@@ -1,0 +1,17 @@
+{
+    "name": "ads_paper",
+    "version": "1.0.0",
+    "description": "论文与文献管理助手（ADS API + AI 摘要）",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "paper",
+            "triggers": [
+                "paper"
+            ],
+            "help": "📚 论文管理 | /paper help 查看用法",
+            "admin_only": false
+        }
+    ],
+    "schedule": []
+}

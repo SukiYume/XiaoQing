@@ -1,0 +1,31 @@
+{
+    "name": "chime",
+    "version": "0.2.0",
+    "description": "CHIME FRB 重复暴监测 - 自动追踪快速射电暴的最新观测数据",
+    "author": "XiaoQing Bot",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "chime",
+            "triggers": [
+                "chime",
+                "frb"
+            ],
+            "help": "查询 CHIME FRB 重复暴的最新观测数据，自动检测新发现的重复暴和新脉冲",
+            "admin_only": false
+        }
+    ],
+    "schedule": [
+        {
+            "id": "chime_check",
+            "handler": "scheduled_check",
+            "cron": {
+                "hour": "9,21",
+                "minute": 0
+            },
+            "group_ids": [],
+            "description": "每天 9:00 和 21:00 检查 CHIME FRB 数据更新"
+        }
+    ],
+    "dependencies": []
+}

@@ -1,0 +1,48 @@
+{
+    "name": "minecraft",
+    "version": "3.0.0",
+    "enabled": true,
+    "description": "Minecraft 服务器通信插件 - 支持多服务器连接、RCON命令执行和状态查询",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "mc",
+            "triggers": [
+                "mc",
+                "minecraft"
+            ],
+            "help": "Minecraft RCON 工具 | /mc help 查看详细帮助",
+            "admin_only": false
+        },
+        {
+            "name": "mcconnect",
+            "triggers": [
+                "mcconnect",
+                "mc连接"
+            ],
+            "help": "连接 MC 服务器 | /mc connect <ip:port> <password> [log_file]",
+            "admin_only": false,
+            "priority": 1
+        },
+        {
+            "name": "mcdisconnect",
+            "triggers": [
+                "mcdisconnect",
+                "mc断开"
+            ],
+            "help": "断开当前 MC 服务器连接 | /mc disconnect",
+            "admin_only": false,
+            "priority": 1
+        }
+    ],
+    "schedule": [
+        {
+            "id": "check_log",
+            "handler": "scheduled",
+            "cron": {
+                "second": "*/5"
+            },
+            "enabled": true
+        }
+    ]
+}

@@ -1,0 +1,21 @@
+{
+    "name": "chat",
+    "version": "0.2.0",
+    "description": "AI 对话助手（基于 Coze API）- 支持智能问答和对话交互",
+    "author": "XiaoQing Bot",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "chat",
+            "triggers": [
+                "chat",
+                "gpt",
+                "ai"
+            ],
+            "help": "与 AI 进行对话 | 用法: /chat <你的问题>",
+            "admin_only": false
+        }
+    ],
+    "schedule": [],
+    "dependencies": []
+}
