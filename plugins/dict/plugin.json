@@ -1,0 +1,19 @@
+{
+    "name": "dict",
+    "version": "0.1.0",
+    "description": "天文学词典工具",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "dict",
+            "triggers": [
+                "dict",
+                "词典",
+                "字典"
+            ],
+            "help": "天文学词典 | /dict galaxy",
+            "admin_only": false
+        }
+    ],
+    "schedule": []
+}

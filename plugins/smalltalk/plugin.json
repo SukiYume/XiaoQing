@@ -1,0 +1,34 @@
+{
+    "name": "smalltalk",
+    "version": "2.0.0",
+    "description": "闲聊插件 - 处理非命令消息、自定义问答对、语音回复",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "qa",
+            "triggers": [
+                "记忆",
+                "记住",
+                "学习"
+            ],
+            "help": "💬 教我说话 | /记忆 help 查看详细帮助",
+            "admin_only": false
+        },
+        {
+            "name": "qa_list",
+            "triggers": [
+                "对话"
+            ],
+            "help": "📜 查看已学内容 | /对话 help 查看详细帮助",
+            "admin_only": false
+        },
+        {
+            "name": "qa_remove",
+            "triggers": [
+                "删除对话"
+            ],
+            "help": "🗑️ 删除问答 | /删除对话 help 查看详细帮助",
+            "admin_only": true
+        }
+    ]
+}

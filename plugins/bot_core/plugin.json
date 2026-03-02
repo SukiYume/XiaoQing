@@ -1,0 +1,90 @@
+{
+	"name": "bot_core",
+	"version": "0.2.0",
+	"description": "XiaoQing Bot 核心管理插件：提供帮助、热重载、插件管理、群消息控制、配置管理和性能监控等核心功能",
+	"author": "XiaoQing Bot Team",
+	"entry": "main.py",
+	"commands": [
+		{
+			"name": "help",
+			"triggers": [
+				"help",
+				"h",
+				"帮助"
+			],
+			"help": "查看帮助 | /help [关键词]",
+			"admin_only": false
+		},
+		{
+			"name": "reload",
+			"triggers": [
+				"reload",
+				"重载"
+			],
+			"help": "热重载配置和插件",
+			"admin_only": true
+		},
+		{
+			"name": "plugins",
+			"triggers": [
+				"plugins",
+				"插件"
+			],
+			"help": "查看已加载插件列表",
+			"admin_only": false
+		},
+		{
+			"name": "闭嘴",
+			"triggers": [
+				"闭嘴",
+				"shutup",
+				"mute",
+				"安静"
+			],
+			"help": "群内静音 | /闭嘴 [分钟/1h]",
+			"admin_only": true
+		},
+		{
+			"name": "说话",
+			"triggers": [
+				"说话",
+				"speak",
+				"unmute"
+			],
+			"help": "解除群内静音",
+			"admin_only": true
+		},
+		{
+			"name": "set_secret",
+			"triggers": [
+				"set_secret",
+				"setsecret",
+				"设置密钥"
+			],
+			"help": "修改密钥 | /set_secret <路径> <值>",
+			"admin_only": true
+		},
+		{
+			"name": "get_secret",
+			"triggers": [
+				"get_secret",
+				"getsecret",
+				"查看密钥"
+			],
+			"help": "查看密钥 | /get_secret <路径>",
+			"admin_only": true
+		},
+		{
+			"name": "metrics",
+			"triggers": [
+				"metrics",
+				"stats",
+				"性能",
+				"指标"
+			],
+			"help": "查看运行指标 | /metrics",
+			"admin_only": true
+		}
+	],
+	"schedule": []
+}

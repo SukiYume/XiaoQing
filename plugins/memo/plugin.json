@@ -1,0 +1,19 @@
+{
+    "name": "memo",
+    "version": "2.0.0",
+    "description": "笔记管理插件 - 支持分类存储、搜索、删除和导出",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "memo",
+            "triggers": [
+                "memo",
+                "笔记",
+                "note"
+            ],
+            "help": "📝 笔记本 | /memo help 查看详细帮助",
+            "admin_only": false
+        }
+    ],
+    "schedule": []
+}
