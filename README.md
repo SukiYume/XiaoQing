@@ -13,9 +13,10 @@
 - ✅ **异步优先** - 100% 异步设计，高效并发处理
 
 **🎉 最新更新 (V3.1.0)**:
+- ✨ **qingpet 插件上线** - 完整的 QQ 群宠物养成系统，支持领养、喂养、多维互动和内置经济系统
 - ✨ **xiaoqing_chat 插件升级** - 向量记忆检索、情绪系统、表达学习
 - ✨ **pendo 插件上线** - 个人时间与信息管理中枢（日程、待办、笔记、日记）
-- 📚 **27 个插件完整文档** - 每个插件都有详细的使用说明和配置指南
+- 📚 **29 个插件完整文档** - 每个插件都有详细的使用说明和配置指南
 - 🔧 **qingssh v1.3** - 支持用户名指定、多服务器并发连接
 - 📊 **ads_paper 插件** - NASA ADS 论文管理，支持 BibTeX 导出和 AI 摘要
 
@@ -135,6 +136,7 @@ INFO - Inbound server started on 127.0.0.1:12000
 | 插件 | 命令 | 说明 |
 |------|------|------|
 | xiaoqing_chat | `/xc <内容>` | 和小青智能聊天 |
+| qingpet | `/宠物 help` | QQ 群宠物功能 |
 | pendo | `/pendo event add` | 添加日程 |
 | pendo | `/pendo todo add` | 添加待办 |
 | qingssh | `/ssh <服务器>` | SSH 远程连接 |
@@ -435,6 +437,7 @@ XiaoQing/
 │   ├── bot_core/           # 核心命令（help、reload）
 │   ├── xiaoqing_chat/      # 智能对话插件（向量记忆、情绪系统）
 │   ├── pendo/              # 个人时间与信息管理中枢
+│   ├── qingpet/            # QQ群宠物养成系统
 │   ├── qingssh/            # SSH 远程控制
 │   ├── jupyter/            # Python 代码执行
 │   ├── astro_tools/        # 天文计算工具箱
@@ -452,7 +455,6 @@ XiaoQing/
 │   ├── wolframalpha/       # 万能计算器
 │   ├── url_parser/         # 链接解析
 │   ├── shell/              # 终端命令
-│   ├── github/             # GitHub Trending
 │   ├── earthquake/         # 地震快讯
 │   ├── signin/              # 自动签到
 │   ├── twitter/            # Twitter 图片
