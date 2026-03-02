@@ -231,10 +231,11 @@ XiaoQing/
 │   ├── message.py          # 消息处理工具
 │   └── logging_config.py   # 日志配置
 │
-├── plugins/                # 插件目录（28 个插件）
+├── plugins/                # 插件目录（29 个插件）
 │   ├── bot_core/           # 核心命令（help、reload）
 │   ├── xiaoqing_chat/      # 智能对话插件（向量记忆、情绪系统）
 │   ├── pendo/              # 个人时间与信息管理中枢
+│   ├── qingpet/            # QQ群宠物养成系统
 │   ├── qingssh/            # SSH 远程控制
 │   ├── jupyter/            # Python 代码执行
 │   ├── astro_tools/        # 天文计算工具箱
