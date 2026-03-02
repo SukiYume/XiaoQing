@@ -25,7 +25,7 @@
 |------|------|----------|
 | [03-plugin-development.md](03-plugin-development.md) | 插件开发完整指南、最佳实践 | 插件开发者 |
 | [07-advanced.md](07-advanced.md) | 高级主题：多轮对话、定时任务、扩展 | 高级开发者 |
-| [09-plugins.md](09-plugins.md) | 28 个内置插件功能说明 | 所有人 |
+| [09-plugins.md](09-plugins.md) | 29 个内置插件功能说明 | 所有人 |
 
 ### 参考篇
 
