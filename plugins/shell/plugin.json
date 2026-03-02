@@ -1,0 +1,19 @@
+{
+    "name": "shell",
+    "version": "2.0.0",
+    "description": "终端命令执行插件 - 仅管理员可用，支持白名单和安全限制",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "shell",
+            "triggers": [
+                "shell",
+                "sh",
+                "exec"
+            ],
+            "help": "💻 执行终端命令 | /shell help 查看详细帮助",
+            "admin_only": true
+        }
+    ],
+    "schedule": []
+}

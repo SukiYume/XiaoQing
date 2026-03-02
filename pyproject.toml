@@ -1,0 +1,163 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xiaoqing"
+version = "3.1.0"
+description = "基于 OneBot 协议和 Python 3.10+ 异步的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "XiaoQing Team"}
+]
+keywords = ["qqbot", "onebot", "async", "plugin", "chatbot", "ai", "memory"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Chat",
+]
+
+# 核心依赖
+dependencies = [
+    "aiohttp>=3.8.0",
+    "websockets>=11.0",
+    "apscheduler>=3.10.0",
+    "pydantic>=2.5.0",
+]
+
+[project.optional-dependencies]
+# 插件常用依赖
+plugins = [
+    "requests>=2.28.0",
+    "beautifulsoup4>=4.11.0",
+    "pillow>=9.0.0",
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+    "aiofiles>=23.0.0",
+    "pathvalidate>=3.2.0",
+    "jieba>=0.42.1",
+    "PyYAML>=6.0",
+    "python-dateutil>=2.8.2",
+]
+
+# 机器学习相关插件（如 arxiv_filter, xiaoqing_chat）
+ml = [
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    "pandas>=2.0.0",
+    "feedparser>=6.0.0",
+]
+
+# 天文工具插件
+astro = [
+    "astropy>=5.0.0",
+    "astroquery>=0.4.0",
+]
+
+# SSH远程控制插件
+ssh = [
+    "paramiko>=3.0.0",
+]
+
+# 开发和测试依赖
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+# 完整安装（所有可选依赖）
+all = [
+    "xiaoqing[plugins,ml,astro,ssh,dev]",
+]
+
+[project.urls]
+# 如果有真实的 GitHub 仓库，请替换为实际地址
+Homepage = "https://github.com/xiaoqing-bot/xiaoqing"
+Documentation = "https://github.com/xiaoqing-bot/xiaoqing#readme"
+Repository = "https://github.com/xiaoqing-bot/xiaoqing.git"
+Issues = "https://github.com/xiaoqing-bot/xiaoqing/issues"
+
+[project.scripts]
+xiaoqing = "main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "plugins*"]
+
+# ============================================================
+# 工具配置
+# ============================================================
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312", "py313"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.mypy_cache
+    | \.pytest_cache
+    | __pycache__
+    | \.venv
+    | logs
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",   # line too long (handled by black)
+    "B008",   # do not perform function calls in argument defaults
+]
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "logs",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "plugins/",
+]

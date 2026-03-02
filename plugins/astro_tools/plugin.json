@@ -1,0 +1,17 @@
+{
+    "name": "astro_tools",
+    "version": "1.0.0",
+    "description": "天文计算工具箱 - 时间转换、坐标转换、天文对象查询、单位转换、公式速查、天文常数",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "astro",
+            "triggers": [
+                "astro"
+            ],
+            "help": "天文工具箱 | /astro <子命令> [参数]",
+            "admin_only": false
+        }
+    ],
+    "schedule": []
+}

@@ -1,0 +1,22 @@
+{
+  "name": "choice",
+  "version": "0.2.0",
+  "description": "随机选择助手 - 帮你做决定，支持单选、多选、加权选择",
+  "author": "XiaoQing Bot",
+  "entry": "main.py",
+  "commands": [
+    {
+      "name": "choice",
+      "triggers": [
+        "choice",
+        "决定",
+        "选择",
+        "抽奖"
+      ],
+      "help": "随机选择困难症救星 | 用法: /选择 问题 选项1 选项2 选项3",
+      "admin_only": false
+    }
+  ],
+  "schedule": [],
+  "dependencies": []
+}

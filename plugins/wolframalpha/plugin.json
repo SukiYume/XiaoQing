@@ -1,0 +1,20 @@
+{
+  "name": "wolframalpha",
+  "version": "0.1.0",
+  "description": "Wolfram|Alpha 计算引擎",
+  "entry": "main.py",
+  "commands": [
+    {
+      "name": "alpha",
+      "triggers": [
+        "alpha",
+        "wolfram",
+        "wa",
+        "计算"
+      ],
+      "help": "🧮 万能计算器 | /wa <问题>",
+      "admin_only": false
+    }
+  ],
+  "schedule": []
+}

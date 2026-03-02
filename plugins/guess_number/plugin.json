@@ -1,0 +1,18 @@
+{
+    "name": "guess_number",
+    "version": "2.0.0",
+    "description": "猜数字游戏 - 多轮对话示例插件。支持多种难度，动态提示范围，会话管理。",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "猜数字",
+            "triggers": [
+                "猜数字",
+                "guess",
+                "猜"
+            ],
+            "help": "🎲 猜数字游戏 - 支持多难度，多轮对话示例"
+        }
+    ],
+    "concurrency": "parallel"
+}

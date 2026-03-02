@@ -1,0 +1,34 @@
+{
+        "bot_name": "小青",
+        "command_prefixes": [
+                "/"
+        ],
+        "require_bot_name_in_group": true,
+        "random_reply_rate": 0.05,
+        "default_group_ids": [
+                123456789
+        ],
+        "enable_ws_client": false,
+        "enable_inbound_server": true,
+        "onebot_ws_uri": "ws://127.0.0.1:11000/ws",
+        "onebot_http_base": "http://127.0.0.1:11001",
+        "ws_queue_size": 200,
+        "max_concurrency": 5,
+        "inbound_ws_uri": "ws://127.0.0.1:12000/ws",
+        "inbound_http_base": "http://127.0.0.1:12000",
+        "inbound_ws_max_workers": 8,
+        "timezone": "Asia/Shanghai",
+        "log_level": "INFO",
+        "log_to_file": true,
+        "log_to_console": true,
+        "log_use_color": true,
+        "log_max_size_mb": 10,
+        "log_backup_count": 5,
+        "log_rotation": "time",
+        "plugins": {
+                "smalltalk_provider": "xiaoqing_chat",
+                "smalltalk": {
+                        "voice_probability": 0
+                }
+        }
+}

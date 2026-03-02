@@ -1,0 +1,27 @@
+{
+    "name": "echo",
+    "version": "0.1.0",
+    "description": "示例插件：回显用户输入",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "echo",
+            "triggers": [
+                "echo",
+                "回显"
+            ],
+            "help": "复读机 | /echo <文本>",
+            "admin_only": false
+        },
+        {
+            "name": "hello",
+            "triggers": [
+                "hello",
+                "你好"
+            ],
+            "help": "打个招呼 👋",
+            "admin_only": false
+        }
+    ],
+    "schedule": []
+}
