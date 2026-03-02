@@ -34,7 +34,7 @@ jobs:
 
     - name: Run plugin tests
       run: |
-        pytest tests/plugins/ -v -m "plugin and unit"
+        pytest tests/plugins/ -v -m "plugin"
 
     - name: Run integration tests
       run: |
