@@ -1,0 +1,30 @@
+{
+    "name": "earthquake",
+    "version": "0.1.0",
+    "description": "地震快讯（微博中国地震台网）",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "earthquake",
+            "triggers": [
+                "earthquake",
+                "地震"
+            ],
+            "help": "最新地震速报 (中国地震台网)",
+            "admin_only": false
+        }
+    ],
+    "schedule": [
+        {
+            "id": "poll",
+            "handler": "scheduled",
+            "cron": {
+                "minute": "*/5"
+            },
+            "group_ids": [
+                187217751,
+                945793035
+            ]
+        }
+    ]
+}

@@ -1,0 +1,29 @@
+{
+    "name": "jupyter",
+    "version": "3.0.0",
+    "description": "Jupyter 代码执行器 - 在 Jupyter 内核中远程执行 Python 代码，支持交互式 REPL 模式",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "jupyter",
+            "triggers": [
+                "jupyter",
+                "py",
+                "python",
+                "exec"
+            ],
+            "help": "执行 Python 代码或启动 REPL | /py <代码> | /py repl | /py help",
+            "admin_only": true
+        },
+        {
+            "name": "jupyter_kernel",
+            "triggers": [
+                "kernel",
+                "内核"
+            ],
+            "help": "管理 Jupyter 内核 | /kernel status | /kernel restart",
+            "admin_only": true
+        }
+    ],
+    "schedule": []
+}

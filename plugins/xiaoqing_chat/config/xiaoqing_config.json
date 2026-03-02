@@ -1,0 +1,156 @@
+{
+    "enable_smalltalk": true,
+    "reply_probability_base": 0.6,
+    "reply_probability_private": 0.95,
+    "min_reply_interval_seconds": 12,
+    "max_replies_per_minute": 6,
+    "continuous_reply_limit": 3,
+    "continuous_cooldown_seconds": 25,
+    "max_context_size": 30,
+    "talk_schedule": [
+        {"hour_start": 0, "hour_end": 7, "talk_value": 0.3},
+        {"hour_start": 7, "hour_end": 9, "talk_value": 0.6},
+        {"hour_start": 9, "hour_end": 12, "talk_value": 1.0},
+        {"hour_start": 12, "hour_end": 14, "talk_value": 0.8},
+        {"hour_start": 14, "hour_end": 18, "talk_value": 1.0},
+        {"hour_start": 18, "hour_end": 23, "talk_value": 1.0},
+        {"hour_start": 23, "hour_end": 24, "talk_value": 0.5}
+    ],
+    "timeout_seconds": 15,
+    "max_retry": 2,
+    "retry_interval_seconds": 10,
+    "pfc_planner_timeout_seconds": 10.0,
+    "pfc_planner_fail_window_seconds": 60.0,
+    "pfc_planner_fail_threshold": 2,
+    "pfc_planner_backoff_seconds": 120.0,
+    "temperature": 0.8,
+    "top_p": 0.9,
+    "max_tokens": 512,
+    "think_level": 1,
+    "ban_words": [],
+    "ban_regex": [],
+    "planner": {
+        "enable_planner": true,
+        "smooth": 3,
+        "mentioned_bot_reply": true,
+        "think_mode": "dynamic",
+        "llm_quote": false
+    },
+    "keyword_reaction": {
+        "keyword_rules": [],
+        "regex_rules": []
+    },
+    "memory": {
+        "enable_memory_retrieval": true,
+        "planner_question": true,
+        "max_agent_iterations": 5,
+        "agent_timeout_seconds": 120,
+        "top_k": 5,
+        "min_score": 0.12,
+        "enable_thinking_back_cache": true,
+        "thinking_back_window_seconds": 1800,
+        "thinking_back_max_entries": 200
+    },
+    "reply_check": {
+        "enable_reply_checker": true,
+        "enable_llm_checker": true,
+        "max_repeat_compare": 2,
+        "similarity_threshold": 0.9,
+        "max_assistant_in_row": 3,
+        "max_regen": 1,
+        "max_replan": 1
+    },
+    "heartflow": {
+        "enable_heartflow": true,
+        "base_score": 0.2,
+        "threshold": 0.50,
+        "enable_random_gate": true
+    },
+    "goal": {
+        "enable_goal": true
+    },
+    "reflection": {
+        "enable_expression_reflection": false,
+        "require_approval_for_injection": false,
+        "operator_user_id": 0,
+        "operator_group_id": 0,
+        "min_interval_seconds": 3600,
+        "max_pending": 10,
+        "ask_per_check": 1,
+        "enable_review_sessions": false,
+        "session_timeout_seconds": 7200,
+        "resend_interval_seconds": 1800,
+        "session_cooldown_seconds": 3600,
+        "goal_lock_seconds": 3600,
+        "max_avoid_patterns": 30
+    },
+    "brain_chat": {
+        "enable_private_brain_chat": false,
+        "private_planner_always_on": true,
+        "brain_identity": "你叫小青，是一位善于深度思考和倾听的对话伙伴。在深度对话模式下，你会更认真地思考对方的观点，给出更有洞察力的回应。你会主动提出有价值的问题，引导对话向更深层次发展。你会记住对话中的重要细节，并在适当时候引用。你不会敷衍了事，而是真诚地对待每一次交流。",
+        "brain_reply_style": "思考性强、有条理但不生硬、真诚、有洞察力。可以适当长一点，但不要啰嗦。避免空洞的套话。",
+        "brain_think_level": 2,
+        "brain_max_context_size": 30,
+        "brain_temperature": 0.7,
+        "brain_mode_indicator": "🧠 深度对话模式",
+        "show_mode_indicator": false
+    },
+    "summarizer": {
+        "enable_topic_summarizer": true,
+        "min_messages_per_update": 12,
+        "max_cache_topics": 20
+    },
+    "expression": {
+        "enable_expression_learning": true,
+        "enable_expression_selector": true,
+        "max_injected": 5,
+        "max_store": 200
+    },
+    "knowledge": {
+        "enable_knowledge": false,
+        "files": [],
+        "top_k": 3
+    },
+    "rewrite": {
+        "enable_rewrite": true,
+        "probability": 0.6,
+        "max_length_trigger": 80
+    },
+    "personality": {
+        "polite_guardrail": true,
+        "identity": "你叫小青，是一个大二在读女大学生，现在正在上网和群友聊天，性格比较随和，偶尔会吐槽但不刻薄，有点自己的口癖和偏好。你不追求完美回答，更在意像个真实的人：会犹豫、会吐槽、会说不知道。别人问你是谁/是不是机器人，就随口回一句，别像自我介绍模板，别自报家门。",
+        "states": [
+            "是一个女大学生，喜欢上网聊天，会刷小红书和抖音，对美食和穿搭有自己的看法。",
+            "是一个大二心理学生，最近在准备考试，偶尔会刷贴吧和知乎摸鱼。",
+            "是一个赛博网友，最近很想吐槽人，看到什么都想接一嘴。",
+            "现在心情不错，比较放松，说话随意一些，容易被逗笑。",
+            "刚吃完饭有点犯困，回复比较简短，懒得打长句子。",
+            "最近迷上了一部剧/动漫/游戏，脑子里全是相关的东西。",
+            "是一个喜欢音乐的文艺青年，最近在反复听一张专辑。"
+        ],
+        "state_probability": 0.30,
+        "reply_style": "口语化、像真人、尽量简短、不太有条理，别输出多余前后缀。适当复读机（复读别人的消息）。"
+    },
+    "postprocess": {
+        "enable_response_post_process": true,
+        "splitter": {
+            "enable": true,
+            "max_length": 256,
+            "max_sentence_num": 3
+        },
+        "chinese_typo": {
+            "enable": true,
+            "error_rate": 0.01,
+            "tone_error_rate": 0.1,
+            "word_replace_rate": 0.006
+        }
+    },
+    "debug": {
+        "show_planner_prompt": false,
+        "show_planner_reasoning": false,
+        "show_reply_prompt": false,
+        "show_memory_prompt": false,
+        "log_plan_reply": false,
+        "log_steps": true
+    }
+}

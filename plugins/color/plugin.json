@@ -1,0 +1,37 @@
+{
+    "name": "color",
+    "version": "0.2.0",
+    "description": "中国传统色彩查询与颜色转换工具 - 支持8000+中国色、恒星光谱颜色、自定义颜色库",
+    "author": "XiaoQing Bot",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "color",
+            "triggers": [
+                "color",
+                "颜色",
+                "色彩"
+            ],
+            "help": "颜色查询与转换 | -n 名称 / -r RGB / -x HEX / -s 光谱型 / -h 帮助",
+            "admin_only": false
+        }
+    ],
+    "schedule": [],
+    "dependencies": [
+        {
+            "name": "matplotlib",
+            "required": false,
+            "description": "用于生成颜色图片"
+        },
+        {
+            "name": "numpy",
+            "required": false,
+            "description": "用于生成颜色图片"
+        },
+        {
+            "name": "pandas",
+            "required": false,
+            "description": "用于恒星光谱颜色查询"
+        }
+    ]
+}

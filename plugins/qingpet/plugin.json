@@ -1,0 +1,48 @@
+{
+    "name": "qingpet",
+    "version": "1.0.0",
+    "description": "QQ群宠物养成系统 - 领养、喂养、互动、社交",
+    "author": "XiaoQing",
+    "commands": [
+        {
+            "name": "qingpet",
+            "triggers": [
+                "宠物",
+                "pet"
+            ],
+            "help": "QQ群宠物养成系统\n\n使用 /宠物 help 查看详细帮助",
+            "usage": "/宠物 <子命令> [args...]"
+        }
+    ],
+    "dependencies": [],
+    "entry": "main.py",
+    "schedule": [
+        {
+            "id": "qingpet_decay",
+            "handler": "scheduled_decay",
+            "cron": {
+                "minute": "*"
+            },
+            "description": "每分钟衰减宠物状态"
+        },
+        {
+            "id": "qingpet_daily_reset",
+            "handler": "scheduled_daily_reset",
+            "cron": {
+                "hour": 0,
+                "minute": 0
+            },
+            "description": "每日重置 - 每天00:00执行"
+        },
+        {
+            "id": "qingpet_weekly_activity",
+            "handler": "scheduled_weekly_activity",
+            "cron": {
+                "day_of_week": 1,
+                "hour": 10,
+                "minute": 0
+            },
+            "description": "每周活动结算 - 每周一10:00执行"
+        }
+    ]
+}

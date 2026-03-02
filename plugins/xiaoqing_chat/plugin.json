@@ -1,0 +1,16 @@
+{
+  "name": "xiaoqing_chat",
+  "version": "0.1.0",
+  "description": "小青拟人聊天（复刻 MaiBot chat 的纯文本对话效果）",
+  "entry": "main.py",
+  "commands": [
+    {
+      "name": "xc",
+      "triggers": ["xc"],
+      "help": "小青聊天 | /xc <内容>  子命令: help 清空 统计 深度 配置 记忆 表达 模型",
+      "admin_only": false,
+      "priority": 5
+    }
+  ],
+  "schedule": []
+}

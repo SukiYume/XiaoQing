@@ -1,0 +1,19 @@
+{
+    "name": "adnmb",
+    "version": "2.0.0",
+    "description": "A岛匿名版客户端 - 浏览时间线、板块、串内容",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "adnmb",
+            "triggers": [
+                "adnmb",
+                "a岛",
+                "岛"
+            ],
+            "help": "A岛匿名版 | /adnmb -h 查看帮助",
+            "admin_only": false
+        }
+    ],
+    "schedule": []
+}

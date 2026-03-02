@@ -1,0 +1,38 @@
+{
+    "name": "twitter",
+    "version": "2.0.0",
+    "description": "Twitter 图片抓取与随机发送 - 自动抓取、随机推送、智能去重",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "twimg",
+            "triggers": [
+                "twimg",
+                "twitter",
+                "推特"
+            ],
+            "help": "🎨 随机推特美图 | /twimg help 查看详细帮助",
+            "admin_only": false
+        },
+        {
+            "name": "tw_fetch",
+            "triggers": [
+                "tw_fetch",
+                "抓取推特"
+            ],
+            "help": "🔄 手动抓取新图 | /tw_fetch help 查看详细帮助",
+            "admin_only": true
+        }
+    ],
+    "schedule": [
+        {
+            "id": "twitter_fetch",
+            "handler": "scheduled_fetch",
+            "cron": {
+                "hour": 3,
+                "minute": 0
+            },
+            "group_ids": []
+        }
+    ]
+}

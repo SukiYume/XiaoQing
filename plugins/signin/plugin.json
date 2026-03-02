@@ -1,0 +1,30 @@
+{
+	"name": "signin",
+	"version": "2.0.0",
+	"description": "自动签到插件 - 支持 Sony 官方商城、影视飓风等平台",
+	"entry": "main.py",
+	"commands": [
+		{
+			"name": "signin",
+			"triggers": [
+				"signin",
+				"签到"
+			],
+			"help": "📝 自动签到 | /signin help 查看详细帮助",
+			"admin_only": false
+		}
+	],
+	"schedule": [
+		{
+			"id": "yingshi",
+			"handler": "scheduled_yingshi",
+			"cron": {
+				"hour": 0,
+				"minute": 30
+			},
+			"group_ids": [
+				945793035
+			]
+		}
+	]
+}

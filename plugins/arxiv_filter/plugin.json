@@ -1,0 +1,79 @@
+{
+	"name": "arxiv_filter",
+	"version": "0.1.0",
+	"description": "arXiv 论文筛选（基于 BERT 模型）",
+	"entry": "main.py",
+	"commands": [
+		{
+			"name": "arxiv",
+			"triggers": [
+				"arxiv",
+				"论文"
+			],
+			"help": "今日 arXiv 论文推荐 (AI筛选)",
+			"admin_only": false
+		}
+	],
+	"schedule": [
+		{
+			"id": "check_10_00",
+			"handler": "scheduled_check",
+			"cron": {
+				"day_of_week": "mon-fri",
+				"hour": 10,
+				"minute": 0
+			},
+			"group_ids": [
+				945793035
+			]
+		},
+		{
+			"id": "check_10_30",
+			"handler": "scheduled_check",
+			"cron": {
+				"day_of_week": "mon-fri",
+				"hour": 10,
+				"minute": 30
+			},
+			"group_ids": [
+				945793035
+			]
+		},
+		{
+			"id": "check_11_00",
+			"handler": "scheduled_check",
+			"cron": {
+				"day_of_week": "mon-fri",
+				"hour": 11,
+				"minute": 0
+			},
+			"group_ids": [
+				945793035
+			]
+		},
+		{
+			"id": "check_11_30",
+			"handler": "scheduled_check",
+			"cron": {
+				"day_of_week": "mon-fri",
+				"hour": 11,
+				"minute": 30
+			},
+			"group_ids": [
+				945793035
+			]
+		},
+		{
+			"id": "final_check_12_00",
+			"handler": "scheduled_final_check",
+			"cron": {
+				"day_of_week": "mon-fri",
+				"hour": 12,
+				"minute": 0
+			},
+			"group_ids": [
+				945793035
+			]
+		}
+	]
+}

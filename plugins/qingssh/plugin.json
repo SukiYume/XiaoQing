@@ -1,0 +1,105 @@
+{
+    "name": "qingssh",
+    "version": "2.0.0",
+    "description": "SSH远程控制插件 - 通过多轮对话管理SSH连接和执行命令，支持 ~/.ssh/config，统一子命令系统",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "ssh",
+            "triggers": [
+                "ssh",
+                "SSH",
+                "远程",
+                "ssh连接",
+                "sshconnect"
+            ],
+            "help": "🖥️ SSH远程控制 - 支持子命令：help/list/add/remove/import/config/status/disconnect | /ssh help 查看详细帮助",
+            "admin_only": true
+        },
+        {
+            "name": "ssh断开",
+            "triggers": [
+                "ssh断开",
+                "sshdisconnect",
+                "ssh退出"
+            ],
+            "help": "🔌 断开SSH连接 | /ssh断开 或 /ssh断开 <服务器名>",
+            "admin_only": true,
+            "priority": 1
+        },
+        {
+            "name": "ssh列表",
+            "triggers": [
+                "ssh列表",
+                "sshlist",
+                "ssh服务器"
+            ],
+            "help": "📋 查看已保存的SSH服务器列表及连接状态 | /ssh列表",
+            "admin_only": true,
+            "priority": 1
+        },
+        {
+            "name": "ssh添加",
+            "triggers": [
+                "ssh添加",
+                "sshadd"
+            ],
+            "help": "➕ 添加SSH服务器（引导式或快速模式） | /ssh添加 或 /ssh添加 <名称> <主机> [端口] [用户名]",
+            "admin_only": true,
+            "priority": 1
+        },
+        {
+            "name": "ssh删除",
+            "triggers": [
+                "ssh删除",
+                "sshremove",
+                "sshdel"
+            ],
+            "help": "➖ 删除已保存的SSH服务器配置 | /ssh删除 <服务器名>",
+            "admin_only": true,
+            "priority": 1
+        },
+        {
+            "name": "ssh导入",
+            "triggers": [
+                "ssh导入",
+                "sshimport"
+            ],
+            "help": "📥 从 ~/.ssh/config 导入服务器 | /ssh导入 <Host名> 或 /ssh导入 all",
+            "admin_only": true,
+            "priority": 1
+        },
+        {
+            "name": "sshconfig",
+            "triggers": [
+                "sshconfig",
+                "ssh配置"
+            ],
+            "help": "🔧 查看 ~/.ssh/config 中的所有 Host 配置 | /sshconfig",
+            "admin_only": true,
+            "priority": 1
+        },
+        {
+            "name": "ssh状态",
+            "triggers": [
+                "ssh状态",
+                "sshstatus",
+                "ssh连接数",
+                "sshactive"
+            ],
+            "help": "📊 查看当前活跃的 SSH 连接数及详情 | /ssh状态",
+            "admin_only": true,
+            "priority": 1
+        }
+    ],
+    "schedule": [
+        {
+            "id": "cleanup",
+            "handler": "cleanup_orphans",
+            "cron": {
+                "minute": "*/1"
+            }
+        }
+    ],
+    "concurrency": "sequential"
+}

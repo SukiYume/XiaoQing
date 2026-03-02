@@ -1,0 +1,30 @@
+{
+    "name": "apod",
+    "version": "1.0.0",
+    "description": "每日一天文图 (Astronomy Picture of the Day)",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "apod",
+            "triggers": [
+                "apod",
+                "每日一天文图"
+            ],
+            "help": "NASA 每日天文图",
+            "admin_only": false
+        }
+    ],
+    "schedule": [
+        {
+            "id": "apod_daily",
+            "handler": "scheduled",
+            "cron": {
+                "hour": 13,
+                "minute": 30
+            },
+            "group_ids": [
+                945793035
+            ]
+        }
+    ]
+}
