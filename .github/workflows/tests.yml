@@ -30,7 +30,7 @@ jobs:
 
     - name: Run unit tests
       run: |
-        pytest tests/core/ -v -m "unit" --cov=core --cov-report=xml
+        pytest tests/ -v -m "unit" --cov=core --cov-report=xml
 
     - name: Run plugin tests
       run: |
