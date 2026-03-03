@@ -4,13 +4,24 @@ Option Explicit
 On Error Resume Next
 
 Const INTERVAL = 3600
-Const BOT_DIR = "C:\Users\torch\Desktop\XiaoQing\XiaoQing_V3"
-Const NAPCAT_DIR = "C:\Users\torch\Desktop\XiaoQing\NapCat.Shell"
-Const CONDA_PATH = "C:\Users\torch\miniconda3\Scripts\conda.exe"
-
 Dim ws, fso
 Set ws = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
+
+' --- 路径与环境配置 (使用相对路径与环境变量) ---
+Dim SCRIPT_DIR, BOT_DIR, NAPCAT_DIR, CONDA_PATH
+
+' 自动获取当前脚本所在的目录
+SCRIPT_DIR = fso.GetParentFolderName(WScript.ScriptFullName)
+
+' 1. 机器人代码目录: 默认为当前脚本所在目录
+BOT_DIR = SCRIPT_DIR
+
+' 2. NapCat启动目录: 假设它和当前项目文件夹同级
+NAPCAT_DIR = fso.BuildPath(fso.GetParentFolderName(SCRIPT_DIR), "NapCat.Shell")
+
+' 3. Conda 路径: 使用 %USERPROFILE% 自动获取当前用户的根目录 (如 C:\Users\xxx)，避免写死用户名
+CONDA_PATH = ws.ExpandEnvironmentStrings("%USERPROFILE%") & "\miniconda3\Scripts\conda.exe"
 
 If LCase(Right(WScript.FullName, 11)) = "wscript.exe" Then
     ws.Run "cscript //NoLogo """ & WScript.ScriptFullName & """", 0
