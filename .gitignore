@@ -65,3 +65,6 @@ plugins/*/data/
 plugins/*/cache/
 plugins/*deprecated/
 plugins/arxiv_filter/best_model
+
+# 个人脚本
+sync_to_remote.sh 
