@@ -457,16 +457,29 @@ class EventHandler(DbOpsMixin):
             current_date = None
 
             for event in events:
-                ev_start_dt = datetime.fromisoformat(event.start_time)
-                date_str = ev_start_dt.strftime('%Y-%m-%d')
-
-                if date_str != current_date:
-                    current_date = date_str
-                    weekday = self._CN_WEEKDAYS[ev_start_dt.weekday()]
-                    message += f"\n**{ev_start_dt.strftime('%m月%d日')} {weekday}**\n"
-
                 milestones = event.milestones if hasattr(event, 'milestones') else []
                 if milestones and len(milestones) >= 2:
+                    # 多节点事件：先收集落在查询范围内的里程碑
+                    in_range_milestones = []
+                    for m in milestones:
+                        try:
+                            m_dt = datetime.fromisoformat(m.get('time', ''))
+                            if start_dt <= m_dt <= end_dt:
+                                in_range_milestones.append((m, m_dt))
+                        except (ValueError, TypeError):
+                            pass
+                    # 没有节点在范围内，跳过整个事件
+                    if not in_range_milestones:
+                        continue
+
+                    # 日期分组：使用第一个在范围内的里程碑日期
+                    first_in_range_dt = in_range_milestones[0][1]
+                    date_str = first_in_range_dt.strftime('%Y-%m-%d')
+                    if date_str != current_date:
+                        current_date = date_str
+                        weekday = self._CN_WEEKDAYS[first_in_range_dt.weekday()]
+                        message += f"\n**{first_in_range_dt.strftime('%m月%d日')} {weekday}**\n"
+
                     start_str = ItemFormatter.format_datetime(event.start_time, '%m-%d')
                     end_str = ItemFormatter.format_datetime(event.end_time, '%m-%d') if event.end_time else ''
                     date_range = f"{start_str}~{end_str}" if end_str else start_str
@@ -475,15 +488,18 @@ class EventHandler(DbOpsMixin):
                         message += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
                     message += f" `{event.id}`\n"
                     # 展示落在查询范围内的里程碑
-                    for m in milestones:
-                        try:
-                            m_dt = datetime.fromisoformat(m.get('time', ''))
-                            if start_dt <= m_dt <= end_dt:
-                                m_str = ItemFormatter.format_datetime(m['time'], '%m-%d')
-                                message += f"  📌 {m_str} {m.get('name', '')}\n"
-                        except (ValueError, TypeError):
-                            pass
+                    for m, m_dt in in_range_milestones:
+                        m_str = ItemFormatter.format_datetime(m['time'], '%m-%d')
+                        message += f"  📌 {m_str} {m.get('name', '')}\n"
                 else:
+                    ev_start_dt = datetime.fromisoformat(event.start_time)
+                    date_str = ev_start_dt.strftime('%Y-%m-%d')
+
+                    if date_str != current_date:
+                        current_date = date_str
+                        weekday = self._CN_WEEKDAYS[ev_start_dt.weekday()]
+                        message += f"\n**{ev_start_dt.strftime('%m月%d日')} {weekday}**\n"
+
                     time_str = ItemFormatter.format_time_range(event.start_time, event.end_time)
                     message += f"• {time_str} {event.title or '无标题'}"
                     if event.location:
@@ -928,14 +944,29 @@ class EventHandler(DbOpsMixin):
 
     @staticmethod
     def _event_in_range(e, start_dt: datetime, end_dt: datetime) -> bool:
-        """判断事件是否在查询范围内（多节点事件用区间重叠，单次事件只看 start_time）"""
+        """判断事件是否在查询范围内
+
+        多节点事件：先用总区间重叠快速筛选，再检查是否有至少一个节点在范围内。
+        单次事件：只看 start_time 是否在范围内。
+        """
         if not e.start_time:
             return False
         e_start = datetime.fromisoformat(e.start_time)
         milestones = getattr(e, 'milestones', None) or []
         if milestones and len(milestones) >= 2 and e.end_time:
             e_end = datetime.fromisoformat(e.end_time)
-            return e_start <= end_dt and e_end >= start_dt
+            # 快速排除：总区间与查询区间不重叠
+            if not (e_start <= end_dt and e_end >= start_dt):
+                return False
+            # 精确检查：至少一个里程碑节点落在查询范围内
+            for m in milestones:
+                try:
+                    m_dt = datetime.fromisoformat(m.get('time', ''))
+                    if start_dt <= m_dt <= end_dt:
+                        return True
+                except (ValueError, TypeError):
+                    pass
+            return False
         return start_dt <= e_start <= end_dt
 
     def _ensure_reminders(self, parsed_data: dict) -> list[str]:
