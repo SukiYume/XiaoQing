@@ -304,7 +304,7 @@ class Database:
         item_dict.setdefault('updated_at', datetime.now().isoformat())
 
         data = self._prepare_data(item_dict)
-        columns = ', '.join(data.keys())
+        columns = ', '.join(self._quote_col(k) for k in data.keys())
         placeholders = ', '.join(['?' for _ in data])
 
         try:
@@ -340,7 +340,7 @@ class Database:
 
             update_dict['updated_at'] = datetime.now().isoformat()
             data = self._prepare_data(update_dict)
-            set_clause = ', '.join([f"{k} = ?" for k in data.keys()])
+            set_clause = ', '.join([f"{self._quote_col(k)} = ?" for k in data.keys()])
 
             # S-1修复：使用 with conn: 代替手动 BEGIN/COMMIT/ROLLBACK
             with conn:
@@ -469,7 +469,7 @@ class Database:
                 if soft:
                     now = datetime.now().isoformat()
                     updates = {'deleted': 1, 'deleted_at': now, 'updated_at': now}
-                    set_clause = ', '.join([f"{k} = ?" for k in updates.keys()])
+                    set_clause = ', '.join([f"{self._quote_col(k)} = ?" for k in updates.keys()])
                     if owner_id:
                         cursor.execute(f"UPDATE items SET {set_clause} WHERE id = ? AND owner_id = ?",
                                      list(updates.values()) + [item_id, owner_id])
@@ -616,7 +616,7 @@ class Database:
             # 准备恢复数据
             old_values['updated_at'] = datetime.now().isoformat()
             restore_data = self._prepare_data(old_values)
-            set_clause = ', '.join([f"{k} = ?" for k in restore_data.keys()])
+            set_clause = ', '.join([f"{self._quote_col(k)} = ?" for k in restore_data.keys()])
             placeholders = ','.join(['?' for _ in instance_ids])
 
             with conn:
@@ -1060,6 +1060,11 @@ class Database:
         return [item for row in cursor.fetchall() if (item := self._row_to_item(row)) is not None]
     
     # ==================== 私有方法 ====================
+
+    @staticmethod
+    def _quote_col(name: str) -> str:
+        """用双引号包裹列名，避免 SQL 保留字（如 references）导致语法错误"""
+        return f'"{name}"'
     
     def _prepare_data(self, data: dict[str, Any]) -> dict[str, Any]:
         """准备数据用于存储"""

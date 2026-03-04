@@ -602,7 +602,7 @@ class EventHandler(DbOpsMixin):
             updates['updated_at'] = now
             from ..services.db import Database
             data = self.db.items._prepare_data(updates)
-            set_clause = ', '.join([f"{k} = ?" for k in data.keys()])
+            set_clause = ', '.join([f'"{k}" = ?' for k in data.keys()])
             instance_ids = [row[0] for row in instances]
             placeholders = ','.join(['?' for _ in instance_ids])
 
