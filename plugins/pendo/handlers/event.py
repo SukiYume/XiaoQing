@@ -939,16 +939,24 @@ class EventHandler(DbOpsMixin):
         return start_dt <= e_start <= end_dt
 
     def _ensure_reminders(self, parsed_data: dict) -> list[str]:
-        """确保有提醒时间"""
+        """确保有提醒时间，每个事件在开始时间必有一次提醒"""
         if parsed_data.get('remind_times'):
-            return parsed_data['remind_times']
-        
-        if parsed_data.get('remind_offsets') and parsed_data.get('start_time'):
-            return self.ai_parser.build_remind_times_from_offsets(
+            remind_times = parsed_data['remind_times']
+        elif parsed_data.get('remind_offsets') and parsed_data.get('start_time'):
+            remind_times = self.ai_parser.build_remind_times_from_offsets(
                 parsed_data['start_time'], parsed_data['remind_offsets']
             )
-        
-        return self._default_reminders(parsed_data.get('start_time'))
+        else:
+            remind_times = self._default_reminders(parsed_data.get('start_time'))
+
+        # 确保开始时间本身有一次提醒
+        start_time = parsed_data.get('start_time')
+        if start_time:
+            if start_time not in remind_times:
+                remind_times.append(start_time)
+            remind_times.sort()
+
+        return remind_times
     
     def _default_reminders(self, start_time: str) -> list[str]:
         """默认提醒：提前1天、1小时、10分钟"""
@@ -980,19 +988,31 @@ class EventHandler(DbOpsMixin):
         return [(start_dt - o).isoformat() for o in offsets]
     
     def _recalculate_reminders(self, event: Any, updates: dict) -> list[str]:
-        """重新计算提醒时间"""
+        """重新计算提醒时间，确保开始时间本身有一次提醒"""
         new_start = updates.get('start_time')
         if not new_start:
-            return parse_remind_times(event.remind_times)
-        
+            remind_times = parse_remind_times(event.remind_times)
+            # 确保当前开始时间在提醒列表中
+            if event.start_time and event.start_time not in remind_times:
+                remind_times.append(event.start_time)
+                remind_times.sort()
+            return remind_times
+
         existing = parse_remind_times(event.remind_times)
         if existing and event.start_time:
             old_start = datetime.fromisoformat(event.start_time)
             new_start_dt = datetime.fromisoformat(new_start)
             offsets = self._calculate_remind_offsets(old_start, existing)
-            return self._apply_offsets(new_start_dt, offsets)
-        
-        return self._default_reminders(new_start)
+            remind_times = self._apply_offsets(new_start_dt, offsets)
+        else:
+            remind_times = self._default_reminders(new_start)
+
+        # 确保新的开始时间在提醒列表中
+        if new_start not in remind_times:
+            remind_times.append(new_start)
+            remind_times.sort()
+
+        return remind_times
     
     async def _parse_updates(self, changes: str, current_event: dict) -> dict[str, Any]:
         """解析更新内容
