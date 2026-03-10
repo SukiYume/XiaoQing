@@ -177,8 +177,8 @@ async def _should_reply(
     window = [t for t in state.get_reply_timestamps(chat_id) if now - t < 60.0]
     state.set_reply_timestamps(chat_id, window)
     goal_state = await state.goal_store.get_async(chat_id) if runtime.cfg.goal.enable_goal else None
-    goal = goal_state.goal if goal_state else ""
-    goal_ts = goal_state.ts if goal_state else 0.0
+    goal = getattr(goal_state, "goal", "") if goal_state else ""
+    goal_ts = float(getattr(goal_state, "ts", 0.0) or 0.0) if goal_state else 0.0
 
     # --- Hard constraints: rate limit & cooldown always apply ---
     seconds_since = max(0.0, now - last) if last else 9999.0

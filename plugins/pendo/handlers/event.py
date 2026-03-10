@@ -548,6 +548,11 @@ class EventHandler(DbOpsMixin):
             return f"{delta_days}天后"
         return f"{abs(delta_days)}天前"
 
+    @classmethod
+    def _format_day_header(cls, target_dt: datetime, current_dt: datetime) -> str:
+        weekday = cls._CN_WEEKDAYS[target_dt.weekday()]
+        return f"**{target_dt.strftime('%m月%d日')} {weekday}** - {cls._format_day_delta(target_dt, current_dt)}"
+
     async def list_events(
         self, user_id: str, time_range: str, context: PendoContext
     ) -> CommandMessage:
@@ -603,8 +608,7 @@ class EventHandler(DbOpsMixin):
                     date_str = first_in_range_dt.strftime("%Y-%m-%d")
                     if date_str != current_date:
                         current_date = date_str
-                        weekday = self._CN_WEEKDAYS[first_in_range_dt.weekday()]
-                        message += f"\n**{first_in_range_dt.strftime('%m月%d日')} {weekday}**\n"
+                        message += f"\n{self._format_day_header(first_in_range_dt, current_dt)}\n"
 
                     start_str = ItemFormatter.format_datetime(event.start_time or "", "%m-%d")
                     end_str = (
@@ -613,15 +617,17 @@ class EventHandler(DbOpsMixin):
                         else ""
                     )
                     date_range = f"{start_str}~{end_str}" if end_str else start_str
-                    day_delta = self._format_day_delta(first_in_range_dt, current_dt)
-                    message += f"• {date_range} {event.title or '无标题'} · {day_delta} 🗺️{len(milestones)}节点"
+                    message += f"• {date_range} {event.title or '无标题'} 🗺️{len(milestones)}节点"
                     if event.location:
                         message += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
                     message += f" `{event.id}`\n"
                     # 展示落在查询范围内的里程碑
                     for m, m_dt in in_range_milestones:
                         m_str = ItemFormatter.format_datetime(m["time"], "%m-%d")
-                        message += f"  📌 {m_str} {m.get('name', '')}\n"
+                        message += (
+                            f"  📌 {m_str} {m.get('name', '')}"
+                            f" - {self._format_day_delta(m_dt, current_dt)}\n"
+                        )
                 else:
                     if not event.start_time:
                         continue
@@ -630,12 +636,10 @@ class EventHandler(DbOpsMixin):
 
                     if date_str != current_date:
                         current_date = date_str
-                        weekday = self._CN_WEEKDAYS[ev_start_dt.weekday()]
-                        message += f"\n**{ev_start_dt.strftime('%m月%d日')} {weekday}**\n"
+                        message += f"\n{self._format_day_header(ev_start_dt, current_dt)}\n"
 
                     time_str = ItemFormatter.format_time_range(event.start_time, event.end_time)
-                    day_delta = self._format_day_delta(ev_start_dt, current_dt)
-                    message += f"• {time_str} {event.title or '无标题'} · {day_delta}"
+                    message += f"• {time_str} {event.title or '无标题'}"
                     if event.location:
                         message += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
                     message += f" `{event.id}`\n"
