@@ -30,7 +30,7 @@ HEADERS = {
     'accept-encoding': 'gzip, deflate, br'
 }
 
-DEFAULT_APOD_URL = 'http://www.star.ucl.ac.uk/~apod/apod'
+DEFAULT_APOD_URL = 'https://apod.nasa.gov/apod/astropix.html'
 TIMEOUT_SECONDS = 60
 DEFAULT_FALLBACK_TITLE = "Today's Astronomy Picture of the Day"
 NO_EXPLANATION_TEXT = "No explanation found."
@@ -288,7 +288,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             
             # 构造完整 URL
             if 'http' not in img_src:
-                imgurl = f'{url}/{img_src}'
+                from urllib.parse import urljoin
+                imgurl = urljoin(url, img_src)
             else:
                 imgurl = img_src
             

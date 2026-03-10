@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -7,39 +8,36 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from ..constants import is_question
+from ..store_base import StoreBase
+
+
 @dataclass
 class GoalState:
     ts: float = 0.0
     goal: str = ""
     source: str = ""
 
-class GoalStore:
+
+class GoalStore(StoreBase):
     def __init__(self) -> None:
-        self._data_dir: Optional[Path] = None
+        super().__init__()
         self._cache: dict[str, GoalState] = {}
 
-    def bind(self, data_dir: Path) -> None:
-        self._data_dir = data_dir
-
     def _path(self, chat_id: str) -> Optional[Path]:
-        if not self._data_dir:
-            return None
-        return self._data_dir / "goal_state" / f"{chat_id}.json"
+        return self._resolve_path("goal_state", f"{chat_id}.json")
 
     def get(self, chat_id: str) -> GoalState:
         if chat_id in self._cache:
             return self._cache[chat_id]
         st = GoalState()
         path = self._path(chat_id)
-        if path and path.exists():
-            try:
-                obj = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(obj, dict):
-                    st.ts = float(obj.get("ts", 0.0) or 0.0)
-                    st.goal = str(obj.get("goal", "") or "").strip()
-                    st.source = str(obj.get("source", "") or "").strip()
-            except Exception:
-                st = GoalState()
+        if path:
+            obj = self._load_json(path, default=None)
+            if isinstance(obj, dict):
+                st.ts = float(obj.get("ts", 0.0) or 0.0)
+                st.goal = str(obj.get("goal", "") or "").strip()
+                st.source = str(obj.get("source", "") or "").strip()
         self._cache[chat_id] = st
         return st
 
@@ -63,43 +61,56 @@ class GoalStore:
         self._cache[chat_id] = st
         path = self._path(chat_id)
         if path:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                path.write_text(
-                    json.dumps({"ts": st.ts, "goal": st.goal, "source": st.source}, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            except OSError:
-                pass
+            self._save_json(path, {"ts": st.ts, "goal": st.goal, "source": st.source})
         return st
 
-def load_latest_topic_summary(data_dir: Path, chat_id: str) -> str:
+    async def get_async(self, chat_id: str) -> GoalState:
+        return await asyncio.to_thread(self.get, chat_id)
+
+    async def set_async(self, chat_id: str, *, goal: str, source: str) -> GoalState:
+        return await asyncio.to_thread(self.set, chat_id, goal=goal, source=source)
+
+
+def load_latest_topic_and_summary(data_dir: Path, chat_id: str) -> tuple[str, str]:
     path = data_dir / "hippo_memorizer" / f"{chat_id}.json"
     if not path.exists():
-        return ""
+        return "", ""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, list) or not raw:
-            return ""
+            return "", ""
         item = raw[-1]
         if not isinstance(item, dict):
-            return ""
+            return "", ""
         topic = str(item.get("topic", "")).strip()
-        if not topic:
-            return ""
-        return topic
+        summary = str(item.get("summary", "")).strip()
+        return topic, summary
     except Exception:
-        return ""
+        return "", ""
+
+
+def load_latest_topic_summary(data_dir: Path, chat_id: str) -> str:
+    topic, _ = load_latest_topic_and_summary(data_dir, chat_id)
+    return topic
+
+
+async def load_latest_topic_and_summary_async(data_dir: Path, chat_id: str) -> tuple[str, str]:
+    return await asyncio.to_thread(load_latest_topic_and_summary, data_dir, chat_id)
+
+
+async def load_latest_topic_summary_async(data_dir: Path, chat_id: str) -> str:
+    return await asyncio.to_thread(load_latest_topic_summary, data_dir, chat_id)
+
 
 _RE_GOAL = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,80})")
 
-def derive_goal(
-    *,
-    data_dir: Path,
-    chat_id: str,
+
+def _derive_goal_from_context(
     current_text: str,
     planner_reasoning: str,
+    topic: str,
 ) -> str:
+    """Pure derivation logic shared by sync and async variants."""
     pr = (planner_reasoning or "").strip()
     if pr:
         m = _RE_GOAL.search(pr)
@@ -111,13 +122,34 @@ def derive_goal(
             return pr
     t = (current_text or "").strip()
     if t:
-        if "?" in t or "？" in t or t.endswith("吗") or t.endswith("嘛"):
+        if is_question(t):
             if len(t) <= 28:
                 return f"回答用户问题：{t}"
             return "回答用户问题"
         if len(t) <= 14:
-            return f"围绕“{t}”继续聊"
-    topic = load_latest_topic_summary(data_dir, chat_id)
+            return f'围绕"{t}"继续聊'
     if topic:
-        return f"围绕话题“{topic}”自然聊天"
+        return f'围绕话题"{topic}"自然聊天'
     return "自然聊天"
+
+
+def derive_goal(
+    *,
+    data_dir: Path,
+    chat_id: str,
+    current_text: str,
+    planner_reasoning: str,
+) -> str:
+    topic = load_latest_topic_summary(data_dir, chat_id)
+    return _derive_goal_from_context(current_text, planner_reasoning, topic)
+
+
+async def derive_goal_async(
+    *,
+    data_dir: Path,
+    chat_id: str,
+    current_text: str,
+    planner_reasoning: str,
+) -> str:
+    topic = await load_latest_topic_summary_async(data_dir, chat_id)
+    return _derive_goal_from_context(current_text, planner_reasoning, topic)

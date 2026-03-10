@@ -12,6 +12,7 @@ from .constants import (
     MEMORY_RETRIEVAL_TIMEOUT,
     UNKNOWN_WORDS_MAX,
 )
+from .helper_utils import _resolve_llm_config
 from .logging_utils import _log_step, _short_text
 from .llm.prompt_builder import build_dialogue_prompt
 from .memory.memory_retrieval import build_memory_block
@@ -53,44 +54,40 @@ async def _build_memory_block(
     Returns:
         A formatted string containing relevant memories, or empty string if retrieval fails.
     """
-    memory_task = asyncio.create_task(
-        build_memory_block(
-            data_dir=data_dir,
-            chat_id=chat_id,
-            http_session=context.http_session,
-            secrets=secrets,
-            cfg=runtime.cfg.memory,
-            bot_name=bot_name,
-            history=history,
-            current_text=current_text,
-            planner_question=planner_question,
-            memory_db=state.memory_db,
-            temperature=runtime.cfg.temperature,
-            top_p=runtime.cfg.top_p,
-            max_tokens=runtime.cfg.max_tokens,
-            timeout_seconds=float(getattr(runtime.cfg, "foreground_timeout_seconds", runtime.cfg.timeout_seconds)),
-            max_retry=int(getattr(runtime.cfg, "foreground_max_retry", runtime.cfg.max_retry)),
-            retry_interval_seconds=float(getattr(runtime.cfg, "foreground_retry_interval_seconds", runtime.cfg.retry_interval_seconds)),
-            proxy=secrets.get("proxy", "") or "",
-            endpoint_path=secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path,
-        )
-    )
+    fg = _resolve_llm_config(runtime.cfg, secrets, foreground=True)
     mem_t0 = time.monotonic()
     memory_block = ""
     try:
-        memory_block = await asyncio.wait_for(memory_task, timeout=MEMORY_RETRIEVAL_TIMEOUT)
+        memory_block = await asyncio.wait_for(
+            build_memory_block(
+                data_dir=data_dir,
+                chat_id=chat_id,
+                http_session=context.http_session,
+                secrets=secrets,
+                cfg=runtime.cfg.memory,
+                bot_name=bot_name,
+                history=history,
+                current_text=current_text,
+                planner_question=planner_question,
+                memory_db=state.memory_db,
+                temperature=runtime.cfg.temperature,
+                top_p=runtime.cfg.top_p,
+                max_tokens=runtime.cfg.max_tokens,
+                **fg.to_dict(),
+            ),
+            timeout=MEMORY_RETRIEVAL_TIMEOUT,
+        )
         _log_step(
             context,
             runtime,
             chat_id=chat_id,
             step="reply.memory.ok",
-            fields={"elapsed_s": round(time.monotonic() - mem_t0, 3), "memory_chars": len(memory_block or "")},
+            fields={
+                "elapsed_s": round(time.monotonic() - mem_t0, 3),
+                "memory_chars": len(memory_block or ""),
+            },
         )
-    except Exception as exc:
-        try:
-            memory_task.cancel()
-        except Exception:
-            pass
+    except Exception:
         memory_block = ""
         _log_step(
             context,
@@ -177,7 +174,9 @@ def _build_knowledge_block(runtime: _ChatRuntime, state, data_dir, chat_id: str,
     return kb_block
 
 
-def _build_jargon_explanation(runtime: _ChatRuntime, state, data_dir, unknown_words: list) -> str:
+def _build_jargon_explanation(
+    runtime: _ChatRuntime, state, data_dir, unknown_words: list[str]
+) -> str:
     """
     Build the jargon/slang explanation context block.
 
@@ -194,14 +193,16 @@ def _build_jargon_explanation(runtime: _ChatRuntime, state, data_dir, unknown_wo
     """
     if not unknown_words:
         return ""
-    state.bw_jargon_store.bind(data_dir)
-    jargon_db = state.bw_jargon_store.load()
+    jargon_db = None
     items = []
     for w in unknown_words[:UNKNOWN_WORDS_MAX]:
         hits = state.memory_db.query(w, top_k=1, min_score=0.0, type_filter="word_def")
         if hits:
             items.append(hits[0].text.strip())
         else:
+            if jargon_db is None:
+                state.bw_jargon_store.bind(data_dir)
+                jargon_db = state.bw_jargon_store.load()
             rec = jargon_db.get(w)
             if rec and rec.meaning:
                 items.append(f"{w}：{rec.meaning}".strip())
@@ -210,7 +211,7 @@ def _build_jargon_explanation(runtime: _ChatRuntime, state, data_dir, unknown_wo
     return "黑话/缩写解释：\n- " + "\n- ".join(items)
 
 
-def _build_tool_info_block(
+async def _build_tool_info_block(
     runtime: _ChatRuntime,
     state,
     data_dir,
@@ -231,7 +232,7 @@ def _build_tool_info_block(
     # Read-only: filter but don't persist the cleaned window
     window = [t for t in state.get_reply_timestamps(chat_id) if now - t < 60.0]
     recent_actions = []
-    for r in state.action_history.get_recent(chat_id, max_items=8):
+    for r in await state.action_history.get_recent_async(chat_id, max_items=8):
         ts = time.strftime("%H:%M:%S", time.localtime(r.ts))
         tgt = r.local_target or "-"
         recent_actions.append(f"{ts} {r.action} {tgt} {r.reasoning}".strip())

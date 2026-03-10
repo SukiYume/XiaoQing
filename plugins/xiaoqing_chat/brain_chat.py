@@ -44,41 +44,45 @@ def is_brain_chat_active(
     return True
 
 
-def get_brain_chat_identity(runtime: _ChatRuntime) -> str:
-    """获取深度对话模式下的人格描述"""
-    return runtime.cfg.brain_chat.brain_identity or runtime.cfg.personality.identity
+def get_brain_chat_identity(runtime: _ChatRuntime, is_brain_chat: bool) -> str:
+    """获取对话模式下的人格描述"""
+    if is_brain_chat and runtime.cfg.brain_chat.brain_identity:
+        return runtime.cfg.brain_chat.brain_identity
+    return runtime.cfg.personality.identity
 
 
-def get_brain_chat_reply_style(runtime: _ChatRuntime) -> str:
-    """获取深度对话模式下的回复风格"""
-    return runtime.cfg.brain_chat.brain_reply_style or runtime.cfg.personality.reply_style
+def get_brain_chat_reply_style(runtime: _ChatRuntime, is_brain_chat: bool) -> str:
+    """获取对话模式下的回复风格"""
+    if is_brain_chat and runtime.cfg.brain_chat.brain_reply_style:
+        return runtime.cfg.brain_chat.brain_reply_style
+    return runtime.cfg.personality.reply_style
 
 
-def get_brain_chat_think_level(runtime: _ChatRuntime) -> int:
-    """获取深度对话模式下的思考级别
-
+def get_brain_chat_think_level(runtime: _ChatRuntime, is_brain_chat: bool) -> int:
+    """获取对话模式下的思考级别
     使用显式 None 检查而非 falsy fallback，避免合法值 0 被误判为未设置。
     """
-    level = runtime.cfg.brain_chat.brain_think_level
-    return level if level is not None else runtime.cfg.planner.resolve_think_level()
+    if is_brain_chat and runtime.cfg.brain_chat.brain_think_level is not None:
+        return runtime.cfg.brain_chat.brain_think_level
+    return runtime.cfg.planner.resolve_think_level()
 
 
-def get_brain_chat_max_context(runtime: _ChatRuntime) -> int:
-    """获取深度对话模式下的最大上下文大小
-
+def get_brain_chat_max_context(runtime: _ChatRuntime, is_brain_chat: bool) -> int:
+    """获取对话模式下的最大上下文大小
     使用显式 None 检查而非 falsy fallback。
     """
-    size = runtime.cfg.brain_chat.brain_max_context_size
-    return size if size is not None else runtime.cfg.max_context_size
+    if is_brain_chat and runtime.cfg.brain_chat.brain_max_context_size is not None:
+        return runtime.cfg.brain_chat.brain_max_context_size
+    return runtime.cfg.max_context_size
 
 
-def get_brain_chat_temperature(runtime: _ChatRuntime) -> float:
-    """获取深度对话模式下的温度参数
-
+def get_brain_chat_temperature(runtime: _ChatRuntime, is_brain_chat: bool) -> float:
+    """获取对话模式下的温度参数
     使用显式 None 检查而非 falsy fallback，避免 temperature=0.0 被误判为未设置。
     """
-    temp = runtime.cfg.brain_chat.brain_temperature
-    return temp if temp is not None else runtime.cfg.temperature
+    if is_brain_chat and runtime.cfg.brain_chat.brain_temperature is not None:
+        return runtime.cfg.brain_chat.brain_temperature
+    return float(runtime.cfg.temperature)
 
 
 def maybe_add_mode_indicator(reply: str, runtime: _ChatRuntime) -> str:

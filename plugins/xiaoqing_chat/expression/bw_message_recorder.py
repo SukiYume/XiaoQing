@@ -12,6 +12,7 @@ from .bw_jargon_store import JargonStore
 from ..config.config import PersonalityConfig
 from ..memory.memory import MemoryStore
 
+
 class MessageRecorder:
     def __init__(self) -> None:
         self._data_dir: Optional[Path] = None
@@ -71,6 +72,7 @@ class MessageRecorder:
         m[str(chat_id)] = float(ts)
         self._save()
 
+
 async def extract_and_learn(
     *,
     context,
@@ -96,7 +98,10 @@ async def extract_and_learn(
 ) -> int:
     t0 = time.monotonic()
     try:
-        context.logger.info('xiaoqing_chat step=%s', json.dumps({"step": "bw.learn.start", "chat_id": chat_id}, ensure_ascii=False))
+        context.logger.info(
+            "xiaoqing_chat step=%s",
+            json.dumps({"step": "bw.learn.start", "chat_id": chat_id}, ensure_ascii=False),
+        )
     except Exception:
         pass
     recorder.bind(context.data_dir)
@@ -105,9 +110,13 @@ async def extract_and_learn(
     if last_ts and now - last_ts < float(min_interval_seconds):
         try:
             context.logger.info(
-                'xiaoqing_chat step=%s',
+                "xiaoqing_chat step=%s",
                 json.dumps(
-                    {"step": "bw.learn.skip.interval", "chat_id": chat_id, "elapsed_since_last_s": round(now - last_ts, 3)},
+                    {
+                        "step": "bw.learn.skip.interval",
+                        "chat_id": chat_id,
+                        "elapsed_since_last_s": round(now - last_ts, 3),
+                    },
                     ensure_ascii=False,
                 ),
             )
@@ -115,13 +124,21 @@ async def extract_and_learn(
             pass
         return 0
 
-    history = memory_store.get(chat_id)
+    history = await memory_store.get_async(chat_id)
     window = [m for m in history if float(m.ts or 0.0) > last_ts]
     if len(window) < int(min_messages):
         try:
             context.logger.info(
-                'xiaoqing_chat step=%s',
-                json.dumps({"step": "bw.learn.skip.messages", "chat_id": chat_id, "window": len(window), "min_messages": int(min_messages)}, ensure_ascii=False),
+                "xiaoqing_chat step=%s",
+                json.dumps(
+                    {
+                        "step": "bw.learn.skip.messages",
+                        "chat_id": chat_id,
+                        "window": len(window),
+                        "min_messages": int(min_messages),
+                    },
+                    ensure_ascii=False,
+                ),
             )
         except Exception:
             pass
@@ -129,8 +146,11 @@ async def extract_and_learn(
 
     try:
         context.logger.info(
-            'xiaoqing_chat step=%s',
-            json.dumps({"step": "bw.learn.extract.start", "chat_id": chat_id, "window": len(window)}, ensure_ascii=False),
+            "xiaoqing_chat step=%s",
+            json.dumps(
+                {"step": "bw.learn.extract.start", "chat_id": chat_id, "window": len(window)},
+                ensure_ascii=False,
+            ),
         )
     except Exception:
         pass
@@ -154,8 +174,15 @@ async def extract_and_learn(
         recorder.set_last_time(chat_id, now)
         try:
             context.logger.info(
-                'xiaoqing_chat step=%s',
-                json.dumps({"step": "bw.learn.extract.empty", "chat_id": chat_id, "elapsed_s": round(time.monotonic() - t0, 3)}, ensure_ascii=False),
+                "xiaoqing_chat step=%s",
+                json.dumps(
+                    {
+                        "step": "bw.learn.extract.empty",
+                        "chat_id": chat_id,
+                        "elapsed_s": round(time.monotonic() - t0, 3),
+                    },
+                    ensure_ascii=False,
+                ),
             )
         except Exception:
             pass
@@ -164,8 +191,11 @@ async def extract_and_learn(
     expr_store.bind(context.data_dir)
     try:
         context.logger.info(
-            'xiaoqing_chat step=%s',
-            json.dumps({"step": "bw.learn.upsert.start", "chat_id": chat_id, "learned": len(learned)}, ensure_ascii=False),
+            "xiaoqing_chat step=%s",
+            json.dumps(
+                {"step": "bw.learn.upsert.start", "chat_id": chat_id, "learned": len(learned)},
+                ensure_ascii=False,
+            ),
         )
     except Exception:
         pass
@@ -189,15 +219,23 @@ async def extract_and_learn(
     )
     try:
         context.logger.info(
-            'xiaoqing_chat step=%s',
-            json.dumps({"step": "bw.learn.upsert.done", "chat_id": chat_id, "changed": int(changed)}, ensure_ascii=False),
+            "xiaoqing_chat step=%s",
+            json.dumps(
+                {"step": "bw.learn.upsert.done", "chat_id": chat_id, "changed": int(changed)},
+                ensure_ascii=False,
+            ),
         )
     except Exception:
         pass
     if jargon_store is not None:
         jargon_store.bind(context.data_dir)
         try:
-            context.logger.info('xiaoqing_chat step=%s', json.dumps({"step": "bw.jargon.mine.start", "chat_id": chat_id}, ensure_ascii=False))
+            context.logger.info(
+                "xiaoqing_chat step=%s",
+                json.dumps(
+                    {"step": "bw.jargon.mine.start", "chat_id": chat_id}, ensure_ascii=False
+                ),
+            )
         except Exception:
             pass
         changed += await mine_jargon(
@@ -217,16 +255,31 @@ async def extract_and_learn(
         )
         try:
             context.logger.info(
-                'xiaoqing_chat step=%s',
-                json.dumps({"step": "bw.jargon.mine.done", "chat_id": chat_id, "changed_total": int(changed)}, ensure_ascii=False),
+                "xiaoqing_chat step=%s",
+                json.dumps(
+                    {
+                        "step": "bw.jargon.mine.done",
+                        "chat_id": chat_id,
+                        "changed_total": int(changed),
+                    },
+                    ensure_ascii=False,
+                ),
             )
         except Exception:
             pass
     recorder.set_last_time(chat_id, now)
     try:
         context.logger.info(
-            'xiaoqing_chat step=%s',
-            json.dumps({"step": "bw.learn.done", "chat_id": chat_id, "changed": int(changed), "elapsed_s": round(time.monotonic() - t0, 3)}, ensure_ascii=False),
+            "xiaoqing_chat step=%s",
+            json.dumps(
+                {
+                    "step": "bw.learn.done",
+                    "chat_id": chat_id,
+                    "changed": int(changed),
+                    "elapsed_s": round(time.monotonic() - t0, 3),
+                },
+                ensure_ascii=False,
+            ),
         )
     except Exception:
         pass

@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 def _split_chat_reply(text: str) -> list[str]:
     """
-    将聊天回复按换行符拆分成多条消息
+    将聊天回复按连贯文本块拆分成多条消息，同时保护代码块不被拆分
     
     Args:
         text: 完整的聊天回复文本
@@ -17,7 +17,7 @@ def _split_chat_reply(text: str) -> list[str]:
 
     lines = text.split("\n")
     messages = []
-    current_code_block = []
+    current_message = []
     in_code_block = False
 
     for line in lines:
@@ -27,28 +27,35 @@ def _split_chat_reply(text: str) -> list[str]:
         if stripped.startswith("```"):
             if in_code_block:
                 # 代码块结束
-                current_code_block.append(line)
-                messages.append("\n".join(current_code_block))
-                current_code_block = []
+                current_message.append(line)
+                messages.append("\n".join(current_message).strip())
+                current_message = []
                 in_code_block = False
             else:
                 # 代码块开始
+                if current_message:
+                    messages.append("\n".join(current_message).strip())
+                    current_message = []
                 in_code_block = True
-                current_code_block.append(line)
+                current_message.append(line)
             continue
 
         if in_code_block:
-            current_code_block.append(line)
+            current_message.append(line)
         else:
-            # 普通文本，按行拆分
-            if stripped:
-                messages.append(stripped)
+            # 普通文本，遇到空行则拆分
+            if not stripped:
+                if current_message:
+                    messages.append("\n".join(current_message).strip())
+                    current_message = []
+            else:
+                current_message.append(line)
 
-    # 处理未闭合的代码块（作为最后一条消息）
-    if current_code_block:
-        messages.append("\n".join(current_code_block))
+    # 处理未闭合的代码块或普通最后一段
+    if current_message:
+        messages.append("\n".join(current_message).strip())
     
-    return messages
+    return [m for m in messages if m]
 
 def _build_reply_segments(text: str, *, reply_to_message_id: Optional[int]) -> list[dict[str, Any]]:
     """
