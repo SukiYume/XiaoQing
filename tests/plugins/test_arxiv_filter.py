@@ -12,17 +12,18 @@ arxiv_filter 插件单元测试
 
 import json
 import os
+import sys
+import types
 import pytest
 from pathlib import Path
+import importlib
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from datetime import date, datetime
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-import importlib.util
-spec = importlib.util.spec_from_file_location("arxiv_filter_main", ROOT / "plugins" / "arxiv_filter" / "main.py")
-arxiv_filter = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(arxiv_filter)
+arxiv_filter = importlib.import_module("plugins.arxiv_filter.main")
+arxiv_filter_utils = importlib.import_module("plugins.arxiv_filter.utils")
 
 
 # ============================================================
@@ -96,7 +97,7 @@ class TestConfigLoading:
     """测试配置加载功能"""
 
     def test_load_config_from_file(self, temp_plugin_dir):
-        """测试从文件加载配置"""
+        """测试从文件加载配置（utils.load_plugin_config）"""
         # 创建配置文件
         config_file = temp_plugin_dir / "config.json"
         config_data = {
@@ -105,24 +106,25 @@ class TestConfigLoading:
         }
         config_file.write_text(json.dumps(config_data), encoding="utf-8")
 
-        config = arxiv_filter._load_config(str(temp_plugin_dir))
+        with patch.object(arxiv_filter_utils, "__file__", str(temp_plugin_dir / "utils.py")):
+            config = arxiv_filter_utils.load_plugin_config()
         assert config["model"]["path"] == "custom_model"
         assert config["arxiv"]["url"] == "https://arxiv.org/list/astro-ph/new"
 
     def test_load_config_missing_file(self, temp_data_dir):
-        """测试配置文件不存在时返回空配置"""
-        # 使用没有配置文件的目录
-        config = arxiv_filter._load_config(str(temp_data_dir))
+        """测试配置文件不存在时返回空配置（utils.load_plugin_config）"""
+        with patch.object(arxiv_filter_utils, "__file__", str(temp_data_dir / "utils.py")):
+            config = arxiv_filter_utils.load_plugin_config()
         assert config == {}
 
     def test_load_config_invalid_json(self, temp_plugin_dir):
-        """测试配置文件 JSON 格式错误"""
+        """测试配置文件 JSON 格式错误时抛出异常"""
         config_file = temp_plugin_dir / "config.json"
         config_file.write_text("{ invalid json }", encoding="utf-8")
 
-        # 应该返回空配置而不是崩溃
-        config = arxiv_filter._load_config(str(temp_plugin_dir))
-        assert config == {}
+        with patch.object(arxiv_filter_utils, "__file__", str(temp_plugin_dir / "utils.py")):
+            with pytest.raises(json.JSONDecodeError):
+                arxiv_filter_utils.load_plugin_config()
 
 
 # ============================================================
@@ -343,21 +345,40 @@ class TestInferenceLoading:
 
     def test_load_inference_caches_result(self, temp_plugin_dir):
         """测试推理函数缓存"""
-        # 第一次加载
-        func1 = arxiv_filter._load_inference(str(temp_plugin_dir))
-        # 第二次加载应该返回缓存的函数
-        func2 = arxiv_filter._load_inference(str(temp_plugin_dir))
-        assert func1 is func2 or func1 == func2
+        fake_module = types.ModuleType("plugins.arxiv_filter.arxiv_inference")
+        fake_func = lambda **kwargs: "ok"  # noqa: E731
+        fake_module.get_positive_arxiv_today_as_string = fake_func
+
+        arxiv_filter._inference_func = None
+        with patch.dict(sys.modules, {"plugins.arxiv_filter.arxiv_inference": fake_module}):
+            # 第一次加载
+            func1 = arxiv_filter._load_inference()
+            # 第二次加载应该返回缓存的函数
+            func2 = arxiv_filter._load_inference()
+
+        assert func1 is fake_func
+        assert func2 is fake_func
+        assert func1 is func2
 
     def test_load_inference_force_reload(self, temp_plugin_dir):
-        """测试强制重新加载"""
-        # 第一次加载
-        func1 = arxiv_filter._load_inference(str(temp_plugin_dir))
-        # 强制重新加载
-        func2 = arxiv_filter._load_inference(str(temp_plugin_dir), force_reload=True)
-        # 由于模块无法真正加载（缺少依赖），只测试调用不会崩溃
-        # 函数可能返回 None，这是预期的
-        assert func1 == func2 or func1 is None or func2 is None
+        """测试强制重新加载：清除缓存并重新从模块读取函数"""
+        fake_module = types.ModuleType("plugins.arxiv_filter.arxiv_inference")
+        fake_func1 = lambda **kwargs: "ok1"  # noqa: E731
+        fake_func2 = lambda **kwargs: "ok2"  # noqa: E731
+        fake_module.get_positive_arxiv_today_as_string = fake_func1
+
+        arxiv_filter._inference_func = None
+        with patch.dict(sys.modules, {"plugins.arxiv_filter.arxiv_inference": fake_module}):
+            func1 = arxiv_filter._load_inference()
+            assert func1 is fake_func1
+
+            # 模拟模块内容变更，然后 force_reload
+            fake_module.get_positive_arxiv_today_as_string = fake_func2
+            with patch("importlib.reload", side_effect=lambda m: m):
+                func2 = arxiv_filter._load_inference(force_reload=True)
+
+        assert func2 is fake_func2
+        assert func2 is not func1
 
 
 # ============================================================

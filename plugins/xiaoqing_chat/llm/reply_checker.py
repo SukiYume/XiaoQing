@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
 from .llm_client import LLMError, chat_completions_raw_with_fallback_paths
+from ..constants import is_question
 from ..memory.memory import StoredMessage
 
 import logging as _logging
@@ -48,31 +49,20 @@ def _normalize_text(s: str) -> str:
     t = re.sub(r"\s+", " ", t)
     return t
 
-_QUESTION_KEYWORDS = ("啥", "谁", "咋", "为啥", "为什么", "什么", "哪", "哪里", "哪个", "多少", "几", "吗", "嘛")
-
-
 def _is_question_sentence(text: str) -> bool:
-    t = (text or "").strip()
-    if not t:
-        return False
-    if t.endswith("？") or t.endswith("?"):
-        return True
-    return any(kw in t for kw in _QUESTION_KEYWORDS)
+    return is_question(text)
 
 
 def _check_repeated_question(
     *,
     reply: str,
-    history: Sequence[StoredMessage],
-    bot_name: str,
-    max_look_back: int = 4,
+    bot_msgs: list[str],
     similarity_threshold: float = 0.75,
 ) -> Optional[ReplyCheckResult]:
     """Reject reply if it repeats a question that was already asked but not answered."""
     if not _is_question_sentence(reply):
         return None
     r = _normalize_text(reply)
-    bot_msgs = _last_bot_messages(history, bot_name=bot_name, limit=max_look_back)
     for prev_msg in bot_msgs:
         if not _is_question_sentence(prev_msg):
             continue
@@ -100,14 +90,17 @@ def _heuristic_check(
     if not r:
         return ReplyCheckResult(False, "回复为空", True)
 
-    bot_msgs = _last_bot_messages(history, bot_name=bot_name, limit=max(1, int(max_repeat_compare)))
-    if bot_msgs:
-        last = _normalize_text(bot_msgs[0])
-        if r == last:
-            return ReplyCheckResult(False, "回复与上一条机器人消息完全相同", True)
-        sim = difflib.SequenceMatcher(None, r, last).ratio()
-        if sim >= float(similarity_threshold):
-            return ReplyCheckResult(False, f"回复与上一条机器人消息高度相似({sim:.2f})", True)
+    max_look_back = max(4, int(max_repeat_compare))
+    bot_msgs = _last_bot_messages(history, bot_name=bot_name, limit=max_look_back)
+
+    if bot_msgs and max_repeat_compare > 0:
+        for prev_msg in bot_msgs[:int(max_repeat_compare)]:
+            last = _normalize_text(prev_msg)
+            if r == last:
+                return ReplyCheckResult(False, "回复与之前机器人消息完全相同", True)
+            sim = difflib.SequenceMatcher(None, r, last).ratio()
+            if sim >= float(similarity_threshold):
+                return ReplyCheckResult(False, f"回复与之前机器人消息高度相似({sim:.2f})", True)
 
     in_row = 0
     for msg in reversed(history[-40:]):
@@ -120,8 +113,8 @@ def _heuristic_check(
 
     rq = _check_repeated_question(
         reply=reply,
-        history=history,
-        bot_name=bot_name,
+        bot_msgs=bot_msgs[:4],
+        similarity_threshold=similarity_threshold,
     )
     if rq:
         return rq
@@ -159,16 +152,22 @@ async def _llm_check(
         _policy = "策略：" + policy_text.strip()[:200] + "\n"
 
     prompt = (
-        "判断这条回复是否合适。重复/轰炸已检查过，只需关注：\n"
-        "1. 是否符合对话目标和上下文\n"
-        "2. 是否有违规内容\n"
-        "3. 语气是否自然，不生硬\n"
-        "4. 是否自问自答或前后矛盾\n\n"
-        f"机器人：{bot_name}\n"
-        f"目标：{goal}\n"
+        f"你是一个聊天逻辑检查器。{bot_name}是一个拟人聊天角色，不是信息助手。"
+        "请检查以下回复是否合适。重复/轰炸已由前置规则检查过，无需再判断。\n\n"
+        f"当前对话目标：{goal}\n"
         f"{_policy}"
-        f"最近对话：\n{_hist}\n\n"
-        f"待检查回复：\n{reply}\n\n"
+        f"最近的对话记录：\n{_hist}\n\n"
+        f"待检查的回复：\n{reply}\n\n"
+        "请结合对话记录检查以下几点：\n"
+        "1. 这条回复是否符合当前对话目标和上下文\n"
+        "2. 是否与最近的对话记录保持一致性（不矛盾、不答非所问）\n"
+        "3. 是否包含违规内容（血腥暴力、政治敏感等）\n"
+        "4. 是否自问自答或混淆了说话人身份\n"
+        "5. 是否逻辑通顺\n"
+        "6. 是否使用了完全没必要的修辞或过于刻意\n\n"
+        "注意：这是拟人角色的日常聊天。"
+        "口语化、犹豫、撒娇、吐槽、调侃、说不知道、反问对方都是正常的拟人表现，不应因此判为不合适。"
+        "简短随意的回复是正常的聊天风格，不要因为回复短或没有提供'有价值的信息'就拒绝。\n\n"
         '仅输出JSON：{"suitable": true/false, "reason": "...", "need_replan": false}'
     )
     resp, _path = await chat_completions_raw_with_fallback_paths(

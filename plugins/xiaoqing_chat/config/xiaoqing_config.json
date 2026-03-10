@@ -2,19 +2,47 @@
     "enable_smalltalk": true,
     "reply_probability_base": 0.6,
     "reply_probability_private": 0.95,
-    "min_reply_interval_seconds": 12,
+    "min_reply_interval_seconds": 3,
     "max_replies_per_minute": 6,
     "continuous_reply_limit": 3,
     "continuous_cooldown_seconds": 25,
     "max_context_size": 30,
     "talk_schedule": [
-        {"hour_start": 0, "hour_end": 7, "talk_value": 0.3},
-        {"hour_start": 7, "hour_end": 9, "talk_value": 0.6},
-        {"hour_start": 9, "hour_end": 12, "talk_value": 1.0},
-        {"hour_start": 12, "hour_end": 14, "talk_value": 0.8},
-        {"hour_start": 14, "hour_end": 18, "talk_value": 1.0},
-        {"hour_start": 18, "hour_end": 23, "talk_value": 1.0},
-        {"hour_start": 23, "hour_end": 24, "talk_value": 0.5}
+        {
+            "hour_start": 0,
+            "hour_end": 7,
+            "talk_value": 0.3
+        },
+        {
+            "hour_start": 7,
+            "hour_end": 9,
+            "talk_value": 0.6
+        },
+        {
+            "hour_start": 9,
+            "hour_end": 12,
+            "talk_value": 1.0
+        },
+        {
+            "hour_start": 12,
+            "hour_end": 14,
+            "talk_value": 0.8
+        },
+        {
+            "hour_start": 14,
+            "hour_end": 18,
+            "talk_value": 1.0
+        },
+        {
+            "hour_start": 18,
+            "hour_end": 23,
+            "talk_value": 1.0
+        },
+        {
+            "hour_start": 23,
+            "hour_end": 24,
+            "talk_value": 0.5
+        }
     ],
     "timeout_seconds": 15,
     "max_retry": 2,
@@ -57,7 +85,7 @@
         "max_repeat_compare": 2,
         "similarity_threshold": 0.9,
         "max_assistant_in_row": 3,
-        "max_regen": 1,
+        "max_regen": 2,
         "max_replan": 1
     },
     "heartflow": {

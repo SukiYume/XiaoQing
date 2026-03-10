@@ -47,8 +47,7 @@ class TestCheckRepeatedQuestion:
         ]
         result = _check_repeated_question(
             reply="石景山路到底有啥特别的",
-            history=history,
-            bot_name="小青",
+            bot_msgs=["所以石景山路到底有啥特别的啊"],
         )
         assert result is not None
         assert result.suitable is False
@@ -59,8 +58,7 @@ class TestCheckRepeatedQuestion:
         ]
         result = _check_repeated_question(
             reply="今天天气咋样",
-            history=history,
-            bot_name="小青",
+            bot_msgs=["松松是谁啊"],
         )
         assert result is None
 
@@ -70,16 +68,14 @@ class TestCheckRepeatedQuestion:
         ]
         result = _check_repeated_question(
             reply="哦这样啊",
-            history=history,
-            bot_name="小青",
+            bot_msgs=["石景山路有啥特别的"],
         )
         assert result is None
 
     def test_no_history_allowed(self):
         result = _check_repeated_question(
             reply="松松是谁啊",
-            history=[],
-            bot_name="小青",
+            bot_msgs=[],
         )
         assert result is None
 

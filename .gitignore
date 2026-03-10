@@ -51,6 +51,7 @@ plugins/minecraft/config.json
 .pytest_cache/
 .coverage
 htmlcov/
+*cache/
 
 # 临时文件
 *.tmp
@@ -64,7 +65,8 @@ Thumbs.db
 plugins/*/data/
 plugins/*/cache/
 plugins/*deprecated/
-plugins/arxiv_filter/best_model
+plugins/arxiv_filter/best_model*
+plugins/arxiv_filter/train_model/arxiv_papers_with_abstract.csv
 
 # 个人脚本
 sync_to_remote.sh 

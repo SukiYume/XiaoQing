@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from ..store_base import StoreBase
+
 
 @dataclass
 class ExpressionRecord:
@@ -20,6 +20,7 @@ class ExpressionRecord:
     checked: bool = False
     rejected: bool = False
     modified_by: str = "ai"
+
 
 class ExpressionStore(StoreBase):
     def __init__(self) -> None:
@@ -39,7 +40,7 @@ class ExpressionStore(StoreBase):
             self._cache = []
             return []
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = self._load_json(path, default=[])
             if not isinstance(raw, list):
                 self._cache = []
                 return []
@@ -67,7 +68,11 @@ class ExpressionStore(StoreBase):
                         chat_id=chat_id,
                         situation=situation,
                         style=style,
-                        content_list=[str(x).strip() for x in content_list if isinstance(x, str) and str(x).strip()],
+                        content_list=[
+                            str(x).strip()
+                            for x in content_list
+                            if isinstance(x, str) and str(x).strip()
+                        ],
                         count=count,
                         last_active_time=last_active_time,
                         checked=checked,
@@ -85,11 +90,8 @@ class ExpressionStore(StoreBase):
         path = self._path()
         if not path:
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = [asdict(x) for x in items]
-        try:
-            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
+        if not self._save_json(path, payload):
             return
         self._cache = list(items)
 

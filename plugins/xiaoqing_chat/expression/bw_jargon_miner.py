@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 from typing import Any, Sequence
 
 from .bw_jargon_store import JargonRecord, JargonStore
+from .expr_utils import extract_json_array, extract_json_obj, render_dialogue
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
 from ..memory.memory import StoredMessage
-
-_RE_JSON_BLOCK = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
-_RE_ARRAY = re.compile(r"\[[\s\S]*\]")
 _logger = logging.getLogger("plugin.xiaoqing_chat")
 
 _EXTRACT_PROMPT = """你是黑话/缩写挖掘器。你会从对话里抽取可能的黑话、缩写、简称、专有词。
@@ -45,35 +42,6 @@ _INFER_PROMPT = """你是黑话/缩写解释器。你会根据上下文给出一
   "meaning": "",
   "is_global": false
 }}"""
-
-def _extract_json_array(text: str) -> list[dict[str, Any]]:
-    s = (text or "").strip()
-    blocks = _RE_JSON_BLOCK.findall(s)
-    if blocks:
-        s = blocks[0].strip()
-    m = _RE_ARRAY.search(s)
-    if m:
-        s = m.group(0)
-    try:
-        arr = json.loads(s)
-    except Exception:
-        return []
-    if not isinstance(arr, list):
-        return []
-    return [x for x in arr if isinstance(x, dict)]
-
-def _render_dialogue(messages: Sequence[StoredMessage], *, max_lines: int = 30) -> str:
-    lines: list[str] = []
-    for msg in messages[-max_lines:]:
-        t = (msg.content or "").strip()
-        if not t:
-            continue
-        if len(t) > 200:
-            t = t[:160].rstrip() + "…"
-        name = msg.name or ("小青" if msg.role == "assistant" else "用户")
-        role = "小青" if msg.role == "assistant" else "对方"
-        lines.append(f"{role}({name})：{t}")
-    return "\n".join(lines).strip()
 
 def _bump_chat_count(chat_counts: list[list[Any]], chat_id: str) -> list[list[Any]]:
     out: list[list[Any]] = []
@@ -116,7 +84,7 @@ async def mine_jargon(
     if not api_base or not api_key or not model:
         return 0
 
-    dialogue = _render_dialogue(messages)
+    dialogue = render_dialogue(messages)
     if not dialogue:
         return 0
 
@@ -142,7 +110,7 @@ async def mine_jargon(
         endpoint_path=endpoint_path,
     )
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-    arr = _extract_json_array(str(content))
+    arr = extract_json_array(str(content))
     try:
         _logger.info(
             "xiaoqing_chat step=%s",
@@ -212,18 +180,7 @@ async def mine_jargon(
             endpoint_path=endpoint_path,
         )
         c2 = (((r2.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-        obj = {}
-        s2 = (str(c2) or "").strip()
-        blocks = _RE_JSON_BLOCK.findall(s2)
-        if blocks:
-            s2 = blocks[0].strip()
-        m2 = re.search(r"\{[\s\S]*\}", s2)
-        if m2:
-            s2 = m2.group(0)
-        try:
-            obj = json.loads(s2)
-        except Exception:
-            obj = {}
+        obj = extract_json_obj(str(c2))
         meaning = str(obj.get("meaning", "") or "").strip()
         try:
             _logger.info(

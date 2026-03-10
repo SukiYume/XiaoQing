@@ -1,136 +1,99 @@
 # arXiv Filter 插件
 
-arXiv 论文筛选插件，使用 AI 模型筛选和推荐感兴趣的论文。
+基于 BERT 模型自动筛选每日 arXiv 天体物理论文，推荐你可能感兴趣的论文。
 
-## 功能介绍
+## 功能
 
-arXiv Filter 插件可以从 arXiv 每日更新中筛选出符合用户研究兴趣的论文，支持基于关键词、分类和 AI 模型的智能筛选。
+- 每日定时从 arXiv `astro-ph/new` 页面获取最新论文
+- 使用 SciBERT 模型（标题 + 摘要作为输入）进行二分类，筛选感兴趣的论文
+- 支持定时检查 arXiv 更新，自动推送筛选结果
 
 ## 使用方法
 
-### 基本命令
-
 ```
-/arxiv today [分类]      # 获取今日论文
-/arxiv filter <关键词>    # 按关键词筛选
-/arxiv categories         # 列出所有分类
-/arxiv help               # 显示帮助信息
+/arxiv       # 获取今日筛选的论文
+/arxiv help  # 显示帮助信息
 ```
 
-### 示例
+## 定时任务
 
-```
-/arxiv today astro-ph     # 获取今日天体物理论文
-/arxiv filter galaxy      # 筛选包含 galaxy 的论文
-/arxiv categories         # 查看所有分类
-/arxiv help               # 显示帮助
-```
+在 `plugin.json` 中配置的定时任务：
 
-## 配置说明
+| 时间 | 行为 |
+|------|------|
+| 周一~周五 10:00 / 10:30 / 11:00 / 11:30 | 检查 arXiv 是否更新到当天，更新则执行筛选并推送 |
+| 周一~周五 12:00 | 最后一次检查，若仍未更新则发送停更通知 |
 
-在 `config/config.json` 中配置：
+每天只推送一次（通过 `data/update_status.json` 去重）。
+
+## 配置
+
+插件自带 `config.json`：
 
 ```json
 {
-  "plugins": {
-    "arxiv_filter": {
-      "categories": ["astro-ph", "hep-th", "gr-qc"],
-      "keywords": ["galaxy", "cosmology", "dark matter"],
-      "use_ai_filter": true,
-      "ai_threshold": 0.7,
-      "max_results": 10
+    "model": {
+        "path": "best_model",
+        "threshold": 0.5,
+        "batch_size": 32,
+        "max_len": 256
+    },
+    "arxiv": {
+        "url": "https://arxiv.org/list/astro-ph/new",
+        "proxy": null,
+        "api_days": 2,
+        "use_ssl_verify": true,
+        "timeout": 30
     }
-  }
 }
 ```
 
 ### 配置项说明
 
-- `categories` - 关注的 arXiv 分类列表
-- `keywords` - 关键词列表
-- `use_ai_filter` - 是否使用 AI 模型筛选（默认: false）
-- `ai_threshold` - AI 筛选阈值（0-1，默认: 0.7）
-- `max_results` - 最大返回结果数（默认: 10）
+| 分组 | 字段 | 说明 |
+|------|------|------|
+| model | `path` | 模型目录（相对于插件目录） |
+| model | `threshold` | 正类概率阈值 |
+| model | `batch_size` | 推理批大小 |
+| model | `max_len` | 最大 token 长度 |
+| arxiv | `url` | arXiv 列表页 URL |
+| arxiv | `proxy` | HTTP/HTTPS 代理（也可通过 `ARXIV_PROXY` 环境变量设置） |
+| arxiv | `use_ssl_verify` | 是否验证 SSL 证书 |
+| arxiv | `timeout` | 请求超时（秒） |
 
-## 支持的分类
+## 项目结构
 
-### 物理学
-- `astro-ph` - 天体物理
-- `hep-th` - 高能物理理论
-- `hep-ph` - 高能物理现象学
-- `gr-qc` - 广义相对论与量子宇宙学
-
-### 计算机科学
-- `cs.AI` - 人工智能
-- `cs.LG` - 机器学习
-- `cs.CV` - 计算机视觉
-
-完整列表请使用 `/arxiv categories` 查看。
-
-## 功能特性
-
-### 基础筛选
-- 按分类筛选
-- 按关键词筛选
-- 按作者筛选
-- 按日期筛选
-
-### AI 智能筛选（可选）
-- 使用深度学习模型评估论文相关性
-- 基于论文标题和摘要
-- 自动排序推荐
-- 可调节筛选阈值
-
-### 论文信息
-- 标题
-- 作者列表
-- 摘要
-- arXiv ID
-- 发布日期
-- 链接
+```
+arxiv_filter/
+├── main.py                   # 插件入口（命令处理、定时任务）
+├── arxiv_inference.py        # 模型推理
+├── arxiv_today.py            # arXiv 数据获取（网页爬取 + API）
+├── utils.py                  # 公共工具（配置加载）
+├── config.json               # 插件配置
+├── plugin.json               # 插件元数据
+├── best_model/               # 预训练 SciBERT 模型
+├── data/                     # 运行时数据（更新状态等）
+└── train_model/              # 模型训练代码和数据
+    ├── run_all.py            # 一键构建训练数据集
+    ├── step1_extract_positive_ids.py
+    ├── step2_fetch_all_astro_ph.py
+    ├── step3_build_dataset.py
+    ├── arxiv_class_v2.py     # 训练脚本（标题+摘要）
+    └── cache/                # 月度论文缓存
+```
 
 ## AI 模型
 
-插件包含预训练模型：
-- 模型路径: `best_model/`
-- 基于论文标题训练
-- 分类器类型: 二分类
-- 输出: 相关性分数（0-1）
-
-## 数据存储
-
-- 论文数据缓存: `data/papers.json`
-- 筛选历史: `data/filter_history.json`
-- AI 模型: `best_model/`
-
-## 注意事项
-
-- arXiv API 有速率限制
-- AI 筛选需要预训练模型
-- 首次运行可能需要下载数据
-- 缓存会定期更新
+- 基座模型: SciBERT (`allenai/scibert_scivocab_cased`)
+- 输入: 标题 (Segment A) + 摘要 (Segment B)，`max_len=256`
+- 任务: 二分类（感兴趣 / 不感兴趣）
+- 损失函数: Focal Loss (γ=4) + 类别加权 + WeightedRandomSampler
+- 输出: 正类概率 (0-1)
 
 ## 依赖
 
-- arxiv (arXiv API 客户端)
-- tensorflow/pytorch (如使用 AI 筛选)
-- transformers (如使用 AI 筛选)
-
-安装依赖：
 ```bash
-pip install arxiv
-# AI 筛选功能需要额外安装
-pip install tensorflow transformers
+pip install torch transformers pandas requests beautifulsoup4 feedparser urllib3
 ```
 
-## 适用场景
-
-- 科研工作者跟踪领域最新进展
-- 筛选感兴趣的研究方向
-- 每日论文推送
-- 研究方向探索
-
-## 数据来源
-
-- arXiv.org: https://arxiv.org/
-- arXiv API: https://arxiv.org/help/api/
+详见 `requirements.txt`。

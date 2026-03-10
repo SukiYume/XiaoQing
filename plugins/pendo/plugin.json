@@ -10,7 +10,6 @@
                 "pendo",
                 "日程",
                 "待办",
-                "笔记",
                 "日记"
             ],
             "help": "个人时间与信息管理中枢\n\n使用 /pendo help 查看详细帮助",
@@ -32,28 +31,17 @@
             "id": "pendo_daily_briefing",
             "handler": "scheduled_daily_briefing",
             "cron": {
-                "hour": 8,
-                "minute": 0
+                "minute": "*"
             },
-            "description": "每日简报 - 每天8点执行"
-        },
-        {
-            "id": "pendo_evening_briefing",
-            "handler": "scheduled_evening_briefing",
-            "cron": {
-                "hour": 21,
-                "minute": 0
-            },
-            "description": "晚间简报 - 每天21点执行"
+            "description": "每日简报 - 每分钟检查用户本地时间"
         },
         {
             "id": "pendo_diary_reminder",
             "handler": "scheduled_diary_reminder",
             "cron": {
-                "hour": 21,
-                "minute": 30
+                "minute": "*"
             },
-            "description": "日记提醒 - 每天21:30执行"
+            "description": "日记提醒 - 每分钟检查用户本地时间"
         },
         {
             "id": "pendo_migrate_todos",

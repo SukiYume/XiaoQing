@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
+
 
 @dataclass(frozen=True)
 class ActionRecord:
@@ -14,6 +16,7 @@ class ActionRecord:
     reasoning: str
     detail: dict[str, Any]
     executed: bool
+
 
 class ActionHistoryStore:
     """Stores action records per chat with debounced persistence.
@@ -57,6 +60,14 @@ class ActionHistoryStore:
             return []
         return list(self._cache[chat_id][-max_items:])
 
+    async def get_recent_async(self, chat_id: str, *, max_items: int = 20) -> list[ActionRecord]:
+        if chat_id not in self._cache:
+            loaded = await asyncio.to_thread(self._load, chat_id)
+            self._cache[chat_id] = loaded or []
+        if max_items <= 0:
+            return []
+        return list(self._cache[chat_id][-max_items:])
+
     def _path(self, chat_id: str) -> Optional[Path]:
         if not self._data_dir:
             return None
@@ -88,13 +99,15 @@ class ActionHistoryStore:
                     ts = float(ts_val)
                 except (TypeError, ValueError):
                     ts = time.time()
+                detail_raw = item.get("detail")
+                detail: dict[str, Any] = detail_raw if isinstance(detail_raw, dict) else {}
                 out.append(
                     ActionRecord(
                         ts=ts,
                         local_target=str(item.get("local_target", "") or ""),
                         action=str(item.get("action", "") or ""),
                         reasoning=str(item.get("reasoning", "") or ""),
-                        detail=item.get("detail") if isinstance(item.get("detail"), dict) else {},
+                        detail=detail,
                         executed=bool(item.get("executed", False)),
                     )
                 )

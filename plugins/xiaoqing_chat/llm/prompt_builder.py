@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import time
-import random
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -16,14 +15,19 @@ class ChatMessage:
     content: str
 
 _DEFAULT_REPLYER_SYSTEM = (
-    "你正在群里聊天，读读之前的聊天记录，把握当前的话题，然后给出日常且简短的回复。\n"
-    "最好一次对一个话题进行回复，免得啰嗦或者回复内容太乱。\n"
-    "口语化、像真人随口接话；允许有点情绪、吐槽、犹豫，不需要每句都完美。\n"
+    "读读之前的聊天记录，把握当前的话题，然后给出日常且简短的回复。\n"
+    "你的回复应该：\n"
+    "1. 以「你」的角度发言，不要自己与自己对话，分清你和对方说的话\n"
+    "2. 符合你的性格特征和身份细节\n"
+    "3. 口语化、像真人随口接话，自然流畅，简短（通常20字以内，除非特殊情况）\n"
+    "4. 一次只回应一个话题，不要啰嗦或回复内容太乱\n"
+    "5. 不要重复表达你说过的话或同质内容\n"
+    "允许有点情绪、吐槽、犹豫，不需要每句都完美。\n"
     "遇到不认识的词/英文/人名/梗，随口接一句或直接忽略就好。\n"
     "如果之前问过的问题没人回答，就放下它，跟着最新的话题走。\n"
     "不要输出多余前后缀，不要用括号包裹解释，不要 @ 任何人。\n"
     "不要主动强调自己是机器人/AI。被问到时自然回应即可。\n"
-    "只输出你要发的那段话。\n"
+    "只输出你要发的那段话，不需要任何额外格式。\n"
 )
 
 def _format_message_time(ts: float) -> str:
@@ -125,6 +129,7 @@ def build_prompt_messages(
     reply_style_override: str = "",
     state_override: str = "",
     request_id: str,
+    goal: str = "",
 ) -> list[ChatMessage]:
     sender = sender_name.strip() if sender_name else "用户"
     now = time.strftime("%Y-%m-%d %H:%M", time.localtime())
@@ -138,38 +143,47 @@ def build_prompt_messages(
     style = reply_style_override.strip() if reply_style_override else (personality.reply_style.strip() if personality.reply_style else "")
     channel = "私聊" if is_private else "群聊"
     identity = identity_block.strip() if identity_block else personality.identity.strip()
-    # 使用持久化的情绪状态（若有），否则随机抽取
+    # 使用调用方传入的持久化情绪状态（由 handlers.py 管理生命周期）
     state_text = state_override.strip() if state_override else ""
-    if not state_text and personality.states and random.random() < max(0.0, min(1.0, personality.state_probability)):
-        state_text = random.choice(personality.states).strip()
 
-    system_lines: list[str] = []
-    system_lines.append(f"你正在 QQ {channel}里聊天。你是「{bot_name}」。")
+    # ── 1. 人设块：名字 + identity + state 融合为连贯开头（参照 MaiBot persona_text）──
+    persona_parts: list[str] = [f"你的名字是「{bot_name}」，现在你在参与一场 QQ {channel}聊天。"]
     if identity:
-        system_lines.append(identity)
+        persona_parts.append(identity)
     if state_text:
-        system_lines.append(state_text)
-    system_lines.append(_DEFAULT_REPLYER_SYSTEM.strip())
+        persona_parts.append(state_text)
+
+    # ── 2. 行为指令块 ──
+    instruction_parts: list[str] = [_DEFAULT_REPLYER_SYSTEM.strip()]
     if guardrail.strip():
-        system_lines.append(guardrail.strip())
-    if expression_habits_block.strip():
-        system_lines.append(expression_habits_block.strip())
-    if tool_info_block.strip():
-        system_lines.append(tool_info_block.strip())
-    if memory_block.strip():
-        system_lines.append(memory_block.strip())
-    if jargon_explanation.strip():
-        system_lines.append(jargon_explanation.strip())
+        instruction_parts.append(guardrail.strip())
     if style:
-        system_lines.append("回复风格偏好\n" + style)
-    system_lines.append(f"当前时间\n{now}")
-    system_lines.append(f"请求ID\n{request_id}")
-    system_prompt = "\n\n".join([s for s in system_lines if s]).strip()
+        instruction_parts.append("回复风格偏好\n" + style)
+    if expression_habits_block.strip():
+        instruction_parts.append(expression_habits_block.strip())
+
+    # ── 3. 参考资料块 ──
+    reference_parts: list[str] = []
+    if memory_block.strip():
+        reference_parts.append(memory_block.strip())
+    if jargon_explanation.strip():
+        reference_parts.append(jargon_explanation.strip())
+    if tool_info_block.strip():
+        reference_parts.append(tool_info_block.strip())
+
+    # ── 4. 元信息 ──
+    meta_parts: list[str] = [f"当前时间\n{now}", f"请求ID\n{request_id}"]
+
+    all_sections = persona_parts + instruction_parts + reference_parts + meta_parts
+    system_prompt = "\n\n".join([s for s in all_sections if s]).strip()
 
     dialogue = build_dialogue_prompt(history, bot_name=bot_name, truncate=True)
     chat_target = "下面是你们的对话" if is_private else "下面是群里正在聊的内容"
     user_blocks: list[str] = []
-    # Planner reasoning first — gives the LLM context on *why* it's replying
+    # Goal first — like MaiBot, tell the LLM what the conversation goal is
+    if goal.strip():
+        user_blocks.append("当前对话目标：" + goal.strip())
+    # Planner reasoning — gives the LLM context on *why* it's replying
     if planner_reasoning.strip():
         user_blocks.append("你为什么要回复这条消息\n" + planner_reasoning.strip())
     user_blocks.append(f'{chat_target}（注意：你是"{bot_name}(你)"）\n{dialogue}'.strip())

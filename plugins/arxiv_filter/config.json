@@ -3,7 +3,7 @@
         "path": "best_model",
         "threshold": 0.5,
         "batch_size": 32,
-        "max_len": 64
+        "max_len": 512
     },
     "arxiv": {
         "url": "https://arxiv.org/list/astro-ph/new",
