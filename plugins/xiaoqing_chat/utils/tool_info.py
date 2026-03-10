@@ -1,28 +1,10 @@
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-def _load_latest_topic_summary(data_dir: Path, chat_id: str) -> str:
-    path = data_dir / "hippo_memorizer" / f"{chat_id}.json"
-    if not path.exists():
-        return ""
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, list) or not raw:
-            return ""
-        item = raw[-1]
-        if not isinstance(item, dict):
-            return ""
-        topic = str(item.get("topic", "")).strip()
-        summary = str(item.get("summary", "")).strip()
-        if not topic or not summary:
-            return ""
-        return f"最新话题：{topic}\n摘要：{summary}"
-    except Exception:
-        return ""
+from ..planning.goal_state import load_latest_topic_and_summary
 
 def build_tool_info_block(
     *,
@@ -58,9 +40,14 @@ def build_tool_info_block(
         f"- 频率：距上次回复{since:.0f}s，60秒内回复{int(replies_last_minute)}，连续回复{int(continuous_reply_count)}，冷却剩余{max(0.0, cooldown_left_seconds):.0f}s"
     )
 
-    topic = _load_latest_topic_summary(data_dir, chat_id)
-    if topic:
-        lines.append("- " + topic.replace("\n", "\n  "))
+    topic, summary = load_latest_topic_and_summary(data_dir, chat_id)
+    topic_text = ""
+    if topic and summary:
+        topic_text = f"最新话题：{topic}\n摘要：{summary}"
+    elif topic:
+        topic_text = f"最新话题：{topic}"
+    if topic_text:
+        lines.append("- " + topic_text.replace("\n", "\n  "))
 
     if recent_actions:
         lines.append("- 最近动作：")

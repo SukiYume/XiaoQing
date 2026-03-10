@@ -4,7 +4,7 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from .config.config import XiaoQingChatConfig
 from .memory.memory_db import MemoryDB
@@ -20,23 +20,27 @@ from .expression.bw_reflect_tracker import ReflectTrackerStore
 from .expression.bw_message_recorder import MessageRecorder
 from .expression.bw_jargon_store import JargonStore
 
+
 @dataclass
 class _ChatRuntime:
     cfg: XiaoQingChatConfig
-    compiled_ban_regex: list[re.Pattern]
+    compiled_ban_regex: list[re.Pattern[str]]
+
 
 @dataclass
 class _PerChatState:
     locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     reply_timestamps: dict[str, list[float]] = field(default_factory=dict)
     last_reply_ts: dict[str, float] = field(default_factory=dict)
+    last_observe_ts: dict[str, float] = field(default_factory=dict)
     continuous_reply_count: dict[str, int] = field(default_factory=dict)
     continuous_cooldown_until: dict[str, float] = field(default_factory=dict)
     stats: dict[str, dict[str, int]] = field(default_factory=dict)
-    persist_tasks: dict[str, asyncio.Task] = field(default_factory=dict)
+    persist_tasks: dict[str, asyncio.Task[Any]] = field(default_factory=dict)
     next_local_id: dict[str, int] = field(default_factory=dict)
     # chat_id -> (mood_text, expires_at_timestamp)
     mood_state: dict[str, tuple[str, float]] = field(default_factory=dict)
+
 
 class ChatRuntimeState:
     __slots__ = (
@@ -78,9 +82,9 @@ class ChatRuntimeState:
         self._runtime_mtime: dict[str, int] = {}
 
         self._per_chat = _PerChatState()
-        self._bg_tasks: set[asyncio.Task] = set()
-        self._vdb_save_task: Optional[asyncio.Task] = None
-        self._active_provider: Optional[str] = None
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
+        self._vdb_save_task: asyncio.Task[Any] | None = None
+        self._active_provider: str | None = None
 
     @property
     def memory_store(self) -> MemoryStore:
@@ -130,22 +134,84 @@ class ChatRuntimeState:
     def bw_jargon_store(self) -> JargonStore:
         return self._bw_jargon_store
 
-    def get_runtime(self, config_key: str) -> Optional[_ChatRuntime]:
+    def get_runtime(self, config_key: str) -> _ChatRuntime | None:
         return self._runtime_cache.get(config_key)
 
     def set_runtime(self, config_key: str, runtime: _ChatRuntime, mtime: int) -> None:
         self._runtime_cache[config_key] = runtime
         self._runtime_mtime[config_key] = mtime
 
-    def get_runtime_mtime(self, config_key: str) -> Optional[int]:
+    def get_runtime_mtime(self, config_key: str) -> int | None:
         return self._runtime_mtime.get(config_key)
+
+    _MAX_TRACKED_CHATS = 500
 
     def get_lock(self, chat_id: str) -> asyncio.Lock:
         lock = self._per_chat.locks.get(chat_id)
         if lock is None:
             lock = asyncio.Lock()
             self._per_chat.locks[chat_id] = lock
+        # Periodic cleanup: only run every 100 new chats
+        if len(self._per_chat.locks) % 100 == 0:
+            self.cleanup_stale_chats()
         return lock
+
+    def cleanup_stale_chats(self) -> None:
+        """Evict per-chat entries beyond the limit, keeping those with recent activity."""
+        pc = self._per_chat
+        all_ids: set[str] = set()
+        for d in (
+            pc.locks,
+            pc.reply_timestamps,
+            pc.last_reply_ts,
+            pc.last_observe_ts,
+            pc.continuous_reply_count,
+            pc.continuous_cooldown_until,
+            pc.stats,
+            pc.persist_tasks,
+            pc.next_local_id,
+            pc.mood_state,
+        ):
+            all_ids.update(d.keys())
+        if len(all_ids) <= self._MAX_TRACKED_CHATS:
+            return
+        scored = []
+        for cid in all_ids:
+            ts = max(pc.last_reply_ts.get(cid, 0.0), pc.last_observe_ts.get(cid, 0.0))
+            scored.append((ts, cid))
+        scored.sort(reverse=True)
+        keep = {cid for _, cid in scored[: self._MAX_TRACKED_CHATS]}
+        for cid, lock in pc.locks.items():
+            if lock.locked():
+                keep.add(cid)
+        for cid, task in pc.persist_tasks.items():
+            if not task.done():
+                keep.add(cid)
+
+        for d in (
+            pc.reply_timestamps,
+            pc.last_reply_ts,
+            pc.last_observe_ts,
+            pc.continuous_reply_count,
+            pc.continuous_cooldown_until,
+            pc.stats,
+            pc.next_local_id,
+            pc.mood_state,
+        ):
+            for cid in list(d.keys()):
+                if cid not in keep:
+                    del d[cid]
+
+        for cid in list(pc.persist_tasks.keys()):
+            if cid in keep:
+                continue
+            task = pc.persist_tasks.pop(cid)
+            if not task.done():
+                task.cancel()
+
+        for cid in list(pc.locks.keys()):
+            if cid not in keep and not pc.locks[cid].locked():
+                del pc.locks[cid]
 
     def get_reply_timestamps(self, chat_id: str) -> list[float]:
         return self._per_chat.reply_timestamps.get(chat_id, [])
@@ -158,6 +224,12 @@ class ChatRuntimeState:
 
     def set_last_reply_ts(self, chat_id: str, ts: float) -> None:
         self._per_chat.last_reply_ts[chat_id] = ts
+
+    def get_last_observe_ts(self, chat_id: str) -> float:
+        return self._per_chat.last_observe_ts.get(chat_id, 0.0)
+
+    def set_last_observe_ts(self, chat_id: str, ts: float) -> None:
+        self._per_chat.last_observe_ts[chat_id] = ts
 
     def get_continuous_reply_count(self, chat_id: str) -> int:
         return self._per_chat.continuous_reply_count.get(chat_id, 0)
@@ -181,22 +253,22 @@ class ChatRuntimeState:
         d = self._per_chat.stats.setdefault(chat_id, {"replies": 0, "calls": 0})
         d[key] = int(d.get(key, 0)) + 1
 
-    def get_persist_task(self, chat_id: str) -> Optional[asyncio.Task]:
+    def get_persist_task(self, chat_id: str) -> asyncio.Task[Any] | None:
         return self._per_chat.persist_tasks.get(chat_id)
 
-    def set_persist_task(self, chat_id: str, task: asyncio.Task) -> None:
+    def set_persist_task(self, chat_id: str, task: asyncio.Task[Any]) -> None:
         self._per_chat.persist_tasks[chat_id] = task
 
-    def add_bg_task(self, task: asyncio.Task) -> None:
+    def add_bg_task(self, task: asyncio.Task[Any]) -> None:
         self._bg_tasks.add(task)
 
-    def remove_bg_task(self, task: asyncio.Task) -> None:
+    def remove_bg_task(self, task: asyncio.Task[Any]) -> None:
         self._bg_tasks.discard(task)
 
-    def get_vdb_save_task(self) -> Optional[asyncio.Task]:
+    def get_vdb_save_task(self) -> asyncio.Task[Any] | None:
         return self._vdb_save_task
 
-    def set_vdb_save_task(self, task: Optional[asyncio.Task]) -> None:
+    def set_vdb_save_task(self, task: asyncio.Task[Any] | None) -> None:
         self._vdb_save_task = task
 
     def get_next_local_id(self, chat_id: str) -> int:
@@ -204,6 +276,12 @@ class ChatRuntimeState:
 
     def set_next_local_id(self, chat_id: str, next_id: int) -> None:
         self._per_chat.next_local_id[chat_id] = next_id
+
+    def fetch_and_increment_local_id(self, chat_id: str) -> int:
+        """Atomically get current local_id and increment. Returns the old value."""
+        n = self._per_chat.next_local_id.get(chat_id, 1)
+        self._per_chat.next_local_id[chat_id] = n + 1
+        return n
 
     def get_mood_state(self, chat_id: str) -> str:
         """Return current mood text if still active, else empty string."""
@@ -216,28 +294,30 @@ class ChatRuntimeState:
             return ""
         return mood_text
 
-    def set_mood_state(self, chat_id: str, mood_text: str, duration_seconds: float = 1800.0) -> None:
+    def set_mood_state(
+        self, chat_id: str, mood_text: str, duration_seconds: float = 1800.0
+    ) -> None:
         """Persist a mood state for this chat for the given duration."""
         self._per_chat.mood_state[chat_id] = (mood_text, time.time() + duration_seconds)
 
     @property
-    def active_provider(self) -> Optional[str]:
+    def active_provider(self) -> str | None:
         return self._active_provider
 
     @active_provider.setter
-    def active_provider(self, name: Optional[str]) -> None:
+    def active_provider(self, name: str | None) -> None:
         self._active_provider = name
 
-_global_state: Optional[ChatRuntimeState] = None
 
-def get_global_state() -> ChatRuntimeState:
+_global_state: ChatRuntimeState | None = None
+
+
+def get_state() -> ChatRuntimeState:
     global _global_state
     if _global_state is None:
         _global_state = ChatRuntimeState()
     return _global_state
 
-def get_state() -> ChatRuntimeState:
-    return get_global_state()
 
 def reset_global_state() -> None:
     global _global_state

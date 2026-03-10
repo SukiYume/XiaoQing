@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from .bw_expression_store import ExpressionRecord, ExpressionStore
+from .expr_utils import extract_json_obj, render_dialogue
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
 from ..memory.memory import MemoryStore, StoredMessage
-
-_RE_JSON_BLOCK = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
-_RE_OBJ = re.compile(r"\{[\s\S]*\}")
 
 _JUDGE_PROMPT = """
 你是一个表达反思助手。Bot之前询问了表达方式是否合适。
@@ -40,12 +37,14 @@ _JUDGE_PROMPT = """
 }}
 ```""".strip()
 
+
 @dataclass
 class ReflectTrackerState:
     operator_chat_id: str
     expression_id: str
     created_time: float
     last_check_count: int = 0
+
 
 class ReflectTrackerStore:
     def __init__(self) -> None:
@@ -76,7 +75,9 @@ class ReflectTrackerStore:
             for k, v in raw.items():
                 if not isinstance(v, dict):
                     continue
-                operator_chat_id = str(v.get("operator_chat_id", "") or "").strip() or str(k).strip()
+                operator_chat_id = (
+                    str(v.get("operator_chat_id", "") or "").strip() or str(k).strip()
+                )
                 expression_id = str(v.get("expression_id", "") or "").strip()
                 created_time = float(v.get("created_time", 0.0) or 0.0)
                 last_check_count = int(v.get("last_check_count", 0) or 0)
@@ -129,38 +130,15 @@ class ReflectTrackerStore:
         self.load()
         return self._cache.get(operator_chat_id)
 
-def _extract_json_obj(text: str) -> dict[str, Any]:
-    s = (text or "").strip()
-    blocks = _RE_JSON_BLOCK.findall(s)
-    if blocks:
-        s = blocks[0].strip()
-    m = _RE_OBJ.search(s)
-    if m:
-        s = m.group(0)
-    try:
-        obj = json.loads(s)
-    except Exception:
-        return {}
-    return obj if isinstance(obj, dict) else {}
 
-def _render_context(messages: Sequence[StoredMessage], *, max_lines: int = 18) -> str:
-    lines: list[str] = []
-    for msg in messages[-max_lines:]:
-        t = (msg.content or "").strip()
-        if not t:
-            continue
-        if len(t) > 180:
-            t = t[:140].rstrip() + "…"
-        name = msg.name or ("小青" if msg.role == "assistant" else "用户")
-        role = "小青" if msg.role == "assistant" else "对方"
-        lines.append(f"{role}({name})：{t}")
-    return "\n".join(lines).strip()
-
-def _find_expression(items: Sequence[ExpressionRecord], expression_id: str) -> Optional[ExpressionRecord]:
+def _find_expression(
+    items: Sequence[ExpressionRecord], expression_id: str
+) -> Optional[ExpressionRecord]:
     for it in items:
         if it.expression_id == expression_id:
             return it
     return None
+
 
 async def tick_reflect_tracker(
     *,
@@ -186,16 +164,18 @@ async def tick_reflect_tracker(
         tracker_store.remove_tracker(operator_chat_id)
         return True
 
-    history = memory_store.get(operator_chat_id)
-    new_msgs = [m for m in history if m.role == "user" and float(m.ts or 0.0) >= tracker.created_time]
+    history = await memory_store.get_async(operator_chat_id)
+    new_msgs = [
+        m for m in history if m.role == "user" and float(m.ts or 0.0) >= tracker.created_time
+    ]
     if len(new_msgs) > int(max_message_count):
         tracker_store.remove_tracker(operator_chat_id)
         return True
 
     if len(new_msgs) <= int(tracker.last_check_count):
         return False
-    tracker.last_check_count = len(new_msgs)
-    tracker_store.save()
+    # Update count *after* processing succeeds (moved to end of function)
+    current_msg_count = len(new_msgs)
 
     expr_items = expr_store.load()
     expr = _find_expression(expr_items, tracker.expression_id)
@@ -209,11 +189,15 @@ async def tick_reflect_tracker(
     if not api_base or not api_key or not model:
         return False
 
-    context_block = _render_context([m for m in history if float(m.ts or 0.0) >= tracker.created_time])
+    context_block = render_dialogue(
+        [m for m in history if float(m.ts or 0.0) >= tracker.created_time]
+    )
     if not context_block:
         return False
 
-    prompt = _JUDGE_PROMPT.format(situation=expr.situation, style=expr.style, context_block=context_block)
+    prompt = _JUDGE_PROMPT.format(
+        situation=expr.situation, style=expr.style, context_block=context_block
+    )
     resp, _path = await chat_completions_raw_with_fallback_paths(
         session=context.http_session,
         api_base=api_base,
@@ -230,7 +214,7 @@ async def tick_reflect_tracker(
         endpoint_path=endpoint_path,
     )
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-    obj = _extract_json_obj(str(content))
+    obj = extract_json_obj(str(content))
     judgment = str(obj.get("judgment", "") or "").strip().lower()
     corrected_situation = str(obj.get("corrected_situation", "") or "").strip()
     corrected_style = str(obj.get("corrected_style", "") or "").strip()
@@ -262,4 +246,8 @@ async def tick_reflect_tracker(
         expr_store.save(expr_items)
         tracker_store.remove_tracker(operator_chat_id)
         return True
+    # Only update last_check_count when no resolution found — avoids resetting
+    # to the same value which would cause a dead loop on next tick
+    tracker.last_check_count = current_msg_count
+    tracker_store.save()
     return False

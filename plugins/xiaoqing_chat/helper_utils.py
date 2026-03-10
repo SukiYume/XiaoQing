@@ -9,15 +9,11 @@ from typing import Any, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from core.plugin_base import Context
 
-import asyncio as _asyncio
-
 from .config.config import XiaoQingChatConfig, load_xiaoqing_chat_config
+from .llm.llm_config import LLMCallConfig
 from .runtime_state import _ChatRuntime
 from .constants import FIND_BY_LOCAL_ID_LIMIT
 from .runtime_state import get_state as _state
-
-# Lock to protect config hot-reload atomicity (issue 2.3)
-_config_reload_lock = _asyncio.Lock()
 
 
 def _get_lock(chat_id: str):
@@ -137,10 +133,11 @@ def _has_bot_name(event: dict[str, Any], bot_name: str) -> bool:
     Returns:
         True if the bot's name appears in the message (case-insensitive).
     """
-    raw = event.get("raw_message")
-    if not isinstance(raw, str) or not bot_name:
+    if not bot_name:
         return False
-    return bot_name.lower() in raw.lower()
+    from core.message import extract_text
+    text = extract_text(event.get("message")).strip()
+    return bot_name.lower() in text.lower()
 
 
 def _load_runtime(context: Context) -> _ChatRuntime:
@@ -253,6 +250,41 @@ def _get_llm_secrets(context: Context) -> dict[str, Any]:
     return result
 
 
+def _resolve_llm_config(
+    cfg: "XiaoQingChatConfig",
+    secrets: dict[str, Any],
+    *,
+    foreground: bool = False,
+) -> LLMCallConfig:
+    """Resolve timeout/retry/proxy settings for LLM calls."""
+    if foreground:
+        timeout = float(
+            getattr(cfg, "foreground_timeout_seconds", cfg.timeout_seconds)
+        )
+        max_retry = int(getattr(cfg, "foreground_max_retry", cfg.max_retry))
+        retry_interval = float(
+            getattr(cfg, "foreground_retry_interval_seconds", cfg.retry_interval_seconds)
+        )
+    else:
+        timeout = float(
+            getattr(cfg, "background_timeout_seconds", cfg.timeout_seconds)
+        )
+        max_retry = int(getattr(cfg, "background_max_retry", cfg.max_retry))
+        retry_interval = float(
+            getattr(cfg, "background_retry_interval_seconds", cfg.retry_interval_seconds)
+        )
+    return LLMCallConfig(
+        timeout_seconds=timeout,
+        max_retry=max_retry,
+        retry_interval_seconds=retry_interval,
+        proxy=secrets.get("proxy", "") or "",
+        endpoint_path=secrets.get("endpoint_path", "") or cfg.endpoint_path,
+        temperature=float(cfg.temperature),
+        top_p=float(cfg.top_p),
+        max_tokens=int(cfg.max_tokens),
+    )
+
+
 def _should_ignore_text(text: str, runtime: _ChatRuntime) -> bool:
     """
     Check if text should be ignored based on ban words/regex patterns.
@@ -284,8 +316,7 @@ def _parse_local_id_num(local_id: str) -> int:
     return 0
 
 def _next_local_id(chat_id: str) -> str:
-    n = _state().get_next_local_id(chat_id)
-    _state().set_next_local_id(chat_id, n + 1)
+    n = _state().fetch_and_increment_local_id(chat_id)
     return f"m{n}"
 
 def _find_by_local_id(chat_id: str, local_id: str) -> Optional[Any]:
@@ -315,7 +346,7 @@ def _replace_local_ids_with_text(chat_id: str, text: str) -> str:
         local_id = match.group(0)
         msg = _find_by_local_id(chat_id, local_id)
         if msg:
-            role_text = "我" if msg.role == "user" else "小青"
+            role_text = "对方" if msg.role == "user" else "小青"
             return f"{role_text}说过"
         return local_id
 

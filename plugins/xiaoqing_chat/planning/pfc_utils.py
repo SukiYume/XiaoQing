@@ -6,6 +6,16 @@ from typing import Any, Optional, Union
 
 _RE_ARRAY = re.compile(r"\[[\s\S]*\]")
 _RE_OBJ = re.compile(r"\{[\s\S]*\}")
+_RE_JSON_BLOCK = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
+
+
+def _strip_code_block(text: str) -> str:
+    """Strip markdown code blocks from text before JSON extraction."""
+    s = (text or "").strip()
+    blocks = _RE_JSON_BLOCK.findall(s)
+    if blocks:
+        return blocks[0].strip()
+    return s
 
 def get_items_from_json(
     content: str,
@@ -88,29 +98,24 @@ def get_items_from_json(
     return True, result
 
 def extract_first_json_list(text: str) -> list[dict[str, Any]]:
-    """Extract the first JSON list from text, returning list of dicts."""
-    s = (text or "").strip()
+    """Extract the first JSON list from text, handling code blocks."""
+    s = _strip_code_block(text)
     m = _RE_ARRAY.search(s)
     if not m:
         return []
     try:
         arr = json.loads(m.group(0))
         if isinstance(arr, list):
-            out: list[dict[str, Any]] = []
-            for it in arr:
-                if isinstance(it, dict):
-                    out.append(it)
-            return out
+            return [it for it in arr if isinstance(it, dict)]
     except Exception:
         pass
     return []
 
 def extract_first_json_dict(text: str) -> Optional[dict[str, Any]]:
-    """Extract the first JSON object from text."""
-    s = (text or "").strip()
+    """Extract the first JSON object from text, handling code blocks."""
+    s = _strip_code_block(text)
     m = _RE_OBJ.search(s)
     if not m:
-        # Fallback: maybe the whole text is JSON
         try:
             obj = json.loads(s)
             return obj if isinstance(obj, dict) else None

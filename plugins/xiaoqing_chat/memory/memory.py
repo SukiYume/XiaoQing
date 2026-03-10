@@ -7,6 +7,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+
+MAX_CACHED_MESSAGES_PER_CHAT = 200
+
+
 @dataclass(frozen=True)
 class StoredMessage:
     role: str
@@ -16,6 +20,7 @@ class StoredMessage:
     user_id: Optional[int] = None
     message_id: Optional[int] = None
     local_id: str = ""
+
 
 class MemoryStore:
     """会话记忆存储，使用 asyncio 兼容的锁保护内部状态。
@@ -32,11 +37,20 @@ class MemoryStore:
         self._lock = asyncio.Lock()
         # 同步快照锁：仅用于极短的字典读写，不做 I/O
         import threading
+
         self._sync_lock = threading.Lock()
 
     def bind_data_dir(self, data_dir: Path) -> None:
         with self._sync_lock:
+            if self._data_dir != data_dir:
+                self._messages.clear()
             self._data_dir = data_dir
+
+    @staticmethod
+    def _trim_history(history: list[StoredMessage]) -> list[StoredMessage]:
+        if len(history) <= MAX_CACHED_MESSAGES_PER_CHAT:
+            return history
+        return history[-MAX_CACHED_MESSAGES_PER_CHAT:]
 
     def clear(self, chat_id: str) -> None:
         with self._sync_lock:
@@ -72,7 +86,10 @@ class MemoryStore:
             ts=ts if ts is not None else time.time(),
         )
         with self._sync_lock:
-            self._messages.setdefault(chat_id, []).append(msg)
+            history = self._messages.setdefault(chat_id, [])
+            history.append(msg)
+            if len(history) > MAX_CACHED_MESSAGES_PER_CHAT:
+                del history[:-MAX_CACHED_MESSAGES_PER_CHAT]
 
     def get(self, chat_id: str) -> list[StoredMessage]:
         with self._sync_lock:
@@ -80,12 +97,28 @@ class MemoryStore:
         if cached is None:
             loaded = self._load(chat_id)
             with self._sync_lock:
-                self._messages[chat_id] = loaded if loaded is not None else []
+                self._messages[chat_id] = self._trim_history(loaded if loaded is not None else [])
+                cached = self._messages.get(chat_id) or []
+        return list(cached)
+
+    async def get_async(self, chat_id: str) -> list[StoredMessage]:
+        with self._sync_lock:
+            cached = self._messages.get(chat_id)
+        if cached is None:
+            loaded = await asyncio.to_thread(self._load, chat_id)
+            with self._sync_lock:
+                self._messages[chat_id] = self._trim_history(loaded if loaded is not None else [])
                 cached = self._messages.get(chat_id) or []
         return list(cached)
 
     def get_recent(self, chat_id: str, *, max_items: int) -> list[StoredMessage]:
         history = self.get(chat_id)
+        if max_items <= 0:
+            return []
+        return history[-max_items:]
+
+    async def get_recent_async(self, chat_id: str, *, max_items: int) -> list[StoredMessage]:
+        history = await self.get_async(chat_id)
         if max_items <= 0:
             return []
         return history[-max_items:]

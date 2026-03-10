@@ -2,51 +2,56 @@
 消息格式化工具
 统一处理各Handler中重复的消息格式化逻辑
 """
+
 from typing import Any, Optional
 from datetime import datetime
 import json
+import re
+
+from ..models.item import get_item_type_value
 
 # 优先级图标映射
 PRIORITY_ICONS = {
-    1: '🔴',   # 紧急
-    2: '🟠',   # 高
-    3: '🟡',   # 中
-    4: '🟢',   # 低
+    1: "🔴",  # 紧急
+    2: "🟠",  # 高
+    3: "🟡",  # 中
+    4: "🟢",  # 低
 }
 
 # 优先级文本映射
 PRIORITY_LABELS = {
-    1: '🔴紧急',
-    2: '🟠高',
-    3: '🟡中',
-    4: '🟢低',
+    1: "🔴紧急",
+    2: "🟠高",
+    3: "🟡中",
+    4: "🟢低",
 }
 
 # 任务状态图标
 STATUS_ICONS = {
-    'todo': '⬜',
-    'in_progress': '⏳',
-    'done': '✅',
-    'cancelled': '❌',
+    "todo": "⬜",
+    "in_progress": "⏳",
+    "done": "✅",
+    "cancelled": "❌",
 }
 
 # 条目类型图标
 TYPE_ICONS = {
-    'event': '🗓️',
-    'task': '✅',
-    'note': '📝',
-    'diary': '📔',
-    'idea': '💡',
+    "event": "🗓️",
+    "task": "✅",
+    "note": "📝",
+    "diary": "📔",
+    "idea": "💡",
 }
 
 # 条目类型名称
 TYPE_NAMES = {
-    'event': '🗓️ 日程',
-    'task': '✅ 待办',
-    'note': '📝 笔记',
-    'idea': '💡 想法',
-    'diary': '📔 日记'
+    "event": "🗓️ 日程",
+    "task": "✅ 待办",
+    "note": "📝 笔记",
+    "idea": "💡 想法",
+    "diary": "📔 日记",
 }
+
 
 class ItemFormatter:
     """条目格式化工具类
@@ -88,7 +93,7 @@ class ItemFormatter:
         Returns:
             状态图标字符串
         """
-        return STATUS_ICONS.get(status, '⬜')
+        return STATUS_ICONS.get(status, "⬜")
 
     @staticmethod
     def format_type_icon(item_type: str) -> str:
@@ -100,10 +105,10 @@ class ItemFormatter:
         Returns:
             类型图标字符串
         """
-        return TYPE_ICONS.get(item_type, '📄')
+        return TYPE_ICONS.get(item_type, "📄")
 
     @staticmethod
-    def format_datetime(dt_str: str, fmt: str = '%Y-%m-%d %H:%M') -> str:
+    def format_datetime(dt_str: str, fmt: str = "%Y-%m-%d %H:%M") -> str:
         """格式化日期时间字符串
 
         Args:
@@ -128,7 +133,7 @@ class ItemFormatter:
         Returns:
             格式化后的日期字符串 (YYYY-MM-DD)
         """
-        return ItemFormatter.format_datetime(dt_str, '%Y-%m-%d')
+        return ItemFormatter.format_datetime(dt_str, "%Y-%m-%d")
 
     @staticmethod
     def format_time(dt_str: str) -> str:
@@ -140,7 +145,7 @@ class ItemFormatter:
         Returns:
             格式化后的时间字符串 (HH:MM)
         """
-        return ItemFormatter.format_datetime(dt_str, '%H:%M')
+        return ItemFormatter.format_datetime(dt_str, "%H:%M")
 
     @staticmethod
     def format_tags(tags: list[str]) -> str:
@@ -153,8 +158,8 @@ class ItemFormatter:
             格式化后的标签字符串
         """
         if not tags:
-            return ''
-        return ' '.join(f'#{tag}' for tag in tags)
+            return ""
+        return " ".join(f"#{tag}" for tag in tags)
 
     @staticmethod
     def format_remind_times(remind_times: list[str]) -> str:
@@ -167,13 +172,13 @@ class ItemFormatter:
             格式化后的提醒时间字符串
         """
         if not remind_times:
-            return '未设置提醒'
+            return "未设置提醒"
 
         formatted = []
         for t in remind_times:
-            time_str = ItemFormatter.format_datetime(t, '%m-%d %H:%M')
+            time_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
             formatted.append(time_str)
-        return ', '.join(formatted)
+        return ", ".join(formatted)
 
     @staticmethod
     def format_item_reference(item) -> str:
@@ -185,10 +190,10 @@ class ItemFormatter:
         Returns:
             格式化后的引用字符串
         """
-        item_type = item.type.value if hasattr(item.type, 'value') else item.type
+        item_type = get_item_type_value(item.type)
         icon = ItemFormatter.format_type_icon(item_type)
-        title = item.title or ItemFormatter.truncate_content(item.content or '', 30)
-        item_id = item.id or ''
+        title = item.title or ItemFormatter.truncate_content(item.content or "", 30)
+        item_id = item.id or ""
 
         return f"{icon} {title} `{item_id}`"
 
@@ -204,7 +209,7 @@ class ItemFormatter:
             格式化后的时间范围字符串
         """
         if not start_time:
-            return ''
+            return ""
 
         start_str = ItemFormatter.format_time(start_time)
 
@@ -215,7 +220,7 @@ class ItemFormatter:
         return start_str
 
     @staticmethod
-    def format_confirm_message(item, action: str = 'confirm') -> str:
+    def format_confirm_message(item, action: str = "confirm") -> str:
         """格式化确认消息
 
         Args:
@@ -230,11 +235,11 @@ class ItemFormatter:
         if item.title:
             lines.append(f"📋 标题: {item.title}")
 
-        item_type = item.type.value if hasattr(item.type, 'value') else item.type
-        if item_type == 'event':
-            if getattr(item, 'start_time', None):
+        item_type = get_item_type_value(item.type)
+        if item_type == "event":
+            if getattr(item, "start_time", None):
                 lines.append(f"⏰ 时间: {ItemFormatter.format_datetime(item.start_time)}")
-            if getattr(item, 'location', None):
+            if getattr(item, "location", None):
                 lines.append(f"📍 地点: {item.location}")
 
         lines.append("")
@@ -243,7 +248,7 @@ class ItemFormatter:
         return "\n".join(lines)
 
     @staticmethod
-    def format_list_header(title: str, count: int, filter_info: str = '') -> str:
+    def format_list_header(title: str, count: int, filter_info: str = "") -> str:
         """格式化列表头部
 
         Args:
@@ -260,7 +265,7 @@ class ItemFormatter:
         return header
 
     @staticmethod
-    def truncate_content(content: str, max_length: int = 50, suffix: str = '...') -> str:
+    def truncate_content(content: str, max_length: int = 50, suffix: str = "...") -> str:
         """截断内容
 
         Args:
@@ -272,10 +277,11 @@ class ItemFormatter:
             截断后的内容
         """
         if not content:
-            return ''
+            return ""
         if len(content) <= max_length:
             return content
         return content[:max_length] + suffix
+
 
 class MessageBuilder:
     """消息构建工具类
@@ -286,29 +292,29 @@ class MessageBuilder:
     def __init__(self):
         self.lines: list[str] = []
 
-    def add_line(self, line: str = '') -> 'MessageBuilder':
+    def add_line(self, line: str = "") -> "MessageBuilder":
         """添加一行"""
         self.lines.append(line)
         return self
 
-    def add_header(self, text: str, level: int = 1) -> 'MessageBuilder':
+    def add_header(self, text: str, level: int = 1) -> "MessageBuilder":
         """添加标题"""
-        prefix = '#' * level
+        prefix = "#" * level
         self.lines.append(f"{prefix} {text}")
         return self
 
-    def add_section(self, title: str) -> 'MessageBuilder':
+    def add_section(self, title: str) -> "MessageBuilder":
         """添加小节标题"""
         self.lines.append(f"\n**{title}**")
         return self
 
-    def add_item(self, icon: str, text: str, indent: int = 0) -> 'MessageBuilder':
+    def add_item(self, icon: str, text: str, indent: int = 0) -> "MessageBuilder":
         """添加列表项"""
-        prefix = '  ' * indent
+        prefix = "  " * indent
         self.lines.append(f"{prefix}{icon} {text}")
         return self
 
-    def add_info(self, key: str, value: str, icon: str = '') -> 'MessageBuilder':
+    def add_info(self, key: str, value: str, icon: str = "") -> "MessageBuilder":
         """添加键值对信息"""
         if icon:
             self.lines.append(f"{icon} {key}: {value}")
@@ -316,12 +322,12 @@ class MessageBuilder:
             self.lines.append(f"{key}: {value}")
         return self
 
-    def add_separator(self) -> 'MessageBuilder':
+    def add_separator(self) -> "MessageBuilder":
         """添加分隔符"""
         self.lines.append("---")
         return self
 
-    def add_blank(self) -> 'MessageBuilder':
+    def add_blank(self) -> "MessageBuilder":
         """添加空行"""
         self.lines.append("")
         return self
@@ -332,6 +338,7 @@ class MessageBuilder:
 
     def __str__(self) -> str:
         return self.build()
+
 
 def format_success_message(message: str, item_id: Optional[str] = None) -> str:
     """格式化成功消息
@@ -348,6 +355,7 @@ def format_success_message(message: str, item_id: Optional[str] = None) -> str:
         lines.append(f"\n`{item_id}`")
     return "\n".join(lines)
 
+
 def format_error_message(message: str, hint: Optional[str] = None) -> str:
     """格式化错误消息
 
@@ -363,6 +371,7 @@ def format_error_message(message: str, hint: Optional[str] = None) -> str:
         lines.append(f"\n💡 {hint}")
     return "\n".join(lines)
 
+
 def format_warning_message(message: str) -> str:
     """格式化警告消息
 
@@ -373,6 +382,66 @@ def format_warning_message(message: str) -> str:
         格式化后的警告消息
     """
     return f"⚠️ {message}"
+
+
+def extract_metadata(text: str, *, with_priority: bool = False) -> dict[str, Any]:
+    """从文本中提取 cat:xxx、#tag、p:N 等元数据，返回提取结果和剩余文本。
+
+    Args:
+        text: 原始文本
+        with_priority: 是否提取 p:1-4 优先级（仅 task 需要）
+
+    Returns:
+        {'category': str|None, 'tags': list[str], 'priority': int|None, 'text': str}
+    """
+    result: dict[str, Any] = {"category": None, "tags": [], "priority": None}
+
+    cat_match = re.search(r"cat:(\S+)", text)
+    if cat_match:
+        result["category"] = cat_match.group(1)
+        text = text.replace(cat_match.group(0), "").strip()
+
+    if with_priority:
+        p_match = re.search(r"p:([1-4])", text)
+        if p_match:
+            result["priority"] = int(p_match.group(1))
+            text = text.replace(p_match.group(0), "").strip()
+
+    tags = re.findall(r"#(\w+)", text)
+    if tags:
+        result["tags"] = tags
+        text = re.sub(r"#\w+", "", text).strip()
+
+    result["text"] = text
+    return result
+
+
+def extract_kv_param(text: str, key: str) -> tuple[Optional[str], str]:
+    """从文本中提取 key=value 或 key:value 参数，返回 (value, 剩余文本)。
+
+    用于 search handler 中提取 type=event、range=last7d 等参数。
+    """
+    match = re.search(rf"{re.escape(key)}[=:]([^\s]+)", text)
+    if match:
+        return match.group(1), text.replace(match.group(0), "").strip()
+    return None, text
+
+
+def paginate(items: list[Any], page: int = 1, page_size: int = 10, show_all: bool = False):
+    """通用分页，返回 (display_items, page_info_str, has_more)。"""
+    total = len(items)
+    if show_all:
+        return items, " (全部显示)", False
+    start = (page - 1) * page_size
+    end = start + page_size
+    display = items[start:end]
+    if page > 1:
+        info = f" (第{page}页)"
+    else:
+        info = ""
+    has_more = total > end
+    return display, info, has_more
+
 
 def parse_remind_times(raw: Any) -> list[str]:
     """解析提醒时间

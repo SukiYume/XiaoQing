@@ -1,6 +1,29 @@
 from __future__ import annotations
 
 
+# ── Shared question detection ──
+# Used across frequency_control, heartflow, goal_state, reply_checker.
+
+_QUESTION_ENDINGS = ("吗", "嘛", "啊", "呢", "吧", "诶")
+_QUESTION_KEYWORDS = frozenset(
+    {"啥", "谁", "咋", "为啥", "为什么", "什么", "哪", "哪里", "哪个", "多少", "几", "吗", "嘛"}
+)
+
+
+def is_question(text: str) -> bool:
+    """Check if text is a question (contains question marks, ends with question particles, or
+    contains question keywords).
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if "?" in t or "？" in t:
+        return True
+    if t.endswith(_QUESTION_ENDINGS):
+        return True
+    return any(kw in t for kw in _QUESTION_KEYWORDS)
+
+
 # Maximum character length considered as "short text" for display/truncation purposes.
 DEFAULT_SHORT_TEXT_LIMIT = 120
 

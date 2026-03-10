@@ -8,6 +8,12 @@ import logging
 import os
 import sys
 import tempfile
+
+# Windows 上 torch 必须在 numpy 等依赖之前加载（DLL 搜索顺序问题）
+try:
+    import torch  # noqa: F401
+except ImportError:
+    pass
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
 from unittest.mock import AsyncMock, MagicMock, Mock
@@ -31,8 +37,20 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "integration: Integration tests")
     config.addinivalue_line("markers", "slow: Slow tests")
     config.addinivalue_line("markers", "async: Async tests")
+    config.addinivalue_line("markers", "asyncio: Asyncio tests")
     config.addinivalue_line("markers", "plugin: Plugin tests")
     config.addinivalue_line("markers", "core: Core module tests")
+
+
+def pytest_pyfunc_call(pyfuncitem):
+    if pyfuncitem.config.pluginmanager.hasplugin("asyncio"):
+        return None
+    if not asyncio.iscoroutinefunction(pyfuncitem.obj):
+        return None
+
+    funcargs = {name: pyfuncitem.funcargs[name] for name in pyfuncitem._fixtureinfo.argnames}
+    asyncio.run(pyfuncitem.obj(**funcargs))
+    return True
 
 # ============================================================
 # Path Fixtures

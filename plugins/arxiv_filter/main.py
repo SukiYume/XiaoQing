@@ -6,33 +6,14 @@ import datetime
 import json
 import logging
 import os
+import time
 
 from core.plugin_base import segments, run_sync
 from core.args import parse
+from .utils import load_plugin_config
 
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================================
-# 配置管理
-# ============================================================
-
-def _load_config(plugin_dir: str) -> dict:
-    """加载插件配置文件"""
-    config_path = os.path.join(plugin_dir, "config.json")
-    logger.debug(f"尝试加载配置文件: {config_path}")
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                logger.info(f"成功加载配置文件，包含 {len(config)} 个配置项")
-                return config
-        except Exception as e:
-            logger.warning(f"加载配置文件失败: {e}，使用默认配置")
-    else:
-        logger.warning(f"配置文件不存在: {config_path}，使用默认配置")
-    return {}
 
 
 # ============================================================
@@ -42,12 +23,11 @@ def _load_config(plugin_dir: str) -> dict:
 _inference_func = None
 
 
-def _load_inference(plugin_dir: str, force_reload: bool = False):
+def _load_inference(force_reload: bool = False):
     """
     动态加载推理模块
     
     Args:
-        plugin_dir: 插件目录路径
         force_reload: 是否强制重新加载
         
     Returns:
@@ -61,24 +41,24 @@ def _load_inference(plugin_dir: str, force_reload: bool = False):
 
     logger.info(f"开始加载推理模块，force_reload={force_reload}")
     
-    # 强制重新加载时，先清除已导入的模块
+    # 强制重新加载时，刷新 sys.modules 中已缓存的模块
     if force_reload:
         import importlib
-        try:
-            from . import arxiv_title_inference
-            importlib.reload(arxiv_title_inference)
-            logger.info("已重新加载 arxiv_title_inference 模块")
-        except ImportError as e:
-            logger.debug(f"未找到已加载的模块: {e}")
+        import sys
+        for key in list(sys.modules):
+            if key.endswith('arxiv_inference'):
+                importlib.reload(sys.modules[key])
+                logger.info("已重新加载 arxiv_inference 模块")
+                break
 
     try:
-        from .arxiv_title_inference import get_positive_arxiv_today_as_string
+        from .arxiv_inference import get_positive_arxiv_today_as_string
         _inference_func = get_positive_arxiv_today_as_string
-        logger.info("成功加载 arxiv_title_inference 模块")
+        logger.info("成功加载 arxiv_inference 模块")
         return _inference_func
     except ImportError as e:
-        logger.error(f"导入 arxiv_title_inference 模块失败: {e}")
-        logger.error(f"请确保安装了所需依赖: tensorflow, transformers")
+        logger.error(f"导入 arxiv_inference 模块失败: {e}")
+        logger.error(f"请确保安装了所需依赖: torch, transformers")
         return None
     except Exception as e:
         logger.exception(f"加载推理模块时发生异常: {e}")
@@ -151,12 +131,12 @@ async def _run_filter(context) -> list:
     plugin_dir = str(context.plugin_dir)
     
     # 加载配置
-    config = _load_config(plugin_dir)
+    config = load_plugin_config()
     model_config = config.get("model", {})
     model_path = os.path.join(plugin_dir, model_config.get("path", "best_model"))
 
     # 加载推理函数
-    inference = _load_inference(plugin_dir)
+    inference = _load_inference()
     if inference is None:
         error_msg = "⚠️ 无法加载AI模型，请检查插件配置。"
         logger.error("加载推理模块失败")
@@ -174,7 +154,6 @@ async def _run_filter(context) -> list:
 
     try:
         logger.info(f"开始执行 arXiv 论文筛选，模型路径: {model_path}")
-        import time
         start_time = time.time()
         arxiv_text = await run_sync(_do_inference)
         elapsed = time.time() - start_time
@@ -199,7 +178,7 @@ async def _run_filter(context) -> list:
         return segments("❌ 模型文件不完整，请联系管理员。")
     except ImportError as e:
         logger.error(f"缺少依赖库: {e}")
-        logger.error("请安装: pip install tensorflow transformers")
+        logger.error("请安装: pip install torch transformers")
         return segments("❌ 系统依赖不完整，请联系管理员。")
     except Exception as exc:
         logger.exception(f"arXiv 筛选器运行异常: {exc}")

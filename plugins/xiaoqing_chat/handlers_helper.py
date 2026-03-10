@@ -1,7 +1,7 @@
 from __future__ import annotations
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from .helper_utils import _is_private
+from .helper_utils import _is_private, _resolve_llm_config
 from .task_scheduler import _spawn_bg_task, _schedule_memory_db_save
 from .logging_utils import _log_step
 from .llm.summarizer import maybe_update_topic_summary
@@ -10,27 +10,36 @@ from .constants import EXPRESSION_LEARN_MIN_INTERVAL, EXPRESSION_LEARN_MIN_MESSA
 from .memory.review_sessions import maybe_open_goal_strategy_review, maybe_push_session
 from .memory.knowledge_extract import maybe_extract_person_facts
 
+if TYPE_CHECKING:
+    from .handler_context import HandlerContext
+
+
 async def _spawn_post_reply_bg_tasks(
-    context,
-    runtime,
-    state,
-    chat_id: str,
-    bot_name: str,
-    secrets: dict[str, Any],
+    hctx: HandlerContext,
     history_snapshot: list[Any],
     event: dict[str, Any],
 ) -> None:
     """
     Spawn background tasks after a reply is sent.
-    
+
     Includes:
     - Topic summarization
     - Expression learning
     - Review session push
     - Fact extraction
     """
+    context = hctx.context
+    runtime = hctx.runtime
+    state = hctx.state
+    chat_id = hctx.chat_id
+    bot_name = hctx.bot_name
+    secrets = hctx.secrets
+
+    bg = _resolve_llm_config(runtime.cfg, secrets, foreground=False)
+
     # 锁外调度后台任务（不阻塞其他请求）
     if runtime.cfg.summarizer.enable_topic_summarizer and not _is_private(event):
+
         async def _run_summarizer() -> None:
             await maybe_update_topic_summary(
                 data_dir=context.data_dir,
@@ -42,14 +51,8 @@ async def _spawn_post_reply_bg_tasks(
                 history=history_snapshot,
                 min_messages_per_update=runtime.cfg.summarizer.min_messages_per_update,
                 max_cache_topics=runtime.cfg.summarizer.max_cache_topics,
-                temperature=runtime.cfg.temperature,
-                top_p=runtime.cfg.top_p,
-                max_tokens=runtime.cfg.max_tokens,
-                timeout_seconds=float(getattr(runtime.cfg, "background_timeout_seconds", runtime.cfg.timeout_seconds)),
-                max_retry=int(getattr(runtime.cfg, "background_max_retry", runtime.cfg.max_retry)),
-                retry_interval_seconds=float(getattr(runtime.cfg, "background_retry_interval_seconds", runtime.cfg.retry_interval_seconds)),
-                proxy=secrets.get("proxy", "") or "",
-                endpoint_path=secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path,
+                **bg.to_model_kwargs(),
+                **bg.to_dict(),
             )
             _schedule_memory_db_save(context, runtime)
 
@@ -72,25 +75,21 @@ async def _spawn_post_reply_bg_tasks(
                 min_interval_seconds=EXPRESSION_LEARN_MIN_INTERVAL,
                 min_messages=EXPRESSION_LEARN_MIN_MESSAGES,
                 self_reflect=True,
-                temperature=runtime.cfg.temperature,
-                top_p=runtime.cfg.top_p,
-                max_tokens=runtime.cfg.max_tokens,
-                timeout_seconds=float(getattr(runtime.cfg, "background_timeout_seconds", runtime.cfg.timeout_seconds)),
-                max_retry=int(getattr(runtime.cfg, "background_max_retry", runtime.cfg.max_retry)),
-                retry_interval_seconds=float(getattr(runtime.cfg, "background_retry_interval_seconds", runtime.cfg.retry_interval_seconds)),
-                proxy=secrets.get("proxy", "") or "",
-                endpoint_path=secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path,
+                **bg.to_model_kwargs(),
+                **bg.to_dict(),
             ),
             name=f"expression_learn:{chat_id}",
         )
-        _log_step(context, runtime, chat_id=chat_id, step="smalltalk.expression_learn.spawn", fields={})
+        _log_step(
+            context, runtime, chat_id=chat_id, step="smalltalk.expression_learn.spawn", fields={}
+        )
 
     if runtime.cfg.reflection.enable_review_sessions:
         state.review_store.cleanup_expired()
-        recent = state.action_history.get_recent(chat_id, max_items=8)
+        recent = await state.action_history.get_recent_async(chat_id, max_items=8)
         rej_cnt = sum(1 for r in recent if getattr(r, "action", "") == "reply_rejected")
         stats = f"最近拒绝{rej_cnt}次，连续回复{state.get_continuous_reply_count(chat_id)}"
-        g = state.goal_store.get(chat_id).goal if runtime.cfg.goal.enable_goal else ""
+        g = (await state.goal_store.get_async(chat_id)).goal if runtime.cfg.goal.enable_goal else ""
         if rej_cnt > 0 or state.get_continuous_reply_count(chat_id) >= 3:
             sess = maybe_open_goal_strategy_review(
                 store=state.review_store,
@@ -125,14 +124,8 @@ async def _spawn_post_reply_bg_tasks(
             bot_name=bot_name,
             chat_id=chat_id,
             history=history_snapshot,
-            temperature=runtime.cfg.temperature,
-            top_p=runtime.cfg.top_p,
-            max_tokens=runtime.cfg.max_tokens,
-            timeout_seconds=float(getattr(runtime.cfg, "background_timeout_seconds", runtime.cfg.timeout_seconds)),
-            max_retry=int(getattr(runtime.cfg, "background_max_retry", runtime.cfg.max_retry)),
-            retry_interval_seconds=float(getattr(runtime.cfg, "background_retry_interval_seconds", runtime.cfg.retry_interval_seconds)),
-            proxy=secrets.get("proxy", "") or "",
-            endpoint_path=secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path,
+            **bg.to_model_kwargs(),
+            **bg.to_dict(),
         )
         _schedule_memory_db_save(context, runtime)
 
