@@ -157,14 +157,13 @@ class TestShowHelp:
         help_text = signin._show_help()
         assert help_text is not None
         assert "signin" in help_text.lower()
-        assert "sony" in help_text.lower()
         assert "yingshi" in help_text.lower() or "影视" in help_text
 
     def test_help_contains_commands(self):
         """测试帮助包含命令说明"""
         help_text = signin._show_help()
         assert "/signin" in help_text
-        assert "Sony" in help_text or "sony" in help_text
+        assert "yingshi" in help_text.lower() or "影视" in help_text
 
 
 class TestHandleCommand:
@@ -254,25 +253,25 @@ class TestSonySignin:
 
     @pytest.mark.asyncio
     async def test_sony_signin_no_config(self, mock_context_no_config, mock_event):
-        """测试Sony签到无配置"""
+        """测试Sony签到无配置 - Sony已弃用，应返回弃用消息"""
         result = await signin.handle("signin", "sony", mock_event, mock_context_no_config)
         assert result is not None
         assert len(result) > 0
         result_text = str(result)
-        assert "未配置" in result_text or "配置" in result_text
+        assert "弃用" in result_text or "Deprecated" in result_text
 
     @pytest.mark.asyncio
     async def test_sony_signin_no_http_session(self, mock_context_no_http, mock_event):
-        """测试Sony签到无HTTP会话"""
+        """测试Sony签到无HTTP会话 - Sony已弃用，应返回弃用消息"""
         result = await signin.handle("signin", "sony", mock_event, mock_context_no_http)
         assert result is not None
         assert len(result) > 0
         result_text = str(result)
-        assert "会话" in result_text or "http" in result_text.lower()
+        assert "弃用" in result_text or "Deprecated" in result_text
 
     @pytest.mark.asyncio
     async def test_sony_signin_partial_config(self, mock_context, mock_event):
-        """测试Sony签到配置不完整"""
+        """测试Sony签到配置不完整 - Sony已弃用，应返回弃用消息"""
         mock_context.secrets["plugins"]["signin"]["sony"] = {
             "login_id": "test_only"
         }
@@ -281,7 +280,7 @@ class TestSonySignin:
         assert result is not None
         assert len(result) > 0
         result_text = str(result)
-        assert "未配置" in result_text or "配置" in result_text
+        assert "弃用" in result_text or "Deprecated" in result_text
 
 
 class TestYingshiSignin:
@@ -626,7 +625,7 @@ class TestSonySigninAPIErrors:
         assert result is not None
         assert len(result) > 0
         result_text = str(result)
-        assert "失败" in result_text or "error" in result_text.lower()
+        assert "弃用" in result_text or "Deprecated" in result_text
 
 
 class TestInit:
