@@ -1,6 +1,7 @@
-"""Sony 官方商城签到"""
+"""Sony 官方商城签到 (Deprecated)"""
 
 import logging
+import warnings
 
 from core.plugin_base import segments
 
@@ -11,6 +12,12 @@ SONY_SIGN_URL = "https://www.sonystyle.com.cn/eSolverOmniChannel/account/signupP
 
 
 async def sony_sign(context) -> list[dict]:
+    warnings.warn(
+        "sony_sign is deprecated and no longer maintained.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    
     config = context.secrets.get("plugins", {}).get("signin", {})
     creds = config.get("sony", {})
     login_id = creds.get("login_id")

@@ -1,7 +1,7 @@
 """
 自动签到插件
 
-支持 Sony、影视飓风等平台的自动签到。
+支持影视飓风等平台的自动签到（Sony 已弃用）。
 """
 
 import logging
@@ -9,7 +9,6 @@ import logging
 from core.args import parse
 from core.plugin_base import segments
 
-from . import sony
 from . import yingshi
 
 logger = logging.getLogger(__name__)
@@ -30,7 +29,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         if target in {"help", "帮助", "?"}:
             return segments(_show_help())
         if target in {"sony", "s"}:
-            return await sony.sony_sign(context)
+            return segments("❌ Sony 签到已弃用 (Deprecated)")
         if target in {"yingshi", "yingshijufeng", "y"}:
             return await yingshi.yingshi_sign(context)
 
@@ -45,14 +44,11 @@ def _show_help() -> str:
 📝 **自动签到**
 
 **基本用法:**
-• /signin sony - Sony 官网签到
-• /signin s - Sony 官网签到（简写）
 • /signin yingshi - 影视飓风签到
 • /signin y - 影视飓风签到（简写）
 • /signin help - 显示帮助
 
 **示例:**
-• /signin sony
 • /signin yingshi
 
 **配置说明:**

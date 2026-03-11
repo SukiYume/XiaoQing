@@ -22,32 +22,35 @@ from pathlib import Path
 # 配置
 # ============================================================
 APOD_ROOT = Path(os.environ.get("APOD_ROOT", r"D:/EscapeWeb/vitepress/docs/apod"))
-CACHE_DIR = Path("cache")
+DATA_PREP_DIR = Path(__file__).resolve().parent
+CACHE_DIR = DATA_PREP_DIR / "cache"
 OUTPUT_IDS_CSV = CACHE_DIR / "positive_ids.csv"
 OUTPUT_DATE_RANGE = CACHE_DIR / "date_range.json"
 
 # 匹配 arxiv.org/abs/XXXX.XXXXX 或 arxiv.org/pdf/XXXX.XXXXX
-ARXIV_PATTERN = re.compile(r'arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})')
+ARXIV_PATTERN = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})")
 # 匹配日期标题 ## YYYY-MM-DD
-DATE_HEADER_PATTERN = re.compile(r'^## (\d{4}-\d{2}-\d{2})', re.MULTILINE)
+DATE_HEADER_PATTERN = re.compile(r"^## (\d{4}-\d{2}-\d{2})", re.MULTILINE)
 
 
-def extract_from_file(filepath: Path) -> tuple[list[dict], list[str]]:
+def extract_from_file(filepath: Path) -> tuple[list[dict[str, str]], list[str]]:
     """从单个 md 文件中提取 arXiv ID 和日期"""
     ids = []
     dates = []
 
     try:
-        text = filepath.read_text(encoding='utf-8')
+        text = filepath.read_text(encoding="utf-8")
     except Exception as e:
         print(f"  [WARN] 无法读取 {filepath}: {e}")
         return ids, dates
 
     for match in ARXIV_PATTERN.finditer(text):
-        ids.append({
-            'arXiv ID': match.group(1),
-            'source_file': str(filepath.relative_to(APOD_ROOT)),
-        })
+        ids.append(
+            {
+                "arXiv ID": match.group(1),
+                "source_file": str(filepath.relative_to(APOD_ROOT)),
+            }
+        )
 
     for match in DATE_HEADER_PATTERN.finditer(text):
         dates.append(match.group(1))
@@ -73,8 +76,8 @@ def main():
     seen = set()
     unique_ids = []
     for r in all_ids:
-        if r['arXiv ID'] not in seen:
-            seen.add(r['arXiv ID'])
+        if r["arXiv ID"] not in seen:
+            seen.add(r["arXiv ID"])
             unique_ids.append(r)
 
     print(f"\n总计: {len(all_ids)} 条记录, 去重后 {len(unique_ids)} 个唯一 arXiv ID")
@@ -94,18 +97,18 @@ def main():
     CACHE_DIR.mkdir(exist_ok=True)
 
     # 保存正样本 ID CSV
-    with open(OUTPUT_IDS_CSV, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=['arXiv ID', 'source_file'])
+    with open(OUTPUT_IDS_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["arXiv ID", "source_file"])
         writer.writeheader()
         writer.writerows(unique_ids)
     print(f"已保存正样本 ID 到 {OUTPUT_IDS_CSV}")
 
     # 保存日期范围
-    date_range = {'start': date_start, 'end': date_end}
-    with open(OUTPUT_DATE_RANGE, 'w', encoding='utf-8') as f:
+    date_range = {"start": date_start, "end": date_end}
+    with open(OUTPUT_DATE_RANGE, "w", encoding="utf-8") as f:
         json.dump(date_range, f, ensure_ascii=False, indent=2)
     print(f"已保存日期范围到 {OUTPUT_DATE_RANGE}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
