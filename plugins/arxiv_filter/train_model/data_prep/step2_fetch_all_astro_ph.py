@@ -21,6 +21,7 @@ Step 2: 获取日期范围内所有 astro-ph 论文（标题 + 摘要）
 """
 
 import json
+import importlib
 import os
 import re
 import sys
@@ -29,34 +30,35 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
-import feedparser
 
-# 确保从脚本所在目录导入 utils
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+feedparser = importlib.import_module("feedparser")
+
 from utils import clean_arxiv_id
 
 # ============================================================
 # 配置
 # ============================================================
-CACHE_DIR = Path("cache")
+DATA_PREP_DIR = Path(__file__).resolve().parent
+CACHE_DIR = DATA_PREP_DIR / "cache"
 DATE_RANGE_FILE = CACHE_DIR / "date_range.json"
 
 API_URL = "http://export.arxiv.org/api/query"
 HEADERS = {"User-Agent": "arxiv-scraper/2.0 (SukiYume@users.noreply.github.com)"}
-MAX_RESULTS = 2000       # 每页最大结果数
-RETRY_LIMIT = 5          # 单次请求重试次数
-DELAY = 3                # 请求间隔（秒）
+MAX_RESULTS = 2000  # 每页最大结果数
+RETRY_LIMIT = 5  # 单次请求重试次数
+DELAY = 3  # 请求间隔（秒）
 
 
 # ============================================================
 # 工具函数
 # ============================================================
 
+
 def load_date_range() -> tuple[str, str]:
     """加载日期范围"""
-    with open(DATE_RANGE_FILE, 'r', encoding='utf-8') as f:
+    with open(DATE_RANGE_FILE, "r", encoding="utf-8") as f:
         dr = json.load(f)
-    return dr['start'], dr['end']
+    return dr["start"], dr["end"]
 
 
 def generate_monthly_ranges(start_str: str, end_str: str) -> list[tuple[str, str, int]]:
@@ -108,20 +110,20 @@ def yymm_to_label(yymm: int) -> str:
 MONTHLY_DIR = CACHE_DIR / "monthly"
 
 
-def load_cache(yymm: int) -> list[dict] | None:
+def load_cache(yymm: int) -> list[dict[str, str]] | None:
     """加载某月的缓存，不存在返回 None"""
     cache_file = MONTHLY_DIR / f"{yymm}.json"
     if cache_file.exists():
-        with open(cache_file, 'r', encoding='utf-8') as f:
+        with open(cache_file, "r", encoding="utf-8") as f:
             return json.load(f)
     return None
 
 
-def save_cache(yymm: int, papers: list[dict]):
+def save_cache(yymm: int, papers: list[dict[str, str]]):
     """保存某月的缓存"""
     MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
     cache_file = MONTHLY_DIR / f"{yymm}.json"
-    with open(cache_file, 'w', encoding='utf-8') as f:
+    with open(cache_file, "w", encoding="utf-8") as f:
         json.dump(papers, f, ensure_ascii=False)
 
 
@@ -139,7 +141,8 @@ def is_month_finalized(yymm: int) -> bool:
 # arXiv API 查询
 # ============================================================
 
-def fetch_month(api_start: str, api_end: str) -> list[dict]:
+
+def fetch_month(api_start: str, api_end: str) -> list[dict[str, str]]:
     """
     获取指定月份的所有 astrophysics 论文（标题 + 摘要）。
     自动分页，处理重试和速率限制。
@@ -149,13 +152,13 @@ def fetch_month(api_start: str, api_end: str) -> list[dict]:
     total_results = None
 
     while True:
-        search_query = f'astrophysics AND submittedDate:[{api_start} TO {api_end}]'
+        search_query = f"astrophysics AND submittedDate:[{api_start} TO {api_end}]"
         params = {
-            'search_query': search_query,
-            'start': offset,
-            'max_results': MAX_RESULTS,
-            'sortBy': 'submittedDate',
-            'sortOrder': 'ascending',
+            "search_query": search_query,
+            "start": offset,
+            "max_results": MAX_RESULTS,
+            "sortBy": "submittedDate",
+            "sortOrder": "ascending",
         }
 
         # 带重试的请求
@@ -165,7 +168,7 @@ def fetch_month(api_start: str, api_end: str) -> list[dict]:
                 r = requests.get(API_URL, params=params, headers=HEADERS, timeout=120)
                 r.raise_for_status()
                 feed = feedparser.parse(r.content)
-                if offset == 0 and 'opensearch_totalresults' in feed.feed:
+                if offset == 0 and "opensearch_totalresults" in feed.feed:
                     total_results = int(feed.feed.opensearch_totalresults)
                 break
             except Exception as e:
@@ -184,22 +187,24 @@ def fetch_month(api_start: str, api_end: str) -> list[dict]:
         for entry in feed.entries:
             arxiv_id = clean_arxiv_id(entry.id)
             # 跳过无效条目（API 无结果时返回错误条目）
-            if not re.match(r'\d{4}\.\d{4,5}', arxiv_id):
+            if not re.match(r"\d{4}\.\d{4,5}", arxiv_id):
                 continue
 
-            title = re.sub(r'\s+', ' ', entry.title.strip())
-            abstract = re.sub(r'\s+', ' ', entry.get('summary', '').strip())
-            batch.append({
-                'arxiv_id': arxiv_id,
-                'title': title,
-                'abstract': abstract,
-            })
+            title = re.sub(r"\s+", " ", entry.title.strip())
+            abstract = re.sub(r"\s+", " ", entry.get("summary", "").strip())
+            batch.append(
+                {
+                    "arxiv_id": arxiv_id,
+                    "title": title,
+                    "abstract": abstract,
+                }
+            )
 
         papers.extend(batch)
 
         if total_results and total_results > 0:
             pct = len(papers) / total_results * 100
-            print(f"      {len(papers)}/{total_results} ({pct:.0f}%)", end='\r')
+            print(f"      {len(papers)}/{total_results} ({pct:.0f}%)", end="\r")
 
         # 没有更多结果
         if len(feed.entries) < MAX_RESULTS:
@@ -214,6 +219,7 @@ def fetch_month(api_start: str, api_end: str) -> list[dict]:
 # ============================================================
 # 主逻辑
 # ============================================================
+
 
 def main():
     # 1. 加载日期范围
@@ -238,6 +244,8 @@ def main():
         # 检查缓存
         if is_month_finalized(yymm):
             cached = load_cache(yymm)
+            if cached is None:
+                continue
             all_papers.extend(cached)
             cached_count += len(cached)
             print(f"  {progress} {label}: {len(cached):>5} 篇 (缓存)")
@@ -266,11 +274,11 @@ def main():
     total_unique = 0
     month_counts: dict[int, int] = {}
     for p in all_papers:
-        if p['arxiv_id'] not in seen:
-            seen.add(p['arxiv_id'])
+        if p["arxiv_id"] not in seen:
+            seen.add(p["arxiv_id"])
             total_unique += 1
             try:
-                ym = int(p['arxiv_id'][:4])
+                ym = int(p["arxiv_id"][:4])
                 month_counts[ym] = month_counts.get(ym, 0) + 1
             except (ValueError, IndexError):
                 pass
@@ -284,5 +292,5 @@ def main():
     print(f"\n缓存目录: {CACHE_DIR}/")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

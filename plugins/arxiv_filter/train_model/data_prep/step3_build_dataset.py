@@ -33,16 +33,16 @@ import requests
 
 feedparser = importlib.import_module("feedparser")
 
-# 确保从脚本所在目录导入 utils
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-clean_arxiv_id = importlib.import_module("utils").clean_arxiv_id
+from utils import clean_arxiv_id
 
 # ============================================================
 # 配置
 # ============================================================
-CACHE_DIR = Path("cache")
+DATA_PREP_DIR = Path(__file__).resolve().parent
+TRAIN_MODEL_DIR = DATA_PREP_DIR.parent
+CACHE_DIR = DATA_PREP_DIR / "cache"
 POSITIVE_IDS_CSV = CACHE_DIR / "positive_ids.csv"
-OUTPUT_CSV = "arxiv_papers_with_abstract.csv"
+OUTPUT_CSV = TRAIN_MODEL_DIR / "arxiv_papers_with_abstract.csv"
 
 ABSTRACT_CACHE_FILE = CACHE_DIR / "abstract_cache.json"  # 用于缓存补充获取的正样本摘要
 
