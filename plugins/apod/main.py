@@ -119,7 +119,13 @@ async def _fetch_with_retry(
         context.logger.info(f"尝试直接访问: {url}")
         async with session.get(url, headers=HEADERS, timeout=timeout) as response:
             if response.status == 200:
-                result = await response.read() if is_binary else await response.text()
+                if is_binary:
+                    result = await response.read()
+                else:
+                    try:
+                        result = await response.text()
+                    except UnicodeDecodeError:
+                        result = await response.text(errors='replace')
                 context.logger.info("直接访问成功")
                 return result
             else:
@@ -133,7 +139,13 @@ async def _fetch_with_retry(
             context.logger.info(f"使用代理访问: {proxy}")
             async with session.get(url, headers=HEADERS, proxy=proxy, timeout=timeout) as response:
                 if response.status == 200:
-                    result = await response.read() if is_binary else await response.text()
+                    if is_binary:
+                        result = await response.read()
+                    else:
+                        try:
+                            result = await response.text()
+                        except UnicodeDecodeError:
+                            result = await response.text(errors='replace')
                     context.logger.info("代理访问成功")
                     return result
                 else:
@@ -260,7 +272,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             url=url,
             proxy=proxy,
             timeout=timeout,
-            is_binary=False,
+            is_binary=True,  # Fetch as bytes so BeautifulSoup handles encoding
             context=context
         )
         

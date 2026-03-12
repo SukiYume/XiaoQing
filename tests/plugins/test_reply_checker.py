@@ -1,7 +1,8 @@
 """Tests for reply_checker heuristic functions."""
 import sys
 import time
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -97,3 +98,85 @@ class TestHeuristicCheckRepeatedQuestion:
         )
         assert result is not None
         assert result.suitable is False
+
+
+@pytest.mark.asyncio
+async def test_handle_smalltalk_recovers_from_need_replan_rejection_by_retrying_flow():
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+    from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
+
+    context = MagicMock()
+    context.logger = MagicMock()
+    event = {"message_type": "group", "group_id": 1, "user_id": 2}
+
+    with patch(
+        "plugins.xiaoqing_chat.handlers._maybe_reply_smalltalk",
+        new=AsyncMock(
+            side_effect=[
+                ReplyRejected("需要重新规划", True),
+                [{"type": "text", "data": {"text": "重规划后回复"}}],
+            ]
+        ),
+    ) as mock_flow:
+        result = await handle_smalltalk("继续", event, context)
+
+    assert result == [{"type": "text", "data": {"text": "重规划后回复"}}]
+    assert mock_flow.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_handle_smalltalk_records_checker_rejected_attempt_for_review_counting():
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+    from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
+
+    context = MagicMock()
+    context.logger = MagicMock()
+    event = {"message_type": "group", "group_id": 1, "user_id": 2}
+    state = MagicMock()
+    state.action_history.append = MagicMock()
+
+    with (
+        patch(
+            "plugins.xiaoqing_chat.handlers._maybe_reply_smalltalk",
+            new=AsyncMock(side_effect=ReplyRejected("检查器拒绝", False)),
+        ),
+        patch("plugins.xiaoqing_chat.handlers._get_bound_state", return_value=state),
+        patch("plugins.xiaoqing_chat.handlers._chat_id", return_value="g1"),
+        patch("plugins.xiaoqing_chat.handlers.time.time", return_value=123.0),
+    ):
+        result = await handle_smalltalk("继续", event, context)
+
+    assert result == []
+    state.action_history.append.assert_called_once()
+    record = state.action_history.append.call_args.args[1]
+    assert record.action == "reply_rejected"
+    assert record.executed is False
+
+
+@pytest.mark.asyncio
+async def test_handle_smalltalk_uses_configured_reply_check_max_replan():
+    from plugins.xiaoqing_chat.handlers import handle_smalltalk
+    from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
+
+    context = MagicMock()
+    context.logger = MagicMock()
+    event = {"message_type": "group", "group_id": 1, "user_id": 2}
+    runtime = SimpleNamespace(cfg=SimpleNamespace(reply_check=SimpleNamespace(max_replan=2)))
+
+    with (
+        patch("plugins.xiaoqing_chat.handlers._load_runtime", return_value=runtime),
+        patch(
+            "plugins.xiaoqing_chat.handlers._maybe_reply_smalltalk",
+            new=AsyncMock(
+                side_effect=[
+                    ReplyRejected("第1次拒绝", True),
+                    ReplyRejected("第2次拒绝", True),
+                    [{"type": "text", "data": {"text": "第3次成功"}}],
+                ]
+            ),
+        ) as mock_flow,
+    ):
+        result = await handle_smalltalk("继续", event, context)
+
+    assert result == [{"type": "text", "data": {"text": "第3次成功"}}]
+    assert mock_flow.await_count == 3

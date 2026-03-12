@@ -225,7 +225,8 @@ async def _should_reply(
     # Interest-based adjustment
     if not is_private:
         if interest == "high":
-            p = min(p * 1.5, 0.95)
+            high_interest_floor = min(float(runtime.cfg.reply_probability_base) * 1.5, 0.95)
+            p = min(max(p * 1.5, high_interest_floor), 0.95)
         elif interest == "low":
             p = p * 0.3
 
@@ -269,6 +270,9 @@ async def _should_reply(
         p = min(p * 1.4, 0.95)
     elif no_reply_streak >= 3:
         p = min(p * 1.2, 0.90)
+
+    if (not is_private) and interest == "low" and no_reply_streak >= 10:
+        p = max(p, 0.35)
 
     p = max(0.0, min(1.0, p))
 

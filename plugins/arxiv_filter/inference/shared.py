@@ -25,19 +25,21 @@ _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 数据类
 # =============================================================================
 
+
 @dataclass(frozen=True)
 class InferenceParams:
     model_path: str
     threshold: float
     batch_size: int
     max_len: int
-    input_mode: str = "title_abstract"   # "title_only" | "title_abstract"
-    model_type: str = "transformers"     # "transformers" | "multi_interest"
+    input_mode: str = "title_abstract"  # "title_only" | "title_abstract"
+    model_type: str = "transformers"  # "transformers" | "multi_interest"
 
 
 # =============================================================================
 # 模型路径解析
 # =============================================================================
+
 
 def _join_plugin_path(path: str) -> str:
     return path if os.path.isabs(path) else os.path.join(_PLUGIN_DIR, path)
@@ -68,7 +70,9 @@ def resolve_model_path(model_path: Optional[str] = None) -> str:
         resolved = _join_plugin_path(c)
         if os.path.isdir(resolved):
             if c != (model_path or configured):
-                logger.warning("Configured path '%s' not found; falling back to '%s'", configured, c)
+                logger.warning(
+                    "Configured path '%s' not found; falling back to '%s'", configured, c
+                )
             return resolved
 
     # 万一都找不到，返回 configured（让后续报错更清晰）
@@ -78,6 +82,7 @@ def resolve_model_path(model_path: Optional[str] = None) -> str:
 # =============================================================================
 # training_config.json 加载与检测
 # =============================================================================
+
 
 def load_training_config(model_path: str) -> dict:
     """加载模型目录中的 training_config.json，不存在返回空字典。"""
@@ -93,9 +98,13 @@ def load_training_config(model_path: str) -> dict:
 def detect_model_type(training_config: dict) -> str:
     """从 training_config 判断模型类型: 'multi_interest' | 'transformers'"""
     mt = str(training_config.get("model_type", "")).strip().lower()
+    if mt == "knn" or mt.startswith("knn"):
+        return "knn"
     if "multi_interest" in mt:
         return "multi_interest"
     tv = str(training_config.get("train_version", "")).strip().lower()
+    if tv.startswith("knn"):
+        return "knn"
     if tv.startswith("multi_interest"):
         return "multi_interest"
     return "transformers"
@@ -116,6 +125,7 @@ def resolve_multi_interest_model_path(model_path: str, training_config: dict) ->
 # 一站式参数解析
 # =============================================================================
 
+
 def resolve_params(
     model_path: Optional[str] = None,
     threshold: Optional[float] = None,
@@ -132,12 +142,19 @@ def resolve_params(
 
     return InferenceParams(
         model_path=resolved_path,
-        threshold=(threshold if threshold is not None
-                   else float(tcfg.get("optimal_threshold", plugin_cfg.get("threshold", 0.5)))),
-        batch_size=(batch_size if batch_size is not None
-                    else int(plugin_cfg.get("batch_size", 32))),
-        max_len=(max_len if max_len is not None
-                 else int(tcfg.get("max_len", plugin_cfg.get("max_len", 512)))),
+        threshold=(
+            threshold
+            if threshold is not None
+            else float(tcfg.get("optimal_threshold", plugin_cfg.get("threshold", 0.5)))
+        ),
+        batch_size=(
+            batch_size if batch_size is not None else int(plugin_cfg.get("batch_size", 32))
+        ),
+        max_len=(
+            max_len
+            if max_len is not None
+            else int(tcfg.get("max_len", plugin_cfg.get("max_len", 512)))
+        ),
         input_mode=input_mode,
         model_type=model_type,
     )

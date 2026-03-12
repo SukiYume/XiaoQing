@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import cast
 
 from ..constants import is_question
+from ..memory.topic_summary_cache import load_topic_summary_entries
 from ..store_base import StoreBase
 
 
@@ -24,7 +24,7 @@ class GoalStore(StoreBase):
         super().__init__()
         self._cache: dict[str, GoalState] = {}
 
-    def _path(self, chat_id: str) -> Optional[Path]:
+    def _path(self, chat_id: str) -> Path | None:
         return self._resolve_path("goal_state", f"{chat_id}.json")
 
     def get(self, chat_id: str) -> GoalState:
@@ -33,11 +33,18 @@ class GoalStore(StoreBase):
         st = GoalState()
         path = self._path(chat_id)
         if path:
-            obj = self._load_json(path, default=None)
+            obj = cast(object, self._load_json(path, default=None))
             if isinstance(obj, dict):
-                st.ts = float(obj.get("ts", 0.0) or 0.0)
-                st.goal = str(obj.get("goal", "") or "").strip()
-                st.source = str(obj.get("source", "") or "").strip()
+                payload = cast(dict[str, object], obj)
+                ts_raw = payload.get("ts", 0.0)
+                if isinstance(ts_raw, (int, float)):
+                    st.ts = ts_raw
+                elif isinstance(ts_raw, str):
+                    st.ts = float(ts_raw) if ts_raw else 0.0
+                else:
+                    st.ts = 0.0
+                st.goal = str(payload.get("goal", "") or "").strip()
+                st.source = str(payload.get("source", "") or "").strip()
         self._cache[chat_id] = st
         return st
 
@@ -61,7 +68,7 @@ class GoalStore(StoreBase):
         self._cache[chat_id] = st
         path = self._path(chat_id)
         if path:
-            self._save_json(path, {"ts": st.ts, "goal": st.goal, "source": st.source})
+            _ = self._save_json(path, {"ts": st.ts, "goal": st.goal, "source": st.source})
         return st
 
     async def get_async(self, chat_id: str) -> GoalState:
@@ -70,23 +77,25 @@ class GoalStore(StoreBase):
     async def set_async(self, chat_id: str, *, goal: str, source: str) -> GoalState:
         return await asyncio.to_thread(self.set, chat_id, goal=goal, source=source)
 
+    def clear(self, chat_id: str) -> None:
+        _ = self._cache.pop(chat_id, None)
+        path = self._path(chat_id)
+        if path and path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    async def clear_async(self, chat_id: str) -> None:
+        await asyncio.to_thread(self.clear, chat_id)
+
 
 def load_latest_topic_and_summary(data_dir: Path, chat_id: str) -> tuple[str, str]:
-    path = data_dir / "hippo_memorizer" / f"{chat_id}.json"
-    if not path.exists():
-        return "", ""
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, list) or not raw:
-            return "", ""
-        item = raw[-1]
-        if not isinstance(item, dict):
-            return "", ""
-        topic = str(item.get("topic", "")).strip()
-        summary = str(item.get("summary", "")).strip()
-        return topic, summary
-    except Exception:
-        return "", ""
+    entries = load_topic_summary_entries(data_dir, chat_id)
+    for item in reversed(entries):
+        if item.topic and item.summary:
+            return item.topic, item.summary
+    return "", ""
 
 
 def load_latest_topic_summary(data_dir: Path, chat_id: str) -> str:
@@ -128,6 +137,7 @@ def _derive_goal_from_context(
             return "回答用户问题"
         if len(t) <= 14:
             return f'围绕"{t}"继续聊'
+        return "自然聊天"
     if topic:
         return f'围绕话题"{topic}"自然聊天'
     return "自然聊天"

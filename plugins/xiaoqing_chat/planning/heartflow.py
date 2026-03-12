@@ -84,6 +84,18 @@ class HeartflowEngine(StoreBase):
         await asyncio.to_thread(self._save, chat_id)
         return st
 
+    def clear(self, chat_id: str) -> None:
+        self._cache.pop(chat_id, None)
+        path = self._path(chat_id)
+        if path and path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    async def clear_async(self, chat_id: str) -> None:
+        await asyncio.to_thread(self.clear, chat_id)
+
     @staticmethod
     def _calculate_score(
         st: HeartflowState,

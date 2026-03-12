@@ -29,13 +29,33 @@ class ActionHistoryStore:
         self._data_dir: Optional[Path] = None
         self._cache: dict[str, list[ActionRecord]] = {}
         self._dirty: set[str] = set()
+        self._async_loading: set[str] = set()
+        self._state_version: dict[str, int] = {}
 
     def bind(self, data_dir: Path) -> None:
         self._data_dir = data_dir
 
     def append(self, chat_id: str, record: ActionRecord) -> None:
-        self._cache.setdefault(chat_id, []).append(record)
+        if chat_id not in self._cache:
+            if chat_id in self._async_loading:
+                self._cache[chat_id] = []
+            else:
+                loaded = self._load(chat_id)
+                self._cache[chat_id] = loaded or []
+        self._cache[chat_id].append(record)
         self._dirty.add(chat_id)
+        self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
+
+    def clear(self, chat_id: str) -> None:
+        self._cache.pop(chat_id, None)
+        self._dirty.discard(chat_id)
+        self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
+        path = self._path(chat_id)
+        if path and path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
     def flush(self, chat_id: Optional[str] = None) -> None:
         """Persist dirty chat(s) to disk. Call from debounced scheduler."""
@@ -62,11 +82,17 @@ class ActionHistoryStore:
 
     async def get_recent_async(self, chat_id: str, *, max_items: int = 20) -> list[ActionRecord]:
         if chat_id not in self._cache:
-            loaded = await asyncio.to_thread(self._load, chat_id)
-            self._cache[chat_id] = loaded or []
+            start_version = self._state_version.get(chat_id, 0)
+            self._async_loading.add(chat_id)
+            try:
+                loaded = await asyncio.to_thread(self._load, chat_id)
+            finally:
+                self._async_loading.discard(chat_id)
+            if chat_id not in self._cache and self._state_version.get(chat_id, 0) == start_version:
+                self._cache[chat_id] = loaded or []
         if max_items <= 0:
             return []
-        return list(self._cache[chat_id][-max_items:])
+        return list(self._cache.get(chat_id, [])[-max_items:])
 
     def _path(self, chat_id: str) -> Optional[Path]:
         if not self._data_dir:
