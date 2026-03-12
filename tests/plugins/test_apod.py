@@ -296,12 +296,15 @@ class TestImageExtraction:
     @pytest.mark.asyncio
     async def test_handle_with_image(self, mock_context, mock_event):
         """测试处理图片 APOD"""
-        # 创建 mock HTTP session
+        call_count = [0]
         class MockResponse:
             status = 200
             async def text(self):
                 return SAMPLE_APOD_HTML_WITH_IMAGE
             async def read(self):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return SAMPLE_APOD_HTML_WITH_IMAGE.encode('utf-8')
                 return b"fake image data"
 
         class MockGetContextManager:
@@ -334,7 +337,7 @@ class TestImageExtraction:
             async def read(self):
                 call_count[0] += 1
                 if call_count[0] == 1:
-                    return b"html"
+                    return SAMPLE_APOD_HTML_WITH_IMAGE.encode('utf-8')
                 return None  # 图片下载失败
 
         class MockGetContextManager:
@@ -369,6 +372,8 @@ class TestVideoHandling:
             status = 200
             async def text(self):
                 return SAMPLE_APOD_HTML_WITH_IFRAME
+            async def read(self):
+                return SAMPLE_APOD_HTML_WITH_IFRAME.encode('utf-8')
 
         class MockGetContextManager:
             async def __aenter__(self):
@@ -394,6 +399,8 @@ class TestVideoHandling:
             status = 200
             async def text(self):
                 return SAMPLE_APOD_HTML_WITH_VIDEO
+            async def read(self):
+                return SAMPLE_APOD_HTML_WITH_VIDEO.encode('utf-8')
 
         class MockGetContextManager:
             async def __aenter__(self):
@@ -656,6 +663,8 @@ class TestHandleCommands:
             status = 200
             async def text(self):
                 return html
+            async def read(self):
+                return html.encode('utf-8')
 
         class MockGetContextManager:
             async def __aenter__(self):
@@ -690,6 +699,11 @@ class TestScheduled:
             async def text(self):
                 return SAMPLE_APOD_HTML_WITH_IMAGE
             async def read(self):
+                if not hasattr(self, 'count'):
+                    self.count = 0
+                self.count += 1
+                if self.count == 1:
+                    return SAMPLE_APOD_HTML_WITH_IMAGE.encode('utf-8')
                 return b"fake image"
 
         class MockGetContextManager:
@@ -761,6 +775,11 @@ class TestImagePathConstruction:
             async def text(self):
                 return html
             async def read(self):
+                if not hasattr(self, 'count'):
+                    self.count = 0
+                self.count += 1
+                if self.count == 1:
+                    return html.encode('utf-8')
                 return b"data"
 
         class MockGetContextManager:
@@ -796,6 +815,11 @@ class TestImagePathConstruction:
             async def text(self):
                 return html
             async def read(self):
+                if not hasattr(self, 'count'):
+                    self.count = 0
+                self.count += 1
+                if self.count == 1:
+                    return html.encode('utf-8')
                 return b"data"
 
         class MockGetContextManager:

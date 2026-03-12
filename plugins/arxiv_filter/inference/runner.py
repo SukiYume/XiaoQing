@@ -23,20 +23,34 @@ logger = logging.getLogger(__name__)
 # 分发推理
 # =============================================================================
 
+
 def _dispatch_inference(
-    params: InferenceParams, data: pd.DataFrame,
+    params: InferenceParams,
+    data: pd.DataFrame,
 ) -> tuple[list[float], list[int]]:
     """根据 params.model_type 调用对应的后端。"""
-    logger.info("推理参数: model=%s, type=%s, input_mode=%s, threshold=%.4f, batch=%d",
-                params.model_path, params.model_type, params.input_mode,
-                params.threshold, params.batch_size)
+    logger.info(
+        "推理参数: model=%s, type=%s, input_mode=%s, threshold=%.4f, batch=%d",
+        params.model_path,
+        params.model_type,
+        params.input_mode,
+        params.threshold,
+        params.batch_size,
+    )
 
-    if params.model_type == "multi_interest":
+    if params.model_type == "knn":
+        from .knn_backend import run_knn_inference
+
+        logger.info("model_type=knn: 使用 k-NN 兴趣库推理")
+        return run_knn_inference(params, data)
+    elif params.model_type == "multi_interest":
         from .multi_interest_backend import run_multi_interest_inference
+
         logger.info("model_type=multi_interest: 使用多兴趣模型推理")
         return run_multi_interest_inference(params, data)
     else:
         from .transformers_backend import run_transformers_inference
+
         logger.info("model_type=transformers: 使用 BERT 分类推理")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         return run_transformers_inference(params, data, device)
@@ -45,6 +59,7 @@ def _dispatch_inference(
 # =============================================================================
 # 输出处理
 # =============================================================================
+
 
 def select_positives(data: pd.DataFrame) -> pd.DataFrame:
     return cast(pd.DataFrame, data.loc[data["Prediction"] == 1].reset_index(drop=True).copy())
@@ -65,6 +80,7 @@ def format_positives(positives: pd.DataFrame) -> str:
 # =============================================================================
 # 高层 API
 # =============================================================================
+
 
 def run_inference_for_dataframe(
     data: pd.DataFrame,
@@ -92,7 +108,8 @@ def run_inference_for_dataframe(
 
 
 def run_single_paper_inference(
-    title: str, abstract: str,
+    title: str,
+    abstract: str,
     model_path: Optional[str] = None,
     threshold: Optional[float] = None,
     batch_size: Optional[int] = None,

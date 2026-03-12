@@ -9,6 +9,7 @@ from typing import Any, Optional, Sequence
 from .llm_client import chat_completions
 from ..memory.memory import StoredMessage
 from ..memory.memory_db import MemoryDB
+from ..memory.topic_summary_cache import load_topic_summary_entries, topic_summary_cache_path
 from .prompt_builder import ChatMessage, build_dialogue_prompt
 
 @dataclass
@@ -21,45 +22,25 @@ class TopicSummary:
     updated_at: float
 
 def _summarizer_path(data_dir: Path, chat_id: str) -> Path:
-    return data_dir / "hippo_memorizer" / f"{chat_id}.json"
+    return topic_summary_cache_path(data_dir, chat_id)
 
 def _load_cache(data_dir: Path, chat_id: str) -> list[TopicSummary]:
-    path = _summarizer_path(data_dir, chat_id)
-    if not path.exists():
-        return []
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, list):
-            return []
-        out: list[TopicSummary] = []
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            topic_id = str(item.get("topic_id", "")).strip()
-            topic = str(item.get("topic", "")).strip()
-            summary = str(item.get("summary", "")).strip()
-            keywords = item.get("keywords", [])
-            key_points = item.get("key_points", [])
-            updated_at = float(item.get("updated_at", 0.0) or 0.0)
-            if not topic_id or not topic or not summary:
-                continue
-            if not isinstance(keywords, list):
-                keywords = []
-            if not isinstance(key_points, list):
-                key_points = []
-            out.append(
-                TopicSummary(
-                    topic_id=topic_id,
-                    topic=topic,
-                    keywords=[str(k).strip() for k in keywords if isinstance(k, str) and k.strip()],
-                    summary=summary,
-                    key_points=[str(k).strip() for k in key_points if isinstance(k, str) and k.strip()],
-                    updated_at=updated_at,
-                )
+    out: list[TopicSummary] = []
+    for idx, item in enumerate(load_topic_summary_entries(data_dir, chat_id)):
+        if not item.topic or not item.summary:
+            continue
+        topic_id = item.topic_id or f"legacy-{idx}-{int(item.updated_at or 0.0)}"
+        out.append(
+            TopicSummary(
+                topic_id=topic_id,
+                topic=item.topic,
+                keywords=item.keywords,
+                summary=item.summary,
+                key_points=item.key_points,
+                updated_at=item.updated_at,
             )
-        return out
-    except Exception:
-        return []
+        )
+    return out
 
 def _save_cache(data_dir: Path, chat_id: str, topics: Sequence[TopicSummary]) -> None:
     path = _summarizer_path(data_dir, chat_id)
@@ -123,8 +104,16 @@ async def maybe_update_topic_summary(
         return
     if len(history) < min_messages_per_update:
         return
+    cache = _load_cache(data_dir, chat_id)
     if len(history) % min_messages_per_update != 0:
-        return
+        if not cache:
+            return
+        last_updated = max((float(t.updated_at or 0.0) for t in cache), default=0.0)
+        observed_since_last = sum(
+            1 for msg in history if float(getattr(msg, "ts", 0.0) or 0.0) > last_updated
+        )
+        if observed_since_last < min_messages_per_update:
+            return
 
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
@@ -173,7 +162,6 @@ async def maybe_update_topic_summary(
         key_points=[str(k).strip() for k in key_points if isinstance(k, str) and k.strip()],
         updated_at=now,
     )
-    cache = _load_cache(data_dir, chat_id)
     cache.append(ts)
     if max_cache_topics > 0 and len(cache) > max_cache_topics:
         cache = cache[-max_cache_topics:]

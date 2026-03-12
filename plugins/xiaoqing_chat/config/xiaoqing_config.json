@@ -1,11 +1,11 @@
 {
     "enable_smalltalk": true,
-    "reply_probability_base": 0.6,
+    "reply_probability_base": 0.72,
     "reply_probability_private": 0.95,
     "min_reply_interval_seconds": 3,
     "max_replies_per_minute": 6,
-    "continuous_reply_limit": 3,
-    "continuous_cooldown_seconds": 25,
+    "continuous_reply_limit": 5,
+    "continuous_cooldown_seconds": 12,
     "max_context_size": 30,
     "talk_schedule": [
         {
@@ -59,7 +59,7 @@
     "ban_regex": [],
     "planner": {
         "enable_planner": true,
-        "smooth": 3,
+        "smooth": 1,
         "mentioned_bot_reply": true,
         "think_mode": "dynamic",
         "llm_quote": false
@@ -86,7 +86,7 @@
         "similarity_threshold": 0.9,
         "max_assistant_in_row": 3,
         "max_regen": 2,
-        "max_replan": 1
+        "max_replan": 2
     },
     "heartflow": {
         "enable_heartflow": true,
@@ -125,7 +125,7 @@
     },
     "summarizer": {
         "enable_topic_summarizer": true,
-        "min_messages_per_update": 12,
+        "min_messages_per_update": 6,
         "max_cache_topics": 20
     },
     "expression": {

@@ -73,14 +73,46 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
     Returns:
         要发送的消息段字典列表，如果不应发送回复则返回空列表
     """
+    runtime = None
+    max_replan = 1
     try:
-        return await _maybe_reply_smalltalk(clean_text, event, context)
-    except ReplyRejected as exc:
-        context.logger.warning("XiaoQing Chat 回复被拒绝(已耗尽重试): %s", exc)
-        return []
-    except Exception as exc:
-        context.logger.exception("XiaoQing Chat smalltalk 处理失败: %s", exc)
-        return segments(f"❌ 对话处理出错: {str(exc)}")
+        runtime = _load_runtime(context)
+        max_replan = max(0, int(getattr(runtime.cfg.reply_check, "max_replan", 1)))
+    except Exception:
+        runtime = None
+    total_attempts = max_replan + 1
+
+    for attempt in range(total_attempts):
+        try:
+            return await _maybe_reply_smalltalk(clean_text, event, context)
+        except ReplyRejected as exc:
+            try:
+                chat_id = _chat_id(event)
+                state = _get_bound_state(context)
+                state.action_history.append(
+                    chat_id,
+                    ActionRecord(
+                        ts=time.time(),
+                        local_target=str(event.get("_xc_user_recorded_local_id") or ""),
+                        action="reply_rejected",
+                        reasoning=str(exc),
+                        detail={"source": "reply_checker", "need_replan": bool(exc.need_replan)},
+                        executed=False,
+                    ),
+                )
+                if runtime is not None:
+                    _schedule_action_history_flush(context, runtime, chat_id=chat_id)
+            except Exception:
+                pass
+            if exc.need_replan and attempt < max_replan:
+                context.logger.info("XiaoQing Chat 回复被拒绝，触发重规划重试: %s", exc)
+                continue
+            context.logger.warning("XiaoQing Chat 回复被拒绝(已耗尽重试): %s", exc)
+            return []
+        except Exception as exc:
+            context.logger.exception("XiaoQing Chat smalltalk 处理失败: %s", exc)
+            return segments(f"❌ 对话处理出错: {str(exc)}")
+    return []
 
 
 async def observe_message(clean_text: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
@@ -307,6 +339,36 @@ async def _maybe_reply_smalltalk(
         _spawn_bg_task(context, _run_reflection(), name=f"reflection:{chat_id}")
         _log_step(context, runtime, chat_id=chat_id, step="smalltalk.reflection.spawn", fields={})
 
+    goal_refreshed_before_gate = False
+    if (not forced) and runtime.cfg.goal.enable_goal:
+        pfc_state_before_gate = await state.pfc_state_store.get_async(chat_id)
+        planner_top_goal = ""
+        planner_goal_list = getattr(pfc_state_before_gate, "goal_list", []) or []
+        if planner_goal_list and isinstance(planner_goal_list[0], dict):
+            planner_top_goal = str(planner_goal_list[0].get("goal", "") or "").strip()
+        g = ""
+        goal_source = "user"
+        if runtime.cfg.reflection.enable_review_sessions:
+            og = get_goal_override(state.review_store, chat_id)
+            if og:
+                g = og
+                goal_source = "review"
+        if not g and not planner_top_goal:
+            g = await derive_goal_async(
+                data_dir=context.data_dir,
+                chat_id=chat_id,
+                current_text=text,
+                planner_reasoning="",
+            )
+        if g:
+            await state.goal_store.set_async(chat_id, goal=g, source=goal_source)
+            goal_refreshed_before_gate = True
+            _log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.set", fields={"goal": g})
+        elif not planner_top_goal:
+            await state.goal_store.set_async(chat_id, goal=g, source="user")
+            goal_refreshed_before_gate = True
+            _log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.set", fields={"goal": g})
+
     if not forced:
         _interest = _score_interest(text)
         if not await _should_reply(
@@ -319,6 +381,9 @@ async def _maybe_reply_smalltalk(
             runtime.cfg.brain_chat.enable_private_brain_chat,
             interest=_interest,
         ):
+            maybe_coro = state.heartflow.on_no_reply_async(chat_id=chat_id)
+            if asyncio.iscoroutine(maybe_coro):
+                await maybe_coro
             return []
 
     # 检查是否为深度对话模式（不需要锁）
@@ -351,7 +416,7 @@ async def _maybe_reply_smalltalk(
 
     async with _get_lock(chat_id):
         local_id = await _ensure_user_message_recorded(text, event, context, runtime, state=state)
-        if runtime.cfg.goal.enable_goal:
+        if runtime.cfg.goal.enable_goal and not goal_refreshed_before_gate:
             g = await derive_goal_async(
                 data_dir=context.data_dir, chat_id=chat_id, current_text=text, planner_reasoning=""
             )
@@ -365,6 +430,8 @@ async def _maybe_reply_smalltalk(
             )
         if not forced:
             pfc_state_snapshot = deepcopy(await state.pfc_state_store.get_async(chat_id))
+            if pfc_state_snapshot and pfc_state_snapshot.ended:
+                pfc_state_snapshot.ended = False
 
     async def _pfc_generate(mode: str, planner_reason: str, extra_reason: str) -> str:
         style_override = ""
@@ -483,6 +550,23 @@ async def _maybe_reply_smalltalk(
             if not forced and pfc_state_snapshot is not None:
                 state.pfc_state_store.set_state(chat_id, pfc_state_snapshot)
                 should_schedule_pfc_state_flush = True
+                if runtime.cfg.goal.enable_goal:
+                    top_goal = ""
+                    goal_list = getattr(pfc_state_snapshot, "goal_list", []) or []
+                    if goal_list and isinstance(goal_list[0], dict):
+                        top_goal = str(goal_list[0].get("goal", "") or "").strip()
+                    if top_goal:
+                        await state.goal_store.set_async(chat_id, goal=top_goal, source="planner")
+                    else:
+                        goal_clear_async = getattr(state.goal_store, "clear_async", None)
+                        if callable(goal_clear_async):
+                            maybe_goal_clear = goal_clear_async(chat_id)
+                            if asyncio.iscoroutine(maybe_goal_clear):
+                                await maybe_goal_clear
+                        else:
+                            goal_clear = getattr(state.goal_store, "clear", None)
+                            if callable(goal_clear):
+                                goal_clear(chat_id)
 
             if forced:
                 history_snapshot = await _record_bot_reply(
@@ -509,7 +593,7 @@ async def _maybe_reply_smalltalk(
                         ActionRecord(
                             ts=time.time(),
                             local_target=local_id,
-                            action="no_reply",
+                            action=str(pfc_result.action or "no_reply").strip() or "no_reply",
                             reasoning=str(pfc_result.action or "").strip()
                             + (f":{pfc_result.reason}" if pfc_result.reason else ""),
                             detail={"source": "pfc"},
@@ -531,7 +615,7 @@ async def _maybe_reply_smalltalk(
                         reply,
                         local_id,
                         forced=False,
-                        action_str="reply",
+                        action_str=str(pfc_result.action or "reply").strip() or "reply",
                         reasoning=_pfc_reasoning,
                         detail={"source": "pfc"},
                     )
@@ -662,6 +746,26 @@ async def handle_internal(
     if command == "重置":
         async with _get_lock(chat_id):
             state.memory_store.clear(chat_id)
+            goal_clear_async = getattr(state.goal_store, "clear_async", None)
+            if callable(goal_clear_async):
+                maybe_goal_clear = goal_clear_async(chat_id)
+                if asyncio.iscoroutine(maybe_goal_clear):
+                    await maybe_goal_clear
+            heartflow_clear_async = getattr(state.heartflow, "clear_async", None)
+            if callable(heartflow_clear_async):
+                maybe_heartflow_clear = heartflow_clear_async(chat_id)
+                if asyncio.iscoroutine(maybe_heartflow_clear):
+                    await maybe_heartflow_clear
+            if hasattr(state.action_history, "clear"):
+                state.action_history.clear(chat_id)
+            review_store = getattr(state, "review_store", None)
+            if review_store is not None:
+                clear_policy = getattr(review_store, "clear_policy", None)
+                if callable(clear_policy):
+                    clear_policy(chat_id)
+                clear_sessions = getattr(review_store, "clear_sessions_for_chat", None)
+                if callable(clear_sessions):
+                    clear_sessions(chat_id)
             # Also clear PFC state so "ended" / "ignore" flags are reset
             pfc_st = await state.pfc_state_store.get_async(chat_id)
             pfc_st.ended = False
@@ -669,7 +773,17 @@ async def handle_internal(
             pfc_st.last_successful_reply_action = ""
             pfc_st.goal_list = []
             pfc_st.knowledge_list = []
+            pfc_st.planner_fail_ts = []
+            pfc_st.planner_skip_until = 0.0
             await state.pfc_state_store.save_async(chat_id)
+            if hasattr(state, "set_continuous_reply_count"):
+                state.set_continuous_reply_count(chat_id, 0)
+            if hasattr(state, "set_continuous_cooldown_until"):
+                state.set_continuous_cooldown_until(chat_id, 0.0)
+            if hasattr(state, "set_reply_timestamps"):
+                state.set_reply_timestamps(chat_id, [])
+            if hasattr(state, "set_last_reply_ts"):
+                state.set_last_reply_ts(chat_id, 0.0)
         state.inc_stats(chat_id, "resets")
         context.logger.info("XiaoQing Chat: 会话 %s 已重置", chat_id)
         return segments("✅ 已重置会话记忆")

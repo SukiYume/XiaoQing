@@ -106,6 +106,35 @@ class ReviewStore(StoreBase):
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         self._cache_policies[chat_id] = pol
 
+    def clear_policy(self, chat_id: str) -> None:
+        self._cache_policies.pop(chat_id, None)
+        path = self._policy_path(chat_id)
+        if path and path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    def clear_sessions_for_chat(self, chat_id: str) -> int:
+        st = self._load_sessions_state()
+        active = st.get("active", {})
+        last_closed = st.get("last_closed", {})
+        if not isinstance(active, dict):
+            return 0
+        removed = 0
+        for sid, obj in list(active.items()):
+            if isinstance(obj, dict) and str(obj.get("chat_id", "") or "") == chat_id:
+                active.pop(sid, None)
+                removed += 1
+        if isinstance(last_closed, dict):
+            for key in list(last_closed.keys()):
+                if isinstance(key, str) and key.startswith(f"{chat_id}:"):
+                    last_closed.pop(key, None)
+            st["last_closed"] = last_closed
+        st["active"] = active
+        self._save_sessions_state(st)
+        return removed
+
     def _new_session_id(self, chat_id: str, kind: str) -> str:
         raw = f"{chat_id}|{kind}|{time.time()}".encode("utf-8")
         return hashlib.md5(raw).hexdigest()[:10]
