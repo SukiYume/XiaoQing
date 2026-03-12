@@ -51,6 +51,29 @@ from .memory.review_sessions import build_policy_block
 from .planning.planner import PlannedAction
 
 
+_RE_GOAL = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,120})")
+
+
+def _extract_planner_goal(reasoning: str) -> str:
+    text = (reasoning or "").strip()
+    if not text:
+        return ""
+    m = _RE_GOAL.search(text)
+    if not m:
+        return ""
+    return str(m.group(1) or "").strip()
+
+
+def _merge_planner_reasoning(action_reasoning: str, plan_reasoning: str) -> str:
+    action_text = (action_reasoning or "").strip()
+    plan_text = (plan_reasoning or "").strip()
+    if action_text and plan_text:
+        if plan_text.startswith(action_text):
+            return plan_text
+        return f"{action_text}\n{plan_text}".strip()
+    return plan_text or action_text
+
+
 async def _generate_reply(
     *,
     text: str,
@@ -142,11 +165,14 @@ async def _generate_reply(
         except re.error:
             continue
 
+    merged_reasoning = _merge_planner_reasoning(action.reasoning, plan_reasoning)
     st = await state.goal_store.get_async(chat_id)
     current_goal = st.goal if runtime.cfg.goal.enable_goal and st.goal else ""
+    planner_goal = _extract_planner_goal(merged_reasoning)
+    effective_goal = planner_goal or current_goal
     tool_info_block = await _build_tool_info_block(
         runtime=runtime, state=state, data_dir=context.data_dir, bot_name=bot_name, 
-        chat_id=chat_id, event=event, goal=current_goal
+        chat_id=chat_id, event=event, goal=effective_goal
     )
 
     effective_identity = get_brain_chat_identity(runtime, is_brain_chat)
@@ -202,12 +228,12 @@ async def _generate_reply(
             expression_habits_block=expression_block,
             jargon_explanation=jargon_explanation,
             tool_info_block=tool_info_block,
-            planner_reasoning=_replace_local_ids_with_text(chat_id, action.reasoning or plan_reasoning),
+            planner_reasoning=_replace_local_ids_with_text(chat_id, merged_reasoning),
             identity_block=effective_identity,
             reply_style_override=effective_style,
             state_override=state_text,
             request_id=request_id,
-            goal=current_goal,
+            goal=effective_goal,
         )
         if extra_check_hint:
             msgs.append(ChatMessage(role="user", content=extra_check_hint))
@@ -366,7 +392,7 @@ async def _generate_reply(
                     trimmed_history, bot_name=bot_name, truncate=True
                 )
                 # 复用已由 handlers.py 设置好的 goal，避免重复 LLM 调用
-                goal = current_goal or (action.reasoning or plan_reasoning or "").strip() or "自然聊天"
+                goal = effective_goal or merged_reasoning or "自然聊天"
                 try:
                     check = await asyncio.wait_for(
                         check_reply(

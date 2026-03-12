@@ -7,6 +7,7 @@
 """
 
 import importlib
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,9 +19,7 @@ import pandas as pd
 import torch
 from sklearn.linear_model import LogisticRegression
 
-from .shared import InferenceParams, resolve_multi_interest_model_path, load_training_config
-
-import logging
+from .shared import InferenceParams, load_training_config, resolve_multi_interest_model_path
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +27,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Artifacts
 # =============================================================================
+
 
 @dataclass
 class ModelArtifacts:
@@ -50,6 +50,7 @@ class ModelArtifacts:
 # =============================================================================
 # 工具函数
 # =============================================================================
+
 
 def _load_sentence_transformer():
     return importlib.import_module("sentence_transformers").SentenceTransformer
@@ -80,6 +81,7 @@ def _build_texts(df: pd.DataFrame, title_col: str, abstract_col: Optional[str]) 
 # 推理模型
 # =============================================================================
 
+
 class MultiInterestInferenceModel:
     def __init__(self, model_dir: str, batch_size: int = 256):
         self.model_dir = Path(model_dir)
@@ -97,8 +99,10 @@ class MultiInterestInferenceModel:
         if not texts:
             return np.zeros((0, self.artifacts.embedding_dim), dtype=np.float32)
         kw: Dict[str, Any] = dict(
-            batch_size=self.batch_size, show_progress_bar=False,
-            convert_to_numpy=True, normalize_embeddings=True,
+            batch_size=self.batch_size,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
         )
         if self._use_fp16:
             with torch.amp.autocast("cuda"):
@@ -118,17 +122,27 @@ class MultiInterestInferenceModel:
         entropy = -np.sum(probs * np.log(probs + 1e-12), axis=1)
 
         sim_pos = (embeddings @ a.pos_centroid.reshape(-1, 1)).ravel()
-        sim_neg = ((embeddings @ a.neg_centroid.reshape(-1, 1)).ravel()
-                   if a.neg_centroid is not None
-                   else np.zeros(len(embeddings), dtype=np.float32))
+        sim_neg = (
+            (embeddings @ a.neg_centroid.reshape(-1, 1)).ravel()
+            if a.neg_centroid is not None
+            else np.zeros(len(embeddings), dtype=np.float32)
+        )
 
-        return np.column_stack([
-            sims,
-            sims.max(axis=1), sims.mean(axis=1), sims.std(axis=1), sims.min(axis=1),
-            sorted_sims[:, -1] - top2,
-            entropy, probs.max(axis=1),
-            sim_pos, sim_neg,
-        ]).astype(np.float32)
+        return np.column_stack(
+            [
+                sims,
+                sims.max(axis=1),
+                sims.mean(axis=1),
+                sims.std(axis=1),
+                sims.min(axis=1),
+                sorted_sims[:, -1] - top2,
+                entropy,
+                probs.max(axis=1),
+                sim_pos,
+                sim_neg,
+                sim_pos - sim_neg,  # contrast_pos_neg: 离正样本重心比负样本重心近多少
+            ]
+        ).astype(np.float32)
 
     def predict_proba(self, df: pd.DataFrame, input_mode: str = "title_abstract") -> np.ndarray:
         """返回每篇论文的正类概率 (1-d array)。"""
@@ -148,8 +162,9 @@ class MultiInterestInferenceModel:
         return self.artifacts.classifier.predict_proba(X)[:, 1]
 
 
-def _resolve_col(df: pd.DataFrame, trained_col: Optional[str],
-                 fallbacks: List[str]) -> Optional[str]:
+def _resolve_col(
+    df: pd.DataFrame, trained_col: Optional[str], fallbacks: List[str]
+) -> Optional[str]:
     """在 df 中找到实际可用的列名。"""
     if trained_col and trained_col in df.columns:
         return trained_col
@@ -163,8 +178,10 @@ def _resolve_col(df: pd.DataFrame, trained_col: Optional[str],
 # 统一入口
 # =============================================================================
 
+
 def run_multi_interest_inference(
-    params: InferenceParams, data: pd.DataFrame,
+    params: InferenceParams,
+    data: pd.DataFrame,
 ) -> tuple[list[float], list[int]]:
     """执行多兴趣模型推理。
 

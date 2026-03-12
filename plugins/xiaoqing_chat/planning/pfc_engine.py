@@ -28,6 +28,20 @@ class PFCRunResult:
 GenerateReplyFn = Callable[[str, str, str], Awaitable[str]]
 
 
+def _build_goal_focus_context(goal_list: Sequence[dict[str, Any]]) -> str:
+    if not goal_list:
+        return ""
+    first = goal_list[0] if isinstance(goal_list[0], dict) else {}
+    goal = str(first.get("goal", "") or "").strip()
+    focus = str(first.get("focus", "") or "").strip()
+    lines: list[str] = []
+    if goal:
+        lines.append(f"目标: {goal}")
+    if focus:
+        lines.append(f"焦点: {focus}")
+    return "\n".join(lines).strip()
+
+
 async def _action_history_summary_async(store: ActionHistoryStore, chat_id: str) -> tuple[str, str]:
     recent = await store.get_recent_async(chat_id, max_items=10)
     if not recent:
@@ -142,6 +156,7 @@ async def run_pfc_once(
     st: PFCConversationState = state_override or await pfc_state_store.get_async(chat_id)
     now = time.time()
     _pfc_dirty = False
+    planner_goal_context = ""
 
     _proxy = secrets.get("proxy", "") or ""
     _endpoint_path = secrets.get("endpoint_path", "") or runtime_cfg.endpoint_path
@@ -323,6 +338,7 @@ async def run_pfc_once(
                 step="pfc.rethink_goal.done",
                 fields={"goals": len(st.goal_list or [])},
             )
+            planner_goal_context = _build_goal_focus_context(st.goal_list or [])
             plan = await _plan()
             act = _normalize_action(plan.action)
 
@@ -397,7 +413,7 @@ async def run_pfc_once(
             combined_reason = plan.reason
             if plan.thinking:
                 combined_reason = f"[thinking: {plan.thinking[:200]}] {plan.reason}"
-            reply = await generate_reply(act, combined_reason, "")
+            reply = await generate_reply(act, combined_reason, planner_goal_context)
             if reply:
                 st.last_successful_reply_action = act
                 _pfc_dirty = True
