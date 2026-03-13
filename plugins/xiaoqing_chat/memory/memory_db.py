@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -9,7 +9,11 @@ from typing import Any, Optional
 
 import numpy as np
 
-from .vector_store import VectorDoc, VectorStore, _embed, _l2_normalize
+from .vector_store import VectorDoc, VectorStore, write_vector_store_files
+
+
+_logger = logging.getLogger("plugin.xiaoqing_chat")
+
 
 @dataclass(frozen=True)
 class RetrievedItem:
@@ -18,11 +22,13 @@ class RetrievedItem:
     score: float
     meta: dict[str, Any]
 
+
 class MemoryDB:
     def __init__(self) -> None:
         self._store = VectorStore(dim=2048)
         self._loaded_dir: Optional[Path] = None
         self._dirty = False
+        self._dirty_version = 0
         self._lock = threading.RLock()
 
     def bind(self, data_dir: Path) -> None:
@@ -48,22 +54,25 @@ class MemoryDB:
             mat = self._store._matrix
             if mat is None:
                 mat = np.zeros((0, dim), dtype=np.float32)
+            save_version = self._dirty_version
         # Write files outside the lock
         vdb_dir = loaded_dir / "vdb"
-        vdb_dir.mkdir(parents=True, exist_ok=True)
-        docs_path = vdb_dir / "memory.docs.json"
-        npz_path = vdb_dir / "memory.vecs.npz"
-
-        docs_payload = [{"doc_id": d.doc_id, "text": d.text, "meta": d.meta} for d in docs]
         try:
-            docs_path.write_text(json.dumps(docs_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            np.savez_compressed(npz_path, dim=np.int32(dim), matrix=mat)
-        except Exception:
+            write_vector_store_files(
+                dir_path=vdb_dir,
+                name="memory",
+                docs=docs,
+                dim=dim,
+                matrix=mat,
+            )
+        except Exception as exc:
+            _logger.warning("xiaoqing_chat memory_db save failed: %s", exc)
             # I/O failed — keep dirty flag so next schedule retries
             return
         # Only clear dirty flag after BOTH writes succeed
         with self._lock:
-            self._dirty = False
+            if self._dirty_version == save_version:
+                self._dirty = False
 
     def is_dirty(self) -> bool:
         with self._lock:
@@ -78,8 +87,11 @@ class MemoryDB:
 
     def upsert_text(self, *, doc_id: str, text: str, meta: dict[str, Any]) -> None:
         with self._lock:
-            self._store.upsert(VectorDoc(doc_id=doc_id, text=text, meta={**meta, "updated_at": time.time()}))
+            self._store.upsert(
+                VectorDoc(doc_id=doc_id, text=text, meta={**meta, "updated_at": time.time()})
+            )
             self._dirty = True
+            self._dirty_version += 1
 
     def query(
         self,

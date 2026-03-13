@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import random
 import re
-import time
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from core.plugin_base import Context
+from typing import Any, Optional
 
 from .config.config import XiaoQingChatConfig, load_xiaoqing_chat_config
 from .llm.llm_config import LLMCallConfig
@@ -49,7 +44,7 @@ def _chat_id(event: dict[str, Any]) -> str:
     return f"u{user_id}"
 
 
-def _get_bot_name(context: Context) -> str:
+def _get_bot_name(context: Any) -> str:
     """
     Get the bot's configured name.
 
@@ -136,11 +131,12 @@ def _has_bot_name(event: dict[str, Any], bot_name: str) -> bool:
     if not bot_name:
         return False
     from core.message import extract_text
+
     text = extract_text(event.get("message")).strip()
     return bot_name.lower() in text.lower()
 
 
-def _load_runtime(context: Context) -> _ChatRuntime:
+def _load_runtime(context: Any) -> _ChatRuntime:
     """
     Load or retrieve the cached runtime configuration for the plugin.
 
@@ -196,7 +192,7 @@ def _load_runtime(context: Context) -> _ChatRuntime:
     return runtime
 
 
-def _get_llm_secrets(context: Context) -> dict[str, Any]:
+def _get_llm_secrets(context: Any) -> dict[str, Any]:
     """Resolve LLM provider config into a flat dict.
 
     The ``xiaoqing_chat`` secrets block now uses a provider-based layout::
@@ -258,17 +254,13 @@ def _resolve_llm_config(
 ) -> LLMCallConfig:
     """Resolve timeout/retry/proxy settings for LLM calls."""
     if foreground:
-        timeout = float(
-            getattr(cfg, "foreground_timeout_seconds", cfg.timeout_seconds)
-        )
+        timeout = float(getattr(cfg, "foreground_timeout_seconds", cfg.timeout_seconds))
         max_retry = int(getattr(cfg, "foreground_max_retry", cfg.max_retry))
         retry_interval = float(
             getattr(cfg, "foreground_retry_interval_seconds", cfg.retry_interval_seconds)
         )
     else:
-        timeout = float(
-            getattr(cfg, "background_timeout_seconds", cfg.timeout_seconds)
-        )
+        timeout = float(getattr(cfg, "background_timeout_seconds", cfg.timeout_seconds))
         max_retry = int(getattr(cfg, "background_max_retry", cfg.max_retry))
         retry_interval = float(
             getattr(cfg, "background_retry_interval_seconds", cfg.retry_interval_seconds)
@@ -307,6 +299,7 @@ def _should_ignore_text(text: str, runtime: _ChatRuntime) -> bool:
             return True
     return False
 
+
 def _parse_local_id_num(local_id: str) -> int:
     if not local_id:
         return 0
@@ -315,9 +308,11 @@ def _parse_local_id_num(local_id: str) -> int:
         return int(m.group(1))
     return 0
 
+
 def _next_local_id(chat_id: str) -> str:
     n = _state().fetch_and_increment_local_id(chat_id)
     return f"m{n}"
+
 
 def _find_by_local_id(chat_id: str, local_id: str) -> Optional[Any]:
     if not local_id:
@@ -327,11 +322,13 @@ def _find_by_local_id(chat_id: str, local_id: str) -> Optional[Any]:
             return msg
     return None
 
+
 def _most_recent_user_local_id(chat_id: str) -> str:
     for msg in reversed(_state().memory_store.get(chat_id)):
         if msg.role == "user":
             return getattr(msg, "local_id", "") or ""
     return ""
+
 
 def _replace_local_ids_with_text(chat_id: str, text: str) -> str:
     """Replace local message IDs (e.g. m123) with human-readable references.
@@ -342,7 +339,7 @@ def _replace_local_ids_with_text(chat_id: str, text: str) -> str:
     if not text:
         return ""
 
-    def _repl(match: re.Match) -> str:
+    def _repl(match: re.Match[str]) -> str:
         local_id = match.group(0)
         msg = _find_by_local_id(chat_id, local_id)
         if msg:

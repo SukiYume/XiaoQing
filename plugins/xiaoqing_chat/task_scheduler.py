@@ -79,60 +79,62 @@ _action_flush_tasks: dict[str, asyncio.Task[Any]] = {}
 _pfc_state_flush_tasks: dict[str, asyncio.Task[Any]] = {}
 
 
-def _schedule_action_history_flush(context: Any, runtime: _ChatRuntime, *, chat_id: str) -> None:
-    """Debounced flush for ActionHistoryStore to avoid writing on every append."""
+def _schedule_debounced_flush(
+    context: Any,
+    runtime: _ChatRuntime,
+    *,
+    chat_id: str,
+    task_registry: dict[str, asyncio.Task[Any]],
+    flush_func: Any,
+    name_prefix: str,
+) -> None:
+    """Shared internal helper for debounced flush scheduling."""
     delay = max(0.0, float(getattr(runtime.cfg, "io_persist_debounce_seconds", 0.8) or 0.0))
-    old = _action_flush_tasks.get(chat_id)
+    old = task_registry.get(chat_id)
     if old is not None and not old.done():
         try:
-            old.cancel()
+            _ = old.cancel()
         except Exception:
             pass
 
     async def _run() -> None:
         if delay:
             await asyncio.sleep(delay)
-        await asyncio.to_thread(_state().action_history.flush, chat_id)
+        await asyncio.to_thread(flush_func, chat_id)
 
     try:
         task = asyncio.create_task(_run())
     except RuntimeError:
         return
-    _action_flush_tasks[chat_id] = task
+    task_registry[chat_id] = task
 
     def _cleanup_done(t: asyncio.Task[Any]) -> None:
-        current = _action_flush_tasks.get(chat_id)
+        current = task_registry.get(chat_id)
         if current is t:
-            _action_flush_tasks.pop(chat_id, None)
+            _ = task_registry.pop(chat_id, None)
 
     task.add_done_callback(_cleanup_done)
-    _track_bg_task(context, task, name=f"action_flush:{chat_id}")
+    _track_bg_task(context, task, name=f"{name_prefix}:{chat_id}")
+
+
+def _schedule_action_history_flush(context: Any, runtime: _ChatRuntime, *, chat_id: str) -> None:
+    """Debounced flush for ActionHistoryStore to avoid writing on every append."""
+    _schedule_debounced_flush(
+        context,
+        runtime,
+        chat_id=chat_id,
+        task_registry=_action_flush_tasks,
+        flush_func=_state().action_history.flush,
+        name_prefix="action_flush",
+    )
 
 
 def _schedule_pfc_state_flush(context: Any, runtime: _ChatRuntime, *, chat_id: str) -> None:
-    delay = max(0.0, float(getattr(runtime.cfg, "io_persist_debounce_seconds", 0.8) or 0.0))
-    old = _pfc_state_flush_tasks.get(chat_id)
-    if old is not None and not old.done():
-        try:
-            old.cancel()
-        except Exception:
-            pass
-
-    async def _run() -> None:
-        if delay:
-            await asyncio.sleep(delay)
-        await asyncio.to_thread(_state().pfc_state_store.save, chat_id)
-
-    try:
-        task = asyncio.create_task(_run())
-    except RuntimeError:
-        return
-    _pfc_state_flush_tasks[chat_id] = task
-
-    def _cleanup_done(t: asyncio.Task[Any]) -> None:
-        current = _pfc_state_flush_tasks.get(chat_id)
-        if current is t:
-            _pfc_state_flush_tasks.pop(chat_id, None)
-
-    task.add_done_callback(_cleanup_done)
-    _track_bg_task(context, task, name=f"pfc_state_flush:{chat_id}")
+    _schedule_debounced_flush(
+        context,
+        runtime,
+        chat_id=chat_id,
+        task_registry=_pfc_state_flush_tasks,
+        flush_func=_state().pfc_state_store.save,
+        name_prefix="pfc_state_flush",
+    )

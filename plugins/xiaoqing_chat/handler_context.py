@@ -1,4 +1,5 @@
 """Handler context — bundles common per-request state."""
+
 from __future__ import annotations
 
 import functools
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class HandlerContext:
     """Immutable bundle of per-request context extracted once at entry point."""
+
     chat_id: str
     runtime: _ChatRuntime
     state: ChatRuntimeState
@@ -52,19 +54,22 @@ def handle_errors(label: str):
     Catches all exceptions, logs them, and returns a user-friendly error message.
     Expects ``context`` as the last positional argument of the wrapped function.
     """
+
     def decorator(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
-            # context is always the last positional arg in handler signatures
-            context = kwargs.get("context") or args[-1] if args else None
+            context = kwargs.get("context")
+            if context is None and args:
+                context = args[-1]
             try:
                 return await fn(*args, **kwargs)
             except Exception as exc:
                 if context and hasattr(context, "logger"):
-                    context.logger.exception(
-                        "XiaoQing Chat %s 处理失败: %s", label, exc
-                    )
+                    context.logger.exception("XiaoQing Chat %s 处理失败: %s", label, exc)
                 from core.plugin_base import segments
+
                 return segments(f"\u274c {label}出错: {exc}")
+
         return wrapper
+
     return decorator

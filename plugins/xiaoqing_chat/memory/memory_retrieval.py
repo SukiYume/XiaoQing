@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from ..config.config import MemoryConfig
 from ..llm.llm_client import LLMError, chat_completions_raw_with_fallback_paths
+from ..utils.json_parsing import parse_first_json_object
 from .memory import StoredMessage
 from .memory_db import MemoryDB, RetrievedItem
 from ..llm.prompt_builder import ChatMessage, build_dialogue_prompt
@@ -17,13 +18,16 @@ from .thinking_back import append_record, get_cached_answer
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
 
+
 @dataclass(frozen=True)
 class ToolCall:
     call_id: str
     name: str
     arguments: dict[str, Any]
 
+
 ToolFunc = Callable[[dict[str, Any]], dict[str, Any]]
+
 
 def _tools_schema() -> list[dict[str, Any]]:
     return [
@@ -68,7 +72,7 @@ def _tools_schema() -> list[dict[str, Any]]:
                     "properties": {
                         "query": {"type": "string"},
                         "top_k": {"type": "integer"},
-                        "subject_id": {"type": "integer"}
+                        "subject_id": {"type": "integer"},
                     },
                     "required": ["query"],
                 },
@@ -81,9 +85,7 @@ def _tools_schema() -> list[dict[str, Any]]:
                 "description": "获取某个人的画像摘要（按 subject_id）。",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "subject_id": {"type": "integer"}
-                    },
+                    "properties": {"subject_id": {"type": "integer"}},
                     "required": ["subject_id"],
                 },
             },
@@ -138,11 +140,13 @@ def _tools_schema() -> list[dict[str, Any]]:
         },
     ]
 
+
 _QUESTION_SYSTEM = (
     "你是聊天记忆检索问题生成器。你只输出 JSON，不要解释。\n"
     "你会从当前对话中提炼一个最关键的问题，用于检索长期记忆。\n"
-    "输出：{\"question\":\"...\"}\n"
+    '输出：{"question":"..."}\n'
 )
+
 
 def build_question_messages(
     *,
@@ -155,27 +159,21 @@ def build_question_messages(
         "对话如下（你是“{bot}(你)”）：\n"
         "{dialogue}\n\n"
         "当前一句话：{text}\n"
-        "输出 JSON：{{\"question\":\"...\"}}"
+        '输出 JSON：{{"question":"..."}}'
     ).format(bot=bot_name, dialogue=dialogue, text=current_text.strip())
     return [
         ChatMessage(role="system", content=_QUESTION_SYSTEM.strip()),
         ChatMessage(role="user", content=user.strip()),
     ]
 
+
 def _parse_question_json(text: str) -> str:
-    if not text:
-        return ""
-    s = text.strip()
-    start = s.find("{")
-    end = s.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return ""
-    try:
-        obj = json.loads(s[start : end + 1])
-    except Exception:
+    obj = parse_first_json_object(text)
+    if not obj:
         return ""
     q = obj.get("question", "")
     return str(q).strip() if isinstance(q, str) else ""
+
 
 _REACT_SYSTEM = (
     "你是记忆检索代理。你可以调用工具查询信息。\n"
@@ -183,12 +181,14 @@ _REACT_SYSTEM = (
     "你必须通过工具来获得信息，不要凭空编造。\n"
 )
 
+
 def build_react_messages(*, question: str) -> list[dict[str, Any]]:
     user = f"问题：{question.strip()}\n请通过工具检索后再回答。"
     return [
         {"role": "system", "content": _REACT_SYSTEM.strip()},
         {"role": "user", "content": user.strip()},
     ]
+
 
 def _extract_tool_calls(resp: dict[str, Any]) -> list[ToolCall]:
     choices = resp.get("choices") or []
@@ -224,7 +224,10 @@ def _extract_tool_calls(resp: dict[str, Any]) -> list[ToolCall]:
             out.append(ToolCall(call_id=call_id, name=name, arguments=args))
     return out
 
-def _tool_query_chat_history(history: Sequence[StoredMessage], args: dict[str, Any]) -> dict[str, Any]:
+
+def _tool_query_chat_history(
+    history: Sequence[StoredMessage], args: dict[str, Any]
+) -> dict[str, Any]:
     query = str(args.get("query", "")).strip()
     limit = int(args.get("limit", 6) or 6)
     user_id_filter = args.get("user_id", None)
@@ -254,7 +257,10 @@ def _tool_query_chat_history(history: Sequence[StoredMessage], args: dict[str, A
             break
     return {"snippets": out}
 
-def _tool_query_db(db: MemoryDB, args: dict[str, Any], *, type_filter: str, chat_id: str) -> dict[str, Any]:
+
+def _tool_query_db(
+    db: MemoryDB, args: dict[str, Any], *, type_filter: str, chat_id: str
+) -> dict[str, Any]:
     query = str(args.get("query", "")).strip()
     top_k = int(args.get("top_k", 5) or 5)
     subject_id_raw = args.get("subject_id", None)
@@ -276,15 +282,26 @@ def _tool_query_db(db: MemoryDB, args: dict[str, Any], *, type_filter: str, chat
         meta_filter = {"chat_id": scoped_chat_id}
     if subject_id is not None and type_filter in ("person_info", "person_profile"):
         meta_filter = {**(meta_filter or {}), "subject_id": subject_id}
-    items = db.query(query, top_k=top_k, min_score=0.0, type_filter=type_filter, meta_filter=meta_filter)
-    return {"items": [{"doc_id": it.doc_id, "score": it.score, "text": it.text, "meta": it.meta} for it in items]}
+    items = db.query(
+        query, top_k=top_k, min_score=0.0, type_filter=type_filter, meta_filter=meta_filter
+    )
+    return {
+        "items": [
+            {"doc_id": it.doc_id, "score": it.score, "text": it.text, "meta": it.meta}
+            for it in items
+        ]
+    }
+
 
 def _tool_get_person_profile(db: MemoryDB, args: dict[str, Any], *, chat_id: str) -> dict[str, Any]:
     subject_id_raw = args.get("subject_id", None)
-    try:
-        subject_id = int(subject_id_raw)
-    except (TypeError, ValueError):
+    if subject_id_raw is None:
         subject_id = 0
+    else:
+        try:
+            subject_id = int(subject_id_raw)
+        except (TypeError, ValueError):
+            subject_id = 0
     if subject_id <= 0:
         return {"items": []}
     scoped_chat_id = (chat_id or "").strip()
@@ -294,6 +311,7 @@ def _tool_get_person_profile(db: MemoryDB, args: dict[str, Any], *, chat_id: str
     if not item:
         return {"items": []}
     return {"items": [{"doc_id": item.doc_id, "score": 1.0, "text": item.text, "meta": item.meta}]}
+
 
 async def react_retrieve(
     *,
@@ -321,10 +339,16 @@ async def react_retrieve(
 
     tool_impl: dict[str, ToolFunc] = {
         "query_chat_history": lambda a: _tool_query_chat_history(history, a),
-        "query_topic_summaries": lambda a: _tool_query_db(memory_db, a, type_filter="topic_summary", chat_id=chat_id),
-        "query_person_info": lambda a: _tool_query_db(memory_db, a, type_filter="person_info", chat_id=chat_id),
+        "query_topic_summaries": lambda a: _tool_query_db(
+            memory_db, a, type_filter="topic_summary", chat_id=chat_id
+        ),
+        "query_person_info": lambda a: _tool_query_db(
+            memory_db, a, type_filter="person_info", chat_id=chat_id
+        ),
         "query_words": lambda a: _tool_query_db(memory_db, a, type_filter="word_def", chat_id=""),
-        "query_knowledge": lambda a: _tool_query_db(memory_db, a, type_filter="knowledge", chat_id=""),
+        "query_knowledge": lambda a: _tool_query_db(
+            memory_db, a, type_filter="knowledge", chat_id=""
+        ),
         "query_person_profile": lambda a: _tool_get_person_profile(memory_db, a, chat_id=chat_id),
         "found_answer": lambda a: {"final": str(a.get("answer", "")).strip()},
         "not_enough_info": lambda a: {"final": ""},
@@ -357,7 +381,9 @@ async def react_retrieve(
         )
         tool_calls = _extract_tool_calls(resp)
         if not tool_calls:
-            content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
+            content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get(
+                "content"
+            ) or ""
             return str(content).strip()
 
         assistant_msg = (resp.get("choices") or [{}])[0].get("message") or {}
@@ -388,13 +414,22 @@ async def react_retrieve(
                 }
             )
         if final:
-            _logger.info("memory_retrieval agent api_calls=%d elapsed=%.2fs", api_call_count, time.time() - start)
+            _logger.info(
+                "memory_retrieval agent api_calls=%d elapsed=%.2fs",
+                api_call_count,
+                time.time() - start,
+            )
             return final
 
         await asyncio.sleep(0)
 
-    _logger.info("memory_retrieval agent api_calls=%d elapsed=%.2fs (exhausted)", api_call_count, time.time() - start)
+    _logger.info(
+        "memory_retrieval agent api_calls=%d elapsed=%.2fs (exhausted)",
+        api_call_count,
+        time.time() - start,
+    )
     return ""
+
 
 async def build_memory_block(
     *,
@@ -422,7 +457,9 @@ async def build_memory_block(
     soft_budget = 4.0
     question = planner_question.strip()
     if not question and cfg.planner_question:
-        msgs = build_question_messages(bot_name=bot_name, history=history, current_text=current_text)
+        msgs = build_question_messages(
+            bot_name=bot_name, history=history, current_text=current_text
+        )
         payload_msgs = [{"role": m.role, "content": m.content} for m in msgs]
         try:
             raw, _path = await asyncio.wait_for(
@@ -443,7 +480,9 @@ async def build_memory_block(
                 ),
                 timeout=min(2.0, soft_budget),
             )
-            content = (((raw.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
+            content = (((raw.get("choices") or [{}])[0] or {}).get("message") or {}).get(
+                "content"
+            ) or ""
             question = _parse_question_json(str(content))
         except Exception:
             question = ""
@@ -492,8 +531,20 @@ async def build_memory_block(
             top_k=max(6, int(cfg.top_k) * 4),
             min_score=cfg.min_score,
             type_filter=None,
-            meta_filter={"chat_id": chat_id},
+            meta_filter=None,
         )
+        scoped_chat_id = (chat_id or "").strip()
+        filtered_items: list[RetrievedItem] = []
+        for it in items:
+            meta = it.meta if isinstance(it.meta, dict) else {}
+            item_chat_id = str(meta.get("chat_id", "") or "").strip()
+            item_type = str(meta.get("type", "") or "").strip()
+            if item_type in {"knowledge", "word_def"}:
+                filtered_items.append(it)
+                continue
+            if scoped_chat_id and item_chat_id == scoped_chat_id:
+                filtered_items.append(it)
+        items = filtered_items
         if not items:
             return ""
         lines = []

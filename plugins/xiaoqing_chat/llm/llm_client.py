@@ -1,37 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 import aiohttp
 
+
 class LLMError(RuntimeError):
     pass
+
 
 def _join_url(api_base: str, path: str) -> str:
     base = (api_base or "").rstrip("/")
     p = (path or "").lstrip("/")
     return f"{base}/{p}" if base else f"/{p}"
 
-def _extract_content(data: dict[str, Any]) -> str:
-    choices = data.get("choices") or []
-    if not isinstance(choices, list) or not choices:
-        return ""
-    choice0 = choices[0] or {}
-    if isinstance(choice0, dict):
-        msg = choice0.get("message") or {}
-        if isinstance(msg, dict):
-            content = msg.get("content")
-            if isinstance(content, str):
-                return content.strip()
-        delta = choice0.get("delta") or {}
-        if isinstance(delta, dict):
-            content = delta.get("content")
-            if isinstance(content, str):
-                return content.strip()
-    return ""
 
-def _extract_message(data: dict[str, Any]) -> dict[str, Any]:
+def extract_response_message(data: dict[str, Any]) -> dict[str, Any]:
     choices = data.get("choices") or []
     if not isinstance(choices, list) or not choices:
         return {}
@@ -46,8 +31,49 @@ def _extract_message(data: dict[str, Any]) -> dict[str, Any]:
         return delta
     return {}
 
+
+def extract_response_content(data: dict[str, Any]) -> str:
+    msg = extract_response_message(data)
+    content = msg.get("content")
+    return content.strip() if isinstance(content, str) else ""
+
+
 def _is_retryable_status(status: int) -> bool:
     return status in (408, 409, 425, 429) or 500 <= status <= 599
+
+
+def _retry_delay(retry_interval_seconds: float, attempt: int) -> float:
+    base = max(0.0, float(retry_interval_seconds))
+    if base <= 0.0:
+        return 0.0
+    return base * (2 ** max(0, attempt - 1))
+
+
+T = TypeVar("T")
+
+
+def _candidate_paths(endpoint_path: str) -> list[str]:
+    paths = [endpoint_path]
+    if endpoint_path.rstrip("/") == "/v1/chat/completions":
+        paths.append("/chat/completions")
+    return paths
+
+
+async def _call_with_fallback_paths(
+    *,
+    endpoint_path: str,
+    invoke: Callable[[str], Awaitable[T]],
+) -> tuple[T, str]:
+    last_exc: Optional[BaseException] = None
+    for path in _candidate_paths(endpoint_path):
+        try:
+            return await invoke(path), path
+        except LLMError as exc:
+            last_exc = exc
+            if "http_404" not in str(exc):
+                break
+    raise last_exc or LLMError("llm_request_failed")
+
 
 async def chat_completions_raw(
     *,
@@ -116,7 +142,7 @@ async def chat_completions_raw(
 
             if not isinstance(data, dict):
                 raise LLMError("invalid_response")
-            msg = _extract_message(data)
+            msg = extract_response_message(data)
             content = msg.get("content")
             tool_calls = msg.get("tool_calls")
             if (not content or not str(content).strip()) and not tool_calls:
@@ -127,11 +153,12 @@ async def chat_completions_raw(
                 raise
             if attempt > max_retry + 1:
                 raise
-            await asyncio.sleep(max(0.0, retry_interval_seconds))
+            await asyncio.sleep(_retry_delay(retry_interval_seconds, attempt))
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             if attempt > max_retry + 1:
                 raise LLMError(str(exc)) from exc
-            await asyncio.sleep(max(0.0, retry_interval_seconds))
+            await asyncio.sleep(_retry_delay(retry_interval_seconds, attempt))
+
 
 async def chat_completions(
     *,
@@ -170,7 +197,8 @@ async def chat_completions(
         tool_choice=tool_choice,
         extra_payload=extra_payload,
     )
-    return _extract_content(data)
+    return extract_response_content(data)
+
 
 async def chat_completions_with_fallback_paths(
     *,
@@ -191,38 +219,28 @@ async def chat_completions_with_fallback_paths(
     tool_choice: Optional[Any] = None,
     extra_payload: Optional[dict[str, Any]] = None,
 ) -> tuple[str, str]:
-    paths = [endpoint_path]
-    if endpoint_path.rstrip("/") == "/v1/chat/completions":
-        paths.append("/chat/completions")
+    return await _call_with_fallback_paths(
+        endpoint_path=endpoint_path,
+        invoke=lambda path: chat_completions(
+            session=session,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+            max_retry=max_retry,
+            retry_interval_seconds=retry_interval_seconds,
+            proxy=proxy,
+            endpoint_path=path,
+            tools=tools,
+            tool_choice=tool_choice,
+            extra_payload=extra_payload,
+        ),
+    )
 
-    last_exc: Optional[BaseException] = None
-    for p in paths:
-        try:
-            content = await chat_completions(
-                session=session,
-                api_base=api_base,
-                api_key=api_key,
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                timeout_seconds=timeout_seconds,
-                max_retry=max_retry,
-                retry_interval_seconds=retry_interval_seconds,
-                proxy=proxy,
-                endpoint_path=p,
-                tools=tools,
-                tool_choice=tool_choice,
-                extra_payload=extra_payload,
-            )
-            return content, p
-        except LLMError as exc:
-            last_exc = exc
-            if "http_404" not in str(exc):
-                break
-
-    raise last_exc or LLMError("llm_request_failed")
 
 async def chat_completions_raw_with_fallback_paths(
     *,
@@ -243,34 +261,24 @@ async def chat_completions_raw_with_fallback_paths(
     tool_choice: Optional[Any] = None,
     extra_payload: Optional[dict[str, Any]] = None,
 ) -> tuple[dict[str, Any], str]:
-    paths = [endpoint_path]
-    if endpoint_path.rstrip("/") == "/v1/chat/completions":
-        paths.append("/chat/completions")
-
-    last_exc: Optional[BaseException] = None
-    for p in paths:
-        try:
-            data = await chat_completions_raw(
-                session=session,
-                api_base=api_base,
-                api_key=api_key,
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                timeout_seconds=timeout_seconds,
-                max_retry=max_retry,
-                retry_interval_seconds=retry_interval_seconds,
-                proxy=proxy,
-                endpoint_path=p,
-                tools=tools,
-                tool_choice=tool_choice,
-                extra_payload=extra_payload,
-            )
-            return data, p
-        except LLMError as exc:
-            last_exc = exc
-            if "http_404" not in str(exc):
-                break
-    raise last_exc or LLMError("llm_request_failed")
+    return await _call_with_fallback_paths(
+        endpoint_path=endpoint_path,
+        invoke=lambda path: chat_completions_raw(
+            session=session,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+            max_retry=max_retry,
+            retry_interval_seconds=retry_interval_seconds,
+            proxy=proxy,
+            endpoint_path=path,
+            tools=tools,
+            tool_choice=tool_choice,
+            extra_payload=extra_payload,
+        ),
+    )
