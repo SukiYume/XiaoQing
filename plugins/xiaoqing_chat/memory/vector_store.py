@@ -12,11 +12,13 @@ import numpy as np
 
 _RE_WS = re.compile(r"\s+")
 
+
 @dataclass(frozen=True)
 class VectorDoc:
     doc_id: str
     text: str
     meta: dict[str, Any]
+
 
 class VectorStore:
     def __init__(self, *, dim: int = 2048) -> None:
@@ -97,16 +99,13 @@ class VectorStore:
         return out
 
     def save(self, dir_path: Path, *, name: str) -> None:
-        dir_path.mkdir(parents=True, exist_ok=True)
-        docs_path = dir_path / f"{name}.docs.json"
-        npz_path = dir_path / f"{name}.vecs.npz"
-
-        docs_payload = [asdict(d) for d in self._docs]
-        docs_path.write_text(json.dumps(docs_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
         self.build()
-        mat = self._matrix if self._matrix is not None else np.zeros((0, self._dim), dtype=np.float32)
-        np.savez_compressed(npz_path, dim=np.int32(self._dim), matrix=mat)
+        mat = (
+            self._matrix if self._matrix is not None else np.zeros((0, self._dim), dtype=np.float32)
+        )
+        write_vector_store_files(
+            dir_path=dir_path, name=name, docs=self._docs, dim=self._dim, matrix=mat
+        )
 
     def load(self, dir_path: Path, *, name: str) -> None:
         docs_path = dir_path / f"{name}.docs.json"
@@ -134,7 +133,7 @@ class VectorStore:
                 # If docs fail to load, we have nothing.
                 self._docs = []
                 self._id_to_idx = {}
-        
+
         # Only attempt to load vector cache if we have docs
         if self._docs and npz_path.exists():
             try:
@@ -154,6 +153,23 @@ class VectorStore:
 
     def _reindex(self) -> None:
         self._id_to_idx = {d.doc_id: i for i, d in enumerate(self._docs)}
+
+
+def write_vector_store_files(
+    *,
+    dir_path: Path,
+    name: str,
+    docs: Sequence[VectorDoc],
+    dim: int,
+    matrix: np.ndarray,
+) -> None:
+    dir_path.mkdir(parents=True, exist_ok=True)
+    docs_path = dir_path / f"{name}.docs.json"
+    npz_path = dir_path / f"{name}.vecs.npz"
+    docs_payload = [asdict(d) for d in docs]
+    docs_path.write_text(json.dumps(docs_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    np.savez_compressed(npz_path, dim=np.int32(dim), matrix=matrix)
+
 
 def _tokenize(text: str) -> list[str]:
     s = _RE_WS.sub(" ", (text or "").strip())
@@ -179,6 +195,7 @@ def _tokenize(text: str) -> list[str]:
         out.append(t)
     return out
 
+
 def _char_ngrams(tokens: Sequence[str]) -> list[str]:
     out: list[str] = []
     for t in tokens:
@@ -192,12 +209,14 @@ def _char_ngrams(tokens: Sequence[str]) -> list[str]:
             out.append(t)
     return out
 
+
 def _hash32(s: str) -> int:
     h = 2166136261
     for ch in s:
         h ^= ord(ch)
         h = (h * 16777619) & 0xFFFFFFFF
     return h
+
 
 def _embed(text: str, *, dim: int) -> np.ndarray:
     tokens = _char_ngrams(_tokenize(text))
@@ -209,6 +228,7 @@ def _embed(text: str, *, dim: int) -> np.ndarray:
         vec[idx] += 1.0
     vec = np.log1p(vec)
     return vec
+
 
 def _l2_normalize(mat: np.ndarray) -> np.ndarray:
     if mat.size == 0:

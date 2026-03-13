@@ -14,13 +14,6 @@ from .brain_chat import (
     get_brain_chat_max_context,
     get_brain_chat_reply_style,
     get_brain_chat_temperature,
-    get_brain_chat_think_level,
-)
-from .config.config import XiaoQingChatConfig
-from .constants import (
-    EXPRESSION_MAX_INJ_DEFAULT,
-    REGENERATION_MAX_ATTEMPTS,
-    UNKNOWN_WORDS_MAX,
 )
 from .context_builder import (
     _build_expression_block,
@@ -33,7 +26,6 @@ from .context_builder import (
 from .helper_utils import (
     _chat_id,
     _extract_sender_name,
-    _find_by_local_id,
     _get_bot_name,
     _get_llm_secrets,
     _is_private,
@@ -46,7 +38,6 @@ from .llm.postprocess import join_reply, process_llm_response
 from .llm.prompt_builder import ChatMessage, build_dialogue_prompt, build_prompt_messages
 from .llm.reply_checker import ReplyCheckResult, ReplyRejected, _heuristic_check, check_reply
 from .llm.rewrite import maybe_rewrite_reply
-from .memory.memory_retrieval import build_memory_block
 from .memory.review_sessions import build_policy_block
 from .planning.planner import PlannedAction
 
@@ -139,16 +130,34 @@ async def _generate_reply(
 
     kb_block = _build_knowledge_block(runtime, state, context.data_dir, chat_id, text)
     if kb_block:
-        _log_step(context, runtime, chat_id=chat_id, step="reply.knowledge.query", fields={"kb_hits": len(kb_block or "")})
+        _log_step(
+            context,
+            runtime,
+            chat_id=chat_id,
+            step="reply.knowledge.query",
+            fields={"kb_hits": len(kb_block or "")},
+        )
 
     expression_block = _build_expression_block(runtime, state, context.data_dir, chat_id)
     if expression_block:
-        _log_step(context, runtime, chat_id=chat_id, step="reply.expression.pick", fields={"picked": len(expression_block)})
+        _log_step(
+            context,
+            runtime,
+            chat_id=chat_id,
+            step="reply.expression.pick",
+            fields={"picked": len(expression_block)},
+        )
 
-    jargon_explanation = _build_jargon_explanation(runtime, state, context.data_dir, action.unknown_words)
+    jargon_explanation = _build_jargon_explanation(
+        runtime, state, context.data_dir, action.unknown_words
+    )
 
     style_override = (reply_style_override or "").strip()
-    if not style_override and runtime.cfg.personality.multiple_reply_style and random.random() < max(0.0, min(1.0, runtime.cfg.personality.multiple_probability)):
+    if (
+        not style_override
+        and runtime.cfg.personality.multiple_reply_style
+        and random.random() < max(0.0, min(1.0, runtime.cfg.personality.multiple_probability))
+    ):
         style_override = random.choice(runtime.cfg.personality.multiple_reply_style).strip()
 
     keyword_rules = []
@@ -156,11 +165,19 @@ async def _generate_reply(
     src_kw = runtime.cfg.keyword_reaction.keyword_rules
     src_rg = runtime.cfg.keyword_reaction.regex_rules
     for rule in src_kw:
-        if rule.keyword and rule.keyword in text and random.random() < max(0.0, min(1.0, rule.probability)):
+        if (
+            rule.keyword
+            and rule.keyword in text
+            and random.random() < max(0.0, min(1.0, rule.probability))
+        ):
             keyword_rules.append(rule)
     for rule in src_rg:
         try:
-            if rule.pattern and re.search(rule.pattern, text) and random.random() < max(0.0, min(1.0, rule.probability)):
+            if (
+                rule.pattern
+                and re.search(rule.pattern, text)
+                and random.random() < max(0.0, min(1.0, rule.probability))
+            ):
                 regex_rules.append(rule)
         except re.error:
             continue
@@ -171,8 +188,13 @@ async def _generate_reply(
     planner_goal = _extract_planner_goal(merged_reasoning)
     effective_goal = planner_goal or current_goal
     tool_info_block = await _build_tool_info_block(
-        runtime=runtime, state=state, data_dir=context.data_dir, bot_name=bot_name, 
-        chat_id=chat_id, event=event, goal=effective_goal
+        runtime=runtime,
+        state=state,
+        data_dir=context.data_dir,
+        bot_name=bot_name,
+        chat_id=chat_id,
+        event=event,
+        goal=effective_goal,
     )
 
     effective_identity = get_brain_chat_identity(runtime, is_brain_chat)
@@ -210,7 +232,9 @@ async def _generate_reply(
         if profile_block:
             full_memory_block = (profile_block + "\n" + (full_memory_block or "")).strip() + "\n"
         if _cached_policy_block.strip():
-            full_memory_block = (_cached_policy_block.strip() + "\n\n" + (full_memory_block or "").strip()).strip() + "\n"
+            full_memory_block = (
+                _cached_policy_block.strip() + "\n\n" + (full_memory_block or "").strip()
+            ).strip() + "\n"
         if kb_block:
             full_memory_block = (kb_block + "\n" + (full_memory_block or "")).strip() + "\n"
 

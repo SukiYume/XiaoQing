@@ -11,47 +11,31 @@ from .bw_jargon_miner import mine_jargon
 from .bw_jargon_store import JargonStore
 from ..config.config import PersonalityConfig
 from ..memory.memory import MemoryStore
+from ..store_base import StoreBase
 
 
-class MessageRecorder:
+class MessageRecorder(StoreBase):
     def __init__(self) -> None:
-        self._data_dir: Optional[Path] = None
+        super().__init__()
         self._state: dict[str, Any] = {}
 
-    def bind(self, data_dir: Path) -> None:
-        self._data_dir = data_dir
-
     def _path(self) -> Optional[Path]:
-        if not self._data_dir:
-            return None
-        return self._data_dir / "bw_learner" / "message_recorder.json"
+        return self._resolve_path("bw_learner", "message_recorder.json")
 
     def _load(self) -> None:
         if self._state:
             return
-        path = self._path()
-        if not path or not path.exists():
-            self._state = {"last_extraction_time": {}}
+        obj = self._load_json_from_path_parts(
+            "bw_learner", "message_recorder.json", default={"last_extraction_time": {}}
+        )
+        if isinstance(obj, dict):
+            obj.setdefault("last_extraction_time", {})
+            self._state = obj
             return
-        try:
-            obj = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(obj, dict):
-                obj.setdefault("last_extraction_time", {})
-                self._state = obj
-                return
-        except Exception:
-            pass
         self._state = {"last_extraction_time": {}}
 
     def _save(self) -> None:
-        path = self._path()
-        if not path:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            path.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            return
+        self._save_json_to_path_parts("bw_learner", "message_recorder.json", data=self._state)
 
     def get_last_time(self, chat_id: str) -> float:
         self._load()

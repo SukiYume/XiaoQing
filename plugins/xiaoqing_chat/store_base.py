@@ -3,6 +3,7 @@
 
 为所有存储类提供通用的接口和方法，减少代码重复。
 """
+
 from __future__ import annotations
 
 import json
@@ -88,6 +89,12 @@ class StoreBase:
         except Exception:
             return default
 
+    def _load_json_from_path_parts(self, *parts: str, default: Any = None) -> Any:
+        path = self._resolve_path(*parts)
+        if not path:
+            return default
+        return self._load_json(path, default=default)
+
     def _save_json(self, path: Path, data: Any, ensure_parent: bool = True) -> bool:
         """
         安全地保存 JSON 文件。
@@ -107,3 +114,9 @@ class StoreBase:
             return True
         except OSError:
             return False
+
+    def _save_json_to_path_parts(self, *parts: str, data: Any) -> bool:
+        path = self._resolve_path(*parts)
+        if not path:
+            return False
+        return self._save_json(path, data, ensure_parent=True)

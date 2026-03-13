@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from .bw_expression_store import ExpressionRecord, ExpressionStore
 from .expr_utils import extract_json_obj, render_dialogue
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
 from ..memory.memory import MemoryStore, StoredMessage
+from ..store_base import StoreBase
 
 _JUDGE_PROMPT = """
 你是一个表达反思助手。Bot之前询问了表达方式是否合适。
@@ -46,28 +46,19 @@ class ReflectTrackerState:
     last_check_count: int = 0
 
 
-class ReflectTrackerStore:
+class ReflectTrackerStore(StoreBase):
     def __init__(self) -> None:
-        self._data_dir: Optional[Path] = None
+        super().__init__()
         self._cache: dict[str, ReflectTrackerState] = {}
 
-    def bind(self, data_dir: Path) -> None:
-        self._data_dir = data_dir
-
     def _path(self) -> Optional[Path]:
-        if not self._data_dir:
-            return None
-        return self._data_dir / "bw_learner" / "reflect_trackers.json"
+        return self._resolve_path("bw_learner", "reflect_trackers.json")
 
     def load(self) -> dict[str, ReflectTrackerState]:
         if self._cache:
             return dict(self._cache)
-        path = self._path()
-        if not path or not path.exists():
-            self._cache = {}
-            return {}
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = self._load_json_from_path_parts("bw_learner", "reflect_trackers.json", default={})
             if not isinstance(raw, dict):
                 self._cache = {}
                 return {}
@@ -95,10 +86,6 @@ class ReflectTrackerStore:
             return {}
 
     def save(self) -> None:
-        path = self._path()
-        if not path:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload: dict[str, Any] = {}
         for k, st in self._cache.items():
             payload[k] = {
@@ -107,10 +94,7 @@ class ReflectTrackerStore:
                 "created_time": st.created_time,
                 "last_check_count": st.last_check_count,
             }
-        try:
-            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            return
+        self._save_json_to_path_parts("bw_learner", "reflect_trackers.json", data=payload)
 
     def set_tracker(self, operator_chat_id: str, expression_id: str) -> None:
         self._cache[operator_chat_id] = ReflectTrackerState(

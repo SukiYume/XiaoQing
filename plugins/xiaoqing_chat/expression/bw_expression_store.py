@@ -28,19 +28,13 @@ class ExpressionStore(StoreBase):
         self._cache: Optional[list[ExpressionRecord]] = None
 
     def _path(self) -> Optional[Path]:
-        if not self._data_dir:
-            return None
-        return self._data_dir / "bw_learner" / "expressions.json"
+        return self._resolve_path("bw_learner", "expressions.json")
 
     def load(self) -> list[ExpressionRecord]:
         if self._cache is not None:
             return list(self._cache)
-        path = self._path()
-        if not path or not path.exists():
-            self._cache = []
-            return []
         try:
-            raw = self._load_json(path, default=[])
+            raw = self._load_json_from_path_parts("bw_learner", "expressions.json", default=[])
             if not isinstance(raw, list):
                 self._cache = []
                 return []
@@ -87,11 +81,8 @@ class ExpressionStore(StoreBase):
             return []
 
     def save(self, items: Sequence[ExpressionRecord]) -> None:
-        path = self._path()
-        if not path:
-            return
         payload = [asdict(x) for x in items]
-        if not self._save_json(path, payload):
+        if not self._save_json_to_path_parts("bw_learner", "expressions.json", data=payload):
             return
         self._cache = list(items)
 

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from plugins.xiaoqing_chat.handler_context import HandlerContext
+from plugins.xiaoqing_chat.handler_context import HandlerContext, handle_errors
 
 
 def _make_hctx(
@@ -958,7 +958,9 @@ class TestScoreInterest:
             patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand,
         ):
             mock_rand.random.return_value = 0.3
-            result = await _should_reply(runtime, state, "g1", "哦", False, False, False, interest="low")
+            result = await _should_reply(
+                runtime, state, "g1", "哦", False, False, False, interest="low"
+            )
 
         assert result is True
 
@@ -1472,6 +1474,7 @@ async def test_smalltalk_goal_path_uses_async_goal_store(mock_context, sample_gr
     state.heartflow.on_no_reply_async = AsyncMock()
     state.goal_store.set_async = AsyncMock()
     state.goal_store.set.side_effect = AssertionError("sync goal store write should not be used")
+    state.pfc_state_store.get_async = AsyncMock(return_value=SimpleNamespace(goal_list=[]))
 
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -1592,7 +1595,8 @@ async def test_ordinary_group_turn_refreshes_goal_before_should_reply_blocks(
         patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async", new=AsyncMock(return_value="保持当前话题")
+            "plugins.xiaoqing_chat.handlers.derive_goal_async",
+            new=AsyncMock(return_value="保持当前话题"),
         ) as mock_derive_goal,
         patch("plugins.xiaoqing_chat.handlers._log_step"),
     ):
@@ -1649,7 +1653,8 @@ async def test_ordinary_group_with_planner_top_goal_skips_heuristic_goal_refresh
         patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async", new=AsyncMock(return_value="保持当前话题")
+            "plugins.xiaoqing_chat.handlers.derive_goal_async",
+            new=AsyncMock(return_value="保持当前话题"),
         ) as mock_derive_goal,
         patch("plugins.xiaoqing_chat.handlers._log_step"),
     ):
@@ -1706,7 +1711,8 @@ async def test_ordinary_group_with_empty_planner_goal_list_still_refreshes_goal_
         patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async", new=AsyncMock(return_value="保持当前话题")
+            "plugins.xiaoqing_chat.handlers.derive_goal_async",
+            new=AsyncMock(return_value="保持当前话题"),
         ) as mock_derive_goal,
         patch("plugins.xiaoqing_chat.handlers._log_step"),
     ):
@@ -1752,7 +1758,8 @@ async def test_ordinary_group_pre_pfc_block_still_updates_no_reply_adaptation(
         patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
         patch(
-            "plugins.xiaoqing_chat.handlers.derive_goal_async", new=AsyncMock(return_value="保持当前话题")
+            "plugins.xiaoqing_chat.handlers.derive_goal_async",
+            new=AsyncMock(return_value="保持当前话题"),
         ),
         patch("plugins.xiaoqing_chat.handlers._log_step"),
     ):
@@ -2890,7 +2897,10 @@ async def test_smalltalk_new_user_turn_clears_sticky_pfc_ended_before_planner_ru
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._build_memory_block", new=AsyncMock(return_value="")),
-        patch("plugins.xiaoqing_chat.handlers.run_pfc_once", new=AsyncMock(side_effect=fake_run_pfc_once)),
+        patch(
+            "plugins.xiaoqing_chat.handlers.run_pfc_once",
+            new=AsyncMock(side_effect=fake_run_pfc_once),
+        ),
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
@@ -2964,8 +2974,14 @@ async def test_smalltalk_commit_syncs_goal_store_to_top_planner_goal_after_state
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._build_memory_block", new=AsyncMock(return_value="")),
-        patch("plugins.xiaoqing_chat.handlers.run_pfc_once", new=AsyncMock(side_effect=fake_run_pfc_once)),
-        patch("plugins.xiaoqing_chat.handlers.derive_goal_async", new=AsyncMock(return_value="旧门控目标")),
+        patch(
+            "plugins.xiaoqing_chat.handlers.run_pfc_once",
+            new=AsyncMock(side_effect=fake_run_pfc_once),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.handlers.derive_goal_async",
+            new=AsyncMock(return_value="旧门控目标"),
+        ),
         patch("plugins.xiaoqing_chat.handlers._record_bot_reply", new=AsyncMock(return_value=[])),
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
@@ -3048,8 +3064,14 @@ async def test_smalltalk_commit_clears_goal_store_when_planner_goal_list_becomes
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=True)),
         patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._build_memory_block", new=AsyncMock(return_value="")),
-        patch("plugins.xiaoqing_chat.handlers.run_pfc_once", new=AsyncMock(side_effect=fake_run_pfc_once)),
-        patch("plugins.xiaoqing_chat.handlers.derive_goal_async", new=AsyncMock(return_value="围绕旧目标继续")),
+        patch(
+            "plugins.xiaoqing_chat.handlers.run_pfc_once",
+            new=AsyncMock(side_effect=fake_run_pfc_once),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.handlers.derive_goal_async",
+            new=AsyncMock(return_value="围绕旧目标继续"),
+        ),
         patch("plugins.xiaoqing_chat.handlers._record_bot_reply", new=AsyncMock(return_value=[])),
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
@@ -3063,6 +3085,85 @@ async def test_smalltalk_commit_clears_goal_store_when_planner_goal_list_becomes
 
     assert result == [{"type": "text", "data": {"text": "planner-ok"}}]
     assert state.goal_store.get(chat_id).goal == ""
+
+
+@pytest.mark.asyncio
+async def test_smalltalk_pre_gate_clears_goal_store_when_no_goal_is_derived(
+    mock_context, sample_group_event
+):
+    from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
+    from plugins.xiaoqing_chat.planning.goal_state import GoalStore
+
+    chat_id = "g67890"
+    lock = asyncio.Lock()
+    goal_store = GoalStore()
+    await goal_store.set_async(chat_id, goal="围绕旧目标继续", source="user")
+
+    state = MagicMock()
+    state.get_mood_state.return_value = ""
+    state.memory_store.get_async = AsyncMock(return_value=[])
+    state.memory_store.get_recent_async = AsyncMock(return_value=[])
+    state.memory_store.append = Mock()
+    state.goal_store = goal_store
+    state.pfc_state_store.get_async = AsyncMock(
+        return_value=SimpleNamespace(
+            chat_id=chat_id,
+            ignore_until_ts=0.0,
+            ended=False,
+            last_successful_reply_action="",
+            goal_list=[],
+            knowledge_list=[],
+            planner_fail_ts=[],
+            planner_skip_until=0.0,
+            updated_at=0.0,
+        )
+    )
+    state.heartflow.on_no_reply_async = AsyncMock()
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            enable_smalltalk=True,
+            goal=SimpleNamespace(enable_goal=True),
+            reflection=SimpleNamespace(
+                enable_expression_reflection=False, enable_review_sessions=False
+            ),
+            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
+            personality=SimpleNamespace(states=[], state_probability=0.0),
+        )
+    )
+
+    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
+    with (
+        patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
+        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=lock),
+        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch(
+            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            new=AsyncMock(return_value="u1"),
+        ),
+        patch("plugins.xiaoqing_chat.handlers.derive_goal_async", new=AsyncMock(return_value="")),
+        patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
+        patch("plugins.xiaoqing_chat.handlers._log_step"),
+    ):
+        result = await _maybe_reply_smalltalk("继续聊", sample_group_event, mock_context)
+
+    assert result == []
+    assert state.goal_store.get(chat_id).goal == ""
+    state.heartflow.on_no_reply_async.assert_awaited_once_with(chat_id=chat_id)
+
+
+@pytest.mark.asyncio
+async def test_handle_errors_uses_keyword_context_for_logging():
+    context = SimpleNamespace(logger=MagicMock())
+
+    @handle_errors("测试")
+    async def failing_handler(*, context=None):
+        raise RuntimeError("boom")
+
+    result = await failing_handler(context=context)
+
+    context.logger.exception.assert_called_once()
+    assert result[0]["data"]["text"] == "❌ 测试出错: boom"
 
 
 @pytest.mark.asyncio
@@ -3162,9 +3263,7 @@ async def test_handle_internal_reset_clears_review_policy_and_sessions_for_curre
     assert policy_after_reset.strategy_note == ""
     assert policy_after_reset.avoid_patterns == []
 
-    sessions_after_reset = [
-        x for x in state.review_store.list_sessions() if x.chat_id == chat_id
-    ]
+    sessions_after_reset = [x for x in state.review_store.list_sessions() if x.chat_id == chat_id]
     assert sessions_after_reset == []
 
 
@@ -3401,7 +3500,9 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
         )
-        stack.enter_context(patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1"))
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+        )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
         )
@@ -3424,7 +3525,9 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
             patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value="")
+            patch(
+                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
+            )
         )
         stack.enter_context(
             patch(
@@ -3433,7 +3536,10 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.build_policy_block", return_value="review-policy")
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.build_policy_block",
+                return_value="review-policy",
+            )
         )
         stack.enter_context(
             patch(
@@ -3442,16 +3548,22 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10)
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10
+            )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7)
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7
+            )
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_identity", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value="")
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value=""
+            )
         )
         stack.enter_context(
             patch(
@@ -3475,13 +3587,18 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.process_llm_response", return_value=["好的"])
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.process_llm_response", return_value=["好的"]
+            )
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_generator.join_reply", return_value="好的")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.build_dialogue_prompt", return_value="dialogue")
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.build_dialogue_prompt",
+                return_value="dialogue",
+            )
         )
         mock_check_reply = stack.enter_context(
             patch(
@@ -3511,7 +3628,9 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
 
 
 @pytest.mark.asyncio
-async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_has_no_goal(mock_context):
+async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_has_no_goal(
+    mock_context,
+):
     from contextlib import ExitStack
 
     from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
@@ -3577,7 +3696,9 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
         )
-        stack.enter_context(patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1"))
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+        )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
         )
@@ -3600,7 +3721,9 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
             patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value="")
+            patch(
+                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
+            )
         )
         stack.enter_context(
             patch(
@@ -3615,16 +3738,22 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10)
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10
+            )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7)
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7
+            )
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_identity", return_value="")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value="")
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value=""
+            )
         )
         stack.enter_context(
             patch(
@@ -3648,13 +3777,18 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
             )
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.process_llm_response", return_value=["好的"])
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.process_llm_response", return_value=["好的"]
+            )
         )
         stack.enter_context(
             patch("plugins.xiaoqing_chat.reply_generator.join_reply", return_value="好的")
         )
         stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.build_dialogue_prompt", return_value="dialogue")
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.build_dialogue_prompt",
+                return_value="dialogue",
+            )
         )
         mock_check_reply = stack.enter_context(
             patch(
@@ -3743,7 +3877,9 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
         patch("plugins.xiaoqing_chat.handlers._build_memory_block", new=AsyncMock(return_value="")),
         patch(
             "plugins.xiaoqing_chat.handlers.run_pfc_once",
-            new=AsyncMock(return_value=SimpleNamespace(reply="", action="wait", reason="再观察", ended=False)),
+            new=AsyncMock(
+                return_value=SimpleNamespace(reply="", action="wait", reason="再观察", ended=False)
+            ),
         ),
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
@@ -3756,6 +3892,7 @@ async def test_smalltalk_no_reply_preserves_wait_action_name_in_action_history(
     assert result == []
     record = state.action_history.append.call_args.args[1]
     assert record.action == "wait"
+
 
 def test_load_latest_topic_and_summary_skips_invalid_tail_entries(tmp_path):
     from plugins.xiaoqing_chat.planning.goal_state import load_latest_topic_and_summary
