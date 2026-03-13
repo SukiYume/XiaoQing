@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import difflib
-import json
 import re
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
+from . import llm_client
 from .llm_client import LLMError, chat_completions_raw_with_fallback_paths
 from ..constants import is_question
 from ..memory.memory import StoredMessage
+from ..utils.json_parsing import parse_first_json_object
 
 import logging as _logging
+
 _log = _logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class ReplyCheckResult:
@@ -20,13 +23,13 @@ class ReplyCheckResult:
     reason: str
     need_replan: bool
 
+
 class ReplyRejected(RuntimeError):
     def __init__(self, reason: str, need_replan: bool) -> None:
         super().__init__(reason)
         self.reason = reason
         self.need_replan = need_replan
 
-_RE_JSON_OBJ = re.compile(r"\{[\s\S]*\}")
 
 def _last_bot_messages(history: Sequence[StoredMessage], *, bot_name: str, limit: int) -> list[str]:
     out: list[str] = []
@@ -44,10 +47,12 @@ def _last_bot_messages(history: Sequence[StoredMessage], *, bot_name: str, limit
             break
     return out
 
+
 def _normalize_text(s: str) -> str:
     t = (s or "").strip()
     t = re.sub(r"\s+", " ", t)
     return t
+
 
 def _is_question_sentence(text: str) -> bool:
     return is_question(text)
@@ -94,7 +99,7 @@ def _heuristic_check(
     bot_msgs = _last_bot_messages(history, bot_name=bot_name, limit=max_look_back)
 
     if bot_msgs and max_repeat_compare > 0:
-        for prev_msg in bot_msgs[:int(max_repeat_compare)]:
+        for prev_msg in bot_msgs[: int(max_repeat_compare)]:
             last = _normalize_text(prev_msg)
             if r == last:
                 return ReplyCheckResult(False, "回复与之前机器人消息完全相同", True)
@@ -120,6 +125,7 @@ def _heuristic_check(
         return rq
 
     return None
+
 
 async def _llm_check(
     *,
@@ -185,21 +191,15 @@ async def _llm_check(
         proxy=proxy,
         endpoint_path=endpoint_path,
     )
-    content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-    s = str(content).strip()
-    m = _RE_JSON_OBJ.search(s)
-    if m:
-        s = m.group(0)
-    try:
-        obj = json.loads(s)
-    except Exception:
-        return ReplyCheckResult(True, "", False)
-    if not isinstance(obj, dict):
+    content = llm_client.extract_response_content(resp)
+    obj = parse_first_json_object(content)
+    if not obj:
         return ReplyCheckResult(True, "", False)
     suitable = bool(obj.get("suitable", True))
     reason = str(obj.get("reason", "") or "").strip()
     need_replan = bool(obj.get("need_replan", False))
     return ReplyCheckResult(suitable=suitable, reason=reason, need_replan=need_replan)
+
 
 async def check_reply(
     *,

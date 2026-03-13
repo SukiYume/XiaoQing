@@ -37,10 +37,6 @@ def is_brain_chat_active(
     if not runtime.cfg.brain_chat.enable_private_brain_chat:
         return False
 
-    # 被强制触发时，不使用深度对话模式（使用普通模式回复）
-    if forced:
-        return False
-
     return True
 
 
@@ -103,7 +99,7 @@ def maybe_add_mode_indicator(reply: str, runtime: _ChatRuntime) -> str:
     return reply
 
 
-def get_brain_chat_config_summary(runtime: _ChatRuntime) -> dict:
+def get_brain_chat_config_summary(runtime: _ChatRuntime) -> dict[str, object]:
     """
     获取深度对话配置摘要（用于调试）
 

@@ -13,8 +13,7 @@ from .constants import (
     UNKNOWN_WORDS_MAX,
 )
 from .helper_utils import _resolve_llm_config
-from .logging_utils import _log_step, _short_text
-from .llm.prompt_builder import build_dialogue_prompt
+from .logging_utils import _log_step
 from .memory.memory_retrieval import build_memory_block
 from .memory.person_profile import build_profile_block
 from .utils.tool_info import build_tool_info_block
