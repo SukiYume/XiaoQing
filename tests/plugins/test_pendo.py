@@ -971,8 +971,12 @@ class TestReminderRegression:
             confirmed_logs = [log for log in logs if log["confirmed_at"]]
             pending_logs = [log for log in logs if not log["confirmed_at"]]
 
-            assert [log["remind_time"] for log in confirmed_logs] == ["2030-01-01T09:00:00"]
-            assert [log["remind_time"] for log in pending_logs] == ["2030-01-01T08:00:00"]
+            # confirm_reminder 不指定 remind_time 时确认该 item 的所有未确认提醒
+            assert sorted(log["remind_time"] for log in confirmed_logs) == [
+                "2030-01-01T08:00:00",
+                "2030-01-01T09:00:00",
+            ]
+            assert pending_logs == []
         finally:
             db.cleanup()
 
@@ -1035,9 +1039,6 @@ class TestReminderRegression:
             def get_unconfirmed_sent_reminders(self):
                 return []
 
-            def count_reminder_repeats(self, item_id, remind_time):
-                return 0
-
             def get_item(self, item_id):
                 return item
 
@@ -1093,14 +1094,10 @@ class TestReminderRegression:
                         "id": 4,
                         "item_id": "evt123",
                         "remind_time": remind_time,
-                        "sent_at": "2030-01-01T09:00:00",
+                        "repeat_count": 4,
+                        "last_sent_at": "2030-01-01T09:00:00",
                     }
                 ]
-
-            def count_reminder_repeats(self, item_id, remind_time_arg):
-                assert item_id == "evt123"
-                assert remind_time_arg == remind_time
-                return 4
 
             def get_item(self, item_id):
                 assert item_id == "evt123"
@@ -1529,7 +1526,10 @@ class TestSessionRegression:
                 }
 
         class _AiParser:
-            async def parse_natural_language_with_ai(self, text, user_id):
+            async def parse_event_with_ai(self, text, user_id):
+                return {"title": "会议"}
+
+            def parse_natural_language(self, text, user_id):
                 return {"title": "会议"}
 
         context = _Context()

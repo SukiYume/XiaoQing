@@ -109,12 +109,6 @@ class AIParser:
         self.context = context
         self.rule_parser = RuleParser()
 
-    def _load_prompt_template(self, template_name: str) -> str:
-        """获取prompt模板（内联版本）"""
-        if template_name == "parse_natural_language":
-            return self.PARSE_PROMPT_TEMPLATE
-        raise ValueError(f"Unknown template: {template_name}")
-
     def _get_llm_secrets(self):
         """获取LLM配置"""
         if self.context and hasattr(self.context, "secrets"):
@@ -156,10 +150,10 @@ class AIParser:
             return None
 
     def parse_natural_language(self, text: str, user_id: str) -> dict[str, Any]:
-        """同步解析自然语言（规则解析，用于event）"""
+        """同步规则解析（固定返回 event 类型），也用作 AI 解析的降级路径"""
         parsed = self.rule_parser.parse(text, user_id)
         parsed["parse_source"] = "rule"
-        parsed["type"] = "event"  # 固定为event类型
+        parsed["type"] = "event"
         return parsed
 
     async def parse_event_with_ai(self, text: str, user_id: str) -> dict[str, Any]:
@@ -176,15 +170,14 @@ class AIParser:
         allowed, wait_seconds = self._rate_limiter.check_rate_limit(user_id)
         if not allowed:
             logger.warning("用户 %s 超过AI解析速率限制，等待 %s 秒", user_id, wait_seconds)
-            return self._fallback_parse(text, user_id)
+            return self.parse_natural_language(text, user_id)
 
         try:
-            prompt_template = self._load_prompt_template("parse_natural_language")
             current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
             weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
             current_weekday = weekday_names[datetime.now().weekday()]
 
-            prompt = prompt_template.format(
+            prompt = self.PARSE_PROMPT_TEMPLATE.format(
                 current_date=current_date, current_weekday=current_weekday, text=text
             )
 
@@ -195,14 +188,14 @@ class AIParser:
 
             response = await self._call_llm(messages)
             if not response:
-                return self._fallback_parse(text, user_id)
+                return self.parse_natural_language(text, user_id)
 
             try:
                 parsed = json.loads(self._extract_json(response))
                 if not isinstance(parsed, dict):
-                    return self._fallback_parse(text, user_id)
+                    return self.parse_natural_language(text, user_id)
             except (json.JSONDecodeError, ValueError):
-                return self._fallback_parse(text, user_id)
+                return self.parse_natural_language(text, user_id)
 
             logger.info("AI解析结果: %s", json.dumps(parsed, ensure_ascii=False))
 
@@ -270,19 +263,7 @@ class AIParser:
 
         except Exception as e:
             logger.exception("AI解析失败: %s", e)
-            return self._fallback_parse(text, user_id)
-
-    # 保持向后兼容的别名
-    async def parse_natural_language_with_ai(self, text: str, user_id: str) -> dict[str, Any]:
-        """向后兼容：调用parse_event_with_ai"""
-        return await self.parse_event_with_ai(text, user_id)
-
-    def _fallback_parse(self, text: str, user_id: str) -> dict[str, Any]:
-        """降级到规则解析（固定返回event类型）"""
-        parsed = self.rule_parser.parse(text, user_id)
-        parsed["parse_source"] = "rule"
-        parsed["type"] = "event"  # 固定为event类型
-        return parsed
+            return self.parse_natural_language(text, user_id)
 
     def _extract_json(self, response: str) -> str:
         """从响应中提取JSON"""
@@ -438,65 +419,3 @@ class AIParser:
             return float(digits[text])
 
         return None
-
-    async def generate_daily_briefing(self, user_id: str, items: list[Any]) -> str:
-        """生成每日简报
-
-        Args:
-            user_id: 用户ID
-            items: 今日日程和待办列表 (Item dataclass实例)
-
-        Returns:
-            简报文本
-        """
-        from ..models.item import ItemType
-
-        current_date = datetime.now().strftime("%Y年%m月%d日")
-        weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        weekday = weekday_names[datetime.now().weekday()]
-
-        lines = [f"☀️ 早上好！今天是{current_date} {weekday}", ""]
-
-        # 分离日程和待办
-        events = [i for i in items if i.type == ItemType.EVENT]
-        tasks = [i for i in items if i.type == ItemType.TASK]
-
-        # 今日日程
-        if events:
-            lines.append("🗓️ **今日日程**")
-            for evt in events[:5]:
-                start_time = evt.start_time or ""
-                time_str = start_time[11:16] if len(start_time) > 11 else ""
-                title = evt.title or "无标题"
-                location = f" @{evt.location}" if evt.location else ""
-                lines.append(f"  • {time_str} {title}{location}")
-            if len(events) > 5:
-                lines.append(f"  ...还有 {len(events) - 5} 项")
-            lines.append("")
-        else:
-            lines.append("🗓️ 今日暂无日程安排")
-            lines.append("")
-
-        # 今日待办
-        if tasks:
-            lines.append("✅ **今日待办**")
-            for task in tasks[:5]:
-                title = task.title or "无标题"
-                raw_priority = (
-                    task.priority if hasattr(task, "priority") and task.priority is not None else 3
-                )
-                priority_value = getattr(raw_priority, "value", raw_priority)
-                priority = priority_value if isinstance(priority_value, int) else 3
-                # 优先级: 1=紧急 2=高 3=中 4=低
-                priority_mark = "🔴" if priority <= 2 else "🟡" if priority == 3 else "⚪"
-                lines.append(f"  {priority_mark} {title}")
-            if len(tasks) > 5:
-                lines.append(f"  ...还有 {len(tasks) - 5} 项")
-            lines.append("")
-        else:
-            lines.append("✅ 今日暂无待办事项")
-            lines.append("")
-
-        lines.append("🌟 祝你今天工作顺利！")
-
-        return "\n".join(lines)
