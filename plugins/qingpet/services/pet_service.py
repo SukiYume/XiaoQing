@@ -492,9 +492,10 @@ class PetService:
             pet.status_expire_time = now + timedelta(hours=travel_hours)
             pet.last_update = now
             self.db.update_pet(pet)
+            recall_coins = int(TRAVEL_THRESHOLDS["recall_cost_coins"])
             return (f"😿 {pet.name}因为照顾不周，离家旅行了...\n"
                     f"它将在{travel_hours}小时后自动回来\n"
-                    f"或者使用 /宠物 召回 提前召回（需要金币和友情点）")
+                    f"或者使用 /宠物 召回 提前召回（需要{recall_coins}金币）")
 
         pet.last_update = now
         self.db.update_pet(pet)
@@ -568,15 +569,11 @@ class PetService:
             return False, "宠物没有在旅行中"
 
         recall_coins = int(TRAVEL_THRESHOLDS["recall_cost_coins"])
-        recall_fp = int(TRAVEL_THRESHOLDS["recall_cost_friendship"])
 
         if user.coins < recall_coins:
             return False, f"金币不足，召回需要{recall_coins}金币"
-        if user.friendship_points < recall_fp:
-            return False, f"友情点不足，召回需要{recall_fp}友情点"
 
         user.coins -= recall_coins
-        user.friendship_points -= recall_fp
 
         pet.status = PetStatus.NORMAL
         pet.status_expire_time = None
@@ -589,5 +586,5 @@ class PetService:
 
         success = self.db.atomic_update_pet_and_user(pet, user)
         if success:
-            return True, f"🎉 {pet.name}被成功召回了！花费{recall_coins}金币和{recall_fp}友情点"
+            return True, f"🎉 {pet.name}被成功召回了！花费{recall_coins}金币"
         return False, "召回失败"
