@@ -359,3 +359,95 @@ GROUP_TASK_TEMPLATES = [
     {"type": "group_clean", "name": "全群累计清洁", "target": 30, "reward_coins": 15, "description": "全群累计清洁30次"},
     {"type": "group_explore", "name": "全群累计探索", "target": 20, "reward_coins": 30, "description": "全群累计探索20次"},
 ]
+
+# 训练系统配置
+TRAINING_CONFIG: Dict[str, Dict] = {
+    "strength": {
+        "name": "体力训练",
+        "exp_gain": 15,
+        "energy_cost": 20,
+        "extra_effects": {"health": 2},
+        "success_rate_base": 0.8,
+    },
+    "agility": {
+        "name": "敏捷训练",
+        "exp_gain": 12,
+        "energy_cost": 15,
+        "extra_effects": {"mood": 8},
+        "success_rate_base": 0.85,
+    },
+    "intellect": {
+        "name": "智力训练",
+        "exp_gain": 20,
+        "energy_cost": 25,
+        "extra_effects": {},
+        "success_rate_base": 0.7,
+    },
+}
+
+TRAINING_SPECIAL_EVENTS = [
+    {"msg": "训练时偶然学会了新技巧！", "intimacy": 3, "prob": 0.1},
+    {"msg": "超常发挥！经验额外×1.5", "exp_multiplier": 1.5, "prob": 0.1},
+    {"msg": "训练完后对你撒娇", "intimacy": 5, "prob": 0.08},
+]
+
+TRAINING_MESSAGES = {
+    "success": [
+        "{name}认真完成了训练，有所成长！",
+        "{name}今天训练很努力！",
+        "{name}挥洒汗水，收获满满！",
+    ],
+    "fail": [
+        "{name}今天状态不佳，训练没什么效果",
+        "{name}偷懒了一下，下次加油！",
+        "{name}训练时分心了，继续努力吧",
+    ],
+}
+
+# 探索地点配置
+EXPLORE_LOCATIONS: Dict[str, Dict] = {
+    "forest": {
+        "name": "森林",
+        "energy_cost": 30,
+        "events": [
+            {"msg": "发现了野果！", "coins": 5, "exp": 3, "item": "apple", "prob": 0.30},
+            {"msg": "遇到了友善的小动物，亲密度提升了", "coins": 10, "exp": 5, "intimacy": 3, "prob": 0.20},
+            {"msg": "在树丛中发现了金币", "coins": 20, "exp": 5, "prob": 0.20},
+            {"msg": "迷路了，折腾了半天", "coins": 0, "exp": 2, "mood": -10, "prob": 0.15},
+            {"msg": "平静地走了一圈", "coins": 8, "exp": 3, "prob": 0.15},
+        ],
+    },
+    "beach": {
+        "name": "海边",
+        "energy_cost": 30,
+        "events": [
+            {"msg": "在沙滩上捡到了贝壳！", "coins": 30, "exp": 5, "prob": 0.25},
+            {"msg": "海浪打来，心情大好！", "coins": 15, "exp": 8, "mood": 10, "prob": 0.25},
+            {"msg": "捡到一个漂流瓶，里面有金币！", "coins": 50, "exp": 5, "prob": 0.10},
+            {"msg": "被海浪打湿了，需要清洁", "coins": 5, "exp": 3, "clean": -15, "prob": 0.20},
+            {"msg": "悠闲地在海边散步", "coins": 12, "exp": 4, "prob": 0.20},
+        ],
+    },
+    "cave": {
+        "name": "山洞",
+        "energy_cost": 40,
+        "events": [
+            {"msg": "发现了宝箱！", "coins": 50, "exp": 10, "prob": 0.20},
+            {"msg": "找到了奇怪的药草", "coins": 10, "exp": 8, "item": "medicine", "prob": 0.20},
+            {"msg": "在黑暗中摸索，积累了经验", "coins": 15, "exp": 15, "prob": 0.20},
+            {"msg": "遭遇危险！受了点伤", "coins": 5, "exp": 5, "health": -20, "prob": 0.25},
+            {"msg": "找到了稀有药品！", "coins": 5, "exp": 10, "item": "rare_medicine", "prob": 0.15},
+        ],
+    },
+    "ruins": {
+        "name": "废墟",
+        "energy_cost": 40,
+        "events": [
+            {"msg": "捡到了神秘卡片！", "coins": 10, "exp": 15, "item": "acceleration_card", "prob": 0.10},
+            {"msg": "发现了大宝藏！", "coins": 100, "exp": 20, "prob": 0.10},
+            {"msg": "废墟中的气氛把你吓到了", "coins": 0, "exp": 5, "mood": -20, "prob": 0.30},
+            {"msg": "被废墟中的机关伤到了", "coins": 0, "exp": 8, "health": -30, "prob": 0.25},
+            {"msg": "探索了废墟遗迹，有所发现", "coins": 20, "exp": 12, "prob": 0.25},
+        ],
+    },
+}
