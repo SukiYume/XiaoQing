@@ -344,7 +344,7 @@ class PetService:
 
     def sleep_pet(self, pet: Pet) -> Tuple[bool, str]:
         if not pet.can_interact():
-            return False, "宠物现在无法互动"
+            return False, self._get_cannot_interact_msg(pet)
 
         if pet.status == PetStatus.SLEEPING:
             return False, "宠物已经在睡觉了"
