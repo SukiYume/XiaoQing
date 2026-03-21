@@ -32,7 +32,7 @@ def _extract_target_user_id(args: str) -> str:
 
 
 async def handle_train(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> Tuple[bool, str]:
-    pet, resolved_group_id, _, err = resolve_pet_for_self_command(
+    pet, resolved_group_id, resolved_args, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "训练"
     )
     if err:
@@ -48,7 +48,14 @@ async def handle_train(user_id: str, group_id: int, args: str, db: Database, **k
 
     spam_decay = kwargs.get("spam_decay_factor", 1.0)
     pet_service = PetService(db)
+    type_map = {
+        "体力": "strength", "strength": "strength",
+        "敏捷": "agility", "agility": "agility",
+        "智力": "intellect", "intellect": "intellect",
+    }
+    training_type = type_map.get(resolved_args.strip() if resolved_args else "", "strength")
     success, message, coins = pet_service.train_pet(pet, user,
+                                                     training_type=training_type,
                                                      spam_decay_factor=spam_decay)
 
     if success:
@@ -59,7 +66,7 @@ async def handle_train(user_id: str, group_id: int, args: str, db: Database, **k
 
 
 async def handle_explore(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> Tuple[bool, str]:
-    pet, resolved_group_id, _, err = resolve_pet_for_self_command(
+    pet, resolved_group_id, resolved_args, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "探索"
     )
     if err:
@@ -75,7 +82,15 @@ async def handle_explore(user_id: str, group_id: int, args: str, db: Database, *
 
     spam_decay = kwargs.get("spam_decay_factor", 1.0)
     pet_service = PetService(db)
+    loc_map = {
+        "森林": "forest", "forest": "forest",
+        "海边": "beach", "beach": "beach",
+        "山洞": "cave", "cave": "cave",
+        "废墟": "ruins", "ruins": "ruins",
+    }
+    location = loc_map.get(resolved_args.strip() if resolved_args else "", "forest")
     success, message, coins = pet_service.explore(pet, user,
+                                                   location=location,
                                                    spam_decay_factor=spam_decay)
 
     if success:
