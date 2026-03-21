@@ -20,6 +20,18 @@ class PetService:
     def __init__(self, db: Database):
         self.db = db
 
+    def _get_cannot_interact_msg(self, pet: "Pet") -> str:
+        """根据宠物状态返回具体的无法互动原因"""
+        if pet.status == PetStatus.SLEEPING:
+            return "宠物在睡觉中，使用 /宠物 起床 唤醒它"
+        if pet.status == PetStatus.SICK:
+            return "宠物生病了，使用 /宠物 治疗 [药品] 治疗"
+        if pet.status == PetStatus.TRAVELING:
+            return "宠物正在旅行中，使用 /宠物 召回 召回它\n用法: /宠物 召回"
+        if pet.status == PetStatus.DEAD:
+            return "宠物已死亡"
+        return "宠物现在无法互动"
+
     # ──────────────────── 领养 ────────────────────
 
     def adopt_pet(self, user_id: str, group_id: int, name: str) -> Tuple[bool, str]:
@@ -79,9 +91,7 @@ class PetService:
                  spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
         """CR Review: 应用反脚本衰减因子，实现免费喂食限制，启用喜好食物加成"""
         if not pet.can_interact():
-            if pet.is_traveling():
-                return False, "宠物正在旅行中，请先召回它\n用法: /宠物 召回", 0
-            return False, "宠物现在无法互动", 0
+            return False, self._get_cannot_interact_msg(pet), 0
 
         cooled, remaining = validate_cooling(pet.last_feed, COOLDOWN_TIMES["feed"])
         if not cooled:
@@ -157,7 +167,7 @@ class PetService:
     def clean_pet(self, pet: Pet, user: User,
                   spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
         if not pet.can_interact():
-            return False, "宠物现在无法互动", 0
+            return False, self._get_cannot_interact_msg(pet), 0
 
         cooled, remaining = validate_cooling(pet.last_clean, COOLDOWN_TIMES["clean"])
         if not cooled:
@@ -196,7 +206,7 @@ class PetService:
     def play_with_pet(self, pet: Pet, user: User,
                       spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
         if not pet.can_interact():
-            return False, "宠物现在无法互动", 0
+            return False, self._get_cannot_interact_msg(pet), 0
 
         cooled, remaining = validate_cooling(pet.last_play, COOLDOWN_TIMES["play"])
         if not cooled:
@@ -235,7 +245,7 @@ class PetService:
     def train_pet(self, pet: Pet, user: User,
                   spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
         if not pet.can_interact():
-            return False, "宠物现在无法互动", 0
+            return False, self._get_cannot_interact_msg(pet), 0
 
         cooled, remaining = validate_cooling(pet.last_train, COOLDOWN_TIMES["train"])
         if not cooled:
@@ -284,7 +294,7 @@ class PetService:
     def explore(self, pet: Pet, user: User,
                 spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
         if not pet.can_interact():
-            return False, "宠物现在无法互动", 0
+            return False, self._get_cannot_interact_msg(pet), 0
 
         cooled, remaining = validate_cooling(pet.last_explore, COOLDOWN_TIMES["explore"])
         if not cooled:
