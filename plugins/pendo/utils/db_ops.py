@@ -140,6 +140,22 @@ class DbOpsMixin:
         """删除条目"""
         return await run_sync(self.db.items.delete_item, item_id, soft, owner_id)
 
+    async def _db_find_instances(
+        self, owner_id: str, parent_id: str, columns: str = "*",
+    ) -> list:
+        """查找父事件及所有子实例"""
+        return await run_sync(self.db.items.find_instances, owner_id, parent_id, columns)
+
+    async def _db_batch_update_items(
+        self, per_item_updates: dict[str, Any], owner_id: str,
+    ) -> int:
+        """批量更新条目"""
+        return await run_sync(self.db.items.batch_update_items, per_item_updates, owner_id)
+
+    async def _db_batch_soft_delete(self, item_ids: list[str], owner_id: str) -> int:
+        """批量软删除"""
+        return await run_sync(self.db.items.batch_soft_delete, item_ids, owner_id)
+
     async def _db_log_operation(self, **kwargs):
         """记录操作日志"""
         return await run_sync(self.db.logs.log_operation, **kwargs)

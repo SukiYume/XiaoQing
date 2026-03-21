@@ -205,7 +205,16 @@ async def handle_undo(user_id: str, args: str, db: Database) -> dict[str, str]:
         if op_type == "edit":
             result = await run_sync(db.items.undo_edit, user_id, minutes)
             if result.get("status") == "success":
-                return success_result(result["message"])
+                type_name = {
+                    "edit_event": "日程", "edit_task": "待办",
+                    "edit_note": "笔记", "edit_diary": "日记",
+                }.get(result.get("action", ""), "条目")
+                item = await run_sync(db.items.get_item, result["item_id"], user_id)
+                title = item.title if item else "未知"
+                msg = f"✅ 已撤销{type_name}编辑: {title}"
+                if result.get("instance_count", 1) > 1:
+                    msg += f"\n📊 共恢复 {result['affected']} 个实例"
+                return success_result(msg)
             return error_result(result.get("message", "撤销编辑失败"))
 
         return error_result("未找到可撤销的操作")

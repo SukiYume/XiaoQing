@@ -241,8 +241,7 @@ async def _generate_briefing_content(user_id: str, db: Database, ai_parser: AIPa
     )
 
     # 生成简报
-    items = events + tasks
-    briefing = await ai_parser.generate_daily_briefing(user_id, items)
+    briefing = _format_daily_briefing(events, tasks)
 
     # 添加逾期提醒
     if overdue_tasks:
@@ -255,6 +254,51 @@ async def _generate_briefing_content(user_id: str, db: Database, ai_parser: AIPa
                 briefing += f"\n  - {task.title or '无标题'} (截止: {time_str})"
 
     return briefing
+
+
+def _format_daily_briefing(events: list[Any], tasks: list[Any]) -> str:
+    """格式化每日简报文本（纯格式化，不涉及 AI）"""
+    current_date = datetime.now().strftime("%Y年%m月%d日")
+    weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    weekday = weekday_names[datetime.now().weekday()]
+
+    lines = [f"☀️ 早上好！今天是{current_date} {weekday}", ""]
+
+    if events:
+        lines.append("🗓️ **今日日程**")
+        for evt in events[:5]:
+            start_time = evt.start_time or ""
+            time_str = start_time[11:16] if len(start_time) > 11 else ""
+            title = evt.title or "无标题"
+            location = f" @{evt.location}" if evt.location else ""
+            lines.append(f"  • {time_str} {title}{location}")
+        if len(events) > 5:
+            lines.append(f"  ...还有 {len(events) - 5} 项")
+        lines.append("")
+    else:
+        lines.append("🗓️ 今日暂无日程安排")
+        lines.append("")
+
+    if tasks:
+        lines.append("✅ **今日待办**")
+        for task in tasks[:5]:
+            title = task.title or "无标题"
+            raw_priority = (
+                task.priority if hasattr(task, "priority") and task.priority is not None else 3
+            )
+            priority_value = getattr(raw_priority, "value", raw_priority)
+            priority = priority_value if isinstance(priority_value, int) else 3
+            priority_mark = "🔴" if priority <= 2 else "🟡" if priority == 3 else "⚪"
+            lines.append(f"  {priority_mark} {title}")
+        if len(tasks) > 5:
+            lines.append(f"  ...还有 {len(tasks) - 5} 项")
+        lines.append("")
+    else:
+        lines.append("✅ 今日暂无待办事项")
+        lines.append("")
+
+    lines.append("🌟 祝你今天工作顺利！")
+    return "\n".join(lines)
 
 
 async def _fetch_briefing_items(db: Database, user_id: str, today_iso: str, tomorrow_iso: str):

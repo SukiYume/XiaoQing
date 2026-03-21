@@ -236,6 +236,9 @@ class Database:
             migrations = [
                 "ALTER TABLE items ADD COLUMN milestones TEXT",
                 "ALTER TABLE items ADD COLUMN notes TEXT",
+                # reminder_logs 重构：一行一个 (item_id, remind_time)，用 repeat_count 替代多行
+                "ALTER TABLE reminder_logs ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE reminder_logs ADD COLUMN last_sent_at TEXT",
             ]
             for sql in migrations:
                 try:
@@ -260,7 +263,7 @@ class Database:
                 )
             """)
 
-            # 提醒记录表
+            # 提醒记录表：每个 (item_id, remind_time) 一行
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS reminder_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -268,8 +271,48 @@ class Database:
                     remind_time TEXT NOT NULL,
                     sent_at TEXT,
                     confirmed_at TEXT,
-                    user_action TEXT
+                    user_action TEXT,
+                    repeat_count INTEGER NOT NULL DEFAULT 1,
+                    last_sent_at TEXT
                 )
+            """)
+
+            # 数据迁移：合并旧的多行 reminder_logs 为每 (item_id, remind_time) 一行
+            # 仅在存在重复行且 last_sent_at 尚未填充时执行
+            cursor.execute("""
+                SELECT item_id, remind_time, COUNT(*) as cnt
+                FROM reminder_logs GROUP BY item_id, remind_time HAVING cnt > 1
+            """)
+            if cursor.fetchone() is not None:
+                cursor.execute("""
+                    CREATE TEMP TABLE _rl_merged AS
+                    SELECT
+                        MIN(id) AS id,
+                        item_id,
+                        remind_time,
+                        MIN(sent_at) AS sent_at,
+                        MAX(confirmed_at) AS confirmed_at,
+                        COALESCE(
+                            MAX(CASE WHEN confirmed_at IS NOT NULL THEN user_action END),
+                            MAX(user_action)
+                        ) AS user_action,
+                        COUNT(CASE WHEN sent_at IS NOT NULL THEN 1 END) AS repeat_count,
+                        MAX(sent_at) AS last_sent_at
+                    FROM reminder_logs
+                    GROUP BY item_id, remind_time
+                """)
+                cursor.execute("DELETE FROM reminder_logs")
+                cursor.execute("""
+                    INSERT INTO reminder_logs
+                        (id, item_id, remind_time, sent_at, confirmed_at, user_action, repeat_count, last_sent_at)
+                    SELECT id, item_id, remind_time, sent_at, confirmed_at, user_action, repeat_count, last_sent_at
+                    FROM _rl_merged
+                """)
+                cursor.execute("DROP TABLE _rl_merged")
+
+            cursor.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_logs_unique
+                ON reminder_logs(item_id, remind_time)
             """)
 
             # 操作日志表
@@ -383,19 +426,7 @@ class Database:
 
                 # C-5修复：在同一事务内直接读取最新数据更新FTS，避免读到缓存中的旧值
                 if cursor.rowcount > 0 and self._FTS_FIELDS & update_dict.keys():
-                    fts_cursor = conn.cursor()
-                    fts_cursor.execute(
-                        "SELECT title, content, tags, category FROM items WHERE id = ?", (item_id,)
-                    )
-                    row = fts_cursor.fetchone()
-                    if row:
-                        fts_data = {
-                            "title": row[0] or "",
-                            "content": row[1] or "",
-                            "tags": json.loads(row[2]) if row[2] else [],
-                            "category": row[3] or "",
-                        }
-                        self._update_fts(item_id, fts_data, conn)
+                    self._refresh_fts(item_id, conn)
 
             # 精确失效：只清除与该条目相关的缓存
             self.cache_invalidate(item_id)
@@ -416,6 +447,78 @@ class Database:
         except Exception as e:
             logger.exception("Failed to update item: %s", e)
             raise
+
+    def find_instances(
+        self, owner_id: str, parent_id: str, columns: str = "*",
+    ) -> list[Any]:
+        """查找 parent_id 对应的父事件及所有子实例（共用查询模式）"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""SELECT {columns} FROM items
+                WHERE owner_id = ? AND type = '{ItemType.EVENT.value}' AND deleted = 0
+                AND (id = ? OR parent_id = ? OR id LIKE ?)
+                ORDER BY start_time""",
+            (owner_id, parent_id, parent_id, f"{parent_id}_%"),
+        )
+        return cursor.fetchall()
+
+    def batch_update_items(
+        self, per_item_updates: dict[str, dict[str, Any]], owner_id: str,
+    ) -> int:
+        """单事务批量更新多个条目，含 FTS 维护和缓存失效"""
+        if not per_item_updates:
+            return 0
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        fts_fields = self._FTS_FIELDS
+        needs_fts = False
+        affected = 0
+
+        with conn:
+            for iid, updates in per_item_updates.items():
+                updates["updated_at"] = now
+                data = self._prepare_data(updates)
+                set_clause = ", ".join([f'{self._quote_col(k)} = ?' for k in data.keys()])
+                cursor.execute(
+                    f"UPDATE items SET {set_clause} WHERE id = ? AND owner_id = ?",
+                    list(data.values()) + [iid, owner_id],
+                )
+                affected += cursor.rowcount
+                needs_fts = needs_fts or bool(fts_fields & set(data.keys()))
+
+            if needs_fts:
+                for iid in per_item_updates:
+                    self._refresh_fts(iid, conn)
+
+        for iid in per_item_updates:
+            self.cache_invalidate(iid)
+        self.cache_invalidate(f"items|{owner_id}")
+        return affected
+
+    def batch_soft_delete(self, item_ids: list[str], owner_id: str) -> int:
+        """单事务批量软删除，含 FTS 清理和缓存失效"""
+        if not item_ids:
+            return 0
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        placeholders = ",".join(["?" for _ in item_ids])
+
+        with conn:
+            cursor.execute(
+                f"UPDATE items SET deleted=1, deleted_at=?, updated_at=? "
+                f"WHERE id IN ({placeholders}) AND owner_id=?",
+                [now, now] + item_ids + [owner_id],
+            )
+            affected = cursor.rowcount
+            cursor.execute(f"DELETE FROM items_fts WHERE id IN ({placeholders})", item_ids)
+
+        for iid in item_ids:
+            self.cache_invalidate(iid)
+        self.cache_invalidate(f"items|{owner_id}")
+        return affected
 
     def get_item(self, item_id: str, owner_id: str | None = None) -> Optional[Item]:
         """获取单个条目，返回Item dataclass实例"""
@@ -538,8 +641,8 @@ class Database:
             """
             SELECT remind_time FROM reminder_logs
             WHERE item_id = ? AND sent_at IS NOT NULL AND confirmed_at IS NULL
-            ORDER BY sent_at DESC LIMIT 1
-        """,
+            ORDER BY COALESCE(last_sent_at, sent_at) DESC LIMIT 1
+            """,
             (item_id,),
         )
         row = cursor.fetchone()
@@ -551,29 +654,18 @@ class Database:
         cursor = conn.cursor()
 
         try:
-            # S-1修复：使用 with conn: 代替手动 BEGIN/COMMIT/ROLLBACK
+            where = "id = ? AND owner_id = ?" if owner_id else "id = ?"
+            params: list[Any] = [item_id, owner_id] if owner_id else [item_id]
+
             with conn:
                 if soft:
                     now = datetime.now().isoformat()
-                    updates = {"deleted": 1, "deleted_at": now, "updated_at": now}
-                    set_clause = ", ".join([f"{self._quote_col(k)} = ?" for k in updates.keys()])
-                    if owner_id:
-                        cursor.execute(
-                            f"UPDATE items SET {set_clause} WHERE id = ? AND owner_id = ?",
-                            list(updates.values()) + [item_id, owner_id],
-                        )
-                    else:
-                        cursor.execute(
-                            f"UPDATE items SET {set_clause} WHERE id = ?",
-                            list(updates.values()) + [item_id],
-                        )
+                    cursor.execute(
+                        f"UPDATE items SET deleted=1, deleted_at=?, updated_at=? WHERE {where}",
+                        [now, now] + params,
+                    )
                 else:
-                    if owner_id:
-                        cursor.execute(
-                            "DELETE FROM items WHERE id = ? AND owner_id = ?", (item_id, owner_id)
-                        )
-                    else:
-                        cursor.execute("DELETE FROM items WHERE id = ?", (item_id,))
+                    cursor.execute(f"DELETE FROM items WHERE {where}", params)
                 # S-2修复：在 FTS 操作前保存 rowcount，避免被后续语句覆盖
                 affected = cursor.rowcount
                 cursor.execute("DELETE FROM items_fts WHERE id = ?", (item_id,))
@@ -582,6 +674,17 @@ class Database:
         except Exception as e:
             logger.exception("Failed to delete item: %s", e)
             raise
+
+    @staticmethod
+    def _apply_filters(
+        where: list[str], params: list[Any], filters: dict[str, Any] | None,
+    ):
+        """将 type/category/status 过滤条件追加到 where / params"""
+        if filters:
+            for key in ("type", "category", "status"):
+                if key in filters:
+                    where.append(f"{key} = ?")
+                    params.append(filters[key])
 
     def search_items(
         self,
@@ -610,14 +713,9 @@ class Database:
 
         # LIKE补充搜索（FTS的unicode61分词器对CJK子字符串匹配不完整，需要LIKE兜底）
         like = f"%{query}%"
-        like_where = ["owner_id = ?", "deleted = 0", "(title LIKE ? OR content LIKE ?)"]
+        like_where: list[str] = ["owner_id = ?", "deleted = 0", "(title LIKE ? OR content LIKE ?)"]
         like_params: list[Any] = [owner_id, like, like]
-
-        if filters:
-            for key in ["type", "category", "status"]:
-                if key in filters:
-                    like_where.append(f"{key} = ?")
-                    like_params.append(filters[key])
+        self._apply_filters(like_where, like_params, filters)
 
         cursor.execute(
             f"SELECT id FROM items WHERE {' AND '.join(like_where)} LIMIT ?", like_params + [limit]
@@ -637,14 +735,9 @@ class Database:
 
         # 查询完整条目
         placeholders = ",".join(["?" for _ in merged_ids])
-        where = [f"id IN ({placeholders})", "owner_id = ?", "deleted = 0"]
+        where: list[str] = [f"id IN ({placeholders})", "owner_id = ?", "deleted = 0"]
         params: list[Any] = merged_ids + [owner_id]
-
-        if filters:
-            for key in ["type", "category", "status"]:
-                if key in filters:
-                    where.append(f"{key} = ?")
-                    params.append(filters[key])
+        self._apply_filters(where, params, filters)
 
         cursor.execute(
             f"SELECT * FROM items WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ?",
@@ -743,43 +836,21 @@ class Database:
 
                 # 更新 FTS 索引
                 if self._FTS_FIELDS & set(restore_data.keys()):
-                    fts_cursor = conn.cursor()
                     for iid in instance_ids:
-                        fts_cursor.execute(
-                            "SELECT title, content, tags, category FROM items WHERE id = ?", (iid,)
-                        )
-                        fts_row = fts_cursor.fetchone()
-                        if fts_row:
-                            fts_data = {
-                                "title": fts_row[0] or "",
-                                "content": fts_row[1] or "",
-                                "tags": json.loads(fts_row[2]) if fts_row[2] else [],
-                                "category": fts_row[3] or "",
-                            }
-                            self._update_fts(iid, fts_data, conn)
+                        self._refresh_fts(iid, conn)
 
                 # 删除该编辑日志，避免重复撤销
                 cursor.execute("DELETE FROM operation_logs WHERE id = ?", (log_id,))
 
             self.cache_clear()
 
-            # 获取恢复后的条目用于提示
-            item = self.get_item(item_id, owner_id)
-            title = item.title if item else old_values.get("title", "未知")
-
-            type_name_map = {
-                "edit_event": "日程",
-                "edit_task": "待办",
-                "edit_note": "笔记",
-                "edit_diary": "日记",
+            return {
+                "status": "success",
+                "item_id": item_id,
+                "action": action,
+                "affected": affected,
+                "instance_count": len(instance_ids),
             }
-            type_name = type_name_map.get(action, "条目")
-
-            result_msg = f"✅ 已撤销{type_name}编辑: {title}"
-            if len(instance_ids) > 1:
-                result_msg += f"\n📊 共恢复 {affected} 个实例"
-
-            return {"status": "success", "message": result_msg, "item_id": item_id}
         except Exception as e:
             logger.exception("Failed to undo edit: %s", e)
             return {"status": "error", "message": f"撤销编辑失败: {e}"}
@@ -1121,25 +1192,27 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """
-            SELECT COUNT(*) FROM reminder_logs 
-            WHERE item_id = ? AND remind_time = ? AND sent_at IS NOT NULL
-        """,
+            "SELECT 1 FROM reminder_logs WHERE item_id = ? AND remind_time = ? AND sent_at IS NOT NULL",
             (item_id, remind_time),
         )
-        return cursor.fetchone()[0] > 0
+        return cursor.fetchone() is not None
 
     def log_reminder(self, item_id: str, remind_time: str, sent: bool = True):
-        """记录提醒发送"""
+        """记录提醒发送（UPSERT：首次 INSERT，重复发送 UPDATE repeat_count + last_sent_at）"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        # S-1修复：使用 with conn: 代替裸 conn.commit()
+        now = datetime.now().isoformat() if sent else None
         with conn:
             cursor.execute(
                 """
-                INSERT INTO reminder_logs (item_id, remind_time, sent_at) VALUES (?, ?, ?)
-            """,
-                (item_id, remind_time, datetime.now().isoformat() if sent else None),
+                INSERT INTO reminder_logs (item_id, remind_time, sent_at, last_sent_at, repeat_count)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT(item_id, remind_time) DO UPDATE SET
+                    repeat_count = repeat_count + 1,
+                    last_sent_at = excluded.sent_at
+                WHERE excluded.sent_at IS NOT NULL
+                """,
+                (item_id, remind_time, now, now),
             )
 
     def confirm_reminder(
@@ -1149,12 +1222,12 @@ class Database:
         owner_id: str | None = None,
         remind_time: str | None = None,
     ) -> dict[str, Any]:
-        """确认提醒"""
+        """确认提醒——直接 UPDATE 该 item 所有未确认行"""
         conn = self.get_connection()
         cursor = conn.cursor()
         now = datetime.now().isoformat()
-        # S-1修复：使用 with conn: 代替裸 conn.commit()
         with conn:
+            # 构建 UPDATE 条件
             where_clauses = ["rl.item_id = ?", "rl.confirmed_at IS NULL"]
             params: list[Any] = [item_id]
             if owner_id is not None:
@@ -1164,79 +1237,78 @@ class Database:
                 where_clauses.append("rl.remind_time = ?")
                 params.append(remind_time)
 
+            # 查找并确认
             cursor.execute(
                 f"""
-                SELECT rl.id, rl.remind_time FROM reminder_logs rl
+                SELECT rl.id FROM reminder_logs rl
                 JOIN items i ON i.id = rl.item_id AND i.deleted = 0
                 WHERE {" AND ".join(where_clauses)}
-                ORDER BY rl.sent_at DESC, rl.id DESC
-                LIMIT 1
                 """,
                 params,
             )
-            target_row = cursor.fetchone()
+            row_ids = [r["id"] for r in cursor.fetchall()]
 
-            if target_row:
+            if row_ids:
+                placeholders = ",".join(["?" for _ in row_ids])
                 cursor.execute(
-                    """
-                    UPDATE reminder_logs SET confirmed_at = ?, user_action = ?
-                    WHERE id = ?
-                    """,
-                    (now, user_action, target_row["id"]),
+                    f"UPDATE reminder_logs SET confirmed_at = ?, user_action = ? WHERE id IN ({placeholders})",
+                    [now, user_action] + row_ids,
                 )
+            else:
+                # 无已发送记录可确认（如静默时间未发出），补插一条已确认的记录
+                self._insert_confirm_for_unsent(cursor, item_id, owner_id, remind_time, now, user_action)
 
-            # 若无已发送记录可确认（如提醒因静默时间未发出，用户手动确认），
-            # 补插最近已过期的 remind_time 日志，使 reminders list 正确显示 ✅
-            if not target_row:
-                item_where = ["id = ?", "deleted = 0"]
-                item_params: list[Any] = [item_id]
-                if owner_id is not None:
-                    item_where.append("owner_id = ?")
-                    item_params.append(owner_id)
-                cursor.execute(
-                    f"SELECT remind_times FROM items WHERE {' AND '.join(item_where)}",
-                    item_params,
-                )
-                row = cursor.fetchone()
-                if row and row[0]:
-                    try:
-                        remind_times = json.loads(row[0])
-                        past_times = [t for t in remind_times if isinstance(t, str) and t <= now]
-                        if remind_time is not None:
-                            past_times = [t for t in past_times if t == remind_time]
-                        past_times = sorted(past_times, reverse=True)
-                        if past_times:
-                            target_time = past_times[0]
-                            cursor.execute(
-                                "SELECT COUNT(*) FROM reminder_logs WHERE item_id = ? AND remind_time = ?",
-                                (item_id, target_time),
-                            )
-                            if cursor.fetchone()[0] == 0:
-                                cursor.execute(
-                                    """INSERT INTO reminder_logs (item_id, remind_time, sent_at, confirmed_at, user_action)
-                                       VALUES (?, ?, NULL, ?, ?)""",
-                                    (item_id, target_time, now, user_action),
-                                )
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                elif owner_id is not None:
-                    return {"status": "error", "message": f"未找到条目: {item_id}"}
         return {"status": "success", "message": f"已记录: {user_action}"}
 
-    def get_reminder_logs(self, item_id: str) -> list[dict[str, Any]]:
-        """获取某个条目的所有提醒日志
+    def _insert_confirm_for_unsent(
+        self, cursor, item_id: str, owner_id: str | None,
+        remind_time: str | None, now: str, user_action: str,
+    ):
+        """为未发送但用户手动确认的提醒补插一条记录"""
+        item_where = ["id = ?", "deleted = 0"]
+        item_params: list[Any] = [item_id]
+        if owner_id is not None:
+            item_where.append("owner_id = ?")
+            item_params.append(owner_id)
+        cursor.execute(
+            f"SELECT remind_times FROM items WHERE {' AND '.join(item_where)}",
+            item_params,
+        )
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            return
+        try:
+            remind_times = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return
+        past_times = [t for t in remind_times if isinstance(t, str) and t <= now]
+        if remind_time is not None:
+            past_times = [t for t in past_times if t == remind_time]
+        if not past_times:
+            return
+        target_time = max(past_times)
+        # UPSERT：如果已有行则更新确认状态，否则插入
+        cursor.execute(
+            """
+            INSERT INTO reminder_logs (item_id, remind_time, sent_at, confirmed_at, user_action, repeat_count, last_sent_at)
+            VALUES (?, ?, NULL, ?, ?, 0, NULL)
+            ON CONFLICT(item_id, remind_time) DO UPDATE SET
+                confirmed_at = excluded.confirmed_at,
+                user_action = excluded.user_action
+            """,
+            (item_id, target_time, now, user_action),
+        )
 
-        Returns:
-            列表，每项包含 remind_time, sent_at, confirmed_at, user_action
-        """
+    def get_reminder_logs(self, item_id: str) -> list[dict[str, Any]]:
+        """获取某个条目的所有提醒日志"""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT remind_time, sent_at, confirmed_at, user_action
+            SELECT remind_time, sent_at, confirmed_at, user_action, repeat_count, last_sent_at
             FROM reminder_logs WHERE item_id = ?
             ORDER BY remind_time
-        """,
+            """,
             (item_id,),
         )
         return [dict(row) for row in cursor.fetchall()]
@@ -1244,32 +1316,19 @@ class Database:
     def get_unconfirmed_sent_reminders(self) -> list[dict[str, Any]]:
         """获取已发送但未确认的提醒（用于重复发送）
 
-        Returns:
-            列表，每项包含 item_id, remind_time, sent_at, id (reminder_log id)
+        每个 (item_id, remind_time) 只有一行，直接返回含 repeat_count 和 last_sent_at 的记录。
         """
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT rl.id, rl.item_id, rl.remind_time, rl.sent_at
+            SELECT rl.id, rl.item_id, rl.remind_time,
+                   rl.repeat_count, COALESCE(rl.last_sent_at, rl.sent_at) AS last_sent_at
             FROM reminder_logs rl
             JOIN items i ON rl.item_id = i.id AND i.deleted = 0
             WHERE rl.sent_at IS NOT NULL AND rl.confirmed_at IS NULL
             ORDER BY rl.sent_at
         """)
         return [dict(row) for row in cursor.fetchall()]
-
-    def count_reminder_repeats(self, item_id: str, remind_time: str) -> int:
-        """统计某个提醒已经发送了几次（包括重复）"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM reminder_logs
-            WHERE item_id = ? AND remind_time = ? AND sent_at IS NOT NULL
-        """,
-            (item_id, remind_time),
-        )
-        return cursor.fetchone()[0]
 
     def get_all_events_with_reminders(
         self, owner_id: str | None = None, future_hours: int = 24
@@ -1397,6 +1456,27 @@ class Database:
                 return None
 
         return None
+
+    def _refresh_fts(self, item_id: str, conn=None):
+        """从数据库当前行刷新 FTS 索引（用于 update/undo 等场景）"""
+        if not conn:
+            conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT title, content, tags, category FROM items WHERE id = ?", (item_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            self._update_fts(
+                item_id,
+                {
+                    "title": row[0] or "",
+                    "content": row[1] or "",
+                    "tags": json.loads(row[2]) if row[2] else [],
+                    "category": row[3] or "",
+                },
+                conn,
+            )
 
     def _update_fts(self, item_id: str, item_data: dict[str, Any], conn=None):
         """更新全文搜索索引"""

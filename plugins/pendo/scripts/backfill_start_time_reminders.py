@@ -144,17 +144,21 @@ def backfill_missing_start_time_reminders(db_path: str, dry_run: bool = True) ->
                 ),
             )
             
-            # 将过去的提醒自动插入 reminder_logs 标记为已确认
+            # 将过去的提醒自动插入 reminder_logs 标记为已确认（UPSERT）
             # 使得 /pendo event reminders 中显示为已处理（✅），并防止重复发送任务抓取它们
             for mt in missing_times:
                 try:
                     if datetime.fromisoformat(mt) < now_dt:
                         conn.execute(
                             """
-                            INSERT INTO reminder_logs (item_id, remind_time, sent_at, confirmed_at, user_action)
-                            VALUES (?, ?, ?, ?, ?)
+                            INSERT INTO reminder_logs
+                                (item_id, remind_time, sent_at, confirmed_at, user_action, repeat_count, last_sent_at)
+                            VALUES (?, ?, ?, ?, ?, 1, ?)
+                            ON CONFLICT(item_id, remind_time) DO UPDATE SET
+                                confirmed_at = excluded.confirmed_at,
+                                user_action = excluded.user_action
                             """,
-                            (row_id_raw, mt, now_iso, now_iso, "auto_backfilled")
+                            (row_id_raw, mt, now_iso, now_iso, "auto_backfilled", now_iso)
                         )
                 except ValueError:
                     pass
