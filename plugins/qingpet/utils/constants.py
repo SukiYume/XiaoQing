@@ -121,7 +121,7 @@ TRAVEL_THRESHOLDS: Dict[str, float] = {
     "care_score_threshold": 0.15,   # 综合评分低于15%触发旅行
     "travel_duration_hours": 24,     # 旅行持续时间（小时）
     "recall_cost_coins": 50,         # 召回费用
-    "recall_cost_friendship": 10,    # 召回所需友情点
+    "recall_cost_friendship": 0,     # 召回所需友情点（已移除此要求）
 }
 
 # 反脚本配置
