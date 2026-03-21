@@ -128,7 +128,7 @@ async def handle_event_info_session(
     # 解析补充内容
     parsed = None
     try:
-        parsed = await ai_parser.parse_natural_language_with_ai(text, user_id)
+        parsed = await ai_parser.parse_event_with_ai(text, user_id)
     except Exception:
         parsed = ai_parser.parse_natural_language(text, user_id)
 

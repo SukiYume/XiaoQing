@@ -81,9 +81,6 @@ class ReminderService:
 
         try:
             # 1. 检查新到期的提醒
-            # R-1修复：future_hours=0 跳过 start_time 过滤。
-            # 原 future_hours=24 会排除 start_time 在24h后但 remind_time 已到期的事件
-            # （如 "国自然截止 03-08，提前7天于03-01提醒"），导致提醒永远不发送。
             items = self.db.get_all_events_with_reminders(future_hours=0)
 
             for item in items:
@@ -93,7 +90,6 @@ class ReminderService:
                     continue
 
                 remind_times = item.remind_times if hasattr(item, "remind_times") else []
-
                 if not remind_times:
                     continue
 
@@ -104,30 +100,10 @@ class ReminderService:
 
                         if 0 <= time_diff <= PendoConfig.REMINDER_CHECK_WINDOW_SECONDS:
                             if not self.db.is_reminder_sent(item.id, remind_time_str):
-                                if self._is_in_quiet_hours(item.owner_id, remind_time):
-                                    if not self._is_important_item(item):
-                                        # 若事件本身也在静默时间内（如早晨6点的事件），仍发送提醒
-                                        start_time = getattr(item, "start_time", None)
-                                        if not (
-                                            start_time
-                                            and self._is_in_quiet_hours(
-                                                item.owner_id, parse_and_localize(start_time)
-                                            )
-                                        ):
-                                            continue
-
+                                if self._should_suppress(item, remind_time):
+                                    continue
                                 message = self._build_reminder_message(item, remind_time_str)
-                                messages.append(
-                                    {
-                                        "user_id": item.owner_id,
-                                        "group_id": item.context.get("group_id")
-                                        if isinstance(item.context, dict)
-                                        else None,
-                                        "message": message,
-                                        "item_id": item.id,
-                                        "remind_time": remind_time_str,
-                                    }
-                                )
+                                messages.append(self._make_msg(item, message, remind_time_str))
                                 sent_count += 1
                     except Exception as e:
                         logger.warning("处理提醒失败: %s, error: %s", remind_time_str, e)
@@ -150,9 +126,7 @@ class ReminderService:
     def _check_unconfirmed_repeats(self, current_time) -> list[dict[str, Any]]:
         """检查未确认的提醒，按间隔重复发送
 
-        I-5修复：
-        - 对同一 (item_id, remind_time) 只保留最新一条 log，避免同一周期内多次触发
-        - 以最新一次发送时间（sent_at）为基准计算下次重发，间隔稳定
+        每个 (item_id, remind_time) 在 DB 中只有一行，直接读取 repeat_count 和 last_sent_at。
         """
         messages = []
         repeat_interval = PendoConfig.REMINDER_REPEAT_INTERVAL_SECONDS
@@ -160,65 +134,63 @@ class ReminderService:
         auto_confirm_after = PendoConfig.REMINDER_AUTO_CONFIRM_AFTER_FINAL_SEND_SECONDS
 
         try:
-            unconfirmed = self.db.get_unconfirmed_sent_reminders()
-
-            # I-5修复：去重，每个 (item_id, remind_time) 只取最新一条
-            deduped: dict[tuple[str, str], dict[str, Any]] = {}
-            for log in unconfirmed:
-                key = (log["item_id"], log["remind_time"])
-                if key not in deduped or log["sent_at"] > deduped[key]["sent_at"]:
-                    deduped[key] = log
-
-            for log in deduped.values():
+            for log in self.db.get_unconfirmed_sent_reminders():
                 item_id = log["item_id"]
                 remind_time_str = log["remind_time"]
-                sent_at_str = log["sent_at"]
+                repeat_count = log["repeat_count"]
+                last_sent_at = parse_and_localize(log["last_sent_at"])
+                seconds_since_last = (current_time - last_sent_at).total_seconds()
 
-                # 计算已重复次数（首次发送算第1次）
-                repeat_count = self.db.count_reminder_repeats(item_id, remind_time_str)
-                sent_at = parse_and_localize(sent_at_str)
-                seconds_since_last = (current_time - sent_at).total_seconds()
-
+                # 已达最大重复次数：超时后自动确认
                 if repeat_count >= max_repeats + 1:
                     if seconds_since_last >= auto_confirm_after:
                         self.db.confirm_reminder(
-                            item_id,
-                            user_action="auto_confirmed",
-                            remind_time=remind_time_str,
+                            item_id, user_action="auto_confirmed", remind_time=remind_time_str,
                         )
                     continue
 
-                if (
-                    repeat_interval
-                    <= seconds_since_last
-                    <= repeat_interval + PendoConfig.REMINDER_CHECK_WINDOW_SECONDS
-                ):
-                    item = self.db.get_item(item_id)
-                    if not item:
-                        continue
+                # 判断是否到了下一次重发的时间窗口
+                if not (repeat_interval <= seconds_since_last
+                        <= repeat_interval + PendoConfig.REMINDER_CHECK_WINDOW_SECONDS):
+                    continue
 
-                    if self._is_in_quiet_hours(item.owner_id, current_time):
-                        if not self._is_important_item(item):
-                            continue
+                item = self.db.get_item(item_id)
+                if not item:
+                    continue
 
-                    message = self._build_repeat_reminder_message(
-                        item, remind_time_str, repeat_count
-                    )
-                    messages.append(
-                        {
-                            "user_id": item.owner_id,
-                            "group_id": item.context.get("group_id")
-                            if isinstance(item.context, dict)
-                            else None,
-                            "message": message,
-                            "item_id": item_id,
-                            "remind_time": remind_time_str,
-                        }
-                    )
+                if self._should_suppress(item, current_time):
+                    continue
+
+                message = self._build_reminder_message(item, remind_time_str, repeat_count=repeat_count)
+                messages.append(self._make_msg(item, message, remind_time_str))
+
         except Exception as e:
             logger.warning("检查未确认提醒重复时出错: %s", e)
 
         return messages
+
+    def _should_suppress(self, item, check_time: datetime) -> bool:
+        """判断是否应抑制发送（静默时间 + 非重要事件）"""
+        if not self._is_in_quiet_hours(item.owner_id, check_time):
+            return False
+        if self._is_important_item(item):
+            return False
+        # 若事件本身也在静默时间内（如早晨6点的事件），仍发送
+        start_time = getattr(item, "start_time", None)
+        if start_time and self._is_in_quiet_hours(item.owner_id, parse_and_localize(start_time)):
+            return False
+        return True
+
+    @staticmethod
+    def _make_msg(item, message: str, remind_time_str: str) -> dict[str, Any]:
+        """构建统一的消息字典"""
+        return {
+            "user_id": item.owner_id,
+            "group_id": item.context.get("group_id") if isinstance(item.context, dict) else None,
+            "message": message,
+            "item_id": item.id,
+            "remind_time": remind_time_str,
+        }
 
     def confirm_reminder(
         self,
@@ -402,10 +374,6 @@ class ReminderService:
             return best or (milestones[0].get("name", "") if milestones else "")
         except (ValueError, TypeError):
             return milestones[0].get("name", "") if milestones else ""
-
-    def _build_repeat_reminder_message(self, item, remind_time: str, repeat_count: int) -> str:
-        """构建重复提醒消息（委托给 _build_reminder_message）"""
-        return self._build_reminder_message(item, remind_time, repeat_count=repeat_count)
 
     def _is_in_quiet_hours(self, user_id: str, remind_time: datetime) -> bool:
         """检查是否在静默时段"""
