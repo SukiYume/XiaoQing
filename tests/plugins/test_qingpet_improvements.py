@@ -304,3 +304,39 @@ def test_explore_event_probabilities_sum_to_one():
     for loc_key, loc in EXPLORE_LOCATIONS.items():
         total = sum(e["prob"] for e in loc["events"])
         assert abs(total - 1.0) < 0.001, f"{loc_key} 概率之和={total}"
+
+
+from plugins.qingpet.utils.formatters import format_pet_card
+from plugins.qingpet.models import User
+
+
+def make_test_user(user_id="test_user", group_id=123456):
+    return User(user_id=user_id, group_id=group_id)
+
+
+def test_format_pet_card_shows_travel_time(pet_and_user, temp_db):
+    """旅行中的宠物卡片显示剩余时间"""
+    pet, user = pet_and_user
+    pet.status = PetStatus.TRAVELING
+    pet.status_expire_time = datetime.now() + timedelta(hours=5, minutes=30)
+    card = format_pet_card(pet, user)
+    assert "旅行剩余" in card
+
+
+def test_format_pet_card_normal_no_travel_time(pet_and_user, temp_db):
+    """正常状态不显示旅行剩余时间"""
+    pet, user = pet_and_user
+    pet.status = PetStatus.NORMAL
+    pet.status_expire_time = None
+    card = format_pet_card(pet, user)
+    assert "旅行剩余" not in card
+
+
+def test_format_pet_card_travel_shows_hours_minutes(pet_and_user, temp_db):
+    """旅行剩余时间包含小时和分钟"""
+    pet, user = pet_and_user
+    pet.status = PetStatus.TRAVELING
+    pet.status_expire_time = datetime.now() + timedelta(hours=3, minutes=15)
+    card = format_pet_card(pet, user)
+    assert "小时" in card
+    assert "分钟" in card

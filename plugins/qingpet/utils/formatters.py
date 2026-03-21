@@ -34,6 +34,16 @@ def format_pet_card(pet: Pet, user: User = None) -> str:
     text += f"• 阶段: {pet.stage.value} ({pet.form})\n"
     text += f"• 性格: {pet.personality.value}\n"
     text += f"• 状态: {s_emoji} {pet.status.value}\n"
+    # 旅行状态显示剩余时间
+    if pet.status == PetStatus.TRAVELING and pet.status_expire_time:
+        from datetime import datetime
+        remaining = pet.status_expire_time - datetime.now()
+        if remaining.total_seconds() > 0:
+            hours = int(remaining.total_seconds() // 3600)
+            minutes = int((remaining.total_seconds() % 3600) // 60)
+            text += f"• 旅行剩余: {hours}小时{minutes}分钟\n"
+        else:
+            text += f"• 旅行剩余: 即将返回\n"
     text += f"• 年龄: {pet.age}天\n"
     text += f"• 亲密度: {pet.intimacy}\n"
     text += f"• 经验值: {pet.experience}\n"
