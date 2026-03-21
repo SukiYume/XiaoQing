@@ -298,13 +298,13 @@ def test_explore_uses_numeric_event_reward_values():
 
     import plugins.qingpet.services.pet_service as pet_service_module
 
-    original_choice = pet_service_module.random.choice
-    pet_service_module.random.choice = lambda _events: {"msg": "固定事件", "coins": 20, "exp": 5}
+    original_choices = pet_service_module.random.choices
+    pet_service_module.random.choices = lambda _events, weights=None, k=1: [{"msg": "固定事件", "coins": 20, "exp": 5}]
 
     try:
-        ok, msg, coins = pet_service.explore(pet, user, 1.0)
+        ok, msg, coins = pet_service.explore(pet, user, spam_decay_factor=1.0)
     finally:
-        pet_service_module.random.choice = original_choice
+        pet_service_module.random.choices = original_choices
         _cleanup_temp_db(temp_db, db_path)
 
     assert ok is True

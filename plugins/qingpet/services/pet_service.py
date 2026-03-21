@@ -8,7 +8,9 @@ from ..utils.constants import (
     PetStage, PetPersonality, PetStatus, MAX_STAT_VALUE, MIN_STAT_VALUE,
     DECAY_RATES, COOLDOWN_TIMES, EVOLUTION_CONDITIONS, DEFAULT_ITEMS,
     DISEASE_THRESHOLDS, TRAVEL_THRESHOLDS, AGE_EVOLUTION_THRESHOLDS,
-    DAILY_LIMITS, FAVORITE_FOOD_BONUS
+    DAILY_LIMITS, FAVORITE_FOOD_BONUS,
+    TRAINING_CONFIG, TRAINING_SPECIAL_EVENTS, TRAINING_MESSAGES,
+    EXPLORE_LOCATIONS,
 )
 from ..utils.validators import validate_cooling, validate_sensitive_content
 from .database import Database
@@ -243,6 +245,7 @@ class PetService:
     # ──────────────────── 训练 ────────────────────
 
     def train_pet(self, pet: Pet, user: User,
+                  training_type: str = "strength",
                   spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
         if not pet.can_interact():
             return False, self._get_cannot_interact_msg(pet), 0
@@ -251,27 +254,59 @@ class PetService:
         if not cooled:
             return False, f"训练冷却中，请等待{remaining}秒", 0
 
-        if pet.energy < 20:
+        # 无效类型回退到 strength
+        config = TRAINING_CONFIG.get(training_type, TRAINING_CONFIG["strength"])
+
+        if pet.energy < config["energy_cost"]:
             return False, "宠物精力不足，无法训练", 0
 
-        exp_gain = 15
-        energy_cost = 20
+        # 成功率：基础 + SMART 性格对智力训练加成
+        success_rate = config["success_rate_base"]
+        if pet.personality == PetPersonality.SMART and training_type == "intellect":
+            success_rate = min(1.0, success_rate + 0.1)
 
-        success_rate = 0.8
-        if pet.personality == PetPersonality.SMART:
-            success_rate = 0.95
-
-        if random.random() > success_rate:
-            pet.update_stat("energy", -energy_cost, min_val=0)
-            pet.last_train = datetime.now()
-            pet.last_update = datetime.now()
-            self.db.update_pet(pet)
-            return True, "训练失败，但不要灰心，再试一次吧！", 0
-
-        pet.experience += exp_gain
+        energy_cost = config["energy_cost"]
         pet.update_stat("energy", -energy_cost, min_val=0)
         pet.last_train = datetime.now()
         pet.last_update = datetime.now()
+
+        if random.random() > success_rate:
+            self.db.update_pet(pet)
+            fail_msg = random.choice(TRAINING_MESSAGES["fail"]).format(name=pet.name)
+            return True, fail_msg, 0
+
+        # 训练成功
+        exp_gain = config["exp_gain"]
+
+        # SMART 性格：所有训练经验 ×1.1
+        if pet.personality == PetPersonality.SMART:
+            exp_gain = int(exp_gain * 1.1)
+
+        # 检查特殊事件（最多触发一个，顺序检查）
+        special_msg = ""
+        for event in TRAINING_SPECIAL_EVENTS:
+            prob = event["prob"]
+            # CLINGY 性格：亲密度相关特殊事件概率 ×2
+            if pet.personality == PetPersonality.CLINGY and "intimacy" in event:
+                prob = min(1.0, prob * 2)
+            if random.random() < prob:
+                special_msg = f"\n✨ {event['msg']}"
+                if "intimacy" in event:
+                    pet.intimacy += event["intimacy"]
+                if "exp_multiplier" in event:
+                    exp_gain = int(exp_gain * event["exp_multiplier"])
+                break  # 最多一个
+
+        # 敏捷训练：心情加成（LIVELY 性格 ×1.5）
+        extra_effects = config.get("extra_effects", {})
+        for stat, delta in extra_effects.items():
+            actual_delta = delta
+            if stat == "mood" and pet.personality == PetPersonality.LIVELY:
+                actual_delta = int(delta * 1.5)
+            pet.update_stat(stat, actual_delta)
+
+        pet.experience += exp_gain
+        pet.intimacy += 1
 
         group_config = self.db.get_group_config(pet.group_id)
         coins_gain = int(10 * group_config.economy_multiplier * spam_decay_factor)
@@ -286,12 +321,15 @@ class PetService:
         if success:
             evo_success, evo_msg = self.check_evolution(pet)
             extra_msg = f"\n\n{evo_msg}" if evo_success else ""
-            return True, f"训练成功！{pet.name}获得了{exp_gain}经验{extra_msg}", coins_gain
+            base_msg = random.choice(TRAINING_MESSAGES["success"]).format(name=pet.name)
+            type_name = config["name"]
+            return True, f"[{type_name}] {base_msg} 获得{exp_gain}经验{special_msg}{extra_msg}", coins_gain
         return False, "训练失败", 0
 
     # ──────────────────── 探索 ────────────────────
 
     def explore(self, pet: Pet, user: User,
+                location: str = "forest",
                 spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
         if not pet.can_interact():
             return False, self._get_cannot_interact_msg(pet), 0
@@ -300,30 +338,62 @@ class PetService:
         if not cooled:
             return False, f"探索冷却中，请等待{remaining}秒", 0
 
-        if pet.energy < 30:
+        # 无效地点回退到森林
+        loc_config = EXPLORE_LOCATIONS.get(location, EXPLORE_LOCATIONS["forest"])
+
+        energy_cost = loc_config["energy_cost"]
+        if pet.energy < energy_cost:
             return False, "宠物精力不足，无法探索", 0
 
-        energy_cost = 30
+        # 山洞/废墟健康前置检查
+        if location in ("cave", "ruins") and pet.health < 40:
+            return False, "宠物健康值过低，不建议进入危险地点（需健康≥40）", 0
+
         pet.update_stat("energy", -energy_cost, min_val=0)
 
-        events: list[dict[str, int | str]] = [
-            {"msg": "探索到了一些金币！", "coins": 20, "exp": 5},
-            {"msg": "发现了一个宝藏！", "coins": 50, "exp": 10},
-            {"msg": "遇到了小困难，但成功克服了", "coins": 5, "exp": 15},
-            {"msg": "只是一次普通的探索", "coins": 10, "exp": 3},
-            {"msg": "探索失败，什么也没找到", "coins": 0, "exp": 0}
-        ]
+        # 按性格调整事件概率权重，加权随机选一个事件
+        events = loc_config["events"]
+        weights = []
+        for event in events:
+            prob = event["prob"]
+            if pet.personality == PetPersonality.LIVELY:
+                if location == "forest" and ("intimacy" in event or event.get("coins", 0) > 0):
+                    prob += 0.1
+                elif location in ("cave", "ruins") and "health" not in event:
+                    prob += 0.05
+            if pet.personality == PetPersonality.SHY:
+                if location in ("cave", "ruins") and ("health" in event or "mood" in event):
+                    prob += 0.1
+            if pet.personality == PetPersonality.SMART:
+                if location in ("cave", "ruins") and "item" in event:
+                    prob += 0.1
+            weights.append(max(prob, 0.01))
 
-        event = random.choice(events)
+        chosen = random.choices(events, weights=weights, k=1)[0]
+
         group_config = self.db.get_group_config(pet.group_id)
-        # CR Review Issue #2: 应用反脚本衰减因子
-        event_coins = int(event["coins"])
-        exp_gain = int(event["exp"])
-        coins_gain = int(event_coins * group_config.economy_multiplier * spam_decay_factor)
+        exp_gain = int(chosen.get("exp", 0))
+        coins_gain = int(chosen.get("coins", 0) * group_config.economy_multiplier * spam_decay_factor)
 
         pet.experience += exp_gain
         pet.last_explore = datetime.now()
         pet.last_update = datetime.now()
+
+        for stat in ("mood", "clean", "health"):
+            if stat in chosen:
+                pet.update_stat(stat, chosen[stat], min_val=0)
+        if "intimacy" in chosen:
+            pet.intimacy += chosen["intimacy"]
+
+        # 道具掉落
+        item_msg = ""
+        if "item" in chosen:
+            inventory = self.db.get_or_create_inventory(user.user_id, user.group_id)
+            item_id = chosen["item"]
+            item_name = DEFAULT_ITEMS.get(item_id, {}).get("name", item_id)
+            inventory.add_item(item_id, 1)
+            self.db.update_inventory(inventory)
+            item_msg = f"（获得 {item_name} ×1）"
 
         if user.can_earn_coins(coins_gain, 500):
             user.coins += coins_gain
@@ -337,7 +407,8 @@ class PetService:
         if success:
             evo_success, evo_msg = self.check_evolution(pet)
             extra_msg = f"\n\n{evo_msg}" if evo_success else ""
-            return True, f"{event['msg']} 获得{exp_gain}经验{extra_msg}", coins_gain
+            loc_name = loc_config["name"]
+            return True, f"[{loc_name}] {chosen['msg']}{item_msg} 获得{exp_gain}经验{extra_msg}", coins_gain
         return False, "探索失败", 0
 
     # ──────────────────── 睡觉 / 起床 ────────────────────
