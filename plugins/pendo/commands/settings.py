@@ -7,7 +7,7 @@ from typing import Callable, Optional, Any
 from core.plugin_base import run_sync
 from core.args import parse
 from ..services.db import Database
-from ..utils.time_utils import parse_custom_settings, save_user_setting
+from ..utils.settings_utils import parse_custom_settings, save_user_setting
 
 # 缓存可用时区列表
 _available_timezones = None
