@@ -1,6 +1,6 @@
 """
-时间与格式化工具（精简版）
-合并 time_parser, timezone_helper, helpers 核心功能
+时间解析工具
+提供时区辅助、日期/时间范围解析、提醒时间解析等核心功能
 """
 
 import json
@@ -11,7 +11,6 @@ from typing import Optional, Any
 from zoneinfo import ZoneInfo
 
 from ..config import PendoConfig
-from .formatters import ItemFormatter as _ItemFormatter
 
 logger = logging.getLogger(__name__)
 
@@ -316,31 +315,6 @@ def parse_hhmm_to_minutes(time_str: str) -> Optional[int]:
     return None
 
 
-# ==================== 格式化工具（委托给 ItemFormatter） ====================
-
-
-def format_datetime(dt_str: str, fmt: str = "%Y-%m-%d %H:%M") -> str:
-    """格式化日期时间字符串"""
-    return _ItemFormatter.format_datetime(dt_str, fmt)
-
-
-def format_date(dt_str: str) -> str:
-    """格式化日期"""
-    return _ItemFormatter.format_date(dt_str)
-
-
-def format_time(dt_str: str) -> str:
-    """格式化时间"""
-    return _ItemFormatter.format_time(dt_str)
-
-
-def truncate_text(text: str, max_length: int = 100, suffix: str = "...") -> str:
-    """截断文本"""
-    if not text or len(text) <= max_length:
-        return text or ""
-    return text[: max_length - len(suffix)] + suffix
-
-
 def parse_time_offset(offset_str: str) -> int:
     """解析时间偏移为分钟数"""
     match = re.match(r"^(\d+)([mhd])$", offset_str.lower())
@@ -351,28 +325,13 @@ def parse_time_offset(offset_str: str) -> int:
     return {"m": value, "h": value * 60, "d": value * 1440}.get(unit, 0)
 
 
-# ==================== 设置工具 ====================
-
-
-def parse_custom_settings(settings: dict[str, Any]) -> dict[str, Any]:
-    """解析自定义设置JSON"""
-    custom = {}
-    if settings.get("settings_json"):
+def parse_remind_times(raw: Any) -> list[str]:
+    """解析提醒时间（list、JSON字符串 → list，失败返回空列表）"""
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
         try:
-            custom = json.loads(settings["settings_json"])
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning("Failed to parse custom settings: %s", e)
-    return custom
-
-
-def save_user_setting(user_id: str, key: str, value: Any, db):
-    """保存用户设置"""
-    try:
-        settings = db.settings.get_user_settings(user_id)
-        custom = parse_custom_settings(settings)
-        custom[key] = value
-        settings["settings_json"] = json.dumps(custom, ensure_ascii=False)
-        db.settings.update_user_settings(user_id, settings)
-    except Exception as e:
-        logger.exception("Failed to save setting for user %s: %s", user_id, e)
-        raise
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return []

@@ -5,7 +5,6 @@
 
 from typing import Any, Optional
 from datetime import datetime
-import json
 import re
 
 from ..models.item import get_item_type_value
@@ -443,22 +442,3 @@ def paginate(items: list[Any], page: int = 1, page_size: int = 10, show_all: boo
     return display, info, has_more
 
 
-def parse_remind_times(raw: Any) -> list[str]:
-    """解析提醒时间
-
-    统一处理提醒时间的解析，避免各Handler中重复实现。
-
-    Args:
-        raw: 原始提醒时间数据（可以是列表、字符串或JSON字符串）
-
-    Returns:
-        解析后的提醒时间列表，解析失败返回空列表
-    """
-    if isinstance(raw, list):
-        return raw
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return []
