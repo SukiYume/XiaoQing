@@ -11,14 +11,13 @@ from core.plugin_base import run_sync
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import error_result, handle_command_errors
 from ..config import PendoConfig
-from ..utils.time_utils import parse_event_time_range, TimezoneHelper, now_in_timezone
+from ..utils.time_utils import parse_event_time_range, TimezoneHelper, now_in_timezone, parse_remind_times
 from ..models.item import EventItem
 from ..core.types import PendoContext, CommandMessage
 from ..utils.formatters import (
     ItemFormatter,
     MessageBuilder,
     format_success_message,
-    parse_remind_times,
 )
 from ..utils.session_utils import safe_create_session
 
@@ -622,7 +621,20 @@ class EventHandler(DbOpsMixin):
             # 多节点事件用区间重叠；单次事件只看 start_time
             start_dt, end_dt = datetime.fromisoformat(start_date), datetime.fromisoformat(end_date)
             events = [e for e in events if self._event_in_range(e, start_dt, end_dt)]
-            events.sort(key=lambda e: e.start_time or "")
+
+            def _effective_sort_time(e: EventItem) -> str:
+                m_list = e.milestones if hasattr(e, "milestones") else []
+                if m_list and len(m_list) >= 2:
+                    for m in m_list:
+                        try:
+                            m_dt = datetime.fromisoformat(m.get("time", ""))
+                            if start_dt <= m_dt <= end_dt:
+                                return m_dt.isoformat()
+                        except (ValueError, TypeError):
+                            pass
+                return e.start_time or ""
+
+            events.sort(key=_effective_sort_time)
 
             if not events:
                 title = self._format_list_title(time_range, start_dt, end_dt)
@@ -1048,14 +1060,28 @@ class EventHandler(DbOpsMixin):
             event_reminders.sort(key=lambda x: x[1][0])
             message = f"🔔 **{title}** (共{len(event_reminders)}项)\n"
             for event, remind_times in event_reminders:
-                time_str = ItemFormatter.format_datetime(event.start_time or "", "%m月%d日 %H:%M")
-                message += f"\n🗓️ {time_str} {event.title or '无标题'} `{event.id}`\n"
                 log_map = self._build_log_map(event.id)
-                for t in remind_times:
-                    t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
-                    t_iso = t
-                    status = self._get_remind_status(log_map.get(t_iso))
-                    message += f"  ⏰ {t_str} {status}\n"
+                milestones = getattr(event, "milestones", None) or []
+                if milestones and len(milestones) >= 2:
+                    # 多节点事件：显示日期区间，并按里程碑分组提醒
+                    start_str = ItemFormatter.format_datetime(event.start_time or "", "%m月%d日")
+                    end_str = ItemFormatter.format_datetime(event.end_time or "", "%m月%d日") if event.end_time else ""
+                    date_range = f"{start_str}~{end_str}" if end_str else start_str
+                    message += f"\n🗓️ {date_range} {event.title or '无标题'} 🗺️{len(milestones)}节点 `{event.id}`\n"
+                    for m, m_reminds in self._group_reminders_by_milestone(remind_times, milestones):
+                        m_str = ItemFormatter.format_datetime(m["time"], "%m-%d")
+                        message += f"  📌 {m_str} {m.get('name', '')}\n"
+                        for t in m_reminds:
+                            t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
+                            status = self._get_remind_status(log_map.get(t))
+                            message += f"    ⏰ {t_str} {status}\n"
+                else:
+                    time_str = ItemFormatter.format_datetime(event.start_time or "", "%m月%d日 %H:%M")
+                    message += f"\n🗓️ {time_str} {event.title or '无标题'} `{event.id}`\n"
+                    for t in remind_times:
+                        t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
+                        status = self._get_remind_status(log_map.get(t))
+                        message += f"  ⏰ {t_str} {status}\n"
 
             return {"status": "success", "message": message}
         except Exception as e:
@@ -1156,6 +1182,40 @@ class EventHandler(DbOpsMixin):
                     pass
             return False
         return start_dt <= e_start <= end_dt
+
+    @staticmethod
+    def _group_reminders_by_milestone(
+        remind_times: list[str], milestones: list[dict[str, Any]]
+    ) -> list[tuple[dict[str, Any], list[str]]]:
+        """将提醒时间按所属里程碑分组。
+        对每个提醒，找到时间 >= 提醒时间且差值最小的里程碑作为归属。
+        返回 [(milestone, [remind_times])]，只含有提醒的里程碑，按里程碑时间排序。
+        """
+        milestone_map: dict[int, list[str]] = {i: [] for i in range(len(milestones))}
+        for rt in remind_times:
+            try:
+                r_dt = datetime.fromisoformat(rt)
+            except (ValueError, TypeError):
+                continue
+            best_idx: int | None = None
+            best_delta: Any = None
+            for i, m in enumerate(milestones):
+                try:
+                    m_dt = datetime.fromisoformat(m.get("time", ""))
+                    if m_dt >= r_dt:
+                        delta = m_dt - r_dt
+                        if best_delta is None or delta < best_delta:
+                            best_delta = delta
+                            best_idx = i
+                except (ValueError, TypeError):
+                    pass
+            if best_idx is not None:
+                milestone_map[best_idx].append(rt)
+        return [
+            (milestones[i], milestone_map[i])
+            for i in range(len(milestones))
+            if milestone_map[i]
+        ]
 
     @staticmethod
     def _normalize_iso(time_str: str) -> str:

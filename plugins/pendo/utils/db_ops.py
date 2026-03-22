@@ -78,7 +78,7 @@ def cleanup_db_singleton() -> None:
 
 async def get_user_custom_settings(user_id: str, db: Database) -> dict[str, Any]:
     """获取用户自定义设置（统一入口）"""
-    from ..utils.time_utils import parse_custom_settings
+    from ..utils.settings_utils import parse_custom_settings
 
     settings = await run_sync(db.settings.get_user_settings, user_id)
     return parse_custom_settings(settings)
@@ -88,7 +88,7 @@ async def get_user_settings_bundle_map(
     user_ids: list[str], db: Database
 ) -> dict[str, dict[str, Any]]:
     """Batch load raw and custom user settings for scheduled jobs."""
-    from ..utils.time_utils import parse_custom_settings
+    from ..utils.settings_utils import parse_custom_settings
 
     if not user_ids:
         return {}

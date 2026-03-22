@@ -24,13 +24,10 @@ from .time_utils import (
     parse_diary_range,
     parse_delay_time,
     parse_hhmm_to_minutes,
-    # 格式化
-    format_datetime,
-    format_date,
-    format_time,
-    truncate_text,
     parse_time_offset,
-    # 设置
+    parse_remind_times,
+)
+from .settings_utils import (
     parse_custom_settings,
     save_user_setting,
 )
@@ -58,12 +55,8 @@ __all__ = [
     'parse_diary_range',
     'parse_delay_time',
     'parse_hhmm_to_minutes',
-    # 格式化
-    'format_datetime',
-    'format_date',
-    'format_time',
-    'truncate_text',
     'parse_time_offset',
+    'parse_remind_times',
     # 设置
     'parse_custom_settings',
     'save_user_setting',

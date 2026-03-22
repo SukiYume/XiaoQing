@@ -12,8 +12,8 @@ from ..utils.time_utils import (
     parse_hhmm_to_minutes,
     parse_and_localize,
     now_in_timezone,
-    parse_custom_settings,
 )
+from ..utils.settings_utils import parse_custom_settings
 from ..utils.formatters import ItemFormatter
 
 logger = logging.getLogger(__name__)

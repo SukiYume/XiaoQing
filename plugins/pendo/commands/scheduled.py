@@ -10,7 +10,8 @@ from core.plugin_base import run_sync, segments
 from ..services.db import Database
 from ..services.reminder import ReminderService
 from ..services.ai_parser import AIParser
-from ..utils.time_utils import get_user_now_from_settings, save_user_setting
+from ..utils.time_utils import get_user_now_from_settings
+from ..utils.settings_utils import save_user_setting
 from ..utils.db_ops import (
     get_database,
     get_user_custom_settings as _get_user_custom_settings,
