@@ -96,7 +96,8 @@ class LedgerHandler(DbOpsMixin):
             "• /pendo ledger quick <金额> <描述> [cat:分类] [pay:方式] [in] - 快速记账\n"
             "• /pendo ledger list [范围] - 查看账目\n"
             "• /pendo ledger view <id> - 查看详情\n"
-            "• /pendo ledger edit <id> <字段:值> - 编辑\n"
+            "• /pendo ledger edit <id> <字段:值> ... - 编辑\n"
+            "  字段: amount: title: cat: pay: dir: date: remark:\n"
             "• /pendo ledger delete <id> - 删除\n"
             "• /pendo ledger summary [范围] - 收支汇总"
         )
@@ -508,11 +509,26 @@ class LedgerHandler(DbOpsMixin):
     ) -> CommandMessage:
         """编辑账目
 
-        格式: /pendo ledger edit <id> <金额|描述|cat:分类|pay:方式|in/out>
+        格式: /pendo ledger edit <id> [amount:金额] [title:描述] [cat:分类] [pay:方式] [dir:in/out] [date:日期] [remark:备注]
+        所有字段均通过 key:value 显式指定
         """
         parts = args.split(maxsplit=1)
         if len(parts) < 2:
-            return {"status": "error", "message": "❌ 用法: /pendo ledger edit <id> <新内容>"}
+            return {
+                "status": "error",
+                "message": (
+                    "❌ 用法: /pendo ledger edit <id> <字段:值> ...\n\n"
+                    "可修改字段：\n"
+                    "• amount:金额 - 修改金额\n"
+                    "• title:描述 - 修改描述\n"
+                    "• cat:分类 - 修改分类\n"
+                    "• pay:方式 - 修改支付方式\n"
+                    "• dir:in/out - 修改收支方向\n"
+                    "• date:YYYY-MM-DD - 修改日期\n"
+                    "• remark:备注 - 修改备注\n\n"
+                    "示例: /pendo ledger edit abc123 amount:50 cat:交通"
+                ),
+            }
 
         item_id = parts[0].strip()
         edit_str = parts[1]
@@ -520,39 +536,56 @@ class LedgerHandler(DbOpsMixin):
         item = cast(LedgerItem, await self._db_get_and_check(item_id, user_id))
 
         updates: dict[str, Any] = {"type": ItemType.LEDGER.value}
+        field_labels: list[str] = []
 
-        # 解析编辑内容
-        if re.search(r"\bin\b", edit_str):
-            updates["direction"] = "income"
-            edit_str = re.sub(r"\bin\b", "", edit_str).strip()
-        elif re.search(r"\bout\b", edit_str):
-            updates["direction"] = "expense"
-            edit_str = re.sub(r"\bout\b", "", edit_str).strip()
+        # 定义字段解析规则: (regex_pattern, db_field, label, validator_or_None)
+        field_parsers: list[tuple[str, str, str, Any]] = [
+            (r"amount:(\S+)", "amount", "金额", "_parse_amount"),
+            (r"title:(\S+)", "title", "描述", None),
+            (r"cat:(\S+)", "ledger_category", "分类", None),
+            (r"pay:(\S+)", "payment_method", "支付方式", None),
+            (r"dir:(in|out|income|expense)", "direction", "方向", "_parse_direction"),
+            (r"date:(\d{4}-\d{2}-\d{2})", "ledger_date", "日期", None),
+            (r"remark:(\S+)", "remark", "备注", None),
+        ]
 
-        pay_match = re.search(r"pay:(\S+)", edit_str)
-        if pay_match:
-            updates["payment_method"] = pay_match.group(1)
-            edit_str = edit_str.replace(pay_match.group(0), "").strip()
+        for pattern, db_field, label, validator in field_parsers:
+            match = re.search(pattern, edit_str)
+            if match:
+                value = match.group(1)
+                if validator == "_parse_amount":
+                    try:
+                        amount = float(value.replace("￥", "").replace("¥", "").replace(",", ""))
+                        if amount <= 0:
+                            return {"status": "error", "message": "❌ 金额必须大于0"}
+                        updates[db_field] = amount
+                        field_labels.append(f"{label} → ¥{amount:.2f}")
+                    except ValueError:
+                        return {"status": "error", "message": f"❌ 无效金额: {value}"}
+                elif validator == "_parse_direction":
+                    direction = "income" if value in ("in", "income") else "expense"
+                    updates[db_field] = direction
+                    field_labels.append(f"{label} → {_direction_label(direction)}")
+                else:
+                    updates[db_field] = value
+                    field_labels.append(f"{label} → {value}")
 
-        cat_match = re.search(r"cat:(\S+)", edit_str)
-        if cat_match:
-            updates["ledger_category"] = cat_match.group(1)
-            edit_str = edit_str.replace(cat_match.group(0), "").strip()
-
-        # 剩余内容：尝试解析为金额，否则当描述
-        if edit_str:
-            try:
-                amount = float(edit_str.replace("￥", "").replace("¥", "").replace(",", ""))
-                if amount > 0:
-                    updates["amount"] = amount
-            except ValueError:
-                updates["title"] = edit_str
+        if len(updates) <= 1:  # only "type" key
+            return {
+                "status": "error",
+                "message": (
+                    "❌ 未识别到有效字段\n\n"
+                    "可用字段: amount: title: cat: pay: dir: date: remark:\n"
+                    "示例: /pendo ledger edit abc123 amount:50 cat:交通"
+                ),
+            }
 
         await self._db_update_with_log(item_id, updates, user_id, action="edit_ledger")
 
+        changes = "\n".join(f"  • {fl}" for fl in field_labels)
         return {
             "status": "success",
-            "message": f"✅ 已更新账目 `{item_id}`\n\n💡 /pendo undo 可撤销编辑",
+            "message": f"✅ 已更新账目 `{item_id}`\n\n{changes}\n\n💡 /pendo undo 可撤销编辑",
         }
 
     # ============================================================
