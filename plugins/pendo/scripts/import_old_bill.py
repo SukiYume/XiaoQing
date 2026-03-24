@@ -145,7 +145,6 @@ def import_csv(dry_run: bool = False, owner_id: str = DEFAULT_OWNER_ID):
                 amount,             # amount
                 direction,          # direction
                 ledger_category,    # ledger_category
-                "",                 # payment_method (CSV中无数据)
                 ledger_date,        # ledger_date
                 "",                 # remark
             ))
@@ -177,13 +176,28 @@ def import_csv(dry_run: bool = False, owner_id: str = DEFAULT_OWNER_ID):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
+    # 确保 ledger 列存在（生产环境可能还没跑过插件migration）
+    existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(items)").fetchall()}
+    ledger_columns = [
+        ("amount", "REAL DEFAULT 0"),
+        ("direction", "TEXT DEFAULT ''"),
+        ("ledger_category", "TEXT DEFAULT ''"),
+        ("ledger_date", "TEXT DEFAULT ''"),
+        ("remark", "TEXT DEFAULT ''"),
+    ]
+    for col_name, col_def in ledger_columns:
+        if col_name not in existing_cols:
+            cursor.execute(f"ALTER TABLE items ADD COLUMN {col_name} {col_def}")
+            print(f"  已添加列: {col_name}")
+    conn.commit()
+
     sql = """
     INSERT INTO items (
         id, type, title, content, tags, category,
         created_at, updated_at, owner_id, context, visibility,
         attachments, ai_meta, deleted, deleted_at,
-        amount, direction, ledger_category, payment_method, ledger_date, remark
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        amount, direction, ledger_category, ledger_date, remark
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     try:

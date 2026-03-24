@@ -20,7 +20,6 @@ from ..config import (
     PendoConfig,
     LEDGER_EXPENSE_CATEGORIES,
     LEDGER_INCOME_CATEGORIES,
-    LEDGER_PAYMENT_METHODS,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,11 +92,11 @@ class LedgerHandler(DbOpsMixin):
         return (
             "💰 **记账帮助**\n\n"
             "• /pendo ledger add - 交互式记账\n"
-            "• /pendo ledger quick <金额> <描述> [cat:分类] [pay:方式] [in] - 快速记账\n"
+            "• /pendo ledger quick <金额> <描述> [cat:分类] [in] - 快速记账\n"
             "• /pendo ledger list [范围] - 查看账目\n"
             "• /pendo ledger view <id> - 查看详情\n"
             "• /pendo ledger edit <id> <字段:值> ... - 编辑\n"
-            "  字段: amount: title: cat: pay: dir: date: remark:\n"
+            "  字段: amount: title: cat: dir: date: remark:\n"
             "• /pendo ledger delete <id> - 删除\n"
             "• /pendo ledger summary [范围] - 收支汇总"
         )
@@ -150,9 +149,7 @@ class LedgerHandler(DbOpsMixin):
         elif step == "category":
             return await self._step_category(text, data, session, context)
         elif step == "description":
-            return await self._step_description(text, data, session, context)
-        elif step == "payment":
-            return await self._step_payment(user_id, text, data, session, context, group_id)
+            return await self._step_description(user_id, text, data, session, context, group_id)
         else:
             return {"status": "error", "message": "❌ 会话状态异常"}
 
@@ -167,9 +164,8 @@ class LedgerHandler(DbOpsMixin):
         else:
             return {"status": "info", "message": "请输入 1(支出) 或 2(收入)"}
 
-        session["data"] = data
-        session["step"] = "amount"
-        await safe_create_session(context, initial_data=session, timeout=PendoConfig.SESSION_TIMEOUT_SECONDS)
+        session.set("data", data)
+        session.set("step", "amount")
 
         return {"status": "success", "message": "💰 请输入金额（数字）："}
 
@@ -185,9 +181,8 @@ class LedgerHandler(DbOpsMixin):
             return {"status": "info", "message": "❌ 请输入有效的数字金额："}
 
         data["amount"] = amount
-        session["data"] = data
-        session["step"] = "category"
-        await safe_create_session(context, initial_data=session, timeout=PendoConfig.SESSION_TIMEOUT_SECONDS)
+        session.set("data", data)
+        session.set("step", "category")
 
         # 根据收支方向显示不同的分类
         categories = (
@@ -232,52 +227,20 @@ class LedgerHandler(DbOpsMixin):
             return {"status": "info", "message": "❌ 无效的分类，请输入编号或分类名："}
 
         data["ledger_category"] = category_name
-        session["data"] = data
-        session["step"] = "description"
-        await safe_create_session(context, initial_data=session, timeout=PendoConfig.SESSION_TIMEOUT_SECONDS)
+        session.set("data", data)
+        session.set("step", "description")
 
         return {"status": "success", "message": "📝 请输入描述（简要说明，如\"午饭\"）："}
 
     async def _step_description(
-        self, text: str, data: dict, session: dict, context: PendoContext
+        self, user_id: str, text: str, data: dict, session: dict,
+        context: PendoContext, group_id: int | None
     ) -> CommandMessage:
-        """步骤4: 输入描述"""
+        """步骤4: 输入描述，然后保存"""
         if not text:
             return {"status": "info", "message": "❌ 描述不能为空，请输入："}
 
         data["title"] = text
-        session["data"] = data
-        session["step"] = "payment"
-        await safe_create_session(context, initial_data=session, timeout=PendoConfig.SESSION_TIMEOUT_SECONDS)
-
-        lines = ["💳 请选择支付方式：\n"]
-        for i, pm in enumerate(LEDGER_PAYMENT_METHODS, 1):
-            lines.append(f"{i}.{pm['name']}")
-
-        lines.append("\n(输入编号或名称，直接回车默认微信)")
-        return {"status": "success", "message": "  ".join(lines)}
-
-    async def _step_payment(
-        self, user_id: str, text: str, data: dict, session: dict,
-        context: PendoContext, group_id: int | None
-    ) -> CommandMessage:
-        """步骤5: 选择支付方式，然后保存"""
-        payment = "微信"  # 默认
-
-        if text:
-            # 尝试按编号匹配
-            try:
-                idx = int(text)
-                if 1 <= idx <= len(LEDGER_PAYMENT_METHODS):
-                    payment = LEDGER_PAYMENT_METHODS[idx - 1]["name"]
-            except ValueError:
-                # 按名称匹配
-                for pm in LEDGER_PAYMENT_METHODS:
-                    if pm["name"] == text or pm["id"] == text.lower():
-                        payment = pm["name"]
-                        break
-
-        data["payment_method"] = payment
 
         # 结束会话并保存
         from ..utils.session_utils import safe_end_session
@@ -299,7 +262,6 @@ class LedgerHandler(DbOpsMixin):
             amount=data.get("amount", 0.0),
             direction=data.get("direction", "expense"),
             ledger_category=data.get("ledger_category", "其他"),
-            payment_method=data.get("payment_method", "微信"),
             ledger_date=ledger_date,
             remark=data.get("remark", ""),
             context={"group_id": group_id} if group_id else {},
@@ -318,7 +280,6 @@ class LedgerHandler(DbOpsMixin):
             f"{_direction_icon(direction)} {_direction_label(direction)} ¥{amount:.2f}\n"
             f"{cat_icon} 分类：{data.get('ledger_category', '其他')}\n"
             f"📝 描述：{data.get('title', '')}\n"
-            f"💳 支付：{data.get('payment_method', '微信')}\n"
             f"📅 日期：{ledger_date}\n"
             f"🔖 ID：`{item_id}`"
         )
@@ -334,13 +295,13 @@ class LedgerHandler(DbOpsMixin):
     ) -> CommandMessage:
         """快速记账
 
-        格式: /pendo ledger quick <金额> <描述> [cat:分类] [pay:方式] [in]
+        格式: /pendo ledger quick <金额> <描述> [cat:分类] [in]
         默认为支出，加 in 标记为收入
         """
         if not text:
             return {
                 "status": "error",
-                "message": "❌ 用法: /pendo ledger quick <金额> <描述> [cat:分类] [pay:方式] [in]",
+                "message": "❌ 用法: /pendo ledger quick <金额> <描述> [cat:分类] [in]",
             }
 
         # 解析收支方向
@@ -348,13 +309,6 @@ class LedgerHandler(DbOpsMixin):
         if re.search(r"\bin\b", text):
             direction = "income"
             text = re.sub(r"\bin\b", "", text).strip()
-
-        # 解析支付方式
-        payment = "微信"
-        pay_match = re.search(r"pay:(\S+)", text)
-        if pay_match:
-            payment = pay_match.group(1)
-            text = text.replace(pay_match.group(0), "").strip()
 
         # 解析分类
         ledger_cat = "其他"
@@ -381,7 +335,6 @@ class LedgerHandler(DbOpsMixin):
             "amount": amount,
             "direction": direction,
             "ledger_category": ledger_cat,
-            "payment_method": payment,
             "title": title,
         }
 
@@ -461,7 +414,7 @@ class LedgerHandler(DbOpsMixin):
             message += f"{icon} {sign}¥{item.amount:.2f} {cat_icon}{item.ledger_category}"
             if item.title:
                 message += f" {item.title}"
-            message += f"\n   📅{date_str} 💳{item.payment_method} `{item.id}`\n\n"
+            message += f"\n   📅{date_str} `{item.id}`\n\n"
 
         if has_more and not show_all:
             message += f"... (使用 'all' 显示全部或 'page:{page_num + 1}' 查看下一页)\n"
@@ -489,7 +442,6 @@ class LedgerHandler(DbOpsMixin):
             f"{icon} {_direction_label(item.direction)} ¥{item.amount:.2f}\n"
             f"{cat_icon} 分类：{item.ledger_category}\n"
             f"📝 描述：{item.title or '无'}\n"
-            f"💳 支付：{item.payment_method}\n"
             f"📅 日期：{item.ledger_date or '未知'}\n"
             f"🔖 ID：`{item.id}`\n"
             f"⏰ 创建：{ItemFormatter.format_datetime(item.created_at)}"
@@ -509,7 +461,7 @@ class LedgerHandler(DbOpsMixin):
     ) -> CommandMessage:
         """编辑账目
 
-        格式: /pendo ledger edit <id> [amount:金额] [title:描述] [cat:分类] [pay:方式] [dir:in/out] [date:日期] [remark:备注]
+        格式: /pendo ledger edit <id> [amount:金额] [title:描述] [cat:分类] [dir:in/out] [date:日期] [remark:备注]
         所有字段均通过 key:value 显式指定
         """
         parts = args.split(maxsplit=1)
@@ -522,7 +474,6 @@ class LedgerHandler(DbOpsMixin):
                     "• amount:金额 - 修改金额\n"
                     "• title:描述 - 修改描述\n"
                     "• cat:分类 - 修改分类\n"
-                    "• pay:方式 - 修改支付方式\n"
                     "• dir:in/out - 修改收支方向\n"
                     "• date:YYYY-MM-DD - 修改日期\n"
                     "• remark:备注 - 修改备注\n\n"
@@ -543,7 +494,6 @@ class LedgerHandler(DbOpsMixin):
             (r"amount:(\S+)", "amount", "金额", "_parse_amount"),
             (r"title:(\S+)", "title", "描述", None),
             (r"cat:(\S+)", "ledger_category", "分类", None),
-            (r"pay:(\S+)", "payment_method", "支付方式", None),
             (r"dir:(in|out|income|expense)", "direction", "方向", "_parse_direction"),
             (r"date:(\d{4}-\d{2}-\d{2})", "ledger_date", "日期", None),
             (r"remark:(\S+)", "remark", "备注", None),
@@ -575,7 +525,7 @@ class LedgerHandler(DbOpsMixin):
                 "status": "error",
                 "message": (
                     "❌ 未识别到有效字段\n\n"
-                    "可用字段: amount: title: cat: pay: dir: date: remark:\n"
+                    "可用字段: amount: title: cat: dir: date: remark:\n"
                     "示例: /pendo ledger edit abc123 amount:50 cat:交通"
                 ),
             }

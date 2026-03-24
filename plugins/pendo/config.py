@@ -286,11 +286,3 @@ LEDGER_INCOME_CATEGORIES = [
     {"id": "other", "name": "其他", "icon": "📌"},
 ]
 
-LEDGER_PAYMENT_METHODS = [
-    {"id": "wechat", "name": "微信"},
-    {"id": "alipay", "name": "支付宝"},
-    {"id": "cash", "name": "现金"},
-    {"id": "bankcard", "name": "银行卡"},
-    {"id": "creditcard", "name": "信用卡"},
-    {"id": "other", "name": "其他"},
-]
