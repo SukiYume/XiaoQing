@@ -557,6 +557,8 @@ class XiaoQingApp:
             async with self._ensure_reload_lock():
                 logger.info("Starting plugin reload...")
                 for name in list(self.plugin_manager.list_plugins()):
+                    # 清理该插件的所有活跃 session，避免 reload 后残留旧状态
+                    await self.session_manager.clear_plugin_sessions(name)
                     await self.plugin_manager.unload_plugin(name)
 
                 self.plugin_manager.load_all()
