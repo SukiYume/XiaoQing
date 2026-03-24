@@ -194,7 +194,6 @@ REMINDER_POLICIES = {
 
 # 日记模板配置
 DIARY_TEMPLATES = {
-    "default": {"name": "自由日记", "prompts": []},
     "three_good": {
         "name": "三件好事",
         "prompts": ["今天发生的第一件好事:", "今天发生的第二件好事:", "今天发生的第三件好事:"],

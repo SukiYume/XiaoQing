@@ -71,8 +71,7 @@ class DiaryHandler(DbOpsMixin):
         - /pendo diary delete <日期> -> 删除日记
         """
         if not args or not args.strip():
-            # 默认显示模板选择
-            return await self.show_templates(user_id, context)
+            return {"status": "success", "message": self._show_help()}
 
         parts = args.split(maxsplit=1)
         command = parts[0].lower()
@@ -80,9 +79,9 @@ class DiaryHandler(DbOpsMixin):
 
         handlers = {
             "add": lambda: self.add_diary(user_id, rest, context, group_id),
-            "list": lambda: self.list_diaries(user_id, rest or "today", context),
+            "list": lambda: self.list_diaries(user_id, rest, context),
             "view": lambda: self.view_diary(user_id, rest, context),
-            "template": lambda: self.show_templates(user_id, context),
+            "template": lambda: self._handle_template_command(user_id, rest, context, group_id),
             "delete": lambda: self.delete_diary(user_id, rest, context),
         }
 
@@ -94,19 +93,8 @@ class DiaryHandler(DbOpsMixin):
         if args.strip() in self.templates:
             return await self.start_template_session(user_id, args.strip(), context, group_id)
 
-        # 未知命令，给出提示
-        return {
-            "status": "error",
-            "message": (
-                f"❌ 未知日记命令: {command}\n\n"
-                "可用命令:\n"
-                "• /pendo diary add [日期] <内容> - 写日记\n"
-                "• /pendo diary list [范围] - 查看日记列表\n"
-                "• /pendo diary view <日期> - 查看日记详情\n"
-                "• /pendo diary template - 查看模板\n"
-                "• /pendo diary delete <日期> - 删除日记"
-            ),
-        }
+        # 未知命令，给出帮助
+        return {"status": "error", "message": f"❌ 未知日记命令: {command}\n\n{self._show_help()}"}
 
     async def add_diary(
         self, user_id: str, args: str, context: PendoContext, group_id: int | None = None
@@ -119,7 +107,10 @@ class DiaryHandler(DbOpsMixin):
         - /pendo diary add weather:晴 location:北京 <内容> -> 带天气和地点
         """
         if not args:
-            return await self.show_templates(user_id, context)
+            return {
+                "status": "error",
+                "message": "❌ 请提供日记内容\n\n用法: /pendo diary add [日期] <内容> [weather:xxx] [location:xxx]",
+            }
 
         # 尝试解析第一个参数是否是日期
         parts = args.split(maxsplit=1)
@@ -300,14 +291,16 @@ class DiaryHandler(DbOpsMixin):
         """列出日记
 
         格式：
-        - /pendo diary list -> 默认today
+        - /pendo diary list -> 默认本月
         - /pendo diary list today/tomorrow/week/year
         - /pendo diary list YYYY-MM (如 2026-02)
         - /pendo diary list last7d
         - /pendo diary list start..end
         """
-        # 解析时间范围
-        start_date, end_date = parse_diary_range(range_str or "today")
+        # 解析时间范围（默认本月）
+        if not range_str or not range_str.strip():
+            range_str = datetime.now().strftime("%Y-%m")
+        start_date, end_date = parse_diary_range(range_str)
 
         # 查询日记
         diaries = await self._fetch_diaries(user_id, start_date, end_date)
@@ -474,42 +467,87 @@ class DiaryHandler(DbOpsMixin):
             user_id, diary_date, content.strip(), context, template_id, group_id
         )
 
-    async def use_template(self, user_id: str, template_id: str, diary_date: str) -> CommandMessage:
-        """使用模板（非会话模式）"""
-        template = self.templates.get(template_id)
-        if not template:
-            return {"status": "error", "message": "❌ 模板不存在"}
-
-        message = f"📋 **{template['name']}** ({diary_date})\n"
-        message += "请复制以下内容填写:\n\n"
-
-        for prompt in template.get("prompts", []):
-            message += f"{prompt}\n\n"
-
-        return {"status": "success", "message": message}
-
-    async def show_templates(
-        self, user_id: str, context: PendoContext, diary_date: str | None = None
+    async def _handle_template_command(
+        self, user_id: str, args: str, context: PendoContext, group_id: int | None = None
     ) -> CommandMessage:
-        """显示模板列表"""
-        message = "📋 **日记模板**\n\n"
-        message += "选择一个模板开始写日记:\n\n"
+        """处理模板命令
 
-        for template_id, template in self.templates.items():
-            message += f"**{template['name']}** (`{template_id}`)\n"
-            if template.get("prompts"):
-                for prompt in template["prompts"][:2]:
-                    message += f"  • {prompt}\n"
-                if len(template["prompts"]) > 2:
-                    message += f"  • ...\n"
+        支持:
+        - /pendo diary template          -> 列出所有模板
+        - /pendo diary template 1        -> 按编号启动模板
+        - /pendo diary template 三件好事 -> 按名称启动模板
+        - /pendo diary template mood     -> 按ID启动模板
+        """
+        if not args or not args.strip():
+            return self._show_template_list()
+
+        arg = args.strip()
+        usable = self._get_usable_templates()
+
+        # 按编号匹配
+        try:
+            idx = int(arg)
+            if 1 <= idx <= len(usable):
+                template_id = usable[idx - 1][0]
+                return await self.start_template_session(user_id, template_id, context, group_id)
+            else:
+                return {"status": "error", "message": f"❌ 无效编号，可选 1-{len(usable)}"}
+        except ValueError:
+            pass
+
+        # 按名称匹配
+        for tid, tpl in usable:
+            if tpl["name"] == arg:
+                return await self.start_template_session(user_id, tid, context, group_id)
+
+        # 按ID匹配
+        if arg in self.templates and self.templates[arg].get("prompts"):
+            return await self.start_template_session(user_id, arg, context, group_id)
+
+        return {"status": "error", "message": f"❌ 未找到模板: {arg}\n\n{self._show_template_list()['message']}"}
+
+    def _get_usable_templates(self) -> list[tuple[str, dict]]:
+        """获取有 prompts 的可用模板列表"""
+        return [(tid, tpl) for tid, tpl in self.templates.items() if tpl.get("prompts")]
+
+    def _show_template_list(self) -> CommandMessage:
+        """显示模板列表"""
+        usable = self._get_usable_templates()
+
+        message = "📋 **日记模板**\n\n"
+        for i, (tid, tpl) in enumerate(usable, 1):
+            prompts = tpl.get("prompts", [])
+            message += f"**{i}. {tpl['name']}**\n"
+            for prompt in prompts[:2]:
+                message += f"  • {prompt}\n"
+            if len(prompts) > 2:
+                message += f"  • ...(共{len(prompts)}题)\n"
             message += "\n"
 
-        message += "\n用法:\n"
-        message += "• /pendo diary add <内容> - 直接写日记\n"
-        message += "• /pendo diary add <日期> <内容> - 写指定日期日记\n"
-        message += "• /pendo diary <模板ID> - 使用模板写日记"
+        message += "用法: /pendo diary template <编号|名称>"
+        return {"status": "success", "message": message}
 
-        return {"status": "info", "message": message}
+    def _show_help(self) -> str:
+        """显示日记帮助信息"""
+        usable = self._get_usable_templates()
+        template_hint = " | ".join(f"{i}.{tpl['name']}" for i, (_, tpl) in enumerate(usable, 1))
+
+        return (
+            "📔 **日记帮助**\n\n"
+            "**写日记:**\n"
+            "• /pendo diary add <内容> - 写今天的日记\n"
+            "• /pendo diary add <日期> <内容> - 写指定日期\n"
+            "  同一天再写会自动追加\n\n"
+            "**模板写日记:**\n"
+            f"• /pendo diary template <编号> - 模板引导写日记\n"
+            f"  可选: {template_hint}\n\n"
+            "**查看:**\n"
+            "• /pendo diary list [范围] - 日记列表(默认本月)\n"
+            "  范围: today, week, YYYY-MM, last7d\n"
+            "• /pendo diary view <日期> - 查看详情\n\n"
+            "**其他:**\n"
+            "• /pendo diary delete <日期> - 删除日记"
+        )
 
     async def _get_diary_by_date(self, user_id: str, diary_date: str) -> DiaryItem | None:
         """根据日期获取日记，返回DiaryItem dataclass"""
