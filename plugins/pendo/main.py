@@ -170,6 +170,9 @@ async def _handle_active_session(
     Returns:
         消息列表
     """
+    # 确保 services 已初始化（session 分支不经过 _build_command_router）
+    _get_services(context)
+
     session = await context.get_session()
 
     # 检查是否是退出命令
@@ -453,13 +456,10 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
     handlers = {
         "event": _help_or_exec(event_handler.handle, "event"),
         "todo": _help_or_exec(task_handler.handle, "todo"),
-        "task": _help_or_exec(task_handler.handle, "todo"),
         "note": _help_or_exec(note_handler.handle, "note"),
         "diary": _help_or_exec(diary_handler.handle, "diary"),
         "search": search_handler.search,
         "ledger": _help_or_exec(ledger_handler.handle, "ledger"),
-        "bill": _help_or_exec(ledger_handler.handle, "ledger"),
-        "finance": _help_or_exec(ledger_handler.handle, "ledger"),
         "export": _export_cmd,
         "import": _import_cmd,
         "settings": _settings_cmd,
@@ -542,7 +542,7 @@ HELP_MAP = {
     "ledger": [
         "**记账 (Ledger):**",
         "• /pendo ledger add - 交互式记账(多轮引导)",
-        "• /pendo ledger quick <金额> <描述> [cat:分类] [pay:方式] [in] - 快速记账",
+        "• /pendo ledger quick <金额> <描述> [cat:分类] [in] - 快速记账",
         "  - 默认支出，加 in 标记收入",
         "  - 例: /pendo ledger quick 35.5 午饭 cat:餐饮",
         "  - 例: /pendo ledger quick 5000 工资 cat:工资 in",
@@ -550,16 +550,19 @@ HELP_MAP = {
         "  - 范围: today, week, YYYY-MM, last7d, start..end",
         "• /pendo ledger view <id> - 查看账目详情",
         "• /pendo ledger edit <id> <字段:值> ... - 编辑账目",
-        "  - 字段: amount: title: cat: pay: dir:in/out date: remark:",
+        "  - 字段: amount: title: cat: dir:in/out date: remark:",
         "  - 例: /pendo ledger edit abc123 amount:50 cat:交通",
         "• /pendo ledger delete <id> - 删除账目",
         "• /pendo ledger summary [范围] - 收支汇总统计",
     ],
     "search": [
         "**搜索 (Search):**",
-        "• /pendo search <关键词> - 全文搜索",
-        "• /pendo search <关键词> type=event/task/note/diary",
-        "• /pendo search <关键词> range=last7d/2026-01",
+        "• /pendo search <关键词> - 全文搜索(标题/内容/备注/分类)",
+        "• /pendo search <关键词> type=event/task/note/diary/ledger",
+        "• /pendo search <关键词> range=today/week/last7d/YYYY-MM",
+        "• /pendo search <关键词> status=todo/done (待办)",
+        "• /pendo search <关键词> direction=income/expense (记账)",
+        "• /pendo search <关键词> category=<分类>",
     ],
     "reminder": [
         "**提醒操作:**",
@@ -575,13 +578,14 @@ HELP_MAP = {
     ],
     "settings": [
         "**设置 (Settings):**",
-        "• /pendo settings view - 查看当前设置",
+        "• /pendo settings [view] - 查看当前设置",
         "• /pendo settings reminder on/off - 开关提醒",
         "• /pendo settings timezone <时区> - 设置时区",
         "• /pendo settings quiet_hours <开始>-<结束> - 静默时段",
-        "• /pendo settings daily_report <时间> - 每日简报时间",
-        "• /pendo settings diary_remind <时间> - 日记提醒时间",
-        "• /pendo settings privacy on/off - 开关隐私模式",
+        "• /pendo settings daily_report <HH:MM> - 每日简报时间",
+        "• /pendo settings daily_briefing on/off - 开关每日简报",
+        "• /pendo settings diary_remind <HH:MM> - 日记提醒时间",
+        "• /pendo settings privacy on/off - 隐私模式",
     ],
     "common": ["**其他操作:**", "• /pendo undo [分钟] - 撤销删除或编辑 (默认5分钟内)"],
 }
