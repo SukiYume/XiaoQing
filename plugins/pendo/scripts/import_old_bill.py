@@ -37,9 +37,9 @@ from datetime import datetime
 
 # 路径
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-CSV_PATH = os.path.join(PROJECT_ROOT, "plugins", "pendo", "data", "old_bill.csv")
-DB_PATH = os.path.join(PROJECT_ROOT, "plugins", "pendo", "data", "pendo.db")
+PENDO_DIR = os.path.dirname(SCRIPT_DIR)  # plugins/pendo
+CSV_PATH = os.path.join(PENDO_DIR, "data", "old_bill.csv")
+DB_PATH = os.path.join(PENDO_DIR, "data", "pendo.db")
 
 DEFAULT_OWNER_ID = "1000000001"
 
