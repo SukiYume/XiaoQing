@@ -13,6 +13,40 @@ logger = logging.getLogger(__name__)
 
 CommandHandler = Callable[[str, str, Any], Awaitable[CommandResult]]
 
+# 命令元数据表：(别名列表, 描述, 用法)
+# 不在此表中的命令仍可通过 handlers 字典注册，只是没有别名和描述
+COMMAND_META: dict[str, tuple[list[str], str, str]] = {
+    "confirm": (["确认"], "确认提醒", "/pendo confirm <id>"),
+    "snooze": (["延后"], "延后提醒", "/pendo snooze <id> <时间>"),
+    "undo": (["撤销"], "撤销删除或编辑", "/pendo undo [分钟]"),
+    "event": (
+        ["e", "日程", "事件"],
+        "管理日程",
+        "/pendo event <add|today|tomorrow|week|list|delete> [args]",
+    ),
+    "todo": (
+        ["task", "t", "待办", "任务"],
+        "管理待办事项",
+        "/pendo todo <add|today|list|done|delete> [args]",
+    ),
+    "diary": (["d", "日记"], "写日记和查看日记", "/pendo diary <write|view|list> [args]"),
+    "note": (
+        ["n", "笔记", "想法", "灵感"],
+        "记笔记",
+        "/pendo note <content>",
+    ),
+    "search": (["s", "搜索", "查找"], "搜索内容", "/pendo search <关键词> [type=] [range=] [status=] [direction=] [category=]"),
+    "ledger": (
+        ["bill", "finance", "记账", "账单"],
+        "记账管理",
+        "/pendo ledger <add|quick|list|view|edit|delete|summary> [args]",
+    ),
+    "export": (["导出"], "导出数据", "/pendo export md [range=<时间范围>]"),
+    "import": (["导入"], "导入数据", "/pendo import md <发送文件>"),
+    "settings": (["setting", "设置"], "管理设置", "/pendo settings [key] [value]"),
+    "help": (["h", "帮助", "?"], "显示帮助信息", "/pendo help [command]"),
+}
+
 
 @dataclass
 class CommandInfo:
@@ -57,154 +91,58 @@ class CommandRouter:
         logger.info("CommandRouter initialized with %s commands", len(self.commands))
 
     def _build_command_registry(self) -> dict[str, CommandInfo]:
-        """构建命令注册表（配置驱动）
+        """构建命令注册表
 
-        使用配置数组统一定义所有命令，避免重复的handler解析代码。
-        新增命令时只需在配置数组中添加一项即可。
+        双层注册：
+        1. 已知命令的元数据（别名、描述、用法）从 COMMAND_META 查找
+        2. handlers 字典中传入的所有命令都会被注册，即使没有预定义元数据
+           （此时使用命令名本身作为描述，无别名）
+
+        新增命令时只需在 main.py 的 handlers 字典中添加即可，
+        如需别名/描述，再在 COMMAND_META 中补充。
         """
-        # 统一的handler配置数组
-        # 格式: (命令键, 优先方法列表, 回退方法, 默认handler函数, 别名列表, 描述, 用法)
-        handler_configs: list[
-            tuple[str, list[str], str | None, CommandHandler | None, list[str], str, str]
-        ] = [
-            (
-                "confirm",
-                ["handle_confirm"],
-                None,
-                None,
-                ["确认"],
-                "确认提醒",
-                "/pendo confirm <id>",
-            ),
-            (
-                "snooze",
-                ["handle_snooze"],
-                None,
-                None,
-                ["延后"],
-                "延后提醒",
-                "/pendo snooze <id> <时间>",
-            ),
-            ("undo", ["handle_undo"], None, None, ["撤销"], "撤销删除或编辑", "/pendo undo [分钟]"),
-            (
-                "event",
-                ["handle_event_command", "handle_event"],
-                "handle",
-                None,
-                ["e", "日程", "事件"],
-                "管理日程",
-                "/pendo event <add|today|tomorrow|week|list|delete> [args]",
-            ),
-            (
-                "todo",
-                ["handle_task_command", "handle_task"],
-                "handle",
-                None,
-                ["task", "t", "待办", "任务"],
-                "管理待办事项",
-                "/pendo todo <add|today|list|done|delete> [args]",
-            ),
-            (
-                "diary",
-                ["handle_diary_command", "handle_diary"],
-                "handle",
-                None,
-                ["d", "日记"],
-                "写日记和查看日记",
-                "/pendo diary <write|view|list> [args]",
-            ),
-            (
-                "note",
-                ["handle_note_command", "handle_note"],
-                "handle",
-                None,
-                ["n", "笔记", "想法", "灵感"],
-                "记笔记",
-                "/pendo note <content>",
-            ),
-            (
-                "search",
-                ["search"],
-                "handle",
-                None,
-                ["s", "搜索", "查找"],
-                "搜索内容",
-                "/pendo search <关键词> [type=<类型>] [range=<时间范围>]",
-            ),
-            (
-                "export",
-                ["handle_export"],
-                None,
-                self._make_unimplemented_handler("export"),
-                ["导出"],
-                "导出数据",
-                "/pendo export md [range=<时间范围>]",
-            ),
-            (
-                "import",
-                ["handle_import"],
-                None,
-                self._make_unimplemented_handler("import"),
-                ["导入"],
-                "导入数据",
-                "/pendo import md <发送文件>",
-            ),
-            (
-                "settings",
-                ["handle_settings"],
-                None,
-                self._make_unimplemented_handler("settings"),
-                ["setting", "设置"],
-                "管理设置",
-                "/pendo settings [key] [value]",
-            ),
-            (
-                "help",
-                ["handle_help"],
-                None,
-                self._handle_help,
-                ["h", "帮助", "?"],
-                "显示帮助信息",
-                "/pendo help [command]",
-            ),
-        ]
-
-        # 构建命令字典
         commands = {}
-        for config in handler_configs:
-            key, preferred_attrs, fallback_attr, default_handler, aliases, description, usage = (
-                config
-            )
 
-            # 解析handler
-            handler = self._resolve_handler(key, preferred_attrs, fallback_attr) or default_handler
+        # 注册所有传入的 handler
+        for key, handler_obj in self.handlers.items():
+            # 解析 handler
+            handler = self._resolve_handler_from_obj(handler_obj)
             if handler is None:
                 handler = self._make_unimplemented_handler(key)
+
+            # 查找元数据（别名、描述、用法）
+            meta = COMMAND_META.get(key)
+            if meta:
+                aliases, description, usage = meta
+            else:
+                aliases, description, usage = [], key, f"/pendo {key}"
 
             commands[key] = CommandInfo(
                 name=key, handler=handler, aliases=aliases, description=description, usage=usage
             )
 
+        # 确保 help 命令始终存在
+        if "help" not in commands:
+            meta = COMMAND_META["help"]
+            commands["help"] = CommandInfo(
+                name="help",
+                handler=self._handle_help,
+                aliases=meta[0],
+                description=meta[1],
+                usage=meta[2],
+            )
+
         return commands
 
-    def _resolve_handler(
-        self, key: str, preferred_attrs: list[str], fallback_attr: str | None
-    ) -> CommandHandler | None:
+    def _resolve_handler_from_obj(self, handler_obj: object) -> CommandHandler | None:
         """解析命令处理函数，支持传入可调用或对象方法"""
-        handler = self.handlers.get(key)
-        if handler is None:
+        if handler_obj is None:
             return None
-        if callable(handler):
-            return cast(CommandHandler, handler)
-        for attr in preferred_attrs:
-            if hasattr(handler, attr):
-                resolved = getattr(handler, attr)
-                if callable(resolved):
-                    return cast(CommandHandler, resolved)
-        if fallback_attr and hasattr(handler, fallback_attr):
-            resolved = getattr(handler, fallback_attr)
-            if callable(resolved):
-                return cast(CommandHandler, resolved)
+        if callable(handler_obj):
+            return cast(CommandHandler, handler_obj)
+        # 对象实例：尝试 handle 方法
+        if hasattr(handler_obj, "handle") and callable(getattr(handler_obj, "handle")):
+            return cast(CommandHandler, getattr(handler_obj, "handle"))
         return None
 
     def _build_alias_map(self) -> dict[str, str]:
