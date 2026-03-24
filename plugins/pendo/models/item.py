@@ -46,6 +46,7 @@ class ItemType(Enum):
     TASK = "task"  # 待办
     NOTE = "note"  # 笔记/想法
     DIARY = "diary"  # 日记
+    LEDGER = "ledger"  # 记账
 
 
 class TaskStatus(Enum):
@@ -170,12 +171,28 @@ class DiaryItem(Item):
     diary_date: Optional[str] = None  # 日记对应的日期(YYYY-MM-DD)
 
 
+@dataclass
+class LedgerItem(Item):
+    """记账条目"""
+
+    type: ItemType = ItemType.LEDGER
+
+    # Ledger特有字段
+    amount: float = 0.0                        # 金额（正数）
+    direction: str = "expense"                 # "income" 或 "expense"
+    ledger_category: str = "其他"              # 账目分类（餐饮、交通等）
+    payment_method: str = "微信"               # 支付方式
+    ledger_date: Optional[str] = None          # 账目日期 YYYY-MM-DD
+    remark: str = ""                           # 备注
+
+
 # 类型映射
 ITEM_TYPE_CLASS_MAP = {
     ItemType.EVENT: EventItem,
     ItemType.TASK: TaskItem,
     ItemType.NOTE: NoteItem,
     ItemType.DIARY: DiaryItem,
+    ItemType.LEDGER: LedgerItem,
 }
 
 
