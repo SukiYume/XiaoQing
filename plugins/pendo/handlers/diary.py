@@ -405,16 +405,14 @@ class DiaryHandler(DbOpsMixin):
         # 记录当前问题的答案
         answers = session.get("answers", [])
         answers.append(text)
-        session["answers"] = answers
+        session.set("answers", answers)
 
         # 移动到下一步
         step = session.get("step", 0) + 1
-        session["step"] = step
+        session.set("step", step)
 
         prompts = session.get("prompts", [])
         total_steps = session.get("total_steps", 0)
-
-        # I-3修复：session 始终是字典，直接用字典赋值（删除冗余的 .set() 分支）
 
         # 检查是否完成
         if step >= total_steps:
