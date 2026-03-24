@@ -45,3 +45,11 @@ class ItemFields:
     MOOD = 'mood'
     WEATHER = 'weather'
     TEMPLATE_ID = 'template_id'
+
+    # Ledger 扩展字段
+    AMOUNT = 'amount'
+    DIRECTION = 'direction'
+    LEDGER_CATEGORY = 'ledger_category'
+    PAYMENT_METHOD = 'payment_method'
+    LEDGER_DATE = 'ledger_date'
+    REMARK = 'remark'
