@@ -531,14 +531,12 @@ HELP_MAP = {
     "diary": [
         "**日记 (Diary):**",
         "• /pendo diary add [日期] <内容> [weather:xxx] [location:xxx]",
-        "  - 无日期则写今天的日记",
-        "  - 同一天再写会自动追加到已有日记",
-        "  - 自动分析情绪(开心/悲伤/平静/兴奋/愤怒)",
-        "• /pendo diary list [范围] - 查看日记列表",
+        "  - 无日期则写今天的日记，同一天再写自动追加",
+        "• /pendo diary template [编号|名称] - 模板引导写日记",
+        "  - 1.三件好事 2.今日总结 3.情绪记录",
+        "• /pendo diary list [范围] - 查看日记列表(默认本月)",
         "  - 范围: today, week, YYYY-MM, last7d, start..end",
         "• /pendo diary view <日期> - 查看日记详情",
-        "• /pendo diary template - 查看所有模板",
-        "• /pendo diary <模板ID> - 使用模板写日记(多轮引导)",
         "• /pendo diary delete <日期> - 删除日记",
     ],
     "ledger": [
