@@ -273,7 +273,7 @@ LEDGER_EXPENSE_CATEGORIES = [
     {"id": "social", "name": "社交", "icon": "🎁"},
     {"id": "pet", "name": "宠物", "icon": "🐾"},
     {"id": "sport", "name": "运动", "icon": "🏃"},
-    {"id": "beauty", "name": "美容", "icon": "💄"},
+    {"id": "service", "name": "服务", "icon": "💆"},
     {"id": "travel", "name": "旅行", "icon": "✈️"},
     {"id": "other", "name": "其他", "icon": "📌"},
 ]
