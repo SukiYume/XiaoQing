@@ -50,6 +50,9 @@ async def handle_session_message(
     if session_type == PendoConfig.SESSION_TYPE_EVENT_INFO:
         return await handle_event_info_session(user_id, text, session, context)
 
+    if session_type == PendoConfig.SESSION_TYPE_LEDGER_ADD:
+        return await handle_ledger_add_session(user_id, text, session, context)
+
     return error_result(f"未知的会话类型: {session_type}")
 
 
@@ -171,3 +174,12 @@ async def handle_event_info_session(
         await safe_end_session(context)
 
     return result
+
+
+async def handle_ledger_add_session(
+    user_id: str, text: str, session: SessionData, context: Any
+) -> dict[str, Any]:
+    """处理记账交互式会话"""
+    services = _require_services(context)
+    ledger_handler = services["ledger_handler"]
+    return await ledger_handler.handle_session_step(user_id, text, session, context)
