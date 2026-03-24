@@ -40,6 +40,7 @@ TYPE_ICONS = {
     "note": "📝",
     "diary": "📔",
     "idea": "💡",
+    "ledger": "💰",
 }
 
 # 条目类型名称
@@ -49,6 +50,7 @@ TYPE_NAMES = {
     "note": "📝 笔记",
     "idea": "💡 想法",
     "diary": "📔 日记",
+    "ledger": "💰 记账",
 }
 
 
