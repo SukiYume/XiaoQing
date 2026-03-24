@@ -181,7 +181,6 @@ class LedgerItem(Item):
     amount: float = 0.0                        # 金额（正数）
     direction: str = "expense"                 # "income" 或 "expense"
     ledger_category: str = "其他"              # 账目分类（餐饮、交通等）
-    payment_method: str = "微信"               # 支付方式
     ledger_date: Optional[str] = None          # 账目日期 YYYY-MM-DD
     remark: str = ""                           # 备注
 
