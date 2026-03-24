@@ -50,6 +50,5 @@ class ItemFields:
     AMOUNT = 'amount'
     DIRECTION = 'direction'
     LEDGER_CATEGORY = 'ledger_category'
-    PAYMENT_METHOD = 'payment_method'
     LEDGER_DATE = 'ledger_date'
     REMARK = 'remark'
