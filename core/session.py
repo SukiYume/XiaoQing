@@ -43,6 +43,19 @@ class Session:
         self.data[key] = value
         self.update()
 
+    def __getitem__(self, key: str) -> Any:
+        """支持 session['key'] 读取"""
+        return self.data[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        """支持 session['key'] = value 写入"""
+        self.data[key] = value
+        self.update()
+
+    def __contains__(self, key: str) -> bool:
+        """支持 'key' in session"""
+        return key in self.data
+
     def clear(self) -> None:
         """清空会话数据"""
         self.data.clear()
@@ -81,16 +94,21 @@ class SessionManager:
     ) -> Session:
         """
         创建新会话
-        
+
         如果已存在会话，会覆盖旧会话。
         """
+        # 防御：如果误传了 Session 对象作为 initial_data，提取其 data 字段
+        if isinstance(initial_data, Session):
+            logger.warning("Session object passed as initial_data, extracting .data dict")
+            initial_data = initial_data.data if isinstance(initial_data.data, dict) else {}
+
         async with self._lock:
             key = self._make_key(user_id, group_id)
             session = Session(
                 user_id=user_id,
                 group_id=group_id,
                 plugin_name=plugin_name,
-                data=initial_data or {},
+                data=initial_data if isinstance(initial_data, dict) else {},
                 timeout=timeout or self._default_timeout,
             )
             self._sessions[key] = session
@@ -170,6 +188,25 @@ class SessionManager:
                 session for key, session in self._sessions.items()
                 if key[0] == user_id and not session.is_expired()
             ]
+
+    async def clear_plugin_sessions(self, plugin_name: str) -> int:
+        """清理指定插件的所有会话（用于插件 reload）
+
+        Returns:
+            清理的会话数量
+        """
+        async with self._lock:
+            keys_to_remove = [
+                key for key, session in self._sessions.items()
+                if session.plugin_name == plugin_name
+            ]
+            for key in keys_to_remove:
+                del self._sessions[key]
+
+            if keys_to_remove:
+                logger.info("Cleared %d sessions for plugin '%s'", len(keys_to_remove), plugin_name)
+
+            return len(keys_to_remove)
 
     async def get_all_sessions(self, plugin_name: str | None = None) -> list[Session]:
         """获取所有活跃会话（可选按插件筛选）"""

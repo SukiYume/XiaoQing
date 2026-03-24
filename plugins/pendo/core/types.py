@@ -14,7 +14,7 @@ class PendoContextProtocol(PluginContextProtocol, Protocol):
 
 
 PendoContext: TypeAlias = PendoContextProtocol
-SessionData: TypeAlias = dict[str, Any]
+SessionData: TypeAlias = Any  # core.session.Session object (supports .get/.set and ['key'] access)
 CommandMessage: TypeAlias = dict[str, Any]
 
 
