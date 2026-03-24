@@ -35,6 +35,7 @@ from .handlers.task import TaskHandler
 from .handlers.note import NoteHandler
 from .handlers.diary import DiaryHandler
 from .handlers.search import SearchHandler
+from .handlers.ledger import LedgerHandler
 from .services.db import Database
 from .services.reminder import ReminderService
 from .services.exporter import ExporterService
@@ -417,6 +418,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
     note_handler = services["note_handler"]
     diary_handler = services["diary_handler"]
     search_handler = services["search_handler"]
+    ledger_handler = services["ledger_handler"]
 
     async def _export_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         return await run_sync(exporter.export_markdown, user_id, args, {})
@@ -455,6 +457,9 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         "note": _help_or_exec(note_handler.handle, "note"),
         "diary": _help_or_exec(diary_handler.handle, "diary"),
         "search": search_handler.search,
+        "ledger": _help_or_exec(ledger_handler.handle, "ledger"),
+        "bill": _help_or_exec(ledger_handler.handle, "ledger"),
+        "finance": _help_or_exec(ledger_handler.handle, "ledger"),
         "export": _export_cmd,
         "import": _import_cmd,
         "settings": _settings_cmd,
@@ -478,6 +483,7 @@ HELP_MAP = {
         "• /pendo event add <内容> - 添加日程(AI解析时间/地点/提醒)",
         "• /pendo todo add <内容> - 添加待办",
         "• /pendo note add <内容> - 记录笔记",
+        "• /pendo ledger quick <金额> <描述> - 快速记账",
     ],
     "event": [
         "**日程管理 (Event):**",
@@ -535,6 +541,20 @@ HELP_MAP = {
         "• /pendo diary <模板ID> - 使用模板写日记(多轮引导)",
         "• /pendo diary delete <日期> - 删除日记",
     ],
+    "ledger": [
+        "**记账 (Ledger):**",
+        "• /pendo ledger add - 交互式记账(多轮引导)",
+        "• /pendo ledger quick <金额> <描述> [cat:分类] [pay:方式] [in] - 快速记账",
+        "  - 默认支出，加 in 标记收入",
+        "  - 例: /pendo ledger quick 35.5 午饭 cat:餐饮",
+        "  - 例: /pendo ledger quick 5000 工资 cat:工资 in",
+        "• /pendo ledger list [范围] - 查看账目",
+        "  - 范围: today, week, YYYY-MM, last7d, start..end",
+        "• /pendo ledger view <id> - 查看账目详情",
+        "• /pendo ledger edit <id> <内容> - 编辑账目",
+        "• /pendo ledger delete <id> - 删除账目",
+        "• /pendo ledger summary [范围] - 收支汇总统计",
+    ],
     "search": [
         "**搜索 (Search):**",
         "• /pendo search <关键词> - 全文搜索",
@@ -582,6 +602,8 @@ def _show_help(subcommand: str = "") -> str:
         "idea": "note",
         "journal": "diary",
         "config": "settings",
+        "bill": "ledger",
+        "finance": "ledger",
     }
     target_key = aliases.get(subcommand, subcommand)
 
@@ -603,6 +625,7 @@ def _show_help(subcommand: str = "") -> str:
         "todo",
         "note",
         "diary",
+        "ledger",
         "search",
         "reminder",
         "common",
@@ -667,6 +690,7 @@ def _get_services(context: PendoContext | None) -> PendoServices:
     note_handler = NoteHandler(db)
     diary_handler = DiaryHandler(db)
     search_handler = SearchHandler(db)
+    ledger_handler = LedgerHandler(db)
 
     services: PendoServices = {
         "db": db,
@@ -678,6 +702,7 @@ def _get_services(context: PendoContext | None) -> PendoServices:
         "note_handler": note_handler,
         "diary_handler": diary_handler,
         "search_handler": search_handler,
+        "ledger_handler": ledger_handler,
     }
 
     set_cached_services(context, services)
