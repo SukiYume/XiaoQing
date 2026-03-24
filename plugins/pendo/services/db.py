@@ -22,6 +22,7 @@ from ..models.item import (
     TaskItem,
     NoteItem,
     DiaryItem,
+    LedgerItem,
     ITEM_TYPE_CLASS_MAP,
 )
 
@@ -36,7 +37,7 @@ class Database:
 
     CACHE_TTL = 30
     CACHE_MAX_SIZE = 1024
-    ALLOWED_DATE_FIELDS = {"start_time", "end_time", "due_time", "diary_date", "created_at"}
+    ALLOWED_DATE_FIELDS = {"start_time", "end_time", "due_time", "diary_date", "created_at", "ledger_date"}
 
     # JSON 序列化字段：写入时 dumps，读取时 loads
     _JSON_FIELDS = [
@@ -236,6 +237,12 @@ class Database:
             migrations = [
                 "ALTER TABLE items ADD COLUMN milestones TEXT",
                 "ALTER TABLE items ADD COLUMN notes TEXT",
+                "ALTER TABLE items ADD COLUMN amount REAL",
+                "ALTER TABLE items ADD COLUMN direction TEXT",
+                "ALTER TABLE items ADD COLUMN ledger_category TEXT",
+                "ALTER TABLE items ADD COLUMN payment_method TEXT",
+                "ALTER TABLE items ADD COLUMN ledger_date TEXT",
+                "ALTER TABLE items ADD COLUMN remark TEXT",
                 # reminder_logs 重构：一行一个 (item_id, remind_time)，用 repeat_count 替代多行
                 "ALTER TABLE reminder_logs ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1",
                 "ALTER TABLE reminder_logs ADD COLUMN last_sent_at TEXT",
