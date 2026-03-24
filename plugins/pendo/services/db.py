@@ -686,9 +686,9 @@ class Database:
     def _apply_filters(
         where: list[str], params: list[Any], filters: dict[str, Any] | None,
     ):
-        """将 type/category/status 过滤条件追加到 where / params"""
+        """将 type/category/status/direction 过滤条件追加到 where / params"""
         if filters:
-            for key in ("type", "category", "status"):
+            for key in ("type", "category", "status", "direction"):
                 if key in filters:
                     where.append(f"{key} = ?")
                     params.append(filters[key])
@@ -720,8 +720,11 @@ class Database:
 
         # LIKE补充搜索（FTS的unicode61分词器对CJK子字符串匹配不完整，需要LIKE兜底）
         like = f"%{query}%"
-        like_where: list[str] = ["owner_id = ?", "deleted = 0", "(title LIKE ? OR content LIKE ?)"]
-        like_params: list[Any] = [owner_id, like, like]
+        like_where: list[str] = [
+            "owner_id = ?", "deleted = 0",
+            "(title LIKE ? OR content LIKE ? OR remark LIKE ? OR ledger_category LIKE ?)",
+        ]
+        like_params: list[Any] = [owner_id, like, like, like, like]
         self._apply_filters(like_where, like_params, filters)
 
         cursor.execute(
