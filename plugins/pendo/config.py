@@ -86,6 +86,7 @@ class PendoConfig:
     SESSION_TYPE_DIARY_TEMPLATE = "diary_template"
     SESSION_TYPE_EVENT_CONFLICT = "event_conflict"
     SESSION_TYPE_EVENT_INFO = "event_info"
+    SESSION_TYPE_LEDGER_ADD = "ledger_add"
 
     @classmethod
     def validate(cls):
@@ -258,3 +259,39 @@ MOOD_ANALYSIS_CONFIG = {
     # 每个匹配词的分值增量
     "score_increment": 1,
 }
+
+# 记账分类配置
+LEDGER_EXPENSE_CATEGORIES = [
+    {"id": "food", "name": "餐饮", "icon": "🍜"},
+    {"id": "transport", "name": "交通", "icon": "🚌"},
+    {"id": "shopping", "name": "购物", "icon": "🛒"},
+    {"id": "housing", "name": "居住", "icon": "🏠"},
+    {"id": "entertainment", "name": "娱乐", "icon": "🎮"},
+    {"id": "medical", "name": "医疗", "icon": "💊"},
+    {"id": "education", "name": "教育", "icon": "📚"},
+    {"id": "telecom", "name": "通讯", "icon": "📱"},
+    {"id": "social", "name": "社交", "icon": "🎁"},
+    {"id": "pet", "name": "宠物", "icon": "🐾"},
+    {"id": "sport", "name": "运动", "icon": "🏃"},
+    {"id": "beauty", "name": "美容", "icon": "💄"},
+    {"id": "travel", "name": "旅行", "icon": "✈️"},
+    {"id": "other", "name": "其他", "icon": "📌"},
+]
+
+LEDGER_INCOME_CATEGORIES = [
+    {"id": "salary", "name": "工资", "icon": "💰"},
+    {"id": "parttime", "name": "兼职", "icon": "💼"},
+    {"id": "invest", "name": "理财", "icon": "📈"},
+    {"id": "hongbao", "name": "红包", "icon": "🧧"},
+    {"id": "reimburse", "name": "报销", "icon": "🧾"},
+    {"id": "other", "name": "其他", "icon": "📌"},
+]
+
+LEDGER_PAYMENT_METHODS = [
+    {"id": "wechat", "name": "微信"},
+    {"id": "alipay", "name": "支付宝"},
+    {"id": "cash", "name": "现金"},
+    {"id": "bankcard", "name": "银行卡"},
+    {"id": "creditcard", "name": "信用卡"},
+    {"id": "other", "name": "其他"},
+]
