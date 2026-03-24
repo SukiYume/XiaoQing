@@ -306,6 +306,7 @@ class TestPendoReviewFixes:
             "note_handler": _StubSimpleHandler(),
             "diary_handler": _StubSimpleHandler(),
             "search_handler": _StubSimpleHandler(),
+            "ledger_handler": _StubSimpleHandler(),
         }
 
         monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
