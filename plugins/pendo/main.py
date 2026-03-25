@@ -36,6 +36,7 @@ from .handlers.note import NoteHandler
 from .handlers.diary import DiaryHandler
 from .handlers.search import SearchHandler
 from .handlers.ledger import LedgerHandler
+from .handlers.web import WebHandler
 from .services.db import Database
 from .services.reminder import ReminderService
 from .services.exporter import ExporterService
@@ -76,9 +77,21 @@ def init(context=None) -> None:
     log = _get_logger(context)
     log.info("Pendo plugin initialized, database at %s", db_path)
 
+    if PendoConfig.WEB_ENABLED:
+        try:
+            from .web import server as web_server
+            web_server.start(db)
+        except Exception as e:
+            logger.warning("Failed to auto-start web UI: %s", e)
+
 
 def cleanup(context=None) -> None:
     """插件清理函数 - 在插件卸载时调用"""
+    try:
+        from .web import server as web_server
+        web_server.stop()
+    except Exception:
+        pass
     try:
         db = _get_database(context)
         db.cleanup()
@@ -422,6 +435,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
     diary_handler = services["diary_handler"]
     search_handler = services["search_handler"]
     ledger_handler = services["ledger_handler"]
+    web_handler = services["web_handler"]
 
     async def _export_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         return await run_sync(exporter.export_markdown, user_id, args, {})
@@ -466,6 +480,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         "confirm": _confirm_cmd,
         "snooze": _snooze_cmd,
         "undo": _undo_cmd,
+        "web": _help_or_exec(web_handler.handle, "web"),
     }
 
     router = CommandRouter(handlers, help_provider=_show_help)
@@ -695,6 +710,7 @@ def _get_services(context: PendoContext | None) -> PendoServices:
     diary_handler = DiaryHandler(db)
     search_handler = SearchHandler(db)
     ledger_handler = LedgerHandler(db)
+    web_handler = WebHandler(db)
 
     services: PendoServices = {
         "db": db,
@@ -707,6 +723,7 @@ def _get_services(context: PendoContext | None) -> PendoServices:
         "diary_handler": diary_handler,
         "search_handler": search_handler,
         "ledger_handler": ledger_handler,
+        "web_handler": web_handler,
     }
 
     set_cached_services(context, services)

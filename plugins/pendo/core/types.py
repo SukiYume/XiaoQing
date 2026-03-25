@@ -29,3 +29,4 @@ class PendoServices(TypedDict):
     diary_handler: Any
     search_handler: Any
     ledger_handler: Any
+    web_handler: Any
