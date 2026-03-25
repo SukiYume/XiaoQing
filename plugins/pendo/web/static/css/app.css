@@ -183,6 +183,8 @@ p {
     margin-left: var(--sidebar-width);
     transition: margin-left var(--transition);
     overflow: hidden;
+    position: relative;
+    z-index: 1;
 }
 
 .content {
@@ -1740,6 +1742,7 @@ tr:hover td {
 
     .main-wrapper {
         margin-left: 56px;
+        overflow-x: hidden;
     }
 
     .summary-cards {

@@ -105,14 +105,6 @@ function groupByDate(items) {
     return sorted.map(date => ({ date, items: groups[date] }));
 }
 
-function applyClientFilters(items) {
-    return items.filter(item => {
-        if (_directionFilter && item.direction !== _directionFilter) return false;
-        if (_categoryFilter  && item.ledger_category !== _categoryFilter) return false;
-        return true;
-    });
-}
-
 // ── CSS ───────────────────────────────────────────────────────────────────────
 
 function ensureStyles() {
@@ -191,7 +183,11 @@ function ensureStyles() {
         .ledger-quick-add input:focus {
             border-color: var(--color-ledger);
         }
-        .ledger-qa-direction { width: 80px; }
+        .ledger-quick-add select {
+            appearance: auto;
+            -webkit-appearance: auto;
+        }
+        .ledger-qa-direction { width: 80px; flex-shrink: 0; }
         .ledger-qa-amount    { width: 110px; }
         .ledger-qa-title     { flex: 1; min-width: 100px; }
         .ledger-qa-category  { width: 90px; }
@@ -215,17 +211,22 @@ function ensureStyles() {
             margin-right: 2px;
         }
         .ledger-filter-bar select {
-            font-size: 12px;
-            padding: 4px 8px;
+            font-size: 13px;
+            padding: 5px 10px;
             border-radius: var(--radius-sm);
             border: 1px solid var(--color-border);
             background: var(--color-bg);
             color: var(--color-text);
             cursor: pointer;
+            min-width: 80px;
+            appearance: auto;
+            -webkit-appearance: auto;
         }
         .ledger-filter-group {
             display: flex;
             gap: 4px;
+            align-items: center;
+            white-space: nowrap;
         }
 
         /* Date group list */
@@ -301,6 +302,8 @@ async function fetchItems(page) {
     const range = dateRangeForFilter(_dateFilter);
     if (range.start_date) params.start_date = range.start_date;
     if (range.end_date)   params.end_date   = range.end_date;
+    if (_directionFilter) params.direction = _directionFilter;
+    if (_categoryFilter)  params.category = _categoryFilter;
 
     const res = await api.get('/items', params);
     return {
@@ -443,7 +446,7 @@ function renderPage() {
 
     ensureStyles();
 
-    const visibleItems = applyClientFilters(_items);
+    const visibleItems = _items;
 
     _container.innerHTML = `
         <div class="ledger-page">
@@ -516,16 +519,18 @@ function attachListeners() {
     }
     const filterDir = _container.querySelector('#filter-direction');
     if (filterDir) {
-        filterDir.addEventListener('change', () => {
+        filterDir.addEventListener('change', async () => {
             _directionFilter = filterDir.value;
-            renderPage();
+            _page = 1;
+            await loadAndRender();
         });
     }
     const filterCat = _container.querySelector('#filter-category');
     if (filterCat) {
-        filterCat.addEventListener('change', () => {
+        filterCat.addEventListener('change', async () => {
             _categoryFilter = filterCat.value;
-            renderPage();
+            _page = 1;
+            await loadAndRender();
         });
     }
 

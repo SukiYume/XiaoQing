@@ -9,6 +9,34 @@ from ..deps import get_db, get_current_user
 router = APIRouter()
 
 
+def _aggregate_monthly(rows):
+    """Aggregate monthly rows by month, merging income/expense."""
+    months = {}
+    for r in rows:
+        month, direction, total = r[0], r[1], r[2]
+        if month not in months:
+            months[month] = {"month": month, "income": 0, "expense": 0}
+        if direction == "income":
+            months[month]["income"] = total
+        else:
+            months[month]["expense"] = total
+    return list(months.values())
+
+
+def _aggregate_daily(rows):
+    """Aggregate daily rows by date, merging income/expense."""
+    days = {}
+    for r in rows:
+        date, direction, total = r[0], r[1], r[2]
+        if date not in days:
+            days[date] = {"date": date, "income": 0, "expense": 0}
+        if direction == "income":
+            days[date]["income"] = total
+        else:
+            days[date]["expense"] = total
+    return list(days.values())
+
+
 def _parse_range(range_str: str | None) -> tuple[str, str]:
     """Parse range string into (start, end) dates."""
     now = datetime.now()
@@ -68,9 +96,10 @@ def ledger_stats(
     return {
         "ok": True,
         "data": {
-            "monthly": [{"month": r[0], "direction": r[1], "total": r[2]} for r in monthly],
-            "by_category": [{"category": r[0], "direction": r[1], "total": r[2], "count": r[3]} for r in by_category],
-            "daily": [{"date": r[0], "direction": r[1], "total": r[2]} for r in daily],
+            "monthly": _aggregate_monthly(monthly),
+            "expense_by_category": [{"category": r[0], "total": r[2]} for r in by_category if r[1] == "expense"],
+            "income_by_category": [{"category": r[0], "total": r[2]} for r in by_category if r[1] == "income"],
+            "daily": _aggregate_daily(daily),
         },
         "message": "",
     }
