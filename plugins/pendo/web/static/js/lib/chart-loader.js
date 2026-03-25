@@ -14,7 +14,7 @@ export function loadChart() {
         }
         // Try local first, then CDN
         const sources = [
-            '/static/js/lib/chart.min.js',
+            '/js/lib/chart.min.js',
             'https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js',
         ];
         let idx = 0;
