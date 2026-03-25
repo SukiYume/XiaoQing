@@ -419,6 +419,7 @@ class Database:
             set_clause = ", ".join([f"{self._quote_col(k)} = ?" for k in data.keys()])
 
             # S-1修复：使用 with conn: 代替手动 BEGIN/COMMIT/ROLLBACK
+            affected = 0
             with conn:
                 if owner_id:
                     cursor.execute(
@@ -430,16 +431,20 @@ class Database:
                         f"UPDATE items SET {set_clause} WHERE id = ?",
                         list(data.values()) + [item_id],
                     )
+                affected = cursor.rowcount
+
+                if affected > 0 and "remind_times" in update_dict:
+                    self._sync_reminder_logs(cursor, item_id, update_dict.get("remind_times"))
 
                 # C-5修复：在同一事务内直接读取最新数据更新FTS，避免读到缓存中的旧值
-                if cursor.rowcount > 0 and self._FTS_FIELDS & update_dict.keys():
+                if affected > 0 and self._FTS_FIELDS & update_dict.keys():
                     self._refresh_fts(item_id, conn)
 
             # 精确失效：只清除与该条目相关的缓存
             self.cache_invalidate(item_id)
             # 即使调用方不传 owner_id，也需要失效该用户的列表缓存
             resolved_owner = owner_id
-            if not resolved_owner and cursor.rowcount > 0:
+            if not resolved_owner and affected > 0:
                 try:
                     oid_cursor = conn.cursor()
                     oid_cursor.execute("SELECT owner_id FROM items WHERE id = ?", (item_id,))
@@ -450,7 +455,7 @@ class Database:
                     pass
             if resolved_owner:
                 self.cache_invalidate(f"items|{resolved_owner}")
-            return cursor.rowcount > 0
+            return affected > 0
         except Exception as e:
             logger.exception("Failed to update item: %s", e)
             raise
@@ -566,7 +571,7 @@ class Database:
 
         Args:
             owner_id: 用户ID
-            filters: 过滤条件，支持 type, category, status, tags, direction,
+            filters: 过滤条件，支持 type, category, ledger_category, status, tags, direction,
                      amount_min, amount_max, start_date, end_date, date_field,
                      sort_field, sort_order
             limit: 返回数量限制
@@ -587,7 +592,7 @@ class Database:
         params = [owner_id]
 
         if filters:
-            for key in ["type", "category", "status"]:
+            for key in ["type", "category", "ledger_category", "status"]:
                 if key in filters:
                     where.append(f"{key} = ?")
                     params.append(filters[key])
@@ -698,12 +703,30 @@ class Database:
                     cursor.execute(f"DELETE FROM items WHERE {where}", params)
                 # S-2修复：在 FTS 操作前保存 rowcount，避免被后续语句覆盖
                 affected = cursor.rowcount
+                cursor.execute("DELETE FROM reminder_logs WHERE item_id = ?", (item_id,))
                 cursor.execute("DELETE FROM items_fts WHERE id = ?", (item_id,))
             self.cache_clear()
             return affected > 0
         except Exception as e:
             logger.exception("Failed to delete item: %s", e)
             raise
+
+    def _sync_reminder_logs(self, cursor, item_id: str, remind_times: list[str] | None):
+        """删除当前条目已移除的提醒日志。"""
+        active_times = sorted({
+            str(remind_time)
+            for remind_time in (remind_times or [])
+            if remind_time
+        })
+        if not active_times:
+            cursor.execute("DELETE FROM reminder_logs WHERE item_id = ?", (item_id,))
+            return
+
+        placeholders = ",".join("?" for _ in active_times)
+        cursor.execute(
+            f"DELETE FROM reminder_logs WHERE item_id = ? AND remind_time NOT IN ({placeholders})",
+            [item_id] + active_times,
+        )
 
     @staticmethod
     def _apply_filters(

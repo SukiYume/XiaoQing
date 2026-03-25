@@ -1,19 +1,24 @@
+import { renderCustomSelect, initCustomSelects } from './custom_select.js';
+
 export function buildFormHTML(fields) {
     return fields.map(field => {
         const required = field.required ? ' required' : '';
-        const value = field.value || '';
+        const value = field.value ?? '';
 
         let input;
         switch (field.type) {
-            case 'select':
-                const opts = (field.options || []).map(o => {
-                    const val = typeof o === 'string' ? o : o.value;
-                    const label = typeof o === 'string' ? o : o.label;
-                    const sel = val === value ? ' selected' : '';
-                    return `<option value="${val}"${sel}>${label}</option>`;
-                }).join('');
-                input = `<select name="${field.name}" class="form-input"${required}>${opts}</select>`;
+            case 'select': {
+                const themeClass = field.selectThemeClass || 'pselect-theme-ledger';
+                input = renderCustomSelect({
+                    id: `form-select-${field.name}`,
+                    name: field.name,
+                    options: field.options || [],
+                    selected: value,
+                    placeholder: field.placeholder || '请选择',
+                    className: `pselect-form pselect-block ${themeClass}`,
+                });
                 break;
+            }
             case 'textarea':
                 input = `<textarea name="${field.name}" class="form-input" rows="${field.rows || 4}" placeholder="${field.placeholder || ''}"${required}>${value}</textarea>`;
                 break;
@@ -35,6 +40,7 @@ export function buildFormHTML(fields) {
                     <button type="button" class="priority-btn priority-2${value == 2 ? ' active' : ''}" data-value="2">🟠</button>
                     <button type="button" class="priority-btn priority-3${value == 3 ? ' active' : ''}" data-value="3">🟡</button>
                     <button type="button" class="priority-btn priority-4${value == 4 ? ' active' : ''}" data-value="4">🟢</button>
+                    <button type="button" class="priority-btn priority-5${value == 5 ? ' active' : ''}" data-value="5">⚪</button>
                 </div>`;
                 break;
             case 'mood':
@@ -78,6 +84,8 @@ export function getFormData(container) {
 }
 
 export function initFormInteractions(container) {
+    initCustomSelects(container);
+
     // Priority buttons
     container.querySelectorAll('.priority-selector').forEach(sel => {
         sel.querySelectorAll('.priority-btn').forEach(btn => {

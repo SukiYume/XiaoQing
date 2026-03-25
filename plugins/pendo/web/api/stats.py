@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query
 
 from ...services.db import Database
+from ..analytics.ledger_insights import build_ledger_insights
+from ..analytics.task_overview import build_task_overview
 from ..deps import get_db, get_current_user
 
 router = APIRouter()
@@ -105,6 +107,36 @@ def ledger_stats(
     }
 
 
+@router.get("/stats/ledger/insights")
+def ledger_visual_insights(
+    direction: str | None = None,
+    category: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    amount_min: float | None = None,
+    amount_max: float | None = None,
+    compare_mode: str = "previous_period",
+    owner_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """Compact ledger insights for the ledger page visual cards."""
+    return {
+        "ok": True,
+        "data": build_ledger_insights(
+            db=db,
+            owner_id=owner_id,
+            direction=direction,
+            category=category,
+            start_date=start_date,
+            end_date=end_date,
+            amount_min=amount_min,
+            amount_max=amount_max,
+            compare_mode=compare_mode,
+        ),
+        "message": "",
+    }
+
+
 @router.get("/stats/tasks")
 def task_stats(
     range: str | None = Query(None, alias="range"),
@@ -157,6 +189,20 @@ def task_stats(
             "by_priority": [{"priority": r[0], "count": r[1]} for r in by_priority],
             "new_this_week": new_this_week,
         },
+        "message": "",
+    }
+
+
+@router.get("/stats/tasks/overview")
+def task_overview(
+    today: str | None = None,
+    owner_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """Compact task overview for the redesigned tasks page."""
+    return {
+        "ok": True,
+        "data": build_task_overview(db=db, owner_id=owner_id, today=today),
         "message": "",
     }
 

@@ -59,12 +59,13 @@ class TaskStatus(Enum):
 
 
 class Priority(Enum):
-    """优先级 (1=紧急, 2=高, 3=中, 4=低)"""
+    """优先级 (1=紧急, 2=高, 3=中, 4=低, 5=最低)"""
 
     URGENT = 1  # 紧急
     HIGH = 2  # 高
     MEDIUM = 3  # 中
     LOW = 4  # 低
+    LOWEST = 5  # 最低
 
 
 @dataclass
@@ -134,7 +135,7 @@ class TaskItem(Item):
 
     # Task特有字段
     due_time: Optional[str] = None  # 截止时间
-    priority: int = 3  # 优先级 1-4 (默认3=中)
+    priority: int = 3  # 优先级 1-5 (默认3=中)
     status: TaskStatus = TaskStatus.TODO
     estimate: int = 0  # 预估时长(分钟)
     subtasks: list[dict[str, Any]] = field(default_factory=list)

@@ -807,6 +807,161 @@ select:hover:not(:disabled) {
     background-color: #EEF0F2;
 }
 
+.pselect {
+    --pselect-accent: #6366F1;
+    --pselect-accent-text: #4338CA;
+    --pselect-accent-soft: rgba(99, 102, 241, 0.08);
+    --pselect-accent-shadow: rgba(99, 102, 241, 0.12);
+    --pselect-border-strong: rgba(99, 102, 241, 0.35);
+    position: relative;
+    display: inline-block;
+    flex-shrink: 0;
+    min-width: 0;
+}
+
+.pselect-trigger {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-size: 13px;
+    font-weight: 500;
+    transition: border-color var(--transition), background-color var(--transition),
+                box-shadow var(--transition);
+}
+
+.pselect-trigger:focus {
+    outline: none;
+}
+
+.pselect:hover .pselect-trigger {
+    border-color: #9CA3AF;
+    background: #EEF0F2;
+}
+
+.pselect.pselect-open .pselect-trigger {
+    border-color: var(--pselect-accent);
+    box-shadow: 0 0 0 3px var(--pselect-accent-shadow);
+}
+
+.pselect-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pselect-chevron {
+    flex-shrink: 0;
+    color: #9CA3AF;
+    transition: transform 0.2s ease;
+}
+
+.pselect.pselect-open .pselect-chevron {
+    transform: rotate(180deg);
+    color: var(--pselect-accent);
+}
+
+.pselect-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 100%;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+    z-index: 1200;
+    padding: 4px 0;
+    overflow: hidden;
+}
+
+.pselect.pselect-open .pselect-panel {
+    display: block;
+}
+
+.pselect-option {
+    padding: 8px 14px;
+    font-size: 13px;
+    color: var(--color-text);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.pselect-option:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.pselect-option.pselect-selected {
+    font-weight: 600;
+    color: var(--pselect-accent-text);
+    background: var(--pselect-accent-soft);
+}
+
+.pselect.pselect-block,
+.pselect.pselect-block .pselect-trigger {
+    width: 100%;
+}
+
+.pselect-pill .pselect-trigger {
+    height: 30px;
+    padding: 0 10px 0 12px;
+    border-radius: 20px;
+    border-color: var(--pselect-border-strong);
+    color: var(--pselect-accent-text);
+}
+
+.pselect-pill:hover .pselect-trigger {
+    border-color: var(--pselect-accent);
+    background: var(--pselect-accent-soft);
+}
+
+.pselect-form .pselect-trigger {
+    height: 36px;
+    padding: 0 12px;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+}
+
+.pselect-theme-tasks {
+    --pselect-accent: var(--color-tasks);
+    --pselect-accent-text: #047857;
+    --pselect-accent-soft: rgba(16, 185, 129, 0.08);
+    --pselect-accent-shadow: rgba(16, 185, 129, 0.12);
+    --pselect-border-strong: rgba(16, 185, 129, 0.35);
+}
+
+.pselect-theme-notes {
+    --pselect-accent: var(--color-notes);
+    --pselect-accent-text: #1D4ED8;
+    --pselect-accent-soft: rgba(59, 130, 246, 0.08);
+    --pselect-accent-shadow: rgba(59, 130, 246, 0.12);
+    --pselect-border-strong: rgba(59, 130, 246, 0.35);
+}
+
+.pselect-theme-diary {
+    --pselect-accent: var(--color-diary);
+    --pselect-accent-text: #BE185D;
+    --pselect-accent-soft: rgba(236, 72, 153, 0.08);
+    --pselect-accent-shadow: rgba(236, 72, 153, 0.12);
+    --pselect-border-strong: rgba(236, 72, 153, 0.35);
+}
+
+.pselect-theme-ledger {
+    --pselect-accent: var(--color-ledger);
+    --pselect-accent-text: #B91C1C;
+    --pselect-accent-soft: rgba(239, 68, 68, 0.08);
+    --pselect-accent-shadow: rgba(239, 68, 68, 0.12);
+    --pselect-border-strong: rgba(239, 68, 68, 0.35);
+}
+
 .input-sm {
     height: 28px;
     font-size: 13px;
@@ -881,6 +1036,7 @@ select:hover:not(:disabled) {
 .priority-2 { color: var(--color-warning); font-weight: 600; }
 .priority-3 { color: var(--color-notes);   font-weight: 600; }
 .priority-4 { color: var(--color-text-tertiary); }
+.priority-5 { color: #CBD5E1; }
 
 .priority-dot {
     display: inline-block;
@@ -894,6 +1050,7 @@ select:hover:not(:disabled) {
 .priority-dot-2 { background: var(--color-warning); }
 .priority-dot-3 { background: var(--color-notes); }
 .priority-dot-4 { background: var(--color-border); }
+.priority-dot-5 { background: #E2E8F0; }
 
 /* ============================================================
    12. Tables & Lists
