@@ -133,21 +133,10 @@ function ensureStyles() {
             height: 30px;
             padding: 0 30px 0 12px;
             border-radius: 20px;
-            border: 1px solid rgba(16, 185, 129, 0.35);
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6.5l4 4 4-4' stroke='%2310B981' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            border: 1px solid var(--color-border);
             background-position: right 9px center;
             font-weight: 500;
             min-width: 80px;
-            color: #065f46;
-        }
-        .tasks-filter-bar select:hover:not(:disabled) {
-            border-color: var(--color-tasks);
-            background-color: rgba(16, 185, 129, 0.06);
-        }
-        .tasks-filter-bar select:focus {
-            outline: none;
-            border-color: var(--color-tasks);
-            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
         }
         .kanban-board {
             display: flex;
