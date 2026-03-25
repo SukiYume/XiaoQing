@@ -24,7 +24,7 @@ async function request(path, options = {}) {
     }
 
     const data = await res.json();
-    if (!data.ok && !res.ok) {
+    if (!data.ok || !res.ok) {
         throw new Error(data.message || data.detail || 'Request failed');
     }
     return data;
