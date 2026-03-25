@@ -105,7 +105,7 @@ function ensureStyles() {
         .search-input {
             width: 100%;
             box-sizing: border-box;
-            padding: 11px 14px 11px 42px;
+            padding: 11px 14px;
             font-size: 15px;
             border: 1px solid var(--color-border);
             border-radius: var(--radius);
@@ -370,7 +370,6 @@ function renderPage() {
             </div>
 
             <div class="search-input-wrap">
-                <span class="search-input-icon">🔍</span>
                 <input
                     type="text"
                     id="search-input"

@@ -251,7 +251,9 @@ function ensureStyles() {
 // ── API ───────────────────────────────────────────────────────────────────────
 
 async function fetchItems(page) {
-    const res = await api.get('/items', { type: 'note', page, page_size: PAGE_SIZE });
+    const params = { type: 'note', page, page_size: PAGE_SIZE };
+    if (_filterCategory) params.category = _filterCategory;
+    const res = await api.get('/items', params);
     return {
         items: (res.data && res.data.items) ? res.data.items : [],
         total: (res.data && res.data.total != null) ? res.data.total : 0,
@@ -371,9 +373,10 @@ function attachListeners() {
 
     const catSel = _container.querySelector('#notes-filter-category');
     if (catSel) {
-        catSel.addEventListener('change', () => {
+        catSel.addEventListener('change', async () => {
             _filterCategory = catSel.value;
-            renderPage();
+            _page = 1;
+            await loadAndRender();
         });
     }
 
