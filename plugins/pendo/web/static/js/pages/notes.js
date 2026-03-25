@@ -112,33 +112,23 @@ function ensureStyles() {
             height: 30px;
             padding: 0 30px 0 12px;
             border-radius: 20px;
-            border: 1px solid rgba(59, 130, 246, 0.35);
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6.5l4 4 4-4' stroke='%233B82F6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            border: 1px solid var(--color-border);
             background-position: right 9px center;
             font-weight: 500;
             min-width: 80px;
-            color: #1d4ed8;
-        }
-        .notes-filter-bar select:hover:not(:disabled) {
-            border-color: var(--color-notes);
-            background-color: rgba(59, 130, 246, 0.06);
-        }
-        .notes-filter-bar select:focus {
-            outline: none;
-            border-color: var(--color-notes);
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
         }
         .notes-filter-bar input[type="text"] {
             font-size: 13px;
             height: 30px;
             padding: 0 10px;
             border-radius: 20px;
-            border: 1px solid rgba(59, 130, 246, 0.35);
+            border: 1px solid var(--color-border);
             outline: none;
         }
+        .notes-filter-bar select:focus,
         .notes-filter-bar input[type="text"]:focus {
-            border-color: var(--color-notes);
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+            border-color: var(--color-notes, #3B82F6);
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
             outline: none;
         }
         .notes-filter-tag { width: 160px; cursor: text !important; }

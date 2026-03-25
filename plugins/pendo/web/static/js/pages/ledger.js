@@ -28,10 +28,17 @@ let _container          = null;
 let _items              = [];
 let _total              = 0;
 let _page               = 1;
-let _dateFilter         = 'month';   // 'today' | 'week' | 'month' | 'all'
+let _dateFilter         = 'month';   // 'today' | 'week' | 'month' | 'year' | 'all' | 'custom'
 let _directionFilter    = '';        // '' | 'income' | 'expense'
 let _categoryFilter     = '';
+let _amountMin          = '';
+let _amountMax          = '';
+let _customDateStart    = '';
+let _customDateEnd      = '';
+let _summaryData        = { income: 0, expense: 0, balance: 0, count: 0 };
+let _allCategories      = [];
 let _dataChangedHandler = null;
+let _docClickAttached   = false;
 
 // ── date helpers ──────────────────────────────────────────────────────────────
 
@@ -47,9 +54,8 @@ function dateRangeForFilter(filter) {
     today.setHours(0, 0, 0, 0);
 
     if (filter === 'today') {
-        const start = todayStr();
-        const end   = todayStr();
-        return { start_date: start, end_date: end };
+        const s = todayStr();
+        return { start_date: s, end_date: s };
     }
     if (filter === 'week') {
         const start = new Date(today);
@@ -67,6 +73,18 @@ function dateRangeForFilter(filter) {
             end_date:   todayStr(),
         };
     }
+    if (filter === 'year') {
+        return {
+            start_date: `${today.getFullYear()}-01-01`,
+            end_date:   todayStr(),
+        };
+    }
+    if (filter === 'custom') {
+        if (_customDateStart && _customDateEnd) {
+            return { start_date: _customDateStart, end_date: _customDateEnd };
+        }
+        return {};
+    }
     // 'all'
     return {};
 }
@@ -77,22 +95,6 @@ function fmtAmount(amount) {
     return '¥' + Number(amount).toFixed(2);
 }
 
-function getCategories() {
-    const cats = new Set();
-    _items.forEach(item => { if (item.ledger_category) cats.add(item.ledger_category); });
-    return Array.from(cats).sort();
-}
-
-function computeSummary(items) {
-    let income = 0, expense = 0;
-    items.forEach(item => {
-        const amt = parseFloat(item.amount) || 0;
-        if (item.direction === 'income')  income  += amt;
-        if (item.direction === 'expense') expense += amt;
-    });
-    return { income, expense, balance: income - expense };
-}
-
 function groupByDate(items) {
     const groups = {};
     items.forEach(item => {
@@ -100,9 +102,57 @@ function groupByDate(items) {
         if (!groups[d]) groups[d] = [];
         groups[d].push(item);
     });
-    // Sort dates descending
     const sorted = Object.keys(groups).sort((a, b) => b.localeCompare(a));
     return sorted.map(date => ({ date, items: groups[date] }));
+}
+
+// ── API ───────────────────────────────────────────────────────────────────────
+
+async function fetchItems(page) {
+    const params = {
+        type:       'ledger',
+        date_field: 'ledger_date',
+        sort:       'ledger_date',
+        order:      'desc',
+        page,
+        page_size:  PAGE_SIZE,
+    };
+    const range = dateRangeForFilter(_dateFilter);
+    if (range.start_date) params.start_date = range.start_date;
+    if (range.end_date)   params.end_date   = range.end_date;
+    if (_directionFilter) params.direction  = _directionFilter;
+    if (_categoryFilter)  params.category   = _categoryFilter;
+    if (_amountMin !== '') params.amount_min = parseFloat(_amountMin);
+    if (_amountMax !== '') params.amount_max = parseFloat(_amountMax);
+
+    const res = await api.get('/items', params);
+    return {
+        items: res.data?.items ?? [],
+        total: res.data?.total ?? 0,
+    };
+}
+
+async function fetchAggregate() {
+    const params = { type: 'ledger', date_field: 'ledger_date' };
+    const range = dateRangeForFilter(_dateFilter);
+    if (range.start_date) params.start_date = range.start_date;
+    if (range.end_date)   params.end_date   = range.end_date;
+    if (_directionFilter) params.direction  = _directionFilter;
+    if (_categoryFilter)  params.category   = _categoryFilter;
+    if (_amountMin !== '') params.amount_min = parseFloat(_amountMin);
+    if (_amountMax !== '') params.amount_max = parseFloat(_amountMax);
+
+    const res = await api.get('/items/aggregate', params);
+    return res.data ?? { income: 0, expense: 0, balance: 0, count: 0 };
+}
+
+async function fetchCategories() {
+    try {
+        const res = await api.get('/items/categories', { type: 'ledger' });
+        return res.data?.categories ?? [];
+    } catch {
+        return [];
+    }
 }
 
 // ── CSS ───────────────────────────────────────────────────────────────────────
@@ -169,24 +219,35 @@ function ensureStyles() {
             gap: 8px;
             align-items: center;
         }
-        .ledger-quick-add select,
         .ledger-quick-add input {
             font-size: 13px;
             height: 34px;
             border-radius: var(--radius-sm);
             border: 1px solid var(--color-border);
         }
-        .ledger-quick-add select:focus,
         .ledger-quick-add input:focus {
             border-color: var(--color-ledger);
             box-shadow: 0 0 0 3px rgba(239,68,68,0.1);
             outline: none;
         }
-        .ledger-qa-direction { width: 90px; flex-shrink: 0; }
         .ledger-qa-amount    { width: 110px; }
         .ledger-qa-title     { flex: 1; min-width: 100px; }
         .ledger-qa-category  { width: 90px; }
         .ledger-qa-date      { width: 140px; }
+        .ledger-qa-submit {
+            height: 34px;
+            padding: 0 14px;
+            font-size: 13px;
+            flex-shrink: 0;
+            background: var(--color-ledger);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-weight: 600;
+            transition: background .15s;
+        }
+        .ledger-qa-submit:hover { background: #dc2626; }
 
         /* Filter bar */
         .ledger-filter-bar {
@@ -206,45 +267,166 @@ function ensureStyles() {
             color: var(--color-text-secondary);
             white-space: nowrap;
         }
-        .ledger-filter-bar select {
-            font-size: 13px;
-            height: 30px;
-            padding: 0 30px 0 12px;
-            border-radius: 20px;
-            border: 1px solid rgba(239, 68, 68, 0.35);
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6.5l4 4 4-4' stroke='%23EF4444' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-            background-position: right 9px center;
-            font-weight: 500;
-            min-width: 80px;
-            color: #b91c1c;
-        }
-        .ledger-filter-bar select:hover:not(:disabled) {
-            border-color: var(--color-ledger);
-            background-color: rgba(239, 68, 68, 0.06);
-        }
-        .ledger-filter-bar select:focus {
-            outline: none;
-            border-color: var(--color-ledger);
-            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
-        }
         .ledger-filter-group {
             display: flex;
             gap: 6px;
             align-items: center;
             white-space: nowrap;
         }
+        .ledger-filter-sep {
+            width: 1px;
+            height: 18px;
+            background: var(--color-border);
+            flex-shrink: 0;
+        }
+        .ledger-amount-input {
+            height: 30px;
+            width: 80px;
+            font-size: 13px;
+            padding: 0 8px;
+            border: 1px solid var(--color-border);
+            border-radius: 20px;
+            background: var(--color-bg);
+            color: var(--color-text);
+            font-weight: 500;
+            outline: none;
+            transition: border-color .15s, box-shadow .15s;
+        }
+        .ledger-amount-input:focus {
+            border-color: var(--color-ledger);
+            box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
+        }
+        .ledger-amount-input::placeholder { color: var(--color-text-tertiary); }
+        .ledger-custom-date-input {
+            height: 30px;
+            font-size: 13px;
+            padding: 0 8px;
+            border: 1px solid var(--color-border);
+            border-radius: 8px;
+            background: var(--color-bg);
+            color: var(--color-text);
+            outline: none;
+            transition: border-color .15s;
+        }
+        .ledger-custom-date-input:focus {
+            border-color: var(--color-ledger);
+        }
+
+        /* Custom select ── shared base */
+        .csel {
+            position: relative;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+        .csel-trigger {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            border: 1px solid var(--color-border);
+            background: var(--color-bg);
+            color: var(--color-text);
+            font-size: 13px;
+            font-weight: 500;
+            transition: border-color .15s, background .15s, box-shadow .15s;
+        }
+        .csel-trigger:hover {
+            border-color: #9CA3AF;
+            background: #EEF0F2;
+        }
+        .csel.csel-open .csel-trigger {
+            border-color: var(--color-ledger);
+            box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
+        }
+        .csel-chevron {
+            flex-shrink: 0;
+            color: #9CA3AF;
+            transition: transform .2s;
+        }
+        .csel.csel-open .csel-chevron {
+            transform: rotate(180deg);
+        }
+        .csel-panel {
+            display: none;
+            position: absolute;
+            top: calc(100% + 5px);
+            left: 0;
+            min-width: 100%;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 10px;
+            box-shadow: 0 6px 24px rgba(0,0,0,0.13);
+            z-index: 1000;
+            padding: 4px 0;
+            overflow: hidden;
+        }
+        .csel.csel-open .csel-panel {
+            display: block;
+        }
+        .csel-option {
+            padding: 7px 16px;
+            font-size: 13px;
+            cursor: pointer;
+            white-space: nowrap;
+            color: var(--color-text);
+            transition: background .1s;
+        }
+        .csel-option:hover {
+            background: rgba(0,0,0,0.04);
+        }
+        .csel-option.csel-selected {
+            font-weight: 600;
+            color: var(--color-ledger);
+            background: rgba(239,68,68,0.05);
+        }
+
+        /* Filter-bar pill selects */
+        .csel-filter .csel-trigger {
+            height: 30px;
+            padding: 0 10px 0 12px;
+            border-radius: 20px;
+            border-color: rgba(239,68,68,0.35);
+            color: #b91c1c;
+        }
+        .csel-filter .csel-trigger:hover {
+            border-color: var(--color-ledger);
+            background: rgba(239,68,68,0.06);
+        }
+        .csel-filter.csel-open .csel-trigger {
+            border-color: var(--color-ledger);
+            box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
+        }
+        .csel-filter .csel-chevron { color: var(--color-ledger); }
+
+        /* Quick-add direction select */
+        .csel-qa-dir .csel-trigger {
+            height: 34px;
+            padding: 0 10px 0 13px;
+            border-radius: 20px;
+            border-color: rgba(239,68,68,0.35);
+            color: #b91c1c;
+            font-weight: 600;
+        }
+        .csel-qa-dir .csel-trigger:hover {
+            border-color: var(--color-ledger);
+            background: rgba(239,68,68,0.06);
+        }
+        .csel-qa-dir.csel-open .csel-trigger {
+            border-color: var(--color-ledger);
+            box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
+        }
+        .csel-qa-dir .csel-chevron { color: var(--color-ledger); }
 
         /* Date group list */
-        .ledger-date-group {
-            margin-bottom: 12px;
-        }
+        .ledger-date-group { margin-bottom: 12px; }
         .ledger-date-group-header {
             font-size: 13px;
             font-weight: 600;
             color: var(--color-text-secondary);
             padding: 6px 0 4px;
             border-bottom: 1px solid var(--color-border);
-            margin-bottom: 0;
         }
         .ledger-row {
             display: flex;
@@ -288,41 +470,73 @@ function ensureStyles() {
             color: var(--color-text-tertiary);
             font-size: 14px;
         }
-        .ledger-pagination {
-            margin-top: 16px;
-        }
+        .ledger-pagination { margin-top: 16px; }
     `;
     document.head.appendChild(style);
 }
 
-// ── API ───────────────────────────────────────────────────────────────────────
+// ── custom select component ───────────────────────────────────────────────────
 
-async function fetchItems(page) {
-    const params = {
-        type:       'ledger',
-        date_field: 'ledger_date',
-        page,
-        page_size:  PAGE_SIZE,
-    };
-    const range = dateRangeForFilter(_dateFilter);
-    if (range.start_date) params.start_date = range.start_date;
-    if (range.end_date)   params.end_date   = range.end_date;
-    if (_directionFilter) params.direction = _directionFilter;
-    if (_categoryFilter)  params.category = _categoryFilter;
+const CHEVRON_SVG = `<svg class="csel-chevron" width="13" height="13" viewBox="0 0 13 13" fill="none">
+    <path d="M3 5l3.5 3.5L10 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
 
-    const res = await api.get('/items', params);
-    return {
-        items: (res.data && res.data.items) ? res.data.items : [],
-        total: (res.data && res.data.total != null) ? res.data.total : 0,
-    };
+function renderCustomSelect({ id, options, selected, className = '' }) {
+    const cur = options.find(o => String(o.value) === String(selected)) || options[0];
+    const optHtml = options.map(o => {
+        const sel = String(o.value) === String(selected) ? ' csel-selected' : '';
+        return `<div class="csel-option${sel}" data-value="${o.value}">${o.label}</div>`;
+    }).join('');
+    return `
+        <div class="csel ${className}" id="${id}" data-value="${selected}">
+            <div class="csel-trigger">
+                <span class="csel-label">${cur ? cur.label : ''}</span>
+                ${CHEVRON_SVG}
+            </div>
+            <div class="csel-panel">${optHtml}</div>
+        </div>`;
+}
+
+function initCustomSelects(container, callbacks) {
+    if (!_docClickAttached) {
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.csel.csel-open').forEach(el => el.classList.remove('csel-open'));
+        });
+        _docClickAttached = true;
+    }
+
+    container.querySelectorAll('.csel').forEach(csel => {
+        const trigger = csel.querySelector('.csel-trigger');
+        const panel   = csel.querySelector('.csel-panel');
+
+        trigger.addEventListener('click', e => {
+            e.stopPropagation();
+            const wasOpen = csel.classList.contains('csel-open');
+            document.querySelectorAll('.csel.csel-open').forEach(el => el.classList.remove('csel-open'));
+            if (!wasOpen) csel.classList.add('csel-open');
+        });
+
+        panel.addEventListener('click', e => {
+            const opt = e.target.closest('.csel-option');
+            if (!opt) return;
+            const value = opt.dataset.value;
+            csel.dataset.value = value;
+            csel.querySelector('.csel-label').textContent = opt.textContent.trim();
+            panel.querySelectorAll('.csel-option').forEach(o =>
+                o.classList.toggle('csel-selected', o.dataset.value === value)
+            );
+            csel.classList.remove('csel-open');
+            const cb = callbacks[csel.id];
+            if (cb) cb(value);
+        });
+    });
 }
 
 // ── render ────────────────────────────────────────────────────────────────────
 
-function renderSummaryCards(items) {
-    const { income, expense, balance } = computeSummary(items);
+function renderSummaryCards() {
+    const { income, expense, balance } = _summaryData;
     const balanceColor = balance >= 0 ? 'var(--color-success)' : 'var(--color-ledger)';
-
     return `
         <div class="ledger-summary-cards">
             <div class="ledger-summary-card">
@@ -346,68 +560,80 @@ function renderSummaryCards(items) {
                     <div class="ledger-summary-label">结余</div>
                 </div>
             </div>
-        </div>
-    `;
+        </div>`;
 }
 
 function renderQuickAdd() {
     const today = todayStr();
+    const dirSelect = renderCustomSelect({
+        id: 'qa-direction',
+        options: [{ value: 'expense', label: '支出' }, { value: 'income', label: '收入' }],
+        selected: 'expense',
+        className: 'csel-qa-dir',
+    });
     return `
         <div class="ledger-quick-add" id="ledger-quick-add">
-            <select class="ledger-qa-direction" id="qa-direction">
-                <option value="expense">支出</option>
-                <option value="income">收入</option>
-            </select>
+            ${dirSelect}
             <input type="number" class="ledger-qa-amount"   id="qa-amount"   placeholder="金额" step="0.01" min="0">
             <input type="text"   class="ledger-qa-title"    id="qa-title"    placeholder="摘要">
             <input type="text"   class="ledger-qa-category" id="qa-category" placeholder="分类（其他）">
             <input type="date"   class="ledger-qa-date"     id="qa-date"     value="${today}">
-            <button class="btn btn-primary btn-sm" id="qa-submit">+ 记录</button>
-        </div>
-    `;
+            <button class="ledger-qa-submit" id="qa-submit">+ 记录</button>
+        </div>`;
 }
 
 function renderFilterBar() {
     const dateOptions = [
-        { value: 'today', label: '今天' },
-        { value: 'week',  label: '近7天' },
-        { value: 'month', label: '近30天' },
-        { value: 'all',   label: '全部' },
+        { value: 'today',  label: '今天' },
+        { value: 'week',   label: '近7天' },
+        { value: 'month',  label: '近30天' },
+        { value: 'year',   label: '今年' },
+        { value: 'all',    label: '全部' },
+        { value: 'custom', label: '自定义' },
     ];
     const dirOptions = [
         { value: '',        label: '全部方向' },
         { value: 'expense', label: '支出' },
         { value: 'income',  label: '收入' },
     ];
-    const categories  = getCategories();
-    const catOptions  = ['', ...categories];
+    const catOptions = [
+        { value: '', label: '全部分类' },
+        ..._allCategories.map(c => ({ value: c, label: c })),
+    ];
 
-    const dateSelect = dateOptions
-        .map(o => `<option value="${o.value}"${_dateFilter === o.value ? ' selected' : ''}>${o.label}</option>`)
-        .join('');
-    const dirSelect = dirOptions
-        .map(o => `<option value="${o.value}"${_directionFilter === o.value ? ' selected' : ''}>${o.label}</option>`)
-        .join('');
-    const catSelect = catOptions
-        .map(c => `<option value="${c}"${_categoryFilter === c ? ' selected' : ''}>${c || '全部分类'}</option>`)
-        .join('');
+    const customVisible = _dateFilter === 'custom' ? '' : 'display:none;';
 
     return `
-        <div class="ledger-filter-bar">
+        <div class="ledger-filter-bar" id="ledger-filter-bar">
             <div class="ledger-filter-group">
                 <label>时段：</label>
-                <select id="filter-date">${dateSelect}</select>
+                ${renderCustomSelect({ id: 'filter-date', options: dateOptions, selected: _dateFilter, className: 'csel-filter' })}
             </div>
+            <div class="ledger-filter-group" id="filter-custom-range" style="${customVisible}gap:6px;align-items:center;">
+                <input type="date" class="ledger-custom-date-input" id="filter-date-start" value="${_customDateStart}">
+                <span style="font-size:12px;color:var(--color-text-secondary);">—</span>
+                <input type="date" class="ledger-custom-date-input" id="filter-date-end"   value="${_customDateEnd}">
+            </div>
+            <div class="ledger-filter-sep"></div>
             <div class="ledger-filter-group">
                 <label>方向：</label>
-                <select id="filter-direction">${dirSelect}</select>
+                ${renderCustomSelect({ id: 'filter-direction', options: dirOptions, selected: _directionFilter, className: 'csel-filter' })}
             </div>
+            <div class="ledger-filter-sep"></div>
             <div class="ledger-filter-group">
                 <label>分类：</label>
-                <select id="filter-category">${catSelect}</select>
+                ${renderCustomSelect({ id: 'filter-category', options: catOptions, selected: _categoryFilter, className: 'csel-filter' })}
             </div>
-        </div>
-    `;
+            <div class="ledger-filter-sep"></div>
+            <div class="ledger-filter-group">
+                <label>金额：</label>
+                <input type="number" class="ledger-amount-input" id="filter-amount-min"
+                    placeholder="最小" min="0" step="0.01" value="${_amountMin}">
+                <span style="font-size:12px;color:var(--color-text-secondary);">~</span>
+                <input type="number" class="ledger-amount-input" id="filter-amount-max"
+                    placeholder="最大" min="0" step="0.01" value="${_amountMax}">
+            </div>
+        </div>`;
 }
 
 function renderItemRow(item) {
@@ -418,7 +644,6 @@ function renderItemRow(item) {
     const catBadge = item.ledger_category
         ? `<span class="badge" style="font-size:11px;">${item.ledger_category}</span>`
         : '';
-
     return `
         <div class="ledger-row" data-id="${item.id}">
             <span class="ledger-dir-icon">${dirIcon}</span>
@@ -429,29 +654,22 @@ function renderItemRow(item) {
                 <button class="btn btn-icon btn-sm btn-edit-ledger"   data-id="${item.id}" title="编辑">✏️</button>
                 <button class="btn btn-icon btn-sm btn-delete-ledger" data-id="${item.id}" title="删除">🗑️</button>
             </div>
-        </div>
-    `;
+        </div>`;
 }
 
 function renderList(items) {
-    if (items.length === 0) {
-        return `<div class="ledger-empty">暂无记录</div>`;
-    }
+    if (items.length === 0) return `<div class="ledger-empty">暂无记录</div>`;
     const groups = groupByDate(items);
     return groups.map(g => `
         <div class="ledger-date-group">
             <div class="ledger-date-group-header">${g.date}</div>
             ${g.items.map(renderItemRow).join('')}
-        </div>
-    `).join('');
+        </div>`).join('');
 }
 
 function renderPage() {
     if (!_container) return;
-
     ensureStyles();
-
-    const visibleItems = _items;
 
     _container.innerHTML = `
         <div class="ledger-page">
@@ -461,21 +679,15 @@ function renderPage() {
                     <p style="font-size:13px;color:var(--color-text-secondary);margin-top:2px;">记录你的收支明细</p>
                 </div>
             </div>
-
-            ${renderSummaryCards(visibleItems)}
+            ${renderSummaryCards()}
             ${renderQuickAdd()}
             ${renderFilterBar()}
-
             <div class="card">
-                <div id="ledger-list">
-                    ${renderList(visibleItems)}
-                </div>
+                <div id="ledger-list">${renderList(_items)}</div>
                 <div id="ledger-pagination" class="ledger-pagination"></div>
             </div>
-        </div>
-    `;
+        </div>`;
 
-    // Render pagination
     const paginationEl = _container.querySelector('#ledger-pagination');
     if (paginationEl) {
         renderPagination(paginationEl, {
@@ -494,61 +706,73 @@ function renderPage() {
 
 // ── listeners ─────────────────────────────────────────────────────────────────
 
+let _amountDebounceTimer = null;
+
 function attachListeners() {
     if (!_container) return;
 
     // Quick-add submit
     const qaSubmit = _container.querySelector('#qa-submit');
-    if (qaSubmit) {
-        qaSubmit.addEventListener('click', handleQuickAdd);
-    }
+    if (qaSubmit) qaSubmit.addEventListener('click', handleQuickAdd);
 
-    // Quick-add on Enter in amount/title fields
     ['qa-amount', 'qa-title', 'qa-category'].forEach(id => {
         const el = _container.querySelector(`#${id}`);
-        if (el) {
-            el.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') handleQuickAdd();
-            });
-        }
+        if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') handleQuickAdd(); });
     });
 
-    // Filter selects
-    const filterDate = _container.querySelector('#filter-date');
-    if (filterDate) {
-        filterDate.addEventListener('change', async () => {
-            _dateFilter = filterDate.value;
+    // Custom selects — filter bar + quick-add
+    initCustomSelects(_container, {
+        'qa-direction':     () => {}, // no state change needed; value read on submit
+        'filter-date':      async (val) => {
+            _dateFilter = val;
             _page = 1;
-            await loadAndRender();
+            const group = _container.querySelector('#filter-custom-range');
+            if (group) group.style.display = val === 'custom' ? 'flex' : 'none';
+            if (val !== 'custom') await loadAndRender();
+        },
+        'filter-direction': async (val) => { _directionFilter = val; _page = 1; await loadAndRender(); },
+        'filter-category':  async (val) => { _categoryFilter = val;  _page = 1; await loadAndRender(); },
+    });
+
+    // Custom date range inputs
+    const dateStart = _container.querySelector('#filter-date-start');
+    const dateEnd   = _container.querySelector('#filter-date-end');
+    if (dateStart) {
+        dateStart.addEventListener('change', async () => {
+            _customDateStart = dateStart.value;
+            if (_customDateStart && _customDateEnd) { _page = 1; await loadAndRender(); }
         });
     }
-    const filterDir = _container.querySelector('#filter-direction');
-    if (filterDir) {
-        filterDir.addEventListener('change', async () => {
-            _directionFilter = filterDir.value;
-            _page = 1;
-            await loadAndRender();
-        });
-    }
-    const filterCat = _container.querySelector('#filter-category');
-    if (filterCat) {
-        filterCat.addEventListener('change', async () => {
-            _categoryFilter = filterCat.value;
-            _page = 1;
-            await loadAndRender();
+    if (dateEnd) {
+        dateEnd.addEventListener('change', async () => {
+            _customDateEnd = dateEnd.value;
+            if (_customDateStart && _customDateEnd) { _page = 1; await loadAndRender(); }
         });
     }
 
-    // Edit / Delete via event delegation on list
+    // Amount range inputs — debounced
+    ['filter-amount-min', 'filter-amount-max'].forEach(id => {
+        const el = _container.querySelector(`#${id}`);
+        if (!el) return;
+        el.addEventListener('input', () => {
+            clearTimeout(_amountDebounceTimer);
+            _amountDebounceTimer = setTimeout(async () => {
+                _amountMin = _container.querySelector('#filter-amount-min')?.value ?? '';
+                _amountMax = _container.querySelector('#filter-amount-max')?.value ?? '';
+                _page = 1;
+                await loadAndRender();
+            }, 600);
+        });
+    });
+
+    // Edit / Delete via delegation
     const list = _container.querySelector('#ledger-list');
     if (list) {
-        list.addEventListener('click', async (e) => {
+        list.addEventListener('click', async e => {
             const editBtn   = e.target.closest('.btn-edit-ledger');
             const deleteBtn = e.target.closest('.btn-delete-ledger');
-
             if (editBtn) {
-                const id   = editBtn.dataset.id;
-                const item = _items.find(i => String(i.id) === String(id));
+                const item = _items.find(i => String(i.id) === editBtn.dataset.id);
                 if (item) openEditModal(item);
             } else if (deleteBtn) {
                 await handleDelete(deleteBtn.dataset.id);
@@ -562,7 +786,8 @@ function attachListeners() {
 async function handleQuickAdd() {
     if (!_container) return;
 
-    const direction = _container.querySelector('#qa-direction').value;
+    const dirCsel   = _container.querySelector('#qa-direction');
+    const direction = dirCsel?.dataset.value || 'expense';
     const amountVal = _container.querySelector('#qa-amount').value.trim();
     const title     = _container.querySelector('#qa-title').value.trim();
     const category  = _container.querySelector('#qa-category').value.trim() || '其他';
@@ -579,22 +804,19 @@ async function handleQuickAdd() {
 
     try {
         await api.post('/items', {
-            type:             'ledger',
+            type:            'ledger',
             direction,
-            amount:           parseFloat(amountVal),
+            amount:          parseFloat(amountVal),
             title,
-            ledger_category:  category,
-            ledger_date:      dateVal || todayStr(),
+            ledger_category: category,
+            ledger_date:     dateVal || todayStr(),
         });
         showToast('记录已添加', 'success');
-
-        // Reset amount and title fields, keep direction/category/date
         _container.querySelector('#qa-amount').value = '';
         _container.querySelector('#qa-title').value  = '';
-
         window.dispatchEvent(new CustomEvent('pendo-data-changed'));
         _page = 1;
-        await loadAndRender();
+        await loadAndRender(true);
     } catch (err) {
         showToast('添加失败：' + err.message, 'error');
     }
@@ -603,43 +825,31 @@ async function handleQuickAdd() {
 // ── edit modal ────────────────────────────────────────────────────────────────
 
 function openEditModal(existing) {
-    const fields = LEDGER_FIELDS.map(f => {
-        let value = existing[f.name] !== undefined && existing[f.name] !== null
-            ? String(existing[f.name])
-            : (f.value !== undefined ? f.value : '');
-        return { ...f, value };
-    });
+    const fields = LEDGER_FIELDS.map(f => ({
+        ...f,
+        value: existing[f.name] !== undefined && existing[f.name] !== null
+            ? String(existing[f.name]) : (f.value ?? ''),
+    }));
 
     const bodyHTML = `<form id="ledger-edit-form">${buildFormHTML(fields)}</form>`;
     const footer = `
         <button class="btn btn-danger btn-sm" id="modal-delete" style="margin-right:auto;">删除</button>
         <button class="btn btn-secondary" id="modal-cancel">取消</button>
-        <button class="btn btn-primary"   id="modal-save">保存</button>
-    `;
+        <button class="btn btn-primary"   id="modal-save">保存</button>`;
 
     const content = showModal('编辑记录', bodyHTML, { footer });
     initFormInteractions(content);
 
     content.querySelector('#modal-cancel').onclick = closeModal;
-
     content.querySelector('#modal-delete').onclick = async () => {
         closeModal();
         await handleDelete(existing.id);
     };
-
     content.querySelector('#modal-save').onclick = async () => {
         const form = content.querySelector('#ledger-edit-form');
         const data = getFormData(form);
-
-        if (!data.title) {
-            showToast('请填写摘要', 'warning');
-            return;
-        }
-        if (!data.amount || data.amount <= 0) {
-            showToast('请填写有效金额', 'warning');
-            return;
-        }
-
+        if (!data.title) { showToast('请填写摘要', 'warning'); return; }
+        if (!data.amount || data.amount <= 0) { showToast('请填写有效金额', 'warning'); return; }
         try {
             await api.put('/items/' + existing.id, data);
             showToast('记录已更新', 'success');
@@ -655,9 +865,7 @@ function openEditModal(existing) {
 // ── delete ────────────────────────────────────────────────────────────────────
 
 async function handleDelete(id) {
-    const confirmed = window.confirm('确定要删除这条记录吗？');
-    if (!confirmed) return;
-
+    if (!window.confirm('确定要删除这条记录吗？')) return;
     try {
         await api.delete('/items/' + id);
         showToast('记录已删除', 'success');
@@ -670,14 +878,19 @@ async function handleDelete(id) {
 
 // ── data load ─────────────────────────────────────────────────────────────────
 
-async function loadAndRender() {
+async function loadAndRender(refreshCategories = false) {
     try {
-        const result = await fetchItems(_page);
-        _items = result.items;
-        _total = result.total;
+        const fetches = [fetchItems(_page), fetchAggregate()];
+        if (refreshCategories) fetches.push(fetchCategories());
+        const results = await Promise.all(fetches);
+        _items       = results[0].items;
+        _total       = results[0].total;
+        _summaryData = results[1];
+        if (refreshCategories) _allCategories = results[2];
     } catch (err) {
-        _items = [];
-        _total = 0;
+        _items       = [];
+        _total       = 0;
+        _summaryData = { income: 0, expense: 0, balance: 0, count: 0 };
         showToast('加载账本失败：' + err.message, 'error');
     }
     renderPage();
@@ -685,15 +898,17 @@ async function loadAndRender() {
 
 // ── page module exports ───────────────────────────────────────────────────────
 
-export function render(container) {
-    _container = container;
-    _items     = [];
-    _total     = 0;
-    _page      = 1;
+export async function render(container) {
+    _container       = container;
+    _items           = [];
+    _total           = 0;
+    _page            = 1;
+    _summaryData     = { income: 0, expense: 0, balance: 0, count: 0 };
 
-    // Render skeleton immediately, then load data
-    renderPage();
-    loadAndRender();
+    renderPage(); // immediate skeleton
+
+    _allCategories = await fetchCategories();
+    await loadAndRender();
 
     _dataChangedHandler = () => loadAndRender();
     window.addEventListener('pendo-data-changed', _dataChangedHandler);
@@ -709,6 +924,4 @@ export function destroy() {
     _total     = 0;
 }
 
-export function onRouteEnter(_params) {
-    // Nothing special; render() is called by the router
-}
+export function onRouteEnter(_params) {}
