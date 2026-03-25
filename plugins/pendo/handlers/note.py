@@ -15,6 +15,7 @@ from core.plugin_base import run_sync
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..config import PendoConfig
+from ..utils.time_utils import _parse_time_range_core
 from ..utils.formatters import (
     ItemFormatter,
     format_success_message,
@@ -163,6 +164,7 @@ class NoteHandler(DbOpsMixin):
         - /pendo note list cat:xxx -> 按分类筛选
         - /pendo note list #tag -> 按标签筛选
         - /pendo note list cat:xxx #tag -> 同时筛选
+        - /pendo note list since:week -> 按时间筛选（today/week/month/year/last7d/YYYY-MM等）
         - /pendo note list cat:xxx all -> 显示该分类全部笔记
         - /pendo note list cat:xxx page:2 -> 显示该分类第2页
         """
@@ -170,9 +172,27 @@ class NoteHandler(DbOpsMixin):
         filter_display = []
         show_all = False
         page_num = 1
+        since_start = None
+        since_end = None
 
         if filter_str:
             filter_str = filter_str.strip()
+
+            # 提取 since:xxx 时间过滤
+            since_match = re.search(r"since:(\S+)", filter_str)
+            if since_match:
+                since_val = since_match.group(1)
+                filter_str = filter_str.replace(since_match.group(0), "").strip()
+                try:
+                    _s, _e = _parse_time_range_core(since_val)
+                    since_start = _s.isoformat()
+                    since_end = _e.isoformat()
+                    filter_display.append(f"时间: {since_val}")
+                    filters["date_field"] = "created_at"
+                    filters["start_date"] = since_start
+                    filters["end_date"] = since_end
+                except Exception:
+                    pass
 
             # 提取 cat:xxx
             cat_val, filter_str = extract_kv_param(filter_str, "cat")
@@ -182,19 +202,17 @@ class NoteHandler(DbOpsMixin):
             else:
                 # 检查是否直接使用分类名（如：/pendo note list 想法）
                 parts = filter_str.split()
+                _reserved = {"all", "page", "since"}
                 if (
                     parts
                     and not parts[0].startswith("#")
                     and not parts[0].startswith("page:")
-                    and parts[0].lower() != "all"
+                    and not parts[0].startswith("since:")
+                    and parts[0].lower() not in _reserved
                 ):
                     # 假设第一个参数是分类名
                     category_candidate = parts[0]
-                    # 检查是否是保留关键字
-                    if category_candidate not in [
-                        "all",
-                        "page",
-                    ] and not category_candidate.startswith("page:"):
+                    if not category_candidate.startswith("page:"):
                         filters["category"] = category_candidate
                         filter_display.append(f"分类: {category_candidate}")
                         # L-4修复：通过丢弃第一个 token 来移除分类名，避免
