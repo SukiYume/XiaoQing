@@ -605,10 +605,29 @@ class EventHandler(DbOpsMixin):
     async def list_events(
         self, user_id: str, time_range: str, context: PendoContext
     ) -> CommandMessage:
-        """列出日程"""
+        """列出日程
+
+        支持额外过滤参数 (可与时间范围组合使用):
+        - cat:xxx  -> 按分类筛选
+        - #tag     -> 按标签筛选
+        """
         # 如果传入的是事件ID，转发到 view
         if self._looks_like_id(time_range.strip()):
             return await self.view_event(user_id, time_range.strip(), context)
+
+        # 解析额外过滤参数
+        cat_filter = None
+        tag_filter = None
+        filter_parts = time_range.split()
+        clean_parts = []
+        for part in filter_parts:
+            if part.startswith("cat:"):
+                cat_filter = part[4:]
+            elif re.match(r"^#\w+$", part):
+                tag_filter = part[1:]
+            else:
+                clean_parts.append(part)
+        time_range = " ".join(clean_parts)
 
         try:
             start_date, end_date = parse_event_time_range(time_range)
@@ -621,6 +640,12 @@ class EventHandler(DbOpsMixin):
             # 多节点事件用区间重叠；单次事件只看 start_time
             start_dt, end_dt = datetime.fromisoformat(start_date), datetime.fromisoformat(end_date)
             events = [e for e in events if self._event_in_range(e, start_dt, end_dt)]
+
+            # 分类/标签过滤
+            if cat_filter:
+                events = [e for e in events if (e.category or "") == cat_filter]
+            if tag_filter:
+                events = [e for e in events if tag_filter in (e.tags or [])]
 
             def _effective_sort_time(e: EventItem) -> str:
                 m_list = e.milestones if hasattr(e, "milestones") else []
@@ -636,16 +661,24 @@ class EventHandler(DbOpsMixin):
 
             events.sort(key=_effective_sort_time)
 
+            # 构建过滤描述
+            filter_labels = []
+            if cat_filter:
+                filter_labels.append(f"分类:{cat_filter}")
+            if tag_filter:
+                filter_labels.append(f"#{tag_filter}")
+            filter_suffix = f" [{', '.join(filter_labels)}]" if filter_labels else ""
+
             if not events:
                 title = self._format_list_title(time_range, start_dt, end_dt)
                 return {
                     "status": "success",
-                    "message": f"🗓️ {title} 没有日程安排\n\n💡 用 /pendo event add <内容> 添加日程",
+                    "message": f"🗓️ {title}{filter_suffix} 没有日程安排\n\n💡 用 /pendo event add <内容> 添加日程",
                 }
 
             # 格式化输出
             title = self._format_list_title(time_range, start_dt, end_dt)
-            message = f"🗓️ **{title}** (共{len(events)}项)\n"
+            message = f"🗓️ **{title}**{filter_suffix} (共{len(events)}项)\n"
             current_date = None
             current_dt = now_in_timezone(user_id, self.db)
 
