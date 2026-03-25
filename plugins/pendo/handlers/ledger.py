@@ -93,7 +93,9 @@ class LedgerHandler(DbOpsMixin):
             "💰 **记账帮助**\n\n"
             "• /pendo ledger add - 交互式记账\n"
             "• /pendo ledger quick <金额> <描述> [cat:分类] [in] - 快速记账\n"
-            "• /pendo ledger list [范围] - 查看账目\n"
+            "• /pendo ledger list [范围] [dir:in/out] [cat:分类] [amount:N或N..M] [ex] - 查看账目\n"
+            "  范围: today/week/month/year/last7d/2026-03/start..end\n"
+            "  ex: 额外显示各分类最大单笔\n"
             "• /pendo ledger view <id> - 查看详情\n"
             "• /pendo ledger edit <id> <字段:值> ... - 编辑\n"
             "  字段: amount: title: cat: dir: date: remark:\n"
@@ -350,27 +352,67 @@ class LedgerHandler(DbOpsMixin):
         """查看账目列表
 
         格式:
-        - /pendo ledger list          -> 本月
-        - /pendo ledger list today    -> 今天
-        - /pendo ledger list week     -> 本周
-        - /pendo ledger list 2026-03  -> 指定月份
+        - /pendo ledger list                    -> 本月
+        - /pendo ledger list today              -> 今天
+        - /pendo ledger list week               -> 本周
+        - /pendo ledger list year               -> 今年
+        - /pendo ledger list 2026-03            -> 指定月份
         - /pendo ledger list 2026-03-01..2026-03-15 -> 范围
+
+        过滤参数 (可组合使用):
+        - dir:in/out 或 dir:income/expense      -> 按收支方向筛选
+        - cat:分类名                             -> 按分类筛选
+        - amount:N                              -> 金额 >= N
+        - amount:N..M                           -> 金额在 N 到 M 之间
+
+        其他:
+        - ex       -> 额外显示每个分类的最大单笔
+        - all      -> 显示全部（不分页）
+        - page:N   -> 显示第N页
         """
         filter_str = (filter_str or "").strip()
 
-        # 解析分页
+        # 解析所有参数
         show_all = False
         page_num = 1
+        show_extra = False
+        dir_filter = None
+        cat_filter = None
+        amount_min = None
+        amount_max = None
+
         filter_parts = filter_str.split()
         clean_parts = []
         for part in filter_parts:
-            if part.lower() == "all":
+            pl = part.lower()
+            if pl == "all":
                 show_all = True
+            elif pl == "ex":
+                show_extra = True
             elif part.startswith("page:"):
                 try:
                     page_num = int(part.split(":")[1])
                 except (IndexError, ValueError):
                     pass
+            elif part.startswith("dir:"):
+                val = part[4:].lower()
+                dir_filter = "income" if val in ("in", "income", "收入") else "expense"
+            elif part.startswith("cat:"):
+                cat_filter = part[4:]
+            elif part.startswith("amount:"):
+                rng = part[7:]
+                if ".." in rng:
+                    lo, hi = rng.split("..", 1)
+                    try:
+                        amount_min = float(lo)
+                        amount_max = float(hi)
+                    except ValueError:
+                        pass
+                else:
+                    try:
+                        amount_min = float(rng)
+                    except ValueError:
+                        pass
             else:
                 clean_parts.append(part)
         range_str = " ".join(clean_parts)
@@ -389,8 +431,30 @@ class LedgerHandler(DbOpsMixin):
             ),
         )
 
+        # 应用额外过滤
+        if dir_filter:
+            items = [i for i in items if i.direction == dir_filter]
+        if cat_filter:
+            items = [i for i in items if i.ledger_category == cat_filter]
+        if amount_min is not None:
+            items = [i for i in items if i.amount >= amount_min]
+        if amount_max is not None:
+            items = [i for i in items if i.amount <= amount_max]
+
+        # 构建过滤描述
+        filter_labels = []
+        if dir_filter:
+            filter_labels.append("收入" if dir_filter == "income" else "支出")
+        if cat_filter:
+            filter_labels.append(f"分类:{cat_filter}")
+        if amount_min is not None and amount_max is not None:
+            filter_labels.append(f"¥{amount_min:.0f}~{amount_max:.0f}")
+        elif amount_min is not None:
+            filter_labels.append(f"≥¥{amount_min:.0f}")
+        filter_suffix = f" [{', '.join(filter_labels)}]" if filter_labels else ""
+
         if not items:
-            return {"status": "success", "message": f"💰 **{range_label}账目**\n\n暂无记录"}
+            return {"status": "success", "message": f"💰 **{range_label}账目**{filter_suffix}\n\n暂无记录"}
 
         # 按日期降序排序
         items.sort(key=lambda x: x.ledger_date or "", reverse=True)
@@ -403,7 +467,7 @@ class LedgerHandler(DbOpsMixin):
         total_income = sum(i.amount for i in items if i.direction == "income")
         total_expense = sum(i.amount for i in items if i.direction == "expense")
 
-        message = f"💰 **{range_label}账目** (共{len(items)}笔){page_info}\n"
+        message = f"💰 **{range_label}账目**{filter_suffix} (共{len(items)}笔){page_info}\n"
         message += f"💸 支出 ¥{total_expense:.2f} | 💰 收入 ¥{total_income:.2f}\n\n"
 
         for item in display_items:
@@ -418,6 +482,24 @@ class LedgerHandler(DbOpsMixin):
 
         if has_more and not show_all:
             message += f"... (使用 'all' 显示全部或 'page:{page_num + 1}' 查看下一页)\n"
+
+        # ex 模式：各分类最大单笔
+        if show_extra:
+            max_by_cat: dict[str, LedgerItem] = {}
+            for item in items:
+                cat = item.ledger_category or "其他"
+                if cat not in max_by_cat or item.amount > max_by_cat[cat].amount:
+                    max_by_cat[cat] = item
+            if max_by_cat:
+                message += "\n📊 **各分类最大单笔**\n"
+                sorted_cats = sorted(max_by_cat.items(), key=lambda x: x[1].amount, reverse=True)
+                for cat, item in sorted_cats:
+                    icon = _direction_icon(item.direction)
+                    cat_icon = _get_category_icon(cat)
+                    sign = "+" if item.direction == "income" else "-"
+                    date_str = item.ledger_date or ""
+                    title_part = f" {item.title}" if item.title else ""
+                    message += f"  {cat_icon}{cat}: {icon}{sign}¥{item.amount:.2f}{title_part} ({date_str})\n"
 
         return {"status": "success", "message": message}
 
@@ -665,6 +747,19 @@ class LedgerHandler(DbOpsMixin):
             start = (now - timedelta(days=weekday)).strftime("%Y-%m-%d")
             end = (now + timedelta(days=7 - weekday)).strftime("%Y-%m-%d")
             return start, end, "本周"
+
+        if range_lower in ("year", "今年"):
+            start = f"{now.year}-01-01"
+            end = f"{now.year}-12-31"
+            return start, end, f"{now.year}年全年"
+
+        if range_lower in ("month", "本月"):
+            start = now.replace(day=1).strftime("%Y-%m-%d")
+            if now.month == 12:
+                end = f"{now.year + 1}-01-01"
+            else:
+                end = f"{now.year}-{now.month + 1:02d}-01"
+            return start, end, f"{now.year}年{now.month}月"
 
         if range_lower.startswith("last"):
             match = re.match(r"last(\d+)d", range_lower)

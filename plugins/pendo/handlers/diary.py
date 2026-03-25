@@ -296,23 +296,40 @@ class DiaryHandler(DbOpsMixin):
         - /pendo diary list YYYY-MM (如 2026-02)
         - /pendo diary list last7d
         - /pendo diary list start..end
+        - /pendo diary list mood:happy -> 按情绪筛选
         """
+        import re as _re
+        range_str = (range_str or "").strip()
+
+        # 解析 mood: 过滤参数
+        mood_filter = None
+        mood_match = _re.search(r"mood:(\S+)", range_str)
+        if mood_match:
+            mood_filter = mood_match.group(1).lower()
+            range_str = range_str.replace(mood_match.group(0), "").strip()
+
         # 解析时间范围（默认本月）
-        if not range_str or not range_str.strip():
+        if not range_str:
             range_str = datetime.now().strftime("%Y-%m")
         start_date, end_date = parse_diary_range(range_str)
 
         # 查询日记
         diaries = await self._fetch_diaries(user_id, start_date, end_date)
 
+        # 应用情绪过滤
+        if mood_filter:
+            diaries = [d for d in diaries if (d.mood or "").lower() == mood_filter]
+
+        filter_suffix = f" [情绪:{mood_filter}]" if mood_filter else ""
+
         if not diaries:
             return {
                 "status": "success",
-                "message": f"📔 {range_str or 'today'} 没有日记\n\n💡 用 /pendo diary add [日期] <内容> 开始写日记",
+                "message": f"📔 {range_str or 'today'}{filter_suffix} 没有日记\n\n💡 用 /pendo diary add [日期] <内容> 开始写日记",
             }
 
         # 格式化输出
-        message = f"📔 **日记列表** (共{len(diaries)}篇)\n\n"
+        message = f"📔 **日记列表**{filter_suffix} (共{len(diaries)}篇)\n\n"
 
         for diary in diaries:
             date = diary.diary_date or ""
