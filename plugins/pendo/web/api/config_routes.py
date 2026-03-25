@@ -29,4 +29,4 @@ def get_diary_templates():
             "name": tdata.get("name", tid),
             "prompts": tdata.get("prompts", []),
         })
-    return {"ok": True, "data": templates, "message": ""}
+    return {"ok": True, "data": {"templates": templates}, "message": ""}

@@ -38,7 +38,9 @@ def search_items(
 
     return {
         "ok": True,
-        "data": [to_dict(item) for item in results],
-        "total": len(results),
+        "data": {
+            "items": [to_dict(item) for item in results],
+            "total": len(results),
+        },
         "message": "",
     }

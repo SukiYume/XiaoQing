@@ -85,6 +85,9 @@ def list_items(
     category: Optional[str] = None,
     priority: Optional[int] = None,
     direction: Optional[str] = None,
+    date_field: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     range: Optional[str] = Query(None, alias="range"),
     sort: str = "created_at",
     order: str = "desc",
@@ -102,10 +105,10 @@ def list_items(
     if category:
         filters["category"] = category
 
-    # Parse date range: "2026-03-01..2026-03-31"
-    if range:
-        parts = range.split("..")
-        if len(parts) == 2:
+    # Date filtering: support both direct params and range="start..end" syntax
+    if start_date and end_date:
+        # Direct params from frontend (start_date, end_date, date_field)
+        if not date_field:
             date_field = "created_at"
             if type == "event":
                 date_field = "start_time"
@@ -115,7 +118,24 @@ def list_items(
                 date_field = "diary_date"
             elif type == "ledger":
                 date_field = "ledger_date"
-            filters["date_field"] = date_field
+        filters["date_field"] = date_field
+        filters["start_date"] = start_date
+        filters["end_date"] = end_date
+    elif range:
+        # Legacy range param: "2026-03-01..2026-03-31"
+        parts = range.split("..")
+        if len(parts) == 2:
+            _df = date_field or "created_at"
+            if not date_field:
+                if type == "event":
+                    _df = "start_time"
+                elif type == "task":
+                    _df = "due_time"
+                elif type == "diary":
+                    _df = "diary_date"
+                elif type == "ledger":
+                    _df = "ledger_date"
+            filters["date_field"] = _df
             filters["start_date"] = parts[0]
             filters["end_date"] = parts[1]
 
@@ -148,8 +168,10 @@ def list_items(
 
     return {
         "ok": True,
-        "data": [_item_to_dict(item) for item in items],
-        "total": total,
+        "data": {
+            "items": [_item_to_dict(item) for item in items],
+            "total": total,
+        },
         "message": "",
     }
 
