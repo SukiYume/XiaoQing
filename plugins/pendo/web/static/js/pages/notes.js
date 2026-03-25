@@ -102,24 +102,34 @@ function ensureStyles() {
             margin-bottom: 20px;
         }
         .notes-filter-bar label {
-            font-size: 13px;
+            font-size: 12px;
+            font-weight: 500;
             color: var(--color-text-secondary);
-            margin-right: 4px;
+            white-space: nowrap;
         }
-        .notes-filter-bar select,
+        .notes-filter-bar select {
+            font-size: 13px;
+            height: 30px;
+            padding: 0 30px 0 12px;
+            border-radius: 20px;
+            border: 1px solid var(--color-border);
+            background-position: right 9px center;
+            font-weight: 500;
+            min-width: 80px;
+        }
         .notes-filter-bar input[type="text"] {
             font-size: 13px;
-            padding: 4px 8px;
-            border-radius: var(--radius-sm);
+            height: 30px;
+            padding: 0 10px;
+            border-radius: 20px;
             border: 1px solid var(--color-border);
-            background: var(--color-bg);
-            color: var(--color-text);
-            cursor: pointer;
             outline: none;
         }
         .notes-filter-bar select:focus,
         .notes-filter-bar input[type="text"]:focus {
             border-color: var(--color-notes, #3B82F6);
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+            outline: none;
         }
         .notes-filter-tag { width: 160px; cursor: text !important; }
 

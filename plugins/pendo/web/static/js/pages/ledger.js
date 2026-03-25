@@ -172,22 +172,17 @@ function ensureStyles() {
         .ledger-quick-add select,
         .ledger-quick-add input {
             font-size: 13px;
-            padding: 6px 10px;
+            height: 34px;
             border-radius: var(--radius-sm);
             border: 1px solid var(--color-border);
-            background: var(--color-bg);
-            color: var(--color-text);
-            outline: none;
         }
         .ledger-quick-add select:focus,
         .ledger-quick-add input:focus {
             border-color: var(--color-ledger);
+            box-shadow: 0 0 0 3px rgba(239,68,68,0.1);
+            outline: none;
         }
-        .ledger-quick-add select {
-            appearance: auto;
-            -webkit-appearance: auto;
-        }
-        .ledger-qa-direction { width: 80px; flex-shrink: 0; }
+        .ledger-qa-direction { width: 90px; flex-shrink: 0; }
         .ledger-qa-amount    { width: 110px; }
         .ledger-qa-title     { flex: 1; min-width: 100px; }
         .ledger-qa-category  { width: 90px; }
@@ -196,7 +191,7 @@ function ensureStyles() {
         /* Filter bar */
         .ledger-filter-bar {
             display: flex;
-            gap: 10px;
+            gap: 8px;
             align-items: center;
             flex-wrap: wrap;
             background: var(--color-surface);
@@ -207,24 +202,23 @@ function ensureStyles() {
         }
         .ledger-filter-bar label {
             font-size: 12px;
+            font-weight: 500;
             color: var(--color-text-secondary);
-            margin-right: 2px;
+            white-space: nowrap;
         }
         .ledger-filter-bar select {
             font-size: 13px;
-            padding: 5px 10px;
-            border-radius: var(--radius-sm);
+            height: 30px;
+            padding: 0 30px 0 12px;
+            border-radius: 20px;
             border: 1px solid var(--color-border);
-            background: var(--color-bg);
-            color: var(--color-text);
-            cursor: pointer;
+            background-position: right 9px center;
+            font-weight: 500;
             min-width: 80px;
-            appearance: auto;
-            -webkit-appearance: auto;
         }
         .ledger-filter-group {
             display: flex;
-            gap: 4px;
+            gap: 6px;
             align-items: center;
             white-space: nowrap;
         }

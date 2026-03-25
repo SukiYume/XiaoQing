@@ -123,18 +123,20 @@ function ensureStyles() {
             padding: 10px 14px;
         }
         .tasks-filter-bar label {
-            font-size: 13px;
+            font-size: 12px;
+            font-weight: 500;
             color: var(--color-text-secondary);
-            margin-right: 4px;
+            white-space: nowrap;
         }
         .tasks-filter-bar select {
             font-size: 13px;
-            padding: 4px 8px;
-            border-radius: var(--radius-sm);
+            height: 30px;
+            padding: 0 30px 0 12px;
+            border-radius: 20px;
             border: 1px solid var(--color-border);
-            background: var(--color-bg);
-            color: var(--color-text);
-            cursor: pointer;
+            background-position: right 9px center;
+            font-weight: 500;
+            min-width: 80px;
         }
         .kanban-board {
             display: flex;
