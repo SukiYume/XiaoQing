@@ -1,8 +1,9 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { showModal, closeModal } from '../components/modal.js';
+import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
 import { renderPagination } from '../components/pagination.js';
+import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -107,15 +108,8 @@ function ensureStyles() {
             color: var(--color-text-secondary);
             white-space: nowrap;
         }
-        .notes-filter-bar select {
-            font-size: 13px;
-            height: 30px;
-            padding: 0 30px 0 12px;
-            border-radius: 20px;
-            border: 1px solid var(--color-border);
-            background-position: right 9px center;
-            font-weight: 500;
-            min-width: 80px;
+        .notes-filter-bar .pselect {
+            min-width: 104px;
         }
         .notes-filter-bar input[type="text"] {
             font-size: 13px;
@@ -274,14 +268,20 @@ async function fetchItems(page) {
 
 function renderFilterBar() {
     const categories = getCategories();
-    const catOptions = ['', ...categories]
-        .map(c => `<option value="${c}"${_filterCategory === c ? ' selected' : ''}>${c || '全部分类'}</option>`)
-        .join('');
+    const catOptions = [
+        { value: '', label: '全部分类' },
+        ...categories.map(c => ({ value: c, label: c })),
+    ];
 
     return `
         <div class="notes-filter-bar">
             <label>分类：</label>
-            <select id="notes-filter-category">${catOptions}</select>
+            ${renderCustomSelect({
+                id: 'notes-filter-category',
+                options: catOptions,
+                selected: _filterCategory,
+                className: 'pselect-pill pselect-theme-notes',
+            })}
             <label style="margin-left:8px;">标签：</label>
             <input type="text"
                    id="notes-filter-tag"
@@ -381,14 +381,13 @@ function attachListeners() {
         addBtn.addEventListener('click', () => openNoteFormModal(null));
     }
 
-    const catSel = _container.querySelector('#notes-filter-category');
-    if (catSel) {
-        catSel.addEventListener('change', async () => {
-            _filterCategory = catSel.value;
+    initCustomSelects(_container, {
+        'notes-filter-category': async (value) => {
+            _filterCategory = value;
             _page = 1;
             await loadAndRender();
-        });
-    }
+        },
+    });
 
     const tagInput = _container.querySelector('#notes-filter-tag');
     if (tagInput) {
@@ -450,12 +449,21 @@ function openNoteViewModal(note) {
     };
 
     content.querySelector('#modal-delete').onclick = async () => {
-        const confirmed = window.confirm('确定要删除这条笔记吗？');
-        if (!confirmed) return;
+        closeModal();
+        const confirmed = await showConfirmModal({
+            title: '删除笔记',
+            message: `确定要删除“${note.title || '这条笔记'}”吗？删除后内容将无法恢复。`,
+            confirmText: '删除',
+            cancelText: '返回详情',
+            tone: 'danger',
+        });
+        if (!confirmed) {
+            openNoteViewModal(note);
+            return;
+        }
         try {
             await api.delete('/items/' + note.id);
             showToast('笔记已删除', 'success');
-            closeModal();
             window.dispatchEvent(new CustomEvent('pendo-data-changed'));
             await loadAndRender();
         } catch (err) {
@@ -501,12 +509,21 @@ function openNoteFormModal(existing = null) {
 
     if (isEdit) {
         content.querySelector('#modal-delete').onclick = async () => {
-            const confirmed = window.confirm('确定要删除这条笔记吗？');
-            if (!confirmed) return;
+            closeModal();
+            const confirmed = await showConfirmModal({
+                title: '删除笔记',
+                message: `确定要删除“${existing.title || '这条笔记'}”吗？删除后内容将无法恢复。`,
+                confirmText: '删除',
+                cancelText: '返回编辑',
+                tone: 'danger',
+            });
+            if (!confirmed) {
+                openNoteFormModal(existing);
+                return;
+            }
             try {
                 await api.delete('/items/' + existing.id);
                 showToast('笔记已删除', 'success');
-                closeModal();
                 window.dispatchEvent(new CustomEvent('pendo-data-changed'));
                 await loadAndRender();
             } catch (err) {

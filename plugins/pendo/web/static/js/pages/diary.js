@@ -1,7 +1,8 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { showModal, closeModal } from '../components/modal.js';
+import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
+import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -12,7 +13,13 @@ const WEATHER_OPTIONS = ['☀️ 晴', '⛅ 多云', '🌧️ 雨', '❄️ 雪'
 const DIARY_FIELDS = [
     { name: 'diary_date', label: '日期',     type: 'date',     required: true },
     { name: 'mood',       label: '心情',     type: 'mood' },
-    { name: 'weather',    label: '天气',     type: 'select',   options: ['', ...WEATHER_OPTIONS] },
+    {
+        name: 'weather',
+        label: '天气',
+        type: 'select',
+        options: [{ value: '', label: '未设置' }, ...WEATHER_OPTIONS],
+        selectThemeClass: 'pselect-theme-diary',
+    },
     { name: 'location',   label: '地点',     type: 'text' },
     { name: 'title',      label: '标题',     type: 'text',     placeholder: '可选标题' },
     { name: 'content',    label: '日记内容', type: 'textarea', rows: 8, required: true },
@@ -308,6 +315,9 @@ function ensureStyles() {
             line-height: 1.6;
             white-space: pre-wrap;
         }
+        .diary-template-select {
+            margin-top: 2px;
+        }
     `;
     document.head.appendChild(style);
 }
@@ -520,7 +530,7 @@ function openDiaryViewModal(item) {
 
     content.querySelector('#modal-delete').onclick = () => {
         closeModal();
-        deleteItem(item);
+        deleteItem(item, () => openDiaryViewModal(item));
     };
 }
 
@@ -549,16 +559,19 @@ async function openDiaryFormModal(existing = null) {
     if (!isEdit) {
         await loadTemplates();
         if (_templates.length > 0) {
-            const opts = _templates
-                .map(t => `<option value="${t.id}">${esc(t.name)}</option>`)
-                .join('');
             templateSectionHTML = `
                 <div class="form-group">
                     <label class="form-label">模板（可选）</label>
-                    <select id="diary-template-sel" class="form-input">
-                        <option value="">-- 不使用模板 --</option>
-                        ${opts}
-                    </select>
+                    ${renderCustomSelect({
+                        id: 'diary-template-sel',
+                        name: 'template_id',
+                        options: [
+                            { value: '', label: '-- 不使用模板 --' },
+                            ..._templates.map(t => ({ value: t.id, label: t.name })),
+                        ],
+                        selected: '',
+                        className: 'pselect-form pselect-block pselect-theme-diary diary-template-select',
+                    })}
                     <div id="diary-template-hint" class="diary-template-hint" style="display:none;"></div>
                 </div>
             `;
@@ -579,23 +592,21 @@ async function openDiaryFormModal(existing = null) {
     const content = showModal(title, bodyHTML, { footer });
     initFormInteractions(content);
 
-    // Template selector interaction
     if (!isEdit && _templates.length > 0) {
-        const templateSel  = content.querySelector('#diary-template-sel');
         const templateHint = content.querySelector('#diary-template-hint');
-        if (templateSel && templateHint) {
-            templateSel.addEventListener('change', () => {
-                const tid  = templateSel.value;
-                const tpl  = _templates.find(t => String(t.id) === String(tid));
+        initCustomSelects(content, {
+            'diary-template-sel': (value) => {
+                if (!templateHint) return;
+                const tpl = _templates.find(t => String(t.id) === String(value));
                 if (tpl && tpl.prompts && tpl.prompts.length > 0) {
                     templateHint.textContent = tpl.prompts.join('\n');
                     templateHint.style.display = 'block';
-                } else {
-                    templateHint.textContent = '';
-                    templateHint.style.display = 'none';
+                    return;
                 }
-            });
-        }
+                templateHint.textContent = '';
+                templateHint.style.display = 'none';
+            },
+        });
     }
 
     content.querySelector('#modal-cancel').onclick = closeModal;
@@ -603,7 +614,7 @@ async function openDiaryFormModal(existing = null) {
     if (isEdit) {
         content.querySelector('#modal-delete').onclick = () => {
             closeModal();
-            deleteItem(existing);
+            deleteItem(existing, () => openDiaryFormModal(existing));
         };
     }
 
@@ -620,12 +631,8 @@ async function openDiaryFormModal(existing = null) {
             return;
         }
 
-        // Attach template_id if selected
-        if (!isEdit && _templates.length > 0) {
-            const templateSel = content.querySelector('#diary-template-sel');
-            if (templateSel && templateSel.value) {
-                data.template_id = templateSel.value;
-            }
+        if (!data.template_id) {
+            delete data.template_id;
         }
 
         try {
@@ -647,9 +654,18 @@ async function openDiaryFormModal(existing = null) {
 
 // ── delete ────────────────────────────────────────────────────────────────────
 
-async function deleteItem(item) {
-    const confirmed = window.confirm('确定要删除这篇日记吗？');
-    if (!confirmed) return;
+async function deleteItem(item, onCancel = null) {
+    const confirmed = await showConfirmModal({
+        title: '删除日记',
+        message: `确定要删除“${item.title || formatDateLabel(item.diary_date) || '这篇日记'}”吗？删除后内容将无法恢复。`,
+        confirmText: '删除',
+        cancelText: '取消',
+        tone: 'danger',
+    });
+    if (!confirmed) {
+        if (onCancel) onCancel();
+        return;
+    }
     try {
         await api.delete('/items/' + item.id);
         showToast('日记已删除', 'success');

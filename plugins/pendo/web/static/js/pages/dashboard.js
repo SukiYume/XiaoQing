@@ -3,243 +3,497 @@ import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
 import { loadChart } from '../lib/chart-loader.js';
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function formatTime(iso) {
-    if (!iso) return '';
-    const d = new Date(iso);
-    const h = String(d.getHours()).padStart(2, '0');
-    const m = String(d.getMinutes()).padStart(2, '0');
-    return `${h}:${m}`;
-}
-
-function formatAmount(n) {
-    return '¥' + Number(n).toFixed(2);
-}
-
-const PRIORITY_LABEL = {
-    1: '🔴 紧急',
-    2: '🟠 高',
-    3: '🟡 中',
-    4: '🟢 低',
-    5: '⚪ 最低',
-};
-
-function priorityLabel(p) {
-    return PRIORITY_LABEL[p] || String(p);
-}
-
-
-// ── module state ──────────────────────────────────────────────────────────────
+const CSS_ID = 'pendo-dashboard-styles';
 
 let _container = null;
 let _chartInstance = null;
 let _dataChangedHandler = null;
 
-// ── render helpers ────────────────────────────────────────────────────────────
+function ensureStyles() {
+    if (document.getElementById(CSS_ID)) return;
+    const style = document.createElement('style');
+    style.id = CSS_ID;
+    style.textContent = `
+        .dashboard-page { padding: 26px 24px 32px; max-width: 1220px; margin: 0 auto; }
+        .dashboard-hero {
+            display: grid; grid-template-columns: minmax(0, 1.2fr) auto; gap: 18px; align-items: end;
+            padding: 22px 24px; margin-bottom: 18px; border-radius: 24px;
+            background:
+                radial-gradient(circle at top right, rgba(99,102,241,0.16), transparent 34%),
+                radial-gradient(circle at bottom left, rgba(16,185,129,0.12), transparent 28%),
+                linear-gradient(145deg, rgba(255,255,255,0.95), rgba(248,250,252,0.92));
+            border: 1px solid rgba(99,102,241,0.14);
+            box-shadow: 0 18px 42px rgba(15,23,42,0.05);
+        }
+        .dashboard-hero h2 { margin: 0; font-size: 26px; font-weight: 800; color: var(--color-dashboard); letter-spacing: -0.02em; }
+        .dashboard-hero p { margin: 8px 0 0; font-size: 14px; line-height: 1.7; color: var(--color-text-secondary); max-width: 640px; }
+        .dashboard-hero-tags { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+        .dashboard-hero-tag {
+            padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.78);
+            border: 1px solid rgba(148,163,184,0.18); color: var(--color-text-secondary);
+            font-size: 12px; font-weight: 600; white-space: nowrap;
+        }
+        .dashboard-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+        .dashboard-summary-card {
+            position: relative; overflow: hidden; padding: 16px 16px 14px; border-radius: 20px;
+            border: 1px solid rgba(226,232,240,0.92);
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.94));
+            box-shadow: 0 12px 28px rgba(15,23,42,0.04);
+        }
+        .dashboard-summary-card::after {
+            content: ''; position: absolute; inset: auto -18px -30px auto; width: 96px; height: 96px;
+            border-radius: 50%; opacity: 0.18; background: currentColor; filter: blur(8px);
+        }
+        .dashboard-summary-card.events { color: #4F46E5; }
+        .dashboard-summary-card.tasks { color: #0F766E; }
+        .dashboard-summary-card.ledger { color: #DC2626; }
+        .dashboard-summary-card.diary { color: #7C3AED; }
+        .dashboard-summary-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+        .dashboard-summary-icon {
+            width: 40px; height: 40px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center;
+            font-size: 20px; background: rgba(255,255,255,0.72); border: 1px solid rgba(255,255,255,0.7);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+        }
+        .dashboard-summary-pill {
+            padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+            background: rgba(255,255,255,0.76); color: currentColor;
+        }
+        .dashboard-summary-value { font-size: 28px; line-height: 1; font-weight: 800; letter-spacing: -0.03em; color: var(--color-text); }
+        .dashboard-summary-label { margin-top: 7px; font-size: 13px; font-weight: 600; color: var(--color-text); }
+        .dashboard-summary-meta { margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); }
+        .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr); gap: 16px; align-items: start; }
+        .dashboard-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+        .dashboard-panel {
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.94));
+            border: 1px solid rgba(226,232,240,0.92); border-radius: 22px;
+            box-shadow: 0 16px 34px rgba(15,23,42,0.04); overflow: hidden;
+        }
+        .dashboard-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
+        .dashboard-panel-header h3 { margin: 0; font-size: 18px; font-weight: 750; color: var(--color-text); letter-spacing: -0.02em; }
+        .dashboard-panel-header p { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
+        .dashboard-link { color: var(--color-text-secondary); font-size: 12px; font-weight: 600; text-decoration: none; }
+        .dashboard-link:hover { color: var(--color-text); }
+        .dashboard-panel-body { padding: 16px 20px 20px; }
+        .dashboard-agenda-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .dashboard-agenda-section-label { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
+        .dashboard-agenda-list { display: flex; flex-direction: column; gap: 10px; }
+        .dashboard-event-card {
+            display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 12px; padding: 12px;
+            border-radius: 16px; background: rgba(255,255,255,0.82); border: 1px solid rgba(226,232,240,0.92);
+        }
+        .dashboard-event-date {
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            border-radius: 14px; background: rgba(79,70,229,0.08); color: #4338CA; font-weight: 700; min-height: 58px;
+        }
+        .dashboard-event-date strong { font-size: 18px; line-height: 1; }
+        .dashboard-event-date span { font-size: 11px; margin-top: 4px; }
+        .dashboard-event-title { font-size: 14px; font-weight: 650; color: var(--color-text); line-height: 1.4; }
+        .dashboard-event-meta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--color-text-secondary); }
+        .dashboard-meta-pill { display: inline-flex; align-items: center; gap: 4px; padding: 5px 8px; border-radius: 999px; background: rgba(148,163,184,0.08); }
+        .dashboard-task-sections { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(220px, 0.9fr); gap: 14px; }
+        .dashboard-task-section { padding: 14px; border-radius: 18px; background: rgba(255,255,255,0.78); border: 1px solid rgba(226,232,240,0.9); }
+        .dashboard-task-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+        .dashboard-task-section-head strong { font-size: 13px; color: var(--color-text); }
+        .dashboard-task-count { font-size: 11px; font-weight: 700; color: var(--color-text-secondary); padding: 4px 8px; border-radius: 999px; background: rgba(148,163,184,0.08); }
+        .dashboard-task-list { display: flex; flex-direction: column; gap: 8px; }
+        .dashboard-task-item {
+            display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start;
+            padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(226,232,240,0.88);
+            background: linear-gradient(180deg, rgba(248,250,252,0.94), rgba(255,255,255,0.98));
+        }
+        .dashboard-task-item.is-completed { opacity: 0.72; background: rgba(248,250,252,0.85); }
+        .dashboard-task-item input[type="checkbox"] { width: 16px; height: 16px; margin-top: 3px; cursor: pointer; }
+        .dashboard-task-title { font-size: 14px; font-weight: 600; color: var(--color-text); line-height: 1.4; }
+        .dashboard-task-title.is-done { text-decoration: line-through; }
+        .dashboard-task-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--color-text-secondary); }
+        .dashboard-finance-top { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+        .dashboard-finance-metric { padding: 12px; border-radius: 16px; background: rgba(255,255,255,0.82); border: 1px solid rgba(226,232,240,0.88); }
+        .dashboard-finance-metric span { font-size: 12px; color: var(--color-text-secondary); }
+        .dashboard-finance-metric strong { display: block; margin-top: 8px; font-size: 22px; line-height: 1.1; font-weight: 800; letter-spacing: -0.03em; }
+        .dashboard-chart-card { padding: 14px; border-radius: 18px; background: linear-gradient(180deg, rgba(254,242,242,0.92), rgba(255,255,255,0.98)); border: 1px solid rgba(239,68,68,0.12); cursor: pointer; }
+        .dashboard-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+        .dashboard-chart-head strong { font-size: 14px; color: var(--color-ledger); }
+        .dashboard-chart-head span { font-size: 11px; color: var(--color-text-secondary); }
+        .dashboard-chart-container { height: 180px; }
+        .dashboard-ledger-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+        .dashboard-ledger-item {
+            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center;
+            padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,0.86); border: 1px solid rgba(226,232,240,0.86);
+        }
+        .dashboard-ledger-item strong { display: block; font-size: 13px; color: var(--color-text); }
+        .dashboard-ledger-item span { display: block; margin-top: 4px; font-size: 11px; color: var(--color-text-secondary); }
+        .dashboard-ledger-amount { font-size: 14px; font-weight: 800; text-align: right; }
+        .dashboard-diary-panel { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; padding: 18px 20px; }
+        .dashboard-diary-copy strong { display: block; font-size: 16px; color: var(--color-text); }
+        .dashboard-diary-copy p { margin: 8px 0 0; font-size: 13px; line-height: 1.7; color: var(--color-text-secondary); }
+        .dashboard-diary-stat {
+            min-width: 132px; padding: 12px 14px; border-radius: 18px; text-align: center;
+            background: linear-gradient(180deg, rgba(124,58,237,0.10), rgba(255,255,255,0.9));
+            border: 1px solid rgba(124,58,237,0.14);
+        }
+        .dashboard-diary-stat strong { display: block; font-size: 28px; line-height: 1; color: #7C3AED; letter-spacing: -0.03em; }
+        .dashboard-diary-stat span { display: block; margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); }
+        .dashboard-empty {
+            padding: 28px 16px; border-radius: 18px; background: rgba(248,250,252,0.86);
+            border: 1px dashed rgba(148,163,184,0.28); text-align: center;
+        }
+        .dashboard-empty strong { display: block; font-size: 14px; color: var(--color-text); }
+        .dashboard-empty p { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); }
+        @media (max-width: 1024px) {
+            .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .dashboard-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 720px) {
+            .dashboard-page { padding: 20px 16px 28px; }
+            .dashboard-hero { grid-template-columns: 1fr; }
+            .dashboard-hero-tags { justify-content: flex-start; }
+            .dashboard-summary { grid-template-columns: 1fr; }
+            .dashboard-agenda-grid, .dashboard-task-sections, .dashboard-finance-top { grid-template-columns: 1fr; }
+            .dashboard-diary-panel { grid-template-columns: 1fr; }
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+function formatTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function formatMonthDay(iso) {
+    if (!iso) return { month: '--', day: '--' };
+    const d = new Date(iso);
+    return { month: `${d.getMonth() + 1}月`, day: String(d.getDate()).padStart(2, '0') };
+}
+
+function formatDate(iso) {
+    if (!iso) return '';
+    return iso.slice(0, 10);
+}
+
+function formatAmount(value) {
+    return `¥${Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatCompactAmount(value) {
+    const amount = Number(value || 0);
+    if (Math.abs(amount) >= 10000) return `¥${(amount / 10000).toFixed(1)}w`;
+    return `¥${amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`;
+}
+
+const PRIORITY_LABEL = { 1: '紧急', 2: '高优先', 3: '中优先', 4: '低优先', 5: '最低' };
+
+function priorityLabel(priority) {
+    return PRIORITY_LABEL[priority] || '未设优先级';
+}
+
+function buildHero(summary, monthSummary) {
+    return `
+        <section class="dashboard-hero">
+            <div>
+                <h2>📊 概览</h2>
+                <p>本月安排、任务进度和资金变化，一页看完。</p>
+            </div>
+            <div class="dashboard-hero-tags">
+                <span class="dashboard-hero-tag">本月 ${summary.events_month ?? 0} 场日程</span>
+                <span class="dashboard-hero-tag">${summary.tasks_pending ?? 0} 项进行中任务</span>
+                <span class="dashboard-hero-tag">支出 ${formatCompactAmount(monthSummary.expense || 0)}</span>
+            </div>
+        </section>`;
+}
 
 function renderSummaryCards(summary) {
     const cards = [
-        {
-            icon: '📅',
-            colorClass: 'events',
-            value: summary.events_today ?? 0,
-            label: '今日日程',
-        },
-        {
-            icon: '✅',
-            colorClass: 'tasks',
-            value: summary.tasks_pending ?? 0,
-            label: '待办任务',
-        },
-        {
-            icon: '💰',
-            colorClass: 'ledger',
-            value: summary.ledger_week ?? 0,
-            label: '本周账单',
-        },
-        {
-            icon: '📖',
-            colorClass: 'diary',
-            value: summary.diary_month ?? 0,
-            label: '本月日记',
-        },
+        { tone: 'events', icon: '📅', badge: '月视图', value: String(summary.events_month ?? 0), label: '本月日程', meta: '包含已安排和即将到来的事项' },
+        { tone: 'tasks', icon: '✅', badge: '进度', value: String(summary.tasks_pending ?? 0), label: '进行中任务', meta: `最近完成 ${summary.tasks_done_recent ?? 0} 项` },
+        { tone: 'ledger', icon: '💸', badge: '财务', value: formatCompactAmount(summary.ledger_month_expense ?? 0), label: '本月支出', meta: '按当前自然月累计' },
+        { tone: 'diary', icon: '📖', badge: '记录', value: String(summary.diary_month ?? 0), label: '近 30 天日记', meta: '保留最近生活轨迹' },
     ];
-
     return `
-        <div class="summary-cards">
-            ${cards.map(c => `
-                <div class="summary-card">
-                    <div class="summary-card-icon ${c.colorClass}">${c.icon}</div>
-                    <div class="summary-card-content">
-                        <div class="summary-card-value">${c.value}</div>
-                        <div class="summary-card-label">${c.label}</div>
+        <section class="dashboard-summary">
+            ${cards.map(card => `
+                <article class="dashboard-summary-card ${card.tone}">
+                    <div class="dashboard-summary-top">
+                        <span class="dashboard-summary-icon">${card.icon}</span>
+                        <span class="dashboard-summary-pill">${card.badge}</span>
                     </div>
+                    <div class="dashboard-summary-value">${card.value}</div>
+                    <div class="dashboard-summary-label">${card.label}</div>
+                    <div class="dashboard-summary-meta">${card.meta}</div>
+                </article>
+            `).join('')}
+        </section>`;
+}
+
+function renderEventSection(title, items, emptyTitle, emptyText) {
+    if (!items.length) {
+        return `
+            <div>
+                <div class="dashboard-agenda-section-label">${title}</div>
+                <div class="dashboard-empty">
+                    <strong>${emptyTitle}</strong>
+                    <p>${emptyText}</p>
                 </div>
-            `).join('')}
-        </div>
-    `;
-}
-
-function renderEventsTimeline(events) {
-    if (!events || events.length === 0) {
-        return `<div class="empty-state"><p>今日暂无日程</p></div>`;
+            </div>`;
     }
 
-    const sorted = [...events].sort((a, b) => {
-        return new Date(a.start_time) - new Date(b.start_time);
-    });
+    return `
+        <div>
+            <div class="dashboard-agenda-section-label">${title}</div>
+            <div class="dashboard-agenda-list">
+                ${items.map(event => {
+                    const date = formatMonthDay(event.start_time);
+                    return `
+                        <article class="dashboard-event-card">
+                            <div class="dashboard-event-date">
+                                <strong>${date.day}</strong>
+                                <span>${date.month}</span>
+                            </div>
+                            <div>
+                                <div class="dashboard-event-title">${event.title || '(无标题)'}</div>
+                                <div class="dashboard-event-meta">
+                                    <span class="dashboard-meta-pill">🕒 ${formatTime(event.start_time)}${event.end_time ? ` - ${formatTime(event.end_time)}` : ''}</span>
+                                    ${event.location ? `<span class="dashboard-meta-pill">📍 ${event.location}</span>` : ''}
+                                </div>
+                            </div>
+                        </article>`;
+                }).join('')}
+            </div>
+        </div>`;
+}
 
+function renderMonthlyAgenda(events) {
     const now = new Date();
+    const sorted = [...events].sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+    const upcoming = sorted.filter(event => {
+        const end = event.end_time ? new Date(event.end_time) : new Date(event.start_time);
+        return end >= now;
+    }).slice(0, 4);
+    const past = sorted.filter(event => {
+        const end = event.end_time ? new Date(event.end_time) : new Date(event.start_time);
+        return end < now;
+    }).slice(-4).reverse();
 
     return `
-        <div style="padding-left: 28px; position: relative;">
-            <div style="position:absolute;left:7px;top:0;bottom:0;width:2px;background:var(--color-border);border-radius:1px;"></div>
-            ${sorted.map(ev => {
-                const start = new Date(ev.start_time);
-                const end = ev.end_time ? new Date(ev.end_time) : null;
-                const isActive = start <= now && (!end || end >= now);
-                return `
-                    <div class="timeline-item${isActive ? ' active' : ''}">
-                        <div class="timeline-date" style="color:var(--color-events);font-weight:600;">
-                            ${formatTime(ev.start_time)}${end ? ' – ' + formatTime(ev.end_time) : ''}
-                        </div>
-                        <div class="timeline-content">
-                            <div style="font-weight:600;color:var(--color-text);">${ev.title || '(无标题)'}</div>
-                            ${ev.location ? `<div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px;">📍 ${ev.location}</div>` : ''}
-                        </div>
-                    </div>
-                `;
-            }).join('')}
-        </div>
-    `;
+        <section class="dashboard-panel">
+            <div class="dashboard-panel-header">
+                <div>
+                    <h3 style="color:var(--color-events);">📅 本月日程</h3>
+                    <p>查看这个月的安排节奏。</p>
+                </div>
+                <a class="dashboard-link" href="#/events">查看全部 →</a>
+            </div>
+            <div class="dashboard-panel-body">
+                <div class="dashboard-agenda-grid">
+                    ${renderEventSection('即将到来', upcoming, '接下来暂无安排', '这个月后续没有新的日程，可以安心处理手头任务。')}
+                    ${renderEventSection('最近经过', past, '本月还没有经过的事项', '新建一条日程后，这里会逐步形成月内轨迹。')}
+                </div>
+            </div>
+        </section>`;
 }
 
-function renderTasksList(tasks, container) {
-    if (!tasks || tasks.length === 0) {
-        return `<div class="empty-state"><p>暂无待办任务</p></div>`;
-    }
-
-    const sorted = [...tasks].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
-
+function renderActiveTaskItem(task) {
+    const due = task.due_time ? `截止 ${formatDate(task.due_time)} ${formatTime(task.due_time)}` : '未设置截止时间';
+    const status = task.status === 'in_progress' ? '进行中' : '待办';
     return `
-        <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;">
-            ${sorted.map(task => `
-                <li style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--color-bg);border-radius:var(--radius-sm);border:1px solid var(--color-border);">
-                    <input
-                        type="checkbox"
-                        data-task-id="${task.id}"
-                        style="width:16px;height:16px;cursor:pointer;flex-shrink:0;"
-                        ${task.status === 'done' ? 'checked disabled' : ''}
-                    />
-                    <div style="flex:1;min-width:0;">
-                        <div style="font-weight:500;color:var(--color-text);${task.status === 'done' ? 'text-decoration:line-through;opacity:0.5;' : ''}">${task.title || '(无标题)'}</div>
-                        <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;">
-                            <span style="font-size:12px;">${priorityLabel(task.priority)}</span>
-                            ${task.category ? `<span class="badge badge-gray">${task.category}</span>` : ''}
-                            ${task.due_time ? `<span style="font-size:12px;color:var(--color-text-secondary);">截止 ${formatTime(task.due_time) || task.due_time.slice(0, 10)}</span>` : ''}
+        <label class="dashboard-task-item">
+            <input type="checkbox" data-task-id="${task.id}">
+            <div>
+                <div class="dashboard-task-title">${task.title || '(无标题)'}</div>
+                <div class="dashboard-task-meta">
+                    <span class="dashboard-meta-pill">${status}</span>
+                    <span class="dashboard-meta-pill">${priorityLabel(task.priority)}</span>
+                    ${task.category ? `<span class="dashboard-meta-pill">${task.category}</span>` : ''}
+                    <span class="dashboard-meta-pill">${due}</span>
+                </div>
+            </div>
+        </label>`;
+}
+
+function renderCompletedTaskItem(task) {
+    const completedAt = task.completed_at || task.updated_at || '';
+    return `
+        <article class="dashboard-task-item is-completed">
+            <div style="width:16px;height:16px;border-radius:999px;background:rgba(16,185,129,0.16);margin-top:4px;"></div>
+            <div>
+                <div class="dashboard-task-title is-done">${task.title || '(无标题)'}</div>
+                <div class="dashboard-task-meta">
+                    <span class="dashboard-meta-pill">已完成</span>
+                    ${completedAt ? `<span class="dashboard-meta-pill">${formatDate(completedAt)} ${formatTime(completedAt)}</span>` : ''}
+                </div>
+            </div>
+        </article>`;
+}
+
+function renderTasksPanel(tasks) {
+    const active = tasks?.active || [];
+    const completed = tasks?.completed || [];
+    return `
+        <section class="dashboard-panel">
+            <div class="dashboard-panel-header">
+                <div>
+                    <h3 style="color:var(--color-tasks);">✅ 任务进度</h3>
+                    <p>当前推进项和最近完成一并查看。</p>
+                </div>
+                <a class="dashboard-link" href="#/tasks">查看全部 →</a>
+            </div>
+            <div class="dashboard-panel-body">
+                <div class="dashboard-task-sections">
+                    <section class="dashboard-task-section">
+                        <div class="dashboard-task-section-head">
+                            <strong>待办 / 进行中</strong>
+                            <span class="dashboard-task-count">${active.length} 项</span>
                         </div>
-                    </div>
-                </li>
-            `).join('')}
-        </ul>
-    `;
+                        <div class="dashboard-task-list" id="dashboard-active-tasks">
+                            ${active.length ? active.map(renderActiveTaskItem).join('') : `<div class="dashboard-empty"><strong>当前没有待办任务</strong><p>可以回到待办页新建，或者先把最近完成的任务复盘一下。</p></div>`}
+                        </div>
+                    </section>
+                    <section class="dashboard-task-section">
+                        <div class="dashboard-task-section-head">
+                            <strong>最近完成</strong>
+                            <span class="dashboard-task-count">${completed.length} 项</span>
+                        </div>
+                        <div class="dashboard-task-list">
+                            ${completed.length ? completed.map(renderCompletedTaskItem).join('') : `<div class="dashboard-empty"><strong>还没有完成记录</strong><p>完成一项任务后，这里会展示最近的收尾节奏。</p></div>`}
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </section>`;
 }
 
 async function renderSpendingChart(canvasId, spendingTrend) {
-    if (!spendingTrend || spendingTrend.length === 0) return;
+    if (!spendingTrend.length) return;
+    const Chart = await loadChart();
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
 
-    try {
-        const Chart = await loadChart();
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
+    const labels = spendingTrend.map(point => {
+        const parts = point.date.split('-');
+        return `${parts[1]}/${parts[2]}`;
+    });
+    const values = spendingTrend.map(point => point.amount);
 
-        const labels = spendingTrend.map(d => {
-            const parts = d.date.split('-');
-            return `${parts[1]}/${parts[2]}`;
-        });
-        const values = spendingTrend.map(d => d.amount);
-
-        if (_chartInstance) {
-            _chartInstance.destroy();
-            _chartInstance = null;
-        }
-
-        _chartInstance = new Chart(canvas, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [{
-                    data: values,
-                    borderColor: '#EF4444',
-                    backgroundColor: 'rgba(239,68,68,0.08)',
-                    borderWidth: 2,
-                    pointRadius: 3,
-                    pointHoverRadius: 5,
-                    fill: true,
-                    tension: 0.4,
-                }],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: ctx => formatAmount(ctx.parsed.y),
-                        },
-                    },
-                },
-                scales: {
-                    x: {
-                        ticks: {
-                            font: { size: 10 },
-                            maxTicksLimit: 7,
-                            color: '#9CA3AF',
-                        },
-                        grid: { display: false },
-                    },
-                    y: {
-                        ticks: {
-                            font: { size: 10 },
-                            color: '#9CA3AF',
-                            callback: v => '¥' + v,
-                        },
-                        grid: { color: 'rgba(0,0,0,0.04)' },
-                    },
-                },
-            },
-        });
-    } catch (err) {
-        console.warn('Dashboard chart error:', err);
+    if (_chartInstance) {
+        _chartInstance.destroy();
+        _chartInstance = null;
     }
+
+    _chartInstance = new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                data: values,
+                borderColor: '#DC2626',
+                backgroundColor: 'rgba(239,68,68,0.12)',
+                borderWidth: 2.4,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                tension: 0.38,
+                fill: true,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: (ctx) => formatAmount(ctx.parsed.y) } },
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: '#94A3B8', maxTicksLimit: 6 } },
+                y: { grid: { color: 'rgba(148,163,184,0.16)' }, ticks: { color: '#94A3B8', callback: (value) => `¥${value}` } },
+            },
+        },
+    });
 }
 
-function renderMonthSummary(monthSummary) {
-    const { income = 0, expense = 0, balance = 0 } = monthSummary || {};
-    const items = [
-        { label: '本月收入', value: income, color: 'var(--color-success)' },
-        { label: '本月支出', value: expense, color: 'var(--color-ledger)' },
-        { label: '结余', value: balance, color: balance >= 0 ? 'var(--color-success)' : 'var(--color-ledger)' },
-    ];
+function renderRecentLedger(recentLedger) {
+    if (!recentLedger.length) {
+        return `<div class="dashboard-empty" style="margin-top:14px;"><strong>本月还没有账目变化</strong><p>新增一笔收入或支出后，这里会显示最近的资金流动。</p></div>`;
+    }
+
     return `
-        <div style="display:flex;gap:0;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--color-border);">
-            ${items.map((item, i) => `
-                <div style="flex:1;padding:16px;text-align:center;${i > 0 ? 'border-left:1px solid var(--color-border);' : ''}background:var(--color-surface);">
-                    <div style="font-size:18px;font-weight:700;color:${item.color};">${formatAmount(item.value)}</div>
-                    <div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px;">${item.label}</div>
-                </div>
-            `).join('')}
-        </div>
-    `;
+        <div class="dashboard-ledger-list">
+            ${recentLedger.slice(0, 5).map(item => {
+                const isExpense = item.direction !== 'income';
+                const amount = `${isExpense ? '-' : '+'}${formatAmount(item.amount)}`;
+                return `
+                    <article class="dashboard-ledger-item">
+                        <div>
+                            <strong>${item.title || '(无摘要)'}</strong>
+                            <span>${item.ledger_category || '未分类'} · ${item.ledger_date || ''}</span>
+                        </div>
+                        <div class="dashboard-ledger-amount" style="color:${isExpense ? 'var(--color-ledger)' : 'var(--color-success)'};">${amount}</div>
+                    </article>`;
+            }).join('')}
+        </div>`;
 }
 
-// ── main page render ──────────────────────────────────────────────────────────
+function renderFinancePanel(spendingTrend, monthSummary, recentLedger) {
+    const chartId = 'dashboard-spending-chart';
+    return `
+        <section class="dashboard-panel">
+            <div class="dashboard-panel-header">
+                <div>
+                    <h3 style="color:var(--color-ledger);">💰 本月财务</h3>
+                    <p>收入、支出和最近账目。</p>
+                </div>
+                <a class="dashboard-link" href="#/ledger">查看账本 →</a>
+            </div>
+            <div class="dashboard-panel-body">
+                <div class="dashboard-finance-top">
+                    <div class="dashboard-finance-metric">
+                        <span>本月收入</span>
+                        <strong style="color:var(--color-success);">${formatAmount(monthSummary.income || 0)}</strong>
+                    </div>
+                    <div class="dashboard-finance-metric">
+                        <span>本月支出</span>
+                        <strong style="color:var(--color-ledger);">${formatAmount(monthSummary.expense || 0)}</strong>
+                    </div>
+                    <div class="dashboard-finance-metric">
+                        <span>当前结余</span>
+                        <strong style="color:${(monthSummary.balance || 0) >= 0 ? 'var(--color-success)' : 'var(--color-ledger)'};">${formatAmount(monthSummary.balance || 0)}</strong>
+                    </div>
+                </div>
+                <div class="dashboard-chart-card" id="dashboard-chart-card">
+                    <div class="dashboard-chart-head">
+                        <strong>支出走势</strong>
+                        <span>点击查看详细统计</span>
+                    </div>
+                    ${spendingTrend.length
+                        ? `<div class="dashboard-chart-container"><canvas id="${chartId}"></canvas></div>`
+                        : `<div class="dashboard-empty"><strong>暂无支出走势</strong><p>本月出现支出后，这里会逐步形成趋势线。</p></div>`}
+                </div>
+                ${renderRecentLedger(recentLedger)}
+            </div>
+        </section>`;
+}
+
+function renderDiaryPanel(summary) {
+    return `
+        <section class="dashboard-panel">
+            <div class="dashboard-diary-panel">
+                <div class="dashboard-diary-copy">
+                    <strong>📖 日记记录</strong>
+                    <p>近 30 天共写了 ${summary.diary_month ?? 0} 篇。</p>
+                    <div style="margin-top:12px;">
+                        <a class="dashboard-link" href="#/diary">去写日记 →</a>
+                    </div>
+                </div>
+                <div class="dashboard-diary-stat">
+                    <strong>${summary.diary_month ?? 0}</strong>
+                    <span>近 30 天记录</span>
+                </div>
+            </div>
+        </section>`;
+}
 
 async function loadAndRender() {
     if (!_container) return;
-
+    ensureStyles();
     _container.innerHTML = `<div class="empty-state"><p>加载中...</p></div>`;
 
     let data;
@@ -252,122 +506,62 @@ async function loadAndRender() {
     }
 
     const summary = data.summary || {};
-    const events = data.events || [];
-    const tasks = data.tasks || [];
+    const eventsMonth = data.events_month || [];
+    const tasks = data.tasks || { active: [], completed: [] };
     const spendingTrend = data.spending_trend || [];
     const monthSummary = data.month_summary || {};
-
-    const CHART_CANVAS_ID = 'dashboard-spending-chart';
+    const recentLedger = data.recent_ledger || [];
 
     _container.innerHTML = `
-        <div style="padding:24px;max-width:1200px;margin:0 auto;">
-
-            <!-- Page title -->
-            <div style="margin-bottom:24px;">
-                <h2 style="font-size:20px;font-weight:700;color:var(--color-dashboard);">📊 概览</h2>
-                <p style="font-size:13px;color:var(--color-text-secondary);margin-top:2px;">今日数据摘要</p>
-            </div>
-
-            <!-- Summary cards -->
+        <div class="dashboard-page">
+            ${buildHero(summary, monthSummary)}
             ${renderSummaryCards(summary)}
-
-            <!-- Main content grid: left=events+tasks, right=chart+ledger -->
-            <div class="chart-row" style="align-items:start;">
-
-                <!-- Left column: events + tasks -->
-                <div style="display:flex;flex-direction:column;gap:16px;">
-
-                    <!-- Today's events -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 style="color:var(--color-events);">📅 今日日程</h3>
-                            <a href="#/events" style="font-size:13px;color:var(--color-text-secondary);">查看全部 →</a>
-                        </div>
-                        <div id="dashboard-events-list">
-                            ${renderEventsTimeline(events)}
-                        </div>
-                    </div>
-
-                    <!-- Pending tasks -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 style="color:var(--color-tasks);">✅ 待办任务</h3>
-                            <a href="#/tasks" style="font-size:13px;color:var(--color-text-secondary);">查看全部 →</a>
-                        </div>
-                        <div id="dashboard-tasks-list">
-                            ${renderTasksList(tasks, null)}
-                        </div>
-                    </div>
-
+            <div class="dashboard-grid">
+                <div class="dashboard-column">
+                    ${renderMonthlyAgenda(eventsMonth)}
+                    ${renderTasksPanel(tasks)}
                 </div>
-
-                <!-- Right column: spending chart + month summary -->
-                <div style="display:flex;flex-direction:column;gap:16px;">
-
-                    <!-- Spending trend chart -->
-                    <div class="chart-card" style="cursor:pointer;" id="dashboard-chart-card">
-                        <h3 style="color:var(--color-ledger);">💸 近期支出趋势</h3>
-                        ${spendingTrend.length > 0
-                            ? `<div class="chart-container" style="height:180px;"><canvas id="${CHART_CANVAS_ID}"></canvas></div>`
-                            : `<div class="empty-state" style="padding:24px 0;"><p>暂无支出数据</p></div>`
-                        }
-                        <div style="font-size:12px;color:var(--color-text-tertiary);margin-top:8px;text-align:right;">点击查看详细统计 →</div>
-                    </div>
-
-                    <!-- Month income/expense/balance -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 style="color:var(--color-ledger);">💰 本月财务</h3>
-                            <a href="#/ledger" style="font-size:13px;color:var(--color-text-secondary);">查看账本 →</a>
-                        </div>
-                        ${renderMonthSummary(monthSummary)}
-                    </div>
-
+                <div class="dashboard-column">
+                    ${renderFinancePanel(spendingTrend, monthSummary, recentLedger)}
+                    ${renderDiaryPanel(summary)}
                 </div>
-
             </div>
         </div>
     `;
 
-    // Navigate to stats when chart card is clicked
     const chartCard = document.getElementById('dashboard-chart-card');
-    if (chartCard) {
-        chartCard.addEventListener('click', () => navigate('stats'));
-    }
+    if (chartCard) chartCard.addEventListener('click', () => navigate('stats'));
 
-    // Attach task checkbox listeners
-    const tasksListEl = document.getElementById('dashboard-tasks-list');
-    if (tasksListEl) {
-        tasksListEl.addEventListener('change', async (e) => {
-            const cb = e.target;
-            if (!cb.matches('input[type="checkbox"][data-task-id]')) return;
-            const id = cb.dataset.taskId;
-            cb.disabled = true;
+    const activeTasksEl = document.getElementById('dashboard-active-tasks');
+    if (activeTasksEl) {
+        activeTasksEl.addEventListener('change', async (event) => {
+            const checkbox = event.target;
+            if (!checkbox.matches('input[type="checkbox"][data-task-id]')) return;
+            const id = checkbox.dataset.taskId;
+            checkbox.disabled = true;
             try {
                 await api.put('/items/' + id, { status: 'done' });
                 showToast('任务已完成 ✅', 'success');
                 await loadAndRender();
             } catch (err) {
                 showToast('标记失败：' + err.message, 'error');
-                cb.checked = false;
-                cb.disabled = false;
+                checkbox.checked = false;
+                checkbox.disabled = false;
             }
         });
     }
 
-    // Render chart (after DOM is ready)
-    if (spendingTrend.length > 0) {
-        await renderSpendingChart(CHART_CANVAS_ID, spendingTrend);
+    if (spendingTrend.length) {
+        await renderSpendingChart('dashboard-spending-chart', spendingTrend);
+    } else if (_chartInstance) {
+        _chartInstance.destroy();
+        _chartInstance = null;
     }
 }
-
-// ── page module exports ───────────────────────────────────────────────────────
 
 export function render(container) {
     _container = container;
     loadAndRender();
-
-    // Listen for data changes (e.g. quick-add via FAB)
     _dataChangedHandler = () => loadAndRender();
     window.addEventListener('pendo-data-changed', _dataChangedHandler);
 }
@@ -384,6 +578,4 @@ export function destroy() {
     _container = null;
 }
 
-export function onRouteEnter(_params) {
-    // Nothing special needed on route enter; render() is called by router
-}
+export function onRouteEnter(_params) {}
