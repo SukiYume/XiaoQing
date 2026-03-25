@@ -88,6 +88,12 @@ class PendoConfig:
     SESSION_TYPE_EVENT_INFO = "event_info"
     SESSION_TYPE_LEDGER_ADD = "ledger_add"
 
+    # Web UI
+    WEB_ENABLED = True
+    WEB_HOST = "127.0.0.1"
+    WEB_PORT = 8765
+    WEB_TOKEN_EXPIRE_HOURS = 24
+
     @classmethod
     def validate(cls):
         """验证配置合理性"""
