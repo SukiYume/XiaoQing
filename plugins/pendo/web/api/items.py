@@ -78,6 +78,87 @@ def _item_to_dict(item) -> dict:
     return {}
 
 
+def _resolve_date_field(type: Optional[str], date_field: Optional[str]) -> str:
+    if date_field:
+        return date_field
+    if type == "event":   return "start_time"
+    if type == "task":    return "due_time"
+    if type == "diary":   return "diary_date"
+    if type == "ledger":  return "ledger_date"
+    return "created_at"
+
+
+def _build_count_where(
+    type, status, category, direction, start_date, end_date, date_field,
+    amount_min, amount_max, owner_id
+):
+    where = ["owner_id = ?", "deleted = 0"]
+    params: list = [owner_id]
+    if type:       where.append("type = ?");             params.append(type)
+    if status:     where.append("status = ?");           params.append(status)
+    if category:   where.append("category = ?");         params.append(category)
+    if direction:  where.append("direction = ?");        params.append(direction)
+    if amount_min is not None:
+        where.append("amount >= ?"); params.append(amount_min)
+    if amount_max is not None:
+        where.append("amount <= ?"); params.append(amount_max)
+    if start_date and end_date and date_field:
+        where.append(f"{date_field} >= ?"); params.append(start_date)
+        where.append(f"{date_field} <= ?"); params.append(end_date)
+    return where, params
+
+
+@router.get("/items/aggregate")
+def aggregate_items(
+    type: Optional[str] = None,
+    direction: Optional[str] = None,
+    category: Optional[str] = None,
+    date_field: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+    owner_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """Return income/expense totals for the given filters (full result set, not paginated)."""
+    _df = _resolve_date_field(type, date_field) if (start_date and end_date) else None
+    where, params = _build_count_where(
+        type, None, category, direction, start_date, end_date, _df, amount_min, amount_max, owner_id
+    )
+    conn = db.get_connection()
+    rows = conn.execute(
+        f"SELECT direction, SUM(amount), COUNT(*) FROM items WHERE {' AND '.join(where)} GROUP BY direction",
+        params,
+    ).fetchall()
+    income = expense = count = 0
+    for row in rows:
+        if row[0] == "income":   income  = float(row[1] or 0)
+        elif row[0] == "expense": expense = float(row[1] or 0)
+        count += int(row[2] or 0)
+    return {"ok": True, "data": {"income": income, "expense": expense, "balance": income - expense, "count": count}}
+
+
+@router.get("/items/categories")
+def list_categories(
+    type: Optional[str] = None,
+    owner_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """Return distinct ledger_category values for the given type."""
+    conn = db.get_connection()
+    where = ["owner_id = ?", "deleted = 0", "ledger_category IS NOT NULL", "ledger_category != ''"]
+    params: list = [owner_id]
+    if type:
+        where.append("type = ?")
+        params.append(type)
+    rows = conn.execute(
+        f"SELECT DISTINCT ledger_category FROM items WHERE {' AND '.join(where)} ORDER BY ledger_category",
+        params,
+    ).fetchall()
+    return {"ok": True, "data": {"categories": [r[0] for r in rows]}}
+
+
 @router.get("/items")
 def list_items(
     type: Optional[str] = None,
@@ -88,6 +169,8 @@ def list_items(
     date_field: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
     range: Optional[str] = Query(None, alias="range"),
     sort: str = "created_at",
     order: str = "desc",
@@ -97,70 +180,49 @@ def list_items(
     db: Database = Depends(get_db),
 ):
     """List items with filtering and pagination."""
-    filters = {}
-    if type:
-        filters["type"] = type
-    if status:
-        filters["status"] = status
-    if category:
-        filters["category"] = category
+    filters: dict = {}
+    if type:      filters["type"] = type
+    if status:    filters["status"] = status
+    if category:  filters["category"] = category
+    if direction: filters["direction"] = direction
+    if amount_min is not None: filters["amount_min"] = amount_min
+    if amount_max is not None: filters["amount_max"] = amount_max
+
+    # Sorting
+    _allowed_sort = {"created_at", "updated_at", "ledger_date", "due_time", "start_time", "amount"}
+    if sort in _allowed_sort:
+        filters["sort_field"] = sort
+        filters["sort_order"] = order.upper()
 
     # Date filtering: support both direct params and range="start..end" syntax
+    resolved_df: Optional[str] = None
     if start_date and end_date:
-        # Direct params from frontend (start_date, end_date, date_field)
-        if not date_field:
-            date_field = "created_at"
-            if type == "event":
-                date_field = "start_time"
-            elif type == "task":
-                date_field = "due_time"
-            elif type == "diary":
-                date_field = "diary_date"
-            elif type == "ledger":
-                date_field = "ledger_date"
-        filters["date_field"] = date_field
+        resolved_df = _resolve_date_field(type, date_field)
+        filters["date_field"] = resolved_df
         filters["start_date"] = start_date
         filters["end_date"] = end_date
     elif range:
-        # Legacy range param: "2026-03-01..2026-03-31"
         parts = range.split("..")
         if len(parts) == 2:
-            _df = date_field or "created_at"
-            if not date_field:
-                if type == "event":
-                    _df = "start_time"
-                elif type == "task":
-                    _df = "due_time"
-                elif type == "diary":
-                    _df = "diary_date"
-                elif type == "ledger":
-                    _df = "ledger_date"
-            filters["date_field"] = _df
+            resolved_df = _resolve_date_field(type, date_field)
+            filters["date_field"] = resolved_df
             filters["start_date"] = parts[0]
             filters["end_date"] = parts[1]
+            start_date, end_date = parts[0], parts[1]
 
     offset = (page - 1) * page_size
     items = db.get_items(owner_id, filters=filters, limit=page_size, offset=offset)
 
-    # Post-filter for fields not supported by get_items() directly
-    if direction:
-        items = [i for i in items if getattr(i, "direction", None) == direction]
+    # Post-filter for priority (not a DB column)
     if priority is not None:
         items = [i for i in items if getattr(i, "priority", None) == priority]
 
-    # Get total count via COUNT query for pagination
+    # Count matching all filters
+    count_where, count_params = _build_count_where(
+        type, status, category, direction, start_date, end_date, resolved_df,
+        amount_min, amount_max, owner_id
+    )
     conn = db.get_connection()
-    count_where = ["owner_id = ?", "deleted = 0"]
-    count_params: list = [owner_id]
-    if type:
-        count_where.append("type = ?")
-        count_params.append(type)
-    if status:
-        count_where.append("status = ?")
-        count_params.append(status)
-    if category:
-        count_where.append("category = ?")
-        count_params.append(category)
     total = conn.execute(
         f"SELECT COUNT(*) FROM items WHERE {' AND '.join(count_where)}",
         count_params,

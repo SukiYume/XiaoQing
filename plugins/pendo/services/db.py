@@ -553,6 +553,8 @@ class Database:
                 return item
         return None
 
+    _ALLOWED_SORT_FIELDS = {"created_at", "updated_at", "ledger_date", "due_time", "start_time", "amount"}
+
     def get_items(
         self,
         owner_id: str,
@@ -564,7 +566,9 @@ class Database:
 
         Args:
             owner_id: 用户ID
-            filters: 过滤条件，支持 type, category, status, tags, start_date, end_date, date_field
+            filters: 过滤条件，支持 type, category, status, tags, direction,
+                     amount_min, amount_max, start_date, end_date, date_field,
+                     sort_field, sort_order
             limit: 返回数量限制
             offset: 偏移量
 
@@ -590,6 +594,15 @@ class Database:
             if "tags" in filters:
                 where.append(f"tags LIKE ?")
                 params.append(f"%{filters['tags']}%")
+            if "direction" in filters:
+                where.append("direction = ?")
+                params.append(filters["direction"])
+            if "amount_min" in filters:
+                where.append("amount >= ?")
+                params.append(filters["amount_min"])
+            if "amount_max" in filters:
+                where.append("amount <= ?")
+                params.append(filters["amount_max"])
 
             # 支持日期范围过滤
             date_field = filters.get("date_field")
@@ -605,7 +618,17 @@ class Database:
                     where.append(f"{date_field} <= ?")
                     params.append(filters["end_date"])
 
-        sql = f"SELECT * FROM items WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        sort_field = "created_at"
+        sort_order = "DESC"
+        if filters:
+            sf = filters.get("sort_field", "created_at")
+            so = filters.get("sort_order", "DESC").upper()
+            if sf in self._ALLOWED_SORT_FIELDS:
+                sort_field = sf
+            if so in ("ASC", "DESC"):
+                sort_order = so
+
+        sql = f"SELECT * FROM items WHERE {' AND '.join(where)} ORDER BY {sort_field} {sort_order} LIMIT ? OFFSET ?"
         cursor.execute(sql, params + [limit, offset])
 
         items = []
