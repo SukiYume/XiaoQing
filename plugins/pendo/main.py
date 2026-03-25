@@ -602,6 +602,13 @@ HELP_MAP = {
         "• /pendo settings diary_remind <HH:MM> - 日记提醒时间",
         "• /pendo settings privacy on/off - 隐私模式",
     ],
+    "web": [
+        "**Web UI 管理 (Web):**",
+        "• /pendo web token  - 生成登录 Token",
+        "• /pendo web start  - 启动 Web 服务",
+        "• /pendo web stop   - 停止 Web 服务",
+        "• /pendo web status - 查看服务状态",
+    ],
     "common": ["**其他操作:**", "• /pendo undo [分钟] - 撤销删除或编辑 (默认5分钟内)"],
 }
 
@@ -650,6 +657,7 @@ def _show_help(subcommand: str = "") -> str:
         "common",
         "import",
         "settings",
+        "web",
     ]
 
     for key in sections:
