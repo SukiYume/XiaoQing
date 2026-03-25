@@ -48,7 +48,7 @@ let isOpen = false;
 export function renderFab(container) {
     container.innerHTML = `
         <div class="fab-wrapper">
-            <div class="fab-menu" style="display: none;">
+            <div class="fab-menu">
                 ${FAB_ITEMS.map(item => `
                     <button class="fab-item" data-type="${item.type}" title="${item.label}">
                         <span>${item.icon}</span>
@@ -63,30 +63,33 @@ export function renderFab(container) {
     const fab = container.querySelector('.fab');
     const menu = container.querySelector('.fab-menu');
 
+    function openMenu() {
+        isOpen = true;
+        menu.classList.add('open');
+        fab.classList.add('open');
+    }
+
+    function closeMenu() {
+        isOpen = false;
+        menu.classList.remove('open');
+        fab.classList.remove('open');
+    }
+
     fab.onclick = () => {
-        isOpen = !isOpen;
-        menu.style.display = isOpen ? 'flex' : 'none';
-        fab.textContent = isOpen ? '✕' : '＋';
-        fab.classList.toggle('fab-open', isOpen);
+        if (isOpen) closeMenu(); else openMenu();
     };
 
     container.querySelectorAll('.fab-item').forEach(btn => {
         btn.onclick = () => {
             openQuickAdd(btn.dataset.type);
-            isOpen = false;
-            menu.style.display = 'none';
-            fab.textContent = '＋';
-            fab.classList.remove('fab-open');
+            closeMenu();
         };
     });
 
     // Close on outside click
     document.addEventListener('click', (e) => {
         if (isOpen && !container.contains(e.target)) {
-            isOpen = false;
-            menu.style.display = 'none';
-            fab.textContent = '＋';
-            fab.classList.remove('fab-open');
+            closeMenu();
         }
     });
 }
