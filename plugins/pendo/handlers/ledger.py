@@ -16,6 +16,7 @@ from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.session_utils import safe_create_session
 from ..utils.formatters import ItemFormatter, paginate
+from ..utils.time_utils import _parse_time_range_core
 from ..config import (
     PendoConfig,
     LEDGER_EXPENSE_CATEGORIES,
@@ -723,78 +724,41 @@ class LedgerHandler(DbOpsMixin):
     # ============================================================
 
     def _parse_date_range(self, range_str: str) -> tuple[str, str, str]:
-        """解析日期范围，返回 (start_date, end_date, label)"""
+        """解析日期范围，返回 (start_date, end_date, label)。
+
+        委托 _parse_time_range_core 做实际计算，仅负责：
+        1. 关键字语义对齐（week→本周、month→本月，保证日历周/月而非滚动区间）
+        2. 生成人类可读标签
+        """
         now = datetime.now()
+        rs = (range_str or "").strip()
+        rl = rs.lower()
 
-        if not range_str:
-            # 默认本月
-            start = now.replace(day=1).strftime("%Y-%m-%d")
-            if now.month == 12:
-                end = now.replace(year=now.year + 1, month=1, day=1).strftime("%Y-%m-%d")
-            else:
-                end = now.replace(month=now.month + 1, day=1).strftime("%Y-%m-%d")
-            return start, end, f"{now.year}年{now.month}月"
-
-        range_lower = range_str.lower()
-
-        if range_lower == "today":
-            date_str = now.strftime("%Y-%m-%d")
-            next_day = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-            return date_str, next_day, "今日"
-
-        if range_lower == "week":
-            weekday = now.weekday()
-            start = (now - timedelta(days=weekday)).strftime("%Y-%m-%d")
-            end = (now + timedelta(days=7 - weekday)).strftime("%Y-%m-%d")
-            return start, end, "本周"
-
-        if range_lower in ("year", "今年"):
-            start = f"{now.year}-01-01"
-            end = f"{now.year}-12-31"
-            return start, end, f"{now.year}年全年"
-
-        if range_lower in ("month", "本月"):
-            start = now.replace(day=1).strftime("%Y-%m-%d")
-            if now.month == 12:
-                end = f"{now.year + 1}-01-01"
-            else:
-                end = f"{now.year}-{now.month + 1:02d}-01"
-            return start, end, f"{now.year}年{now.month}月"
-
-        if range_lower.startswith("last"):
-            match = re.match(r"last(\d+)d", range_lower)
-            if match:
-                days = int(match.group(1))
-                start = (now - timedelta(days=days)).strftime("%Y-%m-%d")
-                end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-                return start, end, f"最近{days}天"
-
-        # YYYY-MM 格式
-        month_match = re.match(r"(\d{4})-(\d{2})$", range_str)
-        if month_match:
-            year, month = int(month_match.group(1)), int(month_match.group(2))
-            start = f"{year}-{month:02d}-01"
-            if month == 12:
-                end = f"{year + 1}-01-01"
-            else:
-                end = f"{year}-{month + 1:02d}-01"
-            return start, end, f"{year}年{month}月"
-
-        # start..end 格式
-        if ".." in range_str:
-            parts = range_str.split("..")
-            if len(parts) == 2:
-                return parts[0], parts[1], f"{parts[0]} ~ {parts[1]}"
-
-        # 单独日期
-        if re.match(r"\d{4}-\d{2}-\d{2}$", range_str):
-            next_day = (datetime.strptime(range_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-            return range_str, next_day, range_str
-
-        # 无法解析，默认本月
-        start = now.replace(day=1).strftime("%Y-%m-%d")
-        if now.month == 12:
-            end = now.replace(year=now.year + 1, month=1, day=1).strftime("%Y-%m-%d")
+        # 生成标签
+        if not rs or rl in ("month", "本月"):
+            label = f"{now.year}年{now.month}月"
+        elif rl in ("today", "今天"):
+            label = "今日"
+        elif rl in ("week", "本周"):
+            label = "本周"
+        elif rl in ("year", "今年"):
+            label = f"{now.year}年全年"
+        elif m := re.match(r"last(\d+)d", rl):
+            label = f"最近{m.group(1)}天"
+        elif re.fullmatch(r"\d{4}", rs):
+            label = f"{rs}年"
+        elif m2 := re.fullmatch(r"(\d{4})-(\d{2})", rs):
+            label = f"{m2.group(1)}年{int(m2.group(2))}月"
+        elif ".." in rs:
+            s, e = rs.split("..", 1)
+            label = f"{s} ~ {e}"
+        elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", rs):
+            label = rs
         else:
-            end = now.replace(month=now.month + 1, day=1).strftime("%Y-%m-%d")
-        return start, end, f"{now.year}年{now.month}月"
+            label = f"{now.year}年{now.month}月"
+
+        # 语义对齐：week/month 使用日历含义（本周/本月）而非滚动区间
+        normalized = {"week": "本周", "month": "本月"}.get(rl, rs or "本月")
+
+        start_dt, end_dt = _parse_time_range_core(normalized, now)
+        return start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"), label
