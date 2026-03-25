@@ -211,10 +211,21 @@ function ensureStyles() {
             height: 30px;
             padding: 0 30px 0 12px;
             border-radius: 20px;
-            border: 1px solid var(--color-border);
+            border: 1px solid rgba(239, 68, 68, 0.35);
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6.5l4 4 4-4' stroke='%23EF4444' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
             background-position: right 9px center;
             font-weight: 500;
             min-width: 80px;
+            color: #b91c1c;
+        }
+        .ledger-filter-bar select:hover:not(:disabled) {
+            border-color: var(--color-ledger);
+            background-color: rgba(239, 68, 68, 0.06);
+        }
+        .ledger-filter-bar select:focus {
+            outline: none;
+            border-color: var(--color-ledger);
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
         }
         .ledger-filter-group {
             display: flex;
