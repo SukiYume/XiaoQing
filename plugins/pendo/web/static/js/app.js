@@ -63,11 +63,9 @@ async function showApp() {
     // Init layout components
     const { renderSidebar } = await import('./components/sidebar.js');
     const { renderHeader } = await import('./components/header.js');
-    const { renderFab } = await import('./components/fab.js');
 
     renderSidebar(document.getElementById('sidebar-container'));
     renderHeader(document.getElementById('header-container'));
-    renderFab(document.getElementById('fab-container'));
 
     // Init router (loads current page)
     await initRouter(document.getElementById('content'));
