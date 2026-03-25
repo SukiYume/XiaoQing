@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
+import { loadChart } from '../lib/chart-loader.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,20 +29,6 @@ function priorityLabel(p) {
     return PRIORITY_LABEL[p] || String(p);
 }
 
-// Load Chart.js via a <script> tag (UMD) and return window.Chart
-let chartJsPromise = null;
-function loadChartJs() {
-    if (chartJsPromise) return chartJsPromise;
-    chartJsPromise = new Promise((resolve, reject) => {
-        if (window.Chart) { resolve(window.Chart); return; }
-        const script = document.createElement('script');
-        script.src = '/static/js/lib/chart.min.js';
-        script.onload = () => resolve(window.Chart);
-        script.onerror = () => reject(new Error('Chart.js 加载失败'));
-        document.head.appendChild(script);
-    });
-    return chartJsPromise;
-}
 
 // ── module state ──────────────────────────────────────────────────────────────
 
@@ -163,7 +150,7 @@ async function renderSpendingChart(canvasId, spendingTrend) {
     if (!spendingTrend || spendingTrend.length === 0) return;
 
     try {
-        const Chart = await loadChartJs();
+        const Chart = await loadChart();
         const canvas = document.getElementById(canvasId);
         if (!canvas) return;
 
