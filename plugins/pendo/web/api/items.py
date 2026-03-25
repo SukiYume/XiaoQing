@@ -7,9 +7,35 @@ from pydantic import BaseModel
 
 from ...services.db import Database
 from ...models.item import ItemType
+from ...utils.validators import normalize_event_fields, normalize_ledger_fields, normalize_task_fields
 from ..deps import get_db, get_current_user
 
 router = APIRouter()
+
+EVENT_MUTABLE_FIELDS = {
+    "title",
+    "category",
+    "start_time",
+    "end_time",
+    "location",
+    "timezone",
+    "remind_times",
+    "milestones",
+    "rrule",
+    "notes",
+}
+
+TASK_MUTABLE_FIELDS = {
+    "title",
+    "content",
+    "category",
+    "due_time",
+    "priority",
+    "status",
+    "completed_at",
+    "progress",
+    "estimate",
+}
 
 
 class ItemCreate(BaseModel):
@@ -24,6 +50,7 @@ class ItemCreate(BaseModel):
     location: Optional[str] = None
     timezone: Optional[str] = None
     remind_times: Optional[list[str]] = None
+    milestones: Optional[list[dict]] = None
     rrule: Optional[str] = None
     notes: Optional[str] = None
     # Task fields
@@ -54,6 +81,7 @@ class ItemUpdate(BaseModel):
     location: Optional[str] = None
     timezone: Optional[str] = None
     remind_times: Optional[list[str]] = None
+    milestones: Optional[list[dict]] = None
     rrule: Optional[str] = None
     notes: Optional[str] = None
     due_time: Optional[str] = None
@@ -88,15 +116,20 @@ def _resolve_date_field(type: Optional[str], date_field: Optional[str]) -> str:
     return "created_at"
 
 
+def _resolve_category_field(type: Optional[str]) -> str:
+    return "ledger_category" if type == "ledger" else "category"
+
+
 def _build_count_where(
     type, status, category, direction, start_date, end_date, date_field,
     amount_min, amount_max, owner_id
 ):
     where = ["owner_id = ?", "deleted = 0"]
     params: list = [owner_id]
+    category_field = _resolve_category_field(type)
     if type:       where.append("type = ?");             params.append(type)
     if status:     where.append("status = ?");           params.append(status)
-    if category:   where.append("category = ?");         params.append(category)
+    if category:   where.append(f"{category_field} = ?"); params.append(category)
     if direction:  where.append("direction = ?");        params.append(direction)
     if amount_min is not None:
         where.append("amount >= ?"); params.append(amount_min)
@@ -183,7 +216,8 @@ def list_items(
     filters: dict = {}
     if type:      filters["type"] = type
     if status:    filters["status"] = status
-    if category:  filters["category"] = category
+    if category:
+        filters[_resolve_category_field(type)] = category
     if direction: filters["direction"] = direction
     if amount_min is not None: filters["amount_min"] = amount_min
     if amount_max is not None: filters["amount_max"] = amount_max
@@ -285,9 +319,21 @@ def create_item(
         if value is not None:
             item_data[field] = value
 
-    # Default ledger_date to today if not set
-    if body.type == "ledger" and not body.ledger_date:
-        item_data["ledger_date"] = datetime.now().strftime("%Y-%m-%d")
+    if body.type == "event":
+        try:
+            item_data = normalize_event_fields(item_data, partial=False)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if body.type == "task":
+        try:
+            item_data = normalize_task_fields(item_data, partial=False)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if body.type == "ledger":
+        try:
+            item_data = normalize_ledger_fields(item_data, partial=False)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     # Default task status
     if body.type == "task" and not body.status:
@@ -313,9 +359,36 @@ def update_item(
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    updates = body.model_dump(exclude_none=True)
+    updates = body.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=422, detail="No fields to update")
+
+    item_type = item.type.value if hasattr(item.type, "value") else item.type
+    if item_type == "event":
+        try:
+            merged = item.to_dict()
+            merged.update(updates)
+            normalized = normalize_event_fields(merged, partial=False)
+            for field in EVENT_MUTABLE_FIELDS:
+                if field in normalized:
+                    updates[field] = normalized[field]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if item_type == "task":
+        try:
+            merged = item.to_dict()
+            merged.update(updates)
+            normalized = normalize_task_fields(merged, partial=False)
+            for field in TASK_MUTABLE_FIELDS:
+                if field in normalized:
+                    updates[field] = normalized[field]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if item_type == "ledger":
+        try:
+            updates = normalize_ledger_fields(updates, partial=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     updates["updated_at"] = datetime.now().isoformat()
     success = db.update_item(item_id, updates, owner_id=owner_id)
