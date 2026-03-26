@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pendo Web</title>
+    <meta name="description" content="Pendo Web 个人管理台，用于查看总览、日程、待办、账本、笔记、日记与统计。">
+    <meta name="theme-color" content="#6366F1">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/css/app.css">
+    <link rel="stylesheet" href="/css/charts.css">
+</head>
+<body>
+    <!-- Login screen -->
+    <div id="login-screen" class="login-screen" style="display: none;">
+        <div class="login-shell">
+            <section class="login-stage">
+                <span class="login-stage-badge">Pendo Web</span>
+                <h1>登录你的个人管理台</h1>
+                <p>用聊天里生成的访问令牌进入总览、日程、待办、账本和写作空间。</p>
+                <div class="login-stage-points">
+                    <div class="login-stage-point">
+                        <strong>1</strong>
+                        <span>在聊天中执行 <code>/pendo web token</code></span>
+                    </div>
+                    <div class="login-stage-point">
+                        <strong>2</strong>
+                        <span>把完整令牌粘贴到右侧输入框</span>
+                    </div>
+                    <div class="login-stage-point">
+                        <strong>3</strong>
+                        <span>验证通过后直接进入当前数据空间</span>
+                    </div>
+                </div>
+            </section>
+            <section class="login-card">
+                <div class="login-card-head">
+                    <span class="login-card-kicker">访问令牌登录</span>
+                    <h2>粘贴登录令牌</h2>
+                    <p>令牌默认 24 小时有效。Web 服务重启后，已生成的令牌仍可继续使用直到过期。</p>
+                </div>
+                <label class="login-field-label" for="token-input">Web Token</label>
+                <textarea id="token-input" class="login-token-input" placeholder="在这里粘贴完整 Token" autocomplete="off" spellcheck="false"></textarea>
+                <p id="login-error" class="error-text" style="display: none;"></p>
+                <div class="login-card-actions">
+                    <button id="login-btn" class="btn btn-primary">进入 Pendo</button>
+                    <button id="login-clear-btn" class="btn btn-secondary" type="button">清空</button>
+                </div>
+                <p id="login-helper" class="login-helper">令牌只保存在当前浏览器，可在设置页随时退出。</p>
+            </section>
+        </div>
+    </div>
+
+    <!-- Main app -->
+    <div id="app" style="display: none;">
+        <div id="sidebar-container"></div>
+        <div class="main-wrapper">
+            <div id="header-container"></div>
+            <main id="content" class="content"></main>
+        </div>
+    </div>
+
+    <!-- Toast container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Modal overlay -->
+    <div id="modal-overlay" class="modal-overlay" style="display: none;">
+        <div id="modal-content" class="modal-content"></div>
+    </div>
+
+    <script type="module" src="/js/app.js"></script>
+</body>
+</html>

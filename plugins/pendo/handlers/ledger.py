@@ -16,6 +16,7 @@ from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.session_utils import safe_create_session
 from ..utils.formatters import ItemFormatter, paginate
+from ..utils.time_utils import _parse_time_range_core
 from ..config import (
     PendoConfig,
     LEDGER_EXPENSE_CATEGORIES,
@@ -90,10 +91,14 @@ class LedgerHandler(DbOpsMixin):
 
     def _show_usage(self) -> str:
         return (
-            "💰 **记账帮助**\n\n"
+            "💰 记账命令\n"
+            "管理账目、查看收支和做快速记录。\n\n"
+            "可用命令:\n"
             "• /pendo ledger add - 交互式记账\n"
             "• /pendo ledger quick <金额> <描述> [cat:分类] [in] - 快速记账\n"
-            "• /pendo ledger list [范围] - 查看账目\n"
+            "• /pendo ledger list [范围] [dir:in/out] [cat:分类] [amount:N或N..M] [ex] - 查看账目\n"
+            "  范围: today/week/month/year/last7d/2026-03/start..end\n"
+            "  ex: 额外显示各分类最大单笔\n"
             "• /pendo ledger view <id> - 查看详情\n"
             "• /pendo ledger edit <id> <字段:值> ... - 编辑\n"
             "  字段: amount: title: cat: dir: date: remark:\n"
@@ -350,27 +355,67 @@ class LedgerHandler(DbOpsMixin):
         """查看账目列表
 
         格式:
-        - /pendo ledger list          -> 本月
-        - /pendo ledger list today    -> 今天
-        - /pendo ledger list week     -> 本周
-        - /pendo ledger list 2026-03  -> 指定月份
+        - /pendo ledger list                    -> 本月
+        - /pendo ledger list today              -> 今天
+        - /pendo ledger list week               -> 本周
+        - /pendo ledger list year               -> 今年
+        - /pendo ledger list 2026-03            -> 指定月份
         - /pendo ledger list 2026-03-01..2026-03-15 -> 范围
+
+        过滤参数 (可组合使用):
+        - dir:in/out 或 dir:income/expense      -> 按收支方向筛选
+        - cat:分类名                             -> 按分类筛选
+        - amount:N                              -> 金额 >= N
+        - amount:N..M                           -> 金额在 N 到 M 之间
+
+        其他:
+        - ex       -> 额外显示每个分类的最大单笔
+        - all      -> 显示全部（不分页）
+        - page:N   -> 显示第N页
         """
         filter_str = (filter_str or "").strip()
 
-        # 解析分页
+        # 解析所有参数
         show_all = False
         page_num = 1
+        show_extra = False
+        dir_filter = None
+        cat_filter = None
+        amount_min = None
+        amount_max = None
+
         filter_parts = filter_str.split()
         clean_parts = []
         for part in filter_parts:
-            if part.lower() == "all":
+            pl = part.lower()
+            if pl == "all":
                 show_all = True
+            elif pl == "ex":
+                show_extra = True
             elif part.startswith("page:"):
                 try:
                     page_num = int(part.split(":")[1])
                 except (IndexError, ValueError):
                     pass
+            elif part.startswith("dir:"):
+                val = part[4:].lower()
+                dir_filter = "income" if val in ("in", "income", "收入") else "expense"
+            elif part.startswith("cat:"):
+                cat_filter = part[4:]
+            elif part.startswith("amount:"):
+                rng = part[7:]
+                if ".." in rng:
+                    lo, hi = rng.split("..", 1)
+                    try:
+                        amount_min = float(lo)
+                        amount_max = float(hi)
+                    except ValueError:
+                        pass
+                else:
+                    try:
+                        amount_min = float(rng)
+                    except ValueError:
+                        pass
             else:
                 clean_parts.append(part)
         range_str = " ".join(clean_parts)
@@ -389,8 +434,30 @@ class LedgerHandler(DbOpsMixin):
             ),
         )
 
+        # 应用额外过滤
+        if dir_filter:
+            items = [i for i in items if i.direction == dir_filter]
+        if cat_filter:
+            items = [i for i in items if i.ledger_category == cat_filter]
+        if amount_min is not None:
+            items = [i for i in items if i.amount >= amount_min]
+        if amount_max is not None:
+            items = [i for i in items if i.amount <= amount_max]
+
+        # 构建过滤描述
+        filter_labels = []
+        if dir_filter:
+            filter_labels.append("收入" if dir_filter == "income" else "支出")
+        if cat_filter:
+            filter_labels.append(f"分类:{cat_filter}")
+        if amount_min is not None and amount_max is not None:
+            filter_labels.append(f"¥{amount_min:.0f}~{amount_max:.0f}")
+        elif amount_min is not None:
+            filter_labels.append(f"≥¥{amount_min:.0f}")
+        filter_suffix = f" [{', '.join(filter_labels)}]" if filter_labels else ""
+
         if not items:
-            return {"status": "success", "message": f"💰 **{range_label}账目**\n\n暂无记录"}
+            return {"status": "success", "message": f"💰 **{range_label}账目**{filter_suffix}\n\n暂无记录"}
 
         # 按日期降序排序
         items.sort(key=lambda x: x.ledger_date or "", reverse=True)
@@ -403,21 +470,43 @@ class LedgerHandler(DbOpsMixin):
         total_income = sum(i.amount for i in items if i.direction == "income")
         total_expense = sum(i.amount for i in items if i.direction == "expense")
 
-        message = f"💰 **{range_label}账目** (共{len(items)}笔){page_info}\n"
-        message += f"💸 支出 ¥{total_expense:.2f} | 💰 收入 ¥{total_income:.2f}\n\n"
+        message = (
+            f"💰 {range_label}账目{filter_suffix}\n"
+            f"共 {len(items)} 笔{page_info}\n"
+            f"💸 支出 ¥{total_expense:.2f} | 💰 收入 ¥{total_income:.2f}\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+        )
 
         for item in display_items:
             icon = _direction_icon(item.direction)
             cat_icon = _get_category_icon(item.ledger_category)
             sign = "+" if item.direction == "income" else "-"
             date_str = item.ledger_date or ""
-            message += f"{icon} {sign}¥{item.amount:.2f} {cat_icon}{item.ledger_category}"
+            message += f"• {icon} {sign}¥{item.amount:.2f}  {cat_icon}{item.ledger_category}"
             if item.title:
                 message += f" {item.title}"
-            message += f"\n   📅{date_str} `{item.id}`\n\n"
+            message += f"\n  📅 {date_str} | ID `{item.id}`\n\n"
 
         if has_more and not show_all:
             message += f"... (使用 'all' 显示全部或 'page:{page_num + 1}' 查看下一页)\n"
+
+        # ex 模式：各分类最大单笔
+        if show_extra:
+            max_by_cat: dict[str, LedgerItem] = {}
+            for item in items:
+                cat = item.ledger_category or "其他"
+                if cat not in max_by_cat or item.amount > max_by_cat[cat].amount:
+                    max_by_cat[cat] = item
+            if max_by_cat:
+                message += "\n📊 **各分类最大单笔**\n"
+                sorted_cats = sorted(max_by_cat.items(), key=lambda x: x[1].amount, reverse=True)
+                for cat, item in sorted_cats:
+                    icon = _direction_icon(item.direction)
+                    cat_icon = _get_category_icon(cat)
+                    sign = "+" if item.direction == "income" else "-"
+                    date_str = item.ledger_date or ""
+                    title_part = f" {item.title}" if item.title else ""
+                    message += f"  • {cat_icon}{cat}: {icon}{sign}¥{item.amount:.2f}{title_part} ({date_str})\n"
 
         return {"status": "success", "message": message}
 
@@ -610,17 +699,25 @@ class LedgerHandler(DbOpsMixin):
         # 格式化
         balance_sign = "+" if balance >= 0 else ""
         message = (
-            f"📊 **{range_label}收支汇总**\n"
+            f"📊 {range_label}收支汇总\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"💸 总支出：¥{total_expense:.2f}\n"
-            f"💰 总收入：¥{total_income:.2f}\n"
-            f"📊 结余：  {balance_sign}¥{balance:.2f}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💸 总支出: ¥{total_expense:.2f}\n"
+            f"💰 总收入: ¥{total_income:.2f}\n"
+            f"📊 结余: {balance_sign}¥{balance:.2f}\n"
         )
 
         if expense_by_cat:
+            top_expense_cat, top_expense_amount = max(expense_by_cat.items(), key=lambda x: x[1])
+            message += f"📂 最大支出分类: {top_expense_cat} ¥{top_expense_amount:.2f}\n"
+        if income_by_cat:
+            top_income_cat, top_income_amount = max(income_by_cat.items(), key=lambda x: x[1])
+            message += f"📥 主要收入来源: {top_income_cat} ¥{top_income_amount:.2f}\n"
+
+        message += "━━━━━━━━━━━━━━━━━━\n"
+
+        if expense_by_cat:
             sorted_cats = sorted(expense_by_cat.items(), key=lambda x: x[1], reverse=True)
-            message += "📂 **支出分类：**\n"
+            message += "📂 支出分类\n"
             for i, (cat, amount) in enumerate(sorted_cats, 1):
                 pct = (amount / total_expense * 100) if total_expense > 0 else 0
                 icon = _get_category_icon(cat)
@@ -628,7 +725,7 @@ class LedgerHandler(DbOpsMixin):
 
         if income_by_cat:
             sorted_cats = sorted(income_by_cat.items(), key=lambda x: x[1], reverse=True)
-            message += "\n📂 **收入分类：**\n"
+            message += "\n📂 收入分类\n"
             for i, (cat, amount) in enumerate(sorted_cats, 1):
                 pct = (amount / total_income * 100) if total_income > 0 else 0
                 icon = _get_category_icon(cat)
@@ -641,65 +738,41 @@ class LedgerHandler(DbOpsMixin):
     # ============================================================
 
     def _parse_date_range(self, range_str: str) -> tuple[str, str, str]:
-        """解析日期范围，返回 (start_date, end_date, label)"""
+        """解析日期范围，返回 (start_date, end_date, label)。
+
+        委托 _parse_time_range_core 做实际计算，仅负责：
+        1. 关键字语义对齐（week→本周、month→本月，保证日历周/月而非滚动区间）
+        2. 生成人类可读标签
+        """
         now = datetime.now()
+        rs = (range_str or "").strip()
+        rl = rs.lower()
 
-        if not range_str:
-            # 默认本月
-            start = now.replace(day=1).strftime("%Y-%m-%d")
-            if now.month == 12:
-                end = now.replace(year=now.year + 1, month=1, day=1).strftime("%Y-%m-%d")
-            else:
-                end = now.replace(month=now.month + 1, day=1).strftime("%Y-%m-%d")
-            return start, end, f"{now.year}年{now.month}月"
-
-        range_lower = range_str.lower()
-
-        if range_lower == "today":
-            date_str = now.strftime("%Y-%m-%d")
-            next_day = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-            return date_str, next_day, "今日"
-
-        if range_lower == "week":
-            weekday = now.weekday()
-            start = (now - timedelta(days=weekday)).strftime("%Y-%m-%d")
-            end = (now + timedelta(days=7 - weekday)).strftime("%Y-%m-%d")
-            return start, end, "本周"
-
-        if range_lower.startswith("last"):
-            match = re.match(r"last(\d+)d", range_lower)
-            if match:
-                days = int(match.group(1))
-                start = (now - timedelta(days=days)).strftime("%Y-%m-%d")
-                end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-                return start, end, f"最近{days}天"
-
-        # YYYY-MM 格式
-        month_match = re.match(r"(\d{4})-(\d{2})$", range_str)
-        if month_match:
-            year, month = int(month_match.group(1)), int(month_match.group(2))
-            start = f"{year}-{month:02d}-01"
-            if month == 12:
-                end = f"{year + 1}-01-01"
-            else:
-                end = f"{year}-{month + 1:02d}-01"
-            return start, end, f"{year}年{month}月"
-
-        # start..end 格式
-        if ".." in range_str:
-            parts = range_str.split("..")
-            if len(parts) == 2:
-                return parts[0], parts[1], f"{parts[0]} ~ {parts[1]}"
-
-        # 单独日期
-        if re.match(r"\d{4}-\d{2}-\d{2}$", range_str):
-            next_day = (datetime.strptime(range_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-            return range_str, next_day, range_str
-
-        # 无法解析，默认本月
-        start = now.replace(day=1).strftime("%Y-%m-%d")
-        if now.month == 12:
-            end = now.replace(year=now.year + 1, month=1, day=1).strftime("%Y-%m-%d")
+        # 生成标签
+        if not rs or rl in ("month", "本月"):
+            label = f"{now.year}年{now.month}月"
+        elif rl in ("today", "今天"):
+            label = "今日"
+        elif rl in ("week", "本周"):
+            label = "本周"
+        elif rl in ("year", "今年"):
+            label = f"{now.year}年全年"
+        elif m := re.match(r"last(\d+)d", rl):
+            label = f"最近{m.group(1)}天"
+        elif re.fullmatch(r"\d{4}", rs):
+            label = f"{rs}年"
+        elif m2 := re.fullmatch(r"(\d{4})-(\d{2})", rs):
+            label = f"{m2.group(1)}年{int(m2.group(2))}月"
+        elif ".." in rs:
+            s, e = rs.split("..", 1)
+            label = f"{s} ~ {e}"
+        elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", rs):
+            label = rs
         else:
-            end = now.replace(month=now.month + 1, day=1).strftime("%Y-%m-%d")
-        return start, end, f"{now.year}年{now.month}月"
+            label = f"{now.year}年{now.month}月"
+
+        # 语义对齐：week/month 使用日历含义（本周/本月）而非滚动区间
+        normalized = {"week": "本周", "month": "本月"}.get(rl, rs or "本月")
+
+        start_dt, end_dt = _parse_time_range_core(normalized, now)
+        return start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"), label
