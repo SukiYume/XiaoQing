@@ -205,6 +205,130 @@ async def check_diary_reminders(context, db: Database) -> list[dict[str, Any]]:
     return messages
 
 
+async def send_weekly_finance_summaries(context, db: Database) -> list[dict[str, Any]]:
+    """发送每周财务总结。
+
+    由调度器按周触发，这里只做幂等保护和内容发送。
+    """
+    messages = []
+    current_utc = datetime.now(timezone.utc)
+
+    try:
+        user_ids = await _get_active_user_ids(db)
+        settings_bundle_map = await get_user_settings_bundle_map(user_ids, db)
+
+        for user_id in user_ids:
+            try:
+                settings_bundle = settings_bundle_map[user_id]
+                user_settings = settings_bundle["settings"]
+                custom_settings = settings_bundle["custom_settings"]
+                user_now = get_user_now_from_settings(user_settings, current_utc)
+                current_date = user_now.date().isoformat()
+
+                if custom_settings.get("last_weekly_finance_summary_date") == current_date:
+                    continue
+
+                start_dt = user_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+                    days=user_now.weekday()
+                )
+                end_dt = user_now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+                    hours=23, minutes=59, seconds=59
+                )
+                summary = await _generate_finance_summary_content(
+                    db,
+                    user_id,
+                    start_dt.strftime("%Y-%m-%d"),
+                    end_dt.strftime("%Y-%m-%d"),
+                    f"{start_dt.strftime('%m/%d')} - {end_dt.strftime('%m/%d')}",
+                    "📆 本周财务总结",
+                )
+                if not summary:
+                    await run_sync(
+                        save_user_setting,
+                        user_id,
+                        "last_weekly_finance_summary_date",
+                        current_date,
+                        db,
+                    )
+                    continue
+
+                await _send_private_or_collect(context, messages, user_id, summary)
+                await run_sync(
+                    save_user_setting,
+                    user_id,
+                    "last_weekly_finance_summary_date",
+                    current_date,
+                    db,
+                )
+            except Exception as e:
+                logger.exception("为用户 %s 发送每周财务总结失败: %s", user_id, e)
+    except Exception as e:
+        logger.exception("发送每周财务总结时出错: %s", e)
+
+    return messages
+
+
+async def send_month_end_finance_summaries(context, db: Database) -> list[dict[str, Any]]:
+    """发送月底财务总结。
+
+    由调度器按月触发，这里只做幂等保护和内容发送。
+    """
+    messages = []
+    current_utc = datetime.now(timezone.utc)
+
+    try:
+        user_ids = await _get_active_user_ids(db)
+        settings_bundle_map = await get_user_settings_bundle_map(user_ids, db)
+
+        for user_id in user_ids:
+            try:
+                settings_bundle = settings_bundle_map[user_id]
+                user_settings = settings_bundle["settings"]
+                custom_settings = settings_bundle["custom_settings"]
+                user_now = get_user_now_from_settings(user_settings, current_utc)
+                current_date = user_now.date().isoformat()
+
+                if custom_settings.get("last_month_end_finance_summary_date") == current_date:
+                    continue
+
+                start_dt = user_now.replace(
+                    day=1, hour=0, minute=0, second=0, microsecond=0
+                )
+                end_dt = user_now.replace(hour=23, minute=59, second=59, microsecond=0)
+                summary = await _generate_finance_summary_content(
+                    db,
+                    user_id,
+                    start_dt.strftime("%Y-%m-%d"),
+                    end_dt.strftime("%Y-%m-%d"),
+                    f"{start_dt.strftime('%Y/%m/%d')} - {end_dt.strftime('%Y/%m/%d')}",
+                    "🧾 月底财务总结",
+                )
+                if not summary:
+                    await run_sync(
+                        save_user_setting,
+                        user_id,
+                        "last_month_end_finance_summary_date",
+                        current_date,
+                        db,
+                    )
+                    continue
+
+                await _send_private_or_collect(context, messages, user_id, summary)
+                await run_sync(
+                    save_user_setting,
+                    user_id,
+                    "last_month_end_finance_summary_date",
+                    current_date,
+                    db,
+                )
+            except Exception as e:
+                logger.exception("为用户 %s 发送月底财务总结失败: %s", user_id, e)
+    except Exception as e:
+        logger.exception("发送月底财务总结时出错: %s", e)
+
+    return messages
+
+
 # ============================================================
 # 辅助函数
 # ============================================================
@@ -213,6 +337,19 @@ async def check_diary_reminders(context, db: Database) -> list[dict[str, Any]]:
 async def _get_active_user_ids(db: Database) -> list[str]:
     """获取活跃用户ID列表"""
     return await run_sync(db.items.get_active_user_ids)
+
+
+async def _send_private_or_collect(
+    context, messages: list[dict[str, Any]], user_id: str, message: str
+) -> None:
+    action = {
+        "action": "send_private_msg",
+        "params": {"user_id": int(user_id), "message": segments(message)},
+    }
+    if hasattr(context, "send_action"):
+        await context.send_action(action)
+    else:
+        messages.append(action)
 
 
 def _is_time_reached(current_time: datetime, target_time_str: str) -> bool:
@@ -230,6 +367,78 @@ def _is_time_reached(current_time: datetime, target_time_str: str) -> bool:
         return current_time.hour == target_hour and current_time.minute == target_minute
     except ValueError:
         return False
+
+
+async def _generate_finance_summary_content(
+    db: Database,
+    user_id: str,
+    start_date: str,
+    end_date: str,
+    range_label: str,
+    title: str,
+) -> str:
+    items = await run_sync(
+        db.items.query_items_by_date_range,
+        user_id,
+        ItemType.LEDGER.value,
+        "ledger_date",
+        start_date,
+        end_date,
+    )
+    if not items:
+        return ""
+
+    income_items = [item for item in items if getattr(item, "direction", "") == "income"]
+    expense_items = [item for item in items if getattr(item, "direction", "") == "expense"]
+    total_income = sum(float(getattr(item, "amount", 0) or 0) for item in income_items)
+    total_expense = sum(float(getattr(item, "amount", 0) or 0) for item in expense_items)
+    balance = total_income - total_expense
+
+    expense_by_cat: dict[str, float] = {}
+    for item in expense_items:
+        category = getattr(item, "ledger_category", "") or "其他"
+        expense_by_cat[category] = expense_by_cat.get(category, 0.0) + float(item.amount or 0)
+
+    income_by_cat: dict[str, float] = {}
+    for item in income_items:
+        category = getattr(item, "ledger_category", "") or "其他"
+        income_by_cat[category] = income_by_cat.get(category, 0.0) + float(item.amount or 0)
+
+    top_expense = max(expense_items, key=lambda item: float(getattr(item, "amount", 0) or 0), default=None)
+    top_expense_category = max(expense_by_cat.items(), key=lambda pair: pair[1], default=None)
+    top_income_category = max(income_by_cat.items(), key=lambda pair: pair[1], default=None)
+
+    balance_prefix = "+" if balance >= 0 else ""
+    lines = [
+        title,
+        f"📅 范围: {range_label}",
+        f"🧾 共 {len(items)} 笔流水",
+        "",
+        f"💰 收入: ¥{total_income:.2f}",
+        f"💸 支出: ¥{total_expense:.2f}",
+        f"📊 结余: {balance_prefix}¥{balance:.2f}",
+    ]
+
+    if top_expense_category:
+        lines.append(f"📂 最大支出分类: {top_expense_category[0]} ¥{top_expense_category[1]:.2f}")
+    if top_income_category:
+        lines.append(f"📥 主要收入来源: {top_income_category[0]} ¥{top_income_category[1]:.2f}")
+    if top_expense is not None:
+        title_text = getattr(top_expense, "title", "") or "未命名支出"
+        ledger_date = getattr(top_expense, "ledger_date", "") or start_date
+        lines.append(
+            f"🔥 最大单笔支出: {title_text} ¥{float(top_expense.amount or 0):.2f} ({ledger_date})"
+        )
+
+    if expense_by_cat:
+        lines.append("")
+        lines.append("支出前 3 分类:")
+        for index, (category, amount) in enumerate(
+            sorted(expense_by_cat.items(), key=lambda pair: pair[1], reverse=True)[:3], 1
+        ):
+            lines.append(f"  {index}. {category} ¥{amount:.2f}")
+
+    return "\n".join(lines)
 
 
 async def _generate_briefing_content(user_id: str, db: Database, ai_parser: AIParser) -> str:

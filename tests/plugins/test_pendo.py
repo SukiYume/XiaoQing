@@ -307,6 +307,7 @@ class TestPendoReviewFixes:
             "diary_handler": _StubSimpleHandler(),
             "search_handler": _StubSimpleHandler(),
             "ledger_handler": _StubSimpleHandler(),
+            "web_handler": _StubSimpleHandler(),
         }
 
         monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
@@ -1034,7 +1035,7 @@ class TestReminderRegression:
                 return {
                     "quiet_hours_start": "23:00",
                     "quiet_hours_end": "07:00",
-                    "settings_json": json.dumps({"reminder_enabled": False}),
+                    "settings_json": {"reminder_enabled": False},
                 }
 
             def get_unconfirmed_sent_reminders(self):
@@ -1108,7 +1109,7 @@ class TestReminderRegression:
                 return {
                     "quiet_hours_start": "23:00",
                     "quiet_hours_end": "07:00",
-                    "settings_json": json.dumps({"reminder_enabled": True}),
+                    "settings_json": {"reminder_enabled": True},
                 }
 
             def confirm_reminder(
@@ -1199,14 +1200,14 @@ class TestScheduledRegression:
                 "daily_report_time": "08:00",
                 "quiet_hours_start": "23:00",
                 "quiet_hours_end": "07:00",
-                "settings_json": json.dumps({"daily_briefing_enabled": True}),
+                "settings_json": {"daily_briefing_enabled": True},
             },
             "1002": {
                 "timezone": "America/New_York",
                 "daily_report_time": "08:00",
                 "quiet_hours_start": "23:00",
                 "quiet_hours_end": "07:00",
-                "settings_json": json.dumps({"daily_briefing_enabled": True}),
+                "settings_json": {"daily_briefing_enabled": True},
             },
         }
         batch_calls = []
@@ -1275,7 +1276,7 @@ class TestScheduledRegression:
                 user_id: {
                     "timezone": "Asia/Shanghai",
                     "daily_report_time": "08:00",
-                    "settings_json": json.dumps({"daily_briefing_enabled": True}),
+                    "settings_json": {"daily_briefing_enabled": True},
                 }
                 for user_id in user_ids
             }
@@ -1372,21 +1373,21 @@ class TestScheduledRegression:
                 "diary_remind_time": "21:30",
                 "quiet_hours_start": "23:00",
                 "quiet_hours_end": "07:00",
-                "settings_json": json.dumps({}),
+                "settings_json": {},
             },
             "2002": {
                 "timezone": "Asia/Shanghai",
                 "diary_remind_time": "21:30",
                 "quiet_hours_start": "23:00",
                 "quiet_hours_end": "07:00",
-                "settings_json": json.dumps({}),
+                "settings_json": {},
             },
             "2003": {
                 "timezone": "America/New_York",
                 "diary_remind_time": "21:30",
                 "quiet_hours_start": "23:00",
                 "quiet_hours_end": "07:00",
-                "settings_json": json.dumps({}),
+                "settings_json": {},
             },
         }
         def get_user_settings_batch(user_ids):
@@ -1432,6 +1433,132 @@ class TestScheduledRegression:
 
         handler_ids = {entry["handler"] for entry in config.get("schedule", [])}
         assert "scheduled_evening_briefing" not in handler_ids
+        assert "scheduled_weekly_finance_summary" in handler_ids
+        assert "scheduled_month_end_finance_summary" in handler_ids
+        weekly_entry = next(
+            entry for entry in config.get("schedule", [])
+            if entry["handler"] == "scheduled_weekly_finance_summary"
+        )
+        monthly_entry = next(
+            entry for entry in config.get("schedule", [])
+            if entry["handler"] == "scheduled_month_end_finance_summary"
+        )
+        assert weekly_entry["cron"] == {"day_of_week": "sun", "hour": 21, "minute": 0}
+        assert monthly_entry["cron"] == {"day": "last", "hour": 21, "minute": 0}
+
+
+class TestPendoFinanceSummaries:
+    def test_weekly_finance_summary_sends_on_sunday_evening(self, monkeypatch):
+        import sys
+        from datetime import datetime, timezone
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.commands import scheduled as scheduled_module
+
+        class _FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                base = datetime(2030, 1, 6, 13, 0, tzinfo=timezone.utc)
+                if tz is None:
+                    return base.replace(tzinfo=None)
+                return base.astimezone(tz)
+
+        actions = []
+
+        async def send_action(action):
+            actions.append(action)
+
+        async def fake_get_active_user_ids(_db):
+            return ["1001"]
+
+        async def fake_get_settings_bundle_map(user_ids, _db):
+            return {
+                user_ids[0]: {
+                    "settings": {"timezone": "Asia/Shanghai"},
+                    "custom_settings": {},
+                }
+            }
+
+        async def fake_generate_summary(*_args, **_kwargs):
+            return "weekly-summary"
+
+        monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
+        monkeypatch.setattr(scheduled_module, "_get_active_user_ids", fake_get_active_user_ids)
+        monkeypatch.setattr(
+            scheduled_module, "get_user_settings_bundle_map", fake_get_settings_bundle_map
+        )
+        monkeypatch.setattr(
+            scheduled_module, "_generate_finance_summary_content", fake_generate_summary
+        )
+        monkeypatch.setattr(scheduled_module, "save_user_setting", lambda *args, **kwargs: None)
+
+        db = SimpleNamespace()
+        result = asyncio.run(
+            scheduled_module.send_weekly_finance_summaries(SimpleNamespace(send_action=send_action), db)
+        )
+
+        assert result == []
+        assert len(actions) == 1
+        assert actions[0]["params"]["user_id"] == 1001
+        assert "weekly-summary" in actions[0]["params"]["message"][0]["data"]["text"]
+
+    def test_month_end_finance_summary_sends_on_last_day_evening(self, monkeypatch):
+        import sys
+        from datetime import datetime, timezone
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.commands import scheduled as scheduled_module
+
+        class _FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                base = datetime(2030, 3, 31, 13, 0, tzinfo=timezone.utc)
+                if tz is None:
+                    return base.replace(tzinfo=None)
+                return base.astimezone(tz)
+
+        actions = []
+
+        async def send_action(action):
+            actions.append(action)
+
+        async def fake_get_active_user_ids(_db):
+            return ["1001"]
+
+        async def fake_get_settings_bundle_map(user_ids, _db):
+            return {
+                user_ids[0]: {
+                    "settings": {"timezone": "Asia/Shanghai"},
+                    "custom_settings": {},
+                }
+            }
+
+        async def fake_generate_summary(*_args, **_kwargs):
+            return "month-summary"
+
+        monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
+        monkeypatch.setattr(scheduled_module, "_get_active_user_ids", fake_get_active_user_ids)
+        monkeypatch.setattr(
+            scheduled_module, "get_user_settings_bundle_map", fake_get_settings_bundle_map
+        )
+        monkeypatch.setattr(
+            scheduled_module, "_generate_finance_summary_content", fake_generate_summary
+        )
+        monkeypatch.setattr(scheduled_module, "save_user_setting", lambda *args, **kwargs: None)
+
+        db = SimpleNamespace()
+        result = asyncio.run(
+            scheduled_module.send_month_end_finance_summaries(
+                SimpleNamespace(send_action=send_action), db
+            )
+        )
+
+        assert result == []
+        assert len(actions) == 1
+        assert actions[0]["params"]["user_id"] == 1001
+        assert "month-summary" in actions[0]["params"]["message"][0]["data"]["text"]
 
 
 class TestBatchDeleteRefactor:
@@ -1596,3 +1723,74 @@ class TestOperationAndImportRegression:
 
         assert result["status"] == "error"
         assert "请指定导入文件路径" in result["message"]
+
+
+class TestPendoWebHandler:
+    """测试 pendo web 命令格式化与发送行为"""
+
+    def test_web_token_sends_token_as_separate_private_message(self, monkeypatch):
+        import sys
+        import types
+        import importlib
+
+        sys.path.insert(0, str(ROOT))
+        sys.modules.pop("plugins.pendo.handlers.web", None)
+        sys.modules["plugins.pendo.web.server"] = types.SimpleNamespace(
+            get_url=lambda: "http://127.0.0.1:8765",
+            is_running=lambda: True,
+            start=lambda _db: True,
+            stop=lambda: True,
+        )
+
+        web_module = importlib.import_module("plugins.pendo.handlers.web")
+
+        monkeypatch.setattr(web_module, "generate_token", lambda *_args, **_kwargs: "mock-token")
+        monkeypatch.setattr(web_module.web_server, "get_url", lambda: "http://127.0.0.1:8765")
+        monkeypatch.setattr(web_module.web_server, "is_running", lambda: True)
+
+        actions = []
+
+        async def send_action(action):
+            actions.append(action)
+
+        context = SimpleNamespace(send_action=send_action)
+        handler = web_module.WebHandler(db=None)
+
+        result = asyncio.run(handler.handle("1001", "token", context=context))
+
+        assert result["status"] == "success"
+        assert "Token 已单独私聊发送" in result["message"]
+        assert "mock-token" not in result["message"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "send_private_msg"
+        assert actions[0]["params"]["user_id"] == 1001
+        token_text = actions[0]["params"]["message"][0]["data"]["text"]
+        assert "Pendo Web 登录 Token" in token_text
+        assert "mock-token" in token_text
+
+    def test_web_token_falls_back_to_inline_message_without_send_action(self, monkeypatch):
+        import sys
+        import types
+        import importlib
+
+        sys.path.insert(0, str(ROOT))
+        sys.modules.pop("plugins.pendo.handlers.web", None)
+        sys.modules["plugins.pendo.web.server"] = types.SimpleNamespace(
+            get_url=lambda: "http://127.0.0.1:8765",
+            is_running=lambda: False,
+            start=lambda _db: True,
+            stop=lambda: True,
+        )
+
+        web_module = importlib.import_module("plugins.pendo.handlers.web")
+
+        monkeypatch.setattr(web_module, "generate_token", lambda *_args, **_kwargs: "mock-token")
+        monkeypatch.setattr(web_module.web_server, "get_url", lambda: "http://127.0.0.1:8765")
+        monkeypatch.setattr(web_module.web_server, "is_running", lambda: False)
+
+        handler = web_module.WebHandler(db=None)
+        result = asyncio.run(handler.handle("1001", "token", context=None))
+
+        assert result["status"] == "success"
+        assert "登录 Token:" in result["message"]
+        assert "mock-token" in result["message"]

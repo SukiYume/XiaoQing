@@ -49,6 +49,7 @@ plugins/minecraft/config.json
 
 # 测试
 .pytest_cache/
+.pytest_tmp/
 .coverage
 htmlcov/
 *cache/

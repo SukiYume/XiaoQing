@@ -4,7 +4,19 @@
 
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
 
-## 🎉 最新更新 (V2.0)
+## 🎉 最新更新 (V3.0)
+
+**Web UI 全面上线！**
+
+- ✅ **Web 控制台** - 基于 FastAPI + 原生 JS 的单页应用，支持浏览器访问
+- ✅ **JWT 鉴权** - 安全的 Token 登录机制，支持多用户会话
+- ✅ **可视化看板** - Dashboard 汇总待办、事件、账本、笔记核心数据
+- ✅ **账本管理** - 支持收支分类、筛选、分页、快速录入
+- ✅ **统计图表** - Chart.js 可视化事件/任务/账本趋势
+- ✅ **全模块页面** - 任务、事件、日记、笔记、搜索、设置均有独立页面
+- ✅ **聊天命令集成** - `/pendo web start|stop|status` 在聊天中管理 Web 服务
+
+## 🎉 V2.0 历史更新
 
 **大规模重构完成！**
 
@@ -20,6 +32,7 @@
 
 - [快速开始](#快速开始)
 - [命令速览](#命令速览)
+- [Web 控制台](#web-控制台)
 - [日程管理](#日程管理)
 - [待办管理](#待办管理)
 - [笔记管理](#笔记管理)
@@ -56,6 +69,41 @@
 - 🤖 **AI增强** - 可选AI解析，提升理解准确度
 - 🔄 **重复事件** - 支持复杂的重复规则
 - 📅 **每日简报** - 自动推送今日日程和待办
+
+## Web 控制台
+
+### 启动/停止服务
+
+```
+/pendo web start             # 启动 Web 服务（默认端口 8080）
+/pendo web start port=9000   # 指定端口
+/pendo web stop              # 停止服务
+/pendo web status            # 查看运行状态和访问地址
+```
+
+### 登录访问
+
+打开浏览器访问 `http://localhost:8080`，使用机器人账号密码登录（JWT Token 鉴权）。
+
+### 页面功能
+
+| 页面 | 功能 |
+|------|------|
+| Dashboard | 核心数据汇总（待办、事件、账本余额、最近笔记） |
+| 任务 | Kanban 看板，按优先级拖拽管理待办 |
+| 事件 | 日历视图，查看/添加日程 |
+| 账本 | 收支记录、分类筛选、余额统计 |
+| 日记 | 时间线视图，按日期浏览日记 |
+| 笔记 | 卡片网格，按分类/标签浏览笔记 |
+| 搜索 | 跨模块全文搜索 |
+| 统计 | Chart.js 可视化图表（事件/任务/账本趋势） |
+| 设置 | 在线修改插件配置 |
+
+### Web 依赖
+
+```bash
+pip install fastapi uvicorn python-jose[cryptography] passlib[bcrypt]
+```
 
 ## 日程管理
 
@@ -372,6 +420,13 @@ plugins/pendo/
 ├── services/           # 核心服务
 ├── commands/           # 命令处理
 ├── utils/              # 工具模块
+├── web/                # Web 控制台
+│   ├── main.py         # FastAPI 应用入口
+│   ├── auth.py         # JWT 鉴权
+│   ├── deps.py         # 依赖注入
+│   ├── api/            # REST API 路由
+│   ├── analytics/      # 数据聚合（Dashboard/统计）
+│   └── static/         # 前端静态资源（HTML/CSS/JS）
 └── data/               # 数据存储
 ```
 
@@ -386,6 +441,15 @@ plugins/pendo/
 详细架构说明请参考 [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## 更新日志
+
+### V3.0 (2026-03-27)
+
+- Web 控制台（FastAPI + 原生 JS SPA）
+- JWT 登录鉴权，多用户会话隔离
+- Dashboard / 任务 / 事件 / 账本 / 日记 / 笔记 / 搜索 / 统计 / 设置 九大页面
+- Chart.js 可视化统计图表
+- `/pendo web` 聊天命令集成
+- 账本页 UX 重设计（筛选、排序、分页、快速录入）
 
 ### V2.0 (2026-02-03)
 

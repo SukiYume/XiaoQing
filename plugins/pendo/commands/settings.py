@@ -8,7 +8,11 @@ from typing import Callable, Optional, Any
 from core.plugin_base import run_sync
 from core.args import parse
 from ..services.db import Database
-from ..utils.settings_utils import parse_custom_settings, save_user_setting
+from ..utils.settings_utils import (
+    format_plugin_settings_message,
+    parse_toggle_value,
+    save_user_setting,
+)
 
 # 缓存可用时区列表
 _available_timezones = None
@@ -65,8 +69,6 @@ async def handle_settings(user_id: str, args: str, db: Database) -> str:
         return await _set_timezone(user_id, value, db)
     elif action == "quiet_hours":
         return await _set_quiet_hours(user_id, value, db)
-    elif action == "default_view":
-        return await _set_default_view(user_id, value, db)
     elif action == "daily_report":
         return await _set_daily_report_time(user_id, value, db)
     elif action == "daily_briefing":
@@ -82,7 +84,6 @@ async def handle_settings(user_id: str, args: str, db: Database) -> str:
             "• reminder - 开关提醒\n"
             "• timezone - 时区\n"
             "• quiet_hours - 静默时段\n"
-            "• default_view - 默认视图\n"
             "• daily_report - 每日简报时间\n"
             "• daily_briefing - 开关每日简报\n"
             "• diary_remind - 日记提醒时间\n"
@@ -94,32 +95,7 @@ async def _show_settings(user_id: str, db: Database) -> str:
     try:
         logger.debug("Showing settings for user %s", user_id)
         settings = await run_sync(db.settings.get_user_settings, user_id)
-        custom = parse_custom_settings(settings)
-
-        reminder_on = custom.get('reminder_enabled', True)
-        briefing_on = custom.get('daily_briefing_enabled', True)
-        privacy_on = custom.get('privacy_mode', False)
-
-        lines = ["⚙️ **当前设置**"]
-        lines.append(f"\n🌍 时区: {settings.get('timezone', 'Asia/Shanghai')}")
-        lines.append(f"🔕 静默时段: {settings.get('quiet_hours_start', '23:00')} - {settings.get('quiet_hours_end', '07:00')}")
-        lines.append(f"📊 默认视图: {custom.get('default_view', 'today')}")
-        lines.append(f"🔔 提醒: {'开启' if reminder_on else '关闭'}")
-        lines.append(f"🗓️ 每日简报: {'开启' if briefing_on else '关闭'} ({settings.get('daily_report_time', '08:00')})")
-        lines.append(f"📝 日记提醒: {settings.get('diary_remind_time', '21:30')}")
-        lines.append(f"🔒 隐私模式: {'开启' if privacy_on else '关闭'}")
-
-        lines.append("\n**修改设置:**")
-        lines.append("• /pendo settings reminder on/off - 开关提醒")
-        lines.append("• /pendo settings timezone <时区> - 设置时区")
-        lines.append("• /pendo settings quiet_hours <开始>-<结束> - 静默时段")
-        lines.append("• /pendo settings default_view <视图> - 默认视图")
-        lines.append("• /pendo settings daily_report <HH:MM> - 每日简报时间")
-        lines.append("• /pendo settings daily_briefing on/off - 开关每日简报")
-        lines.append("• /pendo settings diary_remind <HH:MM> - 日记提醒时间")
-        lines.append("• /pendo settings privacy on/off - 隐私模式")
-
-        return '\n'.join(lines)
+        return format_plugin_settings_message(settings)
     except Exception as e:
         logger.exception("Error showing settings for user %s: %s", user_id, e)
         return f"获取设置失败: {str(e)}"
@@ -167,14 +143,14 @@ async def _update_setting(
 
 async def _set_reminder_settings(user_id: str, value: str, db: Database) -> str:
     """设置提醒开关"""
-    def validator(v):
-        if not v: return False, "请指定 on 或 off"
-        return True, v.lower() in ['on', 'true', '1', 'yes', '是']
-
     return await _update_setting(
         user_id, "reminder_enabled", value, db,
-        validator=validator,
-        formatter=lambda v: f"✅ 提醒已{'开启' if v else '关闭'}",
+        validator=parse_toggle_value,
+        formatter=lambda v: (
+            "⚙️ 设置已更新\n"
+            f"🔔 提醒通知: {'开启' if v else '关闭'}\n"
+            "💡 事件提醒和待办提醒都会按这个总开关生效"
+        ),
         is_custom=True
     )
 
@@ -193,7 +169,11 @@ async def _set_timezone(user_id: str, value: str, db: Database) -> str:
     return await _update_setting(
         user_id, "timezone", value, db,
         validator=validator,
-        formatter=lambda v: f"✅ 时区已设置为: {v}",
+        formatter=lambda v: (
+            "⚙️ 设置已更新\n"
+            f"🌍 时区: {v}\n"
+            "💡 后续提醒、简报和日记提醒都会按这个时区计算"
+        ),
         is_custom=False
     )
 
@@ -219,21 +199,10 @@ async def _set_quiet_hours(user_id: str, value: str, db: Database) -> str:
     settings['quiet_hours_end'] = end_time
     await run_sync(db.settings.update_user_settings, user_id, settings)
 
-    return f"✅ 静默时段已设置为: {start_time} - {end_time}"
-
-async def _set_default_view(user_id: str, value: str, db: Database) -> str:
-    """设置默认视图"""
-    valid_views = ['today', 'tomorrow', 'week', 'month']
-    def validator(v):
-        if not v or v.lower() not in valid_views:
-            return False, f"请指定有效的视图: {', '.join(valid_views)}"
-        return True, v.lower()
-
-    return await _update_setting(
-        user_id, "default_view", value, db,
-        validator=validator,
-        formatter=lambda v: f"✅ 默认视图已设置为: {v}",
-        is_custom=True
+    return (
+        "⚙️ 设置已更新\n"
+        f"🔕 静默时段: {start_time} - {end_time}\n"
+        "💡 这段时间内提醒会更克制"
     )
 
 async def _set_daily_report_time(user_id: str, value: str, db: Database) -> str:
@@ -241,20 +210,23 @@ async def _set_daily_report_time(user_id: str, value: str, db: Database) -> str:
     return await _update_setting(
         user_id, "daily_report_time", value, db,
         validator=_validate_hhmm,
-        formatter=lambda v: f"✅ 每日简报时间已设置为: {v}",
+        formatter=lambda v: (
+            "⚙️ 设置已更新\n"
+            f"🗓️ 每日简报时间: {v}\n"
+            "💡 每日简报会在这个时间点准备发送"
+        ),
         is_custom=False
     )
 
 async def _set_daily_briefing_enabled(user_id: str, value: str, db: Database) -> str:
     """开关每日简报"""
-    def validator(v):
-        if not v: return False, "请指定 on 或 off"
-        return True, v.lower() in ['on', 'true', '1', 'yes', '是']
-
     return await _update_setting(
         user_id, "daily_briefing_enabled", value, db,
-        validator=validator,
-        formatter=lambda v: f"✅ 每日简报已{'开启' if v else '关闭'}",
+        validator=parse_toggle_value,
+        formatter=lambda v: (
+            "⚙️ 设置已更新\n"
+            f"🗓️ 每日简报: {'开启' if v else '关闭'}"
+        ),
         is_custom=True
     )
 
@@ -263,19 +235,22 @@ async def _set_diary_remind_time(user_id: str, value: str, db: Database) -> str:
     return await _update_setting(
         user_id, "diary_remind_time", value, db,
         validator=_validate_hhmm,
-        formatter=lambda v: f"✅ 日记提醒时间已设置为: {v}",
+        formatter=lambda v: (
+            "⚙️ 设置已更新\n"
+            f"📝 日记提醒时间: {v}"
+        ),
         is_custom=False
     )
 
 async def _set_privacy_mode(user_id: str, value: str, db: Database) -> str:
     """设置隐私模式"""
-    def validator(v):
-        if not v: return False, "请指定 on 或 off"
-        return True, v.lower() in ['on', 'true', '1', 'yes', '是']
-
     return await _update_setting(
         user_id, "privacy_mode", value, db,
-        validator=validator,
-        formatter=lambda v: f"✅ 隐私模式已{'开启' if v else '关闭'}\n\n开启后，在群聊中创建条目时，详情将通过私聊发送。",
+        validator=parse_toggle_value,
+        formatter=lambda v: (
+            "⚙️ 设置已更新\n"
+            f"🔒 隐私模式: {'开启' if v else '关闭'}\n"
+            "💡 开启后，群聊中的非公开详情会改为私聊发送"
+        ),
         is_custom=True
     )
