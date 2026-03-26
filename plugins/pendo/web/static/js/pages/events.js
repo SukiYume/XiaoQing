@@ -2,6 +2,8 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
+import { isValidDateInput } from '../utils/format.js';
+import { escapeHtml, injectStyles, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-events-redesign-styles';
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -85,15 +87,6 @@ function inputToIso(value) {
     return value.length === 16 ? `${value}:00` : value;
 }
 
-function escapeHtml(text) {
-    return String(text ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
 function currentRange() {
     if (_state.viewMode === 'calendar') {
         return {
@@ -156,11 +149,8 @@ function restoreScrollPosition(scrollY) {
 }
 
 function ensureStyles() {
-    if (document.getElementById(CSS_ID)) return;
-    const style = document.createElement('style');
-    style.id = CSS_ID;
-    style.textContent = `
-        .events-page { padding: 26px 24px 34px; max-width: 1280px; margin: 0 auto; }
+    injectStyles(CSS_ID, `
+        ${pageShellCss('events-page', { padding: '26px 24px 34px' })}
         .events-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
             padding: 22px 24px; border-radius: 24px; margin-bottom: 18px;
@@ -276,6 +266,17 @@ function ensureStyles() {
         .events-calendar-chip.milestone { background: rgba(99,102,241,0.08); color: #4338CA; }
         .events-calendar-chip.recurring { background: rgba(16,185,129,0.10); color: #0F766E; }
         .events-calendar-overflow { font-size: 12px; color: var(--color-text-secondary); font-weight: 700; padding-top: 2px; }
+        .events-calendar-compact { display: none; }
+        .events-calendar-summary {
+            display: inline-flex; align-items: center; justify-content: center;
+            min-height: 28px; padding: 0 10px; border-radius: 999px;
+            background: rgba(255,248,235,0.96); color: #B45309;
+            font-size: 11px; font-weight: 800; line-height: 1; white-space: nowrap;
+        }
+        .events-calendar-summary-count { font-weight: 900; }
+        .events-calendar-summary-text { margin-left: 2px; }
+        .events-calendar-summary.has-milestone { background: rgba(99,102,241,0.10); color: #4338CA; }
+        .events-calendar-summary.has-recurring { background: rgba(16,185,129,0.12); color: #0F766E; }
         .events-day-shell { display: flex; flex-direction: column; gap: 14px; }
         .events-day-head {
             display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 16px 18px;
@@ -399,9 +400,10 @@ function ensureStyles() {
             .events-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         @media (max-width: 840px) {
-            .events-calendar-cell { min-height: 88px; }
-            .events-calendar-chip { display: none; }
-            .events-calendar-overflow { display: block; }
+            .events-calendar-cell { min-height: 96px; }
+            .events-calendar-count { display: none; }
+            .events-calendar-items { display: none; }
+            .events-calendar-compact { display: flex; margin-top: auto; }
             .events-timeline-item { grid-template-columns: 58px 14px minmax(0, 1fr); }
             .events-timeline-item > :last-child { display: none; }
             .events-timeline-day-marker { grid-template-columns: 58px 14px minmax(0, 1fr); }
@@ -421,14 +423,13 @@ function ensureStyles() {
             .events-summary-chip { height: 38px; padding: 0 12px; font-size: 11px; }
             .events-calendar-grid, .events-calendar-weekdays { gap: 6px; }
             .events-calendar-cell {
-                min-height: 58px; aspect-ratio: auto; padding: 6px; border-radius: 16px;
+                min-height: 72px; aspect-ratio: auto; padding: 6px; border-radius: 16px;
                 display: flex; flex-direction: column; justify-content: space-between;
             }
             .events-calendar-head { margin-bottom: 0; align-items: flex-start; position: relative; min-height: 24px; }
             .events-calendar-date { width: 24px; height: 24px; font-size: 12px; }
-            .events-calendar-count { min-width: 18px; height: 18px; padding: 0 5px; font-size: 10px; position: absolute; top: 0; right: 0; }
-            .events-calendar-items { display: none; }
-            .events-calendar-overflow { font-size: 10px; }
+            .events-calendar-compact { display: flex; width: 100%; justify-content: center; }
+            .events-calendar-summary { min-height: 24px; padding: 0 8px; font-size: 10px; }
             .events-weekday { font-size: 11px; padding: 2px 0 4px; }
             .events-timeline-day-marker { grid-template-columns: 52px 14px minmax(0, 1fr); padding-top: 8px; }
             .events-timeline-day-label { font-size: 12px; }
@@ -436,8 +437,18 @@ function ensureStyles() {
             .events-timeline-time { padding-top: 8px; font-size: 11px; }
             .events-timeline-card { padding: 9px 10px; }
         }
-    `;
-    document.head.appendChild(style);
+        @media (max-width: 560px) {
+            .events-summary-chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .events-summary-chip { width: 100%; justify-content: center; padding: 0 8px; font-size: 10px; }
+            .events-weekday { font-size: 10px; letter-spacing: 0; }
+            .events-calendar-grid, .events-calendar-weekdays { gap: 4px; }
+            .events-calendar-cell { min-height: 64px; padding: 5px; border-radius: 14px; }
+            .events-calendar-date { width: 22px; height: 22px; font-size: 11px; }
+            .events-calendar-compact { justify-content: flex-start; }
+            .events-calendar-summary { min-height: 22px; padding: 0 7px; font-size: 10px; }
+            .events-calendar-summary-text { display: none; }
+        }
+    `);
 }
 
 function renderHero() {
@@ -447,7 +458,7 @@ function renderHero() {
         <section class="events-hero">
             <div>
                 <h2>📅 日程</h2>
-                <p>${_state.viewMode === 'calendar' ? `按月查看 ${range.start} 到 ${range.end} 的安排。` : '把筛选后的日程按时间线展开，便于连续浏览。'}</p>
+                <p>${_state.viewMode === 'calendar' ? `查看 ${range.start} 到 ${range.end} 的月度安排。` : '按时间顺序浏览当前范围内的日程。'}</p>
             </div>
             <div class="events-hero-actions">
                 <div class="events-view-toggle">
@@ -529,6 +540,11 @@ function renderCalendarCell(day, month, calendarDay) {
 
     const items = calendarDay?.items || [];
     const count = calendarDay?.count || 0;
+    const hasMilestone = items.some((item) => item.kind === 'milestone');
+    const hasRecurring = items.some((item) => item.kind === 'recurring');
+    const compactClasses = ['events-calendar-summary'];
+    if (hasMilestone) compactClasses.push('has-milestone');
+    else if (hasRecurring) compactClasses.push('has-recurring');
     return `
         <div class="${classes.join(' ')}" data-day="${dayString}">
             <div class="events-calendar-head">
@@ -539,6 +555,7 @@ function renderCalendarCell(day, month, calendarDay) {
                 ${items.map((item) => `<button class="events-calendar-chip ${item.kind}" data-event-id="${item.event_id}">${escapeHtml(item.label)}</button>`).join('')}
                 ${count > items.length ? `<div class="events-calendar-overflow">+${count - items.length} 条</div>` : ''}
             </div>
+            ${count ? `<div class="events-calendar-compact"><span class="${compactClasses.join(' ')}"><span class="events-calendar-summary-count">${count}</span><span class="events-calendar-summary-text">条安排</span></span></div>` : ''}
         </div>`;
 }
 
@@ -563,7 +580,7 @@ function renderCalendarPanel() {
             <div class="events-panel-header">
                 <div>
                     <h3 class="events-panel-title">${formatMonthLabel(_state.monthCursor)}</h3>
-                    <p class="events-panel-subtitle">日历会按当前筛选结果显示摘要，窄屏时自动收成“当天有几条”。</p>
+                    <p class="events-panel-subtitle">按月查看每天的日程分布。</p>
                 </div>
                 <div class="events-month-nav">
                     <button class="events-month-btn" id="events-prev-month">‹</button>
@@ -642,7 +659,7 @@ function renderSelectedDayPanel() {
             <div class="events-day-head">
                 <div>
                     <h3 class="events-day-title">${formatDateLabel(selectedDate)} · ${formatWeekday(selectedDate)}</h3>
-                    <div class="events-day-subtitle">点击日历日期展开当天时间线，单个日程可以继续查看详情、编辑或调整提醒。</div>
+                    <div class="events-day-subtitle">选中日期后查看当天日程、提醒和详情。</div>
                 </div>
                 <button class="btn btn-primary btn-sm" id="events-add-day" data-date="${selectedDate}">＋ 添加当天日程</button>
             </div>
@@ -657,7 +674,7 @@ function renderTimelinePage() {
             <div class="events-panel-header">
                 <div>
                     <h3 class="events-panel-title">时间线列表</h3>
-                    <p class="events-panel-subtitle">连续浏览当前时间范围内的日程。</p>
+                    <p class="events-panel-subtitle">按时间顺序浏览当前范围内的日程。</p>
                 </div>
                 <div class="events-timeline-tools">
                     <div class="events-timeline-toolbar">
@@ -670,9 +687,10 @@ function renderTimelinePage() {
                     </div>
                     ${_state.listRange === 'custom' ? `
                         <div class="events-inline-dates">
-                            <input class="events-inline-date" id="events-custom-start" type="date" value="${escapeHtml(_state.customStart)}">
+                            <input class="events-inline-date" id="events-custom-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_state.customStart)}">
                             <span style="font-size:12px;color:var(--color-text-secondary);">至</span>
-                            <input class="events-inline-date" id="events-custom-end" type="date" value="${escapeHtml(_state.customEnd)}">
+                            <input class="events-inline-date" id="events-custom-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_state.customEnd)}">
+                            <button type="button" class="events-range-btn" id="events-custom-apply">应用</button>
                         </div>` : ''}
                     </div>
                 </div>
@@ -705,7 +723,7 @@ function renderLoading() {
             <div class="events-panel-body">
                 <div class="events-empty">
                     <strong>加载中</strong>
-                    <p>正在整理当前日程、节点和提醒状态。</p>
+                    <p>正在加载当前日程和提醒。</p>
                 </div>
             </div>
         </div>`;
@@ -1164,18 +1182,39 @@ function attachPageListeners() {
 
     const customStart = root.querySelector('#events-custom-start');
     const customEnd = root.querySelector('#events-custom-end');
+    const customApply = root.querySelector('#events-custom-apply');
+    const applyCustomRange = async () => {
+        const nextStart = customStart?.value.trim() || '';
+        const nextEnd = customEnd?.value.trim() || '';
+        if (!isValidDateInput(nextStart) || !isValidDateInput(nextEnd)) {
+            showToast('请输入有效日期，格式为 YYYY-MM-DD', 'error');
+            return;
+        }
+        if (nextStart > nextEnd) {
+            showToast('开始日期不能晚于结束日期', 'error');
+            return;
+        }
+        _state.customStart = nextStart;
+        _state.customEnd = nextEnd;
+        await loadOverview({ preserveScroll: true });
+    };
     if (customStart) {
-        customStart.onchange = async () => {
-            _state.customStart = customStart.value;
-            if (_state.customStart && _state.customEnd) await loadOverview({ preserveScroll: true });
+        customStart.onkeydown = async (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                await applyCustomRange();
+            }
         };
     }
     if (customEnd) {
-        customEnd.onchange = async () => {
-            _state.customEnd = customEnd.value;
-            if (_state.customStart && _state.customEnd) await loadOverview({ preserveScroll: true });
+        customEnd.onkeydown = async (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                await applyCustomRange();
+            }
         };
     }
+    if (customApply) customApply.onclick = applyCustomRange;
 }
 
 export function render(container) {

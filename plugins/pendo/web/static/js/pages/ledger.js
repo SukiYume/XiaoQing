@@ -4,6 +4,9 @@ import { showModal, closeModal, showConfirmModal } from '../components/modal.js'
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
 import { renderPagination } from '../components/pagination.js';
 import { renderLedgerInsightsPanel } from '../components/ledger_insights.js';
+import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
+import { isoDate, isValidDateInput, todayStr as sharedTodayStr } from '../utils/format.js';
+import { injectStyles, pageShellCss } from '../utils/ui.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -41,15 +44,11 @@ let _summaryData        = { income: 0, expense: 0, balance: 0, count: 0 };
 let _insightsData       = null;
 let _allCategories      = [];
 let _dataChangedHandler = null;
-let _docClickAttached   = false;
 
 // ── date helpers ──────────────────────────────────────────────────────────────
 
-function padZ(n) { return String(n).padStart(2, '0'); }
-
 function todayStr() {
-    const d = new Date();
-    return `${d.getFullYear()}-${padZ(d.getMonth() + 1)}-${padZ(d.getDate())}`;
+    return sharedTodayStr();
 }
 
 function dateRangeForFilter(filter) {
@@ -64,7 +63,7 @@ function dateRangeForFilter(filter) {
         const start = new Date(today);
         start.setDate(today.getDate() - 6);
         return {
-            start_date: `${start.getFullYear()}-${padZ(start.getMonth() + 1)}-${padZ(start.getDate())}`,
+            start_date: isoDate(start),
             end_date:   todayStr(),
         };
     }
@@ -72,13 +71,13 @@ function dateRangeForFilter(filter) {
         const start = new Date(today);
         start.setDate(today.getDate() - 29);
         return {
-            start_date: `${start.getFullYear()}-${padZ(start.getMonth() + 1)}-${padZ(start.getDate())}`,
+            start_date: isoDate(start),
             end_date:   todayStr(),
         };
     }
     if (filter === 'current_month') {
         return {
-            start_date: `${today.getFullYear()}-${padZ(today.getMonth() + 1)}-01`,
+            start_date: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`,
             end_date:   todayStr(),
         };
     }
@@ -188,19 +187,76 @@ async function fetchInsights() {
 // ── CSS ───────────────────────────────────────────────────────────────────────
 
 function ensureStyles() {
-    if (document.getElementById(CSS_ID)) return;
-    const style = document.createElement('style');
-    style.id = CSS_ID;
-    style.textContent = `
-        .ledger-page { padding: 24px; max-width: 900px; margin: 0 auto; }
-
+    injectStyles(CSS_ID, `
+        ${pageShellCss('ledger-page')}
+        .ledger-hero {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 18px;
+            align-items: center;
+            padding: 24px 26px;
+            border-radius: 28px;
+            margin-bottom: 18px;
+            background:
+                radial-gradient(circle at top right, rgba(239,68,68,0.16), transparent 34%),
+                radial-gradient(circle at bottom left, rgba(251,146,60,0.12), transparent 28%),
+                linear-gradient(145deg, rgba(255,255,255,0.98), rgba(255,247,245,0.95));
+            border: 1px solid rgba(239,68,68,0.14);
+            box-shadow: 0 18px 40px rgba(225,82,65,0.06);
+        }
+        .ledger-hero-copy h2 {
+            margin: 0;
+            font-size: 30px;
+            font-weight: 820;
+            letter-spacing: -0.03em;
+            color: #b91c1c;
+        }
+        .ledger-hero-copy p {
+            margin: 8px 0 0;
+            font-size: 14px;
+            line-height: 1.75;
+            color: var(--color-text-secondary);
+        }
+        .ledger-hero-tags {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+        .ledger-hero-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 34px;
+            padding: 0 14px;
+            border-radius: 999px;
+            background: rgba(239,68,68,0.08);
+            color: #b91c1c;
+            font-size: 12px;
+            font-weight: 700;
+        }
         .ledger-page-header {
             display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 10px;
+        }
+        .ledger-page-header-note {
+            display: inline-flex;
             align-items: center;
-            justify-content: space-between;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            gap: 12px;
+            gap: 6px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.76);
+            border: 1px solid rgba(239,68,68,0.12);
+            color: #9f1239;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .ledger-section-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
         }
 
         /* Summary cards */
@@ -208,33 +264,84 @@ function ensureStyles() {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 14px;
-            margin-bottom: 20px;
         }
-        @media (max-width: 600px) {
+        @media (max-width: 1120px) {
+            .ledger-summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 760px) {
             .ledger-summary-cards { grid-template-columns: 1fr; }
         }
         .ledger-summary-card {
-            background: var(--color-surface);
-            border: 1px solid var(--color-border);
-            border-radius: var(--radius);
-            padding: 16px 20px;
-            display: flex;
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,249,247,0.94));
+            border: 1px solid rgba(239,68,68,0.12);
+            border-radius: 22px;
+            padding: 18px;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
             align-items: center;
             gap: 14px;
+            box-shadow: 0 14px 30px rgba(225,82,65,0.05);
+            min-width: 0;
         }
         .ledger-summary-icon {
-            font-size: 28px;
+            width: 48px;
+            height: 48px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 16px;
+            font-size: 24px;
+            background: rgba(239,68,68,0.08);
             flex-shrink: 0;
         }
         .ledger-summary-value {
-            font-size: 20px;
-            font-weight: 700;
-            line-height: 1.2;
+            font-size: clamp(24px, 2.5vw, 31px);
+            font-weight: 820;
+            line-height: 1.04;
+            letter-spacing: -0.03em;
+            min-width: 0;
+            overflow-wrap: anywhere;
         }
         .ledger-summary-label {
             font-size: 12px;
+            font-weight: 700;
             color: var(--color-text-secondary);
-            margin-top: 2px;
+            margin-top: 6px;
+        }
+        .ledger-controls-grid {
+            display: grid;
+            grid-template-columns: minmax(360px, 1.05fr) minmax(320px, 0.95fr);
+            gap: 16px;
+            align-items: start;
+        }
+        .ledger-panel {
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,249,247,0.95));
+            border: 1px solid rgba(239,68,68,0.12);
+            border-radius: 24px;
+            box-shadow: 0 16px 34px rgba(225,82,65,0.05);
+            overflow: visible;
+        }
+        .ledger-panel-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 18px 20px 0;
+        }
+        .ledger-panel-head h3 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 780;
+            color: var(--color-text);
+            letter-spacing: -0.02em;
+        }
+        .ledger-panel-head p {
+            margin: 6px 0 0;
+            font-size: 13px;
+            color: var(--color-text-secondary);
+        }
+        .ledger-panel-body {
+            padding: 16px 20px 20px;
         }
 
         .ledger-insights-panel {
@@ -338,6 +445,22 @@ function ensureStyles() {
             fill: #9ca3af;
             font-size: 10px;
             font-weight: 500;
+        }
+        .ledger-insight-y-label {
+            fill: #94a3b8;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+        }
+        .ledger-insight-svg-trend .ledger-insight-axis-labels text,
+        .ledger-insight-svg-kline .ledger-insight-axis-labels text {
+            font-size: 9px;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+        }
+        .ledger-insight-svg-trend,
+        .ledger-insight-svg-kline {
+            transform: translateY(-2px);
         }
         .ledger-ring-center-value {
             fill: #7f1d1d;
@@ -448,68 +571,75 @@ function ensureStyles() {
 
         /* Quick-add bar */
         .ledger-quick-add {
-            background: var(--color-surface);
-            border: 1px solid var(--color-border);
-            border-radius: var(--radius);
-            padding: 12px 16px;
-            margin-bottom: 16px;
             display: grid;
-            grid-template-columns: 96px 112px minmax(180px, 1fr) 120px 140px auto;
-            gap: 8px;
+            grid-template-columns: 104px 128px minmax(0, 1fr) 156px;
+            grid-template-areas:
+                "dir amount title title"
+                "category category date submit";
+            gap: 12px;
             align-items: center;
         }
+        .ledger-quick-add > * { min-width: 0; }
         .ledger-quick-add input {
             font-size: 13px;
-            height: 36px;
-            border-radius: var(--radius-sm);
-            border: 1px solid var(--color-border);
+            height: 40px;
+            border-radius: 14px;
+            border: 1px solid rgba(239,68,68,0.14);
             width: 100%;
+            padding: 0 14px;
+            background: rgba(255,255,255,0.92);
         }
         .ledger-quick-add input:focus {
             border-color: var(--color-ledger);
             box-shadow: 0 0 0 3px rgba(239,68,68,0.1);
             outline: none;
         }
-        .ledger-quick-add .csel { width: 100%; }
+        .ledger-quick-add .pselect { width: 100%; }
+        .ledger-quick-add .ledger-qa-direction { grid-area: dir; }
         .ledger-quick-add .ledger-qa-amount { width: 100%; min-width: 0; }
+        .ledger-quick-add .ledger-qa-amount { grid-area: amount; }
         .ledger-qa-amount::-webkit-outer-spin-button,
         .ledger-qa-amount::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         .ledger-qa-amount { -moz-appearance: textfield; }
-        .ledger-quick-add .ledger-qa-title { width: 100%; min-width: 0; }
-        .ledger-quick-add .ledger-qa-category { width: 100%; min-width: 0; }
-        .ledger-quick-add .ledger-qa-date { width: 100%; min-width: 0; }
+        .ledger-quick-add .ledger-qa-title { width: 100%; min-width: 0; grid-area: title; }
+        .ledger-quick-add .ledger-qa-category { width: 100%; min-width: 0; grid-area: category; }
+        .ledger-quick-add .ledger-qa-date { width: 100%; min-width: 0; grid-area: date; }
         .ledger-qa-submit {
-            height: 36px;
-            padding: 0 15px;
+            height: 40px;
+            padding: 0 16px;
             font-size: 13px;
             flex-shrink: 0;
             background: var(--color-ledger);
             color: #fff;
             border: none;
-            border-radius: var(--radius-sm);
+            border-radius: 14px;
             cursor: pointer;
-            font-weight: 600;
-            transition: background .15s;
+            font-weight: 700;
+            transition: background .15s, transform .15s, box-shadow .15s;
+            box-shadow: 0 10px 24px rgba(225,82,65,0.18);
         }
-        .ledger-qa-submit:hover { background: #dc2626; }
+        .ledger-quick-add .ledger-qa-submit {
+            grid-area: submit;
+            width: 100%;
+        }
+        .ledger-qa-submit:hover { background: #dc2626; transform: translateY(-1px); }
 
         /* Filter bar */
         .ledger-filter-bar {
-            display: flex;
-            gap: 10px 14px;
-            align-items: center;
-            flex-wrap: wrap;
-            background: var(--color-surface);
-            border: 1px solid var(--color-border);
-            border-radius: var(--radius);
-            padding: 12px 16px;
-            margin-bottom: 16px;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
         }
         .ledger-filter-item {
             display: flex;
-            align-items: center;
+            flex-direction: column;
+            align-items: flex-start;
             gap: 8px;
             min-width: 0;
+            padding: 0;
+            border: none;
+            background: transparent;
+            border-radius: 0;
         }
         .ledger-filter-item--date {
             flex: 0 0 auto;
@@ -524,11 +654,13 @@ function ensureStyles() {
             flex: 0 1 auto;
         }
         .ledger-filter-bar label {
-            font-size: 12px;
-            font-weight: 500;
+            font-size: 11px;
+            font-weight: 800;
             color: var(--color-text-secondary);
             white-space: nowrap;
             flex-shrink: 0;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
         }
         .ledger-filter-controls {
             display: flex;
@@ -544,9 +676,9 @@ function ensureStyles() {
             min-width: 0;
             flex-wrap: nowrap;
         }
-        .csel-filter-date { width: 108px; }
-        .csel-filter-direction { width: 124px; }
-        .csel-filter-category { width: 124px; }
+        .ledger-filter-date { width: 108px; }
+        .ledger-filter-direction { width: 124px; }
+        .ledger-filter-category { width: 124px; }
         .ledger-amount-input,
         .ledger-custom-date-input {
             height: 36px !important;
@@ -573,6 +705,23 @@ function ensureStyles() {
             min-width: 0;
             flex: 0 0 136px;
         }
+        .ledger-range-apply {
+            height: 36px;
+            padding: 0 14px;
+            border: 1px solid rgba(239,68,68,0.2);
+            border-radius: 18px;
+            background: rgba(239,68,68,0.06);
+            color: #b91c1c;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .15s, border-color .15s, transform .15s;
+        }
+        .ledger-range-apply:hover {
+            background: rgba(239,68,68,0.12);
+            border-color: rgba(239,68,68,0.28);
+        }
+        .ledger-range-apply:active { transform: translateY(1px); }
         .ledger-amount-input:hover,
         .ledger-custom-date-input:hover {
             border-color: var(--color-ledger);
@@ -586,124 +735,56 @@ function ensureStyles() {
         }
         .ledger-amount-input::placeholder { color: var(--color-text-secondary); }
 
-        /* Custom select ── shared base */
-        .csel {
-            position: relative;
-            display: inline-block;
-            flex-shrink: 0;
-        }
-        .csel-trigger {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            cursor: pointer;
-            user-select: none;
-            white-space: nowrap;
-            border: 1px solid var(--color-border);
-            background: var(--color-bg);
-            color: var(--color-text);
-            font-size: 13px;
-            font-weight: 500;
-            transition: border-color .15s, background .15s, box-shadow .15s;
-        }
-        .csel-trigger:hover {
-            border-color: #9CA3AF;
-            background: #EEF0F2;
-        }
-        .csel.csel-open .csel-trigger {
-            border-color: var(--color-ledger);
-            box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
-        }
-        .csel-chevron {
-            flex-shrink: 0;
-            color: #9CA3AF;
-            transition: transform .2s;
-        }
-        .csel.csel-open .csel-chevron {
-            transform: rotate(180deg);
-        }
-        .csel-panel {
-            display: none;
-            position: absolute;
-            top: calc(100% + 5px);
-            left: 0;
-            min-width: 100%;
-            background: var(--color-surface);
-            border: 1px solid var(--color-border);
-            border-radius: 10px;
-            box-shadow: 0 6px 24px rgba(0,0,0,0.13);
-            z-index: 1000;
-            padding: 4px 0;
-            overflow: hidden;
-        }
-        .csel.csel-open .csel-panel {
-            display: block;
-        }
-        .csel-option {
-            padding: 7px 16px;
-            font-size: 13px;
-            cursor: pointer;
-            white-space: nowrap;
-            color: var(--color-text);
-            transition: background .1s;
-        }
-        .csel-option:hover {
-            background: rgba(0,0,0,0.04);
-        }
-        .csel-option.csel-selected {
-            font-weight: 600;
-            color: var(--color-ledger);
-            background: rgba(239,68,68,0.05);
-        }
-
-        /* Filter-bar pill selects */
-        .csel-filter .csel-trigger {
-            height: 36px;
+        /* Shared custom select */
+        .ledger-quick-add .pselect { width: 100%; }
+        .ledger-filter-bar .pselect-trigger {
+            height: 40px;
             padding: 0 12px 0 14px;
-            border-radius: 20px;
-            border-color: rgba(239,68,68,0.35);
-            color: #b91c1c;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.94);
         }
-        .csel-filter .csel-trigger:hover {
-            border-color: var(--color-ledger);
-            background: rgba(239,68,68,0.06);
-        }
-        .csel-filter.csel-open .csel-trigger {
-            border-color: var(--color-ledger);
-            box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
-        }
-        .csel-filter .csel-chevron { color: var(--color-ledger); }
-
-        /* Quick-add direction select */
-        .csel-qa-dir .csel-trigger {
-            height: 36px;
+        .ledger-filter-bar .pselect-label { min-width: 0; }
+        .ledger-filter-bar .pselect-panel { border-radius: 16px; z-index: 1200; }
+        .ledger-quick-add .pselect-trigger {
+            height: 40px;
             padding: 0 10px 0 12px;
-            border-radius: 20px;
-            border-color: rgba(239,68,68,0.35);
-            color: #b91c1c;
+            border-radius: 14px;
             font-weight: 600;
+            background: rgba(255,255,255,0.94);
         }
-        .csel-qa-dir .csel-trigger:hover {
-            border-color: var(--color-ledger);
-            background: rgba(239,68,68,0.06);
-        }
-        .csel-qa-dir.csel-open .csel-trigger {
-            border-color: var(--color-ledger);
-            box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
-        }
-        .csel-qa-dir .csel-chevron { color: var(--color-ledger); }
+        .ledger-quick-add .pselect-label { min-width: 0; }
+        .ledger-quick-add .pselect-panel { border-radius: 16px; z-index: 1200; }
         @media (max-width: 980px) {
+            .ledger-controls-grid {
+                grid-template-columns: 1fr;
+            }
             .ledger-insights-panel {
                 grid-template-columns: 1fr;
             }
             .ledger-quick-add {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-            .ledger-qa-submit {
-                width: 100%;
+                grid-template-areas:
+                    "dir amount"
+                    "title title"
+                    "category category"
+                    "date date"
+                    "submit submit";
             }
         }
         @media (max-width: 720px) {
+            .ledger-page {
+                padding: 20px 16px 30px;
+            }
+            .ledger-hero {
+                grid-template-columns: 1fr;
+                padding: 22px 20px;
+            }
+            .ledger-page-header {
+                align-items: flex-start;
+            }
+            .ledger-filter-bar {
+                grid-template-columns: 1fr;
+            }
             .ledger-pulse-metrics {
                 grid-template-columns: 1fr;
             }
@@ -726,9 +807,9 @@ function ensureStyles() {
                 width: 100%;
                 flex-wrap: wrap;
             }
-            .csel-filter-date,
-            .csel-filter-direction,
-            .csel-filter-category {
+            .ledger-filter-date,
+            .ledger-filter-direction,
+            .ledger-filter-category {
                 width: 100%;
             }
             .ledger-filter-bar .ledger-custom-date-input,
@@ -741,6 +822,16 @@ function ensureStyles() {
         @media (max-width: 560px) {
             .ledger-quick-add {
                 grid-template-columns: 1fr;
+                grid-template-areas:
+                    "dir"
+                    "amount"
+                    "title"
+                    "category"
+                    "date"
+                    "submit";
+            }
+            .ledger-summary-value {
+                font-size: 26px;
             }
         }
 
@@ -765,7 +856,7 @@ function ensureStyles() {
             justify-content: space-between;
             align-items: center;
             gap: 12px;
-            margin-bottom: 10px;
+            margin-bottom: 14px;
             flex-wrap: wrap;
         }
         .ledger-list-toolbar-copy {
@@ -858,66 +949,15 @@ function ensureStyles() {
             color: var(--color-text-tertiary);
             font-size: 14px;
         }
+        .ledger-records-card {
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,249,247,0.95));
+            border: 1px solid rgba(239,68,68,0.12);
+            border-radius: 26px;
+            box-shadow: 0 18px 34px rgba(225,82,65,0.05);
+            padding: 18px 20px 20px;
+        }
         .ledger-pagination { margin-top: 16px; }
-    `;
-    document.head.appendChild(style);
-}
-
-// ── custom select component ───────────────────────────────────────────────────
-
-const CHEVRON_SVG = `<svg class="csel-chevron" width="13" height="13" viewBox="0 0 13 13" fill="none">
-    <path d="M3 5l3.5 3.5L10 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>`;
-
-function renderCustomSelect({ id, options, selected, className = '' }) {
-    const cur = options.find(o => String(o.value) === String(selected)) || options[0];
-    const optHtml = options.map(o => {
-        const sel = String(o.value) === String(selected) ? ' csel-selected' : '';
-        return `<div class="csel-option${sel}" data-value="${o.value}">${o.label}</div>`;
-    }).join('');
-    return `
-        <div class="csel ${className}" id="${id}" data-value="${selected}">
-            <div class="csel-trigger">
-                <span class="csel-label">${cur ? cur.label : ''}</span>
-                ${CHEVRON_SVG}
-            </div>
-            <div class="csel-panel">${optHtml}</div>
-        </div>`;
-}
-
-function initCustomSelects(container, callbacks) {
-    if (!_docClickAttached) {
-        document.addEventListener('click', () => {
-            document.querySelectorAll('.csel.csel-open').forEach(el => el.classList.remove('csel-open'));
-        });
-        _docClickAttached = true;
-    }
-
-    container.querySelectorAll('.csel').forEach(csel => {
-        const trigger = csel.querySelector('.csel-trigger');
-        const panel   = csel.querySelector('.csel-panel');
-
-        trigger.addEventListener('click', e => {
-            e.stopPropagation();
-            const wasOpen = csel.classList.contains('csel-open');
-            document.querySelectorAll('.csel.csel-open').forEach(el => el.classList.remove('csel-open'));
-            if (!wasOpen) csel.classList.add('csel-open');
-        });
-
-        panel.addEventListener('click', e => {
-            const opt = e.target.closest('.csel-option');
-            if (!opt) return;
-            const value = opt.dataset.value;
-            csel.dataset.value = value;
-            csel.querySelector('.csel-label').textContent = opt.textContent.trim();
-            panel.querySelectorAll('.csel-option').forEach(o =>
-                o.classList.toggle('csel-selected', o.dataset.value === value)
-            );
-            csel.classList.remove('csel-open');
-            const cb = callbacks[csel.id];
-            if (cb) cb(value);
-        });
-    });
+    `);
 }
 
 // ── render ────────────────────────────────────────────────────────────────────
@@ -957,7 +997,7 @@ function renderQuickAdd() {
         id: 'qa-direction',
         options: [{ value: 'expense', label: '支出' }, { value: 'income', label: '收入' }],
         selected: 'expense',
-        className: 'csel-qa-dir',
+        className: 'pselect-block pselect-theme-ledger ledger-qa-direction',
     });
     return `
         <div class="ledger-quick-add" id="ledger-quick-add">
@@ -965,7 +1005,7 @@ function renderQuickAdd() {
             <input type="number" class="ledger-qa-amount"   id="qa-amount"   placeholder="金额" step="0.01" min="0">
             <input type="text"   class="ledger-qa-title"    id="qa-title"    placeholder="摘要">
             <input type="text"   class="ledger-qa-category" id="qa-category" placeholder="分类（其他）">
-            <input type="date"   class="ledger-qa-date"     id="qa-date"     value="${today}">
+            <input type="text"   class="ledger-qa-date"     id="qa-date"     value="${today}" inputmode="numeric" placeholder="YYYY-MM-DD">
             <button class="ledger-qa-submit" id="qa-submit">+ 记录</button>
         </div>`;
 }
@@ -997,24 +1037,25 @@ function renderFilterBar() {
             <div class="ledger-filter-item ledger-filter-item--date">
                 <label>时段：</label>
                 <div class="ledger-filter-controls">
-                    ${renderCustomSelect({ id: 'filter-date', options: dateOptions, selected: _dateFilter, className: 'csel-filter csel-filter-date' })}
+                    ${renderCustomSelect({ id: 'filter-date', options: dateOptions, selected: _dateFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-date' })}
                     <div class="ledger-filter-range" id="filter-custom-range" style="${customVisible}">
-                        <input type="date" class="ledger-custom-date-input" id="filter-date-start" value="${_customDateStart}">
+                        <input type="text" class="ledger-custom-date-input" id="filter-date-start" value="${_customDateStart}" inputmode="numeric" placeholder="YYYY-MM-DD">
                         <span style="font-size:12px;color:var(--color-text-secondary);">—</span>
-                        <input type="date" class="ledger-custom-date-input" id="filter-date-end" value="${_customDateEnd}">
+                        <input type="text" class="ledger-custom-date-input" id="filter-date-end" value="${_customDateEnd}" inputmode="numeric" placeholder="YYYY-MM-DD">
+                        <button type="button" class="ledger-range-apply" id="filter-date-apply">应用</button>
                     </div>
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--direction">
                 <label>方向：</label>
                 <div class="ledger-filter-controls">
-                    ${renderCustomSelect({ id: 'filter-direction', options: dirOptions, selected: _directionFilter, className: 'csel-filter csel-filter-direction' })}
+                    ${renderCustomSelect({ id: 'filter-direction', options: dirOptions, selected: _directionFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-direction' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--category">
                 <label>分类：</label>
                 <div class="ledger-filter-controls">
-                    ${renderCustomSelect({ id: 'filter-category', options: catOptions, selected: _categoryFilter, className: 'csel-filter csel-filter-category' })}
+                    ${renderCustomSelect({ id: 'filter-category', options: catOptions, selected: _categoryFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-category' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--amount">
@@ -1032,6 +1073,19 @@ function renderFilterBar() {
 
 function renderInsights() {
     return renderLedgerInsightsPanel(_insightsData);
+}
+
+function currentRangeLabel() {
+    const labels = {
+        today: '今天',
+        week: '近 7 天',
+        month: '近 30 天',
+        current_month: '当月',
+        year: '今年',
+        all: '全部账目',
+        custom: '自定义范围',
+    };
+    return labels[_dateFilter] || '当前范围';
 }
 
 function renderItemRow(item) {
@@ -1097,20 +1151,52 @@ function renderPage() {
 
     _container.innerHTML = `
         <div class="ledger-page">
-            <div class="ledger-page-header">
-                <div>
-                    <h2 style="font-size:20px;font-weight:700;color:var(--color-ledger);">💰 账本</h2>
-                    <p style="font-size:13px;color:var(--color-text-secondary);margin-top:2px;">记录你的收支明细</p>
+            <section class="ledger-hero">
+                <div class="ledger-hero-copy">
+                    <h2>💰 账本</h2>
+                    <p>记录每一笔收支，并查看当前范围内的资金变化。</p>
+                    <div class="ledger-hero-tags">
+                        <span class="ledger-hero-tag">${currentRangeLabel()}</span>
+                        <span class="ledger-hero-tag">${_total} 条账目</span>
+                        <span class="ledger-hero-tag">${_sortMode === 'amount' ? '按金额排序' : '按时间排序'}</span>
+                    </div>
                 </div>
-            </div>
-            ${renderSummaryCards()}
-            ${renderQuickAdd()}
-            ${renderFilterBar()}
-            ${renderInsights()}
-            <div class="card">
+                <div class="ledger-page-header">
+                    <span class="ledger-page-header-note">查看当前范围收支分析</span>
+                </div>
+            </section>
+            <div class="ledger-section-stack">
+                ${renderSummaryCards()}
+                <section class="ledger-controls-grid">
+                    <div class="ledger-panel">
+                        <div class="ledger-panel-head">
+                            <div>
+                                <h3>快速记一笔</h3>
+                                <p>快速补记一笔账，同时保留分类和日期信息。</p>
+                            </div>
+                        </div>
+                        <div class="ledger-panel-body">
+                            ${renderQuickAdd()}
+                        </div>
+                    </div>
+                    <div class="ledger-panel">
+                        <div class="ledger-panel-head">
+                            <div>
+                                <h3>筛选范围</h3>
+                                <p>按时间、方向、分类和金额筛选账目。</p>
+                            </div>
+                        </div>
+                        <div class="ledger-panel-body">
+                            ${renderFilterBar()}
+                        </div>
+                    </div>
+                </section>
+                ${renderInsights()}
+            <div class="ledger-records-card">
                 ${renderListToolbar()}
                 <div id="ledger-list">${renderList(_items)}</div>
                 <div id="ledger-pagination" class="ledger-pagination"></div>
+            </div>
             </div>
         </div>`;
 
@@ -1177,18 +1263,40 @@ function attachListeners() {
     // Custom date range inputs
     const dateStart = _container.querySelector('#filter-date-start');
     const dateEnd   = _container.querySelector('#filter-date-end');
+    const dateApply = _container.querySelector('#filter-date-apply');
+    const applyCustomDateRange = async () => {
+        const nextStart = dateStart?.value.trim() || '';
+        const nextEnd = dateEnd?.value.trim() || '';
+        if (!isValidDateInput(nextStart) || !isValidDateInput(nextEnd)) {
+            showToast('请输入有效日期，格式为 YYYY-MM-DD', 'warning');
+            return;
+        }
+        if (nextStart > nextEnd) {
+            showToast('开始日期不能晚于结束日期', 'warning');
+            return;
+        }
+        _customDateStart = nextStart;
+        _customDateEnd = nextEnd;
+        _page = 1;
+        await loadAndRender();
+    };
     if (dateStart) {
-        dateStart.addEventListener('change', async () => {
-            _customDateStart = dateStart.value;
-            if (_customDateStart && _customDateEnd) { _page = 1; await loadAndRender(); }
+        dateStart.addEventListener('keydown', async (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                await applyCustomDateRange();
+            }
         });
     }
     if (dateEnd) {
-        dateEnd.addEventListener('change', async () => {
-            _customDateEnd = dateEnd.value;
-            if (_customDateStart && _customDateEnd) { _page = 1; await loadAndRender(); }
+        dateEnd.addEventListener('keydown', async (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                await applyCustomDateRange();
+            }
         });
     }
+    if (dateApply) dateApply.addEventListener('click', applyCustomDateRange);
 
     // Amount range inputs — debounced
     ['filter-amount-min', 'filter-amount-max'].forEach(id => {
@@ -1257,6 +1365,10 @@ async function handleQuickAdd() {
     }
     if (!title) {
         showToast('请填写摘要', 'warning');
+        return;
+    }
+    if (!isValidDateInput(dateVal)) {
+        showToast('请填写有效日期，格式为 YYYY-MM-DD', 'warning');
         return;
     }
 

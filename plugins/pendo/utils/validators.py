@@ -279,6 +279,17 @@ def _normalize_iso_datetime(value: Any, field_name: str) -> str:
     return parsed.isoformat(timespec="seconds")
 
 
+def _normalize_iso_date(value: Any, field_name: str) -> str:
+    """将输入规范化为 YYYY-MM-DD。"""
+    text = sanitize_text(str(value), 20)
+    if not text:
+        raise ValueError(f"{field_name} is required")
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError(f"Invalid {field_name}, expected YYYY-MM-DD") from exc
+
+
 def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
     """规范化并验证 event 字段。"""
     normalized = dict(data)
@@ -441,5 +452,104 @@ def normalize_task_fields(data: dict[str, Any], partial: bool = False) -> dict[s
             normalized["completed_at"] = _normalize_iso_datetime(completed_at, "completed_at")
     elif status_value is not None:
         normalized["completed_at"] = None
+
+    return normalized
+
+
+def normalize_note_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
+    """规范化并验证 note 字段。"""
+    normalized = dict(data)
+
+    title = normalized.get("title")
+    if not partial or title is not None:
+        normalized["title"] = validate_title(title or "")
+
+    category = normalized.get("category")
+    if category is None and not partial:
+        category = "未分类"
+    if category is not None:
+        normalized["category"] = validate_category(category or "未分类")
+
+    if "content" in normalized:
+        normalized["content"] = sanitize_text(normalized.get("content") or "", 50000)
+    elif not partial:
+        normalized["content"] = ""
+
+    tags = normalized.get("tags")
+    if tags is None and not partial:
+        tags = []
+    if tags is not None:
+        if not isinstance(tags, list):
+            raise ValueError("Note tags must be a list")
+        clean_tags: list[str] = []
+        seen: set[str] = set()
+        for tag in tags:
+            if not tag:
+                continue
+            validated = validate_tag(tag)
+            key = validated.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean_tags.append(validated)
+        normalized["tags"] = clean_tags
+
+    return normalized
+
+
+def normalize_diary_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
+    """规范化并验证 diary 字段。"""
+    normalized = dict(data)
+
+    diary_date = normalized.get("diary_date")
+    if not partial or "diary_date" in normalized:
+        normalized["diary_date"] = _normalize_iso_date(diary_date, "diary_date")
+
+    title = normalized.get("title")
+    if title is not None:
+        normalized["title"] = sanitize_text(str(title), 200)
+    elif not partial:
+        normalized["title"] = ""
+
+    content = normalized.get("content")
+    if not partial or "content" in normalized:
+        normalized["content"] = validate_diary_content(content or "")
+        if not normalized["content"]:
+            raise ValueError("Diary content cannot be empty")
+
+    if "location" in normalized:
+        normalized["location"] = validate_location(normalized.get("location") or "")
+    elif not partial:
+        normalized["location"] = ""
+
+    mood = normalized.get("mood")
+    if mood in (None, ""):
+        normalized["mood"] = ""
+    elif mood is not None:
+        normalized["mood"] = sanitize_text(str(mood), 16)
+
+    weather = normalized.get("weather")
+    if weather in (None, ""):
+        normalized["weather"] = ""
+    elif weather is not None:
+        normalized["weather"] = sanitize_text(str(weather), 32)
+
+    mood_score = normalized.get("mood_score")
+    if mood_score in (None, ""):
+        normalized["mood_score"] = None
+    elif mood_score is not None:
+        try:
+            score = int(mood_score)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Diary mood_score must be an integer") from exc
+        if not 1 <= score <= 10:
+            raise ValueError("Diary mood_score must be between 1 and 10")
+        normalized["mood_score"] = score
+
+    template_id = normalized.get("template_id")
+    if template_id in (None, ""):
+        normalized["template_id"] = None
+    elif template_id is not None:
+        normalized["template_id"] = sanitize_text(str(template_id), 80) or None
 
     return normalized

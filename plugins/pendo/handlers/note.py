@@ -14,6 +14,7 @@ from ..core.types import PendoContext, CommandMessage
 from core.plugin_base import run_sync
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
+from ..utils.settings_utils import resolve_default_category
 from ..config import PendoConfig
 from ..utils.time_utils import _parse_time_range_core
 from ..utils.formatters import (
@@ -100,6 +101,8 @@ class NoteHandler(DbOpsMixin):
 
         # 解析内容
         parsed = self._parse_note_text(content)
+        if not parsed["category"]:
+            parsed["category"] = resolve_default_category(self.db, user_id)
 
         clean_content = parsed["content"]
         title = self._generate_note_title(clean_content)
@@ -150,7 +153,7 @@ class NoteHandler(DbOpsMixin):
         meta = extract_metadata(text)
         return {
             "content": meta["text"],
-            "category": meta["category"] or "未分类",
+            "category": meta["category"] or "",
             "tags": meta["tags"],
         }
 

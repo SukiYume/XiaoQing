@@ -21,17 +21,21 @@ def get_db() -> Database:
     return _db_instance
 
 
-def get_current_user(authorization: str = Header(...)) -> str:
+def get_current_user(authorization: str | None = Header(default=None)) -> str:
     """Extract owner_id from Bearer token.
 
     Returns owner_id string.
     Raises 401 if token is missing, invalid, or expired.
     """
-    if not authorization.startswith("Bearer "):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization header")
+
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
         raise HTTPException(status_code=401, detail="Invalid authorization header")
-    token = authorization[7:]
+
     try:
-        payload = verify_token(token)
+        payload = verify_token(token.strip())
         return payload["owner_id"]
     except AuthError as e:
         raise HTTPException(status_code=401, detail=e.message)
