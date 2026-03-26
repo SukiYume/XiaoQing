@@ -36,12 +36,14 @@ from .handlers.note import NoteHandler
 from .handlers.diary import DiaryHandler
 from .handlers.search import SearchHandler
 from .handlers.ledger import LedgerHandler
+from .handlers.web import WebHandler
 from .services.db import Database
 from .services.reminder import ReminderService
 from .services.exporter import ExporterService
 from .services.ai_parser import AIParser
 from .utils.db_ops import get_user_custom_settings as _get_user_custom_settings_from_db
 from .utils.error_handlers import error_result, handle_command_errors_with_segments, success_result
+from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 from .utils.session_utils import safe_end_session
 from .config import PendoConfig
 
@@ -52,6 +54,8 @@ from .commands.scheduled import (
     cleanup_reminder_singleton,
     migrate_undone_todos,
     send_daily_briefings,
+    send_month_end_finance_summaries,
+    send_weekly_finance_summaries,
 )
 from .commands.session import handle_session_message
 from .commands.settings import handle_settings
@@ -76,9 +80,21 @@ def init(context=None) -> None:
     log = _get_logger(context)
     log.info("Pendo plugin initialized, database at %s", db_path)
 
+    if PendoConfig.WEB_ENABLED:
+        try:
+            from .web import server as web_server
+            web_server.start(db)
+        except Exception as e:
+            logger.warning("Failed to auto-start web UI: %s", e)
+
 
 def cleanup(context=None) -> None:
     """插件清理函数 - 在插件卸载时调用"""
+    try:
+        from .web import server as web_server
+        web_server.stop()
+    except Exception:
+        pass
     try:
         db = _get_database(context)
         db.cleanup()
@@ -306,6 +322,34 @@ async def scheduled_migrate_todos(context) -> list[dict[str, Any]]:
     return result
 
 
+async def scheduled_weekly_finance_summary(context) -> list[dict[str, Any]]:
+    """每周财务总结定时任务。"""
+    log = _get_logger(context)
+    db = _get_database(context)
+
+    result = await _run_scheduled_task(
+        context,
+        "weekly_finance_summary",
+        lambda: send_weekly_finance_summaries(context, db),
+        log,
+    )
+    return result
+
+
+async def scheduled_month_end_finance_summary(context) -> list[dict[str, Any]]:
+    """月底财务总结定时任务。"""
+    log = _get_logger(context)
+    db = _get_database(context)
+
+    result = await _run_scheduled_task(
+        context,
+        "month_end_finance_summary",
+        lambda: send_month_end_finance_summaries(context, db),
+        log,
+    )
+    return result
+
+
 async def _run_scheduled_task(
     context,
     task_name: str,
@@ -422,6 +466,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
     diary_handler = services["diary_handler"]
     search_handler = services["search_handler"]
     ledger_handler = services["ledger_handler"]
+    web_handler = services["web_handler"]
 
     async def _export_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         return await run_sync(exporter.export_markdown, user_id, args, {})
@@ -466,6 +511,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         "confirm": _confirm_cmd,
         "snooze": _snooze_cmd,
         "undo": _undo_cmd,
+        "web": _help_or_exec(web_handler.handle, "web"),
     }
 
     router = CommandRouter(handlers, help_provider=_show_help)
@@ -578,14 +624,14 @@ HELP_MAP = {
     ],
     "settings": [
         "**设置 (Settings):**",
-        "• /pendo settings [view] - 查看当前设置",
-        "• /pendo settings reminder on/off - 开关提醒",
-        "• /pendo settings timezone <时区> - 设置时区",
-        "• /pendo settings quiet_hours <开始>-<结束> - 静默时段",
-        "• /pendo settings daily_report <HH:MM> - 每日简报时间",
-        "• /pendo settings daily_briefing on/off - 开关每日简报",
-        "• /pendo settings diary_remind <HH:MM> - 日记提醒时间",
-        "• /pendo settings privacy on/off - 隐私模式",
+        *PLUGIN_SETTINGS_HELP_LINES,
+    ],
+    "web": [
+        "**Web UI 管理 (Web):**",
+        "• /pendo web token  - 生成登录令牌（Token 单独发送）",
+        "• /pendo web start  - 启动 Web 服务",
+        "• /pendo web stop   - 停止 Web 服务",
+        "• /pendo web status - 查看服务状态",
     ],
     "common": ["**其他操作:**", "• /pendo undo [分钟] - 撤销删除或编辑 (默认5分钟内)"],
 }
@@ -635,6 +681,7 @@ def _show_help(subcommand: str = "") -> str:
         "common",
         "import",
         "settings",
+        "web",
     ]
 
     for key in sections:
@@ -695,6 +742,7 @@ def _get_services(context: PendoContext | None) -> PendoServices:
     diary_handler = DiaryHandler(db)
     search_handler = SearchHandler(db)
     ledger_handler = LedgerHandler(db)
+    web_handler = WebHandler(db)
 
     services: PendoServices = {
         "db": db,
@@ -707,6 +755,7 @@ def _get_services(context: PendoContext | None) -> PendoServices:
         "diary_handler": diary_handler,
         "search_handler": search_handler,
         "ledger_handler": ledger_handler,
+        "web_handler": web_handler,
     }
 
     set_cached_services(context, services)

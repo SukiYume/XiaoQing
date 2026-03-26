@@ -135,13 +135,18 @@ class SearchHandler:
             grouped[item_type].append(item)
 
         # 构建输出
-        parts: list[str] = [f'🔍 搜索 "{query}"  —  找到 {len(results)} 条结果']
+        parts: list[str] = [
+            "🔎 搜索结果",
+            f"关键词: {query}",
+            f"命中: {len(results)} 条",
+        ]
 
         # 显示筛选条件（紧凑行）
         filter_parts = self._format_filter_summary(filters)
         if filter_parts:
             parts.append(f"筛选: {filter_parts}")
 
+        parts.append("━━━━━━━━━━━━━━━━━━")
         parts.append("")
 
         # 类型显示顺序
@@ -159,7 +164,7 @@ class SearchHandler:
 
             if not single_type:
                 type_name = TYPE_NAMES.get(item_type, item_type)
-                parts.append(f"**{type_name}** ({len(items)})")
+                parts.append(f"【{type_name}】{len(items)} 条")
 
             for item in items:
                 if total_shown >= max_display:
@@ -179,7 +184,8 @@ class SearchHandler:
         hint_types = [t for t in type_order if t in grouped]
         hints = [_TYPE_ACTION_HINTS[t] for t in hint_types if t in _TYPE_ACTION_HINTS]
         if hints:
-            parts.append(f"\n💡 {' | '.join(hints)}")
+            parts.append("")
+            parts.append(f"💡 操作: {' | '.join(hints)}")
 
         return "\n".join(parts)
 
@@ -195,7 +201,7 @@ class SearchHandler:
         lines: list[str] = []
 
         # === 第一行: 图标 + 标题 + 类型特有摘要 ===
-        main_line = f"  {icon} {title}"
+        main_line = f"• {icon} {title}"
 
         # 记账: 在标题行追加金额
         if isinstance(item, LedgerItem):
@@ -245,10 +251,10 @@ class SearchHandler:
             detail_parts.append(f"「{preview}」")
 
         if detail_parts:
-            lines.append(f"     {' | '.join(detail_parts)}")
+            lines.append(f"  {' | '.join(detail_parts)}")
 
         # ID 行
-        lines.append(f"     `{item_id}`")
+        lines.append(f"  ID: `{item_id}`")
 
         return "\n".join(lines)
 

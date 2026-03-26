@@ -14,10 +14,21 @@ from ..config import PendoConfig
 from ..utils.time_utils import parse_event_time_range, TimezoneHelper, now_in_timezone, parse_remind_times
 from ..models.item import EventItem
 from ..core.types import PendoContext, CommandMessage
+from ..utils.settings_utils import resolve_default_category
+from .event_support import (
+    apply_offsets,
+    calculate_remind_offsets,
+    ensure_event_reminders,
+    format_conflicts,
+    format_event_created,
+    format_event_reminders,
+    format_milestone_event_created,
+    format_recurring_event_created,
+    recalculate_event_reminders,
+)
 from ..utils.formatters import (
     ItemFormatter,
     MessageBuilder,
-    format_success_message,
 )
 from ..utils.session_utils import safe_create_session
 
@@ -188,8 +199,14 @@ class EventHandler(DbOpsMixin):
                     "data": parsed_data,
                 }
 
+        if not str(parsed_data.get("category") or "").strip():
+            parsed_data["category"] = resolve_default_category(self.db, user_id)
+
         # 确保有提醒时间
-        remind_times = self._ensure_reminders(parsed_data)
+        remind_times = ensure_event_reminders(
+            parsed_data,
+            build_from_offsets=self.ai_parser.build_remind_times_from_offsets,
+        )
 
         # 处理重复日程（rrule优先级高于milestones，避免AI同时生成两者时走错路径）
         if parsed_data.get("rrule"):
@@ -221,7 +238,7 @@ class EventHandler(DbOpsMixin):
         if conflicts:
             return {
                 "status": "need_confirm",
-                "message": self._format_conflicts(conflicts, parsed_data),
+                "message": format_conflicts(conflicts, parsed_data),
                 "pending_action": "create_event_with_conflict",
                 "data": parsed_data,
             }
@@ -266,7 +283,7 @@ class EventHandler(DbOpsMixin):
 
         return {
             "status": "success",
-            "message": self._format_event_created(event_item.to_dict()),
+            "message": format_event_created(event_item.to_dict()),
             "item_id": item_id,
         }
 
@@ -306,7 +323,7 @@ class EventHandler(DbOpsMixin):
                 return {"status": "error", "message": "❌ 没有生成任何重复实例"}
 
             # 计算提醒偏移量
-            remind_offsets = self._calculate_remind_offsets(start_dt_naive, remind_times)
+            remind_offsets = calculate_remind_offsets(start_dt_naive, remind_times)
 
             # 生成父ID
             parent_id = uuid.uuid4().hex[:8]
@@ -324,7 +341,7 @@ class EventHandler(DbOpsMixin):
                     tags=parsed_data.get("tags", []),
                     category=parsed_data.get("category", "未分类"),
                     context=parsed_data.get("context", {}),
-                    remind_times=self._apply_offsets(instance_dt, remind_offsets),
+                    remind_times=apply_offsets(instance_dt, remind_offsets),
                     notes=parsed_data.get("notes", ""),  # I-9修复：重复事件也传入notes
                     parent_id=parent_id,
                     rrule=parsed_data["rrule"],
@@ -350,7 +367,7 @@ class EventHandler(DbOpsMixin):
 
             return {
                 "status": "success",
-                "message": self._format_recurring_event_created(
+                "message": format_recurring_event_created(
                     parsed_data.get("title", "无标题"),
                     len(created_ids),
                     len(remind_offsets),
@@ -361,26 +378,6 @@ class EventHandler(DbOpsMixin):
         except Exception as e:
             logger.exception("创建重复日程失败: %s", e)
             return {"status": "error", "message": f"❌ 创建重复日程失败: {str(e)}"}
-
-    def _format_recurring_event_created(
-        self, title: str, instance_count: int, remind_count: int, parent_id: str
-    ) -> str:
-        """格式化重复事件创建成功消息
-
-        与单次事件的 _format_event_created 保持格式一致，但保留重复事件的特殊信息
-        """
-        lines = [
-            "✅ 已创建日程",
-            "",
-            f"🗓️ {title}",
-            f"🔄 共 {instance_count} 个实例",
-        ]
-        if remind_count:
-            lines.append(f"⏰ 每项已设置 {remind_count} 个提醒")
-        lines.append(f"\n`{parent_id}`")
-        lines.append(f"\n💡 用 /pendo event reminders {parent_id} 查看所有实例提醒")
-
-        return "\n".join(lines)
 
     async def _create_milestone_event(
         self,
@@ -422,36 +419,9 @@ class EventHandler(DbOpsMixin):
 
         return {
             "status": "success",
-            "message": self._format_milestone_event_created(event_item.to_dict()),
+            "message": format_milestone_event_created(event_item.to_dict()),
             "item_id": item_id,
         }
-
-    def _format_milestone_event_created(self, event: dict[str, Any]) -> str:
-        """格式化多时间节点事件创建成功消息"""
-        milestones = event.get("milestones", [])
-        remind_count = len(event.get("remind_times", []))
-
-        lines = [
-            "✅ 已创建日程",
-            "",
-            f"🗓️ {event.get('title', '无标题')}",
-            f"🗺️ 多时间节点事件 ({len(milestones)}个节点)",
-        ]
-        for m in milestones:
-            t = ItemFormatter.format_datetime(m.get("time", ""), "%m-%d %H:%M")
-            lines.append(f"📌 {m.get('name', '')}  {t}")
-
-        if event.get("location"):
-            lines.append(f"📍 {event['location']}")
-        if event.get("notes"):
-            lines.append(f"📝 {event['notes']}")
-        if remind_count:
-            lines.append(f"🔔 已设置 {remind_count} 个提醒")
-
-        lines.append(f"\n`{event['id']}`")
-        lines.append(f"\n💡 用 /pendo event reminders {event['id']} 查看提醒")
-
-        return "\n".join(lines)
 
     # ==================== 查看日程 ====================
 
@@ -605,10 +575,29 @@ class EventHandler(DbOpsMixin):
     async def list_events(
         self, user_id: str, time_range: str, context: PendoContext
     ) -> CommandMessage:
-        """列出日程"""
+        """列出日程
+
+        支持额外过滤参数 (可与时间范围组合使用):
+        - cat:xxx  -> 按分类筛选
+        - #tag     -> 按标签筛选
+        """
         # 如果传入的是事件ID，转发到 view
         if self._looks_like_id(time_range.strip()):
             return await self.view_event(user_id, time_range.strip(), context)
+
+        # 解析额外过滤参数
+        cat_filter = None
+        tag_filter = None
+        filter_parts = time_range.split()
+        clean_parts = []
+        for part in filter_parts:
+            if part.startswith("cat:"):
+                cat_filter = part[4:]
+            elif re.match(r"^#\w+$", part):
+                tag_filter = part[1:]
+            else:
+                clean_parts.append(part)
+        time_range = " ".join(clean_parts)
 
         try:
             start_date, end_date = parse_event_time_range(time_range)
@@ -621,6 +610,12 @@ class EventHandler(DbOpsMixin):
             # 多节点事件用区间重叠；单次事件只看 start_time
             start_dt, end_dt = datetime.fromisoformat(start_date), datetime.fromisoformat(end_date)
             events = [e for e in events if self._event_in_range(e, start_dt, end_dt)]
+
+            # 分类/标签过滤
+            if cat_filter:
+                events = [e for e in events if (e.category or "") == cat_filter]
+            if tag_filter:
+                events = [e for e in events if tag_filter in (e.tags or [])]
 
             def _effective_sort_time(e: EventItem) -> str:
                 m_list = e.milestones if hasattr(e, "milestones") else []
@@ -636,16 +631,24 @@ class EventHandler(DbOpsMixin):
 
             events.sort(key=_effective_sort_time)
 
+            # 构建过滤描述
+            filter_labels = []
+            if cat_filter:
+                filter_labels.append(f"分类:{cat_filter}")
+            if tag_filter:
+                filter_labels.append(f"#{tag_filter}")
+            filter_suffix = f" [{', '.join(filter_labels)}]" if filter_labels else ""
+
             if not events:
                 title = self._format_list_title(time_range, start_dt, end_dt)
                 return {
                     "status": "success",
-                    "message": f"🗓️ {title} 没有日程安排\n\n💡 用 /pendo event add <内容> 添加日程",
+                    "message": f"🗓️ {title}{filter_suffix} 没有日程安排\n\n💡 用 /pendo event add <内容> 添加日程",
                 }
 
             # 格式化输出
             title = self._format_list_title(time_range, start_dt, end_dt)
-            message = f"🗓️ **{title}** (共{len(events)}项)\n"
+            message = f"🗓️ **{title}**{filter_suffix} (共{len(events)}项)\n"
             current_date = None
             current_dt = now_in_timezone(user_id, self.db)
 
@@ -705,7 +708,7 @@ class EventHandler(DbOpsMixin):
 
             title = event.title
             if "start_time" in updates:
-                updates["remind_times"] = self._recalculate_reminders(event, updates)
+                updates["remind_times"] = recalculate_event_reminders(event, updates)
 
             # 保存旧值快照用于 undo
             old_values = {}
@@ -831,7 +834,7 @@ class EventHandler(DbOpsMixin):
                     )
                     inst_update["end_time"] = (inst_start + inst_duration).isoformat()
 
-                inst_update["remind_times"] = self._recalculate_reminders(inst, inst_update)
+                inst_update["remind_times"] = recalculate_event_reminders(inst, inst_update)
             elif "end_time" in inst_update and inst.start_time and new_duration is not None:
                 inst_start = datetime.fromisoformat(inst.start_time)
                 inst_update["end_time"] = (inst_start + new_duration).isoformat()
@@ -1068,7 +1071,7 @@ class EventHandler(DbOpsMixin):
                     end_str = ItemFormatter.format_datetime(event.end_time or "", "%m月%d日") if event.end_time else ""
                     date_range = f"{start_str}~{end_str}" if end_str else start_str
                     message += f"\n🗓️ {date_range} {event.title or '无标题'} 🗺️{len(milestones)}节点 `{event.id}`\n"
-                    for m, m_reminds in self._group_reminders_by_milestone(remind_times, milestones):
+                    for m, m_reminds in group_reminders_by_milestone(remind_times, milestones):
                         m_str = ItemFormatter.format_datetime(m["time"], "%m-%d")
                         message += f"  📌 {m_str} {m.get('name', '')}\n"
                         for t in m_reminds:
@@ -1100,7 +1103,7 @@ class EventHandler(DbOpsMixin):
         event = cast(EventItem | None, await self._db_get_item(query_id, owner_id=user_id))
 
         if event:
-            return self._format_event_reminders(event)
+            return format_event_reminders(event, self._build_log_map(event.id))
 
         # 如果直接查找失败，可能是parent_id，尝试查找所有子实例
         rows = await self._db_find_instances(user_id, query_id)
@@ -1115,7 +1118,7 @@ class EventHandler(DbOpsMixin):
 
         # 如果只有一个实例且ID匹配，返回单个
         if len(instances) == 1 and instances[0].id == query_id:
-            return self._format_event_reminders(instances[0])
+            return format_event_reminders(instances[0], self._build_log_map(instances[0].id))
 
         # 多个实例：汇总显示
         title = instances[0].title or "无标题"
@@ -1183,132 +1186,6 @@ class EventHandler(DbOpsMixin):
             return False
         return start_dt <= e_start <= end_dt
 
-    @staticmethod
-    def _group_reminders_by_milestone(
-        remind_times: list[str], milestones: list[dict[str, Any]]
-    ) -> list[tuple[dict[str, Any], list[str]]]:
-        """将提醒时间按所属里程碑分组。
-        对每个提醒，找到时间 >= 提醒时间且差值最小的里程碑作为归属。
-        返回 [(milestone, [remind_times])]，只含有提醒的里程碑，按里程碑时间排序。
-        """
-        milestone_map: dict[int, list[str]] = {i: [] for i in range(len(milestones))}
-        for rt in remind_times:
-            try:
-                r_dt = datetime.fromisoformat(rt)
-            except (ValueError, TypeError):
-                continue
-            best_idx: int | None = None
-            best_delta: Any = None
-            for i, m in enumerate(milestones):
-                try:
-                    m_dt = datetime.fromisoformat(m.get("time", ""))
-                    if m_dt >= r_dt:
-                        delta = m_dt - r_dt
-                        if best_delta is None or delta < best_delta:
-                            best_delta = delta
-                            best_idx = i
-                except (ValueError, TypeError):
-                    pass
-            if best_idx is not None:
-                milestone_map[best_idx].append(rt)
-        return [
-            (milestones[i], milestone_map[i])
-            for i in range(len(milestones))
-            if milestone_map[i]
-        ]
-
-    @staticmethod
-    def _normalize_iso(time_str: str) -> str:
-        """统一 ISO 格式，消除时区/微秒差异"""
-        return datetime.fromisoformat(time_str).isoformat()
-
-    @staticmethod
-    def _has_time(remind_times: list[str], target: str) -> bool:
-        """语义判断 target 是否已在 remind_times 中（60秒内视为相同）"""
-        try:
-            target_dt = datetime.fromisoformat(target)
-        except (ValueError, TypeError):
-            return target in remind_times
-        for t in remind_times:
-            try:
-                if abs((target_dt - datetime.fromisoformat(t)).total_seconds()) < 60:
-                    return True
-            except (ValueError, TypeError):
-                continue
-        return False
-
-    def _ensure_reminders(self, parsed_data: dict[str, Any]) -> list[str]:
-        """确保有提醒时间，每个事件在开始时间必有一次提醒"""
-        if parsed_data.get("remind_times"):
-            remind_times = parsed_data["remind_times"]
-        elif parsed_data.get("remind_offsets") and parsed_data.get("start_time"):
-            remind_times = self.ai_parser.build_remind_times_from_offsets(
-                parsed_data["start_time"], parsed_data["remind_offsets"]
-            )
-        else:
-            remind_times = self._default_reminders(cast(str | None, parsed_data.get("start_time")))
-
-        # 确保开始时间本身有一次提醒
-        start_time = parsed_data.get("start_time")
-        if start_time and not self._has_time(remind_times, start_time):
-            remind_times.append(self._normalize_iso(start_time))
-        remind_times.sort()
-
-        return remind_times
-
-    def _default_reminders(self, start_time: str | None) -> list[str]:
-        """默认提醒：提前1天、1小时、10分钟"""
-        if not start_time:
-            return []
-        try:
-            start_dt = datetime.fromisoformat(start_time)
-            now = datetime.now()
-            offsets = [timedelta(days=1), timedelta(hours=1), timedelta(minutes=10)]
-            return [(start_dt - o).isoformat() for o in offsets if start_dt - o > now]
-        except (ValueError, TypeError):
-            # ISO格式解析失败或日期计算错误
-            return []
-
-    def _calculate_remind_offsets(
-        self, start_dt: datetime, remind_times: list[str]
-    ) -> list[timedelta]:
-        """计算提醒偏移量"""
-        offsets = []
-        for t in remind_times:
-            try:
-                remind_dt = datetime.fromisoformat(t).replace(tzinfo=None)
-                offsets.append(start_dt - remind_dt)
-            except (ValueError, TypeError):
-                # 忽略无效的时间格式，继续处理其他提醒时间
-                continue
-        return offsets
-
-    def _apply_offsets(self, start_dt: datetime, offsets: list[timedelta]) -> list[str]:
-        """应用偏移量生成提醒时间"""
-        return [(start_dt - o).isoformat() for o in offsets]
-
-    def _recalculate_reminders(self, event: EventItem, updates: dict[str, Any]) -> list[str]:
-        """重新计算提醒时间，确保开始时间本身有一次提醒"""
-        new_start = updates.get("start_time")
-        if not new_start:
-            remind_times = parse_remind_times(event.remind_times)
-            start = event.start_time
-        else:
-            existing = parse_remind_times(event.remind_times)
-            if existing and event.start_time:
-                old_start = datetime.fromisoformat(event.start_time)
-                new_start_dt = datetime.fromisoformat(new_start)
-                offsets = self._calculate_remind_offsets(old_start, existing)
-                remind_times = self._apply_offsets(new_start_dt, offsets)
-            else:
-                remind_times = self._default_reminders(new_start)
-            start = new_start
-
-        if start and not self._has_time(remind_times, start):
-            remind_times.append(self._normalize_iso(start))
-        remind_times.sort()
-        return remind_times
-
     async def _parse_updates(self, changes: str, current_event: EventItem) -> dict[str, Any]:
         """解析更新内容
 
@@ -1369,91 +1246,9 @@ class EventHandler(DbOpsMixin):
             )
         return re.match(r"^[0-9a-f]{8}$", text) is not None
 
-    def _format_event_created(self, event: dict[str, Any]) -> str:
-        """格式化创建成功消息
-
-        与重复事件的 _format_recurring_event_created 保持格式一致
-        """
-        start_time = ItemFormatter.format_datetime(event["start_time"])
-        remind_count = len(event.get("remind_times", []))
-
-        lines = [
-            "✅ 已创建日程",
-            "",
-            f"🗓️ {event.get('title', '无标题')}",
-            f"📆 单次事件",
-            f"⏰ {start_time}",
-        ]
-        if event.get("location"):
-            lines.append(f"📍 {event['location']}")
-        if event.get("notes"):
-            lines.append(f"📝 {event['notes']}")
-        if remind_count:
-            lines.append(f"🔔 已设置 {remind_count} 个提醒")
-        lines.append(f"\n`{event['id']}`")
-        lines.append(f"\n💡 用 /pendo event reminders {event['id']} 查看提醒")
-
-        return "\n".join(lines)
-
-    def _format_conflicts(self, conflicts: list[dict[str, Any]], event: dict[str, Any]) -> str:
-        """格式化冲突消息"""
-        builder = MessageBuilder()
-        builder.add_line(f"⚠️ 日程 {event.get('title', '无标题')} 与以下日程冲突:")
-        builder.add_blank()
-        for c in conflicts[:3]:
-            start_str = ItemFormatter.format_datetime(c.get("start_time", ""), "%m-%d %H:%M")
-            builder.add_item("•", f"{c.get('title', '无标题')} ({start_str})")
-        builder.add_blank()
-        builder.add_line("输入 yes 确认创建，no 取消")
-        return builder.build()
-
     def _build_log_map(self, event_id: str) -> dict[str, dict[str, Any]]:
         """Build {remind_time_iso: log_dict} for an event.
 
         每个 (item_id, remind_time) 在 DB 中只有一行，无需去重。
         """
         return {log["remind_time"]: log for log in self.db.get_reminder_logs(event_id)}
-
-    @staticmethod
-    def _get_remind_status(log: dict[str, Any] | None) -> str:
-        """Return status icon for a reminder log entry (or None)."""
-        if log and log.get("confirmed_at"):
-            return "✅"
-        if log and log.get("sent_at"):
-            return "📩"
-        return "⏳"
-
-    def _format_event_reminders(self, event: Any) -> dict[str, Any]:
-        """格式化单个事件的提醒，包含发送/确认状态"""
-        remind_times = parse_remind_times(event.remind_times)
-        title = event.title or "无标题"
-        start_time = event.start_time or ""
-        milestones = getattr(event, "milestones", None) or []
-        notes = getattr(event, "notes", None) or ""
-
-        if not remind_times:
-            return {"status": "info", "message": f"🔔 日程: {title}\n\n未设置提醒"}
-
-        log_map = self._build_log_map(event.id)
-
-        builder = MessageBuilder()
-        builder.add_line(f"🔔 **{title}** 的提醒列表")
-        event_time_str = ItemFormatter.format_datetime(start_time, "%m月%d日 %H:%M")
-        builder.add_line(f"🗓️ 日程时间: {event_time_str}")
-        if milestones:
-            builder.add_line(f"🗺️ 多时间节点 ({len(milestones)}个)")
-            for m in milestones:
-                m_str = ItemFormatter.format_datetime(m.get("time", ""), "%m月%d日 %H:%M")
-                builder.add_line(f"  📌 {m.get('name', '')}  {m_str}")
-        if notes:
-            builder.add_line(f"📝 {notes}")
-        builder.add_line("─" * 30)
-        builder.add_blank()
-        _STATUS_LABELS = {"✅": "✅ 已确认", "📩": "📩 已发送未确认", "⏳": "⏳ 待发送"}
-        for i, t in enumerate(remind_times, 1):
-            time_str = ItemFormatter.format_datetime(t, "%m月%d日 %H:%M")
-            t_iso = t
-            status = _STATUS_LABELS[self._get_remind_status(log_map.get(t_iso))]
-            builder.add_line(f"⏰ **提醒 {i}**: {time_str}  {status}")
-
-        return {"status": "success", "message": builder.build()}

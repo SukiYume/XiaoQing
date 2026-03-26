@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 from contextlib import contextmanager
 
+from ..utils.settings_utils import normalize_settings_json
 from ..utils.validators import validate_item_data, sanitize_search_keyword
 from ..models.item import (
     ItemType,
@@ -419,6 +420,7 @@ class Database:
             set_clause = ", ".join([f"{self._quote_col(k)} = ?" for k in data.keys()])
 
             # S-1修复：使用 with conn: 代替手动 BEGIN/COMMIT/ROLLBACK
+            affected = 0
             with conn:
                 if owner_id:
                     cursor.execute(
@@ -430,16 +432,20 @@ class Database:
                         f"UPDATE items SET {set_clause} WHERE id = ?",
                         list(data.values()) + [item_id],
                     )
+                affected = cursor.rowcount
+
+                if affected > 0 and "remind_times" in update_dict:
+                    self._sync_reminder_logs(cursor, item_id, update_dict.get("remind_times"))
 
                 # C-5修复：在同一事务内直接读取最新数据更新FTS，避免读到缓存中的旧值
-                if cursor.rowcount > 0 and self._FTS_FIELDS & update_dict.keys():
+                if affected > 0 and self._FTS_FIELDS & update_dict.keys():
                     self._refresh_fts(item_id, conn)
 
             # 精确失效：只清除与该条目相关的缓存
             self.cache_invalidate(item_id)
             # 即使调用方不传 owner_id，也需要失效该用户的列表缓存
             resolved_owner = owner_id
-            if not resolved_owner and cursor.rowcount > 0:
+            if not resolved_owner and affected > 0:
                 try:
                     oid_cursor = conn.cursor()
                     oid_cursor.execute("SELECT owner_id FROM items WHERE id = ?", (item_id,))
@@ -450,7 +456,7 @@ class Database:
                     pass
             if resolved_owner:
                 self.cache_invalidate(f"items|{resolved_owner}")
-            return cursor.rowcount > 0
+            return affected > 0
         except Exception as e:
             logger.exception("Failed to update item: %s", e)
             raise
@@ -553,6 +559,8 @@ class Database:
                 return item
         return None
 
+    _ALLOWED_SORT_FIELDS = {"created_at", "updated_at", "ledger_date", "due_time", "start_time", "amount"}
+
     def get_items(
         self,
         owner_id: str,
@@ -564,7 +572,9 @@ class Database:
 
         Args:
             owner_id: 用户ID
-            filters: 过滤条件，支持 type, category, status, tags, start_date, end_date, date_field
+            filters: 过滤条件，支持 type, category, ledger_category, status, tags, direction,
+                     amount_min, amount_max, start_date, end_date, date_field,
+                     sort_field, sort_order
             limit: 返回数量限制
             offset: 偏移量
 
@@ -583,13 +593,22 @@ class Database:
         params = [owner_id]
 
         if filters:
-            for key in ["type", "category", "status"]:
+            for key in ["type", "category", "ledger_category", "status"]:
                 if key in filters:
                     where.append(f"{key} = ?")
                     params.append(filters[key])
             if "tags" in filters:
                 where.append(f"tags LIKE ?")
                 params.append(f"%{filters['tags']}%")
+            if "direction" in filters:
+                where.append("direction = ?")
+                params.append(filters["direction"])
+            if "amount_min" in filters:
+                where.append("amount >= ?")
+                params.append(filters["amount_min"])
+            if "amount_max" in filters:
+                where.append("amount <= ?")
+                params.append(filters["amount_max"])
 
             # 支持日期范围过滤
             date_field = filters.get("date_field")
@@ -605,7 +624,17 @@ class Database:
                     where.append(f"{date_field} <= ?")
                     params.append(filters["end_date"])
 
-        sql = f"SELECT * FROM items WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        sort_field = "created_at"
+        sort_order = "DESC"
+        if filters:
+            sf = filters.get("sort_field", "created_at")
+            so = filters.get("sort_order", "DESC").upper()
+            if sf in self._ALLOWED_SORT_FIELDS:
+                sort_field = sf
+            if so in ("ASC", "DESC"):
+                sort_order = so
+
+        sql = f"SELECT * FROM items WHERE {' AND '.join(where)} ORDER BY {sort_field} {sort_order} LIMIT ? OFFSET ?"
         cursor.execute(sql, params + [limit, offset])
 
         items = []
@@ -675,12 +704,30 @@ class Database:
                     cursor.execute(f"DELETE FROM items WHERE {where}", params)
                 # S-2修复：在 FTS 操作前保存 rowcount，避免被后续语句覆盖
                 affected = cursor.rowcount
+                cursor.execute("DELETE FROM reminder_logs WHERE item_id = ?", (item_id,))
                 cursor.execute("DELETE FROM items_fts WHERE id = ?", (item_id,))
             self.cache_clear()
             return affected > 0
         except Exception as e:
             logger.exception("Failed to delete item: %s", e)
             raise
+
+    def _sync_reminder_logs(self, cursor, item_id: str, remind_times: list[str] | None):
+        """删除当前条目已移除的提醒日志。"""
+        active_times = sorted({
+            str(remind_time)
+            for remind_time in (remind_times or [])
+            if remind_time
+        })
+        if not active_times:
+            cursor.execute("DELETE FROM reminder_logs WHERE item_id = ?", (item_id,))
+            return
+
+        placeholders = ",".join("?" for _ in active_times)
+        cursor.execute(
+            f"DELETE FROM reminder_logs WHERE item_id = ? AND remind_time NOT IN ({placeholders})",
+            [item_id] + active_times,
+        )
 
     @staticmethod
     def _apply_filters(
@@ -722,9 +769,12 @@ class Database:
         like = f"%{query}%"
         like_where: list[str] = [
             "owner_id = ?", "deleted = 0",
-            "(title LIKE ? OR content LIKE ? OR remark LIKE ? OR ledger_category LIKE ?)",
+            """(
+                title LIKE ? OR content LIKE ? OR tags LIKE ? OR category LIKE ? OR
+                remark LIKE ? OR ledger_category LIKE ? OR location LIKE ? OR notes LIKE ? OR weather LIKE ?
+            )""",
         ]
-        like_params: list[Any] = [owner_id, like, like, like, like]
+        like_params: list[Any] = [owner_id, like, like, like, like, like, like, like, like, like]
         self._apply_filters(like_where, like_params, filters)
 
         cursor.execute(
@@ -749,16 +799,13 @@ class Database:
         params: list[Any] = merged_ids + [owner_id]
         self._apply_filters(where, params, filters)
 
-        cursor.execute(
-            f"SELECT * FROM items WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ?",
-            params + [limit],
-        )
-        items = []
+        cursor.execute(f"SELECT * FROM items WHERE {' AND '.join(where)}", params)
+        items_by_id: dict[str, Item] = {}
         for row in cursor.fetchall():
             item = self._row_to_item(row)
             if item:
-                items.append(item)
-        return items
+                items_by_id[item.id] = item
+        return [items_by_id[item_id] for item_id in merged_ids[:limit] if item_id in items_by_id]
 
     def undo_delete(self, owner_id: str, minutes: int = 5) -> dict[str, Any]:
         """撤销删除"""
@@ -1069,7 +1116,7 @@ class Database:
         row = cursor.fetchone()
 
         if row:
-            settings = dict(row)
+            settings = self._hydrate_user_settings_row(dict(row))
             self._cache_set(cache_key, settings)
             return settings
 
@@ -1099,7 +1146,7 @@ class Database:
                 tuple(missing_user_ids),
             )
             for row in cursor.fetchall():
-                settings = dict(row)
+                settings = self._hydrate_user_settings_row(dict(row))
                 user_id = str(settings["user_id"])
                 self._cache_set(self._cache_key("settings", user_id), settings)
                 results[user_id] = settings
@@ -1118,7 +1165,20 @@ class Database:
             "daily_report_time": "08:00",
             "diary_remind_time": "21:30",
             "default_category": "未分类",
+            "settings_json": normalize_settings_json({}),
         }
+
+    def _hydrate_user_settings_row(self, settings: dict[str, Any]) -> dict[str, Any]:
+        raw_settings = settings.get("settings_json")
+        if raw_settings:
+            try:
+                raw_settings = json.loads(raw_settings)
+            except (TypeError, json.JSONDecodeError, ValueError):
+                raw_settings = {}
+        else:
+            raw_settings = {}
+        settings["settings_json"] = normalize_settings_json(raw_settings)
+        return settings
 
     def update_user_settings(self, user_id: str, settings: dict[str, Any]) -> bool:
         """更新用户设置（C-1修复：先读当前设置再合并，避免部分更新覆盖其他字段）"""
@@ -1130,6 +1190,12 @@ class Database:
 
         # 合并：新传入的字段覆盖现有字段，其余保留
         merged = {**current, **settings}
+        merged_settings_json = {}
+        if isinstance(current.get("settings_json"), dict):
+            merged_settings_json.update(current["settings_json"])
+        if isinstance(settings.get("settings_json"), dict):
+            merged_settings_json.update(normalize_settings_json(settings["settings_json"], partial=True))
+        merged["settings_json"] = normalize_settings_json(merged_settings_json)
 
         try:
             # S-1修复：使用 with conn: 代替手动 BEGIN/COMMIT/ROLLBACK
@@ -1149,7 +1215,7 @@ class Database:
                         merged.get("daily_report_time", "08:00"),
                         merged.get("diary_remind_time", "21:30"),
                         merged.get("default_category", "未分类"),
-                        merged.get("settings_json"),
+                        json.dumps(merged.get("settings_json", {}), ensure_ascii=False),
                         datetime.now().isoformat(),
                     ),
                 )

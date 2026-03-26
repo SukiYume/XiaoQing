@@ -249,6 +249,7 @@ class TaskHandler(DbOpsMixin):
 
         # 解析参数
         status_filter = None
+        priority_filter = None
         show_all = False
         page_num = 1
 
@@ -265,6 +266,11 @@ class TaskHandler(DbOpsMixin):
                     page_num = int(part.split(":")[1])
                 except (IndexError, ValueError):
                     pass
+            elif part.startswith("p:"):
+                try:
+                    priority_filter = int(part[2:])
+                except ValueError:
+                    pass
 
         # 构建查询条件
         filters = {"type": ItemType.TASK.value, "category": category}
@@ -277,6 +283,10 @@ class TaskHandler(DbOpsMixin):
         tasks = cast(
             list[TaskItem], await run_sync(self.db.items.get_items, user_id, filters, query_limit)
         )
+
+        # 应用优先级过滤
+        if priority_filter is not None:
+            tasks = [t for t in tasks if (_enum_val(t.priority) or 3) == priority_filter]
 
         if not tasks:
             return {"status": "success", "message": f"📝 **{category}** 的待办\n\n暂无待办事项"}
