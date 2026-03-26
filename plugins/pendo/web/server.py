@@ -39,7 +39,7 @@ def create_app(db: Database) -> FastAPI:
 
     # Import and mount API routes
     from .api import create_api_router
-    app.include_router(create_api_router(), prefix="/pendo/api")
+    app.include_router(create_api_router(), prefix="/api")
 
     # Mount static files (SPA fallback to index.html)
     if STATIC_DIR.exists():

@@ -14,7 +14,7 @@ async function request(path, options = {}) {
         headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const res = await fetch(`/pendo/api${path}`, { ...options, headers });
+    const res = await fetch(`api${path}`, { ...options, headers });
 
     if (res.status === 401) {
         clearToken();
@@ -48,7 +48,7 @@ export const api = {
 
 export async function verifyToken(token) {
     try {
-        const res = await fetch('/pendo/api/auth/verify', {
+        const res = await fetch('api/auth/verify', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${token}`,
