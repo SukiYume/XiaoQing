@@ -3,6 +3,7 @@ import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
+import { injectStyles, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-tasks-redesign-styles';
 const TODAY = () => new Date();
@@ -224,11 +225,8 @@ function deriveDisplayModel(tasks) {
 }
 
 function ensureStyles() {
-    if (document.getElementById(CSS_ID)) return;
-    const style = document.createElement('style');
-    style.id = CSS_ID;
-    style.textContent = `
-        .tasks-shell { padding: 26px 24px 36px; max-width: 1280px; margin: 0 auto; }
+    injectStyles(CSS_ID, `
+        ${pageShellCss('tasks-shell')}
         .tasks-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
             padding: 24px 26px; border-radius: 26px; margin-bottom: 18px;
@@ -262,7 +260,7 @@ function ensureStyles() {
         }
         .tasks-panel {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-            border: 1px solid rgba(226,232,240,0.92); border-radius: 24px;
+            border: 1px solid rgba(226,232,240,0.92); border-radius: 20px;
             box-shadow: 0 16px 34px rgba(15,23,42,0.04);
         }
         .tasks-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
@@ -271,7 +269,7 @@ function ensureStyles() {
         .tasks-panel-body { padding: 16px 20px 20px; }
         .tasks-stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
         .tasks-stat-card {
-            padding: 16px; border-radius: 18px; background: rgba(255,255,255,0.86);
+            padding: 16px; border-radius: 16px; background: rgba(255,255,255,0.86);
             border: 1px solid rgba(16,185,129,0.08);
         }
         .tasks-stat-label { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
@@ -307,7 +305,7 @@ function ensureStyles() {
         .tasks-filter-bar .pselect-label { min-width: 0; }
         .tasks-workspace {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-            border: 1px solid rgba(226,232,240,0.92); border-radius: 26px; box-shadow: 0 18px 34px rgba(15,23,42,0.04);
+            border: 1px solid rgba(226,232,240,0.92); border-radius: 22px; box-shadow: 0 18px 34px rgba(15,23,42,0.04);
             overflow: hidden;
         }
         .tasks-workspace-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px; border-bottom: 1px solid rgba(226,232,240,0.75); }
@@ -316,7 +314,7 @@ function ensureStyles() {
         .tasks-content { padding: 18px 20px 22px; }
         .tasks-sections { display: flex; flex-direction: column; gap: 16px; }
         .tasks-section {
-            border: 1px solid rgba(226,232,240,0.85); border-radius: 22px;
+            border: 1px solid rgba(226,232,240,0.85); border-radius: 18px;
             background: rgba(255,255,255,0.9); padding: 16px;
         }
         .tasks-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
@@ -325,7 +323,7 @@ function ensureStyles() {
         .tasks-task-list { display: flex; flex-direction: column; gap: 10px; }
         .task-row {
             display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: start;
-            padding: 14px; border-radius: 18px; border: 1px solid rgba(226,232,240,0.82);
+            padding: 14px; border-radius: 16px; border: 1px solid rgba(226,232,240,0.82);
             background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92));
             cursor: pointer; transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
         }
@@ -353,7 +351,7 @@ function ensureStyles() {
         }
         .tasks-board { display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); gap: 14px; overflow-x: auto; padding-bottom: 4px; }
         .tasks-board-col {
-            min-width: 240px; border-radius: 22px; border: 1px solid rgba(226,232,240,0.92);
+            min-width: 240px; border-radius: 18px; border: 1px solid rgba(226,232,240,0.92);
             background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92));
         }
         .tasks-board-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid rgba(226,232,240,0.75); }
@@ -363,7 +361,7 @@ function ensureStyles() {
         .tasks-board-list { min-height: 160px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
         .tasks-board-list.drag-over { background: rgba(16,185,129,0.05); border-radius: 0 0 22px 22px; }
         .tasks-board-card {
-            border: 1px solid rgba(226,232,240,0.86); border-radius: 16px; background: #fff; padding: 12px;
+            border: 1px solid rgba(226,232,240,0.86); border-radius: 14px; background: #fff; padding: 12px;
             cursor: pointer; transition: box-shadow 0.16s ease, transform 0.16s ease; position: relative;
         }
         .tasks-board-card:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(15,23,42,0.08); }
@@ -393,8 +391,7 @@ function ensureStyles() {
             .task-row-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
             .tasks-board { grid-template-columns: 1fr; }
         }
-    `;
-    document.head.appendChild(style);
+    `);
 }
 
 async function fetchOverview() {
@@ -435,7 +432,7 @@ function renderHero(model) {
         <section class="tasks-hero">
             <div>
                 <h2>✅ 待办</h2>
-                <p>把今天该推进的事、接下来要跟进的事和最近收尾的节奏放在同一页里。</p>
+                <p>集中查看当前任务、接下来要跟进的事项和最近完成项。</p>
                 <div class="tasks-hero-tags">
                     <span class="tasks-hero-tag">${summary.focus_count} 项今日聚焦</span>
                     <span class="tasks-hero-tag">${summary.overdue_count} 项截止风险</span>
@@ -462,7 +459,7 @@ function renderInsights(model) {
                 <div class="tasks-panel-head">
                     <div>
                         <h3>执行状态</h3>
-                        <p>把今日推进、截止风险和完成效率放到一眼能扫到的位置。</p>
+                        <p>查看当前推进情况、截止风险和完成节奏。</p>
                     </div>
                     <div class="task-pill">${completion}% 完成率</div>
                 </div>
@@ -503,7 +500,7 @@ function renderInsights(model) {
                 <div class="tasks-panel-head">
                     <div>
                         <h3>分类负载</h3>
-                        <p>看看当前注意力主要被哪些任务分类占住。</p>
+                        <p>查看当前任务主要分布在哪些分类。</p>
                     </div>
                 </div>
                 <div class="tasks-panel-body">
@@ -616,7 +613,7 @@ function renderListView(model) {
     return `
         <div class="tasks-sections">
             ${renderSection('今日聚焦', '先处理逾期和今天要收口的任务。', model.focus_tasks.slice(0, 6))}
-            ${renderSection('接下来', '未来 7 天内会影响节奏的任务。', model.up_next_tasks.slice(0, 8))}
+            ${renderSection('接下来', '未来 7 天内需要留意的任务。', model.up_next_tasks.slice(0, 8))}
             ${renderSection('稍后与待排期', '更晚的任务和没有日期的事项。', [...model.later_tasks.slice(0, 4), ...model.backlog_tasks.slice(0, 4)])}
             ${renderSection('最近完成', '看一下最近是怎么收尾的。', model.done_recent.slice(0, 6))}
         </div>`;
@@ -666,8 +663,8 @@ function renderBoardView(model) {
 
 function renderWorkspace(model) {
     const subtitle = _viewMode === 'list'
-        ? '按执行顺序组织任务，先做今天真正需要动手的部分。'
-        : '在状态流里拖动任务，快速调整推进位置。';
+        ? '按时间和优先级安排接下来要处理的事。'
+        : '按状态查看全部任务。';
     return `
         <section class="tasks-workspace">
             <div class="tasks-workspace-head">
@@ -688,7 +685,7 @@ function renderPage() {
     ensureStyles();
 
     if (_loading && !_overview) {
-        _container.innerHTML = `<div class="tasks-shell"><div class="tasks-empty">正在加载任务面板...</div></div>`;
+        _container.innerHTML = `<div class="tasks-shell"><div class="tasks-empty">正在加载待办...</div></div>`;
         return;
     }
 

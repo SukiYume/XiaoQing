@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
 import { loadChart } from '../lib/chart-loader.js';
+import { injectStyles, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-dashboard-styles';
 
@@ -10,11 +11,8 @@ let _chartInstance = null;
 let _dataChangedHandler = null;
 
 function ensureStyles() {
-    if (document.getElementById(CSS_ID)) return;
-    const style = document.createElement('style');
-    style.id = CSS_ID;
-    style.textContent = `
-        .dashboard-page { padding: 26px 24px 32px; max-width: 1220px; margin: 0 auto; }
+    injectStyles(CSS_ID, `
+        ${pageShellCss('dashboard-page', { padding: '26px 24px 32px' })}
         .dashboard-hero {
             display: grid; grid-template-columns: minmax(0, 1.2fr) auto; gap: 18px; align-items: end;
             padding: 22px 24px; margin-bottom: 18px; border-radius: 24px;
@@ -88,8 +86,13 @@ function ensureStyles() {
         .dashboard-event-date strong { font-size: 18px; line-height: 1; }
         .dashboard-event-date span { font-size: 11px; margin-top: 4px; }
         .dashboard-event-title { font-size: 14px; font-weight: 650; color: var(--color-text); line-height: 1.4; }
-        .dashboard-event-meta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--color-text-secondary); }
-        .dashboard-meta-pill { display: inline-flex; align-items: center; gap: 4px; padding: 5px 8px; border-radius: 999px; background: rgba(148,163,184,0.08); }
+        .dashboard-event-subtitle { margin-top: 5px; font-size: 12px; font-weight: 700; color: #6366F1; }
+        .dashboard-event-meta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--color-text-secondary); min-width: 0; }
+        .dashboard-meta-pill {
+            display: inline-flex; align-items: center; gap: 4px; padding: 5px 8px; border-radius: 999px; background: rgba(148,163,184,0.08);
+            max-width: 100%;
+        }
+        .dashboard-meta-pill.location { white-space: normal; line-height: 1.45; align-items: flex-start; overflow-wrap: anywhere; }
         .dashboard-task-sections { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(220px, 0.9fr); gap: 14px; }
         .dashboard-task-section { padding: 14px; border-radius: 18px; background: rgba(255,255,255,0.78); border: 1px solid rgba(226,232,240,0.9); }
         .dashboard-task-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
@@ -107,9 +110,12 @@ function ensureStyles() {
         .dashboard-task-title.is-done { text-decoration: line-through; }
         .dashboard-task-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--color-text-secondary); }
         .dashboard-finance-top { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-        .dashboard-finance-metric { padding: 12px; border-radius: 16px; background: rgba(255,255,255,0.82); border: 1px solid rgba(226,232,240,0.88); }
+        .dashboard-finance-metric { padding: 12px; border-radius: 16px; background: rgba(255,255,255,0.82); border: 1px solid rgba(226,232,240,0.88); min-width: 0; }
         .dashboard-finance-metric span { font-size: 12px; color: var(--color-text-secondary); }
-        .dashboard-finance-metric strong { display: block; margin-top: 8px; font-size: 22px; line-height: 1.1; font-weight: 800; letter-spacing: -0.03em; }
+        .dashboard-finance-metric strong {
+            display: block; margin-top: 8px; font-size: clamp(18px, 1.9vw, 22px); line-height: 1.1; font-weight: 800; letter-spacing: -0.03em;
+            overflow-wrap: anywhere;
+        }
         .dashboard-chart-card { padding: 14px; border-radius: 18px; background: linear-gradient(180deg, rgba(254,242,242,0.92), rgba(255,255,255,0.98)); border: 1px solid rgba(239,68,68,0.12); cursor: pointer; }
         .dashboard-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
         .dashboard-chart-head strong { font-size: 14px; color: var(--color-ledger); }
@@ -143,6 +149,13 @@ function ensureStyles() {
             .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .dashboard-grid { grid-template-columns: 1fr; }
         }
+        @media (max-width: 920px) {
+            .dashboard-finance-top { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .dashboard-finance-metric strong { font-size: clamp(16px, 2.3vw, 20px); }
+            .dashboard-event-card { grid-template-columns: 50px minmax(0, 1fr); gap: 10px; }
+            .dashboard-event-title { font-size: 13px; }
+            .dashboard-meta-pill.location { width: 100%; border-radius: 14px; }
+        }
         @media (max-width: 720px) {
             .dashboard-page { padding: 20px 16px 28px; }
             .dashboard-hero { grid-template-columns: 1fr; }
@@ -150,9 +163,10 @@ function ensureStyles() {
             .dashboard-summary { grid-template-columns: 1fr; }
             .dashboard-agenda-grid, .dashboard-task-sections, .dashboard-finance-top { grid-template-columns: 1fr; }
             .dashboard-diary-panel { grid-template-columns: 1fr; }
+            .dashboard-event-meta { gap: 5px; }
+            .dashboard-meta-pill { font-size: 11px; }
         }
-    `;
-    document.head.appendChild(style);
+    `);
 }
 
 function formatTime(iso) {
@@ -193,7 +207,7 @@ function buildHero(summary, monthSummary) {
         <section class="dashboard-hero">
             <div>
                 <h2>📊 概览</h2>
-                <p>本月安排、任务进度和资金变化，一页看完。</p>
+                <p>集中查看最近的安排、任务和资金变化。</p>
             </div>
             <div class="dashboard-hero-tags">
                 <span class="dashboard-hero-tag">本月 ${summary.events_month ?? 0} 场日程</span>
@@ -244,6 +258,10 @@ function renderEventSection(title, items, emptyTitle, emptyText) {
             <div class="dashboard-agenda-list">
                 ${items.map(event => {
                     const date = formatMonthDay(event.start_time);
+                    const isMilestone = event.entry_kind === 'milestone' && event.display_subtitle;
+                    const heading = isMilestone
+                        ? `${event.display_title || event.title || '(无标题)'} · ${event.display_subtitle}`
+                        : (event.display_title || event.title || '(无标题)');
                     return `
                         <article class="dashboard-event-card">
                             <div class="dashboard-event-date">
@@ -251,10 +269,11 @@ function renderEventSection(title, items, emptyTitle, emptyText) {
                                 <span>${date.month}</span>
                             </div>
                             <div>
-                                <div class="dashboard-event-title">${event.title || '(无标题)'}</div>
+                                <div class="dashboard-event-title">${heading}</div>
+                                ${event.display_subtitle && !isMilestone ? `<div class="dashboard-event-subtitle">${event.display_subtitle}</div>` : ''}
                                 <div class="dashboard-event-meta">
                                     <span class="dashboard-meta-pill">🕒 ${formatTime(event.start_time)}${event.end_time ? ` - ${formatTime(event.end_time)}` : ''}</span>
-                                    ${event.location ? `<span class="dashboard-meta-pill">📍 ${event.location}</span>` : ''}
+                                    ${event.location ? `<span class="dashboard-meta-pill location">📍 ${event.location}</span>` : ''}
                                 </div>
                             </div>
                         </article>`;
@@ -280,7 +299,7 @@ function renderMonthlyAgenda(events) {
             <div class="dashboard-panel-header">
                 <div>
                     <h3 style="color:var(--color-events);">📅 本月日程</h3>
-                    <p>查看这个月的安排节奏。</p>
+                    <p>查看这个月的重要安排。</p>
                 </div>
                 <a class="dashboard-link" href="#/events">查看全部 →</a>
             </div>
@@ -334,7 +353,7 @@ function renderTasksPanel(tasks) {
             <div class="dashboard-panel-header">
                 <div>
                     <h3 style="color:var(--color-tasks);">✅ 任务进度</h3>
-                    <p>当前推进项和最近完成一并查看。</p>
+                    <p>同时查看进行中的任务和最近完成项。</p>
                 </div>
                 <a class="dashboard-link" href="#/tasks">查看全部 →</a>
             </div>
@@ -439,7 +458,7 @@ function renderFinancePanel(spendingTrend, monthSummary, recentLedger) {
             <div class="dashboard-panel-header">
                 <div>
                     <h3 style="color:var(--color-ledger);">💰 本月财务</h3>
-                    <p>收入、支出和最近账目。</p>
+                    <p>查看最近的收支变化和账目记录。</p>
                 </div>
                 <a class="dashboard-link" href="#/ledger">查看账本 →</a>
             </div>
@@ -507,6 +526,7 @@ async function loadAndRender() {
 
     const summary = data.summary || {};
     const eventsMonth = data.events_month || [];
+    const eventsAgenda = data.events_agenda || eventsMonth;
     const tasks = data.tasks || { active: [], completed: [] };
     const spendingTrend = data.spending_trend || [];
     const monthSummary = data.month_summary || {};
@@ -518,7 +538,7 @@ async function loadAndRender() {
             ${renderSummaryCards(summary)}
             <div class="dashboard-grid">
                 <div class="dashboard-column">
-                    ${renderMonthlyAgenda(eventsMonth)}
+                    ${renderMonthlyAgenda(eventsAgenda)}
                     ${renderTasksPanel(tasks)}
                 </div>
                 <div class="dashboard-column">

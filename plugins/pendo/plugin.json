@@ -25,7 +25,7 @@
             "cron": {
                 "minute": "*"
             },
-            "description": "每分钟检查提醒"
+            "description": "每分钟检查提醒（事件/待办提醒按分钟级触发）"
         },
         {
             "id": "pendo_daily_briefing",
@@ -33,7 +33,7 @@
             "cron": {
                 "minute": "*"
             },
-            "description": "每日简报 - 每分钟检查用户本地时间"
+            "description": "每日简报 - 用户可自定义本地时间，因此按分钟检查"
         },
         {
             "id": "pendo_diary_reminder",
@@ -41,7 +41,7 @@
             "cron": {
                 "minute": "*"
             },
-            "description": "日记提醒 - 每分钟检查用户本地时间"
+            "description": "日记提醒 - 用户可自定义本地时间，因此按分钟检查"
         },
         {
             "id": "pendo_migrate_todos",
@@ -51,6 +51,26 @@
                 "minute": 5
             },
             "description": "待办迁移 - 每天00:05执行"
+        },
+        {
+            "id": "pendo_weekly_finance_summary",
+            "handler": "scheduled_weekly_finance_summary",
+            "cron": {
+                "day_of_week": "sun",
+                "hour": 21,
+                "minute": 0
+            },
+            "description": "每周财务总结 - 每周日 21:00 执行"
+        },
+        {
+            "id": "pendo_month_end_finance_summary",
+            "handler": "scheduled_month_end_finance_summary",
+            "cron": {
+                "day": "last",
+                "hour": 21,
+                "minute": 0
+            },
+            "description": "月底财务总结 - 每月最后一天 21:00 执行"
         }
     ]
 }

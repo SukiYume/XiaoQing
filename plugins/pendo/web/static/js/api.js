@@ -55,8 +55,19 @@ export async function verifyToken(token) {
                 'Content-Type': 'application/json',
             },
         });
-        return res.ok;
+        const data = await res.json().catch(() => ({}));
+        return {
+            ok: Boolean(res.ok && data.ok),
+            ownerId: data?.data?.owner_id || '',
+            expiresAt: data?.data?.expires_at || null,
+            message: data?.message || data?.detail || '',
+        };
     } catch {
-        return false;
+        return {
+            ok: false,
+            ownerId: '',
+            expiresAt: null,
+            message: '无法连接到 Web 服务',
+        };
     }
 }

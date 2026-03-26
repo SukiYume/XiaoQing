@@ -7,7 +7,13 @@ import uuid
 import pytest
 
 from plugins.pendo.services.db import Database
-from plugins.pendo.utils.validators import normalize_event_fields, normalize_ledger_fields, normalize_task_fields
+from plugins.pendo.utils.validators import (
+    normalize_diary_fields,
+    normalize_event_fields,
+    normalize_ledger_fields,
+    normalize_note_fields,
+    normalize_task_fields,
+)
 from plugins.pendo.web.analytics.ledger_insights import build_ledger_insights
 
 
@@ -171,6 +177,85 @@ def test_task_update_route_preserves_explicit_nulls_for_clearing_fields():
     assert updated["due_time"] is None
     assert updated["category"] == "未分类"
     assert updated["content"] == ""
+
+
+def test_normalize_note_fields_sets_defaults_and_deduplicates_tags():
+    note = normalize_note_fields({
+        "title": "  读书摘录  ",
+        "content": "  很长的正文  ",
+        "category": "",
+        "tags": ["学习", "学习", " 阅读 ", ""],
+    }, partial=False)
+
+    assert note["title"] == "读书摘录"
+    assert note["content"] == "很长的正文"
+    assert note["category"] == "未分类"
+    assert note["tags"] == ["学习", "阅读"]
+
+
+def test_normalize_diary_fields_requires_content_and_clears_optional_values():
+    diary = normalize_diary_fields({
+        "diary_date": "2026-03-26",
+        "title": "  夜晚散步  ",
+        "content": "  今天散步很舒服。  ",
+        "location": "  江边  ",
+        "mood": "😊",
+        "weather": "☀️ 晴",
+        "mood_score": "8",
+        "template_id": "",
+    }, partial=False)
+
+    assert diary["diary_date"] == "2026-03-26"
+    assert diary["title"] == "夜晚散步"
+    assert diary["content"] == "今天散步很舒服。"
+    assert diary["location"] == "江边"
+    assert diary["mood"] == "😊"
+    assert diary["weather"] == "☀️ 晴"
+    assert diary["mood_score"] == 8
+    assert diary["template_id"] is None
+
+    cleared = normalize_diary_fields({
+        **diary,
+        "title": "",
+        "location": None,
+        "weather": "",
+        "mood_score": "",
+    }, partial=False)
+
+    assert cleared["title"] == ""
+    assert cleared["location"] == ""
+    assert cleared["weather"] == ""
+    assert cleared["mood_score"] is None
+
+    with pytest.raises(ValueError, match="Diary content cannot be empty"):
+        normalize_diary_fields({"diary_date": "2026-03-26", "content": ""}, partial=False)
+
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        normalize_diary_fields({"diary_date": "2026/03/26", "content": "正文"}, partial=False)
+
+    with pytest.raises(ValueError, match="between 1 and 10"):
+        normalize_diary_fields({"diary_date": "2026-03-26", "content": "正文", "mood_score": 11}, partial=False)
+
+
+def test_items_api_source_supports_note_filters_and_normalization():
+    src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")
+
+    assert 'tags: Optional[str] = None' in src
+    assert 'filters["tags"] = tags' in src
+    assert "normalize_note_fields(item_data, partial=False)" in src
+    assert "normalized = normalize_note_fields(merged, partial=False)" in src
+    assert "resolve_default_category(db, owner_id)" in src
+    assert 'category_field = _resolve_category_field(type)' in src
+    assert 'SELECT DISTINCT {category_field}' in src
+
+
+def test_items_api_source_supports_diary_normalization_and_same_day_conflict():
+    src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")
+
+    assert "normalize_diary_fields(item_data, partial=False)" in src
+    assert "normalized = normalize_diary_fields(merged, partial=False)" in src
+    assert "Diary already exists for this date" in src
+    assert "db.has_diary_for_date(owner_id, diary_date)" in src
 
 
 def test_event_validation_rejects_invalid_merged_update_values():

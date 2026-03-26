@@ -2,52 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any
 
 from ...models.item import EventItem
 from ...services.db import Database
-
-
-def _ensure_datetime(value: str | None, *, is_end: bool = False) -> datetime | None:
-    if not value:
-        return None
-    text = str(value)
-    if "T" not in text:
-        suffix = "T23:59:59" if is_end else "T00:00:00"
-        text = f"{text}{suffix}"
-    return datetime.fromisoformat(text)
-
-
-def _date_key(value: str | None) -> str:
-    return (value or "")[:10]
+from .event_schedule import (
+    build_event_schedule,
+    daterange,
+    ensure_datetime,
+    event_kind,
+)
 
 
 def _iso_or_empty(value: datetime | None) -> str:
     return value.isoformat() if value else ""
 
 
-def _daterange(start_day: date, end_day: date) -> list[str]:
-    days: list[str] = []
-    cursor = start_day
-    while cursor <= end_day:
-        days.append(cursor.strftime("%Y-%m-%d"))
-        cursor += timedelta(days=1)
-    return days
-
-
-def _event_kind(event: EventItem) -> str:
-    milestones = getattr(event, "milestones", None) or []
-    if milestones and len(milestones) >= 2:
-        return "milestone"
-    if getattr(event, "parent_id", None) or getattr(event, "rrule", None):
-        return "recurring"
-    return "single"
-
-
 def _event_matches_range(event: EventItem, range_start: datetime, range_end: datetime) -> bool:
-    start_dt = _ensure_datetime(getattr(event, "start_time", None))
-    end_dt = _ensure_datetime(getattr(event, "end_time", None), is_end=True) or start_dt
+    start_dt = ensure_datetime(getattr(event, "start_time", None))
+    end_dt = ensure_datetime(getattr(event, "end_time", None), is_end=True) or start_dt
     if not start_dt:
         return False
     return start_dt <= range_end and (end_dt is None or end_dt >= range_start)
@@ -118,7 +92,7 @@ def _reminder_rows_in_range(
 
 
 def _event_matches_kind(event: EventItem, kind: str) -> bool:
-    return kind in {"", "all", _event_kind(event)}
+    return kind in {"", "all", event_kind(event)}
 
 
 def _event_matches_reminder(reminder_summary: dict[str, Any], reminder: str) -> bool:
@@ -131,86 +105,19 @@ def _event_matches_reminder(reminder_summary: dict[str, Any], reminder: str) -> 
     return reminder_summary.get(reminder, 0) > 0
 
 
-def _milestone_rows(event: EventItem) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for milestone in getattr(event, "milestones", None) or []:
-        if not milestone.get("time"):
-            continue
-        rows.append({
-            "name": milestone.get("name") or "节点",
-            "time": str(milestone["time"]),
-            "date": _date_key(milestone["time"]),
-        })
-    rows.sort(key=lambda row: row["time"])
-    return rows
-
-
-def _event_display_days(event: EventItem, range_start_day: date, range_end_day: date) -> list[str]:
-    milestone_rows = _milestone_rows(event)
-    if milestone_rows:
-        return [
-            row["date"]
-            for row in milestone_rows
-            if range_start_day <= datetime.fromisoformat(row["time"]).date() <= range_end_day
-        ]
-
-    start_dt = _ensure_datetime(getattr(event, "start_time", None))
-    end_dt = _ensure_datetime(getattr(event, "end_time", None), is_end=True) or start_dt
-    if not start_dt:
-        return []
-
-    start_day = max(start_dt.date(), range_start_day)
-    end_day = min((end_dt or start_dt).date(), range_end_day)
-    if start_day > end_day:
-        return []
-    return _daterange(start_day, end_day)
-
-
 def _timeline_entries_for_day(event_payload: dict[str, Any], day: str) -> list[dict[str, Any]]:
-    kind = event_payload["kind"]
     entries: list[dict[str, Any]] = []
-    if kind == "milestone":
-        milestone_rows = [row for row in event_payload["milestones"] if row["date"] == day]
-        if milestone_rows:
-            for milestone in milestone_rows:
-                entries.append({
-                    "event_id": event_payload["id"],
-                    "kind": "milestone",
-                    "day": day,
-                    "time": milestone["time"],
-                    "time_label": milestone["time"][11:16],
-                    "title": event_payload["title"],
-                    "subtitle": milestone["name"],
-                    "location": event_payload["location"],
-                    "category": event_payload["category"],
-                    "reminder_total": event_payload["range_reminder_summary"]["total"],
-                })
-        else:
-            entries.append({
-                "event_id": event_payload["id"],
-                "kind": "milestone",
-                "day": day,
-                "time": None,
-                "time_label": "节点",
-                "title": event_payload["title"],
-                "subtitle": "多节点事件",
-                "location": event_payload["location"],
-                "category": event_payload["category"],
-                "reminder_total": event_payload["range_reminder_summary"]["total"],
-            })
-        return entries
-
-    if _date_key(event_payload["start_time"]) == day:
+    for row in event_payload["day_entries"].get(day, []):
         entries.append({
             "event_id": event_payload["id"],
-            "kind": event_payload["kind"],
+            "kind": row["kind"],
             "day": day,
-            "time": event_payload["start_time"],
-            "time_label": event_payload["start_time"][11:16] if event_payload["start_time"] else "全天",
-            "title": event_payload["title"],
-            "subtitle": event_payload["time_summary"],
-            "location": event_payload["location"],
-            "category": event_payload["category"],
+            "time": row["time"],
+            "time_label": row["time_label"],
+            "title": row["title"],
+            "subtitle": row["subtitle"],
+            "location": row["location"],
+            "category": row["category"],
             "reminder_total": event_payload["range_reminder_summary"]["total"],
         })
     return entries
@@ -218,28 +125,24 @@ def _timeline_entries_for_day(event_payload: dict[str, Any], day: str) -> list[d
 
 def _normalize_event(event: EventItem, reminder_logs: list[dict[str, Any]], range_start_day: date, range_end_day: date) -> dict[str, Any]:
     base = event.to_dict()
+    schedule = build_event_schedule(event, range_start_day, range_end_day)
     reminders = _build_reminder_rows(event, reminder_logs)
     reminder_summary = _build_reminder_summary(reminders)
     range_reminders = _reminder_rows_in_range(reminders, range_start_day, range_end_day)
     range_reminder_summary = _build_reminder_summary(range_reminders)
-    milestones = _milestone_rows(event)
-    kind = _event_kind(event)
-    start_time = getattr(event, "start_time", None) or ""
-    end_time = getattr(event, "end_time", None) or ""
-    time_summary = start_time[11:16] if start_time else "未设置时间"
-    if end_time:
-        time_summary = f"{time_summary} - {end_time[11:16]}"
+    kind = schedule["kind"]
 
     return {
         **base,
         "kind": kind,
-        "display_days": _event_display_days(event, range_start_day, range_end_day),
-        "milestones": milestones,
+        "display_days": schedule["display_days"],
+        "milestones": schedule["milestones"],
+        "day_entries": schedule["day_entries"],
         "reminders": reminders,
         "reminder_summary": reminder_summary,
         "range_reminders": range_reminders,
         "range_reminder_summary": range_reminder_summary,
-        "time_summary": time_summary,
+        "time_summary": schedule["time_summary"],
         "is_recurring_instance": kind == "recurring",
         "series_id": getattr(event, "parent_id", None) or None,
     }
@@ -256,8 +159,8 @@ def build_events_overview(
     kind: str = "all",
     reminder: str = "all",
 ) -> dict[str, Any]:
-    range_start = _ensure_datetime(start_date) or datetime.now()
-    range_end = _ensure_datetime(end_date, is_end=True) or range_start
+    range_start = ensure_datetime(start_date) or datetime.now()
+    range_end = ensure_datetime(end_date, is_end=True) or range_start
     range_start_day = range_start.date()
     range_end_day = range_end.date()
 
@@ -293,7 +196,7 @@ def build_events_overview(
 
     calendar_days: dict[str, dict[str, Any]] = {}
     timeline_days: dict[str, list[dict[str, Any]]] = {}
-    for day in _daterange(range_start_day, range_end_day):
+    for day in daterange(range_start_day, range_end_day):
         calendar_days[day] = {"date": day, "count": 0, "items": [], "has_events": False}
         timeline_days[day] = []
 
@@ -306,7 +209,7 @@ def build_events_overview(
             if len(calendar_days[day]["items"]) < 3:
                 label = event["title"] or "无标题"
                 if event["kind"] == "milestone":
-                    same_day_nodes = [row["name"] for row in event["milestones"] if row["date"] == day]
+                    same_day_nodes = [row["subtitle"] for row in event["day_entries"].get(day, []) if row["subtitle"]]
                     if same_day_nodes:
                         label = same_day_nodes[0]
                 elif event["kind"] == "single":
@@ -359,8 +262,8 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> dict[str, 
     normalized = _normalize_event(
         event,
         reminder_logs,
-        (_ensure_datetime(getattr(event, "start_time", None)) or datetime.now()).date(),
-        (_ensure_datetime(getattr(event, "end_time", None), is_end=True) or _ensure_datetime(getattr(event, "start_time", None)) or datetime.now()).date(),
+        (ensure_datetime(getattr(event, "start_time", None)) or datetime.now()).date(),
+        (ensure_datetime(getattr(event, "end_time", None), is_end=True) or ensure_datetime(getattr(event, "start_time", None)) or datetime.now()).date(),
     )
 
     series_key = getattr(event, "parent_id", None)

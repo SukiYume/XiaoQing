@@ -21,6 +21,14 @@ function fmtMoneyCompact(value) {
     return `¥${amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`;
 }
 
+function fmtAxisMoney(value) {
+    const amount = Number(value || 0);
+    if (Math.abs(amount) >= 10000) {
+        return `¥${(amount / 10000).toFixed(1)}w`;
+    }
+    return `¥${amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`;
+}
+
 function fmtPercent(value) {
     if (value == null) return '无对比';
     if (value === 1) return '首次有支出';
@@ -42,14 +50,18 @@ function emptyCard(title, subtitle, body) {
 }
 
 function buildTrendSvg(points) {
-    const width = 420;
-    const height = 180;
-    const pad = { top: 18, right: 12, bottom: 28, left: 12 };
+    const width = 500;
+    const height = 200;
+    const pad = { top: 18, right: 18, bottom: 30, left: 48 };
     const values = points.map(point => Number(point.total || 0));
     const maxValue = Math.max(...values, 1);
     const innerWidth = width - pad.left - pad.right;
     const innerHeight = height - pad.top - pad.bottom;
     const stepX = points.length > 1 ? innerWidth / (points.length - 1) : 0;
+    const ticks = [1, 0.66, 0.33, 0].map(ratio => ({
+        value: maxValue * ratio,
+        y: pad.top + innerHeight - innerHeight * ratio,
+    }));
 
     const coords = points.map((point, index) => {
         const x = pad.left + stepX * index;
@@ -62,15 +74,23 @@ function buildTrendSvg(points) {
     ).join(' ');
     const areaPath = `${linePath} L ${(pad.left + innerWidth).toFixed(2)} ${(pad.top + innerHeight).toFixed(2)} L ${pad.left} ${(pad.top + innerHeight).toFixed(2)} Z`;
 
-    const gridLines = [0.25, 0.5, 0.75].map(ratio => {
-        const y = pad.top + innerHeight - innerHeight * ratio;
+    const gridLines = ticks.map(({ y }) => {
         return `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${(pad.left + innerWidth).toFixed(2)}" y2="${y.toFixed(2)}" stroke="rgba(239,68,68,0.10)" stroke-dasharray="4 6"/>`;
     }).join('');
+
+    const yLabels = ticks.map(({ value, y }, index) => `
+        <g>
+            ${index === ticks.length - 1
+                ? `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${pad.left}" y2="${y.toFixed(2)}" stroke="rgba(148,163,184,0.55)" />`
+                : ''}
+            <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${esc(fmtAxisMoney(value))}</text>
+        </g>
+    `).join('');
 
     const pointsHtml = coords.map((point) => `
         <g>
             <title>${esc(point.label)} ${fmtMoney(point.total || 0)} · ${point.count || 0} 笔</title>
-            <circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="3.5" fill="#fff" stroke="#E15241" stroke-width="2"/>
+            <circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="2.7" fill="#fff" stroke="#E15241" stroke-width="1.45"/>
         </g>
     `).join('');
 
@@ -90,8 +110,9 @@ function buildTrendSvg(points) {
                 </linearGradient>
             </defs>
             ${gridLines}
+            ${yLabels}
             <path d="${areaPath}" fill="url(#ledgerTrendArea)"></path>
-            <path d="${linePath}" fill="none" stroke="#E15241" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="${linePath}" fill="none" stroke="#E15241" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
             ${pointsHtml}
             <g class="ledger-insight-axis-labels">${labels}</g>
         </svg>`;
@@ -190,9 +211,9 @@ function buildHotspots(categories, total) {
 }
 
 function buildCandleSvg(candles) {
-    const width = 360;
-    const height = 170;
-    const pad = { top: 18, right: 10, bottom: 26, left: 10 };
+    const width = 500;
+    const height = 200;
+    const pad = { top: 18, right: 18, bottom: 28, left: 48 };
     const innerWidth = width - pad.left - pad.right;
     const innerHeight = height - pad.top - pad.bottom;
     const highs = candles.map(item => Number(item.high || 0));
@@ -201,12 +222,24 @@ function buildCandleSvg(candles) {
     const minValue = Math.min(...lows, 0);
     const spread = Math.max(maxValue - minValue, 1);
     const stepX = innerWidth / candles.length;
-    const candleWidth = Math.min(16, stepX * 0.42);
+    const candleWidth = Math.max(6, Math.min(12, stepX * 0.28));
+    const ticks = [1, 0.66, 0.33, 0].map(ratio => ({
+        value: minValue + spread * ratio,
+        y: pad.top + innerHeight - innerHeight * ratio,
+    }));
 
-    const grid = [0, 0.5, 1].map(ratio => {
-        const y = pad.top + innerHeight * ratio;
+    const grid = ticks.map(({ y }) => {
         return `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${(pad.left + innerWidth).toFixed(2)}" y2="${y.toFixed(2)}" stroke="rgba(15,23,42,0.06)"/>`;
     }).join('');
+
+    const yLabels = ticks.map(({ value, y }, index) => `
+        <g>
+            ${index === ticks.length - 1
+                ? `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${pad.left}" y2="${y.toFixed(2)}" stroke="rgba(148,163,184,0.55)" />`
+                : ''}
+            <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${esc(fmtAxisMoney(value))}</text>
+        </g>
+    `).join('');
 
     const candlesHtml = candles.map((item, index) => {
         const x = pad.left + stepX * index + stepX / 2;
@@ -215,13 +248,16 @@ function buildCandleSvg(candles) {
         const openY = pad.top + innerHeight - ((Number(item.open || 0) - minValue) / spread) * innerHeight;
         const closeY = pad.top + innerHeight - ((Number(item.close || 0) - minValue) / spread) * innerHeight;
         const bodyTop = Math.min(openY, closeY);
-        const bodyHeight = Math.max(Math.abs(closeY - openY), 4);
-        const fill = item.close >= item.open ? '#F28A5D' : '#E15241';
+        const bodyHeight = Math.max(Math.abs(closeY - openY), 5);
+        const isUp = Number(item.close || 0) >= Number(item.open || 0);
+        const fill = isUp ? '#F3A46C' : '#D9684C';
+        const stroke = isUp ? '#E98A48' : '#C9573B';
+        const wickStroke = isUp ? 'rgba(233,138,72,0.75)' : 'rgba(201,87,59,0.80)';
         return `
             <g>
                 <title>${esc(item.label)} 高:${fmtMoney(item.high || 0)} 低:${fmtMoney(item.low || 0)} 开:${fmtMoney(item.open || 0)} 收:${fmtMoney(item.close || 0)}</title>
-                <line x1="${x.toFixed(2)}" y1="${highY.toFixed(2)}" x2="${x.toFixed(2)}" y2="${lowY.toFixed(2)}" stroke="${fill}" stroke-width="2" stroke-linecap="round"></line>
-                <rect x="${(x - candleWidth / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${bodyHeight.toFixed(2)}" rx="4" fill="${fill}" opacity="0.92"></rect>
+                <line x1="${x.toFixed(2)}" y1="${highY.toFixed(2)}" x2="${x.toFixed(2)}" y2="${lowY.toFixed(2)}" stroke="${wickStroke}" stroke-width="1.4" stroke-linecap="round"></line>
+                <rect x="${(x - candleWidth / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${bodyHeight.toFixed(2)}" rx="${Math.min(3, candleWidth / 3).toFixed(2)}" fill="${fill}" stroke="${stroke}" stroke-width="0.8" opacity="0.96"></rect>
             </g>`;
     }).join('');
 
@@ -236,6 +272,7 @@ function buildCandleSvg(candles) {
     return `
         <svg class="ledger-insight-svg ledger-insight-svg-kline" viewBox="0 0 ${width} ${height}" aria-hidden="true">
             ${grid}
+            ${yLabels}
             ${candlesHtml}
             <g class="ledger-insight-axis-labels">${labels}</g>
         </svg>`;

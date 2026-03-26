@@ -26,7 +26,7 @@ export function buildFormHTML(fields) {
                 input = `<input type="datetime-local" name="${field.name}" class="form-input" value="${value}"${required}>`;
                 break;
             case 'date':
-                input = `<input type="date" name="${field.name}" class="form-input" value="${value}"${required}>`;
+                input = `<input type="text" name="${field.name}" class="form-input" value="${value}" inputmode="numeric" placeholder="${field.placeholder || 'YYYY-MM-DD'}"${required}>`;
                 break;
             case 'number':
                 input = `<input type="number" name="${field.name}" class="form-input" value="${value}" step="${field.step || 'any'}" placeholder="${field.placeholder || ''}"${required}>`;

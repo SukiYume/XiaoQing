@@ -91,7 +91,9 @@ class LedgerHandler(DbOpsMixin):
 
     def _show_usage(self) -> str:
         return (
-            "💰 **记账帮助**\n\n"
+            "💰 记账命令\n"
+            "管理账目、查看收支和做快速记录。\n\n"
+            "可用命令:\n"
             "• /pendo ledger add - 交互式记账\n"
             "• /pendo ledger quick <金额> <描述> [cat:分类] [in] - 快速记账\n"
             "• /pendo ledger list [范围] [dir:in/out] [cat:分类] [amount:N或N..M] [ex] - 查看账目\n"
@@ -468,18 +470,22 @@ class LedgerHandler(DbOpsMixin):
         total_income = sum(i.amount for i in items if i.direction == "income")
         total_expense = sum(i.amount for i in items if i.direction == "expense")
 
-        message = f"💰 **{range_label}账目**{filter_suffix} (共{len(items)}笔){page_info}\n"
-        message += f"💸 支出 ¥{total_expense:.2f} | 💰 收入 ¥{total_income:.2f}\n\n"
+        message = (
+            f"💰 {range_label}账目{filter_suffix}\n"
+            f"共 {len(items)} 笔{page_info}\n"
+            f"💸 支出 ¥{total_expense:.2f} | 💰 收入 ¥{total_income:.2f}\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+        )
 
         for item in display_items:
             icon = _direction_icon(item.direction)
             cat_icon = _get_category_icon(item.ledger_category)
             sign = "+" if item.direction == "income" else "-"
             date_str = item.ledger_date or ""
-            message += f"{icon} {sign}¥{item.amount:.2f} {cat_icon}{item.ledger_category}"
+            message += f"• {icon} {sign}¥{item.amount:.2f}  {cat_icon}{item.ledger_category}"
             if item.title:
                 message += f" {item.title}"
-            message += f"\n   📅{date_str} `{item.id}`\n\n"
+            message += f"\n  📅 {date_str} | ID `{item.id}`\n\n"
 
         if has_more and not show_all:
             message += f"... (使用 'all' 显示全部或 'page:{page_num + 1}' 查看下一页)\n"
@@ -500,7 +506,7 @@ class LedgerHandler(DbOpsMixin):
                     sign = "+" if item.direction == "income" else "-"
                     date_str = item.ledger_date or ""
                     title_part = f" {item.title}" if item.title else ""
-                    message += f"  {cat_icon}{cat}: {icon}{sign}¥{item.amount:.2f}{title_part} ({date_str})\n"
+                    message += f"  • {cat_icon}{cat}: {icon}{sign}¥{item.amount:.2f}{title_part} ({date_str})\n"
 
         return {"status": "success", "message": message}
 
@@ -693,17 +699,25 @@ class LedgerHandler(DbOpsMixin):
         # 格式化
         balance_sign = "+" if balance >= 0 else ""
         message = (
-            f"📊 **{range_label}收支汇总**\n"
+            f"📊 {range_label}收支汇总\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"💸 总支出：¥{total_expense:.2f}\n"
-            f"💰 总收入：¥{total_income:.2f}\n"
-            f"📊 结余：  {balance_sign}¥{balance:.2f}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💸 总支出: ¥{total_expense:.2f}\n"
+            f"💰 总收入: ¥{total_income:.2f}\n"
+            f"📊 结余: {balance_sign}¥{balance:.2f}\n"
         )
 
         if expense_by_cat:
+            top_expense_cat, top_expense_amount = max(expense_by_cat.items(), key=lambda x: x[1])
+            message += f"📂 最大支出分类: {top_expense_cat} ¥{top_expense_amount:.2f}\n"
+        if income_by_cat:
+            top_income_cat, top_income_amount = max(income_by_cat.items(), key=lambda x: x[1])
+            message += f"📥 主要收入来源: {top_income_cat} ¥{top_income_amount:.2f}\n"
+
+        message += "━━━━━━━━━━━━━━━━━━\n"
+
+        if expense_by_cat:
             sorted_cats = sorted(expense_by_cat.items(), key=lambda x: x[1], reverse=True)
-            message += "📂 **支出分类：**\n"
+            message += "📂 支出分类\n"
             for i, (cat, amount) in enumerate(sorted_cats, 1):
                 pct = (amount / total_expense * 100) if total_expense > 0 else 0
                 icon = _get_category_icon(cat)
@@ -711,7 +725,7 @@ class LedgerHandler(DbOpsMixin):
 
         if income_by_cat:
             sorted_cats = sorted(income_by_cat.items(), key=lambda x: x[1], reverse=True)
-            message += "\n📂 **收入分类：**\n"
+            message += "\n📂 收入分类\n"
             for i, (cat, amount) in enumerate(sorted_cats, 1):
                 pct = (amount / total_income * 100) if total_income > 0 else 0
                 icon = _get_category_icon(cat)
