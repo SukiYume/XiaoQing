@@ -12,12 +12,10 @@
 - 📚 **文档完善** - [完整文档](docs/README.md) 覆盖架构到高级功能
 - ✅ **异步优先** - 100% 异步设计，高效并发处理
 
-**🎉 最新更新 (V3.2.0)**:
-- ✨ **xiaoqing_chat 重构升级** - 引入更完整的上下文封装、异步状态读写、回复检查与提示词优化，提升对话稳定性与一致性
-- ✨ **pendo 能力增强** - 补齐会话/定时/提醒链路，修复批量操作、提醒确认、循环事件、时区与缓存相关问题
-- ✨ **arxiv_filter 训练与推理链路完善** - 新增独立推理模块、训练脚本与数据构建流程，改进配置加载与测试覆盖
-- ✅ **测试体系补强** - 新增多组回归测试与 asyncio 兼容测试，覆盖聊天、提醒、缓存和插件回归场景
-- 🔧 **工程细节修复** - 调整 pytest 配置、Windows 测试兼容、缓存裁剪与后台任务调度等实现细节
+**🎉 最新更新 (V3.3.0)**:
+- ✨ **pendo Web 控制台** - FastAPI + 原生 JS SPA，支持浏览器访问；九大页面（Dashboard、任务、事件、账本、日记、笔记、搜索、统计、设置），JWT 鉴权，Chart.js 可视化图表
+- ✨ **pendo 账本 UX 重设计** - 筛选、排序、分页、快速录入全面升级
+- 🔧 **依赖补全** - 根目录 requirements.txt 补入 PyJWT / FastAPI / uvicorn / passlib，CI 全平台通过
 
 **文档索引**：
 - [快速入门](docs/01-getting-started.md)
@@ -138,6 +136,7 @@ INFO - Inbound server started on 127.0.0.1:12000
 | qingpet | `/宠物 help` | QQ 群宠物功能 |
 | pendo | `/pendo event add` | 添加日程 |
 | pendo | `/pendo todo add` | 添加待办 |
+| pendo | `/pendo web start` | 启动 Web 控制台 |
 | qingssh | `/ssh <服务器>` | SSH 远程连接 |
 | jupyter | `/py <代码>` | 执行 Python 代码 |
 | astro_tools | `/astro <子命令>` | 天文计算工具 |
@@ -435,7 +434,7 @@ XiaoQing/
 ├── plugins/                # 插件目录
 │   ├── bot_core/           # 核心命令（help、reload）
 │   ├── xiaoqing_chat/      # 智能对话插件（向量记忆、情绪系统）
-│   ├── pendo/              # 个人时间与信息管理中枢
+│   ├── pendo/              # 个人时间与信息管理中枢（含 Web 控制台）
 │   ├── qingpet/            # QQ群宠物养成系统
 │   ├── qingssh/            # SSH 远程控制
 │   ├── jupyter/            # Python 代码执行
