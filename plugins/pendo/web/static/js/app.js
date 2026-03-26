@@ -15,44 +15,75 @@ registerRoute('settings', () => import('./pages/settings.js'));
 async function bootstrap() {
     const token = getToken();
     if (token) {
-        const valid = await verifyToken(token);
-        if (valid) {
+        const result = await verifyToken(token);
+        if (result.ok) {
             await showApp();
             return;
         }
         clearToken();
+        showLogin(result.message || '登录已失效，请重新粘贴令牌。');
+        return;
     }
     showLogin();
 }
 
-function showLogin() {
+function showLogin(initialError = '') {
     document.getElementById('login-screen').style.display = 'flex';
     document.getElementById('app').style.display = 'none';
 
     const btn = document.getElementById('login-btn');
+    const clearBtn = document.getElementById('login-clear-btn');
     const input = document.getElementById('token-input');
     const error = document.getElementById('login-error');
+    const helper = document.getElementById('login-helper');
 
-    btn.onclick = async () => {
+    if (initialError) {
+        error.textContent = initialError;
+        error.style.display = 'block';
+    } else {
+        error.style.display = 'none';
+    }
+
+    const submit = async () => {
         const token = input.value.trim();
-        if (!token) return;
+        if (!token) {
+            error.textContent = '请先粘贴登录令牌';
+            error.style.display = 'block';
+            input.focus();
+            return;
+        }
+
         btn.disabled = true;
+        clearBtn.disabled = true;
         btn.textContent = '验证中...';
         error.style.display = 'none';
+        helper.textContent = '正在校验令牌…';
 
-        const valid = await verifyToken(token);
-        if (valid) {
+        const result = await verifyToken(token);
+        if (result.ok) {
             setToken(token);
             await showApp();
         } else {
-            error.textContent = 'Token 无效或已过期';
+            error.textContent = result.message || '令牌无效或已过期';
             error.style.display = 'block';
+            helper.textContent = '请回到聊天中重新生成令牌后再试。';
         }
         btn.disabled = false;
-        btn.textContent = '登录';
+        clearBtn.disabled = false;
+        btn.textContent = '进入 Pendo';
     };
 
-    input.onkeydown = (e) => { if (e.key === 'Enter') btn.click(); };
+    btn.onclick = submit;
+    clearBtn.onclick = () => {
+        input.value = '';
+        error.style.display = 'none';
+        helper.textContent = '令牌只保存在当前浏览器，可在设置页随时退出。';
+        input.focus();
+    };
+
+    input.onkeydown = (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') submit();
+    };
     input.focus();
 }
 

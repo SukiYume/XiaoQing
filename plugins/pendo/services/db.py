@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 from contextlib import contextmanager
 
+from ..utils.settings_utils import normalize_settings_json
 from ..utils.validators import validate_item_data, sanitize_search_keyword
 from ..models.item import (
     ItemType,
@@ -768,9 +769,12 @@ class Database:
         like = f"%{query}%"
         like_where: list[str] = [
             "owner_id = ?", "deleted = 0",
-            "(title LIKE ? OR content LIKE ? OR remark LIKE ? OR ledger_category LIKE ?)",
+            """(
+                title LIKE ? OR content LIKE ? OR tags LIKE ? OR category LIKE ? OR
+                remark LIKE ? OR ledger_category LIKE ? OR location LIKE ? OR notes LIKE ? OR weather LIKE ?
+            )""",
         ]
-        like_params: list[Any] = [owner_id, like, like, like, like]
+        like_params: list[Any] = [owner_id, like, like, like, like, like, like, like, like, like]
         self._apply_filters(like_where, like_params, filters)
 
         cursor.execute(
@@ -795,16 +799,13 @@ class Database:
         params: list[Any] = merged_ids + [owner_id]
         self._apply_filters(where, params, filters)
 
-        cursor.execute(
-            f"SELECT * FROM items WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ?",
-            params + [limit],
-        )
-        items = []
+        cursor.execute(f"SELECT * FROM items WHERE {' AND '.join(where)}", params)
+        items_by_id: dict[str, Item] = {}
         for row in cursor.fetchall():
             item = self._row_to_item(row)
             if item:
-                items.append(item)
-        return items
+                items_by_id[item.id] = item
+        return [items_by_id[item_id] for item_id in merged_ids[:limit] if item_id in items_by_id]
 
     def undo_delete(self, owner_id: str, minutes: int = 5) -> dict[str, Any]:
         """撤销删除"""
@@ -1115,7 +1116,7 @@ class Database:
         row = cursor.fetchone()
 
         if row:
-            settings = dict(row)
+            settings = self._hydrate_user_settings_row(dict(row))
             self._cache_set(cache_key, settings)
             return settings
 
@@ -1145,7 +1146,7 @@ class Database:
                 tuple(missing_user_ids),
             )
             for row in cursor.fetchall():
-                settings = dict(row)
+                settings = self._hydrate_user_settings_row(dict(row))
                 user_id = str(settings["user_id"])
                 self._cache_set(self._cache_key("settings", user_id), settings)
                 results[user_id] = settings
@@ -1164,7 +1165,20 @@ class Database:
             "daily_report_time": "08:00",
             "diary_remind_time": "21:30",
             "default_category": "未分类",
+            "settings_json": normalize_settings_json({}),
         }
+
+    def _hydrate_user_settings_row(self, settings: dict[str, Any]) -> dict[str, Any]:
+        raw_settings = settings.get("settings_json")
+        if raw_settings:
+            try:
+                raw_settings = json.loads(raw_settings)
+            except (TypeError, json.JSONDecodeError, ValueError):
+                raw_settings = {}
+        else:
+            raw_settings = {}
+        settings["settings_json"] = normalize_settings_json(raw_settings)
+        return settings
 
     def update_user_settings(self, user_id: str, settings: dict[str, Any]) -> bool:
         """更新用户设置（C-1修复：先读当前设置再合并，避免部分更新覆盖其他字段）"""
@@ -1176,6 +1190,12 @@ class Database:
 
         # 合并：新传入的字段覆盖现有字段，其余保留
         merged = {**current, **settings}
+        merged_settings_json = {}
+        if isinstance(current.get("settings_json"), dict):
+            merged_settings_json.update(current["settings_json"])
+        if isinstance(settings.get("settings_json"), dict):
+            merged_settings_json.update(normalize_settings_json(settings["settings_json"], partial=True))
+        merged["settings_json"] = normalize_settings_json(merged_settings_json)
 
         try:
             # S-1修复：使用 with conn: 代替手动 BEGIN/COMMIT/ROLLBACK
@@ -1195,7 +1215,7 @@ class Database:
                         merged.get("daily_report_time", "08:00"),
                         merged.get("diary_remind_time", "21:30"),
                         merged.get("default_category", "未分类"),
-                        merged.get("settings_json"),
+                        json.dumps(merged.get("settings_json", {}), ensure_ascii=False),
                         datetime.now().isoformat(),
                     ),
                 )

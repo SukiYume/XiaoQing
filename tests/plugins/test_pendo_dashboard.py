@@ -41,6 +41,18 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
             "title": "下月活动",
             "start_time": "2026-04-02T18:00:00",
         })
+        db.insert_item({
+            "id": "ev4",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "FRB2026会议",
+            "start_time": "2026-02-20T00:00:00",
+            "end_time": "2026-04-02T12:00:00",
+            "milestones": [
+                {"name": "摘要截止", "time": "2026-03-05T09:00:00"},
+                {"name": "会议开始", "time": "2026-04-01T10:00:00"},
+            ],
+        })
 
         db.insert_item({
             "id": "task1",
@@ -107,13 +119,22 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
             now=datetime(2026, 3, 25, 9, 30, 0),
         )
 
-        assert result["summary"]["events_month"] == 2
+        assert result["summary"]["events_month"] == 3
         assert result["summary"]["tasks_pending"] == 2
         assert result["summary"]["tasks_done_recent"] == 1
         assert result["summary"]["ledger_month_expense"] == 25.5
         assert result["summary"]["diary_month"] == 1
-        assert len(result["events_month"]) == 2
-        assert result["events_month"][0]["title"] == "月内会议"
+        assert len(result["events_month"]) == 3
+        assert result["events_month"][0]["title"] == "FRB2026会议"
+        assert result["events_month"][0]["display_subtitle"] == "摘要截止"
+        assert result["events_month"][0]["start_time"] == "2026-03-05T09:00:00"
+        assert all(event["start_time"][:10] <= "2026-03-31" for event in result["events_month"])
+        assert any(
+            event["title"] == "FRB2026会议"
+            and event["display_subtitle"] == "会议开始"
+            and event["start_time"] == "2026-04-01T10:00:00"
+            for event in result["events_agenda"]
+        )
         assert len(result["tasks"]["active"]) == 2
         assert result["tasks"]["active"][0]["title"] == "进行中任务"
         assert len(result["tasks"]["completed"]) == 1
@@ -134,6 +155,8 @@ def test_dashboard_page_source_uses_month_events_and_completed_tasks():
     assert "本月日程" in src
     assert "最近完成" in src
     assert "events_month" in src
+    assert "events_agenda" in src
+    assert "display_subtitle" in src
     assert "tasks?.active" in src
     assert "tasks?.completed" in src
     assert "recent_ledger" in src

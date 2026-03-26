@@ -7,7 +7,14 @@ from pydantic import BaseModel
 
 from ...services.db import Database
 from ...models.item import ItemType
-from ...utils.validators import normalize_event_fields, normalize_ledger_fields, normalize_task_fields
+from ...utils.settings_utils import resolve_default_category
+from ...utils.validators import (
+    normalize_diary_fields,
+    normalize_event_fields,
+    normalize_ledger_fields,
+    normalize_note_fields,
+    normalize_task_fields,
+)
 from ..deps import get_db, get_current_user
 
 router = APIRouter()
@@ -35,6 +42,24 @@ TASK_MUTABLE_FIELDS = {
     "completed_at",
     "progress",
     "estimate",
+}
+
+NOTE_MUTABLE_FIELDS = {
+    "title",
+    "content",
+    "category",
+    "tags",
+}
+
+DIARY_MUTABLE_FIELDS = {
+    "title",
+    "content",
+    "diary_date",
+    "mood",
+    "mood_score",
+    "weather",
+    "location",
+    "template_id",
 }
 
 
@@ -120,6 +145,28 @@ def _resolve_category_field(type: Optional[str]) -> str:
     return "ledger_category" if type == "ledger" else "category"
 
 
+def _has_other_diary_for_date(
+    db: Database,
+    owner_id: str,
+    diary_date: str,
+    exclude_item_id: Optional[str] = None,
+) -> bool:
+    conn = db.get_connection()
+    if exclude_item_id:
+        row = conn.execute(
+            """
+            SELECT 1 FROM items
+            WHERE owner_id = ? AND type = 'diary' AND deleted = 0
+              AND diary_date = ? AND id != ?
+            LIMIT 1
+            """,
+            (owner_id, diary_date, exclude_item_id),
+        ).fetchone()
+        return row is not None
+
+    return db.has_diary_for_date(owner_id, diary_date)
+
+
 def _build_count_where(
     type, status, category, direction, start_date, end_date, date_field,
     amount_min, amount_max, owner_id
@@ -178,15 +225,16 @@ def list_categories(
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ):
-    """Return distinct ledger_category values for the given type."""
+    """Return distinct category values for the given type."""
     conn = db.get_connection()
-    where = ["owner_id = ?", "deleted = 0", "ledger_category IS NOT NULL", "ledger_category != ''"]
+    category_field = _resolve_category_field(type)
+    where = ["owner_id = ?", "deleted = 0", f"{category_field} IS NOT NULL", f"{category_field} != ''"]
     params: list = [owner_id]
     if type:
         where.append("type = ?")
         params.append(type)
     rows = conn.execute(
-        f"SELECT DISTINCT ledger_category FROM items WHERE {' AND '.join(where)} ORDER BY ledger_category",
+        f"SELECT DISTINCT {category_field} FROM items WHERE {' AND '.join(where)} ORDER BY {category_field}",
         params,
     ).fetchall()
     return {"ok": True, "data": {"categories": [r[0] for r in rows]}}
@@ -197,6 +245,7 @@ def list_items(
     type: Optional[str] = None,
     status: Optional[str] = None,
     category: Optional[str] = None,
+    tags: Optional[str] = None,
     priority: Optional[int] = None,
     direction: Optional[str] = None,
     date_field: Optional[str] = None,
@@ -218,6 +267,7 @@ def list_items(
     if status:    filters["status"] = status
     if category:
         filters[_resolve_category_field(type)] = category
+    if tags:      filters["tags"] = tags
     if direction: filters["direction"] = direction
     if amount_min is not None: filters["amount_min"] = amount_min
     if amount_max is not None: filters["amount_max"] = amount_max
@@ -257,10 +307,16 @@ def list_items(
         amount_min, amount_max, owner_id
     )
     conn = db.get_connection()
-    total = conn.execute(
-        f"SELECT COUNT(*) FROM items WHERE {' AND '.join(count_where)}",
-        count_params,
-    ).fetchone()[0]
+    if tags:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM items WHERE {' AND '.join(count_where)} AND tags LIKE ?",
+            count_params + [f"%{tags}%"],
+        ).fetchone()[0]
+    else:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM items WHERE {' AND '.join(count_where)}",
+            count_params,
+        ).fetchone()[0]
 
     return {
         "ok": True,
@@ -311,6 +367,11 @@ def create_item(
         "deleted": False,
     }
 
+    if body.type in {"event", "note"} and not str(item_data.get("category") or "").strip():
+        item_data["category"] = resolve_default_category(db, owner_id)
+    elif body.type in {"event", "note"} and str(item_data.get("category") or "").strip() == "未分类":
+        item_data["category"] = resolve_default_category(db, owner_id)
+
     # Add type-specific fields (only non-None)
     for field in body.model_fields:
         if field in ("type", "title", "content", "tags", "category"):
@@ -329,6 +390,18 @@ def create_item(
             item_data = normalize_task_fields(item_data, partial=False)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
+    if body.type == "note":
+        try:
+            item_data = normalize_note_fields(item_data, partial=False)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if body.type == "diary":
+        try:
+            item_data = normalize_diary_fields(item_data, partial=False)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        if _has_other_diary_for_date(db, owner_id, item_data["diary_date"]):
+            raise HTTPException(status_code=409, detail="Diary already exists for this date")
     if body.type == "ledger":
         try:
             item_data = normalize_ledger_fields(item_data, partial=False)
@@ -380,6 +453,28 @@ def update_item(
             merged.update(updates)
             normalized = normalize_task_fields(merged, partial=False)
             for field in TASK_MUTABLE_FIELDS:
+                if field in normalized:
+                    updates[field] = normalized[field]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if item_type == "note":
+        try:
+            merged = item.to_dict()
+            merged.update(updates)
+            normalized = normalize_note_fields(merged, partial=False)
+            for field in NOTE_MUTABLE_FIELDS:
+                if field in normalized:
+                    updates[field] = normalized[field]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if item_type == "diary":
+        try:
+            merged = item.to_dict()
+            merged.update(updates)
+            normalized = normalize_diary_fields(merged, partial=False)
+            if _has_other_diary_for_date(db, owner_id, normalized["diary_date"], exclude_item_id=item_id):
+                raise HTTPException(status_code=409, detail="Diary already exists for this date")
+            for field in DIARY_MUTABLE_FIELDS:
                 if field in normalized:
                     updates[field] = normalized[field]
         except ValueError as exc:

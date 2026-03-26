@@ -43,6 +43,7 @@ from .services.exporter import ExporterService
 from .services.ai_parser import AIParser
 from .utils.db_ops import get_user_custom_settings as _get_user_custom_settings_from_db
 from .utils.error_handlers import error_result, handle_command_errors_with_segments, success_result
+from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 from .utils.session_utils import safe_end_session
 from .config import PendoConfig
 
@@ -53,6 +54,8 @@ from .commands.scheduled import (
     cleanup_reminder_singleton,
     migrate_undone_todos,
     send_daily_briefings,
+    send_month_end_finance_summaries,
+    send_weekly_finance_summaries,
 )
 from .commands.session import handle_session_message
 from .commands.settings import handle_settings
@@ -315,6 +318,34 @@ async def scheduled_migrate_todos(context) -> list[dict[str, Any]]:
 
     result = await _run_scheduled_task(
         context, "migrate_todos", lambda: migrate_undone_todos(context, db), log
+    )
+    return result
+
+
+async def scheduled_weekly_finance_summary(context) -> list[dict[str, Any]]:
+    """每周财务总结定时任务。"""
+    log = _get_logger(context)
+    db = _get_database(context)
+
+    result = await _run_scheduled_task(
+        context,
+        "weekly_finance_summary",
+        lambda: send_weekly_finance_summaries(context, db),
+        log,
+    )
+    return result
+
+
+async def scheduled_month_end_finance_summary(context) -> list[dict[str, Any]]:
+    """月底财务总结定时任务。"""
+    log = _get_logger(context)
+    db = _get_database(context)
+
+    result = await _run_scheduled_task(
+        context,
+        "month_end_finance_summary",
+        lambda: send_month_end_finance_summaries(context, db),
+        log,
     )
     return result
 
@@ -593,18 +624,11 @@ HELP_MAP = {
     ],
     "settings": [
         "**设置 (Settings):**",
-        "• /pendo settings [view] - 查看当前设置",
-        "• /pendo settings reminder on/off - 开关提醒",
-        "• /pendo settings timezone <时区> - 设置时区",
-        "• /pendo settings quiet_hours <开始>-<结束> - 静默时段",
-        "• /pendo settings daily_report <HH:MM> - 每日简报时间",
-        "• /pendo settings daily_briefing on/off - 开关每日简报",
-        "• /pendo settings diary_remind <HH:MM> - 日记提醒时间",
-        "• /pendo settings privacy on/off - 隐私模式",
+        *PLUGIN_SETTINGS_HELP_LINES,
     ],
     "web": [
         "**Web UI 管理 (Web):**",
-        "• /pendo web token  - 生成登录 Token",
+        "• /pendo web token  - 生成登录令牌（Token 单独发送）",
         "• /pendo web start  - 启动 Web 服务",
         "• /pendo web stop   - 停止 Web 服务",
         "• /pendo web status - 查看服务状态",
