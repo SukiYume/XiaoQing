@@ -234,7 +234,7 @@ XiaoQing/
 ├── plugins/                # 插件目录（29 个插件）
 │   ├── bot_core/           # 核心命令（help、reload）
 │   ├── xiaoqing_chat/      # 智能对话插件（向量记忆、情绪系统）
-│   ├── pendo/              # 个人时间与信息管理中枢
+│   ├── pendo/              # 个人时间与信息管理中枢（含 Web 控制台）
 │   ├── qingpet/            # QQ群宠物养成系统
 │   ├── qingssh/            # SSH 远程控制
 │   ├── jupyter/            # Python 代码执行
