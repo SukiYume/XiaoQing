@@ -61,9 +61,11 @@
 | 文档 | 说明 |
 |------|------|
 | [📖 开发文档总览](docs/README.md) | 所有文档的导航索引 |
+| [🗺️ 项目概览](docs/00-overview.md) | 先建立对框架和插件体系的整体认识 |
 | [🚀 快速开始](docs/01-getting-started.md) | 10 分钟跑起来 |
 | [🏗️ 核心架构](docs/02-architecture.md) | 框架内部设计 |
 | [🔌 插件开发指南](docs/03-plugin-development.md) | 从零开发插件 |
+| [🔧 配置详解](docs/06-configuration.md) | 配置项、部署注意事项、示例配置 |
 | [📨 消息流程](docs/08-message-flow.md) | 消息处理全链路 |
 | [🧩 内置插件列表](docs/09-plugins.md) | 29 个内置插件说明 |
 
@@ -90,6 +92,20 @@ pip install -r requirements.txt
 ### 3️⃣ 配置
 
 项目默认读取 `config/config.json` 和 `config/secrets.json`。
+
+建议先从示例文件复制：
+
+```bash
+cp config/config.json.example config/config.json
+cp config/secrets.json.example config/secrets.json
+```
+
+如果你在 Windows PowerShell 中操作：
+
+```powershell
+Copy-Item config/config.json.example config/config.json
+Copy-Item config/secrets.json.example config/secrets.json
+```
 
 **最小可运行配置（config.json）：**
 
@@ -159,6 +175,14 @@ Loaded plugin xiaoqing_chat
 Inbound server started ...
 ```
 
+### 6️⃣ 启动前检查清单
+
+- `config/config.json` 和 `config/secrets.json` 已存在
+- OneBot 推送地址与 `inbound_http_base` 一致
+- `inbound_token` 与 OneBot 配置中的密钥一致
+- 如果使用 `xiaoqing_chat`，已经在 `secrets.json` 填好 LLM 配置
+- 如果使用 `pendo web`，当前环境可用 `fastapi` 与 `uvicorn`
+
 ---
 
 ## 🛠️ 常用内置命令
@@ -185,7 +209,7 @@ Inbound server started ...
 >   "plugins": {
 >     "xiaoqing_chat": {
 >       "api_key": "sk-xxx",
->       "base_url": "https://api.openai.com/v1",
+>       "api_base": "https://api.openai.com/v1",
 >       "model": "gpt-4o-mini"
 >     }
 >   }
@@ -343,7 +367,7 @@ XiaoQing/
 │   ├── qingpet/
 │   ├── qingssh/
 │   ├── jupyter/
-│   └── ...                   ← 共 29 个插件
+│   └── ...                   ← 含 29 个带 `plugin.json` 的内置插件
 ├── docs/
 ├── tests/
 └── logs/

@@ -304,7 +304,7 @@ XiaoQing 使用两个 JSON 配置文件：
     },
     "openai": {
       "api_key": "sk-xxx",
-      "base_url": "https://api.openai.com/v1"
+      "api_base": "https://api.openai.com/v1"
     }
   }
 }
@@ -352,7 +352,7 @@ api_key = plugin_cfg.get("api_key")
   "plugins": {
     "xiaoqing_chat": {
       "api_key": "sk-your-openai-api-key",
-      "base_url": "https://api.openai.com/v1",
+      "api_base": "https://api.openai.com/v1",
       "model": "gpt-4o-mini",
       "temperature": 0.7,
       "max_tokens": 1000,
@@ -369,7 +369,7 @@ api_key = plugin_cfg.get("api_key")
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|---------|------|
 | `api_key` | `string` | 必需 | LLM API Key |
-| `base_url` | `string` | `https://api.openai.com/v1` | API 基础 URL |
+| `api_base` | `string` | `https://api.openai.com/v1` | API 基础 URL |
 | `model` | `string` | `gpt-4o-mini` | 使用的模型 |
 | `temperature` | `float` | `0.7` | 温度参数（0-1） |
 | `max_tokens` | `int` | `1000` | 最大 token 数 |
@@ -382,19 +382,19 @@ api_key = plugin_cfg.get("api_key")
 ```json
 // OpenAI
 {
-  "base_url": "https://api.openai.com/v1",
+  "api_base": "https://api.openai.com/v1",
   "model": "gpt-4o-mini"
 }
 
 // Azure OpenAI
 {
-  "base_url": "https://your-resource.openai.azure.com/openai/deployments/your-deployment",
+  "api_base": "https://your-resource.openai.azure.com/openai/deployments/your-deployment",
   "api_key": "your-azure-key"
 }
 
 // 兼容 OpenAI 的服务（如 DeepSeek、Qwen）
 {
-  "base_url": "https://api.deepseek.com/v1",
+  "api_base": "https://api.deepseek.com/v1",
   "model": "deepseek-chat"
 }
 ```
@@ -526,6 +526,7 @@ pendo Web UI 使用 JWT Token 认证，无需手动配置密码。Token 由以�
   "admin_user_ids": [123456789],
   "plugins": {
     "xiaoqing_chat": {
+      "api_base": "https://api.openai.com/v1",
       "api_key": "your-production-api-key",
       "model": "gpt-4o-mini",
       "temperature": 0.7
@@ -551,17 +552,12 @@ pendo Web UI 使用 JWT Token 认证，无需手动配置密码。Token 由以�
   "plugins": {
     "xiaoqing_chat": {
       "api_key": "sk-your-openai-api-key",
-      "base_url": "https://api.openai.com/v1",
+      "api_base": "https://api.openai.com/v1",
       "model": "gpt-4o-mini",
       "temperature": 0.7,
       "memory_enabled": true,
       "emotion_enabled": true,
       "expression_learning": true
-    },
-    "pendo": {
-      "reminder_enabled": true,
-      "daily_briefing_time": "08:00",
-      "evening_briefing_time": "21:00"
     }
   }
 }
@@ -574,7 +570,7 @@ pendo Web UI 使用 JWT Token 认证，无需手动配置密码。Token 由以�
   "plugins": {
     "xiaoqing_chat": {
       "api_key": "your-api-key",
-      "base_url": "https://api.deepseek.com/v1",
+      "api_base": "https://api.deepseek.com/v1",
       "model": "deepseek-chat",
       "temperature": 0.5
     }

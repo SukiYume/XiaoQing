@@ -83,7 +83,7 @@
 
 ### 登录访问
 
-打开浏览器访问 `http://localhost:8080`，使用机器人账号密码登录（JWT Token 鉴权）。
+打开浏览器访问 `http://localhost:8080`，先执行 `/pendo web token` 获取登录令牌，再将令牌粘贴到登录页完成登录。
 
 ### 页面功能
 
@@ -102,8 +102,10 @@
 ### Web 依赖
 
 ```bash
-pip install fastapi uvicorn python-jose[cryptography] passlib[bcrypt]
+pip install fastapi uvicorn PyJWT passlib[bcrypt]
 ```
+
+如果你是从仓库根目录安装 `requirements.txt`，这些依赖已经包含在内，通常不需要额外安装。
 
 ## 日程管理
 
@@ -366,7 +368,7 @@ python-dateutil>=2.8.2
     "pendo": {
       "api_base": "https://api.openai.com/v1",
       "api_key": "your-api-key",
-      "model": "gpt-3.5-turbo"
+      "model": "gpt-4o-mini"
     }
   }
 }
@@ -381,8 +383,8 @@ python-dateutil>=2.8.2
 | 任务 | 时间 | 说明 |
 |------|------|------|
 | pendo_reminders | 每分钟 | 检查并发送提醒 |
-| pendo_daily_briefing | 每天8:00 | 推送每日简报 |
-| pendo_diary_reminder | 每天21:30 | 提醒写日记 |
+| pendo_daily_briefing | 每分钟检查 | 用户可自定义本地简报时间，命中后推送 |
+| pendo_diary_reminder | 每分钟检查 | 用户可自定义本地提醒时间，命中后推送 |
 
 ## 常见问题
 

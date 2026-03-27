@@ -18,6 +18,7 @@
 ## 📦 第一步：安装依赖
 
 ```bash
+git clone https://github.com/SukiYume/XiaoQing.git
 cd XiaoQing
 pip install -r requirements.txt
 ```
@@ -34,6 +35,20 @@ pip install -r requirements.txt
 ## ⚙️ 第二步：配置文件
 
 XiaoQing 使用两个配置文件：
+
+建议先从模板复制，再按需修改：
+
+```bash
+cp config/config.json.example config/config.json
+cp config/secrets.json.example config/secrets.json
+```
+
+如果你在 Windows PowerShell 中操作：
+
+```powershell
+Copy-Item config/config.json.example config/config.json
+Copy-Item config/secrets.json.example config/secrets.json
+```
 
 ### config/config.json - 基础配置
 
@@ -201,7 +216,7 @@ python main.py
 
 ```
 2026-02-04 10:00:00 INFO - XiaoQing starting...
-2026-02-04 10:00:00 INFO - Loaded plugin: core
+2026-02-04 10:00:00 INFO - Loaded plugin: bot_core
 2026-02-04 10:00:00 INFO - Loaded plugin: xiaoqing_chat
 2026-02-04 10:00:00 INFO - Loaded plugin: pendo
 2026-02-04 10:00:00 INFO - Loaded plugin: qingssh
@@ -234,36 +249,39 @@ python main.py
 你: 小青 你好
 机器人: 你好！我是小青，有什么我可以帮助你的吗？
 
-你: /xc_reset
+你: /xc 清空
 机器人: 对话记忆已重置
 
-你: /xc_stats
+你: /xc 统计
 机器人: [对话统计信息...]
 ```
 
 ### 个人助理测试（pendo）
 
 ```
-你: /todo 添加任务：完成文档更新
+你: /pendo todo add 完成文档更新 cat:工作 p:2
 机器人: ✓ 已添加任务
 
-你: /todo list
+你: /pendo todo list
 机器人: [任务列表...]
 
-你: /note 今天天气不错
+你: /pendo note add 今天天气不错 #随手记
 机器人: ✓ 已记录笔记
 ```
 
 ### SSH 远程控制测试（qingssh）
 
 ```
-你: /ssh_add server1 192.168.1.100 root password
+你: /ssh添加 server1 192.168.1.100 22 root
 机器人: ✓ 已添加 SSH 服务器 server1
 
-你: /ssh_list
+你: /ssh列表
 机器人: [服务器列表...]
 
-你: /ssh_exec server1 uptime
+你: /ssh server1
+机器人: 已连接 server1，进入交互模式
+
+你: uptime
 机器人: [服务器执行结果...]
 ```
 
@@ -279,7 +297,7 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 机器人: 运行中 | 地址：http://localhost:8080
 ```
 
-打开浏览器访问后，使用 `secrets.json` 中配置的管理员账号密码登录即可。
+打开浏览器访问后，先执行 `/pendo web token` 获取登录令牌，再将令牌粘贴到登录页即可。
 
 如需使用 nginx 反向代理部署在子路径（如 `/pendo`），参见 [06-configuration.md](06-configuration.md) 中的 nginx 配置示例。
 
@@ -301,7 +319,11 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 
 3. **查看 XiaoQing 日志**：
    ```bash
-   cat logs/xiaoqing.log
+   tail -n 100 logs/xiaoqing.log
+   ```
+
+   ```powershell
+   Get-Content logs/xiaoqing.log -Tail 100
    ```
 
 ### Q: 群聊不响应
@@ -348,18 +370,22 @@ XiaoQing 支持两种闲聊模式：
    ```json
    {
      "plugins": {
-       "xiaoqing_chat": {
-         "api_key": "your-api-key",
-         "base_url": "https://api.openai.com/v1",
-         "model": "gpt-4o-mini"
-       }
-     }
-   }
-   ```
+        "xiaoqing_chat": {
+          "api_key": "your-api-key",
+          "api_base": "https://api.openai.com/v1",
+          "model": "gpt-4o-mini"
+        }
+      }
+    }
+    ```
 
 2. **查看日志确认错误**
    ```bash
-   cat logs/xiaoqing.log | grep xiaoqing_chat
+   grep xiaoqing_chat logs/xiaoqing.log
+   ```
+
+   ```powershell
+   Select-String -Path logs/xiaoqing.log -Pattern xiaoqing_chat
    ```
 
 3. **xiaoqing_chat 的回复频率由插件内部控制**，不是所有消息都会回复
