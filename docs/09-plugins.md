@@ -12,6 +12,7 @@
       - [核心特性](#核心特性)
       - [命令列表](#命令列表)
       - [使用示例](#使用示例)
+      - [记账 (Ledger)](#记账-ledger)
       - [定时任务](#定时任务-8)
       - [注意事项](#注意事项-2)
     - [echo - 回显示例](#echo---回显示例)
@@ -189,6 +190,20 @@
 | `/pendo diary <模板ID>` | 使用模板写日记 |
 | `/pendo diary delete <日期>` | 删除日记 |
 
+**记账 (Ledger)**
+
+| 命令 | 说明 |
+|------|------|
+| `/pendo ledger add` | 交互式多轮记账 |
+| `/pendo ledger quick <金额> <描述> [cat:分类] [in]` | 快速单行记账（默认支出，加 `in` 为收入） |
+| `/pendo ledger list [范围] [dir:in/out] [cat:分类]` | 查看账目列表 |
+| `/pendo ledger view <id>` | 查看账目详情 |
+| `/pendo ledger edit <id> <字段:值>...` | 编辑账目 |
+| `/pendo ledger delete <id>` | 删除账目 |
+| `/pendo ledger summary [范围]` | 收支汇总统计 |
+
+> 别名：`bill`、`finance`、`记账`、`账单`（如 `/pendo 记账 add`）
+
 **搜索 (Search)**
 
 | 命令 | 说明 |
@@ -196,6 +211,9 @@
 | `/pendo search <关键词>` | 全文搜索 |
 | `/pendo search <关键词> type=event/task/note/diary` | 按类型搜索 |
 | `/pendo search <关键词> range=last7d/2026-01` | 按时间范围搜索 |
+| `/pendo search <关键词> status=todo/done` | 按待办状态筛选 |
+| `/pendo search <关键词> category=<分类>` | 按分类筛选 |
+| `/pendo search <关键词> direction=income/expense` | 按收支方向筛选（记账） |
 
 **提醒操作**
 
@@ -228,6 +246,7 @@
 
 | 命令 | 说明 |
 |------|------|
+| `/pendo web token` | 生成登录令牌（JWT，用于浏览器登录） |
 | `/pendo web start [port=8080]` | 启动 Web 服务 |
 | `/pendo web stop` | 停止 Web 服务 |
 | `/pendo web status` | 查看运行状态和访问地址 |
@@ -315,6 +334,9 @@ Web 控制台提供以下页面：
 /pendo search 脉冲星                         # 全文搜索
 /pendo search 脉冲星 type=note              # 只搜笔记
 /pendo search 论文 range=last7d              # 最近7天
+/pendo search 报告 status=todo              # 只看未完成待办
+/pendo search 餐 category=餐饮              # 按分类筛选
+/pendo search 外卖 direction=expense        # 记账支出搜索
 ```
 
 **6. 提醒操作**
@@ -349,23 +371,43 @@ Web 控制台提供以下页面：
 /pendo undo 10                               # 撤销最近10分钟内的删除
 ```
 
-**10. Web 控制台**
+**10. 记账管理**
 
 ```
+/pendo ledger add                            # 交互式记账（多轮对话引导填写）
+/pendo ledger quick 35 午餐                  # 快速记录支出 35 元
+/pendo ledger quick 100 兼职收入 in          # 快速记录收入 100 元
+/pendo ledger quick 20 咖啡 cat:餐饮         # 指定分类
+/pendo ledger list                           # 查看本月账目
+/pendo ledger list week                      # 查看本周
+/pendo ledger list 2026-03                   # 查看三月账目
+/pendo ledger list dir:in                    # 只看收入
+/pendo ledger list cat:餐饮                  # 只看餐饮分类
+/pendo ledger summary                        # 本月收支汇总
+/pendo ledger summary last7d                 # 最近7天汇总
+/pendo 记账 add                             # 用中文别名也可以
+```
+
+**11. Web 控制台**
+
+```
+/pendo web token                             # 获取浏览器登录令牌
 /pendo web start                             # 启动 Web 服务（默认端口 8080）
 /pendo web start port=9000                   # 指定端口
 /pendo web status                            # 查看访问地址
 /pendo web stop                              # 停止服务
 ```
 
-启动后打开浏览器访问 `http://localhost:8080`，使用机器人账号密码登录即可访问九大管理页面。
+启动后打开浏览器访问 `http://localhost:8080`，先运行 `/pendo web token` 获取登录令牌，在登录页粘贴令牌即可访问九大管理页面。
 
 #### 定时任务
 
-- **每分钟** - 检查提醒
-- **每天 8:00** - 每日简报
-- **每天 21:00** - 晚间简报
-- **每天 21:30** - 日记提醒
+- **每分钟** - 检查提醒（事件/待办提醒按分钟级轮询）
+- **每分钟** - 每日简报（用户可自定义触发时间，因此逐分钟检查）
+- **每分钟** - 日记提醒（用户可自定义触发时间，因此逐分钟检查）
+- **每天 00:05** - 待办迁移（将过期待办归档）
+- **每周日 21:00** - 每周财务总结
+- **每月最后一天 21:00** - 月底财务总结
 
 #### 注意事项
 
