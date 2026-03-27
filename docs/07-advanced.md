@@ -282,24 +282,20 @@ async def send_weekly(context) -> List[Dict]:
 
 ### 动态定时任务
 
-在插件中动态添加任务：
+动态任务需要在 `init()` 钩子中通过 `app` 实例操作调度器（`context` 不直接暴露 scheduler）：
 
 ```python
-# 需要访问 app.scheduler
-async def handle(command: str, args: str, event: Dict, context) -> List:
-    # 获取 scheduler（需要通过 app）
-    scheduler = context.app.scheduler
-    
-    # 添加任务
-    scheduler.add_job(
-        job_id="dynamic_task",
-        func=my_task_func,
-        cron={"hour": 12, "minute": 0}
-    )
-    
-    # 移除任务
-    scheduler.remove_job("dynamic_task")
+_app = None
+
+async def init(context):
+    # 保存 app 引用（通过 context.reload_plugins 的闭包可获取）
+    # 推荐在 init 时注册静态任务，动态任务场景较少
+    pass
+
+# 更推荐的方式：在 plugin.json schedule 字段声明所有定时任务
 ```
+
+如确需动态注册，可将 `app` 引用通过 `init(context)` 外部传入（框架扩展场景）。
 
 ---
 
