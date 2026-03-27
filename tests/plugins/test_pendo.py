@@ -748,6 +748,380 @@ class TestRecurringEventRegression:
 
 
 class TestReminderRegression:
+    def test_parse_updates_uses_partial_ai_parse_for_edits(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+
+        changes = "4月7日下午两点，提前一天和提前一小时提醒"
+
+        class _FakeAiParser:
+            async def parse_event_with_ai(self, text, user_id, **kwargs):
+                assert kwargs["partial"] is True
+                assert kwargs["fallback_text"] == changes
+                assert "[编辑现有日程]" in text
+                return {
+                    "type": "event",
+                    "parse_source": "ai",
+                    "title": "[编辑现有日程] 原标题：FAST2026观测申请截止",
+                    "content": text,
+                    "category": "未分类",
+                    "start_time": "2026-04-07T14:00:00",
+                    "remind_times": ["2026-04-06T14:00:00", "2026-04-07T13:00:00"],
+                }
+
+            def parse_natural_language(self, text, user_id):
+                raise AssertionError("unexpected fallback")
+
+        handler = EventHandler(db=MagicMock(), ai_parser=_FakeAiParser(), reminder_service=MagicMock())
+        current_event = EventItem(
+            owner_id="u1",
+            title="FAST2026观测申请截止",
+            category="工作",
+            start_time="2026-03-31T14:00:00",
+        )
+
+        updates = asyncio.run(handler._parse_updates(changes, current_event))
+
+        assert updates == {
+            "start_time": "2026-04-07T14:00:00",
+            "remind_times": ["2026-04-06T14:00:00", "2026-04-07T13:00:00"],
+        }
+
+    def test_edit_single_instance_keeps_category_and_explicit_reminders(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="FAST2026观测申请截止",
+                category="工作",
+                start_time="2026-03-31T14:00:00",
+                remind_times=[
+                    "2026-03-30T14:00:00",
+                    "2026-03-31T13:00:00",
+                    "2026-03-31T14:00:00",
+                ],
+                created_at="2026-03-20T00:00:00",
+                updated_at="2026-03-20T00:00:00",
+            )
+            db.items.insert_item(event, "evt12345")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+
+            async def fake_parse_updates(changes, current_event):
+                return {
+                    "start_time": "2026-04-07T14:00:00",
+                    "remind_times": ["2026-04-06T14:00:00", "2026-04-07T13:00:00"],
+                }
+
+            handler._parse_updates = fake_parse_updates
+
+            result = asyncio.run(
+                handler._edit_single_instance(
+                    "u1",
+                    "evt12345",
+                    "4月7日下午两点，提前一天和提前一小时提醒",
+                )
+            )
+
+            assert result["status"] == "success"
+
+            updated = db.items.get_item("evt12345", "u1")
+            assert updated is not None
+            assert getattr(updated, "title") == "FAST2026观测申请截止"
+            assert getattr(updated, "category") == "工作"
+            assert getattr(updated, "start_time") == "2026-04-07T14:00:00"
+            assert getattr(updated, "remind_times") == [
+                "2026-04-06T14:00:00",
+                "2026-04-07T13:00:00",
+                "2026-04-07T14:00:00",
+            ]
+        finally:
+            db.cleanup()
+
+    def test_edit_all_instances_applies_explicit_reminder_offsets(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo.db"))
+
+        try:
+            parent_id = "series123"
+            first = EventItem(
+                owner_id="u1",
+                title="重复会议",
+                category="工作",
+                start_time="2030-01-01T10:00:00",
+                end_time="2030-01-01T11:00:00",
+                remind_times=["2030-01-01T09:00:00"],
+                parent_id=parent_id,
+                rrule="FREQ=DAILY;COUNT=2",
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            second = EventItem(
+                owner_id="u1",
+                title="重复会议",
+                category="工作",
+                start_time="2030-01-02T10:00:00",
+                end_time="2030-01-02T11:00:00",
+                remind_times=["2030-01-02T09:00:00"],
+                parent_id=parent_id,
+                rrule="FREQ=DAILY;COUNT=2",
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(first, "series123_20300101")
+            db.items.insert_item(second, "series123_20300102")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+
+            async def fake_parse_updates(changes, current_event):
+                return {
+                    "start_time": "2030-01-10T10:00:00",
+                    "remind_times": ["2030-01-09T10:00:00", "2030-01-10T09:00:00"],
+                }
+
+            handler._parse_updates = fake_parse_updates
+
+            result = asyncio.run(
+                handler._edit_all_instances(
+                    "u1",
+                    parent_id,
+                    "改到2030-01-10 10:00，提前1天和1小时提醒",
+                )
+            )
+
+            assert result["status"] == "success"
+
+            updated_first = db.items.get_item("series123_20300101", "u1")
+            updated_second = db.items.get_item("series123_20300102", "u1")
+
+            assert updated_first is not None
+            assert updated_second is not None
+            assert getattr(updated_first, "remind_times") == [
+                "2030-01-09T10:00:00",
+                "2030-01-10T09:00:00",
+                "2030-01-10T10:00:00",
+            ]
+            assert getattr(updated_second, "remind_times") == [
+                "2030-01-10T10:00:00",
+                "2030-01-11T09:00:00",
+                "2030-01-11T10:00:00",
+            ]
+        finally:
+            db.cleanup()
+
+    def test_list_events_exact_date_query_returns_matching_day(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_exact_date.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="元旦会议",
+                start_time="2030-01-01T10:00:00",
+                end_time="2030-01-01T11:00:00",
+                remind_times=["2030-01-01T09:00:00"],
+                created_at="2029-12-01T00:00:00",
+                updated_at="2029-12-01T00:00:00",
+            )
+            db.items.insert_item(event, "evtday01")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+            result = asyncio.run(handler.list_events("u1", "2030-01-01", MagicMock()))
+
+            assert result["status"] == "success"
+            assert "元旦会议" in result["message"]
+            assert "01月01日" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_batch_edit_prunes_stale_reminder_logs(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_batch_logs.db"))
+
+        try:
+            parent_id = "series123"
+            first = EventItem(
+                owner_id="u1",
+                title="重复会议",
+                start_time="2030-01-01T10:00:00",
+                end_time="2030-01-01T11:00:00",
+                remind_times=["2030-01-01T09:00:00", "2030-01-01T10:00:00"],
+                parent_id=parent_id,
+                rrule="FREQ=DAILY;COUNT=2",
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            second = EventItem(
+                owner_id="u1",
+                title="重复会议",
+                start_time="2030-01-02T10:00:00",
+                end_time="2030-01-02T11:00:00",
+                remind_times=["2030-01-02T09:00:00", "2030-01-02T10:00:00"],
+                parent_id=parent_id,
+                rrule="FREQ=DAILY;COUNT=2",
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(first, "series123_20300101")
+            db.items.insert_item(second, "series123_20300102")
+            db.log_reminder("series123_20300101", "2030-01-01T09:00:00", sent=True)
+            db.log_reminder("series123_20300101", "2030-01-01T10:00:00", sent=True)
+            db.log_reminder("series123_20300102", "2030-01-02T09:00:00", sent=True)
+            db.log_reminder("series123_20300102", "2030-01-02T10:00:00", sent=True)
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+
+            async def fake_parse_updates(changes, current_event):
+                return {"start_time": "2030-01-10T10:00:00"}
+
+            handler._parse_updates = fake_parse_updates
+
+            result = asyncio.run(
+                handler._edit_all_instances("u1", parent_id, "改到2030-01-10 10:00")
+            )
+
+            assert result["status"] == "success"
+            assert db.get_reminder_logs("series123_20300101") == []
+            assert db.get_reminder_logs("series123_20300102") == []
+        finally:
+            db.cleanup()
+
+    def test_edit_milestone_event_shifts_milestones_with_start_time(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_milestone_edit.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="报名流程",
+                start_time="2030-01-01T10:00:00",
+                end_time="2030-01-03T10:00:00",
+                milestones=[
+                    {"name": "开始", "time": "2030-01-01T10:00:00"},
+                    {"name": "截止", "time": "2030-01-03T10:00:00"},
+                ],
+                remind_times=["2029-12-31T10:00:00", "2030-01-01T10:00:00"],
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(event, "mile1234")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+
+            async def fake_parse_updates(changes, current_event):
+                return {"start_time": "2030-01-05T10:00:00"}
+
+            handler._parse_updates = fake_parse_updates
+
+            result = asyncio.run(handler.edit_event("u1", "mile1234 改到1月5日10点", MagicMock()))
+
+            assert result["status"] == "success"
+            assert "已更新日程" in result["message"]
+
+            updated = db.items.get_item("mile1234", "u1")
+            assert updated is not None
+            assert updated.start_time == "2030-01-05T10:00:00"
+            assert updated.end_time == "2030-01-07T10:00:00"
+            assert updated.milestones == [
+                {"name": "开始", "time": "2030-01-05T10:00:00"},
+                {"name": "截止", "time": "2030-01-07T10:00:00"},
+            ]
+        finally:
+            db.cleanup()
+
+    def test_parent_id_reminder_view_returns_aggregate_series_reminders(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_parent_reminders.db"))
+
+        try:
+            first = EventItem(
+                owner_id="u1",
+                title="重复会议",
+                start_time="2030-01-01T10:00:00",
+                remind_times=["2030-01-01T09:00:00"],
+                parent_id="abcd1234",
+                rrule="FREQ=DAILY;COUNT=2",
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            second = EventItem(
+                owner_id="u1",
+                title="重复会议",
+                start_time="2030-01-02T10:00:00",
+                remind_times=["2030-01-02T09:00:00"],
+                parent_id="abcd1234",
+                rrule="FREQ=DAILY;COUNT=2",
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(first, "abcd1234_20300101")
+            db.items.insert_item(second, "abcd1234_20300102")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+            result = asyncio.run(handler.list_reminders("u1", "abcd1234", MagicMock()))
+
+            assert result["status"] == "success"
+            assert "共 2 个日程实例" in result["message"]
+            assert "01月01日 10:00" in result["message"]
+            assert "01月02日 10:00" in result["message"]
+        finally:
+            db.cleanup()
+
     def test_backfill_missing_start_time_reminder_adds_event_start(self, tmp_path):
         import importlib
         import sys
