@@ -1,6 +1,6 @@
 import { api, clearToken } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { escapeHtml, injectStyles, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-settings-redesign-styles';
 
@@ -20,7 +20,7 @@ function normalizeToggleSettings(settingsJson) {
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('settings-shell')}
+        ${pageShellCss('settings-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.NARROW })}
         .settings-stack { display: flex; flex-direction: column; gap: 18px; }
         .settings-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -91,17 +91,16 @@ function ensureStyles() {
         .settings-status { font-size: 12px; color: var(--color-text-secondary); }
         .settings-danger { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
         .settings-danger .btn { align-self: flex-start; }
-        @media (max-width: 980px) {
+        ${mediaMax(BREAKPOINTS.FORM, `
             .settings-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .settings-layout { grid-template-columns: 1fr; }
-        }
-        @media (max-width: 760px) {
-            .settings-shell { padding: 20px 16px 30px; }
+        `)}
+        ${mediaMax(BREAKPOINTS.NARROW, `
             .settings-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .settings-summary-grid { grid-template-columns: 1fr; }
             .settings-form-grid { grid-template-columns: 1fr; }
             .settings-actions { flex-direction: column; align-items: stretch; }
-        }
+        `)}
     `);
 }
 

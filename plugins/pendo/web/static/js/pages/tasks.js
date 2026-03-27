@@ -3,7 +3,7 @@ import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
-import { injectStyles, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-tasks-redesign-styles';
 const TODAY = () => new Date();
@@ -226,7 +226,7 @@ function deriveDisplayModel(tasks) {
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('tasks-shell')}
+        ${pageShellCss('tasks-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .tasks-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
             padding: 24px 26px; border-radius: 26px; margin-bottom: 18px;
@@ -374,13 +374,12 @@ function ensureStyles() {
             width: 100%; border: 1px dashed rgba(148,163,184,0.5); background: transparent; color: var(--color-text-secondary);
             border-radius: 14px; padding: 10px 12px; cursor: pointer; font-weight: 700;
         }
-        @media (max-width: 1120px) {
+        ${mediaMax(BREAKPOINTS.WIDE, `
             .tasks-layout { grid-template-columns: 1fr; }
             .tasks-filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .tasks-board { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
-        }
-        @media (max-width: 720px) {
-            .tasks-shell { padding: 20px 16px 30px; }
+        `)}
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .tasks-hero { grid-template-columns: 1fr; }
             .tasks-hero-actions { justify-content: flex-start; }
             .tasks-layout { gap: 14px; }
@@ -390,7 +389,7 @@ function ensureStyles() {
             .task-row { grid-template-columns: auto minmax(0, 1fr); }
             .task-row-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
             .tasks-board { grid-template-columns: 1fr; }
-        }
+        `)}
     `);
 }
 

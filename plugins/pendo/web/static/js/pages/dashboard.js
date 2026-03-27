@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
 import { loadChart } from '../lib/chart-loader.js';
-import { injectStyles, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-dashboard-styles';
 
@@ -12,7 +12,7 @@ let _dataChangedHandler = null;
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('dashboard-page', { padding: '26px 24px 32px' })}
+        ${pageShellCss('dashboard-page', { padding: '26px 24px 32px', compactPadding: '20px 16px 28px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .dashboard-hero {
             display: grid; grid-template-columns: minmax(0, 1.2fr) auto; gap: 18px; align-items: end;
             padding: 22px 24px; margin-bottom: 18px; border-radius: 24px;
@@ -145,19 +145,18 @@ function ensureStyles() {
         }
         .dashboard-empty strong { display: block; font-size: 14px; color: var(--color-text); }
         .dashboard-empty p { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); }
-        @media (max-width: 1024px) {
+        ${mediaMax(BREAKPOINTS.DESKTOP, `
             .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .dashboard-grid { grid-template-columns: 1fr; }
-        }
-        @media (max-width: 920px) {
+        `)}
+        ${mediaMax(BREAKPOINTS.DASHBOARD, `
             .dashboard-finance-top { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .dashboard-finance-metric strong { font-size: clamp(16px, 2.3vw, 20px); }
             .dashboard-event-card { grid-template-columns: 50px minmax(0, 1fr); gap: 10px; }
             .dashboard-event-title { font-size: 13px; }
             .dashboard-meta-pill.location { width: 100%; border-radius: 14px; }
-        }
-        @media (max-width: 720px) {
-            .dashboard-page { padding: 20px 16px 28px; }
+        `)}
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .dashboard-hero { grid-template-columns: 1fr; }
             .dashboard-hero-tags { justify-content: flex-start; }
             .dashboard-summary { grid-template-columns: 1fr; }
@@ -165,7 +164,7 @@ function ensureStyles() {
             .dashboard-diary-panel { grid-template-columns: 1fr; }
             .dashboard-event-meta { gap: 5px; }
             .dashboard-meta-pill { font-size: 11px; }
-        }
+        `)}
     `);
 }
 

@@ -1,6 +1,7 @@
 """Tests for xiaoqing_chat plugin"""
 
 import asyncio
+import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,7 +32,9 @@ def _make_hctx(
         secrets=secrets if secrets is not None else {},
         data_dir=data_dir
         if data_dir is not None
-        else (context.data_dir if context else Path("/test/data")),
+        else (
+            context.data_dir if context else Path(tempfile.gettempdir()) / "xiaoqing_chat_test_data"
+        ),
         bot_name=bot_name,
         context=context,
     )
@@ -49,7 +52,7 @@ from plugins.xiaoqing_chat import main as xiaoqing_chat
 
 
 @pytest.fixture
-def mock_context():
+def mock_context(tmp_path: Path):
     """Create a mock plugin context for xiaoqing_chat"""
     context = MagicMock()
     context.config = {"bot_name": "小青"}
@@ -60,8 +63,8 @@ def mock_context():
         },
     }
     context.plugin_name = "xiaoqing_chat"
-    context.plugin_dir = Path("/test/plugins/xiaoqing_chat")
-    context.data_dir = Path("/test/data/xiaoqing_chat")
+    context.plugin_dir = tmp_path / "plugins" / "xiaoqing_chat"
+    context.data_dir = tmp_path / "data" / "xiaoqing_chat"
     context.http_session = AsyncMock()
     context.send_action = AsyncMock()
     context.reload_config = Mock()

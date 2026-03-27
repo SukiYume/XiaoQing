@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { formatDateInput, pad2, todayStr as sharedTodayStr } from '../utils/format.js';
-import { escapeHtml, injectStyles, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-stats-waterfall-styles';
 const RANGE_OPTIONS = [
@@ -540,7 +540,7 @@ function renderCard({ accent = '#4f46e5', eyebrow = '', title = '', subtitle = '
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('stats-shell')}
+        ${pageShellCss('stats-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.COMPACT })}
         .stats-stack { display: flex; flex-direction: column; gap: 18px; }
         .stats-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -562,8 +562,30 @@ function ensureStyles() {
         }
         .stats-range-btn { cursor: pointer; }
         .stats-range-btn.active { background: #4f46e5; border-color: #4f46e5; color: #fff; box-shadow: 0 10px 24px rgba(79,70,229,0.18); }
-        .stats-custom-range { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+        .stats-custom-range {
+            display: inline-flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
         .stats-date-field { font: inherit; min-width: 148px; }
+        .stats-custom-range .stats-date-field {
+            min-width: 0;
+            width: 140px;
+            padding: 0 12px;
+        }
+        .stats-range-sep {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--color-text-secondary);
+            flex: 0 0 auto;
+        }
+        .stats-custom-range .stats-apply-btn {
+            padding: 0 12px;
+            min-width: 64px;
+            justify-content: center;
+        }
         .stats-summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
         .stats-summary-card {
             padding: 16px 16px 14px; border-radius: 22px;
@@ -694,17 +716,20 @@ function ensureStyles() {
         .stats-dual-label { font-size: 12px; color: var(--color-text-secondary); font-weight: 700; }
         .stats-dual-value { margin-top: 8px; font-size: 24px; font-weight: 820; line-height: 1.06; letter-spacing: -0.03em; }
         .stats-dual-meta { margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); }
-        @media (max-width: 1200px) { .stats-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .stats-wall { column-count: 2; } }
-        @media (max-width: 860px) { .stats-shell { padding: 20px 16px 30px; } .stats-hero { grid-template-columns: 1fr; padding: 22px 20px; } .stats-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stats-donut-wrap { grid-template-columns: 1fr; } .stats-date-field { min-width: 132px; } }
-        @media (max-width: 640px) {
+        ${mediaMax(BREAKPOINTS.XL, `.stats-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .stats-wall { column-count: 2; }`)}
+        ${mediaMax(BREAKPOINTS.COMPACT, `.stats-hero { grid-template-columns: 1fr; padding: 22px 20px; } .stats-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .stats-donut-wrap { grid-template-columns: 1fr; } .stats-date-field { min-width: 132px; }`)}
+        ${mediaMax(BREAKPOINTS.STATS_SMALL, `
             .stats-wall { column-count: 1; }
             .stats-summary-grid, .stats-metric-pairs, .stats-dual-grid, .stats-treemap { grid-template-columns: 1fr; }
             .stats-chip-row { justify-content: flex-start; }
             .stats-matrix { grid-template-columns: 36px repeat(6, minmax(0, 1fr)); gap: 6px; }
             .stats-matrix-cell { min-height: 38px; border-radius: 12px; font-size: 10px; }
             .stats-custom-range { flex-direction: column; align-items: stretch; }
+            .stats-range-sep { display: none; }
+            .stats-custom-range .stats-date-field,
+            .stats-custom-range .stats-apply-btn { width: 100%; }
             .stats-column-stage, .stats-histogram-stage, .stats-stacked-stage { height: 112px; }
-        }
+        `)}
     `);
 }
 
@@ -1117,6 +1142,7 @@ function renderPage() {
                     ${_range === 'custom' ? `
                         <div class="stats-custom-range">
                             <input type="text" class="stats-date-field" id="stats-custom-start" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftStart || _customStart || range.start)}">
+                            <span class="stats-range-sep">至</span>
                             <input type="text" class="stats-date-field" id="stats-custom-end" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftEnd || _customEnd || range.end)}">
                             <button type="button" class="stats-range-btn stats-apply-btn" id="stats-custom-apply">应用</button>
                         </div>

@@ -14,6 +14,7 @@ find . -type f -name "*.pyo" -delete 2>/dev/null
 
 # Remove pytest cache directories
 find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null
+find . -type d -name ".pytest_tmp" -exec rm -rf {} + 2>/dev/null
 
 # Remove Ruff cache directories
 find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null

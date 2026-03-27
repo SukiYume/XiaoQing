@@ -5,7 +5,7 @@ import { buildFormHTML, getFormData, initFormInteractions } from '../components/
 import { renderPagination } from '../components/pagination.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { formatDateTime, formatMonthDay, previewText } from '../utils/format.js';
-import { escapeHtml, injectStyles, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const PAGE_SIZE = 18;
 const CSS_ID = 'pendo-notes-styles';
@@ -71,7 +71,7 @@ function categoryOptions() {
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('notes-shell')}
+        ${pageShellCss('notes-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.NARROW })}
         .notes-hero {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
@@ -206,13 +206,12 @@ function ensureStyles() {
         .note-view-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-bottom: 14px; border-bottom: 1px solid rgba(226,232,240,0.8); margin-bottom: 14px; }
         .note-view-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.8; color: var(--color-text); max-height: 60vh; overflow-y: auto; }
         .note-view-secondary { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
-        @media (max-width: 1120px) {
+        ${mediaMax(BREAKPOINTS.WIDE, `
             .notes-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .notes-layout { grid-template-columns: 1fr; }
             .notes-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-        @media (max-width: 760px) {
-            .notes-shell { padding: 20px 16px 30px; }
+        `)}
+        ${mediaMax(BREAKPOINTS.NARROW, `
             .notes-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .notes-hero-actions { align-items: flex-start; }
             .notes-summary-grid { grid-template-columns: 1fr; }
@@ -221,7 +220,7 @@ function ensureStyles() {
             .notes-grid { grid-template-columns: 1fr; }
             .notes-meter { gap: 6px; }
             .notes-cadence-panel .notes-panel-body { padding-bottom: 14px; }
-        }
+        `)}
     `);
 }
 

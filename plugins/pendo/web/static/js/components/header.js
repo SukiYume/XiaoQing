@@ -10,11 +10,14 @@ export function renderHeader(container) {
     const header = document.createElement('header');
     header.className = 'header';
     header.innerHTML = `
+        <button class="header-toggle" type="button" aria-label="打开导航菜单" title="菜单">☰</button>
         <h2 class="header-title">总览</h2>
         <div class="header-actions">
             <div class="header-search">
+                <span class="header-search-icon">⌕</span>
                 <input type="text" placeholder="搜索..." class="header-search-input" />
             </div>
+            <button class="header-search-toggle" type="button" aria-label="打开搜索" title="搜索">⌕</button>
             <button class="btn btn-ghost header-logout" title="退出登录">退出</button>
         </div>
     `;
@@ -26,6 +29,10 @@ export function renderHeader(container) {
         titleEl.textContent = PAGE_TITLES[path] || path;
     });
 
+    header.querySelector('.header-toggle').addEventListener('click', () => {
+        document.dispatchEvent(new CustomEvent('pendo:toggle-sidebar'));
+    });
+
     // Search
     const searchInput = header.querySelector('.header-search-input');
     searchInput.addEventListener('keydown', e => {
@@ -33,6 +40,9 @@ export function renderHeader(container) {
             navigate('search?q=' + encodeURIComponent(searchInput.value.trim()));
             searchInput.value = '';
         }
+    });
+    header.querySelector('.header-search-toggle').addEventListener('click', () => {
+        navigate('search');
     });
 
     // Logout
