@@ -11,8 +11,8 @@
 from core.plugin_base import (
     text, image, image_url, record, record_url,
     segments, build_action, run_sync,
-    ensure_dir, load_json, write_json,
-    PluginContext
+    ensure_dir, load_json, write_json, atomic_write_text,
+    split_message_segments,
 )
 ```
 
@@ -117,10 +117,28 @@ data = load_json(Path("data.json"), default={"count": 0})
 ```
 
 #### write_json(path, data)
-写入 JSON 文件。
+写入 JSON 文件（先写临时文件再替换，防止中断损坏）。
 
 ```python
 write_json(Path("data.json"), {"count": 1})
+```
+
+#### atomic_write_text(path, payload)
+原子写入文本文件。
+
+```python
+atomic_write_text(Path("output.txt"), "内容")
+```
+
+### 消息分割
+
+#### split_message_segments(segs, max_length=500)
+将消息段列表按文本长度分割为多个分片，防止超长消息被 OneBot 截断。
+
+```python
+long_segs = [text("很长的内容...")]
+parts = split_message_segments(long_segs, max_length=500)
+# parts = [[seg1, seg2], [seg3, ...], ...]
 ```
 
 ---
@@ -133,15 +151,17 @@ write_json(Path("data.json"), {"count": 1})
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `config` | `Dict[str, Any]` | config.json 内容 |
-| `secrets` | `Dict[str, Any]` | secrets.json 内容 |
+| `config` | `Dict[str, Any]` | config.json 完整内容 |
+| `secrets` | `Dict[str, Any]` | secrets.json 完整内容 |
 | `plugin_name` | `str` | 当前插件名 |
 | `plugin_dir` | `Path` | 插件目录路径 |
 | `data_dir` | `Path` | 数据目录路径 |
-| `logger` | `logging.Logger` | 日志记录器 |
-| `http_session` | `aiohttp.ClientSession` | HTTP 客户端 |
-| `current_user_id` | `Optional[int]` | 当前消息的用户 ID |
-| `current_group_id` | `Optional[int]` | 当前消息的群 ID |
+| `logger` | `_RequestLogger` | 日志记录器（自动附带 request_id） |
+| `http_session` | `aiohttp.ClientSession \| None` | HTTP 客户端 |
+| `metrics` | `MetricsCollector \| None` | 运行指标收集器 |
+| `current_user_id` | `int \| None` | 当前消息的用户 ID |
+| `current_group_id` | `int \| None` | 当前消息的群 ID |
+| `state` | `Dict[str, Any]` | 插件私有状态（当次请求生命周期） |
 
 ### 方法
 
@@ -262,62 +282,6 @@ remaining = context.get_mute_remaining(123456)  # -> 930.5 (秒)
 **注意**：新增方法
 
 ---
-
-## Dispatcher 类
-
-Dispatcher 提供了静音控制的便捷方法，插件可以通过 `context.dispatcher` 访问。
-
-### 属性
-
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `router` | `CommandRouter` | 命令路由器 |
-| `app` | `XiaoQingApp` | 应用实例 |
-| `session_manager` | `SessionManager` | 会话管理器 |
-| `_handlers` | `tuple[MessageHandler, ...]` | Handler 链 |
-
-### 方法
-
-#### is_admin(user_id: Optional[int]) -> bool
-判断用户是否是管理员。
-
-```python
-if context.dispatcher.is_admin(user_id):
-    return segments("管理员命令")
-else:
-    return segments("权限不足")
-```
-
-#### mute_group(group_id: int, duration_minutes: float) -> None
-静音指定群。
-
-```python
-context.dispatcher.mute_group(123456, 30)  # 静音 30 分钟
-```
-
-#### unmute_group(group_id: int) -> None
-解除群静音。
-
-```python
-context.dispatcher.unmute_group(123456)
-```
-
-#### is_muted(group_id: Optional[int]) -> bool
-检查群是否被静音。
-
-```python
-if context.dispatcher.is_muted(123456):
-    return segments("群聊已静音")
-```
-
-#### get_mute_remaining(group_id: int) -> Optional[float]
-获取剩余静音时间（秒）。
-
-```python
-remaining = context.dispatcher.get_mute_remaining(123456)
-if remaining:
-    return segments(f"剩余静音时间：{remaining/60:.1f} 分钟")
-```
 
 ---
 
@@ -952,6 +916,37 @@ XiaoQing 返回的 Action 遵循 OneBot 协议。
   }
 }
 ```
+
+---
+
+## core.args 模块
+
+```python
+from core.args import parse, ParsedArgs
+```
+
+#### parse(raw) -> ParsedArgs
+解析命令参数字符串，返回 `ParsedArgs` 对象。
+
+```python
+parsed = parse("add 完成报告 --cat=工作 -p 2")
+```
+
+#### ParsedArgs
+
+| 属性/方法 | 说明 |
+|-----------|------|
+| `parsed.first` | 第一个位置参数（property） |
+| `parsed.second` | 第二个位置参数（property） |
+| `parsed.get(i, default="")` | 获取第 i 个位置参数 |
+| `parsed.rest(start=0)` | 从第 start 个参数开始拼接剩余参数 |
+| `parsed.opt(key, default="")` | 获取选项值（`--key=val` 或 `-k val`） |
+| `parsed.has(key)` | 检查选项/标志是否存在 |
+| `len(parsed)` | 位置参数数量 |
+| `bool(parsed)` | 参数字符串是否非空 |
+| `parsed.raw` | 原始参数字符串 |
+| `parsed.tokens` | 位置参数列表 |
+| `parsed.options` | 选项字典 |
 
 ---
 

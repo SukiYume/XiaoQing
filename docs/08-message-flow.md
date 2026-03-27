@@ -157,7 +157,7 @@ text = "你好世界"
 
 ### 3.1 决策逻辑
 
-`_make_decision()` 方法判断消息是否需要处理，返回 `ProcessDecision(should_process, smalltalk_mode)`：
+`_decide_process()` 方法判断消息是否需要处理，返回 `ProcessDecision(should_process, smalltalk_mode)`：
 
 | 场景 | should_process | smalltalk_mode | 说明 |
 |------|----------------|----------------|------|
@@ -196,7 +196,7 @@ text = "你好世界"
 
 ### 3.4 前缀剥离
 
-`_strip_prefix()` 方法按照以下顺序严格处理：
+`parse_text_command_context()` 函数按照以下顺序严格处理前缀剥离：
 
 1. **去除 @机器人**（例如 `[CQ:at,qq=123] `）
 2. **去除 bot_name**（例如 `小青`，支持模糊匹配及其后的标点）
@@ -664,7 +664,7 @@ GET /health
                     │
                     ▼
         ┌───────────────────────┐
-        │   _make_decision     │
+        │   _decide_process    │
         │   判断是否处理消息     │
         └───────────┬───────────┘
                     │
@@ -730,10 +730,9 @@ GET /health
 | 功能 | 文件 | 函数/方法 |
 |------|------|----------|
 | 消息解析 | `core/message.py` | `normalize_message()`, `extract_text()` |
-| 决策判断 | `core/dispatcher.py` | `_make_decision()` |
-| 前缀剥离 | `core/dispatcher.py` | `_strip_prefix()` |
+| 前缀剥离 & 上下文解析 | `core/message.py` | `parse_text_command_context()` |
+| 决策判断 | `core/dispatcher.py` | `Dispatcher._decide_process()` |
 | 命令路由 | `core/router.py` | `CommandRouter.resolve()` |
 | 会话管理 | `core/session.py` | `SessionManager` |
-| 闲聊处理 | `core/dispatcher.py` | `_handle_smalltalk()` |
 | 静音控制 | `core/dispatcher.py` | `mute_group()`, `is_muted()` |
 | Handler 链 | `core/dispatcher.py` | `BotNameHandler`, `CommandHandler`, `SessionHandler`, `SmalltalkHandler` |
