@@ -1,10 +1,13 @@
-# 01 - 快速开始
+# 🚀 01 - 快速开始
 
 本章将帮助你在 10 分钟内完成 XiaoQing 的安装、配置和运行。
 
+> [!TIP]
+> 还不了解 XiaoQing 是什么？先阅读 [00-overview.md](00-overview.md) 获取整体概念。
+
 ---
 
-## 环境要求
+## 🖥️ 环境要求
 
 - **Python 3.10+**（推荐 3.11）
 - **OneBot 实现**：用于连接 QQ
@@ -12,7 +15,7 @@
 
 ---
 
-## 第一步：安装依赖
+## 📦 第一步：安装依赖
 
 ```bash
 cd XiaoQing
@@ -28,7 +31,7 @@ pip install -r requirements.txt
 
 ---
 
-## 第二步：配置文件
+## ⚙️ 第二步：配置文件
 
 XiaoQing 使用两个配置文件：
 
@@ -88,11 +91,12 @@ XiaoQing 使用两个配置文件：
 | `admin_user_ids` | 管理员 QQ 号列表，可执行管理命令 |
 | `plugins` | 各插件的私有配置（如 API Key） |
 
-⚠️ **注意**：`secrets.json` 包含敏感信息，不要提交到 Git！
+> [!WARNING]
+> `secrets.json` 包含敏感信息（token、管理员 ID、API Key），**不要提交到 Git！** 项目 `.gitignore` 已默认排除此文件。
 
 ---
 
-## 第三步：配置 OneBot
+## 🔗 第三步：配置 OneBot
 
 XiaoQing 支持两种通信模式：
 
@@ -170,7 +174,7 @@ XiaoQing ──WebSocket──> OneBot (端口 11000)
 
 ---
 
-## 第四步：启动
+## 🟢 第四步：启动
 
 ### 启动 OneBot
 
@@ -207,7 +211,7 @@ python main.py
 
 ---
 
-## 第五步：测试
+## 🧪 第五步：测试
 
 ### 基础命令测试
 
@@ -281,7 +285,7 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 
 ---
 
-## 常见问题
+## ❓ 常见问题
 
 ### Q: 启动后没有任何响应
 
@@ -385,7 +389,7 @@ XiaoQing 支持两种闲聊模式：
 
 ---
 
-## 下一步
+## ➡️ 下一步
 
 - 想了解系统架构？→ [02-architecture.md](02-architecture.md)
 - 想开发插件？→ [03-plugin-development.md](03-plugin-development.md)

@@ -1,62 +1,96 @@
-# XiaoQing
+<div align="center">
 
-基于 **OneBot 协议**、**Python 异步运行时** 和 **插件系统** 的 QQ 机器人框架。
-项目既可以作为一个轻量机器人宿主使用，也可以作为个人信息管理与自动化平台扩展，当前内置了 `xiaoqing_chat`、`pendo`、`qingssh`、`jupyter`、`qingpet` 等多类插件。
+# 🤖 XiaoQing
 
-## 亮点
+**基于 OneBot 协议 × Python asyncio 的 QQ 机器人框架**
 
-- **异步优先**：核心消息处理、HTTP、调度都围绕 `asyncio` 构建。
-- **插件化架构**：每个插件独立目录、独立配置、独立数据目录，支持热重载。
-- **命令 + 闲聊双通路**：既支持 `/command` 风格命令，也支持自然对话和 URL 自动解析。
-- **多轮会话**：框架内建会话管理，适合游戏、表单、分步输入等交互。
-- **定时任务**：插件可在 `plugin.json` 中直接声明调度任务。
-- **Pendo Web 控制台**：个人管理插件 `pendo` 提供完整 Web UI，覆盖总览、日程、待办、账本、笔记、日记、搜索、统计、设置。
-- **面向真实部署**：支持 OneBot 被动推送和 WebSocket 主动连接两种模式。
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![OneBot](https://img.shields.io/badge/OneBot-v11-black?style=flat-square)](https://onebot.dev/)
+[![asyncio](https://img.shields.io/badge/async-native-blue?style=flat-square&logo=python&logoColor=white)](https://docs.python.org/3/library/asyncio.html)
 
-## 当前项目里值得先看的两个模块
+*接收 QQ 消息 → 解析命令 → 调用插件处理 → 返回响应*
 
-- **[xiaoqing_chat](plugins/xiaoqing_chat)**
-  面向聊天体验的主插件，包含记忆、回复检查、行为规划、表达系统等能力。
-
-- **[pendo](plugins/pendo)**
-  个人时间与信息管理中枢，聊天端和 Web 端共用一套数据模型。
-
-## 文档入口
-
-- [开发文档总览](docs/README.md)
-- [快速开始](docs/01-getting-started.md)
-- [核心架构](docs/02-architecture.md)
-- [插件开发指南](docs/03-plugin-development.md)
-- [消息流程](docs/08-message-flow.md)
-- [内置插件列表](docs/09-plugins.md)
+</div>
 
 ---
 
-## 快速开始
+## ✨ 亮点
 
-### 1. 环境要求
+| | 特性 | 说明 |
+|---|------|------|
+| ⚡ | **异步优先** | 核心消息处理、HTTP、调度全部围绕 `asyncio` 构建 |
+| 🔌 | **插件化架构** | 每个插件独立目录、独立配置、独立数据目录，支持热重载 |
+| 💬 | **命令 + 闲聊双通路** | 支持 `/command` 风格命令，也支持自然对话和 URL 自动解析 |
+| 🔄 | **多轮会话** | 框架内建会话管理，适合游戏、表单、分步输入等交互 |
+| ⏰ | **定时任务** | 插件可在 `plugin.json` 中直接声明调度任务 |
+| 🌐 | **Pendo Web 控制台** | 个人管理插件 `pendo` 提供完整 Web UI，覆盖总览、日程、待办、账本、笔记、日记、搜索、统计、设置 |
+| 🚀 | **面向真实部署** | 支持 OneBot 被动推送和 WebSocket 主动连接两种模式 |
 
-- Python `3.10+`
-- 一个可用的 OneBot 实现
-  推荐 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)
+---
 
-### 2. 安装依赖
+## 🌟 当前项目里值得先看的两个模块
+
+<table>
+<tr>
+<td width="50%">
+
+### 🧠 xiaoqing_chat
+
+面向聊天体验的主插件，包含记忆、回复检查、行为规划、表达系统等能力。
+
+→ [查看插件目录](plugins/xiaoqing_chat)
+
+</td>
+<td width="50%">
+
+### 📅 pendo
+
+个人时间与信息管理中枢，聊天端和 Web 端共用一套数据模型。
+
+→ [查看插件目录](plugins/pendo)
+
+</td>
+</tr>
+</table>
+
+---
+
+## 📚 文档入口
+
+| 文档 | 说明 |
+|------|------|
+| [📖 开发文档总览](docs/README.md) | 所有文档的导航索引 |
+| [🚀 快速开始](docs/01-getting-started.md) | 10 分钟跑起来 |
+| [🏗️ 核心架构](docs/02-architecture.md) | 框架内部设计 |
+| [🔌 插件开发指南](docs/03-plugin-development.md) | 从零开发插件 |
+| [📨 消息流程](docs/08-message-flow.md) | 消息处理全链路 |
+| [🧩 内置插件列表](docs/09-plugins.md) | 29 个内置插件说明 |
+
+---
+
+## 🚀 快速开始
+
+### 1️⃣ 环境要求
+
+- Python `3.10+`（推荐 3.11）
+- 一个可用的 OneBot 实现 → 推荐 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)
+
+### 2️⃣ 安装依赖
 
 ```bash
 cd XiaoQing
 pip install -r requirements.txt
 ```
 
-如果你需要 `pendo` 的 Web UI，`requirements.txt` 已经包含 `fastapi`、`uvicorn`、`PyJWT`、`passlib[bcrypt]` 等依赖。
+> [!NOTE]
+> 如果你需要 `pendo` 的 Web UI，`requirements.txt` 已经包含 `fastapi`、`uvicorn`、`PyJWT`、`passlib[bcrypt]` 等依赖，无需额外安装。
 
-### 3. 配置
+### 3️⃣ 配置
 
-项目默认读取：
+项目默认读取 `config/config.json` 和 `config/secrets.json`。
 
-- [config/config.json](config/config.json)
-- `config/secrets.json`
-
-一个最小可运行的配置大致如下：
+**最小可运行配置（config.json）：**
 
 ```json
 {
@@ -78,7 +112,7 @@ pip install -r requirements.txt
 }
 ```
 
-`config/secrets.json` 至少应包含：
+**secrets.json（至少包含）：**
 
 ```json
 {
@@ -88,11 +122,12 @@ pip install -r requirements.txt
 }
 ```
 
-### 4. 连接 OneBot
+> [!WARNING]
+> `config/secrets.json` 包含敏感信息，不要提交到 Git！
 
-#### 推荐：被动模式
+### 4️⃣ 连接 OneBot
 
-由 OneBot 主动把消息推送给 XiaoQing：
+**推荐：被动模式**（由 OneBot 主动推送消息给 XiaoQing）
 
 ```yaml
 http:
@@ -101,9 +136,7 @@ http:
       secret: your-secret-token
 ```
 
-#### 可选：主动 WebSocket 模式
-
-由 XiaoQing 主动连接 OneBot：
+**可选：主动 WebSocket 模式**（由 XiaoQing 主动连接 OneBot）
 
 ```json
 {
@@ -113,15 +146,15 @@ http:
 }
 ```
 
-### 5. 启动
+### 5️⃣ 启动
 
 ```bash
 python main.py
 ```
 
-正常启动后，日志中通常会看到：
+正常启动后，日志中会看到：
 
-```text
+```
 Loaded plugin bot_core
 Loaded plugin xiaoqing_chat
 Inbound server started ...
@@ -129,7 +162,7 @@ Inbound server started ...
 
 ---
 
-## 消息处理模型
+## 💬 消息处理模型
 
 ### 私聊
 
@@ -143,7 +176,7 @@ Inbound server started ...
 2. 包含机器人名字，如 `小青 你好`
 3. 命中随机回复概率 `random_reply_rate`
 
-### 常用内置命令
+### 🛠️ 常用内置命令
 
 | 命令 | 说明 |
 |------|------|
@@ -156,9 +189,9 @@ Inbound server started ...
 
 ---
 
-## 常用插件
+## 🧩 常用插件
 
-### xiaoqing_chat
+### 🧠 xiaoqing_chat
 
 | 命令 | 说明 |
 |------|------|
@@ -167,7 +200,7 @@ Inbound server started ...
 | `/xc reset` | 清空当前会话 |
 | `/xc stats` | 查看聊天状态 |
 
-### pendo
+### 📅 pendo
 
 | 命令 | 说明 |
 |------|------|
@@ -179,66 +212,49 @@ Inbound server started ...
 | `/pendo web start` | 启动 Pendo Web 控制台 |
 | `/pendo web token` | 获取 Web 登录令牌 |
 
-### 其他内置插件
+### 🔧 其他内置插件
 
-- `qingssh`：远程 SSH 管理
-- `jupyter`：执行 Python / Notebook 相关操作
-- `qingpet`：群宠物系统
-- `apod`：每日天文图
-- `astro_tools`：天文计算工具
-- `ads_paper` / `arxiv_filter`：论文相关工具
+| 插件 | 说明 |
+|------|------|
+| `qingssh` | 远程 SSH 管理 |
+| `jupyter` | 执行 Python / Notebook 相关操作 |
+| `qingpet` | 群宠物系统 |
+| `apod` | 每日天文图 |
+| `astro_tools` | 天文计算工具 |
+| `ads_paper` / `arxiv_filter` | 论文相关工具 |
 
 ---
 
-## Pendo Web 控制台
+## 🌐 Pendo Web 控制台
 
-Pendo 不只是聊天命令，它现在也是项目里最完整的浏览器控制台。
+Pendo 不只是聊天命令——它也是项目里最完整的浏览器控制台。
 
 ### 启动与访问
 
 ```bash
-/pendo web start
-/pendo web start port=9000
-/pendo web status
-/pendo web stop
-/pendo web token
+/pendo web start           # 启动（默认端口）
+/pendo web start port=9000 # 指定端口
+/pendo web status          # 查看状态
+/pendo web stop            # 停止
+/pendo web token           # 获取登录令牌
 ```
 
-### 登录方式
+> [!TIP]
+> Pendo Web 使用 **Token 登录**，无需账号密码。执行 `/pendo web start` 启动后，再执行 `/pendo web token` 获取令牌，粘贴到登录页即可进入。
 
-Pendo Web 不是账号密码登录，而是 **Token 登录**。
+### 页面一览
 
-基本流程：
+```
+总览  ·  日程  ·  待办  ·  账本  ·  笔记  ·  日记  ·  搜索  ·  统计  ·  设置
+```
 
-1. 在聊天里执行 `/pendo web start`
-2. 执行 `/pendo web token`
-3. 打开浏览器访问返回的地址
-4. 在登录页粘贴 Token 进入
-
-### 当前 Web 页面
-
-- 总览
-- 日程
-- 待办
-- 账本
-- 笔记
-- 日记
-- 搜索
-- 统计
-- 设置
-
-当前 Web UI 使用 **FastAPI + 原生 JS + CSS**，图表主要是原生 SVG 和定制组件，不依赖传统后台模板。
+Web UI 基于 **FastAPI + 原生 JS + CSS** 构建，图表使用原生 SVG 和定制组件，不依赖传统后台模板。
 
 ---
 
-## 插件开发
+## 🔌 插件开发
 
-一个插件最少需要两个文件：
-
-- `plugin.json`
-- `main.py`
-
-### 最小插件示例
+一个插件最少需要两个文件：`plugin.json` + `main.py`。
 
 **plugins/myplugin/plugin.json**
 
@@ -265,53 +281,25 @@ Pendo Web 不是账号密码登录，而是 **Token 登录**。
 ```python
 from typing import Any
 
-
 async def handle(command: str, args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     name = args.strip() or "世界"
     return [{"type": "text", "data": {"text": f"你好，{name}！"}}]
 ```
 
-### 可选生命周期
+### 可选生命周期钩子
 
 ```python
-def init(context=None) -> None:
-    pass
-
-
-async def shutdown(context) -> None:
-    pass
+async def init(context) -> None: ...      # 插件加载时
+async def shutdown(context) -> None: ...  # 插件卸载时
 ```
 
-### 会话处理
-
-如果插件需要多轮交互，可以实现：
+### 多轮会话
 
 ```python
-async def handle_session(text: str, event: dict, context, session):
-    ...
+async def handle_session(text: str, event: dict, context, session): ...
 ```
 
-### URL 解析
-
-如果插件希望自动处理消息中的 URL，可以实现：
-
-```python
-async def handle_url(url: str, event: dict, context):
-    ...
-```
-
-### 闲聊入口
-
-如果插件希望参与普通文本处理，可以实现：
-
-```python
-async def handle_smalltalk(text: str, event: dict, context):
-    ...
-```
-
-### 定时任务
-
-可直接在 `plugin.json` 中声明：
+### 定时任务（在 plugin.json 中声明）
 
 ```json
 {
@@ -319,28 +307,19 @@ async def handle_smalltalk(text: str, event: dict, context):
     {
       "id": "morning",
       "handler": "send_morning_msg",
-      "cron": {
-        "hour": 8,
-        "minute": 0
-      },
+      "cron": { "hour": 8, "minute": 0 },
       "group_ids": [123456789]
     }
   ]
 }
 ```
 
-对应函数：
-
-```python
-async def send_morning_msg(context):
-    return [{"type": "text", "data": {"text": "早上好"}}]
-```
-
-更完整的开发说明请看 [插件开发指南](docs/03-plugin-development.md)。
+> [!TIP]
+> 更完整的开发说明请看 [插件开发指南](docs/03-plugin-development.md)。
 
 ---
 
-## 项目结构
+## 📁 项目结构
 
 ```text
 XiaoQing/
@@ -348,24 +327,24 @@ XiaoQing/
 ├── requirements.txt
 ├── config/
 │   ├── config.json
-│   └── secrets.json
+│   └── secrets.json          ← 不要提交！
 ├── core/
-│   ├── app.py
-│   ├── dispatcher.py
-│   ├── router.py
-│   ├── plugin_manager.py
-│   ├── session.py
-│   ├── scheduler.py
-│   ├── context.py
+│   ├── app.py                ← 应用主类
+│   ├── dispatcher.py         ← 消息分发
+│   ├── router.py             ← 命令路由
+│   ├── plugin_manager.py     ← 插件管理
+│   ├── session.py            ← 多轮会话
+│   ├── scheduler.py          ← 定时任务
+│   ├── context.py            ← 插件上下文
 │   └── ...
 ├── plugins/
 │   ├── bot_core/
-│   ├── xiaoqing_chat/
-│   ├── pendo/
+│   ├── xiaoqing_chat/        ← 智能对话
+│   ├── pendo/                ← 个人管理 + Web 控制台
 │   ├── qingpet/
 │   ├── qingssh/
 │   ├── jupyter/
-│   └── ...
+│   └── ...                   ← 共 29 个插件
 ├── docs/
 ├── tests/
 └── logs/
@@ -373,44 +352,42 @@ XiaoQing/
 
 ---
 
-## 测试
+## 🧪 测试
 
 ```bash
-pytest
-```
-
-运行单个测试：
-
-```bash
-pytest tests/plugins/test_pendo.py
-pytest tests/plugins/test_xiaoqing_chat.py
+pytest                                          # 运行所有测试
+pytest tests/plugins/test_pendo.py             # 单个测试文件
+pytest tests/plugins/test_xiaoqing_chat.py     # 单个测试文件
 ```
 
 ---
 
-## 常见问题
+## ❓ 常见问题
 
-### 群聊不响应
+<details>
+<summary><b>群聊不响应？</b></summary>
 
 优先检查：
-
 1. 消息是否以命令前缀开头
 2. 是否包含机器人名称
-3. 是否被静音
+3. 是否被静音（`/说话` 解除）
 4. 日志里是否有对应请求记录
 
-### Pendo Web 打不开
+</details>
+
+<details>
+<summary><b>Pendo Web 打不开？</b></summary>
 
 优先检查：
-
 1. 是否执行了 `/pendo web start`
 2. 当前环境是否安装了 `fastapi` 和 `uvicorn`
 3. 端口是否被占用
 4. 是否通过 `/pendo web token` 获取了有效登录令牌
 
-### 插件热重载不生效
+</details>
 
-可以先用：
+<details>
+<summary><b>插件热重载不生效？</b></summary>
 
 ```bash
 /reload 插件名
@@ -418,25 +395,29 @@ pytest tests/plugins/test_xiaoqing_chat.py
 
 如果插件内部维护了复杂状态，直接重启进程通常更稳。
 
-### Windows 上 torch 导入冲突
+</details>
 
-项目在 [main.py](main.py) 中已经提前处理了一层：
+<details>
+<summary><b>Windows 上 torch 导入冲突？</b></summary>
 
-- 先设置 `KMP_DUPLICATE_LIB_OK=TRUE`
-- 再尽早尝试导入 `torch`
+项目在 `main.py` 中已经提前处理：先设置 `KMP_DUPLICATE_LIB_OK=TRUE`，再尽早尝试导入 `torch`。如果仍有问题，优先检查 PyTorch、Python、VC Runtime 的版本匹配。
 
-如果仍有问题，优先检查 PyTorch、Python、VC Runtime 的版本匹配。
-
----
-
-## 许可证
-
-MIT License
+</details>
 
 ---
 
-如果你准备开始二次开发，推荐的阅读顺序是：
+## 📖 推荐阅读顺序
 
-1. [快速开始](docs/01-getting-started.md)
-2. [核心架构](docs/02-architecture.md)
-3. [插件开发指南](docs/03-plugin-development.md)
+如果你准备开始二次开发：
+
+1. [🚀 快速开始](docs/01-getting-started.md)
+2. [🏗️ 核心架构](docs/02-architecture.md)
+3. [🔌 插件开发指南](docs/03-plugin-development.md)
+
+---
+
+<div align="center">
+
+MIT License · Built with Python asyncio · OneBot v11
+
+</div>

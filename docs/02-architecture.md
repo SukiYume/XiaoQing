@@ -1,10 +1,13 @@
-# 02 - 系统架构
+# 🏗️ 02 - 系统架构
 
 本章详细介绍 XiaoQing 的内部架构和工作原理。
 
+> [!NOTE]
+> 本章偏向框架内部实现，适合想深入了解的开发者。如果只是写插件，直接看 [03-plugin-development.md](03-plugin-development.md) 即可。
+
 ---
 
-## 架构总览
+## 🔭 架构总览
 
 ```
                               ┌─────────────────┐
@@ -83,7 +86,7 @@
 
 ---
 
-## 核心组件
+## ⚙️ 核心组件
 
 ### 1. XiaoQingApp（app.py）
 
@@ -189,7 +192,8 @@ class MessageHandler(ABC):
         pass
 ```
 
-**短路机制**：一旦某个 Handler 返回非 `None` 结果，后续 Handler 不会执行。
+> [!IMPORTANT]
+> **短路机制**：一旦某个 Handler 返回非 `None` 结果，后续 Handler 不会执行。这意味着命令总是优先于闲聊，会话处理优先于普通匹配。
 
 **消息处理决策树**：
 
@@ -479,7 +483,7 @@ class InboundServer:
 
 ---
 
-## 数据流详解
+## 🔄 数据流详解
 
 ### 完整请求流程
 
@@ -556,7 +560,7 @@ class InboundServer:
 
 ---
 
-## 并发控制
+## ⚡ 并发控制
 
 XiaoQing 使用 `asyncio.Semaphore` 控制并发：
 
@@ -573,7 +577,7 @@ async def handle_event(self, event):
 
 ---
 
-## 插件内嵌服务
+## 🧩 插件内嵌服务
 
 部分插件可以在框架之外独立运行附加服务。典型案例是 **pendo** 插件：
 
@@ -594,7 +598,7 @@ XiaoQing 主进程
 
 ---
 
-## 下一步
+## ➡️ 下一步
 
 - 想开发插件？→ [03-plugin-development.md](03-plugin-development.md)
 - 想了解各模块源码？→ [04-core-modules.md](04-core-modules.md)
