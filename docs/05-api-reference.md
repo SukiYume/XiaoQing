@@ -792,7 +792,7 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
   "plugins": {
     "your_plugin_name": {
       "api_key": "your-api-key",
-      "base_url": "https://api.example.com"
+      "api_base": "https://api.example.com"
     }
   }
 }
