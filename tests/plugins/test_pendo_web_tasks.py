@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_build_task_overview_groups_focus_risk_and_recent_done():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_tasks_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_tasks_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-task-overview"
@@ -103,7 +103,7 @@ def test_tasks_page_source_uses_task_overview_and_view_toggle():
 
 
 def test_build_task_overview_loads_more_than_500_tasks():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_tasks_many_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_tasks_many_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-task-many"

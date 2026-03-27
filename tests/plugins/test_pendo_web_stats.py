@@ -41,7 +41,7 @@ def _load_stats_module():
 
 
 def test_ledger_stats_returns_expense_amount_histogram():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_stats_ledger_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_ledger_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-ledger-stats"
@@ -97,7 +97,7 @@ def test_ledger_stats_returns_expense_amount_histogram():
 
 
 def test_event_stats_filters_range_and_builds_weekday_slot_matrix():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_stats_event_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_event_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-event-stats"
@@ -144,7 +144,7 @@ def test_event_stats_filters_range_and_builds_weekday_slot_matrix():
 
 
 def test_task_stats_separates_created_and_completed_weeks():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_stats_task_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_task_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-task-stats"

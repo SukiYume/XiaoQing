@@ -48,7 +48,7 @@ class TestTokenGeneration:
             verify_token(tampered)
 
     def test_token_remains_valid_after_secret_cache_reset(self, monkeypatch):
-        temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_auth_{uuid.uuid4().hex}"
+        temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_auth_{uuid.uuid4().hex}"
         secret_file = temp_dir / "web_token_secret.txt"
         temp_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -66,7 +66,7 @@ class TestTokenGeneration:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_secret_file_is_reused(self, monkeypatch):
-        temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_auth_{uuid.uuid4().hex}"
+        temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_auth_{uuid.uuid4().hex}"
         secret_file = temp_dir / "web_token_secret.txt"
         temp_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -83,7 +83,7 @@ class TestTokenGeneration:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_generated_token_contains_expected_web_claims(self, monkeypatch):
-        temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_auth_{uuid.uuid4().hex}"
+        temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_auth_{uuid.uuid4().hex}"
         secret_file = temp_dir / "web_token_secret.txt"
         temp_dir.mkdir(parents=True, exist_ok=True)
         try:
