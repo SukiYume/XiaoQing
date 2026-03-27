@@ -20,6 +20,13 @@
 | OneBot 通信 | `onebot.py` | HTTP/WS 客户端 |
 | 服务器 | `server.py` | Inbound HTTP/WS 服务 |
 | 消息处理 | `message.py` | 消息解析工具 |
+| 参数解析 | `args.py` | 命令参数结构化解析（`ParsedArgs`） |
+| 运行指标 | `metrics.py` | 插件执行统计（`MetricsCollector`） |
+| 接口定义 | `interfaces.py` | Protocol 接口定义，降低耦合 |
+| 异常定义 | `exceptions.py` | 自定义异常类 |
+| 数据模型 | `models.py` | 通用数据模型 |
+| 时间工具 | `clock.py` | 时区感知的时间工具 |
+| 全局常量 | `constants.py` | 全局常量定义 |
 | 日志配置 | `logging_config.py` | 日志系统 |
 
 ---
@@ -697,30 +704,36 @@ async def watch(self):
 @dataclass
 class PluginContext:
     # 配置
-    config: Dict[str, Any]
-    secrets: Dict[str, Any]
-    
+    config: Dict[str, Any]          # config.json 完整内容
+    secrets: Dict[str, Any]         # secrets.json 完整内容
+
     # 路径
     plugin_name: str
     plugin_dir: Path
     data_dir: Path
-    
+
     # 工具
-    logger: logging.Logger
-    http_session: aiohttp.ClientSession
-    send_action: SendAction
-    
+    logger: _RequestLogger          # 自动附带 request_id 的日志记录器
+    http_session: aiohttp.ClientSession | None
+    send_action: SendAction         # 发送 OneBot Action 的回调
+    metrics: MetricsCollector | None  # 运行指标收集器
+
     # 回调
     reload_config: Callable
     reload_plugins: Callable
     list_commands: Callable
     list_plugins: Callable
-    
-    # 运行时
-    session_manager: Optional[SessionManager] = None
-    current_user_id: Optional[int] = None
-    current_group_id: Optional[int] = None
-    dispatcher: Optional[Dispatcher] = None
+
+    # 运行时（由 Dispatcher 注入）
+    session_manager: SessionManager | None = None
+    current_user_id: int | None = None
+    current_group_id: int | None = None
+    mute_control: MuteControl | None = None
+    config_manager: ConfigManagerLike | None = None
+    request_id: str | None = None
+
+    # 插件私有状态（当次请求生命周期）
+    state: Dict[str, Any] = field(default_factory=dict)
 ```
 
 ### 会话便捷方法
@@ -854,14 +867,32 @@ def ensure_dir(path: Path):
     path.mkdir(parents=True, exist_ok=True)
 
 def load_json(path: Path, default=None) -> Dict:
-    """加载 JSON"""
+    """加载 JSON（文件不存在时返回 default）"""
     if not path.exists():
         return default or {}
     return json.loads(path.read_text(encoding="utf-8"))
 
 def write_json(path: Path, data: Dict):
-    """写入 JSON"""
+    """写入 JSON（先写临时文件再原子替换）"""
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+def atomic_write_text(path: Path, payload: str) -> None:
+    """原子写入文本文件（避免写入中断导致文件损坏）"""
+    ...
+```
+
+### 长消息分割
+
+```python
+def split_message_segments(
+    segs: Segments,
+    max_length: int = 500,
+) -> list[Segments]:
+    """
+    将消息段列表按文本长度分割，用于防止超长消息被截断。
+    每个分片的文本总长度不超过 max_length。
+    """
+    ...
 ```
 
 ---
@@ -936,6 +967,66 @@ class InboundServer:
 ```
 
 
+
+---
+
+## args.py - 命令参数解析
+
+提供 `ParsedArgs` 类，用于将命令参数字符串结构化解析：
+
+```python
+from core.args import parse
+
+parsed = parse("add 完成报告 --cat=工作 -p 2")
+
+parsed.first          # "add"（第一个位置参数）
+parsed.second         # "完成报告"（第二个位置参数）
+parsed.get(2)         # ""（第三个位置参数，不存在返回空）
+parsed.rest(1)        # "完成报告"（从第 1 个参数开始拼接）
+parsed.opt("cat")     # "工作"（长选项值）
+parsed.opt("p")       # "2"（短选项值）
+parsed.has("dry-run") # False（检查 flag 是否存在）
+len(parsed)           # 2（位置参数数量）
+bool(parsed)          # True（参数字符串非空时为 True）
+```
+
+**支持格式**：
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| 位置参数 | `arg1 arg2` | `parsed.get(0)`, `parsed.first` |
+| 长选项有值 | `--key=value` 或 `--key value` | `parsed.opt("key")` |
+| 长选项标志 | `--flag` | `parsed.opt("flag") == "true"` |
+| 短选项有值 | `-k value` | `parsed.opt("k")` |
+| 引号包裹 | `"hello world"` | 视为单个 token |
+
+---
+
+## metrics.py - 运行指标
+
+`MetricsCollector` 收集插件执行统计，通过 `/metrics` 命令查看：
+
+```python
+# 插件可通过 context.metrics 访问
+if context.metrics:
+    stats = await context.metrics.get_summary()
+    # {
+    #   "total_requests": 1234,
+    #   "uptime": 3600.0,
+    #   "slow_plugins": [...],
+    #   "error_rate": 0.02,
+    # }
+```
+
+通常不需要手动调用，框架在每次命令执行后自动记录。`timed_async` 装饰器可用于自定义计时：
+
+```python
+from core.metrics import timed_async, get_metrics_collector
+
+@timed_async(get_metrics_collector(), "myplugin", "my_command")
+async def my_command_handler(...):
+    ...
+```
 
 ---
 

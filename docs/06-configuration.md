@@ -341,7 +341,8 @@ XiaoQing 使用两个 JSON 配置文件：
 
 在插件中访问：
 ```python
-api_key = context.secrets.get("myplugin", {}).get("api_key")
+plugin_cfg = context.secrets.get("plugins", {}).get("myplugin", {})
+api_key = plugin_cfg.get("api_key")
 ```
 
 #### xiaoqing_chat 配置
@@ -400,29 +401,44 @@ api_key = context.secrets.get("myplugin", {}).get("api_key")
 
 #### pendo 配置
 
+pendo 有两部分配置：**AI 解析**（日程智能解析需要）和**用户偏好**（通过 `/pendo settings` 命令设置）。
+
+AI 解析配置需要在 `secrets.json` 中填写：
+
 ```json
 {
   "plugins": {
     "pendo": {
-      "reminder_enabled": true,
-      "daily_briefing_time": "08:00",
-      "evening_briefing_time": "21:00",
-      "diary_reminder_time": "23:00",
-      "timezone": "Asia/Shanghai"
+      "api_base": "https://api.openai.com/v1",
+      "api_key": "sk-your-api-key",
+      "model": "gpt-4o-mini"
     }
   }
 }
 ```
 
-**配置项说明**：
+| 配置项 | 类型 | 说明 |
+|--------|------|------|
+| `api_base` | `string` | LLM API 基础 URL（用于日程 AI 解析） |
+| `api_key` | `string` | LLM API Key |
+| `model` | `string` | 使用的 LLM 模型 |
 
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|---------|------|
-| `reminder_enabled` | `boolean` | `true` | 是否启用提醒 |
-| `daily_briefing_time` | `string` | `"08:00"` | 每日简报时间 |
-| `evening_briefing_time` | `string` | `"21:00"` | 晚间简报时间 |
-| `diary_reminder_time` | `string` | `"23:00"` | 日记提醒时间 |
-| `timezone` | `string` | `"Asia/Shanghai"` | 时区 |
+**注意**：不配置 LLM 时，日程添加会回退到规则解析，其他功能不受影响。
+
+**Web 控制台认证**：
+
+pendo Web UI 使用 JWT Token 认证，无需手动配置密码。Token 由以下方式管理：
+
+```
+# 获取登录 Token（私聊发送，有效期 24 小时）
+/pendo web token
+
+# Token 签名密钥优先级：
+# 1. 环境变量 PENDO_WEB_TOKEN_SECRET
+# 2. plugins/pendo/data/web_token_secret.txt（首次运行自动生成）
+```
+
+用户偏好（时区、简报时间、日记提醒等）通过 `/pendo settings` 命令在运行时修改，存储于数据库，无需修改配置文件。
 
 #### qingssh 配置
 
@@ -668,6 +684,48 @@ tail -f logs/xiaoqing.log
 ## 下一步
 
 - 高级主题 → [07-advanced.md](07-advanced.md)
+
+---
+
+## pendo Web 控制台部署
+
+### 直接访问（默认）
+
+```bash
+/pendo web start           # 启动，默认 8080 端口
+/pendo web start port=9000 # 指定端口
+```
+
+访问 `http://localhost:8080`，使用 `/pendo web token` 获取的 Token 登录。
+
+### nginx 子路径反向代理
+
+如果希望将 pendo Web 部署在子路径 `/pendo`（而非根路径），可以配置 nginx。pendo Web 已内置对 `/pendo` 前缀的支持：
+
+```nginx
+# nginx.conf 片段
+location /pendo {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # WebSocket 支持（如需）
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+
+location /pendo/api {
+    proxy_pass http://127.0.0.1:8080/pendo/api;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
+
+**注意**：
+- pendo 的 API 路由统一使用 `/pendo/api/` 前缀，静态资源使用相对路径，与子路径部署兼容
+- 环境变量 `PENDO_WEB_TOKEN_SECRET` 可用于在多实例/重启场景下保持 Token 签名密钥稳定
 
 ---
 

@@ -410,7 +410,7 @@ return []
 ```python
 # 配置
 context.config       # Dict - config.json 内容
-context.secrets      # Dict - secrets.json 内容
+context.secrets      # Dict - secrets.json 完整内容
 
 # 路径
 context.plugin_name  # str - 插件名
@@ -418,12 +418,16 @@ context.plugin_dir   # Path - 插件目录 (plugins/myplugin/)
 context.data_dir     # Path - 数据目录 (plugins/myplugin/data/)
 
 # 工具
-context.logger       # Logger - 日志记录器
+context.logger       # Logger - 日志记录器（自动附带 request_id）
 context.http_session # aiohttp.ClientSession - HTTP 客户端
+context.metrics      # MetricsCollector | None - 运行指标收集器
 
 # 当前消息上下文
 context.current_user_id   # int | None
 context.current_group_id  # int | None
+
+# 插件私有状态（当次请求生命周期内有效，不跨请求持久化）
+context.state        # Dict[str, Any]
 ```
 
 ### 常用方法
@@ -623,6 +627,43 @@ is_muted = context.is_group_muted(group_id)
 # 获取剩余静音时间
 remaining = context.get_mute_remaining(group_id)
 ```
+
+---
+
+## 参数解析
+
+对于带参数的命令，`core.args` 模块提供了结构化解析：
+
+```python
+from core.args import parse
+
+async def handle(command: str, args: str, event: Dict, context) -> List:
+    # args = "add 完成报告 p:2 --cat=工作"
+    parsed = parse(args)
+
+    # 位置参数
+    sub = parsed.first          # "add"
+    content = parsed.rest(1)    # "完成报告 p:2"
+
+    # 选项（支持 --key=value 和 --key value 形式）
+    cat = parsed.opt("cat")     # "工作"
+
+    # 检查选项是否存在
+    if parsed.has("dry-run"):
+        ...
+
+    # 获取指定位置参数
+    idx = parsed.get(2, default="")
+```
+
+**支持的参数格式**：
+
+```
+/cmd arg1 arg2 --option=value --flag -f val
+              ↑ 长选项=值       ↑ 标志  ↑ 短选项+值
+```
+
+简单命令不需要 `parse()`，直接用字符串操作即可；当命令有多个可选参数或选项时，`parse()` 能避免手写分割逻辑。
 
 ---
 
@@ -826,18 +867,16 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ### 在插件中读取
 
+`context.secrets` 是完整的 `secrets.json` 内容，插件配置在 `plugins.<plugin_name>` 路径下：
+
 ```python
 async def handle(command: str, args: str, event: Dict, context) -> List:
-    # 方式一：直接访问
     plugin_config = context.secrets.get("plugins", {}).get("myplugin", {})
     api_key = plugin_config.get("api_key")
-    
-    # 方式二：使用 context.secrets（已自动提取 plugins 部分）
-    api_key = context.secrets.get("myplugin", {}).get("api_key")
-    
+
     if not api_key:
         return segments("错误：未配置 API Key")
-    
+
     # 使用配置
     ...
 ```
