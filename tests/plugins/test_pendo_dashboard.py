@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_dashboard_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_dashboard_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-dashboard"

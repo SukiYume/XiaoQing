@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 # Suppress logging during tests unless explicitly enabled
 logging.getLogger().setLevel(logging.WARNING)
 
-PROJECT_TMP_ROOT = ROOT / ".pytest_artifacts"
+PROJECT_TMP_ROOT = ROOT / ".pytest_cache"
 PROJECT_TMP_RUN_ROOT = PROJECT_TMP_ROOT / "tmp"
 
 
