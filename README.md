@@ -29,7 +29,7 @@
 
 ---
 
-## 🌟 当前项目里值得先看的两个模块
+## 🌟 核心插件
 
 <table>
 <tr>
@@ -76,9 +76,10 @@
 - Python `3.10+`（推荐 3.11）
 - 一个可用的 OneBot 实现 → 推荐 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)
 
-### 2️⃣ 安装依赖
+### 2️⃣ 克隆并安装依赖
 
 ```bash
+git clone https://github.com/SukiYume/XiaoQing.git
 cd XiaoQing
 pip install -r requirements.txt
 ```
@@ -101,9 +102,7 @@ pip install -r requirements.txt
   "enable_ws_client": false,
   "enable_inbound_server": true,
   "onebot_http_base": "http://127.0.0.1:11001",
-  "onebot_ws_uri": "ws://127.0.0.1:11000/ws",
   "inbound_http_base": "http://127.0.0.1:12000",
-  "inbound_ws_uri": "ws://127.0.0.1:12000/ws",
   "timezone": "Asia/Shanghai",
   "log_level": "INFO",
   "plugins": {
@@ -162,21 +161,7 @@ Inbound server started ...
 
 ---
 
-## 💬 消息处理模型
-
-### 私聊
-
-私聊消息默认都会进入框架处理。
-
-### 群聊
-
-群消息满足下列任一条件时会进入命令或闲聊流程：
-
-1. 以命令前缀开头，如 `/help`
-2. 包含机器人名字，如 `小青 你好`
-3. 命中随机回复概率 `random_reply_rate`
-
-### 🛠️ 常用内置命令
+## 🛠️ 常用内置命令
 
 | 命令 | 说明 |
 |------|------|
@@ -192,6 +177,20 @@ Inbound server started ...
 ## 🧩 常用插件
 
 ### 🧠 xiaoqing_chat
+
+> [!IMPORTANT]
+> xiaoqing_chat 依赖 LLM API 才能工作，需在 `config/secrets.json` 中配置（兼容 OpenAI 接口格式）：
+> ```json
+> {
+>   "plugins": {
+>     "xiaoqing_chat": {
+>       "api_key": "sk-xxx",
+>       "base_url": "https://api.openai.com/v1",
+>       "model": "gpt-4o-mini"
+>     }
+>   }
+> }
+> ```
 
 | 命令 | 说明 |
 |------|------|
@@ -367,11 +366,15 @@ pytest tests/plugins/test_xiaoqing_chat.py     # 单个测试文件
 <details>
 <summary><b>群聊不响应？</b></summary>
 
-优先检查：
-1. 消息是否以命令前缀开头
-2. 是否包含机器人名称
-3. 是否被静音（`/说话` 解除）
-4. 日志里是否有对应请求记录
+群消息满足下列任一条件才会进入处理流程：
+
+1. 以命令前缀开头，如 `/help`
+2. 包含机器人名字，如 `小青 你好`
+3. 命中随机回复概率 `random_reply_rate`
+
+其他排查：
+- 检查是否被静音（`/说话` 解除）
+- 查看日志里是否有对应请求记录
 
 </details>
 
