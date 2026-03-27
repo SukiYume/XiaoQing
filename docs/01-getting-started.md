@@ -23,6 +23,8 @@ pip install -r requirements.txt
 - `aiohttp` - 异步 HTTP
 - `websockets` - WebSocket 通信
 - `apscheduler` - 定时任务
+- `fastapi` + `uvicorn` - pendo Web 控制台服务器
+- `PyJWT` + `passlib[bcrypt]` - pendo Web 控制台身份验证
 
 ---
 
@@ -260,6 +262,22 @@ python main.py
 你: /ssh_exec server1 uptime
 机器人: [服务器执行结果...]
 ```
+
+### pendo Web 控制台测试
+
+pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器中可视化管理日程、待办、笔记、日记、记账等数据。
+
+```
+你: /pendo web start
+机器人: ✓ Web 控制台已启动，访问 http://localhost:8080
+
+你: /pendo web status
+机器人: 运行中 | 地址：http://localhost:8080
+```
+
+打开浏览器访问后，使用 `secrets.json` 中配置的管理员账号密码登录即可。
+
+如需使用 nginx 反向代理部署在子路径（如 `/pendo`），参见 [06-configuration.md](06-configuration.md) 中的 nginx 配置示例。
 
 ---
 
