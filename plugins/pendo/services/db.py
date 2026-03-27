@@ -499,6 +499,8 @@ class Database:
                     list(data.values()) + [iid, owner_id],
                 )
                 affected += cursor.rowcount
+                if cursor.rowcount > 0 and "remind_times" in updates:
+                    self._sync_reminder_logs(cursor, iid, updates.get("remind_times"))
                 needs_fts = needs_fts or bool(fts_fields & set(data.keys()))
 
             if needs_fts:
