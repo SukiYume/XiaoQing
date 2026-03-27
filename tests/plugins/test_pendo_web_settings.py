@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_user_settings_round_trip_parses_and_merges_settings_json():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_settings_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_settings_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-settings"
@@ -106,7 +106,7 @@ def test_normalize_settings_json_coerces_string_booleans_safely():
 
 
 def test_resolve_default_category_prefers_user_setting():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_settings_default_category_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_settings_default_category_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-settings-category"
@@ -119,7 +119,7 @@ def test_resolve_default_category_prefers_user_setting():
 
 
 def test_user_settings_normalizes_legacy_daily_report_enabled_key():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_settings_legacy_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_settings_legacy_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-settings-legacy"
@@ -139,7 +139,7 @@ def test_user_settings_normalizes_legacy_daily_report_enabled_key():
 
 
 def test_save_user_setting_updates_dict_backed_settings_json():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_settings_save_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_settings_save_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-settings-save"
@@ -161,7 +161,7 @@ def test_save_user_setting_updates_dict_backed_settings_json():
 
 
 def test_default_settings_enable_reminder_briefing_and_privacy():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_settings_defaults_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_settings_defaults_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-settings-defaults"
@@ -176,7 +176,7 @@ def test_default_settings_enable_reminder_briefing_and_privacy():
 
 
 def test_web_saved_settings_reflect_in_plugin_settings_output():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_settings_plugin_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_settings_plugin_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-settings-plugin"
@@ -206,7 +206,7 @@ def test_web_saved_settings_reflect_in_plugin_settings_output():
 
 
 def test_plugin_settings_defaults_match_config_defaults():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_settings_config_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_settings_config_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-settings-config"

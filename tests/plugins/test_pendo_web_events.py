@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_build_events_overview_supports_milestones_recurring_and_reminder_filters():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_events_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-events"
@@ -104,7 +104,7 @@ def test_build_events_overview_supports_milestones_recurring_and_reminder_filter
 
 
 def test_build_event_detail_includes_reminder_logs_and_related_instances():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_event_detail_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_detail_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-event-detail"
@@ -148,7 +148,7 @@ def test_build_event_detail_includes_reminder_logs_and_related_instances():
 
 
 def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_events_visible_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_visible_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-events-visible"

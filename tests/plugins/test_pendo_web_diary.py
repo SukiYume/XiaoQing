@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_diary_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_diary_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-diary-overview"

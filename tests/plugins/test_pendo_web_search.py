@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_database_search_items_matches_additional_text_fields():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_search_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_search_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-search"

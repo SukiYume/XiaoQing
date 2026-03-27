@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_database_get_items_supports_ledger_category_filter():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_web_items_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_items_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-ledger"
@@ -275,7 +275,7 @@ def test_event_validation_rejects_invalid_merged_update_values():
 
 
 def test_event_reminder_log_sync_prunes_removed_reminders_and_deletes_on_item_delete():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_event_reminder_sync_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_event_reminder_sync_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-event-sync"
@@ -308,7 +308,7 @@ def test_event_reminder_log_sync_prunes_removed_reminders_and_deletes_on_item_de
 
 
 def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_ledger_insights_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_insights_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-insights"
@@ -384,7 +384,7 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
 
 
 def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
-    temp_dir = ROOT / ".pytest_tmp" / f"pendo_ledger_year_compare_{uuid.uuid4().hex}"
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_year_compare_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-year-compare"
