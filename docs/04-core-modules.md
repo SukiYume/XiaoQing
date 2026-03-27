@@ -1,10 +1,13 @@
-# 04 - 核心模块详解
+# ⚙️ 04 - 核心模块详解
 
 本章深入分析 XiaoQing 核心模块的源码实现。
 
+> [!NOTE]
+> 本章面向框架开发者。如果你只是写插件，[03-plugin-development.md](03-plugin-development.md) 和 [05-api-reference.md](05-api-reference.md) 更适合你。
+
 ---
 
-## 模块概览
+## 📋 模块概览
 
 | 模块 | 文件 | 职责 |
 |------|------|------|
@@ -31,7 +34,7 @@
 
 ---
 
-## app.py - 应用主类
+## 🏠 app.py — 应用主类
 
 ### 核心结构
 
@@ -136,7 +139,7 @@ def is_admin(self, user_id: Optional[int]) -> bool:
 
 ---
 
-## dispatcher.py - 消息分发器
+## 🔀 dispatcher.py — 消息分发器
 
 ### 核心逻辑
 
@@ -544,7 +547,7 @@ def get_mute_remaining(self, group_id: int) -> Optional[float]:
 
 ---
 
-## router.py - 命令路由
+## 🗺️ router.py — 命令路由
 
 ### 数据结构
 
@@ -599,7 +602,7 @@ class CommandRouter:
 
 ---
 
-## plugin_manager.py - 插件管理
+## 📦 plugin_manager.py — 插件管理
 
 ### 数据结构
 
@@ -696,7 +699,7 @@ async def watch(self):
 
 ---
 
-## context.py - 插件上下文
+## 🔧 context.py — 插件上下文
 
 ### 完整结构
 
@@ -761,7 +764,7 @@ async def end_session(self) -> bool:
 
 ---
 
-## session.py - 会话管理
+## 💬 session.py — 会话管理
 
 ### Session 类
 
@@ -826,7 +829,7 @@ class SessionManager:
 
 ---
 
-## plugin_base.py - 插件工具
+## 🛠️ plugin_base.py — 插件工具
 
 ### 消息段构建
 
@@ -897,7 +900,7 @@ def split_message_segments(
 
 ---
 
-## onebot.py - OneBot 通信
+## 🔗 onebot.py — OneBot 通信
 
 ### HTTP 发送器
 
@@ -936,7 +939,7 @@ class OneBotWsClient:
 
 ---
 
-## server.py - Inbound 服务器
+## 🖥️ server.py — Inbound 服务器
 
 ```python
 class InboundServer:
@@ -970,7 +973,7 @@ class InboundServer:
 
 ---
 
-## args.py - 命令参数解析
+## 🔍 args.py — 命令参数解析
 
 提供 `ParsedArgs` 类，用于将命令参数字符串结构化解析：
 
@@ -1002,7 +1005,7 @@ bool(parsed)          # True（参数字符串非空时为 True）
 
 ---
 
-## metrics.py - 运行指标
+## 📊 metrics.py — 运行指标
 
 `MetricsCollector` 收集插件执行统计，通过 `/metrics` 命令查看：
 
@@ -1030,7 +1033,7 @@ async def my_command_handler(...):
 
 ---
 
-## 下一步
+## ➡️ 下一步
 
 - API 完整参考 → [05-api-reference.md](05-api-reference.md)
 - 配置详解 → [06-configuration.md](06-configuration.md)
