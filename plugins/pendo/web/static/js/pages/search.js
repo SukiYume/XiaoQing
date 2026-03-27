@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
 import { formatDateTime, previewText } from '../utils/format.js';
-import { escapeHtml, injectStyles, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-search-redesign-styles';
 
@@ -98,7 +98,7 @@ function groupedResults() {
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('search-shell')}
+        ${pageShellCss('search-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.SEARCH })}
         .search-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
             padding: 24px 26px; border-radius: 28px; margin-bottom: 18px;
@@ -179,13 +179,12 @@ function ensureStyles() {
             border: 1px dashed rgba(148,163,184,0.28); color: var(--color-text-secondary);
         }
         .search-empty-icon { font-size: 40px; margin-bottom: 10px; }
-        @media (max-width: 820px) {
-            .search-shell { padding: 20px 16px 30px; }
+        ${mediaMax(BREAKPOINTS.SEARCH, `
             .search-hero, .search-query-bar, .search-summary { grid-template-columns: 1fr; }
             .search-query-meta { justify-content: flex-start; }
             .search-card { grid-template-columns: auto minmax(0, 1fr); }
             .search-card-arrow { display: none; }
-        }
+        `)}
     `);
 }
 

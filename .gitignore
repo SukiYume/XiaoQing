@@ -48,8 +48,7 @@ plugins/minecraft/config.json
 *.ipynb
 
 # 测试
-.pytest_cache/
-.pytest_tmp/
+.pytest_*
 .coverage
 htmlcov/
 *cache/
@@ -61,6 +60,8 @@ htmlcov/
 Thumbs.db
 .agent
 .claude
+docs/plans/
+docs/superpowers/
 
 # 数据文件
 plugins/*/data/

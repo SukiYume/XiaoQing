@@ -1,8 +1,0 @@
-.chart-container { position: relative; width: 100%; margin-bottom: 24px; }
-.chart-container canvas { width: 100% !important; }
-.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-.chart-card { background: var(--color-surface); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); border: 1px solid var(--color-border); }
-.chart-card h3 { margin: 0 0 16px; font-size: 16px; color: var(--color-text); }
-.chart-download { position: absolute; top: 12px; right: 12px; cursor: pointer; opacity: 0.5; transition: opacity var(--transition); }
-.chart-download:hover { opacity: 1; }
-@media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }

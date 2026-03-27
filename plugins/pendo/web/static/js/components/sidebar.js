@@ -15,6 +15,11 @@ const BOTTOM_ITEMS = [
 ];
 
 export function renderSidebar(container) {
+    const backdrop = document.createElement('button');
+    backdrop.type = 'button';
+    backdrop.className = 'sidebar-backdrop';
+    backdrop.setAttribute('aria-label', '关闭导航菜单');
+
     const sidebar = document.createElement('aside');
     sidebar.className = 'sidebar';
 
@@ -56,7 +61,27 @@ export function renderSidebar(container) {
     });
 
     sidebar.appendChild(nav);
+    container.appendChild(backdrop);
     container.appendChild(sidebar);
+
+    const setMobileOpen = (open) => {
+        const mobile = window.matchMedia('(max-width: 768px)').matches;
+        const shouldOpen = mobile && open;
+        sidebar.classList.toggle('mobile-open', shouldOpen);
+        backdrop.classList.toggle('visible', shouldOpen);
+        document.body.classList.toggle('sidebar-open', shouldOpen);
+    };
+
+    backdrop.addEventListener('click', () => setMobileOpen(false));
+    document.addEventListener('pendo:toggle-sidebar', () => {
+        const isOpen = sidebar.classList.contains('mobile-open');
+        setMobileOpen(!isOpen);
+    });
+    window.addEventListener('resize', () => {
+        if (window.innerWidth > 768) {
+            setMobileOpen(false);
+        }
+    });
 
     // Track active route
     onRouteChange(path => {
@@ -64,6 +89,9 @@ export function renderSidebar(container) {
             const isActive = el.dataset.path === path;
             el.classList.toggle('active', isActive);
         });
+        if (window.innerWidth <= 768) {
+            setMobileOpen(false);
+        }
     });
 }
 

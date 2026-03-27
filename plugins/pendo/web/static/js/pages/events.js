@@ -3,7 +3,7 @@ import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { isValidDateInput } from '../utils/format.js';
-import { escapeHtml, injectStyles, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-events-redesign-styles';
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -150,7 +150,7 @@ function restoreScrollPosition(scrollY) {
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('events-page', { padding: '26px 24px 34px' })}
+        ${pageShellCss('events-page', { padding: '26px 24px 34px', compactPadding: '20px 16px 28px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .events-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
             padding: 22px 24px; border-radius: 24px; margin-bottom: 18px;
@@ -395,11 +395,11 @@ function ensureStyles() {
             font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); padding: 10px 12px;
             border-radius: 14px; background: rgba(248,250,252,0.78); border: 1px solid rgba(226,232,240,0.92);
         }
-        @media (max-width: 1100px) {
+        ${mediaMax(BREAKPOINTS.EVENTS_WIDE, `
             .events-grid { grid-template-columns: 1fr; }
             .events-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-        @media (max-width: 840px) {
+        `)}
+        ${mediaMax(BREAKPOINTS.EVENTS, `
             .events-calendar-cell { min-height: 96px; }
             .events-calendar-count { display: none; }
             .events-calendar-items { display: none; }
@@ -407,9 +407,8 @@ function ensureStyles() {
             .events-timeline-item { grid-template-columns: 58px 14px minmax(0, 1fr); }
             .events-timeline-item > :last-child { display: none; }
             .events-timeline-day-marker { grid-template-columns: 58px 14px minmax(0, 1fr); }
-        }
-        @media (max-width: 720px) {
-            .events-page { padding: 20px 16px 28px; }
+        `)}
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .events-hero { grid-template-columns: 1fr; }
             .events-hero-actions { justify-content: flex-start; }
             .events-filters, .events-editor-grid { grid-template-columns: 1fr; }
@@ -436,8 +435,8 @@ function ensureStyles() {
             .events-timeline-item { grid-template-columns: 52px 14px minmax(0, 1fr); gap: 8px; }
             .events-timeline-time { padding-top: 8px; font-size: 11px; }
             .events-timeline-card { padding: 9px 10px; }
-        }
-        @media (max-width: 560px) {
+        `)}
+        ${mediaMax(BREAKPOINTS.PHONE, `
             .events-summary-chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .events-summary-chip { width: 100%; justify-content: center; padding: 0 8px; font-size: 10px; }
             .events-weekday { font-size: 10px; letter-spacing: 0; }
@@ -447,7 +446,7 @@ function ensureStyles() {
             .events-calendar-compact { justify-content: flex-start; }
             .events-calendar-summary { min-height: 22px; padding: 0 7px; font-size: 10px; }
             .events-calendar-summary-text { display: none; }
-        }
+        `)}
     `);
 }
 

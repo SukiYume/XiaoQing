@@ -6,7 +6,7 @@ import { renderPagination } from '../components/pagination.js';
 import { renderLedgerInsightsPanel } from '../components/ledger_insights.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { isoDate, isValidDateInput, todayStr as sharedTodayStr } from '../utils/format.js';
-import { injectStyles, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -188,7 +188,7 @@ async function fetchInsights() {
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('ledger-page')}
+        ${pageShellCss('ledger-page', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .ledger-hero {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
@@ -265,12 +265,12 @@ function ensureStyles() {
             grid-template-columns: repeat(3, 1fr);
             gap: 14px;
         }
-        @media (max-width: 1120px) {
+        ${mediaMax(BREAKPOINTS.WIDE, `
             .ledger-summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-        @media (max-width: 760px) {
+        `)}
+        ${mediaMax(BREAKPOINTS.NARROW, `
             .ledger-summary-cards { grid-template-columns: 1fr; }
-        }
+        `)}
         .ledger-summary-card {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,249,247,0.94));
             border: 1px solid rgba(239,68,68,0.12);
@@ -653,6 +653,13 @@ function ensureStyles() {
         .ledger-filter-item--amount {
             flex: 0 1 auto;
         }
+        .ledger-filter-item--amount .ledger-filter-controls {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+        }
         .ledger-filter-bar label {
             font-size: 11px;
             font-weight: 800;
@@ -670,13 +677,21 @@ function ensureStyles() {
             flex-wrap: wrap;
         }
         .ledger-filter-range {
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: 8px;
             min-width: 0;
-            flex-wrap: nowrap;
+            flex-wrap: wrap;
+            flex: 1 0 100%;
+            width: auto;
+            margin-top: 4px;
         }
-        .ledger-filter-date { width: 108px; }
+        .ledger-filter-range-sep {
+            font-size: 12px;
+            color: var(--color-text-secondary);
+            flex: 0 0 auto;
+        }
+        .ledger-filter-date { width: 108px; flex: 0 0 108px; }
         .ledger-filter-direction { width: 124px; }
         .ledger-filter-category { width: 124px; }
         .ledger-amount-input,
@@ -693,21 +708,23 @@ function ensureStyles() {
             transition: border-color .15s, background .15s, box-shadow .15s;
         }
         .ledger-filter-bar .ledger-amount-input {
-            width: 110px;
-            min-width: 110px;
-            flex: 0 0 110px;
+            width: 100%;
+            min-width: 0;
+            flex: 1 1 0;
         }
         .ledger-amount-input::-webkit-outer-spin-button,
         .ledger-amount-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         .ledger-amount-input { -moz-appearance: textfield; }
         .ledger-filter-bar .ledger-custom-date-input {
-            width: 136px;
+            width: 144px;
             min-width: 0;
-            flex: 0 0 136px;
+            flex: 0 1 144px;
         }
         .ledger-range-apply {
             height: 36px;
             padding: 0 14px;
+            min-width: 64px;
+            white-space: nowrap;
             border: 1px solid rgba(239,68,68,0.2);
             border-radius: 18px;
             background: rgba(239,68,68,0.06);
@@ -754,7 +771,7 @@ function ensureStyles() {
         }
         .ledger-quick-add .pselect-label { min-width: 0; }
         .ledger-quick-add .pselect-panel { border-radius: 16px; z-index: 1200; }
-        @media (max-width: 980px) {
+        ${mediaMax(BREAKPOINTS.FORM, `
             .ledger-controls-grid {
                 grid-template-columns: 1fr;
             }
@@ -770,11 +787,8 @@ function ensureStyles() {
                     "date date"
                     "submit submit";
             }
-        }
-        @media (max-width: 720px) {
-            .ledger-page {
-                padding: 20px 16px 30px;
-            }
+        `)}
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .ledger-hero {
                 grid-template-columns: 1fr;
                 padding: 22px 20px;
@@ -807,10 +821,20 @@ function ensureStyles() {
                 width: 100%;
                 flex-wrap: wrap;
             }
+            .ledger-filter-item--amount .ledger-filter-controls {
+                grid-template-columns: 1fr;
+            }
             .ledger-filter-date,
             .ledger-filter-direction,
             .ledger-filter-category {
                 width: 100%;
+            }
+            .ledger-filter-range {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .ledger-filter-range-sep {
+                display: none;
             }
             .ledger-filter-bar .ledger-custom-date-input,
             .ledger-filter-bar .ledger-amount-input {
@@ -818,8 +842,11 @@ function ensureStyles() {
                 min-width: 0;
                 flex: 1 1 100%;
             }
-        }
-        @media (max-width: 560px) {
+            .ledger-range-apply {
+                width: 100%;
+            }
+        `)}
+        ${mediaMax(BREAKPOINTS.PHONE, `
             .ledger-quick-add {
                 grid-template-columns: 1fr;
                 grid-template-areas:
@@ -833,7 +860,7 @@ function ensureStyles() {
             .ledger-summary-value {
                 font-size: 26px;
             }
-        }
+        `)}
 
         /* Date group list */
         .ledger-date-group { margin-bottom: 12px; }
@@ -1040,7 +1067,7 @@ function renderFilterBar() {
                     ${renderCustomSelect({ id: 'filter-date', options: dateOptions, selected: _dateFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-date' })}
                     <div class="ledger-filter-range" id="filter-custom-range" style="${customVisible}">
                         <input type="text" class="ledger-custom-date-input" id="filter-date-start" value="${_customDateStart}" inputmode="numeric" placeholder="YYYY-MM-DD">
-                        <span style="font-size:12px;color:var(--color-text-secondary);">—</span>
+                        <span class="ledger-filter-range-sep">至</span>
                         <input type="text" class="ledger-custom-date-input" id="filter-date-end" value="${_customDateEnd}" inputmode="numeric" placeholder="YYYY-MM-DD">
                         <button type="button" class="ledger-range-apply" id="filter-date-apply">应用</button>
                     </div>
@@ -1239,7 +1266,7 @@ function attachListeners() {
             _dateFilter = val;
             _page = 1;
             const group = _container.querySelector('#filter-custom-range');
-            if (group) group.style.display = val === 'custom' ? 'flex' : 'none';
+            if (group) group.style.display = val === 'custom' ? 'grid' : 'none';
             if (val === 'custom') {
                 // Pre-fill with last 30 days so inputs show dates instead of 年/月/日
                 if (!_customDateStart || !_customDateEnd) {

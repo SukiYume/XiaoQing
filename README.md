@@ -1,87 +1,110 @@
-# XiaoQing - Python 异步 QQ 机器人框架
+# XiaoQing
 
-基于 **OneBot 协议** 和 **Python 3.10+ 异步** 的轻量级 QQ 机器人框架。
+基于 **OneBot 协议**、**Python 异步运行时** 和 **插件系统** 的 QQ 机器人框架。
+项目既可以作为一个轻量机器人宿主使用，也可以作为个人信息管理与自动化平台扩展，当前内置了 `xiaoqing_chat`、`pendo`、`qingssh`、`jupyter`、`qingpet` 等多类插件。
 
-**核心特性**：
-- ✅ **快速上手** - 5 分钟完成配置启动
-- ✅ **智能对话** - 内置 **向量记忆** 与 **行为规划**，拒绝机械回复
-- ✅ **插件化** - 每个功能独立开发，支持热重载，生态丰富
-- ✅ **多轮对话** - 内置会话管理支持复杂交互（如游戏、多步骤）
-- ✅ **定时任务** - APScheduler 支持 cron 表达式
-- ✅ **安全可靠** - Token 鉴权、管理员权限、并发控制
-- 📚 **文档完善** - [完整文档](docs/README.md) 覆盖架构到高级功能
-- ✅ **异步优先** - 100% 异步设计，高效并发处理
+## 亮点
 
-**🎉 最新更新 (V3.3.0)**:
-- ✨ **pendo Web 控制台** - FastAPI + 原生 JS SPA，支持浏览器访问；九大页面（Dashboard、任务、事件、账本、日记、笔记、搜索、统计、设置），JWT 鉴权，Chart.js 可视化图表
-- ✨ **pendo 账本 UX 重设计** - 筛选、排序、分页、快速录入全面升级
-- 🔧 **依赖补全** - 根目录 requirements.txt 补入 PyJWT / FastAPI / uvicorn / passlib，CI 全平台通过
+- **异步优先**：核心消息处理、HTTP、调度都围绕 `asyncio` 构建。
+- **插件化架构**：每个插件独立目录、独立配置、独立数据目录，支持热重载。
+- **命令 + 闲聊双通路**：既支持 `/command` 风格命令，也支持自然对话和 URL 自动解析。
+- **多轮会话**：框架内建会话管理，适合游戏、表单、分步输入等交互。
+- **定时任务**：插件可在 `plugin.json` 中直接声明调度任务。
+- **Pendo Web 控制台**：个人管理插件 `pendo` 提供完整 Web UI，覆盖总览、日程、待办、账本、笔记、日记、搜索、统计、设置。
+- **面向真实部署**：支持 OneBot 被动推送和 WebSocket 主动连接两种模式。
 
-**文档索引**：
-- [快速入门](docs/01-getting-started.md)
-- [插件开发指南](docs/03-plugin-development.md)
+## 当前项目里值得先看的两个模块
+
+- **[xiaoqing_chat](plugins/xiaoqing_chat)**
+  面向聊天体验的主插件，包含记忆、回复检查、行为规划、表达系统等能力。
+
+- **[pendo](plugins/pendo)**
+  个人时间与信息管理中枢，聊天端和 Web 端共用一套数据模型。
+
+## 文档入口
+
+- [开发文档总览](docs/README.md)
+- [快速开始](docs/01-getting-started.md)
 - [核心架构](docs/02-architecture.md)
+- [插件开发指南](docs/03-plugin-development.md)
 - [消息流程](docs/08-message-flow.md)
-- [插件列表](docs/09-plugins.md)
+- [内置插件列表](docs/09-plugins.md)
 
 ---
 
-## 快速开始（5 分钟）
+## 快速开始
 
 ### 1. 环境要求
-- **Python 3.10+**
-- **OneBot 服务**（推荐 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)）
 
-### 2. 安装
+- Python `3.10+`
+- 一个可用的 OneBot 实现
+  推荐 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)
+
+### 2. 安装依赖
 
 ```bash
 cd XiaoQing
 pip install -r requirements.txt
 ```
 
+如果你需要 `pendo` 的 Web UI，`requirements.txt` 已经包含 `fastapi`、`uvicorn`、`PyJWT`、`passlib[bcrypt]` 等依赖。
+
 ### 3. 配置
 
-复制示例配置：
-```bash
-cp config/config.json config/config.json.bak  # 备份
-# 编辑 config/config.json，主要改这些：
-```
+项目默认读取：
 
-**config/config.json** - 关键配置：
+- [config/config.json](config/config.json)
+- `config/secrets.json`
+
+一个最小可运行的配置大致如下：
+
 ```json
 {
-  "bot_name": "小青",           // 机器人名称（群聊触发用）
-  "command_prefixes": ["/"],    // 命令前缀
+  "bot_name": "小青",
+  "command_prefixes": ["/"],
+  "require_bot_name_in_group": true,
+  "random_reply_rate": 0.05,
+  "enable_ws_client": false,
+  "enable_inbound_server": true,
+  "onebot_http_base": "http://127.0.0.1:11001",
+  "onebot_ws_uri": "ws://127.0.0.1:11000/ws",
   "inbound_http_base": "http://127.0.0.1:12000",
   "inbound_ws_uri": "ws://127.0.0.1:12000/ws",
-  "onebot_http_base": "http://127.0.0.1:11001",  // OneBot API 地址
-  "log_level": "INFO"
+  "timezone": "Asia/Shanghai",
+  "log_level": "INFO",
+  "plugins": {
+    "smalltalk_provider": "xiaoqing_chat"
+  }
 }
 ```
 
-**config/secrets.json** - 敏感信息：
+`config/secrets.json` 至少应包含：
+
 ```json
 {
-  "inbound_token": "your-secret-token",  // 与 OneBot 通信的密钥
-  "admin_user_ids": [123456789],         // 管理员 QQ
+  "inbound_token": "your-secret-token",
+  "admin_user_ids": [123456789],
   "plugins": {}
 }
 ```
 
 ### 4. 连接 OneBot
 
-**推荐：被动模式**（OneBot 主动推送消息给 XiaoQing）
+#### 推荐：被动模式
 
-在 OneBot 配置文件中添加：
+由 OneBot 主动把消息推送给 XiaoQing：
+
 ```yaml
-# NapCat 示例
 http:
   post:
     - url: http://127.0.0.1:12000/event
       secret: your-secret-token
 ```
 
-或者 **主动模式**：XiaoQing 连接 OneBot WebSocket
+#### 可选：主动 WebSocket 模式
+
+由 XiaoQing 主动连接 OneBot：
+
 ```json
 {
   "enable_ws_client": true,
@@ -96,71 +119,134 @@ http:
 python main.py
 ```
 
-看到这些日志说明启动成功：
-```
-INFO - XiaoQing starting...
-INFO - Loaded plugin: bot_core
-INFO - Loaded plugin: echo
-INFO - Inbound server started on 127.0.0.1:12000
+正常启动后，日志中通常会看到：
+
+```text
+Loaded plugin bot_core
+Loaded plugin xiaoqing_chat
+Inbound server started ...
 ```
 
 ---
 
-## 基本使用
+## 消息处理模型
 
-### 命令触发规则
+### 私聊
 
-**私聊**：所有消息都会处理
+私聊消息默认都会进入框架处理。
 
-**群聊**：需满足以下之一
-1. 消息以命令前缀开头 → `/help`
-2. 消息包含机器人名称 → `小青 你好`  
-3. 随机触发 → 按 `random_reply_rate` 概率
+### 群聊
 
-### 内置命令
+群消息满足下列任一条件时会进入命令或闲聊流程：
+
+1. 以命令前缀开头，如 `/help`
+2. 包含机器人名字，如 `小青 你好`
+3. 命中随机回复概率 `random_reply_rate`
+
+### 常用内置命令
 
 | 命令 | 说明 |
 |------|------|
-| `/help` | 查看所有可用命令 |
-| `/plugins` | 列出已加载插件 |
+| `/help` | 查看命令帮助 |
+| `/plugins` | 查看已加载插件 |
 | `/reload <name>` | 重载指定插件 |
-| `/echo <text>` | 测试回复 |
-| `/猜数字` | 多轮对话游戏 |
-| `/mute <分钟>` | 静音机器人（群聊） |
-
-### 常用插件命令
-
-| 插件 | 命令 | 说明 |
-|------|------|------|
-| xiaoqing_chat | `/xc <内容>` | 和小青智能聊天 |
-| qingpet | `/宠物 help` | QQ 群宠物功能 |
-| pendo | `/pendo event add` | 添加日程 |
-| pendo | `/pendo todo add` | 添加待办 |
-| pendo | `/pendo web start` | 启动 Web 控制台 |
-| qingssh | `/ssh <服务器>` | SSH 远程连接 |
-| jupyter | `/py <代码>` | 执行 Python 代码 |
-| astro_tools | `/astro <子命令>` | 天文计算工具 |
-| ads_paper | `/paper search` | 搜索论文 |
-| github | `/gh` | GitHub 热门项目 |
-
-### 查看日志
-
-```bash
-tail -f logs/xiaoqing.log          # 实时日志
-cat logs/xiaoqing_error.log        # 错误日志
-```
+| `/闭嘴 [分钟/1h]` | 群内静音机器人 |
+| `/说话` | 解除静音 |
+| `/metrics` | 查看运行指标 |
 
 ---
 
-## 插件开发（10 分钟）
+## 常用插件
 
-### 最简单的插件
+### xiaoqing_chat
+
+| 命令 | 说明 |
+|------|------|
+| `/xc <内容>` | 智能对话 |
+| `/xc help` | 查看聊天插件帮助 |
+| `/xc reset` | 清空当前会话 |
+| `/xc stats` | 查看聊天状态 |
+
+### pendo
+
+| 命令 | 说明 |
+|------|------|
+| `/pendo event add 明天9点开会` | 添加日程 |
+| `/pendo todo add 写报告 cat:工作 p:2` | 添加待办 |
+| `/pendo note add 记录想法 #工作` | 添加笔记 |
+| `/pendo diary` | 进入日记模板流程 |
+| `/pendo search 关键词` | 跨模块搜索 |
+| `/pendo web start` | 启动 Pendo Web 控制台 |
+| `/pendo web token` | 获取 Web 登录令牌 |
+
+### 其他内置插件
+
+- `qingssh`：远程 SSH 管理
+- `jupyter`：执行 Python / Notebook 相关操作
+- `qingpet`：群宠物系统
+- `apod`：每日天文图
+- `astro_tools`：天文计算工具
+- `ads_paper` / `arxiv_filter`：论文相关工具
+
+---
+
+## Pendo Web 控制台
+
+Pendo 不只是聊天命令，它现在也是项目里最完整的浏览器控制台。
+
+### 启动与访问
+
+```bash
+/pendo web start
+/pendo web start port=9000
+/pendo web status
+/pendo web stop
+/pendo web token
+```
+
+### 登录方式
+
+Pendo Web 不是账号密码登录，而是 **Token 登录**。
+
+基本流程：
+
+1. 在聊天里执行 `/pendo web start`
+2. 执行 `/pendo web token`
+3. 打开浏览器访问返回的地址
+4. 在登录页粘贴 Token 进入
+
+### 当前 Web 页面
+
+- 总览
+- 日程
+- 待办
+- 账本
+- 笔记
+- 日记
+- 搜索
+- 统计
+- 设置
+
+当前 Web UI 使用 **FastAPI + 原生 JS + CSS**，图表主要是原生 SVG 和定制组件，不依赖传统后台模板。
+
+---
+
+## 插件开发
+
+一个插件最少需要两个文件：
+
+- `plugin.json`
+- `main.py`
+
+### 最小插件示例
 
 **plugins/myplugin/plugin.json**
+
 ```json
 {
   "name": "myplugin",
   "version": "1.0.0",
+  "description": "示例插件",
   "entry": "main.py",
   "commands": [
     {
@@ -169,214 +255,73 @@ cat logs/xiaoqing_error.log        # 错误日志
       "help": "打个招呼",
       "admin_only": false
     }
-  ]
+  ],
+  "schedule": []
 }
 ```
 
 **plugins/myplugin/main.py**
+
 ```python
-from typing import Any, Dict, List
-from core.plugin_base import segments
+from typing import Any
 
-# 支持相对导入（推荐）
-# from .config import SETTINGS
 
-async def handle(
-    command: str,       # 命令名（如 "hello"）
-    args: str,          # 命令参数（如 "世界"）
-    event: Dict,        # 原始 OneBot 事件
-    context             # 插件上下文
-) -> List[Dict[str, Any]]:
-    """处理 /hello 命令"""
+async def handle(command: str, args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     name = args.strip() or "世界"
-    return segments(f"你好，{name}！")
+    return [{"type": "text", "data": {"text": f"你好，{name}！"}}]
 ```
 
-重启 XiaoQing：
-```bash
-# 方式1：重启进程
-python main.py
-
-# 方式2：发送命令（每 2s 自动热重载，或手动重载）
-/reload myplugin
-```
-
-### PluginContext 常用方法
+### 可选生命周期
 
 ```python
-async def handle(command: str, args: str, event: Dict, context) -> List:
-    # 日志
-    context.logger.info(f"处理命令: {command}")
-    
-    # HTTP 请求
-    async with context.http_session.get("https://api.example.com") as resp:
-        data = await resp.json()
-    
-    # 配置/密钥
-    api_key = context.secrets.get("myplugin", {}).get("api_key")
-    
-    # 文件存储（自动创建 plugins/myplugin/data/）
-    data_file = context.data_dir / "data.json"
-    
-    # 判断管理员
-    user_id = event.get("user_id")
-    group_id = event.get("group_id")
-    admin_ids = context.secrets.get("admin_user_ids", [])
-    if user_id not in admin_ids:
-        return segments("需要管理员权限")
-    
-    return segments("处理完成")
+def init(context=None) -> None:
+    pass
+
+
+async def shutdown(context) -> None:
+    pass
 ```
 
-### 消息构建
+### 会话处理
+
+如果插件需要多轮交互，可以实现：
 
 ```python
-from core.plugin_base import text, image, image_url, segments
-
-# 纯文本
-return segments("Hello")
-
-# 文本 + 图片
-return [
-    text("请看图片："),
-    image_url("https://example.com/pic.jpg")
-]
-
-# 多条消息
-return [
-    text("第一行"),
-    text("第二行")
-]
+async def handle_session(text: str, event: dict, context, session):
+    ...
 ```
 
-### 多轮对话（会话）
+### URL 解析
 
-某些交互需要记录用户状态。示例：猜数字游戏
+如果插件希望自动处理消息中的 URL，可以实现：
 
-**plugins/guess/main.py**
 ```python
-import random
-from core.plugin_base import segments
-
-async def handle(command: str, args: str, event: Dict, context) -> List:
-    """开始游戏，创建会话"""
-    session = await context.create_session(
-        initial_data={"target": random.randint(1, 100), "attempts": 7},
-        timeout=180  # 3 分钟过期
-    )
-    return segments("🎮 想好了吗？我在 1-100 之间想了一个数字，你猜猜看")
-
-async def handle_session(text: str, event: Dict, context, session) -> List:
-    """处理用户在游戏中的猜测"""
-    try:
-        guess = int(text.strip())
-    except ValueError:
-        return segments("请输入一个数字")
-    
-    target = session.get("target")
-    attempts = session.get("attempts", 1)
-    
-    if guess == target:
-        await context.end_session()
-        return segments(f"🎉 恭喜，你猜对了！用了 {8-attempts} 次")
-    
-    if attempts <= 1:
-        await context.end_session()
-        return segments(f"💔 游戏结束，答案是 {target}")
-    
-    session.set("attempts", attempts - 1)
-    hint = "太小了" if guess < target else "太大了"
-    return segments(f"{hint}，还有 {attempts-1} 次机会")
+async def handle_url(url: str, event: dict, context):
+    ...
 ```
 
-**plugin.json**
-```json
-{
-  "name": "guess",
-  "entry": "main.py",
-  "commands": [{
-    "name": "guess",
-    "triggers": ["猜数字"],
-    "help": "多轮对话游戏示例"
-  }]
-}
+### 闲聊入口
+
+如果插件希望参与普通文本处理，可以实现：
+
+```python
+async def handle_smalltalk(text: str, event: dict, context):
+    ...
 ```
 
 ### 定时任务
 
-**plugin.json** 声明任务：
+可直接在 `plugin.json` 中声明：
+
 ```json
 {
   "schedule": [
     {
       "id": "morning",
       "handler": "send_morning_msg",
-      "cron": {"hour": 8, "minute": 0},
-      "group_ids": [123456789]
-    }
-  ]
-}
-```
-
-**main.py** 实现处理函数：
-```python
-async def send_morning_msg(context):
-    """每天 8 点发送早安"""
-    return segments("早上好呀！")
-```
-
-### 自动 URL 解析
-
-当消息包含 URL 时，框架自动调用此函数：
-
-```python
-async def handle_url(url: str, event: Dict, context) -> List:
-    """自动解析消息中的 URL"""
-    context.logger.info(f"Parsing: {url}")
-    return segments(f"URL: {url}")
-```
-
-### 自动闲聊回复
-
-当消息不是命令时，尝试进行闲聊：
-
-```python
-async def handle_smalltalk(text: str, event: Dict, context) -> List:
-    """处理非命令消息"""
-    if "天气" in text:
-        return segments("今天天气不错~")
-    return None  # 返回 None 表示不处理
-```
-
-### 插件完整配置参考
-
-**plugin.json**
-```json
-{
-  "name": "myplugin",
-  "version": "1.0.0",
-  "description": "我的第一个插件",
-  "entry": "main.py",
-  "concurrency": "parallel",
-  
-  "commands": [
-    {
-      "name": "cmd",
-      "triggers": ["cmd", "命令"],
-      "help": "命令帮助",
-      "admin_only": false,
-      "priority": 0
-    }
-  ],
-  
-  "schedule": [
-    {
-      "id": "task_id",
-      "handler": "task_func_name",
       "cron": {
-        "hour": 9,
-        "minute": 0,
-        "day_of_week": "mon-fri"
+        "hour": 8,
+        "minute": 0
       },
       "group_ids": [123456789]
     }
@@ -384,187 +329,46 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
 }
 ```
 
-**字段说明**
-| 字段 | 说明 |
-|------|------|
-| `name` | 插件唯一标识 |
-| `version` | 版本号 |
-| `entry` | 入口文件（通常 `main.py`） |
-| `commands` | 命令列表 |
-| `schedule` | 定时任务列表 |
-| `concurrency` | `parallel`（默认）或 `serial` |
-
-### 生命周期钩子
-
-可选实现：
+对应函数：
 
 ```python
-async def init(context):
-    """插件启动时调用"""
-    context.logger.info("插件已启动")
-
-async def shutdown(context):
-    """插件停止时调用"""
-    context.logger.info("插件已停止")
+async def send_morning_msg(context):
+    return [{"type": "text", "data": {"text": "早上好"}}]
 ```
+
+更完整的开发说明请看 [插件开发指南](docs/03-plugin-development.md)。
 
 ---
 
 ## 项目结构
 
-```
+```text
 XiaoQing/
-├── main.py                  # 入口点
-├── requirements.txt         # 依赖
+├── main.py
+├── requirements.txt
 ├── config/
-│   ├── config.json         # 基础配置
-│   └── secrets.json        # 敏感配置
+│   ├── config.json
+│   └── secrets.json
 ├── core/
-│   ├── app.py              # 主应用
-│   ├── dispatcher.py       # 消息分发
-│   ├── router.py           # 命令路由
-│   ├── plugin_manager.py   # 插件管理
-│   ├── session.py          # 会话管理
-│   ├── scheduler.py        # 定时任务
-│   ├── plugin_base.py      # 插件基础工具
-│   ├── onebot.py           # OneBot 通信
-│   ├── server.py           # Inbound 服务
-│   ├── context.py          # 插件上下文
+│   ├── app.py
+│   ├── dispatcher.py
+│   ├── router.py
+│   ├── plugin_manager.py
+│   ├── session.py
+│   ├── scheduler.py
+│   ├── context.py
 │   └── ...
-├── plugins/                # 插件目录
-│   ├── bot_core/           # 核心命令（help、reload）
-│   ├── xiaoqing_chat/      # 智能对话插件（向量记忆、情绪系统）
-│   ├── pendo/              # 个人时间与信息管理中枢（含 Web 控制台）
-│   ├── qingpet/            # QQ群宠物养成系统
-│   ├── qingssh/            # SSH 远程控制
-│   ├── jupyter/            # Python 代码执行
-│   ├── astro_tools/        # 天文计算工具箱
-│   ├── ads_paper/          # NASA ADS 论文管理
-│   ├── github/             # GitHub Trending
-│   ├── arxiv_filter/       # arXiv 论文筛选
-│   ├── apod/               # 每日天文图
-│   ├── chime/              # FRB 重复暴监测
-│   ├── minecraft/          # MC 服务器通信
-│   ├── smalltalk/          # 闲聊插件
-│   ├── chat/               # AI 对话
-│   ├── voice/              # 语音功能
-│   ├── memo/               # 笔记管理
-│   ├── choice/             # 随机选择
-│   ├── wolframalpha/       # 万能计算器
-│   ├── url_parser/         # 链接解析
-│   ├── shell/              # 终端命令
-│   ├── earthquake/         # 地震快讯
-│   ├── signin/              # 自动签到
-│   ├── twitter/            # Twitter 图片
-│   ├── guess_number/       # 猜数字游戏
-│   ├── dict/               # 天文学词典
-│   ├── color/              # 颜色查询
-│   ├── adnmb/              # A岛匿名版
-│   └── echo/               # 回显示例
-├── logs/                   # 日志（自动生成）
-└── tests/                  # 测试
-```
-
----
-
-## 常见问题
-
-### ❓ 群聊不响应怎么办？
-
-检查：
-1. 消息是否以 `/` 开头
-2. 或是否包含机器人名称（如 `小青`）
-3. 查看 `log_level` 是否设为 `DEBUG`，查看 `logs/xiaoqing.log`
-
-### ❓ 如何调试插件？
-
-1. 设置 `log_level: "DEBUG"`
-2. 在插件中添加 `context.logger.debug("...")`
-3. 查看 `logs/xiaoqing.log`
-4. 用 `test.ipynb` 单独测试
-
-### ❓ 定时任务不执行？
-
-1. 检查 `config.json` 中的 `default_group_ids` 或任务 `group_ids`
-2. 检查 `timezone` 配置
-3. 查看日志中是否有 "Scheduled" 的记录
-
-### ❓ 如何热重载插件？
-
-**方式 1**：发送命令
-```
-/reload myplugin
-```
-
-**方式 2**：重启进程
-```bash
-python main.py
-```
-
-### ❓ 如何分享我的插件？
-
-1. 确保 `plugin.json` 格式正确
-2. 插件目录包含 `main.py` 和 `plugin.json`
-3. 放入 `plugins/` 目录
-4. 重启或执行 `/reload <name>`
-
-### ❓ Windows 下 torch 导入失败？
-
-`main.py` 已处理。如仍有问题：
-1. 确保 PyTorch 版本与 Python 版本匹配
-2. 安装 Microsoft Visual C++ Redistributable
-
----
-
-## 配置参考
-
-### config.json 完整配置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `bot_name` | str | `"小青"` | 机器人名称 |
-| `command_prefixes` | list | `["/"]` | 命令前缀 |
-| `require_bot_name_in_group` | bool | `true` | 群聊是否需要 @ |
-| `random_reply_rate` | float | `0.05` | 随机回复概率（0-1） |
-| `enable_ws_client` | bool | `false` | 启用 WebSocket 客户端 |
-| `enable_inbound_server` | bool | `true` | 启用 Inbound 服务器 |
-| `onebot_http_base` | str | `http://127.0.0.1:11001` | OneBot API |
-| `inbound_http_base` | str | `http://127.0.0.1:12000` | Inbound HTTP 监听地址 |
-| `inbound_ws_uri` | str | `ws://127.0.0.1:12000/ws` | Inbound WS 监听地址 |
-| `ws_queue_size` | int | `200` | WS 队列上限（Inbound + OneBot） |
-| `max_concurrency` | int | `5` | 最大并发消息数 |
-| `session_timeout` | int | `300` | 会话超时（秒） |
-| `timezone` | str | `Asia/Shanghai` | 定时任务时区 |
-| `log_level` | str | `INFO` | 日志级别 |
-
----
-
-## API 参考
-
-### Inbound 服务器
-
-当 `enable_inbound_server: true` 时：
-- 若 `inbound_http_base` 非空：启动 Inbound HTTP（提供 `/event`、`/health`、`/metrics`）
-- 若 `inbound_ws_uri` 非空：启动 Inbound WebSocket（仅 WS）
-
-**POST /event** - 接收 OneBot 事件
-```bash
-curl -X POST http://127.0.0.1:12000/event \
-  -H "Authorization: Bearer your-secret-token" \
-  -H "Content-Type: application/json" \
-  -d '{"post_type":"message",...}'
-```
-
-**WebSocket /ws** - 持久连接
-```
-ws://127.0.0.1:12000/ws
-Header: Authorization: Bearer your-secret-token
-```
-
-**GET /health** - 健康检查
-```bash
-curl http://127.0.0.1:12000/health
-# {"status":"ok","version":"1.0.0"}
+├── plugins/
+│   ├── bot_core/
+│   ├── xiaoqing_chat/
+│   ├── pendo/
+│   ├── qingpet/
+│   ├── qingssh/
+│   ├── jupyter/
+│   └── ...
+├── docs/
+├── tests/
+└── logs/
 ```
 
 ---
@@ -572,32 +376,56 @@ curl http://127.0.0.1:12000/health
 ## 测试
 
 ```bash
-# 运行所有测试
 pytest
+```
 
-# 运行单个测试
-pytest tests/test_plugin_base.py
+运行单个测试：
 
-# 使用 test.ipynb 交互式测试
-python -m jupyter notebook test.ipynb
+```bash
+pytest tests/plugins/test_pendo.py
+pytest tests/plugins/test_xiaoqing_chat.py
 ```
 
 ---
 
-## 贡献指南
+## 常见问题
 
-欢迎 Pull Request！开发流程：
+### 群聊不响应
 
-1. Fork 本仓库
-2. 创建特性分支：`git checkout -b feature/xyz`
-3. 提交代码：`git commit -m "Add feature xyz"`
-4. 推送分支：`git push origin feature/xyz`
-5. 开启 Pull Request
+优先检查：
 
-**代码风格**：
-- 4 空格缩进
-- `snake_case` 函数/变量，`PascalCase` 类名
-- 添加类型注解和文档字符串
+1. 消息是否以命令前缀开头
+2. 是否包含机器人名称
+3. 是否被静音
+4. 日志里是否有对应请求记录
+
+### Pendo Web 打不开
+
+优先检查：
+
+1. 是否执行了 `/pendo web start`
+2. 当前环境是否安装了 `fastapi` 和 `uvicorn`
+3. 端口是否被占用
+4. 是否通过 `/pendo web token` 获取了有效登录令牌
+
+### 插件热重载不生效
+
+可以先用：
+
+```bash
+/reload 插件名
+```
+
+如果插件内部维护了复杂状态，直接重启进程通常更稳。
+
+### Windows 上 torch 导入冲突
+
+项目在 [main.py](main.py) 中已经提前处理了一层：
+
+- 先设置 `KMP_DUPLICATE_LIB_OK=TRUE`
+- 再尽早尝试导入 `torch`
+
+如果仍有问题，优先检查 PyTorch、Python、VC Runtime 的版本匹配。
 
 ---
 
@@ -607,12 +435,8 @@ MIT License
 
 ---
 
-## 致谢
+如果你准备开始二次开发，推荐的阅读顺序是：
 
-- [OneBot](https://onebot.dev/) - 标准化聊天机器人协议
-- [APScheduler](https://apscheduler.readthedocs.io/) - 定时任务库
-- [aiohttp](https://docs.aiohttp.org/) - 异步 HTTP 库
-
----
-
-**快速链接**：[快速开始](#快速开始5-分钟) | [插件开发](#插件开发10-分钟) | [配置参考](#配置参考) | [常见问题](#常见问题)
+1. [快速开始](docs/01-getting-started.md)
+2. [核心架构](docs/02-architecture.md)
+3. [插件开发指南](docs/03-plugin-development.md)

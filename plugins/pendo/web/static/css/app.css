@@ -62,6 +62,10 @@ body {
     overflow-x: hidden;
 }
 
+body.sidebar-open {
+    overflow: hidden;
+}
+
 a {
     color: inherit;
     text-decoration: none;
@@ -173,6 +177,14 @@ p {
     display: flex;
     flex-direction: row;
     min-height: 100vh;
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+}
+
+#sidebar-container,
+#header-container {
+    min-width: 0;
 }
 
 .main-wrapper {
@@ -180,6 +192,8 @@ p {
     display: flex;
     flex-direction: column;
     min-height: 100vh;
+    min-width: 0;
+    width: 100%;
     margin-left: var(--sidebar-width);
     transition: margin-left var(--transition);
     overflow: hidden;
@@ -189,6 +203,7 @@ p {
 
 .content {
     flex: 1;
+    min-width: 0;
     padding: 24px;
     overflow-y: auto;
     overflow-x: hidden;
@@ -376,6 +391,21 @@ p {
     background: linear-gradient(90deg, transparent, rgba(203,213,225,0.9), transparent);
 }
 
+.sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.28);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--transition);
+    z-index: 90;
+}
+
+.sidebar-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
 .sidebar-footer {
     padding: 12px 16px;
     border-top: 1px solid var(--color-border);
@@ -413,6 +443,9 @@ p {
     position: sticky;
     top: 0;
     height: var(--header-height);
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     background: var(--color-surface);
     border-bottom: 1px solid var(--color-border);
     display: flex;
@@ -426,7 +459,6 @@ p {
 .header-toggle {
     width: 32px;
     height: 32px;
-    display: flex;
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-sm);
@@ -435,6 +467,11 @@ p {
     transition: background-color var(--transition);
     flex-shrink: 0;
     font-size: 18px;
+}
+
+.header-toggle,
+.header-search-toggle {
+    display: none;
 }
 
 .header-toggle:hover {
@@ -446,7 +483,11 @@ p {
     font-size: 16px;
     font-weight: 600;
     color: var(--color-text);
-    flex-shrink: 0;
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .header-search {
@@ -488,6 +529,8 @@ p {
     align-items: center;
     gap: 8px;
     margin-left: auto;
+    min-width: 0;
+    flex-shrink: 0;
 }
 
 .header-avatar {
@@ -518,6 +561,25 @@ p {
 }
 
 .header-logout:hover {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+}
+
+.header-search-toggle {
+    width: 32px;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border);
+    background: transparent;
+    transition: background-color var(--transition), color var(--transition);
+    flex-shrink: 0;
+    font-size: 16px;
+}
+
+.header-search-toggle:hover {
     background-color: var(--color-bg);
     color: var(--color-text);
 }
@@ -1427,6 +1489,9 @@ tr:hover td {
     justify-content: center;
     z-index: 400;
     padding: 24px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
 }
 
 .login-shell {
@@ -1435,6 +1500,7 @@ tr:hover td {
     grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
     gap: 20px;
     align-items: stretch;
+    margin: auto;
 }
 
 .login-stage,
@@ -1614,8 +1680,13 @@ tr:hover td {
 }
 
 @media (max-width: 900px) {
+    .login-screen {
+        align-items: flex-start;
+    }
+
     .login-shell {
         grid-template-columns: 1fr;
+        margin: 0 auto;
     }
 
     .login-stage {
@@ -1633,6 +1704,10 @@ tr:hover td {
         padding: 16px;
     }
 
+    .login-shell {
+        gap: 14px;
+    }
+
     .login-stage {
         padding: 24px 20px 20px;
     }
@@ -1644,97 +1719,6 @@ tr:hover td {
     .login-card-actions {
         grid-template-columns: 1fr;
     }
-}
-
-/* ============================================================
-   17. Kanban
-   ============================================================ */
-.kanban-board {
-    display: flex;
-    flex-direction: row;
-    gap: 16px;
-    overflow-x: auto;
-    padding-bottom: 16px;
-    align-items: flex-start;
-}
-
-.kanban-board::-webkit-scrollbar {
-    height: 6px;
-}
-
-.kanban-board::-webkit-scrollbar-thumb {
-    background: var(--color-border);
-    border-radius: 3px;
-}
-
-.kanban-column {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-width: 280px;
-    max-width: 320px;
-    background: var(--color-bg);
-    border-radius: var(--radius);
-    padding: 12px;
-    flex-shrink: 0;
-    border: 1px solid var(--color-border);
-}
-
-.kanban-column-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 4px;
-    padding: 0 4px 8px;
-    border-bottom: 1px solid var(--color-border);
-}
-
-.kanban-column-title {
-    font-size: 13px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--color-text-secondary);
-}
-
-.kanban-card {
-    background: var(--color-surface);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--color-border);
-    padding: 12px;
-    cursor: grab;
-    transition: box-shadow var(--transition), transform var(--transition);
-    user-select: none;
-}
-
-.kanban-card:hover {
-    box-shadow: var(--shadow-lg);
-    transform: translateY(-1px);
-}
-
-.kanban-card:active {
-    cursor: grabbing;
-}
-
-.kanban-card.dragging {
-    opacity: 0.5;
-    box-shadow: var(--shadow-lg);
-}
-
-.kanban-card-title {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--color-text);
-    margin-bottom: 6px;
-}
-
-.kanban-card-meta {
-    font-size: 12px;
-    color: var(--color-text-secondary);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
 }
 
 /* ============================================================
@@ -2079,10 +2063,13 @@ tr:hover td {
         transform: translateX(-100%);
         width: var(--sidebar-width);
         box-shadow: var(--shadow-lg);
+        visibility: hidden;
+        transition: transform var(--transition), visibility var(--transition);
     }
 
     .sidebar.mobile-open {
         transform: translateX(0);
+        visibility: visible;
     }
 
     .sidebar .sidebar-logo {
@@ -2118,7 +2105,7 @@ tr:hover td {
     }
 
     .content {
-        padding: 16px;
+        padding: 16px calc(16px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
     }
 
     .summary-cards {
@@ -2132,11 +2119,30 @@ tr:hover td {
     }
 
     .header {
-        padding: 0 16px;
+        padding: 0 calc(14px + env(safe-area-inset-right)) 0 calc(14px + env(safe-area-inset-left));
+        gap: 10px;
+    }
+
+    .header-toggle,
+    .header-search-toggle {
+        display: inline-flex;
+    }
+
+    .header-title {
+        font-size: 20px;
     }
 
     .header-search {
         display: none;
+    }
+
+    .header-actions {
+        gap: 6px;
+    }
+
+    .header-logout {
+        padding: 0 10px;
+        font-size: 12px;
     }
 
     .modal-content {
@@ -2155,13 +2161,6 @@ tr:hover td {
         padding: 0;
     }
 
-    .kanban-board {
-        padding-bottom: 8px;
-    }
-
-    .kanban-column {
-        min-width: 240px;
-    }
 }
 
 @media (max-width: 480px) {
@@ -2175,6 +2174,46 @@ tr:hover td {
 
     .card {
         padding: 14px;
+    }
+
+    .header {
+        padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
+    }
+
+    .header-title {
+        font-size: 18px;
+    }
+
+    .header-actions {
+        gap: 4px;
+    }
+
+    .header-search-toggle {
+        width: 30px;
+        height: 30px;
+    }
+
+    .header-logout {
+        position: relative;
+        width: 30px;
+        min-width: 30px;
+        height: 30px;
+        padding: 0;
+        font-size: 0;
+        color: transparent;
+        overflow: hidden;
+    }
+
+    .header-logout::after {
+        content: '退';
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--color-text-secondary);
     }
 }
 
@@ -2340,88 +2379,6 @@ tr:hover td {
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     padding: 12px;
-}
-
-/* ============================================================
-   25. Card Grid
-   ============================================================ */
-.card-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
-}
-
-.card-grid.two-col {
-    grid-template-columns: repeat(2, 1fr);
-}
-
-.card-grid.four-col {
-    grid-template-columns: repeat(4, 1fr);
-}
-
-@media (max-width: 1024px) {
-    .card-grid        { grid-template-columns: repeat(2, 1fr); }
-    .card-grid.four-col { grid-template-columns: repeat(2, 1fr); }
-}
-
-@media (max-width: 768px) {
-    .card-grid,
-    .card-grid.two-col,
-    .card-grid.four-col { grid-template-columns: 1fr; }
-}
-
-/* ============================================================
-   26. Filter Bar
-   ============================================================ */
-.filter-bar {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-    margin-bottom: 16px;
-    padding: 12px 16px;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius);
-}
-
-.filter-bar input {
-    height: 30px;
-    font-size: 13px;
-    padding: 0 10px;
-    flex-shrink: 0;
-}
-
-.filter-bar select {
-    height: 30px;
-    font-size: 13px;
-    padding: 0 30px 0 12px;
-    border-radius: 20px;
-    background-position: right 9px center;
-    flex-shrink: 0;
-    min-width: 76px;
-    font-weight: 500;
-}
-
-.filter-bar select:hover:not(:disabled) {
-    border-color: #9CA3AF;
-    background-color: #EEF0F2;
-}
-
-.filter-divider {
-    width: 1px;
-    height: 20px;
-    background: var(--color-border);
-    flex-shrink: 0;
-}
-
-.filter-label {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--color-text-secondary);
-    white-space: nowrap;
-    flex-shrink: 0;
 }
 
 /* ============================================================
