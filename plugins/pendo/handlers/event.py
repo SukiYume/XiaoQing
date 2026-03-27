@@ -18,12 +18,14 @@ from ..utils.settings_utils import resolve_default_category
 from .event_support import (
     apply_offsets,
     calculate_remind_offsets,
+    ensure_start_time_reminder,
     ensure_event_reminders,
     format_conflicts,
     format_event_created,
     format_event_reminders,
     format_milestone_event_created,
     format_recurring_event_created,
+    get_remind_status,
     recalculate_event_reminders,
 )
 from ..utils.formatters import (
@@ -43,7 +45,14 @@ TIME_RANGE_RE = re.compile(r"^(last\d+d|\d{4}|\d{4}-\d{2}|\d{4}-\d{2}-\d{2}|\d{2
 
 
 class EventAIParserProtocol(Protocol):
-    async def parse_event_with_ai(self, text: str, user_id: str) -> dict[str, Any]: ...
+    async def parse_event_with_ai(
+        self,
+        text: str,
+        user_id: str,
+        *,
+        partial: bool = False,
+        fallback_text: str | None = None,
+    ) -> dict[str, Any]: ...
 
     def parse_natural_language(self, text: str, user_id: str) -> dict[str, Any]: ...
 
@@ -62,6 +71,14 @@ class ReminderServiceProtocol(Protocol):
 
 class EventHandler(DbOpsMixin):
     """日程处理器"""
+
+    _TITLE_SCAFFOLD_MARKERS = ("[编辑现有日程]", "原标题", "原时间", "用户修改指令")
+    _TITLE_RENAME_RE = re.compile(r"(改名|重命名|标题|名称|叫做|改成|改为)")
+    _TITLE_SCHEDULE_RE = re.compile(
+        r"(提醒|提前|分钟|小时|天|周|今天|明天|后天|上午|中午|下午|晚上|\d{1,2}[点时:：])"
+    )
+    _CATEGORY_EDIT_RE = re.compile(r"(分类|归类|类别|类目)")
+    _CONTENT_EDIT_RE = re.compile(r"(内容|描述|详情|补充|说明)")
 
     db: "Database"
     ai_parser: EventAIParserProtocol
@@ -691,6 +708,9 @@ class EventHandler(DbOpsMixin):
 
         if is_instance_id:
             return await self._edit_single_instance(user_id, event_id, changes)
+        direct_event = cast(EventItem | None, await self._db_get_item(event_id, owner_id=user_id))
+        if direct_event is not None:
+            return await self._edit_single_instance(user_id, event_id, changes)
         return await self._edit_all_instances(user_id, event_id, changes)
 
     async def _edit_single_instance(
@@ -703,12 +723,18 @@ class EventHandler(DbOpsMixin):
                 return {"status": "error", "message": f"❌ 找不到日程 {instance_id}"}
 
             updates = await self._parse_updates(changes, event)
+            updates = self._normalize_event_updates(event, updates)
             if not updates:
                 return {"status": "warning", "message": "⚠️ 未识别到有效的修改内容"}
 
             title = event.title
-            if "start_time" in updates:
+            if "start_time" in updates and "remind_times" not in updates:
                 updates["remind_times"] = recalculate_event_reminders(event, updates)
+            elif "remind_times" in updates:
+                updates["remind_times"] = ensure_start_time_reminder(
+                    updates["remind_times"],
+                    updates.get("start_time") or event.start_time,
+                )
 
             # 保存旧值快照用于 undo
             old_values = {}
@@ -814,6 +840,10 @@ class EventHandler(DbOpsMixin):
         )
 
         new_duration = self._compute_new_duration(updates, first_event, new_first_start)
+        explicit_remind_offsets: list[timedelta] | None = None
+        if "remind_times" in updates and first_event.start_time:
+            offset_base = new_first_start or datetime.fromisoformat(first_event.start_time)
+            explicit_remind_offsets = calculate_remind_offsets(offset_base, updates["remind_times"])
 
         result: dict[str, dict[str, Any]] = {}
         for item_id, inst in instance_items.items():
@@ -834,13 +864,93 @@ class EventHandler(DbOpsMixin):
                     )
                     inst_update["end_time"] = (inst_start + inst_duration).isoformat()
 
-                inst_update["remind_times"] = recalculate_event_reminders(inst, inst_update)
+                if explicit_remind_offsets is not None:
+                    inst_update["remind_times"] = ensure_start_time_reminder(
+                        apply_offsets(inst_start, explicit_remind_offsets),
+                        inst_start.isoformat(),
+                    )
+                else:
+                    inst_update["remind_times"] = recalculate_event_reminders(inst, inst_update)
             elif "end_time" in inst_update and inst.start_time and new_duration is not None:
                 inst_start = datetime.fromisoformat(inst.start_time)
                 inst_update["end_time"] = (inst_start + new_duration).isoformat()
+            elif explicit_remind_offsets is not None and inst.start_time:
+                inst_start = datetime.fromisoformat(inst.start_time)
+                inst_update["remind_times"] = ensure_start_time_reminder(
+                    apply_offsets(inst_start, explicit_remind_offsets),
+                    inst_start.isoformat(),
+                )
 
             result[item_id] = inst_update
         return result
+
+    def _normalize_event_updates(
+        self, event: EventItem, updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """在持久化前保持事件字段一致性。"""
+        normalized = dict(updates)
+        current_milestones = getattr(event, "milestones", None) or []
+        explicit_milestones = normalized.get("milestones")
+
+        if explicit_milestones:
+            normalized_milestones = self._normalize_milestones(explicit_milestones)
+            if normalized_milestones:
+                normalized["milestones"] = normalized_milestones
+                normalized["start_time"] = normalized_milestones[0]["time"]
+                normalized["end_time"] = normalized_milestones[-1]["time"]
+            return normalized
+
+        if current_milestones and "start_time" in normalized and event.start_time:
+            shifted = self._shift_milestones(current_milestones, event.start_time, normalized["start_time"])
+            if shifted:
+                normalized["milestones"] = shifted
+                normalized["start_time"] = shifted[0]["time"]
+                normalized["end_time"] = shifted[-1]["time"]
+        elif current_milestones and "end_time" in normalized:
+            shifted = [dict(m) for m in current_milestones]
+            if shifted:
+                shifted[-1]["time"] = str(normalized["end_time"])
+                normalized["milestones"] = self._normalize_milestones(shifted)
+                normalized["start_time"] = normalized["milestones"][0]["time"]
+                normalized["end_time"] = normalized["milestones"][-1]["time"]
+
+        return normalized
+
+    @staticmethod
+    def _normalize_milestones(milestones: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """Sort milestone payloads and normalize times to ISO strings."""
+        normalized: list[dict[str, str]] = []
+        for milestone in milestones:
+            try:
+                name = str(milestone.get("name", "")).strip()
+                time_str = datetime.fromisoformat(str(milestone.get("time", ""))).isoformat()
+            except (TypeError, ValueError):
+                continue
+            if not name:
+                continue
+            normalized.append({"name": name, "time": time_str})
+        normalized.sort(key=lambda item: item["time"])
+        return normalized
+
+    def _shift_milestones(
+        self, milestones: list[dict[str, Any]], old_start_time: str, new_start_time: str
+    ) -> list[dict[str, str]]:
+        """Shift all milestone times by the same delta as the event start."""
+        old_start = datetime.fromisoformat(old_start_time)
+        new_start = datetime.fromisoformat(new_start_time)
+        delta = new_start - old_start
+        shifted: list[dict[str, str]] = []
+        for milestone in milestones:
+            try:
+                base_time = datetime.fromisoformat(str(milestone.get("time", "")))
+            except (TypeError, ValueError):
+                continue
+            name = str(milestone.get("name", "")).strip()
+            if not name:
+                continue
+            shifted.append({"name": name, "time": (base_time + delta).isoformat()})
+        shifted.sort(key=lambda item: item["time"])
+        return shifted
 
     def _compute_new_duration(
         self, updates: dict[str, Any], first_event: EventItem, new_first_start: datetime | None,
@@ -1012,6 +1122,7 @@ class EventHandler(DbOpsMixin):
                     logger.warning("里程碑 %s 提醒时间解析失败: %s", m_time, e)
             remind_times = sorted(all_times)
 
+        remind_times = ensure_start_time_reminder(remind_times, base_time)
         await self._db_update_item(event_id, {"remind_times": remind_times}, owner_id=user_id)
 
         lines = [f"✅ 已更新提醒: {event.title or '无标题'}", f"🔔 共 {len(remind_times)} 个提醒"]
@@ -1076,14 +1187,14 @@ class EventHandler(DbOpsMixin):
                         message += f"  📌 {m_str} {m.get('name', '')}\n"
                         for t in m_reminds:
                             t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
-                            status = self._get_remind_status(log_map.get(t))
+                            status = get_remind_status(log_map.get(t))
                             message += f"    ⏰ {t_str} {status}\n"
                 else:
                     time_str = ItemFormatter.format_datetime(event.start_time or "", "%m月%d日 %H:%M")
                     message += f"\n🗓️ {time_str} {event.title or '无标题'} `{event.id}`\n"
                     for t in remind_times:
                         t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
-                        status = self._get_remind_status(log_map.get(t))
+                        status = get_remind_status(log_map.get(t))
                         message += f"  ⏰ {t_str} {status}\n"
 
             return {"status": "success", "message": message}
@@ -1137,7 +1248,7 @@ class EventHandler(DbOpsMixin):
                 for remind_time in remind_times:
                     formatted_time = ItemFormatter.format_datetime(remind_time, "%m-%d %H:%M")
                     t_iso = remind_time
-                    status = self._get_remind_status(log_map.get(t_iso))
+                    status = get_remind_status(log_map.get(t_iso))
                     builder.add_line(f"     ⏰ {formatted_time} {status}")
             else:
                 builder.add_line(f"     ⏰ 无提醒")
@@ -1204,7 +1315,10 @@ class EventHandler(DbOpsMixin):
 
         try:
             parsed = await self.ai_parser.parse_event_with_ai(
-                edit_prompt, current_event.owner_id
+                edit_prompt,
+                current_event.owner_id,
+                partial=True,
+                fallback_text=changes,
             )
         except Exception as e:
             logger.warning("AI解析失败，降级到规则解析: %s", e)
@@ -1212,13 +1326,20 @@ class EventHandler(DbOpsMixin):
 
         updates = {}
         for key in ["title", "content", "start_time", "end_time", "location", "category", "tags"]:
+            candidate = parsed.get(key)
             current_val = getattr(current_event, key, None)
-            if parsed.get(key) and parsed.get(key) != current_val:
-                # 标题：仅过滤占位值，其余交给 prompt 控制
-                if key == "title":
-                    if not isinstance(parsed[key], str) or parsed[key] in ("未命名事件", "无标题"):
-                        continue
-                updates[key] = parsed[key]
+            if candidate in (None, "", [], {}) or candidate == current_val:
+                continue
+            if key == "title":
+                if not self._should_apply_title_update(changes, current_event, candidate):
+                    continue
+            if key == "content":
+                if not self._should_apply_content_update(changes, candidate):
+                    continue
+            if key == "category":
+                if not self._should_apply_category_update(changes, candidate):
+                    continue
+            updates[key] = candidate
 
         if parsed.get("remind_times"):
             updates["remind_times"] = parsed["remind_times"]
@@ -1232,6 +1353,51 @@ class EventHandler(DbOpsMixin):
             updates["milestones"] = parsed["milestones"]
 
         return updates
+
+    @classmethod
+    def _should_apply_title_update(
+        cls, changes: str, current_event: EventItem, candidate: Any
+    ) -> bool:
+        if not isinstance(candidate, str):
+            return False
+        title = candidate.strip()
+        if not title or title in ("未命名事件", "无标题"):
+            return False
+        if any(marker in title for marker in cls._TITLE_SCAFFOLD_MARKERS):
+            return False
+
+        current_title = (getattr(current_event, "title", "") or "").strip()
+        if title == current_title:
+            return False
+
+        normalized_changes = changes.strip()
+        if cls._TITLE_RENAME_RE.search(normalized_changes):
+            return True
+
+        if title == normalized_changes:
+            return cls._TITLE_SCHEDULE_RE.search(normalized_changes) is None
+
+        return True
+
+    @classmethod
+    def _should_apply_category_update(cls, changes: str, candidate: Any) -> bool:
+        if not isinstance(candidate, str):
+            return False
+        category = candidate.strip()
+        if not category or category == "未分类":
+            return False
+        return cls._CATEGORY_EDIT_RE.search(changes) is not None
+
+    @classmethod
+    def _should_apply_content_update(cls, changes: str, candidate: Any) -> bool:
+        if not isinstance(candidate, str):
+            return False
+        content = candidate.strip()
+        if not content:
+            return False
+        if any(marker in content for marker in cls._TITLE_SCAFFOLD_MARKERS):
+            return False
+        return cls._CONTENT_EDIT_RE.search(changes) is not None
 
     def _looks_like_id(self, text: str) -> bool:
         """判断是否像ID（8位十六进制字符，或 8位十六进制_YYYYMMDD日期数字）"""

@@ -156,21 +156,39 @@ class AIParser:
         parsed["type"] = "event"
         return parsed
 
-    async def parse_event_with_ai(self, text: str, user_id: str) -> dict[str, Any]:
+    def _fallback_event_result(
+        self, source_text: str, user_id: str, *, partial: bool
+    ) -> dict[str, Any]:
+        """规则解析兜底并统一整理返回结果。"""
+        parsed = self.parse_natural_language(source_text, user_id)
+        return self._build_event_result(parsed, source_text, user_id, partial=partial)
+
+    async def parse_event_with_ai(
+        self,
+        text: str,
+        user_id: str,
+        *,
+        partial: bool = False,
+        fallback_text: str | None = None,
+    ) -> dict[str, Any]:
         """使用AI解析日程（专用于event类型）
 
         Args:
             text: 用户输入文本
             user_id: 用户ID
+            partial: True 时仅返回明确解析出的字段，不填充 title/category/content 默认值
+            fallback_text: AI失败时用于规则解析的原始文本
 
         Returns:
             解析后的event数据字典
         """
+        source_text = fallback_text or text
+
         # 检查速率限制
         allowed, wait_seconds = self._rate_limiter.check_rate_limit(user_id)
         if not allowed:
             logger.warning("用户 %s 超过AI解析速率限制，等待 %s 秒", user_id, wait_seconds)
-            return self.parse_natural_language(text, user_id)
+            return self._fallback_event_result(source_text, user_id, partial=partial)
 
         try:
             current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -188,82 +206,108 @@ class AIParser:
 
             response = await self._call_llm(messages)
             if not response:
-                return self.parse_natural_language(text, user_id)
+                return self._fallback_event_result(source_text, user_id, partial=partial)
 
             try:
                 parsed = json.loads(self._extract_json(response))
                 if not isinstance(parsed, dict):
-                    return self.parse_natural_language(text, user_id)
+                    return self._fallback_event_result(source_text, user_id, partial=partial)
             except (json.JSONDecodeError, ValueError):
-                return self.parse_natural_language(text, user_id)
+                return self._fallback_event_result(source_text, user_id, partial=partial)
 
             logger.info("AI解析结果: %s", json.dumps(parsed, ensure_ascii=False))
 
-            # 构建event结果（类型固定为event）
-            result = {
-                "type": "event",
-                "title": parsed.get("title", text[:50]) or text[:50],
-                "content": text,
-                "category": parsed.get("category", "未分类"),
-                "owner_id": user_id,
-                "parse_source": "ai",
-            }
-
-            # 时间字段
-            for field in ["start_time", "end_time"]:
-                if parsed.get(field):
-                    try:
-                        dt = parser.parse(str(parsed[field]))
-                        result[field] = dt.isoformat()
-                    except (ValueError, TypeError):
-                        # 时间格式无效，跳过该字段
-                        pass
-
-            # 地点和重复规则
-            if parsed.get("location"):
-                result["location"] = parsed["location"]
-            if parsed.get("rrule"):
-                result["rrule"] = parsed["rrule"]
-
-            # milestones（多时间节点事件）
-            raw_milestones = parsed.get("milestones")
-            if raw_milestones and isinstance(raw_milestones, list) and len(raw_milestones) >= 2:
-                valid_milestones = []
-                for m in raw_milestones:
-                    if isinstance(m, dict) and m.get("name") and m.get("time"):
-                        try:
-                            dt = parser.parse(str(m["time"]))
-                            valid_milestones.append({"name": m["name"], "time": dt.isoformat()})
-                        except (ValueError, TypeError):
-                            pass
-                if len(valid_milestones) >= 2:
-                    result["milestones"] = valid_milestones
-                    result["start_time"] = valid_milestones[0]["time"]
-                    result["end_time"] = valid_milestones[-1]["time"]
-                    if parsed.get("remind_offsets"):
-                        result["remind_times"] = self.build_remind_times_for_milestones(
-                            valid_milestones, parsed["remind_offsets"]
-                        )
-
-            # notes
-            if parsed.get("notes"):
-                result["notes"] = str(parsed["notes"])
-
-            # 提醒时间（仅单次事件；多节点事件在 milestones 块中处理）
-            if (
-                not result.get("remind_times")
-                and parsed.get("remind_offsets")
-                and result.get("start_time")
-            ):
-                result["remind_times"] = self.build_remind_times_from_offsets(
-                    result["start_time"], parsed["remind_offsets"]
-                )
-
-            return result
+            return self._build_event_result(parsed, source_text, user_id, partial=partial)
 
         except Exception as e:
             logger.exception("AI解析失败: %s", e)
-            return self.parse_natural_language(text, user_id)
+            return self._fallback_event_result(source_text, user_id, partial=partial)
+
+    def _build_event_result(
+        self,
+        parsed: dict[str, Any],
+        source_text: str,
+        user_id: str,
+        *,
+        partial: bool,
+    ) -> dict[str, Any]:
+        """将 AI/规则解析结果统一整理为 event 字段。"""
+        result: dict[str, Any] = {
+            "type": "event",
+            "owner_id": user_id,
+            "parse_source": parsed.get("parse_source", "ai"),
+        }
+        if partial:
+            title = str(parsed.get("title") or "").strip()
+            if title:
+                result["title"] = title
+
+            category = str(parsed.get("category") or "").strip()
+            if category and category != "未分类":
+                result["category"] = category
+
+            content = parsed.get("content")
+            if content not in (None, "", source_text):
+                result["content"] = str(content)
+        else:
+            result.update(
+                {
+                    "title": parsed.get("title", source_text[:50]) or source_text[:50],
+                    "content": source_text,
+                    "category": parsed.get("category", "未分类"),
+                }
+            )
+
+        # 时间字段
+        for field in ["start_time", "end_time"]:
+            if parsed.get(field):
+                try:
+                    dt = parser.parse(str(parsed[field]))
+                    result[field] = dt.isoformat()
+                except (ValueError, TypeError):
+                    pass
+
+        # 地点和重复规则
+        if parsed.get("location"):
+            result["location"] = parsed["location"]
+        if parsed.get("rrule"):
+            result["rrule"] = parsed["rrule"]
+
+        # milestones（多时间节点事件）
+        raw_milestones = parsed.get("milestones")
+        if raw_milestones and isinstance(raw_milestones, list) and len(raw_milestones) >= 2:
+            valid_milestones = []
+            for m in raw_milestones:
+                if isinstance(m, dict) and m.get("name") and m.get("time"):
+                    try:
+                        dt = parser.parse(str(m["time"]))
+                        valid_milestones.append({"name": m["name"], "time": dt.isoformat()})
+                    except (ValueError, TypeError):
+                        pass
+            if len(valid_milestones) >= 2:
+                result["milestones"] = valid_milestones
+                result["start_time"] = valid_milestones[0]["time"]
+                result["end_time"] = valid_milestones[-1]["time"]
+                if parsed.get("remind_offsets"):
+                    result["remind_times"] = self.build_remind_times_for_milestones(
+                        valid_milestones, parsed["remind_offsets"]
+                    )
+
+        # notes
+        if parsed.get("notes"):
+            result["notes"] = str(parsed["notes"])
+
+        # 提醒时间（仅单次事件；多节点事件在 milestones 块中处理）
+        if (
+            not result.get("remind_times")
+            and parsed.get("remind_offsets")
+            and result.get("start_time")
+        ):
+            result["remind_times"] = self.build_remind_times_from_offsets(
+                result["start_time"], parsed["remind_offsets"]
+            )
+
+        return result
 
     def _extract_json(self, response: str) -> str:
         """从响应中提取JSON"""

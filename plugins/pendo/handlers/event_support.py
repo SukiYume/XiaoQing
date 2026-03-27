@@ -100,11 +100,16 @@ def ensure_event_reminders(
     else:
         remind_times = default_reminders(parsed_data.get("start_time"))
 
-    start_time = parsed_data.get("start_time")
-    if start_time and not has_time(remind_times, start_time):
-        remind_times.append(normalize_iso(start_time))
-    remind_times.sort()
-    return remind_times
+    return ensure_start_time_reminder(remind_times, parsed_data.get("start_time"))
+
+
+def ensure_start_time_reminder(remind_times: list[str], start_time: str | None) -> list[str]:
+    """Ensure the current event start_time exists exactly once in remind_times."""
+    normalized = list(remind_times)
+    if start_time and not has_time(normalized, start_time):
+        normalized.append(normalize_iso(start_time))
+    normalized.sort()
+    return normalized
 
 
 def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str]:
@@ -124,10 +129,7 @@ def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str
             remind_times = default_reminders(new_start)
         start = new_start
 
-    if start and not has_time(remind_times, start):
-        remind_times.append(normalize_iso(start))
-    remind_times.sort()
-    return remind_times
+    return ensure_start_time_reminder(remind_times, start)
 
 
 def format_recurring_event_created(

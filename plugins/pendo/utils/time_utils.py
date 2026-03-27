@@ -209,6 +209,11 @@ def _parse_time_range_core(
     if re.fullmatch(r"\d{4}-\d{2}", tr):
         return _parse_ym_range(tr)
 
+    # YYYY-MM-DD
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", tr):
+        day = datetime.strptime(tr, "%Y-%m-%d")
+        return day, day.replace(hour=23, minute=59, second=59)
+
     # start..end
     if ".." in tr:
         try:
