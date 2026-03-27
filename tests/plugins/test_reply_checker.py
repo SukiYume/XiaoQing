@@ -101,12 +101,13 @@ class TestHeuristicCheckRepeatedQuestion:
 
 
 @pytest.mark.asyncio
-async def test_handle_smalltalk_recovers_from_need_replan_rejection_by_retrying_flow():
+async def test_handle_smalltalk_recovers_from_need_replan_rejection_by_retrying_flow(tmp_path):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
     from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
 
     context = MagicMock()
     context.logger = MagicMock()
+    context.data_dir = tmp_path / "xiaoqing_chat"
     event = {"message_type": "group", "group_id": 1, "user_id": 2}
 
     with patch(
@@ -125,12 +126,13 @@ async def test_handle_smalltalk_recovers_from_need_replan_rejection_by_retrying_
 
 
 @pytest.mark.asyncio
-async def test_handle_smalltalk_records_checker_rejected_attempt_for_review_counting():
+async def test_handle_smalltalk_records_checker_rejected_attempt_for_review_counting(tmp_path):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
     from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
 
     context = MagicMock()
     context.logger = MagicMock()
+    context.data_dir = tmp_path / "xiaoqing_chat"
     event = {"message_type": "group", "group_id": 1, "user_id": 2}
     state = MagicMock()
     state.action_history.append = MagicMock()
@@ -154,12 +156,13 @@ async def test_handle_smalltalk_records_checker_rejected_attempt_for_review_coun
 
 
 @pytest.mark.asyncio
-async def test_handle_smalltalk_uses_configured_reply_check_max_replan():
+async def test_handle_smalltalk_uses_configured_reply_check_max_replan(tmp_path):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
     from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
 
     context = MagicMock()
     context.logger = MagicMock()
+    context.data_dir = tmp_path / "xiaoqing_chat"
     event = {"message_type": "group", "group_id": 1, "user_id": 2}
     runtime = SimpleNamespace(cfg=SimpleNamespace(reply_check=SimpleNamespace(max_replan=2)))
 

@@ -6,8 +6,11 @@ import asyncio
 import json
 import logging
 import os
+import re
+import shutil
 import sys
 import tempfile
+import uuid
 
 # Windows 上 torch 必须在 numpy 等依赖之前加载（DLL 搜索顺序问题）
 try:
@@ -26,6 +29,60 @@ sys.path.insert(0, str(ROOT))
 
 # Suppress logging during tests unless explicitly enabled
 logging.getLogger().setLevel(logging.WARNING)
+
+PROJECT_TMP_ROOT = ROOT / ".pytest_artifacts"
+PROJECT_TMP_RUN_ROOT = PROJECT_TMP_ROOT / "tmp"
+
+
+def _safe_node_name(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
+    return cleaned or "tmp"
+
+
+def _project_mkdtemp(
+    suffix: str | None = None,
+    prefix: str | None = None,
+    dir: str | os.PathLike[str] | None = None,
+) -> str:
+    base_dir = Path(dir) if dir else PROJECT_TMP_RUN_ROOT
+    base_dir.mkdir(parents=True, exist_ok=True)
+    prefix = prefix or "tmp"
+    suffix = suffix or ""
+    while True:
+        candidate = base_dir / f"{prefix}{uuid.uuid4().hex}{suffix}"
+        try:
+            candidate.mkdir(parents=False, exist_ok=False)
+            return str(candidate)
+        except FileExistsError:
+            continue
+
+
+# 当前环境里 tempfile.mkdtemp() 创建的目录会立即变成不可访问；测试统一改走项目内目录。
+tempfile.mkdtemp = _project_mkdtemp
+
+
+class ProjectTmpPathFactory:
+    def __init__(self, base_dir: Path) -> None:
+        self._base_dir = base_dir
+        self._counter = 0
+
+    def getbasetemp(self) -> Path:
+        self._base_dir.mkdir(parents=True, exist_ok=True)
+        return self._base_dir
+
+    def mktemp(self, basename: str, numbered: bool = True) -> Path:
+        base = self.getbasetemp()
+        safe_name = _safe_node_name(basename)
+        if numbered:
+            while True:
+                self._counter += 1
+                candidate = base / f"{safe_name}_{self._counter}"
+                if not candidate.exists():
+                    candidate.mkdir(parents=True, exist_ok=False)
+                    return candidate
+        candidate = base / safe_name
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
 
 # ============================================================
 # Test Configuration
@@ -80,11 +137,34 @@ def config_dir() -> Path:
     return ROOT / "config"
 
 
+@pytest.fixture(scope="session")
+def project_tmp_root() -> Iterator[Path]:
+    """Session-scoped writable temp root inside the project workspace."""
+    if PROJECT_TMP_ROOT.exists():
+        shutil.rmtree(PROJECT_TMP_ROOT, ignore_errors=True)
+    PROJECT_TMP_RUN_ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        yield PROJECT_TMP_RUN_ROOT
+    finally:
+        shutil.rmtree(PROJECT_TMP_ROOT, ignore_errors=True)
+
+
+@pytest.fixture(scope="session")
+def tmp_path_factory(project_tmp_root: Path) -> ProjectTmpPathFactory:
+    """Project-local replacement for pytest's built-in tmp_path_factory."""
+    return ProjectTmpPathFactory(project_tmp_root)
+
+
 @pytest.fixture
-def temp_dir() -> Iterator[Path]:
-    """Create a temporary directory for tests"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+def tmp_path(tmp_path_factory: ProjectTmpPathFactory, request) -> Path:
+    """Project-local replacement for pytest's built-in tmp_path fixture."""
+    return tmp_path_factory.mktemp(request.node.name)
+
+
+@pytest.fixture
+def temp_dir(tmp_path: Path) -> Iterator[Path]:
+    """Create a temporary directory for tests using the project-local tmp_path."""
+    yield tmp_path
 
 # ============================================================
 # Config Fixtures
@@ -465,3 +545,24 @@ def pytest_collection_modifyitems(config, items):
         # Mark async tests
         if asyncio.iscoroutinefunction(item.function):
             item.add_marker(pytest.mark.asyncio)
+
+
+@pytest.fixture(autouse=True)
+def reset_xiaoqing_chat_runtime_state(request):
+    """Keep xiaoqing_chat singleton runtime state isolated between tests."""
+    nodeid = str(getattr(request.node, "nodeid", ""))
+    if "xiaoqing_chat" not in nodeid and "reply_checker" not in nodeid:
+        yield
+        return
+
+    try:
+        from plugins.xiaoqing_chat.runtime_state import reset_global_state
+    except Exception:
+        yield
+        return
+
+    reset_global_state()
+    try:
+        yield
+    finally:
+        reset_global_state()

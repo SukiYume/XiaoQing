@@ -4,7 +4,7 @@ import { showModal, closeModal, showConfirmModal } from '../components/modal.js'
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { isoDate, pad2, previewText, todayStr as sharedTodayStr } from '../utils/format.js';
-import { escapeHtml, injectStyles, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-diary-redesign-styles';
 const WEATHER_OPTIONS = ['☀️ 晴', '⛅ 多云', '🌧️ 雨', '❄️ 雪', '🌫️ 雾', '💨 风'];
@@ -169,7 +169,7 @@ function moodPalette(index) { return MOOD_SWATCHES[index % MOOD_SWATCHES.length]
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('diary-shell')}
+        ${pageShellCss('diary-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.NARROW })}
         .diary-stack { display: flex; flex-direction: column; gap: 18px; }
         .diary-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -282,16 +282,15 @@ function ensureStyles() {
         .diary-view-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.8; color: var(--color-text); max-height: 60vh; overflow-y: auto; }
         .diary-template-select { margin-top: 2px; }
         .diary-template-hint { font-size: 12px; color: var(--color-text-secondary); margin-top: 6px; padding: 8px 10px; background: rgba(251,207,232,0.28); border-radius: 14px; line-height: 1.6; white-space: pre-wrap; }
-        @media (max-width: 1120px) {
+        ${mediaMax(BREAKPOINTS.WIDE, `
             .diary-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .diary-layout { grid-template-columns: 1fr; }
-        }
-        @media (max-width: 860px) {
+        `)}
+        ${mediaMax(BREAKPOINTS.COMPACT, `
             .diary-cadence { grid-template-columns: repeat(12, minmax(0, 1fr)); }
             .diary-day { min-height: 96px; padding: 10px; }
-        }
-        @media (max-width: 760px) {
-            .diary-shell { padding: 20px 16px 30px; }
+        `)}
+        ${mediaMax(BREAKPOINTS.NARROW, `
             .diary-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .diary-hero-actions { align-items: flex-start; }
             .diary-summary-grid { grid-template-columns: 1fr; }
@@ -304,7 +303,7 @@ function ensureStyles() {
             .diary-cadence { grid-template-columns: repeat(10, minmax(0, 1fr)); }
             .diary-stream-item { flex-direction: column; }
             .diary-stream-date { width: auto; }
-        }
+        `)}
     `);
 }
 
