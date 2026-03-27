@@ -1,89 +1,86 @@
-<div align="center">
-
 # 📚 XiaoQing 开发文档
 
-欢迎阅读 XiaoQing 开发文档！本文档将帮助你全面理解 XiaoQing 框架并进行开发。
+这组文档覆盖三类问题：
 
-</div>
-
----
-
-## 🗂️ 文档目录
-
-### 🌱 入门篇
-
-| 文档 | 内容 | 适合人群 |
-|------|------|----------|
-| [📖 00-overview.md](00-overview.md) | 项目概览、设计理念、核心概念 | 所有人 |
-| [🚀 01-getting-started.md](01-getting-started.md) | 安装配置、快速启动、连接 NapCatQQ | 新手入门 |
-
-### 🏗️ 架构篇
-
-| 文档 | 内容 | 适合人群 |
-|------|------|----------|
-| [🏗️ 02-architecture.md](02-architecture.md) | 系统架构、数据流、模块职责 | 想深入了解的开发者 |
-| [⚙️ 04-core-modules.md](04-core-modules.md) | 核心模块源码详解 | 框架开发者 |
-| [📨 08-message-flow.md](08-message-flow.md) | 消息处理流程与并发控制详解 | 框架开发者/运维 |
-
-### 💻 开发篇
-
-| 文档 | 内容 | 适合人群 |
-|------|------|----------|
-| [🔌 03-plugin-development.md](03-plugin-development.md) | 插件开发完整指南、最佳实践 | 插件开发者 |
-| [🧪 07-advanced.md](07-advanced.md) | 高级主题：多轮对话、定时任务、扩展 | 高级开发者 |
-| [🧩 09-plugins.md](09-plugins.md) | 29 个内置插件功能说明（含 pendo 记账/Web 控制台） | 所有人 |
-
-### 📖 参考篇
-
-| 文档 | 内容 | 适合人群 |
-|------|------|----------|
-| [📋 05-api-reference.md](05-api-reference.md) | 完整 API 参考手册 | 所有开发者 |
-| [🔧 06-configuration.md](06-configuration.md) | 配置项详解、最佳实践 | 运维/部署 |
+- 我怎样把 XiaoQing 跑起来
+- 我怎样理解框架和消息链路
+- 我怎样基于现有插件继续开发
 
 ---
 
-## 🚀 快速导航
+## 🚀 推荐入口
 
-<table>
-<tr>
-<td width="50%">
+| 目标 | 从这里开始 | 说明 |
+|------|------------|------|
+| 第一次接触项目 | [00-overview.md](00-overview.md) | 先建立整体认知，再进入安装和源码阅读 |
+| 想尽快跑起来 | [01-getting-started.md](01-getting-started.md) | 安装、配置、连接 OneBot、基础验证 |
+| 想开发插件 | [03-plugin-development.md](03-plugin-development.md) | 插件结构、生命周期、最佳实践 |
+| 想排查部署/配置问题 | [06-configuration.md](06-configuration.md) | 配置项、示例、部署注意事项 |
+| 想看内置能力 | [09-plugins.md](09-plugins.md) | 29 个内置插件说明，统计口径为仓库中的 `plugin.json` |
 
-**🌱 我是新手，想快速上手**
-1. [00-overview.md](00-overview.md) — 了解这是什么
-2. [01-getting-started.md](01-getting-started.md) — 运行起来
-3. [03-plugin-development.md](03-plugin-development.md) — 写第一个插件
+---
 
-</td>
-<td width="50%">
+## 🗂️ 文档地图
 
-**🔌 我想开发插件**
-1. [03-plugin-development.md](03-plugin-development.md) — 插件开发完整指南
-2. [05-api-reference.md](05-api-reference.md) — API 参考
-3. [07-advanced.md](07-advanced.md) — 多轮对话、定时任务
-4. [09-plugins.md](09-plugins.md) — 参考内置插件
+### 🌱 入门
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+| 文档 | 内容 | 适合人群 |
+|------|------|----------|
+| [00-overview.md](00-overview.md) | 项目概览、设计理念、核心概念、目录结构 | 所有人 |
+| [01-getting-started.md](01-getting-started.md) | 安装、配置、启动、联调 OneBot | 新手 / 首次部署 |
 
-**🔭 我想深入理解框架**
-1. [02-architecture.md](02-architecture.md) — 系统架构
-2. [04-core-modules.md](04-core-modules.md) — 核心模块源码
-3. [08-message-flow.md](08-message-flow.md) — 消息处理与并发控制
-4. 直接阅读 `core/` 目录下的源代码
+### 🏗️ 架构
 
-</td>
-<td width="50%">
+| 文档 | 内容 | 适合人群 |
+|------|------|----------|
+| [02-architecture.md](02-architecture.md) | 系统架构、组件关系、职责边界 | 想理解框架整体设计的开发者 |
+| [04-core-modules.md](04-core-modules.md) | `core/` 模块源码说明 | 框架维护者 |
+| [08-message-flow.md](08-message-flow.md) | 消息从接收到回复的完整处理链路 | 框架开发者 / 运维 |
 
-**🖥️ 我想部署/运维**
-1. [01-getting-started.md](01-getting-started.md) — 安装和启动
-2. [06-configuration.md](06-configuration.md) — 配置详解
-3. [08-message-flow.md](08-message-flow.md) — 消息队列与并发控制
+### 💻 开发
 
-</td>
-</tr>
-</table>
+| 文档 | 内容 | 适合人群 |
+|------|------|----------|
+| [03-plugin-development.md](03-plugin-development.md) | 插件开发完整指南 | 插件开发者 |
+| [07-advanced.md](07-advanced.md) | 多轮对话、定时任务、扩展技巧 | 需要定制复杂行为的开发者 |
+| [09-plugins.md](09-plugins.md) | 内置插件清单与命令示例 | 想复用现有能力的人 |
+
+### 📖 参考
+
+| 文档 | 内容 | 适合人群 |
+|------|------|----------|
+| [05-api-reference.md](05-api-reference.md) | 常用 API 和上下文接口参考 | 所有开发者 |
+| [06-configuration.md](06-configuration.md) | 配置项详解、最佳实践、部署说明 | 运维 / 部署 / 调参 |
+
+---
+
+## 🧭 按角色阅读
+
+### 我是新手
+
+1. [00-overview.md](00-overview.md)
+2. [01-getting-started.md](01-getting-started.md)
+3. [03-plugin-development.md](03-plugin-development.md)
+
+### 我想开发插件
+
+1. [03-plugin-development.md](03-plugin-development.md)
+2. [05-api-reference.md](05-api-reference.md)
+3. [07-advanced.md](07-advanced.md)
+4. [09-plugins.md](09-plugins.md)
+
+### 我想理解框架内部
+
+1. [02-architecture.md](02-architecture.md)
+2. [04-core-modules.md](04-core-modules.md)
+3. [08-message-flow.md](08-message-flow.md)
+4. 结合 `core/` 与 `tests/` 源码交叉阅读
+
+### 我想部署和排障
+
+1. [01-getting-started.md](01-getting-started.md)
+2. [06-configuration.md](06-configuration.md)
+3. [08-message-flow.md](08-message-flow.md)
 
 ---
 
@@ -91,20 +88,21 @@
 
 | 目标 | 推荐文档 | 预计时间 |
 |------|----------|----------|
-| 通篇阅读 | 全部 | ≈ 2–3 小时 |
-| 快速上手 | 00、01、03 | ≈ 30 分钟 |
-| 按需查阅 | 对应章节 | — |
+| 快速跑通 | `00` + `01` | ≈ 20 分钟 |
+| 开始二次开发 | `00` + `03` + `05` | ≈ 45 分钟 |
+| 系统级理解 | `02` + `04` + `08` | ≈ 1.5 小时 |
+| 按需查阅 | 对应章节 | 视问题而定 |
 
 ---
 
-## 🔗 相关链接
+## 🔗 外部链接
 
 - [OneBot 协议文档](https://onebot.dev/)
-- [NapCatQQ](https://github.com/NapNeko/NapCatQQ) — 推荐的 OneBot 实现
+- [NapCatQQ](https://github.com/NapNeko/NapCatQQ)
 - [APScheduler 文档](https://apscheduler.readthedocs.io/)
 - [aiohttp 文档](https://docs.aiohttp.org/)
 - [Python asyncio 官方文档](https://docs.python.org/3/library/asyncio.html)
 
 ---
 
-> 如果文档有任何问题或建议，欢迎提交 Issue 或 PR！
+> 文档内容会随插件和配置演进而更新。发现示例与代码不一致时，请优先以仓库中的 `plugin.json`、`config/*.example` 和源码实现为准。

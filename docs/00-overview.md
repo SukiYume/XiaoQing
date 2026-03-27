@@ -7,6 +7,14 @@
 
 XiaoQing 是一个基于 **Python 异步**（asyncio）和 **OneBot 协议** 的轻量级 QQ 机器人框架。
 
+## ⚡ 三分钟理解
+
+如果你只想先抓住重点，记住这三件事：
+
+1. XiaoQing 的核心是 `core/`，负责消息接入、命令路由、会话管理和调度。
+2. 大部分能力都来自 `plugins/`，以带 `plugin.json` 的目录作为真正的插件单元。
+3. 项目既支持聊天型插件，也支持像 `pendo` 这种带 Web 控制台的复合插件。
+
 ### 一句话描述
 
 > 接收 QQ 消息 → 解析命令 → 调用插件处理 → 返回响应
@@ -242,7 +250,7 @@ XiaoQing/
 │   ├── constants.py        # 全局常量
 │   └── logging_config.py   # 日志配置
 │
-├── plugins/                # 插件目录（29 个插件）
+├── plugins/                # 插件目录（29 个带 plugin.json 的内置插件）
 │   ├── bot_core/           # 核心命令（help、reload）
 │   ├── xiaoqing_chat/      # 智能对话插件（向量记忆、情绪系统）
 │   ├── pendo/              # 个人时间与信息管理中枢（日程/待办/笔记/日记/记账/Web 控制台）
@@ -278,9 +286,11 @@ XiaoQing/
 │   └── xiaoqing_error.log      # 错误日志
 │
 ├── tests/                  # 测试文件
-│   ├── test_framework.py
-│   ├── test_message.py
-│   └── ...
+│   ├── test_app.py
+│   ├── test_dispatcher.py
+│   ├── plugins/
+│   ├── integration/
+│   └── helpers/
 │
 └── docs/                   # 文档（你正在看的）
 ```
