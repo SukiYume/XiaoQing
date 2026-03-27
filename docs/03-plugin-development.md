@@ -1,10 +1,13 @@
-# 03 - 插件开发指南
+# 🔌 03 - 插件开发指南
 
 本章是插件开发的完整指南，从最简单的插件到高级功能。
 
+> [!TIP]
+> 快速参考：一个插件最少只需要 `plugin.json` + `main.py` 两个文件。看完 [📂 插件基础](#-插件基础) 和 [💻 main.py 编写](#-mainpy-编写) 就能写出第一个插件。
+
 ---
 
-## 插件基础
+## 📂 插件基础
 
 ### 插件结构
 
@@ -83,7 +86,7 @@ async def handle(
 
 ---
 
-## plugin.json 配置
+## 📋 plugin.json 配置
 
 ### 完整字段
 
@@ -151,7 +154,7 @@ async def handle(
 
 ---
 
-## main.py 编写
+## 💻 main.py 编写
 
 ### Handler 链式处理机制
 
@@ -401,7 +404,7 @@ return []
 
 ---
 
-## PluginContext 详解
+## 🔧 PluginContext 详解
 
 `context` 是插件的上下文对象，提供各种工具。
 
@@ -630,7 +633,7 @@ remaining = context.get_mute_remaining(group_id)
 
 ---
 
-## 参数解析
+## 🔍 参数解析
 
 对于带参数的命令，`core.args` 模块提供了结构化解析：
 
@@ -667,7 +670,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ---
 
-## 消息构建
+## 💬 消息构建
 
 ### 基础函数
 
@@ -720,7 +723,7 @@ return [
 
 ---
 
-## 生命周期钩子
+## 🔄 生命周期钩子
 
 ### init() - 初始化
 
@@ -743,7 +746,10 @@ async def init(context):
 
 ### shutdown() - 清理
 
-插件卸载时调用，用于清理资源。**注意：此钩子有 5 秒的超时限制，超时将被强制中断。**
+插件卸载时调用，用于清理资源。
+
+> [!WARNING]
+> `shutdown()` 有 **5 秒超时限制**，超时将被强制中断。避免在此处执行耗时操作，尽快保存数据并关闭连接。
 
 ```python
 async def shutdown(context):
@@ -761,7 +767,7 @@ async def shutdown(context):
 
 ---
 
-## HTTP 请求
+## 🌐 HTTP 请求
 
 使用 `context.http_session`（aiohttp.ClientSession）：
 
@@ -801,7 +807,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ---
 
-## 数据持久化
+## 💾 数据持久化
 
 ### 使用 data_dir
 
@@ -850,7 +856,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ---
 
-## 插件私有配置
+## 🔐 插件私有配置
 
 ### 在 secrets.json 中配置
 
@@ -883,7 +889,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ---
 
-## 日志记录
+## 📝 日志记录
 
 使用 `context.logger`：
 
@@ -905,7 +911,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ---
 
-## 权限检查
+## 🛡️ 权限检查
 
 ### 管理员命令
 
@@ -939,7 +945,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ---
 
-## 错误处理
+## 🛠️ 错误处理
 
 ### 基本模式
 
@@ -978,7 +984,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ---
 
-## 完整示例：天气插件
+## 🌟 完整示例：天气插件
 
 ```python
 """
@@ -1076,7 +1082,7 @@ async def shutdown(context):
 
 ---
 
-## 下一步
+## ➡️ 下一步
 
 - 多轮对话开发 → [07-advanced.md](07-advanced.md#多轮对话)
 - 定时任务开发 → [07-advanced.md](07-advanced.md#定时任务)
@@ -1084,7 +1090,7 @@ async def shutdown(context):
 
 ---
 
-### 性能优化建议
+### ⚡ 性能优化建议
 
 1. **避免重复初始化**
    ```python

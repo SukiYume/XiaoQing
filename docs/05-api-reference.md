@@ -1,10 +1,10 @@
-# 05 - API 参考
+# 📋 05 - API 参考
 
 本章是完整的 API 参考手册。
 
 ---
 
-## plugin_base 模块
+## 🛠️ plugin_base 模块
 
 导入方式：
 ```python
@@ -950,7 +950,7 @@ parsed = parse("add 完成报告 --cat=工作 -p 2")
 
 ---
 
-## 下一步
+## ➡️ 下一步
 
 - 配置详解 → [06-configuration.md](06-configuration.md)
 - 高级主题 → [07-advanced.md](07-advanced.md)
