@@ -25,7 +25,7 @@
 |------|------|----------|
 | [03-plugin-development.md](03-plugin-development.md) | 插件开发完整指南、最佳实践 | 插件开发者 |
 | [07-advanced.md](07-advanced.md) | 高级主题：多轮对话、定时任务、扩展 | 高级开发者 |
-| [09-plugins.md](09-plugins.md) | 29 个内置插件功能说明 | 所有人 |
+| [09-plugins.md](09-plugins.md) | 29 个内置插件功能说明（含 pendo 记账/Web 控制台） | 所有人 |
 
 ### 参考篇
 
@@ -57,7 +57,7 @@
 
 ### 我想部署/运维
 1. [01-getting-started.md](01-getting-started.md) - 安装和启动
-2. [06-configuration.md](06-configuration.md) - 配置详解（含并发控制参数）
+2. [06-configuration.md](06-configuration.md) - 配置详解（含并发控制参数、pendo Web 控制台、nginx 子路径部署）
 3. [08-message-flow.md](08-message-flow.md) - 消息队列与并发控制机制
 
 ---

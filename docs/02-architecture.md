@@ -573,6 +573,27 @@ async def handle_event(self, event):
 
 ---
 
+## 插件内嵌服务
+
+部分插件可以在框架之外独立运行附加服务。典型案例是 **pendo** 插件：
+
+```
+XiaoQing 主进程
+├── 正常消息处理流程（Dispatcher → Plugin）
+└── pendo 插件（main.py）
+        └── /pendo web start 命令触发
+                └── FastAPI Web Server（uvicorn）
+                        ├── GET/POST /pendo/api/*  # REST API（JWT 鉴权）
+                        └── GET /*                 # 静态 SPA 文件
+```
+
+**特点**：
+- Web Server 在独立的 asyncio Task 中运行，不阻塞消息处理
+- 通过 `/pendo web start [port]` 按需启动，`/pendo web stop` 关闭
+- 支持 nginx 子路径反向代理（`/pendo` 前缀）
+
+---
+
 ## 下一步
 
 - 想开发插件？→ [03-plugin-development.md](03-plugin-development.md)
