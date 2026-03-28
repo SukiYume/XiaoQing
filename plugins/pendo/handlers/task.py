@@ -65,6 +65,7 @@ class TaskHandler(DbOpsMixin):
         命令格式：
         - /pendo todo add <内容> [cat:xxx] [p:1-4]
         - /pendo todo list [cat] [done/undone] [all|page:n]
+        - /pendo todo view <id>
         - /pendo todo done <id>
         - /pendo todo undone <id>
         - /pendo todo delete <id|cat:xxx>
@@ -80,6 +81,7 @@ class TaskHandler(DbOpsMixin):
         handlers = {
             "add": lambda: self.add_task(user_id, rest, context, group_id),
             "list": lambda: self.list_tasks(user_id, rest, context),
+            "view": lambda: self.view_task(user_id, rest, context),
             "done": lambda: self.mark_done(user_id, rest, context),
             "undone": lambda: self.mark_undone(user_id, rest, context),
             "delete": lambda: self.delete_task(user_id, rest, context),
@@ -89,9 +91,77 @@ class TaskHandler(DbOpsMixin):
         handler = handlers.get(command)
         if handler:
             return await handler()
-        else:
-            # 未知命令，当作list处理
+
+        if self._should_treat_as_list_shortcut(command, rest):
             return await self.list_tasks(user_id, args, context)
+
+        top_level_redirects = {
+            "confirm": "/pendo confirm <id>",
+            "snooze": "/pendo snooze <id> <时间>",
+            "undo": "/pendo undo",
+        }
+        if command in top_level_redirects:
+            return {"status": "error", "message": f"❌ 正确用法:\n\n{top_level_redirects[command]}"}
+
+        return {
+            "status": "error",
+            "message": (
+                f"❌ 未知待办命令: {command}\n\n"
+                "可用命令:\n"
+                "• /pendo todo add <内容>\n"
+                "• /pendo todo list [分类]\n"
+                "• /pendo todo view <id>\n"
+                "• /pendo todo done <id>\n"
+                "• /pendo todo undone <id>\n"
+                "• /pendo todo edit <id> <内容>\n"
+                "• /pendo todo delete <id|cat:分类>"
+            ),
+        }
+
+    @staticmethod
+    def _should_treat_as_list_shortcut(command: str, rest: str) -> bool:
+        """Preserve shorthand list queries while rejecting obvious mistyped commands."""
+        command = (command or "").strip().lower()
+        rest = (rest or "").strip()
+
+        if not command:
+            return False
+
+        single_token_shortcuts = {
+            "today",
+            "done",
+            "undone",
+            "todo",
+            "已完成",
+            "未完成",
+        }
+        if command in single_token_shortcuts or re.fullmatch(r"\d{4}-\d{2}-\d{2}", command):
+            return True
+
+        if not rest:
+            # `/pendo todo 工作`
+            return True
+
+        valid_modifiers = {"done", "undone", "todo", "已完成", "未完成", "all"}
+        for token in rest.split():
+            lower = token.lower()
+            if lower in valid_modifiers:
+                continue
+            if token.startswith("page:"):
+                try:
+                    int(token.split(":", 1)[1])
+                    continue
+                except (IndexError, ValueError):
+                    return False
+            if token.startswith("p:"):
+                try:
+                    int(token.split(":", 1)[1])
+                    continue
+                except (IndexError, ValueError):
+                    return False
+            return False
+
+        return True
 
     async def add_task(
         self, user_id: str, text: str, context: PendoContext, group_id: int | None = None
@@ -440,6 +510,44 @@ class TaskHandler(DbOpsMixin):
 
         return {"status": "success", "message": message}
 
+    async def view_task(self, user_id: str, task_id: str, context: PendoContext) -> CommandMessage:
+        """查看单个待办详情"""
+        if not task_id:
+            raise MissingRequiredFieldException("task_id")
+
+        task_id = task_id.strip()
+        task, wrong_type = await self._db_get_typed_item_or_message(
+            task_id, user_id, ItemType.TASK.value, "待办"
+        )
+        if wrong_type:
+            return wrong_type
+        task = cast(TaskItem, task)
+        status_value = _enum_val(task.status)
+        status_label = "已完成" if status_value == TaskStatus.DONE.value else "未完成"
+
+        lines = [f"📝 **{task.title or '无标题'}**", ""]
+        lines.append(f"{ItemFormatter.format_status_icon(status_value)} 状态: {status_label}")
+        lines.append(
+            f"{ItemFormatter.format_priority_icon(_enum_val(task.priority))} 优先级: {ItemFormatter.format_priority(_enum_val(task.priority) or 3)}"
+        )
+        lines.append(f"📂 分类: {task.category or '未分类'}")
+
+        if task.due_time:
+            lines.append(f"⏰ 截止: {ItemFormatter.format_datetime(task.due_time)}")
+        if task.completed_at:
+            lines.append(f"✅ 完成: {ItemFormatter.format_datetime(task.completed_at)}")
+        if task.tags:
+            lines.append(f"🏷️ 标签: {ItemFormatter.format_tags(task.tags)}")
+
+        lines.append("")
+        if task.content:
+            lines.append(task.content)
+            lines.append("")
+
+        lines.append(f"`{task_id}`")
+        lines.append(f"💡 /pendo todo done {task_id} | /pendo todo edit {task_id} <内容>")
+        return {"status": "success", "message": "\n".join(lines)}
+
     async def mark_done(self, user_id: str, task_id: str, context: PendoContext) -> CommandMessage:
         """标记为完成"""
         if not task_id:
@@ -447,8 +555,12 @@ class TaskHandler(DbOpsMixin):
 
         task_id = task_id.strip()
 
-        # 获取任务（_db_get_and_check 已包含所有权验证）
-        task = cast(TaskItem, await self._db_get_and_check(task_id, user_id))
+        task, wrong_type = await self._db_get_typed_item_or_message(
+            task_id, user_id, ItemType.TASK.value, "待办"
+        )
+        if wrong_type:
+            return wrong_type
+        task = cast(TaskItem, task)
 
         # 更新状态
         now = now_in_timezone(user_id, self.db)
@@ -474,7 +586,12 @@ class TaskHandler(DbOpsMixin):
         task_id = task_id.strip()
 
         # 获取任务并检查权限
-        task = cast(TaskItem, await self._db_get_and_check(task_id, user_id))
+        task, wrong_type = await self._db_get_typed_item_or_message(
+            task_id, user_id, ItemType.TASK.value, "待办"
+        )
+        if wrong_type:
+            return wrong_type
+        task = cast(TaskItem, task)
 
         updates = {
             ItemFields.STATUS: TaskStatus.TODO.value,
@@ -508,7 +625,12 @@ class TaskHandler(DbOpsMixin):
 
         # 单个ID删除
         task_id = args
-        task = cast(TaskItem, await self._db_get_and_check(task_id, user_id))
+        task, wrong_type = await self._db_get_typed_item_or_message(
+            task_id, user_id, ItemType.TASK.value, "待办"
+        )
+        if wrong_type:
+            return wrong_type
+        task = cast(TaskItem, task)
 
         # 软删除
         await self._db_soft_delete_with_log(task_id, user_id, item_type=ItemType.TASK.value)
@@ -557,7 +679,12 @@ class TaskHandler(DbOpsMixin):
         new_content = parts[1]
 
         # 获取任务
-        task = cast(TaskItem, await self._db_get_and_check(task_id, user_id))
+        task, wrong_type = await self._db_get_typed_item_or_message(
+            task_id, user_id, ItemType.TASK.value, "待办"
+        )
+        if wrong_type:
+            return wrong_type
+        task = cast(TaskItem, task)
 
         # 解析新内容
         parsed = self._parse_task_text(new_content, user_id)

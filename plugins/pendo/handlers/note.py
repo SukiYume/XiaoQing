@@ -341,8 +341,12 @@ class NoteHandler(DbOpsMixin):
 
         note_id = note_id.strip()
 
-        # 获取笔记（_db_get_and_check 已包含所有权验证）
-        note = cast(NoteItem, await self._db_get_and_check(note_id, user_id))
+        note, wrong_type = await self._db_get_typed_item_or_message(
+            note_id, user_id, ItemType.NOTE.value, "笔记"
+        )
+        if wrong_type:
+            return wrong_type
+        note = cast(NoteItem, note)
 
         # 更新查看时间
         await self._db_update_item(
@@ -384,7 +388,12 @@ class NoteHandler(DbOpsMixin):
         new_content = parts[1]
 
         # 获取笔记
-        note = cast(NoteItem, await self._db_get_and_check(note_id, user_id))
+        note, wrong_type = await self._db_get_typed_item_or_message(
+            note_id, user_id, ItemType.NOTE.value, "笔记"
+        )
+        if wrong_type:
+            return wrong_type
+        note = cast(NoteItem, note)
 
         # 解析新内容
         parsed = self._parse_note_text(new_content)
@@ -436,7 +445,12 @@ class NoteHandler(DbOpsMixin):
 
         # 单个ID删除
         note_id = args
-        note = cast(NoteItem, await self._db_get_and_check(note_id, user_id))
+        note, wrong_type = await self._db_get_typed_item_or_message(
+            note_id, user_id, ItemType.NOTE.value, "笔记"
+        )
+        if wrong_type:
+            return wrong_type
+        note = cast(NoteItem, note)
 
         # 软删除
         await self._db_soft_delete_with_log(note_id, user_id, item_type=ItemType.NOTE.value)

@@ -521,7 +521,13 @@ class LedgerHandler(DbOpsMixin):
         if not item_id:
             raise MissingRequiredFieldException("id")
 
-        item = cast(LedgerItem, await self._db_get_and_check(item_id.strip(), user_id))
+        item_id = item_id.strip()
+        item, wrong_type = await self._db_get_typed_item_or_message(
+            item_id, user_id, ItemType.LEDGER.value, "账目"
+        )
+        if wrong_type:
+            return wrong_type
+        item = cast(LedgerItem, item)
 
         icon = _direction_icon(item.direction)
         cat_icon = _get_category_icon(item.ledger_category)
@@ -573,7 +579,12 @@ class LedgerHandler(DbOpsMixin):
         item_id = parts[0].strip()
         edit_str = parts[1]
 
-        item = cast(LedgerItem, await self._db_get_and_check(item_id, user_id))
+        item, wrong_type = await self._db_get_typed_item_or_message(
+            item_id, user_id, ItemType.LEDGER.value, "账目"
+        )
+        if wrong_type:
+            return wrong_type
+        item = cast(LedgerItem, item)
 
         updates: dict[str, Any] = {"type": ItemType.LEDGER.value}
         field_labels: list[str] = []
@@ -639,7 +650,12 @@ class LedgerHandler(DbOpsMixin):
             raise MissingRequiredFieldException("id")
 
         item_id = item_id.strip()
-        item = cast(LedgerItem, await self._db_get_and_check(item_id, user_id))
+        item, wrong_type = await self._db_get_typed_item_or_message(
+            item_id, user_id, ItemType.LEDGER.value, "账目"
+        )
+        if wrong_type:
+            return wrong_type
+        item = cast(LedgerItem, item)
 
         await self._db_soft_delete_with_log(item_id, user_id, item_type=ItemType.LEDGER.value)
 

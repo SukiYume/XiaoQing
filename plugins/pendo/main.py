@@ -528,6 +528,7 @@ HELP_MAP = {
         "**快速记录:**",
         "• /pendo event add <内容> - 添加日程(AI解析时间/地点/提醒)",
         "• /pendo todo add <内容> - 添加待办",
+        "• /pendo todo view <id> - 查看待办详情",
         "• /pendo note add <内容> - 记录笔记",
         "• /pendo ledger quick <金额> <描述> - 快速记账",
     ],
@@ -551,6 +552,7 @@ HELP_MAP = {
         "  - 默认添加到当天分类(cat:2026-02-02)",
         "  - 晚上8点后自动归为第二天",
         "  - p:1(紧急) p:2(高) p:3(中) p:4(低)",
+        "• /pendo todo view <id> - 查看待办详情",
         "• /pendo todo list [分类] [done/undone] [all|page:n] - 查看待办",
         "  - /pendo todo list today - 今日待办",
         "  - /pendo todo list 工作 done - 工作分类已完成",
@@ -582,8 +584,8 @@ HELP_MAP = {
         "  - 1.三件好事 2.今日总结 3.情绪记录",
         "• /pendo diary list [范围] - 查看日记列表(默认本月)",
         "  - 范围: today, week, YYYY-MM, last7d, start..end",
-        "• /pendo diary view <日期> - 查看日记详情",
-        "• /pendo diary delete <日期> - 删除日记",
+        "• /pendo diary view [日期|ID] - 查看日记详情",
+        "• /pendo diary delete <日期|ID> - 删除日记",
     ],
     "ledger": [
         "**记账 (Ledger):**",
@@ -735,11 +737,11 @@ def _get_services(context: PendoContext | None) -> PendoServices:
     reminder_service = ReminderService(db)
     exporter = ExporterService(db)
 
-    # Event需要AI解析，Task/Note/Diary不需要
+    # Event/Diary 需要 AI 能力
     event_handler = EventHandler(db, ai_parser, reminder_service)
     task_handler = TaskHandler(db)
     note_handler = NoteHandler(db)
-    diary_handler = DiaryHandler(db)
+    diary_handler = DiaryHandler(db, ai_parser=ai_parser)
     search_handler = SearchHandler(db)
     ledger_handler = LedgerHandler(db)
     web_handler = WebHandler(db)

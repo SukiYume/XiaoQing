@@ -1,7 +1,13 @@
-"""Configuration data endpoints (categories, templates)."""
+"""Configuration data endpoints (categories, templates, diary metadata)."""
 from fastapi import APIRouter
 
-from ...config import PendoConfig, LEDGER_EXPENSE_CATEGORIES, LEDGER_INCOME_CATEGORIES, DIARY_TEMPLATES
+from ...config import (
+    PendoConfig,
+    LEDGER_EXPENSE_CATEGORIES,
+    LEDGER_INCOME_CATEGORIES,
+    DIARY_TEMPLATES,
+    MOOD_ANALYSIS_CONFIG,
+)
 
 router = APIRouter()
 
@@ -30,3 +36,17 @@ def get_diary_templates():
             "prompts": tdata.get("prompts", []),
         })
     return {"ok": True, "data": {"templates": templates}, "message": ""}
+
+
+@router.get("/config/diary/moods")
+def get_diary_moods():
+    """Get diary mood metadata for web clients."""
+    mood_emojis = dict(MOOD_ANALYSIS_CONFIG.get("mood_emojis", {}))
+    return {
+        "ok": True,
+        "data": {
+            "mood_emojis": mood_emojis,
+            "moods": list(mood_emojis.keys()),
+        },
+        "message": "",
+    }

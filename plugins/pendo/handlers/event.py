@@ -12,7 +12,7 @@ from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import error_result, handle_command_errors
 from ..config import PendoConfig
 from ..utils.time_utils import parse_event_time_range, TimezoneHelper, now_in_timezone, parse_remind_times
-from ..models.item import EventItem
+from ..models.item import EventItem, ItemType
 from ..core.types import PendoContext, CommandMessage
 from ..utils.settings_utils import resolve_default_category
 from .event_support import (
@@ -453,8 +453,12 @@ class EventHandler(DbOpsMixin):
                 "message": "❌ 请指定事件ID\n例如: /pendo event view abc12345",
             }
 
-        event = cast(EventItem | None, await self._db_get_item(event_id, owner_id=user_id))
-        if not event:
+        single_event_id, event, error = await self._resolve_single_event_id_or_message(
+            user_id, event_id, allow_series_fallback=False
+        )
+        if error:
+            return error
+        if not single_event_id or not event:
             return {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
 
         title = event.title or "无标题"
@@ -701,16 +705,13 @@ class EventHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 用法: /pendo event edit <id> <修改内容>"}
 
         event_id, changes = parts[0], parts[1]
-
-        # I-2修复：用 _looks_like_id 的严格逻辑判断是否为子实例ID
-        # L-2修复：统一使用 _looks_like_id，避免与其规则不一致
-        is_instance_id = "_" in event_id and self._looks_like_id(event_id)
-
-        if is_instance_id:
-            return await self._edit_single_instance(user_id, event_id, changes)
-        direct_event = cast(EventItem | None, await self._db_get_item(event_id, owner_id=user_id))
-        if direct_event is not None:
-            return await self._edit_single_instance(user_id, event_id, changes)
+        single_event_id, _, error = await self._resolve_single_event_id_or_message(
+            user_id, event_id, allow_series_fallback=True
+        )
+        if error:
+            return error
+        if single_event_id:
+            return await self._edit_single_instance(user_id, single_event_id, changes)
         return await self._edit_all_instances(user_id, event_id, changes)
 
     async def _edit_single_instance(
@@ -718,9 +719,14 @@ class EventHandler(DbOpsMixin):
     ) -> CommandMessage:
         """编辑单个日程实例"""
         try:
-            event = cast(EventItem | None, await self._db_get_item(instance_id, owner_id=user_id))
+            event, wrong_type = await self._db_get_typed_item_or_message(
+                instance_id, user_id, ItemType.EVENT.value, "日程"
+            )
+            if wrong_type:
+                return wrong_type
             if not event:
                 return {"status": "error", "message": f"❌ 找不到日程 {instance_id}"}
+            event = cast(EventItem, event)
 
             updates = await self._parse_updates(changes, event)
             updates = self._normalize_event_updates(event, updates)
@@ -992,13 +998,13 @@ class EventHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 请指定要删除的日程ID"}
 
         event_id = event_id.strip()
-
-        # I-2修复：严格判断是否为子实例ID（parent_YYYYMMDD格式）
-        # L-2修复：统一使用 _looks_like_id，避免与其规则不一致
-        is_instance_id = "_" in event_id and self._looks_like_id(event_id)
-
-        if is_instance_id:
-            return await self._delete_single_instance(user_id, event_id)
+        single_event_id, _, error = await self._resolve_single_event_id_or_message(
+            user_id, event_id, allow_series_fallback=True
+        )
+        if error:
+            return error
+        if single_event_id:
+            return await self._delete_single_instance(user_id, single_event_id)
 
         # 父ID：删除所有实例
         return await self._delete_all_instances(user_id, event_id)
@@ -1081,9 +1087,14 @@ class EventHandler(DbOpsMixin):
 
         event_id, reminder_desc = parts[0].strip(), parts[1].strip()
 
-        event = cast(EventItem | None, await self._db_get_item(event_id, owner_id=user_id))
+        event, wrong_type = await self._db_get_typed_item_or_message(
+            event_id, user_id, ItemType.EVENT.value, "日程"
+        )
+        if wrong_type:
+            return wrong_type
         if not event:
             return {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
+        event = cast(EventItem, event)
 
         # 用AI解析提醒描述，基准时间使用事件start_time
         base_time = event.start_time
@@ -1211,9 +1222,11 @@ class EventHandler(DbOpsMixin):
         - 父ID (8位，有parent_id的事件): 显示所有实例的提醒汇总
         """
         # 先尝试直接获取
-        event = cast(EventItem | None, await self._db_get_item(query_id, owner_id=user_id))
-
-        if event:
+        item = await self._db_get_item(query_id, owner_id=user_id)
+        if item:
+            if not isinstance(item, EventItem):
+                return self._build_wrong_type_message(query_id, "日程", item)
+            event = cast(EventItem, item)
             return format_event_reminders(event, self._build_log_map(event.id))
 
         # 如果直接查找失败，可能是parent_id，尝试查找所有子实例
@@ -1411,6 +1424,31 @@ class EventHandler(DbOpsMixin):
                 and re.match(r"^\d{8}$", parts[1]) is not None
             )
         return re.match(r"^[0-9a-f]{8}$", text) is not None
+
+    async def _resolve_single_event_id_or_message(
+        self, user_id: str, event_id: str, *, allow_series_fallback: bool
+    ) -> tuple[str | None, EventItem | None, CommandMessage | None]:
+        """Resolve direct event/instance IDs and return series fallback when requested."""
+        event_id = (event_id or "").strip()
+
+        if "_" in event_id and self._looks_like_id(event_id):
+            event, wrong_type = await self._db_get_typed_item_or_message(
+                event_id, user_id, ItemType.EVENT.value, "日程"
+            )
+            if wrong_type:
+                return None, None, wrong_type
+            if not event:
+                return None, None, {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
+            return event_id, cast(EventItem, event), None
+
+        item = await self._db_get_item(event_id, owner_id=user_id)
+        if item is None:
+            if allow_series_fallback:
+                return None, None, None
+            return None, None, {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
+        if not isinstance(item, EventItem):
+            return None, None, self._build_wrong_type_message(event_id, "日程", item)
+        return event_id, cast(EventItem, item), None
 
     def _build_log_map(self, event_id: str) -> dict[str, dict[str, Any]]:
         """Build {remind_time_iso: log_dict} for an event.
