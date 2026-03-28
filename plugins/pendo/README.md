@@ -172,6 +172,7 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 
 ```
 /pendo todo                  # 列出所有分类
+/pendo todo view <id>       # 查看待办详情
 /pendo todo today           # 今日待办快捷方式
 /pendo todo list 2026-02-03  # 查看指定日期
 /pendo todo list 工作 done   # 工作分类已完成
@@ -240,6 +241,8 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 ```
 /pendo diary view             # 查看今天的日记
 /pendo diary view 2026-01-31  # 查看指定日期
+/pendo diary view 82d34407    # 按ID查看某篇日记
+/pendo diary delete 82d34407  # 按ID删除日记
 /pendo diary list             # 最近30天日记
 /pendo diary list month       # 本月日记
 ```

@@ -9,6 +9,13 @@ import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '.
 const CSS_ID = 'pendo-diary-redesign-styles';
 const WEATHER_OPTIONS = ['☀️ 晴', '⛅ 多云', '🌧️ 雨', '❄️ 雪', '🌫️ 雾', '💨 风'];
 const MOOD_SWATCHES = ['#EC4899', '#8B5CF6', '#3B82F6', '#F59E0B', '#10B981', '#F97316'];
+const DEFAULT_MOOD_EMOJIS = {
+    happy: '😊',
+    sad: '😢',
+    calm: '😌',
+    excited: '🤩',
+    angry: '😠',
+};
 
 const DIARY_FIELDS = [
     { name: 'diary_date', label: '日期', type: 'date', required: true },
@@ -35,6 +42,7 @@ let _loading = false;
 let _templates = [];
 let _templatesLoaded = false;
 let _dataChangedHandler = null;
+let _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
 
 function todayDate() { return new Date(); }
 
@@ -60,6 +68,18 @@ function parseDate(value) {
 
 function diaryWordCount(item) {
     return String(item?.content || '').trim().length;
+}
+
+function moodEmoji(mood) {
+    const normalized = String(mood || '').trim().toLowerCase();
+    return normalized ? (_moodEmojis[normalized] || '') : '';
+}
+
+function moodBadgeText(mood) {
+    const normalized = String(mood || '').trim();
+    if (!normalized) return '';
+    const emoji = moodEmoji(normalized);
+    return emoji ? `${emoji} ${normalized}` : normalized;
 }
 
 function formatDateLabel(value) {
@@ -145,6 +165,20 @@ async function loadTemplates() {
         _templates = [];
     }
     _templatesLoaded = true;
+}
+
+async function loadMoodEmojis() {
+    try {
+        const res = await api.get('/config/diary/moods');
+        const fetched = res?.data?.mood_emojis;
+        if (fetched && typeof fetched === 'object') {
+            _moodEmojis = { ...DEFAULT_MOOD_EMOJIS, ...fetched };
+            return;
+        }
+    } catch (_) {
+        // Fallback to defaults when config endpoint is unavailable.
+    }
+    _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
 }
 
 function buildCalendarDays(year, month) {
@@ -381,7 +415,7 @@ function renderCalendarPanel() {
                         const list = entries.get(day.key) || [];
                         const first = list[0];
                         const preview = first ? escapeHtml(first.title || previewText(first.content, 14) || '已记录') : '';
-                        const mood = first?.mood ? `<span class="diary-day-mood">${escapeHtml(first.mood)}</span>` : '';
+                        const mood = first?.mood ? `<span class="diary-day-mood">${escapeHtml(moodEmoji(first.mood) || first.mood)}</span>` : '';
                         const count = list.length ? `<span class="diary-day-count">${list.length}</span>` : '';
                         return `
                             <button
@@ -423,7 +457,7 @@ function renderMoodPanel() {
                     ${moods.map((item, index) => `
                         <div class="diary-mood-row">
                             <div class="diary-mood-top">
-                                <span class="diary-mood-name"><span class="diary-mood-dot" style="background:${moodPalette(index)};"></span>${escapeHtml(item.mood)}</span>
+                                <span class="diary-mood-name"><span class="diary-mood-dot" style="background:${moodPalette(index)};"></span>${escapeHtml(moodBadgeText(item.mood) || item.mood)}</span>
                                 <span class="diary-mood-count">${item.count} 天</span>
                             </div>
                             <div class="diary-mood-track"><span class="diary-mood-fill" style="width:${Math.max(10, Math.round(item.share * 100))}%;background:${moodPalette(index)};"></span></div>
@@ -465,7 +499,7 @@ function renderRecentPanel() {
                     <div class="diary-recent-list">
                         ${recent.slice(0, 4).map((item) => `
                             <button type="button" class="diary-recent-item" data-date="${item.diary_date}">
-                                <span class="diary-recent-top"><strong>${escapeHtml(item.mood || '📖')} ${escapeHtml(item.title || item.diary_date)}</strong><span>${escapeHtml(item.diary_date)}</span></span>
+                                <span class="diary-recent-top"><strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || item.diary_date)}</strong><span>${escapeHtml(item.diary_date)}</span></span>
                                 <span class="diary-recent-preview">${escapeHtml(item.content_preview || '点击查看详情')}</span>
                             </button>`).join('')}
                     </div>` : '<div class="diary-empty-card">这个月还没有可以回看的日记。</div>'}
@@ -486,7 +520,7 @@ function renderEntryCard(item) {
         <article class="diary-entry-card" data-id="${item.id}">
             <div class="diary-entry-head">
                 <div>
-                    <div class="diary-entry-title-row"><span class="diary-entry-mood">${escapeHtml(item.mood || '📖')}</span><h4>${escapeHtml(item.title || '这一天的记录')}</h4></div>
+                    <div class="diary-entry-title-row"><span class="diary-entry-mood">${escapeHtml(moodEmoji(item.mood) || '📖')}</span><h4>${escapeHtml(item.title || '这一天的记录')}</h4></div>
                     <div class="diary-entry-meta">
                         <span>${escapeHtml(item.weather || '未记录天气')}</span>
                         ${item.location ? `<span>📍 ${escapeHtml(item.location)}</span>` : ''}
@@ -537,7 +571,7 @@ function renderMonthStream() {
                             <button type="button" class="diary-stream-item" data-id="${item.id}">
                                 <span class="diary-stream-date">${escapeHtml(item.diary_date)}</span>
                                 <span class="diary-stream-main">
-                                    <strong>${escapeHtml(item.mood || '📖')} ${escapeHtml(item.title || previewText(item.content, 18) || '这一天')}</strong>
+                                    <strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || previewText(item.content, 18) || '这一天')}</strong>
                                     <span>${escapeHtml(previewText(item.content, 70) || '点击查看详情')}</span>
                                 </span>
                                 <span class="diary-stream-words">${diaryWordCount(item)} 字</span>
@@ -579,7 +613,7 @@ function openDiaryViewModal(item) {
     const bodyHTML = `
         <div class="diary-view-meta">
             <span class="diary-view-chip">📅 ${escapeHtml(item.diary_date)}</span>
-            ${item.mood ? `<span class="diary-view-chip">${escapeHtml(item.mood)}</span>` : ''}
+            ${item.mood ? `<span class="diary-view-chip">${escapeHtml(moodBadgeText(item.mood))}</span>` : ''}
             ${item.weather ? `<span class="diary-view-chip">${escapeHtml(item.weather)}</span>` : ''}
             ${item.location ? `<span class="diary-view-chip">📍 ${escapeHtml(item.location)}</span>` : ''}
             <span class="diary-view-chip">${diaryWordCount(item)} 字</span>
@@ -830,7 +864,9 @@ export function render(container) {
     _year = now.getFullYear();
     _month = now.getMonth() + 1;
     renderPage();
-    loadAndRender();
+    loadMoodEmojis().finally(() => {
+        loadAndRender();
+    });
     _dataChangedHandler = async (event) => {
         const changedType = event?.detail?.type;
         if (changedType && changedType !== 'diary') return;
