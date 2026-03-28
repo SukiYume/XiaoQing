@@ -28,9 +28,9 @@ SearchItem = EventItem | TaskItem | DiaryItem | NoteItem | LedgerItem
 # 操作提示：根据类型提供对应的操作命令
 _TYPE_ACTION_HINTS: dict[str, str] = {
     "event": "/pendo event view <id>",
-    "task": "/pendo todo done <id>",
+    "task": "/pendo todo view <id>",
     "note": "/pendo note view <id>",
-    "diary": "/pendo diary view <日期>",
+    "diary": "/pendo diary view <日期或ID>",
     "ledger": "/pendo ledger view <id>",
 }
 

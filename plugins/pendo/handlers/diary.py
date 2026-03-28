@@ -38,6 +38,7 @@ class DiaryHandler(DbOpsMixin):
 
     def __init__(self, db: "Database", ai_parser: object | None = None):
         self.db = db
+        self.ai_parser = ai_parser
         # ai_parser保留接口兼容性，但不使用
         # 日记模板（从配置读取）
         self.templates: dict[str, TemplateDef] = cast(dict[str, TemplateDef], DIARY_TEMPLATES)
@@ -56,6 +57,24 @@ class DiaryHandler(DbOpsMixin):
             ),
         )
 
+    async def _resolve_diary_query(
+        self, user_id: str, query: str
+    ) -> tuple[DiaryItem | None, str | None, CommandMessage | None]:
+        """Resolve a diary by date or item ID."""
+        query = (query or "").strip()
+        diary_date = parse_date_optional(query)
+        if diary_date:
+            return await self._get_diary_by_date(user_id, diary_date), diary_date, None
+
+        item = await self._db_get_item(query, owner_id=user_id)
+        if not item:
+            return None, None, {"status": "error", "message": f"❌ 找不到日记 {query}"}
+        if not isinstance(item, DiaryItem):
+            return None, None, self._build_wrong_type_message(query, "日记", item)
+
+        diary = cast(DiaryItem, item)
+        return diary, diary.diary_date or query, None
+
     @handle_command_errors
     async def handle(
         self, user_id: str, args: str, context: PendoContext, group_id: int | None = None
@@ -65,10 +84,10 @@ class DiaryHandler(DbOpsMixin):
         命令格式：
         - /pendo diary add [日期] <内容> -> 写日记
         - /pendo diary list [范围] -> 查看日记列表
-        - /pendo diary view <日期> -> 查看日记详情
+        - /pendo diary view [日期|ID] -> 查看日记详情
         - /pendo diary template -> 查看所有模板
         - /pendo diary <模板ID> -> 使用模板写日记
-        - /pendo diary delete <日期> -> 删除日记
+        - /pendo diary delete <日期|ID> -> 删除日记
         """
         if not args or not args.strip():
             return {"status": "success", "message": self._show_help()}
@@ -146,7 +165,7 @@ class DiaryHandler(DbOpsMixin):
             # 已有日记，追加内容
             new_content = (existing.content or "") + "\n\n---\n\n" + parsed["content"]
             # 重新分析情绪（基于完整的新内容）
-            new_mood, new_mood_score = self._analyze_mood(new_content)
+            new_mood, new_mood_score = await self._analyze_mood(new_content, user_id)
 
             updates = {
                 "content": new_content,
@@ -188,7 +207,7 @@ class DiaryHandler(DbOpsMixin):
         content = str(parsed.get("content", ""))
 
         # 简单情绪分析
-        mood, mood_score = self._analyze_mood(content)
+        mood, mood_score = await self._analyze_mood(content, user_id)
 
         # 生成标题
         title = f"{diary_date}的日记"
@@ -246,13 +265,13 @@ class DiaryHandler(DbOpsMixin):
         self, user_id: str, date_str: str, context: PendoContext
     ) -> CommandMessage:
         """查看日记"""
-        diary_date = parse_date_optional(date_str)
+        query = (date_str or "").strip()
+        if not query:
+            query = datetime.now().strftime("%Y-%m-%d")
 
-        if not diary_date:
-            return {"status": "error", "message": "❌ 无法解析日期，请使用 YYYY-MM-DD 格式"}
-
-        # 获取日记
-        diary = await self._get_diary_by_date(user_id, diary_date)
+        diary, diary_date, error = await self._resolve_diary_query(user_id, query)
+        if error:
+            return error
 
         if not diary:
             return {
@@ -349,21 +368,21 @@ class DiaryHandler(DbOpsMixin):
             message += f"  _{content_preview}_\n"
             message += f"  `{diary.id}`\n\n"
 
-        message += f"💡 用 /pendo diary view <日期> 查看完整日记"
+        message += f"💡 用 /pendo diary view <日期或ID> 查看完整日记"
 
         return {"status": "success", "message": message}
 
     async def delete_diary(
         self, user_id: str, date_str: str, context: PendoContext
     ) -> CommandMessage:
-        """删除指定日期的日记"""
-        diary_date = parse_date_optional(date_str)
+        """按日期或 ID 删除日记"""
+        query = (date_str or "").strip()
+        if not query:
+            return {"status": "error", "message": "❌ 请指定要删除的日记日期或ID"}
 
-        if not diary_date:
-            return {"status": "error", "message": "❌ 无法解析日期，请使用 YYYY-MM-DD 格式"}
-
-        # 获取日记
-        diary = await self._get_diary_by_date(user_id, diary_date)
+        diary, diary_date, error = await self._resolve_diary_query(user_id, query)
+        if error:
+            return error
 
         if not diary:
             return {"status": "error", "message": f"❌ 没有找到 {diary_date} 的日记"}
@@ -559,9 +578,9 @@ class DiaryHandler(DbOpsMixin):
             "**查看:**\n"
             "• /pendo diary list [范围] - 日记列表(默认本月)\n"
             "  范围: today, week, YYYY-MM, last7d\n"
-            "• /pendo diary view <日期> - 查看详情\n\n"
+            "• /pendo diary view [日期|ID] - 查看详情\n\n"
             "**其他:**\n"
-            "• /pendo diary delete <日期> - 删除日记"
+            "• /pendo diary delete <日期|ID> - 删除日记"
         )
 
     async def _get_diary_by_date(self, user_id: str, diary_date: str) -> DiaryItem | None:
@@ -619,17 +638,18 @@ class DiaryHandler(DbOpsMixin):
 
         return result
 
-    def _analyze_mood(self, content: str) -> tuple[str | None, int | None]:
-        """分析日记内容的情绪
+    async def _analyze_mood(self, content: str, user_id: str) -> tuple[str | None, int | None]:
+        """优先使用 AI 判别日记情绪，失败时降级到规则分析。"""
+        if self.ai_parser and hasattr(self.ai_parser, "analyze_diary_mood"):
+            try:
+                return await self.ai_parser.analyze_diary_mood(content, user_id)
+            except Exception:
+                logger.exception("AI 情绪分析失败，回退到规则分析")
 
-        使用配置中的情绪词典进行简单关键词匹配分析。
+        return self._analyze_mood_rule(content)
 
-        Args:
-            content: 日记内容
-
-        Returns:
-            (情绪类型, 情绪分数) 元组，如果没有识别到情绪则返回 (None, None)
-        """
+    def _analyze_mood_rule(self, content: str) -> tuple[str | None, int | None]:
+        """使用配置词典进行规则情绪分析。"""
         positive_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("positive_words", []))
         negative_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("negative_words", []))
         calm_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("calm_words", []))

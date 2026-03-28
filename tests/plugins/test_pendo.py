@@ -1122,6 +1122,642 @@ class TestReminderRegression:
         finally:
             db.cleanup()
 
+
+class TestDiaryViewRegression:
+    def test_view_diary_by_id_returns_full_entry(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.diary import DiaryHandler
+        from plugins.pendo.models.item import DiaryItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_diary_view.db"))
+
+        try:
+            diary = DiaryItem(
+                owner_id="u1",
+                title="2026-03-28 日记",
+                content="今天周六，十点多醒来，去华贸天地吃饭。",
+                diary_date="2026-03-28",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(diary, "82d34407")
+
+            handler = DiaryHandler(db=db)
+            result = asyncio.run(handler.view_diary("u1", "82d34407", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "2026-03-28的日记" in result["message"]
+            assert "今天周六，十点多醒来" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_view_event_with_diary_id_returns_hint_instead_of_crashing(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import DiaryItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_event_wrong_type.db"))
+
+        try:
+            diary = DiaryItem(
+                owner_id="u1",
+                title="2026-03-28 日记",
+                content="今天周六，十点多醒来，去华贸天地吃饭。",
+                diary_date="2026-03-28",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(diary, "82d34407")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+            result = asyncio.run(handler.handle("u1", "view 82d34407", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "不是日程ID" in result["message"]
+            assert "/pendo diary view 82d34407" in result["message"]
+            assert "2026-03-28" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_view_diary_with_event_id_returns_hint(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.diary import DiaryHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_diary_wrong_type.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="晨会",
+                start_time="2026-03-29T09:00:00",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(event, "evt12345")
+
+            handler = DiaryHandler(db=db)
+            result = asyncio.run(handler.view_diary("u1", "evt12345", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "不是日记ID" in result["message"]
+            assert "/pendo event view evt12345" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_delete_diary_by_id_deletes_entry(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.diary import DiaryHandler
+        from plugins.pendo.models.item import DiaryItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_diary_delete_by_id.db"))
+
+        try:
+            diary = DiaryItem(
+                owner_id="u1",
+                title="2026-03-28 日记",
+                content="今天周六，十点多醒来。",
+                diary_date="2026-03-28",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(diary, "82d34407")
+
+            handler = DiaryHandler(db=db)
+            result = asyncio.run(handler.delete_diary("u1", "82d34407", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "已删除 2026-03-28 的日记" in result["message"]
+            assert db.items.get_item("82d34407", "u1") is None
+        finally:
+            db.cleanup()
+
+    def test_delete_diary_with_event_id_returns_hint(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.diary import DiaryHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_diary_delete_wrong_type.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="晨会",
+                start_time="2026-03-29T09:00:00",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(event, "evt12345")
+
+            handler = DiaryHandler(db=db)
+            result = asyncio.run(handler.delete_diary("u1", "evt12345", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "不是日记ID" in result["message"]
+            assert "/pendo event view evt12345" in result["message"]
+        finally:
+            db.cleanup()
+
+
+class TestCrossTypeCommandRegression:
+    def test_note_view_with_event_id_returns_hint(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_wrong_type.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="晨会",
+                start_time="2026-03-29T09:00:00",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(event, "evt12345")
+
+            handler = NoteHandler(db=db)
+            result = asyncio.run(handler.view_note("u1", "evt12345", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "不是笔记ID" in result["message"]
+            assert "/pendo event view evt12345" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_note_delete_with_event_id_returns_hint_without_deleting_event(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.models.item import EventItem, ItemType
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_delete_guard.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="晨会",
+                start_time="2026-03-29T09:00:00",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(event, "evt12345")
+
+            handler = NoteHandler(db=db)
+            result = asyncio.run(handler.delete_note("u1", "evt12345", SimpleNamespace()))
+            preserved = db.items.get_item("evt12345", "u1")
+
+            assert result["status"] == "success"
+            assert "不是笔记ID" in result["message"]
+            assert preserved is not None
+            assert preserved.deleted is False
+            assert preserved.type == ItemType.EVENT
+        finally:
+            db.cleanup()
+
+    def test_ledger_view_with_diary_id_returns_hint(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.ledger import LedgerHandler
+        from plugins.pendo.models.item import DiaryItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_ledger_wrong_type.db"))
+
+        try:
+            diary = DiaryItem(
+                owner_id="u1",
+                title="2026-03-28 日记",
+                content="今天周六，十点多醒来。",
+                diary_date="2026-03-28",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(diary, "dia12345")
+
+            handler = LedgerHandler(db=db)
+            result = asyncio.run(handler.handle("u1", "view dia12345", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "不是账目ID" in result["message"]
+            assert "/pendo diary view dia12345" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_ledger_edit_with_note_id_returns_hint_without_mutation(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.ledger import LedgerHandler
+        from plugins.pendo.models.item import NoteItem, ItemType
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_ledger_edit_guard.db"))
+
+        try:
+            note = NoteItem(
+                owner_id="u1",
+                title="采购清单",
+                content="牛奶 面包",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(note, "not12345")
+
+            handler = LedgerHandler(db=db)
+            result = asyncio.run(
+                handler.edit_ledger("u1", "not12345 amount:50 cat:交通", SimpleNamespace())
+            )
+            preserved = db.items.get_item("not12345", "u1")
+
+            assert result["status"] == "success"
+            assert "不是账目ID" in result["message"]
+            assert preserved is not None
+            assert preserved.type == ItemType.NOTE
+            assert preserved.title == "采购清单"
+        finally:
+            db.cleanup()
+
+    def test_todo_view_returns_detail(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.task import TaskHandler
+        from plugins.pendo.models.item import TaskItem, TaskStatus
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_todo_view.db"))
+
+        try:
+            task = TaskItem(
+                owner_id="u1",
+                title="提交报销",
+                content="整理发票并提交系统",
+                category="工作",
+                priority=2,
+                status=TaskStatus.TODO,
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(task, "tsk12345")
+
+            handler = TaskHandler(db=db)
+            result = asyncio.run(handler.handle("u1", "view tsk12345", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "提交报销" in result["message"]
+            assert "分类: 工作" in result["message"]
+            assert "/pendo todo done tsk12345" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_todo_done_with_note_id_returns_hint_without_mutating_note(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.task import TaskHandler
+        from plugins.pendo.models.item import NoteItem, ItemType
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_todo_wrong_type.db"))
+
+        try:
+            note = NoteItem(
+                owner_id="u1",
+                title="采购清单",
+                content="牛奶 面包",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(note, "not12345")
+
+            handler = TaskHandler(db=db)
+            result = asyncio.run(handler.mark_done("u1", "not12345", SimpleNamespace()))
+            preserved = db.items.get_item("not12345", "u1")
+
+            assert result["status"] == "success"
+            assert "不是待办ID" in result["message"]
+            assert preserved is not None
+            assert preserved.type == ItemType.NOTE
+        finally:
+            db.cleanup()
+
+    def test_todo_unknown_command_returns_error_instead_of_silent_list(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.task import TaskHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_todo_unknown_cmd.db"))
+
+        try:
+            handler = TaskHandler(db=db)
+            result = asyncio.run(handler.handle("u1", "viwe abc12345", SimpleNamespace()))
+
+            assert result["status"] == "error"
+            assert "未知待办命令: viwe" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_todo_category_shortcut_still_routes_to_list(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.task import TaskHandler
+        from plugins.pendo.models.item import TaskItem, TaskStatus
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_todo_shortcut.db"))
+
+        try:
+            task = TaskItem(
+                owner_id="u1",
+                title="提交报销",
+                category="工作",
+                priority=2,
+                status=TaskStatus.TODO,
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(task, "tsk12345")
+
+            handler = TaskHandler(db=db)
+            result = asyncio.run(handler.handle("u1", "工作 done", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "工作" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_event_edit_with_diary_id_returns_hint_without_mutation(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import DiaryItem, ItemType
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_event_edit_wrong_type.db"))
+
+        try:
+            diary = DiaryItem(
+                owner_id="u1",
+                title="2026-03-28 日记",
+                content="今天周六。",
+                diary_date="2026-03-28",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(diary, "dia12345")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+            result = asyncio.run(handler.edit_event("u1", "dia12345 改到明天下午两点", SimpleNamespace()))
+            preserved = db.items.get_item("dia12345", "u1")
+
+            assert result["status"] == "success"
+            assert "不是日程ID" in result["message"]
+            assert "/pendo diary view dia12345" in result["message"]
+            assert preserved is not None
+            assert preserved.type == ItemType.DIARY
+            assert getattr(preserved, "diary_date") == "2026-03-28"
+        finally:
+            db.cleanup()
+
+    def test_event_reminders_view_with_diary_id_returns_hint(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import DiaryItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_event_reminders_wrong_type.db"))
+
+        try:
+            diary = DiaryItem(
+                owner_id="u1",
+                title="2026-03-28 日记",
+                content="今天周六。",
+                diary_date="2026-03-28",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(diary, "8bec805e")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+            result = asyncio.run(handler.list_reminders("u1", "8bec805e", SimpleNamespace()))
+
+            assert result["status"] == "success"
+            assert "不是日程ID" in result["message"]
+            assert "/pendo diary view 8bec805e" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_event_reminders_set_with_note_id_returns_hint_without_mutation(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import NoteItem, ItemType
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_event_reminders_set_guard.db"))
+
+        try:
+            note = NoteItem(
+                owner_id="u1",
+                title="采购清单",
+                content="牛奶 面包",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(note, "not12345")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+            result = asyncio.run(
+                handler.set_reminders("u1", "not12345 提前1天提醒", SimpleNamespace())
+            )
+            preserved = db.items.get_item("not12345", "u1")
+
+            assert result["status"] == "success"
+            assert "不是日程ID" in result["message"]
+            assert preserved is not None
+            assert preserved.type == ItemType.NOTE
+            assert getattr(preserved, "title") == "采购清单"
+        finally:
+            db.cleanup()
+
+    def test_event_delete_with_note_id_returns_hint_without_mutation(self, tmp_path):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import ItemType, NoteItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_event_delete_wrong_type.db"))
+
+        try:
+            note = NoteItem(
+                owner_id="u1",
+                title="采购清单",
+                content="牛奶 面包",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(note, "not12345")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+            result = asyncio.run(handler.delete_event("u1", "not12345", SimpleNamespace()))
+            preserved = db.items.get_item("not12345", "u1")
+
+            assert result["status"] == "success"
+            assert "不是日程ID" in result["message"]
+            assert "/pendo note view not12345" in result["message"]
+            assert preserved is not None
+            assert preserved.type == ItemType.NOTE
+            assert getattr(preserved, "title") == "采购清单"
+        finally:
+            db.cleanup()
+
+
+class TestDiaryMoodAIRegression:
+    def test_create_diary_uses_ai_mood_analysis(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.diary import DiaryHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_diary_ai_mood.db"))
+
+        class _FakeAiParser:
+            async def analyze_diary_mood(self, text, user_id):
+                assert "今天周六" in text
+                assert user_id == "u1"
+                return "calm", 6
+
+        try:
+            handler = DiaryHandler(db=db, ai_parser=_FakeAiParser())
+            result = asyncio.run(
+                handler.create_diary(
+                    "u1",
+                    "2026-03-28",
+                    {"content": "今天周六，十点多醒来，去华贸天地吃饭。"},
+                    SimpleNamespace(),
+                )
+            )
+
+            saved = db.items.get_item(result["item_id"], "u1")
+
+            assert result["status"] == "success"
+            assert "情绪: calm" in result["message"]
+            assert saved is not None
+            assert getattr(saved, "mood") == "calm"
+            assert getattr(saved, "mood_score") == 6
+        finally:
+            db.cleanup()
+
+    def test_append_diary_reanalyzes_mood_with_ai(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.diary import DiaryHandler
+        from plugins.pendo.models.item import DiaryItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_diary_ai_append.db"))
+
+        class _FakeAiParser:
+            def __init__(self):
+                self.calls = []
+
+            async def analyze_diary_mood(self, text, user_id):
+                self.calls.append(text)
+                return "happy", 8
+
+        ai_parser = _FakeAiParser()
+
+        try:
+            diary = DiaryItem(
+                owner_id="u1",
+                title="2026-03-28 日记",
+                content="早上出门。",
+                diary_date="2026-03-28",
+                mood="calm",
+                mood_score=5,
+                category="日记",
+                created_at="2026-03-28T21:41:10",
+                updated_at="2026-03-28T21:41:10",
+            )
+            db.items.insert_item(diary, "dia12345")
+
+            handler = DiaryHandler(db=db, ai_parser=ai_parser)
+            result = asyncio.run(
+                handler.add_diary("u1", "2026-03-28 晚上玩得很开心", SimpleNamespace(), None)
+            )
+
+            updated = db.items.get_item("dia12345", "u1")
+
+            assert result["status"] == "success"
+            assert len(ai_parser.calls) == 1
+            assert "早上出门。" in ai_parser.calls[0]
+            assert "晚上玩得很开心" in ai_parser.calls[0]
+            assert updated is not None
+            assert getattr(updated, "mood") == "happy"
+            assert getattr(updated, "mood_score") == 8
+        finally:
+            db.cleanup()
+
+
+class TestReminderBackfillRegression:
     def test_backfill_missing_start_time_reminder_adds_event_start(self, tmp_path):
         import importlib
         import sys

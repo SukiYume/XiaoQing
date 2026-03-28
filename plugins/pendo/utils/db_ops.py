@@ -13,7 +13,7 @@ from typing import Any, Callable, cast, TYPE_CHECKING
 
 from core.plugin_base import run_sync
 from ..core.exceptions import ItemNotFoundException, ItemAlreadyDeletedException
-from ..models.item import Item
+from ..models.item import Item, ItemType, get_item_type_value
 
 if TYPE_CHECKING:
     from ..services.db import Database
@@ -111,6 +111,13 @@ class DbOpsMixin:
     """
 
     db: Database = cast(Any, None)
+    _ITEM_TYPE_LABELS = {
+        ItemType.EVENT.value: "日程",
+        ItemType.TASK.value: "待办",
+        ItemType.NOTE.value: "笔记",
+        ItemType.DIARY.value: "日记",
+        ItemType.LEDGER.value: "账目",
+    }
 
     # ============================================================
     # 基础操作 - 直接封装数据库调用
@@ -191,6 +198,54 @@ class DbOpsMixin:
             raise ItemAlreadyDeletedException(item_id)
 
         return item
+
+    @classmethod
+    def _item_type_label(cls, item_type: str) -> str:
+        return cls._ITEM_TYPE_LABELS.get(item_type, "其他条目")
+
+    @staticmethod
+    def _build_view_hint_for_item(item: Any) -> str:
+        item_id = getattr(item, "id", "")
+        item_type = get_item_type_value(getattr(item, "type", None), default="item")
+
+        if item_type == ItemType.DIARY.value:
+            diary_date = getattr(item, "diary_date", None)
+            if diary_date:
+                return f"`/pendo diary view {item_id}` 或 `/pendo diary view {diary_date}`"
+            return f"`/pendo diary view {item_id}`"
+
+        commands = {
+            ItemType.EVENT.value: f"`/pendo event view {item_id}`",
+            ItemType.TASK.value: f"`/pendo todo view {item_id}`",
+            ItemType.NOTE.value: f"`/pendo note view {item_id}`",
+            ItemType.LEDGER.value: f"`/pendo ledger view {item_id}`",
+        }
+        return commands.get(item_type, f"`/pendo search {item_id}`")
+
+    @classmethod
+    def _build_wrong_type_message(
+        cls, query_id: str, expected_label: str, item: Any
+    ) -> dict[str, Any]:
+        item_type = get_item_type_value(getattr(item, "type", None), default="item")
+        type_label = cls._item_type_label(item_type)
+        command = cls._build_view_hint_for_item(item)
+        return {
+            "status": "success",
+            "message": f"💡 `{query_id}` 不是{expected_label}ID，它属于{type_label}\n\n请使用 {command}",
+        }
+
+    async def _db_get_typed_item_or_message(
+        self,
+        item_id: str,
+        owner_id: str,
+        expected_type: str,
+        expected_label: str,
+    ) -> tuple[Any | None, dict[str, Any] | None]:
+        item = await self._db_get_and_check(item_id, owner_id)
+        item_type = get_item_type_value(getattr(item, "type", None), default="item")
+        if item_type != expected_type:
+            return None, self._build_wrong_type_message(item_id, expected_label, item)
+        return item, None
 
     async def _db_update_with_log(
         self,
