@@ -1,6 +1,7 @@
 """Regression tests for Pendo web stats aggregations."""
 
 import importlib
+from datetime import datetime
 from pathlib import Path
 import shutil
 import sys
@@ -194,3 +195,112 @@ def test_parse_range_supports_last_year():
 
     assert start == f"{current_year - 1}-01-01"
     assert end == f"{current_year - 1}-12-31"
+
+
+def test_stats_page_source_uses_consistent_task_green_palette():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+
+    assert "const taskToneDone = '#166534';" in src
+    assert "const taskToneOpen = '#16a34a';" in src
+    assert "{ key: 'done', color: taskToneDone }" in src
+    assert "{ key: 'open', color: taskToneOpen }" in src
+    assert "中绿 = 未完成待消化" in src
+
+
+def test_stats_page_source_wraps_note_cadence_into_two_week_rows():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+
+    assert "function renderHeatStrip(items, valueKey, labelKey, color, formatter = (value) => `${value}`, options = {})" in src
+    assert 'const style = columns > 0 ? ` style="grid-template-columns:repeat(${columns}, minmax(0, 1fr));"` : \'\';' in src
+    assert "{ columns: 7 }" in src
+
+
+def test_stats_page_source_uses_neutral_zero_cells_for_activity_heatmap():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+
+    assert "if (!count) return 0;" in src
+    assert "? `rgba(16,185,129,${op})`" in src
+    assert ": 'rgba(226,232,240,0.52)';" in src
+    assert '<div class="stats-heatmap-legend-cell" style="background:rgba(226,232,240,0.52)"></div>' in src
+
+
+def test_stats_page_source_uses_even_axis_tick_sampling_without_forced_last_label():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+
+    assert "const step = (all.length - 1) / (maxTicks - 1);" in src
+    assert "picked.add(Math.round(index * step));" in src
+    assert "return Array.from(picked).sort((a, b) => a - b).map((index) => all[index]);" in src
+
+
+def test_ledger_comparison_fills_missing_months_and_keeps_prev_month_baseline():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_compare_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-ledger-compare"
+    stats_module = _load_stats_module()
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 3, 29, 10, 0, 0)
+
+    original_datetime = stats_module.datetime
+    stats_module.datetime = _FrozenDateTime
+
+    try:
+        db.insert_item({
+            "type": "ledger",
+            "owner_id": owner_id,
+            "title": "十月支出",
+            "amount": 120,
+            "direction": "expense",
+            "ledger_category": "餐饮",
+            "ledger_date": "2025-10-12",
+        })
+        db.insert_item({
+            "type": "ledger",
+            "owner_id": owner_id,
+            "title": "十二月支出",
+            "amount": 360,
+            "direction": "expense",
+            "ledger_category": "交通",
+            "ledger_date": "2025-12-08",
+        })
+        db.insert_item({
+            "type": "ledger",
+            "owner_id": owner_id,
+            "title": "二月支出",
+            "amount": 240,
+            "direction": "expense",
+            "ledger_category": "服务",
+            "ledger_date": "2026-02-18",
+        })
+        db.insert_item({
+            "type": "ledger",
+            "owner_id": owner_id,
+            "title": "三月支出",
+            "amount": 180,
+            "direction": "expense",
+            "ledger_category": "娱乐",
+            "ledger_date": "2026-03-05",
+        })
+
+        result = stats_module.ledger_comparison(months=6, owner_id=owner_id, db=db)
+        months = result["data"]["months"]
+
+        assert [item["month"] for item in months] == [
+            "2025-10",
+            "2025-11",
+            "2025-12",
+            "2026-01",
+            "2026-02",
+            "2026-03",
+        ]
+        assert months[1]["expense"] == 0
+        assert months[3]["expense"] == 0
+        assert months[2]["prev_expense"] == 0
+        assert months[4]["prev_expense"] == 0
+        assert months[5]["prev_expense"] == 240
+    finally:
+        stats_module.datetime = original_datetime
+        shutil.rmtree(temp_dir, ignore_errors=True)

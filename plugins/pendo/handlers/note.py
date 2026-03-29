@@ -144,6 +144,17 @@ class NoteHandler(DbOpsMixin):
         title = content.split("\n")[0][:50] if "\n" in content else content[:50]
         return title + "..." if len(title) == 50 else title
 
+    @staticmethod
+    def _collect_category_tags(cat_items: list) -> tuple[set[str], int]:
+        """收集分类下的所有标签，返回 (tags_set, items_with_tags_count)"""
+        category_tags: set[str] = set()
+        items_with_tags = 0
+        for item in cat_items:
+            if item.tags:
+                category_tags.update(item.tags)
+                items_with_tags += 1
+        return category_tags, items_with_tags
+
     def _parse_note_text(self, text: str) -> dict[str, Any]:
         """解析笔记文本（纯规则解析）
 
@@ -271,11 +282,7 @@ class NoteHandler(DbOpsMixin):
         if not has_category_filter:
             message += "**分类概览**\n\n"
             for category, cat_items in items_by_category.items():
-                # 统计该分类的标签
-                category_tags = set()
-                for item in cat_items:
-                    if item.tags:
-                        category_tags.update(item.tags)
+                category_tags, _ = self._collect_category_tags(cat_items)
 
                 tags_str = (
                     f" {ItemFormatter.format_tags(list(category_tags))}" if category_tags else ""
@@ -287,13 +294,7 @@ class NoteHandler(DbOpsMixin):
 
         # 指定了分类，显示该分类的笔记详情
         for category, cat_items in items_by_category.items():
-            # 统计该分类下的标签分布
-            category_tags = set()
-            items_with_tags = 0
-            for item in cat_items:
-                if item.tags:
-                    category_tags.update(item.tags)
-                    items_with_tags += 1
+            category_tags, items_with_tags = self._collect_category_tags(cat_items)
 
             # 判断是否统一显示标签：所有笔记都有相同标签
             show_tags_inline = True

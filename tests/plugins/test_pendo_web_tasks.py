@@ -102,6 +102,33 @@ def test_tasks_page_source_uses_task_overview_and_view_toggle():
     assert "task-view-board" in page_src
 
 
+def test_tasks_page_source_normalizes_modal_payload_defaults():
+    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js").read_text(encoding="utf-8")
+
+    assert "function normalizeTaskPayload(formData)" in page_src
+    assert "payload.category = String(payload.category || '').trim() || '未分类';" in page_src
+    assert "payload.content = payload.content ?? '';" in page_src
+    assert "payload.priority = Number.isInteger(priority) && priority >= 1 && priority <= 5 ? priority : 3;" in page_src
+
+
+def test_diary_page_source_styles_mood_picker_active_state():
+    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "diary.js").read_text(encoding="utf-8")
+
+    assert ".mood-selector { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }" in page_src
+    assert ".mood-btn.active {" in page_src
+    assert "transform: scale(1.06);" in page_src
+    assert "box-shadow: inset 0 0 0 1px rgba(236,72,153,0.12);" in page_src
+
+
+def test_tasks_page_source_uses_subtle_priority_picker_active_state():
+    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js").read_text(encoding="utf-8")
+
+    assert "border-radius: 12px;" in page_src
+    assert ".priority-btn.active { opacity: 1; transform: scale(1.06); }" in page_src
+    assert ".priority-btn.priority-3.active { border-color: rgba(234,179,8,0.38);" in page_src
+    assert "box-shadow: inset 0 0 0 1px rgba(234,179,8,0.14);" in page_src
+
+
 def test_build_task_overview_loads_more_than_500_tasks():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_tasks_many_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)

@@ -65,10 +65,10 @@ DIARY_MUTABLE_FIELDS = {
 
 class ItemCreate(BaseModel):
     type: str
-    title: str = ""
-    content: str = ""
+    title: Optional[str] = ""
+    content: Optional[str] = ""
     tags: list[str] = []
-    category: str = "未分类"
+    category: Optional[str] = "未分类"
     # Event fields
     start_time: Optional[str] = None
     end_time: Optional[str] = None
@@ -273,7 +273,7 @@ def list_items(
     if amount_max is not None: filters["amount_max"] = amount_max
 
     # Sorting
-    _allowed_sort = {"created_at", "updated_at", "ledger_date", "due_time", "start_time", "amount"}
+    _allowed_sort = {"created_at", "updated_at", "ledger_date", "due_time", "start_time", "diary_date", "amount"}
     if sort in _allowed_sort:
         filters["sort_field"] = sort
         filters["sort_order"] = order.upper()

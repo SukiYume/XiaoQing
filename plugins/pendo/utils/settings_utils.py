@@ -25,6 +25,10 @@ PLUGIN_SETTINGS_HELP_LINES = (
     "• /pendo settings privacy on/off - 隐私模式",
 )
 
+# 统一的布尔值解析字符串集合，供 _coerce_setting_bool 和 parse_toggle_value 共用
+_TRUTHY = frozenset({"on", "true", "1", "yes", "是", "开启", "开"})
+_FALSY = frozenset({"off", "false", "0", "no", "否", "关闭", "关"})
+
 
 def _coerce_setting_bool(value: Any, default: bool) -> bool:
     """Coerce persisted setting values to bool without misreading strings like 'false'."""
@@ -38,11 +42,9 @@ def _coerce_setting_bool(value: Any, default: bool) -> bool:
         normalized = value.strip().lower()
         if not normalized:
             return default
-        truthy = {"on", "true", "1", "yes", "是", "开启", "开"}
-        falsy = {"off", "false", "0", "no", "否", "关闭", "关"}
-        if normalized in truthy:
+        if normalized in _TRUTHY:
             return True
-        if normalized in falsy:
+        if normalized in _FALSY:
             return False
     return bool(value)
 
@@ -97,11 +99,9 @@ def parse_toggle_value(value: str) -> tuple[bool, bool | str]:
     if not normalized:
         return False, "请指定 on 或 off"
 
-    truthy = {"on", "true", "1", "yes", "是", "开启", "开"}
-    falsy = {"off", "false", "0", "no", "否", "关闭", "关"}
-    if normalized in truthy:
+    if normalized in _TRUTHY:
         return True, True
-    if normalized in falsy:
+    if normalized in _FALSY:
         return True, False
     return False, "请指定 on 或 off"
 

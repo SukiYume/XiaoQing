@@ -1,6 +1,7 @@
 import { api, clearToken } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import { navigate } from '../router.js';
 
 const CSS_ID = 'pendo-settings-redesign-styles';
 
@@ -49,6 +50,7 @@ function ensureStyles() {
         .settings-summary-value { margin-top: 10px; font-size: 24px; font-weight: 820; color: #0f172a; letter-spacing: -0.03em; }
         .settings-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); }
         .settings-layout { display: grid; grid-template-columns: minmax(0, 1.06fr) minmax(280px, 0.94fr); gap: 16px; }
+        .settings-main-stack { display: flex; flex-direction: column; gap: 16px; }
         .settings-side-stack { display: flex; flex-direction: column; gap: 16px; }
         .settings-panel { padding: 18px 20px 20px; }
         .settings-panel h3 { margin: 0; font-size: 18px; font-weight: 780; color: var(--color-text); letter-spacing: -0.02em; }
@@ -91,6 +93,22 @@ function ensureStyles() {
         .settings-status { font-size: 12px; color: var(--color-text-secondary); }
         .settings-danger { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
         .settings-danger .btn { align-self: flex-start; }
+        .settings-transfer-card {
+            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center;
+            padding: 16px; border-radius: 20px; border: 1px solid rgba(191,219,254,0.8); background: rgba(239,246,255,0.84);
+            margin-top: 16px;
+        }
+        .settings-transfer-title { font-size: 15px; font-weight: 780; color: #0f172a; }
+        .settings-transfer-desc { margin-top: 6px; font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); }
+        .settings-transfer-btn {
+            background: #fff;
+            border-color: rgba(191,219,254,0.92);
+            box-shadow: 0 8px 18px rgba(148,163,184,0.12);
+        }
+        .settings-transfer-btn:hover {
+            background: rgba(219,234,254,0.78);
+            border-color: rgba(96,165,250,0.58);
+        }
         ${mediaMax(BREAKPOINTS.FORM, `
             .settings-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .settings-layout { grid-template-columns: 1fr; }
@@ -152,35 +170,49 @@ function renderPage() {
                 </section>
 
                 <section class="settings-layout">
-                    <div class="settings-panel">
-                        <h3>时间与默认项</h3>
-                        <p>先把时区和关键时间窗口定准，后续提醒、日报和 diary 逻辑才会按你的日常节奏工作。</p>
-                        <div class="settings-form-grid">
-                            <div class="settings-field full">
-                                <label for="setting-timezone">时区</label>
-                                <input id="setting-timezone" type="text" value="${escapeHtml(settings.timezone)}" placeholder="Asia/Shanghai">
-                            </div>
-                            <div class="settings-field">
-                                <label for="setting-quiet-start">静默开始</label>
-                                <input id="setting-quiet-start" type="time" value="${escapeHtml(settings.quiet_hours_start)}">
-                            </div>
-                            <div class="settings-field">
-                                <label for="setting-quiet-end">静默结束</label>
-                                <input id="setting-quiet-end" type="time" value="${escapeHtml(settings.quiet_hours_end)}">
-                            </div>
-                            <div class="settings-field">
-                                <label for="setting-daily-report-time">日报时间</label>
-                                <input id="setting-daily-report-time" type="time" value="${escapeHtml(settings.daily_report_time)}">
-                            </div>
-                            <div class="settings-field">
-                                <label for="setting-diary-remind-time">日记提醒</label>
-                                <input id="setting-diary-remind-time" type="time" value="${escapeHtml(settings.diary_remind_time)}">
-                            </div>
-                            <div class="settings-field full">
-                                <label for="setting-default-category">默认分类</label>
-                                <input id="setting-default-category" type="text" value="${escapeHtml(settings.default_category)}" placeholder="未分类">
+                    <div class="settings-main-stack">
+                        <div class="settings-panel">
+                            <h3>时间与默认项</h3>
+                            <p>先把时区和关键时间窗口定准，后续提醒、日报和 diary 逻辑才会按你的日常节奏工作。</p>
+                            <div class="settings-form-grid">
+                                <div class="settings-field full">
+                                    <label for="setting-timezone">时区</label>
+                                    <input id="setting-timezone" type="text" value="${escapeHtml(settings.timezone)}" placeholder="Asia/Shanghai">
+                                </div>
+                                <div class="settings-field">
+                                    <label for="setting-quiet-start">静默开始</label>
+                                    <input id="setting-quiet-start" type="time" value="${escapeHtml(settings.quiet_hours_start)}">
+                                </div>
+                                <div class="settings-field">
+                                    <label for="setting-quiet-end">静默结束</label>
+                                    <input id="setting-quiet-end" type="time" value="${escapeHtml(settings.quiet_hours_end)}">
+                                </div>
+                                <div class="settings-field">
+                                    <label for="setting-daily-report-time">日报时间</label>
+                                    <input id="setting-daily-report-time" type="time" value="${escapeHtml(settings.daily_report_time)}">
+                                </div>
+                                <div class="settings-field">
+                                    <label for="setting-diary-remind-time">日记提醒</label>
+                                    <input id="setting-diary-remind-time" type="time" value="${escapeHtml(settings.diary_remind_time)}">
+                                </div>
+                                <div class="settings-field full">
+                                    <label for="setting-default-category">默认分类</label>
+                                    <input id="setting-default-category" type="text" value="${escapeHtml(settings.default_category)}" placeholder="未分类">
+                                </div>
                             </div>
                         </div>
+
+                        <section class="settings-panel">
+                            <h3>数据迁移</h3>
+                            <p>这里处理导出备份、导入 bundle 和跨设备迁移，不和日常偏好设置混在一起。</p>
+                            <div class="settings-transfer-card">
+                                <div>
+                                    <div class="settings-transfer-title">打开数据迁移页</div>
+                                    <div class="settings-transfer-desc">导出正式 bundle 备份，或从 bundle 预检后按类别导入历史数据。</div>
+                                </div>
+                                <button class="btn btn-secondary settings-transfer-btn" id="btn-open-transfer">打开页面</button>
+                            </div>
+                        </section>
                     </div>
 
                     <div class="settings-side-stack">
@@ -275,12 +307,18 @@ function handleLogout() {
     window.location.reload();
 }
 
+function handleOpenTransfer() {
+    navigate('transfer');
+}
+
 function attachListeners() {
     if (!_container) return;
     const saveBtn = _container.querySelector('#btn-save-settings');
     if (saveBtn) saveBtn.onclick = handleSave;
     const logoutBtn = _container.querySelector('#btn-logout');
     if (logoutBtn) logoutBtn.onclick = handleLogout;
+    const transferBtn = _container.querySelector('#btn-open-transfer');
+    if (transferBtn) transferBtn.onclick = handleOpenTransfer;
 }
 
 async function loadAndRender() {

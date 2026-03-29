@@ -13,6 +13,14 @@ logger = logging.getLogger(__name__)
 
 CommandHandler = Callable[[str, str, Any], Awaitable[CommandResult]]
 
+# 顶层命令重定向提示：当用户误将顶层命令放到子模块下时使用
+# 例如 /pendo event confirm xxx → 提示应使用 /pendo confirm xxx
+TOP_LEVEL_REDIRECTS: dict[str, str] = {
+    "confirm": "/pendo confirm <id>",
+    "snooze": "/pendo snooze <id> <时间>",
+    "undo": "/pendo undo",
+}
+
 # 命令元数据表：(别名列表, 描述, 用法)
 # 不在此表中的命令仍可通过 handlers 字典注册，只是没有别名和描述
 COMMAND_META: dict[str, tuple[list[str], str, str]] = {

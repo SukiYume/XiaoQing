@@ -11,6 +11,7 @@ from ..models.item import ItemType, TaskStatus, TaskItem
 from ..models.constants import ItemFields
 from ..core.exceptions import OwnershipException, MissingRequiredFieldException
 from ..core.types import PendoContext, CommandMessage
+from ..core.router import TOP_LEVEL_REDIRECTS
 from ..utils.time_utils import now_in_timezone, TimezoneHelper
 from core.plugin_base import run_sync
 from ..utils.db_ops import DbOpsMixin
@@ -95,13 +96,8 @@ class TaskHandler(DbOpsMixin):
         if self._should_treat_as_list_shortcut(command, rest):
             return await self.list_tasks(user_id, args, context)
 
-        top_level_redirects = {
-            "confirm": "/pendo confirm <id>",
-            "snooze": "/pendo snooze <id> <时间>",
-            "undo": "/pendo undo",
-        }
-        if command in top_level_redirects:
-            return {"status": "error", "message": f"❌ 正确用法:\n\n{top_level_redirects[command]}"}
+        if command in TOP_LEVEL_REDIRECTS:
+            return {"status": "error", "message": f"❌ 正确用法:\n\n{TOP_LEVEL_REDIRECTS[command]}"}
 
         return {
             "status": "error",

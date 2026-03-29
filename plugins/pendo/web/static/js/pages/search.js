@@ -108,7 +108,16 @@ function ensureStyles() {
                 linear-gradient(145deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
             border: 1px solid rgba(148,163,184,0.16); box-shadow: 0 18px 40px rgba(15,23,42,0.05);
         }
-        .search-hero h2 { margin: 0; font-size: 30px; font-weight: 820; letter-spacing: -0.03em; color: #334155; }
+        .search-hero h2 {
+            margin: 0; display: inline-flex; align-items: center; gap: 10px;
+            font-size: 30px; font-weight: 820; letter-spacing: -0.03em; color: #334155;
+        }
+        .search-hero-icon {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 40px; height: 40px; border-radius: 14px; flex: 0 0 auto;
+            background: linear-gradient(135deg, rgba(99,102,241,0.12), rgba(59,130,246,0.18));
+            font-size: 24px; line-height: 1;
+        }
         .search-hero p { margin: 8px 0 0; font-size: 14px; line-height: 1.75; color: var(--color-text-secondary); }
         .search-hero-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
         .search-hero-tag {
@@ -122,13 +131,18 @@ function ensureStyles() {
             border: 1px solid rgba(203,213,225,0.9); box-shadow: 0 14px 30px rgba(15,23,42,0.04);
         }
         .search-input-wrap { position: relative; }
-        .search-input {
-            width: 100%; height: 46px; box-sizing: border-box; padding: 0 16px 0 44px;
+        .search-input-wrap .search-input {
+            width: 100%; height: 46px; box-sizing: border-box; padding: 0 16px 0 50px;
             border-radius: 16px; border: 1px solid rgba(203,213,225,0.92); background: rgba(255,255,255,0.92);
             font-size: 15px; color: var(--color-text);
         }
-        .search-input:focus { outline: none; border-color: #64748B; box-shadow: 0 0 0 3px rgba(148,163,184,0.16); }
-        .search-input-icon { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--color-text-tertiary); }
+        .search-input-wrap .search-input:focus { outline: none; border-color: #64748B; box-shadow: 0 0 0 3px rgba(148,163,184,0.16); }
+        .search-input-icon {
+            position: absolute; left: 18px; top: 50%; transform: translateY(-50%);
+            width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+            color: var(--color-text-tertiary); pointer-events: none;
+        }
+        .search-input-icon svg { width: 18px; height: 18px; display: block; }
         .search-query-meta { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
         .search-pill {
             display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 999px;
@@ -267,7 +281,7 @@ function renderPage() {
         <div class="search-shell">
             <section class="search-hero">
                 <div>
-                    <h2>🔍 搜索</h2>
+                    <h2><span class="search-hero-icon" aria-hidden="true">🔍</span><span>搜索</span></h2>
                     <p>在日程、待办、记账、笔记和日记中统一搜索。</p>
                     <div class="search-hero-tags">
                         <span class="search-hero-tag">${_activeType ? TYPE_CONFIG[_activeType].label : '全部类型'}</span>
@@ -282,7 +296,12 @@ function renderPage() {
 
             <section class="search-query-bar">
                 <div class="search-input-wrap">
-                    <span class="search-input-icon">⌕</span>
+                    <span class="search-input-icon" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" fill="none" focusable="false">
+                            <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.8"></circle>
+                            <path d="M12.5 12.5L17 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+                        </svg>
+                    </span>
                     <input id="search-input" class="search-input" type="text" autocomplete="off" placeholder="搜索标题、内容、标签、地点、备注、天气..." value="${escapeHtml(_query)}">
                 </div>
                 <div class="search-query-meta">

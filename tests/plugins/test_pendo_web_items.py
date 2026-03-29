@@ -157,6 +157,14 @@ def test_normalize_task_fields_accepts_priority_five_and_manages_completed_at():
         normalize_task_fields({"title": "坏任务", "due_time": "tomorrow"}, partial=False)
 
 
+def test_item_create_model_source_accepts_nullable_text_fields():
+    src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")
+
+    assert 'title: Optional[str] = ""' in src
+    assert 'content: Optional[str] = ""' in src
+    assert 'category: Optional[str] = "未分类"' in src
+
+
 def test_task_update_route_preserves_explicit_nulls_for_clearing_fields():
     src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")
     assert "model_dump(exclude_unset=True)" in src
@@ -256,6 +264,7 @@ def test_items_api_source_supports_diary_normalization_and_same_day_conflict():
     assert "normalized = normalize_diary_fields(merged, partial=False)" in src
     assert "Diary already exists for this date" in src
     assert "db.has_diary_for_date(owner_id, diary_date)" in src
+    assert '"diary_date"' in src
 
 
 def test_event_validation_rejects_invalid_merged_update_values():
@@ -460,6 +469,15 @@ def test_ledger_page_source_requests_insights_component():
     assert "_sortMode === 'amount' ? 'amount' : 'ledger_date'" in src
     assert "await loadAndRender(true);" in src
     assert "if (changedType && changedType !== 'ledger') return;" in src
+
+
+def test_ledger_insights_component_uses_time_scaled_candle_axis():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "ledger_insights.js").read_text(encoding="utf-8")
+
+    assert "function pickEvenAxisIndexes(length, maxLabels)" in src
+    assert "const labelIndexes = pickEvenAxisIndexes(coords.length, 5);" in src
+    assert "const stepX = innerWidth / candles.length;" in src
+    assert "const labelIndexes = pickEvenAxisIndexes(candles.length, 5);" in src
 
 
 def test_items_api_source_normalizes_events_before_create_and_update():

@@ -14,6 +14,7 @@ from ..config import PendoConfig
 from ..utils.time_utils import parse_event_time_range, TimezoneHelper, now_in_timezone, parse_remind_times
 from ..models.item import EventItem, ItemType
 from ..core.types import PendoContext, CommandMessage
+from ..core.router import TOP_LEVEL_REDIRECTS
 from ..utils.settings_utils import resolve_default_category
 from .event_support import (
     apply_offsets,
@@ -132,13 +133,8 @@ class EventHandler(DbOpsMixin):
             return error_result(f"❌ 没有这个命令\n\n正确用法是: /pendo event {correct} <id>")
 
         # 顶层命令误放到 event 下（如 /pendo event confirm xxx）
-        top_level_redirects = {
-            "confirm": "/pendo confirm <id>",
-            "snooze": "/pendo snooze <id> <时间>",
-            "undo": "/pendo undo",
-        }
-        if command in top_level_redirects:
-            return error_result(f"❌ 正确用法:\n\n{top_level_redirects[command]}")
+        if command in TOP_LEVEL_REDIRECTS:
+            return error_result(f"❌ 正确用法:\n\n{TOP_LEVEL_REDIRECTS[command]}")
 
         # 未知命令：仅当第一个词看起来是时间范围时才 fallback 到 list_events
         # 否则直接报错，避免把 "confirm xxx" 之类的误操作渲染成列表
@@ -742,28 +738,10 @@ class EventHandler(DbOpsMixin):
                     updates.get("start_time") or event.start_time,
                 )
 
-            # 保存旧值快照用于 undo
-            old_values = {}
-            for key in updates:
-                if key == "updated_at":
-                    continue
-                old_val = getattr(event, key, None)
-                old_values[key] = (
-                    old_val
-                    if isinstance(old_val, (str, int, float, bool, list, dict, type(None)))
-                    else str(old_val)
-                )
-
-            await self._db_update_item(instance_id, updates, owner_id=user_id)
-
-            # 记录编辑日志（含旧值）
-            await self._db_log_operation(
-                user_id=user_id,
-                action="edit_event",
-                item_type="event",
-                item_id=instance_id,
-                details={"updates": updates, "old_values": old_values},
+            await self._db_update_with_log(
+                instance_id, updates, user_id, action="edit_event"
             )
+
 
             return {
                 "status": "success",
@@ -975,18 +953,8 @@ class EventHandler(DbOpsMixin):
 
     @staticmethod
     def _snapshot_old_values(event: EventItem, updates: dict[str, Any]) -> dict[str, Any]:
-        """保存旧值快照用于 undo"""
-        old_values = {}
-        for key in updates:
-            if key == "updated_at":
-                continue
-            old_val = getattr(event, key, None)
-            old_values[key] = (
-                old_val
-                if isinstance(old_val, (str, int, float, bool, list, dict, type(None)))
-                else str(old_val)
-            )
-        return old_values
+        """保存旧值快照用于 undo（委托给 DbOpsMixin）"""
+        return DbOpsMixin._snapshot_item_values(event, updates)
 
     # ==================== 删除日程 ====================
 
@@ -1015,7 +983,7 @@ class EventHandler(DbOpsMixin):
         if not event:
             return {"status": "error", "message": f"❌ 找不到日程 {instance_id}"}
 
-        await self._db_delete_item(instance_id, soft=True, owner_id=user_id)
+        await self._db_soft_delete_with_log(instance_id, user_id, item_type=ItemType.EVENT.value)
 
         e_title = event.title
         return {

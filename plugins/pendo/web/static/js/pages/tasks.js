@@ -89,6 +89,20 @@ function toDatetimeLocal(value) {
     return String(value).slice(0, 16);
 }
 
+function normalizeTaskPayload(formData) {
+    const payload = { ...formData };
+    const priority = Number(payload.priority);
+
+    payload.title = String(payload.title || '').trim();
+    payload.content = payload.content ?? '';
+    payload.category = String(payload.category || '').trim() || '未分类';
+    payload.status = payload.status || 'todo';
+    payload.priority = Number.isInteger(priority) && priority >= 1 && priority <= 5 ? priority : 3;
+    payload.due_time = payload.due_time || null;
+
+    return payload;
+}
+
 function isOverdue(task, today = startOfDay(TODAY())) {
     if (!task?.due_time) return false;
     if (!['todo', 'in_progress'].includes(task.status)) return false;
@@ -374,6 +388,20 @@ function ensureStyles() {
             width: 100%; border: 1px dashed rgba(148,163,184,0.5); background: transparent; color: var(--color-text-secondary);
             border-radius: 14px; padding: 10px 12px; cursor: pointer; font-weight: 700;
         }
+        .priority-selector { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .priority-btn {
+            width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+            border-radius: 12px; border: 1px solid rgba(203,213,225,0.9); background: rgba(255,255,255,0.96);
+            cursor: pointer; font-size: 18px; opacity: 0.92; transform: scale(1);
+            transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+        }
+        .priority-btn:hover { border-color: rgba(148,163,184,0.82); background: rgba(248,250,252,0.98); transform: translateY(-1px) scale(1.03); }
+        .priority-btn.active { opacity: 1; transform: scale(1.06); }
+        .priority-btn.priority-1.active { border-color: rgba(239,68,68,0.36); background: rgba(254,242,242,0.96); box-shadow: inset 0 0 0 1px rgba(239,68,68,0.12); }
+        .priority-btn.priority-2.active { border-color: rgba(249,115,22,0.36); background: rgba(255,247,237,0.96); box-shadow: inset 0 0 0 1px rgba(249,115,22,0.12); }
+        .priority-btn.priority-3.active { border-color: rgba(234,179,8,0.38); background: rgba(254,252,232,0.98); box-shadow: inset 0 0 0 1px rgba(234,179,8,0.14); }
+        .priority-btn.priority-4.active { border-color: rgba(34,197,94,0.36); background: rgba(240,253,244,0.98); box-shadow: inset 0 0 0 1px rgba(34,197,94,0.12); }
+        .priority-btn.priority-5.active { border-color: rgba(148,163,184,0.42); background: rgba(248,250,252,0.98); box-shadow: inset 0 0 0 1px rgba(148,163,184,0.12); }
         ${mediaMax(BREAKPOINTS.WIDE, `
             .tasks-layout { grid-template-columns: 1fr; }
             .tasks-filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -761,18 +789,17 @@ function openTaskModal(existing = null) {
 
     content.querySelector('#task-save').onclick = async () => {
         const form = content.querySelector('#task-form');
-        const payload = getFormData(form);
+        const payload = normalizeTaskPayload(getFormData(form));
         if (!payload.title) {
             showToast('请填写标题', 'warning');
             return;
         }
-        if (!payload.priority) payload.priority = 3;
         try {
             if (isEdit) {
                 await api.put(`/items/${existing.id}`, payload);
                 showToast('任务已更新', 'success');
             } else {
-                await api.post('/items', { type: 'task', status: 'todo', ...payload });
+                await api.post('/items', { type: 'task', ...payload });
                 showToast('任务已创建', 'success');
             }
             closeModal();

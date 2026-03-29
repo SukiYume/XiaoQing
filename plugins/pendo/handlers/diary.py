@@ -39,7 +39,7 @@ class DiaryHandler(DbOpsMixin):
     def __init__(self, db: "Database", ai_parser: object | None = None):
         self.db = db
         self.ai_parser = ai_parser
-        # ai_parser保留接口兼容性，但不使用
+        # ai_parser 用于日记情绪分析（_analyze_mood），为 None 时降级到规则分析
         # 日记模板（从配置读取）
         self.templates: dict[str, TemplateDef] = cast(dict[str, TemplateDef], DIARY_TEMPLATES)
 

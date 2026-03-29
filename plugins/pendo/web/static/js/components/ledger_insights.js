@@ -36,6 +36,16 @@ function fmtPercent(value) {
     return `${value >= 0 ? '+' : '-'}${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
 }
 
+function pickEvenAxisIndexes(length, maxLabels) {
+    if (length <= maxLabels) return Array.from({ length }, (_, index) => index);
+    const step = (length - 1) / (maxLabels - 1);
+    const picked = new Set();
+    for (let index = 0; index < maxLabels; index += 1) {
+        picked.add(Math.round(index * step));
+    }
+    return Array.from(picked).sort((a, b) => a - b);
+}
+
 function emptyCard(title, subtitle, body) {
     return `
         <section class="ledger-insight-card">
@@ -94,10 +104,9 @@ function buildTrendSvg(points) {
         </g>
     `).join('');
 
+    const labelIndexes = pickEvenAxisIndexes(coords.length, 5);
     const labels = coords.map((point, index) => {
-        if (coords.length > 7 && index % Math.ceil(coords.length / 6) !== 0 && index !== coords.length - 1) {
-            return '';
-        }
+        if (!labelIndexes.includes(index)) return '';
         return `<text x="${point.x.toFixed(2)}" y="${height - 6}" text-anchor="middle">${esc(point.label)}</text>`;
     }).join('');
 
@@ -222,7 +231,12 @@ function buildCandleSvg(candles) {
     const minValue = Math.min(...lows, 0);
     const spread = Math.max(maxValue - minValue, 1);
     const stepX = innerWidth / candles.length;
-    const candleWidth = Math.max(6, Math.min(12, stepX * 0.28));
+    const xPositions = candles.map((_, index) => pad.left + stepX * index + stepX / 2);
+    const minGap = xPositions.slice(1).reduce((gap, x, index) => {
+        const delta = x - xPositions[index];
+        return delta > 0 ? Math.min(gap, delta) : gap;
+    }, innerWidth);
+    const candleWidth = Math.max(4, Math.min(12, minGap * 0.34));
     const ticks = [1, 0.66, 0.33, 0].map(ratio => ({
         value: minValue + spread * ratio,
         y: pad.top + innerHeight - innerHeight * ratio,
@@ -242,7 +256,7 @@ function buildCandleSvg(candles) {
     `).join('');
 
     const candlesHtml = candles.map((item, index) => {
-        const x = pad.left + stepX * index + stepX / 2;
+        const x = xPositions[index];
         const highY = pad.top + innerHeight - ((Number(item.high || 0) - minValue) / spread) * innerHeight;
         const lowY = pad.top + innerHeight - ((Number(item.low || 0) - minValue) / spread) * innerHeight;
         const openY = pad.top + innerHeight - ((Number(item.open || 0) - minValue) / spread) * innerHeight;
@@ -261,11 +275,10 @@ function buildCandleSvg(candles) {
             </g>`;
     }).join('');
 
+    const labelIndexes = pickEvenAxisIndexes(candles.length, 5);
     const labels = candles.map((item, index) => {
-        if (candles.length > 6 && index % Math.ceil(candles.length / 4) !== 0 && index !== candles.length - 1) {
-            return '';
-        }
-        const x = pad.left + stepX * index + stepX / 2;
+        if (!labelIndexes.includes(index)) return '';
+        const x = xPositions[index];
         return `<text x="${x.toFixed(2)}" y="${height - 6}" text-anchor="middle">${esc(item.label)}</text>`;
     }).join('');
 

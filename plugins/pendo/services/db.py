@@ -351,6 +351,25 @@ class Database:
                 )
             """)
 
+            # 数据迁移审计日志表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transfer_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    bundle_id TEXT,
+                    filename TEXT,
+                    types TEXT,
+                    record_count INTEGER DEFAULT 0,
+                    result_summary TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_transfer_logs_owner "
+                "ON transfer_logs(owner_id, created_at DESC)"
+            )
+
     # ==================== Item操作 ====================
 
     def insert_item(self, item_data: dict[str, Any] | Item, custom_id: str | None = None) -> str:
@@ -511,6 +530,64 @@ class Database:
             self.cache_invalidate(iid)
         self.cache_invalidate(f"items|{owner_id}")
         return affected
+
+    def batch_insert_or_update(
+        self,
+        operations: list[tuple[str, dict[str, Any]]],
+        owner_id: str,
+    ) -> list[tuple[str, str, Optional[str]]]:
+        """单事务批量插入/更新，用于数据导入
+
+        Args:
+            operations: [(action, payload), ...] 其中 action 为 "insert" 或 "update"
+            owner_id: 用户 ID
+
+        Returns:
+            [(action, item_id, error_or_none), ...] 每条操作的结果
+        """
+        if not operations:
+            return []
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        results: list[tuple[str, str, Optional[str]]] = []
+
+        with conn:
+            for action, payload in operations:
+                item_id = payload.get("id", "")
+                try:
+                    payload["owner_id"] = owner_id
+                    validated = validate_item_data(payload)
+                    validated.setdefault("created_at", datetime.now().isoformat())
+                    validated.setdefault("updated_at", datetime.now().isoformat())
+                    data = self._prepare_data(validated)
+
+                    if action == "insert":
+                        columns = ", ".join(self._quote_col(k) for k in data.keys())
+                        placeholders = ", ".join(["?" for _ in data])
+                        cursor.execute(
+                            f"INSERT INTO items ({columns}) VALUES ({placeholders})",
+                            list(data.values()),
+                        )
+                    elif action == "update":
+                        update_data = {k: v for k, v in data.items() if k not in ("id", "type")}
+                        set_clause = ", ".join(
+                            [f"{self._quote_col(k)} = ?" for k in update_data.keys()]
+                        )
+                        cursor.execute(
+                            f"UPDATE items SET {set_clause} WHERE id = ? AND owner_id = ?",
+                            list(update_data.values()) + [item_id, owner_id],
+                        )
+                    results.append((action, item_id, None))
+                except Exception as exc:
+                    raise RuntimeError(f"导入记录 {item_id} 失败: {exc}") from exc
+
+        # 事务成功后清缓存（包括单条目和列表缓存）
+        for _action, payload in operations:
+            iid = payload.get("id", "")
+            if iid:
+                self.cache_invalidate(iid)
+        self.cache_invalidate(f"items|{owner_id}")
+        return results
 
     def batch_soft_delete(self, item_ids: list[str], owner_id: str) -> int:
         """单事务批量软删除，含 FTS 清理和缓存失效"""
@@ -1262,6 +1339,76 @@ class Database:
         except Exception as e:
             logger.exception("Failed to log operation: %s", e)
             return False
+
+    # ==================== 数据迁移审计 ====================
+
+    def log_transfer(
+        self,
+        owner_id: str,
+        action: str,
+        bundle_id: str | None = None,
+        filename: str | None = None,
+        types: list[str] | None = None,
+        record_count: int = 0,
+        result_summary: dict[str, Any] | None = None,
+    ) -> int:
+        """记录数据迁移操作日志，返回日志 ID"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        with conn:
+            cursor.execute(
+                """INSERT INTO transfer_logs
+                   (owner_id, action, bundle_id, filename, types, record_count, result_summary, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    owner_id,
+                    action,
+                    bundle_id,
+                    filename,
+                    json.dumps(types or [], ensure_ascii=False),
+                    record_count,
+                    json.dumps(result_summary or {}, ensure_ascii=False),
+                    datetime.now().isoformat(timespec="seconds"),
+                ),
+            )
+            return cursor.lastrowid
+
+    def get_transfer_logs(self, owner_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """查询迁移审计日志"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT *
+            FROM transfer_logs
+            WHERE owner_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (owner_id, limit, offset),
+        )
+        rows = cursor.fetchall()
+        results = []
+        for row in rows:
+            entry = dict(row)
+            for field in ("types", "result_summary"):
+                if entry.get(field) and isinstance(entry[field], str):
+                    try:
+                        entry[field] = json.loads(entry[field])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            results.append(entry)
+        return results
+
+    def has_imported_bundle(self, owner_id: str, bundle_id: str) -> bool:
+        """检查某个 bundle_id 是否已被成功导入过"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM transfer_logs WHERE owner_id = ? AND bundle_id = ? AND action = 'import'",
+            (owner_id, bundle_id),
+        )
+        return cursor.fetchone() is not None
 
     # ==================== 提醒相关 ====================
 
