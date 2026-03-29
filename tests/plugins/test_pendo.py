@@ -374,6 +374,34 @@ class TestPendoReviewFixes:
 
         assert "pendo_runtime" not in context.state
 
+    def test_run_scheduled_task_swallows_cancelled_error(self):
+        from plugins.pendo import main as pendo_main
+
+        metrics: list[tuple[str, float, bool]] = []
+        context = SimpleNamespace()
+        log_messages: list[str] = []
+        log = SimpleNamespace(info=lambda msg, *args: log_messages.append(msg % args))
+
+        async def fake_record_metric(_context, name, duration, is_error=False):
+            metrics.append((name, duration, is_error))
+
+        async def cancelled_task():
+            raise asyncio.CancelledError()
+
+        original_record_metric = pendo_main._record_metric
+        pendo_main._record_metric = fake_record_metric
+        try:
+            result = asyncio.run(
+                pendo_main._run_scheduled_task(context, "daily_briefings", cancelled_task, log)
+            )
+        finally:
+            pendo_main._record_metric = original_record_metric
+
+        assert result == []
+        assert metrics and metrics[0][0] == "scheduled.daily_briefings"
+        assert metrics[0][2] is False
+        assert any("cancelled during shutdown" in message for message in log_messages)
+
     def test_task_status_pagination_page_two_spans_categories(self):
         from plugins.pendo.handlers.task import TaskHandler
 

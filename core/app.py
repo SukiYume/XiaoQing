@@ -668,5 +668,7 @@ class XiaoQingApp:
                     # 使用统一的 _send_action 方法（优先 WS，备选 HTTP）
                     await self._send_action(action)
 
+        except asyncio.CancelledError:
+            logger.info("Scheduled job cancelled during shutdown: %s", plugin_name)
         except Exception as exc:
             logger.exception("Scheduled job failed: %s", exc)

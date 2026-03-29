@@ -14,6 +14,7 @@ Pendo Plugin - 个人时间与信息管理中枢
 - services/ - 核心服务
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -377,6 +378,12 @@ async def _run_scheduled_task(
         result = await task_func()
         await _record_metric(context, f"scheduled.{task_name}", time.perf_counter() - start)
         return result if result else []
+    except asyncio.CancelledError:
+        await _record_metric(
+            context, f"scheduled.{task_name}", time.perf_counter() - start
+        )
+        log.info("Scheduled task '%s' cancelled during shutdown", task_name)
+        return []
     except Exception as e:
         await _record_metric(
             context, f"scheduled.{task_name}", time.perf_counter() - start, is_error=True
