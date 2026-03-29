@@ -724,6 +724,20 @@ async def test_app_run_job_with_error(temp_app_root: Path):
     await app._run_job(mock_handler, "test_plugin")
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_run_job_swallows_cancelled_error(temp_app_root: Path):
+    """Test _run_job treats cancellation as normal shutdown."""
+    app = XiaoQingApp(temp_app_root)
+
+    async def mock_handler(context):
+        raise asyncio.CancelledError()
+
+    app.plugin_manager.build_context = Mock(return_value=MagicMock())
+
+    await app._run_job(mock_handler, "test_plugin")
+
+
 # ============================================================
 # Reschedule Tests
 # ============================================================

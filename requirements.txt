@@ -22,6 +22,7 @@ PyJWT>=2.8.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
 passlib[bcrypt]>=1.7.4
+httpx>=0.27.0
 
 # astro_tools 插件依赖
 astropy>=5.0.0

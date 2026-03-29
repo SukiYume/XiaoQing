@@ -17,6 +17,12 @@ except ModuleNotFoundError:
     TestClient = None
     create_app = None
     FASTAPI_AVAILABLE = False
+except RuntimeError as exc:
+    if "requires the httpx package" not in str(exc):
+        raise
+    TestClient = None
+    create_app = None
+    FASTAPI_AVAILABLE = False
 
 from plugins.pendo.models.item import DiaryItem, EventItem, LedgerItem, NoteItem, TaskItem
 from plugins.pendo.services.db import Database
