@@ -11,6 +11,7 @@ registerRoute('diary', () => import('./pages/diary.js'));
 registerRoute('search', () => import('./pages/search.js'));
 registerRoute('stats', () => import('./pages/stats.js'));
 registerRoute('settings', () => import('./pages/settings.js'));
+registerRoute('transfer', () => import('./pages/transfer.js'));
 
 async function bootstrap() {
     const token = getToken();

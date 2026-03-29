@@ -205,6 +205,41 @@ def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_build_events_overview_accepts_offset_aware_imported_events():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_offset_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-events-offset"
+
+    try:
+        db.insert_item({
+            "id": "aware_event",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "带时区的导入日程",
+            "category": "导入",
+            "start_time": "2026-01-21T22:27:00+08:00",
+            "end_time": "2026-01-21T23:00:00+08:00",
+            "timezone": "Asia/Shanghai",
+            "remind_times": ["2026-01-21T22:27:00+08:00"],
+            "created_at": "2026-01-21T22:27:00+08:00",
+            "updated_at": "2026-01-21T22:27:00+08:00",
+        })
+
+        result = build_events_overview(
+            db=db,
+            owner_id=owner_id,
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+        )
+
+        assert result["summary"]["event_count"] == 1
+        assert result["events"][0]["id"] == "aware_event"
+        assert result["calendar_days"]["2026-01-21"]["has_events"] is True
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_events_page_source_uses_event_overview_routes():
     api_src = (ROOT / "plugins" / "pendo" / "web" / "api" / "events.py").read_text(encoding="utf-8")
     items_src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")

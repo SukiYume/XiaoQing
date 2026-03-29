@@ -4,12 +4,27 @@ export function getToken() { return localStorage.getItem(TOKEN_KEY); }
 export function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
 export function clearToken() { localStorage.removeItem(TOKEN_KEY); }
 
+function formatErrorDetail(detail) {
+    if (Array.isArray(detail)) {
+        return detail
+            .map((item) => item?.msg || item?.message || item?.detail || '')
+            .filter(Boolean)
+            .join('；');
+    }
+    if (detail && typeof detail === 'object') {
+        return detail.message || detail.detail || '';
+    }
+    return detail || '';
+}
+
 async function request(path, options = {}) {
     const token = getToken();
-    const headers = {
-        'Content-Type': 'application/json',
-        ...options.headers,
-    };
+    const headers = { ...options.headers };
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+    const isBinary = typeof Blob !== 'undefined' && options.body instanceof Blob;
+    if (!isFormData && !isBinary && !headers['Content-Type']) {
+        headers['Content-Type'] = 'application/json';
+    }
     if (token) {
         headers['Authorization'] = `Bearer ${token}`;
     }
@@ -25,9 +40,18 @@ async function request(path, options = {}) {
 
     const data = await res.json();
     if (!data.ok || !res.ok) {
-        throw new Error(data.message || data.detail || 'Request failed');
+        throw new Error(formatErrorDetail(data.message) || formatErrorDetail(data.detail) || 'Request failed');
     }
     return data;
+}
+
+async function parseErrorResponse(res) {
+    try {
+        const data = await res.json();
+        return data.message || formatErrorDetail(data.detail) || 'Request failed';
+    } catch {
+        return 'Request failed';
+    }
 }
 
 export const api = {
@@ -45,6 +69,42 @@ export const api = {
         return request(path, { method: 'DELETE' });
     },
 };
+
+export async function apiUpload(path, body, headers = {}) {
+    return request(path, { method: 'POST', body, headers });
+}
+
+export async function apiDownload(path, body) {
+    const token = getToken();
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`api${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+    });
+
+    if (res.status === 401) {
+        clearToken();
+        window.location.hash = '';
+        window.location.reload();
+        throw new Error('Unauthorized');
+    }
+    if (!res.ok) {
+        throw new Error(await parseErrorResponse(res));
+    }
+
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    return {
+        blob,
+        filename: match?.[1] || 'download.bin',
+    };
+}
 
 export async function verifyToken(token) {
     try {

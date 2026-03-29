@@ -120,6 +120,36 @@ class DbOpsMixin:
     }
 
     # ============================================================
+    # 通用工具
+    # ============================================================
+
+    @staticmethod
+    def _snapshot_item_values(item: Any, update_keys: Any) -> dict[str, Any]:
+        """Snapshot old field values for undo support.
+
+        Args:
+            item: 当前条目对象
+            update_keys: 需要快照的字段名集合
+
+        Returns:
+            {field: old_value} 字典，值已序列化为 JSON 安全类型
+        """
+        old_values: dict[str, Any] = {}
+        for key in update_keys:
+            if key in ("type", "updated_at"):
+                continue
+            old_val = getattr(item, key, None)
+            if old_val is not None:
+                old_values[key] = (
+                    old_val
+                    if isinstance(old_val, (str, int, float, bool, list, dict))
+                    else str(old_val)
+                )
+            else:
+                old_values[key] = None
+        return old_values
+
+    # ============================================================
     # 基础操作 - 直接封装数据库调用
     # ============================================================
 
@@ -275,19 +305,7 @@ class DbOpsMixin:
         if action.startswith("edit_"):
             current_item = await self._db_get_item(item_id, owner_id)
             if current_item:
-                for key in log_updates:
-                    if key in ("type", "updated_at"):
-                        continue
-                    old_val = getattr(current_item, key, None)
-                    # 将旧值序列化为可 JSON 存储的格式
-                    if old_val is not None:
-                        old_values[key] = (
-                            old_val
-                            if isinstance(old_val, (str, int, float, bool, list, dict))
-                            else str(old_val)
-                        )
-                    else:
-                        old_values[key] = None
+                old_values = self._snapshot_item_values(current_item, log_updates)
 
         # 更新条目
         await self._db_update_item(item_id, updates, owner_id)

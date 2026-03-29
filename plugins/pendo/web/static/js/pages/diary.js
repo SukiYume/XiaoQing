@@ -2,13 +2,22 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
-import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { isoDate, pad2, previewText, todayStr as sharedTodayStr } from '../utils/format.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-diary-redesign-styles';
 const WEATHER_OPTIONS = ['☀️ 晴', '⛅ 多云', '🌧️ 雨', '❄️ 雪', '🌫️ 雾', '💨 风'];
 const MOOD_SWATCHES = ['#EC4899', '#8B5CF6', '#3B82F6', '#F59E0B', '#10B981', '#F97316'];
+const DIARY_YEAR_START = 2000;
+const DIARY_YEAR_COUNT = 100;
+const DIARY_NAV_PREV_ICON = `
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M9.75 3.5 5.5 8l4.25 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+const DIARY_NAV_NEXT_ICON = `
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M6.25 3.5 10.5 8l-4.25 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
 const DEFAULT_MOOD_EMOJIS = {
     happy: '😊',
     sad: '😢',
@@ -57,7 +66,33 @@ function monthEnd(year, month) {
     return `${year}-${pad2(month)}-${pad2(lastDay)}`;
 }
 
+function monthInputValue(year, month) { return `${year}-${pad2(month)}`; }
+
 function monthLabel(year, month) { return `${year}年${month}月`; }
+
+async function updateMonth(year, month) {
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+        return false;
+    }
+    if (_year === year && _month === month) return true;
+    _year = year;
+    _month = month;
+    _selectedDate = '';
+    await loadAndRender();
+    return true;
+}
+
+function parseMonthInput(value) {
+    const matched = String(value || '').trim().match(/^(\d{4})-(\d{1,2})$/);
+    if (!matched) return null;
+    const year = Number(matched[1]);
+    const month = Number(matched[2]);
+    const maxYear = DIARY_YEAR_START + DIARY_YEAR_COUNT - 1;
+    if (!Number.isInteger(year) || !Number.isInteger(month)) return null;
+    if (year < DIARY_YEAR_START || year > maxYear) return null;
+    if (month < 1 || month > 12) return null;
+    return { year, month };
+}
 
 function parseDate(value) {
     if (!value) return null;
@@ -87,6 +122,16 @@ function formatDateLabel(value) {
     if (!date) return value || '未知日期';
     const weekNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
     return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 · ${weekNames[date.getDay()]}`;
+}
+
+function formatWordMetric(value) {
+    const words = Number(value || 0);
+    if (!words) return '0';
+    if (words >= 1000) {
+        const compact = words >= 10000 ? (words / 1000).toFixed(0) : (words / 1000).toFixed(1);
+        return `${compact}k`;
+    }
+    return String(words);
 }
 
 function sortItems(items) {
@@ -241,13 +286,58 @@ function ensureStyles() {
         .diary-panel-head h3, .diary-workspace-title { margin: 0; font-size: 18px; font-weight: 780; color: var(--color-text); letter-spacing: -0.02em; }
         .diary-panel-head p, .diary-workspace-subtitle { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); line-height: 1.7; }
         .diary-panel-body, .diary-workspace-body { padding: 16px 20px 20px; }
-        .diary-month-nav { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border-radius: 999px; background: rgba(255,255,255,0.88); border: 1px solid rgba(236,72,153,0.14); }
+        .diary-month-nav {
+            position: relative;
+            display: inline-grid; grid-template-columns: 32px minmax(108px, auto) 32px; align-items: center; column-gap: 4px;
+            min-height: 42px; padding: 4px 6px;
+            border-radius: 999px; background: rgba(255,255,255,0.88); border: 1px solid rgba(236,72,153,0.14);
+        }
+        .diary-month-label {
+            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+        }
+        .diary-month-nav:focus-within {
+            box-shadow: 0 0 0 3px rgba(244,114,182,0.12);
+        }
         .diary-month-nav button {
-            width: 36px; height: 36px; border: none; background: transparent; border-radius: 999px; cursor: pointer;
-            color: var(--color-text-secondary); font-size: 20px; line-height: 1;
+            width: 32px; height: 32px; padding: 0; margin: 0; display: inline-flex; align-items: center; justify-content: center; align-self: center;
+            border: none; background: transparent; border-radius: 999px; cursor: pointer;
+            color: var(--color-text-secondary); line-height: 1;
+        }
+        .diary-month-nav button svg {
+            width: 14px; height: 14px; display: block; flex: 0 0 auto;
         }
         .diary-month-nav button:hover { background: rgba(236,72,153,0.08); color: var(--color-diary, #EC4899); }
-        .diary-month-nav span { min-width: 96px; text-align: center; font-size: 13px; font-weight: 800; color: var(--color-text); }
+        .diary-month-nav input.diary-month-text {
+            width: 100%; min-width: 0; height: 32px; box-sizing: border-box;
+            margin: 0; padding: 0 8px; border: 0 !important; border-color: transparent !important; border-radius: 0; background: transparent !important;
+            text-align: center; font-size: 13px; font-weight: 800; color: var(--color-text);
+            box-shadow: none !important; outline: none; appearance: none; -webkit-appearance: none; caret-color: var(--color-diary, #EC4899);
+        }
+        .diary-month-nav input.diary-month-text::placeholder {
+            color: rgba(100,116,139,0.72);
+            font-weight: 700;
+        }
+        .diary-month-nav input.diary-month-text:hover {
+            color: #0f172a;
+        }
+        .diary-month-nav input.diary-month-text:focus {
+            background: transparent !important;
+            border-color: transparent !important;
+            box-shadow: none !important;
+        }
+        .mood-selector { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .mood-btn {
+            width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center;
+            border-radius: 14px; border: 1px solid rgba(244,114,182,0.22); background: rgba(255,255,255,0.96);
+            cursor: pointer; font-size: 20px; opacity: 0.94; transform: scale(1);
+            transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+        }
+        .mood-btn:hover { border-color: rgba(244,114,182,0.34); background: rgba(253,242,248,0.66); transform: translateY(-1px) scale(1.03); }
+        .mood-btn.active {
+            opacity: 1; background: rgba(253,242,248,0.94); transform: scale(1.06);
+            border-color: rgba(236,72,153,0.34); box-shadow: inset 0 0 0 1px rgba(236,72,153,0.12);
+        }
         .diary-calendar-weekdays, .diary-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
         .diary-calendar-weekdays { margin-bottom: 10px; }
         .diary-calendar-weekdays span { text-align: center; font-size: 12px; font-weight: 800; color: var(--color-text-secondary); letter-spacing: 0.04em; }
@@ -334,6 +424,7 @@ function ensureStyles() {
             .diary-day-preview { font-size: 11px; -webkit-line-clamp: 1; }
             .diary-entry-head, .diary-workspace-head, .diary-panel-head { flex-direction: column; }
             .diary-month-nav { align-self: flex-start; }
+            .diary-month-nav { grid-template-columns: 32px minmax(104px, 1fr) 32px; width: min(100%, 220px); }
             .diary-cadence { grid-template-columns: repeat(10, minmax(0, 1fr)); }
             .diary-stream-item { flex-direction: column; }
             .diary-stream-date { width: auto; }
@@ -343,7 +434,9 @@ function ensureStyles() {
 
 function renderHero() {
     const summary = _overview?.summary || {};
-    const busiest = summary.busiest_day ? formatDateLabel(summary.busiest_day.date).split(' · ')[0] : '本月还没有高峰日';
+    const busiest = summary.busiest_day
+        ? `${formatDateLabel(summary.busiest_day.date).split(' · ')[0]} · ${summary.busiest_day.words || 0} 字`
+        : '本月还没有高峰日';
     return `
         <section class="diary-hero">
             <div>
@@ -403,9 +496,20 @@ function renderCalendarPanel() {
                     <p>点击日期即可查看或继续书写当天内容。</p>
                 </div>
                 <div class="diary-month-nav">
-                    <button type="button" id="diary-prev-month">‹</button>
-                    <span>${monthLabel(_year, _month)}</span>
-                    <button type="button" id="diary-next-month">›</button>
+                    <button type="button" id="diary-prev-month" aria-label="上个月">${DIARY_NAV_PREV_ICON}</button>
+                    <label class="diary-month-label" for="diary-month-text">月份</label>
+                    <input
+                        id="diary-month-text"
+                        class="diary-month-text"
+                        type="text"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="YYYY-MM"
+                        value="${monthInputValue(_year, _month)}"
+                        aria-label="输入月份，例如 2026-03"
+                    >
+                    <button type="button" id="diary-next-month" aria-label="下个月">${DIARY_NAV_NEXT_ICON}</button>
                 </div>
             </div>
             <div class="diary-panel-body">
@@ -470,16 +574,16 @@ function renderMoodPanel() {
 
 function renderCadencePanel() {
     const cadence = _overview?.cadence || [];
-    const maxValue = Math.max(1, ...cadence.map((item) => item.count || 0));
+    const maxValue = Math.max(1, ...cadence.map((item) => item.words || 0));
     return `
         <section class="diary-panel">
-            <div class="diary-panel-head"><div><h3>书写密度</h3><p>查看这个月每天的记录频率。</p></div></div>
+            <div class="diary-panel-head"><div><h3>书写密度</h3><p>查看这个月每天写了多少字。</p></div></div>
             <div class="diary-panel-body">
                 <div class="diary-cadence">
                     ${cadence.map((item) => `
-                        <div class="diary-cadence-col" title="${item.date} · ${item.count} 篇 · ${item.words} 字">
-                            <span class="diary-cadence-value">${item.count}</span>
-                            <span class="diary-cadence-bar" style="height:${12 + (item.count / maxValue) * 64}px;"></span>
+                        <div class="diary-cadence-col" title="${item.date} · ${item.words} 字">
+                            <span class="diary-cadence-value">${formatWordMetric(item.words)}</span>
+                            <span class="diary-cadence-bar" style="height:${12 + (item.words / maxValue) * 64}px;"></span>
                             <span class="diary-cadence-label">${item.label}</span>
                         </div>`).join('')}
                 </div>
@@ -780,21 +884,43 @@ function attachListeners() {
     const prevBtn = _container.querySelector('#diary-prev-month');
     if (prevBtn) {
         prevBtn.onclick = async () => {
-            _month -= 1;
-            if (_month < 1) { _month = 12; _year -= 1; }
-            _selectedDate = '';
-            await loadAndRender();
+            let nextYear = _year;
+            let nextMonth = _month - 1;
+            if (nextMonth < 1) { nextMonth = 12; nextYear -= 1; }
+            await updateMonth(nextYear, nextMonth);
         };
     }
 
     const nextBtn = _container.querySelector('#diary-next-month');
     if (nextBtn) {
         nextBtn.onclick = async () => {
-            _month += 1;
-            if (_month > 12) { _month = 1; _year += 1; }
-            _selectedDate = '';
-            await loadAndRender();
+            let nextYear = _year;
+            let nextMonth = _month + 1;
+            if (nextMonth > 12) { nextMonth = 1; nextYear += 1; }
+            await updateMonth(nextYear, nextMonth);
         };
+    }
+
+    const monthText = _container.querySelector('#diary-month-text');
+    if (monthText) {
+        const commitMonthText = async () => {
+            const parsed = parseMonthInput(monthText.value);
+            if (!parsed) {
+                monthText.value = monthInputValue(_year, _month);
+                showToast(`月份格式请写成 ${monthInputValue(_year, _month)} 这种形式`, 'warning');
+                return;
+            }
+            monthText.value = monthInputValue(parsed.year, parsed.month);
+            await updateMonth(parsed.year, parsed.month);
+        };
+        monthText.addEventListener('keydown', async (event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            await commitMonthText();
+        });
+        monthText.addEventListener('blur', () => {
+            void commitMonthText();
+        });
     }
 
     _container.querySelectorAll('.diary-day[data-date]').forEach((button) => {
