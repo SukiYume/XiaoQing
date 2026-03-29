@@ -72,13 +72,39 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
         assert result["summary"]["fill_rate"] == 3 / 31
         assert result["summary"]["current_streak"] == 1
         assert result["summary"]["longest_streak"] == 2
+        assert result["summary"]["month_longest_streak"] == 2
         assert result["summary"]["busiest_day"]["date"] == "2026-03-20"
+        assert result["summary"]["busiest_day"]["words"] == len("今天写了很多很多字。")
         assert result["mood_breakdown"][0]["mood"] == "😊"
         assert result["mood_breakdown"][0]["count"] == 2
         assert result["template_usage"][0]["template_id"] == "night_review"
         assert result["cadence"][19]["count"] == 1
+        assert result["cadence"][19]["words"] == len("今天写了很多很多字。")
         assert result["cadence"][20]["count"] == 1
+        assert result["cadence"][20]["words"] == len("今天继续写日记。")
         assert result["cadence"][22]["count"] == 1
+        assert result["cadence"][22]["words"] == len("这一天有些疲惫。")
         assert result["recent_entries"][0]["id"] == "d3"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_diary_page_source_uses_word_based_cadence_copy_and_values():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "diary.js").read_text(encoding="utf-8")
+
+    assert "function formatWordMetric(value)" in src
+    assert "class=\"diary-month-label\"" in src
+    assert "id=\"diary-prev-month\"" in src
+    assert "id=\"diary-next-month\"" in src
+    assert "查看这个月每天写了多少字。" in src
+    assert 'title="${item.date} · ${item.words} 字"' in src
+    assert "const maxValue = Math.max(1, ...cadence.map((item) => item.words || 0));" in src
+
+
+def test_stats_page_source_uses_word_based_diary_density_and_month_streak():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+
+    assert "function formatWordCompact(value)" in src
+    assert "subtitle: '这个月每天写了多少字。'" in src
+    assert "map((item) => ({ label: item.label, words: item.words }))" in src
+    assert "{ label: '本月最长连续', value: formatCount(summary.month_longest_streak || 0) }" in src

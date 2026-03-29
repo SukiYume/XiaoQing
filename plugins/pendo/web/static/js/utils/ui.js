@@ -29,7 +29,11 @@ export function mediaMax(breakpoint, cssText) {
 }
 
 export function injectStyles(styleId, cssText) {
-    if (document.getElementById(styleId)) return;
+    const existing = document.getElementById(styleId);
+    if (existing) {
+        if (existing.textContent !== cssText) existing.textContent = cssText;
+        return;
+    }
     const style = document.createElement('style');
     style.id = styleId;
     style.textContent = cssText;

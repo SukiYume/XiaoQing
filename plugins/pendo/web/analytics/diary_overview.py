@@ -76,6 +76,21 @@ def _compute_streaks(days: list[date], today: date) -> tuple[int, int]:
     return current, longest
 
 
+def _compute_longest_streak(days: list[date]) -> int:
+    if not days:
+        return 0
+    ordered = sorted(set(days))
+    longest = 1
+    current_run = 1
+    for index in range(1, len(ordered)):
+        if ordered[index] - ordered[index - 1] == timedelta(days=1):
+            current_run += 1
+            longest = max(longest, current_run)
+        else:
+            current_run = 1
+    return longest
+
+
 def build_diary_overview(
     db: Database,
     owner_id: str,
@@ -123,7 +138,13 @@ def build_diary_overview(
         for item in all_items
         if (parsed := _parse_day(getattr(item, "diary_date", None))) is not None
     ]
+    month_days = [
+        parsed
+        for key in day_counts.keys()
+        if (parsed := _parse_day(key)) is not None
+    ]
     current_streak, longest_streak = _compute_streaks(all_days, today_day)
+    month_longest_streak = _compute_longest_streak(month_days)
 
     total_words = sum(len(str(getattr(item, "content", "") or "").strip()) for item in month_items)
     active_days = len(day_counts)
@@ -169,9 +190,9 @@ def build_diary_overview(
 
     busiest_day = None
     if cadence:
-        max_count = max(item["count"] for item in cadence)
-        if max_count > 0:
-            busiest = max(cadence, key=lambda item: (item["count"], item["words"], item["date"]))
+        max_words = max(item["words"] for item in cadence)
+        if max_words > 0:
+            busiest = max(cadence, key=lambda item: (item["words"], item["count"], item["date"]))
             busiest_day = {
                 "date": busiest["date"],
                 "count": busiest["count"],
@@ -186,6 +207,7 @@ def build_diary_overview(
             "fill_rate": active_days / total_days if total_days else 0,
             "current_streak": current_streak,
             "longest_streak": longest_streak,
+            "month_longest_streak": month_longest_streak,
             "total_words": total_words,
             "busiest_day": busiest_day,
         },

@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import PendoConfig
 from ..services.db import Database
+from .api import create_api_router
 from .deps import set_db
 
 logger = logging.getLogger("pendo.web")
@@ -37,8 +38,6 @@ def create_app(db: Database) -> FastAPI:
             content={"ok": False, "message": exc.detail, "error_code": str(exc.status_code)},
         )
 
-    # Import and mount API routes
-    from .api import create_api_router
     app.include_router(create_api_router(), prefix="/api")
 
     # Mount static files (SPA fallback to index.html)

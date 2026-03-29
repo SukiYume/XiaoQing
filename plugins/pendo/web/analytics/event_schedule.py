@@ -15,7 +15,13 @@ def ensure_datetime(value: str | None, *, is_end: bool = False) -> datetime | No
     if "T" not in text:
         suffix = "T23:59:59" if is_end else "T00:00:00"
         text = f"{text}{suffix}"
-    return datetime.fromisoformat(text)
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is not None:
+        # The existing web analytics stack treats item datetimes as local wall-clock
+        # values. Imported bundles may carry timezone offsets, so normalize them to
+        # the same naive representation before range comparisons.
+        return parsed.replace(tzinfo=None)
+    return parsed
 
 
 def date_key(value: str | None) -> str:
