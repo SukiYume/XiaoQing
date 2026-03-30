@@ -39,9 +39,9 @@ def _load_dictionary(dict_file: Path):
         DataFrame 或 None（加载失败时）
     """
     try:
-        import pandas as pd
         if not dict_file.exists():
             return None
+        import pandas as pd
         return pd.read_csv(dict_file, sep='\t', header=None, names=['src', 'dst'])
     except ImportError:
         raise ImportError("天文词典功能需要 pandas 库，请运行: pip install pandas")
