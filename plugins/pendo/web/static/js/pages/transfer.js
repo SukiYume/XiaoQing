@@ -13,6 +13,7 @@ const TYPE_OPTIONS = [
 const PRESETS = [
     { value: 'week', label: '本周' },
     { value: 'month', label: '本月' },
+    { value: 'quarter', label: '本季' },
     { value: 'year', label: '今年' },
     { value: 'last_year', label: '去年' },
     { value: 'custom', label: '自定义' },

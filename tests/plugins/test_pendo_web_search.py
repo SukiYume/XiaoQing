@@ -35,9 +35,18 @@ def _load_search_module():
     fastapi.Depends = lambda dep=None: dep
     fastapi.HTTPException = _HTTPException
 
+    _orig_fastapi = sys.modules.get("fastapi")
+
     sys.modules["fastapi"] = fastapi
     sys.modules.pop("plugins.pendo.web.api.search", None)
-    return importlib.import_module("plugins.pendo.web.api.search")
+    mod = importlib.import_module("plugins.pendo.web.api.search")
+
+    if _orig_fastapi is not None:
+        sys.modules["fastapi"] = _orig_fastapi
+    else:
+        sys.modules.pop("fastapi", None)
+
+    return mod
 
 
 def test_database_search_items_matches_additional_text_fields():

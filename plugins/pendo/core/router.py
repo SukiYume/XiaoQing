@@ -49,8 +49,11 @@ COMMAND_META: dict[str, tuple[list[str], str, str]] = {
         "记账管理",
         "/pendo ledger <add|quick|list|view|edit|delete|summary> [args]",
     ),
-    "export": (["导出"], "导出数据", "/pendo export md [range=<时间范围>]"),
-    "import": (["导入"], "导入数据", "/pendo import md <发送文件>"),
+    "export": (
+        ["导出"],
+        "导出 Markdown 档案并私聊发送文件",
+        "/pendo export <文件名> [range] [type]",
+    ),
     "settings": (["setting", "设置"], "管理设置", "/pendo settings [key] [value]"),
     "help": (["h", "帮助", "?"], "显示帮助信息", "/pendo help [command]"),
     "web": (["webui", "网页"], "Web UI 管理", "/pendo web <token|start|stop|status>"),

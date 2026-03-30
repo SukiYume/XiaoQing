@@ -148,7 +148,7 @@
 | **Markdown 导入导出** | 支持数据备份和迁移 |
 | **撤销功能** | 支持短时间内的操作撤销 |
 | **全文搜索** | 跨模块搜索日程、待办、笔记、日记 |
-| **Web 控制台** | FastAPI + 原生 JS SPA，JWT 鉴权，九大页面，Chart.js 图表 |
+| **Web 控制台** | FastAPI + 原生 JS SPA，JWT 鉴权，高级导入导出数据迁移设计，九大页面，Chart.js 图表 |
 
 #### 命令列表
 
@@ -233,6 +233,8 @@
 | `/pendo import md` | 导入 Markdown |
 | `/pendo import md preview` | 预览导入 |
 
+> **提示：Web 端提供内置的高阶数据迁移能力**：支持生成并下载 `.pendo.zip` 数据包，拥有包含冲突处理及审计日志的功能板块。同时支持通过 `plugins/pendo/scripts/convert_text_export_to_pendo_bundle.py` 转换文本备份为可导入的 Bundle 格式。
+
 **设置 (Settings)**
 
 | 命令 | 说明 |
@@ -266,7 +268,7 @@ Web 控制台提供以下页面：
 | 笔记 | 卡片网格，按分类/标签浏览笔记 |
 | 搜索 | 跨模块全文搜索 |
 | 统计 | Chart.js 可视化图表（事件/任务/账本趋势） |
-| 设置 | 在线修改插件配置 |
+| 设置 | 在线修改配置、**高级数据迁移（导入/导出 Bundle）** |
 
 **其他操作**
 

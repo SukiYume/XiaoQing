@@ -18,6 +18,7 @@ from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..config import PendoConfig
 from ..utils.formatters import ItemFormatter, format_success_message, extract_metadata, paginate
+from ..utils.validators import default_task_category, derive_task_category
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,14 @@ def _sort_category_keys(keys: Iterable[str]) -> list[str]:
     date_cats = sorted([k for k in keys if re.match(r"\d{4}-\d{2}-\d{2}", k)], reverse=True)
     other_cats = sorted([k for k in keys if not re.match(r"\d{4}-\d{2}-\d{2}", k)])
     return date_cats + other_cats
+
+
+def _task_category_label(task: TaskItem) -> str:
+    return derive_task_category(
+        getattr(task, "category", None),
+        getattr(task, "due_time", None),
+        getattr(task, "created_at", None),
+    )
 
 
 class TaskHandler(DbOpsMixin):
@@ -65,9 +74,10 @@ class TaskHandler(DbOpsMixin):
 
         命令格式：
         - /pendo todo add <内容> [cat:xxx] [p:1-4]
-        - /pendo todo list [cat] [done/undone] [all|page:n]
+        - /pendo todo list [cat] [done/undone/cancelled] [all|page:n]
         - /pendo todo view <id>
         - /pendo todo done <id>
+        - /pendo todo cancel <id>
         - /pendo todo undone <id>
         - /pendo todo delete <id|cat:xxx>
         - /pendo todo edit <id> <内容>
@@ -84,6 +94,7 @@ class TaskHandler(DbOpsMixin):
             "list": lambda: self.list_tasks(user_id, rest, context),
             "view": lambda: self.view_task(user_id, rest, context),
             "done": lambda: self.mark_done(user_id, rest, context),
+            "cancel": lambda: self.mark_cancelled(user_id, rest, context),
             "undone": lambda: self.mark_undone(user_id, rest, context),
             "delete": lambda: self.delete_task(user_id, rest, context),
             "edit": lambda: self.edit_task(user_id, rest, context),
@@ -108,6 +119,7 @@ class TaskHandler(DbOpsMixin):
                 "• /pendo todo list [分类]\n"
                 "• /pendo todo view <id>\n"
                 "• /pendo todo done <id>\n"
+                "• /pendo todo cancel <id>\n"
                 "• /pendo todo undone <id>\n"
                 "• /pendo todo edit <id> <内容>\n"
                 "• /pendo todo delete <id|cat:分类>"
@@ -127,9 +139,11 @@ class TaskHandler(DbOpsMixin):
             "today",
             "done",
             "undone",
+            "cancelled",
             "todo",
             "已完成",
             "未完成",
+            "已取消",
         }
         if command in single_token_shortcuts or re.fullmatch(r"\d{4}-\d{2}-\d{2}", command):
             return True
@@ -138,7 +152,7 @@ class TaskHandler(DbOpsMixin):
             # `/pendo todo 工作`
             return True
 
-        valid_modifiers = {"done", "undone", "todo", "已完成", "未完成", "all"}
+        valid_modifiers = {"done", "undone", "cancelled", "todo", "已完成", "未完成", "已取消", "all"}
         for token in rest.split():
             lower = token.lower()
             if lower in valid_modifiers:
@@ -222,18 +236,11 @@ class TaskHandler(DbOpsMixin):
         - 事件内容 cat:xxx p:1
         - cat:xxx 事件内容 p:1
         """
-        # 确定默认分类：晚上8点后自动归为第二天
-        now = datetime.now()
-        default_category = now.strftime("%Y-%m-%d")
-        if now.hour >= 20:
-            # 晚上8点后，默认分类为明天
-            default_category = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-
         meta = extract_metadata(text, with_priority=True)
         return {
             "title": meta["text"] or "无标题待办",
             "content": "",
-            "category": meta["category"] or default_category,
+            "category": meta["category"] or default_task_category(),
             "priority": meta["priority"] or 3,
             "tags": meta["tags"],
         }
@@ -254,14 +261,16 @@ class TaskHandler(DbOpsMixin):
         # 按分类分组统计
         categories = {}
         for task in tasks:
-            cat = task.category or "未分类"
+            cat = _task_category_label(task)
             if cat not in categories:
-                categories[cat] = {"done": 0, "undone": 0}
+                categories[cat] = {"done": 0, "undone": 0, "cancelled": 0}
 
             status_val = _enum_val(task.status)
 
             if status_val == TaskStatus.DONE.value:
                 categories[cat]["done"] += 1
+            elif status_val == TaskStatus.CANCELLED.value:
+                categories[cat]["cancelled"] += 1
             else:
                 categories[cat]["undone"] += 1
 
@@ -270,8 +279,11 @@ class TaskHandler(DbOpsMixin):
 
         for cat in _sort_category_keys(categories):
             stats = categories[cat]
-            total = stats["done"] + stats["undone"]
-            message += f"📂 **{cat}** ({stats['undone']}未完成/{total}总)\n"
+            total = stats["done"] + stats["undone"] + stats["cancelled"]
+            detail = f"{stats['undone']}未完成/{stats['done']}完成"
+            if stats["cancelled"]:
+                detail += f"/{stats['cancelled']}取消"
+            message += f"📂 **{cat}** ({detail}/{total}总)\n"
 
         message += f"\n💡 用 /pendo todo list <分类名> 查看详情"
         message += f"\n💡 用 /pendo todo list today 查看今日待办"
@@ -286,9 +298,10 @@ class TaskHandler(DbOpsMixin):
         格式：
         - /pendo todo list -> 列出所有分类
         - /pendo todo list today -> 列出今天的待办
-        - /pendo todo list cat [done/undone] -> 列出指定分类
+        - /pendo todo list cat [done/undone/cancelled] -> 列出指定分类
         - /pendo todo list done -> 列出所有分类下已完成的待办
         - /pendo todo list undone -> 列出所有分类下未完成的待办
+        - /pendo todo list cancelled -> 列出所有分类下已取消的待办
         - /pendo todo list cat all -> 显示该分类全部待办
         - /pendo todo list cat page:2 -> 显示该分类第2页
         """
@@ -304,6 +317,9 @@ class TaskHandler(DbOpsMixin):
         global_status = None
         if category.lower() in ["done", "已完成"]:
             global_status = TaskStatus.DONE.value
+            return await self.list_all_tasks_by_status(user_id, global_status, context, filter_str)
+        elif category.lower() in ["cancelled", "已取消"]:
+            global_status = TaskStatus.CANCELLED.value
             return await self.list_all_tasks_by_status(user_id, global_status, context, filter_str)
         elif category.lower() in ["undone", "未完成", "todo"]:
             global_status = TaskStatus.TODO.value
@@ -323,6 +339,8 @@ class TaskHandler(DbOpsMixin):
             part_lower = part.lower()
             if part_lower in ["done", "已完成"]:
                 status_filter = TaskStatus.DONE.value
+            elif part_lower in ["cancelled", "已取消"]:
+                status_filter = TaskStatus.CANCELLED.value
             elif part_lower in ["undone", "未完成", "todo"]:
                 status_filter = TaskStatus.TODO.value
             elif part_lower == "all":
@@ -421,7 +439,7 @@ class TaskHandler(DbOpsMixin):
         )
 
         if not tasks:
-            status_text = "已完成" if status == TaskStatus.DONE.value else "未完成"
+            status_text = self._status_text(status)
             return {
                 "status": "success",
                 "message": f"📝 所有分类的{status_text}待办\n\n暂无{status_text}待办事项",
@@ -430,7 +448,7 @@ class TaskHandler(DbOpsMixin):
         # 按分类分组
         categories = {}
         for task in tasks:
-            cat = task.category or "未分类"
+            cat = _task_category_label(task)
             if cat not in categories:
                 categories[cat] = []
             categories[cat].append(task)
@@ -445,7 +463,7 @@ class TaskHandler(DbOpsMixin):
             page_info = ""
 
         # 格式化输出
-        status_text = "已完成" if status == TaskStatus.DONE.value else "未完成"
+        status_text = self._status_text(status)
         total_count = sum(len(cats) for cats in categories.values())
 
         # 初始消息头
@@ -502,7 +520,7 @@ class TaskHandler(DbOpsMixin):
             else:
                 message += f"... (使用 'page:{page_num + 1}' 查看下一页)\n"
 
-        message += f"💡 /pendo todo done <id> 完成 | /pendo todo undone <id> 重开"
+        message += f"💡 /pendo todo done <id> 完成 | /pendo todo cancel <id> 取消 | /pendo todo undone <id> 重开"
 
         return {"status": "success", "message": message}
 
@@ -519,19 +537,20 @@ class TaskHandler(DbOpsMixin):
             return wrong_type
         task = cast(TaskItem, task)
         status_value = _enum_val(task.status)
-        status_label = "已完成" if status_value == TaskStatus.DONE.value else "未完成"
+        status_label = self._status_text(status_value)
 
         lines = [f"📝 **{task.title or '无标题'}**", ""]
         lines.append(f"{ItemFormatter.format_status_icon(status_value)} 状态: {status_label}")
         lines.append(
             f"{ItemFormatter.format_priority_icon(_enum_val(task.priority))} 优先级: {ItemFormatter.format_priority(_enum_val(task.priority) or 3)}"
         )
-        lines.append(f"📂 分类: {task.category or '未分类'}")
+        lines.append(f"📂 分类: {_task_category_label(task)}")
 
         if task.due_time:
             lines.append(f"⏰ 截止: {ItemFormatter.format_datetime(task.due_time)}")
         if task.completed_at:
-            lines.append(f"✅ 完成: {ItemFormatter.format_datetime(task.completed_at)}")
+            finished_label = "🚫 取消" if status_value == TaskStatus.CANCELLED.value else "✅ 完成"
+            lines.append(f"{finished_label}: {ItemFormatter.format_datetime(task.completed_at)}")
         if task.tags:
             lines.append(f"🏷️ 标签: {ItemFormatter.format_tags(task.tags)}")
 
@@ -541,7 +560,7 @@ class TaskHandler(DbOpsMixin):
             lines.append("")
 
         lines.append(f"`{task_id}`")
-        lines.append(f"💡 /pendo todo done {task_id} | /pendo todo edit {task_id} <内容>")
+        lines.append(f"💡 /pendo todo done {task_id} | /pendo todo cancel {task_id} | /pendo todo edit {task_id} <内容>")
         return {"status": "success", "message": "\n".join(lines)}
 
     async def mark_done(self, user_id: str, task_id: str, context: PendoContext) -> CommandMessage:
@@ -572,6 +591,35 @@ class TaskHandler(DbOpsMixin):
             "message": f"✅ 已完成: {task.title or '无标题'}\n\n🎉 干得好！\n💡 用 /pendo todo list 查看待办",
         }
 
+    async def mark_cancelled(
+        self, user_id: str, task_id: str, context: PendoContext
+    ) -> CommandMessage:
+        """标记为已取消"""
+        if not task_id:
+            raise MissingRequiredFieldException("task_id")
+
+        task_id = task_id.strip()
+
+        task, wrong_type = await self._db_get_typed_item_or_message(
+            task_id, user_id, ItemType.TASK.value, "待办"
+        )
+        if wrong_type:
+            return wrong_type
+        task = cast(TaskItem, task)
+
+        now = now_in_timezone(user_id, self.db)
+        updates = {
+            ItemFields.STATUS: TaskStatus.CANCELLED.value,
+            "completed_at": TimezoneHelper.format_for_storage(now),
+            "type": ItemType.TASK.value,
+        }
+        await self._db_update_with_log(task_id, updates, user_id, action="cancel_task")
+
+        return {
+            "status": "success",
+            "message": f"🚫 已取消: {task.title or '无标题'}\n\n💡 用 /pendo todo undone {task_id} 可重新打开",
+        }
+
     async def mark_undone(
         self, user_id: str, task_id: str, context: PendoContext
     ) -> CommandMessage:
@@ -598,7 +646,7 @@ class TaskHandler(DbOpsMixin):
 
         return {
             "status": "success",
-            "message": f"↩️ 已重新打开: {task.title or '无标题'}\n\n💡 用 /pendo todo done {task_id} 完成",
+            "message": f"↩️ 已重新打开: {task.title or '无标题'}\n\n💡 用 /pendo todo done {task_id} 完成 | /pendo todo cancel {task_id} 取消",
         }
 
     async def delete_task(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
@@ -700,5 +748,12 @@ class TaskHandler(DbOpsMixin):
 
         return {
             "status": "success",
-            "message": f"✅ 已更新待办: {parsed['title']}\n\n💡 /pendo todo done {task_id} 完成 | /pendo undo 撤销编辑",
+            "message": f"✅ 已更新待办: {parsed['title']}\n\n💡 /pendo todo done {task_id} 完成 | /pendo todo cancel {task_id} 取消 | /pendo undo 撤销编辑",
         }
+
+    @staticmethod
+    def _status_text(status: str) -> str:
+        return {
+            TaskStatus.DONE.value: "已完成",
+            TaskStatus.CANCELLED.value: "已取消",
+        }.get(status, "未完成")

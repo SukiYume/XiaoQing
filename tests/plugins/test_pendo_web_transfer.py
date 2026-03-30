@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
+import importlib
 import io
 import json
 import shutil
+import sys
+import types
 import uuid
 import zipfile
 from pathlib import Path
@@ -34,11 +38,72 @@ from plugins.pendo.web.services.transfer_bundle import (
     serialize_item,
     write_bundle,
 )
-from plugins.pendo.web.api.transfer import query_items_for_types
 
 
 ROOT = Path(__file__).resolve().parents[2]
 OWNER_ID = "u-transfer"
+
+
+def _load_transfer_module():
+    fastapi = types.ModuleType("fastapi")
+
+    class _Router:
+        def _decorator(self, *_args, **_kwargs):
+            def decorator(fn):
+                return fn
+            return decorator
+
+        def get(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def post(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def put(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def delete(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+    class _HTTPException(Exception):
+        def __init__(self, status_code: int, detail: str):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+    fastapi.APIRouter = _Router
+    fastapi.Depends = lambda dep=None: dep
+    fastapi.Header = lambda default=None, **_kwargs: default
+    fastapi.Query = lambda default=None, **_kwargs: default
+    fastapi.HTTPException = _HTTPException
+    fastapi.Request = type("Request", (), {})
+
+    responses = types.ModuleType("fastapi.responses")
+    responses.Response = type("Response", (), {})
+    responses.JSONResponse = type("JSONResponse", (), {})  # needed by server.py
+
+    # Save originals so we can restore them after import (avoid polluting sys.modules
+    # for subsequent tests that rely on the real fastapi / fastapi.responses)
+    _orig_fastapi = sys.modules.get("fastapi")
+    _orig_responses = sys.modules.get("fastapi.responses")
+
+    sys.modules["fastapi"] = fastapi
+    sys.modules["fastapi.responses"] = responses
+    sys.modules.pop("plugins.pendo.web.api.transfer", None)
+    sys.modules.pop("plugins.pendo.web.deps", None)
+    mod = importlib.import_module("plugins.pendo.web.api.transfer")
+
+    # Restore real fastapi modules so other tests are not affected
+    if _orig_fastapi is not None:
+        sys.modules["fastapi"] = _orig_fastapi
+    else:
+        sys.modules.pop("fastapi", None)
+    if _orig_responses is not None:
+        sys.modules["fastapi.responses"] = _orig_responses
+    else:
+        sys.modules.pop("fastapi.responses", None)
+
+    return mod
 
 
 @pytest.fixture()
@@ -387,6 +452,7 @@ def test_read_bundle_accepts_tasks_ndjson():
 @pytest.mark.parametrize("preset,payload", [
     ("week", {"preset": "week"}),
     ("month", {"preset": "month"}),
+    ("quarter", {"preset": "quarter"}),
     ("year", {"preset": "year"}),
     ("last_year", {"preset": "last_year"}),
     ("all", {"preset": "all"}),
@@ -416,6 +482,17 @@ def test_export_preview_rejects_reversed_custom_range(client: TestClient, auth_h
 
     assert response.status_code == 422
     assert "before end" in response.json()["message"]
+
+
+def test_resolve_range_supports_quarter_to_date():
+    transfer_module = _load_transfer_module()
+    start, end = transfer_module.resolve_range(
+        transfer_module.ExportSelection(types=["task"], preset="quarter"),
+        now=datetime(2026, 3, 30, 9, 0, 0),
+    )
+
+    assert start.isoformat() == "2026-01-01"
+    assert end.isoformat() == "2026-03-30"
 
 
 def test_export_preview_returns_counts_by_type_and_filters_by_time_field(client: TestClient, temp_db: Database, auth_headers: dict):
@@ -956,6 +1033,8 @@ def test_transfer_logs_endpoint(client: TestClient, temp_db: Database, auth_head
 
 
 def test_query_items_for_types_paginates_full_export():
+    transfer_module = _load_transfer_module()
+
     class FakeDB:
         def __init__(self):
             self.calls = []
@@ -970,7 +1049,7 @@ def test_query_items_for_types_paginates_full_export():
             return [{"id": f"task_{offset + idx}"} for idx in range(size)]
 
     db = FakeDB()
-    result = query_items_for_types(db, OWNER_ID, ["task"])
+    result = transfer_module.query_items_for_types(db, OWNER_ID, ["task"])
 
     assert len(result["task"]) == 2505
     assert db.calls[:3] == [
