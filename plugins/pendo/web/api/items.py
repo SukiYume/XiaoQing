@@ -68,7 +68,7 @@ class ItemCreate(BaseModel):
     title: Optional[str] = ""
     content: Optional[str] = ""
     tags: list[str] = []
-    category: Optional[str] = "未分类"
+    category: Optional[str] = None
     # Event fields
     start_time: Optional[str] = None
     end_time: Optional[str] = None
@@ -168,7 +168,7 @@ def _has_other_diary_for_date(
 
 
 def _build_count_where(
-    type, status, category, direction, start_date, end_date, date_field,
+    type, status, category, priority, direction, start_date, end_date, date_field,
     amount_min, amount_max, owner_id
 ):
     where = ["owner_id = ?", "deleted = 0"]
@@ -177,6 +177,8 @@ def _build_count_where(
     if type:       where.append("type = ?");             params.append(type)
     if status:     where.append("status = ?");           params.append(status)
     if category:   where.append(f"{category_field} = ?"); params.append(category)
+    if priority is not None:
+        where.append("priority = ?"); params.append(priority)
     if direction:  where.append("direction = ?");        params.append(direction)
     if amount_min is not None:
         where.append("amount >= ?"); params.append(amount_min)
@@ -204,7 +206,7 @@ def aggregate_items(
     """Return income/expense totals for the given filters (full result set, not paginated)."""
     _df = _resolve_date_field(type, date_field) if (start_date and end_date) else None
     where, params = _build_count_where(
-        type, None, category, direction, start_date, end_date, _df, amount_min, amount_max, owner_id
+        type, None, category, None, direction, start_date, end_date, _df, amount_min, amount_max, owner_id
     )
     conn = db.get_connection()
     rows = conn.execute(
@@ -268,6 +270,7 @@ def list_items(
     if category:
         filters[_resolve_category_field(type)] = category
     if tags:      filters["tags"] = tags
+    if priority is not None: filters["priority"] = priority
     if direction: filters["direction"] = direction
     if amount_min is not None: filters["amount_min"] = amount_min
     if amount_max is not None: filters["amount_max"] = amount_max
@@ -297,13 +300,9 @@ def list_items(
     offset = (page - 1) * page_size
     items = db.get_items(owner_id, filters=filters, limit=page_size, offset=offset)
 
-    # Post-filter for priority (not a DB column)
-    if priority is not None:
-        items = [i for i in items if getattr(i, "priority", None) == priority]
-
     # Count matching all filters
     count_where, count_params = _build_count_where(
-        type, status, category, direction, start_date, end_date, resolved_df,
+        type, status, category, priority, direction, start_date, end_date, resolved_df,
         amount_min, amount_max, owner_id
     )
     conn = db.get_connection()
