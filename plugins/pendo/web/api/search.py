@@ -14,6 +14,7 @@ def search_items(
     q: str,
     type: Optional[str] = None,
     category: Optional[str] = None,
+    ledger_category: Optional[str] = None,
     status: Optional[str] = None,
     limit: int = 50,
     owner_id: str = Depends(get_current_user),
@@ -26,8 +27,13 @@ def search_items(
     filters = {}
     if type:
         filters["type"] = type
-    if category:
-        filters["category"] = category
+    if ledger_category:
+        filters["ledger_category"] = ledger_category
+    elif category:
+        if type == "ledger":
+            filters["ledger_category"] = category
+        else:
+            filters["category"] = category
     if status:
         filters["status"] = status
 

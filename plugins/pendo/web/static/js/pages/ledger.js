@@ -6,6 +6,7 @@ import { renderPagination } from '../components/pagination.js';
 import { renderLedgerInsightsPanel } from '../components/ledger_insights.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { isoDate, isValidDateInput, todayStr as sharedTodayStr } from '../utils/format.js';
+import { derivePresetRange, todayRangeKey } from '../utils/date_ranges.js';
 import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ let _container          = null;
 let _items              = [];
 let _total              = 0;
 let _page               = 1;
-let _dateFilter         = 'month';   // 'today' | 'week' | 'month' | 'current_month' | 'year' | 'all' | 'custom'
+let _dateFilter         = 'month';   // 'today' | 'week' | 'month' | 'quarter' | 'year' | 'last_year' | 'all' | 'custom'
 let _directionFilter    = '';        // '' | 'income' | 'expense'
 let _categoryFilter     = '';
 let _amountMin          = '';
@@ -48,53 +49,25 @@ let _dataChangedHandler = null;
 // ── date helpers ──────────────────────────────────────────────────────────────
 
 function todayStr() {
-    return sharedTodayStr();
+    return todayRangeKey() || sharedTodayStr();
 }
 
 function dateRangeForFilter(filter) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     if (filter === 'today') {
-        const s = todayStr();
-        return { start_date: s, end_date: s };
+        const value = todayStr();
+        return { start_date: value, end_date: value };
     }
-    if (filter === 'week') {
-        const start = new Date(today);
-        start.setDate(today.getDate() - 6);
-        return {
-            start_date: isoDate(start),
-            end_date:   todayStr(),
-        };
-    }
-    if (filter === 'month') {
-        const start = new Date(today);
-        start.setDate(today.getDate() - 29);
-        return {
-            start_date: isoDate(start),
-            end_date:   todayStr(),
-        };
-    }
-    if (filter === 'current_month') {
-        return {
-            start_date: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`,
-            end_date:   todayStr(),
-        };
-    }
-    if (filter === 'year') {
-        return {
-            start_date: `${today.getFullYear()}-01-01`,
-            end_date:   todayStr(),
-        };
-    }
-    if (filter === 'custom') {
-        if (_customDateStart && _customDateEnd) {
-            return { start_date: _customDateStart, end_date: _customDateEnd };
-        }
-        return {};
-    }
-    // 'all'
-    return {};
+    const range = derivePresetRange(filter, {
+        today: todayStr(),
+        customStart: _customDateStart,
+        customEnd: _customDateEnd,
+        customFallback: '',
+    });
+    if (!range.start || !range.end) return {};
+    return {
+        start_date: range.start,
+        end_date: range.end,
+    };
 }
 
 function compareModeForFilter(filter) {
@@ -1040,12 +1013,13 @@ function renderQuickAdd() {
 function renderFilterBar() {
     const dateOptions = [
         { value: 'today',  label: '今天' },
-        { value: 'week',   label: '近7天' },
-        { value: 'month',  label: '近30天' },
-        { value: 'current_month', label: '当月' },
+        { value: 'week',   label: '本周' },
+        { value: 'month',  label: '本月' },
+        { value: 'quarter', label: '本季' },
         { value: 'year',   label: '今年' },
-        { value: 'all',    label: '全部' },
+        { value: 'last_year', label: '去年' },
         { value: 'custom', label: '自定义' },
+        { value: 'all',    label: '全部' },
     ];
     const dirOptions = [
         { value: '',        label: '全部方向' },
@@ -1105,11 +1079,12 @@ function renderInsights() {
 function currentRangeLabel() {
     const labels = {
         today: '今天',
-        week: '近 7 天',
-        month: '近 30 天',
-        current_month: '当月',
+        week: '本周',
+        month: '本月',
+        quarter: '本季',
         year: '今年',
-        all: '全部账目',
+        last_year: '去年',
+        all: '全部',
         custom: '自定义范围',
     };
     return labels[_dateFilter] || '当前范围';

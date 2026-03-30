@@ -28,6 +28,8 @@ let _container = null;
 let _query = '';
 let _activeType = '';
 let _activeCategory = '';
+let _activeCategoryField = 'category';
+let _activeCategoryTypeHint = '';
 let _results = [];
 let _loading = false;
 let _hasSearched = false;
@@ -79,14 +81,18 @@ function resultCounts() {
 function matchingCategories() {
     const map = new Map();
     _results.forEach((item) => {
-        const category = item.type === 'ledger' ? item.ledger_category : item.category;
+        const field = item.type === 'ledger' ? 'ledger_category' : 'category';
+        const category = field === 'ledger_category' ? item.ledger_category : item.category;
         if (!category) return;
-        map.set(category, (map.get(category) || 0) + 1);
+        const key = `${field}:${category}`;
+        const entry = map.get(key) || { category, count: 0, field, typeHint: item.type };
+        entry.count += 1;
+        if (entry.typeHint !== item.type) entry.typeHint = '';
+        map.set(key, entry);
     });
-    return [...map.entries()]
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-        .slice(0, 6)
-        .map(([category, count]) => ({ category, count }));
+    return [...map.values()]
+        .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category))
+        .slice(0, 6);
 }
 
 function groupedResults() {
@@ -216,7 +222,7 @@ function renderSuggestions() {
 function renderCategoryChips() {
     const categories = matchingCategories();
     if (!categories.length || !_hasSearched) return '';
-    return `<div class="search-chip-row">${categories.map((item) => `<button type="button" class="search-chip${_activeCategory === item.category ? ' active' : ''}" data-category="${escapeHtml(item.category)}">${escapeHtml(item.category)} · ${item.count}</button>`).join('')}</div>`;
+    return `<div class="search-chip-row">${categories.map((item) => `<button type="button" class="search-chip${_activeCategory === item.category && _activeCategoryField === item.field ? ' active' : ''}" data-category="${escapeHtml(item.category)}" data-category-field="${item.field}" data-category-type="${item.typeHint || ''}">${escapeHtml(item.category)} · ${item.count}</button>`).join('')}</div>`;
 }
 
 function renderSummary() {
@@ -340,7 +346,12 @@ async function doSearch() {
     try {
         const params = { q, limit: 60 };
         if (_activeType) params.type = _activeType;
-        if (_activeCategory) params.category = _activeCategory;
+        if (_activeCategoryField === 'ledger_category' && _activeCategory) {
+            params.ledger_category = _activeCategory;
+            if (!_activeType && _activeCategoryTypeHint === 'ledger') params.type = 'ledger';
+        } else if (_activeCategory) {
+            params.category = _activeCategory;
+        }
         const res = await api.get('/search', params);
         _results = res?.data?.items || [];
         _hasSearched = true;
@@ -359,6 +370,9 @@ function attachListeners() {
     if (input) {
         input.oninput = () => {
             _query = input.value;
+        };
+        input.onchange = async () => {
+            _query = input.value;
             clearTimeout(_debounceTimer);
             if (!_query.trim()) {
                 _results = [];
@@ -367,17 +381,21 @@ function attachListeners() {
                 renderPage();
                 return;
             }
-            _debounceTimer = setTimeout(() => doSearch(), 220);
+            await doSearch();
         };
         input.onkeydown = async (event) => {
             if (event.key === 'Enter') {
                 event.preventDefault();
                 clearTimeout(_debounceTimer);
+                _query = input.value;
                 await doSearch();
             }
             if (event.key === 'Escape') {
+                clearTimeout(_debounceTimer);
                 _query = '';
                 _activeCategory = '';
+                _activeCategoryField = 'category';
+                _activeCategoryTypeHint = '';
                 _results = [];
                 _hasSearched = false;
                 _loading = false;
@@ -390,6 +408,8 @@ function attachListeners() {
         button.onclick = async () => {
             _activeType = button.dataset.type || '';
             _activeCategory = '';
+            _activeCategoryField = 'category';
+            _activeCategoryTypeHint = '';
             if (_query.trim()) await doSearch();
             else renderPage();
         };
@@ -398,7 +418,12 @@ function attachListeners() {
     _container.querySelectorAll('.search-chip[data-category]').forEach((button) => {
         button.onclick = async () => {
             const category = button.dataset.category || '';
-            _activeCategory = _activeCategory === category ? '' : category;
+            const field = button.dataset.categoryField || 'category';
+            const typeHint = button.dataset.categoryType || '';
+            const isSame = _activeCategory === category && _activeCategoryField === field;
+            _activeCategory = isSame ? '' : category;
+            _activeCategoryField = isSame ? 'category' : field;
+            _activeCategoryTypeHint = isSame ? '' : typeHint;
             if (_query.trim()) await doSearch();
             else renderPage();
         };
@@ -409,6 +434,8 @@ function attachListeners() {
             _query = button.dataset.suggestQuery || '';
             _activeType = button.dataset.suggestType || '';
             _activeCategory = '';
+            _activeCategoryField = 'category';
+            _activeCategoryTypeHint = '';
             await doSearch();
         };
     });
@@ -426,6 +453,8 @@ export function render(container) {
     _results = [];
     _activeType = '';
     _activeCategory = '';
+    _activeCategoryField = 'category';
+    _activeCategoryTypeHint = '';
     _loading = false;
     _hasSearched = false;
     renderPage();
@@ -436,6 +465,9 @@ export function destroy() {
     _debounceTimer = null;
     _container = null;
     _results = [];
+    _activeCategory = '';
+    _activeCategoryField = 'category';
+    _activeCategoryTypeHint = '';
     _loading = false;
     _hasSearched = false;
 }
