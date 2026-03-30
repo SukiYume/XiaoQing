@@ -615,6 +615,8 @@ HELP_MAP = {
         "**笔记 (Note):**",
         "• /pendo note add <内容> [cat:分类] [#标签] - 记录笔记",
         "  - 例: /pendo note add 直接折叠找脉冲星 cat:工作 #文章",
+        "• /pendo note add title:<标题> content <正文> - 指定标题和长正文",
+        "  - 例: /pendo note add title:我的标题 content 这里是详细正文",
         "• /pendo note list [分类名|cat:分类] [#标签] [all|page:n] - 查看笔记",
         "  - /pendo note list - 显示所有分类概览",
         '  - /pendo note list 工作 - 查看"工作"分类(直接用分类名)',
@@ -622,6 +624,7 @@ HELP_MAP = {
         '  - /pendo note list 工作 page:2 - 显示"工作"分类第2页',
         "• /pendo note view <id> - 查看笔记详情",
         "• /pendo note edit <id> <新内容> [cat:分类] [#标签] - 编辑笔记",
+        "  - 也支持 title:xxx content yyy 方式重命名和修改大段内容",
         "• /pendo note delete <id|cat:分类> - 删除笔记",
     ],
     "diary": [
