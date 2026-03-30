@@ -195,10 +195,11 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 ### 创建笔记
 
 **语法**: `/pendo note add <内容> [cat:分类] [#标签]`
+**显式标题语法**: `/pendo note add title:<标题> content <正文> [cat:分类] [#标签]`
 
 ```
 /pendo note add 直接折叠找脉冲星 cat:工作 #文章
-/pendo note add 会议记录：今天讨论了三个要点 #会议
+/pendo note add title:我的标题 content 这里是详细的长篇正文内容... #学习
 ```
 
 ### 查看笔记
