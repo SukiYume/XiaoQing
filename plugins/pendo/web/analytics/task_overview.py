@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date, datetime, timedelta
+import re
 from typing import Any
 
 from ...services.db import Database
+
+
+DATE_CATEGORY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _task_dict(task) -> dict[str, Any]:
@@ -32,15 +36,37 @@ def _priority_value(task: dict[str, Any]) -> int:
         return 99
 
 
+def _task_status_bucket(task: dict[str, Any]) -> str:
+    return "closed" if task.get("status") in {"done", "cancelled"} else "open"
+
+
+def _task_text_category(task: dict[str, Any]) -> str:
+    category = str(task.get("category") or "").strip()
+    if category and category != "未分类" and not DATE_CATEGORY_RE.fullmatch(category):
+        return category
+    return ""
+
+
+def _task_plan_key(task: dict[str, Any]) -> str:
+    category = str(task.get("category") or "").strip()
+    due_day = _parse_date(task.get("due_time"))
+    if due_day and (DATE_CATEGORY_RE.fullmatch(category) or not category or category == "未分类"):
+        return due_day.strftime("%Y-%m-%d")
+    if DATE_CATEGORY_RE.fullmatch(category):
+        return category
+    return due_day.strftime("%Y-%m-%d") if due_day else ""
+
+
 def _task_sort_key(task: dict[str, Any]) -> tuple:
-    due_time = task.get("due_time") or "9999-12-31T23:59:59"
-    return (_priority_value(task), due_time, task.get("created_at") or "")
+    due_key = _task_plan_key(task) or "9999-12-31"
+    return (_priority_value(task), due_key, task.get("created_at") or "")
 
 
 def _focus_sort_key(task: dict[str, Any], today_day: date) -> tuple:
-    due_day = _parse_date(task.get("due_time"))
-    is_due_today = 1 if due_day == today_day else 0
-    return (0 if due_day and due_day < today_day else is_due_today, *_task_sort_key(task))
+    plan_key = _task_plan_key(task)
+    today_key = today_day.strftime("%Y-%m-%d")
+    is_due_today = 1 if plan_key == today_key else 0
+    return (0 if plan_key and plan_key < today_key else is_due_today, *_task_sort_key(task))
 
 
 def _done_sort_key(task: dict[str, Any]) -> tuple:
@@ -66,11 +92,14 @@ def _load_all_tasks(db: Database, owner_id: str, batch_size: int = 200) -> list[
 
 def build_task_overview(db: Database, owner_id: str, today: str | None = None) -> dict[str, Any]:
     today_day = _parse_date(today) or datetime.now().date()
+    today_key = today_day.strftime("%Y-%m-%d")
+    next_week_key = (today_day + timedelta(days=7)).strftime("%Y-%m-%d")
     tasks = _load_all_tasks(db=db, owner_id=owner_id)
 
-    active = [task for task in tasks if task.get("status") in {"todo", "in_progress"}]
+    active = [task for task in tasks if _task_status_bucket(task) == "open"]
     done = [task for task in tasks if task.get("status") == "done"]
     cancelled = [task for task in tasks if task.get("status") == "cancelled"]
+    closed = done + cancelled
 
     overdue_tasks: list[dict[str, Any]] = []
     focus_tasks: list[dict[str, Any]] = []
@@ -79,15 +108,15 @@ def build_task_overview(db: Database, owner_id: str, today: str | None = None) -
     backlog_tasks: list[dict[str, Any]] = []
 
     for task in active:
-        due_day = _parse_date(task.get("due_time"))
-        if due_day and due_day < today_day:
+        plan_key = _task_plan_key(task)
+        if plan_key and plan_key < today_key:
             overdue_tasks.append(task)
             focus_tasks.append(task)
-        elif due_day == today_day:
+        elif plan_key == today_key:
             focus_tasks.append(task)
-        elif due_day and due_day <= today_day + timedelta(days=7):
+        elif plan_key and plan_key <= next_week_key:
             up_next_tasks.append(task)
-        elif due_day:
+        elif plan_key:
             later_tasks.append(task)
         else:
             backlog_tasks.append(task)
@@ -116,20 +145,33 @@ def build_task_overview(db: Database, owner_id: str, today: str | None = None) -
         for day in last_days
     ]
 
-    category_counter = Counter(task.get("category") or "未分类" for task in active)
+    category_counter = Counter(_task_text_category(task) or "未分类" for task in active if _task_text_category(task))
     category_load = [
         {"category": category, "count": count, "share": count / len(active) if active else 0}
         for category, count in category_counter.most_common(6)
     ]
 
+    plan_counter = Counter(_task_plan_key(task) for task in active if _task_plan_key(task))
+    plan_load = [
+        {
+            "plan": plan,
+            "count": count,
+            "share": count / len(active) if active else 0,
+            "state": "overdue" if plan < today_key else ("today" if plan == today_key else "upcoming"),
+        }
+        for plan, count in sorted(plan_counter.items(), key=lambda item: item[0])[:6]
+    ]
+
     completion_denominator = len(active) + len(done)
     completion_rate = (len(done) / completion_denominator) if completion_denominator else 0
 
-    board_columns = {}
-    for status in ("todo", "in_progress", "done", "cancelled"):
-        column_tasks = [task for task in tasks if task.get("status") == status]
-        sort_key = _done_sort_key if status == "done" else _task_sort_key
-        board_columns[status] = sorted(column_tasks, key=sort_key, reverse=(status == "done"))
+    board_columns = {
+        "todo": sorted(active, key=_task_sort_key),
+        "done": sorted(done, key=_done_sort_key, reverse=True),
+        "cancelled": sorted(cancelled, key=_done_sort_key, reverse=True),
+    }
+    board_columns["open"] = board_columns["todo"]
+    board_columns["closed"] = sorted(closed, key=_done_sort_key, reverse=True)
 
     return {
         "summary": {
@@ -139,6 +181,7 @@ def build_task_overview(db: Database, owner_id: str, today: str | None = None) -
             "done_today_count": done_today_count,
             "done_count": len(done),
             "cancelled_count": len(cancelled),
+            "closed_count": len(closed),
             "completion_rate": round(completion_rate, 4),
         },
         "focus_tasks": focus_tasks[:6],
@@ -147,6 +190,7 @@ def build_task_overview(db: Database, owner_id: str, today: str | None = None) -
         "backlog_tasks": backlog_tasks[:8],
         "overdue_tasks": overdue_tasks[:6],
         "done_recent": done_recent,
+        "plan_load": plan_load,
         "category_load": category_load,
         "completion_bars": completion_bars,
         "board_columns": board_columns,

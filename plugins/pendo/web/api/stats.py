@@ -1,8 +1,10 @@
 """Statistics aggregation endpoints."""
 
+from collections import Counter
 from datetime import date, datetime, timedelta
+import re
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...services.db import Database
 from ..analytics.diary_overview import build_diary_overview
@@ -12,6 +14,8 @@ from ..analytics.task_overview import build_task_overview
 from ..deps import get_db, get_current_user
 
 router = APIRouter()
+
+DATE_CATEGORY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 LEDGER_HISTOGRAM_BUCKETS = [
@@ -72,6 +76,9 @@ def _parse_range(range_str: str | None) -> tuple[str, str]:
         year = now.year - 1
         start = f"{year}-01-01"
         end = f"{year}-12-31"
+    elif range_str == "all":
+        start = "1970-01-01"
+        end = now.strftime("%Y-%m-%d")
     elif ".." in range_str:
         parts = range_str.split("..")
         start, end = parts[0], parts[1]
@@ -222,7 +229,7 @@ def task_stats(
         )
     """
 
-    totals = conn.execute(
+    totals_rows = conn.execute(
         """
         SELECT status, COUNT(*) AS count
         FROM items WHERE type='task' AND owner_id=? AND deleted=0
@@ -233,6 +240,14 @@ def task_stats(
     """,
         (owner_id, start, end, start, end),
     ).fetchall()
+
+    totals_raw = {row[0]: row[1] for row in totals_rows}
+    totals = {
+        "open": int(totals_raw.get("todo", 0) or 0) + int(totals_raw.get("in_progress", 0) or 0),
+        "done": int(totals_raw.get("done", 0) or 0),
+        "cancelled": int(totals_raw.get("cancelled", 0) or 0),
+    }
+    totals["closed"] = totals["done"] + totals["cancelled"]
 
     created_weekly = conn.execute(
         """
@@ -249,6 +264,19 @@ def task_stats(
         SELECT strftime('%Y-W%W', completed_at) AS week, COUNT(*) AS count
         FROM items WHERE type='task' AND owner_id=? AND deleted=0
         AND completed_at IS NOT NULL
+        AND status='done'
+        AND date(completed_at) BETWEEN ? AND ?
+        GROUP BY week ORDER BY week
+    """,
+        (owner_id, start, end),
+    ).fetchall()
+
+    cancelled_weekly = conn.execute(
+        """
+        SELECT strftime('%Y-W%W', completed_at) AS week, COUNT(*) AS count
+        FROM items WHERE type='task' AND owner_id=? AND deleted=0
+        AND completed_at IS NOT NULL
+        AND status='cancelled'
         AND date(completed_at) BETWEEN ? AND ?
         GROUP BY week ORDER BY week
     """,
@@ -257,25 +285,37 @@ def task_stats(
 
     weekly_map: dict[str, dict[str, int | str]] = {}
     for week, count in created_weekly:
-        weekly_map.setdefault(week, {"week": week, "total": 0, "done": 0})
-        weekly_map[week]["total"] = count
+        weekly_map.setdefault(week, {"week": week, "created": 0, "done": 0, "cancelled": 0})
+        weekly_map[week]["created"] = count
     for week, count in completed_weekly:
-        weekly_map.setdefault(week, {"week": week, "total": 0, "done": 0})
+        weekly_map.setdefault(week, {"week": week, "created": 0, "done": 0, "cancelled": 0})
         weekly_map[week]["done"] = count
+    for week, count in cancelled_weekly:
+        weekly_map.setdefault(week, {"week": week, "created": 0, "done": 0, "cancelled": 0})
+        weekly_map[week]["cancelled"] = count
     weekly = [weekly_map[key] for key in sorted(weekly_map.keys())]
 
-    by_category = conn.execute(
+    task_rows = conn.execute(
         """
-        SELECT category, COUNT(*) AS count
+        SELECT status, category, priority, due_time
         FROM items WHERE type='task' AND owner_id=? AND deleted=0
         AND """
-        + range_condition
-        + """
-        GROUP BY category
-        ORDER BY count DESC, category
-    """,
+        + range_condition,
         (owner_id, start, end, start, end),
     ).fetchall()
+
+    open_rows = [row for row in task_rows if row[0] in {"todo", "in_progress"}]
+    plan_counter = Counter()
+    text_category_counter = Counter()
+    for status, category, priority, due_time in open_rows:
+        cat = str(category or "").strip()
+        due_key = str(due_time or "")[:10]
+        if due_key and (DATE_CATEGORY_RE.fullmatch(cat) or not cat or cat == "未分类"):
+            plan_counter[due_key] += 1
+        elif DATE_CATEGORY_RE.fullmatch(cat):
+            plan_counter[cat] += 1
+        elif cat:
+            text_category_counter[cat] += 1
 
     by_priority = conn.execute(
         """
@@ -301,9 +341,10 @@ def task_stats(
     return {
         "ok": True,
         "data": {
-            "totals": {r[0]: r[1] for r in totals},
+            "totals": totals,
             "weekly": weekly,
-            "by_category": [{"category": r[0], "count": r[1]} for r in by_category],
+            "by_plan": [{"plan": key, "count": count} for key, count in sorted(plan_counter.items())],
+            "by_category": [{"category": key, "count": count} for key, count in text_category_counter.most_common(8)],
             "by_priority": [{"priority": r[0], "count": r[1]} for r in by_priority],
             "new_this_week": new_this_week,
         },
@@ -328,6 +369,8 @@ def task_overview(
 @router.get("/stats/notes/overview")
 def notes_overview(
     today: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     category: str | None = None,
     tags: str | None = None,
     owner_id: str = Depends(get_current_user),
@@ -337,7 +380,13 @@ def notes_overview(
     return {
         "ok": True,
         "data": build_notes_overview(
-            db=db, owner_id=owner_id, today=today, category=category, tags=tags
+            db=db,
+            owner_id=owner_id,
+            today=today,
+            start_date=start_date,
+            end_date=end_date,
+            category=category,
+            tags=tags,
         ),
         "message": "",
     }
@@ -345,18 +394,30 @@ def notes_overview(
 
 @router.get("/stats/diary/overview")
 def diary_overview(
-    year: int,
-    month: int,
+    year: int | None = None,
+    month: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    cadence_granularity: str = "day",
     today: str | None = None,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ):
-    """Compact diary overview for the redesigned diary page."""
-    return {
-        "ok": True,
-        "data": build_diary_overview(db=db, owner_id=owner_id, year=year, month=month, today=today),
-        "message": "",
-    }
+    """Compact diary overview for the redesigned diary page and stats range cards."""
+    try:
+        data = build_diary_overview(
+            db=db,
+            owner_id=owner_id,
+            year=year,
+            month=month,
+            start_date=start_date,
+            end_date=end_date,
+            today=today,
+            cadence_granularity=cadence_granularity,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "data": data, "message": ""}
 
 
 @router.get("/stats/events")
