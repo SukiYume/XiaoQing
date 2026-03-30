@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { formatDateInput, pad2, todayStr as sharedTodayStr } from '../utils/format.js';
+import { derivePresetRange, fetchItemRangeBounds, todayRangeKey } from '../utils/date_ranges.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-stats-waterfall-styles';
@@ -8,10 +9,18 @@ const RANGE_OPTIONS = [
     { key: 'week', label: '本周' },
     { key: 'month', label: '本月' },
     { key: 'quarter', label: '本季' },
-    { key: 'year', label: '本年' },
+    { key: 'year', label: '今年' },
     { key: 'last_year', label: '去年' },
     { key: 'custom', label: '自定义' },
+    { key: 'all', label: '全部' },
 ];
+const DEFAULT_MOOD_EMOJIS = {
+    happy: '😊',
+    sad: '😢',
+    calm: '😌',
+    excited: '🤩',
+    angry: '😠',
+};
 
 let _container = null;
 let _range = 'month';
@@ -23,10 +32,11 @@ let _customDraftStart = '';
 let _customDraftEnd = '';
 let _heatmapData = null;
 let _comparisonData = null;
+let _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
 
 function nowDate() { return new Date(); }
 function todayStr() {
-    return sharedTodayStr();
+    return todayRangeKey() || sharedTodayStr();
 }
 
 function isValidDateInput(value) {
@@ -54,7 +64,13 @@ function formatWordCompact(value) {
 function formatPercent(value) { return `${Math.round(Number(value || 0) * 100)}%`; }
 function sumBy(items, key) { return (items || []).reduce((sum, item) => sum + Number(item?.[key] || 0), 0); }
 function safeArray(value) { return Array.isArray(value) ? value : []; }
-function rangeLabel() { return RANGE_OPTIONS.find((item) => item.key === _range)?.label || '当前范围'; }
+function rangeLabel() {
+    if (_range === 'custom') return '当前范围';
+    if (_range === 'all') return '全部时间';
+    return RANGE_OPTIONS.find((item) => item.key === _range)?.label || '当前范围';
+}
+function diaryRangeTitle() { return _range === 'custom' ? '当前范围' : rangeLabel(); }
+function diaryRangeSentence() { return _range === 'custom' ? '这个范围内' : `${rangeLabel()}里`; }
 function compactAxisLabel(value) {
     const text = String(value || '');
     if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text.slice(5).replace('-', '/');
@@ -91,37 +107,18 @@ function sampleIndexes(length, maxPoints = 18) {
 }
 
 function buildRequestRangeValue() {
+    if (_range === 'all') return 'all';
     const range = deriveRangeDates();
     return `${range.start}..${range.end}`;
 }
 
 function deriveRangeDates() {
-    const now = nowDate();
-    if (_range === 'week') {
-        const monday = new Date(now);
-        monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-        return {
-            start: `${monday.getFullYear()}-${pad2(monday.getMonth() + 1)}-${pad2(monday.getDate())}`,
-            end: todayStr(),
-        };
-    }
-    if (_range === 'month') return { start: `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-01`, end: todayStr() };
-    if (_range === 'quarter') {
-        const firstMonth = Math.floor(now.getMonth() / 3) * 3 + 1;
-        return { start: `${now.getFullYear()}-${pad2(firstMonth)}-01`, end: todayStr() };
-    }
-    if (_range === 'last_year') {
-        const year = now.getFullYear() - 1;
-        return { start: `${year}-01-01`, end: `${year}-12-31` };
-    }
-    if (_range === 'custom') {
-        if (_customStart && _customEnd) return { start: _customStart, end: _customEnd };
-        const end = todayStr();
-        const startDate = new Date(now);
-        startDate.setDate(now.getDate() - 29);
-        return { start: formatDateInput(startDate), end };
-    }
-    return { start: `${now.getFullYear()}-01-01`, end: todayStr() };
+    return derivePresetRange(_range, {
+        today: todayStr(),
+        customStart: _customStart,
+        customEnd: _customEnd,
+        customFallback: 'month',
+    });
 }
 
 function resolveHeatmapYear(range = deriveRangeDates()) {
@@ -159,9 +156,39 @@ function ledgerRhythmSeries(ledger, range = deriveRangeDates()) {
     }));
 }
 
-function deriveWritingMonth(range = deriveRangeDates()) {
-    const endDate = range.end ? new Date(range.end) : nowDate();
-    return { year: endDate.getFullYear(), month: endDate.getMonth() + 1 };
+function moodEmoji(mood) {
+    const normalized = String(mood || '').trim().toLowerCase();
+    return normalized ? (_moodEmojis[normalized] || '') : '';
+}
+
+function formatMoodLabel(mood) {
+    const normalized = String(mood || '').trim();
+    if (!normalized) return '未记录';
+    const emoji = moodEmoji(normalized);
+    return emoji ? `${emoji} ${normalized}` : normalized;
+}
+
+function diaryCadenceSubtitle(granularity) {
+    if (granularity === 'year') return `${diaryRangeSentence()}每年写了多少字。`;
+    if (granularity === 'month') return `${diaryRangeSentence()}每月写了多少字。`;
+    if (granularity === 'week') return `${diaryRangeSentence()}每周写了多少字。`;
+    return `${diaryRangeSentence()}每天写了多少字。`;
+}
+
+function noteCadenceSubtitle(granularity) {
+    if (granularity === 'month') return `按${rangeLabel()}查看每月新增笔记数量。`;
+    if (granularity === 'week') return `按${rangeLabel()}查看每周新增笔记数量。`;
+    return `按${rangeLabel()}查看每天的笔记输入频率。`;
+}
+
+async function fetchDiaryRangeBounds(fallbackEnd = todayStr()) {
+    return fetchItemRangeBounds(api, {
+        type: 'diary',
+        sortField: 'diary_date',
+        startField: 'diary_date',
+        endField: 'diary_date',
+        fallbackEnd,
+    });
 }
 
 function sparklinePath(values, width = 440, height = 168, padding = 18) {
@@ -657,8 +684,8 @@ function generateInsights(data) {
     const incomeByCategory = sortByNumericDesc(ledger.income_by_category, 'total');
     const expenseTotal = sumBy(expenseByCategory, 'total');
     const incomeTotal = sumBy(incomeByCategory, 'total');
-    const totals = tasks.totals || {};
-    const totalTasks = Number(totals.todo || 0) + Number(totals.in_progress || 0) + Number(totals.done || 0);
+    const totals = normalizeTaskTotals(tasks.totals);
+    const totalTasks = totals.total;
 
     if (expenseTotal > 0) {
         const top = expenseByCategory[0];
@@ -678,13 +705,17 @@ function generateInsights(data) {
     }
 
     if (totalTasks > 0) {
-        const doneCount = Number(totals.done || 0);
-        const rate = Math.round((doneCount / totalTasks) * 100);
-        const active = Number(totals.todo || 0) + Number(totals.in_progress || 0);
+        const doneCount = totals.done;
+        const completionBase = totals.open + totals.done;
+        const rate = Math.round(totals.completionRate * 100);
+        const active = totals.open;
+        const cancelled = totals.cancelled;
         insights.push({
             icon: '✅',
             color: '#f0fdf4',
-            text: `任务完成率 <strong>${rate}%</strong>（${doneCount}/${totalTasks}），进行中 <strong>${active}</strong> 项`,
+            text: completionBase > 0
+                ? `任务完成率 <strong>${rate}%</strong>（${doneCount}/${completionBase}），未完成 <strong>${active}</strong> 项${cancelled ? `，已取消 <strong>${cancelled}</strong> 项` : ''}`
+                : `当前范围内暂无可完成任务${cancelled ? `，但有 <strong>${cancelled}</strong> 项已取消` : ''}。`,
         });
     }
 
@@ -727,7 +758,7 @@ function renderInsightCard(data) {
         accent: '#4f46e5',
         eyebrow: 'Insights',
         title: '关键洞察',
-        subtitle: `基于${rangeLabel()}数据的自动摘要。`,
+        subtitle: `基于当前统计结果生成的摘要，默认按${rangeLabel()}解读。`,
         body: `
             <div class="stats-insights">
                 ${insights.map((item) => `
@@ -741,6 +772,23 @@ function renderInsightCard(data) {
     });
 }
 
+function normalizeTaskTotals(totals = {}) {
+    const open = Number(totals.open || 0) || 0;
+    const done = Number(totals.done || 0) || 0;
+    const cancelled = Number(totals.cancelled || 0) || 0;
+    const closed = Number(totals.closed || (done + cancelled)) || 0;
+    const total = open + done + cancelled;
+    const completionBase = open + done;
+    return {
+        open,
+        done,
+        cancelled,
+        closed,
+        total,
+        completionRate: completionBase ? (done / completionBase) : 0,
+    };
+}
+
 function renderFeaturedDeck() {
     const range = deriveRangeDates();
     const heatmapRange = clampRangeToYear(range, Number(_heatmapData?.year || 0));
@@ -750,7 +798,7 @@ function renderFeaturedDeck() {
                 accent: '#10b981',
                 eyebrow: 'Overview',
                 title: '全年活动',
-                subtitle: `${_heatmapData?.year || ''}年各模块活跃度一览。`,
+                subtitle: `${_heatmapData?.year || ''}年全年活跃度概览，当前时间范围仅用于高亮，不改变底图统计。`,
                 classes: 'stats-card--full',
                 body: renderActivityHeatmap(
                     safeArray(_heatmapData?.days),
@@ -768,7 +816,7 @@ function renderComparisonCard() {
         accent: '#f97316',
         eyebrow: 'Finance',
         title: '同比 · 环比',
-        subtitle: '近 6 个月支出对比，不受筛选范围影响。',
+        subtitle: '固定展示近 6 个月支出对比，不随当前时间范围切换。',
         body: renderComparisonBars(_comparisonData.months),
         footer: (() => {
             const latest = (_comparisonData.months || []).slice(-1)[0];
@@ -820,7 +868,7 @@ function ensureStyles() {
         ${pageShellCss('stats-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.COMPACT })}
         .stats-stack { display: flex; flex-direction: column; gap: 18px; }
         .stats-hero {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
+            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start;
             padding: 24px 26px; border-radius: 30px;
             background:
                 radial-gradient(circle at top right, rgba(99,102,241,0.18), transparent 30%),
@@ -833,6 +881,7 @@ function ensureStyles() {
         .stats-hero p { margin: 8px 0 0; font-size: 14px; line-height: 1.75; color: var(--color-text-secondary); }
         .stats-hero-tags, .stats-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
         .stats-hero-tags { margin-top: 14px; }
+        .stats-range-group { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; align-self: start; margin-top: 8px; }
         .stats-chip, .stats-range-btn, .stats-date-field {
             display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 999px;
             border: 1px solid rgba(203,213,225,0.92); background: rgba(255,255,255,0.92); color: #475569; font-size: 12px; font-weight: 700;
@@ -844,7 +893,7 @@ function ensureStyles() {
             align-items: center;
             flex-wrap: wrap;
             gap: 8px;
-            margin-top: 10px;
+            justify-content: flex-end;
         }
         .stats-date-field { font: inherit; min-width: 148px; }
         .stats-custom-range .stats-date-field {
@@ -1069,10 +1118,12 @@ function ensureStyles() {
             .stats-wall { column-count: 2; }
             .stats-donut-wrap { grid-template-columns: 1fr; }
             .stats-date-field { min-width: 132px; }
+            .stats-range-group { margin-top: 0; }
         `)}
         ${mediaMax(BREAKPOINTS.STATS_SMALL, `
             .stats-wall { column-count: 1; }
             .stats-summary-grid, .stats-metric-pairs, .stats-dual-grid, .stats-treemap { grid-template-columns: 1fr; }
+            .stats-range-group, .stats-chip-row { align-items: stretch; }
             .stats-chip-row { justify-content: flex-start; }
             .stats-matrix { grid-template-columns: 36px repeat(6, minmax(0, 1fr)); gap: 6px; }
             .stats-matrix-cell { min-height: 38px; border-radius: 12px; font-size: 10px; }
@@ -1092,18 +1143,23 @@ function ensureStyles() {
 
 async function fetchAllData() {
     const range = deriveRangeDates();
-    const writingMonth = deriveWritingMonth(range);
     const rangeParam = buildRequestRangeValue();
     const heatmapYear = resolveHeatmapYear(range);
-    const [ledgerRes, tasksRes, eventsRes, notesRes, diaryRes, heatmapRes, comparisonRes] = await Promise.all([
+    const diaryRange = _range === 'all' ? await fetchDiaryRangeBounds(range.end) : range;
+    const [ledgerRes, tasksRes, eventsRes, notesRes, diaryRes, heatmapRes, comparisonRes, moodRes] = await Promise.all([
         api.get('/stats/ledger', { range: rangeParam }),
         api.get('/stats/tasks', { range: rangeParam }),
         api.get('/stats/events', { range: rangeParam }),
-        api.get('/stats/notes/overview', { today: range.end }),
-        api.get('/stats/diary/overview', { year: writingMonth.year, month: writingMonth.month, today: range.end }),
+        api.get('/stats/notes/overview', { start_date: range.start, end_date: range.end, today: range.end }),
+        api.get('/stats/diary/overview', { start_date: diaryRange.start, end_date: diaryRange.end, today: diaryRange.end, cadence_granularity: 'auto' }),
         api.get('/stats/activity-heatmap', { year: heatmapYear }),
         api.get('/stats/ledger/comparison', { months: 6 }),
+        api.get('/config/diary/moods').catch(() => null),
     ]);
+    const fetchedMoodEmojis = moodRes?.data?.mood_emojis;
+    _moodEmojis = fetchedMoodEmojis && typeof fetchedMoodEmojis === 'object'
+        ? { ...DEFAULT_MOOD_EMOJIS, ...fetchedMoodEmojis }
+        : { ...DEFAULT_MOOD_EMOJIS };
     _heatmapData = heatmapRes?.data || null;
     _comparisonData = comparisonRes?.data || null;
     return {
@@ -1136,7 +1192,7 @@ function financeCards() {
             accent: '#ef4444',
             eyebrow: 'Finance',
             title: '收支总览',
-            subtitle: `${rangeLabel()}内的收入、支出和结余。`,
+            subtitle: `按${rangeLabel()}汇总收入、支出与结余。`,
             body: `
                 <div class="stats-dual-grid">
                     <div class="stats-dual-card">
@@ -1159,21 +1215,21 @@ function financeCards() {
             accent: '#e15241',
             eyebrow: 'Finance',
             title: '支出走势',
-            subtitle: '观察支出波峰和低谷。',
+            subtitle: `按${rangeLabel()}观察支出在时间轴上的波峰和低谷。`,
             body: renderSparkline(trendLabels, expenseValues, '#ef4444', formatMoney),
         }),
         renderCard({
             accent: '#10b981',
             eyebrow: 'Finance',
             title: '收入走势',
-            subtitle: '查看进账在当前范围内的分布。',
+            subtitle: `按${rangeLabel()}查看进账在时间轴上的分布。`,
             body: renderSparkline(trendLabels, incomeValues, '#10b981', formatMoney),
         }),
         renderCard({
             accent: '#f97316',
             eyebrow: 'Finance',
             title: '支出分类',
-            subtitle: '当前范围内最重的支出去向。',
+            subtitle: `按${rangeLabel()}统计支出主要流向。`,
             body: renderDonut(
                 expenseByCategory.slice(0, 6),
                 'total',
@@ -1188,7 +1244,7 @@ function financeCards() {
             accent: '#fb7185',
             eyebrow: 'Finance',
             title: '支出分层',
-            subtitle: '用面积块快速感知各分类体量。',
+            subtitle: `按${rangeLabel()}用面积块对比各支出分类体量。`,
             body: renderTreemap(
                 expenseTree,
                 'total',
@@ -1201,14 +1257,14 @@ function financeCards() {
             accent: '#14b8a6',
             eyebrow: 'Finance',
             title: '收入来源',
-            subtitle: '看看钱主要从哪里进来。',
+            subtitle: `按${rangeLabel()}查看收入主要来源。`,
             body: renderBarRows(incomeByCategory.slice(0, 6), 'total', 'category', '#14b8a6', formatMoney),
         }),
         renderCard({
             accent: '#f59e0b',
             eyebrow: 'Finance',
             title: '单笔金额分布',
-            subtitle: '支出多集中在哪一档金额区间。',
+            subtitle: `按${rangeLabel()}统计支出集中在哪些金额区间。`,
             body: renderHistogram(
                 safeArray(ledger.expense_amount_histogram),
                 'count',
@@ -1221,7 +1277,7 @@ function financeCards() {
             accent: '#f59e0b',
             eyebrow: 'Finance',
             title: `${rangeLabel()}节奏`,
-            subtitle: '按当前筛选范围比较收支量级。',
+            subtitle: `按${rangeLabel()}比较各时段收支量级。`,
             body: renderColumnChart(
                 rhythmSeries,
                 'total',
@@ -1235,60 +1291,63 @@ function financeCards() {
 
 function taskCards() {
     const tasks = _data?.tasks || {};
-    const totals = tasks.totals || {};
-    const totalCount = Number(totals.todo || 0) + Number(totals.in_progress || 0) + Number(totals.done || 0) + Number(totals.cancelled || 0);
+    const totals = normalizeTaskTotals(tasks.totals);
+    const totalCount = totals.total;
     const taskToneDone = '#166534';
     const taskToneOpen = '#16a34a';
-    const taskToneOpenSoft = '#4ade80';
     const taskToneMuted = '#94a3b8';
     const statusItems = [
-        { label: '待办', count: Number(totals.todo || 0), color: taskToneOpen },
-        { label: '进行中', count: Number(totals.in_progress || 0), color: taskToneOpenSoft },
-        { label: '已完成', count: Number(totals.done || 0), color: taskToneDone },
-        { label: '已取消', count: Number(totals.cancelled || 0), color: taskToneMuted },
+        { label: '未完成', count: totals.open, color: taskToneOpen },
+        { label: '已完成', count: totals.done, color: taskToneDone },
+        { label: '已取消', count: totals.cancelled, color: taskToneMuted },
     ].filter((item) => item.count > 0);
     const weekly = safeArray(tasks.weekly);
+    const planItems = safeArray(tasks.by_plan).slice(0, 8).map((item) => ({ label: item.plan || '未安排', count: item.count }));
+    const categoryItems = safeArray(tasks.by_category).slice(0, 8).map((item) => ({ label: item.category || '未分类', count: item.count }));
     return [
         renderCard({
             accent: '#10b981',
             eyebrow: 'Tasks',
             title: '任务状态',
-            subtitle: '当前任务整体处于什么状态。',
+            subtitle: `按${rangeLabel()}统一为未完成、已完成、已取消三种结果。`,
             body: renderDonut(statusItems, 'count', 'label', statusItems.map((item) => item.color), formatCount(totalCount), '总任务', (value) => `${value} 项`),
         }),
         renderCard({
             accent: '#22c55e',
             eyebrow: 'Tasks',
             title: '完成节奏',
-            subtitle: `${rangeLabel()}里的任务收口情况。`,
+            subtitle: `${rangeLabel()}里真正完成的任务节奏。`,
             body: renderSparkline(weekly.map((item) => item.week || ''), weekly.map((item) => Number(item.done || 0)), '#10b981', (value) => `${value} 项`),
             footer: renderMetricPairs([
                 { label: `${rangeLabel()}新增`, value: formatCount(tasks.new_this_week || 0) },
-                { label: '当前在办', value: formatCount(Number(totals.todo || 0) + Number(totals.in_progress || 0)) },
+                { label: '当前未完成', value: formatCount(totals.open) },
             ]),
         }),
         renderCard({
             accent: '#16a34a',
             eyebrow: 'Tasks',
-            title: '推进堆叠图',
-            subtitle: '把新增和收口放在同一条周节奏里看。',
+            title: '新增与收口',
+            subtitle: `按${rangeLabel()}比较新建、完成和取消的周节奏。`,
             body: renderStackedColumns(
                 weekly.map((item) => ({
                     label: String(item.week || '').replace(/^\d{4}-W/, 'W'),
+                    created: Number(item.created || 0),
                     done: Number(item.done || 0),
-                    open: Math.max(0, Number(item.total || 0) - Number(item.done || 0)),
+                    cancelled: Number(item.cancelled || 0),
                 })),
                 'label',
                 [
+                    { key: 'created', color: '#86efac' },
                     { key: 'done', color: taskToneDone },
-                    { key: 'open', color: taskToneOpen },
+                    { key: 'cancelled', color: taskToneMuted },
                 ],
                 (value) => `${value}`,
             ),
             footer: `
                 <div class="stats-chip-row">
+                    <span class="stats-chip">浅绿 = 新增</span>
                     <span class="stats-chip">深绿 = 已完成</span>
-                    <span class="stats-chip">中绿 = 未完成待消化</span>
+                    <span class="stats-chip">灰蓝 = 已取消</span>
                 </div>
             `,
         }),
@@ -1296,7 +1355,7 @@ function taskCards() {
             accent: '#34d399',
             eyebrow: 'Tasks',
             title: '优先级分布',
-            subtitle: '高优事项是否堆积。',
+            subtitle: `按${rangeLabel()}观察高优事项是否堆积。`,
             body: renderBarRows(
                 safeArray(tasks.by_priority).map((item) => ({ ...item, label: `优先级 ${item.priority ?? '未设'}` })),
                 'count',
@@ -1308,13 +1367,26 @@ function taskCards() {
         renderCard({
             accent: '#059669',
             eyebrow: 'Tasks',
-            title: '分类负载',
-            subtitle: '当前任务主要压在哪些分类。',
+            title: '计划分布',
+            subtitle: `按${rangeLabel()}查看未完成任务主要分布在哪些日期桶。`,
             body: renderColumnChart(
-                safeArray(tasks.by_category).slice(0, 8).map((item) => ({ label: item.category || '未分类', count: item.count })),
+                planItems,
                 'count',
                 'label',
                 '#059669',
+                (value) => `${value}`,
+            ),
+        }),
+        renderCard({
+            accent: '#0f766e',
+            eyebrow: 'Tasks',
+            title: '文字分类',
+            subtitle: `按${rangeLabel()}查看未完成任务压在哪些非日期分类。`,
+            body: renderColumnChart(
+                categoryItems,
+                'count',
+                'label',
+                '#0f766e',
                 (value) => `${value}`,
             ),
         }),
@@ -1332,7 +1404,7 @@ function eventCards() {
             accent: '#6366f1',
             eyebrow: 'Events',
             title: '日程密度',
-            subtitle: `${rangeLabel()}里的安排变化。`,
+            subtitle: `按${rangeLabel()}查看安排数量随时间的变化。`,
             body: renderSparkline(weekly.map((item) => item.week || ''), weekly.map((item) => Number(item.count || 0)), '#6366f1', (value) => `${value} 个`),
             footer: renderMetricPairs([
                 { label: '日程总量', value: formatCount(totalEvents) },
@@ -1343,21 +1415,21 @@ function eventCards() {
             accent: '#8b5cf6',
             eyebrow: 'Events',
             title: '常见时段',
-            subtitle: '一天里哪些时段最常被安排占据。',
+            subtitle: `按${rangeLabel()}看一天里哪些时段最常被安排占据。`,
             body: renderBarRows(safeArray(events.time_slots).map((item) => ({ ...item, label: item.slot })), 'count', 'label', '#8b5cf6', (value) => `${value} 个`),
         }),
         renderCard({
             accent: '#7c3aed',
             eyebrow: 'Events',
             title: '周内时段热力图',
-            subtitle: '看看安排更容易扎堆在哪几天、哪几个时段。',
+            subtitle: `按${rangeLabel()}观察安排更容易扎堆在哪几天、哪几个时段。`,
             body: renderMatrixHeatmap(safeArray(events.weekday_slots), slotLabels, weekdayLabels, '124, 58, 237'),
         }),
         renderCard({
             accent: '#4f46e5',
             eyebrow: 'Events',
             title: '日程分类',
-            subtitle: '当前范围内的主题分布。',
+            subtitle: `按${rangeLabel()}统计日程主题分布。`,
             body: renderDonut(
                 safeArray(events.by_category).slice(0, 6).map((item) => ({ ...item, category: item.category || '未分类' })),
                 'count',
@@ -1374,39 +1446,37 @@ function eventCards() {
 function noteCards() {
     const notes = _data?.notes || {};
     const summary = notes.summary || {};
+    const cadenceGranularity = notes.cadence_granularity || 'day';
     const categories = safeArray(notes.categories);
     const hotTags = safeArray(notes.hot_tags).slice(0, 10).map((item) => ({ label: `#${item.tag}`, value: item.count }));
+    const cadenceItems = safeArray(notes.cadence).map((item) => ({ label: item.label, count: item.count }));
+    const cadenceBody = cadenceGranularity === 'day'
+        ? renderHeatStrip(cadenceItems, 'count', 'label', '59, 130, 246', (value) => `${value}`, { columns: Math.min(Math.max(cadenceItems.length, 1), 7) })
+        : renderColumnChart(cadenceItems, 'count', 'label', '#3b82f6', (value) => `${value}`);
     return [
         renderCard({
             accent: '#3b82f6',
             eyebrow: 'Notes',
             title: '笔记节奏',
-            subtitle: '最近两周的输入频率。',
-            body: renderHeatStrip(
-                safeArray(notes.cadence).map((item) => ({ label: item.label, count: item.count })),
-                'count',
-                'label',
-                '59, 130, 246',
-                (value) => `${value}`,
-                { columns: 7 },
-            ),
+            subtitle: noteCadenceSubtitle(cadenceGranularity),
+            body: cadenceBody,
             footer: renderMetricPairs([
-                { label: '累计笔记', value: formatCount(summary.total_count || 0) },
-                { label: '近 7 天新增', value: formatCount(summary.week_new_count || 0) },
+                { label: `${rangeLabel()}笔记`, value: formatCount(summary.total_count || 0) },
+                { label: '范围尾端近 7 天新增', value: formatCount(summary.week_new_count || 0) },
             ]),
         }),
         renderCard({
             accent: '#2563eb',
             eyebrow: 'Notes',
             title: '笔记分类',
-            subtitle: '知识沉淀主要集中在哪些主题。',
+            subtitle: `按${rangeLabel()}统计知识沉淀主题。`,
             body: renderBarRows(categories.map((item) => ({ ...item, category: item.category || '未分类' })), 'count', 'category', '#3b82f6', (value) => `${value} 条`),
         }),
         renderCard({
             accent: '#0ea5e9',
             eyebrow: 'Notes',
             title: '高频标签',
-            subtitle: '最近常出现的关键词。',
+            subtitle: `按${rangeLabel()}统计高频标签。`,
             body: renderTokenCloud(hotTags, (value) => `${value}`),
             footer: renderMetricPairs([
                 { label: '平均长度', value: `${summary.average_length || 0}` },
@@ -1419,20 +1489,32 @@ function noteCards() {
 function diaryCards() {
     const diary = _data?.diary || {};
     const summary = diary.summary || {};
+    const cadenceGranularity = diary.cadence_granularity || 'day';
+    const cadenceItems = safeArray(diary.cadence).map((item) => ({
+        ...item,
+        mood_label: formatMoodLabel(item.mood),
+        template_label: item.template_id || '手写',
+    }));
+    const moodItems = safeArray(diary.mood_breakdown)
+        .slice(0, 6)
+        .map((item) => ({ ...item, label: formatMoodLabel(item.mood) }));
+    const densityBody = cadenceGranularity === 'day'
+        ? renderHeatStrip(cadenceItems.map((item) => ({ label: item.label, words: item.words })), 'words', 'label', '236, 72, 153', formatWordCompact)
+        : renderColumnChart(cadenceItems.map((item) => ({ label: item.label, words: item.words })), 'words', 'label', '#ec4899', formatWordCompact);
     return [
         renderCard({
             accent: '#ec4899',
             eyebrow: 'Diary',
             title: '心情分布',
-            subtitle: '本月常见情绪落点。',
-            body: renderDonut(safeArray(diary.mood_breakdown).slice(0, 6), 'count', 'mood', ['#ec4899', '#f472b6', '#fb7185', '#f9a8d4', '#db2777', '#be185d'], formatCount(summary.entry_count || 0), '本月篇数', (value) => `${value} 天`),
+            subtitle: `${diaryRangeSentence()}常见情绪落点。`,
+            body: renderDonut(moodItems, 'count', 'label', ['#ec4899', '#f472b6', '#fb7185', '#f9a8d4', '#db2777', '#be185d'], formatCount(summary.entry_count || 0), `${diaryRangeTitle()}篇数`, (value) => `${value} 天`),
         }),
         renderCard({
             accent: '#f43f5e',
             eyebrow: 'Diary',
             title: '书写密度',
-            subtitle: '这个月每天写了多少字。',
-            body: renderHeatStrip(safeArray(diary.cadence).map((item) => ({ label: item.label, words: item.words })), 'words', 'label', '236, 72, 153', formatWordCompact),
+            subtitle: diaryCadenceSubtitle(cadenceGranularity),
+            body: densityBody,
             footer: renderMetricPairs([
                 { label: '连续天数', value: formatCount(summary.current_streak || 0) },
                 { label: '填充率', value: formatPercent(summary.fill_rate || 0) },
@@ -1442,10 +1524,10 @@ function diaryCards() {
             accent: '#e11d48',
             eyebrow: 'Diary',
             title: '模板与回看',
-            subtitle: '本月常用模板和记录节奏。',
-            body: renderBarRows(safeArray(diary.template_usage).slice(0, 5).map((item) => ({ ...item, template_id: item.template_id || '手写' })), 'count', 'template_id', '#ec4899', (value) => `${value} 次`),
+            subtitle: `${diaryRangeSentence()}常用模板和回看节奏。`,
+            body: renderBarRows(safeArray(diary.template_usage).slice(0, 5).map((item) => ({ ...item, label: item.template_id || '手写' })), 'count', 'label', '#ec4899', (value) => `${value} 次`),
             footer: renderMetricPairs([
-                { label: '本月最长连续', value: formatCount(summary.month_longest_streak || 0) },
+                { label: '区间最长连续', value: formatCount(summary.period_longest_streak || summary.month_longest_streak || 0) },
                 { label: '总字数', value: formatCount(summary.total_words || 0) },
             ]),
         }),
@@ -1458,7 +1540,7 @@ function renderSummary() {
     const events = _data?.events || {};
     const notes = _data?.notes || {};
     const diary = _data?.diary || {};
-    const totals = tasks.totals || {};
+    const totals = normalizeTaskTotals(tasks.totals);
     const totalEvents = sumBy(events.weekly, 'count');
     const expenseTotal = sumBy(ledger.expense_by_category, 'total');
     const incomeTotal = sumBy(ledger.income_by_category, 'total');
@@ -1467,10 +1549,10 @@ function renderSummary() {
         <section class="stats-summary-grid">
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}支出</div><div class="stats-summary-value">${formatMoney(expenseTotal)}</div><div class="stats-summary-meta">收入 ${formatMoney(incomeTotal)}</div></article>
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}结余</div><div class="stats-summary-value">${formatMoney(incomeTotal - expenseTotal)}</div><div class="stats-summary-meta">按当前范围计算</div></article>
-            <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}任务</div><div class="stats-summary-value">${formatCount(Number(totals.todo || 0) + Number(totals.in_progress || 0) + Number(totals.done || 0))}</div><div class="stats-summary-meta">完成 ${formatCount(totals.done || 0)} 项</div></article>
+            <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}任务</div><div class="stats-summary-value">${formatCount(totals.total)}</div><div class="stats-summary-meta">完成 ${formatCount(totals.done)} 项 · 取消 ${formatCount(totals.cancelled)} 项</div></article>
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}日程</div><div class="stats-summary-value">${formatCount(totalEvents)}</div><div class="stats-summary-meta">分类 ${formatCount(safeArray(events.by_category).length)} 种</div></article>
-            <article class="stats-summary-card"><div class="stats-summary-label">笔记</div><div class="stats-summary-value">${formatCount(notes.summary?.total_count || 0)}</div><div class="stats-summary-meta">近 7 天新增 ${formatCount(notes.summary?.week_new_count || 0)}</div></article>
-            <article class="stats-summary-card"><div class="stats-summary-label">日记</div><div class="stats-summary-value">${formatCount(diary.summary?.entry_count || 0)}</div><div class="stats-summary-meta">连续 ${formatCount(diary.summary?.current_streak || 0)} 天</div></article>
+            <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}笔记</div><div class="stats-summary-value">${formatCount(notes.summary?.total_count || 0)}</div><div class="stats-summary-meta">范围尾端近 7 天新增 ${formatCount(notes.summary?.week_new_count || 0)}</div></article>
+            <article class="stats-summary-card"><div class="stats-summary-label">日记</div><div class="stats-summary-value">${formatCount(diary.summary?.entry_count || 0)}</div><div class="stats-summary-meta">区间最长 ${formatCount(diary.summary?.period_longest_streak || diary.summary?.month_longest_streak || 0)} 天</div></article>
         </section>
     `;
 }
@@ -1498,6 +1580,7 @@ function renderPage() {
         return;
     }
     const range = deriveRangeDates();
+    const rangeSummary = _range === 'all' ? '全部时间' : `${range.start} → ${range.end}`;
     _container.innerHTML = `
         <div class="stats-shell">
             <div class="stats-stack">
@@ -1507,22 +1590,24 @@ function renderPage() {
                         <p>按时间范围查看财务、任务、日程、笔记和日记的整体变化。</p>
                         <div class="stats-hero-tags">
                             <span class="stats-chip">${rangeLabel()}</span>
-                            <span class="stats-chip">${range.start} → ${range.end}</span>
+                            <span class="stats-chip">${rangeSummary}</span>
                             <span class="stats-chip">按模块查看</span>
                             <span class="stats-chip">笔记与日记同步更新</span>
                         </div>
                     </div>
-                    <div class="stats-chip-row">
-                        ${RANGE_OPTIONS.map((option) => `<button type="button" class="stats-range-btn${_range === option.key ? ' active' : ''}" data-range="${option.key}">${option.label}</button>`).join('')}
-                    </div>
-                    ${_range === 'custom' ? `
-                        <div class="stats-custom-range">
-                            <input type="text" class="stats-date-field" id="stats-custom-start" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftStart || _customStart || range.start)}">
-                            <span class="stats-range-sep">至</span>
-                            <input type="text" class="stats-date-field" id="stats-custom-end" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftEnd || _customEnd || range.end)}">
-                            <button type="button" class="stats-range-btn stats-apply-btn" id="stats-custom-apply">应用</button>
+                    <div class="stats-range-group">
+                        <div class="stats-chip-row">
+                            ${RANGE_OPTIONS.map((option) => `<button type="button" class="stats-range-btn${_range === option.key ? ' active' : ''}" data-range="${option.key}">${option.label}</button>`).join('')}
                         </div>
-                    ` : ''}
+                        ${_range === 'custom' ? `
+                            <div class="stats-custom-range">
+                                <input type="text" class="stats-date-field" id="stats-custom-start" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftStart || _customStart || range.start)}">
+                                <span class="stats-range-sep">至</span>
+                                <input type="text" class="stats-date-field" id="stats-custom-end" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftEnd || _customEnd || range.end)}">
+                                <button type="button" class="stats-range-btn stats-apply-btn" id="stats-custom-apply">应用</button>
+                            </div>
+                        ` : ''}
+                    </div>
                 </section>
                 ${renderSummary()}
                 ${renderWall()}
@@ -1618,6 +1703,7 @@ export function render(container) {
     _customEnd = initialRange.end;
     _customDraftStart = _customStart;
     _customDraftEnd = _customEnd;
+    _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
     renderPage();
     loadAndRender();
 }
@@ -1627,6 +1713,7 @@ export function destroy() {
     _data = null;
     _heatmapData = null;
     _comparisonData = null;
+    _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
 }
 
 export function onRouteEnter(_params) {}

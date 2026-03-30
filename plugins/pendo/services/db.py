@@ -15,7 +15,11 @@ from typing import Any, Optional
 from contextlib import contextmanager
 
 from ..utils.settings_utils import normalize_settings_json
-from ..utils.validators import validate_item_data, sanitize_search_keyword
+from ..utils.validators import (
+    validate_item_data,
+    sanitize_search_keyword,
+    derive_task_category,
+)
 from ..models.item import (
     ItemType,
     Item,
@@ -270,6 +274,31 @@ class Database:
                     id UNINDEXED, title, content, tags, category
                 )
             """)
+
+            cursor.execute(
+                """
+                SELECT id, category, due_time, created_at
+                FROM items
+                WHERE type = ? AND deleted = 0
+                """,
+                (ItemType.TASK.value,),
+            )
+            repaired_task_ids: list[str] = []
+            for row in cursor.fetchall():
+                current_category = row["category"]
+                repaired_category = derive_task_category(
+                    current_category,
+                    row["due_time"],
+                    row["created_at"],
+                )
+                if repaired_category != str(current_category or "").strip():
+                    cursor.execute(
+                        "UPDATE items SET category = ? WHERE id = ?",
+                        (repaired_category, row["id"]),
+                    )
+                    repaired_task_ids.append(row["id"])
+            for item_id in repaired_task_ids:
+                self._refresh_fts(item_id, conn)
 
             # 提醒记录表：每个 (item_id, remind_time) 一行
             cursor.execute("""
@@ -638,7 +667,7 @@ class Database:
                 return item
         return None
 
-    _ALLOWED_SORT_FIELDS = {"created_at", "updated_at", "ledger_date", "due_time", "start_time", "amount"}
+    _ALLOWED_SORT_FIELDS = {"created_at", "updated_at", "ledger_date", "due_time", "start_time", "diary_date", "amount"}
 
     def get_items(
         self,
@@ -672,7 +701,7 @@ class Database:
         params = [owner_id]
 
         if filters:
-            for key in ["type", "category", "ledger_category", "status"]:
+            for key in ["type", "category", "ledger_category", "status", "priority"]:
                 if key in filters:
                     where.append(f"{key} = ?")
                     params.append(filters[key])
@@ -812,9 +841,9 @@ class Database:
     def _apply_filters(
         where: list[str], params: list[Any], filters: dict[str, Any] | None,
     ):
-        """将 type/category/status/direction 过滤条件追加到 where / params"""
+        """将常用过滤条件追加到 where / params"""
         if filters:
-            for key in ("type", "category", "status", "direction"):
+            for key in ("type", "category", "ledger_category", "status", "direction", "priority"):
                 if key in filters:
                     where.append(f"{key} = ?")
                     params.append(filters[key])
@@ -832,6 +861,8 @@ class Database:
 
         # 清洗搜索关键词
         query = sanitize_search_keyword(query)
+        if not query:
+            return []
 
         # FTS搜索
         fts_ids = []

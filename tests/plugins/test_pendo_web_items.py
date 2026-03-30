@@ -1,7 +1,10 @@
 """Regression tests for pendo web ledger category filtering."""
 
+import importlib
 from pathlib import Path
 import shutil
+import sys
+import types
 import uuid
 
 import pytest
@@ -18,6 +21,50 @@ from plugins.pendo.web.analytics.ledger_insights import build_ledger_insights
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_items_module():
+    fastapi = types.ModuleType("fastapi")
+
+    class _Router:
+        def _decorator(self, *_args, **_kwargs):
+            def decorator(fn):
+                return fn
+
+            return decorator
+
+        def get(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def post(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def put(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def delete(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+    class _HTTPException(Exception):
+        def __init__(self, status_code: int, detail: str):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+    fastapi.APIRouter = _Router
+    fastapi.Depends = lambda dep=None: dep
+    fastapi.Query = lambda default=None, **_kwargs: default
+    fastapi.HTTPException = _HTTPException
+    fastapi.Header = lambda default=None, **_kwargs: default
+    fastapi.Request = type("Request", (), {})
+
+    responses = types.ModuleType("fastapi.responses")
+    responses.Response = type("Response", (), {})
+
+    sys.modules["fastapi"] = fastapi
+    sys.modules["fastapi.responses"] = responses
+    sys.modules.pop("plugins.pendo.web.api.items", None)
+    return importlib.import_module("plugins.pendo.web.api.items")
 
 
 def test_database_get_items_supports_ledger_category_filter():
@@ -53,6 +100,99 @@ def test_database_get_items_supports_ledger_category_filter():
         assert len(items) == 1
         assert items[0].ledger_category == "餐饮"
         assert items[0].title == "午饭"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_items_list_applies_priority_before_pagination_and_total_count():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_items_priority_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-priority"
+    items_module = _load_items_module()
+
+    try:
+        db.insert_item({
+            "id": "task_nonmatch",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "普通优先级",
+            "priority": 3,
+            "status": "todo",
+            "created_at": "2026-03-03T09:00:00",
+            "updated_at": "2026-03-03T09:00:00",
+        })
+        db.insert_item({
+            "id": "task_match_1",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "高优先级一",
+            "priority": 1,
+            "status": "todo",
+            "created_at": "2026-03-02T09:00:00",
+            "updated_at": "2026-03-02T09:00:00",
+        })
+        db.insert_item({
+            "id": "task_match_2",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "高优先级二",
+            "priority": 1,
+            "status": "todo",
+            "created_at": "2026-03-01T09:00:00",
+            "updated_at": "2026-03-01T09:00:00",
+        })
+
+        result = items_module.list_items(
+            type="task",
+            priority=1,
+            page=1,
+            page_size=1,
+            owner_id=owner_id,
+            db=db,
+        )
+
+        assert result["data"]["total"] == 2
+        assert [item["id"] for item in result["data"]["items"]] == ["task_match_1"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_database_get_items_supports_diary_date_sort_field():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_items_diary_sort_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-diary-sort"
+
+    try:
+        db.insert_item({
+            "id": "d2",
+            "owner_id": owner_id,
+            "type": "diary",
+            "title": "后一天",
+            "content": "第二篇",
+            "diary_date": "2026-03-20",
+            "created_at": "2026-03-18T20:00:00",
+            "updated_at": "2026-03-18T20:00:00",
+        })
+        db.insert_item({
+            "id": "d1",
+            "owner_id": owner_id,
+            "type": "diary",
+            "title": "前一天",
+            "content": "第一篇",
+            "diary_date": "2026-03-19",
+            "created_at": "2026-03-21T20:00:00",
+            "updated_at": "2026-03-21T20:00:00",
+        })
+
+        items = db.get_items(
+            owner_id,
+            filters={"type": "diary", "sort_field": "diary_date", "sort_order": "ASC"},
+            limit=10,
+        )
+
+        assert [item.id for item in items] == ["d1", "d2"]
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -162,7 +302,7 @@ def test_item_create_model_source_accepts_nullable_text_fields():
 
     assert 'title: Optional[str] = ""' in src
     assert 'content: Optional[str] = ""' in src
-    assert 'category: Optional[str] = "未分类"' in src
+    assert 'category: Optional[str] = None' in src
 
 
 def test_task_update_route_preserves_explicit_nulls_for_clearing_fields():
@@ -183,7 +323,7 @@ def test_task_update_route_preserves_explicit_nulls_for_clearing_fields():
     updated = normalize_task_fields(merged, partial=False)
 
     assert updated["due_time"] is None
-    assert updated["category"] == "未分类"
+    assert updated["category"] == "2026-03-30"
     assert updated["content"] == ""
 
 
@@ -459,6 +599,69 @@ def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_created_at():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_month_candles_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-month-candles"
+
+    try:
+        for item in [
+            {
+                "id": "m-backfill",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "月初补录",
+                "amount": 10,
+                "direction": "expense",
+                "ledger_category": "餐饮",
+                "ledger_date": "2026-03-01",
+                "created_at": "2026-04-01T09:00:00",
+            },
+            {
+                "id": "m-mid",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "月中消费",
+                "amount": 25,
+                "direction": "expense",
+                "ledger_category": "餐饮",
+                "ledger_date": "2026-03-05",
+                "created_at": "2026-03-05T09:00:00",
+            },
+            {
+                "id": "m-end",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "月底消费",
+                "amount": 40,
+                "direction": "expense",
+                "ledger_category": "交通",
+                "ledger_date": "2026-03-28",
+                "created_at": "2026-03-28T09:00:00",
+            },
+        ]:
+            db.insert_item(item)
+
+        result = build_ledger_insights(
+            db=db,
+            owner_id=owner_id,
+            start_date="2026-01-01",
+            end_date="2026-03-31",
+        )
+
+        assert result["summary"]["bucket_mode"] == "month"
+        assert result["expense_timeline"][-1]["key"] == "2026-03"
+        assert result["expense_timeline"][-1]["total"] == 75
+        assert result["expense_candles"][-1]["label"] == "2026-03"
+        assert result["expense_candles"][-1]["open"] == 10
+        assert result["expense_candles"][-1]["close"] == 40
+        assert result["expense_candles"][-1]["high"] == 40
+        assert result["expense_candles"][-1]["low"] == 10
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_ledger_page_source_requests_insights_component():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "ledger.js").read_text(encoding="utf-8")
 
@@ -469,6 +672,24 @@ def test_ledger_page_source_requests_insights_component():
     assert "_sortMode === 'amount' ? 'amount' : 'ledger_date'" in src
     assert "await loadAndRender(true);" in src
     assert "if (changedType && changedType !== 'ledger') return;" in src
+
+
+def test_ledger_page_source_uses_unified_time_presets_with_today():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "ledger.js").read_text(encoding="utf-8")
+
+    assert "{ value: 'today',  label: '今天' }" in src
+    assert "{ value: 'week',   label: '本周' }" in src
+    assert "{ value: 'month',  label: '本月' }" in src
+    assert "{ value: 'quarter', label: '本季' }" in src
+    assert "{ value: 'year',   label: '今年' }" in src
+    assert "{ value: 'last_year', label: '去年' }" in src
+    assert "{ value: 'custom', label: '自定义' }" in src
+    assert "{ value: 'all',    label: '全部' }" in src
+    assert "import { derivePresetRange, todayRangeKey } from '../utils/date_ranges.js';" in src
+    assert "const range = derivePresetRange(filter, {" in src
+    assert "today: todayStr()," in src
+    assert "current_month" not in src
+    assert "近30天" not in src
 
 
 def test_ledger_insights_component_uses_time_scaled_candle_axis():
