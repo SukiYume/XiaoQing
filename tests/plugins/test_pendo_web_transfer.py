@@ -30,7 +30,10 @@ except RuntimeError as exc:
 
 from plugins.pendo.models.item import DiaryItem, EventItem, LedgerItem, NoteItem, TaskItem
 from plugins.pendo.services.db import Database
-from plugins.pendo.web.auth import generate_token
+try:
+    from plugins.pendo.web.auth import generate_token
+except ModuleNotFoundError:
+    pytest.skip("pendo web auth requires PyJWT", allow_module_level=True)
 from plugins.pendo.web.services.transfer_bundle import (
     BundleValidationError,
     build_manifest,
