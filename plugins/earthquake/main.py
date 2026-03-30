@@ -82,11 +82,14 @@ def _create_session() -> requests.Session:
         "Referer": "https://m.weibo.cn/",
     }
 
-    session.post(visitor_url, data=visitor_data, headers=headers, timeout=20)
+    try:
+        session.post(visitor_url, data=visitor_data, headers=headers, timeout=20)
 
-    # 获取配置（包含 XSRF-TOKEN 等）
-    config_url = "https://m.weibo.cn/api/config"
-    session.get(config_url, headers=headers, timeout=20)
+        # 获取配置（包含 XSRF-TOKEN 等）
+        config_url = "https://m.weibo.cn/api/config"
+        session.get(config_url, headers=headers, timeout=20)
+    except requests.RequestException as exc:
+        logger.warning("Failed to bootstrap weibo visitor session: %s", exc)
 
     return session
 
