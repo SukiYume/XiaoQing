@@ -68,13 +68,17 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
         result = build_diary_overview(db=db, owner_id=owner_id, year=2026, month=3, today="2026-03-23")
 
         assert result["summary"]["entry_count"] == 3
+        assert result["summary"]["range_start"] == "2026-03-01"
+        assert result["summary"]["range_end"] == "2026-03-31"
         assert result["summary"]["active_days"] == 3
         assert result["summary"]["fill_rate"] == 3 / 31
         assert result["summary"]["current_streak"] == 1
         assert result["summary"]["longest_streak"] == 2
+        assert result["summary"]["period_longest_streak"] == 2
         assert result["summary"]["month_longest_streak"] == 2
         assert result["summary"]["busiest_day"]["date"] == "2026-03-20"
         assert result["summary"]["busiest_day"]["words"] == len("今天写了很多很多字。")
+        assert result["cadence_granularity"] == "day"
         assert result["mood_breakdown"][0]["mood"] == "😊"
         assert result["mood_breakdown"][0]["count"] == 2
         assert result["template_usage"][0]["template_id"] == "night_review"
@@ -85,6 +89,93 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
         assert result["cadence"][22]["count"] == 1
         assert result["cadence"][22]["words"] == len("这一天有些疲惫。")
         assert result["recent_entries"][0]["id"] == "d3"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_build_diary_overview_supports_range_based_weekly_cadence():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_diary_range_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-diary-range"
+
+    try:
+        for item_id, diary_date, mood, template_id, content in [
+            ("d1", "2026-01-05", "calm", "night_review", "第一周的记录。"),
+            ("d2", "2026-01-12", "calm", "", "第二周的记录更长一点。"),
+            ("d3", "2026-01-27", "happy", "free_write", "第三周没有连写。"),
+            ("d4", "2026-02-08", "happy", "", "二月开始继续补记。"),
+        ]:
+            db.insert_item({
+                "id": item_id,
+                "owner_id": owner_id,
+                "type": "diary",
+                "title": item_id,
+                "content": content,
+                "diary_date": diary_date,
+                "mood": mood,
+                "template_id": template_id,
+                "created_at": f"{diary_date}T21:00:00",
+                "updated_at": f"{diary_date}T21:00:00",
+            })
+
+        result = build_diary_overview(
+            db=db,
+            owner_id=owner_id,
+            start_date="2026-01-01",
+            end_date="2026-02-15",
+            today="2026-02-15",
+            cadence_granularity="auto",
+        )
+
+        assert result["summary"]["entry_count"] == 4
+        assert result["summary"]["range_days"] == 46
+        assert result["summary"]["period_longest_streak"] == 1
+        assert result["cadence_granularity"] == "week"
+        assert result["cadence"][0]["label"] == "2026-W01"
+        assert result["cadence"][-1]["label"] == "2026-W07"
+        assert sum(item["count"] for item in result["cadence"]) == 4
+        assert result["mood_breakdown"][0]["mood"] == "calm"
+        assert result["template_usage"][0]["template_id"] in {"free_write", "night_review"}
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_build_diary_overview_supports_cross_year_yearly_cadence():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_diary_year_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-diary-year"
+
+    try:
+        for item_id, diary_date, content in [
+            ("d1", "2024-03-08", "2024 年记录"),
+            ("d2", "2025-06-10", "2025 年记录更长一点"),
+            ("d3", "2026-02-15", "2026 年记录"),
+        ]:
+            db.insert_item({
+                "id": item_id,
+                "owner_id": owner_id,
+                "type": "diary",
+                "title": item_id,
+                "content": content,
+                "diary_date": diary_date,
+                "created_at": f"{diary_date}T21:00:00",
+                "updated_at": f"{diary_date}T21:00:00",
+            })
+
+        result = build_diary_overview(
+            db=db,
+            owner_id=owner_id,
+            start_date="2024-01-01",
+            end_date="2026-12-31",
+            today="2026-12-31",
+            cadence_granularity="auto",
+        )
+
+        assert result["cadence_granularity"] == "year"
+        assert [item["label"] for item in result["cadence"]] == ["2024", "2025", "2026"]
+        assert [item["count"] for item in result["cadence"]] == [1, 1, 1]
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -105,6 +196,12 @@ def test_stats_page_source_uses_word_based_diary_density_and_month_streak():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
 
     assert "function formatWordCompact(value)" in src
-    assert "subtitle: '这个月每天写了多少字。'" in src
-    assert "map((item) => ({ label: item.label, words: item.words }))" in src
-    assert "{ label: '本月最长连续', value: formatCount(summary.month_longest_streak || 0) }" in src
+    assert "function diaryCadenceSubtitle(granularity)" in src
+    assert "async function fetchDiaryRangeBounds(fallbackEnd = todayStr())" in src
+    assert "const diaryRange = _range === 'all' ? await fetchDiaryRangeBounds(range.end) : range;" in src
+    assert "api.get('/stats/diary/overview', { start_date: diaryRange.start, end_date: diaryRange.end, today: diaryRange.end, cadence_granularity: 'auto' })" in src
+    assert "api.get('/config/diary/moods').catch(() => null)" in src
+    assert "const densityBody = cadenceGranularity === 'day'" in src
+    assert "if (granularity === 'year') return `${diaryRangeSentence()}每年写了多少字。`;" in src
+    assert "formatMoodLabel(item.mood)" in src
+    assert "{ label: '区间最长连续', value: formatCount(summary.period_longest_streak || summary.month_longest_streak || 0) }" in src

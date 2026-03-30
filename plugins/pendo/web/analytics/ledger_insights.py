@@ -226,7 +226,7 @@ def build_ledger_insights(
         bucket_counts: dict[str, int] = defaultdict(int)
         candle_map: dict[str, dict] = {}
 
-        for ledger_date, amount, created_at, item_id in trend_rows:
+        for ledger_date, amount, _created_at, _item_id in trend_rows:
             key = _bucket_key(ledger_date, bucket_mode)
             amt = float(amount or 0)
             bucket_totals[key] += amt
@@ -243,9 +243,6 @@ def build_ledger_insights(
                     "low": amt,
                     "total": amt,
                     "count": 1,
-                    "_first_sort": created_at or ledger_date,
-                    "_last_sort": created_at or ledger_date,
-                    "_last_id": item_id,
                 }
                 continue
 
@@ -253,17 +250,7 @@ def build_ledger_insights(
             candle["low"] = min(candle["low"], amt)
             candle["total"] += amt
             candle["count"] += 1
-
-            first_sort = created_at or ledger_date
-            if first_sort < candle["_first_sort"]:
-                candle["_first_sort"] = first_sort
-                candle["open"] = amt
-
-            last_sort = created_at or ledger_date
-            if (last_sort > candle["_last_sort"]) or (last_sort == candle["_last_sort"] and item_id > candle["_last_id"]):
-                candle["_last_sort"] = last_sort
-                candle["_last_id"] = item_id
-                candle["close"] = amt
+            candle["close"] = amt
 
         trend = [{
             "key": key,

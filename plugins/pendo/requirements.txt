@@ -9,8 +9,8 @@ PyYAML>=6.0
 # 可选：更好的日期解析
 python-dateutil>=2.8.2
 
-# Web UI 依赖
-PyJWT>=2.8.0
-fastapi>=0.110.0
-uvicorn>=0.29.0
-passlib[bcrypt]>=1.7.4
+# 可选：Web UI 依赖 (如果不使用网页界面，可以不装)
+# PyJWT>=2.8.0
+# fastapi>=0.110.0
+# uvicorn>=0.29.0
+# passlib[bcrypt]>=1.7.4

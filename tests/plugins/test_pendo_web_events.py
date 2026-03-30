@@ -252,3 +252,18 @@ def test_events_page_source_uses_event_overview_routes():
     assert "/events/${eventId}/detail" in page_src
     assert "多节点事件" in page_src
     assert "timeline_days" in page_src
+
+
+def test_events_page_source_uses_unified_time_presets():
+    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "events.js").read_text(encoding="utf-8")
+
+    assert "const LIST_RANGE_OPTIONS = [" in page_src
+    assert "{ value: 'week', label: '本周' }" in page_src
+    assert "{ value: 'month', label: '本月' }" in page_src
+    assert "{ value: 'quarter', label: '本季' }" in page_src
+    assert "{ value: 'year', label: '今年' }" in page_src
+    assert "{ value: 'last_year', label: '去年' }" in page_src
+    assert "{ value: 'custom', label: '自定义' }" in page_src
+    assert "{ value: 'all', label: '全部' }" in page_src
+    assert "async function fetchAllRangeBounds()" in page_src
+    assert "listRange: 'month'" in page_src

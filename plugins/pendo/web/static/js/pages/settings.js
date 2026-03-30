@@ -82,9 +82,16 @@ function ensureStyles() {
         }
         .settings-switch input:checked + .settings-slider { background: #0ea5e9; }
         .settings-switch input:checked + .settings-slider::before { transform: translateX(18px); }
+        .settings-callout-card {
+            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center;
+            margin-top: 16px; padding: 16px; border-radius: 20px;
+            border: 1px solid rgba(191,219,254,0.8); background: rgba(239,246,255,0.84);
+        }
+        .settings-callout-copy { min-width: 0; }
+        .settings-callout-title { font-size: 15px; font-weight: 780; color: #0f172a; }
+        .settings-callout-desc { margin-top: 6px; font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); }
         .settings-info-block {
-            margin-top: 16px; padding: 14px; border-radius: 18px; background: rgba(240,249,255,0.84);
-            border: 1px solid rgba(14,165,233,0.12); font-size: 13px; line-height: 1.7; color: var(--color-text-secondary);
+            font-size: 13px; line-height: 1.7; color: var(--color-text-secondary);
         }
         .settings-info-block code {
             font-family: monospace; background: rgba(14,165,233,0.10); color: #0369a1; border-radius: 6px; padding: 2px 6px;
@@ -94,20 +101,19 @@ function ensureStyles() {
         .settings-danger { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
         .settings-danger .btn { align-self: flex-start; }
         .settings-transfer-card {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center;
-            padding: 16px; border-radius: 20px; border: 1px solid rgba(191,219,254,0.8); background: rgba(239,246,255,0.84);
-            margin-top: 16px;
+            grid-template-columns: minmax(0, 1fr) auto;
         }
-        .settings-transfer-title { font-size: 15px; font-weight: 780; color: #0f172a; }
-        .settings-transfer-desc { margin-top: 6px; font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); }
         .settings-transfer-btn {
             background: #fff;
             border-color: rgba(191,219,254,0.92);
             box-shadow: 0 8px 18px rgba(148,163,184,0.12);
+            transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease;
         }
         .settings-transfer-btn:hover {
-            background: rgba(219,234,254,0.78);
-            border-color: rgba(96,165,250,0.58);
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,255,0.96));
+            border-color: rgba(96,165,250,0.78);
+            box-shadow: 0 12px 24px rgba(59,130,246,0.12);
+            transform: translateY(-1px);
         }
         ${mediaMax(BREAKPOINTS.FORM, `
             .settings-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -118,6 +124,7 @@ function ensureStyles() {
             .settings-summary-grid { grid-template-columns: 1fr; }
             .settings-form-grid { grid-template-columns: 1fr; }
             .settings-actions { flex-direction: column; align-items: stretch; }
+            .settings-callout-card { grid-template-columns: 1fr; }
         `)}
     `);
 }
@@ -205,10 +212,10 @@ function renderPage() {
                         <section class="settings-panel">
                             <h3>数据迁移</h3>
                             <p>这里处理导出备份、导入 bundle 和跨设备迁移，不和日常偏好设置混在一起。</p>
-                            <div class="settings-transfer-card">
-                                <div>
-                                    <div class="settings-transfer-title">打开数据迁移页</div>
-                                    <div class="settings-transfer-desc">导出正式 bundle 备份，或从 bundle 预检后按类别导入历史数据。</div>
+                            <div class="settings-callout-card settings-transfer-card">
+                                <div class="settings-callout-copy">
+                                    <div class="settings-callout-title">打开数据迁移页</div>
+                                    <div class="settings-callout-desc">导出正式 bundle 备份，或从 bundle 预检后按类别导入历史数据。</div>
                                 </div>
                                 <button class="btn btn-secondary settings-transfer-btn" id="btn-open-transfer">打开页面</button>
                             </div>
@@ -229,8 +236,11 @@ function renderPage() {
                         <section class="settings-panel">
                             <h3>登录与令牌</h3>
                             <p>需要重新登录时，可以从这里退出当前状态。</p>
-                            <div class="settings-info-block">
-                                当前 Web 端已登录。如需重新生成令牌，请回到聊天里执行 <code>/pendo web token</code>。
+                            <div class="settings-callout-card">
+                                <div class="settings-callout-copy settings-info-block">
+                                    <div class="settings-callout-title">当前登录状态</div>
+                                    <div class="settings-callout-desc">当前 Web 端已登录。如需重新生成令牌，请回到聊天里执行 <code>/pendo web token</code>。</div>
+                                </div>
                             </div>
                             <div class="settings-danger">
                                 <button class="btn btn-secondary" id="btn-logout">退出登录</button>

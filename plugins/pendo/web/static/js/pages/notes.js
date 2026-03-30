@@ -175,23 +175,85 @@ function ensureStyles() {
         .notes-workspace-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px; border-bottom: 1px solid rgba(191,219,254,0.42); }
         .notes-workspace-title { margin: 0; font-size: 18px; font-weight: 780; color: var(--color-text); }
         .notes-workspace-subtitle { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
-        .notes-workspace-body { padding: 18px 20px 22px; }
-        .notes-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+        .notes-workspace-body { padding: 18px 20px 22px; display: flex; flex-direction: column; gap: 16px; }
+        .notes-collection { display: flex; flex-direction: column; gap: 14px; }
         .note-card {
-            display: flex; flex-direction: column; min-height: 196px; border-radius: 18px; overflow: hidden; cursor: pointer;
-            border: 1px solid rgba(59,130,246,0.12); background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(239,246,255,0.9));
-            box-shadow: 0 12px 26px rgba(37,99,235,0.04); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+            cursor: pointer;
+            transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
         }
         .note-card:hover { transform: translateY(-2px); border-color: rgba(59,130,246,0.24); box-shadow: 0 18px 32px rgba(37,99,235,0.08); }
-        .note-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 14px 14px 8px; }
+        .notes-spotlight {
+            display: grid; grid-template-columns: minmax(0, 1fr) minmax(148px, 0.28fr); gap: 18px;
+            padding: 22px; border-radius: 22px; border: 1px solid rgba(59,130,246,0.14);
+            background:
+                radial-gradient(circle at top right, rgba(59,130,246,0.16), transparent 34%),
+                linear-gradient(145deg, rgba(255,255,255,0.99), rgba(239,246,255,0.96));
+            box-shadow: 0 16px 30px rgba(37,99,235,0.05);
+            align-items: stretch;
+        }
+        .notes-spotlight-main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+        .notes-spotlight-kicker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .notes-spotlight-label {
+            display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px;
+            background: rgba(29,78,216,0.10); color: #1d4ed8; font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
+        }
+        .notes-spotlight-title { margin: 0; font-size: 24px; font-weight: 820; line-height: 1.24; letter-spacing: -0.03em; color: var(--color-text); }
+        .notes-spotlight-preview {
+            font-size: 14px; line-height: 1.8; color: var(--color-text-secondary); word-break: break-word;
+            display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .notes-spotlight-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+        .notes-spotlight-side {
+            display: flex; flex-direction: column; justify-content: space-between; gap: 14px;
+            padding-left: 18px; border-left: 1px solid rgba(191,219,254,0.56);
+        }
+        .notes-spotlight-stat {
+            padding: 12px 14px; border-radius: 16px; background: rgba(255,255,255,0.82); border: 1px solid rgba(191,219,254,0.54);
+        }
+        .notes-spotlight-stat-label { font-size: 11px; font-weight: 800; color: var(--color-text-secondary); letter-spacing: 0.04em; text-transform: uppercase; }
+        .notes-spotlight-stat-value { margin-top: 6px; font-size: 18px; font-weight: 760; color: var(--color-text); }
+        .notes-list-shell {
+            border: 1px solid rgba(59,130,246,0.10); border-radius: 20px; background: rgba(255,255,255,0.76);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+            overflow: hidden;
+        }
+        .notes-list-head {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            padding: 14px 16px; border-bottom: 1px solid rgba(191,219,254,0.42); background: rgba(248,250,252,0.85);
+        }
+        .notes-list-title { margin: 0; font-size: 14px; font-weight: 780; color: var(--color-text); }
+        .notes-list-subtitle { margin: 4px 0 0; font-size: 12px; color: var(--color-text-secondary); }
+        .notes-list { display: flex; flex-direction: column; }
+        .note-row {
+            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: flex-start;
+            padding: 16px; border-bottom: 1px solid rgba(226,232,240,0.82);
+            background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(248,250,252,0.78));
+        }
+        .note-row:last-child { border-bottom: none; }
+        .note-row-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+        .note-row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .note-row-title { margin: 0; font-size: 17px; font-weight: 760; line-height: 1.42; color: var(--color-text); }
+        .note-row-preview {
+            font-size: 13px; line-height: 1.7; color: var(--color-text-secondary); word-break: break-word;
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .note-row-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+        .note-row-side {
+            min-width: 96px; display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+            text-align: right;
+        }
+        .note-row-meta { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--color-text-secondary); }
+        .note-row-order {
+            display: inline-flex; align-items: center; justify-content: center; min-width: 36px; height: 28px; padding: 0 10px;
+            border-radius: 999px; background: rgba(219,234,254,0.8); color: #1d4ed8; font-size: 11px; font-weight: 800;
+        }
+        .note-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
         .note-card-title { margin: 0; font-size: 16px; font-weight: 760; color: var(--color-text); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .note-card-category {
             display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px; background: rgba(59,130,246,0.10);
             color: #1d4ed8; font-size: 11px; font-weight: 700; flex-shrink: 0;
         }
-        .note-card-body { padding: 0 14px; flex: 1; }
         .note-card-preview { font-size: 13px; line-height: 1.7; color: var(--color-text-secondary); min-height: 52px; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-        .note-card-footer { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
         .note-card-tags { display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px; }
         .note-tag {
             display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px;
@@ -209,7 +271,8 @@ function ensureStyles() {
         ${mediaMax(BREAKPOINTS.WIDE, `
             .notes-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .notes-layout { grid-template-columns: 1fr; }
-            .notes-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .notes-spotlight { grid-template-columns: 1fr; }
+            .notes-spotlight-side { padding-left: 0; border-left: none; padding-top: 4px; }
         `)}
         ${mediaMax(BREAKPOINTS.NARROW, `
             .notes-hero { grid-template-columns: 1fr; padding: 22px 20px; }
@@ -217,7 +280,12 @@ function ensureStyles() {
             .notes-summary-grid { grid-template-columns: 1fr; }
             .notes-filter-bar { grid-template-columns: 1fr; }
             .notes-filter-actions { justify-content: flex-start; }
-            .notes-grid { grid-template-columns: 1fr; }
+            .notes-workspace-body { padding: 16px; }
+            .notes-spotlight { padding: 18px; }
+            .note-row { grid-template-columns: 1fr; }
+            .note-row-top { flex-direction: column; }
+            .note-row-side { min-width: 0; align-items: flex-start; text-align: left; }
+            .notes-list-head { align-items: flex-start; flex-direction: column; }
             .notes-meter { gap: 6px; }
             .notes-cadence-panel .notes-panel-body { padding-bottom: 14px; }
         `)}
@@ -427,21 +495,56 @@ function renderFilters() {
     `;
 }
 
-function renderNoteCard(note) {
+function renderNoteTags(tags, limit = 4, emptyLabel = '未打标签') {
+    if (!tags.length) return `<span class="note-tag" style="opacity:0.72;">${emptyLabel}</span>`;
+    return tags.slice(0, limit).map((tag) => `<span class="note-tag">#${escapeHtml(tag)}</span>`).join('');
+}
+
+function renderSpotlight(note) {
     const tags = tagList(note.tags);
-    const preview = previewText(note.content, 118);
+    const preview = previewText(note.content, 220);
+    const spotlightLabel = _page === 1 ? '最新更新' : '本页首条';
     return `
-        <article class="note-card" data-id="${note.id}">
-            <div class="note-card-head">
-                <h4 class="note-card-title">${escapeHtml(note.title || '(无标题)')}</h4>
-                <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
+        <article class="note-card notes-spotlight" data-id="${note.id}">
+            <div class="notes-spotlight-main">
+                <div class="notes-spotlight-kicker">
+                    <span class="notes-spotlight-label">${spotlightLabel}</span>
+                    <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
+                </div>
+                <h4 class="notes-spotlight-title">${escapeHtml(note.title || '(无标题)')}</h4>
+                <div class="notes-spotlight-preview">${preview ? escapeHtml(preview) : '<span style="opacity:0.45;">（无内容）</span>'}</div>
+                <div class="notes-spotlight-tags">${renderNoteTags(tags, 5)}</div>
             </div>
-            <div class="note-card-body">
-                <div class="note-card-preview">${preview ? escapeHtml(preview) : '<span style="opacity:0.45;">（无内容）</span>'}</div>
+            <div class="notes-spotlight-side">
+                <div class="notes-spotlight-stat">
+                    <div class="notes-spotlight-stat-label">更新日期</div>
+                    <div class="notes-spotlight-stat-value">${formatDate(note.updated_at || note.created_at)}</div>
+                </div>
+                <div class="notes-spotlight-stat">
+                    <div class="notes-spotlight-stat-label">内容长度</div>
+                    <div class="notes-spotlight-stat-value">${noteWordCount(note)} 字</div>
+                </div>
             </div>
-            <div class="note-card-footer">
-                <div class="note-card-tags">${tags.length ? tags.slice(0, 4).map((tag) => `<span class="note-tag">#${escapeHtml(tag)}</span>`).join('') : '<span class="note-tag" style="opacity:0.72;">未打标签</span>'}</div>
-                <div class="note-card-meta">
+        </article>
+    `;
+}
+
+function renderNoteRow(note, index) {
+    const tags = tagList(note.tags);
+    const preview = previewText(note.content, 96);
+    return `
+        <article class="note-card note-row" data-id="${note.id}">
+            <div class="note-row-main">
+                <div class="note-row-top">
+                    <h4 class="note-row-title">${escapeHtml(note.title || '(无标题)')}</h4>
+                    <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
+                </div>
+                <div class="note-row-preview">${preview ? escapeHtml(preview) : '<span style="opacity:0.45;">（无内容）</span>'}</div>
+                <div class="note-row-tags">${renderNoteTags(tags, 3)}</div>
+            </div>
+            <div class="note-row-side">
+                <span class="note-row-order">${String(index + 1).padStart(2, '0')}</span>
+                <div class="note-row-meta">
                     <span>${formatDate(note.updated_at || note.created_at)}</span>
                     <span>${noteWordCount(note)} 字</span>
                 </div>
@@ -450,25 +553,44 @@ function renderNoteCard(note) {
     `;
 }
 
-function renderGrid() {
+function renderWorkspaceCollection() {
     if (!_items.length) {
         return `<div class="notes-empty">当前筛选下没有笔记。试试清空标签或切换分类。</div>`;
     }
-    return `<div class="notes-grid">${_items.map(renderNoteCard).join('')}</div>`;
+    const [spotlight, ...rest] = _items;
+    return `
+        <div class="notes-collection">
+            ${spotlight ? renderSpotlight(spotlight) : ''}
+            ${rest.length ? `
+                <div class="notes-list-shell">
+                    <div class="notes-list-head">
+                        <div>
+                            <h4 class="notes-list-title">继续浏览</h4>
+                            <p class="notes-list-subtitle">用统一行高查看剩余笔记，优先提升扫读效率。</p>
+                        </div>
+                        <div class="note-tag">${rest.length} 条</div>
+                    </div>
+                    <div class="notes-list">${rest.map((note, index) => renderNoteRow(note, index + ((_page - 1) * PAGE_SIZE) + 1)).join('')}</div>
+                </div>` : ''}
+        </div>
+    `;
 }
 
 function renderWorkspace() {
+    const subtitle = _page === 1
+        ? '先看最新更新，再快速扫读其余笔记。'
+        : '当前页继续按更新时间浏览笔记。';
     return `
         <section class="notes-workspace">
             <div class="notes-workspace-head">
                 <div>
                     <h3 class="notes-workspace-title">最近笔记</h3>
-                    <p class="notes-workspace-subtitle">按最近更新浏览当前笔记。</p>
+                    <p class="notes-workspace-subtitle">${subtitle}</p>
                 </div>
                 <div class="note-tag">${_total} 条匹配</div>
             </div>
             <div class="notes-workspace-body">
-                ${renderGrid()}
+                ${renderWorkspaceCollection()}
                 <div id="notes-pagination" class="notes-pagination"></div>
             </div>
         </section>
@@ -689,14 +811,25 @@ function attachListeners() {
 
     const tagInput = _container.querySelector('#notes-filter-tag');
     if (tagInput) {
-        let timer = null;
-        tagInput.addEventListener('input', () => {
-            clearTimeout(timer);
-            timer = setTimeout(async () => {
+        tagInput.addEventListener('change', async () => {
+            _filters.tag = tagInput.value.trim();
+            _page = 1;
+            await loadAndRender();
+        });
+        tagInput.addEventListener('keydown', async (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
                 _filters.tag = tagInput.value.trim();
                 _page = 1;
                 await loadAndRender();
-            }, 250);
+            }
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                tagInput.value = '';
+                _filters.tag = '';
+                _page = 1;
+                await loadAndRender();
+            }
         });
     }
 

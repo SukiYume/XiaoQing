@@ -388,6 +388,7 @@ function deriveDisplayModel(tasks) {
         later_tasks: sortTasks(laterTasks),
         backlog_tasks: sortTasks(backlogTasks),
         done_recent: sortDone(done).slice(0, 8),
+        cancelled_recent: sortDone(cancelled),
         overdue_tasks: sortTasks(overdueTasks),
         plan_load: planLoad,
         category_load: categoryLoad,
@@ -829,12 +830,15 @@ function renderSection(title, subtitle, tasks) {
 }
 
 function renderListView(model) {
+    const showActive = !_filters.status || _filters.status === 'todo';
+    const showClosed = !_filters.status || _filters.status === 'done' || _filters.status === 'cancelled';
+    const closedTasks = sortDone([...model.done_recent, ...model.cancelled_recent]).slice(0, 8);
     return `
         <div class="tasks-sections">
-            ${renderSection('今天与滞后', '优先清理今天计划和已经拖后的任务。', model.focus_tasks.slice(0, 6))}
-            ${renderSection('未来 7 天', '接下来一周内需要继续跟进的事项。', model.up_next_tasks.slice(0, 8))}
-            ${renderSection('更晚与未安排', '更晚的计划日期，以及尚未放进日期桶的任务。', [...model.later_tasks.slice(0, 4), ...model.backlog_tasks.slice(0, 4)])}
-            ${renderSection('最近完成', '查看最近完成的任务。', model.done_recent.slice(0, 6))}
+            ${showActive ? renderSection('今天与滞后', '优先清理今天计划和已经拖后的任务。', model.focus_tasks.slice(0, 6)) : ''}
+            ${showActive ? renderSection('未来 7 天', '接下来一周内需要继续跟进的事项。', model.up_next_tasks.slice(0, 8)) : ''}
+            ${showActive ? renderSection('更晚与未安排', '更晚的计划日期，以及尚未放进日期桶的任务。', [...model.later_tasks.slice(0, 4), ...model.backlog_tasks.slice(0, 4)]) : ''}
+            ${showClosed ? renderSection('最近完成', '已完成和已取消的任务。', closedTasks) : ''}
         </div>`;
 }
 

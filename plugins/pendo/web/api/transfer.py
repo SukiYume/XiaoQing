@@ -72,16 +72,15 @@ def resolve_range(selection: ExportSelection, now: Optional[datetime] = None) ->
         return None, None
     if selection.preset == "week":
         start = today - timedelta(days=today.weekday())
-        return start, start + timedelta(days=6)
+        return start, today
     if selection.preset == "month":
         start = today.replace(day=1)
-        if start.month == 12:
-            end = start.replace(year=start.year + 1, month=1) - timedelta(days=1)
-        else:
-            end = start.replace(month=start.month + 1) - timedelta(days=1)
-        return start, end
+        return start, today
+    if selection.preset == "quarter":
+        quarter_month = ((today.month - 1) // 3) * 3 + 1
+        return date(today.year, quarter_month, 1), today
     if selection.preset == "year":
-        return date(today.year, 1, 1), date(today.year, 12, 31)
+        return date(today.year, 1, 1), today
     if selection.preset == "last_year":
         last_year = today.year - 1
         return date(last_year, 1, 1), date(last_year, 12, 31)

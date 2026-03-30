@@ -476,10 +476,50 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
     web_handler = services["web_handler"]
 
     async def _export_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
-        return await run_sync(exporter.export_markdown, user_id, args, {})
+        result = await run_sync(exporter.export_markdown, user_id, args, {})
+        if result.get("status") != "success":
+            return result
 
-    async def _import_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
-        return await run_sync(exporter.import_markdown, user_id, args, {"context": ctx})
+        file_path = result.get("file_path")
+        file_name = result.get("file_name")
+        if not file_path or not file_name:
+            return result
+
+        if ctx is None or not hasattr(ctx, "send_action"):
+            result["message"] = (
+                f"{result.get('message', '导出完成')}\n"
+                f"文件已保存在本地: {file_path}"
+            )
+            return result
+
+        try:
+            target_user: int | str = int(user_id)
+        except (TypeError, ValueError):
+            target_user = user_id
+
+        try:
+            await ctx.send_action(
+                {
+                    "action": "upload_private_file",
+                    "params": {
+                        "user_id": target_user,
+                        "file": file_path,
+                        "name": file_name,
+                    },
+                }
+            )
+        except Exception as exc:
+            logger.exception("Failed to send exported markdown file to user %s: %s", user_id, exc)
+            return error_result(
+                "导出文件已生成，但通过 OneBot 私聊发送失败\n"
+                f"本地文件: {file_path}"
+            )
+
+        result["message"] = (
+            f"{result.get('message', '导出完成')}\n"
+            "已通过 QQ 私聊文件发送给你"
+        )
+        return result
 
     async def _settings_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         message = await handle_settings(user_id, args, db)
@@ -513,7 +553,6 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         "search": search_handler.search,
         "ledger": _help_or_exec(ledger_handler.handle, "ledger"),
         "export": _export_cmd,
-        "import": _import_cmd,
         "settings": _settings_cmd,
         "confirm": _confirm_cmd,
         "snooze": _snooze_cmd,
@@ -560,12 +599,14 @@ HELP_MAP = {
         "  - 晚上8点后自动归为第二天",
         "  - p:1(紧急) p:2(高) p:3(中) p:4(低)",
         "• /pendo todo view <id> - 查看待办详情",
-        "• /pendo todo list [分类] [done/undone] [all|page:n] - 查看待办",
+        "• /pendo todo list [分类] [done/undone/cancelled] [all|page:n] - 查看待办",
         "  - /pendo todo list today - 今日待办",
         "  - /pendo todo list 工作 done - 工作分类已完成",
+        "  - /pendo todo list cancelled - 所有分类已取消",
         "  - /pendo todo list done all - 所有分类已完成(全部)",
         "  - /pendo todo list 工作 page:2 - 工作分类第2页",
         "• /pendo todo done <id> - 完成待办",
+        "• /pendo todo cancel <id> - 取消待办",
         "• /pendo todo undone <id> - 重开待办",
         "• /pendo todo delete <id|cat:分类> - 删除待办",
         "• /pendo todo edit <id> <内容> - 编辑待办",
@@ -625,11 +666,14 @@ HELP_MAP = {
         "• /pendo snooze <id> <时间> - 延后提醒",
         "  - 时间格式: 10m, 1h, 19:00",
     ],
-    "import": [
-        "**导入导出:**",
-        "• /pendo export md [range] [type] - 导出Markdown",
-        "• /pendo import md - 导入Markdown",
-        "• /pendo import md preview - 预览导入",
+    "export": [
+        "**导出 (Export):**",
+        "• /pendo export <文件名> [范围] [类型] - 导出 Markdown 并私聊发送文件",
+        "  - 范围: all, today, week, month, YYYY-MM, last7d, start..end",
+        "  - 类型: event, todo, note, ledger, diary，可用逗号组合",
+        "  - 例: /pendo export 我的档案",
+        "  - 例: /pendo export 工作回顾 last30d event,todo",
+        "  - 例: /pendo export 账本快照 2026-03 ledger",
     ],
     "settings": [
         "**设置 (Settings):**",
@@ -688,7 +732,7 @@ def _show_help(subcommand: str = "") -> str:
         "search",
         "reminder",
         "common",
-        "import",
+        "export",
         "settings",
         "web",
     ]

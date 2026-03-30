@@ -60,6 +60,7 @@ htmlcov/
 Thumbs.db
 .agent
 .claude
+.codex
 docs/plans/
 docs/superpowers/
 

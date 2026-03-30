@@ -2,8 +2,14 @@
 from core.plugin_base import build_action, segments
 
 from ..config import PendoConfig
-from ..web.auth import generate_token
-from ..web import server as web_server
+try:
+    from ..web.auth import generate_token
+    from ..web import server as web_server
+    WEB_AVAILABLE = True
+except ImportError:
+    WEB_AVAILABLE = False
+    generate_token = None
+    web_server = None
 from ..utils.error_handlers import handle_command_errors
 
 
@@ -14,6 +20,16 @@ class WebHandler:
     @handle_command_errors
     async def handle(self, user_id: str, args: str, context=None, group_id=None):
         """Handle /pendo web subcommands."""
+        if not WEB_AVAILABLE:
+            return {
+                "status": "error",
+                "message": (
+                    "❌ 无法使用 Web UI。\n"
+                    "请检查是否安装了所需依赖：\n"
+                    "pip install fastapi uvicorn \"passlib[bcrypt]\" PyJWT"
+                ),
+            }
+        
         parts = args.strip().split(maxsplit=1)
         subcmd = parts[0].lower() if parts else ""
 
