@@ -259,10 +259,12 @@ class _StubTaskHandler:
 
 class _StubExporter:
     def export_markdown(self, user_id, args, options):
-        return {"status": "success", "message": "exported"}
-
-    def import_markdown(self, user_id, args, options):
-        return {"status": "success", "message": "imported"}
+        return {
+            "status": "success",
+            "message": "exported",
+            "file_path": "C:/tmp/pendo-export.md",
+            "file_name": "pendo-export.md",
+        }
 
 
 class _FakeItemsRepo:
@@ -324,6 +326,62 @@ class TestPendoReviewFixes:
         assert result_g1["message"] == "group:1001"
         assert result_g2["message"] == "group:1002"
         assert task_handler.group_ids == [1001, 1002]
+
+    def test_import_command_is_removed_from_router(self, monkeypatch):
+        from plugins.pendo import main as pendo_main
+
+        services = {
+            "db": object(),
+            "reminder_service": object(),
+            "exporter": _StubExporter(),
+            "event_handler": _StubSimpleHandler(),
+            "task_handler": _StubSimpleHandler(),
+            "note_handler": _StubSimpleHandler(),
+            "diary_handler": _StubSimpleHandler(),
+            "search_handler": _StubSimpleHandler(),
+            "ledger_handler": _StubSimpleHandler(),
+            "web_handler": _StubSimpleHandler(),
+        }
+
+        monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
+
+        router = pendo_main._build_command_router(SimpleNamespace(state={}))
+
+        assert "import" not in router.commands
+
+    def test_export_command_uploads_private_markdown_file(self, monkeypatch):
+        from plugins.pendo import main as pendo_main
+
+        actions = []
+
+        async def send_action(action):
+            actions.append(action)
+
+        services = {
+            "db": object(),
+            "reminder_service": object(),
+            "exporter": _StubExporter(),
+            "event_handler": _StubSimpleHandler(),
+            "task_handler": _StubSimpleHandler(),
+            "note_handler": _StubSimpleHandler(),
+            "diary_handler": _StubSimpleHandler(),
+            "search_handler": _StubSimpleHandler(),
+            "ledger_handler": _StubSimpleHandler(),
+            "web_handler": _StubSimpleHandler(),
+        }
+
+        monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
+
+        context = SimpleNamespace(state={}, send_action=send_action)
+        router = pendo_main._build_command_router(context)
+        result = asyncio.run(router.route("export", "1001", "工作档案 last30d event,todo", context))
+
+        assert result["status"] == "success"
+        assert "已通过 QQ 私聊文件发送给你" in result["message"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "upload_private_file"
+        assert actions[0]["params"]["user_id"] == 1001
+        assert actions[0]["params"]["name"] == "pendo-export.md"
 
     def test_cleanup_clears_pendo_runtime_state(self, monkeypatch):
         from plugins.pendo import main as pendo_main
@@ -2717,7 +2775,7 @@ class TestSessionRegression:
         assert end_calls == []
 
 
-class TestOperationAndImportRegression:
+class TestOperationAndExportRegression:
     def test_snooze_missing_args_returns_error_result(self):
         import sys
 
@@ -2730,7 +2788,7 @@ class TestOperationAndImportRegression:
         assert result["status"] == "error"
         assert "请指定要延后的条目ID和时间" in result["message"]
 
-    def test_import_markdown_preview_routes_to_file_preview(self, monkeypatch, tmp_path):
+    def test_export_markdown_writes_single_file_and_filters_types(self, monkeypatch, tmp_path):
         import sys
 
         sys.path.insert(0, str(ROOT))
@@ -2738,18 +2796,81 @@ class TestOperationAndImportRegression:
         from plugins.pendo.services import exporter as exporter_module
         from plugins.pendo.services.exporter import ExporterService
 
-        file_path = tmp_path / "sample.md"
-        file_path.write_text("## 示例\n\n内容", encoding="utf-8")
+        monkeypatch.setattr(exporter_module, "_get_export_dir", lambda user_id: tmp_path)
 
-        monkeypatch.setattr(exporter_module, "_validate_file_path", lambda path, user_id: True)
+        event_item = SimpleNamespace(
+            id="evt1",
+            type="event",
+            title="项目周会",
+            category="工作",
+            tags=["会议"],
+            created_at="2026-03-10T09:00:00",
+            updated_at="2026-03-10T10:00:00",
+            start_time="2026-03-12T09:30:00",
+            end_time="2026-03-12T10:30:00",
+            location="腾讯会议",
+            remind_times=["2026-03-12T09:00:00"],
+            milestones=[],
+            notes="带上进度表",
+            content="讨论本周排期",
+        )
+        task_item = SimpleNamespace(
+            id="todo1",
+            type="task",
+            title="提交周报",
+            category="工作",
+            tags=["例行"],
+            created_at="2026-03-08T08:00:00",
+            updated_at="2026-03-09T08:00:00",
+            due_time="2026-03-15T18:00:00",
+            priority=2,
+            status="todo",
+            completed_at=None,
+            content="同步给导师和组会群",
+        )
+        note_item = SimpleNamespace(
+            id="note1",
+            type="note",
+            title="研究想法",
+            category="灵感",
+            tags=["论文"],
+            created_at="2026-03-11T08:00:00",
+            updated_at="2026-03-11T08:30:00",
+            content="这条不应该被导出到 event,todo 结果里",
+        )
 
-        service = ExporterService(SimpleNamespace(items=SimpleNamespace(get_item=lambda *args, **kwargs: None)))
-        result = service.import_markdown("u1", f'md preview "{file_path}"', {})
+        class _Repo:
+            def get_items(self, user_id, filters, limit):
+                item_type = filters.get("type")
+                if item_type == "event":
+                    return [event_item]
+                if item_type == "task":
+                    return [task_item]
+                if item_type == "note":
+                    return [note_item]
+                return []
 
-        assert result["status"] == "preview"
-        assert result["total_count"] == 1
+        service = ExporterService(SimpleNamespace(items=_Repo(), log_transfer=lambda **kwargs: 1))
+        result = service.export_markdown(
+            "u1",
+            "工作档案 2026-03-01..2026-03-31 event,todo",
+            {},
+        )
 
-    def test_import_markdown_requires_file_path(self):
+        assert result["status"] == "success"
+        assert result["record_count"] == 2
+        assert result["file_name"] == "工作档案.md"
+
+        exported = (tmp_path / "工作档案.md").read_text(encoding="utf-8")
+        assert "# Pendo 导出档案 · 工作档案" in exported
+        assert "## 导出摘要" in exported
+        assert "## 日程" in exported
+        assert "## 待办" in exported
+        assert "项目周会" in exported
+        assert "提交周报" in exported
+        assert "研究想法" not in exported
+
+    def test_export_markdown_requires_filename(self):
         import sys
 
         sys.path.insert(0, str(ROOT))
@@ -2757,10 +2878,10 @@ class TestOperationAndImportRegression:
         from plugins.pendo.services.exporter import ExporterService
 
         service = ExporterService(SimpleNamespace(items=SimpleNamespace()))
-        result = service.import_markdown("u1", "md", {})
+        result = service.export_markdown("u1", "", {})
 
         assert result["status"] == "error"
-        assert "请指定导入文件路径" in result["message"]
+        assert "请提供导出文件名" in result["message"]
 
 
 class TestPendoWebHandler:

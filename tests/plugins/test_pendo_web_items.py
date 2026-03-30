@@ -61,10 +61,24 @@ def _load_items_module():
     responses = types.ModuleType("fastapi.responses")
     responses.Response = type("Response", (), {})
 
+    _orig_fastapi = sys.modules.get("fastapi")
+    _orig_responses = sys.modules.get("fastapi.responses")
+
     sys.modules["fastapi"] = fastapi
     sys.modules["fastapi.responses"] = responses
     sys.modules.pop("plugins.pendo.web.api.items", None)
-    return importlib.import_module("plugins.pendo.web.api.items")
+    mod = importlib.import_module("plugins.pendo.web.api.items")
+
+    if _orig_fastapi is not None:
+        sys.modules["fastapi"] = _orig_fastapi
+    else:
+        sys.modules.pop("fastapi", None)
+    if _orig_responses is not None:
+        sys.modules["fastapi.responses"] = _orig_responses
+    else:
+        sys.modules.pop("fastapi.responses", None)
+
+    return mod
 
 
 def test_database_get_items_supports_ledger_category_filter():

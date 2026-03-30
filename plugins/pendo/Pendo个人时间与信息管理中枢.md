@@ -297,12 +297,16 @@
 ## 6.3 导入导出
 
 ```
-/pendo export md                                 # 导出所有
-/pendo export md range=last30d                   # 最近30天
-/pendo export md range=2026-01-01..2026-01-31    # 日期范围
-/pendo import md                                 # 导入
-/pendo import md preview                         # 预览导入
+/pendo export 我的档案
+/pendo export 工作回顾 last30d event,todo
+/pendo export 账本快照 2026-03 ledger
 ```
+
+- 命令格式：`/pendo export <文件名> [范围] [类型]`
+- 范围支持：`all / today / week / month / YYYY-MM / last7d / start..end`
+- 类型支持：`event / todo / note / ledger / diary`，支持逗号组合
+- 导出会生成一个美化过的 Markdown 档案文件，保存到本地后再通过 OneBot 私聊文件消息发送给当前 QQ 用户
+- 插件聊天端不再提供 Markdown 导入；跨设备迁移请使用 Web 端的 Bundle 导入能力
 
 ---
 

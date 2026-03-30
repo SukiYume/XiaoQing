@@ -14,6 +14,7 @@
 - ✅ **账本管理** - 支持收支分类、筛选、分页、快速录入
 - ✅ **统计图表** - Chart.js 可视化事件/任务/账本趋势
 - ✅ **全模块页面** - 任务、事件、日记、笔记、搜索、设置均有独立页面
+- ✅ **数据迁移** - Web 端支持 `.pendo.zip` Bundle 格式的高级导入导出与操作审计
 - ✅ **聊天命令集成** - `/pendo web start|stop|status` 在聊天中管理 Web 服务
 
 ## 🎉 V2.0 历史更新
@@ -97,7 +98,7 @@
 | 笔记 | 卡片网格，按分类/标签浏览笔记 |
 | 搜索 | 跨模块全文搜索 |
 | 统计 | Chart.js 可视化图表（事件/任务/账本趋势） |
-| 设置 | 在线修改插件配置 |
+| 设置 | 在线修改配置、**高级数据迁移（导入/导出 Bundle）** |
 
 ### Web 依赖
 
@@ -309,22 +310,36 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 
 ## 导入导出
 
-### 导出Markdown
+Pendo 现在将聊天端导出收敛为单文件 Markdown 档案，导入能力保留在 Web 端 Bundle 流程中。
+
+### 聊天端 Markdown 导出
 
 ```
-/pendo export md                              # 导出所有数据
-/pendo export md range=last30d                # 导出最近30天
-/pendo export md range=2026-01-01..2026-01-31 # 指定范围
-/pendo export md format=by_type               # 按类型分文件
+/pendo export 我的档案
+/pendo export 工作回顾 last30d event,todo
+/pendo export 账本快照 2026-03 ledger
+/pendo export 本月随笔 month note,diary
 ```
 
-导出文件保存到 `plugins/pendo/data/exports/<user_id>/`
+- 命令格式：`/pendo export <文件名> [范围] [类型]`
+- 范围支持：`all`、`today`、`week`、`month`、`YYYY-MM`、`last7d`、`start..end`
+- 类型支持：`event`、`todo`、`note`、`ledger`、`diary`，可用逗号组合
+- 导出结果会写入 `plugins/pendo/data/exports/<user_id>/`，并通过 OneBot 私聊文件消息发送给当前 QQ 用户
+- 导出的 Markdown 采用单文件档案格式，带摘要、目录、分类型章节和结构化元信息，适合归档与分享
 
-### 导入Markdown
+### Web 端数据迁移 (Pendo Bundle)
 
-```
-/pendo import md              # 进入导入模式
-/pendo import md preview      # 预览导入内容
+Web 控制台支持跨设备的 `.pendo.zip` 数据包安全迁移：
+- **安全校验**: 支持预览与完整的数据格式校验。
+- **冲突策略**: 支持自定义冲突处理（跳过现有记录、强制覆盖、创建副本保留双份）。
+- **审计记录**: 在数据库中留存完整的导入与导出操作日志（含条数结果）。
+
+### 历史数据转换工具
+
+提供内置 Python 脚本，可将旧版传统纯文本格式导出件（如普通文本备份）转换为标准 `.pendo.zip` 以通过 Web 端导入：
+
+```bash
+python plugins/pendo/scripts/convert_text_export_to_pendo_bundle.py 你的文本备份.txt -o my_data.pendo.zip
 ```
 
 ## 设置
@@ -401,7 +416,8 @@ python-dateutil>=2.8.2
 - 确认条目设置了提醒时间
 
 **Q: 如何备份数据？**
-- 使用导出功能: `/pendo export md`
+- 使用设置页面的 Web 端导出功能
+- 或保存聊天端 `/pendo export <文件名>` 导出的 Markdown 档案
 - 或直接复制 `data/pendo.db` 文件
 
 **Q: 支持多用户吗？**
@@ -453,7 +469,11 @@ plugins/pendo/
 - JWT 登录鉴权，多用户会话隔离
 - Dashboard / 任务 / 事件 / 账本 / 日记 / 笔记 / 搜索 / 统计 / 设置 九大页面
 - Chart.js 可视化统计图表
+- 支持通过 Web 端完成全量 `.pendo.zip` 数据 Bundle 安全导入与导出、迁移审计
+- 添加历史文本备份转换脚本 `convert_text_export_to_pendo_bundle.py`
+- 优化部分底层模块设计，提升健壮性
 - `/pendo web` 聊天命令集成
+- 优化聊天端命令冗余调用提示机制
 - 账本页 UX 重设计（筛选、排序、分页、快速录入）
 
 ### V2.0 (2026-02-03)

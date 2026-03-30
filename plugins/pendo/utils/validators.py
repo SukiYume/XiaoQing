@@ -3,7 +3,7 @@
 
 提供统一的输入验证功能，确保数据安全性和一致性
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 from typing import Any, Optional
 
@@ -60,6 +60,10 @@ def validate_category(category: str, max_length: int = 50) -> str:
     
     return category.strip()
 
+
+def is_date_category(category: Any) -> bool:
+    return bool(re.match(r"^\d{4}-\d{2}-\d{2}$", str(category or "").strip()))
+
 def validate_tag(tag: str, max_length: int = 20) -> str:
     """验证标签名
     
@@ -84,6 +88,50 @@ def validate_tag(tag: str, max_length: int = 20) -> str:
         raise ValueError("标签名只能包含中文、英文、数字、下划线和短横线")
     
     return tag
+
+
+def default_task_category(now: Optional[datetime] = None) -> str:
+    """Return the default task date category used by CLI and web create flows."""
+    current = now or datetime.now()
+    target = current + timedelta(days=1) if current.hour >= 20 else current
+    return target.strftime("%Y-%m-%d")
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def is_empty_task_category(category: Any) -> bool:
+    text = str(category or "").strip()
+    return not text or text == "未分类"
+
+
+def derive_task_category(
+    category: Any,
+    due_time: Any = None,
+    reference_time: Any = None,
+) -> str:
+    """Resolve task category into either a date bucket or user-provided text."""
+    text = str(category or "").strip()
+    due_text = str(due_time or "").strip()
+    if due_text and (is_empty_task_category(text) or is_date_category(text)):
+        return due_text[:10]
+    if text and text != "未分类":
+        return text
+    reference_dt = _coerce_datetime(reference_time)
+    return default_task_category(reference_dt)
 
 def validate_title(title: str, max_length: int = 200) -> str:
     """验证标题
@@ -117,14 +165,18 @@ def sanitize_search_keyword(keyword: str) -> str:
     """
     if not keyword:
         return ""
-    
-    # 移除FTS特殊字符
-    keyword = re.sub(r'["*]', '', keyword)
-    
+
+    # 转成字符串并限制长度，避免把 IME 组合态或 FTS 操作符原样送进 MATCH
+    keyword = sanitize_text(str(keyword), 100)
+
+    # 移除/替换 FTS5 容易触发语法解析的字符，保留中文、字母、数字和空格检索
+    keyword = re.sub(r"[\"'`*:(){}\[\]+\-]", " ", keyword)
+    keyword = re.sub(r"\s+", " ", keyword).strip()
+
     # 限制长度
     if len(keyword) > 100:
         keyword = keyword[:100]
-    
+
     return keyword.strip()
 
 def validate_diary_content(content: str, max_length: int = 50000) -> str:
@@ -392,22 +444,22 @@ def normalize_task_fields(data: dict[str, Any], partial: bool = False) -> dict[s
     if not partial or title is not None:
         normalized["title"] = validate_title(title or "")
 
-    category = normalized.get("category")
-    if category is None and not partial:
-        category = "未分类"
-    if category is not None:
-        normalized["category"] = validate_category(category or "未分类")
-
-    if "content" in normalized:
-        normalized["content"] = sanitize_text(normalized.get("content") or "", 50000)
-    elif not partial:
-        normalized["content"] = ""
-
     due_time = normalized.get("due_time")
     if due_time in (None, ""):
         normalized["due_time"] = None
     elif due_time is not None:
         normalized["due_time"] = _normalize_iso_datetime(due_time, "due_time")
+
+    category = normalized.get("category")
+    if not partial or category is not None:
+        normalized["category"] = validate_category(
+            derive_task_category(category, normalized.get("due_time"), normalized.get("created_at"))
+        )
+
+    if "content" in normalized:
+        normalized["content"] = sanitize_text(normalized.get("content") or "", 50000)
+    elif not partial:
+        normalized["content"] = ""
 
     priority = normalized.get("priority")
     if priority is None and not partial:
@@ -445,7 +497,7 @@ def normalize_task_fields(data: dict[str, Any], partial: bool = False) -> dict[s
 
     completed_at = normalized.get("completed_at")
     status_value = normalized.get("status")
-    if status_value == "done":
+    if status_value in {"done", "cancelled"}:
         if completed_at in (None, ""):
             normalized["completed_at"] = datetime.now().isoformat(timespec="seconds")
         else:

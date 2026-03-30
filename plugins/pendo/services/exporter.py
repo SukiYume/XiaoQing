@@ -1,57 +1,40 @@
 """
-导入导出服务
-支持Markdown格式的导入导出
+Pendo Markdown 导出服务。
+
+插件端只保留导出能力：
+- `/pendo export <filename> [range] [type]`
+- 生成单个 Markdown 档案文件
+- 由上层命令处理器负责将文件通过 OneBot 发给 QQ 用户
 """
 
-import os
+from __future__ import annotations
+
 import re
-from typing import Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-import yaml
+from typing import Any
 
 from ..models.item import get_item_type_value
-from ..utils.error_handlers import error_result, preview_result, success_result
-from ..utils.time_utils import parse_search_date_range, parse_date_optional
+from ..utils.error_handlers import error_result, success_result
+from ..utils.time_utils import parse_search_date_range
 
 
 def _sanitize_user_id(user_id: str) -> str:
-    """清洗用户ID，防止路径遍历
-
-    Args:
-        user_id: 原始用户ID
-
-    Returns:
-        清洗后的安全用户ID
-    """
-    # 只保留字母数字、下划线和短横线
+    """清洗用户 ID，避免路径遍历。"""
     return re.sub(r"[^a-zA-Z0-9_-]", "_", user_id)
 
 
-def _validate_file_path(file_path: str, user_id: str) -> bool:
-    """验证文件路径是否安全
-
-    Args:
-        file_path: 文件路径
-        user_id: 用户ID
-
-    Returns:
-        是否安全
-    """
-    # 获取导出目录的绝对路径
-    safe_user_id = _sanitize_user_id(user_id)
-    export_dir = Path(__file__).parent.parent / "data" / "exports" / safe_user_id
-    export_dir_abs = export_dir.resolve()
-
-    # 获取目标文件的绝对路径
-    target_path = Path(file_path).resolve()
-
-    # 检查目标路径是否在导出目录内
-    try:
-        target_path.relative_to(export_dir_abs)
-        return True
-    except ValueError:
-        return False
+def _sanitize_export_filename(raw_name: str) -> str:
+    """清洗导出文件名，保留可读性并强制 .md 后缀。"""
+    name = (raw_name or "").strip().strip('"').strip("'")
+    if not name:
+        return ""
+    name = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", name).strip(" .")
+    if not name:
+        return ""
+    if not name.lower().endswith(".md"):
+        name = f"{name}.md"
+    return name
 
 
 def _get_export_dir(user_id: str) -> Path:
@@ -60,453 +43,617 @@ def _get_export_dir(user_id: str) -> Path:
 
 
 class ExporterService:
-    """导入导出服务"""
+    """Pendo 导出服务。"""
+
+    _EXPORT_TYPE_MAP = {
+        "event": "event",
+        "todo": "task",
+        "task": "task",
+        "note": "note",
+        "ledger": "ledger",
+        "diary": "diary",
+        "all": "all",
+        "全部": "all",
+        "*": "all",
+    }
+    _TYPE_ORDER = ["event", "task", "note", "ledger", "diary"]
+    _TYPE_LABELS = {
+        "event": "日程",
+        "task": "待办",
+        "note": "笔记",
+        "ledger": "记账",
+        "diary": "日记",
+    }
+    _TYPE_EXPORT_NAMES = {
+        "event": "event",
+        "task": "todo",
+        "note": "note",
+        "ledger": "ledger",
+        "diary": "diary",
+    }
+    _TYPE_SUMMARY_HINTS = {
+        "event": "按开始时间归档，保留地点、提醒、里程碑等上下文。",
+        "task": "按截止时间或创建时间排序，保留优先级与完成状态。",
+        "note": "按创建时间归档，保留分类与标签信息。",
+        "ledger": "按记账日期归档，突出收支方向、金额与分类。",
+        "diary": "按日记日期归档，保留天气、地点、心情等记录。",
+    }
 
     def __init__(self, db):
         self.db = db
 
     def export_markdown(self, user_id: str, args: str, context: dict[str, Any]) -> dict[str, Any]:
-        """
-        导出为Markdown文件
+        """导出为单个 Markdown 档案文件。"""
+        params = self._parse_export_args(args)
+        if params.get("status") == "error":
+            return params
 
-        Args:
-            user_id: 用户ID
-            args: 参数，如 "range=2026-01-01..2026-01-31"
-            context: 上下文
-        """
-        # 解析参数
-        params = self._parse_export_params(args)
-
-        # 获取数据
-        filters = {}
-        date_field = params.get("date_field", "created_at")
-        if params.get("start_date"):
-            filters["start_date"] = params["start_date"]
-            filters["date_field"] = date_field
-        if params.get("end_date"):
-            filters["end_date"] = params["end_date"]
-            filters["date_field"] = date_field
-
-        items = self.db.items.get_items(user_id, filters=filters, limit=10000)
-
+        items = self._collect_items(
+            user_id=user_id,
+            selected_types=params["types"],
+            start_date=params["start_date"],
+            end_date=params["end_date"],
+        )
         if not items:
-            return success_result("没有找到要导出的数据")
-
-        # 按类型分组
-        items_by_type = {"event": [], "task": [], "note": [], "diary": []}
-
-        for item in items:
-            item_type = get_item_type_value(item.type)
-            if item_type in items_by_type:
-                items_by_type[item_type].append(item)
-
-        # 生成Markdown文件
-        export_format = params.get("format", "by_type")  # by_type 或 by_date
-
-        if export_format == "by_type":
-            markdown_files = self._export_by_type(items_by_type, user_id, params)
-        else:
-            markdown_files = self._export_by_date(items, user_id, params)
-
-        # 返回文件信息
-        return success_result(f"已生成 {len(markdown_files)} 个Markdown文件", files=markdown_files)
-
-    def _parse_export_params(self, args: str) -> dict[str, Any]:
-        """解析导出参数"""
-        params = {
-            "format": "by_type",  # by_type 或 by_date
-        }
-
-        # 解析 range=...
-        range_match = re.search(r"range=([^\s]+)", args)
-        if range_match:
-            range_str = range_match.group(1)
-            start_date, end_date = parse_search_date_range(range_str)
-            if start_date and end_date:
-                params["start_date"] = start_date
-                params["end_date"] = end_date
-            else:
-                single_date = parse_date_optional(range_str)
-                if single_date:
-                    params["start_date"] = single_date + "T00:00:00"
-                    params["end_date"] = single_date + "T23:59:59"
-
-        # 解析 format=...
-        format_match = re.search(r"format=(by_type|by_date)", args)
-        if format_match:
-            params["format"] = format_match.group(1)
-
-        return params
-
-    def _export_by_type(
-        self, items_by_type: dict[str, list[Any]], user_id: str, params: dict[str, Any]
-    ) -> list[str]:
-        """按类型导出"""
-        files = []
-        safe_user_id = _sanitize_user_id(user_id)
-        export_dir = Path(__file__).parent.parent / "data" / "exports" / safe_user_id
-        export_dir.mkdir(parents=True, exist_ok=True)
-
-        type_names = {"event": "日程", "task": "待办", "note": "笔记", "diary": "日记"}
-
-        for item_type, items in items_by_type.items():
-            if not items:
-                continue
-
-            filename = (
-                f"{type_names.get(item_type, item_type)}_{datetime.now().strftime('%Y%m%d')}.md"
-            )
-            filepath = export_dir / filename
-
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(f"# {type_names.get(item_type, item_type)}\n\n")
-                f.write(f"导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"条目数量: {len(items)}\n\n")
-                f.write("---\n\n")
-
-                for item in items:
-                    f.write(self._item_to_markdown(item))
-                    f.write("\n---\n\n")
-
-            files.append(str(filepath))
-
-        return files
-
-    def _export_by_date(self, items: list[Any], user_id: str, params: dict[str, Any]) -> list[str]:
-        """按日期导出"""
-        files = []
-        safe_user_id = _sanitize_user_id(user_id)
-        export_dir = Path(__file__).parent.parent / "data" / "exports" / safe_user_id
-        export_dir.mkdir(parents=True, exist_ok=True)
-
-        # 按日期分组
-        items_by_date = {}
-        for item in items:
-            # 使用created_at的日期部分作为key
-            date_str = item.created_at[:10]
-            if date_str not in items_by_date:
-                items_by_date[date_str] = []
-            items_by_date[date_str].append(item)
-
-        # 为每个日期生成文件
-        for date_str, date_items in sorted(items_by_date.items()):
-            filename = f"{date_str}.md"
-            filepath = export_dir / filename
-
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(f"# {date_str}\n\n")
-                f.write(f"条目数量: {len(date_items)}\n\n")
-                f.write("---\n\n")
-
-                for item in date_items:
-                    f.write(self._item_to_markdown(item))
-                    f.write("\n---\n\n")
-
-            files.append(str(filepath))
-
-        return files
-
-    def _item_to_markdown(self, item) -> str:
-        """将条目转换为Markdown格式"""
-        lines = []
-
-        # 标题
-        title = item.title or "无标题"
-        lines.append(f"## {title}\n")
-
-        # Front Matter (YAML)
-        item_type = get_item_type_value(item.type)
-        front_matter = {
-            "id": item.id,
-            "type": item_type,
-            "created_at": item.created_at,
-            "updated_at": item.updated_at,
-        }
-
-        if item.tags:
-            front_matter["tags"] = item.tags
-        if item.category:
-            front_matter["category"] = item.category
-
-        # 类型特定字段
-        if item_type == "event":
-            if getattr(item, "start_time", None):
-                front_matter["start_time"] = item.start_time
-            if getattr(item, "end_time", None):
-                front_matter["end_time"] = item.end_time
-            if getattr(item, "location", None):
-                front_matter["location"] = item.location
-
-        elif item_type == "task":
-            if getattr(item, "due_time", None):
-                front_matter["due_time"] = item.due_time
-            if getattr(item, "priority", None):
-                priority_val = (
-                    item.priority.value if hasattr(item.priority, "value") else item.priority
-                )
-                front_matter["priority"] = priority_val
-            if getattr(item, "status", None):
-                status_val = item.status.value if hasattr(item.status, "value") else item.status
-                front_matter["status"] = status_val
-
-        elif item_type == "diary":
-            if getattr(item, "diary_date", None):
-                front_matter["diary_date"] = item.diary_date
-            if getattr(item, "mood", None):
-                front_matter["mood"] = item.mood
-
-        # 写入Front Matter
-        lines.append("```yaml")
-        lines.append(yaml.dump(front_matter, allow_unicode=True, default_flow_style=False))
-        lines.append("```\n")
-
-        # 正文内容
-        if item.content:
-            lines.append(item.content)
-
-        lines.append("")
-
-        return "\n".join(lines)
-
-    def import_markdown(self, user_id: str, args: str, context: dict[str, Any]) -> dict[str, Any]:
-        """
-        导入Markdown文件
-
-        当前支持直接导入导出目录下的 Markdown 文件路径
-        """
-        normalized = args.strip()
-        if normalized.lower().startswith("md "):
-            normalized = normalized[3:].strip()
-        elif normalized.lower() == "md":
-            normalized = ""
-
-        preview = False
-        if normalized.lower().startswith("preview "):
-            preview = True
-            normalized = normalized[8:].strip()
-        elif normalized.lower() == "preview":
-            preview = True
-            normalized = ""
-
-        if not normalized:
-            export_dir = _get_export_dir(user_id)
-            return error_result(
-                "请指定导入文件路径。\n\n"
-                f"示例:\n/pendo import md {export_dir / '日程_20300101.md'}\n"
-                f"/pendo import md preview {export_dir / '日程_20300101.md'}"
+            return success_result(
+                f"没有找到符合条件的数据\n文件名: {params['filename']}\n"
+                f"时间范围: {params['range_label']}\n类型: {params['type_label']}"
             )
 
-        file_path = normalized.strip().strip('"')
-        if preview:
-            return self.import_preview(user_id, file_path)
-        return self.import_from_file(user_id, file_path)
+        export_dir = _get_export_dir(user_id)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        file_path = export_dir / params["filename"]
 
-    def import_from_file(
-        self, user_id: str, file_path: str, preview: bool = False
-    ) -> dict[str, Any]:
-        """
-        从文件导入
+        markdown = self._render_markdown_document(user_id, items, params)
+        file_path.write_text(markdown, encoding="utf-8")
 
-        Args:
-            user_id: 用户ID
-            file_path: 文件路径
-            preview: 是否为预览模式
-        """
-        # 验证文件路径安全性
-        if not _validate_file_path(file_path, user_id):
-            return error_result(f"无效的文件路径: {file_path}")
-
-        if not os.path.exists(file_path):
-            return error_result(f"文件不存在: {file_path}")
-
-        # 读取文件
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # 解析Markdown
-        items = self._parse_markdown_content(content, user_id)
-
-        if preview:
-            # 预览模式：只统计，不实际导入
-            return self._import_preview(items, user_id)
-
-        # 导入到数据库
-        imported = 0
-        updated = 0
-        errors = []
-
-        for item_data in items:
-            try:
-                # 确保owner_id正确（导入时必须是当前用户）
-                item_data["owner_id"] = user_id
-
-                # 检查是否已存在（只能查询和更新自己的数据）
-                existing = None
-                if "id" in item_data:
-                    existing = self.db.items.get_item(item_data["id"], owner_id=user_id)
-
-                if existing:
-                    # 更新（只能更新自己的数据）
-                    self.db.items.update_item(item_data["id"], item_data, owner_id=user_id)
-                    updated += 1
-                else:
-                    # 新增
-                    self.db.items.insert_item(item_data)
-                    imported += 1
-            except Exception as e:
-                errors.append(f"导入失败: {item_data.get('title', 'unknown')} - {str(e)}")
+        counts = self._build_counts(items)
+        self._log_export(user_id, params, file_path, items, counts)
 
         return success_result(
-            f"导入完成!\n新增: {imported}\n更新: {updated}\n错误: {len(errors)}",
-            errors=errors if errors else None,
+            (
+                f"已导出 {len(items)} 条记录到 `{params['filename']}`\n"
+                f"时间范围: {params['range_label']}\n"
+                f"类型: {params['type_label']}"
+            ),
+            file_path=str(file_path.resolve()),
+            file_name=params["filename"],
+            counts=counts,
+            record_count=len(items),
+            range_label=params["range_label"],
+            type_label=params["type_label"],
         )
 
-    def import_preview(self, user_id: str, file_path: str) -> dict[str, Any]:
-        """
-        导入预览
+    def _parse_export_args(self, args: str) -> dict[str, Any]:
+        tokens = self._tokenize_args(args)
+        if tokens and tokens[0].lower() == "md":
+            tokens = tokens[1:]
 
-        Args:
-            user_id: 用户ID
-            file_path: 文件路径
-        """
-        # 验证文件路径安全性
-        if not _validate_file_path(file_path, user_id):
-            return error_result(f"无效的文件路径: {file_path}")
+        if not tokens:
+            return error_result(
+                "请提供导出文件名。\n\n"
+                "示例:\n"
+                "/pendo export 我的档案\n"
+                "/pendo export 工作回顾 last30d event,todo\n"
+                "/pendo export 账本快照 2026-03 ledger"
+            )
 
-        if not os.path.exists(file_path):
-            return error_result(f"文件不存在: {file_path}")
+        filename = _sanitize_export_filename(tokens[0])
+        if not filename:
+            return error_result("导出文件名无效，请换一个更简单的名字")
 
-        # 读取文件
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        rest = tokens[1:]
+        range_token = None
+        if rest and self._looks_like_range_spec(rest[0]):
+            range_token = rest.pop(0)
 
-        # 解析Markdown
-        items = self._parse_markdown_content(content, user_id)
+        type_token = ",".join(rest) if rest else None
 
-        return self._import_preview(items, user_id)
+        range_info = self._parse_range_spec(range_token)
+        if range_info.get("status") == "error":
+            return range_info
 
-    def _import_preview(self, items: list[dict[str, Any]], user_id: str) -> dict[str, Any]:
-        """
-        生成导入预览
+        type_info = self._parse_type_spec(type_token)
+        if type_info.get("status") == "error":
+            return type_info
 
-        Args:
-            items: 解析出的条目列表
-            user_id: 用户ID
+        return {
+            "status": "success",
+            "filename": filename,
+            "start_date": range_info["start_date"],
+            "end_date": range_info["end_date"],
+            "range_label": range_info["label"],
+            "types": type_info["types"],
+            "type_label": type_info["label"],
+        }
 
-        Returns:
-            预览结果
-        """
-        new_count = 0
-        update_count = 0
-        items_preview = []
+    def _tokenize_args(self, args: str) -> list[str]:
+        pattern = r'"([^"]+)"|\'([^\']+)\'|(\S+)'
+        tokens: list[str] = []
+        for match in re.finditer(pattern, args or ""):
+            token = next((group for group in match.groups() if group), "")
+            if token:
+                tokens.append(token.strip())
+        return tokens
 
-        for item_data in items:
-            # 检查是否已存在（仅限当前用户的数据）
-            existing = None
-            if "id" in item_data:
-                existing = self.db.items.get_item(item_data["id"], owner_id=user_id)
+    def _looks_like_range_spec(self, token: str) -> bool:
+        normalized = (token or "").strip().lower()
+        if not normalized:
+            return False
+        if normalized in {"all", "全部", "*", "today", "tomorrow", "week", "month", "year", "今天", "本周", "本月", "今年"}:
+            return True
+        if ".." in normalized:
+            return True
+        if re.fullmatch(r"last\d+d", normalized):
+            return True
+        if re.fullmatch(r"\d{4}", normalized):
+            return True
+        if re.fullmatch(r"\d{4}-\d{2}", normalized):
+            return True
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
+            return True
+        return False
 
-            if existing:
-                update_count += 1
-                preview_type = "更新"
-            else:
-                new_count += 1
-                preview_type = "新增"
+    def _parse_range_spec(self, token: str | None) -> dict[str, Any]:
+        normalized = (token or "").strip()
+        if not normalized or normalized.lower() in {"all", "*"} or normalized == "全部":
+            return {
+                "status": "success",
+                "start_date": None,
+                "end_date": None,
+                "label": "全部时间",
+            }
 
-            # 添加到预览列表（最多显示5个）
-            if len(items_preview) < 5:
-                items_preview.append(
-                    {
-                        "type": preview_type,
-                        "title": item_data.get("title", "无标题"),
-                        "item_type": item_data.get("type", "unknown"),
-                        "id": item_data.get("id", "N/A"),
-                    }
-                )
+        start_date, end_date = parse_search_date_range(normalized)
+        if not start_date or not end_date:
+            return error_result(f"无法解析时间范围: {normalized}")
 
-        # 构建预览消息
-        lines = ["📋 导入预览"]
-        lines.append(f"\n预计新增: {new_count} 条")
-        lines.append(f"预计更新: {update_count} 条")
-        lines.append(f"总计: {len(items)} 条")
+        return {
+            "status": "success",
+            "start_date": start_date,
+            "end_date": end_date,
+            "label": f"{self._format_time_value(start_date)} .. {self._format_time_value(end_date)}",
+        }
 
-        if items_preview:
-            lines.append("\n前5个条目预览:")
-            for i, item in enumerate(items_preview, 1):
-                type_icon = "➕" if item["type"] == "新增" else "✏️"
-                lines.append(
-                    f"{i}. {type_icon} [{item['item_type']}] {item['title']} ({item['id']})"
-                )
+    def _parse_type_spec(self, token: str | None) -> dict[str, Any]:
+        normalized = (token or "").strip()
+        if not normalized:
+            types = list(self._TYPE_ORDER)
+            return {
+                "status": "success",
+                "types": types,
+                "label": "全部类型",
+            }
 
-        if len(items) > 5:
-            lines.append(f"\n... 还有 {len(items) - 5} 个条目")
+        parts = [
+            part.strip().lower()
+            for part in re.split(r"[,，+/|]", normalized)
+            if part.strip()
+        ]
+        if not parts:
+            return error_result(f"无法解析类型筛选: {token}")
 
-        lines.append("\n💡 确认导入请发送文件，取消请忽略")
+        selected: list[str] = []
+        for part in parts:
+            mapped = self._EXPORT_TYPE_MAP.get(part)
+            if mapped is None:
+                allowed = ", ".join(["event", "todo", "note", "ledger", "diary"])
+                return error_result(f"未知导出类型: {part}\n可选类型: {allowed}")
+            if mapped == "all":
+                selected = list(self._TYPE_ORDER)
+                break
+            if mapped not in selected:
+                selected.append(mapped)
 
-        return preview_result(
-            "\n".join(lines),
-            new_count=new_count,
-            update_count=update_count,
-            total_count=len(items),
-            items_preview=items_preview,
-        )
+        if not selected:
+            selected = list(self._TYPE_ORDER)
 
-    def _parse_markdown_content(self, content: str, user_id: str) -> list[dict[str, Any]]:
-        """解析Markdown内容"""
-        items = []
+        ordered = [item_type for item_type in self._TYPE_ORDER if item_type in selected]
+        label = "、".join(self._TYPE_LABELS[item_type] for item_type in ordered)
+        return {
+            "status": "success",
+            "types": ordered,
+            "label": label,
+        }
 
-        # 分割条目 (用 --- 分隔)
-        sections = re.split(r"\n---+\n", content)
-
-        for section in sections:
-            if not section.strip():
-                continue
-
-            item = self._parse_markdown_item(section, user_id)
-            if item:
-                items.append(item)
-
+    def _collect_items(
+        self,
+        user_id: str,
+        selected_types: list[str],
+        start_date: str | None,
+        end_date: str | None,
+    ) -> list[Any]:
+        items: list[Any] = []
+        for item_type in selected_types:
+            type_items = self.db.items.get_items(
+                user_id,
+                filters={"type": item_type, "limit": 10000},
+                limit=10000,
+            )
+            for item in type_items:
+                if self._item_matches_range(item, item_type, start_date, end_date):
+                    items.append(item)
         return items
 
-    def _parse_markdown_item(self, section: str, user_id: str) -> Optional[dict[str, Any]]:
-        """解析单个Markdown条目"""
-        # 提取Front Matter
-        yaml_match = re.search(r"```yaml\n(.*?)\n```", section, re.DOTALL)
+    def _item_matches_range(
+        self,
+        item: Any,
+        item_type: str,
+        start_date: str | None,
+        end_date: str | None,
+    ) -> bool:
+        if not start_date or not end_date:
+            return True
 
-        item_data = {"owner_id": user_id}
+        item_dt = self._get_sort_datetime(item, item_type)
+        if item_dt is None:
+            return False
 
-        if yaml_match:
-            yaml_content = yaml_match.group(1)
-            try:
-                front_matter = yaml.safe_load(yaml_content)
-                if front_matter:
-                    item_data.update(front_matter)
-            except (yaml.YAMLError, ValueError, TypeError):
-                # YAML解析失败，使用默认值
-                pass
+        start_dt = self._parse_datetime(start_date)
+        end_dt = self._parse_datetime(end_date)
+        if start_dt is None or end_dt is None:
+            return True
+        return start_dt <= item_dt <= end_dt
 
-        # 提取标题
-        title_match = re.search(r"^##\s+(.+)$", section, re.MULTILINE)
-        if title_match:
-            item_data["title"] = title_match.group(1).strip()
+    def _get_sort_datetime(self, item: Any, item_type: str) -> datetime | None:
+        candidates: list[str | None] = []
+        if item_type == "event":
+            candidates = [getattr(item, "start_time", None), getattr(item, "created_at", None)]
+        elif item_type == "task":
+            candidates = [getattr(item, "due_time", None), getattr(item, "created_at", None)]
+        elif item_type == "ledger":
+            candidates = [getattr(item, "ledger_date", None), getattr(item, "created_at", None)]
+        elif item_type == "diary":
+            candidates = [getattr(item, "diary_date", None), getattr(item, "created_at", None)]
+        else:
+            candidates = [getattr(item, "created_at", None)]
 
-        # 提取内容 (去除Front Matter和标题)
-        content = section
-        if yaml_match:
-            content = content.replace(yaml_match.group(0), "")
-        if title_match:
-            content = content.replace(title_match.group(0), "")
+        for raw in candidates:
+            parsed = self._parse_datetime(raw)
+            if parsed is not None:
+                return parsed
+        return None
 
-        item_data["content"] = content.strip()
+    def _parse_datetime(self, value: str | None) -> datetime | None:
+        if not value:
+            return None
 
-        # 确保有类型
-        if "type" not in item_data:
-            item_data["type"] = "note"
+        text = str(value).strip()
+        if not text:
+            return None
 
-        # 确保有时间戳
-        if "created_at" not in item_data:
-            item_data["created_at"] = datetime.now().isoformat()
-        if "updated_at" not in item_data:
-            item_data["updated_at"] = datetime.now().isoformat()
+        try:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+                dt = datetime.strptime(text, "%Y-%m-%d")
+            else:
+                dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
-        return item_data if item_data.get("title") or item_data.get("content") else None
+        if dt.tzinfo is not None:
+            return dt.astimezone().replace(tzinfo=None)
+        return dt
+
+    def _build_counts(self, items: list[Any]) -> dict[str, int]:
+        counts = {key: 0 for key in self._TYPE_ORDER}
+        for item in items:
+            item_type = get_item_type_value(getattr(item, "type", None))
+            if item_type in counts:
+                counts[item_type] += 1
+        return counts
+
+    def _render_markdown_document(
+        self,
+        user_id: str,
+        items: list[Any],
+        params: dict[str, Any],
+    ) -> str:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        counts = self._build_counts(items)
+        sections: list[str] = []
+
+        header = [
+            f"# Pendo 导出档案 · {Path(params['filename']).stem}",
+            "",
+            "> 这是一份可读性优先的 Markdown 档案，适合备份、分享和归档。",
+            ">",
+            f"> - 导出时间: {now}",
+            f"> - 用户标识: {user_id}",
+            f"> - 时间范围: {params['range_label']}",
+            f"> - 类型筛选: {params['type_label']}",
+            f"> - 总条目数: {len(items)}",
+            "",
+            "## 导出摘要",
+            "",
+            "| 类型 | 数量 | 说明 |",
+            "| --- | ---: | --- |",
+        ]
+        for item_type in self._TYPE_ORDER:
+            if counts[item_type] <= 0:
+                continue
+            header.append(
+                f"| {self._TYPE_LABELS[item_type]} (`{self._TYPE_EXPORT_NAMES[item_type]}`) | "
+                f"{counts[item_type]} | {self._TYPE_SUMMARY_HINTS[item_type]} |"
+            )
+        header.extend(
+            [
+                "",
+                "---",
+                "",
+                "## 目录",
+                "",
+            ]
+        )
+
+        for item_type in self._TYPE_ORDER:
+            if counts[item_type] <= 0:
+                continue
+            header.append(
+                f"- [{self._TYPE_LABELS[item_type]} · {counts[item_type]} 条]"
+                f"(#{self._TYPE_LABELS[item_type]})"
+            )
+
+        for item_type in self._TYPE_ORDER:
+            type_items = [
+                item for item in items if get_item_type_value(getattr(item, "type", None)) == item_type
+            ]
+            if not type_items:
+                continue
+            sections.append(self._render_type_section(item_type, type_items))
+
+        footer = [
+            "---",
+            "",
+            "_由 Pendo 导出生成。此文件为静态快照，不会随原始数据自动同步。_",
+            "",
+        ]
+
+        return "\n".join(header + sections + footer)
+
+    def _render_type_section(self, item_type: str, items: list[Any]) -> str:
+        sorted_items = sorted(
+            items,
+            key=lambda item: self._get_sort_datetime(item, item_type) or datetime.min,
+        )
+        blocks = [
+            f"## {self._TYPE_LABELS[item_type]}",
+            "",
+            f"> 共 {len(sorted_items)} 条，导出名为 `{self._TYPE_EXPORT_NAMES[item_type]}`。",
+            "",
+        ]
+        for index, item in enumerate(sorted_items, start=1):
+            blocks.append(self._render_item_block(item_type, item, index))
+        return "\n".join(blocks)
+
+    def _render_item_block(self, item_type: str, item: Any, index: int) -> str:
+        title = (getattr(item, "title", "") or "").strip() or "无标题"
+        meta_rows = self._build_common_meta_rows(item_type, item)
+        extra_rows = self._build_type_specific_rows(item_type, item)
+        all_rows = meta_rows + extra_rows
+
+        lines = [
+            f"### {index:02d}. {title}",
+            "",
+            f"> `{self._TYPE_EXPORT_NAMES[item_type]}` · `id:{getattr(item, 'id', 'N/A')}`",
+            "",
+            "| 字段 | 内容 |",
+            "| --- | --- |",
+        ]
+        for label, value in all_rows:
+            lines.append(f"| {label} | {value} |")
+
+        body_sections = self._build_body_sections(item_type, item)
+        if body_sections:
+            lines.extend([""] + body_sections)
+
+        lines.extend(["", "---", ""])
+        return "\n".join(lines)
+
+    def _build_common_meta_rows(self, item_type: str, item: Any) -> list[tuple[str, str]]:
+        rows = [
+            ("分类", self._escape_table(self._value_or_dash(getattr(item, "category", "")))),
+            ("标签", self._escape_table(self._format_tags(getattr(item, "tags", [])))),
+            ("创建时间", self._escape_table(self._format_time_value(getattr(item, "created_at", None)))),
+            ("更新时间", self._escape_table(self._format_time_value(getattr(item, "updated_at", None)))),
+        ]
+        if item_type == "ledger":
+            rows[0] = (
+                "分类",
+                self._escape_table(self._value_or_dash(getattr(item, "ledger_category", ""))),
+            )
+        return rows
+
+    def _build_type_specific_rows(self, item_type: str, item: Any) -> list[tuple[str, str]]:
+        if item_type == "event":
+            return [
+                (
+                    "开始时间",
+                    self._escape_table(self._format_time_value(getattr(item, "start_time", None))),
+                ),
+                (
+                    "结束时间",
+                    self._escape_table(self._format_time_value(getattr(item, "end_time", None))),
+                ),
+                ("地点", self._escape_table(self._value_or_dash(getattr(item, "location", "")))),
+                (
+                    "提醒",
+                    self._escape_table(
+                        self._format_time_list(getattr(item, "remind_times", []), empty="未设置")
+                    ),
+                ),
+            ]
+
+        if item_type == "task":
+            return [
+                (
+                    "截止时间",
+                    self._escape_table(self._format_time_value(getattr(item, "due_time", None))),
+                ),
+                (
+                    "优先级",
+                    self._escape_table(self._format_priority(getattr(item, "priority", None))),
+                ),
+                (
+                    "状态",
+                    self._escape_table(self._format_task_status(getattr(item, "status", None))),
+                ),
+                (
+                    "完成时间",
+                    self._escape_table(self._format_time_value(getattr(item, "completed_at", None))),
+                ),
+            ]
+
+        if item_type == "note":
+            return []
+
+        if item_type == "ledger":
+            amount = getattr(item, "amount", None)
+            direction = getattr(item, "direction", "")
+            amount_text = self._format_ledger_amount(amount, direction)
+            return [
+                (
+                    "记账日期",
+                    self._escape_table(self._format_time_value(getattr(item, "ledger_date", None))),
+                ),
+                ("收支方向", self._escape_table(self._format_direction(direction))),
+                ("金额", self._escape_table(amount_text)),
+                ("备注", self._escape_table(self._value_or_dash(getattr(item, "remark", "")))),
+            ]
+
+        if item_type == "diary":
+            return [
+                (
+                    "日记日期",
+                    self._escape_table(self._format_time_value(getattr(item, "diary_date", None))),
+                ),
+                ("天气", self._escape_table(self._value_or_dash(getattr(item, "weather", "")))),
+                ("地点", self._escape_table(self._value_or_dash(getattr(item, "location", "")))),
+                ("心情", self._escape_table(self._value_or_dash(getattr(item, "mood", "")))),
+            ]
+
+        return []
+
+    def _build_body_sections(self, item_type: str, item: Any) -> list[str]:
+        sections: list[str] = []
+        content = (getattr(item, "content", "") or "").strip()
+        if content:
+            sections.extend(["**正文**", "", content])
+
+        if item_type == "event":
+            milestones = getattr(item, "milestones", []) or []
+            if milestones:
+                sections.extend(["", "**里程碑**", ""])
+                for milestone in milestones:
+                    name = self._value_or_dash(milestone.get("name", "未命名节点"))
+                    when = self._format_time_value(milestone.get("time"))
+                    sections.append(f"- {name}: {when}")
+
+            notes = (getattr(item, "notes", "") or "").strip()
+            if notes:
+                sections.extend(["", "**补充备注**", "", notes])
+
+        return sections
+
+    def _format_tags(self, tags: Any) -> str:
+        if not tags:
+            return "无"
+        if isinstance(tags, list):
+            filtered = [str(tag).strip() for tag in tags if str(tag).strip()]
+            return " ".join(f"`#{tag}`" for tag in filtered) if filtered else "无"
+        return str(tags)
+
+    def _format_priority(self, value: Any) -> str:
+        mapping = {
+            1: "P1 / 紧急",
+            2: "P2 / 高",
+            3: "P3 / 中",
+            4: "P4 / 低",
+            5: "P5 / 最低",
+        }
+        raw = getattr(value, "value", value)
+        try:
+            return mapping.get(int(raw), str(raw))
+        except (TypeError, ValueError):
+            return self._value_or_dash(raw)
+
+    def _format_task_status(self, value: Any) -> str:
+        mapping = {
+            "todo": "待处理",
+            "in_progress": "进行中",
+            "done": "已完成",
+            "cancelled": "已取消",
+        }
+        raw = getattr(value, "value", value)
+        return mapping.get(str(raw), self._value_or_dash(raw))
+
+    def _format_direction(self, value: Any) -> str:
+        mapping = {
+            "income": "收入",
+            "expense": "支出",
+        }
+        return mapping.get(str(value), self._value_or_dash(value))
+
+    def _format_ledger_amount(self, amount: Any, direction: Any) -> str:
+        direction_text = self._format_direction(direction)
+        try:
+            return f"{direction_text} ¥{float(amount):.2f}"
+        except (TypeError, ValueError):
+            return self._value_or_dash(amount)
+
+    def _format_time_value(self, value: Any) -> str:
+        if value in (None, ""):
+            return "未设置"
+        text = str(value).strip()
+        if not text:
+            return "未设置"
+
+        parsed = self._parse_datetime(text)
+        if parsed is None:
+            return text
+
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            return parsed.strftime("%Y-%m-%d")
+        return parsed.strftime("%Y-%m-%d %H:%M")
+
+    def _format_time_list(self, values: Any, empty: str = "无") -> str:
+        if not values:
+            return empty
+        if not isinstance(values, list):
+            return self._format_time_value(values)
+        rendered = [self._format_time_value(value) for value in values if value]
+        return "、".join(rendered) if rendered else empty
+
+    def _value_or_dash(self, value: Any) -> str:
+        text = str(value).strip() if value not in (None, "") else ""
+        return text or "无"
+
+    def _escape_table(self, text: str) -> str:
+        return str(text).replace("|", "\\|").replace("\n", "<br>")
+
+    def _log_export(
+        self,
+        user_id: str,
+        params: dict[str, Any],
+        file_path: Path,
+        items: list[Any],
+        counts: dict[str, int],
+    ) -> None:
+        if not hasattr(self.db, "log_transfer"):
+            return
+        try:
+            self.db.log_transfer(
+                owner_id=user_id,
+                action="export",
+                filename=file_path.name,
+                types=[self._TYPE_EXPORT_NAMES[item_type] for item_type in params["types"]],
+                record_count=len(items),
+                result_summary={
+                    "range": params["range_label"],
+                    "type_label": params["type_label"],
+                    "counts": counts,
+                    "path": str(file_path.resolve()),
+                },
+            )
+        except Exception:
+            # 审计日志失败不应影响导出主流程
+            return
