@@ -105,7 +105,7 @@ class NoteHandler(DbOpsMixin):
             parsed["category"] = resolve_default_category(self.db, user_id)
 
         clean_content = parsed["content"]
-        title = self._generate_note_title(clean_content)
+        title = parsed["title"]
 
         # 创建数据
         from ..models.item import NoteItem
@@ -160,10 +160,32 @@ class NoteHandler(DbOpsMixin):
 
         支持格式：
         - 内容 cat:xxx #tag1 #tag2
+        - title:标题 content 详细内容 cat:xxx #tag1 #tag2
         """
         meta = extract_metadata(text)
+        content_text = meta["text"]
+
+        title = None
+        
+        # 1. 带引号的 title
+        m1 = re.match(r'^title:"([^"]+)"\s*content[\s:]+(.*)$', content_text, re.IGNORECASE | re.DOTALL)
+        if m1:
+            title = m1.group(1).strip()
+            content_text = m1.group(2).strip()
+        else:
+            # 2. 不带引号的 title，需要有明确的 content 关键字并前置空格
+            m2 = re.match(r'^title:([^\s]+)\s+content[\s:]+(.*)$', content_text, re.IGNORECASE | re.DOTALL)
+            if m2:
+                title = m2.group(1).strip()
+                content_text = m2.group(2).strip()
+
+        # 如果没有显式的 title，title 和 content 都是 content_text
+        if not title:
+            title = content_text
+
         return {
-            "content": meta["text"],
+            "title": title,
+            "content": content_text,
             "category": meta["category"] or "",
             "tags": meta["tags"],
         }
@@ -400,7 +422,7 @@ class NoteHandler(DbOpsMixin):
         parsed = self._parse_note_text(new_content)
 
         clean_content = parsed["content"]
-        title = self._generate_note_title(clean_content)
+        title = parsed["title"]
 
         # 构建更新
         updates = {"title": title, "content": clean_content, "type": ItemType.NOTE.value}
