@@ -2,11 +2,21 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
+import { derivePresetRange, fetchItemRangeBounds, todayRangeKey } from '../utils/date_ranges.js';
 import { isValidDateInput } from '../utils/format.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-events-redesign-styles';
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const LIST_RANGE_OPTIONS = [
+    { value: 'week', label: '本周' },
+    { value: 'month', label: '本月' },
+    { value: 'quarter', label: '本季' },
+    { value: 'year', label: '今年' },
+    { value: 'last_year', label: '去年' },
+    { value: 'custom', label: '自定义' },
+    { value: 'all', label: '全部' },
+];
 
 let _container = null;
 let _dataChangedHandler = null;
@@ -14,9 +24,11 @@ let _state = {
     viewMode: 'calendar',
     monthCursor: firstDayOfMonth(new Date()),
     selectedDate: dateKey(new Date()),
-    listRange: '30d',
+    listRange: 'month',
     customStart: '',
     customEnd: '',
+    allRangeStart: '',
+    allRangeEnd: '',
     filters: {
         keyword: '',
         category: '',
@@ -94,34 +106,26 @@ function currentRange() {
             end: dateKey(lastDayOfMonth(_state.monthCursor)),
         };
     }
+    if (_state.listRange === 'all' && _state.allRangeStart && _state.allRangeEnd) {
+        return { start: _state.allRangeStart, end: _state.allRangeEnd };
+    }
+    return derivePresetRange(_state.listRange, {
+        today: todayRangeKey(),
+        customStart: _state.customStart,
+        customEnd: _state.customEnd,
+        customFallback: '',
+    });
+}
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    if (_state.listRange === '90d') {
-        const end = new Date(today);
-        end.setDate(end.getDate() + 89);
-        return { start: dateKey(today), end: dateKey(end) };
-    }
-    if (_state.listRange === 'year') {
-        return {
-            start: `${today.getFullYear()}-01-01`,
-            end: `${today.getFullYear()}-12-31`,
-        };
-    }
-    if (_state.listRange === 'custom' && _state.customStart && _state.customEnd) {
-        return { start: _state.customStart, end: _state.customEnd };
-    }
-    if (_state.listRange === 'month') {
-        return {
-            start: dateKey(firstDayOfMonth(today)),
-            end: dateKey(lastDayOfMonth(today)),
-        };
-    }
-
-    const end = new Date(today);
-    end.setDate(end.getDate() + 29);
-    return { start: dateKey(today), end: dateKey(end) };
+async function fetchAllRangeBounds() {
+    return fetchItemRangeBounds(api, {
+        type: 'event',
+        sortField: 'start_time',
+        startField: 'start_time',
+        endField: 'end_time',
+        fallbackEnd: dateKey(new Date()),
+        minimumEnd: dateKey(new Date()),
+    });
 }
 
 function eventMap() {
@@ -209,7 +213,7 @@ function ensureStyles() {
             border-radius: 999px; padding: 9px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
         }
         .events-range-btn.active { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.32); color: var(--color-events); }
-        .events-inline-dates { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .events-inline-dates { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
         .events-inline-dates .events-inline-date { width: 164px; }
         .events-grid { display: grid; grid-template-columns: minmax(0, 1.16fr) minmax(320px, 0.84fr); gap: 16px; align-items: start; }
         .events-panel {
@@ -678,11 +682,8 @@ function renderTimelinePage() {
                 <div class="events-timeline-tools">
                     <div class="events-timeline-toolbar">
                         <div class="events-list-range">
-                        <button class="events-range-btn ${_state.listRange === 'month' ? 'active' : ''}" data-list-range="month">本月</button>
-                        <button class="events-range-btn ${_state.listRange === 'year' ? 'active' : ''}" data-list-range="year">今年</button>
-                        <button class="events-range-btn ${_state.listRange === '30d' ? 'active' : ''}" data-list-range="30d">近30天</button>
-                        <button class="events-range-btn ${_state.listRange === '90d' ? 'active' : ''}" data-list-range="90d">近90天</button>
-                        <button class="events-range-btn ${_state.listRange === 'custom' ? 'active' : ''}" data-list-range="custom">自定义</button>
+                            ${LIST_RANGE_OPTIONS.map((option) => `<button class="events-range-btn ${_state.listRange === option.value ? 'active' : ''}" data-list-range="${option.value}">${option.label}</button>`).join('')}
+                        </div>
                     </div>
                     ${_state.listRange === 'custom' ? `
                         <div class="events-inline-dates">
@@ -691,7 +692,6 @@ function renderTimelinePage() {
                             <input class="events-inline-date" id="events-custom-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_state.customEnd)}">
                             <button type="button" class="events-range-btn" id="events-custom-apply">应用</button>
                         </div>` : ''}
-                    </div>
                 </div>
             </div>
             <div class="events-panel-body">
@@ -758,8 +758,13 @@ async function loadOverview(options = {}) {
     _state.loading = shouldShowLoading;
     if (shouldShowLoading) renderPage();
 
-    const range = currentRange();
     try {
+        if (_state.viewMode !== 'calendar' && _state.listRange === 'all' && (!_state.allRangeStart || !_state.allRangeEnd)) {
+            const bounds = await fetchAllRangeBounds();
+            _state.allRangeStart = bounds.start;
+            _state.allRangeEnd = bounds.end;
+        }
+        const range = currentRange();
         const res = await api.get('/events/overview', {
             start_date: range.start,
             end_date: range.end,
@@ -1224,9 +1229,11 @@ export function render(container) {
         viewMode: 'calendar',
         monthCursor: firstDayOfMonth(today),
         selectedDate: dateKey(today),
-        listRange: '30d',
+        listRange: 'month',
         customStart: '',
         customEnd: '',
+        allRangeStart: '',
+        allRangeEnd: '',
         overview: null,
         loading: false,
         filters: {

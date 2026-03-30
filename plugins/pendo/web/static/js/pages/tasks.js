@@ -7,9 +7,10 @@ import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.j
 
 const CSS_ID = 'pendo-tasks-redesign-styles';
 const TODAY = () => new Date();
+const DATE_CATEGORY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const STATUS_META = {
-    todo: { label: '待办', tone: '#F59E0B', bg: 'rgba(245,158,11,0.12)' },
+    todo: { label: '未完成', tone: '#F59E0B', bg: 'rgba(245,158,11,0.12)' },
     in_progress: { label: '进行中', tone: '#0F766E', bg: 'rgba(16,185,129,0.12)' },
     done: { label: '已完成', tone: '#16A34A', bg: 'rgba(34,197,94,0.12)' },
     cancelled: { label: '已取消', tone: '#64748B', bg: 'rgba(148,163,184,0.14)' },
@@ -31,15 +32,14 @@ const TASK_FIELDS = [
         label: '状态',
         type: 'select',
         options: [
-            { value: 'todo', label: '待办' },
-            { value: 'in_progress', label: '进行中' },
+            { value: 'todo', label: '未完成' },
             { value: 'done', label: '已完成' },
             { value: 'cancelled', label: '已取消' },
         ],
         selectThemeClass: 'pselect-theme-tasks',
     },
     { name: 'due_time', label: '截止时间', type: 'datetime' },
-    { name: 'category', label: '分类', type: 'text', placeholder: '未分类' },
+    { name: 'category', label: '分类', type: 'text', placeholder: '例如：工作、学习' },
     { name: 'content', label: '备注', type: 'textarea' },
 ];
 
@@ -51,9 +51,11 @@ let _overview = null;
 let _dragTaskId = null;
 let _filters = {
     search: '',
+    plan: '',
     category: '',
-    priority: '',
     status: '',
+    customStart: '',
+    customEnd: '',
 };
 
 function pad(number) {
@@ -71,11 +73,129 @@ function dateKey(value) {
     return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
 }
 
+function firstDayOfWeek(value = TODAY()) {
+    const day = startOfDay(value);
+    day.setDate(day.getDate() - ((day.getDay() + 6) % 7));
+    return day;
+}
+
+function lastDayOfWeek(value = TODAY()) {
+    const day = firstDayOfWeek(value);
+    day.setDate(day.getDate() + 6);
+    return day;
+}
+
+function firstDayOfMonth(value = TODAY()) {
+    const day = startOfDay(value);
+    return new Date(day.getFullYear(), day.getMonth(), 1);
+}
+
+function lastDayOfMonth(value = TODAY()) {
+    const day = startOfDay(value);
+    return new Date(day.getFullYear(), day.getMonth() + 1, 0);
+}
+
 function parseDate(value) {
     if (!value) return null;
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return null;
     return date;
+}
+
+function parseDateCategory(value) {
+    if (!value || !DATE_CATEGORY_RE.test(String(value))) return null;
+    return new Date(`${value}T00:00:00`);
+}
+
+function isDateCategory(value) {
+    return DATE_CATEGORY_RE.test(String(value || '').trim());
+}
+
+function taskTextCategory(task) {
+    const category = String(task?.category || '').trim();
+    return category && category !== '未分类' && !isDateCategory(category) ? category : '';
+}
+
+function taskEditableCategoryValue(task) {
+    const category = String(task?.category || '').trim();
+    const due = parseDate(task?.due_time);
+    if (due && (isDateCategory(category) || !category || category === '未分类')) {
+        return dateKey(due);
+    }
+    if (category && category !== '未分类') return category;
+    return '';
+}
+
+function taskPlanDateKey(task) {
+    const category = String(task?.category || '').trim();
+    const due = parseDate(task?.due_time);
+    if (due && (isDateCategory(category) || !category || category === '未分类')) {
+        return dateKey(due);
+    }
+    if (isDateCategory(category)) return category;
+    return due ? dateKey(due) : '';
+}
+
+function taskPlanDate(task) {
+    const key = taskPlanDateKey(task);
+    return key ? parseDateCategory(key) : null;
+}
+
+function taskPrimaryStatus(task) {
+    return ['done', 'cancelled'].includes(task?.status) ? task.status : 'todo';
+}
+
+function taskStatusBucket(task) {
+    return ['done', 'cancelled'].includes(taskPrimaryStatus(task)) ? 'closed' : 'open';
+}
+
+function formatPlanDate(value) {
+    const date = parseDateCategory(value);
+    if (!date) return '未安排日期';
+    return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function describePlanDate(value, todayKey = dateKey(TODAY())) {
+    if (!value) return '未安排日期';
+    if (value === todayKey) return `今天 · ${formatPlanDate(value)}`;
+    if (value < todayKey) return `已滞后 · ${formatPlanDate(value)}`;
+    return `计划 · ${formatPlanDate(value)}`;
+}
+
+function normalizePlanRange(start, end) {
+    const safeStart = isDateCategory(start) ? start : '';
+    const safeEnd = isDateCategory(end) ? end : '';
+    if (!safeStart || !safeEnd) return { start: safeStart, end: safeEnd };
+    return safeStart <= safeEnd ? { start: safeStart, end: safeEnd } : { start: safeEnd, end: safeStart };
+}
+
+function defaultCustomPlanRange() {
+    return {
+        start: dateKey(firstDayOfMonth(TODAY())),
+        end: dateKey(lastDayOfMonth(TODAY())),
+    };
+}
+
+function planDateMatches(task, filterValue, todayKey = dateKey(TODAY()), customStart = '', customEnd = '') {
+    if (!filterValue) return true;
+    const planKey = taskPlanDateKey(task);
+    if (filterValue === 'undated') return !planKey;
+    if (!planKey) return false;
+
+    const weekStart = dateKey(firstDayOfWeek(TODAY()));
+    const weekEnd = dateKey(lastDayOfWeek(TODAY()));
+    const monthStart = dateKey(firstDayOfMonth(TODAY()));
+    const monthEnd = dateKey(lastDayOfMonth(TODAY()));
+    if (filterValue === 'today') return planKey === todayKey;
+    if (filterValue === 'week') return planKey >= weekStart && planKey <= weekEnd;
+    if (filterValue === 'month') return planKey >= monthStart && planKey <= monthEnd;
+    if (filterValue === 'future') return planKey > monthEnd;
+    if (filterValue === 'custom') {
+        const range = normalizePlanRange(customStart, customEnd);
+        if (!range.start || !range.end) return true;
+        return planKey >= range.start && planKey <= range.end;
+    }
+    return true;
 }
 
 function formatShortDate(value) {
@@ -89,6 +209,15 @@ function toDatetimeLocal(value) {
     return String(value).slice(0, 16);
 }
 
+function defaultTaskDueTimeValue(now = TODAY()) {
+    const target = new Date(now);
+    if (target.getHours() >= 20) {
+        target.setDate(target.getDate() + 1);
+    }
+    target.setHours(23, 59, 0, 0);
+    return `${dateKey(target)}T23:59`;
+}
+
 function normalizeTaskPayload(formData) {
     const payload = { ...formData };
     const priority = Number(payload.priority);
@@ -96,7 +225,7 @@ function normalizeTaskPayload(formData) {
     payload.title = String(payload.title || '').trim();
     payload.content = payload.content ?? '';
     payload.category = String(payload.category || '').trim() || '未分类';
-    payload.status = payload.status || 'todo';
+    payload.status = ['done', 'cancelled'].includes(payload.status) ? payload.status : 'todo';
     payload.priority = Number.isInteger(priority) && priority >= 1 && priority <= 5 ? priority : 3;
     payload.due_time = payload.due_time || null;
 
@@ -104,15 +233,14 @@ function normalizeTaskPayload(formData) {
 }
 
 function isOverdue(task, today = startOfDay(TODAY())) {
-    if (!task?.due_time) return false;
-    if (!['todo', 'in_progress'].includes(task.status)) return false;
-    const due = parseDate(task.due_time);
-    return due ? startOfDay(due) < today : false;
+    if (taskStatusBucket(task) !== 'open') return false;
+    const planDate = taskPlanDate(task);
+    return planDate ? startOfDay(planDate) < today : false;
 }
 
 function taskSortKey(task) {
     const priority = Number(task.priority || 99);
-    const due = task.due_time || '9999-12-31T23:59:59';
+    const due = taskPlanDateKey(task) || '9999-12-31';
     return [priority, due, task.created_at || ''];
 }
 
@@ -139,22 +267,35 @@ function sortDone(tasks) {
 function filteredTasks() {
     const tasks = _overview?.all_tasks || [];
     const keyword = (_filters.search || '').trim().toLowerCase();
+    const todayKey = dateKey(TODAY());
+    const usePlanFilter = Boolean(_filters.plan);
     return tasks.filter((task) => {
-        if (_filters.category && (task.category || '未分类') !== _filters.category) return false;
-        if (_filters.priority && String(task.priority || '') !== String(_filters.priority)) return false;
-        if (_filters.status === 'active' && !['todo', 'in_progress'].includes(task.status)) return false;
-        if (_filters.status && _filters.status !== 'active' && task.status !== _filters.status) return false;
+        if (usePlanFilter) {
+            if (!planDateMatches(task, _filters.plan, todayKey, _filters.customStart, _filters.customEnd)) return false;
+        } else if (_filters.category && taskTextCategory(task) !== _filters.category) {
+            return false;
+        }
+        if (_filters.status && taskPrimaryStatus(task) !== _filters.status) return false;
         if (!keyword) return true;
-        const haystack = [task.title || '', task.content || '', task.category || ''].join('\n').toLowerCase();
+        const haystack = [
+            task.title || '',
+            task.content || '',
+            task.category || '',
+            taskTextCategory(task),
+            taskPlanDateKey(task),
+        ].join('\n').toLowerCase();
         return haystack.includes(keyword);
     });
 }
 
 function deriveDisplayModel(tasks) {
     const today = startOfDay(TODAY());
-    const active = tasks.filter((task) => ['todo', 'in_progress'].includes(task.status));
-    const done = tasks.filter((task) => task.status === 'done');
-    const cancelled = tasks.filter((task) => task.status === 'cancelled');
+    const todayKey = dateKey(today);
+    const next7EndKey = dateKey(new Date(today.getTime() + 7 * 86400000));
+    const active = tasks.filter((task) => taskStatusBucket(task) === 'open');
+    const done = tasks.filter((task) => taskPrimaryStatus(task) === 'done');
+    const cancelled = tasks.filter((task) => taskPrimaryStatus(task) === 'cancelled');
+    const closed = tasks.filter((task) => taskStatusBucket(task) === 'closed');
     const overdueTasks = [];
     const focusTasks = [];
     const upNextTasks = [];
@@ -162,16 +303,15 @@ function deriveDisplayModel(tasks) {
     const backlogTasks = [];
 
     active.forEach((task) => {
-        const due = parseDate(task.due_time);
-        const dueDay = due ? startOfDay(due) : null;
-        if (dueDay && dueDay < today) {
+        const planKey = taskPlanDateKey(task);
+        if (planKey && planKey < todayKey) {
             overdueTasks.push(task);
             focusTasks.push(task);
-        } else if (dueDay && dueDay.getTime() === today.getTime()) {
+        } else if (planKey === todayKey) {
             focusTasks.push(task);
-        } else if (dueDay && dueDay <= new Date(today.getTime() + 7 * 86400000)) {
+        } else if (planKey && planKey <= next7EndKey) {
             upNextTasks.push(task);
-        } else if (dueDay) {
+        } else if (planKey) {
             laterTasks.push(task);
         } else {
             backlogTasks.push(task);
@@ -199,7 +339,8 @@ function deriveDisplayModel(tasks) {
 
     const categoryMap = new Map();
     active.forEach((task) => {
-        const category = task.category || '未分类';
+        const category = taskTextCategory(task);
+        if (!category) return;
         categoryMap.set(category, (categoryMap.get(category) || 0) + 1);
     });
     const categoryLoad = [...categoryMap.entries()]
@@ -211,6 +352,26 @@ function deriveDisplayModel(tasks) {
             share: active.length ? count / active.length : 0,
         }));
 
+    const planMap = new Map();
+    active.forEach((task) => {
+        const planKey = taskPlanDateKey(task);
+        if (!planKey) return;
+        planMap.set(planKey, (planMap.get(planKey) || 0) + 1);
+    });
+    const planLoad = [...planMap.entries()]
+        .sort((a, b) => {
+            if (a[0] === b[0]) return b[1] - a[1];
+            return a[0].localeCompare(b[0]);
+        })
+        .slice(0, 6)
+        .map(([plan, count]) => ({
+            plan,
+            label: formatPlanDate(plan),
+            count,
+            share: active.length ? count / active.length : 0,
+            state: plan < todayKey ? 'overdue' : (plan === todayKey ? 'today' : 'upcoming'),
+        }));
+
     return {
         summary: {
             active_count: active.length,
@@ -219,6 +380,7 @@ function deriveDisplayModel(tasks) {
             done_today_count: doneTodayCount,
             done_count: done.length,
             cancelled_count: cancelled.length,
+            closed_count: closed.length,
             completion_rate: (active.length + done.length) ? done.length / (active.length + done.length) : 0,
         },
         focus_tasks: focusSorted,
@@ -227,13 +389,15 @@ function deriveDisplayModel(tasks) {
         backlog_tasks: sortTasks(backlogTasks),
         done_recent: sortDone(done).slice(0, 8),
         overdue_tasks: sortTasks(overdueTasks),
+        plan_load: planLoad,
         category_load: categoryLoad,
         completion_bars: completionDays,
         board_columns: {
-            todo: sortTasks(tasks.filter((task) => task.status === 'todo')),
-            in_progress: sortTasks(tasks.filter((task) => task.status === 'in_progress')),
-            done: sortDone(tasks.filter((task) => task.status === 'done')),
-            cancelled: sortDone(tasks.filter((task) => task.status === 'cancelled')),
+            todo: sortTasks(active),
+            done: sortDone(done),
+            cancelled: sortDone(cancelled),
+            open: sortTasks(active),
+            closed: sortDone(closed),
         },
     };
 }
@@ -315,7 +479,14 @@ function ensureStyles() {
         .tasks-filter-field { display: flex; flex-direction: column; gap: 6px; }
         .tasks-filter-field label { font-size: 11px; font-weight: 700; color: var(--color-text-secondary); letter-spacing: 0.04em; text-transform: uppercase; }
         .tasks-filter-field input { width: 100%; height: 40px; border-radius: 14px; border: 1px solid rgba(203,213,225,0.92); padding: 0 14px; }
+        .tasks-filter-field--range { grid-column: span 2; }
+        .tasks-filter-range {
+            display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+            gap: 8px; align-items: center;
+        }
+        .tasks-filter-range span { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
         .tasks-filter-bar .pselect-trigger { height: 40px; padding: 0 14px; border-radius: 14px; background: rgba(255,255,255,0.92); }
+        .tasks-filter-bar .pselect-panel { border-radius: 16px; }
         .tasks-filter-bar .pselect-label { min-width: 0; }
         .tasks-workspace {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
@@ -364,6 +535,7 @@ function ensureStyles() {
             border: 1px dashed rgba(148,163,184,0.26); color: var(--color-text-secondary);
         }
         .tasks-board { display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); gap: 14px; overflow-x: auto; padding-bottom: 4px; }
+        .tasks-board--two-col { grid-template-columns: repeat(2, minmax(260px, 1fr)); }
         .tasks-board-col {
             min-width: 240px; border-radius: 18px; border: 1px solid rgba(226,232,240,0.92);
             background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92));
@@ -405,6 +577,7 @@ function ensureStyles() {
         ${mediaMax(BREAKPOINTS.WIDE, `
             .tasks-layout { grid-template-columns: 1fr; }
             .tasks-filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .tasks-filter-field--range { grid-column: span 2; }
             .tasks-board { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
         `)}
         ${mediaMax(BREAKPOINTS.MOBILE, `
@@ -413,6 +586,7 @@ function ensureStyles() {
             .tasks-layout { gap: 14px; }
             .tasks-stat-grid { grid-template-columns: 1fr; }
             .tasks-filter-bar { grid-template-columns: 1fr; }
+            .tasks-filter-field--range { grid-column: span 1; }
             .tasks-workspace-head { align-items: start; }
             .task-row { grid-template-columns: auto minmax(0, 1fr); }
             .task-row-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
@@ -427,27 +601,26 @@ async function fetchOverview() {
 }
 
 function renderCategoryOptions(tasks) {
-    const categories = [...new Set(tasks.map((task) => task.category || '未分类'))].sort();
+    const categories = [...new Set(tasks.map((task) => taskTextCategory(task)).filter(Boolean))].sort();
     return [{ value: '', label: '全部分类' }, ...categories.map((category) => ({ value: category, label: category }))];
 }
 
-function renderPriorityOptions() {
+function renderPlanOptions() {
     return [
-        { value: '', label: '全部优先级' },
-        { value: '1', label: '🔴 紧急' },
-        { value: '2', label: '🟠 高' },
-        { value: '3', label: '🟡 中' },
-        { value: '4', label: '🟢 低' },
-        { value: '5', label: '⚪ 最低' },
+        { value: '', label: '全部计划日期' },
+        { value: 'today', label: '今天' },
+        { value: 'week', label: '本周' },
+        { value: 'month', label: '本月' },
+        { value: 'future', label: '更晚' },
+        { value: 'undated', label: '未安排日期' },
+        { value: 'custom', label: '自定义时间段' },
     ];
 }
 
 function renderStatusOptions() {
     return [
         { value: '', label: '全部状态' },
-        { value: 'active', label: '当前推进' },
-        { value: 'todo', label: '待办' },
-        { value: 'in_progress', label: '进行中' },
+        { value: 'todo', label: '未完成' },
         { value: 'done', label: '已完成' },
         { value: 'cancelled', label: '已取消' },
     ];
@@ -459,17 +632,17 @@ function renderHero(model) {
         <section class="tasks-hero">
             <div>
                 <h2>✅ 待办</h2>
-                <p>集中查看当前任务、接下来要跟进的事项和最近完成项。</p>
+                <p>日期型分类改按计划日期筛选，文字分类单独筛选，状态只保留未完成、已完成、已取消三种口径。</p>
                 <div class="tasks-hero-tags">
-                    <span class="tasks-hero-tag">${summary.focus_count} 项今日聚焦</span>
-                    <span class="tasks-hero-tag">${summary.overdue_count} 项截止风险</span>
-                    <span class="tasks-hero-tag">${summary.done_today_count} 项今日完成</span>
+                    <span class="tasks-hero-tag">${summary.active_count} 项未完成</span>
+                    <span class="tasks-hero-tag">${summary.focus_count} 项今天或已滞后</span>
+                    <span class="tasks-hero-tag">${summary.closed_count} 项已结束</span>
                 </div>
             </div>
             <div class="tasks-hero-actions">
                 <div class="tasks-view-toggle">
                     <button class="tasks-toggle-btn ${_viewMode === 'list' ? 'active' : ''}" id="task-view-list" data-view="list">执行列表</button>
-                    <button class="tasks-toggle-btn ${_viewMode === 'board' ? 'active' : ''}" id="task-view-board" data-view="board">状态看板</button>
+                    <button class="tasks-toggle-btn ${_viewMode === 'board' ? 'active' : ''}" id="task-view-board" data-view="board">双栏总览</button>
                 </div>
                 <button class="btn btn-primary" id="tasks-add-top">＋ 新建任务</button>
             </div>
@@ -488,29 +661,29 @@ function renderInsights(model) {
                         <h3>执行状态</h3>
                         <p>查看当前推进情况、截止风险和完成节奏。</p>
                     </div>
-                    <div class="task-pill">${completion}% 完成率</div>
+                        <div class="task-pill">${completion}% 完成率</div>
                 </div>
                 <div class="tasks-panel-body">
                     <div class="tasks-stat-grid">
                         <div class="tasks-stat-card">
-                            <div class="tasks-stat-label">当前推进</div>
+                            <div class="tasks-stat-label">未完成</div>
                             <div class="tasks-stat-value">${summary.active_count}</div>
-                            <div class="tasks-stat-meta">包含待办和进行中的任务</div>
+                            <div class="tasks-stat-meta">包含所有仍需处理的任务</div>
                         </div>
                         <div class="tasks-stat-card">
-                            <div class="tasks-stat-label">今日聚焦</div>
+                            <div class="tasks-stat-label">今天与滞后</div>
                             <div class="tasks-stat-value">${summary.focus_count}</div>
-                            <div class="tasks-stat-meta">逾期和今天到期会优先出现</div>
+                            <div class="tasks-stat-meta">优先看今天计划和已经拖后的事项</div>
                         </div>
                         <div class="tasks-stat-card">
-                            <div class="tasks-stat-label">截止风险</div>
+                            <div class="tasks-stat-label">已滞后</div>
                             <div class="tasks-stat-value">${summary.overdue_count}</div>
-                            <div class="tasks-stat-meta">越早处理，列表会越干净</div>
+                            <div class="tasks-stat-meta">计划日期早于今天的未完成任务</div>
                         </div>
                         <div class="tasks-stat-card">
-                            <div class="tasks-stat-label">今日完成</div>
-                            <div class="tasks-stat-value">${summary.done_today_count}</div>
-                            <div class="tasks-stat-meta">最近完成 ${summary.done_count} 项</div>
+                            <div class="tasks-stat-label">已结束</div>
+                            <div class="tasks-stat-value">${summary.closed_count}</div>
+                            <div class="tasks-stat-meta">完成 ${summary.done_count} 项，取消 ${summary.cancelled_count} 项</div>
                         </div>
                     </div>
                     <div class="tasks-meter">
@@ -526,18 +699,18 @@ function renderInsights(model) {
             <div class="tasks-panel">
                 <div class="tasks-panel-head">
                     <div>
-                        <h3>分类负载</h3>
-                        <p>查看当前任务主要分布在哪些分类。</p>
+                        <h3>计划分布</h3>
+                        <p>日期型分类按计划日期展示；文字分类留在筛选器里使用。</p>
                     </div>
                 </div>
                 <div class="tasks-panel-body">
-                    ${model.category_load.length ? `
+                    ${model.plan_load.length ? `
                         <div class="tasks-category-list">
-                            ${model.category_load.map((item) => `
+                            ${model.plan_load.map((item) => `
                                 <div class="tasks-category-row">
                                     <div>
                                         <div class="tasks-category-top">
-                                            <span class="tasks-category-name">${item.category}</span>
+                                            <span class="tasks-category-name">${item.state === 'today' ? `今天 · ${item.label}` : (item.state === 'overdue' ? `已滞后 · ${item.label}` : `计划 · ${item.label}`)}</span>
                                             <span class="tasks-category-count">${item.count} 项</span>
                                         </div>
                                         <div class="tasks-category-track">
@@ -546,18 +719,30 @@ function renderInsights(model) {
                                     </div>
                                     <div class="task-pill">${Math.round(item.share * 100)}%</div>
                                 </div>`).join('')}
-                        </div>` : `<div class="tasks-empty">当前没有进行中的任务，分类负载会在开始推进后出现。</div>`}
+                        </div>` : `<div class="tasks-empty">当前没有带计划日期的未完成任务；如果录入了文字分类，可以直接用上方筛选器查看。</div>`}
+                    ${model.category_load.length ? `<div class="task-pill" style="margin-top:14px;">${model.category_load.length} 个文字分类可筛选</div>` : ''}
                 </div>
             </div>
         </section>`;
 }
 
 function renderFilters(tasks) {
+    const showCustomRange = _filters.plan === 'custom';
     return `
         <section class="tasks-filter-bar">
             <div class="tasks-filter-field">
                 <label>搜索</label>
                 <input id="tasks-filter-search" type="search" placeholder="标题、备注、分类" value="${_filters.search}">
+            </div>
+            <div class="tasks-filter-field">
+                <label>计划日期</label>
+                ${renderCustomSelect({
+                    id: 'tasks-filter-plan',
+                    options: renderPlanOptions(),
+                    selected: _filters.plan,
+                    className: 'pselect-block pselect-theme-tasks',
+                    placeholder: '全部计划日期',
+                })}
             </div>
             <div class="tasks-filter-field">
                 <label>分类</label>
@@ -570,16 +755,6 @@ function renderFilters(tasks) {
                 })}
             </div>
             <div class="tasks-filter-field">
-                <label>优先级</label>
-                ${renderCustomSelect({
-                    id: 'tasks-filter-priority',
-                    options: renderPriorityOptions(),
-                    selected: _filters.priority,
-                    className: 'pselect-block pselect-theme-tasks',
-                    placeholder: '全部优先级',
-                })}
-            </div>
-            <div class="tasks-filter-field">
                 <label>状态</label>
                 ${renderCustomSelect({
                     id: 'tasks-filter-status',
@@ -589,15 +764,31 @@ function renderFilters(tasks) {
                     placeholder: '全部状态',
                 })}
             </div>
+            ${showCustomRange ? `
+                <div class="tasks-filter-field tasks-filter-field--range">
+                    <label>自定义范围</label>
+                    <div class="tasks-filter-range">
+                        <input id="tasks-filter-plan-start" type="date" value="${_filters.customStart || ''}">
+                        <span>至</span>
+                        <input id="tasks-filter-plan-end" type="date" value="${_filters.customEnd || ''}">
+                    </div>
+                </div>` : ''}
         </section>`;
 }
 
 function taskRowHTML(task) {
     const priority = PRIORITY_INFO[task.priority] || PRIORITY_INFO[3];
-    const status = STATUS_META[task.status] || STATUS_META.todo;
-    const timeSource = task.status === 'done' ? (task.completed_at || task.updated_at) : task.due_time;
-    const dueLabel = timeSource ? formatShortDate(timeSource) : (task.status === 'done' ? '刚刚完成' : '无截止时间');
-    const dueText = (task.status !== 'done' && isOverdue(task)) ? `已逾期 · ${dueLabel}` : dueLabel;
+    const normalizedStatus = taskPrimaryStatus(task);
+    const status = STATUS_META[normalizedStatus] || STATUS_META.todo;
+    const textCategory = taskTextCategory(task);
+    const planKey = taskPlanDateKey(task);
+    const scheduleText = taskStatusBucket(task) === 'closed'
+        ? (task.completed_at || task.updated_at
+            ? `${normalizedStatus === 'cancelled' ? '结束于' : '完成于'} · ${formatShortDate(task.completed_at || task.updated_at)}`
+            : (normalizedStatus === 'cancelled' ? '已取消' : '已完成'))
+        : (task.due_time
+            ? `${isOverdue(task) ? '已滞后' : '截止'} · ${formatShortDate(task.due_time)}`
+            : describePlanDate(planKey));
     const content = task.content ? `<div class="task-row-note">${task.content}</div>` : '';
     return `
         <div class="task-row" data-task-id="${task.id}">
@@ -607,14 +798,15 @@ function taskRowHTML(task) {
                 ${content}
                 <div class="task-row-meta">
                     <span class="task-pill">${priority.icon} ${priority.label}</span>
-                    <span class="task-pill">${task.category || '未分类'}</span>
+                    ${planKey ? `<span class="task-pill">${formatPlanDate(planKey)}</span>` : ''}
+                    ${textCategory ? `<span class="task-pill">${textCategory}</span>` : (!planKey ? `<span class="task-pill">未分类</span>` : '')}
                     <span class="task-pill status" style="--task-pill-color:${status.tone};--task-pill-bg:${status.bg};">${status.label}</span>
-                    <span class="task-pill">${task.status === 'done' ? '完成于' : '截止'} · ${dueText}</span>
+                    <span class="task-pill">${scheduleText}</span>
                 </div>
             </div>
             <div class="task-row-actions">
-                ${task.status !== 'done' ? `<button class="task-action-btn primary" data-action="done" data-id="${task.id}">完成</button>` : `<button class="task-action-btn" data-action="resume" data-id="${task.id}">恢复</button>`}
-                ${task.status === 'todo' ? `<button class="task-action-btn" data-action="start" data-id="${task.id}">开始</button>` : ''}
+                ${taskStatusBucket(task) !== 'closed' ? `<button class="task-action-btn primary" data-action="done" data-id="${task.id}">完成</button>` : `<button class="task-action-btn" data-action="resume" data-id="${task.id}">恢复</button>`}
+                ${taskStatusBucket(task) !== 'closed' ? `<button class="task-action-btn" data-action="cancel" data-id="${task.id}">取消</button>` : ''}
                 <button class="task-action-btn" data-action="edit" data-id="${task.id}">编辑</button>
             </div>
         </div>`;
@@ -639,36 +831,38 @@ function renderSection(title, subtitle, tasks) {
 function renderListView(model) {
     return `
         <div class="tasks-sections">
-            ${renderSection('今日聚焦', '先处理逾期和今天要收口的任务。', model.focus_tasks.slice(0, 6))}
-            ${renderSection('接下来', '未来 7 天内需要留意的任务。', model.up_next_tasks.slice(0, 8))}
-            ${renderSection('稍后与待排期', '更晚的任务和没有日期的事项。', [...model.later_tasks.slice(0, 4), ...model.backlog_tasks.slice(0, 4)])}
-            ${renderSection('最近完成', '看一下最近是怎么收尾的。', model.done_recent.slice(0, 6))}
+            ${renderSection('今天与滞后', '优先清理今天计划和已经拖后的任务。', model.focus_tasks.slice(0, 6))}
+            ${renderSection('未来 7 天', '接下来一周内需要继续跟进的事项。', model.up_next_tasks.slice(0, 8))}
+            ${renderSection('更晚与未安排', '更晚的计划日期，以及尚未放进日期桶的任务。', [...model.later_tasks.slice(0, 4), ...model.backlog_tasks.slice(0, 4)])}
+            ${renderSection('最近完成', '查看最近完成的任务。', model.done_recent.slice(0, 6))}
         </div>`;
 }
 
 function boardCardHTML(task) {
     const priority = PRIORITY_INFO[task.priority] || PRIORITY_INFO[3];
+    const status = STATUS_META[taskPrimaryStatus(task)] || STATUS_META.todo;
+    const textCategory = taskTextCategory(task);
+    const planKey = taskPlanDateKey(task);
     return `
         <div class="tasks-board-card" data-task-id="${task.id}" draggable="true">
             <h4>${task.title || '(无标题)'}</h4>
             ${task.content ? `<p>${task.content}</p>` : ''}
             <div class="tasks-board-meta">
                 <span class="task-pill">${priority.icon} ${priority.label}</span>
-                <span class="task-pill">${task.category || '未分类'}</span>
-                ${task.due_time ? `<span class="task-pill">${formatShortDate(task.due_time)}</span>` : ''}
+                ${planKey ? `<span class="task-pill">${formatPlanDate(planKey)}</span>` : ''}
+                ${textCategory ? `<span class="task-pill">${textCategory}</span>` : ''}
+                <span class="task-pill status" style="--task-pill-color:${status.tone};--task-pill-bg:${status.bg};">${status.label}</span>
             </div>
         </div>`;
 }
 
 function renderBoardView(model) {
     const columns = [
-        { key: 'todo', label: '待办', color: '#F59E0B' },
-        { key: 'in_progress', label: '进行中', color: '#10B981' },
-        { key: 'done', label: '已完成', color: '#16A34A' },
-        { key: 'cancelled', label: '已取消', color: '#94A3B8' },
+        { key: 'open', label: '未完成', color: '#F59E0B' },
+        { key: 'closed', label: '已结束', color: '#16A34A' },
     ];
     return `
-        <div class="tasks-board">
+        <div class="tasks-board tasks-board--two-col">
             ${columns.map((column) => `
                 <section class="tasks-board-col">
                     <div class="tasks-board-head">
@@ -683,20 +877,20 @@ function renderBoardView(model) {
                             ? model.board_columns[column.key].map(boardCardHTML).join('')
                             : `<div class="tasks-empty">暂无任务</div>`}
                     </div>
-                    ${column.key === 'todo' ? `<div class="tasks-board-add"><button id="tasks-add-board">＋ 添加任务</button></div>` : ''}
+                    ${column.key === 'open' ? `<div class="tasks-board-add"><button id="tasks-add-board">＋ 添加任务</button></div>` : ''}
                 </section>`).join('')}
         </div>`;
 }
 
 function renderWorkspace(model) {
     const subtitle = _viewMode === 'list'
-        ? '按时间和优先级安排接下来要处理的事。'
-        : '按状态查看全部任务。';
+        ? '按计划日期和完成情况安排接下来要处理的事。'
+        : '把未完成和已结束分成两栏快速浏览。';
     return `
         <section class="tasks-workspace">
             <div class="tasks-workspace-head">
                 <div>
-                    <h3 class="tasks-workspace-title">${_viewMode === 'list' ? '执行列表' : '状态看板'}</h3>
+                    <h3 class="tasks-workspace-title">${_viewMode === 'list' ? '执行列表' : '双栏总览'}</h3>
                     <p class="tasks-workspace-subtitle">${subtitle}</p>
                 </div>
                 <div class="task-pill">${filteredTasks().length} 项匹配</div>
@@ -746,7 +940,11 @@ function openTaskModal(existing = null) {
         let value = field.value ?? '';
         if (existing) {
             if (field.name === 'due_time') value = toDatetimeLocal(existing.due_time);
+            else if (field.name === 'status') value = taskPrimaryStatus(existing);
+            else if (field.name === 'category') value = taskEditableCategoryValue(existing);
             else value = existing[field.name] ?? field.value ?? '';
+        } else if (field.name === 'due_time') {
+            value = defaultTaskDueTimeValue();
         }
         return { ...field, value };
     });
@@ -814,9 +1012,33 @@ function openTaskModal(existing = null) {
 function attachListeners() {
     if (!_container) return;
 
+    const handlePlanChange = (value) => {
+        _filters.plan = value;
+        if (value) {
+            _filters.category = '';
+        } else {
+            _filters.customStart = '';
+            _filters.customEnd = '';
+        }
+        if (value === 'custom' && (!_filters.customStart || !_filters.customEnd)) {
+            const range = defaultCustomPlanRange();
+            _filters.customStart = range.start;
+            _filters.customEnd = range.end;
+        }
+        renderPage();
+    };
+
     initCustomSelects(_container, {
-        'tasks-filter-category': (value) => { _filters.category = value; renderPage(); },
-        'tasks-filter-priority': (value) => { _filters.priority = value; renderPage(); },
+        'tasks-filter-plan': handlePlanChange,
+        'tasks-filter-category': (value) => {
+            _filters.category = value;
+            if (value) {
+                _filters.plan = '';
+                _filters.customStart = '';
+                _filters.customEnd = '';
+            }
+            renderPage();
+        },
         'tasks-filter-status': (value) => { _filters.status = value; renderPage(); },
     });
 
@@ -836,6 +1058,22 @@ function attachListeners() {
     if (search) {
         search.onchange = () => {
             _filters.search = search.value || '';
+            renderPage();
+        };
+    }
+
+    const customStart = _container.querySelector('#tasks-filter-plan-start');
+    if (customStart) {
+        customStart.onchange = () => {
+            _filters.customStart = customStart.value || '';
+            renderPage();
+        };
+    }
+
+    const customEnd = _container.querySelector('#tasks-filter-plan-end');
+    if (customEnd) {
+        customEnd.onchange = () => {
+            _filters.customEnd = customEnd.value || '';
             renderPage();
         };
     }
@@ -860,8 +1098,9 @@ function attachListeners() {
                 await updateTaskStatus(taskId, 'todo');
                 return;
             }
-            if (action === 'start') {
-                await updateTaskStatus(taskId, 'in_progress');
+            if (action === 'cancel') {
+                await updateTaskStatus(taskId, 'cancelled');
+                return;
             }
             return;
         }
@@ -899,7 +1138,7 @@ function attachListeners() {
                 zone.classList.remove('drag-over');
                 const status = zone.dataset.col;
                 if (!_dragTaskId || !status) return;
-                await updateTaskStatus(_dragTaskId, status);
+                await updateTaskStatus(_dragTaskId, status === 'closed' ? 'done' : 'todo');
             });
         });
     }
@@ -924,7 +1163,7 @@ export function render(container) {
     _overview = null;
     _loading = false;
     _viewMode = 'list';
-    _filters = { search: '', category: '', priority: '', status: '' };
+    _filters = { search: '', plan: '', category: '', status: '', customStart: '', customEnd: '' };
     renderPage();
     loadAndRender();
     _dataChangedHandler = async (event) => {
