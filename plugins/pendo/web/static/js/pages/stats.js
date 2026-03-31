@@ -156,6 +156,20 @@ function ledgerRhythmSeries(ledger, range = deriveRangeDates()) {
     }));
 }
 
+function ledgerTrendSeries(ledger, range = deriveRangeDates()) {
+    const spanDays = diffDays(range.start, range.end);
+    const useMonthly = _range === 'year' || _range === 'last_year' || spanDays > 62;
+    const source = useMonthly && safeArray(ledger.monthly).length
+        ? safeArray(ledger.monthly)
+        : safeArray(ledger.daily);
+    const labelKey = useMonthly ? 'month' : 'date';
+    return source.map((item) => ({
+        label: String(item[labelKey] || ''),
+        expense: Number(item.expense || 0),
+        income: Number(item.income || 0),
+    }));
+}
+
 function moodEmoji(mood) {
     const normalized = String(mood || '').trim().toLowerCase();
     return normalized ? (_moodEmojis[normalized] || '') : '';
@@ -176,9 +190,30 @@ function diaryCadenceSubtitle(granularity) {
 }
 
 function noteCadenceSubtitle(granularity) {
+    if (granularity === 'year') return `按${rangeLabel()}查看每年新增笔记数量。`;
     if (granularity === 'month') return `按${rangeLabel()}查看每月新增笔记数量。`;
     if (granularity === 'week') return `按${rangeLabel()}查看每周新增笔记数量。`;
     return `按${rangeLabel()}查看每天的笔记输入频率。`;
+}
+
+async function fetchNoteRangeBounds(fallbackEnd = todayStr()) {
+    return fetchItemRangeBounds(api, {
+        type: 'note',
+        sortField: 'created_at',
+        startField: 'created_at',
+        endField: 'created_at',
+        fallbackEnd,
+    });
+}
+
+async function fetchLedgerRangeBounds(fallbackEnd = todayStr()) {
+    return fetchItemRangeBounds(api, {
+        type: 'ledger',
+        sortField: 'ledger_date',
+        startField: 'ledger_date',
+        endField: 'ledger_date',
+        fallbackEnd,
+    });
 }
 
 async function fetchDiaryRangeBounds(fallbackEnd = todayStr()) {
@@ -1145,12 +1180,14 @@ async function fetchAllData() {
     const range = deriveRangeDates();
     const rangeParam = buildRequestRangeValue();
     const heatmapYear = resolveHeatmapYear(range);
+    const ledgerRange = _range === 'all' ? await fetchLedgerRangeBounds(range.end) : range;
+    const notesRange = _range === 'all' ? await fetchNoteRangeBounds(range.end) : range;
     const diaryRange = _range === 'all' ? await fetchDiaryRangeBounds(range.end) : range;
     const [ledgerRes, tasksRes, eventsRes, notesRes, diaryRes, heatmapRes, comparisonRes, moodRes] = await Promise.all([
-        api.get('/stats/ledger', { range: rangeParam }),
+        api.get('/stats/ledger', _range === 'all' ? { start_date: ledgerRange.start, end_date: ledgerRange.end } : { range: rangeParam }),
         api.get('/stats/tasks', { range: rangeParam }),
         api.get('/stats/events', { range: rangeParam }),
-        api.get('/stats/notes/overview', { start_date: range.start, end_date: range.end, today: range.end }),
+        api.get('/stats/notes/overview', { start_date: notesRange.start, end_date: notesRange.end, today: notesRange.end }),
         api.get('/stats/diary/overview', { start_date: diaryRange.start, end_date: diaryRange.end, today: diaryRange.end, cadence_granularity: 'auto' }),
         api.get('/stats/activity-heatmap', { year: heatmapYear }),
         api.get('/stats/ledger/comparison', { months: 6 }),
@@ -1174,7 +1211,7 @@ async function fetchAllData() {
 function financeCards() {
     const ledger = _data?.ledger || {};
     const range = deriveRangeDates();
-    const trend = safeArray(ledger.daily).length ? safeArray(ledger.daily) : safeArray(ledger.monthly);
+    const trend = ledgerTrendSeries(ledger, range);
     const expenseByCategory = sortByNumericDesc(ledger.expense_by_category, 'total');
     const incomeByCategory = sortByNumericDesc(ledger.income_by_category, 'total');
     const expenseTotal = sumBy(expenseByCategory, 'total');
@@ -1183,9 +1220,9 @@ function financeCards() {
     const topExpense = expenseByCategory[0];
     const topIncome = incomeByCategory[0];
     const expenseTree = expenseByCategory.slice(0, 8).map((item) => ({ ...item, category: item.category || '未分类' }));
-    const trendLabels = trend.map((item) => item.date || item.month || '');
-    const expenseValues = trend.map((item) => Number(item.expense || 0));
-    const incomeValues = trend.map((item) => Number(item.income || 0));
+    const trendLabels = trend.map((item) => item.label || '');
+    const expenseValues = trend.map((item) => item.expense);
+    const incomeValues = trend.map((item) => item.income);
     const rhythmSeries = ledgerRhythmSeries(ledger, range).slice(-8);
     return [
         renderCard({
@@ -1294,7 +1331,7 @@ function taskCards() {
     const totals = normalizeTaskTotals(tasks.totals);
     const totalCount = totals.total;
     const taskToneDone = '#166534';
-    const taskToneOpen = '#16a34a';
+    const taskToneOpen = '#F59E0B';
     const taskToneMuted = '#94a3b8';
     const statusItems = [
         { label: '未完成', count: totals.open, color: taskToneOpen },
@@ -1337,7 +1374,7 @@ function taskCards() {
                 })),
                 'label',
                 [
-                    { key: 'created', color: '#86efac' },
+                    { key: 'created', color: '#FCD34D' },
                     { key: 'done', color: taskToneDone },
                     { key: 'cancelled', color: taskToneMuted },
                 ],
@@ -1345,7 +1382,7 @@ function taskCards() {
             ),
             footer: `
                 <div class="stats-chip-row">
-                    <span class="stats-chip">浅绿 = 新增</span>
+                    <span class="stats-chip">浅橙 = 新增</span>
                     <span class="stats-chip">深绿 = 已完成</span>
                     <span class="stats-chip">灰蓝 = 已取消</span>
                 </div>

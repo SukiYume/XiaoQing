@@ -144,9 +144,11 @@ async function fetchCategories() {
 
 async function fetchInsights() {
     const params = {};
-    const range = dateRangeForFilter(_dateFilter);
-    if (range.start_date) params.start_date = range.start_date;
-    if (range.end_date) params.end_date = range.end_date;
+    if (_dateFilter !== 'all') {
+        const range = dateRangeForFilter(_dateFilter);
+        if (range.start_date) params.start_date = range.start_date;
+        if (range.end_date) params.end_date = range.end_date;
+    }
     params.compare_mode = compareModeForFilter(_dateFilter);
     if (_directionFilter) params.direction = _directionFilter;
     if (_categoryFilter) params.category = _categoryFilter;

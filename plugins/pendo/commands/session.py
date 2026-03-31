@@ -144,15 +144,14 @@ async def handle_event_info_session(
 
         if (not merged.get("remind_times")) and parsed.get("remind_times"):
             merged["remind_times"] = parsed.get("remind_times")
-        if (
-            (not merged.get("remind_times"))
-            and parsed.get("remind_offsets")
-            and merged.get("start_time")
-        ):
-            remind_offsets = parsed.get("remind_offsets")
-            merged["remind_times"] = ai_parser.build_remind_times_from_offsets(
-                merged["start_time"], remind_offsets if isinstance(remind_offsets, list) else []
-            )
+        if not merged.get("remind_times") and merged.get("start_time"):
+            # 优先使用原始指令中解析的 remind_offsets（保存在 base_data 里），
+            # 只有原始数据里没有时才退回到新消息的解析结果
+            effective_offsets = merged.get("remind_offsets") or (parsed.get("remind_offsets") if parsed else None)
+            if effective_offsets:
+                merged["remind_times"] = ai_parser.build_remind_times_from_offsets(
+                    merged["start_time"], effective_offsets if isinstance(effective_offsets, list) else []
+                )
 
     # 强制为event
     merged["type"] = "event"
