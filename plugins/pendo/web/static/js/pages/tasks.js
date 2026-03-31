@@ -3,6 +3,7 @@ import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
+import { pad2, parseDate } from '../utils/format.js';
 import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-tasks-redesign-styles';
@@ -58,10 +59,6 @@ let _filters = {
     customEnd: '',
 };
 
-function pad(number) {
-    return String(number).padStart(2, '0');
-}
-
 function startOfDay(value) {
     const day = new Date(value);
     day.setHours(0, 0, 0, 0);
@@ -70,7 +67,7 @@ function startOfDay(value) {
 
 function dateKey(value) {
     const day = value instanceof Date ? value : new Date(value);
-    return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+    return `${day.getFullYear()}-${pad2(day.getMonth() + 1)}-${pad2(day.getDate())}`;
 }
 
 function firstDayOfWeek(value = TODAY()) {
@@ -93,13 +90,6 @@ function firstDayOfMonth(value = TODAY()) {
 function lastDayOfMonth(value = TODAY()) {
     const day = startOfDay(value);
     return new Date(day.getFullYear(), day.getMonth() + 1, 0);
-}
-
-function parseDate(value) {
-    if (!value) return null;
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return null;
-    return date;
 }
 
 function parseDateCategory(value) {
@@ -201,7 +191,7 @@ function planDateMatches(task, filterValue, todayKey = dateKey(TODAY()), customS
 function formatShortDate(value) {
     const date = parseDate(value);
     if (!date) return '未安排日期';
-    return `${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return `${date.getMonth() + 1}/${date.getDate()} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
 function toDatetimeLocal(value) {
@@ -450,10 +440,14 @@ function ensureStyles() {
         .tasks-stat-card {
             padding: 16px; border-radius: 16px; background: rgba(255,255,255,0.86);
             border: 1px solid rgba(16,185,129,0.08);
+            min-width: 0;
         }
         .tasks-stat-label { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
-        .tasks-stat-value { margin-top: 8px; font-size: 30px; font-weight: 800; color: var(--color-text); letter-spacing: -0.03em; }
-        .tasks-stat-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); }
+        .tasks-stat-value {
+            margin-top: 8px; font-size: clamp(24px, 1.9vw, 30px); font-weight: 800; color: var(--color-text); letter-spacing: -0.03em;
+            line-height: 1.04; overflow-wrap: anywhere; word-break: break-word;
+        }
+        .tasks-stat-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
         .tasks-meter {
             display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; align-items: end; margin-top: 18px;
         }
@@ -523,6 +517,7 @@ function ensureStyles() {
         .task-pill {
             display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px;
             font-size: 12px; font-weight: 700; background: rgba(241,245,249,0.92); color: var(--color-text-secondary);
+            white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0;
         }
         .task-pill.status { color: var(--task-pill-color); background: var(--task-pill-bg); }
         .task-row-actions { display: flex; gap: 8px; align-items: center; }
@@ -575,7 +570,7 @@ function ensureStyles() {
         .priority-btn.priority-3.active { border-color: rgba(234,179,8,0.38); background: rgba(254,252,232,0.98); box-shadow: inset 0 0 0 1px rgba(234,179,8,0.14); }
         .priority-btn.priority-4.active { border-color: rgba(34,197,94,0.36); background: rgba(240,253,244,0.98); box-shadow: inset 0 0 0 1px rgba(34,197,94,0.12); }
         .priority-btn.priority-5.active { border-color: rgba(148,163,184,0.42); background: rgba(248,250,252,0.98); box-shadow: inset 0 0 0 1px rgba(148,163,184,0.12); }
-        ${mediaMax(BREAKPOINTS.WIDE, `
+        ${mediaMax(BREAKPOINTS.XL, `
             .tasks-layout { grid-template-columns: 1fr; }
             .tasks-filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .tasks-filter-field--range { grid-column: span 2; }

@@ -47,3 +47,16 @@ export function previewText(value, maxLength = 100) {
     if (!text) return '';
     return text.length <= maxLength ? text : `${text.slice(0, maxLength)}...`;
 }
+
+export function formatAmount(value) {
+    return `¥${Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export function formatMoneyCompact(value) {
+    const amount = Number(value || 0);
+    const sign = amount < 0 ? '-' : '';
+    const absolute = Math.abs(amount);
+    if (absolute >= 10000) return `${sign}¥${(absolute / 10000).toFixed(1)}万`;
+    if (absolute >= 1000) return `${sign}¥${(absolute / 1000).toFixed(1)}k`;
+    return `${sign}¥${absolute.toFixed(0)}`;
+}

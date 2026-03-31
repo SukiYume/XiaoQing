@@ -2,21 +2,12 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
-import { derivePresetRange, fetchItemRangeBounds, todayRangeKey } from '../utils/date_ranges.js';
-import { isValidDateInput } from '../utils/format.js';
+import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
+import { isoDate as dateKey, isValidDateInput, pad2 as pad } from '../utils/format.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-events-redesign-styles';
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-const LIST_RANGE_OPTIONS = [
-    { value: 'week', label: '本周' },
-    { value: 'month', label: '本月' },
-    { value: 'quarter', label: '本季' },
-    { value: 'year', label: '今年' },
-    { value: 'last_year', label: '去年' },
-    { value: 'custom', label: '自定义' },
-    { value: 'all', label: '全部' },
-];
 
 let _container = null;
 let _dataChangedHandler = null;
@@ -38,15 +29,6 @@ let _state = {
     overview: null,
     loading: false,
 };
-
-function pad(number) {
-    return String(number).padStart(2, '0');
-}
-
-function dateKey(value) {
-    const date = value instanceof Date ? value : new Date(value);
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
 
 function firstDayOfMonth(value) {
     return new Date(value.getFullYear(), value.getMonth(), 1);
@@ -88,6 +70,14 @@ function formatTime(iso) {
 function formatDateTime(iso) {
     if (!iso) return '';
     return `${iso.slice(0, 10)} ${formatTime(iso)}`;
+}
+
+function calendarVisibleItemLimit() {
+    if (typeof window !== 'undefined') {
+        if (window.matchMedia(`(max-width: ${BREAKPOINTS.PHONE})`).matches) return 1;
+        if (window.matchMedia(`(max-width: ${BREAKPOINTS.MOBILE})`).matches) return 2;
+    }
+    return 3;
 }
 
 function toInputDateTime(iso) {
@@ -242,7 +232,7 @@ function ensureStyles() {
             text-align: center; font-size: 12px; font-weight: 700; color: var(--color-text-secondary); padding: 6px 0;
         }
         .events-calendar-cell {
-            min-height: 116px; padding: 10px; border-radius: 18px; position: relative; cursor: pointer;
+            min-height: 128px; padding: 10px; border-radius: 18px; position: relative; cursor: pointer;
             border: 1px solid rgba(226,232,240,0.92); background: rgba(255,255,255,0.86); transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
         }
         .events-calendar-cell:hover { transform: translateY(-1px); border-color: rgba(245,158,11,0.26); box-shadow: 0 12px 24px rgba(245,158,11,0.08); }
@@ -251,36 +241,31 @@ function ensureStyles() {
         .events-calendar-cell.today .events-calendar-date {
             background: var(--color-events); color: #fff; box-shadow: 0 8px 18px rgba(245,158,11,0.24);
         }
-        .events-calendar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+        .events-calendar-head { display: flex; align-items: center; justify-content: flex-start; gap: 8px; margin-bottom: 8px; min-height: 28px; padding-right: 34px; }
         .events-calendar-date {
-            width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+            width: 28px; min-width: 28px; max-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; aspect-ratio: 1 / 1;
             border-radius: 999px; font-size: 13px; font-weight: 700; color: var(--color-text);
         }
-        .events-calendar-count {
-            min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center;
-            font-size: 11px; font-weight: 800; background: rgba(245,158,11,0.10); color: #B45309;
-        }
-        .events-calendar-items { display: flex; flex-direction: column; gap: 6px; }
+        .events-calendar-items { display: flex; flex-direction: column; gap: 3px; margin-top: auto; min-height: 0; overflow: hidden; }
         .events-calendar-chip {
-            display: block; width: 100%; text-align: left; border: none; cursor: pointer;
-            padding: 7px 9px; border-radius: 12px; background: rgba(255,248,235,0.92);
-            color: var(--color-text); font-size: 12px; font-weight: 600; line-height: 1.35;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            display: flex; width: 100%; text-align: left; border: none; cursor: pointer; align-items: center; gap: 6px;
+            min-height: 20px; padding: 2px 4px 2px 0; border-radius: 0; background: transparent;
+            color: var(--color-text); font-size: 11px; font-weight: 600; line-height: 1.25;
+            overflow: hidden;
         }
-        .events-calendar-chip.milestone { background: rgba(99,102,241,0.08); color: #4338CA; }
-        .events-calendar-chip.recurring { background: rgba(16,185,129,0.10); color: #0F766E; }
-        .events-calendar-overflow { font-size: 12px; color: var(--color-text-secondary); font-weight: 700; padding-top: 2px; }
-        .events-calendar-compact { display: none; }
-        .events-calendar-summary {
-            display: inline-flex; align-items: center; justify-content: center;
-            min-height: 28px; padding: 0 10px; border-radius: 999px;
-            background: rgba(255,248,235,0.96); color: #B45309;
-            font-size: 11px; font-weight: 800; line-height: 1; white-space: nowrap;
+        .events-calendar-chip::before {
+            content: ''; flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px; background: rgba(245,158,11,0.9);
         }
-        .events-calendar-summary-count { font-weight: 900; }
-        .events-calendar-summary-text { margin-left: 2px; }
-        .events-calendar-summary.has-milestone { background: rgba(99,102,241,0.10); color: #4338CA; }
-        .events-calendar-summary.has-recurring { background: rgba(16,185,129,0.12); color: #0F766E; }
+        .events-calendar-chip.milestone::before { background: #6366F1; }
+        .events-calendar-chip.recurring::before { background: #10B981; }
+        .events-calendar-chip-text {
+            display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .events-calendar-overflow {
+            font-size: 11px; font-weight: 700; color: var(--color-text-secondary);
+            padding-left: 12px; line-height: 1.25;
+        }
+        .events-calendar-overflow-suffix { display: inline; }
         .events-day-shell { display: flex; flex-direction: column; gap: 14px; }
         .events-day-head {
             display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 16px 18px;
@@ -399,22 +384,14 @@ function ensureStyles() {
             font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); padding: 10px 12px;
             border-radius: 14px; background: rgba(248,250,252,0.78); border: 1px solid rgba(226,232,240,0.92);
         }
-        ${mediaMax(BREAKPOINTS.EVENTS_WIDE, `
+        ${mediaMax(BREAKPOINTS.XL, `
             .events-grid { grid-template-columns: 1fr; }
             .events-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         `)}
-        ${mediaMax(BREAKPOINTS.EVENTS, `
-            .events-calendar-cell { min-height: 96px; }
-            .events-calendar-count { display: none; }
-            .events-calendar-items { display: none; }
-            .events-calendar-compact { display: flex; margin-top: auto; }
-            .events-timeline-item { grid-template-columns: 58px 14px minmax(0, 1fr); }
-            .events-timeline-item > :last-child { display: none; }
-            .events-timeline-day-marker { grid-template-columns: 58px 14px minmax(0, 1fr); }
-        `)}
         ${mediaMax(BREAKPOINTS.MOBILE, `
             .events-hero { grid-template-columns: 1fr; }
-            .events-hero-actions { justify-content: flex-start; }
+            .events-hero-actions { justify-content: flex-start; row-gap: 8px; }
+            .events-hero-actions .events-summary-chip { width: auto; flex: 0 0 auto; }
             .events-filters, .events-editor-grid { grid-template-columns: 1fr; }
             .events-editor-row { grid-template-columns: minmax(0, 1fr); }
             .events-panel-header { align-items: start; }
@@ -426,15 +403,18 @@ function ensureStyles() {
             .events-summary-chip { height: 38px; padding: 0 12px; font-size: 11px; }
             .events-calendar-grid, .events-calendar-weekdays { gap: 6px; }
             .events-calendar-cell {
-                min-height: 72px; aspect-ratio: auto; padding: 6px; border-radius: 16px;
-                display: flex; flex-direction: column; justify-content: space-between;
+                min-height: 88px; aspect-ratio: auto; padding: 6px; border-radius: 16px;
+                display: flex; flex-direction: column; justify-content: flex-start;
             }
-            .events-calendar-head { margin-bottom: 0; align-items: flex-start; position: relative; min-height: 24px; }
-            .events-calendar-date { width: 24px; height: 24px; font-size: 12px; }
-            .events-calendar-compact { display: flex; width: 100%; justify-content: center; }
-            .events-calendar-summary { min-height: 24px; padding: 0 8px; font-size: 10px; }
+            .events-calendar-head { margin-bottom: 2px; align-items: flex-start; position: relative; min-height: 24px; padding-right: 0; }
+            .events-calendar-date { width: 24px; min-width: 24px; max-width: 24px; height: 24px; flex: 0 0 24px; font-size: 12px; }
+            .events-calendar-items { gap: 2px; margin-top: 0; }
+            .events-calendar-chip { min-height: 18px; padding: 1px 2px 1px 0; font-size: 10px; line-height: 1.1; }
+            .events-calendar-overflow { font-size: 10px; padding-left: 12px; }
+            .events-calendar-overflow-suffix { display: none; }
             .events-weekday { font-size: 11px; padding: 2px 0 4px; }
             .events-timeline-day-marker { grid-template-columns: 52px 14px minmax(0, 1fr); padding-top: 8px; }
+            .events-timeline-item > :last-child { display: none; }
             .events-timeline-day-label { font-size: 12px; }
             .events-timeline-item { grid-template-columns: 52px 14px minmax(0, 1fr); gap: 8px; }
             .events-timeline-time { padding-top: 8px; font-size: 11px; }
@@ -442,14 +422,13 @@ function ensureStyles() {
         `)}
         ${mediaMax(BREAKPOINTS.PHONE, `
             .events-summary-chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-            .events-summary-chip { width: 100%; justify-content: center; padding: 0 8px; font-size: 10px; }
+            .events-summary-chips .events-summary-chip { width: 100%; justify-content: center; padding: 0 8px; font-size: 10px; }
             .events-weekday { font-size: 10px; letter-spacing: 0; }
             .events-calendar-grid, .events-calendar-weekdays { gap: 4px; }
-            .events-calendar-cell { min-height: 64px; padding: 5px; border-radius: 14px; }
-            .events-calendar-date { width: 22px; height: 22px; font-size: 11px; }
-            .events-calendar-compact { justify-content: flex-start; }
-            .events-calendar-summary { min-height: 22px; padding: 0 7px; font-size: 10px; }
-            .events-calendar-summary-text { display: none; }
+            .events-calendar-cell { min-height: 72px; padding: 5px; border-radius: 14px; }
+            .events-calendar-date { width: 22px; min-width: 22px; max-width: 22px; height: 22px; flex: 0 0 22px; font-size: 11px; }
+            .events-calendar-chip { min-height: 16px; font-size: 9.5px; }
+            .events-calendar-overflow { font-size: 9px; }
         `)}
     `);
 }
@@ -545,20 +524,17 @@ function renderCalendarCell(day, month, calendarDay) {
     const count = calendarDay?.count || 0;
     const hasMilestone = items.some((item) => item.kind === 'milestone');
     const hasRecurring = items.some((item) => item.kind === 'recurring');
-    const compactClasses = ['events-calendar-summary'];
-    if (hasMilestone) compactClasses.push('has-milestone');
-    else if (hasRecurring) compactClasses.push('has-recurring');
+    const visibleLimit = calendarVisibleItemLimit();
+    const visibleItems = items.slice(0, visibleLimit);
     return `
         <div class="${classes.join(' ')}" data-day="${dayString}">
             <div class="events-calendar-head">
                 <span class="events-calendar-date">${day.getDate()}</span>
-                ${count ? `<span class="events-calendar-count">${count}</span>` : ''}
             </div>
             <div class="events-calendar-items">
-                ${items.map((item) => `<button class="events-calendar-chip ${item.kind}" data-event-id="${item.event_id}">${escapeHtml(item.label)}</button>`).join('')}
-                ${count > items.length ? `<div class="events-calendar-overflow">+${count - items.length} 条</div>` : ''}
+                ${visibleItems.map((item) => `<button class="events-calendar-chip ${item.kind}" data-event-id="${item.event_id}" title="${escapeHtml(item.label)}"><span class="events-calendar-chip-text">${escapeHtml(item.label)}</span></button>`).join('')}
+                ${count > visibleItems.length ? `<div class="events-calendar-overflow">+${count - visibleItems.length}<span class="events-calendar-overflow-suffix"> 更多</span></div>` : ''}
             </div>
-            ${count ? `<div class="events-calendar-compact"><span class="${compactClasses.join(' ')}"><span class="events-calendar-summary-count">${count}</span><span class="events-calendar-summary-text">条安排</span></span></div>` : ''}
         </div>`;
 }
 
@@ -682,7 +658,7 @@ function renderTimelinePage() {
                 <div class="events-timeline-tools">
                     <div class="events-timeline-toolbar">
                         <div class="events-list-range">
-                            ${LIST_RANGE_OPTIONS.map((option) => `<button class="events-range-btn ${_state.listRange === option.value ? 'active' : ''}" data-list-range="${option.value}">${option.label}</button>`).join('')}
+                            ${RANGE_PRESET_OPTIONS.map((option) => `<button class="events-range-btn ${_state.listRange === option.key ? 'active' : ''}" data-list-range="${option.key}">${option.label}</button>`).join('')}
                         </div>
                     </div>
                     ${_state.listRange === 'custom' ? `

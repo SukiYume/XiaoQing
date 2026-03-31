@@ -21,7 +21,7 @@ function normalizeToggleSettings(settingsJson) {
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('settings-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.NARROW })}
+        ${pageShellCss('settings-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .settings-stack { display: flex; flex-direction: column; gap: 18px; }
         .settings-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -45,10 +45,13 @@ function ensureStyles() {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
             border: 1px solid rgba(226,232,240,0.88); border-radius: 24px; box-shadow: 0 16px 34px rgba(15,23,42,0.04);
         }
-        .settings-summary-card { padding: 18px; }
+        .settings-summary-card { padding: 18px; min-width: 0; }
         .settings-summary-label { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
-        .settings-summary-value { margin-top: 10px; font-size: 24px; font-weight: 820; color: #0f172a; letter-spacing: -0.03em; }
-        .settings-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); }
+        .settings-summary-value {
+            margin-top: 10px; font-size: clamp(18px, 1.55vw, 24px); font-weight: 820; color: #0f172a; letter-spacing: -0.03em;
+            line-height: 1.18; overflow-wrap: anywhere; word-break: break-word;
+        }
+        .settings-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
         .settings-layout { display: grid; grid-template-columns: minmax(0, 1.06fr) minmax(280px, 0.94fr); gap: 16px; }
         .settings-main-stack { display: flex; flex-direction: column; gap: 16px; }
         .settings-side-stack { display: flex; flex-direction: column; gap: 16px; }
@@ -115,11 +118,11 @@ function ensureStyles() {
             box-shadow: 0 12px 24px rgba(59,130,246,0.12);
             transform: translateY(-1px);
         }
-        ${mediaMax(BREAKPOINTS.FORM, `
+        ${mediaMax(BREAKPOINTS.XL, `
             .settings-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .settings-layout { grid-template-columns: 1fr; }
         `)}
-        ${mediaMax(BREAKPOINTS.NARROW, `
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .settings-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .settings-summary-grid { grid-template-columns: 1fr; }
             .settings-form-grid { grid-template-columns: 1fr; }

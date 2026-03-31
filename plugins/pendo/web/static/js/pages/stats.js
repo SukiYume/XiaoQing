@@ -1,19 +1,10 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { formatDateInput, pad2, todayStr as sharedTodayStr } from '../utils/format.js';
-import { derivePresetRange, fetchItemRangeBounds, todayRangeKey } from '../utils/date_ranges.js';
+import { formatAmount, formatDateInput, formatMoneyCompact, isValidDateInput, pad2, todayStr as sharedTodayStr } from '../utils/format.js';
+import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-stats-waterfall-styles';
-const RANGE_OPTIONS = [
-    { key: 'week', label: '本周' },
-    { key: 'month', label: '本月' },
-    { key: 'quarter', label: '本季' },
-    { key: 'year', label: '今年' },
-    { key: 'last_year', label: '去年' },
-    { key: 'custom', label: '自定义' },
-    { key: 'all', label: '全部' },
-];
 const DEFAULT_MOOD_EMOJIS = {
     happy: '😊',
     sad: '😢',
@@ -39,21 +30,6 @@ function todayStr() {
     return todayRangeKey() || sharedTodayStr();
 }
 
-function isValidDateInput(value) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return false;
-    const date = new Date(`${value}T00:00:00`);
-    return !Number.isNaN(date.getTime()) && formatDateInput(date) === value;
-}
-
-function formatMoney(value) { return `¥${Number(value || 0).toFixed(2)}`; }
-function formatMoneyCompact(value) {
-    const amount = Number(value || 0);
-    const sign = amount < 0 ? '-' : '';
-    const absolute = Math.abs(amount);
-    if (absolute >= 10000) return `${sign}¥${(absolute / 10000).toFixed(1)}万`;
-    if (absolute >= 1000) return `${sign}¥${(absolute / 1000).toFixed(1)}k`;
-    return `${sign}¥${absolute.toFixed(0)}`;
-}
 function formatCount(value) { return `${Number(value || 0)}`; }
 function formatWordCompact(value) {
     const words = Number(value || 0);
@@ -67,7 +43,7 @@ function safeArray(value) { return Array.isArray(value) ? value : []; }
 function rangeLabel() {
     if (_range === 'custom') return '当前范围';
     if (_range === 'all') return '全部时间';
-    return RANGE_OPTIONS.find((item) => item.key === _range)?.label || '当前范围';
+    return RANGE_PRESET_OPTIONS.find((item) => item.key === _range)?.label || '当前范围';
 }
 function diaryRangeTitle() { return _range === 'custom' ? '当前范围' : rangeLabel(); }
 function diaryRangeSentence() { return _range === 'custom' ? '这个范围内' : `${rangeLabel()}里`; }
@@ -666,7 +642,7 @@ function renderComparisonMetric(label, value, maxExpense, color) {
     const amount = Number(value || 0);
     const width = amount > 0 ? Math.max(6, Math.round((amount / maxExpense) * 100)) : 0;
     return `
-        <div class="stats-comparison-metric" title="${escapeHtml(label)} ${formatMoney(amount)}">
+        <div class="stats-comparison-metric" title="${escapeHtml(label)} ${formatAmount(amount)}">
             <div class="stats-comparison-metric-head">
                 <span class="stats-comparison-metric-name">${escapeHtml(label)}</span>
                 <strong>${formatMoneyCompact(amount)}</strong>
@@ -727,14 +703,14 @@ function generateInsights(data) {
         insights.push({
             icon: '💰',
             color: '#fef2f2',
-            text: `${rangeLabel()}支出 <strong>${formatMoney(expenseTotal)}</strong>，收入 <strong>${formatMoney(incomeTotal)}</strong>，结余 <strong>${formatMoney(incomeTotal - expenseTotal)}</strong>`,
+            text: `${rangeLabel()}支出 <strong>${formatAmount(expenseTotal)}</strong>，收入 <strong>${formatAmount(incomeTotal)}</strong>，结余 <strong>${formatAmount(incomeTotal - expenseTotal)}</strong>`,
         });
         if (top) {
             const pct = expenseTotal > 0 ? Math.round((Number(top.total || 0) / expenseTotal) * 100) : 0;
             insights.push({
                 icon: '🏷️',
                 color: '#fff7ed',
-                text: `最大支出分类：<strong>${escapeHtml(top.category || '未分类')}</strong>，占比 ${pct}%（${formatMoney(top.total)}）`,
+                text: `最大支出分类：<strong>${escapeHtml(top.category || '未分类')}</strong>，占比 ${pct}%（${formatAmount(top.total)}）`,
             });
         }
     }
@@ -900,7 +876,7 @@ function renderCard({ accent = '#4f46e5', eyebrow = '', title = '', subtitle = '
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('stats-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.COMPACT })}
+        ${pageShellCss('stats-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .stats-stack { display: flex; flex-direction: column; gap: 18px; }
         .stats-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start;
@@ -949,13 +925,31 @@ function ensureStyles() {
         }
         .stats-summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
         .stats-summary-card {
+            min-width: 0;
             padding: 16px 16px 14px; border-radius: 22px;
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
             border: 1px solid rgba(226,232,240,0.88); box-shadow: 0 14px 30px rgba(15,23,42,0.04);
         }
         .stats-summary-label { font-size: 12px; font-weight: 800; color: var(--color-text-secondary); }
-        .stats-summary-value { margin-top: 10px; font-size: 30px; line-height: 1.04; letter-spacing: -0.03em; font-weight: 820; color: #0f172a; }
-        .stats-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); }
+        .stats-summary-value {
+            min-width: 0;
+            margin-top: 10px;
+            font-size: clamp(24px, 1.85vw, 30px);
+            line-height: 1.04;
+            letter-spacing: -0.03em;
+            font-weight: 820;
+            color: #0f172a;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+        .stats-summary-meta {
+            min-width: 0;
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--color-text-secondary);
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
         .stats-featured { display: flex; flex-direction: column; gap: 16px; }
         .stats-wall { column-count: 3; column-gap: 16px; }
         .stats-card {
@@ -1045,10 +1039,10 @@ function ensureStyles() {
         .stats-histogram-value { font-size: 10px; font-weight: 800; color: #0f172a; }
         .stats-histogram-label { width: 100%; font-size: 10px; color: var(--color-text-secondary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .stats-donut-wrap { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 12px; align-items: center; }
-        .stats-donut { width: 100%; height: auto; }
+        .stats-donut { width: 100%; height: auto; max-width: 180px; margin: 0 auto; }
         .stats-donut path { transition: opacity 0.2s ease, transform 0.2s ease; transform-origin: 90px 90px; }
         .stats-donut path:hover { opacity: 0.85; cursor: pointer; transform: scale(1.02); }
-        .stats-donut-center-value { font-size: 18px; font-weight: 800; fill: #111827; }
+        .stats-donut-center-value { font-size: 17px; font-weight: 700; fill: #7f1d1d; }
         .stats-donut-center-value.small { font-size: 15px; }
         .stats-donut-center-value.tiny { font-size: 13px; }
         .stats-donut-center-label { font-size: 11px; fill: #94a3b8; }
@@ -1147,15 +1141,21 @@ function ensureStyles() {
             .stats-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .stats-wall { column-count: 2; }
         `)}
-        ${mediaMax(BREAKPOINTS.COMPACT, `
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .stats-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .stats-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .stats-wall { column-count: 2; }
-            .stats-donut-wrap { grid-template-columns: 1fr; }
+            .stats-donut-wrap { grid-template-columns: 1fr; gap: 10px; }
+            .stats-donut { max-width: min(200px, 52vw); }
+            .stats-donut-center-value { font-size: 16px; }
+            .stats-donut-center-value.small { font-size: 14px; }
+            .stats-donut-center-value.tiny { font-size: 12px; }
+            .stats-donut-center-label { font-size: 10px; }
+            .stats-donut-legend-item { font-size: 11px; }
             .stats-date-field { min-width: 132px; }
             .stats-range-group { margin-top: 0; }
         `)}
-        ${mediaMax(BREAKPOINTS.STATS_SMALL, `
+        ${mediaMax(BREAKPOINTS.PHONE, `
             .stats-wall { column-count: 1; }
             .stats-summary-grid, .stats-metric-pairs, .stats-dual-grid, .stats-treemap { grid-template-columns: 1fr; }
             .stats-range-group, .stats-chip-row { align-items: stretch; }
@@ -1234,17 +1234,17 @@ function financeCards() {
                 <div class="stats-dual-grid">
                     <div class="stats-dual-card">
                         <div class="stats-dual-label">支出</div>
-                        <div class="stats-dual-value" style="color:#dc2626;">${formatMoney(expenseTotal)}</div>
+                        <div class="stats-dual-value" style="color:#dc2626;">${formatAmount(expenseTotal)}</div>
                         <div class="stats-dual-meta">${topExpense ? `最高分类 ${escapeHtml(topExpense.category || '未分类')}` : '暂无支出分类'}</div>
                     </div>
                     <div class="stats-dual-card">
                         <div class="stats-dual-label">收入</div>
-                        <div class="stats-dual-value" style="color:#10b981;">${formatMoney(incomeTotal)}</div>
+                        <div class="stats-dual-value" style="color:#10b981;">${formatAmount(incomeTotal)}</div>
                         <div class="stats-dual-meta">${topIncome ? `主要来源 ${escapeHtml(topIncome.category || '未分类')}` : '暂无收入分类'}</div>
                     </div>
                 </div>`,
             footer: renderMetricPairs([
-                { label: '结余', value: formatMoney(balance) },
+                { label: '结余', value: formatAmount(balance) },
                 { label: '支出分类数', value: formatCount(expenseByCategory.length) },
             ]),
         }),
@@ -1253,14 +1253,14 @@ function financeCards() {
             eyebrow: 'Finance',
             title: '支出走势',
             subtitle: `按${rangeLabel()}观察支出在时间轴上的波峰和低谷。`,
-            body: renderSparkline(trendLabels, expenseValues, '#ef4444', formatMoney),
+            body: renderSparkline(trendLabels, expenseValues, '#ef4444', formatAmount),
         }),
         renderCard({
             accent: '#10b981',
             eyebrow: 'Finance',
             title: '收入走势',
             subtitle: `按${rangeLabel()}查看进账在时间轴上的分布。`,
-            body: renderSparkline(trendLabels, incomeValues, '#10b981', formatMoney),
+            body: renderSparkline(trendLabels, incomeValues, '#10b981', formatAmount),
         }),
         renderCard({
             accent: '#f97316',
@@ -1272,9 +1272,9 @@ function financeCards() {
                 'total',
                 'category',
                 ['#ef4444', '#f97316', '#f59e0b', '#fb7185', '#f43f5e', '#fdba74'],
-                formatMoney(expenseTotal),
+                formatAmount(expenseTotal),
                 '总支出',
-                formatMoney,
+                formatAmount,
             ),
         }),
         renderCard({
@@ -1287,7 +1287,7 @@ function financeCards() {
                 'total',
                 'category',
                 ['#ef4444', '#f97316', '#fb7185', '#f59e0b', '#f43f5e', '#fdba74'],
-                formatMoney,
+                formatAmount,
             ),
         }),
         renderCard({
@@ -1295,7 +1295,7 @@ function financeCards() {
             eyebrow: 'Finance',
             title: '收入来源',
             subtitle: `按${rangeLabel()}查看收入主要来源。`,
-            body: renderBarRows(incomeByCategory.slice(0, 6), 'total', 'category', '#14b8a6', formatMoney),
+            body: renderBarRows(incomeByCategory.slice(0, 6), 'total', 'category', '#14b8a6', formatAmount),
         }),
         renderCard({
             accent: '#f59e0b',
@@ -1584,8 +1584,8 @@ function renderSummary() {
     const rangeTitle = _range === 'custom' ? '自定义范围' : rangeLabel();
     return `
         <section class="stats-summary-grid">
-            <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}支出</div><div class="stats-summary-value">${formatMoney(expenseTotal)}</div><div class="stats-summary-meta">收入 ${formatMoney(incomeTotal)}</div></article>
-            <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}结余</div><div class="stats-summary-value">${formatMoney(incomeTotal - expenseTotal)}</div><div class="stats-summary-meta">按当前范围计算</div></article>
+            <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}支出</div><div class="stats-summary-value">${formatAmount(expenseTotal)}</div><div class="stats-summary-meta">收入 ${formatAmount(incomeTotal)}</div></article>
+            <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}结余</div><div class="stats-summary-value">${formatAmount(incomeTotal - expenseTotal)}</div><div class="stats-summary-meta">按当前范围计算</div></article>
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}任务</div><div class="stats-summary-value">${formatCount(totals.total)}</div><div class="stats-summary-meta">完成 ${formatCount(totals.done)} 项 · 取消 ${formatCount(totals.cancelled)} 项</div></article>
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}日程</div><div class="stats-summary-value">${formatCount(totalEvents)}</div><div class="stats-summary-meta">分类 ${formatCount(safeArray(events.by_category).length)} 种</div></article>
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}笔记</div><div class="stats-summary-value">${formatCount(notes.summary?.total_count || 0)}</div><div class="stats-summary-meta">范围尾端近 7 天新增 ${formatCount(notes.summary?.week_new_count || 0)}</div></article>
@@ -1634,7 +1634,7 @@ function renderPage() {
                     </div>
                     <div class="stats-range-group">
                         <div class="stats-chip-row">
-                            ${RANGE_OPTIONS.map((option) => `<button type="button" class="stats-range-btn${_range === option.key ? ' active' : ''}" data-range="${option.key}">${option.label}</button>`).join('')}
+                            ${RANGE_PRESET_OPTIONS.map((option) => `<button type="button" class="stats-range-btn${_range === option.key ? ' active' : ''}" data-range="${option.key}">${option.label}</button>`).join('')}
                         </div>
                         ${_range === 'custom' ? `
                             <div class="stats-custom-range">

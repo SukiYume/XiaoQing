@@ -5,7 +5,7 @@ import { buildFormHTML, getFormData, initFormInteractions } from '../components/
 import { renderPagination } from '../components/pagination.js';
 import { renderLedgerInsightsPanel } from '../components/ledger_insights.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
-import { isoDate, isValidDateInput, todayStr as sharedTodayStr } from '../utils/format.js';
+import { formatAmount, isoDate, isValidDateInput, todayStr as sharedTodayStr } from '../utils/format.js';
 import { derivePresetRange, todayRangeKey } from '../utils/date_ranges.js';
 import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
@@ -77,10 +77,6 @@ function compareModeForFilter(filter) {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function fmtAmount(amount) {
-    return '¥' + Number(amount).toFixed(2);
-}
 
 function groupByDate(items) {
     const groups = {};
@@ -240,10 +236,10 @@ function ensureStyles() {
             grid-template-columns: repeat(3, 1fr);
             gap: 14px;
         }
-        ${mediaMax(BREAKPOINTS.WIDE, `
+        ${mediaMax(BREAKPOINTS.XL, `
             .ledger-summary-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         `)}
-        ${mediaMax(BREAKPOINTS.NARROW, `
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .ledger-summary-cards { grid-template-columns: 1fr; }
         `)}
         .ledger-summary-card {
@@ -416,6 +412,10 @@ function ensureStyles() {
             width: 100%;
             height: auto;
         }
+        .ledger-insight-svg-ring {
+            max-width: 188px;
+            margin: 0 auto;
+        }
         .ledger-insight-axis-labels text {
             fill: #9ca3af;
             font-size: 10px;
@@ -546,16 +546,16 @@ function ensureStyles() {
 
         /* Quick-add bar */
         .ledger-quick-add {
-            display: grid;
-            grid-template-columns: 104px 128px minmax(0, 1fr) 156px;
-            grid-template-areas:
-                "dir amount title title"
-                "category category date submit";
+            --ledger-qa-direction-width: 128px;
+            --ledger-qa-control-width: 176px;
+            display: flex;
+            flex-wrap: wrap;
             gap: 12px;
             align-items: center;
         }
         .ledger-quick-add > * { min-width: 0; }
         .ledger-quick-add input {
+            box-sizing: border-box;
             font-size: 13px;
             height: 40px;
             border-radius: 14px;
@@ -569,16 +569,24 @@ function ensureStyles() {
             box-shadow: 0 0 0 3px rgba(239,68,68,0.1);
             outline: none;
         }
-        .ledger-quick-add .pselect { width: 100%; }
-        .ledger-quick-add .ledger-qa-direction { grid-area: dir; }
-        .ledger-quick-add .ledger-qa-amount { width: 100%; min-width: 0; }
-        .ledger-quick-add .ledger-qa-amount { grid-area: amount; }
+        .ledger-quick-add .pselect { width: auto; max-width: 100%; }
+        .ledger-quick-add .ledger-qa-direction {
+            flex: 0 0 auto;
+            width: var(--ledger-qa-direction-width);
+            max-width: 100%;
+        }
+        .ledger-quick-add .ledger-qa-amount,
+        .ledger-quick-add .ledger-qa-title,
+        .ledger-quick-add .ledger-qa-category,
+        .ledger-quick-add .ledger-qa-date,
+        .ledger-quick-add .ledger-qa-submit {
+            flex: 0 0 auto;
+            width: min(100%, var(--ledger-qa-control-width));
+            min-width: 0;
+        }
         .ledger-qa-amount::-webkit-outer-spin-button,
         .ledger-qa-amount::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         .ledger-qa-amount { -moz-appearance: textfield; }
-        .ledger-quick-add .ledger-qa-title { width: 100%; min-width: 0; grid-area: title; }
-        .ledger-quick-add .ledger-qa-category { width: 100%; min-width: 0; grid-area: category; }
-        .ledger-quick-add .ledger-qa-date { width: 100%; min-width: 0; grid-area: date; }
         .ledger-qa-submit {
             height: 40px;
             padding: 0 16px;
@@ -593,16 +601,16 @@ function ensureStyles() {
             transition: background .15s, transform .15s, box-shadow .15s;
             box-shadow: 0 10px 24px rgba(225,82,65,0.18);
         }
-        .ledger-quick-add .ledger-qa-submit {
-            grid-area: submit;
-            width: 100%;
-        }
         .ledger-qa-submit:hover { background: #dc2626; transform: translateY(-1px); }
 
         /* Filter bar */
         .ledger-filter-bar {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            --ledger-filter-select-width: 170px;
+            --ledger-filter-control-width: 196px;
+            --ledger-filter-amount-width: 312px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
             gap: 14px;
         }
         .ledger-filter-item {
@@ -618,16 +626,23 @@ function ensureStyles() {
         }
         .ledger-filter-item--date {
             flex: 0 0 auto;
+            width: min(100%, var(--ledger-filter-control-width));
         }
         .ledger-filter-item--direction {
             flex: 0 0 auto;
+            width: min(100%, var(--ledger-filter-select-width));
         }
         .ledger-filter-item--category {
             flex: 0 0 auto;
+            width: min(100%, var(--ledger-filter-select-width));
         }
         .ledger-filter-item--amount {
-            flex: 0 1 auto;
+            flex: 0 0 auto;
+            width: min(100%, var(--ledger-filter-amount-width));
         }
+        .ledger-filter-item--date .ledger-filter-controls,
+        .ledger-filter-item--direction .ledger-filter-controls,
+        .ledger-filter-item--category .ledger-filter-controls { width: 100%; }
         .ledger-filter-item--amount .ledger-filter-controls {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -652,25 +667,36 @@ function ensureStyles() {
             flex-wrap: wrap;
         }
         .ledger-filter-range {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            align-items: stretch;
+            row-gap: 8px;
             min-width: 0;
-            flex-wrap: wrap;
             flex: 1 0 100%;
-            width: auto;
+            width: 100%;
             margin-top: 4px;
         }
         .ledger-filter-range-sep {
             font-size: 12px;
             color: var(--color-text-secondary);
+            display: none;
             flex: 0 0 auto;
         }
-        .ledger-filter-date { width: 108px; flex: 0 0 108px; }
-        .ledger-filter-direction { width: 124px; }
-        .ledger-filter-category { width: 124px; }
+        .ledger-filter-date,
+        .ledger-filter-direction,
+        .ledger-filter-category {
+            width: 100%;
+            flex: 0 0 auto;
+        }
+        .ledger-filter-item--date .pselect,
+        .ledger-filter-item--direction .pselect,
+        .ledger-filter-item--category .pselect,
+        .ledger-filter-item--date .pselect-trigger,
+        .ledger-filter-item--direction .pselect-trigger,
+        .ledger-filter-item--category .pselect-trigger { width: 100%; }
         .ledger-amount-input,
         .ledger-custom-date-input {
+            box-sizing: border-box;
             height: 36px !important;
             font-size: 13px;
             padding: 0 12px;
@@ -685,15 +711,16 @@ function ensureStyles() {
         .ledger-filter-bar .ledger-amount-input {
             width: 100%;
             min-width: 0;
-            flex: 1 1 0;
+            flex: 1 1 auto;
         }
         .ledger-amount-input::-webkit-outer-spin-button,
         .ledger-amount-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         .ledger-amount-input { -moz-appearance: textfield; }
         .ledger-filter-bar .ledger-custom-date-input {
-            width: 144px;
+            width: 100%;
             min-width: 0;
-            flex: 0 1 144px;
+            max-width: 100%;
+            flex: 1 1 auto;
         }
         .ledger-range-apply {
             height: 36px;
@@ -708,6 +735,8 @@ function ensureStyles() {
             font-weight: 600;
             cursor: pointer;
             transition: background .15s, border-color .15s, transform .15s;
+            grid-column: 1 / -1;
+            justify-self: stretch;
         }
         .ledger-range-apply:hover {
             background: rgba(239,68,68,0.12);
@@ -728,7 +757,6 @@ function ensureStyles() {
         .ledger-amount-input::placeholder { color: var(--color-text-secondary); }
 
         /* Shared custom select */
-        .ledger-quick-add .pselect { width: 100%; }
         .ledger-filter-bar .pselect-trigger {
             height: 40px;
             padding: 0 12px 0 14px;
@@ -746,21 +774,12 @@ function ensureStyles() {
         }
         .ledger-quick-add .pselect-label { min-width: 0; }
         .ledger-quick-add .pselect-panel { border-radius: 16px; z-index: 1200; }
-        ${mediaMax(BREAKPOINTS.FORM, `
+        ${mediaMax(BREAKPOINTS.XL, `
             .ledger-controls-grid {
                 grid-template-columns: 1fr;
             }
             .ledger-insights-panel {
                 grid-template-columns: 1fr;
-            }
-            .ledger-quick-add {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-                grid-template-areas:
-                    "dir amount"
-                    "title title"
-                    "category category"
-                    "date date"
-                    "submit submit";
             }
         `)}
         ${mediaMax(BREAKPOINTS.MOBILE, `
@@ -768,17 +787,40 @@ function ensureStyles() {
                 grid-template-columns: 1fr;
                 padding: 22px 20px;
             }
+            .ledger-quick-add {
+                --ledger-qa-direction-width: 108px;
+                --ledger-qa-control-width: 136px;
+            }
             .ledger-page-header {
                 align-items: flex-start;
             }
             .ledger-filter-bar {
-                grid-template-columns: 1fr;
+                --ledger-filter-select-width: 100%;
+                --ledger-filter-control-width: 100%;
+                --ledger-filter-amount-width: 100%;
             }
             .ledger-pulse-metrics {
                 grid-template-columns: 1fr;
             }
             .ledger-insight-ring-wrap {
                 grid-template-columns: 1fr;
+            }
+            .ledger-insight-svg-ring {
+                max-width: min(200px, 52vw);
+            }
+            .ledger-ring-center-value {
+                font-size: 15px;
+            }
+            .ledger-ring-center-label {
+                font-size: 10px;
+            }
+            .ledger-insight-y-label {
+                font-size: clamp(14px, 4.2vw, 18px);
+            }
+            .ledger-insight-svg-trend .ledger-insight-axis-labels text,
+            .ledger-insight-svg-kline .ledger-insight-axis-labels text {
+                font-size: clamp(13px, 3.8vw, 17px);
+                font-weight: 600;
             }
             .ledger-filter-item {
                 width: 100%;
@@ -797,7 +839,8 @@ function ensureStyles() {
                 flex-wrap: wrap;
             }
             .ledger-filter-item--amount .ledger-filter-controls {
-                grid-template-columns: 1fr;
+                grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+                align-items: center;
             }
             .ledger-filter-date,
             .ledger-filter-direction,
@@ -807,6 +850,8 @@ function ensureStyles() {
             .ledger-filter-range {
                 flex-direction: column;
                 align-items: stretch;
+                grid-template-columns: 1fr;
+                row-gap: 8px;
             }
             .ledger-filter-range-sep {
                 display: none;
@@ -819,19 +864,10 @@ function ensureStyles() {
             }
             .ledger-range-apply {
                 width: 100%;
+                justify-self: stretch;
             }
         `)}
         ${mediaMax(BREAKPOINTS.PHONE, `
-            .ledger-quick-add {
-                grid-template-columns: 1fr;
-                grid-template-areas:
-                    "dir"
-                    "amount"
-                    "title"
-                    "category"
-                    "date"
-                    "submit";
-            }
             .ledger-summary-value {
                 font-size: 26px;
             }
@@ -972,21 +1008,21 @@ function renderSummaryCards() {
             <div class="ledger-summary-card">
                 <div class="ledger-summary-icon">📈</div>
                 <div>
-                    <div class="ledger-summary-value" style="color:var(--color-success);">${fmtAmount(income)}</div>
+                    <div class="ledger-summary-value" style="color:var(--color-success);">${formatAmount(income)}</div>
                     <div class="ledger-summary-label">收入</div>
                 </div>
             </div>
             <div class="ledger-summary-card">
                 <div class="ledger-summary-icon">📉</div>
                 <div>
-                    <div class="ledger-summary-value" style="color:var(--color-ledger);">${fmtAmount(expense)}</div>
+                    <div class="ledger-summary-value" style="color:var(--color-ledger);">${formatAmount(expense)}</div>
                     <div class="ledger-summary-label">支出</div>
                 </div>
             </div>
             <div class="ledger-summary-card">
                 <div class="ledger-summary-icon">💰</div>
                 <div>
-                    <div class="ledger-summary-value" style="color:${balanceColor};">${fmtAmount(balance)}</div>
+                    <div class="ledger-summary-value" style="color:${balanceColor};">${formatAmount(balance)}</div>
                     <div class="ledger-summary-label">结余</div>
                 </div>
             </div>
@@ -1111,7 +1147,7 @@ function renderItemRow(item) {
                 ${meta}
             </div>
             ${catBadge}
-            <span class="ledger-row-amount" style="color:${amtColor};">${amtSign}${fmtAmount(item.amount)}</span>
+            <span class="ledger-row-amount" style="color:${amtColor};">${amtSign}${formatAmount(item.amount)}</span>
             <div class="ledger-row-actions">
                 <button class="btn btn-icon btn-sm btn-edit-ledger"   data-id="${item.id}" title="编辑">✏️</button>
                 <button class="btn btn-icon btn-sm btn-delete-ledger" data-id="${item.id}" title="删除">🗑️</button>
@@ -1242,18 +1278,12 @@ function attachListeners() {
         'filter-date':      async (val) => {
             _dateFilter = val;
             _page = 1;
-            const group = _container.querySelector('#filter-custom-range');
-            if (group) group.style.display = val === 'custom' ? 'grid' : 'none';
             if (val === 'custom') {
                 // Pre-fill with last 30 days so inputs show dates instead of 年/月/日
                 if (!_customDateStart || !_customDateEnd) {
                     const r = dateRangeForFilter('month');
                     _customDateStart = r.start_date;
                     _customDateEnd   = r.end_date;
-                    const s = _container.querySelector('#filter-date-start');
-                    const e = _container.querySelector('#filter-date-end');
-                    if (s) s.value = _customDateStart;
-                    if (e) e.value = _customDateEnd;
                 }
                 await loadAndRender();
             } else {
@@ -1422,7 +1452,7 @@ function openDetailModal(item) {
     const body = `
         <div style="margin:-2px 0;">
             <div style="display:flex;align-items:baseline;gap:8px;padding-bottom:16px;border-bottom:1px solid var(--color-border);margin-bottom:14px;">
-                <span style="font-size:28px;font-weight:700;color:${amtColor};">${amtSign}${fmtAmount(item.amount)}</span>
+                <span style="font-size:28px;font-weight:700;color:${amtColor};">${amtSign}${formatAmount(item.amount)}</span>
                 <span style="font-size:13px;padding:2px 8px;border-radius:20px;background:${isIncome ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'};color:${amtColor};font-weight:600;">${dirLabel}</span>
             </div>
             <div style="padding:0 14px;background:var(--color-bg);border:1px solid var(--color-border);border-radius:12px;">

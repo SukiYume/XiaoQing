@@ -129,6 +129,17 @@ def test_tasks_page_source_uses_subtle_priority_picker_active_state():
     assert "box-shadow: inset 0 0 0 1px rgba(234,179,8,0.14);" in page_src
 
 
+def test_tasks_page_source_scales_stat_values_for_mid_width_layouts():
+    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js").read_text(encoding="utf-8")
+
+    assert "min-width: 0;" in page_src
+    assert "font-size: clamp(24px, 1.9vw, 30px);" in page_src
+    assert "overflow-wrap: anywhere;" in page_src
+    assert "word-break: break-word;" in page_src
+    assert "white-space: nowrap;" in page_src
+    assert "text-overflow: ellipsis;" in page_src
+
+
 def test_build_task_overview_loads_more_than_500_tasks():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_tasks_many_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)

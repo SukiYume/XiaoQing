@@ -1,32 +1,11 @@
+import { formatAmount, formatMoneyCompact } from '../utils/format.js';
+
 function esc(text) {
     return String(text ?? '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
-}
-
-function fmtMoney(value, digits = 2) {
-    return `¥${Number(value || 0).toLocaleString('zh-CN', {
-        minimumFractionDigits: digits,
-        maximumFractionDigits: digits,
-    })}`;
-}
-
-function fmtMoneyCompact(value) {
-    const amount = Number(value || 0);
-    if (Math.abs(amount) >= 10000) {
-        return `¥${(amount / 10000).toFixed(1)}w`;
-    }
-    return `¥${amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`;
-}
-
-function fmtAxisMoney(value) {
-    const amount = Number(value || 0);
-    if (Math.abs(amount) >= 10000) {
-        return `¥${(amount / 10000).toFixed(1)}w`;
-    }
-    return `¥${amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`;
 }
 
 function fmtPercent(value) {
@@ -93,13 +72,13 @@ function buildTrendSvg(points) {
             ${index === ticks.length - 1
                 ? `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${pad.left}" y2="${y.toFixed(2)}" stroke="rgba(148,163,184,0.55)" />`
                 : ''}
-            <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${esc(fmtAxisMoney(value))}</text>
+            <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${esc(formatMoneyCompact(value))}</text>
         </g>
     `).join('');
 
     const pointsHtml = coords.map((point) => `
         <g>
-            <title>${esc(point.label)} ${fmtMoney(point.total || 0)} · ${point.count || 0} 笔</title>
+            <title>${esc(point.label)} ${formatAmount(point.total || 0)} · ${point.count || 0} 笔</title>
             <circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="2.7" fill="#fff" stroke="#E15241" stroke-width="1.45"/>
         </g>
     `).join('');
@@ -171,7 +150,7 @@ function buildRingSvg(categories, total, centerLabel = '支出总额') {
         const path = arcPath(cx, cy, outer, inner, startAngle, endAngle);
         const html = `
             <path d="${path}" fill="${palette[index % palette.length]}">
-                <title>${esc(item.category)} ${fmtMoney(item.total || 0)} · ${(Number(item.share || 0) * 100).toFixed(1)}%</title>
+                <title>${esc(item.category)} ${formatAmount(item.total || 0)} · ${(Number(item.share || 0) * 100).toFixed(1)}%</title>
             </path>`;
         startAngle = endAngle;
         return html;
@@ -183,7 +162,7 @@ function buildRingSvg(categories, total, centerLabel = '支出总额') {
                 <circle cx="${cx}" cy="${cy}" r="${outer}" fill="rgba(225,82,65,0.06)"></circle>
                 ${arcs}
                 <circle cx="${cx}" cy="${cy}" r="${inner - 1}" fill="#fff"></circle>
-                <text x="${cx}" y="${cy - 4}" text-anchor="middle" class="ledger-ring-center-value">${fmtMoneyCompact(total)}</text>
+                <text x="${cx}" y="${cy - 4}" text-anchor="middle" class="ledger-ring-center-value">${formatMoneyCompact(total)}</text>
                 <text x="${cx}" y="${cy + 20}" text-anchor="middle" class="ledger-ring-center-label">${esc(centerLabel)}</text>
             </svg>
             <div class="ledger-insight-legend">
@@ -191,7 +170,7 @@ function buildRingSvg(categories, total, centerLabel = '支出总额') {
                     <div class="ledger-insight-legend-item">
                         <span class="ledger-insight-legend-dot" style="background:${palette[index % palette.length]};"></span>
                         <span class="ledger-insight-legend-name">${esc(item.category)}</span>
-                        <span class="ledger-insight-legend-value">${fmtMoneyCompact(item.total || 0)}</span>
+                        <span class="ledger-insight-legend-value">${formatMoneyCompact(item.total || 0)}</span>
                     </div>
                 `).join('')}
             </div>
@@ -208,7 +187,7 @@ function buildHotspots(categories, total) {
                         <div class="ledger-hotspot-row-head">
                             <span class="ledger-hotspot-rank">0${index + 1}</span>
                             <span class="ledger-hotspot-name">${esc(item.category)}</span>
-                            <span class="ledger-hotspot-amount">${fmtMoney(item.total || 0)}</span>
+                            <span class="ledger-hotspot-amount">${formatAmount(item.total || 0)}</span>
                         </div>
                         <div class="ledger-hotspot-track">
                             <div class="ledger-hotspot-fill" style="width:${pct.toFixed(2)}%;"></div>
@@ -251,7 +230,7 @@ function buildCandleSvg(candles) {
             ${index === ticks.length - 1
                 ? `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${pad.left}" y2="${y.toFixed(2)}" stroke="rgba(148,163,184,0.55)" />`
                 : ''}
-            <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${esc(fmtAxisMoney(value))}</text>
+            <text class="ledger-insight-y-label" x="${pad.left - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${esc(formatMoneyCompact(value))}</text>
         </g>
     `).join('');
 
@@ -269,7 +248,7 @@ function buildCandleSvg(candles) {
         const wickStroke = isUp ? 'rgba(233,138,72,0.75)' : 'rgba(201,87,59,0.80)';
         return `
             <g>
-                <title>${esc(item.label)} 高:${fmtMoney(item.high || 0)} 低:${fmtMoney(item.low || 0)} 开:${fmtMoney(item.open || 0)} 收:${fmtMoney(item.close || 0)}</title>
+                <title>${esc(item.label)} 高:${formatAmount(item.high || 0)} 低:${formatAmount(item.low || 0)} 开:${formatAmount(item.open || 0)} 收:${formatAmount(item.close || 0)}</title>
                 <line x1="${x.toFixed(2)}" y1="${highY.toFixed(2)}" x2="${x.toFixed(2)}" y2="${lowY.toFixed(2)}" stroke="${wickStroke}" stroke-width="1.4" stroke-linecap="round"></line>
                 <rect x="${(x - candleWidth / 2).toFixed(2)}" y="${bodyTop.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${bodyHeight.toFixed(2)}" rx="${Math.min(3, candleWidth / 3).toFixed(2)}" fill="${fill}" stroke="${stroke}" stroke-width="0.8" opacity="0.96"></rect>
             </g>`;
@@ -325,16 +304,16 @@ export function renderLedgerInsightsPanel(data) {
                 <div class="ledger-pulse-metrics">
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">总${focusLabel}</span>
-                        <strong>${fmtMoney(focusTotal)}</strong>
+                        <strong>${formatAmount(focusTotal)}</strong>
                     </div>
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">单笔均值</span>
-                        <strong>${fmtMoney(averageFocusAmount)}</strong>
+                        <strong>${formatAmount(averageFocusAmount)}</strong>
                     </div>
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">峰值时段</span>
                         <strong>${peakLabel}</strong>
-                        <small>${fmtMoneyCompact(peakTotal)}</small>
+                        <small>${formatMoneyCompact(peakTotal)}</small>
                     </div>
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">${deltaLabel}</span>

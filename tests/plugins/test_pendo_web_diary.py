@@ -192,6 +192,38 @@ def test_diary_page_source_uses_word_based_cadence_copy_and_values():
     assert "const maxValue = Math.max(1, ...cadence.map((item) => item.words || 0));" in src
 
 
+def test_diary_page_source_scales_summary_values_for_mid_width_layouts():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "diary.js").read_text(encoding="utf-8")
+
+    assert ".diary-summary-card { padding: 18px; min-width: 0; }" in src
+    assert "font-size: clamp(24px, 1.9vw, 30px);" in src
+    assert "overflow-wrap: anywhere;" in src
+    assert "word-break: break-word;" in src
+    assert ".diary-summary-card { padding: 14px 16px; border-radius: 20px; }" in src
+    assert ".diary-summary-value { margin-top: 6px; font-size: 22px; }" in src
+
+
+def test_diary_page_source_uses_calendar_metrics_instead_of_preview_snippets():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "diary.js").read_text(encoding="utf-8")
+
+    assert "function compactDiaryCellLabel(entry, maxChars = 8)" in src
+    assert ".replace(/^[\\s\\u3000]+/, '')" in src
+    assert ".replace(/\\s+/g, ' ')" in src
+    assert "const totalWords = list.length ? list.reduce((sum, item) => sum + diaryWordCount(item), 0) : 0;" in src
+    assert "const metric = list.length > 1 ? `${list.length} 篇 ${totalWords} 字` : `${totalWords}字`;" in src
+    assert "const copy = meta ? `${metric} ${meta}` : metric;" in src
+    assert '<span class=\"diary-day-copy\">${escapeHtml(copy)}</span>' in src
+    assert "diary-day-count" not in src
+    assert ".diary-day-body { display: flex; flex-direction: column; gap: 4px; min-height: 0; margin-top: 0; align-items: flex-start; text-align: left; }" in src
+    assert ".diary-day-copy {" in src
+    assert "BREAKPOINTS.XL" in src
+    assert "compactBreakpoint: BREAKPOINTS.MOBILE" in src
+    assert "BREAKPOINTS.COMPACT" not in src
+    assert "BREAKPOINTS.NARROW" not in src
+    assert ".diary-month-nav { align-self: stretch; grid-template-columns: 32px minmax(0, 1fr) 32px; width: 100%; }" in src
+    assert "还没写" not in src
+
+
 def test_stats_page_source_uses_word_based_diary_density_and_month_streak():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
 

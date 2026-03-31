@@ -37,6 +37,7 @@ function ensureStyles() {
             border: 1px solid rgba(226,232,240,0.92);
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.94));
             box-shadow: 0 12px 28px rgba(15,23,42,0.04);
+            min-width: 0;
         }
         .dashboard-summary-card::after {
             content: ''; position: absolute; inset: auto -18px -30px auto; width: 96px; height: 96px;
@@ -56,9 +57,12 @@ function ensureStyles() {
             padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
             background: rgba(255,255,255,0.76); color: currentColor;
         }
-        .dashboard-summary-value { font-size: 28px; line-height: 1; font-weight: 800; letter-spacing: -0.03em; color: var(--color-text); }
-        .dashboard-summary-label { margin-top: 7px; font-size: 13px; font-weight: 600; color: var(--color-text); }
-        .dashboard-summary-meta { margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); }
+        .dashboard-summary-value {
+            font-size: clamp(22px, 1.8vw, 28px); line-height: 1.04; font-weight: 800; letter-spacing: -0.03em; color: var(--color-text);
+            overflow-wrap: anywhere; word-break: break-word;
+        }
+        .dashboard-summary-label { margin-top: 7px; font-size: 13px; font-weight: 600; color: var(--color-text); overflow-wrap: anywhere; word-break: break-word; }
+        .dashboard-summary-meta { margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
         .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr); gap: 16px; align-items: start; }
         .dashboard-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
         .dashboard-panel {
@@ -137,19 +141,20 @@ function ensureStyles() {
             background: linear-gradient(180deg, rgba(124,58,237,0.10), rgba(255,255,255,0.9));
             border: 1px solid rgba(124,58,237,0.14);
         }
-        .dashboard-diary-stat strong { display: block; font-size: 28px; line-height: 1; color: #7C3AED; letter-spacing: -0.03em; }
-        .dashboard-diary-stat span { display: block; margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); }
+        .dashboard-diary-stat strong {
+            display: block; font-size: clamp(22px, 1.8vw, 28px); line-height: 1.04; color: #7C3AED; letter-spacing: -0.03em;
+            overflow-wrap: anywhere; word-break: break-word;
+        }
+        .dashboard-diary-stat span { display: block; margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
         .dashboard-empty {
             padding: 28px 16px; border-radius: 18px; background: rgba(248,250,252,0.86);
             border: 1px dashed rgba(148,163,184,0.28); text-align: center;
         }
         .dashboard-empty strong { display: block; font-size: 14px; color: var(--color-text); }
         .dashboard-empty p { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); }
-        ${mediaMax(BREAKPOINTS.DESKTOP, `
+        ${mediaMax(BREAKPOINTS.XL, `
             .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .dashboard-grid { grid-template-columns: 1fr; }
-        `)}
-        ${mediaMax(BREAKPOINTS.DASHBOARD, `
             .dashboard-finance-top { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .dashboard-finance-metric strong { font-size: clamp(16px, 2.3vw, 20px); }
             .dashboard-event-card { grid-template-columns: 50px minmax(0, 1fr); gap: 10px; }
@@ -159,7 +164,15 @@ function ensureStyles() {
         ${mediaMax(BREAKPOINTS.MOBILE, `
             .dashboard-hero { grid-template-columns: 1fr; }
             .dashboard-hero-tags { justify-content: flex-start; }
-            .dashboard-summary { grid-template-columns: 1fr; }
+            .dashboard-summary { grid-template-columns: 1fr; gap: 10px; }
+            .dashboard-summary-card { padding: 14px 14px 12px; border-radius: 18px; }
+            .dashboard-summary-card::after { width: 72px; height: 72px; inset: auto -12px -24px auto; }
+            .dashboard-summary-top { margin-bottom: 12px; }
+            .dashboard-summary-icon { width: 34px; height: 34px; border-radius: 12px; font-size: 18px; }
+            .dashboard-summary-pill { padding: 4px 8px; font-size: 10px; }
+            .dashboard-summary-value { font-size: 24px; }
+            .dashboard-summary-label { margin-top: 5px; font-size: 12px; }
+            .dashboard-summary-meta { margin-top: 4px; font-size: 11px; }
             .dashboard-agenda-grid, .dashboard-task-sections, .dashboard-finance-top { grid-template-columns: 1fr; }
             .dashboard-diary-panel { grid-template-columns: 1fr; }
             .dashboard-event-meta { gap: 5px; }
@@ -193,6 +206,12 @@ function formatCompactAmount(value) {
     const amount = Number(value || 0);
     if (Math.abs(amount) >= 10000) return `¥${(amount / 10000).toFixed(1)}w`;
     return `¥${amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`;
+}
+
+function buildSpendingAxisTicks(values) {
+    const maxValue = Math.max(...values.map(value => Number(value || 0)), 1);
+    const ticks = [0, 0.33, 0.66, 1].map(ratio => Math.round(maxValue * ratio));
+    return Array.from(new Set(ticks)).sort((a, b) => a - b);
 }
 
 const PRIORITY_LABEL = { 1: '紧急', 2: '高优先', 3: '中优先', 4: '低优先', 5: '最低' };
@@ -392,6 +411,8 @@ async function renderSpendingChart(canvasId, spendingTrend) {
         return `${parts[1]}/${parts[2]}`;
     });
     const values = spendingTrend.map(point => point.amount);
+    const axisTicks = buildSpendingAxisTicks(values);
+    const axisMax = axisTicks[axisTicks.length - 1] || 1;
 
     if (_chartInstance) {
         _chartInstance.destroy();
@@ -422,7 +443,20 @@ async function renderSpendingChart(canvasId, spendingTrend) {
             },
             scales: {
                 x: { grid: { display: false }, ticks: { color: '#94A3B8', maxTicksLimit: 6 } },
-                y: { grid: { color: 'rgba(148,163,184,0.16)' }, ticks: { color: '#94A3B8', callback: (value) => `¥${value}` } },
+                y: {
+                    min: 0,
+                    max: axisMax,
+                    afterBuildTicks: (axis) => {
+                        axis.ticks = axisTicks.map(value => ({ value }));
+                    },
+                    border: { display: false },
+                    grid: {
+                        color: 'rgba(239,68,68,0.12)',
+                        borderDash: [4, 6],
+                        drawTicks: false,
+                    },
+                    ticks: { color: '#94A3B8', callback: (value) => `¥${value}` },
+                },
             },
         },
     });
