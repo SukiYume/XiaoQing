@@ -160,3 +160,27 @@ def test_dashboard_page_source_uses_month_events_and_completed_tasks():
     assert "tasks?.active" in src
     assert "tasks?.completed" in src
     assert "recent_ledger" in src
+
+
+def test_dashboard_page_source_scales_summary_numbers_for_mid_width_layouts():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "dashboard.js").read_text(encoding="utf-8")
+
+    assert "min-width: 0;" in src
+    assert "font-size: clamp(22px, 1.8vw, 28px);" in src
+    assert "overflow-wrap: anywhere;" in src
+    assert "word-break: break-word;" in src
+    assert ".dashboard-summary-card { padding: 14px 14px 12px; border-radius: 18px; }" in src
+    assert ".dashboard-summary-value { font-size: 24px; }" in src
+
+
+def test_dashboard_page_source_uses_sparse_spending_axis_ticks():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "dashboard.js").read_text(encoding="utf-8")
+
+    assert "function buildSpendingAxisTicks(values)" in src
+    assert "const ticks = [0, 0.33, 0.66, 1].map" in src
+    assert "afterBuildTicks: (axis) => {" in src
+    assert "axis.ticks = axisTicks.map(value => ({ value }));" in src
+    assert "max: axisMax," in src
+    assert "border: { display: false }," in src
+    assert "borderDash: [4, 6]," in src
+    assert "drawTicks: false," in src

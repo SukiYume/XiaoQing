@@ -1101,3 +1101,28 @@ def test_transfer_page_source_wires_export_and_import_endpoints():
     assert "bundle_id" in transfer_src
     assert "forceReimport" in transfer_src
     assert "已导入过" in transfer_src
+
+
+def test_transfer_and_settings_pages_scale_summary_values_for_mid_width_layouts():
+    settings_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "settings.js").read_text(encoding="utf-8")
+    transfer_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "transfer.js").read_text(encoding="utf-8")
+
+    assert ".settings-summary-card { padding: 18px; min-width: 0; }" in settings_src
+    assert "font-size: clamp(18px, 1.55vw, 24px);" in settings_src
+    assert "overflow-wrap: anywhere;" in settings_src
+    assert "word-break: break-word;" in settings_src
+    assert ".transfer-summary-card { padding: 16px; min-width: 0; }" in transfer_src
+    assert "font-size: clamp(22px, 1.75vw, 28px);" in transfer_src
+    assert "overflow-wrap: anywhere;" in transfer_src
+    assert "word-break: break-word;" in transfer_src
+
+
+def test_transfer_page_source_stacks_import_status_banner_on_mobile():
+    transfer_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "transfer.js").read_text(encoding="utf-8")
+
+    assert 'class="transfer-status-copy"' in transfer_src
+    assert ".transfer-status-copy { min-width: 0; }" in transfer_src
+    assert "line-height: 1.35; overflow-wrap: anywhere; word-break: break-word;" in transfer_src
+    assert "line-height: 1.7; color: #475569; overflow-wrap: anywhere; word-break: break-word;" in transfer_src
+    assert ".transfer-status-banner { grid-template-columns: 1fr; align-items: start; }" in transfer_src
+    assert ".transfer-status-pills { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }" in transfer_src

@@ -5,20 +5,11 @@ import { buildFormHTML, getFormData, initFormInteractions } from '../components/
 import { renderPagination } from '../components/pagination.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { formatDateTime, formatMonthDay, previewText } from '../utils/format.js';
-import { derivePresetRange, fetchItemRangeBounds, todayRangeKey } from '../utils/date_ranges.js';
+import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const PAGE_SIZE = 18;
 const CSS_ID = 'pendo-notes-styles';
-const RANGE_OPTIONS = [
-    { key: 'week', label: '本周' },
-    { key: 'month', label: '本月' },
-    { key: 'quarter', label: '本季' },
-    { key: 'year', label: '今年' },
-    { key: 'last_year', label: '去年' },
-    { key: 'custom', label: '自定义' },
-    { key: 'all', label: '全部' },
-];
 
 const NOTE_FIELDS = [
     { name: 'title', label: '标题', type: 'text', required: true },
@@ -92,7 +83,7 @@ function deriveRangeDates() {
 }
 
 function rangeLabel() {
-    const option = RANGE_OPTIONS.find((item) => item.key === _filters.range);
+    const option = RANGE_PRESET_OPTIONS.find((item) => item.key === _filters.range);
     return option?.label || '当前范围';
 }
 
@@ -129,7 +120,7 @@ function dateTimeRangeForQuery(range) {
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('notes-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.NARROW })}
+        ${pageShellCss('notes-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .notes-hero {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
@@ -184,10 +175,14 @@ function ensureStyles() {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.94));
             border: 1px solid rgba(59,130,246,0.12); border-radius: 22px; padding: 18px;
             box-shadow: 0 14px 30px rgba(37,99,235,0.05);
+            min-width: 0;
         }
         .notes-summary-label { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
-        .notes-summary-value { margin-top: 10px; font-size: 30px; font-weight: 820; line-height: 1.04; letter-spacing: -0.03em; color: #0f172a; }
-        .notes-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); }
+        .notes-summary-value {
+            margin-top: 10px; font-size: clamp(24px, 1.9vw, 30px); font-weight: 820; line-height: 1.04; letter-spacing: -0.03em; color: #0f172a;
+            overflow-wrap: anywhere; word-break: break-word;
+        }
+        .notes-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
         .notes-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.92fr); gap: 16px; align-items: start; }
         .notes-layout-main,
         .notes-layout-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
@@ -315,7 +310,7 @@ function ensureStyles() {
         .note-row:last-child { border-bottom: none; }
         .note-row-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
         .note-row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-        .note-row-title { margin: 0; font-size: 17px; font-weight: 760; line-height: 1.42; color: var(--color-text); }
+        .note-row-title { margin: 0; font-size: 17px; font-weight: 760; line-height: 1.42; color: var(--color-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .note-row-preview {
             font-size: 13px; line-height: 1.7; color: var(--color-text-secondary); word-break: break-word;
             display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -343,6 +338,9 @@ function ensureStyles() {
             background: rgba(219,234,254,0.8); color: #1e40af; font-size: 11px; font-weight: 700;
         }
         .note-card-meta { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 11px; color: var(--color-text-secondary); }
+        .note-row-footer { display: none; }
+        .note-row-footer-sep { font-size: 10px; color: var(--color-text-secondary); opacity: 0.6; }
+        .note-row-footer-meta { font-size: 11px; color: var(--color-text-secondary); }
         .notes-empty {
             padding: 46px 18px; border-radius: 20px; text-align: center; background: rgba(248,250,252,0.82);
             border: 1px dashed rgba(148,163,184,0.26); color: var(--color-text-secondary);
@@ -351,13 +349,13 @@ function ensureStyles() {
         .note-view-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-bottom: 14px; border-bottom: 1px solid rgba(226,232,240,0.8); margin-bottom: 14px; }
         .note-view-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.8; color: var(--color-text); max-height: 60vh; overflow-y: auto; }
         .note-view-secondary { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
-        ${mediaMax(BREAKPOINTS.WIDE, `
+        ${mediaMax(BREAKPOINTS.XL, `
             .notes-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .notes-layout { grid-template-columns: 1fr; }
             .notes-spotlight { grid-template-columns: 1fr; }
             .notes-spotlight-side { padding-left: 0; border-left: none; padding-top: 4px; }
         `)}
-        ${mediaMax(BREAKPOINTS.NARROW, `
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .notes-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .notes-hero-actions { align-items: flex-start; }
             .notes-summary-grid { grid-template-columns: 1fr; }
@@ -366,11 +364,30 @@ function ensureStyles() {
             .notes-range-sep { display: none; }
             .notes-filter-bar { grid-template-columns: 1fr; }
             .notes-filter-actions { justify-content: flex-start; }
-            .notes-workspace-body { padding: 16px; }
-            .notes-spotlight { padding: 18px; }
-            .note-row { grid-template-columns: 1fr; }
-            .note-row-top { flex-direction: column; }
-            .note-row-side { min-width: 0; align-items: flex-start; text-align: left; }
+            .notes-workspace-head { padding: 14px 16px; }
+            .notes-workspace-body { padding: 12px; gap: 10px; }
+            .notes-spotlight { padding: 14px; gap: 10px; }
+            .notes-spotlight-title { font-size: 20px; }
+            .notes-spotlight-preview { font-size: 12px; line-height: 1.6; -webkit-line-clamp: 3; }
+            .notes-spotlight-tags { gap: 6px; }
+            .notes-spotlight-side {
+                display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 10px; padding-left: 0; border-left: none;
+            }
+            .notes-spotlight-stat { padding: 9px 10px; }
+            .note-row { grid-template-columns: 1fr; padding: 12px; gap: 0; }
+            .note-row-main { gap: 5px; }
+            .note-row-top { flex-direction: row; flex-wrap: wrap; gap: 8px; overflow: hidden; }
+            .note-row-title { font-size: 15px; max-width: 100%; }
+            .note-row-preview { font-size: 12px; line-height: 1.55; -webkit-line-clamp: 1; }
+            .note-row-cat-desktop { display: none; }
+            .note-row-tags { display: none; }
+            .note-row-side { display: none; }
+            .note-row-footer {
+                display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 6px;
+            }
+            .note-row-order, .note-card-category, .note-tag { height: 22px; padding: 0 7px; font-size: 10px; }
+            .notes-list-head { padding: 12px 14px; }
             .notes-list-head { align-items: flex-start; flex-direction: column; }
             .notes-meter { gap: 6px; }
             .notes-cadence-panel .notes-panel-body { padding-bottom: 14px; }
@@ -468,7 +485,7 @@ function renderRangeControls() {
     return `
         <section class="notes-range-panel">
             <div class="notes-range-row">
-                ${RANGE_OPTIONS.map((item) => `
+                ${RANGE_PRESET_OPTIONS.map((item) => `
                     <button class="notes-range-btn ${_filters.range === item.key ? 'active' : ''}" type="button" data-range="${item.key}">
                         ${item.label}
                     </button>
@@ -656,21 +673,30 @@ function renderSpotlight(note) {
 function renderNoteRow(note, index) {
     const tags = tagList(note.tags);
     const preview = previewText(note.content, 96);
+    const date = formatDate(note.updated_at || note.created_at);
+    const wordCount = noteWordCount(note);
     return `
         <article class="note-card note-row" data-id="${note.id}">
             <div class="note-row-main">
                 <div class="note-row-top">
                     <h4 class="note-row-title">${escapeHtml(note.title || '(无标题)')}</h4>
-                    <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
+                    <span class="note-card-category note-row-cat-desktop">${escapeHtml(note.category || '未分类')}</span>
                 </div>
                 <div class="note-row-preview">${preview ? escapeHtml(preview) : '<span style="opacity:0.45;">（无内容）</span>'}</div>
                 <div class="note-row-tags">${renderNoteTags(tags, 3)}</div>
+                <div class="note-row-footer">
+                    <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
+                    ${renderNoteTags(tags, 3)}
+                    <span class="note-row-footer-sep">·</span>
+                    <span class="note-row-footer-meta">${date}</span>
+                    <span class="note-row-footer-meta">${wordCount} 字</span>
+                </div>
             </div>
             <div class="note-row-side">
                 <span class="note-row-order">${String(index + 1).padStart(2, '0')}</span>
                 <div class="note-row-meta">
-                    <span>${formatDate(note.updated_at || note.created_at)}</span>
-                    <span>${noteWordCount(note)} 字</span>
+                    <span>${date}</span>
+                    <span>${wordCount} 字</span>
                 </div>
             </div>
         </article>

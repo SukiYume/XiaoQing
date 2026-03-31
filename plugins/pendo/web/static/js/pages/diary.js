@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
-import { isoDate, pad2, previewText, todayStr as sharedTodayStr } from '../utils/format.js';
+import { isoDate, pad2, parseDate, previewText, todayStr as sharedTodayStr } from '../utils/format.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-diary-redesign-styles';
@@ -94,13 +94,6 @@ function parseMonthInput(value) {
     return { year, month };
 }
 
-function parseDate(value) {
-    if (!value) return null;
-    const date = new Date(value.length === 10 ? `${value}T00:00:00` : value);
-    if (Number.isNaN(date.getTime())) return null;
-    return date;
-}
-
 function diaryWordCount(item) {
     return String(item?.content || '').trim().length;
 }
@@ -115,6 +108,17 @@ function moodBadgeText(mood) {
     if (!normalized) return '';
     const emoji = moodEmoji(normalized);
     return emoji ? `${emoji} ${normalized}` : normalized;
+}
+
+function compactDiaryCellLabel(entry, maxChars = 8) {
+    const text = String(previewText(entry?.content, maxChars * 2) || entry?.title || '')
+        .replace(/^[\s\u3000]+/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!text) return '';
+    const chars = Array.from(text);
+    if (chars.length <= maxChars) return text;
+    return `${chars.slice(0, maxChars).join('')}…`;
 }
 
 function formatDateLabel(value) {
@@ -248,7 +252,7 @@ function moodPalette(index) { return MOOD_SWATCHES[index % MOOD_SWATCHES.length]
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('diary-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.NARROW })}
+        ${pageShellCss('diary-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .diary-stack { display: flex; flex-direction: column; gap: 18px; }
         .diary-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -276,10 +280,13 @@ function ensureStyles() {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(253,242,248,0.95));
             border: 1px solid rgba(236,72,153,0.12); border-radius: 24px; box-shadow: 0 16px 34px rgba(236,72,153,0.05);
         }
-        .diary-summary-card { padding: 18px; }
+        .diary-summary-card { padding: 18px; min-width: 0; }
         .diary-summary-label { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); }
-        .diary-summary-value { margin-top: 10px; font-size: 30px; font-weight: 820; line-height: 1.04; color: #0f172a; letter-spacing: -0.03em; }
-        .diary-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); }
+        .diary-summary-value {
+            margin-top: 10px; font-size: clamp(24px, 1.9vw, 30px); font-weight: 820; line-height: 1.04; color: #0f172a; letter-spacing: -0.03em;
+            overflow-wrap: anywhere; word-break: break-word;
+        }
+        .diary-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
         .diary-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.92fr); gap: 16px; }
         .diary-side-stack { display: flex; flex-direction: column; gap: 16px; }
         .diary-panel-head, .diary-workspace-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
@@ -343,22 +350,21 @@ function ensureStyles() {
         .diary-calendar-weekdays span { text-align: center; font-size: 12px; font-weight: 800; color: var(--color-text-secondary); letter-spacing: 0.04em; }
         .diary-day {
             min-height: 112px; border-radius: 20px; border: 1px solid rgba(236,72,153,0.10); background: rgba(255,255,255,0.92);
-            padding: 12px; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 10px;
-            transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+            padding: 12px; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px;
+            transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease; position: relative; min-width: 0;
         }
         .diary-day:hover { transform: translateY(-1px); border-color: rgba(236,72,153,0.24); box-shadow: 0 12px 24px rgba(236,72,153,0.08); }
         .diary-day.is-selected { border-color: rgba(236,72,153,0.42); box-shadow: inset 0 0 0 1px rgba(236,72,153,0.12), 0 16px 30px rgba(236,72,153,0.08); background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(253,242,248,0.9)); }
         .diary-day.is-outside { opacity: 0.38; background: rgba(248,250,252,0.7); }
         .diary-day.is-today { box-shadow: inset 0 0 0 1px rgba(244,114,182,0.32); }
-        .diary-day-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .diary-day-top { display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-height: 28px; }
         .diary-day-number { font-size: 18px; font-weight: 800; color: var(--color-text); }
-        .diary-day-count {
-            min-width: 24px; height: 24px; padding: 0 8px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center;
-            background: rgba(236,72,153,0.10); color: #be185d; font-size: 11px; font-weight: 800;
-        }
-        .diary-day-body { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+        .diary-day-body { display: flex; flex-direction: column; gap: 4px; min-height: 0; margin-top: 0; align-items: flex-start; text-align: left; }
         .diary-day-mood { font-size: 18px; line-height: 1; }
-        .diary-day-preview { font-size: 12px; line-height: 1.55; color: var(--color-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .diary-day-copy {
+            font-size: 12px; line-height: 1.5; color: var(--color-text-secondary);
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; overflow-wrap: anywhere;
+        }
         .diary-mood-list, .diary-recent-list, .diary-entry-stack, .diary-stream-list { display: flex; flex-direction: column; gap: 12px; }
         .diary-mood-row { display: flex; flex-direction: column; gap: 6px; }
         .diary-mood-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
@@ -406,28 +412,38 @@ function ensureStyles() {
         .diary-view-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.8; color: var(--color-text); max-height: 60vh; overflow-y: auto; }
         .diary-template-select { margin-top: 2px; }
         .diary-template-hint { font-size: 12px; color: var(--color-text-secondary); margin-top: 6px; padding: 8px 10px; background: rgba(251,207,232,0.28); border-radius: 14px; line-height: 1.6; white-space: pre-wrap; }
-        ${mediaMax(BREAKPOINTS.WIDE, `
+        ${mediaMax(BREAKPOINTS.XL, `
             .diary-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .diary-layout { grid-template-columns: 1fr; }
         `)}
-        ${mediaMax(BREAKPOINTS.COMPACT, `
-            .diary-cadence { grid-template-columns: repeat(12, minmax(0, 1fr)); }
-            .diary-day { min-height: 96px; padding: 10px; }
-        `)}
-        ${mediaMax(BREAKPOINTS.NARROW, `
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .diary-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .diary-hero-actions { align-items: flex-start; }
             .diary-summary-grid { grid-template-columns: 1fr; }
+            .diary-summary-card { padding: 14px 16px; border-radius: 20px; }
+            .diary-summary-value { margin-top: 6px; font-size: 22px; }
+            .diary-summary-meta { margin-top: 4px; font-size: 11px; }
             .diary-calendar-weekdays, .diary-calendar-grid { gap: 6px; }
-            .diary-day { min-height: 78px; padding: 9px; border-radius: 16px; }
-            .diary-day-body { gap: 4px; }
-            .diary-day-preview { font-size: 11px; -webkit-line-clamp: 1; }
+            .diary-day { min-height: 80px; padding: 8px; border-radius: 16px; gap: 2px; }
+            .diary-day-top { min-height: 24px; }
+            .diary-day-number { font-size: 16px; }
+            .diary-day-body { gap: 3px; margin-top: 0; align-items: flex-start; text-align: left; }
+            .diary-day-copy { font-size: 11px; line-height: 1.4; }
             .diary-entry-head, .diary-workspace-head, .diary-panel-head { flex-direction: column; }
-            .diary-month-nav { align-self: flex-start; }
-            .diary-month-nav { grid-template-columns: 32px minmax(104px, 1fr) 32px; width: min(100%, 220px); }
+            .diary-month-nav { align-self: stretch; grid-template-columns: 32px minmax(0, 1fr) 32px; width: 100%; }
             .diary-cadence { grid-template-columns: repeat(10, minmax(0, 1fr)); }
             .diary-stream-item { flex-direction: column; }
             .diary-stream-date { width: auto; }
+        `)}
+        ${mediaMax(BREAKPOINTS.PHONE, `
+            .diary-calendar-weekdays, .diary-calendar-grid { gap: 4px; }
+            .diary-calendar-weekdays span { font-size: 10px; letter-spacing: 0; }
+            .diary-day { min-height: 72px; padding: 6px; border-radius: 14px; gap: 1px; }
+            .diary-day-top { min-height: 22px; }
+            .diary-day-number { font-size: 15px; }
+            .diary-day-body { gap: 2px; }
+            .diary-day-mood { font-size: 15px; }
+            .diary-day-copy { font-size: 10px; line-height: 1.35; }
         `)}
     `);
 }
@@ -518,9 +534,11 @@ function renderCalendarPanel() {
                     ${buildCalendarDays(_year, _month).map((day) => {
                         const list = entries.get(day.key) || [];
                         const first = list[0];
-                        const preview = first ? escapeHtml(first.title || previewText(first.content, 14) || '已记录') : '';
+                        const totalWords = list.length ? list.reduce((sum, item) => sum + diaryWordCount(item), 0) : 0;
+                        const metric = list.length > 1 ? `${list.length} 篇 ${totalWords} 字` : `${totalWords}字`;
+                        const meta = list.length > 1 ? '' : compactDiaryCellLabel(first);
+                        const copy = meta ? `${metric} ${meta}` : metric;
                         const mood = first?.mood ? `<span class="diary-day-mood">${escapeHtml(moodEmoji(first.mood) || first.mood)}</span>` : '';
-                        const count = list.length ? `<span class="diary-day-count">${list.length}</span>` : '';
                         return `
                             <button
                                 type="button"
@@ -529,12 +547,11 @@ function renderCalendarPanel() {
                             >
                                 <span class="diary-day-top">
                                     <span class="diary-day-number">${day.date.getDate()}</span>
-                                    ${count}
                                 </span>
-                                ${day.inMonth ? `
+                                ${day.inMonth && list.length ? `
                                     <span class="diary-day-body">
                                         ${mood}
-                                        <span class="diary-day-preview">${list.length ? preview : '还没有写'}</span>
+                                        <span class="diary-day-copy">${escapeHtml(copy)}</span>
                                     </span>` : ''}
                             </button>`;
                     }).join('')}

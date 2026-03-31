@@ -1,5 +1,5 @@
 import { getToken, setToken, clearToken, verifyToken } from './api.js';
-import { init as initRouter, registerRoute } from './router.js';
+import { init as initRouter, registerRoute, getCurrentPage, onRouteChange } from './router.js';
 
 // Register all page routes (lazy loaded)
 registerRoute('dashboard', () => import('./pages/dashboard.js'));
@@ -12,6 +12,19 @@ registerRoute('search', () => import('./pages/search.js'));
 registerRoute('stats', () => import('./pages/stats.js'));
 registerRoute('settings', () => import('./pages/settings.js'));
 registerRoute('transfer', () => import('./pages/transfer.js'));
+
+const BACK_TO_TOP_THEME = {
+    dashboard: 'var(--color-dashboard)',
+    events: 'var(--color-events)',
+    tasks: 'var(--color-tasks)',
+    ledger: 'var(--color-ledger)',
+    notes: 'var(--color-notes)',
+    diary: 'var(--color-diary)',
+    search: 'var(--color-search)',
+    stats: 'var(--color-stats)',
+    settings: 'var(--color-text-secondary)',
+    transfer: 'var(--color-dashboard)',
+};
 
 async function bootstrap() {
     const token = getToken();
@@ -88,6 +101,79 @@ function showLogin(initialError = '') {
     input.focus();
 }
 
+function initBackToTop() {
+    const btn = document.createElement('button');
+    btn.id = 'back-to-top';
+    btn.setAttribute('aria-label', '回到顶部');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+    document.body.appendChild(btn);
+
+    const style = document.createElement('style');
+    style.id = 'pendo-back-to-top-style';
+    style.textContent = `
+        #back-to-top {
+            --btt-accent: var(--color-dashboard);
+            position: fixed;
+            bottom: 24px;
+            right: 20px;
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            background: color-mix(in srgb, var(--btt-accent) 68%, transparent);
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 8px 18px color-mix(in srgb, var(--btt-accent) 18%, transparent);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            opacity: 0;
+            transform: translateY(10px) scale(0.92);
+            transition: opacity 0.2s ease, transform 0.2s ease, background 0.15s ease;
+            pointer-events: none;
+            z-index: 500;
+            outline: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #back-to-top.btt-visible {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            pointer-events: auto;
+        }
+        #back-to-top:hover {
+            background: color-mix(in srgb, var(--btt-accent) 82%, transparent);
+            transform: translateY(-2px) scale(1);
+        }
+        #back-to-top:active { transform: translateY(0) scale(0.94); }
+        #back-to-top:focus,
+        #back-to-top:focus-visible {
+            outline: none;
+            box-shadow:
+                0 0 0 2px rgba(255,255,255,0.88),
+                0 0 0 5px color-mix(in srgb, var(--btt-accent) 16%, transparent);
+        }
+        #back-to-top svg { width: 16px; height: 16px; }
+    `;
+    document.head.appendChild(style);
+
+    const applyTheme = (path) => {
+        btn.style.setProperty('--btt-accent', BACK_TO_TOP_THEME[path] || 'var(--color-dashboard)');
+    };
+    applyTheme(getCurrentPage());
+    onRouteChange((path) => applyTheme(path));
+
+    window.addEventListener('scroll', () => {
+        btn.classList.toggle('btt-visible', window.scrollY > 240);
+    }, { passive: true });
+
+    btn.addEventListener('click', () => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+}
+
 async function showApp() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
@@ -101,6 +187,8 @@ async function showApp() {
 
     // Init router (loads current page)
     await initRouter(document.getElementById('content'));
+
+    initBackToTop();
 }
 
 bootstrap();
