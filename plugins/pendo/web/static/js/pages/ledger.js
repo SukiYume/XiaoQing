@@ -1428,7 +1428,7 @@ async function handleQuickAdd() {
 
 // ── detail modal ──────────────────────────────────────────────────────────────
 
-function openDetailModal(item) {
+export function openDetailModal(item) {
     const isIncome = item.direction === 'income';
     const amtColor = isIncome ? 'var(--color-success)' : 'var(--color-ledger)';
     const amtSign  = isIncome ? '+' : '-';

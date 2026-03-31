@@ -730,7 +730,8 @@ function renderPage() {
     attachListeners();
 }
 
-function openDiaryViewModal(item) {
+export function openDiaryViewModal(item) {
+    ensureStyles();
     const bodyHTML = `
         <div class="diary-view-meta">
             <span class="diary-view-chip">📅 ${escapeHtml(item.diary_date)}</span>
@@ -758,7 +759,8 @@ function openDiaryViewModal(item) {
     };
 }
 
-async function openDiaryFormModal(existing = null, presetDate = null) {
+export async function openDiaryFormModal(existing = null, presetDate = null) {
+    ensureStyles();
     const isEdit = Boolean(existing);
     const fields = DIARY_FIELDS.map((field) => {
         let value = '';
