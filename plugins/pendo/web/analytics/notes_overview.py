@@ -122,6 +122,36 @@ def _build_month_cadence(notes: list[dict[str, Any]], start_day: date, end_day: 
     return cadence
 
 
+def _build_year_cadence(notes: list[dict[str, Any]], start_day: date, end_day: date) -> list[dict[str, Any]]:
+    counter = Counter()
+    for note in notes:
+        day = _note_activity_day(note)
+        if not _in_range(day, start_day, end_day):
+            continue
+        counter[day.year] += 1
+
+    cadence: list[dict[str, Any]] = []
+    for year in range(start_day.year, end_day.year + 1):
+        cadence.append({
+            "date": f"{year}-01-01",
+            "label": str(year),
+            "year": str(year),
+            "count": counter.get(year, 0),
+        })
+    return cadence
+
+
+def _resolve_cadence_granularity(start_day: date, end_day: date) -> str:
+    span_days = max(0, (end_day - start_day).days)
+    if start_day.year != end_day.year:
+        return "year"
+    if span_days > 62:
+        return "month"
+    if span_days > 7:
+        return "week"
+    return "day"
+
+
 def build_notes_overview(
     db: Database,
     owner_id: str,
@@ -171,12 +201,12 @@ def build_notes_overview(
 
     cadence_granularity = "day"
     if range_start and range_end:
-        span_days = max(0, (range_end - range_start).days)
-        if span_days > 180:
-            cadence_granularity = "month"
+        cadence_granularity = _resolve_cadence_granularity(range_start, range_end)
+        if cadence_granularity == "year":
+            cadence = _build_year_cadence(notes, range_start, range_end)
+        elif cadence_granularity == "month":
             cadence = _build_month_cadence(notes, range_start, range_end)
-        elif span_days > 31:
-            cadence_granularity = "week"
+        elif cadence_granularity == "week":
             cadence = _build_week_cadence(notes, range_start, range_end)
         else:
             cadence = _build_day_cadence(notes, range_start, range_end)

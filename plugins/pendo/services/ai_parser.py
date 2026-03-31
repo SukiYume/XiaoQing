@@ -96,7 +96,8 @@ class AIParser:
 规则:
 - 相对时间转绝对时间(明天→具体日期)
 - 无时间则默认09:00
-- 若用户描述多个具名时间点(如截止、开始、结束)，填milestones列表，start_time/end_time留null
+- 若用户描述多个具名时间点(如截止、开始、结束、里程碑等事件节点)，填milestones列表，start_time/end_time留null
+- "提前X天/周/小时提醒"是提醒偏移量，必须放入remind_offsets，绝对不能作为milestones节点
 - 普通单次事件milestones留空列表[]
 - 重复事件: 设置rrule，milestones必须留空列表[]，start_time设为第一次发生的时间
 - 重复: 每天→FREQ=DAILY, 每周→FREQ=WEEKLY, 每月X号→FREQ=MONTHLY;BYMONTHDAY=X

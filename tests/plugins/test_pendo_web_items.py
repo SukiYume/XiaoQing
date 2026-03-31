@@ -330,6 +330,8 @@ def test_task_update_route_preserves_explicit_nulls_for_clearing_fields():
         "status": "todo",
         "priority": 2,
         "due_time": "2026-03-26T18:00:00",
+        "created_at": "2026-03-30T09:00:00",
+        "updated_at": "2026-03-30T09:00:00",
     }
     merged = dict(existing)
     merged.update({"due_time": None, "category": None, "content": None})
@@ -532,7 +534,8 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
 
         assert result["summary"]["expense_total"] == 36
         assert result["summary"]["income_total"] == 0
-        assert result["summary"]["expense_count"] == 2
+        assert result["summary"]["focus_direction"] == "expense"
+        assert result["summary"]["focus_count"] == 2
         assert len(result["expense_categories"]) == 1
         assert result["expense_categories"][0]["category"] == "餐饮"
         assert result["expense_categories"][0]["share"] == 1
@@ -542,6 +545,71 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
         assert result["expense_candles"][0]["close"] == 24
         assert result["expense_candles"][0]["high"] == 24
         assert result["expense_candles"][0]["low"] == 12
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_build_ledger_insights_switches_focus_with_income_filter():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_income_insights_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-income-insights"
+
+    try:
+        for item in [
+            {
+                "id": "income-1",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "稿费",
+                "amount": 500,
+                "direction": "income",
+                "ledger_category": "副业",
+                "ledger_date": "2026-03-02",
+                "created_at": "2026-03-02T09:00:00",
+            },
+            {
+                "id": "income-2",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "奖金",
+                "amount": 800,
+                "direction": "income",
+                "ledger_category": "奖金",
+                "ledger_date": "2026-03-18",
+                "created_at": "2026-03-18T09:00:00",
+            },
+            {
+                "id": "expense-1",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "午饭",
+                "amount": 30,
+                "direction": "expense",
+                "ledger_category": "餐饮",
+                "ledger_date": "2026-03-10",
+                "created_at": "2026-03-10T12:00:00",
+            },
+        ]:
+            db.insert_item(item)
+
+        result = build_ledger_insights(
+            db=db,
+            owner_id=owner_id,
+            direction="income",
+            start_date="2026-03-01",
+            end_date="2026-03-31",
+        )
+
+        assert result["summary"]["focus_direction"] == "income"
+        assert result["summary"]["focus_total"] == 1300
+        assert result["summary"]["focus_count"] == 2
+        assert [item["category"] for item in result["expense_categories"]] == ["奖金", "副业"]
+        timeline = {point["key"]: point["total"] for point in result["expense_timeline"] if point["total"]}
+        assert timeline == {
+            "2026-03-02": 500,
+            "2026-03-18": 800,
+        }
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -686,6 +754,7 @@ def test_ledger_page_source_requests_insights_component():
     assert "_sortMode === 'amount' ? 'amount' : 'ledger_date'" in src
     assert "await loadAndRender(true);" in src
     assert "if (changedType && changedType !== 'ledger') return;" in src
+    assert "if (_dateFilter !== 'all') {" in src
 
 
 def test_ledger_page_source_uses_unified_time_presets_with_today():
@@ -713,6 +782,8 @@ def test_ledger_insights_component_uses_time_scaled_candle_axis():
     assert "const labelIndexes = pickEvenAxisIndexes(coords.length, 5);" in src
     assert "const stepX = innerWidth / candles.length;" in src
     assert "const labelIndexes = pickEvenAxisIndexes(candles.length, 5);" in src
+    assert "const focusDirection = summary.focus_direction === 'income' ? 'income' : 'expense';" in src
+    assert "const focusLabel = focusDirection === 'income' ? '收入' : '支出';" in src
 
 
 def test_items_api_source_normalizes_events_before_create_and_update():

@@ -148,7 +148,7 @@ function arcPath(cx, cy, rOuter, rInner, startAngle, endAngle) {
     ].join(' ');
 }
 
-function buildRingSvg(categories, total) {
+function buildRingSvg(categories, total, centerLabel = '支出总额') {
     const palette = ['#E15241', '#F48C58', '#F8B36D', '#F2C14E', '#D97757', '#D9DDE5'];
     const width = 220;
     const height = 220;
@@ -184,7 +184,7 @@ function buildRingSvg(categories, total) {
                 ${arcs}
                 <circle cx="${cx}" cy="${cy}" r="${inner - 1}" fill="#fff"></circle>
                 <text x="${cx}" y="${cy - 4}" text-anchor="middle" class="ledger-ring-center-value">${fmtMoneyCompact(total)}</text>
-                <text x="${cx}" y="${cy + 20}" text-anchor="middle" class="ledger-ring-center-label">支出总额</text>
+                <text x="${cx}" y="${cy + 20}" text-anchor="middle" class="ledger-ring-center-label">${esc(centerLabel)}</text>
             </svg>
             <div class="ledger-insight-legend">
                 ${segments.map((item, index) => `
@@ -297,9 +297,13 @@ export function renderLedgerInsightsPanel(data) {
     const categories = data?.expense_categories || [];
     const hotspots = data?.expense_hotspots || [];
     const candles = data?.expense_candles || [];
+    const focusDirection = summary.focus_direction === 'income' ? 'income' : 'expense';
+    const focusLabel = focusDirection === 'income' ? '收入' : '支出';
+    const focusVerb = focusDirection === 'income' ? '入账' : '消费';
+    const bucketLabel = summary.bucket_mode === 'month' ? '按月' : '按日';
 
-    const expenseTotal = Number(summary.expense_total || 0);
-    const avgExpense = Number(summary.average_expense || 0);
+    const focusTotal = Number(summary.focus_total || 0);
+    const averageFocusAmount = Number(summary.average_focus_amount || 0);
     const peakLabel = summary.peak_bucket_label || '暂无峰值';
     const peakTotal = Number(summary.peak_bucket_total || 0);
     const deltaText = fmtPercent(summary.delta_vs_previous);
@@ -313,19 +317,19 @@ export function renderLedgerInsightsPanel(data) {
             <section class="ledger-insight-card ledger-insight-card-pulse">
                 <div class="ledger-insight-card-head">
                     <div>
-                        <h3>支出脉搏</h3>
-                        <p>当前筛选范围内的消费节奏</p>
+                        <h3>${focusLabel}脉搏</h3>
+                        <p>当前筛选范围内的${focusVerb}节奏</p>
                     </div>
-                    <span class="ledger-insight-badge">${summary.bucket_mode === 'month' ? '按月' : '按日'}</span>
+                    <span class="ledger-insight-badge">${bucketLabel}</span>
                 </div>
                 <div class="ledger-pulse-metrics">
                     <div class="ledger-pulse-metric">
-                        <span class="ledger-pulse-label">总支出</span>
-                        <strong>${fmtMoney(expenseTotal)}</strong>
+                        <span class="ledger-pulse-label">总${focusLabel}</span>
+                        <strong>${fmtMoney(focusTotal)}</strong>
                     </div>
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">单笔均值</span>
-                        <strong>${fmtMoney(avgExpense)}</strong>
+                        <strong>${fmtMoney(averageFocusAmount)}</strong>
                     </div>
                     <div class="ledger-pulse-metric">
                         <span class="ledger-pulse-label">峰值时段</span>
@@ -339,7 +343,7 @@ export function renderLedgerInsightsPanel(data) {
                 </div>
                 ${buildTrendSvg(timeline)}
             </section>`
-        : emptyCard('支出脉搏', '当前筛选结果里暂无支出变化', '调整筛选条件后，这里会显示支出随时间的变化。');
+        : emptyCard(`${focusLabel}脉搏`, `当前筛选结果里暂无${focusLabel}变化`, `调整筛选条件后，这里会显示${focusLabel}随时间的变化。`);
 
     const ringCard = categories.length
         ? `
@@ -347,38 +351,38 @@ export function renderLedgerInsightsPanel(data) {
                 <div class="ledger-insight-card-head">
                     <div>
                         <h3>分类构成</h3>
-                        <p>支出主要流向哪些类别</p>
+                        <p>${focusLabel}主要落在哪些类别</p>
                     </div>
                 </div>
-                ${buildRingSvg(categories, expenseTotal)}
+                ${buildRingSvg(categories, focusTotal, `${focusLabel}总额`)}
             </section>`
-        : emptyCard('分类构成', '当前筛选结果里暂无支出分类', '有支出数据后，这里会显示分类占比。');
+        : emptyCard('分类构成', `当前筛选结果里暂无${focusLabel}分类`, `有${focusLabel}数据后，这里会显示分类占比。`);
 
     const hotspotCard = hotspots.length
         ? `
             <section class="ledger-insight-card ledger-insight-card-hotspot">
                 <div class="ledger-insight-card-head">
                     <div>
-                        <h3>消费热点</h3>
-                        <p>本期支出最高的类别排行</p>
+                        <h3>${focusLabel}热点</h3>
+                        <p>本期${focusLabel}最高的类别排行</p>
                     </div>
                 </div>
-                ${buildHotspots(hotspots, expenseTotal)}
+                ${buildHotspots(hotspots, focusTotal)}
             </section>`
-        : emptyCard('消费热点', '当前筛选结果里暂无排行', '当有支出数据时，这里会显示消费热点。');
+        : emptyCard(`${focusLabel}热点`, '当前筛选结果里暂无排行', `当有${focusLabel}数据时，这里会显示热点排行。`);
 
     const klineCard = candles.length
         ? `
             <section class="ledger-insight-card ledger-insight-card-kline">
                 <div class="ledger-insight-card-head">
                     <div>
-                        <h3>消费 K 线</h3>
-                        <p>每个时段单笔支出的开高低收</p>
+                        <h3>${focusLabel} K 线</h3>
+                        <p>每个时段单笔${focusLabel}的开高低收</p>
                     </div>
                 </div>
                 ${buildCandleSvg(candles)}
             </section>`
-        : emptyCard('消费 K 线', '当前筛选结果里暂无足够的支出波动', '出现单笔支出后，这里会显示类 K 线波动。');
+        : emptyCard(`${focusLabel} K 线`, `当前筛选结果里暂无足够的${focusLabel}波动`, `出现单笔${focusLabel}后，这里会显示类 K 线波动。`);
 
     return `
         <section class="ledger-insights-panel">

@@ -393,9 +393,85 @@ def test_notes_overview_accepts_explicit_range():
         )
 
         assert result["summary"]["total_count"] == 2
+        assert result["cadence_granularity"] == "week"
         assert {item["category"] for item in result["categories"]} == {"工作", "生活"}
         assert {item["tag"] for item in result["hot_tags"]} == {"alpha", "beta"}
-        assert all(item["date"].startswith("2026-03") for item in result["cadence"])
+        assert sum(item["count"] for item in result["cadence"]) == 2
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_ledger_stats_accepts_explicit_date_bounds():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_ledger_bounds_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-ledger-bounds"
+    stats_module = _load_stats_module()
+
+    try:
+        for title, amount, ledger_date in [
+            ("一月支出", 88, "2026-01-05"),
+            ("三月支出", 66, "2026-03-18"),
+        ]:
+            db.insert_item({
+                "type": "ledger",
+                "owner_id": owner_id,
+                "title": title,
+                "amount": amount,
+                "direction": "expense",
+                "ledger_category": "测试",
+                "ledger_date": ledger_date,
+            })
+
+        result = stats_module.ledger_stats(
+            range="all",
+            start_date="2026-03-01",
+            end_date="2026-03-31",
+            owner_id=owner_id,
+            db=db,
+        )
+        data = result["data"]
+
+        assert data["expense_by_category"] == [{"category": "测试", "total": 66}]
+        assert data["daily"] == [{"date": "2026-03-18", "income": 0, "expense": 66}]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_notes_overview_uses_yearly_cadence_for_cross_year_ranges():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_notes_year_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-note-stats-year"
+
+    try:
+        for item_id, created_at in [
+            ("n-2024", "2024-03-03T09:00:00"),
+            ("n-2025", "2025-06-18T09:00:00"),
+            ("n-2026", "2026-02-01T09:00:00"),
+        ]:
+            db.insert_item({
+                "id": item_id,
+                "owner_id": owner_id,
+                "type": "note",
+                "title": item_id,
+                "content": f"{item_id} 内容",
+                "category": "工作",
+                "created_at": created_at,
+                "updated_at": created_at,
+            })
+
+        result = build_notes_overview(
+            db=db,
+            owner_id=owner_id,
+            start_date="2024-01-01",
+            end_date="2026-12-31",
+            today="2026-12-31",
+        )
+
+        assert result["cadence_granularity"] == "year"
+        assert [item["label"] for item in result["cadence"]] == ["2024", "2025", "2026"]
+        assert [item["count"] for item in result["cadence"]] == [1, 1, 1]
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -403,7 +479,17 @@ def test_notes_overview_accepts_explicit_range():
 def test_stats_page_source_passes_note_range_params():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
 
-    assert "api.get('/stats/notes/overview', { start_date: range.start, end_date: range.end, today: range.end })" in src
+    assert "async function fetchNoteRangeBounds(fallbackEnd = todayStr())" in src
+    assert "const notesRange = _range === 'all' ? await fetchNoteRangeBounds(range.end) : range;" in src
+    assert "api.get('/stats/notes/overview', { start_date: notesRange.start, end_date: notesRange.end, today: notesRange.end })" in src
+
+
+def test_stats_page_source_passes_ledger_range_params_for_all():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+
+    assert "async function fetchLedgerRangeBounds(fallbackEnd = todayStr())" in src
+    assert "const ledgerRange = _range === 'all' ? await fetchLedgerRangeBounds(range.end) : range;" in src
+    assert "api.get('/stats/ledger', _range === 'all' ? { start_date: ledgerRange.start, end_date: ledgerRange.end } : { range: rangeParam })" in src
 
 
 def test_parse_range_supports_last_year():
@@ -423,14 +509,14 @@ def test_parse_range_supports_all():
     assert end == __import__("datetime").datetime.now().strftime("%Y-%m-%d")
 
 
-def test_stats_page_source_uses_consistent_task_green_palette():
+def test_stats_page_source_uses_task_palette_aligned_with_tasks_page():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
 
     assert "const taskToneDone = '#166534';" in src
-    assert "const taskToneOpen = '#16a34a';" in src
+    assert "const taskToneOpen = '#F59E0B';" in src
     assert "{ label: '未完成', count: totals.open, color: taskToneOpen }" in src
     assert "{ label: '已完成', count: totals.done, color: taskToneDone }" in src
-    assert "浅绿 = 新增" in src
+    assert "浅橙 = 新增" in src
 
 
 def test_stats_page_source_uses_dynamic_note_cadence_layout():
@@ -477,8 +563,22 @@ def test_stats_page_source_marks_note_cards_as_range_driven():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
 
     assert "subtitle: noteCadenceSubtitle(cadenceGranularity)," in src
+    assert "if (granularity === 'year') return `按${rangeLabel()}查看每年新增笔记数量。`;" in src
     assert "subtitle: `按${rangeLabel()}统计知识沉淀主题。`" in src
     assert "subtitle: `按${rangeLabel()}统计高频标签。`" in src
+
+
+def test_notes_page_source_uses_range_driven_note_cadence():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "notes.js").read_text(encoding="utf-8")
+
+    assert "const RANGE_OPTIONS = [" in src
+    assert "range: 'year'" in src
+    assert "async function fetchNoteRangeBounds(fallbackEnd = todayKey())" in src
+    assert "async function resolveActiveRange()" in src
+    assert "start_date: range?.start || ''" in src
+    assert "date_field: 'created_at'" in src
+    assert "function noteCadenceSubtitle(granularity)" in src
+    assert "按${rangeLabel()}查看每月新增笔记数量。" in src
 
 
 def test_ledger_comparison_fills_missing_months_and_keeps_prev_month_baseline():
