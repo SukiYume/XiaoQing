@@ -918,6 +918,7 @@ function collectEditorPayload(content) {
 }
 
 function openEventEditor(existing = null, prefillDate = '') {
+    ensureStyles();
     const title = existing ? '编辑日程' : '新建日程';
     const content = showModal(title, editorModalHTML(existing, prefillDate), {
         footer: `
@@ -1041,7 +1042,8 @@ function renderDetailBody(detail) {
         </div>`;
 }
 
-async function openEventDetail(eventId) {
+export async function openEventDetail(eventId) {
+    ensureStyles();
     try {
         const res = await api.get(`/events/${eventId}/detail`);
         const detail = res.data;

@@ -16,6 +16,8 @@ def search_items(
     category: Optional[str] = None,
     ledger_category: Optional[str] = None,
     status: Optional[str] = None,
+    page: int = 1,
+    page_size: Optional[int] = None,
     limit: int = 50,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
@@ -37,7 +39,17 @@ def search_items(
     if status:
         filters["status"] = status
 
-    results = db.search_items(owner_id, q.strip(), filters=filters, limit=limit)
+    resolved_page = max(1, int(page or 1))
+    resolved_page_size = max(1, int(page_size or limit or 50))
+    offset = (resolved_page - 1) * resolved_page_size
+
+    results, total = db.search_items_page(
+        owner_id,
+        q.strip(),
+        filters=filters,
+        limit=resolved_page_size,
+        offset=offset,
+    )
 
     def to_dict(item):
         return item.to_dict() if hasattr(item, "to_dict") else {}
@@ -46,7 +58,9 @@ def search_items(
         "ok": True,
         "data": {
             "items": [to_dict(item) for item in results],
-            "total": len(results),
+            "total": total,
+            "page": resolved_page,
+            "page_size": resolved_page_size,
         },
         "message": "",
     }

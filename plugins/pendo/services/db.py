@@ -839,23 +839,26 @@ class Database:
 
     @staticmethod
     def _apply_filters(
-        where: list[str], params: list[Any], filters: dict[str, Any] | None,
+        where: list[str],
+        params: list[Any],
+        filters: dict[str, Any] | None,
+        column_prefix: str = "",
     ):
         """将常用过滤条件追加到 where / params"""
         if filters:
             for key in ("type", "category", "ledger_category", "status", "direction", "priority"):
                 if key in filters:
-                    where.append(f"{key} = ?")
+                    column = f"{column_prefix}{key}" if column_prefix else key
+                    where.append(f"{column} = ?")
                     params.append(filters[key])
 
-    def search_items(
+    def _search_item_ids(
         self,
         owner_id: str,
         query: str,
         filters: dict[str, Any] | None = None,
-        limit: int = 100,
-    ) -> list[Item]:
-        """全文搜索，返回Item dataclass列表"""
+    ) -> list[str]:
+        """执行搜索并返回按相关性去重后的条目 ID。"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -867,9 +870,22 @@ class Database:
         # FTS搜索
         fts_ids = []
         try:
+            fts_where: list[str] = [
+                "items_fts MATCH ?",
+                "i.owner_id = ?",
+                "i.deleted = 0",
+            ]
+            fts_params: list[Any] = [query, owner_id]
+            self._apply_filters(fts_where, fts_params, filters, column_prefix="i.")
             cursor.execute(
-                "SELECT id FROM items_fts WHERE items_fts MATCH ? ORDER BY rank LIMIT ?",
-                (query, limit),
+                f"""
+                SELECT i.id
+                FROM items_fts
+                JOIN items i ON i.id = items_fts.id
+                WHERE {' AND '.join(fts_where)}
+                ORDER BY bm25(items_fts), i.updated_at DESC, i.created_at DESC
+                """,
+                fts_params,
             )
             fts_ids = [row[0] for row in cursor.fetchall()]
         except Exception as e:
@@ -888,7 +904,13 @@ class Database:
         self._apply_filters(like_where, like_params, filters)
 
         cursor.execute(
-            f"SELECT id FROM items WHERE {' AND '.join(like_where)} LIMIT ?", like_params + [limit]
+            f"""
+            SELECT id
+            FROM items
+            WHERE {' AND '.join(like_where)}
+            ORDER BY updated_at DESC, created_at DESC
+            """,
+            like_params,
         )
         like_ids = [row[0] for row in cursor.fetchall()]
 
@@ -900,13 +922,24 @@ class Database:
                 merged_ids.append(lid)
                 seen.add(lid)
 
-        if not merged_ids:
-            return []
+        return merged_ids
 
-        # 查询完整条目
-        placeholders = ",".join(["?" for _ in merged_ids])
+    def _load_items_for_search(
+        self,
+        owner_id: str,
+        item_ids: list[str],
+        filters: dict[str, Any] | None = None,
+    ) -> dict[str, Item]:
+        """按 ID 批量读取搜索结果条目。"""
+        if not item_ids:
+            return {}
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        placeholders = ",".join(["?" for _ in item_ids])
         where: list[str] = [f"id IN ({placeholders})", "owner_id = ?", "deleted = 0"]
-        params: list[Any] = merged_ids + [owner_id]
+        params: list[Any] = item_ids + [owner_id]
         self._apply_filters(where, params, filters)
 
         cursor.execute(f"SELECT * FROM items WHERE {' AND '.join(where)}", params)
@@ -915,7 +948,46 @@ class Database:
             item = self._row_to_item(row)
             if item:
                 items_by_id[item.id] = item
+        return items_by_id
+
+    def search_items(
+        self,
+        owner_id: str,
+        query: str,
+        filters: dict[str, Any] | None = None,
+        limit: int = 100,
+    ) -> list[Item]:
+        """全文搜索，返回 Item dataclass 列表。"""
+        page_size = max(0, int(limit))
+        merged_ids = self._search_item_ids(owner_id, query, filters=filters)
+        if not merged_ids or page_size <= 0:
+            return []
+
+        items_by_id = self._load_items_for_search(owner_id, merged_ids[:page_size], filters=filters)
         return [items_by_id[item_id] for item_id in merged_ids[:limit] if item_id in items_by_id]
+
+    def search_items_page(
+        self,
+        owner_id: str,
+        query: str,
+        filters: dict[str, Any] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Item], int]:
+        """全文搜索，返回当前页条目与总匹配数。"""
+        page_size = max(0, int(limit))
+        start = max(0, int(offset))
+        merged_ids = self._search_item_ids(owner_id, query, filters=filters)
+        total = len(merged_ids)
+        if not total or page_size <= 0:
+            return [], total
+
+        page_ids = merged_ids[start:start + page_size]
+        if not page_ids:
+            return [], total
+
+        items_by_id = self._load_items_for_search(owner_id, page_ids, filters=filters)
+        return [items_by_id[item_id] for item_id in page_ids if item_id in items_by_id], total
 
     def undo_delete(self, owner_id: str, minutes: int = 5) -> dict[str, Any]:
         """撤销删除"""

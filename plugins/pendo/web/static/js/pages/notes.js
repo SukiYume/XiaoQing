@@ -818,7 +818,8 @@ async function loadAndRender() {
     renderPage();
 }
 
-function openNoteViewModal(note) {
+export function openNoteViewModal(note) {
+    ensureStyles();
     const tags = tagList(note.tags);
     const bodyHTML = `
         <div class="note-view-meta">
@@ -864,7 +865,8 @@ function openNoteViewModal(note) {
     };
 }
 
-function openNoteFormModal(existing = null) {
+export function openNoteFormModal(existing = null) {
+    ensureStyles();
     const isEdit = Boolean(existing);
     const fields = NOTE_FIELDS.map((field) => {
         let value = '';

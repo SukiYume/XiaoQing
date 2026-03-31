@@ -933,7 +933,8 @@ async function updateTaskStatus(taskId, status) {
     await loadAndRender();
 }
 
-function openTaskModal(existing = null) {
+export function openTaskModal(existing = null) {
+    ensureStyles();
     const isEdit = Boolean(existing);
     const fields = TASK_FIELDS.map((field) => {
         let value = field.value ?? '';

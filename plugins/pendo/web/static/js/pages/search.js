@@ -1,17 +1,23 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { navigate } from '../router.js';
+import { renderPagination } from '../components/pagination.js';
 import { formatDateTime, previewText } from '../utils/format.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import { openEventDetail } from './events.js';
+import { openTaskModal } from './tasks.js';
+import { openDetailModal as openLedgerDetailModal } from './ledger.js';
+import { openNoteViewModal } from './notes.js';
+import { openDiaryViewModal } from './diary.js';
 
 const CSS_ID = 'pendo-search-redesign-styles';
+const PAGE_SIZE = 20;
 
 const TYPE_CONFIG = {
-    event: { label: '日程', icon: '📅', color: '#F59E0B', route: 'events' },
-    task: { label: '待办', icon: '✅', color: '#10B981', route: 'tasks' },
-    ledger: { label: '记账', icon: '💰', color: '#EF4444', route: 'ledger' },
-    note: { label: '笔记', icon: '📝', color: '#3B82F6', route: 'notes' },
-    diary: { label: '日记', icon: '📔', color: '#EC4899', route: 'diary' },
+    event: { label: '日程', icon: '📅', color: '#F59E0B' },
+    task: { label: '待办', icon: '✅', color: '#10B981' },
+    ledger: { label: '记账', icon: '💰', color: '#EF4444' },
+    note: { label: '笔记', icon: '📝', color: '#3B82F6' },
+    diary: { label: '日记', icon: '📔', color: '#EC4899' },
 };
 
 const TYPE_ORDER = ['event', 'task', 'ledger', 'note', 'diary'];
@@ -31,9 +37,12 @@ let _activeCategory = '';
 let _activeCategoryField = 'category';
 let _activeCategoryTypeHint = '';
 let _results = [];
+let _total = 0;
+let _page = 1;
 let _loading = false;
 let _hasSearched = false;
 let _debounceTimer = null;
+let _dataChangedHandler = null;
 
 function formatDate(value) {
     return value ? formatDateTime(value, '') : '';
@@ -92,6 +101,10 @@ function resultCounts() {
         counts[item.type] = (counts[item.type] || 0) + 1;
     });
     return counts;
+}
+
+function totalPages() {
+    return Math.max(1, Math.ceil((_total || 0) / PAGE_SIZE));
 }
 
 function matchingCategories() {
@@ -248,13 +261,18 @@ function renderSummary() {
     if (!_query.trim() || !_hasSearched) return '';
     const counts = resultCounts();
     const activeTypes = TYPE_ORDER.filter((type) => counts[type]);
+    const visibleCount = _results.length;
+    const summary = _total > visibleCount
+        ? `当前共命中 ${_total} 条，本页展示 ${visibleCount} 条`
+        : `当前共命中 ${_total} 条`;
     return `
         <section class="search-summary">
             <div>
                 <h3>检索结果</h3>
-                <p>“${escapeHtml(_query)}”当前共命中 ${_results.length} 条，分布在 ${activeTypes.length || 0} 个模块里。</p>
+                <p>“${escapeHtml(_query)}”${summary}，本页覆盖 ${activeTypes.length || 0} 个模块。</p>
             </div>
             <div class="search-query-meta">
+                ${_total > PAGE_SIZE ? `<span class="search-pill">第 ${_page} / ${totalPages()} 页</span>` : ''}
                 ${activeTypes.map((type) => `<span class="search-pill">${TYPE_CONFIG[type].icon} ${TYPE_CONFIG[type].label} · ${counts[type]}</span>`).join('')}
             </div>
         </section>
@@ -262,10 +280,10 @@ function renderSummary() {
 }
 
 function renderCard(item) {
-    const cfg = TYPE_CONFIG[item.type] || { label: item.type, icon: '❓', color: '#94A3B8', route: '' };
+    const cfg = TYPE_CONFIG[item.type] || { label: item.type, icon: '❓', color: '#94A3B8' };
     const iconBg = alphaColor(cfg.color, 0.14);
     return `
-        <article class="search-card" data-id="${escapeHtml(String(item.id))}" data-route="${escapeHtml(cfg.route)}">
+        <article class="search-card" data-id="${escapeHtml(String(item.id))}">
             <span class="search-card-icon" style="background:${iconBg};color:${cfg.color};">${cfg.icon}</span>
             <div>
                 <div class="search-card-title-row">
@@ -312,7 +330,7 @@ function renderPage() {
                     <div class="search-hero-tags">
                         <span class="search-hero-tag">${_activeType ? TYPE_CONFIG[_activeType].label : '全部类型'}</span>
                         <span class="search-hero-tag">${_activeCategory || '全部主题'}</span>
-                        <span class="search-hero-tag">${_hasSearched ? `${_results.length} 条结果` : '等待检索'}</span>
+                        <span class="search-hero-tag">${_hasSearched ? `${_total} 条命中` : '等待检索'}</span>
                     </div>
                 </div>
                 <div class="search-query-meta">
@@ -341,8 +359,21 @@ function renderPage() {
             ${renderCategoryChips()}
             ${renderSummary()}
             <div id="search-results-area">${renderResults()}</div>
+            <div id="search-pagination" class="search-pagination"></div>
         </div>
     `;
+    const paginationEl = _container.querySelector('#search-pagination');
+    if (paginationEl) {
+        renderPagination(paginationEl, {
+            page: _page,
+            pageSize: PAGE_SIZE,
+            total: _total,
+            onChange: async (page) => {
+                _page = page;
+                await doSearch();
+            },
+        });
+    }
     attachListeners();
     const input = _container.querySelector('#search-input');
     if (input) {
@@ -352,10 +383,45 @@ function renderPage() {
     }
 }
 
-async function doSearch() {
+async function openResultDetail(item) {
+    if (!item?.id || !item?.type) return;
+    if (item.type === 'event') {
+        await openEventDetail(item.id);
+        return;
+    }
+    try {
+        const res = await api.get(`/items/${item.id}`);
+        const latest = res?.data || item;
+        if (item.type === 'task') {
+            openTaskModal(latest);
+            return;
+        }
+        if (item.type === 'ledger') {
+            openLedgerDetailModal(latest);
+            return;
+        }
+        if (item.type === 'note') {
+            openNoteViewModal(latest);
+            return;
+        }
+        if (item.type === 'diary') {
+            openDiaryViewModal(latest);
+            return;
+        }
+        showToast('暂不支持打开这种搜索结果', 'warning');
+    } catch (err) {
+        showToast(`加载详情失败：${err.message}`, 'error');
+    }
+}
+
+async function doSearch(options = {}) {
+    const { resetPage = false } = options;
+    if (resetPage) _page = 1;
     const q = _query.trim();
     if (!q) {
         _results = [];
+        _total = 0;
+        _page = 1;
         _loading = false;
         _hasSearched = false;
         renderPage();
@@ -364,7 +430,7 @@ async function doSearch() {
     _loading = true;
     renderPage();
     try {
-        const params = { q, limit: 60 };
+        const params = { q, page: _page, page_size: PAGE_SIZE };
         if (_activeType) params.type = _activeType;
         if (_activeCategoryField === 'ledger_category' && _activeCategory) {
             params.ledger_category = _activeCategory;
@@ -374,9 +440,17 @@ async function doSearch() {
         }
         const res = await api.get('/search', params);
         _results = res?.data?.items || [];
+        _total = Number(res?.data?.total || 0);
         _hasSearched = true;
+        const lastPage = totalPages();
+        if (_page > lastPage) {
+            _page = lastPage;
+            await doSearch();
+            return;
+        }
     } catch (err) {
         _results = [];
+        _total = 0;
         _hasSearched = true;
         showToast(`搜索失败：${err.message}`, 'error');
     }
@@ -396,19 +470,21 @@ function attachListeners() {
             clearTimeout(_debounceTimer);
             if (!_query.trim()) {
                 _results = [];
+                _total = 0;
+                _page = 1;
                 _hasSearched = false;
                 _loading = false;
                 renderPage();
                 return;
             }
-            await doSearch();
+            await doSearch({ resetPage: true });
         };
         input.onkeydown = async (event) => {
             if (event.key === 'Enter') {
                 event.preventDefault();
                 clearTimeout(_debounceTimer);
                 _query = input.value;
-                await doSearch();
+                await doSearch({ resetPage: true });
             }
             if (event.key === 'Escape') {
                 clearTimeout(_debounceTimer);
@@ -417,6 +493,8 @@ function attachListeners() {
                 _activeCategoryField = 'category';
                 _activeCategoryTypeHint = '';
                 _results = [];
+                _total = 0;
+                _page = 1;
                 _hasSearched = false;
                 _loading = false;
                 renderPage();
@@ -430,7 +508,7 @@ function attachListeners() {
             _activeCategory = '';
             _activeCategoryField = 'category';
             _activeCategoryTypeHint = '';
-            if (_query.trim()) await doSearch();
+            if (_query.trim()) await doSearch({ resetPage: true });
             else renderPage();
         };
     });
@@ -444,7 +522,7 @@ function attachListeners() {
             _activeCategory = isSame ? '' : category;
             _activeCategoryField = isSame ? 'category' : field;
             _activeCategoryTypeHint = isSame ? '' : typeHint;
-            if (_query.trim()) await doSearch();
+            if (_query.trim()) await doSearch({ resetPage: true });
             else renderPage();
         };
     });
@@ -456,14 +534,14 @@ function attachListeners() {
             _activeCategory = '';
             _activeCategoryField = 'category';
             _activeCategoryTypeHint = '';
-            await doSearch();
+            await doSearch({ resetPage: true });
         };
     });
 
-    _container.querySelectorAll('.search-card[data-route]').forEach((card) => {
-        card.onclick = () => {
-            const route = card.dataset.route;
-            if (route) navigate(route);
+    _container.querySelectorAll('.search-card[data-id]').forEach((card) => {
+        card.onclick = async () => {
+            const item = _results.find((entry) => String(entry.id) === String(card.dataset.id));
+            if (item) await openResultDetail(item);
         };
     });
 }
@@ -471,6 +549,8 @@ function attachListeners() {
 export function render(container) {
     _container = container;
     _results = [];
+    _total = 0;
+    _page = 1;
     _activeType = '';
     _activeCategory = '';
     _activeCategoryField = 'category';
@@ -478,13 +558,24 @@ export function render(container) {
     _loading = false;
     _hasSearched = false;
     renderPage();
+    _dataChangedHandler = async () => {
+        if (!_query.trim() || !_hasSearched) return;
+        await doSearch();
+    };
+    window.addEventListener('pendo-data-changed', _dataChangedHandler);
 }
 
 export function destroy() {
     clearTimeout(_debounceTimer);
     _debounceTimer = null;
+    if (_dataChangedHandler) {
+        window.removeEventListener('pendo-data-changed', _dataChangedHandler);
+        _dataChangedHandler = null;
+    }
     _container = null;
     _results = [];
+    _total = 0;
+    _page = 1;
     _activeCategory = '';
     _activeCategoryField = 'category';
     _activeCategoryTypeHint = '';
@@ -496,5 +587,6 @@ export function onRouteEnter(params) {
     const q = params ? params.get('q') : '';
     if (!q) return;
     _query = q;
+    _page = 1;
     doSearch();
 }
