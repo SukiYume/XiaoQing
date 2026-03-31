@@ -29,7 +29,7 @@ class WebHandler:
                     "pip install fastapi uvicorn \"passlib[bcrypt]\" PyJWT"
                 ),
             }
-        
+
         parts = args.strip().split(maxsplit=1)
         subcmd = parts[0].lower() if parts else ""
 
@@ -46,20 +46,28 @@ class WebHandler:
 
     async def _generate_token(self, user_id: str, context=None):
         token = generate_token(user_id, expires_hours=PendoConfig.WEB_TOKEN_EXPIRE_HOURS)
-        url = web_server.get_url()
+        # url = web_server.get_url()
         running = web_server.is_running()
         status_text = "运行中" if running else "未启动"
         token_sent = await self._send_private_text(
             context,
             user_id,
-            f"🔑 Pendo Web 登录 Token\n{token}",
+            "\n".join(
+                [
+                    "🔑 Pendo Web 登录 Token",
+                    token,
+                    "",
+                    f"⏳ 有效期: {PendoConfig.WEB_TOKEN_EXPIRE_HOURS} 小时",
+                    "💡 打开网页后直接粘贴即可登录",
+                ]
+            ),
         )
 
         lines = [
             "🌐 Pendo Web",
             "✅ 已生成登录令牌",
             "",
-            f"🌍 地址: {url}",
+            f"🌍 地址: https://paris.escape.ac.cn/pendo",
             f"⏳ 有效期: {PendoConfig.WEB_TOKEN_EXPIRE_HOURS} 小时",
             f"⚙️ 服务状态: {status_text}",
             "",

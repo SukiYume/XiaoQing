@@ -115,11 +115,16 @@ def _shift_months(value: date, delta: int) -> date:
 @router.get("/stats/ledger")
 def ledger_stats(
     range: str | None = Query(None, alias="range"),
+    start_date: str | None = None,
+    end_date: str | None = None,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ):
     """Ledger statistics."""
-    start, end = _parse_range(range)
+    if start_date and end_date:
+        start, end = start_date, end_date
+    else:
+        start, end = _parse_range(range)
     conn = db.get_connection()
 
     monthly = conn.execute(

@@ -5,10 +5,20 @@ import { buildFormHTML, getFormData, initFormInteractions } from '../components/
 import { renderPagination } from '../components/pagination.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { formatDateTime, formatMonthDay, previewText } from '../utils/format.js';
+import { derivePresetRange, fetchItemRangeBounds, todayRangeKey } from '../utils/date_ranges.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const PAGE_SIZE = 18;
 const CSS_ID = 'pendo-notes-styles';
+const RANGE_OPTIONS = [
+    { key: 'week', label: '本周' },
+    { key: 'month', label: '本月' },
+    { key: 'quarter', label: '本季' },
+    { key: 'year', label: '今年' },
+    { key: 'last_year', label: '去年' },
+    { key: 'custom', label: '自定义' },
+    { key: 'all', label: '全部' },
+];
 
 const NOTE_FIELDS = [
     { name: 'title', label: '标题', type: 'text', required: true },
@@ -25,13 +35,16 @@ let _page = 1;
 let _loading = false;
 let _dataChangedHandler = null;
 let _filters = {
+    range: 'year',
+    customStart: '',
+    customEnd: '',
     category: '',
     tag: '',
 };
+let _activeRange = { start: '', end: '' };
 
 function todayKey() {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    return todayRangeKey();
 }
 
 function formatDate(value) {
@@ -69,6 +82,51 @@ function categoryOptions() {
     return [{ value: '', label: '全部分类' }, ...categories.map((category) => ({ value: category, label: category }))];
 }
 
+function deriveRangeDates() {
+    return derivePresetRange(_filters.range, {
+        today: todayKey(),
+        customStart: _filters.customStart,
+        customEnd: _filters.customEnd,
+        customFallback: 'month',
+    });
+}
+
+function rangeLabel() {
+    const option = RANGE_OPTIONS.find((item) => item.key === _filters.range);
+    return option?.label || '当前范围';
+}
+
+function noteCadenceSubtitle(granularity) {
+    if (granularity === 'year') return `按${rangeLabel()}查看每年新增笔记数量。`;
+    if (granularity === 'month') return `按${rangeLabel()}查看每月新增笔记数量。`;
+    if (granularity === 'week') return `按${rangeLabel()}查看每周新增笔记数量。`;
+    return `按${rangeLabel()}查看每天的笔记输入频率。`;
+}
+
+async function fetchNoteRangeBounds(fallbackEnd = todayKey()) {
+    return fetchItemRangeBounds(api, {
+        type: 'note',
+        sortField: 'created_at',
+        startField: 'created_at',
+        endField: 'created_at',
+        fallbackEnd,
+    });
+}
+
+async function resolveActiveRange() {
+    const range = deriveRangeDates();
+    if (_filters.range !== 'all') return range;
+    return fetchNoteRangeBounds(range.end);
+}
+
+function dateTimeRangeForQuery(range) {
+    if (!range?.start || !range?.end) return { start: '', end: '' };
+    return {
+        start: `${range.start}T00:00:00`,
+        end: `${range.end}T23:59:59`,
+    };
+}
+
 function ensureStyles() {
     injectStyles(CSS_ID, `
         ${pageShellCss('notes-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.NARROW })}
@@ -96,6 +154,31 @@ function ensureStyles() {
         }
         .notes-hero-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
         .notes-stack { display: flex; flex-direction: column; gap: 18px; }
+        .notes-range-panel {
+            display: flex; flex-direction: column; gap: 12px; padding: 16px 18px;
+            border-radius: 22px; background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.94));
+            border: 1px solid rgba(59,130,246,0.12); box-shadow: 0 14px 30px rgba(37,99,235,0.04);
+        }
+        .notes-range-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        .notes-range-btn {
+            height: 40px; padding: 0 18px; border-radius: 999px; border: 1px solid rgba(203,213,225,0.92);
+            background: rgba(255,255,255,0.92); color: #334155; font-size: 13px; font-weight: 800; cursor: pointer;
+            transition: background .16s ease, border-color .16s ease, transform .16s ease, color .16s ease;
+        }
+        .notes-range-btn:hover { transform: translateY(-1px); }
+        .notes-range-btn.active {
+            background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.28); color: #1d4ed8;
+        }
+        .notes-custom-range { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .notes-date-field {
+            width: 100%; max-width: 220px; height: 40px; border-radius: 14px; border: 1px solid rgba(59,130,246,0.14);
+            background: rgba(255,255,255,0.92); padding: 0 14px; font-size: 13px; color: var(--color-text);
+        }
+        .notes-date-field:focus {
+            outline: none; border-color: var(--color-notes, #3B82F6); box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+        }
+        .notes-range-sep { font-size: 13px; font-weight: 800; color: var(--color-text-secondary); }
+        .notes-range-meta { font-size: 12px; color: var(--color-text-secondary); font-weight: 700; }
         .notes-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
         .notes-summary-card {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.94));
@@ -278,6 +361,9 @@ function ensureStyles() {
             .notes-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .notes-hero-actions { align-items: flex-start; }
             .notes-summary-grid { grid-template-columns: 1fr; }
+            .notes-custom-range { flex-direction: column; align-items: stretch; }
+            .notes-date-field { max-width: none; }
+            .notes-range-sep { display: none; }
             .notes-filter-bar { grid-template-columns: 1fr; }
             .notes-filter-actions { justify-content: flex-start; }
             .notes-workspace-body { padding: 16px; }
@@ -292,22 +378,32 @@ function ensureStyles() {
     `);
 }
 
-async function fetchOverview() {
-    const params = { today: todayKey() };
+async function fetchOverview(range = _activeRange) {
+    const params = {
+        today: range?.end || todayKey(),
+        start_date: range?.start || '',
+        end_date: range?.end || '',
+    };
     if (_filters.category) params.category = _filters.category;
     if (_filters.tag) params.tags = _filters.tag;
     const res = await api.get('/stats/notes/overview', params);
     return res.data || null;
 }
 
-async function fetchNotes(page = 1) {
+async function fetchNotes(page = 1, range = _activeRange) {
     const params = {
         type: 'note',
+        date_field: 'created_at',
         page,
         page_size: PAGE_SIZE,
         sort: 'updated_at',
         order: 'desc',
     };
+    const dateRange = dateTimeRangeForQuery(range);
+    if (dateRange.start && dateRange.end) {
+        params.start_date = dateRange.start;
+        params.end_date = dateRange.end;
+    }
     if (_filters.category) params.category = _filters.category;
     if (_filters.tag) params.tags = _filters.tag;
     const res = await api.get('/items', params);
@@ -325,8 +421,8 @@ function renderHero() {
                 <h2>📝 笔记</h2>
                 <p>集中整理灵感、摘录和工作草稿。</p>
                 <div class="notes-hero-tags">
-                    <span class="notes-hero-tag">${summary.total_count || 0} 条笔记</span>
-                    <span class="notes-hero-tag">近 7 天 ${summary.week_new_count || 0} 条新增</span>
+                    <span class="notes-hero-tag">${rangeLabel()} ${summary.total_count || 0} 条笔记</span>
+                    <span class="notes-hero-tag">范围尾端近 7 天 ${summary.week_new_count || 0} 条新增</span>
                     <span class="notes-hero-tag">${_filters.category || '全部分类'}</span>
                 </div>
             </div>
@@ -343,25 +439,50 @@ function renderSummary() {
     return `
         <section class="notes-summary-grid">
             <div class="notes-summary-card">
-                <div class="notes-summary-label">总笔记数</div>
+                <div class="notes-summary-label">${rangeLabel()}笔记数</div>
                 <div class="notes-summary-value">${summary.total_count || 0}</div>
-                <div class="notes-summary-meta">当前知识库累计条目</div>
+                <div class="notes-summary-meta">当前时间范围内的累计条目</div>
             </div>
             <div class="notes-summary-card">
-                <div class="notes-summary-label">本周新增</div>
+                <div class="notes-summary-label">近 7 天新增</div>
                 <div class="notes-summary-value">${summary.week_new_count || 0}</div>
-                <div class="notes-summary-meta">最近 7 天的新增速度</div>
+                <div class="notes-summary-meta">以当前范围结束日为参照计算</div>
             </div>
             <div class="notes-summary-card">
                 <div class="notes-summary-label">平均字数</div>
                 <div class="notes-summary-value">${Math.round(summary.average_length || 0)}</div>
-                <div class="notes-summary-meta">当前笔记概况</div>
+                <div class="notes-summary-meta">${rangeLabel()}内笔记概况</div>
             </div>
             <div class="notes-summary-card">
                 <div class="notes-summary-label">已打标签</div>
                 <div class="notes-summary-value">${taggedRate}%</div>
-                <div class="notes-summary-meta">便于后续回看与筛选</div>
+                <div class="notes-summary-meta">${rangeLabel()}内便于后续回看与筛选</div>
             </div>
+        </section>
+    `;
+}
+
+function renderRangeControls() {
+    const showCustom = _filters.range === 'custom';
+    const rangeText = _activeRange.start && _activeRange.end ? `${_activeRange.start} → ${_activeRange.end}` : '当前范围';
+    return `
+        <section class="notes-range-panel">
+            <div class="notes-range-row">
+                ${RANGE_OPTIONS.map((item) => `
+                    <button class="notes-range-btn ${_filters.range === item.key ? 'active' : ''}" type="button" data-range="${item.key}">
+                        ${item.label}
+                    </button>
+                `).join('')}
+            </div>
+            ${showCustom ? `
+                <div class="notes-custom-range">
+                    <input class="notes-date-field" id="notes-range-start" type="date" value="${_filters.customStart || ''}">
+                    <span class="notes-range-sep">至</span>
+                    <input class="notes-date-field" id="notes-range-end" type="date" value="${_filters.customEnd || ''}">
+                    <button class="btn btn-secondary" id="notes-range-apply" type="button">应用</button>
+                </div>
+            ` : ''}
+            <div class="notes-range-meta">${rangeText}</div>
         </section>
     `;
 }
@@ -369,16 +490,19 @@ function renderSummary() {
 function renderCadencePanel() {
     const cadence = _overview?.cadence || [];
     const maxCount = Math.max(1, ...cadence.map((item) => item.count || 0));
+    const granularity = _overview?.cadence_granularity || 'day';
+    const columns = Math.min(Math.max(cadence.length, 1), 12);
+    const style = columns ? ` style="grid-template-columns:repeat(${columns}, minmax(0, 1fr));"` : '';
     return `
         <section class="notes-panel notes-cadence-panel">
             <div class="notes-panel-head">
                 <div>
                     <h3>书写节奏</h3>
-                    <p>查看最近两周的记录频率。</p>
+                    <p>${noteCadenceSubtitle(granularity)}</p>
                 </div>
             </div>
             <div class="notes-panel-body">
-                <div class="notes-meter">
+                <div class="notes-meter"${style}>
                     ${cadence.map((item) => `
                         <div class="notes-meter-col">
                             <div class="notes-meter-value">${item.count}</div>
@@ -408,12 +532,12 @@ function renderCategoryPanel() {
     }
     return `
         <section class="notes-panel">
-            <div class="notes-panel-head">
-                <div>
-                    <h3>分类分布</h3>
-                    <p>查看当前笔记主要集中在哪些主题。</p>
+                <div class="notes-panel-head">
+                    <div>
+                        <h3>分类分布</h3>
+                        <p>查看${rangeLabel()}内笔记主要集中在哪些主题。</p>
+                    </div>
                 </div>
-            </div>
             <div class="notes-panel-body">
                 <div class="notes-category-list">
                     ${categories.map((item) => `
@@ -452,12 +576,12 @@ function renderTagPanel() {
     }
     return `
         <section class="notes-panel">
-            <div class="notes-panel-head">
-                <div>
-                    <h3>热门标签</h3>
-                    <p>点击标签可直接筛选当前笔记。</p>
+                <div class="notes-panel-head">
+                    <div>
+                        <h3>热门标签</h3>
+                        <p>点击标签可直接筛选当前范围内的笔记。</p>
+                    </div>
                 </div>
-            </div>
             <div class="notes-panel-body">
                 <div class="notes-tag-list">
                     ${tags.map((item) => `
@@ -610,6 +734,7 @@ function renderPage() {
         <div class="notes-shell">
             ${renderHero()}
             <div class="notes-stack">
+                ${renderRangeControls()}
                 ${renderSummary()}
                 <section class="notes-layout">
                     <div class="notes-layout-main">
@@ -646,14 +771,17 @@ async function loadAndRender() {
     _loading = true;
     renderPage();
     try {
+        const activeRange = await resolveActiveRange();
         const [overview, list] = await Promise.all([
-            fetchOverview(),
-            fetchNotes(_page),
+            fetchOverview(activeRange),
+            fetchNotes(_page, activeRange),
         ]);
+        _activeRange = activeRange;
         _overview = overview;
         _items = list.items;
         _total = list.total;
     } catch (err) {
+        _activeRange = deriveRangeDates();
         _overview = null;
         _items = [];
         _total = 0;
@@ -797,13 +925,40 @@ function attachListeners() {
         },
     });
 
+    _container.querySelectorAll('.notes-range-btn').forEach((button) => {
+        button.onclick = async () => {
+            const nextRange = button.dataset.range || 'month';
+            _filters.range = nextRange;
+            if (nextRange === 'custom' && (!_filters.customStart || !_filters.customEnd)) {
+                const fallback = derivePresetRange('month', { today: todayKey() });
+                _filters.customStart = fallback.start;
+                _filters.customEnd = fallback.end;
+            }
+            _page = 1;
+            await loadAndRender();
+        };
+    });
+
+    const rangeApply = _container.querySelector('#notes-range-apply');
+    if (rangeApply) {
+        rangeApply.onclick = async () => {
+            const startInput = _container.querySelector('#notes-range-start');
+            const endInput = _container.querySelector('#notes-range-end');
+            _filters.customStart = startInput?.value || '';
+            _filters.customEnd = endInput?.value || '';
+            _page = 1;
+            await loadAndRender();
+        };
+    }
+
     const addTop = _container.querySelector('#notes-add-top');
     if (addTop) addTop.onclick = () => openNoteFormModal(null);
 
     const reset = _container.querySelector('#notes-filter-reset');
     if (reset) {
         reset.onclick = async () => {
-            _filters = { category: '', tag: '' };
+            _filters.category = '';
+            _filters.tag = '';
             _page = 1;
             await loadAndRender();
         };
@@ -856,7 +1011,8 @@ export function render(container) {
     _total = 0;
     _page = 1;
     _loading = false;
-    _filters = { category: '', tag: '' };
+    _filters = { range: 'year', customStart: '', customEnd: '', category: '', tag: '' };
+    _activeRange = deriveRangeDates();
     renderPage();
     loadAndRender();
     _dataChangedHandler = async (event) => {
@@ -876,6 +1032,7 @@ export function destroy() {
     _items = [];
     _overview = null;
     _total = 0;
+    _activeRange = { start: '', end: '' };
 }
 
 export function onRouteEnter(_params) {}
