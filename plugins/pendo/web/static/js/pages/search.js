@@ -39,6 +39,22 @@ function formatDate(value) {
     return value ? formatDateTime(value, '') : '';
 }
 
+function alphaColor(hex, alpha = 0.12) {
+    const value = String(hex || '').trim();
+    const normalized = value.startsWith('#') ? value.slice(1) : value;
+    if (![3, 6].includes(normalized.length) || /[^0-9a-f]/i.test(normalized)) {
+        return `rgba(148,163,184,${alpha})`;
+    }
+    const full = normalized.length === 3
+        ? normalized.split('').map((part) => `${part}${part}`).join('')
+        : normalized;
+    const int = Number.parseInt(full, 16);
+    const r = (int >> 16) & 255;
+    const g = (int >> 8) & 255;
+    const b = int & 255;
+    return `rgba(${r},${g},${b},${alpha})`;
+}
+
 function itemTitle(item) {
     if (item.title) return item.title;
     if (item.type === 'diary' && item.diary_date) return `${item.diary_date} 的日记`;
@@ -104,7 +120,7 @@ function groupedResults() {
 
 function ensureStyles() {
     injectStyles(CSS_ID, `
-        ${pageShellCss('search-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.SEARCH })}
+        ${pageShellCss('search-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .search-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
             padding: 24px 26px; border-radius: 28px; margin-bottom: 18px;
@@ -183,7 +199,10 @@ function ensureStyles() {
             cursor: pointer; transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
         }
         .search-card:hover { transform: translateY(-1px); border-color: rgba(100,116,139,0.28); box-shadow: 0 14px 28px rgba(15,23,42,0.06); }
-        .search-card-icon { width: 42px; height: 42px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; }
+        .search-card-icon {
+            width: 42px; height: 42px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center;
+            font-size: 18px;
+        }
         .search-card-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .search-card-title { margin: 0; font-size: 15px; font-weight: 780; color: var(--color-text); }
         .search-card-badge { padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; color: #fff; }
@@ -199,7 +218,7 @@ function ensureStyles() {
             border: 1px dashed rgba(148,163,184,0.28); color: var(--color-text-secondary);
         }
         .search-empty-icon { font-size: 40px; margin-bottom: 10px; }
-        ${mediaMax(BREAKPOINTS.SEARCH, `
+        ${mediaMax(BREAKPOINTS.MOBILE, `
             .search-hero, .search-query-bar, .search-summary { grid-template-columns: 1fr; }
             .search-query-meta { justify-content: flex-start; }
             .search-card { grid-template-columns: auto minmax(0, 1fr); }
@@ -244,9 +263,10 @@ function renderSummary() {
 
 function renderCard(item) {
     const cfg = TYPE_CONFIG[item.type] || { label: item.type, icon: '❓', color: '#94A3B8', route: '' };
+    const iconBg = alphaColor(cfg.color, 0.14);
     return `
         <article class="search-card" data-id="${escapeHtml(String(item.id))}" data-route="${escapeHtml(cfg.route)}">
-            <span class="search-card-icon" style="background:${cfg.color};">${cfg.icon}</span>
+            <span class="search-card-icon" style="background:${iconBg};color:${cfg.color};">${cfg.icon}</span>
             <div>
                 <div class="search-card-title-row">
                     <h4 class="search-card-title">${escapeHtml(itemTitle(item))}</h4>

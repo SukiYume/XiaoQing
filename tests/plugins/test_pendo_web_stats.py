@@ -528,6 +528,15 @@ def test_stats_page_source_uses_dynamic_note_cadence_layout():
     assert "Math.min(Math.max(cadenceItems.length, 1), 7)" in src
 
 
+def test_stats_page_source_scales_summary_values_for_mid_width_layouts():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+
+    assert ".stats-summary-card {" in src
+    assert "font-size: clamp(24px, 1.85vw, 30px);" in src
+    assert "overflow-wrap: anywhere;" in src
+    assert "word-break: break-word;" in src
+
+
 def test_stats_page_source_uses_neutral_zero_cells_for_activity_heatmap():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
 
@@ -548,14 +557,7 @@ def test_stats_page_source_uses_even_axis_tick_sampling_without_forced_last_labe
 def test_stats_page_source_uses_unified_time_presets():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
 
-    assert "const RANGE_OPTIONS = [" in src
-    assert "{ key: 'week', label: '本周' }" in src
-    assert "{ key: 'month', label: '本月' }" in src
-    assert "{ key: 'quarter', label: '本季' }" in src
-    assert "{ key: 'year', label: '今年' }" in src
-    assert "{ key: 'last_year', label: '去年' }" in src
-    assert "{ key: 'custom', label: '自定义' }" in src
-    assert "{ key: 'all', label: '全部' }" in src
+    assert "RANGE_PRESET_OPTIONS" in src
     assert "if (_range === 'all') return 'all';" in src
 
 
@@ -571,7 +573,7 @@ def test_stats_page_source_marks_note_cards_as_range_driven():
 def test_notes_page_source_uses_range_driven_note_cadence():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "notes.js").read_text(encoding="utf-8")
 
-    assert "const RANGE_OPTIONS = [" in src
+    assert "RANGE_PRESET_OPTIONS" in src
     assert "range: 'year'" in src
     assert "async function fetchNoteRangeBounds(fallbackEnd = todayKey())" in src
     assert "async function resolveActiveRange()" in src
@@ -579,6 +581,30 @@ def test_notes_page_source_uses_range_driven_note_cadence():
     assert "date_field: 'created_at'" in src
     assert "function noteCadenceSubtitle(granularity)" in src
     assert "按${rangeLabel()}查看每月新增笔记数量。" in src
+
+
+def test_notes_page_source_scales_summary_values_for_mid_width_layouts():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "notes.js").read_text(encoding="utf-8")
+
+    assert "min-width: 0;" in src
+    assert "font-size: clamp(24px, 1.9vw, 30px);" in src
+    assert "overflow-wrap: anywhere;" in src
+    assert "word-break: break-word;" in src
+    assert ".notes-spotlight-side {" in src
+    assert "display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));" in src
+    assert ".note-row-side {" in src
+    assert ".note-row-footer {" in src
+    assert ".note-row-preview { font-size: 12px; line-height: 1.55; -webkit-line-clamp: 1; }" in src
+    assert ".note-row-order, .note-card-category, .note-tag { height: 22px; padding: 0 7px; font-size: 10px; }" in src
+
+
+def test_stats_page_source_compacts_mobile_donuts():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+
+    assert ".stats-donut { width: 100%; height: auto; max-width: 180px; margin: 0 auto; }" in src
+    assert ".stats-donut { max-width: min(200px, 52vw); }" in src
+    assert ".stats-donut-center-value { font-size: 16px; }" in src
+    assert "fill: #7f1d1d;" in src
 
 
 def test_ledger_comparison_fills_missing_months_and_keeps_prev_month_baseline():

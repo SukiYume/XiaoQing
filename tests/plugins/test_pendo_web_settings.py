@@ -67,6 +67,15 @@ def test_settings_page_source_collects_form_before_rerender_on_save():
     assert src.index("const payload = collectFormData();") < src.index("_saving = true;")
 
 
+def test_settings_page_source_scales_summary_values_for_mid_width_layouts():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "settings.js").read_text(encoding="utf-8")
+
+    assert ".settings-summary-card { padding: 18px; min-width: 0; }" in src
+    assert "font-size: clamp(18px, 1.55vw, 24px);" in src
+    assert "overflow-wrap: anywhere;" in src
+    assert "word-break: break-word;" in src
+
+
 def test_parse_custom_settings_reads_dict_payload():
     custom = parse_custom_settings({
         "settings_json": {

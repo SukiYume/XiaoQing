@@ -775,6 +775,88 @@ def test_ledger_page_source_uses_unified_time_presets_with_today():
     assert "近30天" not in src
 
 
+def test_ledger_page_source_stabilizes_quick_add_and_custom_range_layout():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "ledger.js").read_text(encoding="utf-8")
+
+    assert "box-sizing: border-box;" in src
+    assert "--ledger-qa-direction-width: 128px;" in src
+    assert "--ledger-qa-control-width: 176px;" in src
+    assert "display: flex;" in src
+    assert "flex-wrap: wrap;" in src
+    assert ".ledger-quick-add .pselect { width: auto; max-width: 100%; }" in src
+    assert "width: var(--ledger-qa-direction-width);" in src
+    assert "width: min(100%, var(--ledger-qa-control-width));" in src
+    assert "--ledger-qa-direction-width: 108px;" in src
+    assert "--ledger-qa-control-width: 136px;" in src
+    assert "grid-template-columns: minmax(0, 1fr);" in src
+    assert "width: 100%;" in src
+    assert "max-width: 100%;" in src
+    assert "--ledger-qa-control-width: 100%;" not in src
+    assert "if (group) group.style.display = val === 'custom' ? 'grid' : 'none';" not in src
+    assert "grid-column: 1 / -1;" in src
+    assert "--ledger-filter-select-width: 170px;" in src
+    assert "--ledger-filter-control-width: 196px;" in src
+    assert "--ledger-filter-amount-width: 312px;" in src
+    assert "display: flex;" in src
+    assert "width: min(100%, var(--ledger-filter-amount-width));" in src
+    assert "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);" in src
+    assert ".ledger-filter-date { width: 108px; flex: 0 0 108px; }" not in src
+    assert ".ledger-insight-svg-ring {" in src
+    assert "max-width: min(200px, 52vw);" in src
+    assert ".ledger-insight-y-label {" in src
+    assert "clamp(14px, 4.2vw, 18px)" in src
+    assert "clamp(13px, 3.8vw, 17px)" in src
+
+
+def test_pendo_web_pages_use_unified_xl_mobile_phone_breakpoints():
+    roots = [
+        ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages",
+        ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components",
+    ]
+    legacy_tokens = [
+        "BREAKPOINTS.WIDE",
+        "BREAKPOINTS.NARROW",
+        "BREAKPOINTS.COMPACT",
+        "BREAKPOINTS.FORM",
+        "BREAKPOINTS.SEARCH",
+        "BREAKPOINTS.DASHBOARD",
+        "BREAKPOINTS.DESKTOP",
+        "BREAKPOINTS.STATS_SMALL",
+    ]
+
+    for root in roots:
+        for path in root.rglob("*.js"):
+            src = path.read_text(encoding="utf-8")
+            for token in legacy_tokens:
+                assert token not in src, f"{path} still uses legacy breakpoint {token}"
+
+
+def test_search_page_source_uses_soft_icon_backgrounds():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "search.js").read_text(encoding="utf-8")
+
+    assert "function alphaColor(hex, alpha = 0.12)" in src
+    assert "const iconBg = alphaColor(cfg.color, 0.14);" in src
+    assert "const iconBorder = alphaColor(cfg.color, 0.2);" not in src
+    assert ".search-card-icon {" in src
+    assert "border: 1px solid transparent;" not in src
+    assert 'style="background:${iconBg};color:${cfg.color};"' in src
+
+
+def test_app_source_uses_subtle_back_to_top_button_styles():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+    assert "const BACK_TO_TOP_THEME = {" in src
+    assert "width: 38px;" in src
+    assert "height: 38px;" in src
+    assert "--btt-accent: var(--color-dashboard);" in src
+    assert "background: color-mix(in srgb, var(--btt-accent) 68%, transparent);" in src
+    assert "-webkit-tap-highlight-color: transparent;" in src
+    assert "#back-to-top:focus-visible {" in src
+    assert "color-mix(in srgb, var(--btt-accent) 16%, transparent);" in src
+    assert "applyTheme(getCurrentPage());" in src
+    assert "onRouteChange((path) => applyTheme(path));" in src
+
+
 def test_ledger_insights_component_uses_time_scaled_candle_axis():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "ledger_insights.js").read_text(encoding="utf-8")
 

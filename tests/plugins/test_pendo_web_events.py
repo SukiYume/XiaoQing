@@ -257,13 +257,27 @@ def test_events_page_source_uses_event_overview_routes():
 def test_events_page_source_uses_unified_time_presets():
     page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "events.js").read_text(encoding="utf-8")
 
-    assert "const LIST_RANGE_OPTIONS = [" in page_src
-    assert "{ value: 'week', label: '本周' }" in page_src
-    assert "{ value: 'month', label: '本月' }" in page_src
-    assert "{ value: 'quarter', label: '本季' }" in page_src
-    assert "{ value: 'year', label: '今年' }" in page_src
-    assert "{ value: 'last_year', label: '去年' }" in page_src
-    assert "{ value: 'custom', label: '自定义' }" in page_src
-    assert "{ value: 'all', label: '全部' }" in page_src
+    assert "RANGE_PRESET_OPTIONS" in page_src
+    assert "option.key" in page_src
     assert "async function fetchAllRangeBounds()" in page_src
     assert "listRange: 'month'" in page_src
+
+
+def test_events_page_source_uses_compact_calendar_summary_layout():
+    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "events.js").read_text(encoding="utf-8")
+
+    assert "function calendarVisibleItemLimit()" in page_src
+    assert "const visibleLimit = calendarVisibleItemLimit();" in page_src
+    assert "const visibleItems = items.slice(0, visibleLimit);" in page_src
+    assert ".events-calendar-chip-text {" in page_src
+    assert 'class="events-calendar-overflow">+${count - visibleItems.length}<span class="events-calendar-overflow-suffix"> 更多</span>' in page_src
+    assert "BREAKPOINTS.XL" in page_src
+    assert "BREAKPOINTS.EVENTS" not in page_src
+    assert "events-calendar-summary" not in page_src
+    assert "共 ${count} 条安排" not in page_src
+    assert "aspect-ratio: 1 / 1;" in page_src
+    assert "justify-content: flex-start;" in page_src
+    assert ".events-hero-actions .events-summary-chip { width: auto; flex: 0 0 auto; }" in page_src
+    assert ".events-calendar-items { gap: 2px; margin-top: 0; }" in page_src
+    assert ".events-calendar-overflow-suffix { display: none; }" in page_src
+    assert ".events-summary-chips .events-summary-chip { width: 100%; justify-content: center; padding: 0 8px; font-size: 10px; }" in page_src
