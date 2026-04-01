@@ -26,6 +26,14 @@ const BACK_TO_TOP_THEME = {
     transfer: 'var(--color-dashboard)',
 };
 
+function extractLoginToken(rawValue) {
+    const text = String(rawValue || '').trim();
+    if (!text) return '';
+
+    const match = text.match(/(?:^|[\s"'`])([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)(?=$|[\s"'`])/);
+    return match ? match[1] : text;
+}
+
 async function bootstrap() {
     const token = getToken();
     if (token) {
@@ -59,12 +67,16 @@ function showLogin(initialError = '') {
     }
 
     const submit = async () => {
-        const token = input.value.trim();
+        const token = extractLoginToken(input.value);
         if (!token) {
             error.textContent = '请先粘贴登录令牌';
             error.style.display = 'block';
             input.focus();
             return;
+        }
+
+        if (token !== input.value.trim()) {
+            input.value = token;
         }
 
         btn.disabled = true;

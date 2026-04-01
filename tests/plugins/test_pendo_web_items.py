@@ -857,6 +857,17 @@ def test_app_source_uses_subtle_back_to_top_button_styles():
     assert "onRouteChange((path) => applyTheme(path));" in src
 
 
+def test_app_source_extracts_token_from_pasted_message():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "plugins" / "pendo" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert "function extractLoginToken(rawValue)" in src
+    assert "A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+" in src
+    assert "const token = extractLoginToken(input.value);" in src
+    assert "if (token !== input.value.trim()) {" in src
+    assert "直接粘贴整条回复消息" in html
+
+
 def test_ledger_insights_component_uses_time_scaled_candle_axis():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "ledger_insights.js").read_text(encoding="utf-8")
 

@@ -58,7 +58,7 @@ class WebHandler:
                     token,
                     "",
                     f"⏳ 有效期: {PendoConfig.WEB_TOKEN_EXPIRE_HOURS} 小时",
-                    "💡 打开网页后直接粘贴即可登录",
+                    "💡 复制上面的 token，或直接复制这整条消息到网页登录框，都可以登录",
                 ]
             ),
         )
@@ -76,7 +76,7 @@ class WebHandler:
             lines.extend(
                 [
                     "🔒 Token 已单独私聊发送",
-                    "💡 打开网页后直接粘贴即可登录",
+                    "💡 复制 token，或直接复制整条私聊消息到网页登录框，都可以登录",
                 ]
             )
         else:
@@ -85,7 +85,7 @@ class WebHandler:
                     "🔑 登录 Token:",
                     token,
                     "",
-                    "💡 打开网页后直接粘贴即可登录",
+                    "💡 复制 token，或直接复制这整条消息到网页登录框，都可以登录",
                 ]
             )
         return {
