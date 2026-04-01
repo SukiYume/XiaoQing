@@ -2926,6 +2926,7 @@ class TestPendoWebHandler:
         token_text = actions[0]["params"]["message"][0]["data"]["text"]
         assert "Pendo Web 登录 Token" in token_text
         assert "mock-token" in token_text
+        assert "直接复制这整条消息到网页登录框" in token_text
 
     def test_web_token_falls_back_to_inline_message_without_send_action(self, monkeypatch):
         import sys
@@ -2953,3 +2954,4 @@ class TestPendoWebHandler:
         assert result["status"] == "success"
         assert "登录 Token:" in result["message"]
         assert "mock-token" in result["message"]
+        assert "直接复制这整条消息到网页登录框" in result["message"]
