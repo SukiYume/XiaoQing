@@ -326,20 +326,31 @@ class ReminderService:
             header = f"⏰ **提醒 (第{repeat_count + 1}次，共{max_repeats + 1}次)**"
         else:
             header = "⏰ **提醒**"
-        lines = [header]
+        lines = [header, f"🗓️ {title}"]
 
         milestones = getattr(item, "milestones", None) or []
+        target_time = getattr(item, "start_time", None)
         if milestones:
-            milestone_name = self._find_closest_milestone(milestones, remind_time)
-            lines.append(f"🗓️ {title}")
-            if milestone_name:
-                lines.append(f"📌 {milestone_name}")
+            milestone = self._find_closest_milestone_info(milestones, remind_time)
+            if milestone:
+                milestone_name = milestone.get("name", "")
+                target_time = milestone.get("time") or target_time
+                if milestone_name:
+                    lines.append(f"📌 {milestone_name}")
+                if target_time:
+                    milestone_dt = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
+                    lines.append(f"🎯 节点时间: {milestone_dt}")
+            elif target_time:
+                dt_str = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
+                lines.append(f"🎯 事件时间: {dt_str}")
         else:
-            if item.start_time:
-                dt_str = ItemFormatter.format_datetime(item.start_time, "%m月%d日 %H:%M")
-                lines.append(f"🗓️ {dt_str} - {title}")
-            else:
-                lines.append(f"🗓️ {title}")
+            if target_time:
+                dt_str = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
+                lines.append(f"🎯 事件时间: {dt_str}")
+
+        reminder_slot = self._format_reminder_slot(remind_time, target_time)
+        if reminder_slot:
+            lines.append(f"🔔 对应提醒点: {reminder_slot}")
 
         if item.location:
             lines.append(f"📍 {item.location}")
@@ -356,8 +367,10 @@ class ReminderService:
 
         return "\n".join(lines)
 
-    def _find_closest_milestone(self, milestones: list[dict[str, Any]], remind_time: str) -> str:
-        """根据 remind_time 找到时间最近（且在其后）的里程碑名称"""
+    def _find_closest_milestone_info(
+        self, milestones: list[dict[str, Any]], remind_time: str
+    ) -> dict[str, Any] | None:
+        """根据 remind_time 找到时间最近（且在其后）的里程碑"""
         try:
             remind_dt = datetime.fromisoformat(remind_time)
             best = None
@@ -367,13 +380,54 @@ class ReminderService:
                     m_dt = datetime.fromisoformat(m.get("time", ""))
                     diff = (m_dt - remind_dt).total_seconds()
                     if diff >= 0 and (best_diff is None or diff < best_diff):
-                        best = m.get("name", "")
+                        best = m
                         best_diff = diff
                 except (ValueError, TypeError):
                     continue
-            return best or (milestones[0].get("name", "") if milestones else "")
+            return best or (milestones[0] if milestones else None)
         except (ValueError, TypeError):
-            return milestones[0].get("name", "") if milestones else ""
+            return milestones[0] if milestones else None
+
+    def _format_reminder_slot(self, remind_time: str, target_time: str | None) -> str:
+        """格式化提醒点，展示相对目标时间的偏移和原始提醒时间。"""
+        remind_dt_str = ItemFormatter.format_datetime(remind_time, "%m月%d日 %H:%M")
+        if not target_time:
+            return remind_dt_str
+
+        try:
+            remind_dt = datetime.fromisoformat(remind_time)
+            target_dt = datetime.fromisoformat(target_time)
+        except (ValueError, TypeError):
+            return remind_dt_str
+
+        diff_seconds = int(round((target_dt - remind_dt).total_seconds()))
+        if diff_seconds > 0:
+            relation = f"提前{self._format_duration(abs(diff_seconds))}"
+        elif diff_seconds < 0:
+            relation = f"晚于目标{self._format_duration(abs(diff_seconds))}"
+        else:
+            relation = "准时"
+
+        return f"{relation}（{remind_dt_str}）"
+
+    @staticmethod
+    def _format_duration(total_seconds: int) -> str:
+        """格式化秒数为中文时长。"""
+        total_seconds = max(0, int(total_seconds))
+        days, remainder = divmod(total_seconds, 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        parts = []
+        if days:
+            parts.append(f"{days}天")
+        if hours:
+            parts.append(f"{hours}小时")
+        if minutes:
+            parts.append(f"{minutes}分钟")
+        if not parts:
+            parts.append(f"{seconds}秒" if seconds else "0分钟")
+        return "".join(parts)
 
     def _is_in_quiet_hours(self, user_id: str, remind_time: datetime) -> bool:
         """检查是否在静默时段"""

@@ -696,6 +696,8 @@ class TestMilestoneReminderMessage:
         msg = service._build_reminder_message(item, "2030-04-05T00:00:00")
         assert "注册截止" in msg
         assert "星团会议" in msg
+        assert "节点时间: 04月06日 00:00" in msg
+        assert "对应提醒点: 提前1天（04月05日 00:00）" in msg
 
     def test_reminder_message_shows_notes(self):
         """普通事件的提醒消息应附上 notes"""
@@ -718,6 +720,8 @@ class TestMilestoneReminderMessage:
 
         msg = service._build_reminder_message(item, "2030-04-05T09:00:00")
         assert "会议链接" in msg
+        assert "事件时间: 04月06日 09:00" in msg
+        assert "对应提醒点: 提前1天（04月05日 09:00）" in msg
 
 
 class TestRecurringEventRegression:
