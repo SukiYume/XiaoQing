@@ -14,7 +14,7 @@ from ..core.exceptions import MissingRequiredFieldException
 from core.plugin_base import run_sync
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
-from ..utils.session_utils import safe_create_session
+from ..utils.session_utils import safe_create_session, safe_end_session
 from ..utils.formatters import ItemFormatter, paginate
 from ..utils.time_utils import _parse_time_range_core
 from ..config import (
@@ -120,7 +120,7 @@ class LedgerHandler(DbOpsMixin):
                 "type": PendoConfig.SESSION_TYPE_LEDGER_ADD,
                 "owner_id": user_id,
                 "group_id": group_id,
-                "step": "direction",
+                "step": "amount",
                 "data": {},
             },
             timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
@@ -129,10 +129,9 @@ class LedgerHandler(DbOpsMixin):
         return {
             "status": "success",
             "message": (
-                "📝 开始记账，请选择类型：\n\n"
-                "1️⃣ 支出\n"
-                "2️⃣ 收入\n\n"
-                "(输入 1 或 2，或直接输入\"支出\"/\"收入\")\n"
+                "📝 开始记账，请先输入金额：\n\n"
+                "例如：28.5 / ¥88 / 1200\n"
+                "后面我再问描述、收支类型和分类。\n"
                 "💡 输入\"退出\"可取消"
             ),
         }
@@ -141,7 +140,7 @@ class LedgerHandler(DbOpsMixin):
         self, user_id: str, text: str, session: dict[str, Any], context: PendoContext
     ) -> CommandMessage:
         """处理记账会话的每一步"""
-        step = session.get("step", "direction")
+        step = session.get("step", "amount")
         data = session.get("data", {})
         group_id = session.get("group_id")
 
@@ -161,7 +160,7 @@ class LedgerHandler(DbOpsMixin):
     async def _step_direction(
         self, text: str, data: dict, session: dict, context: PendoContext
     ) -> CommandMessage:
-        """步骤1: 选择收入/支出"""
+        """步骤3: 选择收入/支出"""
         if text in ("1", "支出", "expense"):
             data["direction"] = "expense"
         elif text in ("2", "收入", "income"):
@@ -170,14 +169,13 @@ class LedgerHandler(DbOpsMixin):
             return {"status": "info", "message": "请输入 1(支出) 或 2(收入)"}
 
         session.set("data", data)
-        session.set("step", "amount")
-
-        return {"status": "success", "message": "💰 请输入金额（数字）："}
+        session.set("step", "category")
+        return {"status": "success", "message": self._build_category_prompt(data["direction"])}
 
     async def _step_amount(
         self, text: str, data: dict, session: dict, context: PendoContext
     ) -> CommandMessage:
-        """步骤2: 输入金额"""
+        """步骤1: 输入金额"""
         try:
             amount = float(text.replace("￥", "").replace("¥", "").replace(",", "").strip())
             if amount <= 0:
@@ -187,26 +185,13 @@ class LedgerHandler(DbOpsMixin):
 
         data["amount"] = amount
         session.set("data", data)
-        session.set("step", "category")
-
-        # 根据收支方向显示不同的分类
-        categories = (
-            LEDGER_EXPENSE_CATEGORIES if data["direction"] == "expense" else LEDGER_INCOME_CATEGORIES
-        )
-
-        lines = ["📂 请选择分类：\n"]
-        for i, cat in enumerate(categories, 1):
-            lines.append(f"{i}.{cat['icon']}{cat['name']}")
-            if i % 4 == 0:
-                lines.append("")  # 每4个换行
-
-        lines.append("\n(输入编号或分类名)")
-        return {"status": "success", "message": "\n".join(lines)}
+        session.set("step", "description")
+        return {"status": "success", "message": "📝 请输入描述（简要说明，如\"午饭\"）："}
 
     async def _step_category(
         self, text: str, data: dict, session: dict, context: PendoContext
     ) -> CommandMessage:
-        """步骤3: 选择分类"""
+        """步骤4: 选择分类并保存"""
         categories = (
             LEDGER_EXPENSE_CATEGORIES if data["direction"] == "expense" else LEDGER_INCOME_CATEGORIES
         )
@@ -232,26 +217,47 @@ class LedgerHandler(DbOpsMixin):
             return {"status": "info", "message": "❌ 无效的分类，请输入编号或分类名："}
 
         data["ledger_category"] = category_name
-        session.set("data", data)
-        session.set("step", "description")
-
-        return {"status": "success", "message": "📝 请输入描述（简要说明，如\"午饭\"）："}
+        await safe_end_session(context)
+        return await self._save_ledger_item(
+            data.get("owner_id", ""), data, session.get("group_id")
+        )
 
     async def _step_description(
         self, user_id: str, text: str, data: dict, session: dict,
         context: PendoContext, group_id: int | None
     ) -> CommandMessage:
-        """步骤4: 输入描述，然后保存"""
+        """步骤2: 输入描述，然后进入类型选择"""
         if not text:
             return {"status": "info", "message": "❌ 描述不能为空，请输入："}
 
         data["title"] = text
+        data["owner_id"] = user_id
+        session.set("data", data)
+        session.set("step", "direction")
+        return {
+            "status": "success",
+            "message": (
+                "📌 请选择收支类型：\n\n"
+                "1️⃣ 支出\n"
+                "2️⃣ 收入\n\n"
+                "(输入 1 或 2，或直接输入\"支出\"/\"收入\")"
+            ),
+        }
 
-        # 结束会话并保存
-        from ..utils.session_utils import safe_end_session
-        await safe_end_session(context)
+    @staticmethod
+    def _build_category_prompt(direction: str) -> str:
+        """根据方向构建分类选择提示。"""
+        categories = (
+            LEDGER_EXPENSE_CATEGORIES if direction == "expense" else LEDGER_INCOME_CATEGORIES
+        )
 
-        return await self._save_ledger_item(user_id, data, group_id)
+        lines = ["📂 请选择分类：\n"]
+        for i, cat in enumerate(categories, 1):
+            lines.append(f"{i}.{cat['icon']}{cat['name']}")
+            if i % 4 == 0:
+                lines.append("")
+        lines.append("\n(输入编号或分类名)")
+        return "\n".join(lines)
 
     async def _save_ledger_item(
         self, user_id: str, data: dict, group_id: int | None = None
