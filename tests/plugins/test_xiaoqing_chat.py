@@ -1084,6 +1084,67 @@ def test_group_wait_plan_is_preserved_after_bot_already_replied(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_pfc_once_promotes_group_wait_plan_for_live_short_followups(tmp_path):
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+    from plugins.xiaoqing_chat.memory.memory import MemoryStore
+    from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore
+    from plugins.xiaoqing_chat.planning.pfc_action_planner import PFCPlan
+    from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
+    from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
+
+    now = time.time()
+    chat_id = "group-live-short-followups"
+    cfg = XiaoQingChatConfig()
+    context = MagicMock()
+    context.data_dir = tmp_path
+    context.http_session = AsyncMock()
+
+    memory_store = MemoryStore()
+    memory_store.append(chat_id, role="assistant", name="小青", content="刚刚说过了", ts=now - 25)
+    memory_store.append(chat_id, role="user", name="Tester", content="乐", ts=now - 5)
+    memory_store.append(chat_id, role="user", name="Tester", content="今儿碰见了", ts=now - 1)
+
+    action_history = ActionHistoryStore()
+    memory_db = MagicMock()
+    pfc_state_store = PFCStateStore()
+    pfc_state_store.bind(tmp_path)
+    st = pfc_state_store.get(chat_id)
+    st.last_successful_reply_action = "direct_reply"
+    pfc_state_store.save(chat_id)
+    generate_reply = AsyncMock(return_value="细说，碰见谁了")
+
+    with patch(
+        "plugins.xiaoqing_chat.planning.pfc_engine.plan_next_action",
+        new=AsyncMock(
+            return_value=PFCPlan(
+                action="wait",
+                reason="没有人在跟我直接对话，先等等",
+                thinking="群里在接话，但不是明确问我",
+                wait_seconds=20,
+            )
+        ),
+    ):
+        result = await run_pfc_once(
+            context=context,
+            runtime_cfg=cfg,
+            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            bot_name="小青",
+            is_private=False,
+            chat_id=chat_id,
+            current_text="今儿碰见了",
+            memory_store=memory_store,
+            action_history=action_history,
+            memory_db=memory_db,
+            pfc_state_store=pfc_state_store,
+            generate_reply=generate_reply,
+        )
+
+    assert result.action == "send_new_message"
+    assert result.reply == "细说，碰见谁了"
+    generate_reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_memory_store_get_async_loads_via_to_thread(tmp_path):
     from plugins.xiaoqing_chat.memory.memory import MemoryStore
 
@@ -1780,6 +1841,13 @@ def test_follow_up_compact_prompt_explicitly_allows_brief_interjection_on_new_gr
     from plugins.xiaoqing_chat.planning.pfc_action_planner import PROMPT_FOLLOW_UP_COMPACT
 
     assert "有新内容时可以简短插一句" in PROMPT_FOLLOW_UP_COMPACT
+    assert "不要仅因为刚发过言就机械 wait" in PROMPT_FOLLOW_UP_COMPACT
+
+
+def test_initial_compact_prompt_tells_group_planner_not_to_mechanically_wait():
+    from plugins.xiaoqing_chat.planning.pfc_action_planner import PROMPT_INITIAL_REPLY_COMPACT
+
+    assert "不要因为“不是在跟我说”就机械 wait" in PROMPT_INITIAL_REPLY_COMPACT
 
 
 def test_long_non_question_turn_does_not_fallback_to_stale_topic_title():
