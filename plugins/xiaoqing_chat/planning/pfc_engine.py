@@ -76,6 +76,56 @@ def _timeout_context(history: Sequence[StoredMessage], *, minutes: int = 6) -> s
     return f"重要提示：对方已经长时间（约{mm}分钟）没有回复你的消息了（这可能代表对方繁忙/不想回复/没注意到你的消息等情况，或在对方看来本次聊天已告一段落），请基于此情况规划下一步。\n"
 
 
+def _seconds_since_last_assistant(history: Sequence[StoredMessage], *, now: float) -> float:
+    for msg in reversed(history[-60:]):
+        if msg.role == "assistant":
+            return max(0.0, now - float(msg.ts or now))
+    return 9999.0
+
+
+def _trailing_user_turns(history: Sequence[StoredMessage], *, now: float, window_seconds: float = 18.0) -> int:
+    count = 0
+    for msg in reversed(history[-8:]):
+        if msg.role != "user":
+            break
+        msg_ts = float(msg.ts or 0.0)
+        if msg_ts and now - msg_ts > window_seconds:
+            break
+        count += 1
+    return count
+
+
+def _is_short_group_interjection_candidate(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    if any(ch in t for ch in ("?", "？", "!", "！")):
+        return True
+    return 3 <= len(t) <= 18
+
+
+def _promote_group_wait_action(
+    *,
+    is_private: bool,
+    history: Sequence[StoredMessage],
+    current_text: str,
+    last_successful_reply_action: str,
+    normalized_action: str,
+    now: float,
+) -> str:
+    if is_private or normalized_action != "wait":
+        return ""
+    if not _is_short_group_interjection_candidate(current_text):
+        return ""
+    if _trailing_user_turns(history, now=now) < 2:
+        return ""
+    if _seconds_since_last_assistant(history, now=now) < 8.0:
+        return ""
+    if last_successful_reply_action in ("direct_reply", "send_new_message"):
+        return "send_new_message"
+    return "direct_reply"
+
+
 _ACTION_ALIASES: dict[str, str] = {
     "reply": "direct_reply",
     "directreply": "direct_reply",
@@ -280,6 +330,35 @@ async def run_pfc_once(
                 st.planner_skip_until = 0.0
                 _pfc_dirty = True
         act = _normalize_action(plan.action)
+        promoted_act = _promote_group_wait_action(
+            is_private=is_private,
+            history=history,
+            current_text=current_text,
+            last_successful_reply_action=st.last_successful_reply_action or "",
+            normalized_action=act,
+            now=now,
+        )
+        if promoted_act:
+            reason = str(plan.reason or "").strip()
+            promoted_reason = "群聊里连续有短句新内容，适合像普通群友一样顺势接一句"
+            plan = PFCPlan(
+                action=promoted_act,
+                reason=f"{reason}；{promoted_reason}" if reason else promoted_reason,
+                thinking=plan.thinking,
+                wait_seconds=0,
+            )
+            act = promoted_act
+            _log_step(
+                context,
+                runtime_cfg,
+                chat_id=chat_id,
+                step="pfc.group_wait_promoted",
+                fields={
+                    "from": "wait",
+                    "to": promoted_act,
+                    "text": _short_text(current_text, limit=30),
+                },
+            )
 
         if act == "block_and_ignore":
             st.ignore_until_ts = now + 3600.0
