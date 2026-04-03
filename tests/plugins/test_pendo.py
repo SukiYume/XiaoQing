@@ -1500,6 +1500,89 @@ class TestCrossTypeCommandRegression:
         finally:
             db.cleanup()
 
+    def test_ledger_add_session_starts_with_amount_then_description(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.ledger import LedgerHandler
+
+        create_calls = []
+
+        class _Context:
+            async def create_session(self, initial_data=None, timeout=300.0):
+                create_calls.append((initial_data, timeout))
+
+        handler = LedgerHandler(db=MagicMock())
+        result = asyncio.run(handler.start_add_session("u1", _Context()))
+
+        assert result["status"] == "success"
+        assert "请先输入金额" in result["message"]
+        assert "后面我再问描述、收支类型和分类" in result["message"]
+        assert create_calls[0][0]["step"] == "amount"
+
+    def test_ledger_add_session_flow_collects_amount_and_description_before_options(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.ledger import LedgerHandler
+
+        class _Session(dict):
+            def set(self, key, value):
+                self[key] = value
+
+        class _Context:
+            def __init__(self):
+                self.end_calls = 0
+
+            async def end_session(self):
+                self.end_calls += 1
+                return True
+
+        handler = LedgerHandler(db=MagicMock())
+        context = _Context()
+        session = _Session({"step": "amount", "data": {}, "group_id": 123})
+        captured = {}
+
+        async def _fake_save(user_id, data, group_id=None):
+            captured["user_id"] = user_id
+            captured["data"] = dict(data)
+            captured["group_id"] = group_id
+            return {"status": "success", "message": "saved"}
+
+        handler._save_ledger_item = _fake_save
+
+        result = asyncio.run(handler.handle_session_step("u1", "88.5", session, context))
+        assert result["status"] == "success"
+        assert "请输入描述" in result["message"]
+        assert session["step"] == "description"
+        assert session["data"]["amount"] == 88.5
+
+        result = asyncio.run(handler.handle_session_step("u1", "午饭", session, context))
+        assert result["status"] == "success"
+        assert "请选择收支类型" in result["message"]
+        assert session["step"] == "direction"
+        assert session["data"]["title"] == "午饭"
+
+        result = asyncio.run(handler.handle_session_step("u1", "1", session, context))
+        assert result["status"] == "success"
+        assert "请选择分类" in result["message"]
+        assert session["step"] == "category"
+        assert session["data"]["direction"] == "expense"
+
+        result = asyncio.run(handler.handle_session_step("u1", "1", session, context))
+        assert result == {"status": "success", "message": "saved"}
+        assert context.end_calls == 1
+        assert captured["user_id"] == "u1"
+        assert captured["group_id"] == 123
+        assert captured["data"]["amount"] == 88.5
+        assert captured["data"]["title"] == "午饭"
+        assert captured["data"]["direction"] == "expense"
+        assert captured["data"]["ledger_category"]
+
     def test_todo_view_returns_detail(self, tmp_path):
         import sys
 
