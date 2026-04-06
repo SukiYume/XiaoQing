@@ -20,7 +20,6 @@ from ..utils.time_utils import _parse_time_range_core
 from ..utils.formatters import (
     ItemFormatter,
     format_success_message,
-    extract_metadata,
     extract_kv_param,
     paginate,
 )
@@ -35,7 +34,7 @@ class NoteHandler(DbOpsMixin):
     """笔记处理器
 
     负责处理笔记（Note）相关的所有操作：
-    - 快速记录笔记（支持 cat:xxx #tag 语法）
+    - 快速记录笔记（支持 title:/cat:xxx/#tag 语法）
     - 查看、列表、删除
 
     不需要AI解析，直接规则解析
@@ -53,6 +52,8 @@ class NoteHandler(DbOpsMixin):
 
         命令格式：
         - /pendo note add <内容> [cat:xxx] [#tag]
+        - /pendo note add title:<标题> content <正文> [cat:xxx] [#tag]
+        - /pendo note add title:<标题>\n<正文多行>\ncat:xxx #tag
         - /pendo note list [cat:xxx] [#tag] [all|page:n]
         - /pendo note view <id>
         - /pendo note edit <id> <新内容> [cat:xxx] [#tag]
@@ -85,6 +86,8 @@ class NoteHandler(DbOpsMixin):
                     f"❌ 未知笔记命令: {command}\n\n"
                     "可用命令:\n"
                     "• /pendo note add <内容> [cat:xxx] [#tag]\n"
+                    "• /pendo note add title:<标题> content <正文> [cat:xxx] [#tag]\n"
+                    "• /pendo note add title:<标题> 后换行写正文，结尾可加 cat:xxx #tag\n"
                     "• /pendo note list [cat:xxx] [#tag]\n"
                     "• /pendo note view <id>\n"
                     "• /pendo note edit <id> <新内容>\n"
@@ -161,23 +164,11 @@ class NoteHandler(DbOpsMixin):
         支持格式：
         - 内容 cat:xxx #tag1 #tag2
         - title:标题 content 详细内容 cat:xxx #tag1 #tag2
+        - title:标题\n正文多行... cat:xxx #tag1 #tag2
         """
-        meta = extract_metadata(text)
+        meta = self._extract_note_metadata(text)
         content_text = meta["text"]
-
-        title = None
-        
-        # 1. 带引号的 title
-        m1 = re.match(r'^title:"([^"]+)"\s*content[\s:]+(.*)$', content_text, re.IGNORECASE | re.DOTALL)
-        if m1:
-            title = m1.group(1).strip()
-            content_text = m1.group(2).strip()
-        else:
-            # 2. 不带引号的 title，需要有明确的 content 关键字并前置空格
-            m2 = re.match(r'^title:([^\s]+)\s+content[\s:]+(.*)$', content_text, re.IGNORECASE | re.DOTALL)
-            if m2:
-                title = m2.group(1).strip()
-                content_text = m2.group(2).strip()
+        title, content_text = self._split_explicit_title(content_text)
 
         # 如果没有显式的 title，title 和 content 都是 content_text
         if not title:
@@ -189,6 +180,100 @@ class NoteHandler(DbOpsMixin):
             "category": meta["category"] or "",
             "tags": meta["tags"],
         }
+
+    @staticmethod
+    def _split_explicit_title(text: str) -> tuple[str | None, str]:
+        """拆分 title: 前缀，兼容 inline content 和换行正文。"""
+        content_text = (text or "").strip()
+        if not content_text.lower().startswith("title:"):
+            return None, content_text
+
+        title_payload = content_text[6:].lstrip()
+        title = None
+
+        if title_payload.startswith('"'):
+            end_quote = title_payload.find('"', 1)
+            if end_quote > 0:
+                title = title_payload[1:end_quote].strip()
+                remainder = title_payload[end_quote + 1 :].lstrip()
+                if remainder.lower().startswith("content"):
+                    remainder = re.sub(r"^content[\s:]+", "", remainder, flags=re.IGNORECASE)
+                return title, remainder.strip()
+
+        inline_match = re.match(
+            r"^([^\n]+?)\s+content[\s:]+(.*)$",
+            title_payload,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if inline_match:
+            return inline_match.group(1).strip(), inline_match.group(2).strip()
+
+        first_line, sep, remainder = title_payload.partition("\n")
+        if first_line.strip():
+            return first_line.strip(), remainder.strip() if sep else ""
+        return None, content_text
+
+    @classmethod
+    def _extract_note_metadata(cls, text: str) -> dict[str, Any]:
+        """仅从尾部提取 note metadata，避免误伤正文中的 Markdown/标签文本。"""
+        lines = (text or "").rstrip().splitlines()
+        if not lines:
+            return {"text": "", "category": None, "tags": []}
+
+        category = None
+        tags: list[str] = []
+
+        for idx in range(len(lines) - 1, -1, -1):
+            current = lines[idx].rstrip()
+            if not current.strip():
+                continue
+
+            remaining, line_category, line_tags, had_metadata = cls._strip_note_metadata_suffix(
+                current
+            )
+            if not had_metadata:
+                break
+
+            if line_category and category is None:
+                category = line_category
+            if line_tags:
+                tags = line_tags + tags
+
+            if remaining.strip():
+                lines[idx] = remaining.rstrip()
+                break
+
+            lines = lines[:idx]
+
+        return {"text": "\n".join(lines).strip(), "category": category, "tags": tags}
+
+    @staticmethod
+    def _strip_note_metadata_suffix(line: str) -> tuple[str, str | None, list[str], bool]:
+        """从单行尾部反复剥离 cat: 与 #tag token。"""
+        remaining = line.rstrip()
+        category = None
+        tags: list[str] = []
+        had_metadata = False
+
+        while remaining:
+            token_match = re.search(r'(?:^|\s)(cat:(?:"[^"]+"|\S+)|#[\w-]+)\s*$', remaining)
+            if not token_match:
+                break
+
+            token = token_match.group(1)
+            had_metadata = True
+
+            if token.startswith("cat:") and category is None:
+                category_value = token[4:]
+                if category_value.startswith('"') and category_value.endswith('"'):
+                    category_value = category_value[1:-1]
+                category = category_value.strip()
+            elif token.startswith("#"):
+                tags.insert(0, token[1:])
+
+            remaining = remaining[: token_match.start()].rstrip()
+
+        return remaining, category, tags, had_metadata
 
     async def list_notes(
         self, user_id: str, filter_str: str, context: PendoContext
@@ -404,7 +489,11 @@ class NoteHandler(DbOpsMixin):
         if len(parts) < 2:
             return {
                 "status": "error",
-                "message": "❌ 用法: /pendo note edit <id> <新内容> [cat:xxx] [#tag]",
+                "message": (
+                    "❌ 用法: /pendo note edit <id> <新内容> [cat:xxx] [#tag]\n"
+                    "也支持: /pendo note edit <id> title:<标题> content <正文>\n"
+                    "或 title:<标题> 后直接换行写正文"
+                ),
             }
 
         note_id = parts[0].strip()
