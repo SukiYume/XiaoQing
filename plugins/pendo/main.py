@@ -227,16 +227,11 @@ async def _handle_command_routing(
     """
     log = log or logger
 
-    # 解析命令参数
-    parsed = parse(args)
-
     router = _build_command_router(context, group_id)
 
-    if not parsed:
+    subcommand, rest_args = _split_subcommand_preserve_rest(args)
+    if not subcommand:
         return segments(router.get_help_message())
-
-    subcommand = parsed.first.lower()
-    rest_args = parsed.rest(1)
 
     # 判断是否是公开命令（可以在群聊显示）
     # 公开命令：settings、无参数的子命令（显示帮助）
@@ -260,6 +255,19 @@ async def _handle_command_routing(
         await _record_metric(context, cmd_name, time.perf_counter() - start_time, is_error=is_error)
 
     return await _format_result(user_id, result, group_id, context, is_public=is_public)
+
+
+def _split_subcommand_preserve_rest(args: str) -> tuple[str, str]:
+    """拆分一级子命令，同时保留剩余参数中的原始换行。"""
+    raw = args or ""
+    stripped = raw.strip()
+    if not stripped:
+        return "", ""
+
+    parts = stripped.split(maxsplit=1)
+    subcommand = parts[0].lower()
+    rest = parts[1] if len(parts) > 1 else ""
+    return subcommand, rest
 
 
 async def scheduled(context) -> list[dict[str, Any]]:
