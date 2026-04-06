@@ -1434,6 +1434,96 @@ class TestCrossTypeCommandRegression:
         finally:
             db.cleanup()
 
+    def test_note_add_multiline_title_parses_category_and_tags(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_multiline_title.db"))
+
+        try:
+            handler = NoteHandler(db=db)
+            result = asyncio.run(
+                handler.create_note(
+                    "u1",
+                    "title:xxx\n1. xxx\n2. xxx\n3. xxx\ncat:其他 #xx",
+                    SimpleNamespace(),
+                )
+            )
+
+            assert result["status"] == "success"
+            item = db.items.get_item(result["item_id"], "u1")
+            assert item is not None
+            assert item.title == "xxx"
+            assert item.content == "1. xxx\n2. xxx\n3. xxx"
+            assert item.category == "其他"
+            assert item.tags == ["xx"]
+        finally:
+            db.cleanup()
+
+    def test_note_add_explicit_content_syntax_still_works(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_explicit_content.db"))
+
+        try:
+            handler = NoteHandler(db=db)
+            result = asyncio.run(
+                handler.create_note(
+                    "u1",
+                    "title:我的标题 content 这里是详细正文 cat:工作 #学习",
+                    SimpleNamespace(),
+                )
+            )
+
+            assert result["status"] == "success"
+            item = db.items.get_item(result["item_id"], "u1")
+            assert item is not None
+            assert item.title == "我的标题"
+            assert item.content == "这里是详细正文"
+            assert item.category == "工作"
+            assert item.tags == ["学习"]
+        finally:
+            db.cleanup()
+
+    def test_note_add_preserves_markdown_heading_in_body(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_markdown_heading.db"))
+
+        try:
+            handler = NoteHandler(db=db)
+            result = asyncio.run(
+                handler.create_note(
+                    "u1",
+                    'title:我的 笔记标题\n# 一级标题\n正文内容\ncat:工作 #归档',
+                    SimpleNamespace(),
+                )
+            )
+
+            assert result["status"] == "success"
+            item = db.items.get_item(result["item_id"], "u1")
+            assert item is not None
+            assert item.title == "我的 笔记标题"
+            assert item.content == "# 一级标题\n正文内容"
+            assert item.category == "工作"
+            assert item.tags == ["归档"]
+        finally:
+            db.cleanup()
+
     def test_ledger_view_with_diary_id_returns_hint(self, tmp_path):
         import sys
 
