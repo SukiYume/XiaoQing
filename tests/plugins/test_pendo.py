@@ -257,6 +257,17 @@ class _StubTaskHandler:
         return {"status": "success", "message": f"group:{group_id}"}
 
 
+class _StubCaptureHandler:
+    def __init__(self):
+        self.calls = []
+
+    async def handle(self, user_id, args, context, group_id=None):
+        self.calls.append(
+            {"user_id": user_id, "args": args, "context": context, "group_id": group_id}
+        )
+        return {"status": "success", "message": args}
+
+
 class _StubExporter:
     def export_markdown(self, user_id, args, options):
         return {
@@ -348,6 +359,34 @@ class TestPendoReviewFixes:
         router = pendo_main._build_command_router(SimpleNamespace(state={}))
 
         assert "import" not in router.commands
+
+    def test_handle_command_routing_preserves_multiline_note_body(self, monkeypatch):
+        from plugins.pendo import main as pendo_main
+
+        note_handler = _StubCaptureHandler()
+        services = {
+            "db": object(),
+            "reminder_service": object(),
+            "exporter": _StubExporter(),
+            "event_handler": _StubSimpleHandler(),
+            "task_handler": _StubSimpleHandler(),
+            "note_handler": note_handler,
+            "diary_handler": _StubSimpleHandler(),
+            "search_handler": _StubSimpleHandler(),
+            "ledger_handler": _StubSimpleHandler(),
+            "web_handler": _StubSimpleHandler(),
+        }
+
+        monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
+
+        context = SimpleNamespace(state={})
+        args = "note add title:AV女优排行\n1. 瀬户环奈\n2. 松本一香\ncat:其他 #av"
+
+        result = asyncio.run(pendo_main._handle_command_routing("u1", args, context))
+
+        assert note_handler.calls
+        assert note_handler.calls[0]["args"] == "add title:AV女优排行\n1. 瀬户环奈\n2. 松本一香\ncat:其他 #av"
+        assert "title:AV女优排行\n1. 瀬户环奈\n2. 松本一香\ncat:其他 #av" in result[0]["data"]["text"]
 
     def test_export_command_uploads_private_markdown_file(self, monkeypatch):
         from plugins.pendo import main as pendo_main
