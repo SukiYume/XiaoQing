@@ -5,10 +5,14 @@ import uuid
 from pathlib import Path
 
 import pytest
-from plugins.pendo.web import auth as auth_module
-from plugins.pendo.web.auth import generate_token
-from plugins.pendo.web.services import demo_space as demo_space_module
 from plugins.pendo.services.db import Database
+
+try:
+    from plugins.pendo.web import auth as auth_module
+    from plugins.pendo.web.auth import generate_token
+    from plugins.pendo.web.services import demo_space as demo_space_module
+except ModuleNotFoundError:
+    pytest.skip("pendo web demo requires PyJWT", allow_module_level=True)
 
 try:
     from fastapi.testclient import TestClient
