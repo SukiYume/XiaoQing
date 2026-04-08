@@ -21,6 +21,7 @@ from ...utils.validators import (
     normalize_task_fields,
 )
 from ..deps import get_current_user, get_db
+from ..services.bundle_import import inspect_bundle_bytes, normalize_import_payload
 from ..services.transfer_bundle import (
     BundleValidationError,
     SUPPORTED_TYPES,
@@ -281,54 +282,13 @@ async def _read_upload_body(request: Request) -> bytes:
 
 def _inspect_bundle_data(file_bytes: bytes) -> tuple[Any, list[dict[str, Any]], list[dict[str, Any]]]:
     try:
-        parsed = read_bundle(io.BytesIO(file_bytes))
+        return inspect_bundle_bytes(file_bytes)
     except BundleValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    valid_records = []
-    validation_errors = list(parsed.errors)
-    for item_type, records in parsed.records_by_type.items():
-        for index, record in enumerate(records, start=1):
-            try:
-                normalized = _normalize_import_payload(record)
-                valid_records.append(normalized)
-            except ValueError as exc:
-                validation_errors.append({
-                    "path": TYPE_FILE_NAMES[item_type],
-                    "line": record.get("_bundle_line", index),
-                    "type": item_type,
-                    "message": str(exc),
-                })
-    return parsed, valid_records, validation_errors
-
 
 def _normalize_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    item_type = payload["type"]
-    base = dict(payload)
-    preserved = {
-        key: value for key, value in base.items()
-        if key not in {"type", "id", "created_at", "updated_at", "context", "attachments", "ai_meta", "deleted", "deleted_at", "_bundle_line"}
-    }
-
-    normalizer = _NORMALIZER_MAP.get(item_type)
-    if not normalizer:
-        raise ValueError(f"Unsupported record type: {item_type}")
-    normalized = normalizer(base, partial=False)
-
-    for key, value in preserved.items():
-        normalized.setdefault(key, value)
-    normalized["type"] = item_type
-    if "id" in payload:
-        normalized["id"] = payload["id"]
-    normalized["created_at"] = payload.get("created_at") or datetime.now().isoformat(timespec="seconds")
-    normalized["updated_at"] = payload.get("updated_at") or normalized["created_at"]
-    normalized["context"] = payload.get("context") if isinstance(payload.get("context"), dict) else {}
-    normalized["attachments"] = payload.get("attachments") if isinstance(payload.get("attachments"), list) else []
-    normalized["ai_meta"] = payload.get("ai_meta") if isinstance(payload.get("ai_meta"), dict) else {}
-    normalized["deleted"] = bool(payload.get("deleted", False))
-    normalized["deleted_at"] = payload.get("deleted_at")
-    normalized.pop("_bundle_line", None)
-    return normalized
+    return normalize_import_payload(payload)
 
 
 def _selected_import_types(options: dict[str, Any], parsed) -> list[str]:

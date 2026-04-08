@@ -93,6 +93,8 @@ class PendoConfig:
     WEB_HOST = "127.0.0.1"
     WEB_PORT = 8765
     WEB_TOKEN_EXPIRE_HOURS = 24
+    WEB_DEMO_ENABLED = True
+    WEB_DEMO_EXPIRE_HOURS = 6
 
     @classmethod
     def validate(cls):

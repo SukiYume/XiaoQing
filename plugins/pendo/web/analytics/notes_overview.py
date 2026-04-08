@@ -152,6 +152,18 @@ def _resolve_cadence_granularity(start_day: date, end_day: date) -> str:
     return "day"
 
 
+def _resolve_effective_range(
+    start_day: date | None,
+    end_day: date | None,
+    today_day: date,
+) -> tuple[date | None, date | None]:
+    if not start_day or not end_day:
+        return start_day, end_day
+    if start_day <= today_day <= end_day:
+        return start_day, today_day
+    return start_day, end_day
+
+
 def build_notes_overview(
     db: Database,
     owner_id: str,
@@ -164,14 +176,15 @@ def build_notes_overview(
     today_day = _parse_date(today) or datetime.now().date()
     range_start = _parse_date(start_date)
     range_end = _parse_date(end_date)
+    effective_range_start, effective_range_end = _resolve_effective_range(range_start, range_end, today_day)
     all_notes = _load_all_notes(db=db, owner_id=owner_id)
     tag_query = str(tags or "").strip().lower()
     notes = [
         note for note in all_notes
         if (
-            not range_start
-            or not range_end
-            or _in_range(_note_activity_day(note), range_start, range_end)
+            not effective_range_start
+            or not effective_range_end
+            or _in_range(_note_activity_day(note), effective_range_start, effective_range_end)
         )
         if (not category or (note.get("category") or "未分类") == category)
         and (
@@ -202,14 +215,15 @@ def build_notes_overview(
     cadence_granularity = "day"
     if range_start and range_end:
         cadence_granularity = _resolve_cadence_granularity(range_start, range_end)
+    if effective_range_start and effective_range_end:
         if cadence_granularity == "year":
-            cadence = _build_year_cadence(notes, range_start, range_end)
+            cadence = _build_year_cadence(notes, effective_range_start, effective_range_end)
         elif cadence_granularity == "month":
-            cadence = _build_month_cadence(notes, range_start, range_end)
+            cadence = _build_month_cadence(notes, effective_range_start, effective_range_end)
         elif cadence_granularity == "week":
-            cadence = _build_week_cadence(notes, range_start, range_end)
+            cadence = _build_week_cadence(notes, effective_range_start, effective_range_end)
         else:
-            cadence = _build_day_cadence(notes, range_start, range_end)
+            cadence = _build_day_cadence(notes, effective_range_start, effective_range_end)
     else:
         last_days = [today_day - timedelta(days=offset) for offset in range(13, -1, -1)]
         cadence_counter = Counter(
