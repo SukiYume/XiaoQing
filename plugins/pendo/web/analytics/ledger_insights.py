@@ -56,6 +56,23 @@ def _normalize_category(value: Optional[str]) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else "未分类"
 
 
+def _resolve_effective_range(
+    start_date: Optional[str],
+    end_date: Optional[str],
+    *,
+    today: Optional[date] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    if not start_date or not end_date:
+        return start_date, end_date
+
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
+    current_day = today or datetime.now().date()
+    if start <= current_day <= end:
+        return start_date, current_day.strftime("%Y-%m-%d")
+    return start_date, end_date
+
+
 def _build_ledger_where(
     owner_id: str,
     direction: Optional[str] = None,
@@ -182,13 +199,14 @@ def build_ledger_insights(
     compare_mode: str = "previous_period",
 ) -> dict:
     conn = db.get_connection()
+    effective_start_date, effective_end_date = _resolve_effective_range(start_date, end_date)
 
     base_where, base_params = _build_ledger_where(
         owner_id=owner_id,
         direction=direction,
         category=category,
-        start_date=start_date,
-        end_date=end_date,
+        start_date=effective_start_date,
+        end_date=effective_end_date,
         amount_min=amount_min,
         amount_max=amount_max,
     )
@@ -206,8 +224,8 @@ def build_ledger_insights(
     totals_by_direction = {row[0]: float(row[1] or 0) for row in direction_rows}
     counts_by_direction = {row[0]: int(row[2] or 0) for row in direction_rows}
 
-    focus_start = start_date
-    focus_end = end_date
+    focus_start = effective_start_date
+    focus_end = effective_end_date
     if not focus_start or not focus_end:
         focus_start, focus_end = _query_bounds(conn, focus_where, focus_params)
 
@@ -312,8 +330,8 @@ def build_ledger_insights(
         owner_id=owner_id,
         direction=direction,
         category=category,
-        start_date=start_date,
-        end_date=end_date,
+        start_date=effective_start_date,
+        end_date=effective_end_date,
         amount_min=amount_min,
         amount_max=amount_max,
         current_total=focus_total,

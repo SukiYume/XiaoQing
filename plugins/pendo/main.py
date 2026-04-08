@@ -51,6 +51,7 @@ from .config import PendoConfig
 from .commands.operations import handle_confirm, handle_snooze, handle_undo
 from .commands.scheduled import (
     check_diary_reminders,
+    cleanup_expired_demo_data,
     check_reminders,
     cleanup_reminder_singleton,
     migrate_undone_todos,
@@ -354,6 +355,20 @@ async def scheduled_month_end_finance_summary(context) -> list[dict[str, Any]]:
         context,
         "month_end_finance_summary",
         lambda: send_month_end_finance_summaries(context, db),
+        log,
+    )
+    return result
+
+
+async def scheduled_cleanup_demo_data(context) -> list[dict[str, Any]]:
+    """Pendo Web demo 数据清理定时任务。"""
+    log = _get_logger(context)
+    db = _get_database(context)
+
+    result = await _run_scheduled_task(
+        context,
+        "cleanup_demo_data",
+        lambda: cleanup_expired_demo_data(context, db),
         log,
     )
     return result

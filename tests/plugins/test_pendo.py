@@ -2747,6 +2747,7 @@ class TestScheduledRegression:
         assert "scheduled_evening_briefing" not in handler_ids
         assert "scheduled_weekly_finance_summary" in handler_ids
         assert "scheduled_month_end_finance_summary" in handler_ids
+        assert "scheduled_cleanup_demo_data" in handler_ids
         weekly_entry = next(
             entry for entry in config.get("schedule", [])
             if entry["handler"] == "scheduled_weekly_finance_summary"
@@ -2755,8 +2756,41 @@ class TestScheduledRegression:
             entry for entry in config.get("schedule", [])
             if entry["handler"] == "scheduled_month_end_finance_summary"
         )
+        cleanup_entry = next(
+            entry for entry in config.get("schedule", [])
+            if entry["handler"] == "scheduled_cleanup_demo_data"
+        )
         assert weekly_entry["cron"] == {"day_of_week": "sun", "hour": 21, "minute": 0}
         assert monthly_entry["cron"] == {"day": "last", "hour": 21, "minute": 0}
+        assert cleanup_entry["cron"] == {"hour": "*/6", "minute": 15}
+
+    def test_cleanup_expired_demo_data_runs_periodic_purge(self, monkeypatch):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.commands import scheduled as scheduled_module
+
+        calls = []
+
+        def fake_purge(_db):
+            calls.append(_db)
+            return 3
+
+        monkeypatch.setattr(scheduled_module, "purge_expired_demo_users", fake_purge)
+
+        db = SimpleNamespace()
+        result = asyncio.run(scheduled_module.cleanup_expired_demo_data(SimpleNamespace(), db))
+
+        assert result == []
+        assert calls == [db]
+
+    def test_main_source_exposes_demo_cleanup_scheduled_handler(self):
+        src = (ROOT / "plugins" / "pendo" / "main.py").read_text(encoding="utf-8")
+
+        assert "cleanup_expired_demo_data," in src
+        assert "async def scheduled_cleanup_demo_data(context) -> list[dict[str, Any]]:" in src
+        assert '"cleanup_demo_data",' in src
 
 
 class TestPendoFinanceSummaries:

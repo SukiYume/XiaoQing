@@ -47,7 +47,7 @@ def _get_secret_key() -> str:
     return _SECRET_CACHE
 
 
-def generate_token(owner_id: str, expires_hours: int = 24) -> str:
+def generate_token(owner_id: str, expires_hours: int = 24, extra_claims: dict | None = None) -> str:
     """Generate a JWT token for the given owner_id."""
     now = int(time.time())
     payload = {
@@ -58,6 +58,8 @@ def generate_token(owner_id: str, expires_hours: int = 24) -> str:
         "exp": now + expires_hours * 3600,
         "iat": now,
     }
+    if extra_claims:
+        payload.update(extra_claims)
     return jwt.encode(payload, _get_secret_key(), algorithm=_ALGORITHM)
 
 

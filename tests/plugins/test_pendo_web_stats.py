@@ -481,7 +481,8 @@ def test_stats_page_source_passes_note_range_params():
 
     assert "async function fetchNoteRangeBounds(fallbackEnd = todayStr())" in src
     assert "const notesRange = _range === 'all' ? await fetchNoteRangeBounds(range.end) : range;" in src
-    assert "api.get('/stats/notes/overview', { start_date: notesRange.start, end_date: notesRange.end, today: notesRange.end })" in src
+    assert "function overviewReferenceDay(range, today = todayStr())" in src
+    assert "api.get('/stats/notes/overview', { start_date: notesRange.start, end_date: notesRange.end, today: overviewReferenceDay(notesRange) })" in src
 
 
 def test_stats_page_source_passes_ledger_range_params_for_all():
@@ -507,6 +508,25 @@ def test_parse_range_supports_all():
 
     assert start == "1970-01-01"
     assert end == __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+
+
+def test_parse_range_supports_calendar_quarter_boundaries():
+    stats_module = _load_stats_module()
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 5, 18, 9, 0, 0)
+
+    original_datetime = stats_module.datetime
+    stats_module.datetime = _FrozenDateTime
+    try:
+        start, end = stats_module._parse_range("quarter")
+    finally:
+        stats_module.datetime = original_datetime
+
+    assert start == "2026-04-01"
+    assert end == "2026-05-18"
 
 
 def test_stats_page_source_uses_task_palette_aligned_with_tasks_page():
@@ -577,10 +597,27 @@ def test_notes_page_source_uses_range_driven_note_cadence():
     assert "range: 'year'" in src
     assert "async function fetchNoteRangeBounds(fallbackEnd = todayKey())" in src
     assert "async function resolveActiveRange()" in src
+    assert "function overviewReferenceDay(range)" in src
     assert "start_date: range?.start || ''" in src
+    assert "today: overviewReferenceDay(range)," in src
     assert "date_field: 'created_at'" in src
     assert "function noteCadenceSubtitle(granularity)" in src
     assert "按${rangeLabel()}查看每月新增笔记数量。" in src
+
+
+def test_date_range_utility_uses_full_natural_period_bounds():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "date_ranges.js").read_text(encoding="utf-8")
+
+    assert "function endOfWeek(base)" in src
+    assert "function endOfMonth(base)" in src
+    assert "function endOfQuarter(base)" in src
+    assert "function endOfYear(base)" in src
+    assert "const firstMonth = Math.floor(base.getMonth() / 3) * 3;" in src
+    assert "start: isoDate(new Date(base.getFullYear(), firstMonth, 1))," in src
+    assert "return { start: isoDate(monday), end: isoDate(endOfWeek(base)) };" in src
+    assert "end: isoDate(endOfMonth(base))," in src
+    assert "end: isoDate(endOfQuarter(base))," in src
+    assert "end: isoDate(endOfYear(base))," in src
 
 
 def test_notes_page_source_scales_summary_values_for_mid_width_layouts():

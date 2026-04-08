@@ -110,6 +110,14 @@ async function resolveActiveRange() {
     return fetchNoteRangeBounds(range.end);
 }
 
+function overviewReferenceDay(range) {
+    const today = todayKey();
+    if (range?.start && range?.end && range.start <= today && today <= range.end) {
+        return today;
+    }
+    return range?.end || today;
+}
+
 function dateTimeRangeForQuery(range) {
     if (!range?.start || !range?.end) return { start: '', end: '' };
     return {
@@ -397,7 +405,7 @@ function ensureStyles() {
 
 async function fetchOverview(range = _activeRange) {
     const params = {
-        today: range?.end || todayKey(),
+        today: overviewReferenceDay(range),
         start_date: range?.start || '',
         end_date: range?.end || '',
     };

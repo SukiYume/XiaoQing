@@ -97,6 +97,13 @@ function deriveRangeDates() {
     });
 }
 
+function overviewReferenceDay(range, today = todayStr()) {
+    if (range?.start && range?.end && range.start <= today && today <= range.end) {
+        return today;
+    }
+    return range?.end || today;
+}
+
 function resolveHeatmapYear(range = deriveRangeDates()) {
     const endDate = new Date(`${range.end}T00:00:00`);
     return Number.isNaN(endDate.getTime()) ? nowDate().getFullYear() : endDate.getFullYear();
@@ -1187,7 +1194,7 @@ async function fetchAllData() {
         api.get('/stats/ledger', _range === 'all' ? { start_date: ledgerRange.start, end_date: ledgerRange.end } : { range: rangeParam }),
         api.get('/stats/tasks', { range: rangeParam }),
         api.get('/stats/events', { range: rangeParam }),
-        api.get('/stats/notes/overview', { start_date: notesRange.start, end_date: notesRange.end, today: notesRange.end }),
+        api.get('/stats/notes/overview', { start_date: notesRange.start, end_date: notesRange.end, today: overviewReferenceDay(notesRange) }),
         api.get('/stats/diary/overview', { start_date: diaryRange.start, end_date: diaryRange.end, today: diaryRange.end, cadence_granularity: 'auto' }),
         api.get('/stats/activity-heatmap', { year: heatmapYear }),
         api.get('/stats/ledger/comparison', { months: 6 }),

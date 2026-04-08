@@ -17,6 +17,7 @@ from plugins.pendo.utils.validators import (
     normalize_note_fields,
     normalize_task_fields,
 )
+from plugins.pendo.web.analytics import ledger_insights as ledger_insights_module
 from plugins.pendo.web.analytics.ledger_insights import build_ledger_insights
 
 
@@ -744,6 +745,65 @@ def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_cr
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_build_ledger_insights_clips_current_period_visuals_to_today():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_current_period_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-current-period"
+
+    class _FrozenDateTime(importlib.import_module("datetime").datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 4, 8, 10, 0, 0)
+
+    original_datetime = ledger_insights_module.datetime
+    ledger_insights_module.datetime = _FrozenDateTime
+
+    try:
+        for item in [
+            {
+                "id": "apr-1",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "月初消费",
+                "amount": 48,
+                "direction": "expense",
+                "ledger_category": "餐饮",
+                "ledger_date": "2026-04-01",
+                "created_at": "2026-04-01T09:00:00",
+            },
+            {
+                "id": "apr-8",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "今天消费",
+                "amount": 28,
+                "direction": "expense",
+                "ledger_category": "交通",
+                "ledger_date": "2026-04-08",
+                "created_at": "2026-04-08T09:00:00",
+            },
+        ]:
+            db.insert_item(item)
+
+        result = build_ledger_insights(
+            db=db,
+            owner_id=owner_id,
+            start_date="2026-04-01",
+            end_date="2026-04-30",
+        )
+
+        assert result["summary"]["focus_total"] == 76
+        assert result["summary"]["peak_bucket_label"] == "4/1"
+        assert result["expense_timeline"][0]["key"] == "2026-04-01"
+        assert result["expense_timeline"][-1]["key"] == "2026-04-08"
+        assert len(result["expense_timeline"]) == 8
+        assert result["expense_candles"][-1]["key"] == "2026-04-08"
+    finally:
+        ledger_insights_module.datetime = original_datetime
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_ledger_page_source_requests_insights_component():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "ledger.js").read_text(encoding="utf-8")
 
@@ -872,9 +932,19 @@ def test_ledger_insights_component_uses_time_scaled_candle_axis():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components" / "ledger_insights.js").read_text(encoding="utf-8")
 
     assert "function pickEvenAxisIndexes(length, maxLabels)" in src
+    assert "const safeMaxLabels = Math.max(maxLabels, 2);" in src
+    assert "const step = Math.max(1, Math.ceil((length - 1) / (safeMaxLabels - 1)));" in src
+    assert "for (let index = 0; index < length && picked.length < maxLabels; index += step) {" in src
+    assert "Math.round(index * step)" not in src
     assert "const labelIndexes = pickEvenAxisIndexes(coords.length, 5);" in src
-    assert "const stepX = innerWidth / candles.length;" in src
-    assert "const labelIndexes = pickEvenAxisIndexes(candles.length, 5);" in src
+    assert "function formatAxisLabel(key)" in src
+    assert "function buildCandleSvg(candles, rangeKeys = [])" in src
+    assert "const domainKeys = Array.isArray(rangeKeys) && rangeKeys.length ? rangeKeys : candles.map((item) => item.key);" in src
+    assert "const domainIndex = new Map(domainKeys.map((key, index) => [key, index]));" in src
+    assert "const domainStep = domainKeys.length > 1 ? innerWidth / (domainKeys.length - 1) : innerWidth;" in src
+    assert "const candleDomainIndex = domainIndex.get(item.key) ?? index;" in src
+    assert "const labelIndexes = pickEvenAxisIndexes(domainKeys.length, 5);" in src
+    assert "buildCandleSvg(candles, timeline.map((item) => item.key))" in src
     assert "const focusDirection = summary.focus_direction === 'income' ? 'income' : 'expense';" in src
     assert "const focusLabel = focusDirection === 'income' ? '收入' : '支出';" in src
 

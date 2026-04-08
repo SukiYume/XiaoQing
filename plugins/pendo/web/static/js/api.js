@@ -131,3 +131,30 @@ export async function verifyToken(token) {
         };
     }
 }
+
+export async function createDemoSession() {
+    try {
+        const res = await fetch('api/auth/demo', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+        const data = await res.json().catch(() => ({}));
+        return {
+            ok: Boolean(res.ok && data.ok && data?.data?.token),
+            token: data?.data?.token || '',
+            ownerId: data?.data?.owner_id || '',
+            expiresAt: data?.data?.expires_at || null,
+            message: data?.message || data?.detail || '',
+        };
+    } catch {
+        return {
+            ok: false,
+            token: '',
+            ownerId: '',
+            expiresAt: null,
+            message: '无法创建演示空间',
+        };
+    }
+}

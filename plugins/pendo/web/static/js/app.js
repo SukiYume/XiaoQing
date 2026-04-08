@@ -1,4 +1,4 @@
-import { getToken, setToken, clearToken, verifyToken } from './api.js';
+import { getToken, setToken, clearToken, verifyToken, createDemoSession } from './api.js';
 import { init as initRouter, registerRoute, getCurrentPage, onRouteChange } from './router.js';
 
 // Register all page routes (lazy loaded)
@@ -55,6 +55,7 @@ function showLogin(initialError = '') {
 
     const btn = document.getElementById('login-btn');
     const clearBtn = document.getElementById('login-clear-btn');
+    const demoBtn = document.getElementById('login-demo-btn');
     const input = document.getElementById('token-input');
     const error = document.getElementById('login-error');
     const helper = document.getElementById('login-helper');
@@ -99,6 +100,28 @@ function showLogin(initialError = '') {
         btn.textContent = '进入 Pendo';
     };
 
+    const enterDemo = async () => {
+        btn.disabled = true;
+        clearBtn.disabled = true;
+        demoBtn.disabled = true;
+        error.style.display = 'none';
+        helper.textContent = '正在创建临时演示空间…';
+
+        const result = await createDemoSession();
+        if (result.ok && result.token) {
+            setToken(result.token);
+            await showApp();
+            return;
+        }
+
+        error.textContent = result.message || '暂时无法进入演示空间';
+        error.style.display = 'block';
+        helper.textContent = '你也可以回到聊天里生成自己的登录令牌。';
+        btn.disabled = false;
+        clearBtn.disabled = false;
+        demoBtn.disabled = false;
+    };
+
     btn.onclick = submit;
     clearBtn.onclick = () => {
         input.value = '';
@@ -106,6 +129,7 @@ function showLogin(initialError = '') {
         helper.textContent = '令牌只保存在当前浏览器，可在设置页随时退出。';
         input.focus();
     };
+    demoBtn.onclick = enterDemo;
 
     input.onkeydown = (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') submit();

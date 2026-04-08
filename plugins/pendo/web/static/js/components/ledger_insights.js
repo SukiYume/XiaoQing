@@ -17,12 +17,22 @@ function fmtPercent(value) {
 
 function pickEvenAxisIndexes(length, maxLabels) {
     if (length <= maxLabels) return Array.from({ length }, (_, index) => index);
-    const step = (length - 1) / (maxLabels - 1);
-    const picked = new Set();
-    for (let index = 0; index < maxLabels; index += 1) {
-        picked.add(Math.round(index * step));
+    const safeMaxLabels = Math.max(maxLabels, 2);
+    const step = Math.max(1, Math.ceil((length - 1) / (safeMaxLabels - 1)));
+    const picked = [];
+    for (let index = 0; index < length && picked.length < maxLabels; index += step) {
+        picked.push(index);
     }
-    return Array.from(picked).sort((a, b) => a - b);
+    return picked;
+}
+
+function formatAxisLabel(key) {
+    const text = String(key || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+        const [, month, day] = text.split('-');
+        return `${Number(month)}/${Number(day)}`;
+    }
+    return text;
 }
 
 function emptyCard(title, subtitle, body) {
@@ -198,7 +208,7 @@ function buildHotspots(categories, total) {
         </div>`;
 }
 
-function buildCandleSvg(candles) {
+function buildCandleSvg(candles, rangeKeys = []) {
     const width = 500;
     const height = 200;
     const pad = { top: 18, right: 18, bottom: 28, left: 48 };
@@ -209,13 +219,14 @@ function buildCandleSvg(candles) {
     const maxValue = Math.max(...highs, 1);
     const minValue = Math.min(...lows, 0);
     const spread = Math.max(maxValue - minValue, 1);
-    const stepX = innerWidth / candles.length;
-    const xPositions = candles.map((_, index) => pad.left + stepX * index + stepX / 2);
-    const minGap = xPositions.slice(1).reduce((gap, x, index) => {
-        const delta = x - xPositions[index];
-        return delta > 0 ? Math.min(gap, delta) : gap;
-    }, innerWidth);
-    const candleWidth = Math.max(4, Math.min(12, minGap * 0.34));
+    const domainKeys = Array.isArray(rangeKeys) && rangeKeys.length ? rangeKeys : candles.map((item) => item.key);
+    const domainIndex = new Map(domainKeys.map((key, index) => [key, index]));
+    const domainStep = domainKeys.length > 1 ? innerWidth / (domainKeys.length - 1) : innerWidth;
+    const xForDomainIndex = (index) => {
+        if (domainKeys.length <= 1) return pad.left + innerWidth / 2;
+        return pad.left + domainStep * index;
+    };
+    const candleWidth = Math.max(4, Math.min(12, domainStep * 0.34));
     const ticks = [1, 0.66, 0.33, 0].map(ratio => ({
         value: minValue + spread * ratio,
         y: pad.top + innerHeight - innerHeight * ratio,
@@ -235,7 +246,8 @@ function buildCandleSvg(candles) {
     `).join('');
 
     const candlesHtml = candles.map((item, index) => {
-        const x = xPositions[index];
+        const candleDomainIndex = domainIndex.get(item.key) ?? index;
+        const x = xForDomainIndex(candleDomainIndex);
         const highY = pad.top + innerHeight - ((Number(item.high || 0) - minValue) / spread) * innerHeight;
         const lowY = pad.top + innerHeight - ((Number(item.low || 0) - minValue) / spread) * innerHeight;
         const openY = pad.top + innerHeight - ((Number(item.open || 0) - minValue) / spread) * innerHeight;
@@ -254,11 +266,11 @@ function buildCandleSvg(candles) {
             </g>`;
     }).join('');
 
-    const labelIndexes = pickEvenAxisIndexes(candles.length, 5);
-    const labels = candles.map((item, index) => {
+    const labelIndexes = pickEvenAxisIndexes(domainKeys.length, 5);
+    const labels = domainKeys.map((key, index) => {
         if (!labelIndexes.includes(index)) return '';
-        const x = xPositions[index];
-        return `<text x="${x.toFixed(2)}" y="${height - 6}" text-anchor="middle">${esc(item.label)}</text>`;
+        const x = xForDomainIndex(index);
+        return `<text x="${x.toFixed(2)}" y="${height - 6}" text-anchor="middle">${esc(formatAxisLabel(key))}</text>`;
     }).join('');
 
     return `
@@ -359,7 +371,7 @@ export function renderLedgerInsightsPanel(data) {
                         <p>每个时段单笔${focusLabel}的开高低收</p>
                     </div>
                 </div>
-                ${buildCandleSvg(candles)}
+                ${buildCandleSvg(candles, timeline.map((item) => item.key))}
             </section>`
         : emptyCard(`${focusLabel} K 线`, `当前筛选结果里暂无足够的${focusLabel}波动`, `出现单笔${focusLabel}后，这里会显示类 K 线波动。`);
 
