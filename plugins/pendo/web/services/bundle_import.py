@@ -11,7 +11,7 @@ from ...utils.validators import (
     normalize_note_fields,
     normalize_task_fields,
 )
-from .transfer_bundle import BundleValidationError, read_bundle
+from .transfer_bundle import BundleValidationError, TYPE_FILE_NAMES, read_bundle
 
 
 _NORMALIZER_MAP = {
@@ -63,7 +63,7 @@ def inspect_bundle_bytes(file_bytes: bytes) -> tuple[Any, list[dict[str, Any]], 
                 valid_records.append(normalized)
             except ValueError as exc:
                 validation_errors.append({
-                    "path": f"data/{item_type}.ndjson",
+                    "path": TYPE_FILE_NAMES[item_type],
                     "line": record.get("_bundle_line", index),
                     "type": item_type,
                     "message": str(exc),

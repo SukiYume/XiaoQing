@@ -18,12 +18,18 @@ from ..utils.db_ops import (
     get_user_settings_bundle_map,
 )
 from ..models.item import ItemType
-from ..web.services.demo_space import purge_expired_demo_users
 
 logger = logging.getLogger(__name__)
 
 # 缓存 reminder_service 单例
 _reminder_service_singleton: ReminderService | None = None
+
+
+def purge_expired_demo_users(db: Database, now: datetime | None = None) -> int:
+    """Lazily import demo cleanup so non-web commands don't require PyJWT at import time."""
+    from ..web.services.demo_space import purge_expired_demo_users as _purge_expired_demo_users
+
+    return _purge_expired_demo_users(db, now=now)
 
 
 async def check_reminders(context) -> list[dict[str, Any]]:
