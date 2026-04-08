@@ -1675,15 +1675,35 @@ tr:hover td {
 
 .login-card-actions {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
+    align-items: stretch;
 }
 
 .login-card .btn {
     height: 46px;
+    width: 100%;
     font-size: 15px;
     font-weight: 700;
     border-radius: 16px;
+}
+
+.login-card-subactions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: -4px;
+}
+
+.login-clear-btn {
+    height: 46px !important;
+    width: 100%;
+    padding: 0 12px;
+    font-size: 15px !important;
+    font-weight: 700 !important;
+    color: #64748b;
+    justify-content: center;
+    border: 1px solid var(--color-border) !important;
 }
 
 .login-helper {
@@ -1731,6 +1751,11 @@ tr:hover td {
 
     .login-card-actions {
         grid-template-columns: 1fr;
+    }
+
+    .login-card-subactions {
+        grid-template-columns: 1fr;
+        margin-top: -2px;
     }
 }
 

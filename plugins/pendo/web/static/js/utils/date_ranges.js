@@ -24,6 +24,25 @@ function startOfToday(today = todayRangeKey()) {
     return date;
 }
 
+function endOfWeek(base) {
+    const sunday = new Date(base);
+    sunday.setDate(base.getDate() + (6 - ((base.getDay() + 6) % 7)));
+    return sunday;
+}
+
+function endOfMonth(base) {
+    return new Date(base.getFullYear(), base.getMonth() + 1, 0);
+}
+
+function endOfQuarter(base) {
+    const firstMonth = Math.floor(base.getMonth() / 3) * 3;
+    return new Date(base.getFullYear(), firstMonth + 3, 0);
+}
+
+function endOfYear(base) {
+    return new Date(base.getFullYear(), 11, 31);
+}
+
 export function derivePresetRange(
     preset,
     {
@@ -40,25 +59,25 @@ export function derivePresetRange(
     if (preset === 'week') {
         const monday = new Date(base);
         monday.setDate(base.getDate() - ((base.getDay() + 6) % 7));
-        return { start: isoDate(monday), end: today };
+        return { start: isoDate(monday), end: isoDate(endOfWeek(base)) };
     }
     if (preset === 'month') {
         return {
             start: `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-01`,
-            end: today,
+            end: isoDate(endOfMonth(base)),
         };
     }
     if (preset === 'quarter') {
         const firstMonth = Math.floor(base.getMonth() / 3) * 3;
         return {
             start: isoDate(new Date(base.getFullYear(), firstMonth, 1)),
-            end: today,
+            end: isoDate(endOfQuarter(base)),
         };
     }
     if (preset === 'year') {
         return {
             start: `${base.getFullYear()}-01-01`,
-            end: today,
+            end: isoDate(endOfYear(base)),
         };
     }
     if (preset === 'last_year') {

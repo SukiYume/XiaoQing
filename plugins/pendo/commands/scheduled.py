@@ -18,6 +18,7 @@ from ..utils.db_ops import (
     get_user_settings_bundle_map,
 )
 from ..models.item import ItemType
+from ..web.services.demo_space import purge_expired_demo_users
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +328,17 @@ async def send_month_end_finance_summaries(context, db: Database) -> list[dict[s
         logger.exception("发送月底财务总结时出错: %s", e)
 
     return messages
+
+
+async def cleanup_expired_demo_data(context, db: Database) -> list[dict[str, Any]]:
+    """定期清理过期的 Pendo Web demo 数据。"""
+    try:
+        cleaned = await run_sync(purge_expired_demo_users, db)
+        if cleaned:
+            logger.info("Cleaned up %s expired Pendo Web demo users", cleaned)
+    except Exception as e:
+        logger.exception("清理过期 demo 数据时出错: %s", e)
+    return []
 
 
 # ============================================================

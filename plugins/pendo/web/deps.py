@@ -36,6 +36,11 @@ def get_current_user(authorization: str | None = Header(default=None)) -> str:
 
     try:
         payload = verify_token(token.strip())
-        return payload["owner_id"]
+        owner_id = payload["owner_id"]
+        if payload.get("demo"):
+            from .services.demo_space import ensure_demo_access
+
+            ensure_demo_access(get_db(), owner_id)
+        return owner_id
     except AuthError as e:
         raise HTTPException(status_code=401, detail=e.message)
