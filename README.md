@@ -25,6 +25,7 @@
 | 🔄 | **多轮会话** | 框架内建会话管理，适合游戏、表单、分步输入等交互 |
 | ⏰ | **定时任务** | 插件可在 `plugin.json` 中直接声明调度任务 |
 | 🌐 | **Pendo Web 控制台** | 个人管理插件 `pendo` 提供完整 Web UI，覆盖总览、日程、待办、账本、笔记、日记、搜索、统计、设置（含高级数据导入/导出） |
+| 📱 | **Pendo Scriptable 小组件** | `pendo` 提供只读 widget API、专用 widget token 和 iPhone Scriptable 脚本，可把日程 / 待办 / 财务 / 笔记放到主屏 |
 | 🚀 | **面向真实部署** | 支持 OneBot 被动推送和 WebSocket 主动连接两种模式 |
 
 ---
@@ -234,6 +235,7 @@ Inbound server started ...
 | `/pendo search 关键词` | 跨模块搜索 |
 | `/pendo web start` | 启动 Pendo Web 控制台 |
 | `/pendo web token` | 获取 Web 登录令牌 |
+| `/pendo web widget-token` | 获取 Scriptable 小组件令牌 |
 
 ### 🔧 其他内置插件
 
@@ -255,15 +257,15 @@ Pendo 不只是聊天命令——它也是项目里最完整的浏览器控制�
 ### 启动与访问
 
 ```bash
-/pendo web start           # 启动（默认端口）
-/pendo web start port=9000 # 指定端口
+/pendo web start           # 启动（默认端口 8765）
 /pendo web status          # 查看状态
 /pendo web stop            # 停止
 /pendo web token           # 获取登录令牌
+/pendo web widget-token    # 获取 Scriptable 小组件令牌
 ```
 
 > [!TIP]
-> Pendo Web 使用 **Token 登录**，无需账号密码。执行 `/pendo web start` 启动后，再执行 `/pendo web token` 获取令牌，粘贴到登录页即可进入。
+> Pendo Web 使用 **Token 登录**，无需账号密码。执行 `/pendo web start` 启动后，再执行 `/pendo web token` 获取令牌，粘贴到登录页即可进入；如果要给 iPhone Scriptable 小组件使用，则执行 `/pendo web widget-token`。
 
 ### 页面一览
 
@@ -272,6 +274,12 @@ Pendo 不只是聊天命令——它也是项目里最完整的浏览器控制�
 ```
 
 Web UI 基于 **FastAPI + 原生 JS + CSS** 构建，图表使用原生 SVG 和定制组件，不依赖传统后台模板。
+
+如果你想把 Pendo 放到 iPhone 主屏：
+
+- `/pendo web widget-token` 用来生成只读 widget token
+- `plugins/pendo/web/scriptable/pendo_widget.js` 是可直接导入 Scriptable 的脚本
+- 小组件会显示未来 30 天内最多 5 条日程，以及右侧最多 5 条待办 / 财务 / 笔记摘要
 
 ---
 

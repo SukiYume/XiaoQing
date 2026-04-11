@@ -175,6 +175,7 @@
 | **撤销功能** | 支持短时间内的操作撤销 |
 | **全文搜索** | 跨模块搜索日程、待办、笔记、日记 |
 | **Web 控制台** | FastAPI + 原生 JS SPA，JWT 鉴权，高级导入导出数据迁移设计，九大页面，Chart.js 图表 |
+| **Scriptable 小组件** | 提供 `/api/widget/summary` 只读摘要接口和专用 widget token，适合 iPhone 主屏显示 |
 
 #### 命令列表
 
@@ -278,7 +279,8 @@
 | 命令 | 说明 |
 |------|------|
 | `/pendo web token` | 生成登录令牌（JWT，用于浏览器登录） |
-| `/pendo web start [port=8080]` | 启动 Web 服务 |
+| `/pendo web widget-token` | 生成 Scriptable 小组件令牌（只读） |
+| `/pendo web start` | 启动 Web 服务 |
 | `/pendo web stop` | 停止 Web 服务 |
 | `/pendo web status` | 查看运行状态和访问地址 |
 
@@ -423,13 +425,15 @@ Web 控制台提供以下页面：
 
 ```
 /pendo web token                             # 获取浏览器登录令牌
-/pendo web start                             # 启动 Web 服务（默认端口 8080）
-/pendo web start port=9000                   # 指定端口
+/pendo web widget-token                      # 获取 Scriptable 小组件令牌
+/pendo web start                             # 启动 Web 服务（默认端口 8765）
 /pendo web status                            # 查看访问地址
 /pendo web stop                              # 停止服务
 ```
 
-启动后打开浏览器访问 `http://localhost:8080`，先运行 `/pendo web token` 获取登录令牌，在登录页粘贴令牌即可访问九大管理页面。
+启动后默认通过 `http://127.0.0.1:8765` 访问；如果你做了反向代理，也可以通过自己的外网地址访问。浏览器登录用 `/pendo web token`，iPhone Scriptable 小组件用 `/pendo web widget-token`。
+
+Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏。
 
 #### 定时任务
 

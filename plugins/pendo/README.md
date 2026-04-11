@@ -16,6 +16,7 @@
 - ✅ **全模块页面** - 任务、事件、日记、笔记、搜索、设置均有独立页面
 - ✅ **数据迁移** - Web 端支持 `.pendo.zip` Bundle 格式的高级导入导出与操作审计
 - ✅ **聊天命令集成** - `/pendo web start|stop|status` 在聊天中管理 Web 服务
+- ✅ **iPhone 小组件** - 提供只读 widget API、Scriptable 脚本和专用 widget token
 
 ## 🎉 V2.0 历史更新
 
@@ -76,15 +77,52 @@
 ### 启动/停止服务
 
 ```
-/pendo web start             # 启动 Web 服务（默认端口 8080）
-/pendo web start port=9000   # 指定端口
+/pendo web start             # 启动 Web 服务（默认端口 8765）
 /pendo web stop              # 停止服务
 /pendo web status            # 查看运行状态和访问地址
+/pendo web token             # 生成网页登录 token
+/pendo web widget-token      # 生成 Scriptable 小组件 token
 ```
 
 ### 登录访问
 
-打开浏览器访问 `http://localhost:8080`，先执行 `/pendo web token` 获取登录令牌，再将令牌粘贴到登录页完成登录。
+默认本地地址是 `http://127.0.0.1:8765`。如果你做了反向代理，也可以通过自己的外网地址访问（例如 `https://example.com/pendo/`）。
+
+网页登录流程：
+
+1. 执行 `/pendo web start`
+2. 打开浏览器访问 Web 地址
+3. 执行 `/pendo web token`
+4. 将 token 粘贴到登录页完成登录
+
+### iPhone / Scriptable 小组件
+
+Pendo 提供了专用的只读 widget 摘要接口：
+
+- `GET /api/widget/summary`
+- 支持 `section=tasks|ledger|notes|auto`
+- `auto` 会按小时轮换 `tasks -> ledger -> notes`
+- widget token 只能访问 `/api/widget/*` 的 `GET` 请求
+
+生成小组件 token：
+
+```text
+/pendo web widget-token
+```
+
+Scriptable 脚本位于：
+
+- `plugins/pendo/web/scriptable/pendo_widget.js`
+
+配套说明见：
+
+- `docs/pendo-scriptable-widget.md`
+
+当前脚本的摘要行为：
+
+- 左侧日程显示未来 30 天内的事件，最多 5 条
+- 右侧显示待办 / 财务 / 笔记摘要，最多 5 条
+- `medium` 与 `large` 共用同一套视觉语言，`large` 显示更多细节
 
 ### 页面功能
 
@@ -454,6 +492,7 @@ plugins/pendo/
 │   ├── deps.py         # 依赖注入
 │   ├── api/            # REST API 路由
 │   ├── analytics/      # 数据聚合（Dashboard/统计）
+│   ├── scriptable/     # iPhone Scriptable 小组件脚本
 │   └── static/         # 前端静态资源（HTML/CSS/JS）
 └── data/               # 数据存储
 ```
@@ -480,6 +519,9 @@ plugins/pendo/
 - 添加历史文本备份转换脚本 `convert_text_export_to_pendo_bundle.py`
 - 优化部分底层模块设计，提升健壮性
 - `/pendo web` 聊天命令集成
+- Scriptable 小组件摘要接口 `/api/widget/summary`
+- `/pendo web widget-token` 只读小组件令牌
+- 新增 `plugins/pendo/web/scriptable/pendo_widget.js`
 - 优化聊天端命令冗余调用提示机制
 - 账本页 UX 重设计（筛选、排序、分页、快速录入）
 
