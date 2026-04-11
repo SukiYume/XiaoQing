@@ -63,6 +63,18 @@ def generate_token(owner_id: str, expires_hours: int = 24, extra_claims: dict | 
     return jwt.encode(payload, _get_secret_key(), algorithm=_ALGORITHM)
 
 
+def generate_widget_token(owner_id: str, expires_hours: int = 24 * 180) -> str:
+    """Generate a long-lived read-only token for widget consumption."""
+    return generate_token(
+        owner_id,
+        expires_hours=expires_hours,
+        extra_claims={
+            "kind": "widget",
+            "scope": "widget:read",
+        },
+    )
+
+
 def verify_token(token: str) -> dict:
     """Verify and decode a JWT token. Returns payload dict.
 
