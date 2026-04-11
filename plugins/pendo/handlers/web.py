@@ -3,12 +3,13 @@ from core.plugin_base import build_action, segments
 
 from ..config import PendoConfig
 try:
-    from ..web.auth import generate_token
+    from ..web.auth import generate_token, generate_widget_token
     from ..web import server as web_server
     WEB_AVAILABLE = True
 except ImportError:
     WEB_AVAILABLE = False
     generate_token = None
+    generate_widget_token = None
     web_server = None
 from ..utils.error_handlers import handle_command_errors
 
@@ -30,11 +31,13 @@ class WebHandler:
                 ),
             }
 
-        parts = args.strip().split(maxsplit=1)
-        subcmd = parts[0].lower() if parts else ""
+        parts = [part.lower() for part in args.strip().split() if part.strip()]
+        subcmd = parts[0] if parts else ""
 
         if subcmd == "token":
             return await self._generate_token(user_id, context)
+        elif subcmd in {"widget-token", "widget_token"} or parts[:2] == ["widget", "token"]:
+            return await self._generate_widget_token(user_id, context)
         elif subcmd == "start":
             return await self._start(user_id, context)
         elif subcmd == "stop":
@@ -67,7 +70,7 @@ class WebHandler:
             "🌐 Pendo Web",
             "✅ 已生成登录令牌",
             "",
-            f"🌍 地址: https://paris.escape.ac.cn/pendo",
+            f"🌍 本地地址: {web_server.get_url()}",
             f"⏳ 有效期: {PendoConfig.WEB_TOKEN_EXPIRE_HOURS} 小时",
             f"⚙️ 服务状态: {status_text}",
             "",
@@ -91,6 +94,31 @@ class WebHandler:
         return {
             "status": "success",
             "message": "\n".join(lines),
+        }
+
+    async def _generate_widget_token(self, user_id: str, context=None):
+        token = generate_widget_token(
+            user_id,
+            expires_hours=PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS,
+        )
+        return {
+            "status": "success",
+            "message": "\n".join(
+                [
+                    "🧩 Pendo Web Widget Token",
+                    "",
+                    "用于 Scriptable 等只读小组件访问。",
+                    "📍 接口路径: /api/widget/summary",
+                    f"⏳ 有效期: {PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS} 小时",
+                    "",
+                    "🔑 Widget Token:",
+                    token,
+                    "",
+                    "💡 在 Scriptable 中把 BASE_URL 改成你的 Pendo Web 地址",
+                    "💡 建议只放进 Scriptable 脚本，不要当网页登录 token 使用",
+                    "💡 Scriptable 可传 section=tasks / ledger / notes / auto",
+                ]
+            ),
         }
 
     async def _start(self, user_id: str, context):
@@ -144,7 +172,8 @@ class WebHandler:
                 f"📡 服务状态: {status}\n\n"
                 f"🌍 地址: {web_server.get_url()}\n"
                 f"🔌 端口: {PendoConfig.WEB_PORT}\n"
-                "🔑 登录令牌: /pendo web token"
+                "🔑 登录令牌: /pendo web token\n"
+                "🧩 Widget Token: /pendo web widget-token"
             ),
         }
 
@@ -156,6 +185,7 @@ class WebHandler:
                 "管理网页入口、登录令牌和服务状态。\n\n"
                 "可用命令:\n"
                 "• /pendo web token  - 生成登录令牌\n"
+                "• /pendo web widget-token - 生成 Scriptable 小组件令牌\n"
                 "• /pendo web start  - 启动 Web 服务\n"
                 "• /pendo web stop   - 停止 Web 服务\n"
                 "• /pendo web status - 查看服务状态"

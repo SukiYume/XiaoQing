@@ -8,7 +8,7 @@ import pytest
 
 try:
     from plugins.pendo.web import auth as auth_module
-    from plugins.pendo.web.auth import generate_token, verify_token, AuthError
+    from plugins.pendo.web.auth import generate_token, generate_widget_token, verify_token, AuthError
 except ModuleNotFoundError:
     pytest.skip("pendo web auth requires PyJWT", allow_module_level=True)
 
@@ -100,5 +100,22 @@ class TestTokenGeneration:
             assert payload["sub"] == "user-case"
             assert payload["iss"] == "pendo-web"
             assert payload["typ"] == "pendo-web"
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_generated_widget_token_contains_widget_claims(self, monkeypatch):
+        temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_auth_widget_{uuid.uuid4().hex}"
+        secret_file = temp_dir / "web_token_secret.txt"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            monkeypatch.setattr(auth_module, "_SECRET_FILE", secret_file)
+            monkeypatch.setattr(auth_module, "_SECRET_CACHE", None)
+
+            token = generate_widget_token("widget-user")
+            payload = verify_token(token)
+
+            assert payload["owner_id"] == "widget-user"
+            assert payload["kind"] == "widget"
+            assert payload["scope"] == "widget:read"
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)

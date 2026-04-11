@@ -10,6 +10,7 @@ from .search import router as search_router
 from .settings import router as settings_router
 from .stats import router as stats_router
 from .transfer import router as transfer_router
+from .widget import router as widget_router
 
 
 def create_api_router() -> APIRouter:
@@ -24,4 +25,5 @@ def create_api_router() -> APIRouter:
     router.include_router(settings_router, tags=["settings"])
     router.include_router(config_router, tags=["config"])
     router.include_router(transfer_router, tags=["transfer"])
+    router.include_router(widget_router, tags=["widget"])
     return router

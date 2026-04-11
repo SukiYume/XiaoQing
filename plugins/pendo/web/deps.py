@@ -1,5 +1,5 @@
 """FastAPI dependency injection for Pendo Web UI."""
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from ..services.db import Database
 from .auth import verify_token, AuthError
@@ -21,7 +21,10 @@ def get_db() -> Database:
     return _db_instance
 
 
-def get_current_user(authorization: str | None = Header(default=None)) -> str:
+def get_current_user(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> str:
     """Extract owner_id from Bearer token.
 
     Returns owner_id string.
@@ -36,6 +39,14 @@ def get_current_user(authorization: str | None = Header(default=None)) -> str:
 
     try:
         payload = verify_token(token.strip())
+        if payload.get("kind") == "widget":
+            path = request.url.path if request is not None else ""
+            method = request.method if request is not None else ""
+            if method != "GET" or not path.startswith("/api/widget/"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Widget token is limited to /api/widget/* read-only requests",
+                )
         owner_id = payload["owner_id"]
         if payload.get("demo"):
             from .services.demo_space import ensure_demo_access
