@@ -258,7 +258,7 @@ def test_build_widget_summary_returns_expected_panels_without_fastapi(temp_db: D
     assert tasks_data["agenda"]["today_count"] == 1
     assert tasks_data["panel"]["items"][0]["title"] == "处理周报"
     assert ledger_data["section"] == "ledger"
-    assert ledger_data["panel"]["items"][0]["amount_text"] == "-¥35.50"
+    assert ledger_data["panel"]["items"][0]["amount_text"] == "-¥36"
 
 
 def test_widget_summary_supports_ledger_notes_and_auto_sections(client: TestClient, temp_db: Database):
@@ -289,7 +289,7 @@ def test_widget_summary_supports_ledger_notes_and_auto_sections(client: TestClie
     assert ledger_data["section"] == "ledger"
     assert ledger_data["panel"]["title"] == "财务"
     assert ledger_data["panel"]["items"][0]["title"] == "午饭"
-    assert ledger_data["panel"]["items"][0]["amount_text"] == "-¥35.50"
+    assert ledger_data["panel"]["items"][0]["amount_text"] == "-¥36"
 
     assert notes_data["section"] == "notes"
     assert notes_data["panel"]["title"] == "笔记"

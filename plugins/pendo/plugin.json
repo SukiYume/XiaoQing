@@ -12,7 +12,7 @@
                 "待办",
                 "日记"
             ],
-            "help": "个人时间与信息管理中枢\n\n使用 /pendo help 查看详细帮助",
+            "help": "个人时间与信息管理中枢\nWeb: /pendo web token | /pendo web widget-token\n\n使用 /pendo help 查看详细帮助",
             "usage": "/pendo <subcommand> [args...]"
         }
     ],

@@ -84,9 +84,27 @@
 /pendo web widget-token      # 生成 Scriptable 小组件 token
 ```
 
+> 提示：`pendo` 插件初始化时会尝试自动拉起 Web 服务；如果当时启动失败，后续仍可手动执行 `/pendo web start` 重试。
+
 ### 登录访问
 
 默认本地地址是 `http://127.0.0.1:8765`。如果你做了反向代理，也可以通过自己的外网地址访问（例如 `https://example.com/pendo/`）。
+
+如需修改监听地址或端口，请在启动主进程前设置环境变量：
+
+```text
+# PowerShell
+$env:PENDO_WEB_HOST="127.0.0.1"
+$env:PENDO_WEB_PORT="8766"
+python main.py
+
+# bash
+PENDO_WEB_HOST=127.0.0.1
+PENDO_WEB_PORT=8766
+python main.py
+```
+
+在 Windows 上，如果 `/pendo web start` 提示端口绑定失败，但 `netstat -ano` 看不到 `8765` 被占用，通常不是已有进程监听，而是系统拒绝绑定该端口（例如保留端口范围、Hyper-V / WSL / Docker 或安全策略影响）。这种情况下优先换一个端口，例如 `PENDO_WEB_PORT=8766`。
 
 网页登录流程：
 
@@ -114,6 +132,13 @@ Scriptable 脚本位于：
 
 - `plugins/pendo/web/scriptable/pendo_widget.js`
 
+脚本仓库版本不再包含真实地址和 token，默认是安全占位值。导入 Scriptable 后，请先把文件头部的：
+
+- `BASE_URL`
+- `TOKEN`
+
+替换成你自己的 Pendo Web 地址和 `/pendo web widget-token` 生成的只读 token。
+
 配套说明见：
 
 - `docs/pendo-scriptable-widget.md`
@@ -122,7 +147,13 @@ Scriptable 脚本位于：
 
 - 左侧日程显示未来 30 天内的事件，最多 5 条
 - 右侧显示待办 / 财务 / 笔记摘要，最多 5 条
+- 支持 `small` / `medium` / `large` 三种 iOS 小组件尺寸
 - `medium` 与 `large` 共用同一套视觉语言，`large` 显示更多细节
+
+### 优雅关闭
+
+- `Ctrl+C` 停止 `main.py` 时，XiaoQing 会走插件卸载流程，Pendo Web 会先请求 uvicorn 优雅退出，再清理数据库和运行时状态
+- 手动执行 `/pendo web stop` 也会走同一套停止逻辑
 
 ### 页面功能
 
