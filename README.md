@@ -267,6 +267,9 @@ Pendo 不只是聊天命令——它也是项目里最完整的浏览器控制�
 > [!TIP]
 > Pendo Web 使用 **Token 登录**，无需账号密码。执行 `/pendo web start` 启动后，再执行 `/pendo web token` 获取令牌，粘贴到登录页即可进入；如果要给 iPhone Scriptable 小组件使用，则执行 `/pendo web widget-token`。
 
+> [!NOTE]
+> 如需修改监听端口，请在启动前设置 `PENDO_WEB_PORT`（例如 PowerShell 下执行 `$env:PENDO_WEB_PORT="8766"; python main.py`）。在 Windows 上如果 `netstat -ano` 看不到 `8765` 被占用，但仍然报绑定失败，通常是系统拒绝绑定该端口，直接换端口比继续排查“谁占用了它”更有效。
+
 ### 页面一览
 
 ```
@@ -278,7 +281,7 @@ Web UI 基于 **FastAPI + 原生 JS + CSS** 构建，图表使用原生 SVG 和�
 如果你想把 Pendo 放到 iPhone 主屏：
 
 - `/pendo web widget-token` 用来生成只读 widget token
-- `plugins/pendo/web/scriptable/pendo_widget.js` 是可直接导入 Scriptable 的脚本
+- `plugins/pendo/web/scriptable/pendo_widget.js` 是可直接导入 Scriptable 的脚本，但仓库内只保留 `BASE_URL` / `TOKEN` 占位值，需要先替换成你自己的配置
 - 小组件会显示未来 30 天内最多 5 条日程，以及右侧最多 5 条待办 / 财务 / 笔记摘要
 
 ---
@@ -416,8 +419,12 @@ pytest tests/plugins/test_xiaoqing_chat.py     # 单个测试文件
 优先检查：
 1. 是否执行了 `/pendo web start`
 2. 当前环境是否安装了 `fastapi` 和 `uvicorn`
-3. 端口是否被占用
+3. `127.0.0.1:8765` 是否被占用，或是否被系统拒绝绑定（Windows 上常见）
 4. 是否通过 `/pendo web token` 获取了有效登录令牌
+
+补充：
+- 如果报 `WinError 10048`，说明端口真的被其他进程占用了
+- 如果报 `WinError 10013`，通常是 Windows 保留端口、虚拟化网络组件或安全策略导致，优先改 `PENDO_WEB_PORT`
 
 </details>
 

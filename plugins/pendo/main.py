@@ -63,6 +63,7 @@ from .commands.session import handle_session_message
 from .commands.settings import handle_settings
 
 logger = logging.getLogger(__name__)
+_startup_db: Database | None = None
 
 # ============================================================
 # 插件初始化
@@ -71,6 +72,8 @@ logger = logging.getLogger(__name__)
 
 def init(context=None) -> None:
     """插件初始化"""
+    global _startup_db
+
     PendoConfig.from_env()
     PendoConfig.validate()
 
@@ -79,6 +82,7 @@ def init(context=None) -> None:
 
     # 初始化数据库（创建表结构）
     db = Database(db_path)
+    _startup_db = db
     log = _get_logger(context)
     log.info("Pendo plugin initialized, database at %s", db_path)
 
@@ -90,26 +94,71 @@ def init(context=None) -> None:
             logger.warning("Failed to auto-start web UI: %s", e)
 
 
-def cleanup(context=None) -> None:
-    """插件清理函数 - 在插件卸载时调用"""
+def _stop_web_server() -> None:
     try:
         from .web import server as web_server
+
         web_server.stop()
     except Exception:
         pass
+
+
+async def _stop_web_server_async() -> None:
+    await asyncio.to_thread(_stop_web_server)
+
+
+def _cleanup_resources(context=None, *, stop_web: bool) -> None:
+    """Release Pendo resources shared by cleanup and shutdown hooks."""
+    global _startup_db
+
+    if stop_web:
+        _stop_web_server()
+
+    runtime_db = None
     try:
-        db = _get_database(context)
-        db.cleanup()
+        runtime_db = _get_database(context)
+        runtime_db.cleanup()
+    except Exception as e:
+        logger.exception("Error during Pendo runtime DB cleanup: %s", e)
+
+    try:
         from .utils.db_ops import cleanup_db_singleton
 
         cleanup_db_singleton()
+    except Exception as e:
+        logger.exception("Error during Pendo singleton DB cleanup: %s", e)
+
+    if _startup_db is not None and _startup_db is not runtime_db:
+        try:
+            _startup_db.cleanup()
+        except Exception as e:
+            logger.exception("Error during Pendo startup DB cleanup: %s", e)
+    _startup_db = None
+
+    try:
         cleanup_reminder_singleton()  # L-5修复：清除 reminder service 单例
+    except Exception as e:
+        logger.exception("Error during reminder cleanup: %s", e)
+
+    try:
         runtime_state = _get_plugin_runtime_state(context, create=False)
         runtime_state.clear()
-        log = _get_logger(context)
-        log.info("Pendo plugin cleanup completed")
     except Exception as e:
-        logger.exception("Error during cleanup: %s", e)
+        logger.exception("Error during runtime state cleanup: %s", e)
+
+    log = _get_logger(context)
+    log.info("Pendo plugin cleanup completed")
+
+
+def cleanup(context=None) -> None:
+    """插件清理函数 - 在插件卸载时调用"""
+    _cleanup_resources(context, stop_web=True)
+
+
+async def shutdown(context=None) -> None:
+    """插件异步卸载钩子，供应用在 Ctrl+C 时优雅关闭。"""
+    await _stop_web_server_async()
+    _cleanup_resources(context, stop_web=False)
 
 
 # ============================================================
@@ -710,6 +759,7 @@ HELP_MAP = {
     "web": [
         "**Web UI 管理 (Web):**",
         "• /pendo web token  - 生成登录令牌（Token 单独发送）",
+        "• /pendo web widget-token - 生成 Scriptable 小组件令牌",
         "• /pendo web start  - 启动 Web 服务",
         "• /pendo web stop   - 停止 Web 服务",
         "• /pendo web status - 查看服务状态",

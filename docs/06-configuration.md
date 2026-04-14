@@ -438,6 +438,20 @@ pendo Web UI 使用 JWT Token 认证，无需手动配置密码。Token 由以�
 # 2. plugins/pendo/data/web_token_secret.txt（首次运行自动生成）
 ```
 
+**Web 服务监听地址**：
+
+```text
+# PowerShell
+$env:PENDO_WEB_HOST="127.0.0.1"
+$env:PENDO_WEB_PORT="8765"
+
+# bash
+PENDO_WEB_HOST=127.0.0.1
+PENDO_WEB_PORT=8765
+```
+
+如果你在 Windows 上遇到 `WinError 10013`，通常不是已有进程占用了端口，而是系统拒绝绑定。此时优先换一个端口，例如 `PENDO_WEB_PORT=8766`。
+
 用户偏好（时区、简报时间、日记提醒等）通过 `/pendo settings` 命令在运行时修改，存储于数据库，无需修改配置文件。
 
 #### qingssh 配置
@@ -687,40 +701,42 @@ tail -f logs/xiaoqing.log
 
 ### 直接访问（默认）
 
-```bash
-/pendo web start           # 启动，默认 8080 端口
-/pendo web start port=9000 # 指定端口
+```text
+/pendo web start           # 启动，默认 127.0.0.1:8765
+
+# 如需改端口，在启动主进程前设置环境变量
+# PowerShell
+$env:PENDO_WEB_PORT="8766"
+python main.py
+
+# bash
+PENDO_WEB_PORT=8766 python main.py
 ```
 
-访问 `http://localhost:8080`，使用 `/pendo web token` 获取的 Token 登录。
+访问 `http://127.0.0.1:8765`（或你自定义的新端口），使用 `/pendo web token` 获取的 Token 登录。
 
 ### nginx 子路径反向代理
 
-如果希望将 pendo Web 部署在子路径 `/pendo`（而非根路径），可以配置 nginx。pendo Web 已内置对 `/pendo` 前缀的支持：
+如果希望将 pendo Web 部署在子路径 `/pendo/`（而非根路径），可以通过 nginx 做前缀转发。当前前端静态资源和 API 请求都使用相对路径，因此一个带尾部 `/` 的 `proxy_pass` 即可同时覆盖页面与 `/api/*`：
 
 ```nginx
 # nginx.conf 片段
-location /pendo {
-    proxy_pass http://127.0.0.1:8080;
+location = /pendo {
+    return 301 /pendo/;
+}
+
+location /pendo/ {
+    proxy_pass http://127.0.0.1:8765/;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
-    # WebSocket 支持（如需）
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-}
-
-location /pendo/api {
-    proxy_pass http://127.0.0.1:8080/pendo/api;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
 }
 ```
 
 **注意**：
-- pendo 的 API 路由统一使用 `/pendo/api/` 前缀，静态资源使用相对路径，与子路径部署兼容
+- 上面这条 `proxy_pass http://127.0.0.1:8765/;` 会把 `/pendo/...` 转成后端根路径 `/...`，因此浏览器里的 `/pendo/api/...` 会自动映射到后端的 `/api/...`
+- pendo 后端真实 API 前缀是 `/api/`，不是 `/pendo/api/`
 - 环境变量 `PENDO_WEB_TOKEN_SECRET` 可用于在多实例/重启场景下保持 Token 签名密钥稳定
 
 ---

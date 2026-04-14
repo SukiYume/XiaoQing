@@ -74,6 +74,21 @@ def sample_server(mock_handler):
     )
 
 
+def _make_server(mock_handler, port: int) -> InboundServer:
+    """Create a server instance for tests that need to bind a real socket."""
+    return InboundServer(
+        host="127.0.0.1",
+        port=port,
+        token="test_token",
+        handler=mock_handler,
+        enable_http=True,
+        enable_ws=True,
+        ws_path="/ws",
+        ws_max_workers=2,
+        ws_queue_size=10,
+    )
+
+
 # ============================================================
 # InboundServer Initialization Tests
 # ============================================================
@@ -799,32 +814,35 @@ def test_parse_positive_int():
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_server_start_stop(sample_server):
+async def test_server_start_stop(mock_handler, unused_tcp_port):
     """Test server start and stop"""
-    await sample_server.start()
+    server = _make_server(mock_handler, unused_tcp_port)
+    await server.start()
 
-    assert sample_server._runner is not None
-    assert sample_server._site is not None
+    assert server._runner is not None
+    assert server._site is not None
 
-    await sample_server.stop()
+    await server.stop()
 
-    assert sample_server._runner is None
-    assert sample_server._site is None
+    assert server._runner is None
+    assert server._site is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_server_stop_with_workers(sample_server):
+async def test_server_stop_with_workers(mock_handler, unused_tcp_port):
     """Test server stop cleans up worker tasks"""
+    server = _make_server(mock_handler, unused_tcp_port)
+
     # Start server
-    await sample_server.start()
+    await server.start()
 
     # Create mock worker tasks
     mock_task1 = asyncio.create_task(asyncio.sleep(10))
     mock_task2 = asyncio.create_task(asyncio.sleep(10))
-    sample_server._ws_worker_tasks = [mock_task1, mock_task2]
+    server._ws_worker_tasks = [mock_task1, mock_task2]
 
-    await sample_server.stop()
+    await server.stop()
 
     # Tasks should be cancelled
     assert mock_task1.cancelled()

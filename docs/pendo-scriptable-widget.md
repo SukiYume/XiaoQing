@@ -30,9 +30,15 @@ Pendo 现在提供了一个专门给 `Scriptable` 用的只读摘要接口，适
 需要修改两个常量：
 
 ```javascript
-const BASE_URL = "https://your-host/pendo";
+const BASE_URL = "https://example.com/pendo";
 const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
 ```
+
+仓库中的脚本默认只保留占位值，不包含任何真实地址或 token。
+`BASE_URL` 应改成你自己的 Pendo Web 地址，例如：
+
+- `http://127.0.0.1:8765`
+- `https://example.com/pendo`
 
 ## 当前摘要行为
 
@@ -41,6 +47,7 @@ const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
 - `medium`：紧凑双栏，适合主屏常驻
 - `large`：和 `medium` 同风格，但每条会显示更多细节
 - `small`：自动退化为极简摘要
+- 三种尺寸都使用同一套字号层级：标题略大于 item 内容
 
 ## iPhone 设置步骤
 
@@ -55,6 +62,8 @@ const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
    - `ledger`
    - `notes`
    - `auto`
+
+如果你的 Pendo Web 部署在 Windows 上，并且默认 `8765` 端口启动失败，可以先改服务端环境变量 `PENDO_WEB_PORT`，再把这里的 `BASE_URL` 同步成新的端口。
 
 ## 交互说明
 

@@ -56,7 +56,7 @@ COMMAND_META: dict[str, tuple[list[str], str, str]] = {
     ),
     "settings": (["setting", "设置"], "管理设置", "/pendo settings [key] [value]"),
     "help": (["h", "帮助", "?"], "显示帮助信息", "/pendo help [command]"),
-    "web": (["webui", "网页"], "Web UI 管理", "/pendo web <token|start|stop|status>"),
+    "web": (["webui", "网页"], "Web UI 管理", "/pendo web <token|widget-token|start|stop|status>"),
 }
 
 

@@ -114,6 +114,11 @@ class PendoConfig:
         """从环境变量加载配置（可选的环境变量覆盖）"""
         import os
 
+        if "PENDO_WEB_HOST" in os.environ:
+            cls.WEB_HOST = os.environ["PENDO_WEB_HOST"]
+        if "PENDO_WEB_PORT" in os.environ:
+            cls.WEB_PORT = int(os.environ["PENDO_WEB_PORT"])
+
         # 允许通过环境变量覆盖部分配置，存储在实例字典中
         if "PENDO_TIMEZONE" in os.environ:
             cls._env_overrides["DEFAULT_TIMEZONE"] = os.environ["PENDO_TIMEZONE"]

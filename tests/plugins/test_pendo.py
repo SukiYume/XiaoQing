@@ -118,6 +118,16 @@ class TestPendoConfig:
         commands = config.get("commands", [])
         assert len(commands) > 0, "No commands defined in plugin.json"
 
+    def test_plugin_help_mentions_widget_token(self):
+        """测试插件摘要帮助包含 widget-token 提示"""
+        plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
+        with open(plugin_json_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        commands = config.get("commands", [])
+        assert commands
+        assert "widget-token" in commands[0].get("help", "")
+
     def test_plugin_has_schedule(self):
         """测试插件有定时任务配置"""
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
@@ -470,6 +480,45 @@ class TestPendoReviewFixes:
         pendo_main.cleanup(context)
 
         assert "pendo_runtime" not in context.state
+
+    def test_shutdown_stops_web_and_cleans_all_pendo_databases(self, monkeypatch):
+        from plugins.pendo import main as pendo_main
+
+        class _DummyDb:
+            def __init__(self):
+                self.cleaned = False
+
+            def cleanup(self):
+                self.cleaned = True
+
+        runtime_db = _DummyDb()
+        startup_db = _DummyDb()
+        stopped = []
+
+        async def fake_stop_web_server_async():
+            stopped.append("web")
+
+        monkeypatch.setattr(pendo_main, "_get_database", lambda context: runtime_db)
+        monkeypatch.setattr(pendo_main, "_stop_web_server_async", fake_stop_web_server_async)
+        monkeypatch.setattr(pendo_main, "_startup_db", startup_db)
+
+        from plugins.pendo.utils import db_ops
+
+        monkeypatch.setattr(db_ops, "cleanup_db_singleton", lambda: None)
+        monkeypatch.setattr(pendo_main, "cleanup_reminder_singleton", lambda: None)
+
+        context = SimpleNamespace(
+            state={"pendo_runtime": {"services": {"x": 1}, "router": object()}},
+            logger=SimpleNamespace(info=lambda *args, **kwargs: None),
+        )
+
+        asyncio.run(pendo_main.shutdown(context))
+
+        assert stopped == ["web"]
+        assert runtime_db.cleaned is True
+        assert startup_db.cleaned is True
+        assert pendo_main._startup_db is None
+        assert context.state["pendo_runtime"] == {}
 
     def test_run_scheduled_task_swallows_cancelled_error(self):
         from plugins.pendo import main as pendo_main
@@ -3205,3 +3254,28 @@ class TestPendoWebHandler:
         assert "登录 Token:" in result["message"]
         assert "mock-token" in result["message"]
         assert "直接复制这整条消息到网页登录框" in result["message"]
+
+    def test_web_start_surfaces_last_start_error(self):
+        import sys
+        import types
+        import importlib
+
+        sys.path.insert(0, str(ROOT))
+        sys.modules.pop("plugins.pendo.handlers.web", None)
+        sys.modules["plugins.pendo.web.server"] = types.SimpleNamespace(
+            get_url=lambda: "http://127.0.0.1:8765",
+            is_running=lambda: False,
+            start=lambda _db: False,
+            stop=lambda: True,
+            get_last_error=lambda: "无法绑定到 127.0.0.1:8765，端口可能已被占用。",
+        )
+
+        web_module = importlib.import_module("plugins.pendo.handlers.web")
+
+        handler = web_module.WebHandler(db=None)
+        result = asyncio.run(handler.handle("1001", "start", context=None))
+
+        assert result["status"] == "error"
+        assert "服务启动失败" in result["message"]
+        assert "端口可能已被占用" in result["message"]
+        assert "PENDO_WEB_PORT" in result["message"]
