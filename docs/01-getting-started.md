@@ -291,13 +291,15 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 
 ```
 你: /pendo web start
-机器人: ✓ Web 控制台已启动，访问 http://localhost:8080
+机器人: ✓ Web 控制台已启动，访问 http://127.0.0.1:8765
 
 你: /pendo web status
-机器人: 运行中 | 地址：http://localhost:8080
+机器人: 运行中 | 地址：http://127.0.0.1:8765
 ```
 
 打开浏览器访问后，先执行 `/pendo web token` 获取登录令牌，再将令牌粘贴到登录页即可。
+
+如果你在 Windows 上遇到端口绑定失败，但 `netstat -ano` 看不到 `8765` 被占用，优先尝试在启动前设置 `$env:PENDO_WEB_PORT="8766"` 后重启主进程。
 
 如需使用 nginx 反向代理部署在子路径（如 `/pendo`），参见 [06-configuration.md](06-configuration.md) 中的 nginx 配置示例。
 

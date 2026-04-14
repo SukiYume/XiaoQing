@@ -1,292 +1,241 @@
-// Pendo Scriptable Widget
-// 1. 把 BASE_URL 改成你的公网地址（保留 /pendo）
-// 2. 把 TOKEN 改成 /pendo web widget-token 生成的 token
-// 3. 小组件参数可填：tasks / ledger / notes / auto
+// Variables used by Scriptable.
+// These must be at the very top of the file. Do not edit.
+// icon-color: deep-purple; icon-glyph: magic;
 
-const BASE_URL = "https://your-host/pendo";
+// Replace these placeholders with your own deployed Pendo Web address and
+// `/pendo web widget-token` value before using the Scriptable widget.
+const BASE_URL = "https://example.com/pendo".replace(/\/+$/, "");
 const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
-const DEFAULT_SECTION = "auto";
+const DEFAULT_MEDIUM_SECTION = "auto";
 
+// ---------- 主题（日夜自动切换） ----------
+const LIGHT = {
+  bg: "#F5F7FA",
+  panel: "#FFFFFF",
+  text: "#17171B",
+  subtext: "#55606E",
+  line: "#D1D6E0", // 加深分割线颜色以修复不可见问题
+};
+const DARK = {
+  bg: "#17171B",
+  panel: "#1F2026",
+  text: "#F5F7FA",
+  subtext: "#A7AFBF",
+  line: "#343844",
+};
+const dyn = (light, dark) => Color.dynamic(new Color(light), new Color(dark));
 const COLORS = {
-  bg: new Color("#17171B"),
-  panel: new Color("#1F2026"),
-  panelSoft: new Color("#24262D"),
-  text: new Color("#F5F7FA"),
-  subtext: new Color("#A7AFBF"),
-  line: new Color("#343844"),
+  bg: dyn(LIGHT.bg, DARK.bg),
+  panel: dyn(LIGHT.panel, DARK.panel),
+  text: dyn(LIGHT.text, DARK.text),
+  subtext: dyn(LIGHT.subtext, DARK.subtext),
+  line: dyn(LIGHT.line, DARK.line),
   accent: new Color("#FF6A5C"),
   good: new Color("#44D17A"),
   warn: new Color("#F4B740"),
+  accentBg: Color.dynamic(
+    new Color("#FF6A5C", 0.15),
+    new Color("#FF6A5C", 0.2),
+  ),
 };
 
+const family = config.widgetFamily || "medium";
+// 字体与间距集中管理，保持 small / medium / large 三种尺寸同步。
+const TYPE_SCALE = {
+  item: 12,
+  agendaLead: 10,
+  sectionTitle: 16,
+  panelSummary: 10,
+};
+const FONTS = {
+  body: (size) => Font.mediumSystemFont(size),
+  bodyMono: (size) => Font.mediumMonospacedSystemFont(size),
+  section: (size) => Font.semiboldSystemFont(size),
+  light: (size) => Font.lightSystemFont(size),
+};
+// 布局参数：像素值基于 iPhone 14 系列尺寸估算。
+// leadWidth = 日程时间列宽度；markerWidth = 面板标记列宽度。
+const LAYOUTS = {
+  small: {
+    padding: [11, 12, 11, 12],
+    dividerGap: 4,
+    header: {
+      dateSize: 18,
+      weekdaySize: 12,
+      countSize: 8,
+      gap: 4,
+      titleSize: TYPE_SCALE.sectionTitle,
+    },
+    agenda: {
+      limit: 5,
+      size: TYPE_SCALE.item,
+      leadSize: TYPE_SCALE.agendaLead,
+      leadWidth: 66,
+      gap: 0,
+      rowGap: 3,
+    },
+  },
+  medium: {
+    padding: [14, 14, 14, 14],
+    topSpacing: 8,
+    dividerGap: 6,
+    leftColWidth: 164,
+    rightColWidth: 128,
+    header: {
+      dateSize: 19,
+      weekdaySize: 13,
+      countSize: 9,
+      gap: 10,
+      titleSize: TYPE_SCALE.sectionTitle,
+      summarySize: TYPE_SCALE.panelSummary,
+      rightTitleOffset: 4,
+    },
+    agenda: {
+      limit: 5,
+      size: TYPE_SCALE.item,
+      leadSize: TYPE_SCALE.agendaLead,
+      leadWidth: 64,
+      gap: 2,
+      titleLimit: 12,
+      rowGap: 6,
+    },
+    panel: {
+      limit: 5,
+      size: TYPE_SCALE.item,
+      titleLimit: 8,
+      rowGap: 6,
+      markerWidth: 14,
+      markerGap: 4,
+    },
+  },
+  large: {
+    padding: [16, 20, 16, 12],
+    topSpacing: 8,
+    dividerGap: 6,
+    rowSpacing: 8,
+    quadWidth: 160,
+    header: {
+      dateSize: 22,
+      weekdaySize: 14,
+      countSize: 10,
+      gap: 14,
+      titleSize: TYPE_SCALE.sectionTitle,
+      titleBottomGap: 7,
+    },
+    agenda: {
+      limit: 5,
+      size: TYPE_SCALE.item,
+      leadSize: TYPE_SCALE.agendaLead,
+      leadWidth: 64,
+      gap: 2,
+      titleLimit: 12,
+      rowGap: 6,
+    },
+    panel: {
+      limit: 5,
+      size: TYPE_SCALE.item,
+      titleLimit: 7,
+      rowGap: 6,
+      markerWidth: 14,
+      markerGap: 4,
+    },
+    rightQuadWidth: 144,
+    ledger: { titleLimit: 8 },
+    notes: { titleLimit: 10 },
+  },
+};
+
+// ---------- 通用辅助 ----------
 function appUrl(path) {
   return `${BASE_URL}/${String(path || "#/dashboard").replace(/^\/+/, "")}`;
 }
 
 function truncate(text, limit) {
   const value = String(text || "").trim();
-  if (value.length <= limit) return value;
-  return `${value.slice(0, Math.max(0, limit - 1))}…`;
+  const chars = Array.from(value);
+  if (chars.length <= limit) return value;
+  return `${chars.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
 
-function widgetSection() {
-  const raw = String(args.widgetParameter || DEFAULT_SECTION).trim().toLowerCase();
-  return raw || DEFAULT_SECTION;
-}
-
-async function fetchWidgetData(section) {
-  const request = new Request(`${BASE_URL}/api/widget/summary?section=${encodeURIComponent(section)}`);
-  request.method = "GET";
-  request.headers = {
-    Authorization: `Bearer ${TOKEN}`,
-  };
-  request.timeoutInterval = 20;
-  const result = await request.loadJSON();
-  if (!result.ok) {
-    throw new Error(result.message || "Widget request failed");
-  }
-  return result.data || {};
-}
-
-function addText(stack, text, size, color, opts = {}) {
+function addText(stack, text, opts = {}) {
+  const size = opts.size ?? 12;
   const node = stack.addText(String(text || ""));
   node.font = opts.font || Font.systemFont(size);
-  node.textColor = color;
+  node.textColor = opts.color || COLORS.text;
   node.lineLimit = opts.lineLimit ?? 1;
-  node.minimumScaleFactor = opts.minimumScaleFactor ?? 0.75;
   if (opts.opacity != null) node.textOpacity = opts.opacity;
+  if (opts.minimumScaleFactor != null)
+    node.minimumScaleFactor = opts.minimumScaleFactor;
   return node;
 }
 
-function addDivider(stack) {
-  const line = stack.addStack();
-  line.size = new Size(0, 1);
+function addDivider(parent, { vertical = false, thickness = 1 } = {}) {
+  const line = parent.addStack();
+  line.size = vertical ? new Size(thickness, 0) : new Size(0, thickness);
   line.backgroundColor = COLORS.line;
   return line;
 }
 
-function makeCard(parent, opts = {}) {
-  const card = parent.addStack();
-  card.layoutVertically();
-  card.backgroundColor = opts.backgroundColor || COLORS.panel;
-  card.cornerRadius = opts.cornerRadius || 18;
-  card.setPadding(
-    opts.top ?? 14,
-    opts.left ?? 14,
-    opts.bottom ?? 14,
-    opts.right ?? 14
-  );
-  if (opts.url) card.url = opts.url;
-  if (opts.size) card.size = opts.size;
-  return card;
+function addSectionDivider(parent, gap) {
+  parent.addSpacer(gap);
+  addDivider(parent);
+  parent.addSpacer(gap);
 }
 
-function renderDateBlock(stack, agenda) {
-  const dateStack = stack.addStack();
-  dateStack.layoutVertically();
-  dateStack.spacing = -2;
-
-  addText(dateStack, agenda?.date?.weekday || "--", 18, COLORS.accent, {
-    font: Font.semiboldSystemFont(18),
-  });
-  addText(dateStack, String(agenda?.date?.day || "--"), 38, COLORS.text, {
-    font: Font.lightSystemFont(38),
-  });
+function getSectionIcon(section) {
+  if (section === "ledger") return "creditcard";
+  if (section === "tasks") return "checkmark.circle";
+  if (section === "notes") return "doc.plaintext";
+  if (section === "events" || section === "agenda") return "calendar";
+  return "square.grid.2x2.fill";
 }
 
-function renderCounts(stack, agenda) {
-  const counts = stack.addStack();
-  counts.layoutVertically();
-  counts.spacing = 2;
-
-  const today = counts.addStack();
-  today.addSpacer();
-  addText(today, "今天", 14, COLORS.text, { opacity: 0.92 });
-  today.addSpacer(8);
-  addText(today, `${agenda?.today_count ?? 0}`, 18, COLORS.accent, { font: Font.semiboldSystemFont(18) });
-
-  const tomorrow = counts.addStack();
-  tomorrow.addSpacer();
-  addText(tomorrow, "明天", 14, COLORS.text, { opacity: 0.92 });
-  tomorrow.addSpacer(8);
-  addText(tomorrow, `${agenda?.tomorrow_count ?? 0}`, 18, COLORS.good, { font: Font.semiboldSystemFont(18) });
-}
-
-function renderAgenda(left, data) {
-  const agenda = data.agenda || {};
-
-  const top = left.addStack();
-  top.layoutHorizontally();
-  top.centerAlignContent();
-
-  renderDateBlock(top, agenda);
-  top.addSpacer(16);
-  renderCounts(top, agenda);
-  top.addSpacer();
-
-  const mark = top.addStack();
-  mark.size = new Size(34, 34);
-  mark.cornerRadius = 17;
-  mark.backgroundColor = new Color("#2A2B32");
-  mark.centerAlignContent();
-  mark.addSpacer();
-  addText(mark, "🐱", 18, COLORS.text);
-  mark.addSpacer();
-
-  left.addSpacer(10);
-  addDivider(left);
-  left.addSpacer(10);
-
-  const list = left.addStack();
-  list.layoutVertically();
-  list.spacing = 6;
-
-  const items = agenda.items || [];
-  if (!items.length) {
-    addText(list, agenda.empty_text || "最近没有安排", 13, COLORS.subtext, {
-      lineLimit: 2,
-    });
-    return;
-  }
-
-  for (const item of items.slice(0, 3)) {
-    const row = list.addStack();
-    row.layoutVertically();
-    row.url = appUrl(data.links?.events);
-    addText(row, truncate(item.title, 16), 14, COLORS.text, {
-      font: Font.semiboldSystemFont(14),
-    });
-    addText(row, truncate(item.meta || item.subtitle || "", 20), 11, COLORS.subtext, {
-      lineLimit: 1,
-    });
-    list.addSpacer(7);
-  }
-}
-
-function renderAgendaItems(stack, data, limit = 3) {
-  const agenda = data.agenda || {};
-  const items = agenda.items || [];
-  if (!items.length) {
-    addText(stack, agenda.empty_text || "最近没有安排", 13, COLORS.subtext, {
-      lineLimit: 2,
-    });
-    return;
-  }
-
-  for (const item of items.slice(0, limit)) {
-    const row = stack.addStack();
-    row.layoutVertically();
-    row.url = appUrl(data.links?.events);
-    addText(row, truncate(item.title, 24), 14, COLORS.text, {
-      font: Font.semiboldSystemFont(14),
-      lineLimit: 1,
-    });
-    addText(row, truncate(item.meta || item.subtitle || "", 28), 11, COLORS.subtext, {
-      lineLimit: 1,
-    });
-    stack.addSpacer(6);
-  }
-}
-
-function renderPanelHeader(right, data) {
-  const head = right.addStack();
-  head.layoutHorizontally();
-  head.centerAlignContent();
-  head.url = appUrl(data.panel?.path || data.links?.dashboard);
-
-  addText(head, data.panel?.title || "总览", 16, COLORS.text, {
-    font: Font.semiboldSystemFont(16),
-  });
-  head.addSpacer();
-  addText(head, "◷", 16, COLORS.warn);
-
-  right.addSpacer(4);
-  addText(right, data.panel?.summary?.primary || "", 11, COLORS.subtext, { lineLimit: 1 });
-  addText(right, data.panel?.summary?.secondary || "", 11, COLORS.subtext, { lineLimit: 1 });
-  right.addSpacer(8);
-}
-
-function renderPanelItems(right, data) {
-  const items = data.panel?.items || [];
-  if (!items.length) {
-    addText(right, data.panel?.empty_text || "暂无内容", 13, COLORS.subtext, { lineLimit: 2 });
-    return;
-  }
-
-  for (const item of items.slice(0, 4)) {
-    const row = right.addStack();
-    row.layoutHorizontally();
-    row.centerAlignContent();
-    row.url = appUrl(data.panel?.path || data.links?.dashboard);
-    row.spacing = 8;
-
-    addText(row, "☐", 15, COLORS.subtext);
-
-    const copy = row.addStack();
-    copy.layoutVertically();
-    copy.spacing = 1;
-    addText(copy, truncate(item.title, 18), 14, COLORS.text, {
-      font: Font.mediumSystemFont(14),
-    });
-
-    if (item.amount_text) {
-      addText(copy, `${item.meta || ""}  ${item.amount_text}`.trim(), 11, COLORS.subtext, { lineLimit: 1 });
-    } else if (item.preview) {
-      addText(copy, truncate(item.preview, 20), 11, COLORS.subtext, { lineLimit: 1 });
-    } else {
-      addText(copy, truncate(item.meta || "", 20), 11, COLORS.subtext, { lineLimit: 1 });
+function renderSectionTitle(
+  stack,
+  title,
+  { size = TYPE_SCALE.sectionTitle, icon } = {},
+) {
+  const row = stack.addStack();
+  row.layoutHorizontally();
+  row.centerAlignContent();
+  if (icon) {
+    const sym = SFSymbol.named(icon);
+    if (sym) {
+      const img = row.addImage(sym.image);
+      img.imageSize = new Size(size, size);
+      img.tintColor = COLORS.subtext;
+      row.addSpacer(5);
     }
-
-    right.addSpacer(6);
   }
+  addText(row, title, {
+    size,
+    font: FONTS.section(size),
+  });
+  return row;
 }
 
-function renderPanelItemsLarge(right, data, limit = 5) {
-  const items = data.panel?.items || [];
-  if (!items.length) {
-    addText(right, data.panel?.empty_text || "暂无内容", 14, COLORS.subtext, { lineLimit: 2 });
-    return;
-  }
-
-  for (const item of items.slice(0, limit)) {
-    const row = right.addStack();
-    row.layoutHorizontally();
-    row.centerAlignContent();
-    row.url = appUrl(data.panel?.path || data.links?.dashboard);
-    row.spacing = 8;
-
-    addText(row, "☐", 15, COLORS.subtext);
-
-    const copy = row.addStack();
-    copy.layoutVertically();
-    copy.spacing = 1;
-    addText(copy, truncate(item.title, 26), 14, COLORS.text, {
-      font: Font.mediumSystemFont(14),
-    });
-
-    if (item.amount_text) {
-      addText(copy, `${item.meta || ""}  ${item.amount_text}`.trim(), 11, COLORS.subtext, { lineLimit: 1 });
-    } else if (item.preview) {
-      addText(copy, truncate(item.preview, 30), 11, COLORS.subtext, { lineLimit: 1 });
-    } else {
-      addText(copy, truncate(item.meta || "", 30), 11, COLORS.subtext, { lineLimit: 1 });
-    }
-    right.addSpacer(7);
-  }
+function addSizedTextColumn(parent, text, width, opts = {}) {
+  const column = parent.addStack();
+  column.layoutHorizontally();
+  if (width) column.size = new Size(width, 0);
+  const node = addText(column, text, opts);
+  column.addSpacer();
+  return { column, node };
 }
 
-function firstMetaPart(value) {
+function getMetaParts(value) {
   return String(value || "")
     .split("·")
     .map((part) => part.trim())
-    .filter(Boolean)[0] || "";
+    .filter(Boolean);
+}
+
+function firstMetaPart(value) {
+  return getMetaParts(value)[0] || "";
 }
 
 function lastMetaPart(value) {
-  const parts = String(value || "")
-    .split("·")
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const parts = getMetaParts(value);
   return parts[parts.length - 1] || "";
 }
 
@@ -322,461 +271,590 @@ function agendaDayLabel(item, data) {
 
 function agendaLeadLabel(item, data) {
   const dayText = agendaDayLabel(item, data);
-  const timeText = firstMetaPart(item.meta || item.subtitle || "");
+  const timeText = firstMetaPart(item?.meta || item?.subtitle || "");
   return timeText ? `${dayText} ${timeText}` : dayText;
 }
 
-function mediumPanelPrimaryText(data) {
-  const primary = String(data?.panel?.summary?.primary || "");
-  if (data?.section === "ledger") {
-    return primary.replace(/^支出\s*/, "支 ");
-  }
-  return primary;
+function taskStatusLabel(item) {
+  return firstMetaPart(item?.meta || "");
 }
 
-function renderAgendaDense(stack, data, limit = 3) {
+function amountIsExpense(value) {
+  return String(value || "")
+    .trim()
+    .startsWith("-");
+}
+
+// ---------- 数据请求 ----------
+function widgetSectionParam() {
+  const raw = String(args.widgetParameter || DEFAULT_MEDIUM_SECTION)
+    .trim()
+    .toLowerCase();
+  return raw || DEFAULT_MEDIUM_SECTION;
+}
+
+async function fetchData(section) {
+  const request = new Request(
+    `${BASE_URL}/api/widget/summary?section=${encodeURIComponent(section)}`,
+  );
+  request.method = "GET";
+  request.headers = { Authorization: `Bearer ${TOKEN}` };
+  request.timeoutInterval = 20;
+  const result = await request.loadJSON();
+  if (!result.ok) {
+    throw new Error(result.message || "Widget request failed");
+  }
+  return result.data || {};
+}
+
+// ---------- 渲染组件 ----------
+function renderDateHeader(
+  stack,
+  data,
+  { dateSize = 19, weekdaySize = 13 } = {},
+) {
+  const line = stack.addStack();
+  line.layoutHorizontally();
+  line.centerAlignContent();
+
+  const pill = line.addStack();
+  pill.backgroundColor = COLORS.accentBg;
+  pill.cornerRadius = 6;
+  pill.setPadding(3, 5, 3, 5);
+  pill.layoutHorizontally();
+  pill.centerAlignContent();
+  pill.spacing = 4;
+
+  addText(pill, data.agenda?.date?.weekday || "--", {
+    size: weekdaySize,
+    color: COLORS.accent,
+    font: FONTS.section(weekdaySize),
+    lineLimit: 1,
+    minimumScaleFactor: 1,
+  });
+  addText(pill, String(data.agenda?.date?.day || "--"), {
+    size: dateSize,
+    color: COLORS.accent,
+    font: FONTS.section(dateSize),
+    lineLimit: 1,
+    minimumScaleFactor: 1,
+  });
+  return line;
+}
+
+function renderCountsInline(stack, data, { size = 10 } = {}) {
+  addText(stack, "今天", { size, color: COLORS.subtext });
+  stack.addSpacer(2);
+  addText(stack, `${data.agenda?.today_count ?? 0}`, {
+    size: size + 2,
+    color: COLORS.accent,
+    font: FONTS.section(size + 2),
+  });
+  stack.addSpacer(size === 8 ? 4 : 8);
+  addText(stack, "明天", { size, color: COLORS.subtext });
+  stack.addSpacer(2);
+  addText(stack, `${data.agenda?.tomorrow_count ?? 0}`, {
+    size: size + 2,
+    color: COLORS.good,
+    font: FONTS.section(size + 2),
+  });
+}
+
+// 日程顶栏：日期 + 今天/明天计数。
+function renderAgendaSummaryBar(parent, data, { width = 0, url, header } = {}) {
+  const bar = parent.addStack();
+  bar.layoutHorizontally();
+  bar.centerAlignContent();
+  if (width) bar.size = new Size(width, 0);
+  if (url) bar.url = url;
+
+  renderDateHeader(bar, data, header);
+  bar.addSpacer(header.gap);
+  renderCountsInline(bar, data, { size: header.countSize });
+  bar.addSpacer();
+  return bar;
+}
+
+// 日程列表：使用固定宽度等宽字体的前导列，保证日期/时间视觉对齐、不随内容跳动。
+function renderAgendaList(stack, data, opts = {}) {
+  const {
+    limit = 5,
+    size = TYPE_SCALE.item,
+    leadSize,
+    leadWidth = 56,
+    gap = 4,
+    titleLimit = 7,
+    columnWidth = 0,
+    rowGap = 5,
+  } = opts;
+  const actualLeadSize = leadSize ?? Math.max(9, size - 2);
   const items = data.agenda?.items || [];
   if (!items.length) {
-    return false;
-  }
-
-  for (const item of items.slice(0, limit)) {
-    const row = stack.addStack();
-    row.layoutHorizontally();
-    row.centerAlignContent();
-    row.url = appUrl(data.links?.events);
-
-    const lead = row.addStack();
-    lead.size = new Size(62, 0);
-    addText(lead, agendaLeadLabel(item, data), 11, COLORS.subtext, {
-      font: Font.mediumSystemFont(11),
-      lineLimit: 1,
-      minimumScaleFactor: 1,
+    addText(stack, data.agenda?.empty_text || "最近没有安排", {
+      size,
+      color: COLORS.subtext,
+      lineLimit: 2,
     });
-
-    row.addSpacer(4);
-    addText(row, truncate(item.title, 18), 11, COLORS.text, {
-      font: Font.mediumSystemFont(11),
-      lineLimit: 1,
-      minimumScaleFactor: 1,
-    });
-
-    stack.addSpacer(3);
-  }
-  return true;
-}
-
-function renderPanelItemsDense(stack, data, limit = 5) {
-  const items = data.panel?.items || [];
-  const itemTextSize = 11;
-  const titleWidth = data.section === "ledger" ? 56 : data.section === "notes" ? 72 : 96;
-  const tailWidth = data.section === "ledger" ? 52 : data.section === "notes" ? 28 : 30;
-  if (!items.length) {
-    addText(stack, data.panel?.empty_text || "暂无内容", itemTextSize, COLORS.subtext, { lineLimit: 2 });
     return;
   }
-
-  for (const item of items.slice(0, limit)) {
+  const slice = items.slice(0, limit);
+  const url = appUrl(data.links?.events);
+  const titleWidth = columnWidth
+    ? Math.max(0, columnWidth - leadWidth - gap)
+    : 0;
+  for (let i = 0; i < slice.length; i++) {
+    const item = slice[i];
     const row = stack.addStack();
     row.layoutHorizontally();
     row.centerAlignContent();
-    row.url = appUrl(data.panel?.path || data.links?.dashboard);
-    row.spacing = 4;
+    row.spacing = gap;
+    if (columnWidth) row.size = new Size(columnWidth, 0);
+    row.url = url;
 
-    const marker = data.section === "ledger"
-      ? (String(item.amount_text || "").startsWith("-") ? "↘" : "↗")
-      : (data.section === "notes" ? "•" : "☐");
-    const markerColor = data.section === "ledger"
-      ? (String(item.amount_text || "").startsWith("-") ? COLORS.accent : COLORS.good)
-      : COLORS.subtext;
-
-    const markerBox = row.addStack();
-    markerBox.size = new Size(10, 0);
-    markerBox.centerAlignContent();
-    addText(markerBox, marker, 10, markerColor, {
-      font: Font.mediumSystemFont(10),
-    });
-
-    const copy = row.addStack();
-    copy.size = new Size(titleWidth, 0);
-    copy.layoutHorizontally();
-    addText(copy, truncate(item.title, data.section === "ledger" ? 8 : 16), itemTextSize, COLORS.text, {
-      font: Font.mediumSystemFont(itemTextSize),
+    addSizedTextColumn(row, agendaLeadLabel(item, data), leadWidth, {
+      size: actualLeadSize,
+      color: COLORS.subtext,
+      font: FONTS.bodyMono(actualLeadSize),
       lineLimit: 1,
-      minimumScaleFactor: 1,
     });
-    copy.addSpacer();
 
-    const tail = row.addStack();
-    tail.size = new Size(tailWidth, 0);
-    tail.layoutHorizontally();
-    if (item.amount_text) {
-      addText(tail, item.amount_text, 10, String(item.amount_text).startsWith("-") ? COLORS.accent : COLORS.good, {
-        font: Font.mediumSystemFont(itemTextSize),
+    if (titleWidth) {
+      addSizedTextColumn(row, item.title, titleWidth, {
+        size,
+        font: FONTS.body(size),
         lineLimit: 1,
-        minimumScaleFactor: 1,
       });
-    } else if (data.section === "tasks") {
-      addText(tail, truncate(lastMetaPart(item.meta || ""), 6), itemTextSize, COLORS.subtext, {
+    } else {
+      addText(row, item.title, {
+        size,
+        font: FONTS.body(size),
         lineLimit: 1,
-        minimumScaleFactor: 1,
-      });
-    } else if (item.preview) {
-      addText(tail, truncate(item.preview, 8), itemTextSize, COLORS.subtext, {
-        lineLimit: 1,
-        minimumScaleFactor: 1,
       });
     }
-    tail.addSpacer();
-    stack.addSpacer(4);
+
+    if (i < slice.length - 1) stack.addSpacer(rowGap);
   }
 }
 
-function renderAgendaExpanded(stack, data, limit = 5) {
-  const items = data.agenda?.items || [];
-  if (!items.length) {
+function panelSectionKey(panel) {
+  return String(panel?.section || "").toLowerCase();
+}
+
+function panelItemMarker(section, item) {
+  if (section === "ledger") {
+    return amountIsExpense(item.amount_text)
+      ? { icon: "arrow.down.right", color: COLORS.accent, sizeOffset: 0 }
+      : { icon: "arrow.up.right", color: COLORS.good, sizeOffset: 0 };
+  }
+  if (section === "notes")
+    return { icon: "doc.text.fill", color: COLORS.subtext, sizeOffset: 0 };
+  const status = taskStatusLabel(item);
+  if (status === "已完成")
+    return { icon: "checkmark.circle.fill", color: COLORS.good, sizeOffset: 0 };
+  if (status === "已取消")
+    return { icon: "xmark.circle.fill", color: COLORS.subtext, sizeOffset: 0 };
+  return { icon: "circle", color: COLORS.subtext, sizeOffset: 0 };
+}
+
+function panelItemDetail(section, item) {
+  return item.preview || item.meta || "";
+}
+
+// 统一面板列表渲染器，覆盖 tasks / ledger / notes；差异仅在标记样式、标题截断和尾部文字。
+function renderPanelList(stack, panel, data, opts = {}) {
+  const {
+    limit = 5,
+    size = TYPE_SCALE.item,
+    titleLimit,
+    showDetail = false,
+    columnWidth = 0,
+    markerWidth = 14,
+    markerGap = 4,
+    rowGap = 4,
+    showTaskStatus = true,
+  } = opts;
+  if (!panel) {
+    addText(stack, "暂无内容", { size, color: COLORS.subtext });
     return;
   }
-
-  for (const item of items.slice(0, limit)) {
+  const section = panelSectionKey(panel);
+  const items = panel.items || [];
+  const url = appUrl(panel.path || data.links?.dashboard);
+  if (!items.length) {
+    addText(stack, panel.empty_text || "暂无内容", {
+      size,
+      color: COLORS.subtext,
+      lineLimit: 2,
+    });
+    return;
+  }
+  const slice = items.slice(0, limit);
+  const detailIndent = markerWidth + markerGap;
+  for (let i = 0; i < slice.length; i++) {
+    const item = slice[i];
     const row = stack.addStack();
     row.layoutVertically();
-    row.url = appUrl(data.links?.events);
+    if (columnWidth) row.size = new Size(columnWidth, 0);
+    row.url = url;
 
     const main = row.addStack();
     main.layoutHorizontally();
     main.centerAlignContent();
+    if (columnWidth) main.size = new Size(columnWidth, 0);
 
-    const lead = main.addStack();
-    lead.size = new Size(68, 0);
-    addText(lead, agendaLeadLabel(item, data), 11, COLORS.subtext, {
-      font: Font.mediumSystemFont(11),
-      lineLimit: 1,
-      minimumScaleFactor: 1,
-    });
-
-    main.addSpacer(5);
-    addText(main, truncate(item.title, 18), 12, COLORS.text, {
-      font: Font.mediumSystemFont(12),
-      lineLimit: 1,
-      minimumScaleFactor: 1,
-    });
-
-    const detail = lastMetaPart(item.meta || item.subtitle || "");
-    const timeText = firstMetaPart(item.meta || item.subtitle || "");
-    if (detail && detail !== timeText) {
-      row.addSpacer(1);
-      addText(row, truncate(detail, 24), 10, COLORS.subtext, {
-        lineLimit: 1,
-      });
-    }
-    stack.addSpacer(6);
-  }
-}
-
-function panelItemMarker(data, item) {
-  if (data.section === "ledger") {
-    return String(item.amount_text || "").startsWith("-")
-      ? { text: "↘", color: COLORS.accent }
-      : { text: "↗", color: COLORS.good };
-  }
-  if (data.section === "notes") {
-    return { text: "•", color: COLORS.subtext };
-  }
-  return { text: "☐", color: COLORS.subtext };
-}
-
-function panelItemTailText(data, item) {
-  if (item.amount_text) return item.amount_text;
-  if (data.section === "tasks") return truncate(lastMetaPart(item.meta || ""), 6);
-  return "";
-}
-
-function panelItemDetailText(data, item) {
-  if (data.section === "ledger") return item.meta || "";
-  if (data.section === "tasks") return item.meta || "";
-  if (item.preview) return item.preview;
-  return item.meta || "";
-}
-
-function renderPanelItemsExpanded(stack, data, limit = 5) {
-  const items = data.panel?.items || [];
-  if (!items.length) {
-    addText(stack, data.panel?.empty_text || "暂无内容", 12, COLORS.subtext, { lineLimit: 2 });
-    return;
-  }
-
-  for (const item of items.slice(0, limit)) {
-    const row = stack.addStack();
-    row.layoutVertically();
-    row.url = appUrl(data.panel?.path || data.links?.dashboard);
-
-    const main = row.addStack();
-    main.layoutHorizontally();
-    main.centerAlignContent();
-    main.spacing = 5;
-
-    const marker = panelItemMarker(data, item);
+    const marker = panelItemMarker(section, item);
     const markerBox = main.addStack();
-    markerBox.size = new Size(10, 0);
-    markerBox.centerAlignContent();
-    addText(markerBox, marker.text, 10, marker.color, {
-      font: Font.mediumSystemFont(10),
-    });
+    markerBox.layoutHorizontally();
+    markerBox.size = new Size(markerWidth, 0);
 
-    const titleBox = main.addStack();
-    titleBox.size = new Size(data.section === "ledger" ? 94 : 112, 0);
-    titleBox.layoutHorizontally();
-    addText(titleBox, truncate(item.title, data.section === "ledger" ? 14 : 18), 12, COLORS.text, {
-      font: Font.mediumSystemFont(12),
-      lineLimit: 1,
-      minimumScaleFactor: 1,
-    });
-    titleBox.addSpacer();
-
-    const tailText = panelItemTailText(data, item);
-    if (tailText) {
-      const tailBox = main.addStack();
-      tailBox.size = new Size(data.section === "ledger" ? 70 : 34, 0);
-      tailBox.layoutHorizontally();
-      addText(
-        tailBox,
-        tailText,
-        11,
-        String(tailText).startsWith("-") ? COLORS.accent : (String(tailText).startsWith("+") ? COLORS.good : COLORS.subtext),
-        {
-          font: Font.mediumSystemFont(11),
-          lineLimit: 1,
-          minimumScaleFactor: 1,
-        }
-      );
-      tailBox.addSpacer();
-    }
-
-    const detail = panelItemDetailText(data, item);
-    if (detail) {
-      row.addSpacer(1);
-      addText(row, truncate(detail, data.section === "notes" ? 30 : 28), 10, COLORS.subtext, {
-        lineLimit: 1,
+    if (marker.icon) {
+      const sym = SFSymbol.named(marker.icon);
+      if (sym) {
+        const markerSize = Math.max(10, size + (marker.sizeOffset ?? 0));
+        const img = markerBox.addImage(sym.image);
+        img.imageSize = new Size(markerSize, markerSize);
+        img.tintColor = marker.color;
+      }
+    } else {
+      const markerSize = Math.max(8, size + (marker.sizeOffset ?? -1));
+      addText(markerBox, marker.text, {
+        size: markerSize,
+        color: marker.color,
+        font: FONTS.body(markerSize),
       });
     }
-    stack.addSpacer(6);
+    main.addSpacer(markerGap);
+
+    addText(main, item.title, {
+      size,
+      font: FONTS.body(size),
+    });
+    main.addSpacer();
+
+    if (item.amount_text) {
+      addText(main, item.amount_text, {
+        size,
+        color: amountIsExpense(item.amount_text) ? COLORS.accent : COLORS.good,
+        font: FONTS.body(size),
+      });
+    } else if (section === "tasks" && showTaskStatus) {
+      const status = truncate(lastMetaPart(item.meta || ""), 6);
+      if (status) {
+        addText(main, status, {
+          size: size - 1,
+          color: COLORS.subtext,
+        });
+      }
+    }
+
+    if (showDetail) {
+      const detail = panelItemDetail(section, item);
+      if (detail) {
+        row.addSpacer(1);
+        const detailRow = row.addStack();
+        detailRow.layoutHorizontally();
+        if (columnWidth) detailRow.size = new Size(columnWidth, 0);
+        detailRow.addSpacer(detailIndent);
+        addText(detailRow, truncate(detail, section === "notes" ? 30 : 26), {
+          size: size - 1,
+          color: COLORS.subtext,
+        });
+        detailRow.addSpacer();
+      }
+    }
+    if (i < slice.length - 1) stack.addSpacer(showDetail ? rowGap + 1 : rowGap);
   }
+}
+
+// ---------- 布局 ----------
+function renderSmall(widget, data) {
+  const layout = LAYOUTS.small;
+  widget.setPadding(...layout.padding);
+
+  renderAgendaSummaryBar(widget, data, {
+    url: appUrl(data.links?.events),
+    header: layout.header,
+  });
+
+  addSectionDivider(widget, layout.dividerGap);
+
+  renderAgendaList(widget, data, { ...layout.agenda });
 }
 
 function renderMedium(widget, data) {
-  widget.backgroundColor = COLORS.panel;
-  widget.setPadding(9, 12, 9, 12);
+  const layout = LAYOUTS.medium;
+  widget.setPadding(...layout.padding);
+  widget.addSpacer();
+
+  const leftColWidth = layout.leftColWidth;
+  const rightColWidth = layout.rightColWidth;
 
   const top = widget.addStack();
   top.layoutHorizontally();
   top.centerAlignContent();
-  top.spacing = 8;
+  top.spacing = layout.topSpacing;
 
-  const leftHead = top.addStack();
-  leftHead.layoutHorizontally();
-  leftHead.centerAlignContent();
-  leftHead.size = new Size(150, 0);
-  leftHead.url = appUrl(data.links?.events);
-
-  const dateLine = leftHead.addStack();
-  dateLine.layoutHorizontally();
-  dateLine.centerAlignContent();
-  addText(dateLine, data.agenda?.date?.weekday || "--", 13, COLORS.accent, {
-    font: Font.semiboldSystemFont(13),
+  renderAgendaSummaryBar(top, data, {
+    width: leftColWidth,
+    url: appUrl(data.links?.events),
+    header: layout.header,
   });
-  dateLine.addSpacer(5);
-  addText(dateLine, String(data.agenda?.date?.day || "--"), 19, COLORS.text, {
-    font: Font.lightSystemFont(19),
-  });
-
-  leftHead.addSpacer(10);
-
-  const counts = leftHead.addStack();
-  counts.layoutHorizontally();
-  counts.centerAlignContent();
-
-  addText(counts, "今天", 9, COLORS.subtext);
-  counts.addSpacer(3);
-  addText(counts, `${data.agenda?.today_count ?? 0}`, 11, COLORS.accent, {
-    font: Font.semiboldSystemFont(12),
-  });
-  counts.addSpacer(8);
-  addText(counts, "明天", 9, COLORS.subtext);
-  counts.addSpacer(3);
-  addText(counts, `${data.agenda?.tomorrow_count ?? 0}`, 11, COLORS.good, {
-    font: Font.semiboldSystemFont(12),
-  });
-
-  top.addSpacer();
 
   const rightHead = top.addStack();
   rightHead.layoutHorizontally();
   rightHead.centerAlignContent();
+  if (layout.header.rightTitleOffset) {
+    rightHead.setPadding(layout.header.rightTitleOffset, 0, 0, 0);
+  }
+  rightHead.size = new Size(rightColWidth, 0);
   rightHead.url = appUrl(data.panel?.path || data.links?.dashboard);
-  addText(rightHead, data.panel?.title || "总览", 14, COLORS.text, {
-    font: Font.semiboldSystemFont(14),
-  });
-  rightHead.addSpacer(5);
-  addText(rightHead, mediumPanelPrimaryText(data), 9, COLORS.subtext, {
-    lineLimit: 1,
-  });
+  const panelSection = panelSectionKey(data.panel);
 
-  widget.addSpacer(5);
-  addDivider(widget);
-  widget.addSpacer(5);
+  renderSectionTitle(rightHead, data.panel?.title || "总览", {
+    size: layout.header.titleSize,
+    icon: getSectionIcon(panelSection),
+  });
+  rightHead.addSpacer(6);
+  addText(rightHead, data.panel?.summary?.primary || "", {
+    size: layout.header.summarySize,
+    color: COLORS.subtext,
+  });
+  rightHead.addSpacer();
+
+  addSectionDivider(widget, layout.dividerGap);
 
   const body = widget.addStack();
   body.layoutHorizontally();
-  body.spacing = 8;
+  body.spacing = layout.topSpacing;
+
   const left = body.addStack();
   left.layoutVertically();
-  left.size = new Size(150, 0);
+  left.size = new Size(leftColWidth, 0);
   left.url = appUrl(data.links?.events);
-  renderAgendaDense(left, data, 5);
-
-  const midLine = body.addStack();
-  midLine.size = new Size(1, 0);
-  midLine.backgroundColor = COLORS.line;
+  renderAgendaList(left, data, { ...layout.agenda, columnWidth: leftColWidth });
 
   const right = body.addStack();
   right.layoutVertically();
-  right.url = appUrl(data.panel?.path || data.links?.dashboard);
-  renderPanelItemsDense(right, data, 5);
+  right.size = new Size(rightColWidth, 0);
+  renderPanelList(right, data.panel, data, {
+    ...layout.panel,
+    columnWidth: rightColWidth,
+  });
+
+  widget.addSpacer();
+}
+
+function renderQuadrant(
+  parent,
+  title,
+  url,
+  bodyFn,
+  {
+    width = 150,
+    titleSize = TYPE_SCALE.sectionTitle,
+    icon,
+    titleBottomGap = 5,
+  } = {},
+) {
+  const col = parent.addStack();
+  col.layoutVertically();
+  col.size = new Size(width, 0);
+  col.url = url;
+
+  renderSectionTitle(col, title, { size: titleSize, icon });
+  col.addSpacer(titleBottomGap);
+  bodyFn(col);
+  col.addSpacer();
+  return col;
 }
 
 function renderLarge(widget, data) {
-  widget.backgroundColor = COLORS.panel;
-  widget.setPadding(12, 12, 12, 12);
+  const layout = LAYOUTS.large;
+  widget.setPadding(...layout.padding);
+  widget.addSpacer();
+  const panels = data.panels || {};
+  const tasks = panels.tasks;
+  const ledger = panels.ledger;
+  const notes = panels.notes;
 
-  const top = widget.addStack();
-  top.layoutHorizontally();
-  top.centerAlignContent();
-  top.spacing = 8;
-
-  const leftHead = top.addStack();
-  leftHead.layoutHorizontally();
-  leftHead.centerAlignContent();
-  leftHead.size = new Size(150, 0);
-  leftHead.url = appUrl(data.links?.events);
-
-  const dateLine = leftHead.addStack();
-  dateLine.layoutHorizontally();
-  dateLine.centerAlignContent();
-  addText(dateLine, data.agenda?.date?.weekday || "--", 15, COLORS.accent, {
-    font: Font.semiboldSystemFont(15),
-  });
-  dateLine.addSpacer(5);
-  addText(dateLine, String(data.agenda?.date?.day || "--"), 24, COLORS.text, {
-    font: Font.lightSystemFont(24),
+  renderAgendaSummaryBar(widget, data, {
+    url: appUrl(data.links?.dashboard),
+    header: layout.header,
   });
 
-  leftHead.addSpacer(10);
-
-  const counts = leftHead.addStack();
-  counts.layoutHorizontally();
-  counts.centerAlignContent();
-  addText(counts, "今天", 10, COLORS.subtext);
-  counts.addSpacer(4);
-  addText(counts, `${data.agenda?.today_count ?? 0}`, 12, COLORS.accent, {
-    font: Font.semiboldSystemFont(12),
-  });
-  counts.addSpacer(8);
-  addText(counts, "明天", 10, COLORS.subtext);
-  counts.addSpacer(4);
-  addText(counts, `${data.agenda?.tomorrow_count ?? 0}`, 12, COLORS.good, {
-    font: Font.semiboldSystemFont(12),
-  });
-
-  top.addSpacer();
-
-  const rightHead = top.addStack();
-  rightHead.layoutVertically();
-  rightHead.url = appUrl(data.panel?.path || data.links?.dashboard);
-  addText(rightHead, data.panel?.title || "总览", 18, COLORS.text, {
-    font: Font.semiboldSystemFont(18),
-  });
-  rightHead.addSpacer(1);
-  addText(rightHead, mediumPanelPrimaryText(data), 10, COLORS.subtext, {
-    lineLimit: 1,
-  });
-
-  widget.addSpacer(7);
+  widget.addSpacer(layout.topSpacing);
   addDivider(widget);
-  widget.addSpacer(7);
+  widget.addSpacer(layout.dividerGap);
 
-  const body = widget.addStack();
-  body.layoutHorizontally();
-  body.spacing = 10;
+  const quadWidth = layout.quadWidth;
 
-  const left = body.addStack();
-  left.layoutVertically();
-  left.size = new Size(150, 0);
-  left.url = appUrl(data.links?.events);
-  renderAgendaExpanded(left, data, 5);
+  const row1 = widget.addStack();
+  row1.layoutHorizontally();
+  row1.spacing = layout.rowSpacing;
+  renderQuadrant(
+    row1,
+    "日程",
+    appUrl(data.links?.events),
+    (s) => {
+      renderAgendaList(s, data, { ...layout.agenda, columnWidth: quadWidth });
+    },
+    {
+      width: quadWidth,
+      titleSize: layout.header.titleSize,
+      icon: getSectionIcon("events"),
+      titleBottomGap: layout.header.titleBottomGap,
+    },
+  );
+  renderQuadrant(
+    row1,
+    tasks?.title || "待办",
+    appUrl(tasks?.path || data.links?.tasks),
+    (s) => {
+      renderPanelList(s, tasks, data, {
+        ...layout.panel,
+        columnWidth: layout.rightQuadWidth,
+      });
+    },
+    {
+      width: layout.rightQuadWidth,
+      titleSize: layout.header.titleSize,
+      icon: getSectionIcon("tasks"),
+      titleBottomGap: layout.header.titleBottomGap,
+    },
+  );
 
-  const midLine = body.addStack();
-  midLine.size = new Size(1, 0);
-  midLine.backgroundColor = COLORS.line;
+  addSectionDivider(widget, layout.dividerGap);
 
-  const right = body.addStack();
-  right.layoutVertically();
-  right.url = appUrl(data.panel?.path || data.links?.dashboard);
-  if (data.panel?.summary?.secondary) {
-    addText(right, data.panel.summary.secondary, 10, COLORS.subtext, { lineLimit: 1 });
-    right.addSpacer(6);
+  const row2 = widget.addStack();
+  row2.layoutHorizontally();
+  row2.spacing = layout.rowSpacing;
+  renderQuadrant(
+    row2,
+    ledger?.title || "财务",
+    appUrl(ledger?.path || data.links?.ledger),
+    (s) => {
+      renderPanelList(s, ledger, data, {
+        ...layout.panel,
+        titleLimit: layout.ledger.titleLimit,
+        columnWidth: quadWidth,
+      });
+    },
+    {
+      width: quadWidth,
+      titleSize: layout.header.titleSize,
+      icon: getSectionIcon("ledger"),
+      titleBottomGap: layout.header.titleBottomGap,
+    },
+  );
+  renderQuadrant(
+    row2,
+    notes?.title || "笔记",
+    appUrl(notes?.path || data.links?.notes),
+    (s) => {
+      renderPanelList(s, notes, data, {
+        ...layout.panel,
+        titleLimit: layout.notes.titleLimit,
+        columnWidth: layout.rightQuadWidth,
+      });
+    },
+    {
+      width: layout.rightQuadWidth,
+      titleSize: layout.header.titleSize,
+      icon: getSectionIcon("notes"),
+      titleBottomGap: layout.header.titleBottomGap,
+    },
+  );
+
+  widget.addSpacer();
+}
+
+// ---------- 刷新调度 ----------
+function parseAgendaStart(item) {
+  // 优先使用后端传来的结构化 start_time，避免从 meta 字符串解析
+  const raw = String(item?.start_time || "");
+  if (raw.length >= 16) {
+    const parsed = new Date(raw);
+    if (!isNaN(parsed.getTime())) return parsed;
   }
-  renderPanelItemsExpanded(right, data, 5);
+  // 兜底：从 day + meta 推断
+  const day = String(item?.day || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const time = firstMetaPart(item?.meta || item?.subtitle || "");
+  const match = /^(\d{2}):(\d{2})/.exec(String(time || ""));
+  if (!match) return null;
+  const fallback = new Date(`${day}T${match[1]}:${match[2]}:00`);
+  return isNaN(fallback.getTime()) ? null : fallback;
 }
 
-function renderSmall(widget, data) {
-  const top = widget.addStack();
-  top.layoutVertically();
-  top.url = appUrl(data.links?.dashboard);
+// iOS 对 widget 刷新有节流，`refreshAfterDate` 只是建议。
+// 策略（按最早者取）：
+//   1. 下一个未开始的日程前 5 分钟 —— 临近事件时主动刷新
+//      若事件已在 5 分钟内，改为 1 分钟后尽快刷新
+//   2. 次日 00:05 —— 跨天时更新"今天/明天"计数
+//   3. 兜底 30 分钟
+function computeNextRefresh(data) {
+  const now = new Date();
+  const candidates = [];
 
-  addText(top, `${data.agenda?.date?.weekday || "--"} ${data.agenda?.date?.day || "--"}`, 16, COLORS.accent, {
-    font: Font.semiboldSystemFont(16),
-  });
-  top.addSpacer(6);
-  addText(top, data.panel?.title || "总览", 15, COLORS.text, { font: Font.semiboldSystemFont(15) });
-  addText(top, data.panel?.summary?.primary || "", 12, COLORS.subtext, { lineLimit: 2 });
-  top.addSpacer(8);
+  const rollover = new Date(now);
+  rollover.setDate(rollover.getDate() + 1);
+  rollover.setHours(0, 5, 0, 0);
+  candidates.push(rollover);
 
-  const first = data.agenda?.items?.[0] || data.panel?.items?.[0];
-  addText(top, first?.title || "暂无内容", 13, COLORS.text, { lineLimit: 2 });
-  addText(top, first?.meta || first?.preview || "", 11, COLORS.subtext, { lineLimit: 2 });
+  const earliest = new Date(now.getTime() + 60 * 1000);
+  for (const item of data?.agenda?.items || []) {
+    const start = parseAgendaStart(item);
+    if (start && start > now) {
+      // 提前 5 分钟刷新；若事件已在 5 分钟内，则尽快（1 分钟后）刷新
+      const preAlert = new Date(start.getTime() - 5 * 60 * 1000);
+      candidates.push(preAlert > earliest ? preAlert : earliest);
+    }
+  }
+
+  candidates.push(new Date(now.getTime() + 30 * 60 * 1000));
+
+  const future = candidates
+    .filter((d) => d.getTime() > now.getTime() + 60 * 1000)
+    .sort((a, b) => a - b);
+  return future[0] || new Date(now.getTime() + 30 * 60 * 1000);
 }
 
+// ---------- 主流程 ----------
 async function createWidget() {
-  const section = widgetSection();
-  const data = await fetchWidgetData(section);
+  let section;
+  if (family === "large") section = "all";
+  else if (family === "small") section = "auto";
+  else section = widgetSectionParam();
+
+  const data = await fetchData(section);
 
   const widget = new ListWidget();
   widget.backgroundColor = COLORS.bg;
-  widget.setPadding(12, 12, 12, 12);
-  widget.refreshAfterDate = new Date(Date.now() + 20 * 60 * 1000);
+  widget.refreshAfterDate = computeNextRefresh(data);
   widget.url = appUrl(data.links?.dashboard);
 
-  if (config.widgetFamily === "small") {
-    renderSmall(widget, data);
-  } else if (config.widgetFamily === "large") {
-    renderLarge(widget, data);
-  } else {
-    renderMedium(widget, data);
-  }
+  if (family === "small") renderSmall(widget, data);
+  else if (family === "large") renderLarge(widget, data);
+  else renderMedium(widget, data);
 
   return widget;
 }
 
-async function createErrorWidget(error) {
+function createErrorWidget(error) {
   const widget = new ListWidget();
   widget.backgroundColor = COLORS.bg;
   widget.setPadding(14, 14, 14, 14);
-  addText(widget, "Pendo", 18, COLORS.text, { font: Font.semiboldSystemFont(18) });
+  addText(widget, "Pendo", { size: 18, font: FONTS.section(18) });
   widget.addSpacer(8);
-  addText(widget, "组件加载失败", 14, COLORS.accent, { font: Font.semiboldSystemFont(14) });
+  addText(widget, "组件加载失败", {
+    size: 14,
+    color: COLORS.accent,
+    font: FONTS.section(14),
+  });
   widget.addSpacer(6);
-  addText(widget, truncate(error.message || String(error), 60), 12, COLORS.subtext, {
+  addText(widget, truncate(error.message || String(error), 60), {
+    size: 12,
+    color: COLORS.subtext,
     lineLimit: 3,
   });
   widget.url = appUrl("#/dashboard");
@@ -785,12 +863,19 @@ async function createErrorWidget(error) {
 
 let widget;
 try {
+  if (BASE_URL.includes("example.com")) {
+    throw new Error(
+      "请先把脚本里的 BASE_URL 改成你自己的 Pendo Web 地址",
+    );
+  }
   if (TOKEN === "PASTE_WIDGET_TOKEN_HERE") {
-    throw new Error("请先把脚本里的 TOKEN 改成 /pendo web widget-token 生成的值");
+    throw new Error(
+      "请先把脚本里的 TOKEN 改成 /pendo web widget-token 生成的值",
+    );
   }
   widget = await createWidget();
 } catch (error) {
-  widget = await createErrorWidget(error);
+  widget = createErrorWidget(error);
 }
 
 Script.setWidget(widget);

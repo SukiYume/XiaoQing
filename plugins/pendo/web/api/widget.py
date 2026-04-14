@@ -38,10 +38,12 @@ def _parse_now(value: str | None) -> datetime:
 
 def _section_for(value: str, now: datetime) -> str:
     normalized = str(value or "auto").strip().lower()
+    if normalized == "all":
+        return "all"
     if normalized in _SECTION_ORDER:
         return normalized
     if normalized != "auto":
-        raise HTTPException(status_code=400, detail="section must be one of tasks, ledger, notes, auto")
+        raise HTTPException(status_code=400, detail="section must be one of tasks, ledger, notes, all, auto")
     return _SECTION_ORDER[now.hour % len(_SECTION_ORDER)]
 
 
@@ -63,7 +65,7 @@ def _format_amount(value: float, *, signed: bool = False) -> str:
     if signed:
         prefix = "+" if amount >= 0 else "-"
         amount = abs(amount)
-    return f"{prefix}¥{amount:.2f}"
+    return f"{prefix}¥{amount:.0f}"
 
 
 def _format_event_meta(entry: dict[str, Any]) -> str:
@@ -169,11 +171,12 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
                 "subtitle": item["subtitle"],
                 "meta": _format_event_meta(item),
                 "day": item["day"],
+                "start_time": str(item.get("start_time") or ""),
                 "path": _LINKS["events"],
             }
             for item in upcoming
         ],
-        "empty_text": "",
+        "empty_text": "最近没有安排",
     }
 
 
@@ -308,14 +311,21 @@ def build_widget_summary(db: Database, owner_id: str, section: str = "auto", now
         "ledger": _build_ledger_panel,
         "notes": _build_note_panel,
     }
-    return {
+    base: dict[str, Any] = {
         "generated_at": current.isoformat(),
         "section_requested": str(section or "auto").strip().lower() or "auto",
         "section": resolved_section,
         "agenda": _build_agenda(db=db, owner_id=owner_id, now=current),
-        "panel": panel_builders[resolved_section](db=db, owner_id=owner_id, now=current),
         "links": dict(_LINKS),
     }
+    if resolved_section == "all":
+        base["panels"] = {
+            key: builder(db=db, owner_id=owner_id, now=current)
+            for key, builder in panel_builders.items()
+        }
+    else:
+        base["panel"] = panel_builders[resolved_section](db=db, owner_id=owner_id, now=current)
+    return base
 
 
 @router.get("/widget/summary")

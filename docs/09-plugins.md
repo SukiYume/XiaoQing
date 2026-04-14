@@ -284,6 +284,8 @@
 | `/pendo web stop` | 停止 Web 服务 |
 | `/pendo web status` | 查看运行状态和访问地址 |
 
+> pendo 插件初始化时会尝试自动启动 Web 服务；如果启动失败，仍可用 `/pendo web start` 手动重试。默认监听 `127.0.0.1:8765`，可通过环境变量 `PENDO_WEB_HOST` / `PENDO_WEB_PORT` 调整。
+
 Web 控制台提供以下页面：
 
 | 页面 | 功能 |
@@ -433,7 +435,9 @@ Web 控制台提供以下页面：
 
 启动后默认通过 `http://127.0.0.1:8765` 访问；如果你做了反向代理，也可以通过自己的外网地址访问。浏览器登录用 `/pendo web token`，iPhone Scriptable 小组件用 `/pendo web widget-token`。
 
-Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏。
+Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚本仓库版本只保留 `BASE_URL` 和 `TOKEN` 占位值，导入 Scriptable 后需要替换成你自己的 Pendo Web 地址和 widget token。它可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏，并支持 `small` / `medium` / `large` 三种尺寸。
+
+如果在 Windows 上默认 `8765` 端口启动失败，但 `netstat -ano` 看不到进程占用，通常是系统拒绝绑定该端口。优先改 `PENDO_WEB_PORT`，而不是继续排查“哪个进程占了它”。
 
 #### 定时任务
 

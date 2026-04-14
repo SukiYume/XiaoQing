@@ -1,10 +1,16 @@
 """Handler for /pendo web commands."""
+from importlib import import_module
+
 from core.plugin_base import build_action, segments
 
 from ..config import PendoConfig
 try:
-    from ..web.auth import generate_token, generate_widget_token
-    from ..web import server as web_server
+    auth_module = import_module("plugins.pendo.web.auth")
+    generate_token = auth_module.generate_token
+    generate_widget_token = auth_module.generate_widget_token
+    # Import the submodule directly so reloads and test stubs do not depend on
+    # the cached `plugins.pendo.web.server` package attribute.
+    web_server = import_module("plugins.pendo.web.server")
     WEB_AVAILABLE = True
 except ImportError:
     WEB_AVAILABLE = False
@@ -146,7 +152,23 @@ class WebHandler:
                     "🔑 下一步: 发送 /pendo web token 获取登录令牌"
                 ),
             }
-        return {"status": "error", "message": "❌ Web UI 启动失败"}
+        detail = None
+        if hasattr(web_server, "get_last_error"):
+            detail = web_server.get_last_error()
+        lines = [
+            "🌐 Pendo Web",
+            "❌ 服务启动失败",
+            "",
+            f"🌍 地址: {url}",
+            f"🔌 端口: {PendoConfig.WEB_PORT}",
+        ]
+        if detail:
+            lines.extend(["", f"🧾 原因: {detail}"])
+        lines.extend([
+            "",
+            "💡 若提示是端口占用，请先停止现有进程；若提示是系统拒绝绑定，请改用 PENDO_WEB_PORT / plugins/pendo/config.py 中的其他端口",
+        ])
+        return {"status": "error", "message": "\n".join(lines)}
 
     async def _stop(self, user_id: str, context):
         if not web_server.is_running():
