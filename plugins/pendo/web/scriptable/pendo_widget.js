@@ -7,6 +7,9 @@
 const BASE_URL = "https://example.com/pendo".replace(/\/+$/, "");
 const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
 const DEFAULT_MEDIUM_SECTION = "auto";
+// 日历同步：在 Scriptable 内直接运行脚本时，将 Pendo 日程同步到 iOS 日历。
+// 设为空字符串（""）可禁用同步功能。
+const SYNC_CALENDAR_NAME = "Pendo";
 
 // ---------- 主题（日夜自动切换） ----------
 const LIGHT = {
@@ -78,7 +81,7 @@ const LAYOUTS = {
   medium: {
     padding: [14, 14, 14, 14],
     topSpacing: 8,
-    dividerGap: 6,
+    dividerGap: 4,
     leftColWidth: 164,
     rightColWidth: 128,
     header: {
@@ -819,6 +822,128 @@ function computeNextRefresh(data) {
   return future[0] || new Date(now.getTime() + 30 * 60 * 1000);
 }
 
+// ---------- 日历同步 ----------
+// 仅在 app 内直接运行脚本时触发；widget 渲染时不执行同步。
+// 同步逻辑：
+//  1. 获取完整 agenda（section=auto）
+//  2. 在 iOS 日历中查找或创建名为 SYNC_CALENDAR_NAME 的日历
+//  3. 读取该日历今天起 30 天内的已有事件
+//  4. 对比 title + startTime 去重，仅写入新事件
+//  5. 弹出 Notification 展示同步结果
+async function syncAgendaToCalendar() {
+  if (!SYNC_CALENDAR_NAME) return "同步已禁用（SYNC_CALENDAR_NAME 为空）";
+
+  // 拉取 agenda 数据（复用 widget 的 fetchData）
+  const data = await fetchData("auto");
+  const items = data?.agenda?.items || [];
+  if (!items.length) return "没有需要同步的日程";
+
+  // 查找或创建目标日历
+  let targetCal;
+  try {
+    targetCal = await Calendar.forEventsByTitle(SYNC_CALENDAR_NAME);
+  } catch (_) {
+    targetCal = null;
+  }
+  if (!targetCal) {
+    // Calendar API 没有 createForEvents，需手动创建+保存
+    const allCals = await Calendar.forEvents();
+    targetCal = allCals.find(
+      (c) => c.title === SYNC_CALENDAR_NAME && c.allowsContentModifications,
+    );
+  }
+  if (!targetCal) {
+    // 仍然找不到 → 提示用户先在 iOS 日历 app 中手动创建
+    return `未找到名为「${SYNC_CALENDAR_NAME}」的日历，请先在系统日历 App 中创建`;
+  }
+
+  const SYNC_MARKER = "[由 Pendo Widget 同步]";
+
+  // 预解析所有远程日程的 title + startTime，用于新增去重和清理旧事件
+  const remoteKeys = new Set();
+  const parsedItems = [];
+  for (const item of items) {
+    const startRaw = String(item.start_time || "");
+    let startDate = null;
+    if (startRaw.length >= 16) {
+      startDate = new Date(startRaw);
+      if (isNaN(startDate.getTime())) startDate = null;
+    }
+    if (!startDate && item.day) {
+      const timePart = firstMetaPart(item.meta || "");
+      const tm = /^(\d{2}):(\d{2})/.exec(timePart);
+      if (tm) {
+        startDate = new Date(`${item.day}T${tm[1]}:${tm[2]}:00`);
+      } else {
+        startDate = new Date(`${item.day}T00:00:00`);
+      }
+    }
+    if (!startDate || isNaN(startDate.getTime())) continue;
+
+    let endDate = null;
+    const endRaw = String(item.end_time || "");
+    if (endRaw.length >= 16) {
+      endDate = new Date(endRaw);
+      if (isNaN(endDate.getTime())) endDate = null;
+    }
+    if (!endDate) {
+      endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+    }
+
+    const title = String(item.title || "无标题").replace(/…$/, "");
+    const key = `${title}|${startDate.getTime()}`;
+    remoteKeys.add(key);
+    parsedItems.push({ title, startDate, endDate, location: item.location });
+  }
+
+  // 读取目标日历中今天起 30 天的已有事件
+  const now = new Date();
+  const rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const rangeEnd = new Date(rangeStart.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const existing = await CalendarEvent.between(rangeStart, rangeEnd, [targetCal]);
+  const existingKeys = new Set(
+    existing.map((e) => `${e.title}|${e.startDate.getTime()}`),
+  );
+
+  // ── 新增：写入远程有、本地无的事件 ──
+  let created = 0;
+  let skipped = 0;
+  for (const pi of parsedItems) {
+    const key = `${pi.title}|${pi.startDate.getTime()}`;
+    if (existingKeys.has(key)) {
+      skipped++;
+      continue;
+    }
+    const event = new CalendarEvent();
+    event.title = pi.title;
+    event.startDate = pi.startDate;
+    event.endDate = pi.endDate;
+    event.calendar = targetCal;
+    if (pi.location) event.location = pi.location;
+    event.notes = SYNC_MARKER;
+    event.save();
+    existingKeys.add(key);
+    created++;
+  }
+
+  // ── 清理：删除本地有、远程已不存在的旧同步事件 ──
+  // 仅删除由本脚本创建的事件（notes 包含 SYNC_MARKER），不触碰用户手动添加的事件
+  let removed = 0;
+  for (const e of existing) {
+    if (!String(e.notes || "").includes(SYNC_MARKER)) continue;
+    const key = `${e.title}|${e.startDate.getTime()}`;
+    if (!remoteKeys.has(key)) {
+      e.remove();
+      removed++;
+    }
+  }
+
+  const parts = [`新增 ${created}`];
+  if (skipped) parts.push(`跳过 ${skipped}`);
+  if (removed) parts.push(`清理 ${removed}`);
+  return `同步完成：${parts.join("，")}`;
+}
+
 // ---------- 主流程 ----------
 async function createWidget() {
   let section;
@@ -864,9 +989,7 @@ function createErrorWidget(error) {
 let widget;
 try {
   if (BASE_URL.includes("example.com")) {
-    throw new Error(
-      "请先把脚本里的 BASE_URL 改成你自己的 Pendo Web 地址",
-    );
+    throw new Error("请先把脚本里的 BASE_URL 改成你自己的 Pendo Web 地址");
   }
   if (TOKEN === "PASTE_WIDGET_TOKEN_HERE") {
     throw new Error(
@@ -876,6 +999,20 @@ try {
   widget = await createWidget();
 } catch (error) {
   widget = createErrorWidget(error);
+}
+
+// 在 Scriptable App 内直接运行时（而非 Widget 渲染），自动执行日历同步
+if (!config.runsInWidget) {
+  try {
+    const result = await syncAgendaToCalendar();
+    const note = new Notification();
+    note.title = "Pendo 日历同步";
+    note.body = result;
+    note.schedule();
+    console.log(result);
+  } catch (syncErr) {
+    console.error("日历同步失败: " + syncErr.message);
+  }
 }
 
 Script.setWidget(widget);

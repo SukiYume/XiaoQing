@@ -74,8 +74,8 @@ function formatDateTime(iso) {
 
 function calendarVisibleItemLimit() {
     if (typeof window !== 'undefined') {
-        if (window.matchMedia(`(max-width: ${BREAKPOINTS.PHONE})`).matches) return 1;
-        if (window.matchMedia(`(max-width: ${BREAKPOINTS.MOBILE})`).matches) return 2;
+        if (window.matchMedia(`(max-width: ${BREAKPOINTS.PHONE})`).matches) return 3;
+        if (window.matchMedia(`(max-width: ${BREAKPOINTS.MOBILE})`).matches) return 3;
     }
     return 3;
 }
@@ -225,6 +225,7 @@ function ensureStyles() {
             height: 44px; padding: 0 16px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center;
             background: rgba(245,158,11,0.08); color: #B45309; font-size: 12px; font-weight: 700; white-space: nowrap;
         }
+        .events-calendar-shell { margin-top: 16px; }
         .events-calendar-weekdays,
         .events-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
         .events-calendar-weekdays { margin-bottom: 8px; }
@@ -248,16 +249,17 @@ function ensureStyles() {
         }
         .events-calendar-items { display: flex; flex-direction: column; gap: 3px; margin-top: auto; min-height: 0; overflow: hidden; }
         .events-calendar-chip {
+            --events-calendar-chip-color: rgba(245,158,11,0.9);
             display: flex; width: 100%; text-align: left; border: none; cursor: pointer; align-items: center; gap: 6px;
             min-height: 20px; padding: 2px 4px 2px 0; border-radius: 0; background: transparent;
             color: var(--color-text); font-size: 11px; font-weight: 600; line-height: 1.25;
             overflow: hidden;
         }
         .events-calendar-chip::before {
-            content: ''; flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px; background: rgba(245,158,11,0.9);
+            content: ''; flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px; background: var(--events-calendar-chip-color);
         }
-        .events-calendar-chip.milestone::before { background: #6366F1; }
-        .events-calendar-chip.recurring::before { background: #10B981; }
+        .events-calendar-chip.milestone { --events-calendar-chip-color: #818CF8; }
+        .events-calendar-chip.recurring { --events-calendar-chip-color: #86EFAC; }
         .events-calendar-chip-text {
             display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
@@ -401,16 +403,21 @@ function ensureStyles() {
             .events-inline-dates .events-inline-date { width: 100%; }
             .events-summary-chips { gap: 6px; }
             .events-summary-chip { height: 38px; padding: 0 12px; font-size: 11px; }
+            .events-calendar-shell { margin-top: 14px; }
             .events-calendar-grid, .events-calendar-weekdays { gap: 6px; }
             .events-calendar-cell {
-                min-height: 88px; aspect-ratio: auto; padding: 6px; border-radius: 16px;
+                min-height: 78px; aspect-ratio: auto; padding: 6px 5px; border-radius: 16px;
                 display: flex; flex-direction: column; justify-content: flex-start;
             }
-            .events-calendar-head { margin-bottom: 2px; align-items: flex-start; position: relative; min-height: 24px; padding-right: 0; }
+            .events-calendar-head { margin-bottom: 4px; align-items: flex-start; position: relative; min-height: 24px; padding-right: 0; }
             .events-calendar-date { width: 24px; min-width: 24px; max-width: 24px; height: 24px; flex: 0 0 24px; font-size: 12px; }
-            .events-calendar-items { gap: 2px; margin-top: 0; }
-            .events-calendar-chip { min-height: 18px; padding: 1px 2px 1px 0; font-size: 10px; line-height: 1.1; }
-            .events-calendar-overflow { font-size: 10px; padding-left: 12px; }
+            .events-calendar-items { gap: 4px; margin-top: 0; }
+            .events-calendar-chip {
+                min-height: 0; padding: 0; font-size: 10px; line-height: 1; gap: 0; align-items: stretch;
+            }
+            .events-calendar-chip::before { width: calc(100% - 12px); height: 6px; border-radius: 999px; margin-left: 2px; }
+            .events-calendar-chip-text { display: none; }
+            .events-calendar-overflow { font-size: 9px; padding-left: 0; text-align: right; line-height: 1; }
             .events-calendar-overflow-suffix { display: none; }
             .events-weekday { font-size: 11px; padding: 2px 0 4px; }
             .events-timeline-day-marker { grid-template-columns: 52px 14px minmax(0, 1fr); padding-top: 8px; }
@@ -425,10 +432,13 @@ function ensureStyles() {
             .events-summary-chips .events-summary-chip { width: 100%; justify-content: center; padding: 0 8px; font-size: 10px; }
             .events-weekday { font-size: 10px; letter-spacing: 0; }
             .events-calendar-grid, .events-calendar-weekdays { gap: 4px; }
-            .events-calendar-cell { min-height: 72px; padding: 5px; border-radius: 14px; }
+            .events-calendar-shell { margin-top: 12px; }
+            .events-calendar-cell { min-height: 62px; padding: 4px; border-radius: 14px; }
             .events-calendar-date { width: 22px; min-width: 22px; max-width: 22px; height: 22px; flex: 0 0 22px; font-size: 11px; }
-            .events-calendar-chip { min-height: 16px; font-size: 9.5px; }
-            .events-calendar-overflow { font-size: 9px; }
+            .events-calendar-head { margin-bottom: 3px; min-height: 22px; }
+            .events-calendar-items { gap: 3px; }
+            .events-calendar-chip::before { height: 5px; }
+            .events-calendar-overflow { font-size: 8px; }
         `)}
     `);
 }
@@ -522,8 +532,6 @@ function renderCalendarCell(day, month, calendarDay) {
 
     const items = calendarDay?.items || [];
     const count = calendarDay?.count || 0;
-    const hasMilestone = items.some((item) => item.kind === 'milestone');
-    const hasRecurring = items.some((item) => item.kind === 'recurring');
     const visibleLimit = calendarVisibleItemLimit();
     const visibleItems = items.slice(0, visibleLimit);
     return `
@@ -532,7 +540,7 @@ function renderCalendarCell(day, month, calendarDay) {
                 <span class="events-calendar-date">${day.getDate()}</span>
             </div>
             <div class="events-calendar-items">
-                ${visibleItems.map((item) => `<button class="events-calendar-chip ${item.kind}" data-event-id="${item.event_id}" title="${escapeHtml(item.label)}"><span class="events-calendar-chip-text">${escapeHtml(item.label)}</span></button>`).join('')}
+                ${visibleItems.map((item) => `<button class="events-calendar-chip ${item.kind}" data-event-id="${item.event_id}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}"><span class="events-calendar-chip-text">${escapeHtml(item.label)}</span></button>`).join('')}
                 ${count > visibleItems.length ? `<div class="events-calendar-overflow">+${count - visibleItems.length}<span class="events-calendar-overflow-suffix"> 更多</span></div>` : ''}
             </div>
         </div>`;
@@ -572,7 +580,7 @@ function renderCalendarPanel() {
                     <span class="events-summary-chip">${overview?.summary?.milestone_count || 0} 条多节点</span>
                     <span class="events-summary-chip">${overview?.summary?.reminder_count || 0} 个提醒</span>
                 </div>
-                <div style="margin-top:16px;">
+                <div class="events-calendar-shell">
                     <div class="events-calendar-weekdays">
                         ${WEEKDAYS.map((weekday) => `<div class="events-weekday">${weekday}</div>`).join('')}
                     </div>
