@@ -278,6 +278,9 @@ def test_events_page_source_uses_compact_calendar_summary_layout():
     assert "aspect-ratio: 1 / 1;" in page_src
     assert "justify-content: flex-start;" in page_src
     assert ".events-hero-actions .events-summary-chip { width: auto; flex: 0 0 auto; }" in page_src
-    assert ".events-calendar-items { gap: 2px; margin-top: 0; }" in page_src
+    assert ".events-calendar-items { gap: 4px; margin-top: 0; }" in page_src
+    assert ".events-calendar-chip::before { width: calc(100% - 12px); height: 6px; border-radius: 999px; margin-left: 2px; }" in page_src
+    assert ".events-calendar-chip-text { display: none; }" in page_src
+    assert ".events-calendar-cell { min-height: 62px; padding: 4px; border-radius: 14px; }" in page_src
     assert ".events-calendar-overflow-suffix { display: none; }" in page_src
     assert ".events-summary-chips .events-summary-chip { width: 100%; justify-content: center; padding: 0 8px; font-size: 10px; }" in page_src

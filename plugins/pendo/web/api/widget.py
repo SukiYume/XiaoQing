@@ -126,10 +126,15 @@ def _flatten_event_entries(events: list[Any], range_start: datetime, range_end: 
         for day in schedule["display_days"]:
             for row in schedule["day_entries"].get(day, []):
                 row_start = ensure_datetime(row.get("start_time")) or datetime.fromisoformat(f"{day}T00:00:00")
+                # 多节点事件：将总标题与各节点自己的 name 拼接，形成完整标题
+                # 例如总标题"出差"，节点名"出发" → "出差 · 出发"
+                entry_title = row.get("title") or getattr(event, "title", None) or "无标题"
+                if row.get("kind") == "milestone" and row.get("subtitle"):
+                    entry_title = f"{entry_title} · {row['subtitle']}"
                 rows.append(
                     {
                         "day": day,
-                        "title": row.get("title") or getattr(event, "title", None) or "无标题",
+                        "title": entry_title,
                         "subtitle": row.get("subtitle") or "",
                         "start_time": row.get("start_time") or "",
                         "end_time": row.get("end_time") or "",
@@ -167,11 +172,13 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
         "tomorrow_count": sum(1 for row in rows if row["day"] == tomorrow_key),
         "items": [
             {
-                "title": _title_text(item["title"], limit=18),
+                "title": str(item["title"] or "无标题").strip() or "无标题",
                 "subtitle": item["subtitle"],
                 "meta": _format_event_meta(item),
                 "day": item["day"],
                 "start_time": str(item.get("start_time") or ""),
+                "end_time": str(item.get("end_time") or ""),
+                "location": str(item.get("location") or ""),
                 "path": _LINKS["events"],
             }
             for item in upcoming
