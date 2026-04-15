@@ -42,6 +42,66 @@ const COLORS = {
   ),
 };
 
+// ---------- 动态背景（原生 LinearGradient 支持自动日夜切换） ----------
+// Scriptable 中 DrawContext 绘制的是静态图，无法跟随系统随时无缝切换。
+// 改为使用系统原生支持的 LinearGradient + Color.dynamic 来实现完美过渡。
+function getDynamicGradient() {
+  const gradient = new LinearGradient();
+  gradient.locations = [0, 0.35, 0.65, 1];
+  gradient.colors = [
+    // 对应之前 DrawContext 中的 4 个关键渐变色卡
+    Color.dynamic(new Color("#FDF6F0"), new Color("#0F0F14")),
+    Color.dynamic(new Color("#F7EEF5"), new Color("#161228")),
+    Color.dynamic(new Color("#EDE8F5"), new Color("#13111D")),
+    Color.dynamic(new Color("#F5F7FA"), new Color("#17171B"))
+  ];
+  return gradient;
+}
+
+// ---------- 装饰背景层（透明静态层，叠加在原生渐变之上） ----------
+function bgCanvasSize(fam) {
+  if (fam === "small") return { w: 340, h: 340 };
+  if (fam === "large") return { w: 720, h: 760 };
+  return { w: 720, h: 340 }; // medium
+}
+
+function drawTransparentDecorations(fam) {
+  const { w, h } = bgCanvasSize(fam);
+  const ctx = new DrawContext();
+  ctx.size = new Size(w, h);
+  ctx.opaque = false; // 关键：透明镂空背景
+  ctx.respectScreenScale = false;
+
+  // 使用在深浅色渐变底色下都具美感且不显突兀的折中极高透明度颜色
+  const orbs = [
+    // 右上角光晕
+    { x: w * 0.85, y: h * 0.05, r: w * 0.38, color: "#FF6A5C", alpha: 0.06 },
+    // 左下角光晕
+    { x: w * 0.05, y: h * 0.85, r: w * 0.32, color: "#7B68EE", alpha: 0.06 },
+    // 中偏右光晕
+    { x: w * 0.55, y: h * 0.5, r: w * 0.2, color: "#44D17A", alpha: 0.045 },
+  ];
+  for (const o of orbs) {
+    ctx.setFillColor(new Color(o.color, o.alpha));
+    ctx.fillEllipse(new Rect(o.x - o.r, o.y - o.r, o.r * 2, o.r * 2));
+  }
+
+  // 右下角装饰弧线
+  ctx.setStrokeColor(new Color("#FF6A5C", 0.08));
+  ctx.setLineWidth(1.5);
+  const acx = w * 0.92, acy = h * 0.92;
+  for (let a = 0; a < 3; a++) {
+    const ar = w * (0.18 + a * 0.07);
+    ctx.strokeEllipse(new Rect(acx - ar, acy - ar, ar * 2, ar * 2));
+  }
+
+  // 左上角淡淡的粗细节装饰横线
+  ctx.setFillColor(new Color("#FFFFFF", 0.1));
+  ctx.fillRect(new Rect(w * 0.04, h * 0.18, w * 0.22, 1));
+
+  return ctx.getImage();
+}
+
 const family = config.widgetFamily || "medium";
 // 字体与间距集中管理，保持 small / medium / large 三种尺寸同步。
 const TYPE_SCALE = {
@@ -900,7 +960,9 @@ async function syncAgendaToCalendar() {
   const now = new Date();
   const rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const rangeEnd = new Date(rangeStart.getTime() + 30 * 24 * 60 * 60 * 1000);
-  const existing = await CalendarEvent.between(rangeStart, rangeEnd, [targetCal]);
+  const existing = await CalendarEvent.between(rangeStart, rangeEnd, [
+    targetCal,
+  ]);
   const existingKeys = new Set(
     existing.map((e) => `${e.title}|${e.startDate.getTime()}`),
   );
@@ -954,30 +1016,43 @@ async function createWidget() {
   const data = await fetchData(section);
 
   const widget = new ListWidget();
-  widget.backgroundColor = COLORS.bg;
+  widget.setPadding(0, 0, 0, 0); // 移除组件默认内边距
+  // 使用原生动态渐变背景
+  widget.backgroundGradient = getDynamicGradient();
   widget.refreshAfterDate = computeNextRefresh(data);
   widget.url = appUrl(data.links?.dashboard);
 
-  if (family === "small") renderSmall(widget, data);
-  else if (family === "large") renderLarge(widget, data);
-  else renderMedium(widget, data);
+  // 增加统一层级用于显示透明叠加层图
+  const mainStack = widget.addStack();
+  mainStack.layoutVertically();
+  mainStack.backgroundImage = drawTransparentDecorations(family);
+
+  if (family === "small") renderSmall(mainStack, data);
+  else if (family === "large") renderLarge(mainStack, data);
+  else renderMedium(mainStack, data);
 
   return widget;
 }
 
 function createErrorWidget(error) {
   const widget = new ListWidget();
-  widget.backgroundColor = COLORS.bg;
-  widget.setPadding(14, 14, 14, 14);
-  addText(widget, "Pendo", { size: 18, font: FONTS.section(18) });
-  widget.addSpacer(8);
-  addText(widget, "组件加载失败", {
+  widget.setPadding(0, 0, 0, 0);
+  widget.backgroundGradient = getDynamicGradient();
+
+  const mainStack = widget.addStack();
+  mainStack.layoutVertically();
+  mainStack.backgroundImage = drawTransparentDecorations(family);
+  mainStack.setPadding(14, 14, 14, 14);
+
+  addText(mainStack, "Pendo", { size: 18, font: FONTS.section(18) });
+  mainStack.addSpacer(8);
+  addText(mainStack, "组件加载失败", {
     size: 14,
     color: COLORS.accent,
     font: FONTS.section(14),
   });
-  widget.addSpacer(6);
-  addText(widget, truncate(error.message || String(error), 60), {
+  mainStack.addSpacer(6);
+  addText(mainStack, truncate(error.message || String(error), 60), {
     size: 12,
     color: COLORS.subtext,
     lineLimit: 3,
