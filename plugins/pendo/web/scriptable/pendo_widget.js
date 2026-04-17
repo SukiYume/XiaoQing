@@ -13,29 +13,22 @@ const SYNC_CALENDAR_NAME = "Pendo";
 
 // ---------- 主题（日夜自动切换） ----------
 const LIGHT = {
-  bg: "#F5F7FA",
-  panel: "#FFFFFF",
   text: "#17171B",
   subtext: "#55606E",
   line: "#D1D6E0", // 加深分割线颜色以修复不可见问题
 };
 const DARK = {
-  bg: "#17171B",
-  panel: "#1F2026",
   text: "#F5F7FA",
   subtext: "#A7AFBF",
   line: "#343844",
 };
 const dyn = (light, dark) => Color.dynamic(new Color(light), new Color(dark));
 const COLORS = {
-  bg: dyn(LIGHT.bg, DARK.bg),
-  panel: dyn(LIGHT.panel, DARK.panel),
   text: dyn(LIGHT.text, DARK.text),
   subtext: dyn(LIGHT.subtext, DARK.subtext),
   line: dyn(LIGHT.line, DARK.line),
   accent: new Color("#FF6A5C"),
   good: new Color("#44D17A"),
-  warn: new Color("#F4B740"),
   accentBg: Color.dynamic(
     new Color("#FF6A5C", 0.15),
     new Color("#FF6A5C", 0.2),
@@ -53,7 +46,7 @@ function getDynamicGradient() {
     Color.dynamic(new Color("#FDF6F0"), new Color("#0F0F14")),
     Color.dynamic(new Color("#F7EEF5"), new Color("#161228")),
     Color.dynamic(new Color("#EDE8F5"), new Color("#13111D")),
-    Color.dynamic(new Color("#F5F7FA"), new Color("#17171B"))
+    Color.dynamic(new Color("#F5F7FA"), new Color("#17171B")),
   ];
   return gradient;
 }
@@ -89,7 +82,8 @@ function drawTransparentDecorations(fam) {
   // 右下角装饰弧线
   ctx.setStrokeColor(new Color("#FF6A5C", 0.08));
   ctx.setLineWidth(1.5);
-  const acx = w * 0.92, acy = h * 0.92;
+  const acx = w * 0.92,
+    acy = h * 0.92;
   for (let a = 0; a < 3; a++) {
     const ar = w * (0.18 + a * 0.07);
     ctx.strokeEllipse(new Rect(acx - ar, acy - ar, ar * 2, ar * 2));
@@ -100,6 +94,50 @@ function drawTransparentDecorations(fam) {
   ctx.fillRect(new Rect(w * 0.04, h * 0.18, w * 0.22, 1));
 
   return ctx.getImage();
+}
+
+function createDecoratedMainStack(widget) {
+  const mainStack = widget.addStack();
+  mainStack.layoutVertically();
+  mainStack.backgroundImage = drawTransparentDecorations(family);
+  return mainStack;
+}
+
+function createBaseWidget() {
+  const widget = new ListWidget();
+  widget.setPadding(0, 0, 0, 0); // 移除组件默认内边距
+  widget.backgroundGradient = getDynamicGradient();
+  return widget;
+}
+
+function createWidgetShell({ centerHorizontally = false, padding } = {}) {
+  const widget = createBaseWidget();
+  const mainStack = createDecoratedMainStack(widget);
+  const content = createFilledContentStack(mainStack, { centerHorizontally });
+  if (padding) content.setPadding(...padding);
+  return { widget, content };
+}
+
+function createFilledContentStack(mainStack, { centerHorizontally = false } = {}) {
+  mainStack.addSpacer();
+
+  let content;
+  if (centerHorizontally) {
+    const row = mainStack.addStack();
+    row.layoutHorizontally();
+    row.addSpacer();
+
+    content = row.addStack();
+    content.layoutVertically();
+
+    row.addSpacer();
+  } else {
+    content = mainStack.addStack();
+    content.layoutVertically();
+  }
+
+  mainStack.addSpacer();
+  return content;
 }
 
 const family = config.widgetFamily || "medium";
@@ -114,7 +152,6 @@ const FONTS = {
   body: (size) => Font.mediumSystemFont(size),
   bodyMono: (size) => Font.mediumMonospacedSystemFont(size),
   section: (size) => Font.semiboldSystemFont(size),
-  light: (size) => Font.lightSystemFont(size),
 };
 // 布局参数：像素值基于 iPhone 14 系列尺寸估算。
 // leadWidth = 日程时间列宽度；markerWidth = 面板标记列宽度。
@@ -232,9 +269,9 @@ function addText(stack, text, opts = {}) {
   return node;
 }
 
-function addDivider(parent, { vertical = false, thickness = 1 } = {}) {
+function addDivider(parent) {
   const line = parent.addStack();
-  line.size = vertical ? new Size(thickness, 0) : new Size(0, thickness);
+  line.size = new Size(0, 1);
   line.backgroundColor = COLORS.line;
   return line;
 }
@@ -281,9 +318,8 @@ function addSizedTextColumn(parent, text, width, opts = {}) {
   const column = parent.addStack();
   column.layoutHorizontally();
   if (width) column.size = new Size(width, 0);
-  const node = addText(column, text, opts);
+  addText(column, text, opts);
   column.addSpacer();
-  return { column, node };
 }
 
 function getMetaParts(value) {
@@ -474,6 +510,8 @@ function renderAgendaList(stack, data, opts = {}) {
     if (columnWidth) row.size = new Size(columnWidth, 0);
     row.url = url;
 
+    const titleText = titleLimit ? truncate(item.title, titleLimit) : item.title;
+
     addSizedTextColumn(row, agendaLeadLabel(item, data), leadWidth, {
       size: actualLeadSize,
       color: COLORS.subtext,
@@ -482,13 +520,13 @@ function renderAgendaList(stack, data, opts = {}) {
     });
 
     if (titleWidth) {
-      addSizedTextColumn(row, item.title, titleWidth, {
+      addSizedTextColumn(row, titleText, titleWidth, {
         size,
         font: FONTS.body(size),
         lineLimit: 1,
       });
     } else {
-      addText(row, item.title, {
+      addText(row, titleText, {
         size,
         font: FONTS.body(size),
         lineLimit: 1,
@@ -506,21 +544,17 @@ function panelSectionKey(panel) {
 function panelItemMarker(section, item) {
   if (section === "ledger") {
     return amountIsExpense(item.amount_text)
-      ? { icon: "arrow.down.right", color: COLORS.accent, sizeOffset: 0 }
-      : { icon: "arrow.up.right", color: COLORS.good, sizeOffset: 0 };
+      ? { icon: "arrow.down.right", color: COLORS.accent }
+      : { icon: "arrow.up.right", color: COLORS.good };
   }
   if (section === "notes")
-    return { icon: "doc.text.fill", color: COLORS.subtext, sizeOffset: 0 };
+    return { icon: "doc.text.fill", color: COLORS.subtext };
   const status = taskStatusLabel(item);
   if (status === "已完成")
-    return { icon: "checkmark.circle.fill", color: COLORS.good, sizeOffset: 0 };
+    return { icon: "checkmark.circle.fill", color: COLORS.good };
   if (status === "已取消")
-    return { icon: "xmark.circle.fill", color: COLORS.subtext, sizeOffset: 0 };
-  return { icon: "circle", color: COLORS.subtext, sizeOffset: 0 };
-}
-
-function panelItemDetail(section, item) {
-  return item.preview || item.meta || "";
+    return { icon: "xmark.circle.fill", color: COLORS.subtext };
+  return { icon: "circle", color: COLORS.subtext };
 }
 
 // 统一面板列表渲染器，覆盖 tasks / ledger / notes；差异仅在标记样式、标题截断和尾部文字。
@@ -529,12 +563,10 @@ function renderPanelList(stack, panel, data, opts = {}) {
     limit = 5,
     size = TYPE_SCALE.item,
     titleLimit,
-    showDetail = false,
     columnWidth = 0,
     markerWidth = 14,
     markerGap = 4,
     rowGap = 4,
-    showTaskStatus = true,
   } = opts;
   if (!panel) {
     addText(stack, "暂无内容", { size, color: COLORS.subtext });
@@ -552,80 +584,57 @@ function renderPanelList(stack, panel, data, opts = {}) {
     return;
   }
   const slice = items.slice(0, limit);
-  const detailIndent = markerWidth + markerGap;
   for (let i = 0; i < slice.length; i++) {
     const item = slice[i];
+    const titleText = titleLimit ? truncate(item.title, titleLimit) : item.title;
     const row = stack.addStack();
-    row.layoutVertically();
+    row.layoutHorizontally();
+    row.centerAlignContent();
     if (columnWidth) row.size = new Size(columnWidth, 0);
     row.url = url;
 
-    const main = row.addStack();
-    main.layoutHorizontally();
-    main.centerAlignContent();
-    if (columnWidth) main.size = new Size(columnWidth, 0);
-
     const marker = panelItemMarker(section, item);
-    const markerBox = main.addStack();
+    const markerBox = row.addStack();
     markerBox.layoutHorizontally();
     markerBox.size = new Size(markerWidth, 0);
 
-    if (marker.icon) {
-      const sym = SFSymbol.named(marker.icon);
-      if (sym) {
-        const markerSize = Math.max(10, size + (marker.sizeOffset ?? 0));
-        const img = markerBox.addImage(sym.image);
-        img.imageSize = new Size(markerSize, markerSize);
-        img.tintColor = marker.color;
-      }
+    const sym = SFSymbol.named(marker.icon);
+    if (sym) {
+      const markerSize = Math.max(10, size);
+      const img = markerBox.addImage(sym.image);
+      img.imageSize = new Size(markerSize, markerSize);
+      img.tintColor = marker.color;
     } else {
-      const markerSize = Math.max(8, size + (marker.sizeOffset ?? -1));
-      addText(markerBox, marker.text, {
-        size: markerSize,
+      addText(markerBox, "•", {
+        size: Math.max(8, size - 1),
         color: marker.color,
-        font: FONTS.body(markerSize),
+        font: FONTS.body(Math.max(8, size - 1)),
       });
     }
-    main.addSpacer(markerGap);
+    row.addSpacer(markerGap);
 
-    addText(main, item.title, {
+    addText(row, titleText, {
       size,
       font: FONTS.body(size),
     });
-    main.addSpacer();
+    row.addSpacer();
 
     if (item.amount_text) {
-      addText(main, item.amount_text, {
+      addText(row, item.amount_text, {
         size,
         color: amountIsExpense(item.amount_text) ? COLORS.accent : COLORS.good,
         font: FONTS.body(size),
       });
-    } else if (section === "tasks" && showTaskStatus) {
+    } else if (section === "tasks") {
       const status = truncate(lastMetaPart(item.meta || ""), 6);
       if (status) {
-        addText(main, status, {
+        addText(row, status, {
           size: size - 1,
           color: COLORS.subtext,
         });
       }
     }
-
-    if (showDetail) {
-      const detail = panelItemDetail(section, item);
-      if (detail) {
-        row.addSpacer(1);
-        const detailRow = row.addStack();
-        detailRow.layoutHorizontally();
-        if (columnWidth) detailRow.size = new Size(columnWidth, 0);
-        detailRow.addSpacer(detailIndent);
-        addText(detailRow, truncate(detail, section === "notes" ? 30 : 26), {
-          size: size - 1,
-          color: COLORS.subtext,
-        });
-        detailRow.addSpacer();
-      }
-    }
-    if (i < slice.length - 1) stack.addSpacer(showDetail ? rowGap + 1 : rowGap);
+    if (i < slice.length - 1) stack.addSpacer(rowGap);
   }
 }
 
@@ -647,7 +656,6 @@ function renderSmall(widget, data) {
 function renderMedium(widget, data) {
   const layout = LAYOUTS.medium;
   widget.setPadding(...layout.padding);
-  widget.addSpacer();
 
   const leftColWidth = layout.leftColWidth;
   const rightColWidth = layout.rightColWidth;
@@ -703,8 +711,6 @@ function renderMedium(widget, data) {
     ...layout.panel,
     columnWidth: rightColWidth,
   });
-
-  widget.addSpacer();
 }
 
 function renderQuadrant(
@@ -731,10 +737,18 @@ function renderQuadrant(
   return col;
 }
 
+function renderConfiguredQuadrant(parent, spec, layout) {
+  renderQuadrant(parent, spec.title, spec.url, spec.render, {
+    width: spec.width,
+    titleSize: layout.header.titleSize,
+    icon: getSectionIcon(spec.iconSection),
+    titleBottomGap: layout.header.titleBottomGap,
+  });
+}
+
 function renderLarge(widget, data) {
   const layout = LAYOUTS.large;
   widget.setPadding(...layout.padding);
-  widget.addSpacer();
   const panels = data.panels || {};
   const tasks = panels.tasks;
   const ledger = panels.ledger;
@@ -750,103 +764,94 @@ function renderLarge(widget, data) {
   widget.addSpacer(layout.dividerGap);
 
   const quadWidth = layout.quadWidth;
+  const rows = [
+    [
+      {
+        title: "日程",
+        url: appUrl(data.links?.events),
+        width: quadWidth,
+        iconSection: "events",
+        render: (stack) => {
+          renderAgendaList(stack, data, {
+            ...layout.agenda,
+            columnWidth: quadWidth,
+          });
+        },
+      },
+      {
+        title: tasks?.title || "待办",
+        url: appUrl(tasks?.path || data.links?.tasks),
+        width: layout.rightQuadWidth,
+        iconSection: "tasks",
+        render: (stack) => {
+          renderPanelList(stack, tasks, data, {
+            ...layout.panel,
+            columnWidth: layout.rightQuadWidth,
+          });
+        },
+      },
+    ],
+    [
+      {
+        title: ledger?.title || "财务",
+        url: appUrl(ledger?.path || data.links?.ledger),
+        width: quadWidth,
+        iconSection: "ledger",
+        render: (stack) => {
+          renderPanelList(stack, ledger, data, {
+            ...layout.panel,
+            titleLimit: layout.ledger.titleLimit,
+            columnWidth: quadWidth,
+          });
+        },
+      },
+      {
+        title: notes?.title || "笔记",
+        url: appUrl(notes?.path || data.links?.notes),
+        width: layout.rightQuadWidth,
+        iconSection: "notes",
+        render: (stack) => {
+          renderPanelList(stack, notes, data, {
+            ...layout.panel,
+            titleLimit: layout.notes.titleLimit,
+            columnWidth: layout.rightQuadWidth,
+          });
+        },
+      },
+    ],
+  ];
 
-  const row1 = widget.addStack();
-  row1.layoutHorizontally();
-  row1.spacing = layout.rowSpacing;
-  renderQuadrant(
-    row1,
-    "日程",
-    appUrl(data.links?.events),
-    (s) => {
-      renderAgendaList(s, data, { ...layout.agenda, columnWidth: quadWidth });
-    },
-    {
-      width: quadWidth,
-      titleSize: layout.header.titleSize,
-      icon: getSectionIcon("events"),
-      titleBottomGap: layout.header.titleBottomGap,
-    },
-  );
-  renderQuadrant(
-    row1,
-    tasks?.title || "待办",
-    appUrl(tasks?.path || data.links?.tasks),
-    (s) => {
-      renderPanelList(s, tasks, data, {
-        ...layout.panel,
-        columnWidth: layout.rightQuadWidth,
-      });
-    },
-    {
-      width: layout.rightQuadWidth,
-      titleSize: layout.header.titleSize,
-      icon: getSectionIcon("tasks"),
-      titleBottomGap: layout.header.titleBottomGap,
-    },
-  );
-
-  addSectionDivider(widget, layout.dividerGap);
-
-  const row2 = widget.addStack();
-  row2.layoutHorizontally();
-  row2.spacing = layout.rowSpacing;
-  renderQuadrant(
-    row2,
-    ledger?.title || "财务",
-    appUrl(ledger?.path || data.links?.ledger),
-    (s) => {
-      renderPanelList(s, ledger, data, {
-        ...layout.panel,
-        titleLimit: layout.ledger.titleLimit,
-        columnWidth: quadWidth,
-      });
-    },
-    {
-      width: quadWidth,
-      titleSize: layout.header.titleSize,
-      icon: getSectionIcon("ledger"),
-      titleBottomGap: layout.header.titleBottomGap,
-    },
-  );
-  renderQuadrant(
-    row2,
-    notes?.title || "笔记",
-    appUrl(notes?.path || data.links?.notes),
-    (s) => {
-      renderPanelList(s, notes, data, {
-        ...layout.panel,
-        titleLimit: layout.notes.titleLimit,
-        columnWidth: layout.rightQuadWidth,
-      });
-    },
-    {
-      width: layout.rightQuadWidth,
-      titleSize: layout.header.titleSize,
-      icon: getSectionIcon("notes"),
-      titleBottomGap: layout.header.titleBottomGap,
-    },
-  );
-
-  widget.addSpacer();
+  rows.forEach((specs, index) => {
+    if (index > 0) addSectionDivider(widget, layout.dividerGap);
+    const row = widget.addStack();
+    row.layoutHorizontally();
+    row.spacing = layout.rowSpacing;
+    specs.forEach((spec) => renderConfiguredQuadrant(row, spec, layout));
+  });
 }
 
 // ---------- 刷新调度 ----------
-function parseAgendaStart(item) {
+function parseItemStartDate(item, { allowDateOnly = false } = {}) {
   // 优先使用后端传来的结构化 start_time，避免从 meta 字符串解析
   const raw = String(item?.start_time || "");
   if (raw.length >= 16) {
     const parsed = new Date(raw);
     if (!isNaN(parsed.getTime())) return parsed;
   }
-  // 兜底：从 day + meta 推断
+
+  // 兜底：从 day + meta/subtitle 推断
   const day = String(item?.day || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
   const time = firstMetaPart(item?.meta || item?.subtitle || "");
   const match = /^(\d{2}):(\d{2})/.exec(String(time || ""));
-  if (!match) return null;
-  const fallback = new Date(`${day}T${match[1]}:${match[2]}:00`);
-  return isNaN(fallback.getTime()) ? null : fallback;
+  if (match) {
+    const parsed = new Date(`${day}T${match[1]}:${match[2]}:00`);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  if (!allowDateOnly) return null;
+  const dateOnly = new Date(`${day}T00:00:00`);
+  return isNaN(dateOnly.getTime()) ? null : dateOnly;
 }
 
 // iOS 对 widget 刷新有节流，`refreshAfterDate` 只是建议。
@@ -866,7 +871,7 @@ function computeNextRefresh(data) {
 
   const earliest = new Date(now.getTime() + 60 * 1000);
   for (const item of data?.agenda?.items || []) {
-    const start = parseAgendaStart(item);
+    const start = parseItemStartDate(item);
     if (start && start > now) {
       // 提前 5 分钟刷新；若事件已在 5 分钟内，则尽快（1 分钟后）刷新
       const preAlert = new Date(start.getTime() - 5 * 60 * 1000);
@@ -923,21 +928,7 @@ async function syncAgendaToCalendar() {
   const remoteKeys = new Set();
   const parsedItems = [];
   for (const item of items) {
-    const startRaw = String(item.start_time || "");
-    let startDate = null;
-    if (startRaw.length >= 16) {
-      startDate = new Date(startRaw);
-      if (isNaN(startDate.getTime())) startDate = null;
-    }
-    if (!startDate && item.day) {
-      const timePart = firstMetaPart(item.meta || "");
-      const tm = /^(\d{2}):(\d{2})/.exec(timePart);
-      if (tm) {
-        startDate = new Date(`${item.day}T${tm[1]}:${tm[2]}:00`);
-      } else {
-        startDate = new Date(`${item.day}T00:00:00`);
-      }
-    }
+    const startDate = parseItemStartDate(item, { allowDateOnly: true });
     if (!startDate || isNaN(startDate.getTime())) continue;
 
     let endDate = null;
@@ -1008,51 +999,41 @@ async function syncAgendaToCalendar() {
 
 // ---------- 主流程 ----------
 async function createWidget() {
-  let section;
-  if (family === "large") section = "all";
-  else if (family === "small") section = "auto";
-  else section = widgetSectionParam();
+  const section =
+    family === "large"
+      ? "all"
+      : family === "small"
+        ? "auto"
+        : widgetSectionParam();
 
   const data = await fetchData(section);
 
-  const widget = new ListWidget();
-  widget.setPadding(0, 0, 0, 0); // 移除组件默认内边距
-  // 使用原生动态渐变背景
-  widget.backgroundGradient = getDynamicGradient();
+  const { widget, content } = createWidgetShell();
   widget.refreshAfterDate = computeNextRefresh(data);
   widget.url = appUrl(data.links?.dashboard);
 
-  // 增加统一层级用于显示透明叠加层图
-  const mainStack = widget.addStack();
-  mainStack.layoutVertically();
-  mainStack.backgroundImage = drawTransparentDecorations(family);
-
-  if (family === "small") renderSmall(mainStack, data);
-  else if (family === "large") renderLarge(mainStack, data);
-  else renderMedium(mainStack, data);
+  if (family === "small") renderSmall(content, data);
+  else if (family === "large") renderLarge(content, data);
+  else renderMedium(content, data);
 
   return widget;
 }
 
 function createErrorWidget(error) {
-  const widget = new ListWidget();
-  widget.setPadding(0, 0, 0, 0);
-  widget.backgroundGradient = getDynamicGradient();
+  const { widget, content } = createWidgetShell({
+    centerHorizontally: true,
+    padding: [14, 14, 14, 14],
+  });
 
-  const mainStack = widget.addStack();
-  mainStack.layoutVertically();
-  mainStack.backgroundImage = drawTransparentDecorations(family);
-  mainStack.setPadding(14, 14, 14, 14);
-
-  addText(mainStack, "Pendo", { size: 18, font: FONTS.section(18) });
-  mainStack.addSpacer(8);
-  addText(mainStack, "组件加载失败", {
+  addText(content, "Pendo", { size: 18, font: FONTS.section(18) });
+  content.addSpacer(8);
+  addText(content, "组件加载失败", {
     size: 14,
     color: COLORS.accent,
     font: FONTS.section(14),
   });
-  mainStack.addSpacer(6);
-  addText(mainStack, truncate(error.message || String(error), 60), {
+  content.addSpacer(6);
+  addText(content, truncate(error.message || String(error), 60), {
     size: 12,
     color: COLORS.subtext,
     lineLimit: 3,

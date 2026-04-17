@@ -1582,6 +1582,66 @@ class TestCrossTypeCommandRegression:
         finally:
             db.cleanup()
 
+    def test_note_add_title_token_keeps_body_separate(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_title_token_prefix.db"))
+
+        try:
+            handler = NoteHandler(db=db)
+            result = asyncio.run(
+                handler.create_note(
+                    "u1",
+                    "title:测试 xxx cat:其他 #11 #22 #33",
+                    SimpleNamespace(),
+                )
+            )
+
+            assert result["status"] == "success"
+            item = db.items.get_item(result["item_id"], "u1")
+            assert item is not None
+            assert item.title == "测试"
+            assert item.content == "xxx"
+            assert item.category == "其他"
+            assert item.tags == ["11", "22", "33"]
+        finally:
+            db.cleanup()
+
+    def test_note_add_title_token_can_be_extracted_from_middle(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_title_token_middle.db"))
+
+        try:
+            handler = NoteHandler(db=db)
+            result = asyncio.run(
+                handler.create_note(
+                    "u1",
+                    "xxx title:测试 cat:其他 #11 #22 #33",
+                    SimpleNamespace(),
+                )
+            )
+
+            assert result["status"] == "success"
+            item = db.items.get_item(result["item_id"], "u1")
+            assert item is not None
+            assert item.title == "测试"
+            assert item.content == "xxx"
+            assert item.category == "其他"
+            assert item.tags == ["11", "22", "33"]
+        finally:
+            db.cleanup()
+
     def test_note_add_preserves_markdown_heading_in_body(self, tmp_path):
         import sys
 
