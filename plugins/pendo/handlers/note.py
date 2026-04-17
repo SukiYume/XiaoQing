@@ -8,8 +8,6 @@ from datetime import datetime
 import re
 import logging
 from ..models.item import ItemType, NoteItem
-from ..models.constants import ItemFields
-from ..core.exceptions import OwnershipException
 from ..core.types import PendoContext, CommandMessage
 from core.plugin_base import run_sync
 from ..utils.db_ops import DbOpsMixin
@@ -19,7 +17,6 @@ from ..config import PendoConfig
 from ..utils.time_utils import _parse_time_range_core
 from ..utils.formatters import (
     ItemFormatter,
-    format_success_message,
     extract_kv_param,
     paginate,
 )
@@ -142,12 +139,6 @@ class NoteHandler(DbOpsMixin):
         return {"status": "success", "message": message, "item_id": item_id}
 
     @staticmethod
-    def _generate_note_title(content: str) -> str:
-        """取第一行或前50字符作标题，末尾加 '...' 表示截断"""
-        title = content.split("\n")[0][:50] if "\n" in content else content[:50]
-        return title + "..." if len(title) == 50 else title
-
-    @staticmethod
     def _collect_category_tags(cat_items: list) -> tuple[set[str], int]:
         """收集分类下的所有标签，返回 (tags_set, items_with_tags_count)"""
         category_tags: set[str] = set()
@@ -165,10 +156,13 @@ class NoteHandler(DbOpsMixin):
         - 内容 cat:xxx #tag1 #tag2
         - title:标题 content 详细内容 cat:xxx #tag1 #tag2
         - title:标题\n正文多行... cat:xxx #tag1 #tag2
+        - 内容 title:标题 cat:xxx #tag1 #tag2
         """
         meta = self._extract_note_metadata(text)
         content_text = meta["text"]
         title, content_text = self._split_explicit_title(content_text)
+        if not title:
+            title, content_text = self._extract_inline_title_token(content_text)
 
         # 如果没有显式的 title，title 和 content 都是 content_text
         if not title:
@@ -182,6 +176,18 @@ class NoteHandler(DbOpsMixin):
         }
 
     @staticmethod
+    def _normalize_title_token(raw_value: str) -> str | None:
+        """清洗 title token 值，支持可选引号并过滤空值。"""
+        value = (raw_value or "").strip()
+        if not value:
+            return None
+
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1].strip()
+
+        return value or None
+
+    @staticmethod
     def _split_explicit_title(text: str) -> tuple[str | None, str]:
         """拆分 title: 前缀，兼容 inline content 和换行正文。"""
         content_text = (text or "").strip()
@@ -189,12 +195,16 @@ class NoteHandler(DbOpsMixin):
             return None, content_text
 
         title_payload = content_text[6:].lstrip()
-        title = None
+        if not title_payload:
+            return None, content_text
 
         if title_payload.startswith('"'):
             end_quote = title_payload.find('"', 1)
             if end_quote > 0:
-                title = title_payload[1:end_quote].strip()
+                title = NoteHandler._normalize_title_token(title_payload[1:end_quote])
+                if not title:
+                    return None, content_text
+
                 remainder = title_payload[end_quote + 1 :].lstrip()
                 if remainder.lower().startswith("content"):
                     remainder = re.sub(r"^content[\s:]+", "", remainder, flags=re.IGNORECASE)
@@ -209,9 +219,50 @@ class NoteHandler(DbOpsMixin):
             return inline_match.group(1).strip(), inline_match.group(2).strip()
 
         first_line, sep, remainder = title_payload.partition("\n")
-        if first_line.strip():
-            return first_line.strip(), remainder.strip() if sep else ""
+        if sep:
+            if first_line.strip():
+                return first_line.strip(), remainder.strip()
+            return None, content_text
+
+        # 单行未加 content 关键字时，按 metadata token 语义处理：title 值取第一个 token。
+        parts = title_payload.split(maxsplit=1)
+        if parts:
+            title_token = NoteHandler._normalize_title_token(parts[0])
+            if not title_token:
+                return None, content_text
+
+            remainder_text = parts[1].strip() if len(parts) > 1 else ""
+            return title_token, remainder_text
+
         return None, content_text
+
+    @staticmethod
+    def _extract_inline_title_token(text: str) -> tuple[str | None, str]:
+        """从文本任意位置提取 title: token（如：xxx title:测试）。"""
+        content_text = (text or "").strip()
+        if not content_text:
+            return None, content_text
+
+        token_match = re.search(
+            r'(^|\s)(title:(?:"[^"]+"|\S+))(?=\s|$)',
+            content_text,
+            flags=re.IGNORECASE,
+        )
+        if not token_match:
+            return None, content_text
+
+        token = token_match.group(2)
+        raw_title = token[6:]
+        title = NoteHandler._normalize_title_token(raw_title)
+
+        if not title:
+            return None, content_text
+
+        before = content_text[: token_match.start(2)].strip()
+        after = content_text[token_match.end(2) :].strip()
+        remaining = f"{before} {after}".strip() if before and after else (before or after)
+
+        return title, remaining
 
     @classmethod
     def _extract_note_metadata(cls, text: str) -> dict[str, Any]:
