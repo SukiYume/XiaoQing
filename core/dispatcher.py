@@ -28,7 +28,11 @@ from . import constants
 from .clock import IClock, IRandom, SystemClock, SystemRandom
 from .metrics import MetricsCollector
 from .interfaces import AdminCheck, ConfigProvider, ContextFactory, PluginRegistry
-from .message import compile_bot_name_pattern, normalize_message, parse_text_command_context
+from .message import (
+    compile_bot_name_pattern,
+    parse_text_command_context,
+    scan_message,
+)
 from .models import OneBotEvent
 from pydantic import ValidationError
 from .router import CommandRouter
@@ -93,8 +97,20 @@ class MessageParser:
 
     def parse(self, event: dict[str, Any]) -> MessageContext | None:
         """解析消息事件，构建消息上下文"""
-        text, user_id, group_id = normalize_message(event)
-        if not text:
+        self.refresh_prefix_cache()
+        bot_name = self._cached_bot_name
+        prefixes = self._cached_prefixes
+        self_id = str(event.get("self_id", "") or "")
+        message_scan = scan_message(
+            event.get("message"),
+            self_id=self_id,
+            raw_message=str(event.get("raw_message", "") or ""),
+        )
+        text = message_scan.text.strip()
+        user_id = event.get("user_id")
+        group_id = event.get("group_id")
+
+        if not text and not message_scan.has_media:
             logger.debug(
                 "Drop empty message: post_type=%s message_type=%s message_kind=%s",
                 event.get("post_type"),
@@ -102,11 +118,6 @@ class MessageParser:
                 type(event.get("message")).__name__,
             )
             return None
-
-        self.refresh_prefix_cache()
-        bot_name = self._cached_bot_name
-        prefixes = self._cached_prefixes
-        self_id = str(event.get("self_id", ""))
 
         # 忽略来自自己的消息，防止循环触发
         if self_id and user_id and str(user_id) == self_id:
@@ -119,6 +130,7 @@ class MessageParser:
             prefixes=prefixes,
             self_id=self_id,
             bot_name_pattern=self._bot_name_pattern,
+            message_scan=message_scan,
         )
 
         # 构建上下文
