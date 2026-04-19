@@ -15,7 +15,7 @@ from urllib.parse import unquote, unquote_to_bytes, urlparse
 from core.plugin_base import ensure_dir, load_json, write_json
 
 from ..helper_utils import _iter_message_segments
-from ..llm.llm_client import chat_completions
+from ..llm.llm_client import LLMError, chat_completions
 from .qq_face import describe_face_segment
 
 _SUPPORTED_MEDIA_TYPES = frozenset({"image", "mface", "face"})
@@ -297,6 +297,27 @@ def _build_marker(kind: str, description: str, emotion_tags: tuple[str, ...]) ->
     return f"[图片：{desc}]"
 
 
+def _build_context_marker(rendered: RenderedMedia) -> str:
+    marker = rendered.marker.strip()
+    if rendered.kind != "emoji" or not marker.startswith("[表情包："):
+        return marker
+
+    description = rendered.description.strip()
+    if not description or _is_generic_media_label(description):
+        return marker
+
+    label = "，".join(rendered.emotion_tags[:2]).strip()
+    if not label:
+        return marker
+
+    normalized_label = _normalize_media_label(label)
+    normalized_description = _normalize_media_label(description)
+    if not normalized_description or normalized_description == normalized_label:
+        return marker
+
+    return f"[表情包：{label}；内容：{description}]"
+
+
 def _normalize_media_label(value: str) -> str:
     text = str(value or "").strip()
     if text.startswith("[") and text.endswith("]"):
@@ -397,6 +418,39 @@ def _vision_plugin_secrets(context) -> tuple[dict[str, Any], dict[str, Any], str
     return plugin_secrets, providers, default_name
 
 
+def _normalize_provider_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        item = value.strip()
+        return [item] if item else []
+    if isinstance(value, (list, tuple)):
+        items: list[str] = []
+        for raw in value:
+            item = str(raw or "").strip()
+            if item and item not in items:
+                items.append(item)
+        return items
+    return []
+
+
+def _build_media_provider_secrets(
+    provider_name: str,
+    provider_config: dict[str, Any],
+    *,
+    endpoint_path: str,
+    scope: str,
+) -> dict[str, Any]:
+    return {
+        "api_base": str(provider_config.get("api_base", "") or "").strip(),
+        "api_key": str(provider_config.get("api_key", "") or "").strip(),
+        "model": str(provider_config.get("model", "") or "").strip(),
+        "endpoint_path": str(provider_config.get("endpoint_path", endpoint_path) or "").strip(),
+        "proxy": str(provider_config.get("proxy", "") or "").strip(),
+        "_provider_name": provider_name,
+        "_provider_scope": scope,
+        "_vision_enabled": True,
+    }
+
+
 def _legacy_direct_vision_overrides(cfg) -> dict[str, str]:
     return {
         "api_base": str(getattr(cfg, "vision_api_base", "") or "").strip(),
@@ -422,8 +476,10 @@ def _explicit_media_llm_requested(context, runtime) -> bool:
 def _has_media_llm_capability(context, runtime) -> bool:
     if not _explicit_media_llm_requested(context, runtime):
         return False
-    secrets = _resolve_media_llm_secrets(context, runtime)
-    return all(str(secrets.get(field, "") or "").strip() for field in ("api_base", "api_key", "model"))
+    for secrets in _resolve_media_llm_secret_candidates(context, runtime):
+        if all(str(secrets.get(field, "") or "").strip() for field in ("api_base", "api_key", "model")):
+            return True
+    return False
 
 
 def _looks_like_source_placeholder(
@@ -1002,30 +1058,70 @@ async def _call_media_llm(
     *,
     context,
     runtime,
-    secrets: dict[str, Any],
     messages: list[dict[str, Any]],
     temperature: float,
     top_p: float,
     max_tokens: int,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     cfg = _media_cfg(runtime)
     if cfg is None:
-        return ""
-    return await chat_completions(
-        session=context.http_session,
-        api_base=str(secrets.get("api_base", "") or ""),
-        api_key=str(secrets.get("api_key", "") or ""),
-        model=str(secrets.get("model", "") or ""),
-        messages=messages,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
-        timeout_seconds=float(cfg.vision_timeout_seconds),
-        max_retry=int(cfg.vision_max_retry),
-        retry_interval_seconds=float(cfg.vision_retry_interval_seconds),
-        proxy=str(secrets.get("proxy", "") or ""),
-        endpoint_path=str(secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path),
-    )
+        return "", {}
+
+    candidates = _resolve_media_llm_secret_candidates(context, runtime)
+    if not candidates:
+        return "", {}
+
+    previous_provider: dict[str, Any] | None = None
+    last_exc: Exception | None = None
+
+    for index, secrets in enumerate(candidates):
+        if index > 0 and previous_provider is not None:
+            _media_log(
+                context,
+                runtime,
+                step="media.analyze.provider_fallback",
+                fields={
+                    "from_provider": previous_provider.get("_provider_name", ""),
+                    "to_provider": secrets.get("_provider_name", ""),
+                    "to_model": secrets.get("model", ""),
+                    "reason": "retryable_http_429",
+                },
+                level="warning",
+            )
+        try:
+            output = await chat_completions(
+                session=context.http_session,
+                api_base=str(secrets.get("api_base", "") or ""),
+                api_key=str(secrets.get("api_key", "") or ""),
+                model=str(secrets.get("model", "") or ""),
+                messages=messages,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                timeout_seconds=float(cfg.vision_timeout_seconds),
+                max_retry=int(cfg.vision_max_retry),
+                retry_interval_seconds=float(cfg.vision_retry_interval_seconds),
+                proxy=str(secrets.get("proxy", "") or ""),
+                endpoint_path=str(secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path),
+            )
+            return output, secrets
+        except Exception as exc:
+            setattr(exc, "_media_provider_name", secrets.get("_provider_name", ""))
+            setattr(exc, "_media_provider_scope", secrets.get("_provider_scope", ""))
+            setattr(exc, "_media_provider_model", secrets.get("model", ""))
+            last_exc = exc
+            if (
+                index + 1 < len(candidates)
+                and isinstance(exc, LLMError)
+                and str(exc).startswith("retryable_http_429:")
+            ):
+                previous_provider = secrets
+                continue
+            raise
+
+    if last_exc is not None:
+        raise last_exc
+    return "", candidates[0]
 
 
 def _parse_detail_analysis_output(
@@ -1086,8 +1182,7 @@ async def _refine_emoji_analysis_with_llm(
     resolved: ResolvedMedia,
     context,
     runtime,
-    secrets: dict[str, Any],
-) -> MediaAnalysisDraft | None:
+) -> tuple[MediaAnalysisDraft, dict[str, Any]]:
     prompt = (
         "你要把表情包的详细描述压缩成适合聊天使用的短标签 JSON。"
         "只输出 JSON，不要额外解释。"
@@ -1109,10 +1204,9 @@ async def _refine_emoji_analysis_with_llm(
             "content": prompt + "\n输入数据：" + json.dumps(detail_block, ensure_ascii=False),
         },
     ]
-    output = await _call_media_llm(
+    output, used_secrets = await _call_media_llm(
         context=context,
         runtime=runtime,
-        secrets=secrets,
         messages=messages,
         temperature=0.2,
         top_p=0.9,
@@ -1128,19 +1222,22 @@ async def _refine_emoji_analysis_with_llm(
     emotion_tags = _normalize_emotion_tags(data.get("emotion_tags") or data.get("emotions"))
     if not emotion_tags:
         emotion_tags = draft.emotion_tags
-    return MediaAnalysisDraft(
-        kind="emoji",
-        description=description,
-        visible_text=draft.visible_text,
-        emotion_tags=emotion_tags,
-        raw_output=str(output or "").strip(),
+    return (
+        MediaAnalysisDraft(
+            kind="emoji",
+            description=description,
+            visible_text=draft.visible_text,
+            emotion_tags=emotion_tags,
+            raw_output=str(output or "").strip(),
+        ),
+        used_secrets,
     )
 
 
-def _resolve_media_llm_secrets(context, runtime) -> dict[str, Any]:
+def _resolve_media_llm_secret_candidates(context, runtime) -> list[dict[str, Any]]:
     cfg = _media_cfg(runtime)
     if cfg is None:
-        return {
+        return [{
             "api_base": "",
             "api_key": "",
             "model": "",
@@ -1149,55 +1246,67 @@ def _resolve_media_llm_secrets(context, runtime) -> dict[str, Any]:
             "_provider_name": "",
             "_provider_scope": "none",
             "_vision_enabled": False,
-        }
+        }]
 
     plugin_secrets, vision_providers, vision_default = _vision_plugin_secrets(context)
+    vision_cfg = plugin_secrets.get("vision") or {}
     chat_providers = plugin_secrets.get("providers") or {}
     provider_name = str(getattr(cfg, "vision_provider", "") or "").strip()
+    endpoint_path = str(getattr(runtime.cfg, "endpoint_path", "") or "")
 
-    secrets: dict[str, Any] = {
+    empty: dict[str, Any] = {
         "api_base": "",
         "api_key": "",
         "model": "",
-        "endpoint_path": str(getattr(runtime.cfg, "endpoint_path", "") or ""),
+        "endpoint_path": endpoint_path,
         "proxy": "",
         "_provider_name": "",
         "_provider_scope": "none",
         "_vision_enabled": False,
     }
 
-    selected_provider: dict[str, Any] = {}
-    if provider_name and provider_name in vision_providers:
-        selected_provider = vision_providers.get(provider_name) or {}
-        secrets["_provider_name"] = provider_name
-        secrets["_provider_scope"] = "vision"
-        secrets["_vision_enabled"] = True
-    elif not provider_name and vision_default and vision_default in vision_providers:
-        selected_provider = vision_providers.get(vision_default) or {}
-        secrets["_provider_name"] = vision_default
-        secrets["_provider_scope"] = "vision_default"
-        secrets["_vision_enabled"] = True
-    elif provider_name and provider_name in chat_providers:
-        selected_provider = chat_providers.get(provider_name) or {}
-        secrets["_provider_name"] = provider_name
-        secrets["_provider_scope"] = "chat_provider"
-        secrets["_vision_enabled"] = True
+    provider_candidates: list[dict[str, Any]] = []
+    provider_names: list[str] = []
+    root_fallbacks = _normalize_provider_list(vision_cfg.get("fallbacks"))
 
-    if selected_provider:
-        secrets.update(
-            {
-                "api_base": str(selected_provider.get("api_base", "") or "").strip(),
-                "api_key": str(selected_provider.get("api_key", "") or "").strip(),
-                "model": str(selected_provider.get("model", "") or "").strip(),
-                "endpoint_path": str(
-                    selected_provider.get("endpoint_path", secrets.get("endpoint_path", "")) or ""
-                ).strip(),
-                "proxy": str(selected_provider.get("proxy", "") or "").strip(),
-            }
+    if provider_name and provider_name in vision_providers:
+        provider_names.append(provider_name)
+        provider_names.extend(_normalize_provider_list((vision_providers.get(provider_name) or {}).get("fallbacks")))
+        provider_names.extend(root_fallbacks)
+    elif not provider_name and vision_default and vision_default in vision_providers:
+        provider_names.append(vision_default)
+        provider_names.extend(_normalize_provider_list((vision_providers.get(vision_default) or {}).get("fallbacks")))
+        provider_names.extend(root_fallbacks)
+    elif provider_name and provider_name in chat_providers:
+        provider_candidates.append(
+            _build_media_provider_secrets(
+                provider_name,
+                chat_providers.get(provider_name) or {},
+                endpoint_path=endpoint_path,
+                scope="chat_provider",
+            )
+        )
+
+    seen: set[str] = set()
+    for idx, name in enumerate(provider_names):
+        if not name or name in seen or name not in vision_providers:
+            continue
+        seen.add(name)
+        scope = "vision" if provider_name else "vision_default"
+        if idx > 0:
+            scope = "vision_fallback"
+        provider_candidates.append(
+            _build_media_provider_secrets(
+                name,
+                vision_providers.get(name) or {},
+                endpoint_path=endpoint_path,
+                scope=scope,
+            )
         )
 
     overrides = _legacy_direct_vision_overrides(cfg)
     if any(overrides.values()):
+        secrets = provider_candidates[0] if provider_candidates else dict(empty)
         secrets["_provider_name"] = secrets.get("_provider_name", "") or "legacy_direct"
         secrets["_provider_scope"] = "legacy_direct"
         secrets["_vision_enabled"] = True
@@ -1207,8 +1316,14 @@ def _resolve_media_llm_secrets(context, runtime) -> dict[str, Any]:
                 continue
             if value:
                 secrets[key] = value
+        return [secrets]
 
-    return secrets
+    return provider_candidates or [empty]
+
+
+def _resolve_media_llm_secrets(context, runtime) -> dict[str, Any]:
+    candidates = _resolve_media_llm_secret_candidates(context, runtime)
+    return candidates[0] if candidates else {}
 
 
 async def _analyze_media_with_llm(
@@ -1316,10 +1431,9 @@ async def _analyze_media_with_llm(
     ]
 
     try:
-        detail_output = await _call_media_llm(
+        detail_output, used_secrets = await _call_media_llm(
             context=context,
             runtime=runtime,
-            secrets=secrets,
             messages=messages,
             temperature=0.2,
             top_p=0.9,
@@ -1331,8 +1445,8 @@ async def _analyze_media_with_llm(
             runtime,
             step="media.analyze.fail",
             fields={
-                "provider": secrets.get("_provider_name", ""),
-                "model": secrets.get("model", ""),
+                "provider": getattr(exc, "_media_provider_name", secrets.get("_provider_name", "")),
+                "model": getattr(exc, "_media_provider_model", secrets.get("model", "")),
                 "media_hash": resolved.media_hash[:12],
                 "error": f"{type(exc).__name__}: {exc}",
             },
@@ -1350,8 +1464,8 @@ async def _analyze_media_with_llm(
         runtime,
         step="media.analyze.detail.ok",
         fields={
-            "provider": secrets.get("_provider_name", ""),
-            "model": secrets.get("model", ""),
+            "provider": used_secrets.get("_provider_name", ""),
+            "model": used_secrets.get("model", ""),
             "media_hash": resolved.media_hash[:12],
             "kind": detail.kind,
             "description": detail.description,
@@ -1363,22 +1477,22 @@ async def _analyze_media_with_llm(
 
     kind = detail.kind
     refined: MediaAnalysisDraft | None = None
+    refined_provider: dict[str, Any] = used_secrets
     if kind == "emoji":
         try:
-            refined = await _refine_emoji_analysis_with_llm(
+            refined, refined_provider = await _refine_emoji_analysis_with_llm(
                 detail,
                 resolved=resolved,
                 context=context,
                 runtime=runtime,
-                secrets=secrets,
             )
             _media_log(
                 context,
                 runtime,
                 step="media.analyze.refine.ok",
                 fields={
-                    "provider": secrets.get("_provider_name", ""),
-                    "model": secrets.get("model", ""),
+                    "provider": refined_provider.get("_provider_name", ""),
+                    "model": refined_provider.get("model", ""),
                     "media_hash": resolved.media_hash[:12],
                     "description": refined.description,
                     "emotion_tags": "，".join(refined.emotion_tags),
@@ -1391,8 +1505,8 @@ async def _analyze_media_with_llm(
                 runtime,
                 step="media.analyze.refine.fail",
                 fields={
-                    "provider": secrets.get("_provider_name", ""),
-                    "model": secrets.get("model", ""),
+                    "provider": getattr(exc, "_media_provider_name", used_secrets.get("_provider_name", "")),
+                    "model": getattr(exc, "_media_provider_model", used_secrets.get("model", "")),
                     "media_hash": resolved.media_hash[:12],
                     "error": f"{type(exc).__name__}: {exc}",
                 },
@@ -1713,8 +1827,10 @@ def _compose_effective_user_text(
             ordered_blocks.append(flushed)
         text_buffer = ""
         rendered = next(media_iter, None)
-        if rendered is not None and rendered.marker.strip():
-            ordered_blocks.append(rendered.marker.strip())
+        if rendered is not None:
+            context_marker = _build_context_marker(rendered)
+            if context_marker.strip():
+                ordered_blocks.append(context_marker.strip())
 
     flushed = text_buffer.strip()
     if flushed:
