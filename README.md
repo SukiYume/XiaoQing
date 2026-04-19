@@ -38,7 +38,7 @@
 
 ### 🧠 xiaoqing_chat
 
-面向聊天体验的主插件，包含记忆、回复检查、行为规划、表达系统等能力。
+面向聊天体验的主插件，包含拟人化文本对话、图片/表情包理解、本地表情包回复、记忆、回复检查、行为规划、表达系统等能力。
 
 → [查看插件目录](plugins/xiaoqing_chat)
 
@@ -204,25 +204,48 @@ Inbound server started ...
 ### 🧠 xiaoqing_chat
 
 > [!IMPORTANT]
-> xiaoqing_chat 依赖 LLM API 才能工作，需在 `config/secrets.json` 中配置（兼容 OpenAI 接口格式）：
+> `xiaoqing_chat` 当前建议视为一次 **小版本更新**：从 `0.1.x` 升到 `0.2.0`。原因是它新增了图片上下文、QQ 表情参与对话、本地表情包库与视觉模型配置，但没有改掉 `/xc` 命令入口，也没有引入必须迁移的破坏性配置。
+>
+> `xiaoqing_chat` 依赖聊天 LLM，若要启用图片/表情包理解，还需要额外配置视觉模型。推荐在 `config/secrets.json` 中按 provider 结构配置：
 > ```json
 > {
 >   "plugins": {
 >     "xiaoqing_chat": {
->       "api_key": "sk-xxx",
->       "api_base": "https://api.openai.com/v1",
->       "model": "gpt-4o-mini"
+>       "default": "deepseek",
+>       "providers": {
+>         "deepseek": {
+>           "api_base": "https://api.deepseek.com",
+>           "api_key": "sk-xxx",
+>           "model": "deepseek-chat",
+>           "endpoint_path": "/v1/chat/completions"
+>         }
+>       },
+>       "vision": {
+>         "default": "glm-4.6v-flash",
+>         "providers": {
+>           "glm-4.6v-flash": {
+>             "api_base": "https://open.bigmodel.cn/api/paas/v4",
+>             "api_key": "your-vision-key",
+>             "model": "glm-4.6v-flash",
+>             "endpoint_path": "/chat/completions"
+>           }
+>         }
+>       }
 >     }
 >   }
 > }
 > ```
 
+> [!TIP]
+> 启用媒体能力后，`xiaoqing_chat` 可以把用户发送的普通图片、NapCat `mface`、QQ 原生 `face` 表情都纳入正常对话流；识别为表情包的图片会自动落到 `plugins/xiaoqing_chat/figures/library/`，后续在合适语境下复用发送。
+
 | 命令 | 说明 |
 |------|------|
-| `/xc <内容>` | 智能对话 |
+| `/xc <内容>` | 智能对话；启用媒体能力后也能围绕图片/表情包继续聊 |
 | `/xc help` | 查看聊天插件帮助 |
-| `/xc reset` | 清空当前会话 |
-| `/xc stats` | 查看聊天状态 |
+| `/xc 清空` | 清空当前会话；兼容别名 `/xc reset` |
+| `/xc 统计` | 查看聊天状态；兼容别名 `/xc stats` |
+| `/xc 配置` / `/xc 记忆` / `/xc 表达` / `/xc 黑话` / `/xc 模型` | 查看配置、检索长期记忆、查看表达/黑话、查看或切换模型供应商 |
 
 ### 📅 pendo
 
@@ -392,6 +415,7 @@ XiaoQing/
 pytest                                          # 运行所有测试
 pytest tests/plugins/test_pendo.py             # 单个测试文件
 pytest tests/plugins/test_xiaoqing_chat.py     # 单个测试文件
+pytest tests/plugins/test_xiaoqing_chat_media.py  # xiaoqing_chat 图片/表情包链路
 ```
 
 ---

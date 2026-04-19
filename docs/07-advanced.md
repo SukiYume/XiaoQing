@@ -559,102 +559,57 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 
 ### 核心特性
 
-#### 1. 长期记忆系统
+#### 1. 长期记忆 + 人物资料
 
-使用向量数据库存储对话历史，实现长期记忆。
+`xiaoqing_chat` 会同时维护会话记忆、人物资料和摘要记忆。当前回复阶段会把最近对话、相关长期记忆、当前说话人的已知事实一起送入 prompt。
 
 **工作原理**：
 ```
 用户发送消息
     ↓
-向量化文本（embedding）
+写入会话历史
     ↓
-查询相似历史（向量检索）
+提取人物事实 / 主题摘要
     ↓
-构建上下文（包含相关历史）
+查询相关长期记忆
     ↓
-调用 LLM 生成回复
+构建回复 prompt（记忆 + 人设 + 表达习惯 + 当前目标）
     ↓
-保存对话到向量数据库
+调用 LLM 生成回复并写回会话
 ```
 
-**配置**：
-```json
-{
-  "plugins": {
-    "xiaoqing_chat": {
-      "memory_enabled": true,
-      "memory_max_entries": 1000,
-      "memory_similarity_threshold": 0.7
-    }
-  }
-}
-```
+相关配置主要在 `plugins/xiaoqing_chat/config/xiaoqing_config.json` 的 `memory` / `summarizer` / `goal` 段。
 
-#### 2. 情绪系统
+#### 2. 拟人化表达系统
 
-机器人有自己的"心情"，会根据对话历史调整。
+拟人化不是靠单句 system prompt 硬演，而是几层一起作用：
 
-**情绪值范围**：-1.0（负面）到 1.0（正面）
+1. `personality.identity` 和随机 `states`
+2. 从对话里学到的表达方式
+3. 黑话/梗解释
+4. reply checker 和 rewrite，把回复压回“短、口语、像真人”
+5. PFC / goal，让它知道这轮为什么要说话
 
-**影响因素**：
-- 用户输入的情感倾向
-- 对话频率
-- 话题类型
+#### 3. 图片与表情包进入正常对话流
 
-**示例**：
-```python
-# 情绪影响回复风格
-if emotion > 0.5:
-    # 高兴状态
-    return "好哒！我帮你看看~ 😊"
-elif emotion < -0.5:
-    # 低落状态
-    return "嗯...我尽力帮你吧 😔"
-else:
-    # 正常状态
-    return "好的，让我来处理~"
-```
-
-**配置**：
-```json
-{
-  "plugins": {
-    "xiaoqing_chat": {
-      "emotion_enabled": true,
-      "emotion_decay_rate": 0.01,
-      "emotion_impact_factor": 0.1
-    }
-  }
-}
-```
-
-#### 3. 表情学习
-
-从用户对话中学习使用表情符号。
+启用媒体能力后，用户发来的图片、NapCat `mface`、QQ 原生 `face` 不再被视为“空消息”。
 
 **工作原理**：
 ```
-用户: "这个功能太棒了！😍"
+用户发送图片 / 表情包
     ↓
-分析表情使用场景
+解析 OneBot 消息段
     ↓
-记录到表情库
+必要时下载或回收真实图片
     ↓
-类似场景时复用表情
+视觉模型分析成 [图片：...] / [表情包：...] / [QQ表情：...]
+    ↓
+按原始 segment 顺序拼回有效用户输入
+    ↓
+进入和纯文本相同的频率控制、记忆、回复检查链路
 ```
 
-**配置**：
-```json
-{
-  "plugins": {
-    "xiaoqing_chat": {
-      "expression_learning": true,
-      "expression_min_occurrences": 3
-    }
-  }
-}
-```
+识别成表情包的图片会进入 `plugins/xiaoqing_chat/figures/library/`，后续可作为本地表情包回复素材。
 
 ### 智能回复控制
 
@@ -730,7 +685,7 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
     """集成外部数据源"""
     
     # 检查是否需要查询外部数据
-    if "天气" in text or "天气" in text:
+    if "天气" in text:
         # 调用天气 API
         weather = await fetch_weather(text, context)
         
@@ -746,6 +701,9 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
     # 正常对话
     return await call_xiaoqing_chat(text, context)
 ```
+
+> [!NOTE]
+> 如果你要扩展图片相关行为，优先看 `plugins/xiaoqing_chat/media/event_media.py`、`emoji_library.py`、`emoji_reply.py`。当前设计是“主回复模型仍然输出文本，图片回复作为后处理步骤决定”，不要把内联图片标记重新塞回主回复文本里。
 
 ---
 

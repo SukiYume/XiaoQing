@@ -257,6 +257,16 @@ python main.py
 机器人: [对话统计信息...]
 ```
 
+如果你已经配置了 `xiaoqing_chat.vision`，建议再补两条多模态冒烟：
+
+```
+你: [发一张普通图片]
+机器人: [围绕图片内容自然接话]
+
+你: [发一个 QQ 表情 / NapCat 收藏表情]
+机器人: [把表情内容纳入对话，必要时也可能回一张本地表情包]
+```
+
 ### 个人助理测试（pendo）
 
 ```
@@ -374,13 +384,19 @@ XiaoQing 支持两种闲聊模式：
    {
      "plugins": {
         "xiaoqing_chat": {
-          "api_key": "your-api-key",
-          "api_base": "https://api.openai.com/v1",
-          "model": "gpt-4o-mini"
+          "default": "deepseek",
+          "providers": {
+            "deepseek": {
+              "api_base": "https://api.deepseek.com",
+              "api_key": "your-api-key",
+              "model": "deepseek-chat",
+              "endpoint_path": "/v1/chat/completions"
+            }
+          }
         }
       }
     }
-    ```
+   ```
 
 2. **查看日志确认错误**
    ```bash
@@ -392,6 +408,7 @@ XiaoQing 支持两种闲聊模式：
    ```
 
 3. **xiaoqing_chat 的回复频率由插件内部控制**，不是所有消息都会回复
+4. **如果是图片/表情包不回复**，检查 `config/secrets.json -> plugins.xiaoqing_chat.vision` 是否已配置，以及日志中是否出现 `media.analyze.skip` / `media.analyze.fail`
 
 ### Q: 如何查看详细日志？
 
