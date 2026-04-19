@@ -626,9 +626,14 @@ inbound_ws_max_workers 个 worker 从队列取消息 (默认 8 个)
 
 ### 8.8 性能监控
 
-查看队列状态：
+查看运行状态：
 ```
 GET /health
+```
+
+如果配置了 `inbound_token`，需要携带：
+```
+Authorization: Bearer <inbound_token>
 ```
 
 响应示例：
@@ -636,10 +641,29 @@ GET /health
 {
   "status": "ok",
   "ws_connections": 1,
+  "plugins_loaded": 28,
   "pending_jobs": 3,
   "active_sessions": 2
 }
 ```
+
+查看详细指标：
+```
+GET /metrics
+```
+
+`/metrics` 返回 `MetricsCollector` 聚合的插件执行统计；`/health` 与 `/metrics` 都由 Inbound HTTP 服务直接提供。
+
+### 8.9 出站发送路径
+
+所有插件最终都走统一的 `_send_action()` 发送链路：
+
+1. 优先复用当前事件上下文中的 action sink。
+2. 尝试发送到 OneBot WS Client。
+3. 若当前启用了 Inbound WS 且有活跃客户端，则广播给活跃客户端。
+4. 若仍不可用，则回退到 OneBot HTTP sender。
+
+这意味着在启用双通道部署时，WS 短暂断开不会直接导致消息静默丢失。
 
 ---
 

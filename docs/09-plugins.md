@@ -3,7 +3,7 @@
 本文档详细介绍 XiaoQing 中所有可用插件的功能、命令和配置说明。
 
 > [!NOTE]
-> 本文档的插件总数统计口径为仓库中包含 `plugin.json` 的目录，因此不包含 `plugins/xiaoqing_chat/memory/` 这类辅助子包。
+> 本文档的插件总数统计口径为仓库中包含 `plugin.json` 的目录，因此不包含 `plugins/xiaoqing_chat/memory/` 这类辅助子包，也不包含 `plugins/memo_deprecated/` 这类保留历史代码但已停用的目录。
 
 ## 📑 目录
 
@@ -66,21 +66,19 @@
     - [choice - 随机选择](#choice---随机选择)
       - [参数选项](#参数选项-1)
       - [使用示例](#使用示例-9)
-    - [memo - 笔记管理](#memo---笔记管理)
-      - [使用示例](#使用示例-10)
     - [wolframalpha - 万能计算器](#wolframalpha---万能计算器)
       - [特殊后缀](#特殊后缀)
-      - [使用示例](#使用示例-11)
+      - [使用示例](#使用示例-10)
     - [shell - 终端命令](#shell---终端命令)
       - [功能特性](#功能特性-1)
       - [安全设置](#安全设置)
-      - [使用示例](#使用示例-12)
+      - [使用示例](#使用示例-11)
     - [url\_parser - 链接解析](#url_parser---链接解析)
     - [qingssh - SSH 远程控制](#qingssh---ssh-远程控制)
       - [连接管理逻辑（核心机制）](#连接管理逻辑核心机制)
       - [交互与隔离示例](#交互与隔离示例)
       - [命令列表](#命令列表-5)
-      - [使用示例](#使用示例-13)
+      - [使用示例](#使用示例-12)
       - [高级功能：用户名指定](#高级功能用户名指定)
       - [配置说明](#配置说明-3)
       - [注意事项](#注意事项-2)
@@ -88,30 +86,30 @@
     - [github - GitHub Trending](#github---github-trending)
       - [参数选项](#参数选项-2)
       - [定时任务](#定时任务-4)
-      - [使用示例](#使用示例-14)
+      - [使用示例](#使用示例-13)
     - [earthquake - 地震快讯](#earthquake---地震快讯)
       - [定时任务](#定时任务-5)
     - [signin - 自动签到](#signin---自动签到)
       - [支持平台](#支持平台)
       - [配置说明](#配置说明-4)
       - [定时任务](#定时任务-6)
-      - [使用示例](#使用示例-15)
+      - [使用示例](#使用示例-14)
     - [twitter - Twitter 图片](#twitter---twitter-图片)
       - [配置说明](#配置说明-5)
       - [功能特性](#功能特性-2)
       - [定时任务](#定时任务-7)
-      - [使用示例](#使用示例-16)
+      - [使用示例](#使用示例-15)
     - [jupyter - 代码执行](#jupyter---代码执行)
       - [功能特性](#功能特性-3)
-      - [使用示例](#使用示例-17)
+      - [使用示例](#使用示例-16)
     - [adnmb - A岛匿名版](#adnmb---a岛匿名版)
-      - [使用示例](#使用示例-18)
+      - [使用示例](#使用示例-17)
   - [🎮 娱乐游戏](#-娱乐游戏)
     - [qingpet - QQ群宠物养成系统](#qingpet---qq群宠物养成系统)
       - [核心特性](#核心特性-3)
       - [命令列表](#命令列表-6)
       - [定时任务](#定时任务-8)
-      - [使用示例](#使用示例-19)
+      - [使用示例](#使用示例-18)
     - [guess\_number - 猜数字游戏](#guess_number---猜数字游戏)
       - [难度选择](#难度选择)
       - [游戏流程](#游戏流程)
@@ -662,13 +660,13 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 ### voice - 语音功能
 
-基于 Azure Cognitive Services 的语音插件，支持 TTS 和 STT。
+基于 Azure Cognitive Services 的语音插件。当前公开命令面提供 TTS；STT 作为内部工具函数保留，供其他插件集成时复用。
 
 #### 功能特性
 
 - **文字转语音 (TTS)**: 支持 SSML，可自定义语音、风格、角色
-- **语音转文字 (STT)**: 详细的语音识别
-- **音频缓存**: 基于内容哈希的缓存机制
+- **内部 STT 能力**: 供框架内其他插件复用，不单独暴露命令
+- **音频缓存**: 基于文本与音色配置的缓存机制
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
@@ -723,11 +721,19 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
-| `chime` | `/chime`, `/frb` | 查看最新 FRB 重复暴 |
+| `chime` | `/chime`, `/frb` | 查看最新 FRB、列出已知条目或查询指定 FRB |
 
 #### 定时任务
 
 - 每天 **9:00** 和 **21:00** 自动检测并推送新发现
+
+#### 使用示例
+
+```
+/chime                # 查看最新重复暴
+/chime list           # 查看已知 FRB 列表
+/chime FRB20201124A   # 查询指定 FRB
+```
 
 ---
 
@@ -743,6 +749,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 ```
 /dict galaxy           # 查询"galaxy"
+/dict -e galaxy        # 精确匹配 galaxy
 /词典 黑洞             # 查询"黑洞"
 ```
 
@@ -997,6 +1004,7 @@ https://arxiv.org/abs/astro-ph/0701089
 - `-n <名称>`: 按名称查询（支持中国传统色）
 - `-r <RGB>`: 按 RGB 值查询
 - `-s <光谱型>`: 按恒星光谱型查询颜色
+- `-t [前缀]`: 列出全部光谱型，或按前缀过滤光谱型
 
 #### 使用示例
 
@@ -1004,6 +1012,8 @@ https://arxiv.org/abs/astro-ph/0701089
 /颜色 -n 天青           # 查询中国传统色"天青"
 /color -r 255,128,0    # 查询 RGB 颜色
 /色彩 -s G2V           # 查询太阳光谱型颜色
+/color -t              # 列出全部光谱型
+/color -t G            # 列出 G 开头的光谱型
 ```
 
 ---
@@ -1028,6 +1038,7 @@ https://arxiv.org/abs/astro-ph/0701089
 说明：
 - 默认模式使用有放回抽样；`-n` 大于选项数时，结果里允许重复项。
 - `-u/--unique` 模式下，`-n` 不能大于选项数。
+- 选项支持用引号包裹多词内容。
 
 #### 使用示例
 
@@ -1037,26 +1048,7 @@ https://arxiv.org/abs/astro-ph/0701089
 /choice 抽奖 小明 小红 小张 -n 3    # 选择3个
 /choice 问题 选项1 选项2 -u          # 去重选择
 /choice 问题 选项1 选项1 选项2       # 加权选择（选项1权重更高）
-```
-
----
-
-### memo - 笔记管理
-
-个人笔记管理，支持分类、搜索、删除。
-
-| 命令 | 触发词 | 说明 |
-|------|--------|------|
-| `memo` | `/memo`, `/笔记`, `/note` | 笔记操作 |
-
-#### 使用示例
-
-```
-/memo help             # 查看用法
-/memo add 买菜         # 添加笔记
-/memo list             # 列出所有笔记
-/memo search 买        # 搜索笔记
-/memo del 1            # 删除笔记
+/choice 晚饭 \"ice cream\" 披萨 -n 2  # 支持带空格的选项
 ```
 
 ---
@@ -1097,7 +1089,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
-| `shell` | `/shell`, `/sh`, `/exec` | 执行命令 |
+| `shell` | `/shell`, `/sh` | 执行命令 |
 | `shell list` | `/shell list`, `/shell 列表` | 查看白名单 |
 
 #### 功能特性
@@ -1138,8 +1130,8 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 /sh ls -la
 /sh python --version
 /sh ping -c 3 google.com
-/sh help                    # 显示帮助
 /sh list                    # 查看白名单
+/shell help                 # 显示帮助
 ```
 
 > ⚠️ **警告**: 此命令具有高危险性，请谨慎使用，仅管理员可用。
@@ -1160,6 +1152,8 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 - 通用网页
 
 如果网页提供 `og:image` 或 `twitter:image`，插件会在文字摘要后附带实际图片消息段。
+
+对于使用相对路径图片地址的网页，插件也会基于页面 URL 自动补全成绝对地址后再发送。
 
 ---
 
@@ -1212,13 +1206,13 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
 | `ssh` | `/ssh`, `/远程` | 连接服务器或进入交互会话 |
-| `ssh断开` | `/ssh断开`, `/disconnect` | 断开当前会话的连接 |
-| `ssh列表` | `/ssh列表`, `/list` | 查看已保存的服务器 |
-| `ssh状态` | `/ssh状态`, `/status` | 查看当前活跃的连接数和详情 |
-| `ssh添加` | `/ssh添加`, `/add` | 添加服务器配置 |
-| `ssh删除` | `/ssh删除`, `/remove` | 删除服务器配置 |
-| `ssh导入` | `/ssh导入`, `/import` | 从 ~/.ssh/config 导入 |
-| `sshconfig` | `/sshconfig` | 查看 ~/.ssh/config |
+| `ssh断开` | `/ssh断开`, `/sshdisconnect` | 断开当前会话的连接，或断开显式指定的服务器 |
+| `ssh列表` | `/ssh list`, `/ssh列表` | 查看已保存的服务器 |
+| `ssh状态` | `/ssh status`, `/ssh状态` | 查看当前活跃的连接数和详情 |
+| `ssh添加` | `/ssh add`, `/ssh添加` | 添加服务器配置 |
+| `ssh删除` | `/ssh remove`, `/ssh删除` | 删除服务器配置 |
+| `ssh导入` | `/ssh import`, `/ssh导入` | 从 ~/.ssh/config 导入 |
+| `sshconfig` | `/ssh config`, `/sshconfig` | 查看 ~/.ssh/config |
 | `showimg` | `/showimg` | 查看远程服务器上的图片 |
 
 #### 使用示例
@@ -1264,6 +1258,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 ```
 /ssh状态                    # 查看当前有多少活跃连接
 /ssh断开                    # 断开当前的连接
+/ssh断开 myserver           # 断开当前用户在当前群里的 myserver 连接
 ```
 
 **6. 导入配置**
@@ -1718,20 +1713,23 @@ Minecraft 服务器通信插件，支持多服务器、双向聊天和状态查�
 - **RCON 协议**: 标准 Minecraft RCON 通信
 - **双向聊天**: QQ ↔ MC 实时消息同步
 - **多服务器**: 支持连接多个服务器（不同群/私聊可连接不同服务器）
-- **日志监控**: 自动读取服务器日志
+- **日志监控**: 自动读取服务器 `latest.log`
 
 #### 使用示例
 
 ```
 /mc help                # 显示帮助
 /mcconnect 127.0.0.1:25575 password          # 连接服务器
-/mcconnect 127.0.0.1:25575 password /path/to/log # 连接服务器并指定日志路径
+/mcconnect 127.0.0.1:25575 password /path/to/latest.log # 连接服务器并指定日志路径
 /mc status             # 查看连接状态
 /mc list               # 查看在线玩家
 /mc time set day       # 发送命令到服务器
 /mc 大家好             # 向服务器发送消息
 /mcdisconnect          # 断开连接
 ```
+
+> [!NOTE]
+> 如果传入日志文件路径，插件会先校验它是否指向 `latest.log`，校验通过后才会建立 RCON 连接。
 
 #### 定时任务
 
@@ -1741,17 +1739,17 @@ Minecraft 服务器通信插件，支持多服务器、双向聊天和状态查�
 
 ## 📊 插件统计
 
-统计时间口径：当前仓库内 `plugins/**/plugin.json` 共 `29` 个。
+统计时间口径：当前仓库内 `plugins/**/plugin.json` 共 `28` 个。
 
 | 分类 | 数量 | 插件 |
 |------|------|------|
 | **核心** | 3 | bot_core, echo, pendo |
 | **聊天** | 4 | xiaoqing_chat, smalltalk, chat, voice |
 | **天文科学** | 7 | apod, arxiv_filter, chime, dict, ads_paper, astro_tools, color |
-| **实用工具** | 8 | choice, memo, wolframalpha, shell, url_parser, jupyter, adnmb, qingssh |
+| **实用工具** | 7 | choice, wolframalpha, shell, url_parser, jupyter, adnmb, qingssh |
 | **外部服务** | 4 | github, earthquake, signin, twitter |
 | **娱乐游戏** | 3 | qingpet, guess_number, minecraft |
-| **总计** | **29** | |
+| **总计** | **28** | |
 
 ---
 

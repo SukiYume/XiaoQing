@@ -16,7 +16,7 @@
 | 想尽快跑起来 | [01-getting-started.md](01-getting-started.md) | 安装、配置、连接 OneBot、基础验证 |
 | 想开发插件 | [03-plugin-development.md](03-plugin-development.md) | 插件结构、生命周期、最佳实践 |
 | 想排查部署/配置问题 | [06-configuration.md](06-configuration.md) | 配置项、示例、部署注意事项 |
-| 想看内置能力 | [09-plugins.md](09-plugins.md) | 29 个内置插件说明，统计口径为仓库中的 `plugin.json` |
+| 想看内置能力 | [09-plugins.md](09-plugins.md) | 28 个 active plugins 说明，统计口径为仓库中的 `plugin.json` |
 
 ---
 
@@ -106,3 +106,5 @@
 ---
 
 > 文档内容会随插件和配置演进而更新。发现示例与代码不一致时，请优先以仓库中的 `plugin.json`、`config/*.example` 和源码实现为准。
+
+> `docs/plans/` 用于本地规划、review 和临时笔记，默认被 `.gitignore` 忽略，不属于版本化文档的一部分。
