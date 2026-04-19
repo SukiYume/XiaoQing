@@ -473,7 +473,9 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 ### xiaoqing_chat - 小青拟人聊天
 
-基于 MaiBot 项目设计理念深度重构的拟人聊天插件，实现高度拟人化的对话体验。采用向量记忆检索、情绪系统、表达学习等先进特性，让对话更加自然和有趣。
+当前版本建议按 **小版本 `0.2.0`** 理解：它在保持 `/xc` 命令体系和基础部署方式不变的前提下，新增了图片上下文、QQ 表情参与对话、本地表情包库与视觉模型配置。
+
+基于 MaiBot 项目设计理念做了轻量化重构，目标不是把整套 agent/action 系统搬过来，而是把“像真人聊天”这件事做扎实：文本对话、图片理解、表情包回复、长期记忆和表达学习都围绕一个纯聊天主链运行。
 
 #### 核心特性
 
@@ -483,36 +485,70 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 | **行为规划** | LLM 智能判断是否需要回复，懂得在合适的时间说话 |
 | **频率控制** | 防止刷屏，支持最小间隔、每分钟上限、连续回复冷却 |
 | **表达学习** | 从对话中学习表达风格和黑话，不断进化 |
-| **情绪系统** | 多维情绪（快乐、能量、好奇、耐心），影响回复风格 |
-| **记忆系统** | 对话历史、事实记忆、对话摘要、情绪持久化 |
+| **人物与记忆系统** | 对话历史、事实记忆、人物资料、对话摘要、目标状态 |
+| **图片上下文** | 普通图片、NapCat `mface`、QQ `face` 可进入正常对话流 |
+| **表情包回复** | 新收的表情包会进入本地图库，后续可按语境复用发送 |
 | **性能优化** | 可选安装 `faiss-cpu` 加速向量检索，未安装则使用 numpy 实现 |
-| **上下文感知** | 记住之前的对话内容，能够进行连贯的多轮对话 |
+| **上下文感知** | 文本和图片都能进入统一上下文，进行连贯多轮对话 |
 
 #### 命令列表
 
-| 命令 | 触发词 | 说明 | 管理员 |
-|------|--------|------|--------|
-| `chat_config` | `/小青配置` | 配置聊天参数 | ✅ |
-| `chat_memory` | `/小青记忆` | 管理对话记忆 | ❌ |
-| `chat_expression` | `/小青表达` | 查看学到的表达方式 | ❌ |
-| `chat_stats` | `/小青统计` | 查看聊天统计信息 | ❌ |
+| 命令 | 说明 | 管理员 |
+|------|------|--------|
+| `/xc <内容>` | 和小青聊天；启用媒体能力后也可围绕图片/表情包继续聊 | ❌ |
+| `/xc help` | 查看帮助 | ❌ |
+| `/xc 清空` | 清空当前会话上下文记忆 | ❌ |
+| `/xc 统计` | 查看当前会话统计 | ❌ |
+| `/xc 深度` | 查看深度对话模式状态 | ❌ |
+| `/xc 配置` | 查看插件配置概要 | ❌ |
+| `/xc 记忆 <关键词>` | 检索长期记忆 | ❌ |
+| `/xc 表达` | 查看学到的表达方式 | ❌ |
+| `/xc 黑话` | 查看学到的黑话 | ❌ |
+| `/xc 模型 [名称]` | 查看当前 provider；切换 provider 仅管理员可用 | ✅ |
 
 #### 配置项
 
-在 `plugins/xiaoqing_chat/data/config.json` 中配置：
+聊天模型和视觉模型在 `config/secrets.json` 中配置；插件行为开关在 `plugins/xiaoqing_chat/config/xiaoqing_config.json` 中配置。
 
 ```json
 {
-  "enable_planner": true,           // 启用 LLM 规划
-  "enable_memory_retrieval": true,  // 启用向量记忆检索
-  "enable_expression_learning": true, // 启用表达学习
-  "enable_emotion_system": true,    // 启用情绪系统
-  "reply_probability_base": 0.6,    // 群聊基础回复概率
-  "reply_probability_private": 0.95, // 私聊回复概率
-  "temperature": 0.8,               // LLM 温度参数
-  "min_interval_seconds": 5,        // 最小回复间隔（秒）
-  "max_replies_per_minute": 8,      // 每分钟最大回复数
-  "consecutive_reply_cooldown": 15  // 连续回复后冷却时间（秒）
+  "plugins": {
+    "xiaoqing_chat": {
+      "default": "deepseek",
+      "providers": {
+        "deepseek": {
+          "api_base": "https://api.deepseek.com",
+          "api_key": "your-chat-api-key",
+          "model": "deepseek-chat",
+          "endpoint_path": "/v1/chat/completions"
+        }
+      },
+      "vision": {
+        "default": "glm-4.6v-flash",
+        "providers": {
+          "glm-4.6v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "your-vision-api-key",
+            "model": "glm-4.6v-flash",
+            "endpoint_path": "/chat/completions"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+常用媒体行为开关：
+
+```json
+{
+  "media": {
+    "enable_inbound_media_context": true,
+    "enable_outbound_emoji_reply": true,
+    "emoji_library_dir": "figures/library",
+    "vision_provider": ""
+  }
 }
 ```
 
@@ -529,10 +565,10 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - 用户告诉的个人信息
 - 对话中的关键事件
 
-**3. 情绪记忆**
-- 持久化情绪状态
-- 情绪会影响回复风格
-- 随对话动态变化
+**3. 图片/表情包记忆**
+- 收到的图片统一落到 `plugins/xiaoqing_chat/figures/inbox/`
+- 识别为表情包的图片会复制进 `plugins/xiaoqing_chat/figures/library/`
+- 图片描述缓存保存在 `plugins/xiaoqing_chat/data/media/render_cache.json`
 
 #### 使用说明
 
@@ -540,6 +576,8 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - 插件内部有完整的频率控制，不依赖全局 `random_reply_rate`
 - 支持 @ 机器人触发回复
 - 私聊中回复概率更高，对话更连贯
+- 启用媒体能力后，纯图片、QQ 表情、NapCat `mface` 都能进入正常对话链
+- 如果视觉模型缺失或失败，图片会退回为保守 marker，不阻断纯文本聊天
 
 #### 配置为默认聊天插件
 
