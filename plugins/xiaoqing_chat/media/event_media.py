@@ -71,6 +71,15 @@ class PreparedMediaForLLM:
     is_animated: bool = False
 
 
+@dataclass(frozen=True)
+class MediaAnalysisDraft:
+    kind: str
+    description: str
+    visible_text: str
+    emotion_tags: tuple[str, ...]
+    raw_output: str = ""
+
+
 def _media_cfg(runtime) -> Any:
     return getattr(getattr(runtime, "cfg", None), "media", None)
 
@@ -451,14 +460,15 @@ def _should_refresh_cached_render(
 
     normalized_source = str(cached_source or "").strip().lower()
     if normalized_source == "llm":
-        if cached_prompt_version < _MEDIA_ANALYSIS_PROMPT_VERSION and (
-            cached_quality == "generic"
-            or _is_low_quality_rendered_media(
-                cached_rendered,
-                summary_hint=summary_hint,
-                resolved=resolved,
-            )
+        # Generic LLM labels are not materially better than fallback summary markers.
+        # Keep retrying them on subsequent hits instead of treating them as stable cache.
+        if cached_quality == "generic" or _is_low_quality_rendered_media(
+            cached_rendered,
+            summary_hint=summary_hint,
+            resolved=resolved,
         ):
+            return True
+        if cached_prompt_version < _MEDIA_ANALYSIS_PROMPT_VERSION:
             return True
         return False
     if normalized_source == "fallback":
@@ -966,6 +976,167 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _extract_first_text_value(data: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = str(data.get(key, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _merge_visible_text(description: str, visible_text: str) -> str:
+    desc = str(description or "").strip()
+    text = re.sub(r"\s+", " ", str(visible_text or "").strip())
+    if not text:
+        return desc
+    normalized_desc = re.sub(r"\s+", "", desc)
+    normalized_text = re.sub(r"\s+", "", text)
+    if normalized_text and normalized_text in normalized_desc:
+        return desc
+    if desc:
+        return f'{desc}，配字是“{text}”'
+    return f'配字是“{text}”'
+
+
+async def _call_media_llm(
+    *,
+    context,
+    runtime,
+    secrets: dict[str, Any],
+    messages: list[dict[str, Any]],
+    temperature: float,
+    top_p: float,
+    max_tokens: int,
+) -> str:
+    cfg = _media_cfg(runtime)
+    if cfg is None:
+        return ""
+    return await chat_completions(
+        session=context.http_session,
+        api_base=str(secrets.get("api_base", "") or ""),
+        api_key=str(secrets.get("api_key", "") or ""),
+        model=str(secrets.get("model", "") or ""),
+        messages=messages,
+        temperature=temperature,
+        top_p=top_p,
+        max_tokens=max_tokens,
+        timeout_seconds=float(cfg.vision_timeout_seconds),
+        max_retry=int(cfg.vision_max_retry),
+        retry_interval_seconds=float(cfg.vision_retry_interval_seconds),
+        proxy=str(secrets.get("proxy", "") or ""),
+        endpoint_path=str(secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path),
+    )
+
+
+def _parse_detail_analysis_output(
+    output: str,
+    *,
+    resolved: ResolvedMedia,
+    prefer_emoji: bool,
+) -> MediaAnalysisDraft:
+    data = _extract_json_object(output)
+    kind = str(data.get("kind", "") or "").strip().lower()
+    if kind not in {"image", "emoji"}:
+        kind = _fallback_kind(
+            resolved.source_name,
+            width=resolved.width,
+            height=resolved.height,
+            segment_type=resolved.segment_type,
+        )
+    if prefer_emoji:
+        kind = "emoji"
+
+    description = _extract_first_text_value(
+        data,
+        "detailed_description",
+        "detail_description",
+        "detail",
+        "description",
+        "summary",
+    )
+    visible_text = _extract_first_text_value(
+        data,
+        "visible_text",
+        "ocr_text",
+        "text",
+        "caption_text",
+    )
+    if not description:
+        raw_output = str(output or "").strip().strip("`")
+        if raw_output and not raw_output.startswith("{"):
+            description = raw_output
+    description = _merge_visible_text(description, visible_text)
+    emotion_tags = _normalize_emotion_tags(
+        data.get("emotion_tags") or data.get("emotions") or data.get("tone_tags")
+    )
+    if kind == "emoji" and not emotion_tags:
+        emotion_tags = _normalize_emotion_tags(description or visible_text)
+    return MediaAnalysisDraft(
+        kind=kind,
+        description=description.strip(),
+        visible_text=visible_text.strip(),
+        emotion_tags=emotion_tags,
+        raw_output=str(output or "").strip(),
+    )
+
+
+async def _refine_emoji_analysis_with_llm(
+    draft: MediaAnalysisDraft,
+    *,
+    resolved: ResolvedMedia,
+    context,
+    runtime,
+    secrets: dict[str, Any],
+) -> MediaAnalysisDraft | None:
+    prompt = (
+        "你要把表情包的详细描述压缩成适合聊天使用的短标签 JSON。"
+        "只输出 JSON，不要额外解释。"
+        '格式: {"description":"...","emotion_tags":["..."]}。'
+        "description 用简短中文概括主体、动作、表情和可见文字，优先保留梗图里最有辨识度的内容。"
+        "不要输出泛化词，比如“图片”“表情包”“动画表情”“聊天表情包”。"
+        "emotion_tags 放 1 到 4 个适合聊天使用的情绪或语气标签。"
+    )
+    detail_block = {
+        "detailed_description": draft.description,
+        "visible_text": draft.visible_text,
+        "emotion_tags": list(draft.emotion_tags),
+        "source_hint": resolved.source_name,
+    }
+    messages = [
+        {"role": "system", "content": "你是表情包标签提炼器，只输出 JSON。"},
+        {
+            "role": "user",
+            "content": prompt + "\n输入数据：" + json.dumps(detail_block, ensure_ascii=False),
+        },
+    ]
+    output = await _call_media_llm(
+        context=context,
+        runtime=runtime,
+        secrets=secrets,
+        messages=messages,
+        temperature=0.2,
+        top_p=0.9,
+        max_tokens=120,
+    )
+    data = _extract_json_object(output)
+    description = _extract_first_text_value(data, "description", "label", "summary")
+    if not description:
+        raw_output = str(output or "").strip().strip("`")
+        if raw_output and not raw_output.startswith("{"):
+            description = raw_output
+    description = description.strip()
+    emotion_tags = _normalize_emotion_tags(data.get("emotion_tags") or data.get("emotions"))
+    if not emotion_tags:
+        emotion_tags = draft.emotion_tags
+    return MediaAnalysisDraft(
+        kind="emoji",
+        description=description,
+        visible_text=draft.visible_text,
+        emotion_tags=emotion_tags,
+        raw_output=str(output or "").strip(),
+    )
+
+
 def _resolve_media_llm_secrets(context, runtime) -> dict[str, Any]:
     cfg = _media_cfg(runtime)
     if cfg is None:
@@ -1145,20 +1316,14 @@ async def _analyze_media_with_llm(
     ]
 
     try:
-        output = await chat_completions(
-            session=context.http_session,
-            api_base=str(secrets.get("api_base", "") or ""),
-            api_key=str(secrets.get("api_key", "") or ""),
-            model=str(secrets.get("model", "") or ""),
+        detail_output = await _call_media_llm(
+            context=context,
+            runtime=runtime,
+            secrets=secrets,
             messages=messages,
             temperature=0.2,
             top_p=0.9,
             max_tokens=200,
-            timeout_seconds=float(cfg.vision_timeout_seconds),
-            max_retry=int(cfg.vision_max_retry),
-            retry_interval_seconds=float(cfg.vision_retry_interval_seconds),
-            proxy=str(secrets.get("proxy", "") or ""),
-            endpoint_path=str(secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path),
         )
     except Exception as exc:
         _media_log(
@@ -1175,21 +1340,88 @@ async def _analyze_media_with_llm(
         )
         raise
 
-    data = _extract_json_object(output)
-    kind = str(data.get("kind", "") or "").strip().lower()
-    if kind not in {"image", "emoji"}:
-        kind = _fallback_kind(
-            resolved.source_name,
-            width=resolved.width,
-            height=resolved.height,
-            segment_type=resolved.segment_type,
-        )
-    description = str(data.get("description", "") or "").strip()
-    if not description:
-        description = _safe_source_name(resolved.source_name) or ("一张表情包" if kind == "emoji" else "一张图片")
-    emotion_tags = _normalize_emotion_tags(data.get("emotion_tags"))
-    if kind == "emoji" and not emotion_tags:
-        emotion_tags = _normalize_emotion_tags(description)
+    detail = _parse_detail_analysis_output(
+        detail_output,
+        resolved=resolved,
+        prefer_emoji=prefer_emoji,
+    )
+    _media_log(
+        context,
+        runtime,
+        step="media.analyze.detail.ok",
+        fields={
+            "provider": secrets.get("_provider_name", ""),
+            "model": secrets.get("model", ""),
+            "media_hash": resolved.media_hash[:12],
+            "kind": detail.kind,
+            "description": detail.description,
+            "visible_text": detail.visible_text,
+            "emotion_tags": "，".join(detail.emotion_tags),
+            "raw_output": detail.raw_output,
+        },
+    )
+
+    kind = detail.kind
+    refined: MediaAnalysisDraft | None = None
+    if kind == "emoji":
+        try:
+            refined = await _refine_emoji_analysis_with_llm(
+                detail,
+                resolved=resolved,
+                context=context,
+                runtime=runtime,
+                secrets=secrets,
+            )
+            _media_log(
+                context,
+                runtime,
+                step="media.analyze.refine.ok",
+                fields={
+                    "provider": secrets.get("_provider_name", ""),
+                    "model": secrets.get("model", ""),
+                    "media_hash": resolved.media_hash[:12],
+                    "description": refined.description,
+                    "emotion_tags": "，".join(refined.emotion_tags),
+                    "raw_output": refined.raw_output,
+                },
+            )
+        except Exception as exc:
+            _media_log(
+                context,
+                runtime,
+                step="media.analyze.refine.fail",
+                fields={
+                    "provider": secrets.get("_provider_name", ""),
+                    "model": secrets.get("model", ""),
+                    "media_hash": resolved.media_hash[:12],
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                level="warning",
+            )
+
+    used_summary_fallback = False
+    if kind == "emoji":
+        if refined and refined.description and not _is_generic_media_label(refined.description):
+            description = refined.description
+        elif detail.description and not _is_generic_media_label(detail.description):
+            description = detail.description
+        elif refined and refined.description:
+            description = refined.description
+        elif detail.description:
+            description = detail.description
+        else:
+            description = _safe_source_name(resolved.source_name) or "一张表情包"
+            used_summary_fallback = True
+        emotion_tags = refined.emotion_tags if refined and refined.emotion_tags else detail.emotion_tags
+        if not emotion_tags:
+            emotion_tags = _normalize_emotion_tags(description or detail.visible_text)
+    else:
+        description = detail.description
+        if not description:
+            description = _safe_source_name(resolved.source_name) or "一张图片"
+            used_summary_fallback = True
+        emotion_tags = tuple()
+
     marker = _build_marker(kind, description, emotion_tags)
     quality = "generic" if _is_low_quality_rendered_media(
         RenderedMedia(
@@ -1213,6 +1445,10 @@ async def _analyze_media_with_llm(
             "media_hash": resolved.media_hash[:12],
             "kind": kind,
             "description": description,
+            "detail_description": detail.description,
+            "visible_text": detail.visible_text,
+            "refined_description": refined.description if refined else "",
+            "used_summary_fallback": used_summary_fallback,
             "marker": marker,
             "quality": quality,
         },
