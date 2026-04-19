@@ -811,8 +811,9 @@ context.reload_config()
 ```
 
 **注意**：
-- 某些配置（如 `inbound_http_base` / `inbound_ws_uri`）需要重启才能生效。
-- 配置 watcher 默认开启；插件 watcher 只有在 `enable_plugin_watcher=true` 时才会自动 reload 插件。
+- 常用运行时配置都支持热重载；`enable_ws_client`、`onebot_ws_uri`、`enable_inbound_server`、`inbound_http_base`、`inbound_ws_uri`、`ws_queue_size`、`inbound_ws_max_workers`、`max_concurrency`、`session_timeout`、`timezone` 等修改后，可通过 watcher 或 `/reload config` 直接生效。
+- 配置 watcher 默认开启；插件 watcher 只有在 `enable_plugin_watcher=true` 时才会自动 reload 插件，且会忽略 `plugins/*/data/` 下的运行时状态文件。
+- 如果 `config.json` 或 `secrets.json` 一次写坏，运行时会保留最后一次有效快照；修复文件后重新 `/reload config` 即可。
 - 自动 watcher 能发现文件变化，但如果你刚修改完配置、希望立即生效，仍然建议手动执行一次 `/reload`。
 
 ---

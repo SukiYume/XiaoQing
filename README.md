@@ -20,7 +20,7 @@
 | | 特性 | 说明 |
 |---|------|------|
 | ⚡ | **异步优先** | 核心消息处理、HTTP、调度全部围绕 `asyncio` 构建 |
-| 🔌 | **插件化架构** | 每个插件独立目录、独立配置、独立数据目录；支持手动 `/reload`，启动后也会自动监控配置与插件文件变化 |
+| 🔌 | **插件化架构** | 每个插件独立目录、独立配置、独立数据目录；支持手动 `/reload`，配置文件默认自动监控，插件文件可按需开启 watcher |
 | 💬 | **命令 + 闲聊双通路** | 支持 `/command` 风格命令，也支持自然对话和 URL 自动解析 |
 | 🔄 | **多轮会话** | 框架内建会话管理，适合游戏、表单、分步输入等交互 |
 | ⏰ | **定时任务** | 插件可在 `plugin.json` 中直接声明调度任务 |
@@ -68,7 +68,7 @@
 | [🔌 插件开发指南](docs/03-plugin-development.md) | 从零开发插件 |
 | [🔧 配置详解](docs/06-configuration.md) | 配置项、部署注意事项、示例配置 |
 | [📨 消息流程](docs/08-message-flow.md) | 消息处理全链路 |
-| [🧩 内置插件列表](docs/09-plugins.md) | 29 个内置插件说明 |
+| [🧩 内置插件列表](docs/09-plugins.md) | 28 个 active plugins 说明 |
 
 ---
 
@@ -176,6 +176,8 @@ Loaded plugin xiaoqing_chat
 Inbound server started ...
 ```
 
+常用运行时配置支持热重载。修改 `config/config.json` 或 `config/secrets.json` 后，可以直接执行 `/reload config`，通常无需重启进程；`enable_ws_client`、`enable_inbound_server`、`onebot_ws_uri`、`inbound_http_base`、`inbound_ws_uri`、`max_concurrency`、`session_timeout`、`timezone` 等项都会在运行时重建或更新对应组件。
+
 ### 6️⃣ 启动前检查清单
 
 - `config/config.json` 和 `config/secrets.json` 已存在
@@ -258,10 +260,10 @@ Inbound server started ...
 | `/pendo search 关键词` | 跨模块搜索 |
 | `/pendo web start` | 启动 Pendo Web 控制台 |
 | `/pendo web token` | 获取 Web 登录令牌 |
+| `/pendo web widget-token` | 获取 Scriptable 小组件令牌 |
 
 > [!NOTE]
 > Pendo Web 的公开 demo 会话默认关闭。只有在明确需要临时演示环境时，才通过环境变量 `PENDO_WEB_DEMO_ENABLED=1` 启用。
-| `/pendo web widget-token` | 获取 Scriptable 小组件令牌 |
 
 ### 🔧 其他内置插件
 
@@ -404,7 +406,7 @@ XiaoQing/
 │   ├── qingpet/
 │   ├── qingssh/
 │   ├── jupyter/
-│   └── ...                   ← 含 29 个带 `plugin.json` 的内置插件
+│   └── ...                   ← 含 28 个带 `plugin.json` 的 active plugins
 ├── docs/
 ├── tests/
 └── logs/
