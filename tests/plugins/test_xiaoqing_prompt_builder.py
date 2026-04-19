@@ -62,3 +62,29 @@ def test_prompt_builder_does_not_include_user_id_in_name() -> None:
 
     user_prompt = msgs[1].content
     assert "测试用户(123456)" not in user_prompt
+
+
+def test_prompt_builder_treats_media_markers_as_real_content() -> None:
+    personality = PersonalityConfig(
+        polite_guardrail=True,
+        identity="你叫小青。",
+        states=[],
+        state_probability=0.0,
+        reply_style="口语化",
+    )
+
+    msgs = build_prompt_messages(
+        is_private=False,
+        bot_name="小青",
+        sender_name="测试用户",
+        think_level=1,
+        history=[],
+        current_text="[QQ表情：微笑]",
+        personality=personality,
+        keyword_rules=[],
+        regex_rules=[],
+        request_id="req-test-3",
+    )
+
+    system_prompt = msgs[0].content
+    assert "[图片：...]" in system_prompt or "[表情包：...]" in system_prompt or "[QQ表情：...]" in system_prompt

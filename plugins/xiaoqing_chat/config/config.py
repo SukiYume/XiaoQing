@@ -202,6 +202,25 @@ class RewriteConfig(BaseModel):
     probability: float = 0.6
     max_length_trigger: int = 80
 
+class MediaConfig(BaseModel):
+    enable_inbound_media_context: bool = True
+    enable_outbound_emoji_reply: bool = True
+    emoji_library_dir: str = "figures/library"
+    emoji_reply_probability: float = 0.35
+    emoji_candidate_count: int = 6
+    emoji_cooldown_turns: int = 3
+    max_media_per_message: int = 3
+    max_analyze_bytes: int = 4 * 1024 * 1024
+    vision_provider: str = ""
+    vision_api_base: str = ""
+    vision_api_key: str = ""
+    vision_model: str = ""
+    vision_endpoint_path: str = ""
+    vision_proxy: str = ""
+    vision_timeout_seconds: float = 20.0
+    vision_max_retry: int = 1
+    vision_retry_interval_seconds: float = 1.0
+
 class TalkScheduleEntry(BaseModel):
     """Time-period based talk frequency (MaiBot-style)."""
     hour_start: int = 0
@@ -252,6 +271,7 @@ class XiaoQingChatConfig(BaseModel):
     expression: ExpressionConfig = Field(default_factory=ExpressionConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
+    media: MediaConfig = Field(default_factory=MediaConfig)
     postprocess: ResponsePostProcessConfig = Field(default_factory=ResponsePostProcessConfig)
     endpoint_path: str = "/v1/chat/completions"
     debug: DebugConfig = Field(default_factory=DebugConfig)

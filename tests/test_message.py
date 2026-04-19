@@ -6,10 +6,15 @@ import pytest
 from typing import Any
 
 from core.message import (
+    contains_bot_name,
     compile_bot_name_pattern,
     extract_text,
+    has_at_mention,
+    has_media_segment,
+    iter_message_segments,
     normalize_message,
     parse_text_command_context,
+    scan_message,
     strip_message_prefix,
 )
 
@@ -64,6 +69,41 @@ class TestExtractText:
         assert extract_text(123) == ""
         assert extract_text({"type": "text"}) == ""
 
+
+class TestMessageScan:
+    def test_scan_message_collects_text_media_and_at(self):
+        result = scan_message(
+            [
+                {"type": "at", "data": {"qq": "12345"}},
+                {"type": "text", "data": {"text": "你好"}},
+                {"type": "face", "data": {"id": "14"}},
+            ],
+            self_id="12345",
+        )
+        assert result.text == "你好"
+        assert result.has_media is True
+        assert result.is_at_me is True
+
+    def test_iter_message_segments_filters_invalid_items(self):
+        message = [{"type": "text", "data": {"text": "hi"}}, None, "bad", {"type": "face", "data": {}}]
+        assert iter_message_segments(message) == (
+            {"type": "text", "data": {"text": "hi"}},
+            {"type": "face", "data": {}},
+        )
+
+    def test_has_at_mention_checks_event_and_raw_message(self):
+        event = {
+            "self_id": "12345",
+            "raw_message": "[CQ:at,qq=12345]",
+            "message": [{"type": "text", "data": {"text": ""}}],
+        }
+        assert has_at_mention(event, self_id="12345") is True
+
+    def test_contains_bot_name_handles_empty_values(self):
+        assert contains_bot_name("", "小青") is False
+        assert contains_bot_name("你好小青", "") is False
+        assert contains_bot_name("你好小青", "小青") is True
+
 # ============================================================
 # normalize_message 测试
 # ============================================================
@@ -101,6 +141,26 @@ class TestNormalizeMessage:
         assert text == "你好"
         assert user_id == 12345
         assert group_id is None
+
+
+class TestHasMediaSegment:
+    def test_detects_image_segment(self):
+        message = [{"type": "image", "data": {"file": "file:///tmp/test.png"}}]
+        assert has_media_segment(message) is True
+
+    def test_detects_face_segment(self):
+        message = [{"type": "face", "data": {"id": "14"}}]
+        assert has_media_segment(message) is True
+
+    def test_ignores_text_and_at_only(self):
+        message = [
+            {"type": "at", "data": {"qq": "12345"}},
+            {"type": "text", "data": {"text": ""}},
+        ]
+        assert has_media_segment(message) is False
+
+    def test_non_list_message_returns_false(self):
+        assert has_media_segment("hello") is False
 
 class TestParseTextCommandContext:
     def test_strips_bot_name_and_prefix(self):
