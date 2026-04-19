@@ -236,12 +236,15 @@ class TestHandleCommands:
 
     @pytest.mark.asyncio
     async def test_handle_default(self, mock_context, mock_event):
-        """测试默认命令"""
-        # With no args, the parsed.first is None, so help is shown
-        result = await earthquake.handle("earthquake", "", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "地震" in result_text or "快讯" in result_text or "帮助" in result_text
+        """测试默认命令会获取最新地震快讯"""
+        with patch.object(
+            earthquake,
+            "_fetch_earthquake_news",
+            new=AsyncMock(return_value=earthquake.segments("quake info")),
+        ) as mock_fetch:
+            result = await earthquake.handle("earthquake", "", mock_event, mock_context)
+            assert result is not None
+            mock_fetch.assert_called_once_with(mock_context, force=True)
 
     @pytest.mark.asyncio
     async def test_handle_exception(self, mock_context, mock_event):

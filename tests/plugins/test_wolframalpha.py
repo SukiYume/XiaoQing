@@ -158,6 +158,34 @@ class TestWolframAlphaPlugin:
         assert len(result) > 0
 
     @pytest.mark.asyncio
+    async def test_get_answer_uses_https_endpoint(self, mock_context):
+        captured = {}
+
+        class MockResponse:
+            status = 200
+
+            async def text(self):
+                return "42"
+
+        class MockContextManager:
+            async def __aenter__(self):
+                return MockResponse()
+
+            async def __aexit__(self, *args):
+                pass
+
+        class MockSession:
+            def get(self, url, *args, **kwargs):
+                captured["url"] = url
+                return MockContextManager()
+
+        mock_context.http_session = MockSession()
+
+        await wolframalpha._get_answer("2+2", "appid", mock_context)
+
+        assert captured["url"].startswith("https://")
+
+    @pytest.mark.asyncio
     async def test_get_answer_no_session(self):
         """测试无HTTP会话"""
         context = MagicMock()
@@ -219,6 +247,8 @@ class TestWolframAlphaPlugin:
     @pytest.mark.asyncio
     async def test_query_step_success(self, mock_context):
         """测试步骤解答"""
+        captured = {}
+
         class MockStepResponse:
             status = 200
             async def text(self):
@@ -231,12 +261,14 @@ class TestWolframAlphaPlugin:
                 pass
 
         class MockStepSession:
-            def post(self, *args, **kwargs):
+            def post(self, url, *args, **kwargs):
+                captured["url"] = url
                 return MockStepContextManager()
 
         result = await wolframalpha._query_step("integrate x^2", "appid", MockStepSession())
         assert result is not None
         assert "Step" in result
+        assert captured["url"].startswith("https://")
 
     @pytest.mark.asyncio
     async def test_query_step_no_result(self, mock_context):
@@ -283,6 +315,8 @@ class TestWolframAlphaPlugin:
     @pytest.mark.asyncio
     async def test_query_complete_success(self, mock_context):
         """测试完整结果查询"""
+        captured = {}
+
         class MockCompleteResponse:
             status = 200
             async def json(self):
@@ -305,11 +339,13 @@ class TestWolframAlphaPlugin:
                 pass
 
         class MockCompleteSession:
-            def post(self, *args, **kwargs):
+            def post(self, url, *args, **kwargs):
+                captured["url"] = url
                 return MockCompleteContextManager()
 
         result = await wolframalpha._query_complete("1+1", "appid", MockCompleteSession())
         assert result == "42"
+        assert captured["url"].startswith("https://")
 
     @pytest.mark.asyncio
     async def test_query_complete_no_result(self, mock_context):

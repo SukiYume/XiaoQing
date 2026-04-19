@@ -4,6 +4,7 @@ Minecraft 服务器日志监控
 监控服务器日志文件，提取玩家聊天消息和事件。
 """
 
+import asyncio
 import re
 import logging
 from pathlib import Path
@@ -137,6 +138,10 @@ class LogMonitor:
             logger.error("读取日志文件失败: %s", e)
         
         return events
+
+    async def check_updates_async(self) -> list[LogEvent]:
+        """在线程池中检查更新，避免阻塞事件循环"""
+        return await asyncio.to_thread(self.check_updates)
 
     def _parse_line(self, line: str) -> Optional[LogEvent]:
         """解析单行日志"""

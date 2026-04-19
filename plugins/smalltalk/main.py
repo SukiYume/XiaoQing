@@ -68,7 +68,9 @@ def _load_responses(context) -> list:
     data_file = context.data_dir / "responses.json"
     if data_file.exists():
         data = load_json(data_file, {})
-        return data.get("responses", DEFAULT_RESPONSES)
+        responses = data.get("responses", DEFAULT_RESPONSES)
+        if responses:
+            return responses
     
     return DEFAULT_RESPONSES
 

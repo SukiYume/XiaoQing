@@ -223,7 +223,7 @@ async def _handle_tts(args: str, context: PluginContextProtocol) -> list[dict[st
     
     # 返回语音消息
     return [
-        {"type": "record", "data": {"file": f"file:///{audio_path}"}}
+        {"type": "record", "data": {"file": Path(audio_path).resolve().as_uri()}}
     ]
 
 
@@ -250,5 +250,5 @@ async def convert_text_to_voice(text: str, context: PluginContextProtocol) -> Op
         return None
     
     return [
-        {"type": "record", "data": {"file": f"file:///{audio_path}"}}
+        {"type": "record", "data": {"file": Path(audio_path).resolve().as_uri()}}
     ]

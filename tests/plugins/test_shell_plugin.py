@@ -198,6 +198,64 @@ class TestShellHandle:
         assert isinstance(result, list)
         assert "拒绝" in str(result)
 
+
+class TestShellExecutionSafety:
+    @pytest.mark.asyncio
+    async def test_execute_command_starts_in_own_process_group(self):
+        captured = {}
+
+        class _Proc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"ok", b""
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            captured.update(kwargs)
+            return _Proc()
+
+        with patch.object(
+            shell_main.asyncio,
+            "create_subprocess_exec",
+            new=AsyncMock(side_effect=fake_create_subprocess_exec),
+        ):
+            code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 1)
+
+        assert code == 0
+        assert stdout == "ok"
+        assert stderr == ""
+        if shell_main.sys.platform == "win32":
+            assert captured.get("creationflags", 0) != 0
+        else:
+            assert captured.get("start_new_session") is True
+
+    @pytest.mark.asyncio
+    async def test_execute_command_timeout_terminates_process_tree(self):
+        proc = MagicMock()
+        proc.communicate = AsyncMock()
+        proc.wait = AsyncMock()
+
+        async def fake_wait_for(awaitable, timeout):
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise asyncio.TimeoutError
+
+        with (
+            patch.object(
+                shell_main.asyncio,
+                "create_subprocess_exec",
+                new=AsyncMock(return_value=proc),
+            ),
+            patch.object(shell_main.asyncio, "wait_for", new=fake_wait_for),
+            patch.object(shell_main, "_terminate_process_tree", new=AsyncMock()) as mock_terminate,
+        ):
+            code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 1)
+
+        assert code == -1
+        assert stdout == ""
+        assert "超时" in stderr
+        mock_terminate.assert_awaited_once_with(proc)
+
 # ============================================================
 # 智能解码测试
 # ============================================================

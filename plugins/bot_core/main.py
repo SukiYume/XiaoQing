@@ -29,6 +29,24 @@ def init(context=None) -> None:
     """插件初始化"""
     pass
 
+
+def _parse_help_header(line: str) -> tuple[str, str | None] | None:
+    """解析形如 `[plugin] - 描述` 的插件标题行。"""
+    stripped = line.strip()
+    if not stripped.startswith("[") or "]" not in stripped:
+        return None
+
+    end = stripped.index("]")
+    plugin_name = stripped[1:end].strip()
+    if not plugin_name:
+        return None
+
+    suffix = stripped[end + 1 :].strip()
+    if suffix.startswith("-"):
+        suffix = suffix[1:].strip()
+
+    return plugin_name, suffix or None
+
 # ============================================================
 # 主处理函数
 # ============================================================
@@ -168,16 +186,16 @@ def _filter_help_lines(lines: list[str], keyword: str) -> list[str]:
     current_plugin_name = None
     
     for line in lines:
-        stripped = line.strip()
-        
+        parsed_header = _parse_help_header(line)
+
         # 插件标题行
-        if stripped.startswith("[") and stripped.endswith("]"):
-            current_plugin_name = stripped[1:-1]
+        if parsed_header:
+            current_plugin_name, _ = parsed_header
             plugins[current_plugin_name] = [line]
             continue
         
         # 其他行归入当前插件
-        if current_plugin_name and stripped:
+        if current_plugin_name and line.strip():
             plugins[current_plugin_name].append(line)
     
     # 第二步：检查每个插件是否匹配
@@ -209,14 +227,19 @@ def _format_help_lines(lines: list[str]) -> str:
     result = []
     
     for line in lines:
-        stripped = line.strip()
-        
-        # 插件标题行 [插件名]
-        if stripped.startswith("[") and stripped.endswith("]"):
-            plugin_name = stripped[1:-1]
-            result.append(f"\n📦 {plugin_name}")
+        parsed_header = _parse_help_header(line)
+
+        # 插件标题行 [插件名] - 描述
+        if parsed_header:
+            plugin_name, description = parsed_header
+            if description:
+                result.append(f"\n📦 {plugin_name} - {description}")
+            else:
+                result.append(f"\n📦 {plugin_name}")
             continue
-        
+
+        stripped = line.strip()
+
         # 命令行
         if stripped.startswith("/") or (stripped and not "↳" in stripped):
             # 移除前导空格，添加命令图标

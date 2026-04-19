@@ -283,9 +283,12 @@ class TestURLParserPlugin:
 
         result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
         assert result is not None
-        result_text = str(result)
-        assert "OG Title" in result_text
-        assert "OG Description" in result_text
+        assert len(result) == 2
+        assert result[0]["type"] == "text"
+        assert "OG Title" in result[0]["data"]["text"]
+        assert "OG Description" in result[0]["data"]["text"]
+        assert result[1]["type"] == "image"
+        assert result[1]["data"]["file"] == "https://example.com/og-image.jpg"
 
     @pytest.mark.asyncio
     async def test_handle_url_with_twitter_tags(self, mock_context, mock_event):

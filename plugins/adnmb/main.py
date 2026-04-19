@@ -50,15 +50,20 @@ def _get_plugin_runtime_state(context, *, create: bool = True) -> dict:
 def _get_client(context, cache_dir: Path) -> AdnmbClient:
     runtime_state = _get_plugin_runtime_state(context)
     cached_client = runtime_state.get("client")
+    plugin_cfg = context.secrets.get("plugins", {}).get("adnmb", {})
+    uuid = str(plugin_cfg.get("uuid", "") or "")
     if isinstance(cached_client, AdnmbClient):
-        if cached_client.session is context.http_session and cached_client.cache_dir == cache_dir:
+        if (
+            cached_client.session is context.http_session
+            and cached_client.cache_dir == cache_dir
+            and cached_client.uuid == uuid
+        ):
             return cached_client
 
-    plugin_cfg = context.secrets.get("plugins", {}).get("adnmb", {})
     client = AdnmbClient(
         context.http_session,
         cache_dir,
-        uuid=str(plugin_cfg.get("uuid", "") or ""),
+        uuid=uuid,
     )
     runtime_state["client"] = client
     return client

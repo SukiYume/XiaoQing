@@ -499,6 +499,7 @@ async def test_server_broadcast_socket_error(sample_server):
 
     # Should not raise
     await sample_server.broadcast({"action": "test"})
+    assert mock_ws not in sample_server._active_sockets
 
 
 # ============================================================

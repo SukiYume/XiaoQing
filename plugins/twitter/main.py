@@ -10,7 +10,7 @@ Twitter 图片抓取与随机发送插件
 需要配置:
 - twitter.user_id: Twitter 用户 ID
 - twitter.headers: 请求头（包含认证信息）
-- twitter.proxy: 代理地址
+- twitter.proxy: 代理地址（可选，显式配置才启用）
 - twitter.max_pages: 最大检查页数（可选，默认50页）
 """
 
@@ -119,7 +119,8 @@ def _get_headers(context) -> dict:
 def _get_proxy(context) -> str | None:
     """获取代理配置"""
     config = _get_config(context)
-    return config.get("proxy", "http://127.0.0.1:1080")
+    proxy = config.get("proxy")
+    return str(proxy).strip() if proxy else None
 
 
 def _get_user_id(context) -> str:

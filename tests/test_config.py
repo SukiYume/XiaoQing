@@ -204,6 +204,19 @@ class TestConfigManagerUpdateSecret:
         with pytest.raises(ValueError, match="不是字典类型"):
             config_manager.update_secret("admin_user_ids.key", "value")
 
+    def test_update_secret_triggers_reload_callbacks(self, config_manager: ConfigManager):
+        """测试 update_secret 会触发 reload 回调"""
+        snapshots: list[ConfigSnapshot] = []
+
+        def callback(snapshot: ConfigSnapshot):
+            snapshots.append(snapshot)
+
+        config_manager.on_reload(callback)
+        config_manager.update_secret("admin_user_ids", [2024])
+
+        assert len(snapshots) == 1
+        assert snapshots[0].secrets["admin_user_ids"] == [2024]
+
 # ============================================================
 # ConfigManager.save_secrets 测试
 # ============================================================

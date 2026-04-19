@@ -61,6 +61,9 @@ class XiaoQingApp:
     _session_cleanup_task: asyncio.Task[None] | None
     _reload_lock: asyncio.Lock
     _reload_task: asyncio.Task[None] | None
+    _ws_client_task: asyncio.Task[None] | None
+    _config_watch_task: asyncio.Task[None] | None
+    _plugin_watch_task: asyncio.Task[None] | None
 
     def __init__(
         self,
@@ -146,6 +149,9 @@ class XiaoQingApp:
         self._session_cleanup_task: asyncio.Task[None] | None = None
         self._reload_lock: asyncio.Lock | None = None
         self._reload_task: asyncio.Task[None] | None = None
+        self._ws_client_task: asyncio.Task[None] | None = None
+        self._config_watch_task: asyncio.Task[None] | None = None
+        self._plugin_watch_task: asyncio.Task[None] | None = None
 
         # 注册回调
         self.plugin_manager.on_change(self._reschedule)
@@ -215,6 +221,8 @@ class XiaoQingApp:
         self._reschedule("startup")
 
         self._session_cleanup_task = asyncio.create_task(self._cleanup_sessions_loop())
+        self._config_watch_task = asyncio.create_task(self.config_manager.watch())
+        self._plugin_watch_task = asyncio.create_task(self.plugin_manager.watch())
 
         # 可选：启动 WebSocket 客户端（连接到 OneBot 服务端）
         if self.config.get("enable_ws_client", True):
@@ -231,7 +239,7 @@ class XiaoQingApp:
                     queue_size=ws_queue_size,
                 )
                 self.ws_client.set_on_connect(self._on_ws_connected)
-                asyncio.create_task(
+                self._ws_client_task = asyncio.create_task(
                     self.ws_client.connect_and_listen(self._handle_upstream_event)
                 )
                 logger.info("WebSocket client enabled, connecting to %s", ws_uri)
@@ -253,17 +261,31 @@ class XiaoQingApp:
         """优雅停止应用"""
         logger.info("Shutting down XiaoQing...")
 
+        await self._cancel_task("_config_watch_task")
+        await self._cancel_task("_plugin_watch_task")
+
         if self._session_cleanup_task:
             self._session_cleanup_task.cancel()
             try:
                 await self._session_cleanup_task
             except asyncio.CancelledError:
                 pass
+            self._session_cleanup_task = None
 
         # 1. 停止 WebSocket 客户端（不再接收新消息）
         if self.ws_client:
             await self.ws_client.stop()
+            await self._cancel_task("_ws_client_task")
             logger.info("WebSocket client stopped")
+            self.ws_client = None
+
+        if self._reload_task and not self._reload_task.done():
+            self._reload_task.cancel()
+            try:
+                await self._reload_task
+            except asyncio.CancelledError:
+                pass
+        self._reload_task = None
 
         # 2. 停止定时任务调度器
         try:
@@ -286,6 +308,8 @@ class XiaoQingApp:
         if self.http_session:
             await self.http_session.close()
             logger.info("HTTP session closed")
+            self.http_session = None
+            self.http_sender = None
 
         # 5. 停止 Inbound Server（如果有）
         if self.inbound_manager:
@@ -297,6 +321,17 @@ class XiaoQingApp:
             self.inbound_manager = None
 
         logger.info("XiaoQing shutdown complete")
+
+    async def _cancel_task(self, attr_name: str) -> None:
+        task = getattr(self, attr_name, None)
+        if not task:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        setattr(self, attr_name, None)
 
     async def _cleanup_sessions_loop(self) -> None:
         while True:

@@ -4,6 +4,7 @@ CHIME FRB 重复暴监测插件
 """
 
 # 标准库
+import asyncio
 import logging
 import re
 from pathlib import Path

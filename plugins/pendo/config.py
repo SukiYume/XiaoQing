@@ -94,7 +94,7 @@ class PendoConfig:
     WEB_PORT = 8765
     WEB_TOKEN_EXPIRE_HOURS = 24
     WEB_WIDGET_TOKEN_EXPIRE_HOURS = 24 * 180
-    WEB_DEMO_ENABLED = True
+    WEB_DEMO_ENABLED = False
     WEB_DEMO_EXPIRE_HOURS = 6
 
     @classmethod
@@ -118,6 +118,13 @@ class PendoConfig:
             cls.WEB_HOST = os.environ["PENDO_WEB_HOST"]
         if "PENDO_WEB_PORT" in os.environ:
             cls.WEB_PORT = int(os.environ["PENDO_WEB_PORT"])
+        if "PENDO_WEB_DEMO_ENABLED" in os.environ:
+            cls.WEB_DEMO_ENABLED = os.environ["PENDO_WEB_DEMO_ENABLED"].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
 
         # 允许通过环境变量覆盖部分配置，存储在实例字典中
         if "PENDO_TIMEZONE" in os.environ:

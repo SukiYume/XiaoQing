@@ -165,6 +165,21 @@ class TestSessionManager:
         assert not await session_manager.exists(12345, None)
 
     @pytest.mark.asyncio
+    async def test_exists_does_not_refresh_session_timeout(self, session_manager: SessionManager):
+        """测试 exists 只检查存在性，不刷新会话时间戳"""
+        session = await session_manager.create(
+            user_id=12345,
+            group_id=None,
+            plugin_name="test",
+            timeout=10.0,
+        )
+        await asyncio.sleep(0.02)
+        before = session.updated_at
+
+        assert await session_manager.exists(12345, None) is True
+        assert session.updated_at == before
+
+    @pytest.mark.asyncio
     async def test_delete_nonexistent_session(self, session_manager: SessionManager):
         """测试删除不存在的会话"""
         result = await session_manager.delete(99999, None)

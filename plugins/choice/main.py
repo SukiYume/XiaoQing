@@ -110,10 +110,7 @@ def validate_options(options: list[str], choice_count: int, context) -> tuple[bo
     
     if choice_count > MAX_CHOICES:
         return False, f"选择数量过多，最多支持一次选择 {MAX_CHOICES} 个"
-    
-    if choice_count > len(options):
-        context.logger.warning(f"选择数量 ({choice_count}) 超过选项数量 ({len(options)})，将调整为选项数量")
-    
+
     return True, None
 
 # ============================================================
@@ -135,21 +132,20 @@ def make_choice(
     Returns:
         选中的选项列表
     """
-    # 限制选择数量不超过选项数量
-    actual_count = min(count, len(options))
-    
-    if unique or actual_count >= len(options):
-        # 去重模式或选择全部：使用 sample（无放回）
-        if actual_count >= len(options):
-            # 全选，直接打乱顺序
+    if unique:
+        if count > len(options):
+            raise ValueError("unique mode requires count <= number of options")
+        if count == len(options):
             result = options.copy()
             random.shuffle(result)
-            return result[:actual_count]
-        else:
-            return random.sample(options, actual_count)
-    else:
-        # 允许重复：使用 choices（有放回）
-        return random.choices(options, k=actual_count)
+            return result
+        return random.sample(options, count)
+
+    if count <= 0:
+        return []
+
+    # Non-unique mode should honor the requested count even when it exceeds the option count.
+    return random.choices(options, k=count)
 
 def format_choice_result(
     question: str,
@@ -217,6 +213,11 @@ async def handle(
         is_valid, error_msg = validate_options(options, choice_count, context)
         if not is_valid:
             return segments(f"❌ {error_msg}")
+
+        if unique and choice_count > len(options):
+            return segments(
+                f"❌ 去重模式下，选择数量不能超过选项数量（{choice_count} > {len(options)}）"
+            )
         
         # 记录日志
         unique_options = list(set(options))

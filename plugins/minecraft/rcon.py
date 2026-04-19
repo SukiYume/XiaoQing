@@ -57,6 +57,9 @@ class RconClient:
         async with RconClient("127.0.0.1", 25575, "password") as client:
             response = await client.command("list")
     """
+
+    MAX_COMMAND_RESPONSE_CHUNK_SIZE = 4096
+    RESPONSE_CHUNK_TIMEOUT = 0.2
     
     def __init__(self, host: str, port: int, password: str, timeout: float = 10.0):
         self.host = host
@@ -139,6 +142,28 @@ class RconClient:
             self._connected = False
             return None
 
+    async def _read_packet(self, timeout: float) -> tuple[RconPacket, int]:
+        """读取单个 RCON 数据包"""
+        if not self._reader:
+            raise ConnectionError("未连接到服务器")
+
+        header = await asyncio.wait_for(
+            self._reader.readexactly(4),
+            timeout=timeout,
+        )
+        packet_length = struct.unpack("<i", header)[0]
+        body = await asyncio.wait_for(
+            self._reader.readexactly(packet_length),
+            timeout=timeout,
+        )
+        data = header + body
+
+        if not data:
+            raise ConnectionError("服务器关闭连接")
+
+        response, _ = RconPacket.decode(data)
+        return response, packet_length
+
     async def _send_packet(self, packet_type: PacketType, payload: str) -> RconPacket:
         """发送数据包并等待响应"""
         async with self._lock:
@@ -153,22 +178,32 @@ class RconClient:
             self._writer.write(packet.encode())
             await self._writer.drain()
             
-            # 读取响应
-            header = await asyncio.wait_for(
-                self._reader.readexactly(4),
-                timeout=self.timeout,
-            )
-            packet_length = struct.unpack("<i", header)[0]
-            body = await asyncio.wait_for(
-                self._reader.readexactly(packet_length),
-                timeout=self.timeout,
-            )
-            data = header + body
-            
-            if not data:
-                raise ConnectionError("服务器关闭连接")
-            
-            response, _ = RconPacket.decode(data)
+            response, packet_length = await self._read_packet(self.timeout)
+
+            if packet_type != PacketType.COMMAND:
+                return response
+
+            payload_parts = [response.payload] if response.payload else []
+
+            # Source RCON 会把长响应拆成多个包；当包体达到上限时继续尝试读取后续包。
+            while packet_length - 10 >= self.MAX_COMMAND_RESPONSE_CHUNK_SIZE:
+                try:
+                    next_response, packet_length = await self._read_packet(self.RESPONSE_CHUNK_TIMEOUT)
+                except asyncio.IncompleteReadError:
+                    break
+                except asyncio.TimeoutError:
+                    break
+
+                if next_response.request_id != request_id:
+                    break
+                if not next_response.payload:
+                    break
+
+                payload_parts.append(next_response.payload)
+
+            if payload_parts:
+                response.payload = "".join(payload_parts)
+
             return response
 
     async def __aenter__(self) -> "RconClient":
