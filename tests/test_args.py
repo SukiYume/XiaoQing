@@ -194,6 +194,18 @@ class TestParse:
         assert result.opt("b") == "true"
         assert result.opt("c") == "true"
 
+    def test_negative_numbers_are_tokens(self):
+        """测试独立负数参数不会被当成选项"""
+        result = parse("-1 -2.5 value")
+        assert result.tokens == ["-1", "-2.5", "value"]
+        assert result.options == {}
+
+    def test_negative_number_can_be_option_value(self):
+        """测试负数可以作为选项值"""
+        result = parse("--offset -1 --scale -1.5")
+        assert result.opt("offset") == "-1"
+        assert result.opt("scale") == "-1.5"
+
 # ============================================================
 # ParsedArgs 数据类测试
 # ============================================================

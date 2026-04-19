@@ -6,11 +6,10 @@ import json
 import logging
 import platform
 import pytest
-import time
 from pathlib import Path
 from typing import Any
 
-from core.config import ConfigManager, ConfigSnapshot, _check_secrets_file_permissions
+from core.config import ConfigLoadError, ConfigManager, ConfigSnapshot, _check_secrets_file_permissions
 
 # ============================================================
 # Fixtures
@@ -160,6 +159,20 @@ class TestConfigManagerReload:
         assert manager.config == {}
         assert manager.secrets == {}
 
+    def test_reload_keeps_last_valid_snapshot_when_config_is_invalid(
+        self,
+        config_manager: ConfigManager,
+        config_file: Path,
+    ):
+        """测试 reload 遇到损坏配置时保留旧快照"""
+        original = config_manager.config
+        config_file.write_text("{invalid json}", encoding="utf-8")
+
+        with pytest.raises(ConfigLoadError):
+            config_manager.reload()
+
+        assert config_manager.config == original
+
 # ============================================================
 # ConfigManager.update_secret 测试
 # ============================================================
@@ -216,6 +229,24 @@ class TestConfigManagerUpdateSecret:
 
         assert len(snapshots) == 1
         assert snapshots[0].secrets["admin_user_ids"] == [2024]
+
+    def test_update_secret_rolls_back_when_save_fails(
+        self,
+        config_manager: ConfigManager,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """测试 update_secret 落盘失败会回滚内存状态"""
+        original = config_manager.secrets
+
+        def _boom() -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(config_manager, "save_secrets", _boom)
+
+        with pytest.raises(OSError, match="disk full"):
+            config_manager.update_secret("admin_user_ids", [99999])
+
+        assert config_manager.secrets == original
 
 # ============================================================
 # ConfigManager.save_secrets 测试

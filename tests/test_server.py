@@ -421,6 +421,19 @@ async def test_server_post_event_success(sample_server):
     assert "actions" in body
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_server_post_event_rejects_non_object_payload(sample_server):
+    """Test POST event rejects non-object JSON payloads."""
+    request = _make_request_with_auth("POST", "/event", "test_token")
+    request.json = AsyncMock(return_value=["not", "an", "object"])
+
+    response = await sample_server.post_event(request)
+
+    assert response.status == 400
+    assert "Payload must be a JSON object" in response.text
+
+
 # ============================================================
 # WebSocket Handler Tests
 # ============================================================
@@ -500,6 +513,17 @@ async def test_server_broadcast_socket_error(sample_server):
     # Should not raise
     await sample_server.broadcast({"action": "test"})
     assert mock_ws not in sample_server._active_sockets
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_server_handle_ws_event_cleans_idle_lock(sample_server):
+    """Test per-key WS locks are released after handling."""
+    ws = AsyncMock()
+
+    await sample_server._handle_ws_event(ws, {"user_id": 12345})
+
+    assert "user:12345" not in sample_server._ws_event_locks
 
 
 # ============================================================

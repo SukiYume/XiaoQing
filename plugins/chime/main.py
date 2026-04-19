@@ -287,6 +287,18 @@ def format_update_message(
     return "\n".join(lines)
 
 
+def _sorted_frbs_by_latest_timestamp(frb_list: list[FRBData]) -> list[FRBData]:
+    return sorted(frb_list, key=lambda item: item.timestamp or "", reverse=True)
+
+
+def _find_frb(frb_list: list[FRBData], query: str) -> FRBData | None:
+    normalized = query.strip().lower()
+    for frb in frb_list:
+        if frb.name.lower() == normalized:
+            return frb
+    return None
+
+
 # ============================================================
 # 命令处理
 # ============================================================
@@ -307,6 +319,8 @@ async def handle(
             
             if subcommand == "help" or subcommand == "帮助":
                 return segments(_show_help())
+            if subcommand not in {"list", "列表"} and not re.match(r"^frb[\w.+-]*$", subcommand, re.IGNORECASE):
+                return segments(f"未知命令: {parsed.first}\n{_show_help()}")
         
         logger.info(f"处理 CHIME 命令: {command} {args}")
         
@@ -326,6 +340,23 @@ async def handle(
         # 构建新的映射并保存
         new_mapping = build_history_mapping(frb_list)
         save_history(context, new_mapping)
+
+        if parsed and parsed.first:
+            subcommand = parsed.first.lower()
+            if subcommand in {"list", "列表"}:
+                latest = _sorted_frbs_by_latest_timestamp(frb_list)[:MAX_DISPLAY_FRBS]
+                lines = ["📡 最近更新的 FRB："]
+                for frb in latest:
+                    lines.append(f"• {frb.name} - {frb.timestamp}")
+                if len(frb_list) > MAX_DISPLAY_FRBS:
+                    lines.append(f"\n... 共 {len(frb_list)} 个")
+                return segments("\n".join(lines))
+
+            if re.match(r"^frb[\w.+-]*$", subcommand, re.IGNORECASE):
+                frb = _find_frb(frb_list, parsed.first)
+                if frb is None:
+                    return segments(f"❌ 未找到 FRB「{parsed.first}」")
+                return segments(frb.format_info())
         
         # 查找更新
         new_repeaters, new_pulses = find_updates(data, old_mapping, context)

@@ -553,6 +553,44 @@ class TestPendoReviewFixes:
 
         assert "pendo_runtime" not in context.state
 
+    def test_get_database_reuses_shared_singleton_across_contexts(self):
+        from plugins.pendo.services.db import Database
+        from plugins.pendo.utils import db_ops
+
+        db = Database(":memory:")
+        try:
+            db_ops.set_database_singleton(db)
+            ctx_a = SimpleNamespace()
+            ctx_b = SimpleNamespace()
+
+            assert db_ops.get_database(ctx_a) is db
+            assert db_ops.get_database(ctx_b) is db
+            assert ctx_a.pendo_db is db
+            assert ctx_b.pendo_db is db
+        finally:
+            db.cleanup()
+            db_ops.set_database_singleton(None)
+
+    def test_cached_empty_values_do_not_fall_through_to_sql(self, monkeypatch):
+        from plugins.pendo.services.db import Database
+
+        db = Database(":memory:")
+        try:
+            settings_key = db._cache_key("settings", "u-empty")
+            items_key = db._cache_key("items", "u-empty", {"type": "note"}, 10, 0)
+            db._cache_set(settings_key, {})
+            db._cache_set(items_key, [])
+
+            def _boom():
+                raise AssertionError("should not hit sqlite when cache already has an empty value")
+
+            monkeypatch.setattr(db, "get_connection", _boom)
+
+            assert db.get_user_settings("u-empty") == {}
+            assert db.get_items("u-empty", {"type": "note"}, 10, 0) == []
+        finally:
+            db.cleanup()
+
     def test_shutdown_stops_web_and_cleans_all_pendo_databases(self, monkeypatch):
         from plugins.pendo import main as pendo_main
 

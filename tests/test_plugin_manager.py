@@ -153,3 +153,39 @@ def test_get_mtime_tracks_submodule_changes(tmp_path: Path):
 
     assert after >= before
     assert after != before
+
+
+def test_iter_watch_files_ignores_runtime_data_dir(tmp_path: Path):
+    manager = _build_manager(tmp_path)
+    plugin_dir = manager.plugins_dir / "demo"
+    plugin_dir.mkdir()
+    data_dir = plugin_dir / "data"
+    data_dir.mkdir()
+    definition = _build_definition()
+    (plugin_dir / "plugin.json").write_text(
+        '{"name":"demo","version":"1.0.0","entry":"main.py","commands":[],"schedule":[],"concurrency":"shared","enabled":true}',
+        encoding="utf-8",
+    )
+    (plugin_dir / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    runtime_state = data_dir / "state.json"
+    runtime_state.write_text('{"count": 1}\n', encoding="utf-8")
+
+    files = manager._iter_watch_files(plugin_dir, definition)
+
+    assert runtime_state not in files
+
+
+@pytest.mark.asyncio
+async def test_unload_plugin_clears_pending_plugin_state(tmp_path: Path):
+    manager = _build_manager(tmp_path)
+    definition = _build_definition()
+    task = asyncio.create_task(asyncio.sleep(0))
+    manager._init_tasks.append(task)
+    manager._init_task_plugins[task] = "demo"
+    manager._pending_plugins[task] = (definition, ModuleType("demo.main"), 0.0)
+    manager._plugin_states["demo"] = {"value": 1}
+
+    await manager.unload_plugin("demo")
+
+    assert "demo" not in manager._plugin_states
+    assert not manager._pending_plugins

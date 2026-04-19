@@ -38,6 +38,7 @@ from .config import (
     DANGEROUS_PATTERNS,
     DEFAULT_TIMEOUT,
     MAX_OUTPUT_LENGTH,
+    UNSUPPORTED_SHELL_BUILTINS,
 )
 
 def init(context=None) -> None:
@@ -75,16 +76,16 @@ def _get_whitelist(context) -> set[str]:
     mode = config.get("whitelist_mode", "replace")  # 默认为 replace 保持向后兼容
     
     if not custom_list:
-        return DEFAULT_WHITELIST
+        return DEFAULT_WHITELIST - UNSUPPORTED_SHELL_BUILTINS
     
     custom_set = set(custom_list)
     
     if mode == "extend":
         # 扩展模式：合并默认白名单和自定义命令
-        return DEFAULT_WHITELIST | custom_set
+        return (DEFAULT_WHITELIST | custom_set) - UNSUPPORTED_SHELL_BUILTINS
     else:
         # 替换模式：仅使用自定义命令
-        return custom_set
+        return custom_set - UNSUPPORTED_SHELL_BUILTINS
 
 def _get_timeout(context) -> int:
     """获取执行超时"""
@@ -149,6 +150,9 @@ def _validate_command(cmd_line: str, context) -> Optional[str]:
     cmd_name = _extract_command(cmd_line)
     if not cmd_name:
         return "无法解析命令"
+
+    if cmd_name in UNSUPPORTED_SHELL_BUILTINS:
+        return f"命令 '{cmd_name}' 依赖 shell 内建语义，不能直接执行"
 
     # 白名单检查
     if not _is_whitelist_disabled(context):

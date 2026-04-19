@@ -1837,6 +1837,59 @@ async def test_ordinary_group_pre_pfc_block_still_updates_no_reply_adaptation(
     state.heartflow.on_no_reply_async.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_expression_reflection_does_not_spawn_before_reply_gate_passes(
+    mock_context, sample_group_event
+):
+    from plugins.xiaoqing_chat.handlers import _maybe_reply_smalltalk
+
+    state = MagicMock()
+    state.goal_store.set_async = AsyncMock()
+    state.heartflow.on_no_reply_async = AsyncMock()
+    state.pfc_state_store.get_async = AsyncMock(return_value=SimpleNamespace(goal_list=[]))
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            enable_smalltalk=True,
+            goal=SimpleNamespace(enable_goal=True),
+            reflection=SimpleNamespace(
+                enable_expression_reflection=True,
+                enable_review_sessions=False,
+                operator_user_id="10001",
+                operator_group_id="20001",
+                min_interval_seconds=60,
+                ask_per_check=1,
+            ),
+            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
+        )
+    )
+
+    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
+    with (
+        patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx),
+        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
+        patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
+        patch(
+            "plugins.xiaoqing_chat.handlers.derive_goal_async",
+            new=AsyncMock(return_value="保持当前话题"),
+        ),
+        patch("plugins.xiaoqing_chat.handlers._resolve_llm_config"),
+        patch("plugins.xiaoqing_chat.handlers._spawn_bg_task") as mock_spawn_bg_task,
+        patch("plugins.xiaoqing_chat.handlers._log_step"),
+    ):
+        result = await _maybe_reply_smalltalk(
+            "今天只是同步状态，不需要立即回复",
+            sample_group_event,
+            mock_context,
+        )
+
+    assert result == []
+    mock_spawn_bg_task.assert_not_called()
+
+
 def test_follow_up_compact_prompt_explicitly_allows_brief_interjection_on_new_group_content():
     from plugins.xiaoqing_chat.planning.pfc_action_planner import PROMPT_FOLLOW_UP_COMPACT
 

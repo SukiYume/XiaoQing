@@ -42,7 +42,10 @@ from .services.db import Database
 from .services.reminder import ReminderService
 from .services.exporter import ExporterService
 from .services.ai_parser import AIParser
-from .utils.db_ops import get_user_custom_settings as _get_user_custom_settings_from_db
+from .utils.db_ops import (
+    get_user_custom_settings as _get_user_custom_settings_from_db,
+    set_database_singleton,
+)
 from .utils.error_handlers import error_result, handle_command_errors_with_segments, success_result
 from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 from .utils.session_utils import safe_end_session
@@ -110,6 +113,7 @@ def init(context=None) -> None:
     # 初始化数据库（创建表结构）
     db = Database(db_path)
     _startup_db = db
+    set_database_singleton(db)
     log = _get_logger(context)
     log.info("Pendo plugin initialized, database at %s", db_path)
 

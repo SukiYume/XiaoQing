@@ -359,6 +359,14 @@ class TestVoicePlugin:
         result_text = str(result)
         assert "请输入" in result_text or "转换" in result_text
 
+    def test_plugin_json_description_matches_public_command_surface(self):
+        import json
+
+        plugin_json = json.loads((ROOT / "plugins" / "voice" / "plugin.json").read_text(encoding="utf-8"))
+
+        assert "文字转语音(TTS)" in plugin_json["description"]
+        assert "内部 STT 工具函数" in plugin_json["description"]
+
     @pytest.mark.asyncio
     async def test_handle_tts_success(self, mock_context, mock_event):
         """测试成功的TTS处理"""

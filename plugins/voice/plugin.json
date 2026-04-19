@@ -1,7 +1,7 @@
 {
     "name": "voice",
     "version": "2.0.0",
-    "description": "语音功能插件 - 支持文字转语音(TTS)和语音转文字(STT)，使用 Azure 认知服务",
+    "description": "语音功能插件 - 支持文字转语音(TTS)，并提供内部 STT 工具函数，使用 Azure 认知服务",
     "entry": "main.py",
     "commands": [
         {

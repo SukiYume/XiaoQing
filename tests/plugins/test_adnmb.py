@@ -316,6 +316,26 @@ def test_adnmb_get_client_reuses_fallback_uuid_client(tmp_path):
     assert first is second
 
 
+def test_adnmb_get_client_isolates_subscription_uuid_per_user(tmp_path):
+    class _Context:
+        def __init__(self, plugin_dir: Path):
+            self.plugin_dir = plugin_dir
+            self.http_session = object()
+            self.state = {}
+            self.secrets = {"plugins": {"adnmb": {"uuid": "shared-uuid"}}}
+            self.current_user_id = None
+
+    context = _Context(tmp_path)
+    typed_context = cast(PluginContextProtocol, cast(object, context))
+    cache_dir = context.plugin_dir / "cache"
+
+    first = adnmb_main._get_client(typed_context, cache_dir, user_id="1001")
+    second = adnmb_main._get_client(typed_context, cache_dir, user_id="1002")
+
+    assert first is not second
+    assert first.uuid != second.uuid
+
+
 @pytest.mark.asyncio
 async def test_adnmb_client_get_passes_timeout(tmp_path):
     captured = {}

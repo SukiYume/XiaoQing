@@ -67,21 +67,31 @@ class PaperStorage:
             data[paper_id].append(note)
             return self._save_json(self.notes_file, data)
 
-    def get_paper_notes(self, paper_id: str) -> list[dict[str, Any]]:
+    def get_paper_notes(self, paper_id: str, user_id: int | None = None) -> list[dict[str, Any]]:
         data = self._load_json(self.notes_file)
-        return data.get(paper_id, [])
+        notes = data.get(paper_id, [])
+        if user_id is None:
+            return notes
+        return [note for note in notes if int(note.get("user", -1)) == int(user_id)]
 
-    def delete_paper_note(self, paper_id: str, index: int) -> bool:
+    def delete_paper_note(self, paper_id: str, index: int, user_id: int | None = None) -> bool:
         with self._lock:
             data = self._load_json(self.notes_file)
             if paper_id not in data:
                 return False
 
             notes = data[paper_id]
-            if index < 0 or index >= len(notes):
+            if user_id is None:
+                target_indices = list(range(len(notes)))
+            else:
+                target_indices = [
+                    i for i, note in enumerate(notes)
+                    if int(note.get("user", -1)) == int(user_id)
+                ]
+            if index < 0 or index >= len(target_indices):
                 return False
 
-            notes.pop(index)
+            notes.pop(target_indices[index])
             if not notes:
                 del data[paper_id]
 
@@ -174,20 +184,35 @@ class PaperStorage:
             data["deadlines"].append(deadline)
             return self._save_json(self.deadlines_file, data)
 
-    def get_deadlines(self) -> list[dict[str, Any]]:
+    def get_deadlines(self, user_id: int | None = None) -> list[dict[str, Any]]:
         data = self._load_json(self.deadlines_file)
         deadlines = data.get("deadlines", [])
+        if user_id is not None:
+            deadlines = [
+                deadline for deadline in deadlines
+                if int(deadline.get("user", -1)) == int(user_id)
+            ]
         return sorted(deadlines, key=lambda x: x.get("date", ""))
 
-    def delete_deadline(self, index: int) -> bool:
+    def delete_deadline(self, index: int, user_id: int | None = None) -> bool:
         with self._lock:
             data = self._load_json(self.deadlines_file)
             if "deadlines" not in data:
                 return False
 
             deadlines = data["deadlines"]
-            if index < 0 or index >= len(deadlines):
+            if user_id is None:
+                ordered = [(i, deadline) for i, deadline in enumerate(deadlines)]
+            else:
+                ordered = [
+                    (i, deadline)
+                    for i, deadline in enumerate(deadlines)
+                    if int(deadline.get("user", -1)) == int(user_id)
+                ]
+            ordered.sort(key=lambda item: item[1].get("date", ""))
+            if index < 0 or index >= len(ordered):
                 return False
 
-            deadlines.pop(index)
+            target_index, _ = ordered[index]
+            deadlines.pop(target_index)
             return self._save_json(self.deadlines_file, data)

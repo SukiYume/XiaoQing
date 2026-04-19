@@ -543,6 +543,7 @@ class TestQingsshPathResolver:
 class _SessionStub:
     def __init__(self, data=None):
         self.data = data or {}
+        self.plugin_name = "qingssh"
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -566,6 +567,15 @@ class _ManagerStub:
     async def execute_command_stream(self, *args, **kwargs):
         await self._done.wait()
         return 0
+
+
+class _DisconnectManagerStub:
+    def __init__(self):
+        self.calls = []
+
+    def disconnect(self, user_id, group_id, server_name):
+        self.calls.append((user_id, group_id, server_name))
+        return server_name == "other-srv"
 
 
 def test_qingssh_session_does_not_store_task_object():
@@ -598,6 +608,33 @@ def test_qingssh_session_does_not_store_task_object():
         await asyncio.sleep(0)
 
         assert session.get(SessionKeys.CURRENT_TASK) is None
+
+    asyncio.run(_run())
+
+
+def test_qingssh_disconnect_respects_explicit_target_without_ending_current_session():
+    async def _run():
+        manager = _DisconnectManagerStub()
+        context = Mock()
+        context.current_user_id = 10001
+        context.current_group_id = 50001
+        context.end_session = AsyncMock()
+        context.get_session = AsyncMock(
+            return_value=_SessionStub({SessionKeys.SERVER_NAME: "current-srv"})
+        )
+
+        from plugins.qingssh import handlers as handlers_module
+
+        segments = await handlers_module.handle_ssh_disconnect(
+            "other-srv",
+            {},
+            context,
+            cast(Any, manager),
+        )
+
+        assert manager.calls == [("10001", "50001", "other-srv")]
+        context.end_session.assert_not_awaited()
+        assert "other-srv" in segments[0]["data"]["text"]
 
     asyncio.run(_run())
 
@@ -650,6 +687,95 @@ def test_disconnect_closes_active_channel_and_jump_connection(tmp_path):
     assert client._jump_client.closed is True
     assert key not in manager.active_channels
     assert key not in manager.connections
+
+
+@pytest.mark.asyncio
+async def test_connect_closes_jump_host_when_target_connection_fails(monkeypatch, tmp_path):
+    class _FakeProxySock:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class _FakeTransport:
+        def __init__(self, sock):
+            self.sock = sock
+
+        def open_channel(self, *_args):
+            return self.sock
+
+    class _FakeJumpClient:
+        instances = []
+
+        def __init__(self):
+            self.closed = False
+            self.sock = _FakeProxySock()
+            self.connected = False
+            _FakeJumpClient.instances.append(self)
+
+        def set_missing_host_key_policy(self, _policy):
+            return None
+
+        def load_system_host_keys(self):
+            return None
+
+        def get_transport(self):
+            return _FakeTransport(self.sock)
+
+        def close(self):
+            self.closed = True
+
+        def connect(self, **_kwargs):
+            self.connected = True
+
+    class _FakeTargetClient:
+        def __init__(self):
+            self.closed = False
+
+        def set_missing_host_key_policy(self, _policy):
+            return None
+
+        def load_system_host_keys(self):
+            return None
+
+        def close(self):
+            self.closed = True
+
+        def connect(self, **_kwargs):
+            raise ssh_manager_module.paramiko.SSHException("target failed")
+
+    clients = [_FakeTargetClient(), _FakeJumpClient()]
+
+    def _client_factory():
+        return clients.pop(0)
+
+    monkeypatch.setattr(ssh_manager_module.paramiko, "SSHClient", _client_factory)
+    monkeypatch.setattr(ssh_manager_module, "PARAMIKO_AVAILABLE", True)
+
+    manager = ssh_manager_module.SSHManager(tmp_path)
+    manager._ssh_config = MagicMock()
+    manager._ssh_config.lookup.side_effect = lambda host: {
+        "hostname": host,
+        "port": "22",
+        "user": "root",
+        "identityfile": [],
+        "proxycommand": "ssh -W %h:%p jump-host" if host == "srv" else None,
+    }
+    manager.servers["srv"] = {
+        "host": "srv.internal",
+        "port": 22,
+        "username": "root",
+        "proxycommand": "ssh -W %h:%p jump-host",
+    }
+
+    ok, message = await manager.connect("10001", "20001", "srv")
+
+    assert ok is False
+    assert "连接错误" in message or "连接失败" in message
+    jump_client = _FakeJumpClient.instances[0]
+    assert jump_client.closed is True
+    assert jump_client.sock.closed is True
 
 
 @pytest.mark.asyncio

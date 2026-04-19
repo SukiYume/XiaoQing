@@ -32,6 +32,7 @@ from ..models.item import (
 )
 
 logger = logging.getLogger(__name__)
+_CACHE_MISS = object()
 
 
 class DuplicateBundleImportError(RuntimeError):
@@ -140,7 +141,12 @@ class Database:
         return "|".join(normalize(p) for p in parts)
 
     def _cache_get(self, key: str) -> Any:
-        """获取缓存"""
+        """获取缓存；未命中时返回 None 以保持兼容语义。"""
+        value = self._cache_get_or_miss(key)
+        return None if value is _CACHE_MISS else value
+
+    def _cache_get_or_miss(self, key: str) -> Any:
+        """获取缓存；未命中时返回内部 sentinel。"""
         with self._cache_lock:
             entry = self._cache.get(key)
             if entry:
@@ -149,7 +155,7 @@ class Database:
                     self._cache.move_to_end(key)  # 维护真正的 LRU 顺序
                     return val
                 del self._cache[key]
-        return None
+        return _CACHE_MISS
 
     def _cache_set(self, key: str, value: Any):
         """设置缓存（使用 LRU 淘汰策略）"""
@@ -762,8 +768,8 @@ class Database:
     def get_item(self, item_id: str, owner_id: str | None = None) -> Optional[Item]:
         """获取单个条目，返回Item dataclass实例"""
         cache_key = self._cache_key("item", item_id, owner_id or "*")
-        cached = self._cache_get(cache_key)
-        if cached:
+        cached = self._cache_get_or_miss(cache_key)
+        if cached is not _CACHE_MISS:
             return cached
 
         conn = self.get_connection()
@@ -808,8 +814,8 @@ class Database:
             Item dataclass实例列表
         """
         cache_key = self._cache_key("items", owner_id, filters or {}, limit, offset)
-        cached = self._cache_get(cache_key)
-        if cached:
+        cached = self._cache_get_or_miss(cache_key)
+        if cached is not _CACHE_MISS:
             return cached
 
         conn = self.get_connection()
@@ -1410,8 +1416,8 @@ class Database:
     def get_user_settings(self, user_id: str) -> dict[str, Any]:
         """获取用户设置"""
         cache_key = self._cache_key("settings", user_id)
-        cached = self._cache_get(cache_key)
-        if cached:
+        cached = self._cache_get_or_miss(cache_key)
+        if cached is not _CACHE_MISS:
             return cached
 
         conn = self.get_connection()
@@ -1436,8 +1442,8 @@ class Database:
         results: dict[str, dict[str, Any]] = {}
         missing_user_ids: list[str] = []
         for user_id in unique_user_ids:
-            cached = self._cache_get(self._cache_key("settings", user_id))
-            if cached:
+            cached = self._cache_get_or_miss(self._cache_key("settings", user_id))
+            if cached is not _CACHE_MISS:
                 results[user_id] = cached
             else:
                 missing_user_ids.append(user_id)

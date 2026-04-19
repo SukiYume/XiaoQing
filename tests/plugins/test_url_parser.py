@@ -291,6 +291,48 @@ class TestURLParserPlugin:
         assert result[1]["data"]["file"] == "https://example.com/og-image.jpg"
 
     @pytest.mark.asyncio
+    async def test_handle_url_resolves_relative_image_url(self, mock_context, mock_event):
+        html_content = b'''
+        <html>
+        <head>
+            <title>Relative</title>
+            <meta property="og:image" content="/static/cover.jpg">
+        </head>
+        </html>
+        '''
+
+        class MockResponse:
+            status = 200
+            charset = "utf-8"
+
+            @property
+            def content(self):
+                return self
+
+            async def read(self, limit=None):
+                return html_content
+
+        class MockContextManager:
+            async def __aenter__(self):
+                return MockResponse()
+
+            async def __aexit__(self, *args):
+                return None
+
+        class MockSession:
+            def get(self, *args, **kwargs):
+                return MockContextManager()
+
+        mock_context.http_session = MockSession()
+
+        result = await url_parser.handle_url("https://example.com/post/1", mock_event, mock_context)
+
+        assert any(
+            seg.get("type") == "image" and seg["data"]["file"] == "https://example.com/static/cover.jpg"
+            for seg in result
+        )
+
+    @pytest.mark.asyncio
     async def test_handle_url_with_twitter_tags(self, mock_context, mock_event):
         """测试Twitter卡片标签"""
         html_content = b'''
