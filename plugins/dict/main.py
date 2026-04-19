@@ -62,6 +62,20 @@ def _detect_language(text: str) -> str:
     return 'chinese' if re.search(r'[\u4e00-\u9fff]', text) else 'english'
 
 
+def _extract_query(parsed, exact_match: bool) -> str:
+    query = parsed.rest().strip()
+    if query:
+        return query
+
+    if exact_match:
+        for key in ("e", "exact"):
+            value = parsed.opt(key).strip()
+            if value and value.lower() != "true":
+                return value
+
+    return ""
+
+
 # ============================================================
 # 天文学词典
 # ============================================================
@@ -167,14 +181,14 @@ async def handle(
         if not parsed or parsed.first.lower() in ['help', 'h', 'list', 'l', '帮助']:
             return segments(_get_help())
         
-        # 获取查询词汇（使用 rest() 方法获取所有位置参数）
-        query = parsed.rest() or args.strip()
+        exact_match = parsed.has('e') or parsed.has('exact')
+        # 精确匹配的 bare flag 可能把查询词吃进 option value，需要单独回收。
+        query = _extract_query(parsed, exact_match)
         
         if not query:
             return segments(_get_help())
         
         # 获取参数
-        exact_match = parsed.has('e') or parsed.has('exact')
         max_results_str = parsed.opt('n') or parsed.opt('num')
         try:
             max_results = int(max_results_str) if max_results_str else 10

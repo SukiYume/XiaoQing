@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock
 import tempfile
 import json
+from plugins.chime import main as chime_main
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -271,3 +272,50 @@ class TestChimeIntegration:
         main_file = ROOT / "plugins" / "chime" / "main.py"
         content = main_file.read_text(encoding='utf-8')
         assert "async def handle" in content
+
+
+@pytest.mark.asyncio
+async def test_chime_list_command_shows_latest_frbs(monkeypatch):
+    context = MagicMock()
+    context.logger = MagicMock()
+    sample_data = {
+        "FRB20180916B": {"201225": {"timestamp": {"value": "2020-12-25T12:00:00"}}},
+        "FRB20200120E": {"210101": {"timestamp": {"value": "2021-01-01T00:00:00"}}},
+    }
+
+    monkeypatch.setattr(chime_main, "fetch_chime_repeaters", AsyncMock(return_value=sample_data))
+    monkeypatch.setattr(chime_main, "load_history", lambda _context: {})
+    monkeypatch.setattr(chime_main, "save_history", lambda _context, _mapping: True)
+
+    result = await chime_main.handle("chime", "list", {}, context)
+
+    text = str(result)
+    assert "最近更新的 FRB" in text
+    assert "FRB20200120E" in text
+
+
+@pytest.mark.asyncio
+async def test_chime_specific_frb_query_returns_detail(monkeypatch):
+    context = MagicMock()
+    context.logger = MagicMock()
+    sample_data = {
+        "FRB20180916B": {"201225": {"timestamp": {"value": "2020-12-25T12:00:00"}}},
+    }
+
+    monkeypatch.setattr(chime_main, "fetch_chime_repeaters", AsyncMock(return_value=sample_data))
+    monkeypatch.setattr(chime_main, "load_history", lambda _context: {})
+    monkeypatch.setattr(chime_main, "save_history", lambda _context, _mapping: True)
+
+    result = await chime_main.handle("chime", "FRB20180916B", {}, context)
+
+    assert "FRB: FRB20180916B" in str(result)
+
+
+@pytest.mark.asyncio
+async def test_chime_unknown_subcommand_returns_help(monkeypatch):
+    context = MagicMock()
+    context.logger = MagicMock()
+
+    result = await chime_main.handle("chime", "unknown-subcommand", {}, context)
+
+    assert "未知命令" in str(result)

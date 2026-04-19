@@ -3,12 +3,11 @@
 提供从多个选项中随机选择的功能
 """
 import random
-import re
 import logging
 from typing import Any, Optional
 
 from core.plugin_base import segments
-from core.args import parse
+from core.args import parse, tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ def parse_choice_args(args: str) -> tuple[Optional[str], list[str], int, bool]:
         return None, [], DEFAULT_CHOICES, False
     
     # 分割参数
-    tokens = args.split()
+    tokens = tokenize(args)
     
     if len(tokens) < 2:
         return None, [], DEFAULT_CHOICES, False

@@ -422,32 +422,6 @@ async def _prepare_smalltalk_turn(
         },
     )
 
-    if runtime.cfg.reflection.enable_expression_reflection:
-        bg = _resolve_llm_config(runtime.cfg, secrets, foreground=False)
-
-        async def _run_reflection() -> None:
-            await tick_reflect_tracker(
-                context=context,
-                operator_chat_id=chat_id,
-                memory_store=state.memory_store,
-                expr_store=state.bw_expr_store,
-                tracker_store=state.bw_tracker_store,
-                secrets=secrets,
-                **bg.to_dict(),
-            )
-            await maybe_ask_for_reflection(
-                context=context,
-                expr_store=state.bw_expr_store,
-                tracker_store=state.bw_tracker_store,
-                operator_user_id=int(runtime.cfg.reflection.operator_user_id),
-                operator_group_id=int(runtime.cfg.reflection.operator_group_id),
-                min_interval_seconds=float(runtime.cfg.reflection.min_interval_seconds),
-                ask_per_check=int(runtime.cfg.reflection.ask_per_check),
-            )
-
-        _spawn_bg_task(context, _run_reflection(), name=f"reflection:{chat_id}")
-        _log_step(context, runtime, chat_id=chat_id, step="smalltalk.reflection.spawn", fields={})
-
     if runtime.cfg.goal.enable_goal:
         pfc_state_before_gate = await state.pfc_state_store.get_async(chat_id)
         planner_top_goal = ""
@@ -494,6 +468,32 @@ async def _prepare_smalltalk_turn(
             if asyncio.iscoroutine(maybe_coro):
                 await maybe_coro
             return None
+
+    if runtime.cfg.reflection.enable_expression_reflection:
+        bg = _resolve_llm_config(runtime.cfg, secrets, foreground=False)
+
+        async def _run_reflection() -> None:
+            await tick_reflect_tracker(
+                context=context,
+                operator_chat_id=chat_id,
+                memory_store=state.memory_store,
+                expr_store=state.bw_expr_store,
+                tracker_store=state.bw_tracker_store,
+                secrets=secrets,
+                **bg.to_dict(),
+            )
+            await maybe_ask_for_reflection(
+                context=context,
+                expr_store=state.bw_expr_store,
+                tracker_store=state.bw_tracker_store,
+                operator_user_id=int(runtime.cfg.reflection.operator_user_id),
+                operator_group_id=int(runtime.cfg.reflection.operator_group_id),
+                min_interval_seconds=float(runtime.cfg.reflection.min_interval_seconds),
+                ask_per_check=int(runtime.cfg.reflection.ask_per_check),
+            )
+
+        _spawn_bg_task(context, _run_reflection(), name=f"reflection:{chat_id}")
+        _log_step(context, runtime, chat_id=chat_id, step="smalltalk.reflection.spawn", fields={})
 
     brain_chat_active = is_brain_chat_active(runtime, is_private, forced)
     mood_text = state.get_mood_state(chat_id)

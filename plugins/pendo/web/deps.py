@@ -2,6 +2,7 @@
 from fastapi import Header, HTTPException, Request
 
 from ..services.db import Database
+from ..utils.db_ops import set_database_singleton
 from .auth import verify_token, AuthError
 
 # Module-level reference, set by server.py on startup
@@ -12,6 +13,7 @@ def set_db(db: Database) -> None:
     """Set the database instance (called on server start)."""
     global _db_instance
     _db_instance = db
+    set_database_singleton(db)
 
 
 def get_db() -> Database:

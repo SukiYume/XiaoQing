@@ -2,10 +2,21 @@
 颜色数据管理模块
 负责加载和管理颜色数据
 """
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
 from core.plugin_base import load_json, write_json, ensure_dir
+
+
+@lru_cache(maxsize=4)
+def _load_builtin_colors_cached(color_file: str, mtime_ns: int) -> list[dict[str, Any]]:
+    builtin_colors = load_json(Path(color_file), [])
+    if isinstance(builtin_colors, dict):
+        return [builtin_colors]
+    if isinstance(builtin_colors, list):
+        return builtin_colors
+    return []
 
 def load_colors(context) -> list[dict[str, Any]]:
     """加载所有颜色数据
@@ -22,9 +33,10 @@ def load_colors(context) -> list[dict[str, Any]]:
     try:
         builtin_file = context.plugin_dir / "color.json"
         if builtin_file.exists():
-            builtin_colors = load_json(builtin_file, [])
-            if isinstance(builtin_colors, dict):
-                builtin_colors = [builtin_colors]
+            builtin_colors = _load_builtin_colors_cached(
+                str(builtin_file),
+                builtin_file.stat().st_mtime_ns,
+            )
             colors.extend(builtin_colors)
             context.logger.debug(f"加载内置颜色库: {len(builtin_colors)} 个颜色")
         else:

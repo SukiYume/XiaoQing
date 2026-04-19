@@ -239,6 +239,8 @@ class InboundServer:
             return web.json_response({"error": "Invalid JSON"}, status=400)
         except ContentTypeError:
             return web.json_response({"error": "Unsupported Content-Type"}, status=415)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "Payload must be a JSON object"}, status=400)
         actions = await self.handler(payload)
         return web.json_response({"actions": actions}, dumps=lambda obj: json.dumps(obj, ensure_ascii=False))
 
@@ -262,6 +264,11 @@ class InboundServer:
                         payload = json.loads(msg.data)
                         self._request_count += 1
                     except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, dict):
+                        await ws.send_str(
+                            json.dumps({"error": "Payload must be a JSON object"}, ensure_ascii=False)
+                        )
                         continue
                     queue = self._ws_event_queue
                     if not queue:
@@ -307,6 +314,8 @@ class InboundServer:
 
     async def _handle_ws_event(self, ws: web.WebSocketResponse, payload: dict[str, Any]) -> None:
         """处理 WebSocket 事件（非阻塞）"""
+        key: str | None = None
+        lock: asyncio.Lock | None = None
         try:
             payload = dict(payload)
             payload["_source"] = "inbound_ws"
@@ -321,6 +330,9 @@ class InboundServer:
                 await ws.send_str(json.dumps(action, ensure_ascii=False))
         except Exception as exc:
             logger.exception("WebSocket event handler error: %s", exc)
+        finally:
+            if key and lock and not lock.locked():
+                self._ws_event_locks.pop(key, None)
 
     def _ensure_ws_workers(self) -> None:
         if not self.enable_ws or not self._ws_event_queue:

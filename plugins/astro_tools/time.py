@@ -5,6 +5,9 @@
 import re
 
 
+UNIX_TIMESTAMP_MIN_ABS = 100_000_000
+
+
 def _build_time_response(label: str, t) -> str:
     return f"🕐 {label} 转换结果\n" \
            f"UTC: {t.iso}\n" \
@@ -16,7 +19,7 @@ def _build_time_response(label: str, t) -> str:
 
 def _parse_numeric_time(value: float, Time):
     abs_value = abs(value)
-    if abs_value >= 1_000_000_000:
+    if abs_value >= UNIX_TIMESTAMP_MIN_ABS:
         return Time(value, format='unix'), "Unix"
     if abs_value > 2400000:
         return Time(value, format='jd'), "JD"

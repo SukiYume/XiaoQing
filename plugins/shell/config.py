@@ -119,6 +119,13 @@ DEFAULT_WHITELIST: set[str] = {
     "mode", "chcp", "title", "color", "prompt",
 }
 
+# 这些命令依赖 shell 内建语义，无法通过 create_subprocess_exec 直接执行。
+UNSUPPORTED_SHELL_BUILTINS: set[str] = {
+    "alias", "bg", "cd", "cls", "color", "copy", "del", "fg", "help",
+    "history", "jobs", "path", "prompt", "rd", "rmdir", "set", "start",
+    "title", "type", "wait",
+}
+
 # ============================================================
 # 危险模式（正则表达式）
 # ============================================================

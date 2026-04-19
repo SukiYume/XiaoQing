@@ -86,6 +86,23 @@ class TestDictSearch:
         # 应该返回未找到的提示
         assert len(result) > 0
 
+    @pytest.mark.asyncio
+    async def test_exact_flag_recovers_query_term_from_option_value(self, mock_context, mock_event, monkeypatch):
+        captured = {}
+
+        async def _fake_query_astrodict(query, context, exact_match=False, max_results=10):
+            captured["query"] = query
+            captured["exact_match"] = exact_match
+            return "ok"
+
+        monkeypatch.setattr(dict_plugin, "query_astrodict", _fake_query_astrodict)
+
+        result = await dict_plugin.handle("dict", "-e galaxy", mock_event, mock_context)
+
+        assert result is not None
+        assert captured["query"] == "galaxy"
+        assert captured["exact_match"] is True
+
 
 class TestDictErrorHandling:
     """测试错误处理"""

@@ -503,6 +503,10 @@ class SSHManager:
             server = server.copy()
             server['username'] = username_override
         
+        client = None
+        jump_client = None
+        proxy_sock = None
+
         try:
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.RejectPolicy())
@@ -571,9 +575,9 @@ class SSHManager:
                 await asyncio.to_thread(jump_client.connect, **j_kwargs)
                 dest_addr = (server["host"], server["port"])
                 src_addr = ("0.0.0.0", 0)
-                sock = jump_client.get_transport().open_channel("direct-tcpip", dest_addr, src_addr)
+                proxy_sock = jump_client.get_transport().open_channel("direct-tcpip", dest_addr, src_addr)
 
-                connect_kwargs["sock"] = sock
+                connect_kwargs["sock"] = proxy_sock
                 client._jump_client = jump_client
                 self._log("info", f"Jump host connected: {jump_host_name}")
 
@@ -589,6 +593,18 @@ class SSHManager:
             return True, f"✅ 成功连接到 {name} ({server['host']})"
         
         except paramiko.AuthenticationException as e:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            if proxy_sock is not None:
+                try:
+                    proxy_sock.close()
+                except Exception:
+                    pass
+            if jump_client is not None and client is not None:
+                self._close_jump_client(client)
             self._log("error", f"Authentication failed for {name}: {e}")
             return False, (
                 "❌ 认证失败\n"
@@ -600,6 +616,18 @@ class SSHManager:
                 f"  3. 密钥路径: {server.get('key_path', 'N/A')}"
             )
         except paramiko.SSHException as e:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            if proxy_sock is not None:
+                try:
+                    proxy_sock.close()
+                except Exception:
+                    pass
+            if jump_client is not None and client is not None:
+                self._close_jump_client(client)
             error_msg = str(e)
             self._log("error", f"SSH error for {name}: {e}")
             
@@ -616,6 +644,18 @@ class SSHManager:
             
             return False, f"❌ SSH 连接错误: {e}\n\n💡 请检查网络连接和服务器状态"
         except Exception as e:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            if proxy_sock is not None:
+                try:
+                    proxy_sock.close()
+                except Exception:
+                    pass
+            if jump_client is not None and client is not None:
+                self._close_jump_client(client)
             self._log("error", f"Connection failed for {name}: {e}", exc_info=True)
             return False, f"❌ 连接失败: {e}"
     

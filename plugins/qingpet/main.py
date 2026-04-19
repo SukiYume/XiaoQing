@@ -20,6 +20,7 @@ import logging
 import math
 import re
 import asyncio
+import hashlib
 from typing import Any, Optional
 
 from core.plugin_base import segments
@@ -241,6 +242,76 @@ def _record_command(user_id: str, group_id: int):
         _db_instance.record_command_timestamp(user_id, group_id)
 
 
+_PRIVATE_SELF_SCOPED_ACTIONS = {
+    "状态", "status", "stat", "info",
+    "喂食", "feed", "eat",
+    "清洁", "clean", "bath",
+    "玩耍", "play",
+    "睡觉", "sleep",
+    "起床", "wake",
+    "训练", "train",
+    "探索", "explore", "adventure",
+    "治疗", "treat", "heal", "cure",
+    "使用", "use",
+    "任务", "task", "daily",
+    "改名", "rename",
+    "召回", "recall",
+}
+
+_PRIVATE_AUTO_SCOPE_ACTIONS = {
+    "背包", "backpack", "bag", "inventory",
+    "商店", "shop", "store",
+    "购买", "buy",
+    "装扮", "dress", "outfit",
+    "送礼", "gift",
+    "互访", "visit",
+    "查看", "view",
+    "摸摸", "点赞", "pat", "like",
+    "留言", "message", "msg",
+    "排行", "ranking", "rank", "top",
+    "活动", "activity",
+    "交易", "trade", "market",
+    "展示", "展示会", "show",
+    "称号", "title", "titles",
+    "游戏", "game", "play_game",
+}
+
+_PRIVATE_ALWAYS_ALLOWED_ACTIONS = {
+    "帮助", "help", "h", "?",
+    "基础", "base", "basic",
+    "进阶", "adv", "advanced",
+    "道具", "items", "item",
+    "社交", "social",
+    "玩法", "gameplay",
+    "management",
+}
+
+
+def _private_scope_bucket(user_id: str) -> int:
+    """为私聊命令生成稳定的限流桶，避免所有私聊共用 group_id=0。"""
+    try:
+        return -max(1, int(user_id))
+    except (TypeError, ValueError):
+        digest = hashlib.sha1(user_id.encode("utf-8")).hexdigest()[:8]
+        return -(int(digest, 16) or 1)
+
+
+def _resolve_private_command_group(
+    db: Database,
+    user_id: str,
+) -> tuple[int | None, str | None]:
+    pets = db.get_pets_by_user(user_id)
+    if not pets:
+        return None, "你还没有宠物，请先在群里领养一只"
+
+    group_ids = sorted({int(pet.group_id) for pet in pets})
+    if len(group_ids) == 1:
+        return group_ids[0], None
+
+    groups = "、".join(str(group_id) for group_id in group_ids)
+    return None, f"你在多个群拥有宠物，请在对应群内使用该命令（可用群号：{groups}）"
+
+
 def _extract_message(result: Any) -> str:
     """
     CR Fix #3: 统一子命令返回值。
@@ -382,13 +453,14 @@ async def handle(command: str, args: str, event: dict[str, Any], context, **kwar
     log = _get_logger(context)
 
     user_id = event.get("user_id", "")
-    group_id = event.get("group_id", 0)
+    raw_group_id = event.get("group_id")
 
     try:
-        group_id = int(group_id)
+        group_id = int(raw_group_id) if raw_group_id is not None else 0
     except (TypeError, ValueError):
         group_id = 0
 
+    is_private = raw_group_id in (None, "", 0, "0")
     user_id = str(user_id)
 
     if _db_instance is None:
@@ -396,30 +468,42 @@ async def handle(command: str, args: str, event: dict[str, Any], context, **kwar
     db = _db_instance
 
     async def _execute() -> Any:
-        # ── 群级频率限制（CR Fix #1: 现在真正生效）──
-        rate_limit_msg = _check_group_rate_limit(group_id)
-        if rate_limit_msg is not None:
-            # CR Fix #12: 被限流时不记录命令
-            return rate_limit_msg if rate_limit_msg else None  # 空串 → 静默丢弃
-
-        # ── 反脚本/反刷屏 ──
-        spam_msg = _check_anti_spam(user_id, group_id)
-        if spam_msg:
-            return spam_msg
-
-        # ── 记录操作频率（CR Fix #12: 移到限流检查之后）──
-        _record_command(user_id, group_id)
-
-        # ── 群级开关检查 ──
-        group_config = db.get_group_config(group_id)
-
-        # ── 解析 ──
         parsed = parse(args)
         if not parsed:
             return format_help_text()
 
         action = parsed.first.lower()
         rest_args = parsed._rest
+        effective_group_id = group_id
+
+        if is_private:
+            if action in _PRIVATE_AUTO_SCOPE_ACTIONS:
+                resolved_group_id, err = _resolve_private_command_group(db, user_id)
+                if err:
+                    return err
+                if resolved_group_id is not None:
+                    effective_group_id = resolved_group_id
+            elif action not in _PRIVATE_SELF_SCOPED_ACTIONS and action not in _PRIVATE_ALWAYS_ALLOWED_ACTIONS:
+                return "该命令需要在群聊中使用"
+
+        rate_limit_group_id = effective_group_id if effective_group_id != 0 else _private_scope_bucket(user_id)
+
+        # ── 群级频率限制（CR Fix #1: 现在真正生效）──
+        rate_limit_msg = _check_group_rate_limit(rate_limit_group_id)
+        if rate_limit_msg is not None:
+            # CR Fix #12: 被限流时不记录命令
+            return rate_limit_msg if rate_limit_msg else None  # 空串 → 静默丢弃
+
+        # ── 反脚本/反刷屏 ──
+        spam_msg = _check_anti_spam(user_id, rate_limit_group_id)
+        if spam_msg:
+            return spam_msg
+
+        # ── 记录操作频率（CR Fix #12: 移到限流检查之后）──
+        _record_command(user_id, rate_limit_group_id)
+
+        # ── 群级开关检查 ──
+        group_config = db.get_group_config(effective_group_id) if effective_group_id != 0 else None
 
         at_qq = _extract_first_at_qq(event)
         if at_qq:
@@ -465,18 +549,18 @@ async def handle(command: str, args: str, event: dict[str, Any], context, **kwar
             pass  # 管理命令内部做权限检查
         else:
             # 普通命令检查群开关
-            if not group_config.enabled:
+            if group_config is not None and not group_config.enabled:
                 return "🚫 宠物系统在本群尚未启用\n管理员可使用: /宠物 管理 开启"
 
             # 普通命令检查封禁
-            user = db.get_user(user_id, group_id)
+            user = db.get_user(user_id, effective_group_id) if effective_group_id != 0 else None
             if user and user.is_banned_active():
                 return "⛔ 你已被封禁，无法使用宠物系统"
 
         # ── 执行命令 ──
 
         # CR Review Issue #2: 计算反脚本衰减因子
-        spam_decay = _get_spam_decay_factor(user_id, group_id)
+        spam_decay = _get_spam_decay_factor(user_id, rate_limit_group_id)
 
         # 传递必要的参数
         # Router 注册时已经包裹了适配器，这里只需传入核心参数和 kwargs
@@ -484,7 +568,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context, **kwar
             return await router.route(
                 action,
                 user_id,
-                group_id,
+                effective_group_id,
                 rest_args,
                 db,
                 context=context,

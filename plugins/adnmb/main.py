@@ -48,12 +48,21 @@ def _get_plugin_runtime_state(context, *, create: bool = True) -> dict:
     return {}
 
 
-def _get_client(context, cache_dir: Path) -> AdnmbClient:
+def _get_client(context, cache_dir: Path, user_id: str | None = None) -> AdnmbClient:
     runtime_state = _get_plugin_runtime_state(context)
-    cached_client = runtime_state.get("client")
+    owner_key = str(user_id or getattr(context, "current_user_id", "") or "")
+    cache_key = f"client:{owner_key}" if owner_key else "client"
+    cached_client = runtime_state.get(cache_key)
     plugin_cfg = context.secrets.get("plugins", {}).get("adnmb", {})
-    uuid = str(plugin_cfg.get("uuid", "") or "")
-    effective_uuid = uuid or str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, str(cache_dir.resolve())))
+    configured_uuid = str(plugin_cfg.get("uuid", "") or "")
+    if configured_uuid and owner_key:
+        effective_uuid = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"{configured_uuid}:{owner_key}"))
+    elif configured_uuid:
+        effective_uuid = configured_uuid
+    elif owner_key:
+        effective_uuid = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"{cache_dir.resolve()}:{owner_key}"))
+    else:
+        effective_uuid = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, str(cache_dir.resolve())))
     if isinstance(cached_client, AdnmbClient):
         if (
             cached_client.session is context.http_session
@@ -65,9 +74,9 @@ def _get_client(context, cache_dir: Path) -> AdnmbClient:
     client = AdnmbClient(
         context.http_session,
         cache_dir,
-        uuid=uuid,
+        uuid=effective_uuid,
     )
-    runtime_state["client"] = client
+    runtime_state[cache_key] = client
     return client
 
 
@@ -171,7 +180,7 @@ async def handle(command: str, args: str, event: dict, context: PluginContextPro
         ensure_dir(cache_dir)
         logger.debug(f"缓存目录: {cache_dir}")
         
-        client = _get_client(context, cache_dir)
+        client = _get_client(context, cache_dir, user_id=str(event.get("user_id", "") or ""))
         logger.debug("API 客户端已创建")
 
         # 获取页码（默认 1）

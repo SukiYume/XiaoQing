@@ -6,6 +6,7 @@ GitHub Trending 插件
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -176,18 +177,27 @@ def _parse_trending_html(html: str) -> list[dict[str, Any]]:
 
         # Star 和 Fork
         stars = forks = "0"
-        for stat in article.select("a.Link--muted"):
+        for stat in article.select("a[href]"):
+            href = str(stat.get("href", "") or "")
             txt = stat.get_text(strip=True).replace(",", "")
-            if "star" in txt.lower() or "★" in txt:
+            if not txt:
+                continue
+            if re.search(r"/stargazers/?$", href):
                 stars = txt
-            elif "fork" in txt.lower():
+            elif re.search(r"/forks/?$", href):
+                forks = txt
+            elif ("star" in txt.lower() or "★" in txt) and stars == "0":
+                stars = txt
+            elif "fork" in txt.lower() and forks == "0":
                 forks = txt
 
         # 今日 Star
         stars_today = ""
-        gain_el = article.select_one("span.d-inline-block.float-sm-right")
-        if gain_el:
-            stars_today = gain_el.get_text(strip=True)
+        for gain_el in article.select("span, div"):
+            gain_text = gain_el.get_text(strip=True)
+            if gain_text and "star" in gain_text.lower() and "today" in gain_text.lower():
+                stars_today = gain_text
+                break
 
         repos.append({
             "owner": owner,

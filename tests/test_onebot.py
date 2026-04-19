@@ -341,9 +341,10 @@ class TestOneBotWsClient:
             "params": {"group_id": 12345, "message": []},
         }
 
-        await client.send_action(action)
+        result = await client.send_action(action)
 
         mock_ws.send.assert_called_once()
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_send_action_when_not_connected(self):
@@ -352,8 +353,21 @@ class TestOneBotWsClient:
 
         action = {"action": "test", "params": {}}
 
-        await client.send_action(action)
-        # 不应该抛出异常
+        result = await client.send_action(action)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_send_action_failure_clears_ws(self):
+        """测试发送失败时会清理失效连接"""
+        client = OneBotWsClient("ws://localhost:3000", "")
+        mock_ws = AsyncMock()
+        mock_ws.send = AsyncMock(side_effect=RuntimeError("boom"))
+        client._ws = mock_ws
+
+        result = await client.send_action({"action": "test", "params": {}})
+
+        assert result is False
+        assert client._ws is None
 
     @pytest.mark.asyncio
     async def test_stop(self):
@@ -401,6 +415,34 @@ class TestOneBotWsClient:
         no_user_event = {"group_id": 67890}
         key = client._get_queue_key(no_user_event)
         assert key is None
+
+    @pytest.mark.asyncio
+    async def test_dispatch_event_respects_pending_semaphore_across_queues(self):
+        """测试 max_pending_events 真正限制 handler 执行并发"""
+        client = OneBotWsClient("ws://localhost:3000", "", max_pending_events=1)
+        started = asyncio.Event()
+        release = asyncio.Event()
+        current = 0
+        max_seen = 0
+
+        async def handler(event: dict[str, Any]) -> None:
+            nonlocal current, max_seen
+            current += 1
+            max_seen = max(max_seen, current)
+            started.set()
+            await release.wait()
+            current -= 1
+
+        await asyncio.gather(
+            client._dispatch_event(handler, {"user_id": 1}),
+            client._dispatch_event(handler, {"user_id": 2}),
+        )
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        await asyncio.sleep(0.05)
+        release.set()
+        await asyncio.gather(*client._queue_tasks.values())
+
+        assert max_seen == 1
 
 # ============================================================
 # 运行测试

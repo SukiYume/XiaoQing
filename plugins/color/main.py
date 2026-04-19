@@ -172,7 +172,9 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         
         # 列出光谱型
         if parsed.has('t') or parsed.has('spectype'):
-            prefix = parsed.opt('t') or parsed.opt('spectype') or ''
+            prefix = (parsed.opt('t') or parsed.opt('spectype') or '').strip()
+            if prefix.lower() == "true":
+                prefix = ""
             return stellar.list_spectral_types(prefix, context)
         
         # 默认：显示帮助

@@ -63,10 +63,15 @@ class JupyterKernelManager:
         # 自动关闭相关
         self._last_activity = 0.0
         self._shutdown_task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _instance_key(data_dir: Path, owner_key: str) -> str:
+        resolved_dir = str(Path(data_dir).resolve())
+        return f"{owner_key or 'global'}::{resolved_dir}"
     
     @classmethod
     def get_instance(cls, data_dir: Path, owner_key: str = "global") -> "JupyterKernelManager":
-        key = str(owner_key or "global")
+        key = cls._instance_key(data_dir, str(owner_key or "global"))
         with cls._instances_lock:
             instance = cls._instances.get(key)
             if instance is None:

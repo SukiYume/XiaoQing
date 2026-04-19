@@ -22,6 +22,15 @@ from .plugin_base import atomic_write_text, load_json
 
 logger = logging.getLogger(__name__)
 
+
+class ConfigLoadError(RuntimeError):
+    """Raised when config/secrets cannot be parsed into a valid snapshot."""
+
+    def __init__(self, path: Path, original: Exception):
+        super().__init__(f"Failed to load config from {path}: {original}")
+        self.path = path
+        self.original = original
+
 def _check_secrets_file_permissions(path: Path) -> None:
     """
     检查 secrets 文件权限（Unix-like 系统）
@@ -88,8 +97,13 @@ class ConfigManager:
     def _initial_load(self) -> None:
         """初始加载配置（不触发回调）"""
         with self._lock:
-            self._config = self._load(self.config_path)
-            self._secrets = self._load(self.secrets_path)
+            try:
+                self._config = self._load(self.config_path)
+                self._secrets = self._load(self.secrets_path)
+            except ConfigLoadError as exc:
+                logger.error("%s", exc)
+                self._config = {}
+                self._secrets = {}
         logger.info("Config loaded")
         _check_secrets_file_permissions(self.secrets_path)
 
@@ -105,9 +119,11 @@ class ConfigManager:
 
     def reload(self) -> None:
         """重新加载配置"""
+        config = self._load(self.config_path)
+        secrets = self._load(self.secrets_path)
         with self._lock:
-            self._config = self._load(self.config_path)
-            self._secrets = self._load(self.secrets_path)
+            self._config = config
+            self._secrets = secrets
         self._update_mtime()
         logger.info("Config reloaded")
         _check_secrets_file_permissions(self.secrets_path)
@@ -136,6 +152,7 @@ class ConfigManager:
             ValueError: 如果路径中的某个键不是字典类型
         """
         keys = path.split(".")
+        original_secrets = self.secrets
         with self._lock:
             current = self._secrets
 
@@ -152,8 +169,13 @@ class ConfigManager:
 
             current[final_key] = value
 
-        # 保存并重新加载
-        self.save_secrets()
+        try:
+            self.save_secrets()
+        except Exception:
+            with self._lock:
+                self._secrets = original_secrets
+            raise
+
         self._update_mtime()
         self._notify_callbacks_sync(self.snapshot())
 
@@ -174,7 +196,12 @@ class ConfigManager:
         while True:
             await asyncio.sleep(interval)
             if await asyncio.to_thread(self._changed):
-                await asyncio.to_thread(self.reload)
+                try:
+                    await asyncio.to_thread(self.reload)
+                except ConfigLoadError as exc:
+                    logger.error("Config reload skipped, keeping last valid snapshot: %s", exc)
+                    await asyncio.to_thread(self._update_mtime)
+                    continue
                 snapshot = await asyncio.to_thread(self.snapshot)
                 await self._notify_callbacks_async(snapshot)
                 await asyncio.to_thread(self._update_mtime)
@@ -204,7 +231,10 @@ class ConfigManager:
 
     def _load(self, path: Path) -> dict[str, Any]:
         """加载 JSON 文件"""
-        return load_json(path)
+        try:
+            return load_json(path, raise_on_error=True)
+        except json.JSONDecodeError as exc:
+            raise ConfigLoadError(path, exc) from exc
 
     def _update_mtime(self) -> None:
         """更新文件修改时间"""
@@ -221,4 +251,4 @@ class ConfigManager:
             return True
         return False
 
-__all__ = ["ConfigManager", "ConfigSnapshot"]
+__all__ = ["ConfigManager", "ConfigSnapshot", "ConfigLoadError"]

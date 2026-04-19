@@ -341,8 +341,10 @@ class _FakeRconClient:
         self.host = host
         self.port = port
         self.password = password
+        self.connected = False
 
     async def connect(self):
+        self.connected = True
         return True
 
 
@@ -405,6 +407,34 @@ async def test_mc_connect_default_missing_config_returns_usage(monkeypatch, tmp_
     text = msg[0]["data"]["text"]
 
     assert "config.json" in text
+
+
+@pytest.mark.asyncio
+async def test_mc_connect_rejects_invalid_log_file_before_rcon_connect(monkeypatch, tmp_path):
+    monkeypatch.setattr(mc_main, "_manager", mc_main.ConnectionManager())
+    fake_client = _FakeRconClient("127.0.0.1", 25575, "secret-pass")
+    monkeypatch.setattr(mc_main, "RconClient", lambda *args: fake_client)
+
+    config_data = {
+        "default": {
+            "host": "127.0.0.1",
+            "port": 25575,
+            "password": "secret-pass",
+            "log_file": "",
+        }
+    }
+    (tmp_path / "config.json").write_text(json.dumps(config_data), encoding="utf-8")
+
+    context = cast(
+        PluginContextProtocol,
+        cast(object, _MinecraftTestContext(plugin_dir=tmp_path)),
+    )
+
+    msg = await mc_main._handle_connect("default bad.log", group_id=None, user_id=10002, context=context)
+    text = msg[0]["data"]["text"]
+
+    assert "latest.log" in text
+    assert fake_client.connected is False
 
 
 @pytest.mark.asyncio

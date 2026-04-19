@@ -195,10 +195,10 @@ class OneBotWsClient:
         """是否已连接"""
         return self._ws is not None
 
-    async def send_action(self, action: dict[str, Any]) -> None:
-        """发送 OneBot action"""
+    async def send_action(self, action: dict[str, Any]) -> bool:
+        """发送 OneBot action，返回是否成功发送。"""
         if not self._ws:
-            return
+            return False
         
         # 提取消息内容用于日志
         params = action.get("params", {})
@@ -212,8 +212,11 @@ class OneBotWsClient:
                 "[WS] Sent %s to %s: %s",
                 action.get('action', 'unknown'), target, msg_preview
             )
+            return True
         except Exception as exc:
             logger.warning("[WS] Send failed: %s", exc)
+            self._ws = None
+            return False
 
     async def connect_and_listen(self, handler: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
         """连接并监听消息"""
@@ -293,8 +296,7 @@ class OneBotWsClient:
                     logger.debug("[WS] Raw frame type=%s size=%s", type(raw).__name__, raw_len)
                     event = json.loads(raw)
                     logger.debug("[WS] Event received: %s", _summarize_event(event))
-                    async with self._pending_semaphore:
-                        await self._dispatch_event(handler, event)
+                    await self._dispatch_event(handler, event)
                 except json.JSONDecodeError:
                     logger.debug("[WS] Non-JSON frame received")
                     continue
@@ -330,7 +332,8 @@ class OneBotWsClient:
     ) -> None:
         key = self._get_queue_key(event)
         if not key:
-            await self._handle_event_safely(handler, event)
+            async with self._pending_semaphore:
+                await self._handle_event_safely(handler, event)
             return
 
         queue = self._message_queues.get(key)
@@ -368,7 +371,8 @@ class OneBotWsClient:
             while True:
                 # 等待事件，最多等待 1 秒
                 event = await asyncio.wait_for(queue.get(), timeout=1.0)
-                await self._handle_event_safely(handler, event)
+                async with self._pending_semaphore:
+                    await self._handle_event_safely(handler, event)
                 # 标记任务为活跃
                 self._queue_last_activity[key] = time.time()
         except asyncio.TimeoutError:
