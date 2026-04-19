@@ -7,11 +7,13 @@ import io
 import json
 import mimetypes
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, unquote_to_bytes, urlparse
 
+import aiohttp
 from core.plugin_base import ensure_dir, load_json, write_json
 
 from ..helper_utils import _iter_message_segments
@@ -38,6 +40,11 @@ _GENERIC_MEDIA_LABELS = frozenset(
     }
 )
 _MEDIA_ANALYSIS_PROMPT_VERSION = 2
+_RENDER_CACHE_LOCKS: dict[str, threading.RLock] = {}
+_RENDER_CACHE_LOCKS_GUARD = threading.Lock()
+_MEDIA_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10, sock_read=15)
+_ONEBOT_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
+_DOWNLOAD_CHUNK_SIZE = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -69,6 +76,8 @@ class PreparedMediaForLLM:
     transcoded: bool
     source_mime_type: str
     is_animated: bool = False
+    frame_strategy: str = "original"
+    frame_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -142,6 +151,16 @@ def _load_render_cache(data_dir: Path) -> dict[str, Any]:
 
 def _save_render_cache(data_dir: Path, cache: dict[str, Any]) -> None:
     write_json(_render_cache_path(data_dir), cache)
+
+
+def _render_cache_lock(data_dir: Path) -> threading.RLock:
+    key = str(_render_cache_path(data_dir).resolve())
+    with _RENDER_CACHE_LOCKS_GUARD:
+        lock = _RENDER_CACHE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _RENDER_CACHE_LOCKS[key] = lock
+        return lock
 
 
 def _parse_file_uri(value: str) -> Path | None:
@@ -228,6 +247,55 @@ def _inspect_image_payload(payload: bytes, *, fallback_suffix: str = ".png") -> 
     except Exception:
         mime_type = _guess_mime_type(Path(f"image{fallback_suffix or '.png'}"))
         return mime_type, fallback_suffix or ".png", 0, 0, False
+
+
+def _animation_sample_indexes(frame_count: int) -> list[int]:
+    total = max(1, int(frame_count))
+    if total <= 1:
+        return [0]
+    candidates = [0, total // 2, total - 1]
+    indexes: list[int] = []
+    for idx in candidates:
+        normalized = min(max(0, int(idx)), total - 1)
+        if normalized not in indexes:
+            indexes.append(normalized)
+    return indexes
+
+
+def _render_animation_contact_sheet(payload: bytes) -> tuple[bytes, int]:
+    from PIL import Image
+
+    gap = 8
+    frame_max_side = 320
+    with Image.open(io.BytesIO(payload)) as image:
+        frame_total = int(getattr(image, "n_frames", 1) or 1)
+        indexes = _animation_sample_indexes(frame_total)
+        frames: list[Any] = []
+        for idx in indexes:
+            image.seek(idx)
+            frame = image.convert("RGBA")
+            frame.thumbnail((frame_max_side, frame_max_side))
+            frames.append(frame.copy())
+
+    if not frames:
+        raise ValueError("animation has no usable frames")
+    if len(frames) == 1:
+        buffer = io.BytesIO()
+        frames[0].save(buffer, format="PNG")
+        return buffer.getvalue(), 1
+
+    total_width = sum(frame.width for frame in frames) + gap * (len(frames) - 1)
+    total_height = max(frame.height for frame in frames)
+    sheet = Image.new("RGBA", (total_width, total_height), (255, 255, 255, 255))
+    cursor_x = 0
+    for frame in frames:
+        offset_y = (total_height - frame.height) // 2
+        sheet.alpha_composite(frame, (cursor_x, offset_y))
+        cursor_x += frame.width + gap
+
+    buffer = io.BytesIO()
+    sheet.save(buffer, format="PNG")
+    return buffer.getvalue(), len(frames)
 
 
 def _normalize_emotion_tags(value: Any) -> tuple[str, ...]:
@@ -541,14 +609,33 @@ async def _download_url_bytes(url: str, *, context, max_bytes: int) -> tuple[byt
     if session is None or not hasattr(session, "get"):
         raise FileNotFoundError(f"HTTP session unavailable for {url}")
 
-    async with session.get(url) as resp:
+    async with session.get(url, timeout=_MEDIA_DOWNLOAD_TIMEOUT) as resp:
         if hasattr(resp, "raise_for_status"):
             resp.raise_for_status()
-        data = await resp.read()
-        if max_bytes > 0 and len(data) > max_bytes:
-            raise ValueError(f"media too large: {len(data)} bytes")
         headers = getattr(resp, "headers", {}) or {}
         content_type = str(headers.get("Content-Type", "") or "")
+        content_length = headers.get("Content-Length")
+        if max_bytes > 0 and content_length:
+            try:
+                if int(content_length) > max_bytes:
+                    raise ValueError(f"media too large: {content_length} bytes")
+            except ValueError:
+                pass
+
+        stream = getattr(getattr(resp, "content", None), "iter_chunked", None)
+        if callable(stream):
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in stream(_DOWNLOAD_CHUNK_SIZE):
+                total += len(chunk)
+                if max_bytes > 0 and total > max_bytes:
+                    raise ValueError(f"media too large: {total} bytes")
+                chunks.append(chunk)
+            data = b"".join(chunks)
+        else:
+            data = await resp.read()
+            if max_bytes > 0 and len(data) > max_bytes:
+                raise ValueError(f"media too large: {len(data)} bytes")
     return data, content_type
 
 
@@ -570,7 +657,12 @@ async def _onebot_api_post(context, action: str, payload: dict[str, Any]) -> dic
         return {}
 
     url = f"{base}/{action.lstrip('/')}"
-    async with session.post(url, json=payload, headers=_onebot_headers(context)) as resp:
+    async with session.post(
+        url,
+        json=payload,
+        headers=_onebot_headers(context),
+        timeout=_ONEBOT_HTTP_TIMEOUT,
+    ) as resp:
         if hasattr(resp, "raise_for_status"):
             resp.raise_for_status()
         data = await resp.json(content_type=None)
@@ -990,9 +1082,23 @@ def _prepare_media_for_llm(resolved: ResolvedMedia) -> PreparedMediaForLLM:
             transcoded=False,
             source_mime_type=source_mime,
             is_animated=resolved.is_animated,
+            frame_strategy="original",
+            frame_count=1,
         )
 
     try:
+        if resolved.is_animated:
+            prepared_payload, frame_count = _render_animation_contact_sheet(payload)
+            return PreparedMediaForLLM(
+                payload=prepared_payload,
+                mime_type="image/png",
+                transcoded=True,
+                source_mime_type=source_mime,
+                is_animated=resolved.is_animated,
+                frame_strategy="animation_contact_sheet",
+                frame_count=frame_count,
+            )
+
         from PIL import Image
 
         with Image.open(io.BytesIO(payload)) as image:
@@ -1008,6 +1114,8 @@ def _prepare_media_for_llm(resolved: ResolvedMedia) -> PreparedMediaForLLM:
             transcoded=True,
             source_mime_type=source_mime,
             is_animated=resolved.is_animated,
+            frame_strategy="single_frame_png",
+            frame_count=1,
         )
     except Exception:
         return PreparedMediaForLLM(
@@ -1016,6 +1124,8 @@ def _prepare_media_for_llm(resolved: ResolvedMedia) -> PreparedMediaForLLM:
             transcoded=False,
             source_mime_type=source_mime,
             is_animated=resolved.is_animated,
+            frame_strategy="original_fallback",
+            frame_count=1,
         )
 
 
@@ -1412,6 +1522,8 @@ async def _analyze_media_with_llm(
             "llm_mime": prepared.mime_type,
             "transcoded": prepared.transcoded,
             "animated": prepared.is_animated,
+            "frame_strategy": prepared.frame_strategy,
+            "frame_count": prepared.frame_count,
             "prefer_emoji": prefer_emoji,
         },
     )
@@ -1585,9 +1697,10 @@ async def _render_resolved_media(
     prefer_emoji: bool,
     summary_hint: str = "",
 ) -> RenderedMedia:
-    cache = _load_render_cache(context.data_dir)
-    items = cache.setdefault("items", {})
-    cached = items.get(resolved.media_hash)
+    with _render_cache_lock(context.data_dir):
+        cache = _load_render_cache(context.data_dir)
+        items = cache.setdefault("items", {})
+        cached = items.get(resolved.media_hash)
     if isinstance(cached, dict):
         cached_rendered = _rendered_media_from_cache(cached, resolved=resolved)
         fallback_rendered = _build_fallback_render(
@@ -1683,7 +1796,19 @@ async def _render_resolved_media(
         "analysis_quality": rendered_quality,
         "analysis_prompt_version": _MEDIA_ANALYSIS_PROMPT_VERSION if rendered_source == "llm" else 0,
     }
-    _save_render_cache(context.data_dir, cache)
+    with _render_cache_lock(context.data_dir):
+        latest_cache = _load_render_cache(context.data_dir)
+        latest_items = latest_cache.setdefault("items", {})
+        latest_items[resolved.media_hash] = {
+            "kind": rendered.kind,
+            "description": rendered.description,
+            "emotion_tags": list(rendered.emotion_tags),
+            "marker": rendered.marker,
+            "analysis_source": rendered_source,
+            "analysis_quality": rendered_quality,
+            "analysis_prompt_version": _MEDIA_ANALYSIS_PROMPT_VERSION if rendered_source == "llm" else 0,
+        }
+        _save_render_cache(context.data_dir, latest_cache)
     return rendered
 
 
