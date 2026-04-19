@@ -560,123 +560,140 @@ async def _generate_smalltalk_turn(
         )
         return out or ""
 
-    if prepared.forced:
-        _log_step(context, runtime, chat_id=chat_id, step="smalltalk.forced_direct", fields={})
-        direct_act = PlannedAction(
-            action="reply",
-            target_message_id=generated.local_id,
-            think_level=runtime.cfg.planner.resolve_think_level(),
-            quote=False,
-            reasoning="用户直接发起对话，需要回复",
-            question="",
-            unknown_words=[],
-        )
-        generated.reply = (
-            await _generate_reply(
-                text=prepared.text,
-                event=event,
-                context=context,
-                runtime=runtime,
-                state=state,
-                forced=True,
-                action=direct_act,
-                plan_reasoning="用户直接发起对话，需要回复",
-                bot_name=bot_name,
-                secrets=secrets,
-                state_text=prepared.mood_text,
-                is_brain_chat=prepared.brain_chat_active,
+    try:
+        if prepared.forced:
+            _log_step(context, runtime, chat_id=chat_id, step="smalltalk.forced_direct", fields={})
+            direct_act = PlannedAction(
+                action="reply",
+                target_message_id=generated.local_id,
+                think_level=runtime.cfg.planner.resolve_think_level(),
+                quote=False,
+                reasoning="用户直接发起对话，需要回复",
+                question="",
+                unknown_words=[],
             )
-            or ""
-        ).strip()
-        if not generated.reply:
-            generated.reply = random.choice(["嗯…", "行", "我在听", "你继续", "有点卡，等下"])
-    else:
-        max_context_size = get_brain_chat_max_context(runtime, prepared.brain_chat_active)
-        speculative_history = await state.memory_store.get_recent_async(chat_id, max_items=max_context_size)
-        generated.speculative_memory_task = asyncio.create_task(
-            _build_memory_block(
-                context=context,
-                runtime=runtime,
-                state=state,
-                secrets=secrets,
-                data_dir=data_dir,
-                chat_id=chat_id,
-                history=speculative_history[-max_context_size:] if max_context_size > 0 else [],
-                current_text=prepared.text,
-                planner_question="",
-                bot_name=bot_name,
-            )
-        )
-        generated.pfc_result = await run_pfc_once(
-            context=context,
-            runtime_cfg=runtime.cfg,
-            secrets=secrets,
-            bot_name=bot_name,
-            is_private=prepared.is_private,
-            chat_id=chat_id,
-            current_text=prepared.text,
-            memory_store=state.memory_store,
-            action_history=state.action_history,
-            memory_db=state.memory_db,
-            pfc_state_store=state.pfc_state_store,
-            generate_reply=_pfc_generate,
-            state_override=generated.pfc_state_snapshot,
-            persist_state=False,
-        )
-        _log_step(
-            context,
-            runtime,
-            chat_id=chat_id,
-            step="smalltalk.pfc.done",
-            fields={
-                "action": generated.pfc_result.action,
-                "ended": bool(generated.pfc_result.ended),
-                "reason": generated.pfc_result.reason,
-                "reply_chars": len((generated.pfc_result.reply or "").strip()),
-            },
-        )
-        generated.reply = (generated.pfc_result.reply or "").strip()
-
-    if generated.reply:
-        generated.reply_for_send = (
-            maybe_add_mode_indicator(generated.reply, runtime)
-            if prepared.brain_chat_active
-            else generated.reply
-        )
-        media_cfg = getattr(runtime.cfg, "media", None)
-        if getattr(media_cfg, "enable_outbound_emoji_reply", False):
-            try:
-                history_for_emoji = await state.memory_store.get_recent_async(
-                    chat_id,
-                    max_items=min(max(6, int(getattr(runtime.cfg, "max_context_size", 30))), 12),
-                )
-                generated.emoji_plan = await plan_emoji_reply(
+            generated.reply = (
+                await _generate_reply(
+                    text=prepared.text,
+                    event=event,
                     context=context,
                     runtime=runtime,
-                    history=history_for_emoji,
-                    user_text=prepared.text,
-                    reply_text=generated.reply,
+                    state=state,
+                    forced=True,
+                    action=direct_act,
+                    plan_reasoning="用户直接发起对话，需要回复",
+                    bot_name=bot_name,
                     secrets=secrets,
+                    state_text=prepared.mood_text,
+                    is_brain_chat=prepared.brain_chat_active,
                 )
-            except Exception:
-                generated.emoji_plan = None
-        payload_text = generated.reply_for_send
-        payload_display_text = generated.reply
-        if generated.emoji_plan is not None and getattr(generated.emoji_plan, "mode", "") == "emoji_only":
-            payload_text = ""
-            payload_display_text = generated.emoji_plan.marker
-        generated.reply_payload = build_reply_payload(
-            payload_text,
-            emoji_file_path=(
-                str(resolve_emoji_file_path(context, generated.emoji_plan.entry.file_path))
-                if generated.emoji_plan
-                else ""
-            ),
-            emoji_marker=generated.emoji_plan.marker if generated.emoji_plan else "",
-            display_text=payload_display_text,
-        )
+                or ""
+            ).strip()
+            if not generated.reply:
+                generated.reply = random.choice(["嗯…", "行", "我在听", "你继续", "有点卡，等下"])
+        else:
+            max_context_size = get_brain_chat_max_context(runtime, prepared.brain_chat_active)
+            speculative_history = await state.memory_store.get_recent_async(chat_id, max_items=max_context_size)
+            generated.speculative_memory_task = asyncio.create_task(
+                _build_memory_block(
+                    context=context,
+                    runtime=runtime,
+                    state=state,
+                    secrets=secrets,
+                    data_dir=data_dir,
+                    chat_id=chat_id,
+                    history=speculative_history[-max_context_size:] if max_context_size > 0 else [],
+                    current_text=prepared.text,
+                    planner_question="",
+                    bot_name=bot_name,
+                )
+            )
+            generated.pfc_result = await run_pfc_once(
+                context=context,
+                runtime_cfg=runtime.cfg,
+                secrets=secrets,
+                bot_name=bot_name,
+                is_private=prepared.is_private,
+                chat_id=chat_id,
+                current_text=prepared.text,
+                memory_store=state.memory_store,
+                action_history=state.action_history,
+                memory_db=state.memory_db,
+                pfc_state_store=state.pfc_state_store,
+                generate_reply=_pfc_generate,
+                state_override=generated.pfc_state_snapshot,
+                persist_state=False,
+            )
+            _log_step(
+                context,
+                runtime,
+                chat_id=chat_id,
+                step="smalltalk.pfc.done",
+                fields={
+                    "action": generated.pfc_result.action,
+                    "ended": bool(generated.pfc_result.ended),
+                    "reason": generated.pfc_result.reason,
+                    "reply_chars": len((generated.pfc_result.reply or "").strip()),
+                },
+            )
+            generated.reply = (generated.pfc_result.reply or "").strip()
 
-    return generated
+        if generated.reply:
+            generated.reply_for_send = (
+                maybe_add_mode_indicator(generated.reply, runtime)
+                if prepared.brain_chat_active
+                else generated.reply
+            )
+            media_cfg = getattr(runtime.cfg, "media", None)
+            if getattr(media_cfg, "enable_outbound_emoji_reply", False):
+                try:
+                    history_for_emoji = await state.memory_store.get_recent_async(
+                        chat_id,
+                        max_items=min(max(6, int(getattr(runtime.cfg, "max_context_size", 30))), 12),
+                    )
+                    generated.emoji_plan = await plan_emoji_reply(
+                        context=context,
+                        runtime=runtime,
+                        history=history_for_emoji,
+                        user_text=prepared.text,
+                        reply_text=generated.reply,
+                        secrets=secrets,
+                    )
+                except Exception:
+                    generated.emoji_plan = None
+            payload_text = generated.reply_for_send
+            payload_display_text = generated.reply
+            if generated.emoji_plan is not None and getattr(generated.emoji_plan, "mode", "") == "emoji_only":
+                payload_text = ""
+                payload_display_text = generated.emoji_plan.marker
+            generated.reply_payload = build_reply_payload(
+                payload_text,
+                emoji_file_path=(
+                    str(resolve_emoji_file_path(context, generated.emoji_plan.entry.file_path))
+                    if generated.emoji_plan
+                    else ""
+                ),
+                emoji_marker=generated.emoji_plan.marker if generated.emoji_plan else "",
+                display_text=payload_display_text,
+            )
+
+        return generated
+    except ReplyRejected:
+        _cancel_pending_task(generated.speculative_memory_task)
+        if not prepared.forced and generated.pfc_state_snapshot is not None:
+            async with _get_lock(chat_id):
+                state.pfc_state_store.set_state(chat_id, generated.pfc_state_snapshot)
+                if runtime.cfg.goal.enable_goal:
+                    top_goal = ""
+                    goal_list = getattr(generated.pfc_state_snapshot, "goal_list", []) or []
+                    if goal_list and isinstance(goal_list[0], dict):
+                        top_goal = str(goal_list[0].get("goal", "") or "").strip()
+                    if top_goal:
+                        await state.goal_store.set_async(chat_id, goal=top_goal, source="planner")
+                    else:
+                        await _clear_store_entry(state.goal_store, chat_id)
+            _schedule_pfc_state_flush(context, runtime, chat_id=chat_id)
+        raise
 
 
 async def _finalize_smalltalk_turn(

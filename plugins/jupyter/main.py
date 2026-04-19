@@ -387,7 +387,12 @@ async def shutdown(context: PluginContextProtocol) -> None:
 
 def _owner_key(context: PluginContextProtocol) -> str:
     user_id = getattr(context, "current_user_id", None)
-    return str(user_id) if user_id is not None else "global"
+    if user_id is None:
+        return "global"
+    group_id = getattr(context, "current_group_id", None)
+    if group_id is not None:
+        return f"{user_id}:{group_id}"
+    return str(user_id)
 
 
 def extract_code_and_timeout(args: str) -> tuple[str, float]:

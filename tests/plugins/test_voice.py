@@ -296,6 +296,20 @@ class TestVoicePlugin:
         assert len(result) > 0
         # 返回的应该是语音消息段
         assert result[0].get("type") == "record"
+        assert result[0]["data"]["file"].startswith("file:")
+
+    @pytest.mark.asyncio
+    async def test_handle_tts_builds_uri_from_audio_path(self, mock_context, mock_event, tmp_path):
+        """测试 record 文件字段使用 Path.as_uri()"""
+        audio_path = tmp_path / "audio" / "tts.mp3"
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(b"fake")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(voice, "text_to_speech", AsyncMock(return_value=str(audio_path)))
+            result = await voice.handle("tts", "你好", mock_event, mock_context)
+
+        assert result[0]["data"]["file"] == audio_path.resolve().as_uri()
 
     @pytest.mark.asyncio
     async def test_handle_tts_failure(self, mock_context, mock_event):
@@ -337,6 +351,7 @@ class TestVoicePlugin:
         assert result is not None
         assert isinstance(result, list)
         assert result[0].get("type") == "record"
+        assert result[0]["data"]["file"].startswith("file:")
 
     @pytest.mark.asyncio
     async def test_convert_text_to_voice_failure(self, mock_context):

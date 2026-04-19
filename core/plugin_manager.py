@@ -60,6 +60,7 @@ class PluginManager:
         self._poll_interval = float(poll_interval)
         self._change_handlers: list[Any] = []
         self._init_tasks: list[asyncio.Task[None]] = []
+        self._init_task_plugins: dict[asyncio.Task[None], str] = {}
         self._plugin_states: dict[str, dict[str, Any]] = {}
 
         # 一次性设置 sys.path（使用绝对路径防止路径遍历攻击）
@@ -115,7 +116,9 @@ class PluginManager:
         tasks = list(self._init_tasks)
         self._init_tasks.clear()
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        for result in results:
+        failed_plugins: set[str] = set()
+        for task, result in zip(tasks, results):
+            plugin_name = self._init_task_plugins.pop(task, None)
             if isinstance(result, BaseException):
                 if isinstance(result, (KeyboardInterrupt, SystemExit)):
                     logger.warning("Plugin init interrupted")
@@ -123,10 +126,16 @@ class PluginManager:
                 if isinstance(result, asyncio.CancelledError):
                     logger.debug("Plugin init task cancelled")
                     continue
+                if plugin_name:
+                    failed_plugins.add(plugin_name)
                 if isinstance(result, (ImportError, AttributeError, ValueError, SyntaxError)):
                     logger.warning("Plugin init error: %s", result)
                 else:
                     logger.warning("Plugin init error: %s", result)
+        for plugin_name in failed_plugins:
+            if plugin_name in self._plugins:
+                logger.warning("Plugin %s init failed; unloading partially initialized plugin", plugin_name)
+                await self.unload_plugin(plugin_name)
 
     def load_plugin(self, plugin_dir: Path) -> None:
         # 验证插件目录名是否安全
@@ -159,6 +168,16 @@ class PluginManager:
         self._notify_change(definition.name)
 
     async def unload_plugin(self, name: str) -> None:
+        tasks_to_cancel = [task for task, plugin_name in list(self._init_task_plugins.items()) if plugin_name == name]
+        for task in tasks_to_cancel:
+            self._init_task_plugins.pop(task, None)
+            if task in self._init_tasks:
+                self._init_tasks.remove(task)
+            if not task.done():
+                task.cancel()
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
         plugin = self._plugins.pop(name, None)
         if not plugin:
             return
@@ -203,6 +222,7 @@ class PluginManager:
         await self.unload_plugin(name)
         plugin_dir = self.plugins_dir / name
         self.load_plugin(plugin_dir)
+        await self.wait_inits()
 
     async def watch(self) -> None:
         while True:
@@ -220,6 +240,7 @@ class PluginManager:
                 existing = self._plugins.get(definition.name)
                 if not existing:
                     self.load_plugin(plugin_dir)
+                    await self.wait_inits()
                 elif mtime != existing.mtime:
                     logger.info("Detected changes in plugin %s", definition.name)
                     await self.reload_plugin(definition.name)
@@ -287,6 +308,7 @@ class PluginManager:
                     # 为异步 init 添加超时控制
                     init_task = asyncio.create_task(asyncio.wait_for(result, PLUGIN_INIT_TIMEOUT_SECONDS))
                     self._init_tasks.append(init_task)
+                    self._init_task_plugins[init_task] = definition.name
             return module
         except asyncio.TimeoutError:
             raise PluginLoadError(

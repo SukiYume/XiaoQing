@@ -314,6 +314,8 @@ async def _generate_reply(
                     fields={"max_items": max_items},
                 )
                 max_items = max(2, max_items // 2)
+                _cached_memory = None
+                _prefetched_mem = None
                 continue
             _log_step(
                 context,

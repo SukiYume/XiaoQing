@@ -147,6 +147,72 @@ def test_build_event_detail_includes_reminder_logs_and_related_instances():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_batch_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-events-batch"
+
+    try:
+        for event_id, start_time in [
+            ("batch_ev1", "2026-03-10T09:00:00"),
+            ("batch_ev2", "2026-03-11T09:00:00"),
+            ("batch_ev3", "2026-03-12T09:00:00"),
+        ]:
+            end_time = start_time.replace("09:00:00", "10:00:00")
+            db.insert_item({
+                "id": event_id,
+                "owner_id": owner_id,
+                "type": "event",
+                "title": event_id,
+                "category": "会议",
+                "start_time": start_time,
+                "end_time": end_time,
+                "remind_times": [start_time.replace("09:00:00", "08:00:00")],
+            })
+
+        db.log_reminder("batch_ev1", "2026-03-10T08:00:00", sent=True)
+        db.log_reminder("batch_ev2", "2026-03-11T08:00:00", sent=True)
+
+        from plugins.pendo.web.analytics import events_overview as events_overview_module
+
+        original_fetch = events_overview_module._fetch_reminder_logs_by_event_ids
+        call_info = {"count": 0, "event_ids": []}
+
+        def wrapped_fetch(db_obj, event_ids):
+            call_info["count"] += 1
+            call_info["event_ids"] = list(event_ids)
+            return original_fetch(db_obj, event_ids)
+
+        monkeypatch.setattr(
+            events_overview_module,
+            "_fetch_reminder_logs_by_event_ids",
+            wrapped_fetch,
+        )
+
+        def fail_get_reminder_logs(*args, **kwargs):
+            raise AssertionError("build_events_overview should batch reminder log reads")
+
+        monkeypatch.setattr(Database, "get_reminder_logs", fail_get_reminder_logs)
+
+        result = build_events_overview(
+            db=db,
+            owner_id=owner_id,
+            start_date="2026-03-01",
+            end_date="2026-03-31",
+        )
+
+        assert call_info["count"] == 1
+        assert sorted(call_info["event_ids"]) == ["batch_ev1", "batch_ev2", "batch_ev3"]
+        assert result["summary"]["event_count"] == 3
+        assert result["summary"]["reminder_count"] == 3
+        assert result["events"][0]["reminders"][0]["status"] == "sent"
+        assert result["events"][1]["reminders"][0]["status"] == "sent"
+        assert result["events"][2]["reminders"][0]["status"] == "pending"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_visible_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)

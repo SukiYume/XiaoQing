@@ -4,8 +4,10 @@ jupyter 插件单元测试
 由于 jupyter 插件使用相对导入且依赖 jupyter_client（外部依赖），
 本测试主要测试模块结构和可导入性。
 """
+import asyncio
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -181,6 +183,46 @@ class TestJupyterCodeReviewFixes:
 
         assert manager_a1 is manager_a2
         assert manager_a1 is not manager_b
+
+    def test_owner_key_uses_group_context_when_available(self):
+        from plugins.jupyter.main import _owner_key
+
+        context = SimpleNamespace(current_user_id=10001, current_group_id=20002)
+
+        assert _owner_key(context) == "10001:20002"
+
+    @pytest.mark.asyncio
+    async def test_execute_timeout_interrupts_running_kernel(self, tmp_path):
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        manager = JupyterKernelManager(tmp_path / "jupyter")
+
+        class _FakeKernelManager:
+            def __init__(self):
+                self.interrupted = False
+
+            def is_alive(self):
+                return True
+
+            def interrupt_kernel(self):
+                self.interrupted = True
+
+        class _FakeKernelClient:
+            def execute(self, _code):
+                return "msg-1"
+
+            def get_iopub_msg(self, timeout):
+                raise TimeoutError()
+
+        fake_km = _FakeKernelManager()
+        manager._km = fake_km
+        manager._kc = _FakeKernelClient()
+
+        result = await manager.execute("print('hello')", timeout=0.01)
+
+        assert result.success is False
+        assert "超时" in result.error
+        assert fake_km.interrupted is True
 
 
 if __name__ == "__main__":

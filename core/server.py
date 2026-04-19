@@ -277,12 +277,16 @@ class InboundServer:
             return
         
         text = json.dumps(action, ensure_ascii=False)
+        failed_sockets: list[web.WebSocketResponse] = []
         # 复制集合以防迭代时变更
         for ws in list(self._active_sockets):
             try:
                 await ws.send_str(text)
             except Exception as exc:
                 logger.warning("Broadcast failed for one client: %s", exc)
+                failed_sockets.append(ws)
+        for ws in failed_sockets:
+            self._active_sockets.discard(ws)
 
     async def _handle_ws_event(self, ws: web.WebSocketResponse, payload: dict[str, Any]) -> None:
         """处理 WebSocket 事件（非阻塞）"""

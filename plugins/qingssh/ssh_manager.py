@@ -13,7 +13,6 @@ import json
 import os
 import re
 import shlex
-import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -34,6 +33,104 @@ except ImportError:
     PARAMIKO_AVAILABLE = False
     paramiko = None  # type: ignore
     SSHConfig = None  # type: ignore
+
+_SSH_OPTIONS_WITH_ARG = {
+    "-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i",
+    "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-Q", "-R",
+    "-S", "-W", "-w",
+}
+
+
+def _expand_proxycommand(proxycommand: str, server: dict[str, Any]) -> str:
+    return (
+        proxycommand
+        .replace("%h", server["host"])
+        .replace("%p", str(server["port"]))
+        .replace("%r", server["username"])
+    )
+
+
+def _parse_proxyjump_command(proxycommand: str) -> Optional[dict[str, Any]]:
+    try:
+        parts = shlex.split(proxycommand, posix=(os.name != "nt"))
+    except ValueError:
+        return None
+
+    if not parts:
+        return None
+
+    executable = Path(parts[0]).name.lower()
+    if executable not in {"ssh", "ssh.exe"}:
+        return None
+
+    jump_host = None
+    jump_user = None
+    jump_port = None
+    saw_tunnel = False
+    idx = 1
+
+    while idx < len(parts):
+        part = parts[idx]
+
+        if part == "-W":
+            if idx + 1 >= len(parts):
+                return None
+            saw_tunnel = True
+            idx += 2
+            continue
+        if part.startswith("-W") and len(part) > 2:
+            saw_tunnel = True
+            idx += 1
+            continue
+        if part == "-l":
+            if idx + 1 >= len(parts):
+                return None
+            jump_user = parts[idx + 1]
+            idx += 2
+            continue
+        if part.startswith("-l") and len(part) > 2:
+            jump_user = part[2:]
+            idx += 1
+            continue
+        if part == "-p":
+            if idx + 1 >= len(parts):
+                return None
+            try:
+                jump_port = int(parts[idx + 1])
+            except ValueError:
+                return None
+            idx += 2
+            continue
+        if part.startswith("-p") and len(part) > 2:
+            try:
+                jump_port = int(part[2:])
+            except ValueError:
+                return None
+            idx += 1
+            continue
+        if part in _SSH_OPTIONS_WITH_ARG:
+            if idx + 1 >= len(parts):
+                return None
+            idx += 2
+            continue
+        if part.startswith("-"):
+            idx += 1
+            continue
+
+        jump_host = part
+        idx += 1
+
+    if not saw_tunnel or not jump_host:
+        return None
+
+    if "@" in jump_host and not jump_user:
+        jump_user, jump_host = jump_host.split("@", 1)
+
+    return {
+        "jump_host": jump_host,
+        "jump_user": jump_user,
+        "jump_port": jump_port,
+    }
 
 class SSHManager:
     """
@@ -70,6 +167,18 @@ class SSHManager:
             log_method = getattr(logger, level, None)
             if log_method and callable(log_method):
                 log_method(message, **kwargs)
+
+    def _load_host_keys(self, client: "paramiko.SSHClient", known_hosts_path: Path) -> None:
+        try:
+            client.load_system_host_keys()
+        except Exception as e:
+            self._log("warning", f"Failed to load system host keys: {e}")
+
+        if known_hosts_path.exists():
+            try:
+                client.load_host_keys(str(known_hosts_path))
+            except Exception as e:
+                self._log("warning", f"Failed to load known_hosts: {e}")
 
     async def initialize(self):
         """
@@ -345,16 +454,10 @@ class SSHManager:
         
         try:
             client = paramiko.SSHClient()
-            # 使用 WarningPolicy 而非 AutoAddPolicy 以避免中间人攻击风险
-            # 未知的 host key 会记录警告但允许连接（首次连接）
-            client.set_missing_host_key_policy(paramiko.WarningPolicy())
+            client.set_missing_host_key_policy(paramiko.RejectPolicy())
             
             known_hosts_path = Path.home() / ".ssh" / "known_hosts"
-            if known_hosts_path.exists():
-                try:
-                    client.load_host_keys(str(known_hosts_path))
-                except Exception as e:
-                    self._log("warning", f"Failed to load known_hosts: {e}")
+            self._load_host_keys(client, known_hosts_path)
             
             connect_kwargs = {
                 "hostname": server["host"],
@@ -387,130 +490,41 @@ class SSHManager:
             
             proxycommand = server.get("proxycommand")
             if proxycommand:
-                proxycommand = proxycommand.replace("%h", server["host"])
-                proxycommand = proxycommand.replace("%p", str(server["port"]))
-                proxycommand = proxycommand.replace("%r", server["username"])
-                
-                # Windows 平台下 ProxyCommand 的特殊处理
-                # paramiko 的 ProxyCommand 在 Windows 上使用管道，会导致 select() 调用失败
-                # 解决方案：手动解析 jump host 并建立 direct-tcpip 通道
-                use_proxy_command_fallback = True
-                
-                if sys.platform == 'win32' and 'ssh' in proxycommand:
-                    try:
-                        # 尝试更健壮地解析 Jump Host
-                        # ProxyCommand 通常格式: ssh -W host:port [-p port] [-l user] jump_host
-                        # 使用 shlex 处理引号裹住的路径（如 IdentityFile）
-                        try:
-                            parts = shlex.split(proxycommand)
-                        except ValueError:
-                            parts = proxycommand.split()
-                        
-                        # 解析 SSH 命令行参数以找到目标主机
-                        jump_dest = None
-                        # 这些 SSH 选项后面紧跟着参数
-                        ssh_opts_with_arg = {
-                            '-B', '-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', 
-                            '-J', '-L', '-l', '-m', '-O', '-o', '-p', '-Q', '-R', 
-                            '-S', '-W', '-w'
-                        }
-                        
-                        # 跳过命令本身 (ssh)
-                        idx = 1
-                        while idx < len(parts):
-                            part = parts[idx]
-                            
-                            # 碰到 - 开头认为是选项
-                            if part.startswith('-'):
-                                # 检查是否是 -p2222 这种连写
-                                flag = part[:2]
-                                if len(part) > 2 and flag in ssh_opts_with_arg:
-                                    # 连写形式，当前部分已经包含参数，跳过当前
-                                    idx += 1
-                                    continue
-                                
-                                if part in ssh_opts_with_arg:
-                                    # 也就是 -p 2222 这种分开的形式，需要多跳过一个 args
-                                    idx += 2
-                                else:
-                                    # 假设是不带参数的选项 (如 -v, -4, -C)
-                                    idx += 1
-                            else:
-                                # 找到非选项参数，即为目标主机
-                                jump_dest = part
-                                break
-                                
-                        # 如果解析失败，作为兜底，取最后一个参数
-                        if not jump_dest and len(parts) > 1:
-                            jump_dest = parts[-1]
-                        
-                        if self.context and hasattr(self.context, 'logger'):
-                            self.context.logger.info(f"Attempting Windows ProxyJump workaround for: {jump_dest}")
+                proxycommand = _expand_proxycommand(proxycommand, server)
+                jump_target = _parse_proxyjump_command(proxycommand)
+                if not jump_target:
+                    return False, "❌ ProxyCommand 仅支持安全的 ssh -W 跳板配置，请改用 ProxyJump 或移除本地命令代理"
 
-                        # 解析跳板机用户名和地址
-                        jump_user = None
-                        jump_host_name = jump_dest
-                        if '@' in jump_dest:
-                            jump_user, jump_host_name = jump_dest.split('@', 1)
-                        
-                        # 获取跳板机的配置
-                        jump_conf = self.get_ssh_config_for_host(jump_host_name)
-                        if not jump_conf:
-                            # 如果没有配置，使用默认值
-                            jump_conf = {
-                                'hostname': jump_host_name,
-                                'port': 22,
-                                'user': 'root'
-                            }
-                        
-                        # 准备跳板机连接参数
-                        j_kwargs = {
-                            "hostname": jump_conf.get('hostname', jump_host_name),
-                            "port": jump_conf.get('port', 22),
-                            # 命令行中的用户优先于配置中的用户
-                            "username": jump_user if jump_user else jump_conf.get('user', 'root'),
-                            "timeout": CONNECT_TIMEOUT
-                        }
-                        
-                        if jump_conf.get('identityfile'):
-                            j_kwargs['key_filename'] = os.path.expanduser(jump_conf['identityfile'][0])
-                            
-                        # 创建跳板机客户端
-                        jump_client = paramiko.SSHClient()
-                        jump_client.set_missing_host_key_policy(paramiko.WarningPolicy())
-                        
-                        # 加载 known_hosts
-                        if known_hosts_path.exists():
-                            try:
-                                jump_client.load_host_keys(str(known_hosts_path))
-                            except Exception:
-                                pass
-                        
-                        # 连接跳板机
-                        # 注意：这里需要 await run_in_thread
-                        await asyncio.to_thread(jump_client.connect, **j_kwargs)
-                        
-                        # 建立通道
-                        dest_addr = (server["host"], server["port"])
-                        src_addr = ('0.0.0.0', 0)
-                        sock = jump_client.get_transport().open_channel("direct-tcpip", dest_addr, src_addr)
-                        
-                        connect_kwargs["sock"] = sock
-                        # 将 jump_client 附加到主 client 上，防止被 GC，并在断开时关闭
-                        client._jump_client = jump_client
-                        
-                        use_proxy_command_fallback = False
+                jump_host_name = jump_target["jump_host"]
+                jump_conf = self.get_ssh_config_for_host(jump_host_name) or {
+                    "hostname": jump_host_name,
+                    "port": 22,
+                    "user": "root",
+                    "identityfile": [],
+                }
+                j_kwargs = {
+                    "hostname": jump_conf.get("hostname", jump_host_name),
+                    "port": jump_target["jump_port"] or jump_conf.get("port", 22),
+                    "username": jump_target["jump_user"] or jump_conf.get("user", "root"),
+                    "timeout": CONNECT_TIMEOUT,
+                    "allow_agent": True,
+                    "look_for_keys": True,
+                }
+                if jump_conf.get("identityfile"):
+                    j_kwargs["key_filename"] = os.path.expanduser(jump_conf["identityfile"][0])
 
-                        self._log("info", f"Jump host connected: {jump_host_name}")
+                jump_client = paramiko.SSHClient()
+                jump_client.set_missing_host_key_policy(paramiko.RejectPolicy())
+                self._load_host_keys(jump_client, known_hosts_path)
 
-                    except Exception as e:
-                        self._log("warning", f"Windows ProxyJump workaround failed: {e}. Falling back to standard ProxyCommand.")
+                await asyncio.to_thread(jump_client.connect, **j_kwargs)
+                dest_addr = (server["host"], server["port"])
+                src_addr = ("0.0.0.0", 0)
+                sock = jump_client.get_transport().open_channel("direct-tcpip", dest_addr, src_addr)
 
-                if use_proxy_command_fallback:
-                    self._log("info", f"Using ProxyCommand: {proxycommand}")
-
-                    proxy = paramiko.ProxyCommand(proxycommand)
-                    connect_kwargs["sock"] = proxy
+                connect_kwargs["sock"] = sock
+                client._jump_client = jump_client
+                self._log("info", f"Jump host connected: {jump_host_name}")
 
             self._log("info", f"User {user_id} (Group {group_id}) connecting to {name}...")
 
@@ -538,7 +552,7 @@ class SSHManager:
             error_msg = str(e)
             self._log("error", f"SSH error for {name}: {e}")
             
-            if "does not match" in error_msg or "Host key" in error_msg:
+            if "does not match" in error_msg or "Host key" in error_msg or "known_hosts" in error_msg:
                 known_hosts_path = Path.home() / ".ssh" / "known_hosts"
                 return False, (
                     "❌ SSH Host Key 不匹配\n"
@@ -546,7 +560,7 @@ class SSHManager:
                     "这通常发生在：\n"
                     "  • 服务器重新安装了系统\n"
                     "  • 服务器重新生成了密钥\n\n"
-                    f"请检查: {known_hosts_path}"
+                    f"请确认服务器 Host Key 已存在于 known_hosts 中: {known_hosts_path}"
                 )
             
             return False, f"❌ SSH 连接错误: {e}\n\n💡 请检查网络连接和服务器状态"

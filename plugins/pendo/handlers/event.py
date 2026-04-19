@@ -27,6 +27,7 @@ from .event_support import (
     format_milestone_event_created,
     format_recurring_event_created,
     get_remind_status,
+    group_reminders_by_milestone,
     recalculate_event_reminders,
 )
 from ..utils.formatters import (

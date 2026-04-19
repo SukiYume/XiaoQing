@@ -188,10 +188,15 @@ class TestMakeChoice:
     def test_choice_count_exceeds_options(self):
         """测试选择数量超过选项数量"""
         options = ["A", "B", "C"]
-        result = choice.make_choice(options, 10, True)
-        # 应该最多返回所有选项
-        assert len(result) == 3
-        assert set(result) == set(options)
+        with pytest.raises(ValueError):
+            choice.make_choice(options, 10, True)
+
+    def test_choice_count_exceeds_options_non_unique_keeps_requested_count(self):
+        """测试非去重模式不会静默截断选择数量"""
+        options = ["A", "B", "C"]
+        result = choice.make_choice(options, 10, False)
+        assert len(result) == 10
+        assert all(item in options for item in result)
 
     def test_all_options_selected(self):
         """测试选择所有选项"""
@@ -296,11 +301,27 @@ class TestChoiceCommand:
         assert len(result) > 0
 
     @pytest.mark.asyncio
+    async def test_choice_with_n_flag_overflow_non_unique_keeps_count(self, mock_context, mock_event):
+        """测试 -n 超过选项数时非 unique 模式仍按请求数量选择"""
+        result = await choice.handle("choice", "选择 A B -n 5", mock_event, mock_context)
+        assert result is not None
+        result_text = str(result)
+        assert "已从 2 个选项中选择 5 个" in result_text
+
+    @pytest.mark.asyncio
     async def test_choice_with_u_flag(self, mock_context, mock_event):
         """测试带 -u 标志的去重选择"""
         result = await choice.handle("choice", "选择 A B C D -u", mock_event, mock_context)
         assert result is not None
         assert len(result) > 0
+
+    @pytest.mark.asyncio
+    async def test_choice_with_u_flag_overflow_errors(self, mock_context, mock_event):
+        """测试 unique 模式下数量超限会明确报错"""
+        result = await choice.handle("choice", "选择 A B -n 5 -u", mock_event, mock_context)
+        assert result is not None
+        result_text = str(result)
+        assert "去重模式" in result_text and "不能超过选项数量" in result_text
 
     @pytest.mark.asyncio
     async def test_weighted_choice_duplicates(self, mock_context, mock_event):

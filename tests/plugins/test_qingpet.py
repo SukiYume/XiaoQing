@@ -1,6 +1,7 @@
 import pytest
 import os
 import tempfile
+from datetime import datetime, timedelta
 from plugins.qingpet.services import Database
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.user_service import UserService
@@ -8,7 +9,7 @@ from plugins.qingpet.services.social_service import SocialService
 from plugins.qingpet.services.item_service import ItemService
 from plugins.qingpet.services.admin_service import AdminService
 from plugins.qingpet.models import Pet, User
-from plugins.qingpet.utils.constants import PetStage, PetPersonality
+from plugins.qingpet.utils.constants import PetStage, PetPersonality, PetStatus
 
 @pytest.fixture
 def temp_db():
@@ -221,3 +222,42 @@ def test_safe_add_column_rejects_invalid_identifiers_without_executing_sql():
     cursor = _DummyCursor()
     Database._safe_add_column(cursor, "users;DROP TABLE users", "hacked", "INTEGER DEFAULT 0")
     assert cursor.called is False
+
+
+def test_admin_reset_clears_pet_cooldowns_and_social_cooldowns(temp_db):
+    user_service = UserService(temp_db)
+    user_service.get_or_create_user("test_user", 123456)
+
+    pet_service = PetService(temp_db)
+    pet_service.adopt_pet("test_user", 123456, "小白")
+
+    pet = temp_db.get_pet("test_user", 123456)
+    pet.last_feed = datetime.now() - timedelta(minutes=1)
+    pet.last_clean = datetime.now() - timedelta(minutes=1)
+    pet.last_play = datetime.now() - timedelta(minutes=1)
+    pet.last_train = datetime.now() - timedelta(minutes=1)
+    pet.last_explore = datetime.now() - timedelta(minutes=1)
+    pet.status = PetStatus.SICK
+    pet.status_expire_time = datetime.now() + timedelta(hours=1)
+    temp_db.update_pet(pet)
+
+    user = temp_db.get_user("test_user", 123456)
+    user.last_visit_time = datetime.now() - timedelta(minutes=1)
+    user.last_gift_time = datetime.now() - timedelta(minutes=1)
+    user_service.update_user(user)
+
+    admin_service = AdminService(temp_db)
+    assert admin_service.reset_user_pet("test_user", 123456) is True
+
+    reset_pet = temp_db.get_pet("test_user", 123456)
+    reset_user = temp_db.get_user("test_user", 123456)
+
+    assert reset_pet.status == PetStatus.NORMAL
+    assert reset_pet.status_expire_time is None
+    assert reset_pet.last_feed is None
+    assert reset_pet.last_clean is None
+    assert reset_pet.last_play is None
+    assert reset_pet.last_train is None
+    assert reset_pet.last_explore is None
+    assert reset_user.last_visit_time is None
+    assert reset_user.last_gift_time is None

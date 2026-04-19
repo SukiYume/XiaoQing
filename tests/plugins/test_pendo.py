@@ -1443,6 +1443,61 @@ class TestReminderRegression:
         finally:
             db.cleanup()
 
+    def test_list_reminders_week_supports_milestone_events(self, tmp_path, monkeypatch):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers import event as event_module
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_milestone_reminders_week.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="学术会议",
+                start_time="2030-01-22T10:30:00",
+                end_time="2030-01-26T12:00:00",
+                milestones=[
+                    {"name": "会议开始", "time": "2030-01-22T10:30:00"},
+                    {"name": "会议结束", "time": "2030-01-26T12:00:00"},
+                ],
+                remind_times=[
+                    "2030-01-21T10:30:00",
+                    "2030-01-22T09:30:00",
+                    "2030-01-22T10:30:00",
+                    "2030-01-25T12:00:00",
+                    "2030-01-26T12:00:00",
+                ],
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(event, "mileweek")
+            db.log_reminder("mileweek", "2030-01-21T10:30:00", sent=True)
+
+            monkeypatch.setattr(
+                event_module,
+                "parse_event_time_range",
+                lambda _query: ("2030-01-20T00:00:00", "2030-01-26T23:59:59"),
+            )
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+            result = asyncio.run(handler.handle_reminders("u1", "list week", MagicMock()))
+
+            assert result["status"] == "success"
+            assert "学术会议" in result["message"]
+            assert "🗺️2节点" in result["message"]
+            assert "📌 01-22 会议开始" in result["message"]
+            assert "📌 01-26 会议结束" in result["message"]
+            assert "⏰ 01-21 10:30" in result["message"]
+            assert "⏰ 01-26 12:00" in result["message"]
+        finally:
+            db.cleanup()
+
 
 class TestDiaryViewRegression:
     def test_view_diary_by_id_returns_full_entry(self, tmp_path):
@@ -3453,6 +3508,83 @@ class TestSessionRegression:
 
 
 class TestOperationAndExportRegression:
+    def test_confirm_handles_aware_reminder_times(self, monkeypatch):
+        import sys
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.commands import operations
+        from plugins.pendo.commands.operations import handle_confirm
+
+        fixed_now = datetime.fromisoformat("2030-01-01T09:30:00+08:00")
+        monkeypatch.setattr(operations.TimezoneHelper, "now", lambda tz=None: fixed_now)
+
+        db = MagicMock()
+        db.items.get_item.return_value = SimpleNamespace(
+            title="带时区提醒",
+            type="event",
+            remind_times=[
+                "2030-01-01T08:00:00+08:00",
+                "2030-01-01T10:00:00+08:00",
+            ],
+        )
+
+        reminder_service = MagicMock()
+        reminder_service.confirm_reminder.return_value = {"status": "success", "message": "ok"}
+
+        result = asyncio.run(handle_confirm("u1", "evt123", reminder_service, db))
+
+        assert result["status"] == "success"
+        assert "后续还有 1 个提醒" in result["message"]
+        reminder_service.confirm_reminder.assert_called_once_with("evt123", "confirmed", "u1")
+
+    def test_snooze_keeps_future_aware_reminders(self, monkeypatch):
+        import sys
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.commands import operations
+        from plugins.pendo.commands.operations import handle_snooze
+
+        fixed_now = datetime.fromisoformat("2030-01-01T09:30:00+08:00")
+
+        monkeypatch.setattr(operations.TimezoneHelper, "now", lambda tz=None: fixed_now)
+        monkeypatch.setattr(
+            operations,
+            "_parse_snooze_time",
+            lambda time_arg, base_time=None: "2030-01-01T11:00:00+08:00",
+        )
+
+        async def fake_last_sent_remind_time(db, item_id):
+            return None
+
+        monkeypatch.setattr(operations, "_get_last_sent_remind_time", fake_last_sent_remind_time)
+
+        db = MagicMock()
+        db.items.get_item.return_value = SimpleNamespace(
+            title="延后测试",
+            type="event",
+            remind_times=[
+                "2030-01-01T08:00:00+08:00",
+                "2030-01-01T10:00:00+08:00",
+            ],
+        )
+        db.items.update_item.return_value = {"status": "success"}
+
+        reminder_service = MagicMock()
+        reminder_service.db = db
+        reminder_service.confirm_reminder.return_value = {"status": "success", "message": "ok"}
+
+        result = asyncio.run(handle_snooze("u1", "evt123 10m", reminder_service))
+
+        assert result["status"] == "success"
+        assert "已将提醒延后到: 2030-01-01T11:00:00+08:00" in result["message"]
+        db.items.update_item.assert_called_once()
+
     def test_snooze_missing_args_returns_error_result(self):
         import sys
 

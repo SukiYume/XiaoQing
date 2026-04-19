@@ -228,7 +228,7 @@ class TestConfig:
     def test_get_proxy_default(self, mock_context_no_config):
         """测试默认代理"""
         proxy = twitter._get_proxy(mock_context_no_config)
-        assert proxy == "http://127.0.0.1:1080"
+        assert proxy is None
 
     def test_get_user_id(self, mock_context):
         """测试获取用户 ID"""

@@ -8,6 +8,7 @@ import json
 from typing import Any, cast
 
 from plugins.minecraft import main as mc_main
+from plugins.minecraft.log_monitor import LogEvent, LogEventType
 from plugins.minecraft.rcon import PacketType, RconClient, RconPacket
 from core.interfaces import PluginContextProtocol
 
@@ -419,6 +420,46 @@ async def test_shutdown_cleans_all_mc_connections(monkeypatch):
     assert manager.connection_count() == 0
 
 
+@pytest.mark.asyncio
+async def test_scheduled_uses_async_log_monitor(monkeypatch):
+    manager = mc_main.ConnectionManager()
+    monitor = MagicMock()
+    monitor.check_updates_async = AsyncMock(
+        return_value=[
+            LogEvent(
+                event_type=LogEventType.CHAT,
+                player="Steve",
+                message="hello",
+                raw_line="[12:00:00] [Server thread/INFO]: <Steve> hello",
+                timestamp="12:00:00",
+            )
+        ]
+    )
+    conn = mc_main.McConnection(
+        host="127.0.0.1",
+        port=25575,
+        password="p",
+        log_file="latest.log",
+        target_type="private",
+        target_id=10004,
+        rcon_client=None,
+        log_monitor=monitor,
+    )
+    manager.add_connection(conn)
+    monkeypatch.setattr(mc_main, "_manager", manager)
+
+    context = MagicMock()
+    context.send_action = AsyncMock()
+
+    await mc_main.scheduled(context)
+
+    monitor.check_updates_async.assert_awaited_once()
+    context.send_action.assert_awaited_once()
+    action = context.send_action.await_args.args[0]
+    assert action["action"] == "send_private_msg"
+    assert "Steve" in action["params"]["message"][0]["data"]["text"]
+
+
 class _FakeRconReader:
     def __init__(self, payload: bytes):
         self._payload = payload
@@ -457,3 +498,20 @@ def test_rcon_send_packet_reads_full_large_response():
     response = asyncio.run(client._send_packet(PacketType.COMMAND, "list"))
 
     assert response.payload == large_payload
+
+
+def test_rcon_send_packet_joins_split_command_response():
+    first_payload = "a" * 4096
+    second_payload = "b" * 512
+    encoded = (
+        RconPacket(request_id=1, packet_type=PacketType.RESPONSE, payload=first_payload).encode()
+        + RconPacket(request_id=1, packet_type=PacketType.RESPONSE, payload=second_payload).encode()
+    )
+
+    client = RconClient("127.0.0.1", 25575, "pw")
+    client._reader = cast(Any, _FakeRconReader(encoded))
+    client._writer = cast(Any, _FakeRconWriter())
+
+    response = asyncio.run(client._send_packet(PacketType.COMMAND, "list"))
+
+    assert response.payload == first_payload + second_payload

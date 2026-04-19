@@ -12,7 +12,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 # 本地导入
-from core.plugin_base import run_sync, segments
+from core.plugin_base import image_url as image_segment, run_sync, segments
 
 
 logger = logging.getLogger(__name__)
@@ -95,22 +95,29 @@ async def handle_url(url: str, event: dict, context) -> list:
 
         title, desc, image_url = await run_sync(_parse, html)
         
-        if not title and not desc:
-            logger.debug(f"未找到标题和描述: {url}")
+        if not title and not desc and not image_url:
+            logger.debug(f"未找到标题、描述和图片: {url}")
             return []
 
-        # 构建回复
-        msg = f"🔗 {title}\n"
-        if desc:
-            # 截断过长的描述
-            if len(desc) > MAX_DESC_LENGTH:
-                desc = desc[:MAX_DESC_LENGTH] + "..."
-            msg += f"{desc}\n"
-        
-        msg += f"\n链接: {url}"
+        response = []
+
+        if title or desc:
+            # 构建回复
+            msg = f"🔗 {title}\n"
+            if desc:
+                # 截断过长的描述
+                if len(desc) > MAX_DESC_LENGTH:
+                    desc = desc[:MAX_DESC_LENGTH] + "..."
+                msg += f"{desc}\n"
+            
+            msg += f"\n链接: {url}"
+            response.extend(segments(msg))
+
+        if image_url:
+            response.append(image_segment(image_url))
         
         logger.info(f"解析 URL 成功: {title[:30] if title else url}")
-        return segments(msg)
+        return response
 
     except aiohttp.ClientError as exc:
         logger.debug(f"URL 请求错误: {exc}")

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from plugins.pendo.services.db import Database
+from plugins.pendo.config import PendoConfig
 
 try:
     from plugins.pendo.web import auth as auth_module
@@ -57,7 +58,19 @@ def client(temp_db: Database):
         yield test_client
 
 
-def test_demo_auth_endpoint_creates_seeded_demo_space(client: TestClient, temp_db: Database):
+def test_demo_auth_endpoint_is_disabled_by_default(client: TestClient):
+    res = client.post("/api/auth/demo")
+
+    assert res.status_code == 404
+    assert "disabled" in res.json()["message"]
+
+
+def test_demo_auth_endpoint_creates_seeded_demo_space(
+    client: TestClient,
+    temp_db: Database,
+    monkeypatch,
+):
+    monkeypatch.setattr(PendoConfig, "WEB_DEMO_ENABLED", True)
     res = client.post("/api/auth/demo")
 
     assert res.status_code == 200

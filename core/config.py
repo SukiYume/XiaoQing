@@ -154,6 +154,7 @@ class ConfigManager:
         # 保存并重新加载
         self.save_secrets()
         self._update_mtime()
+        self._notify_callbacks_sync(self.snapshot())
 
     def on_reload(self, callback: ConfigCallback) -> None:
         """注册配置重载回调（支持同步和异步回调）"""
@@ -174,14 +175,31 @@ class ConfigManager:
             if await asyncio.to_thread(self._changed):
                 await asyncio.to_thread(self.reload)
                 snapshot = await asyncio.to_thread(self.snapshot)
-                for cb in self._callbacks:
-                    try:
-                        result = cb(snapshot)
-                        if asyncio.iscoroutine(result):
-                            await result
-                    except Exception as exc:
-                        logger.exception("Config callback failed: %s", exc)
+                await self._notify_callbacks_async(snapshot)
                 await asyncio.to_thread(self._update_mtime)
+
+    def _notify_callbacks_sync(self, snapshot: ConfigSnapshot) -> None:
+        for cb in self._callbacks:
+            try:
+                result = cb(snapshot)
+                if asyncio.iscoroutine(result):
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        asyncio.run(result)
+                    else:
+                        loop.create_task(result)
+            except Exception as exc:
+                logger.exception("Config callback failed: %s", exc)
+
+    async def _notify_callbacks_async(self, snapshot: ConfigSnapshot) -> None:
+        for cb in self._callbacks:
+            try:
+                result = cb(snapshot)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:
+                logger.exception("Config callback failed: %s", exc)
 
     def _load(self, path: Path) -> dict[str, Any]:
         """加载 JSON 文件"""

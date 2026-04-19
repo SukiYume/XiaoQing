@@ -204,6 +204,45 @@ class TestChatPlugin:
         assert result is not None
 
     @pytest.mark.asyncio
+    async def test_call_coze_api_stream_response(self, mock_context):
+        class MockStreamResponse:
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+            async def text(self):
+                return (
+                    'data: {"type":"answer","content":"第一段"}\n\n'
+                    'data: {"type":"answer","content":"第二段"}\n\n'
+                    "data: [DONE]\n\n"
+                )
+
+        class MockStreamContextManager:
+            async def __aenter__(self):
+                return MockStreamResponse()
+
+            async def __aexit__(self, *args):
+                pass
+
+        class MockStreamSession:
+            def post(self, *args, **kwargs):
+                return MockStreamContextManager()
+
+        mock_context.http_session = MockStreamSession()
+
+        result = await chat.call_coze_api(
+            "测试问题",
+            {"token": "test_token", "bot_id": "test_bot", "stream": True},
+            mock_context,
+        )
+
+        assert result == {
+            "messages": [
+                {"type": "answer", "content": "第一段"},
+                {"type": "answer", "content": "第二段"},
+            ]
+        }
+
+    @pytest.mark.asyncio
     async def test_call_coze_api_error_response(self, mock_context):
         """测试API错误响应"""
         class MockErrorResponse:

@@ -9,6 +9,7 @@ import json
 from typing import Any, cast
 
 from plugins.qingssh import session_handlers as ssh_session_handlers
+from plugins.qingssh import ssh_manager as ssh_manager_module
 from plugins.qingssh.config import SessionKeys
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -223,6 +224,28 @@ class TestQingsshSshManager:
         assert "async def _load_ssh_config" in content
         assert "def get_ssh_config_hosts" in content
         assert "def get_ssh_config_for_host" in content
+
+    def test_safe_proxycommand_parser_accepts_ssh_jump_pattern(self):
+        parsed = ssh_manager_module._parse_proxyjump_command(
+            "ssh -W %h:%p -p 2222 -l jumpuser jump-host"
+        )
+
+        assert parsed == {
+            "jump_host": "jump-host",
+            "jump_user": "jumpuser",
+            "jump_port": 2222,
+        }
+
+    def test_safe_proxycommand_parser_rejects_arbitrary_local_commands(self):
+        assert ssh_manager_module._parse_proxyjump_command("bash -lc 'nc %h %p'") is None
+        assert ssh_manager_module._parse_proxyjump_command("ssh jump-host") is None
+
+    def test_source_uses_reject_policy_and_avoids_shell_proxycommand_execution(self):
+        ssh_manager_file = ROOT / "plugins" / "qingssh" / "ssh_manager.py"
+        content = ssh_manager_file.read_text(encoding="utf-8")
+
+        assert "RejectPolicy" in content
+        assert "paramiko.ProxyCommand(" not in content
 
 
 class TestQingsshConfig:

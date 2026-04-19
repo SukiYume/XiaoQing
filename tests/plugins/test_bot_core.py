@@ -619,11 +619,11 @@ class TestFilterHelpLines:
 
     def test_filter_by_plugin_name(self):
         """测试按插件名过滤"""
-        # 使用正确的格式：插件标题行strip后应该以]结尾
+        # 插件标题行允许带描述后缀："[plugin] - 描述"
         lines = [
-            "[bot_core]",
+            "[bot_core] - 核心管理插件",
             "  /help           - 查看帮助",
-            "[chat]",
+            "[chat] - 聊天插件",
             "  /chat           - 与AI对话",
         ]
         result = bot_core._filter_help_lines(lines, "bot_core")
@@ -635,10 +635,10 @@ class TestFilterHelpLines:
     def test_filter_by_command(self):
         """测试按命令过滤"""
         lines = [
-            "[bot_core]",
+            "[bot_core] - 核心管理插件",
             "  /help           - 查看帮助",
             "  /reload         - 热重载",
-            "[chat]",
+            "[chat] - 聊天插件",
             "  /chat           - 与AI对话",
         ]
         result = bot_core._filter_help_lines(lines, "reload")
@@ -650,7 +650,7 @@ class TestFilterHelpLines:
     def test_filter_no_match(self):
         """测试无匹配结果"""
         lines = [
-            "[bot_core]",
+            "[bot_core] - 核心管理插件",
             "  /help           - 查看帮助",
         ]
         result = bot_core._filter_help_lines(lines, "nonexistent")
@@ -668,17 +668,9 @@ class TestFormatHelpLines:
         """测试格式化插件标题"""
         lines = ["[bot_core]        - 核心管理插件"]
         result = bot_core._format_help_lines(lines)
-        # 需要先strip，检查处理后的内容
-        # 格式化后应该是 "📦 bot_core" 或类似格式
-        # _format_help_lines 会检测 [xxx] 格式并添加 📦 图标
-        # 但只对 stripped.startswith("[") 且 stripped.endswith("]") 的行处理
-        # 由于原行是 "[bot_core]        - 核心管理插件"，strip 后是 "[bot_core]        - 核心管理插件"
-        # 并不以"]"结尾，所以不会被认为是插件标题行
-        # 让我们用正确的格式测试
-        lines_clean = ["[bot_core]"]
-        result = bot_core._format_help_lines(lines_clean)
         assert "📦" in result
         assert "bot_core" in result
+        assert "核心管理插件" in result
 
     def test_format_command(self):
         """测试格式化命令"""

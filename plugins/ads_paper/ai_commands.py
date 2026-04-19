@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from typing import Any, Optional
@@ -79,7 +80,7 @@ async def cmd_daily(
     from .storage import PaperStorage
     storage = PaperStorage(context.data_dir)
 
-    topics = storage.get_topics()
+    topics = await asyncio.to_thread(storage.get_topics)
     if not topics:
         return segments("🏷️ 请先添加研究兴趣关键词\n用法: /paper topics add <关键词>")
 
