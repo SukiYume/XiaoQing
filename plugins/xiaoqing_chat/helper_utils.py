@@ -4,11 +4,20 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from core.message import contains_bot_name, extract_text, has_at_mention, iter_message_segments
+
 from .config.config import XiaoQingChatConfig, load_xiaoqing_chat_config
 from .llm.llm_config import LLMCallConfig
 from .runtime_state import _ChatRuntime
 from .constants import FIND_BY_LOCAL_ID_LIMIT
 from .runtime_state import get_state as _state
+
+
+def _iter_message_segments(event_or_message: Any) -> list[dict[str, Any]]:
+    """
+    Return normalized OneBot message segments from either an event or raw message payload.
+    """
+    return list(iter_message_segments(event_or_message))
 
 
 def _get_lock(chat_id: str):
@@ -102,19 +111,7 @@ def _is_at_me(event: dict[str, Any]) -> bool:
         True if the bot was mentioned, False otherwise.
     """
     self_id = str(event.get("self_id", "") or "")
-    if not self_id:
-        return False
-    message = event.get("message")
-    if isinstance(message, list):
-        for seg in message:
-            if isinstance(seg, dict) and seg.get("type") == "at":
-                qq = seg.get("data", {}).get("qq")
-                if qq is not None and str(qq) == self_id:
-                    return True
-    raw = event.get("raw_message")
-    if isinstance(raw, str) and f"[CQ:at,qq={self_id}]" in raw:
-        return True
-    return False
+    return has_at_mention(event, self_id=self_id)
 
 
 def _has_bot_name(event: dict[str, Any], bot_name: str) -> bool:
@@ -130,10 +127,8 @@ def _has_bot_name(event: dict[str, Any], bot_name: str) -> bool:
     """
     if not bot_name:
         return False
-    from core.message import extract_text
-
     text = extract_text(event.get("message")).strip()
-    return bot_name.lower() in text.lower()
+    return contains_bot_name(text, bot_name)
 
 
 def _load_runtime(context: Any) -> _ChatRuntime:

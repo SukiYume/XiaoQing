@@ -4,22 +4,107 @@
 提供消息解析功能。
 """
 
+from dataclasses import dataclass
 import re
 from typing import Any, Optional
 
+_MEDIA_SEGMENT_TYPES = frozenset({"image", "mface", "face"})
+
+
+@dataclass(frozen=True)
+class MessageScan:
+    """Single-pass summary of a OneBot message payload."""
+
+    text: str
+    has_media: bool
+    is_at_me: bool
+
+
+def iter_message_segments(event_or_message: Any) -> tuple[dict[str, Any], ...]:
+    """Return normalized message segments from either an event or raw payload."""
+    message = event_or_message.get("message") if isinstance(event_or_message, dict) else event_or_message
+    if not isinstance(message, list):
+        return tuple()
+    return tuple(item for item in message if isinstance(item, dict))
+
+
+def _has_cq_at(value: Any, self_id: str) -> bool:
+    if not self_id or not isinstance(value, str):
+        return False
+    return f"[CQ:at,qq={self_id}]" in value
+
+
+def scan_message(
+    message: Any,
+    *,
+    self_id: str = "",
+    raw_message: str = "",
+) -> MessageScan:
+    """Scan a message payload once and extract text / media / @mention flags."""
+    if isinstance(message, str):
+        return MessageScan(
+            text=message,
+            has_media=False,
+            is_at_me=_has_cq_at(message, self_id) or _has_cq_at(raw_message, self_id),
+        )
+
+    text_parts: list[str] = []
+    has_media = False
+    is_at_me = False
+
+    for item in iter_message_segments(message):
+        segment_type = item.get("type")
+        data = item.get("data", {}) or {}
+
+        if segment_type == "text":
+            text_parts.append(str(data.get("text", "")))
+            continue
+
+        if segment_type in _MEDIA_SEGMENT_TYPES:
+            has_media = True
+            continue
+
+        if segment_type == "at" and self_id:
+            at_qq = data.get("qq")
+            if at_qq is not None and str(at_qq) == self_id:
+                is_at_me = True
+
+    if not is_at_me and _has_cq_at(raw_message, self_id):
+        is_at_me = True
+
+    return MessageScan(
+        text="".join(text_parts),
+        has_media=has_media,
+        is_at_me=is_at_me,
+    )
+
+
 def extract_text(message: Any) -> str:
     """从 OneBot 消息中提取纯文本"""
-    if isinstance(message, str):
-        return message
+    return scan_message(message).text
 
-    if isinstance(message, list):
-        parts = []
-        for item in message:
-            if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("data", {}).get("text", ""))
-        return "".join(parts)
 
-    return ""
+def has_media_segment(message: Any) -> bool:
+    """判断消息中是否包含当前支持的媒体段。"""
+    return scan_message(message).has_media
+
+
+def contains_bot_name(text: str, bot_name: str) -> bool:
+    if not text or not bot_name:
+        return False
+    return bot_name.lower() in text.lower()
+
+
+def has_at_mention(
+    event_or_message: Any,
+    *,
+    self_id: str = "",
+    raw_message: str = "",
+) -> bool:
+    message = event_or_message.get("message") if isinstance(event_or_message, dict) else event_or_message
+    if isinstance(event_or_message, dict) and not raw_message:
+        raw_message = str(event_or_message.get("raw_message", "") or "")
+    return scan_message(message, self_id=self_id, raw_message=raw_message).is_at_me
 
 def normalize_message(event: dict[str, Any]) -> tuple[str, Optional[int], Optional[int]]:
     """
@@ -27,7 +112,7 @@ def normalize_message(event: dict[str, Any]) -> tuple[str, Optional[int], Option
 
     返回: (文本内容, user_id, group_id)
     """
-    text = extract_text(event.get("message")).strip()
+    text = scan_message(event.get("message")).text.strip()
     return text, event.get("user_id"), event.get("group_id")
 
 def is_bot_mentioned(
@@ -36,23 +121,7 @@ def is_bot_mentioned(
     bot_name: str = "",
     self_id: str = "",
 ) -> bool:
-    if bot_name and bot_name.lower() in text.lower():
-        return True
-
-    if self_id:
-        at_cq = f"[CQ:at,qq={self_id}]"
-        if at_cq in text:
-            return True
-
-    message = event.get("message", [])
-    if isinstance(message, list):
-        for seg in message:
-            if seg.get("type") == "at":
-                at_qq = seg.get("data", {}).get("qq")
-                if at_qq and self_id and str(at_qq) == str(self_id):
-                    return True
-
-    return False
+    return contains_bot_name(text, bot_name) or has_at_mention(event, self_id=self_id)
 
 def compile_bot_name_pattern(bot_name: str) -> Optional[re.Pattern[str]]:
     if not bot_name:
@@ -96,9 +165,15 @@ def parse_text_command_context(
     prefixes: Optional[tuple[str, ...]] = None,
     self_id: str = "",
     bot_name_pattern: Optional[re.Pattern[str]] = None,
+    message_scan: MessageScan | None = None,
 ) -> tuple[bool, str, bool, bool, bool]:
     prefixes = prefixes or tuple()
-    is_at_me = is_bot_mentioned(text, event, self_id=self_id)
+    message_scan = message_scan or scan_message(
+        event.get("message"),
+        self_id=self_id,
+        raw_message=str(event.get("raw_message", "") or ""),
+    )
+    is_at_me = message_scan.is_at_me
     clean_text = strip_message_prefix(
         text,
         bot_name=bot_name,
@@ -106,16 +181,22 @@ def parse_text_command_context(
         self_id=self_id,
         bot_name_pattern=bot_name_pattern,
     )
-    has_bot_name = bool(bot_name and bot_name.lower() in text.lower())
+    has_bot_name = contains_bot_name(text, bot_name)
     has_prefix = any(text.startswith(p) for p in prefixes)
     is_only_bot_name = (text.strip() == bot_name) or (is_at_me and not clean_text)
     return is_at_me, clean_text, has_bot_name, has_prefix, is_only_bot_name
 
 __all__ = [
+    "MessageScan",
+    "contains_bot_name",
     "extract_text",
+    "has_media_segment",
+    "has_at_mention",
+    "iter_message_segments",
     "normalize_message",
     "is_bot_mentioned",
     "compile_bot_name_pattern",
+    "scan_message",
     "strip_message_prefix",
     "parse_text_command_context",
 ]

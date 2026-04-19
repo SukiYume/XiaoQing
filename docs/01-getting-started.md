@@ -83,7 +83,7 @@ Copy-Item config/secrets.json.example config/secrets.json
 |--------|------|--------|
 | `bot_name` | 机器人名称，群聊中喊这个名字会触发 | 你喜欢的名字 |
 | `command_prefixes` | 命令前缀，如 `/help` | `["/"]` |
-| `onebot_http_base` | OneBot 的 HTTP API 地址 | 根据你的 OneBot 配置 |
+| `onebot_http_base` | OneBot 的 HTTP API 地址 | 根据你的 OneBot 配置；`xiaoqing_chat` 回收 NapCat `mface` 真实图片也依赖它 |
 | `inbound_http_base` | XiaoQing Inbound HTTP（接收 OneBot 推送） | `http://127.0.0.1:12000` |
 | `plugins.smalltalk_provider` | 闲聊提供者插件 | `xiaoqing_chat` 或 `smalltalk` |
 
@@ -103,6 +103,7 @@ Copy-Item config/secrets.json.example config/secrets.json
 | 配置项 | 说明 |
 |--------|------|
 | `inbound_token` | 与 OneBot 通信的密钥，需要双方一致 |
+| `onebot_token` | OneBot HTTP API 的鉴权 token；如果你启用了 token，这里也要同步填写，否则图片回收接口会失败 |
 | `admin_user_ids` | 管理员 QQ 号列表，可执行管理命令 |
 | `plugins` | 各插件的私有配置（如 API Key） |
 

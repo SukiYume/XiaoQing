@@ -144,6 +144,20 @@
         "probability": 0.6,
         "max_length_trigger": 80
     },
+    "media": {
+        "enable_inbound_media_context": true,
+        "enable_outbound_emoji_reply": true,
+        "emoji_library_dir": "figures/library",
+        "emoji_reply_probability": 0.35,
+        "emoji_candidate_count": 6,
+        "emoji_cooldown_turns": 3,
+        "max_media_per_message": 3,
+        "max_analyze_bytes": 4194304,
+        "vision_provider": "",
+        "vision_timeout_seconds": 20.0,
+        "vision_max_retry": 1,
+        "vision_retry_interval_seconds": 1.0
+    },
     "personality": {
         "polite_guardrail": true,
         "identity": "你叫小青，是一个大二在读女大学生，现在正在上网和群友聊天，性格比较随和，偶尔会吐槽但不刻薄，有点自己的口癖和偏好。你不追求完美回答，更在意像个真实的人：会犹豫、会吐槽、会说不知道。别人问你是谁/是不是机器人，就随口回一句，别像自我介绍模板，别自报家门。",

@@ -210,6 +210,61 @@ class TestMessageParser:
         ctx = parser.parse(event)
         assert ctx is None
 
+    def test_parse_image_only_message_keeps_context(self, mock_config_provider: MagicMock):
+        """测试纯图片消息不会被 parser 丢弃"""
+        parser = MessageParser(mock_config_provider)
+        event = {
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": [{"type": "image", "data": {"file": "file:///tmp/test.png"}}],
+        }
+
+        ctx = parser.parse(event)
+
+        assert ctx is not None
+        assert ctx.text == ""
+        assert ctx.clean_text == ""
+        assert ctx.user_id == 12345
+        assert ctx.group_id == 67890
+
+    def test_parse_face_only_message_keeps_context(self, mock_config_provider: MagicMock):
+        """测试纯 QQ 表情消息不会被 parser 丢弃"""
+        parser = MessageParser(mock_config_provider)
+        event = {
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": [{"type": "face", "data": {"id": "14"}}],
+        }
+
+        ctx = parser.parse(event)
+
+        assert ctx is not None
+        assert ctx.text == ""
+        assert ctx.clean_text == ""
+        assert ctx.user_id == 12345
+        assert ctx.group_id == 67890
+
+    def test_parse_at_only_without_media_still_returns_none(self, mock_config_provider: MagicMock):
+        """测试无文本无媒体的消息仍会被丢弃"""
+        parser = MessageParser(mock_config_provider)
+        event = {
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": [{"type": "at", "data": {"qq": "11111"}}],
+        }
+
+        ctx = parser.parse(event)
+        assert ctx is None
+
 # ============================================================
 # Dispatcher.handle_event 测试
 # ============================================================
