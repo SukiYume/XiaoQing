@@ -1,126 +1,64 @@
 # QingSSH 插件
 
-SSH 远程管理插件，提供安全的远程服务器连接和命令执行功能。
+SSH 远程控制插件，支持保存服务器配置、从 `~/.ssh/config` 导入、交互式命令执行和远程图片查看。
 
-## 功能介绍
+## 常用命令
 
-QingSSH 插件允许通过 XiaoQing 管理远程服务器，支持 SSH 连接、命令执行、文件传输等功能。
-
-## 使用方法
-
-### 基本命令
-
-```
-/ssh connect <主机>      # 连接到服务器
-/ssh exec <命令>         # 执行命令
-/ssh disconnect          # 断开连接
-/ssh status              # 查看连接状态
-/ssh help                # 显示帮助信息
-```
-
-### 示例
-
-```
-/ssh connect server1
-/ssh exec ls -la
-/ssh exec df -h
-/ssh status
-/ssh disconnect
+```text
 /ssh help
+/ssh <服务器名>
+/ssh <用户名>@<服务器名>
+/ssh添加 <名称> <主机> [端口] [用户名]
+/ssh列表
+/ssh状态
+/ssh断开
+/ssh导入 <Host名>|all
+/sshconfig
 ```
 
-## 配置说明
+连接建立后，直接发送命令即可执行；发送 `停止` 可中断当前命令，发送 `退出` / `取消` 可结束会话。
 
-在 `config/secrets.json` 中配置：
+## 会话与隔离
+
+- 连接按 `用户 + 群 + 服务器` 隔离。
+- 同一用户跨群不会复用连接状态。
+- 不同用户即使连接同一台服务器，也拥有独立会话环境。
+
+## 安全行为
+
+- 默认严格校验 `~/.ssh/known_hosts` 中的 Host Key。
+- 未知主机或 Host Key 变更不会自动放行，需要先修复 `known_hosts`。
+- 导入 `~/.ssh/config` 时支持 `ProxyJump` 和安全的 `ssh -W` 跳板形式。
+- 其他会在本地执行命令的 `ProxyCommand` 会被拒绝。
+- 推荐优先使用私钥认证，而不是密码认证。
+
+## 服务器配置
+
+服务器配置保存在 `plugins/qingssh/data/servers.json`：
 
 ```json
 {
-  "plugins": {
-    "qingssh": {
-      "servers": {
-        "server1": {
-          "host": "192.168.1.100",
-          "port": 22,
-          "username": "user",
-          "password": "password",
-          "key_file": "/path/to/private_key"
-        },
-        "server2": {
-          "host": "example.com",
-          "port": 22,
-          "username": "admin",
-          "key_file": "/path/to/key"
-        }
-      },
-      "allowed_users": ["user_id_1", "user_id_2"],
-      "timeout": 30,
-      "max_output_length": 4000
-    }
+  "myserver": {
+    "host": "192.168.1.100",
+    "port": 22,
+    "username": "root",
+    "password": "password123",
+    "key_file": "~/.ssh/id_rsa"
   }
 }
 ```
 
-### 配置项说明
+认证优先级为“密钥优先于密码”。
 
-- `servers` - 服务器配置列表（必需）
-  - `host` - 服务器地址
-  - `port` - SSH 端口（默认: 22）
-  - `username` - 登录用户名
-  - `password` - 密码（可选，推荐使用密钥）
-  - `key_file` - SSH 私钥文件路径（推荐）
-- `allowed_users` - 允许使用此插件的用户 ID
-- `timeout` - 命令执行超时（秒，默认: 30）
-- `max_output_length` - 最大输出长度（字符，默认: 4000）
+## 远程图片
 
-## 功能特性
-
-- 多服务器管理
-- SSH 密钥认证
-- 命令执行
-- 会话管理
-- 输出截断保护
-- 权限控制
-- 连接状态监控
-- 超时保护
-
-## 安全特性
-
-- 支持密钥认证（推荐）
-- 用户权限控制
-- 命令执行超时
-- 敏感信息过滤
-- 连接状态验证
+```text
+/showimg /home/user/plot.png
+/showimg user@server:/data/chart.png
+```
 
 ## 注意事项
 
-⚠️ **安全警告**：
-- 此插件具有远程服务器访问权限，请特别小心
-- 强烈推荐使用 SSH 密钥认证而非密码
-- 必须配置 `allowed_users` 限制可操作用户
-- 定期审查命令执行日志
-- 不建议在生产环境中开放给所有用户
-
-## 推荐配置
-
-1. 使用 SSH 密钥认证
-2. 限制 allowed_users
-3. 设置合理的超时时间
-4. 配置输出长度限制
-5. 使用非标准 SSH 端口
-
-## 依赖
-
-- paramiko (SSH 客户端库)
-
-安装依赖：
-```bash
-pip install paramiko
-```
-
-## 适用场景
-
-- 远程服务器监控
-- 快速运维操作
-- 服务状态查询
-- 日志查看
-- 简单的批量操作
+- 仅管理员可用。
+- 会话空闲 10 分钟后会自动断开。
+- 远程命令具有高权限，请谨慎开放服务器配置和导入来源。

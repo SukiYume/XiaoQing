@@ -110,6 +110,8 @@ python main.py
 
 在 Windows 上，如果 `/pendo web start` 提示端口绑定失败，但 `netstat -ano` 看不到 `8765` 被占用，通常不是已有进程监听，而是系统拒绝绑定该端口（例如保留端口范围、Hyper-V / WSL / Docker 或安全策略影响）。这种情况下优先换一个端口，例如 `PENDO_WEB_PORT=8766`。
 
+公开 demo 会话默认关闭。只有在显式设置 `PENDO_WEB_DEMO_ENABLED=1` 时，才会开放临时演示空间。
+
 网页登录流程：
 
 1. 执行 `/pendo web start`
