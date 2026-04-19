@@ -72,60 +72,60 @@ class WebHandler:
             ),
         )
 
-        lines = [
-            "🌐 Pendo Web",
-            "✅ 已生成登录令牌",
-            "",
-            f"🌍 本地地址: {web_server.get_url()}",
-            f"⏳ 有效期: {PendoConfig.WEB_TOKEN_EXPIRE_HOURS} 小时",
-            f"⚙️ 服务状态: {status_text}",
-            "",
-        ]
-        if token_sent:
-            lines.extend(
-                [
-                    "🔒 Token 已单独私聊发送",
-                    "💡 复制 token，或直接复制整条私聊消息到网页登录框，都可以登录",
-                ]
-            )
-        else:
-            lines.extend(
-                [
-                    "🔑 登录 Token:",
-                    token,
-                    "",
-                    "💡 复制 token，或直接复制这整条消息到网页登录框，都可以登录",
-                ]
-            )
-        return {
-            "status": "success",
-            "message": "\n".join(lines),
-        }
+        return self._build_token_result(
+            token_sent=token_sent,
+            header="🌐 Pendo Web",
+            success_line="✅ 已生成登录令牌",
+            token_title="🔑 登录 Token:",
+            token=token,
+            expiry_hours=PendoConfig.WEB_TOKEN_EXPIRE_HOURS,
+            private_hint="🔒 Token 已单独私聊发送",
+            inline_hint="💡 复制 token，或直接复制这整条消息到网页登录框，都可以登录",
+            private_copy_hint="💡 复制 token，或直接复制整条私聊消息到网页登录框，都可以登录",
+            extra_lines=[
+                f"🌍 本地地址: {web_server.get_url()}",
+                f"⚙️ 服务状态: {status_text}",
+            ],
+        )
 
     async def _generate_widget_token(self, user_id: str, context=None):
         token = generate_widget_token(
             user_id,
             expires_hours=PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS,
         )
-        return {
-            "status": "success",
-            "message": "\n".join(
+        token_sent = await self._send_private_text(
+            context,
+            user_id,
+            "\n".join(
                 [
                     "🧩 Pendo Web Widget Token",
+                    token,
                     "",
                     "用于 Scriptable 等只读小组件访问。",
                     "📍 接口路径: /api/widget/summary",
                     f"⏳ 有效期: {PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS} 小时",
-                    "",
-                    "🔑 Widget Token:",
-                    token,
-                    "",
-                    "💡 在 Scriptable 中把 BASE_URL 改成你的 Pendo Web 地址",
                     "💡 建议只放进 Scriptable 脚本，不要当网页登录 token 使用",
                     "💡 Scriptable 可传 section=tasks / ledger / notes / auto",
                 ]
             ),
-        }
+        )
+        return self._build_token_result(
+            token_sent=token_sent,
+            header="🧩 Pendo Web Widget Token",
+            success_line="✅ 已生成只读小组件令牌",
+            token_title="🔑 Widget Token:",
+            token=token,
+            expiry_hours=PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS,
+            private_hint="🔒 Widget Token 已单独私聊发送",
+            inline_hint="💡 建议只放进 Scriptable 脚本，不要当网页登录 token 使用",
+            private_copy_hint="💡 请从私聊复制 token 到 Scriptable 脚本中使用",
+            extra_lines=[
+                "用于 Scriptable 等只读小组件访问。",
+                "📍 接口路径: /api/widget/summary",
+                "💡 在 Scriptable 中把 BASE_URL 改成你的 Pendo Web 地址",
+                "💡 Scriptable 可传 section=tasks / ledger / notes / auto",
+            ],
+        )
 
     async def _start(self, user_id: str, context):
         url = web_server.get_url()
@@ -225,3 +225,31 @@ class WebHandler:
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def _build_token_result(
+        *,
+        token_sent: bool,
+        header: str,
+        success_line: str,
+        token_title: str,
+        token: str,
+        expiry_hours: int,
+        private_hint: str,
+        inline_hint: str,
+        private_copy_hint: str,
+        extra_lines: list[str] | None = None,
+    ) -> dict[str, str]:
+        lines = [
+            header,
+            success_line,
+            "",
+            *(extra_lines or []),
+            f"⏳ 有效期: {expiry_hours} 小时",
+            "",
+        ]
+        if token_sent:
+            lines.extend([private_hint, private_copy_hint])
+        else:
+            lines.extend([token_title, token, "", inline_hint])
+        return {"status": "success", "message": "\n".join(lines)}

@@ -14,9 +14,11 @@ from typing import Any, Awaitable, Callable
 
 import aiohttp
 
-from .constants import MAX_SHORT_TEXT_LENGTH
+from .constants import DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS, MAX_SHORT_TEXT_LENGTH
 
 logger = logging.getLogger(__name__)
+
+_ONEBOT_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS)
 
 _SENSITIVE_KEYS = {"token", "appid", "api_key", "secret", "password", "authorization"}
 
@@ -132,7 +134,7 @@ class OneBotHttpSender:
         msg_preview = _extract_message_preview(message)
         
         try:
-            async with self.session.post(url, json=params, headers=headers) as resp:
+            async with self.session.post(url, json=params, headers=headers, timeout=_ONEBOT_HTTP_TIMEOUT) as resp:
                 if resp.status == 200:
                     logger.info(
                         "[HTTP] Sent %s to %s: %s",
@@ -267,6 +269,7 @@ class OneBotWsClient:
                     await self._listen(ws, handler)
         except Exception as exc:
             logger.error("WebSocket connection failed: %s", exc)
+            raise
 
 
     async def _listen(self, ws, handler: Callable[[dict[str, Any]], Awaitable[None]]) -> None:

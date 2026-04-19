@@ -88,44 +88,44 @@ async def handle(command: str, args: str, event: dict, context) -> list:
     """命令处理入口"""
     try:
         parsed = parse(args)
-        
+
         # 无参数：列出所有分类
         if not parsed:
             return _list_categories(context)
-        
+
         first = parsed.first.lower()
-        
+
         # 子命令路由
         if first in {"help", "帮助", "?"}:
             return segments(_show_help())
-        
+
         if first in {"del", "delete", "删除"}:
             return _handle_delete(parsed, context)
-        
+
         if first in {"search", "搜索"}:
             keyword = parsed.rest(1)
             if not keyword:
                 return segments("❌ 请提供搜索关键词\n用法: /memo search <关键词>")
             return _search_notes(keyword, context)
-        
+
         if first in {"clear", "清空"}:
             if not context.secrets.get("admin_user_ids") or \
                _get_user_id(event) not in context.secrets.get("admin_user_ids", []):
                 return segments("❌ 仅管理员可执行此操作")
             return _clear_all(context)
-        
+
         if first in {"export", "导出"}:
             return _export_all(context)
-        
+
         # 一个参数：查看指定分类
         if len(parsed) == 1:
             return _view_category(parsed.first, context)
-        
+
         # 两个或更多参数：添加笔记
         category = parsed.first
         content = parsed.rest(1)
         return _add_note(category, content, event, context)
-        
+
     except Exception as e:
         logger.exception("Memo handle error: %s", e)
         return segments(f"处理请求时出错: {str(e)}")
@@ -139,13 +139,13 @@ def _handle_delete(parsed, context) -> list[dict]:
     """处理删除命令"""
     if len(parsed) < 2:
         return segments("❌ 用法:\n  memo del <分类> - 删除整个分类\n  memo del <分类> <序号> - 删除指定笔记")
-    
+
     category = parsed.get(1)
     data = _load_memo(context)
-    
+
     if category not in data:
         return segments(f"❌ 分类 '{category}' 不存在")
-    
+
     # 删除整个分类
     if len(parsed) == 2:
         count = len(data[category])
@@ -153,19 +153,19 @@ def _handle_delete(parsed, context) -> list[dict]:
         _save_memo(context, data)
         logger.info("Memo category deleted: '%s' (%d notes)", category, count)
         return segments(f"✅ 已删除分类 '{category}'（共 {count} 条笔记）")
-    
+
     # 删除指定笔记
     try:
-        index = int(parsed.get(2)) - 1  # 用户输入从 1 开始
+        index = int(parsed.get(2)) - 1
         notes = data[category]
         if index < 0 or index >= len(notes):
             return segments(f"❌ 序号无效，该分类共 {len(notes)} 条笔记")
-        
+
         deleted = notes.pop(index)
         if not notes:
-            del data[category]  # 如果分类为空，删除分类
+            del data[category]
         _save_memo(context, data)
-        
+
         content = deleted.get("content", deleted) if isinstance(deleted, dict) else deleted
         preview = content[:30] + "..." if len(content) > 30 else content
         logger.info("Memo deleted from '%s': #%d", category, index + 1)
@@ -179,26 +179,26 @@ def _search_notes(keyword: str, context) -> list[dict]:
     data = _load_memo(context)
     if not data:
         return segments("暂无笔记")
-    
+
     results = []
     keyword_lower = keyword.lower()
-    
+
     for category, notes in data.items():
         for i, note in enumerate(notes, 1):
             content = note.get("content", "") if isinstance(note, dict) else note
             if keyword_lower in content.lower() or keyword_lower in category.lower():
                 preview = content[:50] + "..." if len(content) > 50 else content
                 results.append(f"  [{category}#{i}] {preview}")
-    
+
     if not results:
         logger.debug("Memo search: no results for '%s'", keyword)
         return segments(f"🔍 未找到包含 '{keyword}' 的笔记")
-    
+
     lines = [f"🔍 搜索结果 ({len(results)} 条):"]
-    lines.extend(results[:20])  # 最多显示 20 条
+    lines.extend(results[:20])
     if len(results) > 20:
         lines.append(f"  ... 还有 {len(results) - 20} 条结果")
-    
+
     logger.info("Memo search: found %d results for '%s'", len(results), keyword)
     return segments("\n".join(lines))
 
@@ -217,7 +217,7 @@ def _export_all(context) -> list[dict]:
     data = _load_memo(context)
     if not data:
         return segments("暂无笔记")
-    
+
     lines = ["📚 笔记导出\n" + "=" * 30]
     for category, notes in sorted(data.items()):
         lines.append(f"\n【{category}】")
@@ -229,11 +229,11 @@ def _export_all(context) -> list[dict]:
                 lines.append(f"  {i}. {content}{time_str}")
             else:
                 lines.append(f"  {i}. {note}")
-    
+
     total = sum(len(notes) for notes in data.values())
     lines.append(f"\n{'=' * 30}")
     lines.append(f"共 {len(data)} 个分类，{total} 条笔记")
-    
+
     return segments("\n".join(lines))
 
 
@@ -277,13 +277,12 @@ def _list_categories(context) -> list[dict]:
     data = _load_memo(context)
     if not data:
         return segments("暂无笔记\n\n提示: 使用 'memo <分类> <内容>' 添加第一条笔记")
-    
+
     lines = ["📚 笔记分类:"]
     total = 0
     for category, notes in sorted(data.items()):
         count = len(notes)
         total += count
-        # 显示最新一条的预览
         if notes:
             latest = notes[-1]
             content = latest.get("content", latest) if isinstance(latest, dict) else latest
@@ -291,7 +290,7 @@ def _list_categories(context) -> list[dict]:
             lines.append(f"  • {category} ({count}) - {preview}")
         else:
             lines.append(f"  • {category} ({count})")
-    
+
     lines.append(f"\n共 {total} 条笔记 | 输入 'memo help' 查看帮助")
     return segments("\n".join(lines))
 
@@ -299,8 +298,7 @@ def _list_categories(context) -> list[dict]:
 def _view_category(category: str, context) -> list[dict]:
     """查看指定分类"""
     data = _load_memo(context)
-    
-    # 模糊匹配
+
     if category not in data:
         matches = [c for c in data.keys() if category.lower() in c.lower()]
         if len(matches) == 1:
@@ -309,14 +307,14 @@ def _view_category(category: str, context) -> list[dict]:
             return segments(f"❓ 找到多个匹配的分类: {', '.join(matches)}")
         else:
             return segments(f"❌ 分类 '{category}' 不存在\n\n现有分类: {', '.join(data.keys()) or '无'}")
-    
+
     notes = data[category]
     if not notes:
         return segments(f"分类 '{category}' 暂无笔记")
-    
+
     lines = [f"📝 {category} ({len(notes)} 条):"]
     lines.append("-" * 20)
-    
+
     for i, note in enumerate(notes, 1):
         if isinstance(note, dict):
             content = note.get("content", "")
@@ -328,10 +326,10 @@ def _view_category(category: str, context) -> list[dict]:
                 lines.append(f"  {i}. {content}")
         else:
             lines.append(f"  {i}. {note}")
-    
+
     lines.append("-" * 20)
     lines.append("提示: 'memo del {} <序号>' 删除".format(category))
-    
+
     return segments("\n".join(lines))
 
 
@@ -339,18 +337,18 @@ def _add_note(category: str, content: str, event: dict, context) -> list[dict]:
     """添加笔记"""
     if not content.strip():
         return segments("❌ 笔记内容不能为空")
-    
+
     data = _load_memo(context)
-    
+
     note = {
         "content": content.strip(),
         "time": _now_str(),
-        "user": _get_user_id(event)
+        "user": _get_user_id(event),
     }
-    
+
     data.setdefault(category, []).append(note)
     _save_memo(context, data)
-    
+
     count = len(data[category])
     logger.info("Memo added to category '%s': #%d", category, count)
     return segments(f"✅ 已添加到 '{category}' (#{count})")

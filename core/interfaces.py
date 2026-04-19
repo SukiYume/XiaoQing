@@ -65,7 +65,7 @@ class PluginConfig(Protocol):
 class PluginRuntime(Protocol):
     send_action: SendAction
     reload_config: Callable[[], Any]
-    reload_plugins: Callable[[], None]
+    reload_plugins: Callable[[], Any]
     list_commands: Callable[[], list[str]]
     list_plugins: Callable[[], list[str]]
 

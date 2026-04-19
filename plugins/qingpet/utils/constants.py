@@ -128,6 +128,7 @@ TRAVEL_THRESHOLDS: Dict[str, float] = {
 ANTI_SPAM_CONFIG = {
     "window_seconds": 60,          # 时间窗口（秒）
     "max_commands": 10,            # 窗口内最大命令数
+    "hard_block_commands": 20,     # 超过该值才彻底拦截，中间区间只做收益衰减
     "exponential_decay_base": 0.5, # 超出后金币收益的衰减因子
 }
 

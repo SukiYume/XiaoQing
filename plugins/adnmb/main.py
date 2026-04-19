@@ -24,6 +24,7 @@ A岛匿名版插件 (adnmb)
 
 import sys
 import logging
+import uuid as uuidlib
 from pathlib import Path
 
 from core.plugin_base import segments, text, image, ensure_dir, PluginContextProtocol
@@ -52,11 +53,12 @@ def _get_client(context, cache_dir: Path) -> AdnmbClient:
     cached_client = runtime_state.get("client")
     plugin_cfg = context.secrets.get("plugins", {}).get("adnmb", {})
     uuid = str(plugin_cfg.get("uuid", "") or "")
+    effective_uuid = uuid or str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, str(cache_dir.resolve())))
     if isinstance(cached_client, AdnmbClient):
         if (
             cached_client.session is context.http_session
             and cached_client.cache_dir == cache_dir
-            and cached_client.uuid == uuid
+            and cached_client.uuid == effective_uuid
         ):
             return cached_client
 

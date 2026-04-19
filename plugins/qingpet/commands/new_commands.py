@@ -1,5 +1,5 @@
 """
-新增命令处理器：装扮、交易、展示会、删除、导出、公告、召回
+新增命令处理器：装扮、交易、展示会、删除、公告、召回
 """
 import logging
 import re
@@ -291,47 +291,22 @@ def _trade_buy(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bo
         return False, "请指定订单号\n用法: /宠物 交易 购买 <订单号>"
 
     listing_id = int(listing_id_str)
-    listing = db.get_listing_by_id(listing_id)
-    if not listing:
-        return False, "订单不存在或已过期"
-
-    if listing['seller_user_id'] == user_id:
-        return False, "不能购买自己的挂单"
-
-    if listing['group_id'] != group_id:
-        return False, "该订单不属于本群"
-
-    buyer = db.get_user(user_id, group_id)
-    if not buyer:
-        return False, "用户不存在"
-
-    total_cost = listing['price']
-    tax = int(total_cost * TRADE_CONFIG["tax_rate"])
-    if buyer.coins < total_cost:
-        return False, f"金币不足，需要{total_cost}金币"
-
-    buyer.coins -= total_cost
-    db.update_user(buyer)
-
-    seller = db.get_user(listing['seller_user_id'], group_id)
-    if seller:
-        seller.coins += total_cost - tax
-        db.update_user(seller)
-
-    inventory = db.get_or_create_inventory(user_id, group_id)
-    inventory.add_item(listing['item_id'], listing['amount'])
-    db.update_inventory(inventory)
-
-    db.deactivate_listing(listing_id)
+    success, result = db.purchase_trade_listing(listing_id, user_id, group_id, TRADE_CONFIG["tax_rate"])
+    if not success:
+        return False, str(result)
+    listing = result
 
     # CR Review Issue #7: 交易操作记录日志
     admin_service = AdminService(db)
     admin_service.log_admin_operation(
         group_id, user_id, "TRADE_BUY",
-        f"购买订单#{listing_id} {listing['item_id']}x{listing['amount']} 花费{total_cost}金币",
+        f"购买订单#{listing_id} {listing['item_id']}x{listing['amount']} 花费{listing['price']}金币",
         target_user_id=listing['seller_user_id'])
 
-    return True, f"✅ 购买成功！获得 {listing['item_id']} x{listing['amount']} 花费{total_cost}金币（税{tax}）"
+    return True, (
+        f"✅ 购买成功！获得 {listing['item_id']} x{listing['amount']} "
+        f"花费{listing['price']}金币（税{listing['tax']}）"
+    )
 
 
 def _trade_cancel(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
@@ -346,16 +321,13 @@ def _trade_cancel(user_id: str, group_id: int, args: str, db: Database) -> Tuple
 
     if listing['seller_user_id'] != user_id:
         return False, "只能撤销自己的挂单"
-
-    inventory = db.get_or_create_inventory(user_id, group_id)
-    inventory.add_item(listing['item_id'], listing['amount'])
-    db.update_inventory(inventory)
-    db.deactivate_listing(listing_id)
+    if not db.cancel_trade_listing(listing_id, user_id):
+        return False, "撤单失败"
 
     # CR Review Issue #7: 交易操作记录日志
     admin_service = AdminService(db)
     admin_service.log_admin_operation(
-        group_id, user_id, "TRADE_CANCEL",
+        listing['group_id'], user_id, "TRADE_CANCEL",
         f"撤单#{listing_id} {listing['item_id']}x{listing['amount']}")
 
     return True, f"✅ 已撤单，道具已退还"
@@ -429,7 +401,7 @@ def _show_vote(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bo
     return True, f"✅ 成功为 {target_pet.name} 投票！"
 
 
-# ──────────────────── 管理命令: 删除、导出、公告 ────────────────────
+# ──────────────────── 管理命令: 删除、公告 ────────────────────
 
 async def handle_manage_delete(user_id: str, group_id: int, args: str,
                                 db: Database, is_admin: bool = False) -> Tuple[bool, str]:
@@ -446,32 +418,6 @@ async def handle_manage_delete(user_id: str, group_id: int, args: str,
     if success:
         return True, f"✅ 用户 {target_user_id} 的宠物已删除"
     return False, "删除失败"
-
-
-async def handle_manage_export(user_id: str, group_id: int, args: str,
-                                db: Database, is_admin: bool = False) -> Tuple[bool, str]:
-    """导出群数据"""
-    if not is_admin:
-        return False, "⚠️ 该操作需要管理员权限"
-
-    data = db.export_group_data(group_id)
-    if not data:
-        return False, "导出失败"
-
-    summary = (f"📊 **数据导出摘要**\n\n"
-               f"• 群ID: {group_id}\n"
-               f"• 用户数: {len(data.get('users', []))}\n"
-               f"• 宠物数: {len(data.get('pets', []))}\n"
-               f"• 导出时间: {data.get('exported_at', '')}\n\n"
-               f"完整数据已保存至数据库日志")
-
-    from ..services.admin_service import AdminService
-    admin_service = AdminService(db)
-    admin_service.log_admin_operation(group_id, user_id, "EXPORT",
-                                      json.dumps({"users": len(data.get('users', [])),
-                                                   "pets": len(data.get('pets', []))}))
-
-    return True, summary
 
 
 async def handle_manage_announce(user_id: str, group_id: int, args: str,

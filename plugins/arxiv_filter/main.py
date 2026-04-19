@@ -25,6 +25,14 @@ parse = args_module.parse
 
 logger = logging.getLogger(__name__)
 
+_FILTER_ERROR_MARKERS = (
+    "无法加载AI模型",
+    "论文获取失败",
+    "模型文件不完整",
+    "系统依赖不完整",
+    "论文筛选服务暂时不可用",
+)
+
 
 # ============================================================
 # 模块加载
@@ -275,6 +283,25 @@ def _mark_sent_today(plugin_dir: str) -> None:
     _save_update_status(plugin_dir, status)
 
 
+def _extract_result_text(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    if not isinstance(result, list):
+        return ""
+
+    chunks: list[str] = []
+    for segment in result:
+        if segment.get("type") != "text":
+            continue
+        chunks.append(str(segment.get("data", {}).get("text", "")))
+    return "\n".join(chunks)
+
+
+def _is_successful_filter_result(result: Any) -> bool:
+    payload = _extract_result_text(result)
+    return not any(marker in payload for marker in _FILTER_ERROR_MARKERS)
+
+
 # ============================================================
 # arXiv 更新检查
 # ============================================================
@@ -316,8 +343,12 @@ async def _check_arxiv_update(context, is_final_check: bool = False) -> Any:
     # 如果 arXiv 已更新到今天
     if arxiv_date == today:
         logger.info(f"检测到 arXiv 已更新到 {today}，开始筛选论文...")
-        _mark_sent_today(plugin_dir)
-        return await _run_filter(context)
+        result = await _run_filter(context)
+        if _is_successful_filter_result(result):
+            _mark_sent_today(plugin_dir)
+        else:
+            logger.warning("arXiv filter failed after update detection; keep retrying later today")
+        return result
 
     # 如果是最后一次检查且仍未更新
     if is_final_check:

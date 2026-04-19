@@ -20,6 +20,7 @@ import os
 import random
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 # 第三方库
 import aiofiles
@@ -86,6 +87,8 @@ def _show_help_tw_fetch() -> str:
 
 MAX_PAGES_WITHOUT_NEW_IMAGES = 2
 MAX_PAGES_TO_CHECK = 50  # 增加最大检查页数
+REQUEST_TIMEOUT_SECONDS = 30
+_ALLOWED_TWITTER_MEDIA_HOSTS = {"pbs.twimg.com", "ton.twitter.com", "video.twimg.com"}
 
 
 # ============================================================
@@ -121,6 +124,11 @@ def _get_proxy(context) -> str | None:
     config = _get_config(context)
     proxy = config.get("proxy")
     return str(proxy).strip() if proxy else None
+
+
+def _is_allowed_media_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme == "https" and parsed.hostname in _ALLOWED_TWITTER_MEDIA_HOSTS
 
 
 def _get_user_id(context) -> str:
@@ -225,7 +233,7 @@ async def _fetch_timeline(context, cursor: str | None = None) -> tuple:
             headers=headers,
             cookies=cookies,
             proxy=proxy,
-            ssl=False,
+            timeout=REQUEST_TIMEOUT_SECONDS,
         ) as response:
             if response.status != 200:
                 text = await response.text()
@@ -278,6 +286,10 @@ def _extract_image_urls(tweet: dict) -> list:
 
 async def _download_image(url: str, save_dir: Path, context) -> bool:
     """下载单张图片"""
+    if not _is_allowed_media_url(url):
+        logger.warning(f"拒绝下载非 Twitter 媒体域名: {url}")
+        return False
+
     filename = url.split('/')[-1]
     filepath = save_dir / filename
     
@@ -286,12 +298,20 @@ async def _download_image(url: str, save_dir: Path, context) -> bool:
     
     # 请求高清原图
     orig_url = url.split('.jpg')[0] + '?format=jpg&name=4096x4096' if '.jpg' in url else url
+    if not _is_allowed_media_url(orig_url):
+        logger.warning(f"拒绝下载可疑原图地址: {orig_url}")
+        return False
     
     proxy = _get_proxy(context)
     headers = _get_headers(context)  # 使用相同的 headers，包含 User-Agent
     
     try:
-        async with context.http_session.get(orig_url, proxy=proxy, headers=headers, timeout=30) as response:
+        async with context.http_session.get(
+            orig_url,
+            proxy=proxy,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        ) as response:
             if response.status != 200:
                 logger.warning(f"下载失败 {url}: Status {response.status}")
                 return False

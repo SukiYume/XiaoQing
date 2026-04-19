@@ -254,12 +254,12 @@ def _list_qa(context, args: str) -> list[dict]:
 
 def _remove_qa(context, args: str) -> list[dict]:
     """删除问答对"""
-    parts = args.split()
+    parts = args.split(None, 1)
     if not parts:
         return segments("要删除哪个对话？格式: 删除对话 问题 [回答]")
     
     question = parts[0]
-    answer = parts[1] if len(parts) > 1 else None
+    answer = parts[1].strip() if len(parts) > 1 else None
     
     data = _load_qa(context)
     

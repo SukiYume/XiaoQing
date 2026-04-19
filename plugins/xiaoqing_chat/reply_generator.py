@@ -43,6 +43,7 @@ from .planning.planner import PlannedAction
 
 
 _RE_GOAL = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,120})")
+_SAFE_FORCED_REPLY_FALLBACK = "嗯，我先换个说法。"
 
 
 def _extract_planner_goal(reasoning: str) -> str:
@@ -367,7 +368,7 @@ async def _generate_reply(
                     if _pre_h.need_replan and not forced:
                         raise ReplyRejected(_pre_h.reason or "回复被预检查拒绝", True)
                     if forced:
-                        return last_rejected_reply
+                        return _SAFE_FORCED_REPLY_FALLBACK
                     return None
 
         try:
@@ -448,7 +449,11 @@ async def _generate_reply(
                     _log_step(
                         context, runtime, chat_id=chat_id, step="reply.check.timeout", fields={}
                     )
-                    check = ReplyCheckResult(suitable=True, reason="", need_replan=False)
+                    check = ReplyCheckResult(
+                        suitable=False,
+                        reason="回复检查暂不可用",
+                        need_replan=False,
+                    )
                 _log_step(
                     context,
                     runtime,
@@ -481,7 +486,7 @@ async def _generate_reply(
                     if check.need_replan and not forced:
                         raise ReplyRejected(check.reason or "回复被检查拒绝", True)
                     if forced:
-                        return last_rejected_reply
+                        return _SAFE_FORCED_REPLY_FALLBACK
                     return None
             _log_step(
                 context,
@@ -497,7 +502,4 @@ async def _generate_reply(
 
         if not forced:
             return None
-        if last_rejected_reply:
-            return last_rejected_reply
-        fallback = random.choice(["嗯…", "行", "我在听", "你继续", "有点卡，等下"])
-        return fallback
+        return _SAFE_FORCED_REPLY_FALLBACK

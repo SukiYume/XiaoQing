@@ -119,12 +119,17 @@ def test_memory_db_save_logs_write_failures(tmp_path) -> None:
 
     logger = MagicMock()
 
-    def fail_write_text(self, *args, **kwargs):
+    def fail_write_vector_store_files(*args, **kwargs):
         raise OSError("disk full")
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(memory_db_module, "_logger", logger, raising=False)
-        mp.setattr(type(tmp_path / "x"), "write_text", fail_write_text, raising=True)
+        mp.setattr(
+            memory_db_module,
+            "write_vector_store_files",
+            fail_write_vector_store_files,
+            raising=True,
+        )
         db.save()
 
     assert db.is_dirty() is True

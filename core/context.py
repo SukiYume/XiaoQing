@@ -49,7 +49,7 @@ class PluginContext:
     http_session: aiohttp.ClientSession | None
     send_action: SendAction
     reload_config: Callable[[], Any]
-    reload_plugins: Callable[[], None]
+    reload_plugins: Callable[[], Any]
     list_commands: Callable[[], list[str]]
     list_plugins: Callable[[], list[str]]
     metrics: "MetricsCollector | None" = None
@@ -114,14 +114,14 @@ class PluginContext:
     async def create_session(
         self,
         initial_data: dict[str, Any] | None = None,
-        timeout: float = 300.0,
+        timeout: float | None = None,
     ) -> "Session":
         """
         为当前用户创建会话
         
         Args:
             initial_data: 初始会话数据
-            timeout: 会话超时时间（秒），默认 5 分钟
+            timeout: 会话超时时间（秒），默认使用 SessionManager 默认值
         
         Returns:
             新创建的 Session 对象

@@ -80,6 +80,13 @@ class SessionManager:
         self._lock = asyncio.Lock()
         self._default_timeout = default_timeout
 
+    @property
+    def default_timeout(self) -> float:
+        return self._default_timeout
+
+    def set_default_timeout(self, timeout: float) -> None:
+        self._default_timeout = float(timeout)
+
     def _make_key(self, user_id: int, group_id: int | None) -> tuple:
         """生成会话键"""
         return (user_id, group_id)

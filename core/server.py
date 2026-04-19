@@ -73,6 +73,7 @@ class InboundServer:
 
         self._ws_event_queue: asyncio.Queue[tuple[web.WebSocketResponse, dict[str, Any]]] | None = None
         self._ws_worker_tasks: list[asyncio.Task[None]] = []
+        self._ws_event_locks: dict[str, asyncio.Lock] = {}
         self._ws_max_workers = 0
         if self.enable_ws:
             try:
@@ -288,12 +289,34 @@ class InboundServer:
         for ws in failed_sockets:
             self._active_sockets.discard(ws)
 
+    def active_ws_connections(self) -> int:
+        return len(self._active_sockets)
+
+    def has_active_ws_connections(self) -> bool:
+        return bool(self._active_sockets)
+
+    @staticmethod
+    def _get_event_key(payload: dict[str, Any]) -> str | None:
+        user_id = payload.get("user_id")
+        if user_id is None:
+            return None
+        group_id = payload.get("group_id")
+        if group_id is None:
+            return f"user:{user_id}"
+        return f"group:{group_id}:user:{user_id}"
+
     async def _handle_ws_event(self, ws: web.WebSocketResponse, payload: dict[str, Any]) -> None:
         """处理 WebSocket 事件（非阻塞）"""
         try:
             payload = dict(payload)
             payload["_source"] = "inbound_ws"
-            actions = await self.handler(payload)
+            key = self._get_event_key(payload)
+            if key:
+                lock = self._ws_event_locks.setdefault(key, asyncio.Lock())
+                async with lock:
+                    actions = await self.handler(payload)
+            else:
+                actions = await self.handler(payload)
             for action in actions:
                 await ws.send_str(json.dumps(action, ensure_ascii=False))
         except Exception as exc:
@@ -467,6 +490,16 @@ class InboundManager:
             
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    def active_ws_connections(self) -> int:
+        total = 0
+        for server in {self.http_server, self.ws_server}:
+            if server:
+                total += server.active_ws_connections()
+        return total
+
+    def has_active_ws_clients(self) -> bool:
+        return self.active_ws_connections() > 0
 
     def update_token(self, token: str) -> None:
         self._token = token

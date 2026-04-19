@@ -354,6 +354,16 @@ class _FakeDisconnectRcon:
         self.disconnected = True
 
 
+class _FakeCommandRcon:
+    def __init__(self, response="ok"):
+        self.commands = []
+        self.response = response
+
+    async def command(self, cmd):
+        self.commands.append(cmd)
+        return self.response
+
+
 @pytest.mark.asyncio
 async def test_mc_connect_default_reads_secrets_config(monkeypatch, tmp_path):
     monkeypatch.setattr(mc_main, "_manager", mc_main.ConnectionManager())
@@ -458,6 +468,33 @@ async def test_scheduled_uses_async_log_monitor(monkeypatch):
     action = context.send_action.await_args.args[0]
     assert action["action"] == "send_private_msg"
     assert "Steve" in action["params"]["message"][0]["data"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_mc_message_uses_rcon_command_api(monkeypatch):
+    manager = mc_main.ConnectionManager()
+    fake_rcon = _FakeCommandRcon("players: 3")
+    conn = mc_main.McConnection(
+        host="127.0.0.1",
+        port=25575,
+        password="p",
+        log_file="",
+        target_type="private",
+        target_id=10005,
+        rcon_client=fake_rcon,
+        log_monitor=None,
+    )
+    manager.add_connection(conn)
+    monkeypatch.setattr(mc_main, "_manager", manager)
+
+    result = await mc_main._handle_mc_message(
+        "list",
+        {"user_id": 10005, "message_type": "private"},
+        MagicMock(),
+    )
+
+    assert fake_rcon.commands == ["list"]
+    assert "players: 3" in result[0]["data"]["text"]
 
 
 class _FakeRconReader:

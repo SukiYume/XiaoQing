@@ -231,11 +231,13 @@ class TestReloadCommand:
     @pytest.mark.asyncio
     async def test_reload_success(self, mock_context):
         """测试成功重载"""
+        mock_context.reload_plugins = AsyncMock(return_value=None)
         result = await bot_core.handle("reload", "", {}, mock_context)
         assert result is not None
         assert len(result) > 0
         result_text = str(result)
         assert "成功" in result_text or "已重载" in result_text or "✅" in result_text
+        mock_context.reload_plugins.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_reload_with_error(self):
@@ -415,6 +417,21 @@ class TestSetSecretCommand:
         assert len(result) > 0
         result_text = str(result)
         assert "不可用" in result_text or "❌" in result_text
+
+    @pytest.mark.asyncio
+    async def test_set_secret_does_not_trigger_manual_reload(self):
+        """测试 set_secret 不再额外触发 reload_config。"""
+        class Ctx:
+            def __init__(self):
+                self.config_manager = MagicMock()
+                self.reload_config = MagicMock()
+
+        ctx = Ctx()
+        result = await bot_core.handle("set_secret", "plugins.signin.yingshijufeng.sid new_sid", {}, ctx)
+
+        assert result is not None
+        ctx.config_manager.update_secret.assert_called_once()
+        ctx.reload_config.assert_not_called()
 
 
 # ============================================================

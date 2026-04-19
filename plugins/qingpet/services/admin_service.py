@@ -86,7 +86,9 @@ class AdminService:
 
         return success
 
-    def ban_user(self, user_id: str, group_id: int, days: int) -> bool:
+    def ban_user(
+        self, user_id: str, group_id: int, days: int, operator_user_id: str = "ADMIN"
+    ) -> bool:
         user = self.db.get_user(user_id, group_id)
         if not user:
             return False
@@ -94,11 +96,13 @@ class AdminService:
         user.is_banned = True
         user.ban_until = datetime.now() + timedelta(days=days)
 
-        self.log_admin_operation(group_id, "ADMIN", "BAN", f"封禁{days}天", user_id)
+        self.log_admin_operation(group_id, operator_user_id, "BAN", f"封禁{days}天", user_id)
 
         return self.db.update_user(user)
 
-    def unban_user(self, user_id: str, group_id: int) -> bool:
+    def unban_user(
+        self, user_id: str, group_id: int, operator_user_id: str = "ADMIN"
+    ) -> bool:
         user = self.db.get_user(user_id, group_id)
         if not user:
             return False
@@ -106,7 +110,7 @@ class AdminService:
         user.is_banned = False
         user.ban_until = None
 
-        self.log_admin_operation(group_id, "ADMIN", "UNBAN", "解封", user_id)
+        self.log_admin_operation(group_id, operator_user_id, "UNBAN", "解封", user_id)
 
         return self.db.update_user(user)
 

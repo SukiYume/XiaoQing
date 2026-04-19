@@ -170,11 +170,11 @@ class _FakeGroupConfigForJobs:
 
 
 class _FakeJobDB:
+    def get_enabled_group_decay_map(self):
+        return {}
+
     def get_all_pets(self):
         return []
-
-    def get_group_config(self, group_id):
-        return _FakeGroupConfigForJobs()
 
     def cleanup_old_timestamps(self):
         return None
@@ -200,3 +200,40 @@ def test_qingpet_scheduled_decay_uses_to_thread(monkeypatch):
 
     assert calls["count"] == 1
     assert result == []
+
+
+def test_qingpet_scheduled_decay_uses_enabled_group_decay_map(monkeypatch):
+    class _FakeDB:
+        def __init__(self):
+            self.cleaned = False
+
+        def get_enabled_group_decay_map(self):
+            return {123: 1.5}
+
+        def get_all_pets(self):
+            return [type("Pet", (), {"group_id": 123})(), type("Pet", (), {"group_id": 999})()]
+
+        def cleanup_old_timestamps(self):
+            self.cleaned = True
+
+    applied = []
+
+    class _FakeService:
+        def apply_decay(self, pet, decay_multiplier):
+            applied.append((pet.group_id, decay_multiplier))
+            return None
+
+    db = _FakeDB()
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(qingpet_main, "_db_instance", db)
+    monkeypatch.setattr(qingpet_main, "_pet_service", _FakeService())
+    monkeypatch.setattr(qingpet_main.asyncio, "to_thread", _fake_to_thread)
+
+    result = asyncio.run(qingpet_main.scheduled_decay(None))
+
+    assert result == []
+    assert applied == [(123, 1.5)]
+    assert db.cleaned is True

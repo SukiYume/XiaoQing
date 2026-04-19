@@ -3830,3 +3830,125 @@ class TestPendoWebHandler:
         assert "服务启动失败" in result["message"]
         assert "端口可能已被占用" in result["message"]
         assert "PENDO_WEB_PORT" in result["message"]
+
+    def test_web_widget_token_sends_token_as_separate_private_message(self, monkeypatch):
+        import sys
+        import types
+        import importlib
+
+        sys.path.insert(0, str(ROOT))
+        sys.modules.pop("plugins.pendo.handlers.web", None)
+        sys.modules["plugins.pendo.web.server"] = types.SimpleNamespace(
+            get_url=lambda: "http://127.0.0.1:8765",
+            is_running=lambda: True,
+            start=lambda _db: True,
+            stop=lambda: True,
+        )
+
+        web_module = importlib.import_module("plugins.pendo.handlers.web")
+        monkeypatch.setattr(
+            web_module, "generate_widget_token", lambda *_args, **_kwargs: "widget-token"
+        )
+
+        actions = []
+
+        async def send_action(action):
+            actions.append(action)
+
+        context = SimpleNamespace(send_action=send_action)
+        handler = web_module.WebHandler(db=None)
+
+        result = asyncio.run(handler.handle("1001", "widget-token", context=context))
+
+        assert result["status"] == "success"
+        assert "Widget Token 已单独私聊发送" in result["message"]
+        assert "widget-token" not in result["message"]
+        assert len(actions) == 1
+        token_text = actions[0]["params"]["message"][0]["data"]["text"]
+        assert "Pendo Web Widget Token" in token_text
+        assert "widget-token" in token_text
+
+
+class TestPendoSearchAndImportRegression:
+    def test_search_handler_applies_date_field_for_range_filters(self):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.search import SearchHandler
+
+        calls = []
+
+        class _ItemsRepo:
+            def search_items(self, owner_id, query, filters):
+                calls.append((owner_id, query, filters))
+                return []
+
+        handler = SearchHandler(SimpleNamespace(items=_ItemsRepo()))
+        result = asyncio.run(
+            handler.search("u1", "会议 type=event range=last7d", context=SimpleNamespace())
+        )
+
+        assert result["status"] == "success"
+        assert calls
+        assert calls[0][2]["date_field"] == "start_time"
+        assert "start_date" in calls[0][2]
+        assert "end_date" in calls[0][2]
+
+    def test_batch_insert_or_update_refreshes_fts_rows(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo.db"))
+        try:
+            db.batch_insert_or_update(
+                [
+                    (
+                        "insert",
+                        {
+                            "id": "note-1",
+                            "type": "note",
+                            "title": "脉冲星速记",
+                            "content": "第一次导入内容",
+                            "category": "研究",
+                            "tags": ["memo"],
+                        },
+                    )
+                ],
+                "u1",
+            )
+            conn = db.get_connection()
+            first_row = conn.execute(
+                "SELECT title, content FROM items_fts WHERE id = ?",
+                ("note-1",),
+            ).fetchone()
+            assert first_row is not None
+            assert first_row["title"] == "脉冲星速记"
+
+            db.batch_insert_or_update(
+                [
+                    (
+                        "update",
+                        {
+                            "id": "note-1",
+                            "type": "note",
+                            "title": "脉冲星速记",
+                            "content": "更新后的导入内容",
+                            "category": "研究",
+                            "tags": ["memo"],
+                        },
+                    )
+                ],
+                "u1",
+            )
+            updated_row = conn.execute(
+                "SELECT content FROM items_fts WHERE id = ?",
+                ("note-1",),
+            ).fetchone()
+            assert updated_row is not None
+            assert updated_row["content"] == "更新后的导入内容"
+        finally:
+            db.get_connection().close()

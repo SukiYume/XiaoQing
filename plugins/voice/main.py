@@ -13,13 +13,18 @@ import asyncio
 import hashlib
 import logging
 from pathlib import Path
+from typing import Any, Optional, Tuple
 from xml.sax.saxutils import escape as xml_escape
+
+import aiohttp
 
 from core.plugin_base import segments, PluginContextProtocol
 from core.args import parse
 
 
 logger = logging.getLogger(__name__)
+
+_AZURE_API_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=45)
 
 
 def init(context=None) -> None:
@@ -67,8 +72,9 @@ async def text_to_speech(text: str, context: PluginContextProtocol) -> Optional[
         logger.warning("Azure TTS 未配置 subscription_key")
         return None
     
-    # 生成唯一文件名（基于文本内容）
-    text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()[:8]
+    # 生成唯一文件名（文本 + 音色配置），避免不同音色误命中同一缓存
+    cache_material = "|".join([text, region, voice_name, style, role])
+    text_hash = hashlib.md5(cache_material.encode('utf-8')).hexdigest()[:8]
     audio_dir = context.data_dir / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     output_file = audio_dir / f"tts_{text_hash}.mp3"
@@ -101,7 +107,12 @@ async def text_to_speech(text: str, context: PluginContextProtocol) -> Optional[
     }
     
     try:
-        async with context.http_session.post(url, data=ssml.encode('utf-8'), headers=headers) as response:
+        async with context.http_session.post(
+            url,
+            data=ssml.encode('utf-8'),
+            headers=headers,
+            timeout=_AZURE_API_TIMEOUT,
+        ) as response:
             if response.status == 200:
                 content = await response.read()
                 output_file.write_bytes(content)
@@ -153,7 +164,12 @@ async def speech_to_text(audio_path: str, context: PluginContextProtocol) -> Opt
     try:
         audio_data = await asyncio.to_thread(Path(audio_path).read_bytes)
         
-        async with context.http_session.post(url, data=audio_data, headers=headers) as response:
+        async with context.http_session.post(
+            url,
+            data=audio_data,
+            headers=headers,
+            timeout=_AZURE_API_TIMEOUT,
+        ) as response:
             if response.status == 200:
                 data = await response.json()
                 if 'NBest' in data and len(data['NBest']) > 0:

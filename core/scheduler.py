@@ -36,6 +36,19 @@ class SchedulerManager:
         if not self._started:
             self._init_scheduler()
 
+    def reset(self, timezone: str | None = None) -> None:
+        """Reset scheduler with a new timezone and clear existing jobs."""
+        if timezone:
+            self.timezone = timezone
+        if self.scheduler is not None:
+            try:
+                self.scheduler.shutdown(wait=False)
+            except Exception:
+                pass
+        self.scheduler = None
+        self._started = False
+        self.ensure_started()
+
     def add_job(self, job_id: str, func, cron: dict[str, Any]) -> None:
         self.ensure_started()
         self.remove_job(job_id)

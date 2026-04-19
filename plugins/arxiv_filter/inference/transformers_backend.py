@@ -25,6 +25,8 @@ transformers = importlib.import_module("transformers")
 AutoModelForSequenceClassification = transformers.AutoModelForSequenceClassification
 AutoTokenizer = transformers.AutoTokenizer
 
+_MODEL_CACHE: dict[tuple[str, str], tuple[object, object]] = {}
+
 
 # =============================================================================
 # Dataset & Collate
@@ -76,8 +78,14 @@ def dynamic_pad_collate(batch, pad_id: int = 0):
 def load_model_and_tokenizer(model_path: str, device: torch.device):
     if not os.path.isdir(model_path):
         raise FileNotFoundError(f"Model path does not exist or is not a directory: {model_path}")
+    cache_key = (os.path.abspath(model_path), str(device))
+    cached = _MODEL_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     model = AutoModelForSequenceClassification.from_pretrained(model_path).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path)
+    _MODEL_CACHE[cache_key] = (model, tokenizer)
     return model, tokenizer
 
 

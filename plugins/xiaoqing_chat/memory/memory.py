@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from core.plugin_base import write_json
+
 
 MAX_CACHED_MESSAGES_PER_CHAT = 200
 
@@ -137,7 +139,7 @@ class MemoryStore:
         data_dir.mkdir(parents=True, exist_ok=True)
         path = data_dir / f"{chat_id}.json"
         payload = [asdict(m) for m in snapshot]
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json(path, payload)
 
     def _load(self, chat_id: str) -> Optional[list[StoredMessage]]:
         with self._sync_lock:

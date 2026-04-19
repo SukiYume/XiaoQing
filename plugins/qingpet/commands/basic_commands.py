@@ -38,11 +38,20 @@ def resolve_pet_for_self_command(
     args: str,
     command_name: str,
 ) -> Tuple[Optional[Pet], int, str, Optional[str]]:
+    def _validate_scope(target_pet: Pet, resolved_group_id: int, resolved_args: str):
+        group_config = db.get_group_config(resolved_group_id)
+        if not group_config.enabled:
+            return None, resolved_group_id, resolved_args, "🚫 宠物系统在该群尚未启用"
+        user = db.get_user(user_id, resolved_group_id)
+        if user and user.is_banned_active():
+            return None, resolved_group_id, resolved_args, "⛔ 你已被封禁，无法使用宠物系统"
+        return target_pet, resolved_group_id, resolved_args, None
+
     if group_id != 0:
         pet = db.get_pet(user_id, group_id)
         if not pet:
             return None, group_id, args, "你还没有宠物"
-        return pet, group_id, args, None
+        return _validate_scope(pet, group_id, args)
 
     pets = db.get_pets_by_user(user_id)
     if not pets:
@@ -56,11 +65,11 @@ def resolve_pet_for_self_command(
         if not selected_pet:
             groups = "、".join(str(gid) for gid in sorted(group_to_pet))
             return None, 0, args, f"未找到群 {selected_group} 的宠物，可用群号: {groups}"
-        return selected_pet, selected_group, remaining, None
+        return _validate_scope(selected_pet, selected_group, remaining)
 
     if len(pets) == 1:
         only_pet = pets[0]
-        return only_pet, only_pet.group_id, args, None
+        return _validate_scope(only_pet, only_pet.group_id, args)
 
     groups = "、".join(str(gid) for gid in sorted(group_to_pet))
     return None, 0, args, (

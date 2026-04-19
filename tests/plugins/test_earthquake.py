@@ -140,6 +140,16 @@ class TestStatusManagement:
         loaded = earthquake._load_since(mock_context)
         assert loaded == "1234567890"
 
+    def test_load_since_creates_parent_dir(self, temp_data_dir):
+        class MockContext:
+            def __init__(self, data_dir):
+                self.data_dir = data_dir / "missing" / "nested"
+                self.logger = MagicMock()
+
+        context = MockContext(temp_data_dir)
+        assert earthquake._load_since(context) == "0"
+        assert (context.data_dir / "earthquake.json").exists()
+
 
 # ============================================================
 # Test Magnitude Extraction
@@ -368,6 +378,54 @@ class TestFetchEarthquakeNews:
             result = await earthquake._fetch_earthquake_news(mock_context, force=False)
             # 应该返回结果
             assert result is not None
+            assert earthquake._load_since(mock_context) == "1234567890"
+
+    @pytest.mark.asyncio
+    async def test_fetch_scheduled_skips_low_quake_but_keeps_scanning(self, mock_context):
+        """新低震级消息不应导致后续高震级消息漏报。"""
+        earthquake._save_since(mock_context, "198")
+
+        response = {
+            "data": {
+                "cards": [
+                    {
+                        "mblog": {
+                            "id": "200",
+                            "text": '#地震快讯#<a href="/123">中国地震台网正式测定</a>：01月01日00:00在四川发生3.5级地震',
+                        }
+                    },
+                    {
+                        "mblog": {
+                            "id": "199",
+                            "text": '#地震快讯#<a href="/123">中国地震台网正式测定</a>：01月01日01:00在云南发生5.0级地震',
+                        }
+                    },
+                    {
+                        "mblog": {
+                            "id": "198",
+                            "text": '#地震快讯#<a href="/123">中国地震台网正式测定</a>：旧消息',
+                        }
+                    },
+                ]
+            }
+        }
+
+        mock_session = MagicMock()
+
+        def mock_get_side_effect(*args, **kwargs):
+            mock_r = MagicMock()
+            mock_r.json.return_value = response
+            mock_r.content = b""
+            return mock_r
+
+        mock_session.get.side_effect = mock_get_side_effect
+
+        with patch.object(earthquake, "_create_session", return_value=mock_session):
+            result = await earthquake._fetch_earthquake_news(mock_context, force=False)
+
+        assert result
+        assert "5.0级地震" in str(result)
+        assert earthquake._load_since(mock_context) == "200"
 
     @pytest.mark.asyncio
     async def test_fetch_old_post_scheduled(self, mock_context):

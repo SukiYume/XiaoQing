@@ -51,7 +51,20 @@ def _schedule_memory_persist(context: Any, runtime: _ChatRuntime, *, chat_id: st
 
     task = asyncio.create_task(_run())
     _state().set_persist_task(chat_id, task)
+
+    def _cleanup_done(t: asyncio.Task[Any]) -> None:
+        current = _state().get_persist_task(chat_id)
+        if current is t:
+            _state().pop_persist_task(chat_id)
+
+    task.add_done_callback(_cleanup_done)
     _track_bg_task(context, task, name=f"persist:{chat_id}")
+
+
+def _cancel_memory_persist_task(chat_id: str) -> None:
+    task = _state().pop_persist_task(chat_id)
+    if task is not None and not task.done():
+        task.cancel()
 
 
 def _schedule_memory_db_save(context: Any, runtime: _ChatRuntime) -> None:

@@ -2,12 +2,14 @@
 
 import pytest
 import asyncio
+import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock
 import json
 from typing import cast
 
 from plugins.adnmb import main as adnmb_main
+from plugins.adnmb.adapi import AdnmbClient
 from core.interfaces import PluginContextProtocol
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -285,3 +287,55 @@ def test_adnmb_rebuilds_client_when_uuid_changes(monkeypatch, tmp_path):
     assert first is not second
     assert first.uuid == "uuid-1"
     assert second.uuid == "uuid-2"
+
+
+def test_adnmb_client_uses_cache_dir_based_fallback_uuid(tmp_path):
+    client_a = AdnmbClient(session=object(), cache_dir=tmp_path / "a", uuid="")
+    client_b = AdnmbClient(session=object(), cache_dir=tmp_path / "b", uuid="")
+
+    assert uuid.UUID(client_a.uuid)
+    assert uuid.UUID(client_b.uuid)
+    assert client_a.uuid != client_b.uuid
+
+
+def test_adnmb_get_client_reuses_fallback_uuid_client(tmp_path):
+    class _Context:
+        def __init__(self, plugin_dir: Path):
+            self.plugin_dir = plugin_dir
+            self.http_session = object()
+            self.state = {}
+            self.secrets = {"plugins": {"adnmb": {}}}
+
+    context = _Context(tmp_path)
+    typed_context = cast(PluginContextProtocol, cast(object, context))
+    cache_dir = context.plugin_dir / "cache"
+
+    first = adnmb_main._get_client(typed_context, cache_dir)
+    second = adnmb_main._get_client(typed_context, cache_dir)
+
+    assert first is second
+
+
+@pytest.mark.asyncio
+async def test_adnmb_client_get_passes_timeout(tmp_path):
+    captured = {}
+
+    class _Response:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def json(self):
+            return {}
+
+    class _Session:
+        def get(self, url, params=None, timeout=None):
+            captured["timeout"] = timeout
+            return _Response()
+
+    client = AdnmbClient(session=_Session(), cache_dir=tmp_path, uuid="")
+    await client._get("forum_list")
+
+    assert captured["timeout"] is not None

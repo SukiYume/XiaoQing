@@ -69,6 +69,10 @@ plugins/*/data/
 plugins/*/cache/
 plugins/xiaoqing_chat/figures/
 plugins/*deprecated/
+!plugins/memo_deprecated/
+!plugins/memo_deprecated/__init__.py
+!plugins/memo_deprecated/main.py
+!plugins/memo_deprecated/README.md
 plugins/arxiv_filter/best_model*
 plugins/arxiv_filter/train_model/arxiv_papers_with_abstract.csv
 
