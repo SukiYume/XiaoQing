@@ -9,6 +9,7 @@ import asyncio
 import random
 import time
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,9 @@ from .task_scheduler import (
 from .context_builder import _build_memory_block
 from .reply_generator import _generate_reply
 from .frequency_control import _freq_record, _should_reply, _score_interest
+from .media import build_effective_user_text
+from .media.emoji_library import mark_emoji_used, resolve_emoji_file_path
+from .media.emoji_reply import plan_emoji_reply
 from .planning.goal_state import derive_goal_async
 from .memory.review_sessions import get_goal_override
 from .expression.bw_expression_reflector import maybe_ask_for_reflection
@@ -55,6 +59,30 @@ from .planning.action_history import ActionRecord
 from .planning.planned_action import PlannedAction
 from .handler_context import HandlerContext, handle_errors
 from .handlers_helper import _spawn_post_reply_bg_tasks
+from .reply_payload import build_reply_payload
+
+
+@dataclass(frozen=True)
+class _PreparedSmalltalkTurn:
+    text: str
+    mentioned: bool
+    is_private: bool
+    forced: bool
+    brain_chat_active: bool
+    mood_text: str
+    collected_emoji_count: int
+
+
+@dataclass
+class _GeneratedSmalltalkTurn:
+    local_id: str = ""
+    pfc_result: PFCRunResult | None = None
+    pfc_state_snapshot: Any = None
+    speculative_memory_task: Any = None
+    reply: str = ""
+    reply_for_send: str = ""
+    reply_payload: Any = None
+    emoji_plan: Any = None
 
 
 async def _clear_store_entry(store, chat_id: str) -> None:
@@ -134,22 +162,23 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
     Returns:
         要发送的消息段字典列表，如果不应发送回复则返回空列表
     """
-    runtime = None
+    hctx: HandlerContext | None = None
     max_replan = 1
     try:
         runtime = _load_runtime(context)
         max_replan = max(0, int(getattr(runtime.cfg.reply_check, "max_replan", 1)))
+        hctx = HandlerContext.from_event(event, context, runtime=runtime)
     except Exception:
-        runtime = None
+        hctx = None
     total_attempts = max_replan + 1
 
     for attempt in range(total_attempts):
         try:
-            return await _maybe_reply_smalltalk(clean_text, event, context)
+            return await _maybe_reply_smalltalk(clean_text, event, context, hctx=hctx)
         except ReplyRejected as exc:
             try:
-                chat_id = _chat_id(event)
-                state = _get_bound_state(context)
+                chat_id = hctx.chat_id if hctx is not None else _chat_id(event)
+                state = hctx.state if hctx is not None else _get_bound_state(context)
                 state.action_history.append(
                     chat_id,
                     ActionRecord(
@@ -161,8 +190,8 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
                         executed=False,
                     ),
                 )
-                if runtime is not None:
-                    _schedule_action_history_flush(context, runtime, chat_id=chat_id)
+                if hctx is not None:
+                    _schedule_action_history_flush(context, hctx.runtime, chat_id=chat_id)
             except Exception:
                 pass
             if exc.need_replan and attempt < max_replan:
@@ -182,7 +211,7 @@ async def observe_message(clean_text: str, event: dict[str, Any], context) -> li
         if not runtime.cfg.enable_smalltalk:
             return []
 
-        text = (clean_text or "").strip()
+        text = await build_effective_user_text(clean_text, event, context=context, runtime=runtime)
         if not text:
             return []
         if _should_ignore_text(text, runtime):
@@ -305,38 +334,37 @@ async def _record_bot_reply(
     return history_snapshot
 
 
-async def _maybe_reply_smalltalk(
-    clean_text: str, event: dict[str, Any], context
-) -> list[dict[str, Any]]:
-    """
-    核心闲聊处理逻辑，基于 PFC 规划和回复生成
+def _emoji_action_detail(emoji_plan) -> dict[str, Any]:
+    if not emoji_plan:
+        return {}
+    return {
+        "emoji_marker": emoji_plan.marker,
+        "emoji_hash": emoji_plan.entry.media_hash,
+        "emoji_mode": getattr(emoji_plan, "mode", ""),
+    }
 
-    该函数协调整个闲聊流程：
-    1. 验证配置并忽略禁用文本
-    2. 将用户消息存储到记忆中
-    3. 如果启用则运行反思任务
-    4. 根据频率规则检查是否应该发送回复
-    5. 在锁外运行 PFC 规划和回复生成
-    6. 在短临界区内存储机器人的回复
-    7. 为摘要和表达学习生成后台任务
 
-    Args:
-        clean_text: 清理后的用户消息文本
-        event: OneBot 事件字典
-        context: 插件上下文
+def _display_reply_text(generated: _GeneratedSmalltalkTurn) -> str:
+    if generated.reply_payload is not None:
+        return generated.reply_payload.display_text
+    return generated.reply_for_send
 
-    Returns:
-        回复的消息段字典列表，或空列表
-    """
 
-    hctx = HandlerContext.from_event(event, context)
+def _cancel_pending_task(task: Any) -> None:
+    if task is not None and not task.done():
+        task.cancel()
+
+
+async def _prepare_smalltalk_turn(
+    clean_text: str,
+    event: dict[str, Any],
+    context,
+    hctx: HandlerContext,
+) -> _PreparedSmalltalkTurn | None:
     runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
-    bot_name, secrets, data_dir = hctx.bot_name, hctx.secrets, hctx.data_dir
+    bot_name, secrets = hctx.bot_name, hctx.secrets
 
-    if not runtime.cfg.enable_smalltalk:
-        return []
-
-    text = clean_text.strip()
+    text = await build_effective_user_text(clean_text, event, context=context, runtime=runtime)
     if _should_ignore_text(text, runtime):
         _log_step(
             context,
@@ -345,18 +373,19 @@ async def _maybe_reply_smalltalk(
             step="smalltalk.ignore",
             fields={"text": text},
         )
-        return []
+        return None
 
     mentioned = _is_at_me(event) or _has_bot_name(event, bot_name)
     is_private = _is_private(event)
     command_forced = bool(event.get("_xc_command_forced"))
+    collected_emoji_count = max(0, int(event.get("_xc_new_emoji_count", 0) or 0))
     forced = (
         command_forced
         or (is_private and not runtime.cfg.brain_chat.enable_private_brain_chat)
         or mentioned
+        or collected_emoji_count > 0
     )
 
-    t0 = time.monotonic()
     _log_step(
         context,
         runtime,
@@ -371,11 +400,12 @@ async def _maybe_reply_smalltalk(
             "user_id": event.get("user_id"),
             "group_id": event.get("group_id"),
             "text": text,
+            "new_emoji_count": collected_emoji_count,
         },
     )
 
     if runtime.cfg.reflection.enable_expression_reflection:
-        _bg = _resolve_llm_config(runtime.cfg, secrets, foreground=False)
+        bg = _resolve_llm_config(runtime.cfg, secrets, foreground=False)
 
         async def _run_reflection() -> None:
             await tick_reflect_tracker(
@@ -385,7 +415,7 @@ async def _maybe_reply_smalltalk(
                 expr_store=state.bw_expr_store,
                 tracker_store=state.bw_tracker_store,
                 secrets=secrets,
-                **_bg.to_dict(),
+                **bg.to_dict(),
             )
             await maybe_ask_for_reflection(
                 context=context,
@@ -407,31 +437,31 @@ async def _maybe_reply_smalltalk(
             planner_goal_list = getattr(pfc_state_before_gate, "goal_list", []) or []
             if planner_goal_list and isinstance(planner_goal_list[0], dict):
                 planner_top_goal = str(planner_goal_list[0].get("goal", "") or "").strip()
-        g = ""
+        goal = ""
         goal_source = "user"
         if runtime.cfg.reflection.enable_review_sessions:
-            og = get_goal_override(state.review_store, chat_id)
-            if og:
-                g = og
+            override_goal = get_goal_override(state.review_store, chat_id)
+            if override_goal:
+                goal = override_goal
                 goal_source = "review"
-        if not g and not planner_top_goal:
-            g = await derive_goal_async(
+        if not goal and not planner_top_goal:
+            goal = await derive_goal_async(
                 data_dir=context.data_dir,
                 chat_id=chat_id,
                 current_text=text,
                 planner_reasoning="",
             )
-        if g:
-            await state.goal_store.set_async(chat_id, goal=g, source=goal_source)
+        if goal:
+            await state.goal_store.set_async(chat_id, goal=goal, source=goal_source)
             _log_step(
-                context, runtime, chat_id=chat_id, step="smalltalk.goal.set", fields={"goal": g}
+                context, runtime, chat_id=chat_id, step="smalltalk.goal.set", fields={"goal": goal}
             )
         elif not planner_top_goal:
             await _clear_store_entry(state.goal_store, chat_id)
             _log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.clear", fields={})
 
     if not forced:
-        _interest = _score_interest(text)
+        interest = _score_interest(text)
         if not await _should_reply(
             runtime,
             state,
@@ -440,20 +470,16 @@ async def _maybe_reply_smalltalk(
             is_private,
             mentioned,
             runtime.cfg.brain_chat.enable_private_brain_chat,
-            interest=_interest,
+            interest=interest,
         ):
             maybe_coro = state.heartflow.on_no_reply_async(chat_id=chat_id)
             if asyncio.iscoroutine(maybe_coro):
                 await maybe_coro
-            return []
+            return None
 
-    # 检查是否为深度对话模式（不需要锁）
     brain_chat_active = is_brain_chat_active(runtime, is_private, forced)
-
-    # 计算本次要使用的情绪状态（持久化，避免每轮随机切换）
     mood_text = state.get_mood_state(chat_id)
     if mood_text:
-        # 已有活跃情绪：以 10% 概率自然漂移到新状态
         if runtime.cfg.personality.states and random.random() < 0.10:
             mood_text = random.choice(runtime.cfg.personality.states)
             state.set_mood_state(chat_id, mood_text, duration_seconds=1800.0)
@@ -461,26 +487,42 @@ async def _maybe_reply_smalltalk(
         runtime.cfg.personality.states
         and random.random() < runtime.cfg.personality.state_probability
     ):
-        # 无活跃情绪：按概率设置一个新状态
         mood_text = random.choice(runtime.cfg.personality.states)
         state.set_mood_state(chat_id, mood_text, duration_seconds=1800.0)
 
-    history_snapshot: list[Any] = []
-    local_id = ""
-    pfc_result: PFCRunResult | None = None
-    pfc_state_snapshot = None
-    speculative_memory_task = None
-    should_schedule_pfc_state_flush = False
-    should_return_empty = False
-    commit_error: Exception | None = None
-    reply = ""
+    return _PreparedSmalltalkTurn(
+        text=text,
+        mentioned=mentioned,
+        is_private=is_private,
+        forced=forced,
+        brain_chat_active=brain_chat_active,
+        mood_text=mood_text,
+        collected_emoji_count=collected_emoji_count,
+    )
+
+
+async def _generate_smalltalk_turn(
+    prepared: _PreparedSmalltalkTurn,
+    event: dict[str, Any],
+    context,
+    hctx: HandlerContext,
+) -> _GeneratedSmalltalkTurn:
+    runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
+    bot_name, secrets, data_dir = hctx.bot_name, hctx.secrets, hctx.data_dir
+    generated = _GeneratedSmalltalkTurn()
 
     async with _get_lock(chat_id):
-        local_id = await _ensure_user_message_recorded(text, event, context, runtime, state=state)
-        if not forced:
-            pfc_state_snapshot = deepcopy(await state.pfc_state_store.get_async(chat_id))
-            if pfc_state_snapshot and pfc_state_snapshot.ended:
-                pfc_state_snapshot.ended = False
+        generated.local_id = await _ensure_user_message_recorded(
+            prepared.text,
+            event,
+            context,
+            runtime,
+            state=state,
+        )
+        if not prepared.forced:
+            generated.pfc_state_snapshot = deepcopy(await state.pfc_state_store.get_async(chat_id))
+            if generated.pfc_state_snapshot and generated.pfc_state_snapshot.ended:
+                generated.pfc_state_snapshot.ended = False
 
     async def _pfc_generate(mode: str, planner_reason: str, extra_reason: str) -> str:
         style_override = ""
@@ -490,62 +532,68 @@ async def _maybe_reply_smalltalk(
             style_override = "你刚发过一条消息，如果要继续发一条新消息，短一点，别轰炸。"
         act = PlannedAction(
             action="reply",
-            target_message_id=local_id,
+            target_message_id=generated.local_id,
             think_level=runtime.cfg.planner.resolve_think_level(),
             quote=False,
             reasoning=str(planner_reason or "").strip(),
             question="",
             unknown_words=[],
         )
-        pr = (planner_reason or "").strip()
+        plan_reasoning = (planner_reason or "").strip()
         if extra_reason:
-            pr = (pr + "\n" + str(extra_reason).strip()).strip()
+            plan_reasoning = (plan_reasoning + "\n" + str(extra_reason).strip()).strip()
         out = await _generate_reply(
-            text=text,
+            text=prepared.text,
             event=event,
             context=context,
             runtime=runtime,
             state=state,
-            forced=forced,
+            forced=prepared.forced,
             action=act,
-            plan_reasoning=pr,
+            plan_reasoning=plan_reasoning,
+            bot_name=bot_name,
+            secrets=secrets,
             reply_style_override=style_override,
-            state_text=mood_text,
-            is_brain_chat=brain_chat_active,
-            prefetched_memory_task=speculative_memory_task,
+            state_text=prepared.mood_text,
+            is_brain_chat=prepared.brain_chat_active,
+            prefetched_memory_task=generated.speculative_memory_task,
         )
         return out or ""
 
-    if forced:
+    if prepared.forced:
         _log_step(context, runtime, chat_id=chat_id, step="smalltalk.forced_direct", fields={})
         direct_act = PlannedAction(
             action="reply",
-            target_message_id=local_id,
+            target_message_id=generated.local_id,
             think_level=runtime.cfg.planner.resolve_think_level(),
             quote=False,
             reasoning="用户直接发起对话，需要回复",
             question="",
             unknown_words=[],
         )
-        reply = await _generate_reply(
-            text=text,
-            event=event,
-            context=context,
-            runtime=runtime,
-            state=state,
-            forced=True,
-            action=direct_act,
-            plan_reasoning="用户直接发起对话，需要回复",
-            state_text=mood_text,
-            is_brain_chat=brain_chat_active,
-        )
-        reply = (reply or "").strip()
-        if not reply:
-            reply = random.choice(["嗯…", "行", "我在听", "你继续", "有点卡，等下"])
+        generated.reply = (
+            await _generate_reply(
+                text=prepared.text,
+                event=event,
+                context=context,
+                runtime=runtime,
+                state=state,
+                forced=True,
+                action=direct_act,
+                plan_reasoning="用户直接发起对话，需要回复",
+                bot_name=bot_name,
+                secrets=secrets,
+                state_text=prepared.mood_text,
+                is_brain_chat=prepared.brain_chat_active,
+            )
+            or ""
+        ).strip()
+        if not generated.reply:
+            generated.reply = random.choice(["嗯…", "行", "我在听", "你继续", "有点卡，等下"])
     else:
-        _max_ctx = get_brain_chat_max_context(runtime, brain_chat_active)
-        _spec_history = await state.memory_store.get_recent_async(chat_id, max_items=_max_ctx)
-        speculative_memory_task = asyncio.create_task(
+        max_context_size = get_brain_chat_max_context(runtime, prepared.brain_chat_active)
+        speculative_history = await state.memory_store.get_recent_async(chat_id, max_items=max_context_size)
+        generated.speculative_memory_task = asyncio.create_task(
             _build_memory_block(
                 context=context,
                 runtime=runtime,
@@ -553,26 +601,26 @@ async def _maybe_reply_smalltalk(
                 secrets=secrets,
                 data_dir=data_dir,
                 chat_id=chat_id,
-                history=_spec_history[-_max_ctx:] if _max_ctx > 0 else [],
-                current_text=text,
+                history=speculative_history[-max_context_size:] if max_context_size > 0 else [],
+                current_text=prepared.text,
                 planner_question="",
                 bot_name=bot_name,
             )
         )
-        pfc_result = await run_pfc_once(
+        generated.pfc_result = await run_pfc_once(
             context=context,
             runtime_cfg=runtime.cfg,
             secrets=secrets,
             bot_name=bot_name,
-            is_private=is_private,
+            is_private=prepared.is_private,
             chat_id=chat_id,
-            current_text=text,
+            current_text=prepared.text,
             memory_store=state.memory_store,
             action_history=state.action_history,
             memory_db=state.memory_db,
             pfc_state_store=state.pfc_state_store,
             generate_reply=_pfc_generate,
-            state_override=pfc_state_snapshot,
+            state_override=generated.pfc_state_snapshot,
             persist_state=False,
         )
         _log_step(
@@ -581,27 +629,85 @@ async def _maybe_reply_smalltalk(
             chat_id=chat_id,
             step="smalltalk.pfc.done",
             fields={
-                "action": pfc_result.action,
-                "ended": bool(pfc_result.ended),
-                "reason": pfc_result.reason,
-                "reply_chars": len((pfc_result.reply or "").strip()),
+                "action": generated.pfc_result.action,
+                "ended": bool(generated.pfc_result.ended),
+                "reason": generated.pfc_result.reason,
+                "reply_chars": len((generated.pfc_result.reply or "").strip()),
             },
         )
-        reply = (pfc_result.reply or "").strip()
+        generated.reply = (generated.pfc_result.reply or "").strip()
+
+    if generated.reply:
+        generated.reply_for_send = (
+            maybe_add_mode_indicator(generated.reply, runtime)
+            if prepared.brain_chat_active
+            else generated.reply
+        )
+        media_cfg = getattr(runtime.cfg, "media", None)
+        if getattr(media_cfg, "enable_outbound_emoji_reply", False):
+            try:
+                history_for_emoji = await state.memory_store.get_recent_async(
+                    chat_id,
+                    max_items=min(max(6, int(getattr(runtime.cfg, "max_context_size", 30))), 12),
+                )
+                generated.emoji_plan = await plan_emoji_reply(
+                    context=context,
+                    runtime=runtime,
+                    history=history_for_emoji,
+                    user_text=prepared.text,
+                    reply_text=generated.reply,
+                    secrets=secrets,
+                )
+            except Exception:
+                generated.emoji_plan = None
+        payload_text = generated.reply_for_send
+        payload_display_text = generated.reply
+        if generated.emoji_plan is not None and getattr(generated.emoji_plan, "mode", "") == "emoji_only":
+            payload_text = ""
+            payload_display_text = generated.emoji_plan.marker
+        generated.reply_payload = build_reply_payload(
+            payload_text,
+            emoji_file_path=(
+                str(resolve_emoji_file_path(context, generated.emoji_plan.entry.file_path))
+                if generated.emoji_plan
+                else ""
+            ),
+            emoji_marker=generated.emoji_plan.marker if generated.emoji_plan else "",
+            display_text=payload_display_text,
+        )
+
+    return generated
+
+
+async def _finalize_smalltalk_turn(
+    prepared: _PreparedSmalltalkTurn,
+    generated: _GeneratedSmalltalkTurn,
+    event: dict[str, Any],
+    context,
+    hctx: HandlerContext,
+    *,
+    started_at: float,
+) -> list[dict[str, Any]]:
+    runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
+    bot_name = hctx.bot_name
+
+    history_snapshot: list[Any] = []
+    should_schedule_pfc_state_flush = False
+    should_return_empty = False
+    commit_error: Exception | None = None
 
     try:
         async with _get_lock(chat_id):
-            if _most_recent_user_local_id(chat_id) != local_id:
-                if speculative_memory_task and not speculative_memory_task.done():
-                    speculative_memory_task.cancel()
+            if _most_recent_user_local_id(chat_id) != generated.local_id:
+                _cancel_pending_task(generated.speculative_memory_task)
                 return []
 
-            if not forced and pfc_state_snapshot is not None:
-                state.pfc_state_store.set_state(chat_id, pfc_state_snapshot)
+            if not prepared.forced and generated.pfc_state_snapshot is not None:
+                state.pfc_state_store.set_state(chat_id, generated.pfc_state_snapshot)
                 should_schedule_pfc_state_flush = True
                 if runtime.cfg.goal.enable_goal:
                     top_goal = ""
-                    goal_list = getattr(pfc_state_snapshot, "goal_list", []) or []
+                    goal_list = getattr(generated.pfc_state_snapshot, "goal_list", []) or []
                     if goal_list and isinstance(goal_list[0], dict):
                         top_goal = str(goal_list[0].get("goal", "") or "").strip()
                     if top_goal:
@@ -609,34 +715,37 @@ async def _maybe_reply_smalltalk(
                     else:
                         await _clear_store_entry(state.goal_store, chat_id)
 
-            if forced:
+            if prepared.forced:
                 history_snapshot = await _record_bot_reply(
                     context,
                     runtime,
                     state,
                     chat_id,
                     bot_name,
-                    reply,
-                    local_id,
+                    generated.reply_payload.display_text if generated.reply_payload else generated.reply,
+                    generated.local_id,
                     forced=True,
                     action_str="reply",
                     reasoning="forced_direct",
-                    detail={"source": "forced"},
+                    detail={"source": "forced", **_emoji_action_detail(generated.emoji_plan)},
                 )
             else:
-                assert pfc_result is not None
-                if not reply:
-                    if speculative_memory_task and not speculative_memory_task.done():
-                        speculative_memory_task.cancel()
+                assert generated.pfc_result is not None
+                if not generated.reply:
+                    _cancel_pending_task(generated.speculative_memory_task)
                     await state.heartflow.on_no_reply_async(chat_id=chat_id)
                     state.action_history.append(
                         chat_id,
                         ActionRecord(
                             ts=time.time(),
-                            local_target=local_id,
-                            action=str(pfc_result.action or "no_reply").strip() or "no_reply",
-                            reasoning=str(pfc_result.action or "").strip()
-                            + (f":{pfc_result.reason}" if pfc_result.reason else ""),
+                            local_target=generated.local_id,
+                            action=str(generated.pfc_result.action or "no_reply").strip() or "no_reply",
+                            reasoning=str(generated.pfc_result.action or "").strip()
+                            + (
+                                f":{generated.pfc_result.reason}"
+                                if generated.pfc_result.reason
+                                else ""
+                            ),
                             detail={"source": "pfc"},
                             executed=True,
                         ),
@@ -644,21 +753,21 @@ async def _maybe_reply_smalltalk(
                     _schedule_action_history_flush(context, runtime, chat_id=chat_id)
                     should_return_empty = True
                 else:
-                    _pfc_reasoning = str(pfc_result.action or "").strip()
-                    if pfc_result.reason:
-                        _pfc_reasoning += f":{pfc_result.reason}"
+                    pfc_reasoning = str(generated.pfc_result.action or "").strip()
+                    if generated.pfc_result.reason:
+                        pfc_reasoning += f":{generated.pfc_result.reason}"
                     history_snapshot = await _record_bot_reply(
                         context,
                         runtime,
                         state,
                         chat_id,
                         bot_name,
-                        reply,
-                        local_id,
+                        generated.reply_payload.display_text if generated.reply_payload else generated.reply,
+                        generated.local_id,
                         forced=False,
-                        action_str=str(pfc_result.action or "reply").strip() or "reply",
-                        reasoning=_pfc_reasoning,
-                        detail={"source": "pfc"},
+                        action_str=str(generated.pfc_result.action or "reply").strip() or "reply",
+                        reasoning=pfc_reasoning,
+                        detail={"source": "pfc", **_emoji_action_detail(generated.emoji_plan)},
                     )
     except Exception as exc:
         commit_error = exc
@@ -676,7 +785,7 @@ async def _maybe_reply_smalltalk(
 
     if runtime.cfg.debug.log_latency:
         context.logger.info(
-            "xiaoqing_chat smalltalk chat_id=%s latency=%.3fs", chat_id, time.monotonic() - t0
+            "xiaoqing_chat smalltalk chat_id=%s latency=%.3fs", chat_id, time.monotonic() - started_at
         )
     _log_step(
         context,
@@ -684,33 +793,95 @@ async def _maybe_reply_smalltalk(
         chat_id=chat_id,
         step="smalltalk.done",
         fields={
-            "elapsed_s": round(time.monotonic() - t0, 3),
-            "reply_chars": len(reply),
-            "reply": reply,
+            "elapsed_s": round(time.monotonic() - started_at, 3),
+            "reply_chars": len(_display_reply_text(generated)),
+            "reply": _display_reply_text(generated),
         },
     )
 
-    # 深度对话模式：添加模式指示器（如果启用）
-    if brain_chat_active:
-        reply = maybe_add_mode_indicator(reply, runtime)
+    outbound_batches = (
+        generated.reply_payload.outbound_batches
+        if generated.reply_payload
+        else segments(generated.reply_for_send)
+    )
+    if outbound_batches and isinstance(outbound_batches[0], dict):
+        outbound_batches = [outbound_batches]
 
-    # 聊天模式：拆分换行符为多条消息
-    parts = _split_chat_reply(reply)
-    if len(parts) > 1:
-        # 如果有多条消息，前N-1条通过send_action直接发送
+    if len(outbound_batches) > 1:
         user_id = event.get("user_id")
         group_id = event.get("group_id")
-
-        # 发送前N-1条消息
-        for part in parts[:-1]:
-            action = build_action(segments(part), user_id, group_id)
+        send_all_batches = generated.emoji_plan is not None
+        pending_batches = outbound_batches if send_all_batches else outbound_batches[:-1]
+        for batch in pending_batches:
+            action = build_action(batch, user_id, group_id)
             if action:
                 await context.send_action(action)
 
-        # 只返回最后一条消息
-        return segments(parts[-1])
+        if generated.emoji_plan is not None:
+            try:
+                mark_emoji_used(context, runtime, generated.emoji_plan.entry)
+            except Exception:
+                pass
+            return []
 
-    return segments(reply)
+        return outbound_batches[-1]
+
+    if generated.emoji_plan is not None and getattr(generated.emoji_plan, "mode", "") == "emoji_only":
+        try:
+            mark_emoji_used(context, runtime, generated.emoji_plan.entry)
+        except Exception:
+            pass
+
+    return outbound_batches[0] if outbound_batches else []
+
+
+async def _maybe_reply_smalltalk(
+    clean_text: str,
+    event: dict[str, Any],
+    context,
+    *,
+    hctx: HandlerContext | None = None,
+) -> list[dict[str, Any]]:
+    """
+    核心闲聊处理逻辑，基于 PFC 规划和回复生成
+
+    该函数协调整个闲聊流程：
+    1. 验证配置并忽略禁用文本
+    2. 将用户消息存储到记忆中
+    3. 如果启用则运行反思任务
+    4. 根据频率规则检查是否应该发送回复
+    5. 在锁外运行 PFC 规划和回复生成
+    6. 在短临界区内存储机器人的回复
+    7. 为摘要和表达学习生成后台任务
+
+    Args:
+        clean_text: 清理后的用户消息文本
+        event: OneBot 事件字典
+        context: 插件上下文
+
+    Returns:
+        回复的消息段字典列表，或空列表
+    """
+    hctx = hctx or HandlerContext.from_event(event, context)
+    runtime = hctx.runtime
+
+    if not runtime.cfg.enable_smalltalk:
+        return []
+
+    t0 = time.monotonic()
+    prepared = await _prepare_smalltalk_turn(clean_text, event, context, hctx)
+    if prepared is None:
+        return []
+
+    generated = await _generate_smalltalk_turn(prepared, event, context, hctx)
+    return await _finalize_smalltalk_turn(
+        prepared,
+        generated,
+        event,
+        context,
+        hctx,
+        started_at=t0,
+    )
 
 
 async def call_bot_name_only_internal(context) -> list[dict[str, Any]]:

@@ -266,6 +266,7 @@ XiaoQing 使用两个 JSON 配置文件：
 **xiaoqing_chat**（推荐）
 - 基于 LLM 的智能对话
 - 支持长期记忆、情绪系统、表情学习
+- 启用媒体配置后可把图片消息写入上下文，并在文本回复后追加本地表情包
 - 需要配置 LLM API（见下方 secrets.json）
 - 智能回复频率控制
 
@@ -376,6 +377,80 @@ api_key = plugin_cfg.get("api_key")
 | `memory_enabled` | `boolean` | `true` | 是否启用长期记忆 |
 | `emotion_enabled` | `boolean` | `true` | 是否启用情绪系统 |
 | `expression_learning` | `boolean` | `true` | 是否启用表情学习 |
+
+#### xiaoqing_chat 媒体配置（`plugins/xiaoqing_chat/config/xiaoqing_config.json`）
+
+图片上下文和表情包回复的行为开关走插件自己的 `config/xiaoqing_config.json`。视觉模型的 API Base / Key / Model 不再放这里，统一走项目级 `config/secrets.json`：
+
+```json
+{
+  "media": {
+    "enable_inbound_media_context": true,
+    "enable_outbound_emoji_reply": true,
+    "emoji_library_dir": "figures/library",
+    "emoji_reply_probability": 0.35,
+    "emoji_candidate_count": 6,
+    "emoji_cooldown_turns": 3,
+    "vision_provider": "vision"
+  }
+}
+```
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|---------|------|
+| `enable_inbound_media_context` | `boolean` | `true` | 是否把用户图片渲染成 `[图片：...]` / `[表情包：...]` 写入对话上下文 |
+| `enable_outbound_emoji_reply` | `boolean` | `true` | 是否允许回复阶段发送本地表情包。命中时可能是“只发图片”或“先发文字再发图” |
+| `emoji_library_dir` | `string` | `"figures/library"` | 本地可发送表情包目录。相对路径按 `plugins/xiaoqing_chat/` 解析 |
+| `emoji_reply_probability` | `float` | `0.35` | 满足条件时启用表情包模态选择的概率 |
+| `emoji_candidate_count` | `int` | `6` | 每次抽样多少张候选表情包参与选择 |
+| `emoji_cooldown_turns` | `int` | `3` | 距离上次助手发表情包至少间隔多少个助手回合 |
+| `vision_provider` | `string` | `""` | 可选。指定 `secrets.json -> plugins.xiaoqing_chat.vision.providers` 里的视觉 provider 名称；为空时优先使用 `vision.default` |
+
+视觉 provider 示例：
+
+```json
+{
+  "plugins": {
+    "xiaoqing_chat": {
+      "default": "deepseek",
+      "providers": {
+        "deepseek": {
+          "api_base": "https://api.deepseek.com",
+          "api_key": "sk-xxx",
+          "model": "deepseek-chat",
+          "endpoint_path": "/v1/chat/completions"
+        }
+      },
+      "vision": {
+        "default": "glm-4v",
+        "providers": {
+          "glm-4v": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "your-vision-key",
+            "model": "glm-4v",
+            "endpoint_path": "/chat/completions"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**缓存与索引位置**：
+
+- 收到的图片：`plugins/xiaoqing_chat/figures/inbox/`
+- 可发送表情包：`plugins/xiaoqing_chat/figures/library/`
+- 图片描述缓存：`plugins/xiaoqing_chat/data/media/render_cache.json`
+- 表情包索引：`plugins/xiaoqing_chat/figures/library/index.json`
+
+插件会把入站图片统一落到 `figures/inbox/`。如果图片被识别成表情包，就会自动复制进 `figures/library/` 并写入索引，后续在合适语境下参与表情包回复选择。新收进图库的表情包也会让这条消息更倾向于触发一次自然回应。
+
+NapCat/OneBot 的纯 `mface` 消息如果没有直接携带图片源，插件会尝试通过 `onebot_http_base` 对应的 HTTP API 调用 `get_msg` 和 `get_image` 回收真实图片；拿不到真实图片时，再退回成仅保留摘要的 `[表情包：...]` 标记。
+
+如果视觉模型未配置、配置不完整，或请求失败，插件会退回到基于文件名/摘要的保守标记，不会阻断普通文本对话；同时会在日志里打出 `media.analyze.skip` / `media.analyze.fail`，方便定位是“没拿到图”还是“视觉模型没跑起来”。
+
+如果你后来补上了显式视觉配置（例如 `vision.default`，或者 `media.vision_provider` 指向一个单独的视觉 provider），旧的低质量 fallback 图片缓存会在再次命中时自动重跑识图并覆盖，不需要手工清空整个 `render_cache.json`。
 
 **支持的 API 提供商**：
 

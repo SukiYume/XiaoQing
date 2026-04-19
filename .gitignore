@@ -67,6 +67,7 @@ docs/superpowers/
 # 数据文件
 plugins/*/data/
 plugins/*/cache/
+plugins/xiaoqing_chat/figures/
 plugins/*deprecated/
 plugins/arxiv_filter/best_model*
 plugins/arxiv_filter/train_model/arxiv_papers_with_abstract.csv
