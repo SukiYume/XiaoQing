@@ -70,12 +70,39 @@ _startup_db: Database | None = None
 # ============================================================
 
 
+def _apply_runtime_config(config: dict[str, Any] | None = None) -> None:
+    PendoConfig.configure(config)
+    PendoConfig.validate()
+
+
+def _register_config_reload_hook(context: PluginContextProtocol | None) -> None:
+    config_manager = getattr(context, "config_manager", None) if context is not None else None
+    if config_manager is None:
+        return
+
+    runtime_state = _get_plugin_runtime_state(context)
+    if runtime_state.get("config_reload_hook_registered"):
+        return
+
+    token = object()
+    runtime_state["config_reload_hook_registered"] = True
+    runtime_state["config_reload_hook_token"] = token
+
+    def _on_reload(snapshot) -> None:
+        if runtime_state.get("config_reload_hook_token") is not token:
+            return
+        _apply_runtime_config(snapshot.config)
+
+    config_manager.on_reload(_on_reload)
+
+
 def init(context=None) -> None:
     """插件初始化"""
     global _startup_db
 
-    PendoConfig.from_env()
-    PendoConfig.validate()
+    config = getattr(context, "config", None) if context is not None else None
+    _apply_runtime_config(config)
+    _register_config_reload_hook(context)
 
     db_path = os.path.join(os.path.dirname(__file__), "data", PendoConfig.DB_FILENAME)
     os.makedirs(os.path.dirname(db_path), exist_ok=True)

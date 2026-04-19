@@ -38,6 +38,7 @@ XiaoQing 使用两个 JSON 配置文件：
   "ws_queue_size": 200,
   
   "max_concurrency": 5,
+  "enable_plugin_watcher": false,
   "session_timeout": 300,
   "timezone": "Asia/Shanghai",
   
@@ -168,6 +169,26 @@ XiaoQing 使用两个 JSON 配置文件：
 ```
 
 ⚠️ **注意**：过高的并发数可能导致资源耗尽，建议根据服务器性能调整。
+
+#### enable_plugin_watcher
+- **类型**：`boolean`
+- **默认**：`false`
+- **说明**：是否自动监控插件文件变化并热重载插件。
+
+默认关闭，避免开发中的半成品文件在运行时被立即载入。开启后，框架会按 `plugin_poll_interval` 轮询插件目录并在发现变更时自动 reload。
+
+```json
+{"enable_plugin_watcher": true}
+```
+
+#### plugin_poll_interval
+- **类型**：`float`
+- **默认**：`3600`
+- **说明**：插件 watcher 轮询目录变化的间隔，单位秒。
+
+```json
+{"plugin_poll_interval": 2.0}
+```
 
 #### inbound_ws_max_workers
 - **类型**：`int`
@@ -778,7 +799,7 @@ class ConfigManager:
 
 ## 配置热重载
 
-配置文件支持热重载。默认启动后会自动监控 `config.json`、`secrets.json` 和插件文件变化；手动命令适合需要立刻触发重载的场景：
+配置文件支持热重载。默认启动后会自动监控 `config.json` 和 `secrets.json`；插件文件 watcher 默认关闭，需要显式启用 `enable_plugin_watcher`。手动命令适合需要立刻触发重载的场景：
 
 ```
 /reload config
@@ -791,6 +812,7 @@ context.reload_config()
 
 **注意**：
 - 某些配置（如 `inbound_http_base` / `inbound_ws_uri`）需要重启才能生效。
+- 配置 watcher 默认开启；插件 watcher 只有在 `enable_plugin_watcher=true` 时才会自动 reload 插件。
 - 自动 watcher 能发现文件变化，但如果你刚修改完配置、希望立即生效，仍然建议手动执行一次 `/reload`。
 
 ---

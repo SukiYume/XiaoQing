@@ -3,7 +3,6 @@ AI 对话插件 (Coze API)
 提供与 AI 的对话功能
 """
 import asyncio
-import json
 import logging
 from typing import Any, Optional
 
@@ -74,51 +73,6 @@ def validate_config(config: dict[str, Any]) -> tuple[bool, Optional[str]]:
     
     return True, None
 
-
-def _parse_stream_messages(raw_text: str, context) -> dict[str, Any]:
-    """Parse SSE/text-event-stream payload into the standard Coze response shape."""
-    messages: list[dict[str, Any]] = []
-    event_lines: list[str] = []
-
-    def flush_event() -> None:
-        nonlocal event_lines
-        if not event_lines:
-            return
-
-        payload_text = "\n".join(event_lines).strip()
-        event_lines = []
-        if not payload_text or payload_text == "[DONE]":
-            return
-
-        try:
-            payload = json.loads(payload_text)
-        except json.JSONDecodeError:
-            context.logger.debug("跳过无法解析的 SSE 事件: %s", payload_text[:120])
-            return
-
-        if isinstance(payload, dict):
-            nested_messages = payload.get("messages")
-            if isinstance(nested_messages, list):
-                messages.extend(
-                    item for item in nested_messages if isinstance(item, dict)
-                )
-            else:
-                messages.append(payload)
-        elif isinstance(payload, list):
-            messages.extend(item for item in payload if isinstance(item, dict))
-
-    for raw_line in raw_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            flush_event()
-            continue
-
-        if line.startswith("data:"):
-            event_lines.append(line[5:].lstrip())
-
-    flush_event()
-    return {"messages": messages}
-
 # ============================================================
 # API 调用
 # ============================================================
@@ -142,7 +96,8 @@ async def call_coze_api(
     bot_id = config.get("bot_id")
     user_id = config.get("user", DEFAULT_USER_ID)
     proxy = config.get("proxy")
-    stream = config.get("stream", False)
+    if config.get("stream"):
+        context.logger.info("Chat 插件已固定使用非流式请求，忽略 stream 配置")
     
     # 构建请求
     headers = {
@@ -157,7 +112,7 @@ async def call_coze_api(
         "bot_id": bot_id,
         "user": user_id,
         "query": query,
-        "stream": stream,
+        "stream": False,
     }
     
     request_kwargs: dict[str, Any] = {
@@ -178,14 +133,7 @@ async def call_coze_api(
                 error_text = await response.text()
                 context.logger.error(f"Coze API 返回错误: HTTP {response.status}, {error_text[:200]}")
                 return None
-
-            headers = getattr(response, "headers", {}) or {}
-            content_type = str(headers.get("Content-Type", "")).lower()
-            if stream or "text/event-stream" in content_type:
-                raw_text = await response.text()
-                data = _parse_stream_messages(raw_text, context)
-            else:
-                data = await response.json()
+            data = await response.json()
 
             context.logger.info(f"Coze API 调用成功，响应消息数: {len(data.get('messages', []))}")
             return data
