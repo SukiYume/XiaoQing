@@ -50,6 +50,8 @@ from .frequency_control import _freq_record, _should_reply, _score_interest
 from .media import build_effective_user_text
 from .media.emoji_library import mark_emoji_used, resolve_emoji_file_path
 from .media.emoji_reply import plan_emoji_reply
+from .media.qq_face_catalog import mark_qq_face_used
+from .media.qq_face_reply import plan_qq_face_reply
 from .planning.goal_state import derive_goal_async
 from .memory.review_sessions import get_goal_override
 from .expression.bw_expression_reflector import maybe_ask_for_reflection
@@ -84,6 +86,7 @@ class _GeneratedSmalltalkTurn:
     reply_payload: Any = None
     emoji_plan: Any = None
     emoji_plan_task: Any = None
+    face_plan: Any = None
 
 
 async def _clear_store_entry(store, chat_id: str) -> None:
@@ -342,6 +345,16 @@ def _emoji_action_detail(emoji_plan) -> dict[str, Any]:
         "emoji_marker": emoji_plan.marker,
         "emoji_hash": emoji_plan.entry.media_hash,
         "emoji_mode": getattr(emoji_plan, "mode", ""),
+    }
+
+
+def _face_action_detail(face_plan) -> dict[str, Any]:
+    if not face_plan:
+        return {}
+    return {
+        "face_marker": face_plan.marker,
+        "face_id": face_plan.entry.face_id,
+        "face_mode": getattr(face_plan, "mode", ""),
     }
 
 
@@ -669,7 +682,8 @@ async def _generate_smalltalk_turn(
                         chat_id,
                         max_items=min(max(6, int(getattr(runtime.cfg, "max_context_size", 30))), 12),
                     )
-                    # Emoji reply reuses stored marker/path metadata and does not trigger extra image analysis.
+                    # Emoji reply only uses valid existing library metadata on the hot path.
+                    # Invalid library entries are skipped here instead of being rebuilt during reply generation.
                     return await plan_emoji_reply(
                         context=context,
                         runtime=runtime,
@@ -726,12 +740,35 @@ async def _finalize_smalltalk_turn(
     commit_error: Exception | None = None
 
     await _resolve_emoji_plan(generated, context=context, runtime=runtime)
+    if (
+        generated.reply
+        and generated.emoji_plan is None
+        and getattr(getattr(runtime.cfg, "media", None), "enable_outbound_face_reply", False)
+    ):
+        try:
+            history_for_face = await state.memory_store.get_recent_async(
+                chat_id,
+                max_items=min(max(6, int(getattr(runtime.cfg, "max_context_size", 30))), 12),
+            )
+            generated.face_plan = await plan_qq_face_reply(
+                context=context,
+                runtime=runtime,
+                history=history_for_face,
+                user_text=prepared.text,
+                reply_text=generated.reply,
+                secrets=hctx.secrets,
+            )
+        except Exception:
+            generated.face_plan = None
     if generated.reply:
         payload_text = generated.reply_for_send
         payload_display_text = generated.reply
         if generated.emoji_plan is not None and getattr(generated.emoji_plan, "mode", "") == "emoji_only":
             payload_text = ""
             payload_display_text = generated.emoji_plan.marker
+        if generated.face_plan is not None and getattr(generated.face_plan, "mode", "") == "face_only":
+            payload_text = ""
+            payload_display_text = generated.face_plan.marker
         emoji_file_path = ""
         if generated.emoji_plan is not None:
             emoji_file_path = str(resolve_emoji_file_path(context, generated.emoji_plan.entry.file_path))
@@ -739,6 +776,8 @@ async def _finalize_smalltalk_turn(
             payload_text,
             emoji_file_path=emoji_file_path,
             emoji_marker=generated.emoji_plan.marker if generated.emoji_plan else "",
+            qq_face_id=generated.face_plan.entry.face_id if generated.face_plan else "",
+            qq_face_marker=generated.face_plan.marker if generated.face_plan else "",
             display_text=payload_display_text,
         )
 
@@ -768,13 +807,17 @@ async def _finalize_smalltalk_turn(
                     state,
                     chat_id,
                     bot_name,
-                    generated.reply_payload.display_text if generated.reply_payload else generated.reply,
-                    generated.local_id,
-                    forced=True,
-                    action_str="reply",
-                    reasoning="forced_direct",
-                    detail={"source": "forced", **_emoji_action_detail(generated.emoji_plan)},
-                )
+                        generated.reply_payload.display_text if generated.reply_payload else generated.reply,
+                        generated.local_id,
+                        forced=True,
+                        action_str="reply",
+                        reasoning="forced_direct",
+                        detail={
+                            "source": "forced",
+                            **_emoji_action_detail(generated.emoji_plan),
+                            **_face_action_detail(generated.face_plan),
+                        },
+                    )
             else:
                 assert generated.pfc_result is not None
                 if not generated.reply:
@@ -813,7 +856,11 @@ async def _finalize_smalltalk_turn(
                         forced=False,
                         action_str=str(generated.pfc_result.action or "reply").strip() or "reply",
                         reasoning=pfc_reasoning,
-                        detail={"source": "pfc", **_emoji_action_detail(generated.emoji_plan)},
+                        detail={
+                            "source": "pfc",
+                            **_emoji_action_detail(generated.emoji_plan),
+                            **_face_action_detail(generated.face_plan),
+                        },
                     )
     except Exception as exc:
         commit_error = exc
@@ -856,7 +903,7 @@ async def _finalize_smalltalk_turn(
     if len(outbound_batches) > 1:
         user_id = event.get("user_id")
         group_id = event.get("group_id")
-        send_all_batches = generated.emoji_plan is not None
+        send_all_batches = generated.emoji_plan is not None or generated.face_plan is not None
         pending_batches = outbound_batches if send_all_batches else outbound_batches[:-1]
         for batch in pending_batches:
             action = build_action(batch, user_id, group_id)
@@ -868,13 +915,23 @@ async def _finalize_smalltalk_turn(
                 mark_emoji_used(context, runtime, generated.emoji_plan.entry)
             except Exception:
                 pass
+        if generated.face_plan is not None:
+            try:
+                mark_qq_face_used(context, generated.face_plan.entry)
+            except Exception:
+                pass
+        if send_all_batches:
             return []
-
         return outbound_batches[-1]
 
     if generated.emoji_plan is not None and getattr(generated.emoji_plan, "mode", "") == "emoji_only":
         try:
             mark_emoji_used(context, runtime, generated.emoji_plan.entry)
+        except Exception:
+            pass
+    if generated.face_plan is not None and getattr(generated.face_plan, "mode", "") == "face_only":
+        try:
+            mark_qq_face_used(context, generated.face_plan.entry)
         except Exception:
             pass
 

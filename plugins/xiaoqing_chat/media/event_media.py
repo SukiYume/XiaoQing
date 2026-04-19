@@ -19,6 +19,7 @@ from core.plugin_base import ensure_dir, load_json, write_json
 from ..helper_utils import _iter_message_segments
 from ..llm.llm_client import LLMError, chat_completions
 from .qq_face import describe_face_segment
+from .qq_face_catalog import record_face_observation
 
 _SUPPORTED_MEDIA_TYPES = frozenset({"image", "mface", "face"})
 _SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
@@ -39,7 +40,23 @@ _GENERIC_MEDIA_LABELS = frozenset(
         "一张聊天表情包",
     }
 )
-_MEDIA_ANALYSIS_PROMPT_VERSION = 2
+_STRUCTURED_MEDIA_TAG_STOPWORDS = frozenset(
+    {
+        "json",
+        "kind",
+        "emoji",
+        "image",
+        "description",
+        "summary",
+        "label",
+        "visibletext",
+        "detaileddescription",
+        "detaildescription",
+        "emotiontags",
+        "emotions",
+    }
+)
+_MEDIA_ANALYSIS_PROMPT_VERSION = 3
 _RENDER_CACHE_LOCKS: dict[str, threading.RLock] = {}
 _RENDER_CACHE_LOCKS_GUARD = threading.Lock()
 _MEDIA_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10, sock_read=15)
@@ -308,8 +325,17 @@ def _normalize_emotion_tags(value: Any) -> tuple[str, ...]:
 
     tags: list[str] = []
     for item in candidates:
+        if _looks_like_structured_media_text(item):
+            continue
         cleaned = re.sub(r"[^\w\u4e00-\u9fff]+", "", item or "").strip()
-        if cleaned and cleaned not in tags:
+        lowered = cleaned.lower()
+        if not cleaned:
+            continue
+        if lowered in _STRUCTURED_MEDIA_TAG_STOPWORDS:
+            continue
+        if cleaned.startswith("think") or "用户" in cleaned or "输入数据" in cleaned:
+            continue
+        if cleaned not in tags:
             tags.append(cleaned[:12])
     return tuple(tags[:4])
 
@@ -402,12 +428,65 @@ def _is_generic_media_label(value: str) -> bool:
     return normalized in _GENERIC_MEDIA_LABELS
 
 
+def _looks_like_structured_media_text(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if "<think" in lowered or "</think>" in lowered:
+        return True
+    if "```" in text:
+        return True
+    if lowered.startswith("json") and "{" in text:
+        return True
+    if any(
+        token in text
+        for token in (
+            '"kind"',
+            '"description"',
+            '"emotion_tags"',
+            '"detailed_description"',
+            '"visible_text"',
+            '{"detailed_description"',
+            "输入数据：",
+        )
+    ):
+        return True
+    if any(
+        phrase in text
+        for phrase in (
+            "用户给的例子",
+            "现在重新分析",
+            "需要提取信息",
+            "只输出 JSON",
+            "只输出JSON",
+        )
+    ):
+        return True
+    return False
+
+
+def _can_use_raw_media_description(value: str) -> bool:
+    text = str(value or "").strip().strip("`")
+    if not text:
+        return False
+    if text.startswith("{"):
+        return False
+    return not _looks_like_structured_media_text(text)
+
+
 def _is_low_quality_rendered_media(
     rendered: RenderedMedia,
     *,
     summary_hint: str,
     resolved: ResolvedMedia,
 ) -> bool:
+    if _looks_like_structured_media_text(rendered.description):
+        return True
+    if _looks_like_structured_media_text(rendered.marker):
+        return True
+    if any(_looks_like_structured_media_text(tag) for tag in rendered.emotion_tags):
+        return True
     if _is_generic_media_label(rendered.description):
         return True
     if rendered.kind == "emoji" and not rendered.emotion_tags and _is_generic_media_label(rendered.marker):
@@ -498,6 +577,16 @@ def _normalize_provider_list(value: Any) -> list[str]:
                 items.append(item)
         return items
     return []
+
+
+def _media_llm_max_tokens(secrets: dict[str, Any], base_max_tokens: int) -> int:
+    base = max(1, int(base_max_tokens))
+    model = str(secrets.get("model", "") or "").strip().lower()
+    if "thinking" not in model:
+        return base
+    # Thinking models may emit hidden reasoning before the final JSON.
+    # Give them a wider budget so they do not truncate before producing usable output.
+    return max(base * 4, 800 if base >= 200 else 480)
 
 
 def _build_media_provider_secrets(
@@ -1185,6 +1274,7 @@ async def _call_media_llm(
     last_exc: Exception | None = None
 
     for index, secrets in enumerate(candidates):
+        effective_max_tokens = _media_llm_max_tokens(secrets, max_tokens)
         if index > 0 and previous_provider is not None:
             _media_log(
                 context,
@@ -1194,6 +1284,7 @@ async def _call_media_llm(
                     "from_provider": previous_provider.get("_provider_name", ""),
                     "to_provider": secrets.get("_provider_name", ""),
                     "to_model": secrets.get("model", ""),
+                    "to_max_tokens": effective_max_tokens,
                     "reason": "retryable_http_429",
                 },
                 level="warning",
@@ -1207,18 +1298,21 @@ async def _call_media_llm(
                 messages=messages,
                 temperature=temperature,
                 top_p=top_p,
-                max_tokens=max_tokens,
+                max_tokens=effective_max_tokens,
                 timeout_seconds=float(cfg.vision_timeout_seconds),
                 max_retry=int(cfg.vision_max_retry),
                 retry_interval_seconds=float(cfg.vision_retry_interval_seconds),
                 proxy=str(secrets.get("proxy", "") or ""),
                 endpoint_path=str(secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path),
             )
-            return output, secrets
+            used_secrets = dict(secrets)
+            used_secrets["_effective_max_tokens"] = effective_max_tokens
+            return output, used_secrets
         except Exception as exc:
             setattr(exc, "_media_provider_name", secrets.get("_provider_name", ""))
             setattr(exc, "_media_provider_scope", secrets.get("_provider_scope", ""))
             setattr(exc, "_media_provider_model", secrets.get("model", ""))
+            setattr(exc, "_media_provider_max_tokens", effective_max_tokens)
             last_exc = exc
             if (
                 index + 1 < len(candidates)
@@ -1269,7 +1363,7 @@ def _parse_detail_analysis_output(
     )
     if not description:
         raw_output = str(output or "").strip().strip("`")
-        if raw_output and not raw_output.startswith("{"):
+        if _can_use_raw_media_description(raw_output):
             description = raw_output
     description = _merge_visible_text(description, visible_text)
     emotion_tags = _normalize_emotion_tags(
@@ -1326,7 +1420,7 @@ async def _refine_emoji_analysis_with_llm(
     description = _extract_first_text_value(data, "description", "label", "summary")
     if not description:
         raw_output = str(output or "").strip().strip("`")
-        if raw_output and not raw_output.startswith("{"):
+        if _can_use_raw_media_description(raw_output):
             description = raw_output
     description = description.strip()
     emotion_tags = _normalize_emotion_tags(data.get("emotion_tags") or data.get("emotions"))
@@ -1507,6 +1601,11 @@ async def _analyze_media_with_llm(
     )
     if prefer_emoji:
         prompt += " 这张图来自表情包库，请优先按聊天表情包理解，并尽量提炼出适合聊天使用的情绪标签。"
+    if prepared.is_animated and prepared.frame_strategy == "animation_contact_sheet" and prepared.frame_count > 1:
+        prompt += (
+            f" 这张图是从同一个动画表情里抽取的 {prepared.frame_count} 帧拼图，不是多个人物。"
+            " 如果看到相似角色重复出现，要理解成同一角色在不同帧里的动作或表情变化。"
+        )
 
     _media_log(
         context,
@@ -1516,6 +1615,7 @@ async def _analyze_media_with_llm(
             "provider": secrets.get("_provider_name", ""),
             "provider_scope": secrets.get("_provider_scope", ""),
             "model": secrets.get("model", ""),
+            "max_tokens": _media_llm_max_tokens(secrets, 200),
             "media_hash": resolved.media_hash[:12],
             "segment_type": resolved.segment_type,
             "source_mime": prepared.source_mime_type,
@@ -1578,6 +1678,7 @@ async def _analyze_media_with_llm(
         fields={
             "provider": used_secrets.get("_provider_name", ""),
             "model": used_secrets.get("model", ""),
+            "max_tokens": used_secrets.get("_effective_max_tokens", ""),
             "media_hash": resolved.media_hash[:12],
             "kind": detail.kind,
             "description": detail.description,
@@ -1605,6 +1706,7 @@ async def _analyze_media_with_llm(
                 fields={
                     "provider": refined_provider.get("_provider_name", ""),
                     "model": refined_provider.get("model", ""),
+                    "max_tokens": refined_provider.get("_effective_max_tokens", ""),
                     "media_hash": resolved.media_hash[:12],
                     "description": refined.description,
                     "emotion_tags": "，".join(refined.emotion_tags),
@@ -1619,6 +1721,7 @@ async def _analyze_media_with_llm(
                 fields={
                     "provider": getattr(exc, "_media_provider_name", used_secrets.get("_provider_name", "")),
                     "model": getattr(exc, "_media_provider_model", used_secrets.get("model", "")),
+                    "max_tokens": getattr(exc, "_media_provider_max_tokens", used_secrets.get("_effective_max_tokens", "")),
                     "media_hash": resolved.media_hash[:12],
                     "error": f"{type(exc).__name__}: {exc}",
                 },
@@ -1668,6 +1771,7 @@ async def _analyze_media_with_llm(
         fields={
             "provider": secrets.get("_provider_name", ""),
             "model": secrets.get("model", ""),
+            "max_tokens": used_secrets.get("_effective_max_tokens", ""),
             "media_hash": resolved.media_hash[:12],
             "kind": kind,
             "description": description,
@@ -1994,7 +2098,17 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
             },
         )
         if segment_type == "face":
-            rendered_items.append(_render_face_segment(segment))
+            rendered_face = _render_face_segment(segment)
+            rendered_items.append(rendered_face)
+            try:
+                face_data = segment.get("data", {}) or {}
+                record_face_observation(
+                    context,
+                    face_id=face_data.get("id"),
+                    label=rendered_face.description,
+                )
+            except Exception:
+                pass
             if max_items > 0 and len(rendered_items) >= max_items:
                 break
             continue

@@ -205,10 +205,14 @@ class RewriteConfig(BaseModel):
 class MediaConfig(BaseModel):
     enable_inbound_media_context: bool = True
     enable_outbound_emoji_reply: bool = True
+    enable_outbound_face_reply: bool = True
     emoji_library_dir: str = "figures/library"
     emoji_reply_probability: float = 0.35
     emoji_candidate_count: int = 6
     emoji_cooldown_turns: int = 3
+    face_reply_probability: float = 0.18
+    face_candidate_count: int = 8
+    face_cooldown_turns: int = 2
     max_media_per_message: int = 3
     max_analyze_bytes: int = 4 * 1024 * 1024
     vision_provider: str = ""
