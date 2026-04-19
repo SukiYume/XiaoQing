@@ -57,6 +57,9 @@ STOP_KEYWORDS = {"停止", "stop", "cancel", "ctrl+c"}
 # 命令被中断
 EXIT_CODE_INTERRUPTED = -999
 
+# 命令执行超时
+EXIT_CODE_TIMEOUT = -998
+
 # 命令执行失败
 EXIT_CODE_ERROR = -1
 

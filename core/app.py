@@ -14,6 +14,8 @@ from typing import Any, Awaitable, Callable
 import aiohttp
 from .config import ConfigManager, ConfigSnapshot
 from .constants import (
+    DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_TIMEOUT_SECONDS,
     DEFAULT_INBOUND_WS_QUEUE_SIZE,
     DEFAULT_MAX_CONCURRENCY,
     DEFAULT_SESSION_TIMEOUT_SEC,
@@ -40,6 +42,13 @@ ActionSink = Callable[[Action], Awaitable[None]]
 current_action_sink: ContextVar[ActionSink | None] = ContextVar("current_action_sink", default=None)
 
 
+def _build_shared_http_timeout() -> aiohttp.ClientTimeout:
+    return aiohttp.ClientTimeout(
+        total=DEFAULT_HTTP_TIMEOUT_SECONDS,
+        connect=DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
+    )
+
+
 class XiaoQingApp:
     """XiaoQing 主应用类"""
 
@@ -64,6 +73,7 @@ class XiaoQingApp:
     _ws_client_task: asyncio.Task[None] | None
     _config_watch_task: asyncio.Task[None] | None
     _plugin_watch_task: asyncio.Task[None] | None
+    _config_apply_task: asyncio.Task[None] | None
 
     def __init__(
         self,
@@ -152,6 +162,7 @@ class XiaoQingApp:
         self._ws_client_task: asyncio.Task[None] | None = None
         self._config_watch_task: asyncio.Task[None] | None = None
         self._plugin_watch_task: asyncio.Task[None] | None = None
+        self._config_apply_task: asyncio.Task[None] | None = None
 
         # 注册回调
         self.plugin_manager.on_change(self._reschedule)
@@ -230,7 +241,7 @@ class XiaoQingApp:
             self.dispatcher.semaphore = asyncio.Semaphore(concurrency)
 
         # 初始化 HTTP 会话
-        self.http_session = aiohttp.ClientSession()
+        self.http_session = aiohttp.ClientSession(timeout=_build_shared_http_timeout())
 
         # 初始化 HTTP 发送器（可选）
         http_base = str(self.config.get("onebot_http_base", "") or "").strip()
@@ -348,6 +359,8 @@ class XiaoQingApp:
             except Exception as exc:
                 logger.warning("Inbound server stop error: %s", exc)
             self.inbound_manager = None
+
+        await self._cancel_task("_config_apply_task")
 
         logger.info("XiaoQing shutdown complete")
 
@@ -495,8 +508,8 @@ class XiaoQingApp:
             await self.ws_client.send_action(action)
             return
             
-        # 尝试通过 Inbound WebSocket 广播（如果是 Inbound WS 连接进来的）
-        if self.inbound_manager:
+        # 尝试通过 Inbound WebSocket 广播（如果存在活跃连接）
+        if self.inbound_manager and self.inbound_manager.has_active_ws_clients():
             await self.inbound_manager.broadcast(action)
             return
 
@@ -603,7 +616,7 @@ class XiaoQingApp:
             state=state,
         )
 
-    def _reload_plugins(self) -> None:
+    def _reload_plugins(self) -> asyncio.Task[None] | None:
         """
         重载所有插件（非阻塞，创建后台任务）
 
@@ -612,8 +625,9 @@ class XiaoQingApp:
         """
         if self._reload_task and not self._reload_task.done():
             logger.info("Plugin reload already in progress")
-            return
+            return self._reload_task
         self._reload_task = asyncio.create_task(self._reload_plugins_async_with_logging())
+        return self._reload_task
 
     async def _reload_plugins_async_with_logging(self) -> None:
         """执行插件重载并记录结果"""
@@ -644,37 +658,145 @@ class XiaoQingApp:
         self._load_admins(secrets)
         self.dispatcher.refresh_prefix_cache()
         self._configure_plugin_watch(config)
+        session_timeout = float(config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC))
+        self.session_manager.set_default_timeout(session_timeout)
 
-        http_base = str(config.get("onebot_http_base", "") or "").strip()
-        if http_base:
-            if not self.http_sender and self.http_session:
-                self.http_sender = OneBotHttpSender(
-                    http_base,
-                    secrets.get("onebot_token", ""),
-                    self.http_session,
-                )
-            elif self.http_sender:
-                self.http_sender.update(
-                    http_base,
-                    secrets.get("onebot_token", ""),
-                )
-        else:
-            self.http_sender = None
+        concurrency = int(config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY))
+        self.dispatcher.semaphore = asyncio.Semaphore(concurrency)
 
-        if self.ws_client:
-            self.ws_client.update(
-                config.get("onebot_ws_uri", ""),
-                secrets.get("onebot_token", ""),
-            )
+        timezone = str(config.get("timezone", "Asia/Shanghai") or "Asia/Shanghai")
+        if timezone != self.scheduler.timezone:
+            self.scheduler.reset(timezone)
+            self._reschedule("startup")
 
-        if self.inbound_manager:
-            self.inbound_manager.update_token(secrets.get("inbound_token", ""))
+        if self.http_session is not None:
+            current_task = self._config_apply_task
+            if current_task and not current_task.done():
+                current_task.cancel()
+            self._config_apply_task = asyncio.create_task(self._apply_runtime_config(snapshot))
 
     def reload_config(self) -> None:
         """重新加载配置并应用变更"""
         self.config_manager.reload()
         snapshot = ConfigSnapshot(self.config_manager.config, self.config_manager.secrets)
         self._apply_config(snapshot)
+
+    async def _apply_runtime_config(self, snapshot: ConfigSnapshot) -> None:
+        config = snapshot.config
+        secrets = snapshot.secrets
+        if not self.http_session:
+            return
+
+        http_base = str(config.get("onebot_http_base", "") or "").strip()
+        if http_base:
+            if not self.http_sender:
+                self.http_sender = OneBotHttpSender(
+                    http_base,
+                    secrets.get("onebot_token", ""),
+                    self.http_session,
+                )
+            else:
+                self.http_sender.update(http_base, secrets.get("onebot_token", ""))
+        else:
+            self.http_sender = None
+
+        enable_ws = bool(config.get("enable_ws_client", True))
+        ws_uri = str(config.get("onebot_ws_uri", "") or "").strip()
+        ws_queue_size = self._parse_ws_queue_size(config)
+        await self._reconcile_ws_client(
+            enable_ws=enable_ws,
+            ws_uri=ws_uri,
+            token=secrets.get("onebot_token", ""),
+            queue_size=ws_queue_size,
+        )
+
+        await self._reconcile_inbound_manager(config, secrets)
+
+    def _parse_ws_queue_size(self, config: dict[str, Any]) -> int:
+        ws_queue_size_raw = config.get("ws_queue_size", DEFAULT_INBOUND_WS_QUEUE_SIZE)
+        try:
+            return int(ws_queue_size_raw)
+        except (TypeError, ValueError):
+            return DEFAULT_INBOUND_WS_QUEUE_SIZE
+
+    async def _reconcile_ws_client(
+        self,
+        *,
+        enable_ws: bool,
+        ws_uri: str,
+        token: str,
+        queue_size: int,
+    ) -> None:
+        if not enable_ws or not ws_uri:
+            if self.ws_client:
+                await self.ws_client.stop()
+                await self._cancel_task("_ws_client_task")
+                self.ws_client = None
+            return
+
+        needs_restart = (
+            self.ws_client is None
+            or self.ws_client.ws_uri != ws_uri
+            or self.ws_client.auth_token != token
+            or getattr(self.ws_client, "_queue_size", queue_size) != queue_size
+            or self._ws_client_task is None
+            or self._ws_client_task.done()
+        )
+        if not needs_restart:
+            return
+
+        if self.ws_client:
+            await self.ws_client.stop()
+            await self._cancel_task("_ws_client_task")
+
+        self.ws_client = OneBotWsClient(
+            ws_uri,
+            token,
+            queue_size=queue_size,
+        )
+        self.ws_client.set_on_connect(self._on_ws_connected)
+        self._ws_client_task = asyncio.create_task(
+            self.ws_client.connect_and_listen(self._handle_upstream_event)
+        )
+
+    async def _reconcile_inbound_manager(
+        self,
+        config: dict[str, Any],
+        secrets: dict[str, Any],
+    ) -> None:
+        desired = InboundManager.from_config(
+            config=config,
+            token=secrets.get("inbound_token", ""),
+            handler=self._handle_inbound_event,
+        )
+        desired_key = self._inbound_manager_key(desired)
+        current_key = self._inbound_manager_key(self.inbound_manager)
+
+        if desired is None:
+            if self.inbound_manager:
+                await self.inbound_manager.stop()
+                self.inbound_manager = None
+            return
+
+        if self.inbound_manager is None or current_key != desired_key:
+            if self.inbound_manager:
+                await self.inbound_manager.stop()
+            self.inbound_manager = desired
+            await self.inbound_manager.start()
+            return
+
+        self.inbound_manager.update_token(secrets.get("inbound_token", ""))
+
+    @staticmethod
+    def _inbound_manager_key(manager: InboundManager | None) -> tuple[Any, ...] | None:
+        if manager is None:
+            return None
+        return (
+            manager._inbound_http_base,
+            manager._inbound_ws_uri,
+            manager._ws_max_workers,
+            manager._ws_queue_size,
+        )
 
     # ============================================================
     # 定时任务

@@ -108,6 +108,7 @@ class ConfigManager:
         with self._lock:
             self._config = self._load(self.config_path)
             self._secrets = self._load(self.secrets_path)
+        self._update_mtime()
         logger.info("Config reloaded")
         _check_secrets_file_permissions(self.secrets_path)
 

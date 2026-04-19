@@ -17,10 +17,12 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import time
 import re
 import uuid
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Any, Protocol, TYPE_CHECKING
 
@@ -437,6 +439,10 @@ class Dispatcher:
         if ctx.has_prefix:
             return ProcessDecision(True, False)
 
+        # xiaoqing_chat 需要拿到所有群消息并自行决定是否回复
+        if self._get_smalltalk_provider() == "xiaoqing_chat":
+            return ProcessDecision(True, True)
+
         # 有 bot_name 或 @机器人 时处理
         if ctx.has_bot_name or ctx.is_at_me:
             # 静音时不闲聊，只处理命令
@@ -449,13 +455,6 @@ class Dispatcher:
         # 静音模式下不随机回复
         if is_muted:
             return ProcessDecision(False, False)
-
-        # 特殊处理 xiaoqing_chat 提供者
-        # xiaoqing_chat 有自己的频率控制和回复概率判断，
-        # 所有消息都进入 smalltalk 处理，由插件自己决定是否回复。
-        # 因此不使用 random_reply_rate，直接返回处理。
-        if self._get_smalltalk_provider() == "xiaoqing_chat":
-            return ProcessDecision(True, True)
 
         # 其他 smalltalk 提供者（如 smalltalk）使用 random_reply_rate 控制随机回复
         if random_reply_rate > 0 and self.random.random() < random_reply_rate:
@@ -628,6 +627,9 @@ class Dispatcher:
             return None
         
         url = url_match.group()
+        if self._is_blocked_url_target(url):
+            logger.warning("[%s] Blocked suspicious URL target: %s", ctx.request_id, url)
+            return None
         plugin = self.plugin_registry.get("url_parser")
         if not plugin or not hasattr(plugin.module, "handle_url"):
             return None
@@ -644,6 +646,30 @@ class Dispatcher:
             logger.error("[%s] URL handling failed: %s", ctx.request_id, exc)
         
         return None
+
+    @staticmethod
+    def _is_blocked_url_target(url: str) -> bool:
+        try:
+            parsed = urlsplit(url)
+        except Exception:
+            return True
+
+        host = (parsed.hostname or "").strip().lower()
+        if not host:
+            return True
+        if host in {"localhost", "localhost.localdomain"}:
+            return True
+
+        try:
+            ip = ipaddress.ip_address(host.strip("[]"))
+        except ValueError:
+            return False
+
+        if ip.is_loopback or ip.is_private or ip.is_link_local:
+            return True
+        if ip.is_unspecified or ip.is_reserved or ip.is_multicast:
+            return True
+        return False
 
     # ============================================================
     # 闲聊处理

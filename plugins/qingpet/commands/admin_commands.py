@@ -129,7 +129,7 @@ async def handle_manage_ban(user_id: str, group_id: int, args: str,
     days = int(match.group(2))
 
     admin_service = AdminService(db)
-    success = admin_service.ban_user(target_user_id, group_id, days)
+    success = admin_service.ban_user(target_user_id, group_id, days, operator_user_id=user_id)
 
     if success:
         return True, f"✅ 用户 {target_user_id} 已被封禁 {days} 天"
@@ -149,7 +149,7 @@ async def handle_manage_unban(user_id: str, group_id: int, args: str,
     target_user_id = match.group(1)
 
     admin_service = AdminService(db)
-    success = admin_service.unban_user(target_user_id, group_id)
+    success = admin_service.unban_user(target_user_id, group_id, operator_user_id=user_id)
 
     if success:
         return True, f"✅ 用户 {target_user_id} 已解封"

@@ -100,3 +100,9 @@ class UserService:
                 text += f" — {desc}"
             text += "\n"
         return text
+
+    def grant_temporary_title(self, user_id: str, group_id: int, title: str) -> bool:
+        duration_days = TITLES.get(title, {}).get("duration_days")
+        if not duration_days:
+            return False
+        return self.db.grant_temporary_title(user_id, group_id, title, int(duration_days))

@@ -418,6 +418,7 @@ class TestVideoHandling:
         assert result is not None
         result_text = str(result)
         assert "video" in result_text.lower() or "mp4" in result_text
+        assert "https://apod.nasa.gov/apod/video/apod_video.mp4" in result_text
 
 
 # ============================================================

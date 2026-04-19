@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from core.plugin_base import write_json
+
 
 @dataclass(frozen=True)
 class ActionRecord:
@@ -106,7 +108,7 @@ class ActionHistoryStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         items = self._cache.get(chat_id, [])
         payload = [asdict(x) for x in items[-200:]]
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json(path, payload)
 
     def _load(self, chat_id: str) -> Optional[list[ActionRecord]]:
         path = self._path(chat_id)

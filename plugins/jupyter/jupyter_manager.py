@@ -58,6 +58,7 @@ class JupyterKernelManager:
         self._kc: Optional[Any] = None
         self._started_at: Optional[float] = None
         self._execution_count = 0
+        self._execute_lock = asyncio.Lock()
         
         # 自动关闭相关
         self._last_activity = 0.0
@@ -228,91 +229,95 @@ except ImportError:
     
     async def execute(self, code: str, timeout: float = DEFAULT_TIMEOUT) -> ExecutionResult:
         """执行代码"""
-        need_start_idle_check = False
-        if not self.is_running:
-            await asyncio.to_thread(self.start_kernel)
-            need_start_idle_check = True
-        
-        # 更新活动时间
-        self._last_activity = time.time()
-        
-        # 在 asyncio 事件循环上下文中启动空闲检查任务（不能在 start_kernel 中做，因为它可能在线程池中运行）
-        if need_start_idle_check:
-            if self._shutdown_task and not self._shutdown_task.done():
-                self._shutdown_task.cancel()
-            self._shutdown_task = asyncio.create_task(self._check_idleness_loop())
-        
-        result = ExecutionResult()
-        start_time = time.time()
-        image_count = 0
-        
-        try:
-            # 发送执行请求
-            msg_id = self._kc.execute(code)
-            
-            # 收集输出
-            while True:
-                try:
-                    msg = self._kc.get_iopub_msg(timeout=timeout)
-                except TimeoutError:
-                    result.error = f"执行超时 ({timeout}s)"
-                    result.success = False
-                    await asyncio.to_thread(self.interrupt_kernel)
-                    break
-                
-                msg_type = msg["msg_type"]
-                content = msg.get("content", {})
-                
-                # 标准输出
-                if msg_type == "stream":
-                    if content.get("name") == "stdout":
-                        result.stdout += content.get("text", "")
-                    elif content.get("name") == "stderr":
-                        result.stderr += content.get("text", "")
-                
-                # 执行结果
-                elif msg_type == "execute_result":
-                    data = content.get("data", {})
-                    if "image/png" in data and image_count < MAX_IMAGES:
-                        img_path = self._save_image(data["image/png"], image_count)
-                        if img_path:
-                            result.images.append(img_path)
-                            image_count += 1
-                    
-                    if "text/plain" in data:
-                        result.result = data["text/plain"]
-                
-                # 显示数据
-                elif msg_type == "display_data":
-                    data = content.get("data", {})
-                    if "image/png" in data and image_count < MAX_IMAGES:
-                        img_path = self._save_image(data["image/png"], image_count)
-                        if img_path:
-                            result.images.append(img_path)
-                            image_count += 1
-                
-                # 错误
-                elif msg_type == "error":
-                    traceback = content.get("traceback", [])
-                    cleaned = [re.sub(r'\x1b\[[0-9;]*m', '', line) for line in traceback]
-                    result.error = "\n".join(cleaned)
-                    result.success = False
-                
-                # 执行完成
-                elif msg_type == "status":
-                    if content.get("execution_state") == "idle":
-                        parent_id = msg.get("parent_header", {}).get("msg_id")
-                        if parent_id == msg_id:
-                            break
-            
-            self._execution_count += 1
-            
-        except Exception as e:
-            result.error = f"执行异常: {e}"
-            result.success = False
-        
-        result.execution_time = time.time() - start_time
-        return result
+        async with self._execute_lock:
+            need_start_idle_check = False
+            if not self.is_running:
+                await asyncio.to_thread(self.start_kernel)
+                need_start_idle_check = True
+
+            # 更新活动时间
+            self._last_activity = time.time()
+
+            # 在 asyncio 事件循环上下文中启动空闲检查任务（不能在 start_kernel 中做，因为它可能在线程池中运行）
+            if need_start_idle_check:
+                if self._shutdown_task and not self._shutdown_task.done():
+                    self._shutdown_task.cancel()
+                self._shutdown_task = asyncio.create_task(self._check_idleness_loop())
+
+            result = ExecutionResult()
+            start_time = time.time()
+            deadline = start_time + timeout
+            image_count = 0
+
+            try:
+                msg_id = await asyncio.to_thread(self._kc.execute, code)
+
+                while True:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        result.error = f"执行超时 ({timeout}s)"
+                        result.success = False
+                        await asyncio.to_thread(self.interrupt_kernel)
+                        break
+
+                    try:
+                        msg = await asyncio.to_thread(
+                            self._kc.get_iopub_msg,
+                            min(remaining, 0.25),
+                        )
+                    except TimeoutError:
+                        continue
+
+                    parent_id = msg.get("parent_header", {}).get("msg_id")
+                    if parent_id != msg_id:
+                        continue
+
+                    msg_type = msg["msg_type"]
+                    content = msg.get("content", {})
+
+                    if msg_type == "stream":
+                        if content.get("name") == "stdout":
+                            result.stdout += content.get("text", "")
+                        elif content.get("name") == "stderr":
+                            result.stderr += content.get("text", "")
+
+                    elif msg_type == "execute_result":
+                        data = content.get("data", {})
+                        if "image/png" in data and image_count < MAX_IMAGES:
+                            img_path = self._save_image(data["image/png"], image_count)
+                            if img_path:
+                                result.images.append(img_path)
+                                image_count += 1
+
+                        if "text/plain" in data:
+                            result.result = data["text/plain"]
+
+                    elif msg_type == "display_data":
+                        data = content.get("data", {})
+                        if "image/png" in data and image_count < MAX_IMAGES:
+                            img_path = self._save_image(data["image/png"], image_count)
+                            if img_path:
+                                result.images.append(img_path)
+                                image_count += 1
+
+                    elif msg_type == "error":
+                        traceback = content.get("traceback", [])
+                        cleaned = [re.sub(r'\x1b\[[0-9;]*m', '', line) for line in traceback]
+                        result.error = "\n".join(cleaned)
+                        result.success = False
+
+                    elif msg_type == "status" and content.get("execution_state") == "idle":
+                        break
+
+                self._execution_count += 1
+
+            except Exception as e:
+                result.error = f"执行异常: {e}"
+                result.success = False
+
+            self._last_activity = time.time()
+            result.execution_time = time.time() - start_time
+            return result
     
     def _save_image(self, base64_data: str, index: int) -> Optional[Path]:
         """保存 base64 图片到文件"""

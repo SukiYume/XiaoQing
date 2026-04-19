@@ -108,6 +108,12 @@ class TestAstroToolsTime:
         result_str = str(result)
         assert "time" in result_str.lower() or "时间" in result_str
 
+    @pytest.mark.asyncio
+    async def test_time_numeric_unix_timestamp(self, mock_context):
+        result = await loaded_modules["time"].handle_time("1706616000", mock_context)
+        assert "Unix 1706616000.0" in result or "Unix 1706616000" in result
+        assert "UTC" in result
+
 
 class TestAstroToolsCoord:
     """测试坐标转换功能"""
@@ -182,6 +188,41 @@ class TestAstroToolsErrorHandling:
         result = await astro_tools.handle("astro", "convert", {}, mock_context)
         assert result is not None
         # 不应该抛出未捕获的异常
+
+    @pytest.mark.asyncio
+    async def test_obj_query_runs_in_to_thread(self, mock_context, monkeypatch):
+        calls = {"count": 0}
+
+        async def _fake_to_thread(func, *args, **kwargs):
+            calls["count"] += 1
+            return None
+
+        monkeypatch.setattr(loaded_modules["obj"].asyncio, "to_thread", _fake_to_thread)
+
+        result = await loaded_modules["obj"].handle_obj("Crab Pulsar", mock_context)
+
+        assert calls["count"] == 1
+        assert "未找到天体" in result or "查询失败" not in result
+
+    def test_obj_query_caches_simbad_client(self, monkeypatch):
+        calls = {"count": 0}
+
+        class FakeClient:
+            def query_object(self, _name):
+                return None
+
+        def _fake_build():
+            calls["count"] += 1
+            return FakeClient()
+
+        monkeypatch.setattr(loaded_modules["obj"], "_SIMBAD_CLIENT", None)
+        monkeypatch.setattr(loaded_modules["obj"], "_build_simbad_client", _fake_build)
+
+        first = loaded_modules["obj"]._get_simbad_client()
+        second = loaded_modules["obj"]._get_simbad_client()
+
+        assert first is second
+        assert calls["count"] == 1
 
 
 def test_init():

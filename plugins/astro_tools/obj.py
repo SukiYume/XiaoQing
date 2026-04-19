@@ -2,6 +2,35 @@
 天文对象查询模块
 """
 
+import asyncio
+import threading
+
+
+_SIMBAD_CLIENT = None
+_SIMBAD_CLIENT_LOCK = threading.RLock()
+
+
+def _build_simbad_client():
+    from astroquery.simbad import Simbad
+
+    client = Simbad()
+    client.reset_votable_fields()
+    client.add_votable_fields("otype", "V", "sp")
+    return client
+
+
+def _get_simbad_client():
+    global _SIMBAD_CLIENT
+    with _SIMBAD_CLIENT_LOCK:
+        if _SIMBAD_CLIENT is None:
+            _SIMBAD_CLIENT = _build_simbad_client()
+        return _SIMBAD_CLIENT
+
+
+def _query_simbad_object(name: str):
+    with _SIMBAD_CLIENT_LOCK:
+        return _get_simbad_client().query_object(name)
+
 
 async def handle_obj(args: str, context) -> str:
     """处理天文对象查询命令"""
@@ -18,14 +47,10 @@ async def handle_obj(args: str, context) -> str:
     
     # 从SIMBAD查询其他天体
     try:
-        from astroquery.simbad import Simbad
         from astropy.coordinates import SkyCoord
         from astropy import units as u
-        
-        Simbad.reset_votable_fields()
-        Simbad.add_votable_fields('otype', 'flux(V)', 'sp')
-        
-        result = Simbad.query_object(args)
+
+        result = await asyncio.to_thread(_query_simbad_object, args)
         
         if result is None or len(result) == 0:
             return f"未找到天体: {args}\n\n提示: 可以尝试使用英文名称，如 'Crab Nebula', 'Betelgeuse' 等"
@@ -49,7 +74,9 @@ async def handle_obj(args: str, context) -> str:
             result_text += f"类型: {row['OTYPE']}\n"
         
         # 添加V波段星等
-        if 'FLUX_V' in row.colnames and row['FLUX_V']:
+        if 'V' in row.colnames and row['V']:
+            result_text += f"V星等: {row['V']:.2f}\n"
+        elif 'FLUX_V' in row.colnames and row['FLUX_V']:
             result_text += f"V星等: {row['FLUX_V']:.2f}\n"
         
         # 添加光谱型

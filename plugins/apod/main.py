@@ -357,7 +357,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                 video_src = video_element.attrs['src']
                 
             if video_src and not (video_src.startswith('http://') or video_src.startswith('https://')):
-                video_src = f'{url}/{video_src}'
+                from urllib.parse import urljoin
+                video_src = urljoin(url, video_src)
                 
             if video_src:
                 return segments(f"{video_src}\n\n{title}\n\n{explanation}")

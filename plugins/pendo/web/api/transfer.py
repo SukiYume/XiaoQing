@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import uuid
+import asyncio
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -12,7 +13,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ...models.item import get_item_type_value
-from ...services.db import Database
+from ...services.db import Database, DuplicateBundleImportError
 from ...utils.validators import (
     normalize_diary_fields,
     normalize_event_fields,
@@ -36,6 +37,16 @@ from ..services.transfer_bundle import (
 
 
 router = APIRouter()
+_IMPORT_BUNDLE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _get_import_lock(owner_id: str, bundle_id: str | None) -> asyncio.Lock:
+    key = f"{owner_id}:{bundle_id or '__no_bundle__'}"
+    lock = _IMPORT_BUNDLE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _IMPORT_BUNDLE_LOCKS[key] = lock
+    return lock
 
 # 上传大小限制：100 MB
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024
@@ -454,101 +465,114 @@ async def execute_import(
 
     bundle_id = parsed.manifest.get("bundle_id")
 
-    # 幂等性检查
-    if bundle_id and db.has_imported_bundle(owner_id, bundle_id):
-        force = parsed_options.get("force", False)
-        if not force:
-            raise HTTPException(
-                status_code=409,
-                detail={"message": "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」", "bundle_id": bundle_id},
-            )
+    async with _get_import_lock(owner_id, bundle_id):
+        # 幂等性检查
+        if bundle_id and db.has_imported_bundle(owner_id, bundle_id):
+            force = parsed_options.get("force", False)
+            if not force:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"message": "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」", "bundle_id": bundle_id},
+                )
 
-    invalid_policy = parsed_options.get("invalid_policy", "abort")
-    if errors and invalid_policy != "skip_invalid":
-        raise HTTPException(status_code=422, detail={"errors": errors, "message": "Import validation failed"})
+        invalid_policy = parsed_options.get("invalid_policy", "abort")
+        if errors and invalid_policy != "skip_invalid":
+            raise HTTPException(status_code=422, detail={"errors": errors, "message": "Import validation failed"})
 
-    conflict_policy = parsed_options.get("conflict_policy", "skip")
-    if conflict_policy not in {"skip", "overwrite", "duplicate"}:
-        raise HTTPException(status_code=422, detail="Unsupported conflict policy")
+        conflict_policy = parsed_options.get("conflict_policy", "skip")
+        if conflict_policy not in {"skip", "overwrite", "duplicate"}:
+            raise HTTPException(status_code=422, detail="Unsupported conflict policy")
 
-    results = {"inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
-    details: dict[str, list] = {"inserted": [], "updated": [], "skipped": [], "failed": []}
+        results = {"inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
+        details: dict[str, list] = {"inserted": [], "updated": [], "skipped": [], "failed": []}
 
-    # 构建批量操作列表（在事务前完成决策）
-    operations: list[tuple[str, dict[str, Any]]] = []
-    for record in valid_records:
-        if record["type"] not in selected_types:
-            continue
-
-        item_id = record.get("id")
-        existing = db.get_item(item_id, owner_id=owner_id) if item_id else None
-        payload = dict(record)
-
-        if existing:
-            if conflict_policy == "skip":
-                results["skipped"] += 1
-                details["skipped"].append(_result_entry(record, "ID 已存在，按策略跳过"))
+        # 构建批量操作列表（在事务前完成决策）
+        operations: list[tuple[str, dict[str, Any]]] = []
+        for record in valid_records:
+            if record["type"] not in selected_types:
                 continue
-            if conflict_policy == "overwrite":
-                operations.append(("update", payload))
-                results["updated"] += 1
-                details["updated"].append(_result_entry(record))
+
+            item_id = record.get("id")
+            existing = db.get_item(item_id, owner_id=owner_id) if item_id else None
+            payload = dict(record)
+
+            if existing:
+                existing_type = str(getattr(existing.type, "value", existing.type))
+                incoming_type = str(record.get("type", "") or "")
+                if existing_type != incoming_type:
+                    results["failed"] += 1
+                    details["failed"].append(
+                        _result_entry(
+                            record,
+                            f"同 ID 现有条目类型为 {existing_type}，导入类型为 {incoming_type}，拒绝覆盖",
+                        )
+                    )
+                    continue
+                if conflict_policy == "skip":
+                    results["skipped"] += 1
+                    details["skipped"].append(_result_entry(record, "ID 已存在，按策略跳过"))
+                    continue
+                if conflict_policy == "overwrite":
+                    operations.append(("update", payload))
+                    results["updated"] += 1
+                    details["updated"].append(_result_entry(record))
+                    continue
+                # duplicate: 生成足够长的 ID 避免碰撞 (16 hex = 64 bit)
+                original_id = item_id
+                payload.pop("id", None)
+                payload["id"] = uuid.uuid4().hex[:16]
+                payload.setdefault("context", {})
+                ctx_import = payload["context"].get("import", {})
+                ctx_import["source_id"] = original_id
+                payload["context"]["import"] = ctx_import
+                operations.append(("insert", payload))
+                results["inserted"] += 1
+                details["inserted"].append(_result_entry(record, "已生成副本，保留原始 source_id"))
                 continue
-            # duplicate: 生成足够长的 ID 避免碰撞 (16 hex = 64 bit)
-            original_id = item_id
-            payload.pop("id", None)
-            payload["id"] = uuid.uuid4().hex[:16]
-            payload.setdefault("context", {})
-            ctx_import = payload["context"].get("import", {})
-            ctx_import["source_id"] = original_id
-            payload["context"]["import"] = ctx_import
+
+            # 新记录插入
+            if not item_id:
+                payload["id"] = uuid.uuid4().hex[:16]
             operations.append(("insert", payload))
             results["inserted"] += 1
-            details["inserted"].append(_result_entry(record, "已生成副本，保留原始 source_id"))
-            continue
+            details["inserted"].append(_result_entry(record))
 
-        # 新记录插入
-        if not item_id:
-            payload["id"] = uuid.uuid4().hex[:16]
-        operations.append(("insert", payload))
-        results["inserted"] += 1
-        details["inserted"].append(_result_entry(record))
-
-    # 事务原子性：整个导入在一个数据库事务中，失败全部回滚
-    if operations:
+        total_processed = results["inserted"] + results["updated"] + results["skipped"] + results["failed"]
         try:
-            db.batch_insert_or_update(operations, owner_id)
+            db.execute_import_bundle(
+                owner_id=owner_id,
+                bundle_id=bundle_id,
+                operations=operations,
+                filename=request.headers.get("x-transfer-filename"),
+                types=sorted(selected_types),
+                record_count=total_processed,
+                result_summary=results,
+                force=bool(parsed_options.get("force", False)),
+            )
+        except DuplicateBundleImportError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」", "bundle_id": str(exc)},
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
                 detail=f"导入事务失败，已全部回滚：{exc}",
             ) from exc
 
-    # 审计日志
-    total_processed = results["inserted"] + results["updated"] + results["skipped"]
-    db.log_transfer(
-        owner_id=owner_id,
-        action="import",
-        bundle_id=bundle_id,
-        filename=request.headers.get("x-transfer-filename"),
-        types=sorted(selected_types),
-        record_count=total_processed,
-        result_summary=results,
-    )
-
-    return {
-        "ok": True,
-        "data": {
-            "summary": {"types": sorted(selected_types)},
-            "counts": {"valid": len(valid_records), "errors": len(errors)},
-            "bundle_id": bundle_id,
-            "warnings": parsed.warnings,
-            "errors": errors,
-            "results": results,
-            "details": details,
-        },
-        "message": "",
-    }
+        return {
+            "ok": True,
+            "data": {
+                "summary": {"types": sorted(selected_types)},
+                "counts": {"valid": len(valid_records), "errors": len(errors)},
+                "bundle_id": bundle_id,
+                "warnings": parsed.warnings,
+                "errors": errors,
+                "results": results,
+                "details": details,
+            },
+            "message": "",
+        }
 
 
 @router.get("/transfer/logs")

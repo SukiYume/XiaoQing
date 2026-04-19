@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from plugins.qingssh import session_handlers as ssh_session_handlers
 from plugins.qingssh import ssh_manager as ssh_manager_module
-from plugins.qingssh.config import SessionKeys
+from plugins.qingssh.config import EXIT_CODE_TIMEOUT, SessionKeys
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -600,3 +600,72 @@ def test_qingssh_session_does_not_store_task_object():
         assert session.get(SessionKeys.CURRENT_TASK) is None
 
     asyncio.run(_run())
+
+
+class _FakeJumpClient:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeClient:
+    def __init__(self):
+        self.closed = False
+        self._jump_client = _FakeJumpClient()
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeChannel:
+    def __init__(self):
+        self.closed = False
+        self.sent = []
+
+    def send_ready(self):
+        return True
+
+    def send(self, payload):
+        self.sent.append(payload)
+
+    def close(self):
+        self.closed = True
+
+
+def test_disconnect_closes_active_channel_and_jump_connection(tmp_path):
+    manager = ssh_manager_module.SSHManager(tmp_path)
+    key = manager._build_connection_key("10001", "20001", "srv")
+    channel = _FakeChannel()
+    client = _FakeClient()
+
+    manager.active_channels[key] = channel
+    manager.connections[key] = client
+
+    assert manager.disconnect("10001", "20001", "srv") is True
+    assert channel.closed is True
+    assert channel.sent == ["\x03"]
+    assert client.closed is True
+    assert client._jump_client.closed is True
+    assert key not in manager.active_channels
+    assert key not in manager.connections
+
+
+@pytest.mark.asyncio
+async def test_execute_command_stream_applies_timeout(monkeypatch, tmp_path):
+    manager = ssh_manager_module.SSHManager(tmp_path)
+
+    async def fake_impl(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return 0
+
+    stop_command = Mock(return_value=True)
+    monkeypatch.setattr(ssh_manager_module, "COMMAND_TIMEOUT", 0.01)
+    monkeypatch.setattr(manager, "_execute_command_stream_impl", fake_impl)
+    monkeypatch.setattr(manager, "stop_command", stop_command)
+
+    result = await manager.execute_command_stream("10001", "20001", "srv", "sleep 1", AsyncMock())
+
+    assert result == EXIT_CODE_TIMEOUT
+    stop_command.assert_called_once_with("10001", "20001", "srv")

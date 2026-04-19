@@ -5,7 +5,7 @@ import threading
 import time
 import re
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from pathlib import Path
 
 from ..models import Pet, User, Item, Inventory, GroupConfig, PluginConfig, OperationLog
@@ -167,12 +167,18 @@ class Database:
                 start_time TEXT, end_time TEXT, is_active BOOLEAN DEFAULT 0)""")
 
             cursor.execute("""CREATE TABLE IF NOT EXISTS pet_show_votes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 show_id INTEGER NOT NULL, voter_user_id TEXT NOT NULL,
-                pet_user_id TEXT NOT NULL, created_at TEXT,
-                PRIMARY KEY (show_id, voter_user_id))""")
+                pet_user_id TEXT NOT NULL, created_at TEXT)""")
 
             cursor.execute("""CREATE TABLE IF NOT EXISTS command_timestamps (
                 user_id TEXT NOT NULL, group_id INTEGER NOT NULL, timestamp REAL NOT NULL)""")
+
+            cursor.execute("""CREATE TABLE IF NOT EXISTS minigame_cooldowns (
+                user_id TEXT NOT NULL, group_id INTEGER NOT NULL, game_type TEXT NOT NULL,
+                available_at REAL NOT NULL,
+                PRIMARY KEY (user_id, group_id, game_type)
+            )""")
 
             # 交易市场表 (新增)
             cursor.execute("""CREATE TABLE IF NOT EXISTS trade_listings (
@@ -234,6 +240,15 @@ class Database:
                 PRIMARY KEY (user_id, group_id, title))""")
 
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_likes ON daily_likes(user_id, target_user_id, group_id, like_date)")
+            self._migrate_pet_show_votes_table(cursor)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pet_show_votes_show_voter "
+                "ON pet_show_votes(show_id, voter_user_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pet_show_votes_show_pet "
+                "ON pet_show_votes(show_id, pet_user_id)"
+            )
 
             conn.commit()
 
@@ -254,6 +269,29 @@ class Database:
                 cursor.execute(idx_sql)
             except sqlite3.OperationalError:
                 pass
+
+    @staticmethod
+    def _migrate_pet_show_votes_table(cursor) -> None:
+        row = cursor.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pet_show_votes'"
+        ).fetchone()
+        sql_text = str(row["sql"] or "") if row else ""
+        if "PRIMARY KEY (show_id, voter_user_id)" not in sql_text:
+            return
+
+        cursor.execute("ALTER TABLE pet_show_votes RENAME TO pet_show_votes_old")
+        cursor.execute("""CREATE TABLE pet_show_votes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            show_id INTEGER NOT NULL,
+            voter_user_id TEXT NOT NULL,
+            pet_user_id TEXT NOT NULL,
+            created_at TEXT)""")
+        cursor.execute(
+            """INSERT INTO pet_show_votes (show_id, voter_user_id, pet_user_id, created_at)
+               SELECT show_id, voter_user_id, pet_user_id, created_at
+               FROM pet_show_votes_old"""
+        )
+        cursor.execute("DROP TABLE pet_show_votes_old")
 
     @staticmethod
     def _safe_add_column(cursor, table: str, column: str, col_type: str):
@@ -569,6 +607,18 @@ class Database:
             except Exception as e:
                 logger.error(f"Failed to get all pets: {e}")
                 return []
+
+    def get_enabled_group_decay_map(self) -> Dict[int, float]:
+        with self._lock:
+            try:
+                conn = self._get_connection()
+                cursor = conn.execute(
+                    "SELECT group_id, decay_multiplier FROM group_configs WHERE enabled = 1"
+                )
+                return {int(row["group_id"]): float(row["decay_multiplier"]) for row in cursor.fetchall()}
+            except Exception as e:
+                logger.error(f"Failed to get enabled group decay map: {e}")
+                return {}
 
     def get_pets_by_user(self, user_id: str) -> List[Pet]:
         with self._lock:
@@ -920,6 +970,39 @@ class Database:
             except Exception as e:
                 logger.error(f"Failed to cleanup timestamps: {e}")
 
+    def check_and_consume_minigame_cooldown(
+        self, user_id: str, group_id: int, game_type: str, cooldown_seconds: int
+    ) -> int:
+        """Returns remaining seconds if still cooling down, otherwise records a new cooldown and returns 0."""
+        with self._lock:
+            try:
+                conn = self._get_connection()
+                now_ts = time.time()
+                cursor = conn.execute(
+                    """
+                    SELECT available_at FROM minigame_cooldowns
+                    WHERE user_id = ? AND group_id = ? AND game_type = ?
+                    """,
+                    (user_id, group_id, game_type),
+                )
+                row = cursor.fetchone()
+                if row is not None and float(row["available_at"]) > now_ts:
+                    return max(1, int(float(row["available_at"]) - now_ts))
+                conn.execute(
+                    """
+                    INSERT INTO minigame_cooldowns (user_id, group_id, game_type, available_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(user_id, group_id, game_type)
+                    DO UPDATE SET available_at = excluded.available_at
+                    """,
+                    (user_id, group_id, game_type, now_ts + max(0, cooldown_seconds)),
+                )
+                conn.commit()
+                return 0
+            except Exception as e:
+                logger.error(f"Failed to check minigame cooldown: {e}")
+                return 0
+
     # ──────────────────── Trade Market (新增) ────────────────────
 
     def create_trade_listing(self, seller_id: str, group_id: int, item_id: str,
@@ -988,6 +1071,132 @@ class Database:
                 logger.error(f"Failed to deactivate listing: {e}")
                 return False
 
+    def cancel_trade_listing(self, listing_id: int, seller_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.execute(
+                    "SELECT * FROM trade_listings WHERE id = ? AND is_active = 1",
+                    (listing_id,),
+                )
+                row = cursor.fetchone()
+                if not row or str(row["seller_user_id"]) != str(seller_id):
+                    return False
+
+                listing = dict(row)
+                inv_cursor = conn.execute(
+                    "SELECT items FROM inventories WHERE user_id = ? AND group_id = ?",
+                    (seller_id, int(listing["group_id"])),
+                )
+                inv_row = inv_cursor.fetchone()
+                inventory_items = json.loads(inv_row["items"]) if inv_row and inv_row["items"] else {}
+                inventory_items[listing["item_id"]] = (
+                    int(inventory_items.get(listing["item_id"], 0)) + int(listing["amount"])
+                )
+
+                if inv_row:
+                    conn.execute(
+                        "UPDATE inventories SET items = ? WHERE user_id = ? AND group_id = ?",
+                        (json.dumps(inventory_items), seller_id, int(listing["group_id"])),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO inventories (user_id, group_id, items) VALUES (?, ?, ?)",
+                        (seller_id, int(listing["group_id"]), json.dumps(inventory_items)),
+                    )
+
+                conn.execute(
+                    "UPDATE trade_listings SET is_active = 0 WHERE id = ? AND is_active = 1",
+                    (listing_id,),
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Failed to cancel trade listing: {e}")
+                return False
+
+    def purchase_trade_listing(
+        self,
+        listing_id: int,
+        buyer_id: str,
+        group_id: int,
+        tax_rate: float,
+    ) -> tuple[bool, Dict | str]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.execute(
+                    "SELECT * FROM trade_listings WHERE id = ? AND is_active = 1",
+                    (listing_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return False, "订单不存在或已过期"
+
+                listing = dict(row)
+                if str(listing["seller_user_id"]) == str(buyer_id):
+                    return False, "不能购买自己的挂单"
+                if int(listing["group_id"]) != int(group_id):
+                    return False, "该订单不属于本群"
+
+                buyer_row = conn.execute(
+                    "SELECT * FROM users WHERE user_id = ? AND group_id = ?",
+                    (buyer_id, group_id),
+                ).fetchone()
+                if not buyer_row:
+                    return False, "用户不存在"
+
+                total_cost = int(listing["price"])
+                tax = int(total_cost * tax_rate)
+                if int(buyer_row["coins"]) < total_cost:
+                    return False, f"金币不足，需要{total_cost}金币"
+
+                conn.execute(
+                    "UPDATE users SET coins = coins - ? WHERE user_id = ? AND group_id = ?",
+                    (total_cost, buyer_id, group_id),
+                )
+                conn.execute(
+                    "UPDATE users SET coins = coins + ? WHERE user_id = ? AND group_id = ?",
+                    (max(0, total_cost - tax), str(listing["seller_user_id"]), group_id),
+                )
+
+                inv_cursor = conn.execute(
+                    "SELECT items FROM inventories WHERE user_id = ? AND group_id = ?",
+                    (buyer_id, group_id),
+                )
+                inv_row = inv_cursor.fetchone()
+                inventory_items = json.loads(inv_row["items"]) if inv_row and inv_row["items"] else {}
+                inventory_items[listing["item_id"]] = (
+                    int(inventory_items.get(listing["item_id"], 0)) + int(listing["amount"])
+                )
+                if inv_row:
+                    conn.execute(
+                        "UPDATE inventories SET items = ? WHERE user_id = ? AND group_id = ?",
+                        (json.dumps(inventory_items), buyer_id, group_id),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO inventories (user_id, group_id, items) VALUES (?, ?, ?)",
+                        (buyer_id, group_id, json.dumps(inventory_items)),
+                    )
+
+                update_cursor = conn.execute(
+                    "UPDATE trade_listings SET is_active = 0 WHERE id = ? AND is_active = 1",
+                    (listing_id,),
+                )
+                if update_cursor.rowcount <= 0:
+                    conn.rollback()
+                    return False, "订单不存在或已过期"
+
+                conn.commit()
+                listing["tax"] = tax
+                return True, listing
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Failed to purchase trade listing: {e}")
+                return False, "购买失败，请稍后重试"
+
     # ──────────────────── Pet Show (新增完整实现) ────────────────────
 
     def create_pet_show(self, group_id: int, title: str, duration_hours: int) -> Optional[int]:
@@ -1022,7 +1231,7 @@ class Database:
         with self._lock:
             try:
                 conn = self._get_connection()
-                conn.execute("""INSERT OR IGNORE INTO pet_show_votes
+                conn.execute("""INSERT INTO pet_show_votes
                     (show_id, voter_user_id, pet_user_id, created_at)
                     VALUES (?, ?, ?, ?)""",
                     (show_id, voter_id, pet_user_id, datetime.now().isoformat()))
@@ -1127,6 +1336,20 @@ class Database:
             try:
                 conn = self._get_connection()
                 today = datetime.now().strftime("%Y-%m-%d")
+                cursor = conn.execute(
+                    "SELECT 1 FROM group_tasks WHERE group_id = ? AND created_date = ? LIMIT 1",
+                    (group_id, today),
+                )
+                if cursor.fetchone() is None:
+                    from ..utils.constants import GROUP_TASK_TEMPLATES
+
+                    for tmpl in GROUP_TASK_TEMPLATES:
+                        conn.execute("""INSERT INTO group_tasks
+                            (group_id, task_type, target_value, current_value, reward_coins,
+                             description, created_date, is_completed)
+                            VALUES (?, ?, ?, 0, ?, ?, ?, 0)""",
+                            (group_id, tmpl["type"], tmpl["target"], tmpl["reward_coins"],
+                             tmpl["description"], today))
                 conn.execute("""UPDATE group_tasks SET current_value = MIN(current_value + ?, target_value)
                     WHERE group_id = ? AND task_type = ? AND created_date = ? AND is_completed = 0""",
                     (increment, group_id, task_type, today))
@@ -1244,25 +1467,6 @@ class Database:
                 logger.error(f"Atomic update failed: {e}")
                 return False
 
-    # ──────────────────── Data Export (新增) ────────────────────
-
-    def export_group_data(self, group_id: int) -> Dict:
-        """导出群数据（用于备份）"""
-        with self._lock:
-            try:
-                conn = self._get_connection()
-                data = {"group_id": group_id, "exported_at": datetime.now().isoformat()}
-                cursor = conn.execute("SELECT * FROM users WHERE group_id = ?", (group_id,))
-                data["users"] = [dict(row) for row in cursor.fetchall()]
-                cursor = conn.execute("SELECT * FROM pets WHERE group_id = ?", (group_id,))
-                data["pets"] = [dict(row) for row in cursor.fetchall()]
-                cursor = conn.execute("SELECT * FROM inventories WHERE group_id = ?", (group_id,))
-                data["inventories"] = [dict(row) for row in cursor.fetchall()]
-                return data
-            except Exception as e:
-                logger.error(f"Failed to export data: {e}")
-                return {}
-
     def get_all_group_ids(self) -> List[int]:
         with self._lock:
             try:
@@ -1324,6 +1528,39 @@ class Database:
                 return True
             except Exception as e:
                 logger.error(f"Failed to add title with expiry: {e}")
+                return False
+
+    def grant_temporary_title(self, user_id: str, group_id: int, title: str, duration_days: int) -> bool:
+        """Add a temporary title to the user and persist the expiry in one transaction."""
+        with self._lock:
+            try:
+                conn = self._get_connection()
+                cursor = conn.execute(
+                    "SELECT titles FROM users WHERE user_id = ? AND group_id = ?",
+                    (user_id, group_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return False
+                titles = json.loads(row["titles"] or "[]")
+                if title not in titles:
+                    titles.append(title)
+                    conn.execute(
+                        "UPDATE users SET titles = ? WHERE user_id = ? AND group_id = ?",
+                        (json.dumps(titles), user_id, group_id),
+                    )
+                expires_at = (datetime.now() + timedelta(days=duration_days)).isoformat()
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO title_expiry (user_id, group_id, title, expires_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user_id, group_id, title, expires_at),
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to grant temporary title: {e}")
                 return False
 
     def cleanup_expired_titles(self) -> int:

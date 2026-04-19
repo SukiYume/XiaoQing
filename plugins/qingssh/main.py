@@ -272,11 +272,9 @@ async def cleanup_orphans(context: Context) -> None:
             count = 0
             for key in orphans:
                 try:
-                    # key 格式: user_id:group_id:server_name
-                    # 直接调用 close，不通过 disconnect (因为不需要发送停止信号给早已不存在的 session)
                     if key in manager.connections:
-                        manager.connections[key].close()
-                        del manager.connections[key]
+                        user_id, group_id, server_name = manager._parse_connection_key(key)
+                        manager.disconnect(user_id, group_id, server_name)
                         count += 1
                 except Exception as e:
                     logger.warning("Error closing orphan connection %s: %s", key, e)

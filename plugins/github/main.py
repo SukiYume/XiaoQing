@@ -107,6 +107,7 @@ async def _fetch_trending(time_range: str, context) -> list[dict[str, Any]]:
     request_kwargs: dict[str, Any] = {"headers": headers}
     if proxy:
         request_kwargs["proxy"] = proxy
+    request_kwargs["timeout"] = 15
 
     try:
         async with context.http_session.get(url, **request_kwargs) as response:

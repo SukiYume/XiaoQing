@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from core.plugin_base import write_json
 from core.plugin_base import build_action, segments, text
 from ..store_base import StoreBase
 
@@ -69,7 +70,7 @@ class ReviewStore(StoreBase):
         if not path:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json(path, st)
         self._cache_sessions = st
 
     def get_policy(self, chat_id: str) -> ReviewPolicy:
@@ -103,7 +104,7 @@ class ReviewStore(StoreBase):
             "strategy_note": pol.strategy_note,
             "avoid_patterns": list(pol.avoid_patterns),
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json(path, payload)
         self._cache_policies[chat_id] = pol
 
     def clear_policy(self, chat_id: str) -> None:

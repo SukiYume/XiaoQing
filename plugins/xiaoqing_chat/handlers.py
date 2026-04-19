@@ -83,6 +83,7 @@ class _GeneratedSmalltalkTurn:
     reply_for_send: str = ""
     reply_payload: Any = None
     emoji_plan: Any = None
+    emoji_plan_task: Any = None
 
 
 async def _clear_store_entry(store, chat_id: str) -> None:
@@ -353,6 +354,23 @@ def _display_reply_text(generated: _GeneratedSmalltalkTurn) -> str:
 def _cancel_pending_task(task: Any) -> None:
     if task is not None and not task.done():
         task.cancel()
+
+
+async def _resolve_emoji_plan(
+    generated: _GeneratedSmalltalkTurn,
+    *,
+    context,
+    runtime,
+) -> Any:
+    if generated.emoji_plan_task is None:
+        return generated.emoji_plan
+    try:
+        generated.emoji_plan = await generated.emoji_plan_task
+    except Exception:
+        generated.emoji_plan = None
+    finally:
+        generated.emoji_plan_task = None
+    return generated.emoji_plan
 
 
 async def _prepare_smalltalk_turn(
@@ -646,12 +664,13 @@ async def _generate_smalltalk_turn(
             )
             media_cfg = getattr(runtime.cfg, "media", None)
             if getattr(media_cfg, "enable_outbound_emoji_reply", False):
-                try:
+                async def _plan_emoji_task():
                     history_for_emoji = await state.memory_store.get_recent_async(
                         chat_id,
                         max_items=min(max(6, int(getattr(runtime.cfg, "max_context_size", 30))), 12),
                     )
-                    generated.emoji_plan = await plan_emoji_reply(
+                    # Emoji reply reuses stored marker/path metadata and does not trigger extra image analysis.
+                    return await plan_emoji_reply(
                         context=context,
                         runtime=runtime,
                         history=history_for_emoji,
@@ -659,21 +678,14 @@ async def _generate_smalltalk_turn(
                         reply_text=generated.reply,
                         secrets=secrets,
                     )
-                except Exception:
-                    generated.emoji_plan = None
+
+                generated.emoji_plan_task = asyncio.create_task(_plan_emoji_task())
             payload_text = generated.reply_for_send
             payload_display_text = generated.reply
-            if generated.emoji_plan is not None and getattr(generated.emoji_plan, "mode", "") == "emoji_only":
-                payload_text = ""
-                payload_display_text = generated.emoji_plan.marker
             generated.reply_payload = build_reply_payload(
                 payload_text,
-                emoji_file_path=(
-                    str(resolve_emoji_file_path(context, generated.emoji_plan.entry.file_path))
-                    if generated.emoji_plan
-                    else ""
-                ),
-                emoji_marker=generated.emoji_plan.marker if generated.emoji_plan else "",
+                emoji_file_path="",
+                emoji_marker="",
                 display_text=payload_display_text,
             )
 
@@ -712,6 +724,23 @@ async def _finalize_smalltalk_turn(
     should_schedule_pfc_state_flush = False
     should_return_empty = False
     commit_error: Exception | None = None
+
+    await _resolve_emoji_plan(generated, context=context, runtime=runtime)
+    if generated.reply:
+        payload_text = generated.reply_for_send
+        payload_display_text = generated.reply
+        if generated.emoji_plan is not None and getattr(generated.emoji_plan, "mode", "") == "emoji_only":
+            payload_text = ""
+            payload_display_text = generated.emoji_plan.marker
+        emoji_file_path = ""
+        if generated.emoji_plan is not None:
+            emoji_file_path = str(resolve_emoji_file_path(context, generated.emoji_plan.entry.file_path))
+        generated.reply_payload = build_reply_payload(
+            payload_text,
+            emoji_file_path=emoji_file_path,
+            emoji_marker=generated.emoji_plan.marker if generated.emoji_plan else "",
+            display_text=payload_display_text,
+        )
 
     try:
         async with _get_lock(chat_id):
@@ -973,6 +1002,9 @@ async def handle_internal(
         return segments("\n".join(lines))
 
     if command == "重置":
+        pop_persist_task = getattr(state, "pop_persist_task", None)
+        if callable(pop_persist_task):
+            _cancel_pending_task(pop_persist_task(chat_id))
         async with _get_lock(chat_id):
             await _reset_chat_session(state, chat_id)
         state.inc_stats(chat_id, "resets")

@@ -5,6 +5,8 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
+_ADS_LLM_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=45)
+
 async def generate_summary(
     session: aiohttp.ClientSession,
     api_base: str,
@@ -41,7 +43,7 @@ async def generate_summary(
         "max_tokens": 500
     }
 
-    async with session.post(url, headers=headers, json=payload) as resp:
+    async with session.post(url, headers=headers, json=payload, timeout=_ADS_LLM_TIMEOUT) as resp:
         if resp.status != 200:
             text = await resp.text()
             raise RuntimeError(f"LLM API error: {resp.status} - {text}")

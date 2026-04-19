@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any, Optional, TypeVar
 
+from core.plugin_base import write_json
+
 T = TypeVar("T")
 
 
@@ -110,7 +112,7 @@ class StoreBase:
         try:
             if ensure_parent:
                 path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            write_json(path, data)
             return True
         except OSError:
             return False

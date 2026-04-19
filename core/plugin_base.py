@@ -132,7 +132,7 @@ def atomic_write_text(path: Path, payload: str) -> None:
             pass  # cleanup 失败不掩盖原始异常
         raise
 
-def write_json(path: Path, data: dict[str, Any]) -> None:
+def write_json(path: Path, data: Any) -> None:
     """写入 JSON 文件"""
     payload = json.dumps(data, ensure_ascii=False, indent=2)
     atomic_write_text(path, payload)

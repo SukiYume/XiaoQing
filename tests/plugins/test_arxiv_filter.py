@@ -15,10 +15,12 @@ import os
 import sys
 import types
 import pytest
+import pandas as pd
 from pathlib import Path
 import importlib
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from datetime import date, datetime
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -411,6 +413,22 @@ class TestCheckArxivUpdate:
                 result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
                 # 应该调用 _run_filter
                 assert result is not None
+        assert arxiv_filter._should_send_today(str(mock_context.plugin_dir)) is False
+
+    @pytest.mark.asyncio
+    async def test_check_arxiv_update_failure_does_not_mark_sent(self, mock_context):
+        today = date.today().isoformat()
+
+        with patch.object(
+            arxiv_filter,
+            "_run_filter",
+            new=AsyncMock(return_value=arxiv_filter.segments("❌ 论文筛选服务暂时不可用，请稍后再试。")),
+        ):
+            with patch.object(arxiv_filter, "run_sync", return_value=today):
+                result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
+
+        assert "暂时不可用" in str(result)
+        assert arxiv_filter._should_send_today(str(mock_context.plugin_dir)) is True
 
     @pytest.mark.asyncio
     async def test_check_arxiv_update_not_updated_yet(self, mock_context):
@@ -550,6 +568,98 @@ class TestDateHandling:
         assert "last_sent_date" in status
         # 应该是 ISO 格式
         assert "-" in status["last_sent_date"]
+
+
+class TestInferenceBackendCaching:
+    def test_transformers_backend_caches_model_objects(self, monkeypatch, tmp_path):
+        pytest.importorskip("torch")
+        pytest.importorskip("transformers")
+        backend = importlib.import_module("plugins.arxiv_filter.inference.transformers_backend")
+        backend._MODEL_CACHE.clear()
+
+        class DummyModel:
+            def to(self, _device):
+                return self
+
+            def eval(self):
+                return self
+
+        model_loader = Mock(return_value=DummyModel())
+        tokenizer_loader = Mock(return_value=object())
+        monkeypatch.setattr(
+            backend,
+            "AutoModelForSequenceClassification",
+            SimpleNamespace(from_pretrained=model_loader),
+        )
+        monkeypatch.setattr(
+            backend,
+            "AutoTokenizer",
+            SimpleNamespace(from_pretrained=tokenizer_loader),
+        )
+
+        device = backend.torch.device("cpu")
+        first = backend.load_model_and_tokenizer(str(tmp_path), device)
+        second = backend.load_model_and_tokenizer(str(tmp_path), device)
+
+        assert first == second
+        assert model_loader.call_count == 1
+        assert tokenizer_loader.call_count == 1
+
+    def test_knn_backend_caches_runtime_model(self, monkeypatch, tmp_path):
+        pytest.importorskip("torch")
+        backend = importlib.import_module("plugins.arxiv_filter.inference.knn_backend")
+        shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
+        backend._MODEL_CACHE.clear()
+
+        class DummyModel:
+            def predict_proba(self, _data, input_mode="title_abstract"):
+                return backend.np.array([0.9], dtype=backend.np.float32)
+
+        constructor = Mock(return_value=DummyModel())
+        monkeypatch.setattr(backend, "KNNInferenceModel", constructor)
+
+        params = shared.InferenceParams(
+            model_path=str(tmp_path),
+            threshold=0.5,
+            batch_size=32,
+            max_len=64,
+            input_mode="title_only",
+            model_type="knn",
+        )
+        data = pd.DataFrame([{"Title": "Paper"}])
+
+        backend.run_knn_inference(params, data)
+        backend.run_knn_inference(params, data)
+
+        assert constructor.call_count == 1
+
+    def test_multi_interest_backend_caches_runtime_model(self, monkeypatch, tmp_path):
+        pytest.importorskip("torch")
+        backend = importlib.import_module("plugins.arxiv_filter.inference.multi_interest_backend")
+        shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
+        backend._MODEL_CACHE.clear()
+
+        class DummyModel:
+            def predict_proba(self, _data, input_mode="title_abstract"):
+                return backend.np.array([0.9], dtype=backend.np.float32)
+
+        constructor = Mock(return_value=DummyModel())
+        monkeypatch.setattr(backend, "MultiInterestInferenceModel", constructor)
+
+        params = shared.InferenceParams(
+            model_path=str(tmp_path),
+            threshold=0.5,
+            batch_size=32,
+            max_len=64,
+            input_mode="title_only",
+            model_type="multi_interest",
+        )
+        data = pd.DataFrame([{"Title": "Paper"}])
+
+        backend.run_multi_interest_inference(params, data)
+        backend.run_multi_interest_inference(params, data)
+
+        assert constructor.call_count == 1
 
 
 if __name__ == "__main__":

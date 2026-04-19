@@ -20,7 +20,7 @@ from .admin_commands import (
 
 from .new_commands import (
     handle_recall, handle_dress, handle_trade, handle_show,
-    handle_manage_delete, handle_manage_export, handle_manage_announce,
+    handle_manage_delete, handle_manage_announce,
 )
 
 __all__ = [
@@ -40,5 +40,5 @@ __all__ = [
     "handle_manage_enable", "handle_manage_disable", "handle_manage_config",
     "handle_manage_reset", "handle_manage_ban", "handle_manage_unban",
     "handle_manage_log", "handle_manage_stats",
-    "handle_manage_delete", "handle_manage_export", "handle_manage_announce",
+    "handle_manage_delete", "handle_manage_announce",
 ]

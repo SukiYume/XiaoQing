@@ -286,7 +286,7 @@ async def _handle_mc_message(args: str, event: dict[str, Any], context: PluginCo
         return segments("❌ 请提供要执行的命令")
     
     try:
-        response = await conn.rcon_client.send_command(command)
+        response = await conn.rcon_client.command(command)
         logger.info("MC command executed: %s", command)
         if response:
             return segments(f"📤 {response}")

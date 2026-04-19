@@ -115,11 +115,23 @@ class SearchHandler:
         if range_val:
             start_date, end_date = parse_search_date_range(range_val)
             if start_date:
+                filters["date_field"] = self._resolve_search_date_field(filters.get("type"))
                 filters["start_date"] = start_date
             if end_date:
                 filters["end_date"] = end_date
 
         return args.strip(), filters
+
+    @staticmethod
+    def _resolve_search_date_field(item_type: str | None) -> str:
+        mapping = {
+            "event": "start_time",
+            "task": "due_time",
+            "diary": "diary_date",
+            "ledger": "ledger_date",
+            "note": "created_at",
+        }
+        return mapping.get(item_type or "", "created_at")
 
     def _format_search_results(
         self, results: list[SearchItem], query: str, filters: dict[str, Any],

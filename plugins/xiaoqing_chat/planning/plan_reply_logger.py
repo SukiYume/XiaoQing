@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from core.plugin_base import atomic_write_text
+
 class PlanReplyLogger:
     def __init__(self) -> None:
         self._data_dir: Optional[Path] = None
@@ -25,7 +27,7 @@ class PlanReplyLogger:
         if keep_lines > 0 and len(lines) > keep_lines:
             lines = lines[-keep_lines:]
         try:
-            path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            atomic_write_text(path, "\n".join(lines) + ("\n" if lines else ""))
         except OSError:
             return
 

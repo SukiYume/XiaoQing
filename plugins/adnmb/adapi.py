@@ -12,6 +12,7 @@ A岛匿名版 API 封装模块
 import re
 import time
 import aiohttp
+import uuid as uuidlib
 from dataclasses import dataclass
 from typing import Optional, Any
 from pathlib import Path
@@ -26,8 +27,7 @@ logger = logging.getLogger(__name__)
 API_HOST = "https://www.nmbxd1.com"
 IMAGE_CDN = "https://image.nmb.best"
 APP_ID = "A-Island-IOS-App"
-# Default UUID, can be overridden via config
-DEFAULT_UUID = "CD768A98-4C28-4A31-A055-6E0E4AB04E2C"
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 # API 端点
 ENDPOINTS = {
@@ -108,7 +108,7 @@ class AdnmbClient:
     def __init__(self, session: aiohttp.ClientSession, cache_dir: Path, uuid: str = ""):
         self.session = session
         self.cache_dir = cache_dir
-        self.uuid = uuid or DEFAULT_UUID
+        self.uuid = uuid or str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, str(cache_dir.resolve())))
         self._forum_cache: Optional[dict[str, str]] = None
     
     def _build_params(self, **kwargs) -> dict[str, Any]:
@@ -123,7 +123,11 @@ class AdnmbClient:
     async def _get(self, endpoint: str, **params) -> Any:
         """发送 GET 请求"""
         url = f"{API_HOST}{ENDPOINTS.get(endpoint, endpoint)}"
-        async with self.session.get(url, params=self._build_params(**params)) as resp:
+        async with self.session.get(
+            url,
+            params=self._build_params(**params),
+            timeout=REQUEST_TIMEOUT,
+        ) as resp:
             return await resp.json()
     
     async def get_forum_list(self) -> dict[str, str]:

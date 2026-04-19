@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from core.plugin_base import write_json
+
 from .llm_client import chat_completions
 from ..memory.memory import StoredMessage
 from ..memory.memory_db import MemoryDB
@@ -57,7 +59,7 @@ def _save_cache(data_dir: Path, chat_id: str, topics: Sequence[TopicSummary]) ->
                 "updated_at": t.updated_at,
             }
         )
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(path, payload)
 
 from ..planning.pfc_utils import extract_first_json_dict
 

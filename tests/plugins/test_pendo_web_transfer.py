@@ -858,6 +858,51 @@ def test_import_execute_idempotency_blocks_duplicate_bundle(client: TestClient, 
     assert resp3.status_code == 200
 
 
+def test_execute_import_bundle_uses_db_level_bundle_guard(temp_db: Database):
+    operations = [
+        (
+            "insert",
+            {
+                "id": "bundle_guard_task",
+                "type": "task",
+                "title": "bundle guard",
+                "content": "first import",
+                "category": "工作",
+                "priority": 3,
+                "status": "todo",
+                "created_at": "2026-03-20T09:00:00+08:00",
+                "updated_at": "2026-03-20T09:00:00+08:00",
+            },
+        )
+    ]
+
+    temp_db.execute_import_bundle(
+        owner_id=OWNER_ID,
+        bundle_id="bundle-guard-1",
+        operations=operations,
+        filename="bundle.zip",
+        types=["task"],
+        record_count=1,
+        result_summary={"inserted": 1, "updated": 0, "skipped": 0, "failed": 0},
+        force=False,
+    )
+
+    with pytest.raises(Exception):
+        temp_db.execute_import_bundle(
+            owner_id=OWNER_ID,
+            bundle_id="bundle-guard-1",
+            operations=operations,
+            filename="bundle.zip",
+            types=["task"],
+            record_count=1,
+            result_summary={"inserted": 1, "updated": 0, "skipped": 0, "failed": 0},
+            force=False,
+        )
+
+    logs = [log for log in temp_db.get_transfer_logs(OWNER_ID) if log["action"] == "import"]
+    assert len(logs) == 1
+
+
 def test_import_execute_transaction_atomicity(client: TestClient, temp_db: Database, auth_headers: dict):
     """如果导入事务中有记录失败，整体应该回滚"""
     # 插入一条已存在的记录用于 overwrite

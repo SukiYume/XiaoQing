@@ -11,6 +11,8 @@ import asyncio
 from pathlib import Path
 from typing import Any, cast
 
+from plugins.ads_paper.ads_client import ADSClient
+from plugins.ads_paper.llm_client import generate_summary
 from plugins.ads_paper import note_commands
 
 # 添加项目根目录到路径
@@ -230,3 +232,87 @@ class TestAdsPaperAsyncStorage:
 
         assert "get_topics" in calls
         assert "未找到" in str(result)
+
+
+class TestPaperStorageBehavior:
+    def test_storage_roundtrip_for_notes_topics_and_deadlines(self, tmp_path):
+        from plugins.ads_paper.storage import PaperStorage
+
+        storage = PaperStorage(tmp_path)
+
+        assert storage.add_paper_note("paper-1", "first note", 10001) is True
+        assert storage.get_paper_notes("paper-1")[0]["content"] == "first note"
+
+        assert storage.add_topic("FRB") is True
+        assert storage.get_topics() == ["frb"]
+        assert storage.remove_topic("FRB") is True
+        assert storage.get_topics() == []
+
+        assert storage.add_deadline("submit", "2026-05-01", 10001) is True
+        deadlines = storage.get_deadlines()
+        assert len(deadlines) == 1
+        assert deadlines[0]["name"] == "submit"
+
+
+@pytest.mark.asyncio
+async def test_ads_client_search_passes_timeout():
+    captured = {}
+
+    class MockResponse:
+        status = 200
+
+        async def json(self):
+            return {"response": {"docs": []}}
+
+    class MockContextManager:
+        async def __aenter__(self):
+            return MockResponse()
+
+        async def __aexit__(self, *args):
+            return None
+
+    class MockSession:
+        def get(self, *args, **kwargs):
+            captured.update(kwargs)
+            return MockContextManager()
+
+    client = ADSClient("token", MockSession())
+    result = await client.search_papers("frb")
+
+    assert result == []
+    assert captured["timeout"].total == 30
+
+
+@pytest.mark.asyncio
+async def test_ads_llm_generate_summary_passes_timeout():
+    captured = {}
+
+    class MockResponse:
+        status = 200
+
+        async def json(self):
+            return {"choices": [{"message": {"content": "summary"}}]}
+
+    class MockContextManager:
+        async def __aenter__(self):
+            return MockResponse()
+
+        async def __aexit__(self, *args):
+            return None
+
+    class MockSession:
+        def post(self, *args, **kwargs):
+            captured.update(kwargs)
+            return MockContextManager()
+
+    result = await generate_summary(
+        session=MockSession(),
+        api_base="https://example.com/v1",
+        api_key="key",
+        model="model",
+        title="title",
+        abstract="abstract",
+    )
+
+    assert result == "summary"
+    assert captured["timeout"].total == 60

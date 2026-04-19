@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
+from core.plugin_base import write_json
 
 _RE_WS = re.compile(r"\s+")
 
@@ -167,7 +168,7 @@ def write_vector_store_files(
     docs_path = dir_path / f"{name}.docs.json"
     npz_path = dir_path / f"{name}.vecs.npz"
     docs_payload = [asdict(d) for d in docs]
-    docs_path.write_text(json.dumps(docs_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(docs_path, docs_payload)
     np.savez_compressed(npz_path, dim=np.int32(dim), matrix=matrix)
 
 

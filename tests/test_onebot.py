@@ -274,6 +274,7 @@ class TestOneBotHttpSender:
         mock_session.post.assert_called_once()
         call_args = mock_session.post.call_args
         assert "send_group_msg" in call_args[0][0]
+        assert call_args.kwargs["timeout"].total == 15.0
 
     @pytest.mark.asyncio
     async def test_send_action_with_empty_base(self, mock_session):
@@ -365,6 +366,22 @@ class TestOneBotWsClient:
         await client.stop()
 
         assert client._running is False
+
+    @pytest.mark.asyncio
+    async def test_connect_once_reraises_connection_error_for_backoff(self):
+        """测试 _connect_once 会重新抛出连接异常，让外层退避逻辑生效。"""
+        client = OneBotWsClient("ws://localhost:3000", "token")
+
+        class DummyWebsockets:
+            def connect(self, *args, **kwargs):
+                raise RuntimeError("boom")
+
+        with patch.dict("sys.modules", {"websockets": DummyWebsockets()}), patch(
+            "core.onebot._get_connect_signature",
+            return_value={"additional_headers"},
+        ):
+            with pytest.raises(RuntimeError, match="boom"):
+                await client._connect_once(AsyncMock())
 
     def test_get_queue_key(self):
         """测试获取队列键"""

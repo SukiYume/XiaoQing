@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
+from core.plugin_base import write_json
+
 from .memory_db import MemoryDB
 
 @dataclass
@@ -48,7 +50,7 @@ def save_profile(data_dir: Path, profile: PersonProfile) -> None:
         "facts": profile.facts,
         "updated_at": profile.updated_at,
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(path, payload)
 
 def update_profile_and_index(
     *,
