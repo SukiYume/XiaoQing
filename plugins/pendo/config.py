@@ -3,6 +3,7 @@ Pendo插件配置管理
 集中管理所有可配置项，避免硬编码
 """
 
+from copy import deepcopy
 from typing import Any
 
 
@@ -96,6 +97,11 @@ class PendoConfig:
     WEB_WIDGET_TOKEN_EXPIRE_HOURS = 24 * 180
     WEB_DEMO_ENABLED = False
     WEB_DEMO_EXPIRE_HOURS = 6
+    _RUNTIME_DEFAULTS = {
+        "WEB_HOST": WEB_HOST,
+        "WEB_PORT": WEB_PORT,
+        "WEB_DEMO_ENABLED": WEB_DEMO_ENABLED,
+    }
 
     @classmethod
     def validate(cls):
@@ -108,6 +114,37 @@ class PendoConfig:
             raise ValueError("EVENT_MAX_RRULE_COUNT must be positive")
         if cls.REMINDER_CHECK_WINDOW_SECONDS <= 0:
             raise ValueError("REMINDER_CHECK_WINDOW_SECONDS must be positive")
+
+    @classmethod
+    def reset_runtime_config(cls) -> None:
+        """重置运行期可覆盖配置，避免热更新和测试间串值。"""
+        cls._env_overrides = {}
+        for key, value in cls._RUNTIME_DEFAULTS.items():
+            setattr(cls, key, deepcopy(value))
+
+    @classmethod
+    def _parse_bool(cls, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @classmethod
+    def from_global_config(cls, config: dict[str, Any] | None) -> None:
+        """从全局 config.json 的 plugins.pendo 节点加载配置。"""
+        if not isinstance(config, dict):
+            return
+        plugins = config.get("plugins")
+        if not isinstance(plugins, dict):
+            return
+        pendo = plugins.get("pendo")
+        if not isinstance(pendo, dict):
+            return
+        if "web_demo_enabled" in pendo:
+            cls.WEB_DEMO_ENABLED = cls._parse_bool(pendo.get("web_demo_enabled"))
 
     @classmethod
     def from_env(cls):
@@ -133,6 +170,13 @@ class PendoConfig:
             cls._env_overrides["REMINDER_CHECK_WINDOW_SECONDS"] = int(
                 os.environ["PENDO_REMINDER_CHECK_WINDOW"]
             )
+
+    @classmethod
+    def configure(cls, config: dict[str, Any] | None = None) -> None:
+        """按默认值 -> 全局 config.json -> 环境变量 的顺序应用配置。"""
+        cls.reset_runtime_config()
+        cls.from_global_config(config)
+        cls.from_env()
 
     @classmethod
     def get(cls, key: str, default: Any = None) -> Any:

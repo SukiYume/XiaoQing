@@ -204,30 +204,31 @@ class TestChatPlugin:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_call_coze_api_stream_response(self, mock_context):
-        class MockStreamResponse:
+    async def test_call_coze_api_ignores_stream_config(self, mock_context):
+        captured_payload = {}
+
+        class MockSuccessResponse:
             status = 200
-            headers = {"Content-Type": "text/event-stream"}
+            async def json(self):
+                return {
+                    "messages": [
+                        {"type": "answer", "content": "测试回答"}
+                    ]
+                }
 
-            async def text(self):
-                return (
-                    'data: {"type":"answer","content":"第一段"}\n\n'
-                    'data: {"type":"answer","content":"第二段"}\n\n'
-                    "data: [DONE]\n\n"
-                )
-
-        class MockStreamContextManager:
+        class MockSuccessContextManager:
             async def __aenter__(self):
-                return MockStreamResponse()
+                return MockSuccessResponse()
 
             async def __aexit__(self, *args):
                 pass
 
-        class MockStreamSession:
+        class MockHttpSession:
             def post(self, *args, **kwargs):
-                return MockStreamContextManager()
+                captured_payload.update(kwargs.get("json", {}))
+                return MockSuccessContextManager()
 
-        mock_context.http_session = MockStreamSession()
+        mock_context.http_session = MockHttpSession()
 
         result = await chat.call_coze_api(
             "测试问题",
@@ -235,12 +236,8 @@ class TestChatPlugin:
             mock_context,
         )
 
-        assert result == {
-            "messages": [
-                {"type": "answer", "content": "第一段"},
-                {"type": "answer", "content": "第二段"},
-            ]
-        }
+        assert result == {"messages": [{"type": "answer", "content": "测试回答"}]}
+        assert captured_payload["stream"] is False
 
     @pytest.mark.asyncio
     async def test_call_coze_api_error_response(self, mock_context):

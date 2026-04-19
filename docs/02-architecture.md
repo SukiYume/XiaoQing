@@ -324,7 +324,7 @@ class PluginManager:
             # 检查 mtime，如有变化则重载
 ```
 
-> 说明：应用启动时会自动创建配置 watcher 和插件 watcher。插件异步 `init()` 在重载路径上也会被等待；如果初始化失败，半加载插件会被立即卸载，避免继续接流量。
+> 说明：应用启动时会自动创建配置 watcher；插件 watcher 仅在 `config.json` 里启用 `enable_plugin_watcher` 后才会启动。插件异步 `init()` 在重载路径上也会被等待；如果初始化失败，半加载插件会被立即卸载，避免继续接流量。
 
 **插件加载流程**：
 
