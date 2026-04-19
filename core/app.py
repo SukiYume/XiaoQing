@@ -163,6 +163,35 @@ class XiaoQingApp:
             self._reload_lock = asyncio.Lock()
         return self._reload_lock
 
+    def _plugin_watch_enabled(self, config: dict[str, Any] | None = None) -> bool:
+        source = config if config is not None else self.config
+        return bool(source.get("enable_plugin_watcher", False))
+
+    def _plugin_watch_poll_interval(self, config: dict[str, Any] | None = None) -> float:
+        source = config if config is not None else self.config
+        try:
+            return float(source.get("plugin_poll_interval", 3600))
+        except (TypeError, ValueError):
+            return 3600.0
+
+    def _watch_runtime_active(self) -> bool:
+        return self._config_watch_task is not None
+
+    def _configure_plugin_watch(self, config: dict[str, Any] | None = None) -> None:
+        self.plugin_manager._poll_interval = self._plugin_watch_poll_interval(config)
+        if not self._watch_runtime_active():
+            return
+
+        if self._plugin_watch_enabled(config):
+            if self._plugin_watch_task is None or self._plugin_watch_task.done():
+                self._plugin_watch_task = asyncio.create_task(self.plugin_manager.watch())
+            return
+
+        task = self._plugin_watch_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._plugin_watch_task = None
+
     # ============================================================
     # 属性代理（供 Dispatcher 使用）
     # ============================================================
@@ -222,7 +251,7 @@ class XiaoQingApp:
 
         self._session_cleanup_task = asyncio.create_task(self._cleanup_sessions_loop())
         self._config_watch_task = asyncio.create_task(self.config_manager.watch())
-        self._plugin_watch_task = asyncio.create_task(self.plugin_manager.watch())
+        self._configure_plugin_watch(self.config)
 
         # 可选：启动 WebSocket 客户端（连接到 OneBot 服务端）
         if self.config.get("enable_ws_client", True):
@@ -614,6 +643,7 @@ class XiaoQingApp:
 
         self._load_admins(secrets)
         self.dispatcher.refresh_prefix_cache()
+        self._configure_plugin_watch(config)
 
         http_base = str(config.get("onebot_http_base", "") or "").strip()
         if http_base:

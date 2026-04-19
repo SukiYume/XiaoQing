@@ -14,6 +14,7 @@
         "onebot_http_base": "http://127.0.0.1:11001",
         "ws_queue_size": 200,
         "max_concurrency": 5,
+        "enable_plugin_watcher": false,
         "inbound_ws_uri": "ws://127.0.0.1:12000/ws",
         "inbound_http_base": "http://127.0.0.1:12000",
         "inbound_ws_max_workers": 8,
@@ -27,6 +28,9 @@
         "log_rotation": "time",
         "plugins": {
                 "smalltalk_provider": "xiaoqing_chat",
+                "pendo": {
+                        "web_demo_enabled": false
+                },
                 "smalltalk": {
                         "voice_probability": 0
                 }

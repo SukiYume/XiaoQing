@@ -88,8 +88,9 @@ async def start(self) -> None:
     # 4. 加载所有插件
     self.plugin_manager.load_all()
     self._reschedule("startup")  # 注册定时任务
-    self.plugin_watch_task = asyncio.create_task(self.plugin_manager.watch())
     self.config_watch_task = asyncio.create_task(self.config_manager.watch())
+    if self.config.get("enable_plugin_watcher", False):
+        self.plugin_watch_task = asyncio.create_task(self.plugin_manager.watch())
     
     # 5. 启动 WS 客户端（可选）
     if self.config.get("enable_ws_client"):
@@ -705,6 +706,8 @@ async def watch(self):
                 # 文件变化，重载
                 await self.reload_plugin(definition.name)
 ```
+
+默认不会自动启动该 watcher；需要在 `config.json` 中将 `enable_plugin_watcher` 设为 `true`。
 
 ---
 

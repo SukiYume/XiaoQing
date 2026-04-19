@@ -11,6 +11,8 @@ import pytest
 from pathlib import Path
 from types import SimpleNamespace
 
+from core.config import ConfigSnapshot
+
 # 添加项目根目录到路径
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -347,6 +349,45 @@ def _build_task(task_id: str, category: str, created_at: str):
 
 
 class TestPendoReviewFixes:
+    def test_init_reads_demo_switch_from_global_config_and_updates_on_reload(self, monkeypatch):
+        from plugins.pendo import main as pendo_main
+        from plugins.pendo.config import PendoConfig
+
+        class _DummyDb:
+            def cleanup(self):
+                return None
+
+        class _DummyConfigManager:
+            def __init__(self):
+                self.callbacks = []
+
+            def on_reload(self, callback):
+                self.callbacks.append(callback)
+
+        config_manager = _DummyConfigManager()
+        context = SimpleNamespace(
+            config={"plugins": {"pendo": {"web_demo_enabled": True}}},
+            config_manager=config_manager,
+            state={},
+            logger=SimpleNamespace(info=lambda *args, **kwargs: None),
+        )
+
+        monkeypatch.setattr(PendoConfig, "WEB_ENABLED", False)
+        monkeypatch.setattr(pendo_main, "Database", lambda path: _DummyDb())
+        monkeypatch.setattr(pendo_main, "_startup_db", None, raising=False)
+
+        pendo_main.init(context)
+
+        assert PendoConfig.WEB_DEMO_ENABLED is True
+        assert len(config_manager.callbacks) == 1
+
+        config_manager.callbacks[0](ConfigSnapshot(
+            config={"plugins": {"pendo": {"web_demo_enabled": False}}},
+            secrets={},
+        ))
+
+        assert PendoConfig.WEB_DEMO_ENABLED is False
+
     def test_router_is_not_reused_across_group_contexts(self, monkeypatch):
         from plugins.pendo import main as pendo_main
 

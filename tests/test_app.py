@@ -35,6 +35,7 @@ def temp_app_root(temp_dir: Path) -> Path:
         "enable_ws_client": False,
         "enable_inbound_server": False,
         "max_concurrency": 5,
+        "enable_plugin_watcher": False,
         "session_timeout": 300,
         "timezone": "Asia/Shanghai",
         "default_group_ids": [],
@@ -295,6 +296,7 @@ async def test_app_start(temp_app_root: Path):
 
     # Verify session cleanup task is created
     assert app._session_cleanup_task is not None
+    assert app._plugin_watch_task is None
 
     # Cleanup
     await app.stop()
@@ -309,6 +311,7 @@ async def test_app_start_tracks_and_stops_background_tasks(temp_app_root: Path):
         config = json.load(f)
     config["enable_ws_client"] = True
     config["onebot_ws_uri"] = "ws://localhost:6700/ws"
+    config["enable_plugin_watcher"] = True
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f)
 
@@ -358,6 +361,43 @@ async def test_app_start_tracks_and_stops_background_tasks(temp_app_root: Path):
     assert task_cancelled["plugin"] is True
     assert task_cancelled["ws"] is True
     mock_ws_client.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
+    """Test _apply_config can enable/disable plugin watcher at runtime."""
+    from core.config import ConfigSnapshot
+
+    app = XiaoQingApp(temp_app_root)
+    task_cancelled = {"plugin": False}
+
+    async def plugin_watch():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            task_cancelled["plugin"] = True
+            raise
+
+    app.plugin_manager.watch = plugin_watch
+    app._config_watch_task = MagicMock()
+
+    app._apply_config(ConfigSnapshot(
+        config={**app.config, "enable_plugin_watcher": True},
+        secrets=app.secrets,
+    ))
+    await asyncio.sleep(0)
+
+    assert app._plugin_watch_task is not None
+
+    app._apply_config(ConfigSnapshot(
+        config={**app.config, "enable_plugin_watcher": False},
+        secrets=app.secrets,
+    ))
+    await asyncio.sleep(0)
+
+    assert task_cancelled["plugin"] is True
+    assert app._plugin_watch_task is None
 
 
 @pytest.mark.asyncio

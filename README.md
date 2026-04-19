@@ -462,6 +462,14 @@ pytest tests/plugins/test_xiaoqing_chat_media.py  # xiaoqing_chat 图片/表情�
 /reload 插件名
 ```
 
+默认不会自动监控插件文件。需要在 `config/config.json` 中显式开启：
+
+```json
+{
+  "enable_plugin_watcher": true
+}
+```
+
 如果插件内部维护了复杂状态，直接重启进程通常更稳。
 
 </details>

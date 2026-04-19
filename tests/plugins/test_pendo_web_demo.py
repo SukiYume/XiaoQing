@@ -37,6 +37,15 @@ except RuntimeError as exc:
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def reset_pendo_config_state(monkeypatch):
+    monkeypatch.delenv("PENDO_WEB_DEMO_ENABLED", raising=False)
+    PendoConfig.reset_runtime_config()
+    yield
+    monkeypatch.delenv("PENDO_WEB_DEMO_ENABLED", raising=False)
+    PendoConfig.reset_runtime_config()
+
+
 @pytest.fixture()
 def temp_db():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_demo_{uuid.uuid4().hex}"
@@ -68,9 +77,8 @@ def test_demo_auth_endpoint_is_disabled_by_default(client: TestClient):
 def test_demo_auth_endpoint_creates_seeded_demo_space(
     client: TestClient,
     temp_db: Database,
-    monkeypatch,
 ):
-    monkeypatch.setattr(PendoConfig, "WEB_DEMO_ENABLED", True)
+    PendoConfig.configure({"plugins": {"pendo": {"web_demo_enabled": True}}})
     res = client.post("/api/auth/demo")
 
     assert res.status_code == 200
@@ -100,6 +108,20 @@ def test_demo_auth_endpoint_creates_seeded_demo_space(
     assert settings["settings_json"]["demo_mode"] is True
     assert settings["settings_json"]["reminder_enabled"] is False
     assert settings["settings_json"]["daily_briefing_enabled"] is False
+
+
+def test_global_config_can_enable_demo_endpoint():
+    PendoConfig.configure({"plugins": {"pendo": {"web_demo_enabled": True}}})
+
+    assert PendoConfig.WEB_DEMO_ENABLED is True
+
+
+def test_environment_override_wins_over_global_demo_config(monkeypatch):
+    monkeypatch.setenv("PENDO_WEB_DEMO_ENABLED", "false")
+
+    PendoConfig.configure({"plugins": {"pendo": {"web_demo_enabled": True}}})
+
+    assert PendoConfig.WEB_DEMO_ENABLED is False
 
 
 def test_create_demo_session_seeds_items_without_fastapi(temp_db: Database):
