@@ -91,9 +91,9 @@ Wolfram|Alpha 是一个强大的计算知识引擎插件，可以进行各种计
 
 ### API 端点
 
-- **快速查询**: `/v1/result` - 返回简短答案
-- **步骤解答**: `/v2/query` - 返回详细步骤
-- **完整结果**: `/v2/query` - 返回结构化数据
+- **快速查询**: `https://api.wolframalpha.com/v1/result` - 返回简短答案
+- **步骤解答**: `https://api.wolframalpha.com/v2/query` - 返回详细步骤
+- **完整结果**: `https://api.wolframalpha.com/v2/query` - 返回结构化数据
 
 ### 错误处理
 

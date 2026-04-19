@@ -681,6 +681,9 @@ from core.plugin_base import text, image, image_url, record, record_url, segment
 text("Hello")
 # -> {"type": "text", "data": {"text": "Hello"}}
 
+# 手写本地文件消息段时，优先使用 Path.as_uri()
+from pathlib import Path
+
 # 图片（本地文件）
 image("/path/to/image.png")
 # -> {"type": "image", "data": {"file": "file:///path/to/image.png"}}
@@ -691,6 +694,9 @@ image_url("https://example.com/pic.jpg")
 
 # 语音（本地文件）
 record("/path/to/audio.mp3")
+
+# 如果你必须手写消息段，而不是调用 image()/record()：
+{"type": "record", "data": {"file": Path("/path/to/audio.mp3").resolve().as_uri()}}
 
 # 语音（URL）
 record_url("https://example.com/audio.mp3")

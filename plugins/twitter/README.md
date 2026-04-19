@@ -1,34 +1,23 @@
-# Twitter 插件
+# Twitter 图片插件
 
-Twitter 监控插件，提供 Twitter 账号的动态监控和推送功能。
+从指定 X/Twitter 账号抓取图片到本地，并随机发送库存中的一张图片。
 
-## 功能介绍
+## 命令
 
-Twitter 插件可以监控指定的 Twitter 账号，当账号发布新推文时自动推送通知。
-
-## 使用方法
-
-### 基本命令
-
-```
-/twitter add <用户名>    # 添加监控账号
-/twitter remove <用户名> # 移除监控账号
-/twitter list            # 列出监控账号
-/twitter check           # 手动检查更新
-/twitter help            # 显示帮助信息
+```text
+/twimg
+/twitter
+/推特
+/tw_fetch
+/抓取推特
 ```
 
-### 示例
+- `/twimg`：随机发送一张已抓取图片
+- `/tw_fetch`：立即抓取新图片，仅管理员可用
 
-```
-/twitter add elonmusk
-/twitter list
-/twitter check
-/twitter remove elonmusk
-/twitter help
-```
+插件还会在每天 `03:00` 自动抓取。
 
-## 配置说明
+## 配置
 
 在 `config/secrets.json` 中配置：
 
@@ -36,11 +25,11 @@ Twitter 插件可以监控指定的 Twitter 账号，当账号发布新推文时
 {
   "plugins": {
     "twitter": {
-      "api_key": "your_api_key",
-      "api_secret": "your_api_secret",
-      "access_token": "your_access_token",
-      "access_secret": "your_access_secret",
-      "check_interval": 300
+      "user_id": "Twitter用户ID",
+      "headers": {},
+      "cookies": {},
+      "proxy": "http://proxy.example.com:8080",
+      "max_pages": 50
     }
   }
 }
@@ -48,45 +37,20 @@ Twitter 插件可以监控指定的 Twitter 账号，当账号发布新推文时
 
 ### 配置项说明
 
-- `api_key` - Twitter API Key（必需）
-- `api_secret` - Twitter API Secret（必需）
-- `access_token` - Twitter Access Token（必需）
-- `access_secret` - Twitter Access Secret（必需）
-- `check_interval` - 检查间隔（秒，默认: 300）
+- `user_id`：要抓取的目标用户 ID
+- `headers`：请求头，通常用于补充认证信息
+- `cookies`：Cookie 配置
+- `proxy`：可选代理地址；只有显式配置时才启用
+- `max_pages`：单次抓取最多检查的页数
 
-## 功能特性
+## 数据与行为
 
-- 多账号监控
-- 自动推送新推文
-- 手动刷新检查
-- 监控列表管理
-- 推文内容展示（包括文字、图片、视频）
-- 避免重复推送
-
-## Twitter API 申请
-
-1. 访问 [Twitter Developer Portal](https://developer.twitter.com/)
-2. 创建应用获取 API 凭证
-3. 申请适当的访问级别
-4. 将凭证配置到 secrets.json
-
-## 数据存储
-
-监控数据存储在 `data/twitter.json`：
-
-```json
-{
-  "monitored_users": ["username1", "username2"],
-  "last_tweet_ids": {
-    "username1": "1234567890",
-    "username2": "0987654321"
-  }
-}
-```
+- 新图片会下载到本地，避免重复抓取。
+- 随机发送时优先选择未发送过的图片。
+- 当所有图片都发过一轮后，会自动重置发送状态。
+- 不再默认使用本地 `127.0.0.1:1080` 代理。
 
 ## 注意事项
 
-- 需要 Twitter API 访问权限（可能需要付费）
-- API 有速率限制，注意不要设置过短的检查间隔
-- 监控过多账号可能超出 API 配额
-- Twitter API 政策经常变化，注意及时更新
+- 该插件依赖目标站点当前可用的网页接口与认证头。
+- 若目标站点在当前网络环境不可达，再考虑显式配置 `proxy`。

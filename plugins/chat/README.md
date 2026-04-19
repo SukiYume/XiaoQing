@@ -32,7 +32,9 @@ Chat 插件集成了 Coze AI API，允许用户与 AI 进行自然语言对话�
   "plugins": {
     "chat": {
       "token": "your_coze_api_token",
-      "bot_id": "your_bot_id"
+      "bot_id": "your_bot_id",
+      "proxy": "http://proxy.example.com:8080",
+      "stream": true
     }
   }
 }
@@ -42,11 +44,13 @@ Chat 插件集成了 Coze AI API，允许用户与 AI 进行自然语言对话�
 
 - `token` - Coze API 访问令牌（必需）
 - `bot_id` - Coze Bot ID（必需）
+- `proxy` - 可选代理地址
+- `stream` - 是否启用 Coze 的流式响应模式；插件会兼容解析 SSE / `text/event-stream`
 
 ## 功能特性
 
 - 支持自然语言对话
-- 流式响应（实时返回）
+- 支持解析 Coze 的 `stream` / SSE 响应
 - 自动错误处理和重试
 - 查询长度限制保护
 - 超时控制
