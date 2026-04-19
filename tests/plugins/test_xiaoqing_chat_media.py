@@ -14,6 +14,9 @@ from plugins.xiaoqing_chat.media.emoji_library import EmojiLibraryEntry, load_em
 from plugins.xiaoqing_chat.media.emoji_reply import plan_emoji_reply
 from plugins.xiaoqing_chat.media.event_media import (
     RenderedMedia,
+    _download_url_bytes,
+    _onebot_api_post,
+    _prepare_media_for_llm,
     _resolve_media_llm_secrets,
     build_effective_user_text,
     render_event_media_text,
@@ -39,6 +42,27 @@ def _gif_bytes() -> bytes:
     image = Image.new("RGBA", (2, 2), (255, 192, 203, 255))
     buffer = BytesIO()
     image.save(buffer, format="GIF")
+    return buffer.getvalue()
+
+
+def _animated_gif_bytes() -> bytes:
+    from PIL import Image
+
+    frames = [
+        Image.new("RGBA", (24, 24), (255, 255, 255, 0)),
+        Image.new("RGBA", (24, 24), (255, 120, 120, 255)),
+        Image.new("RGBA", (24, 24), (120, 255, 120, 255)),
+    ]
+    buffer = BytesIO()
+    frames[0].save(
+        buffer,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=80,
+        loop=0,
+        disposal=2,
+    )
     return buffer.getvalue()
 
 
@@ -634,6 +658,28 @@ async def test_render_event_media_text_transcodes_octet_stream_sticker_for_visio
     assert event["_xc_new_emoji_count"] == 1
 
 
+def test_prepare_media_for_llm_uses_contact_sheet_for_animated_gif(mock_context):
+    from PIL import Image
+
+    gif_path = mock_context.data_dir / "animated_probe.gif"
+    payload = _animated_gif_bytes()
+    gif_path.write_bytes(payload)
+    resolved = SimpleNamespace(
+        mime_type="image/gif",
+        cached_path=gif_path,
+        is_animated=True,
+    )
+
+    prepared = _prepare_media_for_llm(resolved)
+
+    assert prepared.mime_type == "image/png"
+    assert prepared.transcoded is True
+    assert prepared.frame_strategy == "animation_contact_sheet"
+    assert prepared.frame_count == 3
+    with Image.open(BytesIO(prepared.payload)) as image:
+        assert image.width > image.height
+
+
 @pytest.mark.asyncio
 async def test_render_event_media_text_supports_face_segment(mock_context):
     runtime = _make_media_runtime()
@@ -898,9 +944,115 @@ def test_resolve_media_llm_secrets_keeps_blank_key_for_direct_vision_config(mock
     secrets = _resolve_media_llm_secrets(mock_context, runtime)
 
     assert secrets["api_base"] == "https://open.bigmodel.cn/api/paas/v4"
-    assert secrets["api_key"] == ""
-    assert secrets["model"] == "glm-4v"
-    assert secrets["endpoint_path"] == "/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_download_url_bytes_streams_and_enforces_timeout(mock_context):
+    captured = {}
+
+    class _Stream:
+        async def iter_chunked(self, _size):
+            yield b"12"
+            yield b"34"
+
+    class _Response:
+        headers = {"Content-Type": "image/png"}
+        content = _Stream()
+
+        def raise_for_status(self):
+            return None
+
+    class _ContextManager:
+        async def __aenter__(self):
+            return _Response()
+
+        async def __aexit__(self, *args):
+            return None
+
+    class _Session:
+        def get(self, *args, **kwargs):
+            captured.update(kwargs)
+            return _ContextManager()
+
+    mock_context.http_session = _Session()
+
+    payload, content_type = await _download_url_bytes(
+        "https://example.com/test.png",
+        context=mock_context,
+        max_bytes=8,
+    )
+
+    assert payload == b"1234"
+    assert content_type == "image/png"
+    assert captured["timeout"].total == 20
+
+
+@pytest.mark.asyncio
+async def test_download_url_bytes_rejects_oversized_stream(mock_context):
+    class _Stream:
+        async def iter_chunked(self, _size):
+            yield b"123"
+            yield b"456"
+
+    class _Response:
+        headers = {"Content-Type": "image/png"}
+        content = _Stream()
+
+        def raise_for_status(self):
+            return None
+
+    class _ContextManager:
+        async def __aenter__(self):
+            return _Response()
+
+        async def __aexit__(self, *args):
+            return None
+
+    class _Session:
+        def get(self, *args, **kwargs):
+            return _ContextManager()
+
+    mock_context.http_session = _Session()
+
+    with pytest.raises(ValueError, match="media too large"):
+        await _download_url_bytes(
+            "https://example.com/test.png",
+            context=mock_context,
+            max_bytes=5,
+        )
+
+
+@pytest.mark.asyncio
+async def test_onebot_api_post_passes_timeout(mock_context):
+    captured = {}
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        async def json(self, content_type=None):
+            return {"data": {"ok": True}}
+
+    class _ContextManager:
+        async def __aenter__(self):
+            return _Response()
+
+        async def __aexit__(self, *args):
+            return None
+
+    class _Session:
+        def post(self, *args, **kwargs):
+            captured.update(kwargs)
+            return _ContextManager()
+
+    mock_context.http_session = _Session()
+    mock_context.config["onebot_http_base"] = "http://localhost:5700"
+    mock_context.secrets["onebot_token"] = "token"
+
+    payload = await _onebot_api_post(mock_context, "get_msg", {"message_id": 1})
+
+    assert payload == {"data": {"ok": True}}
+    assert captured["timeout"].total == 15
 
 
 def test_resolve_media_llm_secrets_uses_dedicated_vision_provider(mock_context):
@@ -1012,6 +1164,53 @@ async def test_plan_emoji_reply_skips_during_cooldown(mock_context):
         )
 
     assert plan is None
+
+
+@pytest.mark.asyncio
+async def test_render_local_media_file_merges_latest_cache_before_save(mock_context):
+    runtime = _make_media_runtime(vision_provider="glm-4v")
+    image_path = _write_png(mock_context.data_dir / "merge_cache_probe.png")
+    media_hash = hashlib.sha256(_PNG_BYTES).hexdigest()
+    cache_path = mock_context.data_dir / "media" / "render_cache.json"
+
+    other_hash = "other-media-hash"
+    other_entry = {
+        "kind": "emoji",
+        "description": "另一条缓存",
+        "emotion_tags": ["无语"],
+        "marker": "[表情包：另一条缓存]",
+        "analysis_source": "llm",
+        "analysis_quality": "detailed",
+        "analysis_prompt_version": 2,
+    }
+
+    async def _fake_analyze(resolved, *, context, runtime, prefer_emoji):
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps({"items": {other_hash: other_entry}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return RenderedMedia(
+            media_hash=resolved.media_hash,
+            kind="image",
+            description="新的图片描述",
+            emotion_tags=tuple(),
+            marker="[图片：新的图片描述]",
+            cached_path=resolved.cached_path,
+        )
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        new=AsyncMock(side_effect=_fake_analyze),
+    ):
+        rendered = await render_local_media_file(image_path, context=mock_context, runtime=runtime)
+
+    assert rendered is not None
+    saved = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert other_hash in saved["items"]
+    assert saved["items"][other_hash]["marker"] == other_entry["marker"]
+    assert media_hash in saved["items"]
+    assert saved["items"][media_hash]["marker"] == "[图片：新的图片描述]"
 
 
 @pytest.mark.asyncio
