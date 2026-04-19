@@ -559,6 +559,10 @@ PENDO_WEB_PORT=8765
 | `command_timeout` | `int` | `60` | 命令执行超时（秒） |
 | `auto_disconnect` | `boolean` | `true` | 是否自动断开空闲连接 |
 
+补充说明：
+- QingSSH 现在严格校验 `~/.ssh/known_hosts` 中的 Host Key；未知主机或 Host Key 变更不会自动放行。
+- 从 `~/.ssh/config` 导入时，支持 `ProxyJump` 以及安全的 `ssh -W` 跳板形式；其他会在本地执行命令的 `ProxyCommand` 会被拒绝。
+
 #### ads_paper 配置
 
 ```json
@@ -774,7 +778,7 @@ class ConfigManager:
 
 ## 配置热重载
 
-配置文件支持热重载：
+配置文件支持热重载。默认启动后会自动监控 `config.json`、`secrets.json` 和插件文件变化；手动命令适合需要立刻触发重载的场景：
 
 ```
 /reload config
@@ -785,7 +789,9 @@ class ConfigManager:
 context.reload_config()
 ```
 
-**注意**：某些配置（如 `inbound_http_base` / `inbound_ws_uri`）需要重启才能生效。
+**注意**：
+- 某些配置（如 `inbound_http_base` / `inbound_ws_uri`）需要重启才能生效。
+- 自动 watcher 能发现文件变化，但如果你刚修改完配置、希望立即生效，仍然建议手动执行一次 `/reload`。
 
 ---
 
@@ -829,6 +835,17 @@ PENDO_WEB_PORT=8766 python main.py
 ```
 
 访问 `http://127.0.0.1:8765`（或你自定义的新端口），使用 `/pendo web token` 获取的 Token 登录。
+
+Pendo Web 的公开 demo 会话默认关闭。如需临时开启演示环境，可在启动主进程前设置：
+
+```text
+# PowerShell
+$env:PENDO_WEB_DEMO_ENABLED="1"
+python main.py
+
+# bash
+PENDO_WEB_DEMO_ENABLED=1 python main.py
+```
 
 ### nginx 子路径反向代理
 

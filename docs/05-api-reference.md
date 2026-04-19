@@ -34,6 +34,8 @@ image("/path/to/image.png")
 # 返回: {"type": "image", "data": {"file": "file:///path/to/image.png"}}
 ```
 
+如果你需要手写消息段，而不是调用 `image()`，推荐使用 `Path(file_path).resolve().as_uri()` 生成本地文件 URI。
+
 #### image_url(url)
 创建网络图片消息段。
 
@@ -49,6 +51,8 @@ image_url("https://example.com/pic.jpg")
 record("/path/to/audio.mp3")
 # 返回: {"type": "record", "data": {"file": "file:///path/to/audio.mp3"}}
 ```
+
+同样地，手写本地语音消息段时也优先使用 `Path(file_path).resolve().as_uri()`。
 
 #### record_url(url)
 创建网络语音消息段。

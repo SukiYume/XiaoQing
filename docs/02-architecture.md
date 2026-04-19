@@ -305,13 +305,17 @@ class PluginManager:
         self._register_commands(definition, module)
         
         # 4. 调用 init() 钩子（如果存在）
+        #    若返回协程，会被纳入 init task 跟踪并等待完成
         if hasattr(module, "init"):
-            module.init()
+            result = module.init()
+            if asyncio.iscoroutine(result):
+                ...
     
     async def reload_plugin(self, name: str):
         """热重载插件"""
         await self.unload_plugin(name)
         self.load_plugin(self.plugins_dir / name)
+        await self.wait_inits()
     
     async def watch(self):
         """监控插件文件变化，自动重载"""
@@ -319,6 +323,8 @@ class PluginManager:
             await asyncio.sleep(self._poll_interval)
             # 检查 mtime，如有变化则重载
 ```
+
+> 说明：应用启动时会自动创建配置 watcher 和插件 watcher。插件异步 `init()` 在重载路径上也会被等待；如果初始化失败，半加载插件会被立即卸载，避免继续接流量。
 
 **插件加载流程**：
 

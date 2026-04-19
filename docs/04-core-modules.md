@@ -88,11 +88,13 @@ async def start(self) -> None:
     # 4. 加载所有插件
     self.plugin_manager.load_all()
     self._reschedule("startup")  # 注册定时任务
+    self.plugin_watch_task = asyncio.create_task(self.plugin_manager.watch())
+    self.config_watch_task = asyncio.create_task(self.config_manager.watch())
     
     # 5. 启动 WS 客户端（可选）
     if self.config.get("enable_ws_client"):
         self.ws_client = OneBotWsClient(...)
-        asyncio.create_task(self.ws_client.connect_and_listen(...))
+        self.ws_task = asyncio.create_task(self.ws_client.connect_and_listen(...))
     
     # 5. 启动 Inbound 服务器（可选）
     if self.config.get("enable_inbound_server"):
@@ -105,9 +107,15 @@ async def stop(self) -> None:
     # 1. 停止 WS 客户端
     if self.ws_client:
         await self.ws_client.stop()
+    if self.ws_task:
+        self.ws_task.cancel()
     
     # 2. 停止定时任务
     self.scheduler.scheduler.shutdown(wait=True)
+    if self.plugin_watch_task:
+        self.plugin_watch_task.cancel()
+    if self.config_watch_task:
+        self.config_watch_task.cancel()
     
     # 3. 卸载所有插件（触发 shutdown 钩子）
     for name in self.plugin_manager.list_plugins():
@@ -644,7 +652,7 @@ class PluginManager:
         if hasattr(module, "init"):
             result = module.init()
             if asyncio.iscoroutine(result):
-                asyncio.create_task(result)
+                self._track_init_task(result, definition.name)
         
         # 5. 保存到字典
         self._plugins[definition.name] = LoadedPlugin(...)
@@ -671,6 +679,7 @@ class PluginManager:
         """热重载插件"""
         await self.unload_plugin(name)
         self.load_plugin(self.plugins_dir / name)
+        await self.wait_inits()
 ```
 
 ### 热重载监控
@@ -834,11 +843,13 @@ class SessionManager:
 ### 消息段构建
 
 ```python
+from pathlib import Path
+
 def text(content: str) -> Dict:
     return {"type": "text", "data": {"text": content}}
 
 def image(file_path: str) -> Dict:
-    return {"type": "image", "data": {"file": f"file:///{file_path}"}}
+    return {"type": "image", "data": {"file": Path(file_path).resolve().as_uri()}}
 
 def image_url(url: str) -> Dict:
     return {"type": "image", "data": {"file": url}}
@@ -853,6 +864,8 @@ def segments(payload) -> List[Dict]:
         return [text(payload)]
     return []
 ```
+
+> 说明：框架提供的 `image()` / `record()` 会负责把本地路径转成标准 `file://` URI；手写消息段时也应优先使用 `Path(...).resolve().as_uri()`，不要自己拼接 `file:///` 字符串。
 
 ### 异步工具
 
