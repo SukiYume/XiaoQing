@@ -19,6 +19,7 @@ from plugins.xiaoqing_chat.media.event_media import (
     render_event_media_text,
     render_local_media_file,
 )
+from plugins.xiaoqing_chat.llm.llm_client import LLMError
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 
 
@@ -362,6 +363,81 @@ async def test_render_local_media_file_retries_generic_llm_cache_on_next_send(mo
 
 
 @pytest.mark.asyncio
+async def test_render_event_media_text_falls_back_to_secondary_vision_provider_on_429(mock_context):
+    runtime = _make_media_runtime()
+    vision = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
+    vision["default"] = "glm-4.6v-flash"
+    vision["fallbacks"] = ["glm-4.1v-thinking-flash"]
+    vision["providers"] = {
+        "glm-4.6v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "vision-key",
+            "model": "glm-4.6v-flash",
+            "endpoint_path": "/chat/completions",
+        },
+        "glm-4.1v-thinking-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "vision-key",
+            "model": "glm-4.1v-thinking-flash",
+            "endpoint_path": "/chat/completions",
+        },
+    }
+    event = {
+        "message": [
+            {
+                "type": "image",
+                "data": {
+                    "url": "https://example.com/store_emoji.jpg",
+                    "emoji_package_id": 1001,
+                    "summary": "[动画表情]",
+                },
+            }
+        ]
+    }
+    used_models: list[str] = []
+
+    async def _fake_chat_completions(*, model, messages, **kwargs):
+        used_models.append(model)
+        if model == "glm-4.6v-flash":
+            raise LLMError('retryable_http_429:{"error":{"code":"1305","message":"busy"}}')
+        content = messages[1]["content"]
+        if isinstance(content, list):
+            return json.dumps(
+                {
+                    "kind": "emoji",
+                    "detailed_description": "一只猫皱着脸，配字是苦鲁西",
+                    "visible_text": "苦鲁西",
+                    "emotion_tags": ["委屈", "难受"],
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps({"description": "委屈猫猫苦鲁西", "emotion_tags": ["委屈", "难受"]}, ensure_ascii=False)
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media.chat_completions",
+        new=AsyncMock(side_effect=_fake_chat_completions),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert text == "[表情包：委屈，难受]"
+    assert used_models == [
+        "glm-4.6v-flash",
+        "glm-4.1v-thinking-flash",
+        "glm-4.6v-flash",
+        "glm-4.1v-thinking-flash",
+    ]
+    warning_lines = "\n".join(
+        str(call.args[1]) if len(call.args) > 1 else ""
+        for call in mock_context.logger.warning.call_args_list
+    )
+    assert '"step": "media.analyze.provider_fallback"' in warning_lines
+    assert '"to_provider": "glm-4.1v-thinking-flash"' in warning_lines
+
+
+@pytest.mark.asyncio
 async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(mock_context):
     runtime = _make_media_runtime(vision_provider="glm-4v")
     event = {
@@ -637,6 +713,35 @@ async def test_build_effective_user_text_keeps_media_position_after_prefix_strip
     )
 
     assert text == "你看\n[图片：一只猫歪着头]\n这个"
+
+
+@pytest.mark.asyncio
+async def test_build_effective_user_text_includes_emoji_detail_context(mock_context):
+    runtime = _make_media_runtime()
+    event = {
+        "message": [
+            {"type": "text", "data": {"text": "你这"}},
+            {"type": "image", "data": {"url": "https://example.com/bird.jpg", "summary": "[动画表情]"}},
+        ],
+        "_xc_rendered_media_items": [
+            RenderedMedia(
+                media_hash="hash-emoji",
+                kind="emoji",
+                description='卡通小鸟倒地，上方对话框写"不愧是你"，下方文字写"我佩服得鹉体投地"',
+                emotion_tags=("佩服", "调侃", "开心"),
+                marker="[表情包：佩服，调侃]",
+            )
+        ],
+    }
+
+    text = await build_effective_user_text(
+        "你这",
+        event,
+        context=mock_context,
+        runtime=runtime,
+    )
+
+    assert text == '你这\n[表情包：佩服，调侃；内容：卡通小鸟倒地，上方对话框写"不愧是你"，下方文字写"我佩服得鹉体投地"]'
 
 
 @pytest.mark.asyncio
