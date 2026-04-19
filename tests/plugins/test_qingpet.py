@@ -261,3 +261,98 @@ def test_admin_reset_clears_pet_cooldowns_and_social_cooldowns(temp_db):
     assert reset_pet.last_explore is None
     assert reset_user.last_visit_time is None
     assert reset_user.last_gift_time is None
+
+
+def test_resolve_pet_for_self_command_rejects_disabled_group_in_private(temp_db):
+    from plugins.qingpet.commands.basic_commands import resolve_pet_for_self_command
+
+    user_service = UserService(temp_db)
+    user_service.get_or_create_user("test_user", 123456)
+    pet_service = PetService(temp_db)
+    pet_service.adopt_pet("test_user", 123456, "小白")
+
+    admin_service = AdminService(temp_db)
+    assert admin_service.disable_plugin(123456) is True
+
+    pet, resolved_group_id, _, err = resolve_pet_for_self_command(
+        temp_db,
+        "test_user",
+        0,
+        "123456",
+        "状态",
+    )
+
+    assert pet is None
+    assert resolved_group_id == 123456
+    assert "尚未启用" in err
+
+
+@pytest.mark.asyncio
+async def test_trade_cancel_returns_item_to_listing_group_inventory(temp_db):
+    from plugins.qingpet.commands.new_commands import _trade_cancel, _trade_sell
+
+    inventory = temp_db.get_or_create_inventory("seller", 123456)
+    inventory.add_item("apple", 2)
+    temp_db.update_inventory(inventory)
+
+    ok, _ = _trade_sell("seller", 123456, "apple 2 20", temp_db)
+    assert ok is True
+
+    ok, _ = _trade_cancel("seller", 999999, "1", temp_db)
+    assert ok is True
+
+    listing_group_inventory = temp_db.get_or_create_inventory("seller", 123456)
+    other_group_inventory = temp_db.get_or_create_inventory("seller", 999999)
+    assert listing_group_inventory.get_item_count("apple") == 2
+    assert other_group_inventory.get_item_count("apple") == 0
+
+
+def test_purchase_trade_listing_updates_users_and_inventory(temp_db):
+    user_service = UserService(temp_db)
+    seller = user_service.get_or_create_user("seller", 123456)
+    buyer = user_service.get_or_create_user("buyer", 123456)
+    seller.coins = 100
+    buyer.coins = 200
+    temp_db.update_user(seller)
+    temp_db.update_user(buyer)
+
+    inventory = temp_db.get_or_create_inventory("seller", 123456)
+    inventory.add_item("apple", 3)
+    temp_db.update_inventory(inventory)
+    inventory.remove_item("apple", 3)
+    temp_db.update_inventory(inventory)
+    assert temp_db.create_trade_listing("seller", 123456, "apple", 3, 90) is True
+
+    success, result = temp_db.purchase_trade_listing(1, "buyer", 123456, 0.05)
+
+    assert success is True
+    assert result["tax"] == 4
+    assert temp_db.get_user("buyer", 123456).coins == 110
+    assert temp_db.get_user("seller", 123456).coins == 186
+    assert temp_db.get_or_create_inventory("buyer", 123456).get_item_count("apple") == 3
+    assert temp_db.get_listing_by_id(1) is None
+
+
+def test_pet_show_votes_allow_multiple_votes_per_user(temp_db):
+    show_id = temp_db.create_pet_show(123456, "春季展示会", 24)
+    assert show_id is not None
+
+    assert temp_db.vote_pet_show(show_id, "voter", "pet_a") is True
+    assert temp_db.vote_pet_show(show_id, "voter", "pet_b") is True
+
+    assert temp_db.get_user_vote_count(show_id, "voter") == 2
+    votes = temp_db.get_pet_show_votes(show_id)
+    assert votes["pet_a"] == 1
+    assert votes["pet_b"] == 1
+
+
+def test_admin_ban_user_logs_operator_id(temp_db):
+    user_service = UserService(temp_db)
+    user_service.get_or_create_user("target", 123456)
+
+    admin_service = AdminService(temp_db)
+    assert admin_service.ban_user("target", 123456, 3, operator_user_id="operator") is True
+
+    logs = admin_service.get_logs(123456, limit=5)
+    assert logs
+    assert logs[0].user_id == "operator"

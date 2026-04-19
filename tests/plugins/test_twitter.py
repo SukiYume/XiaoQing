@@ -383,6 +383,8 @@ class TestTimelineFetching:
     @pytest.mark.asyncio
     async def test_fetch_timeline_success(self, mock_context):
         """测试成功获取时间线"""
+        captured = {}
+
         class MockResponse:
             status = 200
             async def json(self):
@@ -396,6 +398,7 @@ class TestTimelineFetching:
 
         class MockSession:
             def get(self, *args, **kwargs):
+                captured.update(kwargs)
                 return MockGetContextManager()
 
         mock_context.http_session = MockSession()
@@ -405,6 +408,8 @@ class TestTimelineFetching:
         assert tweets[0]["entryId"] == "tweet-1234567890"
         assert cursor == "next_cursor_token"
         assert has_next is True
+        assert captured["timeout"] == twitter.REQUEST_TIMEOUT_SECONDS
+        assert "ssl" not in captured
 
     @pytest.mark.asyncio
     async def test_fetch_timeline_with_cursor(self, mock_context):
@@ -581,6 +586,19 @@ class TestImageDownload:
             "https://pbs.twimg.com/media/ABC123.jpg",
             save_dir,
             mock_context
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_download_image_rejects_non_twitter_media_host(self, mock_context, temp_data_dir):
+        save_dir = temp_data_dir / "images"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        result = await twitter._download_image(
+            "https://example.com/media/ABC123.jpg",
+            save_dir,
+            mock_context,
         )
 
         assert result is False

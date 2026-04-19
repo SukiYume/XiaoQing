@@ -43,7 +43,7 @@ class PluginDefinition:
 class LoadedPlugin:
     definition: PluginDefinition
     module: ModuleType
-    mtime: float
+    mtime: int | float
 
 class PluginManager:
     def __init__(
@@ -61,6 +61,7 @@ class PluginManager:
         self._change_handlers: list[Any] = []
         self._init_tasks: list[asyncio.Task[None]] = []
         self._init_task_plugins: dict[asyncio.Task[None], str] = {}
+        self._pending_plugins: dict[asyncio.Task[None], tuple[PluginDefinition, ModuleType, float]] = {}
         self._plugin_states: dict[str, dict[str, Any]] = {}
 
         # 一次性设置 sys.path（使用绝对路径防止路径遍历攻击）
@@ -99,9 +100,11 @@ class PluginManager:
         return self._plugins.get(name)
 
     def _is_plugin_dir(self, path: Path) -> bool:
-        """检查是否为有效的插件目录（排除 __pycache__ 等特殊目录）"""
+        """检查是否为有效的插件目录（排除特殊目录与 deprecated 目录）"""
         name = path.name
         if name.startswith("__") or name.startswith("."):
+            return False
+        if name.endswith("_deprecated"):
             return False
         return path.is_dir()
 
@@ -119,6 +122,7 @@ class PluginManager:
         failed_plugins: set[str] = set()
         for task, result in zip(tasks, results):
             plugin_name = self._init_task_plugins.pop(task, None)
+            pending = self._pending_plugins.pop(task, None)
             if isinstance(result, BaseException):
                 if isinstance(result, (KeyboardInterrupt, SystemExit)):
                     logger.warning("Plugin init interrupted")
@@ -132,6 +136,11 @@ class PluginManager:
                     logger.warning("Plugin init error: %s", result)
                 else:
                     logger.warning("Plugin init error: %s", result)
+                if plugin_name:
+                    self._purge_plugin_modules(plugin_name)
+            elif pending:
+                definition, module, mtime = pending
+                self._register_loaded_plugin(definition, module, mtime)
         for plugin_name in failed_plugins:
             if plugin_name in self._plugins:
                 logger.warning("Plugin %s init failed; unloading partially initialized plugin", plugin_name)
@@ -155,17 +164,17 @@ class PluginManager:
             logger.info("Plugin %s is disabled, skipping", definition.name)
             return
         try:
-            module = self._load_module(plugin_dir, definition)
+            module, init_task = self._load_module(plugin_dir, definition)
         except PluginLoadError as exc:
             logger.error("%s", exc, exc_info=True)
             return
         if not module:
             return
-        self._register_commands(definition, module)
         mtime = self._get_mtime(plugin_dir, definition)
-        self._plugins[definition.name] = LoadedPlugin(definition=definition, module=module, mtime=mtime)
-        logger.info("Loaded plugin %s", definition.name)
-        self._notify_change(definition.name)
+        if init_task:
+            self._pending_plugins[init_task] = (definition, module, mtime)
+        else:
+            self._register_loaded_plugin(definition, module, mtime)
 
     async def unload_plugin(self, name: str) -> None:
         tasks_to_cancel = [task for task, plugin_name in list(self._init_task_plugins.items()) if plugin_name == name]
@@ -201,16 +210,7 @@ class PluginManager:
         self._plugin_states.pop(name, None)
         
         # 清理 sys.modules 中的相关模块，确保 reload 能加载新代码
-        import sys
-        to_delete = []
-        # 假设插件目录名就是插件名
-        prefix = f"{name}."
-        for mod_name in sys.modules:
-            if mod_name == name or mod_name.startswith(prefix):
-                to_delete.append(mod_name)
-               
-        for mod_name in to_delete:
-            del sys.modules[mod_name]
+        self._purge_plugin_modules(name)
         
         logger.info("Unloaded plugin %s", name)
         self._notify_change(name)
@@ -230,6 +230,11 @@ class PluginManager:
             plugin_dirs = await asyncio.to_thread(
                 lambda: [p for p in self.plugins_dir.iterdir() if self._is_plugin_dir(p)]
             )
+            current_names = {plugin_dir.name for plugin_dir in plugin_dirs}
+            for existing_name in list(self._plugins):
+                if existing_name not in current_names:
+                    logger.info("Detected deleted plugin %s", existing_name)
+                    await self.unload_plugin(existing_name)
             for plugin_dir in plugin_dirs:
                 if not self._is_plugin_dir(plugin_dir):
                     continue
@@ -277,11 +282,11 @@ class PluginManager:
             enabled=manifest.enabled,
         )
 
-    def _load_module(self, plugin_dir: Path, definition: PluginDefinition) -> Optional[ModuleType]:
+    def _load_module(self, plugin_dir: Path, definition: PluginDefinition) -> tuple[Optional[ModuleType], asyncio.Task[None] | None]:
         entry_path = plugin_dir / definition.entry
         if not entry_path.exists():
             logger.error("Plugin %s entry missing: %s", definition.name, entry_path)
-            return None
+            return None, None
 
         # 导入插件包（使用目录名作为模块名）
         import sys
@@ -309,7 +314,8 @@ class PluginManager:
                     init_task = asyncio.create_task(asyncio.wait_for(result, PLUGIN_INIT_TIMEOUT_SECONDS))
                     self._init_tasks.append(init_task)
                     self._init_task_plugins[init_task] = definition.name
-            return module
+                    return module, init_task
+            return module, None
         except asyncio.TimeoutError:
             raise PluginLoadError(
                 definition.name,
@@ -335,21 +341,49 @@ class PluginManager:
             )
             self.router.register(spec)
 
-    def _get_mtime(self, plugin_dir: Path, definition: PluginDefinition) -> float:
-        """获取插件文件的修改时间（同步版本，用于启动时加载）"""
-        entry_path = plugin_dir / definition.entry
-        definition_path = plugin_dir / "plugin.json"
-        return max(entry_path.stat().st_mtime, definition_path.stat().st_mtime)
+    def _get_mtime(self, plugin_dir: Path, definition: PluginDefinition) -> int:
+        """获取插件文件的聚合修改时间。
 
-    async def _get_mtime_async(self, plugin_dir: Path, definition: PluginDefinition) -> float:
+        使用所有被监控文件 `st_mtime_ns` 的总和，而不是单个最大值。
+        这样即使变更发生在子模块且没有成为“最大 mtime”文件，也能被 watcher 感知。
+        """
+        return sum(path.stat().st_mtime_ns for path in self._iter_watch_files(plugin_dir, definition))
+
+    async def _get_mtime_async(self, plugin_dir: Path, definition: PluginDefinition) -> int:
         """获取插件文件的修改时间（异步版本，用于监控时避免阻塞事件循环）"""
-        entry_path = plugin_dir / definition.entry
-        definition_path = plugin_dir / "plugin.json"
-        # 使用 asyncio.to_thread 在线程池中执行文件 I/O
-        entry_mtime, def_mtime = await asyncio.to_thread(
-            lambda: (entry_path.stat().st_mtime, definition_path.stat().st_mtime)
-        )
-        return max(entry_mtime, def_mtime)
+        return await asyncio.to_thread(self._get_mtime, plugin_dir, definition)
+
+    def _iter_watch_files(self, plugin_dir: Path, definition: PluginDefinition) -> list[Path]:
+        files: list[Path] = []
+        for path in plugin_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            if "__pycache__" in path.parts:
+                continue
+            if path.suffix.lower() not in {".py", ".json"}:
+                continue
+            files.append(path)
+        if not files:
+            files.extend([plugin_dir / definition.entry, plugin_dir / "plugin.json"])
+        return files
+
+    def _register_loaded_plugin(self, definition: PluginDefinition, module: ModuleType, mtime: float) -> None:
+        self._register_commands(definition, module)
+        self._plugins[definition.name] = LoadedPlugin(definition=definition, module=module, mtime=mtime)
+        logger.info("Loaded plugin %s", definition.name)
+        self._notify_change(definition.name)
+
+    def _purge_plugin_modules(self, name: str) -> None:
+        import sys
+
+        to_delete = []
+        prefix = f"{name}."
+        for mod_name in sys.modules:
+            if mod_name == name or mod_name.startswith(prefix):
+                to_delete.append(mod_name)
+
+        for mod_name in to_delete:
+            del sys.modules[mod_name]
 
     def build_context(
         self,

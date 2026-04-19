@@ -4295,3 +4295,372 @@ def test_load_latest_topic_and_summary_skips_invalid_tail_entries(tmp_path):
 
     assert topic == "火锅选择"
     assert summary == "先看预算和口味"
+
+
+def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
+    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
+
+    first_dir = tmp_path / "a"
+    second_dir = tmp_path / "b"
+    first_dir.mkdir()
+    second_dir.mkdir()
+
+    db = MemoryDB()
+    db.bind(first_dir)
+    db.upsert_text(doc_id="doc1", text="旧目录里的记忆", meta={"type": "knowledge"})
+    assert db.query("旧目录", top_k=5)
+
+    db.bind(second_dir)
+
+    assert db.query("旧目录", top_k=5) == []
+
+
+@pytest.mark.asyncio
+async def test_generate_reply_forced_rejection_uses_safe_fallback(mock_context):
+    from contextlib import ExitStack
+
+    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
+    from plugins.xiaoqing_chat.planning.planner import PlannedAction
+    from plugins.xiaoqing_chat.reply_generator import _generate_reply
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            personality=SimpleNamespace(
+                multiple_reply_style=[],
+                multiple_probability=0.0,
+                identity="",
+                reply_style="",
+            ),
+            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
+            brain_chat=SimpleNamespace(
+                brain_identity="",
+                brain_reply_style="",
+                brain_max_context_size=None,
+                brain_temperature=None,
+            ),
+            goal=SimpleNamespace(enable_goal=False),
+            reflection=SimpleNamespace(enable_review_sessions=False),
+            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
+            max_context_size=20,
+            temperature=0.7,
+            top_p=0.9,
+            max_tokens=128,
+            timeout_seconds=3.0,
+            reply_check=SimpleNamespace(
+                enable_reply_checker=True,
+                enable_llm_checker=False,
+                max_repeat_compare=5,
+                similarity_threshold=0.9,
+                max_assistant_in_row=3,
+                max_regen=0,
+            ),
+            postprocess=SimpleNamespace(),
+            rewrite=SimpleNamespace(),
+        )
+    )
+    state = MagicMock()
+    state.memory_store.get_recent_async = AsyncMock(return_value=[])
+    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
+    state.review_store.bind = Mock()
+    state.inc_stats = Mock()
+
+    fg = SimpleNamespace(
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+        timeout_seconds=3.0,
+        max_retry=0,
+        retry_interval_seconds=0.2,
+        to_dict=lambda: {
+            "timeout_seconds": 3.0,
+            "max_retry": 0,
+            "retry_interval_seconds": 0.2,
+            "proxy": "",
+            "endpoint_path": "/v1/chat/completions",
+        },
+    )
+    action = PlannedAction(
+        action="reply",
+        target_message_id="u1",
+        think_level=1,
+        quote=False,
+        reasoning="用户要求直接回复",
+        question="",
+        unknown_words=[],
+    )
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator._get_llm_secrets",
+                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            )
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value="")
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator._build_memory_block",
+                new=AsyncMock(return_value=""),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator._build_tool_info_block",
+                new=AsyncMock(return_value=""),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
+                return_value=[
+                    SimpleNamespace(role="system", content="system"),
+                    SimpleNamespace(role="user", content="user"),
+                ],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
+                new=AsyncMock(return_value=("不合适的回复", "primary")),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.process_llm_response",
+                return_value=["不合适的回复"],
+            )
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator.join_reply", return_value="不合适的回复")
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator._heuristic_check",
+                return_value=ReplyCheckResult(
+                    suitable=False,
+                    reason="重复且不自然",
+                    need_replan=False,
+                ),
+            )
+        )
+
+        reply = await _generate_reply(
+            text="你好",
+            event={"group_id": 1, "user_id": 2},
+            context=mock_context,
+            runtime=runtime,
+            state=state,
+            forced=True,
+            action=action,
+            plan_reasoning="用户要求直接回复",
+        )
+
+    assert reply == "嗯，我先换个说法。"
+
+
+@pytest.mark.asyncio
+async def test_generate_reply_checker_timeout_fails_closed_for_non_forced(mock_context):
+    from contextlib import ExitStack
+
+    from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
+    from plugins.xiaoqing_chat.planning.planner import PlannedAction
+    from plugins.xiaoqing_chat.reply_generator import _generate_reply
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            personality=SimpleNamespace(
+                multiple_reply_style=[],
+                multiple_probability=0.0,
+                identity="",
+                reply_style="",
+            ),
+            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
+            brain_chat=SimpleNamespace(
+                brain_identity="",
+                brain_reply_style="",
+                brain_max_context_size=None,
+                brain_temperature=None,
+            ),
+            goal=SimpleNamespace(enable_goal=False),
+            reflection=SimpleNamespace(enable_review_sessions=False),
+            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
+            max_context_size=20,
+            temperature=0.7,
+            top_p=0.9,
+            max_tokens=128,
+            timeout_seconds=3.0,
+            reply_check=SimpleNamespace(
+                enable_reply_checker=True,
+                enable_llm_checker=False,
+                max_repeat_compare=5,
+                similarity_threshold=0.9,
+                max_assistant_in_row=3,
+                max_regen=0,
+            ),
+            postprocess=SimpleNamespace(),
+            rewrite=SimpleNamespace(),
+        )
+    )
+    state = MagicMock()
+    state.memory_store.get_recent_async = AsyncMock(return_value=[])
+    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
+    state.review_store.bind = Mock()
+    state.inc_stats = Mock()
+
+    fg = SimpleNamespace(
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+        timeout_seconds=3.0,
+        max_retry=0,
+        retry_interval_seconds=0.2,
+        to_dict=lambda: {
+            "timeout_seconds": 3.0,
+            "max_retry": 0,
+            "retry_interval_seconds": 0.2,
+            "proxy": "",
+            "endpoint_path": "/v1/chat/completions",
+        },
+    )
+    action = PlannedAction(
+        action="reply",
+        target_message_id="u1",
+        think_level=1,
+        quote=False,
+        reasoning="正常回复",
+        question="",
+        unknown_words=[],
+    )
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator._get_llm_secrets",
+                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            )
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_memory_block", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator._build_tool_info_block", return_value="")
+        )
+        stack.enter_context(
+            patch("plugins.xiaoqing_chat.reply_generator.build_policy_block", return_value="")
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
+                return_value=[ChatMessage(role="user", content="hi")],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
+                new=AsyncMock(return_value=({"content": "这条回复需要检查"}, "")),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.process_llm_response",
+                return_value=("这条回复需要检查", "", []),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "plugins.xiaoqing_chat.reply_generator.check_reply",
+                new=AsyncMock(side_effect=asyncio.TimeoutError()),
+            )
+        )
+
+        reply = await _generate_reply(
+            text="你好",
+            event={"message_id": 1, "user_id": 1},
+            context=mock_context,
+            runtime=runtime,
+            state=state,
+            forced=False,
+            action=action,
+            plan_reasoning="",
+            bot_name="小青",
+            secrets=None,
+        )
+
+    assert reply is None
+
+
+@pytest.mark.asyncio
+async def test_handle_internal_reset_cancels_pending_persist_task(
+    mock_context, sample_group_event, tmp_path
+):
+    from contextlib import suppress
+
+    from plugins.xiaoqing_chat.handlers import handle_internal
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+    from plugins.xiaoqing_chat.store_binding import _bind_all_stores
+
+    chat_id = "g67890"
+    runtime = MagicMock()
+    state = ChatRuntimeState()
+    _bind_all_stores(state, tmp_path)
+
+    async def _pending_persist():
+        await asyncio.sleep(30)
+
+    persist_task = asyncio.create_task(_pending_persist())
+    state.set_persist_task(chat_id, persist_task)
+
+    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context, data_dir=tmp_path)
+    with patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx):
+        result = await handle_internal("重置", "", sample_group_event, mock_context)
+
+    assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
+    assert state.get_persist_task(chat_id) is None
+    assert persist_task.cancelled()
+    with suppress(asyncio.CancelledError):
+        await persist_task

@@ -12,7 +12,7 @@ QQ群宠物养成系统主入口
 - CR Fix #3: handle 返回值统一为 str
 - CR Fix #8: 年龄递增（定时任务中每日+1）
 - CR Fix #12: 命令记录移到限流检查之后
-- CR New: 装扮/交易/展示会/数据导出 命令路由
+- CR New: 装扮/交易/展示会 命令路由
 - Refactor: 引入 CommandRouter 优化命令解析与帮助系统
 """
 
@@ -45,7 +45,7 @@ from .commands import (
     handle_manage_enable, handle_manage_disable, handle_manage_config,
     handle_manage_reset, handle_manage_ban, handle_manage_unban,
     handle_manage_log, handle_manage_stats,
-    handle_manage_delete, handle_manage_export, handle_manage_announce,
+    handle_manage_delete, handle_manage_announce,
 )
 
 from .utils.formatters import format_help_text
@@ -208,7 +208,10 @@ def _check_anti_spam(user_id: str, group_id: int) -> Optional[str]:
         user_id, group_id, int(ANTI_SPAM_CONFIG["window_seconds"])
     )
 
-    if recent_count >= ANTI_SPAM_CONFIG["max_commands"]:
+    max_commands = int(ANTI_SPAM_CONFIG["max_commands"])
+    hard_limit = max(max_commands + 1, int(ANTI_SPAM_CONFIG.get("hard_block_commands", max_commands * 2)))
+
+    if recent_count >= hard_limit:
         return "⚠️ 操作过于频繁，请稍后再试"
 
     return None
@@ -514,7 +517,7 @@ async def _handle_admin_command(args: str, user_id: str, group_id: int, context)
 
     if not parsed:
         return (True, "用法: /宠物 管理 <子命令>\n"
-                "可用子命令: 开启, 关闭, 配置, 重置, 删除, 封禁, 解封, 日志, 统计, 导出, 公告")
+                "可用子命令: 开启, 关闭, 配置, 重置, 删除, 封禁, 解封, 日志, 统计, 公告")
 
     action = parsed.first.lower()
     rest_args = parsed.rest(1)
@@ -573,13 +576,10 @@ async def _handle_admin_command(args: str, user_id: str, group_id: int, context)
     if action in ["统计", "stats"]:
         return await handle_manage_stats(user_id, group_id, rest_args, db, is_admin)
 
-    if action in ["导出", "export", "backup"]:
-        return await handle_manage_export(user_id, group_id, rest_args, db, is_admin)
-
     if action in ["公告", "announce"]:
         return await handle_manage_announce(user_id, group_id, rest_args, db, is_admin)
 
-    return (True, f"未知管理命令: {action}\n可用命令: 开启, 关闭, 配置, 重置, 删除, 封禁, 解封, 日志, 统计, 导出, 公告")
+    return (True, f"未知管理命令: {action}\n可用命令: 开启, 关闭, 配置, 重置, 删除, 封禁, 解封, 日志, 统计, 公告")
 
 
 # ──────────────────── 定时任务 ────────────────────
@@ -598,14 +598,17 @@ async def scheduled_decay(context) -> list[dict[str, Any]]:
 
     def _run_job() -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
+        enabled_group_decay = db.get_enabled_group_decay_map()
+        if not enabled_group_decay:
+            db.cleanup_old_timestamps()
+            return messages
         pets = db.get_all_pets()
 
         for pet in pets:
-            group_config = db.get_group_config(pet.group_id)
-            if not group_config.enabled:
+            decay_multiplier = enabled_group_decay.get(pet.group_id)
+            if decay_multiplier is None:
                 continue
 
-            decay_multiplier = group_config.decay_multiplier
             alert_msg = pet_service.apply_decay(pet, decay_multiplier)
             if alert_msg:
                 messages.append({
@@ -667,6 +670,7 @@ async def scheduled_weekly_activity(context) -> list[dict[str, Any]]:
         return []
     db = _db_instance
     social_service = _social_service
+    user_service = _user_service
 
     def _run_job() -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
@@ -693,6 +697,9 @@ async def scheduled_weekly_activity(context) -> list[dict[str, Any]]:
                     if user and i < len(reward_coins):
                         user.coins += reward_coins[i]
                         db.update_user(user)
+                    if i == 0 and user_service is not None:
+                        user_service.grant_temporary_title(uid, group_id, "本周之星")
+                        text += " 🏅本周之星"
 
                 messages.append({
                     "group_id": group_id,

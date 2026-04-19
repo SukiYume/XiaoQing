@@ -303,6 +303,32 @@ async def test_app_start(temp_app_root: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_start_creates_shared_http_session_with_default_timeout(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = Mock()
+    app.plugin_manager.wait_inits = AsyncMock()
+    app.plugin_manager.schedule_definitions = Mock(return_value=[])
+
+    mock_session = MagicMock()
+    mock_session.close = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    def _fake_client_session(*args, **kwargs):
+        captured.update(kwargs)
+        return mock_session
+
+    with patch("core.app.aiohttp.ClientSession", side_effect=_fake_client_session):
+        await app.start()
+        await app.stop()
+
+    timeout = captured.get("timeout")
+    assert timeout is not None
+    assert timeout.total == 30.0
+    assert timeout.connect == 10.0
+
+
+@pytest.mark.asyncio
 @pytest.mark.integration
 async def test_app_start_tracks_and_stops_background_tasks(temp_app_root: Path):
     """Test app start/stop manages WS and watch background tasks."""
@@ -648,6 +674,25 @@ async def test_app_handle_inbound_event_with_source(temp_app_root: Path):
 
     assert len(received_events) == 1
     assert received_events[0].get("_source") == "inbound_http"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_send_single_action_falls_back_to_http_when_inbound_has_no_ws_clients(temp_app_root: Path):
+    """Test inbound manager does not swallow actions when no inbound WS clients are connected."""
+    app = XiaoQingApp(temp_app_root)
+    app.inbound_manager = MagicMock()
+    app.inbound_manager.has_active_ws_clients = Mock(return_value=False)
+    app.inbound_manager.broadcast = AsyncMock()
+    app.http_sender = MagicMock()
+    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender.send_action = AsyncMock()
+
+    action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
+    await app._send_single_action(action)
+
+    app.inbound_manager.broadcast.assert_not_called()
+    app.http_sender.send_action.assert_awaited_once_with(action)
 
 
 # ============================================================

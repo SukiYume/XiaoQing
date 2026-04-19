@@ -22,6 +22,36 @@ class PetService:
     def __init__(self, db: Database):
         self.db = db
 
+    @staticmethod
+    def _daily_limit_message(action: str, limit: int) -> str:
+        labels = {
+            "feed": "喂食",
+            "clean": "清洁",
+            "play": "玩耍",
+            "train": "训练",
+            "explore": "探索",
+        }
+        return f"今日{labels.get(action, action)}次数已达上限({limit}次)"
+
+    def _check_daily_action_limit(self, user: User, action: str) -> tuple[bool, str]:
+        limit = DAILY_LIMITS.get(action)
+        if not limit:
+            return True, ""
+        if user.can_do_action(action, 1, limit):
+            return True, ""
+        return False, self._daily_limit_message(action, limit)
+
+    @staticmethod
+    def _apply_action_reward(user: User, action: str, coins_gain: int) -> int:
+        actual_coins = coins_gain
+        if actual_coins > 0 and user.can_earn_coins(actual_coins, DAILY_LIMITS["coins"]):
+            user.coins += actual_coins
+            user.today_coins_earned += actual_coins
+        else:
+            actual_coins = 0
+        user.increment_action(action)
+        return actual_coins
+
     def _get_cannot_interact_msg(self, pet: "Pet") -> str:
         """根据宠物状态返回具体的无法互动原因"""
         if pet.status == PetStatus.SLEEPING:
@@ -99,6 +129,10 @@ class PetService:
         if not cooled:
             return False, f"喂食冷却中，请等待{remaining}秒", 0
 
+        allowed, reason = self._check_daily_action_limit(user, "feed")
+        if not allowed:
+            return False, reason, 0
+
         actual_item_id = item_id if item_id else "apple"
         item_data = DEFAULT_ITEMS.get(actual_item_id)
         if not item_data:
@@ -145,12 +179,7 @@ class PetService:
         group_config = self.db.get_group_config(pet.group_id)
         # CR Review Issue #2: 应用反脚本衰减因子
         coins_gain = int(5 * group_config.economy_multiplier * spam_decay_factor)
-        if user.can_earn_coins(coins_gain, 500):
-            user.coins += coins_gain
-            user.today_coins_earned += coins_gain
-            user.increment_action("feed")
-        else:
-            coins_gain = 0
+        coins_gain = self._apply_action_reward(user, "feed", coins_gain)
 
         success = self.db.atomic_update_pet_and_user(pet, user)
 
@@ -175,6 +204,10 @@ class PetService:
         if not cooled:
             return False, f"清洁冷却中，请等待{remaining}秒", 0
 
+        allowed, reason = self._check_daily_action_limit(user, "clean")
+        if not allowed:
+            return False, reason, 0
+
         clean_gain = 20
         health_gain = 5
 
@@ -186,12 +219,7 @@ class PetService:
         group_config = self.db.get_group_config(pet.group_id)
         # CR Review Issue #2: 应用反脚本衰减因子
         coins_gain = int(3 * group_config.economy_multiplier * spam_decay_factor)
-        if user.can_earn_coins(coins_gain, 500):
-            user.coins += coins_gain
-            user.today_coins_earned += coins_gain
-            user.increment_action("clean")
-        else:
-            coins_gain = 0
+        coins_gain = self._apply_action_reward(user, "clean", coins_gain)
 
         success = self.db.atomic_update_pet_and_user(pet, user)
         self.db.update_task_progress(user.user_id, pet.group_id, "clean")
@@ -214,6 +242,10 @@ class PetService:
         if not cooled:
             return False, f"玩耍冷却中，请等待{remaining}秒", 0
 
+        allowed, reason = self._check_daily_action_limit(user, "play")
+        if not allowed:
+            return False, reason, 0
+
         mood_gain = 15
         intimacy_gain = 2
         energy_cost = 10
@@ -226,12 +258,7 @@ class PetService:
 
         group_config = self.db.get_group_config(pet.group_id)
         coins_gain = int(5 * group_config.economy_multiplier * spam_decay_factor)
-        if user.can_earn_coins(coins_gain, 500):
-            user.coins += coins_gain
-            user.today_coins_earned += coins_gain
-            user.increment_action("play")
-        else:
-            coins_gain = 0
+        coins_gain = self._apply_action_reward(user, "play", coins_gain)
 
         success = self.db.atomic_update_pet_and_user(pet, user)
         self.db.update_task_progress(user.user_id, pet.group_id, "play")
@@ -254,6 +281,10 @@ class PetService:
         if not cooled:
             return False, f"训练冷却中，请等待{remaining}秒", 0
 
+        allowed, reason = self._check_daily_action_limit(user, "train")
+        if not allowed:
+            return False, reason, 0
+
         # 无效类型回退到 strength
         config = TRAINING_CONFIG.get(training_type, TRAINING_CONFIG["strength"])
 
@@ -271,9 +302,10 @@ class PetService:
         pet.last_update = datetime.now()
 
         if random.random() > success_rate:
-            self.db.update_pet(pet)
+            self._apply_action_reward(user, "train", 0)
+            success = self.db.atomic_update_pet_and_user(pet, user)
             fail_msg = random.choice(TRAINING_MESSAGES["fail"]).format(name=pet.name)
-            return True, fail_msg, 0
+            return (True, fail_msg, 0) if success else (False, "训练失败", 0)
 
         # 训练成功
         exp_gain = config["exp_gain"]
@@ -310,12 +342,7 @@ class PetService:
 
         group_config = self.db.get_group_config(pet.group_id)
         coins_gain = int(10 * group_config.economy_multiplier * spam_decay_factor)
-        if user.can_earn_coins(coins_gain, 500):
-            user.coins += coins_gain
-            user.today_coins_earned += coins_gain
-            user.increment_action("train")
-        else:
-            coins_gain = 0
+        coins_gain = self._apply_action_reward(user, "train", coins_gain)
 
         success = self.db.atomic_update_pet_and_user(pet, user)
         if success:
@@ -337,6 +364,10 @@ class PetService:
         cooled, remaining = validate_cooling(pet.last_explore, COOLDOWN_TIMES["explore"])
         if not cooled:
             return False, f"探索冷却中，请等待{remaining}秒", 0
+
+        allowed, reason = self._check_daily_action_limit(user, "explore")
+        if not allowed:
+            return False, reason, 0
 
         # 无效地点回退到森林
         loc_config = EXPLORE_LOCATIONS.get(location, EXPLORE_LOCATIONS["forest"])
@@ -395,12 +426,7 @@ class PetService:
             self.db.update_inventory(inventory)
             item_msg = f"（获得 {item_name} ×1）"
 
-        if user.can_earn_coins(coins_gain, 500):
-            user.coins += coins_gain
-            user.today_coins_earned += coins_gain
-            user.increment_action("explore")
-        else:
-            coins_gain = 0
+        coins_gain = self._apply_action_reward(user, "explore", coins_gain)
 
         self.db.update_group_task_progress(pet.group_id, "group_explore")
         success = self.db.atomic_update_pet_and_user(pet, user)

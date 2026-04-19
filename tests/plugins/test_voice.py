@@ -84,6 +84,35 @@ class TestVoicePlugin:
         assert result.endswith(".mp3")
 
     @pytest.mark.asyncio
+    async def test_text_to_speech_sets_request_timeout(self, mock_context):
+        captured = {}
+
+        class MockResponse:
+            status = 200
+
+            async def read(self):
+                return b"fake_audio_data"
+
+        class MockContextManager:
+            async def __aenter__(self):
+                return MockResponse()
+
+            async def __aexit__(self, *args):
+                return None
+
+        class MockSession:
+            def post(self, *args, **kwargs):
+                captured.update(kwargs)
+                return MockContextManager()
+
+        mock_context.http_session = MockSession()
+
+        result = await voice.text_to_speech("你好", mock_context)
+
+        assert result is not None
+        assert captured["timeout"].total == 60
+
+    @pytest.mark.asyncio
     async def test_text_to_speech_no_subscription_key(self, tmp_path):
         """测试缺少subscription key"""
         context = MagicMock()
@@ -106,6 +135,17 @@ class TestVoicePlugin:
         result2 = await voice.text_to_speech("测试", mock_context)
         assert result2 is not None
         assert result1 == result2
+
+    @pytest.mark.asyncio
+    async def test_text_to_speech_cache_key_includes_voice_config(self, mock_context):
+        result1 = await voice.text_to_speech("同一句话", mock_context)
+        assert result1 is not None
+
+        mock_context.secrets["plugins"]["voice"]["style"] = "sad"
+        result2 = await voice.text_to_speech("同一句话", mock_context)
+
+        assert result2 is not None
+        assert result1 != result2
 
     @pytest.mark.asyncio
     async def test_text_to_speech_api_error(self, mock_context):
@@ -185,6 +225,37 @@ class TestVoicePlugin:
         assert isinstance(result, tuple)
         assert result[0] == "识别结果"
         assert result[1] == "显示结果"
+
+    @pytest.mark.asyncio
+    async def test_speech_to_text_sets_request_timeout(self, mock_context, tmp_path):
+        audio_file = tmp_path / "test_audio.wav"
+        audio_file.write_bytes(b"fake_wav_data")
+        captured = {}
+
+        class MockResponse:
+            status = 200
+
+            async def json(self):
+                return {"NBest": [{"Lexical": "a", "Display": "b"}]}
+
+        class MockContextManager:
+            async def __aenter__(self):
+                return MockResponse()
+
+            async def __aexit__(self, *args):
+                return None
+
+        class MockSession:
+            def post(self, *args, **kwargs):
+                captured.update(kwargs)
+                return MockContextManager()
+
+        mock_context.http_session = MockSession()
+
+        result = await voice.speech_to_text(str(audio_file), mock_context)
+
+        assert result == ("a", "b")
+        assert captured["timeout"].total == 60
 
     @pytest.mark.asyncio
     async def test_speech_to_text_no_subscription_key(self, tmp_path):

@@ -259,6 +259,9 @@ class ChatRuntimeState:
     def set_persist_task(self, chat_id: str, task: asyncio.Task[Any]) -> None:
         self._per_chat.persist_tasks[chat_id] = task
 
+    def pop_persist_task(self, chat_id: str) -> asyncio.Task[Any] | None:
+        return self._per_chat.persist_tasks.pop(chat_id, None)
+
     def add_bg_task(self, task: asyncio.Task[Any]) -> None:
         self._bg_tasks.add(task)
 

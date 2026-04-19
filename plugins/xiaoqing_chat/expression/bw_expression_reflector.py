@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from core.plugin_base import build_action, segments, text
+from core.plugin_base import build_action, text, write_json
 
 from .bw_expression_store import ExpressionRecord, ExpressionStore
 from .bw_reflect_tracker import ReflectTrackerStore
@@ -28,7 +28,7 @@ def _save_state(data_dir: Path, st: dict[str, Any]) -> None:
     path = _state_path(data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        path.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json(path, st)
     except OSError:
         return
 

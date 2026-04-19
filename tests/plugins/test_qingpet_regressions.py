@@ -8,7 +8,10 @@ from plugins.qingpet.commands.advanced_commands import handle_explore, handle_vi
 from plugins.qingpet.commands.basic_commands import handle_feed, handle_status
 from plugins.qingpet.services.database import Database
 from plugins.qingpet.services.pet_service import PetService
+from plugins.qingpet.services.social_service import SocialService
 from plugins.qingpet.services.user_service import UserService
+from plugins.qingpet.utils.constants import PetStage
+from plugins.qingpet.utils.constants import DAILY_LIMITS
 
 
 def _segments_text(payload) -> str:
@@ -284,6 +287,58 @@ def test_feed_updates_daily_task_before_task_panel_initialized():
     assert feed_task["current_value"] == 1
 
 
+def test_feed_blocks_when_daily_limit_reached():
+    temp_db, db_path = _make_temp_db()
+    user_service = UserService(temp_db)
+    pet_service = PetService(temp_db)
+
+    user = user_service.get_or_create_user("limit_user", 70012)
+    user.today_feed_count = DAILY_LIMITS["feed"]
+    user_service.update_user(user)
+    pet_service.adopt_pet("limit_user", 70012, "满满")
+    pet = temp_db.get_pet("limit_user", 70012)
+    assert pet is not None
+
+    try:
+        ok, msg, _ = pet_service.feed_pet(pet, user, "apple")
+    finally:
+        _cleanup_temp_db(temp_db, db_path)
+
+    assert ok is False
+    assert "上限" in msg
+
+
+def test_train_failed_attempt_still_counts_daily_usage():
+    temp_db, db_path = _make_temp_db()
+    user_service = UserService(temp_db)
+    pet_service = PetService(temp_db)
+
+    user = user_service.get_or_create_user("train_limit_user", 70013)
+    pet_service.adopt_pet("train_limit_user", 70013, "练练")
+    pet = temp_db.get_pet("train_limit_user", 70013)
+    assert pet is not None
+    pet.energy = 100
+    pet.stage = PetStage.YOUNG
+    temp_db.update_pet(pet)
+
+    import plugins.qingpet.services.pet_service as pet_service_module
+
+    original_random = pet_service_module.random.random
+    pet_service_module.random.random = lambda: 1.0
+
+    try:
+        ok, _, _ = pet_service.train_pet(pet, user, training_type="strength")
+        persisted_user = temp_db.get_user("train_limit_user", 70013)
+    finally:
+        pet_service_module.random.random = original_random
+        _cleanup_temp_db(temp_db, db_path)
+
+    assert ok is True
+    assert persisted_user is not None
+    assert persisted_user.today_train_count == 1
+    assert persisted_user.total_train_count == 1
+
+
 def test_explore_uses_numeric_event_reward_values():
     temp_db, db_path = _make_temp_db()
     user_service = UserService(temp_db)
@@ -327,6 +382,52 @@ def test_explore_message_contains_pet_name_prefix():
 
     assert ok is True
     assert msg.startswith("🐾 阿星\n")
+
+
+def test_minigame_respects_configured_cooldown():
+    temp_db, db_path = _make_temp_db()
+    user_service = UserService(temp_db)
+    pet_service = PetService(temp_db)
+    social_service = SocialService(temp_db)
+
+    user_service.get_or_create_user("dice_user", 70014)
+    pet_service.adopt_pet("dice_user", 70014, "骰骰")
+
+    try:
+        ok1, _ = social_service.play_dice("dice_user", 70014)
+        ok2, msg2 = social_service.play_dice("dice_user", 70014)
+    finally:
+        _cleanup_temp_db(temp_db, db_path)
+
+    assert ok1 is True
+    assert ok2 is False
+    assert "冷却" in msg2
+
+
+def test_pet_show_settlement_grants_temporary_champion_title():
+    temp_db, db_path = _make_temp_db()
+    user_service = UserService(temp_db)
+    pet_service = PetService(temp_db)
+    social_service = SocialService(temp_db)
+
+    user_service.get_or_create_user("show_winner", 70015)
+    user_service.get_or_create_user("show_other", 70015)
+    pet_service.adopt_pet("show_winner", 70015, "冠军宠")
+    pet_service.adopt_pet("show_other", 70015, "陪跑宠")
+    show_id = temp_db.create_pet_show(70015, "春季展示会", 24)
+    assert show_id is not None
+    temp_db.vote_pet_show(show_id, "voter-1", "show_winner")
+    temp_db.vote_pet_show(show_id, "voter-2", "show_winner")
+    temp_db.vote_pet_show(show_id, "voter-3", "show_other")
+
+    try:
+        result = social_service.settle_pet_show(70015)
+        titles = user_service.get_user_titles("show_winner", 70015)
+    finally:
+        _cleanup_temp_db(temp_db, db_path)
+
+    assert "冠军宠" in result
+    assert "展示会冠军" in titles
 
 
 def test_qingpet_handle_visit_uses_event_at_when_args_missing_target():

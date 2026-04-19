@@ -10,6 +10,7 @@ from ..utils.constants import (
 )
 from ..utils.validators import validate_cooling, validate_sensitive_content
 from .database import Database
+from .user_service import UserService
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,16 @@ logger = logging.getLogger(__name__)
 class SocialService:
     def __init__(self, db: Database):
         self.db = db
+
+    def _check_minigame_cooldown(self, user_id: str, group_id: int, game_type: str) -> tuple[bool, str]:
+        config = MINIGAME_CONFIG.get(game_type, {})
+        cooldown = int(config.get("cooldown", 0) or 0)
+        if cooldown <= 0:
+            return True, ""
+        remaining = self.db.check_and_consume_minigame_cooldown(user_id, group_id, game_type, cooldown)
+        if remaining > 0:
+            return False, f"小游戏冷却中，请等待{remaining}秒"
+        return True, ""
 
     # ──────────────────── 互访 ────────────────────
 
@@ -260,6 +271,10 @@ class SocialService:
         if not pet.can_interact():
             return False, "宠物现在无法互动"
 
+        cooled, reason = self._check_minigame_cooldown(user_id, group_id, "rock_paper_scissors")
+        if not cooled:
+            return False, reason
+
         npc_choice = random.choice(["rock", "scissors", "paper"])
         cn = {"rock": "石头", "scissors": "剪刀", "paper": "布"}
 
@@ -306,6 +321,10 @@ class SocialService:
 
         if not pet.can_interact():
             return False, "宠物现在无法互动"
+
+        cooled, reason = self._check_minigame_cooldown(user_id, group_id, "dice")
+        if not cooled:
+            return False, reason
 
         config = MINIGAME_CONFIG["dice"]
 
@@ -357,6 +376,9 @@ class SocialService:
             return False, "对方的宠物无法参赛"
 
         config = MINIGAME_CONFIG["race"]
+        cooled, reason = self._check_minigame_cooldown(user_id, group_id, "race")
+        if not cooled:
+            return False, reason
         if pet.energy < config["energy_cost"]:
             return False, "你的宠物精力不足"
 
@@ -438,6 +460,9 @@ class SocialService:
                 if user:
                     user.coins += reward
                     self.db.update_user(user)
+            if i == 0:
+                UserService(self.db).grant_temporary_title(uid, group_id, "展示会冠军")
+                text += " 🏅展示会冠军"
             text += "\n"
 
         self.db.end_pet_show(show['id'])

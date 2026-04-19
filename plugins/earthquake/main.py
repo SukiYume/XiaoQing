@@ -43,6 +43,7 @@ def _since_path(context):
 def _load_since(context) -> str:
     """加载上次处理的微博 ID"""
     path = _since_path(context)
+    path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_text(json.dumps({"since_id": "0"}), encoding="utf-8")
         return "0"
@@ -52,6 +53,7 @@ def _load_since(context) -> str:
 def _save_since(context, since_id: str) -> None:
     """保存最新处理的微博 ID"""
     path = _since_path(context)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"since_id": since_id}), encoding="utf-8")
 
 # ============================================================
@@ -189,12 +191,14 @@ async def _fetch_earthquake_news(context, force: bool = False) -> list:
         force: 是否强制返回（手动触发模式）
     """
     since_id = _load_since(context)
+    since_id_int = int(since_id)
 
     def _do_fetch() -> list:
         session = _create_session()
         data = _fetch_weibo(session)
-        
+
         found_card = None
+        newest_seen_id = since_id_int
 
         for card in data.get("data", {}).get("cards", []):
             mblog = card.get("mblog", {})
@@ -207,33 +211,38 @@ async def _fetch_earthquake_news(context, force: bool = False) -> list:
             mid = str(mblog.get("id", ""))
             if not mid:
                 continue
-                
-            is_new = int(mid) > int(since_id)
+            try:
+                mid_int = int(mid)
+            except (TypeError, ValueError):
+                continue
 
-            # 更新既然状态（如果是新消息）
+            is_new = mid_int > since_id_int
             if is_new:
-                _save_since(context, mid)
+                newest_seen_id = max(newest_seen_id, mid_int)
 
             # 手动触发：直接返回最新的有效地震信息，不论是否看过或震级大小
             if force:
                 found_card = card
+                if is_new:
+                    _save_since(context, mid)
                 break
-                
-            # 定时任务：必须是新消息且满足震级要求
-            if is_new:
-                clean_text = _extract_clean_text(raw_text)
-                magnitude = _extract_magnitude(clean_text)
-                
-                if magnitude is not None and magnitude >= 4:
-                    found_card = card
-                    break
-                else:
-                    logger.info("Earthquake M%.1f < 4, skipping", magnitude or 0)
-                    return []
-            else:
-                # 遇到旧消息，停止处理
-                return []
-        
+
+            # 定时任务：遇到旧消息后停止处理更旧数据
+            if not is_new:
+                break
+
+            clean_text = _extract_clean_text(raw_text)
+            magnitude = _extract_magnitude(clean_text)
+
+            if magnitude is not None and magnitude >= 4:
+                found_card = card
+                break
+
+            logger.info("Earthquake M%.1f < 4, skipping", magnitude or 0)
+
+        if not force and newest_seen_id > since_id_int:
+            _save_since(context, str(newest_seen_id))
+
         if not found_card:
             if force:
                 return segments("未获取到地震快讯数据")

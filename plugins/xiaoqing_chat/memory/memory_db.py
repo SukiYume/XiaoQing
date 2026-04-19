@@ -37,6 +37,7 @@ class MemoryDB:
                 return
             self._loaded_dir = data_dir
             self._dirty = False
+            self._store = VectorStore(dim=2048)
             vdb_dir = data_dir / "vdb"
             if vdb_dir.exists():
                 self._store.load(vdb_dir, name="memory")

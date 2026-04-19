@@ -21,6 +21,7 @@ from .config import (
     MAX_OUTPUT_LENGTH, 
     CONNECT_TIMEOUT,
     EXIT_CODE_INTERRUPTED,
+    EXIT_CODE_TIMEOUT,
     EXIT_CODE_ERROR,
 )
 
@@ -405,6 +406,56 @@ class SSHManager:
         """
         return f"{str(user_id)}:{str(group_id)}:{name}"
 
+    def _parse_connection_key(self, key: str) -> tuple[str, Optional[str], str]:
+        user_id, group_id, name = key.split(":", 2)
+        return user_id, group_id, name
+
+    def _close_channel(self, channel: Any, send_interrupt: bool = False) -> None:
+        if channel is None:
+            return
+
+        if send_interrupt:
+            try:
+                send_ready = getattr(channel, "send_ready", None)
+                if callable(send_ready) and send_ready():
+                    channel.send("\x03")
+            except Exception:
+                pass
+
+        try:
+            channel.close()
+        except Exception:
+            pass
+
+    def _close_jump_client(self, client: Any) -> None:
+        jump_client = getattr(client, "_jump_client", None)
+        if jump_client is None:
+            return
+
+        try:
+            jump_client.close()
+        except Exception as e:
+            self._log("warning", f"Error closing jump host: {e}")
+
+    def _disconnect_key(self, key: str, *, send_interrupt: bool) -> bool:
+        channel = self.active_channels.pop(key, None)
+        if channel is not None:
+            self._close_channel(channel, send_interrupt=send_interrupt)
+
+        client = self.connections.get(key)
+        if client is None:
+            return channel is not None
+
+        try:
+            client.close()
+        except Exception as e:
+            self._log("warning", f"Error closing SSH client for {key}: {e}")
+        finally:
+            self._close_jump_client(client)
+            self.connections.pop(key, None)
+
+        return True
+
     async def connect(self, user_id: str, group_id: Optional[str], name: str, use_ssh_config_direct: bool = False, username_override: str = None) -> tuple[bool, str]:
         """
         连接到服务器（用户+群隔离）
@@ -571,29 +622,7 @@ class SSHManager:
     def disconnect(self, user_id: str, group_id: Optional[str], name: str) -> bool:
         """断开连接（用户+群隔离）"""
         key = self._build_connection_key(user_id, group_id, name)
-
-        # 先停止正在运行的命令
-        self.stop_command(user_id, group_id, name)
-
-        if key in self.connections:
-            client = self.connections[key]
-            try:
-                client.close()
-            except Exception as e:
-                # 记录关闭异常但继续清理
-                self._log("warning", f"Error closing SSH client for {name}: {e}")
-            finally:
-                # 确保 cleanup 无论是否异常都执行
-                # 如果存在跳板机连接，也一并关闭
-                if hasattr(client, '_jump_client'):
-                    try:
-                        client._jump_client.close()
-                    except Exception as e:
-                        self._log("warning", f"Error closing jump host: {e}")
-
-                self.connections.pop(key, None)
-            return True
-        return False
+        return self._disconnect_key(key, send_interrupt=True)
     
     def is_connected(self, user_id: str, group_id: Optional[str], name: str) -> bool:
         """检查是否已连接（用户+群隔离）"""
@@ -636,21 +665,8 @@ class SSHManager:
         """
         key = self._build_connection_key(user_id, group_id, name)
         if key in self.active_channels:
-            channel = self.active_channels[key]
-            try:
-                # 尝试发送 Ctrl+C (SIGINT) 信号
-                if channel.send_ready():
-                    channel.send("\x03")  # Ctrl+C
-            except Exception:
-                pass
-            
-            try:
-                # 关闭通道
-                channel.close()
-            except Exception:
-                pass
-            
-            self.active_channels.pop(key, None)
+            channel = self.active_channels.pop(key, None)
+            self._close_channel(channel, send_interrupt=True)
             return True
         return False
     
@@ -665,8 +681,36 @@ class SSHManager:
     ) -> int:
         """
         流式执行命令（用户+群隔离）
-        
+
         通过回调函数实时推送命令输出。
+        """
+        try:
+            return await asyncio.wait_for(
+                self._execute_command_stream_impl(
+                    user_id,
+                    group_id,
+                    name,
+                    command,
+                    output_callback,
+                    use_pty=use_pty,
+                ),
+                timeout=COMMAND_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            self.stop_command(user_id, group_id, name)
+            return EXIT_CODE_TIMEOUT
+
+    async def _execute_command_stream_impl(
+        self,
+        user_id: str,
+        group_id: Optional[str],
+        name: str, 
+        command: str, 
+        output_callback,
+        use_pty: bool = False
+    ) -> int:
+        """
+        execute_command_stream 的实际执行逻辑。
         """
         if not self.is_connected(user_id, group_id, name):
             await output_callback("❌ 未连接到服务器")
@@ -763,20 +807,15 @@ class SSHManager:
             output_buffer.append(text)
             
         try:
-            exit_code = await asyncio.wait_for(
-                self.execute_command_stream(user_id, group_id, name, command, collector),
-                timeout=COMMAND_TIMEOUT
-            )
+            exit_code = await self.execute_command_stream(user_id, group_id, name, command, collector)
             
             result = "".join(output_buffer)
+            if exit_code == EXIT_CODE_TIMEOUT:
+                return False, f"❌ 命令执行超时 ({COMMAND_TIMEOUT}s)"
             if len(result) > MAX_OUTPUT_LENGTH:
                 result = result[:MAX_OUTPUT_LENGTH] + f"\n\n... (输出被截断)"
                 
             return True, result.strip() if result.strip() else "(无输出)"
-            
-        except asyncio.TimeoutError:
-            self.stop_command(user_id, group_id, name)
-            return False, f"❌ 命令执行超时 ({COMMAND_TIMEOUT}s)"
         except Exception as e:
             return False, f"❌ 执行失败: {e}"
 
@@ -879,15 +918,8 @@ class SSHManager:
             self.context.logger.info(f"Closing all SSH connections ({len(self.connections)} active)")
             
         for key in list(self.connections.keys()):
-            # key 是 "user_id:server_name"
-            if key in self.connections:
-                try:
-                    self.connections[key].close()
-                except Exception:
-                    pass
-                del self.connections[key]
-        
-        # 清理活跃通道
+            self._disconnect_key(key, send_interrupt=False)
+
         self.active_channels.clear()
 
 async def get_manager(context) -> SSHManager:

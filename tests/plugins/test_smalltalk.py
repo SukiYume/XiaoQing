@@ -340,6 +340,18 @@ class TestQAPairs:
         assert "回答B" in data["部分删除"]
 
     @pytest.mark.asyncio
+    async def test_remove_qa_specific_answer_preserves_spaces(self, mock_context, mock_event):
+        await smalltalk.handle("qa", "空格问题 带 空格 的回答", mock_event, mock_context)
+        await smalltalk.handle("qa", "空格问题 另一个回答", mock_event, mock_context)
+
+        await smalltalk.handle("qa_remove", "空格问题 带 空格 的回答", mock_event, mock_context)
+
+        data = smalltalk._load_qa(mock_context)
+        assert "空格问题" in data
+        assert "带 空格 的回答" not in data["空格问题"]
+        assert "另一个回答" in data["空格问题"]
+
+    @pytest.mark.asyncio
     async def test_remove_nonexistent_question(self, mock_context, mock_event):
         """测试删除不存在的问题"""
         result = await smalltalk.handle(

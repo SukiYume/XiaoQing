@@ -95,7 +95,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
             return _handle_help(args, context)
 
         if command == "reload":
-            return _handle_reload(context)
+            return await _handle_reload(context)
 
         if command == "plugins":
             return _handle_plugins(context)
@@ -259,7 +259,7 @@ def _format_help_lines(lines: list[str]) -> str:
     
     return "\n".join(result)
 
-def _handle_reload(context) -> list[dict[str, Any]]:
+async def _handle_reload(context) -> list[dict[str, Any]]:
     """重载配置和插件
     
     Args:
@@ -271,7 +271,9 @@ def _handle_reload(context) -> list[dict[str, Any]]:
     try:
         logger.info("开始重载配置和插件")
         context.reload_config()
-        context.reload_plugins()
+        reload_task = context.reload_plugins()
+        if reload_task is not None:
+            await reload_task
         logger.info("配置和插件重载成功")
         return segments("✅ 配置与插件已重载")
     except Exception as e:
@@ -429,9 +431,6 @@ def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
         
         # 更新配置
         context.config_manager.update_secret(path, parsed_value)
-        
-        # 触发配置重载
-        context.reload_config()
         
         logger.info("已更新配置: %s = %s", path, mask_secret(parsed_value))
         return segments(f"✅ 已更新 {path}\n新值: {mask_secret(parsed_value)}")

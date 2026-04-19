@@ -475,6 +475,43 @@ class TestErrorHandling:
         result_text = str(result)
         assert "失败" in result_text or "timeout" in result_text.lower() or "获取失败" in result_text
 
+    @pytest.mark.asyncio
+    async def test_fetch_trending_sets_request_timeout(self, mock_context):
+        captured = {}
+
+        class MockResponse:
+            status = 200
+
+            async def text(self):
+                return """
+                <article class="Box-row">
+                    <h2><a href="/user/repo">user/repo</a></h2>
+                    <p>Description</p>
+                    <span itemprop="programmingLanguage">Python</span>
+                    <a href="/user/repo/stargazers">100 stars</a>
+                    <span class="d-inline-block float-sm-right">10 stars today</span>
+                </article>
+                """
+
+        class MockGetContextManager:
+            async def __aenter__(self):
+                return MockResponse()
+
+            async def __aexit__(self, *args):
+                pass
+
+        class MockSession:
+            def get(self, *args, **kwargs):
+                captured.update(kwargs)
+                return MockGetContextManager()
+
+        mock_context.http_session = MockSession()
+
+        result = await github._fetch_trending("daily", mock_context)
+
+        assert result is not None
+        assert captured["timeout"] == 15
+
 
 # ============================================================
 # Test Init

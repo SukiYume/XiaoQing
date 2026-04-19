@@ -18,6 +18,8 @@ from .constants import (
 
 logger = logging.getLogger(__name__)
 
+_ADS_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
+
 class ADSClient:
     def __init__(self, token: str, session: aiohttp.ClientSession):
         """Initialize ADS client with API token and shared HTTP session.
@@ -63,7 +65,12 @@ class ADSClient:
         }
 
         try:
-            async with self.session.get(url, headers=self.headers, params=params) as resp:
+            async with self.session.get(
+                url,
+                headers=self.headers,
+                params=params,
+                timeout=_ADS_REQUEST_TIMEOUT,
+            ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     logger.error(f"ADS search failed: {resp.status} - {text}")
@@ -86,7 +93,12 @@ class ADSClient:
         payload = {"bibcode": [bibcode]}
 
         try:
-            async with self.session.post(url, headers=self.headers, json=payload) as resp:
+            async with self.session.post(
+                url,
+                headers=self.headers,
+                json=payload,
+                timeout=_ADS_REQUEST_TIMEOUT,
+            ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     logger.error(f"ADS bibtex failed: {resp.status} - {text}")
@@ -110,7 +122,12 @@ class ADSClient:
         }
 
         try:
-            async with self.session.get(url, headers=self.headers, params=params) as resp:
+            async with self.session.get(
+                url,
+                headers=self.headers,
+                params=params,
+                timeout=_ADS_REQUEST_TIMEOUT,
+            ) as resp:
                 if resp.status != 200:
                     return None
                 data = await resp.json()
@@ -130,7 +147,12 @@ class ADSClient:
         }
 
         try:
-            async with self.session.get(url, headers=self.headers, params=params) as resp:
+            async with self.session.get(
+                url,
+                headers=self.headers,
+                params=params,
+                timeout=_ADS_REQUEST_TIMEOUT,
+            ) as resp:
                 if resp.status != 200:
                     return []
                 data = await resp.json()
@@ -149,7 +171,12 @@ class ADSClient:
         }
 
         try:
-            async with self.session.get(url, headers=self.headers, params=params) as resp:
+            async with self.session.get(
+                url,
+                headers=self.headers,
+                params=params,
+                timeout=_ADS_REQUEST_TIMEOUT,
+            ) as resp:
                 if resp.status != 200:
                     return []
                 data = await resp.json()

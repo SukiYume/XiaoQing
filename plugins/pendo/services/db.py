@@ -34,6 +34,10 @@ from ..models.item import (
 logger = logging.getLogger(__name__)
 
 
+class DuplicateBundleImportError(RuntimeError):
+    """Raised when the same bundle is imported more than once without force."""
+
+
 class Database:
     """统一数据库服务类
 
@@ -398,6 +402,14 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_transfer_logs_owner "
                 "ON transfer_logs(owner_id, created_at DESC)"
             )
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS imported_bundles (
+                    owner_id TEXT NOT NULL,
+                    bundle_id TEXT NOT NULL,
+                    imported_at TEXT NOT NULL,
+                    PRIMARY KEY (owner_id, bundle_id)
+                )
+            """)
 
     # ==================== Item操作 ====================
 
@@ -560,55 +572,92 @@ class Database:
         self.cache_invalidate(f"items|{owner_id}")
         return affected
 
+    def _apply_batch_operations(
+        self,
+        cursor: sqlite3.Cursor,
+        operations: list[tuple[str, dict[str, Any]]],
+        owner_id: str,
+    ) -> tuple[list[tuple[str, str, Optional[str]]], list[str]]:
+        results: list[tuple[str, str, Optional[str]]] = []
+        refreshed_item_ids: list[str] = []
+        for action, payload in operations:
+            item_id = payload.get("id", "")
+            try:
+                payload["owner_id"] = owner_id
+                validated = validate_item_data(payload)
+                validated.setdefault("created_at", datetime.now().isoformat())
+                validated.setdefault("updated_at", datetime.now().isoformat())
+                data = self._prepare_data(validated)
+
+                if action == "insert":
+                    columns = ", ".join(self._quote_col(k) for k in data.keys())
+                    placeholders = ", ".join(["?" for _ in data])
+                    cursor.execute(
+                        f"INSERT INTO items ({columns}) VALUES ({placeholders})",
+                        list(data.values()),
+                    )
+                    refreshed_item_ids.append(str(data.get("id") or item_id))
+                elif action == "update":
+                    update_data = {k: v for k, v in data.items() if k not in ("id", "type")}
+                    set_clause = ", ".join(
+                        [f"{self._quote_col(k)} = ?" for k in update_data.keys()]
+                    )
+                    cursor.execute(
+                        f"UPDATE items SET {set_clause} WHERE id = ? AND owner_id = ?",
+                        list(update_data.values()) + [item_id, owner_id],
+                    )
+                    if cursor.rowcount > 0:
+                        refreshed_item_ids.append(item_id)
+                results.append((action, item_id, None))
+            except Exception as exc:
+                raise RuntimeError(f"导入记录 {item_id} 失败: {exc}") from exc
+        return results, refreshed_item_ids
+
+    def _log_transfer_with_cursor(
+        self,
+        cursor: sqlite3.Cursor,
+        *,
+        owner_id: str,
+        action: str,
+        bundle_id: str | None = None,
+        filename: str | None = None,
+        types: list[str] | None = None,
+        record_count: int = 0,
+        result_summary: dict[str, Any] | None = None,
+    ) -> int:
+        cursor.execute(
+            """INSERT INTO transfer_logs
+               (owner_id, action, bundle_id, filename, types, record_count, result_summary, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                owner_id,
+                action,
+                bundle_id,
+                filename,
+                json.dumps(types or [], ensure_ascii=False),
+                record_count,
+                json.dumps(result_summary or {}, ensure_ascii=False),
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        return int(cursor.lastrowid)
+
     def batch_insert_or_update(
         self,
         operations: list[tuple[str, dict[str, Any]]],
         owner_id: str,
     ) -> list[tuple[str, str, Optional[str]]]:
-        """单事务批量插入/更新，用于数据导入
-
-        Args:
-            operations: [(action, payload), ...] 其中 action 为 "insert" 或 "update"
-            owner_id: 用户 ID
-
-        Returns:
-            [(action, item_id, error_or_none), ...] 每条操作的结果
-        """
+        """单事务批量插入/更新，用于数据导入"""
         if not operations:
             return []
         conn = self.get_connection()
         cursor = conn.cursor()
-        results: list[tuple[str, str, Optional[str]]] = []
 
         with conn:
-            for action, payload in operations:
-                item_id = payload.get("id", "")
-                try:
-                    payload["owner_id"] = owner_id
-                    validated = validate_item_data(payload)
-                    validated.setdefault("created_at", datetime.now().isoformat())
-                    validated.setdefault("updated_at", datetime.now().isoformat())
-                    data = self._prepare_data(validated)
-
-                    if action == "insert":
-                        columns = ", ".join(self._quote_col(k) for k in data.keys())
-                        placeholders = ", ".join(["?" for _ in data])
-                        cursor.execute(
-                            f"INSERT INTO items ({columns}) VALUES ({placeholders})",
-                            list(data.values()),
-                        )
-                    elif action == "update":
-                        update_data = {k: v for k, v in data.items() if k not in ("id", "type")}
-                        set_clause = ", ".join(
-                            [f"{self._quote_col(k)} = ?" for k in update_data.keys()]
-                        )
-                        cursor.execute(
-                            f"UPDATE items SET {set_clause} WHERE id = ? AND owner_id = ?",
-                            list(update_data.values()) + [item_id, owner_id],
-                        )
-                    results.append((action, item_id, None))
-                except Exception as exc:
-                    raise RuntimeError(f"导入记录 {item_id} 失败: {exc}") from exc
+            results, refreshed_item_ids = self._apply_batch_operations(cursor, operations, owner_id)
+            for refreshed_item_id in refreshed_item_ids:
+                if refreshed_item_id:
+                    self._refresh_fts(refreshed_item_id, conn)
 
         # 事务成功后清缓存（包括单条目和列表缓存）
         for _action, payload in operations:
@@ -617,6 +666,75 @@ class Database:
                 self.cache_invalidate(iid)
         self.cache_invalidate(f"items|{owner_id}")
         return results
+
+    def execute_import_bundle(
+        self,
+        *,
+        owner_id: str,
+        bundle_id: str | None,
+        operations: list[tuple[str, dict[str, Any]]],
+        filename: str | None,
+        types: list[str],
+        record_count: int,
+        result_summary: dict[str, Any],
+        force: bool = False,
+    ) -> None:
+        """Atomically apply import operations and record bundle/log state."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        refreshed_item_ids: list[str] = []
+        should_record_bundle = bool(bundle_id)
+        with self._lock:
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+                if bundle_id and not force:
+                    cursor.execute(
+                        """
+                        INSERT INTO imported_bundles (owner_id, bundle_id, imported_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(owner_id, bundle_id) DO NOTHING
+                        """,
+                        (owner_id, bundle_id, datetime.now().isoformat(timespec="seconds")),
+                    )
+                    if cursor.rowcount == 0:
+                        raise DuplicateBundleImportError(bundle_id)
+
+                if operations:
+                    _, refreshed_item_ids = self._apply_batch_operations(cursor, operations, owner_id)
+                    for refreshed_item_id in refreshed_item_ids:
+                        if refreshed_item_id:
+                            self._refresh_fts(refreshed_item_id, conn)
+
+                if bundle_id and force:
+                    cursor.execute(
+                        """
+                        INSERT INTO imported_bundles (owner_id, bundle_id, imported_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(owner_id, bundle_id) DO NOTHING
+                        """,
+                        (owner_id, bundle_id, datetime.now().isoformat(timespec="seconds")),
+                    )
+
+                self._log_transfer_with_cursor(
+                    cursor,
+                    owner_id=owner_id,
+                    action="import",
+                    bundle_id=bundle_id,
+                    filename=filename,
+                    types=types,
+                    record_count=record_count,
+                    result_summary=result_summary,
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        for _action, payload in operations:
+            iid = payload.get("id", "")
+            if iid:
+                self.cache_invalidate(iid)
+        self.cache_invalidate(f"items|{owner_id}")
 
     def batch_soft_delete(self, item_ids: list[str], owner_id: str) -> int:
         """单事务批量软删除，含 FTS 清理和缓存失效"""
@@ -1464,22 +1582,16 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         with conn:
-            cursor.execute(
-                """INSERT INTO transfer_logs
-                   (owner_id, action, bundle_id, filename, types, record_count, result_summary, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    owner_id,
-                    action,
-                    bundle_id,
-                    filename,
-                    json.dumps(types or [], ensure_ascii=False),
-                    record_count,
-                    json.dumps(result_summary or {}, ensure_ascii=False),
-                    datetime.now().isoformat(timespec="seconds"),
-                ),
+            return self._log_transfer_with_cursor(
+                cursor,
+                owner_id=owner_id,
+                action=action,
+                bundle_id=bundle_id,
+                filename=filename,
+                types=types,
+                record_count=record_count,
+                result_summary=result_summary,
             )
-            return cursor.lastrowid
 
     def get_transfer_logs(self, owner_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """查询迁移审计日志"""
@@ -1512,6 +1624,12 @@ class Database:
         """检查某个 bundle_id 是否已被成功导入过"""
         conn = self.get_connection()
         cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM imported_bundles WHERE owner_id = ? AND bundle_id = ?",
+            (owner_id, bundle_id),
+        )
+        if cursor.fetchone() is not None:
+            return True
         cursor.execute(
             "SELECT 1 FROM transfer_logs WHERE owner_id = ? AND bundle_id = ? AND action = 'import'",
             (owner_id, bundle_id),

@@ -25,6 +25,7 @@ from .config import (
     STREAM_BUFFER_SIZE,
     STREAM_FLUSH_INTERVAL,
     EXIT_CODE_INTERRUPTED,
+    EXIT_CODE_TIMEOUT,
     SessionKeys,
     SSHDefaults,
     MAX_HISTORY_LENGTH,
@@ -515,6 +516,8 @@ async def _run_background_command(
         result_msg = ""
         if exit_code == EXIT_CODE_INTERRUPTED:
             result_msg = "\n⏹️ 命令已中断"
+        elif exit_code == EXIT_CODE_TIMEOUT:
+            result_msg = f"\n⏱️ 命令执行超时 ({COMMAND_TIMEOUT}s)"
         elif exit_code != 0:
             result_msg = f"\n⚠️ 命令失败 [退出码: {exit_code}]"
         else:

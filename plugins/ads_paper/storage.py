@@ -16,7 +16,7 @@ class PaperStorage:
         self.writing_file = data_dir / "writing_ideas.json"
         self.topics_file = data_dir / "research_topics.json"
         self.deadlines_file = data_dir / "deadlines.json"
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def _load_json(self, path: Path) -> dict[str, Any]:
         """Load JSON file with error handling."""
@@ -54,49 +54,52 @@ class PaperStorage:
                 return False
 
     def add_paper_note(self, paper_id: str, content: str, user_id: int) -> bool:
-        data = self._load_json(self.notes_file)
-        if paper_id not in data:
-            data[paper_id] = []
+        with self._lock:
+            data = self._load_json(self.notes_file)
+            if paper_id not in data:
+                data[paper_id] = []
 
-        note = {
-            "content": content.strip(),
-            "time": datetime.now().strftime(DATETIME_FORMAT),
-            "user": user_id
-        }
-        data[paper_id].append(note)
-        return self._save_json(self.notes_file, data)
+            note = {
+                "content": content.strip(),
+                "time": datetime.now().strftime(DATETIME_FORMAT),
+                "user": user_id
+            }
+            data[paper_id].append(note)
+            return self._save_json(self.notes_file, data)
 
     def get_paper_notes(self, paper_id: str) -> list[dict[str, Any]]:
         data = self._load_json(self.notes_file)
         return data.get(paper_id, [])
 
     def delete_paper_note(self, paper_id: str, index: int) -> bool:
-        data = self._load_json(self.notes_file)
-        if paper_id not in data:
-            return False
+        with self._lock:
+            data = self._load_json(self.notes_file)
+            if paper_id not in data:
+                return False
 
-        notes = data[paper_id]
-        if index < 0 or index >= len(notes):
-            return False
+            notes = data[paper_id]
+            if index < 0 or index >= len(notes):
+                return False
 
-        notes.pop(index)
-        if not notes:
-            del data[paper_id]
+            notes.pop(index)
+            if not notes:
+                del data[paper_id]
 
-        return self._save_json(self.notes_file, data)
+            return self._save_json(self.notes_file, data)
 
     def add_writing_idea(self, section: str, content: str, user_id: int) -> bool:
-        data = self._load_json(self.writing_file)
-        if section not in data:
-            data[section] = []
+        with self._lock:
+            data = self._load_json(self.writing_file)
+            if section not in data:
+                data[section] = []
 
-        idea = {
-            "content": content.strip(),
-            "time": datetime.now().strftime(DATETIME_FORMAT),
-            "user": user_id
-        }
-        data[section].append(idea)
-        return self._save_json(self.writing_file, data)
+            idea = {
+                "content": content.strip(),
+                "time": datetime.now().strftime(DATETIME_FORMAT),
+                "user": user_id
+            }
+            data[section].append(idea)
+            return self._save_json(self.writing_file, data)
 
     def get_writing_ideas(self, section: str) -> list[dict[str, Any]]:
         data = self._load_json(self.writing_file)
@@ -107,64 +110,69 @@ class PaperStorage:
         return list(data.keys())
 
     def delete_writing_idea(self, section: str, index: int) -> bool:
-        data = self._load_json(self.writing_file)
-        if section not in data:
-            return False
+        with self._lock:
+            data = self._load_json(self.writing_file)
+            if section not in data:
+                return False
 
-        ideas = data[section]
-        if index < 0 or index >= len(ideas):
-            return False
+            ideas = data[section]
+            if index < 0 or index >= len(ideas):
+                return False
 
-        ideas.pop(index)
-        if not ideas:
-            del data[section]
+            ideas.pop(index)
+            if not ideas:
+                del data[section]
 
-        return self._save_json(self.writing_file, data)
+            return self._save_json(self.writing_file, data)
 
     def add_topic(self, keyword: str) -> bool:
-        data = self._load_json(self.topics_file)
-        if "keywords" not in data:
-            data["keywords"] = []
+        with self._lock:
+            data = self._load_json(self.topics_file)
+            if "keywords" not in data:
+                data["keywords"] = []
 
-        keyword = keyword.strip().lower()
-        if keyword not in data["keywords"]:
-            data["keywords"].append(keyword)
-            return self._save_json(self.topics_file, data)
-        return False
+            keyword = keyword.strip().lower()
+            if keyword not in data["keywords"]:
+                data["keywords"].append(keyword)
+                return self._save_json(self.topics_file, data)
+            return False
 
     def get_topics(self) -> list[str]:
         data = self._load_json(self.topics_file)
         return data.get("keywords", [])
 
     def remove_topic(self, keyword: str) -> bool:
-        data = self._load_json(self.topics_file)
-        if "keywords" not in data:
-            return False
+        with self._lock:
+            data = self._load_json(self.topics_file)
+            if "keywords" not in data:
+                return False
 
-        keyword = keyword.strip().lower()
-        if keyword in data["keywords"]:
-            data["keywords"].remove(keyword)
-            return self._save_json(self.topics_file, data)
-        return False
+            keyword = keyword.strip().lower()
+            if keyword in data["keywords"]:
+                data["keywords"].remove(keyword)
+                return self._save_json(self.topics_file, data)
+            return False
 
     def clear_topics(self) -> bool:
         """Clear all research topics."""
-        data = {"keywords": []}
-        return self._save_json(self.topics_file, data)
+        with self._lock:
+            data = {"keywords": []}
+            return self._save_json(self.topics_file, data)
 
     def add_deadline(self, name: str, date: str, user_id: int) -> bool:
-        data = self._load_json(self.deadlines_file)
-        if "deadlines" not in data:
-            data["deadlines"] = []
+        with self._lock:
+            data = self._load_json(self.deadlines_file)
+            if "deadlines" not in data:
+                data["deadlines"] = []
 
-        deadline = {
-            "name": name.strip(),
-            "date": date.strip(),
-            "user": user_id,
-            "created": datetime.now().strftime(DATETIME_FORMAT)
-        }
-        data["deadlines"].append(deadline)
-        return self._save_json(self.deadlines_file, data)
+            deadline = {
+                "name": name.strip(),
+                "date": date.strip(),
+                "user": user_id,
+                "created": datetime.now().strftime(DATETIME_FORMAT)
+            }
+            data["deadlines"].append(deadline)
+            return self._save_json(self.deadlines_file, data)
 
     def get_deadlines(self) -> list[dict[str, Any]]:
         data = self._load_json(self.deadlines_file)
@@ -172,13 +180,14 @@ class PaperStorage:
         return sorted(deadlines, key=lambda x: x.get("date", ""))
 
     def delete_deadline(self, index: int) -> bool:
-        data = self._load_json(self.deadlines_file)
-        if "deadlines" not in data:
-            return False
+        with self._lock:
+            data = self._load_json(self.deadlines_file)
+            if "deadlines" not in data:
+                return False
 
-        deadlines = data["deadlines"]
-        if index < 0 or index >= len(deadlines):
-            return False
+            deadlines = data["deadlines"]
+            if index < 0 or index >= len(deadlines):
+                return False
 
-        deadlines.pop(index)
-        return self._save_json(self.deadlines_file, data)
+            deadlines.pop(index)
+            return self._save_json(self.deadlines_file, data)

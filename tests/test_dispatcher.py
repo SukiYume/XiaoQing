@@ -434,6 +434,23 @@ class TestDecideProcess:
 
         assert decision.should_process is True
 
+    def test_xiaoqing_chat_processes_all_group_messages_as_smalltalk(
+        self,
+        dispatcher: Dispatcher,
+        sample_message_context: MessageContext,
+        mock_config_provider: MagicMock,
+    ):
+        """测试 xiaoqing_chat 提供者下所有群聊都进入 smalltalk_mode。"""
+        mock_config_provider.config["require_bot_name_in_group"] = False
+        mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
+        sample_message_context.has_prefix = False
+        sample_message_context.has_bot_name = False
+        sample_message_context.is_at_me = False
+
+        decision = dispatcher._decide_process(sample_message_context)
+
+        assert decision == ProcessDecision(True, True)
+
 # ============================================================
 # Dispatcher 静音控制测试
 # ============================================================
@@ -559,6 +576,17 @@ class TestTryHandleCommand:
         result = await dispatcher._try_handle_command(sample_message_context)
         assert result is not None
         assert result[0]["data"]["text"] == "权限不足"
+
+
+class TestUrlFiltering:
+    def test_blocks_private_and_loopback_targets(self, dispatcher: Dispatcher):
+        assert dispatcher._is_blocked_url_target("http://127.0.0.1/a") is True
+        assert dispatcher._is_blocked_url_target("http://[::1]/a") is True
+        assert dispatcher._is_blocked_url_target("http://169.254.169.254/latest/meta-data") is True
+        assert dispatcher._is_blocked_url_target("http://localhost:8080") is True
+
+    def test_allows_public_domain_targets(self, dispatcher: Dispatcher):
+        assert dispatcher._is_blocked_url_target("https://example.com/path") is False
 
 # ============================================================
 # Dispatcher URL 处理测试

@@ -224,6 +224,50 @@ class TestJupyterCodeReviewFixes:
         assert "超时" in result.error
         assert fake_km.interrupted is True
 
+    @pytest.mark.asyncio
+    async def test_execute_filters_iopub_messages_by_parent_msg_id(self, tmp_path):
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        manager = JupyterKernelManager(tmp_path / "jupyter")
+
+        class _FakeKernelManager:
+            def is_alive(self):
+                return True
+
+        class _FakeKernelClient:
+            def __init__(self):
+                self.messages = [
+                    {
+                        "msg_type": "stream",
+                        "content": {"name": "stdout", "text": "ignored"},
+                        "parent_header": {"msg_id": "other-msg"},
+                    },
+                    {
+                        "msg_type": "stream",
+                        "content": {"name": "stdout", "text": "kept"},
+                        "parent_header": {"msg_id": "msg-1"},
+                    },
+                    {
+                        "msg_type": "status",
+                        "content": {"execution_state": "idle"},
+                        "parent_header": {"msg_id": "msg-1"},
+                    },
+                ]
+
+            def execute(self, _code):
+                return "msg-1"
+
+            def get_iopub_msg(self, timeout):
+                return self.messages.pop(0)
+
+        manager._km = _FakeKernelManager()
+        manager._kc = _FakeKernelClient()
+
+        result = await manager.execute("print('hello')", timeout=1)
+
+        assert result.success is True
+        assert result.stdout == "kept"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

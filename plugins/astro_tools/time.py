@@ -5,6 +5,24 @@
 import re
 
 
+def _build_time_response(label: str, t) -> str:
+    return f"🕐 {label} 转换结果\n" \
+           f"UTC: {t.iso}\n" \
+           f"JD: {t.jd:.6f}\n" \
+           f"MJD: {t.mjd:.6f}\n" \
+           f"Unix: {t.unix:.2f}\n" \
+           f"格林威治恒星时: {t.sidereal_time('apparent', longitude='greenwich').to_string(sep=':', precision=0)}"
+
+
+def _parse_numeric_time(value: float, Time):
+    abs_value = abs(value)
+    if abs_value >= 1_000_000_000:
+        return Time(value, format='unix'), "Unix"
+    if abs_value > 2400000:
+        return Time(value, format='jd'), "JD"
+    return Time(value, format='mjd'), "MJD"
+
+
 async def handle_time(args: str, context) -> str:
     """处理时间转换命令"""
     args = args.strip()
@@ -31,12 +49,7 @@ async def handle_time(args: str, context) -> str:
             try:
                 jd_val = float(parts[1])
                 t = Time(jd_val, format='jd')
-                return f"🕐 JD {jd_val} 转换结果\n" \
-                       f"UTC: {t.iso}\n" \
-                       f"JD: {t.jd:.6f}\n" \
-                       f"MJD: {t.mjd:.6f}\n" \
-                       f"Unix: {t.unix:.2f}\n" \
-                       f"格林威治恒星时: {t.sidereal_time('apparent', longitude='greenwich').to_string(sep=':', precision=0)}"
+                return _build_time_response(f"JD {jd_val}", t)
             except ValueError:
                 return "无效的儒略日数值"
         
@@ -47,41 +60,20 @@ async def handle_time(args: str, context) -> str:
             try:
                 mjd_val = float(parts[1])
                 t = Time(mjd_val, format='mjd')
-                return f"🕐 MJD {mjd_val} 转换结果\n" \
-                       f"UTC: {t.iso}\n" \
-                       f"JD: {t.jd:.6f}\n" \
-                       f"MJD: {t.mjd:.6f}\n" \
-                       f"Unix: {t.unix:.2f}\n" \
-                       f"格林威治恒星时: {t.sidereal_time('apparent', longitude='greenwich').to_string(sep=':', precision=0)}"
+                return _build_time_response(f"MJD {mjd_val}", t)
             except ValueError:
                 return "无效的修正儒略日数值"
         
-        # 处理一般的时间格式（单个数字假定为MJD）
-        mjd_match = re.match(r'^(\d+\.?\d*)$', args)
-        if mjd_match:
-            mjd = float(mjd_match.group(1))
-            # 判断是JD还是MJD（JD通常 > 2400000）
-            if mjd > 2400000:
-                t = Time(mjd, format='jd')
-                time_type = "JD"
-            else:
-                t = Time(mjd, format='mjd')
-                time_type = "MJD"
-            return f"🕐 {time_type} {mjd} 转换结果\n" \
-                   f"UTC: {t.iso}\n" \
-                   f"JD: {t.jd:.6f}\n" \
-                   f"MJD: {t.mjd:.6f}\n" \
-                   f"Unix: {t.unix:.2f}\n" \
-                   f"格林威治恒星时: {t.sidereal_time('apparent', longitude='greenwich').to_string(sep=':', precision=0)}"
+        # 处理一般的时间格式（单个数字依次识别 Unix / JD / MJD）
+        numeric_match = re.match(r'^(-?\d+\.?\d*)$', args)
+        if numeric_match:
+            numeric_value = float(numeric_match.group(1))
+            t, time_type = _parse_numeric_time(numeric_value, Time)
+            return _build_time_response(f"{time_type} {numeric_value}", t)
         
         # 处理其他时间格式（ISO等）
         t = Time(args)
-        return f"🕐 {args} 转换结果\n" \
-               f"UTC: {t.iso}\n" \
-               f"JD: {t.jd:.6f}\n" \
-               f"MJD: {t.mjd:.6f}\n" \
-               f"Unix: {t.unix:.2f}\n" \
-               f"格林威治恒星时: {t.sidereal_time('apparent', longitude='greenwich').to_string(sep=':', precision=0)}"
+        return _build_time_response(args, t)
     except ValueError as e:
         return f"时间格式错误: {e}\n\n支持的格式:\n- ISO: 2026-01-30 或 2026-01-30T12:00:00\n- JD: 2460419.5 (使用 'jd' 子命令)\n- MJD: 60419.5 (使用 'mjd' 子命令)\n- Unix时间戳: 1706616000"
     except Exception as exc:
@@ -92,9 +84,4 @@ def _get_current_time() -> str:
     """获取当前天文时间"""
     from astropy.time import Time
     t = Time.now()
-    return f"🕐 当前天文时间\n" \
-           f"UTC: {t.iso}\n" \
-           f"JD: {t.jd:.6f}\n" \
-           f"MJD: {t.mjd:.6f}\n" \
-           f"Unix: {t.unix:.2f}\n" \
-           f"格林威治恒星时: {t.sidereal_time('apparent', longitude='greenwich').to_string(sep=':', precision=0)}"
+    return _build_time_response("当前天文时间", t)

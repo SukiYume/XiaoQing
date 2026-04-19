@@ -25,6 +25,8 @@ from .shared import InferenceParams, load_training_config, resolve_multi_interes
 
 logger = logging.getLogger(__name__)
 
+_MODEL_CACHE: dict[str, "KNNInferenceModel"] = {}
+
 
 # =============================================================================
 # 工具函数
@@ -192,8 +194,11 @@ def run_knn_inference(
     """执行 k-NN 模型推理，返回 (probs, preds)。"""
     tcfg = load_training_config(params.model_path)
     runtime_path = resolve_multi_interest_model_path(params.model_path, tcfg)
-
-    model = KNNInferenceModel(runtime_path, batch_size=params.batch_size)
+    cache_key = str(Path(runtime_path).resolve())
+    model = _MODEL_CACHE.get(cache_key)
+    if model is None:
+        model = KNNInferenceModel(runtime_path, batch_size=params.batch_size)
+        _MODEL_CACHE[cache_key] = model
     proba = model.predict_proba(data, input_mode=params.input_mode)
 
     probs = proba.astype(float).tolist()
