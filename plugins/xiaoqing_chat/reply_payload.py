@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core.plugin_base import image, segments
+from core.plugin_base import face, image, segments
 
 from .reply_splitter import _split_chat_reply
 
@@ -19,6 +19,8 @@ def build_reply_payload(
     *,
     emoji_file_path: str = "",
     emoji_marker: str = "",
+    qq_face_id: str = "",
+    qq_face_marker: str = "",
     display_text: str | None = None,
 ) -> ReplyPayload:
     text = (reply_text or "").strip()
@@ -31,5 +33,11 @@ def build_reply_payload(
         outbound_batches.append([image(emoji_file_path)])
         if marker and marker != visible_text and not visible_text.endswith(f"\n{marker}"):
             visible_text = f"{visible_text}\n{marker}".strip() if visible_text else marker
+
+    face_marker = (qq_face_marker or "").strip()
+    if qq_face_id:
+        outbound_batches.append([face(qq_face_id)])
+        if face_marker and face_marker != visible_text and not visible_text.endswith(f"\n{face_marker}"):
+            visible_text = f"{visible_text}\n{face_marker}".strip() if visible_text else face_marker
 
     return ReplyPayload(display_text=visible_text, outbound_batches=outbound_batches)
