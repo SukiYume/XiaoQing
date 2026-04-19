@@ -58,8 +58,13 @@ function bgCanvasSize(fam) {
   return { w: 720, h: 340 }; // medium
 }
 
+function decorationBaseSize(w, h) {
+  return Math.min(w, h);
+}
+
 function drawTransparentDecorations(fam) {
   const { w, h } = bgCanvasSize(fam);
+  const base = decorationBaseSize(w, h);
   const ctx = new DrawContext();
   ctx.size = new Size(w, h);
   ctx.opaque = false; // 关键：透明镂空背景
@@ -68,11 +73,29 @@ function drawTransparentDecorations(fam) {
   // 使用在深浅色渐变底色下都具美感且不显突兀的折中极高透明度颜色
   const orbs = [
     // 右上角光晕
-    { x: w * 0.85, y: h * 0.05, r: w * 0.38, color: "#FF6A5C", alpha: 0.06 },
+    {
+      x: w * 0.85,
+      y: h * 0.05,
+      r: base * 0.38,
+      color: "#FF6A5C",
+      alpha: 0.06,
+    },
     // 左下角光晕
-    { x: w * 0.05, y: h * 0.85, r: w * 0.32, color: "#7B68EE", alpha: 0.06 },
+    {
+      x: w * 0.05,
+      y: h * 0.85,
+      r: base * 0.32,
+      color: "#7B68EE",
+      alpha: 0.06,
+    },
     // 中偏右光晕
-    { x: w * 0.55, y: h * 0.5, r: w * 0.2, color: "#44D17A", alpha: 0.045 },
+    {
+      x: w * 0.55,
+      y: h * 0.5,
+      r: base * 0.2,
+      color: "#44D17A",
+      alpha: 0.045,
+    },
   ];
   for (const o of orbs) {
     ctx.setFillColor(new Color(o.color, o.alpha));
@@ -85,13 +108,9 @@ function drawTransparentDecorations(fam) {
   const acx = w * 0.92,
     acy = h * 0.92;
   for (let a = 0; a < 3; a++) {
-    const ar = w * (0.18 + a * 0.07);
+    const ar = base * (0.18 + a * 0.07);
     ctx.strokeEllipse(new Rect(acx - ar, acy - ar, ar * 2, ar * 2));
   }
-
-  // 左上角淡淡的粗细节装饰横线
-  ctx.setFillColor(new Color("#FFFFFF", 0.1));
-  ctx.fillRect(new Rect(w * 0.04, h * 0.18, w * 0.22, 1));
 
   return ctx.getImage();
 }
@@ -159,6 +178,7 @@ const LAYOUTS = {
   small: {
     padding: [11, 12, 11, 12],
     dividerGap: 4,
+    headerBodyGap: 10,
     header: {
       dateSize: 18,
       weekdaySize: 12,
@@ -179,6 +199,7 @@ const LAYOUTS = {
     padding: [14, 14, 14, 14],
     topSpacing: 8,
     dividerGap: 4,
+    headerBodyGap: 10,
     leftColWidth: 164,
     rightColWidth: 128,
     header: {
@@ -214,6 +235,7 @@ const LAYOUTS = {
     dividerGap: 6,
     rowSpacing: 8,
     quadWidth: 160,
+    headerBodyGap: 12,
     header: {
       dateSize: 22,
       weekdaySize: 14,
@@ -276,10 +298,10 @@ function addDivider(parent) {
   return line;
 }
 
-function addSectionDivider(parent, gap) {
-  parent.addSpacer(gap);
+function addSectionDivider(parent, topGap, bottomGap = topGap) {
+  parent.addSpacer(topGap);
   addDivider(parent);
-  parent.addSpacer(gap);
+  parent.addSpacer(bottomGap);
 }
 
 function getSectionIcon(section) {
@@ -648,7 +670,7 @@ function renderSmall(widget, data) {
     header: layout.header,
   });
 
-  addSectionDivider(widget, layout.dividerGap);
+  widget.addSpacer(layout.headerBodyGap);
 
   renderAgendaList(widget, data, { ...layout.agenda });
 }
@@ -692,7 +714,7 @@ function renderMedium(widget, data) {
   });
   rightHead.addSpacer();
 
-  addSectionDivider(widget, layout.dividerGap);
+  widget.addSpacer(layout.headerBodyGap);
 
   const body = widget.addStack();
   body.layoutHorizontally();
@@ -759,9 +781,7 @@ function renderLarge(widget, data) {
     header: layout.header,
   });
 
-  widget.addSpacer(layout.topSpacing);
-  addDivider(widget);
-  widget.addSpacer(layout.dividerGap);
+  widget.addSpacer(layout.headerBodyGap);
 
   const quadWidth = layout.quadWidth;
   const rows = [

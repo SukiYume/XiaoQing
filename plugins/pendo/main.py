@@ -641,9 +641,9 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
 # ============================================================
 
 HELP_MAP = {
-    "header": "🗓️ **Pendo - 个人时间与信息管理中枢**",
+    "header": "🗓️ **Pendo · 个人时间与信息管理中枢**",
     "quick": [
-        "**快速记录:**",
+        "⚡ **快速记录**",
         "• /pendo event add <内容> - 添加日程(AI解析时间/地点/提醒)",
         "• /pendo todo add <内容> - 添加待办",
         "• /pendo todo view <id> - 查看待办详情",
@@ -651,7 +651,7 @@ HELP_MAP = {
         "• /pendo ledger quick <金额> <描述> - 快速记账",
     ],
     "event": [
-        "**日程管理 (Event):**",
+        "🗓️ **日程管理 (Event)**",
         "• /pendo event add <内容> - 添加日程 (AI解析)",
         "  - 例: 3月8日下午两点，国自然截止，提前一周和一天提醒",
         "  - 例: 每月18号上午十点，公积金提取，重复7个月",
@@ -660,12 +660,17 @@ HELP_MAP = {
         "  - 范围: today, tomorrow, week, YYYY-MM, last7d, start..end",
         "• /pendo event delete <id> - 删除日程 (parentID删全部)",
         "• /pendo event edit <id> <内容> - 编辑日程",
+        "  - 多节点事件可直接写“节点名 + 改成/改到 + 新时间”",
+        "  - 例: /pendo event edit 80efbef6 会议开始改成4月22日12:43",
+        "  - 例: /pendo event edit 80efbef6 会议开始改成4月22日12:43，备注从北京南坐G123去会场",
         "• /pendo event reminders [id|范围] - 查看提醒",
         "• /pendo event reminders set <id> <描述> - 修改提醒",
+        "• /pendo event reminders confirm <id> [today|future|all|提醒时间] - 提前确认提醒",
         "  - 例: /pendo event reminders set abc12345 提前1天和2小时提醒",
+        "  - 例: /pendo event reminders confirm abc12345 today",
     ],
     "todo": [
-        "**待办事项 (Todo):**",
+        "✅ **待办事项 (Todo)**",
         "• /pendo todo add <内容> [cat:分类] [p:1-4] - 添加待办",
         "  - 默认添加到当天分类(cat:2026-02-02)",
         "  - 晚上8点后自动归为第二天",
@@ -684,7 +689,7 @@ HELP_MAP = {
         "• /pendo todo edit <id> <内容> - 编辑待办",
     ],
     "note": [
-        "**笔记 (Note):**",
+        "📝 **笔记 (Note)**",
         "• /pendo note add <内容> [cat:分类] [#标签] - 记录笔记",
         "  - 例: /pendo note add 直接折叠找脉冲星 cat:工作 #文章",
         "• /pendo note add title:<标题> content <正文> [cat:分类] [#标签] - 指定标题和正文",
@@ -702,7 +707,7 @@ HELP_MAP = {
         "• /pendo note delete <id|cat:分类> - 删除笔记",
     ],
     "diary": [
-        "**日记 (Diary):**",
+        "📔 **日记 (Diary)**",
         "• /pendo diary add [日期] <内容> [weather:xxx] [location:xxx]",
         "  - 无日期则写今天的日记，同一天再写自动追加",
         "• /pendo diary template [编号|名称] - 模板引导写日记",
@@ -713,7 +718,7 @@ HELP_MAP = {
         "• /pendo diary delete <日期|ID> - 删除日记",
     ],
     "ledger": [
-        "**记账 (Ledger):**",
+        "💰 **记账 (Ledger)**",
         "• /pendo ledger add - 交互式记账(多轮引导)",
         "• /pendo ledger quick <金额> <描述> [cat:分类] [in] - 快速记账",
         "  - 默认支出，加 in 标记收入",
@@ -729,7 +734,7 @@ HELP_MAP = {
         "• /pendo ledger summary [范围] - 收支汇总统计",
     ],
     "search": [
-        "**搜索 (Search):**",
+        "🔎 **搜索 (Search)**",
         "• /pendo search <关键词> - 全文搜索(标题/内容/备注/分类)",
         "• /pendo search <关键词> type=event/task/note/diary/ledger",
         "• /pendo search <关键词> range=today/week/last7d/YYYY-MM",
@@ -738,13 +743,13 @@ HELP_MAP = {
         "• /pendo search <关键词> category=<分类>",
     ],
     "reminder": [
-        "**提醒操作:**",
+        "⏰ **提醒操作**",
         "• /pendo confirm <id> - 确认提醒",
         "• /pendo snooze <id> <时间> - 延后提醒",
         "  - 时间格式: 10m, 1h, 19:00",
     ],
     "export": [
-        "**导出 (Export):**",
+        "📤 **导出 (Export)**",
         "• /pendo export <文件名> [范围] [类型] - 导出 Markdown 并私聊发送文件",
         "  - 范围: all, today, week, month, YYYY-MM, last7d, start..end",
         "  - 类型: event, todo, note, ledger, diary，可用逗号组合",
@@ -753,19 +758,44 @@ HELP_MAP = {
         "  - 例: /pendo export 账本快照 2026-03 ledger",
     ],
     "settings": [
-        "**设置 (Settings):**",
+        "⚙️ **设置 (Settings)**",
         *PLUGIN_SETTINGS_HELP_LINES,
     ],
     "web": [
-        "**Web UI 管理 (Web):**",
+        "🌐 **Web UI 管理 (Web)**",
         "• /pendo web token  - 生成登录令牌（Token 单独发送）",
         "• /pendo web widget-token - 生成 Scriptable 小组件令牌",
         "• /pendo web start  - 启动 Web 服务",
         "• /pendo web stop   - 停止 Web 服务",
         "• /pendo web status - 查看服务状态",
     ],
-    "common": ["**其他操作:**", "• /pendo undo [分钟] - 撤销删除或编辑 (默认5分钟内)"],
+    "common": ["↩️ **其他操作**", "• /pendo undo [分钟] - 撤销删除或编辑 (默认5分钟内)"],
 }
+
+HELP_SECTION_ORDER = [
+    "quick",
+    "event",
+    "todo",
+    "note",
+    "diary",
+    "ledger",
+    "search",
+    "reminder",
+    "common",
+    "export",
+    "settings",
+    "web",
+]
+
+
+def _render_help_section(key: str) -> list[str]:
+    section = HELP_MAP[key]
+    if not isinstance(section, list) or not section:
+        return []
+
+    title = str(section[0]).rstrip(":")
+    body = [str(line) for line in section[1:]]
+    return [f"━━ {title}", *body]
 
 
 def _show_help(subcommand: str = "") -> str:
@@ -790,38 +820,35 @@ def _show_help(subcommand: str = "") -> str:
 
     # 如果请求特定部分的帮助
     if target_key in HELP_MAP:
-        parts: list[str] = [str(HELP_MAP["header"]), ""]
-        section = HELP_MAP[target_key]
-        if isinstance(section, list):
-            parts.extend(section)
+        parts: list[str] = [
+            str(HELP_MAP["header"]),
+            "",
+            "🧭 输入 `/pendo` 查看完整总览，输入 `/pendo <模块>` 直达对应帮助",
+            "",
+        ]
+        parts.extend(_render_help_section(target_key))
         return "\n".join(parts)
 
     # 否则显示完整帮助
-    all_parts: list[str] = [str(HELP_MAP["header"]), ""]
-
-    # 定义完整帮助的显示顺序
-    sections = [
-        "quick",
-        "event",
-        "todo",
-        "note",
-        "diary",
-        "ledger",
-        "search",
-        "reminder",
-        "common",
-        "export",
-        "settings",
-        "web",
+    all_parts: list[str] = [
+        str(HELP_MAP["header"]),
+        "",
+        "🧭 **模块导航**",
+        "• 记录与安排: `event` `todo` `note` `diary` `ledger`",
+        "• 查询与操作: `search` `confirm` `snooze` `undo` `export`",
+        "• 配置与界面: `settings` `web`",
+        "",
+        "💡 输入 `/pendo <子命令>` 可查看对应模块帮助",
+        "",
     ]
 
-    for key in sections:
-        section = HELP_MAP[key]
-        if isinstance(section, list):
-            all_parts.extend(section)
+    for key in HELP_SECTION_ORDER:
+        rendered = _render_help_section(key)
+        if rendered:
+            all_parts.extend(rendered)
         all_parts.append("")  # 空行分隔
 
-    all_parts.append("输入 /pendo <子命令> 可查看对应模块帮助")
+    all_parts.append("📎 例如: `/pendo event` `/pendo todo` `/pendo web`")
     return "\n".join(all_parts)
 
 

@@ -440,7 +440,7 @@ def test_event_validation_rejects_invalid_merged_update_values():
         normalize_event_fields(merged, partial=False)
 
 
-def test_event_reminder_log_sync_prunes_removed_reminders_and_deletes_on_item_delete():
+def test_event_reminder_log_sync_preserves_sent_history_but_excludes_removed_reminders_from_repeat_queue():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_event_reminder_sync_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
@@ -464,7 +464,10 @@ def test_event_reminder_log_sync_prunes_removed_reminders_and_deletes_on_item_de
 
         logs = db.get_reminder_logs("ev1")
         queued = db.get_unconfirmed_sent_reminders()
-        assert [row["remind_time"] for row in logs] == ["2026-03-26T09:30:00"]
+        assert [row["remind_time"] for row in logs] == [
+            "2026-03-26T09:00:00",
+            "2026-03-26T09:30:00",
+        ]
         assert [row["remind_time"] for row in queued] == ["2026-03-26T09:30:00"]
 
         assert db.delete_item("ev1", soft=True, owner_id=owner_id) is True

@@ -138,6 +138,37 @@ class TestPendoConfig:
         schedule = config.get("schedule", [])
         assert isinstance(schedule, list)
 
+    def test_show_help_uses_navigation_and_section_dividers(self):
+        """测试完整帮助使用更明显的导航和分节样式"""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.main import _show_help
+
+        help_text = _show_help()
+
+        assert "🧭 **模块导航**" in help_text
+        assert "━━ ⚡ **快速记录**" in help_text
+        assert "━━ 🗓️ **日程管理 (Event)**" in help_text
+        assert "📎 例如:" in help_text
+
+    def test_show_help_for_subcommand_only_renders_requested_section(self):
+        """测试子模块帮助只渲染对应模块并保留顶部导航提示"""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.main import _show_help
+
+        help_text = _show_help("event")
+
+        assert "🧭 输入 `/pendo` 查看完整总览" in help_text
+        assert "━━ 🗓️ **日程管理 (Event)**" in help_text
+        assert "多节点事件可直接写“节点名 + 改成/改到 + 新时间”" in help_text
+        assert "/pendo event edit 80efbef6 会议开始改成4月22日12:43" in help_text
+        assert "━━ ✅ **待办事项 (Todo)**" not in help_text
+
 
 class TestPendoServices:
     """测试 pendo 服务模块"""
@@ -1143,7 +1174,7 @@ class TestReminderRegression:
         finally:
             db.cleanup()
 
-    def test_batch_edit_prunes_stale_reminder_logs(self, tmp_path):
+    def test_batch_edit_preserves_sent_history_and_prunes_stale_unsent_logs(self, tmp_path):
         import sys
         from unittest.mock import MagicMock
 
@@ -1162,7 +1193,7 @@ class TestReminderRegression:
                 title="重复会议",
                 start_time="2030-01-01T10:00:00",
                 end_time="2030-01-01T11:00:00",
-                remind_times=["2030-01-01T09:00:00", "2030-01-01T10:00:00"],
+                remind_times=["2030-01-01T08:30:00", "2030-01-01T09:00:00", "2030-01-01T10:00:00"],
                 parent_id=parent_id,
                 rrule="FREQ=DAILY;COUNT=2",
                 created_at="2030-01-01T00:00:00",
@@ -1173,7 +1204,7 @@ class TestReminderRegression:
                 title="重复会议",
                 start_time="2030-01-02T10:00:00",
                 end_time="2030-01-02T11:00:00",
-                remind_times=["2030-01-02T09:00:00", "2030-01-02T10:00:00"],
+                remind_times=["2030-01-02T08:30:00", "2030-01-02T09:00:00", "2030-01-02T10:00:00"],
                 parent_id=parent_id,
                 rrule="FREQ=DAILY;COUNT=2",
                 created_at="2030-01-01T00:00:00",
@@ -1181,6 +1212,20 @@ class TestReminderRegression:
             )
             db.items.insert_item(first, "series123_20300101")
             db.items.insert_item(second, "series123_20300102")
+            db.confirm_reminder(
+                "series123_20300101",
+                "preconfirmed",
+                owner_id="u1",
+                remind_time="2030-01-01T08:30:00",
+                allow_future=True,
+            )
+            db.confirm_reminder(
+                "series123_20300102",
+                "preconfirmed",
+                owner_id="u1",
+                remind_time="2030-01-02T08:30:00",
+                allow_future=True,
+            )
             db.log_reminder("series123_20300101", "2030-01-01T09:00:00", sent=True)
             db.log_reminder("series123_20300101", "2030-01-01T10:00:00", sent=True)
             db.log_reminder("series123_20300102", "2030-01-02T09:00:00", sent=True)
@@ -1198,8 +1243,18 @@ class TestReminderRegression:
             )
 
             assert result["status"] == "success"
-            assert db.get_reminder_logs("series123_20300101") == []
-            assert db.get_reminder_logs("series123_20300102") == []
+            first_logs = db.get_reminder_logs("series123_20300101")
+            second_logs = db.get_reminder_logs("series123_20300102")
+            assert sorted(log["remind_time"] for log in first_logs) == [
+                "2030-01-01T09:00:00",
+                "2030-01-01T10:00:00",
+            ]
+            assert sorted(log["remind_time"] for log in second_logs) == [
+                "2030-01-02T09:00:00",
+                "2030-01-02T10:00:00",
+            ]
+            assert all(log["sent_at"] for log in first_logs + second_logs)
+            assert db.get_unconfirmed_sent_reminders() == []
         finally:
             db.cleanup()
 
@@ -1250,6 +1305,94 @@ class TestReminderRegression:
             assert updated.milestones == [
                 {"name": "开始", "time": "2030-01-05T10:00:00"},
                 {"name": "截止", "time": "2030-01-07T10:00:00"},
+            ]
+        finally:
+            db.cleanup()
+
+    def test_edit_milestone_event_updates_targeted_milestone_and_keeps_other_nodes(self, tmp_path):
+        import sys
+        from unittest.mock import AsyncMock, MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_milestone_targeted_edit.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="学术会议",
+                start_time="2030-01-06T00:00:00",
+                end_time="2030-01-26T12:00:00",
+                milestones=[
+                    {"name": "注册截止", "time": "2030-01-06T00:00:00"},
+                    {"name": "报告提交截止", "time": "2030-01-13T00:00:00"},
+                    {"name": "会议开始", "time": "2030-01-22T10:30:00"},
+                    {"name": "会议结束", "time": "2030-01-26T12:00:00"},
+                ],
+                remind_times=[
+                    "2030-01-05T00:00:00",
+                    "2030-01-06T00:00:00",
+                    "2030-01-12T00:00:00",
+                    "2030-01-13T00:00:00",
+                    "2030-01-21T10:30:00",
+                    "2030-01-22T09:30:00",
+                    "2030-01-22T10:30:00",
+                    "2030-01-25T12:00:00",
+                    "2030-01-26T12:00:00",
+                ],
+                notes="旧备注",
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(event, "mile5678")
+
+            ai_parser = MagicMock()
+            ai_parser.parse_event_with_ai = AsyncMock(side_effect=RuntimeError("boom"))
+            ai_parser.parse_natural_language.return_value = {
+                "type": "event",
+                "title": "会议开始改成1月22日中午12:43，备注从北京南坐G123去会场",
+                "content": "会议开始改成1月22日中午12:43，备注从北京南坐G123去会场",
+                "category": "工作",
+                "owner_id": "u1",
+                "needs_confirmation": [],
+            }
+            handler = EventHandler(db=db, ai_parser=ai_parser, reminder_service=MagicMock())
+
+            result = asyncio.run(
+                handler.edit_event(
+                    "u1",
+                    "mile5678 会议开始改成1月22日中午12:43，备注从北京南坐G123去会场",
+                    MagicMock(),
+                )
+            )
+
+            assert result["status"] == "success"
+
+            updated = db.items.get_item("mile5678", "u1")
+            assert updated is not None
+            assert updated.start_time == "2030-01-06T00:00:00"
+            assert updated.end_time == "2030-01-26T12:00:00"
+            assert updated.notes == "从北京南坐G123去会场"
+            assert updated.milestones == [
+                {"name": "注册截止", "time": "2030-01-06T00:00:00"},
+                {"name": "报告提交截止", "time": "2030-01-13T00:00:00"},
+                {"name": "会议开始", "time": "2030-01-22T12:43:00"},
+                {"name": "会议结束", "time": "2030-01-26T12:00:00"},
+            ]
+            assert updated.remind_times == [
+                "2030-01-05T00:00:00",
+                "2030-01-06T00:00:00",
+                "2030-01-12T00:00:00",
+                "2030-01-13T00:00:00",
+                "2030-01-21T12:43:00",
+                "2030-01-22T11:43:00",
+                "2030-01-22T12:43:00",
+                "2030-01-25T12:00:00",
+                "2030-01-26T12:00:00",
             ]
         finally:
             db.cleanup()
@@ -2403,6 +2546,98 @@ class TestReminderBackfillRegression:
         finally:
             db.cleanup()
 
+    def test_confirm_future_remind_time_with_allow_future_creates_preconfirmed_log(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_confirm_future.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="提醒测试",
+                start_time="2030-01-02T10:00:00",
+                remind_times=["2030-01-02T09:00:00", "2030-01-02T10:00:00"],
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(event, "evtfuture")
+
+            result = db.items.confirm_reminder(
+                "evtfuture",
+                "preconfirmed",
+                owner_id="u1",
+                remind_time="2030-01-02T09:00:00",
+                allow_future=True,
+            )
+
+            assert result["status"] == "success"
+            logs = db.items.get_reminder_logs("evtfuture")
+            assert len(logs) == 1
+            assert logs[0]["remind_time"] == "2030-01-02T09:00:00"
+            assert logs[0]["sent_at"] is None
+            assert logs[0]["confirmed_at"]
+            assert logs[0]["user_action"] == "preconfirmed"
+            assert logs[0]["repeat_count"] == 0
+            assert logs[0]["last_sent_at"] is None
+        finally:
+            db.cleanup()
+
+    def test_event_reminders_confirm_today_preconfirms_all_matching_reminders(self, tmp_path, monkeypatch):
+        import sys
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers import event as event_module
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        fixed_now = datetime.fromisoformat("2030-01-02T08:00:00+08:00")
+        monkeypatch.setattr(event_module, "now_in_timezone", lambda user_id=None, db=None: fixed_now)
+
+        db = Database(str(tmp_path / "pendo_reminders_confirm_today.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="今日提醒",
+                start_time="2030-01-02T14:00:00",
+                remind_times=[
+                    "2030-01-02T09:00:00",
+                    "2030-01-02T13:00:00",
+                    "2030-01-02T14:00:00",
+                    "2030-01-03T09:00:00",
+                ],
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(event, "evtday02")
+
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+            result = asyncio.run(
+                handler.handle_reminders("u1", "confirm evtday02 today", MagicMock())
+            )
+
+            assert result["status"] == "success"
+            assert "已确认 3 个提醒" in result["message"]
+            logs = db.items.get_reminder_logs("evtday02")
+            confirmed = {log["remind_time"] for log in logs if log["confirmed_at"]}
+            assert confirmed == {
+                "2030-01-02T09:00:00",
+                "2030-01-02T13:00:00",
+                "2030-01-02T14:00:00",
+            }
+            assert "2030-01-03T09:00:00" not in confirmed
+        finally:
+            db.cleanup()
+
     def test_reminder_disabled_user_does_not_receive_scheduled_reminder(self, monkeypatch):
         import sys
         from datetime import datetime
@@ -2457,6 +2692,89 @@ class TestReminderBackfillRegression:
                     "quiet_hours_start": "23:00",
                     "quiet_hours_end": "07:00",
                     "settings_json": {"reminder_enabled": False},
+                }
+
+            def get_unconfirmed_sent_reminders(self):
+                return []
+
+            def get_item(self, item_id):
+                return item
+
+        service = ReminderService(db=_FakeDb())
+
+        result = service.check_and_send_reminders()
+
+        assert result["sent"] == 0
+        assert result["messages"] == []
+        assert service.db.logged == []
+
+    def test_preconfirmed_future_reminder_is_not_sent_by_scheduler(self, monkeypatch):
+        import sys
+        from datetime import datetime
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.services import reminder as reminder_module
+        from plugins.pendo.services.reminder import ReminderService
+
+        fixed_now = datetime.fromisoformat("2030-01-01T09:00:00+08:00")
+
+        monkeypatch.setattr(
+            reminder_module, "now_in_timezone", lambda user_id=None, db=None: fixed_now
+        )
+        monkeypatch.setattr(
+            reminder_module,
+            "parse_and_localize",
+            lambda dt_str, user_id=None, db=None: datetime.fromisoformat(dt_str).replace(
+                tzinfo=fixed_now.tzinfo
+            ),
+        )
+
+        item = SimpleNamespace(
+            id="evt123",
+            owner_id="u1",
+            title="晨会",
+            start_time="2030-01-01T10:00:00",
+            end_time="2030-01-01T11:00:00",
+            remind_times=["2030-01-01T09:00:00"],
+            context={},
+            location="会议室A",
+            notes="",
+            milestones=[],
+            tags=[],
+        )
+
+        class _FakeDb:
+            def __init__(self):
+                self.logged = []
+
+            def get_all_events_with_reminders(self, future_hours=0):
+                return [item]
+
+            def is_reminder_sent(self, item_id, remind_time):
+                return False
+
+            def get_reminder_logs(self, item_id):
+                assert item_id == "evt123"
+                return [
+                    {
+                        "remind_time": "2030-01-01T09:00:00",
+                        "sent_at": None,
+                        "confirmed_at": "2030-01-01T08:00:00",
+                        "user_action": "preconfirmed",
+                        "repeat_count": 0,
+                        "last_sent_at": None,
+                    }
+                ]
+
+            def log_reminder(self, item_id, remind_time, sent=True):
+                self.logged.append((item_id, remind_time, sent))
+
+            def get_user_settings(self, user_id):
+                return {
+                    "quiet_hours_start": "23:00",
+                    "quiet_hours_end": "07:00",
+                    "settings_json": {"reminder_enabled": True},
                 }
 
             def get_unconfirmed_sent_reminders(self):

@@ -13,6 +13,18 @@ def group_reminders_by_milestone(
     remind_times: list[str], milestones: list[dict[str, Any]]
 ) -> list[tuple[dict[str, Any], list[str]]]:
     """Group reminders by nearest following milestone."""
+    milestone_map = group_reminders_by_milestone_index(remind_times, milestones)
+    return [
+        (milestones[idx], milestone_map[idx])
+        for idx in range(len(milestones))
+        if milestone_map[idx]
+    ]
+
+
+def group_reminders_by_milestone_index(
+    remind_times: list[str], milestones: list[dict[str, Any]]
+) -> dict[int, list[str]]:
+    """Group reminders by milestone index."""
     milestone_map: dict[int, list[str]] = {i: [] for i in range(len(milestones))}
     for rt in remind_times:
         try:
@@ -33,11 +45,7 @@ def group_reminders_by_milestone(
                     best_idx = idx
         if best_idx is not None:
             milestone_map[best_idx].append(rt)
-    return [
-        (milestones[idx], milestone_map[idx])
-        for idx in range(len(milestones))
-        if milestone_map[idx]
-    ]
+    return milestone_map
 
 
 def normalize_iso(time_str: str) -> str:
@@ -112,14 +120,67 @@ def ensure_start_time_reminder(remind_times: list[str], start_time: str | None) 
     return normalized
 
 
+def recalculate_milestone_reminders(
+    old_milestones: list[dict[str, Any]],
+    new_milestones: list[dict[str, Any]],
+    existing_reminders: list[str],
+) -> list[str]:
+    """Shift reminder groups milestone-by-milestone, preserving unaffected nodes."""
+    if not old_milestones or not new_milestones:
+        return sorted(existing_reminders)
+
+    grouped = group_reminders_by_milestone_index(existing_reminders, old_milestones)
+    old_index_by_name = {
+        str(milestone.get("name", "")).strip(): idx
+        for idx, milestone in enumerate(old_milestones)
+        if str(milestone.get("name", "")).strip()
+    }
+
+    recalculated: list[str] = []
+    for new_idx, new_milestone in enumerate(new_milestones):
+        old_idx = old_index_by_name.get(str(new_milestone.get("name", "")).strip(), new_idx)
+        if old_idx >= len(old_milestones):
+            continue
+
+        old_milestone = old_milestones[old_idx]
+        cluster = grouped.get(old_idx, [])
+        if not cluster:
+            continue
+
+        old_time = str(old_milestone.get("time", "")).strip()
+        new_time = str(new_milestone.get("time", "")).strip()
+        if not old_time or not new_time:
+            recalculated.extend(cluster)
+            continue
+
+        if old_time == new_time:
+            recalculated.extend(cluster)
+            continue
+
+        try:
+            offsets = calculate_remind_offsets(datetime.fromisoformat(old_time), cluster)
+            recalculated.extend(apply_offsets(datetime.fromisoformat(new_time), offsets))
+        except (ValueError, TypeError):
+            recalculated.extend(cluster)
+
+    return sorted(set(recalculated))
+
+
 def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str]:
     """Shift reminder schedule when event start_time changes."""
+    existing = parse_remind_times(event.remind_times)
+    old_milestones = getattr(event, "milestones", None) or []
+    new_milestones = updates.get("milestones") or []
+    if old_milestones and new_milestones:
+        remind_times = recalculate_milestone_reminders(old_milestones, new_milestones, existing)
+        start = updates.get("start_time") or event.start_time
+        return ensure_start_time_reminder(remind_times, start)
+
     new_start = updates.get("start_time")
     if not new_start:
-        remind_times = parse_remind_times(event.remind_times)
+        remind_times = existing
         start = event.start_time
     else:
-        existing = parse_remind_times(event.remind_times)
         if existing and event.start_time:
             old_start = datetime.fromisoformat(event.start_time)
             new_start_dt = datetime.fromisoformat(new_start)
