@@ -1,6 +1,6 @@
 {
   "name": "xiaoqing_chat",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "小青拟人聊天（纯对话 + 可选图片上下文/表情包回复）",
   "entry": "main.py",
   "commands": [

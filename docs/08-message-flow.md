@@ -143,6 +143,8 @@ text, user_id, group_id = normalize_message(event)
 
 > 说明：命令路由仍然只看纯文本；但当 `smalltalk_provider = "xiaoqing_chat"` 且插件媒体能力开启时，纯图片/表情包消息不会在 parser 阶段被丢弃，后续会由 `xiaoqing_chat` 自己读取原始消息段并渲染成 `[图片：...]` / `[表情包：...]` 注入上下文。
 
+> 补充：进入 `xiaoqing_chat` 后，插件会按原始消息段顺序把文本和媒体 marker 重新拼回“有效用户输入”。也就是说，`文字 + 图片 + 文字` 不会再塌成“所有文字在前、所有图片在后”。
+
 ```python
 # 输入
 message = [
@@ -405,6 +407,7 @@ async def handle_session(text: str, event: dict, context, session) -> List[dict]
 - **插件自行决定是否回复** - `xiaoqing_chat` 有自己的频率控制和回复概率判断
 - **返回空列表表示不回复** - 如果插件决定不回复，返回 `[]` 即可
 - **图片消息可进入闲聊链** - 纯图片/表情包消息会被保留到插件层，再决定是否写入上下文
+- **混合图文会保留顺序** - `xiaoqing_chat` 会在插件层按原始 segment 顺序重建有效用户输入
 - **图片回复是后处理步骤** - 主回复仍先生成纯文本，是否再补一张本地表情包由插件第二阶段决定
 
 这样设计的原因是 LLM 模型可以根据上下文判断是否需要回复，比简单的随机概率更智能。

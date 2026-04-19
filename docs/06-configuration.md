@@ -352,14 +352,16 @@ api_key = plugin_cfg.get("api_key")
 {
   "plugins": {
     "xiaoqing_chat": {
-      "api_key": "sk-your-openai-api-key",
-      "api_base": "https://api.openai.com/v1",
-      "model": "gpt-4o-mini",
-      "temperature": 0.7,
-      "max_tokens": 1000,
-      "memory_enabled": true,
-      "emotion_enabled": true,
-      "expression_learning": true
+      "default": "deepseek",
+      "providers": {
+        "deepseek": {
+          "api_base": "https://api.deepseek.com",
+          "api_key": "sk-your-chat-api-key",
+          "model": "deepseek-chat",
+          "endpoint_path": "/v1/chat/completions",
+          "proxy": ""
+        }
+      }
     }
   }
 }
@@ -369,14 +371,16 @@ api_key = plugin_cfg.get("api_key")
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|---------|------|
-| `api_key` | `string` | 必需 | LLM API Key |
-| `api_base` | `string` | `https://api.openai.com/v1` | API 基础 URL |
-| `model` | `string` | `gpt-4o-mini` | 使用的模型 |
-| `temperature` | `float` | `0.7` | 温度参数（0-1） |
-| `max_tokens` | `int` | `1000` | 最大 token 数 |
-| `memory_enabled` | `boolean` | `true` | 是否启用长期记忆 |
-| `emotion_enabled` | `boolean` | `true` | 是否启用情绪系统 |
-| `expression_learning` | `boolean` | `true` | 是否启用表情学习 |
+| `default` | `string` | `""` | 默认聊天 provider 名称；`/xc 模型 默认` 会切回这里 |
+| `providers` | `object` | 必需 | 聊天模型提供商集合，键是 provider 名 |
+| `providers.<name>.api_base` | `string` | 必需 | 聊天模型 API Base |
+| `providers.<name>.api_key` | `string` | 必需 | 聊天模型 API Key |
+| `providers.<name>.model` | `string` | 必需 | 聊天模型名称 |
+| `providers.<name>.endpoint_path` | `string` | `"/v1/chat/completions"` | OpenAI 兼容接口路径 |
+| `providers.<name>.proxy` | `string` | `""` | 可选代理 |
+
+> [!TIP]
+> `xiaoqing_chat` 现在按 provider 结构读取 secrets。这样可以配多套聊天模型，并通过 `/xc 模型 <名称>` 在运行时切换。
 
 #### xiaoqing_chat 媒体配置（`plugins/xiaoqing_chat/config/xiaoqing_config.json`）
 
@@ -422,12 +426,12 @@ api_key = plugin_cfg.get("api_key")
         }
       },
       "vision": {
-        "default": "glm-4v",
+        "default": "glm-4.6v-flash",
         "providers": {
-          "glm-4v": {
+          "glm-4.6v-flash": {
             "api_base": "https://open.bigmodel.cn/api/paas/v4",
             "api_key": "your-vision-key",
-            "model": "glm-4v",
+            "model": "glm-4.6v-flash",
             "endpoint_path": "/chat/completions"
           }
         }
@@ -447,6 +451,8 @@ api_key = plugin_cfg.get("api_key")
 插件会把入站图片统一落到 `figures/inbox/`。如果图片被识别成表情包，就会自动复制进 `figures/library/` 并写入索引，后续在合适语境下参与表情包回复选择。新收进图库的表情包也会让这条消息更倾向于触发一次自然回应。
 
 NapCat/OneBot 的纯 `mface` 消息如果没有直接携带图片源，插件会尝试通过 `onebot_http_base` 对应的 HTTP API 调用 `get_msg` 和 `get_image` 回收真实图片；拿不到真实图片时，再退回成仅保留摘要的 `[表情包：...]` 标记。
+
+QQ 原生 `face` 表情不会走图片下载链，而是直接转换成 `[QQ表情：微笑]` 这类 marker 进入上下文；如果拿不到名称，则退回成 `[QQ表情：id=14]`。
 
 如果视觉模型未配置、配置不完整，或请求失败，插件会退回到基于文件名/摘要的保守标记，不会阻断普通文本对话；同时会在日志里打出 `media.analyze.skip` / `media.analyze.fail`，方便定位是“没拿到图”还是“视觉模型没跑起来”。
 
@@ -615,10 +621,26 @@ PENDO_WEB_PORT=8765
   "admin_user_ids": [123456789],
   "plugins": {
     "xiaoqing_chat": {
-      "api_base": "https://api.openai.com/v1",
-      "api_key": "your-production-api-key",
-      "model": "gpt-4o-mini",
-      "temperature": 0.7
+      "default": "deepseek",
+      "providers": {
+        "deepseek": {
+          "api_base": "https://api.deepseek.com",
+          "api_key": "your-production-api-key",
+          "model": "deepseek-chat",
+          "endpoint_path": "/v1/chat/completions"
+        }
+      },
+      "vision": {
+        "default": "glm-4.6v-flash",
+        "providers": {
+          "glm-4.6v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "your-vision-api-key",
+            "model": "glm-4.6v-flash",
+            "endpoint_path": "/chat/completions"
+          }
+        }
+      }
     }
   }
 }
@@ -640,13 +662,26 @@ PENDO_WEB_PORT=8765
 {
   "plugins": {
     "xiaoqing_chat": {
-      "api_key": "sk-your-openai-api-key",
-      "api_base": "https://api.openai.com/v1",
-      "model": "gpt-4o-mini",
-      "temperature": 0.7,
-      "memory_enabled": true,
-      "emotion_enabled": true,
-      "expression_learning": true
+      "default": "deepseek",
+      "providers": {
+        "deepseek": {
+          "api_base": "https://api.deepseek.com",
+          "api_key": "sk-your-chat-api-key",
+          "model": "deepseek-chat",
+          "endpoint_path": "/v1/chat/completions"
+        }
+      },
+      "vision": {
+        "default": "glm-4.6v-flash",
+        "providers": {
+          "glm-4.6v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "your-vision-api-key",
+            "model": "glm-4.6v-flash",
+            "endpoint_path": "/chat/completions"
+          }
+        }
+      }
     }
   }
 }
@@ -658,17 +693,22 @@ PENDO_WEB_PORT=8765
 {
   "plugins": {
     "xiaoqing_chat": {
-      "api_key": "your-api-key",
-      "api_base": "https://api.deepseek.com/v1",
-      "model": "deepseek-chat",
-      "temperature": 0.5
+      "default": "deepseek",
+      "providers": {
+        "deepseek": {
+          "api_base": "https://api.deepseek.com",
+          "api_key": "your-api-key",
+          "model": "deepseek-chat",
+          "endpoint_path": "/v1/chat/completions"
+        }
+      }
     }
   }
 }
 ```
 
 **推荐免费/低成本选项**：
-- **DeepSeek**：`https://api.deepseek.com/v1` - 免费额度较大
+- **DeepSeek**：`https://api.deepseek.com` - 免费额度较大
 - **Qwen**：`https://dashscope.aliyuncs.com/compatible-mode/v1` - 通义千问
 - **Ollama 本地部署**：完全免费，需要本地 GPU
 
