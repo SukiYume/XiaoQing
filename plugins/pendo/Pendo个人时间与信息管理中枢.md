@@ -5,6 +5,10 @@
 ## 快速开始
 
 ```
+# 查看帮助
+/pendo
+/pendo event
+
 # 添加日程
 /pendo event add 明天下午2点开会
 
@@ -87,12 +91,23 @@
 | 删除单次 | `/pendo event delete <id>` | 删除该条目 |
 | 删除重复 | `/pendo event delete <parent_id>` | 删除所有子事件 |
 | 删除单次重复 | `/pendo event delete <child_id>` | 仅删除该次 (如 `abc12345_20260308`) |
-| 编辑 | `/pendo event edit <id> <修改内容>` | AI重新解析 |
+| 编辑 | `/pendo event edit <id> <修改内容>` | 统一编辑单次/重复/多节点事件；修改时间时未发送提醒会按相对偏移同步 |
+
+示例：
+
+```
+/pendo event edit 80efbef6 会议开始改成4月22日12:43
+/pendo event edit 80efbef6 会议开始改成4月22日12:43，备注从北京南坐G123去会场
+```
 
 ## 1.4 提醒操作
 
 ```
 /pendo confirm <id>        # 确认提醒
+/pendo event reminders confirm <id> today   # 提前确认今天的提醒，不再发送
+/pendo event reminders confirm <id> future  # 提前确认未来所有提醒
+/pendo event reminders confirm <id> all     # 提前确认全部未发送提醒
+/pendo event reminders confirm <id> 04-18 13:50  # 提前确认某一条提醒
 /pendo snooze <id> 10m     # 延后10分钟
 /pendo snooze <id> 19:00   # 延后到19:00
 ```

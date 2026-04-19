@@ -162,6 +162,8 @@
 
 强大的个人时间与信息管理插件，支持日程管理、待办事项、笔记、日记等功能，并附带完整的 **Web 控制台**（FastAPI SPA）。
 
+> `/pendo` 会显示带 emoji 的模块导航帮助；输入 `/pendo <模块>`（如 `/pendo event`、`/pendo ledger`）可直达对应分组帮助。
+
 #### 核心特性
 
 | 特性 | 说明 |
@@ -186,7 +188,7 @@
 | `/pendo event add <内容>` | 添加日程（AI 解析） |
 | `/pendo event list [范围]` | 查看日程 |
 | `/pendo event delete <id>` | 删除日程 |
-| `/pendo event edit <id> <内容>` | 编辑日程 |
+| `/pendo event edit <id> <内容>` | 统一编辑单次 / 重复 / 多节点事件；修改时间时未发送提醒会自动同步平移 |
 | `/pendo event reminders [id\|范围]` | 查看提醒 |
 
 **待办事项 (Todo/Task)**
@@ -250,6 +252,7 @@
 | 命令 | 说明 |
 |------|------|
 | `/pendo confirm <id>` | 确认提醒 |
+| `/pendo event reminders confirm <id> [today\|future\|all\|提醒时间]` | 提前确认未发送提醒，不再发出 |
 | `/pendo snooze <id> <时间>` | 延后提醒（10m, 1h, 19:00） |
 
 **导入导出**
@@ -327,11 +330,14 @@ Web 控制台提供以下页面：
 **1. 添加日程（AI 智能解析）**
 
 ```
+/pendo                                        # 查看完整帮助总览
+/pendo event                                  # 只看 event 模块帮助
 /pendo event add 3月8日下午两点，国自然截止，提前一周和一天提醒
 /pendo event add 每月18号上午十点，公积金提取，重复7个月
 /pendo event list today        # 查看今日日程
 /pendo event list 2026-03     # 查看三月日程
 /pendo event list last7d      # 查看最近7天
+/pendo event edit 80efbef6 会议开始改成4月22日12:43，备注从北京南坐G123去会场
 ```
 
 **2. 待办管理**
@@ -378,6 +384,8 @@ Web 控制台提供以下页面：
 
 ```
 /pendo confirm 1                              # 确认提醒
+/pendo event reminders confirm ea66203d today   # 今天未发送的提醒不再发送
+/pendo event reminders confirm ea66203d future  # 未来全部未发送提醒不再发送
 /pendo snooze 1 10m                          # 延后10分钟
 /pendo snooze 1 19:00                        # 延后到19点
 ```

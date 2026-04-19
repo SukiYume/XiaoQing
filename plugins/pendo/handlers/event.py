@@ -80,6 +80,8 @@ class EventHandler(DbOpsMixin):
     )
     _CATEGORY_EDIT_RE = re.compile(r"(分类|归类|类别|类目)")
     _CONTENT_EDIT_RE = re.compile(r"(内容|描述|详情|补充|说明)")
+    _NOTES_EDIT_RE = re.compile(r"(?:备注(?:改为|改成|[:：])?|备注)\s*(.+)")
+    _MILESTONE_VERBS = ("改成", "改到", "改为", "调整到", "挪到", "挪成")
 
     db: "Database"
     ai_parser: EventAIParserProtocol
@@ -730,7 +732,7 @@ class EventHandler(DbOpsMixin):
                 return {"status": "warning", "message": "⚠️ 未识别到有效的修改内容"}
 
             title = event.title
-            if "start_time" in updates and "remind_times" not in updates:
+            if ("start_time" in updates or "milestones" in updates) and "remind_times" not in updates:
                 updates["remind_times"] = recalculate_event_reminders(event, updates)
             elif "remind_times" in updates:
                 updates["remind_times"] = ensure_start_time_reminder(
@@ -1027,11 +1029,14 @@ class EventHandler(DbOpsMixin):
         if parts and parts[0].lower() == "set":
             rest = parts[1] if len(parts) > 1 else ""
             return await self.set_reminders(user_id, rest, context)
+        if parts and parts[0].lower() == "confirm":
+            rest = parts[1] if len(parts) > 1 else ""
+            return await self.confirm_event_reminders(user_id, rest, context)
         # "list" 是子命令关键字，其后可跟可选的日期范围
         if parts and parts[0].lower() == "list":
             args = parts[1] if len(parts) > 1 else "today"
-        # 顶层命令误放到 reminders 下（如 /pendo event reminders confirm xxx）
-        if parts and parts[0].lower() in ("confirm", "snooze"):
+        # 顶层命令误放到 reminders 下（如 /pendo event reminders snooze xxx）
+        if parts and parts[0].lower() in ("snooze",):
             cmd = parts[0].lower()
             item_id = parts[1].split()[0] if len(parts) > 1 else "<id>"
             hint = (
@@ -1039,6 +1044,148 @@ class EventHandler(DbOpsMixin):
             )
             return {"status": "error", "message": f"❌ 正确用法:\n\n{hint}"}
         return await self.list_reminders(user_id, args, context)
+
+    async def confirm_event_reminders(
+        self, user_id: str, args: str, context: PendoContext
+    ) -> CommandMessage:
+        """提前确认指定事件/系列的提醒。"""
+        parts = (args or "").split(maxsplit=1)
+        if not parts:
+            return {
+                "status": "error",
+                "message": (
+                    "❌ 用法: /pendo event reminders confirm <id> [today|future|all|提醒时间]\n"
+                    "例如: /pendo event reminders confirm abc12345 today"
+                ),
+            }
+
+        query_id = parts[0].strip()
+        selector = parts[1].strip() if len(parts) > 1 else "future"
+        events, error = await self._resolve_events_for_reminder_command(user_id, query_id)
+        if error:
+            return error
+        if not events:
+            return {"status": "error", "message": f"❌ 找不到日程 {query_id}"}
+
+        now = now_in_timezone(user_id, self.db).replace(tzinfo=None)
+        matched: list[tuple[EventItem, str]] = []
+        for event in events:
+            for remind_time in self._select_reminders_for_confirmation(event, selector, now):
+                matched.append((event, remind_time))
+
+        if not matched:
+            return {
+                "status": "warning",
+                "message": f"⚠️ 没有找到匹配 `{selector}` 的提醒",
+            }
+
+        confirmed_count = 0
+        for event, remind_time in matched:
+            remind_dt = datetime.fromisoformat(remind_time)
+            if remind_dt.tzinfo is not None:
+                remind_dt = remind_dt.astimezone(TimezoneHelper.DEFAULT_TZ).replace(tzinfo=None)
+            user_action = "preconfirmed" if remind_dt > now else "confirmed"
+            await run_sync(
+                self.db.confirm_reminder,
+                event.id,
+                user_action,
+                user_id,
+                remind_time,
+                True,
+            )
+            confirmed_count += 1
+
+        subject = events[0].title or "无标题"
+        scope = "系列" if len(events) > 1 else "日程"
+        return {
+            "status": "success",
+            "message": (
+                f"✅ 已确认 {confirmed_count} 个提醒\n"
+                f"🗓️ {scope}: {subject}\n"
+                f"💡 用 /pendo event reminders {query_id} 查看当前状态"
+            ),
+        }
+
+    async def _resolve_events_for_reminder_command(
+        self, user_id: str, query_id: str
+    ) -> tuple[list[EventItem], CommandMessage | None]:
+        single_event_id, event, error = await self._resolve_single_event_id_or_message(
+            user_id, query_id, allow_series_fallback=True
+        )
+        if error:
+            return [], error
+        if single_event_id and event:
+            return [event], None
+
+        rows = await self._db_find_instances(user_id, query_id)
+        if not rows:
+            return [], None
+
+        events: list[EventItem] = []
+        for row in rows:
+            item = self.db.items._row_to_item(row)
+            if isinstance(item, EventItem):
+                events.append(item)
+        return events, None
+
+    @staticmethod
+    def _select_reminders_for_confirmation(
+        event: EventItem, selector: str, now: datetime
+    ) -> list[str]:
+        remind_times = parse_remind_times(event.remind_times)
+        lowered = (selector or "future").strip().lower()
+
+        if lowered == "all":
+            return remind_times
+        if lowered == "future":
+            return [
+                remind_time
+                for remind_time in remind_times
+                if EventHandler._normalize_remind_time(remind_time) > now
+            ]
+        if lowered == "today":
+            return [
+                remind_time
+                for remind_time in remind_times
+                if EventHandler._normalize_remind_time(remind_time).date() == now.date()
+            ]
+
+        matched = [remind_time for remind_time in remind_times if EventHandler._matches_reminder_selector(remind_time, selector)]
+        return matched
+
+    @staticmethod
+    def _normalize_remind_time(remind_time: str) -> datetime:
+        remind_dt = datetime.fromisoformat(remind_time)
+        if remind_dt.tzinfo is not None:
+            remind_dt = remind_dt.astimezone(TimezoneHelper.DEFAULT_TZ).replace(tzinfo=None)
+        return remind_dt
+
+    @classmethod
+    def _matches_reminder_selector(cls, remind_time: str, selector: str) -> bool:
+        selector = (selector or "").strip()
+        if not selector:
+            return False
+
+        normalized = cls._normalize_remind_time(remind_time)
+        selector_candidates = [selector]
+        if "T" in remind_time:
+            selector_candidates.append(remind_time.replace("T", " "))
+
+        for candidate in selector_candidates:
+            if candidate == remind_time or candidate == remind_time.replace("T", " "):
+                return True
+
+        formats = ("%Y-%m-%d %H:%M", "%m-%d %H:%M", "%m月%d日 %H:%M")
+        for fmt in formats:
+            try:
+                parsed = datetime.strptime(selector, fmt)
+            except ValueError:
+                continue
+
+            if fmt.startswith("%m"):
+                parsed = parsed.replace(year=normalized.year)
+            return parsed == normalized.replace(second=0, microsecond=0)
+        return False
 
     async def set_reminders(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
         """修改现有事件的提醒时间
@@ -1333,6 +1480,14 @@ class EventHandler(DbOpsMixin):
         if parsed.get("milestones"):
             updates["milestones"] = parsed["milestones"]
 
+        heuristic_notes = self._extract_notes_update(changes)
+        if heuristic_notes is not None and heuristic_notes != getattr(current_event, "notes", None):
+            updates["notes"] = heuristic_notes
+
+        heuristic_milestones = self._extract_targeted_milestone_update(changes, current_event)
+        if heuristic_milestones:
+            updates["milestones"] = heuristic_milestones
+
         return updates
 
     @classmethod
@@ -1379,6 +1534,112 @@ class EventHandler(DbOpsMixin):
         if any(marker in content for marker in cls._TITLE_SCAFFOLD_MARKERS):
             return False
         return cls._CONTENT_EDIT_RE.search(changes) is not None
+
+    @classmethod
+    def _extract_notes_update(cls, changes: str) -> str | None:
+        match = cls._NOTES_EDIT_RE.search(changes)
+        if not match:
+            return None
+        notes = match.group(1).strip(" ，,。；;")
+        return notes or None
+
+    @classmethod
+    def _extract_targeted_milestone_update(
+        cls, changes: str, current_event: EventItem
+    ) -> list[dict[str, str]] | None:
+        milestones = getattr(current_event, "milestones", None) or []
+        if not milestones:
+            return None
+
+        for idx, milestone in enumerate(milestones):
+            name = str(milestone.get("name", "")).strip()
+            if not name or name not in changes:
+                continue
+            for verb in cls._MILESTONE_VERBS:
+                pattern = rf"(?:把)?{re.escape(name)}(?:时间)?\s*{verb}\s*(?P<dt>[^，,；;。]+)"
+                match = re.search(pattern, changes)
+                if not match:
+                    continue
+                parsed_time = cls._parse_edit_datetime_fragment(
+                    match.group("dt"),
+                    reference_time=str(milestone.get("time", "") or current_event.start_time or ""),
+                )
+                if not parsed_time:
+                    continue
+                updated = [dict(item) for item in milestones]
+                updated[idx]["time"] = parsed_time
+                return updated
+        return None
+
+    @classmethod
+    def _parse_edit_datetime_fragment(
+        cls, fragment: str, *, reference_time: str
+    ) -> str | None:
+        text = (fragment or "").strip(" ，,。；;")
+        if not text:
+            return None
+
+        reference_dt = None
+        if reference_time:
+            try:
+                reference_dt = datetime.fromisoformat(reference_time)
+            except (ValueError, TypeError):
+                reference_dt = None
+        reference_dt = reference_dt or datetime.now()
+
+        normalized = text.replace("T", " ")
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(normalized, fmt).isoformat()
+            except ValueError:
+                continue
+
+        relative_match = re.search(
+            r"(今天|明天|后天|前天)(?:\s*(上午|中午|下午|晚上|凌晨))?\s*(\d{1,2})(?:[点时:：](\d{1,2}))?",
+            text,
+        )
+        if relative_match:
+            base_date = parse_date_optional(relative_match.group(1), reference_dt)
+            if base_date:
+                hour = int(relative_match.group(3))
+                minute = int(relative_match.group(4) or 0)
+                hour = cls._apply_cn_period(relative_match.group(2), hour)
+                return datetime.strptime(base_date, "%Y-%m-%d").replace(
+                    hour=hour,
+                    minute=minute,
+                    second=0,
+                ).isoformat()
+
+        full_match = re.search(
+            r"(?:(\d{4})[年/-])?\s*(\d{1,2})[月/-](\d{1,2})(?:日|号)?"
+            r"(?:\s*(上午|中午|下午|晚上|凌晨))?\s*(\d{1,2})(?:[点时:：](\d{1,2}))?",
+            text,
+        )
+        if not full_match:
+            return None
+
+        year = int(full_match.group(1) or reference_dt.year)
+        month = int(full_match.group(2))
+        day = int(full_match.group(3))
+        hour = cls._apply_cn_period(full_match.group(4), int(full_match.group(5)))
+        minute = int(full_match.group(6) or 0)
+        try:
+            return datetime(year, month, day, hour, minute, 0).isoformat()
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _apply_cn_period(period: str | None, hour: int) -> int:
+        if period in ("下午", "晚上") and 1 <= hour < 12:
+            return hour + 12
+        if period == "中午":
+            if hour == 0:
+                return 12
+            if 1 <= hour < 11:
+                return hour + 12
+        if period == "凌晨" and hour == 12:
+            return 0
+        return hour
 
     def _looks_like_id(self, text: str) -> bool:
         """判断是否像ID（8位十六进制字符，或 8位十六进制_YYYYMMDD日期数字）"""
