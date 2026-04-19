@@ -7,6 +7,7 @@ from plugins.qingpet import main as qingpet_main
 from plugins.qingpet.commands.advanced_commands import handle_explore, handle_view_pet
 from plugins.qingpet.commands.basic_commands import handle_feed, handle_status
 from plugins.qingpet.services.database import Database
+from plugins.qingpet.services.item_service import ItemService
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.social_service import SocialService
 from plugins.qingpet.services.user_service import UserService
@@ -59,6 +60,84 @@ def test_admin_command_recognizes_admin_from_secrets_json():
 
     assert ok is True
     assert "已在群 10001 中启用" in msg
+
+
+def test_private_backpack_uses_real_group_scope_and_private_rate_bucket():
+    temp_db, db_path = _make_temp_db()
+    user_service = UserService(temp_db)
+    pet_service = PetService(temp_db)
+    item_service = ItemService(temp_db)
+
+    user_service.get_or_create_user("private_owner", 81001)
+    pet_service.adopt_pet("private_owner", 81001, "私聊宠")
+    ok, _ = item_service.buy_item("private_owner", 81001, "apple", 2)
+    assert ok is True
+
+    original_db = qingpet_main._db_instance
+    original_router = qingpet_main._router
+    qingpet_main._db_instance = temp_db
+    qingpet_main._router = None
+
+    event = {
+        "user_id": "private_owner",
+        "message_type": "private",
+        "message": [{"type": "text", "data": {"text": "/宠物 背包"}}],
+    }
+
+    try:
+        msg = _segments_text(asyncio.run(qingpet_main.handle("pet", "背包", event, None)))
+        conn = temp_db._get_connection()
+        group_zero_count = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE group_id = 0"
+        ).fetchone()["cnt"]
+        real_group_count = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE user_id = ? AND group_id = ?",
+            ("private_owner", 81001),
+        ).fetchone()["cnt"]
+        negative_bucket_count = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM command_timestamps WHERE user_id = ? AND group_id < 0",
+            ("private_owner",),
+        ).fetchone()["cnt"]
+    finally:
+        qingpet_main._db_instance = original_db
+        qingpet_main._router = original_router
+        _cleanup_temp_db(temp_db, db_path)
+
+    assert "苹果" in msg
+    assert group_zero_count == 0
+    assert real_group_count == 1
+    assert negative_bucket_count == 0
+
+
+def test_private_view_auto_scopes_to_single_pet_group():
+    temp_db, db_path = _make_temp_db()
+    pet_service = PetService(temp_db)
+    user_service = UserService(temp_db)
+
+    user_service.get_or_create_user("viewer_private", 81002)
+    user_service.get_or_create_user("10086", 81002)
+    pet_service.adopt_pet("viewer_private", 81002, "观察者")
+    pet_service.adopt_pet("10086", 81002, "被看见")
+
+    original_db = qingpet_main._db_instance
+    original_router = qingpet_main._router
+    qingpet_main._db_instance = temp_db
+    qingpet_main._router = None
+
+    event = {
+        "user_id": "viewer_private",
+        "message_type": "private",
+        "message": [{"type": "text", "data": {"text": "/宠物 查看 10086"}}],
+    }
+
+    try:
+        msg = _segments_text(asyncio.run(qingpet_main.handle("pet", "查看 10086", event, None)))
+    finally:
+        qingpet_main._db_instance = original_db
+        qingpet_main._router = original_router
+        _cleanup_temp_db(temp_db, db_path)
+
+    assert "被看见" in msg
 
 
 def test_private_status_lists_all_group_pets():

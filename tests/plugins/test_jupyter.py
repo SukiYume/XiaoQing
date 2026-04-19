@@ -177,12 +177,24 @@ class TestJupyterCodeReviewFixes:
         from plugins.jupyter.jupyter_manager import JupyterKernelManager
 
         data_dir = tmp_path / "jupyter"
+        JupyterKernelManager.shutdown_all()
         manager_a1 = JupyterKernelManager.get_instance(data_dir, "user-1")
         manager_a2 = JupyterKernelManager.get_instance(data_dir, "user-1")
         manager_b = JupyterKernelManager.get_instance(data_dir, "user-2")
 
         assert manager_a1 is manager_a2
         assert manager_a1 is not manager_b
+        JupyterKernelManager.shutdown_all()
+
+    def test_kernel_manager_instances_are_workspace_isolated(self, tmp_path):
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        JupyterKernelManager.shutdown_all()
+        manager_a = JupyterKernelManager.get_instance(tmp_path / "ws-a", "user-1")
+        manager_b = JupyterKernelManager.get_instance(tmp_path / "ws-b", "user-1")
+
+        assert manager_a is not manager_b
+        JupyterKernelManager.shutdown_all()
 
     def test_owner_key_uses_group_context_when_available(self):
         from plugins.jupyter.main import _owner_key

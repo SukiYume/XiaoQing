@@ -117,6 +117,11 @@ class TestCommandValidation:
         assert error is not None
         assert "危险" in error
 
+    def test_validate_shell_builtin_rejected(self, mock_context):
+        error = shell_main._validate_command("cd /tmp", mock_context)
+        assert error is not None
+        assert "内建" in error
+
 # ============================================================
 # 命令拆分测试
 # ============================================================
@@ -197,6 +202,13 @@ class TestShellHandle:
         result = await shell_main.handle("shell", "invalid_cmd", mock_event, mock_context)
         assert isinstance(result, list)
         assert "拒绝" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_handle_list_whitelist_hides_unsupported_builtins(self, mock_context, mock_event):
+        result = await shell_main.handle("shell", "list", mock_event, mock_context)
+        text = str(result)
+        assert "cd" not in text
+        assert "copy" not in text
 
 
 class TestShellExecutionSafety:

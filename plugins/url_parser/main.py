@@ -6,6 +6,7 @@ URL 解析插件
 
 # 标准库
 import logging
+from urllib.parse import urljoin
 
 # 第三方库
 import aiohttp
@@ -89,11 +90,13 @@ async def handle_url(url: str, event: dict, context) -> list:
             meta_img = soup.find('meta', attrs={'property': 'og:image'}) or \
                        soup.find('meta', attrs={'name': 'twitter:image'})
             if meta_img:
-                image_url = meta_img.get('content', '')
+                image_url = str(meta_img.get('content', '') or '').strip()
 
             return title, desc, image_url
 
         title, desc, image_url = await run_sync(_parse, html)
+        if image_url:
+            image_url = urljoin(url, image_url)
         
         if not title and not desc and not image_url:
             logger.debug(f"未找到标题、描述和图片: {url}")

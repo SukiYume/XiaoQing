@@ -191,7 +191,7 @@ class TestAdsPaperAsyncStorage:
             def add_paper_note(self, paper_id, content, user_id):
                 return True
 
-            def get_paper_notes(self, paper_id):
+            def get_paper_notes(self, paper_id, user_id=None):
                 return [{"content": "c"}]
 
         monkeypatch.setattr(note_commands.asyncio, "to_thread", fake_to_thread)
@@ -252,6 +252,29 @@ class TestPaperStorageBehavior:
         deadlines = storage.get_deadlines()
         assert len(deadlines) == 1
         assert deadlines[0]["name"] == "submit"
+
+    def test_storage_filters_notes_and_deadlines_by_user_and_delete_uses_visible_order(self, tmp_path):
+        from plugins.ads_paper.storage import PaperStorage
+
+        storage = PaperStorage(tmp_path)
+        storage.add_paper_note("paper-1", "note-user-1", 10001)
+        storage.add_paper_note("paper-1", "note-user-2", 10002)
+        storage.add_deadline("later", "2026-06-01", 10001)
+        storage.add_deadline("earlier", "2026-05-01", 10001)
+        storage.add_deadline("other-user", "2026-04-01", 10002)
+
+        user_notes = storage.get_paper_notes("paper-1", 10001)
+        other_notes = storage.get_paper_notes("paper-1", 10002)
+        assert [note["content"] for note in user_notes] == ["note-user-1"]
+        assert [note["content"] for note in other_notes] == ["note-user-2"]
+
+        deadlines = storage.get_deadlines(10001)
+        assert [deadline["name"] for deadline in deadlines] == ["earlier", "later"]
+
+        assert storage.delete_deadline(0, 10001) is True
+        remaining = storage.get_deadlines(10001)
+        assert [deadline["name"] for deadline in remaining] == ["later"]
+        assert [deadline["name"] for deadline in storage.get_deadlines(10002)] == ["other-user"]
 
 
 @pytest.mark.asyncio

@@ -36,13 +36,13 @@ async def cmd_note(
         except ValueError:
             return segments("❌ 序号必须是数字")
 
-        if await _run_storage(storage.delete_paper_note, paper_id, index):
+        if await _run_storage(storage.delete_paper_note, paper_id, index, user_id):
             return segments(f"✅ 已删除论文 {paper_id} 的笔记")
         return segments(f"❌ 删除失败，请检查 ID 和序号")
 
     if len(parsed) == 1:
         paper_id = parsed.first
-        notes = await _run_storage(storage.get_paper_notes, paper_id)
+        notes = await _run_storage(storage.get_paper_notes, paper_id, user_id)
         if not notes:
             return segments(f"📝 论文 {paper_id} 暂无笔记")
 
@@ -63,7 +63,7 @@ async def cmd_note(
         return segments("❌ 笔记内容不能为空")
 
     if await _run_storage(storage.add_paper_note, paper_id, content, user_id):
-        notes = await _run_storage(storage.get_paper_notes, paper_id)
+        notes = await _run_storage(storage.get_paper_notes, paper_id, user_id)
         return segments(f"✅ 已添加笔记到论文 {paper_id} (#{len(notes)})")
     return segments("❌ 添加笔记失败")
 
@@ -178,7 +178,7 @@ async def cmd_deadline(
     parsed = parse(args)
 
     if not parsed:
-        deadlines = await _run_storage(storage.get_deadlines)
+        deadlines = await _run_storage(storage.get_deadlines, user_id)
         if not deadlines:
             return segments("📅 暂无截稿日期\n\n提示: 使用 '/paper deadline add <名称> <日期>' 添加")
 
@@ -216,7 +216,7 @@ async def cmd_deadline(
         except ValueError:
             return segments("❌ 序号必须是数字")
 
-        if await _run_storage(storage.delete_deadline, index):
+        if await _run_storage(storage.delete_deadline, index, user_id):
             return segments("✅ 已删除截稿日期")
         return segments("❌ 删除失败，请检查序号")
 

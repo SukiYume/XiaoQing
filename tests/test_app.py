@@ -427,6 +427,26 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_start_binds_inbound_status_providers(temp_app_root: Path):
+    """Test inbound manager gets status providers before startup."""
+    app = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = Mock()
+    app.plugin_manager.wait_inits = AsyncMock()
+    app.plugin_manager.schedule_definitions = Mock(return_value=[])
+
+    mock_manager = MagicMock()
+    mock_manager.start = AsyncMock()
+
+    with patch("core.app.InboundManager.from_config", return_value=mock_manager):
+        await app.start()
+        await app.stop()
+
+    mock_manager.set_status_providers.assert_called_once()
+    mock_manager.start.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.integration
 async def test_app_start_with_http_configured(temp_app_root: Path):
     """Test app start with HTTP sender configured"""
@@ -692,6 +712,25 @@ async def test_app_send_single_action_falls_back_to_http_when_inbound_has_no_ws_
     await app._send_single_action(action)
 
     app.inbound_manager.broadcast.assert_not_called()
+    app.http_sender.send_action.assert_awaited_once_with(action)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_send_single_action_falls_back_to_http_when_ws_send_fails(temp_app_root: Path):
+    """Test WS send failures fall through to HTTP sender."""
+    app = XiaoQingApp(temp_app_root)
+    app.ws_client = MagicMock()
+    app.ws_client.connected = Mock(return_value=True)
+    app.ws_client.send_action = AsyncMock(return_value=False)
+    app.http_sender = MagicMock()
+    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender.send_action = AsyncMock()
+
+    action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
+    await app._send_single_action(action)
+
+    app.ws_client.send_action.assert_awaited_once_with(action)
     app.http_sender.send_action.assert_awaited_once_with(action)
 
 

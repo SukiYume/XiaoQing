@@ -150,6 +150,13 @@ class TestStatusManagement:
         assert earthquake._load_since(context) == "0"
         assert (context.data_dir / "earthquake.json").exists()
 
+    def test_load_since_resets_invalid_json(self, mock_context):
+        state_path = mock_context.data_dir / "earthquake.json"
+        state_path.write_text("{invalid", encoding="utf-8")
+
+        assert earthquake._load_since(mock_context) == "0"
+        assert json.loads(state_path.read_text(encoding="utf-8")) == {"since_id": "0"}
+
 
 # ============================================================
 # Test Magnitude Extraction

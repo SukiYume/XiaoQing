@@ -47,8 +47,13 @@ def _load_since(context) -> str:
     if not path.exists():
         path.write_text(json.dumps({"since_id": "0"}), encoding="utf-8")
         return "0"
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data.get("since_id", "0")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, TypeError) as exc:
+        logger.warning("Invalid earthquake state file %s, resetting: %s", path, exc)
+        path.write_text(json.dumps({"since_id": "0"}), encoding="utf-8")
+        return "0"
+    return str(data.get("since_id", "0") or "0")
 
 def _save_since(context, since_id: str) -> None:
     """保存最新处理的微博 ID"""

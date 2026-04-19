@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 _db_singleton: Database | None = None
 
 
+def set_database_singleton(db: Database | None) -> None:
+    """设置全局共享数据库实例。"""
+    global _db_singleton
+    _db_singleton = db
+
+
 def get_database(context: Any) -> Database:
     """获取数据库实例（带缓存）
 
@@ -39,28 +45,33 @@ def get_database(context: Any) -> Database:
     from ..services.db import Database
     from ..config import PendoConfig
 
-    # 如果context中有缓存，优先使用
-    if hasattr(context, "pendo_db"):
-        return context.pendo_db
-
-    # context 为 None 时使用单例
-    if context is None:
-        if _db_singleton is None:
-            db_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), "data", PendoConfig.DB_FILENAME
-            )
-            _db_singleton = Database(db_path)
-        return _db_singleton
-
-    # 创建新的数据库实例并缓存到context
     db_path = os.path.join(
         os.path.dirname(os.path.dirname(__file__)), "data", PendoConfig.DB_FILENAME
     )
-    db = Database(db_path)
+
+    if _db_singleton is not None:
+        if context is not None:
+            try:
+                context.pendo_db = _db_singleton
+            except Exception:
+                pass
+        return _db_singleton
+
+    # 如果context中有缓存，优先使用
+    if hasattr(context, "pendo_db") and getattr(context, "pendo_db", None) is not None:
+        cached_db = context.pendo_db
+        if getattr(cached_db, "db_path", None) == db_path:
+            set_database_singleton(cached_db)
+            return cached_db
+
+    # context 为 None 时使用单例
+    if _db_singleton is None or getattr(_db_singleton, "db_path", None) != db_path:
+        _db_singleton = Database(db_path)
+    db = _db_singleton
 
     # 尝试缓存到context（如果可能）
     try:
-        if not hasattr(context, "pendo_db"):
+        if context is not None and not hasattr(context, "pendo_db"):
             context.pendo_db = db
     except Exception:
         pass  # 忽略缓存失败

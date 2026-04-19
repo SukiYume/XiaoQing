@@ -2,6 +2,7 @@
 恒星光谱颜色模块
 提供恒星光谱型颜色查询和列举功能
 """
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,6 +18,13 @@ except ImportError:
     PANDAS_AVAILABLE = False
 
 MAX_SPECTRAL_TYPES = 30
+
+
+@lru_cache(maxsize=4)
+def _load_stellar_dataframe(stellar_file: str, mtime_ns: int):
+    import pandas as pd
+
+    return pd.read_csv(Path(stellar_file), sep=r"\s+")
 
 def load_stellar_colors(context) -> Optional[Any]:
     """加载恒星光谱颜色数据
@@ -37,8 +45,7 @@ def load_stellar_colors(context) -> Optional[Any]:
         return None
     
     try:
-        import pandas as pd
-        df = pd.read_csv(stellar_file, sep=r'\s+')
+        df = _load_stellar_dataframe(str(stellar_file), stellar_file.stat().st_mtime_ns)
         context.logger.debug(f"加载恒星颜色数据: {len(df)} 条")
         return df
     except Exception as exc:
@@ -59,14 +66,10 @@ async def query_stellar_color(spec_type: str, context, img_dir: Path) -> list[di
     if not PANDAS_AVAILABLE:
         return segments("❌ 恒星颜色查询功能不可用\n需要安装 pandas 依赖：pip install pandas")
     
-    stellar_file = context.plugin_dir / "stellar_colors.txt"
-    
-    if not stellar_file.exists():
-        return segments("❌ 恒星颜色数据文件不存在")
-    
     try:
-        import pandas as pd
-        df = pd.read_csv(stellar_file, sep=r'\s+')
+        df = load_stellar_colors(context)
+        if df is None:
+            return segments("❌ 恒星颜色数据文件不存在")
         
         match = df[df['SpT'] == spec_type]
         if match.empty:
@@ -103,14 +106,10 @@ def list_spectral_types(prefix: str, context) -> list[dict[str, Any]]:
     if not PANDAS_AVAILABLE:
         return segments("❌ 光谱型查询功能不可用\n需要安装 pandas 依赖：pip install pandas")
     
-    stellar_file = context.plugin_dir / "stellar_colors.txt"
-    
-    if not stellar_file.exists():
-        return segments("❌ 恒星颜色数据文件不存在")
-    
     try:
-        import pandas as pd
-        df = pd.read_csv(stellar_file, sep=r'\s+')
+        df = load_stellar_colors(context)
+        if df is None:
+            return segments("❌ 恒星颜色数据文件不存在")
         
         if prefix:
             matches = df[df['SpT'].str.contains(prefix, case=False)]

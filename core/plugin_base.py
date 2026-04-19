@@ -105,13 +105,20 @@ def ensure_dir(path: Path) -> None:
     """确保目录存在"""
     path.mkdir(parents=True, exist_ok=True)
 
-def load_json(path: Path, default: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def load_json(
+    path: Path,
+    default: Optional[dict[str, Any]] = None,
+    *,
+    raise_on_error: bool = False,
+) -> dict[str, Any]:
     """加载 JSON 文件"""
     if not path.exists():
         return default or {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
+        if raise_on_error:
+            raise
         logger.error("Failed to parse JSON %s: %s", path, exc)
         return default or {}
 

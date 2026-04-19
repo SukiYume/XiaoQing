@@ -186,9 +186,15 @@ class PluginManager:
                 task.cancel()
         if tasks_to_cancel:
             await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+        for task, pending in list(self._pending_plugins.items()):
+            definition, _, _ = pending
+            if definition.name == name:
+                self._pending_plugins.pop(task, None)
 
         plugin = self._plugins.pop(name, None)
         if not plugin:
+            self._plugin_states.pop(name, None)
+            self._purge_plugin_modules(name)
             return
         self.router.clear_plugin(name)
         
@@ -359,6 +365,8 @@ class PluginManager:
             if not path.is_file():
                 continue
             if "__pycache__" in path.parts:
+                continue
+            if "data" in path.parts:
                 continue
             if path.suffix.lower() not in {".py", ".json"}:
                 continue

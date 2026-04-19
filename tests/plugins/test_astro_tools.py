@@ -114,6 +114,11 @@ class TestAstroToolsTime:
         assert "Unix 1706616000.0" in result or "Unix 1706616000" in result
         assert "UTC" in result
 
+    @pytest.mark.asyncio
+    async def test_time_numeric_old_unix_timestamp(self, mock_context):
+        result = await loaded_modules["time"].handle_time("946684800", mock_context)
+        assert "Unix 946684800.0" in result or "Unix 946684800" in result
+
 
 class TestAstroToolsCoord:
     """测试坐标转换功能"""

@@ -315,6 +315,23 @@ class TestParseTrendingHTML:
         assert len(repos) == 1
         assert repos[0]["language"] == "未知"
 
+    def test_parse_html_extracts_star_and_fork_without_muted_class(self):
+        html = """
+        <article class="Box-row">
+            <h2><a href="/test/repo">test/repo</a></h2>
+            <a href="/test/repo/stargazers">9,999</a>
+            <a href="/test/repo/forks">123</a>
+            <span>88 stars today</span>
+        </article>
+        """
+
+        repos = github._parse_trending_html(html)
+
+        assert len(repos) == 1
+        assert repos[0]["stars"] == "9999"
+        assert repos[0]["forks"] == "123"
+        assert repos[0]["stars_gained"] == "88 stars today"
+
 
 # ============================================================
 # Test Valid Ranges

@@ -101,6 +101,13 @@ class TestParseChoiceArgs:
         assert question == "问题"
         assert options == ["A", "A", "B", "C"]
 
+    def test_parse_supports_quoted_multiword_options(self):
+        question, options, choice_count, unique = choice.parse_choice_args('吃什么 "ice cream" pizza -n 2 -u')
+        assert question == "吃什么"
+        assert options == ["ice cream", "pizza"]
+        assert choice_count == 2
+        assert unique is True
+
 
 class TestValidateOptions:
     """测试选项验证"""

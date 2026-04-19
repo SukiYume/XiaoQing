@@ -26,7 +26,7 @@ from .context import PluginContext
 from .dispatcher import Dispatcher
 from .logging_config import LogManager, setup_logging
 from .metrics import MetricsCollector
-from .onebot import OneBotHttpSender, OneBotWsClient
+from .onebot import OneBotHttpSender, OneBotWsClient, _extract_message_preview
 from .plugin_base import build_action, segments, split_message_segments
 from .plugin_manager import PluginManager
 from .router import CommandRouter
@@ -295,6 +295,7 @@ class XiaoQingApp:
             handler=self._handle_inbound_event,
         )
         if self.inbound_manager:
+            self._bind_inbound_status_providers(self.inbound_manager)
             await self.inbound_manager.start()
 
     async def stop(self) -> None:
@@ -474,18 +475,9 @@ class XiaoQingApp:
                 params = action.get("params") or {}
                 if isinstance(params, dict):
                     msg = params.get("message")
-                    preview_parts: list[str] = []
+                    preview = ""
                     if isinstance(msg, list):
-                        for seg in msg[:12]:
-                            if not isinstance(seg, dict):
-                                continue
-                            tp = str(seg.get("type", "") or "")
-                            data = seg.get("data") or {}
-                            if tp == "text" and isinstance(data, dict):
-                                preview_parts.append(str(data.get("text", "") or ""))
-                            else:
-                                preview_parts.append(f"[{tp}]")
-                    preview = "".join(preview_parts).replace("\n", "\\n").strip()
+                        preview = _extract_message_preview(msg[:12]).replace("\n", "\\n").strip()
                     if len(preview) > MAX_MESSAGE_PREVIEW_LENGTH:
                         preview = preview[:MAX_MESSAGE_PREVIEW_LENGTH - 1] + "…"
                     logger.info(
@@ -505,8 +497,9 @@ class XiaoQingApp:
             return
 
         if self.ws_client and self.ws_client.connected():
-            await self.ws_client.send_action(action)
-            return
+            sent = await self.ws_client.send_action(action)
+            if sent:
+                return
             
         # 尝试通过 Inbound WebSocket 广播（如果存在活跃连接）
         if self.inbound_manager and self.inbound_manager.has_active_ws_clients():
@@ -517,8 +510,9 @@ class XiaoQingApp:
             deadline = asyncio.get_running_loop().time() + float(wait_ws_seconds)
             while asyncio.get_running_loop().time() < deadline:
                 if self.ws_client.connected():
-                    await self.ws_client.send_action(action)
-                    return
+                    sent = await self.ws_client.send_action(action)
+                    if sent:
+                        return
                 await asyncio.sleep(0.1)
 
         if self._http_enabled():
@@ -782,10 +776,12 @@ class XiaoQingApp:
             if self.inbound_manager:
                 await self.inbound_manager.stop()
             self.inbound_manager = desired
+            self._bind_inbound_status_providers(self.inbound_manager)
             await self.inbound_manager.start()
             return
 
         self.inbound_manager.update_token(secrets.get("inbound_token", ""))
+        self._bind_inbound_status_providers(self.inbound_manager)
 
     @staticmethod
     def _inbound_manager_key(manager: InboundManager | None) -> tuple[Any, ...] | None:
@@ -796,6 +792,34 @@ class XiaoQingApp:
             manager._inbound_ws_uri,
             manager._ws_max_workers,
             manager._ws_queue_size,
+        )
+
+    def _bind_inbound_status_providers(self, manager: InboundManager) -> None:
+        def _plugins_count() -> int:
+            return len(self.plugin_manager.list_plugins())
+
+        def _sessions_count() -> int:
+            return len(self.session_manager._sessions)
+
+        def _pending_jobs() -> int:
+            scheduler = self.scheduler.scheduler
+            if not scheduler:
+                return 0
+            return len(scheduler.get_jobs())
+
+        def _metrics() -> dict[str, Any]:
+            return {
+                "uptime_seconds": round(self.metrics.uptime, 1),
+                "plugins_count": len(self.metrics._plugin_stats),
+                "commands_count": len(self.metrics._command_stats),
+                "global": self.metrics._global_stats.to_dict(),
+            }
+
+        manager.set_status_providers(
+            plugins_count=_plugins_count,
+            sessions_count=_sessions_count,
+            pending_jobs=_pending_jobs,
+            metrics=_metrics,
         )
 
     # ============================================================

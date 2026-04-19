@@ -7,6 +7,26 @@
 import shlex
 from dataclasses import dataclass, field
 
+
+def _looks_like_negative_number(token: str) -> bool:
+    if not token.startswith("-") or token == "-":
+        return False
+    try:
+        float(token)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_option_token(token: str) -> bool:
+    if not token:
+        return False
+    if token.startswith("--") and len(token) > 2:
+        return not _looks_like_negative_number(token)
+    if token.startswith("-") and len(token) > 1:
+        return not _looks_like_negative_number(token)
+    return False
+
 @dataclass
 class ParsedArgs:
     """解析后的命令参数"""
@@ -82,20 +102,20 @@ def parse(raw: str) -> ParsedArgs:
     while idx < len(tokens_list):
         token = tokens_list[idx]
 
-        if token.startswith("--") and len(token) > 2:
+        if token.startswith("--") and len(token) > 2 and not _looks_like_negative_number(token):
             # 长选项
             key, eq, value = token[2:].partition("=")
             if eq:
                 options[key] = value
-            elif idx + 1 < len(tokens_list) and not tokens_list[idx + 1].startswith("-"):
+            elif idx + 1 < len(tokens_list) and not _is_option_token(tokens_list[idx + 1]):
                 options[key] = tokens_list[idx + 1]
                 idx += 1
             else:
                 options[key] = "true"
-        elif token.startswith("-") and len(token) > 1 and not token[1:].isdigit():
+        elif token.startswith("-") and len(token) > 1 and not _looks_like_negative_number(token):
             # 短选项 (排除负数如 -1)
             key = token[1:]
-            if idx + 1 < len(tokens_list) and not tokens_list[idx + 1].startswith("-"):
+            if idx + 1 < len(tokens_list) and not _is_option_token(tokens_list[idx + 1]):
                 options[key] = tokens_list[idx + 1]
                 idx += 1
             else:

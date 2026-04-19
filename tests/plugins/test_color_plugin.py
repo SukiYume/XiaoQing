@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, Mock
 import importlib.util
+import json
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -174,6 +175,52 @@ class TestColorDataManager:
         result = color_data_manager.format_color_info(color)
         assert "胭脂" in result
         assert "#D54547" in result or "213, 69, 71" in result
+
+    def test_load_colors_reuses_cached_builtin_palette(self, tmp_path, monkeypatch):
+        calls = {"builtin": 0}
+        plugin_dir = tmp_path / "plugin"
+        plugin_dir.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        builtin_file = plugin_dir / "color.json"
+        builtin_file.write_text(json.dumps([{"name": "胭脂"}], ensure_ascii=False), encoding="utf-8")
+
+        def _fake_load_json(path, default):
+            if Path(path) == builtin_file:
+                calls["builtin"] += 1
+                return [{"name": "胭脂"}]
+            return default
+
+        monkeypatch.setattr(color_data_manager, "load_json", _fake_load_json)
+        context = MagicMock(plugin_dir=plugin_dir, data_dir=data_dir, logger=MagicMock())
+
+        color_data_manager.load_colors(context)
+        color_data_manager.load_colors(context)
+
+        assert calls["builtin"] == 1
+
+
+class TestColorHandleFixes:
+    @pytest.mark.asyncio
+    async def test_color_bare_spectype_flag_lists_all_types(self):
+        from plugins.color import main as color_main
+
+        context = MagicMock()
+        context.plugin_dir = ROOT / "plugins" / "color"
+        context.data_dir = ROOT / "plugins" / "color" / "data"
+        context.logger = MagicMock()
+
+        called = {}
+
+        def _fake_list(prefix, _context):
+            called["prefix"] = prefix
+            return [{"type": "text", "data": {"text": "ok"}}]
+
+        color_main.stellar.list_spectral_types = _fake_list
+        result = await color_main.handle("color", "-t", {}, context)
+
+        assert result == [{"type": "text", "data": {"text": "ok"}}]
+        assert called["prefix"] == ""
 
 # ============================================================
 # 运行测试

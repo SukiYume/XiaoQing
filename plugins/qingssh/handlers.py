@@ -209,22 +209,32 @@ async def handle_ssh_disconnect(
     
     user_id = str(context.current_user_id)
     group_id = str(context.current_group_id)
+    target_server = args.strip() or None
 
     # 只处理属于 qingssh 的会话
     if session and session.plugin_name == "qingssh":
-        server_name = session.get(SessionKeys.SERVER_NAME)
-        if server_name:
-            manager.disconnect(user_id, group_id, server_name)
-        await context.end_session()
-        return segments(f"🔌 已断开SSH连接: {server_name}")
+        current_server = session.get(SessionKeys.SERVER_NAME)
+        server_name = target_server or current_server
+
+        if server_name and manager.disconnect(user_id, group_id, server_name):
+            if current_server == server_name:
+                await context.end_session()
+            return segments(f"🔌 已断开SSH连接: {server_name}")
+
+        if target_server:
+            return segments(f"❌ 服务器 '{target_server}' 未连接")
+
+        if current_server:
+            await context.end_session()
+            return segments(f"🔌 已断开SSH连接: {current_server}")
+        return segments("❌ 当前没有活跃的SSH会话")
     
     # 如果指定了服务器名
-    if args.strip():
-        server_name = args.strip()
-        if manager.disconnect(user_id, group_id, server_name):
-            return segments(f"🔌 已断开SSH连接: {server_name}")
+    if target_server:
+        if manager.disconnect(user_id, group_id, target_server):
+            return segments(f"🔌 已断开SSH连接: {target_server}")
         else:
-            return segments(f"❌ 服务器 '{server_name}' 未连接")
+            return segments(f"❌ 服务器 '{target_server}' 未连接")
     
     return segments("❌ 当前没有活跃的SSH会话")
 

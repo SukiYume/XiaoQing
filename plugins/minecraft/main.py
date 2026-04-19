@@ -200,6 +200,14 @@ async def _handle_connect(
                 f"已连接到 {old_conn.host}:{old_conn.port}\n请先使用 /mc disconnect 断开"
             )
         return segments("已存在连接，请先使用 /mc disconnect 断开")
+
+    log_monitor_obj = None
+    if log_file:
+        log_path = Path(log_file)
+        if log_path.name != "latest.log":
+            return segments("❌ 日志文件必须是 latest.log")
+        if not log_path.is_file():
+            return segments("❌ 日志文件不存在或无法访问")
     
     # 创建 RCON 客户端
     try:
@@ -212,13 +220,7 @@ async def _handle_connect(
         return segments(f"❌ 连接失败: {e}")
     
     # 创建日志监控器
-    log_monitor_obj = None
     if log_file:
-        log_path = Path(log_file)
-        if log_path.name != "latest.log":
-            return segments("❌ 日志文件必须是 latest.log")
-        if not log_path.is_file():
-            return segments("❌ 日志文件不存在或无法访问")
         log_monitor_obj = LogMonitor(str(log_path))
         if not log_monitor_obj.initialize():
             logger.warning("MC log file inaccessible: %s", log_file)
