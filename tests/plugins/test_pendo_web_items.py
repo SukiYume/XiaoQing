@@ -173,6 +173,31 @@ def test_items_list_applies_priority_before_pagination_and_total_count():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_resolve_date_field_rejects_untrusted_field_names():
+    items_module = _load_items_module()
+
+    with pytest.raises(Exception) as exc_info:
+        items_module._resolve_date_field("ledger", "created_at); DROP TABLE items; --")
+
+    error = exc_info.value
+    assert getattr(error, "status_code", None) == 422
+    assert "Invalid date_field" in getattr(error, "detail", str(error))
+
+
+def test_resolve_date_field_restricts_fields_by_item_type():
+    items_module = _load_items_module()
+
+    assert items_module._resolve_date_field("task", "due_time") == "due_time"
+    assert items_module._resolve_date_field("task", "created_at") == "created_at"
+
+    with pytest.raises(Exception) as exc_info:
+        items_module._resolve_date_field("task", "ledger_date")
+
+    error = exc_info.value
+    assert getattr(error, "status_code", None) == 422
+    assert "task" in getattr(error, "detail", str(error))
+
+
 def test_database_get_items_supports_diary_date_sort_field():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_items_diary_sort_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)

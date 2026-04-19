@@ -70,8 +70,21 @@ class AdminService:
 
         from ..utils.constants import PetStatus
         pet.status = PetStatus.NORMAL
+        pet.status_expire_time = None
+        pet.last_feed = None
+        pet.last_clean = None
+        pet.last_play = None
+        pet.last_train = None
+        pet.last_explore = None
 
-        return self.db.update_pet(pet)
+        success = self.db.update_pet(pet)
+        user = self.db.get_user(user_id, group_id)
+        if user:
+            user.last_visit_time = None
+            user.last_gift_time = None
+            success = self.db.update_user(user) and success
+
+        return success
 
     def ban_user(self, user_id: str, group_id: int, days: int) -> bool:
         user = self.db.get_user(user_id, group_id)

@@ -17,9 +17,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
 import re
 import shlex
+import signal
+import subprocess
 import sys
 from typing import Any, Optional
 
@@ -184,6 +188,38 @@ def _smart_decode(data: bytes) -> str:
     # 最后使用 latin-1（不会失败）
     return data.decode("latin-1")
 
+
+def _subprocess_group_kwargs() -> dict[str, Any]:
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        return {"creationflags": creationflags} if creationflags else {}
+    return {"start_new_session": True}
+
+
+async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
+    if sys.platform == "win32":
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/PID",
+                str(proc.pid),
+                "/T",
+                "/F",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(killer.communicate(), timeout=5)
+        except Exception:
+            with contextlib.suppress(ProcessLookupError, ProcessLookupError, AttributeError):
+                proc.kill()
+                await proc.wait()
+        return
+
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(Exception):
+        await proc.wait()
+
 async def _execute_command(args: list[str], timeout: int) -> tuple[int, str, str]:
     """
     异步执行命令。
@@ -195,6 +231,7 @@ async def _execute_command(args: list[str], timeout: int) -> tuple[int, str, str
         *args[1:],
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **_subprocess_group_kwargs(),
     )
 
     try:
@@ -209,8 +246,7 @@ async def _execute_command(args: list[str], timeout: int) -> tuple[int, str, str
         
         return proc.returncode or 0, stdout_str, stderr_str
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+        await _terminate_process_tree(proc)
         return -1, "", f"命令执行超时（{timeout}秒）"
 
 def _truncate(text: str, max_len: int = MAX_OUTPUT_LENGTH) -> str:

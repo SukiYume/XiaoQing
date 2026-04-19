@@ -154,8 +154,16 @@ class SessionManager:
 
     async def exists(self, user_id: int, group_id: int | None) -> bool:
         """检查会话是否存在（且未过期）"""
-        session = await self.get(user_id, group_id)
-        return session is not None
+        async with self._lock:
+            key = self._make_key(user_id, group_id)
+            session = self._sessions.get(key)
+            if session is None:
+                return False
+            if session.is_expired():
+                del self._sessions[key]
+                logger.debug("Session expired and removed during exists(): user=%s, group=%s", user_id, group_id)
+                return False
+            return True
 
     async def cleanup_expired(self) -> int:
         """

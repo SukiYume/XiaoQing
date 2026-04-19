@@ -51,7 +51,16 @@ async def _get_checkin_id(session, app_id, kdt_id, access_token, headers):
         payload = await resp.json()
     if payload.get("code") != 0:
         return False, "", payload.get("msg", "获取签到信息失败")
-    return True, payload["data"]["checkInId"], "获取签到信息成功"
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return False, "", payload.get("msg", "获取签到信息失败")
+
+    checkin_id = data.get("checkInId")
+    if not checkin_id:
+        return False, "", payload.get("msg", "获取签到信息失败")
+
+    return True, str(checkin_id), "获取签到信息成功"
 
 
 async def _do_checkin(session, checkin_id, app_id, kdt_id, access_token, headers):

@@ -209,6 +209,34 @@ class TestSetupLogging:
         manager = get_log_manager()
         assert manager is not None
 
+    def test_setup_closes_existing_handlers(self, tmp_path: Path):
+        """测试 setup_logging 会关闭旧 handlers"""
+        root_logger = logging.getLogger()
+
+        class DummyHandler(logging.Handler):
+            def __init__(self):
+                super().__init__()
+                self.was_closed = False
+
+            def emit(self, record):
+                return None
+
+            def close(self):
+                self.was_closed = True
+                super().close()
+
+        handler = DummyHandler()
+        root_logger.addHandler(handler)
+
+        try:
+            setup_logging({}, log_dir=tmp_path / "logs")
+            assert handler.was_closed is True
+            assert handler not in root_logger.handlers
+        finally:
+            if handler in root_logger.handlers:
+                root_logger.removeHandler(handler)
+            handler.close()
+
 
 # ============================================================
 # get_logger 测试

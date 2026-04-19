@@ -220,6 +220,11 @@ except ImportError:
             self._init_matplotlib()
         else:
             self.start_kernel()
+
+    def interrupt_kernel(self) -> None:
+        """中断当前执行中的代码，避免超时后继续占用内核状态。"""
+        if self._km and self.is_running:
+            self._km.interrupt_kernel()
     
     async def execute(self, code: str, timeout: float = DEFAULT_TIMEOUT) -> ExecutionResult:
         """执行代码"""
@@ -252,6 +257,7 @@ except ImportError:
                 except TimeoutError:
                     result.error = f"执行超时 ({timeout}s)"
                     result.success = False
+                    await asyncio.to_thread(self.interrupt_kernel)
                     break
                 
                 msg_type = msg["msg_type"]

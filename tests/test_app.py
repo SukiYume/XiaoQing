@@ -3,6 +3,7 @@ Tests for core/app.py - XiaoQingApp main application class
 """
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -297,6 +298,66 @@ async def test_app_start(temp_app_root: Path):
 
     # Cleanup
     await app.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_app_start_tracks_and_stops_background_tasks(temp_app_root: Path):
+    """Test app start/stop manages WS and watch background tasks."""
+    config_file = temp_app_root / "config" / "config.json"
+    with open(config_file, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    config["enable_ws_client"] = True
+    config["onebot_ws_uri"] = "ws://localhost:6700/ws"
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(config, f)
+
+    app = XiaoQingApp(temp_app_root)
+    app.plugin_manager.load_all = Mock()
+    app.plugin_manager.wait_inits = AsyncMock()
+    app.plugin_manager.schedule_definitions = Mock(return_value=[])
+
+    task_cancelled: dict[str, bool] = {"config": False, "plugin": False, "ws": False}
+
+    async def _block_until_cancelled(marker: str):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            task_cancelled[marker] = True
+            raise
+
+    async def config_watch(interval: float = 2.0):
+        await _block_until_cancelled("config")
+
+    async def plugin_watch():
+        await _block_until_cancelled("plugin")
+
+    app.config_manager.watch = config_watch
+    app.plugin_manager.watch = plugin_watch
+
+    mock_ws_client = MagicMock()
+    mock_ws_client.set_on_connect = Mock()
+    mock_ws_client.stop = AsyncMock()
+
+    async def ws_connect_and_listen(handler):
+        await _block_until_cancelled("ws")
+
+    mock_ws_client.connect_and_listen = AsyncMock(side_effect=ws_connect_and_listen)
+
+    with patch("core.app.OneBotWsClient", return_value=mock_ws_client):
+        await app.start()
+        await asyncio.sleep(0)
+
+        assert getattr(app, "_config_watch_task", None) is not None
+        assert getattr(app, "_plugin_watch_task", None) is not None
+        assert getattr(app, "_ws_client_task", None) is not None
+
+        await app.stop()
+
+    assert task_cancelled["config"] is True
+    assert task_cancelled["plugin"] is True
+    assert task_cancelled["ws"] is True
+    mock_ws_client.stop.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -11,9 +11,17 @@ from ..models.item import get_item_type_value
 from ..services.db import Database
 from ..services.reminder import ReminderService
 from ..utils.error_handlers import error_result, success_result
-from ..utils.time_utils import parse_delay_time
+from ..utils.time_utils import TimezoneHelper, parse_delay_time
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_remind_time_for_compare(remind_time: str):
+    """将提醒时间统一到带时区的 datetime，避免 aware/naive 混用。"""
+    try:
+        return TimezoneHelper.parse(remind_time, TimezoneHelper.DEFAULT_TZ)
+    except (ValueError, TypeError):
+        return None
 
 
 async def handle_confirm(
@@ -65,16 +73,12 @@ async def handle_confirm(
                 message += f"`{item_id}`\n\n"
                 # 检查是否还有后续提醒
                 remind_times = item.remind_times or []
-                from datetime import datetime
-
-                now = datetime.now()
+                now = TimezoneHelper.now()
                 future_reminders = []
                 for rt in remind_times:
-                    try:
-                        if datetime.fromisoformat(rt) > now:
-                            future_reminders.append(rt)
-                    except (ValueError, TypeError):
-                        pass
+                    remind_dt = _parse_remind_time_for_compare(rt)
+                    if remind_dt and remind_dt > now:
+                        future_reminders.append(rt)
                 if future_reminders:
                     message += f"💡 此次提醒已确认，后续还有 {len(future_reminders)} 个提醒"
                 else:
@@ -117,8 +121,6 @@ async def handle_snooze(
         return error_result("请指定延后时间，例如: 10min, 1h, 19:00")
 
     try:
-        from datetime import datetime
-
         # 获取条目信息（添加owner_id检查）
         db = reminder_service.db
         item = await run_sync(db.items.get_item, item_id, user_id)
@@ -135,13 +137,17 @@ async def handle_snooze(
 
         # S-3修复：只移除刚触发的那个 remind_time，保留其他所有提醒时间（包括未来的）
         # 旧逻辑仅保留过去时间，会丢失事件的后续提醒点（如 T-1h snooze 后丢失 T、T+1h）
-        now = datetime.now()
+        now = TimezoneHelper.now()
         snoozed_remind_time = await _get_last_sent_remind_time(db, item_id)
         if snoozed_remind_time and snoozed_remind_time in remind_times:
             other_times = [rt for rt in remind_times if rt != snoozed_remind_time]
         else:
             # 无法定位触发的提醒时间时，保留所有未来提醒时间
-            other_times = [rt for rt in remind_times if datetime.fromisoformat(rt) > now]
+            other_times = [
+                rt
+                for rt in remind_times
+                if (remind_dt := _parse_remind_time_for_compare(rt)) and remind_dt > now
+            ]
         new_remind_times = other_times + [new_remind_time]
 
         await run_sync(db.items.update_item, item_id, {"remind_times": new_remind_times}, user_id)

@@ -148,6 +148,33 @@ def _normalize_event(event: EventItem, reminder_logs: list[dict[str, Any]], rang
     }
 
 
+def _fetch_reminder_logs_by_event_ids(db: Database, event_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """一次性读取多个事件的 reminder logs，避免按事件逐条查询。"""
+    unique_ids = [event_id for event_id in dict.fromkeys(event_ids) if event_id]
+    if not unique_ids:
+        return {}
+
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in unique_ids)
+    cursor.execute(
+        f"""
+        SELECT item_id, remind_time, sent_at, confirmed_at, user_action, repeat_count, last_sent_at
+        FROM reminder_logs
+        WHERE item_id IN ({placeholders})
+        ORDER BY item_id, remind_time
+        """,
+        unique_ids,
+    )
+
+    logs_by_event: dict[str, list[dict[str, Any]]] = {event_id: [] for event_id in unique_ids}
+    for row in cursor.fetchall():
+        log = dict(row)
+        item_id = str(log.pop("item_id"))
+        logs_by_event.setdefault(item_id, []).append(log)
+    return logs_by_event
+
+
 def build_events_overview(
     db: Database,
     owner_id: str,
@@ -176,9 +203,10 @@ def build_events_overview(
         for event in db.get_items(owner_id, filters={"type": "event"}, limit=500)
     })
 
+    reminder_logs_by_event = _fetch_reminder_logs_by_event_ids(db, [event.id for event in events])
     normalized_events: list[dict[str, Any]] = []
     for event in events:
-        reminder_logs = db.get_reminder_logs(event.id)
+        reminder_logs = reminder_logs_by_event.get(event.id, [])
         payload = _normalize_event(event, reminder_logs, range_start_day, range_end_day)
         if category and payload.get("category") != category:
             continue

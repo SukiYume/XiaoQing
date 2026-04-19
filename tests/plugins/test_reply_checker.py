@@ -183,3 +183,69 @@ async def test_handle_smalltalk_uses_configured_reply_check_max_replan(tmp_path)
 
     assert result == [{"type": "text", "data": {"text": "第3次成功"}}]
     assert mock_flow.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_check_reply_rejects_when_llm_checker_credentials_missing():
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    result = await check_reply(
+        http_session=None,
+        secrets={},
+        bot_name="小青",
+        reply="好的",
+        goal="聊天",
+        policy_text="",
+        history=[],
+        chat_history_text="user: hi",
+        enable_llm_checker=True,
+        max_repeat_compare=3,
+        similarity_threshold=0.9,
+        max_assistant_in_row=5,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    assert result.suitable is False
+    assert result.need_replan is True
+    assert "checker" in result.reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_check_reply_rejects_when_llm_checker_call_fails(monkeypatch: pytest.MonkeyPatch):
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    async def raise_error(**_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        raise_error,
+    )
+
+    result = await check_reply(
+        http_session=None,
+        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        bot_name="小青",
+        reply="好的",
+        goal="聊天",
+        policy_text="",
+        history=[],
+        chat_history_text="user: hi",
+        enable_llm_checker=True,
+        max_repeat_compare=3,
+        similarity_threshold=0.9,
+        max_assistant_in_row=5,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    assert result.suitable is False
+    assert result.need_replan is True
+    assert "failed" in result.reason.lower() or "checker" in result.reason.lower()

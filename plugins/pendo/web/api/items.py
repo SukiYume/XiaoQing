@@ -19,6 +19,24 @@ from ..deps import get_db, get_current_user
 
 router = APIRouter()
 
+DEFAULT_DATE_FIELDS: dict[str | None, str] = {
+    "event": "start_time",
+    "task": "due_time",
+    "diary": "diary_date",
+    "ledger": "ledger_date",
+    "note": "created_at",
+    None: "created_at",
+}
+
+ALLOWED_DATE_FIELDS_BY_TYPE: dict[str | None, set[str]] = {
+    "event": {"created_at", "start_time", "end_time"},
+    "task": {"created_at", "due_time"},
+    "diary": {"created_at", "diary_date"},
+    "ledger": {"created_at", "ledger_date"},
+    "note": {"created_at"},
+    None: set(Database.ALLOWED_DATE_FIELDS),
+}
+
 EVENT_MUTABLE_FIELDS = {
     "title",
     "category",
@@ -132,13 +150,19 @@ def _item_to_dict(item) -> dict:
 
 
 def _resolve_date_field(type: Optional[str], date_field: Optional[str]) -> str:
-    if date_field:
-        return date_field
-    if type == "event":   return "start_time"
-    if type == "task":    return "due_time"
-    if type == "diary":   return "diary_date"
-    if type == "ledger":  return "ledger_date"
-    return "created_at"
+    item_type = type if type in ALLOWED_DATE_FIELDS_BY_TYPE else None
+    if not date_field:
+        return DEFAULT_DATE_FIELDS.get(item_type, "created_at")
+
+    allowed_fields = ALLOWED_DATE_FIELDS_BY_TYPE[item_type]
+    if date_field not in allowed_fields:
+        allowed_display = ", ".join(sorted(allowed_fields))
+        type_label = item_type or "all"
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid date_field '{date_field}' for type '{type_label}'. Allowed values: {allowed_display}",
+        )
+    return date_field
 
 
 def _resolve_category_field(type: Optional[str]) -> str:

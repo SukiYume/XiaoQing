@@ -197,3 +197,36 @@ class TestAdsPaperAsyncStorage:
 
         assert "add_paper_note" in calls
         assert "get_paper_notes" in calls
+
+    def test_cmd_daily_reads_topics_in_thread(self, monkeypatch, tmp_path):
+        from plugins.ads_paper import ai_commands
+
+        calls = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            calls.append(func.__name__)
+            return func(*args, **kwargs)
+
+        class Client:
+            async def search_papers(self, query, max_results):
+                assert query == "LLM OR agents"
+                assert max_results > 0
+                return []
+
+        class MockContext:
+            def __init__(self, data_dir):
+                self.data_dir = data_dir
+
+        monkeypatch.setattr(ai_commands.asyncio, "to_thread", fake_to_thread)
+
+        data_dir = tmp_path / "ads_paper"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "research_topics.json").write_text(
+            json.dumps({"keywords": ["LLM", "agents"]}),
+            encoding="utf-8",
+        )
+
+        result = asyncio.run(ai_commands.cmd_daily(cast(Any, Client()), MockContext(data_dir)))
+
+        assert "get_topics" in calls
+        assert "未找到" in str(result)

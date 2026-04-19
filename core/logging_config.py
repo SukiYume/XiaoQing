@@ -110,7 +110,18 @@ class LogManager:
         root_logger.setLevel(self.level)
         
         # 清除现有 handlers
-        root_logger.handlers.clear()
+        for handler in list(root_logger.handlers):
+            root_logger.removeHandler(handler)
+            if handler.__class__.__module__.startswith("_pytest."):
+                continue
+            try:
+                handler.flush()
+            except Exception:
+                pass
+            try:
+                handler.close()
+            except Exception:
+                pass
         
         # 添加控制台 handler
         if self.console_output:

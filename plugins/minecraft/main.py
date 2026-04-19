@@ -14,6 +14,7 @@ Minecraft 服务器通信插件
 - /mc help - 显示帮助信息
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -334,8 +335,11 @@ async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, A
             continue
         
         try:
-            events = conn.log_monitor.check_updates()
-            
+            if hasattr(conn.log_monitor, "check_updates_async"):
+                events = await conn.log_monitor.check_updates_async()
+            else:
+                events = await asyncio.to_thread(conn.log_monitor.check_updates)
+
             for event in events:
                 message = _format_event_message(event)
                 

@@ -146,7 +146,7 @@ async def _llm_check(
     api_key = secrets.get("api_key", "")
     model = secrets.get("model", "")
     if not api_base or not api_key or not model:
-        return ReplyCheckResult(True, "", False)
+        return ReplyCheckResult(False, "reply_checker missing credentials", True)
 
     # Trim history to last 800 chars to reduce input tokens
     _hist = chat_history_text.strip()
@@ -194,7 +194,7 @@ async def _llm_check(
     content = llm_client.extract_response_content(resp)
     obj = parse_first_json_object(content)
     if not obj:
-        return ReplyCheckResult(True, "", False)
+        return ReplyCheckResult(False, "reply_checker returned invalid response", True)
     suitable = bool(obj.get("suitable", True))
     reason = str(obj.get("reason", "") or "").strip()
     need_replan = bool(obj.get("need_replan", False))
@@ -249,5 +249,5 @@ async def check_reply(
             endpoint_path=endpoint_path,
         )
     except (LLMError, TimeoutError, asyncio.TimeoutError, Exception) as exc:
-        _log.warning("reply_checker LLM 调用失败，跳过检查: %s", exc)
-        return ReplyCheckResult(True, "", False)
+        _log.warning("reply_checker LLM 调用失败，拒绝当前回复: %s", exc)
+        return ReplyCheckResult(False, f"reply_checker failed: {exc}", True)

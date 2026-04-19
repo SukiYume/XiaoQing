@@ -180,6 +180,21 @@ class TestRandomResponses:
         responses = smalltalk._load_responses(mock_context)
         assert responses == xiaoqing_data["小青"]
 
+    def test_empty_responses_json_falls_back_to_default(self, mock_context, temp_data_dir):
+        """测试空 responses.json 不会让随机回复崩溃"""
+        responses_file = temp_data_dir / "responses.json"
+        responses_file.write_text(
+            json.dumps({"responses": []}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        responses = smalltalk._load_responses(mock_context)
+        assert responses == smalltalk.DEFAULT_RESPONSES
+
+        result = smalltalk.call_bot_name_only(mock_context)
+        assert result is not None
+        assert len(result) > 0
+
 
 # ============================================================
 # Test QA Pairs Management

@@ -259,7 +259,7 @@ class _AdnmbTestContext:
         self.secrets = {"plugins": {"adnmb": {"uuid": "uuid-1"}}}
 
 
-def test_adnmb_reuses_client_from_context_state(monkeypatch, tmp_path):
+def test_adnmb_rebuilds_client_when_uuid_changes(monkeypatch, tmp_path):
     created = []
 
     class FakeClient:
@@ -272,9 +272,16 @@ def test_adnmb_reuses_client_from_context_state(monkeypatch, tmp_path):
     monkeypatch.setattr(adnmb_main, "AdnmbClient", FakeClient)
 
     context = _AdnmbTestContext(tmp_path)
-
     typed_context = cast(PluginContextProtocol, cast(object, context))
-    asyncio.run(adnmb_main.handle("adnmb", "-h", {}, typed_context))
-    asyncio.run(adnmb_main.handle("adnmb", "-h", {}, typed_context))
+    cache_dir = context.plugin_dir / "cache"
 
-    assert len(created) == 1
+    first = adnmb_main._get_client(typed_context, cache_dir)
+    context.secrets["plugins"]["adnmb"]["uuid"] = "uuid-2"
+    second = adnmb_main._get_client(typed_context, cache_dir)
+
+    assert len(created) == 2
+    assert first is created[0]
+    assert second is created[1]
+    assert first is not second
+    assert first.uuid == "uuid-1"
+    assert second.uuid == "uuid-2"

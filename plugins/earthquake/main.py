@@ -138,17 +138,17 @@ async def handle(command: str, args: str, event: dict, context) -> list:
     """命令处理入口"""
     try:
         parsed = parse(args)
-        
-        # 如果没有参数或者是 help/帮助，显示帮助信息
-        if not parsed or (parsed.first and parsed.first.lower() in ["help", "帮助"]):
+
+        # help/帮助 仍然显示帮助；空参数则默认获取最新地震快讯
+        if parsed and parsed.first and parsed.first.lower() in ["help", "帮助"]:
             return segments(_show_help())
         
-        subcommand = parsed.first.lower() if parsed.first else None
-        
+        subcommand = parsed.first.lower() if parsed and parsed.first else None
+
         # 命令路由
-        if subcommand == "latest" or subcommand == "最新":
+        if subcommand in {"latest", "最新"}:
             return await _fetch_earthquake_news(context, force=True)
-        
+
         # 默认行为：获取最新地震快讯
         return await _fetch_earthquake_news(context, force=True)
         

@@ -581,6 +581,25 @@ class TestYingshiTokenTransport:
         assert "json" not in call
         assert call["params"]["access_token"] == "token123"
 
+    def test_get_checkin_id_handles_missing_checkin_id(self):
+        """API 结构异常时不应直接抛 KeyError"""
+        response = MockResponse(json_data={"code": 0, "data": {}})
+        session = _RecordingSession(response)
+
+        ok, checkin_id, msg = asyncio.run(
+            signin_yingshi._get_checkin_id(
+                session,
+                "app",
+                "kdt",
+                "token123",
+                {"X": "1"},
+            )
+        )
+
+        assert ok is False
+        assert checkin_id == ""
+        assert "失败" in msg
+
 
 class TestGetConfig:
     """测试配置获取"""

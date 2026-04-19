@@ -16,6 +16,9 @@ from core.args import parse
 
 logger = logging.getLogger(__name__)
 
+WA_RESULT_URL = "https://api.wolframalpha.com/v1/result"
+WA_QUERY_URL = "https://api.wolframalpha.com/v2/query"
+
 def init(context=None) -> None:
     """插件初始化"""
     pass
@@ -114,10 +117,9 @@ async def _get_answer(question: str, appid: str, context) -> list:
             return segments(f"🔢 **计算结果:**\n\n{result}")
 
         # 简单查询 - 使用 v1/result API (最快速)
-        url = "http://api.wolframalpha.com/v1/result"
         params = {"appid": appid, "i": question}
         
-        async with session.get(url, params=params, timeout=30) as resp:
+        async with session.get(WA_RESULT_URL, params=params, timeout=30) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
                 logger.error("WolframAlpha API error: status=%d, body=%s", resp.status, error_text)
@@ -138,14 +140,14 @@ async def _get_answer(question: str, appid: str, context) -> list:
 
 async def _query_step(question: str, appid: str, session) -> str:
     """获取步骤解答"""
-    url = f"http://api.wolframalpha.com/v2/query?appid={appid}"
     data = {
+        "appid": appid,
         "input": question,
         "podstate": "Result__Step-by-step solution",
         "format": "plaintext",
     }
     
-    async with session.post(url, data=data, timeout=30) as resp:
+    async with session.post(WA_QUERY_URL, data=data, timeout=30) as resp:
         if resp.status != 200:
             error_text = await resp.text()
             raise ValueError(f"API returned status {resp.status}: {error_text}")
@@ -164,7 +166,6 @@ async def _query_step(question: str, appid: str, session) -> str:
 
 async def _query_complete(question: str, appid: str, session) -> str:
     """获取完整结果"""
-    url = "http://api.wolframalpha.com/v2/query"
     data = {
         "appid": appid,
         "input": question,
@@ -173,7 +174,7 @@ async def _query_complete(question: str, appid: str, session) -> str:
         "output": "json",
     }
     
-    async with session.post(url, data=data, timeout=30) as resp:
+    async with session.post(WA_QUERY_URL, data=data, timeout=30) as resp:
         if resp.status != 200:
             error_text = await resp.text()
             raise ValueError(f"API returned status {resp.status}: {error_text}")
