@@ -109,6 +109,24 @@ def _entry_from_render(
     )
 
 
+def _is_usable_library_metadata(description: str, marker: str, emotion_tags: tuple[str, ...]) -> bool:
+    from .event_media import _is_generic_media_label, _looks_like_structured_media_text
+
+    desc = str(description or "").strip()
+    mark = str(marker or "").strip()
+    tags = tuple(str(item or "").strip() for item in emotion_tags if str(item or "").strip())
+
+    if not desc or not mark:
+        return False
+    if _is_generic_media_label(desc) or _is_generic_media_label(mark):
+        return False
+    if _looks_like_structured_media_text(desc) or _looks_like_structured_media_text(mark):
+        return False
+    if any(_looks_like_structured_media_text(tag) for tag in tags):
+        return False
+    return True
+
+
 def collect_emoji_candidate(
     context,
     runtime,
@@ -119,6 +137,8 @@ def collect_emoji_candidate(
     if rendered.kind != "emoji":
         return None
     if not source_path.exists() or not source_path.is_file():
+        return None
+    if not _is_usable_library_metadata(rendered.description, rendered.marker, tuple(rendered.emotion_tags)):
         return None
 
     library_dir = resolve_emoji_library_dir(context, runtime)
@@ -157,7 +177,7 @@ def collect_emoji_candidate(
     return entry, is_new
 
 
-async def load_emoji_library(context, runtime) -> list[EmojiLibraryEntry]:
+async def load_emoji_library(context, runtime, *, repair_invalid: bool = True) -> list[EmojiLibraryEntry]:
     library_dir = resolve_emoji_library_dir(context, runtime)
     if library_dir is None:
         return []
@@ -176,8 +196,11 @@ async def load_emoji_library(context, runtime) -> list[EmojiLibraryEntry]:
         existing = existing_entries.get(media_hash)
         if (
             isinstance(existing, dict)
-            and str(existing.get("description", "") or "").strip()
-            and str(existing.get("marker", "") or "").strip()
+            and _is_usable_library_metadata(
+                str(existing.get("description", "") or "").strip(),
+                str(existing.get("marker", "") or "").strip(),
+                tuple(str(item) for item in existing.get("emotion_tags", []) if str(item).strip()),
+            )
         ):
             entry = EmojiLibraryEntry(
                 media_hash=media_hash,
@@ -191,6 +214,8 @@ async def load_emoji_library(context, runtime) -> list[EmojiLibraryEntry]:
                 marker=str(existing.get("marker", "") or "").strip(),
             )
         else:
+            if not repair_invalid:
+                continue
             from .event_media import render_local_media_file
 
             rendered = await render_local_media_file(
@@ -200,6 +225,8 @@ async def load_emoji_library(context, runtime) -> list[EmojiLibraryEntry]:
                 prefer_emoji=True,
             )
             if rendered is None:
+                continue
+            if not _is_usable_library_metadata(rendered.description, rendered.marker, tuple(rendered.emotion_tags)):
                 continue
             entry = _entry_from_render(
                 context,

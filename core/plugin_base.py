@@ -46,6 +46,10 @@ def image_url(url: str) -> dict[str, Any]:
     """创建图片消息段（网络URL）"""
     return {"type": "image", "data": {"file": url}}
 
+def face(face_id: str | int) -> dict[str, Any]:
+    """创建 QQ face 消息段"""
+    return {"type": "face", "data": {"id": str(face_id)}}
+
 def record(file_path: str) -> dict[str, Any]:
     """创建语音消息段（本地文件）"""
     return {"type": "record", "data": {"file": _to_file_uri(file_path)}}
@@ -241,6 +245,7 @@ __all__ = [
     "text",
     "image",
     "image_url",
+    "face",
     "record",
     "record_url",
     "segments",

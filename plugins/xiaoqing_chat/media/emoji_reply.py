@@ -139,7 +139,7 @@ async def plan_emoji_reply(
     if turns_since_last is not None and turns_since_last < cooldown_turns:
         return None
 
-    entries = await load_emoji_library(context, runtime)
+    entries = await load_emoji_library(context, runtime, repair_invalid=False)
     if not entries:
         return None
 

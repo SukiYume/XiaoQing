@@ -9,6 +9,7 @@ from core.plugin_base import (
     text,
     image,
     image_url,
+    face,
     segments,
     build_action,
     load_json,
@@ -45,6 +46,11 @@ class TestMessageSegments:
         """测试网络图片消息段"""
         seg = image_url("https://example.com/image.png")
         assert seg == {"type": "image", "data": {"file": "https://example.com/image.png"}}
+
+    def test_face_segment(self):
+        """测试 QQ face 消息段"""
+        seg = face(277)
+        assert seg == {"type": "face", "data": {"id": "277"}}
 
 # ============================================================
 # segments 转换测试
