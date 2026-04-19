@@ -24,7 +24,13 @@ class HandlerContext:
     context: Any  # plugin context (untyped)
 
     @classmethod
-    def from_event(cls, event: dict[str, Any], context: Any) -> HandlerContext:
+    def from_event(
+        cls,
+        event: dict[str, Any],
+        context: Any,
+        *,
+        runtime: _ChatRuntime | None = None,
+    ) -> HandlerContext:
         from .helper_utils import (
             _chat_id,
             _get_bot_name,
@@ -34,7 +40,7 @@ class HandlerContext:
         from .runtime_state import get_state as _state
         from .store_binding import _bind_all_stores
 
-        runtime = _load_runtime(context)
+        runtime = runtime or _load_runtime(context)
         state = _state()
         _bind_all_stores(state, context.data_dir)
         return cls(

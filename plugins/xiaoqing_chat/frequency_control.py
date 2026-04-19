@@ -76,6 +76,12 @@ def _score_interest(text: str) -> str:
     t = (text or "").strip()
     if not t:
         return "low"
+    if "[表情包：" in t:
+        return "high"
+    if "[QQ表情：" in t:
+        return "neutral"
+    if "[图片：" in t:
+        return "neutral"
     if "!" in t or "！" in t:
         return "high"
     if is_question(t):

@@ -75,6 +75,8 @@ async def _generate_reply(
     forced: bool,
     action: PlannedAction,
     plan_reasoning: str,
+    bot_name: str = "",
+    secrets: dict[str, Any] | None = None,
     reply_style_override: str = "",
     state_text: str = "",
     is_brain_chat: bool = False,
@@ -83,7 +85,7 @@ async def _generate_reply(
     if not context.http_session:
         raise RuntimeError("http_session not available")
 
-    bot_name = _get_bot_name(context)
+    bot_name = bot_name or _get_bot_name(context)
     chat_id = _chat_id(event)
     is_private = _is_private(event)
 
@@ -106,7 +108,7 @@ async def _generate_reply(
         },
     )
 
-    secrets = _get_llm_secrets(context)
+    secrets = dict(secrets or _get_llm_secrets(context))
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
     model = secrets.get("model", "")
