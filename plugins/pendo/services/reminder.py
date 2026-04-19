@@ -93,12 +93,24 @@ class ReminderService:
                 if not remind_times:
                     continue
 
+                log_map = {}
+                if hasattr(self.db, "get_reminder_logs"):
+                    try:
+                        log_map = {
+                            log["remind_time"]: log for log in self.db.get_reminder_logs(item.id)
+                        }
+                    except Exception as e:
+                        logger.warning("读取提醒日志失败: %s", e)
+
                 for remind_time_str in remind_times:
                     try:
                         remind_time = parse_and_localize(remind_time_str)
                         time_diff = (current_time - remind_time).total_seconds()
 
                         if 0 <= time_diff <= PendoConfig.REMINDER_CHECK_WINDOW_SECONDS:
+                            log = log_map.get(remind_time_str)
+                            if log and log.get("confirmed_at"):
+                                continue
                             if not self.db.is_reminder_sent(item.id, remind_time_str):
                                 if self._should_suppress(item, remind_time):
                                     continue
@@ -198,10 +210,15 @@ class ReminderService:
         user_action: str = "confirmed",
         owner_id: str | None = None,
         remind_time: str | None = None,
+        allow_future: bool = False,
     ) -> dict[str, Any]:
         """用户确认提醒"""
         return self.db.confirm_reminder(
-            item_id, user_action, owner_id=owner_id, remind_time=remind_time
+            item_id,
+            user_action,
+            owner_id=owner_id,
+            remind_time=remind_time,
+            allow_future=allow_future,
         )
 
     def get_pending_reminders(self, user_id: str, hours: int = 24) -> list[dict[str, Any]]:

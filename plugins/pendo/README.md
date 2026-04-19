@@ -48,8 +48,12 @@
 ## 快速开始
 
 ```bash
+/pendo                      # 查看完整帮助总览（按模块分组）
+/pendo event                # 直达 event 模块帮助
 /pendo help                 # 查看帮助
 ```
+
+> `/pendo` 现在会按模块显示带 emoji 的导航式帮助；输入 `/pendo <模块>` 可以只看对应模块的命令。
 
 ### 命令速览
 
@@ -213,8 +217,12 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 
 ```
 /pendo event edit <id> 改到明天10点
+/pendo event edit <id> 会议开始改成4月22日12:43
+/pendo event edit <id> 会议开始改成4月22日12:43，备注从北京南坐G123去会场
 /pendo event delete <id>    # 删除日程（5分钟内可撤销）
 ```
+
+`/pendo event edit` 现在统一支持单次事件、重复事件和多节点事件；如果修改了时间，未发送的提醒会按原相对偏移自动同步。
 
 ## 待办管理
 
@@ -363,10 +371,14 @@ cat:其他 #记录
 
 ## 提醒操作
 
-### 确认提醒
+### 确认 / 提前确认提醒
 
 ```
 /pendo confirm <id>          # 确认已收到提醒
+/pendo event reminders confirm <id> today    # 提前确认今天未发送的提醒
+/pendo event reminders confirm <id> future   # 提前确认未来全部未发送提醒
+/pendo event reminders confirm <id> all      # 提前确认全部未发送提醒
+/pendo event reminders confirm <id> 04-18 13:50  # 提前确认某一条指定提醒
 ```
 
 ### 延后提醒
@@ -484,12 +496,17 @@ python-dateutil>=2.8.2
 
 **Q: 如何修改已创建的条目？**
 - 日程: `/pendo event edit <id> <修改内容>`
+- 多节点事件可直接按节点名改，例如 `/pendo event edit 80efbef6 会议开始改成4月22日12:43`
 - 待办: `/pendo todo edit <id> <新内容>`
 
 **Q: 提醒没有收到？**
 - 检查提醒是否开启: `/pendo settings`
 - 检查是否在静默时段
 - 确认条目设置了提醒时间
+
+**Q: 如何让今天还没发出的提醒不要再发？**
+- 用 `/pendo event reminders confirm <id> today`
+- 如果要一次性跳过后续全部提醒，用 `/pendo event reminders confirm <id> future`
 
 **Q: 如何备份数据？**
 - 使用设置页面的 Web 端导出功能

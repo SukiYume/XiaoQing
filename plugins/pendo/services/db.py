@@ -821,19 +821,24 @@ class Database:
             raise
 
     def _sync_reminder_logs(self, cursor, item_id: str, remind_times: list[str] | None):
-        """删除当前条目已移除的提醒日志。"""
+        """删除当前条目已移除且尚未发送的提醒日志，保留历史发送记录。"""
         active_times = sorted({
             str(remind_time)
             for remind_time in (remind_times or [])
             if remind_time
         })
         if not active_times:
-            cursor.execute("DELETE FROM reminder_logs WHERE item_id = ?", (item_id,))
+            cursor.execute(
+                "DELETE FROM reminder_logs WHERE item_id = ? AND sent_at IS NULL",
+                (item_id,),
+            )
             return
 
         placeholders = ",".join("?" for _ in active_times)
         cursor.execute(
-            f"DELETE FROM reminder_logs WHERE item_id = ? AND remind_time NOT IN ({placeholders})",
+            f"""DELETE FROM reminder_logs
+                WHERE item_id = ? AND sent_at IS NULL
+                AND remind_time NOT IN ({placeholders})""",
             [item_id] + active_times,
         )
 
@@ -1549,6 +1554,7 @@ class Database:
         user_action: str = "confirmed",
         owner_id: str | None = None,
         remind_time: str | None = None,
+        allow_future: bool = False,
     ) -> dict[str, Any]:
         """确认提醒——直接 UPDATE 该 item 所有未确认行"""
         conn = self.get_connection()
@@ -1584,13 +1590,22 @@ class Database:
                 )
             else:
                 # 无已发送记录可确认（如静默时间未发出），补插一条已确认的记录
-                self._insert_confirm_for_unsent(cursor, item_id, owner_id, remind_time, now, user_action)
+                self._insert_confirm_for_unsent(
+                    cursor,
+                    item_id,
+                    owner_id,
+                    remind_time,
+                    now,
+                    user_action,
+                    allow_future=allow_future,
+                )
 
         return {"status": "success", "message": f"已记录: {user_action}"}
 
     def _insert_confirm_for_unsent(
         self, cursor, item_id: str, owner_id: str | None,
         remind_time: str | None, now: str, user_action: str,
+        *, allow_future: bool = False,
     ):
         """为未发送但用户手动确认的提醒补插一条记录"""
         item_where = ["id = ?", "deleted = 0"]
@@ -1609,12 +1624,20 @@ class Database:
             remind_times = json.loads(row[0])
         except (json.JSONDecodeError, TypeError):
             return
-        past_times = [t for t in remind_times if isinstance(t, str) and t <= now]
+        candidate_times = [
+            t
+            for t in remind_times
+            if isinstance(t, str)
+            and (
+                t <= now
+                or (allow_future and remind_time is not None and t == remind_time)
+            )
+        ]
         if remind_time is not None:
-            past_times = [t for t in past_times if t == remind_time]
-        if not past_times:
+            candidate_times = [t for t in candidate_times if t == remind_time]
+        if not candidate_times:
             return
-        target_time = max(past_times)
+        target_time = remind_time if allow_future and remind_time is not None else max(candidate_times)
         # UPSERT：如果已有行则更新确认状态，否则插入
         cursor.execute(
             """
@@ -1644,19 +1667,39 @@ class Database:
     def get_unconfirmed_sent_reminders(self) -> list[dict[str, Any]]:
         """获取已发送但未确认的提醒（用于重复发送）
 
-        每个 (item_id, remind_time) 只有一行，直接返回含 repeat_count 和 last_sent_at 的记录。
+        已从条目当前 remind_times 中移除的 sent history 仍会保留在 reminder_logs，
+        但不应继续进入重复发送队列。
         """
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT rl.id, rl.item_id, rl.remind_time,
-                   rl.repeat_count, COALESCE(rl.last_sent_at, rl.sent_at) AS last_sent_at
+                   rl.repeat_count, COALESCE(rl.last_sent_at, rl.sent_at) AS last_sent_at,
+                   i.remind_times
             FROM reminder_logs rl
             JOIN items i ON rl.item_id = i.id AND i.deleted = 0
             WHERE rl.sent_at IS NOT NULL AND rl.confirmed_at IS NULL
             ORDER BY rl.sent_at
         """)
-        return [dict(row) for row in cursor.fetchall()]
+        results: list[dict[str, Any]] = []
+        for row in cursor.fetchall():
+            active_times: set[str] = set()
+            raw_remind_times = row["remind_times"]
+            if raw_remind_times:
+                try:
+                    parsed = json.loads(raw_remind_times)
+                except (TypeError, json.JSONDecodeError, ValueError):
+                    parsed = []
+                if isinstance(parsed, list):
+                    active_times = {str(remind_time) for remind_time in parsed if remind_time}
+
+            if str(row["remind_time"]) not in active_times:
+                continue
+
+            entry = dict(row)
+            entry.pop("remind_times", None)
+            results.append(entry)
+        return results
 
     def get_all_events_with_reminders(
         self, owner_id: str | None = None, future_hours: int = 24
