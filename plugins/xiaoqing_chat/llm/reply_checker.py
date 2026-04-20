@@ -9,6 +9,7 @@ from typing import Any, Optional, Sequence
 from . import llm_client
 from .llm_client import LLMError, chat_completions_raw_with_fallback_paths
 from ..constants import is_question
+from ..message_parts import render_stored_message
 from ..memory.memory import StoredMessage
 from ..utils.json_parsing import parse_first_json_object
 
@@ -39,7 +40,7 @@ def _last_bot_messages(history: Sequence[StoredMessage], *, bot_name: str, limit
         name = (msg.name or "").strip()
         if name and bot_name and name != bot_name:
             continue
-        text = (msg.content or "").strip()
+        text = render_stored_message(msg)
         if not text:
             continue
         out.append(text)
@@ -163,14 +164,17 @@ async def _llm_check(
         f"当前对话目标：{goal}\n"
         f"{_policy}"
         f"最近的对话记录：\n{_hist}\n\n"
-        f"待检查的回复：\n{reply}\n\n"
+        "注意：如果回复里出现 [表情包：...] 或 [QQ表情：...]，表示最终消息会附带相应媒体，"
+        "这些媒体也算回复内容的一部分，需要一起判断是否自然、贴切。\n\n"
+        f"待检查的最终回复：\n{reply}\n\n"
         "请结合对话记录检查以下几点：\n"
         "1. 这条回复是否符合当前对话目标和上下文\n"
         "2. 是否与最近的对话记录保持一致性（不矛盾、不答非所问）\n"
         "3. 是否包含违规内容（血腥暴力、政治敏感等）\n"
         "4. 是否自问自答或混淆了说话人身份\n"
         "5. 是否逻辑通顺\n"
-        "6. 是否使用了完全没必要的修辞或过于刻意\n\n"
+        "6. 是否使用了完全没必要的修辞或过于刻意\n"
+        "7. 如果附带的媒体没有为回复增加新的交流功能，只是在机械复读、镜像、重复上一条媒体语义，通常应判为不合适\n\n"
         "注意：这是拟人角色的日常聊天。"
         "口语化、犹豫、撒娇、吐槽、调侃、说不知道、反问对方都是正常的拟人表现，不应因此判为不合适。"
         "简短随意的回复是正常的聊天风格，不要因为回复短或没有提供'有价值的信息'就拒绝。\n\n"
@@ -207,6 +211,7 @@ async def check_reply(
     secrets: dict[str, Any],
     bot_name: str,
     reply: str,
+    heuristic_reply: str = "",
     goal: str,
     policy_text: str = "",
     history: Sequence[StoredMessage],
@@ -221,8 +226,9 @@ async def check_reply(
     proxy: str,
     endpoint_path: str,
 ) -> ReplyCheckResult:
+    heuristic_source = str(heuristic_reply or reply or "").strip()
     h = _heuristic_check(
-        reply=reply,
+        reply=heuristic_source,
         history=history,
         bot_name=bot_name,
         max_repeat_compare=max_repeat_compare,

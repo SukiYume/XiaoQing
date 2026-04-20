@@ -9,6 +9,7 @@ from typing import Any
 from .config.config import XiaoQingChatConfig
 from .memory.memory_db import MemoryDB
 from .memory.memory import MemoryStore
+from .media_registry import MediaRegistryStore
 from .planning.action_history import ActionHistoryStore, ActionRecord
 from .planning.plan_reply_logger import PlanReplyLogger
 from .planning.heartflow import HeartflowEngine
@@ -46,6 +47,7 @@ class ChatRuntimeState:
     __slots__ = (
         "_memory_store",
         "_memory_db",
+        "_media_store",
         "_action_history",
         "_plan_reply_logger",
         "_heartflow",
@@ -67,6 +69,7 @@ class ChatRuntimeState:
     def __init__(self) -> None:
         self._memory_store = MemoryStore()
         self._memory_db = MemoryDB()
+        self._media_store = MediaRegistryStore()
         self._action_history = ActionHistoryStore()
         self._plan_reply_logger = PlanReplyLogger()
         self._heartflow = HeartflowEngine()
@@ -93,6 +96,10 @@ class ChatRuntimeState:
     @property
     def memory_db(self) -> MemoryDB:
         return self._memory_db
+
+    @property
+    def media_store(self) -> MediaRegistryStore:
+        return self._media_store
 
     @property
     def action_history(self) -> ActionHistoryStore:

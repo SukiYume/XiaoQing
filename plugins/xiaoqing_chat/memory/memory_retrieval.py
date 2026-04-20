@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from ..config.config import MemoryConfig
 from ..llm.llm_client import LLMError, chat_completions_raw_with_fallback_paths
+from ..message_parts import render_stored_message
 from ..utils.json_parsing import parse_first_json_object
 from .memory import StoredMessage
 from .memory_db import MemoryDB, RetrievedItem
@@ -246,7 +247,7 @@ def _tool_query_chat_history(
     for msg in reversed(history[-120:]):
         if user_id_filter is not None and msg.user_id != user_id_filter:
             continue
-        text = (msg.content or "").strip()
+        text = render_stored_message(msg)
         if not text:
             continue
         if q in text.lower():

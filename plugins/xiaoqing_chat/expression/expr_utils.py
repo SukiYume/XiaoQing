@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
+from ..message_parts import render_stored_message
 from ..memory.memory import StoredMessage
 from ..planning.pfc_utils import extract_first_json_dict as _extract_dict, extract_first_json_list as extract_json_array  # noqa: F401
 
@@ -18,7 +19,7 @@ def render_dialogue(
     """Render a sequence of messages into a human-readable dialogue string."""
     lines: list[str] = []
     for msg in messages[-max_lines:]:
-        t = (msg.content or "").strip()
+        t = render_stored_message(msg)
         if not t:
             continue
         if len(t) > max_text_len:

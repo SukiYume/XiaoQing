@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from core.plugin_base import ensure_dir, load_json, write_json
 
 _SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
+_PENDING_DIR_NAME = "pending"
 
 if TYPE_CHECKING:
     from .event_media import RenderedMedia
@@ -109,6 +110,181 @@ def _entry_from_render(
     )
 
 
+def _media_cfg_value(runtime, field: str, default):
+    media_cfg = getattr(getattr(runtime, "cfg", None), "media", None)
+    if media_cfg is None:
+        return default
+    return getattr(media_cfg, field, default)
+
+
+def _pending_emoji_library_dir(context, runtime) -> Path | None:
+    root = resolve_emoji_library_dir(context, runtime)
+    if root is None:
+        return None
+    return root / _PENDING_DIR_NAME
+
+
+def _status_from_record(record: dict[str, Any] | None) -> str:
+    status = str((record or {}).get("status", "") or "active").strip().lower()
+    return status if status in {"active", "pending"} else "active"
+
+
+def _source_from_record(record: dict[str, Any] | None) -> str:
+    source = str((record or {}).get("source", "") or "manual").strip().lower()
+    return source if source in {"manual", "auto"} else "manual"
+
+
+def _average_hash(path: Path) -> str:
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        return ""
+
+    try:
+        with Image.open(path) as image:
+            sample = ImageOps.exif_transpose(image).convert("L").resize((8, 8))
+            pixels = list(sample.tobytes())
+    except Exception:
+        return ""
+
+    if not pixels:
+        return ""
+    average = sum(int(value) for value in pixels) / len(pixels)
+    bits = "".join("1" if int(value) >= average else "0" for value in pixels)
+    return f"{int(bits, 2):016x}"
+
+
+def _hamming_distance(left: str, right: str) -> int:
+    if not left or not right:
+        return 65
+    try:
+        return (int(left, 16) ^ int(right, 16)).bit_count()
+    except ValueError:
+        return 65
+
+
+def _normalize_entry_record(
+    *,
+    context,
+    file_path: Path,
+    entry: EmojiLibraryEntry,
+    existing: dict[str, Any] | None,
+    status: str,
+    source: str,
+    perceptual_hash: str,
+    touch_collection: bool,
+) -> dict[str, Any]:
+    existing = existing or {}
+    first_collected_ts = float(existing.get("first_collected_ts", 0.0) or 0.0) or float(time.time())
+    seen_count = int(existing.get("seen_count", 0) or 0)
+    if touch_collection:
+        seen_count += 1
+    last_collected_ts = float(existing.get("last_collected_ts", 0.0) or 0.0)
+    if touch_collection:
+        last_collected_ts = float(time.time())
+    return {
+        "media_hash": entry.media_hash,
+        "file_path": _to_plugin_relative_path(context, file_path),
+        "description": entry.description,
+        "emotion_tags": list(entry.emotion_tags),
+        "usage_count": entry.usage_count,
+        "last_used_ts": entry.last_used_ts,
+        "marker": entry.marker,
+        "status": status,
+        "source": source,
+        "perceptual_hash": perceptual_hash or str(existing.get("perceptual_hash", "") or ""),
+        "first_collected_ts": first_collected_ts,
+        "last_collected_ts": last_collected_ts,
+        "seen_count": seen_count,
+    }
+
+
+def _score_record(record: dict[str, Any]) -> tuple[float, float, float]:
+    usage_count = float(record.get("usage_count", 0) or 0.0)
+    last_used_ts = float(record.get("last_used_ts", 0.0) or 0.0)
+    last_collected_ts = float(record.get("last_collected_ts", 0.0) or 0.0)
+    seen_count = float(record.get("seen_count", 0) or 0.0)
+    return (usage_count * 3.0 + seen_count, last_used_ts, last_collected_ts)
+
+
+def _remove_library_file(context, runtime, record: dict[str, Any]) -> None:
+    file_path = resolve_emoji_file_path(context, str(record.get("file_path", "") or ""))
+    library_root = resolve_emoji_library_dir(context, runtime)
+    if library_root is None:
+        return
+    try:
+        file_path.relative_to(library_root.resolve())
+    except ValueError:
+        return
+    if file_path.exists():
+        try:
+            file_path.unlink()
+        except OSError:
+            pass
+
+
+def _find_similar_entry(
+    context,
+    runtime,
+    entries: dict[str, Any],
+    *,
+    source_path: Path,
+    perceptual_hash: str,
+) -> tuple[str, dict[str, Any]] | None:
+    threshold = max(0, int(_media_cfg_value(runtime, "emoji_auto_collect_similarity_threshold", 4)))
+    if not perceptual_hash or threshold < 0:
+        return None
+
+    for media_hash, raw_record in entries.items():
+        if not isinstance(raw_record, dict):
+            continue
+        if _source_from_record(raw_record) != "auto":
+            continue
+        candidate_hash = str(raw_record.get("perceptual_hash", "") or "").strip()
+        if not candidate_hash:
+            candidate_path = resolve_emoji_file_path(context, str(raw_record.get("file_path", "") or ""))
+            if not candidate_path.exists():
+                continue
+            candidate_hash = _average_hash(candidate_path)
+            raw_record["perceptual_hash"] = candidate_hash
+        if _hamming_distance(perceptual_hash, candidate_hash) <= threshold:
+            return str(media_hash), raw_record
+    return None
+
+
+def _prune_auto_entries(context, runtime, payload: dict[str, Any], *, keep_hashes: set[str] | None = None) -> None:
+    max_entries = int(_media_cfg_value(runtime, "emoji_auto_collect_max_entries", 200) or 0)
+    if max_entries <= 0:
+        return
+
+    keep_hashes = keep_hashes or set()
+    entries = payload.setdefault("entries", {})
+    auto_active = [
+        (media_hash, record)
+        for media_hash, record in entries.items()
+        if isinstance(record, dict)
+        and _source_from_record(record) == "auto"
+        and _status_from_record(record) == "active"
+    ]
+    if len(auto_active) <= max_entries:
+        return
+
+    survivors = {
+        media_hash
+        for media_hash, _record in sorted(
+            auto_active,
+            key=lambda item: (_score_record(item[1]), item[0]),
+            reverse=True,
+        )[:max_entries]
+    }
+    survivors.update(keep_hashes)
+    for media_hash, record in list(auto_active):
+        if media_hash in survivors:
+            continue
+        _remove_library_file(context, runtime, record)
+        entries.pop(media_hash, None)
+
+
 def _is_usable_library_metadata(description: str, marker: str, emotion_tags: tuple[str, ...]) -> bool:
     from .event_media import _is_generic_media_label, _looks_like_structured_media_text
 
@@ -136,6 +312,8 @@ def collect_emoji_candidate(
 ) -> tuple[EmojiLibraryEntry, bool] | None:
     if rendered.kind != "emoji":
         return None
+    if not bool(_media_cfg_value(runtime, "enable_auto_collect_inbound_emoji", True)):
+        return None
     if not source_path.exists() or not source_path.is_file():
         return None
     if not _is_usable_library_metadata(rendered.description, rendered.marker, tuple(rendered.emotion_tags)):
@@ -148,31 +326,63 @@ def collect_emoji_candidate(
     ensure_dir(library_dir)
     payload = _load_index(context, runtime)
     entries = payload.setdefault("entries", {})
-    existing = entries.get(rendered.media_hash)
+    perceptual_hash = _average_hash(source_path)
+    record_key = rendered.media_hash
+    existing = entries.get(record_key)
+    if not isinstance(existing, dict):
+        similar = _find_similar_entry(
+            context,
+            runtime,
+            entries,
+            source_path=source_path,
+            perceptual_hash=perceptual_hash,
+        )
+        if similar is not None:
+            record_key, existing = similar
+    existing = existing if isinstance(existing, dict) else None
+    status = (
+        "pending"
+        if bool(_media_cfg_value(runtime, "emoji_auto_collect_requires_approval", False))
+        else "active"
+    )
+    if existing is not None:
+        status = _status_from_record(existing)
+    source = "auto"
 
     suffix = source_path.suffix.lower()
     if suffix not in _SUPPORTED_IMAGE_SUFFIXES:
         suffix = ".png"
-    target_path = library_dir / f"{rendered.media_hash}{suffix}"
-    is_new = not target_path.exists()
-    if is_new:
+    base_dir = library_dir if status == "active" else (_pending_emoji_library_dir(context, runtime) or library_dir)
+    ensure_dir(base_dir)
+    target_path = (
+        resolve_emoji_file_path(context, str(existing.get("file_path", "") or ""))
+        if existing is not None and str(existing.get("file_path", "") or "").strip()
+        else base_dir / f"{record_key}{suffix}"
+    )
+    is_new = existing is None
+    if not target_path.exists():
+        ensure_dir(target_path.parent)
         target_path.write_bytes(source_path.read_bytes())
 
     entry = _entry_from_render(
         context,
         target_path,
         rendered,
-        existing if isinstance(existing, dict) else None,
+        existing,
     )
-    entries[entry.media_hash] = {
-        "media_hash": entry.media_hash,
-        "file_path": entry.file_path,
-        "description": entry.description,
-        "emotion_tags": list(entry.emotion_tags),
-        "usage_count": entry.usage_count,
-        "last_used_ts": entry.last_used_ts,
-        "marker": entry.marker,
-    }
+    normalized = _normalize_entry_record(
+        context=context,
+        file_path=target_path,
+        entry=entry,
+        existing=existing,
+        status=status,
+        source=source,
+        perceptual_hash=perceptual_hash,
+        touch_collection=True,
+    )
+    normalized["media_hash"] = record_key
+    entries[record_key] = normalized
+    _prune_auto_entries(context, runtime, payload, keep_hashes={record_key})
     _save_index(context, runtime, payload)
     return entry, is_new
 
@@ -188,12 +398,17 @@ async def load_emoji_library(context, runtime, *, repair_invalid: bool = True) -
 
     payload = _load_index(context, runtime)
     existing_entries = payload.setdefault("entries", {})
-    active_entries: dict[str, dict[str, Any]] = {}
+    retained_entries: dict[str, dict[str, Any]] = {}
     results: list[EmojiLibraryEntry] = []
 
     for file_path in files:
         media_hash = _hash_file(file_path)
         existing = existing_entries.get(media_hash)
+        status = _status_from_record(existing if isinstance(existing, dict) else None)
+        source = _source_from_record(existing if isinstance(existing, dict) else None)
+        perceptual_hash = str((existing or {}).get("perceptual_hash", "") or "").strip()
+        if not perceptual_hash:
+            perceptual_hash = _average_hash(file_path)
         if (
             isinstance(existing, dict)
             and _is_usable_library_metadata(
@@ -214,6 +429,28 @@ async def load_emoji_library(context, runtime, *, repair_invalid: bool = True) -
                 marker=str(existing.get("marker", "") or "").strip(),
             )
         else:
+            if status == "pending":
+                retained_entries[media_hash] = _normalize_entry_record(
+                    context=context,
+                    file_path=file_path,
+                    entry=EmojiLibraryEntry(
+                        media_hash=media_hash,
+                        file_path=_to_plugin_relative_path(context, file_path),
+                        description=str((existing or {}).get("description", "") or "").strip(),
+                        emotion_tags=tuple(
+                            str(item) for item in (existing or {}).get("emotion_tags", []) if str(item).strip()
+                        ),
+                        usage_count=int((existing or {}).get("usage_count", 0) or 0),
+                        last_used_ts=float((existing or {}).get("last_used_ts", 0.0) or 0.0),
+                        marker=str((existing or {}).get("marker", "") or "").strip(),
+                    ),
+                    existing=existing if isinstance(existing, dict) else None,
+                    status=status,
+                    source=source,
+                    perceptual_hash=perceptual_hash,
+                    touch_collection=False,
+                )
+                continue
             if not repair_invalid:
                 continue
             from .event_media import render_local_media_file
@@ -234,18 +471,20 @@ async def load_emoji_library(context, runtime, *, repair_invalid: bool = True) -
                 rendered,
                 existing if isinstance(existing, dict) else None,
             )
-        results.append(entry)
-        active_entries[entry.media_hash] = {
-            "media_hash": entry.media_hash,
-            "file_path": entry.file_path,
-            "description": entry.description,
-            "emotion_tags": list(entry.emotion_tags),
-            "usage_count": entry.usage_count,
-            "last_used_ts": entry.last_used_ts,
-            "marker": entry.marker,
-        }
+        retained_entries[entry.media_hash] = _normalize_entry_record(
+            context=context,
+            file_path=file_path,
+            entry=entry,
+            existing=existing if isinstance(existing, dict) else None,
+            status=status,
+            source=source,
+            perceptual_hash=perceptual_hash,
+            touch_collection=False,
+        )
+        if status == "active":
+            results.append(entry)
 
-    payload["entries"] = active_entries
+    payload["entries"] = retained_entries
     _save_index(context, runtime, payload)
     return results
 
@@ -282,9 +521,16 @@ def select_emoji_for_tags(
 
 
 def mark_emoji_used(context, runtime, entry: EmojiLibraryEntry) -> None:
+    mark_emoji_used_by_hash(context, runtime, entry.media_hash)
+
+
+def mark_emoji_used_by_hash(context, runtime, media_hash: str) -> None:
+    normalized_hash = str(media_hash or "").strip()
+    if not normalized_hash:
+        return
     payload = _load_index(context, runtime)
     entries = payload.setdefault("entries", {})
-    current = entries.get(entry.media_hash)
+    current = entries.get(normalized_hash)
     if not isinstance(current, dict):
         return
     current["usage_count"] = int(current.get("usage_count", 0) or 0) + 1
