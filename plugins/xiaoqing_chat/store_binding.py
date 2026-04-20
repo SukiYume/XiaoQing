@@ -6,6 +6,7 @@ from pathlib import Path
 def _bind_all_stores(state, data_dir: Path) -> None:
     """绑定所有存储模块到数据目录"""
     state.memory_store.bind_data_dir(data_dir)
+    state.media_store.bind(data_dir)
     state.action_history.bind(data_dir)
     state.plan_reply_logger.bind(data_dir)
     state.heartflow.bind(data_dir)

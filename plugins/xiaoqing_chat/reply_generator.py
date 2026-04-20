@@ -4,6 +4,7 @@ import asyncio
 import random
 import re
 import time
+from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -38,12 +39,175 @@ from .llm.postprocess import join_reply, process_llm_response
 from .llm.prompt_builder import ChatMessage, build_dialogue_prompt, build_prompt_messages
 from .llm.reply_checker import ReplyCheckResult, ReplyRejected, _heuristic_check, check_reply
 from .llm.rewrite import maybe_rewrite_reply
+from .message_parts import build_text_message_parts, normalize_message_parts
+from .media.emoji_reply import plan_emoji_reply
+from .media.qq_face_reply import plan_qq_face_reply
 from .memory.review_sessions import build_policy_block
 from .planning.planner import PlannedAction
+from .reply_media_helpers import merge_selected_reply_media_parts, resolve_reply_media_selection
+from .reply_payload import build_reply_payload_from_parts
 
 
 _RE_GOAL = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,120})")
 _SAFE_FORCED_REPLY_FALLBACK = "嗯，我先换个说法。"
+
+
+@dataclass(frozen=True)
+class ReplyDraft:
+    text: str
+    text_parts: tuple[str, ...]
+    parts: tuple[dict[str, Any], ...]
+    raw_text: str = ""
+    rewritten_text: str = ""
+    emoji_plan: Any = None
+    face_plan: Any = None
+
+
+def _normalize_reply_text_parts(values: Any) -> tuple[str, ...]:
+    if not isinstance(values, (list, tuple)):
+        return ()
+    cleaned: list[str] = []
+    for item in values:
+        if isinstance(item, str):
+            text = item.strip()
+        elif item in (None, "", False):
+            text = ""
+        else:
+            continue
+        if text:
+            cleaned.append(text)
+    return tuple(cleaned)
+
+
+def _build_reply_draft(
+    text_parts: Any,
+    *,
+    raw_text: str = "",
+    rewritten_text: str = "",
+) -> ReplyDraft | None:
+    normalized_text_parts = _normalize_reply_text_parts(text_parts)
+    reply_text = join_reply(normalized_text_parts)
+    if not reply_text:
+        return None
+    return ReplyDraft(
+        text=reply_text,
+        text_parts=normalized_text_parts,
+        parts=build_text_message_parts(reply_text),
+        raw_text=str(raw_text or ""),
+        rewritten_text=str(rewritten_text or raw_text or ""),
+    )
+
+
+def _forced_reply_draft() -> ReplyDraft:
+    return ReplyDraft(
+        text=_SAFE_FORCED_REPLY_FALLBACK,
+        text_parts=(_SAFE_FORCED_REPLY_FALLBACK,),
+        parts=build_text_message_parts(_SAFE_FORCED_REPLY_FALLBACK),
+        raw_text="",
+        rewritten_text=_SAFE_FORCED_REPLY_FALLBACK,
+    )
+
+
+def _draft_has_media(parts: Any) -> bool:
+    return any(
+        str(part.get("kind", "") or "").strip() != "text"
+        for part in normalize_message_parts(parts)
+    )
+
+
+async def _attach_reply_media(
+    draft: ReplyDraft,
+    *,
+    context,
+    runtime,
+    history,
+    user_text: str,
+    secrets: dict[str, Any] | None,
+    chat_id: str,
+) -> ReplyDraft:
+    if not draft.text or _draft_has_media(draft.parts):
+        return draft
+
+    media_cfg = getattr(getattr(runtime, "cfg", None), "media", None)
+    if media_cfg is None:
+        return draft
+
+    enable_emoji = bool(getattr(media_cfg, "enable_outbound_emoji_reply", False))
+    enable_face = bool(getattr(media_cfg, "enable_outbound_face_reply", False))
+    if not enable_emoji and not enable_face:
+        return draft
+
+    emoji_task = None
+    face_task = None
+    if enable_emoji:
+        emoji_task = asyncio.create_task(
+            plan_emoji_reply(
+                context=context,
+                runtime=runtime,
+                history=history,
+                user_text=user_text,
+                reply_text=draft.text,
+                secrets=secrets or {},
+                chat_id=chat_id,
+            )
+        )
+    if enable_face:
+        face_task = asyncio.create_task(
+            plan_qq_face_reply(
+                context=context,
+                runtime=runtime,
+                history=history,
+                user_text=user_text,
+                reply_text=draft.text,
+                secrets=secrets or {},
+                chat_id=chat_id,
+            )
+        )
+
+    try:
+        emoji_plan = await emoji_task if emoji_task is not None else None
+    except Exception:
+        emoji_plan = None
+    try:
+        face_plan = await face_task if face_task is not None else None
+    except Exception:
+        face_plan = None
+    if emoji_plan is None and face_plan is None:
+        return draft
+
+    selection = resolve_reply_media_selection(
+        context,
+        user_text=user_text,
+        emoji_plan=emoji_plan,
+        face_plan=face_plan,
+    )
+    if not selection.media_parts:
+        return draft
+
+    merged_parts = merge_selected_reply_media_parts(draft.parts, selection)
+    return ReplyDraft(
+        text=draft.text,
+        text_parts=draft.text_parts,
+        parts=merged_parts,
+        raw_text=draft.raw_text,
+        rewritten_text=draft.rewritten_text,
+        emoji_plan=selection.emoji_plan,
+        face_plan=selection.face_plan,
+    )
+
+
+def _reply_checker_inputs(draft: ReplyDraft) -> tuple[str, str]:
+    normalized_parts = normalize_message_parts(draft.parts)
+    payload = build_reply_payload_from_parts(normalized_parts)
+    final_reply = str(payload.display_text or "").strip() or str(draft.text or "").strip()
+    heuristic_reply = "".join(
+        str(part.get("text", "") or "")
+        for part in normalized_parts
+        if str(part.get("kind", "") or "").strip() == "text"
+    ).strip()
+    if not heuristic_reply:
+        heuristic_reply = final_reply
+    return final_reply, heuristic_reply
 
 
 def _extract_planner_goal(reasoning: str) -> str:
@@ -66,7 +230,7 @@ def _merge_planner_reasoning(action_reasoning: str, plan_reasoning: str) -> str:
     return plan_text or action_text
 
 
-async def _generate_reply(
+async def _generate_reply_draft(
     *,
     text: str,
     event: dict[str, Any],
@@ -82,7 +246,7 @@ async def _generate_reply(
     state_text: str = "",
     is_brain_chat: bool = False,
     prefetched_memory_task: Optional["asyncio.Task[str]"] = None,
-) -> Optional[str]:
+) -> ReplyDraft | None:
     if not context.http_session:
         raise RuntimeError("http_session not available")
 
@@ -330,10 +494,10 @@ async def _generate_reply(
         # ── Pre-heuristic: fast check on raw reply to skip rewrite if bad ──
         if raw and runtime.cfg.reply_check.enable_reply_checker:
             _raw_parts = process_llm_response(raw, runtime.cfg.postprocess, bot_name=bot_name)
-            _raw_reply = join_reply(_raw_parts)
-            if _raw_reply:
+            _raw_draft = _build_reply_draft(_raw_parts, raw_text=raw, rewritten_text=raw)
+            if _raw_draft is not None:
                 _pre_h = _heuristic_check(
-                    reply=_raw_reply,
+                    reply=_raw_draft.text,
                     history=trimmed_history,
                     bot_name=bot_name,
                     max_repeat_compare=runtime.cfg.reply_check.max_repeat_compare,
@@ -348,12 +512,12 @@ async def _generate_reply(
                         step="reply.pre_heuristic.reject",
                         fields={"reason": _pre_h.reason},
                     )
-                    last_rejected_reply = _raw_reply
+                    last_rejected_reply = _raw_draft.text
                     # Always try regen first (with feedback), even for need_replan
                     if regen_used < max(0, int(runtime.cfg.reply_check.max_regen)):
                         regen_used += 1
                         extra_check_hint = (
-                            f'上一条候选回复"{_raw_reply}"被检查拒绝:{_pre_h.reason}。\n'
+                            f'上一条候选回复"{_raw_draft.text}"被检查拒绝:{_pre_h.reason}。\n'
                             "请换一种更自然、更贴合对话上下文的说法，避免重复表达，避免自言自语，也不要刷屏。"
                         ).strip()
                         _log_step(
@@ -368,7 +532,7 @@ async def _generate_reply(
                     if _pre_h.need_replan and not forced:
                         raise ReplyRejected(_pre_h.reason or "回复被预检查拒绝", True)
                     if forced:
-                        return _SAFE_FORCED_REPLY_FALLBACK
+                        return _forced_reply_draft()
                     return None
 
         try:
@@ -407,8 +571,17 @@ async def _generate_reply(
             rewritten = raw
             _log_step(context, runtime, chat_id=chat_id, step="reply.rewrite.skip", fields={})
         parts = process_llm_response(rewritten, runtime.cfg.postprocess, bot_name=bot_name)
-        reply = join_reply(parts)
-        if reply:
+        draft = _build_reply_draft(parts, raw_text=raw, rewritten_text=rewritten)
+        if draft is not None:
+            draft = await _attach_reply_media(
+                draft,
+                context=context,
+                runtime=runtime,
+                history=trimmed_history,
+                user_text=text,
+                secrets=secrets,
+                chat_id=chat_id,
+            )
             if runtime.cfg.reply_check.enable_reply_checker:
                 _log_step(
                     context,
@@ -420,6 +593,7 @@ async def _generate_reply(
                 chat_history_text = build_dialogue_prompt(
                     trimmed_history, bot_name=bot_name, truncate=True
                 )
+                check_reply_text, heuristic_reply_text = _reply_checker_inputs(draft)
                 # 复用已由 handlers.py 设置好的 goal，避免重复 LLM 调用
                 goal = effective_goal or merged_reasoning or "自然聊天"
                 try:
@@ -428,7 +602,8 @@ async def _generate_reply(
                             http_session=context.http_session,
                             secrets=secrets,
                             bot_name=bot_name,
-                            reply=reply,
+                            reply=check_reply_text,
+                            heuristic_reply=heuristic_reply_text,
                             goal=goal,
                             policy_text=_cached_policy_block,
                             history=trimmed_history,
@@ -464,14 +639,14 @@ async def _generate_reply(
                         "need_replan": bool(check.need_replan),
                         "reason": getattr(check, "reason", ""),
                     },
-                )
+                    )
                 if not check.suitable:
-                    last_rejected_reply = reply
+                    last_rejected_reply = check_reply_text
                     # Always try regen first (with feedback), even for need_replan
                     if regen_used < max(0, int(runtime.cfg.reply_check.max_regen)):
                         regen_used += 1
                         extra_check_hint = (
-                            f'上一条候选回复"{reply}"被检查拒绝:{check.reason}。\n'
+                            f'上一条候选回复"{check_reply_text}"被检查拒绝:{check.reason}。\n'
                             "请换一种更自然、更贴合对话上下文的说法，避免重复表达，避免自言自语，也不要刷屏。"
                         ).strip()
                         _log_step(
@@ -486,7 +661,7 @@ async def _generate_reply(
                     if check.need_replan and not forced:
                         raise ReplyRejected(check.reason or "回复被检查拒绝", True)
                     if forced:
-                        return _SAFE_FORCED_REPLY_FALLBACK
+                        return _forced_reply_draft()
                     return None
             _log_step(
                 context,
@@ -495,11 +670,11 @@ async def _generate_reply(
                 step="reply.generate.done",
                 fields={
                     "elapsed_s": round(time.monotonic() - t_start, 3),
-                    "reply_chars": len(reply),
+                    "reply_chars": len(draft.text),
                 },
             )
-            return reply
+            return draft
 
         if not forced:
             return None
-        return _SAFE_FORCED_REPLY_FALLBACK
+        return _forced_reply_draft()

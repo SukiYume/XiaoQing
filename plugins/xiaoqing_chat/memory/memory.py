@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import InitVar, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 from core.plugin_base import write_json
+from ..message_parts import build_message_parts, message_parts_to_legacy, normalize_message_parts
 
 
 MAX_CACHED_MESSAGES_PER_CHAT = 200
@@ -17,11 +18,79 @@ MAX_CACHED_MESSAGES_PER_CHAT = 200
 class StoredMessage:
     role: str
     name: str
-    content: str
     ts: float
     user_id: Optional[int] = None
     message_id: Optional[int] = None
     local_id: str = ""
+    parts: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    content: InitVar[str] = ""
+    media_items: InitVar[Any] = None
+
+    def __post_init__(self, content: str, media_items: Any) -> None:
+        normalized_parts = _normalize_parts(self.parts)
+        if not normalized_parts:
+            normalized_parts = build_message_parts(str(content or ""), _normalize_media_items(media_items))
+        object.__setattr__(self, "parts", normalized_parts)
+
+    @property
+    def content(self) -> str:
+        content, _media_items = message_parts_to_legacy(self.parts)
+        return content
+
+    @property
+    def media_items(self) -> tuple[dict[str, Any], ...]:
+        _content, media_items = message_parts_to_legacy(self.parts)
+        return _normalize_media_items(media_items)
+
+
+def _normalize_media_items(values: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(values, (list, tuple)):
+        return ()
+
+    normalized_items: list[dict[str, Any]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        normalized: dict[str, Any] = {}
+        for key, value in item.items():
+            field = str(key or "").strip()
+            if not field:
+                continue
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                normalized[field] = value
+                continue
+            if isinstance(value, (list, tuple)):
+                normalized[field] = [
+                    element
+                    for element in value
+                    if isinstance(element, (str, int, float, bool)) or element is None
+                ]
+                continue
+            normalized[field] = str(value)
+        if normalized:
+            normalized_items.append(normalized)
+    return tuple(normalized_items)
+
+
+def _normalize_parts(values: Any) -> tuple[dict[str, Any], ...]:
+    return normalize_message_parts(values)
+
+
+def _serialize_message(message: StoredMessage) -> dict[str, Any]:
+    parts = _normalize_parts(message.parts)
+    payload: dict[str, Any] = {
+        "role": str(message.role or ""),
+        "name": str(message.name or ""),
+        "parts": [dict(part) for part in parts],
+        "ts": float(message.ts),
+    }
+    if message.user_id is not None:
+        payload["user_id"] = int(message.user_id)
+    if message.message_id is not None:
+        payload["message_id"] = int(message.message_id)
+    if message.local_id:
+        payload["local_id"] = str(message.local_id)
+    return payload
 
 
 class MemoryStore:
@@ -75,7 +144,9 @@ class MemoryStore:
         user_id: Optional[int] = None,
         message_id: Optional[int] = None,
         local_id: str = "",
-        content: str,
+        content: str = "",
+        media_items: Any = None,
+        parts: Any = None,
         ts: Optional[float] = None,
     ) -> None:
         msg = StoredMessage(
@@ -84,7 +155,9 @@ class MemoryStore:
             user_id=user_id,
             message_id=message_id,
             local_id=local_id or "",
-            content=content,
+            content=str(content or ""),
+            media_items=media_items,
+            parts=_normalize_parts(parts),
             ts=ts if ts is not None else time.time(),
         )
         with self._sync_lock:
@@ -138,7 +211,7 @@ class MemoryStore:
             snapshot = list(history[-200:])
         data_dir.mkdir(parents=True, exist_ok=True)
         path = data_dir / f"{chat_id}.json"
-        payload = [asdict(m) for m in snapshot]
+        payload = [_serialize_message(message) for message in snapshot]
         write_json(path, payload)
 
     def _load(self, chat_id: str) -> Optional[list[StoredMessage]]:
@@ -175,12 +248,14 @@ class MemoryStore:
                     except (TypeError, ValueError):
                         message_id = None
                 local_id = str(item.get("local_id", "") or "")
+                media_items = _normalize_media_items(item.get("media_items", []))
+                parts = _normalize_parts(item.get("parts", []))
                 ts_val = item.get("ts", time.time())
                 try:
                     ts = float(ts_val)
                 except (TypeError, ValueError):
                     ts = time.time()
-                if role and content:
+                if role and (content or media_items or parts):
                     out.append(
                         StoredMessage(
                             role=role,
@@ -188,7 +263,9 @@ class MemoryStore:
                             user_id=user_id,
                             message_id=message_id,
                             local_id=local_id,
+                            parts=parts,
                             content=content,
+                            media_items=media_items,
                             ts=ts,
                         )
                     )

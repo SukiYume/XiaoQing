@@ -249,3 +249,81 @@ async def test_check_reply_rejects_when_llm_checker_call_fails(monkeypatch: pyte
     assert result.suitable is False
     assert result.need_replan is True
     assert "failed" in result.reason.lower() or "checker" in result.reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_check_reply_heuristics_use_text_reply_when_media_is_attached():
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    history = [_msg("assistant", "咋了咋了", name="小青")]
+
+    result = await check_reply(
+        http_session=None,
+        secrets={},
+        bot_name="小青",
+        reply="咋了咋了[表情包：难过]",
+        heuristic_reply="咋了咋了",
+        goal="聊天",
+        policy_text="",
+        history=history,
+        chat_history_text="assistant: 咋了咋了",
+        enable_llm_checker=False,
+        max_repeat_compare=3,
+        similarity_threshold=0.9,
+        max_assistant_in_row=5,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    assert result.suitable is False
+    assert "完全相同" in result.reason or "高度相似" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest.MonkeyPatch):
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    captured: dict[str, str] = {}
+
+    async def fake_chat(**kwargs):
+        captured["prompt"] = kwargs["messages"][0]["content"]
+        return {"ok": True}, "/v1/chat/completions"
+
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        fake_chat,
+    )
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        lambda _resp: '{"suitable": true, "reason": "ok", "need_replan": false}',
+    )
+
+    result = await check_reply(
+        http_session=None,
+        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        bot_name="小青",
+        reply="咋了咋了[表情包：难过]",
+        heuristic_reply="咋了咋了",
+        goal="聊天",
+        policy_text="",
+        history=[],
+        chat_history_text="user: [表情包：难过]",
+        enable_llm_checker=True,
+        max_repeat_compare=3,
+        similarity_threshold=0.9,
+        max_assistant_in_row=5,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    assert result.suitable is True
+    assert "待检查的最终回复" in captured["prompt"]
+    assert "[表情包：...]" in captured["prompt"]
+    assert "最终消息会附带相应媒体" in captured["prompt"]
+    assert "没有为回复增加新的交流功能" in captured["prompt"]

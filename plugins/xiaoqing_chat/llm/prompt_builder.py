@@ -8,6 +8,7 @@ from typing import Any, Sequence
 from ..config.config import PersonalityConfig
 from ..memory.memory import StoredMessage
 from ..helper_utils import _extract_sender_name
+from ..message_parts import render_stored_message
 
 @dataclass(frozen=True)
 class ChatMessage:
@@ -50,6 +51,10 @@ def _maybe_truncate_message(text: str, *, ratio: float) -> str:
         return text
     return text[:limit].rstrip() + suffix
 
+
+def _render_message_content_for_prompt(message: StoredMessage) -> str:
+    return render_stored_message(message).strip()
+
 def build_dialogue_prompt(
     history: Sequence[StoredMessage],
     *,
@@ -87,7 +92,7 @@ def build_dialogue_prompt(
         )
         prefix = f"[{id_text}]" if id_text else ""
         t = _format_message_time(msg_ts) if msg_ts else ""
-        text = (msg.content or "").strip()
+        text = _render_message_content_for_prompt(msg)
         if not text:
             continue
         if truncate:
