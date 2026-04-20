@@ -53,9 +53,9 @@ def _log_step(
     """
     # Handle both _ChatRuntime and XiaoQingChatConfig types
     if hasattr(runtime, "cfg"):
-        log_enabled = runtime.cfg.debug.log_steps
+        log_enabled = getattr(getattr(runtime.cfg, "debug", None), "log_steps", True)
     elif hasattr(runtime, "debug"):
-        log_enabled = runtime.debug.log_steps
+        log_enabled = getattr(runtime.debug, "log_steps", True)
     else:
         log_enabled = True
 

@@ -10,6 +10,7 @@ from typing import Any, Optional, Sequence
 from .bw_expression_store import ExpressionRecord, ExpressionStore
 from ..config.config import PersonalityConfig
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..message_parts import render_stored_message
 from ..memory.memory import StoredMessage
 from ..planning.pfc_utils import get_items_from_json, extract_first_json_list
 
@@ -78,7 +79,7 @@ def _build_dialogue(messages: Sequence[StoredMessage], *, bot_name: str, max_lin
         sid = lid or f"t{int(msg.ts or 0)}"
         role = "你" if msg.role == "assistant" else "对方"
         name = bot_name if msg.role == "assistant" else (msg.name or "用户")
-        text = (msg.content or "").strip()
+        text = render_stored_message(msg)
         if not text:
             continue
         if len(text) > 160:

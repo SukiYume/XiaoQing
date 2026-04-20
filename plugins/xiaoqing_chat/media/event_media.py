@@ -7,691 +7,78 @@ import io
 import json
 import mimetypes
 import re
-import threading
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, unquote_to_bytes, urlparse
 
 import aiohttp
-from core.plugin_base import ensure_dir, load_json, write_json
+from core.plugin_base import ensure_dir
 
 from ..helper_utils import _iter_message_segments
-from ..llm.llm_client import LLMError, chat_completions
+from ..llm.llm_client import chat_completions
+from ..media_registry import resolve_registered_media_items
+from ..message_parts import build_text_message_parts, normalize_message_parts
+from .event_media_analysis import (
+    _analyze_media_with_llm,
+    _call_media_llm,
+    _explicit_media_llm_requested,
+    _extract_first_text_value,
+    _extract_json_object,
+    _has_media_llm_capability,
+    _legacy_direct_vision_overrides,
+    _media_llm_max_tokens,
+    _merge_visible_text,
+    _normalize_provider_list,
+    _parse_detail_analysis_output,
+    _prepare_media_for_llm,
+    _refine_emoji_analysis_with_llm,
+    _resolve_media_llm_secret_candidates,
+    _resolve_media_llm_secrets,
+    _should_refresh_cached_render,
+    _vision_plugin_secrets,
+)
+from .event_media_common import (
+    RenderedMedia,
+    ResolvedMedia,
+    _DOWNLOAD_CHUNK_SIZE,
+    _EMOJI_HINT_RE,
+    _GENERIC_MEDIA_HINTS,
+    _MEDIA_ANALYSIS_PROMPT_VERSION,
+    _MEDIA_DOWNLOAD_TIMEOUT,
+    _ONEBOT_HTTP_TIMEOUT,
+    _SUPPORTED_IMAGE_SUFFIXES,
+    _SUPPORTED_MEDIA_TYPES,
+    _animation_sample_indexes,
+    _build_context_marker,
+    _build_fallback_render,
+    _build_marker,
+    _clean_media_hint,
+    _fallback_kind,
+    _figures_inbox_dir,
+    _figures_root,
+    _guess_mime_type,
+    _inspect_image_payload,
+    _is_generic_media_label,
+    _is_low_quality_rendered_media,
+    _load_render_cache,
+    _looks_like_base64_source,
+    _looks_like_data_url,
+    _looks_like_structured_media_text,
+    _looks_like_url,
+    _media_cfg_value,
+    _media_log,
+    _media_root,
+    _normalize_emotion_tags,
+    _parse_file_uri,
+    _render_cache_lock,
+    _rendered_media_from_cache,
+    _safe_source_name,
+    _save_render_cache,
+    _segment_prefers_emoji,
+    _segment_summary_hint,
+)
 from .qq_face import describe_face_segment
 from .qq_face_catalog import record_face_observation
-
-_SUPPORTED_MEDIA_TYPES = frozenset({"image", "mface", "face"})
-_SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
-_EMOJI_HINT_RE = re.compile(
-    r"(表情|emoji|sticker|meme|梗图|mface|贴纸|无语|开心|委屈|猫猫|商城表情|收藏表情)",
-    re.IGNORECASE,
-)
-_GENERIC_MEDIA_HINTS = frozenset({"[图片]", "[动画表情]", "[表情]", "图片", "表情"})
-_GENERIC_MEDIA_LABELS = frozenset(
-    {
-        "图片",
-        "表情",
-        "表情包",
-        "动画表情",
-        "聊天表情包",
-        "一张图片",
-        "一张表情包",
-        "一张聊天表情包",
-    }
-)
-_STRUCTURED_MEDIA_TAG_STOPWORDS = frozenset(
-    {
-        "json",
-        "kind",
-        "emoji",
-        "image",
-        "description",
-        "summary",
-        "label",
-        "visibletext",
-        "detaileddescription",
-        "detaildescription",
-        "emotiontags",
-        "emotions",
-    }
-)
-_MEDIA_ANALYSIS_PROMPT_VERSION = 3
-_RENDER_CACHE_LOCKS: dict[str, threading.RLock] = {}
-_RENDER_CACHE_LOCKS_GUARD = threading.Lock()
-_MEDIA_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10, sock_read=15)
-_ONEBOT_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
-_DOWNLOAD_CHUNK_SIZE = 64 * 1024
-
-
-@dataclass(frozen=True)
-class ResolvedMedia:
-    media_hash: str
-    segment_type: str
-    source_name: str
-    mime_type: str
-    cached_path: Path
-    width: int = 0
-    height: int = 0
-    is_animated: bool = False
-
-
-@dataclass(frozen=True)
-class RenderedMedia:
-    media_hash: str
-    kind: str
-    description: str
-    emotion_tags: tuple[str, ...]
-    marker: str
-    cached_path: Path | None = None
-
-
-@dataclass(frozen=True)
-class PreparedMediaForLLM:
-    payload: bytes
-    mime_type: str
-    transcoded: bool
-    source_mime_type: str
-    is_animated: bool = False
-    frame_strategy: str = "original"
-    frame_count: int = 1
-
-
-@dataclass(frozen=True)
-class MediaAnalysisDraft:
-    kind: str
-    description: str
-    visible_text: str
-    emotion_tags: tuple[str, ...]
-    raw_output: str = ""
-
-
-def _media_cfg(runtime) -> Any:
-    return getattr(getattr(runtime, "cfg", None), "media", None)
-
-
-def _media_cfg_value(runtime, field: str, default: Any) -> Any:
-    cfg = _media_cfg(runtime)
-    if cfg is None:
-        return default
-    return getattr(cfg, field, default)
-
-
-def _media_log(context, runtime, *, step: str, fields: dict[str, Any] | None = None, level: str = "info") -> None:
-    debug_cfg = getattr(getattr(runtime, "cfg", runtime), "debug", None)
-    if debug_cfg is not None and not bool(getattr(debug_cfg, "log_steps", True)):
-        return
-    logger = getattr(context, "logger", None)
-    if logger is None:
-        return
-
-    payload: dict[str, Any] = {"step": str(step)}
-    if fields:
-        for key, value in fields.items():
-            if value is None:
-                continue
-            if isinstance(value, Path):
-                payload[str(key)] = str(value)
-                continue
-            text = str(value)
-            payload[str(key)] = text if len(text) <= 240 else text[:239] + "…"
-    try:
-        log_fn = getattr(logger, level, None) or logger.info
-        log_fn("xiaoqing_chat media=%s", json.dumps(payload, ensure_ascii=False))
-    except Exception:
-        return
-
-
-def _media_root(data_dir: Path) -> Path:
-    return data_dir / "media"
-
-
-def _figures_root(context) -> Path:
-    return Path(context.plugin_dir) / "figures"
-
-
-def _figures_inbox_dir(context) -> Path:
-    return _figures_root(context) / "inbox"
-
-
-def _render_cache_path(data_dir: Path) -> Path:
-    return _media_root(data_dir) / "render_cache.json"
-
-
-def _load_render_cache(data_dir: Path) -> dict[str, Any]:
-    payload = load_json(_render_cache_path(data_dir), default={"items": {}})
-    items = payload.get("items")
-    if not isinstance(items, dict):
-        payload["items"] = {}
-    return payload
-
-
-def _save_render_cache(data_dir: Path, cache: dict[str, Any]) -> None:
-    write_json(_render_cache_path(data_dir), cache)
-
-
-def _render_cache_lock(data_dir: Path) -> threading.RLock:
-    key = str(_render_cache_path(data_dir).resolve())
-    with _RENDER_CACHE_LOCKS_GUARD:
-        lock = _RENDER_CACHE_LOCKS.get(key)
-        if lock is None:
-            lock = threading.RLock()
-            _RENDER_CACHE_LOCKS[key] = lock
-        return lock
-
-
-def _parse_file_uri(value: str) -> Path | None:
-    parsed = urlparse(value)
-    if parsed.scheme != "file":
-        return None
-    raw_netloc = unquote(parsed.netloc or "")
-    raw_path = unquote(parsed.path or "")
-    if raw_netloc and raw_path:
-        if re.fullmatch(r"[A-Za-z]:", raw_netloc):
-            raw_path = f"{raw_netloc}{raw_path}"
-        else:
-            raw_path = f"//{raw_netloc}{raw_path}"
-    elif raw_netloc and not raw_path:
-        raw_path = raw_netloc
-    if not raw_path:
-        return None
-    if raw_path.startswith("/") and len(raw_path) > 2 and raw_path[2] == ":":
-        raw_path = raw_path[1:]
-    return Path(raw_path)
-
-
-def _looks_like_url(value: str) -> bool:
-    return value.startswith("http://") or value.startswith("https://")
-
-
-def _looks_like_base64_source(value: str) -> bool:
-    return value.startswith("base64://")
-
-
-def _looks_like_data_url(value: str) -> bool:
-    return value.startswith("data:")
-
-
-def _safe_source_name(value: str) -> str:
-    normalized = _normalize_source_label(value)
-    return normalized[:40]
-
-
-def _normalize_source_label(value: str) -> str:
-    if not value:
-        return ""
-    if _looks_like_base64_source(value) or _looks_like_data_url(value):
-        return ""
-    name = Path(value).stem if any(ch in value for ch in ("/", "\\")) else value
-    name = re.sub(r"[_\-]+", " ", name)
-    name = re.sub(r"\s+", " ", name).strip()
-    return name
-
-
-def _guess_mime_type(path: Path) -> str:
-    mime_type, _ = mimetypes.guess_type(str(path))
-    return mime_type or "image/png"
-
-
-def _suffix_from_format(format_name: str) -> str:
-    normalized = str(format_name or "").strip().upper()
-    if not normalized:
-        return ".png"
-    mapping = {
-        "JPEG": ".jpg",
-        "JPG": ".jpg",
-        "PNG": ".png",
-        "GIF": ".gif",
-        "WEBP": ".webp",
-        "BMP": ".bmp",
-    }
-    return mapping.get(normalized, f".{normalized.lower()}")
-
-
-def _inspect_image_payload(payload: bytes, *, fallback_suffix: str = ".png") -> tuple[str, str, int, int, bool]:
-    try:
-        from PIL import Image
-
-        with Image.open(io.BytesIO(payload)) as image:
-            format_name = str(getattr(image, "format", "") or "").upper()
-            mime_type = ""
-            if format_name:
-                mime_type = str(Image.MIME.get(format_name, "") or "").strip()
-            width, height = image.size
-            is_animated = bool(getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) > 1)
-            suffix = _suffix_from_format(format_name) if format_name else fallback_suffix
-            return mime_type or _guess_mime_type(Path(f"image{suffix}")), suffix or fallback_suffix, width, height, is_animated
-    except Exception:
-        mime_type = _guess_mime_type(Path(f"image{fallback_suffix or '.png'}"))
-        return mime_type, fallback_suffix or ".png", 0, 0, False
-
-
-def _animation_sample_indexes(frame_count: int) -> list[int]:
-    total = max(1, int(frame_count))
-    if total <= 1:
-        return [0]
-    candidates = [0, total // 2, total - 1]
-    indexes: list[int] = []
-    for idx in candidates:
-        normalized = min(max(0, int(idx)), total - 1)
-        if normalized not in indexes:
-            indexes.append(normalized)
-    return indexes
-
-
-def _render_animation_contact_sheet(payload: bytes) -> tuple[bytes, int]:
-    from PIL import Image
-
-    gap = 8
-    frame_max_side = 320
-    with Image.open(io.BytesIO(payload)) as image:
-        frame_total = int(getattr(image, "n_frames", 1) or 1)
-        indexes = _animation_sample_indexes(frame_total)
-        frames: list[Any] = []
-        for idx in indexes:
-            image.seek(idx)
-            frame = image.convert("RGBA")
-            frame.thumbnail((frame_max_side, frame_max_side))
-            frames.append(frame.copy())
-
-    if not frames:
-        raise ValueError("animation has no usable frames")
-    if len(frames) == 1:
-        buffer = io.BytesIO()
-        frames[0].save(buffer, format="PNG")
-        return buffer.getvalue(), 1
-
-    total_width = sum(frame.width for frame in frames) + gap * (len(frames) - 1)
-    total_height = max(frame.height for frame in frames)
-    sheet = Image.new("RGBA", (total_width, total_height), (255, 255, 255, 255))
-    cursor_x = 0
-    for frame in frames:
-        offset_y = (total_height - frame.height) // 2
-        sheet.alpha_composite(frame, (cursor_x, offset_y))
-        cursor_x += frame.width + gap
-
-    buffer = io.BytesIO()
-    sheet.save(buffer, format="PNG")
-    return buffer.getvalue(), len(frames)
-
-
-def _normalize_emotion_tags(value: Any) -> tuple[str, ...]:
-    if isinstance(value, str):
-        candidates = re.split(r"[,，/\s]+", value)
-    elif isinstance(value, list):
-        candidates = [str(item) for item in value]
-    else:
-        candidates = []
-
-    tags: list[str] = []
-    for item in candidates:
-        if _looks_like_structured_media_text(item):
-            continue
-        cleaned = re.sub(r"[^\w\u4e00-\u9fff]+", "", item or "").strip()
-        lowered = cleaned.lower()
-        if not cleaned:
-            continue
-        if lowered in _STRUCTURED_MEDIA_TAG_STOPWORDS:
-            continue
-        if cleaned.startswith("think") or "用户" in cleaned or "输入数据" in cleaned:
-            continue
-        if cleaned not in tags:
-            tags.append(cleaned[:12])
-    return tuple(tags[:4])
-
-
-def _clean_media_hint(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _segment_summary_hint(segment: dict[str, Any]) -> str:
-    data = segment.get("data", {}) or {}
-    generic = ""
-    for key in ("summary", "text", "name", "key", "emoji_id"):
-        value = _clean_media_hint(data.get(key))
-        if not value:
-            continue
-        if value in _GENERIC_MEDIA_HINTS:
-            if not generic:
-                generic = value
-            continue
-        return value
-    return generic
-
-
-def _segment_prefers_emoji(segment: dict[str, Any]) -> bool:
-    segment_type = str(segment.get("type", "") or "")
-    if segment_type == "mface":
-        return True
-
-    data = segment.get("data", {}) or {}
-    for key in ("emoji_id", "emoji_package_id", "key"):
-        value = data.get(key)
-        if value not in (None, ""):
-            return True
-
-    return bool(_EMOJI_HINT_RE.search(_segment_summary_hint(segment)))
-
-
-def _fallback_kind(source_name: str, *, width: int, height: int, segment_type: str) -> str:
-    if segment_type == "mface":
-        return "emoji"
-    if _EMOJI_HINT_RE.search(source_name or ""):
-        return "emoji"
-    if not source_name and width and height and max(width, height) <= 512 and abs(width - height) <= 96:
-        return "emoji"
-    return "image"
-
-
-def _build_marker(kind: str, description: str, emotion_tags: tuple[str, ...]) -> str:
-    if kind == "emoji":
-        label = "，".join(emotion_tags[:2]).strip() or description.strip() or "一张表情包"
-        return f"[表情包：{label}]"
-    desc = description.strip() or "一张图片"
-    return f"[图片：{desc}]"
-
-
-def _build_context_marker(rendered: RenderedMedia) -> str:
-    marker = rendered.marker.strip()
-    if rendered.kind != "emoji" or not marker.startswith("[表情包："):
-        return marker
-
-    description = rendered.description.strip()
-    if not description or _is_generic_media_label(description):
-        return marker
-
-    label = "，".join(rendered.emotion_tags[:2]).strip()
-    if not label:
-        return marker
-
-    normalized_label = _normalize_media_label(label)
-    normalized_description = _normalize_media_label(description)
-    if not normalized_description or normalized_description == normalized_label:
-        return marker
-
-    return f"[表情包：{label}；内容：{description}]"
-
-
-def _normalize_media_label(value: str) -> str:
-    text = str(value or "").strip()
-    if text.startswith("[") and text.endswith("]"):
-        text = text[1:-1].strip()
-    text = re.sub(r"^(QQ表情|表情包|图片)\s*[：:]", "", text)
-    text = re.sub(r"\s+", "", text)
-    return text
-
-
-def _is_generic_media_label(value: str) -> bool:
-    normalized = _normalize_media_label(value)
-    if not normalized:
-        return True
-    return normalized in _GENERIC_MEDIA_LABELS
-
-
-def _looks_like_structured_media_text(value: str) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return False
-    lowered = text.lower()
-    if "<think" in lowered or "</think>" in lowered:
-        return True
-    if "```" in text:
-        return True
-    if lowered.startswith("json") and "{" in text:
-        return True
-    if any(
-        token in text
-        for token in (
-            '"kind"',
-            '"description"',
-            '"emotion_tags"',
-            '"detailed_description"',
-            '"visible_text"',
-            '{"detailed_description"',
-            "输入数据：",
-        )
-    ):
-        return True
-    if any(
-        phrase in text
-        for phrase in (
-            "用户给的例子",
-            "现在重新分析",
-            "需要提取信息",
-            "只输出 JSON",
-            "只输出JSON",
-        )
-    ):
-        return True
-    return False
-
-
-def _can_use_raw_media_description(value: str) -> bool:
-    text = str(value or "").strip().strip("`")
-    if not text:
-        return False
-    if text.startswith("{"):
-        return False
-    return not _looks_like_structured_media_text(text)
-
-
-def _is_low_quality_rendered_media(
-    rendered: RenderedMedia,
-    *,
-    summary_hint: str,
-    resolved: ResolvedMedia,
-) -> bool:
-    if _looks_like_structured_media_text(rendered.description):
-        return True
-    if _looks_like_structured_media_text(rendered.marker):
-        return True
-    if any(_looks_like_structured_media_text(tag) for tag in rendered.emotion_tags):
-        return True
-    if _is_generic_media_label(rendered.description):
-        return True
-    if rendered.kind == "emoji" and not rendered.emotion_tags and _is_generic_media_label(rendered.marker):
-        return True
-    summary_label = _normalize_media_label(summary_hint)
-    if summary_label and summary_label == _normalize_media_label(rendered.description) and _is_generic_media_label(summary_hint):
-        return True
-    source_label = _normalize_media_label(resolved.source_name)
-    if source_label and source_label == _normalize_media_label(rendered.description) and _is_generic_media_label(resolved.source_name):
-        return True
-    return False
-
-
-def _build_fallback_render(
-    resolved: ResolvedMedia,
-    *,
-    summary_hint: str = "",
-    prefer_emoji: bool = False,
-) -> RenderedMedia:
-    if prefer_emoji:
-        kind = "emoji"
-    else:
-        kind = _fallback_kind(
-            summary_hint or resolved.source_name,
-            width=resolved.width,
-            height=resolved.height,
-            segment_type=resolved.segment_type,
-        )
-    label = _safe_source_name(summary_hint or resolved.source_name)
-    if kind == "emoji":
-        emotion_tags = _normalize_emotion_tags(label)
-        description = label or "一张聊天表情包"
-    else:
-        emotion_tags = tuple()
-        description = label or "一张图片"
-    marker = _build_marker(kind, description, emotion_tags)
-    return RenderedMedia(
-        media_hash=resolved.media_hash,
-        kind=kind,
-        description=description,
-        emotion_tags=emotion_tags,
-        marker=marker,
-        cached_path=resolved.cached_path,
-    )
-
-
-def _rendered_media_from_cache(cached: dict[str, Any], *, resolved: ResolvedMedia) -> RenderedMedia:
-    kind = str(cached.get("kind", "") or "").strip() or "image"
-    description = str(cached.get("description", "") or "").strip()
-    emotion_tags = _normalize_emotion_tags(cached.get("emotion_tags"))
-    marker = str(cached.get("marker", "") or "").strip() or _build_marker(kind, description, emotion_tags)
-    return RenderedMedia(
-        media_hash=resolved.media_hash,
-        kind=kind,
-        description=description,
-        emotion_tags=emotion_tags,
-        marker=marker,
-        cached_path=resolved.cached_path,
-    )
-
-
-def _same_rendered_media(left: RenderedMedia, right: RenderedMedia) -> bool:
-    return (
-        left.kind == right.kind
-        and left.description == right.description
-        and tuple(left.emotion_tags) == tuple(right.emotion_tags)
-        and left.marker == right.marker
-    )
-
-
-def _vision_plugin_secrets(context) -> tuple[dict[str, Any], dict[str, Any], str]:
-    plugin_secrets = (getattr(context, "secrets", {}) or {}).get("plugins", {}).get("xiaoqing_chat", {}) or {}
-    vision = plugin_secrets.get("vision") or {}
-    providers = vision.get("providers") or {}
-    default_name = str(vision.get("default", "") or "").strip()
-    return plugin_secrets, providers, default_name
-
-
-def _normalize_provider_list(value: Any) -> list[str]:
-    if isinstance(value, str):
-        item = value.strip()
-        return [item] if item else []
-    if isinstance(value, (list, tuple)):
-        items: list[str] = []
-        for raw in value:
-            item = str(raw or "").strip()
-            if item and item not in items:
-                items.append(item)
-        return items
-    return []
-
-
-def _media_llm_max_tokens(secrets: dict[str, Any], base_max_tokens: int) -> int:
-    base = max(1, int(base_max_tokens))
-    model = str(secrets.get("model", "") or "").strip().lower()
-    if "thinking" not in model:
-        return base
-    # Thinking models may emit hidden reasoning before the final JSON.
-    # Give them a wider budget so they do not truncate before producing usable output.
-    return max(base * 4, 800 if base >= 200 else 480)
-
-
-def _build_media_provider_secrets(
-    provider_name: str,
-    provider_config: dict[str, Any],
-    *,
-    endpoint_path: str,
-    scope: str,
-) -> dict[str, Any]:
-    return {
-        "api_base": str(provider_config.get("api_base", "") or "").strip(),
-        "api_key": str(provider_config.get("api_key", "") or "").strip(),
-        "model": str(provider_config.get("model", "") or "").strip(),
-        "endpoint_path": str(provider_config.get("endpoint_path", endpoint_path) or "").strip(),
-        "proxy": str(provider_config.get("proxy", "") or "").strip(),
-        "_provider_name": provider_name,
-        "_provider_scope": scope,
-        "_vision_enabled": True,
-    }
-
-
-def _legacy_direct_vision_overrides(cfg) -> dict[str, str]:
-    return {
-        "api_base": str(getattr(cfg, "vision_api_base", "") or "").strip(),
-        "api_key": str(getattr(cfg, "vision_api_key", "") or "").strip(),
-        "model": str(getattr(cfg, "vision_model", "") or "").strip(),
-        "endpoint_path": str(getattr(cfg, "vision_endpoint_path", "") or "").strip(),
-        "proxy": str(getattr(cfg, "vision_proxy", "") or "").strip(),
-    }
-
-
-def _explicit_media_llm_requested(context, runtime) -> bool:
-    cfg = _media_cfg(runtime)
-    if cfg is None:
-        return False
-    if str(getattr(cfg, "vision_provider", "") or "").strip():
-        return True
-    if any(_legacy_direct_vision_overrides(cfg).values()):
-        return True
-    _, providers, default_name = _vision_plugin_secrets(context)
-    return bool(providers and default_name)
-
-
-def _has_media_llm_capability(context, runtime) -> bool:
-    if not _explicit_media_llm_requested(context, runtime):
-        return False
-    for secrets in _resolve_media_llm_secret_candidates(context, runtime):
-        if all(str(secrets.get(field, "") or "").strip() for field in ("api_base", "api_key", "model")):
-            return True
-    return False
-
-
-def _looks_like_source_placeholder(
-    rendered: RenderedMedia,
-    *,
-    summary_hint: str,
-    resolved: ResolvedMedia,
-) -> bool:
-    if rendered.kind != "image":
-        return False
-    full_source_label = _normalize_source_label(summary_hint or resolved.source_name)
-    if not full_source_label:
-        return False
-    return (
-        rendered.description == full_source_label
-        and rendered.marker == _build_marker(rendered.kind, rendered.description, rendered.emotion_tags)
-    )
-
-
-def _should_refresh_cached_render(
-    cached_rendered: RenderedMedia,
-    *,
-    cached_source: str,
-    cached_quality: str,
-    cached_prompt_version: int,
-    fallback_rendered: RenderedMedia,
-    summary_hint: str,
-    resolved: ResolvedMedia,
-    context,
-    runtime,
-) -> bool:
-    if not _has_media_llm_capability(context, runtime):
-        return False
-
-    normalized_source = str(cached_source or "").strip().lower()
-    if normalized_source == "llm":
-        # Generic LLM labels are not materially better than fallback summary markers.
-        # Keep retrying them on subsequent hits instead of treating them as stable cache.
-        if cached_quality == "generic" or _is_low_quality_rendered_media(
-            cached_rendered,
-            summary_hint=summary_hint,
-            resolved=resolved,
-        ):
-            return True
-        if cached_prompt_version < _MEDIA_ANALYSIS_PROMPT_VERSION:
-            return True
-        return False
-    if normalized_source == "fallback":
-        return True
-    return _same_rendered_media(cached_rendered, fallback_rendered) or _looks_like_source_placeholder(
-        cached_rendered,
-        summary_hint=summary_hint,
-        resolved=resolved,
-    )
-
 
 async def _download_url_bytes(url: str, *, context, max_bytes: int) -> tuple[bytes, str]:
     session = getattr(context, "http_session", None)
@@ -1161,638 +548,6 @@ async def _resolve_segment_media(
     return resolved
 
 
-def _prepare_media_for_llm(resolved: ResolvedMedia) -> PreparedMediaForLLM:
-    payload = resolved.cached_path.read_bytes()
-    source_mime = str(resolved.mime_type or "").strip() or "image/png"
-    if source_mime in {"image/png", "image/jpeg", "image/jpg"} and not resolved.is_animated:
-        return PreparedMediaForLLM(
-            payload=payload,
-            mime_type=source_mime,
-            transcoded=False,
-            source_mime_type=source_mime,
-            is_animated=resolved.is_animated,
-            frame_strategy="original",
-            frame_count=1,
-        )
-
-    try:
-        if resolved.is_animated:
-            prepared_payload, frame_count = _render_animation_contact_sheet(payload)
-            return PreparedMediaForLLM(
-                payload=prepared_payload,
-                mime_type="image/png",
-                transcoded=True,
-                source_mime_type=source_mime,
-                is_animated=resolved.is_animated,
-                frame_strategy="animation_contact_sheet",
-                frame_count=frame_count,
-            )
-
-        from PIL import Image
-
-        with Image.open(io.BytesIO(payload)) as image:
-            if getattr(image, "mode", "") not in {"RGB", "RGBA"}:
-                image = image.convert("RGBA")
-            elif image.mode == "P":
-                image = image.convert("RGBA")
-            buffer = io.BytesIO()
-            image.save(buffer, format="PNG")
-        return PreparedMediaForLLM(
-            payload=buffer.getvalue(),
-            mime_type="image/png",
-            transcoded=True,
-            source_mime_type=source_mime,
-            is_animated=resolved.is_animated,
-            frame_strategy="single_frame_png",
-            frame_count=1,
-        )
-    except Exception:
-        return PreparedMediaForLLM(
-            payload=payload,
-            mime_type=source_mime,
-            transcoded=False,
-            source_mime_type=source_mime,
-            is_animated=resolved.is_animated,
-            frame_strategy="original_fallback",
-            frame_count=1,
-        )
-
-
-def _extract_json_object(text: str) -> dict[str, Any]:
-    if not text:
-        return {}
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return {}
-    try:
-        raw = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def _extract_first_text_value(data: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = str(data.get(key, "") or "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _merge_visible_text(description: str, visible_text: str) -> str:
-    desc = str(description or "").strip()
-    text = re.sub(r"\s+", " ", str(visible_text or "").strip())
-    if not text:
-        return desc
-    normalized_desc = re.sub(r"\s+", "", desc)
-    normalized_text = re.sub(r"\s+", "", text)
-    if normalized_text and normalized_text in normalized_desc:
-        return desc
-    if desc:
-        return f'{desc}，配字是“{text}”'
-    return f'配字是“{text}”'
-
-
-async def _call_media_llm(
-    *,
-    context,
-    runtime,
-    messages: list[dict[str, Any]],
-    temperature: float,
-    top_p: float,
-    max_tokens: int,
-) -> tuple[str, dict[str, Any]]:
-    cfg = _media_cfg(runtime)
-    if cfg is None:
-        return "", {}
-
-    candidates = _resolve_media_llm_secret_candidates(context, runtime)
-    if not candidates:
-        return "", {}
-
-    previous_provider: dict[str, Any] | None = None
-    last_exc: Exception | None = None
-
-    for index, secrets in enumerate(candidates):
-        effective_max_tokens = _media_llm_max_tokens(secrets, max_tokens)
-        if index > 0 and previous_provider is not None:
-            _media_log(
-                context,
-                runtime,
-                step="media.analyze.provider_fallback",
-                fields={
-                    "from_provider": previous_provider.get("_provider_name", ""),
-                    "to_provider": secrets.get("_provider_name", ""),
-                    "to_model": secrets.get("model", ""),
-                    "to_max_tokens": effective_max_tokens,
-                    "reason": "retryable_http_429",
-                },
-                level="warning",
-            )
-        try:
-            output = await chat_completions(
-                session=context.http_session,
-                api_base=str(secrets.get("api_base", "") or ""),
-                api_key=str(secrets.get("api_key", "") or ""),
-                model=str(secrets.get("model", "") or ""),
-                messages=messages,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=effective_max_tokens,
-                timeout_seconds=float(cfg.vision_timeout_seconds),
-                max_retry=int(cfg.vision_max_retry),
-                retry_interval_seconds=float(cfg.vision_retry_interval_seconds),
-                proxy=str(secrets.get("proxy", "") or ""),
-                endpoint_path=str(secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path),
-            )
-            used_secrets = dict(secrets)
-            used_secrets["_effective_max_tokens"] = effective_max_tokens
-            return output, used_secrets
-        except Exception as exc:
-            setattr(exc, "_media_provider_name", secrets.get("_provider_name", ""))
-            setattr(exc, "_media_provider_scope", secrets.get("_provider_scope", ""))
-            setattr(exc, "_media_provider_model", secrets.get("model", ""))
-            setattr(exc, "_media_provider_max_tokens", effective_max_tokens)
-            last_exc = exc
-            if (
-                index + 1 < len(candidates)
-                and isinstance(exc, LLMError)
-                and str(exc).startswith("retryable_http_429:")
-            ):
-                previous_provider = secrets
-                continue
-            raise
-
-    if last_exc is not None:
-        raise last_exc
-    return "", candidates[0]
-
-
-def _parse_detail_analysis_output(
-    output: str,
-    *,
-    resolved: ResolvedMedia,
-    prefer_emoji: bool,
-) -> MediaAnalysisDraft:
-    data = _extract_json_object(output)
-    kind = str(data.get("kind", "") or "").strip().lower()
-    if kind not in {"image", "emoji"}:
-        kind = _fallback_kind(
-            resolved.source_name,
-            width=resolved.width,
-            height=resolved.height,
-            segment_type=resolved.segment_type,
-        )
-    if prefer_emoji:
-        kind = "emoji"
-
-    description = _extract_first_text_value(
-        data,
-        "detailed_description",
-        "detail_description",
-        "detail",
-        "description",
-        "summary",
-    )
-    visible_text = _extract_first_text_value(
-        data,
-        "visible_text",
-        "ocr_text",
-        "text",
-        "caption_text",
-    )
-    if not description:
-        raw_output = str(output or "").strip().strip("`")
-        if _can_use_raw_media_description(raw_output):
-            description = raw_output
-    description = _merge_visible_text(description, visible_text)
-    emotion_tags = _normalize_emotion_tags(
-        data.get("emotion_tags") or data.get("emotions") or data.get("tone_tags")
-    )
-    if kind == "emoji" and not emotion_tags:
-        emotion_tags = _normalize_emotion_tags(description or visible_text)
-    return MediaAnalysisDraft(
-        kind=kind,
-        description=description.strip(),
-        visible_text=visible_text.strip(),
-        emotion_tags=emotion_tags,
-        raw_output=str(output or "").strip(),
-    )
-
-
-async def _refine_emoji_analysis_with_llm(
-    draft: MediaAnalysisDraft,
-    *,
-    resolved: ResolvedMedia,
-    context,
-    runtime,
-) -> tuple[MediaAnalysisDraft, dict[str, Any]]:
-    prompt = (
-        "你要把表情包的详细描述压缩成适合聊天使用的短标签 JSON。"
-        "只输出 JSON，不要额外解释。"
-        '格式: {"description":"...","emotion_tags":["..."]}。'
-        "description 用简短中文概括主体、动作、表情和可见文字，优先保留梗图里最有辨识度的内容。"
-        "不要输出泛化词，比如“图片”“表情包”“动画表情”“聊天表情包”。"
-        "emotion_tags 放 1 到 4 个适合聊天使用的情绪或语气标签。"
-    )
-    detail_block = {
-        "detailed_description": draft.description,
-        "visible_text": draft.visible_text,
-        "emotion_tags": list(draft.emotion_tags),
-        "source_hint": resolved.source_name,
-    }
-    messages = [
-        {"role": "system", "content": "你是表情包标签提炼器，只输出 JSON。"},
-        {
-            "role": "user",
-            "content": prompt + "\n输入数据：" + json.dumps(detail_block, ensure_ascii=False),
-        },
-    ]
-    output, used_secrets = await _call_media_llm(
-        context=context,
-        runtime=runtime,
-        messages=messages,
-        temperature=0.2,
-        top_p=0.9,
-        max_tokens=120,
-    )
-    data = _extract_json_object(output)
-    description = _extract_first_text_value(data, "description", "label", "summary")
-    if not description:
-        raw_output = str(output or "").strip().strip("`")
-        if _can_use_raw_media_description(raw_output):
-            description = raw_output
-    description = description.strip()
-    emotion_tags = _normalize_emotion_tags(data.get("emotion_tags") or data.get("emotions"))
-    if not emotion_tags:
-        emotion_tags = draft.emotion_tags
-    return (
-        MediaAnalysisDraft(
-            kind="emoji",
-            description=description,
-            visible_text=draft.visible_text,
-            emotion_tags=emotion_tags,
-            raw_output=str(output or "").strip(),
-        ),
-        used_secrets,
-    )
-
-
-def _resolve_media_llm_secret_candidates(context, runtime) -> list[dict[str, Any]]:
-    cfg = _media_cfg(runtime)
-    if cfg is None:
-        return [{
-            "api_base": "",
-            "api_key": "",
-            "model": "",
-            "endpoint_path": "",
-            "proxy": "",
-            "_provider_name": "",
-            "_provider_scope": "none",
-            "_vision_enabled": False,
-        }]
-
-    plugin_secrets, vision_providers, vision_default = _vision_plugin_secrets(context)
-    vision_cfg = plugin_secrets.get("vision") or {}
-    chat_providers = plugin_secrets.get("providers") or {}
-    provider_name = str(getattr(cfg, "vision_provider", "") or "").strip()
-    endpoint_path = str(getattr(runtime.cfg, "endpoint_path", "") or "")
-
-    empty: dict[str, Any] = {
-        "api_base": "",
-        "api_key": "",
-        "model": "",
-        "endpoint_path": endpoint_path,
-        "proxy": "",
-        "_provider_name": "",
-        "_provider_scope": "none",
-        "_vision_enabled": False,
-    }
-
-    provider_candidates: list[dict[str, Any]] = []
-    provider_names: list[str] = []
-    root_fallbacks = _normalize_provider_list(vision_cfg.get("fallbacks"))
-
-    if provider_name and provider_name in vision_providers:
-        provider_names.append(provider_name)
-        provider_names.extend(_normalize_provider_list((vision_providers.get(provider_name) or {}).get("fallbacks")))
-        provider_names.extend(root_fallbacks)
-    elif not provider_name and vision_default and vision_default in vision_providers:
-        provider_names.append(vision_default)
-        provider_names.extend(_normalize_provider_list((vision_providers.get(vision_default) or {}).get("fallbacks")))
-        provider_names.extend(root_fallbacks)
-    elif provider_name and provider_name in chat_providers:
-        provider_candidates.append(
-            _build_media_provider_secrets(
-                provider_name,
-                chat_providers.get(provider_name) or {},
-                endpoint_path=endpoint_path,
-                scope="chat_provider",
-            )
-        )
-
-    seen: set[str] = set()
-    for idx, name in enumerate(provider_names):
-        if not name or name in seen or name not in vision_providers:
-            continue
-        seen.add(name)
-        scope = "vision" if provider_name else "vision_default"
-        if idx > 0:
-            scope = "vision_fallback"
-        provider_candidates.append(
-            _build_media_provider_secrets(
-                name,
-                vision_providers.get(name) or {},
-                endpoint_path=endpoint_path,
-                scope=scope,
-            )
-        )
-
-    overrides = _legacy_direct_vision_overrides(cfg)
-    if any(overrides.values()):
-        secrets = provider_candidates[0] if provider_candidates else dict(empty)
-        secrets["_provider_name"] = secrets.get("_provider_name", "") or "legacy_direct"
-        secrets["_provider_scope"] = "legacy_direct"
-        secrets["_vision_enabled"] = True
-        for key, value in overrides.items():
-            if key == "api_key" and not value:
-                secrets[key] = ""
-                continue
-            if value:
-                secrets[key] = value
-        return [secrets]
-
-    return provider_candidates or [empty]
-
-
-def _resolve_media_llm_secrets(context, runtime) -> dict[str, Any]:
-    candidates = _resolve_media_llm_secret_candidates(context, runtime)
-    return candidates[0] if candidates else {}
-
-
-async def _analyze_media_with_llm(
-    resolved: ResolvedMedia,
-    *,
-    context,
-    runtime,
-    prefer_emoji: bool,
-) -> RenderedMedia | None:
-    cfg = _media_cfg(runtime)
-    if cfg is None:
-        return None
-    secrets = _resolve_media_llm_secrets(context, runtime)
-    if not bool(secrets.get("_vision_enabled")):
-        _media_log(
-            context,
-            runtime,
-            step="media.analyze.skip",
-            fields={
-                "reason": "vision_not_configured",
-                "media_hash": resolved.media_hash[:12],
-                "segment_type": resolved.segment_type,
-            },
-        )
-        return None
-    if not secrets.get("api_base") or not secrets.get("api_key") or not secrets.get("model"):
-        _media_log(
-            context,
-            runtime,
-            step="media.analyze.skip",
-            fields={
-                "reason": "vision_secrets_incomplete",
-                "provider": secrets.get("_provider_name", ""),
-                "provider_scope": secrets.get("_provider_scope", ""),
-                "has_api_base": bool(secrets.get("api_base")),
-                "has_api_key": bool(secrets.get("api_key")),
-                "has_model": bool(secrets.get("model")),
-                "media_hash": resolved.media_hash[:12],
-            },
-            level="warning",
-        )
-        return None
-
-    payload = resolved.cached_path.read_bytes()
-    if cfg.max_analyze_bytes > 0 and len(payload) > int(cfg.max_analyze_bytes):
-        _media_log(
-            context,
-            runtime,
-            step="media.analyze.skip",
-            fields={
-                "reason": "media_too_large",
-                "bytes": len(payload),
-                "limit": int(cfg.max_analyze_bytes),
-                "media_hash": resolved.media_hash[:12],
-            },
-            level="warning",
-        )
-        return None
-
-    prepared = _prepare_media_for_llm(resolved)
-    image_b64 = base64.b64encode(prepared.payload).decode("ascii")
-    prompt = (
-        "请把这张聊天图片分析成 JSON。"
-        "只输出 JSON，不要额外解释。"
-        '格式: {"kind":"image|emoji","description":"...","emotion_tags":["..."]}。'
-        "description 用简短中文描述图片或表情包内容，要尽量说出主体、动作/表情、画面里的可见文字。"
-        "如果它更像聊天表情包/梗图/贴纸，kind 填 emoji；普通照片、截图、插画填 image。"
-        "emotion_tags 只放 0 到 4 个简短中文情绪或语气标签。"
-        "不要输出泛化词，比如“图片”“表情包”“动画表情”“聊天表情包”。"
-        "如果图里有清晰文字，description 尽量把文字内容带上。"
-    )
-    if prefer_emoji:
-        prompt += " 这张图来自表情包库，请优先按聊天表情包理解，并尽量提炼出适合聊天使用的情绪标签。"
-    if prepared.is_animated and prepared.frame_strategy == "animation_contact_sheet" and prepared.frame_count > 1:
-        prompt += (
-            f" 这张图是从同一个动画表情里抽取的 {prepared.frame_count} 帧拼图，不是多个人物。"
-            " 如果看到相似角色重复出现，要理解成同一角色在不同帧里的动作或表情变化。"
-        )
-
-    _media_log(
-        context,
-        runtime,
-        step="media.analyze.start",
-        fields={
-            "provider": secrets.get("_provider_name", ""),
-            "provider_scope": secrets.get("_provider_scope", ""),
-            "model": secrets.get("model", ""),
-            "max_tokens": _media_llm_max_tokens(secrets, 200),
-            "media_hash": resolved.media_hash[:12],
-            "segment_type": resolved.segment_type,
-            "source_mime": prepared.source_mime_type,
-            "llm_mime": prepared.mime_type,
-            "transcoded": prepared.transcoded,
-            "animated": prepared.is_animated,
-            "frame_strategy": prepared.frame_strategy,
-            "frame_count": prepared.frame_count,
-            "prefer_emoji": prefer_emoji,
-        },
-    )
-
-    messages = [
-        {"role": "system", "content": "你是聊天图片解析器，只输出 JSON。"},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{prepared.mime_type};base64,{image_b64}"},
-                },
-            ],
-        },
-    ]
-
-    try:
-        detail_output, used_secrets = await _call_media_llm(
-            context=context,
-            runtime=runtime,
-            messages=messages,
-            temperature=0.2,
-            top_p=0.9,
-            max_tokens=200,
-        )
-    except Exception as exc:
-        _media_log(
-            context,
-            runtime,
-            step="media.analyze.fail",
-            fields={
-                "provider": getattr(exc, "_media_provider_name", secrets.get("_provider_name", "")),
-                "model": getattr(exc, "_media_provider_model", secrets.get("model", "")),
-                "media_hash": resolved.media_hash[:12],
-                "error": f"{type(exc).__name__}: {exc}",
-            },
-            level="warning",
-        )
-        raise
-
-    detail = _parse_detail_analysis_output(
-        detail_output,
-        resolved=resolved,
-        prefer_emoji=prefer_emoji,
-    )
-    _media_log(
-        context,
-        runtime,
-        step="media.analyze.detail.ok",
-        fields={
-            "provider": used_secrets.get("_provider_name", ""),
-            "model": used_secrets.get("model", ""),
-            "max_tokens": used_secrets.get("_effective_max_tokens", ""),
-            "media_hash": resolved.media_hash[:12],
-            "kind": detail.kind,
-            "description": detail.description,
-            "visible_text": detail.visible_text,
-            "emotion_tags": "，".join(detail.emotion_tags),
-            "raw_output": detail.raw_output,
-        },
-    )
-
-    kind = detail.kind
-    refined: MediaAnalysisDraft | None = None
-    refined_provider: dict[str, Any] = used_secrets
-    if kind == "emoji":
-        try:
-            refined, refined_provider = await _refine_emoji_analysis_with_llm(
-                detail,
-                resolved=resolved,
-                context=context,
-                runtime=runtime,
-            )
-            _media_log(
-                context,
-                runtime,
-                step="media.analyze.refine.ok",
-                fields={
-                    "provider": refined_provider.get("_provider_name", ""),
-                    "model": refined_provider.get("model", ""),
-                    "max_tokens": refined_provider.get("_effective_max_tokens", ""),
-                    "media_hash": resolved.media_hash[:12],
-                    "description": refined.description,
-                    "emotion_tags": "，".join(refined.emotion_tags),
-                    "raw_output": refined.raw_output,
-                },
-            )
-        except Exception as exc:
-            _media_log(
-                context,
-                runtime,
-                step="media.analyze.refine.fail",
-                fields={
-                    "provider": getattr(exc, "_media_provider_name", used_secrets.get("_provider_name", "")),
-                    "model": getattr(exc, "_media_provider_model", used_secrets.get("model", "")),
-                    "max_tokens": getattr(exc, "_media_provider_max_tokens", used_secrets.get("_effective_max_tokens", "")),
-                    "media_hash": resolved.media_hash[:12],
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
-                level="warning",
-            )
-
-    used_summary_fallback = False
-    if kind == "emoji":
-        if refined and refined.description and not _is_generic_media_label(refined.description):
-            description = refined.description
-        elif detail.description and not _is_generic_media_label(detail.description):
-            description = detail.description
-        elif refined and refined.description:
-            description = refined.description
-        elif detail.description:
-            description = detail.description
-        else:
-            description = _safe_source_name(resolved.source_name) or "一张表情包"
-            used_summary_fallback = True
-        emotion_tags = refined.emotion_tags if refined and refined.emotion_tags else detail.emotion_tags
-        if not emotion_tags:
-            emotion_tags = _normalize_emotion_tags(description or detail.visible_text)
-    else:
-        description = detail.description
-        if not description:
-            description = _safe_source_name(resolved.source_name) or "一张图片"
-            used_summary_fallback = True
-        emotion_tags = tuple()
-
-    marker = _build_marker(kind, description, emotion_tags)
-    quality = "generic" if _is_low_quality_rendered_media(
-        RenderedMedia(
-            media_hash=resolved.media_hash,
-            kind=kind,
-            description=description,
-            emotion_tags=emotion_tags,
-            marker=marker,
-            cached_path=resolved.cached_path,
-        ),
-        summary_hint=resolved.source_name,
-        resolved=resolved,
-    ) else "detailed"
-    _media_log(
-        context,
-        runtime,
-        step="media.analyze.ok",
-        fields={
-            "provider": secrets.get("_provider_name", ""),
-            "model": secrets.get("model", ""),
-            "max_tokens": used_secrets.get("_effective_max_tokens", ""),
-            "media_hash": resolved.media_hash[:12],
-            "kind": kind,
-            "description": description,
-            "detail_description": detail.description,
-            "visible_text": detail.visible_text,
-            "refined_description": refined.description if refined else "",
-            "used_summary_fallback": used_summary_fallback,
-            "marker": marker,
-            "quality": quality,
-        },
-    )
-    return RenderedMedia(
-        media_hash=resolved.media_hash,
-        kind=kind,
-        description=description,
-        emotion_tags=emotion_tags,
-        marker=marker,
-        cached_path=resolved.cached_path,
-    )
-
-
 async def _render_resolved_media(
     resolved: ResolvedMedia,
     *,
@@ -1891,7 +646,7 @@ async def _render_resolved_media(
     ):
         rendered_quality = "generic"
 
-    items[resolved.media_hash] = {
+    cache_payload = {
         "kind": rendered.kind,
         "description": rendered.description,
         "emotion_tags": list(rendered.emotion_tags),
@@ -1903,15 +658,7 @@ async def _render_resolved_media(
     with _render_cache_lock(context.data_dir):
         latest_cache = _load_render_cache(context.data_dir)
         latest_items = latest_cache.setdefault("items", {})
-        latest_items[resolved.media_hash] = {
-            "kind": rendered.kind,
-            "description": rendered.description,
-            "emotion_tags": list(rendered.emotion_tags),
-            "marker": rendered.marker,
-            "analysis_source": rendered_source,
-            "analysis_quality": rendered_quality,
-            "analysis_prompt_version": _MEDIA_ANALYSIS_PROMPT_VERSION if rendered_source == "llm" else 0,
-        }
+        latest_items[resolved.media_hash] = cache_payload
         _save_render_cache(context.data_dir, latest_cache)
     return rendered
 
@@ -1965,23 +712,108 @@ def _render_summary_only_emoji(summary: str) -> RenderedMedia:
     )
 
 
+def _render_summary_only_media(
+    summary: str,
+    *,
+    segment_type: str,
+    prefer_emoji: bool,
+) -> RenderedMedia:
+    cleaned = _safe_source_name(summary)
+    kind = "emoji" if prefer_emoji else _fallback_kind(cleaned, width=0, height=0, segment_type=segment_type)
+    if kind == "emoji":
+        emotion_tags = _normalize_emotion_tags(cleaned)
+        description = cleaned or "一张表情包"
+    else:
+        emotion_tags = tuple()
+        description = cleaned or "一张图片"
+    marker = _build_marker(kind, description, emotion_tags)
+    summary_key = f"{segment_type}:{kind}:{summary or description}"
+    return RenderedMedia(
+        media_hash=f"summary:{hashlib.sha1(summary_key.encode('utf-8')).hexdigest()}",
+        kind=kind,
+        description=description,
+        emotion_tags=emotion_tags,
+        marker=marker,
+        cached_path=None,
+    )
+
+
 def _render_face_segment(segment: dict[str, Any]) -> RenderedMedia:
     data = segment.get("data", {}) or {}
+    face_id = str(data.get("id", "") or "").strip()
     label = describe_face_segment(segment)
     emotion_tags = tuple()
     if not label.startswith("id=") and "系统表情" not in label:
         emotion_tags = _normalize_emotion_tags(label)
-    media_hash = hashlib.sha1(
-        json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()
+    if face_id:
+        media_hash = f"qq_face:{face_id}"
+    else:
+        media_hash = "qq_face:" + hashlib.sha1(
+            json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
     return RenderedMedia(
-        media_hash=f"face:{media_hash}",
-        kind="emoji",
+        media_hash=media_hash,
+        kind="qq_face",
         description=label,
         emotion_tags=emotion_tags,
         marker=f"[QQ表情：{label}]",
         cached_path=None,
+        face_id=face_id,
     )
+
+
+def _upgrade_rendered_media_from_registry(rendered_items: list[RenderedMedia]) -> list[RenderedMedia]:
+    if not rendered_items:
+        return rendered_items
+    try:
+        from ..runtime_state import get_state as _state
+    except Exception:
+        return rendered_items
+
+    store = getattr(_state(), "media_store", None)
+    if store is None:
+        return rendered_items
+
+    refs: list[dict[str, Any]] = []
+    for item in rendered_items:
+        ref: dict[str, Any] = {
+            "kind": str(item.kind or ""),
+            "media_hash": str(item.media_hash or ""),
+            "face_id": str(item.face_id or ""),
+            "marker": str(item.marker or ""),
+            "description": str(item.description or ""),
+            "emotion_tags": [str(tag) for tag in item.emotion_tags if str(tag).strip()],
+        }
+        if item.cached_path is not None:
+            ref["file_path"] = str(item.cached_path)
+        refs.append(ref)
+
+    resolved_refs = resolve_registered_media_items(refs, store=store)
+    if not resolved_refs:
+        return rendered_items
+
+    upgraded: list[RenderedMedia] = []
+    for original, resolved in zip(rendered_items, resolved_refs):
+        if not isinstance(resolved, dict):
+            upgraded.append(original)
+            continue
+        tags = tuple(
+            str(tag).strip()
+            for tag in resolved.get("emotion_tags", [])
+            if str(tag).strip()
+        )
+        upgraded.append(
+            RenderedMedia(
+                media_hash=str(resolved.get("media_hash", "") or original.media_hash),
+                kind=str(resolved.get("kind", "") or original.kind),
+                description=str(resolved.get("description", "") or original.description),
+                emotion_tags=tags or original.emotion_tags,
+                marker=str(resolved.get("marker", "") or original.marker),
+                cached_path=original.cached_path,
+                face_id=str(resolved.get("face_id", "") or original.face_id),
+            )
+        )
+    return upgraded
 
 
 def _trim_ordered_text_segments(text_parts: list[str], clean_text: str) -> list[str]:
@@ -2070,6 +902,77 @@ def _compose_effective_user_text(
     return (clean_text or "").strip()
 
 
+def _rendered_media_to_message_part(rendered: RenderedMedia) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "kind": str(rendered.kind or "").strip(),
+        "media_hash": str(rendered.media_hash or "").strip(),
+        "marker": str(rendered.marker or "").strip(),
+    }
+    description = str(rendered.description or "").strip()
+    if description:
+        payload["description"] = description
+        if payload["kind"] == "qq_face":
+            payload["label"] = description
+    emotion_tags = [str(tag).strip() for tag in rendered.emotion_tags if str(tag).strip()]
+    if emotion_tags:
+        payload["emotion_tags"] = emotion_tags
+    if rendered.cached_path is not None:
+        payload["file_path"] = str(rendered.cached_path)
+    face_id = str(getattr(rendered, "face_id", "") or "").strip()
+    if face_id:
+        payload["face_id"] = face_id
+    return payload
+
+
+def _compose_effective_user_parts(
+    *,
+    clean_text: str,
+    event: dict[str, Any],
+    rendered_items: list[RenderedMedia],
+) -> tuple[dict[str, Any], ...]:
+    segments = _iter_message_segments(event)
+    if not segments:
+        return build_text_message_parts((clean_text or "").strip())
+
+    has_media = any(str(segment.get("type", "") or "") in _SUPPORTED_MEDIA_TYPES for segment in segments)
+    if not has_media:
+        return build_text_message_parts((clean_text or "").strip())
+
+    text_parts = [
+        str((segment.get("data", {}) or {}).get("text", ""))
+        for segment in segments
+        if str(segment.get("type", "") or "") == "text"
+    ]
+    trimmed_text_parts = _trim_ordered_text_segments(text_parts, clean_text)
+    text_iter = iter(trimmed_text_parts)
+    media_iter = iter(rendered_items)
+
+    ordered_parts: list[dict[str, Any]] = []
+    text_buffer = ""
+    for segment in segments:
+        segment_type = str(segment.get("type", "") or "")
+        if segment_type == "text":
+            text_buffer += next(text_iter, "")
+            continue
+        if segment_type not in _SUPPORTED_MEDIA_TYPES:
+            continue
+        flushed = text_buffer.strip()
+        if flushed:
+            ordered_parts.append({"kind": "text", "text": flushed})
+        text_buffer = ""
+        rendered = next(media_iter, None)
+        if rendered is not None:
+            ordered_parts.append(_rendered_media_to_message_part(rendered))
+
+    flushed = text_buffer.strip()
+    if flushed:
+        ordered_parts.append({"kind": "text", "text": flushed})
+
+    if ordered_parts:
+        return normalize_message_parts(ordered_parts)
+    return build_text_message_parts((clean_text or "").strip())
+
+
 async def render_event_media(event: dict[str, Any], *, context, runtime) -> list[RenderedMedia]:
     cached_items = event.get("_xc_rendered_media_items")
     if isinstance(cached_items, list):
@@ -2134,23 +1037,26 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                 },
                 level="warning",
             )
-            if prefer_emoji and summary_hint:
-                rendered = _render_summary_only_emoji(summary_hint)
-                _media_log(
-                    context,
-                    runtime,
-                    step="media.summary_only",
-                    fields={
-                        **_event_media_log_fields(event),
-                        "segment_type": segment_type,
-                        "summary_hint": summary_hint,
-                        "marker": rendered.marker,
-                    },
-                    level="warning",
-                )
-                rendered_items.append(rendered)
-                if max_items > 0 and len(rendered_items) >= max_items:
-                    break
+            rendered = _render_summary_only_media(
+                summary_hint,
+                segment_type=segment_type,
+                prefer_emoji=prefer_emoji,
+            )
+            _media_log(
+                context,
+                runtime,
+                step="media.summary_only",
+                fields={
+                    **_event_media_log_fields(event),
+                    "segment_type": segment_type,
+                    "summary_hint": summary_hint,
+                    "marker": rendered.marker,
+                },
+                level="warning",
+            )
+            rendered_items.append(rendered)
+            if max_items > 0 and len(rendered_items) >= max_items:
+                break
             continue
         if resolved is None:
             continue
@@ -2183,6 +1089,7 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
         if max_items > 0 and len(rendered_items) >= max_items:
             break
 
+    rendered_items = _upgrade_rendered_media_from_registry(rendered_items)
     event["_xc_rendered_media_items"] = rendered_items
     event["_xc_new_emoji_markers"] = new_emoji_markers
     event["_xc_new_emoji_count"] = len(new_emoji_markers)
@@ -2208,7 +1115,8 @@ async def build_effective_user_text(
     runtime,
 ) -> str:
     cached = str(event.get("_xc_effective_user_text", "") or "").strip()
-    if cached:
+    cached_parts = normalize_message_parts(event.get("_xc_effective_user_parts"))
+    if cached and cached_parts:
         return cached
     rendered_items = await render_event_media(event, context=context, runtime=runtime)
     effective = _compose_effective_user_text(
@@ -2216,5 +1124,11 @@ async def build_effective_user_text(
         event=event,
         rendered_items=rendered_items,
     )
+    effective_parts = _compose_effective_user_parts(
+        clean_text=clean_text,
+        event=event,
+        rendered_items=rendered_items,
+    )
     event["_xc_effective_user_text"] = effective
+    event["_xc_effective_user_parts"] = effective_parts
     return effective
