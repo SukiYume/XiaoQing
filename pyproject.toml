@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaoqing"
-version = "3.2.0"
+version = "4.0.0"
 description = "基于 OneBot 协议和 Python 3.10+ 异步的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
 readme = "README.md"
 license = {text = "MIT"}
