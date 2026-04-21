@@ -113,6 +113,7 @@ def _make_media_runtime(**media_overrides):
         emoji_auto_collect_requires_approval=False,
         emoji_auto_collect_max_entries=200,
         emoji_auto_collect_similarity_threshold=4,
+        max_media_per_message=3,
         image_reply_probability=0.12,
         image_candidate_count=4,
         image_cooldown_turns=4,
@@ -1524,6 +1525,7 @@ async def test_plan_image_reply_skips_user_originated_images(mock_context):
 def test_reply_media_selection_prefers_richer_plan_over_fixed_order(mock_context):
     from plugins.xiaoqing_chat.reply_media_helpers import resolve_reply_media_selection
 
+    runtime = _make_media_runtime(max_media_per_message=1)
     emoji_path = _write_png(mock_context.plugin_dir / "figures" / "library" / "generic_emoji.png")
     emoji_plan = SimpleNamespace(
         entry=SimpleNamespace(
@@ -1547,6 +1549,7 @@ def test_reply_media_selection_prefers_richer_plan_over_fixed_order(mock_context
 
     selection = resolve_reply_media_selection(
         mock_context,
+        runtime=runtime,
         user_text="你好",
         emoji_plan=emoji_plan,
         face_plan=face_plan,
@@ -1555,6 +1558,44 @@ def test_reply_media_selection_prefers_richer_plan_over_fixed_order(mock_context
     assert selection.face_plan is face_plan
     assert selection.emoji_plan is None
     assert [part["kind"] for part in selection.media_parts] == ["qq_face"]
+
+
+def test_reply_media_selection_can_keep_multiple_plans_when_limit_allows(mock_context):
+    from plugins.xiaoqing_chat.reply_media_helpers import resolve_reply_media_selection
+
+    runtime = _make_media_runtime(max_media_per_message=2)
+    emoji_path = _write_png(mock_context.plugin_dir / "figures" / "library" / "generic_emoji.png")
+    emoji_plan = SimpleNamespace(
+        entry=SimpleNamespace(
+            file_path=str(emoji_path),
+            media_hash="emoji-hash",
+            description="猫猫摊手",
+            emotion_tags=("无语",),
+        ),
+        marker="[表情包：猫猫摊手]",
+        mode="text_with_emoji",
+    )
+    face_plan = SimpleNamespace(
+        entry=SimpleNamespace(
+            face_id="277",
+            label="狗头",
+            aliases=("狗头", "阴阳怪气", "懂的都懂"),
+        ),
+        marker="[QQ表情：狗头]",
+        mode="text_with_face",
+    )
+
+    selection = resolve_reply_media_selection(
+        mock_context,
+        runtime=runtime,
+        user_text="你好",
+        emoji_plan=emoji_plan,
+        face_plan=face_plan,
+    )
+
+    assert selection.face_plan is face_plan
+    assert selection.emoji_plan is emoji_plan
+    assert [part["kind"] for part in selection.media_parts] == ["qq_face", "emoji"]
 
 
 @pytest.mark.asyncio
