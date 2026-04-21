@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from core.plugin_base import face, image, segments
+from core.plugin_base import emoji, face, image, segments
 
 from .media_registry import rebuild_message_content
 from .message_parts import (
@@ -26,7 +26,13 @@ class ReplyPayload:
 
 def _media_segment(spec: dict[str, Any]) -> dict[str, Any] | None:
     kind = str(spec.get("kind", "") or "").strip()
-    if kind in {"emoji", "image"}:
+    if kind == "emoji":
+        file_path = str(spec.get("file_path", "") or "").strip()
+        if file_path:
+            summary = str(spec.get("description", "") or spec.get("marker", "") or "").strip()
+            return emoji(file_path, summary=summary)
+        return None
+    if kind == "image":
         file_path = str(spec.get("file_path", "") or "").strip()
         if file_path:
             return image(file_path)

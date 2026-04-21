@@ -193,36 +193,6 @@ async def load_qq_face_catalog(context, runtime=None) -> list[QQFaceEntry]:
     _save_payload(context, payload)
     results.sort(key=lambda item: (item.usage_count, item.last_used_ts, item.face_id))
     return results
-
-
-def select_qq_face_for_labels(entries: list[QQFaceEntry], labels: list[str]) -> QQFaceEntry | None:
-    if not entries:
-        return None
-    normalized = [str(label or "").strip() for label in labels if str(label or "").strip()]
-    if not normalized:
-        return min(entries, key=lambda item: (item.usage_count, item.last_used_ts, item.face_id))
-
-    scored: list[tuple[float, float, QQFaceEntry]] = []
-    for entry in entries:
-        aliases = set(entry.aliases)
-        score = 0.0
-        for label in normalized:
-            if label in aliases:
-                score += 3.0
-            elif any(label in alias or alias in label for alias in aliases):
-                score += 1.5
-        score -= entry.usage_count * 0.05
-        if time.time() - entry.last_used_ts < 300:
-            score -= 1.0
-        scored.append((score, -entry.last_used_ts, entry))
-
-    scored.sort(key=lambda item: (item[0], item[1], random.random()), reverse=True)
-    best_score, _, best_entry = scored[0]
-    if best_score <= 0:
-        return min(entries, key=lambda item: (item.usage_count, item.last_used_ts, item.face_id))
-    return best_entry
-
-
 def mark_qq_face_used(context, entry: QQFaceEntry) -> None:
     mark_qq_face_used_by_id(context, entry.face_id, label=entry.label)
 

@@ -8,12 +8,14 @@ from typing import Any, Awaitable, Callable, Sequence, TypeVar
 from ..helper_utils import _resolve_llm_config
 from ..llm.llm_client import chat_completions
 from ..llm.prompt_builder import build_dialogue_prompt
+from ..message_parts import render_stored_message
 from ..media_registry import message_has_media_kind
 from ..memory.memory import StoredMessage
 
 T = TypeVar("T")
 
 _QQ_FACE_MARKER_RE = re.compile(r"\[QQ表情：([^\]]+)\]")
+_IMAGE_MARKER_RE = re.compile(r"\[图片：([^\]]+)\]")
 _EMOJI_MARKER_RE = re.compile(r"\[表情包：([^\]]+)\]")
 
 
@@ -69,7 +71,12 @@ def extract_inbound_marker_labels(value: str, media_kind: str) -> list[str]:
     text = str(value or "")
     if not text:
         return []
-    pattern = _QQ_FACE_MARKER_RE if media_kind == "qq_face" else _EMOJI_MARKER_RE
+    if media_kind == "qq_face":
+        pattern = _QQ_FACE_MARKER_RE
+    elif media_kind == "image":
+        pattern = _IMAGE_MARKER_RE
+    else:
+        pattern = _EMOJI_MARKER_RE
     labels: list[str] = []
     for match in pattern.finditer(text):
         label = str(match.group(1) or "").strip()
@@ -178,9 +185,18 @@ def build_recent_dialogue(
     context,
     max_items: int = 6,
     max_chars: int = 500,
+    current_text: str = "",
 ) -> str:
+    items = list(history)
+    current = str(current_text or "").strip()
+    if items and current:
+        last_message = items[-1]
+        if str(getattr(last_message, "role", "") or "").strip() == "user":
+            last_rendered = render_stored_message(last_message).strip()
+            if last_rendered and last_rendered == current:
+                items = items[:-1]
     return build_dialogue_prompt(
-        history[-max_items:],
+        items[-max_items:],
         bot_name=(context.config or {}).get("bot_name", "小青"),
         truncate=False,
         max_chars=max_chars,
