@@ -10,10 +10,15 @@ from .message_parts import merge_reply_media_parts
 
 @dataclass(frozen=True)
 class ReplyMediaSelection:
+    image_plan: Any = None
     emoji_plan: Any = None
     face_plan: Any = None
     media_parts: tuple[dict[str, Any], ...] = ()
     suppress_text: bool = False
+
+
+def _is_image_only(image_plan) -> bool:
+    return str(getattr(image_plan, "mode", "") or "") == "image_only"
 
 
 def _is_emoji_only(emoji_plan) -> bool:
@@ -22,6 +27,83 @@ def _is_emoji_only(emoji_plan) -> bool:
 
 def _is_face_only(face_plan) -> bool:
     return str(getattr(face_plan, "mode", "") or "") == "face_only"
+
+
+_GENERIC_IMAGE_LABELS = frozenset({"图片", "一张图片"})
+_GENERIC_EMOJI_LABELS = frozenset({"表情包", "一张表情包", "动画表情", "聊天表情包"})
+
+
+def _normalize_label(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1].strip()
+    for prefix in ("图片：", "表情包：", "QQ表情："):
+        if text.startswith(prefix):
+            text = text[len(prefix) :].strip()
+    return text
+
+
+def _specificity_score(kind: str, plan) -> int:
+    entry = getattr(plan, "entry", None)
+    marker = _normalize_label(getattr(plan, "marker", "") or getattr(entry, "marker", "") or "")
+
+    if kind == "image":
+        description = _normalize_label(getattr(entry, "description", "") or "")
+        score = 0
+        if description and description not in _GENERIC_IMAGE_LABELS:
+            score += 6
+        if marker and marker not in _GENERIC_IMAGE_LABELS:
+            score += 2
+        return score
+
+    if kind == "emoji":
+        description = _normalize_label(getattr(entry, "description", "") or "")
+        tags = [
+            str(tag).strip()
+            for tag in getattr(entry, "emotion_tags", ())
+            if str(tag).strip()
+        ]
+        score = min(len(tags), 4) * 2
+        if description and description not in _GENERIC_EMOJI_LABELS:
+            score += 3
+        if marker and marker not in _GENERIC_EMOJI_LABELS:
+            score += 1
+        return score
+
+    label = _normalize_label(getattr(entry, "label", "") or "")
+    aliases = [
+        str(alias).strip()
+        for alias in getattr(entry, "aliases", ())
+        if str(alias).strip()
+    ]
+    score = min(len(aliases), 4) * 2
+    if label and not label.startswith("系统表情#"):
+        score += 4
+    if marker and "系统表情#" not in marker:
+        score += 1
+    return score
+
+
+def _plan_sort_key(kind: str, plan) -> tuple[int, int, str]:
+    mode = str(getattr(plan, "mode", "") or "")
+    score = 0
+    if kind == "image" and _is_image_only(plan):
+        score += 40
+    elif kind == "emoji" and _is_emoji_only(plan):
+        score += 40
+    elif kind == "qq_face" and _is_face_only(plan):
+        score += 40
+    elif mode:
+        score += 10
+
+    specificity = _specificity_score(kind, plan)
+    stable_label = _normalize_label(
+        getattr(plan, "marker", "")
+        or getattr(getattr(plan, "entry", None), "marker", "")
+        or getattr(getattr(plan, "entry", None), "description", "")
+        or getattr(getattr(plan, "entry", None), "label", "")
+    )
+    return score, specificity, stable_label
 
 
 def _emoji_media_part(context, emoji_plan) -> dict[str, Any] | None:
@@ -68,48 +150,106 @@ def _face_media_part(face_plan) -> dict[str, Any] | None:
     }
 
 
-def _prefer_emoji_plan(user_text: str, emoji_plan, face_plan) -> bool:
-    emoji_inbound = bool(extract_inbound_marker_labels(user_text, "emoji"))
-    face_inbound = bool(extract_inbound_marker_labels(user_text, "qq_face"))
-    if emoji_inbound != face_inbound:
-        return emoji_inbound
+def _image_media_part(image_plan) -> dict[str, Any] | None:
+    if image_plan is None:
+        return None
+    entry = getattr(image_plan, "entry", None)
+    if entry is None:
+        return None
+    raw_file_path = str(getattr(entry, "file_path", "") or "").strip()
+    if not raw_file_path:
+        return None
+    return {
+        "kind": "image",
+        "media_key": str(getattr(entry, "media_key", "") or ""),
+        "media_hash": str(getattr(entry, "media_hash", "") or ""),
+        "marker": str(getattr(image_plan, "marker", "") or getattr(entry, "marker", "") or ""),
+        "description": str(getattr(entry, "description", "") or ""),
+        "file_path": raw_file_path,
+        "mode": str(getattr(image_plan, "mode", "") or ""),
+    }
 
-    emoji_only = _is_emoji_only(emoji_plan)
-    face_only = _is_face_only(face_plan)
-    if emoji_only != face_only:
-        return emoji_only
 
-    return True
+def _select_media_kind(
+    user_text: str,
+    *,
+    image_plan=None,
+    emoji_plan=None,
+    face_plan=None,
+) -> str:
+    choices: list[tuple[str, Any]] = []
+    if image_plan is not None:
+        choices.append(("image", image_plan))
+    if emoji_plan is not None:
+        choices.append(("emoji", emoji_plan))
+    if face_plan is not None:
+        choices.append(("qq_face", face_plan))
+    if len(choices) <= 1:
+        return choices[0][0] if choices else ""
+
+    inbound_image = bool(extract_inbound_marker_labels(user_text, "image"))
+    inbound_emoji = bool(extract_inbound_marker_labels(user_text, "emoji"))
+    inbound_face = bool(extract_inbound_marker_labels(user_text, "qq_face"))
+
+    score_map: dict[str, int] = {}
+    for index, (kind, plan) in enumerate(choices):
+        score = 0
+        if kind == "image":
+            if inbound_image:
+                score += 10
+        elif kind == "emoji":
+            if inbound_emoji:
+                score += 10
+        else:
+            if inbound_face:
+                score += 10
+        plan_score, specificity, stable_label = _plan_sort_key(kind, plan)
+        score_map[kind] = (score * 1000 + plan_score, specificity, stable_label)
+
+    return max(score_map.items(), key=lambda item: item[1])[0]
 
 
 def resolve_reply_media_selection(
     context,
     *,
     user_text: str,
+    image_plan=None,
     emoji_plan=None,
     face_plan=None,
 ) -> ReplyMediaSelection:
+    image_part = _image_media_part(image_plan)
     emoji_part = _emoji_media_part(context, emoji_plan)
     face_part = _face_media_part(face_plan)
+    if image_part is None:
+        image_plan = None
     if emoji_part is None:
         emoji_plan = None
     if face_part is None:
         face_plan = None
 
-    if emoji_plan is not None and face_plan is not None:
-        if _prefer_emoji_plan(user_text, emoji_plan, face_plan):
-            face_plan = None
-            face_part = None
-        else:
-            emoji_plan = None
-            emoji_part = None
+    selected_kind = _select_media_kind(
+        user_text,
+        image_plan=image_plan,
+        emoji_plan=emoji_plan,
+        face_plan=face_plan,
+    )
+    if selected_kind != "image":
+        image_plan = None
+        image_part = None
+    if selected_kind != "emoji":
+        emoji_plan = None
+        emoji_part = None
+    if selected_kind != "qq_face":
+        face_plan = None
+        face_part = None
 
-    media_parts = tuple(part for part in (emoji_part, face_part) if part)
+    media_parts = tuple(part for part in (image_part, emoji_part, face_part) if part)
     return ReplyMediaSelection(
+        image_plan=image_plan,
         emoji_plan=emoji_plan,
         face_plan=face_plan,
         media_parts=media_parts,
-        suppress_text=_is_emoji_only(emoji_plan) or _is_face_only(face_plan),
+        suppress_text=_is_image_only(image_plan) or _is_emoji_only(emoji_plan) or _is_face_only(face_plan),
     )
 
 
