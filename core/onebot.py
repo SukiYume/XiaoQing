@@ -69,8 +69,12 @@ def _extract_message_preview(message: list[dict[str, Any]], max_len: int = MAX_S
             if seg_type == "text":
                 raw = seg.get("data", {}).get("text", "")
                 parts.append(_mask_sensitive_text(raw))
+            elif seg_type == "emoji":
+                parts.append("[表情包]")
             elif seg_type == "image":
-                parts.append("[图片]")
+                data = seg.get("data", {}) or {}
+                subtype = str(data.get("sub_type", "") or "").strip().lower()
+                parts.append("[表情包]" if subtype == "emoji" else "[图片]")
             elif seg_type == "at":
                 parts.append(f"[@{seg.get('data', {}).get('qq', '')}]")
             else:
@@ -80,6 +84,33 @@ def _extract_message_preview(message: list[dict[str, Any]], max_len: int = MAX_S
     if len(text) > max_len:
         text = text[:max_len] + "..."
     return text
+
+
+def _normalize_segment_for_onebot(seg: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(seg, dict):
+        return seg
+    seg_type = str(seg.get("type", "") or "").strip()
+    if seg_type != "emoji":
+        return seg
+
+    data = dict(seg.get("data", {}) or {})
+    normalized_data = {"sub_type": "emoji", **data}
+    return {"type": "image", "data": normalized_data}
+
+
+def _normalize_action_for_onebot(action: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(action, dict):
+        return action
+    params = dict(action.get("params", {}) or {})
+    message = params.get("message")
+    if isinstance(message, list):
+        params["message"] = [
+            _normalize_segment_for_onebot(segment) if isinstance(segment, dict) else segment
+            for segment in message
+        ]
+    normalized = dict(action)
+    normalized["params"] = params
+    return normalized
 
 def _summarize_event(event: dict[str, Any]) -> str:
     post_type = event.get("post_type")
@@ -123,14 +154,15 @@ class OneBotHttpSender:
         if not self.http_base:
             return
 
-        url = f"{self.http_base}/{action['action']}"
+        normalized_action = _normalize_action_for_onebot(action)
+        url = f"{self.http_base}/{normalized_action['action']}"
         # 构建请求头（token 已在客户端配置时验证）
         headers = {"Authorization": f"Bearer {self.auth_token}"} if self.auth_token else {}
 
         # 提取消息内容用于日志
-        params = action.get("params", {})
+        params = normalized_action.get("params", {})
         target = params.get("group_id") or params.get("user_id")
-        message = params.get("message", [])
+        message = action.get("params", {}).get("message", [])
         msg_preview = _extract_message_preview(message)
         
         try:
@@ -201,16 +233,17 @@ class OneBotWsClient:
             return False
         
         # 提取消息内容用于日志
-        params = action.get("params", {})
+        normalized_action = _normalize_action_for_onebot(action)
+        params = normalized_action.get("params", {})
         target = params.get("group_id") or params.get("user_id")
-        message = params.get("message", [])
+        message = action.get("params", {}).get("message", [])
         msg_preview = _extract_message_preview(message)
         
         try:
-            await self._ws.send(json.dumps(action, ensure_ascii=False))
+            await self._ws.send(json.dumps(normalized_action, ensure_ascii=False))
             logger.info(
                 "[WS] Sent %s to %s: %s",
-                action.get('action', 'unknown'), target, msg_preview
+                normalized_action.get('action', 'unknown'), target, msg_preview
             )
             return True
         except Exception as exc:

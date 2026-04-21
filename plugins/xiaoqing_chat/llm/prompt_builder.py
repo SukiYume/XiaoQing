@@ -8,7 +8,12 @@ from typing import Any, Sequence
 from ..config.config import PersonalityConfig
 from ..memory.memory import StoredMessage
 from ..helper_utils import _extract_sender_name
-from ..message_parts import render_stored_message
+from ..message_parts import (
+    build_text_message_parts,
+    normalize_message_parts,
+    render_message_parts,
+    render_stored_message,
+)
 
 @dataclass(frozen=True)
 class ChatMessage:
@@ -32,6 +37,8 @@ _DEFAULT_REPLYER_SYSTEM = (
     "只输出你要发的那段话，不需要任何额外格式。\n"
 )
 
+_CURRENT_MEDIA_MARKER_RE = re.compile(r"\[(图片|表情包|QQ表情)：([^\]\n]{1,400})\]")
+
 def _format_message_time(ts: float) -> str:
     try:
         return time.strftime("%H:%M", time.localtime(float(ts)))
@@ -54,6 +61,137 @@ def _maybe_truncate_message(text: str, *, ratio: float) -> str:
 
 def _render_message_content_for_prompt(message: StoredMessage) -> str:
     return render_stored_message(message).strip()
+
+
+def _render_current_turn_content(
+    current_text: str,
+    current_parts: Sequence[dict[str, Any]] | None,
+) -> str:
+    parts = normalize_message_parts(current_parts) or _current_turn_fallback_parts(current_text)
+    if parts:
+        return render_message_parts(parts).strip()
+    return str(current_text or "").strip()
+
+
+def _history_without_current_turn(
+    history: Sequence[StoredMessage],
+    *,
+    current_text: str,
+    current_parts: Sequence[dict[str, Any]] | None,
+) -> list[StoredMessage]:
+    items = list(history)
+    if not items:
+        return items
+
+    last_message = items[-1]
+    if str(getattr(last_message, "role", "") or "").strip() != "user":
+        return items
+
+    current_rendered = _render_current_turn_content(current_text, current_parts)
+    if not current_rendered:
+        return items
+
+    last_rendered = _render_message_content_for_prompt(last_message)
+    if last_rendered and last_rendered == current_rendered:
+        return items[:-1]
+    return items
+
+
+def _current_turn_fallback_parts(current_text: str) -> tuple[dict[str, Any], ...]:
+    text = str(current_text or "").strip()
+    if not text:
+        return ()
+
+    parts: list[dict[str, Any]] = []
+    cursor = 0
+    for match in _CURRENT_MEDIA_MARKER_RE.finditer(text):
+        prefix = text[cursor : match.start()].strip()
+        if prefix:
+            parts.append({"kind": "text", "text": prefix})
+        marker = str(match.group(0) or "").strip()
+        media_type = str(match.group(1) or "").strip()
+        label = str(match.group(2) or "").strip()
+        if media_type == "图片":
+            parts.append({"kind": "image", "marker": marker, "description": label})
+        elif media_type == "表情包":
+            parts.append({"kind": "emoji", "marker": marker, "description": label})
+        else:
+            parts.append({"kind": "qq_face", "marker": marker, "label": label})
+        cursor = match.end()
+    suffix = text[cursor:].strip()
+    if suffix:
+        parts.append({"kind": "text", "text": suffix})
+    normalized = normalize_message_parts(parts)
+    if normalized:
+        return normalized
+    return build_text_message_parts(text)
+
+
+def _media_marker_for_current_turn(part: dict[str, Any]) -> str:
+    kind = str(part.get("kind", "") or "").strip()
+    marker = str(part.get("marker", "") or "").strip()
+    if marker:
+        return marker
+
+    if kind == "image":
+        description = str(part.get("description", "") or "").strip() or "一张图片"
+        return f"[图片：{description}]"
+    if kind == "emoji":
+        description = str(part.get("description", "") or "").strip() or "一张表情包"
+        return f"[表情包：{description}]"
+    if kind == "qq_face":
+        label = str(part.get("label", "") or part.get("description", "") or "").strip() or "一个QQ表情"
+        return f"[QQ表情：{label}]"
+    return ""
+
+
+def _current_turn_target_block(
+    *,
+    sender: str,
+    current_text: str,
+    current_parts: Sequence[dict[str, Any]] | None,
+) -> str:
+    parts = normalize_message_parts(current_parts) or _current_turn_fallback_parts(current_text)
+    if not parts:
+        text = str(current_text or "").strip()
+        return f"现在{sender}说的：{text}。引起了你的注意" if text else ""
+
+    text_parts: list[str] = []
+    media_markers: list[str] = []
+    media_kinds: list[str] = []
+    for part in parts:
+        kind = str(part.get("kind", "") or "").strip()
+        if kind == "text":
+            text = str(part.get("text", "") or "").strip()
+            if text:
+                text_parts.append(text)
+            continue
+        marker = _media_marker_for_current_turn(part)
+        if marker:
+            media_markers.append(marker)
+            media_kinds.append(kind)
+
+    text_part = "\n".join(text_parts).strip()
+    media_part = " ".join(media_markers).strip()
+    has_text = bool(text_part)
+    has_media = bool(media_part)
+
+    if not has_media:
+        return f"现在{sender}说的：{text_part or str(current_text or '').strip()}。引起了你的注意"
+
+    kind_set = set(media_kinds)
+    if kind_set == {"image"}:
+        media_noun = "图片"
+    elif kind_set == {"emoji"}:
+        media_noun = "表情包"
+    elif kind_set == {"qq_face"}:
+        media_noun = "QQ表情"
+    else:
+        media_noun = "内容"
+
+    if has_media and not has_text:
+        return f"现在{sender}发送的{media_noun}：{media_part}。引起了你的注意"
+    return f"现在{sender}发送了{media_noun}：{media_part}，并说：{text_part}。引起了你的注意"
 
 def build_dialogue_prompt(
     history: Sequence[StoredMessage],
@@ -126,6 +264,7 @@ def build_prompt_messages(
     personality: PersonalityConfig,
     keyword_rules: list[Any],
     regex_rules: list[Any],
+    current_parts: Sequence[dict[str, Any]] | None = None,
     memory_block: str = "",
     expression_habits_block: str = "",
     jargon_explanation: str = "",
@@ -183,7 +322,12 @@ def build_prompt_messages(
     all_sections = persona_parts + instruction_parts + reference_parts + meta_parts
     system_prompt = "\n\n".join([s for s in all_sections if s]).strip()
 
-    dialogue = build_dialogue_prompt(history, bot_name=bot_name, truncate=True)
+    dialogue_history = _history_without_current_turn(
+        history,
+        current_text=current_text,
+        current_parts=current_parts,
+    )
+    dialogue = build_dialogue_prompt(dialogue_history, bot_name=bot_name, truncate=True)
     chat_target = "下面是你们的对话" if is_private else "下面是群里正在聊的内容"
     user_blocks: list[str] = []
     # Goal first — like MaiBot, tell the LLM what the conversation goal is
@@ -193,7 +337,13 @@ def build_prompt_messages(
     if planner_reasoning.strip():
         user_blocks.append("你为什么要回复这条消息\n" + planner_reasoning.strip())
     user_blocks.append(f'{chat_target}（注意：你是"{bot_name}(你)"）\n{dialogue}'.strip())
-    user_blocks.append(f"现在 {sender} 说\n{current_text.strip()}".strip())
+    reply_target_block = _current_turn_target_block(
+        sender=sender,
+        current_text=current_text,
+        current_parts=current_parts,
+    )
+    if reply_target_block:
+        user_blocks.append(reply_target_block)
     user_blocks.append(f"你准备回复给 {sender}。只输出你要发的那段话。")
 
     reaction_prompts: list[str] = []

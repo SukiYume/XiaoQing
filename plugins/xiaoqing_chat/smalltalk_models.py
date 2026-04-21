@@ -26,10 +26,9 @@ class _GeneratedSmalltalkTurn:
     reply: str = ""
     reply_parts: tuple[dict[str, Any], ...] = ()
     reply_output: Any = None
+    image_plan: Any = None
     emoji_plan: Any = None
-    emoji_plan_task: Any = None
     face_plan: Any = None
-    face_plan_task: Any = None
 
 
 @dataclass(frozen=True)

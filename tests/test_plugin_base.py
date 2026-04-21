@@ -7,6 +7,7 @@ from pathlib import Path
 
 from core.plugin_base import (
     text,
+    emoji,
     image,
     image_url,
     face,
@@ -41,6 +42,18 @@ class TestMessageSegments:
         # 使用 Path 生成标准 file URI（相对路径会被 resolve 为绝对路径）
         expected_uri = Path("/path/to/image.png").resolve().as_uri()
         assert seg == {"type": "image", "data": {"file": expected_uri}}
+
+    def test_emoji_segment(self):
+        """测试表情图片消息段保留 emoji 元数据"""
+        seg = emoji("/path/to/emoji.png", summary="无语")
+        expected_uri = Path("/path/to/emoji.png").resolve().as_uri()
+        assert seg == {
+            "type": "emoji",
+            "data": {
+                "file": expected_uri,
+                "summary": "无语",
+            },
+        }
 
     def test_image_url_segment(self):
         """测试网络图片消息段"""

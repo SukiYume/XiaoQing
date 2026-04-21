@@ -199,3 +199,116 @@ def test_prompt_builder_prefers_canonical_parts_when_legacy_fields_are_stale(tmp
     user_prompt = msgs[1].content
     assert "先看这个[表情包：猫猫翻白眼]就知道了" in user_prompt
     assert "[表情包：一张表情包]" not in user_prompt
+
+
+def test_prompt_builder_uses_media_only_reply_target_block_for_current_parts() -> None:
+    personality = PersonalityConfig(
+        polite_guardrail=True,
+        identity="你叫小青。",
+        states=[],
+        state_probability=0.0,
+        reply_style="口语化",
+    )
+
+    msgs = build_prompt_messages(
+        is_private=False,
+        bot_name="小青",
+        sender_name="测试用户",
+        think_level=1,
+        history=[],
+        current_text="[图片：海边落日]",
+        personality=personality,
+        keyword_rules=[],
+        regex_rules=[],
+        current_parts=(
+            {
+                "kind": "image",
+                "marker": "[图片：海边落日]",
+                "description": "海边落日",
+            },
+        ),
+        request_id="req-test-6",
+    )
+
+    user_prompt = msgs[1].content
+    assert "现在测试用户发送的图片：[图片：海边落日]。引起了你的注意" in user_prompt
+    assert "现在 测试用户 说" not in user_prompt
+
+
+def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> None:
+    personality = PersonalityConfig(
+        polite_guardrail=True,
+        identity="你叫小青。",
+        states=[],
+        state_probability=0.0,
+        reply_style="口语化",
+    )
+
+    msgs = build_prompt_messages(
+        is_private=False,
+        bot_name="小青",
+        sender_name="测试用户",
+        think_level=1,
+        history=[],
+        current_text="你看这个\n[表情包：无语]",
+        personality=personality,
+        keyword_rules=[],
+        regex_rules=[],
+        current_parts=(
+            {"kind": "text", "text": "你看这个"},
+            {
+                "kind": "emoji",
+                "marker": "[表情包：无语]",
+                "description": "无语猫猫",
+            },
+        ),
+        request_id="req-test-7",
+    )
+
+    user_prompt = msgs[1].content
+    assert "现在测试用户发送了表情包：[表情包：无语]，并说：你看这个。引起了你的注意" in user_prompt
+
+
+def test_prompt_builder_does_not_duplicate_current_turn_when_history_already_contains_it() -> None:
+    personality = PersonalityConfig(
+        polite_guardrail=True,
+        identity="你叫小青。",
+        states=[],
+        state_probability=0.0,
+        reply_style="口语化",
+    )
+
+    current_parts = (
+        {"kind": "text", "text": "你看这个"},
+        {
+            "kind": "image",
+            "marker": "[图片：海边落日]",
+            "description": "海边落日",
+        },
+    )
+    history = [
+        StoredMessage(
+            role="user",
+            name="测试用户",
+            parts=current_parts,
+            ts=1700000003.0,
+        )
+    ]
+
+    msgs = build_prompt_messages(
+        is_private=False,
+        bot_name="小青",
+        sender_name="测试用户",
+        think_level=1,
+        history=history,
+        current_text="你看这个\n[图片：海边落日]",
+        personality=personality,
+        keyword_rules=[],
+        regex_rules=[],
+        current_parts=current_parts,
+        request_id="req-test-8",
+    )
+
+    user_prompt = msgs[1].content
+    assert user_prompt.count("[图片：海边落日]") == 1
+    assert user_prompt.count("你看这个") == 1

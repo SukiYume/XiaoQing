@@ -42,6 +42,18 @@ def image(file_path: str) -> dict[str, Any]:
     """创建图片消息段（本地文件）"""
     return {"type": "image", "data": {"file": _to_file_uri(file_path)}}
 
+def emoji(file_path: str, *, summary: str = "") -> dict[str, Any]:
+    """创建表情图片消息段。
+
+    内部使用显式 `emoji` 段，发送到 OneBot 时再降级为兼容的 `image`
+    + `sub_type=emoji`，避免在插件内部把表情包和普通图片折叠成同一语义。
+    """
+    data: dict[str, Any] = {"file": _to_file_uri(file_path)}
+    summary_text = str(summary or "").strip()
+    if summary_text:
+        data["summary"] = summary_text
+    return {"type": "emoji", "data": data}
+
 def image_url(url: str) -> dict[str, Any]:
     """创建图片消息段（网络URL）"""
     return {"type": "image", "data": {"file": url}}

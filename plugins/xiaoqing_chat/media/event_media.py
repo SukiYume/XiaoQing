@@ -980,7 +980,6 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
     if not bool(_media_cfg_value(runtime, "enable_inbound_media_context", False)):
         return []
 
-    max_items = max(0, int(_media_cfg_value(runtime, "max_media_per_message", 3)))
     rendered_items: list[RenderedMedia] = []
     new_emoji_markers: list[str] = []
     for segment in _iter_message_segments(event):
@@ -1012,8 +1011,6 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                 )
             except Exception:
                 pass
-            if max_items > 0 and len(rendered_items) >= max_items:
-                break
             continue
 
         try:
@@ -1055,8 +1052,6 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                 level="warning",
             )
             rendered_items.append(rendered)
-            if max_items > 0 and len(rendered_items) >= max_items:
-                break
             continue
         if resolved is None:
             continue
@@ -1086,9 +1081,6 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                 _, is_new = collected
                 if is_new:
                     new_emoji_markers.append(rendered.marker)
-        if max_items > 0 and len(rendered_items) >= max_items:
-            break
-
     rendered_items = _upgrade_rendered_media_from_registry(rendered_items)
     event["_xc_rendered_media_items"] = rendered_items
     event["_xc_new_emoji_markers"] = new_emoji_markers

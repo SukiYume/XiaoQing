@@ -27,7 +27,6 @@ async def generate_smalltalk_turn_impl(
     build_memory_block,
     run_pfc_once,
     normalize_generated_reply_state,
-    start_reply_media_plan_tasks,
     cancel_generated_tasks,
     schedule_pfc_state_flush,
     clear_store_entry,
@@ -69,7 +68,7 @@ async def generate_smalltalk_turn_impl(
         plan_reasoning = (planner_reason or "").strip()
         if extra_reason:
             plan_reasoning = (plan_reasoning + "\n" + str(extra_reason).strip()).strip()
-        out, out_parts, out_emoji_plan, out_face_plan = await generate_reply_result(
+        out, out_parts, out_image_plan, out_emoji_plan, out_face_plan = await generate_reply_result(
             text=prepared.text,
             event=event,
             context=context,
@@ -85,6 +84,7 @@ async def generate_smalltalk_turn_impl(
             is_brain_chat=prepared.brain_chat_active,
             prefetched_memory_task=generated.speculative_memory_task,
         )
+        generated.image_plan = out_image_plan
         generated.emoji_plan = out_emoji_plan
         generated.face_plan = out_face_plan
         generated.reply_parts = out_parts
@@ -105,6 +105,7 @@ async def generate_smalltalk_turn_impl(
             (
                 generated.reply,
                 generated.reply_parts,
+                generated.image_plan,
                 generated.emoji_plan,
                 generated.face_plan,
             ) = await generate_reply_result(
@@ -176,16 +177,6 @@ async def generate_smalltalk_turn_impl(
             reply_text=generated.reply,
             reply_parts=generated.reply_parts,
         )
-        start_reply_media_plan_tasks(
-            prepared,
-            generated,
-            context=context,
-            runtime=runtime,
-            state=state,
-            chat_id=chat_id,
-            secrets=secrets,
-        )
-
         return generated
     except ReplyRejected:
         cancel_generated_tasks(generated)
@@ -216,12 +207,12 @@ async def finalize_smalltalk_turn_impl(
     get_lock,
     most_recent_user_local_id,
     cancel_generated_tasks,
-    resolve_reply_media_plans,
     assistant_reply_parts,
     build_generated_reply_output,
     sync_message_parts_to_registry,
     clear_store_entry,
     record_bot_reply,
+    image_action_detail,
     emoji_action_detail,
     face_action_detail,
     schedule_pfc_state_flush,
@@ -244,12 +235,6 @@ async def finalize_smalltalk_turn_impl(
             cancel_generated_tasks(generated)
             return []
 
-    await resolve_reply_media_plans(
-        generated,
-        context=context,
-        runtime=runtime,
-        user_text=prepared.text,
-    )
     if generated.reply:
         reply_display_parts = assistant_reply_parts(context, generated)
         generated.reply_output = build_generated_reply_output(
@@ -297,6 +282,7 @@ async def finalize_smalltalk_turn_impl(
                     reasoning="forced_direct",
                     detail={
                         "source": "forced",
+                        **image_action_detail(generated.image_plan, reply_parts),
                         **emoji_action_detail(generated.emoji_plan, reply_parts),
                         **face_action_detail(generated.face_plan, reply_parts),
                     },
@@ -341,6 +327,7 @@ async def finalize_smalltalk_turn_impl(
                         reasoning=pfc_reasoning,
                         detail={
                             "source": "pfc",
+                            **image_action_detail(generated.image_plan, reply_parts),
                             **emoji_action_detail(generated.emoji_plan, reply_parts),
                             **face_action_detail(generated.face_plan, reply_parts),
                         },

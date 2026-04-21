@@ -13,7 +13,6 @@ from .message_parts import (
     normalize_message_parts,
     replace_message_media_parts,
 )
-from .reply_media_helpers import merge_selected_reply_media_parts, resolve_reply_media_selection
 from .smalltalk_models import _GeneratedSmalltalkTurn
 
 
@@ -44,6 +43,29 @@ def _emoji_action_detail(
         "emoji_marker": emoji_plan.marker,
         "emoji_hash": emoji_plan.entry.media_hash,
         "emoji_mode": getattr(emoji_plan, "mode", ""),
+    }
+
+
+def _image_action_detail(
+    image_plan,
+    parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if not image_plan:
+        part = _first_media_part(parts, "image")
+        if not part:
+            return {}
+        return {
+            "image_marker": str(part.get("marker", "") or ""),
+            "image_hash": str(part.get("media_hash", "") or ""),
+            "image_key": str(part.get("media_key", "") or ""),
+            "image_mode": str(part.get("mode", "") or ""),
+        }
+    entry = getattr(image_plan, "entry", None)
+    return {
+        "image_marker": str(getattr(image_plan, "marker", "") or ""),
+        "image_hash": str(getattr(entry, "media_hash", "") or ""),
+        "image_key": str(getattr(entry, "media_key", "") or ""),
+        "image_mode": str(getattr(image_plan, "mode", "") or ""),
     }
 
 
@@ -156,13 +178,7 @@ def _assistant_reply_parts(
     context,
     generated: _GeneratedSmalltalkTurn,
 ) -> tuple[dict[str, Any], ...]:
-    selection = resolve_reply_media_selection(
-        context,
-        user_text="",
-        emoji_plan=generated.emoji_plan,
-        face_plan=generated.face_plan,
-    )
-    return merge_selected_reply_media_parts(generated.reply_parts, selection)
+    return normalize_message_parts(generated.reply_parts)
 
 
 def _display_reply_text(generated: _GeneratedSmalltalkTurn) -> str:

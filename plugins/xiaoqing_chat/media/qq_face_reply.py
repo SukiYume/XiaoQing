@@ -260,7 +260,7 @@ async def plan_qq_face_reply(
             )
         return None
 
-    recent_dialogue = build_recent_dialogue(history, context=context)
+    recent_dialogue = build_recent_dialogue(history, context=context, current_text=user_text)
     candidate_block = _render_candidate_block(candidates)
     prompt = (
         "你要决定这次回复要不要带一个 QQ 系统 face，并且判断是只发 face，还是发文字后再补一个 face。"
