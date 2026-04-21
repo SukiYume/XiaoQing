@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import random
 import time
@@ -8,9 +9,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.plugin_base import ensure_dir, load_json, write_json
+from ..task_scheduler import _spawn_bg_task
 
 _SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 _PENDING_DIR_NAME = "pending"
+_EMOJI_REPAIR_TASKS: set[str] = set()
 
 if TYPE_CHECKING:
     from .event_media import RenderedMedia
@@ -29,6 +32,13 @@ class EmojiLibraryEntry:
 
 def _default_emoji_library_dir(context) -> Path:
     return (Path(context.plugin_dir) / "figures" / "library").resolve()
+
+
+def _emoji_library_task_key(context, runtime) -> str:
+    library_dir = resolve_emoji_library_dir(context, runtime)
+    if library_dir is None:
+        return ""
+    return str(library_dir.resolve())
 
 
 def _to_plugin_relative_path(context, path: Path) -> str:
@@ -387,7 +397,43 @@ def collect_emoji_candidate(
     return entry, is_new
 
 
-async def load_emoji_library(context, runtime, *, repair_invalid: bool = True) -> list[EmojiLibraryEntry]:
+def schedule_emoji_library_repair(context, runtime) -> bool:
+    task_key = _emoji_library_task_key(context, runtime)
+    if not task_key or task_key in _EMOJI_REPAIR_TASKS:
+        return False
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+
+    _EMOJI_REPAIR_TASKS.add(task_key)
+
+    async def _run() -> None:
+        try:
+            await load_emoji_library(
+                context,
+                runtime,
+                repair_invalid=True,
+                schedule_background_repair=False,
+            )
+        finally:
+            _EMOJI_REPAIR_TASKS.discard(task_key)
+
+    try:
+        _spawn_bg_task(context, _run(), name=f"emoji_library_repair:{Path(task_key).name}")
+    except Exception:
+        _EMOJI_REPAIR_TASKS.discard(task_key)
+        raise
+    return True
+
+
+async def load_emoji_library(
+    context,
+    runtime,
+    *,
+    repair_invalid: bool = True,
+    schedule_background_repair: bool = False,
+) -> list[EmojiLibraryEntry]:
     library_dir = resolve_emoji_library_dir(context, runtime)
     if library_dir is None:
         return []
@@ -400,6 +446,7 @@ async def load_emoji_library(context, runtime, *, repair_invalid: bool = True) -
     existing_entries = payload.setdefault("entries", {})
     retained_entries: dict[str, dict[str, Any]] = {}
     results: list[EmojiLibraryEntry] = []
+    repair_needed = False
 
     for file_path in files:
         media_hash = _hash_file(file_path)
@@ -451,7 +498,15 @@ async def load_emoji_library(context, runtime, *, repair_invalid: bool = True) -
                     touch_collection=False,
                 )
                 continue
+            repair_needed = True
             if not repair_invalid:
+                if isinstance(existing, dict):
+                    retained = dict(existing)
+                    retained["media_hash"] = media_hash
+                    retained["file_path"] = _to_plugin_relative_path(context, file_path)
+                    if perceptual_hash:
+                        retained["perceptual_hash"] = perceptual_hash
+                    retained_entries[media_hash] = retained
                 continue
             from .event_media import render_local_media_file
 
@@ -486,7 +541,11 @@ async def load_emoji_library(context, runtime, *, repair_invalid: bool = True) -
 
     payload["entries"] = retained_entries
     _save_index(context, runtime, payload)
+    if repair_needed and schedule_background_repair and not repair_invalid:
+        schedule_emoji_library_repair(context, runtime)
     return results
+
+
 def mark_emoji_used(context, runtime, entry: EmojiLibraryEntry) -> None:
     mark_emoji_used_by_hash(context, runtime, entry.media_hash)
 

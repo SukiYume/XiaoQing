@@ -267,6 +267,8 @@ python main.py
 机器人: [把表情内容纳入对话，必要时也可能回一张本地表情包]
 ```
 
+再补一个行为判断：在群里直接 `@` 小青，或发送 `小青 + 内容`，应该会走强制回复路径；即使此时后台正在补修旧表情包索引，也不该卡住当前回复。
+
 ### 个人助理测试（pendo）
 
 ```
@@ -407,7 +409,7 @@ XiaoQing 支持两种闲聊模式：
    Select-String -Path logs/xiaoqing.log -Pattern xiaoqing_chat
    ```
 
-3. **xiaoqing_chat 的回复频率由插件内部控制**，不是所有消息都会回复
+3. **普通群消息的回复频率由插件内部控制**，不是所有消息都会回复；但 `/xc`、`@` 机器人、直接叫 `bot_name` 都属于强制回复路径
 4. **如果是图片/表情包不回复**，检查 `config/secrets.json -> plugins.xiaoqing_chat.vision` 是否已配置，以及日志中是否出现 `media.analyze.skip` / `media.analyze.fail`
 
 ### Q: 如何查看详细日志？

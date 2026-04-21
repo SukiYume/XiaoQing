@@ -264,7 +264,12 @@ async def plan_emoji_reply(
             )
         return None
 
-    entries = await load_emoji_library(context, runtime, repair_invalid=True)
+    entries = await load_emoji_library(
+        context,
+        runtime,
+        repair_invalid=False,
+        schedule_background_repair=True,
+    )
     if not entries:
         if chat_id:
             _log_step(
