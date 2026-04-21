@@ -52,17 +52,14 @@ class PersonalityConfig(BaseModel):
     )
     state_probability: float = 0.30
     reply_style: str = (
-        "口语化、像真人、尽量简短、不太有条理，别输出多余前后缀。不要用括号/冒号/表情包。不要复读用户原话。"
+        "口语化、像真人、尽量简短、不太有条理，别输出多余前后缀。不要用括号/冒号。可以顺着对方的措辞接话，但别整句复读原话。"
     )
     multiple_reply_style: list[str] = Field(default_factory=list)
     multiple_probability: float = 0.0
 
 class PlannerConfig(BaseModel):
     enable_planner: bool = True
-    smooth: int = 3
-    mentioned_bot_reply: bool = True
     think_mode: str = "dynamic"
-    llm_quote: bool = False
 
     def resolve_think_level(self, history_len: int = 0) -> int:
         """Map *think_mode* to a concrete integer think-level.

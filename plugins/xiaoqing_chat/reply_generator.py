@@ -197,6 +197,7 @@ async def _attach_reply_media(
 
     selection = resolve_reply_media_selection(
         context,
+        runtime=runtime,
         user_text=user_text,
         image_plan=image_plan,
         emoji_plan=emoji_plan,

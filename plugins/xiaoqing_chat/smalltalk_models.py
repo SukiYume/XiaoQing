@@ -23,6 +23,7 @@ class _GeneratedSmalltalkTurn:
     pfc_result: PFCRunResult | None = None
     pfc_state_snapshot: Any = None
     speculative_memory_task: Any = None
+    reply_source: str = "pfc"
     reply: str = ""
     reply_parts: tuple[dict[str, Any], ...] = ()
     reply_output: Any = None

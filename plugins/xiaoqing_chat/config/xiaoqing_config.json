@@ -59,10 +59,7 @@
     "ban_regex": [],
     "planner": {
         "enable_planner": true,
-        "smooth": 1,
-        "mentioned_bot_reply": true,
-        "think_mode": "dynamic",
-        "llm_quote": false
+        "think_mode": "dynamic"
     },
     "keyword_reaction": {
         "keyword_rules": [],
@@ -180,7 +177,7 @@
             "是一个喜欢音乐的文艺青年，最近在反复听一张专辑。"
         ],
         "state_probability": 0.30,
-        "reply_style": "口语化、像真人、尽量简短、不太有条理，别输出多余前后缀。适当复读机（复读别人的消息）。"
+        "reply_style": "口语化、像真人、尽量简短、不太有条理，别输出多余前后缀。可以顺着对方的措辞接话，但别整句复读原话。"
     },
     "postprocess": {
         "enable_response_post_process": true,
