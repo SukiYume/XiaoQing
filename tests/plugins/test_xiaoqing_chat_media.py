@@ -1078,6 +1078,57 @@ async def test_load_emoji_library_rebuilds_bad_existing_metadata(mock_context):
     assert saved["entries"][media_hash]["marker"] == "[表情包：疑惑，震惊]"
 
 
+@pytest.mark.asyncio
+async def test_load_emoji_library_schedules_background_repair_without_blocking(mock_context):
+    library_dir = mock_context.plugin_dir / "emoji_library_background_repair"
+    library_dir.mkdir(parents=True, exist_ok=True)
+    image_path = _write_png(library_dir / "坏条目.png")
+    media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    runtime = _make_media_runtime(emoji_library_dir=str(library_dir))
+    (library_dir / "index.json").write_text(
+        json.dumps(
+            {
+                "entries": {
+                    media_hash: {
+                        "media_hash": media_hash,
+                        "file_path": "emoji_library_background_repair/坏条目.png",
+                        "description": 'json\n{"kind":"emoji","description":"坏输出"',
+                        "emotion_tags": ["json", "kind"],
+                        "usage_count": 0,
+                        "last_used_ts": 0.0,
+                        "marker": "[表情包：json，kind]",
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with (
+        patch(
+            "plugins.xiaoqing_chat.media.event_media.render_local_media_file",
+            new=AsyncMock(side_effect=AssertionError("should not repair inline")),
+        ) as mock_render,
+        patch(
+            "plugins.xiaoqing_chat.media.emoji_library.schedule_emoji_library_repair",
+            return_value=True,
+        ) as mock_schedule,
+    ):
+        entries = await load_emoji_library(
+            mock_context,
+            runtime,
+            repair_invalid=False,
+            schedule_background_repair=True,
+        )
+
+    assert entries == []
+    mock_render.assert_not_awaited()
+    mock_schedule.assert_called_once_with(mock_context, runtime)
+    saved = json.loads((library_dir / "index.json").read_text(encoding="utf-8"))
+    assert saved["entries"][media_hash]["marker"] == "[表情包：json，kind]"
+
+
 def test_collect_emoji_candidate_skips_structured_garbage(mock_context):
     runtime = _make_media_runtime()
     source_path = _write_png(mock_context.data_dir / "bad_emoji.png")
@@ -1404,7 +1455,8 @@ async def test_plan_emoji_reply_can_choose_emoji_only_mode(mock_context):
     assert plan is not None
     assert plan.mode == "emoji_only"
     assert plan.selected_tag == "无语"
-    assert mock_load.await_args.kwargs["repair_invalid"] is True
+    assert mock_load.await_args.kwargs["repair_invalid"] is False
+    assert mock_load.await_args.kwargs["schedule_background_repair"] is True
 
 
 @pytest.mark.asyncio

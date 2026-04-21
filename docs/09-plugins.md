@@ -483,19 +483,19 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 当前版本建议按 **小版本 `0.2.0`** 理解：它在保持 `/xc` 命令体系和基础部署方式不变的前提下，新增了图片上下文、QQ 表情参与对话、本地表情包库与视觉模型配置。
 
-基于 MaiBot 项目设计理念做了轻量化重构，目标不是把整套 agent/action 系统搬过来，而是把“像真人聊天”这件事做扎实：文本对话、图片理解、表情包回复、长期记忆和表达学习都围绕一个纯聊天主链运行。
+基于 MaiBot 项目设计理念做了轻量化重构，目标不是把整套 agent/action 系统搬过来，而是把“像真人聊天”这件事做扎实：文本对话、图片理解、图片/表情包/QQ 表情后处理回复、长期记忆和表达学习都围绕一个纯聊天主链运行。
 
 #### 核心特性
 
 | 特性 | 说明 |
 |------|------|
 | **语义记忆检索** | ✅ 基于向量数据库的语义记忆检索，拥有长期记忆能力 |
-| **行为规划** | LLM 智能判断是否需要回复，懂得在合适的时间说话 |
+| **行为规划** | LLM 智能判断是否需要回复；planner 可开关，私聊深度模式可保持常开 |
 | **频率控制** | 防止刷屏，支持最小间隔、每分钟上限、连续回复冷却 |
 | **表达学习** | 从对话中学习表达风格和黑话，不断进化 |
 | **人物与记忆系统** | 对话历史、事实记忆、人物资料、对话摘要、目标状态 |
 | **图片上下文** | 普通图片、NapCat `mface`、QQ `face` 可进入正常对话流 |
-| **表情包回复** | 新收的表情包会进入本地图库，后续可按语境复用发送 |
+| **多模态后处理回复** | 新收的表情包会进入本地图库，后续可按语境补发本地图片 / 表情包 / QQ 表情 |
 | **性能优化** | 可选安装 `faiss-cpu` 加速向量检索，未安装则使用 numpy 实现 |
 | **上下文感知** | 文本和图片都能进入统一上下文，进行连贯多轮对话 |
 
@@ -551,10 +551,23 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 ```json
 {
+  "planner": {
+    "enable_planner": true,
+    "think_mode": "dynamic"
+  },
+  "brain_chat": {
+    "enable_private_brain_chat": false,
+    "private_planner_always_on": true,
+    "brain_think_level": 2
+  },
   "media": {
     "enable_inbound_media_context": true,
+    "enable_outbound_image_reply": true,
     "enable_outbound_emoji_reply": true,
+    "enable_outbound_face_reply": true,
+    "image_library_dir": "figures/reply_images",
     "emoji_library_dir": "figures/library",
+    "max_media_per_message": 3,
     "vision_provider": ""
   }
 }
@@ -582,9 +595,10 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 - 作为 `smalltalk_provider` 使用时，会接管所有闲聊消息
 - 插件内部有完整的频率控制，不依赖全局 `random_reply_rate`
-- 支持 @ 机器人触发回复
+- 被 `@` 或直接叫名字时会强制回复
 - 私聊中回复概率更高，对话更连贯
 - 启用媒体能力后，纯图片、QQ 表情、NapCat `mface` 都能进入正常对话链
+- 回复会先产出纯文本，再决定是否补发本地图片 / 表情包 / QQ 表情；旧图库里不完整的媒体元数据会在后台修复，不阻断当前回复
 - 如果视觉模型缺失或失败，图片会退回为保守 marker，不阻断纯文本聊天
 
 #### 配置为默认聊天插件

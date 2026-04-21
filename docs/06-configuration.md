@@ -403,32 +403,61 @@ api_key = plugin_cfg.get("api_key")
 > [!TIP]
 > `xiaoqing_chat` 现在按 provider 结构读取 secrets。这样可以配多套聊天模型，并通过 `/xc 模型 <名称>` 在运行时切换。
 
-#### xiaoqing_chat 媒体配置（`plugins/xiaoqing_chat/config/xiaoqing_config.json`）
+#### xiaoqing_chat 运行时配置（`plugins/xiaoqing_chat/config/xiaoqing_config.json`）
 
-图片上下文和表情包回复的行为开关走插件自己的 `config/xiaoqing_config.json`。视觉模型的 API Base / Key / Model 不再放这里，统一走项目级 `config/secrets.json`：
+`xiaoqing_chat` 的 planner、深度对话和媒体行为开关走插件自己的 `config/xiaoqing_config.json`。视觉模型的 API Base / Key / Model 不再放这里，统一走项目级 `config/secrets.json`：
 
 ```json
 {
+  "planner": {
+    "enable_planner": true,
+    "think_mode": "dynamic"
+  },
+  "brain_chat": {
+    "enable_private_brain_chat": false,
+    "private_planner_always_on": true,
+    "brain_think_level": 2
+  },
   "media": {
     "enable_inbound_media_context": true,
+    "enable_outbound_image_reply": true,
     "enable_outbound_emoji_reply": true,
+    "enable_outbound_face_reply": true,
+    "image_library_dir": "figures/reply_images",
     "emoji_library_dir": "figures/library",
+    "image_reply_probability": 0.12,
     "emoji_reply_probability": 0.35,
-    "emoji_candidate_count": 6,
-    "emoji_cooldown_turns": 3,
+    "face_reply_probability": 0.18,
+    "max_media_per_message": 3,
     "vision_provider": "vision"
   }
 }
 ```
 
+常用 planner / 深度对话开关：
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|---------|------|
+| `planner.enable_planner` | `boolean` | `true` | 是否启用 PFC/planner；关闭后走直接回复链 |
+| `planner.think_mode` | `string` | `"dynamic"` | 思考等级。`dynamic` 会按近期历史长度自动映射到 0/1/2，也可直接写 `"0"` / `"1"` / `"2"` |
+| `brain_chat.enable_private_brain_chat` | `boolean` | `false` | 是否启用私聊深度对话模式 |
+| `brain_chat.private_planner_always_on` | `boolean` | `true` | 深度对话模式下是否始终启用 planner |
+| `brain_chat.brain_think_level` | `int` | `2` | 深度对话模式的固定 think level |
+
+常用媒体行为开关：
+
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|---------|------|
 | `enable_inbound_media_context` | `boolean` | `true` | 是否把用户图片渲染成 `[图片：...]` / `[表情包：...]` 写入对话上下文 |
-| `enable_outbound_emoji_reply` | `boolean` | `true` | 是否允许回复阶段发送本地表情包。命中时可能是“只发图片”或“先发文字再发图” |
+| `enable_outbound_image_reply` | `boolean` | `true` | 是否允许回复阶段补发本地图片 |
+| `enable_outbound_emoji_reply` | `boolean` | `true` | 是否允许回复阶段发送本地表情包 |
+| `enable_outbound_face_reply` | `boolean` | `true` | 是否允许回复阶段补发 QQ 原生 `face` 表情 |
+| `image_library_dir` | `string` | `"figures/reply_images"` | 本地可发送图片目录。相对路径按 `plugins/xiaoqing_chat/` 解析 |
 | `emoji_library_dir` | `string` | `"figures/library"` | 本地可发送表情包目录。相对路径按 `plugins/xiaoqing_chat/` 解析 |
+| `image_reply_probability` | `float` | `0.12` | 满足条件时启用图片模态选择的概率 |
 | `emoji_reply_probability` | `float` | `0.35` | 满足条件时启用表情包模态选择的概率 |
-| `emoji_candidate_count` | `int` | `6` | 每次抽样多少张候选表情包参与选择 |
-| `emoji_cooldown_turns` | `int` | `3` | 距离上次助手发表情包至少间隔多少个助手回合 |
+| `face_reply_probability` | `float` | `0.18` | 满足条件时启用 QQ 表情模态选择的概率 |
+| `max_media_per_message` | `int` | `3` | 单条回复最多附带多少个媒体模态；只发媒体时仍会优先只保留一个“only”模态 |
 | `vision_provider` | `string` | `""` | 可选。指定 `secrets.json -> plugins.xiaoqing_chat.vision.providers` 里的视觉 provider 名称；为空时优先使用 `vision.default` |
 
 视觉 provider 示例：
@@ -470,6 +499,8 @@ api_key = plugin_cfg.get("api_key")
 - 表情包索引：`plugins/xiaoqing_chat/figures/library/index.json`
 
 插件会把入站图片统一落到 `figures/inbox/`。如果图片被识别成表情包，就会自动复制进 `figures/library/` 并写入索引，后续在合适语境下参与表情包回复选择。新收进图库的表情包也会让这条消息更倾向于触发一次自然回应。
+
+出站阶段不会因为发现旧图库条目缺少 `description` / `marker` / `emotion_tags` 就同步重跑视觉模型。当前回复会先基于已有元数据和文本上下文做决策，坏条目的补修会放到后台异步执行，不阻塞这次回复。
 
 NapCat/OneBot 的纯 `mface` 消息如果没有直接携带图片源，插件会尝试通过 `onebot_http_base` 对应的 HTTP API 调用 `get_msg` 和 `get_image` 回收真实图片；拿不到真实图片时，再退回成仅保留摘要的 `[表情包：...]` 标记。
 
