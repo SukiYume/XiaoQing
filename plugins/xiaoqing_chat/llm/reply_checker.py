@@ -147,7 +147,7 @@ async def _llm_check(
     api_key = secrets.get("api_key", "")
     model = secrets.get("model", "")
     if not api_base or not api_key or not model:
-        return ReplyCheckResult(False, "reply_checker missing credentials", True)
+        return ReplyCheckResult(True, "reply_checker missing credentials", False)
 
     # Trim history to last 800 chars to reduce input tokens
     _hist = chat_history_text.strip()
@@ -255,5 +255,5 @@ async def check_reply(
             endpoint_path=endpoint_path,
         )
     except (LLMError, TimeoutError, asyncio.TimeoutError, Exception) as exc:
-        _log.warning("reply_checker LLM 调用失败，拒绝当前回复: %s", exc)
-        return ReplyCheckResult(False, f"reply_checker failed: {exc}", True)
+        _log.warning("reply_checker LLM 调用失败，放行当前回复: %s", exc)
+        return ReplyCheckResult(True, f"reply_checker failed: {exc}", False)

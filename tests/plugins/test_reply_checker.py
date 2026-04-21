@@ -209,9 +209,9 @@ async def test_check_reply_rejects_when_llm_checker_credentials_missing():
         endpoint_path="/v1/chat/completions",
     )
 
-    assert result.suitable is False
-    assert result.need_replan is True
-    assert "checker" in result.reason.lower()
+    assert result.suitable is True
+    assert result.need_replan is False
+    assert "checker" in result.reason.lower() or "unavailable" in result.reason.lower()
 
 
 @pytest.mark.asyncio
@@ -246,8 +246,8 @@ async def test_check_reply_rejects_when_llm_checker_call_fails(monkeypatch: pyte
         endpoint_path="/v1/chat/completions",
     )
 
-    assert result.suitable is False
-    assert result.need_replan is True
+    assert result.suitable is True
+    assert result.need_replan is False
     assert "failed" in result.reason.lower() or "checker" in result.reason.lower()
 
 

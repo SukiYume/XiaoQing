@@ -148,7 +148,7 @@ async def _validate_text_with_emoji_plan(
     secrets: dict[str, str] | dict[str, object],
     chat_id: str = "",
 ) -> bool:
-    recent_dialogue = build_recent_dialogue(history, context=context)
+    recent_dialogue = build_recent_dialogue(history, context=context, current_text=user_text)
     prompt = (
         "你要判断这次“文字后补一张表情包”的选择是否真的有必要。"
         '只输出 JSON，不要额外解释。格式: {"allow":true|false,"reason":"..."}。\n'
@@ -264,7 +264,7 @@ async def plan_emoji_reply(
             )
         return None
 
-    entries = await load_emoji_library(context, runtime, repair_invalid=False)
+    entries = await load_emoji_library(context, runtime, repair_invalid=True)
     if not entries:
         if chat_id:
             _log_step(
@@ -294,7 +294,7 @@ async def plan_emoji_reply(
             )
         return None
 
-    recent_dialogue = build_recent_dialogue(history, context=context)
+    recent_dialogue = build_recent_dialogue(history, context=context, current_text=user_text)
     candidate_block = _render_candidate_block(candidates)
     prompt = (
         "你要决定这次回复要不要带一张表情包，并且判断是只发一张表情包，还是发文字后再补一张表情包。"
