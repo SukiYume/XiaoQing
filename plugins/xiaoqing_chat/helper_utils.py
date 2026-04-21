@@ -48,9 +48,11 @@ def _chat_id(event: dict[str, Any]) -> str:
     """
     group_id = event.get("group_id")
     user_id = event.get("user_id")
-    if group_id:
+    if group_id not in (None, ""):
         return f"g{group_id}"
-    return f"u{user_id}"
+    if user_id not in (None, ""):
+        return f"u{user_id}"
+    raise ValueError("missing chat identifier: expected group_id or user_id")
 
 
 def _get_bot_name(context: Any) -> str:

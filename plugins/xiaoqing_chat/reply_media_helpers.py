@@ -171,12 +171,13 @@ def _image_media_part(image_plan) -> dict[str, Any] | None:
 
 
 def _select_media_kind(
+    runtime,
     user_text: str,
     *,
     image_plan=None,
     emoji_plan=None,
     face_plan=None,
-) -> str:
+) -> list[str]:
     choices: list[tuple[str, Any]] = []
     if image_plan is not None:
         choices.append(("image", image_plan))
@@ -184,15 +185,26 @@ def _select_media_kind(
         choices.append(("emoji", emoji_plan))
     if face_plan is not None:
         choices.append(("qq_face", face_plan))
-    if len(choices) <= 1:
-        return choices[0][0] if choices else ""
+    if not choices:
+        return []
+
+    max_media = 1
+    media_cfg = getattr(getattr(runtime, "cfg", None), "media", None) if runtime is not None else None
+    if media_cfg is not None:
+        try:
+            max_media = int(getattr(media_cfg, "max_media_per_message", 1) or 1)
+        except (TypeError, ValueError):
+            max_media = 1
+    max_media = max(0, max_media)
+    if max_media == 0:
+        return []
 
     inbound_image = bool(extract_inbound_marker_labels(user_text, "image"))
     inbound_emoji = bool(extract_inbound_marker_labels(user_text, "emoji"))
     inbound_face = bool(extract_inbound_marker_labels(user_text, "qq_face"))
 
-    score_map: dict[str, int] = {}
-    for index, (kind, plan) in enumerate(choices):
+    ranked_choices: list[tuple[str, tuple[int, int, str], bool]] = []
+    for kind, plan in choices:
         score = 0
         if kind == "image":
             if inbound_image:
@@ -204,14 +216,26 @@ def _select_media_kind(
             if inbound_face:
                 score += 10
         plan_score, specificity, stable_label = _plan_sort_key(kind, plan)
-        score_map[kind] = (score * 1000 + plan_score, specificity, stable_label)
+        only_mode = (
+            (kind == "image" and _is_image_only(plan))
+            or (kind == "emoji" and _is_emoji_only(plan))
+            or (kind == "qq_face" and _is_face_only(plan))
+        )
+        ranked_choices.append(
+            (kind, (score * 1000 + plan_score, specificity, stable_label), only_mode)
+        )
 
-    return max(score_map.items(), key=lambda item: item[1])[0]
+    ranked_choices.sort(key=lambda item: item[1], reverse=True)
+    only_mode_choices = [kind for kind, _score, only_mode in ranked_choices if only_mode]
+    if only_mode_choices:
+        return only_mode_choices[:1]
+    return [kind for kind, _score, _only_mode in ranked_choices[:max_media]]
 
 
 def resolve_reply_media_selection(
     context,
     *,
+    runtime=None,
     user_text: str,
     image_plan=None,
     emoji_plan=None,
@@ -227,28 +251,39 @@ def resolve_reply_media_selection(
     if face_part is None:
         face_plan = None
 
-    selected_kind = _select_media_kind(
+    selected_kinds = _select_media_kind(
+        runtime,
         user_text,
         image_plan=image_plan,
         emoji_plan=emoji_plan,
         face_plan=face_plan,
     )
-    if selected_kind != "image":
+    selected_kind_set = set(selected_kinds)
+    if "image" not in selected_kind_set:
         image_plan = None
         image_part = None
-    if selected_kind != "emoji":
+    if "emoji" not in selected_kind_set:
         emoji_plan = None
         emoji_part = None
-    if selected_kind != "qq_face":
+    if "qq_face" not in selected_kind_set:
         face_plan = None
         face_part = None
 
-    media_parts = tuple(part for part in (image_part, emoji_part, face_part) if part)
+    ordered_parts: list[dict[str, Any]] = []
+    part_map = {
+        "image": image_part,
+        "emoji": emoji_part,
+        "qq_face": face_part,
+    }
+    for kind in selected_kinds:
+        part = part_map.get(kind)
+        if part is not None:
+            ordered_parts.append(part)
     return ReplyMediaSelection(
         image_plan=image_plan,
         emoji_plan=emoji_plan,
         face_plan=face_plan,
-        media_parts=media_parts,
+        media_parts=tuple(ordered_parts),
         suppress_text=_is_image_only(image_plan) or _is_emoji_only(emoji_plan) or _is_face_only(face_plan),
     )
 

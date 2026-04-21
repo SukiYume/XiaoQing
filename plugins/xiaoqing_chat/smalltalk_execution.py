@@ -8,10 +8,11 @@ from typing import Any
 
 from core.plugin_base import build_action, segments
 
-from .brain_chat import get_brain_chat_max_context
+from .brain_chat import get_brain_chat_max_context, get_brain_chat_think_level
 from .llm.reply_checker import ReplyRejected
 from .planning.action_history import ActionRecord
 from .planning.planned_action import PlannedAction
+from .planning.pfc_engine import PFCRunResult
 
 
 async def generate_smalltalk_turn_impl(
@@ -36,6 +37,19 @@ async def generate_smalltalk_turn_impl(
     runtime, state, chat_id = hctx.runtime, hctx.state, hctx.chat_id
     bot_name, secrets, data_dir = hctx.bot_name, hctx.secrets, hctx.data_dir
     generated = generated_turn_factory()
+    max_context_size = get_brain_chat_max_context(runtime, prepared.brain_chat_active)
+    recent_history = await state.memory_store.get_recent_async(chat_id, max_items=max_context_size)
+    think_level = get_brain_chat_think_level(
+        runtime,
+        prepared.brain_chat_active,
+        history_len=len(recent_history),
+    )
+    planner_cfg = getattr(runtime.cfg, "planner", None)
+    planner_enabled = bool(getattr(planner_cfg, "enable_planner", True))
+    if prepared.brain_chat_active and bool(
+        getattr(runtime.cfg.brain_chat, "private_planner_always_on", True)
+    ):
+        planner_enabled = True
 
     async with get_lock(chat_id):
         generated.local_id = await ensure_user_message_recorded(
@@ -45,7 +59,7 @@ async def generate_smalltalk_turn_impl(
             runtime,
             state=state,
         )
-        if not prepared.forced:
+        if not prepared.forced and planner_enabled:
             generated.pfc_state_snapshot = deepcopy(await state.pfc_state_store.get_async(chat_id))
             if generated.pfc_state_snapshot and generated.pfc_state_snapshot.ended:
                 generated.pfc_state_snapshot.ended = False
@@ -58,9 +72,7 @@ async def generate_smalltalk_turn_impl(
             style_override = "你刚发过一条消息，如果要继续发一条新消息，短一点，别轰炸。"
         act = PlannedAction(
             action="reply",
-            target_message_id=generated.local_id,
-            think_level=runtime.cfg.planner.resolve_think_level(),
-            quote=False,
+            think_level=think_level,
             reasoning=str(planner_reason or "").strip(),
             question="",
             unknown_words=[],
@@ -92,12 +104,11 @@ async def generate_smalltalk_turn_impl(
 
     try:
         if prepared.forced:
+            generated.reply_source = "forced"
             log_step(context, runtime, chat_id=chat_id, step="smalltalk.forced_direct", fields={})
             direct_act = PlannedAction(
                 action="reply",
-                target_message_id=generated.local_id,
-                think_level=runtime.cfg.planner.resolve_think_level(),
-                quote=False,
+                think_level=think_level,
                 reasoning="用户直接发起对话，需要回复",
                 question="",
                 unknown_words=[],
@@ -126,51 +137,97 @@ async def generate_smalltalk_turn_impl(
                 generated.reply = random.choice(["嗯…", "行", "我在听", "你继续", "有点卡，等下"])
                 generated.reply_parts = build_text_message_parts(generated.reply)
         else:
-            max_context_size = get_brain_chat_max_context(runtime, prepared.brain_chat_active)
-            speculative_history = await state.memory_store.get_recent_async(chat_id, max_items=max_context_size)
-            generated.speculative_memory_task = asyncio.create_task(
-                build_memory_block(
+            if planner_enabled:
+                generated.reply_source = "pfc"
+                speculative_history = recent_history
+                generated.speculative_memory_task = asyncio.create_task(
+                    build_memory_block(
+                        context=context,
+                        runtime=runtime,
+                        state=state,
+                        secrets=secrets,
+                        data_dir=data_dir,
+                        chat_id=chat_id,
+                        history=speculative_history[-max_context_size:] if max_context_size > 0 else [],
+                        current_text=prepared.text,
+                        planner_question="",
+                        bot_name=bot_name,
+                    )
+                )
+                generated.pfc_result = await run_pfc_once(
+                    context=context,
+                    runtime_cfg=runtime.cfg,
+                    secrets=secrets,
+                    bot_name=bot_name,
+                    is_private=prepared.is_private,
+                    chat_id=chat_id,
+                    current_text=prepared.text,
+                    memory_store=state.memory_store,
+                    action_history=state.action_history,
+                    memory_db=state.memory_db,
+                    pfc_state_store=state.pfc_state_store,
+                    generate_reply=_pfc_generate,
+                    state_override=generated.pfc_state_snapshot,
+                    persist_state=False,
+                )
+                log_step(
+                    context,
+                    runtime,
+                    chat_id=chat_id,
+                    step="smalltalk.pfc.done",
+                    fields={
+                        "action": generated.pfc_result.action,
+                        "ended": bool(generated.pfc_result.ended),
+                        "reason": generated.pfc_result.reason,
+                        "reply_chars": len((generated.pfc_result.reply or "").strip()),
+                    },
+                )
+                generated.reply = (generated.pfc_result.reply or "").strip()
+            else:
+                generated.reply_source = "direct"
+                log_step(
+                    context,
+                    runtime,
+                    chat_id=chat_id,
+                    step="smalltalk.planner.disabled",
+                    fields={"is_private": prepared.is_private, "brain_chat": prepared.brain_chat_active},
+                )
+                direct_act = PlannedAction(
+                    action="reply",
+                    think_level=think_level,
+                    reasoning="planner_disabled",
+                    question="",
+                    unknown_words=[],
+                )
+                (
+                    generated.reply,
+                    generated.reply_parts,
+                    generated.image_plan,
+                    generated.emoji_plan,
+                    generated.face_plan,
+                ) = await generate_reply_result(
+                    text=prepared.text,
+                    event=event,
                     context=context,
                     runtime=runtime,
                     state=state,
-                    secrets=secrets,
-                    data_dir=data_dir,
-                    chat_id=chat_id,
-                    history=speculative_history[-max_context_size:] if max_context_size > 0 else [],
-                    current_text=prepared.text,
-                    planner_question="",
+                    forced=False,
+                    action=direct_act,
+                    plan_reasoning="planner_disabled",
                     bot_name=bot_name,
+                    secrets=secrets,
+                    state_text=prepared.mood_text,
+                    is_brain_chat=prepared.brain_chat_active,
                 )
-            )
-            generated.pfc_result = await run_pfc_once(
-                context=context,
-                runtime_cfg=runtime.cfg,
-                secrets=secrets,
-                bot_name=bot_name,
-                is_private=prepared.is_private,
-                chat_id=chat_id,
-                current_text=prepared.text,
-                memory_store=state.memory_store,
-                action_history=state.action_history,
-                memory_db=state.memory_db,
-                pfc_state_store=state.pfc_state_store,
-                generate_reply=_pfc_generate,
-                state_override=generated.pfc_state_snapshot,
-                persist_state=False,
-            )
-            log_step(
-                context,
-                runtime,
-                chat_id=chat_id,
-                step="smalltalk.pfc.done",
-                fields={
-                    "action": generated.pfc_result.action,
-                    "ended": bool(generated.pfc_result.ended),
-                    "reason": generated.pfc_result.reason,
-                    "reply_chars": len((generated.pfc_result.reply or "").strip()),
-                },
-            )
-            generated.reply = (generated.pfc_result.reply or "").strip()
+                if not generated.reply:
+                    generated.reply = random.choice(["嗯", "啊这", "我在听", "你继续", "等我想下"])
+                    generated.reply_parts = build_text_message_parts(generated.reply)
+                generated.pfc_result = PFCRunResult(
+                    reply=generated.reply,
+                    action="reply",
+                    reason="planner_disabled",
+                    ended=False,
+                )
 
         normalize_generated_reply_state(
             generated,
@@ -305,7 +362,7 @@ async def finalize_smalltalk_turn_impl(
                                 if generated.pfc_result.reason
                                 else ""
                             ),
-                            detail={"source": "pfc"},
+                            detail={"source": generated.reply_source},
                             executed=True,
                         ),
                     )
@@ -326,7 +383,7 @@ async def finalize_smalltalk_turn_impl(
                         action_str=str(generated.pfc_result.action or "reply").strip() or "reply",
                         reasoning=pfc_reasoning,
                         detail={
-                            "source": "pfc",
+                            "source": generated.reply_source,
                             **image_action_detail(generated.image_plan, reply_parts),
                             **emoji_action_detail(generated.emoji_plan, reply_parts),
                             **face_action_detail(generated.face_plan, reply_parts),
