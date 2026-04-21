@@ -250,7 +250,7 @@ XiaoQing/
 │   ├── constants.py        # 全局常量
 │   └── logging_config.py   # 日志配置
 │
-├── plugins/                # 插件目录（28 个 active plugins；*_deprecated 目录保留历史代码但不参与加载）
+├── plugins/                # 插件目录（可直接加载的内置插件；*_deprecated 目录默认不参与加载）
 │   ├── bot_core/           # 核心命令（help、reload）
 │   ├── xiaoqing_chat/      # 智能对话插件（向量记忆、情绪系统）
 │   ├── pendo/              # 个人时间与信息管理中枢（日程/待办/笔记/日记/记账/Web 控制台）
@@ -267,7 +267,7 @@ XiaoQing/
 │   ├── smalltalk/          # 闲聊插件
 │   ├── chat/               # AI 对话
 │   ├── voice/              # 语音功能
-│   ├── memo_deprecated/    # 已停用的 memo 历史代码（无 plugin.json）
+│   ├── memo_deprecated/    # 已停用的 memo 兼容目录（无 plugin.json）
 │   ├── choice/             # 随机选择
 │   ├── wolframalpha/       # 万能计算器
 │   ├── url_parser/         # 链接解析

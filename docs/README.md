@@ -16,7 +16,7 @@
 | 想尽快跑起来 | [01-getting-started.md](01-getting-started.md) | 安装、配置、连接 OneBot、基础验证 |
 | 想开发插件 | [03-plugin-development.md](03-plugin-development.md) | 插件结构、生命周期、最佳实践 |
 | 想排查部署/配置问题 | [06-configuration.md](06-configuration.md) | 配置项、示例、部署注意事项 |
-| 想看内置能力 | [09-plugins.md](09-plugins.md) | 28 个 active plugins 说明，统计口径为仓库中的 `plugin.json` |
+| 想看内置能力 | [09-plugins.md](09-plugins.md) | 可直接加载的内置插件清单、命令和配置说明 |
 
 ---
 
@@ -34,7 +34,7 @@
 | 文档 | 内容 | 适合人群 |
 |------|------|----------|
 | [02-architecture.md](02-architecture.md) | 系统架构、组件关系、职责边界 | 想理解框架整体设计的开发者 |
-| [04-core-modules.md](04-core-modules.md) | `core/` 模块源码说明 | 框架维护者 |
+| [04-core-modules.md](04-core-modules.md) | `core/` 模块源码说明 | 想深入理解 core 源码的开发者 |
 | [08-message-flow.md](08-message-flow.md) | 消息从接收到回复的完整处理链路 | 框架开发者 / 运维 |
 
 ### 💻 开发

@@ -68,7 +68,7 @@
 | [🔌 插件开发指南](docs/03-plugin-development.md) | 从零开发插件 |
 | [🔧 配置详解](docs/06-configuration.md) | 配置项、部署注意事项、示例配置 |
 | [📨 消息流程](docs/08-message-flow.md) | 消息处理全链路 |
-| [🧩 内置插件列表](docs/09-plugins.md) | 28 个 active plugins 说明 |
+| [🧩 内置插件列表](docs/09-plugins.md) | 可直接加载的内置插件说明 |
 
 ---
 
@@ -206,7 +206,7 @@ Inbound server started ...
 ### 🧠 xiaoqing_chat
 
 > [!IMPORTANT]
-> `xiaoqing_chat` 当前建议视为一次 **小版本更新**：从 `0.1.x` 升到 `0.2.0`。原因是它新增了图片上下文、QQ 表情参与对话、本地表情包库与视觉模型配置，但没有改掉 `/xc` 命令入口，也没有引入必须迁移的破坏性配置。
+> `xiaoqing_chat` 以 `/xc` 为统一入口，支持文本对话、图片上下文、QQ 表情参与对话、本地表情包库复用，以及可单独配置的视觉模型能力。
 >
 > `xiaoqing_chat` 依赖聊天 LLM，若要启用图片/表情包理解，还需要额外配置视觉模型。推荐在 `config/secrets.json` 中按 provider 结构配置：
 > ```json
@@ -408,7 +408,7 @@ XiaoQing/
 │   ├── qingpet/
 │   ├── qingssh/
 │   ├── jupyter/
-│   └── ...                   ← 含 28 个带 `plugin.json` 的 active plugins
+│   └── ...                   ← 更多可直接加载的内置插件
 ├── docs/
 ├── tests/
 └── logs/

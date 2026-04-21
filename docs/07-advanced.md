@@ -621,7 +621,7 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 - 私聊启用 `brain_chat` 后，会优先使用 `brain_think_level`
 - 如果 `private_planner_always_on = true`，深度对话模式下即使普通 planner 关闭，也会保持 planner 链开启
 
-这套设计的目标不是让所有回复都“想很久”，而是把更高思考成本留给私聊深聊和长上下文场景。
+因此普通短对话会更轻快，私聊深聊和长上下文场景会更容易得到更深入的回复。
 
 ### 智能回复控制
 
