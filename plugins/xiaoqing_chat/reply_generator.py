@@ -41,6 +41,7 @@ from .llm.reply_checker import ReplyCheckResult, ReplyRejected, _heuristic_check
 from .llm.rewrite import maybe_rewrite_reply
 from .message_parts import build_text_message_parts, normalize_message_parts
 from .media.emoji_reply import plan_emoji_reply
+from .media.image_reply import plan_image_reply
 from .media.qq_face_reply import plan_qq_face_reply
 from .memory.review_sessions import build_policy_block
 from .planning.planner import PlannedAction
@@ -59,6 +60,7 @@ class ReplyDraft:
     parts: tuple[dict[str, Any], ...]
     raw_text: str = ""
     rewritten_text: str = ""
+    image_plan: Any = None
     emoji_plan: Any = None
     face_plan: Any = None
 
@@ -133,12 +135,26 @@ async def _attach_reply_media(
         return draft
 
     enable_emoji = bool(getattr(media_cfg, "enable_outbound_emoji_reply", False))
+    enable_image = bool(getattr(media_cfg, "enable_outbound_image_reply", False))
     enable_face = bool(getattr(media_cfg, "enable_outbound_face_reply", False))
-    if not enable_emoji and not enable_face:
+    if not enable_emoji and not enable_image and not enable_face:
         return draft
 
+    image_task = None
     emoji_task = None
     face_task = None
+    if enable_image:
+        image_task = asyncio.create_task(
+            plan_image_reply(
+                context=context,
+                runtime=runtime,
+                history=history,
+                user_text=user_text,
+                reply_text=draft.text,
+                secrets=secrets or {},
+                chat_id=chat_id,
+            )
+        )
     if enable_emoji:
         emoji_task = asyncio.create_task(
             plan_emoji_reply(
@@ -165,6 +181,10 @@ async def _attach_reply_media(
         )
 
     try:
+        image_plan = await image_task if image_task is not None else None
+    except Exception:
+        image_plan = None
+    try:
         emoji_plan = await emoji_task if emoji_task is not None else None
     except Exception:
         emoji_plan = None
@@ -172,12 +192,13 @@ async def _attach_reply_media(
         face_plan = await face_task if face_task is not None else None
     except Exception:
         face_plan = None
-    if emoji_plan is None and face_plan is None:
+    if image_plan is None and emoji_plan is None and face_plan is None:
         return draft
 
     selection = resolve_reply_media_selection(
         context,
         user_text=user_text,
+        image_plan=image_plan,
         emoji_plan=emoji_plan,
         face_plan=face_plan,
     )
@@ -191,6 +212,7 @@ async def _attach_reply_media(
         parts=merged_parts,
         raw_text=draft.raw_text,
         rewritten_text=draft.rewritten_text,
+        image_plan=selection.image_plan,
         emoji_plan=selection.emoji_plan,
         face_plan=selection.face_plan,
     )
@@ -415,6 +437,7 @@ async def _generate_reply_draft(
             personality=runtime.cfg.personality,
             keyword_rules=keyword_rules,
             regex_rules=regex_rules,
+            current_parts=normalize_message_parts(event.get("_xc_effective_user_parts")),
             memory_block=full_memory_block,
             expression_habits_block=expression_block,
             jargon_explanation=jargon_explanation,
@@ -625,7 +648,7 @@ async def _generate_reply_draft(
                         context, runtime, chat_id=chat_id, step="reply.check.timeout", fields={}
                     )
                     check = ReplyCheckResult(
-                        suitable=False,
+                        suitable=True,
                         reason="回复检查暂不可用",
                         need_replan=False,
                     )

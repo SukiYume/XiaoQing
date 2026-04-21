@@ -204,13 +204,18 @@ class RewriteConfig(BaseModel):
 
 class MediaConfig(BaseModel):
     enable_inbound_media_context: bool = True
+    enable_outbound_image_reply: bool = True
     enable_outbound_emoji_reply: bool = True
     enable_outbound_face_reply: bool = True
     enable_auto_collect_inbound_emoji: bool = True
     emoji_library_dir: str = "figures/library"
+    image_library_dir: str = "figures/reply_images"
     emoji_auto_collect_requires_approval: bool = False
     emoji_auto_collect_max_entries: int = 200
     emoji_auto_collect_similarity_threshold: int = 4
+    image_reply_probability: float = 0.12
+    image_candidate_count: int = 4
+    image_cooldown_turns: int = 4
     emoji_reply_probability: float = 0.35
     emoji_candidate_count: int = 6
     emoji_cooldown_turns: int = 3
