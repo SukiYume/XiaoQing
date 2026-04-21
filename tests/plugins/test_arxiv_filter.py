@@ -15,7 +15,6 @@ import os
 import sys
 import types
 import pytest
-import pandas as pd
 from pathlib import Path
 import importlib
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -607,6 +606,7 @@ class TestInferenceBackendCaching:
 
     def test_knn_backend_caches_runtime_model(self, monkeypatch, tmp_path):
         pytest.importorskip("torch")
+        pd = pytest.importorskip("pandas")
         backend = importlib.import_module("plugins.arxiv_filter.inference.knn_backend")
         shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
         backend._MODEL_CACHE.clear()
@@ -635,6 +635,7 @@ class TestInferenceBackendCaching:
 
     def test_multi_interest_backend_caches_runtime_model(self, monkeypatch, tmp_path):
         pytest.importorskip("torch")
+        pd = pytest.importorskip("pandas")
         backend = importlib.import_module("plugins.arxiv_filter.inference.multi_interest_backend")
         shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
         backend._MODEL_CACHE.clear()
