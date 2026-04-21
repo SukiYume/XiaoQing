@@ -136,6 +136,16 @@ class TestExtractMessagePreview:
         assert "Check this:" in result
         assert "[图片]" in result
 
+    def test_text_with_emoji_image(self):
+        """测试带 emoji 元数据的图片预览"""
+        message = [
+            {"type": "text", "data": {"text": "Mood: "}},
+            {"type": "emoji", "data": {"file": "emoji.png"}},
+        ]
+        result = _extract_message_preview(message)
+        assert "Mood:" in result
+        assert "[表情包]" in result
+
     def test_at_mention(self):
         """测试 @ 提及"""
         message = [
@@ -277,6 +287,31 @@ class TestOneBotHttpSender:
         assert call_args.kwargs["timeout"].total == 15.0
 
     @pytest.mark.asyncio
+    async def test_send_action_normalizes_emoji_segment(self, sender: OneBotHttpSender, mock_session):
+        mock_response = AsyncMock()
+        mock_response.status = 200
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_response)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session.post.return_value = cm
+
+        action = {
+            "action": "send_group_msg",
+            "params": {
+                "group_id": 12345,
+                "message": [{"type": "emoji", "data": {"file": "emoji.png", "summary": "无语"}}],
+            },
+        }
+
+        await sender.send_action(action)
+
+        posted_message = mock_session.post.call_args.kwargs["json"]["message"]
+        assert posted_message == [
+            {"type": "image", "data": {"file": "emoji.png", "summary": "无语", "sub_type": "emoji"}}
+        ]
+
+    @pytest.mark.asyncio
     async def test_send_action_with_empty_base(self, mock_session):
         """测试空 http_base 不发送"""
         sender = OneBotHttpSender("", "", mock_session)
@@ -344,6 +379,26 @@ class TestOneBotWsClient:
         result = await client.send_action(action)
 
         mock_ws.send.assert_called_once()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_send_action_when_connected_normalizes_emoji_segment(self):
+        """测试 WebSocket 发送时会归一化 emoji 段"""
+        client = OneBotWsClient("ws://localhost:3000", "")
+        mock_ws = AsyncMock()
+        client._ws = mock_ws
+
+        action = {
+            "action": "send_group_msg",
+            "params": {"group_id": 12345, "message": [{"type": "emoji", "data": {"file": "emoji.png"}}]},
+        }
+
+        result = await client.send_action(action)
+
+        sent_payload = json.loads(mock_ws.send.await_args.args[0])
+        assert sent_payload["params"]["message"] == [
+            {"type": "image", "data": {"file": "emoji.png", "sub_type": "emoji"}}
+        ]
         assert result is True
 
     @pytest.mark.asyncio

@@ -487,39 +487,6 @@ async def load_emoji_library(context, runtime, *, repair_invalid: bool = True) -
     payload["entries"] = retained_entries
     _save_index(context, runtime, payload)
     return results
-
-
-def select_emoji_for_tags(
-    entries: list[EmojiLibraryEntry],
-    tags: list[str],
-) -> EmojiLibraryEntry | None:
-    if not entries:
-        return None
-
-    normalized = [tag.strip() for tag in tags if tag and tag.strip()]
-    if not normalized:
-        return min(entries, key=lambda item: (item.usage_count, item.last_used_ts, item.file_path))
-
-    scored: list[tuple[float, float, EmojiLibraryEntry]] = []
-    for entry in entries:
-        entry_tags = set(entry.emotion_tags)
-        score = 0.0
-        for tag in normalized:
-            if tag in entry_tags:
-                score += 3.0
-            elif tag and tag in entry.description:
-                score += 1.5
-        score -= entry.usage_count * 0.05
-        score -= max(0.0, time.time() - entry.last_used_ts) < 300 and 1.0 or 0.0
-        scored.append((score, -entry.last_used_ts, entry))
-
-    scored.sort(key=lambda item: (item[0], item[1], random.random()), reverse=True)
-    best_score, _, best_entry = scored[0]
-    if best_score <= 0:
-        return min(entries, key=lambda item: (item.usage_count, item.last_used_ts, item.file_path))
-    return best_entry
-
-
 def mark_emoji_used(context, runtime, entry: EmojiLibraryEntry) -> None:
     mark_emoji_used_by_hash(context, runtime, entry.media_hash)
 

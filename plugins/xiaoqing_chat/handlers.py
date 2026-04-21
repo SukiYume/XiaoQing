@@ -52,9 +52,7 @@ from .reply_generator import _generate_reply_draft
 from .frequency_control import _freq_record, _should_reply, _score_interest
 from .media import build_effective_user_text
 from .media.emoji_library import mark_emoji_used
-from .media.emoji_reply import plan_emoji_reply
 from .media.qq_face_catalog import mark_qq_face_used
-from .media.qq_face_reply import plan_qq_face_reply
 from .planning.goal_state import derive_goal_async
 from .memory.review_sessions import get_goal_override
 from .expression.bw_expression_reflector import maybe_ask_for_reflection
@@ -76,7 +74,6 @@ from .handlers_internal import (
     short_base as _short_base_impl,
 )
 from .reply_payload import build_reply_payload_from_parts
-from .reply_media_helpers import resolve_reply_media_selection
 from .smalltalk_execution import (
     finalize_smalltalk_turn_impl,
     generate_smalltalk_turn_impl,
@@ -84,10 +81,10 @@ from .smalltalk_execution import (
 from .smalltalk_media_helpers import (
     _assistant_reply_parts,
     _display_reply_text,
+    _image_action_detail,
     _emoji_action_detail,
     _event_media_items_for_memory,
     _face_action_detail,
-    _first_media_part,
     _mark_reply_media_used,
     _normalize_generated_reply_state,
     _prefix_reply_parts,
@@ -391,11 +388,6 @@ def _build_generated_reply_output(
         payload=payload,
     )
 
-
-def _reply_media_history_limit(runtime) -> int:
-    return min(max(6, int(getattr(runtime.cfg, "max_context_size", 30))), 12)
-
-
 def _cancel_pending_task(task: Any) -> None:
     if task is not None and not task.done():
         task.cancel()
@@ -403,131 +395,11 @@ def _cancel_pending_task(task: Any) -> None:
 
 def _cancel_generated_tasks(generated: _GeneratedSmalltalkTurn) -> None:
     _cancel_pending_task(generated.speculative_memory_task)
-    _cancel_pending_task(generated.emoji_plan_task)
-    _cancel_pending_task(generated.face_plan_task)
 
 
-async def _resolve_emoji_plan(
-    generated: _GeneratedSmalltalkTurn,
-    *,
-    context,
-    runtime,
-) -> Any:
-    if generated.emoji_plan_task is None:
-        return generated.emoji_plan
-    try:
-        generated.emoji_plan = await generated.emoji_plan_task
-    except Exception:
-        generated.emoji_plan = None
-    finally:
-        generated.emoji_plan_task = None
-    return generated.emoji_plan
-
-
-async def _resolve_face_plan(
-    generated: _GeneratedSmalltalkTurn,
-) -> Any:
-    if generated.face_plan_task is None:
-        return generated.face_plan
-    try:
-        generated.face_plan = await generated.face_plan_task
-    except Exception:
-        generated.face_plan = None
-    finally:
-        generated.face_plan_task = None
-    return generated.face_plan
-
-
-def _start_reply_media_plan_tasks(
-    prepared: _PreparedSmalltalkTurn,
-    generated: _GeneratedSmalltalkTurn,
-    *,
-    context,
-    runtime,
-    state,
-    chat_id: str,
-    secrets,
-) -> None:
-    if not generated.reply:
-        return
-    if generated.emoji_plan is not None or generated.face_plan is not None:
-        return
-    if _first_media_part(generated.reply_parts, "emoji") or _first_media_part(generated.reply_parts, "qq_face"):
-        return
-
-    media_cfg = getattr(runtime.cfg, "media", None)
-    enable_emoji = bool(getattr(media_cfg, "enable_outbound_emoji_reply", False))
-    enable_face = bool(getattr(media_cfg, "enable_outbound_face_reply", False))
-    if not enable_emoji and not enable_face:
-        return
-
-    history_task = asyncio.create_task(
-        state.memory_store.get_recent_async(
-            chat_id,
-            max_items=_reply_media_history_limit(runtime),
-        )
-    )
-
-    async def _history_for_media() -> list[Any]:
-        try:
-            history = await history_task
-        except Exception:
-            history = []
-        return list(history or [])
-
-    if enable_emoji:
-        async def _plan_emoji_task():
-            history_for_media = await _history_for_media()
-            return await plan_emoji_reply(
-                context=context,
-                runtime=runtime,
-                history=history_for_media,
-                user_text=prepared.text,
-                reply_text=generated.reply,
-                secrets=secrets,
-                chat_id=chat_id,
-            )
-
-        generated.emoji_plan_task = asyncio.create_task(_plan_emoji_task())
-
-    if enable_face:
-        async def _plan_face_task():
-            history_for_media = await _history_for_media()
-            return await plan_qq_face_reply(
-                context=context,
-                runtime=runtime,
-                history=history_for_media,
-                user_text=prepared.text,
-                reply_text=generated.reply,
-                secrets=secrets,
-                chat_id=chat_id,
-            )
-
-        generated.face_plan_task = asyncio.create_task(_plan_face_task())
-
-
-async def _resolve_reply_media_plans(
-    generated: _GeneratedSmalltalkTurn,
-    *,
-    context,
-    runtime,
-    user_text: str = "",
-) -> None:
-    await _resolve_emoji_plan(generated, context=context, runtime=runtime)
-    await _resolve_face_plan(generated)
-    selection = resolve_reply_media_selection(
-        context,
-        user_text=user_text,
-        emoji_plan=generated.emoji_plan,
-        face_plan=generated.face_plan,
-    )
-    generated.emoji_plan = selection.emoji_plan
-    generated.face_plan = selection.face_plan
-
-
-def _coerce_reply_result(result: Any) -> tuple[str, tuple[dict[str, Any], ...], Any, Any]:
+def _coerce_reply_result(result: Any) -> tuple[str, tuple[dict[str, Any], ...], Any, Any, Any]:
     if result is None:
-        return "", (), None, None
+        return "", (), None, None, None
     if hasattr(result, "text") and hasattr(result, "parts"):
         reply_text = str(getattr(result, "text", "") or "").strip()
         reply_parts = normalize_message_parts(getattr(result, "parts", ()) or ())
@@ -539,14 +411,15 @@ def _coerce_reply_result(result: Any) -> tuple[str, tuple[dict[str, Any], ...], 
         return (
             reply_text,
             reply_parts,
+            getattr(result, "image_plan", None),
             getattr(result, "emoji_plan", None),
             getattr(result, "face_plan", None),
         )
     reply = str(result or "").strip()
-    return reply, build_text_message_parts(reply), None, None
+    return reply, build_text_message_parts(reply), None, None, None
 
 
-async def _generate_reply_result(**kwargs) -> tuple[str, tuple[dict[str, Any], ...], Any, Any]:
+async def _generate_reply_result(**kwargs) -> tuple[str, tuple[dict[str, Any], ...], Any, Any, Any]:
     return _coerce_reply_result(await _generate_reply_draft(**kwargs))
 
 
@@ -713,7 +586,6 @@ async def _generate_smalltalk_turn(
         build_memory_block=_build_memory_block,
         run_pfc_once=run_pfc_once,
         normalize_generated_reply_state=_normalize_generated_reply_state,
-        start_reply_media_plan_tasks=_start_reply_media_plan_tasks,
         cancel_generated_tasks=_cancel_generated_tasks,
         schedule_pfc_state_flush=_schedule_pfc_state_flush,
         clear_store_entry=_clear_store_entry,
@@ -741,12 +613,12 @@ async def _finalize_smalltalk_turn(
         get_lock=_get_lock,
         most_recent_user_local_id=_most_recent_user_local_id,
         cancel_generated_tasks=_cancel_generated_tasks,
-        resolve_reply_media_plans=_resolve_reply_media_plans,
         assistant_reply_parts=_assistant_reply_parts,
         build_generated_reply_output=_build_generated_reply_output,
         sync_message_parts_to_registry=_sync_message_parts_to_registry,
         clear_store_entry=_clear_store_entry,
         record_bot_reply=_record_bot_reply,
+        image_action_detail=_image_action_detail,
         emoji_action_detail=_emoji_action_detail,
         face_action_detail=_face_action_detail,
         schedule_pfc_state_flush=_schedule_pfc_state_flush,

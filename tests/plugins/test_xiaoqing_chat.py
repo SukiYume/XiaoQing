@@ -5237,7 +5237,7 @@ async def test_generate_reply_forced_rejection_uses_safe_fallback(mock_context):
 
 
 @pytest.mark.asyncio
-async def test_generate_reply_checker_timeout_fails_closed_for_non_forced(mock_context):
+async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_context):
     from contextlib import ExitStack
 
     from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
@@ -5387,7 +5387,8 @@ async def test_generate_reply_checker_timeout_fails_closed_for_non_forced(mock_c
             secrets=None,
         )
 
-    assert draft is None
+    assert draft is not None
+    assert draft.text == "这条回复需要检查"
 
 
 @pytest.mark.asyncio
@@ -5594,152 +5595,253 @@ async def test_generate_reply_result_coerces_legacy_string_from_patched_draft():
     draft_mock = AsyncMock(return_value="懂了")
 
     with patch("plugins.xiaoqing_chat.handlers._generate_reply_draft", new=draft_mock):
-        text, parts, emoji_plan, face_plan = await _generate_reply_result(text="你好")
+        text, parts, image_plan, emoji_plan, face_plan = await _generate_reply_result(text="你好")
 
     assert text == "懂了"
     assert parts == build_text_message_parts("懂了")
+    assert image_plan is None
     assert emoji_plan is None
     assert face_plan is None
 
 
 @pytest.mark.asyncio
-async def test_start_reply_media_plan_tasks_resolves_to_single_selected_media():
-    from plugins.xiaoqing_chat.handlers import (
-        _GeneratedSmalltalkTurn,
-        _PreparedSmalltalkTurn,
-        _resolve_reply_media_plans,
-        _start_reply_media_plan_tasks,
-    )
-    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+async def test_attach_reply_media_prefers_image_plan_for_inbound_image_turn(tmp_path: Path):
+    from plugins.xiaoqing_chat.reply_generator import ReplyDraft, _attach_reply_media
 
+    image_path = tmp_path / "sunset.png"
+    image_path.write_bytes(b"png")
+    context = SimpleNamespace(plugin_dir=tmp_path)
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            max_context_size=30,
             media=SimpleNamespace(
+                enable_outbound_image_reply=True,
                 enable_outbound_emoji_reply=True,
-                enable_outbound_face_reply=True,
-            ),
-        )
-    )
-    state = SimpleNamespace(
-        memory_store=SimpleNamespace(
-            get_recent_async=AsyncMock(
-                return_value=[StoredMessage(role="user", name="Tester", content="hi", ts=1.0)]
+                enable_outbound_face_reply=False,
             )
         )
     )
-    prepared = _PreparedSmalltalkTurn(
-        text="你好",
-        mentioned=True,
-        is_private=False,
-        forced=True,
-        brain_chat_active=False,
-        mood_text="",
-        collected_emoji_count=0,
+    draft = ReplyDraft(
+        text="这张也太绝了",
+        text_parts=("这张也太绝了",),
+        parts=build_text_message_parts("这张也太绝了"),
     )
-    generated = _GeneratedSmalltalkTurn(reply="懂了")
-
-    emoji_plan = SimpleNamespace(entry=SimpleNamespace(media_hash="hash"), marker="[表情包：无语]")
-    face_plan = SimpleNamespace(entry=SimpleNamespace(face_id="14"), marker="[QQ表情：微笑]")
+    image_plan = SimpleNamespace(
+        entry=SimpleNamespace(
+            media_key="media:hash-sunset",
+            media_hash="hash-sunset",
+            file_path=str(image_path),
+            description="海边落日",
+            marker="[图片：海边落日]",
+        ),
+        marker="[图片：海边落日]",
+        mode="text_with_image",
+    )
+    emoji_plan = SimpleNamespace(
+        entry=SimpleNamespace(
+            media_hash="hash-emoji",
+            description="无语猫猫",
+            emotion_tags=("无语",),
+            file_path=str(image_path),
+        ),
+        marker="[表情包：无语]",
+        mode="text_with_emoji",
+    )
 
     with (
         patch(
-            "plugins.xiaoqing_chat.handlers.plan_emoji_reply",
-            new=AsyncMock(return_value=emoji_plan),
-        ) as mock_emoji,
+            "plugins.xiaoqing_chat.reply_generator.plan_image_reply",
+            new=AsyncMock(return_value=image_plan),
+        ),
         patch(
-            "plugins.xiaoqing_chat.handlers.plan_qq_face_reply",
-            new=AsyncMock(return_value=face_plan),
-        ) as mock_face,
+            "plugins.xiaoqing_chat.reply_generator.plan_emoji_reply",
+            new=AsyncMock(return_value=emoji_plan),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.reply_generator.plan_qq_face_reply",
+            new=AsyncMock(return_value=None),
+        ),
     ):
-        _start_reply_media_plan_tasks(
-            prepared,
-            generated,
-            context=SimpleNamespace(),
+        merged = await _attach_reply_media(
+            draft,
+            context=context,
             runtime=runtime,
-            state=state,
+            history=[],
+            user_text="[图片：海边落日]",
+            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
             chat_id="g1",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
         )
 
-        assert generated.emoji_plan_task is not None
-        assert generated.face_plan_task is not None
-
-        await _resolve_reply_media_plans(
-            generated,
-            context=SimpleNamespace(),
-            runtime=runtime,
-            user_text="[QQ表情：微笑]",
-        )
-
-    state.memory_store.get_recent_async.assert_awaited_once()
-    mock_emoji.assert_awaited_once()
-    mock_face.assert_awaited_once()
-    assert generated.emoji_plan is None
-    assert generated.face_plan is face_plan
+    assert [part["kind"] for part in merged.parts] == ["text", "image"]
+    assert merged.parts[1]["file_path"] == str(image_path)
+    assert merged.image_plan is image_plan
+    assert merged.emoji_plan is None
 
 
 @pytest.mark.asyncio
-async def test_start_reply_media_plan_tasks_skips_when_generator_already_attached_media():
-    from plugins.xiaoqing_chat.handlers import (
-        _GeneratedSmalltalkTurn,
-        _PreparedSmalltalkTurn,
-        _start_reply_media_plan_tasks,
-    )
+async def test_attach_reply_media_no_longer_penalizes_generic_image_plan(tmp_path: Path):
+    from plugins.xiaoqing_chat.reply_generator import ReplyDraft, _attach_reply_media
 
+    image_path = tmp_path / "sunset.png"
+    image_path.write_bytes(b"png")
+    context = SimpleNamespace(plugin_dir=tmp_path)
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            max_context_size=30,
             media=SimpleNamespace(
+                enable_outbound_image_reply=True,
                 enable_outbound_emoji_reply=True,
-                enable_outbound_face_reply=True,
-            ),
+                enable_outbound_face_reply=False,
+            )
         )
     )
-    state = SimpleNamespace(
-        memory_store=SimpleNamespace(get_recent_async=AsyncMock(return_value=[]))
+    draft = ReplyDraft(
+        text="这张有点绝",
+        text_parts=("这张有点绝",),
+        parts=build_text_message_parts("这张有点绝"),
     )
-    prepared = _PreparedSmalltalkTurn(
-        text="[QQ表情：狗头]",
-        mentioned=True,
-        is_private=False,
-        forced=True,
-        brain_chat_active=False,
-        mood_text="",
-        collected_emoji_count=0,
+    image_plan = SimpleNamespace(
+        entry=SimpleNamespace(
+            media_key="media:hash-sunset",
+            media_hash="hash-sunset",
+            file_path=str(image_path),
+            description="海边落日",
+            marker="[图片：海边落日]",
+        ),
+        marker="[图片：海边落日]",
+        mode="text_with_image",
     )
+    emoji_plan = SimpleNamespace(
+        entry=SimpleNamespace(
+            media_hash="hash-emoji",
+            description="无语猫猫",
+            emotion_tags=("无语",),
+            file_path=str(image_path),
+        ),
+        marker="[表情包：无语]",
+        mode="text_with_emoji",
+    )
+
+    with (
+        patch(
+            "plugins.xiaoqing_chat.reply_generator.plan_image_reply",
+            new=AsyncMock(return_value=image_plan),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.reply_generator.plan_emoji_reply",
+            new=AsyncMock(return_value=emoji_plan),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.reply_generator.plan_qq_face_reply",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        merged = await _attach_reply_media(
+            draft,
+            context=context,
+            runtime=runtime,
+            history=[],
+            user_text="这张有点绝",
+            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
+            chat_id="g1",
+        )
+
+    assert [part["kind"] for part in merged.parts] == ["text", "image"]
+    assert merged.image_plan is image_plan
+    assert merged.emoji_plan is None
+
+
+def test_assistant_reply_parts_keeps_single_face_when_generator_already_attached_it():
+    from plugins.xiaoqing_chat.smalltalk_media_helpers import _assistant_reply_parts
+    from plugins.xiaoqing_chat.smalltalk_models import _GeneratedSmalltalkTurn
+
     generated = _GeneratedSmalltalkTurn(
         reply="懂了",
         reply_parts=(
             {"kind": "text", "text": "懂了"},
             {"kind": "qq_face", "face_id": "277", "marker": "[QQ表情：狗头]"},
         ),
+        face_plan=SimpleNamespace(
+            entry=SimpleNamespace(face_id="277", label="狗头", aliases=()),
+            marker="[QQ表情：狗头]",
+            mode="text_with_face",
+        ),
     )
 
-    with (
-        patch(
-            "plugins.xiaoqing_chat.handlers.plan_emoji_reply",
-            new=AsyncMock(return_value=None),
-        ) as mock_emoji,
-        patch(
-            "plugins.xiaoqing_chat.handlers.plan_qq_face_reply",
-            new=AsyncMock(return_value=None),
-        ) as mock_face,
-    ):
-        _start_reply_media_plan_tasks(
-            prepared,
-            generated,
-            context=SimpleNamespace(),
-            runtime=runtime,
-            state=state,
-            chat_id="g1",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-        )
+    parts = _assistant_reply_parts(SimpleNamespace(), generated)
 
-    assert generated.emoji_plan_task is None
-    assert generated.face_plan_task is None
-    mock_emoji.assert_not_awaited()
-    mock_face.assert_not_awaited()
+    assert [part["kind"] for part in parts] == ["text", "qq_face"]
+    assert str(parts[1].get("face_id", "")) == "277"
+
+
+def test_assistant_reply_parts_keeps_single_emoji_when_generator_already_attached_it():
+    from plugins.xiaoqing_chat.smalltalk_media_helpers import _assistant_reply_parts
+    from plugins.xiaoqing_chat.smalltalk_models import _GeneratedSmalltalkTurn
+
+    context = SimpleNamespace(plugin_dir=Path("/tmp"))
+    generated = _GeneratedSmalltalkTurn(
+        reply="懂了",
+        reply_parts=(
+            {"kind": "text", "text": "懂了"},
+            {
+                "kind": "emoji",
+                "media_hash": "hash-1",
+                "marker": "[表情包：无语]",
+                "description": "猫猫翻白眼",
+                "emotion_tags": ["无语"],
+                "file_path": "/tmp/emoji.png",
+            },
+        ),
+        emoji_plan=SimpleNamespace(
+            entry=SimpleNamespace(
+                media_hash="hash-1",
+                description="猫猫翻白眼",
+                emotion_tags=("无语",),
+                file_path="/tmp/emoji.png",
+            ),
+            marker="[表情包：无语]",
+            mode="text_with_emoji",
+        ),
+    )
+
+    parts = _assistant_reply_parts(context, generated)
+
+    assert [part["kind"] for part in parts] == ["text", "emoji"]
+    assert str(parts[1].get("media_hash", "")) == "hash-1"
+
+
+def test_assistant_reply_parts_keeps_attached_image_without_reselecting():
+    from plugins.xiaoqing_chat.smalltalk_media_helpers import _assistant_reply_parts
+    from plugins.xiaoqing_chat.smalltalk_models import _GeneratedSmalltalkTurn
+
+    generated = _GeneratedSmalltalkTurn(
+        reply="懂了",
+        reply_parts=(
+            {"kind": "text", "text": "懂了"},
+            {
+                "kind": "image",
+                "media_key": "media:hash-1",
+                "media_hash": "hash-1",
+                "marker": "[图片：海边落日]",
+                "description": "海边落日",
+                "file_path": "/tmp/sunset.png",
+            },
+        ),
+        image_plan=SimpleNamespace(
+            entry=SimpleNamespace(
+                media_key="media:hash-1",
+                media_hash="hash-1",
+                marker="[图片：海边落日]",
+                description="海边落日",
+                file_path="/tmp/sunset.png",
+            ),
+            marker="[图片：海边落日]",
+            mode="text_with_image",
+        ),
+    )
+
+    parts = _assistant_reply_parts(SimpleNamespace(), generated)
+
+    assert [part["kind"] for part in parts] == ["text", "image"]
+    assert str(parts[1].get("media_hash", "")) == "hash-1"
 
 
 @pytest.mark.asyncio
