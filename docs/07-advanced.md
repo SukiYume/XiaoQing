@@ -588,7 +588,7 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 2. 从对话里学到的表达方式
 3. 黑话/梗解释
 4. reply checker 和 rewrite，把回复压回“短、口语、像真人”
-5. PFC / goal，让它知道这轮为什么要说话
+5. PFC / goal / brain chat，让它知道这轮为什么要说话；私聊深度对话时还能切到更高 think level
 
 #### 3. 图片与表情包进入正常对话流
 
@@ -610,6 +610,18 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 ```
 
 识别成表情包的图片会进入 `plugins/xiaoqing_chat/figures/library/`，后续可作为本地表情包回复素材。
+
+回复阶段仍然遵循“先出文本，再做媒体后处理”的主链：先生成文本回复，再根据当前回复、最近对话和入站 marker 决定是否补发本地图片、表情包或 QQ 表情。旧图库里元数据不完整的条目会在后台补修，不会卡住当前回复。
+
+#### 4. 深度对话模式与 think level
+
+`xiaoqing_chat` 的普通回复和私聊深度对话并不是同一套思考强度：
+
+- 普通模式下，`planner.think_mode = "dynamic"` 会按近期上下文长度自动映射到不同 think level
+- 私聊启用 `brain_chat` 后，会优先使用 `brain_think_level`
+- 如果 `private_planner_always_on = true`，深度对话模式下即使普通 planner 关闭，也会保持 planner 链开启
+
+这套设计的目标不是让所有回复都“想很久”，而是把更高思考成本留给私聊深聊和长上下文场景。
 
 ### 智能回复控制
 
@@ -703,7 +715,7 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
 ```
 
 > [!NOTE]
-> 如果你要扩展图片相关行为，优先看 `plugins/xiaoqing_chat/media/event_media.py`、`emoji_library.py`、`emoji_reply.py`。当前设计是“主回复模型仍然输出文本，图片回复作为后处理步骤决定”，不要把内联图片标记重新塞回主回复文本里。
+> 如果你要扩展图片相关行为，优先看 `plugins/xiaoqing_chat/media/event_media.py`、`emoji_library.py`、`emoji_reply.py`。当前设计是“主回复模型仍然输出文本，媒体回复作为后处理步骤决定”，不要把内联媒体标记重新塞回主回复文本里。
 
 ---
 
