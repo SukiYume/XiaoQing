@@ -10,7 +10,11 @@ from core.plugin_base import run_sync, segments
 from ..services.db import Database
 from ..services.reminder import ReminderService
 from ..services.ai_parser import AIParser
-from ..utils.time_utils import get_user_now_from_settings
+from ..utils.time_utils import (
+    TimezoneHelper,
+    get_user_now_from_settings,
+    now_in_timezone,
+)
 from ..utils.settings_utils import save_user_setting
 from ..utils.db_ops import (
     get_database,
@@ -461,15 +465,17 @@ async def _generate_finance_summary_content(
 
 async def _generate_briefing_content(user_id: str, db: Database, ai_parser: AIParser) -> str:
     """生成每日简报内容"""
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    user_now = now_in_timezone(user_id, db)
+    today = user_now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     tomorrow = today + timedelta(days=1)
 
     events, tasks, overdue_tasks = await _fetch_briefing_items(
         db, user_id, today.isoformat(), tomorrow.isoformat()
     )
+    event_entries = _build_briefing_event_entries(events, user_id, db, today, tomorrow)
 
     # 生成简报
-    briefing = _format_daily_briefing(events, tasks)
+    briefing = _format_daily_briefing(event_entries, tasks, user_now)
 
     # 添加逾期提醒
     if overdue_tasks:
@@ -484,21 +490,83 @@ async def _generate_briefing_content(user_id: str, db: Database, ai_parser: AIPa
     return briefing
 
 
-def _format_daily_briefing(events: list[Any], tasks: list[Any]) -> str:
+def _normalize_briefing_datetime(dt_str: str, user_id: str, db: Database) -> datetime | None:
+    """将事件/里程碑时间统一到用户时区的 naive datetime。"""
+    if not dt_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(dt_str)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is not None:
+        user_tz = TimezoneHelper.get_user_timezone(user_id, db)
+        dt = dt.astimezone(user_tz).replace(tzinfo=None)
+    return dt
+
+
+def _build_briefing_event_entries(
+    events: list[Any], user_id: str, db: Database, today: datetime, tomorrow: datetime
+) -> list[dict[str, Any]]:
+    """构建每日简报里的事件条目，支持把多节点事件展开为当天节点。"""
+    entries: list[dict[str, Any]] = []
+
+    for event in events:
+        title = getattr(event, "title", "") or "无标题"
+        location = getattr(event, "location", "") or ""
+        milestones = getattr(event, "milestones", None) or []
+
+        if milestones and len(milestones) >= 2:
+            for milestone in milestones:
+                milestone_dt = _normalize_briefing_datetime(
+                    str(milestone.get("time", "")), user_id, db
+                )
+                if not milestone_dt or not (today <= milestone_dt < tomorrow):
+                    continue
+                milestone_name = str(milestone.get("name", "")).strip()
+                entry_title = f"{title} · {milestone_name}" if milestone_name else title
+                entries.append(
+                    {
+                        "sort_time": milestone_dt,
+                        "time_text": milestone_dt.strftime("%H:%M"),
+                        "title": entry_title,
+                        "location": location,
+                    }
+                )
+            continue
+
+        start_dt = _normalize_briefing_datetime(
+            getattr(event, "start_time", "") or "", user_id, db
+        )
+        if start_dt and today <= start_dt < tomorrow:
+            entries.append(
+                {
+                    "sort_time": start_dt,
+                    "time_text": start_dt.strftime("%H:%M"),
+                    "title": title,
+                    "location": location,
+                }
+            )
+
+    entries.sort(key=lambda entry: entry["sort_time"])
+    return entries
+
+
+def _format_daily_briefing(
+    events: list[dict[str, Any]], tasks: list[Any], current_dt: datetime
+) -> str:
     """格式化每日简报文本（纯格式化，不涉及 AI）"""
-    current_date = datetime.now().strftime("%Y年%m月%d日")
+    current_date = current_dt.strftime("%Y年%m月%d日")
     weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-    weekday = weekday_names[datetime.now().weekday()]
+    weekday = weekday_names[current_dt.weekday()]
 
     lines = [f"☀️ 早上好！今天是{current_date} {weekday}", ""]
 
     if events:
         lines.append("🗓️ **今日日程**")
         for evt in events[:5]:
-            start_time = evt.start_time or ""
-            time_str = start_time[11:16] if len(start_time) > 11 else ""
-            title = evt.title or "无标题"
-            location = f" @{evt.location}" if evt.location else ""
+            time_str = evt.get("time_text", "")
+            title = evt.get("title", "无标题")
+            location = f" @{evt['location']}" if evt.get("location") else ""
             lines.append(f"  • {time_str} {title}{location}")
         if len(events) > 5:
             lines.append(f"  ...还有 {len(events) - 5} 项")
