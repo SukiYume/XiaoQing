@@ -376,7 +376,7 @@ cat:其他 #记录
 ### 确认 / 提前确认提醒
 
 ```
-/pendo confirm <id>          # 确认已收到提醒
+/pendo confirm <id>          # 确认刚收到的那一条提醒
 /pendo event reminders confirm <id> today    # 提前确认今天未发送的提醒
 /pendo event reminders confirm <id> future   # 提前确认未来全部未发送提醒
 /pendo event reminders confirm <id> all      # 提前确认全部未发送提醒

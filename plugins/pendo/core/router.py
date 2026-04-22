@@ -24,7 +24,7 @@ TOP_LEVEL_REDIRECTS: dict[str, str] = {
 # 命令元数据表：(别名列表, 描述, 用法)
 # 不在此表中的命令仍可通过 handlers 字典注册，只是没有别名和描述
 COMMAND_META: dict[str, tuple[list[str], str, str]] = {
-    "confirm": (["确认"], "确认提醒", "/pendo confirm <id>"),
+    "confirm": (["确认"], "确认刚收到的提醒", "/pendo confirm <id>"),
     "snooze": (["延后"], "延后提醒", "/pendo snooze <id> <时间>"),
     "undo": (["撤销"], "撤销删除或编辑", "/pendo undo [分钟]"),
     "event": (

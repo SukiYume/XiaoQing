@@ -103,7 +103,7 @@
 ## 1.4 提醒操作
 
 ```
-/pendo confirm <id>        # 确认提醒
+/pendo confirm <id>        # 确认刚收到的那条提醒
 /pendo event reminders confirm <id> today   # 提前确认今天的提醒，不再发送
 /pendo event reminders confirm <id> future  # 提前确认未来所有提醒
 /pendo event reminders confirm <id> all     # 提前确认全部未发送提醒
