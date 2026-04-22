@@ -2630,8 +2630,10 @@ class TestReminderBackfillRegression:
 
         sys.path.insert(0, str(ROOT))
 
+        from plugins.pendo.commands.operations import handle_confirm
         from plugins.pendo.models.item import EventItem
         from plugins.pendo.services.db import Database
+        from plugins.pendo.services.reminder import ReminderService
 
         db = Database(str(tmp_path / "pendo.db"))
 
@@ -2639,10 +2641,10 @@ class TestReminderBackfillRegression:
             event = EventItem(
                 owner_id="u1",
                 title="提醒测试",
-                start_time="2030-01-01T10:00:00",
-                remind_times=["2030-01-01T08:00:00", "2030-01-01T09:00:00"],
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+                start_time="2020-01-01T10:00:00",
+                remind_times=["2020-01-01T08:00:00", "2020-01-01T09:00:00"],
+                created_at="2020-01-01T00:00:00",
+                updated_at="2020-01-01T00:00:00",
             )
             db.items.insert_item(event, "evt123")
 
@@ -2654,29 +2656,25 @@ class TestReminderBackfillRegression:
                     INSERT INTO reminder_logs (item_id, remind_time, sent_at)
                     VALUES (?, ?, ?)
                     """,
-                    ("evt123", "2030-01-01T08:00:00", "2030-01-01T08:00:05"),
+                    ("evt123", "2020-01-01T08:00:00", "2020-01-01T08:00:05"),
                 )
                 cursor.execute(
                     """
                     INSERT INTO reminder_logs (item_id, remind_time, sent_at)
                     VALUES (?, ?, ?)
                     """,
-                    ("evt123", "2030-01-01T09:00:00", "2030-01-01T09:00:05"),
+                    ("evt123", "2020-01-01T09:00:00", "2020-01-01T09:00:05"),
                 )
 
-            result = db.items.confirm_reminder("evt123", "confirmed")
+            result = asyncio.run(handle_confirm("u1", "evt123", ReminderService(db), db))
 
             assert result["status"] == "success"
             logs = db.items.get_reminder_logs("evt123")
             confirmed_logs = [log for log in logs if log["confirmed_at"]]
             pending_logs = [log for log in logs if not log["confirmed_at"]]
 
-            # confirm_reminder 不指定 remind_time 时确认该 item 的所有未确认提醒
-            assert sorted(log["remind_time"] for log in confirmed_logs) == [
-                "2030-01-01T08:00:00",
-                "2030-01-01T09:00:00",
-            ]
-            assert pending_logs == []
+            assert [log["remind_time"] for log in confirmed_logs] == ["2020-01-01T09:00:00"]
+            assert [log["remind_time"] for log in pending_logs] == ["2020-01-01T08:00:00"]
         finally:
             db.cleanup()
 
@@ -3184,6 +3182,53 @@ class TestScheduledRegression:
 
         assert len(result) == 1
         assert result[0]["params"]["user_id"] == 1001
+
+    def test_generate_daily_briefing_includes_today_milestone_events(self, tmp_path, monkeypatch):
+        import sys
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.commands import scheduled as scheduled_module
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        fixed_now = datetime.fromisoformat("2030-01-02T08:00:00+08:00")
+        monkeypatch.setattr(
+            scheduled_module, "now_in_timezone", lambda user_id=None, db=None: fixed_now
+        )
+
+        db = Database(str(tmp_path / "pendo_briefing_milestone.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="学术会议",
+                start_time="2030-01-01T09:00:00",
+                end_time="2030-01-03T18:00:00",
+                milestones=[
+                    {"name": "报到", "time": "2030-01-01T09:00:00"},
+                    {"name": "主会场报告", "time": "2030-01-02T10:30:00"},
+                    {"name": "闭幕", "time": "2030-01-03T18:00:00"},
+                ],
+                remind_times=[],
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(event, "milebrief")
+
+            briefing = asyncio.run(
+                scheduled_module._generate_briefing_content("u1", db, MagicMock())
+            )
+
+            assert "🗓️ **今日日程**" in briefing
+            assert "10:30 学术会议 · 主会场报告" in briefing
+            assert "报到" not in briefing
+            assert "闭幕" not in briefing
+            assert "今日暂无日程安排" not in briefing
+        finally:
+            db.cleanup()
 
     def test_migrate_todos_returns_messages_without_send_action(self, monkeypatch):
         import sys

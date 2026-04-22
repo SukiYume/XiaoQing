@@ -696,7 +696,7 @@ HELP_MAP = {
         "  - 例: /pendo event edit 80efbef6 会议开始改成4月22日12:43，备注从北京南坐G123去会场",
         "• /pendo event reminders [id|范围] - 查看提醒",
         "• /pendo event reminders set <id> <描述> - 修改提醒",
-        "• /pendo event reminders confirm <id> [today|future|all|提醒时间] - 提前确认提醒",
+        "• /pendo event reminders confirm <id> [today|future|all|提醒时间] - 按范围提前确认提醒",
         "  - 例: /pendo event reminders set abc12345 提前1天和2小时提醒",
         "  - 例: /pendo event reminders confirm abc12345 today",
     ],
@@ -775,7 +775,7 @@ HELP_MAP = {
     ],
     "reminder": [
         "⏰ **提醒操作**",
-        "• /pendo confirm <id> - 确认提醒",
+        "• /pendo confirm <id> - 确认刚收到的那条提醒",
         "• /pendo snooze <id> <时间> - 延后提醒",
         "  - 时间格式: 10m, 1h, 19:00",
     ],

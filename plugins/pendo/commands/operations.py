@@ -54,7 +54,17 @@ async def handle_confirm(
             if item is None:
                 return error_result(f"❌ 未找到条目: {item_id}")
 
-        result = await run_sync(reminder_service.confirm_reminder, item_id, "confirmed", user_id)
+        target_remind_time = None
+        if db:
+            last_sent_remind_time = await _get_last_sent_remind_time(db, item_id)
+            if isinstance(last_sent_remind_time, str) and last_sent_remind_time.strip():
+                target_remind_time = last_sent_remind_time
+
+        confirm_args = [item_id, "confirmed", user_id]
+        if target_remind_time:
+            confirm_args.append(target_remind_time)
+
+        result = await run_sync(reminder_service.confirm_reminder, *confirm_args)
         if result.get("status") == "success":
             # 构建友好的确认消息
             if item:

@@ -1325,13 +1325,18 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # 今日日程
+        # 今日日程候选：先按时间区间重叠抓取，格式化层再精确筛选当天节点。
         cursor.execute(
             f"""
             SELECT * FROM items WHERE owner_id = ? AND type = '{ItemType.EVENT.value}' AND deleted = 0
-            AND start_time >= ? AND start_time < ? ORDER BY start_time
+            AND start_time < ?
+            AND (
+                (end_time IS NOT NULL AND end_time != '' AND end_time >= ?)
+                OR ((end_time IS NULL OR end_time = '') AND start_time >= ?)
+            )
+            ORDER BY start_time
         """,
-            (user_id, today_iso, tomorrow_iso),
+            (user_id, tomorrow_iso, today_iso, today_iso),
         )
         events = [item for row in cursor.fetchall() if (item := self._row_to_item(row)) is not None]
 
