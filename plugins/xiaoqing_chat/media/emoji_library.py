@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import random
+import shutil
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -75,6 +77,18 @@ def _save_index(context, runtime, payload: dict[str, Any]) -> None:
     write_json(index_path, payload)
 
 
+def _save_index_if_changed(
+    context,
+    runtime,
+    *,
+    original_payload: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    if payload == original_payload:
+        return
+    _save_index(context, runtime, payload)
+
+
 def resolve_emoji_library_dir(context, runtime) -> Path | None:
     media_cfg = getattr(getattr(runtime, "cfg", None), "media", None)
     if media_cfg is None:
@@ -132,6 +146,31 @@ def _pending_emoji_library_dir(context, runtime) -> Path | None:
     if root is None:
         return None
     return root / _PENDING_DIR_NAME
+
+
+def _allowed_emoji_target_dirs(context, runtime) -> tuple[Path, ...]:
+    library_dir = resolve_emoji_library_dir(context, runtime)
+    if library_dir is None:
+        return ()
+    pending_dir = _pending_emoji_library_dir(context, runtime)
+    roots = [library_dir.resolve()]
+    if pending_dir is not None:
+        roots.append(pending_dir.resolve())
+    return tuple(roots)
+
+
+def _is_path_within_roots(path: Path, roots: tuple[Path, ...]) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    for root in roots:
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _status_from_record(record: dict[str, Any] | None) -> str:
@@ -219,18 +258,44 @@ def _score_record(record: dict[str, Any]) -> tuple[float, float, float]:
 
 def _remove_library_file(context, runtime, record: dict[str, Any]) -> None:
     file_path = resolve_emoji_file_path(context, str(record.get("file_path", "") or ""))
-    library_root = resolve_emoji_library_dir(context, runtime)
-    if library_root is None:
+    allowed_roots = _allowed_emoji_target_dirs(context, runtime)
+    if not allowed_roots:
         return
-    try:
-        file_path.relative_to(library_root.resolve())
-    except ValueError:
+    if not _is_path_within_roots(file_path, allowed_roots):
         return
     if file_path.exists():
         try:
             file_path.unlink()
         except OSError:
             pass
+
+
+def _safe_target_file_path(
+    context,
+    runtime,
+    *,
+    existing: dict[str, Any] | None,
+    base_dir: Path,
+    record_key: str,
+    suffix: str,
+) -> Path:
+    if existing is not None:
+        raw_existing_path = str(existing.get("file_path", "") or "").strip()
+        if raw_existing_path:
+            existing_path = resolve_emoji_file_path(context, raw_existing_path)
+            if _is_path_within_roots(existing_path, _allowed_emoji_target_dirs(context, runtime)):
+                return existing_path
+    return base_dir / f"{record_key}{suffix}"
+
+
+def _copy_into_library_if_needed(source_path: Path, target_path: Path) -> None:
+    try:
+        if target_path.exists() and source_path.samefile(target_path):
+            return
+    except OSError:
+        pass
+    ensure_dir(target_path.parent)
+    shutil.copyfile(source_path, target_path)
 
 
 def _find_similar_entry(
@@ -335,6 +400,7 @@ def collect_emoji_candidate(
 
     ensure_dir(library_dir)
     payload = _load_index(context, runtime)
+    original_payload = deepcopy(payload)
     entries = payload.setdefault("entries", {})
     perceptual_hash = _average_hash(source_path)
     record_key = rendered.media_hash
@@ -364,15 +430,17 @@ def collect_emoji_candidate(
         suffix = ".png"
     base_dir = library_dir if status == "active" else (_pending_emoji_library_dir(context, runtime) or library_dir)
     ensure_dir(base_dir)
-    target_path = (
-        resolve_emoji_file_path(context, str(existing.get("file_path", "") or ""))
-        if existing is not None and str(existing.get("file_path", "") or "").strip()
-        else base_dir / f"{record_key}{suffix}"
+    target_path = _safe_target_file_path(
+        context,
+        runtime,
+        existing=existing,
+        base_dir=base_dir,
+        record_key=record_key,
+        suffix=suffix,
     )
     is_new = existing is None
     if not target_path.exists():
-        ensure_dir(target_path.parent)
-        target_path.write_bytes(source_path.read_bytes())
+        _copy_into_library_if_needed(source_path, target_path)
 
     entry = _entry_from_render(
         context,
@@ -393,7 +461,12 @@ def collect_emoji_candidate(
     normalized["media_hash"] = record_key
     entries[record_key] = normalized
     _prune_auto_entries(context, runtime, payload, keep_hashes={record_key})
-    _save_index(context, runtime, payload)
+    _save_index_if_changed(
+        context,
+        runtime,
+        original_payload=original_payload,
+        payload=payload,
+    )
     return entry, is_new
 
 
@@ -438,11 +511,20 @@ async def load_emoji_library(
     if library_dir is None:
         return []
 
+    payload = _load_index(context, runtime)
+    original_payload = deepcopy(payload)
     files = _iter_library_files(library_dir)
     if not files:
+        if payload.get("entries"):
+            payload["entries"] = {}
+            _save_index_if_changed(
+                context,
+                runtime,
+                original_payload=original_payload,
+                payload=payload,
+            )
         return []
 
-    payload = _load_index(context, runtime)
     existing_entries = payload.setdefault("entries", {})
     retained_entries: dict[str, dict[str, Any]] = {}
     results: list[EmojiLibraryEntry] = []
@@ -540,7 +622,12 @@ async def load_emoji_library(
             results.append(entry)
 
     payload["entries"] = retained_entries
-    _save_index(context, runtime, payload)
+    _save_index_if_changed(
+        context,
+        runtime,
+        original_payload=original_payload,
+        payload=payload,
+    )
     if repair_needed and schedule_background_repair and not repair_invalid:
         schedule_emoji_library_repair(context, runtime)
     return results

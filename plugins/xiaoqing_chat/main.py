@@ -172,6 +172,11 @@ async def shutdown(context) -> None:
     except Exception as exc:
         log.warning("XiaoQing Chat: action_history flush failed: %s", exc)
 
+    try:
+        state.media_store.flush_all()
+    except Exception as exc:
+        log.warning("XiaoQing Chat: media_store flush failed: %s", exc)
+
     # 3. Save vector DB if dirty
     try:
         if state.memory_db.is_dirty():

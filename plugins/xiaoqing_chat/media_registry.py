@@ -440,12 +440,14 @@ class MediaRegistryStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
         self._entries_cache: dict[str, dict[str, Any]] | None = None
+        self._dirty = False
         self._lock = threading.Lock()
 
     def bind(self, data_dir: Path) -> None:
         with self._lock:
             if self._data_dir != data_dir:
                 self._entries_cache = None
+                self._dirty = False
         super().bind(data_dir)
 
     def _index_path(self) -> Path | None:
@@ -460,11 +462,25 @@ class MediaRegistryStore(StoreBase):
         self._entries_cache = entries if isinstance(entries, dict) else {}
         return self._entries_cache
 
-    def _save_entries_locked(self) -> None:
+    def _save_entries_locked(self) -> bool:
         path = self._index_path()
         if not path:
-            return
-        self._save_json(path, {"entries": self._entries_cache or {}})
+            return False
+        return self._save_json(path, {"entries": self._entries_cache or {}})
+
+    def is_dirty(self) -> bool:
+        with self._lock:
+            return bool(self._dirty)
+
+    def flush(self) -> None:
+        with self._lock:
+            if not self._dirty:
+                return
+            if self._save_entries_locked():
+                self._dirty = False
+
+    def flush_all(self) -> None:
+        self.flush()
 
     def upsert_media_items(self, items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized_items = [_normalize_media_ref(item) for item in items if isinstance(item, dict)]
@@ -489,7 +505,7 @@ class MediaRegistryStore(StoreBase):
                 resolved_items.append(self._resolve_item_locked(item, entries=entries))
 
             if changed:
-                self._save_entries_locked()
+                self._dirty = True
             return resolved_items
 
     def resolve_media_items(self, items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:

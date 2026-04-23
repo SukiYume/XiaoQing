@@ -283,6 +283,50 @@ async def test_check_reply_heuristics_use_text_reply_when_media_is_attached():
 
 
 @pytest.mark.asyncio
+async def test_check_reply_rejects_clarifying_placeholder_media_question():
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    history = [
+        StoredMessage(
+            role="user",
+            name="Alice",
+            parts=(
+                {
+                    "kind": "image",
+                    "marker": "[图片：一张图片]",
+                    "description": "一张图片",
+                },
+            ),
+            ts=time.time(),
+        )
+    ]
+
+    result = await check_reply(
+        http_session=None,
+        secrets={},
+        bot_name="小青",
+        reply="啥图啊",
+        heuristic_reply="啥图啊",
+        goal="聊天",
+        policy_text="",
+        history=history,
+        chat_history_text="Alice: [图片：一张图片]",
+        enable_llm_checker=False,
+        max_repeat_compare=3,
+        similarity_threshold=0.9,
+        max_assistant_in_row=5,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    assert result.suitable is False
+    assert "占位信息" in result.reason
+
+
+@pytest.mark.asyncio
 async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest.MonkeyPatch):
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 

@@ -48,6 +48,33 @@ _STRUCTURED_MEDIA_TAG_STOPWORDS = frozenset(
         "emotions",
     }
 )
+_GENERIC_SOURCE_LABELS = frozenset(
+    {
+        "download",
+        "image",
+        "img",
+        "photo",
+        "picture",
+        "file",
+        "attachment",
+        "sticker",
+        "emoji",
+        "cache",
+        "blob",
+        "view",
+    }
+)
+_SOURCE_QUERY_HINTS = (
+    "download?",
+    "appid=",
+    "fileid=",
+    "file_id=",
+    "authkey=",
+    "rkey=",
+    "spec=",
+    "cache=",
+    "uuid=",
+)
 _MEDIA_ANALYSIS_PROMPT_VERSION = 3
 _RENDER_CACHE_LOCKS: dict[str, threading.RLock] = {}
 _RENDER_CACHE_LOCKS_GUARD = threading.Lock()
@@ -97,6 +124,7 @@ class MediaAnalysisDraft:
     visible_text: str
     emotion_tags: tuple[str, ...]
     raw_output: str = ""
+    parsed_json: bool = False
 
 
 def _media_cfg(runtime) -> Any:
@@ -210,14 +238,41 @@ def _safe_source_name(value: str) -> str:
     return normalized[:40]
 
 
+def _looks_like_unusable_source_label(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    compact = re.sub(r"[\s_\-]+", "", lowered)
+    if any(token in lowered for token in _SOURCE_QUERY_HINTS):
+        return True
+    if compact in _GENERIC_SOURCE_LABELS:
+        return True
+    if re.fullmatch(r"(?:img|image|photo|picture|screenshot|file|attachment|download)\d{0,8}", compact):
+        return True
+    if re.fullmatch(r"[0-9a-f]{24,64}", compact):
+        return True
+    if re.fullmatch(r"[a-z0-9_-]{28,64}", lowered) and sum(ch.isdigit() for ch in compact) >= 6:
+        return True
+    return False
+
+
 def _normalize_source_label(value: str) -> str:
     if not value:
         return ""
     if _looks_like_base64_source(value) or _looks_like_data_url(value):
         return ""
-    name = Path(value).stem if any(ch in value for ch in ("/", "\\")) else value
+    if _looks_like_url(value):
+        parsed = urlparse(value)
+        name = Path(unquote(parsed.path or "")).stem or ""
+        if parsed.query and _looks_like_unusable_source_label(f"{name}?{parsed.query}"):
+            return ""
+    else:
+        name = Path(value).stem if any(ch in value for ch in ("/", "\\")) else value
     name = re.sub(r"[_\-]+", " ", name)
     name = re.sub(r"\s+", " ", name).strip()
+    if _looks_like_unusable_source_label(name):
+        return ""
     return name
 
 
@@ -475,6 +530,8 @@ def _is_low_quality_rendered_media(
     resolved: ResolvedMedia,
 ) -> bool:
     if _looks_like_structured_media_text(rendered.description):
+        return True
+    if _looks_like_unusable_source_label(rendered.description):
         return True
     if _looks_like_structured_media_text(rendered.marker):
         return True

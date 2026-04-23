@@ -101,6 +101,25 @@ def _animated_gif_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _raw_media_response(
+    content: str,
+    *,
+    used_path: str = "/chat/completions",
+    finish_reason: str = "stop",
+) -> tuple[dict[str, object], str]:
+    return (
+        {
+            "choices": [
+                {
+                    "message": {"content": content},
+                    "finish_reason": finish_reason,
+                }
+            ]
+        },
+        used_path,
+    )
+
+
 def _make_media_runtime(**media_overrides):
     media_cfg = SimpleNamespace(
         enable_inbound_media_context=True,
@@ -125,11 +144,6 @@ def _make_media_runtime(**media_overrides):
         face_cooldown_turns=2,
         max_analyze_bytes=1024 * 1024,
         vision_provider="",
-        vision_api_base="",
-        vision_api_key="",
-        vision_model="",
-        vision_endpoint_path="",
-        vision_proxy="",
         vision_timeout_seconds=5.0,
         vision_max_retry=0,
         vision_retry_interval_seconds=0.1,
@@ -480,29 +494,33 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
     }
     used_models: list[str] = []
 
-    async def _fake_chat_completions(*, model, messages, **kwargs):
+    async def _fake_chat_raw(*, model, messages, **kwargs):
         used_models.append(model)
         if model in {"glm-4.6v-flash", "glm-4.6v"}:
             raise LLMError('retryable_http_429:{"error":{"code":"1305","message":"busy"}}')
         content = messages[1]["content"]
         if isinstance(content, list):
-            return json.dumps(
-                {
-                    "kind": "emoji",
-                    "detailed_description": "一只猫皱着脸，配字是苦鲁西",
-                    "visible_text": "苦鲁西",
-                    "emotion_tags": ["委屈", "难受"],
-                },
-                ensure_ascii=False,
+            return _raw_media_response(
+                json.dumps(
+                    {
+                        "kind": "emoji",
+                        "detailed_description": "一只猫皱着脸，配字是苦鲁西",
+                        "visible_text": "苦鲁西",
+                        "emotion_tags": ["委屈", "难受"],
+                    },
+                    ensure_ascii=False,
+                )
             )
-        return json.dumps({"description": "委屈猫猫苦鲁西", "emotion_tags": ["委屈", "难受"]}, ensure_ascii=False)
+        return _raw_media_response(
+            json.dumps({"description": "委屈猫猫苦鲁西", "emotion_tags": ["委屈", "难受"]}, ensure_ascii=False)
+        )
 
     with patch(
         "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
         new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
     ), patch(
-        "plugins.xiaoqing_chat.media.event_media.chat_completions",
-        new=AsyncMock(side_effect=_fake_chat_completions),
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
@@ -515,6 +533,204 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
         "glm-4.6v",
         "glm-4v-flash",
     ]
+    warning_lines = "\n".join(
+        str(call.args[1]) if len(call.args) > 1 else ""
+        for call in mock_context.logger.warning.call_args_list
+    )
+    assert '"step": "media.analyze.provider_fallback"' in warning_lines
+    assert '"to_provider": "glm-4v-flash"' in warning_lines
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_text_retries_same_provider_once_on_semantic_failure(mock_context):
+    runtime = _make_media_runtime()
+    vision = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
+    vision["default"] = "glm-4.6v-flash"
+    vision["fallbacks"] = ["glm-4v-flash"]
+    vision["providers"] = {
+        "glm-4.6v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "vision-key",
+            "model": "glm-4.6v-flash",
+            "endpoint_path": "/chat/completions",
+        },
+        "glm-4v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "vision-key",
+            "model": "glm-4v-flash",
+            "endpoint_path": "/chat/completions",
+        },
+    }
+    event = {
+        "message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]
+    }
+    used_models: list[str] = []
+    call_count = 0
+
+    async def _fake_chat_raw(*, model, **kwargs):
+        nonlocal call_count
+        used_models.append(model)
+        call_count += 1
+        if model == "glm-4.6v-flash" and call_count == 1:
+            return _raw_media_response("```json\n{\"kind\":\"image\",\"description\":\"")
+        if model == "glm-4.6v-flash" and call_count == 2:
+            return _raw_media_response(
+                json.dumps({"kind": "image", "description": "海边落日"}, ensure_ascii=False)
+            )
+        raise AssertionError(f"unexpected fallback provider call: {model}")
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert text == "[图片：海边落日]"
+    assert used_models == ["glm-4.6v-flash", "glm-4.6v-flash"]
+    warning_lines = "\n".join(
+        str(call.args[1]) if len(call.args) > 1 else ""
+        for call in mock_context.logger.warning.call_args_list
+    )
+    assert '"step": "media.analyze.provider_retry"' in warning_lines
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_text_logs_raw_response_metadata(mock_context):
+    runtime = _make_media_runtime(vision_provider="glm-4v")
+    event = {
+        "message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]
+    }
+    raw_content = json.dumps({"kind": "image", "description": "海边落日"}, ensure_ascii=False)
+
+    async def _fake_chat_raw(**kwargs):
+        return (
+            {
+                "choices": [
+                    {
+                        "message": {"content": raw_content},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+            "/chat/completions",
+        )
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert text == "[图片：海边落日]"
+    log_lines = "\n".join(
+        str(call.args[1]) if len(call.args) > 1 else ""
+        for call in mock_context.logger.info.call_args_list
+    )
+    assert '"step": "media.analyze.detail.ok"' in log_lines
+    assert '"used_path": "/chat/completions"' in log_lines
+    assert '"finish_reason": "stop"' in log_lines
+    assert f'"raw_chars": "{len(raw_content)}"' in log_lines
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_text_falls_back_after_semantic_retry_exhausted(mock_context):
+    runtime = _make_media_runtime()
+    vision = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
+    vision["default"] = "glm-4.6v-flash"
+    vision["fallbacks"] = ["glm-4v-flash"]
+    vision["providers"] = {
+        "glm-4.6v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "vision-key",
+            "model": "glm-4.6v-flash",
+            "endpoint_path": "/chat/completions",
+        },
+        "glm-4v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "vision-key",
+            "model": "glm-4v-flash",
+            "endpoint_path": "/chat/completions",
+        },
+    }
+    event = {
+        "message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]
+    }
+    used_models: list[str] = []
+
+    async def _fake_chat_raw(*, model, **kwargs):
+        used_models.append(model)
+        if model == "glm-4.6v-flash":
+            return _raw_media_response("```json\n{\"kind\":\"image\",\"description\":\"")
+        return _raw_media_response(json.dumps({"kind": "image", "description": "窗边猫猫"}, ensure_ascii=False))
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert text == "[图片：窗边猫猫]"
+    assert used_models == ["glm-4.6v-flash", "glm-4.6v-flash", "glm-4v-flash"]
+    warning_lines = "\n".join(
+        str(call.args[1]) if len(call.args) > 1 else ""
+        for call in mock_context.logger.warning.call_args_list
+    )
+    assert '"step": "media.analyze.provider_retry"' in warning_lines
+    assert '"step": "media.analyze.provider_fallback"' in warning_lines
+    assert '"to_provider": "glm-4v-flash"' in warning_lines
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_text_falls_back_immediately_on_request_timeout(mock_context):
+    runtime = _make_media_runtime()
+    vision = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]
+    vision["default"] = "glm-4.6v-flash"
+    vision["fallbacks"] = ["glm-4v-flash"]
+    vision["providers"] = {
+        "glm-4.6v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "vision-key",
+            "model": "glm-4.6v-flash",
+            "endpoint_path": "/chat/completions",
+        },
+        "glm-4v-flash": {
+            "api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "vision-key",
+            "model": "glm-4v-flash",
+            "endpoint_path": "/chat/completions",
+        },
+    }
+    event = {
+        "message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]
+    }
+    used_models: list[str] = []
+
+    async def _fake_chat_raw(*, model, **kwargs):
+        used_models.append(model)
+        if model == "glm-4.6v-flash":
+            raise asyncio.TimeoutError()
+        return _raw_media_response(json.dumps({"kind": "image", "description": "草地小狗"}, ensure_ascii=False))
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert text == "[图片：草地小狗]"
+    assert used_models == ["glm-4.6v-flash", "glm-4v-flash"]
     warning_lines = "\n".join(
         str(call.args[1]) if len(call.args) > 1 else ""
         for call in mock_context.logger.warning.call_args_list
@@ -539,26 +755,28 @@ async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(
         ]
     }
 
-    async def _fake_chat_completions(*, messages, **kwargs):
+    async def _fake_chat_raw(*, messages, **kwargs):
         content = messages[1]["content"]
         if isinstance(content, list):
-            return json.dumps(
-                {
-                    "kind": "emoji",
-                    "detailed_description": "一只猫皱着脸，配字是苦鲁西",
-                    "visible_text": "苦鲁西",
-                    "emotion_tags": ["委屈", "难受"],
-                },
-                ensure_ascii=False,
+            return _raw_media_response(
+                json.dumps(
+                    {
+                        "kind": "emoji",
+                        "detailed_description": "一只猫皱着脸，配字是苦鲁西",
+                        "visible_text": "苦鲁西",
+                        "emotion_tags": ["委屈", "难受"],
+                    },
+                    ensure_ascii=False,
+                )
             )
-        return json.dumps({"description": "动画表情", "emotion_tags": []}, ensure_ascii=False)
+        return _raw_media_response(json.dumps({"description": "动画表情", "emotion_tags": []}, ensure_ascii=False))
 
     with patch(
         "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
         new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
     ), patch(
-        "plugins.xiaoqing_chat.media.event_media.chat_completions",
-        new=AsyncMock(side_effect=_fake_chat_completions),
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
@@ -566,7 +784,7 @@ async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(
 
 
 @pytest.mark.asyncio
-async def test_render_event_media_text_logs_summary_fallback_when_detail_empty(mock_context):
+async def test_render_event_media_text_retries_and_then_falls_back_when_detail_empty(mock_context):
     runtime = _make_media_runtime(vision_provider="glm-4v")
     event = {
         "message": [
@@ -581,28 +799,62 @@ async def test_render_event_media_text_logs_summary_fallback_when_detail_empty(m
         ]
     }
 
-    async def _fake_chat_completions(*, messages, **kwargs):
+    async def _fake_chat_raw(*, messages, **kwargs):
         content = messages[1]["content"]
         if isinstance(content, list):
-            return json.dumps({"kind": "emoji", "description": "", "emotion_tags": []}, ensure_ascii=False)
-        return json.dumps({"description": "", "emotion_tags": []}, ensure_ascii=False)
+            return _raw_media_response(json.dumps({"kind": "emoji", "description": "", "emotion_tags": []}, ensure_ascii=False))
+        return _raw_media_response(json.dumps({"description": "", "emotion_tags": []}, ensure_ascii=False))
 
     with patch(
         "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
         new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
     ), patch(
-        "plugins.xiaoqing_chat.media.event_media.chat_completions",
-        new=AsyncMock(side_effect=_fake_chat_completions),
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
     assert text == "[表情包：动画表情]"
     log_lines = "\n".join(
         str(call.args[1]) if len(call.args) > 1 else ""
-        for call in mock_context.logger.info.call_args_list
+        for call in [*mock_context.logger.info.call_args_list, *mock_context.logger.warning.call_args_list]
     )
-    assert '"step": "media.analyze.ok"' in log_lines
-    assert '"used_summary_fallback": "True"' in log_lines
+    assert '"step": "media.analyze.provider_retry"' in log_lines
+    assert '"step": "media.analyze.fail"' in log_lines
+    assert "semantic_validation_failed:summary_fallback" in log_lines
+    assert '"step": "media.render.fallback"' in log_lines
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_text_does_not_leak_download_query_into_fallback_label(mock_context):
+    runtime = _make_media_runtime(vision_provider="glm-4v")
+    event = {
+        "message": [
+            {
+                "type": "image",
+                "data": {
+                    "url": "https://example.com/download?appid=1407&fileid=EhR8SaLBMCs4n",
+                },
+            }
+        ]
+    }
+
+    async def _fake_chat_raw(*, messages, **kwargs):
+        content = messages[1]["content"]
+        if isinstance(content, list):
+            return _raw_media_response(json.dumps({"kind": "image", "description": "", "emotion_tags": []}, ensure_ascii=False))
+        return _raw_media_response(json.dumps({"description": "", "emotion_tags": []}, ensure_ascii=False))
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert text == "[图片：一张图片]"
 
 
 @pytest.mark.asyncio
@@ -701,20 +953,22 @@ async def test_render_event_media_text_transcodes_octet_stream_sticker_for_visio
     captured_urls: list[str] = []
     captured_prompt = ""
 
-    async def _fake_chat_completions(*, messages, **kwargs):
+    async def _fake_chat_raw(*, messages, **kwargs):
         nonlocal captured_prompt
         content = messages[1]["content"]
         captured_prompt = content[0]["text"]
         image_url = content[1]["image_url"]["url"]
         captured_urls.append(image_url)
-        return '{"kind":"emoji","description":"一只猫皱着脸，配字是苦鲁西","emotion_tags":["委屈","难受"]}'
+        return _raw_media_response(
+            '{"kind":"emoji","description":"一只猫皱着脸，配字是苦鲁西","emotion_tags":["委屈","难受"]}'
+        )
 
     with patch(
         "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
         new=AsyncMock(return_value=(_animated_gif_bytes(), "application/octet-stream")),
     ), patch(
-        "plugins.xiaoqing_chat.media.event_media.chat_completions",
-        new=AsyncMock(side_effect=_fake_chat_completions),
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
@@ -1129,6 +1383,35 @@ async def test_load_emoji_library_schedules_background_repair_without_blocking(m
     assert saved["entries"][media_hash]["marker"] == "[表情包：json，kind]"
 
 
+@pytest.mark.asyncio
+async def test_load_emoji_library_clears_stale_index_when_library_empty(mock_context):
+    library_dir = mock_context.plugin_dir / "emoji_library_empty"
+    library_dir.mkdir(parents=True, exist_ok=True)
+    runtime = _make_media_runtime(emoji_library_dir=str(library_dir))
+    index_path = library_dir / "index.json"
+    index_path.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "stale-hash": {
+                        "file_path": "emoji_library_empty/missing.png",
+                        "description": "旧条目",
+                        "marker": "[表情包：旧条目]",
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    entries = await load_emoji_library(mock_context, runtime, repair_invalid=False)
+    persisted = json.loads(index_path.read_text(encoding="utf-8"))
+
+    assert entries == []
+    assert persisted["entries"] == {}
+
+
 def test_collect_emoji_candidate_skips_structured_garbage(mock_context):
     runtime = _make_media_runtime()
     source_path = _write_png(mock_context.data_dir / "bad_emoji.png")
@@ -1150,6 +1433,53 @@ def test_collect_emoji_candidate_skips_structured_garbage(mock_context):
 
     assert collected is None
     assert not (mock_context.plugin_dir / "figures" / "library" / f"{rendered.media_hash}.png").exists()
+
+
+def test_collect_emoji_candidate_rehomes_outside_library_target_path(mock_context):
+    library_dir = mock_context.plugin_dir / "emoji_library_safe"
+    library_dir.mkdir(parents=True, exist_ok=True)
+    runtime = _make_media_runtime(emoji_library_dir=str(library_dir))
+    source_path = _write_png(mock_context.data_dir / "emoji_source" / "source.png")
+    outside_path = mock_context.plugin_dir.parent / "outside.png"
+    index_path = library_dir / "index.json"
+    index_path.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "hash-safe": {
+                        "file_path": "../outside.png",
+                        "description": "旧无语猫猫",
+                        "emotion_tags": ["无语"],
+                        "usage_count": 2,
+                        "last_used_ts": 1.0,
+                        "marker": "[表情包：无语]",
+                        "status": "active",
+                        "source": "auto",
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    rendered = RenderedMedia(
+        media_hash="hash-safe",
+        kind="emoji",
+        description="猫猫无语摊手",
+        emotion_tags=("无语",),
+        marker="[表情包：无语]",
+        cached_path=source_path,
+    )
+
+    collected = collect_emoji_candidate(mock_context, runtime, rendered, source_path=source_path)
+    persisted = json.loads(index_path.read_text(encoding="utf-8"))
+    stored_rel = persisted["entries"]["hash-safe"]["file_path"]
+    stored_path = (mock_context.plugin_dir / stored_rel).resolve()
+
+    assert collected is not None
+    assert stored_path.exists()
+    assert stored_path.parent == library_dir.resolve()
+    assert not outside_path.exists()
 
 
 def test_collect_emoji_candidate_prunes_old_auto_entries(mock_context):
@@ -1273,17 +1603,18 @@ def test_score_interest_treats_media_markers_as_meaningful():
     assert _score_interest("[QQ表情：微笑]") == "neutral"
 
 
-def test_resolve_media_llm_secrets_keeps_blank_key_for_direct_vision_config(mock_context):
-    runtime = _make_media_runtime(
-        vision_api_base="https://open.bigmodel.cn/api/paas/v4",
-        vision_api_key="",
-        vision_model="glm-4v",
-        vision_endpoint_path="/chat/completions",
-    )
+def test_resolve_media_llm_secrets_uses_default_vision_provider_from_secrets(mock_context):
+    runtime = _make_media_runtime()
+    mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]["default"] = "glm-4v"
 
     secrets = _resolve_media_llm_secrets(mock_context, runtime)
 
     assert secrets["api_base"] == "https://open.bigmodel.cn/api/paas/v4"
+    assert secrets["api_key"] == "vision-key"
+    assert secrets["model"] == "glm-4v"
+    assert secrets["endpoint_path"] == "/chat/completions"
+    assert secrets["_vision_enabled"] is True
+    assert secrets["_provider_scope"] == "vision_default"
 
 
 @pytest.mark.asyncio
@@ -1439,8 +1770,13 @@ async def test_plan_emoji_reply_can_choose_emoji_only_mode(mock_context):
             new=AsyncMock(return_value=[entry]),
         ) as mock_load,
         patch(
-            "plugins.xiaoqing_chat.media.emoji_reply.chat_completions",
-            new=AsyncMock(return_value='{"mode":"emoji_only","tag":"无语","reason":"只发图更自然"}'),
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
+            new=AsyncMock(
+                return_value=(
+                    '{"mode":"emoji_only","tag":"无语","reason":"只发图更自然"}',
+                    "/v1/chat/completions",
+                )
+            ),
         ),
     ):
         plan = await plan_emoji_reply(
@@ -1457,6 +1793,55 @@ async def test_plan_emoji_reply_can_choose_emoji_only_mode(mock_context):
     assert plan.selected_tag == "无语"
     assert mock_load.await_args.kwargs["repair_invalid"] is False
     assert mock_load.await_args.kwargs["schedule_background_repair"] is True
+
+
+@pytest.mark.asyncio
+async def test_plan_image_reply_uses_selector_endpoint_fallback(mock_context):
+    runtime = _make_media_runtime(image_cooldown_turns=0)
+    image_path = _write_png(mock_context.data_dir / "history" / "fallback_sunset.png")
+    history = [
+        StoredMessage(
+            role="assistant",
+            name="小青",
+            parts=(
+                {
+                    "kind": "image",
+                    "file_path": str(image_path),
+                    "media_hash": "hash-fallback-sunset",
+                    "media_key": "media:hash-fallback-sunset",
+                    "marker": "[图片：海边落日]",
+                    "description": "海边落日",
+                },
+            ),
+            ts=1.0,
+        )
+    ]
+
+    with (
+        patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
+        patch(
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
+            new=AsyncMock(
+                return_value=(
+                    '{"mode":"text_with_image","candidate":"1","reason":"补图更自然"}',
+                    "/chat/completions",
+                )
+            ),
+        ) as mock_selector,
+    ):
+        plan = await plan_image_reply(
+            context=mock_context,
+            runtime=runtime,
+            history=history,
+            user_text="这张不错",
+            reply_text="给你看张图",
+            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
+        )
+
+    assert plan is not None
+    assert plan.mode == "text_with_image"
+    assert plan.entry.file_path == str(image_path)
+    mock_selector.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1484,8 +1869,13 @@ async def test_plan_image_reply_can_choose_text_with_image(mock_context):
     with (
         patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
         patch(
-            "plugins.xiaoqing_chat.media.image_reply.chat_completions",
-            new=AsyncMock(return_value='{"mode":"text_with_image","candidate":"1","reason":"补一张图更有后劲"}'),
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
+            new=AsyncMock(
+                return_value=(
+                    '{"mode":"text_with_image","candidate":"1","reason":"补一张图更有后劲"}',
+                    "/v1/chat/completions",
+                )
+            ),
         ),
     ):
         plan = await plan_image_reply(
@@ -1515,8 +1905,13 @@ async def test_plan_image_reply_uses_configured_library_when_history_empty(mock_
     with (
         patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
         patch(
-            "plugins.xiaoqing_chat.media.image_reply.chat_completions",
-            new=AsyncMock(return_value='{"mode":"text_with_image","candidate":"1","reason":"这张图更适合补语气"}'),
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
+            new=AsyncMock(
+                return_value=(
+                    '{"mode":"text_with_image","candidate":"1","reason":"这张图更适合补语气"}',
+                    "/v1/chat/completions",
+                )
+            ),
         ),
     ):
         plan = await plan_image_reply(
@@ -1558,7 +1953,7 @@ async def test_plan_image_reply_skips_user_originated_images(mock_context):
     with (
         patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
         patch(
-            "plugins.xiaoqing_chat.media.image_reply.chat_completions",
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
             new=AsyncMock(side_effect=AssertionError("selector should not run without assistant-owned candidates")),
         ),
     ):
@@ -1674,7 +2069,7 @@ async def test_plan_image_reply_skips_during_cooldown(mock_context):
     with (
         patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
         patch(
-            "plugins.xiaoqing_chat.media.image_reply.chat_completions",
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
             new=AsyncMock(side_effect=AssertionError("selector should not run during cooldown")),
         ),
     ):
@@ -1719,6 +2114,71 @@ def test_media_registry_dedup_keeps_latest_better_description(tmp_path):
     assert first[0]["media_key"] == upgraded[0]["media_key"]
     assert upgraded[0]["description"] == "猫猫无语摊手"
     assert upgraded[0]["marker"] == "[表情包：猫猫无语摊手]"
+
+
+def test_media_registry_defers_disk_write_but_keeps_current_process_resolution(tmp_path):
+    from plugins.xiaoqing_chat.media_registry import MediaRegistryStore
+
+    store = MediaRegistryStore()
+    store.bind(tmp_path)
+    index_path = tmp_path / "media" / "index.json"
+
+    store.upsert_media_items(
+        [
+            {
+                "kind": "emoji",
+                "media_hash": "same-hash",
+                "description": "猫猫无语摊手",
+                "emotion_tags": ["无语", "摊手"],
+                "marker": "[表情包：猫猫无语摊手]",
+            }
+        ]
+    )
+
+    rebuilt = resolve_message_content(
+        "[[xc_media_1]]",
+        [
+            {
+                "kind": "emoji",
+                "media_hash": "same-hash",
+                "marker": "[表情包：一张表情包]",
+            }
+        ],
+        store=store,
+    )
+
+    assert store.is_dirty() is True
+    assert index_path.exists() is False
+    assert "猫猫无语摊手" in rebuilt
+    assert "一张表情包" not in rebuilt
+
+    store.flush()
+
+    saved = json.loads(index_path.read_text(encoding="utf-8"))
+    assert saved["entries"]["media:same-hash"]["description"] == "猫猫无语摊手"
+    assert store.is_dirty() is False
+
+
+def test_media_registry_flush_keeps_dirty_when_save_fails(tmp_path):
+    from plugins.xiaoqing_chat.media_registry import MediaRegistryStore
+
+    store = MediaRegistryStore()
+    store.bind(tmp_path)
+    store.upsert_media_items(
+        [
+            {
+                "kind": "image",
+                "media_hash": "hash-fail",
+                "description": "测试图片",
+                "marker": "[图片：测试图片]",
+            }
+        ]
+    )
+
+    with patch.object(store, "_save_json", return_value=False):
+        store.flush()
+
+    assert store.is_dirty() is True
 
 
 def test_media_registry_compacts_and_rehydrates_message_content() -> None:
@@ -2049,8 +2509,13 @@ async def test_plan_qq_face_reply_can_choose_text_with_face(mock_context):
             ),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.qq_face_reply.chat_completions",
-            new=AsyncMock(return_value='{"mode":"text_with_face","face":"狗头","reason":"补个 face 更自然"}'),
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
+            new=AsyncMock(
+                return_value=(
+                    '{"mode":"text_with_face","face":"狗头","reason":"补个 face 更自然"}',
+                    "/v1/chat/completions",
+                )
+            ),
         ),
     ):
         plan = await plan_qq_face_reply(
@@ -2090,8 +2555,8 @@ async def test_plan_qq_face_reply_bypasses_probability_for_inbound_marker(mock_c
             ),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.qq_face_reply.chat_completions",
-            new=AsyncMock(return_value=""),
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
+            new=AsyncMock(return_value=("", "/v1/chat/completions")),
         ),
     ):
         plan = await plan_qq_face_reply(
@@ -2135,6 +2600,45 @@ async def test_plan_emoji_reply_does_not_force_on_plain_image_marker(mock_contex
 
 
 @pytest.mark.asyncio
+async def test_plan_emoji_reply_falls_back_on_inbound_marker_when_selector_empty(mock_context):
+    runtime = _make_media_runtime(emoji_reply_probability=0.0)
+    entry = EmojiLibraryEntry(
+        media_hash="hash-fallback-emoji",
+        file_path="figures/library/fallback.png",
+        description="猫猫无语摊手",
+        emotion_tags=("无语",),
+        usage_count=0,
+        last_used_ts=0.0,
+        marker="[表情包：无语]",
+    )
+
+    with (
+        patch("plugins.xiaoqing_chat.media.emoji_reply.random.random", return_value=0.99),
+        patch(
+            "plugins.xiaoqing_chat.media.emoji_reply.load_emoji_library",
+            new=AsyncMock(return_value=[entry]),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
+            new=AsyncMock(return_value=("", "/v1/chat/completions")),
+        ),
+    ):
+        plan = await plan_emoji_reply(
+            context=mock_context,
+            runtime=runtime,
+            history=[],
+            user_text="[表情包：无语]",
+            reply_text="笑死",
+            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
+            chat_id="u1",
+        )
+
+    assert plan is not None
+    assert plan.mode == "text_with_emoji"
+    assert plan.entry.media_hash == "hash-fallback-emoji"
+
+
+@pytest.mark.asyncio
 async def test_plan_emoji_reply_skips_when_validator_rejects_text_with_emoji(mock_context):
     runtime = _make_media_runtime()
     entry = EmojiLibraryEntry(
@@ -2154,11 +2658,14 @@ async def test_plan_emoji_reply_skips_when_validator_rejects_text_with_emoji(moc
             new=AsyncMock(return_value=[entry]),
         ),
         patch(
-            "plugins.xiaoqing_chat.media.emoji_reply.chat_completions",
+            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
             new=AsyncMock(
                 side_effect=[
-                    '{"mode":"text_with_emoji","candidate":"1","reason":"补一张更有情绪"}',
-                    '{"allow":false,"reason":"只是重复上条媒体语义"}',
+                    (
+                        '{"mode":"text_with_emoji","candidate":"1","reason":"补一张更有情绪"}',
+                        "/v1/chat/completions",
+                    ),
+                    ('{"allow":false,"reason":"只是重复上条媒体语义"}', "/v1/chat/completions"),
                 ]
             ),
         ),

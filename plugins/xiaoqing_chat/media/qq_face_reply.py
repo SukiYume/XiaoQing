@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import Sequence
 
-from ..llm.llm_client import chat_completions
 from ..logging_utils import _log_step
 from ..memory.memory import StoredMessage
 from .qq_face_catalog import QQFaceEntry, load_qq_face_catalog
@@ -283,7 +282,6 @@ async def plan_qq_face_reply(
         secrets=secrets,
         system_prompt="你是 QQ face 回复模态选择器，只输出指定 JSON。mode 只能是 none、face_only、text_with_face。",
         user_prompt=prompt,
-        chat_func=chat_completions,
     )
     mode = "none"
     entry: QQFaceEntry | None = None
