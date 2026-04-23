@@ -61,6 +61,7 @@ Thumbs.db
 .agent
 .claude
 .codex
+.worktrees/
 docs/plans/
 docs/superpowers/
 
