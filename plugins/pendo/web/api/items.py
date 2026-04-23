@@ -1,5 +1,4 @@
 """Unified items CRUD API."""
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,7 +7,9 @@ from pydantic import BaseModel
 from ...services.db import Database
 from ...models.item import ItemType
 from ...utils.settings_utils import resolve_default_category
+from ...utils.time_utils import now_in_timezone
 from ...utils.validators import (
+    merge_milestone_metadata,
     normalize_diary_fields,
     normalize_event_fields,
     normalize_ledger_fields,
@@ -376,7 +377,7 @@ def create_item(
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid type: {body.type}")
 
-    now = datetime.now().isoformat()
+    now = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
     item_data = {
         "type": body.type,
         "title": body.title,
@@ -463,6 +464,11 @@ def update_item(
     if item_type == "event":
         try:
             merged = item.to_dict()
+            if "milestones" in updates:
+                updates["milestones"] = merge_milestone_metadata(
+                    getattr(item, "milestones", None) or [],
+                    updates.get("milestones"),
+                )
             merged.update(updates)
             normalized = normalize_event_fields(merged, partial=False)
             for field in EVENT_MUTABLE_FIELDS:
@@ -508,7 +514,7 @@ def update_item(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
-    updates["updated_at"] = datetime.now().isoformat()
+    updates["updated_at"] = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
     success = db.update_item(item_id, updates, owner_id=owner_id)
     if not success:
         raise HTTPException(status_code=500, detail="Update failed")

@@ -99,6 +99,10 @@ async def send_daily_briefings(context, db: Database) -> list[dict[str, Any]]:
         user_ids = await _get_active_user_ids(db)
         settings_bundle_map = await get_user_settings_bundle_map(user_ids, db)
         ai_parser = AIParser(context)
+        try:
+            setattr(ai_parser, "db", db)
+        except Exception:
+            pass
 
         for user_id in user_ids:
             try:

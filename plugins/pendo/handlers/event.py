@@ -16,6 +16,7 @@ from ..models.item import EventItem, ItemType
 from ..core.types import PendoContext, CommandMessage
 from ..core.router import TOP_LEVEL_REDIRECTS
 from ..utils.settings_utils import resolve_default_category
+from ..utils.validators import merge_milestone_metadata
 from .event_support import (
     apply_offsets,
     calculate_remind_offsets,
@@ -75,7 +76,7 @@ class EventHandler(DbOpsMixin):
     """日程处理器"""
 
     _TITLE_SCAFFOLD_MARKERS = ("[编辑现有日程]", "原标题", "原时间", "用户修改指令")
-    _TITLE_RENAME_RE = re.compile(r"(改名|重命名|标题|名称|叫做|改成|改为)")
+    _TITLE_RENAME_RE = re.compile(r"(改名|重命名|标题|名称|叫做|名字)")
     _TITLE_SCHEDULE_RE = re.compile(
         r"(提醒|提前|分钟|小时|天|周|今天|明天|后天|上午|中午|下午|晚上|\d{1,2}[点时:：])"
     )
@@ -472,6 +473,9 @@ class EventHandler(DbOpsMixin):
             for m in milestones:
                 t_str = ItemFormatter.format_datetime(m.get("time", ""), "%m月%d日 %H:%M")
                 lines.append(f"  📌 {m.get('name', ''):<10}  {t_str}")
+                milestone_notes = str(m.get("notes", "") or "").strip()
+                if milestone_notes:
+                    lines.append(f"     📝 {milestone_notes}")
         else:
             time_str = ItemFormatter.format_time_range(event.start_time, event.end_time)
             event_type = (
@@ -485,7 +489,8 @@ class EventHandler(DbOpsMixin):
         if event.location:
             lines.append(f"📍 {event.location}")
         if notes:
-            lines.append(f"📝 {notes}")
+            label = "📝 全局备注" if milestones and len(milestones) >= 2 else "📝"
+            lines.append(f"{label}: {notes}" if label.endswith("全局备注") else f"{label} {notes}")
         if event.tags:
             lines.append(f"🏷️ {', '.join(event.tags)}")
 
@@ -882,6 +887,10 @@ class EventHandler(DbOpsMixin):
         if explicit_milestones:
             normalized_milestones = self._normalize_milestones(explicit_milestones)
             if normalized_milestones:
+                normalized_milestones = cast(
+                    list[dict[str, Any]],
+                    merge_milestone_metadata(current_milestones, normalized_milestones),
+                )
                 normalized["milestones"] = normalized_milestones
                 normalized["start_time"] = normalized_milestones[0]["time"]
                 normalized["end_time"] = normalized_milestones[-1]["time"]
@@ -904,9 +913,9 @@ class EventHandler(DbOpsMixin):
         return normalized
 
     @staticmethod
-    def _normalize_milestones(milestones: list[dict[str, Any]]) -> list[dict[str, str]]:
+    def _normalize_milestones(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Sort milestone payloads and normalize times to ISO strings."""
-        normalized: list[dict[str, str]] = []
+        normalized: list[dict[str, Any]] = []
         for milestone in milestones:
             try:
                 name = str(milestone.get("name", "")).strip()
@@ -915,18 +924,22 @@ class EventHandler(DbOpsMixin):
                 continue
             if not name:
                 continue
-            normalized.append({"name": name, "time": time_str})
+            normalized_row: dict[str, Any] = {"name": name, "time": time_str}
+            notes = str(milestone.get("notes", "") or "").strip()
+            if notes:
+                normalized_row["notes"] = notes
+            normalized.append(normalized_row)
         normalized.sort(key=lambda item: item["time"])
         return normalized
 
     def _shift_milestones(
         self, milestones: list[dict[str, Any]], old_start_time: str, new_start_time: str
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """Shift all milestone times by the same delta as the event start."""
         old_start = datetime.fromisoformat(old_start_time)
         new_start = datetime.fromisoformat(new_start_time)
         delta = new_start - old_start
-        shifted: list[dict[str, str]] = []
+        shifted: list[dict[str, Any]] = []
         for milestone in milestones:
             try:
                 base_time = datetime.fromisoformat(str(milestone.get("time", "")))
@@ -937,7 +950,10 @@ class EventHandler(DbOpsMixin):
                 continue
             shifted.append({"name": name, "time": (base_time + delta).isoformat()})
         shifted.sort(key=lambda item: item["time"])
-        return shifted
+        return cast(
+            list[dict[str, Any]],
+            merge_milestone_metadata(milestones, shifted),
+        )
 
     def _compute_new_duration(
         self, updates: dict[str, Any], first_event: EventItem, new_first_start: datetime | None,
@@ -1219,7 +1235,10 @@ class EventHandler(DbOpsMixin):
 
         try:
             remind_times = await run_sync(
-                self.ai_parser.build_remind_times_from_description, reminder_desc, base_time
+                self.ai_parser.build_remind_times_from_description,
+                reminder_desc,
+                base_time,
+                user_id=user_id,
             )
         except Exception as e:
             logger.exception("解析提醒描述失败: %s", e)
@@ -1242,7 +1261,10 @@ class EventHandler(DbOpsMixin):
                     continue
                 try:
                     times = await run_sync(
-                        self.ai_parser.build_remind_times_from_description, offsets_desc, m_time
+                        self.ai_parser.build_remind_times_from_description,
+                        offsets_desc,
+                        m_time,
+                        user_id=user_id,
                     )
                     all_times.update(times)
                 except Exception as e:
@@ -1312,6 +1334,9 @@ class EventHandler(DbOpsMixin):
                     for m, m_reminds in group_reminders_by_milestone(remind_times, milestones):
                         m_str = ItemFormatter.format_datetime(m["time"], "%m-%d")
                         message += f"  📌 {m_str} {m.get('name', '')}\n"
+                        milestone_notes = str(m.get("notes", "") or "").strip()
+                        if milestone_notes:
+                            message += f"    📝 {milestone_notes}\n"
                         for t in m_reminds:
                             t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
                             status = get_remind_status(log_map.get(t))
@@ -1470,11 +1495,19 @@ class EventHandler(DbOpsMixin):
                     continue
             updates[key] = candidate
 
+        heuristic_milestones = self._extract_targeted_milestone_update(changes, current_event)
+        targeted_milestone_notes = self._milestone_notes_were_updated(
+            getattr(current_event, "milestones", None) or [],
+            heuristic_milestones,
+        )
+
         if parsed.get("remind_times"):
             updates["remind_times"] = parsed["remind_times"]
 
-        if parsed.get("notes") is not None and parsed.get("notes") != getattr(
-            current_event, "notes", None
+        if (
+            parsed.get("notes") is not None
+            and parsed.get("notes") != getattr(current_event, "notes", None)
+            and not targeted_milestone_notes
         ):
             updates["notes"] = parsed["notes"]
 
@@ -1482,10 +1515,13 @@ class EventHandler(DbOpsMixin):
             updates["milestones"] = parsed["milestones"]
 
         heuristic_notes = self._extract_notes_update(changes)
-        if heuristic_notes is not None and heuristic_notes != getattr(current_event, "notes", None):
+        if (
+            heuristic_notes is not None
+            and heuristic_notes != getattr(current_event, "notes", None)
+            and not targeted_milestone_notes
+        ):
             updates["notes"] = heuristic_notes
 
-        heuristic_milestones = self._extract_targeted_milestone_update(changes, current_event)
         if heuristic_milestones:
             updates["milestones"] = heuristic_milestones
 
@@ -1545,17 +1581,37 @@ class EventHandler(DbOpsMixin):
         return notes or None
 
     @classmethod
+    def _milestone_notes_were_updated(
+        cls,
+        current_milestones: list[dict[str, Any]],
+        updated_milestones: list[dict[str, Any]] | None,
+    ) -> bool:
+        if not updated_milestones:
+            return False
+
+        for idx, updated in enumerate(updated_milestones):
+            current = current_milestones[idx] if idx < len(current_milestones) else {}
+            current_notes = str(current.get("notes", "") or "").strip()
+            updated_notes = str(updated.get("notes", "") or "").strip()
+            if current_notes != updated_notes:
+                return True
+        return False
+
+    @classmethod
     def _extract_targeted_milestone_update(
         cls, changes: str, current_event: EventItem
-    ) -> list[dict[str, str]] | None:
+    ) -> list[dict[str, Any]] | None:
         milestones = getattr(current_event, "milestones", None) or []
         if not milestones:
             return None
 
+        updated: list[dict[str, Any]] | None = None
+        matched_indexes: list[int] = []
         for idx, milestone in enumerate(milestones):
             name = str(milestone.get("name", "")).strip()
             if not name or name not in changes:
                 continue
+            matched_indexes.append(idx)
             for verb in cls._MILESTONE_VERBS:
                 pattern = rf"(?:把)?{re.escape(name)}(?:时间)?\s*{verb}\s*(?P<dt>[^，,；;。]+)"
                 match = re.search(pattern, changes)
@@ -1569,8 +1625,16 @@ class EventHandler(DbOpsMixin):
                     continue
                 updated = [dict(item) for item in milestones]
                 updated[idx]["time"] = parsed_time
-                return updated
-        return None
+
+        unique_indexes = sorted(set(matched_indexes))
+        if len(unique_indexes) == 1:
+            idx = unique_indexes[0]
+            targeted_notes = cls._extract_notes_update(changes)
+            if targeted_notes is not None:
+                updated = updated or [dict(item) for item in milestones]
+                updated[idx]["notes"] = targeted_notes
+
+        return updated
 
     @classmethod
     def _parse_edit_datetime_fragment(

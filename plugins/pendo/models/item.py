@@ -123,7 +123,7 @@ class EventItem(Item):
     remind_policy_id: Optional[str] = None  # 提醒策略ID
     remind_times: list[str] = field(default_factory=list)  # 提醒时间点列表
     milestones: list[dict[str, Any]] = field(default_factory=list)
-    # 格式: [{"name": "注册截止", "time": "2026-04-06T00:00:00"}, ...]
+    # 格式: [{"name": "注册截止", "time": "2026-04-06T00:00:00", "notes": "仅该节点备注"}, ...]
     notes: str = ""
 
 

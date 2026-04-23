@@ -150,7 +150,9 @@ async def handle_event_info_session(
             effective_offsets = merged.get("remind_offsets") or (parsed.get("remind_offsets") if parsed else None)
             if effective_offsets:
                 merged["remind_times"] = ai_parser.build_remind_times_from_offsets(
-                    merged["start_time"], effective_offsets if isinstance(effective_offsets, list) else []
+                    merged["start_time"],
+                    effective_offsets if isinstance(effective_offsets, list) else [],
+                    user_id=user_id,
                 )
 
     # 强制为event

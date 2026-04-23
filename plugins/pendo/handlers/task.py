@@ -66,6 +66,10 @@ class TaskHandler(DbOpsMixin):
         self.db = db
         # ai_parser和reminder_service保留接口兼容性，但不使用
 
+    def _user_local_now(self, user_id: str) -> datetime:
+        current = now_in_timezone(user_id, self.db)
+        return current.replace(tzinfo=None) if current.tzinfo else current
+
     @handle_command_errors
     async def handle(
         self, user_id: str, args: str, context: PendoContext, group_id: int | None = None
@@ -194,6 +198,7 @@ class TaskHandler(DbOpsMixin):
         # 创建待办数据
         from ..models.item import TaskItem
 
+        local_now = self._user_local_now(user_id)
         task_item = TaskItem(
             owner_id=user_id,
             title=parsed["title"],
@@ -203,8 +208,8 @@ class TaskHandler(DbOpsMixin):
             status=TaskStatus.TODO,
             tags=parsed.get("tags", []),
             context={"group_id": group_id} if group_id else {},
-            created_at=datetime.now().isoformat(),
-            updated_at=datetime.now().isoformat(),
+            created_at=local_now.isoformat(),
+            updated_at=local_now.isoformat(),
         )
 
         # 保存到数据库
@@ -219,7 +224,7 @@ class TaskHandler(DbOpsMixin):
         message += f"📂 分类: {parsed['category']}"
 
         # 如果分类是明天，添加提示
-        now = datetime.now()
+        now = local_now
         if now.hour >= 20 and parsed["category"] == (now + timedelta(days=1)).strftime("%Y-%m-%d"):
             message += " (明天)"
 
@@ -240,7 +245,7 @@ class TaskHandler(DbOpsMixin):
         return {
             "title": meta["text"] or "无标题待办",
             "content": "",
-            "category": meta["category"] or default_task_category(),
+            "category": meta["category"] or default_task_category(self._user_local_now(user_id)),
             "priority": meta["priority"] or 3,
             "tags": meta["tags"],
         }
@@ -327,7 +332,7 @@ class TaskHandler(DbOpsMixin):
 
         # today 快捷方式
         if category.lower() == "today":
-            category = datetime.now().strftime("%Y-%m-%d")
+            category = self._user_local_now(user_id).strftime("%Y-%m-%d")
 
         # 解析参数
         status_filter = None

@@ -39,6 +39,7 @@ def _event_matches_keyword(event: EventItem, keyword: str) -> bool:
     ]
     for milestone in getattr(event, "milestones", None) or []:
         haystacks.append(str(milestone.get("name", "") or ""))
+        haystacks.append(str(milestone.get("notes", "") or ""))
     full_text = "\n".join(haystacks).lower()
     return keyword.lower() in full_text
 

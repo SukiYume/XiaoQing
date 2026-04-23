@@ -26,9 +26,20 @@ class ReminderService:
         self.db = db
         self.default_policies = REMINDER_POLICIES
 
+    def _current_user_time(self, user_id: str | None) -> datetime:
+        return now_in_timezone(user_id, self.db) if user_id else now_in_timezone()
+
+    def _parse_user_time(self, dt_str: str, user_id: str | None) -> datetime:
+        return parse_and_localize(dt_str, user_id, self.db) if user_id else parse_and_localize(dt_str)
+
     def calculate_remind_times(self, item_data, policy_type: str = "default") -> list[str]:
         """根据策略计算提醒时间点"""
         base_time = None
+        owner_id = (
+            getattr(item_data, "owner_id", None)
+            if not isinstance(item_data, dict)
+            else item_data.get("owner_id")
+        )
         start_time = (
             getattr(item_data, "start_time", None)
             if not isinstance(item_data, dict)
@@ -40,9 +51,9 @@ class ReminderService:
             else item_data.get("due_time")
         )
         if start_time:
-            base_time = datetime.fromisoformat(start_time)
+            base_time = self._parse_user_time(start_time, owner_id)
         elif due_time:
-            base_time = datetime.fromisoformat(due_time)
+            base_time = self._parse_user_time(due_time, owner_id)
 
         if not base_time:
             return []
@@ -50,7 +61,11 @@ class ReminderService:
         policy: dict[str, Any] = self.default_policies.get(
             policy_type, self.default_policies["default"]
         )
-        now = datetime.now(base_time.tzinfo) if base_time.tzinfo else datetime.now()
+        now = (
+            self._current_user_time(owner_id)
+            if owner_id
+            else (datetime.now(base_time.tzinfo) if base_time.tzinfo else datetime.now())
+        )
         remind_times = []
 
         reminders = policy.get("reminders", [])
@@ -75,7 +90,6 @@ class ReminderService:
 
     def check_and_send_reminders(self, context=None) -> dict[str, Any]:
         """检查并发送到期的提醒，包括重复未确认的提醒"""
-        current_time = now_in_timezone()
         sent_count = 0
         messages = []
 
@@ -89,6 +103,7 @@ class ReminderService:
                 if not custom_settings.get("reminder_enabled", True):
                     continue
 
+                current_time = self._current_user_time(item.owner_id)
                 remind_times = item.remind_times if hasattr(item, "remind_times") else []
                 if not remind_times:
                     continue
@@ -104,7 +119,7 @@ class ReminderService:
 
                 for remind_time_str in remind_times:
                     try:
-                        remind_time = parse_and_localize(remind_time_str)
+                        remind_time = self._parse_user_time(remind_time_str, item.owner_id)
                         time_diff = (current_time - remind_time).total_seconds()
 
                         if 0 <= time_diff <= PendoConfig.REMINDER_CHECK_WINDOW_SECONDS:
@@ -121,7 +136,7 @@ class ReminderService:
                         logger.warning("处理提醒失败: %s, error: %s", remind_time_str, e)
 
             # 2. 重复发送未确认的提醒
-            repeat_messages = self._check_unconfirmed_repeats(current_time)
+            repeat_messages = self._check_unconfirmed_repeats()
             messages.extend(repeat_messages)
             sent_count += len(repeat_messages)
 
@@ -135,7 +150,7 @@ class ReminderService:
             "message": f"发送了{sent_count}条提醒",
         }
 
-    def _check_unconfirmed_repeats(self, current_time) -> list[dict[str, Any]]:
+    def _check_unconfirmed_repeats(self, current_time: datetime | None = None) -> list[dict[str, Any]]:
         """检查未确认的提醒，按间隔重复发送
 
         每个 (item_id, remind_time) 在 DB 中只有一行，直接读取 repeat_count 和 last_sent_at。
@@ -150,8 +165,13 @@ class ReminderService:
                 item_id = log["item_id"]
                 remind_time_str = log["remind_time"]
                 repeat_count = log["repeat_count"]
-                last_sent_at = parse_and_localize(log["last_sent_at"])
-                seconds_since_last = (current_time - last_sent_at).total_seconds()
+                item = self.db.get_item(item_id)
+                if not item:
+                    continue
+
+                user_now = current_time or self._current_user_time(item.owner_id)
+                last_sent_at = self._parse_user_time(log["last_sent_at"], item.owner_id)
+                seconds_since_last = (user_now - last_sent_at).total_seconds()
 
                 # 已达最大重复次数：超时后自动确认
                 if repeat_count >= max_repeats + 1:
@@ -166,11 +186,7 @@ class ReminderService:
                         <= repeat_interval + PendoConfig.REMINDER_CHECK_WINDOW_SECONDS):
                     continue
 
-                item = self.db.get_item(item_id)
-                if not item:
-                    continue
-
-                if self._should_suppress(item, current_time):
+                if self._should_suppress(item, user_now):
                     continue
 
                 message = self._build_reminder_message(item, remind_time_str, repeat_count=repeat_count)
@@ -189,7 +205,10 @@ class ReminderService:
             return False
         # 若事件本身也在静默时间内（如早晨6点的事件），仍发送
         start_time = getattr(item, "start_time", None)
-        if start_time and self._is_in_quiet_hours(item.owner_id, parse_and_localize(start_time)):
+        if start_time and self._is_in_quiet_hours(
+            item.owner_id,
+            self._parse_user_time(start_time, item.owner_id),
+        ):
             return False
         return True
 
@@ -223,7 +242,7 @@ class ReminderService:
 
     def get_pending_reminders(self, user_id: str, hours: int = 24) -> list[dict[str, Any]]:
         """获取未来N小时内的待发送提醒"""
-        now = datetime.now()
+        now = self._current_user_time(user_id)
         future = now + timedelta(hours=hours)
         pending = []
 
@@ -233,7 +252,7 @@ class ReminderService:
             remind_times = item.remind_times or []
             for remind_time_str in remind_times:
                 try:
-                    remind_time = datetime.fromisoformat(remind_time_str)
+                    remind_time = self._parse_user_time(remind_time_str, user_id)
                     if now <= remind_time <= future:
                         pending.append(
                             {
@@ -347,11 +366,13 @@ class ReminderService:
 
         milestones = getattr(item, "milestones", None) or []
         target_time = getattr(item, "start_time", None)
+        milestone_notes = ""
         if milestones:
             milestone = self._find_closest_milestone_info(milestones, remind_time)
             if milestone:
                 milestone_name = milestone.get("name", "")
                 target_time = milestone.get("time") or target_time
+                milestone_notes = str(milestone.get("notes", "") or "").strip()
                 if milestone_name:
                     lines.append(f"📌 {milestone_name}")
                 if target_time:
@@ -373,7 +394,9 @@ class ReminderService:
             lines.append(f"📍 {item.location}")
 
         notes = getattr(item, "notes", None)
-        if notes:
+        if milestone_notes:
+            lines.append(f"📝 {milestone_notes}")
+        elif notes:
             lines.append(f"📝 {notes}")
 
         if repeat_count is None and getattr(item, "parent_id", None):

@@ -276,7 +276,7 @@ def test_normalize_event_fields_normalizes_milestones_and_deduplicates_reminders
         "notes": "  备注  ",
         "milestones": [
             {"name": "上线", "time": "2026-03-14T10:00"},
-            {"name": "提审", "time": "2026-03-13T18:00"},
+            {"name": "提审", "time": "2026-03-13T18:00", "notes": "  带上最终 PDF  "},
         ],
         "remind_times": [
             "2026-03-13T17:00",
@@ -291,6 +291,7 @@ def test_normalize_event_fields_normalizes_milestones_and_deduplicates_reminders
     assert result["start_time"] == "2026-03-13T18:00:00"
     assert result["end_time"] == "2026-03-14T10:00:00"
     assert result["milestones"][0]["name"] == "提审"
+    assert result["milestones"][0]["notes"] == "带上最终 PDF"
     assert result["remind_times"] == ["2026-03-13T17:00:00", "2026-03-14T09:00:00"]
 
     with pytest.raises(ValueError, match="after start_time"):
@@ -308,6 +309,55 @@ def test_normalize_event_fields_normalizes_milestones_and_deduplicates_reminders
                 {"name": "节点二", "time": "2026-03-13T10:00"},
             ],
         }, partial=False)
+
+
+def test_event_update_route_preserves_existing_milestone_notes_when_payload_omits_them():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_event_milestone_note_preserve_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-event-metadata"
+    items_module = _load_items_module()
+
+    try:
+        db.insert_item(normalize_event_fields({
+            "id": "ev-note",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "学术会议",
+            "category": "会议",
+            "start_time": "2026-04-22T12:43:00",
+            "end_time": "2026-04-26T12:00:00",
+            "milestones": [
+                {"name": "会议开始", "time": "2026-04-22T12:43:00", "notes": "北京南 G823，7车5F 坐"},
+                {"name": "会议结束", "time": "2026-04-26T12:00:00"},
+            ],
+            "remind_times": ["2026-04-21T12:43:00", "2026-04-25T12:00:00"],
+            "notes": "全局备注",
+        }, partial=False))
+
+        body = items_module.ItemUpdate(
+            title="学术会议（更新标题）",
+            milestones=[
+                {"name": "会议开始", "time": "2026-04-22T12:43:00"},
+                {"name": "会议结束", "time": "2026-04-26T12:00:00"},
+            ],
+        )
+
+        result = items_module.update_item(
+            "ev-note",
+            body=body,
+            owner_id=owner_id,
+            db=db,
+        )
+
+        assert result["ok"] is True
+        updated = db.get_item("ev-note", owner_id=owner_id)
+        assert updated is not None
+        assert updated.milestones[0]["notes"] == "北京南 G823，7车5F 坐"
+        assert "notes" not in updated.milestones[1]
+        assert updated.notes == "全局备注"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def test_normalize_task_fields_accepts_priority_five_and_manages_completed_at():
