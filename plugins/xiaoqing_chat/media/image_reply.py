@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from ..llm.llm_client import chat_completions
 from ..logging_utils import _log_step
 from ..media_registry import resolve_registered_media_items
 from ..memory.memory import StoredMessage
@@ -394,7 +393,6 @@ async def plan_image_reply(
         secrets=secrets,
         system_prompt="你是聊天回复模态选择器，只输出指定 JSON。mode 只能是 none、image_only、text_with_image。",
         user_prompt=prompt,
-        chat_func=chat_completions,
     )
 
     mode, selected = _parse_image_choice(output or "", candidates)

@@ -16,13 +16,16 @@ def _join_url(api_base: str, path: str) -> str:
     return f"{base}/{p}" if base else f"/{p}"
 
 
-def extract_response_message(data: dict[str, Any]) -> dict[str, Any]:
+def extract_response_choice(data: dict[str, Any]) -> dict[str, Any]:
     choices = data.get("choices") or []
     if not isinstance(choices, list) or not choices:
         return {}
     choice0 = choices[0] or {}
-    if not isinstance(choice0, dict):
-        return {}
+    return choice0 if isinstance(choice0, dict) else {}
+
+
+def extract_response_message(data: dict[str, Any]) -> dict[str, Any]:
+    choice0 = extract_response_choice(data)
     msg = choice0.get("message")
     if isinstance(msg, dict):
         return msg
@@ -36,6 +39,12 @@ def extract_response_content(data: dict[str, Any]) -> str:
     msg = extract_response_message(data)
     content = msg.get("content")
     return content.strip() if isinstance(content, str) else ""
+
+
+def extract_response_finish_reason(data: dict[str, Any]) -> str:
+    choice0 = extract_response_choice(data)
+    value = choice0.get("finish_reason")
+    return str(value or "").strip()
 
 
 def _is_retryable_status(status: int) -> bool:

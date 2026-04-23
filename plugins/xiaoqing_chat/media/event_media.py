@@ -15,27 +15,14 @@ import aiohttp
 from core.plugin_base import ensure_dir
 
 from ..helper_utils import _iter_message_segments
-from ..llm.llm_client import chat_completions
 from ..media_registry import resolve_registered_media_items
 from ..message_parts import build_text_message_parts, normalize_message_parts
 from .event_media_analysis import (
     _analyze_media_with_llm,
-    _call_media_llm,
-    _explicit_media_llm_requested,
-    _extract_first_text_value,
-    _extract_json_object,
-    _has_media_llm_capability,
-    _legacy_direct_vision_overrides,
     _media_llm_max_tokens,
-    _merge_visible_text,
-    _normalize_provider_list,
-    _parse_detail_analysis_output,
     _prepare_media_for_llm,
-    _refine_emoji_analysis_with_llm,
-    _resolve_media_llm_secret_candidates,
     _resolve_media_llm_secrets,
     _should_refresh_cached_render,
-    _vision_plugin_secrets,
 )
 from .event_media_common import (
     RenderedMedia,
@@ -308,6 +295,23 @@ async def _recover_mface_media_via_onebot(
     return None
 
 
+async def _recover_media_bytes_if_needed(
+    segment: dict[str, Any],
+    *,
+    event: dict[str, Any] | None,
+    context,
+    max_bytes: int,
+) -> tuple[bytes, str, str] | None:
+    if not _segment_prefers_emoji(segment):
+        return None
+    return await _recover_mface_media_via_onebot(
+        segment,
+        event=event,
+        context=context,
+        max_bytes=max_bytes,
+    )
+
+
 def _resolve_media_source_path(value: str) -> Path | None:
     if not value:
         return None
@@ -425,21 +429,12 @@ async def _resolve_media_bytes(
     event: dict[str, Any] | None = None,
 ) -> tuple[bytes, str, str]:
     sources = _resolve_media_sources(segment)
-    if not sources:
-        if _segment_prefers_emoji(segment):
-            recovered = await _recover_mface_media_via_onebot(
-                segment,
-                event=event,
-                context=context,
-                max_bytes=max_bytes,
-            )
-            if recovered is not None:
-                return recovered
-        raise FileNotFoundError("segment has no supported media source")
-
     summary_hint = _segment_summary_hint(segment)
     suffix_hint = _segment_suffix_hint(segment)
     last_error: Exception | None = None
+
+    if not sources:
+        last_error = FileNotFoundError("segment has no supported media source")
 
     for source_key, source_value in sources:
         source_name = _safe_source_name(summary_hint or source_value)
@@ -475,16 +470,15 @@ async def _resolve_media_bytes(
             last_error = exc
             continue
 
+    recovered = await _recover_media_bytes_if_needed(
+        segment,
+        event=event,
+        context=context,
+        max_bytes=max_bytes,
+    )
+    if recovered is not None:
+        return recovered
     if last_error is not None:
-        if _segment_prefers_emoji(segment):
-            recovered = await _recover_mface_media_via_onebot(
-                segment,
-                event=event,
-                context=context,
-                max_bytes=max_bytes,
-            )
-            if recovered is not None:
-                return recovered
         raise last_error
     raise FileNotFoundError("segment has no supported media source")
 

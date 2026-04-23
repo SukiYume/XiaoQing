@@ -4,7 +4,7 @@ import random
 from typing import Any
 
 from ..config.config import RewriteConfig
-from .llm_client import chat_completions
+from .llm_client import chat_completions_with_fallback_paths
 from .prompt_builder import ChatMessage
 
 _REWRITE_SYSTEM = (
@@ -58,7 +58,7 @@ async def maybe_rewrite_reply(
 
     msgs = build_rewrite_messages(style=style, user_text=user_text, reply_text=reply_text)
     payload_msgs = [{"role": m.role, "content": m.content} for m in msgs]
-    out = await chat_completions(
+    out, _used_path = await chat_completions_with_fallback_paths(
         session=http_session,
         api_base=api_base,
         api_key=api_key,

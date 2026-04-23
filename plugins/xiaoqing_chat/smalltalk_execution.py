@@ -102,10 +102,31 @@ async def generate_smalltalk_turn_impl(
         generated.reply_parts = out_parts
         return out or ""
 
+    def _ensure_speculative_memory_task(planner_question: str = "") -> Any:
+        if generated.speculative_memory_task is not None:
+            return generated.speculative_memory_task
+        speculative_history = recent_history[-max_context_size:] if max_context_size > 0 else []
+        generated.speculative_memory_task = asyncio.create_task(
+            build_memory_block(
+                context=context,
+                runtime=runtime,
+                state=state,
+                secrets=secrets,
+                data_dir=data_dir,
+                chat_id=chat_id,
+                history=speculative_history,
+                current_text=prepared.text,
+                planner_question=planner_question,
+                bot_name=bot_name,
+            )
+        )
+        return generated.speculative_memory_task
+
     try:
         if prepared.forced:
             generated.reply_source = "forced"
             log_step(context, runtime, chat_id=chat_id, step="smalltalk.forced_direct", fields={})
+            _ensure_speculative_memory_task()
             direct_act = PlannedAction(
                 action="reply",
                 think_level=think_level,
@@ -132,6 +153,7 @@ async def generate_smalltalk_turn_impl(
                 secrets=secrets,
                 state_text=prepared.mood_text,
                 is_brain_chat=prepared.brain_chat_active,
+                prefetched_memory_task=generated.speculative_memory_task,
             )
             if not generated.reply:
                 generated.reply = random.choice(["嗯…", "行", "我在听", "你继续", "有点卡，等下"])
@@ -139,21 +161,7 @@ async def generate_smalltalk_turn_impl(
         else:
             if planner_enabled:
                 generated.reply_source = "pfc"
-                speculative_history = recent_history
-                generated.speculative_memory_task = asyncio.create_task(
-                    build_memory_block(
-                        context=context,
-                        runtime=runtime,
-                        state=state,
-                        secrets=secrets,
-                        data_dir=data_dir,
-                        chat_id=chat_id,
-                        history=speculative_history[-max_context_size:] if max_context_size > 0 else [],
-                        current_text=prepared.text,
-                        planner_question="",
-                        bot_name=bot_name,
-                    )
-                )
+                _ensure_speculative_memory_task()
                 generated.pfc_result = await run_pfc_once(
                     context=context,
                     runtime_cfg=runtime.cfg,
@@ -192,6 +200,7 @@ async def generate_smalltalk_turn_impl(
                     step="smalltalk.planner.disabled",
                     fields={"is_private": prepared.is_private, "brain_chat": prepared.brain_chat_active},
                 )
+                _ensure_speculative_memory_task()
                 direct_act = PlannedAction(
                     action="reply",
                     think_level=think_level,
@@ -218,6 +227,7 @@ async def generate_smalltalk_turn_impl(
                     secrets=secrets,
                     state_text=prepared.mood_text,
                     is_brain_chat=prepared.brain_chat_active,
+                    prefetched_memory_task=generated.speculative_memory_task,
                 )
                 if not generated.reply:
                     generated.reply = random.choice(["嗯", "啊这", "我在听", "你继续", "等我想下"])
@@ -267,6 +277,7 @@ async def finalize_smalltalk_turn_impl(
     assistant_reply_parts,
     build_generated_reply_output,
     sync_message_parts_to_registry,
+    schedule_media_registry_flush,
     clear_store_entry,
     record_bot_reply,
     image_action_detail,
@@ -274,6 +285,7 @@ async def finalize_smalltalk_turn_impl(
     face_action_detail,
     schedule_pfc_state_flush,
     schedule_action_history_flush,
+    spawn_bg_task,
     spawn_post_reply_bg_tasks,
     display_reply_text,
     mark_reply_media_used,
@@ -304,7 +316,13 @@ async def finalize_smalltalk_turn_impl(
     else:
         reply_display_parts = ()
         generated.reply_output = None
-    reply_parts = sync_message_parts_to_registry(state, reply_display_parts)
+    reply_parts = sync_message_parts_to_registry(
+        state,
+        reply_display_parts,
+        context=context,
+        runtime=runtime,
+        schedule_media_registry_flush=schedule_media_registry_flush,
+    )
     generated.reply_parts = reply_parts
 
     try:
@@ -402,7 +420,11 @@ async def finalize_smalltalk_turn_impl(
     if should_return_empty:
         return []
 
-    await spawn_post_reply_bg_tasks(hctx, history_snapshot, event)
+    spawn_bg_task(
+        context,
+        spawn_post_reply_bg_tasks(hctx, history_snapshot, event),
+        name=f"post_reply:{chat_id}",
+    )
 
     if runtime.cfg.debug.log_latency:
         context.logger.info(
@@ -428,7 +450,11 @@ async def finalize_smalltalk_turn_impl(
     if outbound_batches and isinstance(outbound_batches[0], dict):
         outbound_batches = [outbound_batches]
 
-    mark_reply_media_used(context, runtime, generated)
+    spawn_bg_task(
+        context,
+        asyncio.to_thread(mark_reply_media_used, context, runtime, generated),
+        name=f"reply_media_used:{chat_id}",
+    )
 
     if len(outbound_batches) > 1:
         user_id = event.get("user_id")

@@ -138,20 +138,32 @@ async def _event_media_items_for_memory(event: dict[str, Any], *, context, runti
 def _sync_message_parts_to_registry(
     state,
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
+    *,
+    context=None,
+    runtime=None,
+    schedule_media_registry_flush=None,
 ) -> tuple[dict[str, Any], ...]:
     normalized_parts = normalize_message_parts(parts)
     if not normalized_parts:
         return ()
     _content, media_items = message_parts_to_legacy(normalized_parts)
+    media_store = getattr(state, "media_store", None)
     synced_media_items = upsert_registered_media_items(
         media_items,
-        store=getattr(state, "media_store", None),
+        store=media_store,
         compact=False,
     ) or media_items
+    if media_items and media_store is not None and callable(schedule_media_registry_flush):
+        try:
+            is_dirty = getattr(media_store, "is_dirty", None)
+            if not callable(is_dirty) or is_dirty():
+                schedule_media_registry_flush(context, runtime)
+        except Exception:
+            pass
     return replace_message_media_parts(
         normalized_parts,
         synced_media_items,
-        store=getattr(state, "media_store", None),
+        store=media_store,
     )
 
 

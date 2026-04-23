@@ -222,11 +222,6 @@ class MediaConfig(BaseModel):
     max_media_per_message: int = 3
     max_analyze_bytes: int = 4 * 1024 * 1024
     vision_provider: str = ""
-    vision_api_base: str = ""
-    vision_api_key: str = ""
-    vision_model: str = ""
-    vision_endpoint_path: str = ""
-    vision_proxy: str = ""
     vision_timeout_seconds: float = 20.0
     vision_max_retry: int = 1
     vision_retry_interval_seconds: float = 1.0

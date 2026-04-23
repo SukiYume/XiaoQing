@@ -35,7 +35,6 @@ from .logging_utils import _log_step
 from .message_parts import (
     build_message_parts,
     build_text_message_parts,
-    message_parts_to_legacy,
     normalize_message_parts,
 )
 from .reply_splitter import _split_chat_reply
@@ -44,6 +43,7 @@ from .store_binding import _bind_all_stores
 from .task_scheduler import (
     _schedule_memory_persist,
     _spawn_bg_task,
+    _schedule_media_registry_flush,
     _schedule_pfc_state_flush,
     _schedule_action_history_flush,
 )
@@ -273,7 +273,13 @@ async def _ensure_user_message_recorded(
     local_id = _next_local_id(chat_id)
     cached_effective_parts = normalize_message_parts(event.get("_xc_effective_user_parts"))
     if cached_effective_parts:
-        message_parts = _sync_message_parts_to_registry(state, cached_effective_parts)
+        message_parts = _sync_message_parts_to_registry(
+            state,
+            cached_effective_parts,
+            context=context,
+            runtime=runtime,
+            schedule_media_registry_flush=_schedule_media_registry_flush,
+        )
     else:
         message_parts = _sync_message_parts_to_registry(
             state,
@@ -282,6 +288,9 @@ async def _ensure_user_message_recorded(
                 await _event_media_items_for_memory(event, context=context, runtime=runtime),
                 store=getattr(state, "media_store", None),
             ),
+            context=context,
+            runtime=runtime,
+            schedule_media_registry_flush=_schedule_media_registry_flush,
         )
     state.memory_store.append(
         chat_id,
@@ -397,30 +406,21 @@ def _cancel_generated_tasks(generated: _GeneratedSmalltalkTurn) -> None:
     _cancel_pending_task(generated.speculative_memory_task)
 
 
-def _coerce_reply_result(result: Any) -> tuple[str, tuple[dict[str, Any], ...], Any, Any, Any]:
-    if result is None:
-        return "", (), None, None, None
-    if hasattr(result, "text") and hasattr(result, "parts"):
-        reply_text = str(getattr(result, "text", "") or "").strip()
-        reply_parts = normalize_message_parts(getattr(result, "parts", ()) or ())
-        if not reply_text and reply_parts:
-            reply_text, _reply_media_items = message_parts_to_legacy(reply_parts)
-            reply_text = reply_text.strip()
-        if reply_text and not reply_parts:
-            reply_parts = build_text_message_parts(reply_text)
-        return (
-            reply_text,
-            reply_parts,
-            getattr(result, "image_plan", None),
-            getattr(result, "emoji_plan", None),
-            getattr(result, "face_plan", None),
-        )
-    reply = str(result or "").strip()
-    return reply, build_text_message_parts(reply), None, None, None
-
-
 async def _generate_reply_result(**kwargs) -> tuple[str, tuple[dict[str, Any], ...], Any, Any, Any]:
-    return _coerce_reply_result(await _generate_reply_draft(**kwargs))
+    draft = await _generate_reply_draft(**kwargs)
+    if draft is None:
+        return "", (), None, None, None
+    reply_text = str(getattr(draft, "text", "") or "").strip()
+    reply_parts = normalize_message_parts(getattr(draft, "parts", ()) or ())
+    if reply_text and not reply_parts:
+        reply_parts = build_text_message_parts(reply_text)
+    return (
+        reply_text,
+        reply_parts,
+        getattr(draft, "image_plan", None),
+        getattr(draft, "emoji_plan", None),
+        getattr(draft, "face_plan", None),
+    )
 
 
 async def _prepare_smalltalk_turn(
@@ -616,6 +616,7 @@ async def _finalize_smalltalk_turn(
         assistant_reply_parts=_assistant_reply_parts,
         build_generated_reply_output=_build_generated_reply_output,
         sync_message_parts_to_registry=_sync_message_parts_to_registry,
+        schedule_media_registry_flush=_schedule_media_registry_flush,
         clear_store_entry=_clear_store_entry,
         record_bot_reply=_record_bot_reply,
         image_action_detail=_image_action_detail,
@@ -623,6 +624,7 @@ async def _finalize_smalltalk_turn(
         face_action_detail=_face_action_detail,
         schedule_pfc_state_flush=_schedule_pfc_state_flush,
         schedule_action_history_flush=_schedule_action_history_flush,
+        spawn_bg_task=_spawn_bg_task,
         spawn_post_reply_bg_tasks=_spawn_post_reply_bg_tasks,
         display_reply_text=_display_reply_text,
         mark_reply_media_used=_mark_reply_media_used,

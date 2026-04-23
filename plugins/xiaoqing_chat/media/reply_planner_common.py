@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import random
 import re
-from typing import Any, Awaitable, Callable, Sequence, TypeVar
+from typing import Any, Sequence, TypeVar
 
 from ..helper_utils import _resolve_llm_config
-from ..llm.llm_client import chat_completions
+from ..llm.llm_client import chat_completions_with_fallback_paths
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..message_parts import render_stored_message
 from ..media_registry import message_has_media_kind
@@ -212,7 +212,6 @@ async def run_selector_llm(
     user_prompt: str,
     temperature: float = 0.2,
     max_tokens: int = 64,
-    chat_func: Callable[..., Awaitable[str]] | None = None,
 ) -> str | None:
     api_base = str(secrets.get("api_base", "") or "")
     api_key = str(secrets.get("api_key", "") or "")
@@ -221,22 +220,23 @@ async def run_selector_llm(
         return None
 
     llm_cfg = _resolve_llm_config(runtime.cfg, secrets, foreground=False)
-    invoke = chat_func or chat_completions
-    return await invoke(
-        session=context.http_session,
-        api_base=api_base,
-        api_key=api_key,
-        model=model,
-        messages=[
+    request_kwargs = {
+        "session": context.http_session,
+        "api_base": api_base,
+        "api_key": api_key,
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=temperature,
-        top_p=float(getattr(runtime.cfg, "top_p", 0.9)),
-        max_tokens=max_tokens,
-        timeout_seconds=float(llm_cfg.timeout_seconds),
-        max_retry=int(llm_cfg.max_retry),
-        retry_interval_seconds=float(llm_cfg.retry_interval_seconds),
-        proxy=str(llm_cfg.proxy or ""),
-        endpoint_path=str(llm_cfg.endpoint_path or runtime.cfg.endpoint_path),
-    )
+        "temperature": temperature,
+        "top_p": float(getattr(runtime.cfg, "top_p", 0.9)),
+        "max_tokens": max_tokens,
+        "timeout_seconds": float(llm_cfg.timeout_seconds),
+        "max_retry": int(llm_cfg.max_retry),
+        "retry_interval_seconds": float(llm_cfg.retry_interval_seconds),
+        "proxy": str(llm_cfg.proxy or ""),
+        "endpoint_path": str(llm_cfg.endpoint_path or runtime.cfg.endpoint_path),
+    }
+    output, _used_path = await chat_completions_with_fallback_paths(**request_kwargs)
+    return output

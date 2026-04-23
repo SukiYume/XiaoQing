@@ -16,6 +16,33 @@ from ..utils.json_parsing import parse_first_json_object
 import logging as _logging
 
 _log = _logging.getLogger(__name__)
+_MEDIA_MARKER_RE = re.compile(r"\[(图片|表情包|QQ表情)：([^\]]+)\]")
+_GENERIC_MEDIA_LABELS = frozenset(
+    {
+        "图片",
+        "表情",
+        "表情包",
+        "动画表情",
+        "聊天表情包",
+        "一张图片",
+        "一张表情包",
+        "一张聊天表情包",
+    }
+)
+_MEDIA_PLACEHOLDER_HINTS = (
+    "download?",
+    "appid=",
+    "fileid=",
+    "file_id=",
+    "authkey=",
+    "rkey=",
+    "spec=",
+    "cache=",
+    "uuid=",
+)
+_MEDIA_CLARIFICATION_RE = re.compile(
+    r"(啥图|什么图|这图|啥表情|什么表情|发的啥|这是啥|这啥|没看懂|看不懂)"
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +80,49 @@ def _normalize_text(s: str) -> str:
     t = (s or "").strip()
     t = re.sub(r"\s+", " ", t)
     return t
+
+
+def _normalize_media_label(value: str) -> str:
+    text = str(value or "").strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1].strip()
+    text = re.sub(r"^(QQ表情|表情包|图片)\s*[：:]", "", text)
+    text = re.sub(r"\s+", "", text)
+    return text
+
+
+def _looks_like_placeholder_media_label(value: str) -> bool:
+    normalized = _normalize_media_label(value)
+    if not normalized:
+        return True
+    lowered = normalized.lower()
+    compact = re.sub(r"[\s_\-]+", "", lowered)
+    if compact in _GENERIC_MEDIA_LABELS:
+        return True
+    if any(token in lowered for token in _MEDIA_PLACEHOLDER_HINTS):
+        return True
+    if re.fullmatch(r"(?:img|image|photo|picture|screenshot|file|attachment|download)\d{0,8}", compact):
+        return True
+    if re.fullmatch(r"[0-9a-f]{24,64}", compact):
+        return True
+    if re.fullmatch(r"[a-z0-9_-]{28,64}", lowered) and sum(ch.isdigit() for ch in compact) >= 6:
+        return True
+    return False
+
+
+def _latest_user_media_labels(history: Sequence[StoredMessage]) -> list[str]:
+    for msg in reversed(history[-40:]):
+        if msg.role != "user":
+            continue
+        rendered = render_stored_message(msg)
+        if not rendered:
+            continue
+        labels = [str(match.group(2) or "").strip() for match in _MEDIA_MARKER_RE.finditer(rendered)]
+        if labels:
+            return labels
+        if rendered.strip():
+            return []
+    return []
 
 
 def _is_question_sentence(text: str) -> bool:
@@ -95,6 +165,19 @@ def _heuristic_check(
     r = _normalize_text(reply)
     if not r:
         return ReplyCheckResult(False, "回复为空", True)
+
+    latest_media_labels = _latest_user_media_labels(history)
+    if (
+        latest_media_labels
+        and any(_looks_like_placeholder_media_label(label) for label in latest_media_labels)
+        and _is_question_sentence(reply)
+        and _MEDIA_CLARIFICATION_RE.search(re.sub(r"\s+", "", r))
+    ):
+        return ReplyCheckResult(
+            False,
+            "当前图片/表情摘要是占位信息，不要追问内容本身，换个更稳妥的接法",
+            False,
+        )
 
     max_look_back = max(4, int(max_repeat_compare))
     bot_msgs = _last_bot_messages(history, bot_name=bot_name, limit=max_look_back)
