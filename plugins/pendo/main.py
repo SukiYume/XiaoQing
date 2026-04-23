@@ -921,6 +921,10 @@ def _get_services(context: PendoContext | None) -> PendoServices:
 
     db = _get_database(context)
     ai_parser = AIParser(context)
+    try:
+        setattr(ai_parser, "db", db)
+    except Exception:
+        pass
     reminder_service = ReminderService(db)
     exporter = ExporterService(db)
 

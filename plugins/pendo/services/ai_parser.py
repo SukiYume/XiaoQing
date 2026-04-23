@@ -13,6 +13,7 @@ from dateutil import parser
 from collections import defaultdict
 from .rule_parser import RuleParser
 from ..config import MOOD_ANALYSIS_CONFIG
+from ..utils.time_utils import now_in_timezone, parse_and_localize
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +125,9 @@ class AIParser:
 - score 表示情绪强度，1 最弱，10 最强
 - 只返回 JSON，不要解释。"""
 
-    def __init__(self, context=None):
+    def __init__(self, context=None, db=None):
         self.context = context
+        self.db = db
         self.rule_parser = RuleParser()
 
     def _get_llm_secrets(self):
@@ -210,9 +212,10 @@ class AIParser:
             return self._fallback_event_result(source_text, user_id, partial=partial)
 
         try:
-            current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+            current_now = now_in_timezone(user_id, self.db)
+            current_date = current_now.strftime("%Y-%m-%d %H:%M")
             weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-            current_weekday = weekday_names[datetime.now().weekday()]
+            current_weekday = weekday_names[current_now.weekday()]
 
             prompt = self.PARSE_PROMPT_TEMPLATE.format(
                 current_date=current_date, current_weekday=current_weekday, text=text
@@ -357,7 +360,7 @@ class AIParser:
                 result["end_time"] = valid_milestones[-1]["time"]
                 if parsed.get("remind_offsets"):
                     result["remind_times"] = self.build_remind_times_for_milestones(
-                        valid_milestones, parsed["remind_offsets"]
+                        valid_milestones, parsed["remind_offsets"], user_id=user_id
                     )
 
         # notes
@@ -371,7 +374,7 @@ class AIParser:
             and result.get("start_time")
         ):
             result["remind_times"] = self.build_remind_times_from_offsets(
-                result["start_time"], parsed["remind_offsets"]
+                result["start_time"], parsed["remind_offsets"], user_id=user_id
             )
 
         return result
@@ -425,13 +428,18 @@ class AIParser:
 
         return None, None
 
-    def build_remind_times_from_offsets(self, start_time: str, offsets: list[str]) -> list[str]:
+    def build_remind_times_from_offsets(
+        self,
+        start_time: str,
+        offsets: list[str],
+        user_id: str | None = None,
+    ) -> list[str]:
         """根据偏移量构建提醒时间"""
         if not start_time or not offsets:
             return []
 
-        start_dt = datetime.fromisoformat(start_time)
-        now = datetime.now()
+        start_dt = parse_and_localize(start_time, user_id, self.db)
+        now = now_in_timezone(user_id, self.db) if user_id else datetime.now(start_dt.tzinfo)
         remind_times = []
 
         for offset in offsets:
@@ -444,7 +452,10 @@ class AIParser:
         return remind_times
 
     def build_remind_times_for_milestones(
-        self, milestones: list[dict[str, Any]], offsets: list[str]
+        self,
+        milestones: list[dict[str, Any]],
+        offsets: list[str],
+        user_id: str | None = None,
     ) -> list[str]:
         """为多个里程碑的每个时间节点应用提醒偏移，返回去重后的平铺列表"""
         all_times = set()
@@ -452,11 +463,16 @@ class AIParser:
             t = milestone.get("time")
             if not t:
                 continue
-            times = self.build_remind_times_from_offsets(t, offsets)
+            times = self.build_remind_times_from_offsets(t, offsets, user_id=user_id)
             all_times.update(times)
         return sorted(all_times)
 
-    def build_remind_times_from_description(self, description: str, base_time: str) -> list[str]:
+    def build_remind_times_from_description(
+        self,
+        description: str,
+        base_time: str,
+        user_id: str | None = None,
+    ) -> list[str]:
         """从自然语言描述中提取所有偏移量并生成提醒时间
 
         例如: "提前1天和2小时提醒" → offsets=["1天", "2小时"]
@@ -465,7 +481,7 @@ class AIParser:
         offsets = ["".join(m) for m in re.findall(pattern, description)]
         if not offsets:
             return []
-        return self.build_remind_times_from_offsets(base_time, offsets)
+        return self.build_remind_times_from_offsets(base_time, offsets, user_id=user_id)
 
     def _parse_offset(self, offset: str) -> Optional[timedelta]:
         """解析偏移量字符串"""

@@ -981,6 +981,19 @@ class Database:
                     where.append(f"{column} = ?")
                     params.append(filters[key])
 
+            date_field = filters.get("date_field")
+            if date_field:
+                if date_field not in Database.ALLOWED_DATE_FIELDS:
+                    raise ValueError(f"Invalid date field: {date_field}")
+
+                column = f"{column_prefix}{date_field}" if column_prefix else date_field
+                if "start_date" in filters:
+                    where.append(f"{column} >= ?")
+                    params.append(filters["start_date"])
+                if "end_date" in filters:
+                    where.append(f"{column} <= ?")
+                    params.append(filters["end_date"])
+
     def _search_item_ids(
         self,
         owner_id: str,
@@ -1350,7 +1363,7 @@ class Database:
                 category = ?
                 OR (due_time >= ? AND due_time < ?)
             )
-            ORDER BY priority DESC, due_time ASC LIMIT 10
+            ORDER BY COALESCE(priority, 3) ASC, due_time ASC LIMIT 10
         """,
             (user_id, today_date, today_iso, tomorrow_iso),
         )
