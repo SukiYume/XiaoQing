@@ -90,6 +90,7 @@ def _schedule_memory_db_save(context: Any, runtime: _ChatRuntime) -> None:
 
 _action_flush_tasks: dict[str, asyncio.Task[Any]] = {}
 _pfc_state_flush_tasks: dict[str, asyncio.Task[Any]] = {}
+_media_registry_flush_task: asyncio.Task[Any] | None = None
 
 
 def _schedule_debounced_flush(
@@ -151,3 +152,34 @@ def _schedule_pfc_state_flush(context: Any, runtime: _ChatRuntime, *, chat_id: s
         flush_func=_state().pfc_state_store.save,
         name_prefix="pfc_state_flush",
     )
+
+
+def _schedule_media_registry_flush(context: Any, runtime: _ChatRuntime) -> None:
+    global _media_registry_flush_task
+
+    delay = max(0.0, float(getattr(runtime.cfg, "io_persist_debounce_seconds", 0.8) or 0.0))
+    old = _media_registry_flush_task
+    if old is not None and not old.done():
+        try:
+            old.cancel()
+        except Exception:
+            pass
+
+    async def _run() -> None:
+        if delay:
+            await asyncio.sleep(delay)
+        await asyncio.to_thread(_state().media_store.flush)
+
+    try:
+        task = asyncio.create_task(_run())
+    except RuntimeError:
+        return
+    _media_registry_flush_task = task
+
+    def _cleanup_done(t: asyncio.Task[Any]) -> None:
+        global _media_registry_flush_task
+        if _media_registry_flush_task is t:
+            _media_registry_flush_task = None
+
+    task.add_done_callback(_cleanup_done)
+    _track_bg_task(context, task, name="media_registry_flush")

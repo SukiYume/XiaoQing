@@ -140,58 +140,89 @@ async def _attach_reply_media(
     if not enable_emoji and not enable_image and not enable_face:
         return draft
 
-    image_task = None
-    emoji_task = None
-    face_task = None
+    planner_tasks: list[tuple[str, asyncio.Task[Any]]] = []
     if enable_image:
-        image_task = asyncio.create_task(
-            plan_image_reply(
-                context=context,
-                runtime=runtime,
-                history=history,
-                user_text=user_text,
-                reply_text=draft.text,
-                secrets=secrets or {},
-                chat_id=chat_id,
+        planner_tasks.append(
+            (
+                "image",
+                asyncio.create_task(
+                    plan_image_reply(
+                        context=context,
+                        runtime=runtime,
+                        history=history,
+                        user_text=user_text,
+                        reply_text=draft.text,
+                        secrets=secrets or {},
+                        chat_id=chat_id,
+                    )
+                ),
             )
         )
     if enable_emoji:
-        emoji_task = asyncio.create_task(
-            plan_emoji_reply(
-                context=context,
-                runtime=runtime,
-                history=history,
-                user_text=user_text,
-                reply_text=draft.text,
-                secrets=secrets or {},
-                chat_id=chat_id,
+        planner_tasks.append(
+            (
+                "emoji",
+                asyncio.create_task(
+                    plan_emoji_reply(
+                        context=context,
+                        runtime=runtime,
+                        history=history,
+                        user_text=user_text,
+                        reply_text=draft.text,
+                        secrets=secrets or {},
+                        chat_id=chat_id,
+                    )
+                ),
             )
         )
     if enable_face:
-        face_task = asyncio.create_task(
-            plan_qq_face_reply(
-                context=context,
-                runtime=runtime,
-                history=history,
-                user_text=user_text,
-                reply_text=draft.text,
-                secrets=secrets or {},
-                chat_id=chat_id,
+        planner_tasks.append(
+            (
+                "face",
+                asyncio.create_task(
+                    plan_qq_face_reply(
+                        context=context,
+                        runtime=runtime,
+                        history=history,
+                        user_text=user_text,
+                        reply_text=draft.text,
+                        secrets=secrets or {},
+                        chat_id=chat_id,
+                    )
+                ),
             )
         )
 
-    try:
-        image_plan = await image_task if image_task is not None else None
-    except Exception:
-        image_plan = None
-    try:
-        emoji_plan = await emoji_task if emoji_task is not None else None
-    except Exception:
-        emoji_plan = None
-    try:
-        face_plan = await face_task if face_task is not None else None
-    except Exception:
-        face_plan = None
+    if not planner_tasks:
+        return draft
+
+    image_plan = None
+    emoji_plan = None
+    face_plan = None
+    results = await asyncio.gather(
+        *(task for _kind, task in planner_tasks),
+        return_exceptions=True,
+    )
+    for (kind, _task), result in zip(planner_tasks, results):
+        if isinstance(result, Exception):
+            _log_step(
+                context=context,
+                runtime=runtime,
+                chat_id=chat_id,
+                step="reply.media.plan.error",
+                fields={
+                    "planner": kind,
+                    "error": f"{type(result).__name__}: {result}",
+                },
+            )
+            continue
+        if kind == "image":
+            image_plan = result
+        elif kind == "emoji":
+            emoji_plan = result
+        elif kind == "face":
+            face_plan = result
+
     if image_plan is None and emoji_plan is None and face_plan is None:
         return draft
 
@@ -644,13 +675,26 @@ async def _generate_reply_draft(
                         ),
                         timeout=6.0,
                     )
-                except (asyncio.TimeoutError, Exception):
+                except asyncio.TimeoutError:
                     _log_step(
                         context, runtime, chat_id=chat_id, step="reply.check.timeout", fields={}
                     )
                     check = ReplyCheckResult(
                         suitable=True,
                         reason="回复检查暂不可用",
+                        need_replan=False,
+                    )
+                except Exception as exc:
+                    _log_step(
+                        context,
+                        runtime,
+                        chat_id=chat_id,
+                        step="reply.check.error",
+                        fields={"error": f"{type(exc).__name__}: {exc}"},
+                    )
+                    check = ReplyCheckResult(
+                        suitable=True,
+                        reason=f"reply_checker error: {exc}",
                         need_replan=False,
                     )
                 _log_step(

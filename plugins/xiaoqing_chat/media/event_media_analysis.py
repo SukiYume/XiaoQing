@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
 import re
-import sys
+from dataclasses import dataclass
 from typing import Any
 
-from ..llm.llm_client import LLMError, chat_completions
+import aiohttp
+
+from ..llm.llm_client import (
+    LLMError,
+    chat_completions_raw_with_fallback_paths,
+    extract_response_content,
+    extract_response_finish_reason,
+)
 from .event_media_common import (
     MediaAnalysisDraft,
     PreparedMediaForLLM,
@@ -63,6 +71,54 @@ def _media_llm_max_tokens(secrets: dict[str, Any], base_max_tokens: int) -> int:
     return max(base * 4, 800 if base >= 200 else 480)
 
 
+@dataclass(frozen=True)
+class MediaLLMCallResult:
+    text: str
+    used_secrets: dict[str, Any]
+    used_path: str
+    finish_reason: str
+    raw_chars: int
+
+
+def _media_request_failure_reason(exc: Exception) -> str:
+    if isinstance(exc, LLMError):
+        text = str(exc).strip()
+        return text.split(":", 1)[0] if text else "llm_error"
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return "timeout"
+    if isinstance(exc, aiohttp.ClientError):
+        return type(exc).__name__
+    return type(exc).__name__
+
+
+def _is_media_request_failure(exc: Exception) -> bool:
+    return isinstance(exc, (LLMError, asyncio.TimeoutError, TimeoutError, aiohttp.ClientError))
+
+
+def _log_media_provider_fallback(
+    *,
+    context,
+    runtime,
+    from_provider: dict[str, Any],
+    to_provider: dict[str, Any],
+    max_tokens: int,
+    reason: str,
+) -> None:
+    _media_log(
+        context,
+        runtime,
+        step="media.analyze.provider_fallback",
+        fields={
+            "from_provider": from_provider.get("_provider_name", ""),
+            "to_provider": to_provider.get("_provider_name", ""),
+            "to_model": to_provider.get("model", ""),
+            "to_max_tokens": _media_llm_max_tokens(to_provider, max_tokens),
+            "reason": reason or "request_failed",
+        },
+        level="warning",
+    )
+
+
 def _build_media_provider_secrets(
     provider_name: str,
     provider_config: dict[str, Any],
@@ -82,23 +138,11 @@ def _build_media_provider_secrets(
     }
 
 
-def _legacy_direct_vision_overrides(cfg) -> dict[str, str]:
-    return {
-        "api_base": str(getattr(cfg, "vision_api_base", "") or "").strip(),
-        "api_key": str(getattr(cfg, "vision_api_key", "") or "").strip(),
-        "model": str(getattr(cfg, "vision_model", "") or "").strip(),
-        "endpoint_path": str(getattr(cfg, "vision_endpoint_path", "") or "").strip(),
-        "proxy": str(getattr(cfg, "vision_proxy", "") or "").strip(),
-    }
-
-
 def _explicit_media_llm_requested(context, runtime) -> bool:
     cfg = _media_cfg(runtime)
     if cfg is None:
         return False
     if str(getattr(cfg, "vision_provider", "") or "").strip():
-        return True
-    if any(_legacy_direct_vision_overrides(cfg).values()):
         return True
     _, providers, default_name = _vision_plugin_secrets(context)
     return bool(providers and default_name)
@@ -173,20 +217,6 @@ def _resolve_media_llm_secret_candidates(context, runtime) -> list[dict[str, Any
                 scope=scope,
             )
         )
-
-    overrides = _legacy_direct_vision_overrides(cfg)
-    if any(overrides.values()):
-        secrets = provider_candidates[0] if provider_candidates else dict(empty)
-        secrets["_provider_name"] = secrets.get("_provider_name", "") or "legacy_direct"
-        secrets["_provider_scope"] = "legacy_direct"
-        secrets["_vision_enabled"] = True
-        for key, value in overrides.items():
-            if key == "api_key" and not value:
-                secrets[key] = ""
-                continue
-            if value:
-                secrets[key] = value
-        return [secrets]
 
     return provider_candidates or [empty]
 
@@ -314,16 +344,23 @@ def _prepare_media_for_llm(resolved: ResolvedMedia) -> PreparedMediaForLLM:
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
+    data, _ = _extract_json_object_with_status(text)
+    return data
+
+
+def _extract_json_object_with_status(text: str) -> tuple[dict[str, Any], bool]:
     if not text:
-        return {}
+        return {}, False
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
-        return {}
+        return {}, False
     try:
         raw = json.loads(match.group(0))
     except json.JSONDecodeError:
-        return {}
-    return raw if isinstance(raw, dict) else {}
+        return {}, False
+    if not isinstance(raw, dict):
+        return {}, False
+    return raw, True
 
 
 def _extract_first_text_value(data: dict[str, Any], *keys: str) -> str:
@@ -366,57 +403,39 @@ async def _call_media_llm(
         return "", {}
 
     previous_provider: dict[str, Any] | None = None
+    previous_reason = ""
     last_exc: Exception | None = None
 
     for index, secrets in enumerate(candidates):
-        effective_max_tokens = _media_llm_max_tokens(secrets, max_tokens)
         if index > 0 and previous_provider is not None:
-            _media_log(
-                context,
-                runtime,
-                step="media.analyze.provider_fallback",
-                fields={
-                    "from_provider": previous_provider.get("_provider_name", ""),
-                    "to_provider": secrets.get("_provider_name", ""),
-                    "to_model": secrets.get("model", ""),
-                    "to_max_tokens": effective_max_tokens,
-                    "reason": "retryable_http_429",
-                },
-                level="warning",
+            _log_media_provider_fallback(
+                context=context,
+                runtime=runtime,
+                from_provider=previous_provider,
+                to_provider=secrets,
+                max_tokens=max_tokens,
+                reason=previous_reason,
             )
         try:
-            compat_module = sys.modules.get("plugins.xiaoqing_chat.media.event_media")
-            compat_chat_completions = getattr(compat_module, "chat_completions", chat_completions)
-            output = await compat_chat_completions(
-                session=context.http_session,
-                api_base=str(secrets.get("api_base", "") or ""),
-                api_key=str(secrets.get("api_key", "") or ""),
-                model=str(secrets.get("model", "") or ""),
+            result = await _call_media_llm_once(
+                context=context,
+                runtime=runtime,
+                secrets=secrets,
                 messages=messages,
                 temperature=temperature,
                 top_p=top_p,
-                max_tokens=effective_max_tokens,
-                timeout_seconds=float(cfg.vision_timeout_seconds),
-                max_retry=int(cfg.vision_max_retry),
-                retry_interval_seconds=float(cfg.vision_retry_interval_seconds),
-                proxy=str(secrets.get("proxy", "") or ""),
-                endpoint_path=str(secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path),
+                max_tokens=max_tokens,
             )
-            used_secrets = dict(secrets)
-            used_secrets["_effective_max_tokens"] = effective_max_tokens
-            return output, used_secrets
+            return result.text, result.used_secrets
         except Exception as exc:
             setattr(exc, "_media_provider_name", secrets.get("_provider_name", ""))
             setattr(exc, "_media_provider_scope", secrets.get("_provider_scope", ""))
             setattr(exc, "_media_provider_model", secrets.get("model", ""))
-            setattr(exc, "_media_provider_max_tokens", effective_max_tokens)
+            setattr(exc, "_media_provider_max_tokens", _media_llm_max_tokens(secrets, max_tokens))
             last_exc = exc
-            if (
-                index + 1 < len(candidates)
-                and isinstance(exc, LLMError)
-                and str(exc).startswith("retryable_http_429:")
-            ):
+            if index + 1 < len(candidates) and _is_media_request_failure(exc):
                 previous_provider = secrets
+                previous_reason = _media_request_failure_reason(exc)
                 continue
             raise
 
@@ -425,13 +444,56 @@ async def _call_media_llm(
     return "", candidates[0]
 
 
+async def _call_media_llm_once(
+    *,
+    context,
+    runtime,
+    secrets: dict[str, Any],
+    messages: list[dict[str, Any]],
+    temperature: float,
+    top_p: float,
+    max_tokens: int,
+) -> MediaLLMCallResult:
+    cfg = _media_cfg(runtime)
+    if cfg is None:
+        return MediaLLMCallResult(text="", used_secrets={}, used_path="", finish_reason="", raw_chars=0)
+
+    effective_max_tokens = _media_llm_max_tokens(secrets, max_tokens)
+    used_secrets = dict(secrets)
+    used_secrets["_effective_max_tokens"] = effective_max_tokens
+    request_kwargs = {
+        "session": context.http_session,
+        "api_base": str(secrets.get("api_base", "") or ""),
+        "api_key": str(secrets.get("api_key", "") or ""),
+        "model": str(secrets.get("model", "") or ""),
+        "messages": messages,
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": effective_max_tokens,
+        "timeout_seconds": float(cfg.vision_timeout_seconds),
+        "max_retry": int(cfg.vision_max_retry),
+        "retry_interval_seconds": float(cfg.vision_retry_interval_seconds),
+        "proxy": str(secrets.get("proxy", "") or ""),
+        "endpoint_path": str(secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path),
+    }
+    response_data, used_path = await chat_completions_raw_with_fallback_paths(**request_kwargs)
+    text = extract_response_content(response_data)
+    return MediaLLMCallResult(
+        text=text,
+        used_secrets=used_secrets,
+        used_path=str(used_path or ""),
+        finish_reason=extract_response_finish_reason(response_data),
+        raw_chars=len(text),
+    )
+
+
 def _parse_detail_analysis_output(
     output: str,
     *,
     resolved: ResolvedMedia,
     prefer_emoji: bool,
 ) -> MediaAnalysisDraft:
-    data = _extract_json_object(output)
+    data, parsed_json = _extract_json_object_with_status(output)
     kind = str(data.get("kind", "") or "").strip().lower()
     if kind not in {"image", "emoji"}:
         kind = _fallback_kind(
@@ -474,7 +536,75 @@ def _parse_detail_analysis_output(
         visible_text=visible_text.strip(),
         emotion_tags=emotion_tags,
         raw_output=str(output or "").strip(),
+        parsed_json=parsed_json,
     )
+
+
+def _finalize_media_analysis(
+    *,
+    detail: MediaAnalysisDraft,
+    refined: MediaAnalysisDraft | None,
+    resolved: ResolvedMedia,
+) -> tuple[RenderedMedia, bool, str]:
+    kind = detail.kind
+    used_summary_fallback = False
+    if kind == "emoji":
+        if refined and refined.description and not _is_generic_media_label(refined.description):
+            description = refined.description
+        elif detail.description and not _is_generic_media_label(detail.description):
+            description = detail.description
+        elif refined and refined.description:
+            description = refined.description
+        elif detail.description:
+            description = detail.description
+        else:
+            description = _safe_source_name(resolved.source_name) or "一张表情包"
+            used_summary_fallback = True
+        emotion_tags = refined.emotion_tags if refined and refined.emotion_tags else detail.emotion_tags
+        if not emotion_tags:
+            emotion_tags = _normalize_emotion_tags(description or detail.visible_text)
+    else:
+        description = detail.description
+        if not description:
+            description = _safe_source_name(resolved.source_name) or "一张图片"
+            used_summary_fallback = True
+        emotion_tags = tuple()
+
+    marker = _build_marker(kind, description, emotion_tags)
+    rendered = RenderedMedia(
+        media_hash=resolved.media_hash,
+        kind=kind,
+        description=description,
+        emotion_tags=emotion_tags,
+        marker=marker,
+        cached_path=resolved.cached_path,
+    )
+    quality = "generic" if _is_low_quality_rendered_media(
+        rendered,
+        summary_hint=resolved.source_name,
+        resolved=resolved,
+    ) else "detailed"
+    return rendered, used_summary_fallback, quality
+
+
+def _semantic_retry_reason(
+    *,
+    detail: MediaAnalysisDraft,
+    rendered: RenderedMedia,
+    used_summary_fallback: bool,
+    resolved: ResolvedMedia,
+) -> str:
+    if not detail.parsed_json:
+        return "invalid_json"
+    if used_summary_fallback:
+        return "summary_fallback"
+    if not str(rendered.description or "").strip():
+        return "empty_description"
+    if _is_generic_media_label(rendered.description):
+        return "generic_description"
+    if _is_low_quality_rendered_media(rendered, summary_hint=resolved.source_name, resolved=resolved):
+        return "low_quality_render"
+    return ""
 
 
 async def _refine_emoji_analysis_with_llm(
@@ -545,8 +675,9 @@ async def _analyze_media_with_llm(
     cfg = _media_cfg(runtime)
     if cfg is None:
         return None
-    secrets = _resolve_media_llm_secrets(context, runtime)
-    if not bool(secrets.get("_vision_enabled")):
+    candidates = _resolve_media_llm_secret_candidates(context, runtime)
+    primary_secrets = candidates[0] if candidates else {}
+    if not any(bool(secrets.get("_vision_enabled")) for secrets in candidates):
         _media_log(
             context,
             runtime,
@@ -558,18 +689,23 @@ async def _analyze_media_with_llm(
             },
         )
         return None
-    if not secrets.get("api_base") or not secrets.get("api_key") or not secrets.get("model"):
+    complete_candidates = [
+        secrets
+        for secrets in candidates
+        if all(str(secrets.get(field, "") or "").strip() for field in ("api_base", "api_key", "model"))
+    ]
+    if not complete_candidates:
         _media_log(
             context,
             runtime,
             step="media.analyze.skip",
             fields={
                 "reason": "vision_secrets_incomplete",
-                "provider": secrets.get("_provider_name", ""),
-                "provider_scope": secrets.get("_provider_scope", ""),
-                "has_api_base": bool(secrets.get("api_base")),
-                "has_api_key": bool(secrets.get("api_key")),
-                "has_model": bool(secrets.get("model")),
+                "provider": primary_secrets.get("_provider_name", ""),
+                "provider_scope": primary_secrets.get("_provider_scope", ""),
+                "has_api_base": bool(primary_secrets.get("api_base")),
+                "has_api_key": bool(primary_secrets.get("api_key")),
+                "has_model": bool(primary_secrets.get("model")),
                 "media_hash": resolved.media_hash[:12],
             },
             level="warning",
@@ -612,27 +748,6 @@ async def _analyze_media_with_llm(
             " 如果看到相似角色重复出现，要理解成同一角色在不同帧里的动作或表情变化。"
         )
 
-    _media_log(
-        context,
-        runtime,
-        step="media.analyze.start",
-        fields={
-            "provider": secrets.get("_provider_name", ""),
-            "provider_scope": secrets.get("_provider_scope", ""),
-            "model": secrets.get("model", ""),
-            "max_tokens": _media_llm_max_tokens(secrets, 200),
-            "media_hash": resolved.media_hash[:12],
-            "segment_type": resolved.segment_type,
-            "source_mime": prepared.source_mime_type,
-            "llm_mime": prepared.mime_type,
-            "transcoded": prepared.transcoded,
-            "animated": prepared.is_animated,
-            "frame_strategy": prepared.frame_strategy,
-            "frame_count": prepared.frame_count,
-            "prefer_emoji": prefer_emoji,
-        },
-    )
-
     messages = [
         {"role": "system", "content": "你是聊天图片解析器，只输出 JSON。"},
         {
@@ -647,151 +762,226 @@ async def _analyze_media_with_llm(
         },
     ]
 
-    try:
-        detail_output, used_secrets = await _call_media_llm(
-            context=context,
-            runtime=runtime,
-            messages=messages,
-            temperature=0.2,
-            top_p=0.9,
-            max_tokens=200,
-        )
-    except Exception as exc:
-        _media_log(
-            context,
-            runtime,
-            step="media.analyze.fail",
-            fields={
-                "provider": getattr(exc, "_media_provider_name", secrets.get("_provider_name", "")),
-                "model": getattr(exc, "_media_provider_model", secrets.get("model", "")),
-                "media_hash": resolved.media_hash[:12],
-                "error": f"{type(exc).__name__}: {exc}",
-            },
-            level="warning",
-        )
-        raise
+    semantic_retry_limit = 1
+    previous_provider: dict[str, Any] | None = None
+    previous_reason = ""
 
-    detail = _parse_detail_analysis_output(
-        detail_output,
-        resolved=resolved,
-        prefer_emoji=prefer_emoji,
-    )
-    _media_log(
-        context,
-        runtime,
-        step="media.analyze.detail.ok",
-        fields={
-            "provider": used_secrets.get("_provider_name", ""),
-            "model": used_secrets.get("model", ""),
-            "max_tokens": used_secrets.get("_effective_max_tokens", ""),
-            "media_hash": resolved.media_hash[:12],
-            "kind": detail.kind,
-            "description": detail.description,
-            "visible_text": detail.visible_text,
-            "emotion_tags": "，".join(detail.emotion_tags),
-            "raw_output": detail.raw_output,
-        },
-    )
-
-    kind = detail.kind
-    refined: MediaAnalysisDraft | None = None
-    if kind == "emoji":
-        try:
-            refined, refined_provider = await _refine_emoji_analysis_with_llm(
-                detail,
-                resolved=resolved,
+    for index, provider_secrets in enumerate(complete_candidates):
+        if index > 0 and previous_provider is not None:
+            _log_media_provider_fallback(
                 context=context,
                 runtime=runtime,
+                from_provider=previous_provider,
+                to_provider=provider_secrets,
+                max_tokens=200,
+                reason=previous_reason,
+            )
+
+        for semantic_attempt in range(1, semantic_retry_limit + 2):
+            _media_log(
+                context,
+                runtime,
+                step="media.analyze.start",
+                fields={
+                    "provider": provider_secrets.get("_provider_name", ""),
+                    "provider_scope": provider_secrets.get("_provider_scope", ""),
+                    "model": provider_secrets.get("model", ""),
+                    "max_tokens": _media_llm_max_tokens(provider_secrets, 200),
+                    "media_hash": resolved.media_hash[:12],
+                    "segment_type": resolved.segment_type,
+                    "source_mime": prepared.source_mime_type,
+                    "llm_mime": prepared.mime_type,
+                    "transcoded": prepared.transcoded,
+                    "animated": prepared.is_animated,
+                    "frame_strategy": prepared.frame_strategy,
+                    "frame_count": prepared.frame_count,
+                    "prefer_emoji": prefer_emoji,
+                    "semantic_attempt": semantic_attempt,
+                    "semantic_retry_limit": semantic_retry_limit,
+                },
+            )
+
+            try:
+                llm_result = await _call_media_llm_once(
+                    context=context,
+                    runtime=runtime,
+                    secrets=provider_secrets,
+                    messages=messages,
+                    temperature=0.2,
+                    top_p=0.9,
+                    max_tokens=200,
+                )
+            except Exception as exc:
+                setattr(exc, "_media_provider_name", provider_secrets.get("_provider_name", ""))
+                setattr(exc, "_media_provider_scope", provider_secrets.get("_provider_scope", ""))
+                setattr(exc, "_media_provider_model", provider_secrets.get("model", ""))
+                setattr(exc, "_media_provider_max_tokens", _media_llm_max_tokens(provider_secrets, 200))
+                if index + 1 < len(complete_candidates) and _is_media_request_failure(exc):
+                    previous_provider = provider_secrets
+                    previous_reason = _media_request_failure_reason(exc)
+                    break
+                _media_log(
+                    context,
+                    runtime,
+                    step="media.analyze.fail",
+                    fields={
+                        "provider": getattr(exc, "_media_provider_name", provider_secrets.get("_provider_name", "")),
+                        "model": getattr(exc, "_media_provider_model", provider_secrets.get("model", "")),
+                        "media_hash": resolved.media_hash[:12],
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                    level="warning",
+                )
+                raise
+
+            detail = _parse_detail_analysis_output(
+                llm_result.text,
+                resolved=resolved,
+                prefer_emoji=prefer_emoji,
             )
             _media_log(
                 context,
                 runtime,
-                step="media.analyze.refine.ok",
+                step="media.analyze.detail.ok",
                 fields={
-                    "provider": refined_provider.get("_provider_name", ""),
-                    "model": refined_provider.get("model", ""),
-                    "max_tokens": refined_provider.get("_effective_max_tokens", ""),
+                    "provider": llm_result.used_secrets.get("_provider_name", ""),
+                    "model": llm_result.used_secrets.get("model", ""),
+                    "max_tokens": llm_result.used_secrets.get("_effective_max_tokens", ""),
+                    "used_path": llm_result.used_path,
+                    "finish_reason": llm_result.finish_reason,
+                    "raw_chars": llm_result.raw_chars,
                     "media_hash": resolved.media_hash[:12],
-                    "description": refined.description,
-                    "emotion_tags": "，".join(refined.emotion_tags),
-                    "raw_output": refined.raw_output,
+                    "kind": detail.kind,
+                    "description": detail.description,
+                    "visible_text": detail.visible_text,
+                    "emotion_tags": "，".join(detail.emotion_tags),
+                    "parsed_json": detail.parsed_json,
+                    "raw_output": detail.raw_output,
                 },
             )
-        except Exception as exc:
+
+            refined: MediaAnalysisDraft | None = None
+            if detail.kind == "emoji":
+                try:
+                    refined, refined_provider = await _refine_emoji_analysis_with_llm(
+                        detail,
+                        resolved=resolved,
+                        context=context,
+                        runtime=runtime,
+                    )
+                    _media_log(
+                        context,
+                        runtime,
+                        step="media.analyze.refine.ok",
+                        fields={
+                            "provider": refined_provider.get("_provider_name", ""),
+                            "model": refined_provider.get("model", ""),
+                            "max_tokens": refined_provider.get("_effective_max_tokens", ""),
+                            "media_hash": resolved.media_hash[:12],
+                            "description": refined.description,
+                            "emotion_tags": "，".join(refined.emotion_tags),
+                            "raw_output": refined.raw_output,
+                        },
+                    )
+                except Exception as exc:
+                    _media_log(
+                        context,
+                        runtime,
+                        step="media.analyze.refine.fail",
+                        fields={
+                            "provider": getattr(exc, "_media_provider_name", llm_result.used_secrets.get("_provider_name", "")),
+                            "model": getattr(exc, "_media_provider_model", llm_result.used_secrets.get("model", "")),
+                            "max_tokens": getattr(exc, "_media_provider_max_tokens", llm_result.used_secrets.get("_effective_max_tokens", "")),
+                            "media_hash": resolved.media_hash[:12],
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                        level="warning",
+                    )
+
+            rendered, used_summary_fallback, quality = _finalize_media_analysis(
+                detail=detail,
+                refined=refined,
+                resolved=resolved,
+            )
+            semantic_reason = _semantic_retry_reason(
+                detail=detail,
+                rendered=rendered,
+                used_summary_fallback=used_summary_fallback,
+                resolved=resolved,
+            )
+            if semantic_reason:
+                _media_log(
+                    context,
+                    runtime,
+                    step="media.analyze.semantic.invalid",
+                    fields={
+                        "provider": llm_result.used_secrets.get("_provider_name", ""),
+                        "model": llm_result.used_secrets.get("model", ""),
+                        "media_hash": resolved.media_hash[:12],
+                        "reason": semantic_reason,
+                        "semantic_attempt": semantic_attempt,
+                        "semantic_retry_limit": semantic_retry_limit,
+                        "description": rendered.description,
+                        "quality": quality,
+                    },
+                    level="warning",
+                )
+                if semantic_attempt <= semantic_retry_limit:
+                    _media_log(
+                        context,
+                        runtime,
+                        step="media.analyze.provider_retry",
+                        fields={
+                            "provider": llm_result.used_secrets.get("_provider_name", ""),
+                            "model": llm_result.used_secrets.get("model", ""),
+                            "media_hash": resolved.media_hash[:12],
+                            "reason": semantic_reason,
+                            "semantic_attempt": semantic_attempt,
+                            "semantic_retry_limit": semantic_retry_limit,
+                        },
+                        level="warning",
+                    )
+                    continue
+                if index + 1 < len(complete_candidates):
+                    previous_provider = provider_secrets
+                    previous_reason = f"semantic_{semantic_reason}"
+                    break
+                _media_log(
+                    context,
+                    runtime,
+                    step="media.analyze.fail",
+                    fields={
+                        "provider": llm_result.used_secrets.get("_provider_name", ""),
+                        "model": llm_result.used_secrets.get("model", ""),
+                        "media_hash": resolved.media_hash[:12],
+                        "error": f"semantic_validation_failed:{semantic_reason}",
+                    },
+                    level="warning",
+                )
+                return None
+
             _media_log(
                 context,
                 runtime,
-                step="media.analyze.refine.fail",
+                step="media.analyze.ok",
                 fields={
-                    "provider": getattr(exc, "_media_provider_name", used_secrets.get("_provider_name", "")),
-                    "model": getattr(exc, "_media_provider_model", used_secrets.get("model", "")),
-                    "max_tokens": getattr(exc, "_media_provider_max_tokens", used_secrets.get("_effective_max_tokens", "")),
+                    "provider": llm_result.used_secrets.get("_provider_name", ""),
+                    "model": llm_result.used_secrets.get("model", ""),
+                    "max_tokens": llm_result.used_secrets.get("_effective_max_tokens", ""),
+                    "used_path": llm_result.used_path,
+                    "finish_reason": llm_result.finish_reason,
+                    "raw_chars": llm_result.raw_chars,
                     "media_hash": resolved.media_hash[:12],
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "kind": rendered.kind,
+                    "description": rendered.description,
+                    "detail_description": detail.description,
+                    "visible_text": detail.visible_text,
+                    "refined_description": refined.description if refined else "",
+                    "used_summary_fallback": used_summary_fallback,
+                    "marker": rendered.marker,
+                    "quality": quality,
                 },
-                level="warning",
             )
+            return rendered
 
-    used_summary_fallback = False
-    if kind == "emoji":
-        if refined and refined.description and not _is_generic_media_label(refined.description):
-            description = refined.description
-        elif detail.description and not _is_generic_media_label(detail.description):
-            description = detail.description
-        elif refined and refined.description:
-            description = refined.description
-        elif detail.description:
-            description = detail.description
-        else:
-            description = _safe_source_name(resolved.source_name) or "一张表情包"
-            used_summary_fallback = True
-        emotion_tags = refined.emotion_tags if refined and refined.emotion_tags else detail.emotion_tags
-        if not emotion_tags:
-            emotion_tags = _normalize_emotion_tags(description or detail.visible_text)
-    else:
-        description = detail.description
-        if not description:
-            description = _safe_source_name(resolved.source_name) or "一张图片"
-            used_summary_fallback = True
-        emotion_tags = tuple()
-
-    marker = _build_marker(kind, description, emotion_tags)
-    quality = "generic" if _is_low_quality_rendered_media(
-        RenderedMedia(
-            media_hash=resolved.media_hash,
-            kind=kind,
-            description=description,
-            emotion_tags=emotion_tags,
-            marker=marker,
-            cached_path=resolved.cached_path,
-        ),
-        summary_hint=resolved.source_name,
-        resolved=resolved,
-    ) else "detailed"
-    _media_log(
-        context,
-        runtime,
-        step="media.analyze.ok",
-        fields={
-            "provider": secrets.get("_provider_name", ""),
-            "model": secrets.get("model", ""),
-            "max_tokens": used_secrets.get("_effective_max_tokens", ""),
-            "media_hash": resolved.media_hash[:12],
-            "kind": kind,
-            "description": description,
-            "detail_description": detail.description,
-            "visible_text": detail.visible_text,
-            "refined_description": refined.description if refined else "",
-            "used_summary_fallback": used_summary_fallback,
-            "marker": marker,
-            "quality": quality,
-        },
-    )
-    return RenderedMedia(
-        media_hash=resolved.media_hash,
-        kind=kind,
-        description=description,
-        emotion_tags=emotion_tags,
-        marker=marker,
-        cached_path=resolved.cached_path,
-    )
+    return None

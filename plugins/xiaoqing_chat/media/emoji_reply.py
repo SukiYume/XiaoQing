@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import Sequence
 
-from ..llm.llm_client import chat_completions
 from ..logging_utils import _log_step
 from ..memory.memory import StoredMessage
 from .emoji_library import EmojiLibraryEntry, load_emoji_library
@@ -137,6 +136,17 @@ def _parse_candidate_choice(output: str, candidates: Sequence[EmojiLibraryEntry]
     )
 
 
+def _forced_emoji_fallback(
+    candidates: Sequence[EmojiLibraryEntry],
+    inbound_labels: Sequence[str],
+) -> EmojiLibraryEntry | None:
+    for label in inbound_labels:
+        selected = _find_entry_by_hint(candidates, label)
+        if selected is not None:
+            return selected
+    return None
+
+
 async def _validate_text_with_emoji_plan(
     *,
     context,
@@ -168,7 +178,6 @@ async def _validate_text_with_emoji_plan(
         secrets=secrets,
         system_prompt="你是聊天回复媒体增益检查器，只输出 allow/reason JSON。",
         user_prompt=prompt,
-        chat_func=chat_completions,
     )
     payload = extract_choice_json(output or "")
     allow = payload.get("allow")
@@ -324,30 +333,37 @@ async def plan_emoji_reply(
         secrets=secrets,
         system_prompt="你是聊天回复模态选择器，只输出指定 JSON。mode 只能是 none、emoji_only、text_with_emoji。",
         user_prompt=prompt,
-        chat_func=chat_completions,
     )
-    if not output:
-        if chat_id:
-            _log_step(
-                context,
-                runtime,
-                chat_id=chat_id,
-                step="reply.emoji.plan.skip",
-                fields={"reason": "empty_selector"},
-            )
-        return None
+    mode = "none"
+    entry: EmojiLibraryEntry | None = None
+    if output:
+        mode, entry = _parse_candidate_choice(output, candidates)
 
-    mode, entry = _parse_candidate_choice(output, candidates)
     if mode == "none" or entry is None:
+        fallback_entry = _forced_emoji_fallback(candidates, inbound_labels) if forced else None
+        if fallback_entry is None:
+            if chat_id:
+                _log_step(
+                    context,
+                    runtime,
+                    chat_id=chat_id,
+                    step="reply.emoji.plan.skip",
+                    fields={
+                        "reason": "selector_none" if output else "empty_selector",
+                        "mode": mode or "none",
+                    },
+                )
+            return None
+        mode = "text_with_emoji"
+        entry = fallback_entry
         if chat_id:
             _log_step(
                 context,
                 runtime,
                 chat_id=chat_id,
-                step="reply.emoji.plan.skip",
-                fields={"reason": "selector_none", "mode": mode or "none"},
+                step="reply.emoji.plan.fallback",
+                fields={"reason": "inbound_marker_exact_match", "emoji_hash": entry.media_hash},
             )
-        return None
     if mode == "text_with_emoji":
         allow = await _validate_text_with_emoji_plan(
             context=context,
