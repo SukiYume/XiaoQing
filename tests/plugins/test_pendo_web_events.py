@@ -147,6 +147,46 @@ def test_build_event_detail_includes_reminder_logs_and_related_instances():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_build_event_detail_preserves_milestone_notes():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_milestone_notes_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-event-milestone-notes"
+
+    try:
+        db.insert_item({
+            "id": "milestone-detail",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "线下会议",
+            "category": "会议",
+            "start_time": "2026-04-22T12:43:00",
+            "end_time": "2026-04-26T12:00:00",
+            "notes": "全局备注",
+            "milestones": [
+                {
+                    "name": "会议开始",
+                    "time": "2026-04-22T12:43:00",
+                    "notes": "北京南 G823，7车5F 坐",
+                },
+                {
+                    "name": "会议结束",
+                    "time": "2026-04-26T12:00:00",
+                },
+            ],
+            "remind_times": ["2026-04-21T12:43:00", "2026-04-25T12:00:00"],
+        })
+
+        detail = build_event_detail(db=db, owner_id=owner_id, event_id="milestone-detail")
+
+        assert detail is not None
+        assert detail["event"]["milestones"][0]["notes"] == "北京南 G823，7车5F 坐"
+        assert "notes" not in detail["event"]["milestones"][1]
+        assert detail["event"]["notes"] == "全局备注"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_batch_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)

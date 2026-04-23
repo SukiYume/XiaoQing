@@ -298,8 +298,11 @@ def format_event_reminders(event: Any, log_map: dict[str, dict[str, Any]]) -> di
                 milestone.get("time", ""), "%m月%d日 %H:%M"
             )
             builder.add_line(f"  📌 {milestone.get('name', '')}  {milestone_time}")
+            milestone_notes = str(milestone.get("notes", "") or "").strip()
+            if milestone_notes:
+                builder.add_line(f"     📝 {milestone_notes}")
     if notes:
-        builder.add_line(f"📝 {notes}")
+        builder.add_line(f"📝 全局备注: {notes}" if milestones else f"📝 {notes}")
     builder.add_line("─" * 30)
     builder.add_blank()
 

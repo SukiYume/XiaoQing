@@ -868,8 +868,8 @@ class TestMilestoneReminderMessage:
         db.get_user_settings = MagicMock(return_value={})
         return ReminderService(db=db)
 
-    def test_reminder_message_shows_milestone_name(self):
-        """提醒消息应显示对应里程碑名称"""
+    def test_reminder_message_prefers_targeted_milestone_notes(self):
+        """多节点事件提醒应优先显示目标节点备注，而不是事件级全局备注"""
         from types import SimpleNamespace
 
         service = self._make_service()
@@ -880,9 +880,13 @@ class TestMilestoneReminderMessage:
             start_time="2030-04-06T00:00:00",
             end_time="2030-04-26T12:00:00",
             location="江苏溧水",
-            notes="https://example.com",
+            notes="这是整场会议的全局说明",
             milestones=[
-                {"name": "注册截止", "time": "2030-04-06T00:00:00"},
+                {
+                    "name": "注册截止",
+                    "time": "2030-04-06T00:00:00",
+                    "notes": "报名材料今晚前发给秘书",
+                },
                 {"name": "会议开始", "time": "2030-04-22T10:30:00"},
             ],
             remind_times=["2030-04-05T00:00:00", "2030-04-05T23:00:00"],
@@ -896,6 +900,8 @@ class TestMilestoneReminderMessage:
         assert "星团会议" in msg
         assert "节点时间: 04月06日 00:00" in msg
         assert "对应提醒点: 提前1天（04月05日 00:00）" in msg
+        assert "报名材料今晚前发给秘书" in msg
+        assert "这是整场会议的全局说明" not in msg
 
     def test_reminder_message_shows_notes(self):
         """普通事件的提醒消息应附上 notes"""
@@ -1388,7 +1394,7 @@ class TestReminderRegression:
         finally:
             db.cleanup()
 
-    def test_edit_milestone_event_updates_targeted_milestone_and_keeps_other_nodes(self, tmp_path):
+    def test_edit_milestone_event_stores_targeted_notes_on_milestone_only(self, tmp_path):
         import sys
         from unittest.mock import AsyncMock, MagicMock
 
@@ -1396,6 +1402,7 @@ class TestReminderRegression:
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.reminder import ReminderService
         from plugins.pendo.services.db import Database
 
         db = Database(str(tmp_path / "pendo_milestone_targeted_edit.db"))
@@ -1453,13 +1460,18 @@ class TestReminderRegression:
 
             updated = db.items.get_item("mile5678", "u1")
             assert updated is not None
+            assert updated.title == "学术会议"
             assert updated.start_time == "2030-01-06T00:00:00"
             assert updated.end_time == "2030-01-26T12:00:00"
-            assert updated.notes == "从北京南坐G123去会场"
+            assert updated.notes == "旧备注"
             assert updated.milestones == [
                 {"name": "注册截止", "time": "2030-01-06T00:00:00"},
                 {"name": "报告提交截止", "time": "2030-01-13T00:00:00"},
-                {"name": "会议开始", "time": "2030-01-22T12:43:00"},
+                {
+                    "name": "会议开始",
+                    "time": "2030-01-22T12:43:00",
+                    "notes": "从北京南坐G123去会场",
+                },
                 {"name": "会议结束", "time": "2030-01-26T12:00:00"},
             ]
             assert updated.remind_times == [
@@ -1473,6 +1485,14 @@ class TestReminderRegression:
                 "2030-01-25T12:00:00",
                 "2030-01-26T12:00:00",
             ]
+
+            reminder_service = ReminderService(db)
+            start_msg = reminder_service._build_reminder_message(updated, "2030-01-21T12:43:00")
+            end_msg = reminder_service._build_reminder_message(updated, "2030-01-25T12:00:00")
+
+            assert "从北京南坐G123去会场" in start_msg
+            assert "从北京南坐G123去会场" not in end_msg
+            assert "旧备注" in end_msg
         finally:
             db.cleanup()
 

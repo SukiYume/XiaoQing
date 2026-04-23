@@ -373,7 +373,11 @@ function ensureStyles() {
         }
         .events-editor-mode button.active { background: rgba(245,158,11,0.14); color: var(--color-events); }
         .events-editor-rows { display: flex; flex-direction: column; gap: 8px; }
-        .events-editor-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, 0.8fr) auto; gap: 8px; align-items: center; }
+        .events-editor-row { display: grid; gap: 8px; align-items: center; }
+        .events-editor-row[data-reminder-row] { grid-template-columns: minmax(0, 1fr) auto; }
+        .events-editor-row[data-milestone-row] {
+            grid-template-columns: minmax(0, 1fr) minmax(170px, 0.8fr) minmax(0, 1fr) auto;
+        }
         .events-editor-row button {
             width: 34px; height: 34px; border-radius: 12px; border: 1px solid rgba(226,232,240,0.92); background: rgba(255,255,255,0.92);
             cursor: pointer; color: var(--color-text-secondary);
@@ -788,16 +792,16 @@ function reminderRowHTML(value = '') {
     return `
         <div class="events-editor-row" data-reminder-row>
             <input type="datetime-local" class="events-editor-reminder-input" value="${escapeHtml(value)}">
-            <div></div>
             <button type="button" data-remove-row>×</button>
         </div>`;
 }
 
-function milestoneRowHTML(name = '', time = '') {
+function milestoneRowHTML(name = '', time = '', notes = '') {
     return `
         <div class="events-editor-row" data-milestone-row>
             <input type="text" class="events-editor-milestone-name" placeholder="节点名称" value="${escapeHtml(name)}">
             <input type="datetime-local" class="events-editor-milestone-time" value="${escapeHtml(time)}">
+            <input type="text" class="events-editor-milestone-notes" placeholder="节点备注（仅该节点提醒显示）" value="${escapeHtml(notes)}">
             <button type="button" data-remove-row>×</button>
         </div>`;
 }
@@ -843,8 +847,8 @@ function editorModalHTML(existing = null, prefillDate = '') {
                     <label>时间节点</label>
                     <div class="events-editor-note">多节点事件会按节点时间生成当天时间线；保存时会自动用首尾节点推导整体起止时间。</div>
                     <div class="events-editor-rows" id="events-editor-milestones">
-                        ${(milestones.length ? milestones : [{ name: '', time: prefillDate ? `${prefillDate}T09:00:00` : '' }, { name: '', time: prefillDate ? `${prefillDate}T18:00:00` : '' }])
-                            .map((row) => milestoneRowHTML(row.name || '', toInputDateTime(row.time || ''))).join('')}
+                        ${(milestones.length ? milestones : [{ name: '', time: prefillDate ? `${prefillDate}T09:00:00` : '', notes: '' }, { name: '', time: prefillDate ? `${prefillDate}T18:00:00` : '', notes: '' }])
+                            .map((row) => milestoneRowHTML(row.name || '', toInputDateTime(row.time || ''), row.notes || '')).join('')}
                     </div>
                     <button type="button" class="events-editor-add" id="events-add-milestone">＋ 添加节点</button>
                 </div>
@@ -904,7 +908,8 @@ function collectEditorPayload(content) {
             .map((row) => {
                 const name = row.querySelector('.events-editor-milestone-name').value.trim();
                 const time = inputToIso(row.querySelector('.events-editor-milestone-time').value);
-                return name && time ? { name, time } : null;
+                const notes = row.querySelector('.events-editor-milestone-notes').value.trim();
+                return name && time ? { name, time, ...(notes ? { notes } : {}) } : null;
             })
             .filter(Boolean)
             .sort((a, b) => a.time.localeCompare(b.time));
@@ -940,7 +945,7 @@ function openEventEditor(existing = null, prefillDate = '') {
         content.querySelector('#events-editor-reminders').insertAdjacentHTML('beforeend', reminderRowHTML(''));
     };
     content.querySelector('#events-add-milestone').onclick = () => {
-        content.querySelector('#events-editor-milestones').insertAdjacentHTML('beforeend', milestoneRowHTML('', ''));
+        content.querySelector('#events-editor-milestones').insertAdjacentHTML('beforeend', milestoneRowHTML('', '', ''));
     };
 
     content.addEventListener('click', (event) => {
@@ -1013,6 +1018,7 @@ function renderDetailBody(detail) {
                                 <div>
                                     <div style="font-weight:700;color:var(--color-text);">${escapeHtml(milestone.name)}</div>
                                     <div style="margin-top:4px;font-size:12px;color:var(--color-text-secondary);">${escapeHtml(formatDateTime(milestone.time))}</div>
+                                    ${milestone.notes ? `<div style="margin-top:6px;font-size:12px;line-height:1.7;color:var(--color-text-secondary);">${escapeHtml(milestone.notes)}</div>` : ''}
                                 </div>
                             </div>
                         `).join('')}

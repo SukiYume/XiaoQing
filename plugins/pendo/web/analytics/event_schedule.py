@@ -52,11 +52,15 @@ def milestone_rows(event: EventItem) -> list[dict[str, Any]]:
         time_text = str(milestone.get("time") or "").strip()
         if not time_text:
             continue
-        rows.append({
+        row = {
             "name": str(milestone.get("name") or "节点").strip() or "节点",
             "time": time_text,
             "date": date_key(time_text),
-        })
+        }
+        notes = str(milestone.get("notes") or "").strip()
+        if notes:
+            row["notes"] = notes
+        rows.append(row)
     rows.sort(key=lambda row: row["time"])
     return rows
 
