@@ -771,6 +771,88 @@ def test_inbound_manager_update_token():
     manager.ws_server.update_token.assert_called_once_with("new_token")
 
 
+@pytest.mark.unit
+def test_inbound_manager_set_status_providers_updates_existing_servers():
+    """Test InboundManager forwards status providers to active servers."""
+
+    async def handler(event):
+        return []
+
+    manager = InboundManager(
+        inbound_http_base="",
+        inbound_ws_uri="",
+        token="test_token",
+        handler=handler,
+    )
+    manager.http_server = MagicMock()
+    manager.ws_server = MagicMock()
+    plugins_count = Mock(return_value=5)
+    sessions_count = Mock(return_value=2)
+    pending_jobs = Mock(return_value=1)
+    metrics = Mock(return_value={"ok": True})
+
+    manager.set_status_providers(
+        plugins_count=plugins_count,
+        sessions_count=sessions_count,
+        pending_jobs=pending_jobs,
+        metrics=metrics,
+    )
+
+    manager.http_server.set_status_providers.assert_called_once_with(
+        plugins_count=plugins_count,
+        sessions_count=sessions_count,
+        pending_jobs=pending_jobs,
+        metrics=metrics,
+    )
+    manager.ws_server.set_status_providers.assert_called_once_with(
+        plugins_count=plugins_count,
+        sessions_count=sessions_count,
+        pending_jobs=pending_jobs,
+        metrics=metrics,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_inbound_manager_applies_status_providers_when_servers_start():
+    """Test providers bound before start are applied to created servers."""
+
+    async def handler(event):
+        return []
+
+    created = []
+
+    class FakeInboundServer:
+        def __init__(self, *args, **kwargs):
+            self.set_status_providers = Mock()
+            self.kwargs = kwargs
+            created.append(self)
+
+        async def start(self):
+            return None
+
+    manager = InboundManager(
+        inbound_http_base="http://localhost:8080",
+        inbound_ws_uri="",
+        token="test_token",
+        handler=handler,
+    )
+    plugins_count = Mock(return_value=5)
+
+    manager.set_status_providers(plugins_count=plugins_count)
+
+    with patch("core.server.InboundServer", FakeInboundServer):
+        await manager.start()
+
+    assert len(created) == 1
+    created[0].set_status_providers.assert_called_once_with(
+        plugins_count=plugins_count,
+        sessions_count=None,
+        pending_jobs=None,
+        metrics=None,
+    )
+
+
 # ============================================================
 # Utility Function Tests
 # ============================================================
