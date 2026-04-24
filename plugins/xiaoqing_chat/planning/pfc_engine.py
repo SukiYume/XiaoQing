@@ -84,6 +84,21 @@ def _seconds_since_last_assistant(history: Sequence[StoredMessage], *, now: floa
     return 9999.0
 
 
+def _recent_successful_reply_action(
+    history: Sequence[StoredMessage],
+    action: str,
+    *,
+    now: float,
+    window_seconds: float,
+) -> str:
+    normalized = (action or "").strip()
+    if normalized not in ("direct_reply", "send_new_message"):
+        return ""
+    if _seconds_since_last_assistant(history, now=now) <= max(0.0, float(window_seconds)):
+        return normalized
+    return ""
+
+
 def _trailing_user_turns(history: Sequence[StoredMessage], *, now: float, window_seconds: float = 18.0) -> int:
     count = 0
     for msg in reversed(history[-8:]):
@@ -235,6 +250,21 @@ async def run_pfc_once(
         history = await memory_store.get_recent_async(
             chat_id, max_items=max(60, int(runtime_cfg.max_context_size) * 3)
         )
+        followup_action_window = float(
+            getattr(runtime_cfg, "pfc_followup_action_window_seconds", 120.0)
+        )
+        recent_reply_action = _recent_successful_reply_action(
+            history,
+            st.last_successful_reply_action or "",
+            now=now,
+            window_seconds=followup_action_window,
+        )
+        if (
+            st.last_successful_reply_action in ("direct_reply", "send_new_message")
+            and not recent_reply_action
+        ):
+            st.last_successful_reply_action = ""
+            _pfc_dirty = True
         action_summary, last_ctx = await _action_history_summary_async(action_history, chat_id)
         timeout_ctx = _timeout_context(history)
 
@@ -266,7 +296,7 @@ async def run_pfc_once(
             "action_history_summary": action_summary,
             "last_action_context": last_ctx,
             "timeout_context": timeout_ctx,
-            "last_successful_reply_action": st.last_successful_reply_action or "",
+            "last_successful_reply_action": recent_reply_action,
             "temperature": runtime_cfg.temperature,
             "top_p": runtime_cfg.top_p,
             "max_tokens": runtime_cfg.max_tokens,
@@ -337,7 +367,7 @@ async def run_pfc_once(
             is_private=is_private,
             history=history,
             current_text=current_text,
-            last_successful_reply_action=st.last_successful_reply_action or "",
+            last_successful_reply_action=recent_reply_action,
             normalized_action=act,
             now=now,
         )
