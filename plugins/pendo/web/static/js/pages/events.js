@@ -89,6 +89,21 @@ function inputToIso(value) {
     return value.length === 16 ? `${value}:00` : value;
 }
 
+function reminderRulesFromTimes(startTime, remindTimes = []) {
+    if (!startTime || !remindTimes.length) return [{ offset_seconds: 0 }];
+    const start = new Date(startTime).getTime();
+    const offsets = new Set();
+    for (const value of remindTimes) {
+        const remind = new Date(value).getTime();
+        if (Number.isFinite(start) && Number.isFinite(remind)) {
+            const offset = Math.round((start - remind) / 1000);
+            if (offset >= 0) offsets.add(offset);
+        }
+    }
+    offsets.add(0);
+    return [...offsets].sort((a, b) => b - a).map((offset) => ({ offset_seconds: offset }));
+}
+
 function currentRange() {
     if (_state.viewMode === 'calendar') {
         return {
@@ -595,7 +610,7 @@ function renderCalendarPanel() {
 }
 
 function kindPill(kind) {
-    if (kind === 'milestone') return '<span class="events-pill kind-milestone">多节点</span>';
+    if (kind === 'milestone' || kind === 'multi_node') return '<span class="events-pill kind-milestone">多节点</span>';
     if (kind === 'recurring') return '<span class="events-pill kind-recurring">重复实例</span>';
     return '<span class="events-pill kind-single">单次事件</span>';
 }
@@ -608,14 +623,16 @@ function renderTimelineEntries(items) {
     const events = eventMap();
     return items.map((item) => {
         const event = events.get(String(item.event_id));
-        const dotKind = item.kind.includes('milestone') ? 'milestone' : (item.kind === 'recurring' ? 'recurring' : '');
+        const dotKind = (item.kind || '').includes('milestone') || item.kind === 'multi_node' ? 'milestone' : (item.kind === 'recurring' ? 'recurring' : '');
+        const collectionTitle = item.collection?.title || event?.collection?.title || '';
+        const title = collectionTitle ? `${collectionTitle} · ${item.title || event?.title || '(无标题)'}` : (item.title || '(无标题)');
         return `
                 <article class="events-timeline-item" data-event-id="${item.event_id}">
                     <div class="events-timeline-time">${escapeHtml(item.time_label || '全天')}</div>
                     <div class="events-timeline-track"><span class="events-timeline-dot ${dotKind}"></span></div>
                     <div class="events-timeline-card">
                         <div class="events-timeline-top">
-                            <div class="events-timeline-title">${escapeHtml(item.title || '(无标题)')}</div>
+                            <div class="events-timeline-title">${escapeHtml(title)}</div>
                         </div>
                         <div class="events-timeline-subtitle">${escapeHtml(item.subtitle || event?.time_summary || '')}</div>
                         <div class="events-timeline-meta">
@@ -807,7 +824,7 @@ function milestoneRowHTML(name = '', time = '', notes = '') {
 }
 
 function editorModalHTML(existing = null, prefillDate = '') {
-    const isMilestone = !!(existing?.milestones?.length >= 2);
+    const isMilestone = !existing && !!(existing?.milestones?.length >= 2);
     const startValue = existing?.start_time ? toInputDateTime(existing.start_time) : (prefillDate ? `${prefillDate}T09:00` : '');
     const endValue = existing?.end_time ? toInputDateTime(existing.end_time) : '';
     const reminders = (existing?.reminders || []).map((row) => toInputDateTime(row.time || '')).filter(Boolean);
@@ -901,7 +918,7 @@ function collectEditorPayload(content) {
 
     if (!title) throw new Error('请填写标题');
 
-    const payload = { title, category, location, notes, remind_times: remindTimes };
+    const payload = { title, category, location, notes };
 
     if (mode === 'milestone') {
         const milestones = [...form.querySelectorAll('[data-milestone-row]')]
@@ -915,15 +932,20 @@ function collectEditorPayload(content) {
             .sort((a, b) => a.time.localeCompare(b.time));
 
         if (milestones.length < 2) throw new Error('多节点事件至少需要 2 个有效节点');
-        payload.milestones = milestones;
-        payload.start_time = milestones[0].time;
-        payload.end_time = milestones[milestones.length - 1].time;
+        payload.kind = 'multi_node';
+        payload.reminder_rules = reminderRulesFromTimes(milestones[0].time, remindTimes);
+        payload.children = milestones.map((row) => ({
+            title: row.name,
+            start_time: row.time,
+            ...(row.notes ? { notes: row.notes } : {}),
+        }));
     } else {
         const startTime = inputToIso(form.querySelector('[name="start_time"]').value);
         const endTime = inputToIso(form.querySelector('[name="end_time"]').value);
         if (!startTime) throw new Error('请填写开始时间');
         payload.start_time = startTime;
         payload.end_time = endTime || null;
+        payload.reminder_rules = reminderRulesFromTimes(startTime, remindTimes);
         payload.milestones = [];
     }
 
@@ -967,6 +989,9 @@ function openEventEditor(existing = null, prefillDate = '') {
             if (existing) {
                 await api.put(`/items/${existing.id}`, payload);
                 showToast('日程已更新', 'success');
+            } else if (payload.children?.length) {
+                await api.post('/events/collections', payload);
+                showToast('多节点日程已创建', 'success');
             } else {
                 await api.post('/items', { type: 'event', ...payload });
                 showToast('日程已创建', 'success');
@@ -995,8 +1020,146 @@ async function deleteEvent(eventId, title = '这条日程') {
     await loadOverview();
 }
 
+async function deleteCollection(collectionId, title = '这个日程集合') {
+    const confirmed = await showConfirmModal({
+        title: '删除整个多节点日程',
+        message: `确定要删除“${title}”以及它的全部节点吗？`,
+        confirmText: '删除全部',
+        cancelText: '取消',
+        tone: 'danger',
+    });
+    if (!confirmed) return;
+    await api.delete(`/events/collections/${collectionId}`);
+    showToast('多节点日程已删除', 'success');
+    window.dispatchEvent(new CustomEvent('pendo-data-changed'));
+    await loadOverview();
+}
+
+function collectionEditorHTML(collection = {}) {
+    return `
+        <form id="events-collection-editor-form" class="events-editor-grid">
+            <div class="events-editor-field full">
+                <label>集合标题</label>
+                <input name="title" type="text" value="${escapeHtml(collection.title || '')}">
+            </div>
+            <div class="events-editor-field">
+                <label>分类</label>
+                <input name="category" type="text" value="${escapeHtml(collection.category || '')}">
+            </div>
+            <div class="events-editor-field">
+                <label>地点</label>
+                <input name="location" type="text" value="${escapeHtml(collection.location || '')}">
+            </div>
+            <div class="events-editor-field full">
+                <label>备注</label>
+                <textarea name="notes">${escapeHtml(collection.notes || '')}</textarea>
+            </div>
+        </form>`;
+}
+
+function openCollectionEditor(collection) {
+    const content = showModal('编辑多节点日程', collectionEditorHTML(collection), {
+        footer: `
+            <button class="btn btn-secondary" id="events-collection-editor-cancel">取消</button>
+            <button class="btn btn-primary" id="events-collection-editor-save">保存</button>
+        `,
+    });
+    content.querySelector('#events-collection-editor-cancel').onclick = closeModal;
+    content.querySelector('#events-collection-editor-save').onclick = async () => {
+        const form = content.querySelector('#events-collection-editor-form');
+        const payload = {
+            title: form.querySelector('[name="title"]').value.trim(),
+            category: form.querySelector('[name="category"]').value.trim() || '未分类',
+            location: form.querySelector('[name="location"]').value.trim(),
+            notes: form.querySelector('[name="notes"]').value.trim(),
+        };
+        if (!payload.title) {
+            showToast('请填写集合标题', 'error');
+            return;
+        }
+        try {
+            await api.put(`/events/collections/${collection.id}`, payload);
+            showToast('多节点日程已更新', 'success');
+            closeModal();
+            window.dispatchEvent(new CustomEvent('pendo-data-changed'));
+            await loadOverview();
+        } catch (err) {
+            showToast('保存失败：' + err.message, 'error');
+        }
+    };
+}
+
+function renderCollectionDetailBody(detail) {
+    const collection = detail.collection || {};
+    const children = detail.children || [];
+    return `
+        <div class="events-detail-shell">
+            <section class="events-detail-summary">
+                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+                    <span class="events-pill kind-milestone">多节点</span>
+                    ${collection.category ? `<span class="events-pill">${escapeHtml(collection.category)}</span>` : ''}
+                    ${collection.location ? `<span class="events-pill">📍 ${escapeHtml(collection.location)}</span>` : ''}
+                </div>
+                <h3 class="events-detail-title">${escapeHtml(collection.title || '(无标题)')}</h3>
+                ${collection.notes ? `<div style="margin-top:12px;font-size:13px;line-height:1.8;color:var(--color-text-secondary);">${escapeHtml(collection.notes)}</div>` : ''}
+            </section>
+            <section class="events-detail-block">
+                <h4>节点</h4>
+                <div class="events-detail-list">
+                    ${children.map((child) => `
+                        <div class="events-detail-row">
+                            <div>
+                                <div style="font-weight:700;color:var(--color-text);">${escapeHtml(child.title || '(无标题)')}</div>
+                                <div style="margin-top:4px;font-size:12px;color:var(--color-text-secondary);">${escapeHtml(formatDateTime(child.start_time))} · ${escapeHtml(child.id)}</div>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" data-open-detail="${child.id}">详情</button>
+                        </div>
+                    `).join('')}
+                </div>
+            </section>
+        </div>`;
+}
+
+async function openCollectionDetail(collectionId) {
+    try {
+        const res = await api.get(`/events/collections/${collectionId}/detail`);
+        const detail = res.data;
+        const collection = detail.collection;
+        const content = showModal('多节点日程', renderCollectionDetailBody(detail), {
+            footer: `
+                <button class="btn btn-secondary" id="events-collection-close">关闭</button>
+                <button class="btn btn-primary" id="events-collection-edit">编辑整体</button>
+                <button class="btn btn-danger" id="events-collection-delete">删除整体</button>
+            `,
+        });
+        content.querySelector('#events-collection-close').onclick = closeModal;
+        content.querySelector('#events-collection-edit').onclick = () => {
+            closeModal();
+            openCollectionEditor(collection);
+        };
+        content.querySelector('#events-collection-delete').onclick = async () => {
+            closeModal();
+            try {
+                await deleteCollection(collection.id, collection.title || '这个日程集合');
+            } catch (err) {
+                showToast('删除失败：' + err.message, 'error');
+            }
+        };
+        content.addEventListener('click', async (event) => {
+            const trigger = event.target.closest('[data-open-detail]');
+            if (trigger?.dataset.openDetail) {
+                closeModal();
+                await openEventDetail(trigger.dataset.openDetail);
+            }
+        });
+    } catch (err) {
+        showToast('加载集合失败：' + err.message, 'error');
+    }
+}
+
 function renderDetailBody(detail) {
     const event = detail.event;
+    const collection = event.collection || null;
     return `
         <div class="events-detail-shell">
             <section class="events-detail-summary">
@@ -1005,6 +1168,7 @@ function renderDetailBody(detail) {
                     ${event.category ? `<span class="events-pill">${escapeHtml(event.category)}</span>` : ''}
                     ${event.location ? `<span class="events-pill">📍 ${escapeHtml(event.location)}</span>` : ''}
                 </div>
+                ${collection ? `<div style="margin-bottom:8px;font-size:13px;font-weight:800;color:var(--color-events);">${escapeHtml(collection.title || '多节点日程')}</div>` : ''}
                 <h3 class="events-detail-title">${escapeHtml(event.title || '(无标题)')}</h3>
                 <div class="events-detail-time">${escapeHtml(formatDateTime(event.start_time))}${event.end_time ? ` - ${escapeHtml(formatDateTime(event.end_time))}` : ''}</div>
                 ${event.notes ? `<div style="margin-top:12px;font-size:13px;line-height:1.8;color:var(--color-text-secondary);">${escapeHtml(event.notes)}</div>` : ''}
@@ -1053,6 +1217,11 @@ function renderDetailBody(detail) {
                         `).join('')}
                     </div>
                 </section>` : ''}
+            ${collection ? `
+                <section class="events-detail-block">
+                    <h4>整体</h4>
+                    <button class="btn btn-secondary btn-sm" data-open-collection="${collection.id}">管理“${escapeHtml(collection.title || '多节点日程')}”</button>
+                </section>` : ''}
         </div>`;
 }
 
@@ -1065,11 +1234,19 @@ export async function openEventDetail(eventId) {
         const content = showModal('日程详情', renderDetailBody(detail), {
             footer: `
                 <button class="btn btn-secondary" id="events-detail-close">关闭</button>
-                <button class="btn btn-primary" id="events-detail-edit">编辑</button>
-                <button class="btn btn-danger" id="events-detail-delete">删除</button>
+                ${event.collection ? '<button class="btn btn-secondary" id="events-detail-group">管理整体</button>' : ''}
+                <button class="btn btn-primary" id="events-detail-edit">编辑节点</button>
+                <button class="btn btn-danger" id="events-detail-delete">删除节点</button>
             `,
         });
         content.querySelector('#events-detail-close').onclick = closeModal;
+        const groupButton = content.querySelector('#events-detail-group');
+        if (groupButton) {
+            groupButton.onclick = async () => {
+                closeModal();
+                await openCollectionDetail(event.collection.id);
+            };
+        }
         content.querySelector('#events-detail-edit').onclick = () => {
             closeModal();
             openEventEditor(event, _state.selectedDate);
@@ -1082,6 +1259,13 @@ export async function openEventDetail(eventId) {
                 showToast('删除失败：' + err.message, 'error');
             }
         };
+        content.addEventListener('click', async (event) => {
+            const trigger = event.target.closest('[data-open-collection]');
+            if (trigger?.dataset.openCollection) {
+                closeModal();
+                await openCollectionDetail(trigger.dataset.openCollection);
+            }
+        });
     } catch (err) {
         showToast('加载详情失败：' + err.message, 'error');
     }
