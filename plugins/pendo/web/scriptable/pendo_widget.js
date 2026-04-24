@@ -4,7 +4,7 @@
 
 // Replace these placeholders with your own deployed Pendo Web address and
 // `/pendo web widget-token` value before using the Scriptable widget.
-const BASE_URL = "https://example.com/pendo".replace(/\/+$/, "");
+const BASE_URL = normalizeBaseUrl("https://example.com/pendo");
 const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
 const DEFAULT_MEDIUM_SECTION = "auto";
 // 日历同步：在 Scriptable 内直接运行脚本时，将 Pendo 日程同步到 iOS 日历。
@@ -268,6 +268,16 @@ const LAYOUTS = {
 };
 
 // ---------- 通用辅助 ----------
+function normalizeBaseUrl(value) {
+  return String(value || "")
+    .trim()
+    .split("#")[0]
+    .split("?")[0]
+    .replace(/\/api\/widget\/summary\/?$/i, "")
+    .replace(/\/api\/?$/i, "")
+    .replace(/\/+$/, "");
+}
+
 function appUrl(path) {
   return `${BASE_URL}/${String(path || "#/dashboard").replace(/^\/+/, "")}`;
 }
@@ -415,15 +425,31 @@ function widgetSectionParam() {
 }
 
 async function fetchData(section) {
-  const request = new Request(
-    `${BASE_URL}/api/widget/summary?section=${encodeURIComponent(section)}`,
-  );
+  const url = `${BASE_URL}/api/widget/summary?section=${encodeURIComponent(section)}`;
+  const request = new Request(url);
   request.method = "GET";
   request.headers = { Authorization: `Bearer ${TOKEN}` };
   request.timeoutInterval = 20;
-  const result = await request.loadJSON();
+  const raw = await request.loadString();
+  const status = request.response?.statusCode;
+  let result;
+  try {
+    result = JSON.parse(String(raw || "").replace(/^\uFEFF/, ""));
+  } catch (_) {
+    const preview = String(raw || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+    const statusText = status ? `HTTP ${status}: ` : "";
+    throw new Error(
+      `${statusText}接口未返回 JSON。请检查 BASE_URL 只填 Pendo Web 根地址，不要带 #/dashboard。${preview}`,
+    );
+  }
   if (!result.ok) {
-    throw new Error(result.message || "Widget request failed");
+    const statusText = status ? `HTTP ${status}: ` : "";
+    throw new Error(
+      result.message || result.detail || `${statusText}Widget request failed`,
+    );
   }
   return result.data || {};
 }
