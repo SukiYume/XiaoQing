@@ -273,8 +273,8 @@ def _get_llm_secrets(context: Any) -> dict[str, Any]:
     return result
 
 
-def _llm_extra_payload(secrets: dict[str, Any]) -> dict[str, Any]:
-    """Build provider-specific OpenAI-compatible request fields from secrets."""
+def _llm_declared_extra_payload(secrets: dict[str, Any]) -> dict[str, Any]:
+    """Build request fields explicitly declared as provider payload options."""
     payload: dict[str, Any] = {}
     for key in _LLM_EXTRA_DIRECT_KEYS:
         if key in secrets and secrets.get(key) is not None:
@@ -283,6 +283,12 @@ def _llm_extra_payload(secrets: dict[str, Any]) -> dict[str, Any]:
         value = secrets.get(key)
         if isinstance(value, dict):
             payload.update(value)
+    return payload
+
+
+def _llm_extra_payload(secrets: dict[str, Any]) -> dict[str, Any]:
+    """Build provider-specific OpenAI-compatible request fields from secrets."""
+    payload = _llm_declared_extra_payload(secrets)
     for key, value in secrets.items():
         if key in _LLM_SECRET_BASE_KEYS or key in _LLM_EXTRA_DIRECT_KEYS or key in _LLM_EXTRA_PAYLOAD_KEYS:
             continue
