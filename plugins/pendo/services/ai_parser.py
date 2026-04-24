@@ -98,6 +98,7 @@ class AIParser:
 规则:
 - 相对时间转绝对时间(明天→具体日期)
 - 无时间则默认09:00
+- milestones 是解析阶段的多节点列表；系统会把每个 milestone 创建成可独立删除、修改、查询的日程节点，并用 title 作为整体日程标题
 - 若用户描述多个具名时间点(如截止、开始、结束、里程碑等事件节点)，填milestones列表，start_time/end_time留null
 - "提前X天/周/小时提醒"是提醒偏移量，必须放入remind_offsets，绝对不能作为milestones节点
 - 普通单次事件milestones留空列表[]

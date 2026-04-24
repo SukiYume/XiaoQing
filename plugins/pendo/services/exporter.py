@@ -72,7 +72,7 @@ class ExporterService:
         "diary": "diary",
     }
     _TYPE_SUMMARY_HINTS = {
-        "event": "按开始时间归档，保留地点、提醒、里程碑等上下文。",
+        "event": "按开始时间归档，保留地点、提醒、日程集合与节点上下文。",
         "task": "按截止时间或创建时间排序，保留优先级与完成状态。",
         "note": "按创建时间归档，保留分类与标签信息。",
         "ledger": "按记账日期归档，突出收支方向、金额与分类。",
@@ -81,9 +81,11 @@ class ExporterService:
 
     def __init__(self, db):
         self.db = db
+        self._event_collection_cache: dict[tuple[str | None, str], dict[str, Any] | None] = {}
 
     def export_markdown(self, user_id: str, args: str, context: dict[str, Any]) -> dict[str, Any]:
         """导出为单个 Markdown 档案文件。"""
+        self._event_collection_cache.clear()
         params = self._parse_export_args(args)
         if params.get("status") == "error":
             return params
@@ -426,7 +428,7 @@ class ExporterService:
         return "\n".join(blocks)
 
     def _render_item_block(self, item_type: str, item: Any, index: int) -> str:
-        title = (getattr(item, "title", "") or "").strip() or "无标题"
+        title = self._display_title(item_type, item)
         meta_rows = self._build_common_meta_rows(item_type, item)
         extra_rows = self._build_type_specific_rows(item_type, item)
         all_rows = meta_rows + extra_rows
@@ -450,8 +452,13 @@ class ExporterService:
         return "\n".join(lines)
 
     def _build_common_meta_rows(self, item_type: str, item: Any) -> list[tuple[str, str]]:
+        category = getattr(item, "category", "")
+        if item_type == "event" and self._is_uncategorized(category):
+            collection = self._get_event_collection(item)
+            if collection:
+                category = collection.get("category") or category
         rows = [
-            ("分类", self._escape_table(self._value_or_dash(getattr(item, "category", "")))),
+            ("分类", self._escape_table(self._value_or_dash(category))),
             ("标签", self._escape_table(self._format_tags(getattr(item, "tags", [])))),
             ("创建时间", self._escape_table(self._format_time_value(getattr(item, "created_at", None)))),
             ("更新时间", self._escape_table(self._format_time_value(getattr(item, "updated_at", None)))),
@@ -465,6 +472,7 @@ class ExporterService:
 
     def _build_type_specific_rows(self, item_type: str, item: Any) -> list[tuple[str, str]]:
         if item_type == "event":
+            collection = self._get_event_collection(item)
             return [
                 (
                     "开始时间",
@@ -474,7 +482,14 @@ class ExporterService:
                     "结束时间",
                     self._escape_table(self._format_time_value(getattr(item, "end_time", None))),
                 ),
-                ("地点", self._escape_table(self._value_or_dash(getattr(item, "location", "")))),
+                (
+                    "地点",
+                    self._escape_table(
+                        self._value_or_dash(
+                            getattr(item, "location", "") or ((collection or {}).get("location") or "")
+                        )
+                    ),
+                ),
                 (
                     "提醒",
                     self._escape_table(
@@ -533,6 +548,20 @@ class ExporterService:
 
         return []
 
+    def _display_title(self, item_type: str, item: Any) -> str:
+        title = (getattr(item, "title", "") or "").strip() or "无标题"
+        if item_type != "event":
+            return title
+        collection = self._get_event_collection(item)
+        if not collection:
+            return title
+        collection_title = str(collection.get("title") or "").strip()
+        if not collection_title:
+            return title
+        if collection_title == title:
+            return title
+        return f"{collection_title} · {title}"
+
     def _build_body_sections(self, item_type: str, item: Any) -> list[str]:
         sections: list[str] = []
         content = (getattr(item, "content", "") or "").strip()
@@ -565,10 +594,18 @@ class ExporterService:
         owner_id = getattr(item, "owner_id", None)
         if not collection_id or not hasattr(self.db.items, "get_event_collection"):
             return None
+        cache_key = (str(owner_id) if owner_id else None, str(collection_id))
+        if cache_key in self._event_collection_cache:
+            return self._event_collection_cache[cache_key]
         try:
-            return self.db.items.get_event_collection(collection_id, owner_id)
+            collection = self.db.items.get_event_collection(collection_id, owner_id)
         except Exception:
-            return None
+            collection = None
+        self._event_collection_cache[cache_key] = collection
+        return collection
+
+    def _is_uncategorized(self, value: Any) -> bool:
+        return str(value or "").strip() in {"", "未分类"}
 
     def _format_tags(self, tags: Any) -> str:
         if not tags:
