@@ -7,7 +7,7 @@ from typing import Any, TYPE_CHECKING, cast
 from datetime import datetime
 import re
 import logging
-from ..models.item import ItemType, NoteItem
+from ..models.item import ItemType, NoteItem, get_item_type_value
 from ..core.types import PendoContext, CommandMessage
 from core.plugin_base import run_sync
 from ..utils.db_ops import DbOpsMixin
@@ -48,9 +48,9 @@ class NoteHandler(DbOpsMixin):
         """处理笔记相关命令
 
         命令格式：
-        - /pendo note add <内容> [cat:xxx] [#tag]
-        - /pendo note add title:<标题> content <正文> [cat:xxx] [#tag]
-        - /pendo note add title:<标题>\n<正文多行>\ncat:xxx #tag
+        - /pendo note add <内容> [cat:xxx] [#tag] [ref:条目ID]
+        - /pendo note add title:<标题> content <正文> [cat:xxx] [#tag] [ref:条目ID]
+        - /pendo note add title:<标题>\n<正文多行>\ncat:xxx #tag ref:条目ID
         - /pendo note list [cat:xxx] [#tag] [all|page:n]
         - /pendo note view <id>
         - /pendo note edit <id> <新内容> [cat:xxx] [#tag]
@@ -69,6 +69,10 @@ class NoteHandler(DbOpsMixin):
             "list": lambda: self.list_notes(user_id, rest, context),
             "view": lambda: self.view_note(user_id, rest, context),
             "edit": lambda: self.edit_note(user_id, rest, context),
+            "append": lambda: self.append_note(user_id, rest, context),
+            "tag": lambda: self.tag_note(user_id, rest, context),
+            "untag": lambda: self.untag_note(user_id, rest, context),
+            "link": lambda: self.link_note(user_id, rest, context),
             "delete": lambda: self.delete_note(user_id, rest, context),
         }
 
@@ -82,12 +86,15 @@ class NoteHandler(DbOpsMixin):
                 "message": (
                     f"❌ 未知笔记命令: {command}\n\n"
                     "可用命令:\n"
-                    "• /pendo note add <内容> [cat:xxx] [#tag]\n"
+                    "• /pendo note add <内容> [cat:xxx] [#tag] [ref:条目ID]\n"
                     "• /pendo note add title:<标题> content <正文> [cat:xxx] [#tag]\n"
                     "• /pendo note add title:<标题> 后换行写正文，结尾可加 cat:xxx #tag\n"
                     "• /pendo note list [cat:xxx] [#tag]\n"
                     "• /pendo note view <id>\n"
                     "• /pendo note edit <id> <新内容>\n"
+                    "• /pendo note append <id> <追加内容>\n"
+                    "• /pendo note tag <id> #标签 / untag <id> #标签\n"
+                    "• /pendo note link <id> <关联条目ID>\n"
                     "• /pendo note delete <id|cat:xxx>"
                 ),
             }
@@ -106,6 +113,13 @@ class NoteHandler(DbOpsMixin):
 
         clean_content = parsed["content"]
         title = parsed["title"]
+        try:
+            references, related_items = await self._resolve_note_references(
+                user_id,
+                parsed.get("reference_ids", []),
+            )
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
 
         # 创建数据
         from ..models.item import NoteItem
@@ -116,6 +130,8 @@ class NoteHandler(DbOpsMixin):
             content=clean_content,
             tags=parsed["tags"],
             category=parsed["category"],
+            references=references,
+            related_items=related_items,
             context={"group_id": group_id} if group_id else {},
             created_at=datetime.now().isoformat(),
             updated_at=datetime.now().isoformat(),
@@ -149,6 +165,88 @@ class NoteHandler(DbOpsMixin):
                 items_with_tags += 1
         return category_tags, items_with_tags
 
+    @staticmethod
+    def _type_label(item_type: str) -> str:
+        return {
+            "event": "日程",
+            "task": "待办",
+            "note": "笔记",
+            "diary": "日记",
+            "ledger": "账目",
+        }.get(item_type, "条目")
+
+    @staticmethod
+    def _merge_references(
+        existing_refs: list[dict[str, Any]] | None,
+        new_refs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for ref in [*(existing_refs or []), *new_refs]:
+            if not isinstance(ref, dict):
+                continue
+            ref_id = str(ref.get("id") or "").strip()
+            if not ref_id or ref_id in seen:
+                continue
+            seen.add(ref_id)
+            merged.append(ref)
+        return merged
+
+    @staticmethod
+    def _related_from_references(refs: list[dict[str, Any]]) -> list[str]:
+        related: list[str] = []
+        seen: set[str] = set()
+        for ref in refs:
+            ref_id = str(ref.get("id") or "").strip()
+            if ref_id and ref_id not in seen:
+                seen.add(ref_id)
+                related.append(ref_id)
+        return related
+
+    async def _resolve_note_references(
+        self,
+        user_id: str,
+        ref_ids: list[str] | None,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        references: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw_id in ref_ids or []:
+            ref_id = str(raw_id or "").strip()
+            if not ref_id or ref_id in seen:
+                continue
+            seen.add(ref_id)
+            target = await self._db_get_item(ref_id, user_id)
+            if target is None:
+                raise ValueError(f"关联条目不存在: {ref_id}")
+            item_type = get_item_type_value(getattr(target, "type", None), default="item")
+            references.append({
+                "kind": "item",
+                "id": ref_id,
+                "type": item_type,
+                "title": getattr(target, "title", "") or "无标题",
+            })
+        return references, self._related_from_references(references)
+
+    async def _find_note_backlinks(self, user_id: str, note_id: str) -> list[NoteItem]:
+        notes = cast(
+            list[NoteItem],
+            await run_sync(self.db.items.get_items, user_id, {"type": ItemType.NOTE.value}, 1000),
+        )
+        backlinks: list[NoteItem] = []
+        for note in notes:
+            if note.id == note_id:
+                continue
+            related = set(str(value) for value in (getattr(note, "related_items", None) or []))
+            refs = getattr(note, "references", None) or []
+            related.update(
+                str(ref.get("id"))
+                for ref in refs
+                if isinstance(ref, dict) and ref.get("id")
+            )
+            if note_id in related:
+                backlinks.append(note)
+        return backlinks[:10]
+
     def _parse_note_text(self, text: str) -> dict[str, Any]:
         """解析笔记文本（纯规则解析）
 
@@ -173,6 +271,7 @@ class NoteHandler(DbOpsMixin):
             "content": content_text,
             "category": meta["category"] or "",
             "tags": meta["tags"],
+            "reference_ids": meta.get("reference_ids", []),
         }
 
     @staticmethod
@@ -269,17 +368,18 @@ class NoteHandler(DbOpsMixin):
         """仅从尾部提取 note metadata，避免误伤正文中的 Markdown/标签文本。"""
         lines = (text or "").rstrip().splitlines()
         if not lines:
-            return {"text": "", "category": None, "tags": []}
+            return {"text": "", "category": None, "tags": [], "reference_ids": []}
 
         category = None
         tags: list[str] = []
+        reference_ids: list[str] = []
 
         for idx in range(len(lines) - 1, -1, -1):
             current = lines[idx].rstrip()
             if not current.strip():
                 continue
 
-            remaining, line_category, line_tags, had_metadata = cls._strip_note_metadata_suffix(
+            remaining, line_category, line_tags, line_refs, had_metadata = cls._strip_note_metadata_suffix(
                 current
             )
             if not had_metadata:
@@ -289,6 +389,8 @@ class NoteHandler(DbOpsMixin):
                 category = line_category
             if line_tags:
                 tags = line_tags + tags
+            if line_refs:
+                reference_ids = line_refs + reference_ids
 
             if remaining.strip():
                 lines[idx] = remaining.rstrip()
@@ -296,35 +398,73 @@ class NoteHandler(DbOpsMixin):
 
             lines = lines[:idx]
 
-        return {"text": "\n".join(lines).strip(), "category": category, "tags": tags}
+        return_text = "\n".join(lines).strip()
+        inline_refs = [
+            cls._normalize_metadata_token_value(token)
+            for token in re.findall(r'(?<!\S)ref:("[^"]+"|\S+)', return_text, flags=re.IGNORECASE)
+        ]
+        reference_ids = cls._dedupe_reference_ids([*reference_ids, *inline_refs])
+        return_text = re.sub(r'(?<!\S)ref:("[^"]+"|\S+)', " ", return_text, flags=re.IGNORECASE).strip()
+
+        return {
+            "text": return_text,
+            "category": category,
+            "tags": tags,
+            "reference_ids": reference_ids,
+        }
 
     @staticmethod
-    def _strip_note_metadata_suffix(line: str) -> tuple[str, str | None, list[str], bool]:
-        """从单行尾部反复剥离 cat: 与 #tag token。"""
+    def _normalize_metadata_token_value(raw_value: str) -> str:
+        value = (raw_value or "").strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1].strip()
+        return value
+
+    @staticmethod
+    def _dedupe_reference_ids(values: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            ref_id = str(value or "").strip()
+            if ref_id and ref_id not in seen:
+                seen.add(ref_id)
+                result.append(ref_id)
+        return result
+
+    @staticmethod
+    def _strip_note_metadata_suffix(line: str) -> tuple[str, str | None, list[str], list[str], bool]:
+        """从单行尾部反复剥离 cat:、ref: 与 #tag token。"""
         remaining = line.rstrip()
         category = None
         tags: list[str] = []
+        reference_ids: list[str] = []
         had_metadata = False
 
         while remaining:
-            token_match = re.search(r'(?:^|\s)(cat:(?:"[^"]+"|\S+)|#[\w-]+)\s*$', remaining)
+            token_match = re.search(
+                r'(?:^|\s)(cat:(?:"[^"]+"|\S+)|ref:(?:"[^"]+"|\S+)|#[\w\u4e00-\u9fa5-]+)\s*$',
+                remaining,
+                flags=re.IGNORECASE,
+            )
             if not token_match:
                 break
 
             token = token_match.group(1)
             had_metadata = True
 
-            if token.startswith("cat:") and category is None:
-                category_value = token[4:]
-                if category_value.startswith('"') and category_value.endswith('"'):
-                    category_value = category_value[1:-1]
-                category = category_value.strip()
+            token_lower = token.lower()
+            if token_lower.startswith("cat:") and category is None:
+                category = NoteHandler._normalize_metadata_token_value(token[4:])
+            elif token_lower.startswith("ref:"):
+                ref_id = NoteHandler._normalize_metadata_token_value(token[4:])
+                if ref_id:
+                    reference_ids.insert(0, ref_id)
             elif token.startswith("#"):
                 tags.insert(0, token[1:])
 
             remaining = remaining[: token_match.start()].rstrip()
 
-        return remaining, category, tags, had_metadata
+        return remaining, category, tags, reference_ids, had_metadata
 
     async def list_notes(
         self, user_id: str, filter_str: str, context: PendoContext
@@ -529,6 +669,22 @@ class NoteHandler(DbOpsMixin):
         # 内容
         message += note.content or ""
 
+        if note.references:
+            message += "\n\n---\n\n🔗 **关联条目**\n"
+            for ref in note.references[:10]:
+                if not isinstance(ref, dict):
+                    continue
+                ref_id = ref.get("id", "")
+                ref_type = self._type_label(str(ref.get("type") or ""))
+                ref_title = ref.get("title") or "无标题"
+                message += f"• {ref_type}: {ref_title} `{ref_id}`\n"
+
+        backlinks = await self._find_note_backlinks(user_id, note_id)
+        if backlinks:
+            message += "\n↩️ **被这些笔记引用**\n"
+            for backlink in backlinks:
+                message += f"• {backlink.title or '无标题'} `{backlink.id}`\n"
+
         return {"status": "success", "message": message}
 
     async def edit_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
@@ -572,12 +728,148 @@ class NoteHandler(DbOpsMixin):
             updates["category"] = parsed["category"]
         if parsed.get("tags"):
             updates["tags"] = parsed["tags"]
+        if parsed.get("reference_ids"):
+            try:
+                new_refs, _ = await self._resolve_note_references(user_id, parsed["reference_ids"])
+            except ValueError as exc:
+                return {"status": "error", "message": f"❌ {exc}"}
+            merged_refs = self._merge_references(note.references, new_refs)
+            updates["references"] = merged_refs
+            updates["related_items"] = self._related_from_references(merged_refs)
 
         await self._db_update_with_log(note_id, updates, user_id, action="edit_note")
 
         return {
             "status": "success",
             "message": f"✅ 已更新笔记\n\n📝 {title}\n\n💡 /pendo note view {note_id} 查看详情 | /pendo undo 撤销编辑",
+        }
+
+    async def append_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
+        """追加内容到已有笔记。"""
+        parts = args.split(maxsplit=1)
+        if len(parts) < 2:
+            return {"status": "error", "message": "❌ 用法: /pendo note append <id> <追加内容>"}
+        note_id = parts[0].strip()
+        addition = parts[1].strip()
+        if not addition:
+            return {"status": "error", "message": "❌ 请提供要追加的内容"}
+
+        note, wrong_type = await self._db_get_typed_item_or_message(
+            note_id, user_id, ItemType.NOTE.value, "笔记"
+        )
+        if wrong_type:
+            return wrong_type
+        note = cast(NoteItem, note)
+        content = (note.content or "").rstrip()
+        next_content = f"{content}\n\n{addition}" if content else addition
+        await self._db_update_with_log(
+            note_id,
+            {"content": next_content, "type": ItemType.NOTE.value},
+            user_id,
+            action="edit_note",
+        )
+        return {
+            "status": "success",
+            "message": f"✅ 已追加到笔记\n\n📝 {note.title or '无标题'}\n\n💡 /pendo note view {note_id} 查看详情 | /pendo undo 撤销",
+        }
+
+    @staticmethod
+    def _extract_tag_args(text: str) -> list[str]:
+        tags = re.findall(r"#([\w\u4e00-\u9fa5-]+)", text or "")
+        if not tags:
+            tags = [part.lstrip("#") for part in (text or "").split() if part.strip()]
+        clean: list[str] = []
+        seen: set[str] = set()
+        for tag in tags:
+            tag = tag.strip()
+            key = tag.lower()
+            if tag and key not in seen:
+                seen.add(key)
+                clean.append(tag)
+        return clean
+
+    async def tag_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
+        parts = args.split(maxsplit=1)
+        if len(parts) < 2:
+            return {"status": "error", "message": "❌ 用法: /pendo note tag <id> #标签"}
+        note_id = parts[0].strip()
+        tags = self._extract_tag_args(parts[1])
+        if not tags:
+            return {"status": "error", "message": "❌ 请提供标签"}
+        note, wrong_type = await self._db_get_typed_item_or_message(
+            note_id, user_id, ItemType.NOTE.value, "笔记"
+        )
+        if wrong_type:
+            return wrong_type
+        note = cast(NoteItem, note)
+        merged = list(note.tags or [])
+        seen = {tag.lower() for tag in merged}
+        for tag in tags:
+            if tag.lower() not in seen:
+                seen.add(tag.lower())
+                merged.append(tag)
+        await self._db_update_with_log(
+            note_id,
+            {"tags": merged, "type": ItemType.NOTE.value},
+            user_id,
+            action="edit_note",
+        )
+        return {"status": "success", "message": f"✅ 已更新标签: {ItemFormatter.format_tags(merged)}"}
+
+    async def untag_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
+        parts = args.split(maxsplit=1)
+        if len(parts) < 2:
+            return {"status": "error", "message": "❌ 用法: /pendo note untag <id> #标签"}
+        note_id = parts[0].strip()
+        tags = {tag.lower() for tag in self._extract_tag_args(parts[1])}
+        if not tags:
+            return {"status": "error", "message": "❌ 请提供标签"}
+        note, wrong_type = await self._db_get_typed_item_or_message(
+            note_id, user_id, ItemType.NOTE.value, "笔记"
+        )
+        if wrong_type:
+            return wrong_type
+        note = cast(NoteItem, note)
+        remaining = [tag for tag in (note.tags or []) if tag.lower() not in tags]
+        await self._db_update_with_log(
+            note_id,
+            {"tags": remaining, "type": ItemType.NOTE.value},
+            user_id,
+            action="edit_note",
+        )
+        return {"status": "success", "message": f"✅ 已更新标签: {ItemFormatter.format_tags(remaining) or '无'}"}
+
+    async def link_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
+        parts = args.split(maxsplit=1)
+        if len(parts) < 2:
+            return {"status": "error", "message": "❌ 用法: /pendo note link <id> <关联条目ID>"}
+        note_id = parts[0].strip()
+        target_id = parts[1].strip().split()[0]
+        note, wrong_type = await self._db_get_typed_item_or_message(
+            note_id, user_id, ItemType.NOTE.value, "笔记"
+        )
+        if wrong_type:
+            return wrong_type
+        note = cast(NoteItem, note)
+        try:
+            new_refs, _ = await self._resolve_note_references(user_id, [target_id])
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
+        merged_refs = self._merge_references(note.references, new_refs)
+        await self._db_update_with_log(
+            note_id,
+            {
+                "references": merged_refs,
+                "related_items": self._related_from_references(merged_refs),
+                "type": ItemType.NOTE.value,
+            },
+            user_id,
+            action="edit_note",
+        )
+        ref = new_refs[0]
+        return {
+            "status": "success",
+            "message": f"✅ 已关联 {self._type_label(str(ref.get('type') or ''))}: {ref.get('title') or '无标题'} `{target_id}`",
         }
 
     async def delete_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:

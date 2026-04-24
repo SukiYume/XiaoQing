@@ -260,6 +260,9 @@ class Database:
                 "ALTER TABLE items ADD COLUMN payment_method TEXT",
                 "ALTER TABLE items ADD COLUMN ledger_date TEXT",
                 "ALTER TABLE items ADD COLUMN remark TEXT",
+                'ALTER TABLE items ADD COLUMN "references" TEXT',
+                "ALTER TABLE items ADD COLUMN last_viewed TEXT",
+                "ALTER TABLE items ADD COLUMN related_items TEXT",
                 "ALTER TABLE items ADD COLUMN reminder_rules TEXT",
                 "ALTER TABLE items ADD COLUMN event_role TEXT",
                 "ALTER TABLE items ADD COLUMN event_collection_id TEXT",
@@ -1122,7 +1125,13 @@ class Database:
                     params.append(filters[key])
             if "tags" in filters:
                 where.append(f"tags LIKE ?")
-                params.append(f"%{filters['tags']}%")
+                params.append(self.tag_filter_pattern(filters["tags"]))
+            if "keyword" in filters:
+                keyword = sanitize_search_keyword(str(filters["keyword"] or ""))
+                if keyword:
+                    like = f"%{keyword}%"
+                    where.append("(title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ?)")
+                    params.extend([like, like, like, like])
             if "direction" in filters:
                 where.append("direction = ?")
                 params.append(filters["direction"])
@@ -2210,6 +2219,11 @@ class Database:
     def _quote_col(name: str) -> str:
         """用双引号包裹列名，避免 SQL 保留字（如 references）导致语法错误"""
         return f'"{name}"'
+
+    @staticmethod
+    def tag_filter_pattern(tag: Any) -> str:
+        """Return the JSON-list LIKE pattern used for exact tag matching."""
+        return f'%"{str(tag or "").strip()}"%'
 
     def _prepare_data(self, data: dict[str, Any]) -> dict[str, Any]:
         """准备数据用于存储"""
