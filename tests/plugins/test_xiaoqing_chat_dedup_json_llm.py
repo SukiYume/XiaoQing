@@ -140,3 +140,48 @@ async def test_llm_client_fallback_wrapper_stops_on_non_404() -> None:
         await _call_with_fallback_paths(endpoint_path="/v1/chat/completions", invoke=invoke)
 
     assert calls == ["/v1/chat/completions"]
+
+
+@pytest.mark.asyncio
+async def test_person_fact_extract_skips_empty_llm_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from unittest.mock import MagicMock
+
+    from plugins.xiaoqing_chat.llm.llm_client import LLMError
+    from plugins.xiaoqing_chat.memory.knowledge_extract import maybe_extract_person_facts
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+
+    async def raise_empty_response(**_kwargs):
+        raise LLMError("empty_response")
+
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.memory.knowledge_extract.chat_completions",
+        raise_empty_response,
+    )
+
+    history = [
+        StoredMessage(role="user", name=f"User{i}", content=f"消息{i}", ts=float(i))
+        for i in range(20)
+    ]
+    memory_db = MagicMock()
+
+    await maybe_extract_person_facts(
+        data_dir=tmp_path,
+        http_session=None,
+        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        memory_db=memory_db,
+        bot_name="小青",
+        chat_id="g1",
+        history=history,
+        temperature=0.8,
+        top_p=0.9,
+        max_tokens=512,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    memory_db.upsert_text.assert_not_called()
