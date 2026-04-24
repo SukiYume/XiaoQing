@@ -147,7 +147,6 @@ def test_reminder_dispatch_uses_owner_timezone(monkeypatch):
         context={},
         location="Room 1",
         notes="",
-        milestones=[],
         tags=[],
     )
 

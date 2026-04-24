@@ -149,10 +149,6 @@ def _seed_items(db: Database):
         "location": "会议室",
         "participants": ["A", "B"],
         "remind_times": ["2026-03-04T09:30:00+08:00"],
-        "milestones": [
-            {"name": "开始", "time": "2026-03-04T10:00:00+08:00"},
-            {"name": "结束", "time": "2026-03-04T11:00:00+08:00"},
-        ],
         "notes": "带纪要",
         "created_at": "2026-03-01T09:00:00+08:00",
         "updated_at": "2026-03-01T09:00:00+08:00",
