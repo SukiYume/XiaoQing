@@ -48,22 +48,30 @@
 |------|------|
 | 单次日程 | `/pendo event add 3月8日下午两点，国自然基金申请截止，提前一周和一天提醒` |
 | 重复日程 | `/pendo event add 每月18号上午十点，公积金提取，重复7个月` |
+| 多节点日程 | `/pendo event add 4月6日注册截止，4月22日会议开始，4月26日会议结束` |
 | 简单添加 | `/pendo event add 明天9点开会` |
 
 ### 数据结构
 ```json
 {
-  "type": "event",
-  "title": "会议标题",
-  "content": "详细备注",
-  "start_time": "2026-03-08T14:00:00",
-  "end_time": "2026-03-08T16:00:00",
-  "location": "会议室A",
-  "remind_times": ["2026-03-08T13:00:00"],
-  "rrule": "FREQ=MONTHLY;BYMONTHDAY=8",
-  "parent_id": "abc12345"
+  "item": {
+    "type": "event",
+    "event_role": "single | multi_node_child | recurring_occurrence",
+    "event_collection_id": "collection id 或 null",
+    "title": "节点或单次标题",
+    "start_time": "2026-03-08T14:00:00",
+    "reminder_rules": [{"offset_seconds": 3600}],
+    "remind_times": ["2026-03-08T13:00:00"]
+  },
+  "collection": {
+    "kind": "multi_node | recurring",
+    "title": "整体标题",
+    "rrule": "FREQ=MONTHLY;BYMONTHDAY=8"
+  }
 }
 ```
+
+单次日程只有一条 leaf；重复日程和多节点日程都有一个 `event_collections` 整体标题，下面的每个实例/节点都是可独立查看、编辑、删除和设置提醒的 leaf。
 
 ## 1.2 查看日程
 
@@ -89,15 +97,17 @@
 | 操作 | 命令 | 说明 |
 |------|------|------|
 | 删除单次 | `/pendo event delete <id>` | 删除该条目 |
-| 删除重复 | `/pendo event delete <parent_id>` | 删除所有子事件 |
-| 删除单次重复 | `/pendo event delete <child_id>` | 仅删除该次 (如 `abc12345_20260308`) |
-| 编辑 | `/pendo event edit <id> <修改内容>` | 统一编辑单次/重复/多节点事件；修改时间时未发送提醒会按相对偏移同步 |
+| 删除集合 | `/pendo event delete <collection_id>` | 删除重复/多节点整体及其所有 leaf |
+| 删除 leaf | `/pendo event delete <leaf_id>` | 仅删除某次重复或某个多节点节点 |
+| 编辑集合 | `/pendo event edit <collection_id> <修改内容>` | 修改整体标题、分类、地点、备注等元信息 |
+| 编辑 leaf | `/pendo event edit <leaf_id> <修改内容>` | 修改单个节点/实例，修改时间时未发送提醒会按相对偏移同步 |
 
 示例：
 
 ```
-/pendo event edit 80efbef6 会议开始改成4月22日12:43
-/pendo event edit 80efbef6 会议开始改成4月22日12:43，备注从北京南坐G123去会场
+/pendo event view 80efbef6
+/pendo event edit 80efbef6_m03 改到4月22日12:43
+/pendo event edit 80efbef6_m03 备注从北京南坐G123去会场
 ```
 
 ## 1.4 提醒操作
@@ -326,6 +336,17 @@
 - 导出会生成一个美化过的 Markdown 档案文件，保存到本地后再通过 OneBot 私聊文件消息发送给当前 QQ 用户
 - 插件聊天端不再提供 Markdown 导入；跨设备迁移请使用 Web 端的 Bundle 导入能力
 
+## 6.4 Event Graph 迁移脚本
+
+旧版 `pendo.db` 中，多节点事件是单条 `items.milestones`，重复事件依赖 `parent_id`。新版统一迁移为 `event_collections` + leaf events：
+
+```bash
+python -m plugins.pendo.scripts.migrate_event_graph plugins/pendo/data/pendo.db --dry-run
+python -m plugins.pendo.scripts.migrate_event_graph plugins/pendo/data/pendo.db --apply
+```
+
+`--dry-run` 不写库；`--apply` 会先备份，再生成 JSON 报告。迁移后，多节点 leaf id 形如 `<collection_id>_m01`，重复实例保留原 id 但挂到 recurring collection 下。
+
 ---
 
 # 七、数据架构
@@ -334,7 +355,7 @@
 
 | 类型 | type值 | 特点 |
 |------|--------|------|
-| 日程 | `event` | 有开始/结束时间 |
+| 日程 | `event` | 可调度 leaf，单次/重复实例/多节点节点统一 CRUD |
 | 待办 | `task` | 有优先级/状态 |
 | 笔记 | `note` | 有分类/标签 |
 | 日记 | `diary` | 有日期/情绪 |
