@@ -550,9 +550,15 @@ def test_events_page_source_uses_event_overview_routes():
 
     assert '"/events/overview"' in api_src
     assert '"/events/{event_id}/detail"' in api_src
+    assert '"/events/collections"' in api_src
+    assert '"/events/collections/{collection_id}/detail"' in api_src
     assert "milestones: Optional[list[dict]] = None" in items_src
     assert "/events/overview" in page_src
     assert "/events/${eventId}/detail" in page_src
+    assert "/events/collections" in page_src
+    assert "reminder_rules" in page_src
+    assert "openCollectionDetail" in page_src
+    assert "deleteCollection" in page_src
     assert "多节点事件" in page_src
     assert "timeline_days" in page_src
 
