@@ -449,6 +449,12 @@ class InboundManager:
 
         self.http_server: InboundServer | None = None
         self.ws_server: InboundServer | None = None
+        self._status_providers: dict[str, Callable[..., Any] | None] = {
+            "plugins_count": None,
+            "sessions_count": None,
+            "pending_jobs": None,
+            "metrics": None,
+        }
 
     @classmethod
     def from_config(
@@ -513,6 +519,26 @@ class InboundManager:
     def has_active_ws_clients(self) -> bool:
         return self.active_ws_connections() > 0
 
+    def set_status_providers(
+        self,
+        plugins_count: Callable[[], int] | None = None,
+        sessions_count: Callable[[], int] | None = None,
+        pending_jobs: Callable[[], int] | None = None,
+        metrics: Callable[[], dict[str, Any]] | None = None,
+    ) -> None:
+        self._status_providers = {
+            "plugins_count": plugins_count,
+            "sessions_count": sessions_count,
+            "pending_jobs": pending_jobs,
+            "metrics": metrics,
+        }
+        for server in {self.http_server, self.ws_server}:
+            if server:
+                self._apply_status_providers(server)
+
+    def _apply_status_providers(self, server: InboundServer) -> None:
+        server.set_status_providers(**self._status_providers)
+
     def update_token(self, token: str) -> None:
         self._token = token
         for server in {self.http_server, self.ws_server}:
@@ -540,6 +566,7 @@ class InboundManager:
                 ws_max_workers=self._ws_max_workers,
                 ws_queue_size=self._ws_queue_size,
             )
+            self._apply_status_providers(server)
             await server.start()
             self.http_server = server
             self.ws_server = server
@@ -555,6 +582,7 @@ class InboundManager:
                 enable_http=True,
                 enable_ws=False,
             )
+            self._apply_status_providers(server)
             await server.start()
             self.http_server = server
 
@@ -571,6 +599,7 @@ class InboundManager:
                 ws_max_workers=self._ws_max_workers,
                 ws_queue_size=self._ws_queue_size,
             )
+            self._apply_status_providers(server)
             await server.start()
             self.ws_server = server
 
