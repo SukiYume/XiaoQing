@@ -53,36 +53,6 @@ def _load_remind_times(raw_value: object) -> list[str]:
     return normalized
 
 
-def _load_milestone_times(raw_value: object) -> list[str]:
-    if not isinstance(raw_value, str) or not raw_value.strip():
-        return []
-
-    try:
-        loaded = cast(object, json.loads(raw_value))
-    except json.JSONDecodeError:
-        return []
-
-    if not isinstance(loaded, list):
-        return []
-    milestones = cast(list[object], loaded)
-
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for milestone in milestones:
-        if not isinstance(milestone, dict):
-            continue
-        milestone_time = cast(dict[object, object], milestone).get("time")
-        if not isinstance(milestone_time, str):
-            continue
-        normalized_time = _normalize_iso(milestone_time)
-        if normalized_time is None or normalized_time in seen:
-            continue
-        seen.add(normalized_time)
-        normalized.append(normalized_time)
-    normalized.sort()
-    return normalized
-
-
 def backfill_missing_start_time_reminders(db_path: str, dry_run: bool = True) -> dict[str, int]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -95,7 +65,7 @@ def backfill_missing_start_time_reminders(db_path: str, dry_run: bool = True) ->
             list[object],
             conn.execute(
                 """
-            SELECT id, start_time, remind_times, milestones
+            SELECT id, start_time, remind_times
             FROM items
             WHERE type = 'event' AND deleted = 0 AND start_time IS NOT NULL AND TRIM(start_time) != ''
             """
@@ -114,9 +84,7 @@ def backfill_missing_start_time_reminders(db_path: str, dry_run: bool = True) ->
                 continue
 
             remind_times = _load_remind_times(_row_value(row, "remind_times"))
-            expected_times = sorted(
-                {start_time, *_load_milestone_times(_row_value(row, "milestones"))}
-            )
+            expected_times = [start_time]
             missing_times = [
                 candidate for candidate in expected_times if candidate not in remind_times
             ]

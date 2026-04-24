@@ -28,8 +28,6 @@ class ItemFields:
     TIMEZONE = 'timezone'
     LOCATION = 'location'
     PARTICIPANTS = 'participants'
-    RRULE = 'rrule'
-    REMIND_POLICY_ID = 'remind_policy_id'
     
     # Task 扩展字段
     DUE_TIME = 'due_time'

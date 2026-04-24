@@ -99,8 +99,6 @@ def _reminder_rows_in_range(
 
 def _event_matches_kind(event: EventItem, kind: str) -> bool:
     actual = event_kind(event)
-    if kind == "milestone":
-        return actual == "multi_node"
     return kind in {"", "all", actual}
 
 
@@ -166,7 +164,6 @@ def _normalize_event(
         "kind": kind,
         "collection": _collection_payload(collection),
         "display_days": schedule["display_days"],
-        "milestones": schedule["milestones"],
         "day_entries": schedule["day_entries"],
         "reminders": reminders,
         "reminder_summary": reminder_summary,
@@ -221,12 +218,12 @@ def build_events_overview(
     range_start_day = range_start.date()
     range_end_day = range_end.date()
 
-    normal_events, repeat_events = db.get_events_for_range(
+    range_events = db.get_events_for_range(
         owner_id,
         _iso_or_empty(range_start),
         _iso_or_empty(range_end),
     )
-    events = [event for event in normal_events + repeat_events if _event_matches_range(event, range_start, range_end)]
+    events = [event for event in range_events if _event_matches_range(event, range_start, range_end)]
 
     categories = sorted({
         (getattr(event, "category", "") or "未分类")
@@ -305,7 +302,7 @@ def build_events_overview(
         "summary": {
             "event_count": len(normalized_events),
             "day_count": sum(1 for day in calendar_days.values() if day["count"]),
-            "milestone_count": sum(1 for event in normalized_events if event["kind"] == "multi_node"),
+            "multi_node_count": sum(1 for event in normalized_events if event["kind"] == "multi_node"),
             "recurring_count": sum(1 for event in normalized_events if event["kind"] == "recurring"),
             "reminder_count": sum(event["range_reminder_summary"]["total"] for event in normalized_events),
         },
