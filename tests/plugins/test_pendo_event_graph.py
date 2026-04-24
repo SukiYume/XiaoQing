@@ -4,6 +4,7 @@ from pathlib import Path
 
 from plugins.pendo.models.item import EventItem
 from plugins.pendo.services.db import Database
+from plugins.pendo.services.reminder import ReminderService
 from plugins.pendo.utils.validators import (
     build_remind_times_from_rules,
     derive_reminder_rules,
@@ -129,6 +130,33 @@ def test_normalize_event_fields_keeps_rules_and_cache_in_sync():
     ]
 
 
+def test_normalize_event_fields_defaults_leaf_to_start_time_reminder():
+    normalized = normalize_event_fields(
+        {
+            "title": "无显式提醒",
+            "category": "工作",
+            "start_time": "2030-01-02T09:00:00",
+        }
+    )
+
+    assert normalized["reminder_rules"] == [{"offset_seconds": 0}]
+    assert normalized["remind_times"] == ["2030-01-02T09:00:00"]
+
+
+def test_normalize_event_fields_allows_explicit_reminder_clear():
+    normalized = normalize_event_fields(
+        {
+            "title": "清空提醒",
+            "category": "工作",
+            "start_time": "2030-01-02T09:00:00",
+            "reminder_rules": [],
+        }
+    )
+
+    assert normalized["reminder_rules"] == []
+    assert normalized["remind_times"] == []
+
+
 def test_event_collection_store_and_graph_service(tmp_path: Path):
     from plugins.pendo.services.event_graph import EventGraphService
 
@@ -208,5 +236,48 @@ def test_event_collection_store_and_graph_service(tmp_path: Path):
         assert db.get_event_collection(collection_id, "u1") is None
         assert db.get_item("node0001", "u1") is None
         assert db.get_item("node0002", "u1") is None
+    finally:
+        db.cleanup()
+
+
+def test_grouped_leaf_reminder_message_uses_collection_context(tmp_path: Path):
+    db = Database(str(tmp_path / "pendo_event_graph_reminder_message.db"))
+    try:
+        collection_id = db.create_event_collection(
+            {
+                "id": "conf2030",
+                "owner_id": "u1",
+                "kind": "multi_node",
+                "title": "学术会议",
+                "category": "工作",
+                "start_time": "2030-04-01T09:00:00",
+                "end_time": "2030-04-03T18:00:00",
+            }
+        )
+        leaf = EventItem(
+            owner_id="u1",
+            title="报告提交截止",
+            start_time="2030-04-02T12:00:00",
+            event_role="multi_node_child",
+            event_collection_id=collection_id,
+            event_collection_kind="multi_node",
+            event_index=2,
+            reminder_rules=[{"offset_seconds": 3600}, {"offset_seconds": 0}],
+            remind_times=["2030-04-02T11:00:00", "2030-04-02T12:00:00"],
+            notes="提交 PDF",
+        )
+        db.insert_item(leaf, "conf2030_m02")
+
+        loaded = db.get_item("conf2030_m02", owner_id="u1")
+        message = ReminderService(db)._build_reminder_message(
+            loaded,
+            "2030-04-02T11:00:00",
+        )
+
+        assert "🗓️ 学术会议" in message
+        assert "📌 报告提交截止" in message
+        assert "🎯 节点时间: 04月02日 12:00" in message
+        assert "📝 提交 PDF" in message
+        assert "/pendo confirm conf2030_m02" in message
     finally:
         db.cleanup()

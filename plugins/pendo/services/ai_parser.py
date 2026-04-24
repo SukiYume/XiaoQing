@@ -14,6 +14,7 @@ from collections import defaultdict
 from .rule_parser import RuleParser
 from ..config import MOOD_ANALYSIS_CONFIG
 from ..utils.time_utils import now_in_timezone, parse_and_localize
+from ..utils.validators import normalize_reminder_rules
 
 logger = logging.getLogger(__name__)
 
@@ -377,6 +378,11 @@ class AIParser:
                 result["start_time"], parsed["remind_offsets"], user_id=user_id
             )
 
+        if parsed.get("remind_offsets"):
+            result["reminder_rules"] = self.build_reminder_rules_from_offsets(
+                parsed["remind_offsets"]
+            )
+
         return result
 
     def _extract_json(self, response: str) -> str:
@@ -451,6 +457,20 @@ class AIParser:
 
         return remind_times
 
+    def build_reminder_rules_from_offsets(self, offsets: list[str]) -> list[dict[str, int]]:
+        """Build semantic reminder rules from natural-language offsets."""
+        if not offsets:
+            return []
+
+        rules: list[dict[str, int]] = []
+        for offset in offsets:
+            delta = self._parse_offset(offset)
+            if delta:
+                rules.append({"offset_seconds": int(delta.total_seconds())})
+        if rules:
+            rules.append({"offset_seconds": 0})
+        return normalize_reminder_rules(rules)
+
     def build_remind_times_for_milestones(
         self,
         milestones: list[dict[str, Any]],
@@ -482,6 +502,16 @@ class AIParser:
         if not offsets:
             return []
         return self.build_remind_times_from_offsets(base_time, offsets, user_id=user_id)
+
+    def build_reminder_rules_from_description(self, description: str) -> list[dict[str, int]]:
+        """Extract semantic reminder rules from a natural-language reminder description."""
+        pattern = r"(?:提前\s*)?(\d+|[一二三四五六七八九十半两]+)\s*(?:个)?\s*(分钟|min|m|小时|hour|h|天|day|d|周|week|w)"
+        offsets = ["".join(m) for m in re.findall(pattern, description)]
+        if offsets:
+            return self.build_reminder_rules_from_offsets(offsets)
+        if any(token in str(description) for token in ("准时", "开始时", "到点")):
+            return [{"offset_seconds": 0}]
+        return []
 
     def _parse_offset(self, offset: str) -> Optional[timedelta]:
         """解析偏移量字符串"""

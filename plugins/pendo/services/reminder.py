@@ -349,7 +349,7 @@ class ReminderService:
     def _build_reminder_message(
         self, item, remind_time: str, repeat_count: int | None = None
     ) -> str:
-        """构建提醒消息，支持里程碑事件和重复提醒
+        """构建提醒消息，支持事件集合 leaf 和重复提醒
 
         Args:
             item: 事件条目
@@ -362,12 +362,24 @@ class ReminderService:
             header = f"⏰ **提醒 (第{repeat_count + 1}次，共{max_repeats + 1}次)**"
         else:
             header = "⏰ **提醒**"
-        lines = [header, f"🗓️ {title}"]
+        lines = [header]
+
+        collection = self._get_event_collection_for_item(item)
+        if collection:
+            lines.append(f"🗓️ {collection.get('title') or '无标题'}")
+            lines.append(f"📌 {title}")
+        else:
+            lines.append(f"🗓️ {title}")
 
         milestones = getattr(item, "milestones", None) or []
         target_time = getattr(item, "start_time", None)
         milestone_notes = ""
-        if milestones:
+        if collection:
+            if target_time:
+                dt_str = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
+                label = "节点时间" if collection.get("kind") == "multi_node" else "事件时间"
+                lines.append(f"🎯 {label}: {dt_str}")
+        elif milestones:
             milestone = self._find_closest_milestone_info(milestones, remind_time)
             if milestone:
                 milestone_name = milestone.get("name", "")
@@ -399,13 +411,28 @@ class ReminderService:
         elif notes:
             lines.append(f"📝 {notes}")
 
-        if repeat_count is None and getattr(item, "parent_id", None):
+        is_recurring = bool(
+            getattr(item, "parent_id", None)
+            or getattr(item, "event_collection_kind", None) == "recurring"
+            or (collection and collection.get("kind") == "recurring")
+        )
+        if repeat_count is None and is_recurring:
             lines.append("🔄 重复日程")
 
         lines.append(f"\n/pendo confirm {item.id}")
         lines.append(f"/pendo snooze {item.id} 10m")
 
         return "\n".join(lines)
+
+    def _get_event_collection_for_item(self, item) -> dict[str, Any] | None:
+        collection_id = getattr(item, "event_collection_id", None)
+        if not collection_id or not hasattr(self.db, "get_event_collection"):
+            return None
+        try:
+            return self.db.get_event_collection(collection_id, getattr(item, "owner_id", None))
+        except Exception as e:
+            logger.warning("读取日程集合失败: %s", e)
+            return None
 
     def _find_closest_milestone_info(
         self, milestones: list[dict[str, Any]], remind_time: str

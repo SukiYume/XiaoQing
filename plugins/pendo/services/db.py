@@ -2088,6 +2088,7 @@ class Database:
         conditions = [
             f"type = '{ItemType.EVENT.value}'",
             "deleted = 0",
+            "(event_role IS NULL OR event_role IN ('single', 'multi_node_child', 'recurring_occurrence'))",
             "remind_times IS NOT NULL",
             "remind_times != '[]'",
         ]
