@@ -504,12 +504,16 @@ def event_stats(
 
     by_category = conn.execute(
         """
-        SELECT category, COUNT(*) AS count
-        FROM items WHERE type='event' AND owner_id=? AND deleted=0
-        AND start_time IS NOT NULL
-        AND date(start_time) BETWEEN ? AND ?
-        GROUP BY category
-        ORDER BY count DESC, category
+        SELECT COALESCE(NULLIF(NULLIF(i.category, ''), '未分类'), NULLIF(c.category, ''), '未分类') AS resolved_category,
+               COUNT(*) AS count
+        FROM items i
+        LEFT JOIN event_collections c
+          ON c.id = i.event_collection_id AND c.owner_id = i.owner_id AND c.deleted = 0
+        WHERE i.type='event' AND i.owner_id=? AND i.deleted=0
+        AND i.start_time IS NOT NULL
+        AND date(i.start_time) BETWEEN ? AND ?
+        GROUP BY resolved_category
+        ORDER BY count DESC, resolved_category
     """,
         (owner_id, start, end),
     ).fetchall()

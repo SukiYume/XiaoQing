@@ -672,6 +672,7 @@ function updateImportType(type, checked) {
 }
 
 function typeLabel(type) {
+    if (type === 'event_collection') return '日程集合';
     return TYPE_OPTIONS.find((item) => item.value === type)?.label || type;
 }
 

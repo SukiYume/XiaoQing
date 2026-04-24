@@ -25,10 +25,13 @@ from ..deps import get_current_user, get_db
 from ..services.bundle_import import inspect_bundle_bytes, normalize_import_payload
 from ..services.transfer_bundle import (
     BundleValidationError,
+    EVENT_COLLECTION_FILE_NAME,
+    EVENT_COLLECTION_TYPE,
     SUPPORTED_TYPES,
     TIME_FIELD_BY_TYPE,
     build_manifest,
     read_bundle,
+    serialize_event_collection,
     serialize_item,
     write_bundle,
     compute_sha256,
@@ -224,6 +227,22 @@ def _build_export_dataset(db: Database, owner_id: str, selection: ExportSelectio
             matched.append(record)
         records_by_type[item_type] = matched
         counts[item_type] = len(matched)
+    if "event" in records_by_type:
+        seen_collection_ids: set[str] = set()
+        collection_records: list[dict[str, Any]] = []
+        for record in records_by_type["event"]:
+            collection_id = str(record.get("event_collection_id") or "").strip()
+            if not collection_id or collection_id in seen_collection_ids:
+                continue
+            collection = db.get_event_collection(collection_id, owner_id)
+            if not collection:
+                export_warnings.append(f"event/{record.get('id', '?')}: missing event collection {collection_id}")
+                continue
+            collection_records.append(serialize_event_collection(collection))
+            seen_collection_ids.add(collection_id)
+        if collection_records:
+            records_by_type[EVENT_COLLECTION_TYPE] = collection_records
+            counts[EVENT_COLLECTION_TYPE] = len(collection_records)
     return records_by_type, counts, (start, end), export_warnings
 
 
@@ -233,7 +252,7 @@ def _build_bundle_bytes(records_by_type: dict[str, list[dict[str, Any]]], select
         lines = [json.dumps(record, ensure_ascii=False) for record in records]
         content = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
         file_entries.append({
-            "path": TYPE_FILE_NAMES[item_type],
+            "path": EVENT_COLLECTION_FILE_NAME if item_type == EVENT_COLLECTION_TYPE else TYPE_FILE_NAMES[item_type],
             "type": item_type,
             "count": counts[item_type],
             "sha256": compute_sha256(content),
@@ -304,7 +323,11 @@ def _normalize_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _selected_import_types(options: dict[str, Any], parsed) -> list[str]:
     requested = options.get("types")
-    available = [summary["type"] for summary in parsed.file_summaries]
+    available = [
+        summary["type"]
+        for summary in parsed.file_summaries
+        if summary["type"] in SUPPORTED_TYPES
+    ]
     if not requested:
         return available
     selected = []
@@ -316,6 +339,62 @@ def _selected_import_types(options: dict[str, Any], parsed) -> list[str]:
     if not selected:
         raise HTTPException(status_code=422, detail="At least one import type must match the bundle")
     return selected
+
+
+def _new_import_collection_id(db: Database, owner_id: str) -> str:
+    while True:
+        candidate = uuid.uuid4().hex[:16]
+        if not db.get_event_collection(candidate, owner_id):
+            return candidate
+
+
+def _prepare_collection_import_operations(
+    db: Database,
+    owner_id: str,
+    collections: list[dict[str, Any]],
+    *,
+    selected_types: set[str],
+    conflict_policy: str,
+) -> tuple[list[tuple[str, dict[str, Any]]], dict[str, str]]:
+    if "event" not in selected_types:
+        return [], {}
+
+    operations: list[tuple[str, dict[str, Any]]] = []
+    collection_id_map: dict[str, str] = {}
+    for collection in collections:
+        payload = dict(collection)
+        original_id = str(payload.get("id") or "").strip()
+        if not original_id:
+            original_id = _new_import_collection_id(db, owner_id)
+            payload["id"] = original_id
+
+        existing = db.get_event_collection(original_id, owner_id)
+        if existing and str(existing.get("kind") or "") != str(payload.get("kind") or ""):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Event collection kind mismatch for {original_id}",
+            )
+
+        if existing and conflict_policy == "overwrite":
+            collection_id_map[original_id] = original_id
+            operations.append(("update", payload))
+            continue
+        if existing and conflict_policy == "duplicate":
+            duplicate_id = _new_import_collection_id(db, owner_id)
+            payload["id"] = duplicate_id
+            payload.setdefault("context", {})
+            context_import = payload["context"].get("import", {})
+            context_import["source_id"] = original_id
+            payload["context"]["import"] = context_import
+            collection_id_map[original_id] = duplicate_id
+            operations.append(("insert", payload))
+            continue
+
+        collection_id_map[original_id] = original_id
+        if not existing:
+            operations.append(("insert", payload))
+
+    return operations, collection_id_map
 
 
 def _result_entry(record: dict[str, Any], reason: Optional[str] = None) -> dict[str, Any]:
@@ -398,12 +477,12 @@ async def inspect_import(
         "ok": True,
         "data": {
             "summary": {
-                "types": [summary["type"] for summary in parsed.file_summaries],
+                "types": [summary["type"] for summary in parsed.file_summaries if summary["type"] in SUPPORTED_TYPES],
                 "files": len(parsed.file_summaries),
             },
             "files": parsed.file_summaries,
             "counts": {
-                "valid": len(valid_records),
+                "valid": len(valid_records) + len(parsed.event_collections),
                 "errors": len(errors),
                 "total_samples": len(valid_records),
             },
@@ -485,6 +564,13 @@ async def execute_import(
 
         results = {"inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
         details: dict[str, list] = {"inserted": [], "updated": [], "skipped": [], "failed": []}
+        collection_operations, collection_id_map = _prepare_collection_import_operations(
+            db,
+            owner_id,
+            parsed.event_collections,
+            selected_types=selected_types,
+            conflict_policy=conflict_policy,
+        )
 
         # 构建批量操作列表（在事务前完成决策）
         operations: list[tuple[str, dict[str, Any]]] = []
@@ -495,6 +581,10 @@ async def execute_import(
             item_id = record.get("id")
             existing = db.get_item(item_id, owner_id=owner_id) if item_id else None
             payload = dict(record)
+            if payload.get("type") == "event":
+                collection_id = str(payload.get("event_collection_id") or "").strip()
+                if collection_id and collection_id in collection_id_map:
+                    payload["event_collection_id"] = collection_id_map[collection_id]
 
             if existing:
                 existing_type = str(getattr(existing.type, "value", existing.type))
@@ -548,6 +638,7 @@ async def execute_import(
                 record_count=total_processed,
                 result_summary=results,
                 force=bool(parsed_options.get("force", False)),
+                collection_operations=collection_operations,
             )
         except DuplicateBundleImportError as exc:
             raise HTTPException(

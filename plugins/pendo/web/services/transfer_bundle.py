@@ -22,8 +22,13 @@ TYPE_FILE_NAMES = {
     "note": "data/notes.ndjson",
     "diary": "data/diary.ndjson",
 }
+EVENT_COLLECTION_TYPE = "event_collection"
+EVENT_COLLECTION_FILE_NAME = "data/event_collections.ndjson"
 # 反向映射：从文件名推断类型（用于宽松导入模式）
-FILE_NAME_TO_TYPE = {path: item_type for item_type, path in TYPE_FILE_NAMES.items()}
+FILE_NAME_TO_TYPE = {
+    **{path: item_type for item_type, path in TYPE_FILE_NAMES.items()},
+    EVENT_COLLECTION_FILE_NAME: EVENT_COLLECTION_TYPE,
+}
 TIME_FIELD_BY_TYPE = {
     "event": "start_time",
     "task": "due_time",
@@ -50,6 +55,8 @@ TYPE_FIELDS = {
     "event": {
         "start_time", "end_time", "timezone", "location", "participants", "rrule",
         "parent_id", "remind_policy_id", "remind_times", "milestones", "notes",
+        "event_role", "event_collection_id", "event_collection_kind", "event_index",
+        "event_node_key", "source_item_id", "reminder_rules",
     },
     "task": {
         "due_time", "priority", "status", "estimate", "subtasks", "dependencies",
@@ -58,6 +65,28 @@ TYPE_FIELDS = {
     "ledger": {"amount", "direction", "ledger_category", "ledger_date", "remark"},
     "note": {"references", "last_viewed", "related_items"},
     "diary": {"mood", "mood_score", "weather", "location", "template_id", "diary_date"},
+}
+EVENT_COLLECTION_FIELDS = {
+    "id",
+    "kind",
+    "title",
+    "content",
+    "category",
+    "location",
+    "tags",
+    "notes",
+    "context",
+    "visibility",
+    "timezone",
+    "rrule",
+    "reminder_rules",
+    "start_time",
+    "end_time",
+    "source_item_id",
+    "created_at",
+    "updated_at",
+    "deleted",
+    "deleted_at",
 }
 RESERVED_IMPORT_FIELDS = {"_type", "_schema", "owner_id", "_bundle_line"}
 
@@ -70,6 +99,7 @@ class BundleValidationError(ValueError):
 class ParsedBundle:
     manifest: dict[str, Any]
     records_by_type: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    event_collections: list[dict[str, Any]] = field(default_factory=list)
     file_summaries: list[dict[str, Any]] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -118,6 +148,19 @@ def serialize_item(item: Item | dict[str, Any]) -> dict[str, Any]:
     return record
 
 
+def serialize_event_collection(collection: dict[str, Any]) -> dict[str, Any]:
+    record = {"_type": EVENT_COLLECTION_TYPE, "_schema": TRANSFER_VERSION}
+    for key, value in dict(collection).items():
+        if key == "owner_id":
+            continue
+        if key in EVENT_COLLECTION_FIELDS:
+            record[key] = value
+    context = record.get("context")
+    if not isinstance(context, dict):
+        record["context"] = {}
+    return record
+
+
 def deserialize_record(record: dict[str, Any]) -> dict[str, Any]:
     item_type = str(record.get("_type") or "").strip()
     if item_type not in SUPPORTED_TYPES:
@@ -146,18 +189,45 @@ def deserialize_record(record: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def deserialize_event_collection_record(record: dict[str, Any]) -> dict[str, Any]:
+    collection: dict[str, Any] = {}
+    extras = {}
+    for key, value in record.items():
+        if key in RESERVED_IMPORT_FIELDS:
+            continue
+        if key in EVENT_COLLECTION_FIELDS:
+            collection[key] = value
+        else:
+            extras[key] = value
+
+    context = collection.get("context")
+    if not isinstance(context, dict):
+        context = {}
+    if extras:
+        context.setdefault("import", {})
+        context["import"]["extra"] = extras
+    collection["context"] = context
+    if "_bundle_line" in record:
+        collection["_bundle_line"] = record["_bundle_line"]
+    return collection
+
+
 def write_bundle(fileobj, manifest: dict[str, Any], typed_records: dict[str, list[dict[str, Any]]]) -> None:
     with ZipFile(fileobj, "w", compression=ZIP_DEFLATED) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
         for item_type, records in typed_records.items():
-            if item_type not in SUPPORTED_TYPES:
+            if item_type == EVENT_COLLECTION_TYPE:
+                path = EVENT_COLLECTION_FILE_NAME
+            elif item_type in SUPPORTED_TYPES:
+                path = TYPE_FILE_NAMES[item_type]
+            else:
                 raise BundleValidationError(f"Unsupported type for bundle write: {item_type}")
             lines = [json.dumps(record, ensure_ascii=False) for record in records]
             if lines:
                 payload = "\n".join(lines) + "\n"
             else:
                 payload = ""
-            zf.writestr(TYPE_FILE_NAMES[item_type], payload.encode("utf-8"))
+            zf.writestr(path, payload.encode("utf-8"))
 
 
 def read_bundle(fileobj) -> ParsedBundle:
@@ -180,6 +250,7 @@ def read_bundle(fileobj) -> ParsedBundle:
         _validate_manifest(manifest)
 
         records_by_type: dict[str, list[dict[str, Any]]] = {item_type: [] for item_type in SUPPORTED_TYPES}
+        event_collections: list[dict[str, Any]] = []
         file_summaries: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         warnings: list[str] = []
@@ -187,9 +258,9 @@ def read_bundle(fileobj) -> ParsedBundle:
         for entry in manifest.get("files", []):
             path = entry["path"]
             item_type = entry.get("type") or FILE_NAME_TO_TYPE.get(path)
-            if not item_type or item_type not in SUPPORTED_TYPES:
+            if not item_type or (item_type not in SUPPORTED_TYPES and item_type != EVENT_COLLECTION_TYPE):
                 raise BundleValidationError(f"Unsupported file type in manifest: {item_type}")
-            expected_path = TYPE_FILE_NAMES[item_type]
+            expected_path = EVENT_COLLECTION_FILE_NAME if item_type == EVENT_COLLECTION_TYPE else TYPE_FILE_NAMES[item_type]
             if path != expected_path:
                 raise BundleValidationError(f"Unexpected path for {item_type}: {path}")
             if path not in names:
@@ -229,8 +300,12 @@ def read_bundle(fileobj) -> ParsedBundle:
                         raise BundleValidationError(f"Unsupported schema in {path}:{index}")
 
                     raw_record["_bundle_line"] = index
-                    payload = deserialize_record(raw_record)
-                    records_by_type[item_type].append(payload)
+                    if item_type == EVENT_COLLECTION_TYPE:
+                        payload = deserialize_event_collection_record(raw_record)
+                        event_collections.append(payload)
+                    else:
+                        payload = deserialize_record(raw_record)
+                        records_by_type[item_type].append(payload)
                     valid_count += 1
                 except (json.JSONDecodeError, BundleValidationError, TypeError, ValueError) as exc:
                     errors.append({
@@ -257,6 +332,7 @@ def read_bundle(fileobj) -> ParsedBundle:
         return ParsedBundle(
             manifest=manifest,
             records_by_type={k: v for k, v in records_by_type.items() if v},
+            event_collections=event_collections,
             file_summaries=file_summaries,
             errors=errors,
             warnings=warnings,

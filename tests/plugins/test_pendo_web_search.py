@@ -133,6 +133,85 @@ def test_database_search_items_supports_ledger_category_filter():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_database_search_items_matches_event_collection_text():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_search_event_collection_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-search-event-collection"
+
+    try:
+        db.create_event_collection({
+            "id": "col-frb",
+            "owner_id": owner_id,
+            "kind": "multi_node",
+            "title": "FRB2026会议",
+            "category": "学术",
+            "notes": "整体会议信息",
+            "start_time": "2026-03-05T09:00:00",
+            "end_time": "2026-04-01T10:00:00",
+        })
+        db.insert_item({
+            "id": "col-frb_m01",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "摘要截止",
+            "category": "学术",
+            "start_time": "2026-03-05T09:00:00",
+            "event_role": "multi_node_child",
+            "event_collection_id": "col-frb",
+            "event_collection_kind": "multi_node",
+            "event_index": 1,
+            "event_node_key": "m01",
+        })
+
+        results = db.search_items(owner_id, "FRB2026", filters={"type": "event"}, limit=10)
+
+        assert [item.id for item in results] == ["col-frb_m01"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_search_route_adds_event_collection_payload():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_search_route_collection_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-search-route-collection"
+    search_module = _load_search_module()
+
+    try:
+        db.create_event_collection({
+            "id": "col-import",
+            "owner_id": owner_id,
+            "kind": "multi_node",
+            "title": "导入会议",
+            "category": "学术",
+            "notes": "整体备注",
+            "start_time": "2026-03-05T09:00:00",
+            "end_time": "2026-04-01T10:00:00",
+        })
+        db.insert_item({
+            "id": "col-import_m01",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "摘要截止",
+            "category": "学术",
+            "start_time": "2026-03-05T09:00:00",
+            "event_role": "multi_node_child",
+            "event_collection_id": "col-import",
+            "event_collection_kind": "multi_node",
+            "event_index": 1,
+            "event_node_key": "m01",
+        })
+
+        result = search_module.search_items(q="导入会议", type="event", owner_id=owner_id, db=db)
+        item = result["data"]["items"][0]
+
+        assert item["id"] == "col-import_m01"
+        assert item["collection"]["title"] == "导入会议"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_search_route_source_maps_dedicated_ledger_category_filter():
     src = (ROOT / "plugins" / "pendo" / "web" / "api" / "search.py").read_text(encoding="utf-8")
 
@@ -145,3 +224,4 @@ def test_search_page_source_uses_dedicated_ledger_category_param():
 
     assert "params.ledger_category = _activeCategory;" in src
     assert "params.category = _activeCategory;" in src
+    assert "item.collection?.title" in src

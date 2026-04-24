@@ -261,6 +261,37 @@ def test_build_widget_summary_returns_expected_panels_without_fastapi(temp_db: D
     assert ledger_data["panel"]["items"][0]["amount_text"] == "-¥36"
 
 
+def test_build_widget_summary_uses_event_collection_titles_for_agenda(temp_db: Database):
+    widget_module = _load_widget_module()
+    owner_id = "u-widget-event-collection"
+    temp_db.create_event_collection({
+        "id": "widget-conf",
+        "owner_id": owner_id,
+        "kind": "multi_node",
+        "title": "FRB2026会议",
+        "category": "学术",
+        "start_time": "2026-03-25T10:00:00",
+        "end_time": "2026-03-26T10:00:00",
+    })
+    temp_db.insert_item({
+        "id": "widget-conf_m01",
+        "owner_id": owner_id,
+        "type": "event",
+        "title": "摘要截止",
+        "category": "学术",
+        "start_time": "2026-03-25T10:00:00",
+        "event_role": "multi_node_child",
+        "event_collection_id": "widget-conf",
+        "event_collection_kind": "multi_node",
+        "event_index": 1,
+        "event_node_key": "m01",
+    })
+
+    data = widget_module.build_widget_summary(temp_db, owner_id, section="tasks", now="2026-03-25T09:30:00")
+
+    assert data["agenda"]["items"][0]["title"] == "FRB2026会议 · 摘要截止"
+
+
 def test_widget_summary_supports_ledger_notes_and_auto_sections(client: TestClient, temp_db: Database):
     owner_id = "u-widget-sections"
     _seed_widget_data(temp_db, owner_id)
