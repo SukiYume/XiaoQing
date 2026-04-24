@@ -331,6 +331,65 @@ def _normalize_iso_datetime(value: Any, field_name: str) -> str:
     return parsed.isoformat(timespec="seconds")
 
 
+def normalize_reminder_rules(value: Any) -> list[dict[str, int]]:
+    """Normalize reminder rules into unique non-negative second offsets."""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("reminder_rules must be a list")
+
+    offsets: set[int] = set()
+    for row in value:
+        if not isinstance(row, dict):
+            raise ValueError("reminder_rules must contain objects")
+        raw_offset = row.get("offset_seconds")
+        try:
+            offset = int(raw_offset)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("reminder_rules.offset_seconds must be an integer") from exc
+        if offset < 0:
+            raise ValueError("reminder_rules.offset_seconds must be non-negative")
+        offsets.add(offset)
+
+    return [{"offset_seconds": offset} for offset in sorted(offsets, reverse=True)]
+
+
+def derive_reminder_rules(start_time: Any, remind_times: Any) -> list[dict[str, int]]:
+    """Derive relative reminder rules from absolute reminder timestamps."""
+    if not start_time or not remind_times:
+        return []
+    if not isinstance(remind_times, list):
+        raise ValueError("remind_times must be a list")
+
+    start_dt = datetime.fromisoformat(_normalize_iso_datetime(start_time, "start_time"))
+    offsets: set[int] = set()
+    for value in remind_times:
+        if value in (None, ""):
+            continue
+        remind_dt = datetime.fromisoformat(_normalize_iso_datetime(value, "remind_times"))
+        offset = int(round((start_dt - remind_dt).total_seconds()))
+        if offset >= 0:
+            offsets.add(offset)
+
+    return [{"offset_seconds": offset} for offset in sorted(offsets, reverse=True)]
+
+
+def build_remind_times_from_rules(start_time: Any, reminder_rules: Any) -> list[str]:
+    """Build absolute reminder timestamps from a start time and relative rules."""
+    if not start_time:
+        return []
+    rules = normalize_reminder_rules(reminder_rules)
+    if not rules:
+        return []
+
+    start_dt = datetime.fromisoformat(_normalize_iso_datetime(start_time, "start_time"))
+    remind_times = [
+        (start_dt - timedelta(seconds=rule["offset_seconds"])).isoformat(timespec="seconds")
+        for rule in rules
+    ]
+    return sorted(dict.fromkeys(remind_times))
+
+
 def _normalize_iso_date(value: Any, field_name: str) -> str:
     """将输入规范化为 YYYY-MM-DD。"""
     text = sanitize_text(str(value), 20)
@@ -423,6 +482,32 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
     if rrule is not None:
         normalized["rrule"] = sanitize_text(str(rrule), 500)
 
+    event_role = normalized.get("event_role")
+    if event_role is None and not partial:
+        event_role = "single"
+    if event_role is not None:
+        event_role = sanitize_text(str(event_role), 40) or "single"
+        if event_role not in {"single", "multi_node_child", "recurring_occurrence"}:
+            raise ValueError("Invalid event_role")
+        normalized["event_role"] = event_role
+
+    collection_kind = normalized.get("event_collection_kind")
+    if collection_kind is not None:
+        collection_kind = sanitize_text(str(collection_kind), 40)
+        if collection_kind and collection_kind not in {"multi_node", "recurring"}:
+            raise ValueError("Invalid event_collection_kind")
+        normalized["event_collection_kind"] = collection_kind or None
+
+    for text_field in ("event_collection_id", "event_node_key", "source_item_id"):
+        if text_field in normalized and normalized[text_field] is not None:
+            normalized[text_field] = sanitize_text(str(normalized[text_field]), 120)
+
+    if "event_index" in normalized and normalized.get("event_index") is not None:
+        try:
+            normalized["event_index"] = int(normalized["event_index"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("event_index must be an integer") from exc
+
     reminders = normalized.get("remind_times")
     if reminders is None and not partial:
         reminders = []
@@ -434,6 +519,12 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
             for value in reminders
             if value not in (None, "")
         })
+
+    rules = normalized.get("reminder_rules")
+    if rules is None and not partial:
+        rules = []
+    if rules is not None:
+        normalized["reminder_rules"] = normalize_reminder_rules(rules)
 
     milestones = normalized.get("milestones")
     if milestones is None and not partial:
@@ -483,6 +574,22 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
                 raise ValueError("Event end_time must be after start_time")
 
         normalized["milestones"] = []
+
+    has_rules = bool(normalized.get("reminder_rules"))
+    has_reminders = bool(normalized.get("remind_times"))
+    if has_rules:
+        normalized["remind_times"] = build_remind_times_from_rules(
+            normalized["start_time"],
+            normalized["reminder_rules"],
+        )
+    elif has_reminders:
+        normalized["reminder_rules"] = derive_reminder_rules(
+            normalized["start_time"],
+            normalized["remind_times"],
+        )
+    elif not partial:
+        normalized["reminder_rules"] = []
+        normalized["remind_times"] = []
 
     return normalized
 
