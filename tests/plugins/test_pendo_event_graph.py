@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from plugins.pendo.models.item import EventItem
+from plugins.pendo.handlers.event import EventHandler
 from plugins.pendo.services.db import Database
 from plugins.pendo.services.reminder import ReminderService
 from plugins.pendo.utils.validators import (
@@ -236,6 +237,130 @@ def test_event_collection_store_and_graph_service(tmp_path: Path):
         assert db.get_event_collection(collection_id, "u1") is None
         assert db.get_item("node0001", "u1") is None
         assert db.get_item("node0002", "u1") is None
+    finally:
+        db.cleanup()
+
+
+class _NoConflictReminderService:
+    def detect_conflict(self, user_id: str, start_time: str, end_time: str | None = None):
+        return []
+
+
+class _UnusedAiParser:
+    def build_remind_times_from_offsets(self, start_time: str, offsets: list[str]):
+        raise AssertionError("not used")
+
+
+def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Path):
+    import asyncio
+
+    db = Database(str(tmp_path / "pendo_event_graph_create_multi.db"))
+    handler = EventHandler(
+        db=db,
+        ai_parser=_UnusedAiParser(),
+        reminder_service=_NoConflictReminderService(),
+    )
+
+    try:
+        result = asyncio.run(
+            handler.create_event(
+                "u1",
+                {
+                    "title": "学术会议",
+                    "category": "会议",
+                    "location": "北京",
+                    "notes": "全局备注",
+                    "milestones": [
+                        {"name": "注册截止", "time": "2030-04-01T09:00:00"},
+                        {"name": "会议开始", "time": "2030-04-03T09:00:00", "notes": "带证件"},
+                    ],
+                    "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
+                },
+                {},
+            )
+        )
+
+        assert result["status"] == "success"
+        collection_id = result["item_id"]
+        collection = db.get_event_collection(collection_id, "u1")
+        assert collection is not None
+        assert collection["kind"] == "multi_node"
+        assert collection["title"] == "学术会议"
+        assert collection["notes"] == "全局备注"
+        assert collection["start_time"] == "2030-04-01T09:00:00"
+        assert collection["end_time"] == "2030-04-03T09:00:00"
+
+        children = db.get_collection_events(collection_id, "u1")
+        assert [child.id for child in children] == [
+            f"{collection_id}_m01",
+            f"{collection_id}_m02",
+        ]
+        assert [child.title for child in children] == ["注册截止", "会议开始"]
+        assert children[0].event_role == "multi_node_child"
+        assert children[0].event_collection_id == collection_id
+        assert children[0].remind_times == [
+            "2030-04-01T08:00:00",
+            "2030-04-01T09:00:00",
+        ]
+        assert children[1].notes == "带证件"
+        assert children[1].remind_times == [
+            "2030-04-03T08:00:00",
+            "2030-04-03T09:00:00",
+        ]
+    finally:
+        db.cleanup()
+
+
+def test_create_recurring_event_writes_collection_and_occurrence_leaves(tmp_path: Path):
+    import asyncio
+
+    db = Database(str(tmp_path / "pendo_event_graph_create_recurring.db"))
+    handler = EventHandler(
+        db=db,
+        ai_parser=_UnusedAiParser(),
+        reminder_service=_NoConflictReminderService(),
+    )
+
+    try:
+        result = asyncio.run(
+            handler.create_event(
+                "u1",
+                {
+                    "title": "晨会",
+                    "category": "工作",
+                    "start_time": "2030-01-01T09:00:00",
+                    "end_time": "2030-01-01T10:00:00",
+                    "rrule": "FREQ=DAILY;COUNT=2",
+                    "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
+                },
+                {},
+            )
+        )
+
+        assert result["status"] == "success"
+        collection_id = result["item_id"]
+        collection = db.get_event_collection(collection_id, "u1")
+        assert collection is not None
+        assert collection["kind"] == "recurring"
+        assert collection["rrule"] == "FREQ=DAILY;COUNT=2"
+
+        children = db.get_collection_events(collection_id, "u1")
+        assert [child.event_role for child in children] == [
+            "recurring_occurrence",
+            "recurring_occurrence",
+        ]
+        assert [child.start_time for child in children] == [
+            "2030-01-01T09:00:00",
+            "2030-01-02T09:00:00",
+        ]
+        assert [child.end_time for child in children] == [
+            "2030-01-01T10:00:00",
+            "2030-01-02T10:00:00",
+        ]
+        assert children[1].remind_times == [
+            "2030-01-02T08:00:00",
+            "2030-01-02T09:00:00",
+        ]
     finally:
         db.cleanup()
 
