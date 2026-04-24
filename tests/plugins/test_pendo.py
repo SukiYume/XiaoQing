@@ -3862,6 +3862,60 @@ class TestOperationAndExportRegression:
         assert result["status"] == "error"
         assert "请提供导出文件名" in result["message"]
 
+    def test_export_markdown_uses_event_collection_context(self, monkeypatch, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.services import exporter as exporter_module
+        from plugins.pendo.services.exporter import ExporterService
+
+        monkeypatch.setattr(exporter_module, "_get_export_dir", lambda user_id: tmp_path)
+
+        event_item = SimpleNamespace(
+            id="conf2026_m01",
+            owner_id="u1",
+            type="event",
+            title="摘要截止",
+            category="未分类",
+            tags=[],
+            created_at="2026-03-01T09:00:00",
+            updated_at="2026-03-01T09:00:00",
+            start_time="2026-03-05T09:00:00",
+            end_time=None,
+            location="",
+            remind_times=[],
+            notes="节点备注",
+            content="",
+            event_collection_id="conf2026",
+            event_collection_kind="multi_node",
+        )
+
+        class _Repo:
+            def get_items(self, user_id, filters, limit):
+                return [event_item] if filters.get("type") == "event" else []
+
+            def get_event_collection(self, collection_id, owner_id=None):
+                return {
+                    "id": collection_id,
+                    "kind": "multi_node",
+                    "title": "FRB2026会议",
+                    "category": "学术",
+                    "location": "上海",
+                    "notes": "整体备注",
+                }
+
+        service = ExporterService(SimpleNamespace(items=_Repo(), log_transfer=lambda **kwargs: 1))
+        result = service.export_markdown("u1", "日程导出 event", {})
+
+        assert result["status"] == "success"
+        exported = (tmp_path / "日程导出.md").read_text(encoding="utf-8")
+        assert "### 01. FRB2026会议 · 摘要截止" in exported
+        assert "| 分类 | 学术 |" in exported
+        assert "| 地点 | 上海 |" in exported
+        assert "- 集合标题: FRB2026会议" in exported
+        assert "- 集合类型: multi_node" in exported
+
 
 class TestPendoWebHandler:
     """测试 pendo web 命令格式化与发送行为"""
