@@ -39,14 +39,19 @@ def extract_first_json_object_text(text: str) -> str:
 
 
 def parse_first_json_object(text: str) -> dict[str, Any] | None:
+    parsed, ok = parse_first_json_object_with_status(text)
+    return parsed if ok else None
+
+
+def parse_first_json_object_with_status(text: str) -> tuple[dict[str, Any], bool]:
     obj_text = extract_first_json_object_text(text)
     if not obj_text:
-        return None
+        return {}, False
     try:
         parsed = json.loads(obj_text)
     except Exception:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+        return {}, False
+    return (parsed, True) if isinstance(parsed, dict) else ({}, False)
 
 
 def extract_named_list_field(obj: dict[str, Any] | None, field: str) -> list[Any]:

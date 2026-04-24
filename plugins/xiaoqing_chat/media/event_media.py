@@ -22,6 +22,7 @@ from .event_media_analysis import (
     _media_llm_max_tokens,
     _prepare_media_for_llm,
     _resolve_media_llm_secrets,
+    _schedule_background_emoji_refine,
     _should_refresh_cached_render,
 )
 from .event_media_common import (
@@ -30,7 +31,6 @@ from .event_media_common import (
     _DOWNLOAD_CHUNK_SIZE,
     _EMOJI_HINT_RE,
     _GENERIC_MEDIA_HINTS,
-    _MEDIA_ANALYSIS_PROMPT_VERSION,
     _MEDIA_DOWNLOAD_TIMEOUT,
     _ONEBOT_HTTP_TIMEOUT,
     _SUPPORTED_IMAGE_SUFFIXES,
@@ -60,9 +60,9 @@ from .event_media_common import (
     _render_cache_lock,
     _rendered_media_from_cache,
     _safe_source_name,
-    _save_render_cache,
     _segment_prefers_emoji,
     _segment_summary_hint,
+    write_render_cache_entry,
 )
 from .qq_face import describe_face_segment
 from .qq_face_catalog import record_face_observation
@@ -640,20 +640,20 @@ async def _render_resolved_media(
     ):
         rendered_quality = "generic"
 
-    cache_payload = {
-        "kind": rendered.kind,
-        "description": rendered.description,
-        "emotion_tags": list(rendered.emotion_tags),
-        "marker": rendered.marker,
-        "analysis_source": rendered_source,
-        "analysis_quality": rendered_quality,
-        "analysis_prompt_version": _MEDIA_ANALYSIS_PROMPT_VERSION if rendered_source == "llm" else 0,
-    }
-    with _render_cache_lock(context.data_dir):
-        latest_cache = _load_render_cache(context.data_dir)
-        latest_items = latest_cache.setdefault("items", {})
-        latest_items[resolved.media_hash] = cache_payload
-        _save_render_cache(context.data_dir, latest_cache)
+    write_render_cache_entry(
+        context.data_dir,
+        resolved,
+        rendered,
+        source=rendered_source,
+        quality=rendered_quality,
+    )
+    if rendered_source == "llm" and rendered.kind == "emoji" and rendered_quality == "detailed":
+        _schedule_background_emoji_refine(
+            rendered,
+            resolved,
+            context=context,
+            runtime=runtime,
+        )
     return rendered
 
 

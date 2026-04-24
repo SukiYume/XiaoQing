@@ -16,6 +16,8 @@ from ..llm.llm_client import (
     extract_response_content,
     extract_response_finish_reason,
 )
+from ..task_scheduler import _spawn_bg_task
+from ..utils.json_parsing import parse_first_json_object, parse_first_json_object_with_status
 from .event_media_common import (
     MediaAnalysisDraft,
     PreparedMediaForLLM,
@@ -38,7 +40,11 @@ from .event_media_common import (
     _render_animation_contact_sheet,
     _same_rendered_media,
     _safe_source_name,
+    write_render_cache_entry,
 )
+
+_MEDIA_DETAIL_BASE_MAX_TOKENS = 360
+_MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS = 720
 
 
 def _vision_plugin_secrets(context) -> tuple[dict[str, Any], dict[str, Any], str]:
@@ -69,6 +75,27 @@ def _media_llm_max_tokens(secrets: dict[str, Any], base_max_tokens: int) -> int:
     if "thinking" not in model:
         return base
     return max(base * 4, 800 if base >= 200 else 480)
+
+
+def _media_detail_base_max_tokens_for_reason(reason: str) -> int:
+    normalized = str(reason or "").strip().lower()
+    if normalized.endswith("length_truncated"):
+        return _MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS
+    return _MEDIA_DETAIL_BASE_MAX_TOKENS
+
+
+def _emoji_refine_timeout_seconds(runtime) -> float:
+    cfg = _media_cfg(runtime)
+    try:
+        timeout = float(getattr(cfg, "emoji_refine_timeout_seconds", 2.0))
+    except (TypeError, ValueError):
+        return 2.0
+    return max(0.0, timeout)
+
+
+def _enable_emoji_refine_background(runtime) -> bool:
+    cfg = _media_cfg(runtime)
+    return bool(getattr(cfg, "enable_emoji_refine_background", True))
 
 
 @dataclass(frozen=True)
@@ -343,26 +370,6 @@ def _prepare_media_for_llm(resolved: ResolvedMedia) -> PreparedMediaForLLM:
     )
 
 
-def _extract_json_object(text: str) -> dict[str, Any]:
-    data, _ = _extract_json_object_with_status(text)
-    return data
-
-
-def _extract_json_object_with_status(text: str) -> tuple[dict[str, Any], bool]:
-    if not text:
-        return {}, False
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return {}, False
-    try:
-        raw = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return {}, False
-    if not isinstance(raw, dict):
-        return {}, False
-    return raw, True
-
-
 def _extract_first_text_value(data: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = str(data.get(key, "") or "").strip()
@@ -381,8 +388,8 @@ def _merge_visible_text(description: str, visible_text: str) -> str:
     if normalized_text and normalized_text in normalized_desc:
         return desc
     if desc:
-        return f'{desc}，配字是“{text}”'
-    return f'配字是“{text}”'
+        return f'{desc}，文字内容是“{text}”'
+    return f'文字内容是“{text}”'
 
 
 async def _call_media_llm(
@@ -493,7 +500,7 @@ def _parse_detail_analysis_output(
     resolved: ResolvedMedia,
     prefer_emoji: bool,
 ) -> MediaAnalysisDraft:
-    data, parsed_json = _extract_json_object_with_status(output)
+    data, parsed_json = parse_first_json_object_with_status(output)
     kind = str(data.get("kind", "") or "").strip().lower()
     if kind not in {"image", "emoji"}:
         kind = _fallback_kind(
@@ -593,7 +600,10 @@ def _semantic_retry_reason(
     rendered: RenderedMedia,
     used_summary_fallback: bool,
     resolved: ResolvedMedia,
+    finish_reason: str = "",
 ) -> str:
+    if str(finish_reason or "").strip().lower() == "length":
+        return "length_truncated"
     if not detail.parsed_json:
         return "invalid_json"
     if used_summary_fallback:
@@ -643,7 +653,7 @@ async def _refine_emoji_analysis_with_llm(
         top_p=0.9,
         max_tokens=120,
     )
-    data = _extract_json_object(output)
+    data = parse_first_json_object(output) or {}
     description = _extract_first_text_value(data, "description", "label", "summary")
     if not description:
         raw_output = str(output or "").strip().strip("`")
@@ -663,6 +673,122 @@ async def _refine_emoji_analysis_with_llm(
         ),
         used_secrets,
     )
+
+
+def _schedule_background_emoji_refine(
+    rendered: RenderedMedia,
+    resolved: ResolvedMedia,
+    *,
+    context,
+    runtime,
+) -> None:
+    if rendered.kind != "emoji" or not _enable_emoji_refine_background(runtime):
+        return
+    timeout = _emoji_refine_timeout_seconds(runtime)
+    if timeout <= 0:
+        return
+
+    detail = MediaAnalysisDraft(
+        kind="emoji",
+        description=rendered.description,
+        visible_text="",
+        emotion_tags=rendered.emotion_tags,
+        raw_output="",
+        parsed_json=True,
+    )
+
+    async def _run() -> None:
+        try:
+            refined, refined_provider = await asyncio.wait_for(
+                _refine_emoji_analysis_with_llm(
+                    detail,
+                    resolved=resolved,
+                    context=context,
+                    runtime=runtime,
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            _media_log(
+                context,
+                runtime,
+                step="media.analyze.refine.background.timeout",
+                fields={
+                    "media_hash": resolved.media_hash[:12],
+                    "timeout_seconds": f"{timeout:.3f}",
+                },
+                level="warning",
+            )
+            return
+        except Exception as exc:
+            _media_log(
+                context,
+                runtime,
+                step="media.analyze.refine.background.fail",
+                fields={
+                    "media_hash": resolved.media_hash[:12],
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                level="warning",
+            )
+            return
+
+        refined_rendered, used_summary_fallback, quality = _finalize_media_analysis(
+            detail=detail,
+            refined=refined,
+            resolved=resolved,
+        )
+        semantic_reason = _semantic_retry_reason(
+            detail=detail,
+            rendered=refined_rendered,
+            used_summary_fallback=used_summary_fallback,
+            resolved=resolved,
+        )
+        if semantic_reason:
+            _media_log(
+                context,
+                runtime,
+                step="media.analyze.refine.background.skip",
+                fields={
+                    "media_hash": resolved.media_hash[:12],
+                    "reason": semantic_reason,
+                    "description": refined_rendered.description,
+                },
+                level="warning",
+            )
+            return
+
+        write_render_cache_entry(
+            context.data_dir,
+            resolved,
+            refined_rendered,
+            source="llm",
+            quality=quality,
+            prompt_version=_MEDIA_ANALYSIS_PROMPT_VERSION,
+        )
+        _media_log(
+            context,
+            runtime,
+            step="media.analyze.refine.background.ok",
+            fields={
+                "provider": refined_provider.get("_provider_name", ""),
+                "model": refined_provider.get("model", ""),
+                "max_tokens": refined_provider.get("_effective_max_tokens", ""),
+                "media_hash": resolved.media_hash[:12],
+                "description": refined_rendered.description,
+                "emotion_tags": "，".join(refined_rendered.emotion_tags),
+                "marker": refined_rendered.marker,
+                "quality": quality,
+            },
+        )
+
+    _media_log(
+        context,
+        runtime,
+        step="media.analyze.refine.background.spawn",
+        fields={"media_hash": resolved.media_hash[:12]},
+    )
+    _spawn_bg_task(context, _run(), name=f"media_refine:{resolved.media_hash[:12]}")
 
 
 async def _analyze_media_with_llm(
@@ -733,12 +859,13 @@ async def _analyze_media_with_llm(
     prompt = (
         "请把这张聊天图片分析成 JSON。"
         "只输出 JSON，不要额外解释。"
-        '格式: {"kind":"image|emoji","description":"...","emotion_tags":["..."]}。'
-        "description 用简短中文描述图片或表情包内容，要尽量说出主体、动作/表情、画面里的可见文字。"
+        '格式: {"kind":"image|emoji","description":"...","visible_text":"...","emotion_tags":["..."]}。'
+        "description 用简短中文概括图片或表情包内容，优先说出可参与聊天的重点，不要只描述界面、来源、时间或浏览量。"
+        "visible_text 摘录图中最关键的清晰文字；如果是新闻截图、聊天截图、梗图或长段文字图，要保留事件主干/笑点/槽点，不必逐字全抄。"
         "如果它更像聊天表情包/梗图/贴纸，kind 填 emoji；普通照片、截图、插画填 image。"
         "emotion_tags 只放 0 到 4 个简短中文情绪或语气标签。"
         "不要输出泛化词，比如“图片”“表情包”“动画表情”“聊天表情包”。"
-        "如果图里有清晰文字，description 尽量把文字内容带上。"
+        "如果图里有清晰文字，description 和 visible_text 里至少要有一个包含这些文字的核心信息。"
     )
     if prefer_emoji:
         prompt += " 这张图来自表情包库，请优先按聊天表情包理解，并尽量提炼出适合聊天使用的情绪标签。"
@@ -773,11 +900,15 @@ async def _analyze_media_with_llm(
                 runtime=runtime,
                 from_provider=previous_provider,
                 to_provider=provider_secrets,
-                max_tokens=200,
+                max_tokens=_media_detail_base_max_tokens_for_reason(previous_reason),
                 reason=previous_reason,
             )
 
+        last_semantic_reason = ""
         for semantic_attempt in range(1, semantic_retry_limit + 2):
+            attempt_base_max_tokens = _media_detail_base_max_tokens_for_reason(
+                last_semantic_reason or previous_reason
+            )
             _media_log(
                 context,
                 runtime,
@@ -786,7 +917,7 @@ async def _analyze_media_with_llm(
                     "provider": provider_secrets.get("_provider_name", ""),
                     "provider_scope": provider_secrets.get("_provider_scope", ""),
                     "model": provider_secrets.get("model", ""),
-                    "max_tokens": _media_llm_max_tokens(provider_secrets, 200),
+                    "max_tokens": _media_llm_max_tokens(provider_secrets, attempt_base_max_tokens),
                     "media_hash": resolved.media_hash[:12],
                     "segment_type": resolved.segment_type,
                     "source_mime": prepared.source_mime_type,
@@ -809,13 +940,17 @@ async def _analyze_media_with_llm(
                     messages=messages,
                     temperature=0.2,
                     top_p=0.9,
-                    max_tokens=200,
+                    max_tokens=attempt_base_max_tokens,
                 )
             except Exception as exc:
                 setattr(exc, "_media_provider_name", provider_secrets.get("_provider_name", ""))
                 setattr(exc, "_media_provider_scope", provider_secrets.get("_provider_scope", ""))
                 setattr(exc, "_media_provider_model", provider_secrets.get("model", ""))
-                setattr(exc, "_media_provider_max_tokens", _media_llm_max_tokens(provider_secrets, 200))
+                setattr(
+                    exc,
+                    "_media_provider_max_tokens",
+                    _media_llm_max_tokens(provider_secrets, attempt_base_max_tokens),
+                )
                 if index + 1 < len(complete_candidates) and _is_media_request_failure(exc):
                     previous_provider = provider_secrets
                     previous_reason = _media_request_failure_reason(exc)
@@ -860,47 +995,9 @@ async def _analyze_media_with_llm(
                 },
             )
 
-            refined: MediaAnalysisDraft | None = None
-            if detail.kind == "emoji":
-                try:
-                    refined, refined_provider = await _refine_emoji_analysis_with_llm(
-                        detail,
-                        resolved=resolved,
-                        context=context,
-                        runtime=runtime,
-                    )
-                    _media_log(
-                        context,
-                        runtime,
-                        step="media.analyze.refine.ok",
-                        fields={
-                            "provider": refined_provider.get("_provider_name", ""),
-                            "model": refined_provider.get("model", ""),
-                            "max_tokens": refined_provider.get("_effective_max_tokens", ""),
-                            "media_hash": resolved.media_hash[:12],
-                            "description": refined.description,
-                            "emotion_tags": "，".join(refined.emotion_tags),
-                            "raw_output": refined.raw_output,
-                        },
-                    )
-                except Exception as exc:
-                    _media_log(
-                        context,
-                        runtime,
-                        step="media.analyze.refine.fail",
-                        fields={
-                            "provider": getattr(exc, "_media_provider_name", llm_result.used_secrets.get("_provider_name", "")),
-                            "model": getattr(exc, "_media_provider_model", llm_result.used_secrets.get("model", "")),
-                            "max_tokens": getattr(exc, "_media_provider_max_tokens", llm_result.used_secrets.get("_effective_max_tokens", "")),
-                            "media_hash": resolved.media_hash[:12],
-                            "error": f"{type(exc).__name__}: {exc}",
-                        },
-                        level="warning",
-                    )
-
             rendered, used_summary_fallback, quality = _finalize_media_analysis(
                 detail=detail,
-                refined=refined,
+                refined=None,
                 resolved=resolved,
             )
             semantic_reason = _semantic_retry_reason(
@@ -908,8 +1005,10 @@ async def _analyze_media_with_llm(
                 rendered=rendered,
                 used_summary_fallback=used_summary_fallback,
                 resolved=resolved,
+                finish_reason=llm_result.finish_reason,
             )
             if semantic_reason:
+                last_semantic_reason = semantic_reason
                 _media_log(
                     context,
                     runtime,
@@ -976,7 +1075,7 @@ async def _analyze_media_with_llm(
                     "description": rendered.description,
                     "detail_description": detail.description,
                     "visible_text": detail.visible_text,
-                    "refined_description": refined.description if refined else "",
+                    "refined_description": "",
                     "used_summary_fallback": used_summary_fallback,
                     "marker": rendered.marker,
                     "quality": quality,

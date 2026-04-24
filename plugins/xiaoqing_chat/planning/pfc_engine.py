@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable, Optional, Sequence
 
 from .action_history import ActionHistoryStore
 from ..config.config import XiaoQingChatConfig
+from ..helper_utils import _llm_extra_payload
 from ..logging_utils import _log_step, _short_text
 from ..memory.memory import MemoryStore, StoredMessage
 from ..memory.memory_db import MemoryDB
@@ -210,6 +211,7 @@ async def run_pfc_once(
 
     _proxy = secrets.get("proxy", "") or ""
     _endpoint_path = secrets.get("endpoint_path", "") or runtime_cfg.endpoint_path
+    _extra_payload = _llm_extra_payload(secrets)
     if st.ignore_until_ts and now < float(st.ignore_until_ts):
         _log_step(
             context,
@@ -273,6 +275,7 @@ async def run_pfc_once(
             "retry_interval_seconds": 0.2,
             "proxy": _proxy,
             "endpoint_path": _endpoint_path,
+            "extra_payload": _extra_payload,
         }
 
         async def _plan() -> PFCPlan:
@@ -408,6 +411,7 @@ async def run_pfc_once(
                 retry_interval_seconds=0.2,
                 proxy=_proxy,
                 endpoint_path=_endpoint_path,
+                extra_payload=_extra_payload,
             )
             _pfc_dirty = True
             _log_step(
@@ -445,6 +449,7 @@ async def run_pfc_once(
                 retry_interval_seconds=0.2,
                 proxy=_proxy,
                 endpoint_path=_endpoint_path,
+                extra_payload=_extra_payload,
             )
             mem = (mem or "").strip()
             if mem:
@@ -477,6 +482,7 @@ async def run_pfc_once(
                 retry_interval_seconds=0.2,
                 proxy=_proxy,
                 endpoint_path=_endpoint_path,
+                extra_payload=_extra_payload,
             )
             st.ended = True
             _pfc_dirty = True

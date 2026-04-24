@@ -9,14 +9,15 @@ from ..logging_utils import _log_step
 from ..memory.memory import StoredMessage
 from .qq_face_catalog import QQFaceEntry, load_qq_face_catalog
 from .reply_planner_common import (
-    assistant_turns_since_last_media,
     build_recent_dialogue,
     extract_inbound_marker_labels,
     find_candidate_by_hint,
+    media_cfg_value as _media_cfg_value,
     parse_candidate_choice,
     pick_ranked_candidates,
     run_selector_llm,
     should_force_media_consideration,
+    should_skip_outbound_media_plan,
 )
 
 
@@ -28,16 +29,6 @@ class QQFaceReplyPlan:
     reasoning: str
     mode: str = "text_with_face"
 
-
-def _media_cfg(runtime):
-    return getattr(getattr(runtime, "cfg", None), "media", None)
-
-
-def _media_cfg_value(runtime, field: str, default):
-    cfg = _media_cfg(runtime)
-    if cfg is None:
-        return default
-    return getattr(cfg, field, default)
 
 _MODE_ALIASES = {
     "none": "none",
@@ -179,53 +170,28 @@ async def plan_qq_face_reply(
             },
         )
 
-    if not bool(_media_cfg_value(runtime, "enable_outbound_face_reply", False)):
+    skip = should_skip_outbound_media_plan(
+        runtime=runtime,
+        enabled_field="enable_outbound_face_reply",
+        reply_text=reply_text,
+        probability_field="face_reply_probability",
+        probability_default=0.18,
+        cooldown_field="face_cooldown_turns",
+        cooldown_default=2,
+        history=history,
+        media_kind="qq_face",
+        force_consider=forced,
+        roll_fn=random.random,
+    )
+    if skip is not None:
+        reason, fields = skip
         if chat_id:
             _log_step(
                 context,
                 runtime,
                 chat_id=chat_id,
                 step="reply.face.plan.skip",
-                fields={"reason": "disabled"},
-            )
-        return None
-    if not (reply_text or "").strip():
-        if chat_id:
-            _log_step(
-                context,
-                runtime,
-                chat_id=chat_id,
-                step="reply.face.plan.skip",
-                fields={"reason": "empty_reply"},
-            )
-        return None
-    probability = float(_media_cfg_value(runtime, "face_reply_probability", 0.18))
-    roll = random.random()
-    if not forced and roll > probability:
-        if chat_id:
-            _log_step(
-                context,
-                runtime,
-                chat_id=chat_id,
-                step="reply.face.plan.skip",
-                fields={"reason": "probability", "roll": round(roll, 4), "threshold": probability},
-            )
-        return None
-
-    cooldown_turns = max(0, int(_media_cfg_value(runtime, "face_cooldown_turns", 2)))
-    turns_since_last = assistant_turns_since_last_media(history, "qq_face")
-    if turns_since_last is not None and turns_since_last < cooldown_turns:
-        if chat_id:
-            _log_step(
-                context,
-                runtime,
-                chat_id=chat_id,
-                step="reply.face.plan.skip",
-                fields={
-                    "reason": "cooldown",
-                    "turns_since_last": turns_since_last,
-                    "cooldown_turns": cooldown_turns,
-                },
+                fields={"reason": reason, **fields},
             )
         return None
 

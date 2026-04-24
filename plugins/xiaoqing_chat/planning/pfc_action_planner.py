@@ -256,6 +256,7 @@ async def plan_next_action(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> PFCPlan:
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
@@ -305,6 +306,7 @@ async def plan_next_action(
                 retry_interval_seconds=float(retry_interval_seconds),
                 proxy=proxy,
                 endpoint_path=endpoint_path,
+                extra_payload=extra_payload,
             ),
             timeout=max(0.1, float(timeout_seconds) + 0.3),
         )
@@ -379,6 +381,7 @@ async def decide_say_bye(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
@@ -406,6 +409,7 @@ async def decide_say_bye(
             retry_interval_seconds=float(retry_interval_seconds),
             proxy=proxy,
             endpoint_path=endpoint_path,
+            extra_payload=extra_payload,
         )
     except Exception:
         return False, ""

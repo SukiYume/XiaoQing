@@ -117,6 +117,14 @@ def _draft_has_media(parts: Any) -> bool:
     )
 
 
+def _media_planner_timeout_seconds(media_cfg: Any) -> float:
+    try:
+        timeout = float(getattr(media_cfg, "reply_media_timeout_seconds", 2.0))
+    except (TypeError, ValueError):
+        return 2.0
+    return max(0.0, timeout)
+
+
 async def _attach_reply_media(
     draft: ReplyDraft,
     *,
@@ -199,12 +207,37 @@ async def _attach_reply_media(
     image_plan = None
     emoji_plan = None
     face_plan = None
-    results = await asyncio.gather(
-        *(task for _kind, task in planner_tasks),
-        return_exceptions=True,
+    task_names = {task: kind for kind, task in planner_tasks}
+    done, pending = await asyncio.wait(
+        tuple(task_names),
+        timeout=_media_planner_timeout_seconds(media_cfg),
     )
-    for (kind, _task), result in zip(planner_tasks, results):
-        if isinstance(result, Exception):
+    if pending:
+        pending_names = sorted(task_names[task] for task in pending)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        _log_step(
+            context=context,
+            runtime=runtime,
+            chat_id=chat_id,
+            step="reply.media.plan.timeout",
+            fields={
+                "pending": ",".join(pending_names),
+                "timeout_seconds": f"{_media_planner_timeout_seconds(media_cfg):.3f}",
+            },
+        )
+
+    for kind, task in planner_tasks:
+        if task not in done:
+            continue
+        try:
+            result = task.result()
+        except asyncio.CancelledError as exc:
+            result = exc
+        except Exception as exc:
+            result = exc
+        if isinstance(result, (Exception, asyncio.CancelledError)):
             _log_step(
                 context=context,
                 runtime=runtime,
@@ -609,6 +642,7 @@ async def _generate_reply_draft(
                     retry_interval_seconds=0.2,
                     proxy=proxy,
                     endpoint_path=endpoint_path,
+                    extra_payload=getattr(fg, "extra_payload", {}) or {},
                 ),
                 timeout=4.0,
             )
@@ -659,6 +693,7 @@ async def _generate_reply_draft(
                             bot_name=bot_name,
                             reply=check_reply_text,
                             heuristic_reply=heuristic_reply_text,
+                            current_text=text,
                             goal=goal,
                             policy_text=_cached_policy_block,
                             history=trimmed_history,
@@ -672,6 +707,7 @@ async def _generate_reply_draft(
                             retry_interval_seconds=0.2,
                             proxy=proxy,
                             endpoint_path=endpoint_path,
+                            extra_payload=getattr(fg, "extra_payload", {}) or {},
                         ),
                         timeout=6.0,
                     )

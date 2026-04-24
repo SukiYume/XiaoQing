@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
 import random
 import re
-from typing import Any, Sequence, TypeVar
+from typing import Any, Callable, Sequence, TypeVar
 
 from ..helper_utils import _resolve_llm_config
 from ..llm.llm_client import chat_completions_with_fallback_paths
@@ -11,6 +10,7 @@ from ..llm.prompt_builder import build_dialogue_prompt
 from ..message_parts import render_stored_message
 from ..media_registry import message_has_media_kind
 from ..memory.memory import StoredMessage
+from ..utils.json_parsing import parse_first_json_object
 
 T = TypeVar("T")
 
@@ -34,17 +34,53 @@ def assistant_turns_since_last_media(
 
 
 def extract_choice_json(output: str) -> dict[str, Any]:
-    text = (output or "").strip()
-    if not text:
-        return {}
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return {}
-    try:
-        payload = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    return parse_first_json_object(output or "") or {}
+
+
+def media_cfg(runtime) -> Any:
+    return getattr(getattr(runtime, "cfg", None), "media", None)
+
+
+def media_cfg_value(runtime, field: str, default: T) -> T:
+    cfg = media_cfg(runtime)
+    if cfg is None:
+        return default
+    return getattr(cfg, field, default)
+
+
+def should_skip_outbound_media_plan(
+    *,
+    runtime,
+    enabled_field: str,
+    reply_text: str,
+    probability_field: str,
+    probability_default: float,
+    cooldown_field: str,
+    cooldown_default: int,
+    history: Sequence[StoredMessage],
+    media_kind: str,
+    force_consider: bool,
+    roll_fn: Callable[[], float] | None = None,
+) -> tuple[str, dict[str, Any]] | None:
+    if not bool(media_cfg_value(runtime, enabled_field, False)):
+        return "disabled", {}
+    if not (reply_text or "").strip():
+        return "empty_reply", {}
+
+    probability = float(media_cfg_value(runtime, probability_field, probability_default))
+    roll_source = roll_fn or random.random
+    roll = float(roll_source())
+    if not force_consider and roll > probability:
+        return "probability", {"roll": round(roll, 4), "threshold": probability}
+
+    cooldown_turns = max(0, int(media_cfg_value(runtime, cooldown_field, cooldown_default)))
+    turns_since_last = assistant_turns_since_last_media(history, media_kind)
+    if turns_since_last is not None and turns_since_last < cooldown_turns:
+        return "cooldown", {
+            "turns_since_last": turns_since_last,
+            "cooldown_turns": cooldown_turns,
+        }
+    return None
 
 
 def normalize_mode(value: str, aliases: dict[str, str]) -> str:
@@ -237,6 +273,7 @@ async def run_selector_llm(
         "retry_interval_seconds": float(llm_cfg.retry_interval_seconds),
         "proxy": str(llm_cfg.proxy or ""),
         "endpoint_path": str(llm_cfg.endpoint_path or runtime.cfg.endpoint_path),
+        "extra_payload": dict(getattr(llm_cfg, "extra_payload", {}) or {}),
     }
     output, _used_path = await chat_completions_with_fallback_paths(**request_kwargs)
     return output
