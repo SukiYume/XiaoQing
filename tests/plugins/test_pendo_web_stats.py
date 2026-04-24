@@ -271,6 +271,48 @@ def test_event_stats_filters_range_and_builds_weekday_slot_matrix():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_event_stats_counts_event_graph_leaves_and_collection_category_fallback():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_event_graph_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-event-stats-graph"
+    stats_module = _load_stats_module()
+
+    try:
+        db.create_event_collection({
+            "id": "stat-conf",
+            "owner_id": owner_id,
+            "kind": "multi_node",
+            "title": "统计会议",
+            "category": "学术",
+            "start_time": "2026-03-05T09:00:00",
+            "end_time": "2026-03-06T10:00:00",
+        })
+        for item_id, title, start_time in [
+            ("stat-conf_m01", "摘要截止", "2026-03-05T09:00:00"),
+            ("stat-conf_m02", "会议开始", "2026-03-06T10:00:00"),
+        ]:
+            db.insert_item({
+                "id": item_id,
+                "type": "event",
+                "owner_id": owner_id,
+                "title": title,
+                "category": "未分类",
+                "start_time": start_time,
+                "event_role": "multi_node_child",
+                "event_collection_id": "stat-conf",
+                "event_collection_kind": "multi_node",
+            })
+
+        result = stats_module.event_stats(range="2026-03-01..2026-03-31", owner_id=owner_id, db=db)
+        data = result["data"]
+
+        assert sum(item["count"] for item in data["weekly"]) == 2
+        assert data["by_category"] == [{"category": "学术", "count": 2}]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_task_stats_separates_created_and_completed_weeks():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_task_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)

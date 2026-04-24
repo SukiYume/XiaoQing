@@ -65,13 +65,16 @@ function alphaColor(hex, alpha = 0.12) {
 }
 
 function itemTitle(item) {
+    if (item.type === 'event' && item.collection?.title) {
+        return `${item.collection.title} · ${item.title || '(无标题)'}`;
+    }
     if (item.title) return item.title;
     if (item.type === 'diary' && item.diary_date) return `${item.diary_date} 的日记`;
     return '(无标题)';
 }
 
 function itemPreview(item) {
-    if (item.type === 'event') return previewText(item.notes || item.content || item.location || '');
+    if (item.type === 'event') return previewText(item.notes || item.content || item.collection?.notes || item.collection?.location || item.location || '');
     if (item.type === 'task') return previewText(item.content || '');
     if (item.type === 'ledger') return previewText(item.remark || item.content || '');
     if (item.type === 'diary') return previewText(item.content || '');
@@ -80,7 +83,11 @@ function itemPreview(item) {
 
 function itemMeta(item) {
     if (item.type === 'event') {
-        return [item.start_time ? formatDate(item.start_time) : '', item.location ? `📍 ${item.location}` : '', item.category || ''].filter(Boolean);
+        return [
+            item.start_time ? formatDate(item.start_time) : '',
+            item.location || item.collection?.location ? `📍 ${item.location || item.collection.location}` : '',
+            item.category || item.collection?.category || '',
+        ].filter(Boolean);
     }
     if (item.type === 'task') {
         return [item.status || '', item.priority ? `优先级 ${item.priority}` : '', item.due_time ? `截止 ${formatDate(item.due_time)}` : '', item.category || ''].filter(Boolean);

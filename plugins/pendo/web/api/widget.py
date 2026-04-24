@@ -117,20 +117,31 @@ def _merge_unique_tasks(*task_groups: list[dict[str, Any]], limit: int = 3) -> l
     return merged
 
 
-def _flatten_event_entries(events: list[Any], range_start: datetime, range_end: datetime) -> list[dict[str, Any]]:
+def _flatten_event_entries(
+    db: Database,
+    owner_id: str,
+    events: list[Any],
+    range_start: datetime,
+    range_end: datetime,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     start_day = range_start.date()
     end_day = range_end.date()
+    collection_cache: dict[str, dict[str, Any] | None] = {}
     for event in events:
+        collection = None
+        collection_id = getattr(event, "event_collection_id", None)
+        if collection_id:
+            if collection_id not in collection_cache:
+                collection_cache[collection_id] = db.get_event_collection(collection_id, owner_id)
+            collection = collection_cache[collection_id]
         schedule = build_event_schedule(event, start_day, end_day)
         for day in schedule["display_days"]:
             for row in schedule["day_entries"].get(day, []):
                 row_start = ensure_datetime(row.get("start_time")) or datetime.fromisoformat(f"{day}T00:00:00")
-                # 多节点事件：将总标题与各节点自己的 name 拼接，形成完整标题
-                # 例如总标题"出差"，节点名"出发" → "出差 · 出发"
                 entry_title = row.get("title") or getattr(event, "title", None) or "无标题"
-                if row.get("kind") == "milestone" and row.get("subtitle"):
-                    entry_title = f"{entry_title} · {row['subtitle']}"
+                if collection and collection.get("kind") == "multi_node":
+                    entry_title = f"{collection.get('title') or '多节点日程'} · {entry_title}"
                 rows.append(
                     {
                         "day": day,
@@ -138,8 +149,8 @@ def _flatten_event_entries(events: list[Any], range_start: datetime, range_end: 
                         "subtitle": row.get("subtitle") or "",
                         "start_time": row.get("start_time") or "",
                         "end_time": row.get("end_time") or "",
-                        "location": row.get("location") or "",
-                        "category": row.get("category") or "",
+                        "location": row.get("location") or (collection or {}).get("location") or "",
+                        "category": row.get("category") or (collection or {}).get("category") or "",
                         "entry_kind": row.get("kind") or "",
                         "sort_time": row_start,
                     }
@@ -157,7 +168,7 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
         today_start.strftime("%Y-%m-%dT%H:%M:%S"),
         range_end.strftime("%Y-%m-%dT%H:%M:%S"),
     )
-    rows = _flatten_event_entries(raw_events + repeat_events, today_start, range_end)
+    rows = _flatten_event_entries(db, owner_id, raw_events + repeat_events, today_start, range_end)
     upcoming = [row for row in rows if row["sort_time"] >= now][:5]
     today_key = today_start.strftime("%Y-%m-%d")
     tomorrow_key = tomorrow_start.strftime("%Y-%m-%d")
