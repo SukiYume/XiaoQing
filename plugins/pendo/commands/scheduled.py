@@ -517,6 +517,14 @@ def _build_briefing_event_entries(
     for event in events:
         title = getattr(event, "title", "") or "无标题"
         location = getattr(event, "location", "") or ""
+        collection_id = getattr(event, "event_collection_id", None)
+        if collection_id:
+            try:
+                collection = db.get_event_collection(collection_id, user_id)
+            except Exception:
+                collection = None
+            if collection:
+                title = f"{collection.get('title') or '无标题'} · {title}"
         milestones = getattr(event, "milestones", None) or []
 
         if milestones and len(milestones) >= 2:

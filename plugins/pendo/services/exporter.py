@@ -540,6 +540,20 @@ class ExporterService:
             sections.extend(["**正文**", "", content])
 
         if item_type == "event":
+            if getattr(item, "event_collection_id", None):
+                collection = self._get_event_collection(item)
+                if collection:
+                    sections.extend([
+                        "",
+                        "**所属日程集合**",
+                        "",
+                        f"- 集合标题: {self._value_or_dash(collection.get('title'))}",
+                        f"- 集合类型: {self._value_or_dash(collection.get('kind'))}",
+                    ])
+                    collection_notes = (collection.get("notes") or "").strip()
+                    if collection_notes:
+                        sections.append(f"- 集合备注: {collection_notes}")
+
             milestones = getattr(item, "milestones", []) or []
             if milestones:
                 sections.extend(["", "**里程碑**", ""])
@@ -553,6 +567,16 @@ class ExporterService:
                 sections.extend(["", "**补充备注**", "", notes])
 
         return sections
+
+    def _get_event_collection(self, item: Any) -> dict[str, Any] | None:
+        collection_id = getattr(item, "event_collection_id", None)
+        owner_id = getattr(item, "owner_id", None)
+        if not collection_id or not hasattr(self.db.items, "get_event_collection"):
+            return None
+        try:
+            return self.db.items.get_event_collection(collection_id, owner_id)
+        except Exception:
+            return None
 
     def _format_tags(self, tags: Any) -> str:
         if not tags:
