@@ -331,10 +331,11 @@ async def test_check_reply_rejects_clarifying_placeholder_media_question():
 async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest.MonkeyPatch):
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     async def fake_chat(**kwargs):
         captured["prompt"] = kwargs["messages"][0]["content"]
+        captured["extra_payload"] = kwargs.get("extra_payload")
         return {"ok": True}, "/v1/chat/completions"
 
     monkeypatch.setattr(
@@ -366,12 +367,18 @@ async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest
         retry_interval_seconds=0.0,
         proxy="",
         endpoint_path="/v1/chat/completions",
+        extra_payload={"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
     )
 
     assert result.suitable is True
-    assert "待检查的最终回复" in captured["prompt"]
-    assert "[表情包：...]" in captured["prompt"]
-    assert "最终消息会附带相应媒体" in captured["prompt"]
-    assert "没有为回复增加新的交流功能" in captured["prompt"]
-    assert "当前最新用户消息" in captured["prompt"]
-    assert "黑猫瞪大双眼" in captured["prompt"]
+    prompt = str(captured["prompt"])
+    assert "待检查的最终回复" in prompt
+    assert "[表情包：...]" in prompt
+    assert "最终消息会附带相应媒体" in prompt
+    assert "没有为回复增加新的交流功能" in prompt
+    assert "当前最新用户消息" in prompt
+    assert "黑猫瞪大双眼" in prompt
+    assert captured["extra_payload"] == {
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "high",
+    }

@@ -10,6 +10,7 @@ from typing import Any
 
 import aiohttp
 
+from ..helper_utils import _llm_declared_extra_payload
 from ..llm.llm_client import (
     LLMError,
     chat_completions_raw_with_fallback_paths,
@@ -153,12 +154,14 @@ def _build_media_provider_secrets(
     endpoint_path: str,
     scope: str,
 ) -> dict[str, Any]:
+    extra_payload = _llm_declared_extra_payload(provider_config)
     return {
         "api_base": str(provider_config.get("api_base", "") or "").strip(),
         "api_key": str(provider_config.get("api_key", "") or "").strip(),
         "model": str(provider_config.get("model", "") or "").strip(),
         "endpoint_path": str(provider_config.get("endpoint_path", endpoint_path) or "").strip(),
         "proxy": str(provider_config.get("proxy", "") or "").strip(),
+        "_extra_payload": extra_payload,
         "_provider_name": provider_name,
         "_provider_scope": scope,
         "_vision_enabled": True,
@@ -482,6 +485,7 @@ async def _call_media_llm_once(
         "retry_interval_seconds": float(cfg.vision_retry_interval_seconds),
         "proxy": str(secrets.get("proxy", "") or ""),
         "endpoint_path": str(secrets.get("endpoint_path", "") or runtime.cfg.endpoint_path),
+        "extra_payload": dict(secrets.get("_extra_payload") or {}),
     }
     response_data, used_path = await chat_completions_raw_with_fallback_paths(**request_kwargs)
     text = extract_response_content(response_data)

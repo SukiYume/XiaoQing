@@ -291,6 +291,7 @@ async def _llm_check(
         retry_interval_seconds=retry_interval_seconds,
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     content = llm_client.extract_response_content(resp)
     obj = parse_first_json_object(content)
