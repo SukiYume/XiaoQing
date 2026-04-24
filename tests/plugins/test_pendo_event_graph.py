@@ -250,6 +250,11 @@ class _UnusedAiParser:
     def build_remind_times_from_offsets(self, start_time: str, offsets: list[str]):
         raise AssertionError("not used")
 
+    def build_reminder_rules_from_description(self, description: str):
+        if "1小时" in description:
+            return [{"offset_seconds": 3600}, {"offset_seconds": 0}]
+        return [{"offset_seconds": 0}]
+
 
 def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Path):
     import asyncio
@@ -361,6 +366,86 @@ def test_create_recurring_event_writes_collection_and_occurrence_leaves(tmp_path
             "2030-01-02T08:00:00",
             "2030-01-02T09:00:00",
         ]
+    finally:
+        db.cleanup()
+
+
+def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
+    import asyncio
+
+    db = Database(str(tmp_path / "pendo_event_graph_cli_crud.db"))
+    handler = EventHandler(
+        db=db,
+        ai_parser=_UnusedAiParser(),
+        reminder_service=_NoConflictReminderService(),
+    )
+
+    try:
+        create = asyncio.run(
+            handler.create_event(
+                "u1",
+                {
+                    "title": "项目发布",
+                    "category": "工作",
+                    "milestones": [
+                        {"name": "提审", "time": "2030-05-01T10:00:00"},
+                        {"name": "上线", "time": "2030-05-02T18:00:00"},
+                    ],
+                    "reminder_rules": [{"offset_seconds": 0}],
+                },
+                {},
+            )
+        )
+        collection_id = create["item_id"]
+        first_id = f"{collection_id}_m01"
+        second_id = f"{collection_id}_m02"
+
+        leaf_view = asyncio.run(handler.view_event("u1", first_id, {}))
+        assert leaf_view["status"] == "success"
+        assert "所属: 项目发布" in leaf_view["message"]
+        assert "提审" in leaf_view["message"]
+        assert second_id in leaf_view["message"]
+
+        collection_view = asyncio.run(handler.view_event("u1", collection_id, {}))
+        assert collection_view["status"] == "success"
+        assert "项目发布" in collection_view["message"]
+        assert first_id in collection_view["message"]
+        assert second_id in collection_view["message"]
+
+        reminders = asyncio.run(handler.list_reminders("u1", collection_id, {}))
+        assert reminders["status"] == "success"
+        assert "项目发布" in reminders["message"]
+        assert first_id in reminders["message"]
+        assert second_id in reminders["message"]
+
+        set_result = asyncio.run(
+            handler.set_reminders("u1", f"{collection_id} 提前1小时提醒", {})
+        )
+        assert set_result["status"] == "success"
+        assert db.get_item(first_id, "u1").remind_times == [
+            "2030-05-01T09:00:00",
+            "2030-05-01T10:00:00",
+        ]
+
+        async def fake_parse_updates(changes, current_event):
+            return {"title": "提审截止"}
+
+        handler._parse_updates = fake_parse_updates
+        edit_leaf = asyncio.run(handler.edit_event("u1", f"{first_id} 改名", {}))
+        assert edit_leaf["status"] == "success"
+        assert db.get_item(first_id, "u1").title == "提审截止"
+        assert db.get_item(second_id, "u1").title == "上线"
+
+        delete_leaf = asyncio.run(handler.delete_event("u1", first_id, {}))
+        assert delete_leaf["status"] == "success"
+        assert db.get_item(first_id, "u1") is None
+        assert db.get_item(second_id, "u1") is not None
+        assert db.get_event_collection(collection_id, "u1") is not None
+
+        delete_collection = asyncio.run(handler.delete_event("u1", collection_id, {}))
+        assert delete_collection["status"] == "success"
+        assert db.get_item(second_id, "u1") is None
+        assert db.get_event_collection(collection_id, "u1") is None
     finally:
         db.cleanup()
 
