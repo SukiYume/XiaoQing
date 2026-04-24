@@ -47,7 +47,6 @@ EVENT_MUTABLE_FIELDS = {
     "timezone",
     "remind_times",
     "reminder_rules",
-    "rrule",
     "notes",
 }
 
@@ -95,7 +94,6 @@ class ItemCreate(BaseModel):
     timezone: Optional[str] = None
     remind_times: Optional[list[str]] = None
     reminder_rules: Optional[list[dict]] = None
-    rrule: Optional[str] = None
     notes: Optional[str] = None
     # Task fields
     due_time: Optional[str] = None
@@ -126,7 +124,6 @@ class ItemUpdate(BaseModel):
     timezone: Optional[str] = None
     remind_times: Optional[list[str]] = None
     reminder_rules: Optional[list[dict]] = None
-    rrule: Optional[str] = None
     notes: Optional[str] = None
     due_time: Optional[str] = None
     priority: Optional[int] = None

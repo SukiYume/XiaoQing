@@ -163,12 +163,12 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow_start = today_start + timedelta(days=1)
     range_end = (today_start + timedelta(days=30)).replace(hour=23, minute=59, second=59, microsecond=0)
-    raw_events, repeat_events = db.get_events_for_range(
+    raw_events = db.get_events_for_range(
         owner_id,
         today_start.strftime("%Y-%m-%dT%H:%M:%S"),
         range_end.strftime("%Y-%m-%dT%H:%M:%S"),
     )
-    rows = _flatten_event_entries(db, owner_id, raw_events + repeat_events, today_start, range_end)
+    rows = _flatten_event_entries(db, owner_id, raw_events, today_start, range_end)
     upcoming = [row for row in rows if row["sort_time"] >= now][:5]
     today_key = today_start.strftime("%Y-%m-%d")
     tomorrow_key = tomorrow_start.strftime("%Y-%m-%d")

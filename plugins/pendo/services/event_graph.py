@@ -60,10 +60,10 @@ class EventGraphService:
         """Return leaf events whose concrete time overlaps a range."""
         range_start = datetime.fromisoformat(start_time)
         range_end = datetime.fromisoformat(end_time)
-        normal_events, repeat_events = self.db.get_events_for_range(owner_id, start_time, end_time)
+        events = self.db.get_events_for_range(owner_id, start_time, end_time)
 
         leaves: list[EventItem] = []
-        for event in normal_events + repeat_events:
+        for event in events:
             if not isinstance(event, EventItem) or not event.start_time:
                 continue
             if event.event_role not in {"single", "multi_node_child", "recurring_occurrence"}:

@@ -62,7 +62,6 @@ class Database:
         "dependencies",
         "references",
         "related_items",
-        "milestones",
     ]
 
     def __init__(self, db_path: str):
@@ -224,8 +223,6 @@ class Database:
                 timezone TEXT,
                 location TEXT,
                 participants TEXT,
-                rrule TEXT,
-                remind_policy_id TEXT,
                 remind_times TEXT,
                 reminder_rules TEXT,
                 event_role TEXT,
@@ -234,7 +231,6 @@ class Database:
                 event_index INTEGER,
                 event_node_key TEXT,
                 source_item_id TEXT,
-                parent_id TEXT,
                 due_time TEXT,
                 priority INTEGER,
                 status TEXT,
@@ -251,14 +247,12 @@ class Database:
                 weather TEXT,
                 template_id TEXT,
                 diary_date TEXT,
-                milestones TEXT,
                 notes TEXT
             )
             """)
 
             # Schema 迁移：新增字段（幂等，已存在则忽略）
             migrations = [
-                "ALTER TABLE items ADD COLUMN milestones TEXT",
                 "ALTER TABLE items ADD COLUMN notes TEXT",
                 "ALTER TABLE items ADD COLUMN amount REAL",
                 "ALTER TABLE items ADD COLUMN direction TEXT",
@@ -289,7 +283,6 @@ class Database:
                 f"CREATE INDEX IF NOT EXISTS idx_start_time ON items(start_time) WHERE type='{ItemType.EVENT.value}'",
                 f"CREATE INDEX IF NOT EXISTS idx_due_time ON items(due_time) WHERE type='{ItemType.TASK.value}'",
                 f"CREATE INDEX IF NOT EXISTS idx_diary_date ON items(diary_date) WHERE type='{ItemType.DIARY.value}'",
-                "CREATE INDEX IF NOT EXISTS idx_parent_id ON items(parent_id) WHERE parent_id IS NOT NULL",
                 "CREATE INDEX IF NOT EXISTS idx_items_event_collection ON items(event_collection_id, event_index) WHERE type='event' AND deleted = 0",
                 "CREATE INDEX IF NOT EXISTS idx_items_event_role ON items(owner_id, event_role, deleted) WHERE type='event'",
             ]:
@@ -1626,20 +1619,17 @@ class Database:
             else {"type": "delete", "time": delete_time}
         )
 
-    def get_events_for_range(self, user_id: str, start_date: str, end_date: str):
-        """获取日期范围内的日程
-
-        普通事件与多节点事件：使用区间重叠判断
-          start_time <= end_date AND (end_time IS NULL OR end_time >= start_date)
-        重复事件：保持原来逻辑（start_time <= end_date），由上层按实例过滤
-        """
+    def get_events_for_range(
+        self, user_id: str, start_date: str, end_date: str
+    ) -> list[EventItem]:
+        """获取日期范围内的可调度日程 leaf。"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
         cursor.execute(
             f"""
             SELECT * FROM items WHERE owner_id = ? AND type = '{ItemType.EVENT.value}' AND deleted = 0
-            AND (rrule IS NULL OR rrule = '')
+            AND (event_role IS NULL OR event_role IN ('single', 'multi_node_child', 'recurring_occurrence'))
             AND start_time <= ?
             AND (
                 (end_time IS NOT NULL AND end_time != '' AND end_time >= ?)
@@ -1651,19 +1641,7 @@ class Database:
         )
         events = [item for row in cursor.fetchall() if (item := self._row_to_item(row)) is not None]
 
-        cursor.execute(
-            f"""
-            SELECT * FROM items WHERE owner_id = ? AND type = '{ItemType.EVENT.value}' AND deleted = 0
-            AND rrule IS NOT NULL AND rrule != '' AND start_time <= ?
-            ORDER BY start_time
-        """,
-            (user_id, end_date),
-        )
-        repeat_events = [
-            item for row in cursor.fetchall() if (item := self._row_to_item(row)) is not None
-        ]
-
-        return events, repeat_events
+        return events
 
     def get_briefing_items(self, user_id: str, today_iso: str, tomorrow_iso: str):
         """获取每日简报条目
@@ -2279,7 +2257,6 @@ class Database:
                     "dependencies",
                     "references",
                     "related_items",
-                    "milestones",
                 ]:
                     data[field] = []
                 elif field in ["context", "attachments", "ai_meta"]:

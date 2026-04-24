@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from ..services.db import Database
 
-EventRows = tuple[list[EventItem], list[EventItem]]
 TIME_RANGE_KEYWORDS = frozenset(["today", "tomorrow", "week", "month", "year"])
 TIME_RANGE_RE = re.compile(r"^(last\d+d|\d{4}|\d{4}-\d{2}|\d{4}-\d{2}-\d{2}|\d{2}-\d{2})$")
 
@@ -103,9 +102,9 @@ class EventHandler(DbOpsMixin):
         self.reminder_service = reminder_service
         self.event_graph = EventGraphService(db)
 
-    async def _fetch_event_rows(self, user_id: str, start_date: str, end_date: str) -> EventRows:
+    async def _fetch_event_rows(self, user_id: str, start_date: str, end_date: str) -> list[EventItem]:
         rows = await run_sync(self.db.items.get_events_for_range, user_id, start_date, end_date)
-        return cast(EventRows, rows)
+        return cast(list[EventItem], rows)
 
     @handle_command_errors
     async def handle(
@@ -430,8 +429,6 @@ class EventHandler(DbOpsMixin):
                     ),
                     reminder_rules=reminder_rules,
                     notes=parsed_data.get("notes", ""),  # I-9修复：重复事件也传入notes
-                    parent_id=None,
-                    rrule=None,
                     event_role="recurring_occurrence",
                     event_collection_id=collection_id,
                     event_collection_kind="recurring",
@@ -818,10 +815,9 @@ class EventHandler(DbOpsMixin):
 
         try:
             start_date, end_date = parse_event_time_range(time_range)
-            normal_events, repeat_events = await self._fetch_event_rows(
+            events = await self._fetch_event_rows(
                 user_id, start_date, end_date
             )
-            events = normal_events + repeat_events
 
             # 时间过滤
             # 多节点事件用区间重叠；单次事件只看 start_time
@@ -1383,13 +1379,13 @@ class EventHandler(DbOpsMixin):
             # 提醒可比事件早最多 N 天触发，扩展 DB 查询范围以捕获"提醒在今天但事件在未来"的情况
             _MAX_REMIND_LEAD_DAYS = 30
             extended_end = (end_dt + timedelta(days=_MAX_REMIND_LEAD_DAYS)).isoformat()
-            normal_events, repeat_events = await self._fetch_event_rows(
+            events = await self._fetch_event_rows(
                 user_id, start_date, extended_end
             )
 
             # 只保留至少有一个提醒时间在查询范围内的条目（不要求事件本身在范围内）
             event_reminders: list[tuple[EventItem, list[str]]] = []
-            for e in normal_events + repeat_events:
+            for e in events:
                 if not e.remind_times:
                     continue
                 in_range = [

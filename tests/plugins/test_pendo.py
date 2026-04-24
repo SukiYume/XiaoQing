@@ -678,18 +678,21 @@ class TestPendoReviewFixes:
         assert "`w1`" not in message
 
 
-class TestMilestoneEventModel:
-    """测试多时间节点事件数据模型"""
+class TestEventLeafModel:
+    """测试新版日程 leaf 数据模型"""
 
-    def test_event_item_has_milestones_field(self):
+    def test_event_item_has_event_graph_fields_without_legacy_milestones(self):
         import sys
 
         sys.path.insert(0, str(ROOT))
         from plugins.pendo.models.item import EventItem
 
         item = EventItem(owner_id="u1", title="会议")
-        assert hasattr(item, "milestones")
-        assert item.milestones == []
+        assert not hasattr(item, "milestones")
+        assert not hasattr(item, "parent_id")
+        assert not hasattr(item, "rrule")
+        assert item.event_role == "single"
+        assert item.event_collection_id is None
 
     def test_event_item_has_notes_field(self):
         import sys
@@ -700,16 +703,26 @@ class TestMilestoneEventModel:
         item = EventItem(owner_id="u1", title="会议", notes="备注内容")
         assert item.notes == "备注内容"
 
-    def test_event_item_to_dict_includes_new_fields(self):
+    def test_event_item_to_dict_includes_event_graph_fields(self):
         import sys
 
         sys.path.insert(0, str(ROOT))
         from plugins.pendo.models.item import EventItem
 
-        milestones = [{"name": "注册截止", "time": "2026-04-06T00:00:00"}]
-        item = EventItem(owner_id="u1", title="会议", milestones=milestones, notes="备注")
+        item = EventItem(
+            owner_id="u1",
+            title="摘要截止",
+            event_role="multi_node_child",
+            event_collection_id="conf2026",
+            event_collection_kind="multi_node",
+            event_index=1,
+            event_node_key="m01",
+            notes="备注",
+        )
         d = item.to_dict()
-        assert d["milestones"] == milestones
+        assert "milestones" not in d
+        assert d["event_collection_id"] == "conf2026"
+        assert d["event_collection_kind"] == "multi_node"
         assert d["notes"] == "备注"
 
 
@@ -2529,7 +2542,7 @@ class TestReminderBackfillRegression:
             except Exception:
                 pass
 
-    def test_backfill_milestone_event_adds_missing_milestone_times(self, tmp_path):
+    def test_backfill_event_leaf_does_not_depend_on_legacy_milestones(self, tmp_path):
         import importlib
         import sys
 
@@ -2549,24 +2562,23 @@ class TestReminderBackfillRegression:
         try:
             event = EventItem(
                 owner_id="u1",
-                title="报名流程",
+                title="报名截止",
                 start_time="2030-01-05T09:00:00",
                 end_time="2030-01-05T12:00:00",
                 remind_times=["2030-01-05T08:00:00"],
-                milestones=[
-                    {"name": "开始", "time": "2030-01-05T09:00:00"},
-                    {"name": "截止", "time": "2030-01-05T12:00:00"},
-                ],
+                event_role="multi_node_child",
+                event_collection_id="flow2026",
+                event_collection_kind="multi_node",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
-            db.items.insert_item(event, "evt_milestone")
+            db.items.insert_item(event, "flow2026_m01")
             db.cleanup()
 
             result = backfill_missing_start_time_reminders(str(db_path), dry_run=False)
 
             reopened = Database(str(db_path))
-            updated = reopened.items.get_item("evt_milestone", "u1")
+            updated = reopened.items.get_item("flow2026_m01", "u1")
 
             assert result["matched"] == 1
             assert result["updated"] == 1
@@ -2574,7 +2586,6 @@ class TestReminderBackfillRegression:
             assert updated.remind_times == [
                 "2030-01-05T08:00:00",
                 "2030-01-05T09:00:00",
-                "2030-01-05T12:00:00",
             ]
         finally:
             try:

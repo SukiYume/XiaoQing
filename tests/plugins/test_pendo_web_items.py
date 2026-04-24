@@ -268,16 +268,18 @@ def test_normalize_ledger_fields_rejects_invalid_update_values():
         normalize_ledger_fields({"ledger_date": "2026/03/25"}, partial=True)
 
 
-def test_normalize_event_fields_normalizes_milestones_and_deduplicates_reminders():
+def test_normalize_event_fields_ignores_legacy_leaf_fields_and_deduplicates_reminders():
     result = normalize_event_fields({
         "title": "  发布准备  ",
         "category": "项目",
         "location": "  A1  ",
         "notes": "  备注  ",
-        "milestones": [
-            {"name": "上线", "time": "2026-03-14T10:00"},
-            {"name": "提审", "time": "2026-03-13T18:00", "notes": "  带上最终 PDF  "},
-        ],
+        "start_time": "2026-03-13T18:00",
+        "end_time": "2026-03-14T10:00",
+        "rrule": "FREQ=WEEKLY",
+        "parent_id": "legacy-parent",
+        "remind_policy_id": "legacy-policy",
+        "milestones": [{"name": "旧节点", "time": "2026-03-14T10:00"}],
         "remind_times": [
             "2026-03-13T17:00",
             "2026-03-13T17:00",
@@ -290,9 +292,11 @@ def test_normalize_event_fields_normalizes_milestones_and_deduplicates_reminders
     assert result["notes"] == "备注"
     assert result["start_time"] == "2026-03-13T18:00:00"
     assert result["end_time"] == "2026-03-14T10:00:00"
-    assert result["milestones"][0]["name"] == "提审"
-    assert result["milestones"][0]["notes"] == "带上最终 PDF"
-    assert result["remind_times"] == ["2026-03-13T17:00:00", "2026-03-14T09:00:00"]
+    assert "milestones" not in result
+    assert "rrule" not in result
+    assert "parent_id" not in result
+    assert "remind_policy_id" not in result
+    assert result["remind_times"] == ["2026-03-13T17:00:00", "2026-03-13T18:00:00"]
 
     with pytest.raises(ValueError, match="after start_time"):
         normalize_event_fields({
@@ -301,9 +305,9 @@ def test_normalize_event_fields_normalizes_milestones_and_deduplicates_reminders
             "end_time": "2026-03-13T10:00",
         }, partial=False)
 
-    with pytest.raises(ValueError, match="Duplicate milestone time"):
+    with pytest.raises(ValueError, match="Event start_time is required"):
         normalize_event_fields({
-            "title": "坏节点",
+            "title": "旧多节点 payload",
             "milestones": [
                 {"name": "节点一", "time": "2026-03-13T10:00"},
                 {"name": "节点二", "time": "2026-03-13T10:00"},
@@ -311,8 +315,8 @@ def test_normalize_event_fields_normalizes_milestones_and_deduplicates_reminders
         }, partial=False)
 
 
-def test_event_update_route_preserves_existing_milestone_notes_when_payload_omits_them():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_event_milestone_note_preserve_{uuid.uuid4().hex}"
+def test_event_update_route_ignores_legacy_multinode_payload_fields():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_event_legacy_payload_ignore_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-event-metadata"
@@ -327,10 +331,6 @@ def test_event_update_route_preserves_existing_milestone_notes_when_payload_omit
             "category": "会议",
             "start_time": "2026-04-22T12:43:00",
             "end_time": "2026-04-26T12:00:00",
-            "milestones": [
-                {"name": "会议开始", "time": "2026-04-22T12:43:00", "notes": "北京南 G823，7车5F 坐"},
-                {"name": "会议结束", "time": "2026-04-26T12:00:00"},
-            ],
             "remind_times": ["2026-04-21T12:43:00", "2026-04-25T12:00:00"],
             "notes": "全局备注",
         }, partial=False))
@@ -353,8 +353,8 @@ def test_event_update_route_preserves_existing_milestone_notes_when_payload_omit
         assert result["ok"] is True
         updated = db.get_item("ev-note", owner_id=owner_id)
         assert updated is not None
-        assert updated.milestones[0]["notes"] == "北京南 G823，7车5F 坐"
-        assert "notes" not in updated.milestones[1]
+        assert not hasattr(updated, "milestones")
+        assert not hasattr(updated, "rrule")
         assert updated.notes == "全局备注"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

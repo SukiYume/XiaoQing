@@ -130,10 +130,8 @@ def build_dashboard_overview(
     month_ago = (now - timedelta(days=30)).strftime("%Y-%m-%d")
     month_ago_iso = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
 
-    month_events, month_repeat_events = db.get_events_for_range(owner_id, month_start_iso, month_end_iso)
-    raw_events_month = month_events + month_repeat_events
-    agenda_events, agenda_repeat_events = db.get_events_for_range(owner_id, month_start_iso, agenda_end_iso)
-    raw_events_agenda = agenda_events + agenda_repeat_events
+    raw_events_month = db.get_events_for_range(owner_id, month_start_iso, month_end_iso)
+    raw_events_agenda = db.get_events_for_range(owner_id, month_start_iso, agenda_end_iso)
 
     tasks_todo = db.get_items(owner_id, filters={
         "type": "task",

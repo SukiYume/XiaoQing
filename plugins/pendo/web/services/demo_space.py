@@ -177,18 +177,6 @@ def _transform_demo_record(record: dict[str, Any], id_map: dict[str, str], delta
     if isinstance(remind_times, list):
         transformed["remind_times"] = [_shift_datetime_text(value, delta_days) for value in remind_times]
 
-    milestones = transformed.get("milestones")
-    if isinstance(milestones, list):
-        transformed["milestones"] = [
-            {**milestone, "time": _shift_datetime_text(milestone.get("time"), delta_days)}
-            if isinstance(milestone, dict) else milestone
-            for milestone in milestones
-        ]
-
-    parent_id = transformed.get("parent_id")
-    if isinstance(parent_id, str) and parent_id in id_map:
-        transformed["parent_id"] = id_map[parent_id]
-
     for field in _REFERENCE_LIST_FIELDS:
         values = transformed.get(field)
         if isinstance(values, list):

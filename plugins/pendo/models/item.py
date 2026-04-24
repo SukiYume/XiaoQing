@@ -118,9 +118,6 @@ class EventItem(Item):
     timezone: str = "Asia/Shanghai"
     location: str = ""
     participants: list[str] = field(default_factory=list)
-    rrule: Optional[str] = None  # 重复规则(iCal RRULE格式)
-    parent_id: Optional[str] = None  # 重复事件的父ID
-    remind_policy_id: Optional[str] = None  # 提醒策略ID
     remind_times: list[str] = field(default_factory=list)  # 提醒时间点列表
     reminder_rules: list[dict[str, Any]] = field(default_factory=list)
     event_role: str = "single"  # single | multi_node_child | recurring_occurrence
@@ -129,9 +126,6 @@ class EventItem(Item):
     event_index: Optional[int] = None
     event_node_key: Optional[str] = None
     source_item_id: Optional[str] = None
-    milestones: list[dict[str, Any]] = field(default_factory=list)
-    # Legacy only after event graph migration:
-    # [{"name": "注册截止", "time": "2026-04-06T00:00:00", "notes": "仅该节点备注"}, ...]
     notes: str = ""
 
 
