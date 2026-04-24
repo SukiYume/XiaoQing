@@ -1107,6 +1107,124 @@ def test_group_wait_plan_is_preserved_after_bot_already_replied(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_pfc_once_drops_stale_followup_reply_action(tmp_path):
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+    from plugins.xiaoqing_chat.memory.memory import MemoryStore
+    from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore
+    from plugins.xiaoqing_chat.planning.pfc_action_planner import PFCPlan
+    from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
+    from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
+
+    now = time.time()
+    chat_id = "stale-followup-action"
+    cfg = XiaoQingChatConfig()
+    cfg.pfc_followup_action_window_seconds = 120.0
+    context = MagicMock()
+    context.data_dir = tmp_path
+    context.http_session = AsyncMock()
+
+    memory_store = MemoryStore()
+    memory_store.append(chat_id, role="assistant", name="小青", content="很久前说过", ts=now - 3600)
+    memory_store.append(chat_id, role="user", name="Tester", content="新图来了", ts=now - 1)
+
+    action_history = ActionHistoryStore()
+    memory_db = MagicMock()
+    pfc_state_store = PFCStateStore()
+    pfc_state_store.bind(tmp_path)
+    st = pfc_state_store.get(chat_id)
+    st.last_successful_reply_action = "direct_reply"
+    pfc_state_store.save(chat_id)
+    generate_reply = AsyncMock(return_value="不该发送")
+    captured: dict[str, str] = {}
+
+    async def fake_plan_next_action(**kwargs):
+        captured["last_successful_reply_action"] = kwargs["last_successful_reply_action"]
+        return PFCPlan(action="wait", reason="先看看", thinking="", wait_seconds=0)
+
+    with patch(
+        "plugins.xiaoqing_chat.planning.pfc_engine.plan_next_action",
+        new=fake_plan_next_action,
+    ):
+        result = await run_pfc_once(
+            context=context,
+            runtime_cfg=cfg,
+            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            bot_name="小青",
+            is_private=False,
+            chat_id=chat_id,
+            current_text="新图来了",
+            memory_store=memory_store,
+            action_history=action_history,
+            memory_db=memory_db,
+            pfc_state_store=pfc_state_store,
+            generate_reply=generate_reply,
+        )
+
+    assert captured["last_successful_reply_action"] == ""
+    assert pfc_state_store.get(chat_id).last_successful_reply_action == ""
+    assert result.action == "wait"
+    generate_reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_pfc_once_keeps_recent_followup_reply_action(tmp_path):
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+    from plugins.xiaoqing_chat.memory.memory import MemoryStore
+    from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore
+    from plugins.xiaoqing_chat.planning.pfc_action_planner import PFCPlan
+    from plugins.xiaoqing_chat.planning.pfc_engine import run_pfc_once
+    from plugins.xiaoqing_chat.planning.pfc_state import PFCStateStore
+
+    now = time.time()
+    chat_id = "recent-followup-action"
+    cfg = XiaoQingChatConfig()
+    cfg.pfc_followup_action_window_seconds = 120.0
+    context = MagicMock()
+    context.data_dir = tmp_path
+    context.http_session = AsyncMock()
+
+    memory_store = MemoryStore()
+    memory_store.append(chat_id, role="assistant", name="小青", content="刚说过", ts=now - 30)
+    memory_store.append(chat_id, role="user", name="Tester", content="接一句", ts=now - 1)
+
+    action_history = ActionHistoryStore()
+    memory_db = MagicMock()
+    pfc_state_store = PFCStateStore()
+    pfc_state_store.bind(tmp_path)
+    st = pfc_state_store.get(chat_id)
+    st.last_successful_reply_action = "direct_reply"
+    pfc_state_store.save(chat_id)
+    generate_reply = AsyncMock(return_value="")
+    captured: dict[str, str] = {}
+
+    async def fake_plan_next_action(**kwargs):
+        captured["last_successful_reply_action"] = kwargs["last_successful_reply_action"]
+        return PFCPlan(action="wait", reason="刚说过，等一下", thinking="", wait_seconds=0)
+
+    with patch(
+        "plugins.xiaoqing_chat.planning.pfc_engine.plan_next_action",
+        new=fake_plan_next_action,
+    ):
+        result = await run_pfc_once(
+            context=context,
+            runtime_cfg=cfg,
+            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
+            bot_name="小青",
+            is_private=False,
+            chat_id=chat_id,
+            current_text="接一句",
+            memory_store=memory_store,
+            action_history=action_history,
+            memory_db=memory_db,
+            pfc_state_store=pfc_state_store,
+            generate_reply=generate_reply,
+        )
+
+    assert captured["last_successful_reply_action"] == "direct_reply"
+    assert result.action == "wait"
+
+
+@pytest.mark.asyncio
 async def test_run_pfc_once_promotes_group_wait_plan_for_live_short_followups(tmp_path):
     from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
     from plugins.xiaoqing_chat.memory.memory import MemoryStore
