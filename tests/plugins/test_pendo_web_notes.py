@@ -98,3 +98,57 @@ def test_build_notes_overview_clips_current_period_cadence_to_today():
     finally:
         notes_overview_module.datetime = original_datetime
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_build_notes_overview_filters_tags_by_exact_match():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_notes_exact_tag_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-note-overview-exact-tag"
+
+    try:
+        db.insert_item({
+            "id": "n_work",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "工作",
+            "content": "工作内容",
+            "category": "工作",
+            "tags": ["工作"],
+            "created_at": "2026-03-24T10:00:00",
+            "updated_at": "2026-03-24T10:00:00",
+        })
+        db.insert_item({
+            "id": "n_workflow",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "工作流",
+            "content": "工作流内容",
+            "category": "工作",
+            "tags": ["工作流"],
+            "created_at": "2026-03-25T10:00:00",
+            "updated_at": "2026-03-25T10:00:00",
+        })
+
+        result = build_notes_overview(
+            db=db,
+            owner_id=owner_id,
+            today="2026-03-26",
+            tags="工作",
+        )
+
+        assert result["summary"]["total_count"] == 1
+        assert result["recent_notes"][0]["id"] == "n_work"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_notes_page_source_supports_keyword_markdown_and_references():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "notes.js").read_text(encoding="utf-8")
+
+    assert "keyword: ''" in src
+    assert "params.keyword = _filters.keyword" in src
+    assert "function renderMarkdown(content)" in src
+    assert "function renderNoteReferences(note)" in src
+    assert "关联条目 ID" in src
+    assert "data.references = referencesForPayload" in src

@@ -1,8 +1,10 @@
 """Regression tests for pendo web ledger category filtering."""
 
 import importlib
+import json
 from pathlib import Path
 import shutil
+import sqlite3
 import sys
 import types
 import uuid
@@ -431,6 +433,208 @@ def test_normalize_note_fields_sets_defaults_and_deduplicates_tags():
     assert note["content"] == "很长的正文"
     assert note["category"] == "未分类"
     assert note["tags"] == ["学习", "阅读"]
+
+
+def test_normalize_note_fields_normalizes_references_and_related_items():
+    note = normalize_note_fields({
+        "title": "引用笔记",
+        "content": "正文",
+        "references": [
+            {"kind": "item", "id": " task_1 ", "type": "task", "title": " 待办标题 "},
+            {"kind": "item", "id": "task_1", "type": "task", "title": "重复"},
+            {"id": "event_1"},
+            "bad",
+        ],
+        "related_items": ["event_1", "note_1", "note_1"],
+    }, partial=False)
+
+    assert note["references"] == [
+        {"kind": "item", "id": "task_1", "type": "task", "title": "待办标题"},
+        {"kind": "item", "id": "event_1"},
+    ]
+    assert note["related_items"] == ["event_1", "note_1", "task_1"]
+
+
+def test_database_get_items_filters_note_tags_exactly_and_keyword():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_note_exact_tag_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-note-exact-tag"
+
+    try:
+        db.insert_item(normalize_note_fields({
+            "id": "note_work",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "工作笔记",
+            "content": "普通内容",
+            "tags": ["工作"],
+            "created_at": "2026-04-01T10:00:00",
+            "updated_at": "2026-04-01T10:00:00",
+        }, partial=False))
+        db.insert_item(normalize_note_fields({
+            "id": "note_workflow",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "流程笔记",
+            "content": "深度流程内容",
+            "tags": ["工作流"],
+            "created_at": "2026-04-02T10:00:00",
+            "updated_at": "2026-04-02T10:00:00",
+        }, partial=False))
+
+        tagged = db.get_items(owner_id, filters={"type": "note", "tags": "工作"}, limit=10)
+        keyword = db.get_items(owner_id, filters={"type": "note", "keyword": "深度"}, limit=10)
+
+        assert [item.id for item in tagged] == ["note_work"]
+        assert [item.id for item in keyword] == ["note_workflow"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_database_migration_adds_note_reference_columns_to_old_items_table(tmp_path):
+    db_path = tmp_path / "old_note_schema.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE items (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT,
+                tags TEXT,
+                category TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                context TEXT,
+                visibility TEXT DEFAULT 'private',
+                attachments TEXT,
+                ai_meta TEXT,
+                deleted INTEGER DEFAULT 0,
+                deleted_at TEXT,
+                start_time TEXT,
+                end_time TEXT,
+                timezone TEXT,
+                location TEXT,
+                participants TEXT,
+                remind_times TEXT,
+                reminder_rules TEXT,
+                event_role TEXT,
+                event_collection_id TEXT,
+                event_collection_kind TEXT,
+                event_index INTEGER,
+                event_node_key TEXT,
+                source_item_id TEXT,
+                due_time TEXT,
+                priority INTEGER,
+                status TEXT,
+                estimate INTEGER,
+                subtasks TEXT,
+                dependencies TEXT,
+                progress INTEGER DEFAULT 0,
+                completed_at TEXT,
+                mood TEXT,
+                mood_score INTEGER,
+                weather TEXT,
+                template_id TEXT,
+                diary_date TEXT,
+                notes TEXT,
+                amount REAL,
+                direction TEXT,
+                ledger_category TEXT,
+                payment_method TEXT,
+                ledger_date TEXT,
+                remark TEXT
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    db = Database(str(db_path))
+    try:
+        item_id = db.insert_item(normalize_note_fields({
+            "id": "note_ref_migrated",
+            "owner_id": "u-note-migration",
+            "type": "note",
+            "title": "迁移后引用",
+            "content": "正文",
+            "references": [{"kind": "item", "id": "task_1"}],
+            "related_items": ["task_1"],
+            "created_at": "2026-04-01T10:00:00",
+            "updated_at": "2026-04-01T10:00:00",
+        }, partial=False))
+
+        item = db.get_item(item_id, owner_id="u-note-migration")
+        assert item.references == [{"kind": "item", "id": "task_1"}]
+        assert item.related_items == ["task_1"]
+    finally:
+        db.cleanup()
+
+
+def test_item_update_note_logs_edit_details_for_web_undo():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_note_web_edit_log_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-note-web-edit-log"
+    items_module = _load_items_module()
+
+    try:
+        db.insert_item(normalize_note_fields({
+            "id": "note_edit",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "旧标题",
+            "content": "旧正文",
+            "category": "工作",
+            "tags": ["旧"],
+            "created_at": "2026-04-01T10:00:00",
+            "updated_at": "2026-04-01T10:00:00",
+        }, partial=False))
+        db.insert_item(normalize_task_fields({
+            "id": "task_1",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "关联待办",
+            "content": "",
+            "status": "todo",
+            "priority": 3,
+            "created_at": "2026-04-01T11:00:00",
+            "updated_at": "2026-04-01T11:00:00",
+        }, partial=False))
+
+        result = items_module.update_item(
+            "note_edit",
+            body=items_module.ItemUpdate(
+                content="新正文",
+                references=[{"kind": "item", "id": "task_1"}],
+                related_items=["task_1"],
+            ),
+            owner_id=owner_id,
+            db=db,
+        )
+
+        assert result["ok"] is True
+        updated = db.get_item("note_edit", owner_id=owner_id)
+        assert updated.content == "新正文"
+        assert updated.related_items == ["task_1"]
+        assert updated.references == [
+            {"kind": "item", "id": "task_1", "type": "task", "title": "关联待办"}
+        ]
+
+        row = db.get_connection().execute(
+            "SELECT action, details FROM operation_logs WHERE item_id = ? ORDER BY id DESC LIMIT 1",
+            ("note_edit",),
+        ).fetchone()
+        details = json.loads(row[1])
+        assert row[0] == "edit_note"
+        assert details["old_values"]["content"] == "旧正文"
+        assert details["updates"]["content"] == "新正文"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def test_normalize_diary_fields_requires_content_and_clears_optional_values():

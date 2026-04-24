@@ -74,7 +74,7 @@ class ExporterService:
     _TYPE_SUMMARY_HINTS = {
         "event": "按开始时间归档，保留地点、提醒、日程集合与节点上下文。",
         "task": "按截止时间或创建时间排序，保留优先级与完成状态。",
-        "note": "按创建时间归档，保留分类与标签信息。",
+        "note": "按创建时间归档，保留分类、标签与关联条目信息。",
         "ledger": "按记账日期归档，突出收支方向、金额与分类。",
         "diary": "按日记日期归档，保留天气、地点、心情等记录。",
     }
@@ -568,6 +568,13 @@ class ExporterService:
         if content:
             sections.extend(["**正文**", "", content])
 
+        if item_type == "note":
+            references = self._format_note_references(getattr(item, "references", []))
+            if references:
+                if sections:
+                    sections.append("")
+                sections.extend(["**关联条目**", "", *references])
+
         if item_type == "event":
             if getattr(item, "event_collection_id", None):
                 collection = self._get_event_collection(item)
@@ -614,6 +621,32 @@ class ExporterService:
             filtered = [str(tag).strip() for tag in tags if str(tag).strip()]
             return " ".join(f"`#{tag}`" for tag in filtered) if filtered else "无"
         return str(tags)
+
+    def _format_note_references(self, references: Any) -> list[str]:
+        if not isinstance(references, list):
+            return []
+        labels = {
+            "event": "日程",
+            "task": "待办",
+            "note": "笔记",
+            "diary": "日记",
+            "ledger": "账目",
+            "item": "条目",
+        }
+        lines: list[str] = []
+        seen: set[str] = set()
+        for ref in references:
+            if not isinstance(ref, dict):
+                continue
+            ref_id = str(ref.get("id") or "").strip()
+            if not ref_id or ref_id in seen:
+                continue
+            seen.add(ref_id)
+            ref_type = str(ref.get("type") or ref.get("kind") or "item").strip()
+            label = labels.get(ref_type, labels.get(str(ref.get("kind") or ""), "条目"))
+            title = self._value_or_dash(ref.get("title"))
+            lines.append(f"- {label}: {title} (`{ref_id}`)")
+        return lines
 
     def _format_priority(self, value: Any) -> str:
         mapping = {

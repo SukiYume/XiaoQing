@@ -678,7 +678,7 @@ HELP_MAP = {
         "• /pendo event add <内容> - 添加日程(AI解析时间/地点/提醒)",
         "• /pendo todo add <内容> - 添加待办",
         "• /pendo todo view <id> - 查看待办详情",
-        "• /pendo note add <内容> - 记录笔记(支持 title:/cat:/#tag)",
+        "• /pendo note add <内容> - 记录笔记(支持 title:/cat:/#tag/ref:ID)",
         "• /pendo ledger quick <金额> <描述> - 快速记账",
     ],
     "event": [
@@ -721,7 +721,7 @@ HELP_MAP = {
     ],
     "note": [
         "📝 **笔记 (Note)**",
-        "• /pendo note add <内容> [cat:分类] [#标签] - 记录笔记",
+        "• /pendo note add <内容> [cat:分类] [#标签] [ref:条目ID] - 记录笔记",
         "  - 例: /pendo note add 直接折叠找脉冲星 cat:工作 #文章",
         "• /pendo note add title:<标题> content <正文> [cat:分类] [#标签] - 指定标题和正文",
         "• /pendo note add title:<标题>\\n<正文多行>\\ncat:分类 #标签 - 标题后直接换行写正文",
@@ -735,6 +735,9 @@ HELP_MAP = {
         "• /pendo note view <id> - 查看笔记详情",
         "• /pendo note edit <id> <新内容> [cat:分类] [#标签] - 编辑笔记",
         "  - 也支持 title:xxx content yyy 或 title:xxx 后换行正文 的方式重命名和修改大段内容",
+        "• /pendo note append <id> <追加内容> - 追加内容",
+        "• /pendo note tag <id> #标签 / untag <id> #标签 - 增删标签",
+        "• /pendo note link <id> <关联条目ID> - 关联日程/待办/笔记等条目",
         "• /pendo note delete <id|cat:分类> - 删除笔记",
     ],
     "diary": [

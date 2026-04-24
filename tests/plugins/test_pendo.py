@@ -1999,6 +1999,110 @@ class TestCrossTypeCommandRegression:
         finally:
             db.cleanup()
 
+    def test_note_add_parses_references_and_view_shows_linked_item(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_reference.db"))
+
+        try:
+            db.items.insert_item(
+                EventItem(
+                    owner_id="u1",
+                    title="晨会",
+                    start_time="2026-04-20T09:00:00",
+                    created_at="2026-04-19T21:00:00",
+                    updated_at="2026-04-19T21:00:00",
+                ),
+                "evt12345",
+            )
+
+            handler = NoteHandler(db=db)
+            result = asyncio.run(
+                handler.create_note(
+                    "u1",
+                    "title:会议纪要\n今天确认两个事项。\nref:evt12345 cat:工作 #会议",
+                    SimpleNamespace(),
+                )
+            )
+
+            assert result["status"] == "success"
+            item = db.items.get_item(result["item_id"], "u1")
+            assert item.references == [
+                {"kind": "item", "id": "evt12345", "type": "event", "title": "晨会"}
+            ]
+            assert item.related_items == ["evt12345"]
+            assert item.content == "今天确认两个事项。"
+
+            view = asyncio.run(handler.view_note("u1", result["item_id"], SimpleNamespace()))
+            assert "关联条目" in view["message"]
+            assert "日程: 晨会 `evt12345`" in view["message"]
+        finally:
+            db.cleanup()
+
+    def test_note_append_tag_untag_link_and_backlink_flow(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.models.item import NoteItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_command_flow.db"))
+
+        try:
+            db.items.insert_item(
+                NoteItem(
+                    owner_id="u1",
+                    title="主笔记",
+                    content="第一段",
+                    tags=["原始"],
+                    category="工作",
+                    created_at="2026-04-20T09:00:00",
+                    updated_at="2026-04-20T09:00:00",
+                ),
+                "note_main",
+            )
+            db.items.insert_item(
+                NoteItem(
+                    owner_id="u1",
+                    title="引用笔记",
+                    content="引用正文",
+                    category="工作",
+                    created_at="2026-04-20T10:00:00",
+                    updated_at="2026-04-20T10:00:00",
+                ),
+                "note_ref",
+            )
+
+            handler = NoteHandler(db=db)
+            append = asyncio.run(handler.append_note("u1", "note_main 第二段", SimpleNamespace()))
+            tag = asyncio.run(handler.tag_note("u1", "note_main #新增 #原始", SimpleNamespace()))
+            untag = asyncio.run(handler.untag_note("u1", "note_main #原始", SimpleNamespace()))
+            link = asyncio.run(handler.link_note("u1", "note_ref note_main", SimpleNamespace()))
+
+            updated = db.items.get_item("note_main", "u1")
+            linked = db.items.get_item("note_ref", "u1")
+            view = asyncio.run(handler.view_note("u1", "note_main", SimpleNamespace()))
+
+            assert append["status"] == "success"
+            assert tag["status"] == "success"
+            assert untag["status"] == "success"
+            assert link["status"] == "success"
+            assert updated.content == "第一段\n\n第二段"
+            assert updated.tags == ["新增"]
+            assert linked.related_items == ["note_main"]
+            assert "被这些笔记引用" in view["message"]
+            assert "引用笔记 `note_ref`" in view["message"]
+        finally:
+            db.cleanup()
+
     def test_ledger_view_with_diary_id_returns_hint(self, tmp_path):
         import sys
 
@@ -3854,6 +3958,40 @@ class TestOperationAndExportRegression:
         assert "项目周会" in exported
         assert "提交周报" in exported
         assert "研究想法" not in exported
+
+    def test_export_markdown_includes_note_references(self, monkeypatch, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.services import exporter as exporter_module
+        from plugins.pendo.services.exporter import ExporterService
+
+        monkeypatch.setattr(exporter_module, "_get_export_dir", lambda user_id: tmp_path)
+
+        note_item = SimpleNamespace(
+            id="note1",
+            type="note",
+            title="读书摘录",
+            category="学习",
+            tags=["阅读"],
+            created_at="2026-03-11T08:00:00",
+            updated_at="2026-03-11T08:30:00",
+            content="正文",
+            references=[{"kind": "item", "id": "task1", "type": "task", "title": "整理卡片"}],
+        )
+
+        class _Repo:
+            def get_items(self, user_id, filters, limit):
+                return [note_item] if filters.get("type") == "note" else []
+
+        service = ExporterService(SimpleNamespace(items=_Repo(), log_transfer=lambda **kwargs: 1))
+        result = service.export_markdown("u1", "笔记档案 note", {})
+
+        assert result["status"] == "success"
+        exported = (tmp_path / "笔记档案.md").read_text(encoding="utf-8")
+        assert "**关联条目**" in exported
+        assert "- 待办: 整理卡片 (`task1`)" in exported
 
     def test_export_markdown_requires_filename(self):
         import sys
