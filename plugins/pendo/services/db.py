@@ -578,21 +578,6 @@ class Database:
             logger.exception("Failed to update item: %s", e)
             raise
 
-    def find_instances(
-        self, owner_id: str, parent_id: str, columns: str = "*",
-    ) -> list[Any]:
-        """查找 parent_id 对应的父事件及所有子实例（共用查询模式）"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""SELECT {columns} FROM items
-                WHERE owner_id = ? AND type = '{ItemType.EVENT.value}' AND deleted = 0
-                AND (id = ? OR parent_id = ? OR id LIKE ?)
-                ORDER BY start_time""",
-            (owner_id, parent_id, parent_id, f"{parent_id}_%"),
-        )
-        return cursor.fetchall()
-
     def batch_update_items(
         self, per_item_updates: dict[str, dict[str, Any]], owner_id: str,
     ) -> int:
@@ -2099,14 +2084,10 @@ class Database:
             conditions.append("owner_id = ?")
             params.append(owner_id)
 
-        # 添加时间范围过滤以优化性能
-        # 里程碑事件的 start_time 是第一个里程碑，可能远在未来，但 remind_times 可能即将到期
-        # 因此对多时间节点事件（milestones 非空）跳过 start_time 过滤
+        # 添加时间范围过滤以优化性能。多节点已经拆成 leaf，直接看 leaf.start_time。
         if future_hours:
             future_time = (datetime.now() + timedelta(hours=future_hours)).isoformat()
-            conditions.append(
-                "(start_time <= ? OR (milestones IS NOT NULL AND milestones != '[]'))"
-            )
+            conditions.append("start_time <= ?")
             params.append(future_time)
 
         query = f"SELECT * FROM items WHERE {' AND '.join(conditions)}"

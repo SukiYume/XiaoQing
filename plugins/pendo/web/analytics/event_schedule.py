@@ -41,42 +41,16 @@ def event_kind(event: EventItem) -> str:
     collection_kind = getattr(event, "event_collection_kind", None)
     if collection_kind in {"multi_node", "recurring"}:
         return collection_kind
-    milestones = getattr(event, "milestones", None) or []
-    if milestones and len(milestones) >= 2:
-        return "milestone"
-    if getattr(event, "parent_id", None) or getattr(event, "rrule", None):
+    if getattr(event, "rrule", None):
         return "recurring"
     return "single"
 
 
 def milestone_rows(event: EventItem) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for milestone in getattr(event, "milestones", None) or []:
-        time_text = str(milestone.get("time") or "").strip()
-        if not time_text:
-            continue
-        row = {
-            "name": str(milestone.get("name") or "节点").strip() or "节点",
-            "time": time_text,
-            "date": date_key(time_text),
-        }
-        notes = str(milestone.get("notes") or "").strip()
-        if notes:
-            row["notes"] = notes
-        rows.append(row)
-    rows.sort(key=lambda row: row["time"])
-    return rows
+    return []
 
 
 def event_display_days(event: EventItem, range_start_day: date, range_end_day: date) -> list[str]:
-    rows = milestone_rows(event)
-    if rows:
-        return [
-            row["date"]
-            for row in rows
-            if range_start_day <= datetime.fromisoformat(row["time"]).date() <= range_end_day
-        ]
-
     start_dt = ensure_datetime(getattr(event, "start_time", None))
     end_dt = ensure_datetime(getattr(event, "end_time", None), is_end=True) or start_dt
     if not start_dt:
@@ -94,7 +68,6 @@ def build_event_schedule(event: EventItem, range_start_day: date, range_end_day:
     location = getattr(event, "location", None) or ""
     category = getattr(event, "category", None) or ""
     kind = event_kind(event)
-    rows = milestone_rows(event)
     display_days = event_display_days(event, range_start_day, range_end_day)
     start_time = getattr(event, "start_time", None) or ""
     end_time = getattr(event, "end_time", None) or ""
@@ -106,36 +79,7 @@ def build_event_schedule(event: EventItem, range_start_day: date, range_end_day:
     day_entries: dict[str, list[dict[str, Any]]] = {}
     for day in display_days:
         entries: list[dict[str, Any]] = []
-        if kind == "milestone":
-            same_day_rows = [row for row in rows if row["date"] == day]
-            if same_day_rows:
-                for row in same_day_rows:
-                    entries.append({
-                        "day": day,
-                        "kind": "milestone",
-                        "title": title,
-                        "subtitle": row["name"],
-                        "time": row["time"],
-                        "time_label": row["time"][11:16],
-                        "start_time": row["time"],
-                        "end_time": "",
-                        "location": location,
-                        "category": category,
-                    })
-            else:
-                entries.append({
-                    "day": day,
-                    "kind": "milestone",
-                    "title": title,
-                    "subtitle": "多节点事件",
-                    "time": None,
-                    "time_label": "节点",
-                    "start_time": "",
-                    "end_time": "",
-                    "location": location,
-                    "category": category,
-                })
-        elif date_key(start_time) == day:
+        if date_key(start_time) == day:
             entries.append({
                 "day": day,
                 "kind": kind,
@@ -154,7 +98,7 @@ def build_event_schedule(event: EventItem, range_start_day: date, range_end_day:
 
     return {
         "kind": kind,
-        "milestones": rows,
+        "milestones": [],
         "display_days": display_days,
         "day_entries": day_entries,
         "time_summary": time_summary,

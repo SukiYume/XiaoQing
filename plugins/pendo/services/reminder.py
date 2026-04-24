@@ -299,50 +299,23 @@ class ReminderService:
             if not item.start_time:
                 continue
 
-            milestones = getattr(item, "milestones", None) or []
-            if milestones:
-                # 多节点事件：逐个里程碑做点冲突检测（各节点视为1小时事件）
-                # 避免用整段 start_time~end_time 误判长跨度事件
-                overlaps = False
-                for m in milestones:
-                    m_time = m.get("time", "")
-                    if not m_time:
-                        continue
-                    try:
-                        m_start = datetime.fromisoformat(m_time).replace(tzinfo=None)
-                        m_end = m_start + timedelta(hours=1)
-                        if not (end_dt <= m_start or start_dt >= m_end):
-                            overlaps = True
-                            break
-                    except (ValueError, TypeError):
-                        continue
-                if overlaps:
-                    conflicts.append(
-                        {
-                            "id": item.id,
-                            "title": item.title,
-                            "start_time": item.start_time,
-                            "end_time": item.end_time,
-                        }
-                    )
-            else:
-                item_start = datetime.fromisoformat(item.start_time).replace(tzinfo=None)
-                item_end = (
-                    datetime.fromisoformat(item.end_time).replace(tzinfo=None)
-                    if item.end_time
-                    else item_start + timedelta(hours=1)
-                )
+            item_start = datetime.fromisoformat(item.start_time).replace(tzinfo=None)
+            item_end = (
+                datetime.fromisoformat(item.end_time).replace(tzinfo=None)
+                if item.end_time
+                else item_start + timedelta(hours=1)
+            )
 
-                # 区间重叠：item 与 [start_dt, end_dt) 有交叉
-                if not (end_dt <= item_start or start_dt >= item_end):
-                    conflicts.append(
-                        {
-                            "id": item.id,
-                            "title": item.title,
-                            "start_time": item.start_time,
-                            "end_time": item.end_time,
-                        }
-                    )
+            # 区间重叠：item 与 [start_dt, end_dt) 有交叉
+            if not (end_dt <= item_start or start_dt >= item_end):
+                conflicts.append(
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "start_time": item.start_time,
+                        "end_time": item.end_time,
+                    }
+                )
 
         return conflicts
 
@@ -371,28 +344,12 @@ class ReminderService:
         else:
             lines.append(f"🗓️ {title}")
 
-        milestones = getattr(item, "milestones", None) or []
         target_time = getattr(item, "start_time", None)
-        milestone_notes = ""
         if collection:
             if target_time:
                 dt_str = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
                 label = "节点时间" if collection.get("kind") == "multi_node" else "事件时间"
                 lines.append(f"🎯 {label}: {dt_str}")
-        elif milestones:
-            milestone = self._find_closest_milestone_info(milestones, remind_time)
-            if milestone:
-                milestone_name = milestone.get("name", "")
-                target_time = milestone.get("time") or target_time
-                milestone_notes = str(milestone.get("notes", "") or "").strip()
-                if milestone_name:
-                    lines.append(f"📌 {milestone_name}")
-                if target_time:
-                    milestone_dt = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
-                    lines.append(f"🎯 节点时间: {milestone_dt}")
-            elif target_time:
-                dt_str = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
-                lines.append(f"🎯 事件时间: {dt_str}")
         else:
             if target_time:
                 dt_str = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
@@ -406,14 +363,11 @@ class ReminderService:
             lines.append(f"📍 {item.location}")
 
         notes = getattr(item, "notes", None)
-        if milestone_notes:
-            lines.append(f"📝 {milestone_notes}")
-        elif notes:
+        if notes:
             lines.append(f"📝 {notes}")
 
         is_recurring = bool(
-            getattr(item, "parent_id", None)
-            or getattr(item, "event_collection_kind", None) == "recurring"
+            getattr(item, "event_collection_kind", None) == "recurring"
             or (collection and collection.get("kind") == "recurring")
         )
         if repeat_count is None and is_recurring:
@@ -433,27 +387,6 @@ class ReminderService:
         except Exception as e:
             logger.warning("读取日程集合失败: %s", e)
             return None
-
-    def _find_closest_milestone_info(
-        self, milestones: list[dict[str, Any]], remind_time: str
-    ) -> dict[str, Any] | None:
-        """根据 remind_time 找到时间最近（且在其后）的里程碑"""
-        try:
-            remind_dt = datetime.fromisoformat(remind_time)
-            best = None
-            best_diff = None
-            for m in milestones:
-                try:
-                    m_dt = datetime.fromisoformat(m.get("time", ""))
-                    diff = (m_dt - remind_dt).total_seconds()
-                    if diff >= 0 and (best_diff is None or diff < best_diff):
-                        best = m
-                        best_diff = diff
-                except (ValueError, TypeError):
-                    continue
-            return best or (milestones[0] if milestones else None)
-        except (ValueError, TypeError):
-            return milestones[0] if milestones else None
 
     def _format_reminder_slot(self, remind_time: str, target_time: str | None) -> str:
         """格式化提醒点，展示相对目标时间的偏移和原始提醒时间。"""

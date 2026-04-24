@@ -412,53 +412,6 @@ def _normalize_iso_date(value: Any, field_name: str) -> str:
         raise ValueError(f"Invalid {field_name}, expected YYYY-MM-DD") from exc
 
 
-def merge_milestone_metadata(
-    current_milestones: list[dict[str, Any]] | None,
-    incoming_milestones: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]] | None:
-    """Preserve milestone-level metadata when callers only update name/time."""
-    if incoming_milestones is None:
-        return None
-    if not isinstance(incoming_milestones, list):
-        return incoming_milestones
-
-    current_rows = [dict(row) for row in (current_milestones or []) if isinstance(row, dict)]
-    name_map: dict[str, dict[str, Any]] = {}
-    time_map: dict[str, dict[str, Any]] = {}
-    for row in current_rows:
-        name = str(row.get("name") or "").strip()
-        time_value = str(row.get("time") or "").strip()
-        if name and name not in name_map:
-            name_map[name] = row
-        if time_value and time_value not in time_map:
-            time_map[time_value] = row
-
-    merged_rows: list[dict[str, Any]] = []
-    for idx, row in enumerate(incoming_milestones):
-        if not isinstance(row, dict):
-            continue
-        merged = dict(row)
-        name = str(merged.get("name") or "").strip()
-        time_value = str(merged.get("time") or "").strip()
-        current = (
-            name_map.get(name)
-            or time_map.get(time_value)
-            or (current_rows[idx] if idx < len(current_rows) else None)
-        )
-        if current:
-            for key, value in current.items():
-                if key in {"name", "time"}:
-                    continue
-                if key in merged and merged.get(key) not in (None, "", [], {}):
-                    continue
-                if value in (None, "", [], {}):
-                    continue
-                merged[key] = value
-        merged_rows.append(merged)
-
-    return merged_rows
-
-
 def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
     """规范化并验证 event 字段。"""
     normalized = dict(data)

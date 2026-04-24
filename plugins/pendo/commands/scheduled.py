@@ -511,7 +511,7 @@ def _normalize_briefing_datetime(dt_str: str, user_id: str, db: Database) -> dat
 def _build_briefing_event_entries(
     events: list[Any], user_id: str, db: Database, today: datetime, tomorrow: datetime
 ) -> list[dict[str, Any]]:
-    """构建每日简报里的事件条目，支持把多节点事件展开为当天节点。"""
+    """构建每日简报里的事件条目。"""
     entries: list[dict[str, Any]] = []
 
     for event in events:
@@ -525,27 +525,6 @@ def _build_briefing_event_entries(
                 collection = None
             if collection:
                 title = f"{collection.get('title') or '无标题'} · {title}"
-        milestones = getattr(event, "milestones", None) or []
-
-        if milestones and len(milestones) >= 2:
-            for milestone in milestones:
-                milestone_dt = _normalize_briefing_datetime(
-                    str(milestone.get("time", "")), user_id, db
-                )
-                if not milestone_dt or not (today <= milestone_dt < tomorrow):
-                    continue
-                milestone_name = str(milestone.get("name", "")).strip()
-                entry_title = f"{title} · {milestone_name}" if milestone_name else title
-                entries.append(
-                    {
-                        "sort_time": milestone_dt,
-                        "time_text": milestone_dt.strftime("%H:%M"),
-                        "title": entry_title,
-                        "location": location,
-                    }
-                )
-            continue
-
         start_dt = _normalize_briefing_datetime(
             getattr(event, "start_time", "") or "", user_id, db
         )

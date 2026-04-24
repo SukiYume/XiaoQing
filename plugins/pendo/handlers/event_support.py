@@ -15,45 +15,6 @@ from ..utils.validators import (
 )
 
 
-def group_reminders_by_milestone(
-    remind_times: list[str], milestones: list[dict[str, Any]]
-) -> list[tuple[dict[str, Any], list[str]]]:
-    """Group reminders by nearest following milestone."""
-    milestone_map = group_reminders_by_milestone_index(remind_times, milestones)
-    return [
-        (milestones[idx], milestone_map[idx])
-        for idx in range(len(milestones))
-        if milestone_map[idx]
-    ]
-
-
-def group_reminders_by_milestone_index(
-    remind_times: list[str], milestones: list[dict[str, Any]]
-) -> dict[int, list[str]]:
-    """Group reminders by milestone index."""
-    milestone_map: dict[int, list[str]] = {i: [] for i in range(len(milestones))}
-    for rt in remind_times:
-        try:
-            remind_dt = datetime.fromisoformat(rt)
-        except (ValueError, TypeError):
-            continue
-        best_idx: int | None = None
-        best_delta = None
-        for idx, milestone in enumerate(milestones):
-            try:
-                milestone_dt = datetime.fromisoformat(milestone.get("time", ""))
-            except (ValueError, TypeError):
-                continue
-            if milestone_dt >= remind_dt:
-                delta = milestone_dt - remind_dt
-                if best_delta is None or delta < best_delta:
-                    best_delta = delta
-                    best_idx = idx
-        if best_idx is not None:
-            milestone_map[best_idx].append(rt)
-    return milestone_map
-
-
 def normalize_iso(time_str: str) -> str:
     return datetime.fromisoformat(time_str).isoformat()
 
@@ -142,67 +103,14 @@ def ensure_start_time_reminder(remind_times: list[str], start_time: str | None) 
     return normalized
 
 
-def recalculate_milestone_reminders(
-    old_milestones: list[dict[str, Any]],
-    new_milestones: list[dict[str, Any]],
-    existing_reminders: list[str],
-) -> list[str]:
-    """Shift reminder groups milestone-by-milestone, preserving unaffected nodes."""
-    if not old_milestones or not new_milestones:
-        return sorted(existing_reminders)
-
-    grouped = group_reminders_by_milestone_index(existing_reminders, old_milestones)
-    old_index_by_name = {
-        str(milestone.get("name", "")).strip(): idx
-        for idx, milestone in enumerate(old_milestones)
-        if str(milestone.get("name", "")).strip()
-    }
-
-    recalculated: list[str] = []
-    for new_idx, new_milestone in enumerate(new_milestones):
-        old_idx = old_index_by_name.get(str(new_milestone.get("name", "")).strip(), new_idx)
-        if old_idx >= len(old_milestones):
-            continue
-
-        old_milestone = old_milestones[old_idx]
-        cluster = grouped.get(old_idx, [])
-        if not cluster:
-            continue
-
-        old_time = str(old_milestone.get("time", "")).strip()
-        new_time = str(new_milestone.get("time", "")).strip()
-        if not old_time or not new_time:
-            recalculated.extend(cluster)
-            continue
-
-        if old_time == new_time:
-            recalculated.extend(cluster)
-            continue
-
-        try:
-            offsets = calculate_remind_offsets(datetime.fromisoformat(old_time), cluster)
-            recalculated.extend(apply_offsets(datetime.fromisoformat(new_time), offsets))
-        except (ValueError, TypeError):
-            recalculated.extend(cluster)
-
-    return sorted(set(recalculated))
-
-
 def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str]:
     """Shift reminder schedule when event start_time changes."""
     reminder_rules = normalize_reminder_rules(getattr(event, "reminder_rules", None) or [])
     target_start = updates.get("start_time") or getattr(event, "start_time", None)
-    if reminder_rules and target_start and not (getattr(event, "milestones", None) or []):
+    if reminder_rules and target_start:
         return build_remind_times_from_rules(target_start, reminder_rules)
 
     existing = parse_remind_times(event.remind_times)
-    old_milestones = getattr(event, "milestones", None) or []
-    new_milestones = updates.get("milestones") or []
-    if old_milestones and new_milestones:
-        remind_times = recalculate_milestone_reminders(old_milestones, new_milestones, existing)
-        start = updates.get("start_time") or event.start_time
-        return ensure_start_time_reminder(remind_times, start)
-
     new_start = updates.get("start_time")
     if not new_start:
         remind_times = existing
@@ -221,7 +129,7 @@ def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str
 
 
 def format_recurring_event_created(
-    title: str, instance_count: int, remind_count: int, parent_id: str
+    title: str, instance_count: int, remind_count: int, collection_id: str
 ) -> str:
     lines = [
         "✅ 已创建日程",
@@ -231,8 +139,8 @@ def format_recurring_event_created(
     ]
     if remind_count:
         lines.append(f"⏰ 每项已设置 {remind_count} 个提醒")
-    lines.append(f"\n`{parent_id}`")
-    lines.append(f"\n💡 用 /pendo event reminders {parent_id} 查看所有实例提醒")
+    lines.append(f"\n`{collection_id}`")
+    lines.append(f"\n💡 用 /pendo event reminders {collection_id} 查看所有实例提醒")
     return "\n".join(lines)
 
 
@@ -308,7 +216,6 @@ def format_event_reminders(event: Any, log_map: dict[str, dict[str, Any]]) -> di
     remind_times = parse_remind_times(event.remind_times)
     title = event.title or "无标题"
     start_time = event.start_time or ""
-    milestones = getattr(event, "milestones", None) or []
     notes = getattr(event, "notes", None) or ""
 
     if not remind_times:
@@ -318,18 +225,8 @@ def format_event_reminders(event: Any, log_map: dict[str, dict[str, Any]]) -> di
     builder.add_line(f"🔔 **{title}** 的提醒列表")
     event_time_str = ItemFormatter.format_datetime(start_time, "%m月%d日 %H:%M")
     builder.add_line(f"🗓️ 日程时间: {event_time_str}")
-    if milestones:
-        builder.add_line(f"🗺️ 多时间节点 ({len(milestones)}个)")
-        for milestone in milestones:
-            milestone_time = ItemFormatter.format_datetime(
-                milestone.get("time", ""), "%m月%d日 %H:%M"
-            )
-            builder.add_line(f"  📌 {milestone.get('name', '')}  {milestone_time}")
-            milestone_notes = str(milestone.get("notes", "") or "").strip()
-            if milestone_notes:
-                builder.add_line(f"     📝 {milestone_notes}")
     if notes:
-        builder.add_line(f"📝 全局备注: {notes}" if milestones else f"📝 {notes}")
+        builder.add_line(f"📝 {notes}")
     builder.add_line("─" * 30)
     builder.add_blank()
 
