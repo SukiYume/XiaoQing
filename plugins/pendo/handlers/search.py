@@ -206,6 +206,16 @@ class SearchHandler:
         item_type = get_item_type_value(item.type, default=str(item.type))
         icon = ItemFormatter.format_type_icon(item_type)
         title = item.title
+        if isinstance(item, EventItem) and getattr(item, "event_collection_id", None):
+            try:
+                collection = self.db.items.get_event_collection(
+                    item.event_collection_id,
+                    item.owner_id,
+                )
+            except Exception:
+                collection = None
+            if collection:
+                title = f"{collection.get('title') or '无标题'} · {title or '无标题'}"
         if not title:
             title = ItemFormatter.truncate_content(item.content or "", 40, "...")
         item_id = item.id or ""
