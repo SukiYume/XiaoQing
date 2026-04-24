@@ -195,6 +195,7 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 /pendo event add 每周一早上9点站会
 /pendo event add 每月18号下午3点例会，重复12次
 /pendo event add 明天9点开会，提前1小时和15分钟提醒
+/pendo event add 4月6日注册截止，4月22日会议开始，4月26日会议结束
 ```
 
 **智能识别**:
@@ -202,7 +203,15 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 - 时间范围: 9点-11点、14:00-16:00
 - 地点: @会议室A、地点A
 - 重复规则: 每天、每周、每月、重复N次
+- 多节点: AI 会把多个具名时间点创建为一个事件集合，每个节点都是可独立查看、编辑、删除、设置提醒的 leaf 日程
 - 提醒时间: 提前30分钟、提前1小时和1天
+
+**事件结构**:
+
+- 单次日程: 一条 `event` leaf。
+- 重复日程: 一个 `event_collections(kind=recurring)` 集合，加若干 `recurring_occurrence` leaf。
+- 多节点日程: 一个 `event_collections(kind=multi_node)` 集合，加若干 `multi_node_child` leaf。
+- 提醒规则保存在 `reminder_rules`，`remind_times` 是按 leaf 开始时间计算出的发送缓存。
 
 ### 查看日程
 
@@ -219,12 +228,13 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 
 ```
 /pendo event edit <id> 改到明天10点
-/pendo event edit <id> 会议开始改成4月22日12:43
-/pendo event edit <id> 会议开始改成4月22日12:43，备注从北京南坐G123去会场
+/pendo event edit <collection_id> 标题改为星团会议
+/pendo event edit <leaf_id> 改到4月22日12:43
+/pendo event edit <leaf_id> 备注从北京南坐G123去会场
 /pendo event delete <id>    # 删除日程（5分钟内可撤销）
 ```
 
-`/pendo event edit` 现在统一支持单次事件、重复事件和多节点事件；如果修改了时间，未发送的提醒会按原相对偏移自动同步。
+`collection_id` 用于编辑/删除重复或多节点集合整体；`leaf_id` 用于操作某一次重复实例或某个多节点节点。删除集合会级联删除子节点，删除单个 leaf 只影响该节点。
 
 ## 待办管理
 
@@ -432,6 +442,17 @@ Web 控制台支持跨设备的 `.pendo.zip` 数据包安全迁移：
 python plugins/pendo/scripts/convert_text_export_to_pendo_bundle.py 你的文本备份.txt -o my_data.pendo.zip
 ```
 
+### Event Graph 数据库迁移
+
+旧版数据库中，多节点事件存储在单条 `items.milestones` 中，重复事件通过 `parent_id` 聚合。新版统一为 `event_collections` + leaf events：
+
+```bash
+python -m plugins.pendo.scripts.migrate_event_graph plugins/pendo/data/pendo.db --dry-run
+python -m plugins.pendo.scripts.migrate_event_graph plugins/pendo/data/pendo.db --apply
+```
+
+`--dry-run` 只输出计数，不写数据库。`--apply` 会先在原目录生成备份，再写入 JSON 迁移报告。迁移后，旧多节点容器会软删除，节点以 `<collection_id>_m01` 形式成为可单独 CRUD 的日程；旧重复实例会挂到 `event_collections(kind=recurring)` 下。
+
 ## 设置
 
 ### 查看设置
@@ -498,7 +519,7 @@ python-dateutil>=2.8.2
 
 **Q: 如何修改已创建的条目？**
 - 日程: `/pendo event edit <id> <修改内容>`
-- 多节点事件可直接按节点名改，例如 `/pendo event edit 80efbef6 会议开始改成4月22日12:43`
+- 多节点事件先 `/pendo event view <collection_id>` 查看节点 id，再用 `/pendo event edit <leaf_id> <修改内容>` 改某个节点
 - 待办: `/pendo todo edit <id> <新内容>`
 
 **Q: 提醒没有收到？**
