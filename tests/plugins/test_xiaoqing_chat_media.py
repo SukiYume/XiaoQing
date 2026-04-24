@@ -1838,6 +1838,53 @@ def test_resolve_media_llm_secrets_uses_default_vision_provider_from_secrets(moc
     assert secrets["_provider_scope"] == "vision_default"
 
 
+def test_resolve_media_llm_secrets_preserves_vision_extra_payload(mock_context):
+    runtime = _make_media_runtime(vision_provider="glm-4v")
+    provider = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]["providers"]["glm-4v"]
+    provider["thinking"] = {"type": "enabled"}
+    provider["extra_payload"] = {"response_format": {"type": "json_object"}}
+    provider["fallbacks"] = ["glm-4v-flash"]
+
+    secrets = _resolve_media_llm_secrets(mock_context, runtime)
+
+    assert secrets["_extra_payload"] == {
+        "thinking": {"type": "enabled"},
+        "response_format": {"type": "json_object"},
+    }
+    assert "fallbacks" not in secrets["_extra_payload"]
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_text_passes_vision_extra_payload(mock_context):
+    runtime = _make_media_runtime(vision_provider="glm-4v")
+    provider = mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]["providers"]["glm-4v"]
+    provider["thinking"] = {"type": "enabled"}
+    provider["extra_payload"] = {"response_format": {"type": "json_object"}}
+    captured: dict[str, object] = {}
+
+    async def _fake_chat_raw(**kwargs):
+        captured["extra_payload"] = kwargs.get("extra_payload")
+        return _raw_media_response(
+            json.dumps({"kind": "image", "description": "海边落日"}, ensure_ascii=False)
+        )
+
+    event = {"message": [{"type": "image", "data": {"url": "https://example.com/cat_photo.png"}}]}
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert text == "[图片：海边落日]"
+    assert captured["extra_payload"] == {
+        "thinking": {"type": "enabled"},
+        "response_format": {"type": "json_object"},
+    }
+
+
 @pytest.mark.asyncio
 async def test_download_url_bytes_streams_and_enforces_timeout(mock_context):
     captured = {}
