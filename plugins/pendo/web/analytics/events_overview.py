@@ -45,9 +45,6 @@ def _event_matches_keyword(
     if collection:
         haystacks.append(str(collection.get("title") or ""))
         haystacks.append(str(collection.get("notes") or ""))
-    for milestone in getattr(event, "milestones", None) or []:
-        haystacks.append(str(milestone.get("name", "") or ""))
-        haystacks.append(str(milestone.get("notes", "") or ""))
     full_text = "\n".join(haystacks).lower()
     return keyword.lower() in full_text
 
@@ -103,7 +100,7 @@ def _reminder_rows_in_range(
 def _event_matches_kind(event: EventItem, kind: str) -> bool:
     actual = event_kind(event)
     if kind == "milestone":
-        return actual in {"milestone", "multi_node"}
+        return actual == "multi_node"
     return kind in {"", "all", actual}
 
 
@@ -177,7 +174,7 @@ def _normalize_event(
         "range_reminder_summary": range_reminder_summary,
         "time_summary": schedule["time_summary"],
         "is_recurring_instance": kind == "recurring",
-        "series_id": getattr(event, "event_collection_id", None) or getattr(event, "parent_id", None) or None,
+        "series_id": getattr(event, "event_collection_id", None) or None,
     }
 
 
@@ -278,10 +275,6 @@ def build_events_overview(
                 label = event["title"] or "无标题"
                 if event["kind"] == "multi_node":
                     label = event["title"] or "无标题"
-                elif event["kind"] == "milestone":
-                    same_day_nodes = [row["subtitle"] for row in event["day_entries"].get(day, []) if row["subtitle"]]
-                    if same_day_nodes:
-                        label = same_day_nodes[0]
                 elif event["kind"] == "single":
                     label = event["title"] or "无标题"
                 elif event["kind"] == "recurring":
@@ -312,7 +305,7 @@ def build_events_overview(
         "summary": {
             "event_count": len(normalized_events),
             "day_count": sum(1 for day in calendar_days.values() if day["count"]),
-            "milestone_count": sum(1 for event in normalized_events if event["kind"] in {"milestone", "multi_node"}),
+            "milestone_count": sum(1 for event in normalized_events if event["kind"] == "multi_node"),
             "recurring_count": sum(1 for event in normalized_events if event["kind"] == "recurring"),
             "reminder_count": sum(event["range_reminder_summary"]["total"] for event in normalized_events),
         },
@@ -342,7 +335,6 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> dict[str, 
         collection,
     )
 
-    series_key = getattr(event, "parent_id", None)
     related_instances = []
     if collection:
         related_instances = [
@@ -355,20 +347,6 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> dict[str, 
             for child in db.get_collection_events(str(collection["id"]), owner_id)
             if child.id != event.id
         ]
-    elif series_key:
-        rows = db.find_instances(owner_id, series_key, columns="id, title, start_time, end_time")
-        for row in rows:
-            item_id = row["id"] if hasattr(row, "__getitem__") else row[0]
-            start_time = row["start_time"] if hasattr(row, "__getitem__") else row[2]
-            if item_id == event.id:
-                continue
-            related_instances.append({
-                "id": item_id,
-                "title": row["title"] if hasattr(row, "__getitem__") else row[1],
-                "start_time": start_time,
-                "end_time": row["end_time"] if hasattr(row, "__getitem__") else row[3],
-            })
-        related_instances.sort(key=lambda item: item["start_time"] or "")
 
     return {
         "event": normalized,

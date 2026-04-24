@@ -10,7 +10,6 @@ from ...utils.settings_utils import resolve_default_category
 from ...utils.time_utils import now_in_timezone
 from ...utils.validators import (
     derive_reminder_rules,
-    merge_milestone_metadata,
     normalize_diary_fields,
     normalize_event_fields,
     normalize_ledger_fields,
@@ -48,7 +47,6 @@ EVENT_MUTABLE_FIELDS = {
     "timezone",
     "remind_times",
     "reminder_rules",
-    "milestones",
     "rrule",
     "notes",
 }
@@ -97,7 +95,6 @@ class ItemCreate(BaseModel):
     timezone: Optional[str] = None
     remind_times: Optional[list[str]] = None
     reminder_rules: Optional[list[dict]] = None
-    milestones: Optional[list[dict]] = None
     rrule: Optional[str] = None
     notes: Optional[str] = None
     # Task fields
@@ -129,7 +126,6 @@ class ItemUpdate(BaseModel):
     timezone: Optional[str] = None
     remind_times: Optional[list[str]] = None
     reminder_rules: Optional[list[dict]] = None
-    milestones: Optional[list[dict]] = None
     rrule: Optional[str] = None
     notes: Optional[str] = None
     due_time: Optional[str] = None
@@ -478,11 +474,6 @@ def update_item(
                 )
                 if old_rules:
                     merged["reminder_rules"] = old_rules
-            if "milestones" in updates:
-                updates["milestones"] = merge_milestone_metadata(
-                    getattr(item, "milestones", None) or [],
-                    updates.get("milestones"),
-                )
             merged.update(updates)
             normalized = normalize_event_fields(merged, partial=False)
             for field in EVENT_MUTABLE_FIELDS:

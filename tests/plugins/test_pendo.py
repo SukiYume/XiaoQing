@@ -868,33 +868,32 @@ class TestMilestoneReminderMessage:
         db.get_user_settings = MagicMock(return_value={})
         return ReminderService(db=db)
 
-    def test_reminder_message_prefers_targeted_milestone_notes(self):
-        """多节点事件提醒应优先显示目标节点备注，而不是事件级全局备注"""
+    def test_reminder_message_uses_collection_and_leaf_notes(self):
+        """多节点 leaf 提醒显示集合标题、节点标题和节点备注"""
         from types import SimpleNamespace
 
         service = self._make_service()
+        service.db.get_event_collection.return_value = {
+            "id": "abc12345",
+            "kind": "multi_node",
+            "title": "星团会议",
+            "notes": "这是整场会议的全局说明",
+        }
 
         item = SimpleNamespace(
-            id="abc12345",
-            title="星团会议",
+            id="abc12345_m01",
+            title="注册截止",
             start_time="2030-04-06T00:00:00",
-            end_time="2030-04-26T12:00:00",
+            end_time=None,
             location="江苏溧水",
-            notes="这是整场会议的全局说明",
-            milestones=[
-                {
-                    "name": "注册截止",
-                    "time": "2030-04-06T00:00:00",
-                    "notes": "报名材料今晚前发给秘书",
-                },
-                {"name": "会议开始", "time": "2030-04-22T10:30:00"},
-            ],
+            notes="报名材料今晚前发给秘书",
             remind_times=["2030-04-05T00:00:00", "2030-04-05T23:00:00"],
             context={},
             owner_id="user1",
+            event_collection_id="abc12345",
+            event_collection_kind="multi_node",
         )
 
-        # 提醒时间对应"注册截止"前1天
         msg = service._build_reminder_message(item, "2030-04-05T00:00:00")
         assert "注册截止" in msg
         assert "星团会议" in msg
@@ -968,7 +967,7 @@ class TestRecurringEventRegression:
         assert inserted_items[0].end_time == "2030-01-01T10:30:00"
         assert inserted_items[1].end_time == "2030-01-02T10:30:00"
 
-    def test_edit_all_instances_keeps_relative_offsets_between_occurrences(self, tmp_path):
+    def test_edit_recurring_collection_updates_header_without_shifting_occurrences(self, tmp_path):
         import sys
         from unittest.mock import MagicMock
 
@@ -979,17 +978,30 @@ class TestRecurringEventRegression:
         from plugins.pendo.services.db import Database
 
         db = Database(str(tmp_path / "pendo.db"))
-        parent_id = "series123"
+        collection_id = "series123"
 
         try:
+            db.items.create_event_collection({
+                "id": collection_id,
+                "owner_id": "u1",
+                "kind": "recurring",
+                "title": "重复会议",
+                "category": "工作",
+                "rrule": "FREQ=DAILY;COUNT=2",
+                "start_time": "2030-01-01T09:00:00",
+                "end_time": "2030-01-02T10:00:00",
+            })
             first = EventItem(
                 owner_id="u1",
                 title="重复会议",
                 start_time="2030-01-01T09:00:00",
                 end_time="2030-01-01T10:00:00",
                 remind_times=["2030-01-01T08:00:00"],
-                parent_id=parent_id,
-                rrule="FREQ=DAILY;COUNT=2",
+                event_role="recurring_occurrence",
+                event_collection_id=collection_id,
+                event_collection_kind="recurring",
+                event_index=1,
+                event_node_key="20300101",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
@@ -999,8 +1011,11 @@ class TestRecurringEventRegression:
                 start_time="2030-01-02T09:00:00",
                 end_time="2030-01-02T10:00:00",
                 remind_times=["2030-01-02T08:00:00"],
-                parent_id=parent_id,
-                rrule="FREQ=DAILY;COUNT=2",
+                event_role="recurring_occurrence",
+                event_collection_id=collection_id,
+                event_collection_kind="recurring",
+                event_index=2,
+                event_node_key="20300102",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
@@ -1010,12 +1025,12 @@ class TestRecurringEventRegression:
             handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
 
             async def fake_parse_updates(changes, current_event):
-                return {"start_time": "2030-01-10T10:00:00"}
+                return {"title": "新版重复会议"}
 
             handler._parse_updates = fake_parse_updates
 
             result = asyncio.run(
-                handler._edit_all_instances("u1", parent_id, "改到2030-01-10 10:00")
+                handler.edit_event("u1", f"{collection_id} 改名为新版重复会议", MagicMock())
             )
 
             assert result["status"] == "success"
@@ -1025,18 +1040,9 @@ class TestRecurringEventRegression:
 
             assert updated_first is not None
             assert updated_second is not None
-            assert getattr(updated_first, "start_time") == "2030-01-10T10:00:00"
-            assert getattr(updated_first, "end_time") == "2030-01-10T11:00:00"
-            assert getattr(updated_first, "remind_times") == [
-                "2030-01-10T09:00:00",
-                "2030-01-10T10:00:00",
-            ]
-            assert getattr(updated_second, "start_time") == "2030-01-11T10:00:00"
-            assert getattr(updated_second, "end_time") == "2030-01-11T11:00:00"
-            assert getattr(updated_second, "remind_times") == [
-                "2030-01-11T09:00:00",
-                "2030-01-11T10:00:00",
-            ]
+            assert db.items.get_event_collection(collection_id, "u1")["title"] == "新版重复会议"
+            assert getattr(updated_first, "start_time") == "2030-01-01T09:00:00"
+            assert getattr(updated_second, "start_time") == "2030-01-02T09:00:00"
         finally:
             db.cleanup()
 
@@ -1147,7 +1153,7 @@ class TestReminderRegression:
         finally:
             db.cleanup()
 
-    def test_edit_all_instances_applies_explicit_reminder_offsets(self, tmp_path):
+    def test_collection_reminders_apply_explicit_offsets_to_children(self, tmp_path):
         import sys
         from unittest.mock import MagicMock
 
@@ -1160,7 +1166,17 @@ class TestReminderRegression:
         db = Database(str(tmp_path / "pendo.db"))
 
         try:
-            parent_id = "series123"
+            collection_id = "series123"
+            db.items.create_event_collection({
+                "id": collection_id,
+                "owner_id": "u1",
+                "kind": "recurring",
+                "title": "重复会议",
+                "category": "工作",
+                "rrule": "FREQ=DAILY;COUNT=2",
+                "start_time": "2030-01-01T10:00:00",
+                "end_time": "2030-01-02T11:00:00",
+            })
             first = EventItem(
                 owner_id="u1",
                 title="重复会议",
@@ -1168,8 +1184,11 @@ class TestReminderRegression:
                 start_time="2030-01-01T10:00:00",
                 end_time="2030-01-01T11:00:00",
                 remind_times=["2030-01-01T09:00:00"],
-                parent_id=parent_id,
-                rrule="FREQ=DAILY;COUNT=2",
+                event_role="recurring_occurrence",
+                event_collection_id=collection_id,
+                event_collection_kind="recurring",
+                event_index=1,
+                event_node_key="20300101",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
@@ -1180,30 +1199,27 @@ class TestReminderRegression:
                 start_time="2030-01-02T10:00:00",
                 end_time="2030-01-02T11:00:00",
                 remind_times=["2030-01-02T09:00:00"],
-                parent_id=parent_id,
-                rrule="FREQ=DAILY;COUNT=2",
+                event_role="recurring_occurrence",
+                event_collection_id=collection_id,
+                event_collection_kind="recurring",
+                event_index=2,
+                event_node_key="20300102",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
             db.items.insert_item(first, "series123_20300101")
             db.items.insert_item(second, "series123_20300102")
 
-            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
-
-            async def fake_parse_updates(changes, current_event):
-                return {
-                    "start_time": "2030-01-10T10:00:00",
-                    "remind_times": ["2030-01-09T10:00:00", "2030-01-10T09:00:00"],
-                }
-
-            handler._parse_updates = fake_parse_updates
+            ai_parser = MagicMock()
+            ai_parser.build_reminder_rules_from_description.return_value = [
+                {"offset_seconds": 86400},
+                {"offset_seconds": 3600},
+                {"offset_seconds": 0},
+            ]
+            handler = EventHandler(db=db, ai_parser=ai_parser, reminder_service=MagicMock())
 
             result = asyncio.run(
-                handler._edit_all_instances(
-                    "u1",
-                    parent_id,
-                    "改到2030-01-10 10:00，提前1天和1小时提醒",
-                )
+                handler.set_reminders("u1", f"{collection_id} 提前1天和1小时提醒", MagicMock())
             )
 
             assert result["status"] == "success"
@@ -1214,14 +1230,14 @@ class TestReminderRegression:
             assert updated_first is not None
             assert updated_second is not None
             assert getattr(updated_first, "remind_times") == [
-                "2030-01-09T10:00:00",
-                "2030-01-10T09:00:00",
-                "2030-01-10T10:00:00",
+                "2029-12-31T10:00:00",
+                "2030-01-01T09:00:00",
+                "2030-01-01T10:00:00",
             ]
             assert getattr(updated_second, "remind_times") == [
-                "2030-01-10T10:00:00",
-                "2030-01-11T09:00:00",
-                "2030-01-11T10:00:00",
+                "2030-01-01T10:00:00",
+                "2030-01-02T09:00:00",
+                "2030-01-02T10:00:00",
             ]
         finally:
             db.cleanup()
@@ -1259,7 +1275,7 @@ class TestReminderRegression:
         finally:
             db.cleanup()
 
-    def test_batch_edit_preserves_sent_history_and_prunes_stale_unsent_logs(self, tmp_path):
+    def test_leaf_edit_preserves_sent_history_and_prunes_stale_unsent_logs(self, tmp_path):
         import sys
         from unittest.mock import MagicMock
 
@@ -1272,49 +1288,26 @@ class TestReminderRegression:
         db = Database(str(tmp_path / "pendo_batch_logs.db"))
 
         try:
-            parent_id = "series123"
-            first = EventItem(
+            event = EventItem(
                 owner_id="u1",
-                title="重复会议",
+                title="会议",
                 start_time="2030-01-01T10:00:00",
                 end_time="2030-01-01T11:00:00",
                 remind_times=["2030-01-01T08:30:00", "2030-01-01T09:00:00", "2030-01-01T10:00:00"],
-                parent_id=parent_id,
-                rrule="FREQ=DAILY;COUNT=2",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
-            second = EventItem(
-                owner_id="u1",
-                title="重复会议",
-                start_time="2030-01-02T10:00:00",
-                end_time="2030-01-02T11:00:00",
-                remind_times=["2030-01-02T08:30:00", "2030-01-02T09:00:00", "2030-01-02T10:00:00"],
-                parent_id=parent_id,
-                rrule="FREQ=DAILY;COUNT=2",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
+            db.items.insert_item(event, "evtlogs1")
+            db.get_connection().execute(
+                """
+                INSERT INTO reminder_logs (item_id, remind_time, repeat_count)
+                VALUES (?, ?, 1)
+                """,
+                ("evtlogs1", "2030-01-01T08:30:00"),
             )
-            db.items.insert_item(first, "series123_20300101")
-            db.items.insert_item(second, "series123_20300102")
-            db.confirm_reminder(
-                "series123_20300101",
-                "preconfirmed",
-                owner_id="u1",
-                remind_time="2030-01-01T08:30:00",
-                allow_future=True,
-            )
-            db.confirm_reminder(
-                "series123_20300102",
-                "preconfirmed",
-                owner_id="u1",
-                remind_time="2030-01-02T08:30:00",
-                allow_future=True,
-            )
-            db.log_reminder("series123_20300101", "2030-01-01T09:00:00", sent=True)
-            db.log_reminder("series123_20300101", "2030-01-01T10:00:00", sent=True)
-            db.log_reminder("series123_20300102", "2030-01-02T09:00:00", sent=True)
-            db.log_reminder("series123_20300102", "2030-01-02T10:00:00", sent=True)
+            db.get_connection().commit()
+            db.log_reminder("evtlogs1", "2030-01-01T09:00:00", sent=True)
+            db.log_reminder("evtlogs1", "2030-01-01T10:00:00", sent=True)
 
             handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
 
@@ -1324,26 +1317,21 @@ class TestReminderRegression:
             handler._parse_updates = fake_parse_updates
 
             result = asyncio.run(
-                handler._edit_all_instances("u1", parent_id, "改到2030-01-10 10:00")
+                handler.edit_event("u1", "evtlogs1 改到2030-01-10 10:00", MagicMock())
             )
 
             assert result["status"] == "success"
-            first_logs = db.get_reminder_logs("series123_20300101")
-            second_logs = db.get_reminder_logs("series123_20300102")
-            assert sorted(log["remind_time"] for log in first_logs) == [
+            logs = db.get_reminder_logs("evtlogs1")
+            assert sorted(log["remind_time"] for log in logs) == [
                 "2030-01-01T09:00:00",
                 "2030-01-01T10:00:00",
             ]
-            assert sorted(log["remind_time"] for log in second_logs) == [
-                "2030-01-02T09:00:00",
-                "2030-01-02T10:00:00",
-            ]
-            assert all(log["sent_at"] for log in first_logs + second_logs)
+            assert all(log["sent_at"] for log in logs)
             assert db.get_unconfirmed_sent_reminders() == []
         finally:
             db.cleanup()
 
-    def test_edit_milestone_event_shifts_milestones_with_start_time(self, tmp_path):
+    def test_edit_multi_node_leaf_shifts_only_that_leaf(self, tmp_path):
         import sys
         from unittest.mock import MagicMock
 
@@ -1356,20 +1344,43 @@ class TestReminderRegression:
         db = Database(str(tmp_path / "pendo_milestone_edit.db"))
 
         try:
-            event = EventItem(
+            db.items.create_event_collection({
+                "id": "mile1234",
+                "owner_id": "u1",
+                "kind": "multi_node",
+                "title": "报名流程",
+                "category": "未分类",
+                "start_time": "2030-01-01T10:00:00",
+                "end_time": "2030-01-03T10:00:00",
+            })
+            first = EventItem(
                 owner_id="u1",
-                title="报名流程",
+                title="开始",
                 start_time="2030-01-01T10:00:00",
-                end_time="2030-01-03T10:00:00",
-                milestones=[
-                    {"name": "开始", "time": "2030-01-01T10:00:00"},
-                    {"name": "截止", "time": "2030-01-03T10:00:00"},
-                ],
+                event_role="multi_node_child",
+                event_collection_id="mile1234",
+                event_collection_kind="multi_node",
+                event_index=1,
+                event_node_key="m01",
                 remind_times=["2029-12-31T10:00:00", "2030-01-01T10:00:00"],
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
-            db.items.insert_item(event, "mile1234")
+            second = EventItem(
+                owner_id="u1",
+                title="截止",
+                start_time="2030-01-03T10:00:00",
+                event_role="multi_node_child",
+                event_collection_id="mile1234",
+                event_collection_kind="multi_node",
+                event_index=2,
+                event_node_key="m02",
+                remind_times=["2030-01-03T10:00:00"],
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(first, "mile1234_m01")
+            db.items.insert_item(second, "mile1234_m02")
 
             handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
 
@@ -1378,23 +1389,21 @@ class TestReminderRegression:
 
             handler._parse_updates = fake_parse_updates
 
-            result = asyncio.run(handler.edit_event("u1", "mile1234 改到1月5日10点", MagicMock()))
+            result = asyncio.run(handler.edit_event("u1", "mile1234_m01 改到1月5日10点", MagicMock()))
 
             assert result["status"] == "success"
             assert "已更新日程" in result["message"]
 
-            updated = db.items.get_item("mile1234", "u1")
-            assert updated is not None
-            assert updated.start_time == "2030-01-05T10:00:00"
-            assert updated.end_time == "2030-01-07T10:00:00"
-            assert updated.milestones == [
-                {"name": "开始", "time": "2030-01-05T10:00:00"},
-                {"name": "截止", "time": "2030-01-07T10:00:00"},
-            ]
+            updated_first = db.items.get_item("mile1234_m01", "u1")
+            updated_second = db.items.get_item("mile1234_m02", "u1")
+            assert updated_first is not None
+            assert updated_second is not None
+            assert updated_first.start_time == "2030-01-05T10:00:00"
+            assert updated_second.start_time == "2030-01-03T10:00:00"
         finally:
             db.cleanup()
 
-    def test_edit_milestone_event_stores_targeted_notes_on_milestone_only(self, tmp_path):
+    def test_edit_multi_node_leaf_notes_does_not_mutate_collection_notes(self, tmp_path):
         import sys
         from unittest.mock import AsyncMock, MagicMock
 
@@ -1402,39 +1411,40 @@ class TestReminderRegression:
 
         from plugins.pendo.handlers.event import EventHandler
         from plugins.pendo.models.item import EventItem
-        from plugins.pendo.services.reminder import ReminderService
         from plugins.pendo.services.db import Database
 
         db = Database(str(tmp_path / "pendo_milestone_targeted_edit.db"))
 
         try:
+            db.items.create_event_collection({
+                "id": "mile5678",
+                "owner_id": "u1",
+                "kind": "multi_node",
+                "title": "学术会议",
+                "category": "工作",
+                "notes": "旧备注",
+                "start_time": "2030-01-06T00:00:00",
+                "end_time": "2030-01-26T12:00:00",
+            })
             event = EventItem(
                 owner_id="u1",
-                title="学术会议",
-                start_time="2030-01-06T00:00:00",
-                end_time="2030-01-26T12:00:00",
-                milestones=[
-                    {"name": "注册截止", "time": "2030-01-06T00:00:00"},
-                    {"name": "报告提交截止", "time": "2030-01-13T00:00:00"},
-                    {"name": "会议开始", "time": "2030-01-22T10:30:00"},
-                    {"name": "会议结束", "time": "2030-01-26T12:00:00"},
-                ],
+                title="会议开始",
+                start_time="2030-01-22T10:30:00",
                 remind_times=[
-                    "2030-01-05T00:00:00",
-                    "2030-01-06T00:00:00",
-                    "2030-01-12T00:00:00",
-                    "2030-01-13T00:00:00",
                     "2030-01-21T10:30:00",
                     "2030-01-22T09:30:00",
                     "2030-01-22T10:30:00",
-                    "2030-01-25T12:00:00",
-                    "2030-01-26T12:00:00",
                 ],
-                notes="旧备注",
+                notes="",
+                event_role="multi_node_child",
+                event_collection_id="mile5678",
+                event_collection_kind="multi_node",
+                event_index=3,
+                event_node_key="m03",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
-            db.items.insert_item(event, "mile5678")
+            db.items.insert_item(event, "mile5678_m03")
 
             ai_parser = MagicMock()
             ai_parser.parse_event_with_ai = AsyncMock(side_effect=RuntimeError("boom"))
@@ -1451,52 +1461,21 @@ class TestReminderRegression:
             result = asyncio.run(
                 handler.edit_event(
                     "u1",
-                    "mile5678 会议开始改成1月22日中午12:43，备注从北京南坐G123去会场",
+                    "mile5678_m03 备注从北京南坐G123去会场",
                     MagicMock(),
                 )
             )
 
             assert result["status"] == "success"
 
-            updated = db.items.get_item("mile5678", "u1")
+            updated = db.items.get_item("mile5678_m03", "u1")
             assert updated is not None
-            assert updated.title == "学术会议"
-            assert updated.start_time == "2030-01-06T00:00:00"
-            assert updated.end_time == "2030-01-26T12:00:00"
-            assert updated.notes == "旧备注"
-            assert updated.milestones == [
-                {"name": "注册截止", "time": "2030-01-06T00:00:00"},
-                {"name": "报告提交截止", "time": "2030-01-13T00:00:00"},
-                {
-                    "name": "会议开始",
-                    "time": "2030-01-22T12:43:00",
-                    "notes": "从北京南坐G123去会场",
-                },
-                {"name": "会议结束", "time": "2030-01-26T12:00:00"},
-            ]
-            assert updated.remind_times == [
-                "2030-01-05T00:00:00",
-                "2030-01-06T00:00:00",
-                "2030-01-12T00:00:00",
-                "2030-01-13T00:00:00",
-                "2030-01-21T12:43:00",
-                "2030-01-22T11:43:00",
-                "2030-01-22T12:43:00",
-                "2030-01-25T12:00:00",
-                "2030-01-26T12:00:00",
-            ]
-
-            reminder_service = ReminderService(db)
-            start_msg = reminder_service._build_reminder_message(updated, "2030-01-21T12:43:00")
-            end_msg = reminder_service._build_reminder_message(updated, "2030-01-25T12:00:00")
-
-            assert "从北京南坐G123去会场" in start_msg
-            assert "从北京南坐G123去会场" not in end_msg
-            assert "旧备注" in end_msg
+            assert updated.notes == "从北京南坐G123去会场"
+            assert db.items.get_event_collection("mile5678", "u1")["notes"] == "旧备注"
         finally:
             db.cleanup()
 
-    def test_parent_id_reminder_view_returns_aggregate_series_reminders(self, tmp_path):
+    def test_collection_reminder_view_returns_aggregate_series_reminders(self, tmp_path):
         import sys
         from unittest.mock import MagicMock
 
@@ -1509,13 +1488,26 @@ class TestReminderRegression:
         db = Database(str(tmp_path / "pendo_parent_reminders.db"))
 
         try:
+            db.items.create_event_collection({
+                "id": "abcd1234",
+                "owner_id": "u1",
+                "kind": "recurring",
+                "title": "重复会议",
+                "category": "未分类",
+                "rrule": "FREQ=DAILY;COUNT=2",
+                "start_time": "2030-01-01T10:00:00",
+                "end_time": "2030-01-02T10:00:00",
+            })
             first = EventItem(
                 owner_id="u1",
                 title="重复会议",
                 start_time="2030-01-01T10:00:00",
                 remind_times=["2030-01-01T09:00:00"],
-                parent_id="abcd1234",
-                rrule="FREQ=DAILY;COUNT=2",
+                event_role="recurring_occurrence",
+                event_collection_id="abcd1234",
+                event_collection_kind="recurring",
+                event_index=1,
+                event_node_key="20300101",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
@@ -1524,8 +1516,11 @@ class TestReminderRegression:
                 title="重复会议",
                 start_time="2030-01-02T10:00:00",
                 remind_times=["2030-01-02T09:00:00"],
-                parent_id="abcd1234",
-                rrule="FREQ=DAILY;COUNT=2",
+                event_role="recurring_occurrence",
+                event_collection_id="abcd1234",
+                event_collection_kind="recurring",
+                event_index=2,
+                event_node_key="20300102",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
@@ -1536,13 +1531,13 @@ class TestReminderRegression:
             result = asyncio.run(handler.list_reminders("u1", "abcd1234", MagicMock()))
 
             assert result["status"] == "success"
-            assert "共 2 个日程实例" in result["message"]
+            assert "共 2 个节点" in result["message"]
             assert "01月01日 10:00" in result["message"]
             assert "01月02日 10:00" in result["message"]
         finally:
             db.cleanup()
 
-    def test_list_reminders_week_supports_milestone_events(self, tmp_path, monkeypatch):
+    def test_list_reminders_week_supports_multi_node_leaf_events(self, tmp_path, monkeypatch):
         import sys
         from unittest.mock import MagicMock
 
@@ -1556,27 +1551,51 @@ class TestReminderRegression:
         db = Database(str(tmp_path / "pendo_milestone_reminders_week.db"))
 
         try:
-            event = EventItem(
+            db.items.create_event_collection({
+                "id": "mileweek",
+                "owner_id": "u1",
+                "kind": "multi_node",
+                "title": "学术会议",
+                "category": "未分类",
+                "start_time": "2030-01-22T10:30:00",
+                "end_time": "2030-01-26T12:00:00",
+            })
+            start_event = EventItem(
                 owner_id="u1",
-                title="学术会议",
+                title="会议开始",
                 start_time="2030-01-22T10:30:00",
-                end_time="2030-01-26T12:00:00",
-                milestones=[
-                    {"name": "会议开始", "time": "2030-01-22T10:30:00"},
-                    {"name": "会议结束", "time": "2030-01-26T12:00:00"},
-                ],
                 remind_times=[
                     "2030-01-21T10:30:00",
                     "2030-01-22T09:30:00",
                     "2030-01-22T10:30:00",
-                    "2030-01-25T12:00:00",
-                    "2030-01-26T12:00:00",
                 ],
+                event_role="multi_node_child",
+                event_collection_id="mileweek",
+                event_collection_kind="multi_node",
+                event_index=1,
+                event_node_key="m01",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
-            db.items.insert_item(event, "mileweek")
-            db.log_reminder("mileweek", "2030-01-21T10:30:00", sent=True)
+            end_event = EventItem(
+                owner_id="u1",
+                title="会议结束",
+                start_time="2030-01-26T12:00:00",
+                remind_times=[
+                    "2030-01-25T12:00:00",
+                    "2030-01-26T12:00:00",
+                ],
+                event_role="multi_node_child",
+                event_collection_id="mileweek",
+                event_collection_kind="multi_node",
+                event_index=2,
+                event_node_key="m02",
+                created_at="2030-01-01T00:00:00",
+                updated_at="2030-01-01T00:00:00",
+            )
+            db.items.insert_item(start_event, "mileweek_m01")
+            db.items.insert_item(end_event, "mileweek_m02")
+            db.log_reminder("mileweek_m01", "2030-01-21T10:30:00", sent=True)
 
             monkeypatch.setattr(
                 event_module,
@@ -1589,9 +1608,8 @@ class TestReminderRegression:
 
             assert result["status"] == "success"
             assert "学术会议" in result["message"]
-            assert "🗺️2节点" in result["message"]
-            assert "📌 01-22 会议开始" in result["message"]
-            assert "📌 01-26 会议结束" in result["message"]
+            assert "学术会议 · 会议开始" in result["message"]
+            assert "学术会议 · 会议结束" in result["message"]
             assert "⏰ 01-21 10:30" in result["message"]
             assert "⏰ 01-26 12:00" in result["message"]
         finally:
@@ -3203,7 +3221,7 @@ class TestScheduledRegression:
         assert len(result) == 1
         assert result[0]["params"]["user_id"] == 1001
 
-    def test_generate_daily_briefing_includes_today_milestone_events(self, tmp_path, monkeypatch):
+    def test_generate_daily_briefing_includes_today_multi_node_leaf_events(self, tmp_path, monkeypatch):
         import sys
         from datetime import datetime
         from unittest.mock import MagicMock
@@ -3222,21 +3240,29 @@ class TestScheduledRegression:
         db = Database(str(tmp_path / "pendo_briefing_milestone.db"))
 
         try:
+            db.items.create_event_collection({
+                "id": "milebrief",
+                "owner_id": "u1",
+                "kind": "multi_node",
+                "title": "学术会议",
+                "category": "未分类",
+                "start_time": "2030-01-01T09:00:00",
+                "end_time": "2030-01-03T18:00:00",
+            })
             event = EventItem(
                 owner_id="u1",
-                title="学术会议",
-                start_time="2030-01-01T09:00:00",
-                end_time="2030-01-03T18:00:00",
-                milestones=[
-                    {"name": "报到", "time": "2030-01-01T09:00:00"},
-                    {"name": "主会场报告", "time": "2030-01-02T10:30:00"},
-                    {"name": "闭幕", "time": "2030-01-03T18:00:00"},
-                ],
+                title="主会场报告",
+                start_time="2030-01-02T10:30:00",
                 remind_times=[],
+                event_role="multi_node_child",
+                event_collection_id="milebrief",
+                event_collection_kind="multi_node",
+                event_index=2,
+                event_node_key="m02",
                 created_at="2030-01-01T00:00:00",
                 updated_at="2030-01-01T00:00:00",
             )
-            db.items.insert_item(event, "milebrief")
+            db.items.insert_item(event, "milebrief_m02")
 
             briefing = asyncio.run(
                 scheduled_module._generate_briefing_content("u1", db, MagicMock())
