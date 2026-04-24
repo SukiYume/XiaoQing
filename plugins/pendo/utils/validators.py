@@ -650,6 +650,74 @@ def normalize_note_fields(data: dict[str, Any], partial: bool = False) -> dict[s
             clean_tags.append(validated)
         normalized["tags"] = clean_tags
 
+    references = normalized.get("references")
+    if references is None and not partial:
+        references = []
+    if references is not None:
+        if not isinstance(references, list):
+            raise ValueError("Note references must be a list")
+        clean_refs: list[dict[str, str]] = []
+        seen_refs: set[str] = set()
+        for ref in references:
+            if not isinstance(ref, dict):
+                continue
+            ref_id = sanitize_text(str(ref.get("id") or ""), 120)
+            if not ref_id or ref_id in seen_refs:
+                continue
+            seen_refs.add(ref_id)
+            clean_ref = {
+                "kind": sanitize_text(str(ref.get("kind") or "item"), 40) or "item",
+                "id": ref_id,
+            }
+            ref_type = sanitize_text(str(ref.get("type") or ""), 40)
+            ref_title = sanitize_text(str(ref.get("title") or ""), 200)
+            if ref_type:
+                clean_ref["type"] = ref_type
+            if ref_title:
+                clean_ref["title"] = ref_title
+            clean_refs.append(clean_ref)
+        normalized["references"] = clean_refs
+
+    related_items = normalized.get("related_items")
+    if related_items is None and not partial:
+        related_items = []
+    if related_items is not None:
+        if not isinstance(related_items, list):
+            raise ValueError("Note related_items must be a list")
+        clean_related: list[str] = []
+        seen_related: set[str] = set()
+        for value in related_items:
+            related_id = sanitize_text(str(value or ""), 120)
+            if not related_id or related_id in seen_related:
+                continue
+            seen_related.add(related_id)
+            clean_related.append(related_id)
+        normalized["related_items"] = clean_related
+
+    if "references" in normalized:
+        ref_ids = [
+            str(ref.get("id") or "")
+            for ref in normalized.get("references", [])
+            if isinstance(ref, dict) and ref.get("id")
+        ]
+        existing_related = normalized.get("related_items") if isinstance(normalized.get("related_items"), list) else []
+        merged_related: list[str] = []
+        seen_merged: set[str] = set()
+        for related_id in [*existing_related, *ref_ids]:
+            clean_id = sanitize_text(str(related_id or ""), 120)
+            if clean_id and clean_id not in seen_merged:
+                seen_merged.add(clean_id)
+                merged_related.append(clean_id)
+        normalized["related_items"] = merged_related
+
+    if "last_viewed" in normalized:
+        last_viewed = normalized.get("last_viewed")
+        normalized["last_viewed"] = (
+            _normalize_iso_datetime(last_viewed, "last_viewed")
+            if last_viewed not in (None, "")
+            else None
+        )
+
     return normalized
 
 

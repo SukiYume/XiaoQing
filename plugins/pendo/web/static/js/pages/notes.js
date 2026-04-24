@@ -15,6 +15,7 @@ const NOTE_FIELDS = [
     { name: 'title', label: '标题', type: 'text', required: true },
     { name: 'category', label: '分类', type: 'text', placeholder: '未分类' },
     { name: 'tags', label: '标签', type: 'text', placeholder: '逗号分隔，如：工作,阅读' },
+    { name: 'related_items', label: '关联条目 ID', type: 'text', placeholder: '逗号分隔，可填日程/待办/笔记 ID' },
     { name: 'content', label: '内容', type: 'textarea', rows: 10 },
 ];
 
@@ -31,6 +32,7 @@ let _filters = {
     customEnd: '',
     category: '',
     tag: '',
+    keyword: '',
 };
 let _activeRange = { start: '', end: '' };
 
@@ -64,8 +66,136 @@ function tagsFromInput(value) {
     return tagList(String(value || '').split(','));
 }
 
+function idListFromInput(value) {
+    const seen = new Set();
+    return String(value || '')
+        .split(/[,，\s]+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .filter((item) => {
+            if (seen.has(item)) return false;
+            seen.add(item);
+            return true;
+        });
+}
+
+function refsToString(note) {
+    const values = [
+        ...((Array.isArray(note?.references) ? note.references : []).map((ref) => ref?.id)),
+        ...(Array.isArray(note?.related_items) ? note.related_items : []),
+    ];
+    return idListFromInput(values.join(',')).join(', ');
+}
+
+function referencesForPayload(value) {
+    return idListFromInput(value).map((id) => ({ kind: 'item', id }));
+}
+
 function noteWordCount(note) {
     return String(note?.content || '').trim().length;
+}
+
+function renderInlineMarkdown(text) {
+    let html = escapeHtml(text || '');
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    return html;
+}
+
+function renderMarkdown(content) {
+    const lines = String(content || '').replace(/\r\n/g, '\n').split('\n');
+    const html = [];
+    let listOpen = false;
+    let codeOpen = false;
+    const closeList = () => {
+        if (listOpen) {
+            html.push('</ul>');
+            listOpen = false;
+        }
+    };
+
+    lines.forEach((line) => {
+        if (/^```/.test(line.trim())) {
+            closeList();
+            if (codeOpen) {
+                html.push('</code></pre>');
+                codeOpen = false;
+            } else {
+                html.push('<pre><code>');
+                codeOpen = true;
+            }
+            return;
+        }
+        if (codeOpen) {
+            html.push(`${escapeHtml(line)}\n`);
+            return;
+        }
+        if (!line.trim()) {
+            closeList();
+            return;
+        }
+        const heading = line.match(/^(#{1,3})\s+(.+)$/);
+        if (heading) {
+            closeList();
+            const level = heading[1].length + 2;
+            html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+            return;
+        }
+        const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+        if (bullet) {
+            if (!listOpen) {
+                html.push('<ul>');
+                listOpen = true;
+            }
+            html.push(`<li>${renderInlineMarkdown(bullet[1])}</li>`);
+            return;
+        }
+        const quote = line.match(/^\s*>\s?(.+)$/);
+        if (quote) {
+            closeList();
+            html.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
+            return;
+        }
+        closeList();
+        html.push(`<p>${renderInlineMarkdown(line)}</p>`);
+    });
+    closeList();
+    if (codeOpen) html.push('</code></pre>');
+    return html.join('');
+}
+
+function noteReferences(note) {
+    const refs = Array.isArray(note?.references) ? [...note.references] : [];
+    const existing = new Set(refs.map((ref) => String(ref?.id || '')).filter(Boolean));
+    (Array.isArray(note?.related_items) ? note.related_items : []).forEach((id) => {
+        const refId = String(id || '').trim();
+        if (refId && !existing.has(refId)) {
+            existing.add(refId);
+            refs.push({ kind: 'item', id: refId });
+        }
+    });
+    return refs.filter((ref) => ref?.id);
+}
+
+function renderNoteReferences(note) {
+    const refs = noteReferences(note);
+    if (!refs.length) return '';
+    const labels = { event: '日程', task: '待办', note: '笔记', diary: '日记', ledger: '账目', item: '条目' };
+    return `
+        <section class="note-reference-panel">
+            <h4>关联条目</h4>
+            <div class="note-reference-list">
+                ${refs.map((ref) => {
+                    const type = ref.type || ref.kind || 'item';
+                    const label = labels[type] || labels[ref.kind] || '条目';
+                    const title = ref.title || ref.id;
+                    return `<div class="note-reference-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(title)}</strong><code>${escapeHtml(ref.id)}</code></div>`;
+                }).join('')}
+            </div>
+        </section>
+    `;
 }
 
 function categoryOptions() {
@@ -229,7 +359,7 @@ function ensureStyles() {
         }
         .notes-tag-chip:hover { background: rgba(219,234,254,0.8); }
         .notes-filter-bar {
-            display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 0.46fr) auto; gap: 12px;
+            display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(220px, 0.46fr) auto; gap: 12px;
             padding: 16px 18px; border-radius: 22px; background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.94));
             border: 1px solid rgba(59,130,246,0.12); box-shadow: 0 14px 30px rgba(37,99,235,0.04);
         }
@@ -355,7 +485,22 @@ function ensureStyles() {
         }
         .notes-pagination { margin-top: 18px; }
         .note-view-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-bottom: 14px; border-bottom: 1px solid rgba(226,232,240,0.8); margin-bottom: 14px; }
-        .note-view-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.8; color: var(--color-text); max-height: 60vh; overflow-y: auto; }
+        .note-view-content { word-break: break-word; font-size: 14px; line-height: 1.8; color: var(--color-text); max-height: 60vh; overflow-y: auto; }
+        .note-view-content p { margin: 0 0 12px; }
+        .note-view-content h3, .note-view-content h4, .note-view-content h5 { margin: 18px 0 8px; line-height: 1.35; color: #0f172a; }
+        .note-view-content ul { margin: 0 0 12px 20px; padding: 0; }
+        .note-view-content li { margin: 4px 0; }
+        .note-view-content blockquote { margin: 0 0 12px; padding: 8px 12px; border-left: 3px solid rgba(59,130,246,0.42); background: rgba(239,246,255,0.7); color: #475569; border-radius: 10px; }
+        .note-view-content code { padding: 2px 5px; border-radius: 6px; background: rgba(15,23,42,0.06); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
+        .note-view-content pre { overflow-x: auto; padding: 12px; border-radius: 12px; background: #0f172a; color: #e2e8f0; }
+        .note-view-content pre code { padding: 0; background: transparent; color: inherit; }
+        .note-reference-panel { margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(226,232,240,0.85); }
+        .note-reference-panel h4 { margin: 0 0 10px; font-size: 13px; font-weight: 800; color: var(--color-text); }
+        .note-reference-list { display: flex; flex-direction: column; gap: 8px; }
+        .note-reference-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 10px; border-radius: 12px; background: rgba(248,250,252,0.92); border: 1px solid rgba(226,232,240,0.9); }
+        .note-reference-row span { font-size: 11px; font-weight: 800; color: #1d4ed8; }
+        .note-reference-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+        .note-reference-row code { color: var(--color-text-secondary); font-size: 11px; }
         .note-view-secondary { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
         ${mediaMax(BREAKPOINTS.XL, `
             .notes-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -431,6 +576,7 @@ async function fetchNotes(page = 1, range = _activeRange) {
     }
     if (_filters.category) params.category = _filters.category;
     if (_filters.tag) params.tags = _filters.tag;
+    if (_filters.keyword) params.keyword = _filters.keyword;
     const res = await api.get('/items', params);
     return {
         items: res?.data?.items || [],
@@ -623,6 +769,10 @@ function renderTagPanel() {
 function renderFilters() {
     return `
         <section class="notes-filter-bar">
+            <div class="notes-filter-field">
+                <label>关键词</label>
+                <input id="notes-filter-keyword" type="search" placeholder="搜索标题、正文、分类或标签" value="${escapeHtml(_filters.keyword)}">
+            </div>
             <div class="notes-filter-field">
                 <label>标签筛选</label>
                 <input id="notes-filter-tag" type="text" placeholder="输入标签，例如：阅读" value="${escapeHtml(_filters.tag)}">
@@ -835,7 +985,8 @@ export function openNoteViewModal(note) {
             ${tags.map((tag) => `<span class="note-tag">#${escapeHtml(tag)}</span>`).join('')}
             <span class="note-view-secondary">更新于 ${formatDateTime(note.updated_at || note.created_at)}</span>
         </div>
-        <div class="note-view-content">${escapeHtml(note.content || '')}</div>
+        <div class="note-view-content">${renderMarkdown(note.content || '')}</div>
+        ${renderNoteReferences(note)}
     `;
     const footer = `
         <button class="btn btn-danger btn-sm" id="note-delete" style="margin-right:auto;">删除</button>
@@ -880,6 +1031,7 @@ export function openNoteFormModal(existing = null) {
         let value = '';
         if (existing) {
             if (field.name === 'tags') value = tagsToString(existing.tags);
+            else if (field.name === 'related_items') value = refsToString(existing);
             else value = existing[field.name] ?? '';
         }
         return { ...field, value };
@@ -933,6 +1085,9 @@ export function openNoteFormModal(existing = null) {
             return;
         }
         data.tags = tagsFromInput(data.tags || '');
+        const relatedItems = idListFromInput(data.related_items || '');
+        data.related_items = relatedItems;
+        data.references = referencesForPayload(relatedItems.join(','));
         try {
             if (isEdit) {
                 await api.put(`/items/${existing.id}`, data);
@@ -995,9 +1150,34 @@ function attachListeners() {
         reset.onclick = async () => {
             _filters.category = '';
             _filters.tag = '';
+            _filters.keyword = '';
             _page = 1;
             await loadAndRender();
         };
+    }
+
+    const keywordInput = _container.querySelector('#notes-filter-keyword');
+    if (keywordInput) {
+        keywordInput.addEventListener('change', async () => {
+            _filters.keyword = keywordInput.value.trim();
+            _page = 1;
+            await loadAndRender();
+        });
+        keywordInput.addEventListener('keydown', async (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                _filters.keyword = keywordInput.value.trim();
+                _page = 1;
+                await loadAndRender();
+            }
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                keywordInput.value = '';
+                _filters.keyword = '';
+                _page = 1;
+                await loadAndRender();
+            }
+        });
     }
 
     const tagInput = _container.querySelector('#notes-filter-tag');
@@ -1047,7 +1227,7 @@ export function render(container) {
     _total = 0;
     _page = 1;
     _loading = false;
-    _filters = { range: 'year', customStart: '', customEnd: '', category: '', tag: '' };
+    _filters = { range: 'year', customStart: '', customEnd: '', category: '', tag: '', keyword: '' };
     _activeRange = deriveRangeDates();
     renderPage();
     loadAndRender();

@@ -189,7 +189,7 @@ def build_notes_overview(
         if (not category or (note.get("category") or "未分类") == category)
         and (
             not tag_query
-            or any(tag_query in str(tag).lower() for tag in (note.get("tags") if isinstance(note.get("tags"), list) else []))
+            or any(tag_query == str(tag).strip().lower() for tag in (note.get("tags") if isinstance(note.get("tags"), list) else []))
         )
     ]
 

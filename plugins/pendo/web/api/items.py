@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ...services.db import Database
-from ...models.item import ItemType
+from ...models.item import ItemType, get_item_type_value
 from ...utils.settings_utils import resolve_default_category
 from ...utils.time_utils import now_in_timezone
 from ...utils.validators import (
@@ -67,6 +67,9 @@ NOTE_MUTABLE_FIELDS = {
     "content",
     "category",
     "tags",
+    "references",
+    "related_items",
+    "last_viewed",
 }
 
 DIARY_MUTABLE_FIELDS = {
@@ -111,6 +114,9 @@ class ItemCreate(BaseModel):
     ledger_category: Optional[str] = None
     ledger_date: Optional[str] = None
     remark: Optional[str] = None
+    # Note fields
+    references: Optional[list[dict]] = None
+    related_items: Optional[list[str]] = None
 
 
 class ItemUpdate(BaseModel):
@@ -138,6 +144,8 @@ class ItemUpdate(BaseModel):
     ledger_category: Optional[str] = None
     ledger_date: Optional[str] = None
     remark: Optional[str] = None
+    references: Optional[list[dict]] = None
+    related_items: Optional[list[str]] = None
 
 
 def _item_to_dict(item) -> dict:
@@ -145,6 +153,51 @@ def _item_to_dict(item) -> dict:
     if hasattr(item, "to_dict"):
         return item.to_dict()
     return {}
+
+
+def _snapshot_item_fields(item, fields: set[str]) -> dict:
+    data = _item_to_dict(item)
+    return {field: data.get(field) for field in fields if field in data and field != "updated_at"}
+
+
+def _resolve_note_reference_payload(db: Database, owner_id: str, payload: dict) -> dict:
+    """Validate and enrich note references from references/related_items."""
+    ids: list[str] = []
+    seen: set[str] = set()
+    for ref in payload.get("references") or []:
+        if not isinstance(ref, dict):
+            continue
+        ref_id = str(ref.get("id") or "").strip()
+        if ref_id and ref_id not in seen:
+            seen.add(ref_id)
+            ids.append(ref_id)
+    for raw_id in payload.get("related_items") or []:
+        ref_id = str(raw_id or "").strip()
+        if ref_id and ref_id not in seen:
+            seen.add(ref_id)
+            ids.append(ref_id)
+
+    if not ids:
+        payload["references"] = []
+        payload["related_items"] = []
+        return payload
+
+    references: list[dict] = []
+    for ref_id in ids:
+        target = db.get_item(ref_id, owner_id=owner_id)
+        if target is None:
+            raise HTTPException(status_code=422, detail=f"Referenced item not found: {ref_id}")
+        item_type = get_item_type_value(getattr(target, "type", None), default="item")
+        references.append({
+            "kind": "item",
+            "id": ref_id,
+            "type": item_type,
+            "title": getattr(target, "title", "") or "无标题",
+        })
+
+    payload["references"] = references
+    payload["related_items"] = ids
+    return payload
 
 
 def _resolve_date_field(type: Optional[str], date_field: Optional[str]) -> str:
@@ -191,7 +244,7 @@ def _has_other_diary_for_date(
 
 def _build_count_where(
     type, status, category, priority, direction, start_date, end_date, date_field,
-    amount_min, amount_max, owner_id
+    amount_min, amount_max, owner_id, keyword: str | None = None
 ):
     where = ["owner_id = ?", "deleted = 0"]
     params: list = [owner_id]
@@ -209,6 +262,10 @@ def _build_count_where(
     if start_date and end_date and date_field:
         where.append(f"{date_field} >= ?"); params.append(start_date)
         where.append(f"{date_field} <= ?"); params.append(end_date)
+    if keyword:
+        like = f"%{keyword}%"
+        where.append("(title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ?)")
+        params.extend([like, like, like, like])
     return where, params
 
 
@@ -270,6 +327,7 @@ def list_items(
     status: Optional[str] = None,
     category: Optional[str] = None,
     tags: Optional[str] = None,
+    keyword: Optional[str] = None,
     priority: Optional[int] = None,
     direction: Optional[str] = None,
     date_field: Optional[str] = None,
@@ -292,6 +350,7 @@ def list_items(
     if category:
         filters[_resolve_category_field(type)] = category
     if tags:      filters["tags"] = tags
+    if keyword and keyword.strip(): filters["keyword"] = keyword.strip()
     if priority is not None: filters["priority"] = priority
     if direction: filters["direction"] = direction
     if amount_min is not None: filters["amount_min"] = amount_min
@@ -325,13 +384,13 @@ def list_items(
     # Count matching all filters
     count_where, count_params = _build_count_where(
         type, status, category, priority, direction, start_date, end_date, resolved_df,
-        amount_min, amount_max, owner_id
+        amount_min, amount_max, owner_id, keyword.strip() if keyword else None
     )
     conn = db.get_connection()
     if tags:
         total = conn.execute(
             f"SELECT COUNT(*) FROM items WHERE {' AND '.join(count_where)} AND tags LIKE ?",
-            count_params + [f"%{tags}%"],
+            count_params + [Database.tag_filter_pattern(tags)],
         ).fetchone()[0]
     else:
         total = conn.execute(
@@ -414,6 +473,8 @@ def create_item(
     if body.type == "note":
         try:
             item_data = normalize_note_fields(item_data, partial=False)
+            if item_data.get("references") or item_data.get("related_items"):
+                item_data = _resolve_note_reference_payload(db, owner_id, item_data)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
     if body.type == "diary":
@@ -456,6 +517,7 @@ def update_item(
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=422, detail="No fields to update")
+    requested_update_fields = set(updates.keys())
 
     item_type = item.type.value if hasattr(item.type, "value") else item.type
     if item_type == "event":
@@ -493,9 +555,17 @@ def update_item(
             merged = item.to_dict()
             merged.update(updates)
             normalized = normalize_note_fields(merged, partial=False)
-            for field in NOTE_MUTABLE_FIELDS:
-                if field in normalized:
-                    updates[field] = normalized[field]
+            note_reference_requested = bool({"references", "related_items"} & requested_update_fields)
+            if note_reference_requested:
+                normalized = _resolve_note_reference_payload(db, owner_id, normalized)
+            fields_to_apply = NOTE_MUTABLE_FIELDS & requested_update_fields
+            if note_reference_requested:
+                fields_to_apply.update({"references", "related_items"})
+            updates = {
+                field: normalized[field]
+                for field in fields_to_apply
+                if field in normalized
+            }
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
     if item_type == "diary":
@@ -516,12 +586,32 @@ def update_item(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 
+    note_old_values = None
+    note_logged_updates = None
+    if item_type == "note":
+        note_logged_updates = {
+            field: updates[field]
+            for field in NOTE_MUTABLE_FIELDS
+            if field in updates and field != "last_viewed"
+        }
+        if note_logged_updates:
+            note_old_values = _snapshot_item_fields(item, set(note_logged_updates.keys()))
+
     updates["updated_at"] = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
     success = db.update_item(item_id, updates, owner_id=owner_id)
     if not success:
         raise HTTPException(status_code=500, detail="Update failed")
 
-    db.log_operation(owner_id, "update", item_id=item_id)
+    if item_type == "note" and note_logged_updates:
+        db.log_operation(
+            owner_id,
+            "edit_note",
+            item_type="note",
+            item_id=item_id,
+            details={"updates": note_logged_updates, "old_values": note_old_values or {}},
+        )
+    else:
+        db.log_operation(owner_id, "update", item_type=item_type, item_id=item_id)
     return {"ok": True, "data": {"id": item_id}, "message": "更新成功"}
 
 
