@@ -613,6 +613,11 @@ def test_events_page_source_uses_event_overview_routes():
     assert "deleteCollection" in page_src
     assert "多节点事件" in page_src
     assert "timeline_days" in page_src
+    assert "function detailActionNoun(event)" in page_src
+    assert "event?.kind === 'multi_node'" in page_src
+    assert "event?.kind === 'recurring'" in page_src
+    assert "编辑节点</button>" not in page_src
+    assert "删除节点</button>" not in page_src
 
 
 def test_events_page_source_uses_unified_time_presets():
