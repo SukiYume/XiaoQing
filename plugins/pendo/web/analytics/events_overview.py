@@ -7,6 +7,7 @@ from typing import Any
 
 from ...models.item import EventItem
 from ...services.db import Database
+from ...services.event_graph import EventGraphService
 from .event_schedule import (
     build_event_schedule,
     daterange,
@@ -27,7 +28,11 @@ def _event_matches_range(event: EventItem, range_start: datetime, range_end: dat
     return start_dt <= range_end and (end_dt is None or end_dt >= range_start)
 
 
-def _event_matches_keyword(event: EventItem, keyword: str) -> bool:
+def _event_matches_keyword(
+    event: EventItem,
+    keyword: str,
+    collection: dict[str, Any] | None = None,
+) -> bool:
     if not keyword:
         return True
     haystacks = [
@@ -37,6 +42,9 @@ def _event_matches_keyword(event: EventItem, keyword: str) -> bool:
         getattr(event, "notes", "") or "",
         getattr(event, "category", "") or "",
     ]
+    if collection:
+        haystacks.append(str(collection.get("title") or ""))
+        haystacks.append(str(collection.get("notes") or ""))
     for milestone in getattr(event, "milestones", None) or []:
         haystacks.append(str(milestone.get("name", "") or ""))
         haystacks.append(str(milestone.get("notes", "") or ""))
@@ -93,7 +101,10 @@ def _reminder_rows_in_range(
 
 
 def _event_matches_kind(event: EventItem, kind: str) -> bool:
-    return kind in {"", "all", event_kind(event)}
+    actual = event_kind(event)
+    if kind == "milestone":
+        return actual in {"milestone", "multi_node"}
+    return kind in {"", "all", actual}
 
 
 def _event_matches_reminder(reminder_summary: dict[str, Any], reminder: str) -> bool:
@@ -111,6 +122,7 @@ def _timeline_entries_for_day(event_payload: dict[str, Any], day: str) -> list[d
     for row in event_payload["day_entries"].get(day, []):
         entries.append({
             "event_id": event_payload["id"],
+            "collection": event_payload.get("collection"),
             "kind": row["kind"],
             "day": day,
             "time": row["time"],
@@ -124,7 +136,26 @@ def _timeline_entries_for_day(event_payload: dict[str, Any], day: str) -> list[d
     return entries
 
 
-def _normalize_event(event: EventItem, reminder_logs: list[dict[str, Any]], range_start_day: date, range_end_day: date) -> dict[str, Any]:
+def _collection_payload(collection: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not collection:
+        return None
+    return {
+        "id": collection.get("id"),
+        "kind": collection.get("kind"),
+        "title": collection.get("title"),
+        "category": collection.get("category"),
+        "location": collection.get("location"),
+        "notes": collection.get("notes"),
+    }
+
+
+def _normalize_event(
+    event: EventItem,
+    reminder_logs: list[dict[str, Any]],
+    range_start_day: date,
+    range_end_day: date,
+    collection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     base = event.to_dict()
     schedule = build_event_schedule(event, range_start_day, range_end_day)
     reminders = _build_reminder_rows(event, reminder_logs)
@@ -136,6 +167,7 @@ def _normalize_event(event: EventItem, reminder_logs: list[dict[str, Any]], rang
     return {
         **base,
         "kind": kind,
+        "collection": _collection_payload(collection),
         "display_days": schedule["display_days"],
         "milestones": schedule["milestones"],
         "day_entries": schedule["day_entries"],
@@ -145,7 +177,7 @@ def _normalize_event(event: EventItem, reminder_logs: list[dict[str, Any]], rang
         "range_reminder_summary": range_reminder_summary,
         "time_summary": schedule["time_summary"],
         "is_recurring_instance": kind == "recurring",
-        "series_id": getattr(event, "parent_id", None) or None,
+        "series_id": getattr(event, "event_collection_id", None) or getattr(event, "parent_id", None) or None,
     }
 
 
@@ -205,15 +237,22 @@ def build_events_overview(
     })
 
     reminder_logs_by_event = _fetch_reminder_logs_by_event_ids(db, [event.id for event in events])
+    collection_cache: dict[str, dict[str, Any] | None] = {}
     normalized_events: list[dict[str, Any]] = []
     for event in events:
+        collection = None
+        collection_id = getattr(event, "event_collection_id", None)
+        if collection_id:
+            if collection_id not in collection_cache:
+                collection_cache[collection_id] = db.get_event_collection(collection_id, owner_id)
+            collection = collection_cache[collection_id]
         reminder_logs = reminder_logs_by_event.get(event.id, [])
-        payload = _normalize_event(event, reminder_logs, range_start_day, range_end_day)
+        payload = _normalize_event(event, reminder_logs, range_start_day, range_end_day, collection)
         if category and payload.get("category") != category:
             continue
         if not _event_matches_kind(event, kind):
             continue
-        if not _event_matches_keyword(event, keyword):
+        if not _event_matches_keyword(event, keyword, collection):
             continue
         if not payload["display_days"]:
             continue
@@ -237,7 +276,9 @@ def build_events_overview(
             calendar_days[day]["has_events"] = True
             if len(calendar_days[day]["items"]) < 3:
                 label = event["title"] or "无标题"
-                if event["kind"] == "milestone":
+                if event["kind"] == "multi_node":
+                    label = event["title"] or "无标题"
+                elif event["kind"] == "milestone":
                     same_day_nodes = [row["subtitle"] for row in event["day_entries"].get(day, []) if row["subtitle"]]
                     if same_day_nodes:
                         label = same_day_nodes[0]
@@ -271,7 +312,7 @@ def build_events_overview(
         "summary": {
             "event_count": len(normalized_events),
             "day_count": sum(1 for day in calendar_days.values() if day["count"]),
-            "milestone_count": sum(1 for event in normalized_events if event["kind"] == "milestone"),
+            "milestone_count": sum(1 for event in normalized_events if event["kind"] in {"milestone", "multi_node"}),
             "recurring_count": sum(1 for event in normalized_events if event["kind"] == "recurring"),
             "reminder_count": sum(event["range_reminder_summary"]["total"] for event in normalized_events),
         },
@@ -283,21 +324,38 @@ def build_events_overview(
 
 
 def build_event_detail(db: Database, owner_id: str, event_id: str) -> dict[str, Any] | None:
+    family = EventGraphService(db).load_by_id(owner_id, event_id)
+    if family.collection and family.leaf is None:
+        return build_event_collection_detail(db, owner_id, event_id)
+
     event = db.get_item(event_id, owner_id=owner_id)
     if not isinstance(event, EventItem):
         return None
 
+    collection = db.get_event_collection(event.event_collection_id, owner_id) if event.event_collection_id else None
     reminder_logs = db.get_reminder_logs(event.id)
     normalized = _normalize_event(
         event,
         reminder_logs,
         (ensure_datetime(getattr(event, "start_time", None)) or datetime.now()).date(),
         (ensure_datetime(getattr(event, "end_time", None), is_end=True) or ensure_datetime(getattr(event, "start_time", None)) or datetime.now()).date(),
+        collection,
     )
 
     series_key = getattr(event, "parent_id", None)
     related_instances = []
-    if series_key:
+    if collection:
+        related_instances = [
+            {
+                "id": child.id,
+                "title": child.title,
+                "start_time": child.start_time,
+                "end_time": child.end_time,
+            }
+            for child in db.get_collection_events(str(collection["id"]), owner_id)
+            if child.id != event.id
+        ]
+    elif series_key:
         rows = db.find_instances(owner_id, series_key, columns="id, title, start_time, end_time")
         for row in rows:
             item_id = row["id"] if hasattr(row, "__getitem__") else row[0]
@@ -316,4 +374,31 @@ def build_event_detail(db: Database, owner_id: str, event_id: str) -> dict[str, 
         "event": normalized,
         "reminder_logs": reminder_logs,
         "related_instances": related_instances[:12],
+    }
+
+
+def build_event_collection_detail(
+    db: Database,
+    owner_id: str,
+    collection_id: str,
+) -> dict[str, Any] | None:
+    collection = db.get_event_collection(collection_id, owner_id)
+    if not collection:
+        return None
+    children = db.get_collection_events(collection_id, owner_id)
+    child_ids = [child.id for child in children]
+    reminder_logs_by_event = _fetch_reminder_logs_by_event_ids(db, child_ids)
+    normalized_children = [
+        _normalize_event(
+            child,
+            reminder_logs_by_event.get(child.id, []),
+            (ensure_datetime(child.start_time) or datetime.now()).date(),
+            (ensure_datetime(child.end_time, is_end=True) or ensure_datetime(child.start_time) or datetime.now()).date(),
+            collection,
+        )
+        for child in children
+    ]
+    return {
+        "collection": _collection_payload(collection),
+        "children": normalized_children,
     }
