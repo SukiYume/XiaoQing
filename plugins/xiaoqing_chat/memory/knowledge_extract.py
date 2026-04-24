@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from ..llm.llm_client import chat_completions
+from ..llm.llm_client import LLMError, chat_completions
 from ..utils.json_parsing import extract_named_list_field, parse_first_json_object
 from .memory import StoredMessage
 from .memory_db import MemoryDB
@@ -188,22 +188,25 @@ async def maybe_extract_person_facts(
 
     msgs = build_fact_messages(bot_name=bot_name, history=history[-min(50, len(history)) :])
     payload_msgs = [{"role": m.role, "content": m.content} for m in msgs]
-    out = await chat_completions(
-        session=http_session,
-        api_base=api_base,
-        api_key=api_key,
-        model=model,
-        messages=payload_msgs,
-        temperature=min(0.6, temperature),
-        top_p=top_p,
-        max_tokens=min(768, max_tokens),
-        timeout_seconds=timeout_seconds,
-        max_retry=max_retry,
-        retry_interval_seconds=retry_interval_seconds,
-        proxy=proxy,
-        endpoint_path=endpoint_path,
-        extra_payload=extra_payload,
-    )
+    try:
+        out = await chat_completions(
+            session=http_session,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            messages=payload_msgs,
+            temperature=min(0.6, temperature),
+            top_p=top_p,
+            max_tokens=min(768, max_tokens),
+            timeout_seconds=timeout_seconds,
+            max_retry=max_retry,
+            retry_interval_seconds=retry_interval_seconds,
+            proxy=proxy,
+            endpoint_path=endpoint_path,
+            extra_payload=extra_payload,
+        )
+    except LLMError:
+        return
     facts = _parse_fact_json(out)
     if not facts:
         return

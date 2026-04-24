@@ -260,6 +260,7 @@ class XiaoQingChatConfig(BaseModel):
     pfc_planner_fail_window_seconds: float = 60.0
     pfc_planner_fail_threshold: int = 2
     pfc_planner_backoff_seconds: float = 120.0
+    pfc_followup_action_window_seconds: float = 120.0
     temperature: float = 0.8
     top_p: float = 0.9
     max_tokens: int = 512
