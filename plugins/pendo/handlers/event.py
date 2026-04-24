@@ -7,6 +7,7 @@ from typing import Any, TYPE_CHECKING, Protocol, cast
 from datetime import datetime, timedelta
 import logging
 import re
+import uuid
 from core.plugin_base import run_sync
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import error_result, handle_command_errors
@@ -156,6 +157,21 @@ class EventHandler(DbOpsMixin):
 
     # ==================== 添加日程 ====================
 
+    def _new_event_collection_id(self) -> str:
+        """Generate a collection ID that does not collide with known rows."""
+        for _ in range(20):
+            candidate = uuid.uuid4().hex[:8]
+            try:
+                collection = self.db.items.get_event_collection(candidate)
+                item = self.db.items.get_item(candidate)
+            except Exception:
+                return candidate
+            if collection is None and item is None:
+                return candidate
+            if not isinstance(collection, dict) and not isinstance(item, EventItem):
+                return candidate
+        return uuid.uuid4().hex[:12]
+
     async def add_event(
         self, user_id: str, text: str, context: PendoContext, group_id: int | None = None
     ) -> CommandMessage:
@@ -236,7 +252,9 @@ class EventHandler(DbOpsMixin):
 
         # 处理重复日程（rrule优先级高于milestones，避免AI同时生成两者时走错路径）
         if parsed_data.get("rrule"):
-            return await self._create_recurring_event(user_id, parsed_data, remind_times)
+            return await self._create_recurring_event(
+                user_id, parsed_data, remind_times, allow_conflict
+            )
 
         # 处理多时间节点日程（2个及以上节点）
         if milestones and isinstance(milestones, list) and len(milestones) >= 2:
@@ -261,7 +279,7 @@ class EventHandler(DbOpsMixin):
         conflicts = await run_sync(
             self.reminder_service.detect_conflict, user_id, start_time, end_time
         )
-        if conflicts:
+        if isinstance(conflicts, list) and conflicts:
             return {
                 "status": "need_confirm",
                 "message": format_conflicts(conflicts, parsed_data),
@@ -315,12 +333,15 @@ class EventHandler(DbOpsMixin):
         }
 
     async def _create_recurring_event(
-        self, user_id: str, parsed_data: dict[str, Any], remind_times: list[str]
+        self,
+        user_id: str,
+        parsed_data: dict[str, Any],
+        remind_times: list[str],
+        allow_conflict: bool = False,
     ) -> CommandMessage:
         """创建重复日程"""
         try:
             from dateutil.rrule import rrulestr
-            import uuid
 
             start_dt = datetime.fromisoformat(parsed_data["start_time"])
             end_dt = (
@@ -350,12 +371,50 @@ class EventHandler(DbOpsMixin):
                 return {"status": "error", "message": "❌ 没有生成任何重复实例"}
 
             reminder_rules = parsed_data.get("reminder_rules", [])
+            if not reminder_rules:
+                reminder_rules = ensure_event_reminder_rules(parsed_data, remind_times)
 
-            # 生成父ID
-            parent_id = uuid.uuid4().hex[:8]
+            if not allow_conflict:
+                for instance_dt in instances:
+                    instance_end_dt = instance_dt + duration if duration else None
+                    conflict = await self._check_conflict(
+                        user_id,
+                        parsed_data,
+                        instance_dt.isoformat(),
+                        instance_end_dt.isoformat() if instance_end_dt else None,
+                        allow_conflict,
+                    )
+                    if conflict:
+                        return conflict
+
+            collection_id = self._new_event_collection_id()
+            await run_sync(
+                self.db.items.create_event_collection,
+                {
+                    "id": collection_id,
+                    "owner_id": user_id,
+                    "kind": "recurring",
+                    "title": parsed_data.get("title", "无标题日程"),
+                    "content": parsed_data.get("content", ""),
+                    "category": parsed_data.get("category", "未分类"),
+                    "location": parsed_data.get("location", ""),
+                    "tags": parsed_data.get("tags", []),
+                    "notes": parsed_data.get("notes", ""),
+                    "context": parsed_data.get("context", {}),
+                    "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
+                    "rrule": parsed_data["rrule"],
+                    "reminder_rules": reminder_rules,
+                    "start_time": instances[0].isoformat(),
+                    "end_time": (
+                        (instances[-1] + duration).isoformat()
+                        if duration
+                        else instances[-1].isoformat()
+                    ),
+                },
+            )
             created_ids = []
 
-            for instance_dt in instances:
+            for index, instance_dt in enumerate(instances, 1):
                 instance_end_dt = instance_dt + duration if duration else None
                 instance_item = EventItem(
                     owner_id=user_id,
@@ -373,13 +432,18 @@ class EventHandler(DbOpsMixin):
                     ),
                     reminder_rules=reminder_rules,
                     notes=parsed_data.get("notes", ""),  # I-9修复：重复事件也传入notes
-                    parent_id=parent_id,
+                    parent_id=collection_id,
                     rrule=parsed_data["rrule"],
+                    event_role="recurring_occurrence",
+                    event_collection_id=collection_id,
+                    event_collection_kind="recurring",
+                    event_index=index,
+                    event_node_key=instance_dt.strftime("%Y%m%d"),
                     created_at=datetime.now().isoformat(),
                     updated_at=datetime.now().isoformat(),
                 )
 
-                instance_id = f"{parent_id}_{instance_dt.strftime('%Y%m%d')}"
+                instance_id = f"{collection_id}_{instance_dt.strftime('%Y%m%d')}"
                 instance_item.id = instance_id
 
                 await run_sync(self.db.items.insert_item, instance_item, instance_id)
@@ -391,7 +455,7 @@ class EventHandler(DbOpsMixin):
                 user_id=user_id,
                 action="create_recurring",
                 item_type="event",
-                item_id=parent_id,
+                item_id=collection_id,
                 details={"title": parsed_data.get("title"), "instances": len(created_ids)},
             )
 
@@ -401,9 +465,9 @@ class EventHandler(DbOpsMixin):
                     parsed_data.get("title", "无标题"),
                     len(created_ids),
                     len(reminder_rules),
-                    parent_id,
+                    collection_id,
                 ),
-                "item_id": parent_id,
+                "item_id": collection_id,
             }
         except Exception as e:
             logger.exception("创建重复日程失败: %s", e)
@@ -416,7 +480,7 @@ class EventHandler(DbOpsMixin):
         remind_times: list[str],
         allow_conflict: bool = False,
     ) -> CommandMessage:
-        """创建多时间节点事件（单条记录，多个里程碑）"""
+        """创建多时间节点事件集合和可独立操作的节点 leaf。"""
         milestones = parsed_data["milestones"]
         start_time = parsed_data.get("start_time") or milestones[0]["time"]
         end_time = parsed_data.get("end_time") or milestones[-1]["time"]
@@ -427,31 +491,88 @@ class EventHandler(DbOpsMixin):
         if conflict:
             return conflict
 
-        event_item = EventItem(
-            owner_id=user_id,
-            title=parsed_data.get("title", "无标题日程"),
-            content=parsed_data.get("content", ""),
-            start_time=start_time,
-            end_time=end_time,
-            location=parsed_data.get("location", ""),
-            tags=parsed_data.get("tags", []),
-            category=parsed_data.get("category", "未分类"),
-            context=parsed_data.get("context", {}),
-            remind_times=remind_times,
-            reminder_rules=parsed_data.get("reminder_rules", []),
-            milestones=milestones,
-            notes=parsed_data.get("notes", ""),
-            created_at=datetime.now().isoformat(),
-            updated_at=datetime.now().isoformat(),
+        reminder_rules = parsed_data.get("reminder_rules", [])
+        if not reminder_rules:
+            reminder_rules = ensure_event_reminder_rules(parsed_data, remind_times)
+
+        collection_id = self._new_event_collection_id()
+        await run_sync(
+            self.db.items.create_event_collection,
+            {
+                "id": collection_id,
+                "owner_id": user_id,
+                "kind": "multi_node",
+                "title": parsed_data.get("title", "无标题日程"),
+                "content": parsed_data.get("content", ""),
+                "category": parsed_data.get("category", "未分类"),
+                "location": parsed_data.get("location", ""),
+                "tags": parsed_data.get("tags", []),
+                "notes": parsed_data.get("notes", ""),
+                "context": parsed_data.get("context", {}),
+                "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
+                "reminder_rules": reminder_rules,
+                "start_time": start_time,
+                "end_time": end_time,
+            },
         )
 
-        item_id = await self._db_create_with_log(event_item, owner_id=user_id, action="create")
-        event_item.id = item_id
+        created_nodes: list[EventItem] = []
+        all_reminders: set[str] = set()
+        for index, milestone in enumerate(milestones, 1):
+            node_time = milestone["time"]
+            node_key = f"m{index:02d}"
+            node_reminders = build_remind_times_from_rules(node_time, reminder_rules)
+            all_reminders.update(node_reminders)
+            node = EventItem(
+                owner_id=user_id,
+                title=milestone.get("name", "无标题节点"),
+                content=parsed_data.get("content", ""),
+                start_time=node_time,
+                end_time=milestone.get("end_time"),
+                location=parsed_data.get("location", ""),
+                tags=parsed_data.get("tags", []),
+                category=parsed_data.get("category", "未分类"),
+                context=parsed_data.get("context", {}),
+                remind_times=node_reminders,
+                reminder_rules=reminder_rules,
+                notes=milestone.get("notes", ""),
+                event_role="multi_node_child",
+                event_collection_id=collection_id,
+                event_collection_kind="multi_node",
+                event_index=index,
+                event_node_key=node_key,
+                created_at=datetime.now().isoformat(),
+                updated_at=datetime.now().isoformat(),
+            )
+            node_id = f"{collection_id}_{node_key}"
+            node.id = node_id
+            await run_sync(self.db.items.insert_item, node, node_id)
+            created_nodes.append(node)
+
+        await run_sync(
+            self.db.logs.log_operation,
+            user_id=user_id,
+            action="create_multi_node",
+            item_type="event",
+            item_id=collection_id,
+            details={
+                "title": parsed_data.get("title"),
+                "child_ids": [node.id for node in created_nodes],
+            },
+        )
+
+        event_payload = {
+            **parsed_data,
+            "id": collection_id,
+            "start_time": start_time,
+            "end_time": end_time,
+            "remind_times": sorted(all_reminders),
+        }
 
         return {
             "status": "success",
-            "message": format_milestone_event_created(event_item.to_dict()),
-            "item_id": item_id,
+            "message": format_milestone_event_created(event_payload),
+            "item_id": collection_id,
         }
 
     # ==================== 查看日程 ====================
