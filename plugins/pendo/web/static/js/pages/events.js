@@ -1173,21 +1173,6 @@ function renderDetailBody(detail) {
                 <div class="events-detail-time">${escapeHtml(formatDateTime(event.start_time))}${event.end_time ? ` - ${escapeHtml(formatDateTime(event.end_time))}` : ''}</div>
                 ${event.notes ? `<div style="margin-top:12px;font-size:13px;line-height:1.8;color:var(--color-text-secondary);">${escapeHtml(event.notes)}</div>` : ''}
             </section>
-            ${event.milestones?.length ? `
-                <section class="events-detail-block">
-                    <h4>时间节点</h4>
-                    <div class="events-detail-list">
-                        ${event.milestones.map((milestone) => `
-                            <div class="events-detail-row">
-                                <div>
-                                    <div style="font-weight:700;color:var(--color-text);">${escapeHtml(milestone.name)}</div>
-                                    <div style="margin-top:4px;font-size:12px;color:var(--color-text-secondary);">${escapeHtml(formatDateTime(milestone.time))}</div>
-                                    ${milestone.notes ? `<div style="margin-top:6px;font-size:12px;line-height:1.7;color:var(--color-text-secondary);">${escapeHtml(milestone.notes)}</div>` : ''}
-                                </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                </section>` : ''}
             <section class="events-detail-block">
                 <h4>提醒</h4>
                 ${event.reminders?.length ? `

@@ -554,14 +554,6 @@ class ExporterService:
                     if collection_notes:
                         sections.append(f"- 集合备注: {collection_notes}")
 
-            milestones = getattr(item, "milestones", []) or []
-            if milestones:
-                sections.extend(["", "**里程碑**", ""])
-                for milestone in milestones:
-                    name = self._value_or_dash(milestone.get("name", "未命名节点"))
-                    when = self._format_time_value(milestone.get("time"))
-                    sections.append(f"- {name}: {when}")
-
             notes = (getattr(item, "notes", "") or "").strip()
             if notes:
                 sections.extend(["", "**补充备注**", "", notes])

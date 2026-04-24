@@ -17,11 +17,9 @@ from ..models.item import EventItem, ItemType
 from ..core.types import PendoContext, CommandMessage
 from ..core.router import TOP_LEVEL_REDIRECTS
 from ..utils.settings_utils import resolve_default_category
-from ..utils.validators import build_remind_times_from_rules, merge_milestone_metadata
+from ..utils.validators import build_remind_times_from_rules
 from ..services.event_graph import EventFamily, EventGraphService
 from .event_support import (
-    apply_offsets,
-    calculate_remind_offsets,
     ensure_start_time_reminder,
     ensure_event_reminders,
     ensure_event_reminder_rules,
@@ -31,7 +29,6 @@ from .event_support import (
     format_milestone_event_created,
     format_recurring_event_created,
     get_remind_status,
-    group_reminders_by_milestone,
     recalculate_event_reminders,
 )
 from ..utils.formatters import (
@@ -90,7 +87,6 @@ class EventHandler(DbOpsMixin):
     _CATEGORY_EDIT_RE = re.compile(r"(分类|归类|类别|类目)")
     _CONTENT_EDIT_RE = re.compile(r"(内容|描述|详情|补充|说明)")
     _NOTES_EDIT_RE = re.compile(r"(?:备注(?:改为|改成|[:：])?|备注)\s*(.+)")
-    _MILESTONE_VERBS = ("改成", "改到", "改为", "调整到", "挪到", "挪成")
 
     db: "Database"
     ai_parser: EventAIParserProtocol
@@ -434,8 +430,8 @@ class EventHandler(DbOpsMixin):
                     ),
                     reminder_rules=reminder_rules,
                     notes=parsed_data.get("notes", ""),  # I-9修复：重复事件也传入notes
-                    parent_id=collection_id,
-                    rrule=parsed_data["rrule"],
+                    parent_id=None,
+                    rrule=None,
                     event_role="recurring_occurrence",
                     event_collection_id=collection_id,
                     event_collection_kind="recurring",
@@ -595,7 +591,7 @@ class EventHandler(DbOpsMixin):
             return self._format_event_family_detail(family, event_id)
 
         single_event_id, event, error = await self._resolve_single_event_id_or_message(
-            user_id, event_id, allow_series_fallback=False
+            user_id, event_id
         )
         if error:
             return error
@@ -603,35 +599,24 @@ class EventHandler(DbOpsMixin):
             return {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
 
         title = event.title or "无标题"
-        milestones = getattr(event, "milestones", None) or []
         notes = getattr(event, "notes", None) or ""
         remind_times = parse_remind_times(event.remind_times)
 
         lines = [f"📋 **{title}**", ""]
 
-        if milestones and len(milestones) >= 2:
-            lines.append(f"🗺️ 多时间节点事件 ({len(milestones)}个节点)")
-            for m in milestones:
-                t_str = ItemFormatter.format_datetime(m.get("time", ""), "%m月%d日 %H:%M")
-                lines.append(f"  📌 {m.get('name', ''):<10}  {t_str}")
-                milestone_notes = str(m.get("notes", "") or "").strip()
-                if milestone_notes:
-                    lines.append(f"     📝 {milestone_notes}")
-        else:
-            time_str = ItemFormatter.format_time_range(event.start_time, event.end_time)
-            event_type = (
-                "🔄 重复日程"
-                if getattr(event, "rrule", None) or getattr(event, "parent_id", None)
-                else "📆 单次事件"
-            )
-            lines.append(f"{event_type}")
-            lines.append(f"⏰ {time_str}")
+        time_str = ItemFormatter.format_time_range(event.start_time, event.end_time)
+        event_type = (
+            "🔄 重复日程"
+            if getattr(event, "event_collection_kind", None) == "recurring"
+            else "📆 单次事件"
+        )
+        lines.append(f"{event_type}")
+        lines.append(f"⏰ {time_str}")
 
         if event.location:
             lines.append(f"📍 {event.location}")
         if notes:
-            label = "📝 全局备注" if milestones and len(milestones) >= 2 else "📝"
-            lines.append(f"{label}: {notes}" if label.endswith("全局备注") else f"{label} {notes}")
+            lines.append(f"📝 {notes}")
         if event.tags:
             lines.append(f"🏷️ {', '.join(event.tags)}")
 
@@ -769,41 +754,6 @@ class EventHandler(DbOpsMixin):
         weekday = cls._CN_WEEKDAYS[target_dt.weekday()]
         return f"**{target_dt.strftime('%m月%d日')} {weekday}** - {cls._format_day_delta(target_dt, current_dt)}"
 
-    @classmethod
-    def _format_milestone_list_item(
-        cls,
-        event: EventItem,
-        milestones: list[dict[str, Any]],
-        start_dt: datetime,
-        end_dt: datetime,
-        current_dt: datetime,
-    ) -> tuple[str | None, str]:
-        """格式化多节点事件的列表项。返回 (date_str, text)，无匹配时返回 (None, "")。"""
-        in_range = []
-        for m in milestones:
-            try:
-                m_dt = datetime.fromisoformat(m.get("time", ""))
-                if start_dt <= m_dt <= end_dt:
-                    in_range.append((m, m_dt))
-            except (ValueError, TypeError):
-                pass
-        if not in_range:
-            return None, ""
-
-        date_str = in_range[0][1].strftime("%Y-%m-%d")
-        start_str = ItemFormatter.format_datetime(event.start_time or "", "%m-%d")
-        end_str = ItemFormatter.format_datetime(event.end_time, "%m-%d") if event.end_time else ""
-        date_range = f"{start_str}~{end_str}" if end_str else start_str
-
-        text = f"• {date_range} {event.title or '无标题'} 🗺️{len(milestones)}节点"
-        if event.location:
-            text += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
-        text += f" `{event.id}`\n"
-        for m, m_dt in in_range:
-            m_str = ItemFormatter.format_datetime(m["time"], "%m-%d")
-            text += f"  📌 {m_str} {m.get('name', '')} - {cls._format_day_delta(m_dt, current_dt)}\n"
-        return date_str, text
-
     @staticmethod
     def _format_simple_list_item(
         event: EventItem, current_dt: datetime,
@@ -884,19 +834,7 @@ class EventHandler(DbOpsMixin):
             if tag_filter:
                 events = [e for e in events if tag_filter in (e.tags or [])]
 
-            def _effective_sort_time(e: EventItem) -> str:
-                m_list = e.milestones if hasattr(e, "milestones") else []
-                if m_list and len(m_list) >= 2:
-                    for m in m_list:
-                        try:
-                            m_dt = datetime.fromisoformat(m.get("time", ""))
-                            if start_dt <= m_dt <= end_dt:
-                                return m_dt.isoformat()
-                        except (ValueError, TypeError):
-                            pass
-                return e.start_time or ""
-
-            events.sort(key=_effective_sort_time)
+            events.sort(key=lambda event: event.start_time or "")
 
             # 构建过滤描述
             filter_labels = []
@@ -921,7 +859,6 @@ class EventHandler(DbOpsMixin):
             collection_cache: dict[str, dict[str, Any] | None] = {}
 
             for event in events:
-                milestones = event.milestones if hasattr(event, "milestones") else []
                 collection = None
                 if getattr(event, "event_collection_id", None):
                     collection_id = cast(str, event.event_collection_id)
@@ -934,10 +871,6 @@ class EventHandler(DbOpsMixin):
 
                 if collection:
                     date_str, text = self._format_graph_list_item(event, current_dt, collection)
-                elif milestones and len(milestones) >= 2:
-                    date_str, text = self._format_milestone_list_item(
-                        event, milestones, start_dt, end_dt, current_dt
-                    )
                 else:
                     date_str, text = self._format_simple_list_item(event, current_dt)
                 if not text:
@@ -971,13 +904,13 @@ class EventHandler(DbOpsMixin):
             return await self._edit_single_instance(user_id, family.leaf.id, changes)
 
         single_event_id, _, error = await self._resolve_single_event_id_or_message(
-            user_id, event_id, allow_series_fallback=True
+            user_id, event_id
         )
         if error:
             return error
         if single_event_id:
             return await self._edit_single_instance(user_id, single_event_id, changes)
-        return await self._edit_all_instances(user_id, event_id, changes)
+        return {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
 
     async def _edit_collection(
         self, user_id: str, family: EventFamily, changes: str
@@ -1045,7 +978,7 @@ class EventHandler(DbOpsMixin):
                 return {"status": "warning", "message": "⚠️ 未识别到有效的修改内容"}
 
             title = event.title
-            if ("start_time" in updates or "milestones" in updates) and "remind_times" not in updates:
+            if "start_time" in updates and "remind_times" not in updates:
                 updates["remind_times"] = recalculate_event_reminders(event, updates)
             elif "remind_times" in updates:
                 updates["remind_times"] = ensure_start_time_reminder(
@@ -1066,216 +999,13 @@ class EventHandler(DbOpsMixin):
             logger.exception("Failed to edit instance: %s", e)
             return {"status": "error", "message": f"❌ 编辑失败: {str(e)}"}
 
-    async def _edit_all_instances(
-        self, user_id: str, parent_id: str, changes: str
-    ) -> CommandMessage:
-        """编辑所有重复实例"""
-        try:
-            instances = await self._db_find_instances(user_id, parent_id, columns="id, title, start_time")
-            if not instances:
-                return {"status": "error", "message": f"❌ 找不到日程 {parent_id}"}
-
-            first_event = cast(
-                EventItem | None, await self._db_get_item(instances[0][0], owner_id=user_id)
-            )
-            if first_event is None:
-                return {"status": "error", "message": f"❌ 找不到日程 {parent_id}"}
-            updates = await self._parse_updates(changes, first_event)
-            if not updates:
-                return {"status": "warning", "message": "⚠️ 未识别到有效的修改内容"}
-
-            # 加载所有实例完整对象
-            instance_items: dict[str, EventItem | None] = {
-                row[0]: cast(EventItem | None, await self._db_get_item(row[0], owner_id=user_id))
-                for row in instances
-            }
-
-            # 计算每个实例的个性化更新（时间偏移）
-            per_instance_updates = self._compute_per_instance_updates(
-                updates, first_event, instance_items
-            )
-
-            instance_ids = [row[0] for row in instances]
-
-            # 保存旧值快照用于 undo
-            old_values = self._snapshot_old_values(first_event, updates)
-
-            # 批量更新
-            await self._db_batch_update_items(per_instance_updates, user_id)
-
-            await self._db_log_operation(
-                user_id=user_id,
-                action="edit_event",
-                item_type="event",
-                item_id=parent_id,
-                details={"updates": updates, "old_values": old_values, "instance_ids": instance_ids},
-            )
-
-            return {
-                "status": "success",
-                "message": f"✅ 已更新重复日程: {updates.get('title', first_event.title)}\n📊 共更新 {len(instance_ids)} 个实例\n\n💡 /pendo event reminders {parent_id} 查看提醒 | /pendo undo 撤销编辑",
-            }
-        except Exception as e:
-            logger.exception("Failed to edit all instances: %s", e)
-            return {"status": "error", "message": f"❌ 编辑失败: {str(e)}"}
-
-    def _compute_per_instance_updates(
-        self,
-        updates: dict[str, Any],
-        first_event: EventItem,
-        instance_items: dict[str, EventItem | None],
-    ) -> dict[str, dict[str, Any]]:
-        """根据首实例的更新计算每个子实例的个性化更新（含时间偏移）"""
-        new_first_start = (
-            datetime.fromisoformat(updates["start_time"]) if "start_time" in updates else None
-        )
-        old_first_start = (
-            datetime.fromisoformat(first_event.start_time)
-            if "start_time" in updates and first_event.start_time
-            else None
-        )
-        start_delta = (
-            new_first_start - old_first_start if new_first_start and old_first_start else None
-        )
-
-        new_duration = self._compute_new_duration(updates, first_event, new_first_start)
-        explicit_remind_offsets: list[timedelta] | None = None
-        if "remind_times" in updates and first_event.start_time:
-            offset_base = new_first_start or datetime.fromisoformat(first_event.start_time)
-            explicit_remind_offsets = calculate_remind_offsets(offset_base, updates["remind_times"])
-
-        result: dict[str, dict[str, Any]] = {}
-        for item_id, inst in instance_items.items():
-            if inst is None:
-                continue
-            inst_update = dict(updates)
-
-            if start_delta is not None and inst.start_time:
-                inst_start = datetime.fromisoformat(inst.start_time) + start_delta
-                inst_update["start_time"] = inst_start.isoformat()
-
-                if new_duration is not None:
-                    inst_update["end_time"] = (inst_start + new_duration).isoformat()
-                elif "end_time" not in updates and inst.end_time and inst.start_time:
-                    inst_duration = (
-                        datetime.fromisoformat(inst.end_time)
-                        - datetime.fromisoformat(inst.start_time)
-                    )
-                    inst_update["end_time"] = (inst_start + inst_duration).isoformat()
-
-                if explicit_remind_offsets is not None:
-                    inst_update["remind_times"] = ensure_start_time_reminder(
-                        apply_offsets(inst_start, explicit_remind_offsets),
-                        inst_start.isoformat(),
-                    )
-                else:
-                    inst_update["remind_times"] = recalculate_event_reminders(inst, inst_update)
-            elif "end_time" in inst_update and inst.start_time and new_duration is not None:
-                inst_start = datetime.fromisoformat(inst.start_time)
-                inst_update["end_time"] = (inst_start + new_duration).isoformat()
-            elif explicit_remind_offsets is not None and inst.start_time:
-                inst_start = datetime.fromisoformat(inst.start_time)
-                inst_update["remind_times"] = ensure_start_time_reminder(
-                    apply_offsets(inst_start, explicit_remind_offsets),
-                    inst_start.isoformat(),
-                )
-
-            result[item_id] = inst_update
-        return result
-
     def _normalize_event_updates(
         self, event: EventItem, updates: dict[str, Any]
     ) -> dict[str, Any]:
         """在持久化前保持事件字段一致性。"""
         normalized = dict(updates)
-        current_milestones = getattr(event, "milestones", None) or []
-        explicit_milestones = normalized.get("milestones")
-
-        if explicit_milestones:
-            normalized_milestones = self._normalize_milestones(explicit_milestones)
-            if normalized_milestones:
-                normalized_milestones = cast(
-                    list[dict[str, Any]],
-                    merge_milestone_metadata(current_milestones, normalized_milestones),
-                )
-                normalized["milestones"] = normalized_milestones
-                normalized["start_time"] = normalized_milestones[0]["time"]
-                normalized["end_time"] = normalized_milestones[-1]["time"]
-            return normalized
-
-        if current_milestones and "start_time" in normalized and event.start_time:
-            shifted = self._shift_milestones(current_milestones, event.start_time, normalized["start_time"])
-            if shifted:
-                normalized["milestones"] = shifted
-                normalized["start_time"] = shifted[0]["time"]
-                normalized["end_time"] = shifted[-1]["time"]
-        elif current_milestones and "end_time" in normalized:
-            shifted = [dict(m) for m in current_milestones]
-            if shifted:
-                shifted[-1]["time"] = str(normalized["end_time"])
-                normalized["milestones"] = self._normalize_milestones(shifted)
-                normalized["start_time"] = normalized["milestones"][0]["time"]
-                normalized["end_time"] = normalized["milestones"][-1]["time"]
-
+        normalized.pop("milestones", None)
         return normalized
-
-    @staticmethod
-    def _normalize_milestones(milestones: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Sort milestone payloads and normalize times to ISO strings."""
-        normalized: list[dict[str, Any]] = []
-        for milestone in milestones:
-            try:
-                name = str(milestone.get("name", "")).strip()
-                time_str = datetime.fromisoformat(str(milestone.get("time", ""))).isoformat()
-            except (TypeError, ValueError):
-                continue
-            if not name:
-                continue
-            normalized_row: dict[str, Any] = {"name": name, "time": time_str}
-            notes = str(milestone.get("notes", "") or "").strip()
-            if notes:
-                normalized_row["notes"] = notes
-            normalized.append(normalized_row)
-        normalized.sort(key=lambda item: item["time"])
-        return normalized
-
-    def _shift_milestones(
-        self, milestones: list[dict[str, Any]], old_start_time: str, new_start_time: str
-    ) -> list[dict[str, Any]]:
-        """Shift all milestone times by the same delta as the event start."""
-        old_start = datetime.fromisoformat(old_start_time)
-        new_start = datetime.fromisoformat(new_start_time)
-        delta = new_start - old_start
-        shifted: list[dict[str, Any]] = []
-        for milestone in milestones:
-            try:
-                base_time = datetime.fromisoformat(str(milestone.get("time", "")))
-            except (TypeError, ValueError):
-                continue
-            name = str(milestone.get("name", "")).strip()
-            if not name:
-                continue
-            shifted.append({"name": name, "time": (base_time + delta).isoformat()})
-        shifted.sort(key=lambda item: item["time"])
-        return cast(
-            list[dict[str, Any]],
-            merge_milestone_metadata(milestones, shifted),
-        )
-
-    def _compute_new_duration(
-        self, updates: dict[str, Any], first_event: EventItem, new_first_start: datetime | None,
-    ) -> timedelta | None:
-        """计算更新后的事件时长"""
-        if "end_time" in updates and first_event.start_time:
-            base_start = new_first_start or datetime.fromisoformat(first_event.start_time)
-            if isinstance(updates["end_time"], str):
-                return datetime.fromisoformat(updates["end_time"]) - base_start
-        elif "start_time" in updates and first_event.end_time and first_event.start_time:
-            return (
-                datetime.fromisoformat(first_event.end_time)
-                - datetime.fromisoformat(first_event.start_time)
-            )
-        return None
 
     @staticmethod
     def _snapshot_old_values(event: EventItem, updates: dict[str, Any]) -> dict[str, Any]:
@@ -1299,15 +1029,14 @@ class EventHandler(DbOpsMixin):
             return await self._delete_single_instance(user_id, family.leaf.id)
 
         single_event_id, _, error = await self._resolve_single_event_id_or_message(
-            user_id, event_id, allow_series_fallback=True
+            user_id, event_id
         )
         if error:
             return error
         if single_event_id:
             return await self._delete_single_instance(user_id, single_event_id)
 
-        # 父ID：删除所有实例
-        return await self._delete_all_instances(user_id, event_id)
+        return {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
 
     async def _delete_collection(self, user_id: str, family: EventFamily) -> CommandMessage:
         collection = family.collection
@@ -1357,32 +1086,6 @@ class EventHandler(DbOpsMixin):
             "status": "success",
             "message": f"🗑️ 已删除日程: {e_title or '无标题'}\n💡 5分钟内可使用 /pendo undo 撤销",
         }
-
-    async def _delete_all_instances(self, user_id: str, parent_id: str) -> CommandMessage:
-        """删除父ID下所有实例"""
-        try:
-            instances = await self._db_find_instances(user_id, parent_id, columns="id, title, rrule")
-            if not instances:
-                return {"status": "error", "message": f"❌ 找不到日程 {parent_id}"}
-
-            title = instances[0][1]
-            is_recurring = len(instances) > 1 or bool(instances[0][2])
-            instance_ids = [row[0] for row in instances]
-
-            await self._db_batch_soft_delete(instance_ids, user_id)
-
-            if is_recurring:
-                return {
-                    "status": "success",
-                    "message": f"🗑️ 已删除重复日程: {title}\n📊 共删除 {len(instances)} 个实例\n💡 5分钟内可使用 /pendo undo 撤销",
-                }
-            return {
-                "status": "success",
-                "message": f"🗑️ 已删除日程: {title or '无标题'}\n💡 5分钟内可使用 /pendo undo 撤销",
-            }
-        except Exception as e:
-            logger.exception("Failed to delete instances: %s", e)
-            return {"status": "error", "message": f"❌ 删除失败: {str(e)}"}
 
     # ==================== 查看/修改提醒 ====================
 
@@ -1481,23 +1184,14 @@ class EventHandler(DbOpsMixin):
             return [family.leaf], None
 
         single_event_id, event, error = await self._resolve_single_event_id_or_message(
-            user_id, query_id, allow_series_fallback=True
+            user_id, query_id
         )
         if error:
             return [], error
         if single_event_id and event:
             return [event], None
 
-        rows = await self._db_find_instances(user_id, query_id)
-        if not rows:
-            return [], None
-
-        events: list[EventItem] = []
-        for row in rows:
-            item = self.db.items._row_to_item(row)
-            if isinstance(item, EventItem):
-                events.append(item)
-        return events, None
+        return [], None
 
     @staticmethod
     def _select_reminders_for_confirmation(
@@ -1608,21 +1302,6 @@ class EventHandler(DbOpsMixin):
 
         remind_times = build_remind_times_from_rules(base_time, reminder_rules)
 
-        # 对多节点事件，为每个里程碑都应用同样的偏移
-        milestones = getattr(event, "milestones", None) or []
-        if milestones:
-            all_times: set[str] = set()
-            for m in milestones:
-                m_time = m.get("time")
-                if not m_time:
-                    continue
-                try:
-                    times = build_remind_times_from_rules(m_time, reminder_rules)
-                    all_times.update(times)
-                except Exception as e:
-                    logger.warning("里程碑 %s 提醒时间解析失败: %s", m_time, e)
-            remind_times = sorted(all_times)
-
         remind_times = ensure_start_time_reminder(remind_times, base_time)
         await self._db_update_item(
             event_id,
@@ -1730,40 +1409,22 @@ class EventHandler(DbOpsMixin):
             message = f"🔔 **{title}** (共{len(event_reminders)}项)\n"
             for event, remind_times in event_reminders:
                 log_map = self._build_log_map(event.id)
-                milestones = getattr(event, "milestones", None) or []
-                if milestones and len(milestones) >= 2:
-                    # 多节点事件：显示日期区间，并按里程碑分组提醒
-                    start_str = ItemFormatter.format_datetime(event.start_time or "", "%m月%d日")
-                    end_str = ItemFormatter.format_datetime(event.end_time or "", "%m月%d日") if event.end_time else ""
-                    date_range = f"{start_str}~{end_str}" if end_str else start_str
-                    message += f"\n🗓️ {date_range} {event.title or '无标题'} 🗺️{len(milestones)}节点 `{event.id}`\n"
-                    for m, m_reminds in group_reminders_by_milestone(remind_times, milestones):
-                        m_str = ItemFormatter.format_datetime(m["time"], "%m-%d")
-                        message += f"  📌 {m_str} {m.get('name', '')}\n"
-                        milestone_notes = str(m.get("notes", "") or "").strip()
-                        if milestone_notes:
-                            message += f"    📝 {milestone_notes}\n"
-                        for t in m_reminds:
-                            t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
-                            status = get_remind_status(log_map.get(t))
-                            message += f"    ⏰ {t_str} {status}\n"
-                else:
-                    time_str = ItemFormatter.format_datetime(event.start_time or "", "%m月%d日 %H:%M")
-                    display_title = event.title or "无标题"
-                    if getattr(event, "event_collection_id", None):
-                        collection = self.db.items.get_event_collection(
-                            event.event_collection_id,
-                            user_id,
+                time_str = ItemFormatter.format_datetime(event.start_time or "", "%m月%d日 %H:%M")
+                display_title = event.title or "无标题"
+                if getattr(event, "event_collection_id", None):
+                    collection = self.db.items.get_event_collection(
+                        event.event_collection_id,
+                        user_id,
+                    )
+                    if collection:
+                        display_title = (
+                            f"{collection.get('title') or '无标题'} · {display_title}"
                         )
-                        if collection:
-                            display_title = (
-                                f"{collection.get('title') or '无标题'} · {display_title}"
-                            )
-                    message += f"\n🗓️ {time_str} {display_title} `{event.id}`\n"
-                    for t in remind_times:
-                        t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
-                        status = get_remind_status(log_map.get(t))
-                        message += f"  ⏰ {t_str} {status}\n"
+                message += f"\n🗓️ {time_str} {display_title} `{event.id}`\n"
+                for t in remind_times:
+                    t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
+                    status = get_remind_status(log_map.get(t))
+                    message += f"  ⏰ {t_str} {status}\n"
 
             return {"status": "success", "message": message}
         except Exception as e:
@@ -1773,10 +1434,7 @@ class EventHandler(DbOpsMixin):
     async def _format_reminders_by_id(self, user_id: str, query_id: str) -> CommandMessage:
         """按ID格式化提醒信息
 
-        支持以下格式：
-        - 普通ID (8位): 查询单个事件
-        - 实例ID (parent_YYYYMMDD): 查询单个实例
-        - 父ID (8位，有parent_id的事件): 显示所有实例的提醒汇总
+        支持 collection id、leaf id 或单次事件 id。
         """
         family = await self._load_event_family(user_id, query_id)
         if family.collection and family.leaf is None:
@@ -1792,45 +1450,7 @@ class EventHandler(DbOpsMixin):
             event = cast(EventItem, item)
             return format_event_reminders(event, self._build_log_map(event.id))
 
-        # 如果直接查找失败，可能是parent_id，尝试查找所有子实例
-        rows = await self._db_find_instances(user_id, query_id)
-        instances: list[EventItem] = [
-            item
-            for row in rows
-            if isinstance((item := self.db.items._row_to_item(row)), EventItem)
-        ]
-
-        if not instances:
-            return {"status": "error", "message": f"❌ 找不到日程: {query_id}"}
-
-        # 如果只有一个实例且ID匹配，返回单个
-        if len(instances) == 1 and instances[0].id == query_id:
-            return format_event_reminders(instances[0], self._build_log_map(instances[0].id))
-
-        # 多个实例：汇总显示
-        title = instances[0].title or "无标题"
-        builder = MessageBuilder()
-        builder.add_line(f"🔔 **{title}** 的提醒列表")
-        builder.add_line(f"📊 共 {len(instances)} 个日程实例")
-        builder.add_line("─" * 30)
-
-        for i, instance in enumerate(instances, 1):
-            remind_times = parse_remind_times(instance.remind_times)
-            time_str = ItemFormatter.format_datetime(instance.start_time or "", "%m月%d日 %H:%M")
-            builder.add_blank()
-            builder.add_line(f"**{i}.** 🗓️ {time_str}")
-            if remind_times:
-                log_map = self._build_log_map(instance.id)
-                for remind_time in remind_times:
-                    formatted_time = ItemFormatter.format_datetime(remind_time, "%m-%d %H:%M")
-                    t_iso = remind_time
-                    status = get_remind_status(log_map.get(t_iso))
-                    builder.add_line(f"     ⏰ {formatted_time} {status}")
-            else:
-                builder.add_line(f"     ⏰ 无提醒")
-            builder.add_line(f"     🆔 `{instance.id}`")
-
-        return {"status": "success", "message": builder.build()}
+        return {"status": "error", "message": f"❌ 找不到日程: {query_id}"}
 
     def _format_leaf_reminders_with_collection(self, family: EventFamily) -> CommandMessage:
         event = family.leaf
@@ -1904,27 +1524,11 @@ class EventHandler(DbOpsMixin):
     def _event_in_range(e: EventItem, start_dt: datetime, end_dt: datetime) -> bool:
         """判断事件是否在查询范围内
 
-        多节点事件：先用总区间重叠快速筛选，再检查是否有至少一个节点在范围内。
-        单次事件：只看 start_time 是否在范围内。
+        每个可调度事件都是 leaf，按自己的 start_time 判断。
         """
         if not e.start_time:
             return False
         e_start = datetime.fromisoformat(e.start_time)
-        milestones = getattr(e, "milestones", None) or []
-        if milestones and len(milestones) >= 2 and e.end_time:
-            e_end = datetime.fromisoformat(e.end_time)
-            # 快速排除：总区间与查询区间不重叠
-            if not (e_start <= end_dt and e_end >= start_dt):
-                return False
-            # 精确检查：至少一个里程碑节点落在查询范围内
-            for m in milestones:
-                try:
-                    m_dt = datetime.fromisoformat(m.get("time", ""))
-                    if start_dt <= m_dt <= end_dt:
-                        return True
-                except (ValueError, TypeError):
-                    pass
-            return False
         return start_dt <= e_start <= end_dt
 
     async def _parse_updates(self, changes: str, current_event: EventItem) -> dict[str, Any]:
@@ -1971,35 +1575,21 @@ class EventHandler(DbOpsMixin):
                     continue
             updates[key] = candidate
 
-        heuristic_milestones = self._extract_targeted_milestone_update(changes, current_event)
-        targeted_milestone_notes = self._milestone_notes_were_updated(
-            getattr(current_event, "milestones", None) or [],
-            heuristic_milestones,
-        )
-
         if parsed.get("remind_times"):
             updates["remind_times"] = parsed["remind_times"]
 
         if (
             parsed.get("notes") is not None
             and parsed.get("notes") != getattr(current_event, "notes", None)
-            and not targeted_milestone_notes
         ):
             updates["notes"] = parsed["notes"]
-
-        if parsed.get("milestones"):
-            updates["milestones"] = parsed["milestones"]
 
         heuristic_notes = self._extract_notes_update(changes)
         if (
             heuristic_notes is not None
             and heuristic_notes != getattr(current_event, "notes", None)
-            and not targeted_milestone_notes
         ):
             updates["notes"] = heuristic_notes
-
-        if heuristic_milestones:
-            updates["milestones"] = heuristic_milestones
 
         return updates
 
@@ -2056,132 +1646,6 @@ class EventHandler(DbOpsMixin):
         notes = match.group(1).strip(" ，,。；;")
         return notes or None
 
-    @classmethod
-    def _milestone_notes_were_updated(
-        cls,
-        current_milestones: list[dict[str, Any]],
-        updated_milestones: list[dict[str, Any]] | None,
-    ) -> bool:
-        if not updated_milestones:
-            return False
-
-        for idx, updated in enumerate(updated_milestones):
-            current = current_milestones[idx] if idx < len(current_milestones) else {}
-            current_notes = str(current.get("notes", "") or "").strip()
-            updated_notes = str(updated.get("notes", "") or "").strip()
-            if current_notes != updated_notes:
-                return True
-        return False
-
-    @classmethod
-    def _extract_targeted_milestone_update(
-        cls, changes: str, current_event: EventItem
-    ) -> list[dict[str, Any]] | None:
-        milestones = getattr(current_event, "milestones", None) or []
-        if not milestones:
-            return None
-
-        updated: list[dict[str, Any]] | None = None
-        matched_indexes: list[int] = []
-        for idx, milestone in enumerate(milestones):
-            name = str(milestone.get("name", "")).strip()
-            if not name or name not in changes:
-                continue
-            matched_indexes.append(idx)
-            for verb in cls._MILESTONE_VERBS:
-                pattern = rf"(?:把)?{re.escape(name)}(?:时间)?\s*{verb}\s*(?P<dt>[^，,；;。]+)"
-                match = re.search(pattern, changes)
-                if not match:
-                    continue
-                parsed_time = cls._parse_edit_datetime_fragment(
-                    match.group("dt"),
-                    reference_time=str(milestone.get("time", "") or current_event.start_time or ""),
-                )
-                if not parsed_time:
-                    continue
-                updated = [dict(item) for item in milestones]
-                updated[idx]["time"] = parsed_time
-
-        unique_indexes = sorted(set(matched_indexes))
-        if len(unique_indexes) == 1:
-            idx = unique_indexes[0]
-            targeted_notes = cls._extract_notes_update(changes)
-            if targeted_notes is not None:
-                updated = updated or [dict(item) for item in milestones]
-                updated[idx]["notes"] = targeted_notes
-
-        return updated
-
-    @classmethod
-    def _parse_edit_datetime_fragment(
-        cls, fragment: str, *, reference_time: str
-    ) -> str | None:
-        text = (fragment or "").strip(" ，,。；;")
-        if not text:
-            return None
-
-        reference_dt = None
-        if reference_time:
-            try:
-                reference_dt = datetime.fromisoformat(reference_time)
-            except (ValueError, TypeError):
-                reference_dt = None
-        reference_dt = reference_dt or datetime.now()
-
-        normalized = text.replace("T", " ")
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-            try:
-                return datetime.strptime(normalized, fmt).isoformat()
-            except ValueError:
-                continue
-
-        relative_match = re.search(
-            r"(今天|明天|后天|前天)(?:\s*(上午|中午|下午|晚上|凌晨))?\s*(\d{1,2})(?:[点时:：](\d{1,2}))?",
-            text,
-        )
-        if relative_match:
-            base_date = parse_date_optional(relative_match.group(1), reference_dt)
-            if base_date:
-                hour = int(relative_match.group(3))
-                minute = int(relative_match.group(4) or 0)
-                hour = cls._apply_cn_period(relative_match.group(2), hour)
-                return datetime.strptime(base_date, "%Y-%m-%d").replace(
-                    hour=hour,
-                    minute=minute,
-                    second=0,
-                ).isoformat()
-
-        full_match = re.search(
-            r"(?:(\d{4})[年/-])?\s*(\d{1,2})[月/-](\d{1,2})(?:日|号)?"
-            r"(?:\s*(上午|中午|下午|晚上|凌晨))?\s*(\d{1,2})(?:[点时:：](\d{1,2}))?",
-            text,
-        )
-        if not full_match:
-            return None
-
-        year = int(full_match.group(1) or reference_dt.year)
-        month = int(full_match.group(2))
-        day = int(full_match.group(3))
-        hour = cls._apply_cn_period(full_match.group(4), int(full_match.group(5)))
-        minute = int(full_match.group(6) or 0)
-        try:
-            return datetime(year, month, day, hour, minute, 0).isoformat()
-        except ValueError:
-            return None
-
-    @staticmethod
-    def _apply_cn_period(period: str | None, hour: int) -> int:
-        if period in ("下午", "晚上") and 1 <= hour < 12:
-            return hour + 12
-        if period == "中午":
-            if hour == 0:
-                return 12
-            if 1 <= hour < 11:
-                return hour + 12
-        if period == "凌晨" and hour == 12:
-            return 0
-        return hour
-
     def _looks_like_id(self, text: str) -> bool:
         """判断是否像ID（collection id、recurring occurrence id 或 node id）"""
         if not text:
@@ -2195,9 +1659,9 @@ class EventHandler(DbOpsMixin):
         return re.match(r"^[0-9a-f]{8}$", text) is not None
 
     async def _resolve_single_event_id_or_message(
-        self, user_id: str, event_id: str, *, allow_series_fallback: bool
+        self, user_id: str, event_id: str
     ) -> tuple[str | None, EventItem | None, CommandMessage | None]:
-        """Resolve direct event/instance IDs and return series fallback when requested."""
+        """Resolve direct event/leaf IDs."""
         event_id = (event_id or "").strip()
 
         if "_" in event_id and self._looks_like_id(event_id):
@@ -2212,8 +1676,6 @@ class EventHandler(DbOpsMixin):
 
         item = await self._db_get_item(event_id, owner_id=user_id)
         if item is None:
-            if allow_series_fallback:
-                return None, None, None
             return None, None, {"status": "error", "message": f"❌ 找不到日程 {event_id}"}
         if not isinstance(item, EventItem):
             return None, None, self._build_wrong_type_message(event_id, "日程", item)

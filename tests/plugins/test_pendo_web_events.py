@@ -69,7 +69,7 @@ def _load_events_module():
     return mod
 
 
-def test_build_events_overview_supports_milestones_recurring_and_reminder_filters():
+def test_build_events_overview_supports_multi_node_recurring_and_reminder_filters():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
@@ -87,21 +87,43 @@ def test_build_events_overview_supports_milestones_recurring_and_reminder_filter
             "location": "A1",
             "remind_times": ["2026-03-10T08:00:00", "2026-03-10T09:00:00"],
         })
-        db.insert_item({
-            "id": "ev2",
+        db.create_event_collection({
+            "id": "ev2col",
             "owner_id": owner_id,
-            "type": "event",
+            "kind": "multi_node",
             "title": "发布准备",
+            "content": "",
             "category": "项目",
+            "location": "",
+            "notes": "跨三天推进",
             "start_time": "2026-03-12T09:00:00",
             "end_time": "2026-03-14T20:00:00",
-            "milestones": [
-                {"name": "素材冻结", "time": "2026-03-12T09:00:00"},
-                {"name": "提审", "time": "2026-03-13T18:00:00"},
-                {"name": "上线", "time": "2026-03-14T10:00:00"},
-            ],
+        })
+        db.insert_item({
+            "id": "ev2col_m01",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "提审",
+            "category": "项目",
+            "start_time": "2026-03-13T18:00:00",
             "remind_times": ["2026-03-13T17:00:00"],
-            "notes": "跨三天推进",
+            "notes": "节点备注",
+            "event_role": "multi_node_child",
+            "event_collection_id": "ev2col",
+            "event_collection_kind": "multi_node",
+            "event_index": 1,
+            "event_node_key": "m01",
+        })
+        db.create_event_collection({
+            "id": "series",
+            "owner_id": owner_id,
+            "kind": "recurring",
+            "title": "周会",
+            "content": "",
+            "category": "会议",
+            "rrule": "FREQ=WEEKLY",
+            "start_time": "2026-03-18T10:00:00",
+            "end_time": "2026-03-18T11:00:00",
         })
         db.insert_item({
             "id": "series_20260318",
@@ -111,14 +133,17 @@ def test_build_events_overview_supports_milestones_recurring_and_reminder_filter
             "category": "会议",
             "start_time": "2026-03-18T10:00:00",
             "end_time": "2026-03-18T11:00:00",
-            "parent_id": "series",
-            "rrule": "FREQ=WEEKLY",
             "remind_times": ["2026-03-18T09:30:00"],
+            "event_role": "recurring_occurrence",
+            "event_collection_id": "series",
+            "event_collection_kind": "recurring",
+            "event_index": 1,
+            "event_node_key": "20260318",
         })
 
         db.log_reminder("ev1", "2026-03-10T08:00:00", sent=True)
         db.confirm_reminder("ev1", remind_time="2026-03-10T08:00:00")
-        db.log_reminder("ev2", "2026-03-13T17:00:00", sent=True)
+        db.log_reminder("ev2col_m01", "2026-03-13T17:00:00", sent=True)
 
         result = build_events_overview(
             db=db,
@@ -132,7 +157,7 @@ def test_build_events_overview_supports_milestones_recurring_and_reminder_filter
         assert result["summary"]["recurring_count"] == 1
         assert result["summary"]["reminder_count"] == 4
         assert result["calendar_days"]["2026-03-11"]["has_events"] is False
-        assert result["calendar_days"]["2026-03-12"]["has_events"] is True
+        assert result["calendar_days"]["2026-03-12"]["has_events"] is False
         assert result["calendar_days"]["2026-03-13"]["has_events"] is True
         assert result["calendar_days"]["2026-03-13"]["items"][0]["label"] == "提审"
         assert any(day["date"] == "2026-03-10" for day in result["timeline_days"])
@@ -145,7 +170,7 @@ def test_build_events_overview_supports_milestones_recurring_and_reminder_filter
             reminder="sent",
         )
         assert sent_only["summary"]["event_count"] == 1
-        assert sent_only["events"][0]["id"] == "ev2"
+        assert sent_only["events"][0]["id"] == "ev2col_m01"
 
         meeting_only = build_events_overview(
             db=db,
@@ -168,6 +193,17 @@ def test_build_event_detail_includes_reminder_logs_and_related_instances():
     owner_id = "u-event-detail"
 
     try:
+        db.create_event_collection({
+            "id": "series",
+            "owner_id": owner_id,
+            "kind": "recurring",
+            "title": "周会",
+            "content": "",
+            "category": "会议",
+            "rrule": "FREQ=WEEKLY",
+            "start_time": "2026-03-18T10:00:00",
+            "end_time": "2026-03-25T11:00:00",
+        })
         db.insert_item({
             "id": "series_20260318",
             "owner_id": owner_id,
@@ -176,9 +212,12 @@ def test_build_event_detail_includes_reminder_logs_and_related_instances():
             "category": "会议",
             "start_time": "2026-03-18T10:00:00",
             "end_time": "2026-03-18T11:00:00",
-            "parent_id": "series",
-            "rrule": "FREQ=WEEKLY",
             "remind_times": ["2026-03-18T09:30:00"],
+            "event_role": "recurring_occurrence",
+            "event_collection_id": "series",
+            "event_collection_kind": "recurring",
+            "event_index": 1,
+            "event_node_key": "20260318",
         })
         db.insert_item({
             "id": "series_20260325",
@@ -188,9 +227,12 @@ def test_build_event_detail_includes_reminder_logs_and_related_instances():
             "category": "会议",
             "start_time": "2026-03-25T10:00:00",
             "end_time": "2026-03-25T11:00:00",
-            "parent_id": "series",
-            "rrule": "FREQ=WEEKLY",
             "remind_times": ["2026-03-25T09:30:00"],
+            "event_role": "recurring_occurrence",
+            "event_collection_id": "series",
+            "event_collection_kind": "recurring",
+            "event_index": 2,
+            "event_node_key": "20260325",
         })
         db.log_reminder("series_20260318", "2026-03-18T09:30:00", sent=True)
 
@@ -205,42 +247,45 @@ def test_build_event_detail_includes_reminder_logs_and_related_instances():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_build_event_detail_preserves_milestone_notes():
+def test_build_event_detail_preserves_multi_node_leaf_notes():
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_milestone_notes_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-event-milestone-notes"
 
     try:
-        db.insert_item({
+        db.create_event_collection({
             "id": "milestone-detail",
             "owner_id": owner_id,
-            "type": "event",
+            "kind": "multi_node",
             "title": "线下会议",
+            "content": "",
             "category": "会议",
+            "notes": "全局备注",
             "start_time": "2026-04-22T12:43:00",
             "end_time": "2026-04-26T12:00:00",
-            "notes": "全局备注",
-            "milestones": [
-                {
-                    "name": "会议开始",
-                    "time": "2026-04-22T12:43:00",
-                    "notes": "北京南 G823，7车5F 坐",
-                },
-                {
-                    "name": "会议结束",
-                    "time": "2026-04-26T12:00:00",
-                },
-            ],
+        })
+        db.insert_item({
+            "id": "milestone-detail_m01",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "会议开始",
+            "category": "会议",
+            "start_time": "2026-04-22T12:43:00",
+            "notes": "北京南 G823，7车5F 坐",
             "remind_times": ["2026-04-21T12:43:00", "2026-04-25T12:00:00"],
+            "event_role": "multi_node_child",
+            "event_collection_id": "milestone-detail",
+            "event_collection_kind": "multi_node",
+            "event_index": 1,
+            "event_node_key": "m01",
         })
 
-        detail = build_event_detail(db=db, owner_id=owner_id, event_id="milestone-detail")
+        detail = build_event_detail(db=db, owner_id=owner_id, event_id="milestone-detail_m01")
 
         assert detail is not None
-        assert detail["event"]["milestones"][0]["notes"] == "北京南 G823，7车5F 坐"
-        assert "notes" not in detail["event"]["milestones"][1]
-        assert detail["event"]["notes"] == "全局备注"
+        assert detail["event"]["notes"] == "北京南 G823，7车5F 坐"
+        assert detail["event"]["collection"]["notes"] == "全局备注"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -457,39 +502,46 @@ def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders(
     owner_id = "u-events-visible"
 
     try:
+        db.create_event_collection({
+            "id": "visible_nodes",
+            "owner_id": owner_id,
+            "kind": "multi_node",
+            "title": "五月节点",
+            "content": "",
+            "category": "项目",
+            "start_time": "2026-04-29T09:00:00",
+            "end_time": "2026-05-20T10:00:00",
+        })
         db.insert_item({
-            "id": "visible_milestone",
+            "id": "visible_nodes_m01",
             "owner_id": owner_id,
             "type": "event",
-            "title": "五月节点",
+            "title": "前置",
             "category": "项目",
-            "start_time": "2026-04-28T09:00:00",
-            "end_time": "2026-05-20T18:00:00",
-            "milestones": [
-                {"name": "前置", "time": "2026-04-29T09:00:00"},
-                {"name": "发布", "time": "2026-05-20T10:00:00"},
-            ],
+            "start_time": "2026-04-29T09:00:00",
+            "remind_times": ["2026-05-01T08:00:00"],
+            "event_role": "multi_node_child",
+            "event_collection_id": "visible_nodes",
+            "event_collection_kind": "multi_node",
+            "event_index": 1,
+            "event_node_key": "m01",
+        })
+        db.insert_item({
+            "id": "visible_nodes_m02",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "发布",
+            "category": "项目",
+            "start_time": "2026-05-20T10:00:00",
             "remind_times": [
                 "2026-04-29T08:00:00",
                 "2026-05-20T09:00:00",
             ],
-        })
-        db.insert_item({
-            "id": "hidden_milestone",
-            "owner_id": owner_id,
-            "type": "event",
-            "title": "不应出现在五月摘要",
-            "category": "项目",
-            "start_time": "2026-04-28T09:00:00",
-            "end_time": "2026-05-08T18:00:00",
-            "milestones": [
-                {"name": "四月节点", "time": "2026-04-30T09:00:00"},
-            ],
-            "remind_times": [
-                "2026-04-30T08:00:00",
-                "2026-05-01T08:00:00",
-                "2026-05-02T08:00:00",
-            ],
+            "event_role": "multi_node_child",
+            "event_collection_id": "visible_nodes",
+            "event_collection_kind": "multi_node",
+            "event_index": 2,
+            "event_node_key": "m02",
         })
 
         result = build_events_overview(
@@ -503,7 +555,7 @@ def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders(
         assert result["summary"]["milestone_count"] == 1
         assert result["summary"]["reminder_count"] == 1
         assert result["calendar_days"]["2026-05-20"]["count"] == 1
-        assert result["events"][0]["id"] == "visible_milestone"
+        assert result["events"][0]["id"] == "visible_nodes_m02"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -552,7 +604,7 @@ def test_events_page_source_uses_event_overview_routes():
     assert '"/events/{event_id}/detail"' in api_src
     assert '"/events/collections"' in api_src
     assert '"/events/collections/{collection_id}/detail"' in api_src
-    assert "milestones: Optional[list[dict]] = None" in items_src
+    assert "milestones: Optional[list[dict]] = None" not in items_src
     assert "/events/overview" in page_src
     assert "/events/${eventId}/detail" in page_src
     assert "/events/collections" in page_src
