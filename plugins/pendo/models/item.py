@@ -122,8 +122,16 @@ class EventItem(Item):
     parent_id: Optional[str] = None  # 重复事件的父ID
     remind_policy_id: Optional[str] = None  # 提醒策略ID
     remind_times: list[str] = field(default_factory=list)  # 提醒时间点列表
+    reminder_rules: list[dict[str, Any]] = field(default_factory=list)
+    event_role: str = "single"  # single | multi_node_child | recurring_occurrence
+    event_collection_id: Optional[str] = None
+    event_collection_kind: Optional[str] = None  # multi_node | recurring
+    event_index: Optional[int] = None
+    event_node_key: Optional[str] = None
+    source_item_id: Optional[str] = None
     milestones: list[dict[str, Any]] = field(default_factory=list)
-    # 格式: [{"name": "注册截止", "time": "2026-04-06T00:00:00", "notes": "仅该节点备注"}, ...]
+    # Legacy only after event graph migration:
+    # [{"name": "注册截止", "time": "2026-04-06T00:00:00", "notes": "仅该节点备注"}, ...]
     notes: str = ""
 
 

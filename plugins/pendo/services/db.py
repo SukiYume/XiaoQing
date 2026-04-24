@@ -57,6 +57,7 @@ class Database:
         "ai_meta",
         "participants",
         "remind_times",
+        "reminder_rules",
         "subtasks",
         "dependencies",
         "references",
@@ -226,6 +227,13 @@ class Database:
                 rrule TEXT,
                 remind_policy_id TEXT,
                 remind_times TEXT,
+                reminder_rules TEXT,
+                event_role TEXT,
+                event_collection_id TEXT,
+                event_collection_kind TEXT,
+                event_index INTEGER,
+                event_node_key TEXT,
+                source_item_id TEXT,
                 parent_id TEXT,
                 due_time TEXT,
                 priority INTEGER,
@@ -258,6 +266,13 @@ class Database:
                 "ALTER TABLE items ADD COLUMN payment_method TEXT",
                 "ALTER TABLE items ADD COLUMN ledger_date TEXT",
                 "ALTER TABLE items ADD COLUMN remark TEXT",
+                "ALTER TABLE items ADD COLUMN reminder_rules TEXT",
+                "ALTER TABLE items ADD COLUMN event_role TEXT",
+                "ALTER TABLE items ADD COLUMN event_collection_id TEXT",
+                "ALTER TABLE items ADD COLUMN event_collection_kind TEXT",
+                "ALTER TABLE items ADD COLUMN event_index INTEGER",
+                "ALTER TABLE items ADD COLUMN event_node_key TEXT",
+                "ALTER TABLE items ADD COLUMN source_item_id TEXT",
                 # reminder_logs 重构：一行一个 (item_id, remind_time)，用 repeat_count 替代多行
                 "ALTER TABLE reminder_logs ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1",
                 "ALTER TABLE reminder_logs ADD COLUMN last_sent_at TEXT",
@@ -275,8 +290,44 @@ class Database:
                 f"CREATE INDEX IF NOT EXISTS idx_due_time ON items(due_time) WHERE type='{ItemType.TASK.value}'",
                 f"CREATE INDEX IF NOT EXISTS idx_diary_date ON items(diary_date) WHERE type='{ItemType.DIARY.value}'",
                 "CREATE INDEX IF NOT EXISTS idx_parent_id ON items(parent_id) WHERE parent_id IS NOT NULL",
+                "CREATE INDEX IF NOT EXISTS idx_items_event_collection ON items(event_collection_id, event_index) WHERE type='event' AND deleted = 0",
+                "CREATE INDEX IF NOT EXISTS idx_items_event_role ON items(owner_id, event_role, deleted) WHERE type='event'",
             ]:
                 cursor.execute(idx)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS event_collections (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK (kind IN ('multi_node', 'recurring')),
+                    title TEXT NOT NULL,
+                    content TEXT DEFAULT '',
+                    category TEXT DEFAULT '未分类',
+                    location TEXT DEFAULT '',
+                    tags TEXT DEFAULT '[]',
+                    notes TEXT DEFAULT '',
+                    context TEXT DEFAULT '{}',
+                    visibility TEXT DEFAULT 'private',
+                    timezone TEXT DEFAULT 'Asia/Shanghai',
+                    rrule TEXT,
+                    reminder_rules TEXT DEFAULT '[]',
+                    start_time TEXT,
+                    end_time TEXT,
+                    source_item_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    deleted INTEGER DEFAULT 0,
+                    deleted_at TEXT
+                )
+            """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_event_collections_owner_kind "
+                "ON event_collections(owner_id, kind, deleted)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_event_collections_time "
+                "ON event_collections(owner_id, start_time, end_time) WHERE deleted = 0"
+            )
 
             # 全文搜索表
             cursor.execute("""
@@ -764,6 +815,181 @@ class Database:
             self.cache_invalidate(iid)
         self.cache_invalidate(f"items|{owner_id}")
         return affected
+
+    _EVENT_COLLECTION_JSON_FIELDS = frozenset({"tags", "context", "reminder_rules"})
+
+    def _prepare_event_collection_data(self, data: dict[str, Any]) -> dict[str, Any]:
+        prepared: dict[str, Any] = {}
+        for key, value in data.items():
+            if value is None:
+                prepared[key] = None
+            elif key in self._EVENT_COLLECTION_JSON_FIELDS and isinstance(value, (list, dict)):
+                prepared[key] = json.dumps(value, ensure_ascii=False)
+            else:
+                prepared[key] = value
+        return prepared
+
+    def _row_to_event_collection(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        data = dict(row)
+        for field in self._EVENT_COLLECTION_JSON_FIELDS:
+            if data.get(field):
+                try:
+                    data[field] = json.loads(data[field])
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    data[field] = [] if field in {"tags", "reminder_rules"} else {}
+            elif field == "context":
+                data[field] = {}
+            else:
+                data[field] = []
+        if data.get("deleted") is not None:
+            data["deleted"] = bool(data["deleted"])
+        return data
+
+    def create_event_collection(self, payload: dict[str, Any]) -> str:
+        """Create a non-schedulable event collection/header row."""
+        now = datetime.now().isoformat()
+        collection = dict(payload)
+        collection.setdefault("id", uuid.uuid4().hex[:8])
+        collection.setdefault("content", "")
+        collection.setdefault("category", "未分类")
+        collection.setdefault("location", "")
+        collection.setdefault("tags", [])
+        collection.setdefault("notes", "")
+        collection.setdefault("context", {})
+        collection.setdefault("visibility", "private")
+        collection.setdefault("timezone", "Asia/Shanghai")
+        collection.setdefault("reminder_rules", [])
+        collection.setdefault("created_at", now)
+        collection.setdefault("updated_at", now)
+        collection.setdefault("deleted", 0)
+
+        if collection.get("kind") not in {"multi_node", "recurring"}:
+            raise ValueError("Invalid event collection kind")
+        if not collection.get("owner_id"):
+            raise ValueError("event collection owner_id is required")
+        if not collection.get("title"):
+            raise ValueError("event collection title is required")
+
+        data = self._prepare_event_collection_data(collection)
+        columns = ", ".join(self._quote_col(k) for k in data.keys())
+        placeholders = ", ".join(["?" for _ in data])
+        conn = self.get_connection()
+        with conn:
+            conn.execute(
+                f"INSERT INTO event_collections ({columns}) VALUES ({placeholders})",
+                list(data.values()),
+            )
+        self.cache_invalidate(f"event_collections|{collection['owner_id']}")
+        return str(collection["id"])
+
+    def get_event_collection(
+        self, collection_id: str, owner_id: str | None = None
+    ) -> dict[str, Any] | None:
+        cache_key = self._cache_key("event_collection", collection_id, owner_id or "*")
+        cached = self._cache_get_or_miss(cache_key)
+        if cached is not _CACHE_MISS:
+            return cached
+
+        conn = self.get_connection()
+        if owner_id:
+            row = conn.execute(
+                """
+                SELECT * FROM event_collections
+                WHERE id = ? AND owner_id = ? AND deleted = 0
+                """,
+                (collection_id, owner_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM event_collections WHERE id = ? AND deleted = 0",
+                (collection_id,),
+            ).fetchone()
+        collection = self._row_to_event_collection(row)
+        if collection is not None:
+            self._cache_set(cache_key, collection)
+        return collection
+
+    def update_event_collection(
+        self, collection_id: str, updates: dict[str, Any], owner_id: str
+    ) -> bool:
+        allowed = {
+            "title",
+            "content",
+            "category",
+            "location",
+            "tags",
+            "notes",
+            "context",
+            "visibility",
+            "timezone",
+            "rrule",
+            "reminder_rules",
+            "start_time",
+            "end_time",
+            "source_item_id",
+        }
+        clean_updates = {k: v for k, v in updates.items() if k in allowed}
+        if not clean_updates:
+            return False
+        clean_updates["updated_at"] = datetime.now().isoformat()
+        data = self._prepare_event_collection_data(clean_updates)
+        set_clause = ", ".join([f"{self._quote_col(k)} = ?" for k in data.keys()])
+
+        conn = self.get_connection()
+        with conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE event_collections SET {set_clause}
+                WHERE id = ? AND owner_id = ? AND deleted = 0
+                """,
+                list(data.values()) + [collection_id, owner_id],
+            )
+        changed = cursor.rowcount > 0
+        if changed:
+            self.cache_invalidate(collection_id)
+            self.cache_invalidate(f"event_collections|{owner_id}")
+        return changed
+
+    def get_collection_events(self, collection_id: str, owner_id: str) -> list[EventItem]:
+        conn = self.get_connection()
+        rows = conn.execute(
+            f"""
+            SELECT * FROM items
+            WHERE owner_id = ? AND type = ? AND deleted = 0 AND event_collection_id = ?
+            ORDER BY COALESCE(event_index, 999999), start_time, id
+            """,
+            (owner_id, ItemType.EVENT.value, collection_id),
+        ).fetchall()
+        return [
+            item
+            for row in rows
+            if isinstance((item := self._row_to_item(row)), EventItem)
+        ]
+
+    def delete_event_collection(
+        self, collection_id: str, owner_id: str, *, cascade: bool = True
+    ) -> bool:
+        now = datetime.now().isoformat()
+        children = self.get_collection_events(collection_id, owner_id) if cascade else []
+        conn = self.get_connection()
+        with conn:
+            cursor = conn.execute(
+                """
+                UPDATE event_collections
+                SET deleted = 1, deleted_at = ?, updated_at = ?
+                WHERE id = ? AND owner_id = ? AND deleted = 0
+                """,
+                (now, now, collection_id, owner_id),
+            )
+            affected = cursor.rowcount
+        if cascade and children:
+            self.batch_soft_delete([child.id for child in children], owner_id)
+        if affected:
+            self.cache_invalidate(collection_id)
+            self.cache_invalidate(f"event_collections|{owner_id}")
+        return affected > 0
 
     def get_item(self, item_id: str, owner_id: str | None = None) -> Optional[Item]:
         """获取单个条目，返回Item dataclass实例"""
@@ -1936,6 +2162,7 @@ class Database:
                     "tags",
                     "participants",
                     "remind_times",
+                    "reminder_rules",
                     "subtasks",
                     "dependencies",
                     "references",

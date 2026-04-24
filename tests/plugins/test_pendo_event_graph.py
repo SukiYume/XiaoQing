@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from plugins.pendo.models.item import EventItem
+from plugins.pendo.services.db import Database
+from plugins.pendo.utils.validators import (
+    build_remind_times_from_rules,
+    derive_reminder_rules,
+    normalize_event_fields,
+)
+
+
+def test_event_graph_schema_and_event_item_roundtrip(tmp_path: Path):
+    db = Database(str(tmp_path / "pendo_event_graph_schema.db"))
+    try:
+        conn = db.get_connection()
+        item_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(items)").fetchall()
+        }
+        assert {
+            "event_role",
+            "event_collection_id",
+            "event_collection_kind",
+            "event_index",
+            "event_node_key",
+            "source_item_id",
+            "reminder_rules",
+        }.issubset(item_columns)
+
+        collection_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(event_collections)").fetchall()
+        }
+        assert {
+            "id",
+            "owner_id",
+            "kind",
+            "title",
+            "rrule",
+            "reminder_rules",
+            "deleted",
+        }.issubset(collection_columns)
+
+        event = EventItem(
+            owner_id="u1",
+            title="节点",
+            start_time="2030-01-01T10:00:00",
+            event_role="multi_node_child",
+            event_collection_id="col12345",
+            event_collection_kind="multi_node",
+            event_index=2,
+            event_node_key="m02",
+            source_item_id="legacy01",
+            reminder_rules=[{"offset_seconds": 3600}, {"offset_seconds": 0}],
+        )
+        db.insert_item(event, "node0002")
+
+        loaded = db.get_item("node0002", owner_id="u1")
+        assert isinstance(loaded, EventItem)
+        assert loaded.event_role == "multi_node_child"
+        assert loaded.event_collection_id == "col12345"
+        assert loaded.event_collection_kind == "multi_node"
+        assert loaded.event_index == 2
+        assert loaded.event_node_key == "m02"
+        assert loaded.source_item_id == "legacy01"
+        assert loaded.reminder_rules == [
+            {"offset_seconds": 3600},
+            {"offset_seconds": 0},
+        ]
+    finally:
+        db.cleanup()
+
+
+def test_reminder_rules_derive_and_rebuild_remind_times():
+    start_time = "2030-01-02T09:00:00"
+    rules = derive_reminder_rules(
+        start_time,
+        [
+            "2030-01-01T09:00:00",
+            "2030-01-02T08:00:00",
+            "2030-01-02T09:00:00",
+        ],
+    )
+
+    assert rules == [
+        {"offset_seconds": 86400},
+        {"offset_seconds": 3600},
+        {"offset_seconds": 0},
+    ]
+    assert build_remind_times_from_rules(start_time, rules) == [
+        "2030-01-01T09:00:00",
+        "2030-01-02T08:00:00",
+        "2030-01-02T09:00:00",
+    ]
+
+
+def test_normalize_event_fields_keeps_rules_and_cache_in_sync():
+    normalized = normalize_event_fields(
+        {
+            "title": "会议",
+            "category": "工作",
+            "start_time": "2030-01-02T09:00:00",
+            "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
+        }
+    )
+
+    assert normalized["reminder_rules"] == [
+        {"offset_seconds": 3600},
+        {"offset_seconds": 0},
+    ]
+    assert normalized["remind_times"] == [
+        "2030-01-02T08:00:00",
+        "2030-01-02T09:00:00",
+    ]
+
+    normalized_from_times = normalize_event_fields(
+        {
+            "title": "会议",
+            "category": "工作",
+            "start_time": "2030-01-02T09:00:00",
+            "remind_times": ["2030-01-01T09:00:00", "2030-01-02T09:00:00"],
+        }
+    )
+
+    assert normalized_from_times["reminder_rules"] == [
+        {"offset_seconds": 86400},
+        {"offset_seconds": 0},
+    ]
+
+
+def test_event_collection_store_and_graph_service(tmp_path: Path):
+    from plugins.pendo.services.event_graph import EventGraphService
+
+    db = Database(str(tmp_path / "pendo_event_graph_store.db"))
+    try:
+        collection_id = db.create_event_collection(
+            {
+                "id": "col00001",
+                "owner_id": "u1",
+                "kind": "multi_node",
+                "title": "大会",
+                "category": "工作",
+                "start_time": "2030-01-01T09:00:00",
+                "end_time": "2030-01-03T18:00:00",
+                "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
+            }
+        )
+        assert collection_id == "col00001"
+
+        first = EventItem(
+            owner_id="u1",
+            title="注册截止",
+            start_time="2030-01-01T09:00:00",
+            event_role="multi_node_child",
+            event_collection_id=collection_id,
+            event_collection_kind="multi_node",
+            event_index=1,
+            reminder_rules=[{"offset_seconds": 0}],
+            remind_times=["2030-01-01T09:00:00"],
+        )
+        second = EventItem(
+            owner_id="u1",
+            title="会议开始",
+            start_time="2030-01-03T09:00:00",
+            event_role="multi_node_child",
+            event_collection_id=collection_id,
+            event_collection_kind="multi_node",
+            event_index=2,
+            reminder_rules=[{"offset_seconds": 0}],
+            remind_times=["2030-01-03T09:00:00"],
+        )
+        db.insert_item(second, "node0002")
+        db.insert_item(first, "node0001")
+
+        collection = db.get_event_collection(collection_id, "u1")
+        assert collection is not None
+        assert collection["title"] == "大会"
+        assert collection["reminder_rules"] == [
+            {"offset_seconds": 3600},
+            {"offset_seconds": 0},
+        ]
+
+        children = db.get_collection_events(collection_id, "u1")
+        assert [child.id for child in children] == ["node0001", "node0002"]
+
+        service = EventGraphService(db)
+        leaf_family = service.load_by_id("u1", "node0002")
+        assert leaf_family.kind == "multi_node"
+        assert leaf_family.leaf is not None
+        assert leaf_family.leaf.title == "会议开始"
+        assert leaf_family.collection is not None
+        assert leaf_family.collection["title"] == "大会"
+        assert [child.id for child in leaf_family.children] == ["node0001", "node0002"]
+
+        collection_family = service.load_by_id("u1", collection_id)
+        assert collection_family.kind == "multi_node"
+        assert collection_family.leaf is None
+        assert [child.title for child in collection_family.children] == [
+            "注册截止",
+            "会议开始",
+        ]
+
+        assert db.update_event_collection(collection_id, {"title": "新大会"}, "u1")
+        assert db.get_event_collection(collection_id, "u1")["title"] == "新大会"
+
+        assert db.delete_event_collection(collection_id, "u1", cascade=True)
+        assert db.get_event_collection(collection_id, "u1") is None
+        assert db.get_item("node0001", "u1") is None
+        assert db.get_item("node0002", "u1") is None
+    finally:
+        db.cleanup()
