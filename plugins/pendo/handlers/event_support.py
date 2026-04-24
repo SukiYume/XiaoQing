@@ -7,6 +7,12 @@ from typing import Any, Callable
 
 from ..utils.formatters import ItemFormatter, MessageBuilder
 from ..utils.time_utils import parse_remind_times
+from ..utils.validators import (
+    build_remind_times_from_rules,
+    derive_reminder_rules,
+    normalize_reminder_rules,
+    with_start_time_reminder_rule,
+)
 
 
 def group_reminders_by_milestone(
@@ -111,6 +117,22 @@ def ensure_event_reminders(
     return ensure_start_time_reminder(remind_times, parsed_data.get("start_time"))
 
 
+def ensure_event_reminder_rules(
+    parsed_data: dict[str, Any],
+    remind_times: list[str] | None = None,
+) -> list[dict[str, int]]:
+    """Resolve semantic reminder rules for a parsed event payload."""
+    if "reminder_rules" in parsed_data:
+        return normalize_reminder_rules(parsed_data.get("reminder_rules"))
+
+    start_time = parsed_data.get("start_time")
+    reminders = remind_times if remind_times is not None else parsed_data.get("remind_times")
+    if start_time and reminders:
+        return with_start_time_reminder_rule(derive_reminder_rules(start_time, reminders))
+
+    return [{"offset_seconds": 0}] if start_time else []
+
+
 def ensure_start_time_reminder(remind_times: list[str], start_time: str | None) -> list[str]:
     """Ensure the current event start_time exists exactly once in remind_times."""
     normalized = list(remind_times)
@@ -168,6 +190,11 @@ def recalculate_milestone_reminders(
 
 def recalculate_event_reminders(event: Any, updates: dict[str, Any]) -> list[str]:
     """Shift reminder schedule when event start_time changes."""
+    reminder_rules = normalize_reminder_rules(getattr(event, "reminder_rules", None) or [])
+    target_start = updates.get("start_time") or getattr(event, "start_time", None)
+    if reminder_rules and target_start and not (getattr(event, "milestones", None) or []):
+        return build_remind_times_from_rules(target_start, reminder_rules)
+
     existing = parse_remind_times(event.remind_times)
     old_milestones = getattr(event, "milestones", None) or []
     new_milestones = updates.get("milestones") or []

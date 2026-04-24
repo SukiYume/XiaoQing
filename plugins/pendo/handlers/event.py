@@ -16,12 +16,13 @@ from ..models.item import EventItem, ItemType
 from ..core.types import PendoContext, CommandMessage
 from ..core.router import TOP_LEVEL_REDIRECTS
 from ..utils.settings_utils import resolve_default_category
-from ..utils.validators import merge_milestone_metadata
+from ..utils.validators import build_remind_times_from_rules, merge_milestone_metadata
 from .event_support import (
     apply_offsets,
     calculate_remind_offsets,
     ensure_start_time_reminder,
     ensure_event_reminders,
+    ensure_event_reminder_rules,
     format_conflicts,
     format_event_created,
     format_event_reminders,
@@ -64,6 +65,10 @@ class EventAIParserProtocol(Protocol):
     def build_remind_times_from_description(
         self, description: str, base_time: str
     ) -> list[str]: ...
+
+    def build_reminder_rules_from_description(
+        self, description: str
+    ) -> list[dict[str, int]]: ...
 
 
 class ReminderServiceProtocol(Protocol):
@@ -224,6 +229,10 @@ class EventHandler(DbOpsMixin):
             parsed_data,
             build_from_offsets=self.ai_parser.build_remind_times_from_offsets,
         )
+        reminder_rules = ensure_event_reminder_rules(parsed_data, remind_times)
+        parsed_data["reminder_rules"] = reminder_rules
+        if not (milestones and isinstance(milestones, list) and len(milestones) >= 2):
+            remind_times = build_remind_times_from_rules(parsed_data["start_time"], reminder_rules)
 
         # 处理重复日程（rrule优先级高于milestones，避免AI同时生成两者时走错路径）
         if parsed_data.get("rrule"):
@@ -290,6 +299,7 @@ class EventHandler(DbOpsMixin):
             category=parsed_data.get("category", "未分类"),
             context=parsed_data.get("context", {}),
             remind_times=remind_times,
+            reminder_rules=parsed_data.get("reminder_rules", []),
             notes=parsed_data.get("notes", ""),
             created_at=datetime.now().isoformat(),
             updated_at=datetime.now().isoformat(),
@@ -339,8 +349,7 @@ class EventHandler(DbOpsMixin):
             if not instances:
                 return {"status": "error", "message": "❌ 没有生成任何重复实例"}
 
-            # 计算提醒偏移量
-            remind_offsets = calculate_remind_offsets(start_dt_naive, remind_times)
+            reminder_rules = parsed_data.get("reminder_rules", [])
 
             # 生成父ID
             parent_id = uuid.uuid4().hex[:8]
@@ -358,7 +367,11 @@ class EventHandler(DbOpsMixin):
                     tags=parsed_data.get("tags", []),
                     category=parsed_data.get("category", "未分类"),
                     context=parsed_data.get("context", {}),
-                    remind_times=apply_offsets(instance_dt, remind_offsets),
+                    remind_times=build_remind_times_from_rules(
+                        instance_dt.isoformat(),
+                        reminder_rules,
+                    ),
+                    reminder_rules=reminder_rules,
                     notes=parsed_data.get("notes", ""),  # I-9修复：重复事件也传入notes
                     parent_id=parent_id,
                     rrule=parsed_data["rrule"],
@@ -387,7 +400,7 @@ class EventHandler(DbOpsMixin):
                 "message": format_recurring_event_created(
                     parsed_data.get("title", "无标题"),
                     len(created_ids),
-                    len(remind_offsets),
+                    len(reminder_rules),
                     parent_id,
                 ),
                 "item_id": parent_id,
@@ -425,6 +438,7 @@ class EventHandler(DbOpsMixin):
             category=parsed_data.get("category", "未分类"),
             context=parsed_data.get("context", {}),
             remind_times=remind_times,
+            reminder_rules=parsed_data.get("reminder_rules", []),
             milestones=milestones,
             notes=parsed_data.get("notes", ""),
             created_at=datetime.now().isoformat(),
@@ -1234,45 +1248,43 @@ class EventHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 该日程没有开始时间，无法计算提醒"}
 
         try:
-            remind_times = await run_sync(
-                self.ai_parser.build_remind_times_from_description,
+            reminder_rules = await run_sync(
+                self.ai_parser.build_reminder_rules_from_description,
                 reminder_desc,
-                base_time,
-                user_id=user_id,
             )
         except Exception as e:
             logger.exception("解析提醒描述失败: %s", e)
             return {"status": "error", "message": f"❌ 解析提醒描述失败: {e}"}
 
-        if not remind_times:
+        if not reminder_rules:
             return {
                 "status": "error",
                 "message": '❌ 未能从描述中解析出提醒时间，请尝试: "提前1天" "提前2小时30分钟" 等',
             }
 
+        remind_times = build_remind_times_from_rules(base_time, reminder_rules)
+
         # 对多节点事件，为每个里程碑都应用同样的偏移
         milestones = getattr(event, "milestones", None) or []
         if milestones:
-            offsets_desc = reminder_desc
             all_times: set[str] = set()
             for m in milestones:
                 m_time = m.get("time")
                 if not m_time:
                     continue
                 try:
-                    times = await run_sync(
-                        self.ai_parser.build_remind_times_from_description,
-                        offsets_desc,
-                        m_time,
-                        user_id=user_id,
-                    )
+                    times = build_remind_times_from_rules(m_time, reminder_rules)
                     all_times.update(times)
                 except Exception as e:
                     logger.warning("里程碑 %s 提醒时间解析失败: %s", m_time, e)
             remind_times = sorted(all_times)
 
         remind_times = ensure_start_time_reminder(remind_times, base_time)
-        await self._db_update_item(event_id, {"remind_times": remind_times}, owner_id=user_id)
+        await self._db_update_item(
+            event_id,
+            {"reminder_rules": reminder_rules, "remind_times": remind_times},
+            owner_id=user_id,
+        )
 
         lines = [f"✅ 已更新提醒: {event.title or '无标题'}", f"🔔 共 {len(remind_times)} 个提醒"]
         for t in remind_times:

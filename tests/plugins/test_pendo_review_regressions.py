@@ -102,6 +102,18 @@ def test_ai_parser_build_remind_times_uses_user_timezone(monkeypatch):
     assert remind_times == ["2030-01-01T09:00:00-08:00"]
 
 
+def test_ai_parser_builds_semantic_reminder_rules_from_description():
+    parser = AIParser()
+
+    rules = parser.build_reminder_rules_from_description("提前1天和2小时提醒")
+
+    assert rules == [
+        {"offset_seconds": 86400},
+        {"offset_seconds": 7200},
+        {"offset_seconds": 0},
+    ]
+
+
 def test_reminder_dispatch_uses_owner_timezone(monkeypatch):
     from plugins.pendo.services import reminder as reminder_module
 
