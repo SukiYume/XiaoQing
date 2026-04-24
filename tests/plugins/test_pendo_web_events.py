@@ -1,7 +1,10 @@
 """Regression tests for the redesigned Pendo web events page."""
 
 from pathlib import Path
+import importlib
 import shutil
+import sys
+import types
 import uuid
 
 from plugins.pendo.services.db import Database
@@ -9,6 +12,61 @@ from plugins.pendo.web.analytics.events_overview import build_event_detail, buil
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_events_module():
+    fastapi = types.ModuleType("fastapi")
+
+    class _Router:
+        def _decorator(self, *_args, **_kwargs):
+            def decorator(fn):
+                return fn
+            return decorator
+
+        def get(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def post(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def put(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def delete(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+    class _HTTPException(Exception):
+        def __init__(self, status_code: int, detail: str):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+    fastapi.APIRouter = _Router
+    fastapi.Depends = lambda dep=None: dep
+    fastapi.HTTPException = _HTTPException
+    fastapi.Header = lambda default=None, **_kwargs: default
+    fastapi.Query = lambda default=None, **_kwargs: default
+    fastapi.Request = type("Request", (), {})
+
+    responses = types.ModuleType("fastapi.responses")
+    responses.Response = type("Response", (), {})
+
+    _orig_fastapi = sys.modules.get("fastapi")
+    _orig_responses = sys.modules.get("fastapi.responses")
+    sys.modules["fastapi"] = fastapi
+    sys.modules["fastapi.responses"] = responses
+    sys.modules.pop("plugins.pendo.web.api.events", None)
+    mod = importlib.import_module("plugins.pendo.web.api.events")
+
+    if _orig_fastapi is not None:
+        sys.modules["fastapi"] = _orig_fastapi
+    else:
+        sys.modules.pop("fastapi", None)
+    if _orig_responses is not None:
+        sys.modules["fastapi.responses"] = _orig_responses
+    else:
+        sys.modules.pop("fastapi.responses", None)
+    return mod
 
 
 def test_build_events_overview_supports_milestones_recurring_and_reminder_filters():
@@ -183,6 +241,145 @@ def test_build_event_detail_preserves_milestone_notes():
         assert detail["event"]["milestones"][0]["notes"] == "北京南 G823，7车5F 坐"
         assert "notes" not in detail["event"]["milestones"][1]
         assert detail["event"]["notes"] == "全局备注"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_events_overview_and_detail_return_collection_context_for_leaf_events():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-web-event-graph"
+
+    try:
+        collection_id = db.create_event_collection(
+            {
+                "id": "colgraph",
+                "owner_id": owner_id,
+                "kind": "multi_node",
+                "title": "发布项目",
+                "category": "项目",
+                "start_time": "2030-05-01T10:00:00",
+                "end_time": "2030-05-02T18:00:00",
+            }
+        )
+        db.insert_item(
+            {
+                "id": "colgraph_m01",
+                "owner_id": owner_id,
+                "type": "event",
+                "title": "提审",
+                "category": "项目",
+                "start_time": "2030-05-01T10:00:00",
+                "reminder_rules": [{"offset_seconds": 0}],
+                "remind_times": ["2030-05-01T10:00:00"],
+                "event_role": "multi_node_child",
+                "event_collection_id": collection_id,
+                "event_collection_kind": "multi_node",
+                "event_index": 1,
+            }
+        )
+        db.insert_item(
+            {
+                "id": "colgraph_m02",
+                "owner_id": owner_id,
+                "type": "event",
+                "title": "上线",
+                "category": "项目",
+                "start_time": "2030-05-02T18:00:00",
+                "reminder_rules": [{"offset_seconds": 0}],
+                "remind_times": ["2030-05-02T18:00:00"],
+                "event_role": "multi_node_child",
+                "event_collection_id": collection_id,
+                "event_collection_kind": "multi_node",
+                "event_index": 2,
+            }
+        )
+
+        overview = build_events_overview(
+            db=db,
+            owner_id=owner_id,
+            start_date="2030-05-01",
+            end_date="2030-05-31",
+        )
+
+        assert overview["summary"]["event_count"] == 2
+        assert overview["summary"]["milestone_count"] == 2
+        assert overview["events"][0]["collection"]["title"] == "发布项目"
+        assert overview["events"][0]["kind"] == "multi_node"
+        assert overview["timeline_days"][0]["items"][0]["event_id"] == "colgraph_m01"
+
+        detail = build_event_detail(db=db, owner_id=owner_id, event_id="colgraph_m01")
+        assert detail is not None
+        assert detail["event"]["collection"]["id"] == collection_id
+        assert detail["related_instances"][0]["id"] == "colgraph_m02"
+
+        collection_detail = build_event_detail(db=db, owner_id=owner_id, event_id=collection_id)
+        assert collection_detail is not None
+        assert collection_detail["collection"]["id"] == collection_id
+        assert [child["id"] for child in collection_detail["children"]] == [
+            "colgraph_m01",
+            "colgraph_m02",
+        ]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_events_collection_api_creates_updates_and_deletes_graph():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_api_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-web-event-graph-api"
+    events_api = _load_events_module()
+
+    try:
+        created = events_api.create_event_collection(
+            body=events_api.EventCollectionCreate(
+                title="发布项目",
+                category="项目",
+                location="线上",
+                reminder_rules=[{"offset_seconds": 3600}, {"offset_seconds": 0}],
+                children=[
+                    events_api.EventCollectionChildCreate(
+                        title="提审",
+                        start_time="2030-05-01T10:00:00",
+                    ),
+                    events_api.EventCollectionChildCreate(
+                        title="上线",
+                        start_time="2030-05-02T18:00:00",
+                    ),
+                ],
+            ),
+            owner_id=owner_id,
+            db=db,
+        )
+
+        collection_id = created["data"]["id"]
+        child_ids = created["data"]["child_ids"]
+        assert child_ids == [f"{collection_id}_m01", f"{collection_id}_m02"]
+        assert db.get_item(child_ids[0], owner_id).remind_times == [
+            "2030-05-01T09:00:00",
+            "2030-05-01T10:00:00",
+        ]
+
+        detail = events_api.get_collection_detail(collection_id, owner_id=owner_id, db=db)
+        assert detail["data"]["collection"]["title"] == "发布项目"
+        assert [child["id"] for child in detail["data"]["children"]] == child_ids
+
+        updated = events_api.update_collection(
+            collection_id,
+            body=events_api.EventCollectionUpdate(title="发布项目 v2"),
+            owner_id=owner_id,
+            db=db,
+        )
+        assert updated["ok"] is True
+        assert db.get_event_collection(collection_id, owner_id)["title"] == "发布项目 v2"
+
+        deleted = events_api.delete_collection(collection_id, owner_id=owner_id, db=db)
+        assert deleted["ok"] is True
+        assert db.get_event_collection(collection_id, owner_id) is None
+        assert db.get_item(child_ids[0], owner_id) is None
+        assert db.get_item(child_ids[1], owner_id) is None
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

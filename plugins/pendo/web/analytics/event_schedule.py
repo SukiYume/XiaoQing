@@ -38,6 +38,9 @@ def daterange(start_day: date, end_day: date) -> list[str]:
 
 
 def event_kind(event: EventItem) -> str:
+    collection_kind = getattr(event, "event_collection_kind", None)
+    if collection_kind in {"multi_node", "recurring"}:
+        return collection_kind
     milestones = getattr(event, "milestones", None) or []
     if milestones and len(milestones) >= 2:
         return "milestone"
