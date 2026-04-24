@@ -41,13 +41,7 @@ def event_kind(event: EventItem) -> str:
     collection_kind = getattr(event, "event_collection_kind", None)
     if collection_kind in {"multi_node", "recurring"}:
         return collection_kind
-    if getattr(event, "rrule", None):
-        return "recurring"
     return "single"
-
-
-def milestone_rows(event: EventItem) -> list[dict[str, Any]]:
-    return []
 
 
 def event_display_days(event: EventItem, range_start_day: date, range_end_day: date) -> list[str]:
@@ -98,7 +92,6 @@ def build_event_schedule(event: EventItem, range_start_day: date, range_end_day:
 
     return {
         "kind": kind,
-        "milestones": [],
         "display_days": display_days,
         "day_entries": day_entries,
         "time_summary": time_summary,

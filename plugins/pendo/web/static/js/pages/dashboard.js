@@ -276,8 +276,8 @@ function renderEventSection(title, items, emptyTitle, emptyText) {
             <div class="dashboard-agenda-list">
                 ${items.map(event => {
                     const date = formatMonthDay(event.start_time);
-                    const isMilestone = event.entry_kind === 'milestone' && event.display_subtitle;
-                    const heading = isMilestone
+                    const isMultiNode = event.entry_kind === 'multi_node' && event.display_subtitle;
+                    const heading = isMultiNode
                         ? `${event.display_title || event.title || '(无标题)'} · ${event.display_subtitle}`
                         : (event.display_title || event.title || '(无标题)');
                     return `
@@ -288,7 +288,7 @@ function renderEventSection(title, items, emptyTitle, emptyText) {
                             </div>
                             <div>
                                 <div class="dashboard-event-title">${heading}</div>
-                                ${event.display_subtitle && !isMilestone ? `<div class="dashboard-event-subtitle">${event.display_subtitle}</div>` : ''}
+                                ${event.display_subtitle && !isMultiNode ? `<div class="dashboard-event-subtitle">${event.display_subtitle}</div>` : ''}
                                 <div class="dashboard-event-meta">
                                     <span class="dashboard-meta-pill">🕒 ${formatTime(event.start_time)}${event.end_time ? ` - ${formatTime(event.end_time)}` : ''}</span>
                                     ${event.location ? `<span class="dashboard-meta-pill location">📍 ${event.location}</span>` : ''}

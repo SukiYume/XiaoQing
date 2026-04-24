@@ -18,6 +18,10 @@ def _connect(path: Path) -> sqlite3.Connection:
 def _seed_legacy_events(path: Path) -> None:
     db = Database(str(path))
     try:
+        conn = db.get_connection()
+        conn.execute("ALTER TABLE items ADD COLUMN rrule TEXT")
+        conn.execute("ALTER TABLE items ADD COLUMN parent_id TEXT")
+        conn.execute("ALTER TABLE items ADD COLUMN milestones TEXT")
         db.insert_item(
             EventItem(
                 id="single1",
@@ -29,58 +33,63 @@ def _seed_legacy_events(path: Path) -> None:
             "single1",
         )
         db.insert_item(
-            EventItem(
-                id="multi1",
-                owner_id="u1",
-                title="大会",
-                content="整体说明",
-                category="学术",
-                start_time="2030-02-01T09:00:00",
-                milestones=[
-                    {
-                        "name": "摘要截止",
-                        "time": "2030-02-01T09:00:00",
-                        "notes": "只提醒摘要",
-                    },
-                    {
-                        "name": "正式报告",
-                        "time": "2030-02-02T09:00:00",
-                    },
-                ],
-                remind_times=[
+            {
+                "id": "multi1",
+                "owner_id": "u1",
+                "type": "event",
+                "title": "大会",
+                "content": "整体说明",
+                "category": "学术",
+                "start_time": "2030-02-01T09:00:00",
+                "milestones": json.dumps(
+                    [
+                        {
+                            "name": "摘要截止",
+                            "time": "2030-02-01T09:00:00",
+                            "notes": "只提醒摘要",
+                        },
+                        {
+                            "name": "正式报告",
+                            "time": "2030-02-02T09:00:00",
+                        },
+                    ],
+                    ensure_ascii=False,
+                ),
+                "remind_times": [
                     "2030-02-01T09:00:00",
                     "2030-02-02T08:00:00",
                 ],
-            ),
+            },
             "multi1",
         )
         db.insert_item(
-            EventItem(
-                id="recur1_20300301",
-                owner_id="u1",
-                title="周会",
-                start_time="2030-03-01T10:00:00",
-                end_time="2030-03-01T11:00:00",
-                rrule="FREQ=WEEKLY;COUNT=2",
-                parent_id="recur1",
-                remind_times=["2030-03-01T09:30:00"],
-            ),
+            {
+                "id": "recur1_20300301",
+                "owner_id": "u1",
+                "type": "event",
+                "title": "周会",
+                "start_time": "2030-03-01T10:00:00",
+                "end_time": "2030-03-01T11:00:00",
+                "rrule": "FREQ=WEEKLY;COUNT=2",
+                "parent_id": "recur1",
+                "remind_times": ["2030-03-01T09:30:00"],
+            },
             "recur1_20300301",
         )
         db.insert_item(
-            EventItem(
-                id="recur1_20300308",
-                owner_id="u1",
-                title="周会",
-                start_time="2030-03-08T10:00:00",
-                end_time="2030-03-08T11:00:00",
-                rrule="FREQ=WEEKLY;COUNT=2",
-                parent_id="recur1",
-                remind_times=["2030-03-08T09:30:00"],
-            ),
+            {
+                "id": "recur1_20300308",
+                "owner_id": "u1",
+                "type": "event",
+                "title": "周会",
+                "start_time": "2030-03-08T10:00:00",
+                "end_time": "2030-03-08T11:00:00",
+                "rrule": "FREQ=WEEKLY;COUNT=2",
+                "parent_id": "recur1",
+                "remind_times": ["2030-03-08T09:30:00"],
+            },
             "recur1_20300308",
         )
-        conn = db.get_connection()
         conn.execute(
             """
             UPDATE items

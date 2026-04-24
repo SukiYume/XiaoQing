@@ -153,7 +153,7 @@ def test_build_events_overview_supports_multi_node_recurring_and_reminder_filter
         )
 
         assert result["summary"]["event_count"] == 3
-        assert result["summary"]["milestone_count"] == 1
+        assert result["summary"]["multi_node_count"] == 1
         assert result["summary"]["recurring_count"] == 1
         assert result["summary"]["reminder_count"] == 4
         assert result["calendar_days"]["2026-03-11"]["has_events"] is False
@@ -349,7 +349,7 @@ def test_events_overview_and_detail_return_collection_context_for_leaf_events():
         )
 
         assert overview["summary"]["event_count"] == 2
-        assert overview["summary"]["milestone_count"] == 2
+        assert overview["summary"]["multi_node_count"] == 2
         assert overview["events"][0]["collection"]["title"] == "发布项目"
         assert overview["events"][0]["kind"] == "multi_node"
         assert overview["timeline_days"][0]["items"][0]["event_id"] == "colgraph_m01"
@@ -552,7 +552,7 @@ def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders(
         )
 
         assert result["summary"]["event_count"] == 1
-        assert result["summary"]["milestone_count"] == 1
+        assert result["summary"]["multi_node_count"] == 1
         assert result["summary"]["reminder_count"] == 1
         assert result["calendar_days"]["2026-05-20"]["count"] == 1
         assert result["events"][0]["id"] == "visible_nodes_m02"

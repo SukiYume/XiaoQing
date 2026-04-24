@@ -53,8 +53,8 @@ COMMON_FIELDS = {
 }
 TYPE_FIELDS = {
     "event": {
-        "start_time", "end_time", "timezone", "location", "participants", "rrule",
-        "parent_id", "remind_policy_id", "remind_times", "milestones", "notes",
+        "start_time", "end_time", "timezone", "location", "participants",
+        "remind_times", "notes",
         "event_role", "event_collection_id", "event_collection_kind", "event_index",
         "event_node_key", "source_item_id", "reminder_rules",
     },

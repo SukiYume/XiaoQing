@@ -348,7 +348,6 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
         end_time="2026-03-20T10:00:00+08:00",
         timezone="Asia/Shanghai",
         participants=["A"],
-        milestones=[{"name": "开始", "time": "2026-03-20T09:00:00+08:00"}],
         remind_times=["2026-03-20T08:30:00+08:00"],
         notes="带录音",
         event_role="multi_node_child",
@@ -414,7 +413,9 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
     ))
 
     assert event_record["participants"] == ["A"]
-    assert event_record["milestones"][0]["name"] == "开始"
+    assert "milestones" not in event_record
+    assert "rrule" not in event_record
+    assert "parent_id" not in event_record
     assert event_record["event_collection_id"] == "col_1"
     assert event_record["event_collection_kind"] == "multi_node"
     assert event_record["event_index"] == 1

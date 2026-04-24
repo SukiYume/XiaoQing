@@ -273,7 +273,7 @@ function ensureStyles() {
         .events-calendar-chip::before {
             content: ''; flex: 0 0 auto; width: 6px; height: 6px; border-radius: 999px; background: var(--events-calendar-chip-color);
         }
-        .events-calendar-chip.milestone { --events-calendar-chip-color: #818CF8; }
+        .events-calendar-chip.multi_node { --events-calendar-chip-color: #818CF8; }
         .events-calendar-chip.recurring { --events-calendar-chip-color: #86EFAC; }
         .events-calendar-chip-text {
             display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -321,7 +321,7 @@ function ensureStyles() {
             position: relative; z-index: 1; width: 10px; height: 10px; border-radius: 999px; margin-top: 12px;
             background: var(--color-events); box-shadow: 0 0 0 4px rgba(245,158,11,0.12);
         }
-        .events-timeline-dot.milestone { background: #6366F1; box-shadow: 0 0 0 4px rgba(99,102,241,0.12); }
+        .events-timeline-dot.multi-node { background: #6366F1; box-shadow: 0 0 0 4px rgba(99,102,241,0.12); }
         .events-timeline-dot.recurring { background: #10B981; box-shadow: 0 0 0 4px rgba(16,185,129,0.12); }
         .events-timeline-card {
             padding: 10px 12px; border-radius: 16px; border: 1px solid rgba(226,232,240,0.92);
@@ -335,7 +335,7 @@ function ensureStyles() {
             display: inline-flex; align-items: center; gap: 4px; padding: 5px 8px; border-radius: 999px;
             font-size: 11px; font-weight: 700; background: rgba(148,163,184,0.08); color: var(--color-text-secondary);
         }
-        .events-pill.kind-milestone { background: rgba(99,102,241,0.12); color: #4338CA; }
+        .events-pill.kind-multi-node { background: rgba(99,102,241,0.12); color: #4338CA; }
         .events-pill.kind-recurring { background: rgba(16,185,129,0.12); color: #0F766E; }
         .events-pill.kind-single { background: rgba(245,158,11,0.12); color: #B45309; }
         .events-timeline-empty { padding: 14px 0 0 0; }
@@ -390,7 +390,7 @@ function ensureStyles() {
         .events-editor-rows { display: flex; flex-direction: column; gap: 8px; }
         .events-editor-row { display: grid; gap: 8px; align-items: center; }
         .events-editor-row[data-reminder-row] { grid-template-columns: minmax(0, 1fr) auto; }
-        .events-editor-row[data-milestone-row] {
+        .events-editor-row[data-node-row] {
             grid-template-columns: minmax(0, 1fr) minmax(170px, 0.8fr) minmax(0, 1fr) auto;
         }
         .events-editor-row button {
@@ -488,7 +488,7 @@ function renderFilters() {
     const kindOptions = [
         { value: 'all', label: '全部事件' },
         { value: 'single', label: '单次事件' },
-        { value: 'milestone', label: '多节点事件' },
+        { value: 'multi_node', label: '多节点事件' },
         { value: 'recurring', label: '重复实例' },
     ];
     const reminderOptions = [
@@ -596,7 +596,7 @@ function renderCalendarPanel() {
             <div class="events-panel-body">
                 <div class="events-summary-chips">
                     <span class="events-summary-chip">${overview?.summary?.event_count || 0} 条日程</span>
-                    <span class="events-summary-chip">${overview?.summary?.milestone_count || 0} 条多节点</span>
+                    <span class="events-summary-chip">${overview?.summary?.multi_node_count || 0} 条多节点</span>
                     <span class="events-summary-chip">${overview?.summary?.reminder_count || 0} 个提醒</span>
                 </div>
                 <div class="events-calendar-shell">
@@ -610,7 +610,7 @@ function renderCalendarPanel() {
 }
 
 function kindPill(kind) {
-    if (kind === 'milestone' || kind === 'multi_node') return '<span class="events-pill kind-milestone">多节点</span>';
+    if (kind === 'multi_node') return '<span class="events-pill kind-multi-node">多节点</span>';
     if (kind === 'recurring') return '<span class="events-pill kind-recurring">重复实例</span>';
     return '<span class="events-pill kind-single">单次事件</span>';
 }
@@ -623,7 +623,7 @@ function renderTimelineEntries(items) {
     const events = eventMap();
     return items.map((item) => {
         const event = events.get(String(item.event_id));
-        const dotKind = (item.kind || '').includes('milestone') || item.kind === 'multi_node' ? 'milestone' : (item.kind === 'recurring' ? 'recurring' : '');
+        const dotKind = item.kind === 'multi_node' ? 'multi-node' : (item.kind === 'recurring' ? 'recurring' : '');
         const collectionTitle = item.collection?.title || event?.collection?.title || '';
         const title = collectionTitle ? `${collectionTitle} · ${item.title || event?.title || '(无标题)'}` : (item.title || '(无标题)');
         return `
@@ -813,25 +813,25 @@ function reminderRowHTML(value = '') {
         </div>`;
 }
 
-function milestoneRowHTML(name = '', time = '', notes = '') {
+function nodeRowHTML(name = '', time = '', notes = '') {
     return `
-        <div class="events-editor-row" data-milestone-row>
-            <input type="text" class="events-editor-milestone-name" placeholder="节点名称" value="${escapeHtml(name)}">
-            <input type="datetime-local" class="events-editor-milestone-time" value="${escapeHtml(time)}">
-            <input type="text" class="events-editor-milestone-notes" placeholder="节点备注（仅该节点提醒显示）" value="${escapeHtml(notes)}">
+        <div class="events-editor-row" data-node-row>
+            <input type="text" class="events-editor-node-name" placeholder="节点名称" value="${escapeHtml(name)}">
+            <input type="datetime-local" class="events-editor-node-time" value="${escapeHtml(time)}">
+            <input type="text" class="events-editor-node-notes" placeholder="节点备注（仅该节点提醒显示）" value="${escapeHtml(notes)}">
             <button type="button" data-remove-row>×</button>
         </div>`;
 }
 
 function editorModalHTML(existing = null, prefillDate = '') {
-    const isMilestone = !existing && !!(existing?.milestones?.length >= 2);
+    const isMultiNode = false;
     const startValue = existing?.start_time ? toInputDateTime(existing.start_time) : (prefillDate ? `${prefillDate}T09:00` : '');
     const endValue = existing?.end_time ? toInputDateTime(existing.end_time) : '';
     const reminders = (existing?.reminders || []).map((row) => toInputDateTime(row.time || '')).filter(Boolean);
-    const milestones = existing?.milestones || [];
+    const nodes = [];
 
     return `
-        <form id="events-editor-form" data-mode="${isMilestone ? 'milestone' : 'single'}">
+        <form id="events-editor-form" data-mode="${isMultiNode ? 'multi_node' : 'single'}">
             <div class="events-editor-grid">
                 <div class="events-editor-field full">
                     <label>标题</label>
@@ -848,26 +848,26 @@ function editorModalHTML(existing = null, prefillDate = '') {
                 <div class="events-editor-field full">
                     <label>事件模式</label>
                     <div class="events-editor-mode" id="events-editor-mode">
-                        <button type="button" class="${isMilestone ? '' : 'active'}" data-editor-mode="single">单次事件</button>
-                        <button type="button" class="${isMilestone ? 'active' : ''}" data-editor-mode="milestone">多节点事件</button>
+                        <button type="button" class="${isMultiNode ? '' : 'active'}" data-editor-mode="single">单次事件</button>
+                        <button type="button" class="${isMultiNode ? 'active' : ''}" data-editor-mode="multi_node">多节点事件</button>
                     </div>
                 </div>
-                <div class="events-editor-field ${isMilestone ? 'full' : ''}" data-single-section ${isMilestone ? 'style="display:none;"' : ''}>
+                <div class="events-editor-field ${isMultiNode ? 'full' : ''}" data-single-section ${isMultiNode ? 'style="display:none;"' : ''}>
                     <label>开始时间</label>
                     <input name="start_time" type="datetime-local" value="${escapeHtml(startValue)}">
                 </div>
-                <div class="events-editor-field ${isMilestone ? 'full' : ''}" data-single-section ${isMilestone ? 'style="display:none;"' : ''}>
+                <div class="events-editor-field ${isMultiNode ? 'full' : ''}" data-single-section ${isMultiNode ? 'style="display:none;"' : ''}>
                     <label>结束时间</label>
                     <input name="end_time" type="datetime-local" value="${escapeHtml(endValue)}">
                 </div>
-                <div class="events-editor-field full" data-milestone-section ${isMilestone ? '' : 'style="display:none;"'}>
+                <div class="events-editor-field full" data-node-section ${isMultiNode ? '' : 'style="display:none;"'}>
                     <label>时间节点</label>
                     <div class="events-editor-note">多节点事件会按节点时间生成当天时间线；保存时会自动用首尾节点推导整体起止时间。</div>
-                    <div class="events-editor-rows" id="events-editor-milestones">
-                        ${(milestones.length ? milestones : [{ name: '', time: prefillDate ? `${prefillDate}T09:00:00` : '', notes: '' }, { name: '', time: prefillDate ? `${prefillDate}T18:00:00` : '', notes: '' }])
-                            .map((row) => milestoneRowHTML(row.name || '', toInputDateTime(row.time || ''), row.notes || '')).join('')}
+                    <div class="events-editor-rows" id="events-editor-nodes">
+                        ${(nodes.length ? nodes : [{ name: '', time: prefillDate ? `${prefillDate}T09:00:00` : '', notes: '' }, { name: '', time: prefillDate ? `${prefillDate}T18:00:00` : '', notes: '' }])
+                            .map((row) => nodeRowHTML(row.name || '', toInputDateTime(row.time || ''), row.notes || '')).join('')}
                     </div>
-                    <button type="button" class="events-editor-add" id="events-add-milestone">＋ 添加节点</button>
+                    <button type="button" class="events-editor-add" id="events-add-node">＋ 添加节点</button>
                 </div>
                 <div class="events-editor-field full">
                     <label>提醒</label>
@@ -898,8 +898,8 @@ function setEditorMode(content, mode) {
     content.querySelectorAll('[data-single-section]').forEach((section) => {
         section.style.display = mode === 'single' ? '' : 'none';
     });
-    content.querySelectorAll('[data-milestone-section]').forEach((section) => {
-        section.style.display = mode === 'milestone' ? '' : 'none';
+    content.querySelectorAll('[data-node-section]').forEach((section) => {
+        section.style.display = mode === 'multi_node' ? '' : 'none';
     });
 }
 
@@ -920,21 +920,21 @@ function collectEditorPayload(content) {
 
     const payload = { title, category, location, notes };
 
-    if (mode === 'milestone') {
-        const milestones = [...form.querySelectorAll('[data-milestone-row]')]
+    if (mode === 'multi_node') {
+        const nodes = [...form.querySelectorAll('[data-node-row]')]
             .map((row) => {
-                const name = row.querySelector('.events-editor-milestone-name').value.trim();
-                const time = inputToIso(row.querySelector('.events-editor-milestone-time').value);
-                const notes = row.querySelector('.events-editor-milestone-notes').value.trim();
+                const name = row.querySelector('.events-editor-node-name').value.trim();
+                const time = inputToIso(row.querySelector('.events-editor-node-time').value);
+                const notes = row.querySelector('.events-editor-node-notes').value.trim();
                 return name && time ? { name, time, ...(notes ? { notes } : {}) } : null;
             })
             .filter(Boolean)
             .sort((a, b) => a.time.localeCompare(b.time));
 
-        if (milestones.length < 2) throw new Error('多节点事件至少需要 2 个有效节点');
+        if (nodes.length < 2) throw new Error('多节点事件至少需要 2 个有效节点');
         payload.kind = 'multi_node';
-        payload.reminder_rules = reminderRulesFromTimes(milestones[0].time, remindTimes);
-        payload.children = milestones.map((row) => ({
+        payload.reminder_rules = reminderRulesFromTimes(nodes[0].time, remindTimes);
+        payload.children = nodes.map((row) => ({
             title: row.name,
             start_time: row.time,
             ...(row.notes ? { notes: row.notes } : {}),
@@ -946,7 +946,6 @@ function collectEditorPayload(content) {
         payload.start_time = startTime;
         payload.end_time = endTime || null;
         payload.reminder_rules = reminderRulesFromTimes(startTime, remindTimes);
-        payload.milestones = [];
     }
 
     return payload;
@@ -966,8 +965,8 @@ function openEventEditor(existing = null, prefillDate = '') {
     content.querySelector('#events-add-reminder').onclick = () => {
         content.querySelector('#events-editor-reminders').insertAdjacentHTML('beforeend', reminderRowHTML(''));
     };
-    content.querySelector('#events-add-milestone').onclick = () => {
-        content.querySelector('#events-editor-milestones').insertAdjacentHTML('beforeend', milestoneRowHTML('', '', ''));
+    content.querySelector('#events-add-node').onclick = () => {
+        content.querySelector('#events-editor-nodes').insertAdjacentHTML('beforeend', nodeRowHTML('', '', ''));
     };
 
     content.addEventListener('click', (event) => {
@@ -978,7 +977,7 @@ function openEventEditor(existing = null, prefillDate = '') {
         }
         const removeButton = event.target.closest('[data-remove-row]');
         if (removeButton) {
-            const row = removeButton.closest('[data-reminder-row], [data-milestone-row]');
+            const row = removeButton.closest('[data-reminder-row], [data-node-row]');
             if (row) row.remove();
         }
     });
@@ -1096,7 +1095,7 @@ function renderCollectionDetailBody(detail) {
         <div class="events-detail-shell">
             <section class="events-detail-summary">
                 <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
-                    <span class="events-pill kind-milestone">多节点</span>
+                    <span class="events-pill kind-multi-node">多节点</span>
                     ${collection.category ? `<span class="events-pill">${escapeHtml(collection.category)}</span>` : ''}
                     ${collection.location ? `<span class="events-pill">📍 ${escapeHtml(collection.location)}</span>` : ''}
                 </div>

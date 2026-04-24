@@ -444,9 +444,8 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
     if timezone is not None:
         normalized["timezone"] = sanitize_text(str(timezone), 80) or "Asia/Shanghai"
 
-    rrule = normalized.get("rrule")
-    if rrule is not None:
-        normalized["rrule"] = sanitize_text(str(rrule), 500)
+    for legacy_field in ("rrule", "parent_id", "remind_policy_id", "milestones"):
+        normalized.pop(legacy_field, None)
 
     event_role = normalized.get("event_role")
     if event_role is None and not partial:
@@ -492,54 +491,18 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
     if rules is not None:
         normalized["reminder_rules"] = normalize_reminder_rules(rules)
 
-    milestones = normalized.get("milestones")
-    if milestones is None and not partial:
-        milestones = []
-    if milestones is not None:
-        if not isinstance(milestones, list):
-            raise ValueError("milestones must be a list")
-        cleaned_milestones = []
-        seen_times: set[str] = set()
-        for row in milestones:
-            if not isinstance(row, dict):
-                raise ValueError("milestones must contain objects")
-            name = sanitize_text(str(row.get("name") or ""), 120)
-            if not name:
-                raise ValueError("Milestone name cannot be empty")
-            time_value = _normalize_iso_datetime(row.get("time"), "milestones.time")
-            if time_value in seen_times:
-                raise ValueError("Duplicate milestone time is not allowed")
-            seen_times.add(time_value)
-            cleaned_row: dict[str, Any] = {"name": name, "time": time_value}
-            notes = sanitize_text(str(row.get("notes") or ""), 50000)
-            if notes:
-                cleaned_row["notes"] = notes
-            cleaned_milestones.append(cleaned_row)
+    start_time = normalized.get("start_time")
+    if not start_time:
+        raise ValueError("Event start_time is required")
+    normalized["start_time"] = _normalize_iso_datetime(start_time, "start_time")
 
-        cleaned_milestones.sort(key=lambda row: row["time"])
-        if cleaned_milestones and len(cleaned_milestones) < 2:
-            raise ValueError("Milestone events require at least 2 milestones")
-        normalized["milestones"] = cleaned_milestones
-
-    milestones = normalized.get("milestones") or []
-    if milestones:
-        normalized["start_time"] = milestones[0]["time"]
-        normalized["end_time"] = milestones[-1]["time"]
+    end_time = normalized.get("end_time")
+    if end_time in (None, ""):
+        normalized["end_time"] = None
     else:
-        start_time = normalized.get("start_time")
-        if not start_time:
-            raise ValueError("Event start_time is required")
-        normalized["start_time"] = _normalize_iso_datetime(start_time, "start_time")
-
-        end_time = normalized.get("end_time")
-        if end_time in (None, ""):
-            normalized["end_time"] = None
-        else:
-            normalized["end_time"] = _normalize_iso_datetime(end_time, "end_time")
-            if normalized["end_time"] < normalized["start_time"]:
-                raise ValueError("Event end_time must be after start_time")
-
-        normalized["milestones"] = []
+        normalized["end_time"] = _normalize_iso_datetime(end_time, "end_time")
+        if normalized["end_time"] < normalized["start_time"]:
+            raise ValueError("Event end_time must be after start_time")
 
     has_rules = bool(normalized.get("reminder_rules"))
     has_reminders = bool(normalized.get("remind_times"))
@@ -547,15 +510,6 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
         (reminder_rules_provided and not has_rules and (not remind_times_provided or not has_reminders))
         or (remind_times_provided and not has_reminders and (not reminder_rules_provided or not has_rules))
     )
-
-    if milestones:
-        if reminder_rules_provided:
-            normalized["reminder_rules"] = normalize_reminder_rules(
-                normalized.get("reminder_rules")
-            )
-        elif "reminder_rules" not in normalized:
-            normalized["reminder_rules"] = []
-        return normalized
 
     if has_rules:
         normalized["remind_times"] = build_remind_times_from_rules(
