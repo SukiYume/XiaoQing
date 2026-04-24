@@ -77,6 +77,7 @@ async def mine_jargon(
     proxy: str,
     endpoint_path: str,
     infer_threshold: int = 3,
+    extra_payload: dict[str, Any] | None = None,
 ) -> int:
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
@@ -108,6 +109,7 @@ async def mine_jargon(
         retry_interval_seconds=float(retry_interval_seconds),
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     arr = extract_json_array(str(content))
@@ -178,6 +180,7 @@ async def mine_jargon(
             retry_interval_seconds=float(retry_interval_seconds),
             proxy=proxy,
             endpoint_path=endpoint_path,
+            extra_payload=extra_payload,
         )
         c2 = (((r2.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
         obj = extract_json_obj(str(c2))

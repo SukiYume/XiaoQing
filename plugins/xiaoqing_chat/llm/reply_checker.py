@@ -218,6 +218,7 @@ async def _llm_check(
     bot_name: str,
     reply: str,
     goal: str,
+    current_text: str = "",
     policy_text: str,
     chat_history_text: str,
     timeout_seconds: float,
@@ -225,6 +226,7 @@ async def _llm_check(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> ReplyCheckResult:
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
@@ -237,6 +239,17 @@ async def _llm_check(
     if len(_hist) > 800:
         _hist = _hist[-800:]
 
+    _current = str(current_text or "").strip()
+    if len(_current) > 500:
+        _current = _current[-500:]
+    _current_block = ""
+    if _current:
+        _current_block = (
+            "当前最新用户消息（这是待检查回复要回应的目标；"
+            "如果里面有“内容：...”，那是图片/表情识别出的实际画面内容）：\n"
+            f"{_current}\n\n"
+        )
+
     _policy = ""
     if policy_text.strip():
         _policy = "策略：" + policy_text.strip()[:200] + "\n"
@@ -247,6 +260,7 @@ async def _llm_check(
         f"当前对话目标：{goal}\n"
         f"{_policy}"
         f"最近的对话记录：\n{_hist}\n\n"
+        f"{_current_block}"
         "注意：如果回复里出现 [表情包：...] 或 [QQ表情：...]，表示最终消息会附带相应媒体，"
         "这些媒体也算回复内容的一部分，需要一起判断是否自然、贴切。\n\n"
         f"待检查的最终回复：\n{reply}\n\n"
@@ -296,6 +310,7 @@ async def check_reply(
     reply: str,
     heuristic_reply: str = "",
     goal: str,
+    current_text: str = "",
     policy_text: str = "",
     history: Sequence[StoredMessage],
     chat_history_text: str,
@@ -308,6 +323,7 @@ async def check_reply(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> ReplyCheckResult:
     heuristic_source = str(heuristic_reply or reply or "").strip()
     h = _heuristic_check(
@@ -328,6 +344,7 @@ async def check_reply(
             secrets=secrets,
             bot_name=bot_name,
             reply=reply,
+            current_text=current_text,
             goal=goal,
             policy_text=policy_text,
             chat_history_text=chat_history_text,
@@ -336,6 +353,7 @@ async def check_reply(
             retry_interval_seconds=retry_interval_seconds,
             proxy=proxy,
             endpoint_path=endpoint_path,
+            extra_payload=extra_payload,
         )
     except (LLMError, TimeoutError, asyncio.TimeoutError, Exception) as exc:
         _log.warning("reply_checker LLM 调用失败，放行当前回复: %s", exc)

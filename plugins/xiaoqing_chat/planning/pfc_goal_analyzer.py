@@ -25,6 +25,7 @@ async def analyze_goals(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
@@ -87,6 +88,7 @@ async def analyze_goals(
             retry_interval_seconds=float(retry_interval_seconds),
             proxy=proxy,
             endpoint_path=endpoint_path,
+            extra_payload=extra_payload,
         )
     except Exception:
         return list(current_goal_list)

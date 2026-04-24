@@ -1663,6 +1663,99 @@ async def test_ensure_user_message_recorded_uses_async_heartflow(mock_context, s
 
 
 @pytest.mark.asyncio
+async def test_observe_message_skips_prefixed_xc_command(mock_context, sample_group_event):
+    from plugins.xiaoqing_chat.handlers import observe_message
+
+    runtime = SimpleNamespace(cfg=SimpleNamespace(enable_smalltalk=True))
+    event = dict(sample_group_event)
+    event["message"] = [{"type": "text", "data": {"text": "/xc 你好"}}]
+    event["raw_message"] = "/xc 你好"
+
+    with (
+        patch("plugins.xiaoqing_chat.handlers._load_runtime", return_value=runtime),
+        patch(
+            "plugins.xiaoqing_chat.handlers._ensure_user_message_recorded",
+            new=AsyncMock(),
+        ) as mock_record,
+    ):
+        result = await observe_message("xc 你好", event, mock_context)
+
+    assert result == []
+    mock_record.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_observe_outgoing_action_records_external_plugin_text_only(mock_context):
+    from plugins.xiaoqing_chat.handlers import observe_outgoing_action
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(enable_smalltalk=True, ban_words=[]),
+        compiled_ban_regex=[],
+    )
+    state = MagicMock()
+    state.memory_store.append = Mock()
+    state.heartflow.on_bot_reply_async = AsyncMock()
+    state.action_history.append = Mock()
+    action = {
+        "action": "send_group_msg",
+        "params": {
+            "group_id": 67890,
+            "message": [
+                {
+                    "type": "text",
+                    "data": {
+                        "text": "中国地震台网正式测定：04月24日11时18分在地中海东部发生5.7级地震。"
+                    },
+                },
+                {"type": "image", "data": {"file": "file:///tmp/quake.jpg"}},
+            ],
+        },
+    }
+
+    with (
+        patch("plugins.xiaoqing_chat.handlers._load_runtime", return_value=runtime),
+        patch("plugins.xiaoqing_chat.handlers._get_bound_state", return_value=state),
+        patch("plugins.xiaoqing_chat.handlers._get_lock", return_value=asyncio.Lock()),
+        patch("plugins.xiaoqing_chat.handlers._next_local_id", return_value="m-out"),
+        patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
+        patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
+    ):
+        result = await observe_outgoing_action(action, mock_context, source_plugin="earthquake")
+
+    assert result == []
+    append_kwargs = state.memory_store.append.call_args.kwargs
+    assert state.memory_store.append.call_args.args[0] == "g67890"
+    assert append_kwargs["role"] == "assistant"
+    assert append_kwargs["name"] == "小青"
+    content, media_items = message_parts_to_legacy(append_kwargs["parts"])
+    assert "地中海东部" in content
+    assert "5.7级地震" in content
+    assert "[图片" not in content
+    assert media_items == []
+    state.heartflow.on_bot_reply_async.assert_awaited_once_with(chat_id="g67890")
+
+
+@pytest.mark.asyncio
+async def test_observe_outgoing_action_skips_xiaoqing_source(mock_context):
+    from plugins.xiaoqing_chat.handlers import observe_outgoing_action
+
+    state = MagicMock()
+    action = {
+        "action": "send_group_msg",
+        "params": {
+            "group_id": 67890,
+            "message": [{"type": "text", "data": {"text": "这是小青自己回复的内容"}}],
+        },
+    }
+
+    with patch("plugins.xiaoqing_chat.handlers._get_bound_state", return_value=state):
+        result = await observe_outgoing_action(action, mock_context, source_plugin="xiaoqing_chat")
+
+    assert result == []
+    state.memory_store.append.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_ensure_user_message_recorded_persists_rendered_media_items(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.handlers import _ensure_user_message_recorded
 
@@ -6132,6 +6225,7 @@ async def test_generate_reply_checker_uses_combined_reply_after_media_attachment
     kwargs = check_reply_mock.await_args.kwargs
     assert kwargs["reply"] == "咋了咋了[表情包：难过]"
     assert kwargs["heuristic_reply"] == "咋了咋了"
+    assert kwargs["current_text"] == "[表情包：难过]"
 
 
 @pytest.mark.asyncio
@@ -6391,6 +6485,83 @@ async def test_attach_reply_media_logs_planner_error_and_keeps_other_plan(tmp_pa
     assert any(
         call.kwargs.get("step") == "reply.media.plan.error"
         and call.kwargs.get("fields", {}).get("planner") == "image"
+        for call in mock_log_step.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_attach_reply_media_cancels_slow_planner_and_keeps_finished_plan(tmp_path: Path):
+    from plugins.xiaoqing_chat.reply_generator import ReplyDraft, _attach_reply_media
+
+    image_path = tmp_path / "emoji.png"
+    image_path.write_bytes(b"png")
+    context = SimpleNamespace(plugin_dir=tmp_path)
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            media=SimpleNamespace(
+                enable_outbound_image_reply=True,
+                enable_outbound_emoji_reply=True,
+                enable_outbound_face_reply=False,
+                reply_media_timeout_seconds=0.01,
+            )
+        )
+    )
+    draft = ReplyDraft(
+        text="这也太逗了",
+        text_parts=("这也太逗了",),
+        parts=build_text_message_parts("这也太逗了"),
+    )
+    emoji_plan = SimpleNamespace(
+        entry=SimpleNamespace(
+            media_hash="hash-emoji",
+            description="猫猫无语",
+            emotion_tags=("无语",),
+            file_path=str(image_path),
+        ),
+        marker="[表情包：无语]",
+        mode="text_with_emoji",
+    )
+    cancelled = False
+
+    async def _slow_image_plan(**kwargs):
+        nonlocal cancelled
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+
+    with (
+        patch(
+            "plugins.xiaoqing_chat.reply_generator.plan_image_reply",
+            new=AsyncMock(side_effect=_slow_image_plan),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.reply_generator.plan_emoji_reply",
+            new=AsyncMock(return_value=emoji_plan),
+        ),
+        patch(
+            "plugins.xiaoqing_chat.reply_generator.plan_qq_face_reply",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("plugins.xiaoqing_chat.reply_generator._log_step") as mock_log_step,
+    ):
+        merged = await _attach_reply_media(
+            draft,
+            context=context,
+            runtime=runtime,
+            history=[],
+            user_text="你这也太损了",
+            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
+            chat_id="g1",
+        )
+
+    assert cancelled is True
+    assert [part["kind"] for part in merged.parts] == ["text", "emoji"]
+    assert merged.emoji_plan is emoji_plan
+    assert any(
+        call.kwargs.get("step") == "reply.media.plan.timeout"
+        and "image" in call.kwargs.get("fields", {}).get("pending", "")
         for call in mock_log_step.call_args_list
     )
 

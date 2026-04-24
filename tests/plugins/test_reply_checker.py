@@ -1,4 +1,5 @@
 """Tests for reply_checker heuristic functions."""
+import importlib.util
 import sys
 import time
 from types import SimpleNamespace
@@ -6,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Stub out aiohttp before any plugin import that transitively requires it
-if "aiohttp" not in sys.modules:
+# Stub out aiohttp only when it is not installed in the local test environment.
+if "aiohttp" not in sys.modules and importlib.util.find_spec("aiohttp") is None:
     sys.modules["aiohttp"] = MagicMock()
 
 from plugins.xiaoqing_chat.llm.reply_checker import (
@@ -352,6 +353,7 @@ async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest
         reply="咋了咋了[表情包：难过]",
         heuristic_reply="咋了咋了",
         goal="聊天",
+        current_text="[表情包：惊讶，警觉；内容：黑猫瞪大双眼]",
         policy_text="",
         history=[],
         chat_history_text="user: [表情包：难过]",
@@ -371,3 +373,5 @@ async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest
     assert "[表情包：...]" in captured["prompt"]
     assert "最终消息会附带相应媒体" in captured["prompt"]
     assert "没有为回复增加新的交流功能" in captured["prompt"]
+    assert "当前最新用户消息" in captured["prompt"]
+    assert "黑猫瞪大双眼" in captured["prompt"]

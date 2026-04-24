@@ -185,3 +185,100 @@ async def test_chat_completions_raw_uses_exponential_backoff() -> None:
             )
 
     assert sleep_calls == [0.5, 1.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_raw_merges_extra_payload_without_streaming() -> None:
+    from plugins.xiaoqing_chat.llm.llm_client import chat_completions_raw
+
+    class FakeResponse:
+        status = 200
+
+        async def text(self) -> str:
+            return ""
+
+        async def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    class FakePostContext:
+        async def __aenter__(self):
+            return FakeResponse()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    session_mock = MagicMock(spec=aiohttp.ClientSession)
+    session_mock.post = MagicMock(return_value=FakePostContext())
+    session = cast(aiohttp.ClientSession, session_mock)
+    messages = [{"role": "user", "content": "hi"}]
+
+    await chat_completions_raw(
+        session=session,
+        api_base="https://example.com",
+        api_key="k",
+        model="m",
+        messages=messages,
+        temperature=0.7,
+        top_p=0.9,
+        max_tokens=128,
+        timeout_seconds=3.0,
+        max_retry=0,
+        retry_interval_seconds=0.5,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+        extra_payload={
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "high",
+            "stream": True,
+            "model": "override",
+            "messages": [],
+        },
+    )
+
+    payload = session_mock.post.call_args.kwargs["json"]
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "high"
+    assert payload["stream"] is False
+    assert payload["model"] == "m"
+    assert payload["messages"] == messages
+
+
+def test_llm_provider_extras_flow_into_call_config() -> None:
+    from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
+    from plugins.xiaoqing_chat.helper_utils import _get_llm_secrets, _resolve_llm_config
+    from plugins.xiaoqing_chat.runtime_state import get_state
+
+    state = get_state()
+    old_active = state.active_provider
+    state.active_provider = None
+    try:
+        context = SimpleNamespace(
+            secrets={
+                "plugins": {
+                    "xiaoqing_chat": {
+                        "default": "deepseek",
+                        "providers": {
+                            "deepseek": {
+                                "api_base": "https://api.deepseek.com",
+                                "api_key": "k",
+                                "model": "deepseek-v4-flash",
+                                "thinking": {"type": "enabled"},
+                                "reasoning_effort": "high",
+                            }
+                        },
+                    }
+                }
+            }
+        )
+
+        secrets = _get_llm_secrets(context)
+        cfg = _resolve_llm_config(XiaoQingChatConfig(), secrets)
+    finally:
+        state.active_provider = old_active
+
+    assert secrets["model"] == "deepseek-v4-flash"
+    assert cfg.extra_payload == {
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "high",
+    }
+    assert cfg.to_dict()["extra_payload"] == cfg.extra_payload

@@ -220,6 +220,9 @@ class MediaConfig(BaseModel):
     face_candidate_count: int = 8
     face_cooldown_turns: int = 2
     max_media_per_message: int = 3
+    reply_media_timeout_seconds: float = 2.0
+    enable_emoji_refine_background: bool = True
+    emoji_refine_timeout_seconds: float = 2.0
     max_analyze_bytes: int = 4 * 1024 * 1024
     vision_provider: str = ""
     vision_timeout_seconds: float = 20.0

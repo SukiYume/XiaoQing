@@ -71,6 +71,7 @@ async def upsert_word_defs(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> None:
     uniq = []
     seen = set()
@@ -103,6 +104,7 @@ async def upsert_word_defs(
         retry_interval_seconds=retry_interval_seconds,
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     items = _parse_word_json(out)
     if not items:
@@ -172,6 +174,7 @@ async def maybe_extract_person_facts(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> None:
     if len(history) < 20:
         return
@@ -199,6 +202,7 @@ async def maybe_extract_person_facts(
         retry_interval_seconds=retry_interval_seconds,
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     facts = _parse_fact_json(out)
     if not facts:

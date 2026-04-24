@@ -5,6 +5,7 @@ Tests for core/app.py - XiaoQingApp main application class
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -268,6 +269,7 @@ async def test_app_context_send_action(temp_app_root: Path):
     with patch.object(app, "_send_action", new=AsyncMock()) as mock_send:
         await context.send_action({"action": "test"})
         mock_send.assert_called_once()
+        assert mock_send.await_args.args[0]["_source_plugin"] == "test"
 
 
 # ============================================================
@@ -873,6 +875,60 @@ async def test_app_run_job(temp_app_root: Path):
 
     # Verify context was built
     app.plugin_manager.build_context.assert_called_once_with("test_plugin")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_send_action_notifies_xiaoqing_for_external_plugin_text(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    observer = AsyncMock(return_value=[])
+    loaded = SimpleNamespace(module=SimpleNamespace(observe_outgoing_action=observer))
+    xiaoqing_context = MagicMock()
+    app.plugin_manager.get = Mock(return_value=loaded)
+    app.plugin_manager.build_context = Mock(return_value=xiaoqing_context)
+
+    action = {
+        "action": "send_group_msg",
+        "params": {
+            "group_id": 123,
+            "message": [{"type": "text", "data": {"text": "地震播报"}}],
+        },
+        "_source_plugin": "earthquake",
+    }
+
+    await app._send_action(action)
+
+    app.plugin_manager.get.assert_called_once_with("xiaoqing_chat")
+    app.plugin_manager.build_context.assert_called_once_with(
+        "xiaoqing_chat",
+        user_id=None,
+        group_id=123,
+    )
+    observer.assert_awaited_once_with(
+        action,
+        xiaoqing_context,
+        source_plugin="earthquake",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_send_action_does_not_notify_xiaoqing_for_xiaoqing_source(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    app.plugin_manager.get = Mock()
+
+    await app._send_action(
+        {
+            "action": "send_group_msg",
+            "params": {
+                "group_id": 123,
+                "message": [{"type": "text", "data": {"text": "小青回复"}}],
+            },
+            "_source_plugin": "xiaoqing_chat",
+        }
+    )
+
+    app.plugin_manager.get.assert_not_called()
 
 
 @pytest.mark.asyncio

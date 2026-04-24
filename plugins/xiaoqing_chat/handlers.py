@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.message import extract_text
 from core.plugin_base import segments
 
 from .llm.reply_checker import ReplyRejected
@@ -22,6 +23,7 @@ from .helper_utils import (
     _chat_id,
     _extract_sender_name,
     _get_lock,
+    _get_bot_name,
     _is_at_me,
     _has_bot_name,
     _is_private,
@@ -214,10 +216,40 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
     return []
 
 
+def _command_token(text: str) -> str:
+    stripped = str(text or "").strip()
+    return stripped.split(maxsplit=1)[0].lower() if stripped else ""
+
+
+def _is_prefixed_xc_command_observation(clean_text: str, event: dict[str, Any], context) -> bool:
+    if _command_token(clean_text) == "xc":
+        return True
+
+    raw_text = extract_text(event.get("message")).strip()
+    if not raw_text:
+        raw_text = str(event.get("raw_message", "") or "").strip()
+    if not raw_text:
+        return False
+
+    config = getattr(context, "config", {}) or {}
+    prefixes = tuple(config.get("command_prefixes", ["/"]) or ["/"])
+    for prefix in prefixes:
+        prefix_text = str(prefix)
+        if not prefix_text or not raw_text.startswith(prefix_text):
+            continue
+        remainder = raw_text[len(prefix_text) :].lstrip()
+        if _command_token(remainder) == "xc":
+            return True
+    return False
+
+
 async def observe_message(clean_text: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     try:
         runtime = _load_runtime(context)
         if not runtime.cfg.enable_smalltalk:
+            return []
+
+        if _is_prefixed_xc_command_observation(clean_text, event, context):
             return []
 
         text = await build_effective_user_text(clean_text, event, context=context, runtime=runtime)
@@ -233,6 +265,92 @@ async def observe_message(clean_text: str, event: dict[str, Any], context) -> li
     except Exception:
         try:
             context.logger.warning("xiaoqing_chat observe_message failed", exc_info=True)
+        except Exception:
+            pass
+        return []
+    return []
+
+
+def _outgoing_action_chat_event(action: dict[str, Any]) -> dict[str, Any] | None:
+    act = str(action.get("action", "") or "").strip()
+    params = action.get("params") if isinstance(action.get("params"), dict) else {}
+    if act == "send_group_msg":
+        group_id = params.get("group_id")
+        if group_id in (None, ""):
+            return None
+        return {"group_id": group_id, "user_id": params.get("user_id")}
+    if act == "send_private_msg":
+        user_id = params.get("user_id")
+        if user_id in (None, ""):
+            return None
+        return {"user_id": user_id}
+    return None
+
+
+def _outgoing_action_text(action: dict[str, Any]) -> str:
+    params = action.get("params") if isinstance(action.get("params"), dict) else {}
+    message = params.get("message")
+    return extract_text(message).strip()
+
+
+async def observe_outgoing_action(
+    action: dict[str, Any],
+    context,
+    *,
+    source_plugin: str = "",
+) -> list[dict[str, Any]]:
+    """Record text sent by other plugins as XiaoQing's own dialogue context."""
+    try:
+        if str(source_plugin or "").strip() == "xiaoqing_chat":
+            return []
+
+        runtime = _load_runtime(context)
+        if not runtime.cfg.enable_smalltalk:
+            return []
+
+        event = _outgoing_action_chat_event(action)
+        if event is None:
+            return []
+
+        text = _outgoing_action_text(action)
+        if _should_ignore_text(text, runtime):
+            return []
+
+        chat_id = _chat_id(event)
+        state = _get_bound_state(context)
+        async with _get_lock(chat_id):
+            local_id = _next_local_id(chat_id)
+            state.memory_store.append(
+                chat_id,
+                role="assistant",
+                name=_get_bot_name(context),
+                local_id=local_id,
+                parts=build_text_message_parts(text),
+            )
+            _schedule_memory_persist(context, runtime, chat_id=chat_id)
+            await state.heartflow.on_bot_reply_async(chat_id=chat_id)
+            state.action_history.append(
+                chat_id,
+                ActionRecord(
+                    ts=time.time(),
+                    local_target="",
+                    action="external_plugin_message",
+                    reasoning=f"source_plugin={str(source_plugin or '').strip() or '-'}",
+                    detail={"source_plugin": str(source_plugin or "").strip(), "text": text[:500]},
+                    executed=True,
+                ),
+            )
+            _schedule_action_history_flush(context, runtime, chat_id=chat_id)
+            _log_step(
+                context,
+                runtime,
+                chat_id=chat_id,
+                step="smalltalk.memory.append_external_bot",
+                fields={"local_id": local_id, "source_plugin": str(source_plugin or "").strip()},
+            )
+    except Exception:
+        try:
+            context.logger.warning("xiaoqing_chat observe_outgoing_action failed", exc_info=True)
         except Exception:
             pass
         return []

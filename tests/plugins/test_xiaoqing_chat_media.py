@@ -20,6 +20,7 @@ from plugins.xiaoqing_chat.media.emoji_reply import plan_emoji_reply
 from plugins.xiaoqing_chat.media.image_reply import plan_image_reply
 from plugins.xiaoqing_chat.media.qq_face_catalog import load_qq_face_catalog
 from plugins.xiaoqing_chat.media.qq_face_reply import plan_qq_face_reply
+from plugins.xiaoqing_chat.media.reply_planner_common import extract_choice_json
 from plugins.xiaoqing_chat.media.event_media import (
     RenderedMedia,
     ResolvedMedia,
@@ -143,6 +144,8 @@ def _make_media_runtime(**media_overrides):
         face_candidate_count=6,
         face_cooldown_turns=2,
         max_analyze_bytes=1024 * 1024,
+        enable_emoji_refine_background=False,
+        emoji_refine_timeout_seconds=2.0,
         vision_provider="",
         vision_timeout_seconds=5.0,
         vision_max_retry=0,
@@ -389,6 +392,14 @@ async def test_render_local_media_file_refreshes_generic_llm_cache_after_prompt_
     assert saved["items"][media_hash]["analysis_prompt_version"] >= 3
 
 
+def test_extract_choice_json_uses_balanced_json_parser():
+    payload = extract_choice_json(
+        'selector said {"mode":"none","reason":"看到 {猫} 但不必发"} trailing {"mode":"emoji_only"}'
+    )
+
+    assert payload == {"mode": "none", "reason": "看到 {猫} 但不必发"}
+
+
 @pytest.mark.asyncio
 async def test_render_local_media_file_retries_generic_llm_cache_on_next_send(mock_context):
     runtime = _make_media_runtime(vision_provider="glm-4v")
@@ -529,9 +540,6 @@ async def test_render_event_media_text_falls_back_in_configured_provider_order(m
         "glm-4.6v-flash",
         "glm-4.6v",
         "glm-4v-flash",
-        "glm-4.6v-flash",
-        "glm-4.6v",
-        "glm-4v-flash",
     ]
     warning_lines = "\n".join(
         str(call.args[1]) if len(call.args) > 1 else ""
@@ -636,6 +644,103 @@ async def test_render_event_media_text_logs_raw_response_metadata(mock_context):
     assert '"used_path": "/chat/completions"' in log_lines
     assert '"finish_reason": "stop"' in log_lines
     assert f'"raw_chars": "{len(raw_content)}"' in log_lines
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_text_preserves_visible_text_for_text_heavy_screenshot(mock_context):
+    runtime = _make_media_runtime(vision_provider="glm-4v")
+    event = {
+        "message": [{"type": "image", "data": {"url": "https://example.com/news_screenshot.jpg"}}]
+    }
+    captured: dict[str, object] = {}
+
+    async def _fake_chat_raw(**kwargs):
+        messages = kwargs["messages"]
+        captured["prompt"] = messages[1]["content"][0]["text"]
+        captured["max_tokens"] = kwargs["max_tokens"]
+        return _raw_media_response(
+            json.dumps(
+                {
+                    "kind": "image",
+                    "description": "新闻截图，福岛陆上自卫队射击训练误燃干草引发山火，灭火后下山又遭熊袭击",
+                    "visible_text": "22日福岛县陆上自卫队射击训练误燃干草，花5小时扑灭山火，下山时遭熊袭击导致队员受伤",
+                    "emotion_tags": ["离谱", "惊险"],
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert "visible_text" in str(captured["prompt"])
+    assert captured["max_tokens"] >= 320
+    assert "射击训练误燃干草" in text
+    assert "5小时" in text
+    assert "熊袭击导致队员受伤" in text
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_text_retries_when_finish_reason_length(mock_context):
+    runtime = _make_media_runtime(vision_provider="glm-4v")
+    event = {
+        "message": [{"type": "image", "data": {"url": "https://example.com/news_screenshot.jpg"}}]
+    }
+    calls = 0
+    max_tokens_seen: list[int] = []
+
+    async def _fake_chat_raw(**kwargs):
+        nonlocal calls
+        calls += 1
+        max_tokens_seen.append(kwargs["max_tokens"])
+        if calls == 1:
+            return _raw_media_response(
+                json.dumps(
+                    {
+                        "kind": "image",
+                        "description": "新闻截图",
+                        "visible_text": "陆上自卫队演习引发山火",
+                    },
+                    ensure_ascii=False,
+                ),
+                finish_reason="length",
+            )
+        return _raw_media_response(
+            json.dumps(
+                {
+                    "kind": "image",
+                    "description": "新闻截图，福岛陆上自卫队灭火后下山时遭熊袭击，队员受伤",
+                    "visible_text": "自卫队训练引发山火，花5小时灭火后遇熊袭击",
+                    "emotion_tags": ["意外"],
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+
+    assert calls == 2
+    assert max_tokens_seen == [360, 720]
+    assert "遇熊袭击" in text
+    warning_lines = "\n".join(
+        str(call.args[1]) if len(call.args) > 1 else ""
+        for call in mock_context.logger.warning.call_args_list
+    )
+    assert '"reason": "length_truncated"' in warning_lines
+    assert '"step": "media.analyze.provider_retry"' in warning_lines
 
 
 @pytest.mark.asyncio
@@ -781,6 +886,122 @@ async def test_render_event_media_text_uses_detail_when_emoji_refine_is_generic(
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
     assert text == "[表情包：委屈，难受]"
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_text_defers_slow_emoji_refine_and_uses_detail(mock_context):
+    runtime = _make_media_runtime(
+        vision_provider="glm-4v",
+        enable_emoji_refine_background=True,
+        emoji_refine_timeout_seconds=0.01,
+    )
+    event = {
+        "message": [
+            {
+                "type": "image",
+                "data": {
+                    "url": "https://example.com/store_emoji.jpg",
+                    "emoji_package_id": 1001,
+                    "summary": "[动画表情]",
+                },
+            }
+        ]
+    }
+
+    async def _fake_chat_raw(*, messages, **kwargs):
+        content = messages[1]["content"]
+        if isinstance(content, list):
+            return _raw_media_response(
+                json.dumps(
+                    {
+                        "kind": "emoji",
+                        "description": "一只黑色猫咪，眼睛瞪得很大",
+                        "emotion_tags": ["惊讶", "警觉"],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        await asyncio.sleep(60)
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+        await asyncio.sleep(0.05)
+
+    assert text == "[表情包：惊讶，警觉]"
+    warning_lines = "\n".join(
+        str(call.args[1]) if len(call.args) > 1 else ""
+        for call in mock_context.logger.warning.call_args_list
+    )
+    assert '"step": "media.analyze.refine.background.timeout"' in warning_lines
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_background_refine_updates_cache(mock_context):
+    runtime = _make_media_runtime(
+        vision_provider="glm-4v",
+        enable_emoji_refine_background=True,
+        emoji_refine_timeout_seconds=1.0,
+    )
+    event = {
+        "message": [
+            {
+                "type": "image",
+                "data": {
+                    "url": "https://example.com/store_emoji.jpg",
+                    "emoji_package_id": 1001,
+                    "summary": "[动画表情]",
+                },
+            }
+        ]
+    }
+
+    async def _fake_chat_raw(*, messages, **kwargs):
+        content = messages[1]["content"]
+        if isinstance(content, list):
+            return _raw_media_response(
+                json.dumps(
+                    {
+                        "kind": "emoji",
+                        "description": "一只黑色猫咪，眼睛瞪得很大",
+                        "emotion_tags": ["惊讶", "警觉"],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return _raw_media_response(
+            json.dumps(
+                {"description": "黑猫瞪大双眼", "emotion_tags": ["惊讶", "警觉"]},
+                ensure_ascii=False,
+            )
+        )
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._download_url_bytes",
+        new=AsyncMock(return_value=(_PNG_BYTES, "image/png")),
+    ), patch(
+        "plugins.xiaoqing_chat.media.event_media_analysis.chat_completions_raw_with_fallback_paths",
+        new=AsyncMock(side_effect=_fake_chat_raw),
+    ):
+        text = await render_event_media_text(event, context=mock_context, runtime=runtime)
+        await asyncio.sleep(0.05)
+
+    assert text == "[表情包：惊讶，警觉]"
+    cache_path = mock_context.data_dir / "media" / "render_cache.json"
+    item = {}
+    for _ in range(20):
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        item = next(iter(cache["items"].values()))
+        if item.get("description") == "黑猫瞪大双眼":
+            break
+        await asyncio.sleep(0.01)
+    assert item["description"] == "黑猫瞪大双眼"
+    assert item["marker"] == "[表情包：惊讶，警觉]"
 
 
 @pytest.mark.asyncio
@@ -2339,9 +2560,14 @@ async def test_render_resolved_media_writes_cache_once_on_cache_miss(mock_contex
         patch("plugins.xiaoqing_chat.media.event_media._render_cache_lock", return_value=nullcontext()),
         patch(
             "plugins.xiaoqing_chat.media.event_media._load_render_cache",
-            side_effect=[first_cache, second_cache],
+            return_value=first_cache,
         ) as mock_load,
-        patch("plugins.xiaoqing_chat.media.event_media._save_render_cache") as mock_save,
+        patch("plugins.xiaoqing_chat.media.event_media_common._render_cache_lock", return_value=nullcontext()),
+        patch(
+            "plugins.xiaoqing_chat.media.event_media_common._load_render_cache",
+            return_value=second_cache,
+        ) as mock_write_load,
+        patch("plugins.xiaoqing_chat.media.event_media_common._save_render_cache") as mock_save,
         patch(
             "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
             new=AsyncMock(return_value=rendered),
@@ -2358,7 +2584,8 @@ async def test_render_resolved_media_writes_cache_once_on_cache_miss(mock_contex
     assert result == rendered
     assert first_cache["items"] == {}
     assert second_cache["items"]["hash-cache-miss"]["marker"] == "[图片：一只猫在打哈欠]"
-    assert mock_load.call_count == 2
+    assert mock_load.call_count == 1
+    assert mock_write_load.call_count == 1
     assert mock_save.call_count == 1
 
 

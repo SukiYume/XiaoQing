@@ -424,12 +424,48 @@ class XiaoQingApp:
         return bool(self.http_sender and str(getattr(self.http_sender, "http_base", "")).strip())
 
     async def _send_action(self, action: dict[str, Any], wait_ws_seconds: float = 0.0) -> None:
+        await self._notify_outgoing_action_observers(action)
         # 自动拆分长文本消息
         actions = self._maybe_split_action(action)
         for i, act in enumerate(actions):
             if i > 0:
                 await asyncio.sleep(MESSAGE_SPLIT_DELAY)
             await self._send_single_action(act, wait_ws_seconds=wait_ws_seconds)
+
+    @staticmethod
+    def _tag_action_source(action: dict[str, Any], plugin_name: str) -> dict[str, Any]:
+        if not isinstance(action, dict):
+            return action
+        tagged = dict(action)
+        tagged.setdefault("_source_plugin", str(plugin_name or "").strip())
+        return tagged
+
+    async def _notify_outgoing_action_observers(self, action: dict[str, Any]) -> None:
+        source_plugin = str(action.get("_source_plugin", "") or "").strip()
+        if not source_plugin or source_plugin == "xiaoqing_chat":
+            return
+        if str(action.get("action", "") or "").strip() not in ("send_group_msg", "send_private_msg"):
+            return
+
+        loaded = self.plugin_manager.get("xiaoqing_chat")
+        observer = getattr(getattr(loaded, "module", None), "observe_outgoing_action", None)
+        if observer is None:
+            return
+
+        params = action.get("params") if isinstance(action.get("params"), dict) else {}
+        group_id = params.get("group_id")
+        user_id = params.get("user_id")
+        try:
+            context = self.plugin_manager.build_context(
+                "xiaoqing_chat",
+                user_id=user_id if group_id in (None, "") else None,
+                group_id=group_id,
+            )
+            result = observer(action, context, source_plugin=source_plugin)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as exc:
+            logger.debug("Outgoing action observer failed: %s", exc, exc_info=True)
 
     def _maybe_split_action(self, action: dict[str, Any]) -> list[dict[str, Any]]:
         """将包含过长文本的 action 拆分为多个 action"""
@@ -587,7 +623,7 @@ class XiaoQingApp:
     ) -> Any:
         """构建插件上下文"""
         async def send_action(action: dict[str, Any]) -> None:
-            await self._send_action(action, wait_ws_seconds=2.0)
+            await self._send_action(self._tag_action_source(action, plugin_name), wait_ws_seconds=2.0)
         return PluginContext(
             config=self.config,
             secrets=self.secrets,
@@ -876,6 +912,7 @@ class XiaoQingApp:
             for group_id in target_groups:
                 action = build_action(segs, None, group_id)
                 if action:
+                    action = self._tag_action_source(action, plugin_name)
                     # 使用统一的 _send_action 方法（优先 WS，备选 HTTP）
                     await self._send_action(action)
 
