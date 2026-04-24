@@ -103,6 +103,7 @@ async def learn_from_messages(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> list[LearnedExpression]:
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
@@ -129,6 +130,7 @@ async def learn_from_messages(
         retry_interval_seconds=float(retry_interval_seconds),
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     arr = extract_first_json_list(str(content))
@@ -162,6 +164,7 @@ async def single_expression_check(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> tuple[bool, bool, str, str, str]:
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
@@ -186,6 +189,7 @@ async def single_expression_check(
         retry_interval_seconds=float(retry_interval_seconds),
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     ok, obj = get_items_from_json(
@@ -226,6 +230,7 @@ async def upsert_learned(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> int:
     items = store.load()
     now = time.time()
@@ -295,6 +300,7 @@ async def upsert_learned(
                 retry_interval_seconds=retry_interval_seconds,
                 proxy=proxy,
                 endpoint_path=endpoint_path,
+                extra_payload=extra_payload,
             )
             if rejected:
                 ex.checked = False

@@ -79,6 +79,7 @@ async def extract_and_learn(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> int:
     t0 = time.monotonic()
     try:
@@ -153,6 +154,7 @@ async def extract_and_learn(
         retry_interval_seconds=retry_interval_seconds,
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     if not learned:
         recorder.set_last_time(chat_id, now)
@@ -200,6 +202,7 @@ async def extract_and_learn(
         retry_interval_seconds=retry_interval_seconds,
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     try:
         context.logger.info(
@@ -236,6 +239,7 @@ async def extract_and_learn(
             retry_interval_seconds=retry_interval_seconds,
             proxy=proxy,
             endpoint_path=endpoint_path,
+            extra_payload=extra_payload,
         )
         try:
             context.logger.info(

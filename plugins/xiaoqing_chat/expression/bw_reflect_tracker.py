@@ -137,6 +137,7 @@ async def tick_reflect_tracker(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
     max_duration_seconds: float = 15 * 60,
     max_message_count: int = 30,
 ) -> bool:
@@ -196,6 +197,7 @@ async def tick_reflect_tracker(
         retry_interval_seconds=float(retry_interval_seconds),
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     obj = extract_json_obj(str(content))

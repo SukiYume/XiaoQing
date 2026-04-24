@@ -12,6 +12,33 @@ from .runtime_state import _ChatRuntime
 from .constants import FIND_BY_LOCAL_ID_LIMIT
 from .runtime_state import get_state as _state
 
+_LLM_SECRET_BASE_KEYS = {
+    "api_base",
+    "api_key",
+    "model",
+    "endpoint_path",
+    "proxy",
+}
+_LLM_EXTRA_DIRECT_KEYS = {
+    "frequency_penalty",
+    "logit_bias",
+    "logprobs",
+    "metadata",
+    "modalities",
+    "parallel_tool_calls",
+    "presence_penalty",
+    "reasoning_effort",
+    "response_format",
+    "seed",
+    "service_tier",
+    "stop",
+    "store",
+    "thinking",
+    "top_logprobs",
+    "user",
+}
+_LLM_EXTRA_PAYLOAD_KEYS = ("extra_payload", "extra_body", "model_kwargs", "request_payload")
+
 
 def _iter_message_segments(event_or_message: Any) -> list[dict[str, Any]]:
     """
@@ -240,7 +267,30 @@ def _get_llm_secrets(context: Any) -> dict[str, Any]:
         "_providers": providers,
         "_default": default_name,
     }
+    for key, value in provider.items():
+        if key not in result:
+            result[key] = value
     return result
+
+
+def _llm_extra_payload(secrets: dict[str, Any]) -> dict[str, Any]:
+    """Build provider-specific OpenAI-compatible request fields from secrets."""
+    payload: dict[str, Any] = {}
+    for key in _LLM_EXTRA_DIRECT_KEYS:
+        if key in secrets and secrets.get(key) is not None:
+            payload[key] = secrets[key]
+    for key in _LLM_EXTRA_PAYLOAD_KEYS:
+        value = secrets.get(key)
+        if isinstance(value, dict):
+            payload.update(value)
+    for key, value in secrets.items():
+        if key in _LLM_SECRET_BASE_KEYS or key in _LLM_EXTRA_DIRECT_KEYS or key in _LLM_EXTRA_PAYLOAD_KEYS:
+            continue
+        if str(key).startswith("_"):
+            continue
+        if value is not None:
+            payload[key] = value
+    return payload
 
 
 def _resolve_llm_config(
@@ -250,17 +300,20 @@ def _resolve_llm_config(
     foreground: bool = False,
 ) -> LLMCallConfig:
     """Resolve timeout/retry/proxy settings for LLM calls."""
+    base_timeout = getattr(cfg, "timeout_seconds", 30.0)
+    base_max_retry = getattr(cfg, "max_retry", 1)
+    base_retry_interval = getattr(cfg, "retry_interval_seconds", 0.5)
     if foreground:
-        timeout = float(getattr(cfg, "foreground_timeout_seconds", cfg.timeout_seconds))
-        max_retry = int(getattr(cfg, "foreground_max_retry", cfg.max_retry))
+        timeout = float(getattr(cfg, "foreground_timeout_seconds", base_timeout))
+        max_retry = int(getattr(cfg, "foreground_max_retry", base_max_retry))
         retry_interval = float(
-            getattr(cfg, "foreground_retry_interval_seconds", cfg.retry_interval_seconds)
+            getattr(cfg, "foreground_retry_interval_seconds", base_retry_interval)
         )
     else:
-        timeout = float(getattr(cfg, "background_timeout_seconds", cfg.timeout_seconds))
-        max_retry = int(getattr(cfg, "background_max_retry", cfg.max_retry))
+        timeout = float(getattr(cfg, "background_timeout_seconds", base_timeout))
+        max_retry = int(getattr(cfg, "background_max_retry", base_max_retry))
         retry_interval = float(
-            getattr(cfg, "background_retry_interval_seconds", cfg.retry_interval_seconds)
+            getattr(cfg, "background_retry_interval_seconds", base_retry_interval)
         )
     return LLMCallConfig(
         timeout_seconds=timeout,
@@ -271,6 +324,7 @@ def _resolve_llm_config(
         temperature=float(cfg.temperature),
         top_p=float(cfg.top_p),
         max_tokens=int(cfg.max_tokens),
+        extra_payload=_llm_extra_payload(secrets),
     )
 
 

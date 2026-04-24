@@ -201,6 +201,34 @@ def _render_cache_lock(data_dir: Path) -> threading.RLock:
         return lock
 
 
+def write_render_cache_entry(
+    data_dir: Path,
+    resolved: ResolvedMedia,
+    rendered: RenderedMedia,
+    *,
+    source: str,
+    quality: str,
+    prompt_version: int | None = None,
+) -> None:
+    normalized_source = str(source or "").strip() or "fallback"
+    if prompt_version is None:
+        prompt_version = _MEDIA_ANALYSIS_PROMPT_VERSION if normalized_source == "llm" else 0
+    cache_payload = {
+        "kind": rendered.kind,
+        "description": rendered.description,
+        "emotion_tags": list(rendered.emotion_tags),
+        "marker": rendered.marker,
+        "analysis_source": normalized_source,
+        "analysis_quality": str(quality or "").strip(),
+        "analysis_prompt_version": int(prompt_version or 0),
+    }
+    with _render_cache_lock(data_dir):
+        cache = _load_render_cache(data_dir)
+        items = cache.setdefault("items", {})
+        items[resolved.media_hash] = cache_payload
+        _save_render_cache(data_dir, cache)
+
+
 def _parse_file_uri(value: str) -> Path | None:
     parsed = urlparse(value)
     if parsed.scheme != "file":

@@ -10,6 +10,9 @@ class LLMError(RuntimeError):
     pass
 
 
+_EXTRA_PAYLOAD_RESERVED_KEYS = frozenset({"model", "messages", "stream"})
+
+
 def _join_url(api_base: str, path: str) -> str:
     base = (api_base or "").rstrip("/")
     p = (path or "").lstrip("/")
@@ -56,6 +59,15 @@ def _retry_delay(retry_interval_seconds: float, attempt: int) -> float:
     if base <= 0.0:
         return 0.0
     return base * (2 ** max(0, attempt - 1))
+
+
+def _merge_extra_payload(payload: dict[str, Any], extra_payload: Optional[dict[str, Any]]) -> None:
+    if not extra_payload:
+        return
+    for key, value in extra_payload.items():
+        if key in _EXTRA_PAYLOAD_RESERVED_KEYS or value is None:
+            continue
+        payload[key] = value
 
 
 T = TypeVar("T")
@@ -124,8 +136,8 @@ async def chat_completions_raw(
         payload["tools"] = tools
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
-    if extra_payload:
-        payload.update(extra_payload)
+    _merge_extra_payload(payload, extra_payload)
+    payload["stream"] = False
 
     attempt = 0
     while True:

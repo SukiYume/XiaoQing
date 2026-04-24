@@ -331,6 +331,7 @@ async def react_retrieve(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> str:
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
@@ -379,6 +380,7 @@ async def react_retrieve(
             endpoint_path=endpoint_path,
             tools=_tools_schema(),
             tool_choice="auto",
+            extra_payload=extra_payload,
         )
         tool_calls = _extract_tool_calls(resp)
         if not tool_calls:
@@ -452,6 +454,7 @@ async def build_memory_block(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> str:
     if not cfg.enable_memory_retrieval:
         return ""
@@ -478,6 +481,7 @@ async def build_memory_block(
                     retry_interval_seconds=0.2,
                     proxy=proxy,
                     endpoint_path=endpoint_path,
+                    extra_payload=extra_payload,
                 ),
                 timeout=min(2.0, soft_budget),
             )
@@ -520,6 +524,7 @@ async def build_memory_block(
                 retry_interval_seconds=0.2,
                 proxy=proxy,
                 endpoint_path=endpoint_path,
+                extra_payload=extra_payload,
             ),
             timeout=float(soft_budget),
         )

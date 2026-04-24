@@ -13,6 +13,7 @@ from core.args import parse
 from .handlers import (
     handle_smalltalk,
     observe_message as observe_message_internal,
+    observe_outgoing_action as observe_outgoing_action_internal,
     call_bot_name_only_internal,
     handle_internal,
     handle_config,
@@ -141,6 +142,19 @@ async def call_bot_name_only(context) -> list[dict[str, Any]]:
 
 async def observe_message(clean_text: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     return await observe_message_internal(clean_text, event, context)
+
+
+async def observe_outgoing_action(
+    action: dict[str, Any],
+    context,
+    *,
+    source_plugin: str = "",
+) -> list[dict[str, Any]]:
+    return await observe_outgoing_action_internal(
+        action,
+        context,
+        source_plugin=source_plugin,
+    )
 
 
 async def shutdown(context) -> None:

@@ -101,6 +101,7 @@ async def maybe_update_topic_summary(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> None:
     if min_messages_per_update <= 0:
         return
@@ -139,6 +140,7 @@ async def maybe_update_topic_summary(
         retry_interval_seconds=retry_interval_seconds,
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     obj = extract_first_json_dict(out)
     if not obj:

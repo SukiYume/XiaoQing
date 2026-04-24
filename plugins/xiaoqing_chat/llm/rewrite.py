@@ -42,6 +42,7 @@ async def maybe_rewrite_reply(
     retry_interval_seconds: float,
     proxy: str,
     endpoint_path: str,
+    extra_payload: dict[str, Any] | None = None,
 ) -> str:
     if not cfg.enable_rewrite:
         return reply_text
@@ -72,6 +73,7 @@ async def maybe_rewrite_reply(
         retry_interval_seconds=retry_interval_seconds,
         proxy=proxy,
         endpoint_path=endpoint_path,
+        extra_payload=extra_payload,
     )
     out = (out or "").strip()
     if not out:
