@@ -928,7 +928,6 @@ class TestMilestoneReminderMessage:
             end_time=None,
             location="",
             notes="会议链接: https://meet.example.com",
-            milestones=[],
             remind_times=["2030-04-05T09:00:00"],
             context={},
             owner_id="user1",
@@ -2851,7 +2850,6 @@ class TestReminderBackfillRegression:
             context={},
             location="会议室A",
             notes="",
-            milestones=[],
             tags=[],
         )
 
@@ -2921,7 +2919,6 @@ class TestReminderBackfillRegression:
             context={},
             location="会议室A",
             notes="",
-            milestones=[],
             tags=[],
         )
 
@@ -3002,7 +2999,6 @@ class TestReminderBackfillRegression:
             context={},
             location="会议室A",
             notes="",
-            milestones=[],
             tags=[],
         )
 
@@ -3800,7 +3796,6 @@ class TestOperationAndExportRegression:
             end_time="2026-03-12T10:30:00",
             location="腾讯会议",
             remind_times=["2026-03-12T09:00:00"],
-            milestones=[],
             notes="带上进度表",
             content="讨论本周排期",
         )
