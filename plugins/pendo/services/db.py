@@ -720,6 +720,7 @@ class Database:
         record_count: int,
         result_summary: dict[str, Any],
         force: bool = False,
+        collection_operations: list[tuple[str, dict[str, Any]]] | None = None,
     ) -> None:
         """Atomically apply import operations and record bundle/log state."""
         conn = self.get_connection()
@@ -740,6 +741,13 @@ class Database:
                     )
                     if cursor.rowcount == 0:
                         raise DuplicateBundleImportError(bundle_id)
+
+                if collection_operations:
+                    self._apply_event_collection_import_operations(
+                        cursor,
+                        collection_operations,
+                        owner_id,
+                    )
 
                 if operations:
                     _, refreshed_item_ids = self._apply_batch_operations(cursor, operations, owner_id)
@@ -777,6 +785,85 @@ class Database:
             if iid:
                 self.cache_invalidate(iid)
         self.cache_invalidate(f"items|{owner_id}")
+        if collection_operations:
+            for _action, payload in collection_operations:
+                collection_id = payload.get("id", "")
+                if collection_id:
+                    self.cache_invalidate(collection_id)
+            self.cache_invalidate(f"event_collections|{owner_id}")
+
+    def _apply_event_collection_import_operations(
+        self,
+        cursor: sqlite3.Cursor,
+        operations: list[tuple[str, dict[str, Any]]],
+        owner_id: str,
+    ) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        allowed_update_fields = {
+            "title",
+            "content",
+            "category",
+            "location",
+            "tags",
+            "notes",
+            "context",
+            "visibility",
+            "timezone",
+            "rrule",
+            "reminder_rules",
+            "start_time",
+            "end_time",
+            "source_item_id",
+            "created_at",
+            "updated_at",
+            "deleted",
+            "deleted_at",
+        }
+        for action, payload in operations:
+            collection = dict(payload)
+            collection["owner_id"] = owner_id
+            if action == "insert":
+                collection.setdefault("id", uuid.uuid4().hex[:16])
+                collection.setdefault("content", "")
+                collection.setdefault("category", "未分类")
+                collection.setdefault("location", "")
+                collection.setdefault("tags", [])
+                collection.setdefault("notes", "")
+                collection.setdefault("context", {})
+                collection.setdefault("visibility", "private")
+                collection.setdefault("timezone", "Asia/Shanghai")
+                collection.setdefault("reminder_rules", [])
+                collection.setdefault("created_at", now)
+                collection.setdefault("updated_at", collection["created_at"])
+                collection.setdefault("deleted", 0)
+                data = self._prepare_event_collection_data(collection)
+                columns = ", ".join(self._quote_col(k) for k in data.keys())
+                placeholders = ", ".join(["?" for _ in data])
+                cursor.execute(
+                    f"INSERT INTO event_collections ({columns}) VALUES ({placeholders})",
+                    list(data.values()),
+                )
+            elif action == "update":
+                collection_id = str(collection.get("id") or "")
+                if not collection_id:
+                    raise ValueError("event collection update requires id")
+                data = {
+                    key: value
+                    for key, value in collection.items()
+                    if key in allowed_update_fields
+                }
+                data["updated_at"] = collection.get("updated_at") or now
+                prepared = self._prepare_event_collection_data(data)
+                set_clause = ", ".join(f"{self._quote_col(k)} = ?" for k in prepared.keys())
+                cursor.execute(
+                    f"""
+                    UPDATE event_collections SET {set_clause}
+                    WHERE id = ? AND owner_id = ? AND deleted = 0
+                    """,
+                    list(prepared.values()) + [collection_id, owner_id],
+                )
+            else:
+                raise ValueError(f"Unsupported event collection import action: {action}")
 
     def batch_soft_delete(self, item_ids: list[str], owner_id: str) -> int:
         """单事务批量软删除，含 FTS 清理和缓存失效"""
@@ -1267,10 +1354,53 @@ class Database:
         )
         like_ids = [row[0] for row in cursor.fetchall()]
 
+        collection_ids: list[str] = []
+        if not filters or filters.get("type") in (None, ItemType.EVENT.value, "event"):
+            collection_where: list[str] = [
+                "c.owner_id = ?",
+                "c.deleted = 0",
+                f"i.type = '{ItemType.EVENT.value}'",
+                "i.owner_id = ?",
+                "i.deleted = 0",
+                """(
+                    c.title LIKE ? OR c.content LIKE ? OR c.category LIKE ? OR
+                    c.location LIKE ? OR c.notes LIKE ? OR c.tags LIKE ?
+                )""",
+            ]
+            collection_params: list[Any] = [
+                owner_id,
+                owner_id,
+                like,
+                like,
+                like,
+                like,
+                like,
+                like,
+            ]
+            if filters:
+                if filters.get("category"):
+                    collection_where.append("i.category = ?")
+                    collection_params.append(filters["category"])
+                for key in ("ledger_category", "status", "direction", "priority"):
+                    if key in filters:
+                        collection_where.append("1 = 0")
+
+            cursor.execute(
+                f"""
+                SELECT i.id
+                FROM event_collections c
+                JOIN items i ON i.event_collection_id = c.id
+                WHERE {' AND '.join(collection_where)}
+                ORDER BY i.updated_at DESC, i.created_at DESC
+                """,
+                collection_params,
+            )
+            collection_ids = [row[0] for row in cursor.fetchall()]
+
         # 合并去重：FTS结果优先（按rank排序），再补充LIKE独有的结果
         seen = set(fts_ids)
         merged_ids = list(fts_ids)
-        for lid in like_ids:
+        for lid in like_ids + collection_ids:
             if lid not in seen:
                 merged_ids.append(lid)
                 seen.add(lid)

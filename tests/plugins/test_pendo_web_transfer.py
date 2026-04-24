@@ -38,6 +38,7 @@ from plugins.pendo.web.services.transfer_bundle import (
     BundleValidationError,
     build_manifest,
     read_bundle,
+    serialize_event_collection,
     serialize_item,
     write_bundle,
 )
@@ -288,10 +289,18 @@ def _seed_items(db: Database):
 
 def _build_sample_bundle_bytes(records_by_type: dict[str, list[dict]], selection: dict | None = None) -> bytes:
     files = []
+    paths = {
+        "event": "data/events.ndjson",
+        "task": "data/tasks.ndjson",
+        "note": "data/notes.ndjson",
+        "ledger": "data/ledger.ndjson",
+        "diary": "data/diary.ndjson",
+        "event_collection": "data/event_collections.ndjson",
+    }
     for item_type, rows in records_by_type.items():
         content = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
         files.append({
-            "path": f"data/{'events' if item_type == 'event' else 'tasks' if item_type == 'task' else 'notes' if item_type == 'note' else item_type}.ndjson",
+            "path": paths[item_type],
             "type": item_type,
             "count": len(rows),
             "sha256": __import__("hashlib").sha256(content).hexdigest(),
@@ -342,7 +351,22 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
         milestones=[{"name": "开始", "time": "2026-03-20T09:00:00+08:00"}],
         remind_times=["2026-03-20T08:30:00+08:00"],
         notes="带录音",
+        event_role="multi_node_child",
+        event_collection_id="col_1",
+        event_collection_kind="multi_node",
+        event_index=1,
+        event_node_key="m01",
     ))
+    collection_record = serialize_event_collection({
+        "id": "col_1",
+        "owner_id": OWNER_ID,
+        "kind": "multi_node",
+        "title": "发布会整体",
+        "category": "工作",
+        "notes": "整体备注",
+        "start_time": "2026-03-20T09:00:00+08:00",
+        "end_time": "2026-03-20T10:00:00+08:00",
+    })
     task_record = serialize_item(TaskItem(
         id="task_1",
         owner_id=OWNER_ID,
@@ -391,6 +415,12 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
 
     assert event_record["participants"] == ["A"]
     assert event_record["milestones"][0]["name"] == "开始"
+    assert event_record["event_collection_id"] == "col_1"
+    assert event_record["event_collection_kind"] == "multi_node"
+    assert event_record["event_index"] == 1
+    assert collection_record["_type"] == "event_collection"
+    assert collection_record["title"] == "发布会整体"
+    assert "owner_id" not in collection_record
     assert task_record["subtasks"][0]["title"] == "补测试"
     assert task_record["dependencies"] == ["event_1"]
     assert note_record["references"][0]["id"] == "task_1"
@@ -563,6 +593,58 @@ def test_export_download_returns_bundle_with_manifest(client: TestClient, temp_d
         manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
         assert manifest["selection"]["types"] == ["task", "note"]
         assert "bundle_id" in manifest
+
+
+def test_export_download_includes_event_collections_for_event_graph(client: TestClient, temp_db: Database, auth_headers: dict):
+    temp_db.create_event_collection({
+        "id": "conf_2026",
+        "owner_id": OWNER_ID,
+        "kind": "multi_node",
+        "title": "FRB2026会议",
+        "category": "学术",
+        "notes": "整体会议",
+        "start_time": "2026-03-05T09:00:00",
+        "end_time": "2026-04-01T10:00:00",
+    })
+    temp_db.insert_item({
+        "id": "conf_2026_m01",
+        "owner_id": OWNER_ID,
+        "type": "event",
+        "title": "摘要截止",
+        "category": "学术",
+        "start_time": "2026-03-05T09:00:00",
+        "event_role": "multi_node_child",
+        "event_collection_id": "conf_2026",
+        "event_collection_kind": "multi_node",
+        "event_index": 1,
+        "event_node_key": "m01",
+    })
+
+    response = client.post(
+        "/api/transfer/export/download",
+        headers=auth_headers,
+        json={
+            "selection": {
+                "types": ["event"],
+                "preset": "custom",
+                "start": "2026-03-01",
+                "end": "2026-03-31",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content), "r") as zf:
+        names = set(zf.namelist())
+        assert "data/events.ndjson" in names
+        assert "data/event_collections.ndjson" in names
+        event_rows = [json.loads(line) for line in zf.read("data/events.ndjson").decode("utf-8").splitlines() if line]
+        collection_rows = [json.loads(line) for line in zf.read("data/event_collections.ndjson").decode("utf-8").splitlines() if line]
+
+    assert event_rows[0]["event_collection_id"] == "conf_2026"
+    assert event_rows[0]["event_collection_kind"] == "multi_node"
+    assert collection_rows[0]["_type"] == "event_collection"
+    assert collection_rows[0]["title"] == "FRB2026会议"
 
 
 def test_export_download_creates_audit_log(client: TestClient, temp_db: Database, auth_headers: dict):
@@ -815,6 +897,61 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
     assert imported_copies[0].context["import"]["source_id"] == "task_existing"
     # duplicate ID should be 16 hex chars
     assert len(imported_copies[0].id) == 16
+
+
+def test_import_execute_restores_event_collection_before_leaf_events(client: TestClient, temp_db: Database, auth_headers: dict):
+    bundle_bytes = _build_sample_bundle_bytes({
+        "event_collection": [{
+            "_type": "event_collection",
+            "_schema": 1,
+            "id": "bundle_conf",
+            "kind": "multi_node",
+            "title": "导入会议",
+            "category": "学术",
+            "notes": "整体备注",
+            "start_time": "2026-03-05T09:00:00",
+            "end_time": "2026-04-01T10:00:00",
+        }],
+        "event": [{
+            "_type": "event",
+            "_schema": 1,
+            "id": "bundle_conf_m01",
+            "title": "摘要截止",
+            "category": "学术",
+            "start_time": "2026-03-05T09:00:00",
+            "event_role": "multi_node_child",
+            "event_collection_id": "bundle_conf",
+            "event_collection_kind": "multi_node",
+            "event_index": 1,
+            "event_node_key": "m01",
+        }],
+    })
+
+    inspect_response = client.post(
+        "/api/transfer/import/inspect",
+        headers=auth_headers,
+        content=bundle_bytes,
+    )
+    assert inspect_response.status_code == 200
+    inspect_data = inspect_response.json()["data"]
+    assert inspect_data["summary"]["types"] == ["event"]
+    assert inspect_data["counts"]["valid"] == 2
+    assert inspect_data["counts"]["total_samples"] == 1
+    assert any(file["type"] == "event_collection" for file in inspect_data["files"])
+
+    import_response = client.post(
+        "/api/transfer/import/execute",
+        headers={**auth_headers, "X-Transfer-Options": json.dumps({"types": ["event"], "conflict_policy": "skip"})},
+        content=bundle_bytes,
+    )
+
+    assert import_response.status_code == 200
+    collection = temp_db.get_event_collection("bundle_conf", OWNER_ID)
+    event = temp_db.get_item("bundle_conf_m01", owner_id=OWNER_ID)
+    assert collection is not None
+    assert collection["title"] == "导入会议"
+    assert event.event_collection_id == "bundle_conf"
+    assert event.event_collection_kind == "multi_node"
 
 
 def test_import_execute_idempotency_blocks_duplicate_bundle(client: TestClient, temp_db: Database, auth_headers: dict):
@@ -1146,6 +1283,8 @@ def test_transfer_page_source_wires_export_and_import_endpoints():
     assert "bundle_id" in transfer_src
     assert "forceReimport" in transfer_src
     assert "已导入过" in transfer_src
+    assert "event_collection" in transfer_src
+    assert "日程集合" in transfer_src
 
 
 def test_transfer_and_settings_pages_scale_summary_values_for_mid_width_layouts():

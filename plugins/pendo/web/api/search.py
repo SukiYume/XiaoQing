@@ -51,8 +51,28 @@ def search_items(
         offset=offset,
     )
 
+    collection_cache = {}
+
+    def collection_payload(collection):
+        if not collection:
+            return None
+        return {
+            "id": collection.get("id"),
+            "kind": collection.get("kind"),
+            "title": collection.get("title"),
+            "category": collection.get("category"),
+            "location": collection.get("location"),
+            "notes": collection.get("notes"),
+        }
+
     def to_dict(item):
-        return item.to_dict() if hasattr(item, "to_dict") else {}
+        data = item.to_dict() if hasattr(item, "to_dict") else {}
+        collection_id = data.get("event_collection_id")
+        if data.get("type") == "event" and collection_id:
+            if collection_id not in collection_cache:
+                collection_cache[collection_id] = db.get_event_collection(collection_id, owner_id)
+            data["collection"] = collection_payload(collection_cache[collection_id])
+        return data
 
     return {
         "ok": True,
