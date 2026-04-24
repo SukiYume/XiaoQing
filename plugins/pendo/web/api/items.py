@@ -397,7 +397,7 @@ def create_item(
         item_data["category"] = resolve_default_category(db, owner_id)
 
     # Add type-specific fields (only non-None)
-    for field in body.model_fields:
+    for field in type(body).model_fields:
         if field in ("type", "title", "content", "tags", "category"):
             continue
         value = getattr(body, field)

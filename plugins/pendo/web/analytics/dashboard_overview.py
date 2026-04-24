@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 
 from ...services.db import Database
 from .event_schedule import build_event_schedule
@@ -25,32 +26,44 @@ def _month_bounds(now: datetime) -> tuple[str, str, str]:
 def _to_dict(item):
     return item.to_dict() if hasattr(item, "to_dict") else {}
 
-def _month_event_entries(item, month_start: str, month_end: str) -> list[dict]:
-    entries: list[dict] = []
-    schedule = build_event_schedule(
-        item,
-        datetime.strptime(month_start[:10], "%Y-%m-%d").date(),
-        datetime.strptime(month_end[:10], "%Y-%m-%d").date(),
-    )
-    item_dict = _to_dict(item)
-    for day in schedule["display_days"]:
-        for row in schedule["day_entries"].get(day, []):
-            entries.append({
-                **item_dict,
-                "id": getattr(item, "id", ""),
-                "title": row["title"],
-                "display_title": row["title"],
-                "display_subtitle": row["subtitle"],
-                "start_time": row["start_time"],
-                "end_time": row["end_time"],
-                "location": row["location"],
-                "category": row["category"],
-                "entry_kind": row["kind"],
-            })
-    return entries
+
+def _collection_payload(collection: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not collection:
+        return None
+    return {
+        "id": collection.get("id"),
+        "kind": collection.get("kind"),
+        "title": collection.get("title"),
+        "category": collection.get("category"),
+        "location": collection.get("location"),
+        "notes": collection.get("notes"),
+    }
 
 
-def _agenda_event_entries(item, range_start: str, range_end: str) -> list[dict]:
+def _display_fields(row: dict[str, Any], collection: dict[str, Any] | None) -> dict[str, Any]:
+    title = row["title"]
+    subtitle = row["subtitle"]
+    location = row["location"]
+    category = row["category"]
+
+    if collection and collection.get("kind") == "multi_node":
+        collection_title = str(collection.get("title") or "").strip()
+        if collection_title:
+            title = collection_title
+            subtitle = row["title"] if row["title"] != collection_title else row["subtitle"]
+        location = location or collection.get("location") or ""
+        category = category or collection.get("category") or ""
+
+    return {
+        "title": title,
+        "display_title": title,
+        "display_subtitle": subtitle,
+        "location": location,
+        "category": category,
+    }
+
+
+def _event_entries(item, range_start: str, range_end: str, collection: dict[str, Any] | None = None) -> list[dict]:
     entries: list[dict] = []
     schedule = build_event_schedule(
         item,
@@ -58,18 +71,22 @@ def _agenda_event_entries(item, range_start: str, range_end: str) -> list[dict]:
         datetime.strptime(range_end[:10], "%Y-%m-%d").date(),
     )
     item_dict = _to_dict(item)
+    collection_payload = _collection_payload(collection)
     for day in schedule["display_days"]:
         for row in schedule["day_entries"].get(day, []):
+            display = _display_fields(row, collection)
             entries.append({
                 **item_dict,
                 "id": getattr(item, "id", ""),
-                "title": row["title"],
-                "display_title": row["title"],
-                "display_subtitle": row["subtitle"],
+                "title": display["title"],
+                "display_title": display["display_title"],
+                "display_subtitle": display["display_subtitle"],
+                "node_title": row["title"],
+                "collection": collection_payload,
                 "start_time": row["start_time"],
                 "end_time": row["end_time"],
-                "location": row["location"],
-                "category": row["category"],
+                "location": display["location"],
+                "category": display["category"],
                 "entry_kind": row["kind"],
             })
     return entries
@@ -84,6 +101,20 @@ def _date_range(start_date: str, end_date: str) -> list[str]:
         days.append(cursor.strftime("%Y-%m-%d"))
         cursor += timedelta(days=1)
     return days
+
+
+def _collection_for_event(
+    db: Database,
+    owner_id: str,
+    item,
+    cache: dict[str, dict[str, Any] | None],
+) -> dict[str, Any] | None:
+    collection_id = getattr(item, "event_collection_id", None)
+    if not collection_id:
+        return None
+    if collection_id not in cache:
+        cache[collection_id] = db.get_event_collection(collection_id, owner_id)
+    return cache[collection_id]
 
 
 def build_dashboard_overview(
@@ -101,6 +132,8 @@ def build_dashboard_overview(
 
     month_events, month_repeat_events = db.get_events_for_range(owner_id, month_start_iso, month_end_iso)
     raw_events_month = month_events + month_repeat_events
+    agenda_events, agenda_repeat_events = db.get_events_for_range(owner_id, month_start_iso, agenda_end_iso)
+    raw_events_agenda = agenda_events + agenda_repeat_events
 
     tasks_todo = db.get_items(owner_id, filters={
         "type": "task",
@@ -156,13 +189,24 @@ def build_dashboard_overview(
     } for day in _date_range(month_start_date, today)]
 
     events_month: list[dict] = []
+    collection_cache: dict[str, dict[str, Any] | None] = {}
     for item in raw_events_month:
-        events_month.extend(_month_event_entries(item, month_start_iso, month_end_iso))
+        events_month.extend(_event_entries(
+            item,
+            month_start_iso,
+            month_end_iso,
+            _collection_for_event(db, owner_id, item, collection_cache),
+        ))
     events_month.sort(key=lambda event: event.get("start_time") or "")
 
     events_agenda: list[dict] = []
-    for item in raw_events_month:
-        events_agenda.extend(_agenda_event_entries(item, month_start_iso, agenda_end_iso))
+    for item in raw_events_agenda:
+        events_agenda.extend(_event_entries(
+            item,
+            month_start_iso,
+            agenda_end_iso,
+            _collection_for_event(db, owner_id, item, collection_cache),
+        ))
     events_agenda.sort(key=lambda event: event.get("start_time") or "")
 
     conn = db.get_connection()

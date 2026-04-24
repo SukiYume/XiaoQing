@@ -41,17 +41,42 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
             "title": "下月活动",
             "start_time": "2026-04-02T18:00:00",
         })
-        db.insert_item({
-            "id": "ev4",
+        db.create_event_collection({
+            "id": "ev4col",
             "owner_id": owner_id,
-            "type": "event",
+            "kind": "multi_node",
             "title": "FRB2026会议",
+            "content": "",
+            "category": "学术",
+            "location": "",
             "start_time": "2026-02-20T00:00:00",
             "end_time": "2026-04-02T12:00:00",
-            "milestones": [
-                {"name": "摘要截止", "time": "2026-03-05T09:00:00"},
-                {"name": "会议开始", "time": "2026-04-01T10:00:00"},
-            ],
+        })
+        db.insert_item({
+            "id": "ev4col_m01",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "摘要截止",
+            "category": "学术",
+            "start_time": "2026-03-05T09:00:00",
+            "event_role": "multi_node_child",
+            "event_collection_id": "ev4col",
+            "event_collection_kind": "multi_node",
+            "event_index": 1,
+            "event_node_key": "m01",
+        })
+        db.insert_item({
+            "id": "ev4col_m02",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "会议开始",
+            "category": "学术",
+            "start_time": "2026-04-01T10:00:00",
+            "event_role": "multi_node_child",
+            "event_collection_id": "ev4col",
+            "event_collection_kind": "multi_node",
+            "event_index": 2,
+            "event_node_key": "m02",
         })
 
         db.insert_item({
