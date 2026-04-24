@@ -18,6 +18,7 @@ from ..core.types import PendoContext, CommandMessage
 from ..core.router import TOP_LEVEL_REDIRECTS
 from ..utils.settings_utils import resolve_default_category
 from ..utils.validators import build_remind_times_from_rules, merge_milestone_metadata
+from ..services.event_graph import EventFamily, EventGraphService
 from .event_support import (
     apply_offsets,
     calculate_remind_offsets,
@@ -104,6 +105,7 @@ class EventHandler(DbOpsMixin):
         self.db = db
         self.ai_parser = ai_parser
         self.reminder_service = reminder_service
+        self.event_graph = EventGraphService(db)
 
     async def _fetch_event_rows(self, user_id: str, start_date: str, end_date: str) -> EventRows:
         rows = await run_sync(self.db.items.get_events_for_range, user_id, start_date, end_date)
@@ -588,6 +590,10 @@ class EventHandler(DbOpsMixin):
                 "message": "❌ 请指定事件ID\n例如: /pendo event view abc12345",
             }
 
+        family = await self._load_event_family(user_id, event_id)
+        if family.kind != "missing":
+            return self._format_event_family_detail(family, event_id)
+
         single_event_id, event, error = await self._resolve_single_event_id_or_message(
             user_id, event_id, allow_series_fallback=False
         )
@@ -644,6 +650,88 @@ class EventHandler(DbOpsMixin):
         lines.append(f"\n`{event_id}`")
         lines.append(f"💡 /pendo event reminders {event_id} | /pendo event edit {event_id} <内容>")
 
+        return {"status": "success", "message": "\n".join(lines)}
+
+    async def _load_event_family(self, user_id: str, event_or_collection_id: str) -> EventFamily:
+        return await run_sync(self.event_graph.load_by_id, user_id, event_or_collection_id)
+
+    def _format_event_family_detail(
+        self, family: EventFamily, query_id: str
+    ) -> CommandMessage:
+        if family.collection and family.leaf is None:
+            collection = family.collection
+            children = family.children
+            kind_label = "多时间节点事件" if collection.get("kind") == "multi_node" else "重复日程"
+            lines = [
+                f"📋 **{collection.get('title') or '无标题'}**",
+                "",
+                f"🗺️ {kind_label} ({len(children)}个节点)",
+            ]
+            if collection.get("location"):
+                lines.append(f"📍 {collection['location']}")
+            if collection.get("notes"):
+                lines.append(f"📝 {collection['notes']}")
+            if collection.get("tags"):
+                lines.append(f"🏷️ {', '.join(collection['tags'])}")
+            lines.append("")
+            for child in children:
+                child_time = ItemFormatter.format_datetime(
+                    child.start_time or "",
+                    "%m月%d日 %H:%M",
+                )
+                lines.append(f"  📌 {child_time} {child.title or '无标题'} `{child.id}`")
+            lines.append("")
+            lines.append(f"`{collection['id']}`")
+            lines.append(f"💡 /pendo event edit {collection['id']} <内容> 编辑标题/元信息")
+            return {"status": "success", "message": "\n".join(lines)}
+
+        if family.leaf is None:
+            return {"status": "error", "message": f"❌ 找不到日程 {query_id}"}
+
+        event = family.leaf
+        collection = family.collection
+        title = event.title or "无标题"
+        remind_times = parse_remind_times(event.remind_times)
+        lines = [f"📋 **{title}**", ""]
+
+        if collection:
+            lines.append(f"🗓️ 所属: {collection.get('title') or '无标题'}")
+            lines.append("📌 节点日程" if collection.get("kind") == "multi_node" else "🔄 重复实例")
+        else:
+            lines.append("📆 单次事件")
+        lines.append(f"⏰ {ItemFormatter.format_time_range(event.start_time, event.end_time)}")
+
+        if event.location:
+            lines.append(f"📍 {event.location}")
+        if event.notes:
+            lines.append(f"📝 {event.notes}")
+        if event.tags:
+            lines.append(f"🏷️ {', '.join(event.tags)}")
+
+        lines.append("")
+        if remind_times:
+            lines.append(f"🔔 提醒 ({len(remind_times)}个):")
+            for t in remind_times[:5]:
+                lines.append(f"  ⏰ {ItemFormatter.format_datetime(t, '%m月%d日 %H:%M')}")
+            if len(remind_times) > 5:
+                lines.append(f"  … 共{len(remind_times)}个提醒")
+        else:
+            lines.append("🔔 未设置提醒")
+
+        if collection and family.children:
+            siblings = [child for child in family.children if child.id != event.id]
+            if siblings:
+                lines.append("")
+                lines.append("同组其他节点:")
+                for sibling in siblings:
+                    sibling_time = ItemFormatter.format_datetime(
+                        sibling.start_time or "",
+                        "%m月%d日 %H:%M",
+                    )
+                    lines.append(f"  • {sibling_time} {sibling.title or '无标题'} `{sibling.id}`")
+
+        lines.append(f"\n`{event.id}`")
+        lines.append(f"💡 /pendo event reminders {event.id} | /pendo event edit {event.id} <内容>")
         return {"status": "success", "message": "\n".join(lines)}
 
     _CN_WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -732,6 +820,25 @@ class EventHandler(DbOpsMixin):
         text += f" `{event.id}`\n"
         return date_str, text
 
+    @staticmethod
+    def _format_graph_list_item(
+        event: EventItem,
+        current_dt: datetime,
+        collection: dict[str, Any],
+    ) -> tuple[str | None, str]:
+        if not event.start_time:
+            return None, ""
+        ev_start_dt = datetime.fromisoformat(event.start_time)
+        date_str = ev_start_dt.strftime("%Y-%m-%d")
+        time_str = ItemFormatter.format_time_range(event.start_time, event.end_time)
+        collection_title = collection.get("title") or "无标题"
+        marker = "📌" if collection.get("kind") == "multi_node" else "🔄"
+        text = f"• {time_str} {collection_title} · {event.title or '无标题'} {marker}"
+        if event.location:
+            text += f" @ {ItemFormatter.truncate_content(event.location, 15)}"
+        text += f" `{event.id}`\n"
+        return date_str, text
+
     async def list_events(
         self, user_id: str, time_range: str, context: PendoContext
     ) -> CommandMessage:
@@ -811,10 +918,23 @@ class EventHandler(DbOpsMixin):
             message = f"🗓️ **{title}**{filter_suffix} (共{len(events)}项)\n"
             current_date = None
             current_dt = now_in_timezone(user_id, self.db)
+            collection_cache: dict[str, dict[str, Any] | None] = {}
 
             for event in events:
                 milestones = event.milestones if hasattr(event, "milestones") else []
-                if milestones and len(milestones) >= 2:
+                collection = None
+                if getattr(event, "event_collection_id", None):
+                    collection_id = cast(str, event.event_collection_id)
+                    if collection_id not in collection_cache:
+                        collection_cache[collection_id] = self.db.items.get_event_collection(
+                            collection_id,
+                            user_id,
+                        )
+                    collection = collection_cache[collection_id]
+
+                if collection:
+                    date_str, text = self._format_graph_list_item(event, current_dt, collection)
+                elif milestones and len(milestones) >= 2:
                     date_str, text = self._format_milestone_list_item(
                         event, milestones, start_dt, end_dt, current_dt
                     )
@@ -844,6 +964,12 @@ class EventHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 用法: /pendo event edit <id> <修改内容>"}
 
         event_id, changes = parts[0], parts[1]
+        family = await self._load_event_family(user_id, event_id)
+        if family.collection and family.leaf is None:
+            return await self._edit_collection(user_id, family, changes)
+        if family.leaf is not None:
+            return await self._edit_single_instance(user_id, family.leaf.id, changes)
+
         single_event_id, _, error = await self._resolve_single_event_id_or_message(
             user_id, event_id, allow_series_fallback=True
         )
@@ -852,6 +978,52 @@ class EventHandler(DbOpsMixin):
         if single_event_id:
             return await self._edit_single_instance(user_id, single_event_id, changes)
         return await self._edit_all_instances(user_id, event_id, changes)
+
+    async def _edit_collection(
+        self, user_id: str, family: EventFamily, changes: str
+    ) -> CommandMessage:
+        collection = family.collection
+        if not collection:
+            return {"status": "error", "message": "❌ 找不到日程集合"}
+
+        pseudo = EventItem(
+            id=str(collection["id"]),
+            owner_id=user_id,
+            title=str(collection.get("title") or ""),
+            content=str(collection.get("content") or ""),
+            category=str(collection.get("category") or "未分类"),
+            location=str(collection.get("location") or ""),
+            tags=list(collection.get("tags") or []),
+            notes=str(collection.get("notes") or ""),
+            start_time=collection.get("start_time"),
+            end_time=collection.get("end_time"),
+        )
+        updates = await self._parse_updates(changes, pseudo)
+        allowed = {"title", "content", "category", "location", "tags", "notes"}
+        collection_updates = {k: v for k, v in updates.items() if k in allowed}
+        if not collection_updates:
+            return {"status": "warning", "message": "⚠️ 未识别到有效的集合元信息修改"}
+
+        success = await run_sync(
+            self.db.items.update_event_collection,
+            collection["id"],
+            collection_updates,
+            user_id,
+        )
+        if not success:
+            return {"status": "error", "message": f"❌ 更新失败: {collection['id']}"}
+
+        await self._db_log_operation(
+            user_id=user_id,
+            action="edit_event_collection",
+            item_type="event",
+            item_id=collection["id"],
+            details={"updates": collection_updates},
+        )
+        return {
+            "status": "success",
+            "message": f"✅ 已更新日程集合: {collection_updates.get('title', collection.get('title') or '无标题')}",
+        }
 
     async def _edit_single_instance(
         self, user_id: str, instance_id: str, changes: str
@@ -1120,6 +1292,12 @@ class EventHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 请指定要删除的日程ID"}
 
         event_id = event_id.strip()
+        family = await self._load_event_family(user_id, event_id)
+        if family.collection and family.leaf is None:
+            return await self._delete_collection(user_id, family)
+        if family.leaf is not None:
+            return await self._delete_single_instance(user_id, family.leaf.id)
+
         single_event_id, _, error = await self._resolve_single_event_id_or_message(
             user_id, event_id, allow_series_fallback=True
         )
@@ -1131,6 +1309,29 @@ class EventHandler(DbOpsMixin):
         # 父ID：删除所有实例
         return await self._delete_all_instances(user_id, event_id)
 
+    async def _delete_collection(self, user_id: str, family: EventFamily) -> CommandMessage:
+        collection = family.collection
+        if not collection:
+            return {"status": "error", "message": "❌ 找不到日程集合"}
+        await run_sync(
+            lambda: self.db.items.delete_event_collection(
+                collection["id"],
+                user_id,
+                cascade=True,
+            )
+        )
+        await self._db_log_operation(
+            user_id=user_id,
+            action="delete_event_collection",
+            item_type="event",
+            item_id=collection["id"],
+            details={"child_ids": [child.id for child in family.children]},
+        )
+        return {
+            "status": "success",
+            "message": f"🗑️ 已删除日程集合: {collection.get('title') or '无标题'}\n📊 共删除 {len(family.children)} 个节点",
+        }
+
     async def _delete_single_instance(self, user_id: str, instance_id: str) -> CommandMessage:
         """删除单个实例"""
         event = cast(EventItem | None, await self._db_get_item(instance_id, owner_id=user_id))
@@ -1138,6 +1339,18 @@ class EventHandler(DbOpsMixin):
             return {"status": "error", "message": f"❌ 找不到日程 {instance_id}"}
 
         await self._db_soft_delete_with_log(instance_id, user_id, item_type=ItemType.EVENT.value)
+
+        collection_id = getattr(event, "event_collection_id", None)
+        if collection_id and getattr(event, "event_collection_kind", None) == "multi_node":
+            remaining = await run_sync(self.db.items.get_collection_events, collection_id, user_id)
+            if not remaining:
+                await run_sync(
+                    lambda: self.db.items.delete_event_collection(
+                        collection_id,
+                        user_id,
+                        cascade=False,
+                    )
+                )
 
         e_title = event.title
         return {
@@ -1261,6 +1474,12 @@ class EventHandler(DbOpsMixin):
     async def _resolve_events_for_reminder_command(
         self, user_id: str, query_id: str
     ) -> tuple[list[EventItem], CommandMessage | None]:
+        family = await self._load_event_family(user_id, query_id)
+        if family.collection and family.leaf is None:
+            return family.children, None
+        if family.leaf is not None:
+            return [family.leaf], None
+
         single_event_id, event, error = await self._resolve_single_event_id_or_message(
             user_id, query_id, allow_series_fallback=True
         )
@@ -1354,6 +1573,10 @@ class EventHandler(DbOpsMixin):
 
         event_id, reminder_desc = parts[0].strip(), parts[1].strip()
 
+        family = await self._load_event_family(user_id, event_id)
+        if family.collection and family.leaf is None:
+            return await self._set_collection_reminders(user_id, family, reminder_desc)
+
         event, wrong_type = await self._db_get_typed_item_or_message(
             event_id, user_id, ItemType.EVENT.value, "日程"
         )
@@ -1412,6 +1635,56 @@ class EventHandler(DbOpsMixin):
             lines.append(f"  ⏰ {ItemFormatter.format_datetime(t, '%m月%d日 %H:%M')}")
         lines.append(f"\n💡 用 /pendo event reminders {event_id} 查看详情")
         return {"status": "success", "message": "\n".join(lines)}
+
+    async def _set_collection_reminders(
+        self,
+        user_id: str,
+        family: EventFamily,
+        reminder_desc: str,
+    ) -> CommandMessage:
+        collection = family.collection
+        if not collection:
+            return {"status": "error", "message": "❌ 找不到日程集合"}
+        if not family.children:
+            return {"status": "warning", "message": "⚠️ 该日程集合没有可设置提醒的节点"}
+
+        try:
+            reminder_rules = await run_sync(
+                self.ai_parser.build_reminder_rules_from_description,
+                reminder_desc,
+            )
+        except Exception as e:
+            logger.exception("解析提醒描述失败: %s", e)
+            return {"status": "error", "message": f"❌ 解析提醒描述失败: {e}"}
+
+        if not reminder_rules:
+            return {
+                "status": "error",
+                "message": '❌ 未能从描述中解析出提醒时间，请尝试: "提前1天" "提前2小时30分钟" 等',
+            }
+
+        for child in family.children:
+            await self._db_update_item(
+                child.id,
+                {
+                    "reminder_rules": reminder_rules,
+                    "remind_times": build_remind_times_from_rules(child.start_time, reminder_rules),
+                },
+                owner_id=user_id,
+            )
+        await run_sync(
+            self.db.items.update_event_collection,
+            collection["id"],
+            {"reminder_rules": reminder_rules},
+            user_id,
+        )
+        return {
+            "status": "success",
+            "message": (
+                f"✅ 已更新日程集合提醒: {collection.get('title') or '无标题'}\n"
+                f"📊 共更新 {len(family.children)} 个节点"
+            ),
+        }
 
     async def list_reminders(
         self, user_id: str, args: str, context: PendoContext
@@ -1476,7 +1749,17 @@ class EventHandler(DbOpsMixin):
                             message += f"    ⏰ {t_str} {status}\n"
                 else:
                     time_str = ItemFormatter.format_datetime(event.start_time or "", "%m月%d日 %H:%M")
-                    message += f"\n🗓️ {time_str} {event.title or '无标题'} `{event.id}`\n"
+                    display_title = event.title or "无标题"
+                    if getattr(event, "event_collection_id", None):
+                        collection = self.db.items.get_event_collection(
+                            event.event_collection_id,
+                            user_id,
+                        )
+                        if collection:
+                            display_title = (
+                                f"{collection.get('title') or '无标题'} · {display_title}"
+                            )
+                    message += f"\n🗓️ {time_str} {display_title} `{event.id}`\n"
                     for t in remind_times:
                         t_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
                         status = get_remind_status(log_map.get(t))
@@ -1495,6 +1778,12 @@ class EventHandler(DbOpsMixin):
         - 实例ID (parent_YYYYMMDD): 查询单个实例
         - 父ID (8位，有parent_id的事件): 显示所有实例的提醒汇总
         """
+        family = await self._load_event_family(user_id, query_id)
+        if family.collection and family.leaf is None:
+            return self._format_collection_reminders(family)
+        if family.collection and family.leaf is not None:
+            return self._format_leaf_reminders_with_collection(family)
+
         # 先尝试直接获取
         item = await self._db_get_item(query_id, owner_id=user_id)
         if item:
@@ -1541,6 +1830,60 @@ class EventHandler(DbOpsMixin):
                 builder.add_line(f"     ⏰ 无提醒")
             builder.add_line(f"     🆔 `{instance.id}`")
 
+        return {"status": "success", "message": builder.build()}
+
+    def _format_leaf_reminders_with_collection(self, family: EventFamily) -> CommandMessage:
+        event = family.leaf
+        collection = family.collection
+        if event is None or collection is None:
+            return {"status": "error", "message": "❌ 找不到日程"}
+        log_map = self._build_log_map(event.id)
+        remind_times = parse_remind_times(event.remind_times)
+        if not remind_times:
+            return {
+                "status": "info",
+                "message": (
+                    f"🔔 日程: {collection.get('title') or '无标题'} · {event.title or '无标题'}\n\n"
+                    "未设置提醒"
+                ),
+            }
+
+        builder = MessageBuilder()
+        builder.add_line(f"🔔 **{collection.get('title') or '无标题'}**")
+        builder.add_line(f"📌 {event.title or '无标题'}")
+        builder.add_line(
+            f"🗓️ 节点时间: {ItemFormatter.format_datetime(event.start_time or '', '%m月%d日 %H:%M')}"
+        )
+        builder.add_line("─" * 30)
+        status_labels = {"✅": "✅ 已确认", "📩": "📩 已发送未确认", "⏳": "⏳ 待发送"}
+        for index, remind_time in enumerate(remind_times, 1):
+            time_str = ItemFormatter.format_datetime(remind_time, "%m月%d日 %H:%M")
+            status = status_labels[get_remind_status(log_map.get(remind_time))]
+            builder.add_line(f"⏰ **提醒 {index}**: {time_str}  {status}")
+        return {"status": "success", "message": builder.build()}
+
+    def _format_collection_reminders(self, family: EventFamily) -> CommandMessage:
+        collection = family.collection
+        if not collection:
+            return {"status": "error", "message": "❌ 找不到日程集合"}
+        builder = MessageBuilder()
+        builder.add_line(f"🔔 **{collection.get('title') or '无标题'}** 的提醒列表")
+        builder.add_line(f"📊 共 {len(family.children)} 个节点")
+        builder.add_line("─" * 30)
+        for index, child in enumerate(family.children, 1):
+            remind_times = parse_remind_times(child.remind_times)
+            builder.add_blank()
+            child_time = ItemFormatter.format_datetime(child.start_time or "", "%m月%d日 %H:%M")
+            builder.add_line(f"**{index}.** 📌 {child_time} {child.title or '无标题'}")
+            if not remind_times:
+                builder.add_line("     ⏰ 无提醒")
+            else:
+                log_map = self._build_log_map(child.id)
+                for remind_time in remind_times:
+                    formatted_time = ItemFormatter.format_datetime(remind_time, "%m-%d %H:%M")
+                    status = get_remind_status(log_map.get(remind_time))
+                    builder.add_line(f"     ⏰ {formatted_time} {status}")
+            builder.add_line(f"     🆔 `{child.id}`")
         return {"status": "success", "message": builder.build()}
 
     # ==================== 辅助方法 ====================
@@ -1840,15 +2183,14 @@ class EventHandler(DbOpsMixin):
         return hour
 
     def _looks_like_id(self, text: str) -> bool:
-        """判断是否像ID（8位十六进制字符，或 8位十六进制_YYYYMMDD日期数字）"""
+        """判断是否像ID（collection id、recurring occurrence id 或 node id）"""
         if not text:
             return False
         if "_" in text:
             parts = text.rsplit("_", 1)
-            # L-2修复：使用正则代替 len()==8 判断，更健壮且易扩展
             return (
                 re.match(r"^[0-9a-f]{8}$", parts[0]) is not None
-                and re.match(r"^\d{8}$", parts[1]) is not None
+                and re.match(r"^(\d{8}|m\d{2,})$", parts[1]) is not None
             )
         return re.match(r"^[0-9a-f]{8}$", text) is not None
 
