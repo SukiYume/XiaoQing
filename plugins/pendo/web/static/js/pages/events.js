@@ -615,6 +615,24 @@ function kindPill(kind) {
     return '<span class="events-pill kind-single">单次事件</span>';
 }
 
+function detailActionNoun(event) {
+    if (
+        event?.kind === 'multi_node'
+        || event?.event_role === 'multi_node_child'
+        || event?.event_collection_kind === 'multi_node'
+    ) {
+        return '节点';
+    }
+    if (
+        event?.kind === 'recurring'
+        || event?.event_role === 'recurring_occurrence'
+        || event?.event_collection_kind === 'recurring'
+    ) {
+        return '实例';
+    }
+    return '事件';
+}
+
 function renderTimelineEntries(items) {
     if (!items.length) {
         return '';
@@ -1215,12 +1233,13 @@ export async function openEventDetail(eventId) {
         const res = await api.get(`/events/${eventId}/detail`);
         const detail = res.data;
         const event = detail.event;
+        const actionNoun = detailActionNoun(event);
         const content = showModal('日程详情', renderDetailBody(detail), {
             footer: `
                 <button class="btn btn-secondary" id="events-detail-close">关闭</button>
                 ${event.collection ? '<button class="btn btn-secondary" id="events-detail-group">管理整体</button>' : ''}
-                <button class="btn btn-primary" id="events-detail-edit">编辑节点</button>
-                <button class="btn btn-danger" id="events-detail-delete">删除节点</button>
+                <button class="btn btn-primary" id="events-detail-edit">编辑${actionNoun}</button>
+                <button class="btn btn-danger" id="events-detail-delete">删除${actionNoun}</button>
             `,
         });
         content.querySelector('#events-detail-close').onclick = closeModal;
