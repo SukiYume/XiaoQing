@@ -9,6 +9,7 @@ from ...models.item import ItemType
 from ...utils.settings_utils import resolve_default_category
 from ...utils.time_utils import now_in_timezone
 from ...utils.validators import (
+    derive_reminder_rules,
     merge_milestone_metadata,
     normalize_diary_fields,
     normalize_event_fields,
@@ -46,6 +47,7 @@ EVENT_MUTABLE_FIELDS = {
     "location",
     "timezone",
     "remind_times",
+    "reminder_rules",
     "milestones",
     "rrule",
     "notes",
@@ -94,6 +96,7 @@ class ItemCreate(BaseModel):
     location: Optional[str] = None
     timezone: Optional[str] = None
     remind_times: Optional[list[str]] = None
+    reminder_rules: Optional[list[dict]] = None
     milestones: Optional[list[dict]] = None
     rrule: Optional[str] = None
     notes: Optional[str] = None
@@ -125,6 +128,7 @@ class ItemUpdate(BaseModel):
     location: Optional[str] = None
     timezone: Optional[str] = None
     remind_times: Optional[list[str]] = None
+    reminder_rules: Optional[list[dict]] = None
     milestones: Optional[list[dict]] = None
     rrule: Optional[str] = None
     notes: Optional[str] = None
@@ -464,6 +468,16 @@ def update_item(
     if item_type == "event":
         try:
             merged = item.to_dict()
+            if "reminder_rules" in updates and updates.get("reminder_rules") == []:
+                merged["remind_times"] = []
+                updates["remind_times"] = []
+            elif "start_time" in updates and "reminder_rules" not in updates:
+                old_rules = getattr(item, "reminder_rules", None) or derive_reminder_rules(
+                    getattr(item, "start_time", None),
+                    getattr(item, "remind_times", None),
+                )
+                if old_rules:
+                    merged["reminder_rules"] = old_rules
             if "milestones" in updates:
                 updates["milestones"] = merge_milestone_metadata(
                     getattr(item, "milestones", None) or [],

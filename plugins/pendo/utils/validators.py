@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 import re
 from typing import Any, Optional
 
+DEFAULT_EVENT_REMINDER_RULES = [{"offset_seconds": 0}]
+
+
 def sanitize_text(text: str, max_length: int = 10000) -> str:
     """清洗文本输入
     
@@ -354,6 +357,14 @@ def normalize_reminder_rules(value: Any) -> list[dict[str, int]]:
     return [{"offset_seconds": offset} for offset in sorted(offsets, reverse=True)]
 
 
+def with_start_time_reminder_rule(rules: Any) -> list[dict[str, int]]:
+    """Normalize rules and ensure the event start itself is included."""
+    normalized = normalize_reminder_rules(rules)
+    if not any(rule["offset_seconds"] == 0 for rule in normalized):
+        normalized.append({"offset_seconds": 0})
+    return normalize_reminder_rules(normalized)
+
+
 def derive_reminder_rules(start_time: Any, remind_times: Any) -> list[dict[str, int]]:
     """Derive relative reminder rules from absolute reminder timestamps."""
     if not start_time or not remind_times:
@@ -451,6 +462,8 @@ def merge_milestone_metadata(
 def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
     """规范化并验证 event 字段。"""
     normalized = dict(data)
+    reminder_rules_provided = "reminder_rules" in normalized
+    remind_times_provided = "remind_times" in normalized
 
     title = normalized.get("title")
     if not partial or title is not None:
@@ -577,19 +590,45 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
 
     has_rules = bool(normalized.get("reminder_rules"))
     has_reminders = bool(normalized.get("remind_times"))
+    explicitly_cleared = (
+        (reminder_rules_provided and not has_rules and (not remind_times_provided or not has_reminders))
+        or (remind_times_provided and not has_reminders and (not reminder_rules_provided or not has_rules))
+    )
+
+    if milestones:
+        if reminder_rules_provided:
+            normalized["reminder_rules"] = normalize_reminder_rules(
+                normalized.get("reminder_rules")
+            )
+        elif "reminder_rules" not in normalized:
+            normalized["reminder_rules"] = []
+        return normalized
+
     if has_rules:
         normalized["remind_times"] = build_remind_times_from_rules(
             normalized["start_time"],
             normalized["reminder_rules"],
         )
     elif has_reminders:
-        normalized["reminder_rules"] = derive_reminder_rules(
-            normalized["start_time"],
-            normalized["remind_times"],
+        normalized["reminder_rules"] = with_start_time_reminder_rule(
+            derive_reminder_rules(
+                normalized["start_time"],
+                normalized["remind_times"],
+            )
         )
-    elif not partial:
+        normalized["remind_times"] = build_remind_times_from_rules(
+            normalized["start_time"],
+            normalized["reminder_rules"],
+        )
+    elif explicitly_cleared:
         normalized["reminder_rules"] = []
         normalized["remind_times"] = []
+    elif not partial:
+        normalized["reminder_rules"] = [dict(rule) for rule in DEFAULT_EVENT_REMINDER_RULES]
+        normalized["remind_times"] = build_remind_times_from_rules(
+            normalized["start_time"],
+            normalized["reminder_rules"],
+        )
 
     return normalized
 
