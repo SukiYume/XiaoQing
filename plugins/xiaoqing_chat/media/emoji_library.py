@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import random
 import shutil
 import time
 from copy import deepcopy
@@ -16,6 +15,7 @@ from ..task_scheduler import _spawn_bg_task
 _SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 _PENDING_DIR_NAME = "pending"
 _EMOJI_REPAIR_TASKS: set[str] = set()
+_LIBRARY_CACHE: dict[str, tuple[tuple[float, float], list["EmojiLibraryEntry"]]] = {}
 
 if TYPE_CHECKING:
     from .event_media import RenderedMedia
@@ -63,6 +63,35 @@ def _emoji_index_path(context, runtime) -> Path:
     return resolve_emoji_library_dir(context, runtime) / "index.json"
 
 
+def _library_cache_key(context, runtime) -> str:
+    library_dir = resolve_emoji_library_dir(context, runtime)
+    if library_dir is None:
+        return ""
+    try:
+        return str(library_dir.resolve())
+    except OSError:
+        return str(library_dir)
+
+
+def _library_signature(context, runtime) -> tuple[float, float] | None:
+    library_dir = resolve_emoji_library_dir(context, runtime)
+    if library_dir is None:
+        return None
+    index_path = library_dir / "index.json"
+    try:
+        dir_mtime = library_dir.stat().st_mtime if library_dir.exists() else -1.0
+        index_mtime = index_path.stat().st_mtime if index_path.exists() else -1.0
+    except OSError:
+        return None
+    return float(dir_mtime), float(index_mtime)
+
+
+def _invalidate_library_cache(context, runtime) -> None:
+    key = _library_cache_key(context, runtime)
+    if key:
+        _LIBRARY_CACHE.pop(key, None)
+
+
 def _load_index(context, runtime) -> dict[str, Any]:
     payload = load_json(_emoji_index_path(context, runtime), default={"entries": {}})
     entries = payload.get("entries")
@@ -75,6 +104,7 @@ def _save_index(context, runtime, payload: dict[str, Any]) -> None:
     index_path = _emoji_index_path(context, runtime)
     ensure_dir(index_path.parent)
     write_json(index_path, payload)
+    _invalidate_library_cache(context, runtime)
 
 
 def _save_index_if_changed(
@@ -511,6 +541,13 @@ async def load_emoji_library(
     if library_dir is None:
         return []
 
+    cache_key = _library_cache_key(context, runtime)
+    cache_signature = _library_signature(context, runtime)
+    if repair_invalid and not schedule_background_repair and cache_key and cache_signature is not None:
+        cached = _LIBRARY_CACHE.get(cache_key)
+        if cached is not None and cached[0] == cache_signature:
+            return list(cached[1])
+
     payload = _load_index(context, runtime)
     original_payload = deepcopy(payload)
     files = _iter_library_files(library_dir)
@@ -630,6 +667,10 @@ async def load_emoji_library(
     )
     if repair_needed and schedule_background_repair and not repair_invalid:
         schedule_emoji_library_repair(context, runtime)
+    if repair_invalid and not schedule_background_repair and cache_key:
+        updated_signature = _library_signature(context, runtime)
+        if updated_signature is not None:
+            _LIBRARY_CACHE[cache_key] = (updated_signature, list(results))
     return results
 
 
