@@ -5,6 +5,8 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 import aiohttp
 
+from ..utils.json_parsing import normalize_response_content
+
 
 class LLMError(RuntimeError):
     pass
@@ -39,9 +41,7 @@ def extract_response_message(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def extract_response_content(data: dict[str, Any]) -> str:
-    msg = extract_response_message(data)
-    content = msg.get("content")
-    return content.strip() if isinstance(content, str) else ""
+    return normalize_response_content(data)
 
 
 def extract_response_finish_reason(data: dict[str, Any]) -> str:

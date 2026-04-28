@@ -30,6 +30,7 @@ from .helper_utils import (
     _get_bot_name,
     _get_llm_secrets,
     _is_private,
+    _most_recent_user_local_id,
     _replace_local_ids_with_text,
     _resolve_llm_config,
 )
@@ -38,19 +39,33 @@ from .llm.llm_client import LLMError, chat_completions_with_fallback_paths
 from .llm.postprocess import join_reply, process_llm_response
 from .llm.prompt_builder import ChatMessage, build_dialogue_prompt, build_prompt_messages
 from .llm.reply_checker import ReplyCheckResult, ReplyRejected, _heuristic_check, check_reply
-from .llm.rewrite import maybe_rewrite_reply
-from .message_parts import build_text_message_parts, normalize_message_parts
-from .media.emoji_reply import plan_emoji_reply
-from .media.image_reply import plan_image_reply
-from .media.qq_face_reply import plan_qq_face_reply
+from .message_parts import build_text_message_parts, merge_reply_media_parts, normalize_message_parts
+from .media.marker_resolver import (
+    ResolvedMarker,
+    marker_media_part,
+    parse_marker,
+    resolve_marker,
+    strip_marker,
+    strip_outbound_marker_residue,
+    text_without_outbound_marker,
+)
 from .memory.review_sessions import build_policy_block
 from .planning.planner import PlannedAction
-from .reply_media_helpers import merge_selected_reply_media_parts, resolve_reply_media_selection
 from .reply_payload import build_reply_payload_from_parts
 
 
 _RE_GOAL = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,120})")
 _SAFE_FORCED_REPLY_FALLBACK = "嗯，我先换个说法。"
+
+
+def _is_turn_stale(chat_id: str, event: dict[str, Any]) -> bool:
+    local_id = str(event.get("_xc_user_recorded_local_id") or "").strip()
+    if not local_id:
+        return False
+    try:
+        return _most_recent_user_local_id(chat_id) != local_id
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
@@ -60,9 +75,7 @@ class ReplyDraft:
     parts: tuple[dict[str, Any], ...]
     raw_text: str = ""
     rewritten_text: str = ""
-    image_plan: Any = None
-    emoji_plan: Any = None
-    face_plan: Any = None
+    media_marker: ResolvedMarker | None = None
 
 
 def _normalize_reply_text_parts(values: Any) -> tuple[str, ...]:
@@ -117,169 +130,34 @@ def _draft_has_media(parts: Any) -> bool:
     )
 
 
-def _media_planner_timeout_seconds(media_cfg: Any) -> float:
-    try:
-        timeout = float(getattr(media_cfg, "reply_media_timeout_seconds", 2.0))
-    except (TypeError, ValueError):
-        return 2.0
-    return max(0.0, timeout)
-
-
-async def _attach_reply_media(
+async def _attach_reply_media_marker(
     draft: ReplyDraft,
     *,
     context,
     runtime,
     history,
-    user_text: str,
-    secrets: dict[str, Any] | None,
+    resolved_marker: ResolvedMarker | None = None,
     chat_id: str,
 ) -> ReplyDraft:
-    if not draft.text or _draft_has_media(draft.parts):
+    if resolved_marker is None or _draft_has_media(draft.parts):
         return draft
 
-    media_cfg = getattr(getattr(runtime, "cfg", None), "media", None)
-    if media_cfg is None:
+    media_part = marker_media_part(context, resolved_marker)
+    if media_part is None:
         return draft
 
-    enable_emoji = bool(getattr(media_cfg, "enable_outbound_emoji_reply", False))
-    enable_image = bool(getattr(media_cfg, "enable_outbound_image_reply", False))
-    enable_face = bool(getattr(media_cfg, "enable_outbound_face_reply", False))
-    if not enable_emoji and not enable_image and not enable_face:
-        return draft
-
-    planner_tasks: list[tuple[str, asyncio.Task[Any]]] = []
-    if enable_image:
-        planner_tasks.append(
-            (
-                "image",
-                asyncio.create_task(
-                    plan_image_reply(
-                        context=context,
-                        runtime=runtime,
-                        history=history,
-                        user_text=user_text,
-                        reply_text=draft.text,
-                        secrets=secrets or {},
-                        chat_id=chat_id,
-                    )
-                ),
-            )
-        )
-    if enable_emoji:
-        planner_tasks.append(
-            (
-                "emoji",
-                asyncio.create_task(
-                    plan_emoji_reply(
-                        context=context,
-                        runtime=runtime,
-                        history=history,
-                        user_text=user_text,
-                        reply_text=draft.text,
-                        secrets=secrets or {},
-                        chat_id=chat_id,
-                    )
-                ),
-            )
-        )
-    if enable_face:
-        planner_tasks.append(
-            (
-                "face",
-                asyncio.create_task(
-                    plan_qq_face_reply(
-                        context=context,
-                        runtime=runtime,
-                        history=history,
-                        user_text=user_text,
-                        reply_text=draft.text,
-                        secrets=secrets or {},
-                        chat_id=chat_id,
-                    )
-                ),
-            )
-        )
-
-    if not planner_tasks:
-        return draft
-
-    image_plan = None
-    emoji_plan = None
-    face_plan = None
-    task_names = {task: kind for kind, task in planner_tasks}
-    done, pending = await asyncio.wait(
-        tuple(task_names),
-        timeout=_media_planner_timeout_seconds(media_cfg),
+    merged_parts = merge_reply_media_parts(
+        draft.parts,
+        (media_part,),
+        suppress_text=False,
     )
-    if pending:
-        pending_names = sorted(task_names[task] for task in pending)
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        _log_step(
-            context=context,
-            runtime=runtime,
-            chat_id=chat_id,
-            step="reply.media.plan.timeout",
-            fields={
-                "pending": ",".join(pending_names),
-                "timeout_seconds": f"{_media_planner_timeout_seconds(media_cfg):.3f}",
-            },
-        )
-
-    for kind, task in planner_tasks:
-        if task not in done:
-            continue
-        try:
-            result = task.result()
-        except asyncio.CancelledError as exc:
-            result = exc
-        except Exception as exc:
-            result = exc
-        if isinstance(result, (Exception, asyncio.CancelledError)):
-            _log_step(
-                context=context,
-                runtime=runtime,
-                chat_id=chat_id,
-                step="reply.media.plan.error",
-                fields={
-                    "planner": kind,
-                    "error": f"{type(result).__name__}: {result}",
-                },
-            )
-            continue
-        if kind == "image":
-            image_plan = result
-        elif kind == "emoji":
-            emoji_plan = result
-        elif kind == "face":
-            face_plan = result
-
-    if image_plan is None and emoji_plan is None and face_plan is None:
-        return draft
-
-    selection = resolve_reply_media_selection(
-        context,
-        runtime=runtime,
-        user_text=user_text,
-        image_plan=image_plan,
-        emoji_plan=emoji_plan,
-        face_plan=face_plan,
-    )
-    if not selection.media_parts:
-        return draft
-
-    merged_parts = merge_selected_reply_media_parts(draft.parts, selection)
     return ReplyDraft(
-        text=draft.text,
+        text=draft.text or resolved_marker.marker,
         text_parts=draft.text_parts,
         parts=merged_parts,
         raw_text=draft.raw_text,
         rewritten_text=draft.rewritten_text,
-        image_plan=selection.image_plan,
-        emoji_plan=selection.emoji_plan,
-        face_plan=selection.face_plan,
+        media_marker=resolved_marker,
     )
 
 
@@ -372,7 +250,6 @@ async def _generate_reply_draft(
     request_id = str(getattr(context, "request_id", "") or "")
     regen_used = 0
     extra_check_hint = ""
-    last_rejected_reply: Optional[str] = None
     _prefetched_mem = prefetched_memory_task
     _cached_memory: Optional[str] = None
 
@@ -455,6 +332,9 @@ async def _generate_reply_draft(
     effective_style = style_override or get_brain_chat_reply_style(runtime, is_brain_chat)
 
     while True:
+        if _is_turn_stale(chat_id, event):
+            _log_step(context, runtime, chat_id=chat_id, step="reply.stale.abort", fields={})
+            return None
         trimmed_history = history[-max_items:] if max_items > 0 else []
 
         # Memory block: use prefetched (from parallel PFC), cached (regen), or fetch new
@@ -546,6 +426,9 @@ async def _generate_reply_draft(
                 max_tokens=runtime.cfg.max_tokens,
                 **fg.to_dict(),
             )
+            if _is_turn_stale(chat_id, event):
+                _log_step(context, runtime, chat_id=chat_id, step="reply.stale.abort", fields={})
+                return None
             _log_step(
                 context,
                 runtime,
@@ -579,9 +462,10 @@ async def _generate_reply_draft(
             )
             raise
 
-        # ── Pre-heuristic: fast check on raw reply to skip rewrite if bad ──
+        # ── Pre-heuristic: fast local check before checker / replan. ──
         if raw and runtime.cfg.reply_check.enable_reply_checker:
-            _raw_parts = process_llm_response(raw, runtime.cfg.postprocess, bot_name=bot_name)
+            _precheck_text = text_without_outbound_marker(raw)
+            _raw_parts = process_llm_response(_precheck_text, runtime.cfg.postprocess, bot_name=bot_name)
             _raw_draft = _build_reply_draft(_raw_parts, raw_text=raw, rewritten_text=raw)
             if _raw_draft is not None:
                 _pre_h = _heuristic_check(
@@ -597,10 +481,13 @@ async def _generate_reply_draft(
                         context,
                         runtime,
                         chat_id=chat_id,
-                        step="reply.pre_heuristic.reject",
-                        fields={"reason": _pre_h.reason},
+                        step="reply.checker.skip",
+                        fields={
+                            "stage": "pre_heuristic",
+                            "action": "reject",
+                            "reason": _pre_h.reason,
+                        },
                     )
-                    last_rejected_reply = _raw_draft.text
                     # Always try regen first (with feedback), even for need_replan
                     if regen_used < max(0, int(runtime.cfg.reply_check.max_regen)):
                         regen_used += 1
@@ -623,52 +510,96 @@ async def _generate_reply_draft(
                         return _forced_reply_draft()
                     return None
 
-        try:
-            rw_t0 = time.monotonic()
-            rewrite_style = effective_style
-            rewritten = await asyncio.wait_for(
-                maybe_rewrite_reply(
-                    http_session=context.http_session,
-                    secrets=secrets,
-                    cfg=runtime.cfg.rewrite,
-                    style=rewrite_style,
-                    user_text=text,
-                    reply_text=raw,
-                    temperature=chat_temperature,
-                    top_p=runtime.cfg.top_p,
-                    max_tokens=runtime.cfg.max_tokens,
-                    timeout_seconds=min(8.0, float(runtime.cfg.timeout_seconds)),
-                    max_retry=0,
-                    retry_interval_seconds=0.2,
-                    proxy=proxy,
-                    endpoint_path=endpoint_path,
-                    extra_payload=getattr(fg, "extra_payload", {}) or {},
-                ),
-                timeout=4.0,
-            )
+        parsed_marker = parse_marker(raw)
+        resolved_marker: ResolvedMarker | None = None
+        marker_text = raw
+        if parsed_marker is not None:
             _log_step(
                 context,
                 runtime,
                 chat_id=chat_id,
-                step="reply.rewrite.ok",
-                fields={
-                    "elapsed_s": round(time.monotonic() - rw_t0, 3),
-                    "rewritten_chars": len(rewritten or ""),
-                },
+                step="reply.marker.parsed",
+                fields={"kind": parsed_marker.kind, "hint": parsed_marker.hint},
             )
-        except Exception as exc:
-            rewritten = raw
-            _log_step(context, runtime, chat_id=chat_id, step="reply.rewrite.skip", fields={})
-        parts = process_llm_response(rewritten, runtime.cfg.postprocess, bot_name=bot_name)
-        draft = _build_reply_draft(parts, raw_text=raw, rewritten_text=rewritten)
+            marker_text = strip_marker(raw, parsed_marker.raw_span)
+            try:
+                resolved_marker = await resolve_marker(
+                    parsed_marker,
+                    context=context,
+                    runtime=runtime,
+                    history=trimmed_history,
+                )
+            except Exception as exc:
+                _log_step(
+                    context,
+                    runtime,
+                    chat_id=chat_id,
+                    step="reply.marker.miss",
+                    fields={
+                        "kind": parsed_marker.kind,
+                        "hint": parsed_marker.hint,
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                resolved_marker = None
+            if resolved_marker is None:
+                _log_step(
+                    context,
+                    runtime,
+                    chat_id=chat_id,
+                    step="reply.marker.miss",
+                    fields={
+                        "kind": parsed_marker.kind,
+                        "hint": parsed_marker.hint,
+                        "reason": "candidate_not_found",
+                    },
+                )
+            else:
+                entry_id = (
+                    str(getattr(resolved_marker.entry, "media_hash", "") or "")
+                    or str(getattr(resolved_marker.entry, "face_id", "") or "")
+                    or str(getattr(resolved_marker.entry, "media_key", "") or "")
+                )
+                _log_step(
+                    context,
+                    runtime,
+                    chat_id=chat_id,
+                    step="reply.marker.resolved",
+                    fields={
+                        "kind": resolved_marker.kind,
+                        "hint": resolved_marker.hint,
+                        "entry_id": entry_id,
+                    },
+                )
+        else:
+            cleaned_marker_text = strip_outbound_marker_residue(raw)
+            if cleaned_marker_text != raw:
+                marker_text = cleaned_marker_text
+                _log_step(
+                    context,
+                    runtime,
+                    chat_id=chat_id,
+                    step="reply.marker.miss",
+                    fields={"kind": "", "hint": "", "reason": "parse_failed"},
+                )
+
+        parts = process_llm_response(marker_text, runtime.cfg.postprocess, bot_name=bot_name)
+        draft = _build_reply_draft(parts, raw_text=raw, rewritten_text=marker_text)
+        if draft is None and resolved_marker is not None:
+            draft = ReplyDraft(
+                text=resolved_marker.marker,
+                text_parts=(),
+                parts=(),
+                raw_text=raw,
+                rewritten_text=marker_text,
+            )
         if draft is not None:
-            draft = await _attach_reply_media(
+            draft = await _attach_reply_media_marker(
                 draft,
                 context=context,
                 runtime=runtime,
                 history=trimmed_history,
-                user_text=text,
-                secrets=secrets,
+                resolved_marker=resolved_marker,
                 chat_id=chat_id,
             )
             if runtime.cfg.reply_check.enable_reply_checker:
@@ -743,9 +674,8 @@ async def _generate_reply_draft(
                         "need_replan": bool(check.need_replan),
                         "reason": getattr(check, "reason", ""),
                     },
-                    )
+                )
                 if not check.suitable:
-                    last_rejected_reply = check_reply_text
                     # Always try regen first (with feedback), even for need_replan
                     if regen_used < max(0, int(runtime.cfg.reply_check.max_regen)):
                         regen_used += 1

@@ -12,6 +12,7 @@ class _PreparedSmalltalkTurn:
     mentioned: bool
     is_private: bool
     forced: bool
+    force_reason: str
     brain_chat_active: bool
     mood_text: str
     collected_emoji_count: int
@@ -27,9 +28,7 @@ class _GeneratedSmalltalkTurn:
     reply: str = ""
     reply_parts: tuple[dict[str, Any], ...] = ()
     reply_output: Any = None
-    image_plan: Any = None
-    emoji_plan: Any = None
-    face_plan: Any = None
+    media_marker: Any = None
 
 
 @dataclass(frozen=True)

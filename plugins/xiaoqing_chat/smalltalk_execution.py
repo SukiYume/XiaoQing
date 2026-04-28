@@ -15,6 +15,17 @@ from .planning.planned_action import PlannedAction
 from .planning.pfc_engine import PFCRunResult
 
 
+def _fallback_idle_reply(runtime) -> str:
+    candidates = [
+        str(item or "").strip()
+        for item in getattr(getattr(runtime, "cfg", None), "fallback_idle_replies", []) or []
+        if str(item or "").strip()
+    ]
+    if not candidates:
+        candidates = ["嗯", "啊这", "我在听", "你继续", "等我想下"]
+    return random.choice(candidates)
+
+
 async def generate_smalltalk_turn_impl(
     prepared,
     event: dict[str, Any],
@@ -80,7 +91,7 @@ async def generate_smalltalk_turn_impl(
         plan_reasoning = (planner_reason or "").strip()
         if extra_reason:
             plan_reasoning = (plan_reasoning + "\n" + str(extra_reason).strip()).strip()
-        out, out_parts, out_image_plan, out_emoji_plan, out_face_plan = await generate_reply_result(
+        out, out_parts, out_marker = await generate_reply_result(
             text=prepared.text,
             event=event,
             context=context,
@@ -96,9 +107,7 @@ async def generate_smalltalk_turn_impl(
             is_brain_chat=prepared.brain_chat_active,
             prefetched_memory_task=generated.speculative_memory_task,
         )
-        generated.image_plan = out_image_plan
-        generated.emoji_plan = out_emoji_plan
-        generated.face_plan = out_face_plan
+        generated.media_marker = out_marker
         generated.reply_parts = out_parts
         return out or ""
 
@@ -125,21 +134,25 @@ async def generate_smalltalk_turn_impl(
     try:
         if prepared.forced:
             generated.reply_source = "forced"
-            log_step(context, runtime, chat_id=chat_id, step="smalltalk.forced_direct", fields={})
+            log_step(
+                context,
+                runtime,
+                chat_id=chat_id,
+                step="smalltalk.forced_direct",
+                fields={"force_reason": prepared.force_reason},
+            )
             _ensure_speculative_memory_task()
             direct_act = PlannedAction(
                 action="reply",
                 think_level=think_level,
-                reasoning="用户直接发起对话，需要回复",
+                reasoning=f"用户直接发起对话，需要回复({prepared.force_reason or 'forced'})",
                 question="",
                 unknown_words=[],
             )
             (
                 generated.reply,
                 generated.reply_parts,
-                generated.image_plan,
-                generated.emoji_plan,
-                generated.face_plan,
+                generated.media_marker,
             ) = await generate_reply_result(
                 text=prepared.text,
                 event=event,
@@ -156,7 +169,7 @@ async def generate_smalltalk_turn_impl(
                 prefetched_memory_task=generated.speculative_memory_task,
             )
             if not generated.reply:
-                generated.reply = random.choice(["嗯…", "行", "我在听", "你继续", "有点卡，等下"])
+                generated.reply = _fallback_idle_reply(runtime)
                 generated.reply_parts = build_text_message_parts(generated.reply)
         else:
             if planner_enabled:
@@ -211,9 +224,7 @@ async def generate_smalltalk_turn_impl(
                 (
                     generated.reply,
                     generated.reply_parts,
-                    generated.image_plan,
-                    generated.emoji_plan,
-                    generated.face_plan,
+                    generated.media_marker,
                 ) = await generate_reply_result(
                     text=prepared.text,
                     event=event,
@@ -230,7 +241,7 @@ async def generate_smalltalk_turn_impl(
                     prefetched_memory_task=generated.speculative_memory_task,
                 )
                 if not generated.reply:
-                    generated.reply = random.choice(["嗯", "啊这", "我在听", "你继续", "等我想下"])
+                    generated.reply = _fallback_idle_reply(runtime)
                     generated.reply_parts = build_text_message_parts(generated.reply)
                 generated.pfc_result = PFCRunResult(
                     reply=generated.reply,
@@ -280,9 +291,7 @@ async def finalize_smalltalk_turn_impl(
     schedule_media_registry_flush,
     clear_store_entry,
     record_bot_reply,
-    image_action_detail,
-    emoji_action_detail,
-    face_action_detail,
+    media_action_detail,
     schedule_pfc_state_flush,
     schedule_action_history_flush,
     spawn_bg_task,
@@ -300,8 +309,20 @@ async def finalize_smalltalk_turn_impl(
     commit_error: Exception | None = None
 
     async with get_lock(chat_id):
-        if most_recent_user_local_id(chat_id) != generated.local_id:
+        latest_local_id = most_recent_user_local_id(chat_id)
+        if latest_local_id != generated.local_id:
             cancel_generated_tasks(generated)
+            log_step(
+                context,
+                runtime,
+                chat_id=chat_id,
+                step="smalltalk.stale.drop",
+                fields={
+                    "phase": "before_commit",
+                    "local_id": generated.local_id,
+                    "latest_local_id": latest_local_id,
+                },
+            )
             return []
 
     if generated.reply:
@@ -327,8 +348,20 @@ async def finalize_smalltalk_turn_impl(
 
     try:
         async with get_lock(chat_id):
-            if most_recent_user_local_id(chat_id) != generated.local_id:
+            latest_local_id = most_recent_user_local_id(chat_id)
+            if latest_local_id != generated.local_id:
                 cancel_generated_tasks(generated)
+                log_step(
+                    context,
+                    runtime,
+                    chat_id=chat_id,
+                    step="smalltalk.stale.drop",
+                    fields={
+                        "phase": "commit",
+                        "local_id": generated.local_id,
+                        "latest_local_id": latest_local_id,
+                    },
+                )
                 return []
 
             if not prepared.forced and generated.pfc_state_snapshot is not None:
@@ -354,12 +387,11 @@ async def finalize_smalltalk_turn_impl(
                     generated.local_id,
                     forced=True,
                     action_str="reply",
-                    reasoning="forced_direct",
+                    reasoning=f"forced_direct:{prepared.force_reason or 'forced'}",
                     detail={
                         "source": "forced",
-                        **image_action_detail(generated.image_plan, reply_parts),
-                        **emoji_action_detail(generated.emoji_plan, reply_parts),
-                        **face_action_detail(generated.face_plan, reply_parts),
+                        "force_reason": prepared.force_reason,
+                        **media_action_detail(generated.media_marker, reply_parts),
                     },
                     parts=reply_parts,
                 )
@@ -368,6 +400,19 @@ async def finalize_smalltalk_turn_impl(
                 if not generated.reply:
                     cancel_generated_tasks(generated)
                     await state.heartflow.on_no_reply_async(chat_id=chat_id)
+                    log_step(
+                        context,
+                        runtime,
+                        chat_id=chat_id,
+                        step="smalltalk.no_reply",
+                        fields={
+                            "reason": "pfc_no_reply",
+                            "action": str(generated.pfc_result.action or "no_reply").strip()
+                            or "no_reply",
+                            "pfc_reason": generated.pfc_result.reason,
+                            "source": generated.reply_source,
+                        },
+                    )
                     state.action_history.append(
                         chat_id,
                         ActionRecord(
@@ -402,9 +447,7 @@ async def finalize_smalltalk_turn_impl(
                         reasoning=pfc_reasoning,
                         detail={
                             "source": generated.reply_source,
-                            **image_action_detail(generated.image_plan, reply_parts),
-                            **emoji_action_detail(generated.emoji_plan, reply_parts),
-                            **face_action_detail(generated.face_plan, reply_parts),
+                            **media_action_detail(generated.media_marker, reply_parts),
                         },
                         parts=reply_parts,
                     )

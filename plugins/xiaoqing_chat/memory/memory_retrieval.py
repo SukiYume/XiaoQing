@@ -6,10 +6,11 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Sequence
 
 from ..config.config import MemoryConfig
-from ..llm.llm_client import LLMError, chat_completions_raw_with_fallback_paths
+from ..llm.control_payload import control_extra_payload
+from ..llm.llm_client import chat_completions_raw_with_fallback_paths
 from ..message_parts import render_stored_message
 from ..utils.json_parsing import parse_first_json_object
 from .memory import StoredMessage
@@ -314,6 +315,39 @@ def _tool_get_person_profile(db: MemoryDB, args: dict[str, Any], *, chat_id: str
     return {"items": [{"doc_id": item.doc_id, "score": 1.0, "text": item.text, "meta": item.meta}]}
 
 
+def _query_direct_memory_items(
+    memory_db: MemoryDB,
+    question: str,
+    *,
+    cfg: MemoryConfig,
+    chat_id: str,
+) -> list[RetrievedItem]:
+    items = memory_db.query(
+        question,
+        top_k=max(6, int(cfg.top_k) * 4),
+        min_score=cfg.min_score,
+        type_filter=None,
+        meta_filter=None,
+    )
+    scoped_chat_id = (chat_id or "").strip()
+    filtered_items: list[RetrievedItem] = []
+    for it in items:
+        meta = it.meta if isinstance(it.meta, dict) else {}
+        item_chat_id = str(meta.get("chat_id", "") or "").strip()
+        item_type = str(meta.get("type", "") or "").strip()
+        if item_type in {"knowledge", "word_def"}:
+            filtered_items.append(it)
+            continue
+        if scoped_chat_id and item_chat_id == scoped_chat_id:
+            filtered_items.append(it)
+    return filtered_items
+
+
+def _format_memory_items(items: Sequence[RetrievedItem]) -> str:
+    lines = [f"- {it.text.strip()}" for it in items if str(it.text or "").strip()]
+    return "\n".join(lines).strip()
+
+
 async def react_retrieve(
     *,
     http_session,
@@ -380,7 +414,7 @@ async def react_retrieve(
             endpoint_path=endpoint_path,
             tools=_tools_schema(),
             tool_choice="auto",
-            extra_payload=extra_payload,
+            extra_payload=control_extra_payload(extra_payload),
         )
         tool_calls = _extract_tool_calls(resp)
         if not tool_calls:
@@ -460,6 +494,9 @@ async def build_memory_block(
         return ""
     soft_budget = 4.0
     question = planner_question.strip()
+    current_query = str(current_text or "").strip()
+    if not question and current_query and len(current_query) <= 120:
+        question = current_query
     if not question and cfg.planner_question:
         msgs = build_question_messages(
             bot_name=bot_name, history=history, current_text=current_text
@@ -481,7 +518,7 @@ async def build_memory_block(
                     retry_interval_seconds=0.2,
                     proxy=proxy,
                     endpoint_path=endpoint_path,
-                    extra_payload=extra_payload,
+                    extra_payload=control_extra_payload(extra_payload, json_object=True),
                 ),
                 timeout=min(2.0, soft_budget),
             )
@@ -492,6 +529,10 @@ async def build_memory_block(
         except Exception:
             question = ""
 
+    if not question:
+        question = current_query
+        if len(question) > 240:
+            question = question[:240].rstrip()
     if not question:
         return ""
 
@@ -504,6 +545,20 @@ async def build_memory_block(
         )
         if cached:
             return f"你回忆起了以下信息：\n{cached}\n"
+
+    direct_answer = _format_memory_items(
+        _query_direct_memory_items(memory_db, question, cfg=cfg, chat_id=chat_id)
+    )
+    if direct_answer:
+        if cfg.enable_thinking_back_cache:
+            append_record(
+                data_dir=data_dir,
+                chat_id=chat_id,
+                question=question,
+                answer=direct_answer,
+                max_entries=int(cfg.thinking_back_max_entries or 200),
+            )
+        return f"你回忆起了以下信息：\n{direct_answer}\n"
 
     answer = ""
     try:
@@ -524,7 +579,7 @@ async def build_memory_block(
                 retry_interval_seconds=0.2,
                 proxy=proxy,
                 endpoint_path=endpoint_path,
-                extra_payload=extra_payload,
+                extra_payload=control_extra_payload(extra_payload),
             ),
             timeout=float(soft_budget),
         )
@@ -532,31 +587,10 @@ async def build_memory_block(
         answer = ""
     answer = (answer or "").strip()
     if not answer:
-        items = memory_db.query(
-            question,
-            top_k=max(6, int(cfg.top_k) * 4),
-            min_score=cfg.min_score,
-            type_filter=None,
-            meta_filter=None,
-        )
-        scoped_chat_id = (chat_id or "").strip()
-        filtered_items: list[RetrievedItem] = []
-        for it in items:
-            meta = it.meta if isinstance(it.meta, dict) else {}
-            item_chat_id = str(meta.get("chat_id", "") or "").strip()
-            item_type = str(meta.get("type", "") or "").strip()
-            if item_type in {"knowledge", "word_def"}:
-                filtered_items.append(it)
-                continue
-            if scoped_chat_id and item_chat_id == scoped_chat_id:
-                filtered_items.append(it)
-        items = filtered_items
+        items = _query_direct_memory_items(memory_db, question, cfg=cfg, chat_id=chat_id)
         if not items:
             return ""
-        lines = []
-        for it in items:
-            lines.append(f"- {it.text.strip()}")
-        answer = "\n".join(lines).strip()
+        answer = _format_memory_items(items)
 
     if not answer:
         return ""

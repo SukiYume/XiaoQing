@@ -7,8 +7,9 @@ from typing import Any, Sequence
 
 from .bw_jargon_store import JargonRecord, JargonStore
 from .expr_utils import extract_json_array, extract_json_obj, render_dialogue
-from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..llm.llm_client import LLMError, chat_completions_raw_with_fallback_paths
 from ..memory.memory import StoredMessage
+
 _logger = logging.getLogger("plugin.xiaoqing_chat")
 
 _EXTRACT_PROMPT = """你是黑话/缩写挖掘器。你会从对话里抽取可能的黑话、缩写、简称、专有词。
@@ -61,6 +62,28 @@ def _bump_chat_count(chat_counts: list[list[Any]], chat_id: str) -> list[list[An
     out.sort(key=lambda x: (-int(x[1] or 0), str(x[0])))
     return out[:30]
 
+
+def _log_jargon_step(
+    step: str,
+    *,
+    chat_id: str,
+    fields: dict[str, Any] | None = None,
+    warning: bool = False,
+) -> None:
+    payload = {"step": step, "chat_id": chat_id}
+    if fields:
+        payload.update(fields)
+    try:
+        message = "xiaoqing_chat step=%s"
+        encoded = json.dumps(payload, ensure_ascii=False)
+        if warning:
+            _logger.warning(message, encoded)
+        else:
+            _logger.info(message, encoded)
+    except Exception:
+        pass
+
+
 async def mine_jargon(
     *,
     http_session,
@@ -90,36 +113,40 @@ async def mine_jargon(
         return 0
 
     t0 = time.monotonic()
-    try:
-        _logger.info("xiaoqing_chat step=%s", json.dumps({"step": "jargon.extract.start", "chat_id": chat_id, "model": model}, ensure_ascii=False))
-    except Exception:
-        pass
+    _log_jargon_step("jargon.extract.start", chat_id=chat_id, fields={"model": model})
     prompt = _EXTRACT_PROMPT.format(dialogue=dialogue)
-    resp, _path = await chat_completions_raw_with_fallback_paths(
-        session=http_session,
-        api_base=api_base,
-        api_key=api_key,
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=min(0.4, float(temperature)),
-        top_p=float(top_p),
-        max_tokens=min(700, max(400, int(max_tokens))),
-        timeout_seconds=float(timeout_seconds),
-        max_retry=int(max_retry),
-        retry_interval_seconds=float(retry_interval_seconds),
-        proxy=proxy,
-        endpoint_path=endpoint_path,
-        extra_payload=extra_payload,
-    )
+    try:
+        resp, _path = await chat_completions_raw_with_fallback_paths(
+            session=http_session,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=min(0.4, float(temperature)),
+            top_p=float(top_p),
+            max_tokens=min(700, max(400, int(max_tokens))),
+            timeout_seconds=float(timeout_seconds),
+            max_retry=int(max_retry),
+            retry_interval_seconds=float(retry_interval_seconds),
+            proxy=proxy,
+            endpoint_path=endpoint_path,
+            extra_payload=extra_payload,
+        )
+    except LLMError as exc:
+        _log_jargon_step(
+            "jargon.extract.fail",
+            chat_id=chat_id,
+            fields={"error": str(exc), "elapsed_s": round(time.monotonic() - t0, 3)},
+            warning=True,
+        )
+        return 0
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     arr = extract_json_array(str(content))
-    try:
-        _logger.info(
-            "xiaoqing_chat step=%s",
-            json.dumps({"step": "jargon.extract.done", "chat_id": chat_id, "candidates": len(arr), "elapsed_s": round(time.monotonic() - t0, 3)}, ensure_ascii=False),
-        )
-    except Exception:
-        pass
+    _log_jargon_step(
+        "jargon.extract.done",
+        chat_id=chat_id,
+        fields={"candidates": len(arr), "elapsed_s": round(time.monotonic() - t0, 3)},
+    )
 
     db = store.load()
     changed = 0
@@ -143,7 +170,8 @@ async def mine_jargon(
         rec.count = int(rec.count or 0) + 1
         rec.updated_at = now
         rec.is_jargon = True
-        rec.chat_id_counts = _bump_chat_count(rec.chat_id_counts if isinstance(rec.chat_id_counts, list) else [], chat_id)
+        chat_id_counts = rec.chat_id_counts if isinstance(rec.chat_id_counts, list) else []
+        rec.chat_id_counts = _bump_chat_count(chat_id_counts, chat_id)
         if context_text and context_text not in rec.raw_content:
             rec.raw_content.append(context_text)
             rec.raw_content = rec.raw_content[-20:]
@@ -166,32 +194,43 @@ async def mine_jargon(
         it0 = time.monotonic()
         contexts = "\n---\n".join(rec.raw_content[-6:]).strip() or "（无）"
         ip = _INFER_PROMPT.format(term=term, contexts=contexts)
-        r2, _p2 = await chat_completions_raw_with_fallback_paths(
-            session=http_session,
-            api_base=api_base,
-            api_key=api_key,
-            model=model,
-            messages=[{"role": "user", "content": ip}],
-            temperature=min(0.2, float(temperature)),
-            top_p=float(top_p),
-            max_tokens=min(300, int(max_tokens)),
-            timeout_seconds=float(timeout_seconds),
-            max_retry=int(max_retry),
-            retry_interval_seconds=float(retry_interval_seconds),
-            proxy=proxy,
-            endpoint_path=endpoint_path,
-            extra_payload=extra_payload,
-        )
+        try:
+            r2, _p2 = await chat_completions_raw_with_fallback_paths(
+                session=http_session,
+                api_base=api_base,
+                api_key=api_key,
+                model=model,
+                messages=[{"role": "user", "content": ip}],
+                temperature=min(0.2, float(temperature)),
+                top_p=float(top_p),
+                max_tokens=min(300, int(max_tokens)),
+                timeout_seconds=float(timeout_seconds),
+                max_retry=int(max_retry),
+                retry_interval_seconds=float(retry_interval_seconds),
+                proxy=proxy,
+                endpoint_path=endpoint_path,
+                extra_payload=extra_payload,
+            )
+        except LLMError as exc:
+            _log_jargon_step(
+                "jargon.infer.fail",
+                chat_id=chat_id,
+                fields={
+                    "term": term,
+                    "error": str(exc),
+                    "elapsed_s": round(time.monotonic() - it0, 3),
+                },
+                warning=True,
+            )
+            continue
         c2 = (((r2.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
         obj = extract_json_obj(str(c2))
         meaning = str(obj.get("meaning", "") or "").strip()
-        try:
-            _logger.info(
-                "xiaoqing_chat step=%s",
-                json.dumps({"step": "jargon.infer.done", "chat_id": chat_id, "term": term, "elapsed_s": round(time.monotonic() - it0, 3)}, ensure_ascii=False),
-            )
-        except Exception:
-            pass
+        _log_jargon_step(
+            "jargon.infer.done",
+            chat_id=chat_id,
+            fields={"term": term, "elapsed_s": round(time.monotonic() - it0, 3)},
+        )
         is_global = bool(obj.get("is_global", False))
         if meaning:
             rec.meaning = meaning[:200].strip()

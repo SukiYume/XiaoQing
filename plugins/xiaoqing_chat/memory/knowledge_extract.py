@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -10,7 +9,8 @@ from ..utils.json_parsing import extract_named_list_field, parse_first_json_obje
 from .memory import StoredMessage
 from .memory_db import MemoryDB
 from .person_profile import update_profile_and_index
-from ..llm.prompt_builder import ChatMessage, build_dialogue_prompt
+from ..llm.prompt_builder import ChatMessage
+from ..message_parts import render_stored_message
 
 
 @dataclass(frozen=True)
@@ -125,8 +125,30 @@ _FACT_SYSTEM = (
 )
 
 
+def _build_fact_dialogue(history: Sequence[StoredMessage], *, max_chars: int = 1800) -> str:
+    lines: list[str] = []
+    total = 0
+    for msg in history:
+        if msg.role != "user":
+            continue
+        if not msg.user_id:
+            continue
+        name = (msg.name or "用户").strip() or "用户"
+        text = render_stored_message(msg).strip()
+        if not text:
+            continue
+        if len(text) > 220:
+            text = text[:217].rstrip() + "..."
+        line = f"{name}<{int(msg.user_id)}>：{text}"
+        if total + len(line) > max_chars and lines:
+            break
+        lines.append(line)
+        total += len(line)
+    return "\n".join(lines).strip()
+
+
 def build_fact_messages(*, bot_name: str, history: Sequence[StoredMessage]) -> list[ChatMessage]:
-    dialogue = build_dialogue_prompt(history, bot_name=bot_name, truncate=True, max_chars=1800)
+    dialogue = _build_fact_dialogue(history, max_chars=1800)
     user = ("对话如下：\n{dialogue}\n\n从中提炼 0-6 条事实。").format(dialogue=dialogue)
     return [
         ChatMessage(role="system", content=_FACT_SYSTEM.strip()),

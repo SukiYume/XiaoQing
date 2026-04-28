@@ -7,7 +7,6 @@ from typing import Any, Sequence
 
 from ..config.config import PersonalityConfig
 from ..memory.memory import StoredMessage
-from ..helper_utils import _extract_sender_name
 from ..message_parts import (
     build_text_message_parts,
     normalize_message_parts,
@@ -35,6 +34,23 @@ _DEFAULT_REPLYER_SYSTEM = (
     "不要输出多余前后缀，不要用括号包裹解释，不要 @ 任何人。\n"
     "不要主动强调自己是机器人/AI。被问到时自然回应即可。\n"
     "只输出你要发的那段话，不需要任何额外格式。\n"
+)
+
+_HUMANLIKE_REPLY_DIRECTIVE = (
+    "拟人聊天补充\n"
+    "不要像客服、助理或总结器，不要把话说满。可以短、可以口语、可以有轻微停顿感，"
+    "但别刻意装可爱或堆语气词。能一句话接住就别展开成说明。"
+)
+
+_OUTBOUND_MEDIA_MARKER_DIRECTIVE = (
+    "出站媒体 marker\n"
+    "你可以在合适的时候为这条回复挂一个媒体：表情包、QQ 系统表情或图片。"
+    "挂法是在文本里加一个 marker：`[想发表情:简短描述]`、"
+    "`[想发QQ表情:简短描述]`、`[想发图片:简短描述]`。"
+    "每条回复最多挂一个；不挂就不写。"
+    "挂的前提是这个媒体能为这条回复加一层语气、情绪或调侃，单纯复读情绪没必要挂。"
+    "简短描述最多 12 个字，写最贴近你想要的感觉的词，比如“笑哭”“猫举手”“离谱”。"
+    "候选库会按描述查最匹配的项，找不到就当没挂。"
 )
 
 _CURRENT_MEDIA_MARKER_RE = re.compile(r"\[(图片|表情包|QQ表情)：([^\]\n]{1,400})\]")
@@ -299,7 +315,11 @@ def build_prompt_messages(
         persona_parts.append(state_text)
 
     # ── 2. 行为指令块 ──
-    instruction_parts: list[str] = [_DEFAULT_REPLYER_SYSTEM.strip()]
+    instruction_parts: list[str] = [
+        _DEFAULT_REPLYER_SYSTEM.strip(),
+        _HUMANLIKE_REPLY_DIRECTIVE.strip(),
+        _OUTBOUND_MEDIA_MARKER_DIRECTIVE.strip(),
+    ]
     if guardrail.strip():
         instruction_parts.append(guardrail.strip())
     if style:

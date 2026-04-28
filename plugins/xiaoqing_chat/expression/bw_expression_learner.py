@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import difflib
 import hashlib
-import json
 import time
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
@@ -17,6 +16,7 @@ from ..planning.pfc_utils import get_items_from_json, extract_first_json_list
 _LEARN_PROMPT = """你是对话表达方式学习器。你会从对话里抽取“像真人的表达方式/口癖”，并总结成可复用的表达风格。
 
 要求：
+- 只从对方/群友发言学习，不学习机器人自己之前说过的话
 - 只学“怎么说”，不要学具体事实信息
 - 输出要短，能直接插入到机器人表达里
 - 避免脏话、辱骂、人身攻击、极端内容
@@ -75,10 +75,12 @@ def _similarity(a: str, b: str) -> float:
 def _build_dialogue(messages: Sequence[StoredMessage], *, bot_name: str, max_lines: int = 60) -> str:
     lines: list[str] = []
     for msg in messages[-max_lines:]:
+        if msg.role == "assistant":
+            continue
         lid = getattr(msg, "local_id", "") or ""
         sid = lid or f"t{int(msg.ts or 0)}"
-        role = "你" if msg.role == "assistant" else "对方"
-        name = bot_name if msg.role == "assistant" else (msg.name or "用户")
+        role = "对方"
+        name = msg.name or "用户"
         text = render_stored_message(msg)
         if not text:
             continue

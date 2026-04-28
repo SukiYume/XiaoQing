@@ -1,128 +1,61 @@
 from __future__ import annotations
 
 import random
-import re as _re
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .runtime_state import _ChatRuntime
 
-from .constants import is_question
+
+def _cfg_float(cfg: object, name: str, default: float) -> float:
+    value = getattr(cfg, name, default)
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
 
 
-_HIGH_WORDS = frozenset(
-    {
-        "竟然",
-        "没想到",
-        "哈哈",
-        "哈哈哈",
-        "哈哈哈哈",
-        "离谱",
-        "绝了",
-        "火锅",
-        "好吃",
-        "好玩",
-        "emo",
-        "好家伙",
-        "真的吗",
-        "真假",
-        "wtf",
-        "omg",
-        "啊啊啊",
-        "呜呜",
-        "牛啊",
-        "绝绝子",
-    }
-)
+@dataclass(frozen=True)
+class ReplyGateDecision:
+    should_reply: bool
+    reason: str
+    probability: float | None = None
+    roll: float | None = None
+    seconds_since_last_reply: float = 0.0
+    min_interval_seconds: float = 0.0
+    replies_last_minute: int = 0
+    max_replies_per_minute: int = 0
+    cooldown_left_seconds: float = 0.0
+    no_reply_streak: int = 0
+    heartflow_score: float | None = None
+    active_topic: bool = False
 
-
-def _build_high_words_re(words: frozenset[str]) -> "_re.Pattern[str]":
-    cjk_pats = []
-    latin_pats = []
-    for w in words:
-        # Latin-only words need word boundaries to avoid substring false positives
-        if _re.fullmatch(r"[a-zA-Z0-9]+", w):
-            latin_pats.append(_re.escape(w))
-        else:
-            cjk_pats.append(_re.escape(w))
-    parts = []
-    if latin_pats:
-        parts.append(r"(?<![a-zA-Z0-9])(?:" + "|".join(latin_pats) + r")(?![a-zA-Z0-9])")
-    if cjk_pats:
-        parts.append("|".join(cjk_pats))
-    return _re.compile("|".join(parts), _re.IGNORECASE)
-
-
-_HIGH_WORDS_RE = _build_high_words_re(_HIGH_WORDS)
-
-_LOW_PATTERN = _re.compile(
-    r"^(\s|[\U00010000-\U0010ffff]|"
-    r"https?://\S+|"
-    r"\d+|"
-    r"[^\w\u4e00-\u9fff]"
-    r")+$"
-)
-
-
-def _score_interest(text: str) -> str:
-    """
-    对消息打兴趣度分：'high' | 'neutral' | 'low'
-
-    - high: 含问号/感叹符、以疑问助词结尾（吗/嘛/啊/呢/吧/诶）、含生活感叹词
-    - low:  纯表情/链接/数字/标点，或长度 ≤ 2 且无上述高分信号
-    - neutral: 其余
-    """
-    t = (text or "").strip()
-    if not t:
-        return "low"
-    if "[表情包：" in t:
-        return "high"
-    if "[QQ表情：" in t:
-        return "neutral"
-    if "[图片：" in t:
-        return "neutral"
-    if "!" in t or "！" in t:
-        return "high"
-    if is_question(t):
-        return "high"
-    if len(t) <= 2:
-        return "low"
-    if _LOW_PATTERN.fullmatch(t):
-        return "low"
-    tl = t.lower()
-    if _HIGH_WORDS_RE.search(tl):
-        return "high"
-    return "neutral"
-
-
-# ---------------------------------------------------------------------------
-# Time-based talk_value: returns a 0~1 multiplier based on current hour.
-# Mimics MaiBot's per-time-period frequency tuning so the bot talks less at
-# night and more during daytime / evening.
-# ---------------------------------------------------------------------------
-
-# Default time-period schedule (can be overridden via config)
-_DEFAULT_TALK_SCHEDULE: list[tuple[int, int, float]] = [
-    # (hour_start, hour_end_exclusive, talk_value)
-    (0, 7, 0.3),  # 深夜/凌晨 → 大幅减少发言
-    (7, 9, 0.6),  # 早晨起床 → 适度
-    (9, 12, 1.0),  # 上午活跃
-    (12, 14, 0.8),  # 午饭/午休
-    (14, 18, 1.0),  # 下午活跃
-    (18, 23, 1.0),  # 晚间活跃
-    (23, 24, 0.5),  # 深夜 → 减少
-]
-
-
-def _get_talk_value(schedule: list[tuple[int, int, float]] | None = None) -> float:
-    """Return the talk_value for the current hour based on the schedule."""
-    hour = time.localtime().tm_hour
-    sched = schedule or _DEFAULT_TALK_SCHEDULE
-    for start, end, val in sched:
-        if start <= hour < end:
-            return max(0.0, min(1.0, val))
-    return 0.8  # fallback
+    def as_log_fields(self) -> dict[str, object]:
+        fields: dict[str, object] = {
+            "reason": self.reason,
+            "seconds_since_last_reply": round(self.seconds_since_last_reply, 3),
+            "min_interval_seconds": round(self.min_interval_seconds, 3),
+            "replies_last_minute": self.replies_last_minute,
+            "max_replies_per_minute": self.max_replies_per_minute,
+            "cooldown_left_seconds": round(self.cooldown_left_seconds, 3),
+            "no_reply_streak": self.no_reply_streak,
+            "active_topic": self.active_topic,
+        }
+        if self.probability is not None:
+            fields["probability"] = round(self.probability, 4)
+        if self.roll is not None:
+            fields["roll"] = round(self.roll, 4)
+        if self.heartflow_score is not None:
+            fields["heartflow_score"] = round(self.heartflow_score, 4)
+        return fields
 
 
 def _freq_record(chat_id: str, runtime: _ChatRuntime, state, *, forced: bool) -> None:
@@ -145,7 +78,21 @@ def _freq_record(chat_id: str, runtime: _ChatRuntime, state, *, forced: bool) ->
         state.set_continuous_reply_count(chat_id, 0)
 
 
-async def _should_reply(
+def _remember_reply_gate_decision(state, chat_id: str, decision: ReplyGateDecision) -> None:
+    has_real_method = hasattr(type(state), "set_reply_gate_decision")
+    has_test_override = "set_reply_gate_decision" in getattr(state, "__dict__", {})
+    if not (has_real_method or has_test_override):
+        return
+    setter = getattr(state, "set_reply_gate_decision", None)
+    if not callable(setter):
+        return
+    try:
+        setter(chat_id, decision)
+    except Exception:
+        return
+
+
+async def _should_reply_decision(
     runtime: _ChatRuntime,
     state,
     chat_id: str,
@@ -153,15 +100,11 @@ async def _should_reply(
     is_private: bool,
     mentioned: bool,
     enable_private_brain_chat: bool,
-    interest: str = "neutral",
-) -> bool:
+) -> ReplyGateDecision:
     """
-    判断是否应该回复消息，基于 heartflow 评分、时间段 talk_value 和动态概率控制。
+    判断是否应该回复消息。
 
-    改进点（对标 MaiBot）：
-    1. 引入 talk_value 时间段调节（深夜少说、白天多说）
-    2. 连续不回复时动态降低阈值（积累更多消息后更倾向回复）
-    3. interest 分级影响更细腻（连续乘以 talk_value）
+    频控只保留硬约束、基础概率、heartflow 加权和静默期补偿。
 
     Args:
         runtime: 运行时配置
@@ -171,7 +114,6 @@ async def _should_reply(
         is_private: 是否私聊
         mentioned: 是否被艾特
         enable_private_brain_chat: 是否启用私聊深度对话
-        interest: 消息兴趣度分级 ("high"/"neutral"/"low")
 
     Returns:
         是否应该回复
@@ -196,51 +138,58 @@ async def _should_reply(
     actual_min_interval = runtime.cfg.min_reply_interval_seconds
     if is_active_topic:
         # 群聊中连续话题，允许更快回复
-        actual_min_interval = min(actual_min_interval, 3.0)
+        active_topic_min_interval = max(
+            0.0,
+            _cfg_float(runtime.cfg, "active_topic_min_reply_interval", 3.0),
+        )
+        actual_min_interval = min(actual_min_interval, active_topic_min_interval)
 
-    if (
-        actual_min_interval > 0
-        and seconds_since < actual_min_interval
-    ):
-        return False
+    def make_decision(
+        should_reply: bool,
+        reason: str,
+        *,
+        probability: float | None = None,
+        roll: float | None = None,
+        no_reply_streak: int = 0,
+        heartflow_score: float | None = None,
+    ) -> ReplyGateDecision:
+        decision = ReplyGateDecision(
+            should_reply=should_reply,
+            reason=reason,
+            probability=probability,
+            roll=roll,
+            seconds_since_last_reply=seconds_since,
+            min_interval_seconds=actual_min_interval,
+            replies_last_minute=len(window),
+            max_replies_per_minute=runtime.cfg.max_replies_per_minute,
+            cooldown_left_seconds=cooldown_left,
+            no_reply_streak=no_reply_streak,
+            heartflow_score=heartflow_score,
+            active_topic=is_active_topic,
+        )
+        _remember_reply_gate_decision(state, chat_id, decision)
+        return decision
+
+    if actual_min_interval > 0 and seconds_since < actual_min_interval:
+        return make_decision(False, "min_interval")
     if runtime.cfg.max_replies_per_minute > 0 and len(window) >= runtime.cfg.max_replies_per_minute:
-        return False
+        return make_decision(False, "max_replies_per_minute")
     if cooldown_left > 0:
-        return False
+        return make_decision(False, "continuous_cooldown")
 
     # --- 深度对话模式下跳过概率控制 ---
     if enable_private_brain_chat and is_private:
-        return True
+        return make_decision(True, "private_brain_chat")
 
-    # --- Time-based talk_value (MaiBot-style) ---
-    config_schedule = None
-    if hasattr(runtime.cfg, "talk_schedule") and runtime.cfg.talk_schedule:
-        config_schedule = [
-            (entry.hour_start, entry.hour_end, entry.talk_value)
-            for entry in runtime.cfg.talk_schedule
-        ]
-    talk_value = _get_talk_value(config_schedule)
-
-    # --- 单层概率控制（参照 MaiBot：talk_value × base_probability，一次判定）---
+    # --- 单层概率控制 ---
     p = runtime.cfg.reply_probability_private if is_private else runtime.cfg.reply_probability_base
 
-    # Apply time-based talk_value multiplier (MaiBot-style)
-    if not is_private:
-        p = p * talk_value
-
-    # Interest-based adjustment
-    if not is_private:
-        if interest == "high":
-            high_interest_floor = min(float(runtime.cfg.reply_probability_base) * 1.5, 0.95)
-            p = min(max(p * 1.5, high_interest_floor), 0.95)
-        elif interest == "low":
-            p = p * 0.3
-
-        if is_active_topic:
-            # 活跃话题期间大幅提高概率，使机器人更主动接话
-            p = min(0.95, p + (1.0 - p) * 0.6)
+    if (not is_private) and is_active_topic:
+        # 活跃话题期间提高概率，使机器人更容易接住连续对话。
+        p = min(0.95, p + (1.0 - p) * 0.6)
 
     # Heartflow 信号作为概率调整（软加分），不再作为硬门槛
+    hf_score: float | None = None
     if runtime.cfg.heartflow.enable_heartflow:
         hf_score = await state.heartflow.score_async(
             chat_id=chat_id,
@@ -277,11 +226,44 @@ async def _should_reply(
     elif no_reply_streak >= 3:
         p = min(p * 1.2, 0.90)
 
-    if (not is_private) and interest == "low" and no_reply_streak >= 10:
-        p = max(p, 0.35)
-
     p = max(0.0, min(1.0, p))
 
-    if random.random() >= p:
-        return False
-    return True
+    roll = random.random()
+    if roll >= p:
+        return make_decision(
+            False,
+            "probability",
+            probability=p,
+            roll=roll,
+            no_reply_streak=no_reply_streak,
+            heartflow_score=hf_score,
+        )
+    return make_decision(
+        True,
+        "allowed",
+        probability=p,
+        roll=roll,
+        no_reply_streak=no_reply_streak,
+        heartflow_score=hf_score,
+    )
+
+
+async def _should_reply(
+    runtime: _ChatRuntime,
+    state,
+    chat_id: str,
+    text: str,
+    is_private: bool,
+    mentioned: bool,
+    enable_private_brain_chat: bool,
+) -> bool:
+    decision = await _should_reply_decision(
+        runtime,
+        state,
+        chat_id,
+        text,
+        is_private,
+        mentioned,
+        enable_private_brain_chat,
+    )
+    return decision.should_reply
