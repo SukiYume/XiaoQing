@@ -156,12 +156,11 @@ async def test_xiaoqing_chat_init(mock_context):
 async def test_xiaoqing_chat_handle_chat_command(mock_context, sample_group_event):
     """Test handle with chat command"""
     from plugins.xiaoqing_chat.main import handle
-    from core.args import parse
 
     with patch(
         "plugins.xiaoqing_chat.main.handle_smalltalk", new=AsyncMock(return_value=[])
     ) as mock_smalltalk:
-        result = await handle(
+        await handle(
             command="xc",
             args="你好",
             event=sample_group_event,
@@ -195,7 +194,7 @@ async def test_xiaoqing_chat_handle_reset_command(mock_context, sample_group_eve
     with patch(
         "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
     ) as mock_internal:
-        result = await handle(
+        await handle(
             command="xc",
             args="reset",
             event=sample_group_event,
@@ -214,7 +213,7 @@ async def test_xiaoqing_chat_handle_stats_command(mock_context, sample_group_eve
     with patch(
         "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
     ) as mock_internal:
-        result = await handle(
+        await handle(
             command="xc",
             args="stats",
             event=sample_group_event,
@@ -233,7 +232,7 @@ async def test_xiaoqing_chat_handle_brain_command(mock_context, sample_group_eve
     with patch(
         "plugins.xiaoqing_chat.main.handle_internal", new=AsyncMock(return_value=[])
     ) as mock_internal:
-        result = await handle(
+        await handle(
             command="xc",
             args="brain",
             event=sample_group_event,
@@ -404,6 +403,21 @@ async def test_call_bot_name_only_internal(mock_context):
 
 @pytest.mark.plugin
 @pytest.mark.asyncio
+async def test_call_bot_name_only_internal_uses_configured_replies(mock_context):
+    from plugins.xiaoqing_chat.main import call_bot_name_only_internal
+
+    mock_context.config = {
+        "bot_name": "小青",
+        "plugins": {"xiaoqing_chat": {"bot_name_only_replies": ["收到"]}},
+    }
+
+    result = await call_bot_name_only_internal(mock_context)
+
+    assert result[0]["data"]["text"] == "收到"
+
+
+@pytest.mark.plugin
+@pytest.mark.asyncio
 async def test_call_bot_name_only_internal_varies_response(mock_context):
     """Test call_bot_name_only_internal can return different responses"""
     from plugins.xiaoqing_chat.main import call_bot_name_only_internal
@@ -416,6 +430,70 @@ async def test_call_bot_name_only_internal_varies_response(mock_context):
 
     # Should have at least some variety
     assert len(responses) > 0
+
+
+@pytest.mark.plugin
+@pytest.mark.asyncio
+async def test_call_bot_name_only_internal_marks_followup_pending(mock_context):
+    """Calling only the bot name should force the next same-user group turn."""
+    from plugins.xiaoqing_chat.main import call_bot_name_only_internal
+    from plugins.xiaoqing_chat.runtime_state import get_state, reset_global_state
+
+    reset_global_state()
+    try:
+        result = await call_bot_name_only_internal(mock_context)
+
+        assert result
+        state = get_state()
+        assert state.consume_pending_bot_name_call(
+            "g67890", 12345, now=time.time() + 1.0
+        ) is True
+        assert state.consume_pending_bot_name_call(
+            "g67890", 12345, now=time.time() + 1.0
+        ) is False
+    finally:
+        reset_global_state()
+
+
+@pytest.mark.plugin
+@pytest.mark.asyncio
+async def test_pending_bot_name_followup_bypasses_reply_gate(mock_context, sample_group_event):
+    from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
+
+    event = dict(sample_group_event)
+    event["raw_message"] = "起床了没"
+    event["message"] = [{"type": "text", "data": {"text": "起床了没"}}]
+
+    state = MagicMock()
+    state.consume_pending_bot_name_call = Mock(return_value=True)
+    state.get_mood_state.return_value = ""
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            goal=SimpleNamespace(enable_goal=False),
+            reflection=SimpleNamespace(enable_expression_reflection=False),
+            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
+            personality=SimpleNamespace(states=[], state_probability=0.0),
+        )
+    )
+    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
+
+    with (
+        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._is_private", return_value=False),
+        patch(
+            "plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)
+        ) as gate,
+    ):
+        prepared = await _prepare_smalltalk_turn("起床了没", event, mock_context, hctx)
+
+    assert prepared is not None
+    assert prepared.forced is True
+    assert prepared.force_reason == "bot_name_followup"
+    state.consume_pending_bot_name_call.assert_called_once_with("g67890", 12345)
+    gate.assert_not_awaited()
 
 
 # ============================================================
@@ -739,125 +817,8 @@ async def test_action_history_flush_task_entry_removed_after_task_done():
         _action_flush_tasks.clear()
 
 
-# ---- interest scorer tests ----
-from plugins.xiaoqing_chat.frequency_control import _score_interest
-
-
-class TestScoreInterest:
-    def test_question_mark_is_high(self):
-        assert _score_interest("这是什么？") == "high"
-
-    def test_ascii_question_mark_is_high(self):
-        assert _score_interest("what?") == "high"
-
-    def test_exclamation_is_high(self):
-        assert _score_interest("竟然还有这么离谱的项目！") == "high"
-
-    def test_laugh_word_is_high(self):
-        assert _score_interest("哈哈哈太好笑了") == "high"
-
-    def test_life_keyword_is_high(self):
-        assert _score_interest("没有什么是一顿火锅解决不了的") == "high"
-
-    def test_question_ending_is_high(self):
-        assert _score_interest("你觉得这样行吗") == "high"
-
-    def test_short_text_is_low(self):
-        assert _score_interest("哦") == "low"
-
-    def test_empty_is_low(self):
-        assert _score_interest("") == "low"
-
-    def test_pure_url_is_low(self):
-        assert _score_interest("https://example.com/page") == "low"
-
-    def test_pure_number_is_low(self):
-        assert _score_interest("12345") == "low"
-
-    def test_normal_statement_is_neutral(self):
-        assert _score_interest("今天天气不错") == "neutral"
-
-    @pytest.mark.asyncio
-    async def test_interest_affects_probability_high(self):
-        """High interest score allows reply when neutral would be blocked (random=0.7 > base=0.6 but < scaled=0.95)."""
-        from unittest.mock import MagicMock, patch
-
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.reply_probability_private = 0.95
-        runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.continuous_reply_limit = 0
-        runtime.cfg.continuous_cooldown_seconds = 0.0
-        runtime.cfg.heartflow.enable_heartflow = False
-        runtime.cfg.brain_chat.enable_private_brain_chat = False
-        runtime.cfg.goal.enable_goal = False
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
-        state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
-        state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-        state.heartflow.score_async = AsyncMock(return_value=1.0)
-        state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
-
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
-
-        # random=0.7: neutral blocked (0.7 >= 0.6), high allowed (0.7 < 0.95)
-        with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
-            mock_rand.random.return_value = 0.7
-            result_high = await _should_reply(
-                runtime, state, "g1", "火锅好吃吗？", False, False, False, interest="high"
-            )
-            mock_rand.random.return_value = 0.7
-            result_neutral = await _should_reply(
-                runtime, state, "g1", "火锅好吃吗？", False, False, False, interest="neutral"
-            )
-        assert result_high is True
-        assert result_neutral is False
-
-    def test_ascii_exclamation_is_high(self):
-        assert _score_interest("wow!") == "high"
-
-    def test_question_ending_variants_are_high(self):
-        assert _score_interest("是这样嘛") == "high"
-        assert _score_interest("真的啊") == "high"
-        assert _score_interest("去哪里呢") == "high"
-        assert _score_interest("你也去吧") == "high"
-        assert _score_interest("是诶") == "high"
-
-    @pytest.mark.asyncio
-    async def test_interest_affects_probability_low(self):
-        """低兴趣度消息概率降低，random=0.5 时应该被拦截（base*0.2=0.12 < 0.5）"""
-        from unittest.mock import MagicMock, patch
-
-        runtime = MagicMock()
-        runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.reply_probability_private = 0.95
-        runtime.cfg.min_reply_interval_seconds = 0.0
-        runtime.cfg.max_replies_per_minute = 100
-        runtime.cfg.continuous_reply_limit = 0
-        runtime.cfg.continuous_cooldown_seconds = 0.0
-        runtime.cfg.heartflow.enable_heartflow = False
-        runtime.cfg.brain_chat.enable_private_brain_chat = False
-        runtime.cfg.goal.enable_goal = False
-        state = MagicMock()
-        state.get_last_reply_ts.return_value = 0.0
-        state.get_continuous_cooldown_until.return_value = 0.0
-        state.get_reply_timestamps.return_value = []
-        state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-        state.heartflow.score_async = AsyncMock(return_value=1.0)
-        state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
-
-        from plugins.xiaoqing_chat.frequency_control import _should_reply
-
-        # base=0.6, low → p=0.12, random=0.5 → 0.5 >= 0.12 → False
-        with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
-            mock_rand.random.return_value = 0.5
-            result = await _should_reply(
-                runtime, state, "g1", "哦", False, False, False, interest="low"
-            )
-        assert result is False
-
+# ---- reply gate tests ----
+class TestReplyGate:
     @pytest.mark.asyncio
     async def test_heartflow_low_score_does_not_reduce_group_base_probability(self):
         from unittest.mock import MagicMock, patch
@@ -895,16 +856,110 @@ class TestScoreInterest:
 
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        with (
-            patch("plugins.xiaoqing_chat.frequency_control._get_talk_value", return_value=1.0),
-            patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand,
-        ):
+        with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
             mock_rand.random.return_value = 0.55
             result = await _should_reply(
-                runtime, state, "g1", "今天天气不错", False, False, False, interest="neutral"
+                runtime, state, "g1", "今天天气不错", False, False, False
             )
 
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_reply_gate_records_random_skip_reason(self):
+        from plugins.xiaoqing_chat.frequency_control import _should_reply
+
+        runtime = MagicMock()
+        runtime.cfg.reply_probability_base = 0.6
+        runtime.cfg.reply_probability_private = 0.95
+        runtime.cfg.min_reply_interval_seconds = 0.0
+        runtime.cfg.max_replies_per_minute = 100
+        runtime.cfg.heartflow.enable_heartflow = False
+        runtime.cfg.brain_chat.enable_private_brain_chat = False
+        runtime.cfg.goal.enable_goal = False
+
+        state = MagicMock()
+        state.get_last_reply_ts.return_value = 0.0
+        state.get_continuous_cooldown_until.return_value = 0.0
+        state.get_reply_timestamps.return_value = []
+        state.goal_store.get_async = AsyncMock(return_value=None)
+        state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
+        state.set_reply_gate_decision = Mock()
+
+        with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.99):
+            result = await _should_reply(
+                runtime, state, "g1", "今天天气不错", False, False, False
+            )
+
+        assert result is False
+        decision = state.set_reply_gate_decision.call_args.args[1]
+        assert decision.reason == "probability"
+        assert decision.probability == 0.6
+        assert decision.roll == 0.99
+
+    @pytest.mark.asyncio
+    async def test_reply_gate_records_min_interval_skip_reason(self):
+        from plugins.xiaoqing_chat.frequency_control import _should_reply
+
+        runtime = MagicMock()
+        runtime.cfg.reply_probability_base = 0.6
+        runtime.cfg.reply_probability_private = 0.95
+        runtime.cfg.min_reply_interval_seconds = 10.0
+        runtime.cfg.max_replies_per_minute = 100
+        runtime.cfg.heartflow.enable_heartflow = False
+        runtime.cfg.brain_chat.enable_private_brain_chat = False
+        runtime.cfg.goal.enable_goal = False
+
+        state = MagicMock()
+        state.get_last_reply_ts.return_value = 95.0
+        state.get_continuous_cooldown_until.return_value = 0.0
+        state.get_reply_timestamps.return_value = []
+        state.goal_store.get_async = AsyncMock(return_value=None)
+        state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
+        state.set_reply_gate_decision = Mock()
+
+        with patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0):
+            result = await _should_reply(
+                runtime, state, "g1", "今天天气不错", False, False, False
+            )
+
+        assert result is False
+        decision = state.set_reply_gate_decision.call_args.args[1]
+        assert decision.reason == "min_interval"
+        assert decision.seconds_since_last_reply == 5.0
+        assert decision.min_interval_seconds == 10.0
+
+    @pytest.mark.asyncio
+    async def test_active_topic_min_interval_uses_configured_value(self):
+        from plugins.xiaoqing_chat.frequency_control import _should_reply
+
+        runtime = MagicMock()
+        runtime.cfg.reply_probability_base = 0.6
+        runtime.cfg.reply_probability_private = 0.95
+        runtime.cfg.min_reply_interval_seconds = 10.0
+        runtime.cfg.active_topic_min_reply_interval = 4.0
+        runtime.cfg.max_replies_per_minute = 100
+        runtime.cfg.heartflow.enable_heartflow = False
+        runtime.cfg.brain_chat.enable_private_brain_chat = False
+        runtime.cfg.goal.enable_goal = True
+
+        state = MagicMock()
+        state.get_last_reply_ts.return_value = 97.0
+        state.get_continuous_cooldown_until.return_value = 0.0
+        state.get_reply_timestamps.return_value = []
+        state.goal_store.get_async = AsyncMock(
+            return_value=SimpleNamespace(goal="自然聊天", ts=95.0)
+        )
+        state.heartflow.get_async = AsyncMock(return_value=SimpleNamespace(no_reply_streak=0))
+        state.set_reply_gate_decision = Mock()
+
+        with patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0):
+            result = await _should_reply(runtime, state, "g1", "继续聊", False, False, False)
+
+        assert result is False
+        decision = state.set_reply_gate_decision.call_args.args[1]
+        assert decision.reason == "min_interval"
+        assert decision.active_topic is True
+        assert decision.min_interval_seconds == 4.0
 
     @pytest.mark.asyncio
     async def test_group_heartflow_bonus_stays_soft(self):
@@ -943,13 +998,10 @@ class TestScoreInterest:
 
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        with (
-            patch("plugins.xiaoqing_chat.frequency_control._get_talk_value", return_value=1.0),
-            patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand,
-        ):
+        with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
             mock_rand.random.return_value = 0.67
             result = await _should_reply(
-                runtime, state, "g1", "今天天气不错？", False, False, False, interest="neutral"
+                runtime, state, "g1", "今天天气不错？", False, False, False
             )
 
         assert result is False
@@ -979,25 +1031,11 @@ class TestScoreInterest:
 
         from plugins.xiaoqing_chat.frequency_control import _should_reply
 
-        with (
-            patch("plugins.xiaoqing_chat.frequency_control._get_talk_value", return_value=1.0),
-            patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand,
-        ):
+        with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
             mock_rand.random.return_value = 0.3
-            result = await _should_reply(
-                runtime, state, "g1", "哦", False, False, False, interest="low"
-            )
+            result = await _should_reply(runtime, state, "g1", "哦", False, False, False)
 
         assert result is True
-
-    def test_emo_substring_in_english_word_is_neutral(self):
-        # "demo" contains "emo" — should not trigger high
-        assert _score_interest("Here is a demo") == "neutral"
-
-    def test_standalone_emo_is_high(self):
-        # Chinese slang "emo了" — should trigger high
-        assert _score_interest("好emo啊") == "high"
-
 
 def test_group_wait_plan_is_preserved_before_first_reply(tmp_path):
     from plugins.xiaoqing_chat.config.config import XiaoQingChatConfig
@@ -1665,6 +1703,124 @@ async def test_extract_and_learn_uses_async_memory_read(mock_context):
 
 
 @pytest.mark.asyncio
+async def test_extract_and_learn_skips_when_same_chat_inflight(mock_context):
+    from plugins.xiaoqing_chat.expression.bw_message_recorder import (
+        MessageRecorder,
+        extract_and_learn,
+    )
+
+    memory_store = MagicMock()
+    memory_store.get_async = AsyncMock(side_effect=AssertionError("inflight run should skip early"))
+    recorder = MessageRecorder()
+    assert recorder.try_begin("g1") is True
+
+    try:
+        changed = await extract_and_learn(
+            context=mock_context,
+            secrets={},
+            bot_name="小青",
+            chat_id="g1",
+            memory_store=memory_store,
+            expr_store=MagicMock(),
+            jargon_store=None,
+            recorder=recorder,
+            personality=MagicMock(),
+            min_interval_seconds=0.0,
+            min_messages=10,
+            self_reflect=True,
+            temperature=0.7,
+            top_p=0.9,
+            max_tokens=128,
+            timeout_seconds=1.0,
+            max_retry=0,
+            retry_interval_seconds=0.0,
+            proxy="",
+            endpoint_path="/v1/chat/completions",
+        )
+    finally:
+        recorder.end("g1")
+
+    assert changed == 0
+    assert memory_store.get_async.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_extract_and_learn_jargon_empty_response_does_not_fail_task(
+    mock_context, monkeypatch
+):
+    from plugins.xiaoqing_chat.expression.bw_expression_store import ExpressionStore
+    from plugins.xiaoqing_chat.expression.bw_jargon_store import JargonStore
+    from plugins.xiaoqing_chat.expression.bw_message_recorder import (
+        MessageRecorder,
+        extract_and_learn,
+    )
+    from plugins.xiaoqing_chat.llm.llm_client import LLMError
+    from plugins.xiaoqing_chat.memory.memory import MemoryStore
+
+    memory_store = MemoryStore()
+    for idx in range(10):
+        memory_store.append(
+            "g1",
+            role="user",
+            name="User",
+            content=f"测试消息{idx}",
+            local_id=f"m{idx + 1}",
+            ts=float(idx + 1),
+        )
+
+    async def fake_learn_from_messages(**_kwargs):
+        return [{"text": "哈哈", "description": "轻松口语"}]
+
+    async def fake_upsert_learned(**_kwargs):
+        return 2
+
+    async def raise_empty_response(**_kwargs):
+        raise LLMError("empty_response")
+
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.expression.bw_message_recorder.learn_from_messages",
+        fake_learn_from_messages,
+    )
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.expression.bw_message_recorder.upsert_learned",
+        fake_upsert_learned,
+    )
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.expression.bw_jargon_miner.chat_completions_raw_with_fallback_paths",
+        raise_empty_response,
+    )
+
+    recorder = MessageRecorder()
+    changed = await extract_and_learn(
+        context=mock_context,
+        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        bot_name="小青",
+        chat_id="g1",
+        memory_store=memory_store,
+        expr_store=ExpressionStore(),
+        jargon_store=JargonStore(),
+        recorder=recorder,
+        personality=MagicMock(),
+        min_interval_seconds=0.0,
+        min_messages=10,
+        self_reflect=True,
+        temperature=0.7,
+        top_p=0.9,
+        max_tokens=128,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    assert changed == 2
+    assert recorder.get_last_time("g1") > 0
+    assert recorder.try_begin("g1") is True
+    recorder.end("g1")
+
+
+@pytest.mark.asyncio
 async def test_tick_reflect_tracker_uses_async_memory_read(mock_context):
     from plugins.xiaoqing_chat.expression.bw_reflect_tracker import (
         ReflectTrackerState,
@@ -1851,6 +2007,45 @@ async def test_observe_outgoing_action_records_external_plugin_text_only(mock_co
     assert "[图片" not in content
     assert media_items == []
     state.heartflow.on_bot_reply_async.assert_awaited_once_with(chat_id="g67890")
+
+
+@pytest.mark.asyncio
+async def test_observe_outgoing_action_skips_sensitive_external_plugin_output(mock_context):
+    from plugins.xiaoqing_chat.handlers import observe_outgoing_action
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(enable_smalltalk=True, ban_words=[]),
+        compiled_ban_regex=[],
+    )
+    state = MagicMock()
+    state.memory_store.append = Mock()
+    action = {
+        "action": "send_private_msg",
+        "params": {
+            "user_id": 1000000001,
+            "message": [
+                {
+                    "type": "text",
+                    "data": {
+                        "text": (
+                            "🔑 Pendo Web 登录 Token\n"
+                            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+                            "eyJzdWIiOiIxMjMifQ.signature"
+                        )
+                    },
+                },
+            ],
+        },
+    }
+
+    with (
+        patch("plugins.xiaoqing_chat.handlers._load_runtime", return_value=runtime),
+        patch("plugins.xiaoqing_chat.handlers._get_bound_state", return_value=state),
+    ):
+        result = await observe_outgoing_action(action, mock_context, source_plugin="pendo")
+
+    assert result == []
+    state.memory_store.append.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2178,9 +2373,7 @@ async def test_should_reply_uses_async_goal_and_heartflow_state():
     state.heartflow._load.side_effect = AssertionError("sync heartflow load should not be used")
 
     with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.0):
-        result = await _should_reply(
-            runtime, state, "g1", "你好？", False, False, False, interest="high"
-        )
+        result = await _should_reply(runtime, state, "g1", "你好？", False, False, False)
 
     assert result is True
     assert state.goal_store.get_async.await_count == 1
@@ -2214,7 +2407,6 @@ async def test_ordinary_group_turn_refreshes_goal_before_should_reply_blocks(
         patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
         patch(
             "plugins.xiaoqing_chat.handlers.derive_goal_async",
@@ -2272,7 +2464,6 @@ async def test_ordinary_group_with_planner_top_goal_skips_heuristic_goal_refresh
         patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
         patch(
             "plugins.xiaoqing_chat.handlers.derive_goal_async",
@@ -2330,7 +2521,6 @@ async def test_ordinary_group_with_empty_planner_goal_list_still_refreshes_goal_
         patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
         patch(
             "plugins.xiaoqing_chat.handlers.derive_goal_async",
@@ -2377,7 +2567,6 @@ async def test_ordinary_group_pre_pfc_block_still_updates_no_reply_adaptation(
         patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
         patch(
             "plugins.xiaoqing_chat.handlers.derive_goal_async",
@@ -2428,7 +2617,6 @@ async def test_expression_reflection_does_not_spawn_before_reply_gate_passes(
         patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
         patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
-        patch("plugins.xiaoqing_chat.handlers._score_interest", return_value="low"),
         patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)),
         patch(
             "plugins.xiaoqing_chat.handlers.derive_goal_async",
@@ -3032,7 +3220,7 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
         patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
         patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
         patch("plugins.xiaoqing_chat.handlers._freq_record"),
-        patch("plugins.xiaoqing_chat.handlers._log_step"),
+        patch("plugins.xiaoqing_chat.handlers._log_step") as mock_log_step,
     ):
         result = await _maybe_reply_smalltalk("你好", sample_group_event, mock_context)
 
@@ -3042,6 +3230,10 @@ async def test_smalltalk_stale_generation_is_dropped_before_commit(
     state.action_history.append.assert_not_called()
     state.pfc_state_store.set_state.assert_not_called()
     mock_schedule_pfc_state_flush.assert_not_called()
+    assert any(
+        call.kwargs.get("step") == "smalltalk.stale.drop"
+        for call in mock_log_step.call_args_list
+    )
 
 
 @pytest.mark.asyncio
@@ -3128,7 +3320,7 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
         patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
         patch("plugins.xiaoqing_chat.handlers._schedule_action_history_flush"),
         patch("plugins.xiaoqing_chat.handlers._freq_record"),
-        patch("plugins.xiaoqing_chat.handlers._log_step"),
+        patch("plugins.xiaoqing_chat.handlers._log_step") as mock_log_step,
     ):
         result = await _maybe_reply_smalltalk("你好", sample_group_event, mock_context)
 
@@ -3136,6 +3328,12 @@ async def test_smalltalk_no_reply_current_turn_schedules_pfc_state_flush(
     state.pfc_state_store.set_state.assert_called_once()
     mock_schedule_pfc_state_flush.assert_called_once()
     state.heartflow.on_no_reply_async.assert_awaited_once()
+    no_reply_calls = [
+        call for call in mock_log_step.call_args_list
+        if call.kwargs.get("step") == "smalltalk.no_reply"
+    ]
+    assert no_reply_calls
+    assert no_reply_calls[-1].kwargs["fields"]["reason"] == "pfc_no_reply"
 
 
 @pytest.mark.asyncio
@@ -4713,12 +4911,6 @@ async def test_generate_reply_prefers_planner_goal_over_review_override_goal_sto
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.maybe_rewrite_reply",
-                new=AsyncMock(return_value="好的"),
-            )
-        )
-        stack.enter_context(
-            patch(
                 "plugins.xiaoqing_chat.reply_generator.process_llm_response", return_value=["好的"]
             )
         )
@@ -4925,12 +5117,6 @@ async def test_generate_reply_rebuilds_memory_context_after_request_too_large(mo
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.maybe_rewrite_reply",
-                new=AsyncMock(return_value="好的"),
-            )
-        )
-        stack.enter_context(
-            patch(
                 "plugins.xiaoqing_chat.reply_generator.process_llm_response", return_value=["好的"]
             )
         )
@@ -5108,12 +5294,6 @@ async def test_generate_reply_prefers_plan_reasoning_goal_when_action_reasoning_
             patch(
                 "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
                 new=AsyncMock(return_value=("好的", "/v1/chat/completions")),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.maybe_rewrite_reply",
-                new=AsyncMock(return_value="好的"),
             )
         )
         stack.enter_context(
@@ -5296,12 +5476,6 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
                 new=AsyncMock(return_value=("第一句。第二句", "/v1/chat/completions")),
             )
         )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.maybe_rewrite_reply",
-                new=AsyncMock(return_value="第一句。第二句"),
-            )
-        )
 
         draft = await _generate_reply_draft(
             text="你好",
@@ -5322,204 +5496,6 @@ async def test_generate_reply_draft_exposes_canonical_text_parts(mock_context):
     assert [part["kind"] for part in draft.parts] == ["text", "text"]
     assert draft.parts[0]["text"] == "第一句。\n"
     assert draft.parts[1]["text"] == "第二句"
-
-
-@pytest.mark.asyncio
-async def test_generate_reply_draft_prefers_single_media_plan_matching_inbound_marker(mock_context):
-    from contextlib import ExitStack
-
-    from plugins.xiaoqing_chat.config.config import ResponsePostProcessConfig
-    from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.planning.planner import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import _generate_reply_draft
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            personality=SimpleNamespace(multiple_reply_style=[], multiple_probability=0.0),
-            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(enable_review_sessions=False),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            max_context_size=20,
-            top_p=0.9,
-            max_tokens=256,
-            timeout_seconds=3.0,
-            reply_check=SimpleNamespace(
-                enable_reply_checker=False,
-                enable_llm_checker=False,
-                max_repeat_compare=5,
-                similarity_threshold=0.9,
-                max_assistant_in_row=3,
-                max_regen=0,
-            ),
-            postprocess=ResponsePostProcessConfig(),
-            rewrite=SimpleNamespace(),
-            media=SimpleNamespace(
-                enable_outbound_emoji_reply=True,
-                enable_outbound_face_reply=True,
-            ),
-        )
-    )
-
-    state = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-    state.review_store.bind = Mock()
-    state.inc_stats = Mock()
-
-    fg = SimpleNamespace(
-        proxy="",
-        endpoint_path="/v1/chat/completions",
-        timeout_seconds=3.0,
-        max_retry=0,
-        retry_interval_seconds=0.2,
-        to_dict=lambda: {
-            "timeout_seconds": 3.0,
-            "max_retry": 0,
-            "retry_interval_seconds": 0.2,
-            "proxy": "",
-            "endpoint_path": "/v1/chat/completions",
-        },
-    )
-    action = PlannedAction(
-        action="reply",
-        think_level=1,
-        reasoning="正常回复",
-        question="",
-        unknown_words=[],
-    )
-
-    emoji_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            file_path="figures/library/emoji.png",
-            media_hash="hash-1",
-            description="无语",
-            emotion_tags=("无语",),
-        ),
-        marker="[表情包：无语]",
-        mode="text_with_emoji",
-    )
-    face_plan = SimpleNamespace(
-        entry=SimpleNamespace(face_id="277", label="狗头", aliases=("狗头",)),
-        marker="[QQ表情：狗头]",
-        mode="text_with_face",
-    )
-
-    with ExitStack() as stack:
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._get_llm_secrets",
-                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_memory_block",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_tool_info_block",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_identity", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                return_value=[
-                    ChatMessage(role="system", content="s"),
-                    ChatMessage(role="user", content="u"),
-                ],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
-                new=AsyncMock(return_value=("懂了。再说", "/v1/chat/completions")),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.maybe_rewrite_reply",
-                new=AsyncMock(return_value="懂了。再说"),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.plan_emoji_reply",
-                new=AsyncMock(return_value=emoji_plan),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.plan_qq_face_reply",
-                new=AsyncMock(return_value=face_plan),
-            )
-        )
-
-        draft = await _generate_reply_draft(
-            text="[QQ表情：狗头]",
-            event={"message_id": 1, "user_id": 1},
-            context=mock_context,
-            runtime=cast(Any, runtime),
-            state=state,
-            forced=False,
-            action=action,
-            plan_reasoning="正常回复",
-            bot_name="小青",
-            secrets=None,
-        )
-
-    assert draft is not None
-    assert draft.emoji_plan is None
-    assert draft.face_plan is face_plan
-    assert [part["kind"] for part in draft.parts] == ["text", "qq_face", "text"]
-    assert draft.parts[1]["face_id"] == "277"
 
 
 @pytest.mark.asyncio
@@ -5666,7 +5642,7 @@ async def test_generate_reply_forced_rejection_uses_safe_fallback(mock_context):
             ),
             goal=SimpleNamespace(enable_goal=False),
             reflection=SimpleNamespace(enable_review_sessions=False),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
+            debug=SimpleNamespace(show_reply_prompt=False, log_steps=True),
             max_context_size=20,
             temperature=0.7,
             top_p=0.9,
@@ -5803,6 +5779,8 @@ async def test_generate_reply_forced_rejection_uses_safe_fallback(mock_context):
 
     assert draft is not None
     assert draft.text == "嗯，我先换个说法。"
+    logged_payloads = [str(call.args[1]) for call in mock_context.logger.info.call_args_list]
+    assert any('"step": "reply.checker.skip"' in payload for payload in logged_payloads)
 
 
 @pytest.mark.asyncio
@@ -5987,7 +5965,6 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
                 max_regen=0,
             ),
             postprocess=ResponsePostProcessConfig(),
-            rewrite=SimpleNamespace(enable_rewrite=True),
         )
     )
 
@@ -6100,12 +6077,6 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
         )
         stack.enter_context(
             patch(
-                "plugins.xiaoqing_chat.reply_generator.maybe_rewrite_reply",
-                new=AsyncMock(return_value="这条回复需要检查"),
-            )
-        )
-        stack.enter_context(
-            patch(
                 "plugins.xiaoqing_chat.reply_generator.process_llm_response",
                 return_value=["这条回复需要检查"],
             )
@@ -6151,537 +6122,17 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
 
 
 @pytest.mark.asyncio
-async def test_generate_reply_checker_uses_combined_reply_after_media_attachment(mock_context):
-    from contextlib import ExitStack
-
-    from plugins.xiaoqing_chat.config.config import ResponsePostProcessConfig
-    from plugins.xiaoqing_chat.llm.prompt_builder import ChatMessage
-    from plugins.xiaoqing_chat.llm.reply_checker import ReplyCheckResult
-    from plugins.xiaoqing_chat.planning.planner import PlannedAction
-    from plugins.xiaoqing_chat.reply_generator import _generate_reply_draft
-
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            personality=SimpleNamespace(multiple_reply_style=[], multiple_probability=0.0),
-            keyword_reaction=SimpleNamespace(keyword_rules=[], regex_rules=[]),
-            goal=SimpleNamespace(enable_goal=False),
-            reflection=SimpleNamespace(enable_review_sessions=False),
-            debug=SimpleNamespace(show_reply_prompt=False, log_steps=False),
-            max_context_size=20,
-            top_p=0.9,
-            max_tokens=256,
-            timeout_seconds=3.0,
-            reply_check=SimpleNamespace(
-                enable_reply_checker=True,
-                enable_llm_checker=False,
-                max_repeat_compare=5,
-                similarity_threshold=0.9,
-                max_assistant_in_row=3,
-                max_regen=0,
-            ),
-            postprocess=ResponsePostProcessConfig(),
-            rewrite=SimpleNamespace(enable_rewrite=True),
-            media=SimpleNamespace(
-                enable_outbound_emoji_reply=True,
-                enable_outbound_face_reply=False,
-            ),
-        )
-    )
-
-    state = MagicMock()
-    state.memory_store.get_recent_async = AsyncMock(return_value=[])
-    state.goal_store.get_async = AsyncMock(return_value=SimpleNamespace(goal=""))
-    state.review_store.bind = Mock()
-    state.inc_stats = Mock()
-
-    fg = SimpleNamespace(
-        proxy="",
-        endpoint_path="/v1/chat/completions",
-        timeout_seconds=3.0,
-        max_retry=0,
-        retry_interval_seconds=0.2,
-        to_dict=lambda: {
-            "timeout_seconds": 3.0,
-            "max_retry": 0,
-            "retry_interval_seconds": 0.2,
-            "proxy": "",
-            "endpoint_path": "/v1/chat/completions",
-        },
-    )
-    action = PlannedAction(
-        action="reply",
-        think_level=1,
-        reasoning="正常回复",
-        question="",
-        unknown_words=[],
-    )
-
-    emoji_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            file_path="figures/library/emoji.png",
-            media_hash="hash-1",
-            description="难过",
-            emotion_tags=("难过",),
-        ),
-        marker="[表情包：难过]",
-        mode="text_with_emoji",
-    )
-    check_reply_mock = AsyncMock(
-        return_value=ReplyCheckResult(suitable=True, reason="", need_replan=False)
-    )
-
-    with ExitStack() as stack:
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._get_bot_name", return_value="小青")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._chat_id", return_value="g1")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._is_private", return_value=False)
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._get_llm_secrets",
-                return_value={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._resolve_llm_config", return_value=fg)
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_profile_block", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_knowledge_block", return_value="")
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator._build_expression_block", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_jargon_explanation", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_memory_block",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator._build_tool_info_block",
-                new=AsyncMock(return_value=""),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_max_context", return_value=10
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_temperature", return_value=0.7
-            )
-        )
-        stack.enter_context(
-            patch("plugins.xiaoqing_chat.reply_generator.get_brain_chat_identity", return_value="")
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.get_brain_chat_reply_style", return_value=""
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.build_prompt_messages",
-                return_value=[ChatMessage(role="system", content="s"), ChatMessage(role="user", content="u")],
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.chat_completions_with_fallback_paths",
-                new=AsyncMock(return_value=("咋了咋了", "/v1/chat/completions")),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.maybe_rewrite_reply",
-                new=AsyncMock(return_value="咋了咋了"),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.plan_emoji_reply",
-                new=AsyncMock(return_value=emoji_plan),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "plugins.xiaoqing_chat.reply_generator.check_reply",
-                new=check_reply_mock,
-            )
-        )
-
-        draft = await _generate_reply_draft(
-            text="[表情包：难过]",
-            event={"message_id": 1, "user_id": 1},
-            context=mock_context,
-            runtime=cast(Any, runtime),
-            state=state,
-            forced=False,
-            action=action,
-            plan_reasoning="正常回复",
-            bot_name="小青",
-            secrets=None,
-        )
-
-    assert draft is not None
-    assert [part["kind"] for part in draft.parts] == ["text", "emoji"]
-    check_reply_mock.assert_awaited_once()
-    kwargs = check_reply_mock.await_args.kwargs
-    assert kwargs["reply"] == "咋了咋了[表情包：难过]"
-    assert kwargs["heuristic_reply"] == "咋了咋了"
-    assert kwargs["current_text"] == "[表情包：难过]"
-
-
-@pytest.mark.asyncio
-async def test_maybe_rewrite_reply_uses_endpoint_fallback_paths():
-    from plugins.xiaoqing_chat.llm.rewrite import maybe_rewrite_reply
-
-    cfg = SimpleNamespace(enable_rewrite=True, max_length_trigger=999, probability=1.0)
-
-    with patch(
-        "plugins.xiaoqing_chat.llm.rewrite.chat_completions_with_fallback_paths",
-        new=AsyncMock(return_value=("更自然一点", "/chat/completions")),
-    ) as mock_chat:
-        rewritten = await maybe_rewrite_reply(
-            http_session=AsyncMock(),
-            secrets={"api_base": "http://test", "api_key": "key", "model": "test-model"},
-            cfg=cfg,
-            style="口语一点",
-            user_text="你在干嘛",
-            reply_text="我现在正在处理一点事情",
-            temperature=0.7,
-            top_p=0.9,
-            max_tokens=256,
-            timeout_seconds=3.0,
-            max_retry=0,
-            retry_interval_seconds=0.2,
-            proxy="",
-            endpoint_path="/v1/chat/completions",
-        )
-
-    assert rewritten == "更自然一点"
-    mock_chat.assert_awaited_once()
-    assert mock_chat.await_args is not None
-    assert mock_chat.await_args.kwargs["endpoint_path"] == "/v1/chat/completions"
-
-
-@pytest.mark.asyncio
 async def test_generate_reply_result_handles_missing_draft():
     from plugins.xiaoqing_chat.handlers import _generate_reply_result
 
     draft_mock = AsyncMock(return_value=None)
 
     with patch("plugins.xiaoqing_chat.handlers._generate_reply_draft", new=draft_mock):
-        text, parts, image_plan, emoji_plan, face_plan = await _generate_reply_result(text="你好")
+        text, parts, media_marker = await _generate_reply_result(text="你好")
 
     assert text == ""
     assert parts == ()
-    assert image_plan is None
-    assert emoji_plan is None
-    assert face_plan is None
-
-
-@pytest.mark.asyncio
-async def test_attach_reply_media_prefers_image_plan_for_inbound_image_turn(tmp_path: Path):
-    from plugins.xiaoqing_chat.reply_generator import ReplyDraft, _attach_reply_media
-
-    image_path = tmp_path / "sunset.png"
-    image_path.write_bytes(b"png")
-    context = SimpleNamespace(plugin_dir=tmp_path)
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            media=SimpleNamespace(
-                enable_outbound_image_reply=True,
-                enable_outbound_emoji_reply=True,
-                enable_outbound_face_reply=False,
-            )
-        )
-    )
-    draft = ReplyDraft(
-        text="这张也太绝了",
-        text_parts=("这张也太绝了",),
-        parts=build_text_message_parts("这张也太绝了"),
-    )
-    image_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            media_key="media:hash-sunset",
-            media_hash="hash-sunset",
-            file_path=str(image_path),
-            description="海边落日",
-            marker="[图片：海边落日]",
-        ),
-        marker="[图片：海边落日]",
-        mode="text_with_image",
-    )
-    emoji_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            media_hash="hash-emoji",
-            description="无语猫猫",
-            emotion_tags=("无语",),
-            file_path=str(image_path),
-        ),
-        marker="[表情包：无语]",
-        mode="text_with_emoji",
-    )
-
-    with (
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_image_reply",
-            new=AsyncMock(return_value=image_plan),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_emoji_reply",
-            new=AsyncMock(return_value=emoji_plan),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_qq_face_reply",
-            new=AsyncMock(return_value=None),
-        ),
-    ):
-        merged = await _attach_reply_media(
-            draft,
-            context=context,
-            runtime=runtime,
-            history=[],
-            user_text="[图片：海边落日]",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-            chat_id="g1",
-        )
-
-    assert [part["kind"] for part in merged.parts] == ["text", "image"]
-    assert merged.parts[1]["file_path"] == str(image_path)
-    assert merged.image_plan is image_plan
-    assert merged.emoji_plan is None
-
-
-@pytest.mark.asyncio
-async def test_attach_reply_media_no_longer_penalizes_generic_image_plan(tmp_path: Path):
-    from plugins.xiaoqing_chat.reply_generator import ReplyDraft, _attach_reply_media
-
-    image_path = tmp_path / "sunset.png"
-    image_path.write_bytes(b"png")
-    context = SimpleNamespace(plugin_dir=tmp_path)
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            media=SimpleNamespace(
-                enable_outbound_image_reply=True,
-                enable_outbound_emoji_reply=True,
-                enable_outbound_face_reply=False,
-            )
-        )
-    )
-    draft = ReplyDraft(
-        text="这张有点绝",
-        text_parts=("这张有点绝",),
-        parts=build_text_message_parts("这张有点绝"),
-    )
-    image_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            media_key="media:hash-sunset",
-            media_hash="hash-sunset",
-            file_path=str(image_path),
-            description="海边落日",
-            marker="[图片：海边落日]",
-        ),
-        marker="[图片：海边落日]",
-        mode="text_with_image",
-    )
-    emoji_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            media_hash="hash-emoji",
-            description="无语猫猫",
-            emotion_tags=("无语",),
-            file_path=str(image_path),
-        ),
-        marker="[表情包：无语]",
-        mode="text_with_emoji",
-    )
-
-    with (
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_image_reply",
-            new=AsyncMock(return_value=image_plan),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_emoji_reply",
-            new=AsyncMock(return_value=emoji_plan),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_qq_face_reply",
-            new=AsyncMock(return_value=None),
-        ),
-    ):
-        merged = await _attach_reply_media(
-            draft,
-            context=context,
-            runtime=runtime,
-            history=[],
-            user_text="这张有点绝",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-            chat_id="g1",
-        )
-
-    assert [part["kind"] for part in merged.parts] == ["text", "image"]
-    assert merged.image_plan is image_plan
-    assert merged.emoji_plan is None
-
-
-@pytest.mark.asyncio
-async def test_attach_reply_media_logs_planner_error_and_keeps_other_plan(tmp_path: Path):
-    from plugins.xiaoqing_chat.reply_generator import ReplyDraft, _attach_reply_media
-
-    image_path = tmp_path / "emoji.png"
-    image_path.write_bytes(b"png")
-    context = SimpleNamespace(plugin_dir=tmp_path)
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            media=SimpleNamespace(
-                enable_outbound_image_reply=True,
-                enable_outbound_emoji_reply=True,
-                enable_outbound_face_reply=False,
-            )
-        )
-    )
-    draft = ReplyDraft(
-        text="这也太逗了",
-        text_parts=("这也太逗了",),
-        parts=build_text_message_parts("这也太逗了"),
-    )
-    emoji_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            media_hash="hash-emoji",
-            description="猫猫无语",
-            emotion_tags=("无语",),
-            file_path=str(image_path),
-        ),
-        marker="[表情包：无语]",
-        mode="text_with_emoji",
-    )
-
-    with (
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_image_reply",
-            new=AsyncMock(side_effect=RuntimeError("image planner boom")),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_emoji_reply",
-            new=AsyncMock(return_value=emoji_plan),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_qq_face_reply",
-            new=AsyncMock(return_value=None),
-        ),
-        patch("plugins.xiaoqing_chat.reply_generator._log_step") as mock_log_step,
-    ):
-        merged = await _attach_reply_media(
-            draft,
-            context=context,
-            runtime=runtime,
-            history=[],
-            user_text="你这也太损了",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-            chat_id="g1",
-        )
-
-    assert [part["kind"] for part in merged.parts] == ["text", "emoji"]
-    assert merged.image_plan is None
-    assert merged.emoji_plan is emoji_plan
-    assert any(
-        call.kwargs.get("step") == "reply.media.plan.error"
-        and call.kwargs.get("fields", {}).get("planner") == "image"
-        for call in mock_log_step.call_args_list
-    )
-
-
-@pytest.mark.asyncio
-async def test_attach_reply_media_cancels_slow_planner_and_keeps_finished_plan(tmp_path: Path):
-    from plugins.xiaoqing_chat.reply_generator import ReplyDraft, _attach_reply_media
-
-    image_path = tmp_path / "emoji.png"
-    image_path.write_bytes(b"png")
-    context = SimpleNamespace(plugin_dir=tmp_path)
-    runtime = SimpleNamespace(
-        cfg=SimpleNamespace(
-            media=SimpleNamespace(
-                enable_outbound_image_reply=True,
-                enable_outbound_emoji_reply=True,
-                enable_outbound_face_reply=False,
-                reply_media_timeout_seconds=0.01,
-            )
-        )
-    )
-    draft = ReplyDraft(
-        text="这也太逗了",
-        text_parts=("这也太逗了",),
-        parts=build_text_message_parts("这也太逗了"),
-    )
-    emoji_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            media_hash="hash-emoji",
-            description="猫猫无语",
-            emotion_tags=("无语",),
-            file_path=str(image_path),
-        ),
-        marker="[表情包：无语]",
-        mode="text_with_emoji",
-    )
-    cancelled = False
-
-    async def _slow_image_plan(**kwargs):
-        nonlocal cancelled
-        try:
-            await asyncio.sleep(60)
-        except asyncio.CancelledError:
-            cancelled = True
-            raise
-
-    with (
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_image_reply",
-            new=AsyncMock(side_effect=_slow_image_plan),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_emoji_reply",
-            new=AsyncMock(return_value=emoji_plan),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.reply_generator.plan_qq_face_reply",
-            new=AsyncMock(return_value=None),
-        ),
-        patch("plugins.xiaoqing_chat.reply_generator._log_step") as mock_log_step,
-    ):
-        merged = await _attach_reply_media(
-            draft,
-            context=context,
-            runtime=runtime,
-            history=[],
-            user_text="你这也太损了",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-            chat_id="g1",
-        )
-
-    assert cancelled is True
-    assert [part["kind"] for part in merged.parts] == ["text", "emoji"]
-    assert merged.emoji_plan is emoji_plan
-    assert any(
-        call.kwargs.get("step") == "reply.media.plan.timeout"
-        and "image" in call.kwargs.get("fields", {}).get("pending", "")
-        for call in mock_log_step.call_args_list
-    )
+    assert media_marker is None
 
 
 def test_assistant_reply_parts_keeps_single_face_when_generator_already_attached_it():
@@ -6694,7 +6145,8 @@ def test_assistant_reply_parts_keeps_single_face_when_generator_already_attached
             {"kind": "text", "text": "懂了"},
             {"kind": "qq_face", "face_id": "277", "marker": "[QQ表情：狗头]"},
         ),
-        face_plan=SimpleNamespace(
+        media_marker=SimpleNamespace(
+            kind="qq_face",
             entry=SimpleNamespace(face_id="277", label="狗头", aliases=()),
             marker="[QQ表情：狗头]",
             mode="text_with_face",
@@ -6725,7 +6177,8 @@ def test_assistant_reply_parts_keeps_single_emoji_when_generator_already_attache
                 "file_path": "/tmp/emoji.png",
             },
         ),
-        emoji_plan=SimpleNamespace(
+        media_marker=SimpleNamespace(
+            kind="emoji",
             entry=SimpleNamespace(
                 media_hash="hash-1",
                 description="猫猫翻白眼",
@@ -6760,7 +6213,8 @@ def test_assistant_reply_parts_keeps_attached_image_without_reselecting():
                 "file_path": "/tmp/sunset.png",
             },
         ),
-        image_plan=SimpleNamespace(
+        media_marker=SimpleNamespace(
+            kind="image",
             entry=SimpleNamespace(
                 media_key="media:hash-1",
                 media_hash="hash-1",

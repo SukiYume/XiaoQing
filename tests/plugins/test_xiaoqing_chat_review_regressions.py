@@ -109,6 +109,150 @@ async def test_build_memory_block_fallback_keeps_global_memory_hits() -> None:
     assert "全局知识命中" in block
 
 
+@pytest.mark.asyncio
+async def test_build_memory_block_uses_current_text_when_question_generation_fails() -> None:
+    from plugins.xiaoqing_chat.config.config import MemoryConfig
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
+    from plugins.xiaoqing_chat.memory.memory_db import RetrievedItem
+    from plugins.xiaoqing_chat.memory.memory_retrieval import build_memory_block
+
+    queried: list[str] = []
+
+    async def fake_react_retrieve(**kwargs) -> str:
+        return ""
+
+    def fake_query(question, *, top_k, min_score, type_filter=None, meta_filter=None):
+        queried.append(question)
+        return [
+            RetrievedItem(
+                doc_id="topic:1",
+                text="王府井二次元店讨论摘要",
+                score=0.9,
+                meta={"type": "topic_summary", "chat_id": "g1"},
+            )
+        ]
+
+    memory_db = MemoryDB()
+    cfg = MemoryConfig(
+        planner_question=True,
+        enable_thinking_back_cache=False,
+        top_k=2,
+        min_score=0.1,
+        max_agent_iterations=1,
+        agent_timeout_seconds=1.0,
+    )
+    history = [StoredMessage(role="user", name="Tester", content="你好", ts=1.0)]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(memory_db, "query", fake_query)
+        mp.setattr(
+            "plugins.xiaoqing_chat.memory.memory_retrieval.react_retrieve",
+            fake_react_retrieve,
+        )
+        block = await build_memory_block(
+            data_dir=Path("."),
+            chat_id="g1",
+            http_session=object(),
+            secrets={},
+            cfg=cfg,
+            bot_name="小青",
+            history=history,
+            current_text="王府井以前有二次元店吗",
+            planner_question="",
+            memory_db=memory_db,
+            temperature=0.7,
+            top_p=0.9,
+            max_tokens=256,
+            timeout_seconds=3.0,
+            max_retry=0,
+            retry_interval_seconds=0.2,
+            proxy="",
+            endpoint_path="/v1/chat/completions",
+        )
+
+    assert queried == ["王府井以前有二次元店吗"]
+    assert "王府井二次元店讨论摘要" in block
+
+
+@pytest.mark.asyncio
+async def test_build_memory_block_uses_control_payload_for_react() -> None:
+    from plugins.xiaoqing_chat.config.config import MemoryConfig
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
+    from plugins.xiaoqing_chat.memory.memory_retrieval import build_memory_block
+
+    captured: dict[str, object] = {}
+
+    async def fake_react_retrieve(**kwargs) -> str:
+        captured["extra_payload"] = kwargs.get("extra_payload")
+        return "记得她之前说过喜欢吃辣"
+
+    def fake_query(question, *, top_k, min_score, type_filter=None, meta_filter=None):
+        return []
+
+    memory_db = MemoryDB()
+    cfg = MemoryConfig(
+        planner_question=False,
+        enable_thinking_back_cache=False,
+        top_k=2,
+        min_score=0.1,
+        max_agent_iterations=1,
+        agent_timeout_seconds=1.0,
+    )
+    history = [StoredMessage(role="user", name="Tester", content="你好", ts=1.0)]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(memory_db, "query", fake_query)
+        mp.setattr(
+            "plugins.xiaoqing_chat.memory.memory_retrieval.react_retrieve",
+            fake_react_retrieve,
+        )
+        block = await build_memory_block(
+            data_dir=Path("."),
+            chat_id="g1",
+            http_session=object(),
+            secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
+            cfg=cfg,
+            bot_name="小青",
+            history=history,
+            current_text="她喜欢吃什么来着",
+            planner_question="她喜欢吃什么来着",
+            memory_db=memory_db,
+            temperature=0.7,
+            top_p=0.9,
+            max_tokens=256,
+            timeout_seconds=3.0,
+            max_retry=0,
+            retry_interval_seconds=0.2,
+            proxy="",
+            endpoint_path="/v1/chat/completions",
+            extra_payload={"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
+        )
+
+    assert "喜欢吃辣" in block
+    assert captured["extra_payload"] == {"thinking": {"type": "disabled"}}
+
+
+def test_control_extra_payload_preserves_non_reasoning_fields_and_disables_thinking() -> None:
+    from plugins.xiaoqing_chat.llm.control_payload import control_extra_payload
+
+    payload = control_extra_payload(
+        {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "high",
+            "seed": 123,
+        },
+        json_object=True,
+    )
+
+    assert payload == {
+        "thinking": {"type": "disabled"},
+        "seed": 123,
+        "response_format": {"type": "json_object"},
+    }
+
+
 def test_memory_db_save_logs_write_failures(tmp_path) -> None:
     from plugins.xiaoqing_chat.memory import memory_db as memory_db_module
     from plugins.xiaoqing_chat.memory.memory_db import MemoryDB

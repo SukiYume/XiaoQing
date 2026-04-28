@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, Optional, Union
+
+from ..utils.json_parsing import (
+    normalize_llm_text,
+    parse_first_json_array,
+    parse_first_json_object,
+    parse_first_json_value,
+)
 
 _RE_ARRAY = re.compile(r"\[[\s\S]*\]")
 _RE_OBJ = re.compile(r"\{[\s\S]*\}")
@@ -11,11 +17,7 @@ _RE_JSON_BLOCK = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
 
 def _strip_code_block(text: str) -> str:
     """Strip markdown code blocks from text before JSON extraction."""
-    s = (text or "").strip()
-    blocks = _RE_JSON_BLOCK.findall(s)
-    if blocks:
-        return blocks[0].strip()
-    return s
+    return normalize_llm_text(text)
 
 def get_items_from_json(
     content: str,
@@ -29,51 +31,35 @@ def get_items_from_json(
     if default_values:
         result.update(default_values)
 
-    if allow_array:
-        m = _RE_ARRAY.search(s)
-        if m:
-            try:
-                arr = json.loads(m.group(0))
-            except Exception:
-                arr = None
-            if isinstance(arr, list):
-                valid: list[dict[str, Any]] = []
-                for it in arr:
-                    if not isinstance(it, dict):
-                        continue
-                    if not all(k in it for k in items):
-                        continue
-                    if required_types:
-                        ok = True
-                        for k, tp in required_types.items():
-                            if k in it and not isinstance(it[k], tp):
-                                ok = False
-                                break
-                        if not ok:
-                            continue
-                    empty = False
-                    for k in items:
-                        v = it.get(k)
-                        if isinstance(v, str) and not v.strip():
-                            empty = True
-                            break
-                    if empty:
-                        continue
-                    valid.append(it)
-                if valid:
-                    return True, valid
+    parsed = parse_first_json_value(s) if allow_array else parse_first_json_object(s)
+    if isinstance(parsed, list):
+        valid: list[dict[str, Any]] = []
+        for it in parsed:
+            if not all(k in it for k in items):
+                continue
+            if required_types:
+                ok = True
+                for k, tp in required_types.items():
+                    if k in it and not isinstance(it[k], tp):
+                        ok = False
+                        break
+                if not ok:
+                    continue
+            empty = False
+            for k in items:
+                v = it.get(k)
+                if isinstance(v, str) and not v.strip():
+                    empty = True
+                    break
+            if empty:
+                continue
+            valid.append(it)
+        if valid:
+            return True, valid
+        return False, result
 
-    obj_text = s
-    try:
-        parsed = json.loads(obj_text)
-    except Exception:
-        m = _RE_OBJ.search(s)
-        if not m:
-            return False, result
-        try:
-            parsed = json.loads(m.group(0))
-        except Exception:
-            return False, result
+    if parsed is None:
+        return False, result
 
     if not isinstance(parsed, dict):
         return False, result
@@ -99,30 +85,8 @@ def get_items_from_json(
 
 def extract_first_json_list(text: str) -> list[dict[str, Any]]:
     """Extract the first JSON list from text, handling code blocks."""
-    s = _strip_code_block(text)
-    m = _RE_ARRAY.search(s)
-    if not m:
-        return []
-    try:
-        arr = json.loads(m.group(0))
-        if isinstance(arr, list):
-            return [it for it in arr if isinstance(it, dict)]
-    except Exception:
-        pass
-    return []
+    return parse_first_json_array(text)
 
 def extract_first_json_dict(text: str) -> Optional[dict[str, Any]]:
     """Extract the first JSON object from text, handling code blocks."""
-    s = _strip_code_block(text)
-    m = _RE_OBJ.search(s)
-    if not m:
-        try:
-            obj = json.loads(s)
-            return obj if isinstance(obj, dict) else None
-        except Exception:
-            return None
-    try:
-        obj = json.loads(m.group(0))
-        return obj if isinstance(obj, dict) else None
-    except Exception:
-        return None
+    return parse_first_json_object(text)

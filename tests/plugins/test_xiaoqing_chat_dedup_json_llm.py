@@ -46,6 +46,31 @@ def test_json_parsing_helper_extracts_embedded_object_and_named_list() -> None:
     assert extract_named_list_field(obj, "missing") == []
 
 
+def test_json_parsing_helper_strips_think_and_repairs_common_bad_json() -> None:
+    from plugins.xiaoqing_chat.utils.json_parsing import parse_first_json_object
+
+    text = '<think>先想一下</think>\n```json\n{suitable: true, reason: "ok",}\n```'
+
+    assert parse_first_json_object(text) == {"suitable": True, "reason": "ok"}
+
+
+def test_llm_content_extractor_ignores_reasoning_content_and_strips_think_tags() -> None:
+    from plugins.xiaoqing_chat.llm.llm_client import extract_response_content
+
+    data = {
+        "choices": [
+            {
+                "message": {
+                    "reasoning_content": "这里不应该参与解析",
+                    "content": "<think>内部思考</think>\n{\"answer\":\"最终\"}",
+                }
+            }
+        ]
+    }
+
+    assert extract_response_content(data) == '{"answer":"最终"}'
+
+
 @pytest.mark.asyncio
 async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.MonkeyPatch) -> None:
     from plugins.xiaoqing_chat.llm import llm_client
@@ -57,7 +82,10 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
                 "choices": [
                     {
                         "message": {
-                            "content": '前缀 {"suitable": false, "reason": "重复", "need_replan": true} 后缀'
+                            "content": (
+                                '前缀 {"suitable": false, "reason": "重复", '
+                                '"need_replan": true} 后缀'
+                            )
                         }
                     }
                 ]

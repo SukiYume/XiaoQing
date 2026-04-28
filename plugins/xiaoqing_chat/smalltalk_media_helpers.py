@@ -16,77 +16,48 @@ from .message_parts import (
 from .smalltalk_models import _GeneratedSmalltalkTurn
 
 
+_MEDIA_PART_KINDS = ("emoji", "qq_face", "image")
+
+
 def _first_media_part(
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
-    kind: str,
 ) -> dict[str, Any] | None:
     for part in normalize_message_parts(parts):
-        if str(part.get("kind", "") or "").strip() == kind:
+        if str(part.get("kind", "") or "").strip() in _MEDIA_PART_KINDS:
             return dict(part)
     return None
 
 
-def _emoji_action_detail(
-    emoji_plan,
+def _drop_empty(detail: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in detail.items() if value}
+
+
+def _media_action_detail(
+    marker,
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    if not emoji_plan:
-        part = _first_media_part(parts, "emoji")
-        if not part:
-            return {}
-        return {
-            "emoji_marker": str(part.get("marker", "") or ""),
-            "emoji_hash": str(part.get("media_hash", "") or ""),
-            "emoji_mode": str(part.get("mode", "") or ""),
-        }
-    return {
-        "emoji_marker": emoji_plan.marker,
-        "emoji_hash": emoji_plan.entry.media_hash,
-        "emoji_mode": getattr(emoji_plan, "mode", ""),
-    }
+    if marker is not None:
+        entry = getattr(marker, "entry", None)
+        return _drop_empty({
+            "media_kind": str(getattr(marker, "kind", "") or ""),
+            "media_marker": str(getattr(marker, "marker", "") or ""),
+            "media_mode": str(getattr(marker, "mode", "") or ""),
+            "media_hash": str(getattr(entry, "media_hash", "") or ""),
+            "media_key": str(getattr(entry, "media_key", "") or ""),
+            "media_face_id": str(getattr(entry, "face_id", "") or ""),
+        })
 
-
-def _image_action_detail(
-    image_plan,
-    parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    if not image_plan:
-        part = _first_media_part(parts, "image")
-        if not part:
-            return {}
-        return {
-            "image_marker": str(part.get("marker", "") or ""),
-            "image_hash": str(part.get("media_hash", "") or ""),
-            "image_key": str(part.get("media_key", "") or ""),
-            "image_mode": str(part.get("mode", "") or ""),
-        }
-    entry = getattr(image_plan, "entry", None)
-    return {
-        "image_marker": str(getattr(image_plan, "marker", "") or ""),
-        "image_hash": str(getattr(entry, "media_hash", "") or ""),
-        "image_key": str(getattr(entry, "media_key", "") or ""),
-        "image_mode": str(getattr(image_plan, "mode", "") or ""),
-    }
-
-
-def _face_action_detail(
-    face_plan,
-    parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    if not face_plan:
-        part = _first_media_part(parts, "qq_face")
-        if not part:
-            return {}
-        return {
-            "face_marker": str(part.get("marker", "") or ""),
-            "face_id": str(part.get("face_id", "") or ""),
-            "face_mode": str(part.get("mode", "") or ""),
-        }
-    return {
-        "face_marker": face_plan.marker,
-        "face_id": face_plan.entry.face_id,
-        "face_mode": getattr(face_plan, "mode", ""),
-    }
+    part = _first_media_part(parts)
+    if not part:
+        return {}
+    return _drop_empty({
+        "media_kind": str(part.get("kind", "") or ""),
+        "media_marker": str(part.get("marker", "") or ""),
+        "media_mode": str(part.get("mode", "") or ""),
+        "media_hash": str(part.get("media_hash", "") or ""),
+        "media_key": str(part.get("media_key", "") or ""),
+        "media_face_id": str(part.get("face_id", "") or ""),
+    })
 
 
 def _serialize_rendered_media_items(rendered_items: list[Any]) -> list[dict[str, Any]]:
@@ -228,12 +199,15 @@ def _normalize_generated_reply_state(
 
 
 def _mark_reply_media_used(context, runtime, generated: _GeneratedSmalltalkTurn) -> None:
-    if generated.emoji_plan is not None:
+    marker = generated.media_marker
+    marker_kind = str(getattr(marker, "kind", "") or "") if marker is not None else ""
+
+    if marker is not None and marker_kind == "emoji":
         try:
-            mark_emoji_used(context, runtime, generated.emoji_plan.entry)
+            mark_emoji_used(context, runtime, marker.entry)
         except Exception:
             pass
-    else:
+    elif marker_kind != "emoji":
         for part in normalize_message_parts(generated.reply_parts):
             if str(part.get("kind", "") or "").strip() != "emoji":
                 continue
@@ -241,12 +215,13 @@ def _mark_reply_media_used(context, runtime, generated: _GeneratedSmalltalkTurn)
                 mark_emoji_used_by_hash(context, runtime, str(part.get("media_hash", "") or ""))
             except Exception:
                 pass
-    if generated.face_plan is not None:
+
+    if marker is not None and marker_kind == "qq_face":
         try:
-            mark_qq_face_used(context, generated.face_plan.entry)
+            mark_qq_face_used(context, marker.entry)
         except Exception:
             pass
-    else:
+    elif marker_kind != "qq_face":
         for part in normalize_message_parts(generated.reply_parts):
             if str(part.get("kind", "") or "").strip() != "qq_face":
                 continue

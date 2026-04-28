@@ -587,7 +587,7 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 1. `personality.identity` 和随机 `states`
 2. 从对话里学到的表达方式
 3. 黑话/梗解释
-4. reply checker 和 rewrite，把回复压回“短、口语、像真人”
+4. 人设提示、pre-heuristic 和 reply checker，把回复压回“短、口语、像真人”
 5. PFC / goal / brain chat，让它知道这轮为什么要说话；私聊深度对话时还能切到更高 think level
 
 #### 3. 图片与表情包进入正常对话流
@@ -611,7 +611,7 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 
 识别成表情包的图片会进入 `plugins/xiaoqing_chat/figures/library/`，后续可作为本地表情包回复素材。
 
-回复阶段仍然遵循“先出文本，再做媒体后处理”的主链：先生成文本回复，再根据当前回复、最近对话和入站 marker 决定是否补发本地图片、表情包或 QQ 表情。旧图库里元数据不完整的条目会在后台补修，不会卡住当前回复。
+回复阶段由主 LLM 直接决定是否带出站媒体：它可以在自然文本里附一个 `[想发表情:hint]`、`[想发QQ表情:hint]` 或 `[想发图片:hint]` marker。插件会剥离这个控制 marker，再按 hint 到本地表情包库、图片目录或 QQ face 目录里解析成实际发送段。旧图库里元数据不完整的条目会在后台补修，不会卡住当前回复。
 
 #### 4. 深度对话模式与 think level
 
@@ -629,39 +629,27 @@ xiaoqing_chat 内部实现智能回复频率控制，优于简单的 `random_rep
 
 **控制策略**：
 
-1. **话题相关性**：根据用户输入的相关性决定是否回复
-2. **对话连贯性**：保持对话的连贯性
-3. **用户频率限制**：避免对同一用户回复过频繁
-4. **上下文感知**：根据对话上下文判断
+1. **硬频控**：最小回复间隔、每分钟上限、连续回复冷却
+2. **强制回复**：私聊、被 `@`、直接叫名字后的下一轮会跳过概率门
+3. **活跃话题**：近期目标仍活跃时可使用更短的 `active_topic_min_reply_interval`
+4. **soft gate**：基础概率叠加 heartflow 和连续未回复补偿
 
 **示例**：
 ```python
 async def handle_smalltalk(text: str, event: Dict, context) -> List:
-    """智能回复控制"""
-    
-    # 1. 获取用户历史
-    user_id = event.get("user_id")
-    history = await get_user_history(user_id, context)
-    
-    # 2. 分析话题相关性
-    relevance = analyze_relevance(text, history)
-    if relevance < 0.3:
-        # 话题不相关，不回复
-        return None
-    
-    # 3. 检查频率限制
-    recent_count = get_recent_reply_count(user_id, context)
-    if recent_count > 3:
-        # 回复过频繁，跳过
-        return None
-    
-    # 4. 生成回复
-    response = await generate_llm_response(text, history, context)
-    
-    # 5. 保存到历史
-    await save_to_history(user_id, text, response)
-    
-    return segments(response)
+    """示意：xiaoqing_chat 自己决定是否回复"""
+
+    runtime = load_xiaoqing_runtime(context)
+    state = get_state()
+    chat_id = resolve_chat_id(event)
+
+    if not is_forced(event) and not await should_reply(runtime, state, chat_id, text):
+        await state.heartflow.on_no_reply_async(chat_id=chat_id)
+        return []
+
+    draft = await generate_reply_draft(text, event, context)
+    await save_reply_to_memory(chat_id, draft)
+    return draft.parts
 ```
 
 ### 扩展 xiaoqing_chat
@@ -715,7 +703,7 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
 ```
 
 > [!NOTE]
-> 如果你要扩展图片相关行为，优先看 `plugins/xiaoqing_chat/media/event_media.py`、`emoji_library.py`、`emoji_reply.py`。当前设计是“主回复模型仍然输出文本，媒体回复作为后处理步骤决定”，不要把内联媒体标记重新塞回主回复文本里。
+> 如果你要扩展图片或表情相关行为，优先看 `plugins/xiaoqing_chat/media/event_media.py`、`emoji_library.py`、`marker_resolver.py`。当前设计是主回复模型输出至多一个出站媒体 marker，解析与落盘路径由 `marker_resolver.py` 统一处理。
 
 ---
 

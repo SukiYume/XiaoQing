@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import random
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +17,7 @@ _LEGACY_QQ_FACE_LABEL_OVERRIDES: dict[str, tuple[str, ...]] = {
     "279": ("踩",),
 }
 _BUNDLED_QQ_FACE_LABELS: dict[str, tuple[str, ...]] | None = None
+_CATALOG_CACHE: dict[str, tuple[tuple[float, float], list["QQFaceEntry"]]] = {}
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,37 @@ def _save_payload(context, payload: dict[str, Any]) -> None:
     path = _catalog_path(context)
     ensure_dir(path.parent)
     write_json(path, payload)
+    _invalidate_catalog_cache(context)
+
+
+def _catalog_cache_key(context) -> str:
+    try:
+        return str(_catalog_path(context).resolve())
+    except OSError:
+        return str(_catalog_path(context))
+
+
+def _catalog_signature(context) -> tuple[float, float] | None:
+    catalog_path = _catalog_path(context)
+    bundled_path = _bundled_catalog_path()
+    try:
+        catalog_mtime = catalog_path.stat().st_mtime if catalog_path.exists() else -1.0
+        bundled_mtime = bundled_path.stat().st_mtime if bundled_path.exists() else -1.0
+    except OSError:
+        return None
+    return float(catalog_mtime), float(bundled_mtime)
+
+
+def _invalidate_catalog_cache(context) -> None:
+    key = _catalog_cache_key(context)
+    if key:
+        _CATALOG_CACHE.pop(key, None)
+
+
+def _save_payload_if_changed(context, *, original_payload: dict[str, Any], payload: dict[str, Any]) -> None:
+    if payload == original_payload:
+        return
+    _save_payload(context, payload)
 
 
 def _load_bundled_qq_face_labels() -> dict[str, tuple[str, ...]]:
@@ -155,7 +187,15 @@ def record_face_observation(context, *, face_id: Any, label: Any) -> None:
 
 
 async def load_qq_face_catalog(context, runtime=None) -> list[QQFaceEntry]:
+    cache_key = _catalog_cache_key(context)
+    cache_signature = _catalog_signature(context)
+    if cache_key and cache_signature is not None:
+        cached = _CATALOG_CACHE.get(cache_key)
+        if cached is not None and cached[0] == cache_signature:
+            return list(cached[1])
+
     payload = _load_payload(context)
+    original_payload = deepcopy(payload)
     observed_entries = payload.setdefault("entries", {})
 
     merged_entries: dict[str, dict[str, Any]] = {}
@@ -190,8 +230,11 @@ async def load_qq_face_catalog(context, runtime=None) -> list[QQFaceEntry]:
         }
 
     payload["entries"] = persisted_entries
-    _save_payload(context, payload)
+    _save_payload_if_changed(context, original_payload=original_payload, payload=payload)
     results.sort(key=lambda item: (item.usage_count, item.last_used_ts, item.face_id))
+    updated_signature = _catalog_signature(context)
+    if cache_key and updated_signature is not None:
+        _CATALOG_CACHE[cache_key] = (updated_signature, list(results))
     return results
 def mark_qq_face_used(context, entry: QQFaceEntry) -> None:
     mark_qq_face_used_by_id(context, entry.face_id, label=entry.label)

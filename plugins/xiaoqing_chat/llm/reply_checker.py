@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
 from . import llm_client
+from .control_payload import control_extra_payload
 from .llm_client import LLMError, chat_completions_raw_with_fallback_paths
-from ..constants import is_question
 from ..message_parts import render_stored_message
 from ..memory.memory import StoredMessage
 from ..utils.json_parsing import parse_first_json_object
@@ -16,33 +16,6 @@ from ..utils.json_parsing import parse_first_json_object
 import logging as _logging
 
 _log = _logging.getLogger(__name__)
-_MEDIA_MARKER_RE = re.compile(r"\[(图片|表情包|QQ表情)：([^\]]+)\]")
-_GENERIC_MEDIA_LABELS = frozenset(
-    {
-        "图片",
-        "表情",
-        "表情包",
-        "动画表情",
-        "聊天表情包",
-        "一张图片",
-        "一张表情包",
-        "一张聊天表情包",
-    }
-)
-_MEDIA_PLACEHOLDER_HINTS = (
-    "download?",
-    "appid=",
-    "fileid=",
-    "file_id=",
-    "authkey=",
-    "rkey=",
-    "spec=",
-    "cache=",
-    "uuid=",
-)
-_MEDIA_CLARIFICATION_RE = re.compile(
-    r"(啥图|什么图|这图|啥表情|什么表情|发的啥|这是啥|这啥|没看懂|看不懂)"
-)
 
 
 @dataclass(frozen=True)
@@ -82,77 +55,6 @@ def _normalize_text(s: str) -> str:
     return t
 
 
-def _normalize_media_label(value: str) -> str:
-    text = str(value or "").strip()
-    if text.startswith("[") and text.endswith("]"):
-        text = text[1:-1].strip()
-    text = re.sub(r"^(QQ表情|表情包|图片)\s*[：:]", "", text)
-    text = re.sub(r"\s+", "", text)
-    return text
-
-
-def _looks_like_placeholder_media_label(value: str) -> bool:
-    normalized = _normalize_media_label(value)
-    if not normalized:
-        return True
-    lowered = normalized.lower()
-    compact = re.sub(r"[\s_\-]+", "", lowered)
-    if compact in _GENERIC_MEDIA_LABELS:
-        return True
-    if any(token in lowered for token in _MEDIA_PLACEHOLDER_HINTS):
-        return True
-    if re.fullmatch(r"(?:img|image|photo|picture|screenshot|file|attachment|download)\d{0,8}", compact):
-        return True
-    if re.fullmatch(r"[0-9a-f]{24,64}", compact):
-        return True
-    if re.fullmatch(r"[a-z0-9_-]{28,64}", lowered) and sum(ch.isdigit() for ch in compact) >= 6:
-        return True
-    return False
-
-
-def _latest_user_media_labels(history: Sequence[StoredMessage]) -> list[str]:
-    for msg in reversed(history[-40:]):
-        if msg.role != "user":
-            continue
-        rendered = render_stored_message(msg)
-        if not rendered:
-            continue
-        labels = [str(match.group(2) or "").strip() for match in _MEDIA_MARKER_RE.finditer(rendered)]
-        if labels:
-            return labels
-        if rendered.strip():
-            return []
-    return []
-
-
-def _is_question_sentence(text: str) -> bool:
-    return is_question(text)
-
-
-def _check_repeated_question(
-    *,
-    reply: str,
-    bot_msgs: list[str],
-    similarity_threshold: float = 0.75,
-) -> Optional[ReplyCheckResult]:
-    """Reject reply if it repeats a question that was already asked but not answered."""
-    if not _is_question_sentence(reply):
-        return None
-    r = _normalize_text(reply)
-    for prev_msg in bot_msgs:
-        if not _is_question_sentence(prev_msg):
-            continue
-        prev = _normalize_text(prev_msg)
-        sim = difflib.SequenceMatcher(None, r, prev).ratio()
-        if sim >= similarity_threshold:
-            return ReplyCheckResult(
-                suitable=False,
-                reason=f"重复了之前已经问过的问题（相似度{sim:.2f}），换个话题",
-                need_replan=False,
-            )
-    return None
-
-
 def _heuristic_check(
     *,
     reply: str,
@@ -165,19 +67,6 @@ def _heuristic_check(
     r = _normalize_text(reply)
     if not r:
         return ReplyCheckResult(False, "回复为空", True)
-
-    latest_media_labels = _latest_user_media_labels(history)
-    if (
-        latest_media_labels
-        and any(_looks_like_placeholder_media_label(label) for label in latest_media_labels)
-        and _is_question_sentence(reply)
-        and _MEDIA_CLARIFICATION_RE.search(re.sub(r"\s+", "", r))
-    ):
-        return ReplyCheckResult(
-            False,
-            "当前图片/表情摘要是占位信息，不要追问内容本身，换个更稳妥的接法",
-            False,
-        )
 
     max_look_back = max(4, int(max_repeat_compare))
     bot_msgs = _last_bot_messages(history, bot_name=bot_name, limit=max_look_back)
@@ -199,14 +88,6 @@ def _heuristic_check(
         break
     if max_assistant_in_row > 0 and in_row >= int(max_assistant_in_row):
         return ReplyCheckResult(False, "疑似消息轰炸（连续多条机器人发言）", True)
-
-    rq = _check_repeated_question(
-        reply=reply,
-        bot_msgs=bot_msgs[:4],
-        similarity_threshold=similarity_threshold,
-    )
-    if rq:
-        return rq
 
     return None
 
@@ -256,7 +137,9 @@ async def _llm_check(
 
     prompt = (
         f"你是一个聊天逻辑检查器。{bot_name}是一个拟人聊天角色，不是信息助手。"
-        "请检查以下回复是否合适。重复/轰炸已由前置规则检查过，无需再判断。\n\n"
+        "请检查以下回复是否合适。空回复、完全相同/高度相似文本和连续机器人发言"
+        "已有结构性规则检查；其余上下文、语义和节奏问题都由你判断。"
+        "你必须只输出一个 JSON object，不要输出推理过程。\n\n"
         f"当前对话目标：{goal}\n"
         f"{_policy}"
         f"最近的对话记录：\n{_hist}\n\n"
@@ -267,36 +150,64 @@ async def _llm_check(
         "请结合对话记录检查以下几点：\n"
         "1. 这条回复是否符合当前对话目标和上下文\n"
         "2. 是否与最近的对话记录保持一致性（不矛盾、不答非所问）\n"
-        "3. 是否包含违规内容（血腥暴力、政治敏感等）\n"
+        "3. 是否包含明显不适合公开群聊的内容\n"
         "4. 是否自问自答或混淆了说话人身份\n"
         "5. 是否逻辑通顺\n"
         "6. 是否使用了完全没必要的修辞或过于刻意\n"
-        "7. 如果附带的媒体没有为回复增加新的交流功能，只是在机械复读、镜像、重复上一条媒体语义，通常应判为不合适\n\n"
+        "7. 是否又重复使用近期同一个梗、口癖、调侃角度、追问角度或结论。"
+        "即使换了句式，只要听起来还是在拿同一个点反复说，也应判为不合适。"
+        "但如果用户当前明确追问某个词或梗，回复可以先解释它；不要解释完又继续把它当笑点反复用\n"
+        "8. 如果当前用户消息里的图片/表情摘要明显只是占位或泛称，"
+        "不要追问“啥图/啥表情/这是什么”这类内容本身；应换成更稳妥的接法\n"
+        "9. 如果附带的媒体没有为回复增加新的交流功能，只是在机械复读、镜像、"
+        "重复上一条媒体语义，通常应判为不合适\n\n"
         "注意：这是拟人角色的日常聊天。"
         "口语化、犹豫、撒娇、吐槽、调侃、说不知道、反问对方都是正常的拟人表现，不应因此判为不合适。"
         "简短随意的回复是正常的聊天风格，不要因为回复短或没有提供'有价值的信息'就拒绝。\n\n"
         '仅输出JSON：{"suitable": true/false, "reason": "...", "need_replan": false}'
     )
-    resp, _path = await chat_completions_raw_with_fallback_paths(
-        session=http_session,
-        api_base=api_base,
-        api_key=api_key,
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        top_p=0.8,
-        max_tokens=128,
-        timeout_seconds=timeout_seconds,
-        max_retry=max_retry,
-        retry_interval_seconds=retry_interval_seconds,
-        proxy=proxy,
-        endpoint_path=endpoint_path,
-        extra_payload=extra_payload,
-    )
+    request_payload = control_extra_payload(extra_payload, json_object=True)
+    try:
+        resp, _path = await chat_completions_raw_with_fallback_paths(
+            session=http_session,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            top_p=0.8,
+            max_tokens=128,
+            timeout_seconds=timeout_seconds,
+            max_retry=max_retry,
+            retry_interval_seconds=retry_interval_seconds,
+            proxy=proxy,
+            endpoint_path=endpoint_path,
+            extra_payload=request_payload,
+        )
+    except LLMError as exc:
+        if "response_format" not in request_payload or "http_400" not in str(exc):
+            raise
+        fallback_payload = control_extra_payload(extra_payload, json_object=False)
+        resp, _path = await chat_completions_raw_with_fallback_paths(
+            session=http_session,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            top_p=0.8,
+            max_tokens=128,
+            timeout_seconds=timeout_seconds,
+            max_retry=max_retry,
+            retry_interval_seconds=retry_interval_seconds,
+            proxy=proxy,
+            endpoint_path=endpoint_path,
+            extra_payload=fallback_payload,
+        )
     content = llm_client.extract_response_content(resp)
     obj = parse_first_json_object(content)
     if not obj:
-        return ReplyCheckResult(False, "reply_checker returned invalid response", True)
+        return ReplyCheckResult(True, "reply_checker invalid response", False)
     suitable = bool(obj.get("suitable", True))
     reason = str(obj.get("reason", "") or "").strip()
     need_replan = bool(obj.get("need_replan", False))

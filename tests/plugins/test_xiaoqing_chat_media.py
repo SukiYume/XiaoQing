@@ -10,17 +10,17 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from plugins.xiaoqing_chat.frequency_control import _score_interest
-from plugins.xiaoqing_chat.media.emoji_library import (
-    EmojiLibraryEntry,
-    collect_emoji_candidate,
-    load_emoji_library,
-)
-from plugins.xiaoqing_chat.media.emoji_reply import plan_emoji_reply
-from plugins.xiaoqing_chat.media.image_reply import plan_image_reply
+from plugins.xiaoqing_chat.media.emoji_library import collect_emoji_candidate, load_emoji_library
 from plugins.xiaoqing_chat.media.qq_face_catalog import load_qq_face_catalog
-from plugins.xiaoqing_chat.media.qq_face_reply import plan_qq_face_reply
-from plugins.xiaoqing_chat.media.reply_planner_common import extract_choice_json
+from plugins.xiaoqing_chat.media.marker_resolver import (
+    extract_choice_json,
+    extract_inbound_marker_labels,
+    marker_media_part,
+    parse_marker,
+    resolve_marker,
+    strip_outbound_marker_residue,
+    text_without_outbound_marker,
+)
 from plugins.xiaoqing_chat.media.event_media import (
     RenderedMedia,
     ResolvedMedia,
@@ -38,7 +38,6 @@ from plugins.xiaoqing_chat.media.event_media import (
 from plugins.xiaoqing_chat.llm.llm_client import LLMError
 from plugins.xiaoqing_chat.media_registry import compact_message_content, resolve_message_content
 from plugins.xiaoqing_chat.message_parts import build_text_message_parts, message_parts_to_legacy
-from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.runtime_state import get_state
 
 
@@ -57,18 +56,25 @@ def _reply_draft(text: str) -> SimpleNamespace:
     return SimpleNamespace(text=text, parts=build_text_message_parts(text))
 
 
+def test_extract_inbound_marker_labels_ignores_rendered_content_suffix() -> None:
+    labels = extract_inbound_marker_labels(
+        "[表情包：疑惑，调侃；内容：河禽在河里，说‘没毛病啊’]",
+        "emoji",
+    )
+
+    assert labels == ["疑惑，调侃"]
+
+
 def _reply_draft_with_parts(
     text: str,
     parts,
     *,
-    emoji_plan=None,
-    face_plan=None,
+    media_marker=None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         text=text,
         parts=tuple(parts),
-        emoji_plan=emoji_plan,
-        face_plan=face_plan,
+        media_marker=media_marker,
     )
 
 
@@ -124,9 +130,6 @@ def _raw_media_response(
 def _make_media_runtime(**media_overrides):
     media_cfg = SimpleNamespace(
         enable_inbound_media_context=True,
-        enable_outbound_image_reply=True,
-        enable_outbound_emoji_reply=True,
-        enable_outbound_face_reply=True,
         enable_auto_collect_inbound_emoji=True,
         emoji_library_dir="figures/library",
         image_library_dir="figures/reply_images",
@@ -134,15 +137,6 @@ def _make_media_runtime(**media_overrides):
         emoji_auto_collect_max_entries=200,
         emoji_auto_collect_similarity_threshold=4,
         max_media_per_message=3,
-        image_reply_probability=0.12,
-        image_candidate_count=4,
-        image_cooldown_turns=4,
-        emoji_reply_probability=1.0,
-        emoji_candidate_count=4,
-        emoji_cooldown_turns=3,
-        face_reply_probability=1.0,
-        face_candidate_count=6,
-        face_cooldown_turns=2,
         max_analyze_bytes=1024 * 1024,
         enable_emoji_refine_background=False,
         emoji_refine_timeout_seconds=2.0,
@@ -398,6 +392,140 @@ def test_extract_choice_json_uses_balanced_json_parser():
     )
 
     assert payload == {"mode": "none", "reason": "看到 {猫} 但不必发"}
+
+
+def test_parse_marker_accepts_first_valid_marker_and_cleans_residue() -> None:
+    parsed = parse_marker("哈哈 [想发表情:笑哭] [想发QQ表情:狗头]")
+
+    assert parsed is not None
+    assert parsed.kind == "emoji"
+    assert parsed.hint == "笑哭"
+    assert text_without_outbound_marker("哈哈 [想发表情:笑哭]") == "哈哈"
+    assert strip_outbound_marker_residue("行吧 [想发表情:笑哭") == "行吧"
+    assert parse_marker("[想发表情:这个描述真的太长了吧超过十二字]") is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_marker_matches_emoji_hint_and_builds_media_part(mock_context):
+    runtime = _make_media_runtime()
+    image_path = _write_png(mock_context.plugin_dir / "figures" / "library" / "wuyu.png")
+    media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    index_path = image_path.parent / "index.json"
+    index_path.write_text(
+        json.dumps(
+            {
+                "entries": {
+                    media_hash: {
+                        "file_path": "figures/library/wuyu.png",
+                        "description": "猫猫无语摊手",
+                        "emotion_tags": ["无语", "摊手"],
+                        "usage_count": 0,
+                        "last_used_ts": 0.0,
+                        "marker": "[表情包：猫猫无语摊手]",
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = parse_marker("笑死 [想发表情:无语]")
+    assert parsed is not None
+    resolved = await resolve_marker(parsed, context=mock_context, runtime=runtime)
+
+    assert resolved is not None
+    assert resolved.kind == "emoji"
+    assert resolved.marker == "[表情包：猫猫无语摊手]"
+    part = marker_media_part(mock_context, resolved)
+    assert part is not None
+    assert part["kind"] == "emoji"
+    assert part["media_hash"] == media_hash
+
+
+@pytest.mark.asyncio
+async def test_resolve_marker_matches_qq_face_and_image_hints(mock_context):
+    runtime = _make_media_runtime()
+    image_path = _write_png(mock_context.plugin_dir / "figures" / "reply_images" / "猫举手.png")
+
+    face = await resolve_marker(
+        parse_marker("来个 [想发QQ表情:狗头]"),
+        context=mock_context,
+        runtime=runtime,
+    )
+    image = await resolve_marker(
+        parse_marker("看这个 [想发图片:猫举手]"),
+        context=mock_context,
+        runtime=runtime,
+        history=[],
+    )
+
+    assert face is not None
+    assert face.kind == "qq_face"
+    assert face.marker == "[QQ表情：狗头]"
+    assert image is not None
+    assert image.kind == "image"
+    assert image.entry.file_path == str(image_path)
+    assert marker_media_part(mock_context, image)["kind"] == "image"
+
+
+@pytest.mark.asyncio
+async def test_resolve_marker_returns_none_when_candidate_missing(mock_context):
+    runtime = _make_media_runtime()
+    parsed = parse_marker("哈哈 [想发表情:不存在]")
+
+    assert parsed is not None
+    assert await resolve_marker(parsed, context=mock_context, runtime=runtime) is None
+
+
+@pytest.mark.asyncio
+async def test_load_emoji_library_uses_mtime_cache(mock_context):
+    runtime = _make_media_runtime()
+    image_path = _write_png(mock_context.plugin_dir / "figures" / "library" / "cached.png")
+    media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    (image_path.parent / "index.json").write_text(
+        json.dumps(
+            {
+                "entries": {
+                    media_hash: {
+                        "file_path": "figures/library/cached.png",
+                        "description": "缓存猫猫",
+                        "emotion_tags": ["缓存"],
+                        "usage_count": 0,
+                        "last_used_ts": 0.0,
+                        "marker": "[表情包：缓存猫猫]",
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    first = await load_emoji_library(mock_context, runtime)
+    with patch(
+        "plugins.xiaoqing_chat.media.emoji_library._iter_library_files",
+        side_effect=AssertionError("cache hit should not walk files"),
+    ):
+        second = await load_emoji_library(mock_context, runtime)
+
+    assert [item.media_hash for item in first] == [media_hash]
+    assert [item.media_hash for item in second] == [media_hash]
+
+
+@pytest.mark.asyncio
+async def test_load_qq_face_catalog_uses_mtime_cache(mock_context):
+    runtime = _make_media_runtime()
+
+    first = await load_qq_face_catalog(mock_context, runtime)
+    with patch(
+        "plugins.xiaoqing_chat.media.qq_face_catalog._load_payload",
+        side_effect=AssertionError("cache hit should not read payload"),
+    ):
+        second = await load_qq_face_catalog(mock_context, runtime)
+
+    assert first
+    assert [item.face_id for item in second] == [item.face_id for item in first]
 
 
 @pytest.mark.asyncio
@@ -1469,8 +1597,8 @@ async def test_render_event_media_text_falls_back_to_store_emoji_summary_when_do
 async def test_load_emoji_library_reuses_existing_metadata(mock_context):
     library_dir = mock_context.plugin_dir / "emoji_library"
     library_dir.mkdir(parents=True, exist_ok=True)
-    first_path = _write_png(library_dir / "无语猫猫.png")
-    second_path = _write_png(library_dir / "开心狗狗.png")
+    _write_png(library_dir / "无语猫猫.png")
+    _write_png(library_dir / "开心狗狗.png")
     runtime = _make_media_runtime(emoji_library_dir=str(library_dir))
 
     async def _fake_render(file_path, *, context, runtime, prefer_emoji):
@@ -1818,12 +1946,6 @@ def test_media_llm_max_tokens_expands_for_thinking_models():
     assert _media_llm_max_tokens({"model": "glm-4.1v-thinking-flash"}, 120) == 480
 
 
-def test_score_interest_treats_media_markers_as_meaningful():
-    assert _score_interest("[图片：一只猫躺在桌上]") == "neutral"
-    assert _score_interest("[表情包：无语]") == "high"
-    assert _score_interest("[QQ表情：微笑]") == "neutral"
-
-
 def test_resolve_media_llm_secrets_uses_default_vision_provider_from_secrets(mock_context):
     runtime = _make_media_runtime()
     mock_context.secrets["plugins"]["xiaoqing_chat"]["vision"]["default"] = "glm-4v"
@@ -2016,341 +2138,6 @@ def test_resolve_media_llm_secrets_does_not_reuse_chat_provider_without_explicit
     assert secrets["api_key"] == ""
     assert secrets["model"] == ""
     assert secrets["_vision_enabled"] is False
-
-
-@pytest.mark.asyncio
-async def test_plan_emoji_reply_can_choose_emoji_only_mode(mock_context):
-    runtime = _make_media_runtime()
-    entry = EmojiLibraryEntry(
-        media_hash="hash-1",
-        file_path="figures/library/emoji.png",
-        description="无语猫猫",
-        emotion_tags=("无语",),
-        usage_count=0,
-        last_used_ts=0.0,
-        marker="[表情包：无语]",
-    )
-
-    with (
-        patch("plugins.xiaoqing_chat.media.emoji_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.emoji_reply.load_emoji_library",
-            new=AsyncMock(return_value=[entry]),
-        ) as mock_load,
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(
-                return_value=(
-                    '{"mode":"emoji_only","tag":"无语","reason":"只发图更自然"}',
-                    "/v1/chat/completions",
-                )
-            ),
-        ),
-    ):
-        plan = await plan_emoji_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=[],
-            user_text="[表情包：无语]",
-            reply_text="笑死",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is not None
-    assert plan.mode == "emoji_only"
-    assert plan.selected_tag == "无语"
-    assert mock_load.await_args.kwargs["repair_invalid"] is False
-    assert mock_load.await_args.kwargs["schedule_background_repair"] is True
-
-
-@pytest.mark.asyncio
-async def test_plan_image_reply_uses_selector_endpoint_fallback(mock_context):
-    runtime = _make_media_runtime(image_cooldown_turns=0)
-    image_path = _write_png(mock_context.data_dir / "history" / "fallback_sunset.png")
-    history = [
-        StoredMessage(
-            role="assistant",
-            name="小青",
-            parts=(
-                {
-                    "kind": "image",
-                    "file_path": str(image_path),
-                    "media_hash": "hash-fallback-sunset",
-                    "media_key": "media:hash-fallback-sunset",
-                    "marker": "[图片：海边落日]",
-                    "description": "海边落日",
-                },
-            ),
-            ts=1.0,
-        )
-    ]
-
-    with (
-        patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(
-                return_value=(
-                    '{"mode":"text_with_image","candidate":"1","reason":"补图更自然"}',
-                    "/chat/completions",
-                )
-            ),
-        ) as mock_selector,
-    ):
-        plan = await plan_image_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=history,
-            user_text="这张不错",
-            reply_text="给你看张图",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is not None
-    assert plan.mode == "text_with_image"
-    assert plan.entry.file_path == str(image_path)
-    mock_selector.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_plan_image_reply_can_choose_text_with_image(mock_context):
-    runtime = _make_media_runtime(image_cooldown_turns=0)
-    image_path = _write_png(mock_context.data_dir / "history" / "sunset.png")
-    history = [
-        StoredMessage(
-            role="assistant",
-            name="小青",
-            parts=(
-                {
-                    "kind": "image",
-                    "file_path": str(image_path),
-                    "media_hash": "hash-sunset",
-                    "media_key": "media:hash-sunset",
-                    "marker": "[图片：海边落日]",
-                    "description": "海边落日",
-                },
-            ),
-            ts=1.0,
-        )
-    ]
-
-    with (
-        patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(
-                return_value=(
-                    '{"mode":"text_with_image","candidate":"1","reason":"补一张图更有后劲"}',
-                    "/v1/chat/completions",
-                )
-            ),
-        ),
-    ):
-        plan = await plan_image_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=history,
-            user_text="[图片：海边落日]",
-            reply_text="这张拍得真好",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is not None
-    assert plan.mode == "text_with_image"
-    assert plan.entry.file_path == str(image_path)
-    assert plan.marker == "[图片：海边落日]"
-
-
-@pytest.mark.asyncio
-async def test_plan_image_reply_uses_configured_library_when_history_empty(mock_context):
-    library_dir = mock_context.plugin_dir / "reply_images"
-    image_path = _write_png(library_dir / "偷笑猫猫.png")
-    runtime = _make_media_runtime(
-        image_cooldown_turns=0,
-        image_library_dir=str(library_dir),
-    )
-
-    with (
-        patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(
-                return_value=(
-                    '{"mode":"text_with_image","candidate":"1","reason":"这张图更适合补语气"}',
-                    "/v1/chat/completions",
-                )
-            ),
-        ),
-    ):
-        plan = await plan_image_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=[],
-            user_text="你这也太损了",
-            reply_text="给你看张图",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is not None
-    assert plan.entry.file_path == str(image_path)
-    assert plan.marker == "[图片：偷笑猫猫]"
-
-
-@pytest.mark.asyncio
-async def test_plan_image_reply_skips_user_originated_images(mock_context):
-    runtime = _make_media_runtime()
-    image_path = _write_png(mock_context.data_dir / "history" / "sunset.png")
-    history = [
-        StoredMessage(
-            role="user",
-            name="Tester",
-            parts=(
-                {
-                    "kind": "image",
-                    "file_path": str(image_path),
-                    "media_hash": "hash-sunset",
-                    "media_key": "media:hash-sunset",
-                    "marker": "[图片：海边落日]",
-                    "description": "海边落日",
-                },
-            ),
-            ts=1.0,
-        )
-    ]
-
-    with (
-        patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(side_effect=AssertionError("selector should not run without assistant-owned candidates")),
-        ),
-    ):
-        plan = await plan_image_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=history,
-            user_text="[图片：海边落日]",
-            reply_text="这张拍得真好",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is None
-
-
-def test_reply_media_selection_prefers_richer_plan_over_fixed_order(mock_context):
-    from plugins.xiaoqing_chat.reply_media_helpers import resolve_reply_media_selection
-
-    runtime = _make_media_runtime(max_media_per_message=1)
-    emoji_path = _write_png(mock_context.plugin_dir / "figures" / "library" / "generic_emoji.png")
-    emoji_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            file_path=str(emoji_path),
-            media_hash="emoji-hash",
-            description="一张表情包",
-            emotion_tags=tuple(),
-        ),
-        marker="[表情包：动画表情]",
-        mode="text_with_emoji",
-    )
-    face_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            face_id="277",
-            label="狗头",
-            aliases=("狗头", "阴阳怪气", "懂的都懂"),
-        ),
-        marker="[QQ表情：狗头]",
-        mode="text_with_face",
-    )
-
-    selection = resolve_reply_media_selection(
-        mock_context,
-        runtime=runtime,
-        user_text="你好",
-        emoji_plan=emoji_plan,
-        face_plan=face_plan,
-    )
-
-    assert selection.face_plan is face_plan
-    assert selection.emoji_plan is None
-    assert [part["kind"] for part in selection.media_parts] == ["qq_face"]
-
-
-def test_reply_media_selection_can_keep_multiple_plans_when_limit_allows(mock_context):
-    from plugins.xiaoqing_chat.reply_media_helpers import resolve_reply_media_selection
-
-    runtime = _make_media_runtime(max_media_per_message=2)
-    emoji_path = _write_png(mock_context.plugin_dir / "figures" / "library" / "generic_emoji.png")
-    emoji_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            file_path=str(emoji_path),
-            media_hash="emoji-hash",
-            description="猫猫摊手",
-            emotion_tags=("无语",),
-        ),
-        marker="[表情包：猫猫摊手]",
-        mode="text_with_emoji",
-    )
-    face_plan = SimpleNamespace(
-        entry=SimpleNamespace(
-            face_id="277",
-            label="狗头",
-            aliases=("狗头", "阴阳怪气", "懂的都懂"),
-        ),
-        marker="[QQ表情：狗头]",
-        mode="text_with_face",
-    )
-
-    selection = resolve_reply_media_selection(
-        mock_context,
-        runtime=runtime,
-        user_text="你好",
-        emoji_plan=emoji_plan,
-        face_plan=face_plan,
-    )
-
-    assert selection.face_plan is face_plan
-    assert selection.emoji_plan is emoji_plan
-    assert [part["kind"] for part in selection.media_parts] == ["qq_face", "emoji"]
-
-
-@pytest.mark.asyncio
-async def test_plan_image_reply_skips_during_cooldown(mock_context):
-    runtime = _make_media_runtime(image_cooldown_turns=2)
-    image_path = _write_png(mock_context.data_dir / "history" / "cat.png")
-    history = [
-        StoredMessage(
-            role="assistant",
-            name="小青",
-            parts=(
-                {
-                    "kind": "image",
-                    "file_path": str(image_path),
-                    "media_hash": "hash-cat",
-                    "marker": "[图片：猫猫在发呆]",
-                    "description": "猫猫在发呆",
-                },
-            ),
-            ts=1.0,
-        )
-    ]
-
-    with (
-        patch("plugins.xiaoqing_chat.media.image_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(side_effect=AssertionError("selector should not run during cooldown")),
-        ),
-    ):
-        plan = await plan_image_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=history,
-            user_text="你看这个",
-            reply_text="哈哈",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is None
 
 
 def test_media_registry_dedup_keeps_latest_better_description(tmp_path):
@@ -2637,67 +2424,6 @@ async def test_render_resolved_media_writes_cache_once_on_cache_miss(mock_contex
 
 
 @pytest.mark.asyncio
-async def test_plan_emoji_reply_skips_when_library_empty(mock_context):
-    runtime = _make_media_runtime()
-
-    with (
-        patch("plugins.xiaoqing_chat.media.emoji_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.emoji_reply.load_emoji_library",
-            new=AsyncMock(return_value=[]),
-        ),
-    ):
-        plan = await plan_emoji_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=[],
-            user_text="你看这个",
-            reply_text="哈哈",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is None
-
-
-@pytest.mark.asyncio
-async def test_plan_emoji_reply_skips_during_cooldown(mock_context):
-    runtime = _make_media_runtime(emoji_cooldown_turns=3)
-    history = [
-        StoredMessage(
-            role="assistant",
-            name="小青",
-            content="懂了\n[[xc_media_1]]",
-            media_items=(
-                {
-                    "kind": "emoji",
-                    "media_hash": "hash-emoji",
-                    "marker": "[表情包：无语]",
-                },
-            ),
-            ts=1.0,
-        ),
-    ]
-
-    with (
-        patch("plugins.xiaoqing_chat.media.emoji_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.emoji_reply.load_emoji_library",
-            new=AsyncMock(side_effect=AssertionError("library should not be loaded during cooldown")),
-        ),
-    ):
-        plan = await plan_emoji_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=history,
-            user_text="你看这个",
-            reply_text="哈哈",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is None
-
-
-@pytest.mark.asyncio
 async def test_load_qq_face_catalog_merges_builtin_and_observed_labels(mock_context):
     runtime = _make_media_runtime()
     event = {
@@ -2759,240 +2485,6 @@ async def test_load_qq_face_catalog_keeps_placeholder_for_unlabeled_face(mock_co
 
     assert placeholder.label == "系统表情#999"
     assert "系统表情#999" in persisted["entries"]["999"]["labels"]
-
-
-@pytest.mark.asyncio
-async def test_plan_qq_face_reply_can_choose_text_with_face(mock_context):
-    runtime = _make_media_runtime()
-
-    with (
-        patch("plugins.xiaoqing_chat.media.qq_face_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.qq_face_reply.load_qq_face_catalog",
-            new=AsyncMock(
-                return_value=[
-                    SimpleNamespace(
-                        face_id="277",
-                        label="狗头",
-                        aliases=("狗头",),
-                        usage_count=0,
-                        last_used_ts=0.0,
-                        marker="[QQ表情：狗头]",
-                    )
-                ]
-            ),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(
-                return_value=(
-                    '{"mode":"text_with_face","face":"狗头","reason":"补个 face 更自然"}',
-                    "/v1/chat/completions",
-                )
-            ),
-        ),
-    ):
-        plan = await plan_qq_face_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=[],
-            user_text="热死了",
-            reply_text="又热了",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is not None
-    assert plan.mode == "text_with_face"
-    assert plan.entry.face_id == "277"
-    assert plan.marker == "[QQ表情：狗头]"
-
-
-@pytest.mark.asyncio
-async def test_plan_qq_face_reply_bypasses_probability_for_inbound_marker(mock_context):
-    runtime = _make_media_runtime(face_reply_probability=0.0)
-
-    with (
-        patch("plugins.xiaoqing_chat.media.qq_face_reply.random.random", return_value=0.99),
-        patch(
-            "plugins.xiaoqing_chat.media.qq_face_reply.load_qq_face_catalog",
-            new=AsyncMock(
-                return_value=[
-                    SimpleNamespace(
-                        face_id="424",
-                        label="菜汪",
-                        aliases=("菜汪",),
-                        usage_count=0,
-                        last_used_ts=0.0,
-                        marker="[QQ表情：菜汪]",
-                    )
-                ]
-            ),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(return_value=("", "/v1/chat/completions")),
-        ),
-    ):
-        plan = await plan_qq_face_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=[],
-            user_text="[QQ表情：菜汪]",
-            reply_text="菜汪菜汪",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-            chat_id="u1",
-        )
-
-    assert plan is not None
-    assert plan.mode == "text_with_face"
-    assert plan.entry.face_id == "424"
-    assert plan.marker == "[QQ表情：菜汪]"
-
-
-@pytest.mark.asyncio
-async def test_plan_emoji_reply_does_not_force_on_plain_image_marker(mock_context):
-    runtime = _make_media_runtime(emoji_reply_probability=0.0)
-
-    with (
-        patch("plugins.xiaoqing_chat.media.emoji_reply.random.random", return_value=0.99),
-        patch(
-            "plugins.xiaoqing_chat.media.emoji_reply.load_emoji_library",
-            new=AsyncMock(side_effect=AssertionError("plain image markers should not force emoji planning")),
-        ),
-    ):
-        plan = await plan_emoji_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=[],
-            user_text="[图片：海边落日]",
-            reply_text="这张不错",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-            chat_id="u1",
-        )
-
-    assert plan is None
-
-
-@pytest.mark.asyncio
-async def test_plan_emoji_reply_falls_back_on_inbound_marker_when_selector_empty(mock_context):
-    runtime = _make_media_runtime(emoji_reply_probability=0.0)
-    entry = EmojiLibraryEntry(
-        media_hash="hash-fallback-emoji",
-        file_path="figures/library/fallback.png",
-        description="猫猫无语摊手",
-        emotion_tags=("无语",),
-        usage_count=0,
-        last_used_ts=0.0,
-        marker="[表情包：无语]",
-    )
-
-    with (
-        patch("plugins.xiaoqing_chat.media.emoji_reply.random.random", return_value=0.99),
-        patch(
-            "plugins.xiaoqing_chat.media.emoji_reply.load_emoji_library",
-            new=AsyncMock(return_value=[entry]),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(return_value=("", "/v1/chat/completions")),
-        ),
-    ):
-        plan = await plan_emoji_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=[],
-            user_text="[表情包：无语]",
-            reply_text="笑死",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-            chat_id="u1",
-        )
-
-    assert plan is not None
-    assert plan.mode == "text_with_emoji"
-    assert plan.entry.media_hash == "hash-fallback-emoji"
-
-
-@pytest.mark.asyncio
-async def test_plan_emoji_reply_skips_when_validator_rejects_text_with_emoji(mock_context):
-    runtime = _make_media_runtime()
-    entry = EmojiLibraryEntry(
-        media_hash="hash-sad",
-        file_path="figures/library/sad.png",
-        description="小狗委屈流泪",
-        emotion_tags=("难过", "委屈"),
-        usage_count=0,
-        last_used_ts=0.0,
-        marker="[表情包：难过，委屈]",
-    )
-
-    with (
-        patch("plugins.xiaoqing_chat.media.emoji_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.emoji_reply.load_emoji_library",
-            new=AsyncMock(return_value=[entry]),
-        ),
-        patch(
-            "plugins.xiaoqing_chat.media.reply_planner_common.chat_completions_with_fallback_paths",
-            new=AsyncMock(
-                side_effect=[
-                    (
-                        '{"mode":"text_with_emoji","candidate":"1","reason":"补一张更有情绪"}',
-                        "/v1/chat/completions",
-                    ),
-                    ('{"allow":false,"reason":"只是重复上条媒体语义"}', "/v1/chat/completions"),
-                ]
-            ),
-        ),
-    ):
-        plan = await plan_emoji_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=[],
-            user_text="[表情包：难过，委屈；内容：卡通小狗流泪]",
-            reply_text="我懂你意思了",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-            chat_id="u1",
-        )
-
-    assert plan is None
-
-
-@pytest.mark.asyncio
-async def test_plan_qq_face_reply_skips_during_cooldown(mock_context):
-    runtime = _make_media_runtime(face_cooldown_turns=2)
-    history = [
-        StoredMessage(
-            role="assistant",
-            name="小青",
-            content="懂了\n[[xc_media_1]]",
-            media_items=(
-                {
-                    "kind": "qq_face",
-                    "face_id": "14",
-                    "marker": "[QQ表情：微笑]",
-                },
-            ),
-            ts=1.0,
-        ),
-    ]
-
-    with (
-        patch("plugins.xiaoqing_chat.media.qq_face_reply.random.random", return_value=0.0),
-        patch(
-            "plugins.xiaoqing_chat.media.qq_face_reply.load_qq_face_catalog",
-            new=AsyncMock(side_effect=AssertionError("catalog should not be loaded during cooldown")),
-        ),
-    ):
-        plan = await plan_qq_face_reply(
-            context=mock_context,
-            runtime=runtime,
-            history=history,
-            user_text="你看这个",
-            reply_text="哈哈",
-            secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
-        )
-
-    assert plan is None
 
 
 @pytest.mark.asyncio
@@ -3081,8 +2573,6 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
 
     runtime = _make_media_runtime(
         enable_inbound_media_context=False,
-        enable_outbound_emoji_reply=True,
-        enable_outbound_face_reply=False,
     )
     image_path = _write_png(mock_context.data_dir / "emoji_reply.png")
 
@@ -3115,7 +2605,8 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
         secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
         data_dir=mock_context.data_dir,
     )
-    emoji_plan = SimpleNamespace(
+    emoji_marker = SimpleNamespace(
+        kind="emoji",
         entry=SimpleNamespace(file_path=str(image_path), media_hash="hash-1"),
         marker="[表情包：无语]",
         reasoning="emoji_tag:无语",
@@ -3131,7 +2622,7 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
                 "marker": "[表情包：无语]",
             },
         ),
-        emoji_plan=emoji_plan,
+        media_marker=emoji_marker,
     )
 
     with (
@@ -3148,7 +2639,7 @@ async def test_smalltalk_emoji_reply_returns_mixed_text_and_image_and_persists_m
             "plugins.xiaoqing_chat.handlers._generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.handlers.mark_emoji_used"),
+        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_emoji_used"),
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
@@ -3175,8 +2666,6 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
 
     runtime = _make_media_runtime(
         enable_inbound_media_context=False,
-        enable_outbound_emoji_reply=True,
-        enable_outbound_face_reply=False,
     )
     image_path = mock_context.plugin_dir / "figures" / "library" / "emoji_only.png"
     image_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3211,7 +2700,8 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
         secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
         data_dir=mock_context.data_dir,
     )
-    emoji_plan = SimpleNamespace(
+    emoji_marker = SimpleNamespace(
+        kind="emoji",
         entry=SimpleNamespace(file_path=str(image_path), media_hash="hash-1"),
         marker="[表情包：无语]",
         reasoning="emoji_mode:emoji_only;emoji_tag:无语",
@@ -3228,7 +2718,7 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
                 "mode": "emoji_only",
             },
         ),
-        emoji_plan=emoji_plan,
+        media_marker=emoji_marker,
     )
 
     with (
@@ -3248,7 +2738,7 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
             "plugins.xiaoqing_chat.handlers._generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.handlers.mark_emoji_used"),
+        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_emoji_used"),
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
@@ -3272,8 +2762,6 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
 
     runtime = _make_media_runtime(
         enable_inbound_media_context=False,
-        enable_outbound_emoji_reply=False,
-        enable_outbound_face_reply=True,
     )
 
     state = MagicMock()
@@ -3305,7 +2793,8 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
         secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
         data_dir=mock_context.data_dir,
     )
-    face_plan = SimpleNamespace(
+    face_marker = SimpleNamespace(
+        kind="qq_face",
         entry=SimpleNamespace(face_id="277"),
         marker="[QQ表情：狗头]",
         reasoning="face_mode:text_with_face;face_label:狗头",
@@ -3322,7 +2811,7 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
                 "mode": "text_with_face",
             },
         ),
-        face_plan=face_plan,
+        media_marker=face_marker,
     )
 
     with (
@@ -3339,7 +2828,7 @@ async def test_smalltalk_face_reply_returns_mixed_text_and_face_and_persists_mar
             "plugins.xiaoqing_chat.handlers._generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.handlers.mark_qq_face_used"),
+        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_qq_face_used"),
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
@@ -3366,8 +2855,6 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
 
     runtime = _make_media_runtime(
         enable_inbound_media_context=False,
-        enable_outbound_emoji_reply=True,
-        enable_outbound_face_reply=True,
     )
     image_path = mock_context.plugin_dir / "figures" / "library" / "mixed_reply.png"
     image_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3402,17 +2889,12 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
         secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
         data_dir=mock_context.data_dir,
     )
-    emoji_plan = SimpleNamespace(
+    emoji_marker = SimpleNamespace(
+        kind="emoji",
         entry=SimpleNamespace(file_path=str(image_path), media_hash="hash-1", description="无语", emotion_tags=("无语",)),
         marker="[表情包：无语]",
         reasoning="emoji_mode:text_with_emoji;emoji_tag:无语",
         mode="text_with_emoji",
-    )
-    face_plan = SimpleNamespace(
-        entry=SimpleNamespace(face_id="277", label="狗头", aliases=("狗头", "汪汪")),
-        marker="[QQ表情：狗头]",
-        reasoning="face_mode:text_with_face;face_label:狗头",
-        mode="text_with_face",
     )
     reply_draft = _reply_draft_with_parts(
         "懂了\n你看这个\n再说",
@@ -3429,8 +2911,7 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
             },
             {"kind": "text", "text": "\n你看这个\n再说"},
         ),
-        emoji_plan=emoji_plan,
-        face_plan=face_plan,
+        media_marker=emoji_marker,
     )
 
     with (
@@ -3447,8 +2928,8 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
             "plugins.xiaoqing_chat.handlers._generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.handlers.mark_emoji_used"),
-        patch("plugins.xiaoqing_chat.handlers.mark_qq_face_used"),
+        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_emoji_used"),
+        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_qq_face_used"),
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
@@ -3476,8 +2957,6 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
 
     runtime = _make_media_runtime(
         enable_inbound_media_context=False,
-        enable_outbound_emoji_reply=False,
-        enable_outbound_face_reply=True,
     )
 
     state = MagicMock()
@@ -3508,7 +2987,8 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
         secrets={"api_base": "http://test", "api_key": "key", "model": "model"},
         data_dir=mock_context.data_dir,
     )
-    face_plan = SimpleNamespace(
+    face_marker = SimpleNamespace(
+        kind="qq_face",
         entry=SimpleNamespace(face_id="14"),
         marker="[QQ表情：微笑]",
         reasoning="face_mode:face_only;face_label:微笑",
@@ -3524,7 +3004,7 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
                 "mode": "face_only",
             },
         ),
-        face_plan=face_plan,
+        media_marker=face_marker,
     )
 
     with (
@@ -3541,7 +3021,7 @@ async def test_smalltalk_face_only_reply_returns_single_face_and_marker_memory(m
             "plugins.xiaoqing_chat.handlers._generate_reply_draft",
             new=AsyncMock(return_value=reply_draft),
         ),
-        patch("plugins.xiaoqing_chat.handlers.mark_qq_face_used"),
+        patch("plugins.xiaoqing_chat.smalltalk_media_helpers.mark_qq_face_used"),
         patch("plugins.xiaoqing_chat.handlers._most_recent_user_local_id", return_value="u1"),
         patch("plugins.xiaoqing_chat.handlers._spawn_post_reply_bg_tasks", new=AsyncMock()),
         patch("plugins.xiaoqing_chat.handlers._schedule_memory_persist"),
@@ -3566,8 +3046,6 @@ async def test_smalltalk_does_not_force_reply_when_new_emoji_collected(mock_cont
 
     runtime = _make_media_runtime(
         enable_inbound_media_context=True,
-        enable_outbound_emoji_reply=False,
-        enable_outbound_face_reply=False,
     )
     state = MagicMock()
     state.get_mood_state.return_value = ""

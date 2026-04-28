@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import random
 import re
 from typing import Sequence
 
-from ..config.config import ChineseTypoConfig, ResponsePostProcessConfig, ResponseSplitterConfig
+from ..config.config import ResponsePostProcessConfig, ResponseSplitterConfig
 
 _RE_CHINESE_BRACKETS = re.compile(r"（[^）]*）")
 _RE_ASCII_PARENS = re.compile(r"\([^)]*\)")
@@ -54,33 +53,12 @@ def _split_sentences(text: str) -> list[str]:
             out.append(p)
     return out or ([s] if s else [])
 
-_HOMOGLYPH_REPLACE = {
-    "你": ["妳", "妮"],
-    "的": ["得", "地"],
-    "吗": ["嘛"],
-    "吧": ["叭"],
-    "这": ["這"],
-    # "那" → "哪" removed: semantically different ("那个人" vs "哪个人")
-}
-
-def _apply_chinese_typo(text: str, cfg: ChineseTypoConfig) -> str:
-    if not cfg.enable:
-        return text
-    if not text:
-        return text
-    out_chars = list(text)
-    for i, ch in enumerate(out_chars):
-        if ch in _HOMOGLYPH_REPLACE and random.random() < cfg.word_replace_rate:
-            out_chars[i] = random.choice(_HOMOGLYPH_REPLACE[ch])
-    return "".join(out_chars)
-
 def process_llm_response(
     response_text: str,
     cfg: ResponsePostProcessConfig,
     *,
     bot_name: str,
     enable_splitter: bool = True,
-    enable_chinese_typo: bool = True,
 ) -> list[str]:
     text = response_text or ""
     if cfg.enable_response_post_process:
@@ -93,8 +71,6 @@ def process_llm_response(
         return []
 
     splitter: ResponseSplitterConfig = cfg.splitter
-    typo_cfg: ChineseTypoConfig = cfg.chinese_typo
-
     if splitter.enable and enable_splitter:
         sentences = _split_sentences(text)
         out: list[str] = []
@@ -104,13 +80,9 @@ def process_llm_response(
                 out.append(s)
             if len(out) >= splitter.max_sentence_num:
                 break
-        if enable_chinese_typo and typo_cfg.enable:
-            return [_apply_chinese_typo(s, typo_cfg) for s in out]
         return out
 
     text = _truncate(text, splitter.max_length)
-    if enable_chinese_typo and typo_cfg.enable:
-        text = _apply_chinese_typo(text, typo_cfg)
     return [text] if text else []
 
 def join_reply(parts: Sequence[str]) -> str:
