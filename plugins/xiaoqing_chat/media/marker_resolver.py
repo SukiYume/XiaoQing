@@ -17,6 +17,7 @@ T = TypeVar("T")
 
 _OUTBOUND_MARKER_RE = re.compile(r"\[想发(表情|QQ表情|图片)[:：]([^\]\n]{1,12})\]")
 _OUTBOUND_MARKER_RESIDUE_RE = re.compile(r"\[想发[^\]\n]*(?:\]|$)")
+_RENDERED_OUTBOUND_MARKER_RE = re.compile(r"\[(表情包|QQ表情|图片)[:：]([^\]\n]{1,80})\]")
 _QQ_FACE_MARKER_RE = re.compile(r"\[QQ表情：([^\]]+)\]")
 _IMAGE_MARKER_RE = re.compile(r"\[图片：([^\]]+)\]")
 _EMOJI_MARKER_RE = re.compile(r"\[表情包：([^\]]+)\]")
@@ -50,9 +51,28 @@ class ImageLibraryEntry:
 
 
 def parse_marker(text: str) -> ParsedMarker | None:
-    match = _OUTBOUND_MARKER_RE.search(str(text or ""))
+    raw_text = str(text or "")
+    match = _OUTBOUND_MARKER_RE.search(raw_text)
     if match is None:
-        return None
+        # Older prompts/checkers described resolved media as [QQ表情：捂脸].
+        # Treat that rendered form as an outbound marker too, so a model slip
+        # does not leak the marker as plain text.
+        match = _RENDERED_OUTBOUND_MARKER_RE.search(raw_text)
+        if match is None:
+            return None
+        label = str(match.group(1) or "").strip()
+        hint = str(match.group(2) or "").strip()
+        hint = re.split(r"[；;]", hint, maxsplit=1)[0].strip()
+        label_map: dict[str, MediaMarkerKind] = {
+            "表情包": "emoji",
+            "QQ表情": "qq_face",
+            "图片": "image",
+        }
+        kind = label_map.get(label)
+        if kind is None or not hint:
+            return None
+        return ParsedMarker(kind=kind, hint=hint, raw_span=(match.start(), match.end()))
+
     label = str(match.group(1) or "").strip()
     hint = str(match.group(2) or "").strip()
     if not hint:
