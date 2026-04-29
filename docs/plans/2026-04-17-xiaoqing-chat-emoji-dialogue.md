@@ -80,7 +80,7 @@ Expected:
 Introduce a small config block for media behavior, for example:
 - `enable_inbound_media_context`
 - `enable_outbound_emoji_reply`
-- `emoji_library_dir`
+- fixed emoji library path under `data/media/library`
 - `emoji_reply_probability`
 - `emoji_candidate_count`
 - `emoji_cooldown_turns`
@@ -273,7 +273,7 @@ Expected: PASS
 
 Document:
 - how to enable media context
-- how to point `emoji_library_dir` to a local folder
+- the fixed `data/media/library` emoji library layout
 - how cache/index files are stored under the plugin data dir
 - that phase 1 does not depend on MaiBot's DB or action framework
 

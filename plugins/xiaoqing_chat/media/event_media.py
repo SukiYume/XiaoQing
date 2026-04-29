@@ -3,15 +3,13 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import io
 import json
 import mimetypes
 import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, unquote_to_bytes, urlparse
+from urllib.parse import unquote_to_bytes, urlparse
 
-import aiohttp
 from core.plugin_base import ensure_dir
 
 from ..helper_utils import _iter_message_segments
@@ -19,9 +17,9 @@ from ..media_registry import resolve_registered_media_items
 from ..message_parts import build_text_message_parts, normalize_message_parts
 from .event_media_analysis import (
     _analyze_media_with_llm,
-    _media_llm_max_tokens,
-    _prepare_media_for_llm,
-    _resolve_media_llm_secrets,
+    _media_llm_max_tokens,  # noqa: F401 - re-exported for legacy callers/tests
+    _prepare_media_for_llm,  # noqa: F401 - re-exported for legacy callers/tests
+    _resolve_media_llm_secrets,  # noqa: F401 - re-exported for legacy callers/tests
     _schedule_background_emoji_refine,
     _should_refresh_cached_render,
 )
@@ -29,32 +27,25 @@ from .event_media_common import (
     RenderedMedia,
     ResolvedMedia,
     _DOWNLOAD_CHUNK_SIZE,
-    _EMOJI_HINT_RE,
-    _GENERIC_MEDIA_HINTS,
     _MEDIA_DOWNLOAD_TIMEOUT,
     _ONEBOT_HTTP_TIMEOUT,
     _SUPPORTED_IMAGE_SUFFIXES,
     _SUPPORTED_MEDIA_TYPES,
-    _animation_sample_indexes,
     _build_context_marker,
     _build_fallback_render,
     _build_marker,
-    _clean_media_hint,
     _fallback_kind,
     _figures_inbox_dir,
-    _figures_root,
-    _guess_mime_type,
     _inspect_image_payload,
-    _is_generic_media_label,
+    _is_generic_media_label,  # noqa: F401 - re-exported for emoji library compatibility
     _is_low_quality_rendered_media,
     _load_render_cache,
     _looks_like_base64_source,
     _looks_like_data_url,
-    _looks_like_structured_media_text,
+    _looks_like_structured_media_text,  # noqa: F401 - re-exported for legacy callers/tests
     _looks_like_url,
     _media_cfg_value,
     _media_log,
-    _media_root,
     _normalize_emotion_tags,
     _parse_file_uri,
     _render_cache_lock,

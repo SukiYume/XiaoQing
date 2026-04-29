@@ -4,9 +4,9 @@ import json
 import random
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from core.plugin_base import build_action, text, write_json
+from core.plugin_base import build_action, segments, text, write_json
 
 from .bw_expression_store import ExpressionRecord, ExpressionStore
 from .bw_reflect_tracker import ReflectTrackerStore

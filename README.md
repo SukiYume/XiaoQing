@@ -229,7 +229,10 @@ Inbound server started ...
 >             "api_base": "https://open.bigmodel.cn/api/paas/v4",
 >             "api_key": "your-vision-key",
 >             "model": "glm-4.6v-flash",
->             "endpoint_path": "/chat/completions"
+>             "endpoint_path": "/chat/completions",
+>             "thinking": {
+>               "type": "disabled"
+>             }
 >           }
 >         }
 >       }
@@ -239,9 +242,9 @@ Inbound server started ...
 > ```
 
 > [!TIP]
-> 启用媒体能力后，`xiaoqing_chat` 可以把用户发送的普通图片、NapCat `mface`、QQ 原生 `face` 表情都纳入正常对话流；识别为表情包的图片会自动落到 `plugins/xiaoqing_chat/figures/library/`，后续在合适语境下复用发送。
+> 启用媒体能力后，`xiaoqing_chat` 可以把用户发送的普通图片、NapCat `mface`、QQ 原生 `face` 表情都纳入正常对话流；识别为表情包的图片会自动落到 `plugins/xiaoqing_chat/data/media/library/`，后续在合适语境下复用发送。
 >
-> 作为 `smalltalk_provider` 使用时，所有群聊消息都会进入插件；被 `@` 或直接叫机器人名字会走强制回复路径。出站图片/表情/QQ 表情选择由文本链路结合现有 marker 与图库元数据决定；如果图库里有旧坏条目，会在后台异步补修，不阻塞当前回复。
+> 作为 `smalltalk_provider` 使用时，所有群聊消息都会进入插件；被 `@` 或直接叫机器人名字会走强制回复路径。出站图片/表情/QQ 表情由主回复 LLM 在文本里写一个 `[想发...]` marker 触发，插件再按图库或 QQ face 目录解析成实际发送段；如果图库里有旧坏条目，会在后台异步补修，不阻塞当前回复。
 
 | 命令 | 说明 |
 |------|------|
