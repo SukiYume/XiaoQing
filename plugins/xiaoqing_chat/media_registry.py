@@ -145,6 +145,12 @@ def _render_media_marker(item: dict[str, Any]) -> str:
         def _normalize_media_label(value: str) -> str:
             return _clean_text(value)
 
+    try:
+        from .media.event_media_common import split_emoji_visible_text
+    except Exception:
+        def split_emoji_visible_text(value: str) -> tuple[str, str]:
+            return _clean_text(value), ""
+
     kind = _clean_text(item.get("kind"))
     marker = _clean_text(item.get("marker"))
     description = _clean_text(item.get("description"))
@@ -160,15 +166,23 @@ def _render_media_marker(item: dict[str, Any]) -> str:
         return f"[QQ表情：{resolved_label}]" if resolved_label else marker
 
     if kind == "emoji":
+        clean_desc, visible_text = split_emoji_visible_text(description)
         label_text = "，".join(emotion_tags[:2]).strip()
         if not label_text:
-            label_text = _extract_marker_label(marker) or description or "一张表情包"
+            label_text = (
+                _extract_marker_label(marker)
+                or clean_desc
+                or description
+                or "一张表情包"
+            )
+        if visible_text:
+            return f'[表情包：{label_text}；写着“{visible_text}”]'
         if (
-            description
-            and not _is_generic_media_label(description)
-            and _normalize_media_label(description) != _normalize_media_label(label_text)
+            clean_desc
+            and not _is_generic_media_label(clean_desc)
+            and _normalize_media_label(clean_desc) != _normalize_media_label(label_text)
         ):
-            return f"[表情包：{label_text}；内容：{description}]"
+            return f"[表情包：{label_text}；内容：{clean_desc}]"
         return f"[表情包：{label_text}]"
 
     if kind == "image":
