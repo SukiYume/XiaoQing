@@ -1493,6 +1493,34 @@ async def test_build_effective_user_text_includes_emoji_detail_context(mock_cont
 
 
 @pytest.mark.asyncio
+async def test_build_effective_user_text_surfaces_emoji_visible_text_as_quoted_speech(mock_context):
+    runtime = _make_media_runtime()
+    event = {
+        "message": [
+            {"type": "image", "data": {"url": "https://example.com/cat.jpg", "summary": "[动画表情]"}},
+        ],
+        "_xc_rendered_media_items": [
+            RenderedMedia(
+                media_hash="hash-emoji",
+                kind="emoji",
+                description="一个猫耳动漫女孩露出惊讶表情，配文字表达疑惑或调侃。，文字内容是“那咋整啊”",
+                emotion_tags=("疑惑", "调侃"),
+                marker="[表情包：疑惑，调侃]",
+            )
+        ],
+    }
+
+    text = await build_effective_user_text(
+        "",
+        event,
+        context=mock_context,
+        runtime=runtime,
+    )
+
+    assert text == "[表情包：疑惑，调侃；写着“那咋整啊”]"
+
+
+@pytest.mark.asyncio
 async def test_render_event_media_text_strips_face_brackets(mock_context):
     runtime = _make_media_runtime()
     event = {
@@ -2258,6 +2286,23 @@ def test_media_registry_compacts_and_rehydrates_message_content() -> None:
 
     assert compacted == "懂了\n[[xc_media_1]]\n[[xc_media_2]]"
     assert rebuilt == "懂了\n[表情包：无语；内容：猫猫翻白眼]\n[QQ表情：微笑]"
+
+
+def test_media_registry_emoji_marker_surfaces_visible_text_in_quotes() -> None:
+    media_items = [
+        {
+            "kind": "emoji",
+            "media_hash": "hash-vt",
+            "marker": "[表情包：疑惑，调侃]",
+            "description": "一个猫耳动漫女孩露出惊讶表情，配文字表达疑惑或调侃。，文字内容是“那咋整啊”",
+            "emotion_tags": ["疑惑", "调侃"],
+        }
+    ]
+
+    compacted = compact_message_content("[表情包：疑惑，调侃]", media_items)
+    rebuilt = resolve_message_content(compacted, media_items, store=None)
+
+    assert rebuilt == "[表情包：疑惑，调侃；写着“那咋整啊”]"
 
 
 @pytest.mark.asyncio
