@@ -5,12 +5,17 @@ from typing import Any, Sequence
 
 from ..message_parts import render_stored_message
 from ..memory.memory import StoredMessage
-from ..planning.pfc_utils import extract_first_json_dict as _extract_dict, extract_first_json_list as extract_json_array  # noqa: F401
+from ..utils.json_parsing import parse_first_json_array, parse_first_json_object
 
 
 def extract_json_obj(text: str) -> dict[str, Any]:
     """Extract the first JSON object from LLM response text."""
-    return _extract_dict(text) or {}
+    return parse_first_json_object(text) or {}
+
+
+def extract_json_array(text: str) -> list[dict[str, Any]]:
+    """Extract the first JSON array from LLM response text."""
+    return parse_first_json_array(text)
 
 
 def render_dialogue(

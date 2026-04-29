@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import random
 import shutil
 import time
 from copy import deepcopy
@@ -16,6 +15,7 @@ from ..task_scheduler import _spawn_bg_task
 _SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 _PENDING_DIR_NAME = "pending"
 _EMOJI_REPAIR_TASKS: set[str] = set()
+_LIBRARY_CACHE: dict[str, tuple[tuple[float, float], list["EmojiLibraryEntry"]]] = {}
 
 if TYPE_CHECKING:
     from .event_media import RenderedMedia
@@ -32,10 +32,6 @@ class EmojiLibraryEntry:
     marker: str
 
 
-def _default_emoji_library_dir(context) -> Path:
-    return (Path(context.plugin_dir) / "figures" / "library").resolve()
-
-
 def _emoji_library_task_key(context, runtime) -> str:
     library_dir = resolve_emoji_library_dir(context, runtime)
     if library_dir is None:
@@ -43,8 +39,8 @@ def _emoji_library_task_key(context, runtime) -> str:
     return str(library_dir.resolve())
 
 
-def _to_plugin_relative_path(context, path: Path) -> str:
-    root = Path(context.plugin_dir).resolve()
+def _to_data_relative_path(context, path: Path) -> str:
+    root = Path(context.data_dir).resolve()
     target = path.resolve()
     try:
         return target.relative_to(root).as_posix()
@@ -56,11 +52,40 @@ def resolve_emoji_file_path(context, file_path: str) -> Path:
     path = Path(file_path)
     if path.is_absolute():
         return path
-    return (Path(context.plugin_dir) / path).resolve()
+    return (Path(context.data_dir) / path).resolve()
 
 
 def _emoji_index_path(context, runtime) -> Path:
     return resolve_emoji_library_dir(context, runtime) / "index.json"
+
+
+def _library_cache_key(context, runtime) -> str:
+    library_dir = resolve_emoji_library_dir(context, runtime)
+    if library_dir is None:
+        return ""
+    try:
+        return str(library_dir.resolve())
+    except OSError:
+        return str(library_dir)
+
+
+def _library_signature(context, runtime) -> tuple[float, float] | None:
+    library_dir = resolve_emoji_library_dir(context, runtime)
+    if library_dir is None:
+        return None
+    index_path = library_dir / "index.json"
+    try:
+        dir_mtime = library_dir.stat().st_mtime if library_dir.exists() else -1.0
+        index_mtime = index_path.stat().st_mtime if index_path.exists() else -1.0
+    except OSError:
+        return None
+    return float(dir_mtime), float(index_mtime)
+
+
+def _invalidate_library_cache(context, runtime) -> None:
+    key = _library_cache_key(context, runtime)
+    if key:
+        _LIBRARY_CACHE.pop(key, None)
 
 
 def _load_index(context, runtime) -> dict[str, Any]:
@@ -75,6 +100,7 @@ def _save_index(context, runtime, payload: dict[str, Any]) -> None:
     index_path = _emoji_index_path(context, runtime)
     ensure_dir(index_path.parent)
     write_json(index_path, payload)
+    _invalidate_library_cache(context, runtime)
 
 
 def _save_index_if_changed(
@@ -89,17 +115,8 @@ def _save_index_if_changed(
     _save_index(context, runtime, payload)
 
 
-def resolve_emoji_library_dir(context, runtime) -> Path | None:
-    media_cfg = getattr(getattr(runtime, "cfg", None), "media", None)
-    if media_cfg is None:
-        return _default_emoji_library_dir(context)
-    raw = str(getattr(media_cfg, "emoji_library_dir", "") or "").strip()
-    if not raw:
-        return _default_emoji_library_dir(context)
-    path = Path(raw)
-    if not path.is_absolute():
-        path = (Path(context.plugin_dir) / raw).resolve()
-    return path
+def resolve_emoji_library_dir(context, runtime=None) -> Path:
+    return (Path(context.data_dir) / "media" / "library").resolve()
 
 
 def _iter_library_files(root: Path) -> list[Path]:
@@ -125,7 +142,7 @@ def _entry_from_render(
     last_used_ts = float(existing.get("last_used_ts", 0.0) or 0.0)
     return EmojiLibraryEntry(
         media_hash=rendered.media_hash,
-        file_path=_to_plugin_relative_path(context, file_path),
+        file_path=_to_data_relative_path(context, file_path),
         description=rendered.description,
         emotion_tags=tuple(rendered.emotion_tags),
         usage_count=usage_count,
@@ -233,7 +250,7 @@ def _normalize_entry_record(
         last_collected_ts = float(time.time())
     return {
         "media_hash": entry.media_hash,
-        "file_path": _to_plugin_relative_path(context, file_path),
+        "file_path": _to_data_relative_path(context, file_path),
         "description": entry.description,
         "emotion_tags": list(entry.emotion_tags),
         "usage_count": entry.usage_count,
@@ -511,6 +528,13 @@ async def load_emoji_library(
     if library_dir is None:
         return []
 
+    cache_key = _library_cache_key(context, runtime)
+    cache_signature = _library_signature(context, runtime)
+    if repair_invalid and not schedule_background_repair and cache_key and cache_signature is not None:
+        cached = _LIBRARY_CACHE.get(cache_key)
+        if cached is not None and cached[0] == cache_signature:
+            return list(cached[1])
+
     payload = _load_index(context, runtime)
     original_payload = deepcopy(payload)
     files = _iter_library_files(library_dir)
@@ -548,7 +572,7 @@ async def load_emoji_library(
         ):
             entry = EmojiLibraryEntry(
                 media_hash=media_hash,
-                file_path=_to_plugin_relative_path(context, file_path),
+                file_path=_to_data_relative_path(context, file_path),
                 description=str(existing.get("description", "") or "").strip(),
                 emotion_tags=tuple(
                     str(item) for item in existing.get("emotion_tags", []) if str(item).strip()
@@ -564,7 +588,7 @@ async def load_emoji_library(
                     file_path=file_path,
                     entry=EmojiLibraryEntry(
                         media_hash=media_hash,
-                        file_path=_to_plugin_relative_path(context, file_path),
+                        file_path=_to_data_relative_path(context, file_path),
                         description=str((existing or {}).get("description", "") or "").strip(),
                         emotion_tags=tuple(
                             str(item) for item in (existing or {}).get("emotion_tags", []) if str(item).strip()
@@ -585,7 +609,7 @@ async def load_emoji_library(
                 if isinstance(existing, dict):
                     retained = dict(existing)
                     retained["media_hash"] = media_hash
-                    retained["file_path"] = _to_plugin_relative_path(context, file_path)
+                    retained["file_path"] = _to_data_relative_path(context, file_path)
                     if perceptual_hash:
                         retained["perceptual_hash"] = perceptual_hash
                     retained_entries[media_hash] = retained
@@ -630,6 +654,10 @@ async def load_emoji_library(
     )
     if repair_needed and schedule_background_repair and not repair_invalid:
         schedule_emoji_library_repair(context, runtime)
+    if repair_invalid and not schedule_background_repair and cache_key:
+        updated_signature = _library_signature(context, runtime)
+        if updated_signature is not None:
+            _LIBRARY_CACHE[cache_key] = (updated_signature, list(results))
     return results
 
 

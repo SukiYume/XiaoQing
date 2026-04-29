@@ -12,74 +12,13 @@ if "aiohttp" not in sys.modules and importlib.util.find_spec("aiohttp") is None:
     sys.modules["aiohttp"] = MagicMock()
 
 from plugins.xiaoqing_chat.llm.reply_checker import (
-    _check_repeated_question,
     _heuristic_check,
-    _is_question_sentence,
 )
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
 
 
 def _msg(role, content, name=""):
     return StoredMessage(role=role, content=content, name=name, ts=time.time())
-
-
-class TestIsQuestionSentence:
-    def test_question_mark_is_question(self):
-        assert _is_question_sentence("石景山路有啥特别的？") is True
-
-    def test_sha_keyword_is_question(self):
-        assert _is_question_sentence("石景山路到底有啥特别的啊") is True
-
-    def test_shui_keyword_is_question(self):
-        assert _is_question_sentence("松松是谁啊") is True
-
-    def test_plain_statement_not_question(self):
-        assert _is_question_sentence("好啊随便") is False
-
-    def test_empty_not_question(self):
-        assert _is_question_sentence("") is False
-
-
-class TestCheckRepeatedQuestion:
-    def test_repeated_similar_question_detected(self):
-        history = [
-            _msg("user", "复兴路", name="Alice"),
-            _msg("assistant", "所以石景山路到底有啥特别的啊", name="小青"),
-            _msg("user", "对啊", name="Bob"),
-        ]
-        result = _check_repeated_question(
-            reply="石景山路到底有啥特别的",
-            bot_msgs=["所以石景山路到底有啥特别的啊"],
-        )
-        assert result is not None
-        assert result.suitable is False
-
-    def test_different_question_allowed(self):
-        history = [
-            _msg("assistant", "松松是谁啊", name="小青"),
-        ]
-        result = _check_repeated_question(
-            reply="今天天气咋样",
-            bot_msgs=["松松是谁啊"],
-        )
-        assert result is None
-
-    def test_non_question_reply_skipped(self):
-        history = [
-            _msg("assistant", "石景山路有啥特别的", name="小青"),
-        ]
-        result = _check_repeated_question(
-            reply="哦这样啊",
-            bot_msgs=["石景山路有啥特别的"],
-        )
-        assert result is None
-
-    def test_no_history_allowed(self):
-        result = _check_repeated_question(
-            reply="松松是谁啊",
-            bot_msgs=[],
-        )
-        assert result is None
 
 
 class TestHeuristicCheckRepeatedQuestion:
@@ -253,6 +192,45 @@ async def test_check_reply_rejects_when_llm_checker_call_fails(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
+async def test_check_reply_allows_when_llm_checker_returns_invalid_json(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    async def fake_chat(**_kwargs):
+        return {"choices": [{"message": {"content": "我觉得可以"}}]}, "/v1/chat/completions"
+
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        fake_chat,
+    )
+
+    result = await check_reply(
+        http_session=None,
+        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        bot_name="小青",
+        reply="好家伙，原来是这样",
+        goal="聊天",
+        policy_text="",
+        history=[],
+        chat_history_text="user: hi",
+        enable_llm_checker=True,
+        max_repeat_compare=3,
+        similarity_threshold=0.9,
+        max_assistant_in_row=5,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    assert result.suitable is True
+    assert result.need_replan is False
+    assert "invalid" in result.reason.lower()
+
+
+@pytest.mark.asyncio
 async def test_check_reply_heuristics_use_text_reply_when_media_is_attached():
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
@@ -284,34 +262,30 @@ async def test_check_reply_heuristics_use_text_reply_when_media_is_attached():
 
 
 @pytest.mark.asyncio
-async def test_check_reply_rejects_clarifying_placeholder_media_question():
+@pytest.mark.parametrize(
+    ("current_text", "reply"),
+    [
+        (
+            "[表情包：佩服，调侃；写着“不愧是你 我佩服得鹉体投地”]",
+            "哎哟，你这表情包一套一套的，我都有点招架不住了",
+        ),
+        ("[QQ表情：菜汪]", "啊这，大早上的发个菜汪是几个意思"),
+    ],
+)
+async def test_check_reply_rejects_media_only_meta_comment_without_llm(current_text, reply):
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
-
-    history = [
-        StoredMessage(
-            role="user",
-            name="Alice",
-            parts=(
-                {
-                    "kind": "image",
-                    "marker": "[图片：一张图片]",
-                    "description": "一张图片",
-                },
-            ),
-            ts=time.time(),
-        )
-    ]
 
     result = await check_reply(
         http_session=None,
         secrets={},
         bot_name="小青",
-        reply="啥图啊",
-        heuristic_reply="啥图啊",
-        goal="聊天",
+        reply=reply,
+        heuristic_reply=reply,
+        current_text=current_text,
+        goal="自然聊天",
         policy_text="",
-        history=history,
-        chat_history_text="Alice: [图片：一张图片]",
+        history=[],
+        chat_history_text=f"user: {current_text}",
         enable_llm_checker=False,
         max_repeat_compare=3,
         similarity_threshold=0.9,
@@ -324,7 +298,63 @@ async def test_check_reply_rejects_clarifying_placeholder_media_question():
     )
 
     assert result.suitable is False
-    assert "占位信息" in result.reason
+    assert result.need_replan is True
+    assert "媒体" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_check_reply_uses_llm_to_reject_repeated_joke_angle(monkeypatch: pytest.MonkeyPatch):
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    async def fake_chat(**_kwargs):
+        return {"ok": True}, "/v1/chat/completions"
+
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.llm.reply_checker.chat_completions_raw_with_fallback_paths",
+        fake_chat,
+    )
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.llm.reply_checker.llm_client.extract_response_content",
+        lambda _resp: (
+            '{"suitable": false, "reason": "重复使用了批发这个调侃角度", '
+            '"need_replan": true}'
+        ),
+    )
+    history = [
+        _msg("assistant", "你搁这批发表情包呢哈哈", name="小青"),
+        _msg("user", "批发啥啊", name="Alice"),
+        _msg("assistant", "就是表情包一下子发这么多，跟批发似的", name="小青"),
+        _msg("user", "[表情包：疑惑，调侃]", name="Alice"),
+    ]
+
+    result = await check_reply(
+        http_session=None,
+        secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        bot_name="小青",
+        reply="哈哈你这表情包也太多了吧，批发商本商啊",
+        goal="聊天",
+        policy_text="",
+        history=history,
+        chat_history_text=(
+            "小青: 你搁这批发表情包呢哈哈\n"
+            "Alice: 批发啥啊\n"
+            "小青: 就是表情包一下子发这么多，跟批发似的\n"
+            "Alice: [表情包：疑惑，调侃]"
+        ),
+        enable_llm_checker=True,
+        max_repeat_compare=3,
+        similarity_threshold=0.9,
+        max_assistant_in_row=5,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    assert result.suitable is False
+    assert result.need_replan is True
+    assert "批发" in result.reason
 
 
 @pytest.mark.asyncio
@@ -375,10 +405,14 @@ async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest
     assert "待检查的最终回复" in prompt
     assert "[表情包：...]" in prompt
     assert "最终消息会附带相应媒体" in prompt
+    assert "同一个梗" in prompt
+    assert "交际作用" in prompt
     assert "没有为回复增加新的交流功能" in prompt
+    assert "媒体形式本身" in prompt
+    assert "交际意图" in prompt
     assert "当前最新用户消息" in prompt
     assert "黑猫瞪大双眼" in prompt
     assert captured["extra_payload"] == {
-        "thinking": {"type": "enabled"},
-        "reasoning_effort": "high",
+        "thinking": {"type": "disabled"},
+        "response_format": {"type": "json_object"},
     }

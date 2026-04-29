@@ -167,12 +167,12 @@ def _media_root(data_dir: Path) -> Path:
     return data_dir / "media"
 
 
-def _figures_root(context) -> Path:
-    return Path(context.plugin_dir) / "figures"
+def _media_files_root(context) -> Path:
+    return Path(context.data_dir) / "media"
 
 
 def _figures_inbox_dir(context) -> Path:
-    return _figures_root(context) / "inbox"
+    return _media_files_root(context) / "inbox"
 
 
 def _render_cache_path(data_dir: Path) -> Path:
@@ -480,12 +480,16 @@ def _build_context_marker(rendered: RenderedMedia) -> str:
     if not label:
         return marker
 
+    clean_desc, visible_text = split_emoji_visible_text(description)
+    if visible_text:
+        return f'[表情包：{label}；写着“{visible_text}”]'
+
     normalized_label = _normalize_media_label(label)
-    normalized_description = _normalize_media_label(description)
+    normalized_description = _normalize_media_label(clean_desc)
     if not normalized_description or normalized_description == normalized_label:
         return marker
 
-    return f"[表情包：{label}；内容：{description}]"
+    return f"[表情包：{label}；内容：{clean_desc}]"
 
 
 def _normalize_media_label(value: str) -> str:
@@ -502,6 +506,26 @@ def _is_generic_media_label(value: str) -> bool:
     if not normalized:
         return True
     return normalized in _GENERIC_MEDIA_LABELS
+
+
+_EMOJI_VISIBLE_TEXT_RE = re.compile(r'^(?:(.+?)，)?文字内容是“(.+?)”$')
+
+
+def split_emoji_visible_text(description: str) -> tuple[str, str]:
+    """Pull `desc，文字内容是“X”` apart into (clean_desc, visible_text).
+
+    Returns the original description and an empty visible_text when the
+    suffix is absent.
+    """
+    text = str(description or "").strip()
+    if not text:
+        return "", ""
+    match = _EMOJI_VISIBLE_TEXT_RE.match(text)
+    if not match:
+        return text, ""
+    clean_desc = (match.group(1) or "").strip()
+    visible_text = (match.group(2) or "").strip()
+    return clean_desc, visible_text
 
 
 def _looks_like_structured_media_text(value: str) -> bool:

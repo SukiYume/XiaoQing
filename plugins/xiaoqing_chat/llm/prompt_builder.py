@@ -7,7 +7,6 @@ from typing import Any, Sequence
 
 from ..config.config import PersonalityConfig
 from ..memory.memory import StoredMessage
-from ..helper_utils import _extract_sender_name
 from ..message_parts import (
     build_text_message_parts,
     normalize_message_parts,
@@ -29,12 +28,35 @@ _DEFAULT_REPLYER_SYSTEM = (
     "4. 一次只回应一个话题，不要啰嗦或回复内容太乱\n"
     "5. 不要机械重复你说过的话，也不要整句复读对方原话\n"
     "允许有点情绪、吐槽、犹豫，不需要每句都完美。\n"
-    "如果对话里出现 [图片：...]、[表情包：...] 或 [QQ表情：...]，那是对方实际发来的内容摘要，和文字消息一样重要。\n"
+    "媒体消息理解\n"
+    "对话里出现 [图片：...]、[表情包：...] 或 [QQ表情：...] 时，那是对方实际发来的内容摘要，和文字消息一样重要。\n"
+    "先判断这条媒体消息在聊天里的交际作用：可见文字通常是对方借媒体说的话；"
+    "情绪标签或 QQ 表情名称通常是对方的语气、态度或反应；图片内容通常是对方抛出的新话题素材。\n"
+    "回复时优先接住它承载的意思、情绪或上下文话题，像人在聊天里顺着反应接话，"
+    "不要只围绕媒体这种形式本身展开。\n"
     "遇到不认识的词/英文/人名/梗，随口接一句或直接忽略就好。\n"
     "如果之前问过的问题没人回答，就放下它，跟着最新的话题走。\n"
     "不要输出多余前后缀，不要用括号包裹解释，不要 @ 任何人。\n"
     "不要主动强调自己是机器人/AI。被问到时自然回应即可。\n"
     "只输出你要发的那段话，不需要任何额外格式。\n"
+)
+
+_HUMANLIKE_REPLY_DIRECTIVE = (
+    "拟人聊天补充\n"
+    "不要像客服、助理或总结器，不要把话说满。可以短、可以口语、可以有轻微停顿感，"
+    "但别刻意装可爱或堆语气词。能一句话接住就别展开成说明。"
+)
+
+_OUTBOUND_MEDIA_MARKER_DIRECTIVE = (
+    "出站媒体 marker\n"
+    "你可以在合适的时候为这条回复挂一个媒体：表情包、QQ 系统表情或图片。"
+    "挂法是在文本里加一个 marker：`[想发表情:简短描述]`、"
+    "`[想发QQ表情:简短描述]`、`[想发图片:简短描述]`。"
+    "不要直接输出 `[表情包：...]`、`[QQ表情：...]` 或 `[图片：...]`，那是对方消息摘要的格式。"
+    "每条回复最多挂一个；不挂就不写。"
+    "挂的前提是这个媒体能为这条回复加一层语气、情绪或调侃，单纯复读情绪没必要挂。"
+    "简短描述最多 12 个字，写最贴近你想要的感觉的词，比如“笑哭”“猫举手”“离谱”。"
+    "候选库会按描述查最匹配的项，找不到就当没挂。"
 )
 
 _CURRENT_MEDIA_MARKER_RE = re.compile(r"\[(图片|表情包|QQ表情)：([^\]\n]{1,400})\]")
@@ -145,6 +167,62 @@ def _media_marker_for_current_turn(part: dict[str, Any]) -> str:
     return ""
 
 
+def _marker_label_for_prompt(marker: str) -> str:
+    text = str(marker or "").strip()
+    if not text:
+        return ""
+    match = _CURRENT_MEDIA_MARKER_RE.match(text)
+    if not match:
+        return text
+    label = str(match.group(2) or "").strip()
+    return re.split(r"[；;]", label, maxsplit=1)[0].strip()
+
+
+def _marker_visible_speech(marker: str) -> str:
+    text = str(marker or "").strip()
+    if not text:
+        return ""
+    patterns = (
+        r"写着[“\"]([^”\"\]]{1,80})[”\"]",
+        r"文字(?:内容)?(?:是|为)[“\"]([^”\"\]]{1,80})[”\"]",
+        r"配文(?:字)?(?:是|为)?[“\"]([^”\"\]]{1,80})[”\"]",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return str(match.group(1) or "").strip()
+    return ""
+
+
+def _media_only_target_block(
+    *,
+    sender: str,
+    media_kinds: Sequence[str],
+    media_markers: Sequence[str],
+) -> str:
+    kind_set = set(media_kinds)
+    if kind_set == {"emoji"}:
+        labels = "、".join(
+            label for label in (_marker_label_for_prompt(marker) for marker in media_markers) if label
+        )
+        speech = next(
+            (speech for speech in (_marker_visible_speech(marker) for marker in media_markers) if speech),
+            "",
+        )
+        if speech:
+            tone = f"；语气反应：{labels}" if labels else ""
+            return f"现在{sender}借表情包表达：想说的话：{speech}{tone}。请像正常聊天一样接这句话"
+        if labels:
+            return f"现在{sender}用表情包表达一个反应：{labels}。请结合上下文接住这个反应"
+    if kind_set == {"qq_face"}:
+        labels = "、".join(
+            label for label in (_marker_label_for_prompt(marker) for marker in media_markers) if label
+        )
+        if labels:
+            return f"现在{sender}用 QQ 表情表达一个反应：{labels}。请结合上下文接住这个反应"
+    return ""
+
+
 def _current_turn_target_block(
     *,
     sender: str,
@@ -190,6 +268,13 @@ def _current_turn_target_block(
         media_noun = "内容"
 
     if has_media and not has_text:
+        media_only_block = _media_only_target_block(
+            sender=sender,
+            media_kinds=media_kinds,
+            media_markers=media_markers,
+        )
+        if media_only_block:
+            return media_only_block + "。引起了你的注意"
         return f"现在{sender}发送的{media_noun}：{media_part}。引起了你的注意"
     return f"现在{sender}发送了{media_noun}：{media_part}，并说：{text_part}。引起了你的注意"
 
@@ -299,7 +384,11 @@ def build_prompt_messages(
         persona_parts.append(state_text)
 
     # ── 2. 行为指令块 ──
-    instruction_parts: list[str] = [_DEFAULT_REPLYER_SYSTEM.strip()]
+    instruction_parts: list[str] = [
+        _DEFAULT_REPLYER_SYSTEM.strip(),
+        _HUMANLIKE_REPLY_DIRECTIVE.strip(),
+        _OUTBOUND_MEDIA_MARKER_DIRECTIVE.strip(),
+    ]
     if guardrail.strip():
         instruction_parts.append(guardrail.strip())
     if style:

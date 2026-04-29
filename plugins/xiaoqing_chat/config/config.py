@@ -20,16 +20,9 @@ class ResponseSplitterConfig(BaseModel):
     max_length: int = 256
     max_sentence_num: int = 3
 
-class ChineseTypoConfig(BaseModel):
-    enable: bool = True
-    error_rate: float = 0.01
-    tone_error_rate: float = 0.1
-    word_replace_rate: float = 0.006
-
 class ResponsePostProcessConfig(BaseModel):
     enable_response_post_process: bool = True
     splitter: ResponseSplitterConfig = Field(default_factory=ResponseSplitterConfig)
-    chinese_typo: ChineseTypoConfig = Field(default_factory=ChineseTypoConfig)
 
 class PersonalityConfig(BaseModel):
     polite_guardrail: bool = True
@@ -137,7 +130,7 @@ class GoalConfig(BaseModel):
 
 class ReflectionConfig(BaseModel):
     enable_expression_reflection: bool = False
-    require_approval_for_injection: bool = False
+    require_approval_for_injection: bool = True
     operator_user_id: int = 0
     operator_group_id: int = 0
     min_interval_seconds: float = 3600.0
@@ -194,33 +187,13 @@ class KnowledgeConfig(BaseModel):
     files: list[str] = Field(default_factory=list)
     top_k: int = 3
 
-class RewriteConfig(BaseModel):
-    enable_rewrite: bool = True
-    probability: float = 0.6
-    max_length_trigger: int = 80
-
 class MediaConfig(BaseModel):
     enable_inbound_media_context: bool = True
-    enable_outbound_image_reply: bool = True
-    enable_outbound_emoji_reply: bool = True
-    enable_outbound_face_reply: bool = True
     enable_auto_collect_inbound_emoji: bool = True
-    emoji_library_dir: str = "figures/library"
-    image_library_dir: str = "figures/reply_images"
     emoji_auto_collect_requires_approval: bool = False
     emoji_auto_collect_max_entries: int = 200
     emoji_auto_collect_similarity_threshold: int = 4
-    image_reply_probability: float = 0.12
-    image_candidate_count: int = 4
-    image_cooldown_turns: int = 4
-    emoji_reply_probability: float = 0.35
-    emoji_candidate_count: int = 6
-    emoji_cooldown_turns: int = 3
-    face_reply_probability: float = 0.18
-    face_candidate_count: int = 8
-    face_cooldown_turns: int = 2
-    max_media_per_message: int = 3
-    reply_media_timeout_seconds: float = 2.0
+    max_media_per_message: int = 1
     enable_emoji_refine_background: bool = True
     emoji_refine_timeout_seconds: float = 2.0
     max_analyze_bytes: int = 4 * 1024 * 1024
@@ -229,22 +202,16 @@ class MediaConfig(BaseModel):
     vision_max_retry: int = 1
     vision_retry_interval_seconds: float = 1.0
 
-class TalkScheduleEntry(BaseModel):
-    """Time-period based talk frequency (MaiBot-style)."""
-    hour_start: int = 0
-    hour_end: int = 24
-    talk_value: float = 1.0
-
 class XiaoQingChatConfig(BaseModel):
     enable_smalltalk: bool = True
     reply_probability_base: float = 0.6
     reply_probability_private: float = 0.95
     min_reply_interval_seconds: float = 12.0
+    active_topic_min_reply_interval: float = 3.0
     max_replies_per_minute: int = 6
     continuous_reply_limit: int = 3
     continuous_cooldown_seconds: float = 25.0
     max_context_size: int = 30
-    talk_schedule: list[TalkScheduleEntry] = Field(default_factory=list)
     timeout_seconds: float = 15.0
     max_retry: int = 2
     retry_interval_seconds: float = 10.0
@@ -267,6 +234,13 @@ class XiaoQingChatConfig(BaseModel):
     think_level: int = 1
     ban_words: list[str] = Field(default_factory=list)
     ban_regex: list[str] = Field(default_factory=list)
+    noisy_external_source_plugins: list[str] = Field(default_factory=list)
+    fallback_idle_replies: list[str] = Field(
+        default_factory=lambda: ["嗯", "啊这", "我在听", "你继续", "等我想下"]
+    )
+    bot_name_only_replies: list[str] = Field(
+        default_factory=lambda: ["在呢", "嗯？", "怎么啦", "我在", "有事吗"]
+    )
     personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
     keyword_reaction: KeywordReactionConfig = Field(default_factory=KeywordReactionConfig)
@@ -279,7 +253,6 @@ class XiaoQingChatConfig(BaseModel):
     summarizer: SummarizerConfig = Field(default_factory=SummarizerConfig)
     expression: ExpressionConfig = Field(default_factory=ExpressionConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
-    rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
     postprocess: ResponsePostProcessConfig = Field(default_factory=ResponsePostProcessConfig)
     endpoint_path: str = "/v1/chat/completions"

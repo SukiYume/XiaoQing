@@ -18,6 +18,7 @@ class MessageRecorder(StoreBase):
     def __init__(self) -> None:
         super().__init__()
         self._state: dict[str, Any] = {}
+        self._active_chats: set[str] = set()
 
     def _path(self) -> Optional[Path]:
         return self._resolve_path("bw_learner", "message_recorder.json")
@@ -56,6 +57,16 @@ class MessageRecorder(StoreBase):
         m[str(chat_id)] = float(ts)
         self._save()
 
+    def try_begin(self, chat_id: str) -> bool:
+        cid = str(chat_id or "")
+        if cid in self._active_chats:
+            return False
+        self._active_chats.add(cid)
+        return True
+
+    def end(self, chat_id: str) -> None:
+        self._active_chats.discard(str(chat_id or ""))
+
 
 async def extract_and_learn(
     *,
@@ -89,148 +100,128 @@ async def extract_and_learn(
         )
     except Exception:
         pass
-    recorder.bind(context.data_dir)
-    last_ts = recorder.get_last_time(chat_id)
-    now = time.time()
-    if last_ts and now - last_ts < float(min_interval_seconds):
+    if not recorder.try_begin(chat_id):
         try:
             context.logger.info(
                 "xiaoqing_chat step=%s",
                 json.dumps(
-                    {
-                        "step": "bw.learn.skip.interval",
-                        "chat_id": chat_id,
-                        "elapsed_since_last_s": round(now - last_ts, 3),
-                    },
+                    {"step": "bw.learn.skip.inflight", "chat_id": chat_id},
                     ensure_ascii=False,
                 ),
             )
         except Exception:
             pass
         return 0
+    try:
+        recorder.bind(context.data_dir)
+        last_ts = recorder.get_last_time(chat_id)
+        now = time.time()
+        if last_ts and now - last_ts < float(min_interval_seconds):
+            try:
+                context.logger.info(
+                    "xiaoqing_chat step=%s",
+                    json.dumps(
+                        {
+                            "step": "bw.learn.skip.interval",
+                            "chat_id": chat_id,
+                            "elapsed_since_last_s": round(now - last_ts, 3),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception:
+                pass
+            return 0
 
-    history = await memory_store.get_async(chat_id)
-    window = [m for m in history if float(m.ts or 0.0) > last_ts]
-    if len(window) < int(min_messages):
+        history = await memory_store.get_async(chat_id)
+        window = [m for m in history if float(m.ts or 0.0) > last_ts]
+        if len(window) < int(min_messages):
+            try:
+                context.logger.info(
+                    "xiaoqing_chat step=%s",
+                    json.dumps(
+                        {
+                            "step": "bw.learn.skip.messages",
+                            "chat_id": chat_id,
+                            "window": len(window),
+                            "min_messages": int(min_messages),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception:
+                pass
+            return 0
+
         try:
             context.logger.info(
                 "xiaoqing_chat step=%s",
                 json.dumps(
                     {
-                        "step": "bw.learn.skip.messages",
+                        "step": "bw.learn.extract.start",
                         "chat_id": chat_id,
                         "window": len(window),
-                        "min_messages": int(min_messages),
                     },
                     ensure_ascii=False,
                 ),
             )
         except Exception:
             pass
-        return 0
-
-    try:
-        context.logger.info(
-            "xiaoqing_chat step=%s",
-            json.dumps(
-                {"step": "bw.learn.extract.start", "chat_id": chat_id, "window": len(window)},
-                ensure_ascii=False,
-            ),
-        )
-    except Exception:
-        pass
-    learned = await learn_from_messages(
-        http_session=context.http_session,
-        secrets=secrets,
-        bot_name=bot_name,
-        chat_id=chat_id,
-        personality=personality,
-        messages=window[-80:],
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
-        timeout_seconds=timeout_seconds,
-        max_retry=max_retry,
-        retry_interval_seconds=retry_interval_seconds,
-        proxy=proxy,
-        endpoint_path=endpoint_path,
-        extra_payload=extra_payload,
-    )
-    if not learned:
-        recorder.set_last_time(chat_id, now)
-        try:
-            context.logger.info(
-                "xiaoqing_chat step=%s",
-                json.dumps(
-                    {
-                        "step": "bw.learn.extract.empty",
-                        "chat_id": chat_id,
-                        "elapsed_s": round(time.monotonic() - t0, 3),
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-        except Exception:
-            pass
-        return 0
-
-    expr_store.bind(context.data_dir)
-    try:
-        context.logger.info(
-            "xiaoqing_chat step=%s",
-            json.dumps(
-                {"step": "bw.learn.upsert.start", "chat_id": chat_id, "learned": len(learned)},
-                ensure_ascii=False,
-            ),
-        )
-    except Exception:
-        pass
-    changed = await upsert_learned(
-        store=expr_store,
-        chat_id=chat_id,
-        learned=learned,
-        self_reflect=self_reflect,
-        http_session=context.http_session,
-        secrets=secrets,
-        bot_name=bot_name,
-        personality=personality,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
-        timeout_seconds=timeout_seconds,
-        max_retry=max_retry,
-        retry_interval_seconds=retry_interval_seconds,
-        proxy=proxy,
-        endpoint_path=endpoint_path,
-        extra_payload=extra_payload,
-    )
-    try:
-        context.logger.info(
-            "xiaoqing_chat step=%s",
-            json.dumps(
-                {"step": "bw.learn.upsert.done", "chat_id": chat_id, "changed": int(changed)},
-                ensure_ascii=False,
-            ),
-        )
-    except Exception:
-        pass
-    if jargon_store is not None:
-        jargon_store.bind(context.data_dir)
-        try:
-            context.logger.info(
-                "xiaoqing_chat step=%s",
-                json.dumps(
-                    {"step": "bw.jargon.mine.start", "chat_id": chat_id}, ensure_ascii=False
-                ),
-            )
-        except Exception:
-            pass
-        changed += await mine_jargon(
+        learned = await learn_from_messages(
             http_session=context.http_session,
             secrets=secrets,
-            store=jargon_store,
+            bot_name=bot_name,
             chat_id=chat_id,
-            messages=window[-60:],
+            personality=personality,
+            messages=window[-80:],
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+            max_retry=max_retry,
+            retry_interval_seconds=retry_interval_seconds,
+            proxy=proxy,
+            endpoint_path=endpoint_path,
+            extra_payload=extra_payload,
+        )
+        if not learned:
+            recorder.set_last_time(chat_id, now)
+            try:
+                context.logger.info(
+                    "xiaoqing_chat step=%s",
+                    json.dumps(
+                        {
+                            "step": "bw.learn.extract.empty",
+                            "chat_id": chat_id,
+                            "elapsed_s": round(time.monotonic() - t0, 3),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception:
+                pass
+            return 0
+
+        expr_store.bind(context.data_dir)
+        try:
+            context.logger.info(
+                "xiaoqing_chat step=%s",
+                json.dumps(
+                    {"step": "bw.learn.upsert.start", "chat_id": chat_id, "learned": len(learned)},
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception:
+            pass
+        changed = await upsert_learned(
+            store=expr_store,
+            chat_id=chat_id,
+            learned=learned,
+            self_reflect=self_reflect,
+            http_session=context.http_session,
+            secrets=secrets,
+            bot_name=bot_name,
+            personality=personality,
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
@@ -245,30 +236,70 @@ async def extract_and_learn(
             context.logger.info(
                 "xiaoqing_chat step=%s",
                 json.dumps(
+                    {"step": "bw.learn.upsert.done", "chat_id": chat_id, "changed": int(changed)},
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception:
+            pass
+
+        if jargon_store is not None:
+            jargon_store.bind(context.data_dir)
+            try:
+                context.logger.info(
+                    "xiaoqing_chat step=%s",
+                    json.dumps(
+                        {"step": "bw.jargon.mine.start", "chat_id": chat_id}, ensure_ascii=False
+                    ),
+                )
+            except Exception:
+                pass
+            changed += await mine_jargon(
+                http_session=context.http_session,
+                secrets=secrets,
+                store=jargon_store,
+                chat_id=chat_id,
+                messages=window[-60:],
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
+                max_retry=max_retry,
+                retry_interval_seconds=retry_interval_seconds,
+                proxy=proxy,
+                endpoint_path=endpoint_path,
+                extra_payload=extra_payload,
+            )
+            try:
+                context.logger.info(
+                    "xiaoqing_chat step=%s",
+                    json.dumps(
+                        {
+                            "step": "bw.jargon.mine.done",
+                            "chat_id": chat_id,
+                            "changed_total": int(changed),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception:
+                pass
+        recorder.set_last_time(chat_id, now)
+        try:
+            context.logger.info(
+                "xiaoqing_chat step=%s",
+                json.dumps(
                     {
-                        "step": "bw.jargon.mine.done",
+                        "step": "bw.learn.done",
                         "chat_id": chat_id,
-                        "changed_total": int(changed),
+                        "changed": int(changed),
+                        "elapsed_s": round(time.monotonic() - t0, 3),
                     },
                     ensure_ascii=False,
                 ),
             )
         except Exception:
             pass
-    recorder.set_last_time(chat_id, now)
-    try:
-        context.logger.info(
-            "xiaoqing_chat step=%s",
-            json.dumps(
-                {
-                    "step": "bw.learn.done",
-                    "chat_id": chat_id,
-                    "changed": int(changed),
-                    "elapsed_s": round(time.monotonic() - t0, 3),
-                },
-                ensure_ascii=False,
-            ),
-        )
-    except Exception:
-        pass
-    return changed
+        return changed
+    finally:
+        recorder.end(chat_id)

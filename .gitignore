@@ -63,7 +63,10 @@ Thumbs.db
 .codex
 .worktrees/
 docs/plans/
-docs/superpowers/
+docs/superpowers/*
+!docs/superpowers/specs/
+docs/superpowers/specs/*
+!docs/superpowers/specs/2026-04-27-xiaoqing-chat-simplification-design.md
 
 # 数据文件
 plugins/*/data/
