@@ -637,6 +637,85 @@ def test_item_update_note_logs_edit_details_for_web_undo():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_item_update_note_preserves_unchanged_missing_reference_for_web_edit():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_note_web_missing_ref_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-note-web-missing-ref"
+    items_module = _load_items_module()
+
+    try:
+        db.insert_item(normalize_note_fields({
+            "id": "note_dangling_ref",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "旧标题",
+            "content": "旧正文",
+            "category": "工作",
+            "references": [{"kind": "item", "id": "deleted_task", "type": "task", "title": "已删除待办"}],
+            "related_items": ["deleted_task"],
+            "created_at": "2026-04-01T10:00:00",
+            "updated_at": "2026-04-01T10:00:00",
+        }, partial=False))
+
+        result = items_module.update_item(
+            "note_dangling_ref",
+            body=items_module.ItemUpdate(
+                content="新正文",
+                references=[{"kind": "item", "id": "deleted_task"}],
+                related_items=["deleted_task"],
+            ),
+            owner_id=owner_id,
+            db=db,
+        )
+
+        assert result["ok"] is True
+        updated = db.get_item("note_dangling_ref", owner_id=owner_id)
+        assert updated.content == "新正文"
+        assert updated.references == [
+            {"kind": "item", "id": "deleted_task", "type": "task", "title": "已删除待办"}
+        ]
+        assert updated.related_items == ["deleted_task"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_item_update_note_rejects_new_missing_reference():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_note_web_new_missing_ref_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-note-web-new-missing-ref"
+    items_module = _load_items_module()
+
+    try:
+        db.insert_item(normalize_note_fields({
+            "id": "note_without_ref",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "旧标题",
+            "content": "旧正文",
+            "category": "工作",
+            "created_at": "2026-04-01T10:00:00",
+            "updated_at": "2026-04-01T10:00:00",
+        }, partial=False))
+
+        with pytest.raises(items_module.HTTPException) as exc_info:
+            items_module.update_item(
+                "note_without_ref",
+                body=items_module.ItemUpdate(
+                    references=[{"kind": "item", "id": "missing_task"}],
+                    related_items=["missing_task"],
+                ),
+                owner_id=owner_id,
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 422
+        assert "Referenced item not found: missing_task" in exc_info.value.detail
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_normalize_diary_fields_requires_content_and_clears_optional_values():
     diary = normalize_diary_fields({
         "diary_date": "2026-03-26",
