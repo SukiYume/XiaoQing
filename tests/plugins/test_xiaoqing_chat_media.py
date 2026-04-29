@@ -403,6 +403,15 @@ def test_parse_marker_accepts_first_valid_marker_and_cleans_residue() -> None:
     assert parse_marker("[想发表情:这个描述真的太长了吧超过十二字]") is None
 
 
+def test_parse_marker_accepts_rendered_qq_face_marker_as_outbound_fallback() -> None:
+    parsed = parse_marker("有点绷不住[QQ表情：捂脸]")
+
+    assert parsed is not None
+    assert parsed.kind == "qq_face"
+    assert parsed.hint == "捂脸"
+    assert text_without_outbound_marker("有点绷不住[QQ表情：捂脸]") == "有点绷不住"
+
+
 @pytest.mark.asyncio
 async def test_resolve_marker_matches_emoji_hint_and_builds_media_part(mock_context):
     runtime = _make_media_runtime()
@@ -461,6 +470,14 @@ async def test_resolve_marker_matches_qq_face_and_image_hints(mock_context):
     assert face is not None
     assert face.kind == "qq_face"
     assert face.marker == "[QQ表情：狗头]"
+    rendered_face = await resolve_marker(
+        parse_marker("行吧[QQ表情：捂脸]"),
+        context=mock_context,
+        runtime=runtime,
+    )
+    assert rendered_face is not None
+    assert rendered_face.kind == "qq_face"
+    assert rendered_face.entry.face_id == "264"
     assert image is not None
     assert image.kind == "image"
     assert image.entry.file_path == str(image_path)
