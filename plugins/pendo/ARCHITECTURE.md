@@ -542,9 +542,15 @@ CREATE TABLE items (
     start_time TEXT,
     end_time TEXT,
     location TEXT,
-    rrule TEXT,                            -- 重复规则
     remind_times TEXT,                     -- JSON数组
-    parent_id TEXT,
+    reminder_rules TEXT,                   -- JSON数组，按 leaf.start_time 派生 remind_times
+    event_role TEXT,                       -- single/multi_node_child/recurring_occurrence
+    event_collection_id TEXT,              -- 指向 event_collections
+    event_collection_kind TEXT,            -- multi_node/recurring
+    event_index INTEGER,
+    event_node_key TEXT,
+    source_item_id TEXT,
+    notes TEXT,
 
     -- Task特有字段
     priority INTEGER,                      -- 1-4
@@ -560,7 +566,36 @@ CREATE TABLE items (
 -- 核心索引
 CREATE INDEX idx_owner_type ON items(owner_id, type, deleted);
 CREATE INDEX idx_start_time ON items(start_time) WHERE type='event';
+CREATE INDEX idx_items_event_collection ON items(event_collection_id, event_index)
+    WHERE type='event' AND deleted = 0;
 CREATE INDEX idx_diary_date ON items(diary_date) WHERE type='diary';
+```
+
+重复日程和多节点日程的整体标题与共享上下文不再塞进单条 `items` 行，而是放在 `event_collections` 中；实际可提醒、可单独查看/编辑/删除的是 `items` 里的 leaf event。
+
+```sql
+CREATE TABLE event_collections (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('multi_node', 'recurring')),
+    title TEXT NOT NULL,
+    content TEXT DEFAULT '',
+    category TEXT DEFAULT '未分类',
+    location TEXT DEFAULT '',
+    tags TEXT DEFAULT '[]',
+    notes TEXT DEFAULT '',
+    context TEXT DEFAULT '{}',
+    timezone TEXT DEFAULT 'Asia/Shanghai',
+    rrule TEXT,                            -- recurring collection 的重复规则
+    reminder_rules TEXT DEFAULT '[]',
+    start_time TEXT,
+    end_time TEXT,
+    source_item_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER DEFAULT 0,
+    deleted_at TEXT
+);
 ```
 
 ### 全文搜索表: items_fts

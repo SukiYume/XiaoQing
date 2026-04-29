@@ -96,7 +96,7 @@ All items share a base `Item` dataclass. Specialised fields are in subclasses:
 
 | Class | Key Extra Fields |
 |---|---|
-| `EventItem` | `start_time`, `end_time`, `location`, `rrule`, `remind_times`, `milestones` |
+| `EventItem` | `start_time`, `end_time`, `location`, `reminder_rules`, `remind_times`, `event_role`, `event_collection_id`, `event_collection_kind`, `event_index`, `event_node_key` |
 | `TaskItem` | `due_time`, `priority` (1–4), `status` (TODO/IN_PROGRESS/DONE/CANCELLED), `subtasks` |
 | `NoteItem` | `tags`, `references`, `related_items` |
 | `DiaryItem` | `mood`, `mood_score`, `weather`, `diary_date`, `template_id` |
@@ -109,7 +109,8 @@ All items share a base `Item` dataclass. Specialised fields are in subclasses:
 - **Engine:** SQLite with WAL mode, thread-local connections
 - **Caching:** LRU cache (30 s TTL, max 1024 items)
 - **Tables:**
-  - `items` — all types unified, soft-delete (`is_deleted`), `owner_id` for data isolation
+  - `items` — all schedulable item leaves unified, soft-delete (`deleted`), `owner_id` for data isolation
+  - `event_collections` — non-schedulable event family headers for multi-node and recurring events
   - `items_fts` — FTS5 virtual table for full-text search
   - `reminder_logs` — `(item_id, remind_time, status)`
   - `operation_logs` — audit trail
