@@ -7,6 +7,8 @@ import sys
 import types
 import uuid
 
+import pytest
+
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics.events_overview import build_event_detail, build_events_overview
 
@@ -425,6 +427,47 @@ def test_events_collection_api_creates_updates_and_deletes_graph():
         assert db.get_event_collection(collection_id, owner_id) is None
         assert db.get_item(child_ids[0], owner_id) is None
         assert db.get_item(child_ids[1], owner_id) is None
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_events_collection_api_rejects_invalid_child_without_partial_writes():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_invalid_child_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-web-event-graph-invalid-child"
+    events_api = _load_events_module()
+
+    try:
+        with pytest.raises(events_api.HTTPException) as exc_info:
+            events_api.create_event_collection(
+                body=events_api.EventCollectionCreate(
+                    title="发布项目",
+                    children=[
+                        events_api.EventCollectionChildCreate(
+                            title="提审",
+                            start_time="2030-05-01T10:00:00",
+                        ),
+                        events_api.EventCollectionChildCreate(
+                            title="上线",
+                            start_time="not-a-date",
+                        ),
+                    ],
+                ),
+                owner_id=owner_id,
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 422
+        assert "Invalid start_time" in exc_info.value.detail
+        assert db.get_connection().execute(
+            "SELECT COUNT(*) FROM event_collections WHERE owner_id = ?",
+            (owner_id,),
+        ).fetchone()[0] == 0
+        assert db.get_connection().execute(
+            "SELECT COUNT(*) FROM items WHERE owner_id = ?",
+            (owner_id,),
+        ).fetchone()[0] == 0
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

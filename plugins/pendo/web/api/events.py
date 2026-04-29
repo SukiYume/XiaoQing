@@ -123,31 +123,9 @@ def create_event_collection(
     rules = normalize_reminder_rules(body.reminder_rules if body.reminder_rules is not None else [{"offset_seconds": 0}])
     collection_id = _new_collection_id(db, owner_id)
     now = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
-    start_time = min(child.start_time for child in body.children)
-    end_time = max((child.end_time or child.start_time) for child in body.children)
 
     try:
-        db.create_event_collection(
-            {
-                "id": collection_id,
-                "owner_id": owner_id,
-                "kind": "multi_node",
-                "title": body.title,
-                "content": body.content or "",
-                "category": category,
-                "location": body.location or "",
-                "tags": body.tags,
-                "notes": body.notes or "",
-                "timezone": body.timezone or "Asia/Shanghai",
-                "reminder_rules": rules,
-                "start_time": start_time,
-                "end_time": end_time,
-                "created_at": now,
-                "updated_at": now,
-            }
-        )
-
-        child_ids: list[str] = []
+        child_rows: list[tuple[str, dict[str, Any]]] = []
         for index, child in enumerate(body.children, 1):
             node_key = f"m{index:02d}"
             normalized = normalize_event_fields(
@@ -174,7 +152,33 @@ def create_event_collection(
                 },
                 partial=False,
             )
-            node_id = f"{collection_id}_{node_key}"
+            child_rows.append((f"{collection_id}_{node_key}", normalized))
+
+        start_time = min(row["start_time"] for _, row in child_rows)
+        end_time = max((row.get("end_time") or row["start_time"]) for _, row in child_rows)
+
+        db.create_event_collection(
+            {
+                "id": collection_id,
+                "owner_id": owner_id,
+                "kind": "multi_node",
+                "title": body.title,
+                "content": body.content or "",
+                "category": category,
+                "location": body.location or "",
+                "tags": body.tags,
+                "notes": body.notes or "",
+                "timezone": body.timezone or "Asia/Shanghai",
+                "reminder_rules": rules,
+                "start_time": start_time,
+                "end_time": end_time,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+        child_ids: list[str] = []
+        for node_id, normalized in child_rows:
             db.insert_item(EventItem(**{k: v for k, v in normalized.items() if k in EventItem.__dataclass_fields__}), node_id)
             child_ids.append(node_id)
 
