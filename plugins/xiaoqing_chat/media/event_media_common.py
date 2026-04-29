@@ -167,12 +167,12 @@ def _media_root(data_dir: Path) -> Path:
     return data_dir / "media"
 
 
-def _figures_root(context) -> Path:
-    return Path(context.plugin_dir) / "figures"
+def _media_files_root(context) -> Path:
+    return Path(context.data_dir) / "media"
 
 
 def _figures_inbox_dir(context) -> Path:
-    return _figures_root(context) / "inbox"
+    return _media_files_root(context) / "inbox"
 
 
 def _render_cache_path(data_dir: Path) -> Path:

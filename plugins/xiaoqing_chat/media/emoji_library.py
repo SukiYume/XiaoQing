@@ -32,10 +32,6 @@ class EmojiLibraryEntry:
     marker: str
 
 
-def _default_emoji_library_dir(context) -> Path:
-    return (Path(context.plugin_dir) / "figures" / "library").resolve()
-
-
 def _emoji_library_task_key(context, runtime) -> str:
     library_dir = resolve_emoji_library_dir(context, runtime)
     if library_dir is None:
@@ -43,8 +39,8 @@ def _emoji_library_task_key(context, runtime) -> str:
     return str(library_dir.resolve())
 
 
-def _to_plugin_relative_path(context, path: Path) -> str:
-    root = Path(context.plugin_dir).resolve()
+def _to_data_relative_path(context, path: Path) -> str:
+    root = Path(context.data_dir).resolve()
     target = path.resolve()
     try:
         return target.relative_to(root).as_posix()
@@ -56,7 +52,7 @@ def resolve_emoji_file_path(context, file_path: str) -> Path:
     path = Path(file_path)
     if path.is_absolute():
         return path
-    return (Path(context.plugin_dir) / path).resolve()
+    return (Path(context.data_dir) / path).resolve()
 
 
 def _emoji_index_path(context, runtime) -> Path:
@@ -119,17 +115,8 @@ def _save_index_if_changed(
     _save_index(context, runtime, payload)
 
 
-def resolve_emoji_library_dir(context, runtime) -> Path | None:
-    media_cfg = getattr(getattr(runtime, "cfg", None), "media", None)
-    if media_cfg is None:
-        return _default_emoji_library_dir(context)
-    raw = str(getattr(media_cfg, "emoji_library_dir", "") or "").strip()
-    if not raw:
-        return _default_emoji_library_dir(context)
-    path = Path(raw)
-    if not path.is_absolute():
-        path = (Path(context.plugin_dir) / raw).resolve()
-    return path
+def resolve_emoji_library_dir(context, runtime=None) -> Path:
+    return (Path(context.data_dir) / "media" / "library").resolve()
 
 
 def _iter_library_files(root: Path) -> list[Path]:
@@ -155,7 +142,7 @@ def _entry_from_render(
     last_used_ts = float(existing.get("last_used_ts", 0.0) or 0.0)
     return EmojiLibraryEntry(
         media_hash=rendered.media_hash,
-        file_path=_to_plugin_relative_path(context, file_path),
+        file_path=_to_data_relative_path(context, file_path),
         description=rendered.description,
         emotion_tags=tuple(rendered.emotion_tags),
         usage_count=usage_count,
@@ -263,7 +250,7 @@ def _normalize_entry_record(
         last_collected_ts = float(time.time())
     return {
         "media_hash": entry.media_hash,
-        "file_path": _to_plugin_relative_path(context, file_path),
+        "file_path": _to_data_relative_path(context, file_path),
         "description": entry.description,
         "emotion_tags": list(entry.emotion_tags),
         "usage_count": entry.usage_count,
@@ -585,7 +572,7 @@ async def load_emoji_library(
         ):
             entry = EmojiLibraryEntry(
                 media_hash=media_hash,
-                file_path=_to_plugin_relative_path(context, file_path),
+                file_path=_to_data_relative_path(context, file_path),
                 description=str(existing.get("description", "") or "").strip(),
                 emotion_tags=tuple(
                     str(item) for item in existing.get("emotion_tags", []) if str(item).strip()
@@ -601,7 +588,7 @@ async def load_emoji_library(
                     file_path=file_path,
                     entry=EmojiLibraryEntry(
                         media_hash=media_hash,
-                        file_path=_to_plugin_relative_path(context, file_path),
+                        file_path=_to_data_relative_path(context, file_path),
                         description=str((existing or {}).get("description", "") or "").strip(),
                         emotion_tags=tuple(
                             str(item) for item in (existing or {}).get("emotion_tags", []) if str(item).strip()
@@ -622,7 +609,7 @@ async def load_emoji_library(
                 if isinstance(existing, dict):
                     retained = dict(existing)
                     retained["media_hash"] = media_hash
-                    retained["file_path"] = _to_plugin_relative_path(context, file_path)
+                    retained["file_path"] = _to_data_relative_path(context, file_path)
                     if perceptual_hash:
                         retained["perceptual_hash"] = perceptual_hash
                     retained_entries[media_hash] = retained
