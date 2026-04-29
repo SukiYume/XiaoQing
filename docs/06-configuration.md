@@ -287,7 +287,7 @@ XiaoQing 使用两个 JSON 配置文件：
 **xiaoqing_chat**（推荐）
 - 基于 LLM 的智能对话
 - 支持长期记忆、情绪系统、表情学习
-- 启用媒体配置后可把图片消息写入上下文，并在文本回复后追加本地表情包
+- 启用媒体配置后可把图片消息写入上下文，主回复 LLM 也可通过出站 marker 带出本地图片、表情包或 QQ 表情
 - 需要配置 LLM API（见下方 secrets.json）
 - 智能回复频率控制
 
@@ -420,16 +420,8 @@ api_key = plugin_cfg.get("api_key")
   },
   "media": {
     "enable_inbound_media_context": true,
-    "enable_outbound_image_reply": true,
-    "enable_outbound_emoji_reply": true,
-    "enable_outbound_face_reply": true,
-    "image_library_dir": "figures/reply_images",
-    "emoji_library_dir": "figures/library",
-    "image_reply_probability": 0.12,
-    "emoji_reply_probability": 0.35,
-    "face_reply_probability": 0.18,
-    "max_media_per_message": 3,
-    "vision_provider": "vision"
+    "max_media_per_message": 1,
+    "vision_provider": ""
   }
 }
 ```
@@ -449,15 +441,7 @@ api_key = plugin_cfg.get("api_key")
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|---------|------|
 | `enable_inbound_media_context` | `boolean` | `true` | 是否把用户图片渲染成 `[图片：...]` / `[表情包：...]` 写入对话上下文 |
-| `enable_outbound_image_reply` | `boolean` | `true` | 是否允许回复阶段补发本地图片 |
-| `enable_outbound_emoji_reply` | `boolean` | `true` | 是否允许回复阶段发送本地表情包 |
-| `enable_outbound_face_reply` | `boolean` | `true` | 是否允许回复阶段补发 QQ 原生 `face` 表情 |
-| `image_library_dir` | `string` | `"figures/reply_images"` | 本地可发送图片目录。相对路径按 `plugins/xiaoqing_chat/` 解析 |
-| `emoji_library_dir` | `string` | `"figures/library"` | 本地可发送表情包目录。相对路径按 `plugins/xiaoqing_chat/` 解析 |
-| `image_reply_probability` | `float` | `0.12` | 满足条件时启用图片模态选择的概率 |
-| `emoji_reply_probability` | `float` | `0.35` | 满足条件时启用表情包模态选择的概率 |
-| `face_reply_probability` | `float` | `0.18` | 满足条件时启用 QQ 表情模态选择的概率 |
-| `max_media_per_message` | `int` | `3` | 单条回复最多附带多少个媒体模态；只发媒体时仍会优先只保留一个“only”模态 |
+| `max_media_per_message` | `int` | `1` | marker 协议每条回复最多解析并发送一个出站媒体 |
 | `vision_provider` | `string` | `""` | 可选。指定 `secrets.json -> plugins.xiaoqing_chat.vision.providers` 里的视觉 provider 名称；为空时优先使用 `vision.default` |
 
 视觉 provider 示例：
@@ -482,7 +466,10 @@ api_key = plugin_cfg.get("api_key")
             "api_base": "https://open.bigmodel.cn/api/paas/v4",
             "api_key": "your-vision-key",
             "model": "glm-4.6v-flash",
-            "endpoint_path": "/chat/completions"
+            "endpoint_path": "/chat/completions",
+            "thinking": {
+              "type": "disabled"
+            }
           }
         }
       }
@@ -493,14 +480,16 @@ api_key = plugin_cfg.get("api_key")
 
 **缓存与索引位置**：
 
-- 收到的图片：`plugins/xiaoqing_chat/figures/inbox/`
-- 可发送表情包：`plugins/xiaoqing_chat/figures/library/`
+- 收到的图片：`plugins/xiaoqing_chat/data/media/inbox/`
+- 可发送图片：`plugins/xiaoqing_chat/data/media/reply_images/`
+- 可发送表情包：`plugins/xiaoqing_chat/data/media/library/`
 - 图片描述缓存：`plugins/xiaoqing_chat/data/media/render_cache.json`
-- 表情包索引：`plugins/xiaoqing_chat/figures/library/index.json`
+- 媒体注册索引：`plugins/xiaoqing_chat/data/media/index.json`
+- 表情包索引：`plugins/xiaoqing_chat/data/media/library/index.json`
 
-插件会把入站图片统一落到 `figures/inbox/`。如果图片被识别成表情包，就会自动复制进 `figures/library/` 并写入索引，后续在合适语境下参与表情包回复选择。新收进图库的表情包也会让这条消息更倾向于触发一次自然回应。
+媒体目录固定在 `plugins/xiaoqing_chat/data/media/` 下，不通过 `xiaoqing_config.json` 配置。插件会把入站图片统一落到 `data/media/inbox/`。如果图片被识别成表情包，就会自动复制进 `data/media/library/` 并写入索引，后续可被主回复 LLM 通过 `[想发表情:hint]` marker 复用。新收进图库的表情包也会让这条消息更倾向于触发一次自然回应。
 
-出站阶段不会因为发现旧图库条目缺少 `description` / `marker` / `emotion_tags` 就同步重跑视觉模型。当前回复会先基于已有元数据和文本上下文做决策，坏条目的补修会放到后台异步执行，不阻塞这次回复。
+出站阶段不会因为发现旧图库条目缺少 `description` / `marker` / `emotion_tags` 就同步重跑视觉模型。当前回复会先按主 LLM 输出的 `[想发图片:hint]` / `[想发表情:hint]` / `[想发QQ表情:hint]` 查找候选，坏条目的补修会放到后台异步执行，不阻塞这次回复。
 
 NapCat/OneBot 的纯 `mface` 消息如果没有直接携带图片源，插件会尝试通过 `onebot_http_base` 对应的 HTTP API 调用 `get_msg` 和 `get_image` 回收真实图片；拿不到真实图片时，再退回成仅保留摘要的 `[表情包：...]` 标记。
 
@@ -693,7 +682,10 @@ PENDO_WEB_PORT=8765
             "api_base": "https://open.bigmodel.cn/api/paas/v4",
             "api_key": "your-vision-api-key",
             "model": "glm-4.6v-flash",
-            "endpoint_path": "/chat/completions"
+            "endpoint_path": "/chat/completions",
+            "thinking": {
+              "type": "disabled"
+            }
           }
         }
       }
@@ -734,7 +726,10 @@ PENDO_WEB_PORT=8765
             "api_base": "https://open.bigmodel.cn/api/paas/v4",
             "api_key": "your-vision-api-key",
             "model": "glm-4.6v-flash",
-            "endpoint_path": "/chat/completions"
+            "endpoint_path": "/chat/completions",
+            "thinking": {
+              "type": "disabled"
+            }
           }
         }
       }

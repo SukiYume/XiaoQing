@@ -8,6 +8,56 @@ _QUESTION_ENDINGS = ("吗", "嘛", "啊", "呢", "吧", "诶")
 _QUESTION_KEYWORDS = frozenset(
     {"啥", "谁", "咋", "为啥", "为什么", "什么", "哪", "哪里", "哪个", "多少", "几", "吗", "嘛"}
 )
+_COLLOQUIAL_MEI_MAX_CHARS = 24
+_COLLOQUIAL_MEI_ASPECT_SUFFIXES = ("了", "过", "完", "好", "到", "上", "下", "成", "在", "着")
+_COLLOQUIAL_MEI_ACTION_MARKERS = frozenset(
+    {
+        "吃",
+        "喝",
+        "睡",
+        "醒",
+        "起床",
+        "到",
+        "来",
+        "回",
+        "去",
+        "看",
+        "听",
+        "写",
+        "做",
+        "弄",
+        "搞",
+        "开",
+        "关",
+        "要",
+        "能",
+        "会",
+        "有",
+        "行",
+        "可以",
+    }
+)
+_COLLOQUIAL_MEI_ONE_CHAR_PREDICATES = frozenset({"好", "到", "行", "醒", "睡", "吃", "喝", "来", "去", "有"})
+_COLLOQUIAL_MEI_STANDALONE_NEGATIONS = frozenset(
+    {"没", "真没", "还没", "也没", "都没", "并没", "我没", "你没", "他没", "她没", "它没", "这没", "那没"}
+)
+
+
+def _is_colloquial_mei_question(t: str) -> bool:
+    """Detect colloquial questions such as "起床了没" without treating "没" as a question."""
+    if not t.endswith("没") or len(t) > _COLLOQUIAL_MEI_MAX_CHARS:
+        return False
+    if t in _COLLOQUIAL_MEI_STANDALONE_NEGATIONS:
+        return False
+
+    body = t[:-1].strip()
+    if not body:
+        return False
+    if len(body) == 1:
+        return body in _COLLOQUIAL_MEI_ONE_CHAR_PREDICATES
+    if body.endswith(_COLLOQUIAL_MEI_ASPECT_SUFFIXES):
+        return True
+    return any(marker in body for marker in _COLLOQUIAL_MEI_ACTION_MARKERS)
 
 
 def is_question(text: str) -> bool:
@@ -20,6 +70,8 @@ def is_question(text: str) -> bool:
     if "?" in t or "？" in t:
         return True
     if t.endswith(_QUESTION_ENDINGS):
+        return True
+    if _is_colloquial_mei_question(t):
         return True
     return any(kw in t for kw in _QUESTION_KEYWORDS)
 
@@ -37,7 +89,7 @@ LOCAL_ID_HISTORY_LIMIT = 50
 FIND_BY_LOCAL_ID_LIMIT = 200
 
 # Timeout (seconds) for the foreground memory retrieval task before giving up.
-MEMORY_RETRIEVAL_TIMEOUT = 1.5
+MEMORY_RETRIEVAL_TIMEOUT = 4.5
 
 # Maximum number of unknown/jargon words to look up per reply generation.
 UNKNOWN_WORDS_MAX = 6

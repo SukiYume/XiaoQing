@@ -483,7 +483,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 `xiaoqing_chat` 提供以聊天体验为中心的拟人对话能力。它以 `/xc` 为统一入口，同时支持图片上下文、QQ 表情参与对话、本地表情包库，以及可单独配置的视觉模型能力。
 
-它的重点是让对话保持自然连贯：文本对话、图片理解、图片/表情包/QQ 表情后处理回复、长期记忆和表达学习都围绕同一条聊天主链协同工作。
+它的重点是让对话保持自然连贯：文本对话、图片理解、主回复 LLM 的出站媒体 marker、长期记忆和表达学习都围绕同一条聊天主链协同工作。
 
 #### 核心特性
 
@@ -495,7 +495,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 | **表达学习** | 从对话中学习表达风格和黑话，不断进化 |
 | **人物与记忆系统** | 对话历史、事实记忆、人物资料、对话摘要、目标状态 |
 | **图片上下文** | 普通图片、NapCat `mface`、QQ `face` 可进入正常对话流 |
-| **多模态后处理回复** | 新收的表情包会进入本地图库，后续可按语境补发本地图片 / 表情包 / QQ 表情 |
+| **出站媒体 marker** | 新收的表情包会进入本地图库，主回复 LLM 可在文本里附一个 `[想发...]` marker 来带出本地图片 / 表情包 / QQ 表情 |
 | **性能优化** | 可选安装 `faiss-cpu` 加速向量检索，未安装则使用 numpy 实现 |
 | **上下文感知** | 文本和图片都能进入统一上下文，进行连贯多轮对话 |
 
@@ -538,7 +538,10 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
             "api_base": "https://open.bigmodel.cn/api/paas/v4",
             "api_key": "your-vision-api-key",
             "model": "glm-4.6v-flash",
-            "endpoint_path": "/chat/completions"
+            "endpoint_path": "/chat/completions",
+            "thinking": {
+              "type": "disabled"
+            }
           }
         }
       }
@@ -562,12 +565,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
   },
   "media": {
     "enable_inbound_media_context": true,
-    "enable_outbound_image_reply": true,
-    "enable_outbound_emoji_reply": true,
-    "enable_outbound_face_reply": true,
-    "image_library_dir": "figures/reply_images",
-    "emoji_library_dir": "figures/library",
-    "max_media_per_message": 3,
+    "max_media_per_message": 1,
     "vision_provider": ""
   }
 }
@@ -587,8 +585,9 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - 对话中的关键事件
 
 **3. 图片/表情包记忆**
-- 收到的图片统一落到 `plugins/xiaoqing_chat/figures/inbox/`
-- 识别为表情包的图片会复制进 `plugins/xiaoqing_chat/figures/library/`
+- 收到的图片统一落到 `plugins/xiaoqing_chat/data/media/inbox/`
+- 可发送图片固定放在 `plugins/xiaoqing_chat/data/media/reply_images/`
+- 识别为表情包的图片会复制进 `plugins/xiaoqing_chat/data/media/library/`
 - 图片描述缓存保存在 `plugins/xiaoqing_chat/data/media/render_cache.json`
 
 #### 使用说明
@@ -598,7 +597,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - 被 `@` 或直接叫名字时会强制回复
 - 私聊中回复概率更高，对话更连贯
 - 启用媒体能力后，纯图片、QQ 表情、NapCat `mface` 都能进入正常对话链
-- 回复会先产出纯文本，再决定是否补发本地图片 / 表情包 / QQ 表情；旧图库里不完整的媒体元数据会在后台修复，不阻断当前回复
+- 回复可以在自然文本里带一个 `[想发图片:hint]` / `[想发表情:hint]` / `[想发QQ表情:hint]` marker；插件解析命中后会发送实际图片、表情包或 QQ face，旧图库里不完整的媒体元数据会在后台修复，不阻断当前回复
 - 如果视觉模型缺失或失败，图片会退回为保守 marker，不阻断纯文本聊天
 
 #### 配置为默认聊天插件

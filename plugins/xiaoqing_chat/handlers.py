@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -39,7 +41,6 @@ from .message_parts import (
     build_text_message_parts,
     normalize_message_parts,
 )
-from .reply_splitter import _split_chat_reply
 from .runtime_state import get_state as _state
 from .store_binding import _bind_all_stores
 from .task_scheduler import (
@@ -51,10 +52,8 @@ from .task_scheduler import (
 )
 from .context_builder import _build_memory_block
 from .reply_generator import _generate_reply_draft
-from .frequency_control import _freq_record, _should_reply, _score_interest
+from .frequency_control import _freq_record, _should_reply
 from .media import build_effective_user_text
-from .media.emoji_library import mark_emoji_used
-from .media.qq_face_catalog import mark_qq_face_used
 from .planning.goal_state import derive_goal_async
 from .memory.review_sessions import get_goal_override
 from .expression.bw_expression_reflector import maybe_ask_for_reflection
@@ -83,17 +82,99 @@ from .smalltalk_execution import (
 from .smalltalk_media_helpers import (
     _assistant_reply_parts,
     _display_reply_text,
-    _image_action_detail,
-    _emoji_action_detail,
     _event_media_items_for_memory,
-    _face_action_detail,
     _mark_reply_media_used,
+    _media_action_detail,
     _normalize_generated_reply_state,
     _prefix_reply_parts,
     _reply_send_prefix,
     _sync_message_parts_to_registry,
 )
 from .smalltalk_models import _GeneratedSmalltalkTurn, _PreparedSmalltalkTurn, _ReplyEnvelope
+
+
+_SENSITIVE_EXTERNAL_TEXT_RE = re.compile(
+    r"(?:"
+    r"登录\s*token|web\s*token|api[_-]?key|secret|set[_-]?secret|password|密码|authkey|"
+    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}"
+    r")",
+    re.IGNORECASE,
+)
+
+_BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS = 60.0
+_DEFAULT_BOT_NAME_ONLY_REPLIES = ("在呢", "嗯？", "怎么啦", "我在", "有事吗")
+
+
+def _should_skip_external_bot_memory(text: str, source_plugin: str, cfg: Any | None = None) -> bool:
+    source = str(source_plugin or "").strip().lower()
+    noisy_plugins = {
+        str(item or "").strip().lower()
+        for item in getattr(cfg, "noisy_external_source_plugins", []) or []
+        if str(item or "").strip()
+    }
+    if source in noisy_plugins:
+        return True
+    compact = str(text or "").strip()
+    if not compact:
+        return True
+    if len(compact) > 1000:
+        return True
+    return bool(_SENSITIVE_EXTERNAL_TEXT_RE.search(compact))
+
+
+def _context_chat_and_user_id(context) -> tuple[str, int | None]:
+    user_id = _coerce_int_or_none(getattr(context, "current_user_id", None))
+    group_id = _coerce_int_or_none(getattr(context, "current_group_id", None))
+    if group_id is not None:
+        return f"g{group_id}", user_id
+    if user_id is not None:
+        return f"u{user_id}", user_id
+    return "", user_id
+
+
+def _coerce_int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _state_method(state, name: str):
+    if hasattr(type(state), name) or name in getattr(state, "__dict__", {}):
+        method = getattr(state, name, None)
+        if callable(method):
+            return method
+    return None
+
+
+def _consume_pending_bot_name_call(state, chat_id: str, user_id: int | None) -> bool:
+    method = _state_method(state, "consume_pending_bot_name_call")
+    if method is None:
+        return False
+    try:
+        return bool(method(chat_id, user_id))
+    except Exception:
+        return False
+
+
+def _last_reply_gate_log_fields(state, chat_id: str) -> dict[str, Any]:
+    method = _state_method(state, "get_reply_gate_decision")
+    if method is None:
+        return {}
+    try:
+        decision = method(chat_id)
+    except Exception:
+        return {}
+    as_log_fields = getattr(decision, "as_log_fields", None)
+    if callable(as_log_fields):
+        try:
+            fields = as_log_fields()
+            return dict(fields) if isinstance(fields, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 
 async def _clear_store_entry(store, chat_id: str) -> None:
@@ -315,6 +396,8 @@ async def observe_outgoing_action(
         text = _outgoing_action_text(action)
         if _should_ignore_text(text, runtime):
             return []
+        if _should_skip_external_bot_memory(text, source_plugin, runtime.cfg):
+            return []
 
         chat_id = _chat_id(event)
         state = _get_bound_state(context)
@@ -524,21 +607,15 @@ def _cancel_generated_tasks(generated: _GeneratedSmalltalkTurn) -> None:
     _cancel_pending_task(generated.speculative_memory_task)
 
 
-async def _generate_reply_result(**kwargs) -> tuple[str, tuple[dict[str, Any], ...], Any, Any, Any]:
+async def _generate_reply_result(**kwargs) -> tuple[str, tuple[dict[str, Any], ...], Any]:
     draft = await _generate_reply_draft(**kwargs)
     if draft is None:
-        return "", (), None, None, None
+        return "", (), None
     reply_text = str(getattr(draft, "text", "") or "").strip()
     reply_parts = normalize_message_parts(getattr(draft, "parts", ()) or ())
     if reply_text and not reply_parts:
         reply_parts = build_text_message_parts(reply_text)
-    return (
-        reply_text,
-        reply_parts,
-        getattr(draft, "image_plan", None),
-        getattr(draft, "emoji_plan", None),
-        getattr(draft, "face_plan", None),
-    )
+    return reply_text, reply_parts, getattr(draft, "media_marker", None)
 
 
 async def _prepare_smalltalk_turn(
@@ -565,11 +642,25 @@ async def _prepare_smalltalk_turn(
     is_private = _is_private(event)
     command_forced = bool(event.get("_xc_command_forced"))
     collected_emoji_count = max(0, int(event.get("_xc_new_emoji_count", 0) or 0))
-    forced = (
-        command_forced
-        or (is_private and not runtime.cfg.brain_chat.enable_private_brain_chat)
-        or mentioned
-    )
+    pending_bot_name_forced = False
+    forced = False
+    force_reason = ""
+    if command_forced:
+        forced = True
+        force_reason = "command"
+    elif is_private and not runtime.cfg.brain_chat.enable_private_brain_chat:
+        forced = True
+        force_reason = "private"
+    elif mentioned:
+        forced = True
+        force_reason = "mentioned"
+    else:
+        pending_bot_name_forced = _consume_pending_bot_name_call(
+            state, chat_id, _coerce_int_or_none(event.get("user_id"))
+        )
+        if pending_bot_name_forced:
+            forced = True
+            force_reason = "bot_name_followup"
 
     _log_step(
         context,
@@ -580,6 +671,8 @@ async def _prepare_smalltalk_turn(
             "is_private": is_private,
             "mentioned": mentioned,
             "forced": forced,
+            "force_reason": force_reason,
+            "pending_bot_name": pending_bot_name_forced,
             "brain_chat_enabled": runtime.cfg.brain_chat.enable_private_brain_chat,
             "msg_id": event.get("message_id"),
             "user_id": event.get("user_id"),
@@ -620,7 +713,6 @@ async def _prepare_smalltalk_turn(
             _log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.clear", fields={})
 
     if not forced:
-        interest = _score_interest(text)
         if not await _should_reply(
             runtime,
             state,
@@ -629,8 +721,18 @@ async def _prepare_smalltalk_turn(
             is_private,
             mentioned,
             runtime.cfg.brain_chat.enable_private_brain_chat,
-            interest=interest,
         ):
+            gate_fields = _last_reply_gate_log_fields(state, chat_id)
+            gate_fields.update({"text": text})
+            if "reason" not in gate_fields:
+                gate_fields["reason"] = "reply_gate"
+            _log_step(
+                context,
+                runtime,
+                chat_id=chat_id,
+                step="smalltalk.no_reply",
+                fields=gate_fields,
+            )
             maybe_coro = state.heartflow.on_no_reply_async(chat_id=chat_id)
             if asyncio.iscoroutine(maybe_coro):
                 await maybe_coro
@@ -680,6 +782,7 @@ async def _prepare_smalltalk_turn(
         mentioned=mentioned,
         is_private=is_private,
         forced=forced,
+        force_reason=force_reason,
         brain_chat_active=brain_chat_active,
         mood_text=mood_text,
         collected_emoji_count=collected_emoji_count,
@@ -737,9 +840,7 @@ async def _finalize_smalltalk_turn(
         schedule_media_registry_flush=_schedule_media_registry_flush,
         clear_store_entry=_clear_store_entry,
         record_bot_reply=_record_bot_reply,
-        image_action_detail=_image_action_detail,
-        emoji_action_detail=_emoji_action_detail,
-        face_action_detail=_face_action_detail,
+        media_action_detail=_media_action_detail,
         schedule_pfc_state_flush=_schedule_pfc_state_flush,
         schedule_action_history_flush=_schedule_action_history_flush,
         spawn_bg_task=_spawn_bg_task,
@@ -811,13 +912,35 @@ async def call_bot_name_only_internal(context) -> list[dict[str, Any]]:
     Returns:
         包含单个文本消息段的列表
     """
-    replies = [
-        "在呢",
-        "嗯？",
-        "怎么啦",
-        "我在",
-        "有事吗",
-    ]
+    replies = list(_DEFAULT_BOT_NAME_ONLY_REPLIES)
+    try:
+        runtime = _load_runtime(context)
+        configured = [
+            str(item).strip()
+            for item in getattr(runtime.cfg, "bot_name_only_replies", []) or []
+            if str(item).strip()
+        ]
+        if configured:
+            replies = configured
+    except Exception:
+        pass
+    chat_id, user_id = _context_chat_and_user_id(context)
+    if chat_id:
+        _state().set_pending_bot_name_call(
+            chat_id,
+            user_id,
+            ttl_seconds=_BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS,
+        )
+        try:
+            payload = {
+                "step": "smalltalk.bot_name_only",
+                "chat_id": chat_id,
+                "user_id": user_id,
+                "followup_ttl_s": _BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS,
+            }
+            context.logger.info("xiaoqing_chat step=%s", json.dumps(payload, ensure_ascii=False))
+        except Exception:
+            pass
     return segments(random.choice(replies))
 
 

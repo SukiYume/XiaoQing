@@ -53,10 +53,10 @@ async def _build_memory_block(
     Returns:
         A formatted string containing relevant memories, or empty string if retrieval fails.
     """
-    fg = _resolve_llm_config(runtime.cfg, secrets, foreground=True)
     mem_t0 = time.monotonic()
     memory_block = ""
     try:
+        fg = _resolve_llm_config(runtime.cfg, secrets, foreground=True)
         memory_block = await asyncio.wait_for(
             build_memory_block(
                 data_dir=data_dir,
@@ -86,14 +86,30 @@ async def _build_memory_block(
                 "memory_chars": len(memory_block or ""),
             },
         )
-    except Exception:
+    except asyncio.TimeoutError:
         memory_block = ""
         _log_step(
             context,
             runtime,
             chat_id=chat_id,
             step="reply.memory.fail",
-            fields={"elapsed_s": round(time.monotonic() - mem_t0, 3)},
+            fields={
+                "elapsed_s": round(time.monotonic() - mem_t0, 3),
+                "reason": "timeout",
+            },
+        )
+    except Exception as exc:
+        memory_block = ""
+        _log_step(
+            context,
+            runtime,
+            chat_id=chat_id,
+            step="reply.memory.fail",
+            fields={
+                "elapsed_s": round(time.monotonic() - mem_t0, 3),
+                "reason": type(exc).__name__,
+                "error": str(exc)[:160],
+            },
         )
     return memory_block
 
@@ -126,7 +142,12 @@ def _build_expression_block(runtime: _ChatRuntime, state, data_dir, chat_id: str
             continue
         if ex.chat_id != chat_id:
             continue
-        if runtime.cfg.reflection.enable_expression_reflection and not ex.checked:
+        reflection_cfg = getattr(runtime.cfg, "reflection", None)
+        require_checked = bool(
+            getattr(reflection_cfg, "enable_expression_reflection", False)
+            or getattr(reflection_cfg, "require_approval_for_injection", True)
+        )
+        if require_checked and not ex.checked:
             continue
         candidates.append(ex)
     candidates.sort(key=lambda x: (-x.count, -x.last_active_time))
