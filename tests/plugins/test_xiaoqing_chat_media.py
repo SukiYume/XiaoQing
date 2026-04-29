@@ -131,8 +131,6 @@ def _make_media_runtime(**media_overrides):
     media_cfg = SimpleNamespace(
         enable_inbound_media_context=True,
         enable_auto_collect_inbound_emoji=True,
-        emoji_library_dir="figures/library",
-        image_library_dir="figures/reply_images",
         emoji_auto_collect_requires_approval=False,
         emoji_auto_collect_max_entries=200,
         emoji_auto_collect_similarity_threshold=4,
@@ -408,7 +406,7 @@ def test_parse_marker_accepts_first_valid_marker_and_cleans_residue() -> None:
 @pytest.mark.asyncio
 async def test_resolve_marker_matches_emoji_hint_and_builds_media_part(mock_context):
     runtime = _make_media_runtime()
-    image_path = _write_png(mock_context.plugin_dir / "figures" / "library" / "wuyu.png")
+    image_path = _write_png(mock_context.data_dir / "media" / "library" / "wuyu.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
     index_path = image_path.parent / "index.json"
     index_path.write_text(
@@ -416,7 +414,7 @@ async def test_resolve_marker_matches_emoji_hint_and_builds_media_part(mock_cont
             {
                 "entries": {
                     media_hash: {
-                        "file_path": "figures/library/wuyu.png",
+                        "file_path": "media/library/wuyu.png",
                         "description": "猫猫无语摊手",
                         "emotion_tags": ["无语", "摊手"],
                         "usage_count": 0,
@@ -446,7 +444,7 @@ async def test_resolve_marker_matches_emoji_hint_and_builds_media_part(mock_cont
 @pytest.mark.asyncio
 async def test_resolve_marker_matches_qq_face_and_image_hints(mock_context):
     runtime = _make_media_runtime()
-    image_path = _write_png(mock_context.plugin_dir / "figures" / "reply_images" / "猫举手.png")
+    image_path = _write_png(mock_context.data_dir / "media" / "reply_images" / "猫举手.png")
 
     face = await resolve_marker(
         parse_marker("来个 [想发QQ表情:狗头]"),
@@ -481,14 +479,14 @@ async def test_resolve_marker_returns_none_when_candidate_missing(mock_context):
 @pytest.mark.asyncio
 async def test_load_emoji_library_uses_mtime_cache(mock_context):
     runtime = _make_media_runtime()
-    image_path = _write_png(mock_context.plugin_dir / "figures" / "library" / "cached.png")
+    image_path = _write_png(mock_context.data_dir / "media" / "library" / "cached.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
     (image_path.parent / "index.json").write_text(
         json.dumps(
             {
                 "entries": {
                     media_hash: {
-                        "file_path": "figures/library/cached.png",
+                        "file_path": "media/library/cached.png",
                         "description": "缓存猫猫",
                         "emotion_tags": ["缓存"],
                         "usage_count": 0,
@@ -1222,7 +1220,7 @@ async def test_render_event_media_text_resolves_remote_url_into_cache(mock_conte
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
-    cached_files = list((mock_context.plugin_dir / "figures" / "inbox").glob("*"))
+    cached_files = list((mock_context.data_dir / "media" / "inbox").glob("*"))
     assert text.startswith("[图片：")
     assert cached_files
 
@@ -1247,7 +1245,7 @@ async def test_render_event_media_text_supports_inline_image_sources(mock_contex
     ):
         text = await render_event_media_text(event, context=mock_context, runtime=runtime)
 
-    cached_files = list((mock_context.plugin_dir / "figures" / "inbox").glob("*"))
+    cached_files = list((mock_context.data_dir / "media" / "inbox").glob("*"))
     assert text.startswith("[图片：")
     assert cached_files
 
@@ -1280,7 +1278,7 @@ async def test_render_event_media_text_marks_napcat_store_emoji_image(mock_conte
 
     assert text.startswith("[表情包：")
     assert event["_xc_new_emoji_count"] == 1
-    assert list((mock_context.plugin_dir / "figures" / "library").glob("*"))
+    assert list((mock_context.data_dir / "media" / "library").glob("*"))
 
 
 @pytest.mark.asyncio
@@ -1623,11 +1621,11 @@ async def test_render_event_media_text_falls_back_to_store_emoji_summary_when_do
 
 @pytest.mark.asyncio
 async def test_load_emoji_library_reuses_existing_metadata(mock_context):
-    library_dir = mock_context.plugin_dir / "emoji_library"
+    library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
     _write_png(library_dir / "无语猫猫.png")
     _write_png(library_dir / "开心狗狗.png")
-    runtime = _make_media_runtime(emoji_library_dir=str(library_dir))
+    runtime = _make_media_runtime()
 
     async def _fake_render(file_path, *, context, runtime, prefer_emoji):
         file_path = Path(file_path)
@@ -1650,8 +1648,8 @@ async def test_load_emoji_library_reuses_existing_metadata(mock_context):
         second_entries = await load_emoji_library(mock_context, runtime)
 
     assert {entry.file_path for entry in first_entries} == {
-        "emoji_library/无语猫猫.png",
-        "emoji_library/开心狗狗.png",
+        "media/library/无语猫猫.png",
+        "media/library/开心狗狗.png",
     }
     assert len(second_entries) == 2
     assert mock_render.await_count == 2
@@ -1659,18 +1657,18 @@ async def test_load_emoji_library_reuses_existing_metadata(mock_context):
 
 @pytest.mark.asyncio
 async def test_load_emoji_library_rebuilds_bad_existing_metadata(mock_context):
-    library_dir = mock_context.plugin_dir / "emoji_library_bad"
+    library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
     image_path = _write_png(library_dir / "坏条目.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
-    runtime = _make_media_runtime(emoji_library_dir=str(library_dir))
+    runtime = _make_media_runtime()
     (library_dir / "index.json").write_text(
         json.dumps(
             {
                 "entries": {
                     media_hash: {
                         "media_hash": media_hash,
-                        "file_path": "emoji_library_bad/坏条目.png",
+                        "file_path": "media/library/坏条目.png",
                         "description": 'json\n{"kind":"emoji","description":"坏输出"',
                         "emotion_tags": ["json", "kind"],
                         "usage_count": 0,
@@ -1711,18 +1709,18 @@ async def test_load_emoji_library_rebuilds_bad_existing_metadata(mock_context):
 
 @pytest.mark.asyncio
 async def test_load_emoji_library_schedules_background_repair_without_blocking(mock_context):
-    library_dir = mock_context.plugin_dir / "emoji_library_background_repair"
+    library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
     image_path = _write_png(library_dir / "坏条目.png")
     media_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
-    runtime = _make_media_runtime(emoji_library_dir=str(library_dir))
+    runtime = _make_media_runtime()
     (library_dir / "index.json").write_text(
         json.dumps(
             {
                 "entries": {
                     media_hash: {
                         "media_hash": media_hash,
-                        "file_path": "emoji_library_background_repair/坏条目.png",
+                        "file_path": "media/library/坏条目.png",
                         "description": 'json\n{"kind":"emoji","description":"坏输出"',
                         "emotion_tags": ["json", "kind"],
                         "usage_count": 0,
@@ -1762,16 +1760,16 @@ async def test_load_emoji_library_schedules_background_repair_without_blocking(m
 
 @pytest.mark.asyncio
 async def test_load_emoji_library_clears_stale_index_when_library_empty(mock_context):
-    library_dir = mock_context.plugin_dir / "emoji_library_empty"
+    library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
-    runtime = _make_media_runtime(emoji_library_dir=str(library_dir))
+    runtime = _make_media_runtime()
     index_path = library_dir / "index.json"
     index_path.write_text(
         json.dumps(
             {
                 "entries": {
                     "stale-hash": {
-                        "file_path": "emoji_library_empty/missing.png",
+                        "file_path": "media/library/missing.png",
                         "description": "旧条目",
                         "marker": "[表情包：旧条目]",
                     }
@@ -1809,13 +1807,13 @@ def test_collect_emoji_candidate_skips_structured_garbage(mock_context):
     )
 
     assert collected is None
-    assert not (mock_context.plugin_dir / "figures" / "library" / f"{rendered.media_hash}.png").exists()
+    assert not (mock_context.data_dir / "media" / "library" / f"{rendered.media_hash}.png").exists()
 
 
 def test_collect_emoji_candidate_rehomes_outside_library_target_path(mock_context):
-    library_dir = mock_context.plugin_dir / "emoji_library_safe"
+    library_dir = mock_context.data_dir / "media" / "library"
     library_dir.mkdir(parents=True, exist_ok=True)
-    runtime = _make_media_runtime(emoji_library_dir=str(library_dir))
+    runtime = _make_media_runtime()
     source_path = _write_png(mock_context.data_dir / "emoji_source" / "source.png")
     outside_path = mock_context.plugin_dir.parent / "outside.png"
     index_path = library_dir / "index.json"
@@ -1851,7 +1849,7 @@ def test_collect_emoji_candidate_rehomes_outside_library_target_path(mock_contex
     collected = collect_emoji_candidate(mock_context, runtime, rendered, source_path=source_path)
     persisted = json.loads(index_path.read_text(encoding="utf-8"))
     stored_rel = persisted["entries"]["hash-safe"]["file_path"]
-    stored_path = (mock_context.plugin_dir / stored_rel).resolve()
+    stored_path = (mock_context.data_dir / stored_rel).resolve()
 
     assert collected is not None
     assert stored_path.exists()
@@ -1893,9 +1891,9 @@ def test_collect_emoji_candidate_prunes_old_auto_entries(mock_context):
     assert collect_emoji_candidate(mock_context, runtime, first_rendered, source_path=first_path) is not None
     assert collect_emoji_candidate(mock_context, runtime, second_rendered, source_path=second_path) is not None
 
-    saved = json.loads((mock_context.plugin_dir / "figures" / "library" / "index.json").read_text(encoding="utf-8"))
+    saved = json.loads((mock_context.data_dir / "media" / "library" / "index.json").read_text(encoding="utf-8"))
     assert list(saved["entries"].keys()) == [second_rendered.media_hash]
-    assert not (mock_context.plugin_dir / "figures" / "library" / f"{first_rendered.media_hash}.png").exists()
+    assert not (mock_context.data_dir / "media" / "library" / f"{first_rendered.media_hash}.png").exists()
 
 
 @pytest.mark.asyncio
@@ -1913,7 +1911,7 @@ async def test_collect_emoji_candidate_requires_approval_keeps_entry_pending(moc
 
     collected = collect_emoji_candidate(mock_context, runtime, rendered, source_path=source_path)
     entries = await load_emoji_library(mock_context, runtime, repair_invalid=False)
-    saved = json.loads((mock_context.plugin_dir / "figures" / "library" / "index.json").read_text(encoding="utf-8"))
+    saved = json.loads((mock_context.data_dir / "media" / "library" / "index.json").read_text(encoding="utf-8"))
 
     assert collected is not None
     assert entries == []
@@ -1954,7 +1952,7 @@ def test_collect_emoji_candidate_dedups_visually_identical_auto_entries(mock_con
 
     first = collect_emoji_candidate(mock_context, runtime, first_rendered, source_path=first_path)
     second = collect_emoji_candidate(mock_context, runtime, second_rendered, source_path=second_path)
-    saved = json.loads((mock_context.plugin_dir / "figures" / "library" / "index.json").read_text(encoding="utf-8"))
+    saved = json.loads((mock_context.data_dir / "media" / "library" / "index.json").read_text(encoding="utf-8"))
 
     assert first is not None
     assert second is not None
@@ -2712,7 +2710,7 @@ async def test_smalltalk_emoji_only_reply_returns_single_image_and_marker_memory
     runtime = _make_media_runtime(
         enable_inbound_media_context=False,
     )
-    image_path = mock_context.plugin_dir / "figures" / "library" / "emoji_only.png"
+    image_path = mock_context.data_dir / "media" / "library" / "emoji_only.png"
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path = _write_png(image_path)
 
@@ -2901,7 +2899,7 @@ async def test_smalltalk_reply_applies_only_one_outbound_media_plan(mock_context
     runtime = _make_media_runtime(
         enable_inbound_media_context=False,
     )
-    image_path = mock_context.plugin_dir / "figures" / "library" / "mixed_reply.png"
+    image_path = mock_context.data_dir / "media" / "library" / "mixed_reply.png"
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path = _write_png(image_path)
 

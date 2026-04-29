@@ -190,8 +190,6 @@ class KnowledgeConfig(BaseModel):
 class MediaConfig(BaseModel):
     enable_inbound_media_context: bool = True
     enable_auto_collect_inbound_emoji: bool = True
-    emoji_library_dir: str = "figures/library"
-    image_library_dir: str = "figures/reply_images"
     emoji_auto_collect_requires_approval: bool = False
     emoji_auto_collect_max_entries: int = 200
     emoji_auto_collect_similarity_threshold: int = 4

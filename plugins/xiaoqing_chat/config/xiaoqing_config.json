@@ -118,8 +118,6 @@
     },
     "media": {
         "enable_inbound_media_context": true,
-        "emoji_library_dir": "figures/library",
-        "image_library_dir": "figures/reply_images",
         "max_media_per_message": 1,
         "enable_emoji_refine_background": true,
         "emoji_refine_timeout_seconds": 2.0,
