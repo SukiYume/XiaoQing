@@ -609,7 +609,7 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 进入和纯文本相同的频率控制、记忆、回复检查链路
 ```
 
-识别成表情包的图片会进入 `plugins/xiaoqing_chat/figures/library/`，后续可作为本地表情包回复素材。
+识别成表情包的图片会进入 `plugins/xiaoqing_chat/data/media/library/`，后续可作为本地表情包回复素材。
 
 回复阶段由主 LLM 直接决定是否带出站媒体：它可以在自然文本里附一个 `[想发表情:hint]`、`[想发QQ表情:hint]` 或 `[想发图片:hint]` marker。插件会剥离这个控制 marker，再按 hint 到本地表情包库、图片目录或 QQ face 目录里解析成实际发送段。旧图库里元数据不完整的条目会在后台补修，不会卡住当前回复。
 

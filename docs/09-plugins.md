@@ -565,8 +565,6 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
   },
   "media": {
     "enable_inbound_media_context": true,
-    "image_library_dir": "figures/reply_images",
-    "emoji_library_dir": "figures/library",
     "max_media_per_message": 1,
     "vision_provider": ""
   }
@@ -587,8 +585,9 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - 对话中的关键事件
 
 **3. 图片/表情包记忆**
-- 收到的图片统一落到 `plugins/xiaoqing_chat/figures/inbox/`
-- 识别为表情包的图片会复制进 `plugins/xiaoqing_chat/figures/library/`
+- 收到的图片统一落到 `plugins/xiaoqing_chat/data/media/inbox/`
+- 可发送图片固定放在 `plugins/xiaoqing_chat/data/media/reply_images/`
+- 识别为表情包的图片会复制进 `plugins/xiaoqing_chat/data/media/library/`
 - 图片描述缓存保存在 `plugins/xiaoqing_chat/data/media/render_cache.json`
 
 #### 使用说明
