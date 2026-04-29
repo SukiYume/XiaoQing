@@ -235,6 +235,79 @@ def test_prompt_builder_uses_media_only_reply_target_block_for_current_parts() -
     assert "现在 测试用户 说" not in user_prompt
 
 
+def test_prompt_builder_treats_media_only_emoji_text_as_user_speech() -> None:
+    personality = PersonalityConfig(
+        polite_guardrail=True,
+        identity="你叫小青。",
+        states=[],
+        state_probability=0.0,
+        reply_style="口语化",
+    )
+
+    msgs = build_prompt_messages(
+        is_private=True,
+        bot_name="小青",
+        sender_name="测试用户",
+        think_level=1,
+        history=[],
+        current_text="[表情包：佩服，调侃；写着“不愧是你 我佩服得鹉体投地”]",
+        personality=personality,
+        keyword_rules=[],
+        regex_rules=[],
+        current_parts=(
+            {
+                "kind": "emoji",
+                "marker": "[表情包：佩服，调侃；写着“不愧是你 我佩服得鹉体投地”]",
+                "description": "佩服，调侃",
+            },
+        ),
+        request_id="req-test-emoji-speech",
+    )
+
+    system_prompt = msgs[0].content
+    user_prompt = msgs[1].content
+    assert "媒体消息理解" in system_prompt
+    assert "交际作用" in system_prompt
+    assert "不要直接输出 `[表情包：...]`" in system_prompt
+    assert "现在测试用户借表情包表达：想说的话：不愧是你 我佩服得鹉体投地" in user_prompt
+    assert "语气反应：佩服，调侃" in user_prompt
+    assert "发送的表情包" not in user_prompt
+
+
+def test_prompt_builder_treats_media_only_qq_face_as_tone() -> None:
+    personality = PersonalityConfig(
+        polite_guardrail=True,
+        identity="你叫小青。",
+        states=[],
+        state_probability=0.0,
+        reply_style="口语化",
+    )
+
+    msgs = build_prompt_messages(
+        is_private=True,
+        bot_name="小青",
+        sender_name="测试用户",
+        think_level=1,
+        history=[],
+        current_text="[QQ表情：菜汪]",
+        personality=personality,
+        keyword_rules=[],
+        regex_rules=[],
+        current_parts=(
+            {
+                "kind": "qq_face",
+                "marker": "[QQ表情：菜汪]",
+                "label": "菜汪",
+            },
+        ),
+        request_id="req-test-qq-face-tone",
+    )
+
+    user_prompt = msgs[1].content
+    assert "现在测试用户用 QQ 表情表达一个反应：菜汪" in user_prompt
+    assert "请结合上下文接住这个反应" in user_prompt
+
+
 def test_prompt_builder_uses_mixed_reply_target_block_for_current_parts() -> None:
     personality = PersonalityConfig(
         polite_guardrail=True,

@@ -92,6 +92,76 @@ def _heuristic_check(
     return None
 
 
+_CURRENT_MEDIA_MARKER_RE = re.compile(r"\[(图片|表情包|QQ表情)：([^\]\n]{1,400})\]")
+_MEDIA_FORM_RE = re.compile(r"(图片|这张图|那张图|表情包|QQ表情|表情|媒体)")
+_INTENT_QUESTION_RE = re.compile(r"(啥意思|什么意思|几个意思|什么情况|干嘛|为何|为什么)")
+_VISIBLE_SPEECH_PATTERNS = (
+    r"写着[“\"]([^”\"\]]{1,80})[”\"]",
+    r"文字(?:内容)?(?:是|为)[“\"]([^”\"\]]{1,80})[”\"]",
+    r"配文(?:字)?(?:是|为)?[“\"]([^”\"\]]{1,80})[”\"]",
+)
+
+
+def _current_media_only_anchors(current_text: str) -> tuple[str, ...]:
+    text = str(current_text or "").strip()
+    if not text:
+        return ()
+    anchors: list[str] = []
+    for match in _CURRENT_MEDIA_MARKER_RE.finditer(text):
+        label = str(match.group(2) or "").strip()
+        label = re.split(r"[；;]", label, maxsplit=1)[0].strip()
+        if label:
+            anchors.extend(part.strip() for part in re.split(r"[，,、\s]+", label) if part.strip())
+        marker = str(match.group(0) or "")
+        for pattern in _VISIBLE_SPEECH_PATTERNS:
+            speech_match = re.search(pattern, marker)
+            if speech_match:
+                anchors.append(str(speech_match.group(1) or "").strip())
+                break
+    if not anchors:
+        return ()
+    remainder = _CURRENT_MEDIA_MARKER_RE.sub("", text).strip()
+    if remainder:
+        return ()
+    deduped: list[str] = []
+    for anchor in anchors:
+        if anchor and anchor not in deduped:
+            deduped.append(anchor)
+    return tuple(deduped)
+
+
+def _media_meta_reply_check(*, reply: str, current_text: str) -> Optional[ReplyCheckResult]:
+    anchors = _current_media_only_anchors(current_text)
+    if not anchors:
+        return None
+
+    normalized_reply = _normalize_text(reply)
+    if not normalized_reply:
+        return None
+
+    anchor_in_reply = any(anchor and anchor in normalized_reply for anchor in anchors if len(anchor) <= 40)
+    media_form_mentioned = _MEDIA_FORM_RE.search(normalized_reply) is not None
+    asks_about_intent = _INTENT_QUESTION_RE.search(normalized_reply) is not None
+
+    if media_form_mentioned and not anchor_in_reply:
+        return ReplyCheckResult(
+            False,
+            "当前用户只发了媒体消息，回复主要围绕媒体形式本身，没有接住其中的文字、情绪或上下文意图",
+            True,
+        )
+
+    if asks_about_intent:
+        for anchor in anchors:
+            if not anchor or len(anchor) > 12 or anchor not in normalized_reply:
+                continue
+            return ReplyCheckResult(
+                False,
+                "当前用户只发了媒体消息，回复把媒体摘要标签当作要解释的对象，而不是接住它表达的反应",
+                True,
+            )
+    return None
+
+
 async def _llm_check(
     *,
     http_session,
@@ -127,9 +197,9 @@ async def _llm_check(
     if _current:
         _current_block = (
             "当前最新用户消息（这是待检查回复要回应的目标；"
-            "如果里面有“内容：...”，那是图片/表情识别出的实际画面内容；"
-            "如果里面有「写着“XX”」，那 XX 就是对方借表情包要说的话，"
-            "回复应当把 XX 当成对方说的话来接，而不是评论这个表情包本身）：\n"
+            "如果里面有媒体摘要，需要判断它在聊天里的交际作用："
+            "可见文字通常是对方借媒体说的话，情绪标签或 QQ 表情名称通常是对方的语气/态度/反应，"
+            "图片内容通常是对方抛出的新话题素材）：\n"
             f"{_current}\n\n"
         )
 
@@ -159,10 +229,13 @@ async def _llm_check(
         "7. 是否又重复使用近期同一个梗、口癖、调侃角度、追问角度或结论。"
         "即使换了句式，只要听起来还是在拿同一个点反复说，也应判为不合适。"
         "但如果用户当前明确追问某个词或梗，回复可以先解释它；不要解释完又继续把它当笑点反复用\n"
-        "8. 如果当前用户消息里的图片/表情摘要明显只是占位或泛称，"
-        "不要追问“啥图/啥表情/这是什么”这类内容本身；应换成更稳妥的接法\n"
+        "8. 如果当前用户消息主要是图片/表情/QQ 表情摘要，"
+        "要判断回复是否接住了其中的可见文字、情绪反应、图片内容或原上下文话题；"
+        "如果回复只是在围绕媒体形式本身说话，而没有回应它承载的交际意图，通常应判为不合适\n"
         "9. 如果附带的媒体没有为回复增加新的交流功能，只是在机械复读、镜像、"
-        "重复上一条媒体语义，通常应判为不合适\n\n"
+        "重复上一条媒体语义，通常应判为不合适\n"
+        "10. 只有当用户明确要求解释、评价或寻找媒体本身时，回复才适合把媒体形式作为话题；"
+        "否则应优先回应媒体表达的内容、态度、情绪或上下文含义\n\n"
         "注意：这是拟人角色的日常聊天。"
         "口语化、犹豫、撒娇、吐槽、调侃、说不知道、反问对方都是正常的拟人表现，不应因此判为不合适。"
         "简短随意的回复是正常的聊天风格，不要因为回复短或没有提供'有价值的信息'就拒绝。\n\n"
@@ -250,6 +323,9 @@ async def check_reply(
     )
     if h:
         return h
+    media_h = _media_meta_reply_check(reply=heuristic_source, current_text=current_text)
+    if media_h:
+        return media_h
     if not enable_llm_checker:
         return ReplyCheckResult(True, "", False)
     try:

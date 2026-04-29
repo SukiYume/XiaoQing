@@ -262,6 +262,47 @@ async def test_check_reply_heuristics_use_text_reply_when_media_is_attached():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current_text", "reply"),
+    [
+        (
+            "[表情包：佩服，调侃；写着“不愧是你 我佩服得鹉体投地”]",
+            "哎哟，你这表情包一套一套的，我都有点招架不住了",
+        ),
+        ("[QQ表情：菜汪]", "啊这，大早上的发个菜汪是几个意思"),
+    ],
+)
+async def test_check_reply_rejects_media_only_meta_comment_without_llm(current_text, reply):
+    from plugins.xiaoqing_chat.llm.reply_checker import check_reply
+
+    result = await check_reply(
+        http_session=None,
+        secrets={},
+        bot_name="小青",
+        reply=reply,
+        heuristic_reply=reply,
+        current_text=current_text,
+        goal="自然聊天",
+        policy_text="",
+        history=[],
+        chat_history_text=f"user: {current_text}",
+        enable_llm_checker=False,
+        max_repeat_compare=3,
+        similarity_threshold=0.9,
+        max_assistant_in_row=5,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+        proxy="",
+        endpoint_path="/v1/chat/completions",
+    )
+
+    assert result.suitable is False
+    assert result.need_replan is True
+    assert "媒体" in result.reason
+
+
+@pytest.mark.asyncio
 async def test_check_reply_uses_llm_to_reject_repeated_joke_angle(monkeypatch: pytest.MonkeyPatch):
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
 
@@ -365,8 +406,10 @@ async def test_check_reply_llm_prompt_mentions_media_markers(monkeypatch: pytest
     assert "[表情包：...]" in prompt
     assert "最终消息会附带相应媒体" in prompt
     assert "同一个梗" in prompt
-    assert "占位或泛称" in prompt
+    assert "交际作用" in prompt
     assert "没有为回复增加新的交流功能" in prompt
+    assert "媒体形式本身" in prompt
+    assert "交际意图" in prompt
     assert "当前最新用户消息" in prompt
     assert "黑猫瞪大双眼" in prompt
     assert captured["extra_payload"] == {
