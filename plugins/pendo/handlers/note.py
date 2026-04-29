@@ -37,9 +37,8 @@ class NoteHandler(DbOpsMixin):
     不需要AI解析，直接规则解析
     """
 
-    def __init__(self, db: "Database", ai_parser: object | None = None):
+    def __init__(self, db: "Database"):
         self.db = db
-        # ai_parser保留接口兼容性，但不使用
 
     @handle_command_errors
     async def handle(

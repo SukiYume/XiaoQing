@@ -160,8 +160,7 @@ def _snapshot_item_fields(item, fields: set[str]) -> dict:
     return {field: data.get(field) for field in fields if field in data and field != "updated_at"}
 
 
-def _resolve_note_reference_payload(db: Database, owner_id: str, payload: dict) -> dict:
-    """Validate and enrich note references from references/related_items."""
+def _collect_note_reference_ids(payload: dict) -> list[str]:
     ids: list[str] = []
     seen: set[str] = set()
     for ref in payload.get("references") or []:
@@ -176,6 +175,40 @@ def _resolve_note_reference_payload(db: Database, owner_id: str, payload: dict) 
         if ref_id and ref_id not in seen:
             seen.add(ref_id)
             ids.append(ref_id)
+    return ids
+
+
+def _note_reference_ids_match(left: dict, right: dict) -> bool:
+    left_ids = _collect_note_reference_ids(left)
+    right_ids = _collect_note_reference_ids(right)
+    return len(left_ids) == len(right_ids) and set(left_ids) == set(right_ids)
+
+
+def _requested_note_reference_payload(updates: dict, requested_fields: set[str]) -> dict:
+    payload = {}
+    if "references" in requested_fields:
+        payload["references"] = updates.get("references") or []
+    if "related_items" in requested_fields:
+        payload["related_items"] = updates.get("related_items") or []
+    return normalize_note_fields(payload, partial=True)
+
+
+def _preserve_existing_note_references(item, payload: dict) -> dict:
+    current = _item_to_dict(item)
+    references = current.get("references") if isinstance(current.get("references"), list) else []
+    related_items = (
+        current.get("related_items")
+        if isinstance(current.get("related_items"), list)
+        else _collect_note_reference_ids({"references": references})
+    )
+    payload["references"] = references
+    payload["related_items"] = related_items
+    return payload
+
+
+def _resolve_note_reference_payload(db: Database, owner_id: str, payload: dict) -> dict:
+    """Validate and enrich note references from references/related_items."""
+    ids = _collect_note_reference_ids(payload)
 
     if not ids:
         payload["references"] = []
@@ -557,7 +590,13 @@ def update_item(
             normalized = normalize_note_fields(merged, partial=False)
             note_reference_requested = bool({"references", "related_items"} & requested_update_fields)
             if note_reference_requested:
-                normalized = _resolve_note_reference_payload(db, owner_id, normalized)
+                reference_payload = _requested_note_reference_payload(updates, requested_update_fields)
+                if _note_reference_ids_match(reference_payload, _item_to_dict(item)):
+                    reference_payload = _preserve_existing_note_references(item, reference_payload)
+                else:
+                    reference_payload = _resolve_note_reference_payload(db, owner_id, reference_payload)
+                normalized["references"] = reference_payload["references"]
+                normalized["related_items"] = reference_payload["related_items"]
             fields_to_apply = NOTE_MUTABLE_FIELDS & requested_update_fields
             if note_reference_requested:
                 fields_to_apply.update({"references", "related_items"})
