@@ -420,8 +420,6 @@ api_key = plugin_cfg.get("api_key")
   },
   "media": {
     "enable_inbound_media_context": true,
-    "image_library_dir": "figures/reply_images",
-    "emoji_library_dir": "figures/library",
     "max_media_per_message": 1,
     "vision_provider": ""
   }
@@ -443,8 +441,6 @@ api_key = plugin_cfg.get("api_key")
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|---------|------|
 | `enable_inbound_media_context` | `boolean` | `true` | 是否把用户图片渲染成 `[图片：...]` / `[表情包：...]` 写入对话上下文 |
-| `image_library_dir` | `string` | `"figures/reply_images"` | 本地可发送图片目录。相对路径按 `plugins/xiaoqing_chat/` 解析 |
-| `emoji_library_dir` | `string` | `"figures/library"` | 本地可发送表情包目录。相对路径按 `plugins/xiaoqing_chat/` 解析 |
 | `max_media_per_message` | `int` | `1` | marker 协议每条回复最多解析并发送一个出站媒体 |
 | `vision_provider` | `string` | `""` | 可选。指定 `secrets.json -> plugins.xiaoqing_chat.vision.providers` 里的视觉 provider 名称；为空时优先使用 `vision.default` |
 
@@ -484,12 +480,14 @@ api_key = plugin_cfg.get("api_key")
 
 **缓存与索引位置**：
 
-- 收到的图片：`plugins/xiaoqing_chat/figures/inbox/`
-- 可发送表情包：`plugins/xiaoqing_chat/figures/library/`
+- 收到的图片：`plugins/xiaoqing_chat/data/media/inbox/`
+- 可发送图片：`plugins/xiaoqing_chat/data/media/reply_images/`
+- 可发送表情包：`plugins/xiaoqing_chat/data/media/library/`
 - 图片描述缓存：`plugins/xiaoqing_chat/data/media/render_cache.json`
-- 表情包索引：`plugins/xiaoqing_chat/figures/library/index.json`
+- 媒体注册索引：`plugins/xiaoqing_chat/data/media/index.json`
+- 表情包索引：`plugins/xiaoqing_chat/data/media/library/index.json`
 
-插件会把入站图片统一落到 `figures/inbox/`。如果图片被识别成表情包，就会自动复制进 `figures/library/` 并写入索引，后续可被主回复 LLM 通过 `[想发表情:hint]` marker 复用。新收进图库的表情包也会让这条消息更倾向于触发一次自然回应。
+媒体目录固定在 `plugins/xiaoqing_chat/data/media/` 下，不通过 `xiaoqing_config.json` 配置。插件会把入站图片统一落到 `data/media/inbox/`。如果图片被识别成表情包，就会自动复制进 `data/media/library/` 并写入索引，后续可被主回复 LLM 通过 `[想发表情:hint]` marker 复用。新收进图库的表情包也会让这条消息更倾向于触发一次自然回应。
 
 出站阶段不会因为发现旧图库条目缺少 `description` / `marker` / `emotion_tags` 就同步重跑视觉模型。当前回复会先按主 LLM 输出的 `[想发图片:hint]` / `[想发表情:hint]` / `[想发QQ表情:hint]` 查找候选，坏条目的补修会放到后台异步执行，不阻塞这次回复。
 
