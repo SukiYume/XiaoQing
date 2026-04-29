@@ -181,21 +181,8 @@ def _media_store():
         return None
 
 
-def _media_cfg_value(runtime, field: str, default):
-    media_cfg = getattr(getattr(runtime, "cfg", None), "media", None)
-    if media_cfg is None:
-        return default
-    return getattr(media_cfg, field, default)
-
-
-def _resolve_image_library_dir(context, runtime) -> Path:
-    raw = str(_media_cfg_value(runtime, "image_library_dir", "figures/reply_images") or "").strip()
-    if not raw:
-        raw = "figures/reply_images"
-    path = Path(raw)
-    if not path.is_absolute():
-        path = (Path(context.plugin_dir) / raw).resolve()
-    return path
+def _resolve_image_library_dir(context, runtime=None) -> Path:
+    return (Path(context.data_dir) / "media" / "reply_images").resolve()
 
 
 def _iter_image_library_files(root: Path) -> list[Path]:
