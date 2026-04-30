@@ -7,8 +7,12 @@ import re
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
+from zoneinfo import ZoneInfo
+
+from ..config import PendoConfig
 
 DEFAULT_EVENT_REMINDER_RULES = [{"offset_seconds": 0}]
+DEFAULT_EVENT_TIMEZONE = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
 
 LEDGER_TRANSACTION_TYPES = {"expense", "income", "transfer"}
 LEDGER_DEFAULT_ACCOUNT = "现金"
@@ -589,6 +593,13 @@ def _normalize_iso_datetime(value: Any, field_name: str) -> str:
     return parsed.isoformat(timespec="seconds")
 
 
+def _datetime_for_rule_delta(value: Any, field_name: str) -> datetime:
+    parsed = datetime.fromisoformat(_normalize_iso_datetime(value, field_name))
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(DEFAULT_EVENT_TIMEZONE).replace(tzinfo=None)
+    return parsed
+
+
 def normalize_reminder_rules(value: Any) -> list[dict[str, int]]:
     """Normalize reminder rules into unique non-negative second offsets."""
     if value in (None, ""):
@@ -627,12 +638,12 @@ def derive_reminder_rules(start_time: Any, remind_times: Any) -> list[dict[str, 
     if not isinstance(remind_times, list):
         raise ValueError("remind_times must be a list")
 
-    start_dt = datetime.fromisoformat(_normalize_iso_datetime(start_time, "start_time"))
+    start_dt = _datetime_for_rule_delta(start_time, "start_time")
     offsets: set[int] = set()
     for value in remind_times:
         if value in (None, ""):
             continue
-        remind_dt = datetime.fromisoformat(_normalize_iso_datetime(value, "remind_times"))
+        remind_dt = _datetime_for_rule_delta(value, "remind_times")
         offset = int(round((start_dt - remind_dt).total_seconds()))
         if offset >= 0:
             offsets.add(offset)
