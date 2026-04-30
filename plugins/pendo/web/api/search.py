@@ -1,7 +1,7 @@
 """Search endpoint."""
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...services.db import Database
 from ..deps import get_db, get_current_user
@@ -16,9 +16,12 @@ def search_items(
     category: Optional[str] = None,
     ledger_category: Optional[str] = None,
     status: Optional[str] = None,
-    page: int = 1,
-    page_size: Optional[int] = None,
-    limit: int = 50,
+    transaction_type: Optional[str] = None,
+    account_name: Optional[str] = None,
+    merchant: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: Optional[int] = Query(None, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=100),
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ):
@@ -38,6 +41,12 @@ def search_items(
             filters["category"] = category
     if status:
         filters["status"] = status
+    if transaction_type:
+        filters["transaction_type"] = transaction_type
+    if account_name:
+        filters["account_name"] = account_name
+    if merchant:
+        filters["merchant"] = merchant
 
     resolved_page = max(1, int(page or 1))
     resolved_page_size = max(1, int(page_size or limit or 50))

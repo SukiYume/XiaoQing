@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
 import { loadChart } from '../lib/chart-loader.js';
-import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-dashboard-styles';
 
@@ -283,15 +283,15 @@ function renderEventSection(title, items, emptyTitle, emptyText) {
                     return `
                         <article class="dashboard-event-card">
                             <div class="dashboard-event-date">
-                                <strong>${date.day}</strong>
-                                <span>${date.month}</span>
+                                <strong>${escapeHtml(date.day)}</strong>
+                                <span>${escapeHtml(date.month)}</span>
                             </div>
                             <div>
-                                <div class="dashboard-event-title">${heading}</div>
-                                ${event.display_subtitle && !isMultiNode ? `<div class="dashboard-event-subtitle">${event.display_subtitle}</div>` : ''}
+                                <div class="dashboard-event-title">${escapeHtml(heading)}</div>
+                                ${event.display_subtitle && !isMultiNode ? `<div class="dashboard-event-subtitle">${escapeHtml(event.display_subtitle)}</div>` : ''}
                                 <div class="dashboard-event-meta">
                                     <span class="dashboard-meta-pill">🕒 ${formatTime(event.start_time)}${event.end_time ? ` - ${formatTime(event.end_time)}` : ''}</span>
-                                    ${event.location ? `<span class="dashboard-meta-pill location">📍 ${event.location}</span>` : ''}
+                                    ${event.location ? `<span class="dashboard-meta-pill location">📍 ${escapeHtml(event.location)}</span>` : ''}
                                 </div>
                             </div>
                         </article>`;
@@ -331,18 +331,20 @@ function renderMonthlyAgenda(events) {
 }
 
 function renderActiveTaskItem(task) {
-    const due = task.due_time ? `截止 ${formatDate(task.due_time)} ${formatTime(task.due_time)}` : '未设置截止时间';
-    const status = task.status === 'in_progress' ? '进行中' : '待办';
+    const schedule = task.deadline_at
+        ? `截止 ${formatDate(task.deadline_at)} ${formatTime(task.deadline_at)}`
+        : (task.plan_date ? `计划 ${formatDate(task.plan_date)}` : '未安排日期');
+    const status = '待办';
     return `
         <label class="dashboard-task-item">
-            <input type="checkbox" data-task-id="${task.id}">
+            <input type="checkbox" data-task-id="${escapeHtml(task.id || '')}">
             <div>
-                <div class="dashboard-task-title">${task.title || '(无标题)'}</div>
+                <div class="dashboard-task-title">${escapeHtml(task.title || '(无标题)')}</div>
                 <div class="dashboard-task-meta">
                     <span class="dashboard-meta-pill">${status}</span>
                     <span class="dashboard-meta-pill">${priorityLabel(task.priority)}</span>
-                    ${task.category ? `<span class="dashboard-meta-pill">${task.category}</span>` : ''}
-                    <span class="dashboard-meta-pill">${due}</span>
+                    ${task.category ? `<span class="dashboard-meta-pill">${escapeHtml(task.category)}</span>` : ''}
+                    <span class="dashboard-meta-pill">${escapeHtml(schedule)}</span>
                 </div>
             </div>
         </label>`;
@@ -354,7 +356,7 @@ function renderCompletedTaskItem(task) {
         <article class="dashboard-task-item is-completed">
             <div style="width:16px;height:16px;border-radius:999px;background:rgba(16,185,129,0.16);margin-top:4px;"></div>
             <div>
-                <div class="dashboard-task-title is-done">${task.title || '(无标题)'}</div>
+                <div class="dashboard-task-title is-done">${escapeHtml(task.title || '(无标题)')}</div>
                 <div class="dashboard-task-meta">
                     <span class="dashboard-meta-pill">已完成</span>
                     ${completedAt ? `<span class="dashboard-meta-pill">${formatDate(completedAt)} ${formatTime(completedAt)}</span>` : ''}
@@ -470,15 +472,18 @@ function renderRecentLedger(recentLedger) {
     return `
         <div class="dashboard-ledger-list">
             ${recentLedger.slice(0, 5).map(item => {
-                const isExpense = item.direction !== 'income';
-                const amount = `${isExpense ? '-' : '+'}${formatAmount(item.amount)}`;
+                const txType = item.transaction_type || 'expense';
+                const isIncome = txType === 'income';
+                const isTransfer = txType === 'transfer';
+                const amount = `${isTransfer ? '' : (isIncome ? '+' : '-')}${formatAmount(item.amount)}`;
+                const amountColor = isTransfer ? 'var(--color-text)' : (isIncome ? 'var(--color-success)' : 'var(--color-ledger)');
                 return `
                     <article class="dashboard-ledger-item">
                         <div>
-                            <strong>${item.title || '(无摘要)'}</strong>
-                            <span>${item.ledger_category || '未分类'} · ${item.ledger_date || ''}</span>
+                            <strong>${escapeHtml(item.title || '(无摘要)')}</strong>
+                            <span>${escapeHtml(item.ledger_category || '未分类')} · ${escapeHtml(item.ledger_date || '')}</span>
                         </div>
-                        <div class="dashboard-ledger-amount" style="color:${isExpense ? 'var(--color-ledger)' : 'var(--color-success)'};">${amount}</div>
+                        <div class="dashboard-ledger-amount" style="color:${amountColor};">${amount}</div>
                     </article>`;
             }).join('')}
         </div>`;

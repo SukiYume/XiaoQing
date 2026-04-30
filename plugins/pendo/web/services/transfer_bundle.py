@@ -10,11 +10,12 @@ from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from ...models.item import Item, get_item_type_value
+from ...utils.validators import COMMON_ITEM_FIELDS, SUPPORTED_ITEM_TYPES, TYPE_SPECIFIC_ITEM_FIELDS
 
 
 TRANSFER_FORMAT = "pendo-bundle"
-TRANSFER_VERSION = 1
-SUPPORTED_TYPES = {"event", "task", "ledger", "note", "diary"}
+TRANSFER_VERSION = 2
+SUPPORTED_TYPES = set(SUPPORTED_ITEM_TYPES)
 TYPE_FILE_NAMES = {
     "event": "data/events.ndjson",
     "task": "data/tasks.ndjson",
@@ -31,41 +32,13 @@ FILE_NAME_TO_TYPE = {
 }
 TIME_FIELD_BY_TYPE = {
     "event": "start_time",
-    "task": "due_time",
+    "task": "plan_date",
     "ledger": "ledger_date",
     "note": "created_at",
     "diary": "diary_date",
 }
-COMMON_FIELDS = {
-    "id",
-    "title",
-    "content",
-    "tags",
-    "category",
-    "created_at",
-    "updated_at",
-    "context",
-    "visibility",
-    "attachments",
-    "ai_meta",
-    "deleted",
-    "deleted_at",
-}
-TYPE_FIELDS = {
-    "event": {
-        "start_time", "end_time", "timezone", "location", "participants",
-        "remind_times", "notes",
-        "event_role", "event_collection_id", "event_collection_kind", "event_index",
-        "event_node_key", "source_item_id", "reminder_rules",
-    },
-    "task": {
-        "due_time", "priority", "status", "estimate", "subtasks", "dependencies",
-        "progress", "remind_times", "completed_at",
-    },
-    "ledger": {"amount", "direction", "ledger_category", "ledger_date", "remark"},
-    "note": {"references", "last_viewed", "related_items"},
-    "diary": {"mood", "mood_score", "weather", "location", "template_id", "diary_date"},
-}
+COMMON_FIELDS = set(COMMON_ITEM_FIELDS) - {"type", "owner_id"}
+TYPE_FIELDS = TYPE_SPECIFIC_ITEM_FIELDS
 EVENT_COLLECTION_FIELDS = {
     "id",
     "kind",
@@ -168,21 +141,17 @@ def deserialize_record(record: dict[str, Any]) -> dict[str, Any]:
 
     payload = {"type": item_type}
     allowed_fields = COMMON_FIELDS | TYPE_FIELDS[item_type]
-    extras = {}
     for key, value in record.items():
         if key in RESERVED_IMPORT_FIELDS:
             continue
         if key in allowed_fields:
             payload[key] = value
         else:
-            extras[key] = value
+            raise BundleValidationError(f"Unsupported field for {item_type}: {key}")
 
     context = payload.get("context")
     if not isinstance(context, dict):
         context = {}
-    if extras:
-        context.setdefault("import", {})
-        context["import"]["extra"] = extras
     payload["context"] = context
     if "_bundle_line" in record:
         payload["_bundle_line"] = record["_bundle_line"]
@@ -191,21 +160,17 @@ def deserialize_record(record: dict[str, Any]) -> dict[str, Any]:
 
 def deserialize_event_collection_record(record: dict[str, Any]) -> dict[str, Any]:
     collection: dict[str, Any] = {}
-    extras = {}
     for key, value in record.items():
         if key in RESERVED_IMPORT_FIELDS:
             continue
         if key in EVENT_COLLECTION_FIELDS:
             collection[key] = value
         else:
-            extras[key] = value
+            raise BundleValidationError(f"Unsupported field for event_collection: {key}")
 
     context = collection.get("context")
     if not isinstance(context, dict):
         context = {}
-    if extras:
-        context.setdefault("import", {})
-        context["import"]["extra"] = extras
     collection["context"] = context
     if "_bundle_line" in record:
         collection["_bundle_line"] = record["_bundle_line"]
@@ -239,6 +204,7 @@ def read_bundle(fileobj) -> ParsedBundle:
     - Per-record ``_type`` can be omitted when it matches the file's type
       (inferred from filename).
     - Per-record ``_schema`` defaults to current TRANSFER_VERSION if absent.
+    - Unknown top-level fields are rejected; importers must emit the v2 schema.
     """
     fileobj.seek(0)
     with ZipFile(fileobj, "r") as zf:

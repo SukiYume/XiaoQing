@@ -18,7 +18,7 @@ from ..utils.settings_utils import normalize_settings_json
 from ..utils.validators import (
     validate_item_data,
     sanitize_search_keyword,
-    derive_task_category,
+    normalize_bool_flag,
 )
 from ..models.item import (
     ItemType,
@@ -47,7 +47,19 @@ class Database:
 
     CACHE_TTL = 30
     CACHE_MAX_SIZE = 1024
-    ALLOWED_DATE_FIELDS = {"start_time", "end_time", "due_time", "diary_date", "created_at", "ledger_date"}
+    ALLOWED_DATE_FIELDS = {
+        "start_time",
+        "end_time",
+        "plan_date",
+        "deadline_at",
+        "completed_at",
+        "cancelled_at",
+        "diary_date",
+        "entry_time",
+        "created_at",
+        "ledger_date",
+    }
+    _LEDGER_AMOUNT_CENTS_EXPR = "COALESCE(amount_cents, 0)"
 
     # JSON 序列化字段：写入时 dumps，读取时 loads
     _JSON_FIELDS = [
@@ -58,10 +70,9 @@ class Database:
         "participants",
         "remind_times",
         "reminder_rules",
-        "subtasks",
-        "dependencies",
         "references",
         "related_items",
+        "template_answers",
     ]
 
     def __init__(self, db_path: str):
@@ -231,14 +242,13 @@ class Database:
                 event_index INTEGER,
                 event_node_key TEXT,
                 source_item_id TEXT,
-                due_time TEXT,
+                plan_date TEXT,
+                deadline_at TEXT,
                 priority INTEGER,
                 status TEXT,
-                estimate INTEGER,
-                subtasks TEXT,
-                dependencies TEXT,
-                progress INTEGER DEFAULT 0,
+                repeat_rule TEXT,
                 completed_at TEXT,
+                cancelled_at TEXT,
                 "references" TEXT,
                 last_viewed TEXT,
                 related_items TEXT,
@@ -247,7 +257,20 @@ class Database:
                 weather TEXT,
                 template_id TEXT,
                 diary_date TEXT,
-                notes TEXT
+                entry_time TEXT,
+                template_answers TEXT,
+                is_favorite INTEGER DEFAULT 0,
+                notes TEXT,
+                amount REAL,
+                amount_cents INTEGER,
+                currency TEXT,
+                transaction_type TEXT,
+                ledger_category TEXT,
+                ledger_date TEXT,
+                account_name TEXT,
+                counter_account_name TEXT,
+                merchant TEXT,
+                remark TEXT
             )
             """)
 
@@ -255,10 +278,14 @@ class Database:
             migrations = [
                 "ALTER TABLE items ADD COLUMN notes TEXT",
                 "ALTER TABLE items ADD COLUMN amount REAL",
-                "ALTER TABLE items ADD COLUMN direction TEXT",
+                "ALTER TABLE items ADD COLUMN amount_cents INTEGER",
+                "ALTER TABLE items ADD COLUMN currency TEXT",
+                "ALTER TABLE items ADD COLUMN transaction_type TEXT",
                 "ALTER TABLE items ADD COLUMN ledger_category TEXT",
-                "ALTER TABLE items ADD COLUMN payment_method TEXT",
                 "ALTER TABLE items ADD COLUMN ledger_date TEXT",
+                "ALTER TABLE items ADD COLUMN account_name TEXT",
+                "ALTER TABLE items ADD COLUMN counter_account_name TEXT",
+                "ALTER TABLE items ADD COLUMN merchant TEXT",
                 "ALTER TABLE items ADD COLUMN remark TEXT",
                 'ALTER TABLE items ADD COLUMN "references" TEXT',
                 "ALTER TABLE items ADD COLUMN last_viewed TEXT",
@@ -270,6 +297,13 @@ class Database:
                 "ALTER TABLE items ADD COLUMN event_index INTEGER",
                 "ALTER TABLE items ADD COLUMN event_node_key TEXT",
                 "ALTER TABLE items ADD COLUMN source_item_id TEXT",
+                "ALTER TABLE items ADD COLUMN plan_date TEXT",
+                "ALTER TABLE items ADD COLUMN deadline_at TEXT",
+                "ALTER TABLE items ADD COLUMN repeat_rule TEXT",
+                "ALTER TABLE items ADD COLUMN cancelled_at TEXT",
+                "ALTER TABLE items ADD COLUMN entry_time TEXT",
+                "ALTER TABLE items ADD COLUMN template_answers TEXT",
+                "ALTER TABLE items ADD COLUMN is_favorite INTEGER DEFAULT 0",
                 # reminder_logs 重构：一行一个 (item_id, remind_time)，用 repeat_count 替代多行
                 "ALTER TABLE reminder_logs ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1",
                 "ALTER TABLE reminder_logs ADD COLUMN last_sent_at TEXT",
@@ -284,8 +318,13 @@ class Database:
             for idx in [
                 "CREATE INDEX IF NOT EXISTS idx_owner_type ON items(owner_id, type, deleted)",
                 f"CREATE INDEX IF NOT EXISTS idx_start_time ON items(start_time) WHERE type='{ItemType.EVENT.value}'",
-                f"CREATE INDEX IF NOT EXISTS idx_due_time ON items(due_time) WHERE type='{ItemType.TASK.value}'",
+                f"CREATE INDEX IF NOT EXISTS idx_task_plan_date ON items(plan_date) WHERE type='{ItemType.TASK.value}'",
+                f"CREATE INDEX IF NOT EXISTS idx_task_deadline_at ON items(deadline_at) WHERE type='{ItemType.TASK.value}'",
                 f"CREATE INDEX IF NOT EXISTS idx_diary_date ON items(diary_date) WHERE type='{ItemType.DIARY.value}'",
+                f"CREATE INDEX IF NOT EXISTS idx_diary_entry_time ON items(entry_time) WHERE type='{ItemType.DIARY.value}'",
+                f"CREATE INDEX IF NOT EXISTS idx_ledger_date ON items(ledger_date) WHERE type='{ItemType.LEDGER.value}'",
+                f"CREATE INDEX IF NOT EXISTS idx_ledger_account ON items(owner_id, account_name, deleted) WHERE type='{ItemType.LEDGER.value}'",
+                f"CREATE INDEX IF NOT EXISTS idx_ledger_transaction_type ON items(owner_id, transaction_type, deleted) WHERE type='{ItemType.LEDGER.value}'",
                 "CREATE INDEX IF NOT EXISTS idx_items_event_collection ON items(event_collection_id, event_index) WHERE type='event' AND deleted = 0",
                 "CREATE INDEX IF NOT EXISTS idx_items_event_role ON items(owner_id, event_role, deleted) WHERE type='event'",
             ]:
@@ -331,31 +370,6 @@ class Database:
                     id UNINDEXED, title, content, tags, category
                 )
             """)
-
-            cursor.execute(
-                """
-                SELECT id, category, due_time, created_at
-                FROM items
-                WHERE type = ? AND deleted = 0
-                """,
-                (ItemType.TASK.value,),
-            )
-            repaired_task_ids: list[str] = []
-            for row in cursor.fetchall():
-                current_category = row["category"]
-                repaired_category = derive_task_category(
-                    current_category,
-                    row["due_time"],
-                    row["created_at"],
-                )
-                if repaired_category != str(current_category or "").strip():
-                    cursor.execute(
-                        "UPDATE items SET category = ? WHERE id = ?",
-                        (repaired_category, row["id"]),
-                    )
-                    repaired_task_ids.append(row["id"])
-            for item_id in repaired_task_ids:
-                self._refresh_fts(item_id, conn)
 
             # 提醒记录表：每个 (item_id, remind_time) 一行
             cursor.execute("""
@@ -1085,7 +1099,20 @@ class Database:
                 return item
         return None
 
-    _ALLOWED_SORT_FIELDS = {"created_at", "updated_at", "ledger_date", "due_time", "start_time", "diary_date", "amount"}
+    _ALLOWED_SORT_FIELDS = {
+        "created_at",
+        "updated_at",
+        "ledger_date",
+        "plan_date",
+        "deadline_at",
+        "completed_at",
+        "cancelled_at",
+        "start_time",
+        "diary_date",
+        "entry_time",
+        "amount",
+        "amount_cents",
+    }
 
     def get_items(
         self,
@@ -1098,7 +1125,8 @@ class Database:
 
         Args:
             owner_id: 用户ID
-            filters: 过滤条件，支持 type, category, ledger_category, status, tags, direction,
+            filters: 过滤条件，支持 type, category, ledger_category, transaction_type,
+                     account_name, counter_account_name, merchant, status, tags,
                      amount_min, amount_max, start_date, end_date, date_field,
                      sort_field, sort_order
             limit: 返回数量限制
@@ -1119,10 +1147,23 @@ class Database:
         params = [owner_id]
 
         if filters:
-            for key in ["type", "category", "ledger_category", "status", "priority"]:
+            for key in [
+                "type",
+                "category",
+                "ledger_category",
+                "transaction_type",
+                "counter_account_name",
+                "merchant",
+                "status",
+                "priority",
+                "plan_date",
+            ]:
                 if key in filters:
                     where.append(f"{key} = ?")
                     params.append(filters[key])
+            if "account_name" in filters:
+                where.append("(account_name = ? OR counter_account_name = ?)")
+                params.extend([filters["account_name"], filters["account_name"]])
             if "tags" in filters:
                 where.append(f"tags LIKE ?")
                 params.append(self.tag_filter_pattern(filters["tags"]))
@@ -1132,15 +1173,12 @@ class Database:
                     like = f"%{keyword}%"
                     where.append("(title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ?)")
                     params.extend([like, like, like, like])
-            if "direction" in filters:
-                where.append("direction = ?")
-                params.append(filters["direction"])
             if "amount_min" in filters:
-                where.append("amount >= ?")
-                params.append(filters["amount_min"])
+                where.append(f"{self._LEDGER_AMOUNT_CENTS_EXPR} >= ?")
+                params.append(int(round(float(filters["amount_min"]) * 100)))
             if "amount_max" in filters:
-                where.append("amount <= ?")
-                params.append(filters["amount_max"])
+                where.append(f"{self._LEDGER_AMOUNT_CENTS_EXPR} <= ?")
+                params.append(int(round(float(filters["amount_max"]) * 100)))
 
             # 支持日期范围过滤
             date_field = filters.get("date_field")
@@ -1186,11 +1224,16 @@ class Database:
         return [str(row[0]) for row in cursor.fetchall()]
 
     def get_undone_tasks_for_date(self, user_id: str, date_str: str) -> list[TaskItem]:
-        """Return unfinished tasks in the date-based category bucket."""
+        """Return open tasks planned for a specific date."""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT * FROM items WHERE owner_id = ? AND type = '{ItemType.TASK.value}' AND category = ? AND status = 'todo' AND deleted = 0",
+            f"""
+            SELECT * FROM items
+            WHERE owner_id = ? AND type = '{ItemType.TASK.value}'
+              AND plan_date = ? AND status = 'open' AND deleted = 0
+            ORDER BY COALESCE(priority, 3) ASC, created_at ASC
+            """,
             (user_id, date_str),
         )
 
@@ -1275,11 +1318,29 @@ class Database:
     ):
         """将常用过滤条件追加到 where / params"""
         if filters:
-            for key in ("type", "category", "ledger_category", "status", "direction", "priority"):
+            for key in (
+                "type",
+                "category",
+                "ledger_category",
+                "transaction_type",
+                "counter_account_name",
+                "merchant",
+                "status",
+                "priority",
+                "plan_date",
+            ):
                 if key in filters:
                     column = f"{column_prefix}{key}" if column_prefix else key
                     where.append(f"{column} = ?")
                     params.append(filters[key])
+            if "account_name" in filters:
+                account_column = f"{column_prefix}account_name" if column_prefix else "account_name"
+                counter_column = (
+                    f"{column_prefix}counter_account_name"
+                    if column_prefix else "counter_account_name"
+                )
+                where.append(f"({account_column} = ? OR {counter_column} = ?)")
+                params.extend([filters["account_name"], filters["account_name"]])
 
             date_field = filters.get("date_field")
             if date_field:
@@ -1339,10 +1400,26 @@ class Database:
             "owner_id = ?", "deleted = 0",
             """(
                 title LIKE ? OR content LIKE ? OR tags LIKE ? OR category LIKE ? OR
-                remark LIKE ? OR ledger_category LIKE ? OR location LIKE ? OR notes LIKE ? OR weather LIKE ?
+                remark LIKE ? OR ledger_category LIKE ? OR account_name LIKE ? OR
+                counter_account_name LIKE ? OR merchant LIKE ? OR location LIKE ? OR
+                notes LIKE ? OR weather LIKE ?
             )""",
         ]
-        like_params: list[Any] = [owner_id, like, like, like, like, like, like, like, like, like]
+        like_params: list[Any] = [
+            owner_id,
+            like,
+            like,
+            like,
+            like,
+            like,
+            like,
+            like,
+            like,
+            like,
+            like,
+            like,
+            like,
+        ]
         self._apply_filters(like_where, like_params, filters)
 
         cursor.execute(
@@ -1383,7 +1460,15 @@ class Database:
                 if filters.get("category"):
                     collection_where.append("i.category = ?")
                     collection_params.append(filters["category"])
-                for key in ("ledger_category", "status", "direction", "priority"):
+                for key in (
+                    "ledger_category",
+                    "transaction_type",
+                    "account_name",
+                    "counter_account_name",
+                    "merchant",
+                    "status",
+                    "priority",
+                ):
                     if key in filters:
                         collection_where.append("1 = 0")
 
@@ -1474,36 +1559,233 @@ class Database:
         items_by_id = self._load_items_for_search(owner_id, page_ids, filters=filters)
         return [items_by_id[item_id] for item_id in page_ids if item_id in items_by_id], total
 
+    _UNDO_DELETE_ACTIONS = ("delete_event_collection", "delete_task", "delete_note", "delete")
+
+    def _parse_operation_details(self, raw_details: Any) -> dict[str, Any]:
+        if not raw_details:
+            return {}
+        if isinstance(raw_details, dict):
+            return raw_details
+        try:
+            details = json.loads(raw_details)
+        except (TypeError, ValueError):
+            return {}
+        return details if isinstance(details, dict) else {}
+
+    def _restore_deleted_item_ids(
+        self,
+        cursor: sqlite3.Cursor,
+        conn: sqlite3.Connection,
+        owner_id: str,
+        item_ids: list[str],
+    ) -> tuple[int, list[str]]:
+        unique_ids = list(dict.fromkeys(str(item_id) for item_id in item_ids if item_id))
+        if not unique_ids:
+            return 0, []
+
+        placeholders = ",".join("?" for _ in unique_ids)
+        now = datetime.now().isoformat()
+        cursor.execute(
+            f"""
+            UPDATE items
+            SET deleted = 0, deleted_at = NULL, updated_at = ?
+            WHERE owner_id = ? AND deleted = 1 AND id IN ({placeholders})
+            """,
+            [now, owner_id] + unique_ids,
+        )
+        affected = cursor.rowcount
+        for item_id in unique_ids:
+            self._refresh_fts(item_id, conn)
+        return affected, unique_ids
+
+    def _load_item_for_undo(
+        self, cursor: sqlite3.Cursor, owner_id: str, item_id: str | None
+    ) -> Item | None:
+        if not item_id:
+            return None
+        row = cursor.execute(
+            "SELECT * FROM items WHERE id = ? AND owner_id = ?",
+            (item_id, owner_id),
+        ).fetchone()
+        return self._row_to_item(row) if row else None
+
+    def _latest_delete_log_row(self, cursor: sqlite3.Cursor, owner_id: str, threshold: str):
+        placeholders = ",".join("?" for _ in self._UNDO_DELETE_ACTIONS)
+        return cursor.execute(
+            f"""
+            SELECT id, item_id, action, item_type, details, created_at
+            FROM operation_logs
+            WHERE user_id = ? AND action IN ({placeholders}) AND created_at >= ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            [owner_id] + list(self._UNDO_DELETE_ACTIONS) + [threshold],
+        ).fetchone()
+
+    def _latest_deleted_item_row(self, cursor: sqlite3.Cursor, owner_id: str, threshold: str):
+        return cursor.execute(
+            """
+            SELECT * FROM items
+            WHERE owner_id = ? AND deleted = 1 AND deleted_at >= ?
+            ORDER BY deleted_at DESC
+            LIMIT 1
+            """,
+            (owner_id, threshold),
+        ).fetchone()
+
+    def _delete_operation_logs(self, cursor: sqlite3.Cursor, log_ids: list[int]) -> None:
+        unique_ids = list(dict.fromkeys(int(log_id) for log_id in log_ids if log_id))
+        if not unique_ids:
+            return
+        placeholders = ",".join("?" for _ in unique_ids)
+        cursor.execute(f"DELETE FROM operation_logs WHERE id IN ({placeholders})", unique_ids)
+
+    def _undo_delete_from_log(
+        self,
+        conn: sqlite3.Connection,
+        cursor: sqlite3.Cursor,
+        owner_id: str,
+        log_row,
+    ) -> dict[str, Any]:
+        action = str(log_row["action"] or "")
+        item_id = str(log_row["item_id"] or "")
+        details = self._parse_operation_details(log_row["details"])
+
+        if action == "delete_event_collection":
+            child_ids = [
+                str(child_id)
+                for child_id in (details.get("child_ids") or [])
+                if child_id
+            ]
+            if not child_ids and item_id:
+                child_ids = [
+                    str(row["id"])
+                    for row in cursor.execute(
+                        """
+                        SELECT id FROM items
+                        WHERE owner_id = ? AND event_collection_id = ? AND deleted = 1
+                        ORDER BY COALESCE(event_index, 999999), start_time, id
+                        """,
+                        (owner_id, item_id),
+                    ).fetchall()
+                ]
+
+            now = datetime.now().isoformat()
+            with conn:
+                collection_affected = 0
+                if item_id:
+                    cursor.execute(
+                        """
+                        UPDATE event_collections
+                        SET deleted = 0, deleted_at = NULL, updated_at = ?
+                        WHERE id = ? AND owner_id = ? AND deleted = 1
+                        """,
+                        (now, item_id, owner_id),
+                    )
+                    collection_affected = cursor.rowcount
+                item_affected, restored_ids = self._restore_deleted_item_ids(
+                    cursor, conn, owner_id, child_ids
+                )
+                self._delete_operation_logs(cursor, [int(log_row["id"])])
+
+            self.cache_clear()
+            if collection_affected or item_affected:
+                return {
+                    "status": "success",
+                    "message": f"已恢复日程集合和 {item_affected} 个日程",
+                    "item": None,
+                    "affected": collection_affected + item_affected,
+                    "item_ids": restored_ids,
+                    "collection_id": item_id,
+                }
+            return {"status": "error", "message": "该删除操作没有可恢复的数据"}
+
+        if action in {"delete_task", "delete_note"}:
+            params: list[Any] = [owner_id, action, log_row["created_at"]]
+            item_type_clause = ""
+            if log_row["item_type"] is not None:
+                item_type_clause = " AND item_type = ?"
+                params.append(log_row["item_type"])
+            batch_rows = cursor.execute(
+                f"""
+                SELECT id, item_id FROM operation_logs
+                WHERE user_id = ? AND action = ? AND created_at = ?{item_type_clause}
+                ORDER BY id
+                """,
+                params,
+            ).fetchall()
+            log_ids = [int(row["id"]) for row in batch_rows]
+            item_ids = [str(row["item_id"]) for row in batch_rows if row["item_id"]]
+            with conn:
+                affected, restored_ids = self._restore_deleted_item_ids(
+                    cursor, conn, owner_id, item_ids
+                )
+                self._delete_operation_logs(cursor, log_ids)
+
+            self.cache_clear()
+            if affected:
+                type_name = "待办" if action == "delete_task" else "笔记"
+                return {
+                    "status": "success",
+                    "message": f"已恢复 {affected} 个{type_name}",
+                    "item": None,
+                    "affected": affected,
+                    "item_ids": restored_ids,
+                }
+            return {"status": "error", "message": "该删除操作没有可恢复的数据"}
+
+        with conn:
+            affected, restored_ids = self._restore_deleted_item_ids(
+                cursor, conn, owner_id, [item_id]
+            )
+            self._delete_operation_logs(cursor, [int(log_row["id"])])
+            item = self._load_item_for_undo(cursor, owner_id, restored_ids[0] if restored_ids else None)
+
+        self.cache_clear()
+        if affected and item:
+            return {"status": "success", "message": "已恢复", "item": item, "affected": affected}
+        return {"status": "error", "message": "该删除操作没有可恢复的数据"}
+
+    def _undo_delete_from_item_row(
+        self,
+        conn: sqlite3.Connection,
+        cursor: sqlite3.Cursor,
+        owner_id: str,
+        row,
+    ) -> dict[str, Any]:
+        item = self._row_to_item(row)
+        if not item:
+            return {"status": "error", "message": "数据转换失败"}
+
+        with conn:
+            affected, _ = self._restore_deleted_item_ids(cursor, conn, owner_id, [item.id])
+            restored_item = self._load_item_for_undo(cursor, owner_id, item.id)
+
+        self.cache_clear()
+        if affected and restored_item:
+            return {"status": "success", "message": "已恢复", "item": restored_item, "affected": affected}
+        return {"status": "error", "message": "该删除操作没有可恢复的数据"}
+
     def undo_delete(self, owner_id: str, minutes: int = 5) -> dict[str, Any]:
-        """撤销删除"""
+        """撤销删除，按最近一次删除操作恢复单条、批量条目或日程集合。"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
         try:
             threshold = (datetime.now() - timedelta(minutes=minutes)).isoformat()
-            cursor.execute(
-                """
-                SELECT * FROM items WHERE owner_id = ? AND deleted = 1 AND deleted_at >= ?
-                ORDER BY deleted_at DESC LIMIT 1
-            """,
-                (owner_id, threshold),
-            )
-            row = cursor.fetchone()
-            if not row:
+            log_row = self._latest_delete_log_row(cursor, owner_id, threshold)
+            item_row = self._latest_deleted_item_row(cursor, owner_id, threshold)
+
+            if not log_row and not item_row:
                 return {"status": "error", "message": f"未找到{minutes}分钟内删除的条目"}
 
-            item = self._row_to_item(row)
-            if not item:
-                return {"status": "error", "message": "数据转换失败"}
+            if log_row and (
+                not item_row
+                or str(log_row["created_at"] or "") >= str(item_row["deleted_at"] or "")
+            ):
+                return self._undo_delete_from_log(conn, cursor, owner_id, log_row)
 
-            # S-1修复：使用 with conn: 代替手动 BEGIN/COMMIT/ROLLBACK
-            with conn:
-                cursor.execute(
-                    "UPDATE items SET deleted = 0, deleted_at = NULL WHERE id = ?", (item.id,)
-                )
-                self._update_fts(item.id, item.to_dict(), conn)
-            self.cache_clear()
-            return {"status": "success", "message": "已恢复", "item": item}
+            return self._undo_delete_from_item_row(conn, cursor, owner_id, item_row)
         except Exception as e:
             logger.exception("Failed to undo delete: %s", e)
             return {"status": "error", "message": f"恢复失败: {e}"}
@@ -1592,16 +1874,15 @@ class Database:
         cursor = conn.cursor()
         threshold = (datetime.now() - timedelta(minutes=minutes)).isoformat()
 
-        # 查找最近的删除
-        cursor.execute(
-            """
-            SELECT deleted_at FROM items WHERE owner_id = ? AND deleted = 1 AND deleted_at >= ?
-            ORDER BY deleted_at DESC LIMIT 1
-        """,
-            (owner_id, threshold),
+        delete_log = self._latest_delete_log_row(cursor, owner_id, threshold)
+        delete_log_time = delete_log["created_at"] if delete_log else None
+
+        delete_row = self._latest_deleted_item_row(cursor, owner_id, threshold)
+        deleted_item_time = delete_row["deleted_at"] if delete_row else None
+        delete_time = max(
+            [time_value for time_value in (delete_log_time, deleted_item_time) if time_value],
+            default=None,
         )
-        delete_row = cursor.fetchone()
-        delete_time = delete_row[0] if delete_row else None
 
         # 查找最近的编辑
         cursor.execute(
@@ -1681,27 +1962,28 @@ class Database:
         )
         events = [item for row in cursor.fetchall() if (item := self._row_to_item(row)) is not None]
 
-        # 今日待办（I-6修复：按 category 过滤今日分类，或 due_time 在今日范围内，避免历史积压全量纳入）
+        # 今日待办：计划在今天，或硬截止落在今天。
         today_date = today_iso[:10]  # YYYY-MM-DD
         cursor.execute(
             f"""
             SELECT * FROM items WHERE owner_id = ? AND type = '{ItemType.TASK.value}' AND deleted = 0
-            AND status != 'done'
+            AND status = 'open'
             AND (
-                category = ?
-                OR (due_time >= ? AND due_time < ?)
+                plan_date = ?
+                OR (deadline_at >= ? AND deadline_at < ?)
             )
-            ORDER BY COALESCE(priority, 3) ASC, due_time ASC LIMIT 10
+            ORDER BY COALESCE(priority, 3) ASC, COALESCE(deadline_at, plan_date, created_at) ASC LIMIT 10
         """,
             (user_id, today_date, today_iso, tomorrow_iso),
         )
         tasks = [item for row in cursor.fetchall() if (item := self._row_to_item(row)) is not None]
 
-        # 逾期待办
+        # 逾期待办：只看仍打开且硬截止已过的任务，取消任务不会进入提醒。
         cursor.execute(
             f"""
             SELECT * FROM items WHERE owner_id = ? AND type = '{ItemType.TASK.value}' AND deleted = 0
-            AND status != 'done' AND due_time < ? ORDER BY due_time ASC LIMIT 10
+            AND status = 'open' AND deadline_at IS NOT NULL AND deadline_at < ?
+            ORDER BY deadline_at ASC LIMIT 10
         """,
             (user_id, today_iso),
         )
@@ -2147,7 +2429,9 @@ class Database:
                    rl.repeat_count, COALESCE(rl.last_sent_at, rl.sent_at) AS last_sent_at,
                    i.remind_times
             FROM reminder_logs rl
-            JOIN items i ON rl.item_id = i.id AND i.deleted = 0
+            JOIN items i ON rl.item_id = i.id
+                AND i.deleted = 0
+                AND (i.type != 'task' OR COALESCE(i.status, 'open') = 'open')
             WHERE rl.sent_at IS NOT NULL AND rl.confirmed_at IS NULL
             ORDER BY rl.sent_at
         """)
@@ -2174,7 +2458,7 @@ class Database:
     def get_all_events_with_reminders(
         self, owner_id: str | None = None, future_hours: int = 24
     ) -> list[Item]:
-        """获取有提醒的日程
+        """获取有提醒的日程和待办
 
         Args:
             owner_id: 用户ID，如果为None则返回所有用户的日程
@@ -2186,11 +2470,11 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # 构建查询条件
         conditions = [
-            f"type = '{ItemType.EVENT.value}'",
+            f"type IN ('{ItemType.EVENT.value}', '{ItemType.TASK.value}')",
             "deleted = 0",
-            "(event_role IS NULL OR event_role IN ('single', 'multi_node_child', 'recurring_occurrence'))",
+            f"(type != '{ItemType.EVENT.value}' OR event_role IS NULL OR event_role IN ('single', 'multi_node_child', 'recurring_occurrence'))",
+            f"(type != '{ItemType.TASK.value}' OR COALESCE(status, 'open') = 'open')",
             "remind_times IS NOT NULL",
             "remind_times != '[]'",
         ]
@@ -2204,7 +2488,10 @@ class Database:
         # 添加时间范围过滤以优化性能。多节点已经拆成 leaf，直接看 leaf.start_time。
         if future_hours:
             future_time = (datetime.now() + timedelta(hours=future_hours)).isoformat()
-            conditions.append("start_time <= ?")
+            conditions.append(
+                "(type != ? OR COALESCE(start_time, deadline_at, plan_date, created_at) <= ?)"
+            )
+            params.append(ItemType.EVENT.value)
             params.append(future_time)
 
         query = f"SELECT * FROM items WHERE {' AND '.join(conditions)}"
@@ -2267,10 +2554,9 @@ class Database:
                     "participants",
                     "remind_times",
                     "reminder_rules",
-                    "subtasks",
-                    "dependencies",
                     "references",
                     "related_items",
+                    "template_answers",
                 ]:
                     data[field] = []
                 elif field in ["context", "attachments", "ai_meta"]:
@@ -2284,6 +2570,8 @@ class Database:
         # 转换deleted字段
         if "deleted" in data:
             data["deleted"] = bool(data["deleted"])
+        if "is_favorite" in data:
+            data["is_favorite"] = normalize_bool_flag(data["is_favorite"])
 
         # 根据type选择对应的dataclass
         item_type = data.get("type")
@@ -2345,3 +2633,54 @@ class Database:
                 item_data.get("category", ""),
             ),
         )
+
+    def rebuild_fts_index(self, owner_id: str | None = None) -> dict[str, Any]:
+        """Rebuild FTS rows for active items and remove stale/deleted rows."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        active_clause = "WHERE deleted = 0"
+        active_params: list[Any] = []
+        if owner_id:
+            active_clause += " AND owner_id = ?"
+            active_params.append(owner_id)
+
+        with conn:
+            if owner_id:
+                cursor.execute(
+                    "DELETE FROM items_fts WHERE id IN (SELECT id FROM items WHERE owner_id = ?)",
+                    (owner_id,),
+                )
+            else:
+                cursor.execute("DELETE FROM items_fts")
+
+            rows = cursor.execute(
+                f"""
+                SELECT id, title, content, tags, category
+                FROM items
+                {active_clause}
+                ORDER BY id
+                """,
+                active_params,
+            ).fetchall()
+            for row in rows:
+                try:
+                    tags = json.loads(row["tags"]) if row["tags"] else []
+                except (TypeError, ValueError):
+                    tags = []
+                self._update_fts(
+                    row["id"],
+                    {
+                        "title": row["title"] or "",
+                        "content": row["content"] or "",
+                        "tags": tags,
+                        "category": row["category"] or "",
+                    },
+                    conn,
+                )
+
+        self.cache_clear()
+        return {
+            "owner_id": owner_id,
+            "indexed": len(rows),
+            "scope": "owner" if owner_id else "all",
+        }

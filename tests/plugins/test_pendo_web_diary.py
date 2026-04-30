@@ -25,7 +25,7 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
             "title": "春天",
             "content": "今天写了很多很多字。",
             "diary_date": "2026-03-20",
-            "mood": "😊",
+            "mood": "happy",
             "weather": "☀️ 晴",
             "created_at": "2026-03-20T22:00:00",
             "updated_at": "2026-03-20T22:00:00",
@@ -37,7 +37,7 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
             "title": "散步",
             "content": "今天继续写日记。",
             "diary_date": "2026-03-21",
-            "mood": "😊",
+            "mood": "happy",
             "created_at": "2026-03-21T22:00:00",
             "updated_at": "2026-03-21T22:00:00",
         })
@@ -48,7 +48,7 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
             "title": "雨夜",
             "content": "这一天有些疲惫。",
             "diary_date": "2026-03-23",
-            "mood": "😴",
+            "mood": "tired",
             "template_id": "night_review",
             "created_at": "2026-03-23T22:00:00",
             "updated_at": "2026-03-23T22:00:00",
@@ -60,7 +60,7 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
             "title": "四月第一天",
             "content": "下一月的记录不应算进三月。",
             "diary_date": "2026-04-01",
-            "mood": "🌤️",
+            "mood": "neutral",
             "created_at": "2026-04-01T22:00:00",
             "updated_at": "2026-04-01T22:00:00",
         })
@@ -79,7 +79,7 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
         assert result["summary"]["busiest_day"]["date"] == "2026-03-20"
         assert result["summary"]["busiest_day"]["words"] == len("今天写了很多很多字。")
         assert result["cadence_granularity"] == "day"
-        assert result["mood_breakdown"][0]["mood"] == "😊"
+        assert result["mood_breakdown"][0]["mood"] == "happy"
         assert result["mood_breakdown"][0]["count"] == 2
         assert result["template_usage"][0]["template_id"] == "night_review"
         assert result["cadence"][19]["count"] == 1
@@ -222,6 +222,16 @@ def test_diary_page_source_uses_calendar_metrics_instead_of_preview_snippets():
     assert "BREAKPOINTS.NARROW" not in src
     assert ".diary-month-nav { align-self: stretch; grid-template-columns: 32px minmax(0, 1fr) 32px; width: 100%; }" in src
     assert "还没写" not in src
+
+
+def test_diary_page_source_allows_editing_structured_template_answers():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "diary.js").read_text(encoding="utf-8")
+
+    assert "function renderTemplateAnswerInputs(template, answers = [])" in src
+    assert "const existingAnswers = normalizeTemplateAnswers(existing?.template_answers);" in src
+    assert "const answerInputs = renderTemplateAnswerInputs(template, existingAnswers);" in src
+    assert "const templateAnswerInputs = form.querySelectorAll('.diary-template-answer-input');" in src
+    assert "if (templateAnswerInputs.length || templateAnswers.length)" in src
 
 
 def test_stats_page_source_uses_word_based_diary_density_and_month_streak():

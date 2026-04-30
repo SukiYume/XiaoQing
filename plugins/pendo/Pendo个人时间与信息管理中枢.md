@@ -129,7 +129,7 @@
 ## 2.1 添加待办
 
 ```
-/pendo todo add <内容> [cat:分类] [p:1-4] [#标签]
+/pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [cat:分类] [p:1-5] [#标签]
 ```
 
 ### 优先级说明
@@ -140,24 +140,26 @@
 | 高 | `p:2` | 🟠 | 重要但不紧急 |
 | 中 | `p:3` | 🟡 | 默认优先级 |
 | 低 | `p:4` | 🟢 | 可后续处理 |
+| 最低 | `p:5` | ⚪ | 可长期排队 |
 
 ### 示例
 
 ```
-/pendo todo add 提交周报 cat:工作 p:2
+/pendo todo add 提交周报 plan:2026-05-01 deadline:2026-05-01T18:00 cat:工作 p:2
 /pendo todo add 买牛奶 cat:生活 p:4
 /pendo todo add 紧急事项 #财务 p:1
 ```
 
-### 分类说明
+### 计划与分类说明
 
-- **日期分类**: `cat:2026-02-02` - 当天的待办
-- **自定义分类**: `cat:工作`、`cat:学习` 等
+- **计划日期**: `plan:2026-02-02` - 希望在哪天处理
+- **硬截止**: `deadline:2026-02-02T18:00` - 确定不能晚于这个时间
+- **文字分类**: `cat:工作`、`cat:学习` 等
 
 ## 2.2 查看待办
 
 ```
-/pendo todo list [分类] [done/undone]
+/pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类]
 ```
 
 | 命令 | 说明 |
@@ -167,6 +169,8 @@
 | `/pendo todo list 2026-02-03` | 查看指定日期 |
 | `/pendo todo list 工作` | 查看工作分类 |
 | `/pendo todo list 工作 done` | 查看已完成 |
+| `/pendo todo list 工作 open` | 查看未完成 |
+| `/pendo todo list cancelled` | 查看已取消 |
 
 > 显示排序：按优先级排序，同级按创建时间排序
 
@@ -174,6 +178,7 @@
 
 ```
 /pendo todo done <id>      # 完成待办
+/pendo todo cancel <id>    # 取消待办
 /pendo todo undone <id>    # 重开待办
 /pendo todo delete <id>    # 删除待办
 /pendo todo delete cat:分类  # 删除整个分类
@@ -242,12 +247,14 @@
 |------|------|
 | 不带日期 | 写今天的日记 |
 | 带日期 | 写指定日期的日记 |
-| 多次添加 | 同一天多次添加会追加内容 |
+| 多次添加 | 同一天会创建多篇独立条目，按记录时间排序 |
+| 元数据 | 支持 `mood:happy`、`score:8`、`tags:工作,复盘`、`favorite:true` |
 
 ## 4.2 查看日记
 
 ```
 /pendo diary view <日期>              # 查看某日详情
+/pendo diary view <ID>                # 查看某篇条目
 /pendo diary list [范围]              # 列表（范围参数同event）
 /pendo diary template                 # 查看模板
 ```
@@ -256,7 +263,6 @@
 
 | 模板ID | 名称 | 说明 |
 |--------|------|------|
-| `default` | 自由日记 | 自由记录 |
 | `three_good` | 三件好事 | 记录三件开心的事 |
 | `summary` | 今日总结 | 做了什么/学到什么/改进/明天计划 |
 | `mood` | 情绪记录 | 心情评分与分析 |
@@ -269,8 +275,10 @@
 ## 4.4 删除日记
 
 ```
-/pendo diary delete <日期>
+/pendo diary delete <日期或ID>
 ```
+
+如果某天有多篇日记，按日期删除会提示具体 ID，避免误删整天内容。
 
 ---
 
@@ -335,17 +343,6 @@
 - 类型支持：`event / todo / note / ledger / diary`，支持逗号组合
 - 导出会生成一个美化过的 Markdown 档案文件，保存到本地后再通过 OneBot 私聊文件消息发送给当前 QQ 用户
 - 插件聊天端不再提供 Markdown 导入；跨设备迁移请使用 Web 端的 Bundle 导入能力
-
-## 6.4 Event Graph 迁移脚本
-
-旧版 `pendo.db` 中，多节点事件是单条 `items.milestones`，重复事件依赖 `parent_id`。新版统一迁移为 `event_collections` + leaf events：
-
-```bash
-python -m plugins.pendo.scripts.migrate_event_graph plugins/pendo/data/pendo.db --dry-run
-python -m plugins.pendo.scripts.migrate_event_graph plugins/pendo/data/pendo.db --apply
-```
-
-`--dry-run` 不写库；`--apply` 会先备份，再生成 JSON 报告。迁移后，多节点 leaf id 形如 `<collection_id>_m01`，重复实例保留原 id 但挂到 recurring collection 下。
 
 ---
 

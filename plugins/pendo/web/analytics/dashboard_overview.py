@@ -133,16 +133,10 @@ def build_dashboard_overview(
     raw_events_month = db.get_events_for_range(owner_id, month_start_iso, month_end_iso)
     raw_events_agenda = db.get_events_for_range(owner_id, month_start_iso, agenda_end_iso)
 
-    tasks_todo = db.get_items(owner_id, filters={
+    tasks_open = db.get_items(owner_id, filters={
         "type": "task",
-        "status": "todo",
-        "sort_field": "due_time",
-        "sort_order": "ASC",
-    }, limit=20)
-    tasks_in_progress = db.get_items(owner_id, filters={
-        "type": "task",
-        "status": "in_progress",
-        "sort_field": "due_time",
+        "status": "open",
+        "sort_field": "plan_date",
         "sort_order": "ASC",
     }, limit=20)
     tasks_completed = db.get_items(owner_id, filters={
@@ -174,11 +168,11 @@ def build_dashboard_overview(
     for item in month_ledger:
         day = getattr(item, "ledger_date", None) or today
         amount = float(getattr(item, "amount", 0) or 0)
-        direction = getattr(item, "direction", "expense")
-        if direction == "expense":
+        transaction_type = getattr(item, "transaction_type", "expense")
+        if transaction_type == "expense":
             spending_by_day[day] = spending_by_day.get(day, 0.0) + amount
             month_expense += amount
-        else:
+        elif transaction_type == "income":
             month_income += amount
 
     spending_trend = [{
@@ -211,7 +205,7 @@ def build_dashboard_overview(
     active_tasks_count = conn.execute(
         """
         SELECT COUNT(*) FROM items
-        WHERE type='task' AND owner_id=? AND deleted=0 AND status IN ('todo', 'in_progress')
+        WHERE type='task' AND owner_id=? AND deleted=0 AND status = 'open'
         """,
         (owner_id,),
     ).fetchone()[0]
@@ -234,11 +228,11 @@ def build_dashboard_overview(
         (owner_id, month_ago_iso, now_iso),
     ).fetchone()[0]
 
-    active_tasks = tasks_todo + tasks_in_progress
+    active_tasks = list(tasks_open)
     active_tasks.sort(key=lambda task: (
-        getattr(task, "status", "") != "in_progress",
         getattr(task, "priority", 99) if getattr(task, "priority", None) is not None else 99,
-        getattr(task, "due_time", "") or "9999-99-99T99:99:99",
+        getattr(task, "plan_date", "") or "9999-99-99",
+        getattr(task, "deadline_at", "") or "9999-99-99T99:99:99",
     ))
     tasks_completed.sort(
         key=lambda task: getattr(task, "completed_at", "") or getattr(task, "updated_at", "") or "",

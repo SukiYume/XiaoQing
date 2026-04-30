@@ -5,6 +5,7 @@
 
 from typing import Any, TYPE_CHECKING, Protocol, cast
 from datetime import datetime, timedelta
+from itertools import islice
 import logging
 import re
 import uuid
@@ -362,7 +363,7 @@ class EventHandler(DbOpsMixin):
                 start_dt_naive = next_dt
 
             rrule_obj = rrulestr(parsed_data["rrule"], dtstart=start_dt_naive)
-            instances = list(rrule_obj)[: PendoConfig.EVENT_MAX_RRULE_COUNT]
+            instances = list(islice(rrule_obj, PendoConfig.EVENT_MAX_RRULE_COUNT))
 
             if not instances:
                 return {"status": "error", "message": "❌ 没有生成任何重复实例"}
@@ -969,7 +970,6 @@ class EventHandler(DbOpsMixin):
             event = cast(EventItem, event)
 
             updates = await self._parse_updates(changes, event)
-            updates = self._normalize_event_updates(event, updates)
             if not updates:
                 return {"status": "warning", "message": "⚠️ 未识别到有效的修改内容"}
 
@@ -994,14 +994,6 @@ class EventHandler(DbOpsMixin):
         except Exception as e:
             logger.exception("Failed to edit instance: %s", e)
             return {"status": "error", "message": f"❌ 编辑失败: {str(e)}"}
-
-    def _normalize_event_updates(
-        self, event: EventItem, updates: dict[str, Any]
-    ) -> dict[str, Any]:
-        """在持久化前保持事件字段一致性。"""
-        normalized = dict(updates)
-        normalized.pop("milestones", None)
-        return normalized
 
     @staticmethod
     def _snapshot_old_values(event: EventItem, updates: dict[str, Any]) -> dict[str, Any]:

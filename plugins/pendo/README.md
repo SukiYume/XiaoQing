@@ -240,10 +240,10 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 
 ### 创建待办
 
-**语法**: `/pendo todo add <内容> [cat:分类] [p:1-4] [#标签]`
+**语法**: `/pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [cat:分类] [p:1-5] [#标签]`
 
 ```
-/pendo todo add 写报告 cat:工作 p:2
+/pendo todo add 写报告 plan:2026-05-01 deadline:2026-05-01T18:00 cat:工作 p:2
 /pendo todo add 买牛奶 cat:生活 p:4
 /pendo todo add 提交报销 #财务 p:1
 ```
@@ -253,10 +253,12 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 - `p:2` - 🟠高
 - `p:3` - 🟡中（默认）
 - `p:4` - 🟢低
+- `p:5` - ⚪最低
 
-**分类**:
-- 默认添加到当天分类（如 `cat:2026-02-03`）
-- 可使用自定义分类（如 `cat:工作`、`cat:学习`）
+**计划与分类**:
+- `plan:` 是计划处理日期；晚上 20:00 后默认计划到明天
+- `deadline:` 是硬截止时间；只在确实有截止时填写
+- `cat:` 只作为文字分类（如 `cat:工作`、`cat:学习`）
 
 ### 查看待办
 
@@ -266,7 +268,7 @@ pip install fastapi uvicorn PyJWT passlib[bcrypt]
 /pendo todo today           # 今日待办快捷方式
 /pendo todo list 2026-02-03  # 查看指定日期
 /pendo todo list 工作 done   # 工作分类已完成
-/pendo todo list 生活 undone # 生活分类未完成
+/pendo todo list 生活 open   # 生活分类未完成
 ```
 
 ### 管理
@@ -319,6 +321,7 @@ cat:其他 #记录
 **直接写日记**:
 ```
 /pendo diary add 今天天气很好，心情不错...
+/pendo diary add 2026-01-31 mood:happy score:8 tags:工作,复盘 favorite:true 今天推进了重构。
 ```
 
 **使用模板**:
@@ -328,16 +331,17 @@ cat:其他 #记录
 ```
 
 **内置模板**:
-- `default` - 自由日记
 - `three_good` - 三件好事
 - `summary` - 今日总结
 - `mood` - 情绪记录
+
+每条 `diary` 是一篇独立日记。同一天可以写多篇，系统用 `diary_date` 归到同一天，用 `entry_time` 排序；模板回答会结构化保存，心情使用固定枚举（如 `happy`、`calm`、`anxious`、`grateful`）和可选 1-10 分数。
 
 ### 查看日记
 
 ```
 /pendo diary view             # 查看今天的日记
-/pendo diary view 2026-01-31  # 查看指定日期
+/pendo diary view 2026-01-31  # 查看指定日期下的所有日记条目
 /pendo diary view 82d34407    # 按ID查看某篇日记
 /pendo diary delete 82d34407  # 按ID删除日记
 /pendo diary list             # 最近30天日记
@@ -347,7 +351,7 @@ cat:其他 #记录
 ### 删除日记
 
 ```
-/pendo diary delete 2026-01-31  # 删除指定日期的日记
+/pendo diary delete 2026-01-31  # 当天只有一篇时可按日期删除；多篇时按ID删除
 ```
 
 ## 搜索
@@ -424,7 +428,7 @@ Pendo 现在将聊天端导出收敛为单文件 Markdown 档案，导入能力�
 - 命令格式：`/pendo export <文件名> [范围] [类型]`
 - 范围支持：`all`、`today`、`week`、`month`、`YYYY-MM`、`last7d`、`start..end`
 - 类型支持：`event`、`todo`、`note`、`ledger`、`diary`，可用逗号组合
-- 导出结果会写入 `plugins/pendo/data/exports/<user_id>/`，并通过 OneBot 私聊文件消息发送给当前 QQ 用户
+- 导出结果会通过 OneBot 私聊文件消息发送给当前 QQ 用户
 - 导出的 Markdown 采用单文件档案格式，带摘要、目录、分类型章节和结构化元信息，适合归档与分享
 
 ### Web 端数据迁移 (Pendo Bundle)
@@ -433,25 +437,6 @@ Web 控制台支持跨设备的 `.pendo.zip` 数据包安全迁移：
 - **安全校验**: 支持预览与完整的数据格式校验。
 - **冲突策略**: 支持自定义冲突处理（跳过现有记录、强制覆盖、创建副本保留双份）。
 - **审计记录**: 在数据库中留存完整的导入与导出操作日志（含条数结果）。
-
-### 历史数据转换工具
-
-提供内置 Python 脚本，可将旧版传统纯文本格式导出件（如普通文本备份）转换为标准 `.pendo.zip` 以通过 Web 端导入：
-
-```bash
-python plugins/pendo/scripts/convert_text_export_to_pendo_bundle.py 你的文本备份.txt -o my_data.pendo.zip
-```
-
-### Event Graph 数据库迁移
-
-旧版数据库中，多节点事件存储在单条 `items.milestones` 中，重复事件通过 `parent_id` 聚合。新版统一为 `event_collections` + leaf events：
-
-```bash
-python -m plugins.pendo.scripts.migrate_event_graph plugins/pendo/data/pendo.db --dry-run
-python -m plugins.pendo.scripts.migrate_event_graph plugins/pendo/data/pendo.db --apply
-```
-
-`--dry-run` 只输出计数，不写数据库。`--apply` 会先在原目录生成备份，再写入 JSON 迁移报告。迁移后，旧多节点容器会软删除，节点以 `<collection_id>_m01` 形式成为可单独 CRUD 的日程；旧重复实例会挂到 `event_collections(kind=recurring)` 下。
 
 ## 设置
 
@@ -565,7 +550,7 @@ plugins/pendo/
 │   ├── analytics/      # 数据聚合（Dashboard/统计）
 │   ├── scriptable/     # iPhone Scriptable 小组件脚本
 │   └── static/         # 前端静态资源（HTML/CSS/JS）
-└── data/               # 数据存储
+└── data/               # 本地运行时数据：pendo.db / web_token_secret.txt
 ```
 
 ### 设计特点
@@ -587,7 +572,6 @@ plugins/pendo/
 - Dashboard / 任务 / 事件 / 账本 / 日记 / 笔记 / 搜索 / 统计 / 设置 九大页面
 - Chart.js 可视化统计图表
 - 支持通过 Web 端完成全量 `.pendo.zip` 数据 Bundle 安全导入与导出、迁移审计
-- 添加历史文本备份转换脚本 `convert_text_export_to_pendo_bundle.py`
 - 优化部分底层模块设计，提升健壮性
 - `/pendo web` 聊天命令集成
 - Scriptable 小组件摘要接口 `/api/widget/summary`

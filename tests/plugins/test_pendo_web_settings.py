@@ -56,6 +56,8 @@ def test_settings_api_source_normalizes_time_and_category_inputs():
 
     assert "_normalize_time_text" in src
     assert "ZoneInfo(timezone)" in src
+    assert "ZoneInfoNotFoundError" in src
+    assert "Invalid timezone" in src
     assert 'validate_category(category or "未分类")' in src
     assert "normalize_settings_json" in src
 

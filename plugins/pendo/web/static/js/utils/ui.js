@@ -7,6 +7,10 @@ export function escapeHtml(value) {
         .replace(/'/g, '&#39;');
 }
 
+export function escapeAttr(value) {
+    return escapeHtml(value);
+}
+
 export const BREAKPOINTS = Object.freeze({
     XL: '1200px',
     WIDE: '1120px',

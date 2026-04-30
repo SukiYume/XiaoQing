@@ -1,9 +1,12 @@
+import { escapeHtml } from '../utils/ui.js';
+
 export function showToast(message, type = 'info', duration = 3000, options = {}) {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
+    const safeType = String(type || 'info').replace(/[^a-zA-Z0-9_-]/g, '') || 'info';
+    toast.className = `toast toast-${safeType}`;
 
-    let html = `<span class="toast-message">${message}</span>`;
+    let html = `<span class="toast-message">${escapeHtml(message)}</span>`;
     if (options.undoCallback) {
         html += `<button class="toast-undo">撤销</button>`;
     }

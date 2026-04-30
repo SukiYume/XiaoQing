@@ -388,7 +388,7 @@ function renderImportExamples() {
     ].join('\n');
     const minimalManifest = JSON.stringify({
         format: 'pendo-bundle',
-        version: 1,
+        version: 2,
         bundle_id: 'my-first-import',
         exported_at: '2026-03-29T20:00:00+08:00',
         source: { app: 'external-tool', timezone: 'Asia/Shanghai' },
@@ -398,11 +398,11 @@ function renderImportExamples() {
             { path: 'data/ledger.ndjson', type: 'ledger' },
         ],
     }, null, 2);
-    const minimalTask = '{"id": "t001", "title": "买牛奶", "status": "todo", "due_time": "2026-03-30T18:00:00+08:00"}\n{"id": "t002", "title": "交报告", "status": "todo", "priority": 2, "category": "工作"}';
-    const minimalLedger = '{"id": "l001", "title": "午饭", "amount": 32.5, "direction": "expense", "ledger_category": "餐饮", "ledger_date": "2026-03-18"}';
+    const minimalTask = '{"id": "t001", "title": "买牛奶", "status": "open", "plan_date": "2026-03-30", "deadline_at": "2026-03-30T18:00:00+08:00"}\n{"id": "t002", "title": "交报告", "status": "open", "priority": 2, "category": "工作"}';
+    const minimalLedger = '{"id": "l001", "title": "午饭", "amount_cents": 3250, "transaction_type": "expense", "ledger_category": "餐饮", "ledger_date": "2026-03-18", "account_name": "微信", "merchant": "食堂"}';
     const fullManifest = JSON.stringify({
         format: 'pendo-bundle',
-        version: 1,
+        version: 2,
         bundle_id: 'a1b2c3d4e5f6...',
         exported_at: '2026-03-29T20:00:00+08:00',
         source: { app: 'external-tool', timezone: 'Asia/Shanghai' },
@@ -416,14 +416,15 @@ function renderImportExamples() {
     }, null, 2);
     const fullTask = JSON.stringify({
         _type: 'task',
-        _schema: 1,
+        _schema: 2,
         id: 'task_20260329_review',
         title: '补完迁移文档',
         content: '整理导入导出字段说明',
         category: '工作',
         priority: 3,
-        status: 'todo',
-        due_time: '2026-03-30T18:00:00+08:00',
+        status: 'open',
+        plan_date: '2026-03-30',
+        deadline_at: '2026-03-30T18:00:00+08:00',
         created_at: '2026-03-29T10:30:00+08:00',
         updated_at: '2026-03-29T10:30:00+08:00',
     }, null, 2);
@@ -433,8 +434,8 @@ function renderImportExamples() {
         renderExampleBlock('2. manifest.json（精简模式）', '精简模式下，files 只需要声明 path 和 type。sha256、count 省略后系统会跳过校验并给出提示。bundle_id 可以用任意唯一字符串，例如稳定自定义字符串。', minimalManifest),
         renderExampleBlock('3. 精简 ndjson 示例', '每条记录只需要写业务字段，不需要 _type 和 _schema（系统会根据文件名自动推断）。没有 created_at 时系统会自动填充当前时间；没有 id 时会默认生成短随机 ID。', minimalTask + '\n\n// ledger.ndjson:\n' + minimalLedger),
         renderExampleBlock('4. manifest.json（完整模式）', 'Pendo 导出的标准格式。files 里带 count（精确行数）和 sha256（文件校验和），导入时会严格校验完整性。', fullManifest),
-        renderExampleBlock('5. 完整 ndjson 示例', '完整模式下每条记录带 _type 和 _schema 元字段，便于跨版本兼容。', fullTask),
-        `<div class="transfer-note">改造规则：1. 日期时间统一用 ISO 8601 并带时区偏移。2. 纯日期字段用 <code>YYYY-MM-DD</code>。3. 每个 <code>ndjson</code> 文件一行一条 JSON。4. ID 可以自定义，导入时会按这个 ID 做跳过 / 覆盖判断；不传 ID 时系统自动生成。5. 外部工具带来的未知字段会被自动存入 <code>context.import.extra</code>，不会丢失。</div>`,
+        renderExampleBlock('5. 完整 ndjson 示例', '完整模式下每条记录带 _type 和 _schema: 2 元字段，导入时会按当前重构后的字段集合严格校验。', fullTask),
+        `<div class="transfer-note">改造规则：1. 日期时间统一用 ISO 8601 并带时区偏移。2. 纯日期字段用 <code>YYYY-MM-DD</code>。3. 每个 <code>ndjson</code> 文件一行一条 JSON。4. ID 可以自定义，导入时会按这个 ID 做跳过 / 覆盖判断；不传 ID 时系统自动生成。5. 未知字段会在预检阶段报错；旧字段需要先用一次性迁移脚本转换成新结构。</div>`,
     ].join('');
 }
 
