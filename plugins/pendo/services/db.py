@@ -1455,8 +1455,8 @@ class Database:
             ]
             if filters:
                 if filters.get("category"):
-                    collection_where.append("i.category = ?")
-                    collection_params.append(filters["category"])
+                    collection_where.append("(i.category = ? OR c.category = ?)")
+                    collection_params.extend([filters["category"], filters["category"]])
                 for key in (
                     "ledger_category",
                     "transaction_type",
@@ -1507,7 +1507,26 @@ class Database:
         placeholders = ",".join(["?" for _ in item_ids])
         where: list[str] = [f"id IN ({placeholders})", "owner_id = ?", "deleted = 0"]
         params: list[Any] = item_ids + [owner_id]
-        self._apply_filters(where, params, filters)
+        load_filters = dict(filters or {})
+        category_filter = None
+        if load_filters.get("category") and load_filters.get("type") in (None, ItemType.EVENT.value, "event"):
+            category_filter = load_filters.pop("category")
+        self._apply_filters(where, params, load_filters)
+        if category_filter is not None:
+            where.append(
+                """(
+                    category = ?
+                    OR (
+                        type = ?
+                        AND event_collection_id IN (
+                            SELECT id
+                            FROM event_collections
+                            WHERE owner_id = ? AND deleted = 0 AND category = ?
+                        )
+                    )
+                )"""
+            )
+            params.extend([category_filter, ItemType.EVENT.value, owner_id, category_filter])
 
         cursor.execute(f"SELECT * FROM items WHERE {' AND '.join(where)}", params)
         items_by_id: dict[str, Item] = {}

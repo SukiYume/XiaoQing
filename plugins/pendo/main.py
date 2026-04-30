@@ -121,20 +121,41 @@ def init(context=None) -> None:
     log.info("Pendo plugin initialized, database at %s", db_path)
 
     if PendoConfig.WEB_ENABLED:
-        try:
-            from .web import server as web_server
-            web_server.start(db)
-        except Exception as e:
-            logger.warning("Failed to auto-start web UI: %s", e)
+        _start_web_server(db)
 
 
-def _stop_web_server() -> None:
+def _start_web_server(db: Database) -> bool:
+    """Start the Pendo Web UI, replacing an existing in-process server if needed."""
     try:
         from .web import server as web_server
 
-        web_server.stop()
-    except Exception:
-        pass
+        if web_server.is_running():
+            stopped = web_server.stop()
+            if not stopped and web_server.is_running():
+                logger.warning("Pendo Web UI is still running; skip restart")
+                return False
+
+        started = web_server.start(db)
+        if not started:
+            detail = web_server.get_last_error() if hasattr(web_server, "get_last_error") else ""
+            if detail:
+                logger.warning("Failed to auto-start web UI: %s", detail)
+            else:
+                logger.warning("Failed to auto-start web UI")
+        return bool(started)
+    except Exception as e:
+        logger.warning("Failed to auto-start web UI: %s", e)
+        return False
+
+
+def _stop_web_server() -> bool:
+    try:
+        from .web import server as web_server
+
+        return bool(web_server.stop())
+    except Exception as e:
+        logger.warning("Failed to stop Pendo Web UI: %s", e)
+        return False
 
 
 async def _stop_web_server_async() -> None:
@@ -717,7 +738,8 @@ HELP_MAP = {
         "  - 多节点/重复日程先用 view 集合ID 查看节点ID，再编辑具体节点",
         "  - 集合ID只编辑整体标题、分类、地点、备注，不修改某个节点时间",
         "  - 例: /pendo event edit 80efbef6_m03 改到4月22日12:43",
-        "  - 例: /pendo event edit 80efbef6_m03 备注从北京南坐G123去会场",
+        "  - 例: /pendo event edit 80efbef6_m03 备注为从北京南坐G123去会场",
+        "  - 例: /pendo event edit 80efbef6_m03 地点改到北京南",
         "  - 例: /pendo event edit 80efbef6 标题改为FAST会议行程",
         "• /pendo event reminders [id|范围] - 查看提醒",
         "• /pendo event reminders list [范围] - 按范围查看提醒",
@@ -933,11 +955,14 @@ def _show_help(subcommand: str = "") -> str:
         parts: list[str] = [
             str(HELP_MAP["header"]),
             "",
-            "🧭 输入 `/pendo` 查看完整总览，输入 `/pendo <模块>` 直达对应帮助",
+            "🧭 输入 `/pendo` 查看完整总览，输入 `/pendo help <模块>` 查看对应帮助",
             "",
         ]
         parts.extend(_render_help_section(target_key))
         return "\n".join(parts)
+
+    if subcommand:
+        return f"❌ 未知命令: {subcommand}\n\n使用 /pendo help 查看所有命令"
 
     # 否则显示完整帮助
     all_parts: list[str] = [
@@ -948,7 +973,7 @@ def _show_help(subcommand: str = "") -> str:
         "• 查询与操作: `search` `confirm` `snooze` `undo` `export`",
         "• 配置与界面: `settings` `web`",
         "",
-        "💡 输入 `/pendo <子命令>` 可查看对应模块帮助",
+        "💡 输入 `/pendo help <子命令>` 可查看对应模块帮助，例如 `/pendo help event`、`/pendo help reminder`",
         "",
     ]
 
