@@ -24,7 +24,7 @@
 | 💬 | **命令 + 闲聊双通路** | 支持 `/command` 风格命令，也支持自然对话和 URL 自动解析 |
 | 🔄 | **多轮会话** | 框架内建会话管理，适合游戏、表单、分步输入等交互 |
 | ⏰ | **定时任务** | 插件可在 `plugin.json` 中直接声明调度任务 |
-| 🌐 | **Pendo Web 控制台** | 个人管理插件 `pendo` 提供完整 Web UI，覆盖总览、日程、待办、账本、笔记、日记、搜索、统计、设置（含高级数据导入/导出） |
+| 🌐 | **Pendo Web 控制台** | 个人管理插件 `pendo` 提供完整 Web UI，覆盖总览、日程、待办、账本、笔记、日记、搜索、统计、设置和数据迁移 |
 | 📱 | **Pendo Scriptable 小组件** | `pendo` 提供只读 widget API、专用 widget token 和 iPhone Scriptable 脚本，可把日程 / 待办 / 财务 / 笔记放到主屏 |
 | 🚀 | **面向真实部署** | 支持 OneBot 被动推送和 WebSocket 主动连接两种模式 |
 
@@ -47,7 +47,7 @@
 
 ### 📅 pendo
 
-个人时间与信息管理中枢，聊天端和 Web 端共用一套数据模型。
+个人时间与信息管理中枢，聊天端和 Web 端共用一套数据模型，覆盖日程、待办、笔记、日记、账本、提醒、搜索、统计和数据迁移。
 
 → [查看插件目录](plugins/pendo)
 
@@ -261,6 +261,7 @@ Inbound server started ...
 | `/pendo event add 明天9点开会` | 添加日程 |
 | `/pendo todo add 写报告 cat:工作 p:2` | 添加待办 |
 | `/pendo note add 记录想法 #工作` | 添加笔记 |
+| `/pendo ledger quick 35 午饭 cat:餐饮 account:微信` | 快速记账 |
 | `/pendo diary` | 进入日记模板流程 |
 | `/pendo search 关键词` | 跨模块搜索 |
 | `/pendo web start` | 启动 Pendo Web 控制台 |
@@ -306,10 +307,10 @@ Pendo 不只是聊天命令——它也是项目里最完整的浏览器控制�
 ### 页面一览
 
 ```
-总览  ·  日程  ·  待办  ·  账本  ·  笔记  ·  日记  ·  搜索  ·  统计  ·  设置 (含高级数据迁移与审计)
+总览  ·  日程  ·  待办  ·  账本  ·  笔记  ·  日记  ·  搜索  ·  统计  ·  设置  ·  迁移
 ```
 
-Web UI 基于 **FastAPI + 原生 JS + CSS** 构建，图表使用原生 SVG 和定制组件，不依赖传统后台模板。
+Web UI 基于 **FastAPI + 原生 JS + CSS** 构建，API 统一挂载在 `/api`，迁移页支持 `.pendo.zip` Bundle 的预览、导入、导出、冲突策略和审计日志。
 
 如果你想把 Pendo 放到 iPhone 主屏：
 
@@ -423,10 +424,12 @@ XiaoQing/
 
 ```bash
 pytest                                          # 运行所有测试
-pytest tests/plugins/test_pendo.py             # 单个测试文件
+pytest tests/plugins/test_pendo*.py tests/test_server.py  # pendo 相关测试（bash/zsh）
 pytest tests/plugins/test_xiaoqing_chat.py     # 单个测试文件
 pytest tests/plugins/test_xiaoqing_chat_media.py  # xiaoqing_chat 图片/表情包链路
 ```
+
+PowerShell 下通配符不会按同样方式传给 pytest；需要先枚举文件或直接运行 `tests/plugins` 目录下的目标文件。
 
 ---
 

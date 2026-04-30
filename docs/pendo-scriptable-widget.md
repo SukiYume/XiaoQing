@@ -1,6 +1,6 @@
 # Pendo Scriptable Widget
 
-Pendo 现在提供了一个专门给 `Scriptable` 用的只读摘要接口，适合把日程、待办、财务或笔记放到 iPhone 主屏。
+Pendo 提供一个专门给 `Scriptable` 使用的只读摘要接口，适合把日程、待办、财务或笔记放到 iPhone 主屏。
 
 ## 接口与鉴权
 

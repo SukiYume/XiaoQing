@@ -272,7 +272,7 @@ python main.py
 ### 个人助理测试（pendo）
 
 ```
-你: /pendo todo add 完成文档更新 cat:工作 p:2
+你: /pendo todo add 整理项目资料 cat:工作 p:2
 机器人: ✓ 已添加任务
 
 你: /pendo todo list
@@ -280,6 +280,9 @@ python main.py
 
 你: /pendo note add 今天天气不错 #随手记
 机器人: ✓ 已记录笔记
+
+你: /pendo ledger quick 35 午饭 cat:餐饮 account:微信
+机器人: ✓ 已记录支出
 ```
 
 ### SSH 远程控制测试（qingssh）
@@ -300,7 +303,7 @@ python main.py
 
 ### pendo Web 控制台测试
 
-pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器中可视化管理日程、待办、笔记、日记、记账等数据。
+pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器中可视化管理日程、待办、笔记、日记、账本、搜索、统计和数据迁移。
 
 ```
 你: /pendo web start
@@ -310,7 +313,7 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 机器人: 运行中 | 地址：http://127.0.0.1:8765
 ```
 
-打开浏览器访问后，先执行 `/pendo web token` 获取登录令牌，再将令牌粘贴到登录页即可。
+打开浏览器访问后，先执行 `/pendo web token` 获取登录令牌，再将令牌粘贴到登录页即可。iPhone Scriptable 小组件使用 `/pendo web widget-token` 生成只读 token。
 
 如果你在 Windows 上遇到端口绑定失败，但 `netstat -ano` 看不到 `8765` 被占用，优先尝试在启动前设置 `$env:PENDO_WEB_PORT="8766"` 后重启主进程。
 

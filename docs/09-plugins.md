@@ -158,7 +158,7 @@
 
 ### pendo - 个人时间与信息管理中枢
 
-强大的个人时间与信息管理插件，支持日程管理、待办事项、笔记、日记等功能，并附带完整的 **Web 控制台**（FastAPI SPA）。
+个人时间与信息管理插件，支持日程、待办、笔记、日记、账本、提醒、搜索、统计和完整的 **Web 控制台**（FastAPI + 原生 JS SPA）。
 
 > `/pendo` 会显示带 emoji 的模块导航帮助；输入 `/pendo <模块>`（如 `/pendo event`、`/pendo ledger`）可直达对应分组帮助。
 
@@ -169,12 +169,12 @@
 | **AI 智能解析** | 日程添加自动识别时间、地点、提醒设置 |
 | **多轮对话** | 支持会话式交互，自然流畅的操作体验 |
 | **隐私保护** | 支持群聊隐私模式，敏感内容转私聊 |
-| **智能提醒** | 支持单次、重复、提前多种提醒方式 |
-| **定时简报** | 每日/晚间简报，日记提醒自动推送 |
-| **Markdown 导入导出** | 支持数据备份和迁移 |
+| **智能提醒** | 支持单次、重复、多节点、提前确认和延后提醒 |
+| **定时任务** | 每日简报、日记提醒、待办顺延、财务周报/月报和 demo 数据清理 |
+| **导出和迁移** | 聊天端 Markdown 档案导出；Web 端 `.pendo.zip` Bundle 导入导出 |
 | **撤销功能** | 支持短时间内的操作撤销 |
-| **全文搜索** | 跨模块搜索日程、待办、笔记、日记 |
-| **Web 控制台** | FastAPI + 原生 JS SPA，JWT 鉴权，高级导入导出数据迁移设计，九大页面，Chart.js 图表 |
+| **全文搜索** | 跨模块搜索日程、待办、笔记、日记和账本 |
+| **Web 控制台** | FastAPI + 原生 JS SPA，JWT 鉴权，高级数据迁移、十个页面和聚合统计 |
 | **Scriptable 小组件** | 提供 `/api/widget/summary` 只读摘要接口和专用 widget token，适合 iPhone 主屏显示 |
 
 #### 命令列表
@@ -185,6 +185,7 @@
 |------|------|
 | `/pendo event add <内容>` | 添加日程（AI 解析） |
 | `/pendo event list [范围]` | 查看日程 |
+| `/pendo event view <id>` | 查看单次日程、重复实例、多节点节点或集合详情 |
 | `/pendo event delete <id>` | 删除日程 |
 | `/pendo event edit <id> <内容>` | 统一编辑单次 / 重复 / 多节点事件；修改时间时未发送提醒会自动同步平移 |
 | `/pendo event reminders [id\|范围]` | 查看提醒 |
@@ -193,7 +194,7 @@
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo todo add <内容> [plan:日期] [deadline:时间] [cat:分类] [p:1-5]` | 添加待办 |
+| `/pendo todo add <内容> [plan:日期] [deadline:时间] [remind:时间] [cat:分类] [p:1-5] [#标签]` | 添加待办 |
 | `/pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类]` | 查看待办 |
 | `/pendo todo done <id>` | 完成待办 |
 | `/pendo todo cancel <id>` | 取消待办 |
@@ -205,9 +206,13 @@
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo note add <内容> [cat:分类] [#标签]` | 记录笔记 |
-| `/pendo note list [cat:分类] [#标签]` | 查看笔记 |
+| `/pendo note add <内容> [cat:分类] [#标签] [ref:条目ID]` | 记录笔记 |
+| `/pendo note list [分类名\|cat:分类] [#标签] [since:范围]` | 查看笔记 |
 | `/pendo note view <id>` | 查看笔记详情 |
+| `/pendo note edit <id> <内容>` | 编辑标题、正文、分类和标签 |
+| `/pendo note append <id> <内容>` | 追加正文 |
+| `/pendo note tag/untag <id> #标签` | 添加或移除标签 |
+| `/pendo note link <id> <关联条目ID>` | 建立条目关联 |
 | `/pendo note delete <id\|cat:分类>` | 删除笔记 |
 
 **日记 (Diary)**
@@ -226,8 +231,8 @@
 | 命令 | 说明 |
 |------|------|
 | `/pendo ledger add` | 交互式多轮记账 |
-| `/pendo ledger quick <金额> <描述> [cat:分类] [in\|transfer] [account:账户] [to:账户] [merchant:商户]` | 快速单行记账；默认支出，支持收入、账户和转账 |
-| `/pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [cat:分类]` | 查看账目列表 |
+| `/pendo ledger quick <金额> <描述> [cat:分类] [in\|out\|transfer] [account:账户] [to:账户] [merchant:商户] [date:日期] [remark:备注]` | 快速单行记账；默认支出，支持收入、账户和转账 |
+| `/pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [cat:分类] [amount:min..max]` | 查看账目列表 |
 | `/pendo ledger view <id>` | 查看账目详情 |
 | `/pendo ledger edit <id> <字段:值>...` | 编辑账目 |
 | `/pendo ledger delete <id>` | 删除账目 |
@@ -240,7 +245,7 @@
 | 命令 | 说明 |
 |------|------|
 | `/pendo search <关键词>` | 全文搜索 |
-| `/pendo search <关键词> type=event/task/note/diary` | 按类型搜索 |
+| `/pendo search <关键词> type=event/task/note/diary/ledger` | 按类型搜索 |
 | `/pendo search <关键词> range=last7d/2026-01` | 按时间范围搜索 |
 | `/pendo search <关键词> status=open/done/cancelled` | 按待办状态筛选 |
 | `/pendo search <关键词> category=<分类>` | 按分类筛选 |
@@ -259,7 +264,7 @@
 | 命令 | 说明 |
 |------|------|
 | `/pendo export <文件名> [范围] [类型]` | 聊天端导出单文件 Markdown 档案 |
-| Web 设置页导入/导出 Bundle | 导入/导出 `.pendo.zip` 数据包，支持预览、冲突策略和审计日志 |
+| Web 迁移页导入/导出 Bundle | 导入/导出 `.pendo.zip` 数据包，支持预览、冲突策略和审计日志 |
 
 > **提示：聊天端只保留 Markdown 档案导出；数据迁移和恢复请使用 Web 端 Bundle 流程。**
 
@@ -298,8 +303,9 @@ Web 控制台提供以下页面：
 | 日记 | 时间线视图，按日期浏览日记 |
 | 笔记 | 卡片网格，按分类/标签浏览笔记 |
 | 搜索 | 跨模块全文搜索 |
-| 统计 | Chart.js 可视化图表（事件/任务/账本趋势） |
-| 设置 | 在线修改配置、**高级数据迁移（导入/导出 Bundle）** |
+| 统计 | 活跃度、任务、账本、日记、事件等聚合图表 |
+| 设置 | 在线修改配置 |
+| 迁移 | **高级数据迁移（导入/导出 Bundle）**、冲突策略和操作日志 |
 
 **其他操作**
 
@@ -345,7 +351,7 @@ Web 控制台提供以下页面：
 /pendo todo add 整理数据 cat:工作 p:2         # 工作分类高优先级
 /pendo todo list today                        # 今日待办
 /pendo todo list 工作 done                    # 工作分类已完成
-/pendo todo done 1                            # 完成第1个待办
+/pendo todo done abc12345                     # 完成指定待办
 ```
 
 **3. 笔记管理**
@@ -354,7 +360,7 @@ Web 控制台提供以下页面：
 /pendo note add 直接折叠找脉冲星 cat:工作 #文章
 /pendo note list cat:工作                    # 查看工作笔记
 /pendo note list #文章                       # 查看带文章标签的笔记
-/pendo note view 1                           # 查看详情
+/pendo note view abc12345                    # 查看详情
 ```
 
 **4. 日记管理**
@@ -382,11 +388,11 @@ Web 控制台提供以下页面：
 **6. 提醒操作**
 
 ```
-/pendo confirm 1                              # 确认提醒
+/pendo confirm abc12345                       # 确认提醒
 /pendo event reminders confirm ea66203d today   # 今天未发送的提醒不再发送
 /pendo event reminders confirm ea66203d future  # 未来全部未发送提醒不再发送
-/pendo snooze 1 10m                          # 延后10分钟
-/pendo snooze 1 19:00                        # 延后到19点
+/pendo snooze abc12345 10m                   # 延后10分钟
+/pendo snooze abc12345 19:00                 # 延后到19点
 ```
 
 **7. 数据导入导出**
@@ -395,7 +401,7 @@ Web 控制台提供以下页面：
 /pendo export 我的档案                      # 导出所有数据
 /pendo export 工作回顾 last7d event,todo    # 导出最近7天日程和待办
 /pendo export 账本快照 2026-03 ledger       # 导出指定月份账本
-# 导入和 Bundle 迁移在 Web 设置页完成
+# 导入和 Bundle 迁移在 Web 迁移页完成
 ```
 
 **8. 设置管理**
@@ -458,6 +464,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - **每天 00:05** - 待办计划迁移（将昨日仍 open 的计划顺延到今天）
 - **每周日 21:00** - 每周财务总结
 - **每月最后一天 21:00** - 月底财务总结
+- **每 6 小时** - 清理过期 Web demo 数据
 
 #### 注意事项
 
