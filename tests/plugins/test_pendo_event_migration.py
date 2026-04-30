@@ -282,6 +282,54 @@ def test_event_graph_migration_dry_run_counts_without_mutating(tmp_path: Path):
         conn.close()
 
 
+def test_event_graph_migration_handles_mixed_timezone_legacy_reminders(tmp_path: Path):
+    db_path = tmp_path / "pendo.db"
+    db = Database(str(db_path))
+    try:
+        conn = db.get_connection()
+        _insert_raw_item(
+            conn,
+            {
+                "id": "mixed_tz_event",
+                "owner_id": "u1",
+                "type": "event",
+                "title": "混合时区提醒",
+                "content": "",
+                "category": "工作",
+                "start_time": "2030-01-02T09:00:00",
+                "remind_times": ["2030-01-02T08:00:00+08:00"],
+                "reminder_rules": None,
+            },
+        )
+        conn.commit()
+    finally:
+        db.cleanup()
+
+    result = migrate_event_graph(
+        db_path,
+        apply=True,
+        create_backup=False,
+        write_report=False,
+    )
+
+    assert result["single_events_updated"] == 1
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT reminder_rules, remind_times FROM items WHERE id = 'mixed_tz_event'"
+        ).fetchone()
+        assert json.loads(row["reminder_rules"]) == [
+            {"offset_seconds": 3600},
+            {"offset_seconds": 0},
+        ]
+        assert json.loads(row["remind_times"]) == [
+            "2030-01-02T08:00:00",
+            "2030-01-02T09:00:00",
+        ]
+    finally:
+        conn.close()
+
+
 def test_event_graph_migration_apply_rewrites_legacy_events_and_is_idempotent(tmp_path: Path):
     db_path = tmp_path / "pendo.db"
     _seed_legacy_events(db_path)
