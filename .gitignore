@@ -52,6 +52,8 @@ plugins/minecraft/config.json
 .coverage
 htmlcov/
 *cache/
+plugins/pendo/test_reports/
+plugins/pendo/测试Prompt.md
 
 # 临时文件
 *.tmp
