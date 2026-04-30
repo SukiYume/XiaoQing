@@ -60,6 +60,18 @@ def test_settings_api_source_normalizes_time_and_category_inputs():
     assert "normalize_settings_json" in src
 
 
+def test_settings_payload_rejects_path_like_timezone_without_internal_tzpath():
+    import pytest
+
+    from plugins.pendo.web.api.settings import _normalize_settings_payload
+
+    with pytest.raises(ValueError, match="^Invalid timezone$") as exc_info:
+        _normalize_settings_payload({"timezone": "../../etc/passwd"})
+
+    assert "TZPATH" not in str(exc_info.value)
+    assert "../../etc/passwd" not in str(exc_info.value)
+
+
 def test_settings_page_source_collects_form_before_rerender_on_save():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "settings.js").read_text(encoding="utf-8")
 

@@ -53,6 +53,7 @@ plugins/minecraft/config.json
 htmlcov/
 *cache/
 plugins/pendo/test_reports/
+plugins/pendo/test_tools/
 plugins/pendo/测试Prompt.md
 
 # 临时文件

@@ -37,8 +37,8 @@ def _normalize_settings_payload(updates: dict) -> dict:
     if timezone is not None:
         try:
             ZoneInfo(timezone)
-        except ZoneInfoNotFoundError as exc:
-            raise ValueError(f"Invalid timezone: {timezone}") from exc
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("Invalid timezone") from exc
 
     for field in ("quiet_hours_start", "quiet_hours_end", "daily_report_time", "diary_remind_time"):
         if normalized.get(field) is not None:

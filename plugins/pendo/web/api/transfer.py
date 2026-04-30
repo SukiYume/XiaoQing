@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -31,6 +32,7 @@ from ..services.transfer_bundle import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 _IMPORT_BUNDLE_LOCKS: dict[str, asyncio.Lock] = {}
 
 
@@ -792,9 +794,10 @@ async def execute_import(
                     status_code=409,
                     detail="导入记录 ID 与现有数据冲突，请选择跳过或生成副本后重试",
                 ) from exc
+            logger.exception("Import transaction failed for owner=%s bundle=%s", owner_id, bundle_id)
             raise HTTPException(
                 status_code=500,
-                detail=f"导入事务失败，已全部回滚：{exc}",
+                detail="导入事务失败，已全部回滚；请检查导入预检结果或稍后重试",
             ) from exc
 
         return {

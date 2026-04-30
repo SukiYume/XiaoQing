@@ -27,6 +27,31 @@ def _to_dict(item):
     return item.to_dict() if hasattr(item, "to_dict") else {}
 
 
+def _ledger_amount_value(item) -> float:
+    cents = getattr(item, "amount_cents", None)
+    if cents not in (None, ""):
+        try:
+            return int(cents) / 100
+        except (TypeError, ValueError):
+            pass
+    try:
+        return float(getattr(item, "amount", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _get_all_items(db: Database, owner_id: str, filters: dict[str, Any], batch_size: int = 500) -> list:
+    items: list = []
+    offset = 0
+    while True:
+        chunk = db.get_items(owner_id, filters=filters, limit=batch_size, offset=offset)
+        items.extend(chunk)
+        if len(chunk) < batch_size:
+            break
+        offset += batch_size
+    return items
+
+
 def _collection_payload(collection: dict[str, Any] | None) -> dict[str, Any] | None:
     if not collection:
         return None
@@ -155,19 +180,19 @@ def build_dashboard_overview(
         "sort_order": "DESC",
     }, limit=8)
 
-    month_ledger = db.get_items(owner_id, filters={
+    month_ledger = _get_all_items(db, owner_id, filters={
         "type": "ledger",
         "date_field": "ledger_date",
         "start_date": month_start_date,
         "end_date": today,
-    }, limit=500)
+    })
 
     spending_by_day: dict[str, float] = {}
     month_income = 0.0
     month_expense = 0.0
     for item in month_ledger:
         day = getattr(item, "ledger_date", None) or today
-        amount = float(getattr(item, "amount", 0) or 0)
+        amount = _ledger_amount_value(item)
         transaction_type = getattr(item, "transaction_type", "expense")
         if transaction_type == "expense":
             spending_by_day[day] = spending_by_day.get(day, 0.0) + amount

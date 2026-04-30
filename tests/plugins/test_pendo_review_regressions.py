@@ -549,8 +549,10 @@ def test_pendo_active_session_source_bypasses_explicit_commands():
     src = (ROOT / "plugins" / "pendo" / "main.py").read_text(encoding="utf-8")
 
     assert "def _is_explicit_pendo_command" in src
+    assert "TRIGGER_SUBCOMMAND_MAP" in src
+    assert "route_args = _normalize_trigger_args(command, args)" in src
     assert "await safe_end_session(context)" in src
-    assert "return await _handle_command_routing(user_id, args, context, group_id, log)" in src
+    assert "return await _handle_command_routing(user_id, route_args, context, group_id, log)" in src
 
 
 def test_undo_delete_restores_logged_task_and_note_batches():

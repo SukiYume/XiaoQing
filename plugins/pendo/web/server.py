@@ -6,6 +6,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 
 from ..config import PendoConfig
@@ -38,6 +39,26 @@ def create_app(db: Database) -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content={"ok": False, "message": exc.detail, "error_code": str(exc.status_code)},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_exception_handler(request, exc):
+        errors = [
+            {
+                "loc": err.get("loc", []),
+                "msg": err.get("msg", "Invalid value"),
+                "type": err.get("type", "value_error"),
+            }
+            for err in exc.errors()
+        ]
+        return JSONResponse(
+            status_code=422,
+            content={
+                "ok": False,
+                "message": "请求参数校验失败",
+                "error_code": "validation_error",
+                "errors": errors,
+            },
         )
 
     app.include_router(create_api_router(), prefix="/api")
