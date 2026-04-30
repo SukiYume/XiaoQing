@@ -174,7 +174,7 @@ async def handle_config_impl(args: str, event: dict[str, Any], context, *, handl
 async def handle_memory_impl(args: str, event: dict[str, Any], context, *, handler_context_from_event) -> list[dict[str, Any]]:
     query = args.strip() if args else ""
     if not query:
-        return segments("🔍 **记忆检索**\n\n使用方法: /xc记忆 <关键词>\n\n示例: /xc记忆 喜欢的食物")
+        return segments("🔍 **记忆检索**\n\n使用方法: /xc 记忆 <关键词>\n\n示例: /xc 记忆 喜欢的食物")
 
     hctx = handler_context_from_event(event, context)
     runtime, state = hctx.runtime, hctx.state

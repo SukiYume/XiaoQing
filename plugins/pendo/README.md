@@ -95,7 +95,7 @@ Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程�
 ### 账本
 
 ```text
-/pendo ledger add
+/pendo ledger add [金额 描述 ...]
 /pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注]
 /pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [cat:分类] [amount:min..max] [all|page:n] [ex]
 /pendo ledger view <id>
@@ -103,6 +103,8 @@ Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程�
 /pendo ledger delete <id>
 /pendo ledger summary [范围]
 ```
+
+`ledger add` 可以直接带一条记录，例如 `/pendo ledger add 28 午饭 cat:餐饮 account:微信`；只发送 `/pendo ledger add` 时会进入同样格式的引导。未填写的普通字段使用默认值：支出、其他分类、现金账户、今天。
 
 账本以 `amount_cents` 为统计主字段，`amount` 是展示镜像。转账使用 `transaction_type=transfer`，统计时和收入、支出分开处理。
 

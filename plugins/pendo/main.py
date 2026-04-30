@@ -878,7 +878,7 @@ HELP_MAP = {
     "ledger": [
         "💰 **记账 (Ledger)**",
         "  - 别名: `bill`, `finance`, `记账`, `账单`",
-        "• /pendo ledger add - 交互式记账(多轮引导)",
+        "• /pendo ledger add [金额 描述 ...] - 一条消息记账；无参数则进入同样格式的引导",
         "• /pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] - 快速记账",
         "  - 默认支出；in 标记收入，out/expense 标记支出，transfer 标记账户间转账",
         "  - account/from 表示账户，to/counter 表示转入账户，merchant/payee 表示商户",

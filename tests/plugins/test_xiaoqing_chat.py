@@ -332,6 +332,8 @@ async def test_xiaoqing_chat_handle_memory_command(mock_context, sample_group_ev
 
     assert len(result) > 0
     assert "记忆" in result[0]["data"]["text"]
+    assert "/xc 记忆 <关键词>" in result[0]["data"]["text"]
+    assert "/xc记忆" not in result[0]["data"]["text"]
 
 
 @pytest.mark.plugin
