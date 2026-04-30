@@ -68,10 +68,9 @@ async def check_reminders(context) -> list[dict[str, Any]]:
         remind_time = msg.get("remind_time")
         if not user_id:
             continue
-        action = {
-            "action": "send_private_msg",
-            "params": {"user_id": int(user_id), "message": segments(message)},
-        }
+        action = _build_private_action(user_id, message)
+        if action is None:
+            continue
         try:
             if hasattr(context, "send_action"):
                 await context.send_action(action)
@@ -131,10 +130,9 @@ async def send_daily_briefings(context, db: Database) -> list[dict[str, Any]]:
                 # 生成并发送简报
                 briefing_msg = await _generate_briefing_content(user_id, db, ai_parser)
 
-                action = {
-                    "action": "send_private_msg",
-                    "params": {"user_id": int(user_id), "message": segments(briefing_msg)},
-                }
+                action = _build_private_action(user_id, briefing_msg)
+                if action is None:
+                    continue
                 if hasattr(context, "send_action"):
                     await context.send_action(action)
                 else:
@@ -197,15 +195,12 @@ async def check_diary_reminders(context, db: Database) -> list[dict[str, Any]]:
                     continue
 
                 # 发送提醒
-                action = {
-                    "action": "send_private_msg",
-                    "params": {
-                        "user_id": int(user_id),
-                        "message": segments(
-                            "📔 今天还没有写日记哦，记录一下美好的今天吧？\n发送 /pendo diary 开始"
-                        ),
-                    },
-                }
+                action = _build_private_action(
+                    user_id,
+                    "📔 今天还没有写日记哦，记录一下美好的今天吧？\n发送 /pendo diary 开始",
+                )
+                if action is None:
+                    continue
                 if hasattr(context, "send_action"):
                     await context.send_action(action)
                 else:
@@ -271,7 +266,8 @@ async def send_weekly_finance_summaries(context, db: Database) -> list[dict[str,
                     )
                     continue
 
-                await _send_private_or_collect(context, messages, user_id, summary)
+                if not await _send_private_or_collect(context, messages, user_id, summary):
+                    continue
                 await run_sync(
                     save_user_setting,
                     user_id,
@@ -332,7 +328,8 @@ async def send_month_end_finance_summaries(context, db: Database) -> list[dict[s
                     )
                     continue
 
-                await _send_private_or_collect(context, messages, user_id, summary)
+                if not await _send_private_or_collect(context, messages, user_id, summary):
+                    continue
                 await run_sync(
                     save_user_setting,
                     user_id,
@@ -369,17 +366,29 @@ async def _get_active_user_ids(db: Database) -> list[str]:
     return await run_sync(db.items.get_active_user_ids)
 
 
+def _build_private_action(user_id: str, message: str) -> dict[str, Any] | None:
+    try:
+        numeric_user_id = int(str(user_id))
+    except (TypeError, ValueError):
+        logger.debug("Skipping scheduled private message for non-numeric owner_id=%s", user_id)
+        return None
+    return {
+        "action": "send_private_msg",
+        "params": {"user_id": numeric_user_id, "message": segments(message)},
+    }
+
+
 async def _send_private_or_collect(
     context, messages: list[dict[str, Any]], user_id: str, message: str
-) -> None:
-    action = {
-        "action": "send_private_msg",
-        "params": {"user_id": int(user_id), "message": segments(message)},
-    }
+) -> bool:
+    action = _build_private_action(user_id, message)
+    if action is None:
+        return False
     if hasattr(context, "send_action"):
         await context.send_action(action)
     else:
         messages.append(action)
+    return True
 
 
 def _is_time_reached(current_time: datetime, target_time_str: str) -> bool:
@@ -441,8 +450,13 @@ async def _generate_finance_summary_content(
         item for item in items
         if getattr(item, "transaction_type", "") == "expense"
     ]
+    transfer_items = [
+        item for item in items
+        if getattr(item, "transaction_type", "") == "transfer"
+    ]
     total_income = sum(_ledger_amount_value(item) for item in income_items)
     total_expense = sum(_ledger_amount_value(item) for item in expense_items)
+    total_transfer = sum(_ledger_amount_value(item) for item in transfer_items)
     balance = total_income - total_expense
 
     expense_by_cat: dict[str, float] = {}
@@ -454,6 +468,23 @@ async def _generate_finance_summary_content(
     for item in income_items:
         category = getattr(item, "ledger_category", "") or "其他"
         income_by_cat[category] = income_by_cat.get(category, 0.0) + _ledger_amount_value(item)
+
+    account_flow: dict[str, dict[str, float]] = {}
+    for item in income_items:
+        account = getattr(item, "account_name", "") or "现金"
+        account_flow.setdefault(account, {"income": 0.0, "expense": 0.0})
+        account_flow[account]["income"] += _ledger_amount_value(item)
+    for item in expense_items:
+        account = getattr(item, "account_name", "") or "现金"
+        account_flow.setdefault(account, {"income": 0.0, "expense": 0.0})
+        account_flow[account]["expense"] += _ledger_amount_value(item)
+
+    transfer_flow: dict[str, float] = {}
+    for item in transfer_items:
+        from_account = getattr(item, "account_name", "") or "现金"
+        to_account = getattr(item, "counter_account_name", "") or "未指定账户"
+        key = f"{from_account} → {to_account}"
+        transfer_flow[key] = transfer_flow.get(key, 0.0) + _ledger_amount_value(item)
 
     top_expense = max(expense_items, key=_ledger_amount_value, default=None)
     top_expense_category = max(expense_by_cat.items(), key=lambda pair: pair[1], default=None)
@@ -469,6 +500,8 @@ async def _generate_finance_summary_content(
         f"💸 支出: ¥{total_expense:.2f}",
         f"📊 结余: {balance_prefix}¥{balance:.2f}",
     ]
+    if transfer_items:
+        lines.append(f"🔁 转账: ¥{total_transfer:.2f}")
 
     if top_expense_category:
         lines.append(f"📂 最大支出分类: {top_expense_category[0]} ¥{top_expense_category[1]:.2f}")
@@ -488,6 +521,30 @@ async def _generate_finance_summary_content(
             sorted(expense_by_cat.items(), key=lambda pair: pair[1], reverse=True)[:3], 1
         ):
             lines.append(f"  {index}. {category} ¥{amount:.2f}")
+
+    if account_flow:
+        lines.append("")
+        lines.append("账户收支:")
+        ranked_accounts = sorted(
+            account_flow.items(),
+            key=lambda pair: pair[1]["income"] + pair[1]["expense"],
+            reverse=True,
+        )
+        for index, (account, flow) in enumerate(ranked_accounts[:5], 1):
+            net = flow["income"] - flow["expense"]
+            net_prefix = "+" if net >= 0 else ""
+            lines.append(
+                f"  {index}. {account} 收入¥{flow['income']:.2f} "
+                f"支出¥{flow['expense']:.2f} 净额{net_prefix}¥{net:.2f}"
+            )
+
+    if transfer_flow:
+        lines.append("")
+        lines.append("转账流向:")
+        for index, (flow_name, amount) in enumerate(
+            sorted(transfer_flow.items(), key=lambda pair: pair[1], reverse=True)[:5], 1
+        ):
+            lines.append(f"  {index}. {flow_name} ¥{amount:.2f}")
 
     return "\n".join(lines)
 
@@ -664,15 +721,12 @@ async def migrate_undone_todos(context, db: Database) -> list[dict[str, Any]]:
 
                 # 如果有迁移，发送通知
                 if migrated_count > 0:
-                    action = {
-                        "action": "send_private_msg",
-                        "params": {
-                            "user_id": int(user_id),
-                            "message": segments(
-                                f"📋 已将昨天的 {migrated_count} 个未完成待办迁移到今天\n\n💡 使用 /pendo todo list today 查看"
-                            ),
-                        },
-                    }
+                    action = _build_private_action(
+                        user_id,
+                        f"📋 已将昨天的 {migrated_count} 个未完成待办迁移到今天\n\n💡 使用 /pendo todo list today 查看",
+                    )
+                    if action is None:
+                        continue
                     if hasattr(context, "send_action"):
                         await context.send_action(action)
                     else:

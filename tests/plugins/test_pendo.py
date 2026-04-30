@@ -282,10 +282,13 @@ class TestPendoConfig:
             "/pendo snooze <id> <时间>",
             "/pendo undo [分钟]",
             "/pendo export <文件名> [范围] [类型]",
+            "/pendo import - 查看 Web 导入入口和支持格式",
             "/pendo settings timezone <IANA时区>",
             "/pendo settings quiet_hours <开始>-<结束>",
             "/pendo web widget-token",
             "/pendo web status",
+            "别名: `task`, `t`, `待办`, `任务`",
+            "别名: `bill`, `finance`, `记账`, `账单`",
         ]
 
         for fragment in expected_fragments:
@@ -297,11 +300,14 @@ class TestPendoConfig:
             "/pendo note add title:读书摘录",
             "/pendo diary add 今天跑步5公里",
             "/pendo ledger quick 35.5 午饭",
+            "/pendo event add 3月8日下午两点，国自然截止，提前一周和一天提醒",
+            "/pendo event add 每月18号上午十点，公积金提取，重复7个月",
             "/pendo event edit 80efbef6_m03 改到4月22日12:43",
             "/pendo ledger list 2026-03 type:expense",
             "/pendo search 组会 type=event",
             "/pendo settings timezone Asia/Shanghai",
             "/pendo export \"三月 账本\" 2026-03 ledger",
+            "/pendo import",
             "/pendo event edit 80efbef6_m03 备注为从北京南坐G123去会场",
             "/pendo event edit 80efbef6_m03 地点改到北京南",
         ]
@@ -313,6 +319,7 @@ class TestPendoConfig:
             "提醒规则",
             "节点名 + 改成/改到",
             "/pendo event edit 80efbef6 会议开始改成",
+            "title:<标题>\\n<正文多行>",
         ]
         for phrase in stale_or_internal_phrases:
             assert phrase not in help_text
@@ -566,7 +573,7 @@ class TestPendoReviewFixes:
         assert result_g2["message"] == "group:1002"
         assert task_handler.group_ids == [1001, 1002]
 
-    def test_import_command_is_removed_from_router(self, monkeypatch):
+    def test_import_command_guides_user_to_web_import(self, monkeypatch):
         from plugins.pendo import main as pendo_main
 
         services = {
@@ -586,7 +593,46 @@ class TestPendoReviewFixes:
 
         router = pendo_main._build_command_router(SimpleNamespace(state={}))
 
-        assert "import" not in router.commands
+        assert "import" in router.commands
+
+        result = asyncio.run(router.route("import", "u1", "", SimpleNamespace(state={})))
+
+        assert result["status"] == "success"
+        assert "/pendo web token" in result["message"]
+        assert "Web 数据迁移页" in result["message"]
+        assert "不接收本地文件路径" in result["message"]
+
+    def test_plugin_trigger_aliases_are_routed_to_matching_subcommands(self, monkeypatch):
+        import logging
+
+        from plugins.pendo import main as pendo_main
+
+        task_handler = _StubCaptureHandler()
+        event_handler = _StubCaptureHandler()
+        diary_handler = _StubCaptureHandler()
+        services = {
+            "db": object(),
+            "reminder_service": object(),
+            "exporter": _StubExporter(),
+            "event_handler": event_handler,
+            "task_handler": task_handler,
+            "note_handler": _StubSimpleHandler(),
+            "diary_handler": diary_handler,
+            "search_handler": _StubSimpleHandler(),
+            "ledger_handler": _StubSimpleHandler(),
+            "web_handler": _StubSimpleHandler(),
+        }
+
+        monkeypatch.setattr(pendo_main, "_get_services", lambda context: services)
+        context = SimpleNamespace(state={}, logger=logging.getLogger("pendo-test"))
+
+        asyncio.run(pendo_main.handle("待办", "add TEST_ALIAS_TASK", {"user_id": "u1"}, context))
+        asyncio.run(pendo_main.handle("日程", "add TEST_ALIAS_EVENT", {"user_id": "u1"}, context))
+        asyncio.run(pendo_main.handle("日记", "add TEST_ALIAS_DIARY", {"user_id": "u1"}, context))
+
+        assert task_handler.calls[0]["args"] == "add TEST_ALIAS_TASK"
+        assert event_handler.calls[0]["args"] == "add TEST_ALIAS_EVENT"
+        assert diary_handler.calls[0]["args"] == "add TEST_ALIAS_DIARY"
 
     def test_handle_command_routing_preserves_multiline_note_body(self, monkeypatch):
         from plugins.pendo import main as pendo_main
@@ -4033,13 +4079,39 @@ class TestPendoFinanceSummaries:
             assert "💰 收入: ¥5000.00" in summary
             assert "💸 支出: ¥123.45" in summary
             assert "📊 结余: +¥4876.55" in summary
+            assert "🔁 转账: ¥200.00" in summary
             assert "📂 最大支出分类: 餐饮 ¥123.45" in summary
             assert "📥 主要收入来源: 工资 ¥5000.00" in summary
             assert "🔥 最大单笔支出: 午饭 ¥123.45 (2026-05-02)" in summary
+            assert "账户收支:" in summary
+            assert "招商银行卡 收入¥5000.00 支出¥0.00 净额+¥5000.00" in summary
+            assert "微信 收入¥0.00 支出¥123.45 净额¥-123.45" in summary
+            assert "转账流向:" in summary
+            assert "招商银行卡 → 储蓄卡 ¥200.00" in summary
             assert "范围外支出" not in summary
         finally:
             db.cleanup()
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_scheduled_private_send_skips_non_numeric_owner_ids(self):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.commands import scheduled as scheduled_module
+
+        messages = []
+        result = asyncio.run(
+            scheduled_module._send_private_or_collect(
+                SimpleNamespace(),
+                messages,
+                "demo_web_TEST",
+                "测试消息",
+            )
+        )
+
+        assert result is False
+        assert messages == []
 
 
 class TestBatchDeleteRefactor:

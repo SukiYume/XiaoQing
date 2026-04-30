@@ -59,6 +59,11 @@ COMMAND_META: dict[str, tuple[list[str], str, str]] = {
         "导出 Markdown 档案并私聊发送文件",
         "/pendo export <文件名> [range] [type]",
     ),
+    "import": (
+        ["导入"],
+        "查看 Web 导入入口和支持格式",
+        "/pendo import",
+    ),
     "settings": (["setting", "config", "设置"], "管理设置", "/pendo settings [key] [value]"),
     "help": (["h", "帮助", "?"], "显示帮助信息", "/pendo help [command]"),
     "web": (["webui", "网页"], "Web UI 管理", "/pendo web <token|widget-token|start|stop|status>"),
