@@ -54,8 +54,7 @@ htmlcov/
 *cache/
 plugins/pendo/test_reports/
 plugins/pendo/test_tools/
-plugins/pendo/pendo测试.md
-plugins/xiaoqing_chat/xiaoqing测试.md
+.playwright-mcp/
 
 # 临时文件
 *.tmp
