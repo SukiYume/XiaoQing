@@ -151,6 +151,13 @@ def _extract_item_date(item, item_type: str, zone: ZoneInfo | None = None) -> da
 def item_matches_range(item, item_type: str, start: date | None, end: date | None, zone: ZoneInfo | None = None) -> bool:
     if start is None or end is None:
         return True
+    if item_type == "event":
+        start_date = _coerce_date_tz(getattr(item, "start_time", None), zone) if zone else _coerce_date(getattr(item, "start_time", None))
+        end_date = _coerce_date_tz(getattr(item, "end_time", None), zone) if zone else _coerce_date(getattr(item, "end_time", None))
+        if start_date is None:
+            return False
+        end_date = end_date or start_date
+        return start_date <= end and end_date >= start
     item_date = _extract_item_date(item, item_type, zone)
     if item_date is None:
         return False

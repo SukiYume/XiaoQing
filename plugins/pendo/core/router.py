@@ -29,7 +29,7 @@ COMMAND_META: dict[str, tuple[list[str], str, str]] = {
     "snooze": (["延后"], "延后提醒", "/pendo snooze <id> <时间>"),
     "undo": (["撤销"], "撤销删除或编辑", "/pendo undo [分钟]"),
     "event": (
-        ["e", "日程", "事件"],
+        ["e", "calendar", "日程", "事件"],
         "管理日程",
         "/pendo event <add|list|view|edit|delete|reminders> [args]",
     ),
@@ -38,9 +38,9 @@ COMMAND_META: dict[str, tuple[list[str], str, str]] = {
         "管理待办事项",
         "/pendo todo <add|list|view|done|cancel|undone|edit|delete> [args]",
     ),
-    "diary": (["d", "日记"], "写日记和查看日记", "/pendo diary <add|list|view|template|delete> [args]"),
+    "diary": (["d", "journal", "日记"], "写日记和查看日记", "/pendo diary <add|list|view|template|delete> [args]"),
     "note": (
-        ["n", "笔记", "想法", "灵感"],
+        ["n", "idea", "笔记", "想法", "灵感"],
         "记笔记",
         "/pendo note <add|list|view|edit|append|tag|untag|link|delete> [args]",
     ),
@@ -59,7 +59,7 @@ COMMAND_META: dict[str, tuple[list[str], str, str]] = {
         "导出 Markdown 档案并私聊发送文件",
         "/pendo export <文件名> [range] [type]",
     ),
-    "settings": (["setting", "设置"], "管理设置", "/pendo settings [key] [value]"),
+    "settings": (["setting", "config", "设置"], "管理设置", "/pendo settings [key] [value]"),
     "help": (["h", "帮助", "?"], "显示帮助信息", "/pendo help [command]"),
     "web": (["webui", "网页"], "Web UI 管理", "/pendo web <token|widget-token|start|stop|status>"),
 }
@@ -244,6 +244,10 @@ class CommandRouter:
 
         # 如果指定了命令，显示该命令的详细帮助
         if args:
+            if self.help_provider:
+                provided = self.help_provider(args)
+                if not provided.startswith("❌ 未知命令"):
+                    return provided
             cmd_name = self.alias_map.get(args.lower())
             if cmd_name:
                 if self.help_provider:

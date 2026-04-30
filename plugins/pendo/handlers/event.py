@@ -93,6 +93,9 @@ class EventHandler(DbOpsMixin):
     )
     _CATEGORY_EDIT_RE = re.compile(r"(分类|归类|类别|类目)")
     _CONTENT_EDIT_RE = re.compile(r"(内容|描述|详情|补充|说明)")
+    _LOCATION_EDIT_RE = re.compile(
+        r"(@|地点|位置|场地|地址|(?:会场|会议地点)\s*(?:改为|改成|改到|在|[:：]))"
+    )
     _NOTES_EDIT_RE = re.compile(r"(?:备注(?:改为|改成|[:：])?|备注)\s*(.+)")
 
     db: "Database"
@@ -1640,6 +1643,9 @@ class EventHandler(DbOpsMixin):
             if key == "category":
                 if not self._should_apply_category_update(changes, candidate):
                     continue
+            if key == "location":
+                if not self._should_apply_location_update(changes, candidate):
+                    continue
             updates[key] = candidate
 
         if parsed.get("remind_times"):
@@ -1704,6 +1710,20 @@ class EventHandler(DbOpsMixin):
         if any(marker in content for marker in cls._TITLE_SCAFFOLD_MARKERS):
             return False
         return cls._CONTENT_EDIT_RE.search(changes) is not None
+
+    @classmethod
+    def _should_apply_location_update(cls, changes: str, candidate: Any) -> bool:
+        if not isinstance(candidate, str):
+            return False
+        location = candidate.strip()
+        if not location:
+            return False
+        # AI may infer a station or city from note text such as
+        # "备注从北京南坐G123去会场". Treat that as note-only unless the user
+        # explicitly asks to edit the location.
+        has_note_directive = cls._NOTES_EDIT_RE.search(changes) is not None
+        has_location_directive = cls._LOCATION_EDIT_RE.search(changes) is not None
+        return has_location_directive or not has_note_directive
 
     @classmethod
     def _extract_notes_update(cls, changes: str) -> str | None:

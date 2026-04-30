@@ -522,7 +522,8 @@ function renderImportExamples() {
         content: '支持 Markdown/HTML 文本，前端会按文本安全渲染。',
         tags: ['迁移', 'pendo'],
         category: '知识',
-        references: [{ title: '旧系统导出', url: 'https://example.com/export' }],
+        references: [{ kind: 'item', id: 'task_001', type: 'task', title: '交报告' }],
+        related_items: ['task_001'],
     });
     const diary = JSON.stringify({
         id: 'diary_2026_05_01',
@@ -565,7 +566,7 @@ function renderImportExamples() {
         renderExampleBlock('4. 日程 events.ndjson', '单次日程直接写 start_time；多节点/重复实例用 event_collection_id 关联集合。提醒跟着事件走：reminder_rules 的 offset_seconds 表示提前多少秒提醒，0 表示事件开始时提醒；没有提醒时写空数组。', events),
         renderExampleBlock('5. 待办 tasks.ndjson', 'status 可用 open、done、cancelled；priority 范围 1-5；deadline_at 用 ISO 时间。任务提醒通常按 deadline_at 计算。', tasks),
         renderExampleBlock('6. 记账 ledger.ndjson', '金额优先使用 amount_cents，单位是分。transaction_type 可用 expense、income、transfer；transfer 必须写 counter_account_name。', ledger),
-        renderExampleBlock('7. 笔记 notes.ndjson', 'title 必填；content、tags、category、references、related_items 都可以按需填写。HTML/Markdown 会作为文本内容保存和安全展示。', notes),
+        renderExampleBlock('7. 笔记 notes.ndjson', 'title 必填；content、tags、category、references、related_items 都可以按需填写。references 必须带 id；外部网址请放在 content 中或转成一条 note 再引用。HTML/Markdown 会作为文本内容保存和安全展示。', notes),
         renderExampleBlock('8. 日记 diary.ndjson', 'diary_date 必填且格式为 YYYY-MM-DD；content 不能为空；mood_score 范围 1-10。', diary),
         renderExampleBlock('9. 完整记录格式', '完整模式下每条记录可带 _type 和 _schema: 2 元字段，导入时会按当前重构后的字段集合严格校验。', fullRecord),
         `<div class="transfer-note">通用字段：<code>id、title、content、tags、category、created_at、updated_at、context、visibility、attachments、ai_meta、deleted、deleted_at</code>。日期时间统一用 ISO 8601 并带时区偏移；纯日期字段用 <code>YYYY-MM-DD</code>。每个 <code>ndjson</code> 文件一行一条 JSON。不传 ID 时系统会默认生成短随机 ID；未知字段会在预检阶段报错，旧字段需要先用迁移脚本转换成新结构。</div>`,
