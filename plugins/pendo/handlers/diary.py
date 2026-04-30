@@ -186,9 +186,10 @@ class DiaryHandler(DbOpsMixin):
         content = str(parsed.get("content", ""))
 
         manual_mood = parsed.get("mood")
-        if manual_mood:
+        manual_score = parsed.get("mood_score")
+        if manual_mood or manual_score not in (None, ""):
             mood = manual_mood
-            mood_score = parsed.get("mood_score")
+            mood_score = manual_score
         else:
             mood, mood_score = await self._analyze_mood(content, user_id)
 

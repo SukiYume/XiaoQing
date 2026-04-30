@@ -3,6 +3,8 @@ import logging
 import threading
 import time
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -183,9 +185,23 @@ def stop(timeout: float = 5.0) -> bool:
     return True
 
 
-def is_running() -> bool:
-    """Check if the web server is running."""
+def is_managed_running() -> bool:
+    """Check whether this process owns a running web server thread."""
     return _thread is not None and _thread.is_alive()
+
+
+def is_reachable(timeout: float = 0.3) -> bool:
+    """Check whether a web service is reachable at the configured URL."""
+    try:
+        with urlopen(get_url(), timeout=timeout) as response:
+            return 200 <= response.status < 500
+    except (OSError, URLError, TimeoutError):
+        return False
+
+
+def is_running() -> bool:
+    """Check if the web UI is running, including an externally started server."""
+    return is_managed_running() or is_reachable()
 
 
 def get_last_error() -> str | None:
