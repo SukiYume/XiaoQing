@@ -4,8 +4,9 @@
 """
 
 import logging
-from typing import Any, Callable, Awaitable, Mapping, cast
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from typing import Any, cast
 
 from ..models.types import CommandResult, ErrorResult, SuccessResult
 
@@ -30,20 +31,24 @@ COMMAND_META: dict[str, tuple[list[str], str, str]] = {
     "event": (
         ["e", "日程", "事件"],
         "管理日程",
-        "/pendo event <add|today|tomorrow|week|list|delete> [args]",
+        "/pendo event <add|list|view|edit|delete|reminders> [args]",
     ),
     "todo": (
         ["task", "t", "待办", "任务"],
         "管理待办事项",
-        "/pendo todo <add|today|list|done|delete> [args]",
+        "/pendo todo <add|list|view|done|cancel|undone|edit|delete> [args]",
     ),
-    "diary": (["d", "日记"], "写日记和查看日记", "/pendo diary <write|view|list> [args]"),
+    "diary": (["d", "日记"], "写日记和查看日记", "/pendo diary <add|list|view|template|delete> [args]"),
     "note": (
         ["n", "笔记", "想法", "灵感"],
         "记笔记",
-        "/pendo note <content>",
+        "/pendo note <add|list|view|edit|append|tag|untag|link|delete> [args]",
     ),
-    "search": (["s", "搜索", "查找"], "搜索内容", "/pendo search <关键词> [type=] [range=] [status=] [transaction_type=] [category=]"),
+    "search": (
+        ["s", "搜索", "查找"],
+        "搜索内容",
+        "/pendo search <关键词> [type=] [range=] [status=] [transaction_type=] [category=]",
+    ),
     "ledger": (
         ["bill", "finance", "记账", "账单"],
         "记账管理",
@@ -153,8 +158,8 @@ class CommandRouter:
         if callable(handler_obj):
             return cast(CommandHandler, handler_obj)
         # 对象实例：尝试 handle 方法
-        if hasattr(handler_obj, "handle") and callable(getattr(handler_obj, "handle")):
-            return cast(CommandHandler, getattr(handler_obj, "handle"))
+        if hasattr(handler_obj, "handle") and callable(handler_obj.handle):
+            return cast(CommandHandler, handler_obj.handle)
         return None
 
     def _build_alias_map(self) -> dict[str, str]:
@@ -241,6 +246,8 @@ class CommandRouter:
         if args:
             cmd_name = self.alias_map.get(args.lower())
             if cmd_name:
+                if self.help_provider:
+                    return self.help_provider(cmd_name)
                 cmd_info = self.commands[cmd_name]
                 return (
                     f"📖 {cmd_info.name} - {cmd_info.description}\n\n"

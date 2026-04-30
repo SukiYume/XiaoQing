@@ -5,8 +5,9 @@ import uuid
 from pathlib import Path
 
 import pytest
-from plugins.pendo.services.db import Database
+
 from plugins.pendo.config import PendoConfig
+from plugins.pendo.services.db import Database
 
 try:
     from plugins.pendo.web import auth as auth_module
@@ -17,6 +18,7 @@ except ModuleNotFoundError:
 
 try:
     from fastapi.testclient import TestClient
+
     from plugins.pendo.web import deps as deps_module
     from plugins.pendo.web.server import create_app
     FASTAPI_AVAILABLE = True

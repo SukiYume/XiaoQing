@@ -10,12 +10,18 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Awaitable, Callable
+from typing import Any
 from urllib.parse import urlsplit
-from typing import Any, Awaitable, Callable
 
 from aiohttp import ContentTypeError, web
 
-from .constants import DEFAULT_INBOUND_WS_MAX_WORKERS, DEFAULT_INBOUND_WS_QUEUE_SIZE, SECONDS_PER_HOUR, SECONDS_PER_DAY
+from .constants import (
+    DEFAULT_INBOUND_WS_MAX_WORKERS,
+    DEFAULT_INBOUND_WS_QUEUE_SIZE,
+    SECONDS_PER_DAY,
+    SECONDS_PER_HOUR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +31,10 @@ VERSION = "1.0.0"
 class InboundServer:
     """
     入站服务器
-    
+
     提供 HTTP POST 和 WebSocket 两种方式接收事件。
     """
-    
+
     def __init__(
         self,
         host: str,
@@ -62,7 +68,7 @@ class InboundServer:
         if self.enable_ws:
             routes.append(web.get(self.ws_path, self.ws_handler))
         self.app.add_routes(routes)
-        
+
         # 状态追踪
         self._start_time = time.time()
         self._request_count = 0
@@ -84,13 +90,13 @@ class InboundServer:
                 max_queue = 0
             self._ws_event_queue = asyncio.Queue(maxsize=max_queue)
             self._ws_max_workers = max(1, ws_max_workers)
-        
+
         # 可选：外部注入的状态获取函数
         self._get_plugins_count: Callable[[], int] | None = None
         self._get_sessions_count: Callable[[], int] | None = None
         self._get_pending_jobs: Callable[[], int] | None = None
         self._get_metrics: Callable[[], dict[str, Any]] | None = None
-        
+
         # 活跃的 WebSocket 连接集合
         self._active_sockets: set[web.WebSocketResponse] = set()
 
@@ -122,15 +128,45 @@ class InboundServer:
     def _get_ws_connections(self) -> int:
         with self._ws_connections_lock:
             return self._ws_connections
-    
+
     @staticmethod
     def _unauthorized_response() -> web.Response:
         return web.json_response({"status": "unauthorized"}, status=401)
 
+    @staticmethod
+    def _payload_validation_error(payload: dict[str, Any]) -> tuple[str, int] | None:
+        post_type = payload.get("post_type")
+        if not isinstance(post_type, str) or not post_type.strip():
+            return "Missing or invalid post_type", 400
+        if post_type != "message":
+            return None
+
+        message_type = payload.get("message_type")
+        if not isinstance(message_type, str) or not message_type.strip():
+            return "Missing or invalid message_type", 400
+
+        user_id = payload.get("user_id")
+        if user_id is None or isinstance(user_id, bool) or not str(user_id).strip():
+            return "Missing or invalid user_id", 400
+
+        message = payload.get("message")
+        raw_message = str(payload.get("raw_message") or "")
+        if message is None and not raw_message.strip():
+            return "Missing message or raw_message", 400
+        if message is not None and not isinstance(message, (list, str)):
+            return "Invalid message payload", 400
+
+        if message_type == "group":
+            group_id = payload.get("group_id")
+            if group_id is None or isinstance(group_id, bool) or not str(group_id).strip():
+                return "Missing or invalid group_id", 400
+
+        return None
+
     async def health(self, request: web.Request) -> web.Response:
         """
         健康检查端点
-        
+
         返回服务器状态信息，包括：
         - status: 服务状态
         - version: 版本号
@@ -145,7 +181,7 @@ class InboundServer:
             return self._unauthorized_response()
 
         uptime = time.time() - self._start_time
-        
+
         response = {
             "status": "ok",
             "version": VERSION,
@@ -154,32 +190,32 @@ class InboundServer:
             "request_count": self._request_count,
             "ws_connections": self._get_ws_connections(),
         }
-        
+
         # 添加可选状态信息
         if self._get_plugins_count:
             try:
                 response["plugins_loaded"] = self._get_plugins_count()
             except Exception as exc:
                 logger.warning("Plugins count unavailable: %s", exc)
-        
+
         if self._get_sessions_count:
             try:
                 response["active_sessions"] = self._get_sessions_count()
             except Exception as exc:
                 logger.warning("Sessions count unavailable: %s", exc)
-        
+
         if self._get_pending_jobs:
             try:
                 response["pending_jobs"] = self._get_pending_jobs()
             except Exception as exc:
                 logger.warning("Pending jobs count unavailable: %s", exc)
-        
+
         return web.json_response(response)
 
     async def metrics(self, request: web.Request) -> web.Response:
         """
         性能指标端点
-        
+
         返回详细的性能指标数据。需要配置 metrics 提供函数。
         """
         if not self._authorized(request):
@@ -190,7 +226,7 @@ class InboundServer:
                 {"error": "Metrics not configured"},
                 status=501
             )
-        
+
         try:
             metrics_data = self._get_metrics()
             return web.json_response(metrics_data)
@@ -230,7 +266,7 @@ class InboundServer:
         """处理 HTTP POST 事件"""
         if not self._authorized(request):
             return self._unauthorized_response()
-        
+
         self._request_count += 1
         try:
             payload = await request.json()
@@ -241,6 +277,10 @@ class InboundServer:
             return web.json_response({"error": "Unsupported Content-Type"}, status=415)
         if not isinstance(payload, dict):
             return web.json_response({"error": "Payload must be a JSON object"}, status=400)
+        validation_error = self._payload_validation_error(payload)
+        if validation_error is not None:
+            message, status = validation_error
+            return web.json_response({"error": message}, status=status)
         actions = await self.handler(payload)
         return web.json_response({"actions": actions}, dumps=lambda obj: json.dumps(obj, ensure_ascii=False))
 
@@ -254,7 +294,7 @@ class InboundServer:
         await ws.prepare(request)
 
         self._ensure_ws_workers()
-        
+
         self._increment_ws_connections()
         self._active_sockets.add(ws)
         try:
@@ -270,6 +310,11 @@ class InboundServer:
                             json.dumps({"error": "Payload must be a JSON object"}, ensure_ascii=False)
                         )
                         continue
+                    validation_error = self._payload_validation_error(payload)
+                    if validation_error is not None:
+                        message, _status = validation_error
+                        await ws.send_str(json.dumps({"error": message}, ensure_ascii=False))
+                        continue
                     queue = self._ws_event_queue
                     if not queue:
                         continue
@@ -283,7 +328,7 @@ class InboundServer:
         """向所有连接的 WebSocket 广播 Action"""
         if not self._active_sockets:
             return
-        
+
         text = json.dumps(action, ensure_ascii=False)
         failed_sockets: list[web.WebSocketResponse] = []
         # 复制集合以防迭代时变更
@@ -501,11 +546,11 @@ class InboundManager:
         if self.http_server:
             # http server 同时也可能包含 ws (enable_ws=True)
             tasks.append(self.http_server.broadcast(action))
-        
+
         # 如果 ws_server 是独立实例且不相同
         if self.ws_server and self.ws_server is not self.http_server:
             tasks.append(self.ws_server.broadcast(action))
-            
+
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 

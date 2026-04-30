@@ -32,11 +32,11 @@ Database层已自动处理dataclass与数据库行的转换：
 - Handler层可以灵活选择使用dict或dataclass实例
 """
 
-from enum import Enum
-from typing import Optional, Any
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
 import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any
 
 
 class ItemType(Enum):
@@ -86,7 +86,7 @@ class Item:
     attachments: list[dict[str, str]] = field(default_factory=list)
     ai_meta: dict[str, Any] = field(default_factory=dict)  # AI生成的摘要、关键词等
     deleted: bool = False  # 软删除标记
-    deleted_at: Optional[str] = None  # 软删除时间戳
+    deleted_at: str | None = None  # 软删除时间戳
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -112,19 +112,19 @@ class EventItem(Item):
     type: ItemType = ItemType.EVENT
 
     # Event特有字段
-    start_time: Optional[str] = None  # ISO格式时间
-    end_time: Optional[str] = None
+    start_time: str | None = None  # ISO格式时间
+    end_time: str | None = None
     timezone: str = "Asia/Shanghai"
     location: str = ""
     participants: list[str] = field(default_factory=list)
     remind_times: list[str] = field(default_factory=list)  # 提醒时间点列表
     reminder_rules: list[dict[str, Any]] = field(default_factory=list)
     event_role: str = "single"  # single | multi_node_child | recurring_occurrence
-    event_collection_id: Optional[str] = None
-    event_collection_kind: Optional[str] = None  # multi_node | recurring
-    event_index: Optional[int] = None
-    event_node_key: Optional[str] = None
-    source_item_id: Optional[str] = None
+    event_collection_id: str | None = None
+    event_collection_kind: str | None = None  # multi_node | recurring
+    event_index: int | None = None
+    event_node_key: str | None = None
+    source_item_id: str | None = None
     notes: str = ""
 
 
@@ -135,15 +135,15 @@ class TaskItem(Item):
     type: ItemType = ItemType.TASK
 
     # Task特有字段
-    plan_date: Optional[str] = None  # 计划处理日期 YYYY-MM-DD
-    deadline_at: Optional[str] = None  # 硬截止时间 ISO datetime
+    plan_date: str | None = None  # 计划处理日期 YYYY-MM-DD
+    deadline_at: str | None = None  # 硬截止时间 ISO datetime
     priority: int = 3  # 优先级 1-5 (默认3=中)
     status: TaskStatus = TaskStatus.OPEN
     remind_times: list[str] = field(default_factory=list)  # 提醒时间点列表
     reminder_rules: list[dict[str, Any]] = field(default_factory=list)
-    repeat_rule: Optional[str] = None
-    completed_at: Optional[str] = None  # 完成时间
-    cancelled_at: Optional[str] = None  # 取消时间
+    repeat_rule: str | None = None
+    completed_at: str | None = None  # 完成时间
+    cancelled_at: str | None = None  # 取消时间
 
 
 @dataclass
@@ -154,7 +154,7 @@ class NoteItem(Item):
 
     # Note特有字段
     references: list[dict[str, str]] = field(default_factory=list)  # 引用的其他条目或消息
-    last_viewed: Optional[str] = None
+    last_viewed: str | None = None
     related_items: list[str] = field(default_factory=list)  # 相关条目ID
 
 
@@ -165,13 +165,13 @@ class DiaryItem(Item):
     type: ItemType = ItemType.DIARY
 
     # Diary特有字段
-    mood: Optional[str] = None  # 情绪(如: happy, sad, calm等)
-    mood_score: Optional[int] = None  # 情绪评分(1-10)
-    weather: Optional[str] = None
+    mood: str | None = None  # 情绪(如: happy, sad, calm等)
+    mood_score: int | None = None  # 情绪评分(1-10)
+    weather: str | None = None
     location: str = ""  # L-7修复：缺失的 location 字段，缺少时 asdict() 不序列化导致无法持久化
-    template_id: Optional[str] = None  # 使用的模板ID
-    diary_date: Optional[str] = None  # 日记对应的日期(YYYY-MM-DD)
-    entry_time: Optional[str] = None  # 记录发生/写下的具体时间(ISO datetime)
+    template_id: str | None = None  # 使用的模板ID
+    diary_date: str | None = None  # 日记对应的日期(YYYY-MM-DD)
+    entry_time: str | None = None  # 记录发生/写下的具体时间(ISO datetime)
     template_answers: list[dict[str, str]] = field(default_factory=list)  # 模板问题与回答
     is_favorite: bool = False  # 是否收藏，便于回看
 
@@ -188,7 +188,7 @@ class LedgerItem(Item):
     currency: str = "CNY"                      # 币种
     transaction_type: str = "expense"          # expense | income | transfer
     ledger_category: str = "其他"              # 账目分类（餐饮、交通等）
-    ledger_date: Optional[str] = None          # 账目日期 YYYY-MM-DD
+    ledger_date: str | None = None          # 账目日期 YYYY-MM-DD
     account_name: str = "现金"                 # 账户/钱包
     counter_account_name: str = ""             # 转账目标账户
     merchant: str = ""                         # 商户/付款方/收款方

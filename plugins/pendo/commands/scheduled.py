@@ -6,22 +6,26 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
 from core.plugin_base import run_sync, segments
+
+from ..models.item import ItemType
+from ..services.ai_parser import AIParser
 from ..services.db import Database
 from ..services.reminder import ReminderService
-from ..services.ai_parser import AIParser
+from ..utils.db_ops import (
+    get_database,
+    get_user_settings_bundle_map,
+)
+from ..utils.db_ops import (
+    get_user_custom_settings as _get_user_custom_settings,
+)
+from ..utils.settings_utils import save_user_setting
 from ..utils.time_utils import (
     TimezoneHelper,
     get_user_now_from_settings,
     now_in_timezone,
 )
-from ..utils.settings_utils import save_user_setting
-from ..utils.db_ops import (
-    get_database,
-    get_user_custom_settings as _get_user_custom_settings,
-    get_user_settings_bundle_map,
-)
-from ..models.item import ItemType
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +104,7 @@ async def send_daily_briefings(context, db: Database) -> list[dict[str, Any]]:
         settings_bundle_map = await get_user_settings_bundle_map(user_ids, db)
         ai_parser = AIParser(context)
         try:
-            setattr(ai_parser, "db", db)
+            ai_parser.db = db
         except Exception:
             pass
 
@@ -395,6 +399,21 @@ def _is_time_reached(current_time: datetime, target_time_str: str) -> bool:
         return False
 
 
+def _ledger_amount_value(item: Any) -> float:
+    """Return canonical ledger amount from cents, falling back to legacy amount."""
+    amount_cents = getattr(item, "amount_cents", None)
+    if amount_cents not in (None, ""):
+        try:
+            return int(amount_cents) / 100
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        return float(getattr(item, "amount", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def _generate_finance_summary_content(
     db: Database,
     user_id: str,
@@ -422,21 +441,21 @@ async def _generate_finance_summary_content(
         item for item in items
         if getattr(item, "transaction_type", "") == "expense"
     ]
-    total_income = sum(float(getattr(item, "amount", 0) or 0) for item in income_items)
-    total_expense = sum(float(getattr(item, "amount", 0) or 0) for item in expense_items)
+    total_income = sum(_ledger_amount_value(item) for item in income_items)
+    total_expense = sum(_ledger_amount_value(item) for item in expense_items)
     balance = total_income - total_expense
 
     expense_by_cat: dict[str, float] = {}
     for item in expense_items:
         category = getattr(item, "ledger_category", "") or "其他"
-        expense_by_cat[category] = expense_by_cat.get(category, 0.0) + float(item.amount or 0)
+        expense_by_cat[category] = expense_by_cat.get(category, 0.0) + _ledger_amount_value(item)
 
     income_by_cat: dict[str, float] = {}
     for item in income_items:
         category = getattr(item, "ledger_category", "") or "其他"
-        income_by_cat[category] = income_by_cat.get(category, 0.0) + float(item.amount or 0)
+        income_by_cat[category] = income_by_cat.get(category, 0.0) + _ledger_amount_value(item)
 
-    top_expense = max(expense_items, key=lambda item: float(getattr(item, "amount", 0) or 0), default=None)
+    top_expense = max(expense_items, key=_ledger_amount_value, default=None)
     top_expense_category = max(expense_by_cat.items(), key=lambda pair: pair[1], default=None)
     top_income_category = max(income_by_cat.items(), key=lambda pair: pair[1], default=None)
 
@@ -459,7 +478,7 @@ async def _generate_finance_summary_content(
         title_text = getattr(top_expense, "title", "") or "未命名支出"
         ledger_date = getattr(top_expense, "ledger_date", "") or start_date
         lines.append(
-            f"🔥 最大单笔支出: {title_text} ¥{float(top_expense.amount or 0):.2f} ({ledger_date})"
+            f"🔥 最大单笔支出: {title_text} ¥{_ledger_amount_value(top_expense):.2f} ({ledger_date})"
         )
 
     if expense_by_cat:

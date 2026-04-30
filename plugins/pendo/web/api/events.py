@@ -1,8 +1,7 @@
 """Events-specific API routes for the web UI."""
 
-from datetime import datetime
-from typing import Any, Optional
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -29,32 +28,32 @@ router = APIRouter()
 class EventCollectionChildCreate(BaseModel):
     title: str
     start_time: str
-    end_time: Optional[str] = None
-    notes: Optional[str] = ""
+    end_time: str | None = None
+    notes: str | None = ""
 
 
 class EventCollectionCreate(BaseModel):
     kind: str = "multi_node"
     title: str
-    content: Optional[str] = ""
-    category: Optional[str] = None
-    location: Optional[str] = ""
+    content: str | None = ""
+    category: str | None = None
+    location: str | None = ""
     tags: list[str] = []
-    notes: Optional[str] = ""
-    timezone: Optional[str] = None
-    reminder_rules: Optional[list[dict[str, Any]]] = None
+    notes: str | None = ""
+    timezone: str | None = None
+    reminder_rules: list[dict[str, Any]] | None = None
     children: list[EventCollectionChildCreate]
 
 
 class EventCollectionUpdate(BaseModel):
-    title: Optional[str] = None
-    content: Optional[str] = None
-    category: Optional[str] = None
-    location: Optional[str] = None
-    tags: Optional[list[str]] = None
-    notes: Optional[str] = None
-    timezone: Optional[str] = None
-    reminder_rules: Optional[list[dict[str, Any]]] = None
+    title: str | None = None
+    content: str | None = None
+    category: str | None = None
+    location: str | None = None
+    tags: list[str] | None = None
+    notes: str | None = None
+    timezone: str | None = None
+    reminder_rules: list[dict[str, Any]] | None = None
 
 
 @router.get("/events/overview")

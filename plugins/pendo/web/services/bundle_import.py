@@ -5,7 +5,11 @@ from datetime import datetime
 from typing import Any
 
 from ...utils.validators import normalize_item_fields
-from .transfer_bundle import BundleValidationError, EVENT_COLLECTION_FILE_NAME, TYPE_FILE_NAMES, read_bundle
+from .transfer_bundle import (
+    EVENT_COLLECTION_FILE_NAME,
+    TYPE_FILE_NAMES,
+    read_bundle,
+)
 
 
 def normalize_import_payload(payload: dict[str, Any]) -> dict[str, Any]:

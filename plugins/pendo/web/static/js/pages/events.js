@@ -502,37 +502,40 @@ function renderFilters() {
     return `
         <section class="events-filters">
             <div class="events-filter-field">
-                <label>搜索</label>
-                <input id="events-filter-keyword" type="search" placeholder="标题、地点、备注、节点名称" value="${escapeHtml(filters.keyword)}">
+                <label for="events-filter-keyword">搜索</label>
+                <input id="events-filter-keyword" type="search" placeholder="标题、地点、备注、节点名称" value="${escapeHtml(filters.keyword)}" aria-label="搜索日程">
             </div>
             <div class="events-filter-field">
-                <label>分类</label>
+                <label id="events-filter-category-label">分类</label>
                 ${renderCustomSelect({
                     id: 'events-filter-category',
                     options: categoryOptionsList,
                     selected: filters.category,
                     className: 'pselect-block pselect-theme-events',
                     placeholder: '全部分类',
+                    labelledBy: 'events-filter-category-label',
                 })}
             </div>
             <div class="events-filter-field">
-                <label>事件类型</label>
+                <label id="events-filter-kind-label">事件类型</label>
                 ${renderCustomSelect({
                     id: 'events-filter-kind',
                     options: kindOptions,
                     selected: filters.kind,
                     className: 'pselect-block pselect-theme-events',
                     placeholder: '全部事件',
+                    labelledBy: 'events-filter-kind-label',
                 })}
             </div>
             <div class="events-filter-field">
-                <label>提醒状态</label>
+                <label id="events-filter-reminder-label">提醒状态</label>
                 ${renderCustomSelect({
                     id: 'events-filter-reminder',
                     options: reminderOptions,
                     selected: filters.reminder,
                     className: 'pselect-block pselect-theme-events',
                     placeholder: '全部提醒',
+                    labelledBy: 'events-filter-reminder-label',
                 })}
             </div>
         </section>`;
@@ -710,9 +713,9 @@ function renderTimelinePage() {
                     </div>
                     ${_state.listRange === 'custom' ? `
                         <div class="events-inline-dates">
-                            <input class="events-inline-date" id="events-custom-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_state.customStart)}">
+                            <input class="events-inline-date" id="events-custom-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_state.customStart)}" aria-label="自定义开始日期">
                             <span style="font-size:12px;color:var(--color-text-secondary);">至</span>
-                            <input class="events-inline-date" id="events-custom-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_state.customEnd)}">
+                            <input class="events-inline-date" id="events-custom-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_state.customEnd)}" aria-label="自定义结束日期">
                             <button type="button" class="events-range-btn" id="events-custom-apply">应用</button>
                         </div>` : ''}
                 </div>
@@ -826,18 +829,18 @@ async function loadOverview(options = {}) {
 function reminderRowHTML(value = '') {
     return `
         <div class="events-editor-row" data-reminder-row>
-            <input type="datetime-local" class="events-editor-reminder-input" value="${escapeHtml(value)}">
-            <button type="button" data-remove-row>×</button>
+            <input type="datetime-local" class="events-editor-reminder-input" value="${escapeHtml(value)}" aria-label="提醒时间">
+            <button type="button" data-remove-row aria-label="删除提醒时间">×</button>
         </div>`;
 }
 
 function nodeRowHTML(name = '', time = '', notes = '') {
     return `
         <div class="events-editor-row" data-node-row>
-            <input type="text" class="events-editor-node-name" placeholder="节点名称" value="${escapeHtml(name)}">
-            <input type="datetime-local" class="events-editor-node-time" value="${escapeHtml(time)}">
-            <input type="text" class="events-editor-node-notes" placeholder="节点备注（仅该节点提醒显示）" value="${escapeHtml(notes)}">
-            <button type="button" data-remove-row>×</button>
+            <input type="text" class="events-editor-node-name" placeholder="节点名称" value="${escapeHtml(name)}" aria-label="节点名称">
+            <input type="datetime-local" class="events-editor-node-time" value="${escapeHtml(time)}" aria-label="节点时间">
+            <input type="text" class="events-editor-node-notes" placeholder="节点备注（仅该节点提醒显示）" value="${escapeHtml(notes)}" aria-label="节点备注">
+            <button type="button" data-remove-row aria-label="删除节点">×</button>
         </div>`;
 }
 
@@ -852,16 +855,16 @@ function editorModalHTML(existing = null, prefillDate = '') {
         <form id="events-editor-form" data-mode="${isMultiNode ? 'multi_node' : 'single'}">
             <div class="events-editor-grid">
                 <div class="events-editor-field full">
-                    <label>标题</label>
-                    <input name="title" type="text" value="${escapeHtml(existing?.title || '')}" placeholder="比如：产品评审、提审节点、出发前准备">
+                    <label for="events-editor-title">标题</label>
+                    <input id="events-editor-title" name="title" type="text" value="${escapeHtml(existing?.title || '')}" placeholder="比如：产品评审、提审节点、出发前准备">
                 </div>
                 <div class="events-editor-field">
-                    <label>分类</label>
-                    <input name="category" type="text" value="${escapeHtml(existing?.category || '')}" placeholder="会议、项目、个人等">
+                    <label for="events-editor-category">分类</label>
+                    <input id="events-editor-category" name="category" type="text" value="${escapeHtml(existing?.category || '')}" placeholder="会议、项目、个人等">
                 </div>
                 <div class="events-editor-field">
-                    <label>地点</label>
-                    <input name="location" type="text" value="${escapeHtml(existing?.location || '')}" placeholder="可选">
+                    <label for="events-editor-location">地点</label>
+                    <input id="events-editor-location" name="location" type="text" value="${escapeHtml(existing?.location || '')}" placeholder="可选">
                 </div>
                 <div class="events-editor-field full">
                     <label>事件模式</label>
@@ -871,12 +874,12 @@ function editorModalHTML(existing = null, prefillDate = '') {
                     </div>
                 </div>
                 <div class="events-editor-field ${isMultiNode ? 'full' : ''}" data-single-section ${isMultiNode ? 'style="display:none;"' : ''}>
-                    <label>开始时间</label>
-                    <input name="start_time" type="datetime-local" value="${escapeHtml(startValue)}">
+                    <label for="events-editor-start-time">开始时间</label>
+                    <input id="events-editor-start-time" name="start_time" type="datetime-local" value="${escapeHtml(startValue)}">
                 </div>
                 <div class="events-editor-field ${isMultiNode ? 'full' : ''}" data-single-section ${isMultiNode ? 'style="display:none;"' : ''}>
-                    <label>结束时间</label>
-                    <input name="end_time" type="datetime-local" value="${escapeHtml(endValue)}">
+                    <label for="events-editor-end-time">结束时间</label>
+                    <input id="events-editor-end-time" name="end_time" type="datetime-local" value="${escapeHtml(endValue)}">
                 </div>
                 <div class="events-editor-field full" data-node-section ${isMultiNode ? '' : 'style="display:none;"'}>
                     <label>时间节点</label>
@@ -895,8 +898,8 @@ function editorModalHTML(existing = null, prefillDate = '') {
                     <button type="button" class="events-editor-add" id="events-add-reminder">＋ 添加提醒时间</button>
                 </div>
                 <div class="events-editor-field full">
-                    <label>备注</label>
-                    <textarea name="notes" placeholder="可选，用来记录背景、材料链接或执行说明">${escapeHtml(existing?.notes || '')}</textarea>
+                    <label for="events-editor-notes">备注</label>
+                    <textarea id="events-editor-notes" name="notes" placeholder="可选，用来记录背景、材料链接或执行说明">${escapeHtml(existing?.notes || '')}</textarea>
                 </div>
                 ${existing?.series_id ? `
                     <div class="events-editor-field full">
@@ -1056,20 +1059,20 @@ function collectionEditorHTML(collection = {}) {
     return `
         <form id="events-collection-editor-form" class="events-editor-grid">
             <div class="events-editor-field full">
-                <label>集合标题</label>
-                <input name="title" type="text" value="${escapeHtml(collection.title || '')}">
+                <label for="events-collection-title">集合标题</label>
+                <input id="events-collection-title" name="title" type="text" value="${escapeHtml(collection.title || '')}">
             </div>
             <div class="events-editor-field">
-                <label>分类</label>
-                <input name="category" type="text" value="${escapeHtml(collection.category || '')}">
+                <label for="events-collection-category">分类</label>
+                <input id="events-collection-category" name="category" type="text" value="${escapeHtml(collection.category || '')}">
             </div>
             <div class="events-editor-field">
-                <label>地点</label>
-                <input name="location" type="text" value="${escapeHtml(collection.location || '')}">
+                <label for="events-collection-location">地点</label>
+                <input id="events-collection-location" name="location" type="text" value="${escapeHtml(collection.location || '')}">
             </div>
             <div class="events-editor-field full">
-                <label>备注</label>
-                <textarea name="notes">${escapeHtml(collection.notes || '')}</textarea>
+                <label for="events-collection-notes">备注</label>
+                <textarea id="events-collection-notes" name="notes">${escapeHtml(collection.notes || '')}</textarea>
             </div>
         </form>`;
 }

@@ -7,7 +7,6 @@ from ..auth import verify_token
 from ..deps import get_current_user, get_db
 from ..services.demo_space import create_demo_session
 
-
 router = APIRouter()
 
 

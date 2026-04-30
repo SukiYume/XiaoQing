@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from plugins.pendo.models.item import EventItem
 from plugins.pendo.handlers.event import EventHandler
+from plugins.pendo.models.item import EventItem
 from plugins.pendo.services.db import Database
 from plugins.pendo.services.reminder import ReminderService
 from plugins.pendo.utils.validators import (
@@ -447,6 +447,50 @@ def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
         assert delete_collection["status"] == "success"
         assert db.get_item(second_id, "u1") is None
         assert db.get_event_collection(collection_id, "u1") is None
+    finally:
+        db.cleanup()
+
+
+def test_cli_delete_single_reminder_removes_it_from_event_and_logs(tmp_path: Path):
+    import asyncio
+
+    db = Database(str(tmp_path / "pendo_event_reminder_delete.db"))
+    handler = EventHandler(
+        db=db,
+        ai_parser=_UnusedAiParser(),
+        reminder_service=_NoConflictReminderService(),
+    )
+
+    try:
+        db.insert_item(
+            EventItem(
+                id="evt-del",
+                owner_id="u1",
+                title="可删除提醒",
+                start_time="2030-06-01T10:00:00",
+                end_time="2030-06-01T11:00:00",
+                reminder_rules=[{"offset_seconds": 3600}, {"offset_seconds": 0}],
+                remind_times=["2030-06-01T09:00:00", "2030-06-01T10:00:00"],
+            ),
+            "evt-del",
+        )
+        db.confirm_reminder(
+            "evt-del",
+            user_action="preconfirmed",
+            owner_id="u1",
+            remind_time="2030-06-01T09:00:00",
+            allow_future=True,
+        )
+
+        result = asyncio.run(
+            handler.handle_reminders("u1", "delete evt-del 2030-06-01 09:00", {})
+        )
+
+        assert result["status"] == "success"
+        event = db.get_item("evt-del", owner_id="u1")
+        assert event.remind_times == ["2030-06-01T10:00:00"]
+        assert event.reminder_rules == [{"offset_seconds": 0}]
+        assert db.get_reminder_logs("evt-del") == []
     finally:
         db.cleanup()
 

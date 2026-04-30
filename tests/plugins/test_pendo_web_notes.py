@@ -1,14 +1,13 @@
 """Regression tests for the redesigned Pendo web notes page analytics."""
 
 import importlib
-from pathlib import Path
 import shutil
 import uuid
+from pathlib import Path
 
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics import notes_overview as notes_overview_module
 from plugins.pendo.web.analytics.notes_overview import build_notes_overview
-
 
 ROOT = Path(__file__).resolve().parents[2]
 

@@ -345,7 +345,7 @@ class ExporterService:
         return dt
 
     def _build_counts(self, items: list[Any]) -> dict[str, int]:
-        counts = {key: 0 for key in self._TYPE_ORDER}
+        counts = dict.fromkeys(self._TYPE_ORDER, 0)
         for item in items:
             item_type = get_item_type_value(getattr(item, "type", None))
             if item_type in counts:

@@ -92,7 +92,7 @@ def verify_token(token: str) -> dict:
         if not isinstance(owner_id, str) or not owner_id.strip():
             raise AuthError("Token missing owner_id")
         return payload
-    except jwt.ExpiredSignatureError:
-        raise AuthError("Token has expired")
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthError("Token has expired") from exc
     except jwt.InvalidTokenError as e:
-        raise AuthError(f"Invalid token: {e}")
+        raise AuthError(f"Invalid token: {e}") from e

@@ -337,7 +337,7 @@ function renderActiveTaskItem(task) {
     const status = '待办';
     return `
         <label class="dashboard-task-item">
-            <input type="checkbox" data-task-id="${escapeHtml(task.id || '')}">
+            <input type="checkbox" data-task-id="${escapeHtml(task.id || '')}" aria-label="完成待办：${escapeHtml(task.title || '(无标题)')}">
             <div>
                 <div class="dashboard-task-title">${escapeHtml(task.title || '(无标题)')}</div>
                 <div class="dashboard-task-meta">

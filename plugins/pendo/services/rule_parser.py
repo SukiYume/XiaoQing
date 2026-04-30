@@ -5,8 +5,8 @@
 """
 
 import re
-from typing import Any, Optional
 from datetime import datetime, timedelta
+from typing import Any
 
 from ..models.item import ItemType
 
@@ -133,7 +133,7 @@ class RuleParser:
 
         return ItemType.NOTE
 
-    def _extract_time(self, text: str) -> Optional[dict[str, str]]:
+    def _extract_time(self, text: str) -> dict[str, str] | None:
         """提取时间信息"""
         now = datetime.now()
         result = {}
@@ -185,7 +185,7 @@ class RuleParser:
         patterns = [r"\d{1,2}[点:：]", r"今天|明天|后天", r"\d{4}-\d{1,2}-\d{1,2}", r"下周|这周"]
         return any(re.search(p, text) for p in patterns)
 
-    def _extract_location(self, text: str) -> Optional[str]:
+    def _extract_location(self, text: str) -> str | None:
         """提取地点"""
         patterns = [
             r"在([^，,。.！!？?]+?)(开会|见面|会议)",
@@ -197,7 +197,7 @@ class RuleParser:
                 return match.group(1).strip()
         return None
 
-    def _extract_rrule(self, text: str) -> Optional[str]:
+    def _extract_rrule(self, text: str) -> str | None:
         """提取重复规则"""
         for keyword, freq in self.repeat_keywords.items():
             if keyword in text:
@@ -233,14 +233,14 @@ class RuleParser:
                 return ";".join(rrule_parts)
         return None
 
-    def _extract_priority(self, text: str) -> Optional[int]:
+    def _extract_priority(self, text: str) -> int | None:
         """提取优先级"""
         for keyword, priority in self.priority_keywords.items():
             if keyword in text.lower():
                 return priority
         return None
 
-    def _extract_reminders(self, text: str, time_info: Optional[dict[str, str]]) -> list[str]:
+    def _extract_reminders(self, text: str, time_info: dict[str, str] | None) -> list[str]:
         """提取提醒时间"""
         if not time_info or "start_time" not in time_info:
             return []
@@ -276,7 +276,7 @@ class RuleParser:
         """提取标签 (#tag格式)"""
         return re.findall(r"#(\w+)", text)
 
-    def _extract_category(self, text: str) -> Optional[str]:
+    def _extract_category(self, text: str) -> str | None:
         """提取分类"""
         categories = {
             "健康": ["体检", "锻炼", "跑步", "健身", "运动", "医院"],

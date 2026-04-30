@@ -21,14 +21,14 @@ class ItemFields:
     ATTACHMENTS = 'attachments'
     AI_META = 'ai_meta'
     DELETED = 'deleted'
-    
+
     # Event 扩展字段
     START_TIME = 'start_time'
     END_TIME = 'end_time'
     TIMEZONE = 'timezone'
     LOCATION = 'location'
     PARTICIPANTS = 'participants'
-    
+
     # Task 扩展字段
     PLAN_DATE = 'plan_date'
     DEADLINE_AT = 'deadline_at'
@@ -37,7 +37,7 @@ class ItemFields:
     REPEAT_RULE = 'repeat_rule'
     COMPLETED_AT = 'completed_at'
     CANCELLED_AT = 'cancelled_at'
-    
+
     # Diary 扩展字段
     DIARY_DATE = 'diary_date'
     ENTRY_TIME = 'entry_time'

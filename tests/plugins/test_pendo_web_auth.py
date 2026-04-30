@@ -8,7 +8,12 @@ import pytest
 
 try:
     from plugins.pendo.web import auth as auth_module
-    from plugins.pendo.web.auth import generate_token, generate_widget_token, verify_token, AuthError
+    from plugins.pendo.web.auth import (
+        AuthError,
+        generate_token,
+        generate_widget_token,
+        verify_token,
+    )
 except ModuleNotFoundError:
     pytest.skip("pendo web auth requires PyJWT", allow_module_level=True)
 

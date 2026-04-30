@@ -1,18 +1,17 @@
 """Regression tests for the redesigned Pendo web events page."""
 
-from pathlib import Path
 import importlib
 import shutil
 import sys
 import types
 import uuid
+from pathlib import Path
 
 import pytest
 
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics.event_schedule import ensure_datetime
 from plugins.pendo.web.analytics.events_overview import build_event_detail, build_events_overview
-
 
 ROOT = Path(__file__).resolve().parents[2]
 

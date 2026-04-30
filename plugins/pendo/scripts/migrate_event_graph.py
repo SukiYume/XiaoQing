@@ -17,7 +17,6 @@ from ..utils.validators import (
     with_start_time_reminder_rule,
 )
 
-
 ITEM_COLUMNS = [
     "id",
     "type",

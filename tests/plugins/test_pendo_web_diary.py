@@ -1,12 +1,11 @@
 """Regression tests for the redesigned Pendo web diary page analytics."""
 
-from pathlib import Path
 import shutil
 import uuid
+from pathlib import Path
 
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics.diary_overview import build_diary_overview
-
 
 ROOT = Path(__file__).resolve().parents[2]
 

@@ -1,13 +1,12 @@
 """Regression tests for the refreshed Pendo dashboard overview."""
 
-from datetime import datetime
-from pathlib import Path
 import shutil
 import uuid
+from datetime import datetime
+from pathlib import Path
 
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics.dashboard_overview import build_dashboard_overview
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -211,3 +210,13 @@ def test_dashboard_page_source_uses_sparse_spending_axis_ticks():
     assert "border: { display: false }," in src
     assert "borderDash: [4, 6]," in src
     assert "drawTicks: false," in src
+
+
+def test_chart_loader_uses_cdn_without_dead_local_asset_probe():
+    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "lib" / "chart-loader.js").read_text(encoding="utf-8")
+
+    assert "/js/lib/chart.min.js" not in src
+    assert "localScriptAvailable" not in src
+    assert "fetch(src, { method: 'HEAD', cache: 'no-store' })" not in src
+    assert "https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" in src
+    assert "if (window.Chart)" in src

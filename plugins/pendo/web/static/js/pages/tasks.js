@@ -721,46 +721,49 @@ function renderFilters(tasks) {
     return `
         <section class="tasks-filter-bar">
             <div class="tasks-filter-field">
-                <label>搜索</label>
-                <input id="tasks-filter-search" type="search" placeholder="标题、备注、分类" value="${_filters.search}">
+                <label for="tasks-filter-search">搜索</label>
+                <input id="tasks-filter-search" type="search" placeholder="标题、备注、分类" value="${_filters.search}" aria-label="搜索待办">
             </div>
             <div class="tasks-filter-field">
-                <label>计划日期</label>
+                <label id="tasks-filter-plan-label">计划日期</label>
                 ${renderCustomSelect({
                     id: 'tasks-filter-plan',
                     options: renderPlanOptions(),
                     selected: _filters.plan,
                     className: 'pselect-block pselect-theme-tasks',
                     placeholder: '全部计划日期',
+                    labelledBy: 'tasks-filter-plan-label',
                 })}
             </div>
             <div class="tasks-filter-field">
-                <label>分类</label>
+                <label id="tasks-filter-category-label">分类</label>
                 ${renderCustomSelect({
                     id: 'tasks-filter-category',
                     options: renderCategoryOptions(tasks),
                     selected: _filters.category,
                     className: 'pselect-block pselect-theme-tasks',
                     placeholder: '全部分类',
+                    labelledBy: 'tasks-filter-category-label',
                 })}
             </div>
             <div class="tasks-filter-field">
-                <label>状态</label>
+                <label id="tasks-filter-status-label">状态</label>
                 ${renderCustomSelect({
                     id: 'tasks-filter-status',
                     options: renderStatusOptions(),
                     selected: _filters.status,
                     className: 'pselect-block pselect-theme-tasks',
                     placeholder: '全部状态',
+                    labelledBy: 'tasks-filter-status-label',
                 })}
             </div>
             ${showCustomRange ? `
                 <div class="tasks-filter-field tasks-filter-field--range">
                     <label>自定义范围</label>
                     <div class="tasks-filter-range">
-                        <input id="tasks-filter-plan-start" type="date" value="${_filters.customStart || ''}">
+                        <input id="tasks-filter-plan-start" type="date" value="${_filters.customStart || ''}" aria-label="计划开始日期">
                         <span>至</span>
-                        <input id="tasks-filter-plan-end" type="date" value="${_filters.customEnd || ''}">
+                        <input id="tasks-filter-plan-end" type="date" value="${_filters.customEnd || ''}" aria-label="计划结束日期">
                     </div>
                 </div>` : ''}
         </section>`;

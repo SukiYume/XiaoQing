@@ -323,7 +323,7 @@ function renderImportTab() {
                         <div class="transfer-upload-title">拖进来，或手动选择文件</div>
                         <div class="transfer-upload-hint">只接受 <code>.pendo.zip</code>。预检会先校验 manifest、checksum、schema 和逐行记录合法性。</div>
                         <div class="transfer-file-name">${state.file ? escapeHtml(state.file.name) : '尚未选择文件'}</div>
-                        <input id="transfer-file-input" type="file" accept=".zip,.pendo.zip" style="display:none;">
+                        <input id="transfer-file-input" type="file" accept=".zip,.pendo.zip" style="display:none;" aria-label="选择 Pendo bundle 文件">
                         <button type="button" class="transfer-btn secondary" id="btn-transfer-pick-file">选择文件</button>
                     </div>
                 </div>
@@ -337,7 +337,7 @@ function renderImportTab() {
                 <p>默认最安全的是"跳过同 ID"。如果你确定当前数据应被文件覆盖，再选"覆盖同 ID"。</p>
                 <div class="transfer-section"><div class="transfer-section-label">冲突策略</div>${CONFLICT_POLICIES.map((item) => renderPolicy(item, 'transfer-conflict-policy', state.conflictPolicy)).join('')}</div>
                 <div class="transfer-section"><div class="transfer-section-label">非法记录处理</div>${INVALID_POLICIES.map((item) => renderPolicy(item, 'transfer-invalid-policy', state.invalidPolicy)).join('')}</div>
-                ${state.inspect?.already_imported ? `<div class="transfer-section"><label class="transfer-check"><input type="checkbox" id="transfer-force-reimport" ${state.forceReimport ? 'checked' : ''}><span>强制重新导入（此 bundle 已导入过）</span></label></div>` : ''}
+                ${state.inspect?.already_imported ? `<div class="transfer-section"><label class="transfer-check"><input type="checkbox" id="transfer-force-reimport" aria-label="强制重新导入" ${state.forceReimport ? 'checked' : ''}><span>强制重新导入（此 bundle 已导入过）</span></label></div>` : ''}
                 <div class="transfer-section">
                     <div class="transfer-section-label">导入示例</div>
                     <div class="transfer-note">如果你手里是别的工具导出的 JSON、CSV 或数据库结果，可以先把字段重组到下面这套 bundle 结构，再压缩成 <code>.pendo.zip</code> 导入。示例里的 JSON 做了换行便于阅读，真正的 <code>ndjson</code> 文件需要"一行一条记录"。</div>
@@ -364,7 +364,7 @@ function renderDuplicateBundleWarning() {
 }
 
 function renderPolicy(item, name, current) {
-    return `<label class="transfer-check"><input type="radio" name="${name}" value="${item.value}" ${current === item.value ? 'checked' : ''}><span>${item.label}</span></label><div class="transfer-list-meta" style="margin:-2px 0 4px 6px;">${item.desc}</div>`;
+    return `<label class="transfer-check"><input type="radio" name="${name}" value="${item.value}" aria-label="${item.label}" ${current === item.value ? 'checked' : ''}><span>${item.label}</span></label><div class="transfer-list-meta" style="margin:-2px 0 4px 6px;">${item.desc}</div>`;
 }
 
 function renderExampleBlock(title, tip, code) {
@@ -382,39 +382,162 @@ function renderImportExamples() {
         'your-backup.pendo.zip',
         '  manifest.json',
         '  data/',
+        '    events.ndjson',
+        '    event_collections.ndjson',
         '    tasks.ndjson',
         '    ledger.ndjson',
+        '    notes.ndjson',
         '    diary.ndjson',
     ].join('\n');
-    const minimalManifest = JSON.stringify({
+    const manifest = JSON.stringify({
         format: 'pendo-bundle',
         version: 2,
         bundle_id: 'my-first-import',
         exported_at: '2026-03-29T20:00:00+08:00',
         source: { app: 'external-tool', timezone: 'Asia/Shanghai' },
-        selection: { types: ['task', 'ledger'], preset: 'all' },
+        selection: { types: ['event', 'task', 'ledger', 'note', 'diary'], preset: 'all', start: null, end: null },
         files: [
-            { path: 'data/tasks.ndjson', type: 'task' },
-            { path: 'data/ledger.ndjson', type: 'ledger' },
-        ],
-    }, null, 2);
-    const minimalTask = '{"id": "t001", "title": "买牛奶", "status": "open", "plan_date": "2026-03-30", "deadline_at": "2026-03-30T18:00:00+08:00"}\n{"id": "t002", "title": "交报告", "status": "open", "priority": 2, "category": "工作"}';
-    const minimalLedger = '{"id": "l001", "title": "午饭", "amount_cents": 3250, "transaction_type": "expense", "ledger_category": "餐饮", "ledger_date": "2026-03-18", "account_name": "微信", "merchant": "食堂"}';
-    const fullManifest = JSON.stringify({
-        format: 'pendo-bundle',
-        version: 2,
-        bundle_id: 'a1b2c3d4e5f6...',
-        exported_at: '2026-03-29T20:00:00+08:00',
-        source: { app: 'external-tool', timezone: 'Asia/Shanghai' },
-        selection: { types: ['task', 'ledger', 'diary'], preset: 'all', start: null, end: null },
-        files: [
-            { path: 'data/tasks.ndjson', type: 'task', count: 2, sha256: '<sha256>' },
-            { path: 'data/ledger.ndjson', type: 'ledger', count: 18, sha256: '<sha256>' },
-            { path: 'data/diary.ndjson', type: 'diary', count: 6, sha256: '<sha256>' },
+            { path: 'data/events.ndjson', type: 'event', count: 3, sha256: '<sha256 可省略>' },
+            { path: 'data/event_collections.ndjson', type: 'event_collection', count: 2, sha256: '<sha256 可省略>' },
+            { path: 'data/tasks.ndjson', type: 'task', count: 2, sha256: '<sha256 可省略>' },
+            { path: 'data/ledger.ndjson', type: 'ledger', count: 3, sha256: '<sha256 可省略>' },
+            { path: 'data/notes.ndjson', type: 'note', count: 1, sha256: '<sha256 可省略>' },
+            { path: 'data/diary.ndjson', type: 'diary', count: 1, sha256: '<sha256 可省略>' },
         ],
         attachments_mode: 'metadata_only',
     }, null, 2);
-    const fullTask = JSON.stringify({
+    const eventCollections = [
+        JSON.stringify({
+            id: 'conf_2026',
+            kind: 'multi_node',
+            title: '学术会议',
+            category: '工作',
+            location: '北京',
+            start_time: '2026-05-10T09:00:00+08:00',
+            end_time: '2026-05-12T18:00:00+08:00',
+            notes: '集合记录大标题、地点、备注；每个节点仍写在 events.ndjson',
+        }),
+        JSON.stringify({
+            id: 'standup_2026',
+            kind: 'recurring',
+            title: '每周站会',
+            category: '工作',
+            rrule: 'FREQ=WEEKLY;COUNT=4',
+            timezone: 'Asia/Shanghai',
+            reminder_rules: [{ offset_seconds: 900 }],
+        }),
+    ].join('\n');
+    const events = [
+        JSON.stringify({
+            id: 'event_single_001',
+            title: '牙医复诊',
+            start_time: '2026-05-03T15:00:00+08:00',
+            end_time: '2026-05-03T16:00:00+08:00',
+            timezone: 'Asia/Shanghai',
+            location: '社区医院',
+            notes: '单次日程。没有提醒时显式写空数组。',
+            reminder_rules: [],
+            remind_times: [],
+        }),
+        JSON.stringify({
+            id: 'conf_2026_node_01',
+            title: '摘要截止',
+            start_time: '2026-05-10T09:00:00+08:00',
+            event_role: 'multi_node_child',
+            event_collection_id: 'conf_2026',
+            event_collection_kind: 'multi_node',
+            event_index: 1,
+            event_node_key: 'abstract_deadline',
+            reminder_rules: [{ offset_seconds: 86400 }, { offset_seconds: 0 }],
+        }),
+        JSON.stringify({
+            id: 'standup_2026_occ_01',
+            title: '每周站会',
+            start_time: '2026-05-04T10:00:00+08:00',
+            end_time: '2026-05-04T10:30:00+08:00',
+            event_role: 'recurring_occurrence',
+            event_collection_id: 'standup_2026',
+            event_collection_kind: 'recurring',
+            event_index: 1,
+            source_item_id: 'standup_2026',
+            reminder_rules: [{ offset_seconds: 900 }],
+        }),
+    ].join('\n');
+    const tasks = [
+        JSON.stringify({
+            id: 'task_001',
+            title: '交报告',
+            content: '把周报发给项目组',
+            status: 'open',
+            priority: 2,
+            category: '工作',
+            plan_date: '2026-05-06',
+            deadline_at: '2026-05-06T18:00:00+08:00',
+            reminder_rules: [{ offset_seconds: 1800 }],
+        }),
+        JSON.stringify({
+            id: 'task_002',
+            title: '已完成任务',
+            status: 'done',
+            priority: 3,
+            completed_at: '2026-05-01T20:10:00+08:00',
+        }),
+    ].join('\n');
+    const ledger = [
+        JSON.stringify({
+            id: 'ledger_expense_001',
+            title: '午饭',
+            amount_cents: 3250,
+            currency: 'CNY',
+            transaction_type: 'expense',
+            ledger_category: '餐饮',
+            ledger_date: '2026-05-01',
+            account_name: '微信',
+            merchant: '食堂',
+            remark: '金额优先写 amount_cents，单位是分。',
+        }),
+        JSON.stringify({
+            id: 'ledger_income_001',
+            title: '工资',
+            amount_cents: 1800000,
+            transaction_type: 'income',
+            ledger_category: '工资',
+            ledger_date: '2026-05-05',
+            account_name: '招商银行卡',
+        }),
+        JSON.stringify({
+            id: 'ledger_transfer_001',
+            title: '转入储蓄账户',
+            amount_cents: 200000,
+            transaction_type: 'transfer',
+            ledger_category: '转账',
+            ledger_date: '2026-05-08',
+            account_name: '招商银行卡',
+            counter_account_name: '储蓄卡',
+        }),
+    ].join('\n');
+    const notes = JSON.stringify({
+        id: 'note_001',
+        title: '迁移注意事项',
+        content: '支持 Markdown/HTML 文本，前端会按文本安全渲染。',
+        tags: ['迁移', 'pendo'],
+        category: '知识',
+        references: [{ title: '旧系统导出', url: 'https://example.com/export' }],
+    });
+    const diary = JSON.stringify({
+        id: 'diary_2026_05_01',
+        title: '劳动节',
+        content: '今天完成了数据整理。',
+        diary_date: '2026-05-01',
+        entry_time: '2026-05-01T22:10:00+08:00',
+        mood: 'happy',
+        mood_score: 8,
+        weather: '晴',
+        location: '上海',
+        is_favorite: true,
+        template_answers: [{ prompt: '今天最重要的事', answer: '补齐导入数据' }],
+    });
+    const fullRecord = JSON.stringify({
         _type: 'task',
         _schema: 2,
         id: 'task_20260329_review',
@@ -427,15 +550,25 @@ function renderImportExamples() {
         deadline_at: '2026-03-30T18:00:00+08:00',
         created_at: '2026-03-29T10:30:00+08:00',
         updated_at: '2026-03-29T10:30:00+08:00',
+        tags: ['迁移', '重要'],
+        visibility: 'private',
+        context: { source: 'manual' },
+        attachments: [],
+        ai_meta: {},
+        deleted: false,
     }, null, 2);
     return [
-        `<div class="transfer-note">支持两种构造方式：<strong>精简模式</strong>适合从外部工具快速导入；<strong>完整模式</strong>是 Pendo 自身导出的标准格式，带 SHA256 校验和行数验证。</div>`,
-        renderExampleBlock('1. 压缩包目录', 'zip 根目录必须包含 manifest.json，数据文件放在 data/ 下。', bundleTree),
-        renderExampleBlock('2. manifest.json（精简模式）', '精简模式下，files 只需要声明 path 和 type。sha256、count 省略后系统会跳过校验并给出提示。bundle_id 可以用任意唯一字符串，例如稳定自定义字符串。', minimalManifest),
-        renderExampleBlock('3. 精简 ndjson 示例', '每条记录只需要写业务字段，不需要 _type 和 _schema（系统会根据文件名自动推断）。没有 created_at 时系统会自动填充当前时间；没有 id 时会默认生成短随机 ID。', minimalTask + '\n\n// ledger.ndjson:\n' + minimalLedger),
-        renderExampleBlock('4. manifest.json（完整模式）', 'Pendo 导出的标准格式。files 里带 count（精确行数）和 sha256（文件校验和），导入时会严格校验完整性。', fullManifest),
-        renderExampleBlock('5. 完整 ndjson 示例', '完整模式下每条记录带 _type 和 _schema: 2 元字段，导入时会按当前重构后的字段集合严格校验。', fullTask),
-        `<div class="transfer-note">改造规则：1. 日期时间统一用 ISO 8601 并带时区偏移。2. 纯日期字段用 <code>YYYY-MM-DD</code>。3. 每个 <code>ndjson</code> 文件一行一条 JSON。4. ID 可以自定义，导入时会按这个 ID 做跳过 / 覆盖判断；不传 ID 时系统自动生成。5. 未知字段会在预检阶段报错；旧字段需要先用一次性迁移脚本转换成新结构。</div>`,
+        `<div class="transfer-note">支持 <strong>event、task、ledger、note、diary</strong> 五类条目，以及用于多节点/重复日程的 <strong>event_collection</strong>。精简模式只写业务字段；完整模式可以带 <code>_type</code>、<code>_schema: 2</code>、<code>count</code> 和 <code>sha256</code>。</div>`,
+        renderExampleBlock('1. 压缩包目录', 'zip 根目录必须包含 manifest.json，数据文件必须放在 data/ 下；不用导入的类型可以不写对应文件。', bundleTree),
+        renderExampleBlock('2. manifest.json', 'files 声明每个数据文件的 path 和 type。count、sha256 可省略；带上时导入会做行数和校验和验证。bundle_id 可以用任意唯一字符串，例如稳定自定义字符串，重复导入时会据此识别。', manifest),
+        renderExampleBlock('3. 日程集合 event_collections.ndjson', '多节点和重复日程先写集合，再在 events.ndjson 写具体节点/occurrence。kind 只能是 multi_node 或 recurring。', eventCollections),
+        renderExampleBlock('4. 日程 events.ndjson', '单次日程直接写 start_time；多节点/重复实例用 event_collection_id 关联集合。提醒跟着事件走：reminder_rules 的 offset_seconds 表示提前多少秒提醒，0 表示事件开始时提醒；没有提醒时写空数组。', events),
+        renderExampleBlock('5. 待办 tasks.ndjson', 'status 可用 open、done、cancelled；priority 范围 1-5；deadline_at 用 ISO 时间。任务提醒通常按 deadline_at 计算。', tasks),
+        renderExampleBlock('6. 记账 ledger.ndjson', '金额优先使用 amount_cents，单位是分。transaction_type 可用 expense、income、transfer；transfer 必须写 counter_account_name。', ledger),
+        renderExampleBlock('7. 笔记 notes.ndjson', 'title 必填；content、tags、category、references、related_items 都可以按需填写。HTML/Markdown 会作为文本内容保存和安全展示。', notes),
+        renderExampleBlock('8. 日记 diary.ndjson', 'diary_date 必填且格式为 YYYY-MM-DD；content 不能为空；mood_score 范围 1-10。', diary),
+        renderExampleBlock('9. 完整记录格式', '完整模式下每条记录可带 _type 和 _schema: 2 元字段，导入时会按当前重构后的字段集合严格校验。', fullRecord),
+        `<div class="transfer-note">通用字段：<code>id、title、content、tags、category、created_at、updated_at、context、visibility、attachments、ai_meta、deleted、deleted_at</code>。日期时间统一用 ISO 8601 并带时区偏移；纯日期字段用 <code>YYYY-MM-DD</code>。每个 <code>ndjson</code> 文件一行一条 JSON。不传 ID 时系统会默认生成短随机 ID；未知字段会在预检阶段报错，旧字段需要先用迁移脚本转换成新结构。</div>`,
     ].join('');
 }
 
@@ -453,7 +586,7 @@ function renderImportInspect(state) {
                 <article class="transfer-summary-card"><div class="transfer-summary-label">文件数</div><div class="transfer-summary-value">${inspect.summary.files}</div><div class="transfer-summary-meta">bundle 中实际包含的数据文件数</div></article>
             </div>
         </div>
-        <div class="transfer-section"><div class="transfer-section-label">要导入的类别</div><div class="transfer-inline-checks">${inspect.summary.types.map((type) => `<label class="transfer-check"><input type="checkbox" data-import-type="${type}" ${state.selectedTypes.includes(type) ? 'checked' : ''}><span>${typeLabel(type)}</span></label>`).join('')}</div></div>
+        <div class="transfer-section"><div class="transfer-section-label">要导入的类别</div><div class="transfer-inline-checks">${inspect.summary.types.map((type) => `<label class="transfer-check"><input type="checkbox" data-import-type="${type}" aria-label="导入${typeLabel(type)}" ${state.selectedTypes.includes(type) ? 'checked' : ''}><span>${typeLabel(type)}</span></label>`).join('')}</div></div>
         <div class="transfer-section"><div class="transfer-section-label">文件明细</div><div class="transfer-list">${inspect.files.map((file) => `<div class="transfer-list-row"><div><div class="transfer-list-title">${escapeHtml(file.path)}</div><div class="transfer-list-meta">${typeLabel(file.type)}，共 ${file.count} 行，合法 ${file.valid} 行</div></div><div class="transfer-list-value">${file.count}</div></div>`).join('')}</div></div>
         <div class="transfer-section">
             <div class="transfer-section-label">样例记录${inspect.counts.total_samples > 5 ? ` (共 ${inspect.counts.total_samples} 条)` : ''}</div>

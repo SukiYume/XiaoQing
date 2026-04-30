@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends
 
 from ...services.db import Database
 from ..analytics.dashboard_overview import build_dashboard_overview
-from ..deps import get_db, get_current_user
+from ..deps import get_current_user, get_db
 
 router = APIRouter()
 

@@ -5,9 +5,8 @@ pendo 插件单元测试
 由于 pendo 插件使用相对导入且有复杂的模块结构，我们主要测试文件结构和配置。
 """
 
-import json
 import asyncio
-import pytest
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,7 +29,7 @@ class TestPendoStructure:
         main_path = ROOT / "plugins" / "pendo" / "main.py"
         assert main_path.exists()
 
-        with open(main_path, "r", encoding="utf-8") as f:
+        with open(main_path, encoding="utf-8") as f:
             content = f.read()
             assert "class Plugin" in content or "plugin" in content.lower()
 
@@ -39,7 +38,7 @@ class TestPendoStructure:
         config_path = ROOT / "plugins" / "pendo" / "config.py"
         assert config_path.exists()
 
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             content = f.read()
             assert "class" in content or "def" in content
 
@@ -103,7 +102,7 @@ class TestPendoConfig:
     def test_plugin_json_structure(self):
         """测试 plugin.json 结构"""
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
-        with open(plugin_json_path, "r", encoding="utf-8") as f:
+        with open(plugin_json_path, encoding="utf-8") as f:
             config = json.load(f)
 
         assert "name" in config
@@ -114,7 +113,7 @@ class TestPendoConfig:
     def test_plugin_commands_exist(self):
         """测试插件有命令定义"""
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
-        with open(plugin_json_path, "r", encoding="utf-8") as f:
+        with open(plugin_json_path, encoding="utf-8") as f:
             config = json.load(f)
 
         commands = config.get("commands", [])
@@ -123,7 +122,7 @@ class TestPendoConfig:
     def test_plugin_help_mentions_widget_token(self):
         """测试插件摘要帮助包含 widget-token 提示"""
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
-        with open(plugin_json_path, "r", encoding="utf-8") as f:
+        with open(plugin_json_path, encoding="utf-8") as f:
             config = json.load(f)
 
         commands = config.get("commands", [])
@@ -133,7 +132,7 @@ class TestPendoConfig:
     def test_plugin_has_schedule(self):
         """测试插件有定时任务配置"""
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
-        with open(plugin_json_path, "r", encoding="utf-8") as f:
+        with open(plugin_json_path, encoding="utf-8") as f:
             config = json.load(f)
 
         # 检查是否有 schedule 配置
@@ -167,9 +166,136 @@ class TestPendoConfig:
 
         assert "🧭 输入 `/pendo` 查看完整总览" in help_text
         assert "━━ 🗓️ **日程管理 (Event)**" in help_text
-        assert "多节点事件可直接写“节点名 + 改成/改到 + 新时间”" in help_text
-        assert "/pendo event edit 80efbef6 会议开始改成4月22日12:43" in help_text
+        assert "先用 view 集合ID 查看节点ID，再编辑具体节点" in help_text
+        assert "集合ID只编辑整体标题、分类、地点、备注，不修改某个节点时间" in help_text
+        assert "/pendo event edit 80efbef6_m03 改到4月22日12:43" in help_text
+        assert "/pendo event edit 80efbef6 标题改为FAST会议行程" in help_text
+        assert "多节点事件可直接写“节点名 + 改成/改到 + 新时间”" not in help_text
+        assert "/pendo event reminders delete <id> <all|today|future|提醒时间>" in help_text
         assert "━━ ✅ **待办事项 (Todo)**" not in help_text
+
+    def test_command_router_help_uses_detailed_provider_for_subcommands(self):
+        """测试 /pendo help event 复用 main.py 的详细帮助，而不是旧路由摘要。"""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.core.router import CommandRouter
+        from plugins.pendo.main import _show_help
+
+        async def dummy_handler(user_id, args, context):
+            return {"status": "success", "message": "ok"}
+
+        router = CommandRouter({"event": dummy_handler, "confirm": dummy_handler}, help_provider=_show_help)
+
+        event_help = router.get_help_message("event")
+        assert "━━ 🗓️ **日程管理 (Event)**" in event_help
+        assert "/pendo event reminders delete <id> <all|today|future|提醒时间>" in event_help
+        assert "📖 event - 管理日程" not in event_help
+
+        alias_help = router.get_help_message("confirm")
+        assert "━━ ⏰ **提醒操作**" in alias_help
+        assert "/pendo event reminders set/delete/confirm <id> ..." in alias_help
+
+    def test_help_map_covers_current_command_surface_and_beginner_examples(self):
+        """测试 HELP_MAP 覆盖当前命令面、关键参数和可复制示例。"""
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.main import _show_help
+
+        help_text = _show_help()
+
+        expected_fragments = [
+            # event
+            "/pendo event add <内容>",
+            "/pendo event list [范围] [cat:分类] [#标签]",
+            "/pendo event view <id>",
+            "/pendo event edit <id> <内容>",
+            "/pendo event delete <id>",
+            "/pendo event reminders [id|范围]",
+            "/pendo event reminders list [范围]",
+            "/pendo event reminders set <id> <描述>",
+            "/pendo event reminders delete <id> <all|today|future|提醒时间>",
+            "/pendo event reminders confirm <id> [today|future|all|提醒时间]",
+            # todo
+            "/pendo todo add <内容>",
+            "remind:YYYY-MM-DDTHH:MM",
+            "/pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类]",
+            "/pendo todo view <id>",
+            "/pendo todo done <id>",
+            "/pendo todo cancel <id>",
+            "/pendo todo undone <id>",
+            "/pendo todo edit <id> <内容>",
+            "/pendo todo delete <id|cat:分类>",
+            # note
+            "/pendo note add <内容>",
+            "ref:条目ID",
+            "since:范围",
+            "/pendo note view <id>",
+            "/pendo note edit <id>",
+            "/pendo note append <id>",
+            "/pendo note tag <id>",
+            "untag <id>",
+            "/pendo note link <id>",
+            "/pendo note delete <id|cat:分类>",
+            # diary
+            "/pendo diary add [日期]",
+            "favorite:true",
+            "/pendo diary template [编号|名称]",
+            "/pendo diary list [范围]",
+            "/pendo diary view [日期|ID]",
+            "/pendo diary delete <日期|ID>",
+            # ledger
+            "/pendo ledger add",
+            "/pendo ledger quick <金额> <描述>",
+            "type:expense/income/transfer",
+            "/pendo ledger list [范围] [筛选]",
+            "all page:N",
+            "/pendo ledger view <id>",
+            "/pendo ledger edit <id>",
+            "/pendo ledger delete <id>",
+            "/pendo ledger summary [范围]",
+            # search/settings/common/export/web
+            "/pendo search <关键词>",
+            "transaction_type=income/expense/transfer",
+            "/pendo confirm <id>",
+            "/pendo snooze <id> <时间>",
+            "/pendo undo [分钟]",
+            "/pendo export <文件名> [范围] [类型]",
+            "/pendo settings timezone <IANA时区>",
+            "/pendo settings quiet_hours <开始>-<结束>",
+            "/pendo web widget-token",
+            "/pendo web status",
+        ]
+
+        for fragment in expected_fragments:
+            assert fragment in help_text
+
+        beginner_examples = [
+            "/pendo event add 明天9点组会",
+            "/pendo todo add 写周报",
+            "/pendo note add title:读书摘录",
+            "/pendo diary add 今天跑步5公里",
+            "/pendo ledger quick 35.5 午饭",
+            "/pendo event edit 80efbef6_m03 改到4月22日12:43",
+            "/pendo ledger list 2026-03 type:expense",
+            "/pendo search 组会 type=event",
+            "/pendo settings timezone Asia/Shanghai",
+            "/pendo export \"三月 账本\" 2026-03 ledger",
+        ]
+        for example in beginner_examples:
+            assert example in help_text
+
+        stale_or_internal_phrases = [
+            "reminder rules",
+            "提醒规则",
+            "节点名 + 改成/改到",
+            "/pendo event edit 80efbef6 会议开始改成",
+        ]
+        for phrase in stale_or_internal_phrases:
+            assert phrase not in help_text
 
 
 class TestPendoServices:
@@ -178,7 +304,7 @@ class TestPendoServices:
     def test_database_service_exists(self):
         """测试数据库服务模块"""
         db_path = ROOT / "plugins" / "pendo" / "services" / "db.py"
-        with open(db_path, "r", encoding="utf-8") as f:
+        with open(db_path, encoding="utf-8") as f:
             content = f.read()
 
         assert "class" in content
@@ -187,7 +313,7 @@ class TestPendoServices:
     def test_ai_parser_service_exists(self):
         """测试 AI 解析服务模块"""
         ai_path = ROOT / "plugins" / "pendo" / "services" / "ai_parser.py"
-        with open(ai_path, "r", encoding="utf-8") as f:
+        with open(ai_path, encoding="utf-8") as f:
             content = f.read()
 
         assert "async def" in content or "def" in content
@@ -195,7 +321,7 @@ class TestPendoServices:
     def test_rule_parser_service_exists(self):
         """测试规则解析服务模块"""
         rule_path = ROOT / "plugins" / "pendo" / "services" / "rule_parser.py"
-        with open(rule_path, "r", encoding="utf-8") as f:
+        with open(rule_path, encoding="utf-8") as f:
             content = f.read()
 
         assert "async def" in content or "def" in content
@@ -203,7 +329,7 @@ class TestPendoServices:
     def test_exporter_service_exists(self):
         """测试导出服务模块"""
         exporter_path = ROOT / "plugins" / "pendo" / "services" / "exporter.py"
-        with open(exporter_path, "r", encoding="utf-8") as f:
+        with open(exporter_path, encoding="utf-8") as f:
             content = f.read()
 
         assert "async def" in content or "def" in content
@@ -211,7 +337,7 @@ class TestPendoServices:
     def test_reminder_service_exists(self):
         """测试提醒服务模块"""
         reminder_path = ROOT / "plugins" / "pendo" / "services" / "reminder.py"
-        with open(reminder_path, "r", encoding="utf-8") as f:
+        with open(reminder_path, encoding="utf-8") as f:
             content = f.read()
 
         assert "async def" in content or "def" in content
@@ -231,7 +357,7 @@ class TestPendoDataModels:
         # 检查是否定义了基本的数据类型
         for model_file in model_files:
             if model_file.name != "__init__.py":
-                with open(model_file, "r", encoding="utf-8") as f:
+                with open(model_file, encoding="utf-8") as f:
                     content = f.read()
                     # 检查是否有数据类或类型定义
                     assert "class" in content or "dataclass" in content
@@ -245,7 +371,7 @@ class TestPendoDocumentation:
         readme_path = ROOT / "plugins" / "pendo" / "README.md"
         assert readme_path.exists()
 
-        with open(readme_path, "r", encoding="utf-8") as f:
+        with open(readme_path, encoding="utf-8") as f:
             content = f.read()
             assert len(content) > 100  # 应该有实际内容
 
@@ -254,7 +380,7 @@ class TestPendoDocumentation:
         arch_path = ROOT / "plugins" / "pendo" / "ARCHITECTURE.md"
         assert arch_path.exists()
 
-        with open(arch_path, "r", encoding="utf-8") as f:
+        with open(arch_path, encoding="utf-8") as f:
             content = f.read()
             assert len(content) > 100
 
@@ -278,7 +404,7 @@ class TestPendoCommands:
         # 检查是否有处理不同类型项目的命令
         for cmd_file in command_files:
             if cmd_file.name != "__init__.py":
-                with open(cmd_file, "r", encoding="utf-8") as f:
+                with open(cmd_file, encoding="utf-8") as f:
                     content = f.read()
                     assert "async def" in content or "def" in content
 
@@ -751,7 +877,8 @@ class TestAIParserMilestones:
 
     def test_parse_event_with_ai_handles_milestones(self):
         """模拟 LLM 返回 milestones 时正确解析"""
-        import asyncio, json
+        import asyncio
+        import json
         from unittest.mock import AsyncMock, patch
 
         parser = self._make_parser()
@@ -793,7 +920,8 @@ class TestMilestoneEventHandler:
         import sys
 
         sys.path.insert(0, str(ROOT))
-        from unittest.mock import MagicMock, AsyncMock
+        from unittest.mock import MagicMock
+
         from plugins.pendo.handlers.event import EventHandler
 
         db = MagicMock()
@@ -875,6 +1003,7 @@ class TestMilestoneReminderMessage:
 
         sys.path.insert(0, str(ROOT))
         from unittest.mock import MagicMock
+
         from plugins.pendo.services.reminder import ReminderService
 
         db = MagicMock()
@@ -1053,8 +1182,8 @@ class TestRecurringEventRegression:
             assert updated_first is not None
             assert updated_second is not None
             assert db.items.get_event_collection(collection_id, "u1")["title"] == "新版重复会议"
-            assert getattr(updated_first, "start_time") == "2030-01-01T09:00:00"
-            assert getattr(updated_second, "start_time") == "2030-01-02T09:00:00"
+            assert updated_first.start_time == "2030-01-01T09:00:00"
+            assert updated_second.start_time == "2030-01-02T09:00:00"
         finally:
             db.cleanup()
 
@@ -1154,10 +1283,10 @@ class TestReminderRegression:
 
             updated = db.items.get_item("evt12345", "u1")
             assert updated is not None
-            assert getattr(updated, "title") == "FAST2026观测申请截止"
-            assert getattr(updated, "category") == "工作"
-            assert getattr(updated, "start_time") == "2026-04-07T14:00:00"
-            assert getattr(updated, "remind_times") == [
+            assert updated.title == "FAST2026观测申请截止"
+            assert updated.category == "工作"
+            assert updated.start_time == "2026-04-07T14:00:00"
+            assert updated.remind_times == [
                 "2026-04-06T14:00:00",
                 "2026-04-07T13:00:00",
                 "2026-04-07T14:00:00",
@@ -1241,12 +1370,12 @@ class TestReminderRegression:
 
             assert updated_first is not None
             assert updated_second is not None
-            assert getattr(updated_first, "remind_times") == [
+            assert updated_first.remind_times == [
                 "2029-12-31T10:00:00",
                 "2030-01-01T09:00:00",
                 "2030-01-01T10:00:00",
             ]
-            assert getattr(updated_second, "remind_times") == [
+            assert updated_second.remind_times == [
                 "2030-01-01T10:00:00",
                 "2030-01-02T09:00:00",
                 "2030-01-02T10:00:00",
@@ -2141,7 +2270,7 @@ class TestCrossTypeCommandRegression:
         sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.ledger import LedgerHandler
-        from plugins.pendo.models.item import NoteItem, ItemType
+        from plugins.pendo.models.item import ItemType, NoteItem
         from plugins.pendo.services.db import Database
 
         db = Database(str(tmp_path / "pendo_ledger_edit_guard.db"))
@@ -2329,7 +2458,7 @@ class TestCrossTypeCommandRegression:
         sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.task import TaskHandler
-        from plugins.pendo.models.item import NoteItem, ItemType
+        from plugins.pendo.models.item import ItemType, NoteItem
         from plugins.pendo.services.db import Database
 
         db = Database(str(tmp_path / "pendo_todo_wrong_type.db"))
@@ -2437,7 +2566,7 @@ class TestCrossTypeCommandRegression:
             assert "/pendo diary view dia12345" in result["message"]
             assert preserved is not None
             assert preserved.type == ItemType.DIARY
-            assert getattr(preserved, "diary_date") == "2026-03-28"
+            assert preserved.diary_date == "2026-03-28"
         finally:
             db.cleanup()
 
@@ -2480,7 +2609,7 @@ class TestCrossTypeCommandRegression:
         sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.handlers.event import EventHandler
-        from plugins.pendo.models.item import NoteItem, ItemType
+        from plugins.pendo.models.item import ItemType, NoteItem
         from plugins.pendo.services.db import Database
 
         db = Database(str(tmp_path / "pendo_event_reminders_set_guard.db"))
@@ -2505,7 +2634,7 @@ class TestCrossTypeCommandRegression:
             assert "不是日程ID" in result["message"]
             assert preserved is not None
             assert preserved.type == ItemType.NOTE
-            assert getattr(preserved, "title") == "采购清单"
+            assert preserved.title == "采购清单"
         finally:
             db.cleanup()
 
@@ -2540,7 +2669,7 @@ class TestCrossTypeCommandRegression:
             assert "/pendo note view not12345" in result["message"]
             assert preserved is not None
             assert preserved.type == ItemType.NOTE
-            assert getattr(preserved, "title") == "采购清单"
+            assert preserved.title == "采购清单"
         finally:
             db.cleanup()
 
@@ -2578,8 +2707,8 @@ class TestDiaryMoodAIRegression:
             assert result["status"] == "success"
             assert "情绪: calm" in result["message"]
             assert saved is not None
-            assert getattr(saved, "mood") == "calm"
-            assert getattr(saved, "mood_score") == 6
+            assert saved.mood == "calm"
+            assert saved.mood_score == 6
         finally:
             db.cleanup()
 
@@ -2638,10 +2767,10 @@ class TestDiaryMoodAIRegression:
             assert "早上出门。" not in ai_parser.calls[0]
             assert "晚上玩得很开心" in ai_parser.calls[0]
             assert original is not None
-            assert getattr(original, "mood") == "calm"
+            assert original.mood == "calm"
             assert created is not None
-            assert getattr(created, "mood") == "happy"
-            assert getattr(created, "mood_score") == 8
+            assert created.mood == "happy"
+            assert created.mood_score == 8
             assert len(entries) == 2
         finally:
             db.cleanup()
@@ -2671,11 +2800,11 @@ class TestDiaryMoodAIRegression:
 
             assert result["status"] == "success"
             assert saved is not None
-            assert getattr(saved, "diary_date") == "2026-01-31"
-            assert getattr(saved, "entry_time").startswith("2026-01-31T")
-            assert getattr(saved, "mood") == "happy"
-            assert getattr(saved, "mood_score") == 8
-            assert getattr(saved, "is_favorite") is False
+            assert saved.diary_date == "2026-01-31"
+            assert saved.entry_time.startswith("2026-01-31T")
+            assert saved.mood == "happy"
+            assert saved.mood_score == 8
+            assert saved.is_favorite is False
         finally:
             db.cleanup()
 
@@ -3424,7 +3553,6 @@ class TestScheduledRegression:
 
     def test_migrate_todos_returns_messages_without_send_action(self, monkeypatch):
         import sys
-        from datetime import datetime
         from typing import Any, cast
 
         sys.path.insert(0, str(ROOT))
@@ -3538,7 +3666,7 @@ class TestScheduledRegression:
 
     def test_plugin_manifest_has_no_dead_evening_briefing_schedule(self):
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
-        with open(plugin_json_path, "r", encoding="utf-8") as f:
+        with open(plugin_json_path, encoding="utf-8") as f:
             config = json.load(f)
 
         handler_ids = {entry["handler"] for entry in config.get("schedule", [])}
@@ -3624,7 +3752,10 @@ class TestPendoFinanceSummaries:
                 }
             }
 
+        generate_calls = []
+
         async def fake_generate_summary(*_args, **_kwargs):
+            generate_calls.append(_args)
             return "weekly-summary"
 
         monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
@@ -3646,6 +3777,9 @@ class TestPendoFinanceSummaries:
         assert len(actions) == 1
         assert actions[0]["params"]["user_id"] == 1001
         assert "weekly-summary" in actions[0]["params"]["message"][0]["data"]["text"]
+        assert generate_calls == [
+            (db, "1001", "2029-12-31", "2030-01-06", "12/31 - 01/06", "📆 本周财务总结")
+        ]
 
     def test_month_end_finance_summary_sends_on_last_day_evening(self, monkeypatch):
         import sys
@@ -3679,7 +3813,10 @@ class TestPendoFinanceSummaries:
                 }
             }
 
+        generate_calls = []
+
         async def fake_generate_summary(*_args, **_kwargs):
+            generate_calls.append(_args)
             return "month-summary"
 
         monkeypatch.setattr(scheduled_module, "datetime", _FixedDateTime)
@@ -3703,6 +3840,101 @@ class TestPendoFinanceSummaries:
         assert len(actions) == 1
         assert actions[0]["params"]["user_id"] == 1001
         assert "month-summary" in actions[0]["params"]["message"][0]["data"]["text"]
+        assert generate_calls == [
+            (db, "1001", "2030-03-01", "2030-03-31", "2030/03/01 - 2030/03/31", "🧾 月底财务总结")
+        ]
+
+    def test_finance_summary_uses_amount_cents_and_ledger_date_range(self):
+        import shutil
+        import sys
+        import uuid
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.commands import scheduled as scheduled_module
+        from plugins.pendo.services.db import Database
+
+        temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_finance_summary_{uuid.uuid4().hex}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        db = Database(str(temp_dir / "pendo.db"))
+        owner_id = "u-finance-summary"
+
+        try:
+            db.insert_item({
+                "id": "sum_expense",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "午饭",
+                "amount_cents": 12345,
+                "transaction_type": "expense",
+                "ledger_category": "餐饮",
+                "ledger_date": "2026-05-02",
+                "account_name": "微信",
+            })
+            db.insert_item({
+                "id": "sum_income",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "工资",
+                "amount_cents": 500000,
+                "transaction_type": "income",
+                "ledger_category": "工资",
+                "ledger_date": "2026-05-03",
+                "account_name": "招商银行卡",
+            })
+            db.insert_item({
+                "id": "sum_transfer",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "转入储蓄",
+                "amount_cents": 20000,
+                "transaction_type": "transfer",
+                "ledger_category": "转账",
+                "ledger_date": "2026-05-04",
+                "account_name": "招商银行卡",
+                "counter_account_name": "储蓄卡",
+            })
+            db.insert_item({
+                "id": "sum_outside",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "范围外支出",
+                "amount_cents": 999999,
+                "transaction_type": "expense",
+                "ledger_category": "测试",
+                "ledger_date": "2026-06-01",
+                "account_name": "微信",
+            })
+            conn = db.get_connection()
+            with conn:
+                conn.execute(
+                    "UPDATE items SET amount = 0 WHERE id IN (?, ?)",
+                    ("sum_expense", "sum_income"),
+                )
+            db.cache_clear()
+
+            summary = asyncio.run(
+                scheduled_module._generate_finance_summary_content(
+                    db,
+                    owner_id,
+                    "2026-05-01",
+                    "2026-05-31",
+                    "2026/05/01 - 2026/05/31",
+                    "测试财务总结",
+                )
+            )
+
+            assert "🧾 共 3 笔流水" in summary
+            assert "💰 收入: ¥5000.00" in summary
+            assert "💸 支出: ¥123.45" in summary
+            assert "📊 结余: +¥4876.55" in summary
+            assert "📂 最大支出分类: 餐饮 ¥123.45" in summary
+            assert "📥 主要收入来源: 工资 ¥5000.00" in summary
+            assert "🔥 最大单笔支出: 午饭 ¥123.45 (2026-05-02)" in summary
+            assert "范围外支出" not in summary
+        finally:
+            db.cleanup()
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class TestBatchDeleteRefactor:
@@ -3761,10 +3993,62 @@ class TestBatchDeleteRefactor:
         assert details_factory is None  # 不再传多余的 details_factory
 
 
+class TestCommandValidationRegression:
+    def test_note_add_invalid_category_returns_validation_error(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.note import NoteHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_note_invalid_category.db"))
+        try:
+            handler = NoteHandler(db)
+            result = asyncio.run(
+                handler.create_note(
+                    "u-note-validation",
+                    "title:bad content body cat:<script>",
+                    SimpleNamespace(),
+                )
+            )
+
+            assert result["status"] == "error"
+            assert "分类名只能包含" in result["message"]
+            assert db.get_items("u-note-validation", filters={"type": "note"}) == []
+        finally:
+            db.cleanup()
+
+    def test_todo_add_invalid_priority_is_rejected(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.task import TaskHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_todo_invalid_priority.db"))
+        try:
+            handler = TaskHandler(db)
+            result = asyncio.run(
+                handler.add_task(
+                    "u-task-validation",
+                    "非法优先级 p:9 cat:测试",
+                    SimpleNamespace(),
+                )
+            )
+
+            assert result["status"] == "error"
+            assert "优先级必须在1-5之间" in result["message"]
+            assert db.get_items("u-task-validation", filters={"type": "task"}) == []
+        finally:
+            db.cleanup()
+
+
 class TestTriggerConflictRegression:
     def test_pendo_manifest_does_not_claim_bare_biji_trigger(self):
         plugin_json_path = ROOT / "plugins" / "pendo" / "plugin.json"
-        with open(plugin_json_path, "r", encoding="utf-8") as f:
+        with open(plugin_json_path, encoding="utf-8") as f:
             config = json.load(f)
 
         triggers = config["commands"][0]["triggers"]
@@ -3772,6 +4056,53 @@ class TestTriggerConflictRegression:
 
 
 class TestSessionRegression:
+    def test_active_session_with_missing_raw_message_routes_explicit_command(self, monkeypatch):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo import main as pendo_main
+
+        end_calls = []
+        routed = []
+
+        class _Session:
+            plugin_name = "pendo"
+
+        class _Context:
+            logger = pendo_main.logger
+            metrics = None
+
+            async def get_session(self):
+                return _Session()
+
+            async def end_session(self):
+                end_calls.append(True)
+                return True
+
+        async def _fake_route(user_id, args, context, group_id=None, log=None):
+            routed.append((user_id, args, group_id))
+            return [{"type": "text", "data": {"text": "ok"}}]
+
+        monkeypatch.setattr(pendo_main, "_handle_command_routing", _fake_route)
+
+        result = asyncio.run(
+            pendo_main.handle(
+                "pendo",
+                "todo add CX_RAW_FALLBACK",
+                {
+                    "user_id": "u-raw",
+                    "group_id": 42,
+                    "raw_message": None,
+                },
+                _Context(),
+            )
+        )
+
+        assert result == [{"type": "text", "data": {"text": "ok"}}]
+        assert end_calls == [True]
+        assert routed == [("u-raw", "todo add CX_RAW_FALLBACK", 42)]
+
     def test_event_info_session_keeps_new_conflict_session_active(self):
         import sys
 
@@ -4102,9 +4433,9 @@ class TestPendoWebHandler:
     """测试 pendo web 命令格式化与发送行为"""
 
     def test_web_token_sends_token_as_separate_private_message(self, monkeypatch):
+        import importlib
         import sys
         import types
-        import importlib
 
         sys.path.insert(0, str(ROOT))
         sys.modules.pop("plugins.pendo.handlers.web", None)
@@ -4143,9 +4474,9 @@ class TestPendoWebHandler:
         assert "直接复制这整条消息到网页登录框" in token_text
 
     def test_web_token_falls_back_to_inline_message_without_send_action(self, monkeypatch):
+        import importlib
         import sys
         import types
-        import importlib
 
         sys.path.insert(0, str(ROOT))
         sys.modules.pop("plugins.pendo.handlers.web", None)
@@ -4171,9 +4502,9 @@ class TestPendoWebHandler:
         assert "直接复制这整条消息到网页登录框" in result["message"]
 
     def test_web_start_surfaces_last_start_error(self):
+        import importlib
         import sys
         import types
-        import importlib
 
         sys.path.insert(0, str(ROOT))
         sys.modules.pop("plugins.pendo.handlers.web", None)
@@ -4196,9 +4527,9 @@ class TestPendoWebHandler:
         assert "PENDO_WEB_PORT" in result["message"]
 
     def test_web_widget_token_sends_token_as_separate_private_message(self, monkeypatch):
+        import importlib
         import sys
         import types
-        import importlib
 
         sys.path.insert(0, str(ROOT))
         sys.modules.pop("plugins.pendo.handlers.web", None)

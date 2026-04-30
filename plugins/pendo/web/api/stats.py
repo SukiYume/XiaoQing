@@ -10,7 +10,7 @@ from ..analytics.diary_overview import build_diary_overview
 from ..analytics.ledger_insights import build_ledger_insights
 from ..analytics.notes_overview import build_notes_overview
 from ..analytics.task_overview import build_task_overview
-from ..deps import get_db, get_current_user
+from ..deps import get_current_user, get_db
 
 router = APIRouter()
 LEDGER_AMOUNT_EXPR = Database._LEDGER_AMOUNT_CENTS_EXPR
@@ -325,7 +325,7 @@ def task_stats(
     open_rows = [row for row in task_rows if row[0] == "open"]
     plan_counter = Counter()
     text_category_counter = Counter()
-    for status, category, priority, plan_date, deadline_at in open_rows:
+    for _status, category, _priority, plan_date, deadline_at in open_rows:
         cat = str(category or "").strip()
         plan_key = str(plan_date or "").strip() or str(deadline_at or "")[:10]
         if plan_key:
@@ -700,7 +700,7 @@ def activity_heatmap(
 
     days = []
     for d in all_days:
-        l = ledger_map.get(d, 0)
+        ledger_count = ledger_map.get(d, 0)
         t = task_map.get(d, 0)
         e = event_map.get(d, 0)
         n = note_map.get(d, 0)
@@ -708,8 +708,8 @@ def activity_heatmap(
         days.append(
             {
                 "date": d,
-                "count": l + t + e + n + dy,
-                "ledger": l,
+                "count": ledger_count + t + e + n + dy,
+                "ledger": ledger_count,
                 "task": t,
                 "event": e,
                 "note": n,

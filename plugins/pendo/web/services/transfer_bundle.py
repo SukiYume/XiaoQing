@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
 
 from ...models.item import Item, get_item_type_value
 from ...utils.validators import COMMON_ITEM_FIELDS, SUPPORTED_ITEM_TYPES, TYPE_SPECIFIC_ITEM_FIELDS
 
-
 TRANSFER_FORMAT = "pendo-bundle"
 TRANSFER_VERSION = 2
+MAX_BUNDLE_MANIFEST_BYTES = 1 * 1024 * 1024
+MAX_BUNDLE_MEMBER_BYTES = 50 * 1024 * 1024
+MAX_BUNDLE_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
+MAX_BUNDLE_RECORDS = 100_000
 SUPPORTED_TYPES = set(SUPPORTED_ITEM_TYPES)
 TYPE_FILE_NAMES = {
     "event": "data/events.ndjson",
@@ -207,13 +209,26 @@ def read_bundle(fileobj) -> ParsedBundle:
     - Unknown top-level fields are rejected; importers must emit the v2 schema.
     """
     fileobj.seek(0)
-    with ZipFile(fileobj, "r") as zf:
-        names = set(zf.namelist())
+    try:
+        zip_file = ZipFile(fileobj, "r")
+    except BadZipFile as exc:
+        raise BundleValidationError("Invalid bundle zip") from exc
+
+    with zip_file as zf:
+        infos = {info.filename: info for info in zf.infolist()}
+        names = set(infos)
         if "manifest.json" not in names:
             raise BundleValidationError("Bundle is missing manifest.json")
+        manifest_info = infos["manifest.json"]
+        if manifest_info.file_size > MAX_BUNDLE_MANIFEST_BYTES:
+            raise BundleValidationError("Bundle manifest exceeds maximum file size")
 
-        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        try:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BundleValidationError("Bundle manifest is not valid UTF-8 JSON") from exc
         _validate_manifest(manifest)
+        _validate_bundle_size_limits(infos, manifest)
 
         records_by_type: dict[str, list[dict[str, Any]]] = {item_type: [] for item_type in SUPPORTED_TYPES}
         event_collections: list[dict[str, Any]] = []
@@ -232,6 +247,9 @@ def read_bundle(fileobj) -> ParsedBundle:
             if path not in names:
                 raise BundleValidationError(f"Bundle is missing {path}")
 
+            info = infos[path]
+            if info.file_size > MAX_BUNDLE_MEMBER_BYTES:
+                raise BundleValidationError(f"{path} exceeds maximum file size")
             file_bytes = zf.read(path)
 
             # SHA256: 有则校验，无则警告
@@ -244,10 +262,17 @@ def read_bundle(fileobj) -> ParsedBundle:
                 warnings.append(f"{path}: 缺少 sha256 校验和，跳过完整性检查")
 
             line_count, valid_count = 0, 0
-            for index, line in enumerate(file_bytes.decode("utf-8").splitlines(), start=1):
+            try:
+                file_lines = file_bytes.decode("utf-8").splitlines()
+            except UnicodeDecodeError as exc:
+                raise BundleValidationError(f"{path} is not valid UTF-8") from exc
+
+            for index, line in enumerate(file_lines, start=1):
                 if not line.strip():
                     continue
                 line_count += 1
+                if line_count > MAX_BUNDLE_RECORDS:
+                    raise BundleValidationError(f"{path} has too many records")
                 try:
                     raw_record = json.loads(line)
 
@@ -314,3 +339,37 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         raise BundleValidationError("Bundle manifest files must be a list")
     if not isinstance(manifest.get("selection"), dict):
         raise BundleValidationError("Bundle manifest selection must be an object")
+
+
+def _validate_bundle_size_limits(infos: dict[str, Any], manifest: dict[str, Any]) -> None:
+    total_size = infos["manifest.json"].file_size
+    seen_paths: set[str] = {"manifest.json"}
+
+    for entry in manifest.get("files", []):
+        if not isinstance(entry, dict):
+            raise BundleValidationError("Bundle manifest files must contain objects")
+        path = str(entry.get("path") or "")
+        if not path:
+            raise BundleValidationError("Bundle manifest file path is required")
+        if path in seen_paths:
+            raise BundleValidationError(f"Duplicate bundle file path: {path}")
+        seen_paths.add(path)
+
+        info = infos.get(path)
+        if info is None:
+            continue
+        if info.file_size > MAX_BUNDLE_MEMBER_BYTES:
+            raise BundleValidationError(f"{path} exceeds maximum file size")
+        total_size += info.file_size
+
+        expected_count = entry.get("count")
+        if expected_count is not None:
+            try:
+                count = int(expected_count)
+            except (TypeError, ValueError) as exc:
+                raise BundleValidationError(f"Invalid count for {path}") from exc
+            if count > MAX_BUNDLE_RECORDS:
+                raise BundleValidationError(f"{path} has too many records")
+
+    if total_size > MAX_BUNDLE_UNCOMPRESSED_BYTES:
+        raise BundleValidationError("Bundle exceeds maximum uncompressed size")

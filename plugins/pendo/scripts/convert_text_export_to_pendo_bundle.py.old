@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from plugins.pendo.web.services.transfer_bundle import (  # noqa: E402
     TYPE_FILE_NAMES,
+    TRANSFER_VERSION,
     build_manifest,
     compute_sha256,
     write_bundle,
@@ -34,8 +35,10 @@ DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TYPE_MAP = {
     "calendar": "event",
     "note": "note",
+    "todo": "task",
     "journal": "diary",
 }
+TODO_RE = re.compile(r"^\s*-\s*\[([vxX\s])\]\s*(.+?)\s*$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -190,7 +193,7 @@ def build_event_record(entry: dict[str, Any], timezone: str) -> dict[str, Any]:
     iso_time = parse_header_datetime(entry["timestamp"], timezone_value)
     return {
         "_type": "event",
-        "_schema": 1,
+        "_schema": TRANSFER_VERSION,
         "id": record_id,
         "title": title,
         "category": default_category(),
@@ -200,6 +203,8 @@ def build_event_record(entry: dict[str, Any], timezone: str) -> dict[str, Any]:
         "timezone": timezone_value,
         "location": location,
         "notes": "\n\n".join(part for part in notes_parts if part).strip(),
+        "reminder_rules": [],
+        "remind_times": [],
         "created_at": iso_time,
         "updated_at": iso_time,
         "context": {
@@ -221,7 +226,7 @@ def build_note_record(entry: dict[str, Any], timezone: str) -> dict[str, Any]:
     created_at = parse_header_datetime(entry["timestamp"], timezone)
     return {
         "_type": "note",
-        "_schema": 1,
+        "_schema": TRANSFER_VERSION,
         "id": record_id,
         "title": title,
         "content": block,
@@ -257,11 +262,12 @@ def build_diary_record(entry: dict[str, Any], timezone: str) -> dict[str, Any]:
     created_at = parse_header_datetime(entry["timestamp"], timezone)
     return {
         "_type": "diary",
-        "_schema": 1,
+        "_schema": TRANSFER_VERSION,
         "id": record_id,
         "title": diary_date,
         "content": content,
         "diary_date": diary_date,
+        "entry_time": created_at,
         "tags": [],
         "created_at": created_at,
         "updated_at": created_at,
@@ -275,11 +281,82 @@ def build_diary_record(entry: dict[str, Any], timezone: str) -> dict[str, Any]:
     }
 
 
+def build_task_records(entry: dict[str, Any], timezone: str) -> list[dict[str, Any]]:
+    fields = entry["fields"]
+    block = normalized_content(fields.get("title", ""))
+    created_at = parse_header_datetime(entry["timestamp"], timezone)
+    source_title = first_non_empty_line(block) or "导入待办"
+    tasks: list[dict[str, Any]] = []
+
+    for index, line in enumerate(block.splitlines(), 1):
+        matched = TODO_RE.match(line)
+        if not matched:
+            continue
+        status_mark = matched.group(1).strip().lower()
+        title = matched.group(2).strip()
+        if not title:
+            continue
+        record_id = f"{make_import_id('todo', fields.get('source_id'), entry['timestamp'], source_title)}_{index:03d}"
+        done = status_mark in {"v", "x"}
+        tasks.append(
+            {
+                "_type": "task",
+                "_schema": TRANSFER_VERSION,
+                "id": record_id,
+                "title": title[:200],
+                "content": "",
+                "category": default_category(),
+                "tags": [],
+                "priority": 3,
+                "status": "done" if done else "open",
+                "completed_at": created_at if done else None,
+                "created_at": created_at,
+                "updated_at": created_at,
+                "context": {
+                    "import": {
+                        "source": "legacy-text-export",
+                        "source_type": "todo",
+                        "source_id": fields.get("source_id"),
+                        "source_title": source_title,
+                    }
+                },
+            }
+        )
+
+    if tasks:
+        return tasks
+
+    record_id = make_import_id("todo", fields.get("source_id"), entry["timestamp"], source_title)
+    return [
+        {
+            "_type": "task",
+            "_schema": TRANSFER_VERSION,
+            "id": record_id,
+            "title": source_title[:200],
+            "content": block,
+            "category": default_category(),
+            "tags": [],
+            "priority": 3,
+            "status": "open",
+            "created_at": created_at,
+            "updated_at": created_at,
+            "context": {
+                "import": {
+                    "source": "legacy-text-export",
+                    "source_type": "todo",
+                    "source_id": fields.get("source_id"),
+                }
+            },
+        }
+    ]
+
+
 def convert_entries(entries: list[dict[str, Any]], timezone: str) -> dict[str, list[dict[str, Any]]]:
     records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     builders = {
         "calendar": build_event_record,
         "note": build_note_record,
+        "todo": build_task_records,
         "journal": build_diary_record,
     }
     for entry in entries:
@@ -331,15 +408,15 @@ def main() -> int:
         print(f"输入文件不存在：{input_path}", file=sys.stderr)
         return 1
 
-    output_path = (
-        (
-            Path(args.output).expanduser()
-            if Path(args.output).expanduser().is_absolute()
-            else (SCRIPT_DIR / Path(args.output).expanduser())
-        ).resolve()
-        if args.output
-        else input_path.with_suffix(input_path.suffix + ".pendo.zip")
-    )
+    if args.output:
+        raw_output_path = Path(args.output).expanduser()
+        output_path = (
+            raw_output_path.resolve()
+            if raw_output_path.is_absolute()
+            else (Path.cwd() / raw_output_path).resolve()
+        )
+    else:
+        output_path = input_path.with_suffix(input_path.suffix + ".pendo.zip")
 
     text = input_path.read_text(encoding="utf-8")
     entries = parse_entries(text)
@@ -349,6 +426,7 @@ def main() -> int:
         return 1
 
     bundle_bytes = build_bundle(records_by_type, args.timezone)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(bundle_bytes)
 
     counts = {item_type: len(rows) for item_type, rows in records_by_type.items()}
