@@ -1599,6 +1599,12 @@ class EventHandler(DbOpsMixin):
         if not e.start_time:
             return False
         e_start = datetime.fromisoformat(e.start_time)
+        if e_start.tzinfo is not None:
+            e_start = e_start.astimezone(TimezoneHelper.DEFAULT_TZ).replace(tzinfo=None)
+        if start_dt.tzinfo is not None:
+            start_dt = start_dt.astimezone(TimezoneHelper.DEFAULT_TZ).replace(tzinfo=None)
+        if end_dt.tzinfo is not None:
+            end_dt = end_dt.astimezone(TimezoneHelper.DEFAULT_TZ).replace(tzinfo=None)
         return start_dt <= e_start <= end_dt
 
     async def _parse_updates(self, changes: str, current_event: EventItem) -> dict[str, Any]:

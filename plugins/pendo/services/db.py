@@ -888,6 +888,7 @@ class Database:
                 [now, now] + item_ids + [owner_id],
             )
             affected = cursor.rowcount
+            cursor.execute(f"DELETE FROM reminder_logs WHERE item_id IN ({placeholders})", item_ids)
             cursor.execute(f"DELETE FROM items_fts WHERE id IN ({placeholders})", item_ids)
 
         for iid in item_ids:
