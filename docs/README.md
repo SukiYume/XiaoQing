@@ -51,6 +51,7 @@
 |------|------|----------|
 | [05-api-reference.md](05-api-reference.md) | 常用 API 和上下文接口参考 | 所有开发者 |
 | [06-configuration.md](06-configuration.md) | 配置项详解、最佳实践、部署说明 | 运维 / 部署 / 调参 |
+| [pendo-scriptable-widget.md](pendo-scriptable-widget.md) | Pendo iPhone Scriptable 小组件配置和只读 API | Pendo 用户 / 部署者 |
 
 ---
 

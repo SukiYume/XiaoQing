@@ -27,7 +27,7 @@ XiaoQing 是一个基于 **Python 异步**（asyncio）和 **OneBot 协议** 的
 | **异步优先** | 100% 异步设计，高效处理并发消息 |
 | **协议标准** | 基于 OneBot 协议，兼容多种 QQ 客户端实现 |
 | **开发友好** | 清晰的 API，完善的日志，内置指标统计 |
-| **Web 控制台** | pendo 插件内置 FastAPI SPA，支持浏览器管理个人数据 |
+| **Web 控制台** | pendo 插件内置 FastAPI + 原生 JS SPA，支持浏览器管理个人数据、统计和迁移 |
 
 ---
 
@@ -253,7 +253,7 @@ XiaoQing/
 ├── plugins/                # 插件目录（可直接加载的内置插件；*_deprecated 目录默认不参与加载）
 │   ├── bot_core/           # 核心命令（help、reload）
 │   ├── xiaoqing_chat/      # 智能对话插件（向量记忆、情绪系统）
-│   ├── pendo/              # 个人时间与信息管理中枢（日程/待办/笔记/日记/记账/Web 控制台）
+│   ├── pendo/              # 个人时间与信息管理中枢（日程/待办/笔记/日记/账本/提醒/Web 控制台）
 │   ├── qingpet/            # QQ群宠物养成系统
 │   ├── qingssh/            # SSH 远程控制
 │   ├── jupyter/            # Python 代码执行

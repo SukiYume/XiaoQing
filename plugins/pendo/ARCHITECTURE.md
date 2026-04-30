@@ -1,6 +1,6 @@
 # Pendo 插件架构与代码结构
 
-> 这份文档合并了旧 `ARCHITECTURE.md` 与 `STRUCTURE.md`。它只描述当前 `pendo-redesign` 分支上的运行时结构；历史重构方案放在 `docs/plans/`。
+> 这份文档描述当前已合入主分支的 Pendo 运行时结构。历史重构方案放在 `docs/plans/`，不作为当前行为说明。
 
 ## 定位
 
@@ -57,7 +57,7 @@ plugins/pendo/
 │   ├── db.py                    # SQLite、schema、缓存、CRUD、审计
 │   ├── event_graph.py           # event_collections 与 leaf events 的组装/拆解
 │   ├── reminder.py              # 提醒计算、发送、日志去重
-│   ├── ai_parser.py             # 日程/任务自然语言解析入口
+│   ├── ai_parser.py             # 日程自然语言解析入口
 │   ├── rule_parser.py           # 规则解析回退
 │   ├── exporter.py              # CLI Markdown 档案导出
 │   └── llm_client.py            # LLM 客户端封装
@@ -149,6 +149,7 @@ services/db.py SQLite schema
 - `ledger`
 - `search`
 - `export`
+- `import`
 - `settings`
 - `confirm`
 - `snooze`
