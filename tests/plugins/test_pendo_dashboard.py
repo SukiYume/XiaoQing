@@ -84,18 +84,20 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
             "owner_id": owner_id,
             "type": "task",
             "title": "未完成任务",
-            "status": "todo",
+            "status": "open",
             "priority": 2,
-            "due_time": "2026-03-26T10:00:00",
+            "plan_date": "2026-03-26",
+            "deadline_at": "2026-03-26T10:00:00",
         })
         db.insert_item({
             "id": "task2",
             "owner_id": owner_id,
             "type": "task",
-            "title": "进行中任务",
-            "status": "in_progress",
+            "title": "今日任务",
+            "status": "open",
             "priority": 1,
-            "due_time": "2026-03-25T18:00:00",
+            "plan_date": "2026-03-25",
+            "deadline_at": "2026-03-25T18:00:00",
         })
         db.insert_item({
             "id": "task3",
@@ -114,7 +116,7 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
             "type": "ledger",
             "title": "午饭",
             "amount": 25.5,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": "2026-03-20",
         })
@@ -124,7 +126,7 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
             "type": "ledger",
             "title": "工资",
             "amount": 3000,
-            "direction": "income",
+            "transaction_type": "income",
             "ledger_category": "工资",
             "ledger_date": "2026-03-21",
         })
@@ -161,7 +163,7 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
             for event in result["events_agenda"]
         )
         assert len(result["tasks"]["active"]) == 2
-        assert result["tasks"]["active"][0]["title"] == "进行中任务"
+        assert result["tasks"]["active"][0]["title"] == "今日任务"
         assert len(result["tasks"]["completed"]) == 1
         assert result["tasks"]["completed"][0]["title"] == "已完成任务"
         assert result["month_summary"]["income"] == 3000

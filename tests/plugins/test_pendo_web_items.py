@@ -2,6 +2,7 @@
 
 import importlib
 import json
+from datetime import datetime
 from pathlib import Path
 import shutil
 import sqlite3
@@ -15,6 +16,7 @@ from plugins.pendo.services.db import Database
 from plugins.pendo.utils.validators import (
     normalize_diary_fields,
     normalize_event_fields,
+    normalize_item_fields,
     normalize_ledger_fields,
     normalize_note_fields,
     normalize_task_fields,
@@ -97,7 +99,7 @@ def test_database_get_items_supports_ledger_category_filter():
             "type": "ledger",
             "title": "午饭",
             "amount": 22.5,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": "2026-03-25",
         })
@@ -107,7 +109,7 @@ def test_database_get_items_supports_ledger_category_filter():
             "type": "ledger",
             "title": "地铁",
             "amount": 4,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "交通",
             "ledger_date": "2026-03-25",
         })
@@ -135,7 +137,7 @@ def test_items_list_applies_priority_before_pagination_and_total_count():
             "type": "task",
             "title": "普通优先级",
             "priority": 3,
-            "status": "todo",
+            "status": "open",
             "created_at": "2026-03-03T09:00:00",
             "updated_at": "2026-03-03T09:00:00",
         })
@@ -145,7 +147,7 @@ def test_items_list_applies_priority_before_pagination_and_total_count():
             "type": "task",
             "title": "高优先级一",
             "priority": 1,
-            "status": "todo",
+            "status": "open",
             "created_at": "2026-03-02T09:00:00",
             "updated_at": "2026-03-02T09:00:00",
         })
@@ -155,7 +157,7 @@ def test_items_list_applies_priority_before_pagination_and_total_count():
             "type": "task",
             "title": "高优先级二",
             "priority": 1,
-            "status": "todo",
+            "status": "open",
             "created_at": "2026-03-01T09:00:00",
             "updated_at": "2026-03-01T09:00:00",
         })
@@ -189,7 +191,8 @@ def test_resolve_date_field_rejects_untrusted_field_names():
 def test_resolve_date_field_restricts_fields_by_item_type():
     items_module = _load_items_module()
 
-    assert items_module._resolve_date_field("task", "due_time") == "due_time"
+    assert items_module._resolve_date_field("task", "plan_date") == "plan_date"
+    assert items_module._resolve_date_field("task", "deadline_at") == "deadline_at"
     assert items_module._resolve_date_field("task", "created_at") == "created_at"
 
     with pytest.raises(Exception) as exc_info:
@@ -214,8 +217,20 @@ def test_database_get_items_supports_diary_date_sort_field():
             "title": "后一天",
             "content": "第二篇",
             "diary_date": "2026-03-20",
+            "entry_time": "2026-03-20T22:00:00",
             "created_at": "2026-03-18T20:00:00",
             "updated_at": "2026-03-18T20:00:00",
+        })
+        db.insert_item({
+            "id": "d3",
+            "owner_id": owner_id,
+            "type": "diary",
+            "title": "同一天早些",
+            "content": "第三篇",
+            "diary_date": "2026-03-20",
+            "entry_time": "2026-03-20T08:00:00",
+            "created_at": "2026-03-20T08:00:00",
+            "updated_at": "2026-03-20T08:00:00",
         })
         db.insert_item({
             "id": "d1",
@@ -224,6 +239,7 @@ def test_database_get_items_supports_diary_date_sort_field():
             "title": "前一天",
             "content": "第一篇",
             "diary_date": "2026-03-19",
+            "entry_time": "2026-03-19T20:00:00",
             "created_at": "2026-03-21T20:00:00",
             "updated_at": "2026-03-21T20:00:00",
         })
@@ -234,7 +250,26 @@ def test_database_get_items_supports_diary_date_sort_field():
             limit=10,
         )
 
-        assert [item.id for item in items] == ["d1", "d2"]
+        assert [item.id for item in items] == ["d1", "d2", "d3"]
+
+        by_entry_time = db.get_items(
+            owner_id,
+            filters={"type": "diary", "sort_field": "entry_time", "sort_order": "DESC"},
+            limit=10,
+        )
+        assert [item.id for item in by_entry_time] == ["d2", "d3", "d1"]
+
+        items_module = _load_items_module()
+        response = items_module.list_items(
+            type="diary",
+            sort="entry_time",
+            order="desc",
+            page=1,
+            page_size=10,
+            owner_id=owner_id,
+            db=db,
+        )
+        assert [item["id"] for item in response["data"]["items"]] == ["d2", "d3", "d1"]
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -247,14 +282,17 @@ def test_items_api_source_maps_ledger_category_for_filters():
     assert 'filters[_resolve_category_field(type)] = category' in src
     assert 'where.append(f"{category_field} = ?")' in src
     assert "normalize_ledger_fields(item_data, partial=False)" in src
-    assert "normalize_ledger_fields(updates, partial=True)" in src
+    assert "normalize_ledger_fields(merged, partial=False)" in src
 
 
 def test_normalize_ledger_fields_sets_defaults_and_rejects_invalid_amount():
     result = normalize_ledger_fields({"title": "午饭", "amount": 18.5}, partial=False)
 
     assert result["amount"] == 18.5
-    assert result["direction"] == "expense"
+    assert result["amount_cents"] == 1850
+    assert result["transaction_type"] == "expense"
+    assert result["currency"] == "CNY"
+    assert result["account_name"] == "现金"
     assert result["ledger_category"] == "其他"
     assert result["ledger_date"]
 
@@ -262,15 +300,196 @@ def test_normalize_ledger_fields_sets_defaults_and_rejects_invalid_amount():
         normalize_ledger_fields({"title": "坏数据", "amount": 0}, partial=False)
 
 
-def test_normalize_ledger_fields_rejects_invalid_update_values():
-    with pytest.raises(ValueError, match="Invalid ledger direction"):
-        normalize_ledger_fields({"direction": "sideways"}, partial=True)
+def test_update_ledger_item_recomputes_amount_cents_when_amount_changes():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_amount_update_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-ledger-amount"
+    items_module = _load_items_module()
+
+    try:
+        db.insert_item({
+            "id": "ledger_amount",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "午饭",
+            "amount": 12.34,
+            "amount_cents": 1234,
+            "transaction_type": "expense",
+            "currency": "CNY",
+            "ledger_category": "餐饮",
+            "ledger_date": "2026-04-29",
+            "account_name": "现金",
+            "created_at": "2026-04-29T12:00:00",
+            "updated_at": "2026-04-29T12:00:00",
+        })
+
+        response = items_module.update_item(
+            "ledger_amount",
+            body=items_module.ItemUpdate(amount=56.78),
+            owner_id=owner_id,
+            db=db,
+        )
+        item = db.get_item("ledger_amount", owner_id=owner_id)
+
+        assert response["ok"] is True
+        assert item.amount == 56.78
+        assert item.amount_cents == 5678
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_database_row_to_item_does_not_mask_incomplete_ledger_rows():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_strict_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-ledger-strict"
+
+    try:
+        with db.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO items
+                    (id, owner_id, type, title, amount, amount_cents, transaction_type,
+                     currency, ledger_category, ledger_date, account_name, created_at, updated_at)
+                VALUES
+                    (?, ?, 'ledger', '脏账目', 12.0, 1200, NULL, NULL, '其他', '2026-03-25', NULL, ?, ?)
+                """,
+                (
+                    "ledger_dirty",
+                    owner_id,
+                    "2026-03-25T12:00:00",
+                    "2026-03-25T12:00:00",
+                ),
+            )
+
+        item = db.get_item("ledger_dirty", owner_id=owner_id)
+
+        assert item is not None
+        assert item.transaction_type is None
+        assert item.currency is None
+        assert item.account_name is None
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_normalize_ledger_fields_handles_transfer_and_rejects_invalid_update_values():
+    result = normalize_ledger_fields({
+        "title": "信用卡还款",
+        "amount_cents": 120000,
+        "transaction_type": "transfer",
+        "account_name": "招行储蓄卡",
+        "counter_account_name": "招行信用卡",
+        "ledger_category": "",
+    }, partial=False)
+
+    assert result["amount"] == 1200
+    assert result["transaction_type"] == "transfer"
+    assert result["ledger_category"] == "转账"
+    assert result["account_name"] == "招行储蓄卡"
+    assert result["counter_account_name"] == "招行信用卡"
+
+    with pytest.raises(ValueError, match="Invalid ledger transaction type"):
+        normalize_ledger_fields({"transaction_type": "sideways"}, partial=True)
+
+    with pytest.raises(ValueError, match="different"):
+        normalize_ledger_fields({
+            "title": "坏转账",
+            "amount": 10,
+            "transaction_type": "transfer",
+            "account_name": "微信",
+            "counter_account_name": "微信",
+        }, partial=False)
 
     with pytest.raises(ValueError, match="expected YYYY-MM-DD"):
         normalize_ledger_fields({"ledger_date": "2026/03/25"}, partial=True)
 
 
-def test_normalize_event_fields_ignores_legacy_leaf_fields_and_deduplicates_reminders():
+def test_ledger_aggregate_tracks_transfer_separately_and_lists_accounts():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_ledger_v2_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-ledger-v2"
+    items_module = _load_items_module()
+
+    try:
+        for record in [
+            {
+                "id": "expense_1",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "午饭",
+                "amount_cents": 3250,
+                "transaction_type": "expense",
+                "ledger_category": "餐饮",
+                "ledger_date": "2026-03-18",
+                "account_name": "微信",
+                "merchant": "食堂",
+            },
+            {
+                "id": "income_1",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "工资",
+                "amount_cents": 500000,
+                "transaction_type": "income",
+                "ledger_category": "工资",
+                "ledger_date": "2026-03-18",
+                "account_name": "招行",
+                "merchant": "公司",
+            },
+            {
+                "id": "transfer_1",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "信用卡还款",
+                "amount_cents": 120000,
+                "transaction_type": "transfer",
+                "ledger_category": "转账",
+                "ledger_date": "2026-03-18",
+                "account_name": "微信",
+                "counter_account_name": "招行信用卡",
+            },
+        ]:
+            db.insert_item(record)
+
+        aggregate = items_module.aggregate_items(
+            type="ledger",
+            start_date="2026-03-01",
+            end_date="2026-03-31",
+            owner_id=owner_id,
+            db=db,
+        )["data"]
+        transfer_account = items_module.aggregate_items(
+            type="ledger",
+            account_name="招行信用卡",
+            start_date="2026-03-01",
+            end_date="2026-03-31",
+            owner_id=owner_id,
+            db=db,
+        )["data"]
+        accounts = items_module.list_ledger_accounts(owner_id=owner_id, db=db)["data"]["accounts"]
+
+        assert aggregate == {
+            "income": 5000,
+            "expense": 32.5,
+            "transfer": 1200,
+            "balance": 4967.5,
+            "count": 3,
+        }
+        assert transfer_account == {
+            "income": 0,
+            "expense": 0,
+            "transfer": 1200,
+            "balance": 0,
+            "count": 1,
+        }
+        assert accounts == ["微信", "招行", "招行信用卡"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_normalize_event_fields_normalizes_event_graph_fields_and_deduplicates_reminders():
     result = normalize_event_fields({
         "title": "  发布准备  ",
         "category": "项目",
@@ -278,10 +497,7 @@ def test_normalize_event_fields_ignores_legacy_leaf_fields_and_deduplicates_remi
         "notes": "  备注  ",
         "start_time": "2026-03-13T18:00",
         "end_time": "2026-03-14T10:00",
-        "rrule": "FREQ=WEEKLY",
-        "parent_id": "legacy-parent",
-        "remind_policy_id": "legacy-policy",
-        "milestones": [{"name": "旧节点", "time": "2026-03-14T10:00"}],
+        "event_role": "single",
         "remind_times": [
             "2026-03-13T17:00",
             "2026-03-13T17:00",
@@ -294,10 +510,7 @@ def test_normalize_event_fields_ignores_legacy_leaf_fields_and_deduplicates_remi
     assert result["notes"] == "备注"
     assert result["start_time"] == "2026-03-13T18:00:00"
     assert result["end_time"] == "2026-03-14T10:00:00"
-    assert "milestones" not in result
-    assert "rrule" not in result
-    assert "parent_id" not in result
-    assert "remind_policy_id" not in result
+    assert result["event_role"] == "single"
     assert result["remind_times"] == ["2026-03-13T17:00:00", "2026-03-13T18:00:00"]
 
     with pytest.raises(ValueError, match="after start_time"):
@@ -307,18 +520,16 @@ def test_normalize_event_fields_ignores_legacy_leaf_fields_and_deduplicates_remi
             "end_time": "2026-03-13T10:00",
         }, partial=False)
 
-    with pytest.raises(ValueError, match="Event start_time is required"):
+    with pytest.raises(ValueError, match="Invalid event_role"):
         normalize_event_fields({
-            "title": "旧多节点 payload",
-            "milestones": [
-                {"name": "节点一", "time": "2026-03-13T10:00"},
-                {"name": "节点二", "time": "2026-03-13T10:00"},
-            ],
+            "title": "坏事件",
+            "start_time": "2026-03-14T10:00",
+            "event_role": "collection",
         }, partial=False)
 
 
-def test_event_update_route_ignores_legacy_multinode_payload_fields():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_event_legacy_payload_ignore_{uuid.uuid4().hex}"
+def test_event_update_route_preserves_event_notes_when_title_changes():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_event_update_preserves_notes_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-event-metadata"
@@ -339,10 +550,6 @@ def test_event_update_route_ignores_legacy_multinode_payload_fields():
 
         body = items_module.ItemUpdate(
             title="学术会议（更新标题）",
-            milestones=[
-                {"name": "会议开始", "time": "2026-04-22T12:43:00"},
-                {"name": "会议结束", "time": "2026-04-26T12:00:00"},
-            ],
         )
 
         result = items_module.update_item(
@@ -355,8 +562,7 @@ def test_event_update_route_ignores_legacy_multinode_payload_fields():
         assert result["ok"] is True
         updated = db.get_item("ev-note", owner_id=owner_id)
         assert updated is not None
-        assert not hasattr(updated, "milestones")
-        assert not hasattr(updated, "rrule")
+        assert updated.title == "学术会议（更新标题）"
         assert updated.notes == "全局备注"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -368,25 +574,30 @@ def test_normalize_task_fields_accepts_priority_five_and_manages_completed_at():
         "category": "工作",
         "priority": 5,
         "status": "done",
-        "due_time": "2026-03-26T18:00",
+        "plan_date": "2026-03-26",
+        "deadline_at": "2026-03-26T18:00",
     }, partial=False)
 
     assert task["priority"] == 5
     assert task["status"] == "done"
-    assert task["due_time"] == "2026-03-26T18:00:00"
+    assert task["plan_date"] == "2026-03-26"
+    assert task["deadline_at"] == "2026-03-26T18:00:00"
     assert task["completed_at"]
 
     reopened = normalize_task_fields({
         **task,
-        "status": "in_progress",
+        "status": "open",
     }, partial=False)
     assert reopened["completed_at"] is None
 
     with pytest.raises(ValueError, match="Invalid task status"):
         normalize_task_fields({"title": "坏任务", "status": "stuck"}, partial=False)
 
-    with pytest.raises(ValueError, match="due_time"):
-        normalize_task_fields({"title": "坏任务", "due_time": "tomorrow"}, partial=False)
+    with pytest.raises(ValueError, match="deadline_at"):
+        normalize_task_fields({"title": "坏任务", "deadline_at": "tomorrow"}, partial=False)
+
+    with pytest.raises(ValueError, match="legacy task field"):
+        normalize_task_fields({"title": "坏任务", "due_time": "2026-03-26T18:00"}, partial=False)
 
 
 def test_item_create_model_source_accepts_nullable_text_fields():
@@ -405,19 +616,21 @@ def test_task_update_route_preserves_explicit_nulls_for_clearing_fields():
         "title": "清空字段",
         "content": "旧备注",
         "category": "工作",
-        "status": "todo",
+        "status": "open",
         "priority": 2,
-        "due_time": "2026-03-26T18:00:00",
+        "plan_date": "2026-03-26",
+        "deadline_at": "2026-03-26T18:00:00",
         "created_at": "2026-03-30T09:00:00",
         "updated_at": "2026-03-30T09:00:00",
     }
     merged = dict(existing)
-    merged.update({"due_time": None, "category": None, "content": None})
+    merged.update({"deadline_at": None, "plan_date": None, "category": None, "content": None})
 
     updated = normalize_task_fields(merged, partial=False)
 
-    assert updated["due_time"] is None
-    assert updated["category"] == "2026-03-30"
+    assert updated["deadline_at"] is None
+    assert updated["plan_date"] is None
+    assert updated["category"] == "未分类"
     assert updated["content"] == ""
 
 
@@ -525,16 +738,15 @@ def test_database_migration_adds_note_reference_columns_to_old_items_table(tmp_p
                 event_collection_id TEXT,
                 event_collection_kind TEXT,
                 event_index INTEGER,
-                event_node_key TEXT,
-                source_item_id TEXT,
-                due_time TEXT,
-                priority INTEGER,
-                status TEXT,
-                estimate INTEGER,
-                subtasks TEXT,
-                dependencies TEXT,
-                progress INTEGER DEFAULT 0,
-                completed_at TEXT,
+            event_node_key TEXT,
+            source_item_id TEXT,
+            plan_date TEXT,
+            deadline_at TEXT,
+            priority INTEGER,
+            status TEXT,
+            completed_at TEXT,
+            cancelled_at TEXT,
+            repeat_rule TEXT,
                 mood TEXT,
                 mood_score INTEGER,
                 weather TEXT,
@@ -542,9 +754,7 @@ def test_database_migration_adds_note_reference_columns_to_old_items_table(tmp_p
                 diary_date TEXT,
                 notes TEXT,
                 amount REAL,
-                direction TEXT,
                 ledger_category TEXT,
-                payment_method TEXT,
                 ledger_date TEXT,
                 remark TEXT
             )
@@ -600,7 +810,7 @@ def test_item_update_note_logs_edit_details_for_web_undo():
             "type": "task",
             "title": "关联待办",
             "content": "",
-            "status": "todo",
+            "status": "open",
             "priority": 3,
             "created_at": "2026-04-01T11:00:00",
             "updated_at": "2026-04-01T11:00:00",
@@ -726,16 +936,22 @@ def test_normalize_diary_fields_requires_content_and_clears_optional_values():
         "weather": "☀️ 晴",
         "mood_score": "8",
         "template_id": "",
+        "entry_time": "2026-03-26T21:30:00",
+        "template_answers": [{"prompt": "今天做了什么", "answer": "散步"}],
+        "is_favorite": "true",
     }, partial=False)
 
     assert diary["diary_date"] == "2026-03-26"
     assert diary["title"] == "夜晚散步"
     assert diary["content"] == "今天散步很舒服。"
     assert diary["location"] == "江边"
-    assert diary["mood"] == "😊"
+    assert diary["mood"] == "happy"
     assert diary["weather"] == "☀️ 晴"
     assert diary["mood_score"] == 8
     assert diary["template_id"] is None
+    assert diary["entry_time"] == "2026-03-26T21:30:00"
+    assert diary["template_answers"] == [{"prompt": "今天做了什么", "answer": "散步"}]
+    assert diary["is_favorite"] is True
 
     cleared = normalize_diary_fields({
         **diary,
@@ -743,12 +959,21 @@ def test_normalize_diary_fields_requires_content_and_clears_optional_values():
         "location": None,
         "weather": "",
         "mood_score": "",
+        "template_answers": "",
+        "is_favorite": "",
     }, partial=False)
 
     assert cleared["title"] == ""
     assert cleared["location"] == ""
     assert cleared["weather"] == ""
     assert cleared["mood_score"] is None
+    assert cleared["template_answers"] == []
+    assert cleared["is_favorite"] is False
+    assert normalize_diary_fields({
+        "diary_date": "2026-03-26",
+        "content": "正文",
+        "is_favorite": "false",
+    }, partial=False)["is_favorite"] is False
 
     with pytest.raises(ValueError, match="Diary content cannot be empty"):
         normalize_diary_fields({"diary_date": "2026-03-26", "content": ""}, partial=False)
@@ -758,6 +983,46 @@ def test_normalize_diary_fields_requires_content_and_clears_optional_values():
 
     with pytest.raises(ValueError, match="between 1 and 10"):
         normalize_diary_fields({"diary_date": "2026-03-26", "content": "正文", "mood_score": 11}, partial=False)
+
+
+def test_normalize_item_fields_rejects_legacy_event_and_task_fields():
+    with pytest.raises(ValueError, match="Unsupported event field: milestones"):
+        normalize_item_fields({
+            "type": "event",
+            "title": "旧事件",
+            "start_time": "2026-03-26T10:00:00",
+            "milestones": [],
+        }, partial=False)
+
+    with pytest.raises(ValueError, match="Unsupported task field: due_time"):
+        normalize_item_fields({
+            "type": "task",
+            "title": "旧待办",
+            "due_time": "2026-03-26T18:00:00",
+        }, partial=False)
+
+
+def test_items_api_create_diary_defaults_entry_time_to_diary_date(monkeypatch, tmp_path):
+    mod = _load_items_module()
+    db = Database(str(tmp_path / "pendo_diary_api.db"))
+    owner_id = "u-diary-api"
+    monkeypatch.setattr(
+        mod,
+        "now_in_timezone",
+        lambda _owner_id, _db: datetime(2026, 4, 29, 21, 30, 45),
+    )
+    body = mod.ItemCreate(
+        type="diary",
+        title="",
+        content="补写当天记录",
+        diary_date="2026-01-31",
+    )
+
+    response = mod.create_item(body, owner_id=owner_id, db=db)
+    saved = db.get_item(response["data"]["id"], owner_id=owner_id)
+
+    assert saved.entry_time == "2026-01-31T21:30:45"
+    assert saved.title == "2026-01-31 21:30 日记"
 
 
 def test_items_api_source_supports_note_filters_and_normalization():
@@ -772,14 +1037,28 @@ def test_items_api_source_supports_note_filters_and_normalization():
     assert 'SELECT DISTINCT {category_field}' in src
 
 
-def test_items_api_source_supports_diary_normalization_and_same_day_conflict():
+def test_items_api_source_supports_diary_normalization_and_multiple_entries():
     src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")
 
     assert "normalize_diary_fields(item_data, partial=False)" in src
     assert "normalized = normalize_diary_fields(merged, partial=False)" in src
-    assert "Diary already exists for this date" in src
-    assert "db.has_diary_for_date(owner_id, diary_date)" in src
     assert '"diary_date"' in src
+    assert '"entry_time"' in src
+    assert '"template_answers"' in src
+    assert "Diary already exists for this date" not in src
+
+
+def test_shared_web_components_escape_rendered_user_text():
+    component_dir = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "components"
+    form_src = (component_dir / "form.js").read_text(encoding="utf-8")
+    modal_src = (component_dir / "modal.js").read_text(encoding="utf-8")
+    toast_src = (component_dir / "toast.js").read_text(encoding="utf-8")
+
+    assert "escapeAttr(value)" in form_src
+    assert "escapeHtml(value)" in form_src
+    assert "escapeHtml(title)" in modal_src
+    assert "escapeHtml(message)" in modal_src
+    assert "escapeHtml(message)" in toast_src
 
 
 def test_event_validation_rejects_invalid_merged_update_values():
@@ -923,7 +1202,7 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
             "type": "ledger",
             "title": "早餐",
             "amount": 12,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": "2026-03-20",
             "created_at": "2026-03-20T08:00:00",
@@ -934,7 +1213,7 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
             "type": "ledger",
             "title": "午餐",
             "amount": 24,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": "2026-03-20",
             "created_at": "2026-03-20T12:00:00",
@@ -945,7 +1224,7 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
             "type": "ledger",
             "title": "地铁",
             "amount": 6,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "交通",
             "ledger_date": "2026-03-21",
             "created_at": "2026-03-21T09:00:00",
@@ -956,7 +1235,7 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
             "type": "ledger",
             "title": "工资",
             "amount": 5000,
-            "direction": "income",
+            "transaction_type": "income",
             "ledger_category": "工资",
             "ledger_date": "2026-03-21",
             "created_at": "2026-03-21T10:00:00",
@@ -972,7 +1251,7 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
 
         assert result["summary"]["expense_total"] == 36
         assert result["summary"]["income_total"] == 0
-        assert result["summary"]["focus_direction"] == "expense"
+        assert result["summary"]["focus_transaction_type"] == "expense"
         assert result["summary"]["focus_count"] == 2
         assert len(result["expense_categories"]) == 1
         assert result["expense_categories"][0]["category"] == "餐饮"
@@ -1001,7 +1280,7 @@ def test_build_ledger_insights_switches_focus_with_income_filter():
                 "type": "ledger",
                 "title": "稿费",
                 "amount": 500,
-                "direction": "income",
+                "transaction_type": "income",
                 "ledger_category": "副业",
                 "ledger_date": "2026-03-02",
                 "created_at": "2026-03-02T09:00:00",
@@ -1012,7 +1291,7 @@ def test_build_ledger_insights_switches_focus_with_income_filter():
                 "type": "ledger",
                 "title": "奖金",
                 "amount": 800,
-                "direction": "income",
+                "transaction_type": "income",
                 "ledger_category": "奖金",
                 "ledger_date": "2026-03-18",
                 "created_at": "2026-03-18T09:00:00",
@@ -1023,7 +1302,7 @@ def test_build_ledger_insights_switches_focus_with_income_filter():
                 "type": "ledger",
                 "title": "午饭",
                 "amount": 30,
-                "direction": "expense",
+                "transaction_type": "expense",
                 "ledger_category": "餐饮",
                 "ledger_date": "2026-03-10",
                 "created_at": "2026-03-10T12:00:00",
@@ -1034,12 +1313,12 @@ def test_build_ledger_insights_switches_focus_with_income_filter():
         result = build_ledger_insights(
             db=db,
             owner_id=owner_id,
-            direction="income",
+            transaction_type="income",
             start_date="2026-03-01",
             end_date="2026-03-31",
         )
 
-        assert result["summary"]["focus_direction"] == "income"
+        assert result["summary"]["focus_transaction_type"] == "income"
         assert result["summary"]["focus_total"] == 1300
         assert result["summary"]["focus_count"] == 2
         assert [item["category"] for item in result["expense_categories"]] == ["奖金", "副业"]
@@ -1065,7 +1344,7 @@ def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
             "type": "ledger",
             "title": "今年一月",
             "amount": 100,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": "2026-01-10",
             "created_at": "2026-01-10T10:00:00",
@@ -1076,7 +1355,7 @@ def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
             "type": "ledger",
             "title": "今年三月",
             "amount": 50,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "交通",
             "ledger_date": "2026-03-10",
             "created_at": "2026-03-10T10:00:00",
@@ -1087,7 +1366,7 @@ def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
             "type": "ledger",
             "title": "去年同期",
             "amount": 100,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": "2025-02-10",
             "created_at": "2025-02-10T10:00:00",
@@ -1098,7 +1377,7 @@ def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
             "type": "ledger",
             "title": "上一周期高支出",
             "amount": 500,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "服务",
             "ledger_date": "2025-11-10",
             "created_at": "2025-11-10T10:00:00",
@@ -1133,7 +1412,7 @@ def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_cr
                 "type": "ledger",
                 "title": "月初补录",
                 "amount": 10,
-                "direction": "expense",
+                "transaction_type": "expense",
                 "ledger_category": "餐饮",
                 "ledger_date": "2026-03-01",
                 "created_at": "2026-04-01T09:00:00",
@@ -1144,7 +1423,7 @@ def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_cr
                 "type": "ledger",
                 "title": "月中消费",
                 "amount": 25,
-                "direction": "expense",
+                "transaction_type": "expense",
                 "ledger_category": "餐饮",
                 "ledger_date": "2026-03-05",
                 "created_at": "2026-03-05T09:00:00",
@@ -1155,7 +1434,7 @@ def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_cr
                 "type": "ledger",
                 "title": "月底消费",
                 "amount": 40,
-                "direction": "expense",
+                "transaction_type": "expense",
                 "ledger_category": "交通",
                 "ledger_date": "2026-03-28",
                 "created_at": "2026-03-28T09:00:00",
@@ -1204,7 +1483,7 @@ def test_build_ledger_insights_clips_current_period_visuals_to_today():
                 "type": "ledger",
                 "title": "月初消费",
                 "amount": 48,
-                "direction": "expense",
+                "transaction_type": "expense",
                 "ledger_category": "餐饮",
                 "ledger_date": "2026-04-01",
                 "created_at": "2026-04-01T09:00:00",
@@ -1215,7 +1494,7 @@ def test_build_ledger_insights_clips_current_period_visuals_to_today():
                 "type": "ledger",
                 "title": "今天消费",
                 "amount": 28,
-                "direction": "expense",
+                "transaction_type": "expense",
                 "ledger_category": "交通",
                 "ledger_date": "2026-04-08",
                 "created_at": "2026-04-08T09:00:00",
@@ -1276,14 +1555,14 @@ def test_ledger_page_source_stabilizes_quick_add_and_custom_range_layout():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "ledger.js").read_text(encoding="utf-8")
 
     assert "box-sizing: border-box;" in src
-    assert "--ledger-qa-direction-width: 128px;" in src
+    assert "--ledger-qa-transaction-type-width: 128px;" in src
     assert "--ledger-qa-control-width: 176px;" in src
     assert "display: flex;" in src
     assert "flex-wrap: wrap;" in src
     assert ".ledger-quick-add .pselect { width: auto; max-width: 100%; }" in src
-    assert "width: var(--ledger-qa-direction-width);" in src
+    assert "width: var(--ledger-qa-transaction-type-width);" in src
     assert "width: min(100%, var(--ledger-qa-control-width));" in src
-    assert "--ledger-qa-direction-width: 108px;" in src
+    assert "--ledger-qa-transaction-type-width: 108px;" in src
     assert "--ledger-qa-control-width: 136px;" in src
     assert "grid-template-columns: minmax(0, 1fr);" in src
     assert "width: 100%;" in src
@@ -1382,8 +1661,8 @@ def test_ledger_insights_component_uses_time_scaled_candle_axis():
     assert "const candleDomainIndex = domainIndex.get(item.key) ?? index;" in src
     assert "const labelIndexes = pickEvenAxisIndexes(domainKeys.length, 5);" in src
     assert "buildCandleSvg(candles, timeline.map((item) => item.key))" in src
-    assert "const focusDirection = summary.focus_direction === 'income' ? 'income' : 'expense';" in src
-    assert "const focusLabel = focusDirection === 'income' ? '收入' : '支出';" in src
+    assert "['income', 'expense', 'transfer'].includes(summary.focus_transaction_type)" in src
+    assert "focusTransactionType === 'transfer' ? '转账' : '支出'" in src
 
 
 def test_items_api_source_normalizes_events_before_create_and_update():

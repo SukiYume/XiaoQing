@@ -7,21 +7,26 @@ import { renderLedgerInsightsPanel } from '../components/ledger_insights.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { formatAmount, isoDate, isValidDateInput, todayStr as sharedTodayStr } from '../utils/format.js';
 import { derivePresetRange, todayRangeKey } from '../utils/date_ranges.js';
-import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 50;
 
 const LEDGER_FIELDS = [
-    { name: 'direction', label: '类型', type: 'select', options: [
+    { name: 'transaction_type', label: '类型', type: 'select', options: [
         { value: 'expense', label: '支出' },
         { value: 'income',  label: '收入' },
+        { value: 'transfer', label: '转账' },
     ]},
     { name: 'amount',          label: '金额', type: 'number', required: true, step: '0.01' },
+    { name: 'currency',        label: '币种', type: 'text',   placeholder: 'CNY' },
     { name: 'title',           label: '摘要', type: 'text',   required: true },
     { name: 'ledger_category', label: '分类', type: 'text',   placeholder: '其他' },
     { name: 'ledger_date',     label: '日期', type: 'date' },
+    { name: 'account_name',    label: '账户', type: 'text',   placeholder: '现金' },
+    { name: 'counter_account_name', label: '转入账户', type: 'text', placeholder: '转账时填写' },
+    { name: 'merchant',        label: '商户/对方', type: 'text' },
     { name: 'remark',          label: '备注', type: 'textarea' },
 ];
 
@@ -34,16 +39,18 @@ let _items              = [];
 let _total              = 0;
 let _page               = 1;
 let _dateFilter         = 'month';   // 'today' | 'week' | 'month' | 'quarter' | 'year' | 'last_year' | 'all' | 'custom'
-let _directionFilter    = '';        // '' | 'income' | 'expense'
+let _transactionTypeFilter = '';     // '' | 'income' | 'expense' | 'transfer'
 let _categoryFilter     = '';
+let _accountFilter      = '';
 let _amountMin          = '';
 let _amountMax          = '';
 let _sortMode           = 'date';    // 'date' | 'amount'
 let _customDateStart    = '';
 let _customDateEnd      = '';
-let _summaryData        = { income: 0, expense: 0, balance: 0, count: 0 };
+let _summaryData        = { income: 0, expense: 0, transfer: 0, balance: 0, count: 0 };
 let _insightsData       = null;
 let _allCategories      = [];
+let _allAccounts        = [];
 let _dataChangedHandler = null;
 
 // ── date helpers ──────────────────────────────────────────────────────────────
@@ -103,8 +110,9 @@ async function fetchItems(page) {
     const range = dateRangeForFilter(_dateFilter);
     if (range.start_date) params.start_date = range.start_date;
     if (range.end_date)   params.end_date   = range.end_date;
-    if (_directionFilter) params.direction  = _directionFilter;
+    if (_transactionTypeFilter) params.transaction_type = _transactionTypeFilter;
     if (_categoryFilter)  params.category   = _categoryFilter;
+    if (_accountFilter)   params.account_name = _accountFilter;
     if (_amountMin !== '') params.amount_min = parseFloat(_amountMin);
     if (_amountMax !== '') params.amount_max = parseFloat(_amountMax);
 
@@ -120,8 +128,9 @@ async function fetchAggregate() {
     const range = dateRangeForFilter(_dateFilter);
     if (range.start_date) params.start_date = range.start_date;
     if (range.end_date)   params.end_date   = range.end_date;
-    if (_directionFilter) params.direction  = _directionFilter;
+    if (_transactionTypeFilter) params.transaction_type = _transactionTypeFilter;
     if (_categoryFilter)  params.category   = _categoryFilter;
+    if (_accountFilter)   params.account_name = _accountFilter;
     if (_amountMin !== '') params.amount_min = parseFloat(_amountMin);
     if (_amountMax !== '') params.amount_max = parseFloat(_amountMax);
 
@@ -138,6 +147,15 @@ async function fetchCategories() {
     }
 }
 
+async function fetchAccounts() {
+    try {
+        const res = await api.get('/items/ledger/accounts');
+        return res.data?.accounts ?? ['现金'];
+    } catch {
+        return ['现金'];
+    }
+}
+
 async function fetchInsights() {
     const params = {};
     if (_dateFilter !== 'all') {
@@ -146,8 +164,9 @@ async function fetchInsights() {
         if (range.end_date) params.end_date = range.end_date;
     }
     params.compare_mode = compareModeForFilter(_dateFilter);
-    if (_directionFilter) params.direction = _directionFilter;
+    if (_transactionTypeFilter) params.transaction_type = _transactionTypeFilter;
     if (_categoryFilter) params.category = _categoryFilter;
+    if (_accountFilter) params.account_name = _accountFilter;
     if (_amountMin !== '') params.amount_min = parseFloat(_amountMin);
     if (_amountMax !== '') params.amount_max = parseFloat(_amountMax);
 
@@ -546,7 +565,7 @@ function ensureStyles() {
 
         /* Quick-add bar */
         .ledger-quick-add {
-            --ledger-qa-direction-width: 128px;
+            --ledger-qa-transaction-type-width: 128px;
             --ledger-qa-control-width: 176px;
             display: flex;
             flex-wrap: wrap;
@@ -570,14 +589,17 @@ function ensureStyles() {
             outline: none;
         }
         .ledger-quick-add .pselect { width: auto; max-width: 100%; }
-        .ledger-quick-add .ledger-qa-direction {
+        .ledger-quick-add .ledger-qa-transaction-type {
             flex: 0 0 auto;
-            width: var(--ledger-qa-direction-width);
+            width: var(--ledger-qa-transaction-type-width);
             max-width: 100%;
         }
         .ledger-quick-add .ledger-qa-amount,
         .ledger-quick-add .ledger-qa-title,
         .ledger-quick-add .ledger-qa-category,
+        .ledger-quick-add .ledger-qa-account,
+        .ledger-quick-add .ledger-qa-counter,
+        .ledger-quick-add .ledger-qa-merchant,
         .ledger-quick-add .ledger-qa-date,
         .ledger-quick-add .ledger-qa-submit {
             flex: 0 0 auto;
@@ -628,11 +650,12 @@ function ensureStyles() {
             flex: 0 0 auto;
             width: min(100%, var(--ledger-filter-control-width));
         }
-        .ledger-filter-item--direction {
+        .ledger-filter-item--transaction-type {
             flex: 0 0 auto;
             width: min(100%, var(--ledger-filter-select-width));
         }
-        .ledger-filter-item--category {
+        .ledger-filter-item--category,
+        .ledger-filter-item--account {
             flex: 0 0 auto;
             width: min(100%, var(--ledger-filter-select-width));
         }
@@ -641,8 +664,9 @@ function ensureStyles() {
             width: min(100%, var(--ledger-filter-amount-width));
         }
         .ledger-filter-item--date .ledger-filter-controls,
-        .ledger-filter-item--direction .ledger-filter-controls,
-        .ledger-filter-item--category .ledger-filter-controls { width: 100%; }
+        .ledger-filter-item--transaction-type .ledger-filter-controls,
+        .ledger-filter-item--category .ledger-filter-controls,
+        .ledger-filter-item--account .ledger-filter-controls { width: 100%; }
         .ledger-filter-item--amount .ledger-filter-controls {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -683,16 +707,18 @@ function ensureStyles() {
             flex: 0 0 auto;
         }
         .ledger-filter-date,
-        .ledger-filter-direction,
+        .ledger-filter-transaction-type,
         .ledger-filter-category {
             width: 100%;
             flex: 0 0 auto;
         }
         .ledger-filter-item--date .pselect,
-        .ledger-filter-item--direction .pselect,
+        .ledger-filter-item--transaction-type .pselect,
+        .ledger-filter-item--account .pselect,
         .ledger-filter-item--category .pselect,
         .ledger-filter-item--date .pselect-trigger,
-        .ledger-filter-item--direction .pselect-trigger,
+        .ledger-filter-item--transaction-type .pselect-trigger,
+        .ledger-filter-item--account .pselect-trigger,
         .ledger-filter-item--category .pselect-trigger { width: 100%; }
         .ledger-amount-input,
         .ledger-custom-date-input {
@@ -788,7 +814,7 @@ function ensureStyles() {
                 padding: 22px 20px;
             }
             .ledger-quick-add {
-                --ledger-qa-direction-width: 108px;
+                --ledger-qa-transaction-type-width: 108px;
                 --ledger-qa-control-width: 136px;
             }
             .ledger-page-header {
@@ -828,7 +854,8 @@ function ensureStyles() {
                 align-items: flex-start;
             }
             .ledger-filter-item--date,
-            .ledger-filter-item--direction,
+            .ledger-filter-item--transaction-type,
+            .ledger-filter-item--account,
             .ledger-filter-item--category,
             .ledger-filter-item--amount {
                 flex-basis: 100%;
@@ -843,7 +870,7 @@ function ensureStyles() {
                 align-items: center;
             }
             .ledger-filter-date,
-            .ledger-filter-direction,
+            .ledger-filter-transaction-type,
             .ledger-filter-category {
                 width: 100%;
             }
@@ -1001,7 +1028,7 @@ function ensureStyles() {
 // ── render ────────────────────────────────────────────────────────────────────
 
 function renderSummaryCards() {
-    const { income, expense, balance } = _summaryData;
+    const { income, expense, transfer = 0, balance } = _summaryData;
     const balanceColor = balance >= 0 ? 'var(--color-success)' : 'var(--color-ledger)';
     return `
         <div class="ledger-summary-cards">
@@ -1026,23 +1053,33 @@ function renderSummaryCards() {
                     <div class="ledger-summary-label">结余</div>
                 </div>
             </div>
+            <div class="ledger-summary-card">
+                <div class="ledger-summary-icon">🔁</div>
+                <div>
+                    <div class="ledger-summary-value" style="color:var(--color-text);">${formatAmount(transfer)}</div>
+                    <div class="ledger-summary-label">转账</div>
+                </div>
+            </div>
         </div>`;
 }
 
 function renderQuickAdd() {
     const today = todayStr();
-    const dirSelect = renderCustomSelect({
-        id: 'qa-direction',
-        options: [{ value: 'expense', label: '支出' }, { value: 'income', label: '收入' }],
+    const typeSelect = renderCustomSelect({
+        id: 'qa-transaction-type',
+        options: [{ value: 'expense', label: '支出' }, { value: 'income', label: '收入' }, { value: 'transfer', label: '转账' }],
         selected: 'expense',
-        className: 'pselect-block pselect-theme-ledger ledger-qa-direction',
+        className: 'pselect-block pselect-theme-ledger ledger-qa-transaction-type',
     });
     return `
         <div class="ledger-quick-add" id="ledger-quick-add">
-            ${dirSelect}
+            ${typeSelect}
             <input type="number" class="ledger-qa-amount"   id="qa-amount"   placeholder="金额" step="0.01" min="0">
             <input type="text"   class="ledger-qa-title"    id="qa-title"    placeholder="摘要">
             <input type="text"   class="ledger-qa-category" id="qa-category" placeholder="分类（其他）">
+            <input type="text"   class="ledger-qa-account"  id="qa-account"  placeholder="账户（现金）">
+            <input type="text"   class="ledger-qa-counter"  id="qa-counter"  placeholder="转入账户">
+            <input type="text"   class="ledger-qa-merchant" id="qa-merchant" placeholder="商户/对方">
             <input type="text"   class="ledger-qa-date"     id="qa-date"     value="${today}" inputmode="numeric" placeholder="YYYY-MM-DD">
             <button class="ledger-qa-submit" id="qa-submit">+ 记录</button>
         </div>`;
@@ -1059,14 +1096,19 @@ function renderFilterBar() {
         { value: 'custom', label: '自定义' },
         { value: 'all',    label: '全部' },
     ];
-    const dirOptions = [
-        { value: '',        label: '全部方向' },
+    const typeOptions = [
+        { value: '',        label: '全部类型' },
         { value: 'expense', label: '支出' },
         { value: 'income',  label: '收入' },
+        { value: 'transfer', label: '转账' },
     ];
     const catOptions = [
         { value: '', label: '全部分类' },
         ..._allCategories.map(c => ({ value: c, label: c })),
+    ];
+    const accountOptions = [
+        { value: '', label: '全部账户' },
+        ..._allAccounts.map(c => ({ value: c, label: c })),
     ];
 
     const customVisible = _dateFilter === 'custom' ? '' : 'display:none;';
@@ -1085,10 +1127,16 @@ function renderFilterBar() {
                     </div>
                 </div>
             </div>
-            <div class="ledger-filter-item ledger-filter-item--direction">
-                <label>方向：</label>
+            <div class="ledger-filter-item ledger-filter-item--transaction-type">
+                <label>类型：</label>
                 <div class="ledger-filter-controls">
-                    ${renderCustomSelect({ id: 'filter-direction', options: dirOptions, selected: _directionFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-direction' })}
+                    ${renderCustomSelect({ id: 'filter-transaction-type', options: typeOptions, selected: _transactionTypeFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-transaction-type' })}
+                </div>
+            </div>
+            <div class="ledger-filter-item ledger-filter-item--account">
+                <label>账户：</label>
+                <div class="ledger-filter-controls">
+                    ${renderCustomSelect({ id: 'filter-account', options: accountOptions, selected: _accountFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-category' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--category">
@@ -1129,28 +1177,36 @@ function currentRangeLabel() {
 }
 
 function renderItemRow(item) {
-    const isIncome = item.direction === 'income';
-    const dirIcon  = isIncome ? '⬆️' : '⬇️';
-    const amtColor = isIncome ? 'var(--color-success)' : 'var(--color-ledger)';
-    const amtSign  = isIncome ? '+' : '-';
+    const txType = item.transaction_type || 'expense';
+    const isIncome = txType === 'income';
+    const isTransfer = txType === 'transfer';
+    const dirIcon  = isTransfer ? '↔' : (isIncome ? '⬆️' : '⬇️');
+    const amtColor = isTransfer ? 'var(--color-text)' : (isIncome ? 'var(--color-success)' : 'var(--color-ledger)');
+    const amtSign  = isTransfer ? '↔ ' : (isIncome ? '+' : '-');
     const meta     = _sortMode === 'amount' && item.ledger_date
-        ? `<span class="ledger-row-meta">${item.ledger_date}</span>`
+        ? `<span class="ledger-row-meta">${escapeHtml(item.ledger_date)}</span>`
         : '';
     const catBadge = item.ledger_category
-        ? `<span class="badge" style="font-size:11px;">${item.ledger_category}</span>`
+        ? `<span class="badge" style="font-size:11px;">${escapeHtml(item.ledger_category)}</span>`
         : '';
+    const accountText = isTransfer && item.counter_account_name
+        ? `${item.account_name || '现金'} → ${item.counter_account_name}`
+        : (item.account_name || '现金');
+    const accountMeta = `<span class="ledger-row-meta">${escapeHtml(accountText)}${item.merchant ? ' · ' + escapeHtml(item.merchant) : ''}</span>`;
+    const itemId = escapeHtml(item.id || '');
     return `
-        <div class="ledger-row" data-id="${item.id}">
+        <div class="ledger-row" data-id="${itemId}">
             <span class="ledger-dir-icon">${dirIcon}</span>
             <div class="ledger-row-main">
-                <span class="ledger-row-title" title="${item.title || ''}">${item.title || '(无摘要)'}</span>
+                <span class="ledger-row-title" title="${escapeHtml(item.title || '')}">${escapeHtml(item.title || '(无摘要)')}</span>
                 ${meta}
+                ${accountMeta}
             </div>
             ${catBadge}
             <span class="ledger-row-amount" style="color:${amtColor};">${amtSign}${formatAmount(item.amount)}</span>
             <div class="ledger-row-actions">
-                <button class="btn btn-icon btn-sm btn-edit-ledger"   data-id="${item.id}" title="编辑">✏️</button>
-                <button class="btn btn-icon btn-sm btn-delete-ledger" data-id="${item.id}" title="删除">🗑️</button>
+                <button class="btn btn-icon btn-sm btn-edit-ledger"   data-id="${itemId}" title="编辑">✏️</button>
+                <button class="btn btn-icon btn-sm btn-delete-ledger" data-id="${itemId}" title="删除">🗑️</button>
             </div>
         </div>`;
 }
@@ -1267,14 +1323,14 @@ function attachListeners() {
     const qaSubmit = _container.querySelector('#qa-submit');
     if (qaSubmit) qaSubmit.addEventListener('click', handleQuickAdd);
 
-    ['qa-amount', 'qa-title', 'qa-category'].forEach(id => {
+    ['qa-amount', 'qa-title', 'qa-category', 'qa-account', 'qa-counter', 'qa-merchant', 'qa-date'].forEach(id => {
         const el = _container.querySelector(`#${id}`);
         if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') handleQuickAdd(); });
     });
 
     // Custom selects — filter bar + quick-add
     initCustomSelects(_container, {
-        'qa-direction':     () => {}, // no state change needed; value read on submit
+        'qa-transaction-type': () => {}, // no state change needed; value read on submit
         'filter-date':      async (val) => {
             _dateFilter = val;
             _page = 1;
@@ -1290,8 +1346,9 @@ function attachListeners() {
                 await loadAndRender();
             }
         },
-        'filter-direction': async (val) => { _directionFilter = val; _page = 1; await loadAndRender(); },
+        'filter-transaction-type': async (val) => { _transactionTypeFilter = val; _page = 1; await loadAndRender(); },
         'filter-category':  async (val) => { _categoryFilter = val;  _page = 1; await loadAndRender(); },
+        'filter-account':   async (val) => { _accountFilter = val;   _page = 1; await loadAndRender(); },
     });
 
     // Custom date range inputs
@@ -1386,11 +1443,14 @@ function attachListeners() {
 async function handleQuickAdd() {
     if (!_container) return;
 
-    const dirCsel   = _container.querySelector('#qa-direction');
-    const direction = dirCsel?.dataset.value || 'expense';
+    const typeCsel = _container.querySelector('#qa-transaction-type');
+    const transactionType = typeCsel?.dataset.value || 'expense';
     const amountVal = _container.querySelector('#qa-amount').value.trim();
     const title     = _container.querySelector('#qa-title').value.trim();
-    const category  = _container.querySelector('#qa-category').value.trim() || '其他';
+    const category  = _container.querySelector('#qa-category').value.trim() || (transactionType === 'transfer' ? '转账' : '其他');
+    const account   = _container.querySelector('#qa-account').value.trim() || '现金';
+    const counter   = _container.querySelector('#qa-counter').value.trim();
+    const merchant  = _container.querySelector('#qa-merchant').value.trim();
     const dateVal   = _container.querySelector('#qa-date').value;
 
     if (!amountVal || isNaN(parseFloat(amountVal)) || parseFloat(amountVal) <= 0) {
@@ -1405,19 +1465,28 @@ async function handleQuickAdd() {
         showToast('请填写有效日期，格式为 YYYY-MM-DD', 'warning');
         return;
     }
+    if (transactionType === 'transfer' && !counter) {
+        showToast('转账需要填写转入账户', 'warning');
+        return;
+    }
 
     try {
         await api.post('/items', {
             type:            'ledger',
-            direction,
+            transaction_type: transactionType,
             amount:          parseFloat(amountVal),
             title,
             ledger_category: category,
             ledger_date:     dateVal || todayStr(),
+            account_name:    account,
+            counter_account_name: counter,
+            merchant,
+            currency:        'CNY',
         });
         showToast('记录已添加', 'success');
         _container.querySelector('#qa-amount').value = '';
         _container.querySelector('#qa-title').value  = '';
+        _container.querySelector('#qa-merchant').value = '';
         window.dispatchEvent(new CustomEvent('pendo-data-changed'));
         _page = 1;
         await loadAndRender(true);
@@ -1429,23 +1498,33 @@ async function handleQuickAdd() {
 // ── detail modal ──────────────────────────────────────────────────────────────
 
 export function openDetailModal(item) {
-    const isIncome = item.direction === 'income';
-    const amtColor = isIncome ? 'var(--color-success)' : 'var(--color-ledger)';
-    const amtSign  = isIncome ? '+' : '-';
-    const dirLabel = isIncome ? '收入' : '支出';
+    const txType = item.transaction_type || 'expense';
+    const isIncome = txType === 'income';
+    const isTransfer = txType === 'transfer';
+    const amtColor = isTransfer ? 'var(--color-text)' : (isIncome ? 'var(--color-success)' : 'var(--color-ledger)');
+    const amtSign  = isTransfer ? '↔ ' : (isIncome ? '+' : '-');
+    const dirLabel = txType === 'transfer' ? '转账' : (isIncome ? '收入' : '支出');
+    const accountText = isTransfer && item.counter_account_name
+        ? `${item.account_name || '现金'} → ${item.counter_account_name}`
+        : (item.account_name || '现金');
     const rows = [
         ['摘要', item.title],
         ['分类', item.ledger_category],
         ['日期', item.ledger_date],
+        ['账户', accountText],
+        ['商户/对方', item.merchant],
+        ['币种', item.currency],
         ['备注', item.remark],
     ].filter(([, value]) => value);
 
     const rowsHtml = rows.map(([label, value], index) => {
         const isLast = index === rows.length - 1;
+        const safeLabel = escapeHtml(String(label));
+        const safeValue = escapeHtml(String(value));
         return `
             <div style="display:flex;gap:12px;padding:12px 0;${isLast ? '' : 'border-bottom:1px solid var(--color-border);'}">
-                <span style="width:56px;flex-shrink:0;font-size:12px;color:var(--color-text-secondary);padding-top:2px;">${label}</span>
-                <span style="flex:1;font-size:14px;color:var(--color-text);word-break:break-word;line-height:1.6;">${value}</span>
+                <span style="width:56px;flex-shrink:0;font-size:12px;color:var(--color-text-secondary);padding-top:2px;">${safeLabel}</span>
+                <span style="flex:1;font-size:14px;color:var(--color-text);word-break:break-word;line-height:1.6;">${safeValue}</span>
             </div>`;
     }).join('');
 
@@ -1453,7 +1532,7 @@ export function openDetailModal(item) {
         <div style="margin:-2px 0;">
             <div style="display:flex;align-items:baseline;gap:8px;padding-bottom:16px;border-bottom:1px solid var(--color-border);margin-bottom:14px;">
                 <span style="font-size:28px;font-weight:700;color:${amtColor};">${amtSign}${formatAmount(item.amount)}</span>
-                <span style="font-size:13px;padding:2px 8px;border-radius:20px;background:${isIncome ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'};color:${amtColor};font-weight:600;">${dirLabel}</span>
+                <span style="font-size:13px;padding:2px 8px;border-radius:20px;background:${isTransfer ? 'rgba(15,23,42,0.08)' : (isIncome ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)')};color:${amtColor};font-weight:600;">${dirLabel}</span>
             </div>
             <div style="padding:0 14px;background:var(--color-bg);border:1px solid var(--color-border);border-radius:12px;">
                 ${rowsHtml}
@@ -1474,8 +1553,10 @@ export function openDetailModal(item) {
 function openEditModal(existing) {
     const fields = LEDGER_FIELDS.map(f => ({
         ...f,
-        value: existing[f.name] !== undefined && existing[f.name] !== null
-            ? String(existing[f.name]) : (f.value ?? ''),
+        value: f.name === 'transaction_type'
+            ? String(existing.transaction_type || 'expense')
+            : (existing[f.name] !== undefined && existing[f.name] !== null
+                ? String(existing[f.name]) : (f.value ?? '')),
     }));
 
     const bodyHTML = `<form id="ledger-edit-form">${buildFormHTML(fields)}</form>`;
@@ -1497,6 +1578,12 @@ function openEditModal(existing) {
         const data = getFormData(form);
         if (!data.title) { showToast('请填写摘要', 'warning'); return; }
         if (!data.amount || data.amount <= 0) { showToast('请填写有效金额', 'warning'); return; }
+        if (!data.currency) data.currency = 'CNY';
+        if (!data.account_name) data.account_name = '现金';
+        if (data.transaction_type === 'transfer' && !data.counter_account_name) {
+            showToast('转账需要填写转入账户', 'warning');
+            return;
+        }
         try {
             await api.put('/items/' + existing.id, data);
             showToast('记录已更新', 'success');
@@ -1537,17 +1624,23 @@ async function handleDelete(id) {
 async function loadAndRender(refreshCategories = false) {
     try {
         const fetches = [fetchItems(_page), fetchAggregate(), fetchInsights().catch(() => null)];
-        if (refreshCategories) fetches.push(fetchCategories());
+        if (refreshCategories) {
+            fetches.push(fetchCategories());
+            fetches.push(fetchAccounts());
+        }
         const results = await Promise.all(fetches);
         _items       = results[0].items;
         _total       = results[0].total;
         _summaryData = results[1];
         _insightsData = results[2];
-        if (refreshCategories) _allCategories = results[3];
+        if (refreshCategories) {
+            _allCategories = results[3];
+            _allAccounts = results[4];
+        }
     } catch (err) {
         _items       = [];
         _total       = 0;
-        _summaryData = { income: 0, expense: 0, balance: 0, count: 0 };
+        _summaryData = { income: 0, expense: 0, transfer: 0, balance: 0, count: 0 };
         _insightsData = null;
         showToast('加载账本失败：' + err.message, 'error');
     }
@@ -1562,12 +1655,12 @@ export async function render(container) {
     _total           = 0;
     _page            = 1;
     _sortMode        = 'date';
-    _summaryData     = { income: 0, expense: 0, balance: 0, count: 0 };
+    _summaryData     = { income: 0, expense: 0, transfer: 0, balance: 0, count: 0 };
     _insightsData    = null;
 
     renderPage(); // immediate skeleton
 
-    _allCategories = await fetchCategories();
+    [_allCategories, _allAccounts] = await Promise.all([fetchCategories(), fetchAccounts()]);
     await loadAndRender();
 
     _dataChangedHandler = (event) => {

@@ -1,9 +1,13 @@
 import { renderCustomSelect, initCustomSelects } from './custom_select.js';
+import { escapeAttr, escapeHtml } from '../utils/ui.js';
 
 export function buildFormHTML(fields) {
     return fields.map(field => {
         const required = field.required ? ' required' : '';
         const value = field.value ?? '';
+        const name = escapeAttr(field.name || '');
+        const label = escapeHtml(field.label || '');
+        const placeholder = escapeAttr(field.placeholder || '');
 
         let input;
         switch (field.type) {
@@ -20,22 +24,25 @@ export function buildFormHTML(fields) {
                 break;
             }
             case 'textarea':
-                input = `<textarea name="${field.name}" class="form-input" rows="${field.rows || 4}" placeholder="${field.placeholder || ''}"${required}>${value}</textarea>`;
+                input = `<textarea name="${name}" class="form-input" rows="${escapeAttr(field.rows || 4)}" placeholder="${placeholder}"${required}>${escapeHtml(value)}</textarea>`;
                 break;
             case 'datetime':
-                input = `<input type="datetime-local" name="${field.name}" class="form-input" value="${value}"${required}>`;
+                input = `<input type="datetime-local" name="${name}" class="form-input" value="${escapeAttr(value)}"${required}>`;
                 break;
             case 'date':
-                input = `<input type="text" name="${field.name}" class="form-input" value="${value}" inputmode="numeric" placeholder="${field.placeholder || 'YYYY-MM-DD'}"${required}>`;
+                input = `<input type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" inputmode="numeric" placeholder="${escapeAttr(field.placeholder || 'YYYY-MM-DD')}"${required}>`;
                 break;
             case 'number':
-                input = `<input type="number" name="${field.name}" class="form-input" value="${value}" step="${field.step || 'any'}" placeholder="${field.placeholder || ''}"${required}>`;
+                input = `<input type="number" name="${name}" class="form-input" value="${escapeAttr(value)}" min="${escapeAttr(field.min ?? '')}" max="${escapeAttr(field.max ?? '')}" step="${escapeAttr(field.step || 'any')}" placeholder="${placeholder}"${required}>`;
+                break;
+            case 'checkbox':
+                input = `<label class="form-checkbox"><input type="checkbox" name="${name}" class="form-input" ${value ? 'checked' : ''}> <span>${escapeHtml(field.checkboxLabel || '启用')}</span></label>`;
                 break;
             case 'tags':
-                input = `<input type="text" name="${field.name}" class="form-input" value="${value}" placeholder="${field.placeholder || '回车添加标签'}">`;
+                input = `<input type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" placeholder="${escapeAttr(field.placeholder || '回车添加标签')}">`;
                 break;
             case 'priority':
-                input = `<div class="priority-selector" data-name="${field.name}">
+                input = `<div class="priority-selector" data-name="${name}">
                     <button type="button" class="priority-btn priority-1${value == 1 ? ' active' : ''}" data-value="1">🔴</button>
                     <button type="button" class="priority-btn priority-2${value == 2 ? ' active' : ''}" data-value="2">🟠</button>
                     <button type="button" class="priority-btn priority-3${value == 3 ? ' active' : ''}" data-value="3">🟡</button>
@@ -44,18 +51,30 @@ export function buildFormHTML(fields) {
                 </div>`;
                 break;
             case 'mood':
-                input = `<div class="mood-selector" data-name="${field.name}">
-                    ${['😊', '😢', '😌', '🤩', '😠'].map(m =>
-                        `<button type="button" class="mood-btn${value === m ? ' active' : ''}" data-value="${m}">${m}</button>`
+                const moodOptions = field.options?.length ? field.options : [
+                    { value: 'happy', label: '开心', emoji: '😊' },
+                    { value: 'sad', label: '难过', emoji: '😢' },
+                    { value: 'calm', label: '平静', emoji: '😌' },
+                    { value: 'excited', label: '兴奋', emoji: '🤩' },
+                    { value: 'angry', label: '生气', emoji: '😠' },
+                ];
+                input = `<div class="mood-selector" data-name="${name}">
+                    ${moodOptions.map(m => {
+                        const optionValue = String(m.value ?? m.id ?? m.emoji ?? m);
+                        const optionLabel = String(m.label ?? optionValue);
+                        const optionEmoji = String(m.emoji ?? optionValue);
+                        const active = value === optionValue || value === optionEmoji;
+                        return `<button type="button" class="mood-btn${active ? ' active' : ''}" data-value="${escapeAttr(optionValue)}" title="${escapeAttr(optionLabel)}" aria-label="${escapeAttr(optionLabel)}">${escapeHtml(optionEmoji)}</button>`;
+                    }
                     ).join('')}
                 </div>`;
                 break;
             default:
-                input = `<input type="text" name="${field.name}" class="form-input" value="${value}" placeholder="${field.placeholder || ''}"${required}>`;
+                input = `<input type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" placeholder="${placeholder}"${required}>`;
         }
 
         return `<div class="form-group">
-            <label class="form-label">${field.label}${field.required ? ' <span class="text-danger">*</span>' : ''}</label>
+            <label class="form-label">${label}${field.required ? ' <span class="text-danger">*</span>' : ''}</label>
             ${input}
         </div>`;
     }).join('');
@@ -65,7 +84,9 @@ export function getFormData(container) {
     const data = {};
     container.querySelectorAll('.form-input').forEach(el => {
         if (el.name) {
-            if (el.type === 'number') {
+            if (el.type === 'checkbox') {
+                data[el.name] = el.checked;
+            } else if (el.type === 'number') {
                 data[el.name] = el.value ? parseFloat(el.value) : null;
             } else {
                 data[el.name] = el.value || null;

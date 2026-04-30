@@ -1,24 +1,10 @@
+import { escapeAttr, escapeHtml } from '../utils/ui.js';
+
 const CHEVRON_SVG = `<svg class="pselect-chevron" width="13" height="13" viewBox="0 0 13 13" fill="none">
     <path d="M3 5l3.5 3.5L10 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
 let docClickAttached = false;
-
-function escAttr(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-
-function escHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
 
 function normalizeOptions(options = []) {
     return options.map(option => {
@@ -52,26 +38,27 @@ export function renderCustomSelect({
     placeholder = '请选择',
 }) {
     const normalized = normalizeOptions(options);
+    const safeClassName = String(className || '').replace(/[^a-zA-Z0-9_\- ]/g, '');
     const current = normalized.find(o => String(o.value) === String(selected))
         || normalized[0]
         || { value: '', label: placeholder };
     const optionHtml = normalized.map(option => {
         const isSelected = String(option.value) === String(current.value);
         return `
-            <div class="pselect-option${isSelected ? ' pselect-selected' : ''}" data-value="${escAttr(option.value)}">
-                ${escHtml(option.label)}
+            <div class="pselect-option${isSelected ? ' pselect-selected' : ''}" data-value="${escapeAttr(option.value)}">
+                ${escapeHtml(option.label)}
             </div>`;
     }).join('');
 
     const hiddenInput = name
-        ? `<input type="hidden" class="form-input pselect-input" name="${escAttr(name)}" value="${escAttr(current.value)}">`
+        ? `<input type="hidden" class="form-input pselect-input" name="${escapeAttr(name)}" value="${escapeAttr(current.value)}">`
         : '';
 
     return `
-        <div class="pselect ${className}" id="${escAttr(id)}" data-value="${escAttr(current.value)}">
+        <div class="pselect ${safeClassName}" id="${escapeAttr(id)}" data-value="${escapeAttr(current.value)}">
             ${hiddenInput}
             <div class="pselect-trigger" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false">
-                <span class="pselect-label">${escHtml(current.label)}</span>
+                <span class="pselect-label">${escapeHtml(current.label)}</span>
                 ${CHEVRON_SVG}
             </div>
             <div class="pselect-panel" role="listbox">${optionHtml}</div>

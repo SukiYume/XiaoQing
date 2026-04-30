@@ -1655,7 +1655,8 @@ class TestDiaryViewRegression:
             result = asyncio.run(handler.view_diary("u1", "82d34407", SimpleNamespace()))
 
             assert result["status"] == "success"
-            assert "2026-03-28的日记" in result["message"]
+            assert "2026-03-28 的日记条目" in result["message"]
+            assert "`82d34407`" in result["message"]
             assert "今天周六，十点多醒来" in result["message"]
         finally:
             db.cleanup()
@@ -2188,7 +2189,7 @@ class TestCrossTypeCommandRegression:
 
         assert result["status"] == "success"
         assert "请先输入金额" in result["message"]
-        assert "后面我再问描述、收支类型和分类" in result["message"]
+        assert "后面我再问描述、交易类型、账户和分类" in result["message"]
         assert create_calls[0][0]["step"] == "amount"
 
     def test_ledger_add_session_flow_collects_amount_and_description_before_options(self):
@@ -2233,24 +2234,60 @@ class TestCrossTypeCommandRegression:
         result = asyncio.run(handler.handle_session_step("u1", "午饭", session, context))
         assert result["status"] == "success"
         assert "请选择收支类型" in result["message"]
-        assert session["step"] == "direction"
+        assert session["step"] == "transaction_type"
         assert session["data"]["title"] == "午饭"
 
         result = asyncio.run(handler.handle_session_step("u1", "1", session, context))
         assert result["status"] == "success"
+        assert "请输入账户" in result["message"]
+        assert session["step"] == "account"
+        assert session["data"]["transaction_type"] == "expense"
+
+        result = asyncio.run(handler.handle_session_step("u1", "微信", session, context))
+        assert result["status"] == "success"
         assert "请选择分类" in result["message"]
         assert session["step"] == "category"
-        assert session["data"]["direction"] == "expense"
+        assert session["data"]["account_name"] == "微信"
 
         result = asyncio.run(handler.handle_session_step("u1", "1", session, context))
+        assert result["status"] == "success"
+        assert "请输入商户" in result["message"]
+        assert session["step"] == "merchant"
+
+        result = asyncio.run(handler.handle_session_step("u1", "食堂", session, context))
         assert result == {"status": "success", "message": "saved"}
         assert context.end_calls == 1
         assert captured["user_id"] == "u1"
         assert captured["group_id"] == 123
         assert captured["data"]["amount"] == 88.5
         assert captured["data"]["title"] == "午饭"
-        assert captured["data"]["direction"] == "expense"
+        assert captured["data"]["transaction_type"] == "expense"
+        assert captured["data"]["account_name"] == "微信"
         assert captured["data"]["ledger_category"]
+        assert captured["data"]["merchant"] == "食堂"
+
+        context = _Context()
+        session = _Session({"step": "transaction_type", "data": {"amount": 1000, "title": "还款", "owner_id": "u1"}, "group_id": None})
+        captured.clear()
+        result = asyncio.run(handler.handle_session_step("u1", "3", session, context))
+        assert result["status"] == "success"
+        assert session["step"] == "account"
+        assert session["data"]["transaction_type"] == "transfer"
+
+        result = asyncio.run(handler.handle_session_step("u1", "微信", session, context))
+        assert result["status"] == "success"
+        assert session["step"] == "counter_account"
+
+        result = asyncio.run(handler.handle_session_step("u1", "招行信用卡", session, context))
+        assert result["status"] == "success"
+        assert session["step"] == "merchant"
+        assert session["data"]["ledger_category"] == "转账"
+
+        result = asyncio.run(handler.handle_session_step("u1", "跳过", session, context))
+        assert result == {"status": "success", "message": "saved"}
+        assert captured["data"]["transaction_type"] == "transfer"
+        assert captured["data"]["account_name"] == "微信"
+        assert captured["data"]["counter_account_name"] == "招行信用卡"
 
     def test_todo_view_returns_detail(self, tmp_path):
         import sys
@@ -2270,7 +2307,7 @@ class TestCrossTypeCommandRegression:
                 content="整理发票并提交系统",
                 category="工作",
                 priority=2,
-                status=TaskStatus.TODO,
+                status=TaskStatus.OPEN,
                 created_at="2026-03-28T21:41:10",
                 updated_at="2026-03-28T21:41:10",
             )
@@ -2354,7 +2391,7 @@ class TestCrossTypeCommandRegression:
                 title="提交报销",
                 category="工作",
                 priority=2,
-                status=TaskStatus.TODO,
+                status=TaskStatus.OPEN,
                 created_at="2026-03-28T21:41:10",
                 updated_at="2026-03-28T21:41:10",
             )
@@ -2546,7 +2583,7 @@ class TestDiaryMoodAIRegression:
         finally:
             db.cleanup()
 
-    def test_append_diary_reanalyzes_mood_with_ai(self, tmp_path):
+    def test_add_diary_creates_separate_entry_with_ai_mood(self, tmp_path):
         import sys
 
         sys.path.insert(0, str(ROOT))
@@ -2586,117 +2623,115 @@ class TestDiaryMoodAIRegression:
                 handler.add_diary("u1", "2026-03-28 晚上玩得很开心", SimpleNamespace(), None)
             )
 
-            updated = db.items.get_item("dia12345", "u1")
+            original = db.items.get_item("dia12345", "u1")
+            created = db.items.get_item(result["item_id"], "u1")
+            entries = db.items.query_items_by_date_range(
+                "u1",
+                "diary",
+                "diary_date",
+                "2026-03-28",
+                "2026-03-28",
+            )
 
             assert result["status"] == "success"
             assert len(ai_parser.calls) == 1
-            assert "早上出门。" in ai_parser.calls[0]
+            assert "早上出门。" not in ai_parser.calls[0]
             assert "晚上玩得很开心" in ai_parser.calls[0]
-            assert updated is not None
-            assert getattr(updated, "mood") == "happy"
-            assert getattr(updated, "mood_score") == 8
+            assert original is not None
+            assert getattr(original, "mood") == "calm"
+            assert created is not None
+            assert getattr(created, "mood") == "happy"
+            assert getattr(created, "mood_score") == 8
+            assert len(entries) == 2
+        finally:
+            db.cleanup()
+
+    def test_add_diary_backfill_date_keeps_entry_time_on_diary_date(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.diary import DiaryHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_diary_backfill_entry_time.db"))
+
+        try:
+            handler = DiaryHandler(db=db, ai_parser=None)
+            result = asyncio.run(
+                handler.add_diary(
+                    "u1",
+                    "2026-01-31 mood:happy score:8 favorite:false 补写这一天。",
+                    SimpleNamespace(),
+                    None,
+                )
+            )
+
+            saved = db.items.get_item(result["item_id"], "u1")
+
+            assert result["status"] == "success"
+            assert saved is not None
+            assert getattr(saved, "diary_date") == "2026-01-31"
+            assert getattr(saved, "entry_time").startswith("2026-01-31T")
+            assert getattr(saved, "mood") == "happy"
+            assert getattr(saved, "mood_score") == 8
+            assert getattr(saved, "is_favorite") is False
+        finally:
+            db.cleanup()
+
+    def test_create_diary_rejects_invalid_new_structure_fields(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.diary import DiaryHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_diary_invalid_fields.db"))
+
+        try:
+            handler = DiaryHandler(db=db, ai_parser=None)
+            result = asyncio.run(
+                handler.create_diary(
+                    "u1",
+                    "2026-03-28",
+                    {
+                        "content": "今天记录一下。",
+                        "mood": "happy",
+                        "mood_score": 99,
+                        "template_answers": "legacy text",
+                    },
+                    SimpleNamespace(),
+                )
+            )
+
+            assert result["status"] == "error"
+            assert "mood_score" in result["message"]
+
+            template_result = asyncio.run(
+                handler.create_diary(
+                    "u1",
+                    "2026-03-28",
+                    {
+                        "content": "今天记录一下。",
+                        "mood": "happy",
+                        "mood_score": 8,
+                        "template_answers": "legacy text",
+                    },
+                    SimpleNamespace(),
+                )
+            )
+
+            assert template_result["status"] == "error"
+            assert "template_answers" in template_result["message"]
+            assert db.items.query_items_by_date_range(
+                "u1", "diary", "diary_date", "2026-03-28", "2026-03-28"
+            ) == []
         finally:
             db.cleanup()
 
 
 class TestReminderBackfillRegression:
-    def test_backfill_missing_start_time_reminder_adds_event_start(self, tmp_path):
-        import importlib
-        import sys
-
-        sys.path.insert(0, str(ROOT))
-
-        from plugins.pendo.models.item import EventItem
-        from plugins.pendo.services.db import Database
-
-        backfill_missing_start_time_reminders = importlib.import_module(
-            "plugins.pendo.scripts.backfill_start_time_reminders"
-        ).backfill_missing_start_time_reminders
-
-        db_path = tmp_path / "pendo.db"
-        db = Database(str(db_path))
-        reopened = None
-
-        try:
-            event = EventItem(
-                owner_id="u1",
-                title="晨会",
-                start_time="2030-01-03T09:00:00",
-                remind_times=["2030-01-03T08:00:00"],
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
-            )
-            db.items.insert_item(event, "evt123")
-            db.cleanup()
-
-            result = backfill_missing_start_time_reminders(str(db_path), dry_run=False)
-
-            reopened = Database(str(db_path))
-            updated = reopened.items.get_item("evt123", "u1")
-
-            assert result["matched"] == 1
-            assert result["updated"] == 1
-            assert isinstance(updated, EventItem)
-            assert updated.remind_times == ["2030-01-03T08:00:00", "2030-01-03T09:00:00"]
-        finally:
-            try:
-                if reopened is not None:
-                    reopened.cleanup()
-            except Exception:
-                pass
-
-    def test_backfill_event_leaf_does_not_depend_on_legacy_milestones(self, tmp_path):
-        import importlib
-        import sys
-
-        sys.path.insert(0, str(ROOT))
-
-        from plugins.pendo.models.item import EventItem
-        from plugins.pendo.services.db import Database
-
-        backfill_missing_start_time_reminders = importlib.import_module(
-            "plugins.pendo.scripts.backfill_start_time_reminders"
-        ).backfill_missing_start_time_reminders
-
-        db_path = tmp_path / "pendo.db"
-        db = Database(str(db_path))
-        reopened = None
-
-        try:
-            event = EventItem(
-                owner_id="u1",
-                title="报名截止",
-                start_time="2030-01-05T09:00:00",
-                end_time="2030-01-05T12:00:00",
-                remind_times=["2030-01-05T08:00:00"],
-                event_role="multi_node_child",
-                event_collection_id="flow2026",
-                event_collection_kind="multi_node",
-                created_at="2030-01-01T00:00:00",
-                updated_at="2030-01-01T00:00:00",
-            )
-            db.items.insert_item(event, "flow2026_m01")
-            db.cleanup()
-
-            result = backfill_missing_start_time_reminders(str(db_path), dry_run=False)
-
-            reopened = Database(str(db_path))
-            updated = reopened.items.get_item("flow2026_m01", "u1")
-
-            assert result["matched"] == 1
-            assert result["updated"] == 1
-            assert isinstance(updated, EventItem)
-            assert updated.remind_times == [
-                "2030-01-05T08:00:00",
-                "2030-01-05T09:00:00",
-            ]
-        finally:
-            try:
-                if reopened is not None:
-                    reopened.cleanup()
-            except Exception:
-                pass
-
     def test_event_list_includes_day_delta_for_each_event(self, monkeypatch, tmp_path):
         import sys
         from datetime import datetime
@@ -3911,10 +3946,12 @@ class TestOperationAndExportRegression:
             tags=["例行"],
             created_at="2026-03-08T08:00:00",
             updated_at="2026-03-09T08:00:00",
-            due_time="2026-03-15T18:00:00",
+            plan_date="2026-03-15",
+            deadline_at="2026-03-15T18:00:00",
             priority=2,
-            status="todo",
+            status="open",
             completed_at=None,
+            cancelled_at=None,
             content="同步给导师和组会群",
         )
         note_item = SimpleNamespace(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 import importlib
 import io
@@ -171,13 +172,10 @@ def _seed_items(db: Database):
         "title": "月内待办",
         "content": "有截止时间",
         "category": "工作",
-        "due_time": "2026-03-11T18:00:00+08:00",
+        "plan_date": "2026-03-11",
+        "deadline_at": "2026-03-11T18:00:00+08:00",
         "priority": 2,
-        "status": "todo",
-        "progress": 0,
-        "estimate": 30,
-        "subtasks": [{"title": "拆分", "done": False}],
-        "dependencies": ["event_in"],
+        "status": "open",
         "remind_times": ["2026-03-11T09:00:00+08:00"],
         "created_at": "2026-03-02T09:00:00+08:00",
         "updated_at": "2026-03-02T09:00:00+08:00",
@@ -190,8 +188,7 @@ def _seed_items(db: Database):
         "content": "靠创建时间命中",
         "category": "个人",
         "priority": 3,
-        "status": "in_progress",
-        "progress": 20,
+        "status": "open",
         "created_at": "2026-03-12T09:00:00+08:00",
         "updated_at": "2026-03-12T09:00:00+08:00",
     })
@@ -202,9 +199,10 @@ def _seed_items(db: Database):
         "title": "月外待办",
         "content": "不应导出",
         "category": "个人",
-        "due_time": "2026-02-10T18:00:00+08:00",
+        "plan_date": "2026-02-10",
+        "deadline_at": "2026-02-10T18:00:00+08:00",
         "priority": 3,
-        "status": "todo",
+        "status": "open",
         "created_at": "2026-02-02T09:00:00+08:00",
         "updated_at": "2026-02-02T09:00:00+08:00",
     })
@@ -214,7 +212,7 @@ def _seed_items(db: Database):
         "type": "ledger",
         "title": "午饭",
         "amount": 23.5,
-        "direction": "expense",
+        "transaction_type": "expense",
         "ledger_category": "餐饮",
         "ledger_date": "2026-03-08",
         "remark": "食堂",
@@ -227,7 +225,7 @@ def _seed_items(db: Database):
         "type": "ledger",
         "title": "旧账单",
         "amount": 12,
-        "direction": "expense",
+        "transaction_type": "expense",
         "ledger_category": "交通",
         "ledger_date": "2026-02-08",
         "created_at": "2026-02-08T12:00:00+08:00",
@@ -311,6 +309,15 @@ def _build_sample_bundle_bytes(records_by_type: dict[str, list[dict]], selection
     return buf.getvalue()
 
 
+class _ImportRequest:
+    def __init__(self, body: bytes):
+        self._body = body
+        self.headers = {}
+
+    async def body(self) -> bytes:
+        return self._body
+
+
 def test_build_manifest_includes_bundle_id():
     manifest = build_manifest(
         {"types": ["event", "task"], "preset": "month", "start": "2026-03-01", "end": "2026-03-31"},
@@ -318,7 +325,7 @@ def test_build_manifest_includes_bundle_id():
         "Asia/Shanghai",
     )
     assert manifest["format"] == "pendo-bundle"
-    assert manifest["version"] == 1
+    assert manifest["version"] == 2
     assert manifest["selection"]["preset"] == "month"
     assert "bundle_id" in manifest
     assert len(manifest["bundle_id"]) == 32
@@ -332,7 +339,7 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
     )
 
     assert manifest["format"] == "pendo-bundle"
-    assert manifest["version"] == 1
+    assert manifest["version"] == 2
     assert manifest["selection"]["preset"] == "month"
 
     event_record = serialize_item(EventItem(
@@ -368,11 +375,10 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
         title="补图表",
         content="导出实现",
         category="工作",
-        due_time="2026-03-21T18:00:00+08:00",
+        plan_date="2026-03-21",
+        deadline_at="2026-03-21T18:00:00+08:00",
         priority=2,
-        status="todo",
-        subtasks=[{"title": "补测试", "done": False}],
-        dependencies=["event_1"],
+        status="open",
         remind_times=["2026-03-21T09:00:00+08:00"],
     ))
     note_record = serialize_item(NoteItem(
@@ -396,15 +402,22 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
         weather="sunny",
         location="家",
         template_id="tpl-1",
+        entry_time="2026-03-21T22:15:00",
+        template_answers=[{"prompt": "今天做了什么", "answer": "写日记"}],
+        is_favorite=True,
     ))
     ledger_record = serialize_item(LedgerItem(
         id="ledger_1",
         owner_id=OWNER_ID,
         title="咖啡",
         amount=18,
-        direction="expense",
+        amount_cents=1800,
+        transaction_type="expense",
+        currency="CNY",
         ledger_category="餐饮",
         ledger_date="2026-03-21",
+        account_name="微信",
+        merchant="咖啡店",
         remark="拿铁",
     ))
 
@@ -418,17 +431,26 @@ def test_build_manifest_and_serialize_item_preserve_type_fields():
     assert collection_record["_type"] == "event_collection"
     assert collection_record["title"] == "发布会整体"
     assert "owner_id" not in collection_record
-    assert task_record["subtasks"][0]["title"] == "补测试"
-    assert task_record["dependencies"] == ["event_1"]
+    assert task_record["plan_date"] == "2026-03-21"
+    assert task_record["deadline_at"] == "2026-03-21T18:00:00+08:00"
+    assert "subtasks" not in task_record
+    assert "dependencies" not in task_record
     assert note_record["references"][0]["id"] == "task_1"
     assert diary_record["mood_score"] == 9
+    assert diary_record["entry_time"] == "2026-03-21T22:15:00"
+    assert diary_record["template_answers"][0]["answer"] == "写日记"
+    assert diary_record["is_favorite"] is True
     assert ledger_record["ledger_category"] == "餐饮"
+    assert ledger_record["amount_cents"] == 1800
+    assert ledger_record["transaction_type"] == "expense"
+    assert ledger_record["account_name"] == "微信"
+    assert "direction" not in ledger_record
 
 
 def test_read_bundle_rejects_missing_manifest():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("data/tasks.ndjson", '{"_type":"task","_schema":1,"id":"task_1","title":"测试"}\n')
+        zf.writestr("data/tasks.ndjson", '{"_type":"task","_schema":2,"id":"task_1","title":"测试"}\n')
     buf.seek(0)
 
     with pytest.raises(BundleValidationError, match="manifest.json"):
@@ -438,7 +460,7 @@ def test_read_bundle_rejects_missing_manifest():
 def test_read_bundle_rejects_unknown_file_type():
     manifest = {
         "format": "pendo-bundle",
-        "version": 1,
+        "version": 2,
         "bundle_id": "test123",
         "exported_at": "2026-03-29T12:00:00+08:00",
         "source": {"app": "pendo-web", "timezone": "Asia/Shanghai"},
@@ -449,24 +471,56 @@ def test_read_bundle_rejects_unknown_file_type():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
-        zf.writestr("data/unknown.ndjson", '{"_type":"unknown","_schema":1}\n')
+        zf.writestr("data/unknown.ndjson", '{"_type":"unknown","_schema":2}\n')
     buf.seek(0)
 
     with pytest.raises(BundleValidationError, match="unknown"):
         read_bundle(buf)
 
 
+def test_read_bundle_rejects_legacy_item_fields():
+    record = {
+        "_type": "event",
+        "_schema": 2,
+        "id": "event_legacy",
+        "title": "旧多节点",
+        "start_time": "2026-03-20T09:00:00",
+        "milestones": [{"name": "旧节点", "time": "2026-03-20T09:00:00"}],
+    }
+    content = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+    manifest = build_manifest(
+        {"types": ["event"], "preset": "all", "start": None, "end": None},
+        [{
+            "path": "data/events.ndjson",
+            "type": "event",
+            "count": 1,
+            "sha256": __import__("hashlib").sha256(content).hexdigest(),
+        }],
+        "Asia/Shanghai",
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
+        zf.writestr("data/events.ndjson", content)
+    buf.seek(0)
+
+    parsed = read_bundle(buf)
+
+    assert parsed.records_by_type == {}
+    assert parsed.errors[0]["message"] == "Unsupported field for event: milestones"
+
+
 def test_read_bundle_accepts_tasks_ndjson():
     bundle_bytes = _build_sample_bundle_bytes({
         "task": [{
             "_type": "task",
-            "_schema": 1,
+            "_schema": 2,
             "id": "task_1",
             "title": "导入任务",
             "content": "正文",
             "category": "工作",
             "priority": 3,
-            "status": "todo",
+            "status": "open",
             "created_at": "2026-03-21T09:00:00+08:00",
             "updated_at": "2026-03-21T09:00:00+08:00",
         }]
@@ -523,6 +577,19 @@ def test_resolve_range_supports_quarter_to_date():
 
     assert start.isoformat() == "2026-01-01"
     assert end.isoformat() == "2026-03-30"
+
+
+def test_resolve_range_rejects_invalid_timezone():
+    transfer_module = _load_transfer_module()
+
+    with pytest.raises(transfer_module.HTTPException) as exc_info:
+        transfer_module.resolve_range(
+            transfer_module.ExportSelection(types=["task"], preset="month", timezone="Mars/Olympus"),
+            now=datetime(2026, 3, 30, 9, 0, 0),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "Invalid timezone" in exc_info.value.detail
 
 
 def test_export_preview_returns_counts_by_type_and_filters_by_time_field(client: TestClient, temp_db: Database, auth_headers: dict):
@@ -662,17 +729,17 @@ def test_export_download_creates_audit_log(client: TestClient, temp_db: Database
 def test_import_inspect_returns_summary_and_row_errors(client: TestClient, auth_headers: dict):
     valid_task = {
         "_type": "task",
-        "_schema": 1,
+        "_schema": 2,
         "id": "task_bundle_1",
         "title": "导入任务",
         "content": "来自备份",
         "category": "工作",
         "priority": 3,
-        "status": "todo",
+        "status": "open",
         "created_at": "2026-03-20T09:00:00+08:00",
         "updated_at": "2026-03-20T09:00:00+08:00",
     }
-    invalid_task = {"_type": "task", "_schema": 1, "id": "bad"}
+    invalid_task = {"_type": "task", "_schema": 2, "id": "bad"}
     records = [valid_task, invalid_task]
     content = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in records).encode("utf-8")
     manifest = build_manifest(
@@ -713,13 +780,13 @@ def test_import_inspect_detects_already_imported_bundle(client: TestClient, temp
     bundle_bytes = _build_sample_bundle_bytes({
         "task": [{
             "_type": "task",
-            "_schema": 1,
+            "_schema": 2,
             "id": "task_idem_1",
             "title": "幂等测试",
             "content": "正文",
             "category": "工作",
             "priority": 3,
-            "status": "todo",
+            "status": "open",
             "created_at": "2026-03-20T09:00:00+08:00",
             "updated_at": "2026-03-20T09:00:00+08:00",
         }],
@@ -744,10 +811,10 @@ def test_import_inspect_detects_already_imported_bundle(client: TestClient, temp
 
 def test_import_inspect_preserves_original_line_number_for_normalization_errors(client: TestClient, auth_headers: dict):
     rows = [
-        '{"_type":"task","_schema":1,"id":"broken-json"',
+        '{"_type":"task","_schema":2,"id":"broken-json"',
         json.dumps({
             "_type": "task",
-            "_schema": 1,
+            "_schema": 2,
             "id": "task_bad_line",
             "created_at": "2026-03-20T09:00:00+08:00",
             "updated_at": "2026-03-20T09:00:00+08:00",
@@ -790,7 +857,7 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
         "content": "旧内容",
         "category": "旧分类",
         "priority": 2,
-        "status": "todo",
+        "status": "open",
         "created_at": "2026-03-01T09:00:00+08:00",
         "updated_at": "2026-03-01T09:00:00+08:00",
     })
@@ -798,7 +865,7 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
     bundle_bytes = _build_sample_bundle_bytes({
         "task": [{
             "_type": "task",
-            "_schema": 1,
+            "_schema": 2,
             "id": "task_existing",
             "title": "新任务标题",
             "content": "新内容",
@@ -810,7 +877,7 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
         }],
         "note": [{
             "_type": "note",
-            "_schema": 1,
+            "_schema": 2,
             "id": "note_subset",
             "title": "不会导入",
             "content": "因为没选中",
@@ -838,7 +905,7 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
     overwrite_bundle = _build_sample_bundle_bytes({
         "task": [{
             "_type": "task",
-            "_schema": 1,
+            "_schema": 2,
             "id": "task_existing",
             "title": "新任务标题",
             "content": "新内容",
@@ -866,7 +933,7 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
     duplicate_bundle = _build_sample_bundle_bytes({
         "task": [{
             "_type": "task",
-            "_schema": 1,
+            "_schema": 2,
             "id": "task_existing",
             "title": "新任务标题",
             "content": "新内容",
@@ -896,11 +963,239 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
     assert len(imported_copies[0].id) == 16
 
 
+def test_import_execute_handles_cross_owner_global_id_conflicts(temp_db: Database):
+    transfer_api = _load_transfer_module()
+    other_owner = "u-transfer-other"
+    temp_db.insert_item({
+        "id": "task_shared_global",
+        "owner_id": other_owner,
+        "type": "task",
+        "title": "其他用户任务",
+        "content": "不能被覆盖",
+        "category": "工作",
+        "priority": 3,
+        "status": "open",
+        "created_at": "2026-03-01T09:00:00+08:00",
+        "updated_at": "2026-03-01T09:00:00+08:00",
+    })
+
+    def bundle(title: str) -> bytes:
+        return _build_sample_bundle_bytes({
+            "task": [{
+                "_type": "task",
+                "_schema": 2,
+                "id": "task_shared_global",
+                "title": title,
+                "content": "导入内容",
+                "category": "工作",
+                "priority": 4,
+                "status": "open",
+                "created_at": "2026-03-20T09:00:00+08:00",
+                "updated_at": "2026-03-20T09:00:00+08:00",
+            }],
+        })
+
+    skip_result = asyncio.run(
+        transfer_api.execute_import(
+            _ImportRequest(bundle("跳过")),
+            x_transfer_options=json.dumps({"types": ["task"], "conflict_policy": "skip"}),
+            owner_id=OWNER_ID,
+            db=temp_db,
+        )
+    )
+    assert skip_result["data"]["results"]["skipped"] == 1
+    assert temp_db.get_item("task_shared_global", owner_id=OWNER_ID) is None
+    assert temp_db.get_item("task_shared_global", owner_id=other_owner).title == "其他用户任务"
+
+    overwrite_result = asyncio.run(
+        transfer_api.execute_import(
+            _ImportRequest(bundle("覆盖")),
+            x_transfer_options=json.dumps({"types": ["task"], "conflict_policy": "overwrite"}),
+            owner_id=OWNER_ID,
+            db=temp_db,
+        )
+    )
+    assert overwrite_result["data"]["results"]["failed"] == 1
+    assert "拒绝覆盖" in overwrite_result["data"]["details"]["failed"][0]["reason"]
+    assert temp_db.get_item("task_shared_global", owner_id=other_owner).title == "其他用户任务"
+
+    duplicate_result = asyncio.run(
+        transfer_api.execute_import(
+            _ImportRequest(bundle("副本")),
+            x_transfer_options=json.dumps({"types": ["task"], "conflict_policy": "duplicate"}),
+            owner_id=OWNER_ID,
+            db=temp_db,
+        )
+    )
+    assert duplicate_result["data"]["results"]["inserted"] == 1
+    imported = [
+        item
+        for item in temp_db.get_items(OWNER_ID, filters={"type": "task"}, limit=10)
+        if item.title == "副本"
+    ]
+    assert len(imported) == 1
+    assert imported[0].id != "task_shared_global"
+    assert imported[0].context["import"]["source_id"] == "task_shared_global"
+
+
+def test_import_execute_handles_soft_deleted_global_id_conflict(temp_db: Database):
+    transfer_api = _load_transfer_module()
+    temp_db.insert_item({
+        "id": "task_deleted_global",
+        "owner_id": OWNER_ID,
+        "type": "task",
+        "title": "已删任务",
+        "category": "工作",
+        "priority": 3,
+        "status": "open",
+        "created_at": "2026-03-01T09:00:00+08:00",
+        "updated_at": "2026-03-01T09:00:00+08:00",
+    })
+    temp_db.delete_item("task_deleted_global", soft=True, owner_id=OWNER_ID)
+    bundle_bytes = _build_sample_bundle_bytes({
+        "task": [{
+            "_type": "task",
+            "_schema": 2,
+            "id": "task_deleted_global",
+            "title": "重新导入",
+            "category": "工作",
+            "priority": 3,
+            "status": "open",
+            "created_at": "2026-03-20T09:00:00+08:00",
+            "updated_at": "2026-03-20T09:00:00+08:00",
+        }],
+    })
+
+    result = asyncio.run(
+        transfer_api.execute_import(
+            _ImportRequest(bundle_bytes),
+            x_transfer_options=json.dumps({"types": ["task"], "conflict_policy": "duplicate"}),
+            owner_id=OWNER_ID,
+            db=temp_db,
+        )
+    )
+
+    assert result["data"]["results"]["inserted"] == 1
+    imported = [
+        item
+        for item in temp_db.get_items(OWNER_ID, filters={"type": "task"}, limit=10)
+        if item.title == "重新导入"
+    ]
+    assert len(imported) == 1
+    assert imported[0].id != "task_deleted_global"
+
+
+def test_import_execute_duplicate_rewrites_note_relationships_to_duplicated_items(
+    client: TestClient,
+    temp_db: Database,
+    auth_headers: dict,
+):
+    temp_db.insert_item({
+        "id": "task_existing",
+        "owner_id": OWNER_ID,
+        "type": "task",
+        "title": "旧任务",
+        "priority": 3,
+        "status": "open",
+        "created_at": "2026-03-01T09:00:00+08:00",
+        "updated_at": "2026-03-01T09:00:00+08:00",
+    })
+    temp_db.insert_item({
+        "id": "note_existing",
+        "owner_id": OWNER_ID,
+        "type": "note",
+        "title": "旧笔记",
+        "content": "旧内容",
+        "category": "知识",
+        "references": [{"kind": "item", "id": "task_existing", "type": "task", "title": "旧任务"}],
+        "related_items": ["task_existing"],
+        "created_at": "2026-03-01T09:00:00+08:00",
+        "updated_at": "2026-03-01T09:00:00+08:00",
+    })
+
+    duplicate_bundle = _build_sample_bundle_bytes({
+        "task": [{
+            "_type": "task",
+            "_schema": 2,
+            "id": "task_existing",
+            "title": "导入任务",
+            "priority": 2,
+            "status": "open",
+            "created_at": "2026-03-20T09:00:00+08:00",
+            "updated_at": "2026-03-20T09:00:00+08:00",
+        }],
+        "note": [{
+            "_type": "note",
+            "_schema": 2,
+            "id": "note_existing",
+            "title": "导入笔记",
+            "content": "引用导入任务",
+            "category": "知识",
+            "references": [{"kind": "item", "id": "task_existing", "type": "task", "title": "导入任务"}],
+            "related_items": ["task_existing"],
+            "created_at": "2026-03-20T09:00:00+08:00",
+            "updated_at": "2026-03-20T09:00:00+08:00",
+        }],
+    })
+
+    response = client.post(
+        "/api/transfer/import/execute",
+        headers={**auth_headers, "X-Transfer-Options": json.dumps({"types": ["task", "note"], "conflict_policy": "duplicate"})},
+        content=duplicate_bundle,
+    )
+
+    assert response.status_code == 200
+    imported_task = [
+        item for item in temp_db.get_items(OWNER_ID, filters={"type": "task"}, limit=20)
+        if item.id != "task_existing" and item.title == "导入任务"
+    ][0]
+    imported_note = [
+        item for item in temp_db.get_items(OWNER_ID, filters={"type": "note"}, limit=20)
+        if item.id != "note_existing" and item.title == "导入笔记"
+    ][0]
+
+    assert imported_note.references[0]["id"] == imported_task.id
+    assert imported_note.related_items == [imported_task.id]
+
+
+def test_import_relationship_rewrite_remaps_note_links_and_event_source_ids():
+    transfer_module = _load_transfer_module()
+
+    note_payload = {
+        "type": "note",
+        "id": "note_new",
+        "references": [
+            {"kind": "item", "id": "task_old", "type": "task", "title": "任务"},
+            {"kind": "item", "id": "event_keep", "type": "event", "title": "日程"},
+        ],
+        "related_items": ["task_old", "event_keep"],
+    }
+    event_payload = {
+        "type": "event",
+        "id": "event_new",
+        "source_item_id": "event_old",
+    }
+
+    rewritten_note = transfer_module._rewrite_import_item_relationships(
+        note_payload,
+        {"task_old": "task_new", "event_old": "event_new_source"},
+    )
+    rewritten_event = transfer_module._rewrite_import_item_relationships(
+        event_payload,
+        {"event_old": "event_new_source"},
+    )
+
+    assert rewritten_note["references"][0]["id"] == "task_new"
+    assert rewritten_note["references"][1]["id"] == "event_keep"
+    assert rewritten_note["related_items"] == ["task_new", "event_keep"]
+    assert rewritten_event["source_item_id"] == "event_new_source"
+
+
 def test_import_execute_restores_event_collection_before_leaf_events(client: TestClient, temp_db: Database, auth_headers: dict):
     bundle_bytes = _build_sample_bundle_bytes({
         "event_collection": [{
             "_type": "event_collection",
-            "_schema": 1,
+            "_schema": 2,
             "id": "bundle_conf",
             "kind": "multi_node",
             "title": "导入会议",
@@ -911,7 +1206,7 @@ def test_import_execute_restores_event_collection_before_leaf_events(client: Tes
         }],
         "event": [{
             "_type": "event",
-            "_schema": 1,
+            "_schema": 2,
             "id": "bundle_conf_m01",
             "title": "摘要截止",
             "category": "学术",
@@ -955,13 +1250,13 @@ def test_import_execute_idempotency_blocks_duplicate_bundle(client: TestClient, 
     bundle_bytes = _build_sample_bundle_bytes({
         "task": [{
             "_type": "task",
-            "_schema": 1,
+            "_schema": 2,
             "id": "task_idem_block",
             "title": "幂等阻断",
             "content": "正文",
             "category": "工作",
             "priority": 3,
-            "status": "todo",
+            "status": "open",
             "created_at": "2026-03-20T09:00:00+08:00",
             "updated_at": "2026-03-20T09:00:00+08:00",
         }],
@@ -1003,7 +1298,7 @@ def test_execute_import_bundle_uses_db_level_bundle_guard(temp_db: Database):
                 "content": "first import",
                 "category": "工作",
                 "priority": 3,
-                "status": "todo",
+                "status": "open",
                 "created_at": "2026-03-20T09:00:00+08:00",
                 "updated_at": "2026-03-20T09:00:00+08:00",
             },
@@ -1048,7 +1343,7 @@ def test_import_execute_transaction_atomicity(client: TestClient, temp_db: Datab
         "content": "旧",
         "category": "工作",
         "priority": 2,
-        "status": "todo",
+        "status": "open",
         "created_at": "2026-03-01T09:00:00+08:00",
         "updated_at": "2026-03-01T09:00:00+08:00",
     })
@@ -1057,16 +1352,16 @@ def test_import_execute_transaction_atomicity(client: TestClient, temp_db: Datab
     bundle_bytes = _build_sample_bundle_bytes({
         "task": [
             {
-                "_type": "task", "_schema": 1, "id": "task_atom_new_1",
+                "_type": "task", "_schema": 2, "id": "task_atom_new_1",
                 "title": "原子新1", "content": "OK", "category": "工作",
-                "priority": 3, "status": "todo",
+                "priority": 3, "status": "open",
                 "created_at": "2026-03-20T09:00:00+08:00",
                 "updated_at": "2026-03-20T09:00:00+08:00",
             },
             {
-                "_type": "task", "_schema": 1, "id": "task_atom_new_2",
+                "_type": "task", "_schema": 2, "id": "task_atom_new_2",
                 "title": "原子新2", "content": "OK", "category": "工作",
-                "priority": 3, "status": "todo",
+                "priority": 3, "status": "open",
                 "created_at": "2026-03-20T09:00:00+08:00",
                 "updated_at": "2026-03-20T09:00:00+08:00",
             },
@@ -1090,13 +1385,13 @@ def test_import_execute_rejects_empty_selected_types(client: TestClient, auth_he
     bundle_bytes = _build_sample_bundle_bytes({
         "task": [{
             "_type": "task",
-            "_schema": 1,
+            "_schema": 2,
             "id": "task_only",
             "title": "只有任务",
             "content": "正文",
             "category": "工作",
             "priority": 3,
-            "status": "todo",
+            "status": "open",
             "created_at": "2026-03-20T09:00:00+08:00",
             "updated_at": "2026-03-20T09:00:00+08:00",
         }],
@@ -1116,13 +1411,13 @@ def test_import_execute_creates_audit_log(client: TestClient, temp_db: Database,
     bundle_bytes = _build_sample_bundle_bytes({
         "task": [{
             "_type": "task",
-            "_schema": 1,
+            "_schema": 2,
             "id": "task_audit_log",
             "title": "审计日志测试",
             "content": "正文",
             "category": "工作",
             "priority": 3,
-            "status": "todo",
+            "status": "open",
             "created_at": "2026-03-20T09:00:00+08:00",
             "updated_at": "2026-03-20T09:00:00+08:00",
         }],
@@ -1157,9 +1452,9 @@ def test_import_samples_pagination(client: TestClient, auth_headers: dict):
     tasks = []
     for i in range(10):
         tasks.append({
-            "_type": "task", "_schema": 1, "id": f"task_page_{i}",
+            "_type": "task", "_schema": 2, "id": f"task_page_{i}",
             "title": f"分页任务{i}", "content": "正文", "category": "工作",
-            "priority": 3, "status": "todo",
+            "priority": 3, "status": "open",
             "created_at": "2026-03-20T09:00:00+08:00",
             "updated_at": "2026-03-20T09:00:00+08:00",
         })
@@ -1273,6 +1568,13 @@ def test_transfer_page_source_wires_export_and_import_endpoints():
     assert "manifest.json" in transfer_src
     assert "tasks.ndjson" in transfer_src
     assert "_type" in transfer_src
+    assert "version: 2" in transfer_src
+    assert "_schema: 2" in transfer_src
+    assert "amount_cents" in transfer_src
+    assert "transaction_type" in transfer_src
+    assert "account_name" in transfer_src
+    assert "未知字段会在预检阶段报错" in transfer_src
+    assert "context.import.extra" not in transfer_src
     assert "导入示例" in transfer_src
     assert "稳定自定义字符串" in transfer_src
     assert "默认生成短随机 ID" in transfer_src

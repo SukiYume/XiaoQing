@@ -17,6 +17,8 @@ from ..utils.error_handlers import handle_command_errors
 from ..utils.session_utils import safe_create_session, safe_end_session
 from ..utils.formatters import ItemFormatter, paginate
 from ..utils.time_utils import _parse_time_range_core
+from ..utils.time_utils import now_in_timezone
+from ..utils.validators import normalize_ledger_fields
 from ..config import (
     PendoConfig,
     LEDGER_EXPENSE_CATEGORIES,
@@ -37,12 +39,56 @@ def _get_category_icon(name: str) -> str:
     return "📌"
 
 
-def _direction_label(direction: str) -> str:
-    return "收入" if direction == "income" else "支出"
+def _transaction_type_label(transaction_type: str) -> str:
+    labels = {"income": "收入", "expense": "支出", "transfer": "转账"}
+    return labels.get(transaction_type, "支出")
 
 
-def _direction_icon(direction: str) -> str:
-    return "💰" if direction == "income" else "💸"
+def _transaction_type_icon(transaction_type: str) -> str:
+    icons = {"income": "💰", "expense": "💸", "transfer": "🔁"}
+    return icons.get(transaction_type, "💸")
+
+
+_FIELD_RE = re.compile(r"(?P<key>[A-Za-z_]+):(?P<value>\"[^\"]*\"|“[^”]*”|\S+)")
+
+
+def _extract_field_args(text: str) -> tuple[str, dict[str, str]]:
+    fields: dict[str, str] = {}
+    spans: list[tuple[int, int]] = []
+    for match in _FIELD_RE.finditer(text):
+        key = match.group("key").lower()
+        value = match.group("value").strip()
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("“") and value.endswith("”")
+        ):
+            value = value[1:-1]
+        fields[key] = value.strip()
+        spans.append(match.span())
+    if not spans:
+        return text.strip(), fields
+
+    parts: list[str] = []
+    last = 0
+    for start, end in spans:
+        parts.append(text[last:start])
+        last = end
+    parts.append(text[last:])
+    return " ".join("".join(parts).split()), fields
+
+
+def _parse_ledger_type(value: str) -> str | None:
+    mapping = {
+        "in": "income",
+        "income": "income",
+        "收入": "income",
+        "out": "expense",
+        "expense": "expense",
+        "支出": "expense",
+        "transfer": "transfer",
+        "xfer": "transfer",
+        "转账": "transfer",
+    }
+    return mapping.get(str(value or "").strip().lower())
 
 
 class LedgerHandler(DbOpsMixin):
@@ -95,13 +141,13 @@ class LedgerHandler(DbOpsMixin):
             "管理账目、查看收支和做快速记录。\n\n"
             "可用命令:\n"
             "• /pendo ledger add - 交互式记账\n"
-            "• /pendo ledger quick <金额> <描述> [cat:分类] [in] - 快速记账\n"
-            "• /pendo ledger list [范围] [dir:in/out] [cat:分类] [amount:N或N..M] [ex] - 查看账目\n"
+            "• /pendo ledger quick <金额> <描述> [cat:分类] [in|transfer] [account:账户] [to:账户] [merchant:商户] - 快速记账\n"
+            "• /pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [cat:分类] [amount:N或N..M] [ex] - 查看账目\n"
             "  范围: today/week/month/year/last7d/2026-03/start..end\n"
             "  ex: 额外显示各分类最大单笔\n"
             "• /pendo ledger view <id> - 查看详情\n"
             "• /pendo ledger edit <id> <字段:值> ... - 编辑\n"
-            "  字段: amount: title: cat: dir: date: remark:\n"
+            "  字段: amount: title: cat: type: account: to: merchant: date: remark:\n"
             "• /pendo ledger delete <id> - 删除\n"
             "• /pendo ledger summary [范围] - 收支汇总"
         )
@@ -131,7 +177,7 @@ class LedgerHandler(DbOpsMixin):
             "message": (
                 "📝 开始记账，请先输入金额：\n\n"
                 "例如：28.5 / ¥88 / 1200\n"
-                "后面我再问描述、收支类型和分类。\n"
+                "后面我再问描述、交易类型、账户和分类。\n"
                 "💡 输入\"退出\"可取消"
             ),
         }
@@ -146,31 +192,84 @@ class LedgerHandler(DbOpsMixin):
 
         text = text.strip()
 
-        if step == "direction":
-            return await self._step_direction(text, data, session, context)
+        if step == "transaction_type":
+            return await self._step_transaction_type(text, data, session, context)
         elif step == "amount":
             return await self._step_amount(text, data, session, context)
+        elif step == "account":
+            return await self._step_account(text, data, session, context)
+        elif step == "counter_account":
+            return await self._step_counter_account(text, data, session, context)
         elif step == "category":
             return await self._step_category(text, data, session, context)
+        elif step == "merchant":
+            return await self._step_merchant(text, data, session, context)
         elif step == "description":
             return await self._step_description(user_id, text, data, session, context, group_id)
         else:
             return {"status": "error", "message": "❌ 会话状态异常"}
 
-    async def _step_direction(
+    async def _step_transaction_type(
         self, text: str, data: dict, session: dict, context: PendoContext
     ) -> CommandMessage:
-        """步骤3: 选择收入/支出"""
-        if text in ("1", "支出", "expense"):
-            data["direction"] = "expense"
-        elif text in ("2", "收入", "income"):
-            data["direction"] = "income"
+        """步骤3: 选择交易类型"""
+        parsed_type = _parse_ledger_type(text)
+        if text == "1":
+            parsed_type = "expense"
+        elif text == "2":
+            parsed_type = "income"
+        elif text == "3":
+            parsed_type = "transfer"
+
+        if parsed_type in {"expense", "income", "transfer"}:
+            data["transaction_type"] = parsed_type
         else:
-            return {"status": "info", "message": "请输入 1(支出) 或 2(收入)"}
+            return {"status": "info", "message": "请输入 1(支出)、2(收入) 或 3(转账)"}
 
         session.set("data", data)
+        session.set("step", "account")
+        return {
+            "status": "success",
+            "message": "🏦 请输入账户/钱包（如 微信、支付宝、招行；直接回车默认现金）：",
+        }
+
+    async def _step_account(
+        self, text: str, data: dict, session: dict, context: PendoContext
+    ) -> CommandMessage:
+        """步骤4: 输入账户。"""
+        account = text.strip()
+        if not account or account in {"跳过", "默认", "现金"}:
+            account = "现金"
+        data["account_name"] = account
+        session.set("data", data)
+
+        if data.get("transaction_type") == "transfer":
+            session.set("step", "counter_account")
+            return {
+                "status": "success",
+                "message": "➡️ 请输入转入账户（必须和转出账户不同）：",
+            }
+
         session.set("step", "category")
-        return {"status": "success", "message": self._build_category_prompt(data["direction"])}
+        return {"status": "success", "message": self._build_category_prompt(data["transaction_type"])}
+
+    async def _step_counter_account(
+        self, text: str, data: dict, session: dict, context: PendoContext
+    ) -> CommandMessage:
+        """步骤5: 输入转账目标账户。"""
+        counter = text.strip()
+        if not counter:
+            return {"status": "info", "message": "❌ 转账必须填写转入账户："}
+        if counter == data.get("account_name"):
+            return {"status": "info", "message": "❌ 转入账户不能和转出账户相同，请重新输入："}
+        data["counter_account_name"] = counter
+        data["ledger_category"] = "转账"
+        session.set("data", data)
+        session.set("step", "merchant")
+        return {
+            "status": "success",
+            "message": "🏷️ 请输入商户/对方（可输入 跳过）：",
+        }
 
     async def _step_amount(
         self, text: str, data: dict, session: dict, context: PendoContext
@@ -191,9 +290,10 @@ class LedgerHandler(DbOpsMixin):
     async def _step_category(
         self, text: str, data: dict, session: dict, context: PendoContext
     ) -> CommandMessage:
-        """步骤4: 选择分类并保存"""
+        """步骤5: 选择分类"""
+        tx_type = data.get("transaction_type", "expense")
         categories = (
-            LEDGER_EXPENSE_CATEGORIES if data["direction"] == "expense" else LEDGER_INCOME_CATEGORIES
+            LEDGER_EXPENSE_CATEGORIES if tx_type == "expense" else LEDGER_INCOME_CATEGORIES
         )
 
         category_name = None
@@ -217,6 +317,20 @@ class LedgerHandler(DbOpsMixin):
             return {"status": "info", "message": "❌ 无效的分类，请输入编号或分类名："}
 
         data["ledger_category"] = category_name
+        session.set("data", data)
+        session.set("step", "merchant")
+        return {
+            "status": "success",
+            "message": "🏷️ 请输入商户/对方（可输入 跳过）：",
+        }
+
+    async def _step_merchant(
+        self, text: str, data: dict, session: dict, context: PendoContext
+    ) -> CommandMessage:
+        """最后一步: 输入商户/对方并保存。"""
+        merchant = text.strip()
+        if merchant and merchant not in {"跳过", "无", "-"}:
+            data["merchant"] = merchant
         await safe_end_session(context)
         return await self._save_ledger_item(
             data.get("owner_id", ""), data, session.get("group_id")
@@ -233,22 +347,23 @@ class LedgerHandler(DbOpsMixin):
         data["title"] = text
         data["owner_id"] = user_id
         session.set("data", data)
-        session.set("step", "direction")
+        session.set("step", "transaction_type")
         return {
             "status": "success",
             "message": (
                 "📌 请选择收支类型：\n\n"
                 "1️⃣ 支出\n"
-                "2️⃣ 收入\n\n"
-                "(输入 1 或 2，或直接输入\"支出\"/\"收入\")"
+                "2️⃣ 收入\n"
+                "3️⃣ 转账\n\n"
+                "(输入 1/2/3，或直接输入\"支出\"/\"收入\"/\"转账\")"
             ),
         }
 
     @staticmethod
-    def _build_category_prompt(direction: str) -> str:
-        """根据方向构建分类选择提示。"""
+    def _build_category_prompt(transaction_type: str) -> str:
+        """根据交易类型构建分类选择提示。"""
         categories = (
-            LEDGER_EXPENSE_CATEGORIES if direction == "expense" else LEDGER_INCOME_CATEGORIES
+            LEDGER_EXPENSE_CATEGORIES if transaction_type == "expense" else LEDGER_INCOME_CATEGORIES
         )
 
         lines = ["📂 请选择分类：\n"]
@@ -263,35 +378,67 @@ class LedgerHandler(DbOpsMixin):
         self, user_id: str, data: dict, group_id: int | None = None
     ) -> CommandMessage:
         """保存记账条目"""
-        now = datetime.now()
-        ledger_date = data.get("ledger_date") or now.strftime("%Y-%m-%d")
+        now = now_in_timezone(user_id, self.db).replace(tzinfo=None)
+        item_data = {
+            "owner_id": user_id,
+            "title": data.get("title", ""),
+            "content": data.get("remark", ""),
+            "amount": data.get("amount"),
+            "amount_cents": data.get("amount_cents"),
+            "currency": data.get("currency"),
+            "transaction_type": data.get("transaction_type"),
+            "ledger_category": data.get("ledger_category"),
+            "ledger_date": data.get("ledger_date") or now.strftime("%Y-%m-%d"),
+            "account_name": data.get("account_name"),
+            "counter_account_name": data.get("counter_account_name"),
+            "merchant": data.get("merchant"),
+            "remark": data.get("remark", ""),
+            "context": {"group_id": group_id} if group_id else {},
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        }
+        try:
+            normalized = normalize_ledger_fields(item_data, partial=False)
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
 
         item = LedgerItem(
             owner_id=user_id,
-            title=data.get("title", ""),
-            content=data.get("remark", ""),
-            amount=data.get("amount", 0.0),
-            direction=data.get("direction", "expense"),
-            ledger_category=data.get("ledger_category", "其他"),
-            ledger_date=ledger_date,
-            remark=data.get("remark", ""),
-            context={"group_id": group_id} if group_id else {},
-            created_at=now.isoformat(),
-            updated_at=now.isoformat(),
+            title=normalized.get("title", ""),
+            content=normalized.get("content", ""),
+            amount=normalized["amount"],
+            amount_cents=normalized["amount_cents"],
+            currency=normalized["currency"],
+            transaction_type=normalized["transaction_type"],
+            ledger_category=normalized["ledger_category"],
+            ledger_date=normalized["ledger_date"],
+            account_name=normalized["account_name"],
+            counter_account_name=normalized.get("counter_account_name", ""),
+            merchant=normalized.get("merchant", ""),
+            remark=normalized.get("remark", ""),
+            context=normalized.get("context", {}),
+            created_at=normalized["created_at"],
+            updated_at=normalized["updated_at"],
         )
 
         item_id = await self._db_create_with_log(item, owner_id=user_id, action="create_ledger")
 
-        amount = data.get("amount", 0.0)
-        direction = data.get("direction", "expense")
-        cat_icon = _get_category_icon(data.get("ledger_category", "其他"))
+        amount = normalized["amount"]
+        transaction_type = normalized["transaction_type"]
+        cat_icon = _get_category_icon(normalized["ledger_category"])
+        account_line = f"🏦 账户：{normalized['account_name']}"
+        if transaction_type == "transfer":
+            account_line += f" → {normalized.get('counter_account_name', '')}"
+        merchant = normalized.get("merchant", "")
 
         message = (
             f"✅ 记账成功！\n\n"
-            f"{_direction_icon(direction)} {_direction_label(direction)} ¥{amount:.2f}\n"
-            f"{cat_icon} 分类：{data.get('ledger_category', '其他')}\n"
-            f"📝 描述：{data.get('title', '')}\n"
-            f"📅 日期：{ledger_date}\n"
+            f"{_transaction_type_icon(transaction_type)} {_transaction_type_label(transaction_type)} ¥{amount:.2f}\n"
+            f"{cat_icon} 分类：{normalized['ledger_category']}\n"
+            f"{account_line}\n"
+            f"📝 摘要：{normalized.get('title', '')}\n"
+            f"{'🏷️ 商户：' + merchant + chr(10) if merchant else ''}"
+            f"📅 日期：{normalized['ledger_date']}\n"
             f"🔖 ID：`{item_id}`"
         )
 
@@ -306,27 +453,29 @@ class LedgerHandler(DbOpsMixin):
     ) -> CommandMessage:
         """快速记账
 
-        格式: /pendo ledger quick <金额> <描述> [cat:分类] [in]
-        默认为支出，加 in 标记为收入
+        格式: /pendo ledger quick <金额> <描述> [cat:分类] [in|transfer] [account:账户] [to:账户]
+        默认为支出，加 in 标记为收入，加 transfer 标记为转账
         """
         if not text:
             return {
                 "status": "error",
-                "message": "❌ 用法: /pendo ledger quick <金额> <描述> [cat:分类] [in]",
+                "message": "❌ 用法: /pendo ledger quick <金额> <描述> [cat:分类] [in|transfer] [account:账户] [to:账户]",
             }
 
-        # 解析收支方向
-        direction = "expense"
-        if re.search(r"\bin\b", text):
-            direction = "income"
-            text = re.sub(r"\bin\b", "", text).strip()
+        text, fields = _extract_field_args(text)
 
-        # 解析分类
-        ledger_cat = "其他"
-        cat_match = re.search(r"cat:(\S+)", text)
-        if cat_match:
-            ledger_cat = cat_match.group(1)
-            text = text.replace(cat_match.group(0), "").strip()
+        transaction_type = _parse_ledger_type(fields.get("type") or "") or "expense"
+        tokens = text.split()
+        remaining_tokens: list[str] = []
+        for token in tokens:
+            parsed_type = _parse_ledger_type(token)
+            if parsed_type in {"income", "transfer"}:
+                transaction_type = parsed_type
+            elif token.lower() in {"out", "expense"}:
+                transaction_type = "expense"
+            else:
+                remaining_tokens.append(token)
+        text = " ".join(remaining_tokens)
 
         # 解析金额和描述
         parts = text.split(maxsplit=1)
@@ -344,9 +493,15 @@ class LedgerHandler(DbOpsMixin):
 
         data = {
             "amount": amount,
-            "direction": direction,
-            "ledger_category": ledger_cat,
+            "transaction_type": transaction_type,
+            "ledger_category": fields.get("cat") or fields.get("category"),
+            "ledger_date": fields.get("date"),
+            "account_name": fields.get("account") or fields.get("from"),
+            "counter_account_name": fields.get("to") or fields.get("counter"),
+            "merchant": fields.get("merchant") or fields.get("payee"),
+            "currency": fields.get("currency"),
             "title": title,
+            "remark": fields.get("remark", ""),
         }
 
         return await self._save_ledger_item(user_id, data, group_id)
@@ -369,7 +524,8 @@ class LedgerHandler(DbOpsMixin):
         - /pendo ledger list 2026-03-01..2026-03-15 -> 范围
 
         过滤参数 (可组合使用):
-        - dir:in/out 或 dir:income/expense      -> 按收支方向筛选
+        - type:expense/income/transfer          -> 按交易类型筛选
+        - account:账户 / to:账户 / merchant:商户 -> 按账户/对方账户/商户筛选
         - cat:分类名                             -> 按分类筛选
         - amount:N                              -> 金额 >= N
         - amount:N..M                           -> 金额在 N 到 M 之间
@@ -385,8 +541,11 @@ class LedgerHandler(DbOpsMixin):
         show_all = False
         page_num = 1
         show_extra = False
-        dir_filter = None
+        type_filter = None
         cat_filter = None
+        account_filter = None
+        counter_filter = None
+        merchant_filter = None
         amount_min = None
         amount_max = None
 
@@ -403,9 +562,17 @@ class LedgerHandler(DbOpsMixin):
                     page_num = int(part.split(":")[1])
                 except (IndexError, ValueError):
                     pass
-            elif part.startswith("dir:"):
-                val = part[4:].lower()
-                dir_filter = "income" if val in ("in", "income", "收入") else "expense"
+            elif part.startswith("type:"):
+                val = part[5:]
+                type_filter = _parse_ledger_type(val)
+                if not type_filter:
+                    return {"status": "error", "message": f"❌ 无效交易类型: {val}"}
+            elif part.startswith("account:"):
+                account_filter = part[8:]
+            elif part.startswith("to:"):
+                counter_filter = part[3:]
+            elif part.startswith("merchant:"):
+                merchant_filter = part[9:]
             elif part.startswith("cat:"):
                 cat_filter = part[4:]
             elif part.startswith("amount:"):
@@ -441,10 +608,22 @@ class LedgerHandler(DbOpsMixin):
         )
 
         # 应用额外过滤
-        if dir_filter:
-            items = [i for i in items if i.direction == dir_filter]
+        if type_filter:
+            items = [
+                i for i in items
+                if getattr(i, "transaction_type", None) == type_filter
+            ]
         if cat_filter:
             items = [i for i in items if i.ledger_category == cat_filter]
+        if account_filter:
+            items = [
+                i for i in items
+                if account_filter in {getattr(i, "account_name", ""), getattr(i, "counter_account_name", "")}
+            ]
+        if counter_filter:
+            items = [i for i in items if getattr(i, "counter_account_name", "") == counter_filter]
+        if merchant_filter:
+            items = [i for i in items if getattr(i, "merchant", "") == merchant_filter]
         if amount_min is not None:
             items = [i for i in items if i.amount >= amount_min]
         if amount_max is not None:
@@ -452,10 +631,16 @@ class LedgerHandler(DbOpsMixin):
 
         # 构建过滤描述
         filter_labels = []
-        if dir_filter:
-            filter_labels.append("收入" if dir_filter == "income" else "支出")
+        if type_filter:
+            filter_labels.append(_transaction_type_label(type_filter))
         if cat_filter:
             filter_labels.append(f"分类:{cat_filter}")
+        if account_filter:
+            filter_labels.append(f"账户:{account_filter}")
+        if counter_filter:
+            filter_labels.append(f"转入:{counter_filter}")
+        if merchant_filter:
+            filter_labels.append(f"商户:{merchant_filter}")
         if amount_min is not None and amount_max is not None:
             filter_labels.append(f"¥{amount_min:.0f}~{amount_max:.0f}")
         elif amount_min is not None:
@@ -473,25 +658,32 @@ class LedgerHandler(DbOpsMixin):
         display_items, page_info, has_more = paginate(items, page_num, page_size, show_all)
 
         # 汇总
-        total_income = sum(i.amount for i in items if i.direction == "income")
-        total_expense = sum(i.amount for i in items if i.direction == "expense")
+        total_income = sum(i.amount for i in items if getattr(i, "transaction_type", "") == "income")
+        total_expense = sum(i.amount for i in items if getattr(i, "transaction_type", "") == "expense")
+        total_transfer = sum(i.amount for i in items if getattr(i, "transaction_type", "") == "transfer")
 
         message = (
             f"💰 {range_label}账目{filter_suffix}\n"
             f"共 {len(items)} 笔{page_info}\n"
-            f"💸 支出 ¥{total_expense:.2f} | 💰 收入 ¥{total_income:.2f}\n"
+            f"💸 支出 ¥{total_expense:.2f} | 💰 收入 ¥{total_income:.2f} | 🔁 转账 ¥{total_transfer:.2f}\n"
             "━━━━━━━━━━━━━━━━━━\n"
         )
 
         for item in display_items:
-            icon = _direction_icon(item.direction)
+            tx_type = getattr(item, "transaction_type", "expense")
+            icon = _transaction_type_icon(tx_type)
             cat_icon = _get_category_icon(item.ledger_category)
-            sign = "+" if item.direction == "income" else "-"
+            sign = "+" if tx_type == "income" else ("↔ " if tx_type == "transfer" else "-")
             date_str = item.ledger_date or ""
             message += f"• {icon} {sign}¥{item.amount:.2f}  {cat_icon}{item.ledger_category}"
             if item.title:
                 message += f" {item.title}"
-            message += f"\n  📅 {date_str} | ID `{item.id}`\n\n"
+            account = getattr(item, "account_name", "") or "现金"
+            counter = getattr(item, "counter_account_name", "") or ""
+            account_text = f"{account} → {counter}" if tx_type == "transfer" and counter else account
+            merchant = getattr(item, "merchant", "") or ""
+            merchant_text = f" | 🏷️ {merchant}" if merchant else ""
+            message += f"\n  📅 {date_str} | 🏦 {account_text}{merchant_text} | ID `{item.id}`\n\n"
 
         if has_more and not show_all:
             message += f"... (使用 'all' 显示全部或 'page:{page_num + 1}' 查看下一页)\n"
@@ -507,9 +699,10 @@ class LedgerHandler(DbOpsMixin):
                 message += "\n📊 **各分类最大单笔**\n"
                 sorted_cats = sorted(max_by_cat.items(), key=lambda x: x[1].amount, reverse=True)
                 for cat, item in sorted_cats:
-                    icon = _direction_icon(item.direction)
+                    tx_type = getattr(item, "transaction_type", "expense")
+                    icon = _transaction_type_icon(tx_type)
                     cat_icon = _get_category_icon(cat)
-                    sign = "+" if item.direction == "income" else "-"
+                    sign = "+" if tx_type == "income" else ("↔ " if tx_type == "transfer" else "-")
                     date_str = item.ledger_date or ""
                     title_part = f" {item.title}" if item.title else ""
                     message += f"  • {cat_icon}{cat}: {icon}{sign}¥{item.amount:.2f}{title_part} ({date_str})\n"
@@ -535,19 +728,26 @@ class LedgerHandler(DbOpsMixin):
             return wrong_type
         item = cast(LedgerItem, item)
 
-        icon = _direction_icon(item.direction)
+        tx_type = getattr(item, "transaction_type", "expense")
+        icon = _transaction_type_icon(tx_type)
         cat_icon = _get_category_icon(item.ledger_category)
+        account = getattr(item, "account_name", "") or "现金"
+        counter = getattr(item, "counter_account_name", "") or ""
+        account_text = f"{account} → {counter}" if tx_type == "transfer" and counter else account
 
         message = (
             f"💰 **账目详情**\n\n"
-            f"{icon} {_direction_label(item.direction)} ¥{item.amount:.2f}\n"
+            f"{icon} {_transaction_type_label(tx_type)} ¥{item.amount:.2f} {getattr(item, 'currency', 'CNY') or 'CNY'}\n"
             f"{cat_icon} 分类：{item.ledger_category}\n"
+            f"🏦 账户：{account_text}\n"
             f"📝 描述：{item.title or '无'}\n"
             f"📅 日期：{item.ledger_date or '未知'}\n"
             f"🔖 ID：`{item.id}`\n"
             f"⏰ 创建：{ItemFormatter.format_datetime(item.created_at)}"
         )
 
+        if getattr(item, "merchant", ""):
+            message += f"\n🏷️ 商户：{item.merchant}"
         if item.remark:
             message += f"\n💬 备注：{item.remark}"
 
@@ -562,7 +762,7 @@ class LedgerHandler(DbOpsMixin):
     ) -> CommandMessage:
         """编辑账目
 
-        格式: /pendo ledger edit <id> [amount:金额] [title:描述] [cat:分类] [dir:in/out] [date:日期] [remark:备注]
+        格式: /pendo ledger edit <id> [amount:金额] [title:描述] [cat:分类] [type:expense/income/transfer] [account:账户] [to:账户] [date:日期] [remark:备注]
         所有字段均通过 key:value 显式指定
         """
         parts = args.split(maxsplit=1)
@@ -575,7 +775,9 @@ class LedgerHandler(DbOpsMixin):
                     "• amount:金额 - 修改金额\n"
                     "• title:描述 - 修改描述\n"
                     "• cat:分类 - 修改分类\n"
-                    "• dir:in/out - 修改收支方向\n"
+                    "• type:expense/income/transfer - 修改交易类型\n"
+                    "• account:账户 / to:账户 - 修改账户/转入账户\n"
+                    "• merchant:商户 - 修改商户\n"
                     "• date:YYYY-MM-DD - 修改日期\n"
                     "• remark:备注 - 修改备注\n\n"
                     "示例: /pendo ledger edit abc123 amount:50 cat:交通"
@@ -592,51 +794,78 @@ class LedgerHandler(DbOpsMixin):
             return wrong_type
         item = cast(LedgerItem, item)
 
-        updates: dict[str, Any] = {"type": ItemType.LEDGER.value}
-        field_labels: list[str] = []
-
-        # 定义字段解析规则: (regex_pattern, db_field, label, validator_or_None)
-        field_parsers: list[tuple[str, str, str, Any]] = [
-            (r"amount:(\S+)", "amount", "金额", "_parse_amount"),
-            (r"title:(\S+)", "title", "描述", None),
-            (r"cat:(\S+)", "ledger_category", "分类", None),
-            (r"dir:(in|out|income|expense)", "direction", "方向", "_parse_direction"),
-            (r"date:(\d{4}-\d{2}-\d{2})", "ledger_date", "日期", None),
-            (r"remark:(\S+)", "remark", "备注", None),
-        ]
-
-        for pattern, db_field, label, validator in field_parsers:
-            match = re.search(pattern, edit_str)
-            if match:
-                value = match.group(1)
-                if validator == "_parse_amount":
-                    try:
-                        amount = float(value.replace("￥", "").replace("¥", "").replace(",", ""))
-                        if amount <= 0:
-                            return {"status": "error", "message": "❌ 金额必须大于0"}
-                        updates[db_field] = amount
-                        field_labels.append(f"{label} → ¥{amount:.2f}")
-                    except ValueError:
-                        return {"status": "error", "message": f"❌ 无效金额: {value}"}
-                elif validator == "_parse_direction":
-                    direction = "income" if value in ("in", "income") else "expense"
-                    updates[db_field] = direction
-                    field_labels.append(f"{label} → {_direction_label(direction)}")
-                else:
-                    updates[db_field] = value
-                    field_labels.append(f"{label} → {value}")
-
-        if len(updates) <= 1:  # only "type" key
+        _unused_text, fields = _extract_field_args(edit_str)
+        if not fields:
             return {
                 "status": "error",
                 "message": (
                     "❌ 未识别到有效字段\n\n"
-                    "可用字段: amount: title: cat: dir: date: remark:\n"
-                    "示例: /pendo ledger edit abc123 amount:50 cat:交通"
+        "可用字段: amount: title: cat: type: account: to: merchant: date: remark:\n"
+                    "带空格值请加引号，例如 title:\"团队午餐\""
                 ),
             }
 
-        await self._db_update_with_log(item_id, updates, user_id, action="edit_ledger")
+        updates: dict[str, Any] = {}
+        field_labels: list[str] = []
+        field_map = {
+            "amount": "amount",
+            "title": "title",
+            "cat": "ledger_category",
+            "category": "ledger_category",
+            "date": "ledger_date",
+            "account": "account_name",
+            "from": "account_name",
+            "to": "counter_account_name",
+            "counter": "counter_account_name",
+            "merchant": "merchant",
+            "payee": "merchant",
+            "remark": "remark",
+            "currency": "currency",
+        }
+        for key, value in fields.items():
+            if key == "type":
+                parsed_type = _parse_ledger_type(value)
+                if not parsed_type:
+                    return {"status": "error", "message": f"❌ 无效交易类型: {value}"}
+                updates["transaction_type"] = parsed_type
+                field_labels.append(f"类型 → {_transaction_type_label(parsed_type)}")
+                continue
+            target = field_map.get(key)
+            if not target:
+                continue
+            updates[target] = value
+
+        if not updates:
+            return {"status": "error", "message": "❌ 未识别到有效字段"}
+
+        merged = item.to_dict()
+        if "amount" in updates and "amount_cents" not in updates:
+            merged.pop("amount_cents", None)
+        merged.update(updates)
+        try:
+            normalized = normalize_ledger_fields(merged, partial=False)
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
+
+        apply_updates = {key: normalized[key] for key in updates if key in normalized}
+        if "amount" in updates or "amount_cents" in updates:
+            apply_updates["amount"] = normalized["amount"]
+            apply_updates["amount_cents"] = normalized["amount_cents"]
+            field_labels.append(f"金额 → ¥{normalized['amount']:.2f}")
+        for label, key in [
+            ("摘要", "title"),
+            ("分类", "ledger_category"),
+            ("日期", "ledger_date"),
+            ("账户", "account_name"),
+            ("转入", "counter_account_name"),
+            ("商户", "merchant"),
+            ("备注", "remark"),
+            ("币种", "currency"),
+        ]:
+            if key in updates:
+                field_labels.append(f"{label} → {normalized.get(key, '')}")
+
+        await self._db_update_with_log(item_id, apply_updates, user_id, action="edit_ledger")
 
         changes = "\n".join(f"  • {fl}" for fl in field_labels)
         return {
@@ -668,7 +897,7 @@ class LedgerHandler(DbOpsMixin):
         return {
             "status": "success",
             "message": (
-                f"🗑️ 已删除: {_direction_label(item.direction)} ¥{item.amount:.2f} {item.title or ''}\n\n"
+                f"🗑️ 已删除: {_transaction_type_label(getattr(item, 'transaction_type', 'expense'))} ¥{item.amount:.2f} {item.title or ''}\n\n"
                 f"💡 5分钟内可用 /pendo undo 撤销"
             ),
         }
@@ -700,21 +929,22 @@ class LedgerHandler(DbOpsMixin):
             return {"status": "success", "message": f"📊 **{range_label}收支汇总**\n\n暂无记录"}
 
         # 计算总额
-        total_income = sum(i.amount for i in items if i.direction == "income")
-        total_expense = sum(i.amount for i in items if i.direction == "expense")
+        total_income = sum(i.amount for i in items if getattr(i, "transaction_type", "") == "income")
+        total_expense = sum(i.amount for i in items if getattr(i, "transaction_type", "") == "expense")
+        total_transfer = sum(i.amount for i in items if getattr(i, "transaction_type", "") == "transfer")
         balance = total_income - total_expense
 
         # 按分类统计支出
         expense_by_cat: dict[str, float] = {}
         for i in items:
-            if i.direction == "expense":
+            if getattr(i, "transaction_type", "") == "expense":
                 cat = i.ledger_category or "其他"
                 expense_by_cat[cat] = expense_by_cat.get(cat, 0.0) + i.amount
 
         # 按分类统计收入
         income_by_cat: dict[str, float] = {}
         for i in items:
-            if i.direction == "income":
+            if getattr(i, "transaction_type", "") == "income":
                 cat = i.ledger_category or "其他"
                 income_by_cat[cat] = income_by_cat.get(cat, 0.0) + i.amount
 
@@ -725,6 +955,7 @@ class LedgerHandler(DbOpsMixin):
             f"━━━━━━━━━━━━━━━━━━\n"
             f"💸 总支出: ¥{total_expense:.2f}\n"
             f"💰 总收入: ¥{total_income:.2f}\n"
+            f"🔁 转账流量: ¥{total_transfer:.2f}\n"
             f"📊 结余: {balance_sign}¥{balance:.2f}\n"
         )
 

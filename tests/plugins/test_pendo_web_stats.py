@@ -85,7 +85,7 @@ def test_ledger_stats_returns_expense_amount_histogram():
             "owner_id": owner_id,
             "title": "早餐",
             "amount": 12,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": "2026-03-10",
         })
@@ -94,7 +94,7 @@ def test_ledger_stats_returns_expense_amount_histogram():
             "owner_id": owner_id,
             "title": "打车",
             "amount": 48,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "交通",
             "ledger_date": "2026-03-11",
         })
@@ -103,7 +103,7 @@ def test_ledger_stats_returns_expense_amount_histogram():
             "owner_id": owner_id,
             "title": "房租",
             "amount": 1200,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "居住",
             "ledger_date": "2026-03-12",
         })
@@ -112,7 +112,7 @@ def test_ledger_stats_returns_expense_amount_histogram():
             "owner_id": owner_id,
             "title": "工资",
             "amount": 5000,
-            "direction": "income",
+            "transaction_type": "income",
             "ledger_category": "工资",
             "ledger_date": "2026-03-15",
         })
@@ -142,7 +142,7 @@ def test_ledger_stats_respects_range_for_totals_categories_and_trend_data():
                 "owner_id": owner_id,
                 "title": "早餐",
                 "amount": 18,
-                "direction": "expense",
+                "transaction_type": "expense",
                 "ledger_category": "餐饮",
                 "ledger_date": "2026-03-02",
             },
@@ -151,7 +151,7 @@ def test_ledger_stats_respects_range_for_totals_categories_and_trend_data():
                 "owner_id": owner_id,
                 "title": "兼职",
                 "amount": 300,
-                "direction": "income",
+                "transaction_type": "income",
                 "ledger_category": "副业",
                 "ledger_date": "2026-03-03",
             },
@@ -160,7 +160,7 @@ def test_ledger_stats_respects_range_for_totals_categories_and_trend_data():
                 "owner_id": owner_id,
                 "title": "范围外支出",
                 "amount": 66,
-                "direction": "expense",
+                "transaction_type": "expense",
                 "ledger_category": "交通",
                 "ledger_date": "2026-04-03",
             },
@@ -200,7 +200,7 @@ def test_ledger_stats_all_range_stops_at_today_and_excludes_future_entries():
             "owner_id": owner_id,
             "title": "已发生支出",
             "amount": 28,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": included_date,
         })
@@ -209,7 +209,7 @@ def test_ledger_stats_all_range_stops_at_today_and_excludes_future_entries():
             "owner_id": owner_id,
             "title": "未来支出",
             "amount": 88,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "未来",
             "ledger_date": future_date,
         })
@@ -334,7 +334,7 @@ def test_task_stats_separates_created_and_completed_weeks():
             "type": "task",
             "owner_id": owner_id,
             "title": "任务二",
-            "status": "todo",
+            "status": "open",
             "category": "生活",
             "created_at": "2026-03-17T09:00:00",
         })
@@ -460,7 +460,7 @@ def test_ledger_stats_accepts_explicit_date_bounds():
                 "owner_id": owner_id,
                 "title": title,
                 "amount": amount,
-                "direction": "expense",
+                "transaction_type": "expense",
                 "ledger_category": "测试",
                 "ledger_date": ledger_date,
             })
@@ -707,7 +707,7 @@ def test_ledger_comparison_fills_missing_months_and_keeps_prev_month_baseline():
             "owner_id": owner_id,
             "title": "十月支出",
             "amount": 120,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": "2025-10-12",
         })
@@ -716,7 +716,7 @@ def test_ledger_comparison_fills_missing_months_and_keeps_prev_month_baseline():
             "owner_id": owner_id,
             "title": "十二月支出",
             "amount": 360,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "交通",
             "ledger_date": "2025-12-08",
         })
@@ -725,7 +725,7 @@ def test_ledger_comparison_fills_missing_months_and_keeps_prev_month_baseline():
             "owner_id": owner_id,
             "title": "二月支出",
             "amount": 240,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "服务",
             "ledger_date": "2026-02-18",
         })
@@ -734,7 +734,7 @@ def test_ledger_comparison_fills_missing_months_and_keeps_prev_month_baseline():
             "owner_id": owner_id,
             "title": "三月支出",
             "amount": 180,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "娱乐",
             "ledger_date": "2026-03-05",
         })

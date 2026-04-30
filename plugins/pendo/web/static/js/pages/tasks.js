@@ -4,15 +4,14 @@ import { showModal, closeModal, showConfirmModal } from '../components/modal.js'
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { pad2, parseDate } from '../utils/format.js';
-import { BREAKPOINTS, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-tasks-redesign-styles';
 const TODAY = () => new Date();
-const DATE_CATEGORY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const STATUS_META = {
-    todo: { label: '未完成', tone: '#F59E0B', bg: 'rgba(245,158,11,0.12)' },
-    in_progress: { label: '进行中', tone: '#0F766E', bg: 'rgba(16,185,129,0.12)' },
+    open: { label: '未完成', tone: '#F59E0B', bg: 'rgba(245,158,11,0.12)' },
     done: { label: '已完成', tone: '#16A34A', bg: 'rgba(34,197,94,0.12)' },
     cancelled: { label: '已取消', tone: '#64748B', bg: 'rgba(148,163,184,0.14)' },
 };
@@ -33,13 +32,14 @@ const TASK_FIELDS = [
         label: '状态',
         type: 'select',
         options: [
-            { value: 'todo', label: '未完成' },
+            { value: 'open', label: '未完成' },
             { value: 'done', label: '已完成' },
             { value: 'cancelled', label: '已取消' },
         ],
         selectThemeClass: 'pselect-theme-tasks',
     },
-    { name: 'due_time', label: '截止时间', type: 'datetime' },
+    { name: 'plan_date', label: '计划日期', type: 'date' },
+    { name: 'deadline_at', label: '截止时间', type: 'datetime' },
     { name: 'category', label: '分类', type: 'text', placeholder: '例如：工作、学习' },
     { name: 'content', label: '备注', type: 'textarea' },
 ];
@@ -92,47 +92,40 @@ function lastDayOfMonth(value = TODAY()) {
     return new Date(day.getFullYear(), day.getMonth() + 1, 0);
 }
 
-function parseDateCategory(value) {
-    if (!value || !DATE_CATEGORY_RE.test(String(value))) return null;
+function parseIsoDate(value) {
+    if (!value || !ISO_DATE_RE.test(String(value))) return null;
     return new Date(`${value}T00:00:00`);
 }
 
-function isDateCategory(value) {
-    return DATE_CATEGORY_RE.test(String(value || '').trim());
+function isIsoDate(value) {
+    return ISO_DATE_RE.test(String(value || '').trim());
 }
 
 function taskTextCategory(task) {
     const category = String(task?.category || '').trim();
-    return category && category !== '未分类' && !isDateCategory(category) ? category : '';
+    return category && category !== '未分类' ? category : '';
 }
 
 function taskEditableCategoryValue(task) {
     const category = String(task?.category || '').trim();
-    const due = parseDate(task?.due_time);
-    if (due && (isDateCategory(category) || !category || category === '未分类')) {
-        return dateKey(due);
-    }
     if (category && category !== '未分类') return category;
     return '';
 }
 
 function taskPlanDateKey(task) {
-    const category = String(task?.category || '').trim();
-    const due = parseDate(task?.due_time);
-    if (due && (isDateCategory(category) || !category || category === '未分类')) {
-        return dateKey(due);
-    }
-    if (isDateCategory(category)) return category;
-    return due ? dateKey(due) : '';
+    const plan = String(task?.plan_date || '').trim();
+    if (isIsoDate(plan)) return plan;
+    const deadline = parseDate(task?.deadline_at);
+    return deadline ? dateKey(deadline) : '';
 }
 
 function taskPlanDate(task) {
     const key = taskPlanDateKey(task);
-    return key ? parseDateCategory(key) : null;
+    return key ? parseIsoDate(key) : null;
 }
 
 function taskPrimaryStatus(task) {
-    return ['done', 'cancelled'].includes(task?.status) ? task.status : 'todo';
+    return ['done', 'cancelled'].includes(task?.status) ? task.status : 'open';
 }
 
 function taskStatusBucket(task) {
@@ -140,7 +133,7 @@ function taskStatusBucket(task) {
 }
 
 function formatPlanDate(value) {
-    const date = parseDateCategory(value);
+    const date = parseIsoDate(value);
     if (!date) return '未安排日期';
     return `${date.getMonth() + 1}/${date.getDate()}`;
 }
@@ -153,8 +146,8 @@ function describePlanDate(value, todayKey = dateKey(TODAY())) {
 }
 
 function normalizePlanRange(start, end) {
-    const safeStart = isDateCategory(start) ? start : '';
-    const safeEnd = isDateCategory(end) ? end : '';
+    const safeStart = isIsoDate(start) ? start : '';
+    const safeEnd = isIsoDate(end) ? end : '';
     if (!safeStart || !safeEnd) return { start: safeStart, end: safeEnd };
     return safeStart <= safeEnd ? { start: safeStart, end: safeEnd } : { start: safeEnd, end: safeStart };
 }
@@ -199,13 +192,12 @@ function toDatetimeLocal(value) {
     return String(value).slice(0, 16);
 }
 
-function defaultTaskDueTimeValue(now = TODAY()) {
+function defaultTaskPlanDateValue(now = TODAY()) {
     const target = new Date(now);
     if (target.getHours() >= 20) {
         target.setDate(target.getDate() + 1);
     }
-    target.setHours(23, 59, 0, 0);
-    return `${dateKey(target)}T23:59`;
+    return dateKey(target);
 }
 
 function normalizeTaskPayload(formData) {
@@ -215,9 +207,10 @@ function normalizeTaskPayload(formData) {
     payload.title = String(payload.title || '').trim();
     payload.content = payload.content ?? '';
     payload.category = String(payload.category || '').trim() || '未分类';
-    payload.status = ['done', 'cancelled'].includes(payload.status) ? payload.status : 'todo';
+    payload.status = ['done', 'cancelled'].includes(payload.status) ? payload.status : 'open';
     payload.priority = Number.isInteger(priority) && priority >= 1 && priority <= 5 ? priority : 3;
-    payload.due_time = payload.due_time || null;
+    payload.plan_date = payload.plan_date || null;
+    payload.deadline_at = payload.deadline_at || null;
 
     return payload;
 }
@@ -230,8 +223,9 @@ function isOverdue(task, today = startOfDay(TODAY())) {
 
 function taskSortKey(task) {
     const priority = Number(task.priority || 99);
-    const due = taskPlanDateKey(task) || '9999-12-31';
-    return [priority, due, task.created_at || ''];
+    const plan = taskPlanDateKey(task) || '9999-12-31';
+    const deadline = task.deadline_at || '9999-12-31T99:99:99';
+    return [priority, plan, deadline, task.created_at || ''];
 }
 
 function sortTasks(tasks) {
@@ -273,6 +267,7 @@ function filteredTasks() {
             task.category || '',
             taskTextCategory(task),
             taskPlanDateKey(task),
+            task.deadline_at || '',
         ].join('\n').toLowerCase();
         return haystack.includes(keyword);
     });
@@ -384,10 +379,9 @@ function deriveDisplayModel(tasks) {
         category_load: categoryLoad,
         completion_bars: completionDays,
         board_columns: {
-            todo: sortTasks(active),
+            open: sortTasks(active),
             done: sortDone(done),
             cancelled: sortDone(cancelled),
-            open: sortTasks(active),
             closed: sortDone(closed),
         },
     };
@@ -616,7 +610,7 @@ function renderPlanOptions() {
 function renderStatusOptions() {
     return [
         { value: '', label: '全部状态' },
-        { value: 'todo', label: '未完成' },
+        { value: 'open', label: '未完成' },
         { value: 'done', label: '已完成' },
         { value: 'cancelled', label: '已取消' },
     ];
@@ -775,35 +769,36 @@ function renderFilters(tasks) {
 function taskRowHTML(task) {
     const priority = PRIORITY_INFO[task.priority] || PRIORITY_INFO[3];
     const normalizedStatus = taskPrimaryStatus(task);
-    const status = STATUS_META[normalizedStatus] || STATUS_META.todo;
+    const status = STATUS_META[normalizedStatus] || STATUS_META.open;
     const textCategory = taskTextCategory(task);
     const planKey = taskPlanDateKey(task);
     const scheduleText = taskStatusBucket(task) === 'closed'
         ? (task.completed_at || task.updated_at
             ? `${normalizedStatus === 'cancelled' ? '结束于' : '完成于'} · ${formatShortDate(task.completed_at || task.updated_at)}`
             : (normalizedStatus === 'cancelled' ? '已取消' : '已完成'))
-        : (task.due_time
-            ? `${isOverdue(task) ? '已滞后' : '截止'} · ${formatShortDate(task.due_time)}`
+        : (task.deadline_at
+            ? `${isOverdue(task) ? '已滞后' : '截止'} · ${formatShortDate(task.deadline_at)}`
             : describePlanDate(planKey));
-    const content = task.content ? `<div class="task-row-note">${task.content}</div>` : '';
+    const taskId = escapeHtml(task.id || '');
+    const content = task.content ? `<div class="task-row-note">${escapeHtml(task.content)}</div>` : '';
     return `
-        <div class="task-row" data-task-id="${task.id}">
+        <div class="task-row" data-task-id="${taskId}">
             <div class="task-row-priority" style="background:${priority.color};"></div>
             <div>
-                <h4 class="task-row-title">${task.title || '(无标题)'}</h4>
+                <h4 class="task-row-title">${escapeHtml(task.title || '(无标题)')}</h4>
                 ${content}
                 <div class="task-row-meta">
                     <span class="task-pill">${priority.icon} ${priority.label}</span>
                     ${planKey ? `<span class="task-pill">${formatPlanDate(planKey)}</span>` : ''}
-                    ${textCategory ? `<span class="task-pill">${textCategory}</span>` : (!planKey ? `<span class="task-pill">未分类</span>` : '')}
+                    ${textCategory ? `<span class="task-pill">${escapeHtml(textCategory)}</span>` : (!planKey ? `<span class="task-pill">未分类</span>` : '')}
                     <span class="task-pill status" style="--task-pill-color:${status.tone};--task-pill-bg:${status.bg};">${status.label}</span>
-                    <span class="task-pill">${scheduleText}</span>
+                    <span class="task-pill">${escapeHtml(scheduleText)}</span>
                 </div>
             </div>
             <div class="task-row-actions">
-                ${taskStatusBucket(task) !== 'closed' ? `<button class="task-action-btn primary" data-action="done" data-id="${task.id}">完成</button>` : `<button class="task-action-btn" data-action="resume" data-id="${task.id}">恢复</button>`}
-                ${taskStatusBucket(task) !== 'closed' ? `<button class="task-action-btn" data-action="cancel" data-id="${task.id}">取消</button>` : ''}
-                <button class="task-action-btn" data-action="edit" data-id="${task.id}">编辑</button>
+                ${taskStatusBucket(task) !== 'closed' ? `<button class="task-action-btn primary" data-action="done" data-id="${taskId}">完成</button>` : `<button class="task-action-btn" data-action="resume" data-id="${taskId}">恢复</button>`}
+                ${taskStatusBucket(task) !== 'closed' ? `<button class="task-action-btn" data-action="cancel" data-id="${taskId}">取消</button>` : ''}
+                <button class="task-action-btn" data-action="edit" data-id="${taskId}">编辑</button>
             </div>
         </div>`;
 }
@@ -825,7 +820,7 @@ function renderSection(title, subtitle, tasks) {
 }
 
 function renderListView(model) {
-    const showActive = !_filters.status || _filters.status === 'todo';
+    const showActive = !_filters.status || _filters.status === 'open';
     const showClosed = !_filters.status || _filters.status === 'done' || _filters.status === 'cancelled';
     const closedTasks = sortDone([...model.done_recent, ...model.cancelled_recent]).slice(0, 8);
     return `
@@ -839,17 +834,17 @@ function renderListView(model) {
 
 function boardCardHTML(task) {
     const priority = PRIORITY_INFO[task.priority] || PRIORITY_INFO[3];
-    const status = STATUS_META[taskPrimaryStatus(task)] || STATUS_META.todo;
+    const status = STATUS_META[taskPrimaryStatus(task)] || STATUS_META.open;
     const textCategory = taskTextCategory(task);
     const planKey = taskPlanDateKey(task);
     return `
-        <div class="tasks-board-card" data-task-id="${task.id}" draggable="true">
-            <h4>${task.title || '(无标题)'}</h4>
-            ${task.content ? `<p>${task.content}</p>` : ''}
+        <div class="tasks-board-card" data-task-id="${escapeHtml(task.id || '')}" draggable="true">
+            <h4>${escapeHtml(task.title || '(无标题)')}</h4>
+            ${task.content ? `<p>${escapeHtml(task.content)}</p>` : ''}
             <div class="tasks-board-meta">
                 <span class="task-pill">${priority.icon} ${priority.label}</span>
                 ${planKey ? `<span class="task-pill">${formatPlanDate(planKey)}</span>` : ''}
-                ${textCategory ? `<span class="task-pill">${textCategory}</span>` : ''}
+                ${textCategory ? `<span class="task-pill">${escapeHtml(textCategory)}</span>` : ''}
                 <span class="task-pill status" style="--task-pill-color:${status.tone};--task-pill-bg:${status.bg};">${status.label}</span>
             </div>
         </div>`;
@@ -939,12 +934,12 @@ export function openTaskModal(existing = null) {
     const fields = TASK_FIELDS.map((field) => {
         let value = field.value ?? '';
         if (existing) {
-            if (field.name === 'due_time') value = toDatetimeLocal(existing.due_time);
+            if (field.name === 'deadline_at') value = toDatetimeLocal(existing.deadline_at);
             else if (field.name === 'status') value = taskPrimaryStatus(existing);
             else if (field.name === 'category') value = taskEditableCategoryValue(existing);
             else value = existing[field.name] ?? field.value ?? '';
-        } else if (field.name === 'due_time') {
-            value = defaultTaskDueTimeValue();
+        } else if (field.name === 'plan_date') {
+            value = defaultTaskPlanDateValue();
         }
         return { ...field, value };
     });
@@ -1095,7 +1090,7 @@ function attachListeners() {
                 return;
             }
             if (action === 'resume') {
-                await updateTaskStatus(taskId, 'todo');
+                await updateTaskStatus(taskId, 'open');
                 return;
             }
             if (action === 'cancel') {
@@ -1138,7 +1133,7 @@ function attachListeners() {
                 zone.classList.remove('drag-over');
                 const status = zone.dataset.col;
                 if (!_dragTaskId || !status) return;
-                await updateTaskStatus(_dragTaskId, status === 'closed' ? 'done' : 'todo');
+                await updateTaskStatus(_dragTaskId, status === 'closed' ? 'done' : 'open');
             });
         });
     }

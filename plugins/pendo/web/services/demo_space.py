@@ -16,9 +16,19 @@ from .bundle_import import inspect_bundle_bytes
 _DEMO_PREFIX = "demo_web_"
 _DEMO_TEMPLATE_PATH = Path(__file__).resolve().parent / "assets" / "demo_bundle.pendo.zip"
 _DEMO_TEMPLATE_ANCHOR = datetime(2026, 4, 8, 9, 0, 0)
-_DATE_FIELDS = {"ledger_date", "diary_date"}
-_DATETIME_FIELDS = {"created_at", "updated_at", "start_time", "end_time", "due_time", "completed_at", "last_viewed", "deleted_at"}
-_REFERENCE_LIST_FIELDS = {"dependencies", "related_items"}
+_DATE_FIELDS = {"ledger_date", "diary_date", "plan_date"}
+_DATETIME_FIELDS = {
+    "created_at",
+    "updated_at",
+    "start_time",
+    "end_time",
+    "deadline_at",
+    "completed_at",
+    "cancelled_at",
+    "last_viewed",
+    "deleted_at",
+}
+_REFERENCE_LIST_FIELDS = {"related_items"}
 
 
 def _iso(dt: datetime) -> str:

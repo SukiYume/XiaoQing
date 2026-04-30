@@ -4,40 +4,15 @@ import io
 from datetime import datetime
 from typing import Any
 
-from ...utils.validators import (
-    normalize_diary_fields,
-    normalize_event_fields,
-    normalize_ledger_fields,
-    normalize_note_fields,
-    normalize_task_fields,
-)
+from ...utils.validators import normalize_item_fields
 from .transfer_bundle import BundleValidationError, EVENT_COLLECTION_FILE_NAME, TYPE_FILE_NAMES, read_bundle
-
-
-_NORMALIZER_MAP = {
-    "event": normalize_event_fields,
-    "task": normalize_task_fields,
-    "note": normalize_note_fields,
-    "diary": normalize_diary_fields,
-    "ledger": normalize_ledger_fields,
-}
 
 
 def normalize_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
     item_type = payload["type"]
     base = dict(payload)
-    preserved = {
-        key: value for key, value in base.items()
-        if key not in {"type", "id", "created_at", "updated_at", "context", "attachments", "ai_meta", "deleted", "deleted_at", "_bundle_line"}
-    }
-
-    normalizer = _NORMALIZER_MAP.get(item_type)
-    if not normalizer:
-        raise ValueError(f"Unsupported record type: {item_type}")
-    normalized = normalizer(base, partial=False)
-
-    for key, value in preserved.items():
-        normalized.setdefault(key, value)
+    base.pop("_bundle_line", None)
+    normalized = normalize_item_fields(base, partial=False)
     normalized["type"] = item_type
     if "id" in payload:
         normalized["id"] = payload["id"]

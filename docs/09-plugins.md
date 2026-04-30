@@ -193,9 +193,10 @@
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo todo add <内容> [cat:分类] [p:1-4]` | 添加待办 |
-| `/pendo todo list [分类] [done/undone]` | 查看待办 |
+| `/pendo todo add <内容> [plan:日期] [deadline:时间] [cat:分类] [p:1-5]` | 添加待办 |
+| `/pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类]` | 查看待办 |
 | `/pendo todo done <id>` | 完成待办 |
+| `/pendo todo cancel <id>` | 取消待办 |
 | `/pendo todo undone <id>` | 重开待办 |
 | `/pendo todo delete <id\|cat:分类>` | 删除待办 |
 | `/pendo todo edit <id> <内容>` | 编辑待办 |
@@ -213,20 +214,20 @@
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo diary add [日期] <内容>` | 写日记 |
+| `/pendo diary add [日期] <内容>` | 写一篇日记；同一天可多篇 |
 | `/pendo diary list [范围]` | 查看日记列表 |
-| `/pendo diary view <日期>` | 查看日记详情 |
+| `/pendo diary view <日期或ID>` | 查看某天所有日记或某篇详情 |
 | `/pendo diary template` | 查看所有模板 |
 | `/pendo diary <模板ID>` | 使用模板写日记 |
-| `/pendo diary delete <日期>` | 删除日记 |
+| `/pendo diary delete <日期或ID>` | 删除日记；同天多篇时按ID删除 |
 
 **记账 (Ledger)**
 
 | 命令 | 说明 |
 |------|------|
 | `/pendo ledger add` | 交互式多轮记账 |
-| `/pendo ledger quick <金额> <描述> [cat:分类] [in]` | 快速单行记账（默认支出，加 `in` 为收入） |
-| `/pendo ledger list [范围] [dir:in/out] [cat:分类]` | 查看账目列表 |
+| `/pendo ledger quick <金额> <描述> [cat:分类] [in\|transfer] [account:账户] [to:账户] [merchant:商户]` | 快速单行记账；默认支出，支持收入、账户和转账 |
+| `/pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [cat:分类]` | 查看账目列表 |
 | `/pendo ledger view <id>` | 查看账目详情 |
 | `/pendo ledger edit <id> <字段:值>...` | 编辑账目 |
 | `/pendo ledger delete <id>` | 删除账目 |
@@ -241,9 +242,9 @@
 | `/pendo search <关键词>` | 全文搜索 |
 | `/pendo search <关键词> type=event/task/note/diary` | 按类型搜索 |
 | `/pendo search <关键词> range=last7d/2026-01` | 按时间范围搜索 |
-| `/pendo search <关键词> status=todo/done` | 按待办状态筛选 |
+| `/pendo search <关键词> status=open/done/cancelled` | 按待办状态筛选 |
 | `/pendo search <关键词> category=<分类>` | 按分类筛选 |
-| `/pendo search <关键词> direction=income/expense` | 按收支方向筛选（记账） |
+| `/pendo search <关键词> transaction_type=income/expense/transfer` | 按账目类型筛选（记账） |
 
 **提醒操作**
 
@@ -257,11 +258,10 @@
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo export md [range] [type]` | 导出 Markdown |
-| `/pendo import md` | 导入 Markdown |
-| `/pendo import md preview` | 预览导入 |
+| `/pendo export <文件名> [范围] [类型]` | 聊天端导出单文件 Markdown 档案 |
+| Web 设置页导入/导出 Bundle | 导入/导出 `.pendo.zip` 数据包，支持预览、冲突策略和审计日志 |
 
-> **提示：Web 端提供内置的高阶数据迁移能力**：支持生成并下载 `.pendo.zip` 数据包，拥有包含冲突处理及审计日志的功能板块。同时支持通过 `plugins/pendo/scripts/convert_text_export_to_pendo_bundle.py` 转换文本备份为可导入的 Bundle 格式。
+> **提示：聊天端只保留 Markdown 档案导出；数据迁移和恢复请使用 Web 端 Bundle 流程。**
 
 **设置 (Settings)**
 
@@ -362,6 +362,7 @@ Web 控制台提供以下页面：
 ```
 /pendo diary add 今天完成了论文初稿        # 写今天日记
 /pendo diary add 2026-02-01 昨天很充实    # 补写日记
+/pendo diary add mood:happy score:8 favorite:true 今天推进顺利
 /pendo diary list week                       # 查看本周日记
 /pendo diary view 2026-02-01                 # 查看详情
 /pendo diary template                        # 查看模板
@@ -373,9 +374,9 @@ Web 控制台提供以下页面：
 /pendo search 脉冲星                         # 全文搜索
 /pendo search 脉冲星 type=note              # 只搜笔记
 /pendo search 论文 range=last7d              # 最近7天
-/pendo search 报告 status=todo              # 只看未完成待办
+/pendo search 报告 status=open              # 只看未完成待办
 /pendo search 餐 category=餐饮              # 按分类筛选
-/pendo search 外卖 direction=expense        # 记账支出搜索
+/pendo search 外卖 transaction_type=expense # 记账支出搜索
 ```
 
 **6. 提醒操作**
@@ -391,10 +392,10 @@ Web 控制台提供以下页面：
 **7. 数据导入导出**
 
 ```
-/pendo export md                             # 导出所有数据
-/pendo export md last7d                      # 导出最近7天
-/pendo import md                             # 导入 Markdown
-/pendo import md preview                     # 预览导入
+/pendo export 我的档案                      # 导出所有数据
+/pendo export 工作回顾 last7d event,todo    # 导出最近7天日程和待办
+/pendo export 账本快照 2026-03 ledger       # 导出指定月份账本
+# 导入和 Bundle 迁移在 Web 设置页完成
 ```
 
 **8. 设置管理**
@@ -416,13 +417,15 @@ Web 控制台提供以下页面：
 
 ```
 /pendo ledger add                            # 交互式记账（多轮对话引导填写）
-/pendo ledger quick 35 午餐                  # 快速记录支出 35 元
-/pendo ledger quick 100 兼职收入 in          # 快速记录收入 100 元
-/pendo ledger quick 20 咖啡 cat:餐饮         # 指定分类
+/pendo ledger quick 35 午餐 account:微信 merchant:食堂
+/pendo ledger quick 100 兼职收入 in account:支付宝
+/pendo ledger quick 1000 还款 transfer account:微信 to:招行
+/pendo ledger quick 20 咖啡 cat:餐饮 account:现金
 /pendo ledger list                           # 查看本月账目
 /pendo ledger list week                      # 查看本周
 /pendo ledger list 2026-03                   # 查看三月账目
-/pendo ledger list dir:in                    # 只看收入
+/pendo ledger list type:income               # 只看收入
+/pendo ledger list account:微信              # 只看某个账户
 /pendo ledger list cat:餐饮                  # 只看餐饮分类
 /pendo ledger summary                        # 本月收支汇总
 /pendo ledger summary last7d                 # 最近7天汇总
@@ -452,7 +455,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - **每分钟** - 检查提醒（事件/待办提醒按分钟级轮询）
 - **每分钟** - 每日简报（用户可自定义触发时间，因此逐分钟检查）
 - **每分钟** - 日记提醒（用户可自定义触发时间，因此逐分钟检查）
-- **每天 00:05** - 待办迁移（将过期待办归档）
+- **每天 00:05** - 待办计划迁移（将昨日仍 open 的计划顺延到今天）
 - **每周日 21:00** - 每周财务总结
 - **每月最后一天 21:00** - 月底财务总结
 
@@ -461,7 +464,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - 日程添加需要配置 LLM API 以使用 AI 解析功能
 - 群聊中长消息会自动转为私聊以保护隐私
 - 支持会话式交互，使用"退出"或"q"结束会话
-- 所有数据存储在 `plugins/pendo/data/` 目录
+- Pendo 的本地运行时数据包括 SQLite 数据库和 Web Token 签名密钥
 - Web 控制台需要额外依赖：`PyJWT`、`fastapi`、`uvicorn`、`passlib[bcrypt]`（已包含在根目录 `requirements.txt`）
 
 ---

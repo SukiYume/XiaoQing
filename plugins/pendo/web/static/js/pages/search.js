@@ -90,14 +90,32 @@ function itemMeta(item) {
         ].filter(Boolean);
     }
     if (item.type === 'task') {
-        return [item.status || '', item.priority ? `优先级 ${item.priority}` : '', item.due_time ? `截止 ${formatDate(item.due_time)}` : '', item.category || ''].filter(Boolean);
+        return [
+            item.status || '',
+            item.priority ? `优先级 ${item.priority}` : '',
+            item.plan_date ? `计划 ${formatDate(item.plan_date)}` : '',
+            item.deadline_at ? `截止 ${formatDate(item.deadline_at)}` : '',
+            item.category || '',
+        ].filter(Boolean);
     }
     if (item.type === 'ledger') {
-        const amount = item.amount != null ? `${item.direction === 'income' ? '+' : '-'}¥${Number(item.amount).toFixed(2)}` : '';
-        return [amount, item.ledger_category || '', item.ledger_date || ''].filter(Boolean);
+        const txType = item.transaction_type || 'expense';
+        const sign = txType === 'income' ? '+' : (txType === 'transfer' ? '↔ ' : '-');
+        const amount = item.amount != null ? `${sign}¥${Number(item.amount).toFixed(2)}` : '';
+        const account = txType === 'transfer' && item.counter_account_name
+            ? `${item.account_name || '现金'}→${item.counter_account_name}`
+            : (item.account_name || '');
+        return [amount, item.ledger_category || '', account, item.merchant || '', item.ledger_date || ''].filter(Boolean);
     }
     if (item.type === 'diary') {
-        return [item.diary_date || '', item.weather || '', item.mood || ''].filter(Boolean);
+        const entryTime = item.entry_time ? formatDate(item.entry_time) : '';
+        return [
+            entryTime || item.diary_date || '',
+            item.weather || '',
+            item.mood ? `心情 ${item.mood}` : '',
+            item.mood_score ? `${item.mood_score}/10` : '',
+            item.is_favorite ? '收藏' : '',
+        ].filter(Boolean);
     }
     return [item.category || '', formatDate(item.updated_at || item.created_at)].filter(Boolean);
 }

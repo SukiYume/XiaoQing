@@ -273,6 +273,18 @@ DIARY_TEMPLATES = {
     },
 }
 
+DIARY_MOODS = [
+    {"id": "happy", "label": "开心", "emoji": "😊"},
+    {"id": "calm", "label": "平静", "emoji": "😌"},
+    {"id": "excited", "label": "兴奋", "emoji": "🤩"},
+    {"id": "sad", "label": "难过", "emoji": "😢"},
+    {"id": "angry", "label": "生气", "emoji": "😠"},
+    {"id": "tired", "label": "疲惫", "emoji": "😴"},
+    {"id": "anxious", "label": "焦虑", "emoji": "😰"},
+    {"id": "grateful", "label": "感恩", "emoji": "🙏"},
+    {"id": "neutral", "label": "普通", "emoji": "😐"},
+]
+
 # 情绪分析配置
 MOOD_ANALYSIS_CONFIG = {
     "positive_words": [
@@ -316,10 +328,25 @@ MOOD_ANALYSIS_CONFIG = {
     "calm_words": ["平静", "安宁", "放松", "舒适", "还行", "一般", "平常", "普通", "淡定", "冷静"],
     "excited_words": ["激动", "兴奋", "期待", "迫不及待", "热血沸腾"],
     "angry_words": ["生气", "愤怒", "恼火", "不爽", "讨厌", "烦"],
+    "tired_words": ["疲惫", "疲劳", "困", "没精神", "累瘫"],
+    "anxious_words": ["焦虑", "担心", "紧张", "不安", "慌"],
+    "grateful_words": ["感恩", "感谢", "珍惜", "幸运", "被照顾"],
     # 情绪类型到emoji的映射
-    "mood_emojis": {"happy": "😊", "sad": "😢", "calm": "😌", "excited": "🤩", "angry": "😠"},
+    "mood_emojis": {row["id"]: row["emoji"] for row in DIARY_MOODS},
+    "mood_labels": {row["id"]: row["label"] for row in DIARY_MOODS},
+    "allowed_moods": [row["id"] for row in DIARY_MOODS],
     # 基础分数配置
-    "base_scores": {"happy": 6, "sad": 5, "calm": 5, "excited": 8, "angry": 3},
+    "base_scores": {
+        "happy": 6,
+        "sad": 5,
+        "calm": 5,
+        "excited": 8,
+        "angry": 3,
+        "tired": 4,
+        "anxious": 3,
+        "grateful": 7,
+        "neutral": 5,
+    },
     # 每个匹配词的分值增量
     "score_increment": 1,
 }

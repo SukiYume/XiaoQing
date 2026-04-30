@@ -10,6 +10,7 @@ import uuid
 import pytest
 
 from plugins.pendo.services.db import Database
+from plugins.pendo.web.analytics.event_schedule import ensure_datetime
 from plugins.pendo.web.analytics.events_overview import build_event_detail, build_events_overview
 
 
@@ -186,6 +187,50 @@ def test_build_events_overview_supports_multi_node_recurring_and_reminder_filter
         assert meeting_only["events"][0]["id"] == "series_20260318"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_build_events_overview_includes_each_day_for_multi_day_events():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_events_multiday_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-events-multiday"
+
+    try:
+        db.insert_item({
+            "id": "ev_multiday",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "跨天出差",
+            "category": "工作",
+            "start_time": "2026-03-10T22:00:00",
+            "end_time": "2026-03-12T03:00:00",
+        })
+
+        result = build_events_overview(
+            db=db,
+            owner_id=owner_id,
+            start_date="2026-03-10",
+            end_date="2026-03-12",
+        )
+
+        assert result["events"][0]["display_days"] == ["2026-03-10", "2026-03-11", "2026-03-12"]
+        assert result["calendar_days"]["2026-03-11"]["has_events"] is True
+        assert [row["date"] for row in result["timeline_days"]] == [
+            "2026-03-10",
+            "2026-03-11",
+            "2026-03-12",
+        ]
+        assert result["timeline_days"][1]["items"][0]["time_label"] == "跨天"
+        assert result["timeline_days"][2]["items"][0]["time_label"] == "至 03:00"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_event_schedule_converts_offset_aware_datetimes_to_default_local_time():
+    parsed = ensure_datetime("2026-04-29T00:30:00+00:00")
+
+    assert parsed is not None
+    assert parsed.isoformat(timespec="seconds") == "2026-04-29T08:30:00"
 
 
 def test_build_event_detail_includes_reminder_logs_and_related_instances():
@@ -468,6 +513,48 @@ def test_events_collection_api_rejects_invalid_child_without_partial_writes():
             "SELECT COUNT(*) FROM items WHERE owner_id = ?",
             (owner_id,),
         ).fetchone()[0] == 0
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_events_collection_update_rejects_invalid_reminder_rules():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_event_graph_invalid_rules_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-web-event-graph-invalid-rules"
+    events_api = _load_events_module()
+
+    try:
+        created = events_api.create_event_collection(
+            body=events_api.EventCollectionCreate(
+                title="发布项目",
+                children=[
+                    events_api.EventCollectionChildCreate(
+                        title="提审",
+                        start_time="2030-05-01T10:00:00",
+                    ),
+                    events_api.EventCollectionChildCreate(
+                        title="上线",
+                        start_time="2030-05-02T18:00:00",
+                    ),
+                ],
+            ),
+            owner_id=owner_id,
+            db=db,
+        )
+
+        with pytest.raises(events_api.HTTPException) as exc_info:
+            events_api.update_collection(
+                created["data"]["id"],
+                body=events_api.EventCollectionUpdate(
+                    reminder_rules=[{"offset_seconds": -120}],
+                ),
+                owner_id=owner_id,
+                db=db,
+            )
+
+        assert exc_info.value.status_code == 422
+        assert "offset_seconds" in exc_info.value.detail
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

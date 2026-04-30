@@ -2,7 +2,6 @@
 
 from collections import Counter
 from datetime import date, datetime, timedelta
-import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -14,9 +13,8 @@ from ..analytics.task_overview import build_task_overview
 from ..deps import get_db, get_current_user
 
 router = APIRouter()
-
-DATE_CATEGORY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
+LEDGER_AMOUNT_EXPR = Database._LEDGER_AMOUNT_CENTS_EXPR
+LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({LEDGER_AMOUNT_EXPR}), 0) / 100.0, 2)"
 
 LEDGER_HISTOGRAM_BUCKETS = [
     ("0-20", 0, 20),
@@ -32,12 +30,12 @@ def _aggregate_monthly(rows):
     """Aggregate monthly rows by month, merging income/expense."""
     months = {}
     for r in rows:
-        month, direction, total = r[0], r[1], r[2]
+        month, transaction_type, total = r[0], r[1], r[2]
         if month not in months:
             months[month] = {"month": month, "income": 0, "expense": 0}
-        if direction == "income":
+        if transaction_type == "income":
             months[month]["income"] = total
-        else:
+        elif transaction_type == "expense":
             months[month]["expense"] = total
     return list(months.values())
 
@@ -46,12 +44,12 @@ def _aggregate_daily(rows):
     """Aggregate daily rows by date, merging income/expense."""
     days = {}
     for r in rows:
-        date, direction, total = r[0], r[1], r[2]
+        date, transaction_type, total = r[0], r[1], r[2]
         if date not in days:
             days[date] = {"date": date, "income": 0, "expense": 0}
-        if direction == "income":
+        if transaction_type == "income":
             days[date]["income"] = total
-        else:
+        elif transaction_type == "expense":
             days[date]["expense"] = total
     return list(days.values())
 
@@ -128,42 +126,49 @@ def ledger_stats(
     conn = db.get_connection()
 
     monthly = conn.execute(
-        """
-        SELECT strftime('%Y-%m', ledger_date) AS month, direction, SUM(amount) AS total
+        f"""
+        SELECT strftime('%Y-%m', ledger_date) AS month,
+               transaction_type AS ledger_kind,
+               {LEDGER_AMOUNT_TOTAL_EXPR} AS total
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
         AND ledger_date BETWEEN ? AND ?
-        GROUP BY month, direction ORDER BY month
+        GROUP BY month, ledger_kind ORDER BY month
     """,
         (owner_id, start, end),
     ).fetchall()
 
     by_category = conn.execute(
-        """
-        SELECT ledger_category, direction, SUM(amount) AS total, COUNT(*) AS count
+        f"""
+        SELECT ledger_category,
+               transaction_type AS ledger_kind,
+               {LEDGER_AMOUNT_TOTAL_EXPR} AS total,
+               COUNT(*) AS count
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
         AND ledger_date BETWEEN ? AND ?
-        GROUP BY ledger_category, direction
+        GROUP BY ledger_category, ledger_kind
         ORDER BY total DESC, ledger_category
     """,
         (owner_id, start, end),
     ).fetchall()
 
     daily = conn.execute(
-        """
-        SELECT ledger_date, direction, SUM(amount) AS total
+        f"""
+        SELECT ledger_date,
+               transaction_type AS ledger_kind,
+               {LEDGER_AMOUNT_TOTAL_EXPR} AS total
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
         AND ledger_date BETWEEN ? AND ?
-        GROUP BY ledger_date, direction ORDER BY ledger_date
+        GROUP BY ledger_date, ledger_kind ORDER BY ledger_date
     """,
         (owner_id, start, end),
     ).fetchall()
 
     expense_amounts = conn.execute(
-        """
-        SELECT amount
+        f"""
+        SELECT ROUND({LEDGER_AMOUNT_EXPR} / 100.0, 2)
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
-        AND direction='expense' AND ledger_date BETWEEN ? AND ?
-        ORDER BY amount
+        AND transaction_type='expense' AND ledger_date BETWEEN ? AND ?
+        ORDER BY {LEDGER_AMOUNT_EXPR}
     """,
         (owner_id, start, end),
     ).fetchall()
@@ -178,6 +183,9 @@ def ledger_stats(
             "income_by_category": [
                 {"category": r[0], "total": r[2]} for r in by_category if r[1] == "income"
             ],
+            "transfer_by_category": [
+                {"category": r[0], "total": r[2]} for r in by_category if r[1] == "transfer"
+            ],
             "daily": _aggregate_daily(daily),
             "expense_amount_histogram": _build_amount_histogram(
                 [float(r[0] or 0) for r in expense_amounts]
@@ -189,8 +197,9 @@ def ledger_stats(
 
 @router.get("/stats/ledger/insights")
 def ledger_visual_insights(
-    direction: str | None = None,
+    transaction_type: str | None = None,
     category: str | None = None,
+    account_name: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     amount_min: float | None = None,
@@ -205,8 +214,9 @@ def ledger_visual_insights(
         "data": build_ledger_insights(
             db=db,
             owner_id=owner_id,
-            direction=direction,
+            transaction_type=transaction_type,
             category=category,
+            account_name=account_name,
             start_date=start_date,
             end_date=end_date,
             amount_min=amount_min,
@@ -231,8 +241,11 @@ def task_stats(
         (
             date(created_at) BETWEEN ? AND ?
             OR (completed_at IS NOT NULL AND date(completed_at) BETWEEN ? AND ?)
+            OR (cancelled_at IS NOT NULL AND date(cancelled_at) BETWEEN ? AND ?)
+            OR (plan_date IS NOT NULL AND plan_date BETWEEN ? AND ?)
         )
     """
+    range_params = (start, end, start, end, start, end, start, end)
 
     totals_rows = conn.execute(
         """
@@ -243,12 +256,12 @@ def task_stats(
         + """
         GROUP BY status
     """,
-        (owner_id, start, end, start, end),
+        (owner_id, *range_params),
     ).fetchall()
 
     totals_raw = {row[0]: row[1] for row in totals_rows}
     totals = {
-        "open": int(totals_raw.get("todo", 0) or 0) + int(totals_raw.get("in_progress", 0) or 0),
+        "open": int(totals_raw.get("open", 0) or 0),
         "done": int(totals_raw.get("done", 0) or 0),
         "cancelled": int(totals_raw.get("cancelled", 0) or 0),
     }
@@ -278,11 +291,11 @@ def task_stats(
 
     cancelled_weekly = conn.execute(
         """
-        SELECT strftime('%Y-W%W', completed_at) AS week, COUNT(*) AS count
+        SELECT strftime('%Y-W%W', cancelled_at) AS week, COUNT(*) AS count
         FROM items WHERE type='task' AND owner_id=? AND deleted=0
-        AND completed_at IS NOT NULL
+        AND cancelled_at IS NOT NULL
         AND status='cancelled'
-        AND date(completed_at) BETWEEN ? AND ?
+        AND date(cancelled_at) BETWEEN ? AND ?
         GROUP BY week ORDER BY week
     """,
         (owner_id, start, end),
@@ -302,24 +315,22 @@ def task_stats(
 
     task_rows = conn.execute(
         """
-        SELECT status, category, priority, due_time
+        SELECT status, category, priority, plan_date, deadline_at
         FROM items WHERE type='task' AND owner_id=? AND deleted=0
         AND """
         + range_condition,
-        (owner_id, start, end, start, end),
+        (owner_id, *range_params),
     ).fetchall()
 
-    open_rows = [row for row in task_rows if row[0] in {"todo", "in_progress"}]
+    open_rows = [row for row in task_rows if row[0] == "open"]
     plan_counter = Counter()
     text_category_counter = Counter()
-    for status, category, priority, due_time in open_rows:
+    for status, category, priority, plan_date, deadline_at in open_rows:
         cat = str(category or "").strip()
-        due_key = str(due_time or "")[:10]
-        if due_key and (DATE_CATEGORY_RE.fullmatch(cat) or not cat or cat == "未分类"):
-            plan_counter[due_key] += 1
-        elif DATE_CATEGORY_RE.fullmatch(cat):
-            plan_counter[cat] += 1
-        elif cat:
+        plan_key = str(plan_date or "").strip() or str(deadline_at or "")[:10]
+        if plan_key:
+            plan_counter[plan_key] += 1
+        if cat and cat != "未分类":
             text_category_counter[cat] += 1
 
     by_priority = conn.execute(
@@ -332,7 +343,7 @@ def task_stats(
         GROUP BY priority
         ORDER BY priority
     """,
-        (owner_id, start, end, start, end),
+        (owner_id, *range_params),
     ).fetchall()
 
     new_this_week = conn.execute(
@@ -544,44 +555,44 @@ def ledger_comparison(
     month_window = [_shift_months(current_month, offset) for offset in range(-(months - 1), 1)]
     current_query_start = _shift_months(month_window[0], -1).strftime("%Y-%m-01")
     current_monthly = conn.execute(
-        """
+        f"""
         SELECT strftime('%Y-%m', ledger_date) AS month,
-               direction,
-               SUM(amount) AS total
+               transaction_type AS ledger_kind,
+               {LEDGER_AMOUNT_TOTAL_EXPR} AS total
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
         AND ledger_date >= ?
-        GROUP BY month, direction ORDER BY month
+        GROUP BY month, ledger_kind ORDER BY month
     """,
         (owner_id, current_query_start),
     ).fetchall()
 
     monthly_map: dict[str, dict] = {}
-    for month, direction, total in current_monthly:
+    for month, transaction_type, total in current_monthly:
         monthly_map.setdefault(month, {"month": month, "expense": 0, "income": 0})
-        if direction == "income":
+        if transaction_type == "income":
             monthly_map[month]["income"] = round(total, 2)
-        else:
+        elif transaction_type == "expense":
             monthly_map[month]["expense"] = round(total, 2)
 
     yoy_query_start = _shift_months(month_window[0], -12).strftime("%Y-%m-01")
     yoy_data = conn.execute(
-        """
+        f"""
         SELECT strftime('%Y-%m', ledger_date) AS month,
-               direction,
-               SUM(amount) AS total
+               transaction_type AS ledger_kind,
+               {LEDGER_AMOUNT_TOTAL_EXPR} AS total
         FROM items WHERE type='ledger' AND owner_id=? AND deleted=0
         AND ledger_date >= ?
-        GROUP BY month, direction ORDER BY month
+        GROUP BY month, ledger_kind ORDER BY month
     """,
         (owner_id, yoy_query_start),
     ).fetchall()
 
     yoy_map: dict[str, dict] = {}
-    for month, direction, total in yoy_data:
+    for month, transaction_type, total in yoy_data:
         yoy_map.setdefault(month, {"expense": 0, "income": 0})
-        if direction == "income":
+        if transaction_type == "income":
             yoy_map[month]["income"] = round(total, 2)
-        else:
+        elif transaction_type == "expense":
             yoy_map[month]["expense"] = round(total, 2)
 
     result_months = []

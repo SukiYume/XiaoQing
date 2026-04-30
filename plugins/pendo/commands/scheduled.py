@@ -414,8 +414,14 @@ async def _generate_finance_summary_content(
     if not items:
         return ""
 
-    income_items = [item for item in items if getattr(item, "direction", "") == "income"]
-    expense_items = [item for item in items if getattr(item, "direction", "") == "expense"]
+    income_items = [
+        item for item in items
+        if getattr(item, "transaction_type", "") == "income"
+    ]
+    expense_items = [
+        item for item in items
+        if getattr(item, "transaction_type", "") == "expense"
+    ]
     total_income = sum(float(getattr(item, "amount", 0) or 0) for item in income_items)
     total_expense = sum(float(getattr(item, "amount", 0) or 0) for item in expense_items)
     balance = total_income - total_expense
@@ -485,9 +491,9 @@ async def _generate_briefing_content(user_id: str, db: Database, ai_parser: AIPa
     if overdue_tasks:
         briefing += f"\n\n⚠️ 逾期待办 ({len(overdue_tasks)}项):"
         for task in overdue_tasks[:3]:
-            due_time = getattr(task, "due_time", "") or ""
-            if due_time:
-                dt = datetime.fromisoformat(due_time)
+            deadline_at = getattr(task, "deadline_at", "") or ""
+            if deadline_at:
+                dt = datetime.fromisoformat(deadline_at)
                 time_str = dt.strftime("%m-%d")
                 briefing += f"\n  - {task.title or '无标题'} (截止: {time_str})"
 
@@ -601,7 +607,7 @@ async def _has_diary_for_date(db: Database, user_id: str, diary_date: str) -> bo
 async def migrate_undone_todos(context, db: Database) -> list[dict[str, Any]]:
     """迁移前一天未完成的待办到今天
 
-    每晚12:05执行，检查前一天所有分类下未完成的待办，将它们迁移到当天的分类
+    每晚12:05执行，检查前一天计划日期下仍打开的待办，将它们的 plan_date 迁移到今天。
 
     Args:
         context: 上下文对象
@@ -611,15 +617,14 @@ async def migrate_undone_todos(context, db: Database) -> list[dict[str, Any]]:
         消息列表
     """
     messages = []
-    current_time = datetime.now()
-    yesterday = (current_time - timedelta(days=1)).strftime("%Y-%m-%d")
-    today = current_time.strftime("%Y-%m-%d")
-
     try:
         user_ids = await _get_active_user_ids(db)
 
         for user_id in user_ids:
             try:
+                current_time = now_in_timezone(user_id, db)
+                yesterday = (current_time - timedelta(days=1)).strftime("%Y-%m-%d")
+                today = current_time.strftime("%Y-%m-%d")
                 # 检查是否今天已执行过迁移
                 custom_settings = await _get_user_custom_settings(user_id, db)
                 if custom_settings.get("last_todo_migrate_date") == today:
@@ -697,10 +702,14 @@ async def _batch_migrate_tasks_to_date(
         placeholders = ",".join(["?" for _ in task_ids])
         with conn:
             cursor.execute(
-                f"UPDATE items SET category = ?, updated_at = ? WHERE id IN ({placeholders}) AND owner_id = ?",
+                f"UPDATE items SET plan_date = ?, updated_at = ? WHERE id IN ({placeholders}) AND owner_id = ?",
                 [target_date, now] + task_ids + [user_id],
             )
-            return cursor.rowcount
+            rowcount = cursor.rowcount
+        db.cache_invalidate(f"items|{user_id}")
+        for task_id in task_ids:
+            db.cache_invalidate(task_id)
+        return rowcount
 
     return await run_sync(_update)
 

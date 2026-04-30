@@ -6,6 +6,7 @@ from ...config import (
     LEDGER_EXPENSE_CATEGORIES,
     LEDGER_INCOME_CATEGORIES,
     DIARY_TEMPLATES,
+    DIARY_MOODS,
     MOOD_ANALYSIS_CONFIG,
 )
 
@@ -26,6 +27,7 @@ def get_categories():
 
 
 @router.get("/diary/templates")
+@router.get("/config/diary/templates")
 def get_diary_templates():
     """Get available diary templates."""
     templates = []
@@ -46,7 +48,8 @@ def get_diary_moods():
         "ok": True,
         "data": {
             "mood_emojis": mood_emojis,
-            "moods": list(mood_emojis.keys()),
+            "mood_labels": dict(MOOD_ANALYSIS_CONFIG.get("mood_labels", {})),
+            "moods": DIARY_MOODS,
         },
         "message": "",
     }

@@ -84,15 +84,15 @@ def _format_event_meta(entry: dict[str, Any]) -> str:
 
 def _format_task_meta(task: dict[str, Any], today_key: str) -> str:
     status_map = {
-        "todo": "待办",
-        "in_progress": "进行中",
+        "open": "待办",
         "done": "已完成",
         "cancelled": "已取消",
     }
     status = status_map.get(str(task.get("status") or ""), "待办")
-    due_time = str(task.get("due_time") or "")
-    if due_time:
-        due_key = due_time[:10]
+    plan_date = str(task.get("plan_date") or "")
+    deadline_at = str(task.get("deadline_at") or "")
+    due_key = plan_date or deadline_at[:10]
+    if due_key:
         if due_key == today_key:
             due_label = "今天"
         else:
@@ -107,7 +107,10 @@ def _merge_unique_tasks(*task_groups: list[dict[str, Any]], limit: int = 3) -> l
     for group in task_groups:
         for task in group:
             task_id = str(task.get("id") or "")
-            dedupe_key = task_id or f"{task.get('title')}|{task.get('due_time')}|{task.get('created_at')}"
+            dedupe_key = task_id or (
+                f"{task.get('title')}|{task.get('plan_date')}|"
+                f"{task.get('deadline_at')}|{task.get('created_at')}"
+            )
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -263,7 +266,7 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> dict[str,
     )
     recent_ledger = sorted(
         recent_ledger,
-        key=lambda item: getattr(item, "direction", "expense") != "expense",
+        key=lambda item: getattr(item, "transaction_type", "expense") != "expense",
     )
     summary = insights["summary"]
     balance = summary["income_total"] - summary["expense_total"]
@@ -282,12 +285,15 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> dict[str,
                 "meta": " · ".join(
                     part for part in [getattr(item, "ledger_category", None) or "未分类", getattr(item, "ledger_date", None) or ""] if part
                 ),
-                "amount_text": _format_amount(
-                    float(getattr(item, "amount", 0) or 0),
-                    signed=(getattr(item, "direction", "expense") == "income"),
-                )
-                if getattr(item, "direction", "expense") == "income"
-                else f"-{_format_amount(float(getattr(item, 'amount', 0) or 0))}",
+                "amount_text": (
+                    f"↔ {_format_amount(float(getattr(item, 'amount', 0) or 0))}"
+                    if getattr(item, "transaction_type", "expense") == "transfer"
+                    else (
+                        _format_amount(float(getattr(item, "amount", 0) or 0), signed=True)
+                        if getattr(item, "transaction_type", "expense") == "income"
+                        else f"-{_format_amount(float(getattr(item, 'amount', 0) or 0))}"
+                    )
+                ),
             }
             for item in recent_ledger
         ],

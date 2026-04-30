@@ -15,6 +15,7 @@ PRIORITY_ICONS = {
     2: "🟠",  # 高
     3: "🟡",  # 中
     4: "🟢",  # 低
+    5: "⚪",  # 最低
 }
 
 # 优先级文本映射
@@ -23,12 +24,12 @@ PRIORITY_LABELS = {
     2: "🟠高",
     3: "🟡中",
     4: "🟢低",
+    5: "⚪最低",
 }
 
 # 任务状态图标
 STATUS_ICONS = {
-    "todo": "⬜",
-    "in_progress": "⏳",
+    "open": "⬜",
     "done": "✅",
     "cancelled": "❌",
 }
@@ -65,7 +66,7 @@ class ItemFormatter:
         """格式化优先级
 
         Args:
-            priority: 优先级值 (1-4)
+            priority: 优先级值 (1-5)
 
         Returns:
             格式化后的优先级字符串（带图标）
@@ -77,7 +78,7 @@ class ItemFormatter:
         """获取优先级图标
 
         Args:
-            priority: 优先级值 (1-4)
+            priority: 优先级值 (1-5)
 
         Returns:
             优先级图标字符串
@@ -390,7 +391,7 @@ def extract_metadata(text: str, *, with_priority: bool = False) -> dict[str, Any
 
     Args:
         text: 原始文本
-        with_priority: 是否提取 p:1-4 优先级（仅 task 需要）
+        with_priority: 是否提取 p:1-5 优先级（仅 task 需要）
 
     Returns:
         {'category': str|None, 'tags': list[str], 'priority': int|None, 'text': str}
@@ -403,7 +404,7 @@ def extract_metadata(text: str, *, with_priority: bool = False) -> dict[str, Any
         text = text.replace(cat_match.group(0), "").strip()
 
     if with_priority:
-        p_match = re.search(r"p:([1-4])", text)
+        p_match = re.search(r"p:([1-5])", text)
         if p_match:
             result["priority"] = int(p_match.group(1))
             text = text.replace(p_match.group(0), "").strip()

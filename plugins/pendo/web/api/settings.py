@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ...services.db import Database
 from ...utils.settings_utils import normalize_settings_json
@@ -35,7 +35,10 @@ def _normalize_settings_payload(updates: dict) -> dict:
 
     timezone = normalized.get("timezone")
     if timezone is not None:
-        ZoneInfo(timezone)
+        try:
+            ZoneInfo(timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"Invalid timezone: {timezone}") from exc
 
     for field in ("quiet_hours_start", "quiet_hours_end", "daily_report_time", "diary_remind_time"):
         if normalized.get(field) is not None:

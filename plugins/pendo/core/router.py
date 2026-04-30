@@ -43,7 +43,7 @@ COMMAND_META: dict[str, tuple[list[str], str, str]] = {
         "记笔记",
         "/pendo note <content>",
     ),
-    "search": (["s", "搜索", "查找"], "搜索内容", "/pendo search <关键词> [type=] [range=] [status=] [direction=] [category=]"),
+    "search": (["s", "搜索", "查找"], "搜索内容", "/pendo search <关键词> [type=] [range=] [status=] [transaction_type=] [category=]"),
     "ledger": (
         ["bill", "finance", "记账", "账单"],
         "记账管理",

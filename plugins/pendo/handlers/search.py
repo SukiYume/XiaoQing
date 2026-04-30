@@ -69,9 +69,9 @@ class SearchHandler:
                     "可用筛选:\n"
                     "• type=event/task/note/diary/ledger\n"
                     "• range=today/week/last7d/last30d/YYYY-MM\n"
-                    "• status=todo/done (待办)\n"
+                    "• status=open/done/cancelled (待办)\n"
                     "• category=<分类>\n"
-                    "• direction=income/expense (记账)"
+                    "• transaction_type=income/expense/transfer (记账)"
                 ),
             }
 
@@ -105,7 +105,9 @@ class SearchHandler:
             ("type", "type"),
             ("status", "status"),
             ("category", "category"),
-            ("direction", "direction"),
+            ("transaction_type", "transaction_type"),
+            ("account", "account_name"),
+            ("merchant", "merchant"),
         ]:
             val, args = extract_kv_param(args, key)
             if val:
@@ -126,7 +128,7 @@ class SearchHandler:
     def _resolve_search_date_field(item_type: str | None) -> str:
         mapping = {
             "event": "start_time",
-            "task": "due_time",
+            "task": "plan_date",
             "diary": "diary_date",
             "ledger": "ledger_date",
             "note": "created_at",
@@ -227,7 +229,8 @@ class SearchHandler:
 
         # 记账: 在标题行追加金额
         if isinstance(item, LedgerItem):
-            sign = "+" if item.direction == "income" else "-"
+            tx_type = getattr(item, "transaction_type", "expense")
+            sign = "+" if tx_type == "income" else ("↔ " if tx_type == "transfer" else "-")
             main_line += f"  {sign}¥{item.amount:.2f}"
 
         # 待办: 在标题行追加状态
@@ -252,6 +255,12 @@ class SearchHandler:
         # 记账分类
         if isinstance(item, LedgerItem) and item.ledger_category:
             detail_parts.append(f"📂{item.ledger_category}")
+        if isinstance(item, LedgerItem) and getattr(item, "account_name", ""):
+            account = item.account_name
+            counter = getattr(item, "counter_account_name", "") or ""
+            detail_parts.append(f"🏦{account + '→' + counter if counter else account}")
+        if isinstance(item, LedgerItem) and getattr(item, "merchant", ""):
+            detail_parts.append(f"🏷️{item.merchant}")
 
         # 通用分类和标签（非记账类型）
         if not isinstance(item, LedgerItem):
@@ -319,12 +328,18 @@ class SearchHandler:
             dt_str = ItemFormatter.format_datetime(item.start_time)
             return f"🗓️{dt_str}"
 
-        if isinstance(item, TaskItem) and item.due_time:
-            dt_str = ItemFormatter.format_datetime(item.due_time)
-            return f"⏱{dt_str}"
+        if isinstance(item, TaskItem):
+            if item.plan_date:
+                return f"📅{item.plan_date}"
+            if item.deadline_at:
+                dt_str = ItemFormatter.format_datetime(item.deadline_at)
+                return f"⏱{dt_str}"
 
-        if isinstance(item, DiaryItem) and item.diary_date:
-            return f"📔{item.diary_date}"
+        if isinstance(item, DiaryItem):
+            if item.entry_time:
+                return f"📔{item.entry_time[:16].replace('T', ' ')}"
+            if item.diary_date:
+                return f"📔{item.diary_date}"
 
         if isinstance(item, LedgerItem) and item.ledger_date:
             return f"📅{item.ledger_date}"
@@ -340,10 +355,14 @@ class SearchHandler:
             parts.append(f"状态={filters['status']}")
         if filters.get("category"):
             parts.append(f"分类={filters['category']}")
-        if filters.get("direction"):
-            direction = filters["direction"]
-            label = "收入" if direction == "income" else "支出"
-            parts.append(f"方向={label}")
+        if filters.get("transaction_type"):
+            transaction_type = filters["transaction_type"]
+            label = {"income": "收入", "expense": "支出", "transfer": "转账"}.get(transaction_type, transaction_type)
+            parts.append(f"交易={label}")
+        if filters.get("account_name"):
+            parts.append(f"账户={filters['account_name']}")
+        if filters.get("merchant"):
+            parts.append(f"商户={filters['merchant']}")
         if filters.get("start_date") or filters.get("end_date"):
             parts.append(f"时间={filters.get('start_date', '')}~{filters.get('end_date', '')}")
         return " | ".join(parts)
