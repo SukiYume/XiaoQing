@@ -397,12 +397,12 @@ function renderImportExamples() {
         source: { app: 'external-tool', timezone: 'Asia/Shanghai' },
         selection: { types: ['event', 'task', 'ledger', 'note', 'diary'], preset: 'all', start: null, end: null },
         files: [
-            { path: 'data/events.ndjson', type: 'event', count: 3, sha256: '<sha256 可省略>' },
-            { path: 'data/event_collections.ndjson', type: 'event_collection', count: 2, sha256: '<sha256 可省略>' },
-            { path: 'data/tasks.ndjson', type: 'task', count: 2, sha256: '<sha256 可省略>' },
-            { path: 'data/ledger.ndjson', type: 'ledger', count: 3, sha256: '<sha256 可省略>' },
-            { path: 'data/notes.ndjson', type: 'note', count: 1, sha256: '<sha256 可省略>' },
-            { path: 'data/diary.ndjson', type: 'diary', count: 1, sha256: '<sha256 可省略>' },
+            { path: 'data/events.ndjson', type: 'event', count: 3 },
+            { path: 'data/event_collections.ndjson', type: 'event_collection', count: 2 },
+            { path: 'data/tasks.ndjson', type: 'task', count: 2 },
+            { path: 'data/ledger.ndjson', type: 'ledger', count: 3 },
+            { path: 'data/notes.ndjson', type: 'note', count: 1 },
+            { path: 'data/diary.ndjson', type: 'diary', count: 1 },
         ],
         attachments_mode: 'metadata_only',
     }, null, 2);

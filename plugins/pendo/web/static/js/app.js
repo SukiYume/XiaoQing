@@ -2,7 +2,7 @@ import { getToken, setToken, clearToken, verifyToken, createDemoSession } from '
 import { init as initRouter, registerRoute, getCurrentPage, onRouteChange } from './router.js';
 
 // Register all page routes (lazy loaded)
-registerRoute('dashboard', () => import('./pages/dashboard.js'));
+registerRoute('dashboard', () => import('./pages/dashboard.js?v=20260430'));
 registerRoute('events', () => import('./pages/events.js'));
 registerRoute('tasks', () => import('./pages/tasks.js'));
 registerRoute('ledger', () => import('./pages/ledger.js'));

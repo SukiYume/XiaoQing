@@ -139,6 +139,22 @@ def auth_headers():
     return {"Authorization": f"Bearer <redacted-historical-token>)}"}
 
 
+def test_web_validation_errors_use_safe_response_shape(client: TestClient, auth_headers: dict):
+    response = client.post(
+        "/api/items",
+        headers=auth_headers,
+        json={"type": "ledger", "title": "坏账", "amount": "not-number"},
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["ok"] is False
+    assert body["message"] == "请求参数校验失败"
+    assert body["error_code"] == "validation_error"
+    assert "not-number" not in str(body)
+    assert "input" not in str(body)
+
+
 def _seed_items(db: Database):
     db.insert_item({
         "id": "event_in",
@@ -1037,6 +1053,36 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
     assert len(imported_copies[0].id) == 16
 
 
+def test_import_execute_hides_internal_transaction_errors(client: TestClient, temp_db: Database, auth_headers: dict, monkeypatch):
+    bundle_bytes = _build_sample_bundle_bytes({
+        "task": [{
+            "_type": "task",
+            "_schema": 2,
+            "id": "task_internal_error",
+            "title": "触发事务错误",
+            "status": "open",
+        }],
+    })
+
+    def fail_execute_import_bundle(**kwargs):
+        raise RuntimeError("C:\\secret\\pendo.db SQL failed")
+
+    monkeypatch.setattr(temp_db, "execute_import_bundle", fail_execute_import_bundle)
+
+    response = client.post(
+        "/api/transfer/import/execute",
+        headers={**auth_headers, "X-Transfer-Options": json.dumps({"types": ["task"], "conflict_policy": "skip"})},
+        content=bundle_bytes,
+    )
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["ok"] is False
+    assert "导入事务失败" in body["message"]
+    assert "C:\\secret" not in str(body)
+    assert "SQL failed" not in str(body)
+
+
 def test_import_execute_handles_cross_owner_global_id_conflicts(temp_db: Database):
     transfer_api = _load_transfer_module()
     other_owner = "u-transfer-other"
@@ -1665,6 +1711,7 @@ def test_transfer_page_source_wires_export_and_import_endpoints():
     assert "默认生成短随机 ID" in transfer_src
     assert "操作记录" in transfer_src
     assert "bundle_id" in transfer_src
+    assert "<sha256 可省略>" not in transfer_src
     assert "forceReimport" in transfer_src
     assert "已导入过" in transfer_src
     assert "event_collection" in transfer_src

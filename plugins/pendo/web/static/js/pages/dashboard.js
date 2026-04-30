@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
-import { loadChart } from '../lib/chart-loader.js';
+import { loadChart } from '../lib/chart-loader.js?v=20260430';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-dashboard-styles';

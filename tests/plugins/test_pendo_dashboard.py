@@ -175,6 +175,51 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_dashboard_overview_prefers_amount_cents_and_paginates_month_ledger():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_dashboard_amounts_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-dashboard-amounts"
+
+    try:
+        for index in range(505):
+            db.insert_item({
+                "id": f"ledger_expense_{index}",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": f"批量支出 {index}",
+                "amount": 0,
+                "amount_cents": 100,
+                "transaction_type": "expense",
+                "ledger_category": "压力测试",
+                "ledger_date": "2026-03-20",
+            })
+        db.insert_item({
+            "id": "ledger_income_cents",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "收入",
+            "amount": 0,
+            "amount_cents": 12345,
+            "transaction_type": "income",
+            "ledger_category": "工资",
+            "ledger_date": "2026-03-21",
+        })
+
+        result = build_dashboard_overview(
+            db=db,
+            owner_id=owner_id,
+            now=datetime(2026, 3, 25, 9, 30, 0),
+        )
+
+        assert result["summary"]["ledger_month_expense"] == 505.0
+        assert result["month_summary"]["expense"] == 505.0
+        assert result["month_summary"]["income"] == 123.45
+        assert any(point == {"date": "2026-03-20", "amount": 505.0} for point in result["spending_trend"])
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_dashboard_page_source_uses_month_events_and_completed_tasks():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "dashboard.js").read_text(encoding="utf-8")
 
@@ -213,8 +258,14 @@ def test_dashboard_page_source_uses_sparse_spending_axis_ticks():
 
 
 def test_chart_loader_uses_cdn_without_dead_local_asset_probe():
+    index_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    app_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    dashboard_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "dashboard.js").read_text(encoding="utf-8")
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "lib" / "chart-loader.js").read_text(encoding="utf-8")
 
+    assert "js/app.js?v=20260430" in index_src
+    assert "./pages/dashboard.js?v=20260430" in app_src
+    assert "../lib/chart-loader.js?v=20260430" in dashboard_src
     assert "/js/lib/chart.min.js" not in src
     assert "localScriptAvailable" not in src
     assert "fetch(src, { method: 'HEAD', cache: 'no-store' })" not in src

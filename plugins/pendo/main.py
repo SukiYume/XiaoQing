@@ -70,6 +70,13 @@ from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 
 logger = logging.getLogger(__name__)
 _startup_db: Database | None = None
+TRIGGER_SUBCOMMAND_MAP = {
+    "日程": "event",
+    "事件": "event",
+    "待办": "todo",
+    "任务": "todo",
+    "日记": "diary",
+}
 
 # ============================================================
 # 插件初始化
@@ -245,6 +252,7 @@ async def handle(
     user_id = str(event.get("user_id", ""))
     group_id = event.get("group_id")
     raw_message = event.get("raw_message") or f"{command} {args}".strip()
+    route_args = _normalize_trigger_args(command, args)
 
     # 1. 优先检查是否存在活跃会话 (多轮对话)
     # 注意：只处理属于 pendo 的会话，忽略其他插件的会话
@@ -255,12 +263,26 @@ async def handle(
             return await _handle_active_session(user_id, raw_message, context, group_id)
 
     # 2. 解析并路由命令
-    return await _handle_command_routing(user_id, args, context, group_id, log)
+    return await _handle_command_routing(user_id, route_args, context, group_id, log)
 
 
 def _is_explicit_pendo_command(raw_message: str) -> bool:
     text = str(raw_message or "").strip().lower()
-    return text == "/pendo" or text.startswith("/pendo ") or text == "pendo" or text.startswith("pendo ")
+    if text == "/pendo" or text.startswith("/pendo ") or text == "pendo" or text.startswith("pendo "):
+        return True
+    stripped = text.lstrip("/")
+    return any(
+        stripped == trigger.lower() or stripped.startswith(f"{trigger.lower()} ")
+        for trigger in TRIGGER_SUBCOMMAND_MAP
+    )
+
+
+def _normalize_trigger_args(command: str, args: str) -> str:
+    command_name = str(command or "").strip().lstrip("/")
+    subcommand = TRIGGER_SUBCOMMAND_MAP.get(command_name)
+    if not subcommand:
+        return args
+    return f"{subcommand} {str(args or '').strip()}".strip()
 
 
 async def _has_active_session(context, plugin_name: str | None = None) -> bool:
@@ -657,6 +679,25 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         )
         return result
 
+    async def _import_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
+        return success_result(
+            "\n".join(
+                [
+                    "📥 **导入 (Import)**",
+                    "",
+                    "命令聊天入口不能安全上传 `.pendo.zip` 文件；请使用 Web 数据迁移页完成预检和导入。",
+                    "",
+                    "1. 发送 `/pendo web token` 获取登录令牌",
+                    f"2. 打开 Web UI: http://{PendoConfig.WEB_HOST}:{PendoConfig.WEB_PORT}/#/transfer",
+                    "3. 在“导入”页上传 `.pendo.zip`，先预检，再执行导入",
+                    "",
+                    "聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险。",
+                    "支持类型: event、task/todo、note、diary、ledger，以及多节点/重复日程的 event_collection。",
+                    "冲突策略: 跳过同 ID、覆盖同 ID、生成副本；重复 bundle 默认阻止二次导入，可在 Web 勾选强制重新导入。",
+                ]
+            )
+        )
+
     async def _settings_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
         message = await handle_settings(user_id, args, db)
         return success_result(message)
@@ -689,6 +730,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         "search": search_handler.search,
         "ledger": _help_or_exec(ledger_handler.handle, "ledger"),
         "export": _export_cmd,
+        "import": _import_cmd,
         "settings": _settings_cmd,
         "confirm": _confirm_cmd,
         "snooze": _snooze_cmd,
@@ -722,10 +764,11 @@ HELP_MAP = {
     ],
     "event": [
         "🗓️ **日程管理 (Event)**",
+        "  - 别名: `e`, `calendar`, `日程`, `事件`",
         "• /pendo event add <内容> - 添加日程(AI解析单次/重复/多节点)",
-        "  - 例: 3月8日下午两点，国自然截止，提前一周和一天提醒",
-        "  - 例: 每月18号上午十点，公积金提取，重复7个月",
-        "  - 例: 5月1日9点出发、14点入住、5月3日18点返程，杭州团建，提前2小时提醒",
+        "  - 例: /pendo event add 3月8日下午两点，国自然截止，提前一周和一天提醒",
+        "  - 例: /pendo event add 每月18号上午十点，公积金提取，重复7个月",
+        "  - 例: /pendo event add 5月1日9点出发、14点入住、5月3日18点返程，杭州团建，提前2小时提醒",
         "  - 多节点事件会生成一个日程集合和多个可单独查看/编辑/删除的节点",
         "• /pendo event view <id> - 查看日程详情；集合ID显示整体，节点ID显示单个节点",
         "• /pendo event list [范围] [cat:分类] [#标签] - 查看日程",
@@ -756,6 +799,7 @@ HELP_MAP = {
     ],
     "todo": [
         "✅ **待办事项 (Todo)**",
+        "  - 别名: `task`, `t`, `待办`, `任务`",
         "• /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [remind:YYYY-MM-DDTHH:MM[,YYYY-MM-DDTHH:MM]] [cat:分类] [p:1-5] [#标签] - 添加待办",
         "  - 默认计划到今天，晚上8点后自动计划到明天",
         "  - cat: 只表示文字分类，不再作为日期桶",
@@ -780,12 +824,16 @@ HELP_MAP = {
     ],
     "note": [
         "📝 **笔记 (Note)**",
+        "  - 别名: `n`, `idea`, `笔记`, `想法`, `灵感`",
         "• /pendo note add <内容> [cat:分类] [#标签] [ref:条目ID] - 记录笔记",
         "  - 例: /pendo note add 直接折叠找脉冲星 cat:工作 #文章",
         "• /pendo note add title:<标题> content <正文> [cat:分类] [#标签] - 指定标题和正文",
-        "• /pendo note add title:<标题>\\n<正文多行>\\ncat:分类 #标签 - 标题后直接换行写正文",
+        "• /pendo note add title:<标题> 后回车输入正文，再写 cat:/#标签 - 标题后直接换行写正文",
         "  - 例: /pendo note add title:我的标题 content 这里是详细正文 cat:工作 #学习",
-        "  - 例: /pendo note add title:会议纪要\\n1. 事项A\\n2. 事项B\\ncat:其他 #记录",
+        "  - 多行示例: /pendo note add title:会议纪要",
+        "    1. 事项A",
+        "    2. 事项B",
+        "    cat:其他 #记录",
         "  - 例: /pendo note add 这条关联到日程 ref:80efbef6 cat:工作 #关联",
         "  - ref:条目ID 会保存为结构化 references，支持关联日程/待办/笔记/日记/账目",
         "• /pendo note list [分类名|cat:分类] [#标签] [since:范围] [all|page:n] - 查看笔记",
@@ -811,6 +859,7 @@ HELP_MAP = {
     ],
     "diary": [
         "📔 **日记 (Diary)**",
+        "  - 别名: `d`, `journal`, `日记`",
         "• /pendo diary add [日期] <内容> [weather:xxx] [location:xxx] [mood:happy] [score:1-10] [tags:a,b] [favorite:true]",
         "  - 无日期则写今天；同一天可写多篇独立条目，按记录时间排序",
         "  - 心情可用: happy/calm/excited/sad/angry/tired/anxious/grateful/neutral",
@@ -828,6 +877,7 @@ HELP_MAP = {
     ],
     "ledger": [
         "💰 **记账 (Ledger)**",
+        "  - 别名: `bill`, `finance`, `记账`, `账单`",
         "• /pendo ledger add - 交互式记账(多轮引导)",
         "• /pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] - 快速记账",
         "  - 默认支出；in 标记收入，out/expense 标记支出，transfer 标记账户间转账",
@@ -880,6 +930,16 @@ HELP_MAP = {
         "  - 例: /pendo export \"三月 账本\" 2026-03 ledger",
         "  - 例: /pendo export 账本快照 2026-03 ledger",
     ],
+    "import": [
+        "📥 **导入 (Import)**",
+        "• /pendo import - 查看 Web 导入入口和支持格式",
+        "  - 聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险",
+        "  - 请使用 Web 数据迁移页上传 .pendo.zip，页面会先做预检再写入数据库",
+        "  - 支持类型: event、task/todo、note、diary、ledger、event_collection",
+        "  - 支持策略: 跳过同 ID、覆盖同 ID、生成副本；重复 bundle 默认阻止二次导入",
+        "  - 例: /pendo import",
+        "  - 例: /pendo web token",
+    ],
     "settings": [
         "⚙️ **设置 (Settings)**",
         *PLUGIN_SETTINGS_HELP_LINES,
@@ -912,6 +972,7 @@ HELP_SECTION_ORDER = [
     "reminder",
     "common",
     "export",
+    "import",
     "settings",
     "web",
 ]
@@ -970,7 +1031,7 @@ def _show_help(subcommand: str = "") -> str:
         "",
         "🧭 **模块导航**",
         "• 记录与安排: `event` `todo` `note` `diary` `ledger`",
-        "• 查询与操作: `search` `confirm` `snooze` `undo` `export`",
+        "• 查询与操作: `search` `confirm` `snooze` `undo` `export` `import`",
         "• 配置与界面: `settings` `web`",
         "",
         "💡 输入 `/pendo help <子命令>` 可查看对应模块帮助，例如 `/pendo help event`、`/pendo help reminder`",
