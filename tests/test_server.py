@@ -5,21 +5,20 @@ Tests for core/server.py - InboundServer and InboundManager classes
 import asyncio
 import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from aiohttp import web
 
 from core.server import (
-    InboundServer,
-    InboundManager,
     VERSION,
+    InboundManager,
+    InboundServer,
     _parse_http_base,
     _parse_non_negative_int,
     _parse_positive_int,
     _parse_ws_uri,
 )
-
 
 # ============================================================
 # Helper Classes & Functions
@@ -44,6 +43,16 @@ def _make_request_with_auth(method: str, path: str, token: str) -> _MockRequest:
 def _make_request_without_auth(method: str, path: str) -> _MockRequest:
     """Create a mock request without Authorization header"""
     return _MockRequest(method, path, {})
+
+
+def _onebot_message_payload(text: str = "/help") -> dict[str, Any]:
+    return {
+        "post_type": "message",
+        "message_type": "private",
+        "user_id": 10001,
+        "raw_message": text,
+        "message": [{"type": "text", "data": {"text": text}}],
+    }
 
 
 # ============================================================
@@ -407,7 +416,7 @@ async def test_server_post_event_invalid_json(sample_server):
 @pytest.mark.unit
 async def test_server_post_event_success(sample_server):
     """Test POST event with valid payload"""
-    payload = {"test": "data"}
+    payload = _onebot_message_payload()
 
     request = _make_request_with_auth("POST", "/event", "test_token")
     request.json = AsyncMock(return_value=payload)
@@ -432,6 +441,50 @@ async def test_server_post_event_rejects_non_object_payload(sample_server):
 
     assert response.status == 400
     assert "Payload must be a JSON object" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_server_post_event_rejects_missing_post_type(sample_server):
+    """Test POST event rejects payloads without OneBot post_type."""
+    request = _make_request_with_auth("POST", "/event", "test_token")
+    request.json = AsyncMock(return_value={"message": "/help", "user_id": 10001})
+
+    response = await sample_server.post_event(request)
+
+    assert response.status == 400
+    assert "post_type" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_server_post_event_rejects_message_without_user_id(sample_server):
+    """Test message events require a sender user_id."""
+    payload = _onebot_message_payload()
+    payload.pop("user_id")
+    request = _make_request_with_auth("POST", "/event", "test_token")
+    request.json = AsyncMock(return_value=payload)
+
+    response = await sample_server.post_event(request)
+
+    assert response.status == 400
+    assert "user_id" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_server_post_event_rejects_message_without_message_body(sample_server):
+    """Test message events require message or raw_message content."""
+    payload = _onebot_message_payload()
+    payload.pop("message")
+    payload.pop("raw_message")
+    request = _make_request_with_auth("POST", "/event", "test_token")
+    request.json = AsyncMock(return_value=payload)
+
+    response = await sample_server.post_event(request)
+
+    assert response.status == 400
+    assert "message" in response.text
 
 
 # ============================================================

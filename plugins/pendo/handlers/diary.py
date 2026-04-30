@@ -3,19 +3,21 @@
 处理日记相关的所有操作，不需要AI解析
 """
 
-from typing import Any, TYPE_CHECKING, cast
-from datetime import datetime
 import logging
-from ..models.item import ItemType, DiaryItem
-from ..models.constants import ItemFields
-from ..core.types import PendoContext, CommandMessage
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, cast
+
 from core.plugin_base import run_sync
+
+from ..config import DIARY_TEMPLATES, MOOD_ANALYSIS_CONFIG, PendoConfig
+from ..core.types import CommandMessage, PendoContext
+from ..models.constants import ItemFields
+from ..models.item import DiaryItem, ItemType
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
-from ..utils.session_utils import safe_create_session, safe_end_session
-from ..config import PendoConfig, DIARY_TEMPLATES, MOOD_ANALYSIS_CONFIG
-from ..utils.time_utils import now_in_timezone, parse_date_optional, parse_diary_range
 from ..utils.formatters import ItemFormatter
+from ..utils.session_utils import safe_create_session, safe_end_session
+from ..utils.time_utils import now_in_timezone, parse_date_optional, parse_diary_range
 from ..utils.validators import normalize_diary_fields, normalize_diary_mood
 
 logger = logging.getLogger(__name__)
@@ -355,7 +357,7 @@ class DiaryHandler(DbOpsMixin):
             message += f"  _{content_preview}_\n"
             message += f"  `{diary.id}`\n\n"
 
-        message += f"💡 用 /pendo diary view <日期或ID> 查看完整日记"
+        message += "💡 用 /pendo diary view <日期或ID> 查看完整日记"
 
         return {"status": "success", "message": message}
 
@@ -513,7 +515,7 @@ class DiaryHandler(DbOpsMixin):
         """提交模板结果"""
         template_answers = [
             {"prompt": q, "answer": a}
-            for q, a in zip(prompts, answers)
+            for q, a in zip(prompts, answers, strict=False)
             if str(q or "").strip() or str(a or "").strip()
         ]
         content = "\n\n".join(f"**{row['prompt']}**\n{row['answer']}" for row in template_answers)
@@ -575,7 +577,7 @@ class DiaryHandler(DbOpsMixin):
         usable = self._get_usable_templates()
 
         message = "📋 **日记模板**\n\n"
-        for i, (tid, tpl) in enumerate(usable, 1):
+        for i, (_tid, tpl) in enumerate(usable, 1):
             prompts = tpl.get("prompts", [])
             message += f"**{i}. {tpl['name']}**\n"
             for prompt in prompts[:2]:

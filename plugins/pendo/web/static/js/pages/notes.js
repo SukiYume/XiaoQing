@@ -647,9 +647,9 @@ function renderRangeControls() {
             </div>
             ${showCustom ? `
                 <div class="notes-custom-range">
-                    <input class="notes-date-field" id="notes-range-start" type="date" value="${_filters.customStart || ''}">
+                    <input class="notes-date-field" id="notes-range-start" type="date" value="${_filters.customStart || ''}" aria-label="笔记范围开始日期">
                     <span class="notes-range-sep">至</span>
-                    <input class="notes-date-field" id="notes-range-end" type="date" value="${_filters.customEnd || ''}">
+                    <input class="notes-date-field" id="notes-range-end" type="date" value="${_filters.customEnd || ''}" aria-label="笔记范围结束日期">
                     <button class="btn btn-secondary" id="notes-range-apply" type="button">应用</button>
                 </div>
             ` : ''}
@@ -770,21 +770,22 @@ function renderFilters() {
     return `
         <section class="notes-filter-bar">
             <div class="notes-filter-field">
-                <label>关键词</label>
+                <label for="notes-filter-keyword">关键词</label>
                 <input id="notes-filter-keyword" type="search" placeholder="搜索标题、正文、分类或标签" value="${escapeHtml(_filters.keyword)}">
             </div>
             <div class="notes-filter-field">
-                <label>标签筛选</label>
+                <label for="notes-filter-tag">标签筛选</label>
                 <input id="notes-filter-tag" type="text" placeholder="输入标签，例如：阅读" value="${escapeHtml(_filters.tag)}">
             </div>
             <div class="notes-filter-field">
-                <label>分类</label>
+                <label id="notes-filter-category-label">分类</label>
                 ${renderCustomSelect({
                     id: 'notes-filter-category',
                     options: categoryOptions(),
                     selected: _filters.category,
                     className: 'pselect-block pselect-theme-notes',
                     placeholder: '全部分类',
+                    labelledBy: 'notes-filter-category-label',
                 })}
             </div>
             <div class="notes-filter-actions">

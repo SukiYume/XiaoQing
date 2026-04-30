@@ -7,7 +7,6 @@ import sys
 import types
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +19,7 @@ except ModuleNotFoundError:
 
 try:
     from fastapi.testclient import TestClient
+
     from plugins.pendo.web.server import create_app
 
     FASTAPI_AVAILABLE = True
@@ -332,6 +332,42 @@ def test_widget_summary_supports_ledger_notes_and_auto_sections(client: TestClie
     assert auto_data["section_requested"] == "auto"
     assert auto_data["section"] == "notes"
     assert auto_data["panel"]["title"] == "笔记"
+
+
+def test_widget_ledger_panel_marks_transfer_transactions(temp_db: Database):
+    widget_module = _load_widget_module()
+    owner_id = "u-widget-transfer"
+    _seed_widget_data(temp_db, owner_id)
+    temp_db.insert_item(
+        {
+            "id": "ledger_transfer",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "转到储蓄卡",
+            "amount": 1200,
+            "transaction_type": "transfer",
+            "ledger_category": "转账",
+            "ledger_date": "2026-03-22",
+            "account_name": "现金",
+            "counter_account_name": "储蓄卡",
+        }
+    )
+
+    data = widget_module.build_widget_summary(temp_db, owner_id, section="ledger", now="2026-03-25T09:30:00")
+    transfer = next(item for item in data["panel"]["items"] if item["title"] == "转到储蓄卡")
+
+    assert transfer["transaction_type"] == "transfer"
+    assert transfer["amount_text"] == "↔ ¥1200"
+
+
+def test_scriptable_widget_reads_current_widget_summary_shape():
+    src = (ROOT / "plugins" / "pendo" / "web" / "scriptable" / "pendo_widget.js").read_text(encoding="utf-8")
+
+    assert "/api/widget/summary?section=" in src
+    assert "data.panels || {}" in src
+    assert "item?.start_time" in src
+    assert "function ledgerAmountKind(item)" in src
+    assert 'text.startsWith("↔")' in src
 
 
 def test_build_widget_summary_auto_rotates_by_hour(temp_db: Database):

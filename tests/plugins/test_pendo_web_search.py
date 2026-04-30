@@ -1,14 +1,13 @@
 """Regression tests for the redesigned Pendo web search behavior."""
 
 import importlib
-from pathlib import Path
 import shutil
 import sys
 import types
 import uuid
+from pathlib import Path
 
 from plugins.pendo.services.db import Database
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -255,7 +254,7 @@ def test_search_route_adds_event_collection_payload():
 def test_search_route_source_maps_dedicated_ledger_category_filter():
     src = (ROOT / "plugins" / "pendo" / "web" / "api" / "search.py").read_text(encoding="utf-8")
 
-    assert "ledger_category: Optional[str] = None" in src
+    assert "ledger_category: str | None = None" in src
     assert 'filters["ledger_category"] = ledger_category' in src
 
 

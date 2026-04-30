@@ -2,11 +2,14 @@
 设置管理命令模块
 处理用户设置相关的所有命令
 """
-import re
 import logging
-from typing import Callable, Optional, Any
-from core.plugin_base import run_sync
+import re
+from collections.abc import Callable
+from typing import Any
+
 from core.args import parse
+from core.plugin_base import run_sync
+
 from ..services.db import Database
 from ..utils.settings_utils import (
     format_plugin_settings_message,
@@ -105,8 +108,8 @@ async def _update_setting(
     setting_key: str,
     value: str,
     db: Database,
-    validator: Optional[Callable[[str], tuple[bool, Any]]] = None,
-    formatter: Optional[Callable[[Any], str]] = None,
+    validator: Callable[[str], tuple[bool, Any]] | None = None,
+    formatter: Callable[[Any], str] | None = None,
     is_custom: bool = True
 ) -> str:
     """通用设置更新函数

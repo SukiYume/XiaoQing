@@ -1,16 +1,15 @@
 """Regression tests for Pendo web stats aggregations."""
 
 import importlib
-from datetime import datetime, timedelta
-from pathlib import Path
 import shutil
 import sys
 import types
 import uuid
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics.notes_overview import build_notes_overview
-
 
 ROOT = Path(__file__).resolve().parents[2]
 

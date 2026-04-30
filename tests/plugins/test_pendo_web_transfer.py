@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 import importlib
 import io
 import json
@@ -10,12 +9,14 @@ import sys
 import types
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 try:
     from fastapi.testclient import TestClient
+
     from plugins.pendo.web.server import create_app
     FASTAPI_AVAILABLE = True
 except ModuleNotFoundError:
@@ -30,11 +31,13 @@ except RuntimeError as exc:
     FASTAPI_AVAILABLE = False
 
 from plugins.pendo.models.item import DiaryItem, EventItem, LedgerItem, NoteItem, TaskItem
-from plugins.pendo.services.db import Database
+from plugins.pendo.services.db import Database, DuplicateBundleImportError
+
 try:
     from plugins.pendo.web.auth import generate_token
 except ModuleNotFoundError:
     pytest.skip("pendo web auth requires PyJWT", allow_module_level=True)
+from plugins.pendo.web.services import transfer_bundle as transfer_bundle_module
 from plugins.pendo.web.services.transfer_bundle import (
     BundleValidationError,
     build_manifest,
@@ -43,7 +46,6 @@ from plugins.pendo.web.services.transfer_bundle import (
     serialize_item,
     write_bundle,
 )
-
 
 ROOT = Path(__file__).resolve().parents[2]
 OWNER_ID = "u-transfer"
@@ -454,6 +456,78 @@ def test_read_bundle_rejects_missing_manifest():
     buf.seek(0)
 
     with pytest.raises(BundleValidationError, match="manifest.json"):
+        read_bundle(buf)
+
+
+def test_read_bundle_rejects_invalid_zip_as_validation_error():
+    with pytest.raises(BundleValidationError, match="Invalid bundle zip"):
+        read_bundle(io.BytesIO(b"not-a-zip"))
+
+
+def test_read_bundle_rejects_invalid_manifest_json_as_validation_error():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", b"{not-json")
+    buf.seek(0)
+
+    with pytest.raises(BundleValidationError, match="manifest"):
+        read_bundle(buf)
+
+
+def test_read_bundle_rejects_member_above_uncompressed_limit(monkeypatch):
+    monkeypatch.setattr(transfer_bundle_module, "MAX_BUNDLE_MEMBER_BYTES", 16)
+    record = {
+        "_type": "note",
+        "_schema": 2,
+        "id": "note_big",
+        "title": "大文件",
+        "content": "x" * 64,
+    }
+    content = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+    manifest = build_manifest(
+        {"types": ["note"], "preset": "all", "start": None, "end": None},
+        [{
+            "path": "data/notes.ndjson",
+            "type": "note",
+            "count": 1,
+            "sha256": __import__("hashlib").sha256(content).hexdigest(),
+        }],
+        "Asia/Shanghai",
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
+        zf.writestr("data/notes.ndjson", content)
+    buf.seek(0)
+
+    with pytest.raises(BundleValidationError, match="exceeds maximum file size"):
+        read_bundle(buf)
+
+
+def test_read_bundle_rejects_record_count_above_limit(monkeypatch):
+    monkeypatch.setattr(transfer_bundle_module, "MAX_BUNDLE_RECORDS", 1)
+    records = [
+        {"_type": "note", "_schema": 2, "id": "note_1", "title": "一"},
+        {"_type": "note", "_schema": 2, "id": "note_2", "title": "二"},
+    ]
+    content = ("\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n").encode("utf-8")
+    manifest = build_manifest(
+        {"types": ["note"], "preset": "all", "start": None, "end": None},
+        [{
+            "path": "data/notes.ndjson",
+            "type": "note",
+            "count": 2,
+            "sha256": __import__("hashlib").sha256(content).hexdigest(),
+        }],
+        "Asia/Shanghai",
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
+        zf.writestr("data/notes.ndjson", content)
+    buf.seek(0)
+
+    with pytest.raises(BundleValidationError, match="too many records"):
         read_bundle(buf)
 
 
@@ -1316,7 +1390,7 @@ def test_execute_import_bundle_uses_db_level_bundle_guard(temp_db: Database):
         force=False,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(DuplicateBundleImportError):
         temp_db.execute_import_bundle(
             owner_id=OWNER_ID,
             bundle_id="bundle-guard-1",
@@ -1573,6 +1647,17 @@ def test_transfer_page_source_wires_export_and_import_endpoints():
     assert "amount_cents" in transfer_src
     assert "transaction_type" in transfer_src
     assert "account_name" in transfer_src
+    assert "data/events.ndjson" in transfer_src
+    assert "data/event_collections.ndjson" in transfer_src
+    assert "data/notes.ndjson" in transfer_src
+    assert "event_role" in transfer_src
+    assert "multi_node_child" in transfer_src
+    assert "recurring_occurrence" in transfer_src
+    assert "reminder_rules" in transfer_src
+    assert "offset_seconds" in transfer_src
+    assert "counter_account_name" in transfer_src
+    assert "transfer 必须写 counter_account_name" in transfer_src
+    assert "diary_date 必填" in transfer_src
     assert "未知字段会在预检阶段报错" in transfer_src
     assert "context.import.extra" not in transfer_src
     assert "导入示例" in transfer_src

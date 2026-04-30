@@ -3,23 +3,26 @@
 处理笔记相关的所有操作，不需要AI解析
 """
 
-from typing import Any, TYPE_CHECKING, cast
-from datetime import datetime
-import re
 import logging
-from ..models.item import ItemType, NoteItem, get_item_type_value
-from ..core.types import PendoContext, CommandMessage
+import re
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, cast
+
 from core.plugin_base import run_sync
+
+from ..config import PendoConfig
+from ..core.types import CommandMessage, PendoContext
+from ..models.item import ItemType, NoteItem, get_item_type_value
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
-from ..utils.settings_utils import resolve_default_category
-from ..config import PendoConfig
-from ..utils.time_utils import _parse_time_range_core
 from ..utils.formatters import (
     ItemFormatter,
     extract_kv_param,
     paginate,
 )
+from ..utils.settings_utils import resolve_default_category
+from ..utils.time_utils import _parse_time_range_core
+from ..utils.validators import normalize_note_fields
 
 logger = logging.getLogger(__name__)
 
@@ -123,14 +126,29 @@ class NoteHandler(DbOpsMixin):
         # 创建数据
         from ..models.item import NoteItem
 
+        try:
+            normalized = normalize_note_fields(
+                {
+                    "title": title,
+                    "content": clean_content,
+                    "category": parsed["category"],
+                    "tags": parsed["tags"],
+                    "references": references,
+                    "related_items": related_items,
+                },
+                partial=False,
+            )
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
+
         note_item = NoteItem(
             owner_id=user_id,
-            title=title,
-            content=clean_content,
-            tags=parsed["tags"],
-            category=parsed["category"],
-            references=references,
-            related_items=related_items,
+            title=normalized["title"],
+            content=normalized["content"],
+            tags=normalized["tags"],
+            category=normalized["category"],
+            references=normalized["references"],
+            related_items=normalized["related_items"],
             context={"group_id": group_id} if group_id else {},
             created_at=datetime.now().isoformat(),
             updated_at=datetime.now().isoformat(),
@@ -142,10 +160,10 @@ class NoteHandler(DbOpsMixin):
         note_item.id = item_id
 
         # 格式化返回消息
-        tags_str = ItemFormatter.format_tags(parsed["tags"])
+        tags_str = ItemFormatter.format_tags(normalized["tags"])
         message = "✅ 已记录笔记\n\n"
-        message += f"📝 {title}\n"
-        message += f"📂 分类: {parsed['category']}\n"
+        message += f"📝 {normalized['title']}\n"
+        message += f"📂 分类: {normalized['category']}\n"
         if tags_str:
             message += f"🏷️ 标签: {tags_str}\n"
         message += f"`{item_id}`\n\n"
@@ -235,7 +253,7 @@ class NoteHandler(DbOpsMixin):
         for note in notes:
             if note.id == note_id:
                 continue
-            related = set(str(value) for value in (getattr(note, "related_items", None) or []))
+            related = {str(value) for value in (getattr(note, "related_items", None) or [])}
             refs = getattr(note, "references", None) or []
             related.update(
                 str(ref.get("id"))

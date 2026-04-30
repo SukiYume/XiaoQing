@@ -1070,17 +1070,18 @@ function renderQuickAdd() {
         options: [{ value: 'expense', label: '支出' }, { value: 'income', label: '收入' }, { value: 'transfer', label: '转账' }],
         selected: 'expense',
         className: 'pselect-block pselect-theme-ledger ledger-qa-transaction-type',
+        ariaLabel: '交易类型',
     });
     return `
         <div class="ledger-quick-add" id="ledger-quick-add">
             ${typeSelect}
-            <input type="number" class="ledger-qa-amount"   id="qa-amount"   placeholder="金额" step="0.01" min="0">
-            <input type="text"   class="ledger-qa-title"    id="qa-title"    placeholder="摘要">
-            <input type="text"   class="ledger-qa-category" id="qa-category" placeholder="分类（其他）">
-            <input type="text"   class="ledger-qa-account"  id="qa-account"  placeholder="账户（现金）">
-            <input type="text"   class="ledger-qa-counter"  id="qa-counter"  placeholder="转入账户">
-            <input type="text"   class="ledger-qa-merchant" id="qa-merchant" placeholder="商户/对方">
-            <input type="text"   class="ledger-qa-date"     id="qa-date"     value="${today}" inputmode="numeric" placeholder="YYYY-MM-DD">
+            <input type="number" class="ledger-qa-amount"   id="qa-amount"   placeholder="金额" step="0.01" min="0" aria-label="金额">
+            <input type="text"   class="ledger-qa-title"    id="qa-title"    placeholder="摘要" aria-label="摘要">
+            <input type="text"   class="ledger-qa-category" id="qa-category" placeholder="分类（其他）" aria-label="分类">
+            <input type="text"   class="ledger-qa-account"  id="qa-account"  placeholder="账户（现金）" aria-label="账户">
+            <input type="text"   class="ledger-qa-counter"  id="qa-counter"  placeholder="转入账户" aria-label="转入账户">
+            <input type="text"   class="ledger-qa-merchant" id="qa-merchant" placeholder="商户/对方" aria-label="商户或对方">
+            <input type="text"   class="ledger-qa-date"     id="qa-date"     value="${today}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="记账日期">
             <button class="ledger-qa-submit" id="qa-submit">+ 记录</button>
         </div>`;
 }
@@ -1116,42 +1117,44 @@ function renderFilterBar() {
     return `
         <div class="ledger-filter-bar" id="ledger-filter-bar">
             <div class="ledger-filter-item ledger-filter-item--date">
-                <label>时段：</label>
+                <label id="filter-date-label">时段：</label>
                 <div class="ledger-filter-controls">
-                    ${renderCustomSelect({ id: 'filter-date', options: dateOptions, selected: _dateFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-date' })}
+                    ${renderCustomSelect({ id: 'filter-date', options: dateOptions, selected: _dateFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-date', labelledBy: 'filter-date-label' })}
                     <div class="ledger-filter-range" id="filter-custom-range" style="${customVisible}">
-                        <input type="text" class="ledger-custom-date-input" id="filter-date-start" value="${_customDateStart}" inputmode="numeric" placeholder="YYYY-MM-DD">
+                        <input type="text" class="ledger-custom-date-input" id="filter-date-start" value="${_customDateStart}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="筛选开始日期">
                         <span class="ledger-filter-range-sep">至</span>
-                        <input type="text" class="ledger-custom-date-input" id="filter-date-end" value="${_customDateEnd}" inputmode="numeric" placeholder="YYYY-MM-DD">
+                        <input type="text" class="ledger-custom-date-input" id="filter-date-end" value="${_customDateEnd}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="筛选结束日期">
                         <button type="button" class="ledger-range-apply" id="filter-date-apply">应用</button>
                     </div>
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--transaction-type">
-                <label>类型：</label>
+                <label id="filter-transaction-type-label">类型：</label>
                 <div class="ledger-filter-controls">
-                    ${renderCustomSelect({ id: 'filter-transaction-type', options: typeOptions, selected: _transactionTypeFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-transaction-type' })}
+                    ${renderCustomSelect({ id: 'filter-transaction-type', options: typeOptions, selected: _transactionTypeFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-transaction-type', labelledBy: 'filter-transaction-type-label' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--account">
-                <label>账户：</label>
+                <label id="filter-account-label">账户：</label>
                 <div class="ledger-filter-controls">
-                    ${renderCustomSelect({ id: 'filter-account', options: accountOptions, selected: _accountFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-category' })}
+                    ${renderCustomSelect({ id: 'filter-account', options: accountOptions, selected: _accountFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-category', labelledBy: 'filter-account-label' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--category">
-                <label>分类：</label>
+                <label id="filter-category-label">分类：</label>
                 <div class="ledger-filter-controls">
-                    ${renderCustomSelect({ id: 'filter-category', options: catOptions, selected: _categoryFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-category' })}
+                    ${renderCustomSelect({ id: 'filter-category', options: catOptions, selected: _categoryFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-category', labelledBy: 'filter-category-label' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--amount">
                 <label>金额：</label>
                 <div class="ledger-filter-controls">
                     <input type="number" class="ledger-amount-input" id="filter-amount-min"
+                        aria-label="最小金额"
                         placeholder="最小" min="0" step="0.01" value="${_amountMin}">
                     <span style="font-size:12px;color:var(--color-text-secondary);">~</span>
                     <input type="number" class="ledger-amount-input" id="filter-amount-max"
+                        aria-label="最大金额"
                         placeholder="最大" min="0" step="0.01" value="${_amountMax}">
                 </div>
             </div>

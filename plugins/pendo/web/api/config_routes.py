@@ -2,11 +2,10 @@
 from fastapi import APIRouter
 
 from ...config import (
-    PendoConfig,
+    DIARY_MOODS,
+    DIARY_TEMPLATES,
     LEDGER_EXPENSE_CATEGORIES,
     LEDGER_INCOME_CATEGORIES,
-    DIARY_TEMPLATES,
-    DIARY_MOODS,
     MOOD_ANALYSIS_CONFIG,
 )
 

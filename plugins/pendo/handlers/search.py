@@ -3,20 +3,31 @@
 处理全文搜索和高级筛选
 """
 
-from typing import Any, TYPE_CHECKING, cast
-from collections import defaultdict
 import logging
+from collections import defaultdict
+from typing import TYPE_CHECKING, Any, cast
+
 from core.plugin_base import run_sync
-from ..core.types import PendoContext, CommandMessage
+
+from ..config import PendoConfig
+from ..core.types import CommandMessage, PendoContext
 from ..models.item import (
-    DiaryItem, EventItem, LedgerItem, NoteItem, TaskItem, get_item_type_value,
+    DiaryItem,
+    EventItem,
+    LedgerItem,
+    NoteItem,
+    TaskItem,
+    get_item_type_value,
 )
-from ..utils.time_utils import parse_search_date_range, parse_remind_times
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import (
-    ItemFormatter, TYPE_NAMES, STATUS_ICONS, PRIORITY_ICONS, extract_kv_param,
+    PRIORITY_ICONS,
+    STATUS_ICONS,
+    TYPE_NAMES,
+    ItemFormatter,
+    extract_kv_param,
 )
-from ..config import PendoConfig
+from ..utils.time_utils import parse_remind_times, parse_search_date_range
 
 logger = logging.getLogger(__name__)
 

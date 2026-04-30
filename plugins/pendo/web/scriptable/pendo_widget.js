@@ -410,10 +410,16 @@ function taskStatusLabel(item) {
   return firstMetaPart(item?.meta || "");
 }
 
-function amountIsExpense(value) {
-  return String(value || "")
+function ledgerAmountKind(item) {
+  const explicit = String(item?.transaction_type || "")
     .trim()
-    .startsWith("-");
+    .toLowerCase();
+  if (["expense", "income", "transfer"].includes(explicit)) return explicit;
+
+  const text = String(item?.amount_text || "").trim();
+  if (text.startsWith("↔")) return "transfer";
+  if (text.startsWith("-")) return "expense";
+  return "income";
 }
 
 // ---------- 数据请求 ----------
@@ -591,9 +597,10 @@ function panelSectionKey(panel) {
 
 function panelItemMarker(section, item) {
   if (section === "ledger") {
-    return amountIsExpense(item.amount_text)
-      ? { icon: "arrow.down.right", color: COLORS.accent }
-      : { icon: "arrow.up.right", color: COLORS.good };
+    const kind = ledgerAmountKind(item);
+    if (kind === "expense") return { icon: "arrow.down.right", color: COLORS.accent };
+    if (kind === "transfer") return { icon: "arrow.left.arrow.right", color: COLORS.subtext };
+    return { icon: "arrow.up.right", color: COLORS.good };
   }
   if (section === "notes")
     return { icon: "doc.text.fill", color: COLORS.subtext };
@@ -668,9 +675,15 @@ function renderPanelList(stack, panel, data, opts = {}) {
     row.addSpacer();
 
     if (item.amount_text) {
+      const amountKind = ledgerAmountKind(item);
       addText(row, item.amount_text, {
         size,
-        color: amountIsExpense(item.amount_text) ? COLORS.accent : COLORS.good,
+        color:
+          amountKind === "expense"
+            ? COLORS.accent
+            : amountKind === "transfer"
+              ? COLORS.subtext
+              : COLORS.good,
         font: FONTS.body(size),
       });
     } else if (section === "tasks") {

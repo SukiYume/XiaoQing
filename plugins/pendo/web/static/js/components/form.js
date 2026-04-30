@@ -2,11 +2,15 @@ import { renderCustomSelect, initCustomSelects } from './custom_select.js';
 import { escapeAttr, escapeHtml } from '../utils/ui.js';
 
 export function buildFormHTML(fields) {
-    return fields.map(field => {
+    return fields.map((field, index) => {
         const required = field.required ? ' required' : '';
         const value = field.value ?? '';
         const name = escapeAttr(field.name || '');
         const label = escapeHtml(field.label || '');
+        const labelText = field.label || field.placeholder || field.name || '表单字段';
+        const fieldId = escapeAttr(field.id || `form-field-${field.name || 'field'}-${index}`);
+        const labelId = escapeAttr(`${fieldId}-label`);
+        const ariaLabel = escapeAttr(labelText);
         const placeholder = escapeAttr(field.placeholder || '');
 
         let input;
@@ -14,32 +18,33 @@ export function buildFormHTML(fields) {
             case 'select': {
                 const themeClass = field.selectThemeClass || 'pselect-theme-ledger';
                 input = renderCustomSelect({
-                    id: `form-select-${field.name}`,
+                    id: fieldId,
                     name: field.name,
                     options: field.options || [],
                     selected: value,
                     placeholder: field.placeholder || '请选择',
                     className: `pselect-form pselect-block ${themeClass}`,
+                    labelledBy: labelId,
                 });
                 break;
             }
             case 'textarea':
-                input = `<textarea name="${name}" class="form-input" rows="${escapeAttr(field.rows || 4)}" placeholder="${placeholder}"${required}>${escapeHtml(value)}</textarea>`;
+                input = `<textarea id="${fieldId}" name="${name}" class="form-input" rows="${escapeAttr(field.rows || 4)}" placeholder="${placeholder}" aria-label="${ariaLabel}"${required}>${escapeHtml(value)}</textarea>`;
                 break;
             case 'datetime':
-                input = `<input type="datetime-local" name="${name}" class="form-input" value="${escapeAttr(value)}"${required}>`;
+                input = `<input id="${fieldId}" type="datetime-local" name="${name}" class="form-input" value="${escapeAttr(value)}" aria-label="${ariaLabel}"${required}>`;
                 break;
             case 'date':
-                input = `<input type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" inputmode="numeric" placeholder="${escapeAttr(field.placeholder || 'YYYY-MM-DD')}"${required}>`;
+                input = `<input id="${fieldId}" type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" inputmode="numeric" placeholder="${escapeAttr(field.placeholder || 'YYYY-MM-DD')}" aria-label="${ariaLabel}"${required}>`;
                 break;
             case 'number':
-                input = `<input type="number" name="${name}" class="form-input" value="${escapeAttr(value)}" min="${escapeAttr(field.min ?? '')}" max="${escapeAttr(field.max ?? '')}" step="${escapeAttr(field.step || 'any')}" placeholder="${placeholder}"${required}>`;
+                input = `<input id="${fieldId}" type="number" name="${name}" class="form-input" value="${escapeAttr(value)}" min="${escapeAttr(field.min ?? '')}" max="${escapeAttr(field.max ?? '')}" step="${escapeAttr(field.step || 'any')}" placeholder="${placeholder}" aria-label="${ariaLabel}"${required}>`;
                 break;
             case 'checkbox':
-                input = `<label class="form-checkbox"><input type="checkbox" name="${name}" class="form-input" ${value ? 'checked' : ''}> <span>${escapeHtml(field.checkboxLabel || '启用')}</span></label>`;
+                input = `<label class="form-checkbox"><input id="${fieldId}" type="checkbox" name="${name}" class="form-input" aria-label="${ariaLabel}" ${value ? 'checked' : ''}> <span>${escapeHtml(field.checkboxLabel || '启用')}</span></label>`;
                 break;
             case 'tags':
-                input = `<input type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" placeholder="${escapeAttr(field.placeholder || '回车添加标签')}">`;
+                input = `<input id="${fieldId}" type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" placeholder="${escapeAttr(field.placeholder || '回车添加标签')}" aria-label="${ariaLabel}">`;
                 break;
             case 'priority':
                 input = `<div class="priority-selector" data-name="${name}">
@@ -70,11 +75,11 @@ export function buildFormHTML(fields) {
                 </div>`;
                 break;
             default:
-                input = `<input type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" placeholder="${placeholder}"${required}>`;
+                input = `<input id="${fieldId}" type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" placeholder="${placeholder}" aria-label="${ariaLabel}"${required}>`;
         }
 
         return `<div class="form-group">
-            <label class="form-label">${label}${field.required ? ' <span class="text-danger">*</span>' : ''}</label>
+            <label class="form-label" id="${labelId}" for="${fieldId}">${label}${field.required ? ' <span class="text-danger">*</span>' : ''}</label>
             ${input}
         </div>`;
     }).join('');

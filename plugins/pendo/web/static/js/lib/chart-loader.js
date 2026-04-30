@@ -1,38 +1,31 @@
 /**
- * Chart.js loader — loads Chart.js from CDN at runtime.
- * If a local chart.min.js exists, it will have already set window.Chart.
- * Otherwise, we load from jsdelivr CDN.
+ * Chart.js loader — reuses an existing Chart global or loads Chart.js from CDN.
  */
 let _promise = null;
 
+const CHART_CDN = 'https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js';
+
+function appendScript(src) {
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error(`无法加载 ${src}`));
+        document.head.appendChild(script);
+    });
+}
+
 export function loadChart() {
     if (_promise) return _promise;
-    _promise = new Promise((resolve, reject) => {
+    _promise = (async () => {
         if (window.Chart) {
-            resolve(window.Chart);
-            return;
+            return window.Chart;
         }
-        // Try local first, then CDN
-        const sources = [
-            '/js/lib/chart.min.js',
-            'https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js',
-        ];
-        let idx = 0;
-        function tryNext() {
-            if (idx >= sources.length) {
-                reject(new Error('Chart.js 加载失败'));
-                return;
-            }
-            const script = document.createElement('script');
-            script.src = sources[idx++];
-            script.onload = () => {
-                if (window.Chart) resolve(window.Chart);
-                else tryNext();
-            };
-            script.onerror = tryNext;
-            document.head.appendChild(script);
-        }
-        tryNext();
-    });
+
+        await appendScript(CHART_CDN);
+        if (window.Chart) return window.Chart;
+
+        throw new Error('Chart.js 加载失败');
+    })();
     return _promise;
 }

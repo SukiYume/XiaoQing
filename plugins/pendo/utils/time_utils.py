@@ -4,10 +4,10 @@
 """
 
 import json
-import re
 import logging
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Any
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..config import PendoConfig
@@ -35,12 +35,12 @@ class TimezoneHelper:
         return TimezoneHelper.DEFAULT_TZ
 
     @staticmethod
-    def now(tz: Optional[ZoneInfo] = None) -> datetime:
+    def now(tz: ZoneInfo | None = None) -> datetime:
         """获取带时区的当前时间"""
         return datetime.now(tz or TimezoneHelper.DEFAULT_TZ)
 
     @staticmethod
-    def parse(dt_str: str, tz: Optional[ZoneInfo] = None) -> datetime:
+    def parse(dt_str: str, tz: ZoneInfo | None = None) -> datetime:
         """解析日期时间字符串并附加时区"""
         if not dt_str:
             raise ValueError("Empty datetime string")
@@ -94,7 +94,7 @@ def parse_and_localize(dt_str: str, user_id: str | None = None, db=None) -> date
 # ==================== 日期解析 ====================
 
 
-def parse_date_optional(date_str: str, now: Optional[datetime] = None) -> Optional[str]:
+def parse_date_optional(date_str: str, now: datetime | None = None) -> str | None:
     """解析日期字符串为 YYYY-MM-DD，失败返回 None"""
     if not date_str or not str(date_str).strip():
         return None
@@ -132,7 +132,7 @@ def parse_date_optional(date_str: str, now: Optional[datetime] = None) -> Option
     return None
 
 
-def parse_date_required(date_str: str, now: Optional[datetime] = None) -> str:
+def parse_date_required(date_str: str, now: datetime | None = None) -> str:
     """解析日期字符串，失败抛出 ValueError"""
     parsed = parse_date_optional(date_str, now)
     if not parsed:
@@ -152,7 +152,7 @@ def _parse_ym_range(ym_str: str) -> tuple[datetime, datetime]:
 
 
 def _parse_time_range_core(
-    time_range: str, now: Optional[datetime] = None, default: str = "today"
+    time_range: str, now: datetime | None = None, default: str = "today"
 ) -> tuple[datetime, datetime]:
     """核心时间范围解析，返回 (start_dt, end_dt)。
 
@@ -235,15 +235,15 @@ def _parse_time_range_core(
     return _sod, _eod
 
 
-def parse_event_time_range(time_range: str, now: Optional[datetime] = None) -> tuple[str, str]:
+def parse_event_time_range(time_range: str, now: datetime | None = None) -> tuple[str, str]:
     """解析事件时间范围，返回 ISO start/end"""
     start, end = _parse_time_range_core(time_range, now)
     return start.isoformat(), end.isoformat()
 
 
 def parse_search_date_range(
-    range_str: str, now: Optional[datetime] = None
-) -> tuple[Optional[str], Optional[str]]:
+    range_str: str, now: datetime | None = None
+) -> tuple[str | None, str | None]:
     """解析搜索日期范围，返回 ISO start/end 或 (None, None)"""
     if not range_str or not range_str.strip():
         return None, None
@@ -254,7 +254,7 @@ def parse_search_date_range(
         return None, None
 
 
-def parse_diary_range(range_str: str, now: Optional[datetime] = None) -> tuple[str, str]:
+def parse_diary_range(range_str: str, now: datetime | None = None) -> tuple[str, str]:
     """解析日记范围，返回 YYYY-MM-DD start/end"""
     now = now or datetime.now()
     default = "today"
@@ -267,8 +267,8 @@ def parse_diary_range(range_str: str, now: Optional[datetime] = None) -> tuple[s
 
 
 def parse_delay_time(
-    delay_str: str, current_due: Optional[str] = None, now: Optional[datetime] = None
-) -> Optional[str]:
+    delay_str: str, current_due: str | None = None, now: datetime | None = None
+) -> str | None:
     """解析延后时间，返回 ISO 时间字符串"""
     if not delay_str:
         return None
@@ -306,7 +306,7 @@ def parse_delay_time(
     return None
 
 
-def parse_hhmm_to_minutes(time_str: str) -> Optional[int]:
+def parse_hhmm_to_minutes(time_str: str) -> int | None:
     """解析 HH:MM 到分钟数"""
     if not time_str:
         return None

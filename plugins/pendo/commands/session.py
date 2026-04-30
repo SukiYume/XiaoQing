@@ -5,6 +5,7 @@
 
 import logging
 from typing import Any
+
 from ..config import PendoConfig
 from ..core.runtime import get_cached_services
 from ..core.types import PendoServices, SessionData

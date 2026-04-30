@@ -7,11 +7,12 @@
 - 错误ID生成用于追踪
 """
 
-import uuid
-import logging
 import functools
 import inspect
-from typing import Any, Callable
+import logging
+import uuid
+from collections.abc import Callable
+from typing import Any
 
 from ..core.exceptions import PendoException
 

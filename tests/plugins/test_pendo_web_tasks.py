@@ -1,12 +1,11 @@
 """Regression tests for the redesigned Pendo web tasks page."""
 
-from pathlib import Path
 import shutil
 import uuid
+from pathlib import Path
 
 from plugins.pendo.services.db import Database
 from plugins.pendo.web.analytics.task_overview import build_task_overview
-
 
 ROOT = Path(__file__).resolve().parents[2]
 

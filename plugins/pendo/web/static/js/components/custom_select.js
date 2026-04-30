@@ -36,6 +36,8 @@ export function renderCustomSelect({
     selected = '',
     className = '',
     placeholder = '请选择',
+    ariaLabel = '',
+    labelledBy = '',
 }) {
     const normalized = normalizeOptions(options);
     const safeClassName = String(className || '').replace(/[^a-zA-Z0-9_\- ]/g, '');
@@ -57,7 +59,7 @@ export function renderCustomSelect({
     return `
         <div class="pselect ${safeClassName}" id="${escapeAttr(id)}" data-value="${escapeAttr(current.value)}">
             ${hiddenInput}
-            <div class="pselect-trigger" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false">
+            <div class="pselect-trigger" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false"${labelledBy ? ` aria-labelledby="${escapeAttr(labelledBy)}"` : ` aria-label="${escapeAttr(ariaLabel || placeholder)}"`}>
                 <span class="pselect-label">${escapeHtml(current.label)}</span>
                 ${CHEVRON_SVG}
             </div>

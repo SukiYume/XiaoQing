@@ -1,22 +1,20 @@
 """Regression tests for Pendo web settings persistence."""
 
 import asyncio
-from pathlib import Path
 import shutil
 import uuid
+from pathlib import Path
 
 from plugins.pendo.commands.settings import handle_settings
 from plugins.pendo.config import PendoConfig
 from plugins.pendo.services.db import Database
 from plugins.pendo.utils.settings_utils import (
-    PLUGIN_SETTINGS_HELP_LINES,
     normalize_settings_json,
     parse_custom_settings,
     parse_toggle_value,
     resolve_default_category,
     save_user_setting,
 )
-
 
 ROOT = Path(__file__).resolve().parents[2]
 

@@ -1,49 +1,42 @@
 """
-一次性脚本：将 plugins/pendo/data/old_bill.csv 导入 pendo.db 的 items 表（type=ledger）
+一次性脚本：将 plugins/pendo/data/old_bill.csv 转换为新版 Pendo ledger 数据。
 
-CSV 格式：事件,收支,标签,时间,记录人,渠道,月份
-字段映射：
-  事件   -> title
-  收支   -> amount (取绝对值) + direction (负=expense, 正=income)
-  标签   -> ledger_category (按映射表转换)
-  时间   -> ledger_date (YYYY/MM/DD -> YYYY-MM-DD)
-  渠道   -> payment_method (CSV中全为空，留空字符串)
-  记录人 -> 忽略
-  月份   -> 忽略
-
-标签映射规则：
-  吃饭       -> 餐饮
-  出行       -> 交通
-  房租       -> 居住
-  购物       -> 购物
-  娱乐       -> 娱乐
-  服务       -> 美容  (理发、洗牙等生活服务)
-  工资       -> 工资
-  利息       -> 理财
-  其他       -> 其他
-  周转       -> 其他
-  信用卡还款 -> 跳过（不导入）
-
-用法：
-  python scripts/import_old_bill.py [--dry-run] [--owner-id OWNER_ID]
+默认只做 dry-run 预览；使用 --apply 写入 pendo.db，使用 --bundle 生成
+old_bill.csv.pendo.zip 供 Web transfer 导入。
 """
 
-import csv
-import sqlite3
-import uuid
+from __future__ import annotations
+
 import argparse
-import os
+import csv
+import io
+import json
+import sqlite3
+import sys
+import uuid
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-# 路径
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PENDO_DIR = os.path.dirname(SCRIPT_DIR)  # plugins/pendo
-CSV_PATH = os.path.join(PENDO_DIR, "data", "old_bill.csv")
-DB_PATH = os.path.join(PENDO_DIR, "data", "pendo.db")
+SCRIPT_DIR = Path(__file__).resolve().parent
+PENDO_DIR = SCRIPT_DIR.parent
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
+from plugins.pendo.utils.validators import normalize_ledger_fields  # noqa: E402
+from plugins.pendo.web.services.transfer_bundle import (  # noqa: E402
+    TRANSFER_VERSION,
+    TYPE_FILE_NAMES,
+    build_manifest,
+    compute_sha256,
+    write_bundle,
+)
+
+CSV_PATH = PENDO_DIR / "data" / "old_bill.csv"
+DB_PATH = PENDO_DIR / "data" / "pendo.db"
 DEFAULT_OWNER_ID = "1000000001"
 
-# 标签 -> ledger_category 映射
 TAG_MAP = {
     "吃饭": "餐饮",
     "出行": "交通",
@@ -56,165 +49,242 @@ TAG_MAP = {
     "其他": "其他",
     "周转": "其他",
 }
-
-# 需要跳过的标签
 SKIP_TAGS = {"信用卡还款"}
 
 
 def parse_date(date_str: str) -> str:
-    """将 YYYY/MM/DD 转换为 YYYY-MM-DD"""
-    return date_str.replace("/", "-")
+    return datetime.strptime(date_str.strip(), "%Y/%m/%d").strftime("%Y-%m-%d")
 
 
 def generate_id() -> str:
-    return str(uuid.uuid4())[:8]
+    return uuid.uuid4().hex[:8]
 
 
-def import_csv(dry_run: bool = False, owner_id: str = DEFAULT_OWNER_ID):
-    print(f"CSV 文件: {CSV_PATH}")
-    print(f"数据库:   {DB_PATH}")
-    print(f"Owner ID: {owner_id}")
-    print(f"模式:     {'预览(dry-run)' if dry_run else '正式导入'}")
-    print()
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
 
-    if not os.path.exists(CSV_PATH):
-        print(f"❌ CSV 文件不存在: {CSV_PATH}")
-        return
 
-    rows_to_insert = []
-    skipped = 0
-    errors = []
-    now = datetime.now().isoformat()
+def parse_old_bill_rows(csv_path: Path = CSV_PATH) -> tuple[list[dict[str, Any]], dict[str, int], list[str]]:
+    rows: list[dict[str, Any]] = []
+    stats = {"skipped": 0}
+    warnings: list[str] = []
+    now = datetime.now().isoformat(timespec="seconds")
 
-    with open(CSV_PATH, "r", encoding="utf-8-sig") as f:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
-
         for line_num, row in enumerate(reader, start=2):
-            tag = (row.get("标签") or "").strip()
-
-            # 跳过信用卡还款
+            tag = _clean_text(row.get("标签"))
             if tag in SKIP_TAGS:
-                skipped += 1
+                stats["skipped"] += 1
                 continue
 
-            # 解析金额和方向
-            amount_str = (row.get("收支") or "").strip()
+            amount_text = _clean_text(row.get("收支"))
             try:
-                amount_raw = float(amount_str)
+                amount_raw = float(amount_text)
             except ValueError:
-                errors.append(f"行 {line_num}: 无法解析金额 '{amount_str}'")
+                warnings.append(f"行 {line_num}: 无法解析金额 {amount_text!r}")
+                continue
+            if amount_raw == 0:
+                warnings.append(f"行 {line_num}: 金额为 0，跳过")
                 continue
 
-            direction = "income" if amount_raw > 0 else "expense"
-            amount = abs(amount_raw)
-
-            # 映射分类
-            ledger_category = TAG_MAP.get(tag)
-            if ledger_category is None:
-                errors.append(f"行 {line_num}: 未知标签 '{tag}'，归为'其他'")
-                ledger_category = "其他"
-
-            # 解析日期
-            date_str = (row.get("时间") or "").strip()
-            if not date_str:
-                errors.append(f"行 {line_num}: 缺少日期，跳过")
+            date_text = _clean_text(row.get("时间"))
+            try:
+                ledger_date = parse_date(date_text)
+            except ValueError:
+                warnings.append(f"行 {line_num}: 无法解析日期 {date_text!r}")
                 continue
-            ledger_date = parse_date(date_str)
 
-            # 标题
-            title = (row.get("事件") or "").strip()
+            category = TAG_MAP.get(tag, "其他")
+            if tag and tag not in TAG_MAP:
+                warnings.append(f"行 {line_num}: 未知标签 {tag!r}，归为其他")
 
-            item_id = generate_id()
+            normalized = normalize_ledger_fields(
+                {
+                    "title": _clean_text(row.get("事件")) or "旧账单",
+                    "content": "",
+                    "amount": abs(amount_raw),
+                    "transaction_type": "income" if amount_raw > 0 else "expense",
+                    "ledger_category": category,
+                    "ledger_date": ledger_date,
+                    "account_name": _clean_text(row.get("渠道")) or "现金",
+                    "counter_account_name": "",
+                    "merchant": "",
+                    "remark": "",
+                    "currency": "CNY",
+                },
+                partial=False,
+            )
+            normalized.update(
+                {
+                    "_type": "ledger",
+                    "_schema": TRANSFER_VERSION,
+                    "id": generate_id(),
+                    "created_at": now,
+                    "updated_at": now,
+                    "category": "未分类",
+                    "tags": [],
+                    "context": {
+                        "import": {
+                            "source": "old_bill.csv",
+                            "line": line_num,
+                            "legacy_tag": tag,
+                            "legacy_month": _clean_text(row.get("月份")),
+                            "legacy_recorder": _clean_text(row.get("记录人")),
+                        }
+                    },
+                }
+            )
+            rows.append(normalized)
 
-            rows_to_insert.append((
-                item_id,
-                "ledger",           # type
-                title,              # title
-                "",                 # content
-                "[]",               # tags (JSON)
-                "未分类",           # category (基类字段，不用)
-                now,                # created_at
-                now,                # updated_at
-                owner_id,           # owner_id
-                "{}",               # context (JSON)
-                "private",          # visibility
-                "[]",               # attachments (JSON)
-                "{}",               # ai_meta (JSON)
-                0,                  # deleted
-                None,               # deleted_at
-                amount,             # amount
-                direction,          # direction
-                ledger_category,    # ledger_category
-                ledger_date,        # ledger_date
-                "",                 # remark
-            ))
+    return rows, stats, warnings
 
-    # 统计
-    print(f"解析完成:")
-    print(f"  待导入: {len(rows_to_insert)} 条")
-    print(f"  跳过(信用卡还款): {skipped} 条")
-    if errors:
-        print(f"  警告: {len(errors)} 条")
-        for e in errors[:10]:
-            print(f"    ⚠️ {e}")
-        if len(errors) > 10:
-            print(f"    ... 还有 {len(errors) - 10} 条警告")
-    print()
 
-    # 预览前 5 条
-    print("前 5 条预览:")
-    for r in rows_to_insert[:5]:
-        d_icon = "💰" if r[16] == "income" else "💸"
-        print(f"  {d_icon} ¥{r[15]:.2f} [{r[17]}] {r[2]} ({r[19]})")
-    print()
+def build_old_bill_bundle(records: list[dict[str, Any]], timezone: str = "Asia/Shanghai") -> bytes:
+    payload = ("\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n").encode(
+        "utf-8"
+    )
+    manifest = build_manifest(
+        {
+            "types": ["ledger"],
+            "preset": "all",
+            "start": None,
+            "end": None,
+        },
+        [
+            {
+                "path": TYPE_FILE_NAMES["ledger"],
+                "type": "ledger",
+                "count": len(records),
+                "sha256": compute_sha256(payload),
+            }
+        ],
+        timezone,
+    )
+    manifest["source"]["app"] = "old-bill-converter"
+    buffer = io.BytesIO()
+    write_bundle(buffer, manifest, {"ledger": records})
+    return buffer.getvalue()
 
-    if dry_run:
-        print("(dry-run 模式，未写入数据库)")
-        return
 
-    # 写入数据库
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+def _db_value(value: Any) -> Any:
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    return value
 
-    # 确保 ledger 列存在（生产环境可能还没跑过插件migration）
-    existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(items)").fetchall()}
-    ledger_columns = [
-        ("amount", "REAL DEFAULT 0"),
-        ("direction", "TEXT DEFAULT ''"),
-        ("ledger_category", "TEXT DEFAULT ''"),
-        ("ledger_date", "TEXT DEFAULT ''"),
-        ("remark", "TEXT DEFAULT ''"),
+
+def insert_rows(db_path: Path, owner_id: str, records: list[dict[str, Any]]) -> int:
+    conn = sqlite3.connect(db_path)
+    columns = [
+        "id",
+        "type",
+        "title",
+        "content",
+        "tags",
+        "category",
+        "created_at",
+        "updated_at",
+        "owner_id",
+        "context",
+        "visibility",
+        "attachments",
+        "ai_meta",
+        "deleted",
+        "deleted_at",
+        "amount",
+        "amount_cents",
+        "currency",
+        "transaction_type",
+        "ledger_category",
+        "ledger_date",
+        "account_name",
+        "counter_account_name",
+        "merchant",
+        "remark",
     ]
-    for col_name, col_def in ledger_columns:
-        if col_name not in existing_cols:
-            cursor.execute(f"ALTER TABLE items ADD COLUMN {col_name} {col_def}")
-            print(f"  已添加列: {col_name}")
-    conn.commit()
-
-    sql = """
-    INSERT INTO items (
-        id, type, title, content, tags, category,
-        created_at, updated_at, owner_id, context, visibility,
-        attachments, ai_meta, deleted, deleted_at,
-        amount, direction, ledger_category, ledger_date, remark
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """
+    placeholders = ", ".join("?" for _ in columns)
+    sql = f"INSERT INTO items ({', '.join(columns)}) VALUES ({placeholders})"
+    rows = []
+    for record in records:
+        row = {
+            **record,
+            "type": "ledger",
+            "owner_id": owner_id,
+            "visibility": "private",
+            "attachments": [],
+            "ai_meta": {},
+            "deleted": 0,
+            "deleted_at": None,
+        }
+        rows.append(tuple(_db_value(row.get(column)) for column in columns))
 
     try:
-        cursor.executemany(sql, rows_to_insert)
-        conn.commit()
-        print(f"✅ 成功导入 {cursor.rowcount} 条记账记录到 pendo.db")
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ 导入失败: {e}")
+        with conn:
+            conn.executemany(sql, rows)
     finally:
         conn.close()
+    return len(rows)
+
+
+def print_summary(records: list[dict[str, Any]], stats: dict[str, int], warnings: list[str]) -> None:
+    print(f"待转换: {len(records)} 条")
+    print(f"跳过: {stats['skipped']} 条")
+    if warnings:
+        print(f"警告: {len(warnings)} 条")
+        for warning in warnings[:10]:
+            print(f"  - {warning}")
+        if len(warnings) > 10:
+            print(f"  ... 还有 {len(warnings) - 10} 条")
+    print("前 5 条预览:")
+    for record in records[:5]:
+        sign = "+" if record["transaction_type"] == "income" else "-"
+        print(
+            f"  {sign} CNY {record['amount']:.2f} "
+            f"[{record['ledger_category']}] {record['title']} ({record['ledger_date']})"
+        )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="转换旧账单 CSV 到新版 Pendo ledger 数据")
+    parser.add_argument("--csv", default=str(CSV_PATH), help="输入 CSV 路径")
+    parser.add_argument("--db", default=str(DB_PATH), help="pendo.db 路径")
+    parser.add_argument("--owner-id", default=DEFAULT_OWNER_ID, help="写入 DB 时使用的用户 ID")
+    parser.add_argument("--dry-run", action="store_true", help="兼容旧参数；不写入 DB")
+    parser.add_argument("--apply", action="store_true", help="写入 pendo.db")
+    parser.add_argument("--bundle", action="store_true", help="生成 .pendo.zip bundle")
+    parser.add_argument("--output", help="bundle 输出路径，默认 old_bill.csv.pendo.zip")
+    args = parser.parse_args()
+
+    csv_path = Path(args.csv).expanduser().resolve()
+    db_path = Path(args.db).expanduser().resolve()
+    if not csv_path.exists():
+        print(f"CSV 文件不存在: {csv_path}", file=sys.stderr)
+        return 1
+
+    records, stats, warnings = parse_old_bill_rows(csv_path)
+    print(f"CSV 文件: {csv_path}")
+    print(f"数据库:   {db_path}")
+    print(f"Owner ID: {args.owner_id}")
+    print_summary(records, stats, warnings)
+
+    if args.bundle:
+        output_path = (
+            Path(args.output).expanduser().resolve()
+            if args.output
+            else csv_path.with_suffix(csv_path.suffix + ".pendo.zip")
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(build_old_bill_bundle(records))
+        print(f"已生成 bundle: {output_path}")
+
+    if args.apply:
+        inserted = insert_rows(db_path, args.owner_id, records)
+        print(f"已写入 DB: {inserted} 条")
+    else:
+        print("dry-run: 未写入 DB")
+
+    return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="导入旧账单 CSV 到 pendo.db")
-    parser.add_argument("--dry-run", action="store_true", help="预览模式，不实际写入")
-    parser.add_argument("--owner-id", default=DEFAULT_OWNER_ID, help=f"用户ID (默认: {DEFAULT_OWNER_ID})")
-    args = parser.parse_args()
-
-    import_csv(dry_run=args.dry_run, owner_id=args.owner_id)
+    raise SystemExit(main())

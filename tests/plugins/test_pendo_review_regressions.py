@@ -14,7 +14,6 @@ from plugins.pendo.services.ai_parser import AIParser
 from plugins.pendo.services.db import Database
 from plugins.pendo.services.reminder import ReminderService
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -542,7 +541,7 @@ def test_web_list_and_search_api_source_bounds_pagination_inputs():
     assert "page: int = Query(1, ge=1)" in items_src
     assert "page_size: int = Query(20, ge=1, le=100)" in items_src
     assert "page: int = Query(1, ge=1)" in search_src
-    assert "page_size: Optional[int] = Query(None, ge=1, le=100)" in search_src
+    assert "page_size: int | None = Query(None, ge=1, le=100)" in search_src
     assert "limit: int = Query(50, ge=1, le=100)" in search_src
 
 

@@ -3,21 +3,24 @@
 按照计划日期、硬截止和分类管理待办事项，不需要AI解析
 """
 
-from typing import Any, TYPE_CHECKING, Iterable, cast
-from datetime import datetime, timedelta
-import re
 import logging
-from ..models.item import ItemType, TaskStatus, TaskItem
-from ..models.constants import ItemFields
-from ..core.exceptions import OwnershipException, MissingRequiredFieldException
-from ..core.types import PendoContext, CommandMessage
-from ..core.router import TOP_LEVEL_REDIRECTS
-from ..utils.time_utils import now_in_timezone, TimezoneHelper
+import re
+from collections.abc import Iterable
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
+
 from core.plugin_base import run_sync
+
+from ..config import PendoConfig
+from ..core.exceptions import MissingRequiredFieldException
+from ..core.router import TOP_LEVEL_REDIRECTS
+from ..core.types import CommandMessage, PendoContext
+from ..models.constants import ItemFields
+from ..models.item import ItemType, TaskItem, TaskStatus
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
-from ..config import PendoConfig
-from ..utils.formatters import ItemFormatter, format_success_message, extract_metadata, paginate
+from ..utils.formatters import ItemFormatter, extract_metadata, paginate
+from ..utils.time_utils import TimezoneHelper, now_in_timezone
 from ..utils.validators import default_task_plan_date, normalize_task_fields
 
 logger = logging.getLogger(__name__)
@@ -218,7 +221,10 @@ class TaskHandler(DbOpsMixin):
             }
 
         # 解析参数
-        parsed = self._parse_task_text(text, user_id)
+        try:
+            parsed = self._parse_task_text(text, user_id)
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
 
         # 创建待办数据
         from ..models.item import TaskItem
@@ -250,7 +256,7 @@ class TaskHandler(DbOpsMixin):
 
         # 格式化返回消息
         priority_str = ItemFormatter.format_priority(parsed["priority"])
-        message = f"✅ 已添加待办\n\n"
+        message = "✅ 已添加待办\n\n"
         message += f"📝 {parsed['title']}\n"
         message += f"📅 计划: {parsed['plan_date'] or '未安排'}\n"
         if parsed.get("deadline_at"):
@@ -277,6 +283,9 @@ class TaskHandler(DbOpsMixin):
         plan_date, text = self._extract_inline_param(text, ("plan", "date"))
         deadline_at, text = self._extract_inline_param(text, ("deadline", "due"))
         remind_raw, text = self._extract_inline_param(text, ("remind", "reminder"))
+        priority_token = re.search(r"(?<!\S)p:(\S+)", text)
+        if priority_token and not re.fullmatch(r"[1-5]", priority_token.group(1)):
+            raise ValueError("优先级必须在1-5之间")
         meta = extract_metadata(text, with_priority=True)
         remind_times = [
             value.strip()
@@ -342,8 +351,8 @@ class TaskHandler(DbOpsMixin):
                 detail += f"/{stats['cancelled']}取消"
             message += f"📂 **{cat}** ({detail}/{total}总)\n"
 
-        message += f"\n💡 用 /pendo todo list <分类名> 查看详情"
-        message += f"\n💡 用 /pendo todo list today 查看今日待办"
+        message += "\n💡 用 /pendo todo list <分类名> 查看详情"
+        message += "\n💡 用 /pendo todo list today 查看今日待办"
 
         return {"status": "success", "message": message}
 
@@ -397,7 +406,7 @@ class TaskHandler(DbOpsMixin):
         show_all = False
         page_num = 1
 
-        for i, part in enumerate(parts[1:], 1):
+        for _i, part in enumerate(parts[1:], 1):
             part_lower = part.lower()
             if part_lower in ["done", "已完成"]:
                 status_filter = TaskStatus.DONE.value
@@ -489,7 +498,7 @@ class TaskHandler(DbOpsMixin):
         if has_more and not show_all:
             message += f"   ... (使用 'all' 显示全部或 'page:{page_num + 1}' 查看下一页)\n"
 
-        message += f"💡 /pendo todo done <id> 完成 | /pendo todo undone <id> 重开"
+        message += "💡 /pendo todo done <id> 完成 | /pendo todo undone <id> 重开"
 
         return {"status": "success", "message": message}
 
@@ -612,7 +621,7 @@ class TaskHandler(DbOpsMixin):
             else:
                 message += f"... (使用 'page:{page_num + 1}' 查看下一页)\n"
 
-        message += f"💡 /pendo todo done <id> 完成 | /pendo todo cancel <id> 取消 | /pendo todo undone <id> 重开"
+        message += "💡 /pendo todo done <id> 完成 | /pendo todo cancel <id> 取消 | /pendo todo undone <id> 重开"
 
         return {"status": "success", "message": message}
 
@@ -831,7 +840,10 @@ class TaskHandler(DbOpsMixin):
         task = cast(TaskItem, task)
 
         # 解析新内容
-        parsed = self._parse_task_text(new_content, user_id)
+        try:
+            parsed = self._parse_task_text(new_content, user_id)
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
 
         # 构建更新
         updates = {"title": parsed["title"], "type": ItemType.TASK.value}

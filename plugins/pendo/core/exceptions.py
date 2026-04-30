@@ -2,8 +2,8 @@
 Pendo 自定义异常类（精简版）
 """
 
-import uuid
 import logging
+import uuid
 from typing import Any
 
 logger = logging.getLogger(__name__)

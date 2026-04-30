@@ -1,10 +1,9 @@
 """Search endpoint."""
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...services.db import Database
-from ..deps import get_db, get_current_user
+from ..deps import get_current_user, get_db
 
 router = APIRouter()
 
@@ -12,15 +11,15 @@ router = APIRouter()
 @router.get("/search")
 def search_items(
     q: str,
-    type: Optional[str] = None,
-    category: Optional[str] = None,
-    ledger_category: Optional[str] = None,
-    status: Optional[str] = None,
-    transaction_type: Optional[str] = None,
-    account_name: Optional[str] = None,
-    merchant: Optional[str] = None,
+    type: str | None = None,
+    category: str | None = None,
+    ledger_category: str | None = None,
+    status: str | None = None,
+    transaction_type: str | None = None,
+    account_name: str | None = None,
+    merchant: str | None = None,
     page: int = Query(1, ge=1),
-    page_size: Optional[int] = Query(None, ge=1, le=100),
+    page_size: int | None = Query(None, ge=1, le=100),
     limit: int = Query(50, ge=1, le=100),
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),

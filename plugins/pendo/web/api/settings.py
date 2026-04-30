@@ -1,26 +1,26 @@
 """User settings endpoints."""
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ...services.db import Database
 from ...utils.settings_utils import normalize_settings_json
 from ...utils.validators import validate_category
-from ..deps import get_db, get_current_user
+from ..deps import get_current_user, get_db
 
 router = APIRouter()
 
 
 class SettingsUpdate(BaseModel):
-    timezone: Optional[str] = None
-    quiet_hours_start: Optional[str] = None
-    quiet_hours_end: Optional[str] = None
-    daily_report_time: Optional[str] = None
-    diary_remind_time: Optional[str] = None
-    default_category: Optional[str] = None
-    settings_json: Optional[dict] = None
+    timezone: str | None = None
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
+    daily_report_time: str | None = None
+    diary_remind_time: str | None = None
+    default_category: str | None = None
+    settings_json: dict | None = None
 
 
 def _normalize_time_text(value: str, field_name: str) -> str:
@@ -78,7 +78,7 @@ def update_settings(
         try:
             updates = _normalize_settings_payload(updates)
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not db.update_user_settings(owner_id, updates):
             raise HTTPException(status_code=500, detail="Failed to update settings")
     settings = db.get_user_settings(owner_id)

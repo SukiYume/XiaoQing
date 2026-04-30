@@ -12,16 +12,20 @@ from typing import Any
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from plugins.pendo.scripts.migrate_event_graph import migrate_event_graph
     from plugins.pendo.services.db import Database
     from plugins.pendo.utils.validators import (
         normalize_diary_mood,
         normalize_ledger_fields,
         normalize_template_answers,
     )
-    from plugins.pendo.scripts.migrate_event_graph import migrate_event_graph
 else:
     from ..services.db import Database
-    from ..utils.validators import normalize_diary_mood, normalize_ledger_fields, normalize_template_answers
+    from ..utils.validators import (
+        normalize_diary_mood,
+        normalize_ledger_fields,
+        normalize_template_answers,
+    )
     from .migrate_event_graph import migrate_event_graph
 
 
