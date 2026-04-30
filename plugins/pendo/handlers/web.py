@@ -25,6 +25,13 @@ class WebHandler:
     def __init__(self, db):
         self.db = db
 
+    @staticmethod
+    def _is_managed_running() -> bool:
+        checker = getattr(web_server, "is_managed_running", None)
+        if callable(checker):
+            return bool(checker())
+        return bool(web_server.is_running())
+
     @handle_command_errors
     async def handle(self, user_id: str, args: str, context=None, group_id=None):
         """Handle /pendo web subcommands."""
@@ -172,7 +179,15 @@ class WebHandler:
         return {"status": "error", "message": "\n".join(lines)}
 
     async def _stop(self, user_id: str, context):
-        if not web_server.is_running():
+        if not self._is_managed_running():
+            if web_server.is_running():
+                return {
+                    "status": "success",
+                    "message": (
+                        "🌐 Pendo Web\n"
+                        "ℹ️ 服务可访问，但不是由当前插件线程启动；未停止外部服务"
+                    ),
+                }
             return {
                 "status": "success",
                 "message": "🌐 Pendo Web\nℹ️ 服务当前未在运行",

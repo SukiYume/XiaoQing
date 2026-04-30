@@ -242,6 +242,37 @@ def test_event_collection_store_and_graph_service(tmp_path: Path):
         db.cleanup()
 
 
+def test_batch_soft_delete_removes_child_reminder_logs(tmp_path: Path):
+    db = Database(str(tmp_path / "pendo_batch_delete_reminder_logs.db"))
+    try:
+        first = EventItem(
+            owner_id="u1",
+            title="节点一",
+            start_time="2030-01-01T09:00:00",
+            remind_times=["2030-01-01T08:00:00"],
+        )
+        second = EventItem(
+            owner_id="u1",
+            title="节点二",
+            start_time="2030-01-02T09:00:00",
+            remind_times=["2030-01-02T08:00:00"],
+        )
+        db.insert_item(first, "node-log1")
+        db.insert_item(second, "node-log2")
+        db.log_reminder("node-log1", "2030-01-01T08:00:00", sent=True)
+        db.log_reminder("node-log2", "2030-01-02T08:00:00", sent=True)
+
+        assert db.get_reminder_logs("node-log1")
+        assert db.get_reminder_logs("node-log2")
+
+        db.batch_soft_delete(["node-log1", "node-log2"], "u1")
+
+        assert db.get_reminder_logs("node-log1") == []
+        assert db.get_reminder_logs("node-log2") == []
+    finally:
+        db.cleanup()
+
+
 class _NoConflictReminderService:
     def detect_conflict(self, user_id: str, start_time: str, end_time: str | None = None):
         return []

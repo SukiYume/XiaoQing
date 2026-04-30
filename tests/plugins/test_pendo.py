@@ -2959,6 +2959,35 @@ class TestDiaryMoodAIRegression:
         finally:
             db.cleanup()
 
+    def test_add_diary_rejects_score_without_mood_when_out_of_range(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.diary import DiaryHandler
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_diary_score_without_mood.db"))
+
+        try:
+            handler = DiaryHandler(db=db, ai_parser=None)
+            result = asyncio.run(
+                handler.add_diary(
+                    "u1",
+                    "2026-01-31 score:99 补写这一天。",
+                    SimpleNamespace(),
+                    None,
+                )
+            )
+
+            assert result["status"] == "error"
+            assert "mood_score" in result["message"]
+            assert db.items.query_items_by_date_range(
+                "u1", "diary", "diary_date", "2026-01-31", "2026-01-31"
+            ) == []
+        finally:
+            db.cleanup()
+
     def test_create_diary_rejects_invalid_new_structure_fields(self, tmp_path):
         import sys
 
@@ -3070,6 +3099,41 @@ class TestReminderBackfillRegression:
             assert "• 09:00 - 10:00 未来会议" in result["message"]
             assert "**12月30日 周日** - 2天前" in result["message"]
             assert "• 09:00 - 10:00 过去会议" in result["message"]
+        finally:
+            db.cleanup()
+
+    def test_event_list_handles_timezone_aware_event_start_time(self, tmp_path):
+        import sys
+        from typing import Any, cast
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo_event_aware_start.db"))
+
+        try:
+            event = EventItem(
+                owner_id="u1",
+                title="带时区会议",
+                start_time="2026-05-01T09:00:00+08:00",
+                end_time="2026-05-01T10:00:00+08:00",
+                remind_times=["2026-05-01T08:30:00+08:00"],
+                created_at="2026-05-01T00:00:00",
+                updated_at="2026-05-01T00:00:00",
+            )
+            db.items.insert_item(event, "evtaware")
+            handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
+
+            result = asyncio.run(
+                handler.list_events("u1", "2026", cast(Any, SimpleNamespace()))
+            )
+
+            assert result["status"] == "success"
+            assert "带时区会议" in result["message"]
         finally:
             db.cleanup()
 
@@ -4702,6 +4766,29 @@ class TestPendoWebHandler:
         assert "服务启动失败" in result["message"]
         assert "端口可能已被占用" in result["message"]
         assert "PENDO_WEB_PORT" in result["message"]
+
+    def test_web_stop_reports_external_running_server_without_failing(self):
+        import importlib
+        import sys
+        import types
+
+        sys.path.insert(0, str(ROOT))
+        sys.modules.pop("plugins.pendo.handlers.web", None)
+        sys.modules["plugins.pendo.web.server"] = types.SimpleNamespace(
+            get_url=lambda: "http://127.0.0.1:8765",
+            is_running=lambda: True,
+            is_managed_running=lambda: False,
+            start=lambda _db: False,
+            stop=lambda: False,
+        )
+
+        web_module = importlib.import_module("plugins.pendo.handlers.web")
+
+        handler = web_module.WebHandler(db=None)
+        result = asyncio.run(handler.handle("1001", "stop", context=None))
+
+        assert result["status"] == "success"
+        assert "外部服务" in result["message"]
 
     def test_web_widget_token_sends_token_as_separate_private_message(self, monkeypatch):
         import importlib
