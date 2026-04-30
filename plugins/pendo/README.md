@@ -1,480 +1,284 @@
 # Pendo - 个人时间与信息管理中枢
 
-> 在聊天场景里完成记录、查询、提醒与复盘，把日程、待办、笔记、日记汇总到同一套体系里。
+Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程、待办、笔记、日记、账本和提醒。聊天命令适合快速记录、查询和处理提醒；Web 控制台适合集中浏览、编辑、统计和迁移数据；Scriptable 小组件适合把只读摘要放到 iPhone 主屏。
 
-[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
+## 能力边界
 
-## 🎉 最新更新 (V3.0)
-
-**Web UI 全面上线！**
-
-- ✅ **Web 控制台** - 基于 FastAPI + 原生 JS 的单页应用，支持浏览器访问
-- ✅ **JWT 鉴权** - 安全的 Token 登录机制，支持多用户会话
-- ✅ **可视化看板** - Dashboard 汇总待办、事件、账本、笔记核心数据
-- ✅ **账本管理** - 支持收支分类、筛选、分页、快速录入
-- ✅ **统计图表** - Chart.js 可视化事件/任务/账本趋势
-- ✅ **全模块页面** - 任务、事件、日记、笔记、搜索、设置均有独立页面
-- ✅ **数据迁移** - Web 端支持 `.pendo.zip` Bundle 格式的高级导入导出与操作审计
-- ✅ **聊天命令集成** - `/pendo web start|stop|status` 在聊天中管理 Web 服务
-- ✅ **iPhone 小组件** - 提供只读 widget API、Scriptable 脚本和专用 widget token
-
-## 🎉 V2.0 历史更新
-
-**大规模重构完成！**
-
-- ✅ **模块化架构** - commands/handlers/services分离，代码更清晰
-- ✅ **按需AI解析** - 仅日程使用AI，待办/笔记/日记采用规则解析
-- ✅ **待办分类管理** - 支持 `cat:日期` 或 `cat:自定义分类` 进行分组
-- ✅ **优先级系统** - 待办支持 `p:1` (紧急) 到 `p:4` (低) 四级优先级
-- ✅ **笔记标签** - 支持 `#标签` 和 `cat:分类` 语法
-- ✅ **日记模板** - 多轮对话式模板写日记
-- ✅ **代码质量** - 统一错误处理、消息格式化工具、完善文档
-
-## 📑 目录
-
-- [快速开始](#快速开始)
-- [命令速览](#命令速览)
-- [Web 控制台](#web-控制台)
-- [日程管理](#日程管理)
-- [待办管理](#待办管理)
-- [笔记管理](#笔记管理)
-- [日记管理](#日记管理)
-- [搜索](#搜索)
-- [提醒操作](#提醒操作)
-- [导入导出](#导入导出)
-- [设置](#设置)
-- [常见问题](#常见问题)
+| 模块 | 能力 |
+|---|---|
+| 日程 | 单次日程、重复日程、多节点日程、地点、备注、提醒规则、提醒确认 |
+| 待办 | 计划日期、硬截止、优先级、状态、提醒、分类、标签 |
+| 笔记 | 标题、正文、分类、标签、条目引用、关联条目 |
+| 日记 | 同日多篇、模板回答、心情、评分、天气、位置、收藏 |
+| 账本 | 支出、收入、转账、账户、对方账户、商户、分类、金额分存储、统计 |
+| 搜索 | 跨模块全文搜索和类型、状态、范围、分类、账本字段筛选 |
+| Web | FastAPI + 原生 JS SPA，覆盖 CRUD、统计、迁移、设置和 demo 会话 |
+| 迁移 | 聊天端 Markdown 档案导出，Web 端 `.pendo.zip` Bundle 导入导出 |
+| 小组件 | `/api/widget/summary` 只读摘要接口和 Scriptable 脚本 |
 
 ## 快速开始
 
-```bash
-/pendo                      # 查看完整帮助总览（按模块分组）
-/pendo event                # 直达 event 模块帮助
-/pendo help                 # 查看帮助
+```text
+/pendo                      # 查看模块化帮助
+/pendo help event            # 查看某个模块帮助
+/pendo event add 明天9点组会，提前30分钟提醒
+/pendo todo add 写周报 cat:工作 p:2 plan:2026-05-01
+/pendo note add title:会议纪要 content 讨论迁移方案 cat:工作 #复盘
+/pendo diary add 今天完成了项目复盘 mood:happy score:8
+/pendo ledger quick 35.5 午饭 cat:餐饮 account:微信
+/pendo search 组会 type=event range=last30d
 ```
 
-> `/pendo` 现在会按模块显示带 emoji 的导航式帮助；输入 `/pendo <模块>` 可以只看对应模块的命令。
+## 命令总览
 
-### 命令速览
+### 日程
 
-| 模块 | 常用命令 |
-|------|----------|
-| 日程 | `/pendo event add 明天9点开会` |
-| 待办 | `/pendo todo add 写报告 cat:工作 p:2` |
-| 笔记 | `/pendo note add 今天学到的知识 #学习` |
-| 日记 | `/pendo diary` |
-| 搜索 | `/pendo search 关键词` |
+```text
+/pendo event add <内容>
+/pendo event list [today|tomorrow|week|month|year|YYYY-MM|start..end] [cat:分类] [#标签]
+/pendo event view <id>
+/pendo event edit <id> <内容>
+/pendo event delete <id>
+/pendo event reminders [id|范围]
+/pendo event reminders list [范围]
+/pendo event reminders set <id> <提醒描述>
+/pendo event reminders delete <id> <all|today|future|提醒时间>
+/pendo event reminders confirm <id> [today|future|all|提醒时间]
+```
 
-### 核心特性
+日程以 leaf event 为可操作单元。单次日程是一条 leaf；重复日程和多节点日程由 `event_collections` 组织多个 leaf。集合 ID 用来操作整体，leaf ID 用来操作单个 occurrence 或节点。
 
-- 📅 **日程管理** - AI解析自然语言，智能识别时间、地点、提醒
-- ✅ **待办管理** - 分类和优先级管理，无需AI
-- 📝 **笔记管理** - 标签和分类支持，无需AI
-- 📔 **日记管理** - 模板式记录，情绪分析
-- 🔍 **全文搜索** - 快速找到所有信息
-- 🤖 **AI增强** - 可选AI解析，提升理解准确度
-- 🔄 **重复事件** - 支持复杂的重复规则
-- 📅 **每日简报** - 自动推送今日日程和待办
+### 待办
+
+```text
+/pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [remind:YYYY-MM-DDTHH:MM[,YYYY-MM-DDTHH:MM]] [cat:分类] [p:1-5] [#标签]
+/pendo todo list [today|open|done|cancelled|overdue|upcoming|inbox|分类] [open|done|cancelled] [p:1-5] [all|page:n]
+/pendo todo view <id>
+/pendo todo done <id>
+/pendo todo cancel <id>
+/pendo todo undone <id>
+/pendo todo edit <id> <内容> [plan:/deadline:/remind:/cat:/p:/#标签]
+/pendo todo delete <id|cat:分类>
+```
+
+`task`、`t`、`待办`、`任务` 都是 `todo` 的别名。状态只有 `open`、`done`、`cancelled`。
+
+### 笔记
+
+```text
+/pendo note add <内容> [cat:分类] [#标签] [ref:条目ID]
+/pendo note add title:<标题> content <正文> [cat:分类] [#标签]
+/pendo note list [分类名|cat:分类] [#标签] [since:范围] [all|page:n]
+/pendo note view <id>
+/pendo note edit <id> <新内容> [cat:分类] [#标签]
+/pendo note append <id> <追加内容>
+/pendo note tag <id> #标签
+/pendo note untag <id> #标签
+/pendo note link <id> <关联条目ID>
+/pendo note delete <id|cat:分类>
+```
+
+笔记的 `references` 和 `related_items` 会在 CLI、Web、搜索、Bundle 导入导出中保持一致。
+
+### 日记
+
+```text
+/pendo diary add [日期] <内容> [weather:天气] [location:地点] [mood:happy] [score:1-10] [tags:a,b] [favorite:true]
+/pendo diary template [编号|名称|模板ID]
+/pendo diary list [范围] [mood:心情]
+/pendo diary view [日期|ID]
+/pendo diary delete <日期|ID>
+```
+
+同一天可以写多篇日记。`diary_date` 表示归属日期，`entry_time` 表示具体记录时间；模板回答结构化保存在 `template_answers`。
+
+### 账本
+
+```text
+/pendo ledger add
+/pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注]
+/pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [cat:分类] [amount:min..max] [all|page:n] [ex]
+/pendo ledger view <id>
+/pendo ledger edit <id> <字段:值>...
+/pendo ledger delete <id>
+/pendo ledger summary [范围]
+```
+
+账本以 `amount_cents` 为统计主字段，`amount` 是展示镜像。转账使用 `transaction_type=transfer`，统计时和收入、支出分开处理。
+
+### 搜索、提醒和设置
+
+```text
+/pendo search <关键词> [type=event/task/note/diary/ledger] [range=] [status=] [category=] [transaction_type=] [account=] [merchant=]
+/pendo confirm <id>
+/pendo snooze <id> <10m|1h|19:00>
+/pendo undo [分钟]
+/pendo settings
+/pendo settings reminder on/off
+/pendo settings timezone Asia/Shanghai
+/pendo settings quiet_hours 23:00-07:00
+/pendo settings daily_report 08:30
+/pendo settings diary_remind 21:30
+/pendo settings privacy on/off
+```
 
 ## Web 控制台
 
-### 启动/停止服务
+### 启动和登录
 
+```text
+/pendo web start
+/pendo web status
+/pendo web stop
+/pendo web token
+/pendo web widget-token
 ```
-/pendo web start             # 启动 Web 服务（默认端口 8765）
-/pendo web stop              # 停止服务
-/pendo web status            # 查看运行状态和访问地址
-/pendo web token             # 生成网页登录 token
-/pendo web widget-token      # 生成 Scriptable 小组件 token
-```
 
-> 提示：`pendo` 插件初始化时会尝试自动拉起 Web 服务；如果当时启动失败，后续仍可手动执行 `/pendo web start` 重试。
-
-### 登录访问
-
-默认本地地址是 `http://127.0.0.1:8765`。如果你做了反向代理，也可以通过自己的外网地址访问（例如 `https://example.com/pendo/`）。
-
-如需修改监听地址或端口，请在启动主进程前设置环境变量：
+默认监听 `http://127.0.0.1:8765`。可在启动主进程前设置：
 
 ```text
 # PowerShell
 $env:PENDO_WEB_HOST="127.0.0.1"
 $env:PENDO_WEB_PORT="8766"
+$env:PENDO_WEB_DEMO_ENABLED="1"
 python main.py
 
 # bash
-PENDO_WEB_HOST=127.0.0.1
-PENDO_WEB_PORT=8766
-python main.py
+PENDO_WEB_HOST=127.0.0.1 PENDO_WEB_PORT=8766 python main.py
 ```
 
-在 Windows 上，如果 `/pendo web start` 提示端口绑定失败，但 `netstat -ano` 看不到 `8765` 被占用，通常不是已有进程监听，而是系统拒绝绑定该端口（例如保留端口范围、Hyper-V / WSL / Docker 或安全策略影响）。这种情况下优先换一个端口，例如 `PENDO_WEB_PORT=8766`。
+Token 登录不需要账号密码。执行 `/pendo web token` 后，把收到的 token 粘贴到登录页即可。`PENDO_WEB_TOKEN_SECRET` 可用于保持多实例或重启后的签名密钥稳定。
 
-公开 demo 会话默认关闭。只有在显式设置 `PENDO_WEB_DEMO_ENABLED=1` 时，才会开放临时演示空间。
+### 页面
 
-网页登录流程：
+| 页面 | 说明 |
+|---|---|
+| Dashboard | 日程、待办、账本、笔记等核心摘要 |
+| Events | 单次、重复、多节点日程和提醒 |
+| Tasks | 待办看板、筛选、状态切换 |
+| Ledger | 快速记账、筛选、账户、收支和转账 |
+| Notes | 笔记、分类、标签、关联条目 |
+| Diary | 日记时间线、心情、模板字段 |
+| Search | 跨模块搜索 |
+| Stats | 活跃度、任务、账本、日记、事件等统计 |
+| Settings | 用户设置 |
+| Transfer | `.pendo.zip` Bundle 导入导出、预览、冲突策略和日志 |
 
-1. 执行 `/pendo web start`
-2. 打开浏览器访问 Web 地址
-3. 执行 `/pendo web token`
-4. 将 token 粘贴到登录页完成登录
+Web 后端位于 `plugins/pendo/web/server.py`，使用 FastAPI + uvicorn。API 统一挂载在 `/api`，静态前端位于 `plugins/pendo/web/static`。
 
-### iPhone / Scriptable 小组件
+### Scriptable 小组件
 
-Pendo 提供了专用的只读 widget 摘要接口：
-
-- `GET /api/widget/summary`
-- 支持 `section=tasks|ledger|notes|auto`
-- `auto` 会按小时轮换 `tasks -> ledger -> notes`
-- widget token 只能访问 `/api/widget/*` 的 `GET` 请求
-
-生成小组件 token：
+Pendo 提供只读 widget API：
 
 ```text
-/pendo web widget-token
+GET /api/widget/summary?section=tasks|ledger|notes|auto
+Authorization: Bearer <widget_token>
 ```
 
-Scriptable 脚本位于：
+脚本路径：
 
-- `plugins/pendo/web/scriptable/pendo_widget.js`
-
-脚本仓库版本不再包含真实地址和 token，默认是安全占位值。导入 Scriptable 后，请先把文件头部的：
-
-- `BASE_URL`
-- `TOKEN`
-
-替换成你自己的 Pendo Web 地址和 `/pendo web widget-token` 生成的只读 token。
-
-配套说明见：
-
-- `docs/pendo-scriptable-widget.md`
-
-当前脚本的摘要行为：
-
-- 左侧日程显示未来 30 天内的事件，最多 5 条
-- 右侧显示待办 / 财务 / 笔记摘要，最多 5 条
-- 支持 `small` / `medium` / `large` 三种 iOS 小组件尺寸
-- `medium` 与 `large` 共用同一套视觉语言，`large` 显示更多细节
-
-### 优雅关闭
-
-- `Ctrl+C` 停止 `main.py` 时，XiaoQing 会走插件卸载流程，Pendo Web 会先请求 uvicorn 优雅退出，再清理数据库和运行时状态
-- 手动执行 `/pendo web stop` 也会走同一套停止逻辑
-
-### 页面功能
-
-| 页面 | 功能 |
-|------|------|
-| Dashboard | 核心数据汇总（待办、事件、账本余额、最近笔记） |
-| 任务 | Kanban 看板，按优先级拖拽管理待办 |
-| 事件 | 日历视图，查看/添加日程 |
-| 账本 | 收支记录、分类筛选、余额统计 |
-| 日记 | 时间线视图，按日期浏览日记 |
-| 笔记 | 卡片网格，按分类/标签浏览笔记 |
-| 搜索 | 跨模块全文搜索 |
-| 统计 | Chart.js 可视化图表（事件/任务/账本趋势） |
-| 设置 | 在线修改配置、**高级数据迁移（导入/导出 Bundle）** |
-
-### Web 依赖
-
-```bash
-pip install fastapi uvicorn PyJWT passlib[bcrypt]
+```text
+plugins/pendo/web/scriptable/pendo_widget.js
 ```
 
-如果你是从仓库根目录安装 `requirements.txt`，这些依赖已经包含在内，通常不需要额外安装。
+脚本中只保留 `BASE_URL` 和 `TOKEN` 占位值。使用前将 `BASE_URL` 改成自己的 Pendo Web 地址，将 `TOKEN` 改成 `/pendo web widget-token` 生成的只读 token。详细说明见 `docs/pendo-scriptable-widget.md`。
 
-## 日程管理
+## 导入、导出和迁移
 
-### 创建日程
+### 聊天端 Markdown 档案
 
-**自然语言创建（推荐）**:
-
-```
-/pendo event add 明天9点开会
-/pendo event add 明天14:00-16:00 产品评审会 @会议室A
-/pendo event add 每周一早上9点站会
-/pendo event add 每月18号下午3点例会，重复12次
-/pendo event add 明天9点开会，提前1小时和15分钟提醒
-/pendo event add 4月6日注册截止，4月22日会议开始，4月26日会议结束
-```
-
-**智能识别**:
-- 时间: 明天、下周三、每周一、每月18号
-- 时间范围: 9点-11点、14:00-16:00
-- 地点: @会议室A、地点A
-- 重复规则: 每天、每周、每月、重复N次
-- 多节点: AI 会把多个具名时间点创建为一个事件集合，每个节点都是可独立查看、编辑、删除、设置提醒的 leaf 日程
-- 提醒时间: 提前30分钟、提前1小时和1天
-
-**事件结构**:
-
-- 单次日程: 一条 `event` leaf。
-- 重复日程: 一个 `event_collections(kind=recurring)` 集合，加若干 `recurring_occurrence` leaf。
-- 多节点日程: 一个 `event_collections(kind=multi_node)` 集合，加若干 `multi_node_child` leaf。
-- 提醒规则保存在 `reminder_rules`，`remind_times` 是按 leaf 开始时间计算出的发送缓存。
-
-### 查看日程
-
-```
-/pendo event today          # 今天的日程
-/pendo event tomorrow       # 明天的日程
-/pendo event week           # 本周的日程
-/pendo event month          # 本月的日程
-/pendo event 2026-02        # 指定月份
-/pendo event 2026-02-01..2026-02-14  # 指定日期范围
-```
-
-### 编辑/删除日程
-
-```
-/pendo event edit <id> 改到明天10点
-/pendo event edit <collection_id> 标题改为星团会议
-/pendo event edit <leaf_id> 改到4月22日12:43
-/pendo event edit <leaf_id> 备注从北京南坐G123去会场
-/pendo event delete <id>    # 删除日程（5分钟内可撤销）
-```
-
-`collection_id` 用于编辑/删除重复或多节点集合整体；`leaf_id` 用于操作某一次重复实例或某个多节点节点。删除集合会级联删除子节点，删除单个 leaf 只影响该节点。
-
-## 待办管理
-
-### 创建待办
-
-**语法**: `/pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [cat:分类] [p:1-5] [#标签]`
-
-```
-/pendo todo add 写报告 plan:2026-05-01 deadline:2026-05-01T18:00 cat:工作 p:2
-/pendo todo add 买牛奶 cat:生活 p:4
-/pendo todo add 提交报销 #财务 p:1
-```
-
-**优先级**:
-- `p:1` - 🔴紧急
-- `p:2` - 🟠高
-- `p:3` - 🟡中（默认）
-- `p:4` - 🟢低
-- `p:5` - ⚪最低
-
-**计划与分类**:
-- `plan:` 是计划处理日期；晚上 20:00 后默认计划到明天
-- `deadline:` 是硬截止时间；只在确实有截止时填写
-- `cat:` 只作为文字分类（如 `cat:工作`、`cat:学习`）
-
-### 查看待办
-
-```
-/pendo todo                  # 列出所有分类
-/pendo todo view <id>       # 查看待办详情
-/pendo todo today           # 今日待办快捷方式
-/pendo todo list 2026-02-03  # 查看指定日期
-/pendo todo list 工作 done   # 工作分类已完成
-/pendo todo list 生活 open   # 生活分类未完成
-```
-
-### 管理
-
-```
-/pendo todo done <id>        # 完成待办
-/pendo todo undone <id>      # 重开待办
-/pendo todo delete <id>      # 删除单个待办
-/pendo todo delete cat:工作  # 删除整个分类
-/pendo todo edit <id> 新内容  # 编辑待办
-```
-
-## 笔记管理
-
-### 创建笔记
-
-**语法**: `/pendo note add <内容> [cat:分类] [#标签]`
-**显式标题语法**:
-- `/pendo note add title:<标题> content <正文> [cat:分类] [#标签]`
-- `/pendo note add title:<标题>` 后直接换行写正文，最后一行可接 `cat:分类 #标签`
-
-```
-/pendo note add 直接折叠找脉冲星 cat:工作 #文章
-/pendo note add title:我的标题 content 这里是详细的长篇正文内容... cat:工作 #学习
-/pendo note add title:会议纪要
-1. 事项A
-2. 事项B
-cat:其他 #记录
-```
-
-### 查看笔记
-
-```
-/pendo note list             # 查看所有笔记
-/pendo note list cat:工作    # 按分类筛选
-/pendo note view <id>        # 查看详情
-```
-
-### 删除笔记
-
-```
-/pendo note delete <id>      # 删除单个笔记
-/pendo note delete cat:工作  # 删除整个分类下的笔记
-```
-
-## 日记管理
-
-### 写日记
-
-**直接写日记**:
-```
-/pendo diary add 今天天气很好，心情不错...
-/pendo diary add 2026-01-31 mood:happy score:8 tags:工作,复盘 favorite:true 今天推进了重构。
-```
-
-**使用模板**:
-```
-/pendo diary                 # 显示模板列表
-/pendo diary three_good      # 使用"三件好事"模板
-```
-
-**内置模板**:
-- `three_good` - 三件好事
-- `summary` - 今日总结
-- `mood` - 情绪记录
-
-每条 `diary` 是一篇独立日记。同一天可以写多篇，系统用 `diary_date` 归到同一天，用 `entry_time` 排序；模板回答会结构化保存，心情使用固定枚举（如 `happy`、`calm`、`anxious`、`grateful`）和可选 1-10 分数。
-
-### 查看日记
-
-```
-/pendo diary view             # 查看今天的日记
-/pendo diary view 2026-01-31  # 查看指定日期下的所有日记条目
-/pendo diary view 82d34407    # 按ID查看某篇日记
-/pendo diary delete 82d34407  # 按ID删除日记
-/pendo diary list             # 最近30天日记
-/pendo diary list month       # 本月日记
-```
-
-### 删除日记
-
-```
-/pendo diary delete 2026-01-31  # 当天只有一篇时可按日期删除；多篇时按ID删除
-```
-
-## 搜索
-
-### 全文搜索
-
-```
-/pendo search 报销
-/pendo search 会议
-/pendo search 项目方案
-```
-
-### 高级搜索
-
-**按类型**:
-```
-/pendo search 会议 type=event
-/pendo search 报销 type=task
-/pendo search 知识 type=note
-```
-
-**按时间范围**:
-```
-/pendo search 项目 range=last7d
-/pendo search 日记 range=2026-01
-/pendo search 记录 range=2026-01-01..2026-01-31
-```
-
-**组合搜索**:
-```
-/pendo search 会议 type=event range=last7d
-```
-
-## 提醒操作
-
-### 确认 / 提前确认提醒
-
-```
-/pendo confirm <id>          # 确认刚收到的那一条提醒
-/pendo event reminders confirm <id> today    # 提前确认今天未发送的提醒
-/pendo event reminders confirm <id> future   # 提前确认未来全部未发送提醒
-/pendo event reminders confirm <id> all      # 提前确认全部未发送提醒
-/pendo event reminders confirm <id> 04-18 13:50  # 提前确认某一条指定提醒
-```
-
-### 延后提醒
-
-```
-/pendo snooze <id> 10m       # 延后10分钟
-/pendo snooze <id> 1h        # 延后1小时
-/pendo snooze <id> 19:00     # 延后到19:00
-```
-
-### 撤销删除
-
-```
-/pendo undo                  # 撤销最近5分钟内的删除
-/pendo undo 10               # 撤销10分钟内的删除
-```
-
-## 导入导出
-
-Pendo 现在将聊天端导出收敛为单文件 Markdown 档案，导入能力保留在 Web 端 Bundle 流程中。
-
-### 聊天端 Markdown 导出
-
-```
+```text
 /pendo export 我的档案
 /pendo export 工作回顾 last30d event,todo
 /pendo export 账本快照 2026-03 ledger
 /pendo export 本月随笔 month note,diary
 ```
 
-- 命令格式：`/pendo export <文件名> [范围] [类型]`
-- 范围支持：`all`、`today`、`week`、`month`、`YYYY-MM`、`last7d`、`start..end`
-- 类型支持：`event`、`todo`、`note`、`ledger`、`diary`，可用逗号组合
-- 导出结果会通过 OneBot 私聊文件消息发送给当前 QQ 用户
-- 导出的 Markdown 采用单文件档案格式，带摘要、目录、分类型章节和结构化元信息，适合归档与分享
+聊天端只负责 Markdown 档案导出，结果通过 OneBot 私聊文件消息发送。
 
-### Web 端数据迁移 (Pendo Bundle)
+### Web 端 Pendo Bundle
 
-Web 控制台支持跨设备的 `.pendo.zip` 数据包安全迁移：
-- **安全校验**: 支持预览与完整的数据格式校验。
-- **冲突策略**: 支持自定义冲突处理（跳过现有记录、强制覆盖、创建副本保留双份）。
-- **审计记录**: 在数据库中留存完整的导入与导出操作日志（含条数结果）。
+Web Transfer 页负责 `.pendo.zip` 数据包：
 
-## 设置
+- 导出预览和下载
+- 导入 inspect、samples、execute
+- 冲突策略：跳过、覆盖、复制
+- duplicate 导入时重写条目 ID 和跨条目关系
+- `transfer_logs` 和 `imported_bundles` 记录审计和幂等信息
 
-### 查看设置
+聊天端不再提供 Markdown 导入；跨设备迁移和恢复请使用 Web Bundle 流程。
 
+## 数据模型
+
+| 类型 | 关键字段 |
+|---|---|
+| `event` | `start_time`、`end_time`、`location`、`event_role`、`event_collection_id`、`reminder_rules`、`remind_times` |
+| `task` | `plan_date`、`deadline_at`、`priority`、`status`、`completed_at`、`cancelled_at` |
+| `note` | `tags`、`category`、`references`、`related_items` |
+| `diary` | `diary_date`、`entry_time`、`mood`、`mood_score`、`template_answers`、`is_favorite` |
+| `ledger` | `amount_cents`、`transaction_type`、`ledger_category`、`ledger_date`、`account_name`、`counter_account_name`、`merchant` |
+
+主要表：
+
+- `items`
+- `event_collections`
+- `items_fts`
+- `reminder_logs`
+- `operation_logs`
+- `user_settings`
+- `transfer_logs`
+- `imported_bundles`
+
+字段写入边界集中在 `plugins/pendo/utils/validators.py`。CLI handler、Web API、Bundle 导入都应复用这些归一化函数。
+
+## 目录结构
+
+```text
+plugins/pendo/
+├── main.py                      # 插件入口、生命周期、命令注册、scheduled_* 入口
+├── config.py                    # 配置常量、提醒策略、日记模板
+├── plugin.json                  # 插件清单和定时任务
+├── core/                        # 路由、runtime、类型、异常
+├── models/                      # Item / EventItem / TaskItem / NoteItem / DiaryItem / LedgerItem
+├── handlers/                    # event / task / note / diary / ledger / search / web 命令处理
+├── services/                    # SQLite、事件图、提醒、解析、导出、LLM
+├── commands/                    # confirm / snooze / undo / settings / scheduled / session
+├── utils/                       # 校验、格式化、时间、设置、数据库辅助
+├── scripts/                     # 一次性迁移脚本和历史脚本留档
+├── data/                        # 本地运行时数据，不应提交
+└── web/
+    ├── server.py                # FastAPI app 和 uvicorn 生命周期
+    ├── auth.py                  # Token 生成和校验
+    ├── deps.py                  # owner_id / Database 依赖
+    ├── api/                     # REST API routers
+    ├── analytics/               # Dashboard / Stats 聚合逻辑
+    ├── services/                # Bundle 导入导出和 demo 数据
+    ├── scriptable/              # Scriptable 小组件脚本
+    └── static/                  # 无构建 SPA
 ```
-/pendo settings               # 查看当前所有设置
-```
 
-### 修改设置
+## 定时任务
 
-```
-/pendo settings reminder on/off          # 开关提醒
-/pendo settings timezone Asia/Shanghai   # 设置时区
-/pendo settings quiet_hours 23:00-07:00 # 设置静默时段
-/pendo settings privacy on/off          # 开关隐私模式
-```
+| 任务 | 说明 |
+|---|---|
+| `pendo_reminders` | 每分钟检查日程/待办提醒 |
+| `pendo_daily_briefing` | 每分钟检查是否到用户本地日报时间 |
+| `pendo_diary_reminder` | 每分钟检查是否到用户本地日记提醒时间 |
+| `pendo_migrate_todos` | 每天 00:05 顺延昨日仍 open 的计划待办 |
+| `pendo_weekly_finance_summary` | 每周日 21:00 财务总结 |
+| `pendo_month_end_finance_summary` | 每月最后一天 21:00 财务总结 |
+| `pendo_cleanup_demo_data` | 每 6 小时清理过期 Web demo 数据 |
 
-## 安装配置
+## 安装和配置
 
-### 1. 安装依赖
+根目录 `requirements.txt` 已包含 Pendo Web 依赖。单独安装插件依赖时可执行：
 
 ```bash
 cd plugins/pendo
 pip install -r requirements.txt
 ```
 
-### 2. 必需依赖
-
-```txt
-jieba>=0.42.1
-PyYAML>=6.0
-python-dateutil>=2.8.2
-```
-
-### 3. 可选AI功能
-
-如需使用AI自然语言解析，在 `config/secrets.json` 中配置：
+日程自然语言解析可使用 LLM。配置写在 `config/secrets.json`：
 
 ```json
 {
@@ -488,127 +292,46 @@ python-dateutil>=2.8.2
 }
 ```
 
-**注意**: AI功能是可选的，不配置也能正常使用规则解析。
-
-## 定时任务
-
-插件会自动执行以下定时任务（在 `plugin.json` 中配置）：
-
-| 任务 | 时间 | 说明 |
-|------|------|------|
-| pendo_reminders | 每分钟 | 检查并发送提醒 |
-| pendo_daily_briefing | 每分钟检查 | 用户可自定义本地简报时间，命中后推送 |
-| pendo_diary_reminder | 每分钟检查 | 用户可自定义本地提醒时间，命中后推送 |
+不配置 LLM 时，日程添加会回退到规则解析，其他模块不受影响。
 
 ## 常见问题
 
-**Q: 如何修改已创建的条目？**
-- 日程: `/pendo event edit <id> <修改内容>`
-- 多节点事件先 `/pendo event view <collection_id>` 查看节点 id，再用 `/pendo event edit <leaf_id> <修改内容>` 改某个节点
-- 待办: `/pendo todo edit <id> <新内容>`
+**Pendo Web 打不开**
 
-**Q: 提醒没有收到？**
-- 检查提醒是否开启: `/pendo settings`
-- 检查是否在静默时段
-- 确认条目设置了提醒时间
+1. 先执行 `/pendo web status`。
+2. 确认环境安装了 `fastapi`、`uvicorn`、`PyJWT`、`passlib[bcrypt]`。
+3. Windows 上如果 `8765` 绑定失败且 `netstat -ano` 看不到占用，优先换 `PENDO_WEB_PORT`。
+4. 登录前先执行 `/pendo web token` 获取有效 token。
 
-**Q: 如何让今天还没发出的提醒不要再发？**
-- 用 `/pendo event reminders confirm <id> today`
-- 如果要一次性跳过后续全部提醒，用 `/pendo event reminders confirm <id> future`
+**提醒没有收到**
 
-**Q: 如何备份数据？**
-- 使用设置页面的 Web 端导出功能
-- 或保存聊天端 `/pendo export <文件名>` 导出的 Markdown 档案
-- 或直接复制 `data/pendo.db` 文件
+1. 检查 `/pendo settings` 中提醒是否开启。
+2. 检查是否处在静默时段。
+3. 用 `/pendo event reminders <id>` 查看提醒是否存在。
 
-**Q: 支持多用户吗？**
-- 支持，每个用户的数据完全隔离
+**如何备份数据**
 
-**Q: 群聊中如何保护隐私？**
-- 默认长消息自动转私聊
-- 可通过 `/pendo settings privacy on` 强制私聊
+1. Web Transfer 页导出 `.pendo.zip`。
+2. 聊天端 `/pendo export <文件名>` 导出 Markdown 档案。
+3. 停止服务后复制 `plugins/pendo/data/pendo.db`。
 
-## 技术架构
+## 测试
 
-### 目录结构
+常用验证命令：
 
-```
-plugins/pendo/
-├── main.py             # 插件入口
-├── config.py           # 配置管理
-├── core/               # 核心组件（路由器、异常）
-├── models/             # 数据模型
-├── handlers/           # 业务处理器
-├── services/           # 核心服务
-├── commands/           # 命令处理
-├── utils/              # 工具模块
-├── web/                # Web 控制台
-│   ├── main.py         # FastAPI 应用入口
-│   ├── auth.py         # JWT 鉴权
-│   ├── deps.py         # 依赖注入
-│   ├── api/            # REST API 路由
-│   ├── analytics/      # 数据聚合（Dashboard/统计）
-│   ├── scriptable/     # iPhone Scriptable 小组件脚本
-│   └── static/         # 前端静态资源（HTML/CSS/JS）
-└── data/               # 本地运行时数据：pendo.db / web_token_secret.txt
+```powershell
+python -m compileall -q plugins/pendo
+node --check plugins/pendo/web/scriptable/pendo_widget.js
+$files = Get-ChildItem -LiteralPath 'tests/plugins' -Filter 'test_pendo*.py' | Sort-Object Name | ForEach-Object { $_.FullName }
+python -m pytest @files tests/test_server.py
 ```
 
-### 设计特点
+完整手工/黑盒测试要求见 `plugins/pendo/pendo测试.md`。该测试说明使用 `plugins/pendo/test_reports/CURRENT_RUN_ID.txt` 和 `plugins/pendo/test_reports/runs/<RUN_ID>/` 记录可恢复进度。
 
-1. **统一数据模型** - 所有条目共享Item表结构
-2. **按需AI解析** - 仅日程使用AI，其他模块规则解析
-3. **多用户隔离** - 所有查询基于owner_id
-4. **软删除支持** - 5分钟撤销窗口
-5. **全文搜索** - SQLite FTS5
+## 相关文档
 
-详细架构说明请参考 [ARCHITECTURE.md](ARCHITECTURE.md)
-
-## 更新日志
-
-### V3.0 (2026-03-27)
-
-- Web 控制台（FastAPI + 原生 JS SPA）
-- JWT 登录鉴权，多用户会话隔离
-- Dashboard / 任务 / 事件 / 账本 / 日记 / 笔记 / 搜索 / 统计 / 设置 九大页面
-- Chart.js 可视化统计图表
-- 支持通过 Web 端完成全量 `.pendo.zip` 数据 Bundle 安全导入与导出、迁移审计
-- 优化部分底层模块设计，提升健壮性
-- `/pendo web` 聊天命令集成
-- Scriptable 小组件摘要接口 `/api/widget/summary`
-- `/pendo web widget-token` 只读小组件令牌
-- 新增 `plugins/pendo/web/scriptable/pendo_widget.js`
-- 优化聊天端命令冗余调用提示机制
-- 账本页 UX 重设计（筛选、排序、分页、快速录入）
-
-### V2.0 (2026-02-03)
-
-- 模块化重构（commands/handlers/services分离）
-- CommandRouter命令路由
-- 统一配置管理
-- 消息格式化工具
-- 待办分类管理
-- 优先级系统
-- 笔记标签支持
-- 日记模板多轮对话
-- 代码质量改进
-
-### V1.1 (2026-01-29)
-
-- 多用户数据隔离
-- 统一错误处理
-- JSON字段容错解析
-- 操作日志审计
-
-### V1.0 (2026-01-25)
-
-- 初始版本发布
-- 支持日程、待办、笔记、日记管理
-- 自然语言解析、智能提醒、全文搜索
-
-## 许可证
-
-MIT License
-
----
-
-**Pendo - 让时间管理更简单** 🎯
+- `plugins/pendo/ARCHITECTURE.md`
+- `plugins/pendo/Pendo个人时间与信息管理中枢.md`
+- `plugins/pendo/pendo测试.md`
+- `docs/09-plugins.md`
+- `docs/pendo-scriptable-widget.md`

@@ -555,6 +555,9 @@ pendo Web UI 使用 JWT Token 认证，无需手动配置密码。Token 由以�
 # 获取登录 Token（私聊发送，有效期 24 小时）
 /pendo web token
 
+# 获取 Scriptable 小组件只读 Token（默认长期有效）
+/pendo web widget-token
+
 # Token 签名密钥优先级：
 # 1. 环境变量 PENDO_WEB_TOKEN_SECRET
 # 2. plugins/pendo/data/web_token_secret.txt（首次运行自动生成）
@@ -575,6 +578,8 @@ PENDO_WEB_PORT=8765
 如果你在 Windows 上遇到 `WinError 10013`，通常不是已有进程占用了端口，而是系统拒绝绑定。此时优先换一个端口，例如 `PENDO_WEB_PORT=8766`。
 
 用户偏好（时区、简报时间、日记提醒等）通过 `/pendo settings` 命令在运行时修改，存储于数据库，无需修改配置文件。
+
+公开 demo 会话默认关闭。可通过全局配置 `plugins.pendo.web_demo_enabled` 或环境变量 `PENDO_WEB_DEMO_ENABLED=1` 临时开启；生产环境建议保持关闭。
 
 #### qingssh 配置
 
@@ -884,6 +889,8 @@ PENDO_WEB_PORT=8766 python main.py
 ```
 
 访问 `http://127.0.0.1:8765`（或你自定义的新端口），使用 `/pendo web token` 获取的 Token 登录。
+
+Web 控制台包含总览、日程、待办、账本、笔记、日记、搜索、统计、设置和迁移页面。迁移页面负责 `.pendo.zip` Bundle 的预览、导出、导入、冲突策略和审计日志；聊天端 `/pendo export` 只导出 Markdown 档案。
 
 Pendo Web 的公开 demo 会话默认关闭。如需临时开启演示环境，可在启动主进程前设置：
 

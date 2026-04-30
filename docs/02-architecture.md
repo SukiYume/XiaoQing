@@ -593,7 +593,7 @@ XiaoQing 主进程
 └── pendo 插件（main.py）
         └── 插件初始化或 /pendo web start
                 └── FastAPI Web Server（uvicorn）
-                        ├── /api/*  # REST API（JWT 鉴权）
+                        ├── /api/*  # REST API（JWT 鉴权、CRUD、统计、Bundle、widget）
                         └── /*      # 静态 SPA 文件
 ```
 
@@ -602,6 +602,7 @@ XiaoQing 主进程
 - 插件初始化会尝试自动启动；也可以通过 `/pendo web start` 手动重试，通过 `/pendo web stop` 关闭
 - 应用退出、插件卸载或 `Ctrl+C` 时，会先请求 Pendo Web 优雅停止，再清理数据库和运行时状态
 - 支持通过 nginx 在子路径（如 `/pendo/`）下反向代理访问
+- Pendo Web 与聊天命令共用 `plugins/pendo/services/db.py`、`utils/validators.py` 和事件图/提醒服务，避免 Web 与 CLI 各自维护一套字段语义
 
 ---
 
