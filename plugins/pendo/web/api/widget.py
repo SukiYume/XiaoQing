@@ -68,6 +68,20 @@ def _format_amount(value: float, *, signed: bool = False) -> str:
     return f"{prefix}¥{amount:.0f}"
 
 
+def _ledger_amount(item: Any) -> float:
+    """Return ledger amount in yuan, preferring the redesign canonical cents field."""
+    cents = getattr(item, "amount_cents", None)
+    if cents not in (None, ""):
+        try:
+            return int(cents) / 100
+        except (TypeError, ValueError):
+            pass
+    try:
+        return float(getattr(item, "amount", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _format_event_meta(entry: dict[str, Any]) -> str:
     parts: list[str] = []
     start_time = str(entry.get("start_time") or "")
@@ -287,12 +301,12 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> dict[str,
                 ),
                 "transaction_type": getattr(item, "transaction_type", "expense") or "expense",
                 "amount_text": (
-                    f"↔ {_format_amount(float(getattr(item, 'amount', 0) or 0))}"
+                    f"↔ {_format_amount(_ledger_amount(item))}"
                     if getattr(item, "transaction_type", "expense") == "transfer"
                     else (
-                        _format_amount(float(getattr(item, "amount", 0) or 0), signed=True)
+                        _format_amount(_ledger_amount(item), signed=True)
                         if getattr(item, "transaction_type", "expense") == "income"
-                        else f"-{_format_amount(float(getattr(item, 'amount', 0) or 0))}"
+                        else f"-{_format_amount(_ledger_amount(item))}"
                     )
                 ),
             }

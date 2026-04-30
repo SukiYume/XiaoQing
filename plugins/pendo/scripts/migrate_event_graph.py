@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,6 +15,14 @@ from ..utils.validators import (
     normalize_reminder_rules,
     with_start_time_reminder_rule,
 )
+
+
+def backup_sqlite_database(db_path: Path, backup_path: Path) -> None:
+    """Create a consistent SQLite backup, including uncheckpointed WAL pages."""
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(db_path)) as source, sqlite3.connect(str(backup_path)) as target:
+        source.backup(target)
+
 
 ITEM_COLUMNS = [
     "id",
@@ -650,7 +657,7 @@ def migrate_event_graph(
             backup_path = db_path.with_name(
                 f"{db_path.name}.event-graph-backup-{datetime.now().strftime('%Y%m%d%H%M%S')}"
             )
-            shutil.copy2(db_path, backup_path)
+            backup_sqlite_database(db_path, backup_path)
         db = Database(str(db_path))
         db.cleanup()
 

@@ -722,7 +722,7 @@ function renderFilters(tasks) {
         <section class="tasks-filter-bar">
             <div class="tasks-filter-field">
                 <label for="tasks-filter-search">搜索</label>
-                <input id="tasks-filter-search" type="search" placeholder="标题、备注、分类" value="${_filters.search}" aria-label="搜索待办">
+                <input id="tasks-filter-search" type="search" placeholder="标题、备注、分类" value="${escapeHtml(_filters.search)}" aria-label="搜索待办">
             </div>
             <div class="tasks-filter-field">
                 <label id="tasks-filter-plan-label">计划日期</label>

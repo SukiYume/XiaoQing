@@ -1,3 +1,5 @@
+import { escapeHtml } from './utils/ui.js';
+
 const routes = {};
 let currentPage = null;
 let contentEl = null;
@@ -51,7 +53,7 @@ async function loadCurrentRoute() {
         if (page.render) page.render(contentEl);
     } catch (e) {
         console.error('Page load error:', e);
-        contentEl.innerHTML = `<div class="error-state"><p>加载失败: ${e.message}</p></div>`;
+        contentEl.innerHTML = `<div class="error-state"><p>加载失败: ${escapeHtml(e.message)}</p></div>`;
         currentPage = null;
     }
 }

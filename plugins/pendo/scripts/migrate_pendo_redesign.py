@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sqlite3
 import sys
 from dataclasses import dataclass, field
@@ -27,6 +26,13 @@ else:
         normalize_template_answers,
     )
     from .migrate_event_graph import migrate_event_graph
+
+
+def backup_sqlite_database(db_path: Path, backup_path: Path) -> None:
+    """Create a consistent SQLite backup, including uncheckpointed WAL pages."""
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(db_path)) as source, sqlite3.connect(str(backup_path)) as target:
+        source.backup(target)
 
 
 LEGACY_EVENT_ITEM_COLUMNS = ("rrule", "parent_id", "remind_policy_id", "milestones")
@@ -1004,7 +1010,7 @@ def migrate_pendo_redesign(db_path: str | Path, *, apply: bool = False) -> dict[
         backup_path = db_path.with_name(
             f"{db_path.name}.pendo-redesign-backup-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         )
-        shutil.copy2(db_path, backup_path)
+        backup_sqlite_database(db_path, backup_path)
 
     event_report = migrate_event_graph(
         db_path,

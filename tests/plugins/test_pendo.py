@@ -165,6 +165,7 @@ class TestPendoConfig:
         help_text = _show_help("event")
 
         assert "🧭 输入 `/pendo` 查看完整总览" in help_text
+        assert "`/pendo help <模块>`" in help_text
         assert "━━ 🗓️ **日程管理 (Event)**" in help_text
         assert "先用 view 集合ID 查看节点ID，再编辑具体节点" in help_text
         assert "集合ID只编辑整体标题、分类、地点、备注，不修改某个节点时间" in help_text
@@ -186,16 +187,33 @@ class TestPendoConfig:
         async def dummy_handler(user_id, args, context):
             return {"status": "success", "message": "ok"}
 
-        router = CommandRouter({"event": dummy_handler, "confirm": dummy_handler}, help_provider=_show_help)
+        router = CommandRouter(
+            {
+                "event": dummy_handler,
+                "note": dummy_handler,
+                "diary": dummy_handler,
+                "settings": dummy_handler,
+                "confirm": dummy_handler,
+            },
+            help_provider=_show_help,
+        )
 
         event_help = router.get_help_message("event")
         assert "━━ 🗓️ **日程管理 (Event)**" in event_help
         assert "/pendo event reminders delete <id> <all|today|future|提醒时间>" in event_help
         assert "📖 event - 管理日程" not in event_help
 
+        reminder_help = router.get_help_message("reminder")
+        assert "━━ ⏰ **提醒操作**" in reminder_help
+
         alias_help = router.get_help_message("confirm")
         assert "━━ ⏰ **提醒操作**" in alias_help
         assert "/pendo event reminders set/delete/confirm <id> ..." in alias_help
+
+        assert router.alias_map["calendar"] == "event"
+        assert router.alias_map["idea"] == "note"
+        assert router.alias_map["journal"] == "diary"
+        assert router.alias_map["config"] == "settings"
 
     def test_help_map_covers_current_command_surface_and_beginner_examples(self):
         """测试 HELP_MAP 覆盖当前命令面、关键参数和可复制示例。"""
@@ -284,6 +302,8 @@ class TestPendoConfig:
             "/pendo search 组会 type=event",
             "/pendo settings timezone Asia/Shanghai",
             "/pendo export \"三月 账本\" 2026-03 ledger",
+            "/pendo event edit 80efbef6_m03 备注为从北京南坐G123去会场",
+            "/pendo event edit 80efbef6_m03 地点改到北京南",
         ]
         for example in beginner_examples:
             assert example in help_text
@@ -716,6 +736,56 @@ class TestPendoReviewFixes:
             assert db.get_items("u-empty", {"type": "note"}, 10, 0) == []
         finally:
             db.cleanup()
+
+    def test_start_web_server_restarts_existing_server(self, monkeypatch):
+        from plugins.pendo import main as pendo_main
+        from plugins.pendo.web import server as web_server
+
+        calls = []
+        state = {"running": True}
+        db = object()
+
+        monkeypatch.setattr(web_server, "is_running", lambda: state["running"])
+
+        def fake_stop():
+            calls.append("stop")
+            state["running"] = False
+            return True
+
+        def fake_start(start_db):
+            calls.append(("start", start_db))
+            state["running"] = True
+            return True
+
+        monkeypatch.setattr(web_server, "stop", fake_stop)
+        monkeypatch.setattr(web_server, "start", fake_start)
+
+        assert pendo_main._start_web_server(db) is True
+        assert calls == ["stop", ("start", db)]
+        assert state["running"] is True
+
+    def test_start_web_server_does_not_start_when_old_server_cannot_stop(self, monkeypatch):
+        from plugins.pendo import main as pendo_main
+        from plugins.pendo.web import server as web_server
+
+        calls = []
+        state = {"running": True}
+
+        monkeypatch.setattr(web_server, "is_running", lambda: state["running"])
+
+        def fake_stop():
+            calls.append("stop")
+            return False
+
+        def fake_start(_db):
+            calls.append("start")
+            return True
+
+        monkeypatch.setattr(web_server, "stop", fake_stop)
+        monkeypatch.setattr(web_server, "start", fake_start)
+
+        assert pendo_main._start_web_server(object()) is False
+        assert calls == ["stop"]
 
     def test_shutdown_stops_web_and_cleans_all_pendo_databases(self, monkeypatch):
         from plugins.pendo import main as pendo_main
@@ -1232,6 +1302,41 @@ class TestReminderRegression:
             "start_time": "2026-04-07T14:00:00",
             "remind_times": ["2026-04-06T14:00:00", "2026-04-07T13:00:00"],
         }
+
+    def test_parse_updates_does_not_take_location_from_note_text(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.event import EventHandler
+        from plugins.pendo.models.item import EventItem
+
+        class _FakeAiParser:
+            async def parse_event_with_ai(self, text, user_id, **kwargs):
+                return {
+                    "type": "event",
+                    "location": "北京南",
+                    "notes": "从北京南坐G123去会场",
+                }
+
+            def parse_natural_language(self, text, user_id):
+                raise AssertionError("unexpected fallback")
+
+        handler = EventHandler(db=MagicMock(), ai_parser=_FakeAiParser(), reminder_service=MagicMock())
+        current_event = EventItem(
+            owner_id="u1",
+            title="会议开始",
+            location="杭州",
+            notes="",
+            start_time="2030-01-22T10:30:00",
+        )
+
+        updates = asyncio.run(
+            handler._parse_updates("备注从北京南坐G123去会场", current_event)
+        )
+
+        assert updates == {"notes": "从北京南坐G123去会场"}
 
     def test_edit_single_instance_keeps_category_and_explicit_reminders(self, tmp_path):
         import sys
@@ -4647,3 +4752,132 @@ class TestPendoSearchAndImportRegression:
             assert updated_row["content"] == "更新后的导入内容"
         finally:
             db.get_connection().close()
+
+
+class TestPendoRedesignRegression:
+    def test_widget_ledger_panel_prefers_amount_cents(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.services.db import Database
+        from plugins.pendo.web.api.widget import build_widget_summary
+
+        db = Database(str(tmp_path / "pendo.db"))
+        owner_id = "u-widget-ledger"
+        try:
+            db.insert_item({
+                "id": "widget-ledger-expense",
+                "owner_id": owner_id,
+                "type": "ledger",
+                "title": "TEST_SCRIPTABLE 午饭",
+                "amount": 0,
+                "amount_cents": 12345,
+                "transaction_type": "expense",
+                "ledger_category": "餐饮",
+                "ledger_date": "2026-04-30",
+                "account_name": "微信",
+            })
+
+            summary = build_widget_summary(
+                db,
+                owner_id,
+                section="ledger",
+                now="2026-04-30T12:00:00",
+            )
+
+            assert summary["panel"]["items"][0]["amount_text"] == "-¥123"
+            assert summary["panel"]["summary"]["primary"] == "支出 ¥123"
+        finally:
+            db.cleanup()
+
+    def test_sqlite_backup_includes_uncheckpointed_wal_pages(self, tmp_path):
+        import sqlite3
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.scripts.migrate_pendo_redesign import backup_sqlite_database
+
+        db_path = tmp_path / "wal-source.db"
+        backup_path = tmp_path / "wal-backup.db"
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("CREATE TABLE demo (id INTEGER PRIMARY KEY, value TEXT)")
+            conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("INSERT INTO demo (value) VALUES (?)", ("from-wal",))
+            conn.commit()
+
+            backup_sqlite_database(db_path, backup_path)
+
+            backup = sqlite3.connect(backup_path)
+            try:
+                rows = backup.execute("SELECT value FROM demo").fetchall()
+            finally:
+                backup.close()
+            assert rows == [("from-wal",)]
+        finally:
+            conn.close()
+
+    def test_export_range_includes_event_spanning_into_window(self):
+        import sys
+        from datetime import date
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.web.api.transfer import item_matches_range
+
+        spanning_event = SimpleNamespace(
+            start_time="2026-04-29T23:00:00+08:00",
+            end_time="2026-04-30T01:00:00+08:00",
+        )
+        before_event = SimpleNamespace(
+            start_time="2026-04-29T20:00:00+08:00",
+            end_time="2026-04-29T21:00:00+08:00",
+        )
+
+        assert item_matches_range(spanning_event, "event", date(2026, 4, 30), date(2026, 4, 30))
+        assert not item_matches_range(before_event, "event", date(2026, 4, 30), date(2026, 4, 30))
+
+    def test_collection_category_search_uses_collection_fallback(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.services.db import Database
+
+        db = Database(str(tmp_path / "pendo.db"))
+        owner_id = "u-search-collection"
+        try:
+            collection_id = db.create_event_collection({
+                "id": "test_collection_category",
+                "owner_id": owner_id,
+                "kind": "multi_node",
+                "title": "TEST_STATS 学术会议",
+                "category": "工作",
+                "location": "上海",
+            })
+            db.insert_item({
+                "id": "test_collection_node",
+                "owner_id": owner_id,
+                "type": "event",
+                "title": "摘要截止",
+                "category": "",
+                "start_time": "2026-05-10T09:00:00",
+                "event_role": "multi_node_child",
+                "event_collection_id": collection_id,
+                "event_collection_kind": "multi_node",
+                "event_index": 1,
+            })
+
+            rows = db.search_items(
+                owner_id,
+                "学术会议",
+                {"type": "event", "category": "工作"},
+            )
+
+            assert [row.id for row in rows] == ["test_collection_node"]
+        finally:
+            db.cleanup()

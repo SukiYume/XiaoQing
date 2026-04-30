@@ -558,7 +558,7 @@ async function loadAndRender() {
         const res = await api.get('/dashboard');
         data = res.data || {};
     } catch (err) {
-        _container.innerHTML = `<div class="empty-state"><p>加载失败：${err.message}</p></div>`;
+        _container.innerHTML = `<div class="empty-state"><p>加载失败：${escapeHtml(err.message)}</p></div>`;
         return;
     }
 
@@ -610,7 +610,15 @@ async function loadAndRender() {
     }
 
     if (spendingTrend.length) {
-        await renderSpendingChart('dashboard-spending-chart', spendingTrend);
+        try {
+            await renderSpendingChart('dashboard-spending-chart', spendingTrend);
+        } catch (err) {
+            console.warn('Dashboard chart unavailable:', err);
+            const chartContainer = document.querySelector('.dashboard-chart-container');
+            if (chartContainer) {
+                chartContainer.innerHTML = '<div class="dashboard-empty"><strong>图表暂不可用</strong><p>账目统计数据已加载，稍后刷新可重试。</p></div>';
+            }
+        }
     } else if (_chartInstance) {
         _chartInstance.destroy();
         _chartInstance = null;
