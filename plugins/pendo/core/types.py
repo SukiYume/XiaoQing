@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Protocol, TypedDict, TypeAlias
+from typing import Any, Protocol, TypeAlias, TypedDict
 
 from core.interfaces import PluginContextProtocol
 

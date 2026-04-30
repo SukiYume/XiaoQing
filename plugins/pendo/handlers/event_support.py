@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 from ..utils.formatters import ItemFormatter, MessageBuilder
 from ..utils.time_utils import parse_remind_times

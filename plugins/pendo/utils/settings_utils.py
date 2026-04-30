@@ -15,14 +15,21 @@ DEFAULT_SETTINGS_JSON = {
 }
 
 PLUGIN_SETTINGS_HELP_LINES = (
-    "• /pendo settings [view] - 查看当前设置",
-    "• /pendo settings reminder on/off - 开关提醒",
-    "• /pendo settings timezone <时区> - 设置时区",
+    "• /pendo settings [view|show] - 查看当前设置",
+    "• /pendo settings reminder on/off - 开关提醒(也支持 开/关)",
+    "  - 例: /pendo settings reminder on",
+    "• /pendo settings timezone <IANA时区> - 设置时区",
+    "  - 例: /pendo settings timezone Asia/Shanghai",
     "• /pendo settings quiet_hours <开始>-<结束> - 静默时段",
+    "  - 例: /pendo settings quiet_hours 23:00-07:00",
     "• /pendo settings daily_report <HH:MM> - 每日简报时间",
+    "  - 例: /pendo settings daily_report 08:30",
     "• /pendo settings daily_briefing on/off - 开关每日简报",
+    "  - 例: /pendo settings daily_briefing off",
     "• /pendo settings diary_remind <HH:MM> - 日记提醒时间",
+    "  - 例: /pendo settings diary_remind 21:30",
     "• /pendo settings privacy on/off - 隐私模式",
+    "  - 例: /pendo settings privacy on",
 )
 
 # 统一的布尔值解析字符串集合，供 _coerce_setting_bool 和 parse_toggle_value 共用

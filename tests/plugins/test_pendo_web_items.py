@@ -2,13 +2,13 @@
 
 import importlib
 import json
-from datetime import datetime
-from pathlib import Path
 import shutil
 import sqlite3
 import sys
 import types
 import uuid
+from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -23,7 +23,6 @@ from plugins.pendo.utils.validators import (
 )
 from plugins.pendo.web.analytics import ledger_insights as ledger_insights_module
 from plugins.pendo.web.analytics.ledger_insights import build_ledger_insights
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -277,7 +276,7 @@ def test_database_get_items_supports_diary_date_sort_field():
 def test_items_api_source_maps_ledger_category_for_filters():
     src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")
 
-    assert 'def _resolve_category_field(type: Optional[str]) -> str:' in src
+    assert 'def _resolve_category_field(type: str | None) -> str:' in src
     assert 'return "ledger_category" if type == "ledger" else "category"' in src
     assert 'filters[_resolve_category_field(type)] = category' in src
     assert 'where.append(f"{category_field} = ?")' in src
@@ -603,9 +602,9 @@ def test_normalize_task_fields_accepts_priority_five_and_manages_completed_at():
 def test_item_create_model_source_accepts_nullable_text_fields():
     src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")
 
-    assert 'title: Optional[str] = ""' in src
-    assert 'content: Optional[str] = ""' in src
-    assert 'category: Optional[str] = None' in src
+    assert 'title: str | None = ""' in src
+    assert 'content: str | None = ""' in src
+    assert 'category: str | None = None' in src
 
 
 def test_task_update_route_preserves_explicit_nulls_for_clearing_fields():
@@ -1028,7 +1027,7 @@ def test_items_api_create_diary_defaults_entry_time_to_diary_date(monkeypatch, t
 def test_items_api_source_supports_note_filters_and_normalization():
     src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")
 
-    assert 'tags: Optional[str] = None' in src
+    assert 'tags: str | None = None' in src
     assert 'filters["tags"] = tags' in src
     assert "normalize_note_fields(item_data, partial=False)" in src
     assert "normalized = normalize_note_fields(merged, partial=False)" in src
@@ -1145,6 +1144,46 @@ def test_item_update_event_rebuilds_stale_remind_times_from_existing_rules():
             {"offset_seconds": 3600},
             {"offset_seconds": 0},
         ]
+        assert event.remind_times == [
+            "2030-01-03T09:00:00",
+            "2030-01-03T10:00:00",
+        ]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_item_update_event_start_time_preserves_duration_when_end_time_omitted():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_event_duration_update_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-event-duration-update"
+    items_module = _load_items_module()
+
+    try:
+        db.insert_item(
+            normalize_event_fields(
+                {
+                    "id": "ev-duration",
+                    "owner_id": owner_id,
+                    "type": "event",
+                    "title": "移动含结束时间事件",
+                    "category": "会议",
+                    "start_time": "2030-01-02T09:00:00",
+                    "end_time": "2030-01-02T11:30:00",
+                    "reminder_rules": [{"offset_seconds": 3600}, {"offset_seconds": 0}],
+                },
+                partial=False,
+            )
+        )
+
+        body = items_module.ItemUpdate(start_time="2030-01-03T10:00:00")
+
+        result = items_module.update_item("ev-duration", body=body, owner_id=owner_id, db=db)
+
+        assert result["ok"] is True
+        event = db.get_item("ev-duration", owner_id=owner_id)
+        assert event.start_time == "2030-01-03T10:00:00"
+        assert event.end_time == "2030-01-03T12:30:00"
         assert event.remind_times == [
             "2030-01-03T09:00:00",
             "2030-01-03T10:00:00",

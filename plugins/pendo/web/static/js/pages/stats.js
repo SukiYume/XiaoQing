@@ -1666,9 +1666,9 @@ function renderPage() {
                         </div>
                         ${_range === 'custom' ? `
                             <div class="stats-custom-range">
-                                <input type="text" class="stats-date-field" id="stats-custom-start" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftStart || _customStart || range.start)}">
+                                <input type="text" class="stats-date-field" id="stats-custom-start" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftStart || _customStart || range.start)}" aria-label="统计开始日期">
                                 <span class="stats-range-sep">至</span>
-                                <input type="text" class="stats-date-field" id="stats-custom-end" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftEnd || _customEnd || range.end)}">
+                                <input type="text" class="stats-date-field" id="stats-custom-end" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftEnd || _customEnd || range.end)}" aria-label="统计结束日期">
                                 <button type="button" class="stats-range-btn stats-apply-btn" id="stats-custom-apply">应用</button>
                             </div>
                         ` : ''}

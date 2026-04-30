@@ -1,7 +1,7 @@
 """数据模型初始化"""
-from .item import Item, ItemType, EventItem, TaskItem, NoteItem, DiaryItem
-from .constants import ItemFields
 from . import types
+from .constants import ItemFields
+from .item import DiaryItem, EventItem, Item, ItemType, NoteItem, TaskItem
 
 __all__ = [
     'Item', 'ItemType', 'EventItem', 'TaskItem', 'NoteItem', 'DiaryItem',

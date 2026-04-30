@@ -3,9 +3,9 @@
 统一处理各Handler中重复的消息格式化逻辑
 """
 
-from typing import Any, Optional
-from datetime import datetime
 import re
+from datetime import datetime
+from typing import Any
 
 from ..models.item import get_item_type_value
 
@@ -200,7 +200,7 @@ class ItemFormatter:
         return f"{icon} {title} `{item_id}`"
 
     @staticmethod
-    def format_time_range(start_time: Optional[str], end_time: Optional[str] = None) -> str:
+    def format_time_range(start_time: str | None, end_time: str | None = None) -> str:
         """格式化时间范围
 
         Args:
@@ -342,7 +342,7 @@ class MessageBuilder:
         return self.build()
 
 
-def format_success_message(message: str, item_id: Optional[str] = None) -> str:
+def format_success_message(message: str, item_id: str | None = None) -> str:
     """格式化成功消息
 
     Args:
@@ -358,7 +358,7 @@ def format_success_message(message: str, item_id: Optional[str] = None) -> str:
     return "\n".join(lines)
 
 
-def format_error_message(message: str, hint: Optional[str] = None) -> str:
+def format_error_message(message: str, hint: str | None = None) -> str:
     """格式化错误消息
 
     Args:
@@ -418,7 +418,7 @@ def extract_metadata(text: str, *, with_priority: bool = False) -> dict[str, Any
     return result
 
 
-def extract_kv_param(text: str, key: str) -> tuple[Optional[str], str]:
+def extract_kv_param(text: str, key: str) -> tuple[str | None, str]:
     """从文本中提取 key=value 或 key:value 参数，返回 (value, 剩余文本)。
 
     用于 search handler 中提取 type=event、range=last7d 等参数。

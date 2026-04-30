@@ -1,37 +1,34 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import uuid
-import asyncio
 from datetime import date, datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from ...models.item import get_item_type_value
 from ...services.db import Database, DuplicateBundleImportError
 from ...utils.validators import get_item_normalizer
 from ..deps import get_current_user, get_db
 from ..services.bundle_import import inspect_bundle_bytes, normalize_import_payload
 from ..services.transfer_bundle import (
-    BundleValidationError,
     EVENT_COLLECTION_FILE_NAME,
     EVENT_COLLECTION_TYPE,
     SUPPORTED_TYPES,
     TIME_FIELD_BY_TYPE,
+    TYPE_FILE_NAMES,
+    BundleValidationError,
     build_manifest,
-    read_bundle,
+    compute_sha256,
     serialize_event_collection,
     serialize_item,
     write_bundle,
-    compute_sha256,
-    TYPE_FILE_NAMES,
 )
-
 
 router = APIRouter()
 _IMPORT_BUNDLE_LOCKS: dict[str, asyncio.Lock] = {}
@@ -51,8 +48,8 @@ MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 class ExportSelection(BaseModel):
     types: list[str] = Field(default_factory=list)
     preset: str = "all"
-    start: Optional[str] = None
-    end: Optional[str] = None
+    start: str | None = None
+    end: str | None = None
     timezone: str = "Asia/Shanghai"
 
 
@@ -72,7 +69,7 @@ def _resolve_timezone(timezone: str | None) -> ZoneInfo:
         raise HTTPException(status_code=422, detail=f"Invalid timezone: {name}") from exc
 
 
-def resolve_range(selection: ExportSelection, now: Optional[datetime] = None) -> tuple[Optional[date], Optional[date]]:
+def resolve_range(selection: ExportSelection, now: datetime | None = None) -> tuple[date | None, date | None]:
     zone = _resolve_timezone(selection.timezone)
     current = now.astimezone(zone) if now else datetime.now(zone)
     today = current.date()
@@ -110,7 +107,7 @@ def _parse_date(value: str) -> date:
         raise HTTPException(status_code=422, detail=f"Invalid date: {value}") from exc
 
 
-def _coerce_date(value: Any) -> Optional[date]:
+def _coerce_date(value: Any) -> date | None:
     if value in (None, ""):
         return None
     text = str(value)
@@ -122,7 +119,7 @@ def _coerce_date(value: Any) -> Optional[date]:
         return None
 
 
-def _coerce_date_tz(value: Any, zone: ZoneInfo) -> Optional[date]:
+def _coerce_date_tz(value: Any, zone: ZoneInfo) -> date | None:
     """将日期时间字符串转换为指定时区的 date 对象"""
     if value in (None, ""):
         return None
@@ -138,7 +135,7 @@ def _coerce_date_tz(value: Any, zone: ZoneInfo) -> Optional[date]:
         return None
 
 
-def _extract_item_date(item, item_type: str, zone: Optional[ZoneInfo] = None) -> Optional[date]:
+def _extract_item_date(item, item_type: str, zone: ZoneInfo | None = None) -> date | None:
     if item_type == "task":
         primary = (
             getattr(item, "plan_date", None)
@@ -151,7 +148,7 @@ def _extract_item_date(item, item_type: str, zone: Optional[ZoneInfo] = None) ->
     return _coerce_date_tz(value, zone) if zone else _coerce_date(value)
 
 
-def item_matches_range(item, item_type: str, start: Optional[date], end: Optional[date], zone: Optional[ZoneInfo] = None) -> bool:
+def item_matches_range(item, item_type: str, start: date | None, end: date | None, zone: ZoneInfo | None = None) -> bool:
     if start is None or end is None:
         return True
     item_date = _extract_item_date(item, item_type, zone)
@@ -190,7 +187,7 @@ def _normalize_selection(selection: ExportSelection) -> list[str]:
     return normalized_types
 
 
-def _validate_export_record(record: dict[str, Any]) -> tuple[dict[str, Any], Optional[str]]:
+def _validate_export_record(record: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     """导出时对记录做规范化校验，返回 (record, warning_or_none)"""
     item_type = record.get("_type")
     normalizer = get_item_normalizer(str(item_type or ""))
@@ -203,7 +200,7 @@ def _validate_export_record(record: dict[str, Any]) -> tuple[dict[str, Any], Opt
         return record, f"{item_type}/{record.get('id', '?')}: {exc}"
 
 
-def _build_export_dataset(db: Database, owner_id: str, selection: ExportSelection) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int], tuple[Optional[date], Optional[date]], list[str]]:
+def _build_export_dataset(db: Database, owner_id: str, selection: ExportSelection) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int], tuple[date | None, date | None], list[str]]:
     selected_types = _normalize_selection(selection)
     start, end = resolve_range(selection)
     zone = _resolve_timezone(selection.timezone)
@@ -243,7 +240,7 @@ def _build_export_dataset(db: Database, owner_id: str, selection: ExportSelectio
     return records_by_type, counts, (start, end), export_warnings
 
 
-def _build_bundle_bytes(records_by_type: dict[str, list[dict[str, Any]]], selection: ExportSelection, counts: dict[str, int], start: Optional[date], end: Optional[date]) -> bytes:
+def _build_bundle_bytes(records_by_type: dict[str, list[dict[str, Any]]], selection: ExportSelection, counts: dict[str, int], start: date | None, end: date | None) -> bytes:
     file_entries = []
     for item_type, records in records_by_type.items():
         lines = [json.dumps(record, ensure_ascii=False) for record in records]
@@ -270,7 +267,7 @@ def _build_bundle_bytes(records_by_type: dict[str, list[dict[str, Any]]], select
     return buffer.getvalue()
 
 
-def _parse_import_options(options: Optional[str]) -> dict[str, Any]:
+def _parse_import_options(options: str | None) -> dict[str, Any]:
     if not options:
         return {}
     try:
@@ -476,7 +473,7 @@ def _prepare_collection_import_operations(
     return operations, collection_id_map
 
 
-def _result_entry(record: dict[str, Any], reason: Optional[str] = None) -> dict[str, Any]:
+def _result_entry(record: dict[str, Any], reason: str | None = None) -> dict[str, Any]:
     entry = {
         "type": record.get("type"),
         "id": record.get("id"),
@@ -645,7 +642,7 @@ async def import_samples(
 @router.post("/transfer/import/execute")
 async def execute_import(
     request: Request,
-    x_transfer_options: Optional[str] = Header(default=None),
+    x_transfer_options: str | None = Header(default=None),
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ):

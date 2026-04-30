@@ -285,6 +285,7 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> dict[str,
                 "meta": " · ".join(
                     part for part in [getattr(item, "ledger_category", None) or "未分类", getattr(item, "ledger_date", None) or ""] if part
                 ),
+                "transaction_type": getattr(item, "transaction_type", "expense") or "expense",
                 "amount_text": (
                     f"↔ {_format_amount(float(getattr(item, 'amount', 0) or 0))}"
                     if getattr(item, "transaction_type", "expense") == "transfer"

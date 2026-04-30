@@ -21,7 +21,7 @@ export function renderHeader(container) {
                         <path d="M12.5 12.5L17 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
                     </svg>
                 </span>
-                <input id="header-search-input" name="global-search" type="text" placeholder="搜索..." class="header-search-input" />
+                <input id="header-search-input" name="global-search" type="text" placeholder="搜索..." class="header-search-input" aria-label="全局搜索" />
             </div>
             <button class="header-search-toggle" type="button" aria-label="打开搜索" title="搜索">⌕</button>
             <button class="btn btn-ghost header-logout" title="退出登录">退出</button>

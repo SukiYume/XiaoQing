@@ -5,15 +5,12 @@
 """
 
 import sys
-import time
-import tempfile
-import os
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
-
-import pytest
 
 # ========================================================
 # Issue 1: LRU 缓存退化为 FIFO

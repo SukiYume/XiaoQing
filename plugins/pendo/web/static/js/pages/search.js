@@ -371,7 +371,7 @@ function renderPage() {
                             <path d="M12.5 12.5L17 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
                         </svg>
                     </span>
-                    <input id="search-input" class="search-input" type="text" autocomplete="off" placeholder="搜索标题、内容、标签、地点、备注、天气..." value="${escapeHtml(_query)}">
+                    <input id="search-input" class="search-input" type="text" autocomplete="off" placeholder="搜索标题、内容、标签、地点、备注、天气..." value="${escapeHtml(_query)}" aria-label="全局搜索关键词">
                 </div>
                 <div class="search-query-meta">
                     <span class="search-pill">Enter 立即搜索</span>

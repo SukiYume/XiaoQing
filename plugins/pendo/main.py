@@ -18,44 +18,17 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from core.interfaces import PluginContextProtocol
-from core.plugin_base import build_action, segments, run_sync
-from core.args import parse
-
-from .core.router import CommandRouter
-from .core.runtime import (
-    get_cached_services,
-    get_plugin_runtime_state as _runtime_plugin_state,
-    set_cached_services,
-)
-from .core.types import PendoContext, PendoServices
-from .handlers.event import EventHandler
-from .handlers.task import TaskHandler
-from .handlers.note import NoteHandler
-from .handlers.diary import DiaryHandler
-from .handlers.search import SearchHandler
-from .handlers.ledger import LedgerHandler
-from .handlers.web import WebHandler
-from .services.db import Database
-from .services.reminder import ReminderService
-from .services.exporter import ExporterService
-from .services.ai_parser import AIParser
-from .utils.db_ops import (
-    get_user_custom_settings as _get_user_custom_settings_from_db,
-    set_database_singleton,
-)
-from .utils.error_handlers import error_result, handle_command_errors_with_segments, success_result
-from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
-from .utils.session_utils import safe_end_session
-from .config import PendoConfig
+from core.plugin_base import build_action, run_sync, segments
 
 from .commands.operations import handle_confirm, handle_snooze, handle_undo
 from .commands.scheduled import (
     check_diary_reminders,
-    cleanup_expired_demo_data,
     check_reminders,
+    cleanup_expired_demo_data,
     cleanup_reminder_singleton,
     migrate_undone_todos,
     send_daily_briefings,
@@ -64,6 +37,36 @@ from .commands.scheduled import (
 )
 from .commands.session import handle_session_message
 from .commands.settings import handle_settings
+from .config import PendoConfig
+from .core.router import CommandRouter
+from .core.runtime import (
+    get_cached_services,
+    set_cached_services,
+)
+from .core.runtime import (
+    get_plugin_runtime_state as _runtime_plugin_state,
+)
+from .core.types import PendoContext, PendoServices
+from .handlers.diary import DiaryHandler
+from .handlers.event import EventHandler
+from .handlers.ledger import LedgerHandler
+from .handlers.note import NoteHandler
+from .handlers.search import SearchHandler
+from .handlers.task import TaskHandler
+from .handlers.web import WebHandler
+from .services.ai_parser import AIParser
+from .services.db import Database
+from .services.exporter import ExporterService
+from .services.reminder import ReminderService
+from .utils.db_ops import (
+    get_user_custom_settings as _get_user_custom_settings_from_db,
+)
+from .utils.db_ops import (
+    set_database_singleton,
+)
+from .utils.error_handlers import error_result, handle_command_errors_with_segments, success_result
+from .utils.session_utils import safe_end_session
+from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 
 logger = logging.getLogger(__name__)
 _startup_db: Database | None = None
@@ -220,7 +223,7 @@ async def handle(
     log = _get_logger(context)
     user_id = str(event.get("user_id", ""))
     group_id = event.get("group_id")
-    raw_message = event.get("raw_message", args)
+    raw_message = event.get("raw_message") or f"{command} {args}".strip()
 
     # 1. 优先检查是否存在活跃会话 (多轮对话)
     # 注意：只处理属于 pendo 的会话，忽略其他插件的会话
@@ -276,15 +279,16 @@ async def _handle_active_session(
     Returns:
         消息列表
     """
+    # 检查是否是退出命令
+    raw_message = str(raw_message or "")
+    if raw_message.strip() in PendoConfig.SESSION_EXIT_COMMANDS:
+        await safe_end_session(context)
+        return segments("✅ 已退出当前会话")
+
     # 确保 services 已初始化（session 分支不经过 _build_command_router）
     _get_services(context)
 
     session = await context.get_session()
-
-    # 检查是否是退出命令
-    if raw_message.strip() in PendoConfig.SESSION_EXIT_COMMANDS:
-        await safe_end_session(context)
-        return segments("✅ 已退出当前会话")
 
     # 将消息传递给会话处理器（使用commands模块）
     result = await handle_session_message(user_id, raw_message, session, context)
@@ -684,44 +688,63 @@ HELP_MAP = {
     "quick": [
         "⚡ **快速记录**",
         "• /pendo event add <内容> - 添加单次/重复/多节点日程(AI解析)",
+        "  - 例: /pendo event add 明天9点组会，提前30分钟提醒",
         "• /pendo todo add <内容> - 添加待办(默认计划到今天)",
+        "  - 例: /pendo todo add 写周报 cat:工作 p:2 plan:2026-05-01",
         "• /pendo todo view <id> - 查看待办详情",
         "• /pendo note add <内容> - 记录笔记(支持 title:/cat:/#标签/ref:ID)",
+        "  - 例: /pendo note add title:读书摘录 content 费曼技巧 cat:学习 #方法",
         "• /pendo diary add <内容> - 写一篇日记(同一天可多篇)",
+        "  - 例: /pendo diary add 今天跑步5公里 mood:happy score:8",
         "• /pendo ledger quick <金额> <描述> - 快速记账",
+        "  - 例: /pendo ledger quick 35.5 午饭 cat:餐饮 account:微信",
     ],
     "event": [
         "🗓️ **日程管理 (Event)**",
         "• /pendo event add <内容> - 添加日程(AI解析单次/重复/多节点)",
         "  - 例: 3月8日下午两点，国自然截止，提前一周和一天提醒",
         "  - 例: 每月18号上午十点，公积金提取，重复7个月",
+        "  - 例: 5月1日9点出发、14点入住、5月3日18点返程，杭州团建，提前2小时提醒",
         "  - 多节点事件会生成一个日程集合和多个可单独查看/编辑/删除的节点",
         "• /pendo event view <id> - 查看日程详情；集合ID显示整体，节点ID显示单个节点",
-        "• /pendo event list [范围] - 查看日程",
-        "  - 范围: today, tomorrow, week, YYYY-MM, last7d, start..end",
+        "• /pendo event list [范围] [cat:分类] [#标签] - 查看日程",
+        "  - 范围: today, tomorrow, week, month, year, YYYY-MM-DD, YYYY-MM, last7d/last30d, start..end",
+        "  - 例: /pendo event list week cat:工作",
+        "  - 例: /pendo event list 2026-05-01..2026-05-07 #会议",
         "• /pendo event delete <id> - 删除单个日程/节点；传集合ID会删除整组",
         "• /pendo event edit <id> <内容> - 编辑日程",
-        "  - 节点ID可像单次日程一样改标题、时间、地点、备注、提醒",
-        "  - 多节点事件可直接写“节点名 + 改成/改到 + 新时间”",
-        "  - 集合ID用于编辑多节点/重复日程的整体标题、分类、地点、备注",
-        "  - 例: /pendo event edit 80efbef6 会议开始改成4月22日12:43",
-        "  - 例: /pendo event edit 80efbef6 会议开始改成4月22日12:43，备注从北京南坐G123去会场",
+        "  - 节点ID可像单次日程一样改标题、时间、地点、备注；提醒建议用 reminders set/delete",
+        "  - 多节点/重复日程先用 view 集合ID 查看节点ID，再编辑具体节点",
+        "  - 集合ID只编辑整体标题、分类、地点、备注，不修改某个节点时间",
+        "  - 例: /pendo event edit 80efbef6_m03 改到4月22日12:43",
+        "  - 例: /pendo event edit 80efbef6_m03 备注从北京南坐G123去会场",
+        "  - 例: /pendo event edit 80efbef6 标题改为FAST会议行程",
         "• /pendo event reminders [id|范围] - 查看提醒",
-        "• /pendo event reminders set <id> <描述> - 修改单个日程/节点或整组集合提醒",
-        "• /pendo event reminders confirm <id> [today|future|all|提醒时间] - 按范围提前确认提醒",
+        "• /pendo event reminders list [范围] - 按范围查看提醒",
+        "  - id 可为单次日程、重复/多节点集合ID，或单个节点ID",
+        "• /pendo event reminders set <id> <描述> - 重置单个日程/节点或整组集合的提醒",
+        "• /pendo event reminders delete <id> <all|today|future|提醒时间> - 删除某个或某些提醒",
+        "• /pendo event reminders confirm <id> [today|future|all|提醒时间] - 提前确认某个或某些提醒",
+        "  - 提醒时间支持 YYYY-MM-DD HH:MM、MM-DD HH:MM、M月D日 HH:MM",
+        "  - 例: /pendo event reminders list week",
         "  - 例: /pendo event reminders set abc12345 提前1天和2小时提醒",
+        "  - 例: /pendo event reminders delete abc12345 2030-06-01 09:00",
+        "  - 例: /pendo event reminders delete abc12345 all",
         "  - 例: /pendo event reminders confirm abc12345 today",
     ],
     "todo": [
         "✅ **待办事项 (Todo)**",
-        "• /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [cat:分类] [p:1-5] [#标签] - 添加待办",
+        "• /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [remind:YYYY-MM-DDTHH:MM[,YYYY-MM-DDTHH:MM]] [cat:分类] [p:1-5] [#标签] - 添加待办",
         "  - 默认计划到今天，晚上8点后自动计划到明天",
         "  - cat: 只表示文字分类，不再作为日期桶",
         "  - p:1(紧急) p:2(高) p:3(中) p:4(低) p:5(最低)",
+        "  - 例: /pendo todo add 写项目周报 cat:工作 p:2 plan:2026-05-01 deadline:2026-05-01T18:00 #周报",
+        "  - 例: /pendo todo add 交材料 remind:2026-05-01T09:00,2026-05-01T17:00",
         "• /pendo todo view <id> - 查看待办详情",
-        "• /pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类] [all|page:n] - 查看待办",
+        "• /pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类] [open|done|cancelled] [p:1-5] [all|page:n] - 查看待办",
         "  - /pendo todo list today - 今日待办",
         "  - /pendo todo list 工作 done - 工作分类已完成",
+        "  - /pendo todo list 工作 p:1 - 工作分类紧急待办",
         "  - /pendo todo list cancelled - 所有分类已取消",
         "  - /pendo todo list done all - 所有分类已完成(全部)",
         "  - /pendo todo list 工作 page:2 - 工作分类第2页",
@@ -729,7 +752,9 @@ HELP_MAP = {
         "• /pendo todo cancel <id> - 取消待办",
         "• /pendo todo undone <id> - 重开待办",
         "• /pendo todo delete <id|cat:分类> - 删除待办",
-        "• /pendo todo edit <id> <内容> - 编辑待办",
+        "  - 例: /pendo todo delete cat:临时",
+        "• /pendo todo edit <id> <内容> [plan:/deadline:/remind:/cat:/p:/#标签] - 编辑待办",
+        "  - 例: /pendo todo edit abc12345 写项目周报 p:1 deadline:2026-05-01T17:00",
     ],
     "note": [
         "📝 **笔记 (Note)**",
@@ -739,71 +764,98 @@ HELP_MAP = {
         "• /pendo note add title:<标题>\\n<正文多行>\\ncat:分类 #标签 - 标题后直接换行写正文",
         "  - 例: /pendo note add title:我的标题 content 这里是详细正文 cat:工作 #学习",
         "  - 例: /pendo note add title:会议纪要\\n1. 事项A\\n2. 事项B\\ncat:其他 #记录",
+        "  - 例: /pendo note add 这条关联到日程 ref:80efbef6 cat:工作 #关联",
         "  - ref:条目ID 会保存为结构化 references，支持关联日程/待办/笔记/日记/账目",
-        "• /pendo note list [分类名|cat:分类] [#标签] [all|page:n] - 查看笔记",
+        "• /pendo note list [分类名|cat:分类] [#标签] [since:范围] [all|page:n] - 查看笔记",
         "  - /pendo note list - 显示所有分类概览",
         '  - /pendo note list 工作 - 查看"工作"分类(直接用分类名)',
+        "  - /pendo note list cat:工作 #文章 since:last30d - 查看最近30天工作文章",
         '  - /pendo note list 工作 all - 显示"工作"分类全部笔记',
         '  - /pendo note list 工作 page:2 - 显示"工作"分类第2页',
         "• /pendo note view <id> - 查看笔记详情",
         "• /pendo note edit <id> <新内容> [cat:分类] [#标签] - 编辑笔记",
         "  - 也支持 title:xxx content yyy 或 title:xxx 后换行正文 的方式重命名和修改大段内容",
+        "  - 例: /pendo note edit abc12345 title:新标题 content 新正文 cat:工作 #复盘",
         "• /pendo note append <id> <追加内容> - 追加内容",
-        "• /pendo note tag <id> #标签 / untag <id> #标签 - 增删标签",
+        "  - 例: /pendo note append abc12345 补充一条结论",
+        "• /pendo note tag <id> #标签 - 添加标签，可一次写多个",
+        "  - 例: /pendo note tag abc12345 #论文 #想法",
+        "• /pendo note untag <id> #标签 - 移除标签，可一次写多个",
+        "  - 例: /pendo note untag abc12345 #想法",
         "• /pendo note link <id> <关联条目ID> - 关联日程/待办/笔记等条目",
+        "  - 例: /pendo note link abc12345 80efbef6",
         "• /pendo note delete <id|cat:分类> - 删除笔记",
+        "  - 例: /pendo note delete cat:临时",
     ],
     "diary": [
         "📔 **日记 (Diary)**",
         "• /pendo diary add [日期] <内容> [weather:xxx] [location:xxx] [mood:happy] [score:1-10] [tags:a,b] [favorite:true]",
         "  - 无日期则写今天；同一天可写多篇独立条目，按记录时间排序",
         "  - 心情可用: happy/calm/excited/sad/angry/tired/anxious/grateful/neutral",
+        "  - weather/location 可加引号写空格；favorite 也可写 fav",
+        "  - 例: /pendo diary add 2026-05-01 今天跑步5公里 weather:晴 location:操场 mood:happy score:8 tags:运动,复盘 favorite:true",
         "• /pendo diary template [编号|名称] - 模板引导写日记",
         "  - 1.三件好事 2.今日总结 3.情绪记录",
         "• /pendo diary list [范围] - 查看日记列表(默认本月)",
-        "  - 范围: today, week, YYYY-MM, last7d, start..end；可加 mood:happy",
+        "  - 范围: today, tomorrow, week, month, year, YYYY-MM, last7d/last30d, start..end；可加 mood:happy",
+        "  - 例: /pendo diary list 2026-05 mood:happy",
         "• /pendo diary view [日期|ID] - 日期查看当天所有条目，ID查看单篇",
         "• /pendo diary delete <日期|ID> - 当天多篇时需按ID删除，避免误删",
+        "  - 例: /pendo diary view 2026-05-01",
+        "  - 例: /pendo diary delete abc12345",
     ],
     "ledger": [
         "💰 **记账 (Ledger)**",
         "• /pendo ledger add - 交互式记账(多轮引导)",
-        "• /pendo ledger quick <金额> <描述> [cat:分类] [in|transfer] [account:账户] [to:账户] [merchant:商户] - 快速记账",
-        "  - 默认支出，加 in 标记收入，加 transfer 标记账户间转账",
+        "• /pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] - 快速记账",
+        "  - 默认支出；in 标记收入，out/expense 标记支出，transfer 标记账户间转账",
+        "  - account/from 表示账户，to/counter 表示转入账户，merchant/payee 表示商户",
+        "  - 带空格的值可加英文双引号，例如 merchant:\"星巴克 人民广场店\"",
         "  - 例: /pendo ledger quick 35.5 午饭 cat:餐饮 account:微信 merchant:食堂",
         "  - 例: /pendo ledger quick 5000 工资 cat:工资 in account:招行",
-        "  - 例: /pendo ledger quick 1000 还款 transfer account:微信 to:招行",
-        "• /pendo ledger list [范围] - 查看账目",
-        "  - 范围: today, week, YYYY-MM, last7d, start..end；可加 type:transfer/account:微信",
+        "  - 例: /pendo ledger quick 1000 还款 transfer account:微信 to:招行 date:2026-05-01",
+        "• /pendo ledger list [范围] [筛选] - 查看账目",
+        "  - 范围: today, week, month, year, YYYY-MM, last7d/last30d, start..end",
+        "  - 筛选: type:expense/income/transfer account:账户 to:账户 merchant:商户 cat:分类 amount:N或N..M ex all page:N",
+        "  - 例: /pendo ledger list 2026-03 type:expense cat:餐饮 amount:20..100 ex",
+        "  - 例: /pendo ledger list month account:微信 page:2",
         "• /pendo ledger view <id> - 查看账目详情",
         "• /pendo ledger edit <id> <字段:值> ... - 编辑账目",
-        "  - 字段: amount: title: cat: type: account: to: merchant: date: remark:",
+        "  - 字段: amount: title: cat/category: type: account/from: to/counter: merchant/payee: date: remark:",
         "  - 例: /pendo ledger edit abc123 amount:50 cat:交通 account:微信",
         "• /pendo ledger delete <id> - 删除账目",
         "• /pendo ledger summary [范围] - 收支汇总统计",
+        "  - 例: /pendo ledger summary 2026-03",
     ],
     "search": [
         "🔎 **搜索 (Search)**",
         "• /pendo search <关键词> - 全文搜索(标题/内容/备注/分类)",
-        "• /pendo search <关键词> type=event/task/note/diary/ledger",
-        "• /pendo search <关键词> range=today/week/last7d/YYYY-MM",
-        "• /pendo search <关键词> status=open/done/cancelled (待办)",
-        "• /pendo search <关键词> transaction_type=income/expense/transfer (记账)",
-        "• /pendo search <关键词> category=<分类>",
+        "• 筛选: type=event/task/note/diary/ledger range=today/week/month/year/last7d/last30d/YYYY-MM",
+        "• 待办筛选: status=open/done/cancelled",
+        "• 记账筛选: transaction_type=income/expense/transfer account=<账户> merchant=<商户>",
+        "• 通用筛选: category=<分类>",
+        "  - 例: /pendo search 组会 type=event range=last30d",
+        "  - 例: /pendo search 午饭 type=ledger transaction_type=expense account=微信",
+        "  - 例: /pendo search 周报 type=task status=open category=工作",
     ],
     "reminder": [
         "⏰ **提醒操作**",
         "• /pendo confirm <id> - 确认刚收到的那条提醒",
-        "• /pendo snooze <id> <时间> - 延后提醒",
-        "  - 时间格式: 10m, 1h, 19:00",
+        "• /pendo snooze <id> <时间> - 延后刚收到的提醒",
+        "  - 时间格式: 10m, 10min, 1h, 1d, 19:00",
+        "  - 例: /pendo confirm abc12345",
+        "  - 例: /pendo snooze abc12345 10m",
+        "• 管理未来提醒: /pendo event reminders set/delete/confirm <id> ...",
     ],
     "export": [
         "📤 **导出 (Export)**",
         "• /pendo export <文件名> [范围] [类型] - 导出 Markdown 并私聊发送文件",
-        "  - 范围: all, today, week, month, YYYY-MM, last7d, start..end",
-        "  - 类型: event, todo, note, ledger, diary，可用逗号组合",
+        "  - 范围: all, today, tomorrow, week, month, year, YYYY-MM, last7d/last30d, start..end",
+        "  - 类型: all, event, todo/task, note, ledger, diary，可用逗号组合",
+        "  - 文件名会自动加 .md；含空格请加英文引号",
         "  - 例: /pendo export 我的档案",
         "  - 例: /pendo export 工作回顾 last30d event,todo",
+        "  - 例: /pendo export \"三月 账本\" 2026-03 ledger",
         "  - 例: /pendo export 账本快照 2026-03 ledger",
     ],
     "settings": [
@@ -817,8 +869,14 @@ HELP_MAP = {
         "• /pendo web start  - 启动 Web 服务",
         "• /pendo web stop   - 停止 Web 服务",
         "• /pendo web status - 查看服务状态",
+        "  - 例: /pendo web status",
     ],
-    "common": ["↩️ **其他操作**", "• /pendo undo [分钟] - 撤销删除或编辑 (默认5分钟内)"],
+    "common": [
+        "↩️ **其他操作**",
+        "• /pendo undo [分钟] - 撤销最近一次删除或编辑 (默认5分钟内)",
+        "  - 例: /pendo undo",
+        "  - 例: /pendo undo 30",
+    ],
 }
 
 HELP_SECTION_ORDER = [
@@ -864,6 +922,9 @@ def _show_help(subcommand: str = "") -> str:
         "config": "settings",
         "bill": "ledger",
         "finance": "ledger",
+        "confirm": "reminder",
+        "snooze": "reminder",
+        "undo": "common",
     }
     target_key = aliases.get(subcommand, subcommand)
 
@@ -940,7 +1001,7 @@ def _get_services(context: PendoContext | None) -> PendoServices:
     db = _get_database(context)
     ai_parser = AIParser(context)
     try:
-        setattr(ai_parser, "db", db)
+        ai_parser.db = db
     except Exception:
         pass
     reminder_service = ReminderService(db)

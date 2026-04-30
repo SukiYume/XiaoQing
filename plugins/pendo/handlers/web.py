@@ -4,6 +4,7 @@ from importlib import import_module
 from core.plugin_base import build_action, segments
 
 from ..config import PendoConfig
+
 try:
     auth_module = import_module("plugins.pendo.web.auth")
     generate_token = auth_module.generate_token

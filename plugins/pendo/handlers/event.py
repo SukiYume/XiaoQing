@@ -3,27 +3,39 @@
 处理日程相关的所有操作，使用AI解析自然语言
 """
 
-from typing import Any, TYPE_CHECKING, Protocol, cast
-from datetime import datetime, timedelta
-from itertools import islice
 import logging
 import re
 import uuid
+from datetime import datetime, timedelta
+from itertools import islice
+from typing import TYPE_CHECKING, Any, Protocol, cast
+
 from core.plugin_base import run_sync
+
+from ..config import PendoConfig
+from ..core.router import TOP_LEVEL_REDIRECTS
+from ..core.types import CommandMessage, PendoContext
+from ..models.item import EventItem, ItemType
+from ..services.event_graph import EventFamily, EventGraphService
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import error_result, handle_command_errors
-from ..config import PendoConfig
-from ..utils.time_utils import parse_event_time_range, TimezoneHelper, now_in_timezone, parse_remind_times
-from ..models.item import EventItem, ItemType
-from ..core.types import PendoContext, CommandMessage
-from ..core.router import TOP_LEVEL_REDIRECTS
+from ..utils.formatters import (
+    ItemFormatter,
+    MessageBuilder,
+)
+from ..utils.session_utils import safe_create_session
 from ..utils.settings_utils import resolve_default_category
-from ..utils.validators import build_remind_times_from_rules
-from ..services.event_graph import EventFamily, EventGraphService
+from ..utils.time_utils import (
+    TimezoneHelper,
+    now_in_timezone,
+    parse_event_time_range,
+    parse_remind_times,
+)
+from ..utils.validators import build_remind_times_from_rules, derive_reminder_rules
 from .event_support import (
-    ensure_start_time_reminder,
-    ensure_event_reminders,
     ensure_event_reminder_rules,
+    ensure_event_reminders,
+    ensure_start_time_reminder,
     format_conflicts,
     format_event_created,
     format_event_reminders,
@@ -32,11 +44,6 @@ from .event_support import (
     get_remind_status,
     recalculate_event_reminders,
 )
-from ..utils.formatters import (
-    ItemFormatter,
-    MessageBuilder,
-)
-from ..utils.session_utils import safe_create_session
 
 logger = logging.getLogger(__name__)
 
@@ -1088,6 +1095,9 @@ class EventHandler(DbOpsMixin):
         if parts and parts[0].lower() == "confirm":
             rest = parts[1] if len(parts) > 1 else ""
             return await self.confirm_event_reminders(user_id, rest, context)
+        if parts and parts[0].lower() in {"delete", "remove", "rm"}:
+            rest = parts[1] if len(parts) > 1 else ""
+            return await self.delete_event_reminders(user_id, rest, context)
         # "list" 是子命令关键字，其后可跟可选的日期范围
         if parts and parts[0].lower() == "list":
             args = parts[1] if len(parts) > 1 else "today"
@@ -1100,6 +1110,76 @@ class EventHandler(DbOpsMixin):
             )
             return {"status": "error", "message": f"❌ 正确用法:\n\n{hint}"}
         return await self.list_reminders(user_id, args, context)
+
+    async def delete_event_reminders(
+        self, user_id: str, args: str, context: PendoContext
+    ) -> CommandMessage:
+        """删除指定事件/系列的一个或多个提醒。"""
+        parts = (args or "").split(maxsplit=1)
+        if len(parts) < 2:
+            return {
+                "status": "error",
+                "message": (
+                    "❌ 用法: /pendo event reminders delete <id> <all|today|future|提醒时间>\n"
+                    "例如: /pendo event reminders delete abc12345 2030-06-01 09:00"
+                ),
+            }
+
+        query_id = parts[0].strip()
+        selector = parts[1].strip()
+        events, error = await self._resolve_events_for_reminder_command(user_id, query_id)
+        if error:
+            return error
+        if not events:
+            return {"status": "error", "message": f"❌ 找不到日程 {query_id}"}
+
+        now = now_in_timezone(user_id, self.db).replace(tzinfo=None)
+        deleted_count = 0
+        updated_rules: list[list[dict[str, int]]] = []
+        for event in events:
+            current_times = parse_remind_times(event.remind_times)
+            selected = set(self._select_reminders_for_confirmation(event, selector, now))
+            if not selected:
+                updated_rules.append(list(event.reminder_rules or []))
+                continue
+            next_times = [remind_time for remind_time in current_times if remind_time not in selected]
+            rules = (
+                derive_reminder_rules(event.start_time, next_times)
+                if event.start_time and next_times
+                else []
+            )
+            await self._db_update_item(
+                event.id,
+                {"remind_times": next_times, "reminder_rules": rules},
+                owner_id=user_id,
+            )
+            deleted_count += len(selected)
+            updated_rules.append(rules)
+
+        if deleted_count == 0:
+            return {
+                "status": "warning",
+                "message": f"⚠️ 没有找到匹配 `{selector}` 的提醒",
+            }
+
+        family = await self._load_event_family(user_id, query_id)
+        if family.collection and family.leaf is None and updated_rules:
+            first_rules = updated_rules[0]
+            if all(rules == first_rules for rules in updated_rules):
+                await run_sync(
+                    self.db.items.update_event_collection,
+                    family.collection["id"],
+                    {"reminder_rules": first_rules},
+                    user_id,
+                )
+
+        return {
+            "status": "success",
+            "message": (
+                f"🗑️ 已删除 {deleted_count} 个提醒\n"
+                f"💡 用 /pendo event reminders {query_id} 查看当前提醒"
+            ),
+        }
 
     async def confirm_event_reminders(
         self, user_id: str, args: str, context: PendoContext
@@ -1220,13 +1300,12 @@ class EventHandler(DbOpsMixin):
             return False
 
         normalized = cls._normalize_remind_time(remind_time)
-        selector_candidates = [selector]
-        if "T" in remind_time:
-            selector_candidates.append(remind_time.replace("T", " "))
-
-        for candidate in selector_candidates:
-            if candidate == remind_time or candidate == remind_time.replace("T", " "):
-                return True
+        reminder_candidates = {remind_time, remind_time.replace("T", " ")}
+        reminder_without_seconds = normalized.replace(second=0, microsecond=0).isoformat(timespec="minutes")
+        reminder_candidates.add(reminder_without_seconds)
+        reminder_candidates.add(reminder_without_seconds.replace("T", " "))
+        if selector in reminder_candidates:
+            return True
 
         formats = ("%Y-%m-%d %H:%M", "%m-%d %H:%M", "%m月%d日 %H:%M")
         for fmt in formats:

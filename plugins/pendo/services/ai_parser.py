@@ -3,18 +3,20 @@ AI自然语言解析服务
 使用LLM进行自然语言理解，失败时降级到规则解析
 """
 
-import re
 import json
 import logging
+import re
 import time
-from typing import Any, Optional
-from datetime import datetime, timedelta
-from dateutil import parser
 from collections import defaultdict
-from .rule_parser import RuleParser
+from datetime import datetime, timedelta
+from typing import Any
+
+from dateutil import parser
+
 from ..config import MOOD_ANALYSIS_CONFIG
 from ..utils.time_utils import now_in_timezone, parse_and_localize
 from ..utils.validators import normalize_reminder_rules
+from .rule_parser import RuleParser
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +142,7 @@ class AIParser:
 
     async def _call_llm(
         self, messages: list[dict[str, str]], temperature: float = 0.3
-    ) -> Optional[str]:
+    ) -> str | None:
         """调用LLM API"""
         try:
             from .llm_client import chat_completions_with_fallback_paths
@@ -150,6 +152,8 @@ class AIParser:
             api_key = secrets.get("api_key", "")
             model = secrets.get("model", "")
             proxy = secrets.get("proxy", "")
+            endpoint_path = secrets.get("endpoint_path", "/chat/completions")
+            thinking = secrets.get("thinking")
 
             if not api_key:
                 return None
@@ -160,6 +164,8 @@ class AIParser:
                 api_key=api_key,
                 model=model,
                 messages=messages,
+                endpoint_path=endpoint_path,
+                thinking=thinking if isinstance(thinking, dict) else None,
                 temperature=temperature,
                 max_tokens=1000,
                 timeout_seconds=30,
@@ -533,7 +539,7 @@ class AIParser:
             return [{"offset_seconds": 0}]
         return []
 
-    def _parse_offset(self, offset: str) -> Optional[timedelta]:
+    def _parse_offset(self, offset: str) -> timedelta | None:
         """解析偏移量字符串"""
         match = re.search(
             r"(\d+|[一二三四五六七八九十半两]+)\s*(分钟|min|m|小时|hour|h|天|day|d|周|week|w)",
@@ -561,7 +567,7 @@ class AIParser:
             return timedelta(weeks=float(num))
         return None
 
-    def _parse_chinese_number(self, text: str) -> Optional[float]:
+    def _parse_chinese_number(self, text: str) -> float | None:
         """解析中文数字
 
         支持格式：

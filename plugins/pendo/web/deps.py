@@ -3,7 +3,7 @@ from fastapi import Header, HTTPException, Request
 
 from ..services.db import Database
 from ..utils.db_ops import set_database_singleton
-from .auth import verify_token, AuthError
+from .auth import AuthError, verify_token
 
 # Module-level reference, set by server.py on startup
 _db_instance: Database | None = None
@@ -56,4 +56,4 @@ def get_current_user(
             ensure_demo_access(get_db(), owner_id)
         return owner_id
     except AuthError as e:
-        raise HTTPException(status_code=401, detail=e.message)
+        raise HTTPException(status_code=401, detail=e.message) from e

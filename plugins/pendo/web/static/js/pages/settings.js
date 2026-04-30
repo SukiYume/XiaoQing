@@ -100,6 +100,25 @@ function ensureStyles() {
             font-family: monospace; background: rgba(14,165,233,0.10); color: #0369a1; border-radius: 6px; padding: 2px 6px;
         }
         .settings-actions { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 18px; }
+        .settings-save-panel {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 16px;
+            padding: 16px 18px;
+        }
+        .settings-save-panel h3 { font-size: 16px; }
+        .settings-save-panel p { margin-top: 4px; }
+        .settings-save-actions {
+            justify-content: flex-end;
+            margin-top: 0;
+            min-width: min(360px, 100%);
+        }
+        .settings-save-actions .settings-status { text-align: right; }
+        .settings-save-actions .btn {
+            flex: 0 0 auto;
+            min-width: 112px;
+        }
         .settings-status { font-size: 12px; color: var(--color-text-secondary); }
         .settings-danger { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
         .settings-danger .btn { align-self: flex-start; }
@@ -127,6 +146,9 @@ function ensureStyles() {
             .settings-summary-grid { grid-template-columns: 1fr; }
             .settings-form-grid { grid-template-columns: 1fr; }
             .settings-actions { flex-direction: column; align-items: stretch; }
+            .settings-save-panel { grid-template-columns: 1fr; }
+            .settings-save-actions { min-width: 0; }
+            .settings-save-actions .settings-status { text-align: left; }
             .settings-callout-card { grid-template-columns: 1fr; }
         `)}
     `);
@@ -252,10 +274,12 @@ function renderPage() {
                     </div>
                 </section>
 
-                <section class="settings-panel">
-                    <h3>保存</h3>
-                    <p>修改后统一保存当前设置。</p>
-                    <div class="settings-actions">
+                <section class="settings-panel settings-save-panel">
+                    <div>
+                        <h3>保存更改</h3>
+                        <p>修改后统一写入当前设置。</p>
+                    </div>
+                    <div class="settings-actions settings-save-actions">
                         <div class="settings-status">${_saving ? '正在保存设置...' : '保存后会立即返回最新配置。'}</div>
                         <button class="btn btn-primary" id="btn-save-settings" ${_saving ? 'disabled' : ''}>${_saving ? '保存中...' : '保存设置'}</button>
                     </div>
@@ -274,7 +298,7 @@ function toggleRow(id, title, desc, checked) {
                 <div class="settings-toggle-desc">${desc}</div>
             </div>
             <label class="settings-switch">
-                <input type="checkbox" id="${id}" ${checked ? 'checked' : ''}>
+                <input type="checkbox" id="${id}" aria-label="${escapeHtml(title)}" ${checked ? 'checked' : ''}>
                 <span class="settings-slider"></span>
             </label>
         </div>

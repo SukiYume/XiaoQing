@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from typing import Optional
 
 from ...services.db import Database
+
 LEDGER_AMOUNT_EXPR = Database._LEDGER_AMOUNT_CENTS_EXPR
 LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({LEDGER_AMOUNT_EXPR}), 0) / 100.0, 2)"
 
@@ -58,16 +58,16 @@ def _resolve_bucket_mode(start: date, end: date) -> str:
     return "day" if (end - start).days <= 62 else "month"
 
 
-def _normalize_category(value: Optional[str]) -> str:
+def _normalize_category(value: str | None) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else "未分类"
 
 
 def _resolve_effective_range(
-    start_date: Optional[str],
-    end_date: Optional[str],
+    start_date: str | None,
+    end_date: str | None,
     *,
-    today: Optional[date] = None,
-) -> tuple[Optional[str], Optional[str]]:
+    today: date | None = None,
+) -> tuple[str | None, str | None]:
     if not start_date or not end_date:
         return start_date, end_date
 
@@ -81,13 +81,13 @@ def _resolve_effective_range(
 
 def _build_ledger_where(
     owner_id: str,
-    transaction_type: Optional[str] = None,
-    category: Optional[str] = None,
-    account_name: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    amount_min: Optional[float] = None,
-    amount_max: Optional[float] = None,
+    transaction_type: str | None = None,
+    category: str | None = None,
+    account_name: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    amount_min: float | None = None,
+    amount_max: float | None = None,
 ) -> tuple[list[str], list]:
     where = ["type = 'ledger'", "owner_id = ?", "deleted = 0"]
     params: list = [owner_id]
@@ -125,7 +125,7 @@ def _query_scalar(conn, sql: str, params: list) -> float:
     return float((row[0] if row else 0) or 0)
 
 
-def _query_bounds(conn, where: list[str], params: list) -> tuple[Optional[str], Optional[str]]:
+def _query_bounds(conn, where: list[str], params: list) -> tuple[str | None, str | None]:
     row = conn.execute(
         f"SELECT MIN(ledger_date), MAX(ledger_date) FROM items WHERE {' AND '.join(where)}",
         params,
@@ -146,16 +146,16 @@ def _shift_year(dt: date, years: int = -1) -> date:
 def _build_period_delta(
     conn,
     owner_id: str,
-    transaction_type: Optional[str],
-    category: Optional[str],
-    account_name: Optional[str],
-    start_date: Optional[str],
-    end_date: Optional[str],
-    amount_min: Optional[float],
-    amount_max: Optional[float],
+    transaction_type: str | None,
+    category: str | None,
+    account_name: str | None,
+    start_date: str | None,
+    end_date: str | None,
+    amount_min: float | None,
+    amount_max: float | None,
     current_total: float,
     compare_mode: str = "previous_period",
-) -> Optional[float]:
+) -> float | None:
     if not start_date or not end_date or compare_mode == "none":
         return None
 
@@ -203,13 +203,13 @@ def _delta_label(compare_mode: str) -> str:
 def build_ledger_insights(
     db: Database,
     owner_id: str,
-    transaction_type: Optional[str] = None,
-    category: Optional[str] = None,
-    account_name: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    amount_min: Optional[float] = None,
-    amount_max: Optional[float] = None,
+    transaction_type: str | None = None,
+    category: str | None = None,
+    account_name: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    amount_min: float | None = None,
+    amount_max: float | None = None,
     compare_mode: str = "previous_period",
 ) -> dict:
     conn = db.get_connection()

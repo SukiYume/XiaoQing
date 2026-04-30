@@ -3,32 +3,29 @@
 合并 connection_manager, cache_manager, item_repository, settings_repository, log_repository
 """
 
-import sqlite3
 import json
 import logging
-import uuid
-import time
+import sqlite3
 import threading
+import time
+import uuid
 from collections import OrderedDict
-from datetime import datetime, timedelta
-from typing import Any, Optional
 from contextlib import contextmanager
+from datetime import datetime, timedelta
+from typing import Any
 
+from ..models.item import (
+    ITEM_TYPE_CLASS_MAP,
+    EventItem,
+    Item,
+    ItemType,
+    TaskItem,
+)
 from ..utils.settings_utils import normalize_settings_json
 from ..utils.validators import (
-    validate_item_data,
-    sanitize_search_keyword,
     normalize_bool_flag,
-)
-from ..models.item import (
-    ItemType,
-    Item,
-    EventItem,
-    TaskItem,
-    NoteItem,
-    DiaryItem,
-    LedgerItem,
-    ITEM_TYPE_CLASS_MAP,
+    sanitize_search_keyword,
+    validate_item_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -629,8 +626,8 @@ class Database:
         cursor: sqlite3.Cursor,
         operations: list[tuple[str, dict[str, Any]]],
         owner_id: str,
-    ) -> tuple[list[tuple[str, str, Optional[str]]], list[str]]:
-        results: list[tuple[str, str, Optional[str]]] = []
+    ) -> tuple[list[tuple[str, str, str | None]], list[str]]:
+        results: list[tuple[str, str, str | None]] = []
         refreshed_item_ids: list[str] = []
         for action, payload in operations:
             item_id = payload.get("id", "")
@@ -698,7 +695,7 @@ class Database:
         self,
         operations: list[tuple[str, dict[str, Any]]],
         owner_id: str,
-    ) -> list[tuple[str, str, Optional[str]]]:
+    ) -> list[tuple[str, str, str | None]]:
         """单事务批量插入/更新，用于数据导入"""
         if not operations:
             return []
@@ -736,7 +733,7 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         refreshed_item_ids: list[str] = []
-        should_record_bundle = bool(bundle_id)
+        bool(bundle_id)
         with self._lock:
             try:
                 cursor.execute("BEGIN IMMEDIATE")
@@ -1037,7 +1034,7 @@ class Database:
     def get_collection_events(self, collection_id: str, owner_id: str) -> list[EventItem]:
         conn = self.get_connection()
         rows = conn.execute(
-            f"""
+            """
             SELECT * FROM items
             WHERE owner_id = ? AND type = ? AND deleted = 0 AND event_collection_id = ?
             ORDER BY COALESCE(event_index, 999999), start_time, id
@@ -1073,7 +1070,7 @@ class Database:
             self.cache_invalidate(f"event_collections|{owner_id}")
         return affected > 0
 
-    def get_item(self, item_id: str, owner_id: str | None = None) -> Optional[Item]:
+    def get_item(self, item_id: str, owner_id: str | None = None) -> Item | None:
         """获取单个条目，返回Item dataclass实例"""
         cache_key = self._cache_key("item", item_id, owner_id or "*")
         cached = self._cache_get_or_miss(cache_key)
@@ -1165,7 +1162,7 @@ class Database:
                 where.append("(account_name = ? OR counter_account_name = ?)")
                 params.extend([filters["account_name"], filters["account_name"]])
             if "tags" in filters:
-                where.append(f"tags LIKE ?")
+                where.append("tags LIKE ?")
                 params.append(self.tag_filter_pattern(filters["tags"]))
             if "keyword" in filters:
                 keyword = sanitize_search_keyword(str(filters["keyword"] or ""))
@@ -1244,7 +1241,7 @@ class Database:
                 tasks.append(item)
         return tasks
 
-    def get_last_unconfirmed_remind_time(self, item_id: str) -> Optional[str]:
+    def get_last_unconfirmed_remind_time(self, item_id: str) -> str | None:
         """Return the latest sent but unconfirmed remind time for an item."""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -2007,7 +2004,7 @@ class Database:
         cursor = conn.cursor()
         cursor.execute(
             f"""
-            SELECT COUNT(*) FROM items WHERE owner_id = ? AND type = '{ItemType.DIARY.value}' 
+            SELECT COUNT(*) FROM items WHERE owner_id = ? AND type = '{ItemType.DIARY.value}'
             AND deleted = 0 AND diary_date = ?
         """,
             (user_id, diary_date),
@@ -2524,7 +2521,7 @@ class Database:
                 prepared[key] = value
         return prepared
 
-    def _row_to_item(self, row: sqlite3.Row) -> Optional[Item]:
+    def _row_to_item(self, row: sqlite3.Row) -> Item | None:
         """行转Item dataclass
 
         将数据库行转换为对应的Item子类实例

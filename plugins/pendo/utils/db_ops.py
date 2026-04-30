@@ -1,18 +1,19 @@
-from __future__ import annotations
-
 """
 数据库通用操作封装
 用于复用各 Handler 的基础 CRUD 操作
 """
 
+from __future__ import annotations
+
 import json
-import os
 import logging
+import os
 from datetime import datetime
-from typing import Any, Callable, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from core.plugin_base import run_sync
-from ..core.exceptions import ItemNotFoundException, ItemAlreadyDeletedException
+
+from ..core.exceptions import ItemAlreadyDeletedException, ItemNotFoundException
 from ..models.item import Item, ItemType, get_item_type_value
 
 if TYPE_CHECKING:
@@ -42,8 +43,8 @@ def get_database(context: Any) -> Database:
         Database实例
     """
     global _db_singleton
-    from ..services.db import Database
     from ..config import PendoConfig
+    from ..services.db import Database
 
     db_path = os.path.join(
         os.path.dirname(os.path.dirname(__file__)), "data", PendoConfig.DB_FILENAME

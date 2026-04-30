@@ -4,9 +4,10 @@
 """
 
 import logging
-from typing import Optional
-from core.plugin_base import run_sync
+
 from core.args import parse
+from core.plugin_base import run_sync
+
 from ..models.item import get_item_type_value
 from ..services.db import Database
 from ..services.reminder import ReminderService
@@ -92,7 +93,7 @@ async def handle_confirm(
                 if future_reminders:
                     message += f"💡 此次提醒已确认，后续还有 {len(future_reminders)} 个提醒"
                 else:
-                    message += f"💡 此次提醒已确认，没有更多提醒了"
+                    message += "💡 此次提醒已确认，没有更多提醒了"
                 return success_result(message)
             else:
                 return success_result(f"✅ 已确认提醒 `{item_id}`")
@@ -240,7 +241,7 @@ async def handle_undo(user_id: str, args: str, db: Database) -> dict[str, str]:
         return error_result(f"撤销失败: {str(e)}")
 
 
-def _parse_snooze_time(time_arg: str, base_time: Optional[str] = None) -> str:
+def _parse_snooze_time(time_arg: str, base_time: str | None = None) -> str:
     """解析延后时间参数
 
     Args:
@@ -259,7 +260,7 @@ def _parse_snooze_time(time_arg: str, base_time: Optional[str] = None) -> str:
     return new_time
 
 
-async def _get_last_sent_remind_time(db: Database, item_id: str) -> Optional[str]:
+async def _get_last_sent_remind_time(db: Database, item_id: str) -> str | None:
     """获取最近已发送的提醒时间
 
     Args:
