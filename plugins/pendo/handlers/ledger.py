@@ -94,8 +94,8 @@ def _parse_ledger_type(value: str) -> str | None:
 class LedgerHandler(DbOpsMixin):
     """记账处理器
 
-    支持交互式记账(多轮对话)和快速记账：
-    - add: 交互式多轮记账
+    支持一条消息记账引导和快速记账：
+    - add: 一条消息记账；无参数时进入引导
     - quick: 单条命令快速记账
     - list: 查看账目列表
     - view: 查看账目详情
@@ -120,7 +120,11 @@ class LedgerHandler(DbOpsMixin):
         rest = parts[1] if len(parts) > 1 else ""
 
         handlers = {
-            "add": lambda: self.start_add_session(user_id, context, group_id),
+            "add": lambda: (
+                self.quick_add(user_id, rest, context, group_id)
+                if rest.strip()
+                else self.start_add_session(user_id, context, group_id)
+            ),
             "quick": lambda: self.quick_add(user_id, rest, context, group_id),
             "list": lambda: self.list_ledger(user_id, rest, context),
             "view": lambda: self.view_ledger(user_id, rest, context),
@@ -140,7 +144,7 @@ class LedgerHandler(DbOpsMixin):
             "💰 记账命令\n"
             "管理账目、查看收支和做快速记录。\n\n"
             "可用命令:\n"
-            "• /pendo ledger add - 交互式记账\n"
+            "• /pendo ledger add [金额 描述 ...] - 一条消息记账；无参数则进入引导\n"
             "• /pendo ledger quick <金额> <描述> [cat:分类] [in|transfer] [account:账户] [to:账户] [merchant:商户] - 快速记账\n"
             "• /pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [cat:分类] [amount:N或N..M] [ex] - 查看账目\n"
             "  范围: today/week/month/year/last7d/2026-03/start..end\n"
@@ -153,20 +157,20 @@ class LedgerHandler(DbOpsMixin):
         )
 
     # ============================================================
-    # 交互式记账 (多轮对话)
+    # 一条消息记账引导
     # ============================================================
 
     async def start_add_session(
         self, user_id: str, context: PendoContext, group_id: int | None = None
     ) -> CommandMessage:
-        """开始交互式记账会话"""
+        """开始一条消息记账引导会话"""
         await safe_create_session(
             context,
             initial_data={
                 "type": PendoConfig.SESSION_TYPE_LEDGER_ADD,
                 "owner_id": user_id,
                 "group_id": group_id,
-                "step": "amount",
+                "step": "entry",
                 "data": {},
             },
             timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
@@ -175,9 +179,12 @@ class LedgerHandler(DbOpsMixin):
         return {
             "status": "success",
             "message": (
-                "📝 开始记账，请先输入金额：\n\n"
-                "例如：28.5 / ¥88 / 1200\n"
-                "后面我再问描述、交易类型、账户和分类。\n"
+                "📝 开始记账，请发送一条记录：\n\n"
+                "金额 描述 [cat:分类] [in|out|transfer] [account:账户] [to:账户] [merchant:商户]\n\n"
+                "例如：28.5 午饭\n"
+                "例如：5000 工资 in cat:工资 account:招行\n"
+                "例如：1000 还款 transfer account:微信 to:招行\n\n"
+                "默认：支出 / 分类其他 / 账户现金 / 今天；不需要发空消息。\n"
                 "💡 输入\"退出\"可取消"
             ),
         }
@@ -192,7 +199,9 @@ class LedgerHandler(DbOpsMixin):
 
         text = text.strip()
 
-        if step == "transaction_type":
+        if step == "entry":
+            return await self._step_entry(user_id, text, data, session, context, group_id)
+        elif step == "transaction_type":
             return await self._step_transaction_type(text, data, session, context)
         elif step == "amount":
             return await self._step_amount(text, data, session, context)
@@ -208,6 +217,41 @@ class LedgerHandler(DbOpsMixin):
             return await self._step_description(user_id, text, data, session, context, group_id)
         else:
             return {"status": "error", "message": "❌ 会话状态异常"}
+
+    async def _step_entry(
+        self,
+        user_id: str,
+        text: str,
+        data: dict,
+        session: dict,
+        context: PendoContext,
+        group_id: int | None,
+    ) -> CommandMessage:
+        """Compact add flow: parse a full ledger entry from one message."""
+        parsed_data, error = self._parse_quick_ledger_data(text)
+        if error:
+            return {
+                "status": "info",
+                "message": (
+                    f"{error}\n\n"
+                    "请重新发送，例如：28.5 午饭 cat:餐饮 account:微信"
+                ),
+            }
+
+        data.update(parsed_data)
+        data["owner_id"] = user_id
+
+        if data.get("transaction_type") == "transfer" and not data.get("counter_account_name"):
+            data["_compact_entry"] = True
+            session.set("data", data)
+            session.set("step", "counter_account")
+            return {
+                "status": "success",
+                "message": "➡️ 转账需要转入账户，请输入转入账户（必须和转出账户不同）：",
+            }
+
+        await safe_end_session(context)
+        return await self._save_ledger_item(user_id, data, group_id)
 
     async def _step_transaction_type(
         self, text: str, data: dict, session: dict, context: PendoContext
@@ -265,6 +309,11 @@ class LedgerHandler(DbOpsMixin):
         data["counter_account_name"] = counter
         data["ledger_category"] = "转账"
         session.set("data", data)
+        if data.get("_compact_entry"):
+            await safe_end_session(context)
+            return await self._save_ledger_item(
+                data.get("owner_id", ""), data, session.get("group_id")
+            )
         session.set("step", "merchant")
         return {
             "status": "success",
@@ -456,11 +505,19 @@ class LedgerHandler(DbOpsMixin):
         格式: /pendo ledger quick <金额> <描述> [cat:分类] [in|transfer] [account:账户] [to:账户]
         默认为支出，加 in 标记为收入，加 transfer 标记为转账
         """
+        data, error = self._parse_quick_ledger_data(text)
+        if error:
+            return {"status": "error", "message": error}
+
+        return await self._save_ledger_item(user_id, data, group_id)
+
+    @staticmethod
+    def _parse_quick_ledger_data(text: str) -> tuple[dict[str, Any], str | None]:
         if not text:
-            return {
-                "status": "error",
-                "message": "❌ 用法: /pendo ledger quick <金额> <描述> [cat:分类] [in|transfer] [account:账户] [to:账户]",
-            }
+            return {}, (
+                "❌ 用法: /pendo ledger quick <金额> <描述> "
+                "[cat:分类] [in|transfer] [account:账户] [to:账户]"
+            )
 
         text, fields = _extract_field_args(text)
 
@@ -471,7 +528,7 @@ class LedgerHandler(DbOpsMixin):
             parsed_type = _parse_ledger_type(token)
             if parsed_type in {"income", "transfer"}:
                 transaction_type = parsed_type
-            elif token.lower() in {"out", "expense"}:
+            elif parsed_type == "expense" or token.lower() in {"out", "expense"}:
                 transaction_type = "expense"
             else:
                 remaining_tokens.append(token)
@@ -480,14 +537,14 @@ class LedgerHandler(DbOpsMixin):
         # 解析金额和描述
         parts = text.split(maxsplit=1)
         if not parts:
-            return {"status": "error", "message": "❌ 请提供金额"}
+            return {}, "❌ 请提供金额"
 
         try:
             amount = float(parts[0].replace("￥", "").replace("¥", "").replace(",", ""))
             if amount <= 0:
-                return {"status": "error", "message": "❌ 金额必须大于0"}
+                return {}, "❌ 金额必须大于0"
         except ValueError:
-            return {"status": "error", "message": f"❌ 无法识别金额: {parts[0]}"}
+            return {}, f"❌ 无法识别金额: {parts[0]}"
 
         title = parts[1] if len(parts) > 1 else ""
 
@@ -504,7 +561,7 @@ class LedgerHandler(DbOpsMixin):
             "remark": fields.get("remark", ""),
         }
 
-        return await self._save_ledger_item(user_id, data, group_id)
+        return data, None
 
     # ============================================================
     # 列表

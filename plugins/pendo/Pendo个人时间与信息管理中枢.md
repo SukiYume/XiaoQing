@@ -232,9 +232,10 @@ cat:工作 #记录
 
 账本以 `amount_cents` 为统计主字段，`amount` 只是展示镜像。`transaction_type` 支持 `expense`、`income`、`transfer`；转账不计入收入或支出汇总。
 
-### 交互、列表和编辑
+### 录入、列表和编辑
 
 ```text
+/pendo ledger add 28 午饭 cat:餐饮 account:微信
 /pendo ledger add
 /pendo ledger list
 /pendo ledger list 2026-03 type:expense cat:餐饮 amount:20..100 ex
@@ -244,6 +245,8 @@ cat:工作 #记录
 /pendo ledger delete <id>
 /pendo ledger summary 2026-03
 ```
+
+`ledger add` 支持一条消息完成录入；无参数时会先提示发送同样的一条记录。未写 `cat`、`account`、`date` 时默认使用其他分类、现金账户和今天，避免在 QQ 里依赖空消息选择默认值。
 
 ## 六、搜索、提醒和设置
 

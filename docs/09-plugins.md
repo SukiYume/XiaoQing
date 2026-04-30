@@ -230,7 +230,7 @@
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo ledger add` | 交互式多轮记账 |
+| `/pendo ledger add [金额 描述 ...]` | 一条消息记账；无参数时进入同样格式的引导 |
 | `/pendo ledger quick <金额> <描述> [cat:分类] [in\|out\|transfer] [account:账户] [to:账户] [merchant:商户] [date:日期] [remark:备注]` | 快速单行记账；默认支出，支持收入、账户和转账 |
 | `/pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [cat:分类] [amount:min..max]` | 查看账目列表 |
 | `/pendo ledger view <id>` | 查看账目详情 |
@@ -422,7 +422,8 @@ Web 控制台提供以下页面：
 **10. 记账管理**
 
 ```
-/pendo ledger add                            # 交互式记账（多轮对话引导填写）
+/pendo ledger add 35 午餐 account:微信       # 一条消息记账；默认支出、其他分类、现金账户、今天
+/pendo ledger add                            # 进入一条消息记账引导
 /pendo ledger quick 35 午餐 account:微信 merchant:食堂
 /pendo ledger quick 100 兼职收入 in account:支付宝
 /pendo ledger quick 1000 还款 transfer account:微信 to:招行

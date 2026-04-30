@@ -54,6 +54,7 @@ htmlcov/
 *cache/
 plugins/pendo/test_reports/
 plugins/pendo/test_tools/
+plugins/xiaoqing_chat/test_reports/
 .playwright-mcp/
 
 # 临时文件
