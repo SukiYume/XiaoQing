@@ -120,11 +120,11 @@ def create_event_collection(
     category = body.category
     if not str(category or "").strip() or str(category or "").strip() == "未分类":
         category = resolve_default_category(db, owner_id)
-    rules = normalize_reminder_rules(body.reminder_rules if body.reminder_rules is not None else [{"offset_seconds": 0}])
-    collection_id = _new_collection_id(db, owner_id)
-    now = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
-
     try:
+        rules = normalize_reminder_rules(body.reminder_rules if body.reminder_rules is not None else [{"offset_seconds": 0}])
+        collection_id = _new_collection_id(db, owner_id)
+        now = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
+
         child_rows: list[tuple[str, dict[str, Any]]] = []
         for index, child in enumerate(body.children, 1):
             node_key = f"m{index:02d}"
@@ -219,17 +219,20 @@ def update_collection(
     db: Database = Depends(get_db),
 ):
     updates = body.model_dump(exclude_unset=True)
-    if "reminder_rules" in updates and updates["reminder_rules"] is not None:
-        updates["reminder_rules"] = normalize_reminder_rules(updates["reminder_rules"])
-        for child in db.get_collection_events(collection_id, owner_id):
-            db.update_item(
-                child.id,
-                {
-                    "reminder_rules": updates["reminder_rules"],
-                    "remind_times": build_remind_times_from_rules(child.start_time, updates["reminder_rules"]),
-                },
-                owner_id=owner_id,
-            )
+    try:
+        if "reminder_rules" in updates and updates["reminder_rules"] is not None:
+            updates["reminder_rules"] = normalize_reminder_rules(updates["reminder_rules"])
+            for child in db.get_collection_events(collection_id, owner_id):
+                db.update_item(
+                    child.id,
+                    {
+                        "reminder_rules": updates["reminder_rules"],
+                        "remind_times": build_remind_times_from_rules(child.start_time, updates["reminder_rules"]),
+                    },
+                    owner_id=owner_id,
+                )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     success = db.update_event_collection(collection_id, updates, owner_id)
     if not success:
         raise HTTPException(status_code=404, detail="Event collection not found")

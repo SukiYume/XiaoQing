@@ -1,3 +1,5 @@
+import { escapeHtml } from '../utils/ui.js';
+
 let currentOnClose = null;
 
 export function showModal(title, contentHTML, options = {}) {
@@ -6,7 +8,7 @@ export function showModal(title, contentHTML, options = {}) {
 
     content.innerHTML = `
         <div class="modal-header">
-            <h3>${title}</h3>
+            <h3>${escapeHtml(title)}</h3>
             <button class="btn btn-icon modal-close">&times;</button>
         </div>
         <div class="modal-body">${contentHTML}</div>
@@ -52,12 +54,12 @@ export function showConfirmModal({
                     background:${tone === 'danger' ? 'rgba(239,68,68,0.10)' : 'rgba(59,130,246,0.10)'};
                     color:${tone === 'danger' ? 'var(--color-ledger)' : 'var(--color-primary, #2563eb)'};
                     font-size:22px;">${tone === 'danger' ? '🗑️' : 'ℹ️'}</div>
-                <p style="margin:0;font-size:14px;line-height:1.7;color:var(--color-text);">${message}</p>
+                <p style="margin:0;font-size:14px;line-height:1.7;color:var(--color-text);">${escapeHtml(message)}</p>
             </div>`;
 
         const footer = `
-            <button class="btn btn-secondary" id="confirm-cancel">${cancelText}</button>
-            <button class="btn ${tone === 'danger' ? 'btn-danger' : 'btn-primary'}" id="confirm-ok">${confirmText}</button>`;
+            <button class="btn btn-secondary" id="confirm-cancel">${escapeHtml(cancelText)}</button>
+            <button class="btn ${tone === 'danger' ? 'btn-danger' : 'btn-primary'}" id="confirm-ok">${escapeHtml(confirmText)}</button>`;
 
         const content = showModal(title, bodyHTML, {
             footer,

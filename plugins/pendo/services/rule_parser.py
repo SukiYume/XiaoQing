@@ -64,7 +64,13 @@ class RuleParser:
                 result["start_time"] = time_info.get("start_time")
                 result["end_time"] = time_info.get("end_time")
             elif result["type"] == ItemType.TASK:
-                result["due_time"] = time_info.get("due_time") or time_info.get("start_time")
+                deadline_at = time_info.get("deadline_at")
+                start_time = time_info.get("start_time")
+                if deadline_at:
+                    result["deadline_at"] = deadline_at
+                    result["plan_date"] = deadline_at[:10]
+                elif start_time:
+                    result["plan_date"] = start_time[:10]
 
         # 提取地点
         location = self._extract_location(text)
@@ -90,8 +96,8 @@ class RuleParser:
         # 检查缺失字段
         if result["type"] == ItemType.EVENT and not result.get("start_time"):
             result["needs_confirmation"].append("start_time")
-        if result["type"] == ItemType.TASK and not result.get("due_time"):
-            result["needs_confirmation"].append("due_time")
+        if result["type"] == ItemType.TASK and not result.get("plan_date"):
+            result["needs_confirmation"].append("plan_date")
 
         return result
 
@@ -169,7 +175,7 @@ class RuleParser:
         # 截止时间
         if "截止" in text or "deadline" in text.lower():
             if "start_time" in result:
-                result["due_time"] = result.pop("start_time")
+                result["deadline_at"] = result.pop("start_time")
                 result.pop("end_time", None)
 
         return result if result else None

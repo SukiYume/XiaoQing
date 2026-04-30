@@ -117,13 +117,13 @@ class AIParser:
 
 返回 JSON:
 {{
-  "mood": "happy|sad|calm|excited|angry",
+  "mood": "happy|calm|excited|sad|angry|tired|anxious|grateful|neutral",
   "mood_score": 1-10
 }}
 
 规则:
-- 只允许以上 5 种 mood
-- 即使内容偏平淡，也应优先判断为 calm，而不是返回空
+- 只允许以上 mood
+- 即使内容偏平淡，也应优先判断为 neutral 或 calm，而不是返回空
 - score 表示情绪强度，1 最弱，10 最强
 - 只返回 JSON，不要解释。"""
 
@@ -279,7 +279,14 @@ class AIParser:
                 return self._fallback_diary_mood(text)
 
             mood = str(parsed.get("mood") or "").strip().lower()
-            if mood not in {"happy", "sad", "calm", "excited", "angry"}:
+            allowed_moods = set(MOOD_ANALYSIS_CONFIG.get("allowed_moods", [])) or {
+                "happy",
+                "sad",
+                "calm",
+                "excited",
+                "angry",
+            }
+            if mood not in allowed_moods:
                 return self._fallback_diary_mood(text)
 
             raw_score = parsed.get("mood_score")
@@ -412,6 +419,9 @@ class AIParser:
         calm_words = MOOD_ANALYSIS_CONFIG.get("calm_words", [])
         excited_words = MOOD_ANALYSIS_CONFIG.get("excited_words", [])
         angry_words = MOOD_ANALYSIS_CONFIG.get("angry_words", [])
+        tired_words = MOOD_ANALYSIS_CONFIG.get("tired_words", [])
+        anxious_words = MOOD_ANALYSIS_CONFIG.get("anxious_words", [])
+        grateful_words = MOOD_ANALYSIS_CONFIG.get("grateful_words", [])
         base_scores = MOOD_ANALYSIS_CONFIG.get("base_scores", {})
         raw_increment = MOOD_ANALYSIS_CONFIG.get("score_increment", 1)
         score_increment = raw_increment if isinstance(raw_increment, int) else 1
@@ -421,11 +431,20 @@ class AIParser:
         calm_count = sum(1 for word in calm_words if word in content)
         excited_count = sum(1 for word in excited_words if word in content)
         angry_count = sum(1 for word in angry_words if word in content)
+        tired_count = sum(1 for word in tired_words if word in content)
+        anxious_count = sum(1 for word in anxious_words if word in content)
+        grateful_count = sum(1 for word in grateful_words if word in content)
 
+        if grateful_count > 0:
+            return "grateful", min(10, int(base_scores.get("grateful", 7)) + grateful_count)
         if excited_count > 0:
             return "excited", min(10, int(base_scores.get("excited", 8)) + excited_count + pos_count)
         if angry_count > neg_count or angry_count >= 2:
             return "angry", max(1, int(base_scores.get("angry", 3)) - angry_count)
+        if anxious_count > 0:
+            return "anxious", max(1, int(base_scores.get("anxious", 3)) - anxious_count)
+        if tired_count > 0:
+            return "tired", max(1, int(base_scores.get("tired", 4)) - tired_count)
         if pos_count > neg_count and pos_count > calm_count:
             return "happy", min(10, int(base_scores.get("happy", 6)) + pos_count * score_increment)
         if neg_count > pos_count:
@@ -433,7 +452,7 @@ class AIParser:
         if calm_count > 0:
             return "calm", int(base_scores.get("calm", 5))
 
-        return None, None
+        return "neutral", int(base_scores.get("neutral", 5))
 
     def build_remind_times_from_offsets(
         self,

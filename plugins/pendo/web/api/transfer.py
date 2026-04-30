@@ -6,7 +6,7 @@ import uuid
 import asyncio
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
@@ -14,13 +14,7 @@ from pydantic import BaseModel, Field
 
 from ...models.item import get_item_type_value
 from ...services.db import Database, DuplicateBundleImportError
-from ...utils.validators import (
-    normalize_diary_fields,
-    normalize_event_fields,
-    normalize_ledger_fields,
-    normalize_note_fields,
-    normalize_task_fields,
-)
+from ...utils.validators import get_item_normalizer
 from ..deps import get_current_user, get_db
 from ..services.bundle_import import inspect_bundle_bytes, normalize_import_payload
 from ..services.transfer_bundle import (
@@ -54,15 +48,6 @@ def _get_import_lock(owner_id: str, bundle_id: str | None) -> asyncio.Lock:
 # 上传大小限制：100 MB
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 
-_NORMALIZER_MAP = {
-    "event": normalize_event_fields,
-    "task": normalize_task_fields,
-    "note": normalize_note_fields,
-    "diary": normalize_diary_fields,
-    "ledger": normalize_ledger_fields,
-}
-
-
 class ExportSelection(BaseModel):
     types: list[str] = Field(default_factory=list)
     preset: str = "all"
@@ -79,8 +64,16 @@ class ExportDownloadRequest(BaseModel):
     selection: ExportSelection
 
 
+def _resolve_timezone(timezone: str | None) -> ZoneInfo:
+    name = timezone or "Asia/Shanghai"
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid timezone: {name}") from exc
+
+
 def resolve_range(selection: ExportSelection, now: Optional[datetime] = None) -> tuple[Optional[date], Optional[date]]:
-    zone = ZoneInfo(selection.timezone or "Asia/Shanghai")
+    zone = _resolve_timezone(selection.timezone)
     current = now.astimezone(zone) if now else datetime.now(zone)
     today = current.date()
     if selection.preset == "all":
@@ -147,7 +140,11 @@ def _coerce_date_tz(value: Any, zone: ZoneInfo) -> Optional[date]:
 
 def _extract_item_date(item, item_type: str, zone: Optional[ZoneInfo] = None) -> Optional[date]:
     if item_type == "task":
-        primary = getattr(item, "due_time", None) or getattr(item, "created_at", None)
+        primary = (
+            getattr(item, "plan_date", None)
+            or getattr(item, "deadline_at", None)
+            or getattr(item, "created_at", None)
+        )
         return _coerce_date_tz(primary, zone) if zone else _coerce_date(primary)
     field_name = TIME_FIELD_BY_TYPE[item_type]
     value = getattr(item, field_name, None)
@@ -196,7 +193,7 @@ def _normalize_selection(selection: ExportSelection) -> list[str]:
 def _validate_export_record(record: dict[str, Any]) -> tuple[dict[str, Any], Optional[str]]:
     """导出时对记录做规范化校验，返回 (record, warning_or_none)"""
     item_type = record.get("_type")
-    normalizer = _NORMALIZER_MAP.get(item_type)
+    normalizer = get_item_normalizer(str(item_type or ""))
     if not normalizer:
         return record, None
     try:
@@ -209,7 +206,7 @@ def _validate_export_record(record: dict[str, Any]) -> tuple[dict[str, Any], Opt
 def _build_export_dataset(db: Database, owner_id: str, selection: ExportSelection) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int], tuple[Optional[date], Optional[date]], list[str]]:
     selected_types = _normalize_selection(selection)
     start, end = resolve_range(selection)
-    zone = ZoneInfo(selection.timezone or "Asia/Shanghai")
+    zone = _resolve_timezone(selection.timezone)
     items_by_type = query_items_for_types(db, owner_id, selected_types)
 
     records_by_type: dict[str, list[dict[str, Any]]] = {}
@@ -341,10 +338,74 @@ def _selected_import_types(options: dict[str, Any], parsed) -> list[str]:
     return selected
 
 
+def _get_item_identity(db: Database, item_id: str | None) -> dict[str, Any] | None:
+    if not item_id:
+        return None
+    row = db.get_connection().execute(
+        "SELECT id, owner_id, type, deleted FROM items WHERE id = ?",
+        (item_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "owner_id": row["owner_id"],
+        "type": row["type"],
+        "deleted": int(row["deleted"] or 0),
+    }
+
+
+def _new_import_item_id(db: Database) -> str:
+    while True:
+        candidate = uuid.uuid4().hex[:16]
+        if _get_item_identity(db, candidate) is None:
+            return candidate
+
+
+def _global_conflict_reason(identity: dict[str, Any], owner_id: str) -> str:
+    if identity.get("owner_id") == owner_id:
+        return "ID 已被当前数据空间的已删除记录占用"
+    return "ID 已被其他数据空间占用"
+
+
+def _duplicate_import_payload(
+    db: Database,
+    payload: dict[str, Any],
+    original_id: str | None,
+) -> dict[str, Any]:
+    duplicate = dict(payload)
+    duplicate.pop("id", None)
+    duplicate["id"] = _new_import_item_id(db)
+    if original_id:
+        context = duplicate.get("context")
+        duplicate["context"] = dict(context) if isinstance(context, dict) else {}
+        ctx_import = dict(duplicate["context"].get("import") or {})
+        ctx_import["source_id"] = original_id
+        duplicate["context"]["import"] = ctx_import
+    return duplicate
+
+
+def _get_event_collection_identity(db: Database, collection_id: str | None) -> dict[str, Any] | None:
+    if not collection_id:
+        return None
+    row = db.get_connection().execute(
+        "SELECT id, owner_id, kind, deleted FROM event_collections WHERE id = ?",
+        (collection_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "owner_id": row["owner_id"],
+        "kind": row["kind"],
+        "deleted": int(row["deleted"] or 0),
+    }
+
+
 def _new_import_collection_id(db: Database, owner_id: str) -> str:
     while True:
         candidate = uuid.uuid4().hex[:16]
-        if not db.get_event_collection(candidate, owner_id):
+        if _get_event_collection_identity(db, candidate) is None:
             return candidate
 
 
@@ -368,12 +429,29 @@ def _prepare_collection_import_operations(
             original_id = _new_import_collection_id(db, owner_id)
             payload["id"] = original_id
 
-        existing = db.get_event_collection(original_id, owner_id)
+        identity = _get_event_collection_identity(db, original_id)
+        existing = (
+            db.get_event_collection(original_id, owner_id)
+            if identity and identity.get("owner_id") == owner_id and not identity.get("deleted")
+            else None
+        )
         if existing and str(existing.get("kind") or "") != str(payload.get("kind") or ""):
             raise HTTPException(
                 status_code=422,
                 detail=f"Event collection kind mismatch for {original_id}",
             )
+
+        if identity and not existing:
+            duplicate_id = _new_import_collection_id(db, owner_id)
+            payload["id"] = duplicate_id
+            context = payload.get("context")
+            payload["context"] = dict(context) if isinstance(context, dict) else {}
+            context_import = dict(payload["context"].get("import") or {})
+            context_import["source_id"] = original_id
+            payload["context"]["import"] = context_import
+            collection_id_map[original_id] = duplicate_id
+            operations.append(("insert", payload))
+            continue
 
         if existing and conflict_policy == "overwrite":
             collection_id_map[original_id] = original_id
@@ -382,8 +460,9 @@ def _prepare_collection_import_operations(
         if existing and conflict_policy == "duplicate":
             duplicate_id = _new_import_collection_id(db, owner_id)
             payload["id"] = duplicate_id
-            payload.setdefault("context", {})
-            context_import = payload["context"].get("import", {})
+            context = payload.get("context")
+            payload["context"] = dict(context) if isinstance(context, dict) else {}
+            context_import = dict(payload["context"].get("import") or {})
             context_import["source_id"] = original_id
             payload["context"]["import"] = context_import
             collection_id_map[original_id] = duplicate_id
@@ -406,6 +485,39 @@ def _result_entry(record: dict[str, Any], reason: Optional[str] = None) -> dict[
     if reason:
         entry["reason"] = reason
     return entry
+
+
+def _rewrite_import_item_relationships(payload: dict[str, Any], item_id_map: dict[str, str]) -> dict[str, Any]:
+    if not item_id_map:
+        return payload
+
+    rewritten = dict(payload)
+    if rewritten.get("type") == "note":
+        references = []
+        for ref in rewritten.get("references") or []:
+            if not isinstance(ref, dict):
+                continue
+            next_ref = dict(ref)
+            ref_id = str(next_ref.get("id") or "").strip()
+            if ref_id in item_id_map:
+                next_ref["id"] = item_id_map[ref_id]
+            references.append(next_ref)
+        if "references" in rewritten:
+            rewritten["references"] = references
+
+        related_items = []
+        for raw_id in rewritten.get("related_items") or []:
+            related_id = str(raw_id).strip()
+            if related_id:
+                related_items.append(item_id_map.get(related_id, related_id))
+        if "related_items" in rewritten:
+            rewritten["related_items"] = related_items
+
+    source_item_id = str(rewritten.get("source_item_id") or "").strip()
+    if source_item_id in item_id_map:
+        rewritten["source_item_id"] = item_id_map[source_item_id]
+
+    return rewritten
 
 
 @router.post("/transfer/export/preview")
@@ -574,17 +686,39 @@ async def execute_import(
 
         # 构建批量操作列表（在事务前完成决策）
         operations: list[tuple[str, dict[str, Any]]] = []
+        item_id_map: dict[str, str] = {}
         for record in valid_records:
             if record["type"] not in selected_types:
                 continue
 
             item_id = record.get("id")
-            existing = db.get_item(item_id, owner_id=owner_id) if item_id else None
+            identity = _get_item_identity(db, item_id)
+            existing = db.get_item(item_id, owner_id=owner_id) if item_id and identity and identity.get("owner_id") == owner_id and not identity.get("deleted") else None
             payload = dict(record)
             if payload.get("type") == "event":
                 collection_id = str(payload.get("event_collection_id") or "").strip()
                 if collection_id and collection_id in collection_id_map:
                     payload["event_collection_id"] = collection_id_map[collection_id]
+
+            if identity and not existing:
+                reason = _global_conflict_reason(identity, owner_id)
+                if conflict_policy == "skip":
+                    results["skipped"] += 1
+                    details["skipped"].append(_result_entry(record, f"{reason}，按策略跳过"))
+                    continue
+                if conflict_policy == "overwrite":
+                    results["failed"] += 1
+                    details["failed"].append(_result_entry(record, f"{reason}，拒绝覆盖"))
+                    continue
+
+                original_id = str(item_id) if item_id else None
+                payload = _duplicate_import_payload(db, payload, original_id)
+                if original_id:
+                    item_id_map[original_id] = payload["id"]
+                operations.append(("insert", payload))
+                results["inserted"] += 1
+                details["inserted"].append(_result_entry(record, "已生成副本，保留原始 source_id"))
+                continue
 
             if existing:
                 existing_type = str(getattr(existing.type, "value", existing.type))
@@ -608,13 +742,10 @@ async def execute_import(
                     details["updated"].append(_result_entry(record))
                     continue
                 # duplicate: 生成足够长的 ID 避免碰撞 (16 hex = 64 bit)
-                original_id = item_id
-                payload.pop("id", None)
-                payload["id"] = uuid.uuid4().hex[:16]
-                payload.setdefault("context", {})
-                ctx_import = payload["context"].get("import", {})
-                ctx_import["source_id"] = original_id
-                payload["context"]["import"] = ctx_import
+                original_id = str(item_id) if item_id else None
+                payload = _duplicate_import_payload(db, payload, original_id)
+                if original_id:
+                    item_id_map[str(original_id)] = payload["id"]
                 operations.append(("insert", payload))
                 results["inserted"] += 1
                 details["inserted"].append(_result_entry(record, "已生成副本，保留原始 source_id"))
@@ -622,10 +753,16 @@ async def execute_import(
 
             # 新记录插入
             if not item_id:
-                payload["id"] = uuid.uuid4().hex[:16]
+                payload["id"] = _new_import_item_id(db)
             operations.append(("insert", payload))
             results["inserted"] += 1
             details["inserted"].append(_result_entry(record))
+
+        if item_id_map:
+            operations = [
+                (action, _rewrite_import_item_relationships(payload, item_id_map))
+                for action, payload in operations
+            ]
 
         total_processed = results["inserted"] + results["updated"] + results["skipped"] + results["failed"]
         try:
@@ -646,6 +783,11 @@ async def execute_import(
                 detail={"message": "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」", "bundle_id": str(exc)},
             ) from exc
         except Exception as exc:
+            if "UNIQUE constraint failed: items.id" in str(exc):
+                raise HTTPException(
+                    status_code=409,
+                    detail="导入记录 ID 与现有数据冲突，请选择跳过或生成副本后重试",
+                ) from exc
             raise HTTPException(
                 status_code=500,
                 detail=f"导入事务失败，已全部回滚：{exc}",

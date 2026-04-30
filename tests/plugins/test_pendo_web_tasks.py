@@ -24,9 +24,10 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
             "type": "task",
             "title": "今天截止",
             "category": "工作",
-            "status": "todo",
+            "status": "open",
             "priority": 1,
-            "due_time": "2026-03-26T18:00:00",
+            "plan_date": "2026-03-26",
+            "deadline_at": "2026-03-26T18:00:00",
             "created_at": "2026-03-25T09:00:00",
         })
         db.insert_item({
@@ -35,9 +36,10 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
             "type": "task",
             "title": "已经逾期",
             "category": "工作",
-            "status": "in_progress",
+            "status": "open",
             "priority": 2,
-            "due_time": "2026-03-24T18:00:00",
+            "plan_date": "2026-03-24",
+            "deadline_at": "2026-03-24T18:00:00",
             "created_at": "2026-03-20T09:00:00",
         })
         db.insert_item({
@@ -46,9 +48,10 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
             "type": "task",
             "title": "下周处理",
             "category": "生活",
-            "status": "todo",
+            "status": "open",
             "priority": 4,
-            "due_time": "2026-03-29T12:00:00",
+            "plan_date": "2026-03-29",
+            "deadline_at": "2026-03-29T12:00:00",
             "created_at": "2026-03-22T09:00:00",
         })
         db.insert_item({
@@ -59,7 +62,8 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
             "category": "工作",
             "status": "done",
             "priority": 3,
-            "due_time": "2026-03-25T10:00:00",
+            "plan_date": "2026-03-25",
+            "deadline_at": "2026-03-25T10:00:00",
             "completed_at": "2026-03-26T08:00:00",
             "created_at": "2026-03-24T09:00:00",
         })
@@ -85,7 +89,7 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
         assert result["up_next_tasks"][0]["id"] == "t3"
         assert result["done_recent"][0]["id"] == "t4"
         assert result["category_load"][0]["category"] == "工作"
-        assert result["board_columns"]["todo"][0]["id"] == "t1"
+        assert result["board_columns"]["open"][0]["id"] == "t1"
         assert result["board_columns"]["cancelled"][0]["id"] == "t5"
         assert len(result["completion_bars"]) == 7
     finally:
@@ -154,7 +158,7 @@ def test_build_task_overview_loads_more_than_500_tasks():
                 "type": "task",
                 "title": f"任务 {index}",
                 "category": "工作",
-                "status": "todo",
+                "status": "open",
                 "priority": 3,
                 "created_at": f"2026-03-01T00:00:{index % 60:02d}",
             })
@@ -163,6 +167,6 @@ def test_build_task_overview_loads_more_than_500_tasks():
 
         assert result["summary"]["active_count"] == 505
         assert len(result["all_tasks"]) == 505
-        assert len(result["board_columns"]["todo"]) == 505
+        assert len(result["board_columns"]["open"]) == 505
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

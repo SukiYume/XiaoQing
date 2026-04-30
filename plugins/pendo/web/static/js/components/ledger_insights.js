@@ -1,12 +1,5 @@
 import { formatAmount, formatMoneyCompact } from '../utils/format.js';
-
-function esc(text) {
-    return String(text ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
+import { escapeHtml as esc } from '../utils/ui.js';
 
 function fmtPercent(value) {
     if (value == null) return '无对比';
@@ -288,9 +281,10 @@ export function renderLedgerInsightsPanel(data) {
     const categories = data?.expense_categories || [];
     const hotspots = data?.expense_hotspots || [];
     const candles = data?.expense_candles || [];
-    const focusDirection = summary.focus_direction === 'income' ? 'income' : 'expense';
-    const focusLabel = focusDirection === 'income' ? '收入' : '支出';
-    const focusVerb = focusDirection === 'income' ? '入账' : '消费';
+    const focusTransactionType = ['income', 'expense', 'transfer'].includes(summary.focus_transaction_type)
+        ? summary.focus_transaction_type : 'expense';
+    const focusLabel = focusTransactionType === 'income' ? '收入' : (focusTransactionType === 'transfer' ? '转账' : '支出');
+    const focusVerb = focusTransactionType === 'income' ? '入账' : (focusTransactionType === 'transfer' ? '流转' : '消费');
     const bucketLabel = summary.bucket_mode === 'month' ? '按月' : '按日';
 
     const focusTotal = Number(summary.focus_total || 0);

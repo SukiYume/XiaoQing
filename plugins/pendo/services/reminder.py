@@ -45,15 +45,15 @@ class ReminderService:
             if not isinstance(item_data, dict)
             else item_data.get("start_time")
         )
-        due_time = (
-            getattr(item_data, "due_time", None)
+        deadline_at = (
+            getattr(item_data, "deadline_at", None)
             if not isinstance(item_data, dict)
-            else item_data.get("due_time")
+            else item_data.get("deadline_at")
         )
         if start_time:
             base_time = self._parse_user_time(start_time, owner_id)
-        elif due_time:
-            base_time = self._parse_user_time(due_time, owner_id)
+        elif deadline_at:
+            base_time = self._parse_user_time(deadline_at, owner_id)
 
         if not base_time:
             return []
@@ -98,6 +98,9 @@ class ReminderService:
             items = self.db.get_all_events_with_reminders(future_hours=0)
 
             for item in items:
+                if not self._is_active_reminder_item(item):
+                    continue
+
                 settings = self.db.get_user_settings(item.owner_id)
                 custom_settings = parse_custom_settings(settings)
                 if not custom_settings.get("reminder_enabled", True):
@@ -166,7 +169,7 @@ class ReminderService:
                 remind_time_str = log["remind_time"]
                 repeat_count = log["repeat_count"]
                 item = self.db.get_item(item_id)
-                if not item:
+                if not item or not self._is_active_reminder_item(item):
                     continue
 
                 user_now = current_time or self._current_user_time(item.owner_id)
@@ -196,6 +199,13 @@ class ReminderService:
             logger.warning("检查未确认提醒重复时出错: %s", e)
 
         return messages
+
+    @staticmethod
+    def _is_active_reminder_item(item) -> bool:
+        item_type = getattr(getattr(item, "type", None), "value", getattr(item, "type", ""))
+        if item_type == "task":
+            return getattr(item, "status", "open") == "open"
+        return True
 
     def _should_suppress(self, item, check_time: datetime) -> bool:
         """判断是否应抑制发送（静默时间 + 非重要事件）"""
@@ -246,9 +256,14 @@ class ReminderService:
         future = now + timedelta(hours=hours)
         pending = []
 
-        items = self.db.get_items(user_id, filters={"type": "event"})
+        items = (
+            self.db.get_items(user_id, filters={"type": "event"}, limit=1000)
+            + self.db.get_items(user_id, filters={"type": "task"}, limit=1000)
+        )
 
         for item in items:
+            if not self._is_active_reminder_item(item):
+                continue
             remind_times = item.remind_times or []
             for remind_time_str in remind_times:
                 try:
@@ -258,7 +273,7 @@ class ReminderService:
                             {
                                 "item_id": item.id,
                                 "title": item.title,
-                                "type": "event",
+                                "type": getattr(getattr(item, "type", None), "value", getattr(item, "type", "")),
                                 "remind_time": remind_time_str,
                             }
                         )
@@ -329,6 +344,7 @@ class ReminderService:
             remind_time: 提醒时间字符串
             repeat_count: 当前是第几次重复提醒（首次为 None）
         """
+        item_type = getattr(getattr(item, "type", None), "value", getattr(item, "type", ""))
         title = item.title or "无标题"
         if repeat_count is not None:
             max_repeats = PendoConfig.REMINDER_MAX_REPEATS
@@ -337,14 +353,20 @@ class ReminderService:
             header = "⏰ **提醒**"
         lines = [header]
 
-        collection = self._get_event_collection_for_item(item)
+        collection = (
+            self._get_event_collection_for_item(item)
+            if item_type == "event" or getattr(item, "event_collection_id", None)
+            else None
+        )
         if collection:
             lines.append(f"🗓️ {collection.get('title') or '无标题'}")
             lines.append(f"📌 {title}")
+        elif item_type == "task":
+            lines.append(f"✅ {title}")
         else:
             lines.append(f"🗓️ {title}")
 
-        target_time = getattr(item, "start_time", None)
+        target_time = getattr(item, "start_time", None) or getattr(item, "deadline_at", None)
         if collection:
             if target_time:
                 dt_str = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
@@ -353,13 +375,16 @@ class ReminderService:
         else:
             if target_time:
                 dt_str = ItemFormatter.format_datetime(target_time, "%m月%d日 %H:%M")
-                lines.append(f"🎯 事件时间: {dt_str}")
+                label = "截止时间" if item_type == "task" else "事件时间"
+                lines.append(f"🎯 {label}: {dt_str}")
+            elif item_type == "task" and getattr(item, "plan_date", None):
+                lines.append(f"📅 计划日期: {item.plan_date}")
 
         reminder_slot = self._format_reminder_slot(remind_time, target_time)
         if reminder_slot:
             lines.append(f"🔔 对应提醒点: {reminder_slot}")
 
-        if item.location:
+        if getattr(item, "location", None):
             lines.append(f"📍 {item.location}")
 
         notes = getattr(item, "notes", None)

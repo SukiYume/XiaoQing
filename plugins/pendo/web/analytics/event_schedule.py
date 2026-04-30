@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from ...models.item import EventItem
+from ...utils.time_utils import TimezoneHelper
 
 
 def ensure_datetime(value: str | None, *, is_end: bool = False) -> datetime | None:
@@ -15,17 +16,15 @@ def ensure_datetime(value: str | None, *, is_end: bool = False) -> datetime | No
     if "T" not in text:
         suffix = "T23:59:59" if is_end else "T00:00:00"
         text = f"{text}{suffix}"
-    parsed = datetime.fromisoformat(text)
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     if parsed.tzinfo is not None:
-        # The existing web analytics stack treats item datetimes as local wall-clock
-        # values. Imported bundles may carry timezone offsets, so normalize them to
-        # the same naive representation before range comparisons.
-        return parsed.replace(tzinfo=None)
+        return parsed.astimezone(TimezoneHelper.DEFAULT_TZ).replace(tzinfo=None)
     return parsed
 
 
 def date_key(value: str | None) -> str:
-    return (value or "")[:10]
+    parsed = ensure_datetime(value)
+    return parsed.strftime("%Y-%m-%d") if parsed else ""
 
 
 def daterange(start_day: date, end_day: date) -> list[str]:
@@ -63,32 +62,42 @@ def build_event_schedule(event: EventItem, range_start_day: date, range_end_day:
     category = getattr(event, "category", None) or ""
     kind = event_kind(event)
     display_days = event_display_days(event, range_start_day, range_end_day)
-    start_time = getattr(event, "start_time", None) or ""
-    end_time = getattr(event, "end_time", None) or ""
+    start_dt = ensure_datetime(getattr(event, "start_time", None))
+    end_dt = ensure_datetime(getattr(event, "end_time", None), is_end=True)
+    start_time = start_dt.isoformat(timespec="seconds") if start_dt else ""
+    end_time = end_dt.isoformat(timespec="seconds") if end_dt else ""
+    start_day = start_dt.strftime("%Y-%m-%d") if start_dt else ""
+    end_day = end_dt.strftime("%Y-%m-%d") if end_dt else start_day
 
-    time_summary = start_time[11:16] if start_time else "未设置时间"
+    time_summary = start_dt.strftime("%H:%M") if start_dt else "未设置时间"
     if end_time:
-        time_summary = f"{time_summary} - {end_time[11:16]}"
+        time_summary = f"{time_summary} - {end_dt.strftime('%H:%M')}"
 
     day_entries: dict[str, list[dict[str, Any]]] = {}
     for day in display_days:
-        entries: list[dict[str, Any]] = []
-        if date_key(start_time) == day:
-            entries.append({
-                "day": day,
-                "kind": kind,
-                "title": title,
-                "subtitle": time_summary,
-                "time": start_time or None,
-                "time_label": start_time[11:16] if start_time else "全天",
-                "start_time": start_time,
-                "end_time": end_time,
-                "location": location,
-                "category": category,
-            })
-
-        if entries:
-            day_entries[day] = entries
+        if not start_dt:
+            continue
+        if day == start_day:
+            row_time = start_time
+            time_label = start_dt.strftime("%H:%M")
+        elif end_dt and day == end_day and day != start_day:
+            row_time = f"{day}T00:00:00"
+            time_label = f"至 {end_dt.strftime('%H:%M')}"
+        else:
+            row_time = f"{day}T00:00:00"
+            time_label = "跨天"
+        day_entries[day] = [{
+            "day": day,
+            "kind": kind,
+            "title": title,
+            "subtitle": time_summary,
+            "time": row_time,
+            "time_label": time_label,
+            "start_time": start_time,
+            "end_time": end_time,
+            "location": location,
+            "category": category,
+        }]
 
     return {
         "kind": kind,

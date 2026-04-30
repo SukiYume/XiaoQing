@@ -52,8 +52,7 @@ class ItemType(Enum):
 class TaskStatus(Enum):
     """任务状态"""
 
-    TODO = "todo"  # 未开始
-    IN_PROGRESS = "in_progress"  # 进行中
+    OPEN = "open"  # 未完成
     DONE = "done"  # 已完成
     CANCELLED = "cancelled"  # 已取消
 
@@ -136,15 +135,15 @@ class TaskItem(Item):
     type: ItemType = ItemType.TASK
 
     # Task特有字段
-    due_time: Optional[str] = None  # 截止时间
+    plan_date: Optional[str] = None  # 计划处理日期 YYYY-MM-DD
+    deadline_at: Optional[str] = None  # 硬截止时间 ISO datetime
     priority: int = 3  # 优先级 1-5 (默认3=中)
-    status: TaskStatus = TaskStatus.TODO
-    estimate: int = 0  # 预估时长(分钟)
-    subtasks: list[dict[str, Any]] = field(default_factory=list)
-    dependencies: list[str] = field(default_factory=list)  # 依赖的其他task id
-    progress: int = 0  # 进度百分比(0-100)
+    status: TaskStatus = TaskStatus.OPEN
     remind_times: list[str] = field(default_factory=list)  # 提醒时间点列表
+    reminder_rules: list[dict[str, Any]] = field(default_factory=list)
+    repeat_rule: Optional[str] = None
     completed_at: Optional[str] = None  # 完成时间
+    cancelled_at: Optional[str] = None  # 取消时间
 
 
 @dataclass
@@ -172,6 +171,9 @@ class DiaryItem(Item):
     location: str = ""  # L-7修复：缺失的 location 字段，缺少时 asdict() 不序列化导致无法持久化
     template_id: Optional[str] = None  # 使用的模板ID
     diary_date: Optional[str] = None  # 日记对应的日期(YYYY-MM-DD)
+    entry_time: Optional[str] = None  # 记录发生/写下的具体时间(ISO datetime)
+    template_answers: list[dict[str, str]] = field(default_factory=list)  # 模板问题与回答
+    is_favorite: bool = False  # 是否收藏，便于回看
 
 
 @dataclass
@@ -181,10 +183,15 @@ class LedgerItem(Item):
     type: ItemType = ItemType.LEDGER
 
     # Ledger特有字段
-    amount: float = 0.0                        # 金额（正数）
-    direction: str = "expense"                 # "income" 或 "expense"
+    amount: float = 0.0                        # 金额镜像（由 amount_cents 派生，正数）
+    amount_cents: int = 0                      # 金额（分，正整数，账本计算主字段）
+    currency: str = "CNY"                      # 币种
+    transaction_type: str = "expense"          # expense | income | transfer
     ledger_category: str = "其他"              # 账目分类（餐饮、交通等）
     ledger_date: Optional[str] = None          # 账目日期 YYYY-MM-DD
+    account_name: str = "现金"                 # 账户/钱包
+    counter_account_name: str = ""             # 转账目标账户
+    merchant: str = ""                         # 商户/付款方/收款方
     remark: str = ""                           # 备注
 
 

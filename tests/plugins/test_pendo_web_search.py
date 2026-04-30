@@ -25,6 +25,15 @@ def _load_search_module():
         def get(self, *_args, **_kwargs):
             return self._decorator(*_args, **_kwargs)
 
+        def post(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def put(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
+        def delete(self, *_args, **_kwargs):
+            return self._decorator(*_args, **_kwargs)
+
     class _HTTPException(Exception):
         def __init__(self, status_code: int, detail: str):
             super().__init__(detail)
@@ -33,11 +42,18 @@ def _load_search_module():
 
     fastapi.APIRouter = _Router
     fastapi.Depends = lambda dep=None: dep
+    fastapi.Header = lambda default=None, **_kwargs: default
+    fastapi.Query = lambda default=None, **_kwargs: default
     fastapi.HTTPException = _HTTPException
+    fastapi.Request = type("Request", (), {})
+    responses = types.ModuleType("fastapi.responses")
+    responses.Response = type("Response", (), {})
 
     _orig_fastapi = sys.modules.get("fastapi")
+    _orig_responses = sys.modules.get("fastapi.responses")
 
     sys.modules["fastapi"] = fastapi
+    sys.modules["fastapi.responses"] = responses
     sys.modules.pop("plugins.pendo.web.api.search", None)
     mod = importlib.import_module("plugins.pendo.web.api.search")
 
@@ -45,6 +61,10 @@ def _load_search_module():
         sys.modules["fastapi"] = _orig_fastapi
     else:
         sys.modules.pop("fastapi", None)
+    if _orig_responses is not None:
+        sys.modules["fastapi.responses"] = _orig_responses
+    else:
+        sys.modules.pop("fastapi.responses", None)
 
     return mod
 
@@ -73,7 +93,7 @@ def test_database_search_items_matches_additional_text_fields():
             "title": "雨夜",
             "content": "今天走得很慢。",
             "weather": "🌧️ 雨",
-            "notes": "窗边的风声",
+            "location": "窗边的风声",
             "diary_date": "2026-03-28",
         })
 
@@ -106,7 +126,7 @@ def test_database_search_items_supports_ledger_category_filter():
             "type": "ledger",
             "title": "餐饮消费",
             "amount": 20,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "餐饮",
             "ledger_date": "2026-03-28",
         })
@@ -116,9 +136,21 @@ def test_database_search_items_supports_ledger_category_filter():
             "type": "ledger",
             "title": "交通消费",
             "amount": 8,
-            "direction": "expense",
+            "transaction_type": "expense",
             "ledger_category": "交通",
             "ledger_date": "2026-03-28",
+        })
+        db.insert_item({
+            "id": "ld3",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "信用卡还款",
+            "amount_cents": 100000,
+            "transaction_type": "transfer",
+            "ledger_category": "转账",
+            "ledger_date": "2026-03-28",
+            "account_name": "微信",
+            "counter_account_name": "招行信用卡",
         })
 
         results = db.search_items(
@@ -129,6 +161,14 @@ def test_database_search_items_supports_ledger_category_filter():
         )
 
         assert [item.id for item in results] == ["ld1"]
+
+        transfer_results = db.search_items(
+            owner_id,
+            "还款",
+            filters={"type": "ledger", "account_name": "招行信用卡"},
+            limit=10,
+        )
+        assert [item.id for item in transfer_results] == ["ld3"]
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

@@ -4,13 +4,9 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date, datetime, timedelta
-import re
 from typing import Any
 
 from ...services.db import Database
-
-
-DATE_CATEGORY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _task_dict(task) -> dict[str, Any]:
@@ -42,19 +38,17 @@ def _task_status_bucket(task: dict[str, Any]) -> str:
 
 def _task_text_category(task: dict[str, Any]) -> str:
     category = str(task.get("category") or "").strip()
-    if category and category != "未分类" and not DATE_CATEGORY_RE.fullmatch(category):
+    if category and category != "未分类":
         return category
     return ""
 
 
 def _task_plan_key(task: dict[str, Any]) -> str:
-    category = str(task.get("category") or "").strip()
-    due_day = _parse_date(task.get("due_time"))
-    if due_day and (DATE_CATEGORY_RE.fullmatch(category) or not category or category == "未分类"):
-        return due_day.strftime("%Y-%m-%d")
-    if DATE_CATEGORY_RE.fullmatch(category):
-        return category
-    return due_day.strftime("%Y-%m-%d") if due_day else ""
+    plan = str(task.get("plan_date") or "").strip()
+    if plan:
+        return plan
+    deadline_day = _parse_date(task.get("deadline_at"))
+    return deadline_day.strftime("%Y-%m-%d") if deadline_day else ""
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple:
@@ -166,11 +160,10 @@ def build_task_overview(db: Database, owner_id: str, today: str | None = None) -
     completion_rate = (len(done) / completion_denominator) if completion_denominator else 0
 
     board_columns = {
-        "todo": sorted(active, key=_task_sort_key),
+        "open": sorted(active, key=_task_sort_key),
         "done": sorted(done, key=_done_sort_key, reverse=True),
         "cancelled": sorted(cancelled, key=_done_sort_key, reverse=True),
     }
-    board_columns["open"] = board_columns["todo"]
     board_columns["closed"] = sorted(closed, key=_done_sort_key, reverse=True)
 
     return {

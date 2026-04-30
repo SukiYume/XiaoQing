@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
+import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { isoDate, pad2, parseDate, previewText, todayStr as sharedTodayStr } from '../utils/format.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
@@ -24,11 +25,33 @@ const DEFAULT_MOOD_EMOJIS = {
     calm: '😌',
     excited: '🤩',
     angry: '😠',
+    tired: '😴',
+    anxious: '😰',
+    grateful: '🙏',
+    neutral: '😐',
 };
+const DEFAULT_MOOD_LABELS = {
+    happy: '开心',
+    calm: '平静',
+    excited: '兴奋',
+    sad: '难过',
+    angry: '生气',
+    tired: '疲惫',
+    anxious: '焦虑',
+    grateful: '感恩',
+    neutral: '普通',
+};
+const DEFAULT_MOOD_OPTIONS = Object.keys(DEFAULT_MOOD_LABELS).map((id) => ({
+    value: id,
+    label: DEFAULT_MOOD_LABELS[id],
+    emoji: DEFAULT_MOOD_EMOJIS[id],
+}));
 
 const DIARY_FIELDS = [
     { name: 'diary_date', label: '日期', type: 'date', required: true },
     { name: 'mood', label: '心情', type: 'mood' },
+    { name: 'mood_score', label: '心情分数', type: 'number', min: 1, max: 10, step: 1, placeholder: '1-10' },
+    { name: 'entry_time', label: '记录时间', type: 'datetime' },
     {
         name: 'weather',
         label: '天气',
@@ -38,6 +61,7 @@ const DIARY_FIELDS = [
     },
     { name: 'location', label: '地点', type: 'text' },
     { name: 'title', label: '标题', type: 'text', placeholder: '可选标题' },
+    { name: 'is_favorite', label: '标记', type: 'checkbox', checkboxLabel: '收藏这篇日记' },
     { name: 'content', label: '日记内容', type: 'textarea', rows: 10, required: true },
 ];
 
@@ -52,6 +76,8 @@ let _templates = [];
 let _templatesLoaded = false;
 let _dataChangedHandler = null;
 let _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
+let _moodLabels = { ...DEFAULT_MOOD_LABELS };
+let _moodOptions = [...DEFAULT_MOOD_OPTIONS];
 
 function todayDate() { return new Date(); }
 
@@ -107,7 +133,34 @@ function moodBadgeText(mood) {
     const normalized = String(mood || '').trim();
     if (!normalized) return '';
     const emoji = moodEmoji(normalized);
-    return emoji ? `${emoji} ${normalized}` : normalized;
+    const label = _moodLabels[normalized.toLowerCase()] || normalized;
+    return emoji ? `${emoji} ${label}` : label;
+}
+
+function itemEntryTimestamp(item) {
+    return item?.entry_time || item?.created_at || item?.updated_at || (item?.diary_date ? `${item.diary_date}T00:00:00` : '');
+}
+
+function formatEntryTime(item, options = {}) {
+    const raw = itemEntryTimestamp(item);
+    if (!raw) return item?.diary_date || '';
+    const text = String(raw).trim();
+    const time = text.match(/T(\d{2}:\d{2})/)?.[1] || '';
+    if (options.timeOnly) return time || '全天';
+    const date = item?.diary_date || text.slice(0, 10);
+    return time ? `${date} ${time}` : date;
+}
+
+function defaultEntryTime(dateStr) {
+    const now = new Date();
+    return `${dateStr || todayStr()}T${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+}
+
+function toDatetimeLocal(value) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const matched = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+    return matched ? `${matched[1]}T${matched[2]}` : text;
 }
 
 function compactDiaryCellLabel(entry, maxChars = 8) {
@@ -140,8 +193,8 @@ function formatWordMetric(value) {
 
 function sortItems(items) {
     return [...items].sort((a, b) => {
-        const dateA = `${a.diary_date || ''}|${a.updated_at || ''}`;
-        const dateB = `${b.diary_date || ''}|${b.updated_at || ''}`;
+        const dateA = `${a.diary_date || ''}|${itemEntryTimestamp(a)}`;
+        const dateB = `${b.diary_date || ''}|${itemEntryTimestamp(b)}`;
         return dateB.localeCompare(dateA);
     });
 }
@@ -185,7 +238,7 @@ async function fetchItems(year, month) {
             end_date: monthEnd(year, month),
             page,
             page_size: pageSize,
-            sort: 'updated_at',
+            sort: 'entry_time',
             order: 'desc',
         });
         const batch = res?.data?.items || [];
@@ -220,14 +273,36 @@ async function loadMoodEmojis() {
     try {
         const res = await api.get('/config/diary/moods');
         const fetched = res?.data?.mood_emojis;
+        const fetchedLabels = res?.data?.mood_labels;
+        const fetchedMoods = res?.data?.moods;
         if (fetched && typeof fetched === 'object') {
             _moodEmojis = { ...DEFAULT_MOOD_EMOJIS, ...fetched };
+        }
+        if (fetchedLabels && typeof fetchedLabels === 'object') {
+            _moodLabels = { ...DEFAULT_MOOD_LABELS, ...fetchedLabels };
+        }
+        if (Array.isArray(fetchedMoods) && fetchedMoods.length) {
+            _moodOptions = fetchedMoods.map((item) => ({
+                value: item.id,
+                label: item.label || item.id,
+                emoji: item.emoji || _moodEmojis[item.id] || item.id,
+            }));
+            return;
+        }
+        if (fetched || fetchedLabels) {
+            _moodOptions = Object.keys(_moodLabels).map((id) => ({
+                value: id,
+                label: _moodLabels[id],
+                emoji: _moodEmojis[id] || id,
+            }));
             return;
         }
     } catch (_) {
         // Fallback to defaults when config endpoint is unavailable.
     }
     _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
+    _moodLabels = { ...DEFAULT_MOOD_LABELS };
+    _moodOptions = [...DEFAULT_MOOD_OPTIONS];
 }
 
 function buildCalendarDays(year, month) {
@@ -412,6 +487,15 @@ function ensureStyles() {
         .diary-view-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.8; color: var(--color-text); max-height: 60vh; overflow-y: auto; }
         .diary-template-select { margin-top: 2px; }
         .diary-template-hint { font-size: 12px; color: var(--color-text-secondary); margin-top: 6px; padding: 8px 10px; background: rgba(251,207,232,0.28); border-radius: 14px; line-height: 1.6; white-space: pre-wrap; }
+        .diary-template-answer-stack { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+        .diary-template-answer label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 800; color: var(--color-text-secondary); }
+        .diary-template-answer textarea { min-height: 74px; }
+        .diary-template-answer-view { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+        .diary-template-answer-item { padding: 12px 14px; border-radius: 16px; background: rgba(253,242,248,0.72); border: 1px solid rgba(251,207,232,0.7); }
+        .diary-template-answer-item strong { display: block; font-size: 12px; color: #be185d; margin-bottom: 6px; }
+        .diary-template-answer-item p { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--color-text); line-height: 1.7; }
+        .form-checkbox { display: inline-flex; align-items: center; gap: 8px; color: var(--color-text-secondary); font-size: 13px; font-weight: 700; }
+        .form-checkbox input { width: 16px; height: 16px; accent-color: var(--color-diary, #EC4899); }
         ${mediaMax(BREAKPOINTS.XL, `
             .diary-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .diary-layout { grid-template-columns: 1fr; }
@@ -579,7 +663,7 @@ function renderMoodPanel() {
                         <div class="diary-mood-row">
                             <div class="diary-mood-top">
                                 <span class="diary-mood-name"><span class="diary-mood-dot" style="background:${moodPalette(index)};"></span>${escapeHtml(moodBadgeText(item.mood) || item.mood)}</span>
-                                <span class="diary-mood-count">${item.count} 天</span>
+                                <span class="diary-mood-count">${item.count} 条</span>
                             </div>
                             <div class="diary-mood-track"><span class="diary-mood-fill" style="width:${Math.max(10, Math.round(item.share * 100))}%;background:${moodPalette(index)};"></span></div>
                         </div>`).join('')}
@@ -619,8 +703,8 @@ function renderRecentPanel() {
                 ${recent.length ? `
                     <div class="diary-recent-list">
                         ${recent.slice(0, 4).map((item) => `
-                            <button type="button" class="diary-recent-item" data-date="${item.diary_date}">
-                                <span class="diary-recent-top"><strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || item.diary_date)}</strong><span>${escapeHtml(item.diary_date)}</span></span>
+                            <button type="button" class="diary-recent-item" data-id="${escapeHtml(String(item.id))}" data-date="${item.diary_date}">
+                                <span class="diary-recent-top"><strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || item.diary_date)}</strong><span>${escapeHtml(item.entry_label || formatEntryTime(item))}</span></span>
                                 <span class="diary-recent-preview">${escapeHtml(item.content_preview || '点击查看详情')}</span>
                             </button>`).join('')}
                     </div>` : '<div class="diary-empty-card">这个月还没有可以回看的日记。</div>'}
@@ -643,9 +727,11 @@ function renderEntryCard(item) {
                 <div>
                     <div class="diary-entry-title-row"><span class="diary-entry-mood">${escapeHtml(moodEmoji(item.mood) || '📖')}</span><h4>${escapeHtml(item.title || '这一天的记录')}</h4></div>
                     <div class="diary-entry-meta">
+                        <span>${escapeHtml(formatEntryTime(item, { timeOnly: true }))}</span>
                         <span>${escapeHtml(item.weather || '未记录天气')}</span>
                         ${item.location ? `<span>📍 ${escapeHtml(item.location)}</span>` : ''}
                         <span>${diaryWordCount(item)} 字</span>
+                        ${item.is_favorite ? '<span>收藏</span>' : ''}
                     </div>
                 </div>
                 <div class="diary-entry-actions">
@@ -668,7 +754,7 @@ function renderSelectedDay() {
                     <h3 class="diary-workspace-title">${formatDateLabel(_selectedDate)}</h3>
                     <p class="diary-workspace-subtitle">${entries.length ? '查看、编辑或删除当天的日记内容。' : '这一天还没有日记，可以直接开始记录。'}</p>
                 </div>
-                <button class="btn btn-secondary" id="diary-add-selected" type="button">${entries.length ? '编辑这一天' : '为这一天写日记'}</button>
+                <button class="btn btn-secondary" id="diary-add-selected" type="button">${entries.length ? '继续写一篇' : '为这一天写日记'}</button>
             </div>
             <div class="diary-workspace-body">
                 ${entries.length ? `<div class="diary-entry-stack">${entries.map(renderEntryCard).join('')}</div>` : `
@@ -690,7 +776,7 @@ function renderMonthStream() {
                     <div class="diary-stream-list">
                         ${_items.map((item) => `
                             <button type="button" class="diary-stream-item" data-id="${item.id}">
-                                <span class="diary-stream-date">${escapeHtml(item.diary_date)}</span>
+                                <span class="diary-stream-date">${escapeHtml(formatEntryTime(item))}</span>
                                 <span class="diary-stream-main">
                                     <strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || previewText(item.content, 18) || '这一天')}</strong>
                                     <span>${escapeHtml(previewText(item.content, 70) || '点击查看详情')}</span>
@@ -730,16 +816,91 @@ function renderPage() {
     attachListeners();
 }
 
+function normalizeTemplateAnswers(raw) {
+    if (!Array.isArray(raw)) return [];
+    return raw
+        .map((item) => ({
+            prompt: String(item?.prompt || '').trim(),
+            answer: String(item?.answer || '').trim(),
+        }))
+        .filter((item) => item.prompt || item.answer);
+}
+
+function renderTemplateAnswers(answers) {
+    const normalized = normalizeTemplateAnswers(answers);
+    if (!normalized.length) return '';
+    return `
+        <div class="diary-template-answer-view">
+            ${normalized.map((item) => `
+                <div class="diary-template-answer-item">
+                    ${item.prompt ? `<strong>${escapeHtml(item.prompt)}</strong>` : ''}
+                    ${item.answer ? `<p>${escapeHtml(item.answer)}</p>` : ''}
+                </div>`).join('')}
+        </div>`;
+}
+
+function templateAnswerInputRows(template, answers = []) {
+    const normalizedAnswers = normalizeTemplateAnswers(answers);
+    const prompts = Array.isArray(template?.prompts) ? template.prompts.map((prompt) => String(prompt || '').trim()).filter(Boolean) : [];
+    normalizedAnswers.forEach((item) => {
+        if (item.prompt && !prompts.includes(item.prompt)) prompts.push(item.prompt);
+    });
+    const answerByPrompt = new Map(normalizedAnswers.map((item) => [item.prompt, item.answer]));
+    return prompts.map((prompt, index) => ({
+        prompt,
+        answer: answerByPrompt.get(prompt) || '',
+        label: prompt || `问题 ${index + 1}`,
+    }));
+}
+
+function renderTemplateAnswerInputs(template, answers = []) {
+    const rows = templateAnswerInputRows(template, answers);
+    if (!rows.length) return '';
+    return `
+        <div class="diary-template-answer-stack">
+            ${rows.map((row, index) => `
+                <div class="diary-template-answer">
+                    <label for="diary-template-answer-${index}">${escapeHtml(row.label)}</label>
+                    <textarea
+                        id="diary-template-answer-${index}"
+                        class="form-input diary-template-answer-input"
+                        data-prompt="${escapeHtml(row.prompt)}"
+                        rows="3"
+                    >${escapeHtml(row.answer)}</textarea>
+                </div>`).join('')}
+        </div>`;
+}
+
+function collectTemplateAnswers(form) {
+    return [...form.querySelectorAll('.diary-template-answer-input')]
+        .map((el) => ({
+            prompt: String(el.dataset.prompt || '').trim(),
+            answer: String(el.value || '').trim(),
+        }))
+        .filter((item) => item.prompt || item.answer);
+}
+
+function templateAnswersToContent(answers) {
+    return answers
+        .filter((item) => item.answer)
+        .map((item) => `${item.prompt}\n${item.answer}`)
+        .join('\n\n');
+}
+
 export function openDiaryViewModal(item) {
     ensureStyles();
     const bodyHTML = `
         <div class="diary-view-meta">
             <span class="diary-view-chip">📅 ${escapeHtml(item.diary_date)}</span>
+            <span class="diary-view-chip">🕒 ${escapeHtml(formatEntryTime(item, { timeOnly: true }))}</span>
             ${item.mood ? `<span class="diary-view-chip">${escapeHtml(moodBadgeText(item.mood))}</span>` : ''}
+            ${item.mood_score ? `<span class="diary-view-chip">心情 ${escapeHtml(String(item.mood_score))}/10</span>` : ''}
             ${item.weather ? `<span class="diary-view-chip">${escapeHtml(item.weather)}</span>` : ''}
             ${item.location ? `<span class="diary-view-chip">📍 ${escapeHtml(item.location)}</span>` : ''}
+            ${item.is_favorite ? '<span class="diary-view-chip">收藏</span>' : ''}
             <span class="diary-view-chip">${diaryWordCount(item)} 字</span>
         </div>
+        ${renderTemplateAnswers(item.template_answers)}
         <div class="diary-view-content">${escapeHtml(item.content || '')}</div>
     `;
     const footer = `
@@ -762,28 +923,42 @@ export function openDiaryViewModal(item) {
 export async function openDiaryFormModal(existing = null, presetDate = null) {
     ensureStyles();
     const isEdit = Boolean(existing);
+    const formDate = existing?.diary_date || presetDate || _selectedDate || todayStr();
     const fields = DIARY_FIELDS.map((field) => {
         let value = '';
         if (existing) value = existing[field.name] ?? '';
-        else if (field.name === 'diary_date') value = presetDate || _selectedDate || todayStr();
-        return { ...field, value };
+        else if (field.name === 'diary_date') value = formDate;
+        else if (field.name === 'entry_time') value = defaultEntryTime(formDate);
+        if (field.name === 'entry_time') value = toDatetimeLocal(value);
+        const nextField = { ...field, value };
+        if (field.name === 'mood') nextField.options = _moodOptions;
+        return nextField;
     });
 
     let templateSectionHTML = '';
-    if (!isEdit) {
-        await loadTemplates();
-        if (_templates.length) {
+    await loadTemplates();
+    if (!isEdit && _templates.length) {
+        templateSectionHTML = `
+            <div class="form-group">
+                <label class="form-label">模板（可选）</label>
+                ${renderCustomSelect({
+                    id: 'diary-template-sel',
+                    name: 'template_id',
+                    options: [{ value: '', label: '-- 不使用模板 --' }, ..._templates.map((tpl) => ({ value: tpl.id, label: tpl.name }))],
+                    selected: '',
+                    className: 'pselect-form pselect-block pselect-theme-diary diary-template-select',
+                })}
+                <div id="diary-template-hint" class="diary-template-hint" style="display:none;"></div>
+            </div>`;
+    } else if (isEdit) {
+        const existingAnswers = normalizeTemplateAnswers(existing?.template_answers);
+        const template = _templates.find((tpl) => String(tpl.id) === String(existing?.template_id));
+        const answerInputs = renderTemplateAnswerInputs(template, existingAnswers);
+        if (answerInputs) {
             templateSectionHTML = `
                 <div class="form-group">
-                    <label class="form-label">模板（可选）</label>
-                    ${renderCustomSelect({
-                        id: 'diary-template-sel',
-                        name: 'template_id',
-                        options: [{ value: '', label: '-- 不使用模板 --' }, ..._templates.map((tpl) => ({ value: tpl.id, label: tpl.name }))],
-                        selected: '',
-                        className: 'pselect-form pselect-block pselect-theme-diary diary-template-select',
-                    })}
-                    <div id="diary-template-hint" class="diary-template-hint" style="display:none;"></div>
+                    <label class="form-label">模板回答</label>
+                    <div class="diary-template-hint" style="display:block;">${answerInputs}</div>
                 </div>`;
         }
     }
@@ -805,11 +980,11 @@ export async function openDiaryFormModal(existing = null, presetDate = null) {
             'diary-template-sel': (value) => {
                 const template = _templates.find((tpl) => String(tpl.id) === String(value));
                 if (!template || !template.prompts?.length) {
-                    templateHint.textContent = '';
+                    templateHint.innerHTML = '';
                     templateHint.style.display = 'none';
                     return;
                 }
-                templateHint.textContent = template.prompts.join('\n');
+                templateHint.innerHTML = renderTemplateAnswerInputs(template);
                 templateHint.style.display = 'block';
             },
         });
@@ -825,6 +1000,18 @@ export async function openDiaryFormModal(existing = null, presetDate = null) {
     content.querySelector('#diary-modal-save').onclick = async () => {
         const form = content.querySelector('#diary-form');
         const data = getFormData(form);
+        const templateAnswerInputs = form.querySelectorAll('.diary-template-answer-input');
+        const templateAnswers = collectTemplateAnswers(form);
+        if (templateAnswerInputs.length || templateAnswers.length) {
+            data.template_answers = templateAnswers;
+            if (!String(data.content || '').trim()) {
+                data.content = templateAnswersToContent(templateAnswers);
+            }
+        }
+        if (data.diary_date) {
+            const currentTime = String(data.entry_time || '').match(/T(\d{2}:\d{2})/)?.[1];
+            data.entry_time = currentTime ? `${data.diary_date}T${currentTime}` : defaultEntryTime(data.diary_date);
+        }
         if (!data.diary_date) {
             showToast('请选择日期', 'warning');
             return;
@@ -879,11 +1066,6 @@ function attachListeners() {
     const addTop = _container.querySelector('#diary-add-top');
     if (addTop) {
         addTop.onclick = () => {
-            const entries = dayEntries(_selectedDate || todayStr());
-            if (entries.length) {
-                openDiaryFormModal(entries[0]);
-                return;
-            }
             openDiaryFormModal(null, _selectedDate || todayStr());
         };
     }
@@ -891,11 +1073,6 @@ function attachListeners() {
     const addSelected = _container.querySelector('#diary-add-selected');
     if (addSelected) {
         addSelected.onclick = () => {
-            const entries = dayEntries(_selectedDate || todayStr());
-            if (entries.length) {
-                openDiaryFormModal(entries[0]);
-                return;
-            }
             openDiaryFormModal(null, _selectedDate || todayStr());
         };
     }
@@ -949,8 +1126,14 @@ function attachListeners() {
         };
     });
 
-    _container.querySelectorAll('.diary-recent-item[data-date]').forEach((button) => {
+    _container.querySelectorAll('.diary-recent-item').forEach((button) => {
         button.onclick = () => {
+            const item = _items.find((entry) => String(entry.id) === String(button.dataset.id));
+            if (item) {
+                _selectedDate = item.diary_date || _selectedDate;
+                openDiaryViewModal(item);
+                return;
+            }
             _selectedDate = button.dataset.date || _selectedDate;
             renderPage();
         };

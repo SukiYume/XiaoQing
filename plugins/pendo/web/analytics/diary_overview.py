@@ -58,7 +58,7 @@ def _load_all_diaries(db: Database, owner_id: str) -> list[Any]:
             owner_id,
             filters={
                 "type": ItemType.DIARY.value,
-                "sort_field": "diary_date",
+                "sort_field": "entry_time",
                 "sort_order": "DESC",
             },
             limit=batch_size,
@@ -72,6 +72,23 @@ def _load_all_diaries(db: Database, owner_id: str) -> list[Any]:
         offset += batch_size
 
     return items
+
+
+def _entry_sort_key(item: Any) -> str:
+    return str(
+        getattr(item, "entry_time", None)
+        or getattr(item, "created_at", None)
+        or getattr(item, "updated_at", None)
+        or getattr(item, "diary_date", None)
+        or ""
+    )
+
+
+def _entry_label(item: Any) -> str:
+    raw = _entry_sort_key(item)
+    if "T" in raw and len(raw) >= 16:
+        return raw[11:16]
+    return "全天"
 
 
 def _compute_streaks(days: list[date], today: date) -> tuple[int, int]:
@@ -202,6 +219,7 @@ def build_diary_overview(
         start.strftime("%Y-%m-%d"),
         end.strftime("%Y-%m-%d"),
     )
+    window_items = sorted(window_items, key=_entry_sort_key, reverse=True)
     all_items = _load_all_diaries(db, owner_id)
 
     day_counts: dict[str, int] = {}
@@ -269,8 +287,12 @@ def build_diary_overview(
             "id": item.id,
             "title": item.title,
             "diary_date": item.diary_date,
+            "entry_time": getattr(item, "entry_time", None),
+            "entry_label": _entry_label(item),
             "mood": item.mood,
+            "mood_score": getattr(item, "mood_score", None),
             "weather": item.weather,
+            "is_favorite": getattr(item, "is_favorite", False),
             "content_preview": str(item.content or "").strip()[:80],
             "word_count": len(str(item.content or "").strip()),
         }

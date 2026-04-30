@@ -11,6 +11,21 @@ const DEFAULT_MOOD_EMOJIS = {
     calm: '😌',
     excited: '🤩',
     angry: '😠',
+    tired: '😴',
+    anxious: '😰',
+    grateful: '🙏',
+    neutral: '😐',
+};
+const DEFAULT_MOOD_LABELS = {
+    happy: '开心',
+    calm: '平静',
+    excited: '兴奋',
+    sad: '难过',
+    angry: '生气',
+    tired: '疲惫',
+    anxious: '焦虑',
+    grateful: '感恩',
+    neutral: '普通',
 };
 
 let _container = null;
@@ -24,6 +39,7 @@ let _customDraftEnd = '';
 let _heatmapData = null;
 let _comparisonData = null;
 let _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
+let _moodLabels = { ...DEFAULT_MOOD_LABELS };
 
 function nowDate() { return new Date(); }
 function todayStr() {
@@ -162,7 +178,8 @@ function formatMoodLabel(mood) {
     const normalized = String(mood || '').trim();
     if (!normalized) return '未记录';
     const emoji = moodEmoji(normalized);
-    return emoji ? `${emoji} ${normalized}` : normalized;
+    const label = _moodLabels[normalized.toLowerCase()] || normalized;
+    return emoji ? `${emoji} ${label}` : label;
 }
 
 function diaryCadenceSubtitle(granularity) {
@@ -1201,9 +1218,13 @@ async function fetchAllData() {
         api.get('/config/diary/moods').catch(() => null),
     ]);
     const fetchedMoodEmojis = moodRes?.data?.mood_emojis;
+    const fetchedMoodLabels = moodRes?.data?.mood_labels;
     _moodEmojis = fetchedMoodEmojis && typeof fetchedMoodEmojis === 'object'
         ? { ...DEFAULT_MOOD_EMOJIS, ...fetchedMoodEmojis }
         : { ...DEFAULT_MOOD_EMOJIS };
+    _moodLabels = fetchedMoodLabels && typeof fetchedMoodLabels === 'object'
+        ? { ...DEFAULT_MOOD_LABELS, ...fetchedMoodLabels }
+        : { ...DEFAULT_MOOD_LABELS };
     _heatmapData = heatmapRes?.data || null;
     _comparisonData = comparisonRes?.data || null;
     return {
@@ -1551,7 +1572,7 @@ function diaryCards() {
             eyebrow: 'Diary',
             title: '心情分布',
             subtitle: `${diaryRangeSentence()}常见情绪落点。`,
-            body: renderDonut(moodItems, 'count', 'label', ['#ec4899', '#f472b6', '#fb7185', '#f9a8d4', '#db2777', '#be185d'], formatCount(summary.entry_count || 0), `${diaryRangeTitle()}篇数`, (value) => `${value} 天`),
+            body: renderDonut(moodItems, 'count', 'label', ['#ec4899', '#f472b6', '#fb7185', '#f9a8d4', '#db2777', '#be185d'], formatCount(summary.entry_count || 0), `${diaryRangeTitle()}篇数`, (value) => `${value} 条`),
         }),
         renderCard({
             accent: '#f43f5e',
@@ -1748,6 +1769,7 @@ export function render(container) {
     _customDraftStart = _customStart;
     _customDraftEnd = _customEnd;
     _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
+    _moodLabels = { ...DEFAULT_MOOD_LABELS };
     renderPage();
     loadAndRender();
 }
@@ -1758,6 +1780,7 @@ export function destroy() {
     _heatmapData = null;
     _comparisonData = null;
     _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
+    _moodLabels = { ...DEFAULT_MOOD_LABELS };
 }
 
 export function onRouteEnter(_params) {}

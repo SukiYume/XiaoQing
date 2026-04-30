@@ -632,7 +632,13 @@ def _migrate_recurring_group(
             _sync_unsent_reminder_logs(cursor, str(row["id"]), remind_times)
 
 
-def migrate_event_graph(db_path: str | Path, *, apply: bool = False) -> dict[str, Any]:
+def migrate_event_graph(
+    db_path: str | Path,
+    *,
+    apply: bool = False,
+    create_backup: bool = True,
+    write_report: bool = True,
+) -> dict[str, Any]:
     db_path = Path(db_path)
     started_at = datetime.now().isoformat(timespec="seconds")
     backup_path: Path | None = None
@@ -641,10 +647,11 @@ def migrate_event_graph(db_path: str | Path, *, apply: bool = False) -> dict[str
     if apply:
         if not db_path.exists():
             raise FileNotFoundError(db_path)
-        backup_path = db_path.with_name(
-            f"{db_path.name}.event-graph-backup-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        )
-        shutil.copy2(db_path, backup_path)
+        if create_backup:
+            backup_path = db_path.with_name(
+                f"{db_path.name}.event-graph-backup-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            )
+            shutil.copy2(db_path, backup_path)
         db = Database(str(db_path))
         db.cleanup()
 
@@ -719,7 +726,7 @@ def migrate_event_graph(db_path: str | Path, *, apply: bool = False) -> dict[str
         "finished_at": datetime.now().isoformat(timespec="seconds"),
         **stats.to_dict(),
     }
-    if apply:
+    if apply and write_report:
         report_path = db_path.with_name(
             f"{db_path.name}.event-graph-report-{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
         )

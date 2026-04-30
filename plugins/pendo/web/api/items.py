@@ -22,7 +22,7 @@ router = APIRouter()
 
 DEFAULT_DATE_FIELDS: dict[str | None, str] = {
     "event": "start_time",
-    "task": "due_time",
+    "task": "plan_date",
     "diary": "diary_date",
     "ledger": "ledger_date",
     "note": "created_at",
@@ -31,12 +31,21 @@ DEFAULT_DATE_FIELDS: dict[str | None, str] = {
 
 ALLOWED_DATE_FIELDS_BY_TYPE: dict[str | None, set[str]] = {
     "event": {"created_at", "start_time", "end_time"},
-    "task": {"created_at", "due_time"},
-    "diary": {"created_at", "diary_date"},
+    "task": {"created_at", "plan_date", "deadline_at", "completed_at", "cancelled_at"},
+    "diary": {"created_at", "diary_date", "entry_time"},
     "ledger": {"created_at", "ledger_date"},
     "note": {"created_at"},
     None: set(Database.ALLOWED_DATE_FIELDS),
 }
+
+
+def _entry_time_for_diary_date(now_iso: str, diary_date: str | None) -> str:
+    date_part = str(diary_date or "").strip()
+    if not date_part:
+        return now_iso
+    time_part = now_iso[11:19] if len(now_iso) >= 19 else "00:00:00"
+    return f"{date_part}T{time_part}"
+
 
 EVENT_MUTABLE_FIELDS = {
     "title",
@@ -54,12 +63,15 @@ TASK_MUTABLE_FIELDS = {
     "title",
     "content",
     "category",
-    "due_time",
+    "plan_date",
+    "deadline_at",
     "priority",
     "status",
+    "remind_times",
+    "reminder_rules",
+    "repeat_rule",
     "completed_at",
-    "progress",
-    "estimate",
+    "cancelled_at",
 }
 
 NOTE_MUTABLE_FIELDS = {
@@ -81,6 +93,24 @@ DIARY_MUTABLE_FIELDS = {
     "weather",
     "location",
     "template_id",
+    "entry_time",
+    "template_answers",
+    "is_favorite",
+}
+
+LEDGER_MUTABLE_FIELDS = {
+    "title",
+    "content",
+    "amount",
+    "amount_cents",
+    "currency",
+    "transaction_type",
+    "ledger_category",
+    "ledger_date",
+    "account_name",
+    "counter_account_name",
+    "merchant",
+    "remark",
 }
 
 
@@ -99,20 +129,32 @@ class ItemCreate(BaseModel):
     reminder_rules: Optional[list[dict]] = None
     notes: Optional[str] = None
     # Task fields
-    due_time: Optional[str] = None
+    plan_date: Optional[str] = None
+    deadline_at: Optional[str] = None
     priority: Optional[int] = None
     status: Optional[str] = None
+    repeat_rule: Optional[str] = None
+    completed_at: Optional[str] = None
+    cancelled_at: Optional[str] = None
     # Diary fields
     diary_date: Optional[str] = None
     mood: Optional[str] = None
     mood_score: Optional[int] = None
     weather: Optional[str] = None
     template_id: Optional[str] = None
+    entry_time: Optional[str] = None
+    template_answers: Optional[list[dict]] = None
+    is_favorite: Optional[bool] = None
     # Ledger fields
     amount: Optional[float] = None
-    direction: Optional[str] = None
+    amount_cents: Optional[int] = None
+    currency: Optional[str] = None
+    transaction_type: Optional[str] = None
     ledger_category: Optional[str] = None
     ledger_date: Optional[str] = None
+    account_name: Optional[str] = None
+    counter_account_name: Optional[str] = None
+    merchant: Optional[str] = None
     remark: Optional[str] = None
     # Note fields
     references: Optional[list[dict]] = None
@@ -131,18 +173,30 @@ class ItemUpdate(BaseModel):
     remind_times: Optional[list[str]] = None
     reminder_rules: Optional[list[dict]] = None
     notes: Optional[str] = None
-    due_time: Optional[str] = None
+    plan_date: Optional[str] = None
+    deadline_at: Optional[str] = None
     priority: Optional[int] = None
     status: Optional[str] = None
+    repeat_rule: Optional[str] = None
+    completed_at: Optional[str] = None
+    cancelled_at: Optional[str] = None
     diary_date: Optional[str] = None
     mood: Optional[str] = None
     mood_score: Optional[int] = None
     weather: Optional[str] = None
     template_id: Optional[str] = None
+    entry_time: Optional[str] = None
+    template_answers: Optional[list[dict]] = None
+    is_favorite: Optional[bool] = None
     amount: Optional[float] = None
-    direction: Optional[str] = None
+    amount_cents: Optional[int] = None
+    currency: Optional[str] = None
+    transaction_type: Optional[str] = None
     ledger_category: Optional[str] = None
     ledger_date: Optional[str] = None
+    account_name: Optional[str] = None
+    counter_account_name: Optional[str] = None
+    merchant: Optional[str] = None
     remark: Optional[str] = None
     references: Optional[list[dict]] = None
     related_items: Optional[list[str]] = None
@@ -253,31 +307,19 @@ def _resolve_category_field(type: Optional[str]) -> str:
     return "ledger_category" if type == "ledger" else "category"
 
 
-def _has_other_diary_for_date(
-    db: Database,
-    owner_id: str,
-    diary_date: str,
-    exclude_item_id: Optional[str] = None,
-) -> bool:
-    conn = db.get_connection()
-    if exclude_item_id:
-        row = conn.execute(
-            """
-            SELECT 1 FROM items
-            WHERE owner_id = ? AND type = 'diary' AND deleted = 0
-              AND diary_date = ? AND id != ?
-            LIMIT 1
-            """,
-            (owner_id, diary_date, exclude_item_id),
-        ).fetchone()
-        return row is not None
+def _ledger_amount_expr() -> str:
+    return Database._LEDGER_AMOUNT_CENTS_EXPR
 
-    return db.has_diary_for_date(owner_id, diary_date)
+
+def _amount_filter_cents(value: float) -> int:
+    return max(0, int(round(float(value) * 100)))
 
 
 def _build_count_where(
-    type, status, category, priority, direction, start_date, end_date, date_field,
-    amount_min, amount_max, owner_id, keyword: str | None = None
+    type, status, category, priority, start_date, end_date, date_field,
+    amount_min, amount_max, owner_id, keyword: str | None = None,
+    transaction_type: str | None = None, account_name: str | None = None,
+    counter_account_name: str | None = None, merchant: str | None = None,
 ):
     where = ["owner_id = ?", "deleted = 0"]
     params: list = [owner_id]
@@ -287,25 +329,42 @@ def _build_count_where(
     if category:   where.append(f"{category_field} = ?"); params.append(category)
     if priority is not None:
         where.append("priority = ?"); params.append(priority)
-    if direction:  where.append("direction = ?");        params.append(direction)
+    if transaction_type:
+        where.append("transaction_type = ?"); params.append(transaction_type)
+    if account_name:
+        where.append("(account_name = ? OR counter_account_name = ?)")
+        params.extend([account_name, account_name])
+    if counter_account_name:
+        where.append("counter_account_name = ?"); params.append(counter_account_name)
+    if merchant:
+        where.append("merchant = ?"); params.append(merchant)
     if amount_min is not None:
-        where.append("amount >= ?"); params.append(amount_min)
+        where.append(f"{_ledger_amount_expr()} >= ?"); params.append(_amount_filter_cents(amount_min))
     if amount_max is not None:
-        where.append("amount <= ?"); params.append(amount_max)
+        where.append(f"{_ledger_amount_expr()} <= ?"); params.append(_amount_filter_cents(amount_max))
     if start_date and end_date and date_field:
         where.append(f"{date_field} >= ?"); params.append(start_date)
         where.append(f"{date_field} <= ?"); params.append(end_date)
     if keyword:
         like = f"%{keyword}%"
-        where.append("(title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ?)")
-        params.extend([like, like, like, like])
+        where.append(
+            """(
+                title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ? OR
+                ledger_category LIKE ? OR account_name LIKE ? OR counter_account_name LIKE ? OR
+                merchant LIKE ? OR remark LIKE ?
+            )"""
+        )
+        params.extend([like, like, like, like, like, like, like, like, like])
     return where, params
 
 
 @router.get("/items/aggregate")
 def aggregate_items(
     type: Optional[str] = None,
-    direction: Optional[str] = None,
+    transaction_type: Optional[str] = None,
+    account_name: Optional[str] = None,
+    counter_account_name: Optional[str] = None,
+    merchant: Optional[str] = None,
     category: Optional[str] = None,
     date_field: Optional[str] = None,
     start_date: Optional[str] = None,
@@ -318,19 +377,36 @@ def aggregate_items(
     """Return income/expense totals for the given filters (full result set, not paginated)."""
     _df = _resolve_date_field(type, date_field) if (start_date and end_date) else None
     where, params = _build_count_where(
-        type, None, category, None, direction, start_date, end_date, _df, amount_min, amount_max, owner_id
+        type, None, category, None, start_date, end_date, _df, amount_min, amount_max, owner_id,
+        transaction_type=transaction_type,
+        account_name=account_name,
+        counter_account_name=counter_account_name,
+        merchant=merchant,
     )
     conn = db.get_connection()
     rows = conn.execute(
-        f"SELECT direction, SUM(amount), COUNT(*) FROM items WHERE {' AND '.join(where)} GROUP BY direction",
+        f"""SELECT transaction_type, COALESCE(SUM({_ledger_amount_expr()}), 0), COUNT(*)
+            FROM items WHERE {' AND '.join(where)}
+            GROUP BY transaction_type""",
         params,
     ).fetchall()
-    income = expense = count = 0
+    income = expense = transfer = count = 0
     for row in rows:
-        if row[0] == "income":   income  = float(row[1] or 0)
-        elif row[0] == "expense": expense = float(row[1] or 0)
+        total = round(float(row[1] or 0) / 100.0, 2)
+        if row[0] == "income":   income  = total
+        elif row[0] == "expense": expense = total
+        elif row[0] == "transfer": transfer = total
         count += int(row[2] or 0)
-    return {"ok": True, "data": {"income": income, "expense": expense, "balance": income - expense, "count": count}}
+    return {
+        "ok": True,
+        "data": {
+            "income": income,
+            "expense": expense,
+            "transfer": transfer,
+            "balance": income - expense,
+            "count": count,
+        },
+    }
 
 
 @router.get("/items/categories")
@@ -354,6 +430,32 @@ def list_categories(
     return {"ok": True, "data": {"categories": [r[0] for r in rows]}}
 
 
+@router.get("/items/ledger/accounts")
+def list_ledger_accounts(
+    owner_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db),
+):
+    """Return distinct ledger account names from both sides of transfers."""
+    conn = db.get_connection()
+    rows = conn.execute(
+        """
+        SELECT account_name AS account FROM items
+        WHERE owner_id = ? AND type = 'ledger' AND deleted = 0
+          AND account_name IS NOT NULL AND TRIM(account_name) != ''
+        UNION
+        SELECT counter_account_name AS account FROM items
+        WHERE owner_id = ? AND type = 'ledger' AND deleted = 0
+          AND counter_account_name IS NOT NULL AND TRIM(counter_account_name) != ''
+        ORDER BY account
+        """,
+        (owner_id, owner_id),
+    ).fetchall()
+    accounts = [str(row[0]) for row in rows if row[0]]
+    if not accounts:
+        accounts = ["现金"]
+    return {"ok": True, "data": {"accounts": accounts}}
+
+
 @router.get("/items")
 def list_items(
     type: Optional[str] = None,
@@ -362,7 +464,10 @@ def list_items(
     tags: Optional[str] = None,
     keyword: Optional[str] = None,
     priority: Optional[int] = None,
-    direction: Optional[str] = None,
+    transaction_type: Optional[str] = None,
+    account_name: Optional[str] = None,
+    counter_account_name: Optional[str] = None,
+    merchant: Optional[str] = None,
     date_field: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -371,8 +476,8 @@ def list_items(
     range: Optional[str] = Query(None, alias="range"),
     sort: str = "created_at",
     order: str = "desc",
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
 ):
@@ -385,12 +490,28 @@ def list_items(
     if tags:      filters["tags"] = tags
     if keyword and keyword.strip(): filters["keyword"] = keyword.strip()
     if priority is not None: filters["priority"] = priority
-    if direction: filters["direction"] = direction
+    if transaction_type: filters["transaction_type"] = transaction_type
+    if account_name: filters["account_name"] = account_name
+    if counter_account_name: filters["counter_account_name"] = counter_account_name
+    if merchant: filters["merchant"] = merchant
     if amount_min is not None: filters["amount_min"] = amount_min
     if amount_max is not None: filters["amount_max"] = amount_max
 
     # Sorting
-    _allowed_sort = {"created_at", "updated_at", "ledger_date", "due_time", "start_time", "diary_date", "amount"}
+    _allowed_sort = {
+        "created_at",
+        "updated_at",
+        "ledger_date",
+        "plan_date",
+        "deadline_at",
+        "completed_at",
+        "cancelled_at",
+        "start_time",
+        "diary_date",
+        "entry_time",
+        "amount",
+        "amount_cents",
+    }
     if sort in _allowed_sort:
         filters["sort_field"] = sort
         filters["sort_order"] = order.upper()
@@ -416,8 +537,12 @@ def list_items(
 
     # Count matching all filters
     count_where, count_params = _build_count_where(
-        type, status, category, priority, direction, start_date, end_date, resolved_df,
-        amount_min, amount_max, owner_id, keyword.strip() if keyword else None
+        type, status, category, priority, start_date, end_date, resolved_df,
+        amount_min, amount_max, owner_id, keyword.strip() if keyword else None,
+        transaction_type=transaction_type,
+        account_name=account_name,
+        counter_account_name=counter_account_name,
+        merchant=merchant,
     )
     conn = db.get_connection()
     if tags:
@@ -511,23 +636,26 @@ def create_item(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
     if body.type == "diary":
+        if not item_data.get("entry_time"):
+            item_data["entry_time"] = _entry_time_for_diary_date(
+                now,
+                str(item_data.get("diary_date") or ""),
+            )
         try:
             item_data = normalize_diary_fields(item_data, partial=False)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
-        if _has_other_diary_for_date(db, owner_id, item_data["diary_date"]):
-            raise HTTPException(status_code=409, detail="Diary already exists for this date")
+        if not str(item_data.get("title") or "").strip():
+            entry_time = str(item_data.get("entry_time") or now)
+            entry_label = entry_time[11:16] if len(entry_time) >= 16 else ""
+            item_data["title"] = f"{item_data['diary_date']} {entry_label} 日记".strip()
     if body.type == "ledger":
+        if not item_data.get("ledger_date"):
+            item_data["ledger_date"] = now[:10]
         try:
             item_data = normalize_ledger_fields(item_data, partial=False)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
-
-    # Default task status
-    if body.type == "task" and not body.status:
-        item_data["status"] = "todo"
-    if body.type == "task" and not body.priority:
-        item_data["priority"] = 3
 
     item_id = db.insert_item(item_data)
     db.log_operation(owner_id, "create", item_type=body.type, item_id=item_id)
@@ -612,8 +740,6 @@ def update_item(
             merged = item.to_dict()
             merged.update(updates)
             normalized = normalize_diary_fields(merged, partial=False)
-            if _has_other_diary_for_date(db, owner_id, normalized["diary_date"], exclude_item_id=item_id):
-                raise HTTPException(status_code=409, detail="Diary already exists for this date")
             for field in DIARY_MUTABLE_FIELDS:
                 if field in normalized:
                     updates[field] = normalized[field]
@@ -621,7 +747,21 @@ def update_item(
             raise HTTPException(status_code=422, detail=str(exc))
     if item_type == "ledger":
         try:
-            updates = normalize_ledger_fields(updates, partial=True)
+            merged = item.to_dict()
+            if "amount" in updates and "amount_cents" not in updates:
+                merged.pop("amount_cents", None)
+            merged.update(updates)
+            normalized = normalize_ledger_fields(merged, partial=False)
+            updates = {
+                field: normalized[field]
+                for field in LEDGER_MUTABLE_FIELDS & requested_update_fields
+                if field in normalized
+            }
+            if {"amount", "amount_cents"} & requested_update_fields:
+                updates["amount"] = normalized["amount"]
+                updates["amount_cents"] = normalized["amount_cents"]
+            if "transaction_type" in requested_update_fields:
+                updates["transaction_type"] = normalized["transaction_type"]
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
 

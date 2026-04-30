@@ -30,23 +30,32 @@ class ItemFields:
     PARTICIPANTS = 'participants'
     
     # Task 扩展字段
-    DUE_TIME = 'due_time'
+    PLAN_DATE = 'plan_date'
+    DEADLINE_AT = 'deadline_at'
     PRIORITY = 'priority'
     STATUS = 'status'
-    ESTIMATE = 'estimate'
-    SUBTASKS = 'subtasks'
-    DEPENDENCY = 'dependency'
-    PROGRESS = 'progress'
+    REPEAT_RULE = 'repeat_rule'
+    COMPLETED_AT = 'completed_at'
+    CANCELLED_AT = 'cancelled_at'
     
     # Diary 扩展字段
     DIARY_DATE = 'diary_date'
+    ENTRY_TIME = 'entry_time'
     MOOD = 'mood'
+    MOOD_SCORE = 'mood_score'
     WEATHER = 'weather'
     TEMPLATE_ID = 'template_id'
+    TEMPLATE_ANSWERS = 'template_answers'
+    IS_FAVORITE = 'is_favorite'
 
     # Ledger 扩展字段
     AMOUNT = 'amount'
-    DIRECTION = 'direction'
+    AMOUNT_CENTS = 'amount_cents'
+    CURRENCY = 'currency'
+    TRANSACTION_TYPE = 'transaction_type'
     LEDGER_CATEGORY = 'ledger_category'
     LEDGER_DATE = 'ledger_date'
+    ACCOUNT_NAME = 'account_name'
+    COUNTER_ACCOUNT_NAME = 'counter_account_name'
+    MERCHANT = 'merchant'
     REMARK = 'remark'

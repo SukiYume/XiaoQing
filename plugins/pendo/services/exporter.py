@@ -73,7 +73,7 @@ class ExporterService:
     }
     _TYPE_SUMMARY_HINTS = {
         "event": "按开始时间归档，保留地点、提醒、日程集合与节点上下文。",
-        "task": "按截止时间或创建时间排序，保留优先级与完成状态。",
+        "task": "按计划日期、截止时间或创建时间排序，保留优先级、提醒与完成状态。",
         "note": "按创建时间归档，保留分类、标签与关联条目信息。",
         "ledger": "按记账日期归档，突出收支方向、金额与分类。",
         "diary": "按日记日期归档，保留天气、地点、心情等记录。",
@@ -302,11 +302,19 @@ class ExporterService:
         if item_type == "event":
             candidates = [getattr(item, "start_time", None), getattr(item, "created_at", None)]
         elif item_type == "task":
-            candidates = [getattr(item, "due_time", None), getattr(item, "created_at", None)]
+            candidates = [
+                getattr(item, "plan_date", None),
+                getattr(item, "deadline_at", None),
+                getattr(item, "created_at", None),
+            ]
         elif item_type == "ledger":
             candidates = [getattr(item, "ledger_date", None), getattr(item, "created_at", None)]
         elif item_type == "diary":
-            candidates = [getattr(item, "diary_date", None), getattr(item, "created_at", None)]
+            candidates = [
+                getattr(item, "entry_time", None),
+                getattr(item, "diary_date", None),
+                getattr(item, "created_at", None),
+            ]
         else:
             candidates = [getattr(item, "created_at", None)]
 
@@ -501,8 +509,12 @@ class ExporterService:
         if item_type == "task":
             return [
                 (
+                    "计划日期",
+                    self._escape_table(self._format_time_value(getattr(item, "plan_date", None))),
+                ),
+                (
                     "截止时间",
-                    self._escape_table(self._format_time_value(getattr(item, "due_time", None))),
+                    self._escape_table(self._format_time_value(getattr(item, "deadline_at", None))),
                 ),
                 (
                     "优先级",
@@ -516,6 +528,16 @@ class ExporterService:
                     "完成时间",
                     self._escape_table(self._format_time_value(getattr(item, "completed_at", None))),
                 ),
+                (
+                    "取消时间",
+                    self._escape_table(self._format_time_value(getattr(item, "cancelled_at", None))),
+                ),
+                (
+                    "提醒",
+                    self._escape_table(
+                        self._format_time_list(getattr(item, "remind_times", []), empty="未设置")
+                    ),
+                ),
             ]
 
         if item_type == "note":
@@ -523,15 +545,19 @@ class ExporterService:
 
         if item_type == "ledger":
             amount = getattr(item, "amount", None)
-            direction = getattr(item, "direction", "")
-            amount_text = self._format_ledger_amount(amount, direction)
+            transaction_type = getattr(item, "transaction_type", "")
+            amount_text = self._format_ledger_amount(amount, transaction_type)
             return [
                 (
                     "记账日期",
                     self._escape_table(self._format_time_value(getattr(item, "ledger_date", None))),
                 ),
-                ("收支方向", self._escape_table(self._format_direction(direction))),
+                ("交易类型", self._escape_table(self._format_transaction_type(transaction_type))),
                 ("金额", self._escape_table(amount_text)),
+                ("币种", self._escape_table(self._value_or_dash(getattr(item, "currency", "")))),
+                ("账户", self._escape_table(self._value_or_dash(getattr(item, "account_name", "")))),
+                ("转入账户", self._escape_table(self._value_or_dash(getattr(item, "counter_account_name", "")))),
+                ("商户", self._escape_table(self._value_or_dash(getattr(item, "merchant", "")))),
                 ("备注", self._escape_table(self._value_or_dash(getattr(item, "remark", "")))),
             ]
 
@@ -541,9 +567,16 @@ class ExporterService:
                     "日记日期",
                     self._escape_table(self._format_time_value(getattr(item, "diary_date", None))),
                 ),
+                (
+                    "记录时间",
+                    self._escape_table(self._format_time_value(getattr(item, "entry_time", None))),
+                ),
                 ("天气", self._escape_table(self._value_or_dash(getattr(item, "weather", "")))),
                 ("地点", self._escape_table(self._value_or_dash(getattr(item, "location", "")))),
                 ("心情", self._escape_table(self._value_or_dash(getattr(item, "mood", "")))),
+                ("心情分数", self._escape_table(self._value_or_dash(getattr(item, "mood_score", "")))),
+                ("收藏", "是" if getattr(item, "is_favorite", False) else "否"),
+                ("模板", self._escape_table(self._value_or_dash(getattr(item, "template_id", "")))),
             ]
 
         return []
@@ -593,6 +626,13 @@ class ExporterService:
             notes = (getattr(item, "notes", "") or "").strip()
             if notes:
                 sections.extend(["", "**补充备注**", "", notes])
+
+        if item_type == "diary":
+            answers = self._format_template_answers(getattr(item, "template_answers", []))
+            if answers:
+                if sections:
+                    sections.append("")
+                sections.extend(["**模板回答**", "", *answers])
 
         return sections
 
@@ -648,6 +688,20 @@ class ExporterService:
             lines.append(f"- {label}: {title} (`{ref_id}`)")
         return lines
 
+    def _format_template_answers(self, answers: Any) -> list[str]:
+        if not isinstance(answers, list):
+            return []
+        lines: list[str] = []
+        for item in answers:
+            if not isinstance(item, dict):
+                continue
+            prompt = self._value_or_dash(item.get("prompt"))
+            answer = self._value_or_dash(item.get("answer"))
+            if prompt == "无" and answer == "无":
+                continue
+            lines.append(f"- {prompt}: {answer}")
+        return lines
+
     def _format_priority(self, value: Any) -> str:
         mapping = {
             1: "P1 / 紧急",
@@ -664,25 +718,25 @@ class ExporterService:
 
     def _format_task_status(self, value: Any) -> str:
         mapping = {
-            "todo": "待处理",
-            "in_progress": "进行中",
+            "open": "待处理",
             "done": "已完成",
             "cancelled": "已取消",
         }
         raw = getattr(value, "value", value)
         return mapping.get(str(raw), self._value_or_dash(raw))
 
-    def _format_direction(self, value: Any) -> str:
+    def _format_transaction_type(self, value: Any) -> str:
         mapping = {
             "income": "收入",
             "expense": "支出",
+            "transfer": "转账",
         }
         return mapping.get(str(value), self._value_or_dash(value))
 
-    def _format_ledger_amount(self, amount: Any, direction: Any) -> str:
-        direction_text = self._format_direction(direction)
+    def _format_ledger_amount(self, amount: Any, transaction_type: Any) -> str:
+        transaction_type_text = self._format_transaction_type(transaction_type)
         try:
-            return f"{direction_text} ¥{float(amount):.2f}"
+            return f"{transaction_type_text} ¥{float(amount):.2f}"
         except (TypeError, ValueError):
             return self._value_or_dash(amount)
 

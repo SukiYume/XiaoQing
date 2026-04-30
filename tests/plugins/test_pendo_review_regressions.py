@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+from plugins.pendo.handlers.note import NoteHandler
 from plugins.pendo.handlers.task import TaskHandler
 from plugins.pendo.services.ai_parser import AIParser
 from plugins.pendo.services.db import Database
@@ -183,6 +184,102 @@ def test_reminder_dispatch_uses_owner_timezone(monkeypatch):
     assert result["messages"][0]["item_id"] == "evt-la"
 
 
+def test_reminder_service_skips_closed_tasks():
+    done_task = SimpleNamespace(
+        id="task-done",
+        owner_id="u-task",
+        type="task",
+        status="done",
+        title="已完成任务",
+        remind_times=["2030-01-01T09:00:00"],
+        context={},
+    )
+
+    class _FakeDb:
+        def get_all_events_with_reminders(self, future_hours=0):
+            return [done_task]
+
+        def get_user_settings(self, user_id):
+            raise AssertionError("closed task should not load reminder settings")
+
+        def get_unconfirmed_sent_reminders(self):
+            return []
+
+    result = ReminderService(db=_FakeDb()).check_and_send_reminders()
+
+    assert result["sent"] == 0
+    assert result["messages"] == []
+
+
+def test_reminder_repeats_skip_closed_tasks():
+    cancelled_task = SimpleNamespace(
+        id="task-cancelled",
+        owner_id="u-task",
+        type="task",
+        status="cancelled",
+        title="已取消任务",
+        remind_times=["2030-01-01T09:00:00"],
+        context={},
+    )
+
+    class _FakeDb:
+        def get_unconfirmed_sent_reminders(self):
+            return [{
+                "item_id": "task-cancelled",
+                "remind_time": "2030-01-01T09:00:00",
+                "repeat_count": 1,
+                "last_sent_at": "2030-01-01T09:00:00",
+            }]
+
+        def get_item(self, item_id):
+            return cancelled_task
+
+    messages = ReminderService(db=_FakeDb())._check_unconfirmed_repeats(
+        current_time=datetime(2030, 1, 1, 9, 10, 0),
+    )
+
+    assert messages == []
+
+
+def test_ledger_cli_edit_recomputes_amount_cents_when_amount_changes():
+    from plugins.pendo.handlers.ledger import LedgerHandler
+
+    temp_dir, db = _make_temp_db("pendo_review_ledger_amount_edit")
+    owner_id = "u-ledger-cli"
+
+    try:
+        db.insert_item({
+            "id": "ledger_amount",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "午饭",
+            "amount": 12.34,
+            "amount_cents": 1234,
+            "transaction_type": "expense",
+            "currency": "CNY",
+            "ledger_category": "餐饮",
+            "ledger_date": "2026-04-29",
+            "account_name": "现金",
+            "created_at": "2026-04-29T12:00:00",
+            "updated_at": "2026-04-29T12:00:00",
+        })
+
+        result = asyncio.run(
+            LedgerHandler(db=db).edit_ledger(
+                owner_id,
+                "ledger_amount amount:56.78",
+                SimpleNamespace(),
+            )
+        )
+        item = db.get_item("ledger_amount", owner_id=owner_id)
+
+        assert result["status"] == "success"
+        assert item.amount == 56.78
+        assert item.amount_cents == 5678
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_daily_briefing_orders_urgent_tasks_first():
     temp_dir, db = _make_temp_db("pendo_review_briefing_priority")
     owner_id = "u-briefing-priority"
@@ -194,10 +291,11 @@ def test_daily_briefing_orders_urgent_tasks_first():
                 "owner_id": owner_id,
                 "type": "task",
                 "title": "Fix incident",
-                "category": "2026-04-23",
-                "status": "todo",
+                "category": "工作",
+                "status": "open",
                 "priority": 1,
-                "due_time": "2026-04-23T18:00:00",
+                "plan_date": "2026-04-23",
+                "deadline_at": "2026-04-23T18:00:00",
                 "created_at": "2026-04-23T09:00:00",
                 "updated_at": "2026-04-23T09:00:00",
             }
@@ -208,10 +306,11 @@ def test_daily_briefing_orders_urgent_tasks_first():
                 "owner_id": owner_id,
                 "type": "task",
                 "title": "Tidy backlog",
-                "category": "2026-04-23",
-                "status": "todo",
+                "category": "工作",
+                "status": "open",
                 "priority": 4,
-                "due_time": "2026-04-23T18:00:00",
+                "plan_date": "2026-04-23",
+                "deadline_at": "2026-04-23T18:00:00",
                 "created_at": "2026-04-23T09:05:00",
                 "updated_at": "2026-04-23T09:05:00",
             }
@@ -228,7 +327,100 @@ def test_daily_briefing_orders_urgent_tasks_first():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_task_parser_uses_user_timezone_for_default_category(monkeypatch):
+def test_daily_briefing_excludes_cancelled_tasks():
+    temp_dir, db = _make_temp_db("pendo_review_briefing_cancelled")
+    owner_id = "u-briefing-cancelled"
+
+    try:
+        db.insert_item(
+            {
+                "id": "task-cancelled-today",
+                "owner_id": owner_id,
+                "type": "task",
+                "title": "Cancelled today",
+                "category": "工作",
+                "status": "cancelled",
+                "priority": 1,
+                "plan_date": "2026-04-23",
+                "deadline_at": "2026-04-22T18:00:00",
+                "cancelled_at": "2026-04-22T09:00:00",
+                "created_at": "2026-04-22T08:00:00",
+                "updated_at": "2026-04-22T09:00:00",
+            }
+        )
+        db.insert_item(
+            {
+                "id": "task-open-today",
+                "owner_id": owner_id,
+                "type": "task",
+                "title": "Open today",
+                "category": "工作",
+                "status": "open",
+                "priority": 3,
+                "plan_date": "2026-04-23",
+                "created_at": "2026-04-23T09:00:00",
+                "updated_at": "2026-04-23T09:00:00",
+            }
+        )
+
+        _events, tasks, overdue = db.get_briefing_items(
+            owner_id,
+            "2026-04-23T00:00:00",
+            "2026-04-24T00:00:00",
+        )
+
+        assert [task.id for task in tasks] == ["task-open-today"]
+        assert overdue == []
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_daily_migration_updates_plan_date_and_invalidates_task_cache():
+    from plugins.pendo.commands import scheduled as scheduled_module
+
+    temp_dir, db = _make_temp_db("pendo_review_task_migration_cache")
+    owner_id = "u-task-migration-cache"
+
+    try:
+        db.insert_item(
+            {
+                "id": "task-yesterday",
+                "owner_id": owner_id,
+                "type": "task",
+                "title": "Move me",
+                "category": "工作",
+                "status": "open",
+                "priority": 3,
+                "plan_date": "2026-04-28",
+                "created_at": "2026-04-28T08:00:00",
+                "updated_at": "2026-04-28T08:00:00",
+            }
+        )
+        assert db.get_item("task-yesterday", owner_id).plan_date == "2026-04-28"
+        assert db.get_items(owner_id, filters={"type": "task"}, limit=10)[0].plan_date == "2026-04-28"
+
+        migrated = asyncio.run(
+            scheduled_module._batch_migrate_tasks_to_date(
+                db,
+                [SimpleNamespace(id="task-yesterday")],
+                "2026-04-29",
+                owner_id,
+            )
+        )
+
+        assert migrated == 1
+        assert db.get_item("task-yesterday", owner_id).plan_date == "2026-04-29"
+        assert db.get_items(owner_id, filters={"type": "task"}, limit=10)[0].plan_date == "2026-04-29"
+        raw = db.get_connection().execute(
+            "SELECT category FROM items WHERE id = ?",
+            ("task-yesterday",),
+        ).fetchone()
+        assert raw["category"] == "工作"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_task_parser_uses_user_timezone_for_default_plan_date(monkeypatch):
     from plugins.pendo.handlers import task as task_module
     from plugins.pendo.utils import validators as validators_module
 
@@ -249,7 +441,8 @@ def test_task_parser_uses_user_timezone_for_default_category(monkeypatch):
 
     parsed = handler._parse_task_text("Write weekly recap", "u-la")
 
-    assert parsed["category"] == "2030-01-02"
+    assert parsed["category"] == "未分类"
+    assert parsed["plan_date"] == "2030-01-02"
 
 
 def test_task_today_shortcut_uses_user_timezone(monkeypatch):
@@ -267,7 +460,28 @@ def test_task_today_shortcut_uses_user_timezone(monkeypatch):
 
         def get_items(self, owner_id, filters, limit):
             self.captured_filters = filters
-            return []
+            return [
+                SimpleNamespace(
+                    id="la",
+                    title="LA today",
+                    status="open",
+                    priority=3,
+                    plan_date="2030-01-01",
+                    deadline_at=None,
+                    category="工作",
+                    created_at="2030-01-01T08:00:00",
+                ),
+                SimpleNamespace(
+                    id="server",
+                    title="Server tomorrow",
+                    status="open",
+                    priority=3,
+                    plan_date="2030-01-02",
+                    deadline_at=None,
+                    category="工作",
+                    created_at="2030-01-02T08:00:00",
+                ),
+            ]
 
     items_repo = _ItemsRepo()
     handler = TaskHandler(db=SimpleNamespace(items=items_repo))
@@ -279,10 +493,12 @@ def test_task_today_shortcut_uses_user_timezone(monkeypatch):
         lambda user_id, db: datetime(2030, 1, 1, 23, 30, 0, tzinfo=ZoneInfo("America/Los_Angeles")),
     )
 
-    asyncio.run(handler.list_tasks("u-la", "today", SimpleNamespace()))
+    result = asyncio.run(handler.list_tasks("u-la", "today", SimpleNamespace()))
 
     assert items_repo.captured_filters is not None
-    assert items_repo.captured_filters["category"] == "2030-01-01"
+    assert items_repo.captured_filters["status"] == "open"
+    assert "LA today" in result["message"]
+    assert "Server tomorrow" not in result["message"]
 
 
 def test_web_task_api_source_uses_user_timezone_for_task_timestamps():
@@ -291,3 +507,200 @@ def test_web_task_api_source_uses_user_timezone_for_task_timestamps():
     expected = 'now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()'
 
     assert src.count(expected) >= 2
+
+
+def test_web_redesign_pages_escape_user_controlled_list_fields():
+    tasks_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js").read_text(encoding="utf-8")
+    ledger_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "ledger.js").read_text(encoding="utf-8")
+    dashboard_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "dashboard.js").read_text(encoding="utf-8")
+
+    assert "escapeHtml(task.title || '(无标题)')" in tasks_src
+    assert "escapeHtml(task.content)" in tasks_src
+    assert "escapeHtml(textCategory)" in tasks_src
+    assert "escapeHtml(item.title || '(无摘要)')" in ledger_src
+    assert "escapeHtml(item.ledger_category)" in ledger_src
+    assert "escapeHtml(accountText)" in ledger_src
+    assert "const safeValue = escapeHtml(String(value));" in ledger_src
+    assert "${safeValue}</span>" in ledger_src
+    assert "escapeHtml(heading)" in dashboard_src
+    assert "escapeHtml(task.title || '(无标题)')" in dashboard_src
+    assert "escapeHtml(item.title || '(无摘要)')" in dashboard_src
+
+
+def test_rrule_generation_is_bounded_before_materializing_instances():
+    src = (ROOT / "plugins" / "pendo" / "handlers" / "event.py").read_text(encoding="utf-8")
+
+    assert "from itertools import islice" in src
+    assert "list(islice(rrule_obj, PendoConfig.EVENT_MAX_RRULE_COUNT))" in src
+    assert "list(rrule_obj)[: PendoConfig.EVENT_MAX_RRULE_COUNT]" not in src
+
+
+def test_web_list_and_search_api_source_bounds_pagination_inputs():
+    items_src = (ROOT / "plugins" / "pendo" / "web" / "api" / "items.py").read_text(encoding="utf-8")
+    search_src = (ROOT / "plugins" / "pendo" / "web" / "api" / "search.py").read_text(encoding="utf-8")
+
+    assert "page: int = Query(1, ge=1)" in items_src
+    assert "page_size: int = Query(20, ge=1, le=100)" in items_src
+    assert "page: int = Query(1, ge=1)" in search_src
+    assert "page_size: Optional[int] = Query(None, ge=1, le=100)" in search_src
+    assert "limit: int = Query(50, ge=1, le=100)" in search_src
+
+
+def test_pendo_active_session_source_bypasses_explicit_commands():
+    src = (ROOT / "plugins" / "pendo" / "main.py").read_text(encoding="utf-8")
+
+    assert "def _is_explicit_pendo_command" in src
+    assert "await safe_end_session(context)" in src
+    assert "return await _handle_command_routing(user_id, args, context, group_id, log)" in src
+
+
+def test_undo_delete_restores_logged_task_and_note_batches():
+    temp_dir, db = _make_temp_db("pendo_review_undo_batch")
+    owner_id = "u-undo-batch"
+
+    try:
+        for item_id, title in (("task-a", "A"), ("task-b", "B")):
+            db.insert_item({
+                "id": item_id,
+                "owner_id": owner_id,
+                "type": "task",
+                "title": title,
+                "category": "工作",
+                "status": "open",
+                "priority": 3,
+                "created_at": "2026-04-30T09:00:00",
+                "updated_at": "2026-04-30T09:00:00",
+            })
+
+        deleted = asyncio.run(
+            TaskHandler(db)._delete_category_tasks(owner_id, "工作", SimpleNamespace())
+        )
+        assert deleted["status"] == "success"
+        assert db.get_item("task-a", owner_id) is None
+        assert db.get_item("task-b", owner_id) is None
+
+        restored = db.undo_delete(owner_id)
+        assert restored["status"] == "success"
+        assert restored["affected"] == 2
+        assert db.get_item("task-a", owner_id).title == "A"
+        assert db.get_item("task-b", owner_id).title == "B"
+
+        for item_id, title in (("note-a", "NA"), ("note-b", "NB")):
+            db.insert_item({
+                "id": item_id,
+                "owner_id": owner_id,
+                "type": "note",
+                "title": title,
+                "content": "body",
+                "category": "知识",
+                "created_at": "2026-04-30T10:00:00",
+                "updated_at": "2026-04-30T10:00:00",
+            })
+
+        deleted_notes = asyncio.run(
+            NoteHandler(db)._delete_category_notes(owner_id, "知识", SimpleNamespace())
+        )
+        assert deleted_notes["status"] == "success"
+        assert db.get_item("note-a", owner_id) is None
+        assert db.get_item("note-b", owner_id) is None
+
+        restored_notes = db.undo_delete(owner_id)
+        assert restored_notes["status"] == "success"
+        assert restored_notes["affected"] == 2
+        assert db.get_item("note-a", owner_id).title == "NA"
+        assert db.get_item("note-b", owner_id).title == "NB"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_undo_delete_restores_event_collection_and_children_from_log():
+    temp_dir, db = _make_temp_db("pendo_review_undo_collection")
+    owner_id = "u-undo-collection"
+
+    try:
+        db.create_event_collection({
+            "id": "coll-undo",
+            "owner_id": owner_id,
+            "kind": "multi_node",
+            "title": "项目发布",
+            "category": "项目",
+            "start_time": "2030-05-01T10:00:00",
+            "end_time": "2030-05-02T18:00:00",
+            "created_at": "2026-04-30T09:00:00",
+            "updated_at": "2026-04-30T09:00:00",
+        })
+        for item_id, index, title, start_time in (
+            ("coll-undo_m01", 1, "提审", "2030-05-01T10:00:00"),
+            ("coll-undo_m02", 2, "上线", "2030-05-02T18:00:00"),
+        ):
+            db.insert_item({
+                "id": item_id,
+                "owner_id": owner_id,
+                "type": "event",
+                "title": title,
+                "category": "项目",
+                "start_time": start_time,
+                "event_role": "multi_node_child",
+                "event_collection_id": "coll-undo",
+                "event_collection_kind": "multi_node",
+                "event_index": index,
+                "created_at": "2026-04-30T09:00:00",
+                "updated_at": "2026-04-30T09:00:00",
+            })
+
+        assert db.delete_event_collection("coll-undo", owner_id, cascade=True) is True
+        db.log_operation(owner_id, "delete_event_collection", item_type="event", item_id="coll-undo")
+        assert db.get_event_collection("coll-undo", owner_id) is None
+        assert db.get_item("coll-undo_m01", owner_id) is None
+
+        restored = db.undo_delete(owner_id)
+        assert restored["status"] == "success"
+        assert restored["collection_id"] == "coll-undo"
+        assert db.get_event_collection("coll-undo", owner_id)["title"] == "项目发布"
+        assert db.get_item("coll-undo_m01", owner_id).title == "提审"
+        assert db.get_item("coll-undo_m02", owner_id).title == "上线"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_rebuild_fts_index_repairs_missing_and_stale_rows():
+    temp_dir, db = _make_temp_db("pendo_review_fts_rebuild")
+    owner_id = "u-fts-rebuild"
+
+    try:
+        db.insert_item({
+            "id": "note-live",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "全文索引修复",
+            "content": "可搜索正文",
+            "category": "研究",
+            "created_at": "2026-04-30T09:00:00",
+            "updated_at": "2026-04-30T09:00:00",
+        })
+        db.insert_item({
+            "id": "note-deleted",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "应删除索引",
+            "content": "旧正文",
+            "category": "研究",
+            "created_at": "2026-04-30T09:00:00",
+            "updated_at": "2026-04-30T09:00:00",
+        })
+        db.delete_item("note-deleted", soft=True, owner_id=owner_id)
+        conn = db.get_connection()
+        conn.execute("DELETE FROM items_fts WHERE id = ?", ("note-live",))
+        conn.execute(
+            "INSERT INTO items_fts (id, title, content, tags, category) VALUES (?, ?, ?, ?, ?)",
+            ("note-deleted", "应删除索引", "旧正文", "", "研究"),
+        )
+        conn.commit()
+
+        result = db.rebuild_fts_index(owner_id)
+
+        assert result["indexed"] == 1
+        assert conn.execute("SELECT 1 FROM items_fts WHERE id = ?", ("note-live",)).fetchone() is not None
+        assert conn.execute("SELECT 1 FROM items_fts WHERE id = ?", ("note-deleted",)).fetchone() is None
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

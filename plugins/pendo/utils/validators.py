@@ -4,10 +4,125 @@
 提供统一的输入验证功能，确保数据安全性和一致性
 """
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from typing import Any, Optional
 
 DEFAULT_EVENT_REMINDER_RULES = [{"offset_seconds": 0}]
+
+LEDGER_TRANSACTION_TYPES = {"expense", "income", "transfer"}
+LEDGER_DEFAULT_ACCOUNT = "现金"
+LEDGER_DEFAULT_CURRENCY = "CNY"
+
+COMMON_ITEM_FIELDS = {
+    "id",
+    "owner_id",
+    "type",
+    "title",
+    "content",
+    "tags",
+    "category",
+    "created_at",
+    "updated_at",
+    "context",
+    "visibility",
+    "attachments",
+    "ai_meta",
+    "deleted",
+    "deleted_at",
+}
+
+TYPE_SPECIFIC_ITEM_FIELDS = {
+    "event": {
+        "start_time",
+        "end_time",
+        "timezone",
+        "location",
+        "participants",
+        "remind_times",
+        "notes",
+        "event_role",
+        "event_collection_id",
+        "event_collection_kind",
+        "event_index",
+        "event_node_key",
+        "source_item_id",
+        "reminder_rules",
+    },
+    "task": {
+        "plan_date",
+        "deadline_at",
+        "priority",
+        "status",
+        "remind_times",
+        "reminder_rules",
+        "repeat_rule",
+        "completed_at",
+        "cancelled_at",
+    },
+    "ledger": {
+        "amount",
+        "amount_cents",
+        "currency",
+        "transaction_type",
+        "ledger_category",
+        "ledger_date",
+        "account_name",
+        "counter_account_name",
+        "merchant",
+        "remark",
+    },
+    "note": {"references", "last_viewed", "related_items"},
+    "diary": {
+        "mood",
+        "mood_score",
+        "weather",
+        "location",
+        "template_id",
+        "diary_date",
+        "entry_time",
+        "template_answers",
+        "is_favorite",
+    },
+}
+
+SUPPORTED_ITEM_TYPES = set(TYPE_SPECIFIC_ITEM_FIELDS)
+
+DIARY_MOOD_VALUES = {
+    "happy",
+    "calm",
+    "excited",
+    "sad",
+    "angry",
+    "tired",
+    "anxious",
+    "grateful",
+    "neutral",
+}
+
+DIARY_MOOD_ALIASES = {
+    "😊": "happy",
+    "😄": "happy",
+    "😌": "calm",
+    "🤩": "excited",
+    "😢": "sad",
+    "😭": "sad",
+    "😠": "angry",
+    "😡": "angry",
+    "😴": "tired",
+    "😰": "anxious",
+    "🙏": "grateful",
+    "😐": "neutral",
+    "开心": "happy",
+    "平静": "calm",
+    "兴奋": "excited",
+    "难过": "sad",
+    "生气": "angry",
+    "疲惫": "tired",
+    "焦虑": "anxious",
+    "感恩": "grateful",
+    "普通": "neutral",
+}
 
 
 def sanitize_text(text: str, max_length: int = 10000) -> str:
@@ -93,8 +208,8 @@ def validate_tag(tag: str, max_length: int = 20) -> str:
     return tag
 
 
-def default_task_category(now: Optional[datetime] = None) -> str:
-    """Return the default task date category used by CLI and web create flows."""
+def default_task_plan_date(now: Optional[datetime] = None) -> str:
+    """Return the default planned date used by CLI and web create flows."""
     current = now or datetime.now()
     target = current + timedelta(days=1) if current.hour >= 20 else current
     return target.strftime("%Y-%m-%d")
@@ -115,26 +230,6 @@ def _coerce_datetime(value: Any) -> Optional[datetime]:
     except ValueError:
         return None
 
-
-def is_empty_task_category(category: Any) -> bool:
-    text = str(category or "").strip()
-    return not text or text == "未分类"
-
-
-def derive_task_category(
-    category: Any,
-    due_time: Any = None,
-    reference_time: Any = None,
-) -> str:
-    """Resolve task category into either a date bucket or user-provided text."""
-    text = str(category or "").strip()
-    due_text = str(due_time or "").strip()
-    if due_text and (is_empty_task_category(text) or is_date_category(text)):
-        return due_text[:10]
-    if text and text != "未分类":
-        return text
-    reference_dt = _coerce_datetime(reference_time)
-    return default_task_category(reference_dt)
 
 def validate_title(title: str, max_length: int = 200) -> str:
     """验证标题
@@ -181,6 +276,49 @@ def sanitize_search_keyword(keyword: str) -> str:
         keyword = keyword[:100]
 
     return keyword.strip()
+
+
+def normalize_diary_mood(value: Any) -> str:
+    """Normalize diary mood into the canonical journal vocabulary."""
+    if value in (None, ""):
+        return ""
+    mood = sanitize_text(str(value), 16).strip().lower()
+    if not mood:
+        return ""
+    mood = DIARY_MOOD_ALIASES.get(mood, mood)
+    if mood not in DIARY_MOOD_VALUES:
+        allowed = ", ".join(sorted(DIARY_MOOD_VALUES))
+        raise ValueError(f"Invalid diary mood: {mood}. Allowed values: {allowed}")
+    return mood
+
+
+def normalize_template_answers(value: Any) -> list[dict[str, str]]:
+    """Normalize structured diary template answers."""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("Diary template_answers must be a list")
+
+    answers: list[dict[str, str]] = []
+    for row in value:
+        if not isinstance(row, dict):
+            raise ValueError("Diary template_answers must contain objects")
+        prompt = sanitize_text(str(row.get("prompt") or ""), 300)
+        answer = sanitize_text(str(row.get("answer") or ""), 50000)
+        if not prompt and not answer:
+            continue
+        answers.append({"prompt": prompt, "answer": answer})
+    return answers
+
+
+def normalize_bool_flag(value: Any) -> bool:
+    """Normalize form/API boolean-ish values without treating 'false' as true."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "是", "收藏"}
+
 
 def validate_diary_content(content: str, max_length: int = 50000) -> str:
     """验证日记内容
@@ -252,6 +390,14 @@ def validate_item_data(data: dict[str, Any]) -> dict[str, Any]:
     Raises:
         ValueError: 数据无效
     """
+    item_type = str(data.get("type") or "").strip()
+    if item_type in SUPPORTED_ITEM_TYPES:
+        unknown = sorted(key for key in data if key not in get_allowed_item_fields(item_type))
+        if unknown:
+            raise ValueError(f"Unsupported {item_type} field: {', '.join(unknown)}")
+        if item_type == "ledger":
+            return normalize_ledger_fields(dict(data), partial=False)
+
     validated = {}
     
     # 验证标题
@@ -282,33 +428,98 @@ def validate_item_data(data: dict[str, Any]) -> dict[str, Any]:
     for key, value in data.items():
         if key not in validated and value is not None:
             validated[key] = value
-    
+
     return validated
 
 
+def ledger_amount_to_cents(amount: Any) -> int:
+    """Convert a user-facing money amount to integer cents."""
+    if amount is None or amount == "":
+        raise ValueError("Ledger amount is required")
+    if isinstance(amount, str):
+        amount = amount.replace("￥", "").replace("¥", "").replace(",", "").strip()
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError("Ledger amount must be a valid number") from exc
+    cents = int((value * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if cents <= 0:
+        raise ValueError("Ledger amount must be greater than 0")
+    return cents
+
+
+def ledger_cents_to_amount(cents: Any) -> float:
+    """Convert integer cents to a two-decimal float for display/API mirrors."""
+    try:
+        value = int(cents)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Ledger amount_cents must be an integer") from exc
+    if value <= 0:
+        raise ValueError("Ledger amount_cents must be greater than 0")
+    return float((Decimal(value) / Decimal("100")).quantize(Decimal("0.01")))
+
+
+def _clean_ledger_text(value: Any, default: str = "", max_length: int = 80) -> str:
+    return sanitize_text(str(value or "").strip(), max_length) or default
+
+
+def _normalize_ledger_type(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    aliases = {
+        "out": "expense",
+        "expense": "expense",
+        "支出": "expense",
+        "in": "income",
+        "income": "income",
+        "收入": "income",
+        "transfer": "transfer",
+        "xfer": "transfer",
+        "转账": "transfer",
+    }
+    return aliases.get(text, text)
+
+
 def normalize_ledger_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
-    """规范化并验证 ledger 字段。"""
+    """规范化并验证 ledger 字段。
+
+    `amount_cents` is the canonical money field. `amount` is a decimal
+    display mirror generated from cents.
+    """
     normalized = dict(data)
 
-    amount = normalized.get("amount")
-    if not partial or "amount" in normalized:
-        if amount is None or float(amount) <= 0:
+    has_amount_cents = "amount_cents" in normalized
+    has_amount = "amount" in normalized
+    if not partial or has_amount_cents or has_amount:
+        if has_amount_cents and normalized.get("amount_cents") not in (None, ""):
+            try:
+                cents = int(normalized["amount_cents"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Ledger amount_cents must be an integer") from exc
+            if cents <= 0:
+                raise ValueError("Ledger amount_cents must be greater than 0")
+        elif has_amount:
+            cents = ledger_amount_to_cents(normalized.get("amount"))
+        else:
             raise ValueError("Ledger amount must be greater than 0")
-        normalized["amount"] = float(amount)
+        normalized["amount_cents"] = cents
+        normalized["amount"] = ledger_cents_to_amount(cents)
 
-    direction = normalized.get("direction")
-    if direction is None and not partial:
-        direction = "expense"
-    if direction is not None:
-        if direction not in {"expense", "income"}:
-            raise ValueError("Invalid ledger direction")
-        normalized["direction"] = direction
+    tx_type = normalized.get("transaction_type")
+    if tx_type is None and not partial:
+        tx_type = "expense"
+    if tx_type is not None:
+        tx_type = _normalize_ledger_type(tx_type)
+        if tx_type not in LEDGER_TRANSACTION_TYPES:
+            raise ValueError("Invalid ledger transaction type")
+        normalized["transaction_type"] = tx_type
 
+    effective_type = normalized.get("transaction_type")
     category = normalized.get("ledger_category")
     if category is None and not partial:
-        category = "其他"
+        category = "转账" if effective_type == "transfer" else "其他"
     if category is not None:
-        normalized["ledger_category"] = str(category).strip() or "其他"
+        default_category = "转账" if effective_type == "transfer" else "其他"
+        normalized["ledger_category"] = _clean_ledger_text(category, default_category, 60)
 
     ledger_date = normalized.get("ledger_date")
     if not ledger_date and not partial:
@@ -318,6 +529,50 @@ def normalize_ledger_fields(data: dict[str, Any], partial: bool = False) -> dict
             normalized["ledger_date"] = datetime.strptime(str(ledger_date), "%Y-%m-%d").strftime("%Y-%m-%d")
         except ValueError as exc:
             raise ValueError("Invalid ledger_date, expected YYYY-MM-DD") from exc
+
+    currency = normalized.get("currency")
+    if currency is None and not partial:
+        currency = LEDGER_DEFAULT_CURRENCY
+    if currency is not None:
+        code = str(currency or "").strip().upper() or LEDGER_DEFAULT_CURRENCY
+        if not re.fullmatch(r"[A-Z]{3}", code):
+            raise ValueError("Invalid ledger currency")
+        normalized["currency"] = code
+
+    account = normalized.get("account_name")
+    if account is None and not partial:
+        account = LEDGER_DEFAULT_ACCOUNT
+    if account is not None:
+        normalized["account_name"] = _clean_ledger_text(account, LEDGER_DEFAULT_ACCOUNT, 80)
+
+    counter = normalized.get("counter_account_name")
+    if counter is not None:
+        normalized["counter_account_name"] = _clean_ledger_text(counter, "", 80)
+    elif not partial:
+        normalized["counter_account_name"] = ""
+
+    if effective_type == "transfer":
+        account_name = _clean_ledger_text(normalized.get("account_name"), LEDGER_DEFAULT_ACCOUNT, 80)
+        counter_name = _clean_ledger_text(normalized.get("counter_account_name"), "", 80)
+        if not counter_name:
+            raise ValueError("Ledger transfer requires counter_account_name")
+        if account_name == counter_name:
+            raise ValueError("Ledger transfer accounts must be different")
+        normalized["account_name"] = account_name
+        normalized["counter_account_name"] = counter_name
+        normalized["ledger_category"] = _clean_ledger_text(
+            normalized.get("ledger_category"), "转账", 60
+        )
+
+    if "merchant" in normalized:
+        normalized["merchant"] = _clean_ledger_text(normalized.get("merchant"), "", 120)
+    elif not partial:
+        normalized["merchant"] = ""
+
+    if "remark" in normalized:
+        normalized["remark"] = sanitize_text(str(normalized.get("remark") or "").strip(), 2000)
+    elif not partial:
+        normalized["remark"] = ""
 
     return normalized
 
@@ -412,6 +667,12 @@ def _normalize_iso_date(value: Any, field_name: str) -> str:
         raise ValueError(f"Invalid {field_name}, expected YYYY-MM-DD") from exc
 
 
+def _normalize_optional_iso_date(value: Any, field_name: str) -> str | None:
+    if value in (None, ""):
+        return None
+    return _normalize_iso_date(value, field_name)
+
+
 def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
     """规范化并验证 event 字段。"""
     normalized = dict(data)
@@ -443,9 +704,6 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
         timezone = "Asia/Shanghai"
     if timezone is not None:
         normalized["timezone"] = sanitize_text(str(timezone), 80) or "Asia/Shanghai"
-
-    for legacy_field in ("rrule", "parent_id", "remind_policy_id", "milestones"):
-        normalized.pop(legacy_field, None)
 
     event_role = normalized.get("event_role")
     if event_role is None and not partial:
@@ -543,27 +801,37 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
 def normalize_task_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
     """规范化并验证 task 字段。"""
     normalized = dict(data)
+    legacy_fields = {"due_time", "estimate", "subtasks", "dependencies", "progress"} & normalized.keys()
+    if legacy_fields:
+        field_list = ", ".join(sorted(legacy_fields))
+        raise ValueError(f"Unsupported legacy task field: {field_list}")
+    reminder_rules_provided = "reminder_rules" in normalized
+    remind_times_provided = "remind_times" in normalized
 
     title = normalized.get("title")
     if not partial or title is not None:
         normalized["title"] = validate_title(title or "")
 
-    due_time = normalized.get("due_time")
-    if due_time in (None, ""):
-        normalized["due_time"] = None
-    elif due_time is not None:
-        normalized["due_time"] = _normalize_iso_datetime(due_time, "due_time")
+    plan_date = normalized.get("plan_date")
+    if not partial or "plan_date" in normalized:
+        normalized["plan_date"] = _normalize_optional_iso_date(plan_date, "plan_date")
 
     category = normalized.get("category")
-    if not partial or category is not None:
-        normalized["category"] = validate_category(
-            derive_task_category(category, normalized.get("due_time"), normalized.get("created_at"))
-        )
+    if category is None and not partial:
+        category = "未分类"
+    if category is not None:
+        normalized["category"] = validate_category(category or "未分类")
 
     if "content" in normalized:
         normalized["content"] = sanitize_text(normalized.get("content") or "", 50000)
     elif not partial:
         normalized["content"] = ""
+
+    deadline_at = normalized.get("deadline_at")
+    if not partial or "deadline_at" in normalized:
+        normalized["deadline_at"] = (
+            None if deadline_at in (None, "") else _normalize_iso_datetime(deadline_at, "deadline_at")
+        )
 
     priority = normalized.get("priority")
     if priority is None and not partial:
@@ -573,41 +841,71 @@ def normalize_task_fields(data: dict[str, Any], partial: bool = False) -> dict[s
 
     status = normalized.get("status")
     if status is None and not partial:
-        status = "todo"
+        status = "open"
     if status is not None:
         status = sanitize_text(str(status), 30)
-        if status not in {"todo", "in_progress", "done", "cancelled"}:
+        if status not in {"open", "done", "cancelled"}:
             raise ValueError("Invalid task status")
         normalized["status"] = status
 
-    progress = normalized.get("progress")
-    if progress is not None:
-        try:
-            progress_value = int(progress)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Task progress must be an integer") from exc
-        if not 0 <= progress_value <= 100:
-            raise ValueError("Task progress must be between 0 and 100")
-        normalized["progress"] = progress_value
+    reminders = normalized.get("remind_times")
+    if reminders is None and not partial:
+        reminders = []
+    if reminders is not None:
+        if not isinstance(reminders, list):
+            raise ValueError("remind_times must be a list")
+        normalized["remind_times"] = sorted({
+            _normalize_iso_datetime(value, "remind_times")
+            for value in reminders
+            if value not in (None, "")
+        })
 
-    if "estimate" in normalized and normalized.get("estimate") not in (None, ""):
-        try:
-            estimate = int(normalized["estimate"])
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Task estimate must be an integer") from exc
-        if estimate < 0:
-            raise ValueError("Task estimate must be non-negative")
-        normalized["estimate"] = estimate
+    rules = normalized.get("reminder_rules")
+    if rules is None and not partial:
+        rules = []
+    if rules is not None:
+        normalized["reminder_rules"] = normalize_reminder_rules(rules)
+
+    repeat_rule = normalized.get("repeat_rule")
+    if repeat_rule in (None, ""):
+        if not partial or "repeat_rule" in normalized:
+            normalized["repeat_rule"] = None
+    elif repeat_rule is not None:
+        normalized["repeat_rule"] = sanitize_text(str(repeat_rule), 200)
+
+    has_rules = bool(normalized.get("reminder_rules"))
+    has_reminders = bool(normalized.get("remind_times"))
+    deadline = normalized.get("deadline_at")
+    explicitly_cleared = (
+        (reminder_rules_provided and not has_rules and (not remind_times_provided or not has_reminders))
+        or (remind_times_provided and not has_reminders and (not reminder_rules_provided or not has_rules))
+    )
+    if has_rules and deadline:
+        normalized["remind_times"] = build_remind_times_from_rules(deadline, normalized["reminder_rules"])
+    elif has_reminders and deadline:
+        normalized["reminder_rules"] = derive_reminder_rules(deadline, normalized["remind_times"])
+    elif explicitly_cleared:
+        normalized["reminder_rules"] = []
+        normalized["remind_times"] = []
 
     completed_at = normalized.get("completed_at")
+    cancelled_at = normalized.get("cancelled_at")
     status_value = normalized.get("status")
-    if status_value in {"done", "cancelled"}:
+    if status_value == "done":
         if completed_at in (None, ""):
             normalized["completed_at"] = datetime.now().isoformat(timespec="seconds")
         else:
             normalized["completed_at"] = _normalize_iso_datetime(completed_at, "completed_at")
+        normalized["cancelled_at"] = None
+    elif status_value == "cancelled":
+        normalized["completed_at"] = None
+        if cancelled_at in (None, ""):
+            normalized["cancelled_at"] = datetime.now().isoformat(timespec="seconds")
+        else:
+            normalized["cancelled_at"] = _normalize_iso_datetime(cancelled_at, "cancelled_at")
     elif status_value is not None:
         normalized["completed_at"] = None
+        normalized["cancelled_at"] = None
 
     return normalized
 
@@ -747,10 +1045,8 @@ def normalize_diary_fields(data: dict[str, Any], partial: bool = False) -> dict[
         normalized["location"] = ""
 
     mood = normalized.get("mood")
-    if mood in (None, ""):
-        normalized["mood"] = ""
-    elif mood is not None:
-        normalized["mood"] = sanitize_text(str(mood), 16)
+    if not partial or "mood" in normalized:
+        normalized["mood"] = normalize_diary_mood(mood)
 
     weather = normalized.get("weather")
     if weather in (None, ""):
@@ -776,4 +1072,53 @@ def normalize_diary_fields(data: dict[str, Any], partial: bool = False) -> dict[
     elif template_id is not None:
         normalized["template_id"] = sanitize_text(str(template_id), 80) or None
 
+    entry_time = normalized.get("entry_time")
+    if not partial or "entry_time" in normalized:
+        if entry_time in (None, ""):
+            normalized["entry_time"] = None
+        else:
+            normalized["entry_time"] = _normalize_iso_datetime(entry_time, "entry_time")
+
+    if not partial or "template_answers" in normalized:
+        normalized["template_answers"] = normalize_template_answers(normalized.get("template_answers"))
+
+    if "is_favorite" in normalized:
+        normalized["is_favorite"] = normalize_bool_flag(normalized.get("is_favorite"))
+    elif not partial:
+        normalized["is_favorite"] = False
+
     return normalized
+
+
+def get_item_normalizer(item_type: str):
+    """Return the strict field normalizer for a supported item type."""
+    return {
+        "event": normalize_event_fields,
+        "task": normalize_task_fields,
+        "note": normalize_note_fields,
+        "diary": normalize_diary_fields,
+        "ledger": normalize_ledger_fields,
+    }.get(str(item_type or "").strip())
+
+
+def get_allowed_item_fields(item_type: str) -> set[str]:
+    """Return the complete top-level field set accepted for a persisted item."""
+    item_type = str(item_type or "").strip()
+    return set(COMMON_ITEM_FIELDS) | set(TYPE_SPECIFIC_ITEM_FIELDS.get(item_type, set()))
+
+
+def normalize_item_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
+    """Normalize a full item payload and reject fields outside the new schema."""
+    item_type = str(data.get("type") or "").strip()
+    normalizer = get_item_normalizer(item_type)
+    if not normalizer:
+        raise ValueError(f"Unsupported record type: {item_type}")
+
+    allowed = get_allowed_item_fields(item_type)
+    unknown = sorted(key for key in data if key not in allowed)
+    if unknown:
+        raise ValueError(f"Unsupported {item_type} field: {', '.join(unknown)}")
+
+    payload = {key: value for key, value in data.items() if key in allowed}
+    payload["type"] = item_type
+    return normalizer(payload, partial=partial)
