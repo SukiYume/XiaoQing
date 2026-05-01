@@ -1,9 +1,9 @@
 # 🚀 01 - 快速开始
 
-本章将帮助你在 10 分钟内完成 XiaoQing 的安装、配置和运行。
+本章带你完成 XiaoQing 的安装、配置和首次运行。
 
 > [!TIP]
-> 还不了解 XiaoQing 是什么？先阅读 [00-overview.md](00-overview.md) 获取整体概念。
+> [00-overview.md](00-overview.md) 提供项目整体概念。第一次接触项目时，先看一遍会更顺。
 
 ---
 
@@ -23,7 +23,7 @@ cd XiaoQing
 pip install -r requirements.txt
 ```
 
-核心依赖包括：
+核心依赖包括以下组件。
 - `aiohttp` - 异步 HTTP
 - `websockets` - WebSocket 通信
 - `apscheduler` - 定时任务
@@ -43,7 +43,7 @@ cp config/config.json.example config/config.json
 cp config/secrets.json.example config/secrets.json
 ```
 
-如果你在 Windows PowerShell 中操作：
+Windows PowerShell 操作方式如下。
 
 ```powershell
 Copy-Item config/config.json.example config/config.json
@@ -103,7 +103,7 @@ Copy-Item config/secrets.json.example config/secrets.json
 | 配置项 | 说明 |
 |--------|------|
 | `inbound_token` | 与 OneBot 通信的密钥，需要双方一致 |
-| `onebot_token` | OneBot HTTP API 的鉴权 token；如果你启用了 token，这里也要同步填写，否则图片回收接口会失败 |
+| `onebot_token` | OneBot HTTP API 的鉴权 token；启用 token 时需要同步填写，否则图片回收接口会失败 |
 | `admin_user_ids` | 管理员 QQ 号列表，可执行管理命令 |
 | `plugins` | 各插件的私有配置（如 API Key） |
 
@@ -179,14 +179,14 @@ XiaoQing ──WebSocket──> OneBot (端口 11000)
 }
 ```
 
-### 选择哪种模式？
+### 接入模式选择
 
 | 模式 | 优点 | 缺点 |
 |------|------|------|
 | 被动接收 | 简单可靠，支持响应返回 | 需要 XiaoQing 监听端口 |
 | 主动连接 | 不需要 XiaoQing 监听 | 需要 OneBot 启用 WS |
 
-**推荐使用被动接收模式**，配置简单，调试方便。
+被动接收模式配置较简单，也便于调试。
 
 ---
 
@@ -194,7 +194,7 @@ XiaoQing ──WebSocket──> OneBot (端口 11000)
 
 ### 启动 OneBot
 
-先启动你的 NapCat：
+先启动 NapCat。
 
 ```bash
 # Windows
@@ -257,7 +257,7 @@ python main.py
 机器人: [对话统计信息...]
 ```
 
-如果你已经配置了 `xiaoqing_chat.vision`，建议再补两条多模态冒烟：
+配置 `xiaoqing_chat.vision` 后，建议再补两条多模态冒烟。
 
 ```
 你: [发一张普通图片]
@@ -267,7 +267,15 @@ python main.py
 机器人: [把表情内容纳入对话，必要时可能顺手带一个本地表情包或 QQ 表情]
 ```
 
-再补一个行为判断：在群里直接 `@` 小青，或发送 `小青 + 内容`，应该会走强制回复路径；即使此时后台正在补修旧表情包索引，也不该卡住当前回复。
+再补几个行为判断。
+
+- 在群里直接 `@` 小青，或发送 `小青 + 内容`，应走 forced 回复路径。
+- 只发送 `小青` 后，同一用户短时间内继续追问，小青应能接住后续问题。
+- reply 引用小青上一条消息时，应按 reply-to-bot 处理。
+- 最近上下文明确在聊小青时，发送 `不@她能不能听见啊` 这类“她/ta”共指消息，应能被识别为在叫小青。
+- 纯普通群聊闲聊不保证每条都回复，它会经过普通插话概率、heartflow、planner 和硬频控。
+
+这些行为属于 `xiaoqing_chat` 插件内部的 attention gate 和 participation gate，不由全局 `random_reply_rate` 决定。
 
 ### 个人助理测试（pendo）
 
@@ -284,6 +292,18 @@ python main.py
 你: /pendo ledger quick 35 午饭 cat:餐饮 account:微信
 机器人: ✓ 已记录支出
 ```
+
+需要浏览器界面时，继续验证 Web 控制台。
+
+```text
+你: /pendo web start
+机器人: [Web 服务状态和访问地址]
+
+你: /pendo web token
+机器人: [登录 token]
+```
+
+Pendo Web 覆盖 Dashboard、Events、Tasks、Ledger、Notes、Diary、Search、Stats、Settings 和 Transfer。聊天端适合快速录入，Web 端适合集中编辑、统计和数据迁移。
 
 ### SSH 远程控制测试（qingssh）
 
@@ -315,27 +335,27 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 
 打开浏览器访问后，先执行 `/pendo web token` 获取登录令牌，再将令牌粘贴到登录页即可。iPhone Scriptable 小组件使用 `/pendo web widget-token` 生成只读 token。
 
-如果你在 Windows 上遇到端口绑定失败，但 `netstat -ano` 看不到 `8765` 被占用，优先尝试在启动前设置 `$env:PENDO_WEB_PORT="8766"` 后重启主进程。
+Windows 上遇到端口绑定失败，且 `netstat -ano` 看不到 `8765` 被占用时，优先尝试在启动前设置 `$env:PENDO_WEB_PORT="8766"` 后重启主进程。
 
 如需使用 nginx 反向代理部署在子路径（如 `/pendo`），参见 [06-configuration.md](06-configuration.md) 中的 nginx 配置示例。
 
 ---
 
-## ❓ 常见问题
+## ❓ 常见排障
 
-### Q: 启动后没有任何响应
+### 启动后没有任何响应
 
-**检查清单**：
+排查时依次检查以下项。
 
-1. **OneBot 是否正常运行？**
+1. **OneBot 运行状态**
    - 查看 OneBot 的日志
    - 确认 QQ 已登录
 
-2. **网络配置是否正确？**
+2. **网络配置**
    - XiaoQing 的 `inbound_http_base` 端口与 OneBot 推送端口是否一致
    - Token 是否匹配
 
-3. **查看 XiaoQing 日志**：
+3. **查看 XiaoQing 日志**
    ```bash
    tail -n 100 logs/xiaoqing.log
    ```
@@ -344,7 +364,7 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
    Get-Content logs/xiaoqing.log -Tail 100
    ```
 
-### Q: 群聊不响应
+### 群聊不响应
 
 群聊默认需要满足以下条件之一：
 
@@ -352,16 +372,16 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 2. 消息包含机器人名称（如 `小青 你好`）
 3. 随机触发（默认 5% 概率）
 
-如果想让机器人响应所有群消息：
+响应所有群消息需要关闭群聊名称限制。
 ```json
 {
   "require_bot_name_in_group": false
 }
 ```
 
-### Q: 如何切换闲聊模式？
+### 闲聊模式切换
 
-XiaoQing 支持两种闲聊模式：
+XiaoQing 支持两种闲聊模式。
 
 1. **xiaoqing_chat**（推荐）：基于 LLM 的智能对话
    - 需要在 `config/secrets.json` 中配置 LLM API
@@ -371,7 +391,7 @@ XiaoQing 支持两种闲聊模式：
    - 无需额外配置
    - 回复简单、固定
 
-切换方法：
+通过配置切换。
 ```json
 {
   "plugins": {
@@ -380,11 +400,11 @@ XiaoQing 支持两种闲聊模式：
 }
 ```
 
-### Q: xiaoqing_chat 不回复？
+### xiaoqing_chat 回复缺失
 
-检查以下几点：
+排查时依次检查以下项。
 
-1. **是否配置了 LLM API？**
+1. **LLM API 配置**
    ```json
    {
      "plugins": {
@@ -413,11 +433,11 @@ XiaoQing 支持两种闲聊模式：
    ```
 
 3. **普通群消息的回复频率由插件内部控制**，不是所有消息都会回复；但 `/xc`、`@` 机器人、直接叫 `bot_name` 都属于强制回复路径
-4. **如果是图片/表情包不回复**，检查 `config/secrets.json -> plugins.xiaoqing_chat.vision` 是否已配置，以及日志中是否出现 `media.analyze.skip` / `media.analyze.fail`
+4. **图片或表情包不回复时**，检查 `config/secrets.json -> plugins.xiaoqing_chat.vision` 是否已配置，以及日志中是否出现 `media.analyze.skip` / `media.analyze.fail`
 
-### Q: 如何查看详细日志？
+### 详细日志查看
 
-修改 `config.json`：
+修改 `config.json`。
 ```json
 {
   "log_level": "DEBUG"
@@ -426,9 +446,9 @@ XiaoQing 支持两种闲聊模式：
 
 然后重启 XiaoQing。
 
-### Q: 端口被占用
+### 端口被占用
 
-更换端口：
+更换端口。
 ```json
 {
   "inbound_http_base": "http://127.0.0.1:12001",
@@ -442,7 +462,7 @@ XiaoQing 支持两种闲聊模式：
 
 ## ➡️ 下一步
 
-- 想了解系统架构？→ [02-architecture.md](02-architecture.md)
-- 想开发插件？→ [03-plugin-development.md](03-plugin-development.md)
-- 想了解配置详情？→ [06-configuration.md](06-configuration.md)
-- 想了解消息处理流程？→ [08-message-flow.md](08-message-flow.md)
+- 系统架构见 [02-architecture.md](02-architecture.md)
+- 插件开发见 [03-plugin-development.md](03-plugin-development.md)
+- 配置详情见 [06-configuration.md](06-configuration.md)
+- 消息处理流程见 [08-message-flow.md](08-message-flow.md)

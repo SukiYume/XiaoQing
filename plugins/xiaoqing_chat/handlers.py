@@ -21,6 +21,7 @@ from .brain_chat import (
     is_brain_chat_active,
     maybe_add_mode_indicator,
 )
+from .attention_gate import decide_attention
 from .helper_utils import (
     _chat_id,
     _extract_sender_name,
@@ -638,29 +639,34 @@ async def _prepare_smalltalk_turn(
         )
         return None
 
-    mentioned = _is_at_me(event) or _has_bot_name(event, bot_name)
+    direct_mentioned = _is_at_me(event) or _has_bot_name(event, bot_name)
     is_private = _is_private(event)
     command_forced = bool(event.get("_xc_command_forced"))
     collected_emoji_count = max(0, int(event.get("_xc_new_emoji_count", 0) or 0))
     pending_bot_name_forced = False
-    forced = False
-    force_reason = ""
-    if command_forced:
-        forced = True
-        force_reason = "command"
-    elif is_private and not runtime.cfg.brain_chat.enable_private_brain_chat:
-        forced = True
-        force_reason = "private"
-    elif mentioned:
-        forced = True
-        force_reason = "mentioned"
-    else:
+    if (
+        not command_forced
+        and not (is_private and not runtime.cfg.brain_chat.enable_private_brain_chat)
+        and not direct_mentioned
+    ):
         pending_bot_name_forced = _consume_pending_bot_name_call(
             state, chat_id, _coerce_int_or_none(event.get("user_id"))
         )
-        if pending_bot_name_forced:
-            forced = True
-            force_reason = "bot_name_followup"
+    attention = await decide_attention(
+        text=text,
+        event=event,
+        state=state,
+        chat_id=chat_id,
+        bot_name=bot_name,
+        is_private=is_private,
+        command_forced=command_forced,
+        direct_mentioned=direct_mentioned,
+        pending_bot_name_forced=pending_bot_name_forced,
+        enable_private_brain_chat=runtime.cfg.brain_chat.enable_private_brain_chat,
+    )
+    mentioned = attention.mentioned
+    forced = attention.forced
+    force_reason = attention.force_reason
 
     _log_step(
         context,
@@ -670,6 +676,9 @@ async def _prepare_smalltalk_turn(
         fields={
             "is_private": is_private,
             "mentioned": mentioned,
+            "direct_mentioned": direct_mentioned,
+            "coreference_mentioned": attention.coreference_mentioned,
+            "reply_to_bot": attention.reply_to_bot,
             "forced": forced,
             "force_reason": force_reason,
             "pending_bot_name": pending_bot_name_forced,
@@ -719,7 +728,6 @@ async def _prepare_smalltalk_turn(
             chat_id,
             text,
             is_private,
-            mentioned,
             runtime.cfg.brain_chat.enable_private_brain_chat,
         ):
             gate_fields = _last_reply_gate_log_fields(state, chat_id)

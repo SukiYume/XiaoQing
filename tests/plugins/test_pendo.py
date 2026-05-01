@@ -411,10 +411,10 @@ class TestPendoDocumentation:
             content = f.read()
             assert len(content) > 100
 
-    def test_plugin_doc_exists(self):
-        """测试插件说明文档存在"""
+    def test_duplicate_plugin_doc_removed(self):
+        """测试重复的旧插件说明文档已移除"""
         doc_path = ROOT / "plugins" / "pendo" / "Pendo个人时间与信息管理中枢.md"
-        assert doc_path.exists()
+        assert not doc_path.exists()
 
 
 class TestPendoCommands:

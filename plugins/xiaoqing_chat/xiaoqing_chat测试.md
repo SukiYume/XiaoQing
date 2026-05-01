@@ -1,4 +1,4 @@
-# `plugins/xiaoqing_chat` 完整测试 Prompt（改进版：状态续测 + 命令矩阵 + 真实 LLM 群聊）
+# `plugins/xiaoqing_chat` 完整测试 Prompt
 
 你现在是资深 Python 异步系统测试工程师、OneBot/QQ 机器人测试工程师、多模态聊天系统测试工程师、LLM 拟人聊天体验评估员、安全工程师、代码维护者和产品文档审查员。请对仓库中的 `plugins/xiaoqing_chat` 插件做一次**实际执行**的完整测试、问题修复、回归验证和报告输出。
 
@@ -70,7 +70,7 @@ plugins/xiaoqing_chat
 - `/xc` 命令入口。
 - `smalltalk_provider.observe_message` 和 `smalltalk_provider.handle_smalltalk`。
 - 私聊自动对话。
-- 群聊中被 @、叫名字、概率触发、静默观察、不该回复时沉默。
+- 群聊中 attention gate 触发（`/xc`、@、叫名字、只喊名字后的追问、reply 引用小青、上下文锚定的“她/ta”共指）、普通插话概率、静默观察、不该回复时沉默。
 - 多人群聊中的自然参与、接梗、上下文理解、用户识别、话题跟踪和边界感。
 - 文本、多图片、QQ face、NapCat mface、普通 image、reply、混合消息段。
 - 本地图库图片回复、表情包回复、QQ face 回复。
@@ -515,7 +515,11 @@ xiaoqing-trigger-matrix.json
 - 群聊 `/xc <内容>` 强制回复。
 - 群聊 @机器人强制回复。
 - 群聊直接叫机器人名字强制回复。
+- 只喊机器人名字后，同一用户短时间追问是否强制回复。
+- reply 引用小青上一条回复是否强制回复。
 - 群聊无 @ 但明显谈到小青。
+- 最近上下文锚定小青时，`她/他/ta` 共指召唤（如“不@她能不能听见啊”）是否强制回复。
+- 无小青上下文锚点的普通“她/ta”是否不会误触发。
 - 群聊普通消息按概率触发。
 - 群聊只观察不回复时是否仍正确记录上下文/记忆。
 - 群友互聊时小青应该沉默。
@@ -597,22 +601,24 @@ xiaoqing-trigger-matrix.json
 xiaoqing-group-script-matrix.json
 ```
 
-至少执行以下 14 个剧本。每个剧本至少 20 轮消息；重点剧本至少 50 轮消息。若因为真实 LLM 配额、网络或时间无法执行完整轮数，必须标记未完成，不能视为通过。
+至少执行以下 16 个剧本。每个剧本至少 20 轮消息；重点剧本至少 50 轮消息。若因为真实 LLM 配额、网络或时间无法执行完整轮数，必须标记未完成，不能视为通过。
 
 1. 日常闲聊。
 2. 多人同时 @ 小青。
 3. 无 @ 但提到小青。
-4. 群友互相聊天，小青应该沉默。
-5. 表情包和 mface 密集聊天。
-6. 图片理解群聊。
-7. 玩笑、接梗和轻度阴阳怪气。
-8. 情绪支持。
-9. 群聊话题快速切换。
-10. 刷屏和噪音。
-11. 群聊中的命令和自然语言混合。
-12. 长期群聊连续性。
-13. 多人争论和气氛变化。
-14. 用户身份、昵称和群名片变化。
+4. reply 引用小青和 reply 引用其他群友的区别。
+5. 上下文锚定小青后的共指召唤（她/他/ta、不@她能不能听见）。
+6. 群友互相聊天，小青应该沉默。
+7. 表情包和 mface 密集聊天。
+8. 图片理解群聊。
+9. 玩笑、接梗和轻度阴阳怪气。
+10. 情绪支持。
+11. 群聊话题快速切换。
+12. 刷屏和噪音。
+13. 群聊中的命令和自然语言混合。
+14. 长期群聊连续性。
+15. 多人争论和气氛变化。
+16. 用户身份、昵称和群名片变化。
 
 每轮 transcript 必须记录：
 
@@ -644,7 +650,34 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-transcripts/<scr
 plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-transcripts/<script_id>.jsonl
 ```
 
-### 8.4 拟人感评分
+### 8.4 可复用拟人大群实验 runner
+
+仓库内提供可复用实验框架：
+
+```text
+plugins/xiaoqing_chat/experiments/anthropomorphic_group.py
+```
+
+它用于批量生成和执行大群聊天实验，不替代上面的命令、消息段、触发和存储矩阵；它是“真实 LLM 群聊拟人效果”专项的标准化执行工具。
+
+基本命令：
+
+```bash
+# 只生成矩阵，不调用插件主流程
+python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group --mode matrix --run-id <RUN_ID>
+
+# 离线 dry-run，验证 workload、评分和产物格式
+python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group --mode dry-run --run-id <RUN_ID> --groups 2 --rounds-per-group 12
+
+# 真实主流程实验，默认大群规模可按配额调整
+python -m plugins.xiaoqing_chat.experiments.anthropomorphic_group --mode real --run-id <RUN_ID> --groups 20 --rounds-per-group 150
+```
+
+`real` 模式必须走 `xiaoqing_chat.observe_message()` + `xiaoqing_chat.handle_smalltalk()`，覆盖接收、上下文、触发/频控、PFC/直接回复、主 LLM、reply checker 和 OneBot 消息段返回；不得用 mock LLM 结果替代真实拟人结论。runner 不应向 live OneBot HTTP 网关发送消息。
+
+runner 输出必须写入当前运行目录，并与 `xiaoqing-test-results.jsonl` 的 case 进度互相引用。若发生上下文压缩、resume 或中断，必须从 JSONL 重建已完成轮次和 pending 轮次后继续，不得重跑覆盖旧结果。
+
+### 8.5 拟人感评分
 
 每条真实回复按 0 到 5 分评价：
 
@@ -675,7 +708,7 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-transcripts/<scr
 - 人设漂移次数。
 - 泄露或疑似泄露次数。
 
-### 8.5 不能只看“有回复”
+### 8.6 不能只看“有回复”
 
 必须判断：
 
@@ -688,7 +721,7 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-transcripts/<scr
 - 是否在争论中火上浇油。
 - 是否像人在聊天，而不是每次生成 AI 答案。
 
-### 8.6 失败类型分类
+### 8.7 失败类型分类
 
 群聊拟人失败至少按以下类型归类：
 
@@ -834,6 +867,7 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-transcripts/<scr
 
 覆盖：
 
+- attention gate forced 路径与普通 participation gate 路径的分流。
 - 初始化。
 - 多轮更新。
 - 群聊观察但不回复时是否更新。
@@ -1102,7 +1136,7 @@ python -m pytest tests -k "xiaoqing or reply_checker"
 - `rg` / `grep` 动态入口和引用检查。
 - 修复后的相关回归和完整回归。
 
-如果某个命令失败，判断是环境问题、已有问题、本次发现的问题还是修复引入的问题，并记录。
+如果某个命令失败，判断是环境问题、已有问题、测试中发现的问题还是修复引入的问题，并记录。
 
 ---
 
@@ -1187,7 +1221,7 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-test-results.jsonl
 40. 每个问题的复现、根因、修复、回归。
 41. 未解决问题和风险。
 42. 建议后续补充的自动化测试。
-43. 本次新增/修改文件列表。
+43. 测试过程中新增/修改文件列表。
 44. `git diff` 摘要。
 45. 当前 `git status` 摘要。
 46. 最终结论：是否可以认为 `xiaoqing_chat` 通过本轮完整测试；尤其是否可以认为小青在真实 LLM 群聊 transcript 中像自然群友，而不是客服型机器人。
@@ -1292,7 +1326,7 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-test-results.jsonl
 23. 安全测试是否通过，是否仍有未解决风险。
 24. 关键测试命令和回归结果。
 25. 当前 `git status` 摘要。
-26. 是否建议合并当前版本。
+26. 插件质量结论、上线风险和继续维护建议。
 
 请真实记录结果。无法执行的测试必须标记原因、影响和替代验证方式。疑似冗余但无法确认无用的代码不要删除。群聊拟人效果必须以真实已配置 LLM 的 transcript 和评分为准；mock/fake LLM 测试只能说明链路、异常处理和回归稳定性，不能证明真实拟人效果通过。
 

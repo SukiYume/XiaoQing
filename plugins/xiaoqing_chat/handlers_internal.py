@@ -135,7 +135,7 @@ async def handle_config_impl(args: str, event: dict[str, Any], context, *, handl
     lines = [
         "⚙️ **插件配置概要**\n",
         "**基础配置:**",
-        f"• 回复概率 (群聊/私聊): {cfg.reply_probability_base:.0%} / {cfg.reply_probability_private:.0%}",
+        f"• 普通群聊插话概率: {cfg.reply_probability_base:.0%}",
         f"• 最小回复间隔: {cfg.min_reply_interval_seconds} 秒",
         f"• 每分钟最大回复数: {cfg.max_replies_per_minute}",
         f"• 最大上下文大小: {cfg.max_context_size} 条",

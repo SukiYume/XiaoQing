@@ -1268,6 +1268,51 @@ async def test_render_event_media_text_supports_inline_image_sources(mock_contex
 
 
 @pytest.mark.asyncio
+async def test_render_event_media_blocks_private_image_url_without_download(mock_context):
+    runtime = _make_media_runtime()
+    event = {
+        "message": [
+            {
+                "type": "image",
+                "data": {"url": "http://127.0.0.1:5700/private.png"},
+            }
+        ]
+    }
+    mock_context.http_session.get = Mock(side_effect=AssertionError("unsafe URL fetched"))
+
+    rendered = await render_event_media(event, context=mock_context, runtime=runtime)
+
+    mock_context.http_session.get.assert_not_called()
+    assert len(rendered) == 1
+    assert rendered[0].marker.startswith("[图片：")
+
+
+@pytest.mark.asyncio
+async def test_render_event_media_blocks_file_uri_outside_plugin_data_dir(mock_context, tmp_path):
+    runtime = _make_media_runtime()
+    outside = _write_png(tmp_path / "outside.png")
+    event = {
+        "message": [
+            {
+                "type": "image",
+                "data": {"file": outside.as_uri()},
+            }
+        ]
+    }
+
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
+        new=AsyncMock(side_effect=AssertionError("outside file should not be analyzed")),
+    ):
+        rendered = await render_event_media(event, context=mock_context, runtime=runtime)
+
+    cached_files = list((mock_context.data_dir / "media" / "inbox").glob("*"))
+    assert len(rendered) == 1
+    assert rendered[0].marker.startswith("[图片：")
+    assert cached_files == []
+
+
+@pytest.mark.asyncio
 async def test_render_event_media_text_marks_napcat_store_emoji_image(mock_context):
     runtime = _make_media_runtime()
     event = {

@@ -1,9 +1,9 @@
 # 🧩 09 - 插件功能介绍
 
-本文档详细介绍 XiaoQing 中所有可用插件的功能、命令和配置说明。
+本章按插件分类整理 XiaoQing 中可直接加载的功能、命令和配置。
 
 > [!NOTE]
-> 本文档主要介绍可直接加载和使用的内置插件。像 `plugins/xiaoqing_chat/memory/` 这类辅助子包，以及 `plugins/memo_deprecated/` 这类默认不加载的停用目录，不在列表中单独展开。
+> 本章主要介绍可直接加载和使用的内置插件。`plugins/xiaoqing_chat/memory/` 这类辅助子包，以及 `plugins/memo_deprecated/` 这类默认不加载的停用目录，不单独展开。
 
 ## 📑 目录
 
@@ -158,18 +158,20 @@
 
 ### pendo - 个人时间与信息管理中枢
 
-个人时间与信息管理插件，支持日程、待办、笔记、日记、账本、提醒、搜索、统计和完整的 **Web 控制台**（FastAPI + 原生 JS SPA）。
+个人时间与信息管理插件，支持日程、待办、笔记、日记、账本、提醒、搜索、统计和 **Web 控制台**（FastAPI + 原生 JS SPA）。
 
 > `/pendo` 会显示带 emoji 的模块导航帮助；输入 `/pendo <模块>`（如 `/pendo event`、`/pendo ledger`）可直达对应分组帮助。
+
+Pendo 的长期文档入口是 `plugins/pendo/README.md` 和 `plugins/pendo/ARCHITECTURE.md`：前者面向使用和部署，后者面向维护和二次开发。本章提供命令速查和功能索引。
 
 #### 核心特性
 
 | 特性 | 说明 |
 |------|------|
 | **AI 智能解析** | 日程添加自动识别时间、地点、提醒设置 |
-| **多轮对话** | 支持会话式交互，自然流畅的操作体验 |
+| **多轮对话** | 支持会话式操作 |
 | **隐私保护** | 支持群聊隐私模式，敏感内容转私聊 |
-| **智能提醒** | 支持单次、重复、多节点、提前确认和延后提醒 |
+| **提醒** | 支持单次、重复、多节点、提前确认和延后提醒 |
 | **定时任务** | 每日简报、日记提醒、待办顺延、财务周报/月报和 demo 数据清理 |
 | **导出和迁移** | 聊天端 Markdown 档案导出；Web 端 `.pendo.zip` Bundle 导入导出 |
 | **撤销功能** | 支持短时间内的操作撤销 |
@@ -449,7 +451,7 @@ Web 控制台提供以下页面：
 /pendo web stop                              # 停止服务
 ```
 
-启动后默认通过 `http://127.0.0.1:8765` 访问；如果你做了反向代理，也可以通过自己的外网地址访问。浏览器登录用 `/pendo web token`，iPhone Scriptable 小组件用 `/pendo web widget-token`。
+启动后默认通过 `http://127.0.0.1:8765` 访问。反向代理部署时，也可以通过自己的外网地址访问。浏览器登录用 `/pendo web token`，iPhone Scriptable 小组件用 `/pendo web widget-token`。
 
 Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚本仓库版本只保留 `BASE_URL` 和 `TOKEN` 占位值，导入 Scriptable 后需要替换成你自己的 Pendo Web 地址和 widget token。它可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏，并支持 `small` / `medium` / `large` 三种尺寸。
 
@@ -496,13 +498,16 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 它的重点是让对话保持自然连贯：文本对话、图片理解、主回复 LLM 的出站媒体 marker、长期记忆和表达学习都围绕同一条聊天主链协同工作。
 
+插件的长期文档入口是 `plugins/xiaoqing_chat/README.md` 和 `plugins/xiaoqing_chat/ARCHITECTURE.md`：前者面向配置、使用和排障，后者说明 attention gate、频控、planner、memory、media、reply checker 的工程边界。本章提供命令速查和配置索引。
+
 #### 核心特性
 
 | 特性 | 说明 |
 |------|------|
 | **语义记忆检索** | ✅ 基于向量数据库的语义记忆检索，拥有长期记忆能力 |
-| **行为规划** | LLM 智能判断是否需要回复；planner 可开关，私聊深度模式可保持常开 |
-| **频率控制** | 防止刷屏，支持最小间隔、每分钟上限、连续回复冷却 |
+| **Attention Gate** | 区分“明确冲小青来的消息”和普通群聊插话，支持 `@`、名字、reply-to-bot、上下文共指等触发 |
+| **行为规划** | 普通群聊可通过 PFC planner 判断下一步行动；forced/direct 场景直接进入回复生成 |
+| **频率控制** | 普通群聊插话支持最小间隔、每分钟上限、连续回复冷却、heartflow 和未回复补偿 |
 | **表达学习** | 从对话中学习表达风格和黑话，不断进化 |
 | **人物与记忆系统** | 对话历史、事实记忆、人物资料、对话摘要、目标状态 |
 | **图片上下文** | 普通图片、NapCat `mface`、QQ `face` 可进入正常对话流 |
@@ -561,13 +566,23 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 }
 ```
 
-常用媒体行为开关：
+常用媒体行为开关如下。
 
 ```json
 {
+  "reply_probability_base": 0.72,
+  "min_reply_interval_seconds": 3,
+  "active_topic_min_reply_interval": 3.0,
+  "max_replies_per_minute": 6,
+  "continuous_reply_limit": 5,
+  "continuous_cooldown_seconds": 12,
   "planner": {
     "enable_planner": true,
     "think_mode": "dynamic"
+  },
+  "heartflow": {
+    "enable_heartflow": true,
+    "base_score": 0.2
   },
   "brain_chat": {
     "enable_private_brain_chat": false,
@@ -581,6 +596,13 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
   }
 }
 ```
+
+触发和频控说明如下。
+
+- 当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时，所有群聊消息都会进入插件观察；`random_reply_rate` 不再决定是否进入插件。
+- `/xc`、私聊、`@小青`、直接叫名字、只喊名字后的追问、reply 引用小青，以及有近期上下文锚点的“她/ta”共指召唤，会跳过普通插话概率并强制回复。
+- 没有明确 directed attention 的普通群聊消息才会使用 `reply_probability_base`、heartflow、连续未回复补偿和硬频控。
+- 配置边界：`reply_probability_private`、`heartflow.threshold`、`heartflow.enable_random_gate`、`heartflow.weight_mentioned`、`heartflow.weight_private`、`heartflow.weight_rate_limit`、`heartflow.weight_cooldown`、`heartflow.weight_interval` 不参与当前回复主路径。私聊、点名和共指由 attention gate 处理；速率限制由硬频控处理。
 
 #### 记忆系统说明
 
@@ -604,11 +626,11 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 #### 使用说明
 
 - 作为 `smalltalk_provider` 使用时，会接管所有闲聊消息
-- 插件内部有完整的频率控制，不依赖全局 `random_reply_rate`
-- 被 `@` 或直接叫名字时会强制回复
-- 私聊中回复概率更高，对话更连贯
+- 插件内部有独立频率控制，不依赖全局 `random_reply_rate`
+- `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青，以及有近期上下文锚点的“她/ta”共指召唤会强制回复
+- 普通群聊消息才走 `reply_probability_base`、heartflow 和硬频控
 - 启用媒体能力后，纯图片、QQ 表情、NapCat `mface` 都能进入正常对话链
-- 回复可以在自然文本里带一个 `[想发图片:hint]` / `[想发表情:hint]` / `[想发QQ表情:hint]` marker；插件解析命中后会发送实际图片、表情包或 QQ face，旧图库里不完整的媒体元数据会在后台修复，不阻断当前回复
+- 回复可以在自然文本里带一个 `[想发图片:hint]` / `[想发表情:hint]` / `[想发QQ表情:hint]` marker；插件解析命中后会发送实际图片、表情包或 QQ face，旧图库里缺失的媒体元数据会在后台修复，不阻断当前回复
 - 如果视觉模型缺失或失败，图片会退回为保守 marker，不阻断纯文本聊天
 
 #### 配置为默认聊天插件
@@ -940,7 +962,7 @@ https://arxiv.org/abs/astro-ph/0701089
 
 ### astro_tools - 天文计算工具箱
 
-全面的天文计算工具集，支持时间转换、坐标转换、天体查询、单位转换、公式速查等功能。
+天文计算工具集，支持时间转换、坐标转换、天体查询、单位转换和公式速查。
 
 #### 功能列表
 
@@ -1183,7 +1205,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 
 ### qingssh - SSH 远程控制
 
-强大的 SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
+SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 
 **核心特性**:
 - **环境保持**: 支持 `cd` 切换目录和 `export` 环境变量
@@ -1200,7 +1222,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 
 1.  **连接隔离**：
     - 连接标识符 (Key) = `用户ID : 群ID : 服务器名`
-    - **这意味着**：你在群 A 连接了服务器，去群 B 是**无法**直接使用的（需要重新连接）。
+    - 群 A 中建立的服务器连接不能在群 B 中直接使用，需要重新连接。
     - 同样，其他用户也无法复用你的连接。
 
 2.  **交互逻辑**：
@@ -1500,7 +1522,7 @@ Twitter 图片抓取与随机发送。
 
 ### jupyter - 代码执行
 
-强大的 Python 代码执行环境，支持绘图。
+Python 代码执行环境，支持绘图。
       
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
@@ -1549,7 +1571,7 @@ A岛匿名版 (ADNMB) 客户端，支持浏览时间线和串内容。
 
 ### qingpet - QQ群宠物养成系统
 
-完整的虚拟宠物养成游戏，支持领养、喂养、互动、装扮、交易等丰富功能。
+虚拟宠物养成游戏，支持领养、喂养、互动、装扮和交易。
 
 #### 核心特性
 
@@ -1558,7 +1580,7 @@ A岛匿名版 (ADNMB) 客户端，支持浏览时间线和串内容。
 | **宠物养成** | 领养、喂养、清洁、玩耍、睡眠、训练 |
 | **状态系统** | 饱食度、心情、清洁度、健康、体力、经验 |
 | **成长进化** | 宠物随时间成长，等级提升 |
-| **物品系统** | 食物、玩具、药品、装扮等丰富道具 |
+| **物品系统** | 食物、玩具、药品、装扮等多类道具 |
 | **社交互动** | 访问他人宠物、送礼、点赞、留言 |
 | **装扮展示** | 多种装扮，宠物展示会 |
 | **交易系统** | 玩家间物品交易 |
