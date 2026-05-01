@@ -10,6 +10,23 @@ from ..constants import is_question
 from ..store_base import StoreBase
 
 
+_LEGACY_SCORE_KWARGS = (
+    "threshold",
+    "enable_random",
+    "mentioned",
+    "weight_mentioned",
+    "is_private",
+    "replies_last_minute",
+    "max_replies_per_minute",
+    "cooldown_left_seconds",
+    "min_reply_interval_seconds",
+    "weight_private",
+    "weight_rate_limit",
+    "weight_cooldown",
+    "weight_interval",
+)
+
+
 @dataclass
 class HeartflowState:
     last_user_ts: float = 0.0
@@ -102,30 +119,15 @@ class HeartflowEngine(StoreBase):
         *,
         text: str,
         goal: str,
-        mentioned: bool,
-        is_private: bool,
-        replies_last_minute: int,
-        max_replies_per_minute: int,
-        cooldown_left_seconds: float,
-        min_reply_interval_seconds: float,
         seconds_since_last_reply: float,
         base: float,
-        weight_private: float = 0.55,
-        weight_mentioned: float = 0.45,
         weight_question: float = 0.12,
         weight_goal_match: float = 0.06,
         weight_short_text: float = -0.08,
-        weight_rate_limit: float = -0.35,
-        weight_cooldown: float = -0.45,
-        weight_interval: float = -0.25,
         weight_no_reply_streak: float = 0.05,
         weight_long_silence: float = 0.08,
     ) -> float:
         s = float(base)
-        if is_private:
-            s += weight_private
-        if mentioned:
-            s += weight_mentioned
         t = (text or "").strip()
         if is_question(t):
             s += weight_question
@@ -134,12 +136,6 @@ class HeartflowEngine(StoreBase):
             s += weight_goal_match
         if len(t) <= 2:
             s += weight_short_text
-        if max_replies_per_minute > 0 and replies_last_minute >= max_replies_per_minute:
-            s += weight_rate_limit
-        if cooldown_left_seconds > 0:
-            s += weight_cooldown
-        if min_reply_interval_seconds > 0 and seconds_since_last_reply < min_reply_interval_seconds:
-            s += weight_interval
         if st.no_reply_streak >= 3:
             s += weight_no_reply_streak
         if seconds_since_last_reply > 240:
@@ -148,13 +144,16 @@ class HeartflowEngine(StoreBase):
 
     def score(self, *, chat_id: str, **kwargs: Any) -> float:
         st = self._load(chat_id)
-        # Remove params not used by _calculate_score
-        kwargs.pop("threshold", None)
-        kwargs.pop("enable_random", None)
+        # Drop legacy gate params that are now handled before heartflow.
+        _drop_legacy_score_kwargs(kwargs)
         return self._calculate_score(st, **kwargs)
 
     async def score_async(self, *, chat_id: str, **kwargs: Any) -> float:
         st = await self.get_async(chat_id)
-        kwargs.pop("threshold", None)
-        kwargs.pop("enable_random", None)
+        _drop_legacy_score_kwargs(kwargs)
         return self._calculate_score(st, **kwargs)
+
+
+def _drop_legacy_score_kwargs(kwargs: dict[str, Any]) -> None:
+    for name in _LEGACY_SCORE_KWARGS:
+        kwargs.pop(name, None)

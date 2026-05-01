@@ -1,9 +1,9 @@
 # ⚙️ 04 - 核心模块详解
 
-本章深入分析 XiaoQing 核心模块的源码实现。
+本章把 XiaoQing `core/` 里的主要模块逐个拆开说明。
 
 > [!NOTE]
-> 本章面向框架开发者。如果你只是写插件，[03-plugin-development.md](03-plugin-development.md) 和 [05-api-reference.md](05-api-reference.md) 更适合你。
+> 本章面向框架开发者。只做插件开发时，优先阅读 [03-plugin-development.md](03-plugin-development.md) 和 [05-api-reference.md](05-api-reference.md)。
 
 ---
 
@@ -32,9 +32,24 @@
 | 全局常量 | `constants.py` | 全局常量定义 |
 | 日志配置 | `logging_config.py` | 日志系统 |
 
+核心模块只负责所有插件共享的基础设施。像 `pendo` 的 SQLite 数据模型、Web Transfer，或 `xiaoqing_chat` 的 attention gate、PFC planner、主 LLM 和媒体 marker 解析，都放在插件目录内维护。这样做可以保持 core 稳定，也让大型插件能够在不污染框架层的前提下演进自己的业务架构。
+
+从一次消息处理看，核心模块按以下关系协作。
+
+```text
+InboundServer / OneBotWsClient
+  -> XiaoQingApp
+  -> Dispatcher
+  -> Handler chain
+  -> CommandRouter / SessionManager / Smalltalk provider
+  -> PluginManager 提供插件模块和 PluginContext
+  -> plugin.handle() 或 plugin.handle_smalltalk()
+  -> OneBotHttpSender / WebSocket 发送消息段
+```
+
 ---
 
-## 🏠 app.py — 应用主类
+## 🏠 app.py 应用主类
 
 ### 核心结构
 
@@ -148,7 +163,7 @@ def is_admin(self, user_id: Optional[int]) -> bool:
 
 ---
 
-## 🔀 dispatcher.py — 消息分发器
+## 🔀 dispatcher.py 消息分发器
 
 ### 核心逻辑
 
@@ -405,6 +420,7 @@ def _make_decision(
     特殊处理：
     - 当 smalltalk_provider 为 xiaoqing_chat 时，所有群聊消息都进入 SmalltalkHandler
     - random_reply_rate 配置失效
+    - xiaoqing_chat 在插件内使用 attention gate / 硬频控 / 普通插话概率决定是否回复
     """
     # xiaoqing_chat 特殊处理
     if self._get_smalltalk_provider() == "xiaoqing_chat":
@@ -556,7 +572,7 @@ def get_mute_remaining(self, group_id: int) -> Optional[float]:
 
 ---
 
-## 🗺️ router.py — 命令路由
+## 🗺️ router.py 命令路由
 
 ### 数据结构
 
@@ -611,7 +627,7 @@ class CommandRouter:
 
 ---
 
-## 📦 plugin_manager.py — 插件管理
+## 📦 plugin_manager.py 插件管理
 
 ### 数据结构
 
@@ -711,7 +727,7 @@ async def watch(self):
 
 ---
 
-## 🔧 context.py — 插件上下文
+## 🔧 context.py 插件上下文
 
 ### 完整结构
 
@@ -776,7 +792,7 @@ async def end_session(self) -> bool:
 
 ---
 
-## 💬 session.py — 会话管理
+## 💬 session.py 会话管理
 
 ### Session 类
 
@@ -841,7 +857,7 @@ class SessionManager:
 
 ---
 
-## 🛠️ plugin_base.py — 插件工具
+## 🛠️ plugin_base.py 插件工具
 
 ### 消息段构建
 
@@ -916,7 +932,7 @@ def split_message_segments(
 
 ---
 
-## 🔗 onebot.py — OneBot 通信
+## 🔗 onebot.py OneBot 通信
 
 ### HTTP 发送器
 
@@ -955,7 +971,7 @@ class OneBotWsClient:
 
 ---
 
-## 🖥️ server.py — Inbound 服务器
+## 🖥️ server.py Inbound 服务器
 
 ```python
 class InboundServer:
@@ -989,7 +1005,7 @@ class InboundServer:
 
 ---
 
-## 🔍 args.py — 命令参数解析
+## 🔍 args.py 命令参数解析
 
 提供 `ParsedArgs` 类，用于将命令参数字符串结构化解析：
 
@@ -1021,7 +1037,7 @@ bool(parsed)          # True（参数字符串非空时为 True）
 
 ---
 
-## 📊 metrics.py — 运行指标
+## 📊 metrics.py 运行指标
 
 `MetricsCollector` 收集插件执行统计，通过 `/metrics` 命令查看：
 
@@ -1051,5 +1067,5 @@ async def my_command_handler(...):
 
 ## ➡️ 下一步
 
-- API 完整参考 → [05-api-reference.md](05-api-reference.md)
-- 配置详解 → [06-configuration.md](06-configuration.md)
+- API 参考见 [05-api-reference.md](05-api-reference.md)
+- 配置详解见 [06-configuration.md](06-configuration.md)

@@ -111,17 +111,9 @@ class ReplyCheckConfig(BaseModel):
 class HeartflowConfig(BaseModel):
     enable_heartflow: bool = False
     base_score: float = 0.35
-    threshold: float = 0.55
-    enable_random_gate: bool = True
-    # Configurable scoring weights (previously hardcoded)
-    weight_private: float = 0.55
-    weight_mentioned: float = 0.45
     weight_question: float = 0.12
     weight_goal_match: float = 0.06
     weight_short_text: float = -0.08
-    weight_rate_limit: float = -0.35
-    weight_cooldown: float = -0.45
-    weight_interval: float = -0.25
     weight_no_reply_streak: float = 0.05
     weight_long_silence: float = 0.08
 
@@ -205,7 +197,6 @@ class MediaConfig(BaseModel):
 class XiaoQingChatConfig(BaseModel):
     enable_smalltalk: bool = True
     reply_probability_base: float = 0.6
-    reply_probability_private: float = 0.95
     min_reply_interval_seconds: float = 12.0
     active_topic_min_reply_interval: float = 3.0
     max_replies_per_minute: int = 6

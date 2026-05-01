@@ -98,13 +98,13 @@ async def _should_reply_decision(
     chat_id: str,
     text: str,
     is_private: bool,
-    mentioned: bool,
     enable_private_brain_chat: bool,
 ) -> ReplyGateDecision:
     """
-    判断是否应该回复消息。
+    判断普通群聊消息是否应该主动参与。
 
-    频控只保留硬约束、基础概率、heartflow 加权和静默期补偿。
+    明确冲机器人来的消息已经由 attention_gate 在 handler 层强制回复。
+    这里只保留硬频控、普通插话概率、heartflow 软加权和静默期补偿。
 
     Args:
         runtime: 运行时配置
@@ -112,7 +112,6 @@ async def _should_reply_decision(
         chat_id: 聊天ID
         text: 消息文本
         is_private: 是否私聊
-        mentioned: 是否被艾特
         enable_private_brain_chat: 是否启用私聊深度对话
 
     Returns:
@@ -181,8 +180,8 @@ async def _should_reply_decision(
     if enable_private_brain_chat and is_private:
         return make_decision(True, "private_brain_chat")
 
-    # --- 单层概率控制 ---
-    p = runtime.cfg.reply_probability_private if is_private else runtime.cfg.reply_probability_base
+    # --- 单层概率控制：这里只处理普通参与，明确私聊/点名已在前面放行 ---
+    p = runtime.cfg.reply_probability_base
 
     if (not is_private) and is_active_topic:
         # 活跃话题期间提高概率，使机器人更容易接住连续对话。
@@ -195,24 +194,11 @@ async def _should_reply_decision(
             chat_id=chat_id,
             text=text,
             goal=goal,
-            mentioned=mentioned,
-            is_private=is_private,
-            replies_last_minute=len(window),
-            max_replies_per_minute=runtime.cfg.max_replies_per_minute,
-            cooldown_left_seconds=0.0,  # already checked above
-            min_reply_interval_seconds=0.0,  # already checked above
             seconds_since_last_reply=seconds_since,
             base=runtime.cfg.heartflow.base_score,
-            threshold=runtime.cfg.heartflow.threshold,
-            enable_random=False,
-            weight_private=runtime.cfg.heartflow.weight_private,
-            weight_mentioned=runtime.cfg.heartflow.weight_mentioned,
             weight_question=runtime.cfg.heartflow.weight_question,
             weight_goal_match=runtime.cfg.heartflow.weight_goal_match,
             weight_short_text=runtime.cfg.heartflow.weight_short_text,
-            weight_rate_limit=0.0,  # already checked above
-            weight_cooldown=0.0,  # already checked above
-            weight_interval=0.0,  # already checked above
             weight_no_reply_streak=runtime.cfg.heartflow.weight_no_reply_streak,
             weight_long_silence=runtime.cfg.heartflow.weight_long_silence,
         )
@@ -254,7 +240,6 @@ async def _should_reply(
     chat_id: str,
     text: str,
     is_private: bool,
-    mentioned: bool,
     enable_private_brain_chat: bool,
 ) -> bool:
     decision = await _should_reply_decision(
@@ -263,7 +248,6 @@ async def _should_reply(
         chat_id,
         text,
         is_private,
-        mentioned,
         enable_private_brain_chat,
     )
     return decision.should_reply

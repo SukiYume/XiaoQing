@@ -1,7 +1,6 @@
 {
     "enable_smalltalk": true,
     "reply_probability_base": 0.72,
-    "reply_probability_private": 0.95,
     "min_reply_interval_seconds": 3,
     "active_topic_min_reply_interval": 3.0,
     "max_replies_per_minute": 6,
@@ -67,9 +66,7 @@
     },
     "heartflow": {
         "enable_heartflow": true,
-        "base_score": 0.2,
-        "threshold": 0.50,
-        "enable_random_gate": true
+        "base_score": 0.2
     },
     "goal": {
         "enable_goal": true

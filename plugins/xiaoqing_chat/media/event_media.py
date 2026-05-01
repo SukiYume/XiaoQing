@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import ipaddress
 import json
 import mimetypes
 import re
@@ -59,6 +60,8 @@ from .qq_face import describe_face_segment
 from .qq_face_catalog import record_face_observation
 
 async def _download_url_bytes(url: str, *, context, max_bytes: int) -> tuple[bytes, str]:
+    if _is_blocked_media_url_target(url):
+        raise ValueError("blocked unsafe media url target")
     session = getattr(context, "http_session", None)
     if session is None or not hasattr(session, "get"):
         raise FileNotFoundError(f"HTTP session unavailable for {url}")
@@ -303,15 +306,65 @@ async def _recover_media_bytes_if_needed(
     )
 
 
-def _resolve_media_source_path(value: str) -> Path | None:
+def _is_blocked_media_url_target(url: str) -> bool:
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return True
+
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return True
+    if host in {"localhost", "localhost.localdomain"}:
+        return True
+
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+
+    return (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_unspecified
+        or ip.is_reserved
+        or ip.is_multicast
+    )
+
+
+def _is_allowed_local_media_path(path: Path, context: Any | None) -> bool:
+    if context is None:
+        return False
+    allowed_roots: list[Path] = []
+    for attr in ("data_dir", "plugin_dir"):
+        root = getattr(context, attr, None)
+        if not root:
+            continue
+        try:
+            allowed_roots.append(Path(root).resolve())
+        except OSError:
+            continue
+    if not allowed_roots:
+        return False
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return any(resolved == root or root in resolved.parents for root in allowed_roots)
+
+
+def _resolve_media_source_path(value: str, *, context: Any | None = None) -> Path | None:
     if not value:
         return None
     if _looks_like_base64_source(value) or _looks_like_data_url(value) or _looks_like_url(value):
         return None
+    path: Path | None
     if value.startswith("file://"):
-        return _parse_file_uri(value)
-    path = Path(value)
-    if path.exists():
+        path = _parse_file_uri(value)
+    else:
+        path = Path(value)
+    if path is not None and path.exists() and _is_allowed_local_media_path(path, context):
         return path
     return None
 
@@ -376,7 +429,11 @@ def _segment_suffix_hint(segment: dict[str, Any]) -> str:
     return ".png"
 
 
-def _resolve_media_sources(segment: dict[str, Any]) -> list[tuple[str, str]]:
+def _resolve_media_sources(
+    segment: dict[str, Any],
+    *,
+    context: Any | None = None,
+) -> list[tuple[str, str]]:
     data = segment.get("data", {}) or {}
     key_order = {"path": 0, "file": 1, "url": 2}
     sources: list[tuple[str, str]] = []
@@ -390,7 +447,7 @@ def _resolve_media_sources(segment: dict[str, Any]) -> list[tuple[str, str]]:
 
     def _priority(item: tuple[str, str]) -> tuple[int, int]:
         key, value = item
-        if _resolve_media_source_path(value) is not None:
+        if _resolve_media_source_path(value, context=context) is not None:
             return 0, key_order.get(key, 9)
         if _looks_like_base64_source(value) or _looks_like_data_url(value):
             return 1, key_order.get(key, 9)
@@ -419,7 +476,7 @@ async def _resolve_media_bytes(
     max_bytes: int,
     event: dict[str, Any] | None = None,
 ) -> tuple[bytes, str, str]:
-    sources = _resolve_media_sources(segment)
+    sources = _resolve_media_sources(segment, context=context)
     summary_hint = _segment_summary_hint(segment)
     suffix_hint = _segment_suffix_hint(segment)
     last_error: Exception | None = None
@@ -430,7 +487,7 @@ async def _resolve_media_bytes(
     for source_key, source_value in sources:
         source_name = _safe_source_name(summary_hint or source_value)
         try:
-            source_path = _resolve_media_source_path(source_value)
+            source_path = _resolve_media_source_path(source_value, context=context)
             if source_path is not None:
                 payload = source_path.read_bytes()
                 if max_bytes > 0 and len(payload) > max_bytes:

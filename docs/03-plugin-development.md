@@ -1,17 +1,24 @@
 # 🔌 03 - 插件开发指南
 
-本章是插件开发的完整指南，从最简单的插件到高级功能。
+本章从一个最小插件开始，说明插件结构、生命周期、消息段、会话、定时任务和常见工程实践。
 
 > [!TIP]
-> 快速参考：一个插件最少只需要 `plugin.json` + `main.py` 两个文件。看完 [📂 插件基础](#-插件基础) 和 [💻 main.py 编写](#-mainpy-编写) 就能写出第一个插件。
+> 一个插件最少只需要 `plugin.json` 和 `main.py` 两个文件。先看 [📂 插件基础](#-插件基础) 和 [💻 main.py 编写](#-mainpy-编写)，就能写出第一个可运行插件。
 
 ---
 
 ## 📂 插件基础
 
+XiaoQing 插件有两种常见规模。
+
+- **轻量插件**：一个 `plugin.json` 加一个 `main.py` 就能完成，例如 `echo`、`choice`、`wolframalpha`。
+- **复合插件**：拥有自己的子目录、服务层、数据模型、测试和文档，例如 `pendo` 和 `xiaoqing_chat`。
+
+无论规模大小，框架看到的入口都一样：插件目录、`plugin.json`、入口模块、`handle()`、可选生命周期钩子和可选 schedule handler。大型插件应在自己的目录下维护 `README.md` 和 `ARCHITECTURE.md`，分别说明使用方式和工程结构。
+
 ### 插件结构
 
-每个插件应该是一个Python包（包含 `__init__.py`），位于 `plugins/` 目录下：
+每个插件应是位于 `plugins/` 目录下的 Python 包，并包含 `__init__.py`。
 
 ```
 plugins/
@@ -19,6 +26,8 @@ plugins/
     ├── plugin.json     # 必需：插件配置
     ├── main.py         # 必需：入口代码
     ├── __init__.py     # 推荐：使插件成为 Python 包
+    ├── README.md       # 推荐：插件使用手册
+    ├── ARCHITECTURE.md # 推荐：复杂插件的架构说明
     ├── config.py       # 可选：配置文件
     ├── utils.py        # 可选：工具函数
     └── data/           # 可选：数据目录（自动创建）
@@ -26,7 +35,7 @@ plugins/
 
 ### 导入规范
 
-从 v2.0 开始，插件被加载为标准的 Python 包 (`xiaoqing_plugins.plugin_name`)。这意味着你可以（并且应该）使用**相对导入**来引用插件内的其他模块：
+从 v2.0 开始，插件被加载为标准的 Python 包 (`xiaoqing_plugins.plugin_name`)。插件内部模块使用**相对导入**。
 
 **plugins/myplugin/main.py**:
 ```python
@@ -167,7 +176,7 @@ async def handle(
     ↓
 决策判断 (should_process)
     ↓
-Handler 链依次尝试：
+Handler 链依次尝试。
     ↓
 ┌─────────────────────────────┐
 │ 1. BotNameHandler         │ ← 处理仅机器人名字（如"小青"）
@@ -213,9 +222,9 @@ Handler 链依次尝试：
    - **会话优先级**：会话处理在命令匹配之后
 
 3. **闲聊处理**（SmalltalkHandler）
-   - 如果你的插件是 `smalltalk_provider`
+   - 插件作为 `smalltalk_provider` 时
    - SmalltalkHandler 调用你的 `handle_smalltalk()` 函数
-   - **智能回复**：你可以根据上下文决定是否返回消息
+   - **回复控制**：插件根据上下文决定是否返回消息
 
 #### 短路机制示例
 
@@ -272,7 +281,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ### handle_smalltalk() 函数（可选）
 
-如果你的插件是 `smalltalk_provider`（如 xiaoqing_chat），需要实现此函数。
+作为 `smalltalk_provider` 的插件需要实现此函数，例如 `xiaoqing_chat`。
 
 ```python
 async def handle_smalltalk(
@@ -292,10 +301,10 @@ async def handle_smalltalk(
     return segments(response)
 ```
 
-**重要特性**：
+**重要特性**
 
 1. **智能回复控制**
-   - 不同于简单的 `random_reply_rate`，你可以根据上下文判断
+   - 根据上下文判断回复时机
    - 返回 `[]` 表示不回复
    - 返回非空列表表示回复
 
@@ -303,7 +312,8 @@ async def handle_smalltalk(
    - 当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时
    - 所有群聊消息都会进入 `handle_smalltalk()`
    - `random_reply_rate` 配置失效
-   - 由插件内部控制回复频率
+   - 由插件内部的 attention gate、硬频控、普通插话概率、PFC planner 和 reply checker 控制是否回复
+   - `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及有近期上下文锚点的“她/ta”共指召唤会走 forced 路径
 
 3. **与其他 Handler 的关系**
    - SmalltalkHandler 是 Handler 链的最后一环
@@ -471,7 +481,7 @@ plugins = context.list_plugins()
 4. 用户后续消息被 SessionHandler 捕获
        │
        ▼
-5. 调用 handle_session() 而非 handle()
+5. 调用 handle_session()，不调用 handle()
        │
        ├─ 继续对话 ──> 回到步骤 5
        │
@@ -695,7 +705,7 @@ image_url("https://example.com/pic.jpg")
 # 语音（本地文件）
 record("/path/to/audio.mp3")
 
-# 如果你必须手写消息段，而不是调用 image()/record()：
+# 手写消息段时可直接构造 record 段：
 {"type": "record", "data": {"file": Path("/path/to/audio.mp3").resolve().as_uri()}}
 
 # 语音（URL）
@@ -879,7 +889,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 
 ### 在插件中读取
 
-`context.secrets` 是完整的 `secrets.json` 内容，插件配置在 `plugins.<plugin_name>` 路径下：
+`context.secrets` 保存 `secrets.json` 内容，插件配置在 `plugins.<plugin_name>` 路径下：
 
 ```python
 async def handle(command: str, args: str, event: Dict, context) -> List:
@@ -1090,9 +1100,9 @@ async def shutdown(context):
 
 ## ➡️ 下一步
 
-- 多轮对话开发 → [07-advanced.md](07-advanced.md#多轮对话)
-- 定时任务开发 → [07-advanced.md](07-advanced.md#定时任务)
-- API 完整参考 → [05-api-reference.md](05-api-reference.md)
+- 多轮对话开发见 [07-advanced.md](07-advanced.md#多轮对话)
+- 定时任务开发见 [07-advanced.md](07-advanced.md#定时任务)
+- API 参考见 [05-api-reference.md](05-api-reference.md)
 
 ---
 

@@ -1,6 +1,6 @@
 # 🔧 06 - 配置详解
 
-本章详细说明所有配置项。
+本章集中说明 XiaoQing 的主要配置项，适合部署前后对照检查。
 
 ---
 
@@ -200,7 +200,7 @@ XiaoQing 使用两个 JSON 配置文件：
 **工作原理**：
 当 Inbound Server 通过 WebSocket 接收到消息后，会放入内部队列，由多个 worker 协程并行从队列中取出并处理。
 
-**推荐配置**：
+**建议配置**
 ```json
 {"inbound_ws_max_workers": 8}  // 通常无需调整
 ```
@@ -303,7 +303,8 @@ XiaoQing 使用两个 JSON 配置文件：
 **特性说明**：
 - 当使用 `xiaoqing_chat` 时，所有群聊消息都会进入 `handle_smalltalk()`
 - `random_reply_rate` 配置失效
-- 由插件内部控制回复频率（更智能）
+- 由插件内部的 attention gate、硬频控、普通插话概率、PFC planner 和 reply checker 控制是否回复
+- `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及有近期上下文锚点的“她/ta”共指召唤会走 forced 路径
 - 支持向量数据库长期记忆
 
 ---
@@ -401,7 +402,7 @@ api_key = plugin_cfg.get("api_key")
 | `providers.<name>.proxy` | `string` | `""` | 可选代理 |
 
 > [!TIP]
-> `xiaoqing_chat` 现在按 provider 结构读取 secrets。这样可以配多套聊天模型，并通过 `/xc 模型 <名称>` 在运行时切换。
+> `xiaoqing_chat` 使用 provider 结构读取 secrets。这样可以配置多套聊天模型，并通过 `/xc 模型 <名称>` 在运行时切换。
 
 #### xiaoqing_chat 运行时配置（`plugins/xiaoqing_chat/config/xiaoqing_config.json`）
 
@@ -497,7 +498,7 @@ QQ 原生 `face` 表情不会走图片下载链，而是直接转换成 `[QQ表�
 
 如果视觉模型未配置、配置不完整，或请求失败，插件会退回到基于文件名/摘要的保守标记，不会阻断普通文本对话；同时会在日志里打出 `media.analyze.skip` / `media.analyze.fail`，方便定位是“没拿到图”还是“视觉模型没跑起来”。
 
-如果你后来补上了显式视觉配置（例如 `vision.default`，或者 `media.vision_provider` 指向一个单独的视觉 provider），旧的低质量 fallback 图片缓存会在再次命中时自动重跑识图并覆盖，不需要手工清空整个 `render_cache.json`。
+后续补上显式视觉配置后，例如 `vision.default`，或者 `media.vision_provider` 指向单独的视觉 provider，旧的低质量 fallback 图片缓存会在再次命中时自动重跑识图并覆盖，不需要手工清空整个 `render_cache.json`。
 
 **支持的 API 提供商**：
 
@@ -575,7 +576,7 @@ PENDO_WEB_HOST=127.0.0.1
 PENDO_WEB_PORT=8765
 ```
 
-如果你在 Windows 上遇到 `WinError 10013`，通常不是已有进程占用了端口，而是系统拒绝绑定。此时优先换一个端口，例如 `PENDO_WEB_PORT=8766`。
+Windows 上遇到 `WinError 10013` 时，常见原因是系统拒绝绑定端口。此时优先换一个端口，例如 `PENDO_WEB_PORT=8766`。
 
 用户偏好（时区、简报时间、日记提醒等）通过 `/pendo settings` 命令在运行时修改，存储于数据库，无需修改配置文件。
 
@@ -606,7 +607,7 @@ PENDO_WEB_PORT=8765
 | `auto_disconnect` | `boolean` | `true` | 是否自动断开空闲连接 |
 
 补充说明：
-- QingSSH 现在严格校验 `~/.ssh/known_hosts` 中的 Host Key；未知主机或 Host Key 变更不会自动放行。
+- QingSSH 严格校验 `~/.ssh/known_hosts` 中的 Host Key；未知主机或 Host Key 变更不会自动放行。
 - 从 `~/.ssh/config` 导入时，支持 `ProxyJump` 以及安全的 `ssh -W` 跳板形式；其他会在本地执行命令的 `ProxyCommand` 会被拒绝。
 
 #### ads_paper 配置
@@ -633,7 +634,7 @@ PENDO_WEB_PORT=8765
 
 ---
 
-## 配置最佳实践
+## 配置实践
 
 ### 1. 开发环境
 ```json
@@ -810,7 +811,7 @@ PENDO_WEB_PORT=8765
 
 ## 环境变量
 
-目前 XiaoQing 不支持环境变量配置。如需此功能，可以修改 `config.py`：
+XiaoQing 的主配置入口是 JSON 文件。部署环境需要把配置映射到环境变量时，可以在 `config.py` 中增加读取层。
 
 ```python
 import os
@@ -845,7 +846,7 @@ context.reload_config()
 - 常用运行时配置都支持热重载；`enable_ws_client`、`onebot_ws_uri`、`enable_inbound_server`、`inbound_http_base`、`inbound_ws_uri`、`ws_queue_size`、`inbound_ws_max_workers`、`max_concurrency`、`session_timeout`、`timezone` 等修改后，可通过 watcher 或 `/reload config` 直接生效。
 - 配置 watcher 默认开启；插件 watcher 只有在 `enable_plugin_watcher=true` 时才会自动 reload 插件，且会忽略 `plugins/*/data/` 下的运行时状态文件。
 - 如果 `config.json` 或 `secrets.json` 一次写坏，运行时会保留最后一次有效快照；修复文件后重新 `/reload config` 即可。
-- 自动 watcher 能发现文件变化，但如果你刚修改完配置、希望立即生效，仍然建议手动执行一次 `/reload`。
+- 自动 watcher 能发现文件变化。配置刚修改完成且需要立即生效时，仍建议手动执行一次 `/reload`。
 
 ---
 
@@ -905,7 +906,7 @@ PENDO_WEB_DEMO_ENABLED=1 python main.py
 
 ### nginx 子路径反向代理
 
-如果希望将 pendo Web 部署在子路径 `/pendo/`（而非根路径），可以通过 nginx 做前缀转发。当前前端静态资源和 API 请求都使用相对路径，因此一个带尾部 `/` 的 `proxy_pass` 即可同时覆盖页面与 `/api/*`：
+pendo Web 部署在子路径 `/pendo/` 时，可以通过 nginx 做前缀转发。当前前端静态资源和 API 请求都使用相对路径，因此一个带尾部 `/` 的 `proxy_pass` 可以同时覆盖页面与 `/api/*`。
 
 ```nginx
 # nginx.conf 片段
@@ -922,9 +923,9 @@ location /pendo/ {
 }
 ```
 
-**注意**：
-- 上面这条 `proxy_pass http://127.0.0.1:8765/;` 会把 `/pendo/...` 转成后端根路径 `/...`，因此浏览器里的 `/pendo/api/...` 会自动映射到后端的 `/api/...`
-- pendo 后端真实 API 前缀是 `/api/`，不是 `/pendo/api/`
+**注意事项**
+- `proxy_pass http://127.0.0.1:8765/;` 会把 `/pendo/...` 转成后端根路径 `/...`，因此浏览器里的 `/pendo/api/...` 会自动映射到后端的 `/api/...`
+- pendo 后端真实 API 前缀是 `/api/`，`/pendo/api/` 由代理路径映射产生
 - 环境变量 `PENDO_WEB_TOKEN_SECRET` 可用于在多实例/重启场景下保持 Token 签名密钥稳定
 
 ---
