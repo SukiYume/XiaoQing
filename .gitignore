@@ -1,8 +1,10 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+
+# Python packaging and build outputs
 .Python
 build/
 develop-eggs/
@@ -16,73 +18,118 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# 虚拟环境
+# Virtual environments and local env files
+.venv/
 venv/
 ENV/
 env/
-.venv/
+.env
+.env.*
+!.env.example
+!.env.*.example
 
-# IDE
+# Test, coverage, type-checker and linter caches
+.pytest_cache/
+.pytest_*/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.pyright/
+
+# Jupyter notebooks and checkpoints
+.ipynb_checkpoints/
+*.ipynb
+
+# Node / frontend dependencies and build artifacts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.parcel-cache/
+.vite/
+coverage/
+
+# IDE and editor state
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
-# 日志文件
-logs/
-*.log
-
-# 配置文件（敏感信息）
-config/secrets.json
-config/config.json
-plugins/minecraft/config.json
-
-
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
-
-# 测试
-.pytest_*
-.coverage
-htmlcov/
-*cache/
-plugins/pendo/test_reports/
-plugins/pendo/test_tools/
-plugins/xiaoqing_chat/test_reports/
-.playwright-mcp/
-
-# 临时文件
-*.tmp
-*.temp
+# OS metadata
 .DS_Store
 Thumbs.db
-.agent
-.claude
-.codex
+Desktop.ini
+
+# Logs and runtime traces
+logs/
+*.log
+*.trace
+*.trace.*
+*.heapsnapshot
+*.network-request
+*.network-response
+
+# Local configuration and secrets
+config/config.json
+config/secrets.json
+plugins/minecraft/config.json
+
+# Plugin runtime data, caches and generated reports
+plugins/*/data/
+plugins/*/cache/
+plugins/*/test_reports/
+plugins/pendo/test_tools/
+plugins/xiaoqing_chat/figures/
+
+# Large local model / training artifacts
+plugins/arxiv_filter/best_model*/
+plugins/arxiv_filter/train_model/**/cache/
+plugins/arxiv_filter/train_model/arxiv_papers_with_abstract.csv
+
+# Deprecated plugin workspaces, except the tracked memo compatibility stub
+plugins/*deprecated/
+!plugins/memo_deprecated/
+!plugins/memo_deprecated/__init__.py
+!plugins/memo_deprecated/main.py
+!plugins/memo_deprecated/README.md
+
+# Local automation / agent / browser artifacts
+.agent/
+.claude/
+.codex/
+.playwright-mcp/
 .worktrees/
+
+# Local planning notes and superpowers scratch space
 docs/plans/
 docs/superpowers/*
 !docs/superpowers/specs/
 docs/superpowers/specs/*
 !docs/superpowers/specs/2026-04-27-xiaoqing-chat-simplification-design.md
 
-# 数据文件
-plugins/*/data/
-plugins/*/cache/
-plugins/xiaoqing_chat/figures/
-plugins/*deprecated/
-!plugins/memo_deprecated/
-!plugins/memo_deprecated/__init__.py
-!plugins/memo_deprecated/main.py
-!plugins/memo_deprecated/README.md
-plugins/arxiv_filter/best_model*
-plugins/arxiv_filter/train_model/arxiv_papers_with_abstract.csv
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
 
-# 个人脚本
-sync_to_remote.sh 
+# Personal scripts
+sync_to_remote.sh

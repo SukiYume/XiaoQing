@@ -1,15 +1,22 @@
 # 🗺️ 00 - 项目概览
 
 > [!NOTE]
-> 本章是入门概览，适合所有人阅读。读完后前往 [01-getting-started.md](01-getting-started.md) 开始安装。
+> 本章是入门概览，适合所有读者。读完后可以接着看 [01-getting-started.md](01-getting-started.md) 完成安装。
 
-## 🤖 XiaoQing 是什么？
+## 🤖 XiaoQing 定位
 
 XiaoQing 是一个基于 **Python 异步**（asyncio）和 **OneBot 协议** 的轻量级 QQ 机器人框架。
 
+它在当前仓库中同时承担两层角色。
+
+1. **机器人框架**：`core/` 提供 OneBot 接入、消息分发、命令路由、插件生命周期、多轮会话、调度任务、配置热重载、运行指标和错误处理。
+2. **成品机器人应用**：`plugins/` 提供可直接加载的功能插件，覆盖拟人聊天、个人时间管理、天文工具、远程运维、代码执行、群娱乐、外部信息抓取和自动化任务。
+
+项目默认适合长期运行在个人机器、服务器或 NAS 上。QQ 客户端侧由 NapCatQQ 等 OneBot 实现负责，XiaoQing 专注于事件处理、业务插件和响应生成。
+
 ## ⚡ 三分钟理解
 
-如果你只想先抓住重点，记住这三件事：
+初次阅读时先记住三点，后面的配置和源码阅读会轻松很多。
 
 1. XiaoQing 的核心是 `core/`，负责消息接入、命令路由、会话管理和调度。
 2. 大部分能力都来自 `plugins/`，以带 `plugin.json` 的目录作为真正的插件单元。
@@ -19,25 +26,42 @@ XiaoQing 是一个基于 **Python 异步**（asyncio）和 **OneBot 协议** 的
 
 > 接收 QQ 消息 → 解析命令 → 调用插件处理 → 返回响应
 
-### 核心价值
+### 核心特性
 
 | 特性 | 说明 |
 |------|------|
 | **插件化** | 每个功能独立成插件，可手动重载；配置文件默认自动监控，插件文件 watcher 可按需开启 |
-| **异步优先** | 100% 异步设计，高效处理并发消息 |
+| **异步优先** | 基于 asyncio 处理并发消息 |
 | **协议标准** | 基于 OneBot 协议，兼容多种 QQ 客户端实现 |
-| **开发友好** | 清晰的 API，完善的日志，内置指标统计 |
+| **开发接口** | 提供插件 API、日志和运行指标统计 |
 | **Web 控制台** | pendo 插件内置 FastAPI + 原生 JS SPA，支持浏览器管理个人数据、统计和迁移 |
+
+---
+
+## 🌟 当前项目能力版图
+
+| 领域 | 插件 | 能力 |
+|------|------|------|
+| 拟人聊天 | `xiaoqing_chat` | 多模态群聊/私聊、图片和表情上下文、记忆、PFC 行为规划、reply checker、表达学习 |
+| 个人管理 | `pendo` | 日程、待办、笔记、日记、账本、提醒、搜索、统计、Web 控制台、Scriptable 小组件 |
+| 核心管理 | `bot_core` | `/help`、`/reload`、`/plugins`、静音、配置管理、metrics |
+| 基础聊天 | `smalltalk`, `chat`, `voice` | 简单闲聊、Coze 对话、TTS 和内部 STT 工具 |
+| 运维与执行 | `qingssh`, `shell`, `jupyter`, `minecraft` | SSH、受限 shell、Jupyter REPL、Minecraft RCON |
+| 科研/天文 | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | 天文图、论文筛选、ADS、天文计算、词典、FRB 监测 |
+| 外部信息 | `github`, `earthquake`, `twitter`, `url_parser`, `signin`, `adnmb` | Trending、地震、图片抓取、链接预览、签到、A 岛 |
+| 娱乐工具 | `choice`, `guess_number`, `qingpet`, `color`, `wolframalpha`, `echo` | 抽奖、猜数字、群宠物、颜色、计算、示例回显 |
+
+完整插件命令和配置在 [09-plugins.md](09-plugins.md)。
 
 ---
 
 ## 💡 核心概念
 
-在开始之前，先了解几个核心概念：
+后续文档会反复使用以下核心概念。
 
 ### 1. OneBot 协议
 
-[OneBot](https://onebot.dev/) 是一个聊天机器人的标准协议。它定义了：
+[OneBot](https://onebot.dev/) 是聊天机器人的标准协议。它定义事件格式、API 格式和通信方式。
 
 - **事件格式**：QQ 消息如何表示为 JSON
 - **API 格式**：如何发送消息、获取信息
@@ -188,11 +212,11 @@ return segments("你好")  # 自动转换为消息段
    ▼
 2. Dispatcher 解析
    - 提取文本、user_id、group_id
-   - 判断是否需要处理（群聊需要 @机器人 或命令前缀）
+   - 判断是否需要处理（普通群聊通常需要 @机器人、命令前缀或随机触发；`smalltalk_provider = xiaoqing_chat` 时所有群聊消息进入插件内部判定）
    │
    ▼
 3. 检查会话
-   - 用户是否有进行中的多轮对话？
+   - 检查用户是否有进行中的多轮对话
    - 有 → 路由到会话插件
    │
    ▼
@@ -252,7 +276,7 @@ XiaoQing/
 │
 ├── plugins/                # 插件目录（可直接加载的内置插件；*_deprecated 目录默认不参与加载）
 │   ├── bot_core/           # 核心命令（help、reload）
-│   ├── xiaoqing_chat/      # 智能对话插件（向量记忆、情绪系统）
+│   ├── xiaoqing_chat/      # 多模态拟人聊天（attention gate、记忆、规划、reply checker）
 │   ├── pendo/              # 个人时间与信息管理中枢（日程/待办/笔记/日记/账本/提醒/Web 控制台）
 │   ├── qingpet/            # QQ群宠物养成系统
 │   ├── qingssh/            # SSH 远程控制
@@ -336,7 +360,7 @@ XiaoQing 的设计遵循以下原则：
 | 插件生态 | 小 | 大 | 大 |
 | 适合场景 | 个人/小型 | 通用 | 通用 |
 
-**XiaoQing 适合**：
+**XiaoQing 适用场景**
 - 想要简单、直接的框架
 - 快速开发个人机器人
 - 学习机器人开发原理
@@ -345,4 +369,4 @@ XiaoQing 的设计遵循以下原则：
 
 ## ➡️ 下一步
 
-准备好了吗？前往 [01-getting-started.md](01-getting-started.md) 开始安装和配置！
+下一步阅读 [01-getting-started.md](01-getting-started.md)，完成安装和配置。

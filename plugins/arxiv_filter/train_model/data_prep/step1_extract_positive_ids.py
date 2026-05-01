@@ -10,6 +10,8 @@ Step 1: 从 apod 笔记中提取正样本 arXiv ID 和日期范围
 - cache/date_range.json: 笔记覆盖的日期范围 {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
 
 更新方式: 直接重新运行即可，会自动扫描所有笔记文件。
+
+默认读取本机 APOD 笔记目录，也可以通过 APOD_ROOT 环境变量覆盖。
 """
 
 import os
@@ -21,7 +23,7 @@ from pathlib import Path
 # ============================================================
 # 配置
 # ============================================================
-APOD_ROOT = Path(os.environ.get("APOD_ROOT", r"D:/EscapeWeb/vitepress/docs/apod"))
+DEFAULT_APOD_ROOT = Path(r"D:/EscapeWeb/vitepress/docs/apod")
 DATA_PREP_DIR = Path(__file__).resolve().parent
 CACHE_DIR = DATA_PREP_DIR / "cache"
 OUTPUT_IDS_CSV = CACHE_DIR / "positive_ids.csv"
@@ -33,7 +35,16 @@ ARXIV_PATTERN = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})")
 DATE_HEADER_PATTERN = re.compile(r"^## (\d{4}-\d{2}-\d{2})", re.MULTILINE)
 
 
-def extract_from_file(filepath: Path) -> tuple[list[dict[str, str]], list[str]]:
+def resolve_apod_root() -> Path:
+    apod_root = Path(os.environ.get("APOD_ROOT", DEFAULT_APOD_ROOT)).expanduser()
+    if not apod_root.exists():
+        raise SystemExit(f"APOD_ROOT 不存在: {apod_root}")
+    if not apod_root.is_dir():
+        raise SystemExit(f"APOD_ROOT 不是目录: {apod_root}")
+    return apod_root
+
+
+def extract_from_file(filepath: Path, apod_root: Path) -> tuple[list[dict[str, str]], list[str]]:
     """从单个 md 文件中提取 arXiv ID 和日期"""
     ids = []
     dates = []
@@ -48,7 +59,7 @@ def extract_from_file(filepath: Path) -> tuple[list[dict[str, str]], list[str]]:
         ids.append(
             {
                 "arXiv ID": match.group(1),
-                "source_file": str(filepath.relative_to(APOD_ROOT)),
+                "source_file": str(filepath.relative_to(apod_root)),
             }
         )
 
@@ -59,16 +70,17 @@ def extract_from_file(filepath: Path) -> tuple[list[dict[str, str]], list[str]]:
 
 
 def main():
-    md_files = sorted(APOD_ROOT.rglob("AstroPH-*.md"))
+    apod_root = resolve_apod_root()
+    md_files = sorted(apod_root.rglob("AstroPH-*.md"))
     print(f"找到 {len(md_files)} 个笔记文件")
 
     all_ids = []
     all_dates = []
 
     for f in md_files:
-        ids, dates = extract_from_file(f)
+        ids, dates = extract_from_file(f, apod_root)
         if ids:
-            print(f"  {f.relative_to(APOD_ROOT)}: {len(ids)} 篇论文, {len(dates)} 个日期")
+            print(f"  {f.relative_to(apod_root)}: {len(ids)} 篇论文, {len(dates)} 个日期")
         all_ids.extend(ids)
         all_dates.extend(dates)
 

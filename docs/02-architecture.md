@@ -1,13 +1,21 @@
 # 🏗️ 02 - 系统架构
 
-本章详细介绍 XiaoQing 的内部架构和工作原理。
+本章把 XiaoQing 的内部架构和工作原理拆开说明。
 
 > [!NOTE]
-> 本章偏向框架内部实现，适合想深入了解的开发者。如果只是写插件，直接看 [03-plugin-development.md](03-plugin-development.md) 即可。
+> 本章偏向框架内部实现。只写普通插件时，可以先阅读 [03-plugin-development.md](03-plugin-development.md)。
 
 ---
 
 ## 🔭 架构总览
+
+XiaoQing 的核心架构分成三层。
+
+1. **协议接入层**：`server.py` 和 `onebot.py` 负责接收 OneBot 事件、维护 WebSocket 连接和发送 OneBot API 请求。
+2. **框架调度层**：`app.py`、`dispatcher.py`、`router.py`、`plugin_manager.py`、`session.py`、`scheduler.py` 负责生命周期、消息分发、命令匹配、插件加载、多轮会话和定时任务。
+3. **插件业务层**：`plugins/` 内的插件实现具体能力。轻量插件通常只需要 `plugin.json + main.py`；大型插件如 `xiaoqing_chat` 和 `pendo` 拥有自己的服务层、状态层、Web/API 或 LLM 子系统。
+
+核心框架不直接理解 Pendo 的账本模型，也不直接生成 xiaoqing_chat 的拟人回复。它提供统一的事件、上下文、路由和发送能力；业务插件在这个边界内自行组织更复杂的内部架构。
 
 ```
                               ┌─────────────────┐
@@ -87,6 +95,8 @@
 ---
 
 ## ⚙️ 核心组件
+
+在当前项目中，`core/` 的职责边界保持稳定。它处理所有插件共享的通用问题，不把某个业务插件的规则写进核心。少数特殊分支服务于清晰的职责划分，例如 `smalltalk_provider = "xiaoqing_chat"` 时让所有群聊消息进入 SmalltalkHandler，由聊天插件判断回复时机，核心只负责入口分发。
 
 ### 1. XiaoQingApp（app.py）
 
@@ -193,54 +203,55 @@ class MessageHandler(ABC):
 ```
 
 > [!IMPORTANT]
-> **短路机制**：一旦某个 Handler 返回非 `None` 结果，后续 Handler 不会执行。这意味着命令总是优先于闲聊，会话处理优先于普通匹配。
+> **短路机制**：一旦某个 Handler 返回非 `None` 结果，后续 Handler 不会执行。命令优先于闲聊，会话处理优先于普通匹配。
 
 **消息处理决策树**：
 
 ```
 收到消息
     │
-    ├─ 私聊？─────────────────────────────────────> 进入 Handler 链
+    ├─ 私聊消息 ─────────────────────────────────> 进入 Handler 链
     │
-    └─ 群聊？
+    └─ 群聊消息
          │
-         ├─ 有命令前缀（如 /help）？─────────────> 进入 Handler 链（命令优先）
+         ├─ 存在命令前缀（如 /help）────────────> 进入 Handler 链（命令优先）
          │
-         ├─ 包含机器人名字（如"小青"）？─────────> 进入 Handler 链（可闲聊）
+         ├─ 包含机器人名字（如"小青"）──────────> 进入 Handler 链（可闲聊）
          │
-         ├─ 群被静音？─────────────────────────> 不处理（命令除外）
+         ├─ 群被静音 ──────────────────────────> 不处理（命令除外）
          │
-         ├─ 活跃会话？─────────────────────────> 进入 Handler 链（会话优先）
+         ├─ 存在活跃会话 ──────────────────────> 进入 Handler 链（会话优先）
          │
-         ├─ 随机触发（random_reply_rate）？────> 进入 Handler 链（闲聊模式）
+         ├─ 随机触发（random_reply_rate）──────> 进入 Handler 链（闲聊模式）
          │
          └─ 否则 ──────────────────────────────> 不处理
 
 Handler 链处理流程：
     │
-    ├─ BotNameHandler：仅机器人名字？───────────> 处理并返回
+    ├─ BotNameHandler：仅机器人名字 ───────────> 处理并返回
     │       │
     │       └─ 否 ────────────────────────────────> 继续下一个 Handler
     │
-    ├─ CommandHandler：命令匹配成功？───────────> 处理并返回
+    ├─ CommandHandler：命令匹配成功 ───────────> 处理并返回
     │       │
     │       └─ 否 ────────────────────────────────> 继续下一个 Handler
     │
-    ├─ SessionHandler：活跃会话存在？───────────> 处理并返回
+    ├─ SessionHandler：存在活跃会话 ───────────> 处理并返回
     │       │
     │       └─ 否 ────────────────────────────────> 继续下一个 Handler
     │
-    └─ SmalltalkHandler：smalltalk_mode=True？──> 处理并返回
+    └─ SmalltalkHandler：smalltalk_mode=True ─> 处理并返回
             │
             └─ 否 ────────────────────────────────> 返回空列表
 ```
 
 **xiaoqing_chat 特殊处理**：
 
-当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时，决策逻辑特殊：
+当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时，决策逻辑有特殊处理。
 - 所有群聊消息都返回 `should_process=True` 和 `smalltalk_mode=True`
 - `random_reply_rate` 配置失效
-- `xiaoqing_chat` 插件内部有自己的频率控制和回复概率判断
+- `xiaoqing_chat` 插件内部有自己的 attention gate、硬频控、普通群聊插话概率、heartflow 和 PFC planner
+- `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及近期上下文锚定小青的“她/ta”共指召唤，会在插件内标记为 forced，跳过普通插话概率
 
 ---
 
@@ -608,6 +619,6 @@ XiaoQing 主进程
 
 ## ➡️ 下一步
 
-- 想开发插件？→ [03-plugin-development.md](03-plugin-development.md)
-- 想了解各模块源码？→ [04-core-modules.md](04-core-modules.md)
-- 想了解消息处理流程？→ [08-message-flow.md](08-message-flow.md)
+- 插件开发见 [03-plugin-development.md](03-plugin-development.md)
+- 核心模块源码见 [04-core-modules.md](04-core-modules.md)
+- 消息处理流程见 [08-message-flow.md](08-message-flow.md)

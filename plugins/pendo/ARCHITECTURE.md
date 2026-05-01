@@ -1,10 +1,10 @@
 # Pendo 插件架构与代码结构
 
-> 这份文档描述当前已合入主分支的 Pendo 运行时结构。历史重构方案放在 `docs/plans/`，不作为当前行为说明。
+本文件把 Pendo 的运行时结构、模块边界、数据模型和扩展方式梳理在一起。它与 `plugins/pendo/README.md` 共同组成 Pendo 的正式文档入口。README 面向使用和部署，ARCHITECTURE 面向维护和二次开发。
 
 ## 定位
 
-Pendo 是 XiaoQing 的个人时间与信息管理中枢，当前功能边界是：
+Pendo 是 XiaoQing 的个人时间与信息管理中枢，当前功能边界如下。
 
 - `event + reminders`: 日程、重复日程、多节点日程、提醒确认与延后。
 - `note`: 笔记、标签、分类、条目引用、关联条目。
@@ -12,13 +12,22 @@ Pendo 是 XiaoQing 的个人时间与信息管理中枢，当前功能边界是�
 - `todo/task`: 计划日期、硬截止、提醒、优先级、open/done/cancelled 状态。
 - `ledger`: 账目、账户、转账、商户、金额分存储、统计。
 
-核心设计原则：
+核心设计原则如下。
 
 - 单一条目管线：大部分业务对象都落在 `items` 表，按 `type` 区分。
 - 明确产品语义：字段只保留前后端和 CLI 都能闭环使用的语义。
 - 类型统一校验：CLI、Web API、Bundle 导入都应走 `utils/validators.py` 的类型归一化。
 - 多用户隔离：所有读写都以 `owner_id` 过滤。
 - Web 与 CLI 共用后端服务：Web 负责高密度管理，CLI 负责快速录入和提醒操作。
+
+## 正式文档边界
+
+Pendo 插件目录中可能存在测试提示和运行报告等执行产物。当前维护时只把以下两个文件当作长期文档入口。
+
+- `README.md`: 用户手册，覆盖命令、Web 控制台、迁移、配置和排障。
+- `ARCHITECTURE.md`: 工程手册，覆盖运行时分层、数据库、服务、Web API、调度和测试边界。
+
+测试任务文档和 test report 属于执行记录，不参与架构说明。
 
 ## 目录结构
 
@@ -28,8 +37,7 @@ plugins/pendo/
 ├── config.py                    # 配置常量、提醒策略、日记模板
 ├── plugin.json                  # 插件清单和定时任务
 ├── README.md                    # 用户使用说明
-├── ARCHITECTURE.md              # 本文档
-├── Pendo个人时间与信息管理中枢.md # 产品说明文档
+├── ARCHITECTURE.md              # 架构文档
 ├── requirements.txt
 │
 ├── core/
@@ -274,7 +282,7 @@ CLI、Web 和导入路径都通过 `normalize_diary_fields()` 统一校验心情
 
 原则：
 
-- 新增或更新条目必须先归一化再写库。
+- 写入或更新条目必须先归一化再写库。
 - Web API、CLI handler、Bundle 导入不要各自手写不同校验。
 - 新结构不保留旧字段兜底；旧数据只允许在一次性迁移脚本里被读取和转换。
 
@@ -380,7 +388,7 @@ plugins/pendo/scripts/migrate_pendo_redesign.py
 
 ## 文档归属
 
-- 插件内用户文档：`README.md`, `Pendo个人时间与信息管理中枢.md`
+- 插件内用户文档：`README.md`
 - 插件内架构文档：`ARCHITECTURE.md`
 - 全局插件手册：`docs/09-plugins.md`
 - 重构/实现计划：`docs/plans/`
@@ -390,7 +398,7 @@ plugins/pendo/scripts/migrate_pendo_redesign.py
 
 ## 验证建议
 
-文档或架构调整后至少运行：
+文档或架构调整后至少运行以下命令。
 
 ```powershell
 python -m pytest tests/plugins/test_pendo.py::TestPendoDocumentation -q

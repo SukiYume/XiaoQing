@@ -1,4 +1,4 @@
-# pendo-redesign 插件完整测试、修复与回归任务
+# `plugins/pendo` 完整测试 Prompt
 
 你现在是一个资深全栈测试工程师、安全工程师、产品文档审查员和代码维护者。请对仓库中的 `plugins/pendo` 插件执行一次完整的白盒 + 黑盒测试、文档审查、问题修复、冗余代码审查、回归验证，并输出可复现报告。
 
@@ -6,16 +6,16 @@
 
 ## 一、背景与环境
 
-当前分支是 `pendo-redesign`，请重点检查 `plugins/pendo`，并结合 `master` 对比理解本次重构带来的行为变化、兼容性风险和潜在回归。
+测试对象是当前工作树中的 `plugins/pendo`。行为判断以 `plugin.json`、`README.md`、`ARCHITECTURE.md`、`docs/09-plugins.md`、源码和自动化测试为准；历史设计草案、迁移脚本和旧测试报告只能作为兼容性线索，不能替代当前实现验证。
 
 本地已有生产数据库及备份：
 
 - `plugins/pendo/data/pendo.db`
-- `plugins/pendo/data/pendo.db.bak.20260430`
+- `plugins/pendo/data/pendo.db.bak.*` 或测试前创建的数据库快照
 
 迁移报告可能位于：
 
-- `plugins/pendo/data/pendo.db.pendo-redesign-report-20260430152313.json`
+- `plugins/pendo/data/*.json` 中的迁移或校验报告
 
 服务已启动：
 
@@ -28,7 +28,7 @@
 
 ## 二、最高优先级：命令面和参数面的完整覆盖
 
-之前的测试只做了少量代表性命令，这是不够的。本轮最重要的目标是：**每一条 `/pendo xxx yyy` 命令、每一个别名、每一个参数，都必须有多种测试输入，并且有日志证据。**
+本 prompt 的最重要目标是：**每一条 `/pendo xxx yyy` 命令、每一个别名、每一个参数，都必须有多种测试输入，并且有日志证据。**
 
 ### 2.1 禁止跳过的规则
 
@@ -49,8 +49,8 @@
 
 在执行大规模测试前，必须先生成完整命令库存，建议保存为：
 
-- `plugins/pendo/test_reports/pendo-command-inventory-20260430.md`
-- `plugins/pendo/test_reports/pendo-command-inventory-20260430.json`
+- `plugins/pendo/test_reports/runs/<RUN_ID>/pendo-command-inventory.md`
+- `plugins/pendo/test_reports/runs/<RUN_ID>/pendo-command-inventory.json`
 
 命令库存必须同时来自以下来源，并做交叉比对：
 
@@ -59,7 +59,7 @@
 3. 代码中实际支持的子命令、别名、参数解析分支。
 4. README、Web 页面、导入页示例、其他文档中的 `/pendo ...` 示例。
 5. `test_http.ipynb` 或已有测试中的命令样例。
-6. master 与 `pendo-redesign` diff 中新增、删除、改名的命令。
+6. 历史兼容、迁移脚本、README/ARCHITECTURE、Web 文案和测试中出现的命令差异。
 
 每条库存记录至少包含：
 
@@ -88,14 +88,14 @@
 - 代码支持但 HELP_MAP 未列出的命令。
 - 参数说明不完整或错误的命令。
 - 示例不可执行的命令。
-- 新旧分支行为变化的命令。
+- 当前实现与文档、帮助文案或历史兼容入口不一致的命令。
 
 ### 2.3 Coverage Gate 1：为每条命令生成参数测试矩阵
 
 必须基于命令库存生成参数级测试矩阵，建议保存为：
 
-- `plugins/pendo/test_reports/pendo-command-parameter-matrix-20260430.md`
-- `plugins/pendo/test_reports/pendo-command-parameter-matrix-20260430.json`
+- `plugins/pendo/test_reports/runs/<RUN_ID>/pendo-command-parameter-matrix.md`
+- `plugins/pendo/test_reports/runs/<RUN_ID>/pendo-command-parameter-matrix.json`
 
 每个测试用例必须有唯一 `case_id`，例如：
 
@@ -159,8 +159,8 @@
 
 建议保存为：
 
-- `plugins/pendo/test_reports/pendo-command-test-results-20260430.jsonl`
-- `plugins/pendo/test_reports/pendo-command-test-results-20260430.md`
+- `plugins/pendo/test_reports/runs/<RUN_ID>/pendo-command-test-results.jsonl`
+- `plugins/pendo/test_reports/runs/<RUN_ID>/pendo-command-test-results.md`
 
 最终报告中必须能追溯每条结论对应的 `case_id` 和日志。没有执行日志的测试不得写成通过。
 
@@ -169,15 +169,17 @@
 
 本任务可能很长，不能依赖对话历史或压缩摘要来记住进度。必须把测试状态写入仓库文件，让任何新的 Codex 会话、压缩后的会话或 `codex resume` 后的会话，都能从文件恢复并继续执行。
 
+如果已有 `plugins/pendo/test_reports/CURRENT_RUN_ID.txt`，读取其中的 `RUN_ID` 并继续；如果不存在，创建 `pendo-fulltest-YYYYMMDD-HHMMSS`，写入该文件，并把所有产物放入 `plugins/pendo/test_reports/runs/<RUN_ID>/`。
+
 #### 2.5.1 强制持久化状态文件
 
 在进入大规模执行前，必须创建并持续维护以下文件：
 
-- `plugins/pendo/test_reports/pendo-run-state-20260430.json`
-- `plugins/pendo/test_reports/pendo-next-actions-20260430.md`
-- `plugins/pendo/test_reports/pendo-session-handoff-20260430.md`
+- `plugins/pendo/test_reports/runs/<RUN_ID>/pendo-run-state.json`
+- `plugins/pendo/test_reports/runs/<RUN_ID>/pendo-next-actions.md`
+- `plugins/pendo/test_reports/runs/<RUN_ID>/pendo-session-handoff.md`
 
-`pendo-run-state-20260430.json` 至少包含：
+`pendo-run-state.json` 至少包含：
 
 | 字段                         | 要求                                                         |
 | ---------------------------- | ------------------------------------------------------------ |
@@ -208,7 +210,7 @@
 | next_actions                 | 下一步要做的具体动作，按优先级排序                           |
 | resume_prompt                | 下一次恢复时应直接复制给 Codex 的续测提示                    |
 
-`pendo-next-actions-20260430.md` 必须用人类可读格式列出：
+`pendo-next-actions.md` 必须用人类可读格式列出：
 
 1. 当前已完成到哪里。
 2. 下一条应执行的 `case_id`。
@@ -218,7 +220,7 @@
 6. 需要优先回归的修复项。
 7. 恢复测试前必须检查的环境项。
 
-`pendo-session-handoff-20260430.md` 必须像交接班说明一样可独立阅读，包含：
+`pendo-session-handoff.md` 必须像交接班说明一样可独立阅读，包含：
 
 1. 本轮任务目标摘要。
 2. 已完成 Coverage Gate。
@@ -246,10 +248,10 @@
 
 每次恢复或压缩后，必须先执行以下恢复流程，再继续测试：
 
-1. 读取 `pendo-session-handoff-20260430.md`。
-2. 读取 `pendo-run-state-20260430.json`。
+1. 读取 `pendo-session-handoff.md`。
+2. 读取 `pendo-run-state.json`。
 3. 读取命令库存 JSON 和参数矩阵 JSON。
-4. 读取 `pendo-command-test-results-20260430.jsonl`，按 `case_id` 去重，计算 PASS / FAIL / BLOCKED / SKIPPED / PENDING。
+4. 读取 `pendo-command-test-results.jsonl`，按 `case_id` 去重，计算 PASS / FAIL / BLOCKED / SKIPPED / PENDING。
 5. 对比 `run_state.pending_case_ids` 与结果日志，修正不一致。
 6. 执行 `git status --short`，确认当前未提交修改。
 7. 检查 `pendo.db` 或测试数据库快照是否存在。
@@ -266,7 +268,7 @@
 
 #### 2.5.4 日志必须可追加、可去重、可审计
 
-`pendo-command-test-results-20260430.jsonl` 必须使用 append-only 方式记录。重复执行同一 `case_id` 时，不能覆盖旧记录，必须增加 `attempt` 字段，并在最终统计中以最新一次有效 attempt 为准。
+`pendo-command-test-results.jsonl` 必须使用 append-only 方式记录。重复执行同一 `case_id` 时，不能覆盖旧记录，必须增加 `attempt` 字段，并在最终统计中以最新一次有效 attempt 为准。
 
 每条结果至少包含：
 
@@ -288,9 +290,9 @@
 
 准备压缩上下文、执行 `/compact` 或结束当前 Codex 回合前，必须先完成以下动作：
 
-1. 写入最新 `pendo-run-state-20260430.json`。
-2. 写入最新 `pendo-next-actions-20260430.md`。
-3. 写入最新 `pendo-session-handoff-20260430.md`。
+1. 写入最新 `pendo-run-state.json`。
+2. 写入最新 `pendo-next-actions.md`。
+3. 写入最新 `pendo-session-handoff.md`。
 4. 确认所有已执行用例都已追加到 JSONL。
 5. 生成或刷新覆盖率摘要。
 6. 在回复中明确下一步要从哪个 `case_id` 继续。
@@ -302,12 +304,12 @@
 恢复 Codex 会话时，直接给它以下提示：
 
 ```text
-继续 pendo-redesign 插件测试，不要从头开始。先读取：
-1. plugins/pendo/test_reports/pendo-session-handoff-20260430.md
-2. plugins/pendo/test_reports/pendo-run-state-20260430.json
-3. plugins/pendo/test_reports/pendo-command-inventory-20260430.json
-4. plugins/pendo/test_reports/pendo-command-parameter-matrix-20260430.json
-5. plugins/pendo/test_reports/pendo-command-test-results-20260430.jsonl
+继续 `plugins/pendo` 插件测试，不要从头开始。先读取：
+1. plugins/pendo/test_reports/runs/<RUN_ID>/pendo-session-handoff.md
+2. plugins/pendo/test_reports/runs/<RUN_ID>/pendo-run-state.json
+3. plugins/pendo/test_reports/runs/<RUN_ID>/pendo-command-inventory.json
+4. plugins/pendo/test_reports/runs/<RUN_ID>/pendo-command-parameter-matrix.json
+5. plugins/pendo/test_reports/runs/<RUN_ID>/pendo-command-test-results.jsonl
 
 请按 case_id 去重统计已执行结果，确认 pending_case_ids，然后从第一个未完成 case_id 继续执行。不要把未执行项写成通过。每执行 10 到 20 个用例、每完成一个命令域、每修复一个问题、以及每次准备压缩上下文前，都必须更新 run_state、next_actions 和 session_handoff。
 ```
@@ -464,14 +466,14 @@
 - 日期时间格式、ID 是否可省略、重复导入去重策略、字段缺失默认值、非法字段处理。
 - 最小可用示例和完整综合示例。
 
-示例必须符合 pendo-redesign 新 schema，并实际导入成功；导入后要能通过命令查询、Web 展示、统计校验。
+示例必须符合当前 schema，并实际导入成功；导入后要能通过命令查询、Web 展示、统计校验。
 
 ### 5.5 Scriptable iOS widget
 
 检查 `plugins/pendo/scriptable/` 中所有 JavaScript：
 
 - API 路径是否存在。
-- 字段名是否适配新 schema。
+- 字段名是否适配当前 schema。
 - event/reminder、重复 occurrence、多节点、task、ledger、diary/note 如果支持的展示是否正确。
 - 时间、金额、状态、分类、账户、排序、过滤是否正确。
 - 空数据、网络失败、异常返回、超长文本、emoji、中文。
@@ -484,7 +486,7 @@
 
 先枚举所有 pendo 相关定时任务，包括 reminder、每日/每周/每月摘要、财务周报/月报、统计推送、自动清理或归档等。
 
-对每个定时任务验证注册、触发周期、时区、起止范围、数据表和字段、新 schema 适配、空数据、异常、服务重启、幂等、输出可读性、日志安全、是否存在已不再注册的死函数。
+对每个定时任务验证注册、触发周期、时区、起止范围、数据表和字段、当前 schema 适配、空数据、异常、服务重启、幂等、输出可读性、日志安全、是否存在已不再注册的死函数。
 
 财务周报/月报必须构造固定账本数据验证：
 
@@ -516,7 +518,7 @@
 
 ## 七、冗余代码、死代码和重复逻辑审查
 
-对 `plugins/pendo` 做完整冗余代码检查。目标不是盲目删代码，而是找出 pendo-redesign 重构后遗留的无用代码、重复逻辑和过时兼容层，并在安全前提下清理。
+对 `plugins/pendo` 做完整冗余代码检查。目标不是盲目删代码，而是找出插件演进中遗留的无用代码、重复逻辑和过时兼容层，并在安全前提下清理。
 
 覆盖：Python 后端、命令解析、数据库访问、migration、HTTP API、Web 前端、静态资源、Scriptable、定时任务、测试、HELP_MAP、导入导出示例和文档。
 
@@ -652,13 +654,13 @@ git diff master...HEAD -- plugins/pendo/scriptable
 - `rg` / `grep` 搜索候选函数、类、API 路由、静态资源路径是否仍被引用。
 - 动态入口检查：命令分发、API 路由、定时任务注册、Scriptable 使用接口。
 
-如果命令失败，请判断是环境问题、已有问题还是本次重构问题，并在报告中说明。失败不能被写成通过。
+如果命令失败，请判断是环境问题、已有问题还是插件实现问题，并在报告中说明。失败不能被写成通过。
 
 ## 十二、最终交付物
 
 请在仓库中生成详细测试报告，建议路径：
 
-`plugins/pendo/test_reports/pendo-redesign-full-test-report-20260430.md`
+`plugins/pendo/test_reports/runs/<RUN_ID>/pendo-final-report.md`
 
 同时至少生成这些辅助产物：
 
@@ -671,14 +673,14 @@ git diff master...HEAD -- plugins/pendo/scriptable
 7. Scriptable mock 测试结果。
 8. 定时任务测试结果。
 9. 冗余代码检查结果。
-10. 本次新增或修改的测试脚本列表。
+10. 测试过程中新增或修改的测试脚本列表。
 
 最终报告必须包含：
 
 1. 执行摘要。
 2. 测试环境。
 3. 代码阅读总结。
-4. master 与 pendo-redesign 关键差异。
+4. 实现、文档、帮助文案和历史兼容入口的关键差异。
 5. 功能地图。
 6. 数据库 schema 和迁移检查结果。
 7. 命令库存和 `/pendo xxx` 命令地图。
@@ -708,9 +710,9 @@ git diff master...HEAD -- plugins/pendo/scriptable
 31. 发现的问题列表，按 P0/P1/P2/P3 分类。
 32. 每个问题的复现步骤、根因、修复文件、回归结果。
 33. 未解决问题或风险。
-34. 新增或修改的测试文件列表。
-35. 本次代码修复和清理的 `git diff` 摘要。
-36. 最终结论：是否建议合并 `pendo-redesign`。
+34. 测试过程中新增或修改的测试文件列表。
+35. 代码修复和清理的 `git diff` 摘要。
+36. 最终结论：插件质量结论、上线风险和继续维护建议。
 
 ### 12.1 必须使用的核心表格
 
@@ -783,13 +785,13 @@ Scriptable 检查表：
 8. Web 总览/统计/图表是否通过校验。
 9. 静态资源 404 处理结果。
 10. Web 导入页面示例是否补全并验证可导入。
-11. Scriptable iOS widget 是否适配 pendo-redesign。
+11. Scriptable iOS widget 是否适配当前 API 和数据字段。
 12. 每周/月财务总结等定时任务是否通过校验。
 13. 冗余代码、死代码、重复逻辑检查数量；删除、合并、保留数量及原因。
 14. 冗余代码清理后执行了哪些回归测试，结果如何。
 15. 关键测试命令和回归结果。
 16. 当前 `git status` 摘要。
-17. 是否建议合并 `pendo-redesign`。
+17. 插件质量结论、上线风险和继续维护建议。
 
 必须真实记录结果。无法执行的测试要说明原因、影响和替代验证方式。疑似冗余但无法确认无用的代码不要删除，要说明保留原因和后续建议。
 

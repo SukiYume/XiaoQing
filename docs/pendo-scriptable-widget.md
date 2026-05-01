@@ -1,6 +1,6 @@
-# Pendo Scriptable Widget
+# Pendo Scriptable 小组件
 
-Pendo 提供一个专门给 `Scriptable` 使用的只读摘要接口，适合把日程、待办、财务或笔记放到 iPhone 主屏。
+Pendo 提供 Scriptable 只读摘要接口，可以把日程、待办、财务或笔记放到 iPhone 主屏，适合每天扫一眼当前事项。
 
 ## 接口与鉴权
 
@@ -23,11 +23,9 @@ Pendo 提供一个专门给 `Scriptable` 使用的只读摘要接口，适合把
 
 ## Scriptable 脚本
 
-脚本文件：
+脚本文件位于 `plugins/pendo/web/scriptable/pendo_widget.js`。
 
-- `plugins/pendo/web/scriptable/pendo_widget.js`
-
-需要修改两个常量：
+使用前修改两个常量。
 
 ```javascript
 const BASE_URL = "https://example.com/pendo";
@@ -63,7 +61,7 @@ const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
    - `notes`
    - `auto`
 
-如果你的 Pendo Web 部署在 Windows 上，并且默认 `8765` 端口启动失败，可以先改服务端环境变量 `PENDO_WEB_PORT`，再把这里的 `BASE_URL` 同步成新的端口。
+Windows 部署下默认 `8765` 端口启动失败时，可以先改服务端环境变量 `PENDO_WEB_PORT`，再把 `BASE_URL` 同步成新的端口。
 
 ## 交互说明
 

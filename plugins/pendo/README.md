@@ -1,6 +1,12 @@
 # Pendo - 个人时间与信息管理中枢
 
-Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程、待办、笔记、日记、账本和提醒。聊天命令适合快速记录、查询和处理提醒；Web 控制台适合集中浏览、编辑、统计和迁移数据；Scriptable 小组件适合把只读摘要放到 iPhone 主屏。
+Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程、待办、笔记、日记、账本和提醒。聊天命令适合随手记录、快速查询和处理提醒；Web 控制台适合集中浏览、编辑、统计和迁移数据；Scriptable 小组件适合把只读摘要放到 iPhone 主屏。
+
+## 文档定位
+
+`plugins/pendo/README.md` 是 Pendo 的使用手册，面向部署者和日常用户，描述命令、Web 控制台、数据模型、迁移和常见问题。`plugins/pendo/ARCHITECTURE.md` 是 Pendo 的工程架构文档，面向维护者，描述运行时分层、数据库、Web API、调度和扩展边界。
+
+插件目录下可能保留历史产品说明或测试提示文档；这些文件不作为当前维护入口。Pendo 当前行为以本 README、`ARCHITECTURE.md`、`plugin.json` 和源码为准。
 
 ## 能力边界
 
@@ -319,7 +325,7 @@ pip install -r requirements.txt
 
 ## 测试
 
-常用验证命令：
+常用验证命令如下。
 
 ```powershell
 python -m compileall -q plugins/pendo
@@ -328,12 +334,11 @@ $files = Get-ChildItem -LiteralPath 'tests/plugins' -Filter 'test_pendo*.py' | S
 python -m pytest @files tests/test_server.py
 ```
 
-完整手工/黑盒测试要求见 `plugins/pendo/pendo测试.md`。该测试说明使用 `plugins/pendo/test_reports/CURRENT_RUN_ID.txt` 和 `plugins/pendo/test_reports/runs/<RUN_ID>/` 记录可恢复进度。
+全量手工和黑盒测试要求见 `plugins/pendo/pendo测试.md`。该测试说明使用 `plugins/pendo/test_reports/CURRENT_RUN_ID.txt` 和 `plugins/pendo/test_reports/runs/<RUN_ID>/` 记录可恢复进度。
 
 ## 相关文档
 
 - `plugins/pendo/ARCHITECTURE.md`
-- `plugins/pendo/Pendo个人时间与信息管理中枢.md`
 - `plugins/pendo/pendo测试.md`
 - `docs/09-plugins.md`
 - `docs/pendo-scriptable-widget.md`

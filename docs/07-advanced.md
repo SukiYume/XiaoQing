@@ -1,6 +1,6 @@
 # 🧪 07 - 高级主题
 
-本章涵盖多轮对话、定时任务、URL 解析、闲聊等高级功能。
+本章收纳多轮对话、定时任务、URL 解析、闲聊等进阶用法。
 
 ---
 
@@ -486,7 +486,7 @@ Handler 链依次尝试：
 
 ### 开发自定义 Handler
 
-你可以实现自定义 Handler 来扩展消息处理逻辑。
+自定义 Handler 可用于扩展消息处理逻辑。
 
 **步骤 1**：定义 Handler 类
 
@@ -582,7 +582,7 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 
 #### 2. 拟人化表达系统
 
-拟人化不是靠单句 system prompt 硬演，而是几层一起作用：
+拟人化由多层机制共同实现，单句 system prompt 只承担一部分约束。
 
 1. `personality.identity` 和随机 `states`
 2. 从对话里学到的表达方式
@@ -611,11 +611,11 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 
 识别成表情包的图片会进入 `plugins/xiaoqing_chat/data/media/library/`，后续可作为本地表情包回复素材。
 
-回复阶段由主 LLM 直接决定是否带出站媒体：它可以在自然文本里附一个 `[想发表情:hint]`、`[想发QQ表情:hint]` 或 `[想发图片:hint]` marker。插件会剥离这个控制 marker，再按 hint 到本地表情包库、图片目录或 QQ face 目录里解析成实际发送段。旧图库里元数据不完整的条目会在后台补修，不会卡住当前回复。
+回复阶段由主 LLM 直接决定是否带出站媒体。模型可以在自然文本里附一个 `[想发表情:hint]`、`[想发QQ表情:hint]` 或 `[想发图片:hint]` marker。插件会剥离这个控制 marker，再按 hint 到本地表情包库、图片目录或 QQ face 目录里解析成实际发送段。旧图库里缺失的元数据会在后台补修，不会卡住当前回复。
 
 #### 4. 深度对话模式与 think level
 
-`xiaoqing_chat` 的普通回复和私聊深度对话并不是同一套思考强度：
+`xiaoqing_chat` 的普通回复和私聊深度对话使用不同思考强度。
 
 - 普通模式下，`planner.think_mode = "dynamic"` 会按近期上下文长度自动映射到不同 think level
 - 私聊启用 `brain_chat` 后，会优先使用 `brain_think_level`
@@ -629,10 +629,12 @@ xiaoqing_chat 内部实现智能回复频率控制，优于简单的 `random_rep
 
 **控制策略**：
 
-1. **硬频控**：最小回复间隔、每分钟上限、连续回复冷却
-2. **强制回复**：私聊、被 `@`、直接叫名字后的下一轮会跳过概率门
-3. **活跃话题**：近期目标仍活跃时可使用更短的 `active_topic_min_reply_interval`
-4. **soft gate**：基础概率叠加 heartflow 和连续未回复补偿
+1. **attention gate**：先判断这条消息是不是冲小青来的。`/xc`、私聊、被 `@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及近期上下文锚定小青的“她/ta”共指召唤，都会跳过普通概率门。
+2. **硬频控**：普通群聊参与前先检查最小回复间隔、每分钟上限、连续回复冷却。
+3. **活跃话题**：近期目标仍活跃时可使用更短的 `active_topic_min_reply_interval`，并提高普通参与概率。
+4. **soft gate**：普通群聊插话概率 `reply_probability_base` 叠加 heartflow 和连续未回复补偿。
+
+配置边界：`reply_probability_private`、`heartflow.threshold`、`heartflow.enable_random_gate`、`heartflow.weight_mentioned`、`heartflow.weight_private`、`heartflow.weight_rate_limit`、`heartflow.weight_cooldown`、`heartflow.weight_interval` 不属于当前回复主路径。私聊、点名和共指由 attention gate 处理；速率限制由硬频控处理。
 
 **示例**：
 ```python
@@ -643,7 +645,8 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
     state = get_state()
     chat_id = resolve_chat_id(event)
 
-    if not is_forced(event) and not await should_reply(runtime, state, chat_id, text):
+    attention = await decide_attention(text, event, state, chat_id)
+    if not attention.forced and not await should_reply(runtime, state, chat_id, text):
         await state.heartflow.on_no_reply_async(chat_id=chat_id)
         return []
 
@@ -654,7 +657,7 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
 
 ### 扩展 xiaoqing_chat
 
-你可以在现有基础上扩展 xiaoqing_chat 的功能。
+扩展 xiaoqing_chat 时，可以在现有链路上增加后处理或外部数据源。
 
 #### 添加自定义后处理
 
@@ -703,7 +706,7 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
 ```
 
 > [!NOTE]
-> 如果你要扩展图片或表情相关行为，优先看 `plugins/xiaoqing_chat/media/event_media.py`、`emoji_library.py`、`marker_resolver.py`。当前设计是主回复模型输出至多一个出站媒体 marker，解析与落盘路径由 `marker_resolver.py` 统一处理。
+> 扩展图片或表情相关行为时，优先阅读 `plugins/xiaoqing_chat/media/event_media.py`、`emoji_library.py`、`marker_resolver.py`。当前设计是主回复模型输出至多一个出站媒体 marker，解析与落盘路径由 `marker_resolver.py` 统一处理。
 
 ---
 
@@ -775,7 +778,7 @@ data = load_json(Path("plugins/shared/data.json"))
 
 ---
 
-## 错误处理最佳实践
+## 错误处理实践
 
 ### 1. 捕获特定异常
 
@@ -995,7 +998,7 @@ pm2 startup
 
 ## 结语
 
-恭喜你阅读完所有文档！现在你应该对 XiaoQing 有了全面的了解。
+完成 00-09 文档后，读者应能掌握 XiaoQing 的运行方式、配置路径、插件开发入口和常见排障流程。
 
 **快速回顾**：
 - [00-overview.md](00-overview.md) - 项目概览
@@ -1008,4 +1011,4 @@ pm2 startup
 - [08-message-flow.md](08-message-flow.md) - 消息处理与并发控制
 - [09-plugins.md](09-plugins.md) - 内置插件说明
 
-如有问题，欢迎提交 Issue！
+后续问题可通过 Issue 跟踪。

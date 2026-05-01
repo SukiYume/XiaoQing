@@ -827,22 +827,15 @@ class TestReplyGate:
 
         runtime = MagicMock()
         runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.reply_probability_private = 0.95
         runtime.cfg.min_reply_interval_seconds = 0.0
         runtime.cfg.max_replies_per_minute = 100
         runtime.cfg.continuous_reply_limit = 0
         runtime.cfg.continuous_cooldown_seconds = 0.0
         runtime.cfg.heartflow.enable_heartflow = True
         runtime.cfg.heartflow.base_score = 0.2
-        runtime.cfg.heartflow.threshold = 0.5
-        runtime.cfg.heartflow.weight_private = 0.55
-        runtime.cfg.heartflow.weight_mentioned = 0.45
         runtime.cfg.heartflow.weight_question = 0.12
         runtime.cfg.heartflow.weight_goal_match = 0.06
         runtime.cfg.heartflow.weight_short_text = -0.08
-        runtime.cfg.heartflow.weight_rate_limit = -0.35
-        runtime.cfg.heartflow.weight_cooldown = -0.45
-        runtime.cfg.heartflow.weight_interval = -0.25
         runtime.cfg.heartflow.weight_no_reply_streak = 0.05
         runtime.cfg.heartflow.weight_long_silence = 0.08
         runtime.cfg.brain_chat.enable_private_brain_chat = False
@@ -861,7 +854,7 @@ class TestReplyGate:
         with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
             mock_rand.random.return_value = 0.55
             result = await _should_reply(
-                runtime, state, "g1", "今天天气不错", False, False, False
+                runtime, state, "g1", "今天天气不错", False, False
             )
 
         assert result is True
@@ -872,7 +865,6 @@ class TestReplyGate:
 
         runtime = MagicMock()
         runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.reply_probability_private = 0.95
         runtime.cfg.min_reply_interval_seconds = 0.0
         runtime.cfg.max_replies_per_minute = 100
         runtime.cfg.heartflow.enable_heartflow = False
@@ -889,7 +881,7 @@ class TestReplyGate:
 
         with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.99):
             result = await _should_reply(
-                runtime, state, "g1", "今天天气不错", False, False, False
+                runtime, state, "g1", "今天天气不错", False, False
             )
 
         assert result is False
@@ -904,7 +896,6 @@ class TestReplyGate:
 
         runtime = MagicMock()
         runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.reply_probability_private = 0.95
         runtime.cfg.min_reply_interval_seconds = 10.0
         runtime.cfg.max_replies_per_minute = 100
         runtime.cfg.heartflow.enable_heartflow = False
@@ -921,7 +912,7 @@ class TestReplyGate:
 
         with patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0):
             result = await _should_reply(
-                runtime, state, "g1", "今天天气不错", False, False, False
+                runtime, state, "g1", "今天天气不错", False, False
             )
 
         assert result is False
@@ -936,7 +927,6 @@ class TestReplyGate:
 
         runtime = MagicMock()
         runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.reply_probability_private = 0.95
         runtime.cfg.min_reply_interval_seconds = 10.0
         runtime.cfg.active_topic_min_reply_interval = 4.0
         runtime.cfg.max_replies_per_minute = 100
@@ -955,7 +945,7 @@ class TestReplyGate:
         state.set_reply_gate_decision = Mock()
 
         with patch("plugins.xiaoqing_chat.frequency_control.time.time", return_value=100.0):
-            result = await _should_reply(runtime, state, "g1", "继续聊", False, False, False)
+            result = await _should_reply(runtime, state, "g1", "继续聊", False, False)
 
         assert result is False
         decision = state.set_reply_gate_decision.call_args.args[1]
@@ -969,22 +959,15 @@ class TestReplyGate:
 
         runtime = MagicMock()
         runtime.cfg.reply_probability_base = 0.6
-        runtime.cfg.reply_probability_private = 0.95
         runtime.cfg.min_reply_interval_seconds = 0.0
         runtime.cfg.max_replies_per_minute = 100
         runtime.cfg.continuous_reply_limit = 0
         runtime.cfg.continuous_cooldown_seconds = 0.0
         runtime.cfg.heartflow.enable_heartflow = True
         runtime.cfg.heartflow.base_score = 0.2
-        runtime.cfg.heartflow.threshold = 0.5
-        runtime.cfg.heartflow.weight_private = 0.55
-        runtime.cfg.heartflow.weight_mentioned = 0.45
         runtime.cfg.heartflow.weight_question = 0.12
         runtime.cfg.heartflow.weight_goal_match = 0.06
         runtime.cfg.heartflow.weight_short_text = -0.08
-        runtime.cfg.heartflow.weight_rate_limit = -0.35
-        runtime.cfg.heartflow.weight_cooldown = -0.45
-        runtime.cfg.heartflow.weight_interval = -0.25
         runtime.cfg.heartflow.weight_no_reply_streak = 0.05
         runtime.cfg.heartflow.weight_long_silence = 0.08
         runtime.cfg.brain_chat.enable_private_brain_chat = False
@@ -1003,7 +986,7 @@ class TestReplyGate:
         with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
             mock_rand.random.return_value = 0.67
             result = await _should_reply(
-                runtime, state, "g1", "今天天气不错？", False, False, False
+                runtime, state, "g1", "今天天气不错？", False, False
             )
 
         assert result is False
@@ -1014,7 +997,6 @@ class TestReplyGate:
 
         runtime = MagicMock()
         runtime.cfg.reply_probability_base = 0.5
-        runtime.cfg.reply_probability_private = 0.95
         runtime.cfg.min_reply_interval_seconds = 0.0
         runtime.cfg.max_replies_per_minute = 100
         runtime.cfg.continuous_reply_limit = 0
@@ -1035,7 +1017,7 @@ class TestReplyGate:
 
         with patch("plugins.xiaoqing_chat.frequency_control.random") as mock_rand:
             mock_rand.random.return_value = 0.3
-            result = await _should_reply(runtime, state, "g1", "哦", False, False, False)
+            result = await _should_reply(runtime, state, "g1", "哦", False, False)
 
         assert result is True
 
@@ -1596,7 +1578,6 @@ async def test_handle_internal_stats_uses_async_memory_read(mock_context, sample
                 enable_expression_learning=True, max_injected=5, max_store=200
             ),
             reply_probability_base=0.6,
-            reply_probability_private=0.95,
             min_reply_interval_seconds=12.0,
             max_replies_per_minute=6,
             max_context_size=30,
@@ -1639,7 +1620,6 @@ async def test_handle_internal_stats_uses_async_action_history_read(
                 enable_expression_learning=True, max_injected=5, max_store=200
             ),
             reply_probability_base=0.6,
-            reply_probability_private=0.95,
             min_reply_interval_seconds=12.0,
             max_replies_per_minute=6,
             max_context_size=30,
@@ -2350,13 +2330,9 @@ async def test_should_reply_uses_async_goal_and_heartflow_state():
     runtime.cfg.goal.enable_goal = True
     runtime.cfg.min_reply_interval_seconds = 0.0
     runtime.cfg.max_replies_per_minute = 0
-    runtime.cfg.reply_probability_private = 0.95
     runtime.cfg.reply_probability_base = 0.6
     runtime.cfg.heartflow.enable_heartflow = True
     runtime.cfg.heartflow.base_score = 0.2
-    runtime.cfg.heartflow.threshold = 0.5
-    runtime.cfg.heartflow.weight_private = 0.55
-    runtime.cfg.heartflow.weight_mentioned = 0.45
     runtime.cfg.heartflow.weight_question = 0.12
     runtime.cfg.heartflow.weight_goal_match = 0.06
     runtime.cfg.heartflow.weight_short_text = -0.08
@@ -2375,7 +2351,7 @@ async def test_should_reply_uses_async_goal_and_heartflow_state():
     state.heartflow._load.side_effect = AssertionError("sync heartflow load should not be used")
 
     with patch("plugins.xiaoqing_chat.frequency_control.random.random", return_value=0.0):
-        result = await _should_reply(runtime, state, "g1", "你好？", False, False, False)
+        result = await _should_reply(runtime, state, "g1", "你好？", False, False)
 
     assert result is True
     assert state.goal_store.get_async.await_count == 1
@@ -4246,6 +4222,136 @@ async def test_prepare_smalltalk_turn_forces_reply_when_bot_name_is_mentioned(
     assert prepared is not None
     assert prepared.mentioned is True
     assert prepared.forced is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_smalltalk_turn_forces_reply_when_recent_coreference_mentions_bot(
+    mock_context, sample_group_event
+):
+    from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+
+    event = dict(sample_group_event)
+    event["message_id"] = 103
+    state = MagicMock()
+    state.memory_store.get_recent_async = AsyncMock(
+        return_value=[
+            StoredMessage(
+                role="user",
+                name="群友",
+                ts=time.time() - 5,
+                message_id=101,
+                content="小青你在吗",
+            ),
+            StoredMessage(
+                role="assistant",
+                name="小青",
+                ts=time.time() - 4,
+                message_id=102,
+                content="在呢",
+            ),
+        ]
+    )
+    state.pfc_state_store.get_async = AsyncMock(
+        return_value=SimpleNamespace(goal_list=[], planner_skip_until=0.0)
+    )
+    state.get_mood_state.return_value = ""
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            goal=SimpleNamespace(enable_goal=False),
+            reflection=SimpleNamespace(
+                enable_expression_reflection=False,
+                enable_review_sessions=False,
+            ),
+            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
+            personality=SimpleNamespace(states=[], state_probability=0.0),
+        )
+    )
+    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
+
+    with (
+        patch(
+            "plugins.xiaoqing_chat.handlers.build_effective_user_text",
+            new=AsyncMock(return_value="不@她能不能听见啊"),
+        ),
+        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._is_private", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)) as gate,
+        patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._log_step"),
+    ):
+        prepared = await _prepare_smalltalk_turn(
+            "不@她能不能听见啊", event, mock_context, hctx
+        )
+
+    assert prepared is not None
+    assert prepared.mentioned is True
+    assert prepared.forced is True
+    assert prepared.force_reason == "coreference_mention"
+    gate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prepare_smalltalk_turn_does_not_force_coreference_without_bot_anchor(
+    mock_context, sample_group_event
+):
+    from plugins.xiaoqing_chat.handlers import _prepare_smalltalk_turn
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+
+    event = dict(sample_group_event)
+    event["message_id"] = 103
+    state = MagicMock()
+    state.memory_store.get_recent_async = AsyncMock(
+        return_value=[
+            StoredMessage(
+                role="user",
+                name="群友",
+                ts=time.time() - 5,
+                message_id=101,
+                content="她刚才还在说外卖",
+            )
+        ]
+    )
+    state.pfc_state_store.get_async = AsyncMock(
+        return_value=SimpleNamespace(goal_list=[], planner_skip_until=0.0)
+    )
+    state.get_mood_state.return_value = ""
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            goal=SimpleNamespace(enable_goal=False),
+            reflection=SimpleNamespace(
+                enable_expression_reflection=False,
+                enable_review_sessions=False,
+            ),
+            brain_chat=SimpleNamespace(enable_private_brain_chat=False),
+            personality=SimpleNamespace(states=[], state_probability=0.0),
+        )
+    )
+    hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
+
+    with (
+        patch(
+            "plugins.xiaoqing_chat.handlers.build_effective_user_text",
+            new=AsyncMock(return_value="不@她能不能听见啊"),
+        ),
+        patch("plugins.xiaoqing_chat.handlers._should_ignore_text", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._is_at_me", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._has_bot_name", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._is_private", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._should_reply", new=AsyncMock(return_value=False)) as gate,
+        patch("plugins.xiaoqing_chat.handlers.is_brain_chat_active", return_value=False),
+        patch("plugins.xiaoqing_chat.handlers._log_step"),
+    ):
+        prepared = await _prepare_smalltalk_turn(
+            "不@她能不能听见啊", event, mock_context, hctx
+        )
+
+    assert prepared is None
+    gate.assert_awaited_once()
 
 
 @pytest.mark.asyncio

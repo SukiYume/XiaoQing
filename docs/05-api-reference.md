@@ -1,12 +1,12 @@
 # 📋 05 - API 参考
 
-本章是完整的 API 参考手册。
+本章把插件开发常用 API 集中放在一起，便于写插件时随手查。
 
 ---
 
 ## 🛠️ plugin_base 模块
 
-导入方式：
+导入方式如下。
 ```python
 from core.plugin_base import (
     text, image, image_url, record, record_url,
@@ -34,7 +34,7 @@ image("/path/to/image.png")
 # 返回: {"type": "image", "data": {"file": "file:///path/to/image.png"}}
 ```
 
-如果你需要手写消息段，而不是调用 `image()`，推荐使用 `Path(file_path).resolve().as_uri()` 生成本地文件 URI。
+手写消息段时，推荐使用 `Path(file_path).resolve().as_uri()` 生成本地文件 URI。
 
 #### image_url(url)
 创建网络图片消息段。
@@ -283,15 +283,9 @@ remaining = context.get_mute_remaining(123456)  # -> 930.5 (秒)
 
 **返回值**：`float` - 剩余静音时间（秒），0 表示未静音
 
-**注意**：新增方法
-
 ---
 
----
-
-## Session 类增强
-
-### 新增方法
+## Session 类
 
 #### get_remaining_time() -> float
 获取会话剩余时间（秒）。
@@ -748,13 +742,17 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
 
 1. **所有群聊消息都会调用此函数**
    - 不受 `random_reply_rate` 配置影响
-   - 由插件内部控制回复频率
+   - 由插件内部控制 attention、回复频率、普通插话概率、PFC planner 和 reply checker
 
 2. **插件可以自主决定是否回复**
    - 返回 `None` 或 `[]` 表示不回复
    - 返回消息段列表表示需要回复
 
-3. **可以实现更复杂的逻辑**
+3. **xiaoqing_chat 的 directed attention 会跳过普通概率门**
+   - `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及有近期上下文锚点的“她/ta”共指召唤会走 forced 路径
+   - 普通群聊消息才走 `reply_probability_base`、heartflow 和硬频控
+
+4. **可以实现更复杂的逻辑**
    ```python
    async def handle_smalltalk(text: str, event: Dict, context) -> List:
        # 1. 获取用户历史
