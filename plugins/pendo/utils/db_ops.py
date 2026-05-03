@@ -136,6 +136,13 @@ class DbOpsMixin:
     # ============================================================
 
     @staticmethod
+    def _single_token_error(value: str, message: str) -> dict[str, str] | None:
+        """Return an error result when a command argument contains extra tokens."""
+        if value.strip() and len(value.split()) != 1:
+            return {"status": "error", "message": message}
+        return None
+
+    @staticmethod
     def _snapshot_item_values(item: Any, update_keys: Any) -> dict[str, Any]:
         """Snapshot old field values for undo support.
 

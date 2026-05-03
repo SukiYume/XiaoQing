@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ..models.item import ItemType
+from ..utils.formatters import extract_tags
 
 
 class RuleParser:
@@ -274,7 +275,7 @@ class RuleParser:
 
     def _extract_tags(self, text: str) -> list[str]:
         """提取标签 (#tag格式)"""
-        return re.findall(r"#(\w+)", text)
+        return extract_tags(text)
 
     def _extract_category(self, text: str) -> str | None:
         """提取分类"""

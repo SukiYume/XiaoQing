@@ -6,13 +6,10 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from ...services.db import Database
+from ..utils import amount_filter_cents
 
 LEDGER_AMOUNT_EXPR = Database._LEDGER_AMOUNT_CENTS_EXPR
 LEDGER_AMOUNT_TOTAL_EXPR = f"ROUND(COALESCE(SUM({LEDGER_AMOUNT_EXPR}), 0) / 100.0, 2)"
-
-
-def _amount_filter_cents(value: float) -> int:
-    return max(0, int(round(float(value) * 100)))
 
 
 def _parse_date(value: str) -> date:
@@ -109,10 +106,10 @@ def _build_ledger_where(
         params.append(end_date)
     if amount_min is not None:
         where.append(f"{LEDGER_AMOUNT_EXPR} >= ?")
-        params.append(_amount_filter_cents(amount_min))
+        params.append(amount_filter_cents(amount_min))
     if amount_max is not None:
         where.append(f"{LEDGER_AMOUNT_EXPR} <= ?")
-        params.append(_amount_filter_cents(amount_max))
+        params.append(amount_filter_cents(amount_max))
     return where, params
 
 

@@ -17,6 +17,7 @@ from ...utils.validators import (
     normalize_task_fields,
 )
 from ..deps import get_current_user, get_db
+from ..utils import amount_filter_cents
 
 router = APIRouter()
 
@@ -311,10 +312,6 @@ def _ledger_amount_expr() -> str:
     return Database._LEDGER_AMOUNT_CENTS_EXPR
 
 
-def _amount_filter_cents(value: float) -> int:
-    return max(0, int(round(float(value) * 100)))
-
-
 def _shift_event_end_time_if_start_moved(current: dict, updates: dict) -> None:
     """Preserve event duration when only start_time is patched."""
     if "start_time" not in updates or "end_time" in updates:
@@ -370,10 +367,10 @@ def _build_count_where(
         params.append(merchant)
     if amount_min is not None:
         where.append(f"{_ledger_amount_expr()} >= ?")
-        params.append(_amount_filter_cents(amount_min))
+        params.append(amount_filter_cents(amount_min))
     if amount_max is not None:
         where.append(f"{_ledger_amount_expr()} <= ?")
-        params.append(_amount_filter_cents(amount_max))
+        params.append(amount_filter_cents(amount_max))
     if start_date and end_date and date_field:
         where.append(f"{date_field} >= ?")
         params.append(start_date)
@@ -385,10 +382,10 @@ def _build_count_where(
             """(
                 title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ? OR
                 ledger_category LIKE ? OR account_name LIKE ? OR counter_account_name LIKE ? OR
-                merchant LIKE ? OR remark LIKE ?
+                merchant LIKE ? OR remark LIKE ? OR location LIKE ? OR notes LIKE ? OR weather LIKE ?
             )"""
         )
-        params.extend([like, like, like, like, like, like, like, like, like])
+        params.extend([like] * 12)
     return where, params
 
 

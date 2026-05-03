@@ -54,6 +54,18 @@ TYPE_NAMES = {
     "ledger": "💰 记账",
 }
 
+TAG_NAME_PATTERN = r"[\w\u4e00-\u9fa5-]+"
+TAG_TOKEN_RE = re.compile(rf"#({TAG_NAME_PATTERN})")
+BOUNDARY_TAG_TOKEN_RE = re.compile(rf"(?<!\S)#({TAG_NAME_PATTERN})(?=\s|$)")
+
+
+def extract_tags(text: str | None) -> list[str]:
+    return TAG_TOKEN_RE.findall(text or "")
+
+
+def is_tag_token(text: str | None) -> bool:
+    return re.fullmatch(rf"#{TAG_NAME_PATTERN}", text or "") is not None
+
 
 class ItemFormatter:
     """条目格式化工具类
@@ -409,10 +421,10 @@ def extract_metadata(text: str, *, with_priority: bool = False) -> dict[str, Any
             result["priority"] = int(p_match.group(1))
             text = text.replace(p_match.group(0), "").strip()
 
-    tags = re.findall(r"#(\w+)", text)
+    tags = extract_tags(text)
     if tags:
         result["tags"] = tags
-        text = re.sub(r"#\w+", "", text).strip()
+        text = TAG_TOKEN_RE.sub("", text).strip()
 
     result["text"] = text
     return result

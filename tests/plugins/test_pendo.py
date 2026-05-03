@@ -139,20 +139,23 @@ class TestPendoConfig:
         schedule = config.get("schedule", [])
         assert isinstance(schedule, list)
 
-    def test_show_help_uses_navigation_and_section_dividers(self):
-        """测试完整帮助使用更明显的导航和分节样式"""
+    def test_show_help_uses_overview_and_subcommand_sections(self):
+        """测试根帮助只显示命令总览，子命令帮助保留分节样式"""
         import sys
 
         sys.path.insert(0, str(ROOT))
 
         from plugins.pendo.main import _show_help
 
-        help_text = _show_help()
+        overview = _show_help()
+        event_help = _show_help("event")
 
-        assert "🧭 **模块导航**" in help_text
-        assert "━━ ⚡ **快速记录**" in help_text
-        assert "━━ 🗓️ **日程管理 (Event)**" in help_text
-        assert "📎 例如:" in help_text
+        assert "🧭 **可用命令**" in overview
+        assert "• /pendo event" in overview
+        assert "💡 查看详细用法" in overview
+        assert "━━ 🗓️ **日程管理 (Event)**" not in overview
+        assert "━━ 🗓️ **日程管理 (Event)**" in event_help
+        assert "/pendo event add 3月8日下午两点，国自然截止" in event_help
 
     def test_show_help_for_subcommand_only_renders_requested_section(self):
         """测试子模块帮助只渲染对应模块并保留顶部导航提示"""
@@ -221,9 +224,13 @@ class TestPendoConfig:
 
         sys.path.insert(0, str(ROOT))
 
-        from plugins.pendo.main import _show_help
+        from plugins.pendo.main import HELP_SECTION_ORDER, _show_help
 
-        help_text = _show_help()
+        overview = _show_help()
+        assert "🧭 **可用命令**" in overview
+        assert "/pendo export <文件名> [范围] [类型]" not in overview
+
+        help_text = "\n".join(_show_help(section) for section in HELP_SECTION_ORDER)
 
         expected_fragments = [
             # event
@@ -240,7 +247,8 @@ class TestPendoConfig:
             # todo
             "/pendo todo add <内容>",
             "remind:YYYY-MM-DDTHH:MM",
-            "/pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类]",
+            "/pendo todo list [范围|状态|分类|cat:分类|#标签]",
+            "last7d/last30d",
             "/pendo todo view <id>",
             "/pendo todo done <id>",
             "/pendo todo cancel <id>",
@@ -262,7 +270,7 @@ class TestPendoConfig:
             "/pendo diary add [日期]",
             "favorite:true",
             "/pendo diary template [编号|名称]",
-            "/pendo diary list [范围]",
+            "/pendo diary list [范围] [mood:情绪] [cat:分类] [#标签]",
             "/pendo diary view [日期|ID]",
             "/pendo diary delete <日期|ID>",
             # ledger
@@ -277,6 +285,8 @@ class TestPendoConfig:
             "/pendo ledger summary [范围]",
             # search/settings/common/export/web
             "/pendo search <关键词>",
+            "#标签",
+            "tag=<标签>",
             "transaction_type=income/expense/transfer",
             "/pendo confirm <id>",
             "/pendo snooze <id> <时间>",
@@ -695,6 +705,142 @@ class TestPendoReviewFixes:
         assert actions[0]["action"] == "upload_private_file"
         assert actions[0]["params"]["user_id"] == 1001
         assert actions[0]["params"]["name"] == "pendo-export.md"
+
+    def test_export_month_week_and_type_combinations_use_list_style_ranges(self, tmp_path, monkeypatch):
+        import shutil
+        from datetime import datetime as real_datetime
+
+        from plugins.pendo.services import exporter as exporter_module
+        from plugins.pendo.services.db import Database
+        from plugins.pendo.services.exporter import ExporterService
+        from plugins.pendo.utils import time_utils
+
+        class FrozenDateTime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                base = cls(2026, 5, 3, 16, 0, 0)
+                return base if tz is None else base.replace(tzinfo=tz)
+
+        monkeypatch.setattr(time_utils, "datetime", FrozenDateTime)
+        monkeypatch.setattr(
+            exporter_module,
+            "_get_export_dir",
+            lambda user_id: tmp_path / "exports" / user_id,
+        )
+
+        db = Database(str(tmp_path / "pendo-export.db"))
+        owner = "u-export-ranges"
+        rows = [
+            {
+                "id": "ld_may1",
+                "owner_id": owner,
+                "type": "ledger",
+                "title": "五月一日账目",
+                "ledger_category": "餐饮",
+                "transaction_type": "expense",
+                "amount": 10,
+                "amount_cents": 1000,
+                "ledger_date": "2026-05-01",
+                "created_at": "2026-05-01T12:00:00",
+                "updated_at": "2026-05-01T12:00:00",
+            },
+            {
+                "id": "ld_may3",
+                "owner_id": owner,
+                "type": "ledger",
+                "title": "五月三日账目",
+                "ledger_category": "交通",
+                "transaction_type": "expense",
+                "amount": 20,
+                "amount_cents": 2000,
+                "ledger_date": "2026-05-03",
+                "created_at": "2026-05-03T12:00:00",
+                "updated_at": "2026-05-03T12:00:00",
+            },
+            {
+                "id": "ld_may4",
+                "owner_id": owner,
+                "type": "ledger",
+                "title": "五月四日账目",
+                "ledger_category": "交通",
+                "transaction_type": "expense",
+                "amount": 30,
+                "amount_cents": 3000,
+                "ledger_date": "2026-05-04",
+                "created_at": "2026-05-04T12:00:00",
+                "updated_at": "2026-05-04T12:00:00",
+            },
+            {
+                "id": "ev_may1",
+                "owner_id": owner,
+                "type": "event",
+                "title": "五月一日日程",
+                "start_time": "2026-05-01T09:00:00",
+                "end_time": "2026-05-01T10:00:00",
+                "created_at": "2026-05-01T08:00:00",
+                "updated_at": "2026-05-01T08:00:00",
+            },
+            {
+                "id": "tk_may3",
+                "owner_id": owner,
+                "type": "task",
+                "title": "五月三日待办",
+                "status": "open",
+                "priority": 1,
+                "plan_date": "2026-05-03",
+                "created_at": "2026-05-03T09:00:00",
+                "updated_at": "2026-05-03T09:00:00",
+            },
+            {
+                "id": "note_may",
+                "owner_id": owner,
+                "type": "note",
+                "title": "五月笔记",
+                "content": "note",
+                "created_at": "2026-05-02T10:00:00",
+                "updated_at": "2026-05-02T10:00:00",
+            },
+        ]
+        for row in rows:
+            db.insert_item(row)
+
+        service = ExporterService(db)
+
+        month_result = service.export_markdown(owner, "本月账本 month ledger", {})
+        month_text = Path(month_result["file_path"]).read_text(encoding="utf-8")
+        assert month_result["record_count"] == 3
+        assert "2026-05-01 00:00 .. 2026-05-31 23:59" in month_result["range_label"]
+        assert "五月一日账目" in month_text
+        assert "五月四日账目" in month_text
+
+        week_result = service.export_markdown(owner, "本周账本 week ledger", {})
+        week_text = Path(week_result["file_path"]).read_text(encoding="utf-8")
+        assert week_result["record_count"] == 2
+        assert "2026-04-27 00:00 .. 2026-05-03 23:59" in week_result["range_label"]
+        assert "五月一日账目" in week_text
+        assert "五月三日账目" in week_text
+        assert "五月四日账目" not in week_text
+
+        combo_result = service.export_markdown(owner, '"五月 工作" 2026-05 event,todo', {})
+        assert combo_result["file_name"] == "五月 工作.md"
+        assert combo_result["counts"]["event"] == 1
+        assert combo_result["counts"]["task"] == 1
+        assert combo_result["counts"]["note"] == 0
+
+        shutil.rmtree(tmp_path / "exports", ignore_errors=True)
+
+    def test_pendo_help_root_is_overview_and_subcommand_is_detailed(self):
+        from plugins.pendo import main as pendo_main
+
+        overview = pendo_main._show_help("")
+        export_help = pendo_main._show_help("export")
+
+        assert "🧭 **可用命令**" in overview
+        assert "• /pendo event" in overview
+        assert "/pendo export <文件名>" not in overview
+        assert "多节点事件会生成" not in overview
+        assert "/pendo export <文件名> [范围] [类型]" in export_help
+        assert "week(本周), month(本月)" in export_help
 
     def test_cleanup_clears_pendo_runtime_state(self, monkeypatch):
         from plugins.pendo import main as pendo_main

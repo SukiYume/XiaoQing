@@ -130,6 +130,18 @@ function arcPath(cx, cy, rOuter, rInner, startAngle, endAngle) {
     ].join(' ');
 }
 
+function fullRingPath(cx, cy, rOuter, rInner) {
+    return [
+        `M ${cx} ${cy - rOuter}`,
+        `A ${rOuter} ${rOuter} 0 1 1 ${cx} ${cy + rOuter}`,
+        `A ${rOuter} ${rOuter} 0 1 1 ${cx} ${cy - rOuter}`,
+        `M ${cx} ${cy - rInner}`,
+        `A ${rInner} ${rInner} 0 1 0 ${cx} ${cy + rInner}`,
+        `A ${rInner} ${rInner} 0 1 0 ${cx} ${cy - rInner}`,
+        'Z',
+    ].join(' ');
+}
+
 function buildRingSvg(categories, total, centerLabel = '支出总额') {
     const palette = ['#E15241', '#F48C58', '#F8B36D', '#F2C14E', '#D97757', '#D9DDE5'];
     const width = 220;
@@ -150,9 +162,11 @@ function buildRingSvg(categories, total, centerLabel = '支出总额') {
     const arcs = segments.map((item, index) => {
         const slice = total ? (Number(item.total || 0) / total) * 360 : 0;
         const endAngle = startAngle + slice;
-        const path = arcPath(cx, cy, outer, inner, startAngle, endAngle);
+        const path = slice >= 359.999
+            ? fullRingPath(cx, cy, outer, inner)
+            : arcPath(cx, cy, outer, inner, startAngle, endAngle);
         const html = `
-            <path d="${path}" fill="${palette[index % palette.length]}">
+            <path d="${path}" fill="${palette[index % palette.length]}" fill-rule="evenodd" stroke="#ffffff" stroke-width="1.5">
                 <title>${esc(item.category)} ${formatAmount(item.total || 0)} · ${(Number(item.share || 0) * 100).toFixed(1)}%</title>
             </path>`;
         startAngle = endAngle;

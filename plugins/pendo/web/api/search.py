@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...services.db import Database
 from ..deps import get_current_user, get_db
+from ..utils import collection_payload
 
 router = APIRouter()
 
@@ -60,18 +61,6 @@ def search_items(
     )
 
     collection_cache = {}
-
-    def collection_payload(collection):
-        if not collection:
-            return None
-        return {
-            "id": collection.get("id"),
-            "kind": collection.get("kind"),
-            "title": collection.get("title"),
-            "category": collection.get("category"),
-            "location": collection.get("location"),
-            "notes": collection.get("notes"),
-        }
 
     def to_dict(item):
         data = item.to_dict() if hasattr(item, "to_dict") else {}
