@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+from plugins.pendo.handlers.event import EventHandler
 from plugins.pendo.handlers.note import NoteHandler
 from plugins.pendo.handlers.task import TaskHandler
 from plugins.pendo.services.ai_parser import AIParser
@@ -21,6 +22,29 @@ def _make_temp_db(prefix: str) -> tuple[Path, Database]:
     temp_dir = ROOT / ".pytest_cache" / "tmp" / f"{prefix}_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     return temp_dir, Database(str(temp_dir / "pendo.db"))
+
+
+def test_bare_week_month_year_are_current_calendar_ranges(monkeypatch):
+    from plugins.pendo.utils import time_utils
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2026, 5, 3, 16, 30, 0)
+            return current if tz is None else current.replace(tzinfo=tz)
+
+    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
+
+    week_start, week_end = time_utils._parse_time_range_core("week", strict=True)
+    month_start, month_end = time_utils._parse_time_range_core("month", strict=True)
+    year_start, year_end = time_utils._parse_time_range_core("year", strict=True)
+
+    assert week_start.isoformat() == "2026-04-27T00:00:00"
+    assert week_end.isoformat() == "2026-05-03T23:59:59"
+    assert month_start.isoformat() == "2026-05-01T00:00:00"
+    assert month_end.isoformat() == "2026-05-31T23:59:59"
+    assert year_start.isoformat() == "2026-01-01T00:00:00"
+    assert year_end.isoformat() == "2026-12-31T23:59:59"
 
 
 def test_search_items_applies_date_range_filters():
@@ -498,6 +522,566 @@ def test_task_today_shortcut_uses_user_timezone(monkeypatch):
     assert items_repo.captured_filters["status"] == "open"
     assert "LA today" in result["message"]
     assert "Server tomorrow" not in result["message"]
+
+
+def test_todo_edit_only_updates_explicit_fields_and_accepts_24_hour_deadline():
+    temp_dir, db = _make_temp_db("pendo_review_todo_edit_partial")
+    owner_id = "u-todo-edit"
+
+    try:
+        db.insert_item({
+            "id": "todo-edit",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "写项目周报",
+            "category": "工作",
+            "plan_date": "2026-05-01",
+            "deadline_at": "2026-05-01T18:00:00",
+            "priority": 3,
+            "status": "open",
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+
+        result = asyncio.run(
+            TaskHandler(db).edit_task(
+                owner_id,
+                "todo-edit deadline:2026-05-01T24:00",
+                SimpleNamespace(),
+            )
+        )
+
+        assert result["status"] == "success"
+        task = db.get_item("todo-edit", owner_id)
+        assert task.title == "写项目周报"
+        assert task.category == "工作"
+        assert task.plan_date == "2026-05-01"
+        assert task.deadline_at == "2026-05-02T00:00:00"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_todo_edit_title_phrase_updates_title_only():
+    temp_dir, db = _make_temp_db("pendo_review_todo_title_phrase")
+    owner_id = "u-todo-title-phrase"
+
+    try:
+        db.insert_item({
+            "id": "todo-title",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "旧待办",
+            "category": "工作",
+            "plan_date": "2026-05-01",
+            "deadline_at": "2026-05-01T18:00:00",
+            "priority": 2,
+            "status": "open",
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+
+        result = asyncio.run(
+            TaskHandler(db).edit_task(
+                owner_id,
+                "todo-title 标题改为新的待办标题",
+                SimpleNamespace(),
+            )
+        )
+
+        assert result["status"] == "success"
+        task = db.get_item("todo-title", owner_id)
+        assert task.title == "新的待办标题"
+        assert task.category == "工作"
+        assert task.plan_date == "2026-05-01"
+        assert task.deadline_at == "2026-05-01T18:00:00"
+        assert task.priority == 2
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_todo_edit_plain_text_and_metadata_update_only_mentioned_fields():
+    temp_dir, db = _make_temp_db("pendo_review_todo_edit_semantics")
+    owner_id = "u-todo-edit-semantics"
+
+    def insert_task(item_id: str):
+        db.insert_item({
+            "id": item_id,
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "原标题",
+            "category": "原分类",
+            "plan_date": "2026-05-01",
+            "deadline_at": "2026-05-01T18:00:00",
+            "priority": 2,
+            "status": "open",
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+
+    try:
+        handler = TaskHandler(db)
+        cases = [
+            ("todosem1", "新标题", "新标题", "原分类"),
+            ("todosem2", "cat:新分类", "原标题", "新分类"),
+            ("todosem3", "新标题 cat:新分类", "新标题", "新分类"),
+        ]
+
+        for item_id, edit_text, expected_title, expected_category in cases:
+            insert_task(item_id)
+            result = asyncio.run(
+                handler.edit_task(owner_id, f"{item_id} {edit_text}", SimpleNamespace())
+            )
+
+            assert result["status"] == "success"
+            task = db.get_item(item_id, owner_id)
+            assert task.title == expected_title
+            assert task.category == expected_category
+            assert task.plan_date == "2026-05-01"
+            assert task.deadline_at == "2026-05-01T18:00:00"
+            assert task.priority == 2
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_todo_edit_keeps_title_when_only_reminder_changes():
+    temp_dir, db = _make_temp_db("pendo_review_todo_edit_reminder")
+    owner_id = "u-todo-reminder"
+
+    try:
+        db.insert_item({
+            "id": "todo-reminder",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "提交材料",
+            "category": "行政",
+            "plan_date": "2026-05-01",
+            "deadline_at": "2026-05-02T10:00:00",
+            "priority": 3,
+            "status": "open",
+            "remind_times": [],
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+
+        result = asyncio.run(
+            TaskHandler(db).edit_task(
+                owner_id,
+                "todo-reminder remind:2026-05-01T24:00",
+                SimpleNamespace(),
+            )
+        )
+
+        assert result["status"] == "success"
+        task = db.get_item("todo-reminder", owner_id)
+        assert task.title == "提交材料"
+        assert task.remind_times == ["2026-05-02T00:00:00"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_note_list_accepts_bare_time_range_before_category_inference(monkeypatch):
+    from plugins.pendo.utils import time_utils
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = cls(2026, 5, 3, 16, 30, 0)
+            return current if tz is None else current.replace(tzinfo=tz)
+
+    monkeypatch.setattr(time_utils, "datetime", _FrozenDateTime)
+
+    temp_dir, db = _make_temp_db("pendo_review_note_bare_range")
+    owner_id = "u-note-bare-range"
+
+    try:
+        for item_id, created_at, title in [
+            ("note-apr", "2026-04-30T10:00:00", "四月 RustDesk"),
+            ("note-may", "2026-05-02T10:00:00", "五月 RustDesk"),
+            ("note-jun", "2026-06-01T10:00:00", "六月 RustDesk"),
+        ]:
+            db.insert_item({
+                "id": item_id,
+                "owner_id": owner_id,
+                "type": "note",
+                "title": title,
+                "content": "密钥内容",
+                "category": "密钥",
+                "tags": ["rustdesk"],
+                "created_at": created_at,
+                "updated_at": created_at,
+            })
+
+        result = asyncio.run(
+            NoteHandler(db).list_notes(owner_id, "month cat:密钥 #rustdesk", SimpleNamespace())
+        )
+
+        assert result["status"] == "success"
+        assert "时间: month" in result["message"]
+        assert "分类: 密钥" in result["message"]
+        assert "标签: #rustdesk" in result["message"]
+        assert "分类: month" not in result["message"]
+        assert "五月 RustDesk" in result["message"]
+        assert "四月 RustDesk" not in result["message"]
+        assert "六月 RustDesk" not in result["message"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_event_edit_explicit_fields_do_not_become_title_without_ai():
+    class _FallbackTitleParser:
+        async def parse_event_with_ai(self, *_args, **_kwargs):
+            raise RuntimeError("no ai")
+
+        def parse_natural_language(self, text, _user_id):
+            return {"title": text}
+
+        def build_remind_times_from_offsets(self, _start_time, _offsets):
+            return []
+
+        def build_remind_times_from_description(self, _description, _base_time):
+            return []
+
+        def build_reminder_rules_from_description(self, _description):
+            return []
+
+    temp_dir, db = _make_temp_db("pendo_review_event_explicit_edit")
+    owner_id = "u-event-explicit-edit"
+
+    def insert_event(item_id: str):
+        db.insert_item({
+            "id": item_id,
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "原始日程",
+            "content": "",
+            "category": "工作",
+            "location": "上海",
+            "notes": "原备注",
+            "tags": [],
+            "start_time": "2026-05-04T09:00:00",
+            "end_time": "2026-05-04T10:00:00",
+            "remind_times": ["2026-05-04T09:00:00"],
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+
+    try:
+        handler = EventHandler(db, _FallbackTitleParser(), ReminderService(db))
+
+        insert_event("evloc001")
+        result = asyncio.run(
+            handler.edit_event(owner_id, "evloc001 地点改到北京南", SimpleNamespace())
+        )
+        assert result["status"] == "success"
+        event = db.get_item("evloc001", owner_id)
+        assert event.title == "原始日程"
+        assert event.location == "北京南"
+        assert event.notes == "原备注"
+        assert event.start_time == "2026-05-04T09:00:00"
+
+        insert_event("evnote01")
+        result = asyncio.run(
+            handler.edit_event(owner_id, "evnote01 备注为从北京南坐G123去会场", SimpleNamespace())
+        )
+        assert result["status"] == "success"
+        event = db.get_item("evnote01", owner_id)
+        assert event.title == "原始日程"
+        assert event.location == "上海"
+        assert event.notes == "从北京南坐G123去会场"
+        assert event.start_time == "2026-05-04T09:00:00"
+
+        insert_event("evtitle1")
+        result = asyncio.run(
+            handler.edit_event(owner_id, "evtitle1 标题改为FAST会议行程", SimpleNamespace())
+        )
+        assert result["status"] == "success"
+        event = db.get_item("evtitle1", owner_id)
+        assert event.title == "FAST会议行程"
+        assert event.location == "上海"
+        assert event.notes == "原备注"
+        assert event.start_time == "2026-05-04T09:00:00"
+
+        insert_event("evtime01")
+        result = asyncio.run(
+            handler.edit_event(owner_id, "evtime01 改到2026-05-04 24:00", SimpleNamespace())
+        )
+        assert result["status"] == "success"
+        event = db.get_item("evtime01", owner_id)
+        assert event.title == "原始日程"
+        assert event.location == "上海"
+        assert event.notes == "原备注"
+        assert event.start_time == "2026-05-05T00:00:00"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_note_edit_only_updates_explicit_metadata_when_no_body():
+    temp_dir, db = _make_temp_db("pendo_review_note_edit_partial")
+    owner_id = "u-note-edit"
+
+    try:
+        db.insert_item({
+            "id": "note-edit",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "原始标题",
+            "content": "原始正文",
+            "category": "旧分类",
+            "tags": ["旧标签"],
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+
+        result = asyncio.run(
+            NoteHandler(db).edit_note(owner_id, "note-edit cat:新分类 #新标签", SimpleNamespace())
+        )
+
+        assert result["status"] == "success"
+        note = db.get_item("note-edit", owner_id)
+        assert note.title == "原始标题"
+        assert note.content == "原始正文"
+        assert note.category == "新分类"
+        assert note.tags == ["新标签"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_task_list_supports_cat_tag_and_date_filters():
+    from plugins.pendo.models.item import TaskStatus
+
+    temp_dir, db = _make_temp_db("pendo_review_task_list_filters")
+    owner_id = "u-task-list-filters"
+
+    try:
+        db.insert_item({
+            "id": "task-work",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "CmdAudit 写周报",
+            "category": "工作",
+            "tags": ["cmdaudit", "周报"],
+            "plan_date": "2026-05-10",
+            "deadline_at": "2026-05-11T18:00:00",
+            "priority": 2,
+            "status": TaskStatus.OPEN.value,
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+        db.insert_item({
+            "id": "task-home",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "CmdAudit 买礼物",
+            "category": "家庭",
+            "tags": ["family"],
+            "plan_date": "2026-05-12",
+            "priority": 4,
+            "status": TaskStatus.OPEN.value,
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+
+        handler = TaskHandler(db)
+
+        by_cat = asyncio.run(handler.list_tasks(owner_id, "cat:工作", SimpleNamespace()))
+        assert by_cat["status"] == "success"
+        assert "task-work" in by_cat["message"]
+        assert "task-home" not in by_cat["message"]
+
+        by_tag = asyncio.run(handler.list_tasks(owner_id, "#cmdaudit", SimpleNamespace()))
+        assert by_tag["status"] == "success"
+        assert "task-work" in by_tag["message"]
+        assert "task-home" not in by_tag["message"]
+
+        by_date = asyncio.run(handler.list_tasks(owner_id, "2026-05-10", SimpleNamespace()))
+        assert by_date["status"] == "success"
+        assert "task-work" in by_date["message"]
+        assert "task-home" not in by_date["message"]
+
+        bad_page = asyncio.run(handler.list_tasks(owner_id, "工作 page:x", SimpleNamespace()))
+        assert bad_page["status"] == "error"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_diary_list_supports_cat_tag_and_rejects_invalid_range():
+    from plugins.pendo.handlers.diary import DiaryHandler
+
+    temp_dir, db = _make_temp_db("pendo_review_diary_list_filters")
+    owner_id = "u-diary-list-filters"
+
+    try:
+        db.insert_item({
+            "id": "diary-a",
+            "owner_id": owner_id,
+            "type": "diary",
+            "title": "CmdAudit 日记",
+            "content": "CmdAudit 今天完成接口巡检",
+            "category": "日记",
+            "tags": ["cmdaudit", "复盘"],
+            "diary_date": "2026-05-10",
+            "entry_time": "2026-05-10T22:10:00",
+            "mood": "happy",
+            "created_at": "2026-05-10T22:10:00",
+            "updated_at": "2026-05-10T22:10:00",
+        })
+
+        handler = DiaryHandler(db)
+        by_tag = asyncio.run(handler.list_diaries(owner_id, "2026-05 #cmdaudit", SimpleNamespace()))
+        assert by_tag["status"] == "success"
+        assert "diary-a" in by_tag["message"]
+
+        by_cat = asyncio.run(handler.list_diaries(owner_id, "2026-05 cat:日记", SimpleNamespace()))
+        assert by_cat["status"] == "success"
+        assert "diary-a" in by_cat["message"]
+
+        invalid = asyncio.run(handler.list_diaries(owner_id, "not-a-range", SimpleNamespace()))
+        assert invalid["status"] == "error"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_search_supports_tag_filter_and_ledger_category_filter():
+    from plugins.pendo.handlers.search import SearchHandler
+
+    temp_dir, db = _make_temp_db("pendo_review_search_filters")
+    owner_id = "u-search-filters"
+
+    try:
+        db.insert_item({
+            "id": "note-cmd",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "CmdAudit RustDesk",
+            "content": "CmdAudit note body",
+            "category": "资料",
+            "tags": ["cmdaudit"],
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+        db.insert_item({
+            "id": "ledger-cmd",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "CmdAudit 超市采购",
+            "content": "CmdAudit receipt",
+            "category": "记账",
+            "ledger_category": "餐饮",
+            "transaction_type": "expense",
+            "amount": 57,
+            "amount_cents": 5700,
+            "ledger_date": "2026-05-10",
+            "created_at": "2026-05-10T09:00:00",
+            "updated_at": "2026-05-10T09:00:00",
+        })
+
+        handler = SearchHandler(db)
+
+        by_tag = asyncio.run(handler.search(owner_id, "CmdAudit #cmdaudit", SimpleNamespace()))
+        assert by_tag["status"] == "success"
+        assert "note-cmd" in by_tag["message"]
+        assert "ledger-cmd" not in by_tag["message"]
+
+        by_ledger_category = asyncio.run(
+            handler.search(owner_id, "CmdAudit type=ledger category=餐饮 range=2026-05", SimpleNamespace())
+        )
+        assert by_ledger_category["status"] == "success"
+        assert "ledger-cmd" in by_ledger_category["message"]
+
+        by_ledger_start_day = asyncio.run(
+            handler.search(
+                owner_id,
+                "CmdAudit type=ledger range=2026-05-10..2026-05-10",
+                SimpleNamespace(),
+            )
+        )
+        assert by_ledger_start_day["status"] == "success"
+        assert "ledger-cmd" in by_ledger_start_day["message"]
+
+        bad_type = asyncio.run(handler.search(owner_id, "CmdAudit type=bad", SimpleNamespace()))
+        assert bad_type["status"] == "error"
+
+        bad_range = asyncio.run(handler.search(owner_id, "CmdAudit range=not-a-range", SimpleNamespace()))
+        assert bad_range["status"] == "error"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_view_commands_reject_extra_arguments():
+    from plugins.pendo.handlers.diary import DiaryHandler
+    from plugins.pendo.handlers.event import EventHandler
+    from plugins.pendo.handlers.ledger import LedgerHandler
+    from plugins.pendo.models.item import TaskStatus
+
+    temp_dir, db = _make_temp_db("pendo_review_view_args")
+    owner_id = "u-view-args"
+
+    try:
+        db.insert_item({
+            "id": "view-event",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "CmdAudit 日程",
+            "start_time": "2026-05-10T09:00:00",
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+        db.insert_item({
+            "id": "view-task",
+            "owner_id": owner_id,
+            "type": "task",
+            "title": "CmdAudit 待办",
+            "status": TaskStatus.OPEN.value,
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+        db.insert_item({
+            "id": "view-note",
+            "owner_id": owner_id,
+            "type": "note",
+            "title": "CmdAudit 笔记",
+            "content": "正文",
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+        db.insert_item({
+            "id": "view-ledger",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "CmdAudit 账目",
+            "amount": 57,
+            "amount_cents": 5700,
+            "ledger_category": "餐饮",
+            "ledger_date": "2026-05-10",
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+        db.insert_item({
+            "id": "view-diary",
+            "owner_id": owner_id,
+            "type": "diary",
+            "title": "CmdAudit 日记",
+            "content": "正文",
+            "diary_date": "2026-05-10",
+            "entry_time": "2026-05-10T22:10:00",
+            "created_at": "2026-05-01T09:00:00",
+            "updated_at": "2026-05-01T09:00:00",
+        })
+
+        checks = [
+            EventHandler(db, SimpleNamespace(), SimpleNamespace()).view_event(owner_id, "view-event extra", SimpleNamespace()),
+            TaskHandler(db).view_task(owner_id, "view-task extra", SimpleNamespace()),
+            NoteHandler(db).view_note(owner_id, "view-note extra", SimpleNamespace()),
+            LedgerHandler(db).view_ledger(owner_id, "view-ledger extra", SimpleNamespace()),
+            DiaryHandler(db).view_diary(owner_id, "view-diary extra", SimpleNamespace()),
+        ]
+
+        for coro in checks:
+            result = asyncio.run(coro)
+            assert result["status"] == "error"
+            assert "只接受" in result["message"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def test_web_task_api_source_uses_user_timezone_for_task_timestamps():

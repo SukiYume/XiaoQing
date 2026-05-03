@@ -8,6 +8,7 @@ from typing import Any
 from ...models.item import EventItem
 from ...services.db import Database
 from ...services.event_graph import EventGraphService
+from ..utils import collection_payload
 from .event_schedule import (
     build_event_schedule,
     daterange,
@@ -131,19 +132,6 @@ def _timeline_entries_for_day(event_payload: dict[str, Any], day: str) -> list[d
     return entries
 
 
-def _collection_payload(collection: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not collection:
-        return None
-    return {
-        "id": collection.get("id"),
-        "kind": collection.get("kind"),
-        "title": collection.get("title"),
-        "category": collection.get("category"),
-        "location": collection.get("location"),
-        "notes": collection.get("notes"),
-    }
-
-
 def _normalize_event(
     event: EventItem,
     reminder_logs: list[dict[str, Any]],
@@ -162,7 +150,7 @@ def _normalize_event(
     return {
         **base,
         "kind": kind,
-        "collection": _collection_payload(collection),
+        "collection": collection_payload(collection),
         "display_days": schedule["display_days"],
         "day_entries": schedule["day_entries"],
         "reminders": reminders,
@@ -374,6 +362,6 @@ def build_event_collection_detail(
         for child in children
     ]
     return {
-        "collection": _collection_payload(collection),
+        "collection": collection_payload(collection),
         "children": normalized_children,
     }

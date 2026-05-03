@@ -581,11 +581,26 @@ def normalize_ledger_fields(data: dict[str, Any], partial: bool = False) -> dict
     return normalized
 
 
+def _coerce_24_hour_iso_datetime(text: str) -> str:
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2})([T\s])24:00(?::00(?:\.0{1,6})?)?(Z|[+-]\d{2}:\d{2})?",
+        text,
+    )
+    if not match:
+        return text
+    day = datetime.strptime(match.group(1), "%Y-%m-%d") + timedelta(days=1)
+    tz_suffix = match.group(3) or ""
+    if tz_suffix == "Z":
+        tz_suffix = "+00:00"
+    return f"{day.strftime('%Y-%m-%d')}T00:00:00{tz_suffix}"
+
+
 def _normalize_iso_datetime(value: Any, field_name: str) -> str:
     """将输入规范化为秒级 ISO datetime。"""
     text = sanitize_text(str(value), 40)
     if not text:
         raise ValueError(f"{field_name} is required")
+    text = _coerce_24_hour_iso_datetime(text)
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError as exc:

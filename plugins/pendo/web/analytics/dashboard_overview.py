@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ...services.db import Database
+from ..utils import collection_payload, item_to_dict
 from .event_schedule import build_event_schedule
 
 
@@ -21,10 +22,6 @@ def _month_bounds(now: datetime) -> tuple[str, str, str]:
         month_start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
         month_end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
     )
-
-
-def _to_dict(item):
-    return item.to_dict() if hasattr(item, "to_dict") else {}
 
 
 def _ledger_amount_value(item) -> float:
@@ -50,19 +47,6 @@ def _get_all_items(db: Database, owner_id: str, filters: dict[str, Any], batch_s
             break
         offset += batch_size
     return items
-
-
-def _collection_payload(collection: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not collection:
-        return None
-    return {
-        "id": collection.get("id"),
-        "kind": collection.get("kind"),
-        "title": collection.get("title"),
-        "category": collection.get("category"),
-        "location": collection.get("location"),
-        "notes": collection.get("notes"),
-    }
 
 
 def _display_fields(row: dict[str, Any], collection: dict[str, Any] | None) -> dict[str, Any]:
@@ -95,8 +79,8 @@ def _event_entries(item, range_start: str, range_end: str, collection: dict[str,
         datetime.strptime(range_start[:10], "%Y-%m-%d").date(),
         datetime.strptime(range_end[:10], "%Y-%m-%d").date(),
     )
-    item_dict = _to_dict(item)
-    collection_payload = _collection_payload(collection)
+    item_dict = item_to_dict(item)
+    event_collection = collection_payload(collection)
     for day in schedule["display_days"]:
         for row in schedule["day_entries"].get(day, []):
             display = _display_fields(row, collection)
@@ -107,7 +91,7 @@ def _event_entries(item, range_start: str, range_end: str, collection: dict[str,
                 "display_title": display["display_title"],
                 "display_subtitle": display["display_subtitle"],
                 "node_title": row["title"],
-                "collection": collection_payload,
+                "collection": event_collection,
                 "start_time": row["start_time"],
                 "end_time": row["end_time"],
                 "location": display["location"],
@@ -275,10 +259,10 @@ def build_dashboard_overview(
         "events_month": events_month,
         "events_agenda": events_agenda,
         "tasks": {
-            "active": [_to_dict(task) for task in active_tasks[:8]],
-            "completed": [_to_dict(task) for task in tasks_completed[:4]],
+            "active": [item_to_dict(task) for task in active_tasks[:8]],
+            "completed": [item_to_dict(task) for task in tasks_completed[:4]],
         },
-        "recent_ledger": [_to_dict(item) for item in recent_ledger],
+        "recent_ledger": [item_to_dict(item) for item in recent_ledger],
         "spending_trend": spending_trend,
         "month_summary": {
             "income": round(month_income, 2),

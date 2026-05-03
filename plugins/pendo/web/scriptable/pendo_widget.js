@@ -672,9 +672,9 @@ function renderPanelList(stack, panel, data, opts = {}) {
       size,
       font: FONTS.body(size),
     });
-    row.addSpacer();
 
     if (item.amount_text) {
+      row.addSpacer();
       const amountKind = ledgerAmountKind(item);
       addText(row, item.amount_text, {
         size,
@@ -689,11 +689,18 @@ function renderPanelList(stack, panel, data, opts = {}) {
     } else if (section === "tasks") {
       const status = truncate(lastMetaPart(item.meta || ""), 6);
       if (status) {
+        if (opts.inlineTaskStatus) row.addSpacer(opts.statusGap ?? 8);
+        else row.addSpacer();
         addText(row, status, {
           size: size - 1,
           color: COLORS.subtext,
         });
+        if (opts.inlineTaskStatus) row.addSpacer();
+      } else {
+        row.addSpacer();
       }
+    } else {
+      row.addSpacer();
     }
     if (i < slice.length - 1) stack.addSpacer(rowGap);
   }
@@ -846,6 +853,8 @@ function renderLarge(widget, data) {
           renderPanelList(stack, tasks, data, {
             ...layout.panel,
             columnWidth: layout.rightQuadWidth,
+            inlineTaskStatus: true,
+            statusGap: 8,
           });
         },
       },

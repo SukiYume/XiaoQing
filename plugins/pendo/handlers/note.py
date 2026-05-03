@@ -17,7 +17,9 @@ from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import (
     ItemFormatter,
+    TAG_TOKEN_RE,
     extract_kv_param,
+    extract_tags,
     paginate,
 )
 from ..utils.settings_utils import resolve_default_category
@@ -276,10 +278,13 @@ class NoteHandler(DbOpsMixin):
         meta = self._extract_note_metadata(text)
         content_text = meta["text"]
         title, content_text = self._split_explicit_title(content_text)
+        explicit_title = bool(title)
         if not title:
             title, content_text = self._extract_inline_title_token(content_text)
+            explicit_title = bool(title)
 
         # 如果没有显式的 title，title 和 content 都是 content_text
+        content_provided = bool(str(content_text or "").strip())
         if not title:
             title = content_text
 
@@ -289,6 +294,13 @@ class NoteHandler(DbOpsMixin):
             "category": meta["category"] or "",
             "tags": meta["tags"],
             "reference_ids": meta.get("reference_ids", []),
+            "_title_provided": explicit_title or content_provided,
+            "_content_provided": content_provided,
+            "_explicit_fields": {
+                "category": bool(meta["category"]),
+                "tags": bool(meta["tags"]),
+                "references": bool(meta.get("reference_ids", [])),
+            },
         }
 
     @staticmethod
@@ -490,6 +502,7 @@ class NoteHandler(DbOpsMixin):
 
         格式：
         - /pendo note list -> 列出所有笔记（每分类显示前10项）
+        - /pendo note list month -> 按本月创建时间筛选
         - /pendo note list cat:xxx -> 按分类筛选
         - /pendo note list #tag -> 按标签筛选
         - /pendo note list cat:xxx #tag -> 同时筛选
@@ -501,8 +514,6 @@ class NoteHandler(DbOpsMixin):
         filter_display = []
         show_all = False
         page_num = 1
-        since_start = None
-        since_end = None
 
         if filter_str:
             filter_str = filter_str.strip()
@@ -513,15 +524,33 @@ class NoteHandler(DbOpsMixin):
                 since_val = since_match.group(1)
                 filter_str = filter_str.replace(since_match.group(0), "").strip()
                 try:
-                    _s, _e = _parse_time_range_core(since_val)
-                    since_start = _s.isoformat()
-                    since_end = _e.isoformat()
+                    _s, _e = _parse_time_range_core(since_val, strict=True)
                     filter_display.append(f"时间: {since_val}")
                     filters["date_field"] = "created_at"
-                    filters["start_date"] = since_start
-                    filters["end_date"] = since_end
-                except Exception:
-                    pass
+                    filters["start_date"] = _s.isoformat()
+                    filters["end_date"] = _e.isoformat()
+                except ValueError as exc:
+                    return {"status": "error", "message": f"❌ {str(exc)}"}
+
+            # 允许 note list month/week/2026-05 这类裸时间范围，避免被当作分类名。
+            parts = filter_str.split()
+            if parts and "date_field" not in filters:
+                range_candidate = parts[0]
+                reserved_prefixes = ("#", "cat:", "page:", "since:")
+                if (
+                    range_candidate.lower() not in {"all", "page", "since"}
+                    and not range_candidate.lower().startswith(reserved_prefixes)
+                ):
+                    try:
+                        _s, _e = _parse_time_range_core(range_candidate, strict=True)
+                    except ValueError:
+                        pass
+                    else:
+                        filters["date_field"] = "created_at"
+                        filters["start_date"] = _s.isoformat()
+                        filters["end_date"] = _e.isoformat()
+                        filter_display.append(f"时间: {range_candidate}")
+                        filter_str = " ".join(parts[1:])
 
             # 提取 cat:xxx
             cat_val, filter_str = extract_kv_param(filter_str, "cat")
@@ -549,7 +578,7 @@ class NoteHandler(DbOpsMixin):
                         filter_str = " ".join(parts[1:])
 
             # 提取 #tag
-            tag_match = re.search(r"#(\w+)", filter_str)
+            tag_match = TAG_TOKEN_RE.search(filter_str)
             if tag_match:
                 filters["tags"] = tag_match.group(1)
                 filter_display.append(f"标签: #{tag_match.group(1)}")
@@ -559,9 +588,14 @@ class NoteHandler(DbOpsMixin):
                 show_all = True
 
             # 检查是否指定页码
-            page_match = re.search(r"page:(\d+)", filter_str)
-            if page_match:
-                page_num = int(page_match.group(1))
+            page_token_match = re.search(r"(?<!\S)page:(\S+)", filter_str)
+            if page_token_match:
+                page_value = page_token_match.group(1)
+                if not page_value.isdigit():
+                    return {"status": "error", "message": f"❌ 无效页码: page:{page_value}"}
+                page_num = int(page_value)
+                if page_num < 1:
+                    return {"status": "error", "message": f"❌ 无效页码: page:{page_num}"}
 
         # 查询（如果显示全部或分页，增加limit）
         query_limit = 1000 if show_all or page_num > 1 else PendoConfig.DEFAULT_SEARCH_LIMIT
@@ -656,6 +690,10 @@ class NoteHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 请指定ID"}
 
         note_id = note_id.strip()
+        if error := self._single_token_error(
+            note_id, "❌ 笔记详情只接受一个ID\n例如: /pendo note view abc12345"
+        ):
+            return error
 
         note, wrong_type = await self._db_get_typed_item_or_message(
             note_id, user_id, ItemType.NOTE.value, "笔记"
@@ -737,15 +775,20 @@ class NoteHandler(DbOpsMixin):
         clean_content = parsed["content"]
         title = parsed["title"]
 
-        # 构建更新
-        updates = {"title": title, "content": clean_content, "type": ItemType.NOTE.value}
+        # 构建更新。只写 cat:/#tag/ref: 时保留原标题和正文。
+        updates = {"type": ItemType.NOTE.value}
+        explicit_fields = parsed.get("_explicit_fields") or {}
+        if parsed.get("_title_provided"):
+            updates["title"] = title
+        if parsed.get("_content_provided"):
+            updates["content"] = clean_content
 
         # 只有明确指定才更新
-        if "cat:" in new_content:
+        if explicit_fields.get("category"):
             updates["category"] = parsed["category"]
-        if parsed.get("tags"):
+        if explicit_fields.get("tags"):
             updates["tags"] = parsed["tags"]
-        if parsed.get("reference_ids"):
+        if explicit_fields.get("references"):
             try:
                 new_refs, _ = await self._resolve_note_references(user_id, parsed["reference_ids"])
             except ValueError as exc:
@@ -754,11 +797,15 @@ class NoteHandler(DbOpsMixin):
             updates["references"] = merged_refs
             updates["related_items"] = self._related_from_references(merged_refs)
 
+        if set(updates.keys()) == {"type"}:
+            return {"status": "warning", "message": "⚠️ 未识别到有效的笔记修改内容"}
+
         await self._db_update_with_log(note_id, updates, user_id, action="edit_note")
 
+        display_title = updates.get("title") or note.title or "无标题笔记"
         return {
             "status": "success",
-            "message": f"✅ 已更新笔记\n\n📝 {title}\n\n💡 /pendo note view {note_id} 查看详情 | /pendo undo 撤销编辑",
+            "message": f"✅ 已更新笔记\n\n📝 {display_title}\n\n💡 /pendo note view {note_id} 查看详情 | /pendo undo 撤销编辑",
         }
 
     async def append_note(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
@@ -792,7 +839,7 @@ class NoteHandler(DbOpsMixin):
 
     @staticmethod
     def _extract_tag_args(text: str) -> list[str]:
-        tags = re.findall(r"#([\w\u4e00-\u9fa5-]+)", text or "")
+        tags = extract_tags(text)
         if not tags:
             tags = [part.lstrip("#") for part in (text or "").split() if part.strip()]
         clean: list[str] = []

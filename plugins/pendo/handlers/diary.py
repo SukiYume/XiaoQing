@@ -15,7 +15,7 @@ from ..models.constants import ItemFields
 from ..models.item import DiaryItem, ItemType
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
-from ..utils.formatters import ItemFormatter
+from ..utils.formatters import ItemFormatter, TAG_TOKEN_RE
 from ..utils.session_utils import safe_create_session, safe_end_session
 from ..utils.time_utils import now_in_timezone, parse_date_optional, parse_diary_range
 from ..utils.validators import normalize_diary_fields, normalize_diary_mood
@@ -259,6 +259,10 @@ class DiaryHandler(DbOpsMixin):
         query = (date_str or "").strip()
         if not query:
             query = self._user_now(user_id).strftime("%Y-%m-%d")
+        elif error := self._single_token_error(
+            query, "❌ 日记详情只接受一个日期或ID\n例如: /pendo diary view 2026-05-10"
+        ):
+            return error
 
         query_date = parse_date_optional(query)
         if query_date:
@@ -297,7 +301,7 @@ class DiaryHandler(DbOpsMixin):
 
         格式：
         - /pendo diary list -> 默认本月
-        - /pendo diary list today/tomorrow/week/year
+        - /pendo diary list today/tomorrow/week/month/year
         - /pendo diary list YYYY-MM (如 2026-02)
         - /pendo diary list last7d
         - /pendo diary list start..end
@@ -306,8 +310,10 @@ class DiaryHandler(DbOpsMixin):
         import re as _re
         range_str = (range_str or "").strip()
 
-        # 解析 mood: 过滤参数
+        # 解析 mood:/cat:/#tag 过滤参数
         mood_filter = None
+        category_filter = None
+        tag_filter = None
         mood_match = _re.search(r"mood:(\S+)", range_str)
         if mood_match:
             try:
@@ -316,10 +322,23 @@ class DiaryHandler(DbOpsMixin):
                 mood_filter = mood_match.group(1).lower()
             range_str = range_str.replace(mood_match.group(0), "").strip()
 
+        cat_match = _re.search(r"cat:(\S+)", range_str)
+        if cat_match:
+            category_filter = cat_match.group(1)
+            range_str = range_str.replace(cat_match.group(0), "").strip()
+
+        tag_match = TAG_TOKEN_RE.search(range_str)
+        if tag_match:
+            tag_filter = tag_match.group(1)
+            range_str = range_str.replace(tag_match.group(0), "").strip()
+
         # 解析时间范围（默认本月）
         if not range_str:
             range_str = self._user_now(user_id).strftime("%Y-%m")
-        start_date, end_date = parse_diary_range(range_str)
+        try:
+            start_date, end_date = parse_diary_range(range_str, strict=True)
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {str(exc)}"}
 
         # 查询日记
         diaries = await self._fetch_diaries(user_id, start_date, end_date)
@@ -327,8 +346,19 @@ class DiaryHandler(DbOpsMixin):
         # 应用情绪过滤
         if mood_filter:
             diaries = [d for d in diaries if (d.mood or "").lower() == mood_filter]
+        if category_filter:
+            diaries = [d for d in diaries if (d.category or "") == category_filter]
+        if tag_filter:
+            diaries = [d for d in diaries if tag_filter in (d.tags or [])]
 
-        filter_suffix = f" [情绪:{mood_filter}]" if mood_filter else ""
+        filter_labels = []
+        if mood_filter:
+            filter_labels.append(f"情绪:{mood_filter}")
+        if category_filter:
+            filter_labels.append(f"分类:{category_filter}")
+        if tag_filter:
+            filter_labels.append(f"#{tag_filter}")
+        filter_suffix = f" [{', '.join(filter_labels)}]" if filter_labels else ""
 
         if not diaries:
             return {
@@ -605,8 +635,8 @@ class DiaryHandler(DbOpsMixin):
             f"• /pendo diary template <编号> - 模板引导写日记\n"
             f"  可选: {template_hint}\n\n"
             "**查看:**\n"
-            "• /pendo diary list [范围] - 日记列表(默认本月)\n"
-            "  范围: today, week, YYYY-MM, last7d\n"
+            "• /pendo diary list [范围] [mood:情绪] [cat:分类] [#标签] - 日记列表(默认本月)\n"
+            "  范围: today, tomorrow, week, month, year, YYYY-MM, last7d/last30d, start..end\n"
             "• /pendo diary view [日期|ID] - 查看详情\n\n"
             "**其他:**\n"
             "• /pendo diary delete <日期|ID> - 删除日记"
