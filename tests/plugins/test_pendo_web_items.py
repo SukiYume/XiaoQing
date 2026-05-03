@@ -1656,27 +1656,28 @@ def test_ledger_page_source_stabilizes_quick_add_and_custom_range_layout():
     src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "ledger.js").read_text(encoding="utf-8")
 
     assert "box-sizing: border-box;" in src
-    assert "--ledger-qa-transaction-type-width: 128px;" in src
-    assert "--ledger-qa-control-width: 176px;" in src
-    assert "display: flex;" in src
-    assert "flex-wrap: wrap;" in src
-    assert ".ledger-quick-add .pselect { width: auto; max-width: 100%; }" in src
-    assert "width: var(--ledger-qa-transaction-type-width);" in src
-    assert "width: min(100%, var(--ledger-qa-control-width));" in src
-    assert "--ledger-qa-transaction-type-width: 108px;" in src
-    assert "--ledger-qa-control-width: 136px;" in src
-    assert "grid-template-columns: minmax(0, 1fr);" in src
+    assert ".ledger-quick-add {" in src
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in src
+    assert ".ledger-qa-field--title," in src
+    assert ".ledger-qa-field--date," in src
+    assert ".ledger-qa-action {" in src
+    assert "labelledBy: 'qa-transaction-type-label'" in src
+    assert ".ledger-quick-add .pselect," in src
+    assert ".ledger-quick-add .pselect-trigger { width: 100%; }" in src
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in src
+    assert "grid-template-columns: 1fr;" in src
     assert "width: 100%;" in src
     assert "max-width: 100%;" in src
     assert "--ledger-qa-control-width: 100%;" not in src
     assert "if (group) group.style.display = val === 'custom' ? 'grid' : 'none';" not in src
+    assert ".ledger-filter-bar {" in src
+    assert "gap: 18px 20px;" in src
+    assert ".ledger-filter-item--amount {" in src
     assert "grid-column: 1 / -1;" in src
-    assert "--ledger-filter-select-width: 170px;" in src
-    assert "--ledger-filter-control-width: 196px;" in src
-    assert "--ledger-filter-amount-width: 312px;" in src
-    assert "display: flex;" in src
-    assert "width: min(100%, var(--ledger-filter-amount-width));" in src
+    assert "max-width: 520px;" not in src
     assert "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);" in src
+    assert "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;" in src
+    assert "className: 'pselect-block pselect-theme-ledger ledger-filter-account'" in src
     assert ".ledger-filter-date { width: 108px; flex: 0 0 108px; }" not in src
     assert ".ledger-insight-svg-ring {" in src
     assert "max-width: min(200px, 52vw);" in src

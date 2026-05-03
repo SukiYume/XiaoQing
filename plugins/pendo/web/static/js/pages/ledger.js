@@ -565,18 +565,30 @@ function ensureStyles() {
 
         /* Quick-add bar */
         .ledger-quick-add {
-            --ledger-qa-transaction-type-width: 128px;
-            --ledger-qa-control-width: 176px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            align-items: center;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px 16px;
+            align-items: end;
         }
         .ledger-quick-add > * { min-width: 0; }
+        .ledger-qa-field {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+        .ledger-qa-label {
+            font-size: 11px;
+            font-weight: 800;
+            color: var(--color-text-secondary);
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
         .ledger-quick-add input {
             box-sizing: border-box;
             font-size: 13px;
-            height: 40px;
+            height: 42px;
             border-radius: 14px;
             border: 1px solid rgba(239,68,68,0.14);
             width: 100%;
@@ -588,32 +600,20 @@ function ensureStyles() {
             box-shadow: 0 0 0 3px rgba(239,68,68,0.1);
             outline: none;
         }
-        .ledger-quick-add .pselect { width: auto; max-width: 100%; }
-        .ledger-quick-add .ledger-qa-transaction-type {
-            flex: 0 0 auto;
-            width: var(--ledger-qa-transaction-type-width);
-            max-width: 100%;
-        }
-        .ledger-quick-add .ledger-qa-amount,
-        .ledger-quick-add .ledger-qa-title,
-        .ledger-quick-add .ledger-qa-category,
-        .ledger-quick-add .ledger-qa-account,
-        .ledger-quick-add .ledger-qa-counter,
-        .ledger-quick-add .ledger-qa-merchant,
-        .ledger-quick-add .ledger-qa-date,
-        .ledger-quick-add .ledger-qa-submit {
-            flex: 0 0 auto;
-            width: min(100%, var(--ledger-qa-control-width));
-            min-width: 0;
-        }
+        .ledger-quick-add .pselect,
+        .ledger-quick-add .pselect-trigger { width: 100%; }
         .ledger-qa-amount::-webkit-outer-spin-button,
         .ledger-qa-amount::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
         .ledger-qa-amount { -moz-appearance: textfield; }
+        .ledger-qa-action {
+            min-width: 0;
+            align-self: end;
+        }
         .ledger-qa-submit {
-            height: 40px;
+            width: 100%;
+            height: 42px;
             padding: 0 16px;
             font-size: 13px;
-            flex-shrink: 0;
             background: var(--color-ledger);
             color: #fff;
             border: none;
@@ -627,13 +627,10 @@ function ensureStyles() {
 
         /* Filter bar */
         .ledger-filter-bar {
-            --ledger-filter-select-width: 170px;
-            --ledger-filter-control-width: 196px;
-            --ledger-filter-amount-width: 312px;
-            display: flex;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             align-items: flex-start;
-            gap: 14px;
+            gap: 18px 20px;
         }
         .ledger-filter-item {
             display: flex;
@@ -646,22 +643,9 @@ function ensureStyles() {
             background: transparent;
             border-radius: 0;
         }
-        .ledger-filter-item--date {
-            flex: 0 0 auto;
-            width: min(100%, var(--ledger-filter-control-width));
-        }
-        .ledger-filter-item--transaction-type {
-            flex: 0 0 auto;
-            width: min(100%, var(--ledger-filter-select-width));
-        }
-        .ledger-filter-item--category,
-        .ledger-filter-item--account {
-            flex: 0 0 auto;
-            width: min(100%, var(--ledger-filter-select-width));
-        }
         .ledger-filter-item--amount {
-            flex: 0 0 auto;
-            width: min(100%, var(--ledger-filter-amount-width));
+            grid-column: 1 / -1;
+            width: 100%;
         }
         .ledger-filter-item--date .ledger-filter-controls,
         .ledger-filter-item--transaction-type .ledger-filter-controls,
@@ -689,25 +673,29 @@ function ensureStyles() {
             align-items: center;
             min-width: 0;
             flex-wrap: wrap;
+            width: 100%;
         }
         .ledger-filter-range {
             display: grid;
-            grid-template-columns: minmax(0, 1fr);
-            align-items: stretch;
-            row-gap: 8px;
+            grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 8px;
             min-width: 0;
             flex: 1 0 100%;
             width: 100%;
-            margin-top: 4px;
+            margin-top: 8px;
         }
         .ledger-filter-range-sep {
             font-size: 12px;
             color: var(--color-text-secondary);
-            display: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             flex: 0 0 auto;
         }
         .ledger-filter-date,
         .ledger-filter-transaction-type,
+        .ledger-filter-account,
         .ledger-filter-category {
             width: 100%;
             flex: 0 0 auto;
@@ -723,14 +711,14 @@ function ensureStyles() {
         .ledger-amount-input,
         .ledger-custom-date-input {
             box-sizing: border-box;
-            height: 36px !important;
+            height: 40px !important;
             font-size: 13px;
             padding: 0 12px;
-            border: 1px solid rgba(239,68,68,0.35);
-            border-radius: 20px;
-            background: var(--color-bg);
-            color: #b91c1c;
-            font-weight: 500;
+            border: 1px solid rgba(239,68,68,0.16);
+            border-radius: 14px;
+            background: rgba(255,255,255,0.94);
+            color: var(--color-text);
+            font-weight: 600;
             outline: none;
             transition: border-color .15s, background .15s, box-shadow .15s;
         }
@@ -749,20 +737,19 @@ function ensureStyles() {
             flex: 1 1 auto;
         }
         .ledger-range-apply {
-            height: 36px;
+            height: 40px;
             padding: 0 14px;
             min-width: 64px;
             white-space: nowrap;
             border: 1px solid rgba(239,68,68,0.2);
-            border-radius: 18px;
+            border-radius: 14px;
             background: rgba(239,68,68,0.06);
             color: #b91c1c;
             font-size: 13px;
             font-weight: 600;
             cursor: pointer;
             transition: background .15s, border-color .15s, transform .15s;
-            grid-column: 1 / -1;
-            justify-self: stretch;
+            justify-self: start;
         }
         .ledger-range-apply:hover {
             background: rgba(239,68,68,0.12);
@@ -792,7 +779,7 @@ function ensureStyles() {
         .ledger-filter-bar .pselect-label { min-width: 0; }
         .ledger-filter-bar .pselect-panel { border-radius: 16px; z-index: 1200; }
         .ledger-quick-add .pselect-trigger {
-            height: 40px;
+            height: 42px;
             padding: 0 10px 0 12px;
             border-radius: 14px;
             font-weight: 600;
@@ -814,16 +801,19 @@ function ensureStyles() {
                 padding: 22px 20px;
             }
             .ledger-quick-add {
-                --ledger-qa-transaction-type-width: 108px;
-                --ledger-qa-control-width: 136px;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 12px;
+            }
+            .ledger-qa-field--title,
+            .ledger-qa-field--date,
+            .ledger-qa-action {
+                grid-column: 1 / -1;
             }
             .ledger-page-header {
                 align-items: flex-start;
             }
             .ledger-filter-bar {
-                --ledger-filter-select-width: 100%;
-                --ledger-filter-control-width: 100%;
-                --ledger-filter-amount-width: 100%;
+                grid-template-columns: 1fr;
             }
             .ledger-pulse-metrics {
                 grid-template-columns: 1fr;
@@ -875,7 +865,6 @@ function ensureStyles() {
                 width: 100%;
             }
             .ledger-filter-range {
-                flex-direction: column;
                 align-items: stretch;
                 grid-template-columns: 1fr;
                 row-gap: 8px;
@@ -895,6 +884,14 @@ function ensureStyles() {
             }
         `)}
         ${mediaMax(BREAKPOINTS.PHONE, `
+            .ledger-quick-add {
+                grid-template-columns: 1fr;
+            }
+            .ledger-qa-field--title,
+            .ledger-qa-field--date,
+            .ledger-qa-action {
+                grid-column: auto;
+            }
             .ledger-summary-value {
                 font-size: 26px;
             }
@@ -1070,19 +1067,45 @@ function renderQuickAdd() {
         options: [{ value: 'expense', label: '支出' }, { value: 'income', label: '收入' }, { value: 'transfer', label: '转账' }],
         selected: 'expense',
         className: 'pselect-block pselect-theme-ledger ledger-qa-transaction-type',
-        ariaLabel: '交易类型',
+        labelledBy: 'qa-transaction-type-label',
     });
     return `
         <div class="ledger-quick-add" id="ledger-quick-add">
-            ${typeSelect}
-            <input type="number" class="ledger-qa-amount"   id="qa-amount"   placeholder="金额" step="0.01" min="0" aria-label="金额">
-            <input type="text"   class="ledger-qa-title"    id="qa-title"    placeholder="摘要" aria-label="摘要">
-            <input type="text"   class="ledger-qa-category" id="qa-category" placeholder="分类（其他）" aria-label="分类">
-            <input type="text"   class="ledger-qa-account"  id="qa-account"  placeholder="账户（现金）" aria-label="账户">
-            <input type="text"   class="ledger-qa-counter"  id="qa-counter"  placeholder="转入账户" aria-label="转入账户">
-            <input type="text"   class="ledger-qa-merchant" id="qa-merchant" placeholder="商户/对方" aria-label="商户或对方">
-            <input type="text"   class="ledger-qa-date"     id="qa-date"     value="${today}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="记账日期">
-            <button class="ledger-qa-submit" id="qa-submit">+ 记录</button>
+            <div class="ledger-qa-field ledger-qa-field--type">
+                <label class="ledger-qa-label" id="qa-transaction-type-label">方向</label>
+                ${typeSelect}
+            </div>
+            <div class="ledger-qa-field ledger-qa-field--amount">
+                <label class="ledger-qa-label" for="qa-amount">金额</label>
+                <input type="number" class="ledger-qa-amount" id="qa-amount" placeholder="0.00" step="0.01" min="0" aria-label="金额">
+            </div>
+            <div class="ledger-qa-field ledger-qa-field--title">
+                <label class="ledger-qa-label" for="qa-title">摘要</label>
+                <input type="text" class="ledger-qa-title" id="qa-title" placeholder="餐饮、交通、工资..." aria-label="摘要">
+            </div>
+            <div class="ledger-qa-field ledger-qa-field--category">
+                <label class="ledger-qa-label" for="qa-category">分类</label>
+                <input type="text" class="ledger-qa-category" id="qa-category" placeholder="其他" aria-label="分类">
+            </div>
+            <div class="ledger-qa-field ledger-qa-field--account">
+                <label class="ledger-qa-label" for="qa-account">账户</label>
+                <input type="text" class="ledger-qa-account" id="qa-account" placeholder="现金" aria-label="账户">
+            </div>
+            <div class="ledger-qa-field ledger-qa-field--counter">
+                <label class="ledger-qa-label" for="qa-counter">转入账户</label>
+                <input type="text" class="ledger-qa-counter" id="qa-counter" placeholder="仅转账填写" aria-label="转入账户">
+            </div>
+            <div class="ledger-qa-field ledger-qa-field--merchant">
+                <label class="ledger-qa-label" for="qa-merchant">商户/对方</label>
+                <input type="text" class="ledger-qa-merchant" id="qa-merchant" placeholder="可选" aria-label="商户或对方">
+            </div>
+            <div class="ledger-qa-field ledger-qa-field--date">
+                <label class="ledger-qa-label" for="qa-date">日期</label>
+                <input type="text" class="ledger-qa-date" id="qa-date" value="${today}" inputmode="numeric" placeholder="YYYY-MM-DD" aria-label="记账日期">
+            </div>
+            <div class="ledger-qa-action">
+                <button class="ledger-qa-submit" id="qa-submit">+ 记录</button>
+            </div>
         </div>`;
 }
 
@@ -1137,7 +1160,7 @@ function renderFilterBar() {
             <div class="ledger-filter-item ledger-filter-item--account">
                 <label id="filter-account-label">账户：</label>
                 <div class="ledger-filter-controls">
-                    ${renderCustomSelect({ id: 'filter-account', options: accountOptions, selected: _accountFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-category', labelledBy: 'filter-account-label' })}
+                    ${renderCustomSelect({ id: 'filter-account', options: accountOptions, selected: _accountFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-account', labelledBy: 'filter-account-label' })}
                 </div>
             </div>
             <div class="ledger-filter-item ledger-filter-item--category">
