@@ -485,41 +485,67 @@ function ensureStyles() {
         .tasks-workspace-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px; border-bottom: 1px solid rgba(226,232,240,0.75); }
         .tasks-workspace-title { margin: 0; font-size: 18px; font-weight: 760; color: var(--color-text); }
         .tasks-workspace-subtitle { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
-        .tasks-content { padding: 18px 20px 22px; }
-        .tasks-sections { display: flex; flex-direction: column; gap: 16px; }
+        .tasks-content { padding: 8px 20px 18px; }
+        .tasks-sections { display: flex; flex-direction: column; gap: 0; }
         .tasks-section {
-            border: 1px solid rgba(226,232,240,0.85); border-radius: 18px;
-            background: rgba(255,255,255,0.9); padding: 16px;
+            padding: 18px 0 20px; border-top: 1px solid rgba(226,232,240,0.78);
+            background: transparent;
         }
-        .tasks-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+        .tasks-section:first-child { border-top: none; padding-top: 8px; }
+        .tasks-section-head { display: flex; align-items: end; justify-content: space-between; gap: 14px; margin-bottom: 8px; }
         .tasks-section-title { font-size: 16px; font-weight: 760; color: var(--color-text); }
         .tasks-section-meta { font-size: 12px; color: var(--color-text-secondary); }
-        .tasks-task-list { display: flex; flex-direction: column; gap: 10px; }
+        .tasks-section-count {
+            font-size: 12px; font-weight: 760; color: var(--color-text-secondary);
+            white-space: nowrap;
+        }
+        .tasks-task-list { display: flex; flex-direction: column; gap: 0; }
         .task-row {
             display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: start;
-            padding: 14px; border-radius: 16px; border: 1px solid rgba(226,232,240,0.82);
-            background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92));
-            cursor: pointer; transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+            margin: 0 -8px; padding: 14px 8px; border-bottom: 1px solid rgba(226,232,240,0.66);
+            background: transparent; cursor: pointer;
+            transition: background 0.16s ease;
         }
-        .task-row:hover { transform: translateY(-1px); border-color: rgba(16,185,129,0.28); box-shadow: 0 12px 28px rgba(16,185,129,0.08); }
+        .task-row:last-child { border-bottom: none; }
+        .task-row:hover { background: linear-gradient(90deg, rgba(236,253,245,0.78), transparent 76%); }
         .task-row-priority {
-            width: 12px; height: 12px; border-radius: 999px; margin-top: 6px; box-shadow: 0 0 0 4px rgba(255,255,255,0.92);
+            width: 8px; height: 34px; border-radius: 999px; margin-top: 2px;
         }
-        .task-row-title { margin: 0; font-size: 15px; font-weight: 760; color: var(--color-text); }
+        .task-row-main { min-width: 0; }
+        .task-row-title-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+        .task-row-title {
+            margin: 0; font-size: 15px; font-weight: 760; color: var(--color-text);
+            min-width: 0; overflow-wrap: anywhere; word-break: break-word;
+        }
         .task-row-note { margin-top: 6px; font-size: 13px; line-height: 1.6; color: var(--color-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-        .task-row-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+        .task-row-meta {
+            display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 9px;
+            font-size: 12px; font-weight: 700; color: var(--color-text-secondary);
+        }
+        .task-row-meta span { display: inline-flex; align-items: center; min-width: 0; overflow-wrap: anywhere; }
+        .task-row-meta span:not(:last-child)::after {
+            content: ""; width: 3px; height: 3px; border-radius: 999px;
+            background: rgba(148,163,184,0.72); margin-left: 10px;
+        }
         .task-pill {
             display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px;
             font-size: 12px; font-weight: 700; background: rgba(241,245,249,0.92); color: var(--color-text-secondary);
             white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0;
         }
         .task-pill.status { color: var(--task-pill-color); background: var(--task-pill-bg); }
+        .task-status-badge {
+            display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 999px;
+            font-size: 12px; font-weight: 760; color: var(--task-pill-color); background: var(--task-pill-bg);
+            white-space: nowrap; flex-shrink: 0;
+        }
         .task-row-actions { display: flex; gap: 8px; align-items: center; }
         .task-action-btn {
-            border: 1px solid rgba(203,213,225,0.9); background: #fff; color: var(--color-text-secondary);
-            border-radius: 12px; padding: 8px 10px; font-size: 12px; font-weight: 700; cursor: pointer;
+            border: 1px solid transparent; background: transparent; color: var(--color-text-secondary);
+            border-radius: 10px; padding: 8px 10px; font-size: 12px; font-weight: 700; cursor: pointer;
+            transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
         }
-        .task-action-btn.primary { color: #047857; border-color: rgba(16,185,129,0.24); background: rgba(236,253,245,0.9); }
+        .task-action-btn:hover { background: rgba(241,245,249,0.9); border-color: rgba(203,213,225,0.8); }
+        .task-action-btn.primary { color: #047857; border-color: rgba(16,185,129,0.18); background: rgba(236,253,245,0.86); }
         .tasks-empty {
             padding: 28px 18px; border-radius: 18px; text-align: center; background: rgba(248,250,252,0.82);
             border: 1px dashed rgba(148,163,184,0.26); color: var(--color-text-secondary);
@@ -784,18 +810,23 @@ function taskRowHTML(task) {
             : describePlanDate(planKey));
     const taskId = escapeHtml(task.id || '');
     const content = task.content ? `<div class="task-row-note">${escapeHtml(task.content)}</div>` : '';
+    const metaParts = [
+        `${priority.icon} ${priority.label}`,
+        planKey ? formatPlanDate(planKey) : '',
+        textCategory || (!planKey ? '未分类' : ''),
+        scheduleText,
+    ].filter(Boolean);
     return `
         <div class="task-row" data-task-id="${taskId}">
             <div class="task-row-priority" style="background:${priority.color};"></div>
-            <div>
-                <h4 class="task-row-title">${escapeHtml(task.title || '(无标题)')}</h4>
+            <div class="task-row-main">
+                <div class="task-row-title-line">
+                    <h4 class="task-row-title">${escapeHtml(task.title || '(无标题)')}</h4>
+                    <span class="task-status-badge" style="--task-pill-color:${status.tone};--task-pill-bg:${status.bg};">${status.label}</span>
+                </div>
                 ${content}
                 <div class="task-row-meta">
-                    <span class="task-pill">${priority.icon} ${priority.label}</span>
-                    ${planKey ? `<span class="task-pill">${formatPlanDate(planKey)}</span>` : ''}
-                    ${textCategory ? `<span class="task-pill">${escapeHtml(textCategory)}</span>` : (!planKey ? `<span class="task-pill">未分类</span>` : '')}
-                    <span class="task-pill status" style="--task-pill-color:${status.tone};--task-pill-bg:${status.bg};">${status.label}</span>
-                    <span class="task-pill">${escapeHtml(scheduleText)}</span>
+                    ${metaParts.map((part) => `<span>${escapeHtml(part)}</span>`).join('')}
                 </div>
             </div>
             <div class="task-row-actions">
@@ -814,7 +845,7 @@ function renderSection(title, subtitle, tasks) {
                     <div class="tasks-section-title">${title}</div>
                     <div class="tasks-section-meta">${subtitle}</div>
                 </div>
-                <div class="task-pill">${tasks.length} 项</div>
+                <div class="tasks-section-count">${tasks.length} 项</div>
             </div>
             ${tasks.length
                 ? `<div class="tasks-task-list">${tasks.map(taskRowHTML).join('')}</div>`
@@ -828,9 +859,9 @@ function renderListView(model) {
     const closedTasks = sortDone([...model.done_recent, ...model.cancelled_recent]).slice(0, 8);
     return `
         <div class="tasks-sections">
-            ${showActive ? renderSection('今天与滞后', '优先清理今天计划和已经拖后的任务。', model.focus_tasks.slice(0, 6)) : ''}
-            ${showActive ? renderSection('未来 7 天', '接下来一周内需要继续跟进的事项。', model.up_next_tasks.slice(0, 8)) : ''}
-            ${showActive ? renderSection('更晚与未安排', '更晚的计划日期，以及尚未放进日期桶的任务。', [...model.later_tasks.slice(0, 4), ...model.backlog_tasks.slice(0, 4)]) : ''}
+            ${showActive ? renderSection('今天与滞后', '优先清理今天计划和已经拖后的任务。', model.focus_tasks) : ''}
+            ${showActive ? renderSection('未来 7 天', '接下来一周内需要继续跟进的事项。', model.up_next_tasks) : ''}
+            ${showActive ? renderSection('更晚与未安排', '更晚的计划日期，以及尚未放进日期桶的任务。', [...model.later_tasks, ...model.backlog_tasks]) : ''}
             ${showClosed ? renderSection('最近完成', '已完成和已取消的任务。', closedTasks) : ''}
         </div>`;
 }

@@ -95,6 +95,35 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_build_task_overview_returns_all_focus_tasks():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_tasks_focus_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-task-focus"
+
+    try:
+        for index in range(8):
+            db.insert_item({
+                "id": f"today-{index}",
+                "owner_id": owner_id,
+                "type": "task",
+                "title": f"今天任务 {index}",
+                "category": "工作",
+                "status": "open",
+                "priority": 3,
+                "plan_date": "2026-03-26",
+                "created_at": f"2026-03-25T09:00:{index:02d}",
+            })
+
+        result = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
+
+        assert result["summary"]["focus_count"] == 8
+        assert len(result["focus_tasks"]) == 8
+        assert [task["id"] for task in result["focus_tasks"]] == [f"today-{index}" for index in range(8)]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_tasks_page_source_uses_task_overview_and_view_toggle():
     api_src = (ROOT / "plugins" / "pendo" / "web" / "api" / "stats.py").read_text(encoding="utf-8")
     page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js").read_text(encoding="utf-8")
@@ -103,6 +132,7 @@ def test_tasks_page_source_uses_task_overview_and_view_toggle():
     assert "/stats/tasks/overview" in page_src
     assert "task-view-list" in page_src
     assert "task-view-board" in page_src
+    assert "model.focus_tasks.slice(0, 6)" not in page_src
 
 
 def test_tasks_page_source_normalizes_modal_payload_defaults():
