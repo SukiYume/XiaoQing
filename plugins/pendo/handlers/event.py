@@ -22,6 +22,7 @@ from ..utils.error_handlers import error_result, handle_command_errors
 from ..utils.formatters import (
     ItemFormatter,
     MessageBuilder,
+    is_tag_token,
 )
 from ..utils.session_utils import safe_create_session
 from ..utils.settings_utils import resolve_default_category
@@ -31,7 +32,11 @@ from ..utils.time_utils import (
     parse_event_time_range,
     parse_remind_times,
 )
-from ..utils.validators import build_remind_times_from_rules, derive_reminder_rules
+from ..utils.validators import (
+    build_remind_times_from_rules,
+    derive_reminder_rules,
+    normalize_event_fields,
+)
 from .event_support import (
     ensure_event_reminder_rules,
     ensure_event_reminders,
@@ -96,7 +101,10 @@ class EventHandler(DbOpsMixin):
     _LOCATION_EDIT_RE = re.compile(
         r"(@|地点|位置|场地|地址|(?:会场|会议地点)\s*(?:改为|改成|改到|在|[:：]))"
     )
-    _NOTES_EDIT_RE = re.compile(r"(?:备注(?:改为|改成|[:：])?|备注)\s*(.+)")
+    _NOTES_EDIT_RE = re.compile(
+        r"(?:备注|说明)\s*(?:改为|改成|设为|设置为|为|成|[:：])?\s*(.+)"
+    )
+    _EDIT_VALUE_STOP_CHARS = " ，,。；;\n\t"
 
     db: "Database"
     ai_parser: EventAIParserProtocol
@@ -593,6 +601,10 @@ class EventHandler(DbOpsMixin):
                 "status": "error",
                 "message": "❌ 请指定事件ID\n例如: /pendo event view abc12345",
             }
+        if error := self._single_token_error(
+            event_id, "❌ 日程详情只接受一个ID\n例如: /pendo event view abc12345"
+        ):
+            return error
 
         family = await self._load_event_family(user_id, event_id)
         if family.kind != "missing":
@@ -733,9 +745,9 @@ class EventHandler(DbOpsMixin):
         "今天": "今日",
         "tomorrow": "明日",
         "明天": "明日",
-        "week": "未来7天",
+        "week": "本周",
         "本周": "本周",
-        "month": "未来30天",
+        "month": "本月",
         "本月": "本月",
         "year": "本年",
         "今年": "本年",
@@ -818,14 +830,16 @@ class EventHandler(DbOpsMixin):
         for part in filter_parts:
             if part.startswith("cat:"):
                 cat_filter = part[4:]
-            elif re.match(r"^#\w+$", part):
+                if not cat_filter:
+                    return {"status": "error", "message": "❌ cat: 后面需要分类名"}
+            elif is_tag_token(part):
                 tag_filter = part[1:]
             else:
                 clean_parts.append(part)
         time_range = " ".join(clean_parts)
 
         try:
-            start_date, end_date = parse_event_time_range(time_range)
+            start_date, end_date = parse_event_time_range(time_range, strict=True)
             events = await self._fetch_event_rows(
                 user_id, start_date, end_date
             )
@@ -891,6 +905,8 @@ class EventHandler(DbOpsMixin):
             message += "\n💡 /pendo event reminders <id> 查看提醒 · event edit <id> <内容> 编辑"
 
             return {"status": "success", "message": message}
+        except ValueError as e:
+            return {"status": "error", "message": f"❌ {str(e)}"}
         except Exception as e:
             logger.exception("Failed to list events: %s", e)
             return {"status": "error", "message": f"❌ 获取日程失败: {str(e)}"}
@@ -1613,6 +1629,7 @@ class EventHandler(DbOpsMixin):
         尝试使用AI解析，失败时降级到规则解析。
         通过 prompt 指示 AI 不要随意修改标题，避免把编辑指令误设为标题。
         """
+        explicit_updates = self._parse_explicit_edit_updates(changes, current_event)
         current_title = getattr(current_event, "title", "") or ""
         current_start = getattr(current_event, "start_time", "") or ""
         edit_prompt = (
@@ -1634,8 +1651,12 @@ class EventHandler(DbOpsMixin):
             logger.warning("AI解析失败，降级到规则解析: %s", e)
             parsed = self.ai_parser.parse_natural_language(changes, current_event.owner_id)
 
-        updates = {}
+        updates = dict(explicit_updates)
         for key in ["title", "content", "start_time", "end_time", "location", "category", "tags"]:
+            if key in updates:
+                continue
+            if explicit_updates and key in {"title", "content", "location", "category", "tags"}:
+                continue
             candidate = parsed.get(key)
             current_val = getattr(current_event, key, None)
             if candidate in (None, "", [], {}) or candidate == current_val:
@@ -1654,11 +1675,12 @@ class EventHandler(DbOpsMixin):
                     continue
             updates[key] = candidate
 
-        if parsed.get("remind_times"):
+        if parsed.get("remind_times") and not explicit_updates:
             updates["remind_times"] = parsed["remind_times"]
 
         if (
-            parsed.get("notes") is not None
+            not explicit_updates
+            and parsed.get("notes") is not None
             and parsed.get("notes") != getattr(current_event, "notes", None)
         ):
             updates["notes"] = parsed["notes"]
@@ -1671,6 +1693,119 @@ class EventHandler(DbOpsMixin):
             updates["notes"] = heuristic_notes
 
         return updates
+
+    @classmethod
+    def _parse_explicit_edit_updates(
+        cls, changes: str, current_event: EventItem
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {}
+
+        title = cls._extract_edit_value(
+            changes,
+            (
+                r"(?:标题|名字|名称)\s*(?:改为|改成|改到|设为|设置为|重命名为|:|：)\s*([^，,。；;\n]+)",
+                r"(?:改名|重命名)\s*(?:为|成)?\s*([^，,。；;\n]+)",
+            ),
+        )
+        if title is not None and title != getattr(current_event, "title", None):
+            updates["title"] = title
+
+        location = cls._extract_edit_value(
+            changes,
+            (
+                r"(?:地点|位置|场地|地址|会场|会议地点)\s*(?:改为|改成|改到|设为|设置为|在|到|:|：)\s*([^，,。；;\n]+)",
+                r"@([^\s，,。；;\n]+)",
+            ),
+        )
+        if location is not None and location != getattr(current_event, "location", None):
+            updates["location"] = location
+
+        category = cls._extract_edit_value(
+            changes,
+            (
+                r"(?:分类|归类|类别|类目)\s*(?:改为|改成|设为|设置为|为|成|到|:|：)\s*([^，,。；;\n]+)",
+            ),
+        )
+        if category is not None and category != getattr(current_event, "category", None):
+            updates["category"] = category
+
+        content = cls._extract_edit_value(
+            changes,
+            (
+                r"(?:内容|描述|详情)\s*(?:改为|改成|设为|设置为|为|成|:|：)\s*(.+)",
+            ),
+        )
+        if content is not None and content != getattr(current_event, "content", None):
+            updates["content"] = content
+
+        notes = cls._extract_notes_update(changes)
+        if notes is not None and notes != getattr(current_event, "notes", None):
+            updates["notes"] = notes
+
+        if not any(key in updates for key in ("title", "location", "category", "content", "notes")):
+            start_time = cls._extract_start_time_update(changes, current_event)
+            if start_time is not None and start_time != getattr(current_event, "start_time", None):
+                updates["start_time"] = start_time
+
+        return updates
+
+    @classmethod
+    def _extract_edit_value(cls, changes: str, patterns: tuple[str, ...]) -> str | None:
+        for pattern in patterns:
+            match = re.search(pattern, changes, re.IGNORECASE)
+            if not match:
+                continue
+            value = (match.group(1) or "").strip(cls._EDIT_VALUE_STOP_CHARS)
+            return value or None
+        return None
+
+    @classmethod
+    def _extract_start_time_update(cls, changes: str, current_event: EventItem) -> str | None:
+        text = changes.strip()
+        match = re.search(
+            r"(?:开始时间|时间)\s*(?:改为|改成|改到|设为|设置为|调整到|调整为|到|:|：)\s*(.+)",
+            text,
+        )
+        if not match:
+            match = re.match(r"\s*(?:改到|改为|改成|调整到|调整为)\s*(.+)", text)
+        if not match:
+            return None
+
+        candidate = match.group(1).strip(cls._EDIT_VALUE_STOP_CHARS)
+        candidate = cls._normalize_datetime_candidate(candidate, current_event)
+        if candidate is None:
+            return None
+        try:
+            return normalize_event_fields({"start_time": candidate}, partial=True)["start_time"]
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _normalize_datetime_candidate(candidate: str, current_event: EventItem) -> str | None:
+        match = re.fullmatch(
+            r"(\d{4}-\d{2}-\d{2})(?:[T\s]+)(\d{1,2}):(\d{2})(?::(\d{2}))?",
+            candidate,
+        )
+        if match:
+            hour = int(match.group(2))
+            minute = match.group(3)
+            second = match.group(4) or "00"
+            return f"{match.group(1)}T{hour:02d}:{minute}:{second}"
+
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", candidate)
+        if match and getattr(current_event, "start_time", None):
+            hour = int(match.group(1))
+            minute = match.group(2)
+            second = match.group(3) or "00"
+            return f"{current_event.start_time[:10]}T{hour:02d}:{minute}:{second}"
+
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", candidate):
+            time_part = "00:00:00"
+            if getattr(current_event, "start_time", None) and "T" in current_event.start_time:
+                time_part = current_event.start_time.split("T", 1)[1]
+            return f"{candidate}T{time_part}"
+
+        return candidate or None
 
     @classmethod
     def _should_apply_title_update(
@@ -1736,7 +1871,7 @@ class EventHandler(DbOpsMixin):
         match = cls._NOTES_EDIT_RE.search(changes)
         if not match:
             return None
-        notes = match.group(1).strip(" ，,。；;")
+        notes = match.group(1).strip(cls._EDIT_VALUE_STOP_CHARS)
         return notes or None
 
     def _looks_like_id(self, text: str) -> bool:

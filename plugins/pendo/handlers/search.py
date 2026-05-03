@@ -4,6 +4,7 @@
 """
 
 import logging
+import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, cast
 
@@ -21,6 +22,7 @@ from ..models.item import (
 )
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import (
+    BOUNDARY_TAG_TOKEN_RE,
     PRIORITY_ICONS,
     STATUS_ICONS,
     TYPE_NAMES,
@@ -35,6 +37,9 @@ if TYPE_CHECKING:
     from ..services.db import Database
 
 SearchItem = EventItem | TaskItem | DiaryItem | NoteItem | LedgerItem
+_ALLOWED_SEARCH_TYPES = {"event", "task", "note", "diary", "ledger"}
+_ALLOWED_TASK_STATUS = {"open", "done", "cancelled"}
+_ALLOWED_TRANSACTION_TYPES = {"income", "expense", "transfer"}
 
 # 操作提示：根据类型提供对应的操作命令
 _TYPE_ACTION_HINTS: dict[str, str] = {
@@ -79,15 +84,19 @@ class SearchHandler:
                     "/pendo search <关键词> type=<类型> range=<时间范围>\n\n"
                     "可用筛选:\n"
                     "• type=event/task/note/diary/ledger\n"
-                    "• range=today/week/last7d/last30d/YYYY-MM\n"
+                    "• range=today/week/month/year/last7d/last30d/YYYY-MM/start..end\n"
+                    "• #标签 或 tag=<标签>\n"
                     "• status=open/done/cancelled (待办)\n"
-                    "• category=<分类>\n"
+                    "• category=<分类> (type=ledger 时按账目分类)\n"
                     "• transaction_type=income/expense/transfer (记账)"
                 ),
             }
 
         # 解析查询和过滤条件
-        query, filters = self._parse_search_query(args)
+        try:
+            query, filters = self._parse_search_query(args)
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {str(exc)}"}
 
         if not query:
             return {"status": "error", "message": "❌ 请提供搜索关键词"}
@@ -112,11 +121,32 @@ class SearchHandler:
         """解析搜索查询和过滤条件，返回 (query, filters)"""
         filters: dict[str, Any] = {}
 
+        type_val, args = extract_kv_param(args, "type")
+        if type_val:
+            if type_val not in _ALLOWED_SEARCH_TYPES:
+                raise ValueError(f"无效类型: {type_val}")
+            filters["type"] = type_val
+
+        status_val, args = extract_kv_param(args, "status")
+        if status_val:
+            if status_val not in _ALLOWED_TASK_STATUS:
+                raise ValueError(f"无效待办状态: {status_val}")
+            filters["status"] = status_val
+
+        category_val, args = extract_kv_param(args, "category")
+        if category_val:
+            if filters.get("type") == "ledger":
+                filters["ledger_category"] = category_val
+            else:
+                filters["category"] = category_val
+
+        transaction_val, args = extract_kv_param(args, "transaction_type")
+        if transaction_val:
+            if transaction_val not in _ALLOWED_TRANSACTION_TYPES:
+                raise ValueError(f"无效交易类型: {transaction_val}")
+            filters["transaction_type"] = transaction_val
+
         for key, filter_key in [
-            ("type", "type"),
-            ("status", "status"),
-            ("category", "category"),
-            ("transaction_type", "transaction_type"),
             ("account", "account_name"),
             ("merchant", "merchant"),
         ]:
@@ -124,11 +154,26 @@ class SearchHandler:
             if val:
                 filters[filter_key] = val
 
+        for key in ("tag", "tags"):
+            tag_val, args = extract_kv_param(args, key)
+            if tag_val:
+                filters["tags"] = tag_val
+
+        tag_match = BOUNDARY_TAG_TOKEN_RE.search(args)
+        if tag_match:
+            filters["tags"] = tag_match.group(1)
+            args = (args[: tag_match.start()] + args[tag_match.end() :]).strip()
+
         range_val, args = extract_kv_param(args, "range")
         if range_val:
-            start_date, end_date = parse_search_date_range(range_val)
+            start_date, end_date = parse_search_date_range(range_val, strict=True)
             if start_date:
-                filters["date_field"] = self._resolve_search_date_field(filters.get("type"))
+                date_field = self._resolve_search_date_field(filters.get("type"))
+                filters["date_field"] = date_field
+                if self._is_date_only_search_field(date_field):
+                    start_date = start_date[:10]
+                    if end_date:
+                        end_date = end_date[:10]
                 filters["start_date"] = start_date
             if end_date:
                 filters["end_date"] = end_date
@@ -145,6 +190,10 @@ class SearchHandler:
             "note": "created_at",
         }
         return mapping.get(item_type or "", "created_at")
+
+    @staticmethod
+    def _is_date_only_search_field(date_field: str) -> bool:
+        return date_field in {"plan_date", "diary_date", "ledger_date"}
 
     def _format_search_results(
         self, results: list[SearchItem], query: str, filters: dict[str, Any],
@@ -366,6 +415,10 @@ class SearchHandler:
             parts.append(f"状态={filters['status']}")
         if filters.get("category"):
             parts.append(f"分类={filters['category']}")
+        if filters.get("ledger_category"):
+            parts.append(f"分类={filters['ledger_category']}")
+        if filters.get("tags"):
+            parts.append(f"标签=#{filters['tags']}")
         if filters.get("transaction_type"):
             transaction_type = filters["transaction_type"]
             label = {"income": "收入", "expense": "支出", "transfer": "转账"}.get(transaction_type, transaction_type)

@@ -152,7 +152,7 @@ def _parse_ym_range(ym_str: str) -> tuple[datetime, datetime]:
 
 
 def _parse_time_range_core(
-    time_range: str, now: datetime | None = None, default: str = "today"
+    time_range: str, now: datetime | None = None, default: str = "today", strict: bool = False
 ) -> tuple[datetime, datetime]:
     """核心时间范围解析，返回 (start_dt, end_dt)。
 
@@ -165,6 +165,12 @@ def _parse_time_range_core(
 
     _sod = now.replace(hour=0, minute=0, second=0, microsecond=0)
     _eod = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    _week_start = _sod - timedelta(days=now.weekday())
+    _week_end = _week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+    _month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    _month_end = (_parse_ym_range(now.strftime("%Y-%m")))[1]
+    _year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    _year_end = now.replace(month=12, day=31, hour=23, minute=59, second=59, microsecond=0)
 
     # lastNd
     match = re.search(r"last(\d+)d", tr)
@@ -176,26 +182,12 @@ def _parse_time_range_core(
         "today": (_sod, _eod),
         "今天": (_sod, _eod),
         "tomorrow": ((_sod + timedelta(days=1)), (_eod + timedelta(days=1))),
-        "week": (_sod, now + timedelta(days=7)),
-        "本周": (
-            _sod - timedelta(days=now.weekday()),
-            _sod
-            - timedelta(days=now.weekday())
-            + timedelta(days=6, hours=23, minutes=59, seconds=59),
-        ),
-        "month": (_sod, now + timedelta(days=30)),
-        "本月": (
-            now.replace(day=1, hour=0, minute=0, second=0, microsecond=0),
-            (_parse_ym_range(now.strftime("%Y-%m")))[1],
-        ),
-        "year": (
-            now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0),
-            now.replace(month=12, day=31, hour=23, minute=59, second=59, microsecond=0),
-        ),
-        "今年": (
-            now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0),
-            now.replace(month=12, day=31, hour=23, minute=59, second=59, microsecond=0),
-        ),
+        "week": (_week_start, _week_end),
+        "本周": (_week_start, _week_end),
+        "month": (_month_start, _month_end),
+        "本月": (_month_start, _month_end),
+        "year": (_year_start, _year_end),
+        "今年": (_year_start, _year_end),
     }
     if tr in kw:
         return kw[tr]
@@ -231,38 +223,49 @@ def _parse_time_range_core(
         except (ValueError, AttributeError) as exc:
             logger.warning("Failed to parse time range '%s': %s", time_range, exc)
 
+    if strict:
+        raise ValueError(f"无法解析时间范围: {time_range}")
+
     # 默认
     return _sod, _eod
 
 
-def parse_event_time_range(time_range: str, now: datetime | None = None) -> tuple[str, str]:
+def parse_event_time_range(
+    time_range: str, now: datetime | None = None, strict: bool = False
+) -> tuple[str, str]:
     """解析事件时间范围，返回 ISO start/end"""
-    start, end = _parse_time_range_core(time_range, now)
+    start, end = _parse_time_range_core(time_range, now, strict=strict)
     return start.isoformat(), end.isoformat()
 
 
 def parse_search_date_range(
-    range_str: str, now: datetime | None = None
+    range_str: str, now: datetime | None = None, strict: bool = False
 ) -> tuple[str | None, str | None]:
     """解析搜索日期范围，返回 ISO start/end 或 (None, None)"""
     if not range_str or not range_str.strip():
         return None, None
     try:
-        start, end = _parse_time_range_core(range_str, now)
+        start, end = _parse_time_range_core(range_str, now, strict=strict)
         return start.isoformat(), end.isoformat()
     except Exception:
+        if strict:
+            raise
         return None, None
 
 
-def parse_diary_range(range_str: str, now: datetime | None = None) -> tuple[str, str]:
+def parse_diary_range(
+    range_str: str, now: datetime | None = None, strict: bool = False
+) -> tuple[str, str]:
     """解析日记范围，返回 YYYY-MM-DD start/end"""
     now = now or datetime.now()
     default = "today"
     # diary 特有默认：无匹配时返回最近30天
     tr = (range_str or default).strip().lower()
     if not re.search(r"last\d+d|today|week|month|year|今天|本周|本月|今年|\d{4}|\.\.", tr):
+        if strict:
+            raise ValueError(f"无法解析时间范围: {range_str}")
         return (now - timedelta(days=30)).strftime("%Y-%m-%d"), now.strftime("%Y-%m-%d")
-    start, end = _parse_time_range_core(range_str, now)
+    start, end = _parse_time_range_core(range_str, now, strict=strict)
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 

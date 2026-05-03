@@ -616,9 +616,11 @@ class LedgerHandler(DbOpsMixin):
                 show_extra = True
             elif part.startswith("page:"):
                 try:
-                    page_num = int(part.split(":")[1])
+                    page_num = int(part.split(":", 1)[1])
+                    if page_num < 1:
+                        raise ValueError
                 except (IndexError, ValueError):
-                    pass
+                    return {"status": "error", "message": f"❌ 无效页码: {part}"}
             elif part.startswith("type:"):
                 val = part[5:]
                 type_filter = _parse_ledger_type(val)
@@ -640,17 +642,20 @@ class LedgerHandler(DbOpsMixin):
                         amount_min = float(lo)
                         amount_max = float(hi)
                     except ValueError:
-                        pass
+                        return {"status": "error", "message": f"❌ 无效金额范围: {rng}"}
                 else:
                     try:
                         amount_min = float(rng)
                     except ValueError:
-                        pass
+                        return {"status": "error", "message": f"❌ 无效金额: {rng}"}
             else:
                 clean_parts.append(part)
         range_str = " ".join(clean_parts)
 
-        start_date, end_date, range_label = self._parse_date_range(range_str)
+        try:
+            start_date, end_date, range_label = self._parse_date_range(range_str)
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {str(exc)}"}
 
         items = cast(
             list[LedgerItem],
@@ -778,6 +783,10 @@ class LedgerHandler(DbOpsMixin):
             raise MissingRequiredFieldException("id")
 
         item_id = item_id.strip()
+        if error := self._single_token_error(
+            item_id, "❌ 账目详情只接受一个ID\n例如: /pendo ledger view abc12345"
+        ):
+            return error
         item, wrong_type = await self._db_get_typed_item_or_message(
             item_id, user_id, ItemType.LEDGER.value, "账目"
         )
@@ -1050,9 +1059,7 @@ class LedgerHandler(DbOpsMixin):
     def _parse_date_range(self, range_str: str) -> tuple[str, str, str]:
         """解析日期范围，返回 (start_date, end_date, label)。
 
-        委托 _parse_time_range_core 做实际计算，仅负责：
-        1. 关键字语义对齐（week→本周、month→本月，保证日历周/月而非滚动区间）
-        2. 生成人类可读标签
+        委托 _parse_time_range_core 做实际计算，仅负责生成账目列表的人类可读标签。
         """
         now = datetime.now()
         rs = (range_str or "").strip()
@@ -1079,10 +1086,7 @@ class LedgerHandler(DbOpsMixin):
         elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", rs):
             label = rs
         else:
-            label = f"{now.year}年{now.month}月"
+            raise ValueError(f"无法解析时间范围: {range_str}")
 
-        # 语义对齐：week/month 使用日历含义（本周/本月）而非滚动区间
-        normalized = {"week": "本周", "month": "本月"}.get(rl, rs or "本月")
-
-        start_dt, end_dt = _parse_time_range_core(normalized, now)
+        start_dt, end_dt = _parse_time_range_core(rs or "本月", now, strict=True)
         return start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"), label

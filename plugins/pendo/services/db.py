@@ -1169,8 +1169,14 @@ class Database:
                 keyword = sanitize_search_keyword(str(filters["keyword"] or ""))
                 if keyword:
                     like = f"%{keyword}%"
-                    where.append("(title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ?)")
-                    params.extend([like, like, like, like])
+                    where.append(
+                        """(
+                            title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ? OR
+                            ledger_category LIKE ? OR account_name LIKE ? OR counter_account_name LIKE ? OR
+                            merchant LIKE ? OR remark LIKE ? OR location LIKE ? OR notes LIKE ? OR weather LIKE ?
+                        )"""
+                    )
+                    params.extend([like] * 12)
             if "amount_min" in filters:
                 where.append(f"{self._LEDGER_AMOUNT_CENTS_EXPR} >= ?")
                 params.append(int(round(float(filters["amount_min"]) * 100)))
@@ -1307,8 +1313,8 @@ class Database:
             [item_id] + active_times,
         )
 
-    @staticmethod
     def _apply_filters(
+        self,
         where: list[str],
         params: list[Any],
         filters: dict[str, Any] | None,
@@ -1339,6 +1345,10 @@ class Database:
                 )
                 where.append(f"({account_column} = ? OR {counter_column} = ?)")
                 params.extend([filters["account_name"], filters["account_name"]])
+            if "tags" in filters:
+                tags_column = f"{column_prefix}tags" if column_prefix else "tags"
+                where.append(f"{tags_column} LIKE ?")
+                params.append(self.tag_filter_pattern(filters["tags"]))
 
             date_field = filters.get("date_field")
             if date_field:

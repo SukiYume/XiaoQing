@@ -7,22 +7,11 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from ...services.db import Database
+from ..utils import parse_iso_date
 
 
 def _task_dict(task) -> dict[str, Any]:
     return task.to_dict() if hasattr(task, "to_dict") else {}
-
-
-def _parse_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    text = str(value)
-    try:
-        if "T" in text:
-            return datetime.fromisoformat(text).date()
-        return datetime.fromisoformat(f"{text}T00:00:00").date()
-    except ValueError:
-        return None
 
 
 def _priority_value(task: dict[str, Any]) -> int:
@@ -47,7 +36,7 @@ def _task_plan_key(task: dict[str, Any]) -> str:
     plan = str(task.get("plan_date") or "").strip()
     if plan:
         return plan
-    deadline_day = _parse_date(task.get("deadline_at"))
+    deadline_day = parse_iso_date(task.get("deadline_at"))
     return deadline_day.strftime("%Y-%m-%d") if deadline_day else ""
 
 
@@ -85,7 +74,7 @@ def _load_all_tasks(db: Database, owner_id: str, batch_size: int = 200) -> list[
 
 
 def build_task_overview(db: Database, owner_id: str, today: str | None = None) -> dict[str, Any]:
-    today_day = _parse_date(today) or datetime.now().date()
+    today_day = parse_iso_date(today) or datetime.now().date()
     today_key = today_day.strftime("%Y-%m-%d")
     next_week_key = (today_day + timedelta(days=7)).strftime("%Y-%m-%d")
     tasks = _load_all_tasks(db=db, owner_id=owner_id)
@@ -122,13 +111,13 @@ def build_task_overview(db: Database, owner_id: str, today: str | None = None) -
     backlog_tasks.sort(key=_task_sort_key)
 
     done_recent = sorted(done, key=_done_sort_key, reverse=True)[:8]
-    done_today_count = sum(1 for task in done if _parse_date(task.get("completed_at") or task.get("updated_at")) == today_day)
+    done_today_count = sum(1 for task in done if parse_iso_date(task.get("completed_at") or task.get("updated_at")) == today_day)
 
     last_days = [today_day - timedelta(days=offset) for offset in range(6, -1, -1)]
     done_counter = Counter(
-        _parse_date(task.get("completed_at") or task.get("updated_at"))
+        parse_iso_date(task.get("completed_at") or task.get("updated_at"))
         for task in done
-        if _parse_date(task.get("completed_at") or task.get("updated_at")) is not None
+        if parse_iso_date(task.get("completed_at") or task.get("updated_at")) is not None
     )
     completion_bars = [
         {

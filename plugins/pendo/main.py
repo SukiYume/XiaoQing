@@ -634,6 +634,9 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
     web_handler = services["web_handler"]
 
     async def _export_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
+        if not args or not args.strip():
+            return success_result(_show_help("export"))
+
         result = await run_sync(exporter.export_markdown, user_id, args, {})
         if result.get("status") != "success":
             return result
@@ -679,7 +682,14 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         )
         return result
 
+    async def _search_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
+        if not args or not args.strip():
+            return success_result(_show_help("search"))
+        return await search_handler.search(user_id, args, ctx)
+
     async def _import_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
+        if args and args.strip().lower() in {"help", "h", "?"}:
+            return success_result(_show_help("import"))
         return success_result(
             "\n".join(
                 [
@@ -727,7 +737,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         "todo": _help_or_exec(task_handler.handle, "todo"),
         "note": _help_or_exec(note_handler.handle, "note"),
         "diary": _help_or_exec(diary_handler.handle, "diary"),
-        "search": search_handler.search,
+        "search": _search_cmd,
         "ledger": _help_or_exec(ledger_handler.handle, "ledger"),
         "export": _export_cmd,
         "import": _import_cmd,
@@ -772,7 +782,7 @@ HELP_MAP = {
         "  - 多节点事件会生成一个日程集合和多个可单独查看/编辑/删除的节点",
         "• /pendo event view <id> - 查看日程详情；集合ID显示整体，节点ID显示单个节点",
         "• /pendo event list [范围] [cat:分类] [#标签] - 查看日程",
-        "  - 范围: today, tomorrow, week, month, year, YYYY-MM-DD, YYYY-MM, last7d/last30d, start..end",
+        "  - 范围: today, tomorrow, week(本周), month(本月), year(今年), YYYY-MM-DD, YYYY-MM, last7d/last30d, start..end",
         "  - 例: /pendo event list week cat:工作",
         "  - 例: /pendo event list 2026-05-01..2026-05-07 #会议",
         "• /pendo event delete <id> - 删除单个日程/节点；传集合ID会删除整组",
@@ -807,8 +817,11 @@ HELP_MAP = {
         "  - 例: /pendo todo add 写项目周报 cat:工作 p:2 plan:2026-05-01 deadline:2026-05-01T18:00 #周报",
         "  - 例: /pendo todo add 交材料 remind:2026-05-01T09:00,2026-05-01T17:00",
         "• /pendo todo view <id> - 查看待办详情",
-        "• /pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类] [open|done|cancelled] [p:1-5] [all|page:n] - 查看待办",
+        "• /pendo todo list [范围|状态|分类|cat:分类|#标签] [open|done|cancelled] [p:1-5] [all|page:n] - 查看待办",
+        "  - 范围: today, tomorrow, week(本周), month(本月), year(今年), YYYY-MM-DD, YYYY-MM, last7d/last30d, start..end",
         "  - /pendo todo list today - 今日待办",
+        "  - /pendo todo list 2026-05-01 - 指定日期待办",
+        "  - /pendo todo list cat:工作 #周报 - 工作分类下的周报标签待办",
         "  - /pendo todo list 工作 done - 工作分类已完成",
         "  - /pendo todo list 工作 p:1 - 工作分类紧急待办",
         "  - /pendo todo list cancelled - 所有分类已取消",
@@ -820,7 +833,8 @@ HELP_MAP = {
         "• /pendo todo delete <id|cat:分类> - 删除待办",
         "  - 例: /pendo todo delete cat:临时",
         "• /pendo todo edit <id> <内容> [plan:/deadline:/remind:/cat:/p:/#标签] - 编辑待办",
-        "  - 例: /pendo todo edit abc12345 写项目周报 p:1 deadline:2026-05-01T17:00",
+        "  - 例: /pendo todo edit abc12345 标题改为写项目周报",
+        "  - 例: /pendo todo edit abc12345 deadline:2026-05-01T24:00",
     ],
     "note": [
         "📝 **笔记 (Note)**",
@@ -836,9 +850,11 @@ HELP_MAP = {
         "    cat:其他 #记录",
         "  - 例: /pendo note add 这条关联到日程 ref:80efbef6 cat:工作 #关联",
         "  - ref:条目ID 会保存为结构化 references，支持关联日程/待办/笔记/日记/账目",
-        "• /pendo note list [分类名|cat:分类] [#标签] [since:范围] [all|page:n] - 查看笔记",
+        "• /pendo note list [范围|since:范围] [分类名|cat:分类] [#标签] [all|page:n] - 查看笔记",
         "  - /pendo note list - 显示所有分类概览",
+        "  - 范围: today, week(本周), month(本月), year(今年), YYYY-MM, last7d/last30d, start..end",
         '  - /pendo note list 工作 - 查看"工作"分类(直接用分类名)',
+        "  - /pendo note list month cat:密钥 #rustdesk - 查看本月密钥分类下的 RustDesk 笔记",
         "  - /pendo note list cat:工作 #文章 since:last30d - 查看最近30天工作文章",
         '  - /pendo note list 工作 all - 显示"工作"分类全部笔记',
         '  - /pendo note list 工作 page:2 - 显示"工作"分类第2页',
@@ -867,9 +883,10 @@ HELP_MAP = {
         "  - 例: /pendo diary add 2026-05-01 今天跑步5公里 weather:晴 location:操场 mood:happy score:8 tags:运动,复盘 favorite:true",
         "• /pendo diary template [编号|名称] - 模板引导写日记",
         "  - 1.三件好事 2.今日总结 3.情绪记录",
-        "• /pendo diary list [范围] - 查看日记列表(默认本月)",
-        "  - 范围: today, tomorrow, week, month, year, YYYY-MM, last7d/last30d, start..end；可加 mood:happy",
+        "• /pendo diary list [范围] [mood:情绪] [cat:分类] [#标签] - 查看日记列表(默认本月)",
+        "  - 范围: today, tomorrow, week(本周), month(本月), year(今年), YYYY-MM, last7d/last30d, start..end",
         "  - 例: /pendo diary list 2026-05 mood:happy",
+        "  - 例: /pendo diary list 2026-05 cat:日记 #复盘",
         "• /pendo diary view [日期|ID] - 日期查看当天所有条目，ID查看单篇",
         "• /pendo diary delete <日期|ID> - 当天多篇时需按ID删除，避免误删",
         "  - 例: /pendo diary view 2026-05-01",
@@ -887,7 +904,7 @@ HELP_MAP = {
         "  - 例: /pendo ledger quick 5000 工资 cat:工资 in account:招行",
         "  - 例: /pendo ledger quick 1000 还款 transfer account:微信 to:招行 date:2026-05-01",
         "• /pendo ledger list [范围] [筛选] - 查看账目",
-        "  - 范围: today, week, month, year, YYYY-MM, last7d/last30d, start..end",
+        "  - 范围: today, week(本周), month(本月), year(今年), YYYY-MM, last7d/last30d, start..end",
         "  - 筛选: type:expense/income/transfer account:账户 to:账户 merchant:商户 cat:分类 amount:N或N..M ex all page:N",
         "  - 例: /pendo ledger list 2026-03 type:expense cat:餐饮 amount:20..100 ex",
         "  - 例: /pendo ledger list month account:微信 page:2",
@@ -901,14 +918,15 @@ HELP_MAP = {
     ],
     "search": [
         "🔎 **搜索 (Search)**",
-        "• /pendo search <关键词> - 全文搜索(标题/内容/备注/分类)",
-        "• 筛选: type=event/task/note/diary/ledger range=today/week/month/year/last7d/last30d/YYYY-MM",
+        "• /pendo search <关键词> [#标签] - 全文搜索(标题/内容/备注/分类)",
+        "• 筛选: type=event/task/note/diary/ledger range=today/week(本周)/month(本月)/year(今年)/last7d/last30d/YYYY-MM/start..end",
         "• 待办筛选: status=open/done/cancelled",
         "• 记账筛选: transaction_type=income/expense/transfer account=<账户> merchant=<商户>",
-        "• 通用筛选: category=<分类>",
+        "• 通用筛选: category=<分类> tag=<标签>；type=ledger 时 category 按账目分类筛选",
         "  - 例: /pendo search 组会 type=event range=last30d",
         "  - 例: /pendo search 午饭 type=ledger transaction_type=expense account=微信",
         "  - 例: /pendo search 周报 type=task status=open category=工作",
+        "  - 例: /pendo search 周报 #复盘",
     ],
     "reminder": [
         "⏰ **提醒操作**",
@@ -922,7 +940,7 @@ HELP_MAP = {
     "export": [
         "📤 **导出 (Export)**",
         "• /pendo export <文件名> [范围] [类型] - 导出 Markdown 并私聊发送文件",
-        "  - 范围: all, today, tomorrow, week, month, year, YYYY-MM, last7d/last30d, start..end",
+        "  - 范围: all, today, tomorrow, week(本周), month(本月), year(今年), YYYY, YYYY-MM, YYYY-MM-DD, last7d/last30d, start..end",
         "  - 类型: all, event, todo/task, note, ledger, diary，可用逗号组合",
         "  - 文件名会自动加 .md；含空格请加英文引号",
         "  - 例: /pendo export 我的档案",
@@ -988,6 +1006,30 @@ def _render_help_section(key: str) -> list[str]:
     return [f"━━ {title}", *body]
 
 
+def _show_help_overview() -> str:
+    return "\n".join(
+        [
+            str(HELP_MAP["header"]),
+            "",
+            "🧭 **可用命令**",
+            "• /pendo event   - 日程：添加、列表、详情、编辑、提醒",
+            "• /pendo todo    - 待办：添加、列表、完成、取消、编辑",
+            "• /pendo note    - 笔记：记录、列表、详情、追加、标签、关联",
+            "• /pendo diary   - 日记：写日记、模板、按日期查看",
+            "• /pendo ledger  - 记账：快速记账、列表、详情、汇总",
+            "• /pendo search  - 全局搜索",
+            "• /pendo export  - Markdown 导出",
+            "• /pendo import  - Web 导入入口说明",
+            "• /pendo settings - 设置管理",
+            "• /pendo web     - Web UI 和 Scriptable token",
+            "• /pendo confirm / snooze / undo - 提醒确认、延后和撤销",
+            "",
+            "💡 查看详细用法：`/pendo <命令>` 或 `/pendo help <命令>`",
+            "例: `/pendo event`、`/pendo todo`、`/pendo export`",
+        ]
+    )
+
+
 def _show_help(subcommand: str = "") -> str:
     """显示帮助信息
 
@@ -1025,27 +1067,7 @@ def _show_help(subcommand: str = "") -> str:
     if subcommand:
         return f"❌ 未知命令: {subcommand}\n\n使用 /pendo help 查看所有命令"
 
-    # 否则显示完整帮助
-    all_parts: list[str] = [
-        str(HELP_MAP["header"]),
-        "",
-        "🧭 **模块导航**",
-        "• 记录与安排: `event` `todo` `note` `diary` `ledger`",
-        "• 查询与操作: `search` `confirm` `snooze` `undo` `export` `import`",
-        "• 配置与界面: `settings` `web`",
-        "",
-        "💡 输入 `/pendo help <子命令>` 可查看对应模块帮助，例如 `/pendo help event`、`/pendo help reminder`",
-        "",
-    ]
-
-    for key in HELP_SECTION_ORDER:
-        rendered = _render_help_section(key)
-        if rendered:
-            all_parts.extend(rendered)
-        all_parts.append("")  # 空行分隔
-
-    all_parts.append("📎 例如: `/pendo event` `/pendo todo` `/pendo web`")
-    return "\n".join(all_parts)
+    return _show_help_overview()
 
 
 def _get_logger(context: PluginContextProtocol | None) -> logging.Logger:

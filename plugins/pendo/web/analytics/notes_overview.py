@@ -7,22 +7,11 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from ...services.db import Database
+from ..utils import parse_iso_date
 
 
 def _note_dict(note) -> dict[str, Any]:
     return note.to_dict() if hasattr(note, "to_dict") else {}
-
-
-def _parse_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    text = str(value)
-    try:
-        if "T" in text:
-            return datetime.fromisoformat(text).date()
-        return datetime.fromisoformat(f"{text}T00:00:00").date()
-    except ValueError:
-        return None
 
 
 def _load_all_notes(db: Database, owner_id: str, batch_size: int = 200) -> list[dict[str, Any]]:
@@ -42,7 +31,7 @@ def _load_all_notes(db: Database, owner_id: str, batch_size: int = 200) -> list[
 
 
 def _note_activity_day(note: dict[str, Any]) -> date | None:
-    return _parse_date(note.get("created_at") or note.get("updated_at"))
+    return parse_iso_date(note.get("created_at") or note.get("updated_at"))
 
 
 def _in_range(day: date | None, start_day: date | None, end_day: date | None) -> bool:
@@ -173,9 +162,9 @@ def build_notes_overview(
     category: str | None = None,
     tags: str | None = None,
 ) -> dict[str, Any]:
-    today_day = _parse_date(today) or datetime.now().date()
-    range_start = _parse_date(start_date)
-    range_end = _parse_date(end_date)
+    today_day = parse_iso_date(today) or datetime.now().date()
+    range_start = parse_iso_date(start_date)
+    range_end = parse_iso_date(end_date)
     effective_range_start, effective_range_end = _resolve_effective_range(range_start, range_end, today_day)
     all_notes = _load_all_notes(db=db, owner_id=owner_id)
     tag_query = str(tags or "").strip().lower()
@@ -208,7 +197,7 @@ def build_notes_overview(
             for tag in tags:
                 if tag:
                     tag_counter[str(tag)] += 1
-        created_day = _parse_date(note.get("created_at"))
+        created_day = parse_iso_date(note.get("created_at"))
         if created_day and created_day >= today_day - timedelta(days=6):
             week_new += 1
 

@@ -704,6 +704,68 @@ def test_database_get_items_filters_note_tags_exactly_and_keyword():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_items_list_keyword_matches_extended_fields_and_total_count():
+    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_items_keyword_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(str(temp_dir / "pendo.db"))
+    owner_id = "u-items-keyword"
+    items_module = _load_items_module()
+
+    try:
+        db.insert_item({
+            "id": "ledger_merchant",
+            "owner_id": owner_id,
+            "type": "ledger",
+            "title": "午饭",
+            "amount": 42,
+            "transaction_type": "expense",
+            "ledger_category": "餐饮",
+            "ledger_date": "2026-05-03",
+            "account_name": "微信",
+            "merchant": "窗口商户",
+            "remark": "楼下小店",
+            "created_at": "2026-05-03T10:00:00",
+            "updated_at": "2026-05-03T10:00:00",
+        })
+        db.insert_item({
+            "id": "event_location",
+            "owner_id": owner_id,
+            "type": "event",
+            "title": "项目会",
+            "category": "工作",
+            "location": "南楼会议室",
+            "notes": "季度复盘",
+            "start_time": "2026-05-03T09:00:00",
+            "end_time": "2026-05-03T10:00:00",
+            "created_at": "2026-05-03T09:00:00",
+            "updated_at": "2026-05-03T09:00:00",
+        })
+
+        ledger_result = items_module.list_items(
+            type="ledger",
+            keyword="窗口商户",
+            page=1,
+            page_size=10,
+            owner_id=owner_id,
+            db=db,
+        )
+        event_result = items_module.list_items(
+            type="event",
+            keyword="会议室",
+            page=1,
+            page_size=10,
+            owner_id=owner_id,
+            db=db,
+        )
+
+        assert ledger_result["data"]["total"] == 1
+        assert [item["id"] for item in ledger_result["data"]["items"]] == ["ledger_merchant"]
+        assert event_result["data"]["total"] == 1
+        assert [item["id"] for item in event_result["data"]["items"]] == ["event_location"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_database_migration_adds_note_reference_columns_to_old_items_table(tmp_path):
     db_path = tmp_path / "old_note_schema.db"
     conn = sqlite3.connect(db_path)
