@@ -4,6 +4,15 @@
 
 维护时把最新内容写在最上方。日期使用北京时间，格式为 `YYYY-MM-DD`。如果一组改动还没有提交，先放在“未发布”中；提交或发版后，再移动到对应日期下面。
 
+## 2026-05-03
+
+### Pendo Web 待办与账本界面修复
+
+- 修复 Pendo Web 待办概览中“今天与滞后”任务最多只返回 6 条的问题，让今天和已滞后的待办完整展示。
+- 调整待办列表页的展示方式，减少多层圆角容器嵌套，改用更扁平的分区和行式任务列表。
+- 优化 Pendo Web 账本页的快速记账和筛选范围表单布局，统一字段网格、标签和金额筛选输入框宽度。
+- 已执行 `pytest tests/plugins/test_pendo_web_items.py tests/plugins/test_pendo_web_tasks.py tests/plugins/test_pendo_web_widget.py -q` 验证相关 Web 回归覆盖。
+
 ## 2026-05-01 (v4.1.0)
 
 ### 文档体系整理
