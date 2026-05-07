@@ -861,10 +861,14 @@ async def _analyze_media_with_llm(
         "请把这张聊天图片分析成 JSON。"
         "只输出 JSON，不要额外解释。"
         '格式: {"kind":"image|emoji","description":"...","visible_text":"...","emotion_tags":["..."]}。'
-        "description 用简短中文概括图片或表情包内容，优先说出可参与聊天的重点，不要只描述界面、来源、时间或浏览量。"
-        "visible_text 摘录图中最关键的清晰文字；如果是新闻截图、聊天截图、梗图或长段文字图，要保留事件主干/笑点/槽点，不必逐字全抄。"
+        "description 只客观描述画面里看得到的元素：人物/物体/动作/构图/可见文字。"
+        "不要替读者下评价，禁用主观形容词，比如“搞笑/好笑/有趣/夸张/可爱/魔性/离谱/沙雕/绝绝子/经典”等；"
+        "也不要写“形成了……场景”“显得很……”这类总结句。"
+        "是否好笑、是否抽象由聊天双方自己判断，你只负责告诉他们看到了什么。"
+        "如果是梗图/截图但你认不出梗，就老实描述画面元素和可见文字，不要硬猜含义。"
+        "visible_text 摘录图中最关键的清晰文字；如果是新闻截图、聊天截图、梗图或长段文字图，要保留事件主干和原话，不必逐字全抄。"
         "如果它更像聊天表情包/梗图/贴纸，kind 填 emoji；普通照片、截图、插画填 image。"
-        "emotion_tags 只放 0 到 4 个简短中文情绪或语气标签。"
+        "emotion_tags 只放 0 到 4 个简短中文情绪或语气标签，标的是图中人物表现出的情绪，不是你对图的评价。"
         "不要输出泛化词，比如“图片”“表情包”“动画表情”“聊天表情包”。"
         "如果图里有清晰文字，description 和 visible_text 里至少要有一个包含这些文字的核心信息。"
     )
@@ -1060,6 +1064,27 @@ async def _analyze_media_with_llm(
                 )
                 return None
 
+            cultural_hint = ""
+            if _should_extract_cultural_hint(rendered, detail, runtime):
+                cultural_hint = await _extract_cultural_hint(
+                    rendered=rendered,
+                    detail=detail,
+                    resolved=resolved,
+                    context=context,
+                    runtime=runtime,
+                )
+                if cultural_hint:
+                    rendered = RenderedMedia(
+                        media_hash=rendered.media_hash,
+                        kind=rendered.kind,
+                        description=rendered.description,
+                        emotion_tags=rendered.emotion_tags,
+                        marker=rendered.marker,
+                        cached_path=rendered.cached_path,
+                        face_id=rendered.face_id,
+                        cultural_hint=cultural_hint,
+                    )
+
             _media_log(
                 context,
                 runtime,
@@ -1079,9 +1104,119 @@ async def _analyze_media_with_llm(
                     "refined_description": "",
                     "used_summary_fallback": used_summary_fallback,
                     "marker": rendered.marker,
+                    "cultural_hint": cultural_hint,
                     "quality": quality,
                 },
             )
             return rendered
 
     return None
+
+
+def _should_extract_cultural_hint(
+    rendered: RenderedMedia,
+    detail: MediaAnalysisDraft,
+    runtime,
+) -> bool:
+    cfg = _media_cfg(runtime)
+    if cfg is None or not bool(getattr(cfg, "enable_meme_cultural_hint", False)):
+        return False
+    if rendered.kind != "emoji":
+        return False
+    visible_text = str(getattr(detail, "visible_text", "") or "").strip()
+    description = str(rendered.description or "").strip()
+    return bool(visible_text) or "“" in description or '"' in description
+
+
+async def _extract_cultural_hint(
+    *,
+    rendered: RenderedMedia,
+    detail: MediaAnalysisDraft,
+    resolved: ResolvedMedia,
+    context,
+    runtime,
+) -> str:
+    cfg = _media_cfg(runtime)
+    if cfg is None:
+        return ""
+    timeout = max(1.0, float(getattr(cfg, "meme_cultural_hint_timeout_seconds", 8.0) or 8.0))
+
+    visible_text = str(getattr(detail, "visible_text", "") or "").strip()
+    description = str(rendered.description or "").strip()
+
+    payload = {
+        "description": description,
+        "visible_text": visible_text,
+        "emotion_tags": list(rendered.emotion_tags),
+    }
+    prompt = (
+        "下面是一张表情包/梗图的客观描述和文字。"
+        "如果你认得这个梗（中文互联网常见的谐音梗、引用梗、表情包模板、网络流行语等），"
+        "用一句不超过 24 字的中文说出梗的来源或常见用法。"
+        "不知道、不确定、需要更多上下文、内容只是普通画面就直接输出空字符串。"
+        '只输出 JSON：{"hint":"..."}。\n输入：'
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    messages = [
+        {"role": "system", "content": "你是中文网络梗解读器，只输出 JSON。"},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        output, used_secrets = await asyncio.wait_for(
+            _call_media_llm(
+                context=context,
+                runtime=runtime,
+                messages=messages,
+                temperature=0.2,
+                top_p=0.9,
+                max_tokens=80,
+            ),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        _media_log(
+            context,
+            runtime,
+            step="media.cultural_hint.timeout",
+            fields={
+                "media_hash": resolved.media_hash[:12],
+                "timeout_seconds": f"{timeout:.3f}",
+            },
+            level="warning",
+        )
+        return ""
+    except Exception as exc:
+        _media_log(
+            context,
+            runtime,
+            step="media.cultural_hint.fail",
+            fields={
+                "media_hash": resolved.media_hash[:12],
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+            level="warning",
+        )
+        return ""
+
+    data = parse_first_json_object(output) or {}
+    hint = str(data.get("hint", "") or "").strip()
+    if not hint:
+        return ""
+    if len(hint) > 60:
+        hint = hint[:60].rstrip() + "…"
+    refusal_tokens = ("不知道", "不确定", "无法", "无内容", "无梗", "需要更多")
+    if any(token in hint for token in refusal_tokens):
+        return ""
+    _media_log(
+        context,
+        runtime,
+        step="media.cultural_hint.ok",
+        fields={
+            "provider": used_secrets.get("_provider_name", ""),
+            "model": used_secrets.get("model", ""),
+            "media_hash": resolved.media_hash[:12],
+            "hint": hint,
+        },
+    )
+    return hint

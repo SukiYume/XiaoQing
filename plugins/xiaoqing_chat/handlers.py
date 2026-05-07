@@ -94,6 +94,46 @@ from .smalltalk_media_helpers import (
 from .smalltalk_models import _GeneratedSmalltalkTurn, _PreparedSmalltalkTurn, _ReplyEnvelope
 
 
+def _refresh_mood_state(runtime, state, chat_id: str) -> str:
+    """挑选/复用 personality state.
+
+    规则：
+    - 已有未过期 mood，且最近活跃过 → 直接沿用，不再随机重摇。
+    - 长时间静默（超过 state_force_refresh_after_idle_seconds）→ 视作"睡了一觉"，
+      强制走重新挑 state 的流程。
+    - 没有可用 mood → 按 state_probability 摇是否进入某个 state；
+      命中后随机一个时长（在 [min,max] 之间），写入 state 缓存。
+    """
+    cfg = getattr(runtime.cfg, "personality", None)
+    states = list(getattr(cfg, "states", []) or [])
+    if not states:
+        return ""
+
+    now = time.time()
+    last_observe = float(state.get_last_observe_ts(chat_id) or 0.0)
+    last_reply = float(state.get_last_reply_ts(chat_id) or 0.0)
+    last_active = max(last_observe, last_reply)
+    idle_threshold = max(0.0, float(getattr(cfg, "state_force_refresh_after_idle_seconds", 14400.0)))
+
+    current = state.get_mood_state(chat_id)
+    if current and idle_threshold > 0 and last_active and (now - last_active) > idle_threshold:
+        # 静默太久，强制让下面的逻辑走"重新决定"
+        current = ""
+
+    if current:
+        return current
+
+    if random.random() >= float(getattr(cfg, "state_probability", 0.30)):
+        return ""
+
+    new_mood = random.choice(states)
+    min_d = max(60.0, float(getattr(cfg, "state_min_duration_seconds", 7200.0)))
+    max_d = max(min_d, float(getattr(cfg, "state_max_duration_seconds", 21600.0)))
+    duration = random.uniform(min_d, max_d)
+    state.set_mood_state(chat_id, new_mood, duration_seconds=duration)
+    return new_mood
+
+
 _SENSITIVE_EXTERNAL_TEXT_RE = re.compile(
     r"(?:"
     r"登录\s*token|web\s*token|api[_-]?key|secret|set[_-]?secret|password|密码|authkey|"
@@ -773,17 +813,7 @@ async def _prepare_smalltalk_turn(
         _log_step(context, runtime, chat_id=chat_id, step="smalltalk.reflection.spawn", fields={})
 
     brain_chat_active = is_brain_chat_active(runtime, is_private, forced)
-    mood_text = state.get_mood_state(chat_id)
-    if mood_text:
-        if runtime.cfg.personality.states and random.random() < 0.10:
-            mood_text = random.choice(runtime.cfg.personality.states)
-            state.set_mood_state(chat_id, mood_text, duration_seconds=1800.0)
-    elif (
-        runtime.cfg.personality.states
-        and random.random() < runtime.cfg.personality.state_probability
-    ):
-        mood_text = random.choice(runtime.cfg.personality.states)
-        state.set_mood_state(chat_id, mood_text, duration_seconds=1800.0)
+    mood_text = _refresh_mood_state(runtime, state, chat_id)
 
     return _PreparedSmalltalkTurn(
         text=text,

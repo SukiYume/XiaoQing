@@ -24,6 +24,27 @@ class ResponsePostProcessConfig(BaseModel):
     enable_response_post_process: bool = True
     splitter: ResponseSplitterConfig = Field(default_factory=ResponseSplitterConfig)
 
+
+class HumanizeConfig(BaseModel):
+    """模拟"读消息+打字"的发送延迟，弱化 bot 秒回的机器味。
+
+    forced 路径（/xc 命令）默认跳过这套延迟，避免显式调用变慢。
+    """
+    enable_typing_delay: bool = True
+    apply_to_forced: bool = False
+    # 读消息：常数 + 用户输入字符数 * 系数
+    read_base_seconds: float = 0.4
+    read_per_char_seconds: float = 0.04
+    # 打字：bot 输出字符数 * 系数
+    type_per_char_seconds: float = 0.05
+    # 抖动比例：±jitter_ratio 之间的随机扰动
+    jitter_ratio: float = 0.25
+    # 整体延迟封顶
+    max_total_delay_seconds: float = 5.0
+    # 多条消息之间的额外停顿（每两条之间随机取值）
+    interbubble_min_seconds: float = 0.6
+    interbubble_max_seconds: float = 1.6
+
 class PersonalityConfig(BaseModel):
     polite_guardrail: bool = True
     identity: str = (
@@ -44,6 +65,11 @@ class PersonalityConfig(BaseModel):
         ]
     )
     state_probability: float = 0.30
+    # 选中一个 state 后，持续多久才考虑重摇。最小/最大之间随机取一个值。
+    state_min_duration_seconds: float = 7200.0   # 2h
+    state_max_duration_seconds: float = 21600.0  # 6h
+    # 距离上次活跃超过这个时间，认为"睡了一觉"，强制重新挑 state。
+    state_force_refresh_after_idle_seconds: float = 14400.0  # 4h
     reply_style: str = (
         "口语化、像真人、尽量简短、不太有条理，别输出多余前后缀。不要用括号/冒号。可以顺着对方的措辞接话，但别整句复读原话。"
     )
@@ -173,6 +199,9 @@ class ExpressionConfig(BaseModel):
     enable_expression_selector: bool = True
     max_injected: int = 5
     max_store: int = 200
+    # 学到的表达即使没人审核（checked=false），出现次数 >= 此阈值也允许注入。
+    # 设为 0 表示完全依赖人工审核（旧行为）。
+    auto_inject_min_count: int = 3
 
 class KnowledgeConfig(BaseModel):
     enable_knowledge: bool = False
@@ -193,6 +222,10 @@ class MediaConfig(BaseModel):
     vision_timeout_seconds: float = 20.0
     vision_max_retry: int = 1
     vision_retry_interval_seconds: float = 1.0
+    # 对识别为表情包/梗图、且含有清晰文字的图，做一次额外的 LLM 调用提取梗背景。
+    # 模型不知道时返回空，不强行猜。每张梗图额外一次 LLM 调用，量受到表情包出现频率限制。
+    enable_meme_cultural_hint: bool = True
+    meme_cultural_hint_timeout_seconds: float = 8.0
 
 class XiaoQingChatConfig(BaseModel):
     enable_smalltalk: bool = True
@@ -246,6 +279,7 @@ class XiaoQingChatConfig(BaseModel):
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
     postprocess: ResponsePostProcessConfig = Field(default_factory=ResponsePostProcessConfig)
+    humanize: HumanizeConfig = Field(default_factory=HumanizeConfig)
     endpoint_path: str = "/v1/chat/completions"
     debug: DebugConfig = Field(default_factory=DebugConfig)
 

@@ -3,6 +3,8 @@ from unittest.mock import MagicMock
 
 from plugins.xiaoqing_chat.config.config import (
     ExpressionConfig,
+    HumanizeConfig,
+    PersonalityConfig,
     ReflectionConfig,
     XiaoQingChatConfig,
 )
@@ -38,7 +40,12 @@ def test_expression_block_requires_checked_records_when_approval_required(tmp_pa
     state.bw_expr_store.load.return_value = [unchecked, checked]
     runtime = SimpleNamespace(
         cfg=SimpleNamespace(
-            expression=ExpressionConfig(enable_expression_selector=True, max_injected=5),
+            expression=ExpressionConfig(
+                enable_expression_selector=True,
+                max_injected=5,
+                # 关闭自动注入，回到旧的"必须 checked 才注入"行为
+                auto_inject_min_count=0,
+            ),
             reflection=ReflectionConfig(
                 enable_expression_reflection=False,
                 require_approval_for_injection=True,
@@ -50,6 +57,49 @@ def test_expression_block_requires_checked_records_when_approval_required(tmp_pa
 
     assert "短促地说一句我去" in block
     assert "好家伙" not in block
+
+
+def test_expression_block_auto_injects_unchecked_high_count_records(tmp_path):
+    low_count_unchecked = ExpressionRecord(
+        expression_id="low",
+        chat_id="g1",
+        situation="听到普通新鲜事时",
+        style="哦这样啊",
+        checked=False,
+        rejected=False,
+        count=2,
+        last_active_time=5.0,
+    )
+    high_count_unchecked = ExpressionRecord(
+        expression_id="high",
+        chat_id="g1",
+        situation="听到离谱事情时",
+        style="好家伙",
+        checked=False,
+        rejected=False,
+        count=10,
+        last_active_time=99.0,
+    )
+    state = SimpleNamespace(bw_expr_store=MagicMock())
+    state.bw_expr_store.load.return_value = [low_count_unchecked, high_count_unchecked]
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            expression=ExpressionConfig(
+                enable_expression_selector=True,
+                max_injected=5,
+                auto_inject_min_count=3,
+            ),
+            reflection=ReflectionConfig(
+                enable_expression_reflection=False,
+                require_approval_for_injection=True,
+            ),
+        )
+    )
+
+    block = _build_expression_block(runtime, state, tmp_path, "g1")
+
+    assert "好家伙" in block
+    assert "哦这样啊" not in block
 
 
 def test_expression_block_default_config_requires_approval_for_injection():
@@ -143,3 +193,90 @@ def test_expression_reflector_can_build_operator_review_action(tmp_path):
     assert sent == 1
     assert sent_actions[0]["action"] == "send_group_msg"
     assert sent_actions[0]["params"]["group_id"] == 456
+
+
+def test_humanize_typing_delay_scales_with_lengths_and_caps():
+    from plugins.xiaoqing_chat.smalltalk_execution import _compute_typing_delay
+
+    cfg = HumanizeConfig(
+        enable_typing_delay=True,
+        read_base_seconds=0.4,
+        read_per_char_seconds=0.04,
+        type_per_char_seconds=0.05,
+        jitter_ratio=0.0,
+        max_total_delay_seconds=5.0,
+    )
+    runtime = SimpleNamespace(cfg=SimpleNamespace(humanize=cfg))
+
+    short = _compute_typing_delay(runtime, input_text="嗨", output_text="嗨")
+    assert short > 0
+    long_in_short_out = _compute_typing_delay(
+        runtime, input_text="一" * 50, output_text=""
+    )
+    assert long_in_short_out > short
+
+    capped = _compute_typing_delay(runtime, input_text="x" * 5000, output_text="y" * 5000)
+    assert capped <= cfg.max_total_delay_seconds + 1e-6
+
+
+def test_humanize_typing_delay_disabled_when_flag_off():
+    from plugins.xiaoqing_chat.smalltalk_execution import _compute_typing_delay
+
+    cfg = HumanizeConfig(enable_typing_delay=False)
+    runtime = SimpleNamespace(cfg=SimpleNamespace(humanize=cfg))
+    assert _compute_typing_delay(runtime, input_text="abc", output_text="def") == 0.0
+
+
+def test_refresh_mood_state_reuses_active_mood_without_reroll():
+    import random
+    import time
+    from plugins.xiaoqing_chat.handlers import _refresh_mood_state
+
+    state = MagicMock()
+    state.get_mood_state.return_value = "现在心情不错"
+    # 最近一分钟有活动，远小于 idle threshold
+    state.get_last_observe_ts.return_value = time.time() - 30
+    state.get_last_reply_ts.return_value = time.time() - 60
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            personality=PersonalityConfig(
+                states=["现在心情不错", "刚吃完饭"],
+                state_probability=0.30,
+                state_force_refresh_after_idle_seconds=14400,
+            )
+        )
+    )
+
+    # 即使随机数极端，活跃 mood 应直接复用
+    random.seed(0)
+    mood = _refresh_mood_state(runtime, state, "g1")
+    assert mood == "现在心情不错"
+    state.set_mood_state.assert_not_called()
+
+
+def test_refresh_mood_state_resets_after_long_idle():
+    import time
+    from plugins.xiaoqing_chat.handlers import _refresh_mood_state
+
+    state = MagicMock()
+    state.get_mood_state.return_value = "现在心情不错"
+    # 上次活跃距今超过 4h
+    state.get_last_observe_ts.return_value = time.time() - 6 * 3600
+    state.get_last_reply_ts.return_value = 0.0
+
+    runtime = SimpleNamespace(
+        cfg=SimpleNamespace(
+            personality=PersonalityConfig(
+                states=["现在心情不错", "刚吃完饭"],
+                state_probability=1.0,  # 强制进入重摇分支
+                state_force_refresh_after_idle_seconds=14400,
+                state_min_duration_seconds=7200,
+                state_max_duration_seconds=21600,
+            )
+        )
+    )
+
+    mood = _refresh_mood_state(runtime, state, "g1")
+    assert mood in {"现在心情不错", "刚吃完饭"}
+    assert state.set_mood_state.called

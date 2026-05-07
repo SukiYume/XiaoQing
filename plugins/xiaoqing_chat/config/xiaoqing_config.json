@@ -106,7 +106,8 @@
         "enable_expression_learning": true,
         "enable_expression_selector": true,
         "max_injected": 5,
-        "max_store": 200
+        "max_store": 200,
+        "auto_inject_min_count": 3
     },
     "knowledge": {
         "enable_knowledge": false,
@@ -122,7 +123,9 @@
         "vision_provider": "",
         "vision_timeout_seconds": 20.0,
         "vision_max_retry": 1,
-        "vision_retry_interval_seconds": 1.0
+        "vision_retry_interval_seconds": 1.0,
+        "enable_meme_cultural_hint": true,
+        "meme_cultural_hint_timeout_seconds": 8.0
     },
     "personality": {
         "polite_guardrail": true,
@@ -131,12 +134,15 @@
             "是一个女大学生，喜欢上网聊天，会刷小红书和抖音，对美食和穿搭有自己的看法。",
             "是一个大二心理学生，最近在准备考试，偶尔会刷贴吧和知乎摸鱼。",
             "是一个赛博网友，最近很想吐槽人，看到什么都想接一嘴。",
-            "现在心情不错，比较放松，说话随意一些，容易被逗笑。",
+            "现在心情不错，比较放松，回复偏短，不刻意捧场。",
             "刚吃完饭有点犯困，回复比较简短，懒得打长句子。",
             "最近迷上了一部剧/动漫/游戏，脑子里全是相关的东西。",
             "是一个喜欢音乐的文艺青年，最近在反复听一张专辑。"
         ],
         "state_probability": 0.30,
+        "state_min_duration_seconds": 7200,
+        "state_max_duration_seconds": 21600,
+        "state_force_refresh_after_idle_seconds": 14400,
         "reply_style": "口语化、像真人、尽量简短、不太有条理，别输出多余前后缀。可以顺着对方的措辞接话，但别整句复读原话。"
     },
     "postprocess": {
@@ -146,6 +152,17 @@
             "max_length": 256,
             "max_sentence_num": 3
         }
+    },
+    "humanize": {
+        "enable_typing_delay": true,
+        "apply_to_forced": false,
+        "read_base_seconds": 0.4,
+        "read_per_char_seconds": 0.04,
+        "type_per_char_seconds": 0.05,
+        "jitter_ratio": 0.25,
+        "max_total_delay_seconds": 5.0,
+        "interbubble_min_seconds": 0.6,
+        "interbubble_max_seconds": 1.6
     },
     "debug": {
         "show_planner_prompt": false,
