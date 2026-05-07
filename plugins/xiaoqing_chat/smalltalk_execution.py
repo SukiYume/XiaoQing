@@ -26,6 +26,71 @@ def _fallback_idle_reply(runtime) -> str:
     return random.choice(candidates)
 
 
+def _humanize_cfg(runtime):
+    return getattr(getattr(runtime, "cfg", None), "humanize", None)
+
+
+def _jittered(value: float, ratio: float) -> float:
+    if ratio <= 0:
+        return value
+    factor = 1.0 + random.uniform(-ratio, ratio)
+    return max(0.0, value * factor)
+
+
+def _compute_typing_delay(runtime, *, input_text: str, output_text: str) -> float:
+    """读消息 + 打字的总延迟，单位秒。返回 0 表示禁用。"""
+    cfg = _humanize_cfg(runtime)
+    if cfg is None or not bool(getattr(cfg, "enable_typing_delay", False)):
+        return 0.0
+    read_base = float(getattr(cfg, "read_base_seconds", 0.4) or 0.0)
+    read_per = float(getattr(cfg, "read_per_char_seconds", 0.04) or 0.0)
+    type_per = float(getattr(cfg, "type_per_char_seconds", 0.05) or 0.0)
+    jitter = float(getattr(cfg, "jitter_ratio", 0.25) or 0.0)
+    cap = float(getattr(cfg, "max_total_delay_seconds", 5.0) or 0.0)
+    in_len = len(str(input_text or ""))
+    out_len = len(str(output_text or ""))
+    raw = (read_base + read_per * in_len) + (type_per * out_len)
+    raw = _jittered(raw, jitter)
+    if cap > 0:
+        raw = min(raw, cap)
+    return max(0.0, raw)
+
+
+def _compute_interbubble_delay(runtime) -> float:
+    cfg = _humanize_cfg(runtime)
+    if cfg is None or not bool(getattr(cfg, "enable_typing_delay", False)):
+        return 0.0
+    lo = max(0.0, float(getattr(cfg, "interbubble_min_seconds", 0.6) or 0.0))
+    hi = max(lo, float(getattr(cfg, "interbubble_max_seconds", 1.6) or lo))
+    if hi <= 0:
+        return 0.0
+    return random.uniform(lo, hi)
+
+
+def _humanize_apply_to_forced(runtime) -> bool:
+    cfg = _humanize_cfg(runtime)
+    if cfg is None:
+        return False
+    return bool(getattr(cfg, "apply_to_forced", False))
+
+
+def _batch_text_length(batch: Any) -> int:
+    """估算一批 segment 的文本字符数，用于 inter-bubble 节奏。"""
+    if isinstance(batch, dict):
+        batch = [batch]
+    total = 0
+    if not isinstance(batch, (list, tuple)):
+        return 0
+    for seg in batch:
+        if not isinstance(seg, dict):
+            continue
+        data = seg.get("data") or {}
+        text = data.get("text")
+        if isinstance(text, str):
+            total += len(text)
+    return total
+
+
 async def generate_smalltalk_turn_impl(
     prepared,
     event: dict[str, Any],
@@ -499,6 +564,23 @@ async def finalize_smalltalk_turn_impl(
         name=f"reply_media_used:{chat_id}",
     )
 
+    apply_humanize = (not prepared.forced) or _humanize_apply_to_forced(runtime)
+    if apply_humanize and outbound_batches:
+        delay = _compute_typing_delay(
+            runtime,
+            input_text=prepared.text,
+            output_text=display_reply_text(generated),
+        )
+        if delay > 0:
+            log_step(
+                context,
+                runtime,
+                chat_id=chat_id,
+                step="smalltalk.humanize.delay",
+                fields={"phase": "pre_send", "delay_s": round(delay, 3)},
+            )
+            await asyncio.sleep(delay)
+
     if len(outbound_batches) > 1:
         user_id = event.get("user_id")
         group_id = event.get("group_id")
@@ -506,6 +588,17 @@ async def finalize_smalltalk_turn_impl(
             action = build_action(batch, user_id, group_id)
             if action:
                 await context.send_action(action)
+            if apply_humanize:
+                gap = _compute_interbubble_delay(runtime)
+                # 按这一批的文本长度再加一个轻量打字停顿（封顶 1.2s）
+                batch_chars = _batch_text_length(batch)
+                if batch_chars:
+                    cfg = _humanize_cfg(runtime)
+                    type_per = float(getattr(cfg, "type_per_char_seconds", 0.05) or 0.0) if cfg else 0.0
+                    extra = min(1.2, type_per * batch_chars * 0.6)
+                    gap += extra
+                if gap > 0:
+                    await asyncio.sleep(gap)
         return outbound_batches[-1]
 
     return outbound_batches[0] if outbound_batches else []

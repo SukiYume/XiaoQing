@@ -137,6 +137,7 @@ def _build_expression_block(runtime: _ChatRuntime, state, data_dir, chat_id: str
     state.bw_expr_store.bind(data_dir)
     expr_items = state.bw_expr_store.load()
     candidates = []
+    auto_min = max(0, int(getattr(runtime.cfg.expression, "auto_inject_min_count", 0)))
     for ex in expr_items:
         if ex.rejected:
             continue
@@ -148,7 +149,9 @@ def _build_expression_block(runtime: _ChatRuntime, state, data_dir, chat_id: str
             or getattr(reflection_cfg, "require_approval_for_injection", True)
         )
         if require_checked and not ex.checked:
-            continue
+            # auto_inject_min_count 阈值：count 足够高时跳过审核要求
+            if auto_min <= 0 or int(getattr(ex, "count", 0) or 0) < auto_min:
+                continue
         candidates.append(ex)
     candidates.sort(key=lambda x: (-x.count, -x.last_active_time))
     max_inj = max(0, int(runtime.cfg.expression.max_injected or EXPRESSION_MAX_INJ_DEFAULT))
