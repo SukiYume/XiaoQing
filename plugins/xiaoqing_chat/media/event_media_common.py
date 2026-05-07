@@ -75,7 +75,7 @@ _SOURCE_QUERY_HINTS = (
     "cache=",
     "uuid=",
 )
-_MEDIA_ANALYSIS_PROMPT_VERSION = 3
+_MEDIA_ANALYSIS_PROMPT_VERSION = 5
 _RENDER_CACHE_LOCKS: dict[str, threading.RLock] = {}
 _RENDER_CACHE_LOCKS_GUARD = threading.Lock()
 _MEDIA_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10, sock_read=15)
@@ -104,6 +104,9 @@ class RenderedMedia:
     marker: str
     cached_path: Path | None = None
     face_id: str = ""
+    # 二次分析得到的梗背景/语境说明；不知道就为空字符串，
+    # 与 description 分开存放，便于将来重生成 marker。
+    cultural_hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,7 @@ class MediaAnalysisDraft:
     emotion_tags: tuple[str, ...]
     raw_output: str = ""
     parsed_json: bool = False
+    cultural_hint: str = ""
 
 
 def _media_cfg(runtime) -> Any:
@@ -221,6 +225,7 @@ def write_render_cache_entry(
         "analysis_source": normalized_source,
         "analysis_quality": str(quality or "").strip(),
         "analysis_prompt_version": int(prompt_version or 0),
+        "cultural_hint": str(getattr(rendered, "cultural_hint", "") or "").strip(),
     }
     with _render_cache_lock(data_dir):
         cache = _load_render_cache(data_dir)
@@ -469,27 +474,45 @@ def _build_marker(kind: str, description: str, emotion_tags: tuple[str, ...]) ->
 
 def _build_context_marker(rendered: RenderedMedia) -> str:
     marker = rendered.marker.strip()
+    cultural_hint = str(getattr(rendered, "cultural_hint", "") or "").strip()
     if rendered.kind != "emoji" or not marker.startswith("[表情包："):
-        return marker
+        return _append_cultural_hint(marker, cultural_hint)
 
     description = rendered.description.strip()
     if not description or _is_generic_media_label(description):
-        return marker
+        return _append_cultural_hint(marker, cultural_hint)
 
     label = "，".join(rendered.emotion_tags[:2]).strip()
     if not label:
-        return marker
+        return _append_cultural_hint(marker, cultural_hint)
 
     clean_desc, visible_text = split_emoji_visible_text(description)
     if visible_text:
-        return f'[表情包：{label}；写着“{visible_text}”]'
+        return _append_cultural_hint(
+            f'[表情包：{label}；写着“{visible_text}”]', cultural_hint
+        )
 
     normalized_label = _normalize_media_label(label)
     normalized_description = _normalize_media_label(clean_desc)
     if not normalized_description or normalized_description == normalized_label:
-        return marker
+        return _append_cultural_hint(marker, cultural_hint)
 
-    return f"[表情包：{label}；内容：{clean_desc}]"
+    return _append_cultural_hint(f"[表情包：{label}；内容：{clean_desc}]", cultural_hint)
+
+
+def _append_cultural_hint(marker: str, cultural_hint: str) -> str:
+    base = str(marker or "").strip()
+    hint = str(cultural_hint or "").strip()
+    if not base or not hint:
+        return base
+    if not (base.startswith("[") and base.endswith("]")):
+        return base
+    inner = base[1:-1].strip()
+    if not inner:
+        return base
+    if "梗背景" in inner:
+        return base
+    return f"[{inner}；梗背景：{hint}]"
 
 
 def _normalize_media_label(value: str) -> str:
@@ -641,6 +664,7 @@ def _rendered_media_from_cache(cached: dict[str, Any], *, resolved: ResolvedMedi
     emotion_tags = _normalize_emotion_tags(cached.get("emotion_tags"))
     marker = str(cached.get("marker", "") or "").strip() or _build_marker(kind, description, emotion_tags)
     face_id = str(cached.get("face_id", "") or "").strip()
+    cultural_hint = str(cached.get("cultural_hint", "") or "").strip()
     return RenderedMedia(
         media_hash=resolved.media_hash,
         kind=kind,
@@ -649,6 +673,7 @@ def _rendered_media_from_cache(cached: dict[str, Any], *, resolved: ResolvedMedi
         marker=marker,
         cached_path=resolved.cached_path,
         face_id=face_id,
+        cultural_hint=cultural_hint,
     )
 
 

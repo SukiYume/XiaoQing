@@ -55,6 +55,25 @@ def _normalize_text(s: str) -> str:
     return t
 
 
+_FILLER_OPENER_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("哈哈", re.compile(r"^哈哈+")),
+    ("笑死", re.compile(r"^笑死(我了|了|啦)?")),
+    ("笑哭", re.compile(r"^笑哭(了|啦)?")),
+    ("啊这", re.compile(r"^啊这")),
+    ("草", re.compile(r"^草+(?![木莓案])")),
+)
+
+
+def _filler_opener_key(text: str) -> str:
+    head = (text or "").lstrip().lstrip("「『\"'“‘([【")
+    if not head:
+        return ""
+    for key, pattern in _FILLER_OPENER_PATTERNS:
+        if pattern.match(head):
+            return key
+    return ""
+
+
 def _heuristic_check(
     *,
     reply: str,
@@ -79,6 +98,23 @@ def _heuristic_check(
             sim = difflib.SequenceMatcher(None, r, last).ratio()
             if sim >= float(similarity_threshold):
                 return ReplyCheckResult(False, f"回复与之前机器人消息高度相似({sim:.2f})", True)
+
+    new_opener = _filler_opener_key(r)
+    if new_opener:
+        recent_openers = [_filler_opener_key(_normalize_text(prev)) for prev in bot_msgs[:3]]
+        same_count = sum(1 for k in recent_openers if k == new_opener)
+        if same_count >= 1 and len(recent_openers) >= 1 and recent_openers[0] == new_opener:
+            return ReplyCheckResult(
+                False,
+                f"开头“{new_opener}”刚刚已经用过，换一个开头或直接进话题",
+                False,
+            )
+        if same_count >= 2:
+            return ReplyCheckResult(
+                False,
+                f"近几条都以“{new_opener}”开头，换一个开头",
+                False,
+            )
 
     in_row = 0
     for msg in reversed(history[-40:]):

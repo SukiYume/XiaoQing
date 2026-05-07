@@ -40,6 +40,92 @@ class TestHeuristicCheckRepeatedQuestion:
         assert result.suitable is False
 
 
+class TestFillerOpenerDiversity:
+    def test_back_to_back_haha_opener_rejected(self):
+        history = [
+            _msg("user", "随便聊聊", name="Alice"),
+            _msg("assistant", "哈哈这图也太好笑了", name="小青"),
+            _msg("user", "再来一张", name="Alice"),
+        ]
+        result = _heuristic_check(
+            reply="哈哈哈又来一张",
+            history=history,
+            bot_name="小青",
+            max_repeat_compare=2,
+            similarity_threshold=0.9,
+            max_assistant_in_row=3,
+        )
+        assert result is not None
+        assert result.suitable is False
+        assert result.need_replan is False
+        assert "哈哈" in result.reason
+
+    def test_xiaosi_opener_repeat_rejected(self):
+        history = [
+            _msg("user", "随便聊聊", name="Alice"),
+            _msg("assistant", "笑死，怎么这样", name="小青"),
+            _msg("user", "再说一句", name="Alice"),
+        ]
+        result = _heuristic_check(
+            reply="笑死我了",
+            history=history,
+            bot_name="小青",
+            max_repeat_compare=2,
+            similarity_threshold=0.9,
+            max_assistant_in_row=3,
+        )
+        assert result is not None
+        assert result.suitable is False
+
+    def test_different_opener_passes(self):
+        history = [
+            _msg("user", "随便聊聊", name="Alice"),
+            _msg("assistant", "哈哈这图也太好笑了", name="小青"),
+            _msg("user", "再来一张", name="Alice"),
+        ]
+        result = _heuristic_check(
+            reply="嗯，那这张也挺有意思",
+            history=history,
+            bot_name="小青",
+            max_repeat_compare=2,
+            similarity_threshold=0.9,
+            max_assistant_in_row=3,
+        )
+        assert result is None
+
+    def test_filler_opener_after_normal_replies_allowed(self):
+        history = [
+            _msg("user", "随便聊聊", name="Alice"),
+            _msg("assistant", "嗯还行吧", name="小青"),
+            _msg("user", "看这个", name="Alice"),
+        ]
+        result = _heuristic_check(
+            reply="哈哈这个有点意思",
+            history=history,
+            bot_name="小青",
+            max_repeat_compare=2,
+            similarity_threshold=0.9,
+            max_assistant_in_row=3,
+        )
+        assert result is None
+
+    def test_cao_does_not_match_caomu(self):
+        history = [
+            _msg("user", "随便聊聊", name="Alice"),
+            _msg("assistant", "草莓不错", name="小青"),
+            _msg("user", "嗯", name="Alice"),
+        ]
+        result = _heuristic_check(
+            reply="草莓蛋糕也行",
+            history=history,
+            bot_name="小青",
+            max_repeat_compare=2,
+            similarity_threshold=0.9,
+            max_assistant_in_row=3,
+        )
+        assert result is None
+
+
 @pytest.mark.asyncio
 async def test_handle_smalltalk_recovers_from_need_replan_rejection_by_retrying_flow(tmp_path):
     from plugins.xiaoqing_chat.handlers import handle_smalltalk
