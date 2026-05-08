@@ -303,7 +303,7 @@ python main.py
 Pendo Web 由 `plugins/pendo/web/server.py` 启动，默认地址如下。
 
 ```text
-http://127.0.0.1:8765
+http://127.0.0.1:12001
 ```
 
 常用命令如下。
@@ -320,7 +320,7 @@ http://127.0.0.1:8765
 
 ```powershell
 $env:PENDO_WEB_HOST="127.0.0.1"
-$env:PENDO_WEB_PORT="8766"
+$env:PENDO_WEB_PORT="12003"
 python main.py
 ```
 
