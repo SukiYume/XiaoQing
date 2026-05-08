@@ -106,6 +106,15 @@ XiaoQing 使用两个 JSON 配置文件：
 
 ### 通信配置
 
+默认本地端口布局如下：
+
+| 端口 | 服务 | 方向 | 配置项 |
+|------|------|------|--------|
+| `11000` | OneBot WebSocket | XiaoQing 主动连接 NapCat/OneBot | `onebot_ws_uri` |
+| `11001` | OneBot HTTP API | XiaoQing 调用 NapCat/OneBot | `onebot_http_base` |
+| `12000` | XiaoQing Inbound HTTP/WS | NapCat/OneBot 推送到 XiaoQing | `inbound_http_base` / `inbound_ws_uri` |
+| `12001` | Pendo Web 控制台 | 浏览器访问 Pendo | `PendoConfig.WEB_PORT` / `PENDO_WEB_PORT` |
+
 #### enable_ws_client
 - **类型**：`boolean`
 - **默认**：`false`
@@ -569,14 +578,14 @@ pendo Web UI 使用 JWT Token 认证，无需手动配置密码。Token 由以�
 ```text
 # PowerShell
 $env:PENDO_WEB_HOST="127.0.0.1"
-$env:PENDO_WEB_PORT="8765"
+$env:PENDO_WEB_PORT="12001"
 
 # bash
 PENDO_WEB_HOST=127.0.0.1
-PENDO_WEB_PORT=8765
+PENDO_WEB_PORT=12001
 ```
 
-Windows 上遇到 `WinError 10013` 时，常见原因是系统拒绝绑定端口。此时优先换一个端口，例如 `PENDO_WEB_PORT=8766`。
+Windows 上遇到 `WinError 10013` 时，常见原因是系统拒绝绑定端口。此时优先换一个端口，例如 `PENDO_WEB_PORT=12003`。
 
 用户偏好（时区、简报时间、日记提醒等）通过 `/pendo settings` 命令在运行时修改，存储于数据库，无需修改配置文件。
 
@@ -878,18 +887,18 @@ tail -f logs/xiaoqing.log
 ### 直接访问（默认）
 
 ```text
-/pendo web start           # 启动，默认 127.0.0.1:8765
+/pendo web start           # 启动，默认 127.0.0.1:12001
 
 # 如需改端口，在启动主进程前设置环境变量
 # PowerShell
-$env:PENDO_WEB_PORT="8766"
+$env:PENDO_WEB_PORT="12003"
 python main.py
 
 # bash
-PENDO_WEB_PORT=8766 python main.py
+PENDO_WEB_PORT=12003 python main.py
 ```
 
-访问 `http://127.0.0.1:8765`（或你自定义的新端口），使用 `/pendo web token` 获取的 Token 登录。
+访问 `http://127.0.0.1:12001`（或你自定义的新端口），使用 `/pendo web token` 获取的 Token 登录。
 
 Web 控制台包含总览、日程、待办、账本、笔记、日记、搜索、统计、设置和迁移页面。迁移页面负责 `.pendo.zip` Bundle 的预览、导出、导入、冲突策略和审计日志；聊天端 `/pendo export` 只导出 Markdown 档案。
 
@@ -915,7 +924,7 @@ location = /pendo {
 }
 
 location /pendo/ {
-    proxy_pass http://127.0.0.1:8765/;
+    proxy_pass http://127.0.0.1:12001/;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -924,7 +933,7 @@ location /pendo/ {
 ```
 
 **注意事项**
-- `proxy_pass http://127.0.0.1:8765/;` 会把 `/pendo/...` 转成后端根路径 `/...`，因此浏览器里的 `/pendo/api/...` 会自动映射到后端的 `/api/...`
+- `proxy_pass http://127.0.0.1:12001/;` 会把 `/pendo/...` 转成后端根路径 `/...`，因此浏览器里的 `/pendo/api/...` 会自动映射到后端的 `/api/...`
 - pendo 后端真实 API 前缀是 `/api/`，`/pendo/api/` 由代理路径映射产生
 - 环境变量 `PENDO_WEB_TOKEN_SECRET` 可用于在多实例/重启场景下保持 Token 签名密钥稳定
 
