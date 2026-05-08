@@ -327,15 +327,15 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 
 ```
 你: /pendo web start
-机器人: ✓ Web 控制台已启动，访问 http://127.0.0.1:8765
+机器人: ✓ Web 控制台已启动，访问 http://127.0.0.1:12001
 
 你: /pendo web status
-机器人: 运行中 | 地址：http://127.0.0.1:8765
+机器人: 运行中 | 地址：http://127.0.0.1:12001
 ```
 
 打开浏览器访问后，先执行 `/pendo web token` 获取登录令牌，再将令牌粘贴到登录页即可。iPhone Scriptable 小组件使用 `/pendo web widget-token` 生成只读 token。
 
-Windows 上遇到端口绑定失败，且 `netstat -ano` 看不到 `8765` 被占用时，优先尝试在启动前设置 `$env:PENDO_WEB_PORT="8766"` 后重启主进程。
+Windows 上遇到端口绑定失败，且 `netstat -ano` 看不到默认端口被占用时，优先尝试在启动前设置 `$env:PENDO_WEB_PORT="12003"` 后重启主进程。
 
 如需使用 nginx 反向代理部署在子路径（如 `/pendo`），参见 [06-configuration.md](06-configuration.md) 中的 nginx 配置示例。
 
@@ -451,8 +451,8 @@ XiaoQing 支持两种闲聊模式。
 更换端口。
 ```json
 {
-  "inbound_http_base": "http://127.0.0.1:12001",
-  "inbound_ws_uri": "ws://127.0.0.1:12001/ws"
+  "inbound_http_base": "http://127.0.0.1:12002",
+  "inbound_ws_uri": "ws://127.0.0.1:12002/ws"
 }
 ```
 

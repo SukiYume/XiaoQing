@@ -292,7 +292,7 @@ Pendo 的长期文档入口是 `plugins/pendo/README.md` 和 `plugins/pendo/ARCH
 | `/pendo web stop` | 停止 Web 服务 |
 | `/pendo web status` | 查看运行状态和访问地址 |
 
-> pendo 插件初始化时会尝试自动启动 Web 服务；如果启动失败，仍可用 `/pendo web start` 手动重试。默认监听 `127.0.0.1:8765`，可通过环境变量 `PENDO_WEB_HOST` / `PENDO_WEB_PORT` 调整。
+> pendo 插件初始化时会尝试自动启动 Web 服务；如果启动失败，仍可用 `/pendo web start` 手动重试。默认监听 `127.0.0.1:12001`，可通过环境变量 `PENDO_WEB_HOST` / `PENDO_WEB_PORT` 调整。
 
 Web 控制台提供以下页面：
 
@@ -446,16 +446,16 @@ Web 控制台提供以下页面：
 ```
 /pendo web token                             # 获取浏览器登录令牌
 /pendo web widget-token                      # 获取 Scriptable 小组件令牌
-/pendo web start                             # 启动 Web 服务（默认端口 8765）
+/pendo web start                             # 启动 Web 服务（默认端口 12001）
 /pendo web status                            # 查看访问地址
 /pendo web stop                              # 停止服务
 ```
 
-启动后默认通过 `http://127.0.0.1:8765` 访问。反向代理部署时，也可以通过自己的外网地址访问。浏览器登录用 `/pendo web token`，iPhone Scriptable 小组件用 `/pendo web widget-token`。
+启动后默认通过 `http://127.0.0.1:12001` 访问。反向代理部署时，也可以通过自己的外网地址访问。浏览器登录用 `/pendo web token`，iPhone Scriptable 小组件用 `/pendo web widget-token`。
 
 Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚本仓库版本只保留 `BASE_URL` 和 `TOKEN` 占位值，导入 Scriptable 后需要替换成你自己的 Pendo Web 地址和 widget token。它可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏，并支持 `small` / `medium` / `large` 三种尺寸。
 
-如果在 Windows 上默认 `8765` 端口启动失败，但 `netstat -ano` 看不到进程占用，通常是系统拒绝绑定该端口。优先改 `PENDO_WEB_PORT`，而不是继续排查“哪个进程占了它”。
+如果在 Windows 上默认端口启动失败，但 `netstat -ano` 看不到进程占用，通常是系统拒绝绑定该端口。优先改 `PENDO_WEB_PORT`，而不是继续排查“哪个进程占了它”。
 
 公开 demo 会话默认关闭；只有在显式设置 `PENDO_WEB_DEMO_ENABLED=1` 时才会开放临时演示空间。
 

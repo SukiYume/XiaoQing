@@ -142,17 +142,17 @@ Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程�
 /pendo web widget-token
 ```
 
-默认监听 `http://127.0.0.1:8765`。可在启动主进程前设置：
+默认监听 `http://127.0.0.1:12001`。可在启动主进程前设置：
 
 ```text
 # PowerShell
 $env:PENDO_WEB_HOST="127.0.0.1"
-$env:PENDO_WEB_PORT="8766"
+$env:PENDO_WEB_PORT="12003"
 $env:PENDO_WEB_DEMO_ENABLED="1"
 python main.py
 
 # bash
-PENDO_WEB_HOST=127.0.0.1 PENDO_WEB_PORT=8766 python main.py
+PENDO_WEB_HOST=127.0.0.1 PENDO_WEB_PORT=12003 python main.py
 ```
 
 Token 登录不需要账号密码。执行 `/pendo web token` 后，把收到的 token 粘贴到登录页即可。`PENDO_WEB_TOKEN_SECRET` 可用于保持多实例或重启后的签名密钥稳定。
@@ -308,7 +308,7 @@ pip install -r requirements.txt
 
 1. 先执行 `/pendo web status`。
 2. 确认环境安装了 `fastapi`、`uvicorn`、`PyJWT`、`passlib[bcrypt]`。
-3. Windows 上如果 `8765` 绑定失败且 `netstat -ano` 看不到占用，优先换 `PENDO_WEB_PORT`。
+3. Windows 上如果默认端口绑定失败且 `netstat -ano` 看不到占用，优先换 `PENDO_WEB_PORT`。
 4. 登录前先执行 `/pendo web token` 获取有效 token。
 
 **提醒没有收到**

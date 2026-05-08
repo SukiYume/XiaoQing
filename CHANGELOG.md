@@ -4,6 +4,15 @@
 
 维护时把最新内容写在最上方。日期使用北京时间，格式为 `YYYY-MM-DD`。如果一组改动还没有提交，先放在“未发布”中；提交或发版后，再移动到对应日期下面。
 
+## 2026-05-08
+
+### Pendo Web 端口整理
+
+- 将 Pendo Web 默认端口从 `8765` 调整为 `12001`，避开 Windows TCP excluded port range 导致的 `WinError 10013` 绑定失败。
+- 统一本地端口说明：OneBot/NapCat 保持 `11000`/`11001`，XiaoQing inbound 使用 `12000`，Pendo Web 使用相邻的 `12001`，备用示例使用 `12002`/`12003`。
+- 更新 README、Pendo 文档、配置文档、Scriptable 小组件说明、nginx 反向代理示例和 Pendo 测试说明中的默认地址。
+- 已在生产 Windows 主机上验证 `127.0.0.1:12001` 和 `127.0.0.1:12003` 可绑定；已执行 `pytest tests/test_config.py tests/test_server.py tests/plugins/test_pendo.py tests/plugins/test_pendo_web_widget.py` 验证相关配置、inbound server 和 Pendo 回归覆盖。
+
 ## 2026-05-07
 
 ### xiaoqing_chat 拟人对话自然度改进

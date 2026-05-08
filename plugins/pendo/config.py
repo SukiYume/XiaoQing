@@ -92,7 +92,7 @@ class PendoConfig:
     # Web UI
     WEB_ENABLED = True
     WEB_HOST = "127.0.0.1"
-    WEB_PORT = 8765
+    WEB_PORT = 12001
     WEB_TOKEN_EXPIRE_HOURS = 24
     WEB_WIDGET_TOKEN_EXPIRE_HOURS = 24 * 180
     WEB_DEMO_ENABLED = False

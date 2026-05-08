@@ -35,7 +35,7 @@ const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
 仓库中的脚本默认只保留占位值，不包含任何真实地址或 token。
 `BASE_URL` 应改成你自己的 Pendo Web 地址，例如：
 
-- `http://127.0.0.1:8765`
+- `http://127.0.0.1:12001`
 - `https://example.com/pendo`
 
 ## 当前摘要行为
@@ -61,7 +61,7 @@ const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
    - `notes`
    - `auto`
 
-Windows 部署下默认 `8765` 端口启动失败时，可以先改服务端环境变量 `PENDO_WEB_PORT`，再把 `BASE_URL` 同步成新的端口。
+Windows 部署下默认端口启动失败时，可以先改服务端环境变量 `PENDO_WEB_PORT`，再把 `BASE_URL` 同步成新的端口。
 
 ## 交互说明
 
