@@ -10,7 +10,7 @@ XiaoQing 是一个基于 **Python 异步**（asyncio）和 **OneBot 协议** 的
 它在当前仓库中同时承担两层角色。
 
 1. **机器人框架**：`core/` 提供 OneBot 接入、消息分发、命令路由、插件生命周期、多轮会话、调度任务、配置热重载、运行指标和错误处理。
-2. **成品机器人应用**：`plugins/` 提供可直接加载的功能插件，覆盖拟人聊天、个人时间管理、天文工具、远程运维、代码执行、群娱乐、外部信息抓取和自动化任务。
+2. **成品机器人应用**：`plugins/` 提供可直接加载的功能插件，覆盖拟人聊天、个人时间管理、天文工具、远程运维、受限终端执行、Codex 后台任务、群娱乐、外部信息抓取和自动化任务。
 
 项目默认适合长期运行在个人机器、服务器或 NAS 上。QQ 客户端侧由 NapCatQQ 等 OneBot 实现负责，XiaoQing 专注于事件处理、业务插件和响应生成。
 
@@ -35,6 +35,7 @@ XiaoQing 是一个基于 **Python 异步**（asyncio）和 **OneBot 协议** 的
 | **协议标准** | 基于 OneBot 协议，兼容多种 QQ 客户端实现 |
 | **开发接口** | 提供插件 API、日志和运行指标统计 |
 | **Web 控制台** | pendo 插件内置 FastAPI + 原生 JS SPA，支持浏览器管理个人数据、统计和迁移 |
+| **后台任务** | 插件可以自建独立队列并主动回发结果，长任务不必占用框架多轮会话 |
 
 ---
 
@@ -46,7 +47,7 @@ XiaoQing 是一个基于 **Python 异步**（asyncio）和 **OneBot 协议** 的
 | 个人管理 | `pendo` | 日程、待办、笔记、日记、账本、提醒、搜索、统计、Web 控制台、Scriptable 小组件 |
 | 核心管理 | `bot_core` | `/help`、`/reload`、`/plugins`、静音、配置管理、metrics |
 | 基础聊天 | `smalltalk`, `chat`, `voice` | 简单闲聊、Coze 对话、TTS 和内部 STT 工具 |
-| 运维与执行 | `qingssh`, `shell`, `jupyter`, `minecraft` | SSH、受限 shell、Jupyter REPL、Minecraft RCON |
+| 运维与执行 | `qingssh`, `shell`, `codex`, `jupyter`, `minecraft` | SSH、受限 shell、Codex 后台会话队列、Jupyter REPL、Minecraft RCON |
 | 科研/天文 | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | 天文图、论文筛选、ADS、天文计算、词典、FRB 监测 |
 | 外部信息 | `github`, `earthquake`, `twitter`, `url_parser`, `signin`, `adnmb` | Trending、地震、图片抓取、链接预览、签到、A 岛 |
 | 娱乐工具 | `choice`, `guess_number`, `qingpet`, `color`, `wolframalpha`, `echo` | 抽奖、猜数字、群宠物、颜色、计算、示例回显 |
@@ -197,7 +198,7 @@ return segments("你好")  # 自动转换为消息段
 │                   你的插件代码                               │
 └─────────────────────────────────────────────────────────────┘
 
-（pendo 插件额外内置 FastAPI Web Server，独立提供 HTTP 控制台服务）
+（pendo 插件额外内置 FastAPI Web Server，独立提供 HTTP 控制台服务；codex 插件维护自己的后台任务队列并通过 OneBot 主动回发结果）
 ```
 
 ---
@@ -215,14 +216,14 @@ return segments("你好")  # 自动转换为消息段
    - 判断是否需要处理（普通群聊通常需要 @机器人、命令前缀或随机触发；`smalltalk_provider = xiaoqing_chat` 时所有群聊消息进入插件内部判定）
    │
    ▼
-3. 检查会话
-   - 检查用户是否有进行中的多轮对话
-   - 有 → 路由到会话插件
-   │
-   ▼
-4. 命令路由
+3. 命令路由
    - Router 匹配触发词
    - 找到对应插件和命令
+   │
+   ▼
+4. 检查会话
+   - 命令未命中时，检查用户是否有进行中的多轮对话
+   - 有 → 路由到会话插件
    │
    ▼
 5. 权限检查
@@ -278,6 +279,7 @@ XiaoQing/
 │   ├── bot_core/           # 核心命令（help、reload）
 │   ├── xiaoqing_chat/      # 多模态拟人聊天（attention gate、记忆、规划、reply checker）
 │   ├── pendo/              # 个人时间与信息管理中枢（日程/待办/笔记/日记/账本/提醒/Web 控制台）
+│   ├── codex/              # Codex 后台会话与任务队列
 │   ├── qingpet/            # QQ群宠物养成系统
 │   ├── qingssh/            # SSH 远程控制
 │   ├── jupyter/            # Python 代码执行
@@ -295,7 +297,7 @@ XiaoQing/
 │   ├── choice/             # 随机选择
 │   ├── wolframalpha/       # 万能计算器
 │   ├── url_parser/         # 链接解析
-│   ├── shell/              # 终端命令
+│   ├── shell/              # 终端命令（管理员白名单 + 路径归一化）
 │   ├── earthquake/         # 地震快讯
 │   ├── signin/              # 自动签到
 │   ├── twitter/            # Twitter 图片

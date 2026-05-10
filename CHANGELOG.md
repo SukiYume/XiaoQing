@@ -4,6 +4,39 @@
 
 维护时把最新内容写在最上方。日期使用北京时间，格式为 `YYYY-MM-DD`。如果一组改动还没有提交，先放在“未发布”中；提交或发版后，再移动到对应日期下面。
 
+## 2026-05-10
+
+### Codex 后台任务插件
+
+- 新增 `plugins/codex`，通过 `/codex create <name> [cwd:<path>]` 创建 Codex 会话标签，通过 `/codex <name> <任务>` 向指定会话投递任务。
+- 将 Codex 任务设计为插件内部独立队列，不占用 XiaoQing 的框架 Session；同一标签内串行执行，不同标签可按 `max_parallel_jobs` 并行执行，完成后主动回发 `[codex:<label> #<job_id>]` 结果。
+- 支持 `/codex list`、`/codex status`、`/codex cancel`/`stop`、`/codex clear` 和 `/codex delete`，并支持创建会话时指定工作目录。
+- 新增 Codex 路径归一化和允许目录校验。默认工作目录为 `C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex`，用户可在 QQ 中统一使用 `/` 斜杠输入路径。
+- 将 Codex 会话索引和每个标签的对话 JSONL 保存到 `plugins/codex/data/`，运行时数据继续由 `.gitignore` 排除。
+
+### Shell 路径解析改进
+
+- 改进 `plugins/shell` 的参数拆分和路径识别，Windows 下不再把反斜杠转义吃掉。
+- 支持用户在 QQ 中统一输入 `/` 斜杠路径，由插件按 bot 所在系统归一化；同时避免把 URL、`cmd /c`、`xcopy /Y` 这类参数误判为路径。
+- 明确 Windows 的 `copy`、`del`、`type` 等 shell 内建命令不能直接执行，需要使用 `cmd /c copy` 或外部命令 `cp`、`xcopy`、`robocopy`。
+
+### Pendo 账本录入
+
+- 调整 `/pendo ledger add`：无参数时进入交互式记账，金额和描述先手动输入，交易类型、账户、分类等后续步骤可用数字选择。
+- 保留 `/pendo ledger add <金额> <描述> ...` 的单行快捷记账方式，并继续支持 `cat:`、`in/out/transfer`、`account:`、`to:`、`merchant:`、`date:` 和 `remark:` 等参数。
+- 补充 Pendo ledger 和主入口测试，覆盖交互步骤、默认值、转账校验和快捷录入。
+
+### 文档同步
+
+- 更新根 README、`docs/00-09`、`docs/README.md`、Pendo README、Shell README 和 Codex README，让项目手册描述当前项目结构、命令、配置、后台队列和路径规则。
+- 补充 `PluginContext.send_action()`、后台任务队列、Codex 配置、Shell 配置、Pendo ledger 交互记账和插件统计说明。
+- 检查 README 和 `docs/*.md` 的文档口吻，保持为项目说明和使用手册；更新流水账只保留在本 CHANGELOG 中。
+
+### 验证
+
+- 已执行 `git diff --check`。
+- 已执行 `conda activate normal; python -m pytest tests/plugins/test_codex.py tests/plugins/test_shell_plugin.py tests/plugins/test_pendo.py -q`，结果为 `180 passed`。
+
 ## 2026-05-08
 
 ### Pendo Web 端口整理

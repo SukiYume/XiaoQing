@@ -32,6 +32,9 @@ from core.args import parse
 
 logger = logging.getLogger(__name__)
 
+URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
 # 从配置文件导入常量
 from .config import (
     DEFAULT_WHITELIST,
@@ -108,12 +111,63 @@ def _is_whitelist_disabled(context) -> bool:
 # 安全检查
 # ============================================================
 
+def _strip_outer_quotes(token: str) -> str:
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'}:
+        return token[1:-1]
+    return token
+
+
+def _looks_like_path(token: str) -> bool:
+    if not token:
+        return False
+    if URL_SCHEME_RE.match(token):
+        return False
+    if token.startswith("-"):
+        return False
+    if sys.platform == "win32":
+        if WINDOWS_DRIVE_PATH_RE.match(token):
+            return True
+        if token.startswith("//"):
+            return True
+        if token.startswith(("./", "../", "~/")):
+            return True
+        if token.startswith("/") and not token.startswith("//"):
+            return False
+        return "/" in token or "\\" in token
+    return token.startswith(("/", "./", "../", "~/"))
+
+
+def _normalize_path_token(token: str) -> str:
+    if "=" in token:
+        key, value = token.split("=", 1)
+        if key and _looks_like_path(value):
+            return f"{key}={_normalize_path_token(value)}"
+        return token
+
+    if not _looks_like_path(token):
+        return token
+
+    if sys.platform == "win32":
+        if token.startswith("~/"):
+            token = os.path.expanduser(token)
+        return os.path.normpath(token)
+
+    if token.startswith("~/"):
+        return os.path.expanduser(token)
+    return token
+
+
+def _normalize_command_args(parts: list[str]) -> list[str]:
+    return [_normalize_path_token(_strip_outer_quotes(part)) for part in parts]
+
+
 def _split_command(cmd_line: str) -> Optional[list[str]]:
-    """安全拆分命令参数"""
+    """安全拆分命令参数，并按运行系统规范化路径参数。"""
     try:
-        parts = shlex.split(cmd_line)
+        parts = shlex.split(cmd_line, posix=sys.platform != "win32")
     except ValueError:
         return None
+    parts = _normalize_command_args(parts)
     return parts if parts else None
 
 def _extract_command(cmd_line: str) -> Optional[str]:
@@ -121,7 +175,7 @@ def _extract_command(cmd_line: str) -> Optional[str]:
     parts = _split_command(cmd_line)
     if not parts:
         return None
-    return parts[0].split("/")[-1]
+    return re.split(r"[\\/]", parts[0])[-1]
 
 def _check_dangerous_patterns(cmd_line: str) -> Optional[str]:
     """检查危险模式"""
@@ -343,6 +397,10 @@ def _show_help(context) -> str:
         "   /shell pwd\n"
         "   /shell python --version\n"
         "   /shell ping -c 3 google.com\n\n"
+        "📁 路径格式:\n"
+        "   • QQ 中建议统一使用 / 斜杠，例如 C:/Users/testuser/Desktop/a.py\n"
+        "   • 插件会按 bot 所在系统转换为本机路径格式\n"
+        "   • 路径包含空格时请加引号\n\n"
         "⚠️ 注意: 此插件仅管理员可用\n"
         "═══════════════════════"
     )

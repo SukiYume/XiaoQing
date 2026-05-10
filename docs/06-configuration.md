@@ -51,7 +51,17 @@ XiaoQing 使用两个 JSON 配置文件：
   "log_rotation": "time",
   
   "plugins": {
-    "smalltalk_provider": "smalltalk"
+    "smalltalk_provider": "smalltalk",
+    "codex": {
+      "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
+      "allowed_cwd_roots": ["C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"],
+      "max_parallel_jobs": 2,
+      "per_session_queue_limit": 10,
+      "job_timeout_seconds": 3600,
+      "sandbox": "workspace-write",
+      "approval_policy": "never",
+      "skip_git_repo_check": true
+    }
   }
 }
 ```
@@ -315,6 +325,45 @@ XiaoQing 使用两个 JSON 配置文件：
 - 由插件内部的 attention gate、硬频控、普通插话概率、PFC planner 和 reply checker 控制是否回复
 - `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及有近期上下文锚点的“她/ta”共指召唤会走 forced 路径
 - 支持向量数据库长期记忆
+
+#### plugins.codex
+- **类型**：`object`
+- **说明**：Codex 后台会话队列插件配置。配置放在 `config.json -> plugins.codex`；如需覆盖 `codex_bin` 等本机私有路径，也可以放在 `secrets.json -> plugins.codex`。
+
+```json
+{
+  "plugins": {
+    "codex": {
+      "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
+      "allowed_cwd_roots": ["C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"],
+      "max_parallel_jobs": 2,
+      "per_session_queue_limit": 10,
+      "job_timeout_seconds": 3600,
+      "sandbox": "workspace-write",
+      "approval_policy": "never",
+      "skip_git_repo_check": true
+    }
+  }
+}
+```
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `codex_bin` | `string` | `"codex"` | Codex CLI 可执行文件名或路径 |
+| `default_cwd` | `string` | `C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex` | `/codex create <name>` 未指定 `cwd:` 时使用的工作目录；不存在时会自动创建 |
+| `allowed_cwd_roots` | `string[]` | `[default_cwd]` | 允许创建 Codex 会话的目录根；实际工作目录必须在这些根目录下 |
+| `max_parallel_jobs` | `int` | `2` | 全局最多同时运行的 Codex CLI 任务数 |
+| `per_session_queue_limit` | `int` | `10` | 每个 Codex 标签允许排队的任务数 |
+| `job_timeout_seconds` | `int` | `3600` | 单个 Codex 任务超时秒数 |
+| `sandbox` | `string` | `"workspace-write"` | 传给 Codex CLI 的 sandbox 模式 |
+| `approval_policy` | `string` | `"never"` | 传给 Codex CLI 的审批策略 |
+| `skip_git_repo_check` | `boolean` | `true` | 是否给 `codex exec` 添加 `--skip-git-repo-check` |
+
+路径输入建议统一使用 `/` 斜杠。Windows 上可以写 `C:/Users/testuser/Desktop/project`，插件会按运行系统解析；Linux/macOS 上仍写 `/home/user/project`。如果 bot 运行在非 Windows 系统，Windows 盘符路径会被拒绝。
+
+Codex 插件会把运行时状态写入 `plugins/codex/data/`：`sessions.json` 保存会话标签和 thread id，`conversations/*.jsonl` 保存每个标签的用户任务、Codex 回复、取消和删除事件。该目录不应提交到 Git。
+
+`cancel` 和 `stop` 是同一个操作：取消排队任务，或终止正在运行的 Codex CLI 子进程。能否保留已完成的中间文件取决于 Codex CLI 和任务自身行为。
 
 ---
 
@@ -618,6 +667,34 @@ Windows 上遇到 `WinError 10013` 时，常见原因是系统拒绝绑定端口
 补充说明：
 - QingSSH 严格校验 `~/.ssh/known_hosts` 中的 Host Key；未知主机或 Host Key 变更不会自动放行。
 - 从 `~/.ssh/config` 导入时，支持 `ProxyJump` 以及安全的 `ssh -W` 跳板形式；其他会在本地执行命令的 `ProxyCommand` 会被拒绝。
+
+#### shell 配置
+
+Shell 插件的配置放在 `secrets.json -> plugins.shell`。它默认只允许白名单命令，并且直接用 `create_subprocess_exec()` 启动进程，不经过系统 shell。
+
+```json
+{
+  "plugins": {
+    "shell": {
+      "whitelist": ["ls", "pwd", "git", "cp", "cmd", "robocopy"],
+      "whitelist_mode": "extend",
+      "timeout": 30,
+      "disable_whitelist": false
+    }
+  }
+}
+```
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `whitelist` | `string[]` | `[]` | 自定义命令白名单 |
+| `whitelist_mode` | `string` | `"replace"` | `replace` 表示只使用自定义白名单；`extend` 表示在默认白名单上追加 |
+| `timeout` | `int` | `30` | 命令执行超时秒数 |
+| `disable_whitelist` | `boolean` | `false` | 关闭白名单，危险模式；危险正则仍会生效 |
+
+路径参数会按 bot 所在系统归一化。QQ 里可以统一输入 `/` 斜杠路径，例如 Windows 的 `C:/Users/testuser/Desktop/a.txt` 或 Linux/macOS 的 `/home/user/a.txt`。URL 不会被当作路径改写，`/c`、`/Y` 这类 Windows 选项也不会被误判为路径。
+
+Windows 的 `copy`、`del`、`type` 等命令是 shell 内建命令，不能直接 `/shell copy ...`。需要复制文件时，优先用外部命令 `cp`、`xcopy`、`robocopy`，或者显式执行 `cmd /c copy <src> <dst>`。
 
 #### ads_paper 配置
 

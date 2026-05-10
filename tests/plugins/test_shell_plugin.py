@@ -149,6 +149,39 @@ class TestCommandSplit:
         result = shell_main._extract_command("ls -la")
         assert result == "ls"
 
+    def test_split_path_with_spaces(self):
+        """测试带空格路径仍作为单个参数"""
+        result = shell_main._split_command('echo "C:/Users/testuser/Desktop/my file.py"')
+        assert result[0] == "echo"
+        assert "my file.py" in result[1]
+
+    def test_split_windows_backslash_path_not_mangled(self):
+        """Windows 反斜杠路径不应被 shlex 当转义吞掉"""
+        result = shell_main._split_command(r"echo C:/Users/testuser\Desktop\a.py")
+        if shell_main.sys.platform == "win32":
+            assert result == ["echo", r"C:/Users/testuser\Desktop\a.py"]
+        else:
+            assert result == ["echo", "C:UserstorchDesktopa.py"]
+
+    def test_forward_slash_path_normalized_for_current_platform(self):
+        """用户统一输入 / 路径，后端按当前系统规范化"""
+        result = shell_main._split_command("echo C:/Users/testuser/Desktop/a.py")
+        if shell_main.sys.platform == "win32":
+            assert result == ["echo", r"C:/Users/testuser\Desktop\a.py"]
+        else:
+            assert result == ["echo", "C:/Users/testuser/Desktop/a.py"]
+
+    def test_windows_options_are_not_paths(self):
+        """cmd /c copy /Y 中的 /c 和 /Y 不是路径"""
+        result = shell_main._split_command("cmd /c copy /Y C:/Users/testuser/a.py C:/Users/testuser/b.py")
+        assert result[1] == "/c"
+        assert result[3] == "/Y"
+
+    def test_url_is_not_normalized_as_path(self):
+        """URL 参数不应被路径规范化破坏"""
+        result = shell_main._split_command("curl https://example.com/a/b")
+        assert result == ["curl", "https://example.com/a/b"]
+
 # ============================================================
 # 输出截断测试
 # ============================================================

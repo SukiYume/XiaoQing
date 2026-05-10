@@ -625,6 +625,20 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
 3. **每个用户独立**：每个 `(user_id, group_id)` 组合有独立的会话
 4. **手动结束**：游戏结束时必须调用 `context.end_session()`
 
+#### 长任务不要滥用 Session
+
+框架 session 适合“下一条消息就是当前流程输入”的交互，例如猜数字、表单填写、SSH 交互和 Pendo 记账引导。它不适合承载长时间运行的后台任务，因为活跃 session 会在命令未命中时抢先接管同一用户后续消息，容易影响闲聊或其他普通输入。
+
+如果插件需要后台执行并在完成后主动通知，建议像 `codex` 插件一样在插件内部维护自己的会话标签和任务队列：
+
+1. 用普通命令创建业务会话，例如 `/codex create main cwd:C:/project`。
+2. 后续命令显式带标签，例如 `/codex main <任务>`，插件立即返回“已收到”。
+3. 插件内部按标签串行、跨标签并行执行任务。
+4. 任务完成后用 `context.send_action(build_action(...))` 主动发送结果。
+5. 运行时状态写入 `context.data_dir`，例如 `plugins/codex/data/sessions.json` 和对话 JSONL。
+
+这种设计不会占用 `SessionHandler`，因此不影响同一用户继续发送其他命令或闲聊。
+
 ### 静音控制
 
 ```python

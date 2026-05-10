@@ -69,6 +69,7 @@
     - [wolframalpha - 万能计算器](#wolframalpha---万能计算器)
       - [特殊后缀](#特殊后缀)
       - [使用示例](#使用示例-10)
+    - [codex - Codex 后台任务队列](#codex---codex-后台任务队列)
     - [shell - 终端命令](#shell---终端命令)
       - [功能特性](#功能特性-1)
       - [安全设置](#安全设置)
@@ -232,8 +233,9 @@ Pendo 的长期文档入口是 `plugins/pendo/README.md` 和 `plugins/pendo/ARCH
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo ledger add [金额 描述 ...]` | 一条消息记账；无参数时进入同样格式的引导 |
-| `/pendo ledger quick <金额> <描述> [cat:分类] [in\|out\|transfer] [account:账户] [to:账户] [merchant:商户] [date:日期] [remark:备注]` | 快速单行记账；默认支出，支持收入、账户和转账 |
+| `/pendo ledger add` | 进入交互式记账；先手动输入金额和描述，后续类型、账户、分类等可按数字选择 |
+| `/pendo ledger add <金额> <描述> [cat:分类] [in\|out\|transfer] [account:账户] [to:账户] [merchant:商户] [date:日期] [remark:备注]` | 快捷单行记账；默认支出、其他分类、现金账户、今天 |
+| `/pendo ledger quick <金额> <描述> ...` | 快速记账别名，参数同 `ledger add <金额> <描述> ...` |
 | `/pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [cat:分类] [amount:min..max]` | 查看账目列表 |
 | `/pendo ledger view <id>` | 查看账目详情 |
 | `/pendo ledger edit <id> <字段:值>...` | 编辑账目 |
@@ -425,11 +427,12 @@ Web 控制台提供以下页面：
 
 ```
 /pendo ledger add 35 午餐 account:微信       # 一条消息记账；默认支出、其他分类、现金账户、今天
-/pendo ledger add                            # 进入一条消息记账引导
-/pendo ledger quick 35 午餐 account:微信 merchant:食堂
-/pendo ledger quick 100 兼职收入 in account:支付宝
-/pendo ledger quick 1000 还款 transfer account:微信 to:招行
-/pendo ledger quick 20 咖啡 cat:餐饮 account:现金
+/pendo ledger add                            # 进入交互式记账：金额、描述手动输入，后续按数字选择
+/pendo ledger add 35 午餐 account:微信 merchant:食堂
+/pendo ledger add 100 兼职收入 in account:支付宝
+/pendo ledger add 1000 还款 transfer account:微信 to:招行
+/pendo ledger add 20 咖啡 cat:餐饮 account:现金
+/pendo ledger quick 35 午餐 account:微信      # quick 别名同样可用
 /pendo ledger list                           # 查看本月账目
 /pendo ledger list week                      # 查看本周
 /pendo ledger list 2026-03                   # 查看三月账目
@@ -1129,6 +1132,76 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 
 ---
 
+### codex - Codex 后台任务队列
+
+通过 QQ 命令调用生产环境 Codex CLI。插件自己维护 Codex 会话标签、任务队列和对话记录，不占用 XiaoQing 的框架 Session。
+
+| 命令 | 触发词 | 说明 |
+|------|--------|------|
+| `codex` | `/codex` | 查看帮助或执行子命令 |
+
+#### 功能特性
+
+- **独立会话标签**：`/codex create <name>` 创建 Codex 业务会话，不影响普通闲聊或其他命令。
+- **显式投递任务**：后续用 `/codex <name> <任务>` 向指定会话追加任务。
+- **队列隔离**：同一标签内串行执行，避免并发 resume 同一个 Codex thread；不同标签可并行执行。
+- **主动回发结果**：任务完成、失败、超时或取消后，插件主动发送 `[codex:<name> #<job_id>]` 消息。
+- **会话持久化**：`plugins/codex/data/sessions.json` 保存 label、cwd 和 thread id；`plugins/codex/data/conversations/*.jsonl` 保存每个会话的任务与回复。
+- **路径归一化**：QQ 中建议统一输入 `/` 斜杠路径，插件按 bot 所在系统解析。
+
+#### 命令列表
+
+| 命令 | 说明 |
+|------|------|
+| `/codex create <name> [cwd:<path>]` | 创建 Codex 会话标签；未指定 `cwd:` 时使用默认工作目录 |
+| `/codex <name> <任务>` | 向指定会话追加任务，立即返回排队或开始执行状态 |
+| `/codex list` | 查看所有 Codex 会话 |
+| `/codex status [name]` | 查看全部或指定会话的运行状态 |
+| `/codex cancel <name> [job_id]` | 取消正在运行的任务；指定 `job_id` 时也可移除排队任务 |
+| `/codex stop <name> [job_id]` | `cancel` 的别名 |
+| `/codex clear <name>` | 清空指定会话的排队任务 |
+| `/codex delete <name> [--force]` | 删除会话；运行中任务需先取消，或使用 `--force` |
+
+#### 配置说明
+
+基础配置放在 `config.json -> plugins.codex`：
+
+```json
+{
+  "plugins": {
+    "codex": {
+      "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
+      "allowed_cwd_roots": ["C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"],
+      "max_parallel_jobs": 2,
+      "per_session_queue_limit": 10,
+      "job_timeout_seconds": 3600,
+      "sandbox": "workspace-write",
+      "approval_policy": "never",
+      "skip_git_repo_check": true
+    }
+  }
+}
+```
+
+如果 Codex CLI 不在 PATH 中，可在 `config.json` 或 `secrets.json` 的 `plugins.codex.codex_bin` 指定完整路径。`allowed_cwd_roots` 是安全边界，用户创建会话时指定的 `cwd:` 必须位于这些目录下。
+
+#### 使用示例
+
+```
+/codex create main
+/codex create repo cwd:C:/Users/testuser/Desktop/project
+/codex main 总结一下当前项目结构
+/codex repo 跑一下测试并说明失败点
+/codex list
+/codex status repo
+/codex cancel repo
+/codex delete repo --force
+```
+
+Windows 下可以写 `C:/Users/testuser/Desktop/project`。Linux/macOS 下照常写 `/home/user/project`。插件只负责路径解析和允许目录校验，不会绕过 Codex CLI 自身的 sandbox、审批策略和系统权限。
+
+---
+
 ### shell - 终端命令
 
 在服务器上执行终端命令。
@@ -1145,6 +1218,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 - **输出限制**：输出最大 4000 字符
 - **安全防护**：禁止命令链接符（&&, ||, ;, |）除非在白名单
 - **超时清理**：超时后会终止整棵子进程树，而不只是直接子进程
+- **路径归一化**：QQ 中可统一输入 `/` 斜杠路径，插件按 bot 所在系统转换
 
 #### 安全设置
 
@@ -1170,6 +1244,18 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 | `timeout` | 超时时间（秒） |
 | `disable_whitelist` | 禁用白名单（危险模式） |
 
+#### 路径格式
+
+Shell 插件会在拆分命令参数后，对看起来像路径的参数做系统相关归一化：
+
+- Windows 上可以输入 `C:/Users/testuser/Desktop/a.txt`，执行前会规范化成 Windows 本机路径。
+- Linux/macOS 上继续输入 `/home/user/a.txt`、`~/a.txt`、`./file` 或 `../file`。
+- `key=value` 中的 value 如果像路径，也会被归一化，例如 `--output=C:/tmp/a.txt`。
+- URL（如 `https://example.com/a/b`）不会被当作路径改写。
+- Windows 选项（如 `cmd /c`、`xcopy /Y`）不会被误判为绝对路径。
+
+插件直接启动外部命令，不经过系统 shell。Windows 的 `copy`、`del`、`type` 等内建命令不能直接执行；需要用 `cmd /c copy ...`，或改用外部命令 `cp`、`xcopy`、`robocopy`。
+
 #### 使用示例
 
 ```
@@ -1178,6 +1264,9 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 /sh ping -c 3 google.com
 /sh list                    # 查看白名单
 /shell help                 # 显示帮助
+/shell cp C:/Users/testuser/Desktop/a.txt C:/Users/testuser/Desktop/b.txt
+/shell cmd /c copy C:/Users/testuser/Desktop/a.txt C:/Users/testuser/Desktop/b.txt
+/shell robocopy C:/Users/testuser/Desktop/src C:/Users/testuser/Desktop/dst a.txt
 ```
 
 > ⚠️ **警告**: 此命令具有高危险性，请谨慎使用，仅管理员可用。
@@ -1785,17 +1874,17 @@ Minecraft 服务器通信插件，支持多服务器、双向聊天和状态查�
 
 ## 📊 插件统计
 
-统计时间口径：当前仓库内 `plugins/**/plugin.json` 共 `28` 个。
+统计时间口径：当前仓库内 `plugins/**/plugin.json` 共 `29` 个。
 
 | 分类 | 数量 | 插件 |
 |------|------|------|
 | **核心** | 3 | bot_core, echo, pendo |
 | **聊天** | 4 | xiaoqing_chat, smalltalk, chat, voice |
 | **天文科学** | 7 | apod, arxiv_filter, chime, dict, ads_paper, astro_tools, color |
-| **实用工具** | 7 | choice, wolframalpha, shell, url_parser, jupyter, adnmb, qingssh |
+| **实用工具** | 8 | choice, wolframalpha, codex, shell, url_parser, jupyter, adnmb, qingssh |
 | **外部服务** | 4 | github, earthquake, signin, twitter |
 | **娱乐游戏** | 3 | qingpet, guess_number, minecraft |
-| **总计** | **28** | |
+| **总计** | **29** | |
 
 ---
 

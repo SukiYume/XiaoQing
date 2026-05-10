@@ -31,6 +31,18 @@
                 "pendo": {
                         "web_demo_enabled": false
                 },
+                "codex": {
+                        "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
+                        "allowed_cwd_roots": [
+                                "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"
+                        ],
+                        "max_parallel_jobs": 2,
+                        "per_session_queue_limit": 10,
+                        "job_timeout_seconds": 3600,
+                        "sandbox": "workspace-write",
+                        "approval_policy": "never",
+                        "skip_git_repo_check": true
+                },
                 "smalltalk": {
                         "voice_probability": 0
                 }

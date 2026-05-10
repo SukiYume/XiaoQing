@@ -289,9 +289,11 @@ python main.py
 你: /pendo note add 今天天气不错 #随手记
 机器人: ✓ 已记录笔记
 
-你: /pendo ledger quick 35 午饭 cat:餐饮 account:微信
+你: /pendo ledger add 35 午饭 cat:餐饮 account:微信
 机器人: ✓ 已记录支出
 ```
+
+如果不想在一条消息里写完金额、描述、分类和账户，也可以只发 `/pendo ledger add` 进入交互式记账。前两步需要手动输入金额和描述，后续类型、账户和分类可按数字选择。
 
 需要浏览器界面时，继续验证 Web 控制台。
 
@@ -304,6 +306,35 @@ python main.py
 ```
 
 Pendo Web 覆盖 Dashboard、Events、Tasks、Ledger、Notes、Diary、Search、Stats、Settings 和 Transfer。聊天端适合快速录入，Web 端适合集中编辑、统计和数据迁移。
+
+### Codex 后台任务测试
+
+Codex 插件不占用框架的多轮 session。先创建一个带标签的 Codex 会话，再把任务发到对应标签；同一标签内任务串行执行，不同标签可以并行执行，完成后由插件主动回发结果。
+
+```
+你: /codex create main
+机器人: 已创建 Codex 会话 `main`
+
+你: /codex main 看一下当前项目结构
+机器人: 已收到 Codex 任务: `main` #1
+
+你: /codex status main
+机器人: [当前运行与排队状态...]
+```
+
+默认工作目录是 `C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex`。在 QQ 里建议统一使用 `/` 斜杠输入路径，例如 `/codex create demo cwd:C:/Users/testuser/Desktop/project`，插件会按 bot 所在系统解析。
+
+### Shell 路径测试
+
+Shell 插件直接执行白名单命令，不经过系统 shell。Windows 下 `copy`、`del` 这类内建命令不能直接执行；复制文件优先使用 `cp`、`xcopy`、`robocopy`，或显式通过 `cmd /c copy`。
+
+```
+你: /shell cp C:/Users/testuser/Desktop/a.txt C:/Users/testuser/Desktop/b.txt
+机器人: [执行结果...]
+
+你: /shell cmd /c copy C:/Users/testuser/Desktop/a.txt C:/Users/testuser/Desktop/b.txt
+机器人: [执行结果...]
+```
 
 ### SSH 远程控制测试（qingssh）
 

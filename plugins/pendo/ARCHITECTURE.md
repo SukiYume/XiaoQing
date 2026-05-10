@@ -57,7 +57,7 @@ plugins/pendo/
 │   ├── task.py                  # 待办命令
 │   ├── note.py                  # 笔记命令
 │   ├── diary.py                 # 日记命令和模板会话
-│   ├── ledger.py                # 账本命令和一条消息记账引导
+│   ├── ledger.py                # 账本命令、快捷记账和交互式记账引导
 │   ├── search.py                # 全文搜索命令
 │   └── web.py                   # Web 服务启动、Token 命令
 │

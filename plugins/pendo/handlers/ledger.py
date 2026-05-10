@@ -49,6 +49,9 @@ def _transaction_type_icon(transaction_type: str) -> str:
     return icons.get(transaction_type, "💸")
 
 
+_COMMON_LEDGER_ACCOUNTS = ["现金", "微信", "支付宝", "银行卡", "信用卡"]
+
+
 _FIELD_RE = re.compile(r"(?P<key>[A-Za-z_]+):(?P<value>\"[^\"]*\"|“[^”]*”|\S+)")
 
 
@@ -94,8 +97,8 @@ def _parse_ledger_type(value: str) -> str | None:
 class LedgerHandler(DbOpsMixin):
     """记账处理器
 
-    支持一条消息记账引导和快速记账：
-    - add: 一条消息记账；无参数时进入引导
+    支持交互式记账和快速记账：
+    - add: 无参数时进入多轮交互；有参数时按快速记账解析
     - quick: 单条命令快速记账
     - list: 查看账目列表
     - view: 查看账目详情
@@ -144,7 +147,8 @@ class LedgerHandler(DbOpsMixin):
             "💰 记账命令\n"
             "管理账目、查看收支和做快速记录。\n\n"
             "可用命令:\n"
-            "• /pendo ledger add [金额 描述 ...] - 一条消息记账；无参数则进入引导\n"
+            "• /pendo ledger add - 交互式记账\n"
+            "• /pendo ledger add <金额> <描述> [cat:分类] [in|out|transfer] [account:账户] [to:账户] [merchant:商户] - 快捷记账\n"
             "• /pendo ledger quick <金额> <描述> [cat:分类] [in|transfer] [account:账户] [to:账户] [merchant:商户] - 快速记账\n"
             "• /pendo ledger list [范围] [type:expense/income/transfer] [account:账户] [cat:分类] [amount:N或N..M] [ex] - 查看账目\n"
             "  范围: today/week/month/year/last7d/2026-03/start..end\n"
@@ -157,20 +161,20 @@ class LedgerHandler(DbOpsMixin):
         )
 
     # ============================================================
-    # 一条消息记账引导
+    # 交互式记账
     # ============================================================
 
     async def start_add_session(
         self, user_id: str, context: PendoContext, group_id: int | None = None
     ) -> CommandMessage:
-        """开始一条消息记账引导会话"""
+        """开始交互式记账会话"""
         await safe_create_session(
             context,
             initial_data={
                 "type": PendoConfig.SESSION_TYPE_LEDGER_ADD,
                 "owner_id": user_id,
                 "group_id": group_id,
-                "step": "entry",
+                "step": "amount",
                 "data": {},
             },
             timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
@@ -179,12 +183,10 @@ class LedgerHandler(DbOpsMixin):
         return {
             "status": "success",
             "message": (
-                "📝 开始记账，请发送一条记录：\n\n"
-                "金额 描述 [cat:分类] [in|out|transfer] [account:账户] [to:账户] [merchant:商户]\n\n"
-                "例如：28.5 午饭\n"
-                "例如：5000 工资 in cat:工资 account:招行\n"
-                "例如：1000 还款 transfer account:微信 to:招行\n\n"
-                "默认：支出 / 分类其他 / 账户现金 / 今天；不需要发空消息。\n"
+                "📝 开始记账，请先输入金额：\n\n"
+                "例如：28.5 / ¥88 / 1,200\n"
+                "后面只需要输入描述，类型、账户和分类可直接选数字。\n\n"
+                "💡 如果想一条命令完成，也可以用：/pendo ledger add 28.5 午饭 cat:餐饮 account:微信\n"
                 "💡 输入\"退出\"可取消"
             ),
         }
@@ -272,18 +274,15 @@ class LedgerHandler(DbOpsMixin):
 
         session.set("data", data)
         session.set("step", "account")
-        return {
-            "status": "success",
-            "message": "🏦 请输入账户/钱包（如 微信、支付宝、招行；直接回车默认现金）：",
-        }
+        return {"status": "success", "message": self._build_account_prompt(default_allowed=True)}
 
     async def _step_account(
         self, text: str, data: dict, session: dict, context: PendoContext
     ) -> CommandMessage:
         """步骤4: 输入账户。"""
-        account = text.strip()
-        if not account or account in {"跳过", "默认", "现金"}:
-            account = "现金"
+        account, error = self._parse_account_choice(text, default_allowed=True)
+        if error:
+            return {"status": "info", "message": error}
         data["account_name"] = account
         session.set("data", data)
 
@@ -291,7 +290,10 @@ class LedgerHandler(DbOpsMixin):
             session.set("step", "counter_account")
             return {
                 "status": "success",
-                "message": "➡️ 请输入转入账户（必须和转出账户不同）：",
+                "message": self._build_account_prompt(
+                    default_allowed=False,
+                    title="➡️ 请选择转入账户（必须和转出账户不同）：",
+                ),
             }
 
         session.set("step", "category")
@@ -301,9 +303,9 @@ class LedgerHandler(DbOpsMixin):
         self, text: str, data: dict, session: dict, context: PendoContext
     ) -> CommandMessage:
         """步骤5: 输入转账目标账户。"""
-        counter = text.strip()
-        if not counter:
-            return {"status": "info", "message": "❌ 转账必须填写转入账户："}
+        counter, error = self._parse_account_choice(text, default_allowed=False)
+        if error:
+            return {"status": "info", "message": error}
         if counter == data.get("account_name"):
             return {"status": "info", "message": "❌ 转入账户不能和转出账户相同，请重新输入："}
         data["counter_account_name"] = counter
@@ -317,7 +319,7 @@ class LedgerHandler(DbOpsMixin):
         session.set("step", "merchant")
         return {
             "status": "success",
-            "message": "🏷️ 请输入商户/对方（可输入 跳过）：",
+            "message": "🏷️ 请输入商户/对方（可输入 0 或 跳过）：",
         }
 
     async def _step_amount(
@@ -347,13 +349,17 @@ class LedgerHandler(DbOpsMixin):
 
         category_name = None
 
+        if text.strip() in {"0", "默认", "跳过"}:
+            category_name = "其他"
+
         # 尝试按编号匹配
-        try:
-            idx = int(text)
-            if 1 <= idx <= len(categories):
-                category_name = categories[idx - 1]["name"]
-        except ValueError:
-            pass
+        if not category_name:
+            try:
+                idx = int(text)
+                if 1 <= idx <= len(categories):
+                    category_name = categories[idx - 1]["name"]
+            except ValueError:
+                pass
 
         # 尝试按名称匹配
         if not category_name:
@@ -370,7 +376,7 @@ class LedgerHandler(DbOpsMixin):
         session.set("step", "merchant")
         return {
             "status": "success",
-            "message": "🏷️ 请输入商户/对方（可输入 跳过）：",
+            "message": "🏷️ 请输入商户/对方（可输入 0 或 跳过）：",
         }
 
     async def _step_merchant(
@@ -378,7 +384,7 @@ class LedgerHandler(DbOpsMixin):
     ) -> CommandMessage:
         """最后一步: 输入商户/对方并保存。"""
         merchant = text.strip()
-        if merchant and merchant not in {"跳过", "无", "-"}:
+        if merchant and merchant not in {"0", "跳过", "默认", "无", "-"}:
             data["merchant"] = merchant
         await safe_end_session(context)
         return await self._save_ledger_item(
@@ -416,12 +422,43 @@ class LedgerHandler(DbOpsMixin):
         )
 
         lines = ["📂 请选择分类：\n"]
+        lines.append("0. 📌其他（默认）")
         for i, cat in enumerate(categories, 1):
             lines.append(f"{i}.{cat['icon']}{cat['name']}")
             if i % 4 == 0:
                 lines.append("")
         lines.append("\n(输入编号或分类名)")
         return "\n".join(lines)
+
+    @staticmethod
+    def _build_account_prompt(
+        default_allowed: bool,
+        title: str = "🏦 请选择账户/钱包：",
+    ) -> str:
+        lines = [title, ""]
+        if default_allowed:
+            lines.append("0. 现金（默认）")
+        for index, account in enumerate(_COMMON_LEDGER_ACCOUNTS, 1):
+            lines.append(f"{index}. {account}")
+        lines.append("\n(输入编号，或直接输入自定义账户名)")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse_account_choice(text: str, default_allowed: bool) -> tuple[str, str | None]:
+        value = text.strip()
+        if default_allowed and (not value or value in {"0", "跳过", "默认", "现金"}):
+            return "现金", None
+        if not value or value in {"0", "跳过", "默认"}:
+            return "", "❌ 转账必须填写转入账户，可输入编号或账户名："
+
+        try:
+            index = int(value)
+        except ValueError:
+            return value, None
+
+        if 1 <= index <= len(_COMMON_LEDGER_ACCOUNTS):
+            return _COMMON_LEDGER_ACCOUNTS[index - 1], None
+        return "", "❌ 无效账户编号，请输入列表编号或账户名："
 
     async def _save_ledger_item(
         self, user_id: str, data: dict, group_id: int | None = None
