@@ -2596,7 +2596,7 @@ class TestCrossTypeCommandRegression:
         finally:
             db.cleanup()
 
-    def test_ledger_add_session_starts_with_compact_entry_prompt(self):
+    def test_ledger_add_session_starts_with_amount_then_numeric_options(self):
         import sys
         from unittest.mock import MagicMock
 
@@ -2614,11 +2614,11 @@ class TestCrossTypeCommandRegression:
         result = asyncio.run(handler.start_add_session("u1", _Context()))
 
         assert result["status"] == "success"
-        assert "请发送一条记录" in result["message"]
-        assert "默认：支出 / 分类其他 / 账户现金 / 今天" in result["message"]
-        assert create_calls[0][0]["step"] == "entry"
+        assert "请先输入金额" in result["message"]
+        assert "类型、账户和分类可直接选数字" in result["message"]
+        assert create_calls[0][0]["step"] == "amount"
 
-    def test_ledger_add_session_saves_one_message_entry_and_transfer_target_followup(self):
+    def test_ledger_add_session_collects_typed_front_fields_then_numeric_options(self):
         import sys
         from unittest.mock import MagicMock
 
@@ -2640,7 +2640,7 @@ class TestCrossTypeCommandRegression:
 
         handler = LedgerHandler(db=MagicMock())
         context = _Context()
-        session = _Session({"step": "entry", "data": {}, "group_id": 123})
+        session = _Session({"step": "amount", "data": {}, "group_id": 123})
         captured = {}
 
         async def _fake_save(user_id, data, group_id=None):
@@ -2651,11 +2651,36 @@ class TestCrossTypeCommandRegression:
 
         handler._save_ledger_item = _fake_save
 
-        result = asyncio.run(
-            handler.handle_session_step(
-                "u1", "88.5 午饭 cat:餐饮 account:微信 merchant:食堂", session, context
-            )
-        )
+        result = asyncio.run(handler.handle_session_step("u1", "88.5", session, context))
+        assert result["status"] == "success"
+        assert "请输入描述" in result["message"]
+        assert session["step"] == "description"
+        assert session["data"]["amount"] == 88.5
+
+        result = asyncio.run(handler.handle_session_step("u1", "午饭", session, context))
+        assert result["status"] == "success"
+        assert "请选择收支类型" in result["message"]
+        assert session["step"] == "transaction_type"
+        assert session["data"]["title"] == "午饭"
+
+        result = asyncio.run(handler.handle_session_step("u1", "1", session, context))
+        assert result["status"] == "success"
+        assert "请选择账户" in result["message"]
+        assert session["step"] == "account"
+        assert session["data"]["transaction_type"] == "expense"
+
+        result = asyncio.run(handler.handle_session_step("u1", "2", session, context))
+        assert result["status"] == "success"
+        assert "请选择分类" in result["message"]
+        assert session["step"] == "category"
+        assert session["data"]["account_name"] == "微信"
+
+        result = asyncio.run(handler.handle_session_step("u1", "1", session, context))
+        assert result["status"] == "success"
+        assert "请输入商户" in result["message"]
+        assert session["step"] == "merchant"
+
+        result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
         assert result == {"status": "success", "message": "saved"}
         assert context.end_calls == 1
         assert captured["user_id"] == "u1"
@@ -2665,26 +2690,38 @@ class TestCrossTypeCommandRegression:
         assert captured["data"]["transaction_type"] == "expense"
         assert captured["data"]["account_name"] == "微信"
         assert captured["data"]["ledger_category"] == "餐饮"
-        assert captured["data"]["merchant"] == "食堂"
+        assert "merchant" not in captured["data"]
 
         context = _Context()
-        session = _Session({"step": "entry", "data": {}, "group_id": None})
-        captured.clear()
-        result = asyncio.run(
-            handler.handle_session_step("u1", "1000 还款 transfer account:微信", session, context)
+        session = _Session(
+            {
+                "step": "transaction_type",
+                "data": {"amount": 1000, "title": "还款", "owner_id": "u1"},
+                "group_id": None,
+            }
         )
+        captured.clear()
+        result = asyncio.run(handler.handle_session_step("u1", "3", session, context))
         assert result["status"] == "success"
-        assert "转入账户" in result["message"]
-        assert session["step"] == "counter_account"
+        assert session["step"] == "account"
         assert session["data"]["transaction_type"] == "transfer"
+
+        result = asyncio.run(handler.handle_session_step("u1", "2", session, context))
+        assert result["status"] == "success"
+        assert session["step"] == "counter_account"
         assert session["data"]["account_name"] == "微信"
 
-        result = asyncio.run(handler.handle_session_step("u1", "招行信用卡", session, context))
+        result = asyncio.run(handler.handle_session_step("u1", "4", session, context))
+        assert result["status"] == "success"
+        assert session["step"] == "merchant"
+        assert session["data"]["ledger_category"] == "转账"
+
+        result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
         assert result == {"status": "success", "message": "saved"}
         assert context.end_calls == 1
         assert captured["data"]["transaction_type"] == "transfer"
         assert captured["data"]["account_name"] == "微信"
-        assert captured["data"]["counter_account_name"] == "招行信用卡"
+        assert captured["data"]["counter_account_name"] == "银行卡"
 
     def test_ledger_add_inline_uses_compact_entry_parser(self):
         import sys

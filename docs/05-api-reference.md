@@ -162,6 +162,7 @@ parts = split_message_segments(long_segs, max_length=500)
 | `data_dir` | `Path` | 数据目录路径 |
 | `logger` | `_RequestLogger` | 日志记录器（自动附带 request_id） |
 | `http_session` | `aiohttp.ClientSession \| None` | HTTP 客户端 |
+| `send_action` | `Callable` | 发送 OneBot Action 的异步回调，可用于后台任务完成后的主动通知 |
 | `metrics` | `MetricsCollector \| None` | 运行指标收集器 |
 | `current_user_id` | `int \| None` | 当前消息的用户 ID |
 | `current_group_id` | `int \| None` | 当前消息的群 ID |
@@ -203,6 +204,25 @@ commands = context.list_commands()  # -> ["help", "echo", ...]
 ```python
 plugins = context.list_plugins()  # -> ["core", "echo", ...]
 ```
+
+#### send_action(action)
+主动发送 OneBot Action。
+
+普通命令处理通常只需要 `return segments(...)`，由框架自动构建并发送响应。只有后台任务、定时任务或需要在当前 handler 返回之后再通知用户时，才直接调用 `context.send_action(action)`。
+
+```python
+from core.plugin_base import build_action, segments
+
+action = build_action(
+    segments("[codex:main #1] 完成:\n结果内容"),
+    user_id=event.get("user_id"),
+    group_id=event.get("group_id"),
+)
+if action:
+    await context.send_action(action)
+```
+
+长文本不需要在插件里手动截断；发送链路会通过 `split_message_segments()` 按文本长度分片。
 
 ### 会话方法
 

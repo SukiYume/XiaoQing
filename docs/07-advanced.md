@@ -186,6 +186,22 @@ await context.end_session()
 
 ---
 
+## 后台任务队列
+
+多轮会话不是所有“持续工作”的唯一方案。对于 Codex 这类可能执行几分钟甚至更久的任务，更合适的模式是插件自己维护业务会话和队列，然后在完成时主动发送结果。
+
+`plugins/codex` 的设计可以作为参考：
+
+- `/codex create <label> [cwd:<path>]` 创建一个业务会话标签，不创建框架 Session。
+- `/codex <label> <任务>` 将任务加入标签队列，handler 立即返回“已收到”。
+- 同一标签内任务串行运行，避免同一 Codex thread 被并发 resume；不同标签之间按 `max_parallel_jobs` 并行。
+- 任务完成、失败、超时或取消后，插件用 `context.send_action()` 主动回发 `[codex:<label> #<job_id>]` 消息。
+- 会话索引和对话记录保存在 `plugins/codex/data/`，重启后可以继续知道 label、cwd 和 Codex thread id。
+
+这种模式不会让 `SessionHandler` 接管同一用户的后续普通消息，因此用户可以继续使用其他命令或闲聊。
+
+---
+
 ## ⏰ 定时任务
 
 使用 APScheduler 执行定时任务。
