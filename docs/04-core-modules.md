@@ -790,6 +790,20 @@ async def end_session(self) -> bool:
     )
 ```
 
+### 主动发送回调
+
+`send_action` 是插件上下文中的异步回调，底层会进入 `XiaoQingApp._send_action()` 的统一发送链路。普通命令应优先返回消息段；后台任务、定时任务或插件内独立队列需要在稍后回发结果时，再直接调用它。
+
+```python
+from core.plugin_base import build_action, segments
+
+action = build_action(segments("任务完成"), user_id, group_id)
+if action:
+    await context.send_action(action)
+```
+
+`codex` 插件使用这种方式在 CLI 任务完成后主动发送 `[codex:<label> #<job_id>]` 结果；发送链路会继续负责长消息分割、WS/HTTP 回退和错误日志。
+
 ---
 
 ## 💬 session.py 会话管理

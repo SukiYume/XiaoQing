@@ -378,6 +378,12 @@ async def handle_session(text: str, event: dict, context, session) -> List[dict]
 以下命令可退出会话：
 - `退出`、`取消`、`exit`、`quit`、`q`
 
+### 5.5 与后台队列的区别
+
+框架 Session 会接管同一用户后续未命中命令的消息，适合交互式表单、游戏、SSH REPL 和 `/pendo ledger add` 这种逐步引导。耗时后台任务不应为了“保持上下文”而创建框架 Session。
+
+`codex` 插件使用独立业务会话：`/codex create main` 只创建 Codex 标签和工作目录，后续必须显式发送 `/codex main <任务>`。任务进入插件自己的队列后，当前 handler 立即返回；完成结果通过 `context.send_action()` 主动发送，因此不会影响用户继续发其他命令或闲聊。
+
 ---
 
 ## 6️⃣ 闲聊处理
@@ -648,7 +654,7 @@ Authorization: Bearer <inbound_token>
 {
   "status": "ok",
   "ws_connections": 1,
-  "plugins_loaded": 28,
+  "plugins_loaded": 29,
   "pending_jobs": 3,
   "active_sessions": 2
 }
@@ -671,6 +677,8 @@ GET /metrics
 4. 若仍不可用，则回退到 OneBot HTTP sender。
 
 因此启用双通道部署时，WS 短暂断开不会直接导致消息静默丢失。
+
+后台任务也应复用这条发送链路。插件可以保存触发任务时的 `user_id` / `group_id`，等任务完成后通过 `context.send_action(build_action(...))` 主动发送。发送阶段仍会执行长文本分片、WS/HTTP 回退和错误日志处理；插件自身不需要为了避免截断而设置单独的结果字符上限。
 
 ---
 

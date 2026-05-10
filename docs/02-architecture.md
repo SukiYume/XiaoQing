@@ -13,9 +13,9 @@ XiaoQing 的核心架构分成三层。
 
 1. **协议接入层**：`server.py` 和 `onebot.py` 负责接收 OneBot 事件、维护 WebSocket 连接和发送 OneBot API 请求。
 2. **框架调度层**：`app.py`、`dispatcher.py`、`router.py`、`plugin_manager.py`、`session.py`、`scheduler.py` 负责生命周期、消息分发、命令匹配、插件加载、多轮会话和定时任务。
-3. **插件业务层**：`plugins/` 内的插件实现具体能力。轻量插件通常只需要 `plugin.json + main.py`；大型插件如 `xiaoqing_chat` 和 `pendo` 拥有自己的服务层、状态层、Web/API 或 LLM 子系统。
+3. **插件业务层**：`plugins/` 内的插件实现具体能力。轻量插件通常只需要 `plugin.json + main.py`；大型插件如 `xiaoqing_chat`、`pendo` 和 `codex` 拥有自己的服务层、状态层、Web/API、LLM 子系统或后台任务队列。
 
-核心框架不直接理解 Pendo 的账本模型，也不直接生成 xiaoqing_chat 的拟人回复。它提供统一的事件、上下文、路由和发送能力；业务插件在这个边界内自行组织更复杂的内部架构。
+核心框架不直接理解 Pendo 的账本模型，也不直接生成 xiaoqing_chat 的拟人回复，也不调度 Codex CLI 的内部任务队列。它提供统一的事件、上下文、路由和发送能力；业务插件在这个边界内自行组织更复杂的内部架构。
 
 ```
                               ┌─────────────────┐
@@ -614,6 +614,16 @@ XiaoQing 主进程
 - 应用退出、插件卸载或 `Ctrl+C` 时，会先请求 Pendo Web 优雅停止，再清理数据库和运行时状态
 - 支持通过 nginx 在子路径（如 `/pendo/`）下反向代理访问
 - Pendo Web 与聊天命令共用 `plugins/pendo/services/db.py`、`utils/validators.py` 和事件图/提醒服务，避免 Web 与 CLI 各自维护一套字段语义
+
+另一类独立服务是 **codex** 插件的后台队列。它不使用 `SessionManager` 捕获用户后续消息，而是在插件内部维护 `label -> session/thread/queue`：
+
+- `/codex create <label> [cwd:<path>]` 创建业务会话标签
+- `/codex <label> <任务>` 将任务放入该标签队列，handler 立即返回“已收到”
+- 同一标签内任务串行执行，不同标签受 `max_parallel_jobs` 限制并行执行
+- 任务完成后通过 `context.send_action()` 主动发送结果，底层仍走统一 OneBot 发送链路
+- 会话索引和对话记录保存在 `plugins/codex/data/`
+
+这种方式适合耗时较长但不应占用 bot 多轮会话的后台工作。
 
 ---
 

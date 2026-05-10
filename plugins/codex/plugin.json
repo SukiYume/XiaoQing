@@ -1,0 +1,18 @@
+{
+    "name": "codex",
+    "version": "1.0.0",
+    "description": "Codex CLI 后台任务队列插件",
+    "entry": "main.py",
+    "concurrency": "parallel",
+    "commands": [
+        {
+            "name": "codex",
+            "triggers": [
+                "codex"
+            ],
+            "help": "Codex 会话队列 | /codex help",
+            "admin_only": true
+        }
+    ],
+    "schedule": []
+}

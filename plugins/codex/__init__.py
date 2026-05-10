@@ -1,0 +1,1 @@
+"""Codex CLI integration plugin."""
