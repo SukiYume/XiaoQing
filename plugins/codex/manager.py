@@ -9,8 +9,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.plugin_base import build_action, load_json, segments, write_json
+from core.plugin_base import build_action, image, load_json, segments, split_message_segments, write_json
 
+from .artifacts import CodexImageArtifact, collect_image_artifacts, default_generated_images_dir
 from .config import LABEL_PATTERN, CodexPluginConfig, load_plugin_config
 from .paths import CwdError, normalize_cwd
 from .runner import CodexRunResult, CodexRunner, terminate_process_tree
@@ -41,6 +42,7 @@ class RuntimeJob:
     started_at: float | None = None
     finished_at: float | None = None
     result: CodexRunResult | None = None
+    image_artifacts: list[CodexImageArtifact] = field(default_factory=list)
     process: asyncio.subprocess.Process | None = None
     cancel_requested: bool = False
 
@@ -59,8 +61,8 @@ class CodexQueueManager:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_path = self.data_dir / "sessions.json"
         self.output_dir = self.data_dir / "outputs"
-        self.conversations_dir = self.data_dir / "conversations"
-        self.conversations_dir.mkdir(parents=True, exist_ok=True)
+        self.session_root = self.data_dir / "session"
+        self.session_root.mkdir(parents=True, exist_ok=True)
         self.runner = runner or CodexRunner(self.config, self.output_dir)
         self.sessions: dict[str, CodexSession] = {}
         self.queues: dict[str, deque[RuntimeJob]] = {}
@@ -83,8 +85,26 @@ class CodexQueueManager:
         payload = {"sessions": {label: asdict(session) for label, session in self.sessions.items()}}
         write_json(self.sessions_path, payload)
 
+    def _session_dir(self, label: str) -> Path:
+        path = self.session_root / label
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def _conversation_path(self, label: str) -> Path:
-        return self.conversations_dir / f"{label}.jsonl"
+        return self._session_dir(label) / "conversation.jsonl"
+
+    def _session_images_dir(self, label: str) -> Path:
+        path = self._session_dir(label) / "images"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _job_artifact_dir(self, label: str, job_id: int) -> Path:
+        path = self._session_dir(label) / "jobs" / f"job-{job_id:04d}" / "artifacts"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _generated_images_dir(self) -> Path:
+        return default_generated_images_dir()
 
     def _append_history(self, label: str, payload: dict[str, Any]) -> None:
         event = {"ts": time.time(), **payload}
@@ -205,6 +225,7 @@ class CodexQueueManager:
                 self.running[label] = job
 
             result: CodexRunResult | None = None
+            artifact_dir = self._job_artifact_dir(label, job.job_id)
             try:
                 async with self.global_sem:
                     result = await self.runner.run(
@@ -212,6 +233,7 @@ class CodexQueueManager:
                         prompt=job.prompt,
                         thread_id=session.thread_id,
                         job=job,
+                        artifact_dir=artifact_dir,
                     )
             except Exception as exc:  # noqa: BLE001 - keep bot task alive and report failure.
                 result = CodexRunResult(
@@ -233,6 +255,19 @@ class CodexQueueManager:
                         self.sessions[label].thread_id = result.thread_id
                         self.sessions[label].updated_at = time.time()
                         self._save()
+                if result is not None:
+                    job.image_artifacts = collect_image_artifacts(
+                        result.final_text,
+                        referenced_paths=result.image_paths,
+                        cwd=Path(session.cwd),
+                        artifact_dir=artifact_dir,
+                        session_dir=self._session_dir(label),
+                        images_dir=self._session_images_dir(label),
+                        job_id=job.job_id,
+                        generated_images_dir=self._generated_images_dir(),
+                        started_at=job.started_at,
+                        finished_at=job.finished_at,
+                    )
                 self._append_job_history(session, job, result)
 
             await self._send_job_result(session, job, result)
@@ -272,8 +307,23 @@ class CodexQueueManager:
                 "started_at": job.started_at,
                 "finished_at": job.finished_at,
                 "stderr_tail": stderr_tail,
+                "images": [artifact.as_record() for artifact in job.image_artifacts],
             },
         )
+
+    def _result_message_batches(
+        self,
+        content: str,
+        image_artifacts: list[CodexImageArtifact],
+    ) -> list[list[dict[str, Any]]]:
+        image_segments = [image(artifact.absolute_path) for artifact in image_artifacts]
+        if not image_segments:
+            return [segments(content)]
+
+        text_batches = split_message_segments(segments(content))
+        if len(text_batches) == 1:
+            return [text_batches[0] + image_segments]
+        return text_batches + [image_segments]
 
     async def _send_job_result(
         self,
@@ -295,10 +345,15 @@ class CodexQueueManager:
         else:
             content = f"[codex:{job.label} #{job.job_id}] 完成:\n{result.final_text.strip()}"
 
-        action = build_action(segments(content), job.user_id or session.owner_user_id, job.group_id or session.target_group_id)
-        if action and hasattr(job.context, "send_action"):
-            action["_bypass_sink"] = True
-            await job.context.send_action(action)
+        for batch in self._result_message_batches(content, job.image_artifacts):
+            action = build_action(
+                batch,
+                job.user_id or session.owner_user_id,
+                job.group_id or session.target_group_id,
+            )
+            if action and hasattr(job.context, "send_action"):
+                action["_bypass_sink"] = True
+                await job.context.send_action(action)
 
     async def list_sessions(self) -> str:
         async with self.lock:

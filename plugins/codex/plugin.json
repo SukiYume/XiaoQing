@@ -11,7 +11,7 @@
                 "codex"
             ],
             "help": "Codex 会话队列 | /codex help",
-            "admin_only": true
+            "admin_only": false
         }
     ],
     "schedule": []

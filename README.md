@@ -34,7 +34,7 @@ XiaoQingBot 是一个面向真实 QQ 使用场景的机器人项目。它既是�
 | 命令路由 | 支持多个命令前缀、触发词、管理员命令、bot name 前缀剥离和参数解析 |
 | Handler 链 | `BotNameHandler`、`CommandHandler`、`SessionHandler`、`SmalltalkHandler` 分层处理 |
 | 多轮会话 | 内置 session manager，适合游戏、表单、REPL、SSH、记账引导等交互 |
-| 后台任务队列 | 插件可自建独立队列并通过 `context.send_action()` 主动回发结果，适合 Codex 这类长任务 |
+| 后台任务队列 | 插件可自建独立队列并通过 `context.send_action()` 主动回发文字或图片结果，适合 Codex 这类长任务 |
 | Smalltalk Provider | 可把普通闲聊交给 `smalltalk` 或 `xiaoqing_chat` 插件处理 |
 | 调度任务 | 插件可在 `plugin.json` 中声明 cron schedule，由框架统一调度 |
 | 配置热重载 | `/reload config` 可重读配置；插件可按需开启文件 watcher |
@@ -227,7 +227,7 @@ python main.py
 | `/metrics` | 查看运行指标 |
 | `/xc <内容>` | 进入 xiaoqing_chat 对话 |
 | `/pendo ...` | 进入 Pendo 个人管理功能 |
-| `/codex ...` | 管理 Codex 后台会话和任务队列 |
+| `/codex ...` | 管理 Codex 后台会话、任务队列和结果回发 |
 | `/shell <命令>` | 管理员执行白名单内终端命令 |
 
 ## 核心插件
@@ -278,7 +278,7 @@ python main.py
 | 聊天 | `chat` | 基于 Coze API 的 AI 对话 |
 | 个人管理 | `pendo` | 日程、待办、笔记、日记、账本、提醒、Web |
 | 工具 | `choice` | 随机选择、抽奖、多选、去重 |
-| 工具 | `codex` | Codex CLI 后台会话、串行队列和并行任务 |
+| 工具 | `codex` | Codex CLI 后台会话、串行队列、并行任务和图片结果透传 |
 | 工具 | `color` | 中国传统色、颜色转换、恒星光谱颜色 |
 | 工具 | `wolframalpha` | Wolfram Alpha 计算 |
 | 工具 | `url_parser` | 链接预览解析 |
@@ -403,7 +403,7 @@ async def handle(command: str, args: str, event: dict, context):
 /reload
 ```
 
-插件运行时数据通常位于各自的 `plugins/<name>/data/` 目录，不应提交。Pendo 的 SQLite 数据库、xiaoqing_chat 的媒体库/记忆/表达学习状态，以及 codex 的会话索引和对话 JSONL 都属于本地运行时数据。
+插件运行时数据通常位于各自的 `plugins/<name>/data/` 目录，不应提交。Pendo 的 SQLite 数据库、xiaoqing_chat 的媒体库/记忆/表达学习状态，以及 codex 的会话索引、`session/<name>/conversation.jsonl`、图片副本和任务 artifacts 都属于本地运行时数据。
 
 ## 测试
 
