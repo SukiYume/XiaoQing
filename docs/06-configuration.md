@@ -361,7 +361,7 @@ XiaoQing 使用两个 JSON 配置文件：
 
 路径输入建议统一使用 `/` 斜杠。Windows 上可以写 `C:/Users/testuser/Desktop/project`，插件会按运行系统解析；Linux/macOS 上仍写 `/home/user/project`。如果 bot 运行在非 Windows 系统，Windows 盘符路径会被拒绝。
 
-Codex 插件会把运行时状态写入 `plugins/codex/data/`：`sessions.json` 保存会话标签和 thread id，`conversations/*.jsonl` 保存每个标签的用户任务、Codex 回复、取消和删除事件。该目录不应提交到 Git。
+Codex 插件会把运行时状态写入 `plugins/codex/data/`：`sessions.json` 保存会话标签和 thread id，`session/<label>/conversation.jsonl` 保存每个标签的用户任务、Codex 回复、取消、删除事件和图片记录，`session/<label>/images/` 保存已透传到 QQ 的图片副本，`session/<label>/jobs/` 保存单次任务的 artifacts 目录。该目录不应提交到 Git。
 
 `cancel` 和 `stop` 是同一个操作：取消排队任务，或终止正在运行的 Codex CLI 子进程。能否保留已完成的中间文件取决于 Codex CLI 和任务自身行为。
 

@@ -309,7 +309,7 @@ Pendo Web 覆盖 Dashboard、Events、Tasks、Ledger、Notes、Diary、Search、
 
 ### Codex 后台任务测试
 
-Codex 插件不占用框架的多轮 session。先创建一个带标签的 Codex 会话，再把任务发到对应标签；同一标签内任务串行执行，不同标签可以并行执行，完成后由插件主动回发结果。
+Codex 插件不占用框架的多轮 session。先创建一个带标签的 Codex 会话，再把任务发到对应标签；同一标签内任务串行执行，不同标签可以并行执行，完成后由插件主动回发文字和图片结果。
 
 ```
 你: /codex create main
@@ -322,7 +322,7 @@ Codex 插件不占用框架的多轮 session。先创建一个带标签的 Codex
 机器人: [当前运行与排队状态...]
 ```
 
-默认工作目录是 `C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex`。在 QQ 里建议统一使用 `/` 斜杠输入路径，例如 `/codex create demo cwd:C:/Users/testuser/Desktop/project`，插件会按 bot 所在系统解析。
+默认工作目录是 `C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex`。在 QQ 里建议统一使用 `/` 斜杠输入路径，例如 `/codex create demo cwd:C:/Users/testuser/Desktop/project`，插件会按 bot 所在系统解析。Codex 任务如果生成图片，插件会自动提供任务级 artifacts 目录，完成后把文字和图片一起回发到 QQ。
 
 ### Shell 路径测试
 

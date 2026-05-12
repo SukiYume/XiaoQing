@@ -1145,8 +1145,9 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 - **独立会话标签**：`/codex create <name>` 创建 Codex 业务会话，不影响普通闲聊或其他命令。
 - **显式投递任务**：后续用 `/codex <name> <任务>` 向指定会话追加任务。
 - **队列隔离**：同一标签内串行执行，避免并发 resume 同一个 Codex thread；不同标签可并行执行。
-- **主动回发结果**：任务完成、失败、超时或取消后，插件主动发送 `[codex:<name> #<job_id>]` 消息。
-- **会话持久化**：`plugins/codex/data/sessions.json` 保存 label、cwd 和 thread id；`plugins/codex/data/conversations/*.jsonl` 保存每个会话的任务与回复。
+- **主动回发结果**：任务完成、失败、超时或取消后，插件主动发送 `[codex:<name> #<job_id>]` 文字和图片消息。
+- **图片透传**：每个任务自动获得 artifacts 目录；Codex 生成的本地图片会从 artifacts 或 `$CODEX_HOME/generated_images/` 复制到会话图片目录，并随文字一起发送。
+- **会话持久化**：`plugins/codex/data/sessions.json` 保存 label、cwd 和 thread id；`plugins/codex/data/session/<name>/conversation.jsonl` 保存每个会话的任务、回复和图片记录。
 - **路径归一化**：QQ 中建议统一输入 `/` 斜杠路径，插件按 bot 所在系统解析。
 
 #### 命令列表
@@ -1199,6 +1200,8 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 ```
 
 Windows 下可以写 `C:/Users/testuser/Desktop/project`。Linux/macOS 下照常写 `/home/user/project`。插件只负责路径解析和允许目录校验，不会绕过 Codex CLI 自身的 sandbox、审批策略和系统权限。
+
+Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，用户不需要额外要求“把图片保存到哪里”。如果 Codex 在最终回复里用 Markdown 图片语法或 `图片: <path>` 标出图片，或直接把图片保存到本任务 artifacts 目录，插件会把图片复制到 `plugins/codex/data/session/<name>/images/` 并发送到 QQ。内置 imagegen 若只落到 `$CODEX_HOME/generated_images/`，插件也会按任务开始和结束时间扫描生成的图片作为兜底。
 
 ---
 

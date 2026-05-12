@@ -620,8 +620,8 @@ XiaoQing 主进程
 - `/codex create <label> [cwd:<path>]` 创建业务会话标签
 - `/codex <label> <任务>` 将任务放入该标签队列，handler 立即返回“已收到”
 - 同一标签内任务串行执行，不同标签受 `max_parallel_jobs` 限制并行执行
-- 任务完成后通过 `context.send_action()` 主动发送结果，底层仍走统一 OneBot 发送链路
-- 会话索引和对话记录保存在 `plugins/codex/data/`
+- 任务完成后通过 `context.send_action()` 主动发送文字和图片结果，底层仍走统一 OneBot 发送链路
+- 会话索引保存在 `plugins/codex/data/sessions.json`，每个标签的记录、图片和任务 artifacts 保存在 `plugins/codex/data/session/<label>/`
 
 这种方式适合耗时较长但不应占用 bot 多轮会话的后台工作。
 
