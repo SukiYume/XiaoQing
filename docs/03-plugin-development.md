@@ -635,7 +635,7 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
 2. 后续命令显式带标签，例如 `/codex main <任务>`，插件立即返回“已收到”。
 3. 插件内部按标签串行、跨标签并行执行任务。
 4. 任务完成后用 `context.send_action(build_action(...))` 主动发送结果。
-5. 运行时状态写入 `context.data_dir`，例如 `plugins/codex/data/sessions.json` 和对话 JSONL。
+5. 运行时状态写入 `context.data_dir`，例如 `plugins/codex/data/sessions.json`、`session/<label>/conversation.jsonl` 和任务图片 artifacts。
 
 这种设计不会占用 `SessionHandler`，因此不影响同一用户继续发送其他命令或闲聊。
 

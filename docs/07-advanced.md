@@ -195,8 +195,8 @@ await context.end_session()
 - `/codex create <label> [cwd:<path>]` 创建一个业务会话标签，不创建框架 Session。
 - `/codex <label> <任务>` 将任务加入标签队列，handler 立即返回“已收到”。
 - 同一标签内任务串行运行，避免同一 Codex thread 被并发 resume；不同标签之间按 `max_parallel_jobs` 并行。
-- 任务完成、失败、超时或取消后，插件用 `context.send_action()` 主动回发 `[codex:<label> #<job_id>]` 消息。
-- 会话索引和对话记录保存在 `plugins/codex/data/`，重启后可以继续知道 label、cwd 和 Codex thread id。
+- 任务完成、失败、超时或取消后，插件用 `context.send_action()` 主动回发 `[codex:<label> #<job_id>]` 消息；如果任务生成图片，会随文字一起发送 QQ image 段。
+- 会话索引保存在 `plugins/codex/data/sessions.json`，对话记录、图片副本和任务 artifacts 保存在 `plugins/codex/data/session/<label>/`，重启后可以继续知道 label、cwd 和 Codex thread id。
 
 这种模式不会让 `SessionHandler` 接管同一用户的后续普通消息，因此用户可以继续使用其他命令或闲聊。
 
