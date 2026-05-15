@@ -726,6 +726,11 @@ function ensureStyles() {
             width: 100%;
             min-width: 0;
             flex: 1 1 auto;
+            padding: 0 12px 0 14px;
+            border-color: var(--color-border);
+            border-radius: 14px;
+            background: rgba(255,255,255,0.94);
+            font-weight: 500;
         }
         .ledger-amount-input::-webkit-outer-spin-button,
         .ledger-amount-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
@@ -768,6 +773,15 @@ function ensureStyles() {
             box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
         }
         .ledger-amount-input::placeholder { color: var(--color-text-secondary); }
+        .ledger-filter-bar .ledger-amount-input:hover {
+            border-color: #9CA3AF;
+            background: #EEF0F2;
+        }
+        .ledger-filter-bar .ledger-amount-input:focus {
+            border-color: var(--color-ledger);
+            background: rgba(255,255,255,0.94);
+            box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
+        }
 
         /* Shared custom select */
         .ledger-filter-bar .pselect-trigger {

@@ -6,6 +6,16 @@
 
 ## 未发布
 
+## 2026-05-15
+
+### Pendo Web 账本筛选样式
+
+- 统一 Ledger 页面“筛选范围”中金额上下限输入框与时段、账户、分类筛选框的高度、内边距、边框、圆角、背景和字重。
+- 将金额筛选输入框的 hover/focus 状态对齐到同一区域的 custom select 视觉规则，同时不影响快捷记账金额输入框和自定义日期输入框。
+- 已执行 `node --check plugins/pendo/web/static/js/pages/ledger.js`、`git diff --check`，并通过 Pendo Web demo 页面检查关键 computed style。
+
+## 2026-05-12
+
 ### Codex 图片结果透传
 
 - 调整 `plugins/codex` 的运行时数据布局，将每个 Codex 标签的对话记录、图片副本和任务 artifacts 收拢到 `plugins/codex/data/session/<label>/`。
