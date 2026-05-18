@@ -602,7 +602,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 触发和频控说明如下。
 
-- 当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时，所有群聊消息都会进入插件观察；`random_reply_rate` 不再决定是否进入插件。
+- 当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时，群聊消息会先经过插件观察；`random_reply_rate` 不参与 dispatcher 分发。
 - `/xc`、私聊、`@小青`、直接叫名字、只喊名字后的追问、reply 引用小青，以及有近期上下文锚点的“她/ta”共指召唤，会跳过普通插话概率并强制回复。
 - 没有明确 directed attention 的普通群聊消息才会使用 `reply_probability_base`、heartflow、连续未回复补偿和硬频控。
 - 配置边界：`reply_probability_private`、`heartflow.threshold`、`heartflow.enable_random_gate`、`heartflow.weight_mentioned`、`heartflow.weight_private`、`heartflow.weight_rate_limit`、`heartflow.weight_cooldown`、`heartflow.weight_interval` 不参与当前回复主路径。私聊、点名和共指由 attention gate 处理；速率限制由硬频控处理。
@@ -678,7 +678,6 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 ```json
 {
-  "random_reply_rate": 0.05,         // 随机回复概率（仅 smalltalk 生效）
   "plugins": {
     "smalltalk_provider": "smalltalk", // 或 "xiaoqing_chat"
     "smalltalk": {

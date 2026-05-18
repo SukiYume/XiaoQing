@@ -167,7 +167,7 @@ def is_admin(self, user_id: Optional[int]) -> bool:
 
 ### 核心逻辑
 
-框架引入了 Handler 链式处理模式，采用责任链模式来处理消息。
+Dispatcher 负责把已经验证的 OneBot 消息事件解析成 `MessageContext`，再按照固定的 A-G 线性流程处理。处理状态保存在 `MessageContext` 与局部控制流中。
 
 ```python
 class Dispatcher:
@@ -178,340 +178,76 @@ class Dispatcher:
         self.semaphore = semaphore
         self.session_manager = session_manager
         self._muted_groups: Dict[int, float] = {}  # 静音管理
-        
-        # Handler 链：按优先级依次尝试处理
-        self._handlers: tuple[MessageHandler, ...] = (
-            BotNameHandler(self),      # 1. 处理仅提及机器人名字
-            CommandHandler(self),       # 2. 命令匹配
-            SessionHandler(self),       # 3. 活跃会话
-            SmalltalkHandler(self),    # 4. 闲聊
-        )
     
     async def handle_event(self, event: Dict) -> List[Dict]:
         """处理事件（带并发控制）"""
         async with self.semaphore:
-            return await self._handle_event(event)
+            return await self._process_event(event)
     
-    async def _handle_event(self, event: Dict) -> List[Dict]:
-        # 1. 仅处理消息事件
-        if event.get("post_type") != "message":
+    async def _process_event(self, event: Dict) -> List[Dict]:
+        # Step 0: 解析消息
+        ctx = self.parser.parse(event)
+        if ctx is None:
             return []
-        
-        # 2. 解析消息
-        text, user_id, group_id = normalize_message(event)
-        
-        # 3. 决策判断
-        decision = self._make_decision(text, user_id, group_id)
-        if not decision.should_process:
-            return []
-        
-        # 4. URL 检测（全局监听）
-        if url_match and not has_prefix:
-            result = await self._handle_url(url, event)
-            if result:
-                return result
-        
-        # 5. Handler 链式处理
-        for handler in self._handlers:
-            result = await handler.handle(text, event, context)
-            if result is not None:
-                return result
-        
-        return []
-```
 
-### Handler 链式处理
+        await self._observe_message(ctx)
 
-框架引入了责任链模式，将消息处理逻辑分解为独立的 Handler。
+        # Step A: clean_text 是单个 URL 时直接交给 url_parser
+        if ctx.is_url_only:
+            return await self._invoke_url_parser(ctx, ctx.clean_text.strip()) or []
 
-#### MessageHandler 基类
-
-```python
-class MessageHandler(ABC):
-    """Handler 基类"""
-    
-    def __init__(self, dispatcher: Dispatcher):
-        self.dispatcher = dispatcher
-    
-    @abstractmethod
-    async def handle(
-        self,
-        text: str,
-        event: Dict[str, Any],
-        context: PluginContext
-    ) -> Optional[List[Dict[str, Any]]]:
-        """
-        处理消息
-        
-        返回:
-            - List[Dict]: 消息段列表，表示处理成功
-            - None: 不处理，传递给下一个 Handler
-        """
-        pass
-```
-
-#### BotNameHandler
-
-处理仅提及机器人名字的消息。
-
-```python
-class BotNameHandler(MessageHandler):
-    """处理仅机器人名字"""
-    
-    async def handle(self, text: str, event: Dict, context) -> Optional[List]:
-        # 检查文本是否仅包含 bot_name
-        bot_name = context.config.get("bot_name", "")
-        
-        # 去除标点和空格
-        cleaned = text.strip("，。！？、,.!? ")
-        
-        if cleaned == bot_name:
-            # 返回帮助或问候
-            return segments(
-                f"你好！我是 {bot_name}\n"
-                f"发送 /help 查看可用命令"
-            )
-        
-        return None
-```
-
-#### CommandHandler
-
-匹配并执行命令。
-
-```python
-class CommandHandler(MessageHandler):
-    """命令匹配和执行"""
-    
-    async def handle(self, text: str, event: Dict, context) -> Optional[List]:
-        # 1. 剥离前缀
-        clean_text = self.dispatcher._strip_prefix(text, event, context)
-        if clean_text is None:
-            return None
-        
-        # 2. 路由匹配
-        resolved = self.dispatcher.router.resolve(clean_text)
-        if not resolved:
-            return None
-        
-        # 3. 权限检查
-        spec, args = resolved
-        if spec.admin_only and not context.dispatcher.is_admin(event.get("user_id")):
-            return segments("权限不足")
-        
-        # 4. 执行命令
-        return await spec.handler(spec.name, args, event, context)
-```
-
-#### SessionHandler
-
-处理活跃会话。
-
-```python
-class SessionHandler(MessageHandler):
-    """活跃会话处理"""
-    
-    async def handle(self, text: str, event: Dict, context) -> Optional[List]:
-        # 检查是否有活跃会话
-        session_manager = self.dispatcher.session_manager
-        if not session_manager:
-            return None
-        
-        session = await session_manager.get(
-            context.current_user_id,
-            context.current_group_id
+        # Step B: 处理门控
+        should_process = (
+            ctx.is_private
+            or not self.config_provider.config.get("require_bot_name_in_group", True)
+            or ctx.has_prefix
+            or await self._has_active_session(ctx)
         )
-        
-        if not session:
-            return None
-        
-        # 获取会话插件模块
-        plugin_name = session.plugin_name
-        plugin = self.dispatcher.app.plugin_manager.get_plugin(plugin_name)
-        
-        if not plugin or not hasattr(plugin.module, "handle_session"):
-            return None
-        
-        # 调用 handle_session
-        return await plugin.module.handle_session(text, event, context, session)
+        if not should_process:
+            return []
+
+        # Step C-G: 只喊名字、命令、未知命令、会话、闲聊回落
+        ...
 ```
 
-#### SmalltalkHandler
+### 线性处理流程
 
-处理闲聊消息。
-
-```python
-class SmalltalkHandler(MessageHandler):
-    """闲聊处理"""
-    
-    async def handle(self, text: str, event: Dict, context) -> Optional[List]:
-        # 检查 smalltalk_mode
-        decision = self.dispatcher._make_decision(text, ...)
-        if not decision.smalltalk_mode:
-            return None
-        
-        # 获取 smalltalk_provider
-        provider_name = context.config.get("plugins", {}).get("smalltalk_provider")
-        if not provider_name:
-            return None
-        
-        plugin = self.dispatcher.app.plugin_manager.get_plugin(provider_name)
-        
-        if not plugin or not hasattr(plugin.module, "handle_smalltalk"):
-            return None
-        
-        # 调用 handle_smalltalk
-        result = await plugin.module.handle_smalltalk(text, event, context)
-        
-        # 返回空列表表示不回复
-        if not result:
-            return None
-        
-        return result
+```
+Step A: URL short-circuit (clean_text 单 URL → url_parser；mute 不影响)
+Step B: 处理门控
+        - 私聊：处理
+        - require_bot_name_in_group=False：处理
+        - has_prefix（/ 开头 OR bot_name OR @me）：处理
+        - 有活跃 session 且非 is_only_bot_name：处理
+        - 否则：丢弃
+Step C: is_only_bot_name → 默认回应 / call_bot_name_only
+Step D: router 命中 → 执行命令
+Step E: has_command_prefix 且命令未命中 → 未知命令提示
+Step F: 活跃 session → 转 session 插件
+Step G: 回落 smalltalk provider（mute 仅在此步阻塞）
 ```
 
-#### 短路机制
+### 解析信号
 
-```python
-# Handler 链执行示例
-async def _handle_event(self, event: Dict) -> List[Dict]:
-    results = []
-    
-    for handler in self._handlers:
-        result = await handler.handle(text, event, context)
-        
-        if result is not None:
-            # 短路：不再执行后续 Handler
-            return result
-        
-        # 继续下一个 Handler
-    
-    # 所有 Handler 都不处理
-    return []
-```
-
-**短路机制的优势**：
-1. **性能优化**：一旦找到合适的处理者，立即返回
-2. **优先级明确**：命令优先于会话，会话优先于闲聊
-3. **解耦合**：每个 Handler 独立，互不影响
-
-### 决策判断逻辑
-
-```python
-@dataclass
-class ProcessDecision:
-    """处理决策"""
-    should_process: bool    # 是否应该处理
-    smalltalk_mode: bool    # 是否进入闲聊模式
-
-
-def _make_decision(
-    self,
-    text: str,
-    is_private: bool,
-    has_bot_name: bool,
-    has_prefix: bool,
-    group_id: Optional[int],
-    ...
-) -> ProcessDecision:
-    """
-    返回处理决策
-    
-    特殊处理：
-    - 当 smalltalk_provider 为 xiaoqing_chat 时，所有群聊消息都进入 SmalltalkHandler
-    - random_reply_rate 配置失效
-    - xiaoqing_chat 在插件内使用 attention gate / 硬频控 / 普通插话概率决定是否回复
-    """
-    # xiaoqing_chat 特殊处理
-    if self._get_smalltalk_provider() == "xiaoqing_chat":
-        return ProcessDecision(True, True)
-    
-    # 私聊始终处理，可闲聊
-    if is_private:
-        return ProcessDecision(True, True)
-    
-    # 群聊检查
-    is_muted = self.is_muted(group_id)
-    
-    # 有命令前缀 -> 处理（静音不影响命令）
-    if has_prefix:
-        return ProcessDecision(True, False)
-    
-    # 有 bot_name -> 处理
-    if has_bot_name:
-        return ProcessDecision(True, not is_muted)  # 静音时不闲聊
-    
-    # 静音 -> 不处理
-    if is_muted:
-        return ProcessDecision(False, False)
-    
-    # 随机回复
-    random_reply_rate = self.config.get("random_reply_rate", 0.05)
-    if random.random() < random_reply_rate:
-        return ProcessDecision(True, True)
-    
-    return ProcessDecision(False, False)
-
-
-def _get_smalltalk_provider(self) -> Optional[str]:
-    """获取当前闲聊提供者"""
-    return self.config.get("plugins", {}).get("smalltalk_provider")
-```
+- `has_prefix` 表示消息以命令前缀（默认 `/`）开头，或包含 `bot_name`（任意位置），或包含 @机器人（任意位置）。
+- `has_command_prefix` 单独标识严格以命令前缀开头。
+- URL 处理改用 `ctx.is_url_only`：仅当 `clean_text` strip 后整体匹配 `^https?://\S+$` 时调度到 `url_parser`。
 
 ### 前缀剥离
 
 ```python
-def _strip_prefix(self, text: str, event: Dict, context: PluginContext) -> Optional[str]:
-    """剥离前缀（@机器人、bot_name、命令前缀）"""
-    
-    # 1. 剥离 @机器人
-    text = self._strip_at_mention(text, event)
-    
-    # 2. 剥离 bot_name
-    text = self._strip_bot_name(text, context)
-    
-    # 3. 剥离命令前缀
-    text = self._strip_command_prefix(text, context)
-    
-    return text
-
-
-def _strip_at_mention(self, text: str, event: Dict) -> str:
-    """剥离 @机器人"""
-    # 从消息段中提取 @信息
-    message = event.get("message", [])
-    for segment in message:
-        if segment.get("type") == "at":
-            text = text.replace(f"[CQ:at,qq={segment['data']['qq']}] ", "")
-    return text
-
-
-def _strip_bot_name(self, text: str, context: PluginContext) -> str:
-    """剥离 bot_name（支持模糊匹配）"""
-    bot_name = context.config.get("bot_name", "")
-    
-    if not bot_name:
-        return text
-    
-    # 检查是否以 bot_name 开头（忽略大小写）
-    if text.lower().startswith(bot_name.lower()):
-        # 移除 bot_name 和后面的标点
-        remainder = text[len(bot_name):]
-        return remainder.lstrip("，。！？、,.!? ")
-    
-    return text
-
-
-def _strip_command_prefix(self, text: str, context: PluginContext) -> str:
-    """剥离命令前缀"""
-    prefixes = context.config.get("command_prefixes", ["/"])
-    
-    for prefix in prefixes:
-        if text.startswith(prefix):
-            return text[len(prefix):]
-    
-    return text
+parsed = parse_text_command_context(
+    text,
+    event,
+    bot_name=bot_name,
+    prefixes=prefixes,
+    self_id=self_id,
+    bot_name_pattern=self._bot_name_pattern,
+    message_scan=message_scan,
+)
 ```
+
+`parse_text_command_context()` 统一产出 `clean_text`、`has_bot_name`、`has_command_prefix`、`has_prefix`、`is_only_bot_name`、`is_at_me` 和 `is_url_only`。前缀剥离只移除开头的 @、开头的 bot_name 及随后的命令前缀；`has_prefix` 的检测范围更宽，bot_name 或 @me 在任意位置都会让消息被视为指向机器人。
 
 ### 静音管理
 
@@ -565,10 +301,10 @@ def get_mute_remaining(self, group_id: int) -> Optional[float]:
 | 消息类型 | 静音时是否处理 |
 |----------|---------------|
 | 命令（有前缀） | ✅ 处理 |
-| @机器人 | ✅ 处理命令，❌ 不闲聊 |
-| 活跃会话 | ✅ 处理（会话优先级最高） |
-| 随机回复 | ❌ 不处理 |
-| 闲聊 | ❌ 不处理 |
+| 单 URL | ✅ 处理，仍进入 `url_parser` |
+| @机器人 / bot_name | ✅ 通过门控，最终 smalltalk 回落会被静音阻塞 |
+| 活跃会话 | ✅ 处理 |
+| 闲聊回落 | ❌ 不处理 |
 
 ---
 
