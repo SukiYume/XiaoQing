@@ -96,7 +96,7 @@ XiaoQing 的核心架构分成三层。
 
 ## ⚙️ 核心组件
 
-在当前项目中，`core/` 的职责边界保持稳定。它处理所有插件共享的通用问题，不把某个业务插件的规则写进核心。少数特殊分支服务于清晰的职责划分，例如 `smalltalk_provider = "xiaoqing_chat"` 时让所有群聊消息进入 SmalltalkHandler，由聊天插件判断回复时机，核心只负责入口分发。
+在当前项目中，`core/` 的职责边界保持稳定。它处理所有插件共享的通用问题，不把某个业务插件的规则写进核心。`smalltalk_provider = "xiaoqing_chat"` 时，核心先调用插件的 `observe_message()` 观察消息；只有通过 dispatcher 门控并落到 smalltalk 回落时，才由聊天插件判断是否实际回复。
 
 ### 1. XiaoQingApp（app.py）
 
@@ -148,110 +148,67 @@ class XiaoQingApp:
 
 ### 2. Dispatcher（dispatcher.py）
 
-**职责**：消息分发的核心，采用 Handler 链式处理模式。
+**职责**：消息分发的核心。Dispatcher 使用单个线性流程处理消息，处理状态保存在 `MessageContext` 与局部控制流中。
 
 ```python
 class Dispatcher:
-    def __init__(self, ...):
-        # Handler 链：按优先级依次尝试处理
-        self._handlers: tuple[MessageHandler, ...] = (
-            BotNameHandler(self),      # 1. 处理仅提及机器人名字
-            CommandHandler(self),       # 2. 命令匹配
-            SessionHandler(self),       # 3. 活跃会话
-            SmalltalkHandler(self),    # 4. 闲聊
-        )
-    
-    async def handle_event(self, event: Dict) -> List[Dict]:
-        # 1. 并发控制
-        async with self.semaphore:
-            return await self._handle_event(event)
-    
-    async def _handle_event(self, event: Dict) -> List[Dict]:
-        # 2. 解析消息
-        text, user_id, group_id = normalize_message(event)
-        
-        # 3. 决策判断
-        decision = self._make_decision(text, user_id, group_id)
-        if not decision.should_process:
+    async def _process_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        ctx = self.parser.parse(event)
+        if ctx is None:
             return []
-        
-        # 4. URL 检测（全局监听）
-        if url_match and not has_prefix:
-            result = await url_plugin.handle_url(url, event, context)
-            if result:
-                return result
-        
-        # 5. Handler 链式处理
-        for handler in self._handlers:
-            result = await handler.handle(text, event, context)
-            if result is not None:
-                return result
-        
-        return []
+
+        await self._observe_message(ctx)
+
+        if ctx.is_url_only:
+            return await self._invoke_url_parser(ctx, ctx.clean_text.strip()) or []
+
+        should_process = (
+            ctx.is_private
+            or not config.get("require_bot_name_in_group", True)
+            or ctx.has_prefix
+            or has_active_session(ctx)
+        )
+        if not should_process:
+            return []
+
+        if ctx.is_only_bot_name:
+            return await self._handle_bot_name_only(ctx)
+
+        resolved = self.router.resolve(ctx.clean_text)
+        if resolved:
+            return await self._execute_command(resolved, ctx) or []
+
+        if ctx.has_command_prefix:
+            return unknown_command_hint(ctx)
+
+        if ctx.cached_session:
+            return await self._try_handle_session(ctx) or []
+
+        if self.is_muted(ctx.group_id):
+            return []
+
+        return await self._handle_smalltalk(ctx)
 ```
 
-**Handler 链工作原理**：
+**关键解析信号**：
 
-每个 Handler 实现相同的接口，按顺序尝试处理：
+- `has_prefix` 表示消息以命令前缀（默认 `/`）开头，或包含 `bot_name`（任意位置），或包含 @机器人（任意位置）。
+- `has_command_prefix` 单独标识严格以命令前缀开头。未知命令提示只看这个字段。
+- URL 处理改用 `ctx.is_url_only`：仅当 `clean_text` strip 后整体匹配 `^https?://\S+$` 时调度到 `url_parser`。文本中夹带 URL 不会触发 URL 短路。
 
-```python
-class MessageHandler(ABC):
-    @abstractmethod
-    async def handle(self, text: str, event: Dict, context) -> Optional[List[Dict]]:
-        """处理消息，返回消息段列表或 None（表示不处理）"""
-        pass
-```
-
-> [!IMPORTANT]
-> **短路机制**：一旦某个 Handler 返回非 `None` 结果，后续 Handler 不会执行。命令优先于闲聊，会话处理优先于普通匹配。
-
-**消息处理决策树**：
+**线性处理顺序**：
 
 ```
-收到消息
-    │
-    ├─ 私聊消息 ─────────────────────────────────> 进入 Handler 链
-    │
-    └─ 群聊消息
-         │
-         ├─ 存在命令前缀（如 /help）────────────> 进入 Handler 链（命令优先）
-         │
-         ├─ 包含机器人名字（如"小青"）──────────> 进入 Handler 链（可闲聊）
-         │
-         ├─ 群被静音 ──────────────────────────> 不处理（命令除外）
-         │
-         ├─ 存在活跃会话 ──────────────────────> 进入 Handler 链（会话优先）
-         │
-         ├─ 随机触发（random_reply_rate）──────> 进入 Handler 链（闲聊模式）
-         │
-         └─ 否则 ──────────────────────────────> 不处理
-
-Handler 链处理流程：
-    │
-    ├─ BotNameHandler：仅机器人名字 ───────────> 处理并返回
-    │       │
-    │       └─ 否 ────────────────────────────────> 继续下一个 Handler
-    │
-    ├─ CommandHandler：命令匹配成功 ───────────> 处理并返回
-    │       │
-    │       └─ 否 ────────────────────────────────> 继续下一个 Handler
-    │
-    ├─ SessionHandler：存在活跃会话 ───────────> 处理并返回
-    │       │
-    │       └─ 否 ────────────────────────────────> 继续下一个 Handler
-    │
-    └─ SmalltalkHandler：smalltalk_mode=True ─> 处理并返回
-            │
-            └─ 否 ────────────────────────────────> 返回空列表
+Step A: URL short-circuit（clean_text 单 URL → url_parser；mute 不影响）
+Step B: 处理门控（私聊、require_bot_name_in_group=False、has_prefix、活跃 session）
+Step C: is_only_bot_name → 默认回应 / call_bot_name_only
+Step D: router 命中 → 执行命令
+Step E: has_command_prefix 且命令未命中 → 未知命令提示
+Step F: 活跃 session → 转 session 插件
+Step G: 回落 smalltalk provider（mute 仅在此步阻塞）
 ```
 
-**xiaoqing_chat 特殊处理**：
-
-当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时，决策逻辑有特殊处理。
-- 所有群聊消息都返回 `should_process=True` 和 `smalltalk_mode=True`
-- `random_reply_rate` 配置失效
-- `xiaoqing_chat` 插件内部有自己的 attention gate、硬频控、普通群聊插话概率、heartflow 和 PFC planner
-- `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及近期上下文锚定小青的“她/ta”共指召唤，会在插件内标记为 forced，跳过普通插话概率
+`xiaoqing_chat` 仍然通过 `observe_message()` 观察已解析消息，是否实际回复由插件内部的 attention gate、硬频控、普通群聊插话概率、heartflow 和 PFC planner 决定。
 
 ---
 
@@ -521,17 +478,14 @@ class InboundServer:
    └─ 调用 handler(event)
 
 3. Dispatcher 处理
-   └─ normalize_message() 提取 text="echo hello", user_id=789, group_id=123456
-   └─ _make_decision() 判断需要处理（有命令前缀）
-   └─ URL 检测（无 URL，跳过）
-   └─ Handler 链处理：
-       ├─ BotNameHandler：不是仅机器人名字 → None
-       ├─ CommandHandler：匹配成功！
-       │   └─ router.resolve("echo hello") 得到 (echo插件, "hello")
-       │   └─ 权限检查通过
-       │   └─ 构建 context
-       │   └─ 调用 echo.handle("echo", "hello", event, context)
-       └─ （短路，后续 Handler 不执行）
+   └─ MessageParser.parse() 构建 MessageContext
+   └─ ctx.has_command_prefix=True，ctx.clean_text="echo hello"
+   └─ ctx.is_url_only=False，跳过 URL 短路
+   └─ 处理门控通过
+   └─ router.resolve("echo hello") 得到 (echo插件, "hello")
+   └─ 权限检查通过
+   └─ 构建 context
+   └─ 调用 echo.handle("echo", "hello", event, context)
 
 4. 插件处理
    └─ 返回 [{"type": "text", "data": {"text": "hello"}}]
@@ -560,16 +514,13 @@ class InboundServer:
 
 2. 用户后续消息 "50"
    └─ Dispatcher 处理
-   └─ Handler 链：
-       ├─ BotNameHandler：None
-       ├─ CommandHandler：无命令匹配 → None
-       ├─ SessionHandler：发现活跃会话！
-       │   └─ 调用 guess.handle_session("50", event, context, session)
-       │   └─ 返回 ["太大了！"]
-       └─ （短路）
+   └─ 命令未命中
+   └─ Step F 发现活跃会话
+   └─ 调用 guess.handle_session("50", event, context, session)
+   └─ 返回 ["太大了！"]
 
 3. 用户猜测正确 "42"
-   └─ SessionHandler 处理
+   └─ Step F 会话处理
    └─ guess.handle_session() 判断正确
    └─ context.end_session() 删除会话
    └─ 返回 ["恭喜你猜对了！"]

@@ -16,7 +16,7 @@
 | [05-api-reference.md](05-api-reference.md) | API 参考 | `PluginContext`、消息段构造、session、handler 返回值、smalltalk provider 接口 | 插件开发者 |
 | [06-configuration.md](06-configuration.md) | 配置详解 | `config.json`、`secrets.json`、OneBot、插件配置、热重载、安全和部署 | 部署/运维 |
 | [07-advanced.md](07-advanced.md) | 高级用法 | 多轮会话、调度、权限、Web 插件、复杂 smalltalk、性能和调试 | 高级开发者 |
-| [08-message-flow.md](08-message-flow.md) | 消息流程 | OneBot 事件、解析、决策、Handler 链、命令、会话、闲聊、发送 | 排障和框架维护 |
+| [08-message-flow.md](08-message-flow.md) | 消息流程 | OneBot 事件、解析、线性分发、命令、会话、闲聊、发送 | 排障和框架维护 |
 | [09-plugins.md](09-plugins.md) | 内置插件 | 所有内置插件的功能、命令、配置、示例和注意事项 | 使用者和维护者 |
 
 补充文档如下。

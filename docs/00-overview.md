@@ -213,7 +213,7 @@ return segments("你好")  # 自动转换为消息段
    ▼
 2. Dispatcher 解析
    - 提取文本、user_id、group_id
-   - 判断是否需要处理（普通群聊通常需要 @机器人、命令前缀或随机触发；`smalltalk_provider = xiaoqing_chat` 时所有群聊消息进入插件内部判定）
+   - 判断是否需要处理（私聊、命令前缀、bot_name、@机器人、关闭群聊名称限制或活跃会话）
    │
    ▼
 3. 命令路由

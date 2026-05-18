@@ -24,7 +24,6 @@ XiaoQing 使用两个 JSON 配置文件：
   "bot_name": "小青",
   "command_prefixes": ["/"],
   "require_bot_name_in_group": true,
-  "random_reply_rate": 0.05,
   "default_group_ids": [],
   
   "enable_ws_client": false,
@@ -99,10 +98,11 @@ XiaoQing 使用两个 JSON 配置文件：
 - **类型**：`float`
 - **默认**：`0.05`
 - **范围**：`0.0` - `1.0`
-- **说明**：群聊随机回复概率。即使不满足触发条件，也有此概率回复。
+- **状态**：兼容保留字段
+- **说明**：该字段不参与 dispatcher 分发。群聊回复概率由 `xiaoqing_chat` 等 smalltalk provider 内部控制。配置项保留用于兼容已有配置，无副作用。
 
 ```json
-{"random_reply_rate": 0.1}  // 10% 概率
+{"random_reply_rate": 0.1}
 ```
 
 #### default_group_ids
@@ -320,8 +320,9 @@ XiaoQing 使用两个 JSON 配置文件：
 ```
 
 **特性说明**：
-- 当使用 `xiaoqing_chat` 时，所有群聊消息都会进入 `handle_smalltalk()`
-- `random_reply_rate` 配置失效
+- 当使用 `xiaoqing_chat` 时，所有消息会先进入 `observe_message()` 供插件更新上下文
+- 只有通过 dispatcher 门控并落到 smalltalk 回落时，才会进入 `handle_smalltalk()`
+- `random_reply_rate` 不参与 dispatcher 分发
 - 由插件内部的 attention gate、硬频控、普通插话概率、PFC planner 和 reply checker 控制是否回复
 - `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及有近期上下文锚点的“她/ta”共指召唤会走 forced 路径
 - 支持向量数据库长期记忆
@@ -548,7 +549,7 @@ api_key = plugin_cfg.get("api_key")
 
 媒体目录固定在 `plugins/xiaoqing_chat/data/media/` 下，不通过 `xiaoqing_config.json` 配置。插件会把入站图片统一落到 `data/media/inbox/`。如果图片被识别成表情包，就会自动复制进 `data/media/library/` 并写入索引，后续可被主回复 LLM 通过 `[想发表情:hint]` marker 复用。新收进图库的表情包也会让这条消息更倾向于触发一次自然回应。
 
-出站阶段不会因为发现旧图库条目缺少 `description` / `marker` / `emotion_tags` 就同步重跑视觉模型。当前回复会先按主 LLM 输出的 `[想发图片:hint]` / `[想发表情:hint]` / `[想发QQ表情:hint]` 查找候选，坏条目的补修会放到后台异步执行，不阻塞这次回复。
+出站阶段不会因为发现旧图库条目缺少 `description` / `marker` / `emotion_tags` 就同步重跑视觉模型。当轮回复会先按主 LLM 输出的 `[想发图片:hint]` / `[想发表情:hint]` / `[想发QQ表情:hint]` 查找候选，坏条目的补修会放到后台异步执行，不阻塞这次回复。
 
 NapCat/OneBot 的纯 `mface` 消息如果没有直接携带图片源，插件会尝试通过 `onebot_http_base` 对应的 HTTP API 调用 `get_msg` 和 `get_image` 回收真实图片；拿不到真实图片时，再退回成仅保留摘要的 `[表情包：...]` 标记。
 
@@ -727,7 +728,6 @@ Windows 的 `copy`、`del`、`type` 等命令是 shell 内建命令，不能直�
 // config.json
 {
   "log_level": "DEBUG",
-  "random_reply_rate": 0,
   "plugins": {
     "smalltalk_provider": "smalltalk"
   }
@@ -745,7 +745,6 @@ Windows 的 `copy`、`del`、`type` 等命令是 shell 内建命令，不能直�
 // config.json
 {
   "log_level": "INFO",
-  "random_reply_rate": 0.05,
   "max_concurrency": 10,
   "plugins": {
     "smalltalk_provider": "xiaoqing_chat"
@@ -792,7 +791,6 @@ Windows 的 `copy`、`del`、`type` 等命令是 shell 内建命令，不能直�
 {
   "bot_name": "小青",
   "command_prefixes": ["/"],
-  "random_reply_rate": 0.05,  // 使用 xiaoqing_chat 时此配置失效
   "plugins": {
     "smalltalk_provider": "xiaoqing_chat"
   }
@@ -1016,18 +1014,21 @@ location /pendo/ {
 
 ---
 
-## Handler 链相关配置
+## 消息分发相关配置
 
-框架引入了 Handler 链式处理，无需额外配置即可启用。
+框架使用 dispatcher 线性流程处理消息，无需额外配置即可启用。
 
 **相关配置**：
-- `bot_name`：影响 BotNameHandler 的触发
-- `command_prefixes`：影响 CommandHandler 的匹配
-- `session_timeout`：影响 SessionHandler 的超时
-- `plugins.smalltalk_provider`：影响 SmalltalkHandler 的调用
+- `bot_name`：影响 `has_prefix`、`has_bot_name` 与只喊名字回应
+- `command_prefixes`：影响 `has_command_prefix` 与命令匹配
+- `session_timeout`：影响活跃会话的 Step F 处理
+- `plugins.smalltalk_provider`：影响 Step G 的 smalltalk 回落
 
-**Handler 优先级**（固定，不可配置）：
-1. BotNameHandler
-2. CommandHandler
-3. SessionHandler
-4. SmalltalkHandler
+**分发顺序**（固定，不可配置）：
+1. URL-only 短路
+2. 处理门控
+3. 只喊名字回应
+4. 命令匹配
+5. 未知命令提示
+6. 活跃会话
+7. smalltalk 回落

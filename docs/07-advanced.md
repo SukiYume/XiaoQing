@@ -198,7 +198,7 @@ await context.end_session()
 - 任务完成、失败、超时或取消后，插件用 `context.send_action()` 主动回发 `[codex:<label> #<job_id>]` 消息；如果任务生成图片，会随文字一起发送 QQ image 段。
 - 会话索引保存在 `plugins/codex/data/sessions.json`，对话记录、图片副本和任务 artifacts 保存在 `plugins/codex/data/session/<label>/`，重启后可以继续知道 label、cwd 和 Codex thread id。
 
-这种模式不会让 `SessionHandler` 接管同一用户的后续普通消息，因此用户可以继续使用其他命令或闲聊。
+这种模式不会占用框架活跃会话，因此用户可以继续使用其他命令或闲聊。
 
 ---
 
@@ -411,9 +411,9 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List[Dict]:
 
 ### 触发条件
 
-- 私聊：无命令前缀的消息
-- 群聊：包含 bot_name 但非命令
-- 群聊：随机触发（`random_reply_rate`）
+- 私聊：命令未匹配、没有活跃会话消费时进入 smalltalk 回落
+- 群聊：消息带命令前缀、包含 bot_name、@ 机器人，或 `require_bot_name_in_group=false` 时进入处理流程
+- 群聊静音：只跳过 smalltalk 回落，不影响 URL-only、命令、只喊名字和活跃会话
 
 ### 配置闲聊提供者
 
@@ -442,115 +442,62 @@ def call_bot_name_only(context) -> List[Dict]:
 
 ---
 
-## Handler 链式处理
+## Dispatcher 消息分发顺序
 
-框架引入了责任链模式来处理消息，更加清晰和灵活。
+Dispatcher 使用固定线性流程处理消息。插件通过约定函数接入，无需注册自定义处理链。
 
-### Handler 链架构
+### 线性流程
 
 ```
 消息到达 Dispatcher
     ↓
-决策判断 (should_process)
+解析 MessageContext
     ↓
-Handler 链依次尝试：
+URL-only 短路
     ↓
-┌─────────────────────────────┐
-│ 1. BotNameHandler       │ ← 处理仅机器人名字（如"小青"）
-│    - 返回固定回复或帮助  │
-└──────────┬────────────────┘
-           │ 失败（返回 None）
-           ▼
-┌─────────────────────────────┐
-│ 2. CommandHandler        │ ← 命令匹配和执行
-│    - 匹配触发词          │
-│    - 检查权限           │
-│    - 调用 handle()       │
-└──────────┬────────────────┘
-           │ 失败（无匹配命令）
-           ▼
-┌─────────────────────────────┐
-│ 3. SessionHandler        │ ← 活跃会话处理
-│    - 调用 handle_session()│
-└──────────┬────────────────┘
-           │ 失败（无活跃会话）
-           ▼
-┌─────────────────────────────┐
-│ 4. SmalltalkHandler      │ ← 闲聊处理
-│    - 调用 handle_smalltalk()│
-└──────────┬────────────────┘
-           │ 失败（不回复）
-           ▼
-       返回 []
+处理门控（私聊 / require_bot_name_in_group=false / has_prefix / 活跃会话）
+    ↓
+只喊机器人名字或只 @ 机器人
+    ↓
+命令匹配并调用 handle()
+    ↓
+未知命令提示（仅严格命令前缀）
+    ↓
+活跃会话并调用 handle_session()
+    ↓
+smalltalk 回落并调用 handle_smalltalk()
 ```
 
-### 短路机制
+### 短路规则
 
-一旦某个 Handler 返回非 `None` 结果，后续 Handler 不会执行。
+某个步骤返回结果后，后续步骤不会继续执行。
 
 **示例**：用户发送 `/help`
 
 ```
-1. BotNameHandler: 不是仅机器人名字 → None
-2. CommandHandler: 匹配成功！
-   → 调用 help.handle()
-   → 返回帮助信息
-   → 短路 ✅
-3. SessionHandler: 不执行 ❌
-4. SmalltalkHandler: 不执行 ❌
+1. URL-only：不是完整单 URL，跳过
+2. 处理门控：has_prefix=True，放行
+3. 只喊名字：否
+4. 命令匹配：匹配 /help
+5. 调用 help.handle() 并返回帮助信息
+6. 直接返回，不进入会话或 smalltalk 回落
 ```
 
-### 开发自定义 Handler
+### 扩展边界
 
-自定义 Handler 可用于扩展消息处理逻辑。
+插件应优先使用现有接入点：
 
-**步骤 1**：定义 Handler 类
+- `handle()`：命令处理
+- `handle_session()`：多轮会话
+- `handle_smalltalk()`：smalltalk 回落
+- `call_bot_name_only()`：只喊机器人名字或只 @ 机器人
+- `observe_message()`：观察消息、维护上下文，不直接决定 dispatcher 是否回复
 
-```python
-from core.dispatcher import MessageHandler
+如果需要新增全局消息处理能力，应在 `core/dispatcher.py` 的线性流程中显式设计步骤和优先级，并同步更新架构文档与回归测试。
 
-class CustomHandler(MessageHandler):
-    """自定义消息处理器"""
-    
-    def __init__(self, dispatcher):
-        super().__init__(dispatcher)
-    
-    async def handle(self, text: str, event: Dict, context) -> Optional[List]:
-        """处理消息"""
-        # 实现你的逻辑
-        if should_handle(text, event):
-            return segments("自定义处理结果")
-        
-        # 不处理，传递给下一个 Handler
-        return None
-```
+### 调试
 
-**步骤 2**：在插件 init() 中注册
-
-```python
-async def init(context):
-    """插件初始化"""
-    # 获取 dispatcher
-    dispatcher = context.app.dispatcher
-    
-    # 创建自定义 Handler
-    custom_handler = CustomHandler(dispatcher)
-    
-    # 插入到 Handler 链的指定位置
-    # 例如：插入到 CommandHandler 之后
-    handlers_list = list(dispatcher._handlers)
-    handlers_list.insert(1, custom_handler)  # 插入到索引 1
-    dispatcher._handlers = tuple(handlers_list)
-```
-
-**注意事项**：
-- Handler 的执行顺序很重要
-- 插入位置影响处理优先级
-- 建议在文档中说明自定义 Handler 的优先级
-
-### Handler 链调试
-
-启用 DEBUG 日志可以查看 Handler 链的执行过程：
+启用 DEBUG 日志可以查看 dispatcher 的关键分发决策：
 
 ```python
 # config.json
@@ -559,13 +506,7 @@ async def init(context):
 }
 ```
 
-日志输出示例：
-```
-2026-02-04 10:00:00 DEBUG - BotNameHandler: checking...
-2026-02-04 10:00:00 DEBUG - BotNameHandler: not matched, returning None
-2026-02-04 10:00:00 DEBUG - CommandHandler: checking...
-2026-02-04 10:00:00 DEBUG - CommandHandler: matched /help, executing...
-```
+日志会包含收到的消息、命令匹配、URL 处理、会话处理、群聊静音跳过 smalltalk 等信息。
 
 ---
 
@@ -608,7 +549,7 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 
 #### 3. 图片与表情包进入正常对话流
 
-启用媒体能力后，用户发来的图片、NapCat `mface`、QQ 原生 `face` 不再被视为“空消息”。
+启用媒体能力后，用户发来的图片、NapCat `mface`、QQ 原生 `face` 会作为有效消息进入解析。
 
 **工作原理**：
 ```

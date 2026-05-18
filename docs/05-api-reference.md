@@ -330,129 +330,38 @@ if session.is_active():
 
 ---
 
-## ProcessDecision 类
+## Dispatcher 线性消息流程
 
-处理决策数据类，用于决策判断。
+Dispatcher 的入口由 `MessageParser.parse()` 构建 `MessageContext`，随后 `_process_event()` 按固定 A-G 顺序处理。插件通过命令、会话、smalltalk provider 等约定函数接入。
 
-### 定义
+### MessageContext 关键字段
 
-```python
-@dataclass
-class ProcessDecision:
-    """处理决策"""
-    should_process: bool    # 是否应该处理
-    smalltalk_mode: bool    # 是否进入闲聊模式
-```
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `clean_text` | `str` | 去除开头 bot_name / 命令前缀后的文本 |
+| `has_bot_name` | `bool` | 原始文本任意位置包含 `bot_name` |
+| `has_command_prefix` | `bool` | 原始文本严格以命令前缀开头 |
+| `has_prefix` | `bool` | `has_command_prefix`、`has_bot_name`、`is_at_me` 的并集 |
+| `is_only_bot_name` | `bool` | 只叫机器人名字或只 @ 机器人 |
+| `is_at_me` | `bool` | OneBot at 段或 raw_message 中 @ 机器人 |
+| `is_url_only` | `bool` | `clean_text.strip()` 整体匹配 `^https?://\S+$` |
 
-### 使用场景
-
-此数据类由 `Dispatcher._make_decision()` 返回，决定消息如何处理。
-
-**示例**：
-
-```python
-# xiaoqing_chat 特殊处理
-if smalltalk_provider == "xiaoqing_chat":
-    # 所有群聊消息都进入 SmalltalkHandler
-    return ProcessDecision(True, True)
-
-# 私聊始终处理
-if is_private:
-    return ProcessDecision(True, True)
-
-# 群聊有命令前缀
-if has_prefix:
-    return ProcessDecision(True, False)  # 不进入闲聊模式
-
-# 群聊随机触发
-if random.random() < random_reply_rate:
-    return ProcessDecision(True, True)  # 进入闲聊模式
-
-# 其他情况不处理
-return ProcessDecision(False, False)
-```
-
-### 决策影响
-
-| `should_process` | `smalltalk_mode` | 结果 |
-|-----------------|-----------------|------|
-| `False` | 任意 | 不处理，直接返回 `[]` |
-| `True` | `False` | 处理，但不进入 SmalltalkHandler |
-| `True` | `True` | 处理，可进入 SmalltalkHandler |
-
----
-
-## Handler 链
-
-框架引入了责任链模式，Handler 链按优先级依次处理消息。
-
-### Handler 类型
-
-| Handler | 优先级 | 职责 | 调用函数 |
-|---------|---------|------|---------|
-| `BotNameHandler` | 1 | 处理仅机器人名字 | - |
-| `CommandHandler` | 2 | 命令匹配和执行 | `handle()` |
-| `SessionHandler` | 3 | 活跃会话处理 | `handle_session()` |
-| `SmalltalkHandler` | 4 | 闲聊处理 | `handle_smalltalk()` |
-
-### 执行流程
-
-```python
-# Dispatcher 内部执行
-for handler in self._handlers:
-    result = await handler.handle(text, event, context)
-    
-    if result is not None:
-        # 短路：返回结果，不再执行后续 Handler
-        return result
-
-# 所有 Handler 都不处理
-return []
-```
-
-### 短路机制
-
-- **短路**：一旦某个 Handler 返回非 `None` 结果，后续 Handler 不会执行
-- **优先级**：命令优先于会话，会话优先于闲聊
-- **独立性**：每个 Handler 独立判断是否处理
-
-### 示例场景
-
-**场景 1：用户发送命令 `/help`**
+### 处理顺序
 
 ```
-1. BotNameHandler: 不是仅机器人名字 → None
-2. CommandHandler: 匹配成功！
-   → 调用 help.handle()
-   → 返回帮助信息
-   → 短路 ✅
-3. SessionHandler: 不执行 ❌
-4. SmalltalkHandler: 不执行 ❌
+Step A: URL short-circuit（clean_text 单 URL → url_parser；mute 不影响）
+Step B: 处理门控（私聊、require_bot_name_in_group=False、has_prefix、活跃 session）
+Step C: is_only_bot_name → 默认回应 / call_bot_name_only
+Step D: router 命中 → 执行命令
+Step E: has_command_prefix 且命令未命中 → 未知命令提示
+Step F: 活跃 session → 转 session 插件
+Step G: 回落 smalltalk provider（mute 仅在此步阻塞）
 ```
 
-**场景 2：用户在会话中发送消息**
+### URL 与未知命令
 
-```
-1. BotNameHandler: None
-2. CommandHandler: 无匹配命令 → None
-3. SessionHandler: 发现活跃会话！
-   → 调用 guess.handle_session()
-   → 返回 ["太大了！"]
-   → 短路 ✅
-4. SmalltalkHandler: 不执行 ❌
-```
-
-**场景 3：用户发送闲聊消息**
-
-```
-1. BotNameHandler: None
-2. CommandHandler: 无匹配命令 → None
-3. SessionHandler: 无活跃会话 → None
-4. SmalltalkHandler: smalltalk_mode=True
-   → 调用 xiaoqing_chat.handle_smalltalk()
-   → 返回 ["你好！"]
-   → 短路 ✅
-```
+- URL 处理改用 `ctx.is_url_only`，只接受完整单 URL。`看看 https://example.com` 不会触发 `url_parser`。
+- 未知命令提示只在 `has_command_prefix=True` 且 router 未命中时出现。`小青 不存在的指令` 会继续走会话或 smalltalk 回落，不会被当作 `/不存在的指令`。
 
 ---
 
@@ -549,7 +458,7 @@ event = {
 
 ### 概述
 
-当用户处于活跃会话时，此函数会被调用处理用户的后续消息。在 Handler 链式架构中，`SessionHandler` 负责调用此函数。
+当用户处于活跃会话时，此函数会被调用处理用户的后续消息。在 dispatcher 线性流程中，Step F 负责调用此函数。
 
 ### 函数签名
 
@@ -587,7 +496,7 @@ async def handle_session(
     ↓
 用户后续消息
     ↓
-SessionHandler 捕获
+Dispatcher Step F 捕获
     ↓
 调用 handle_session()
     ↓
@@ -668,11 +577,11 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
 
 ### 架构特性
 
-在 Handler 链式架构中：
+在 dispatcher 线性流程中：
 
 1. **优先级明确**：会话处理在命令匹配之后、闲聊之前
-2. **绕过触发条件**：即使 `should_process = False`，活跃会话仍会处理
-3. **独立处理**：会话处理不受 `random_reply_rate` 或 `bot_name` 影响
+2. **绕过普通触发条件**：群聊普通文本没有 `has_prefix` 时，只要活跃会话存在仍会处理
+3. **独立处理**：会话处理不依赖 bot_name；只有 `is_only_bot_name` 会先走只叫名字回应，避免打断“叫机器人”语义
 
 ### 注意事项
 
@@ -698,9 +607,11 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
 
 URL 自动解析函数（可选）。
 
+Dispatcher 只在 Step A 调用此函数：`ctx.clean_text.strip()` 必须整体匹配 `^https?://\S+$`。含附加文字或多个 URL 的消息不会进入 `handle_url()`。
+
 ```python
 async def handle_url(
-    url: str,               # 提取到的 URL
+    url: str,               # clean_text 中的完整单 URL
     event: Dict[str, Any],  # 原始 OneBot 事件
     context: PluginContext  # 插件上下文
 ) -> List[Dict[str, Any]]:  # 返回消息段列表
@@ -760,8 +671,8 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
 
 当 `smalltalk_provider` 配置为 `xiaoqing_chat` 时：
 
-1. **所有群聊消息都会调用此函数**
-   - 不受 `random_reply_rate` 配置影响
+1. **进入 smalltalk 回落时会调用此函数**
+   - `random_reply_rate` 不参与 dispatcher 分发
    - 由插件内部控制 attention、回复频率、普通插话概率、PFC planner 和 reply checker
 
 2. **插件可以自主决定是否回复**
