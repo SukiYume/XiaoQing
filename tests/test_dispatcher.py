@@ -325,13 +325,12 @@ class TestMessageParser:
         assert ctx.is_url_only is False
 
     def test_parse_at_me_with_empty_text_is_only_bot_name(self, mock_config_provider: MagicMock):
-        """@me with no following text is is_only_bot_name (short-circuits is_url_only).
+        """@me with no following text yields is_only_bot_name=True and is_url_only=False (clean_text empty).
 
-        A face segment is included to keep the parser's empty-text-and-no-media
-        guard from dropping the event (see
-        test_parse_at_only_without_media_still_returns_none). The face does not
-        contribute text, so clean_text remains empty and is_only_bot_name is
-        driven by the (is_at_me and not clean_text) branch.
+        Note: in production, an @me-only message would be dropped by the parser's
+        empty-text-no-media guard at core/dispatcher.py. This test uses a face
+        segment to keep the event alive so the (is_at_me and not clean_text)
+        branch of is_only_bot_name can be exercised through MessageParser.parse.
         """
         parser = MessageParser(mock_config_provider)
         ctx = parser.parse({
