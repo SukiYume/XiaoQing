@@ -6,6 +6,16 @@
 
 ## 未发布
 
+## 2026-05-18
+
+### Pendo 待办交互添加
+
+- 调整 `/pendo todo add`：无参数时进入多轮交互，先输入待办内容，再依次填写计划日期、截止时间、提醒时间、分类、优先级和标签。
+- 保留 `/pendo todo add <内容> ...` 的单行快捷添加方式，并继续支持 `plan:`、`deadline:`、`remind:`、`cat:`、`p:` 和 `#标签` 等参数。
+- 交互式添加中除待办内容外，后续字段可输入 `0` 使用默认值，包括默认计划日期、无截止、无提醒、未分类、优先级 3 和无标签。
+- 补充 Pendo todo 回归测试，覆盖无参数启动 session、带参数快捷添加不创建 session、默认值流程和非法计划日期重新提示。
+- 已执行 `python -m pytest tests/plugins/test_pendo.py -q`、`python -m pytest @files -q`（`files` 为 `tests/plugins/test_pendo*.py`）、`python -m compileall plugins/pendo -q` 和 `git diff --check`。
+
 ## 2026-05-15
 
 ### Pendo Web 账本筛选样式

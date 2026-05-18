@@ -87,6 +87,7 @@ class PendoConfig:
     SESSION_TYPE_DIARY_TEMPLATE = "diary_template"
     SESSION_TYPE_EVENT_CONFLICT = "event_conflict"
     SESSION_TYPE_EVENT_INFO = "event_info"
+    SESSION_TYPE_TASK_ADD = "task_add"
     SESSION_TYPE_LEDGER_ADD = "ledger_add"
 
     # Web UI
