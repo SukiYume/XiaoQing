@@ -85,8 +85,8 @@ class AIParser:
 返回JSON:
 {{
   "title": "简洁标题",
-  "start_time": "YYYY-MM-DDTHH:MM:SS或null（有milestones时留null）",
-  "end_time": "YYYY-MM-DDTHH:MM:SS或null（有milestones时留null）",
+  "start_time": "YYYY-MM-DDTHH:MM:SS或null（多节点milestones时留null）",
+  "end_time": "YYYY-MM-DDTHH:MM:SS或null（多节点milestones时留null）",
   "location": "地点或null",
   "category": "工作|学习|生活|健康|财务|社交",
   "remind_offsets": ["提前1天", "提前1小时"],
@@ -100,8 +100,9 @@ class AIParser:
 规则:
 - 相对时间转绝对时间(明天→具体日期)
 - 无时间则默认09:00
-- milestones 是解析阶段的多节点列表；系统会把每个 milestone 创建成可独立删除、修改、查询的日程节点，并用 title 作为整体日程标题
-- 若用户描述多个具名时间点(如截止、开始、结束、里程碑等事件节点)，填milestones列表，start_time/end_time留null
+- milestones 只用于两个及以上独立时间节点；系统会把每个 milestone 创建成可独立删除、修改、查询的日程节点，并用 title 作为整体日程标题
+- 若用户描述两个及以上具名时间点(如注册截止、会议开始、会议结束等事件节点)，填milestones列表，start_time/end_time留null
+- 只有一个时间点的截止、申请、提交、面试、会议等普通单次日程必须写入start_time，milestones留空列表[]
 - "提前X天/周/小时提醒"是提醒偏移量，必须放入remind_offsets，绝对不能作为milestones节点
 - 普通单次事件milestones留空列表[]
 - 重复事件: 设置rrule，milestones必须留空列表[]，start_time设为第一次发生的时间
@@ -360,7 +361,7 @@ class AIParser:
 
         # milestones（多时间节点事件）
         raw_milestones = parsed.get("milestones")
-        if raw_milestones and isinstance(raw_milestones, list) and len(raw_milestones) >= 2:
+        if raw_milestones and isinstance(raw_milestones, list):
             valid_milestones = []
             for m in raw_milestones:
                 if isinstance(m, dict) and m.get("name") and m.get("time"):
@@ -377,6 +378,8 @@ class AIParser:
                     result["remind_times"] = self.build_remind_times_for_milestones(
                         valid_milestones, parsed["remind_offsets"], user_id=user_id
                     )
+            elif len(valid_milestones) == 1 and not result.get("start_time"):
+                result["start_time"] = valid_milestones[0]["time"]
 
         # notes
         if parsed.get("notes"):

@@ -1174,6 +1174,41 @@ class TestAIParserMilestones:
         assert result["notes"] == "https://example.com"
         assert len(result["remind_times"]) == 6  # 3 milestones × 2 offsets
 
+    def test_parse_event_with_ai_recovers_single_milestone_as_start_time(self):
+        """LLM 把单次日程误放进一个 milestone 时，应按单次日程整理。"""
+        import asyncio
+        import json
+        from unittest.mock import AsyncMock, patch
+
+        parser = self._make_parser()
+
+        mock_response = json.dumps(
+            {
+                "title": "悉尼大学博后申请",
+                "start_time": None,
+                "end_time": None,
+                "location": "悉尼大学",
+                "category": "工作",
+                "remind_offsets": ["提前1周", "提前1天"],
+                "rrule": None,
+                "milestones": [
+                    {"name": "申请截止", "time": "2026-06-14T14:00:00"},
+                ],
+                "notes": "https://example.com/job",
+            }
+        )
+
+        async def run():
+            with patch.object(parser, "_call_llm", new=AsyncMock(return_value=mock_response)):
+                return await parser.parse_event_with_ai("...", "user1")
+
+        result = asyncio.run(run())
+        assert result["title"] == "悉尼大学博后申请"
+        assert result["start_time"] == "2026-06-14T14:00:00"
+        assert "milestones" not in result
+        assert result["notes"] == "https://example.com/job"
+        assert len(result["remind_times"]) == 2
+
 
 class TestMilestoneEventHandler:
     """测试多时间节点事件创建"""
