@@ -228,6 +228,43 @@ class TestParseTextCommandContext:
         assert user_id is None
         assert group_id is None
 
+class TestIsCleanTextUrlOnly:
+    def test_bare_url(self):
+        from core.message import is_clean_text_url_only
+        assert is_clean_text_url_only("https://example.com") is True
+
+    def test_http_url(self):
+        from core.message import is_clean_text_url_only
+        assert is_clean_text_url_only("http://example.com/path?q=1") is True
+
+    def test_url_with_surrounding_whitespace(self):
+        from core.message import is_clean_text_url_only
+        assert is_clean_text_url_only("  https://example.com  ") is True
+
+    def test_text_before_url_rejected(self):
+        from core.message import is_clean_text_url_only
+        assert is_clean_text_url_only("看看 https://example.com") is False
+
+    def test_text_after_url_rejected(self):
+        from core.message import is_clean_text_url_only
+        assert is_clean_text_url_only("https://example.com 看看") is False
+
+    def test_multiple_urls_rejected(self):
+        from core.message import is_clean_text_url_only
+        assert is_clean_text_url_only("https://a.com https://b.com") is False
+
+    def test_empty_rejected(self):
+        from core.message import is_clean_text_url_only
+        assert is_clean_text_url_only("") is False
+
+    def test_non_http_scheme_rejected(self):
+        from core.message import is_clean_text_url_only
+        assert is_clean_text_url_only("ftp://example.com") is False
+
+    def test_plain_text_rejected(self):
+        from core.message import is_clean_text_url_only
+        assert is_clean_text_url_only("你好") is False
+
 # ============================================================
 # 运行测试
 # ============================================================
