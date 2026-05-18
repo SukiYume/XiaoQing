@@ -102,8 +102,10 @@ def sample_message_context() -> MessageContext:
         is_private=False,
         has_bot_name=False,
         has_prefix=True,
+        has_command_prefix=True,
         is_only_bot_name=False,
         is_at_me=False,
+        is_url_only=False,
         event={},
     )
 
@@ -527,8 +529,10 @@ class TestTryHandleCommand:
             is_private=False,
             has_bot_name=False,
             has_prefix=False,  # 没有命令前缀
+            has_command_prefix=False,
             is_only_bot_name=False,
             is_at_me=False,
+            is_url_only=False,
             event={},
         )
 
@@ -661,8 +665,10 @@ class TestMessageContext:
             is_private=False,
             has_bot_name=False,
             has_prefix=True,
+            has_command_prefix=True,
             is_only_bot_name=False,
             is_at_me=False,
+            is_url_only=False,
             event={},
         )
 

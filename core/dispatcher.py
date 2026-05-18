@@ -53,18 +53,20 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MessageContext:
     """消息上下文，封装消息相关的所有信息"""
-    request_id: str          # 请求追踪 ID
-    text: str                # 原始文本
-    clean_text: str          # 去除前缀后的文本
-    user_id: int | None   # 用户 ID
-    group_id: int | None  # 群 ID (私聊为 None)
-    is_private: bool         # 是否私聊
-    has_bot_name: bool       # 是否包含 bot_name
-    has_prefix: bool         # 是否有命令前缀
-    is_only_bot_name: bool   # 是否只叫 bot_name
-    is_at_me: bool           # 是否 @ 了机器人
-    event: dict[str, Any]    # 原始事件
-    cached_session: Any = None  # 缓存的会话对象（避免 TOCTOU 竞争）
+    request_id: str                 # 请求追踪 ID
+    text: str                       # 原始文本
+    clean_text: str                 # 去除前缀后的文本
+    user_id: int | None             # 用户 ID
+    group_id: int | None            # 群 ID (私聊为 None)
+    is_private: bool                # 是否私聊
+    has_bot_name: bool              # 是否包含 bot_name（任意位置）
+    has_prefix: bool                # 是否"指向 bot"：/开头 OR bot_name OR @me（任意位置）
+    has_command_prefix: bool        # 是否以命令前缀（默认 "/"）开头
+    is_only_bot_name: bool          # 是否只叫 bot_name
+    is_at_me: bool                  # 是否 @ 了机器人
+    is_url_only: bool               # clean_text 严格匹配 ^https?://\S+$
+    event: dict[str, Any]           # 原始事件
+    cached_session: Any = None      # 缓存的会话对象（避免 TOCTOU 竞争）
 
 @dataclass
 class ProcessDecision:
@@ -125,7 +127,7 @@ class MessageParser:
         if self_id and user_id and str(user_id) == self_id:
             return None
 
-        is_at_me, clean_text, has_bot_name, has_prefix, is_only_bot_name = parse_text_command_context(
+        parsed = parse_text_command_context(
             text,
             event,
             bot_name=bot_name,
@@ -135,18 +137,19 @@ class MessageParser:
             message_scan=message_scan,
         )
 
-        # 构建上下文
         return MessageContext(
             request_id=str(uuid.uuid4())[:8],
             text=text,
-            clean_text=clean_text,
+            clean_text=parsed.clean_text,
             user_id=user_id,
             group_id=group_id,
             is_private=group_id is None,
-            has_bot_name=has_bot_name,
-            has_prefix=has_prefix,
-            is_only_bot_name=is_only_bot_name,
-            is_at_me=is_at_me,
+            has_bot_name=parsed.has_bot_name,
+            has_prefix=parsed.has_prefix,
+            has_command_prefix=parsed.has_command_prefix,
+            is_only_bot_name=parsed.is_only_bot_name,
+            is_at_me=parsed.is_at_me,
+            is_url_only=parsed.is_url_only,
             event=event,
         )
 
