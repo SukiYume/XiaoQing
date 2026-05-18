@@ -165,92 +165,71 @@ async def handle(
 
 ## 💻 main.py 编写
 
-### Handler 链式处理机制
+### Dispatcher 线性处理流程
 
-框架引入了 Handler 链式处理模式，所有插件命令都通过 **CommandHandler** 执行。了解 Handler 链有助于开发更复杂的插件。
+Dispatcher 使用固定顺序处理消息。插件通过约定函数接入：命令用 `handle()`，多轮会话用 `handle_session()`，闲聊回落用 `handle_smalltalk()`，只喊机器人名字用 `call_bot_name_only()`。
 
-#### Handler 链处理流程
+#### 处理顺序
 
 ```
 消息到达 Dispatcher
     ↓
-决策判断 (should_process)
+解析 MessageContext
     ↓
-Handler 链依次尝试。
+URL-only 短路
     ↓
-┌─────────────────────────────┐
-│ 1. BotNameHandler         │ ← 处理仅机器人名字（如"小青"）
-│    - 返回固定回复或帮助   │
-└──────────┬────────────────┘
-           │ 失败（返回 None）
-           ▼
-┌─────────────────────────────┐
-│ 2. CommandHandler        │ ← 你的插件命令在这里执行
-│    - 匹配触发词          │
-│    - 调用 handle()       │
-│    - 检查权限           │
-└──────────┬────────────────┘
-           │ 失败（无匹配命令）
-           ▼
-┌─────────────────────────────┐
-│ 3. SessionHandler        │ ← 活跃会话处理
-│    - 调用 handle_session()│
-└──────────┬────────────────┘
-           │ 失败（无活跃会话）
-           ▼
-┌─────────────────────────────┐
-│ 4. SmalltalkHandler      │ ← 闲聊处理
-│    - 调用 handle_smalltalk()│
-└──────────┬────────────────┘
-           │ 失败（不回复）
-           ▼
-       返回 []
+处理门控（私聊 / require_bot_name_in_group=false / has_prefix / 活跃会话）
+    ↓
+只喊机器人名字或只 @ 机器人
+    ↓
+命令匹配并调用 handle()
+    ↓
+未知命令提示（仅严格命令前缀）
+    ↓
+活跃会话并调用 handle_session()
+    ↓
+smalltalk 回落并调用 handle_smalltalk()
 ```
 
-#### 插件与 Handler 链的交互
+#### 插件与分发流程的交互
 
-1. **命令处理**（CommandHandler）
+1. **命令处理**
    - 用户发送 `/your_command args`
-   - CommandHandler 匹配成功
-   - 调用你的 `handle()` 函数
-   - **短路机制**：一旦返回非空结果，后续 Handler 不会执行
+   - router 匹配到插件命令
+   - Dispatcher 调用插件的 `handle()` 函数
+   - 命令返回后不会继续进入会话或闲聊回落
 
-2. **会话处理**（SessionHandler）
-   - 用户在会话中发送消息
-   - SessionHandler 发现活跃会话
-   - 调用你的 `handle_session()` 函数
-   - **会话优先级**：会话处理在命令匹配之后
+2. **会话处理**
+   - 用户在活跃会话中发送普通消息
+   - 命令未匹配时，Dispatcher 调用插件的 `handle_session()` 函数
+   - 会话处理成功后不会继续进入闲聊回落
 
-3. **闲聊处理**（SmalltalkHandler）
+3. **闲聊处理**
    - 插件作为 `smalltalk_provider` 时
-   - SmalltalkHandler 调用你的 `handle_smalltalk()` 函数
-   - **回复控制**：插件根据上下文决定是否返回消息
+   - 只有消息通过门控、未命中命令、未被活跃会话消费、且群聊未静音时，Dispatcher 才调用 `handle_smalltalk()`
+   - 插件根据上下文决定是否返回消息，返回 `[]` 表示不回复
 
-#### 短路机制示例
+#### 短路示例
 
 ```python
 # 场景：用户在猜数字会话中，同时发送了命令
 # 用户的会话状态：guess_game = True
 
-# Handler 链执行：
-# 1. BotNameHandler: None
-# 2. CommandHandler: 匹配到 /guess 命令
-#    → 调用 guess.handle()
-#    → 返回 ["游戏开始！"]
-#    → 短路，后续 Handler 不执行 ❌
-#    → SessionHandler 不会处理
+# 执行顺序：
+# 1. 命令匹配到 /guess
+# 2. 调用 guess.handle()
+# 3. 返回 ["游戏开始！"]
+# 4. 直接返回，不进入 guess.handle_session()
 
 # 场景：用户在会话中，但没有发送命令
 # 用户的会话状态：guess_game = True
 
-# Handler 链执行：
-# 1. BotNameHandler: None
-# 2. CommandHandler: 无匹配命令 → None
-# 3. SessionHandler: 发现活跃会话！
-#    → 调用 guess.handle_session()
-#    → 返回 ["太大了！"]
-#    → 短路，后续 Handler 不执行 ❌
-#    → SmalltalkHandler 不会处理
+# 执行顺序：
+# 1. 命令未匹配
+# 2. 发现活跃会话
+# 3. 调用 guess.handle_session()
+# 4. 返回 ["太大了！"]
+# 5. 直接返回，不进入 handle_smalltalk()
 ```
 
 ---
@@ -310,15 +289,16 @@ async def handle_smalltalk(
 
 2. **xiaoqing_chat 特殊处理**
    - 当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时
-   - 所有群聊消息都会进入 `handle_smalltalk()`
-   - `random_reply_rate` 配置失效
+   - 所有消息会先进入 `observe_message()` 供插件更新上下文
+   - 只有通过 dispatcher 门控并落到 smalltalk 回落时，才会进入 `handle_smalltalk()`
+   - `random_reply_rate` 不参与 dispatcher 分发
    - 由插件内部的 attention gate、硬频控、普通插话概率、PFC planner 和 reply checker 控制是否回复
    - `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及有近期上下文锚点的“她/ta”共指召唤会走 forced 路径
 
-3. **与其他 Handler 的关系**
-   - SmalltalkHandler 是 Handler 链的最后一环
-   - 只有在前面所有 Handler 都失败时才会执行
-   - 如果用户在会话中，SmalltalkHandler 不会执行
+3. **与其他流程的关系**
+   - `handle_smalltalk()` 是最后的回落路径
+   - 命令、未知命令提示、活跃会话先于 `handle_smalltalk()` 执行
+   - 群聊静音只跳过 `handle_smalltalk()`，不影响命令、URL-only、只喊名字或活跃会话
 
 **示例：简单闲聊插件**
 
@@ -464,7 +444,7 @@ plugins = context.list_plugins()
 
 ### 会话方法（多轮对话）
 
-会话是 Handler 链的第三环（SessionHandler），用于实现多轮对话。
+会话位于 dispatcher 线性流程中的命令匹配之后、smalltalk 回落之前，用于实现多轮对话。
 
 #### 会话生命周期
 
@@ -478,7 +458,7 @@ plugins = context.list_plugins()
 3. 会话创建，存储初始数据
        │
        ▼
-4. 用户后续消息被 SessionHandler 捕获
+4. 用户后续消息在命令未匹配时进入会话处理
        │
        ▼
 5. 调用 handle_session()，不调用 handle()
@@ -637,7 +617,7 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
 4. 任务完成后用 `context.send_action(build_action(...))` 主动发送结果。
 5. 运行时状态写入 `context.data_dir`，例如 `plugins/codex/data/sessions.json`、`session/<label>/conversation.jsonl` 和任务图片 artifacts。
 
-这种设计不会占用 `SessionHandler`，因此不影响同一用户继续发送其他命令或闲聊。
+这种设计不会占用框架活跃会话，因此不影响同一用户继续发送其他命令或闲聊。
 
 ### 静音控制
 

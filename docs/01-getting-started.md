@@ -57,7 +57,6 @@ Copy-Item config/secrets.json.example config/secrets.json
   "bot_name": "小青",
   "command_prefixes": ["/"],
   "require_bot_name_in_group": true,
-  "random_reply_rate": 0.05,
   
   "enable_ws_client": false,
   "enable_inbound_server": true,
@@ -401,7 +400,8 @@ Windows 上遇到端口绑定失败，且 `netstat -ano` 看不到默认端口�
 
 1. 消息以命令前缀开头（如 `/help`）
 2. 消息包含机器人名称（如 `小青 你好`）
-3. 随机触发（默认 5% 概率）
+3. 消息 @ 机器人
+4. 该用户在当前群里有活跃会话
 
 响应所有群消息需要关闭群聊名称限制。
 ```json

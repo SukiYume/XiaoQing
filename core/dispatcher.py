@@ -7,8 +7,8 @@
 处理流程:
 1. 事件过滤 - 仅处理 message 类型事件
 2. 消息解析 - 提取文本、user_id、group_id
-3. URL 解析 - 全局监听 URL 并路由到 url_parser
-4. 触发判断 - 判断是否处理消息
+3. URL-only 短路 - clean_text 为单个 URL 时路由到 url_parser
+4. 触发门控 - 私聊、配置放行、has_prefix 或活跃会话
 5. 命令路由 - 匹配命令并执行
 6. 会话处理 - 多轮对话支持
 7. 闲聊处理 - 无命令时进行闲聊
@@ -24,7 +24,7 @@ import re
 import uuid
 from urllib.parse import urlsplit
 from dataclasses import dataclass
-from typing import Any, Protocol, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from . import constants
 from .clock import IClock, IRandom, SystemClock, SystemRandom
@@ -68,12 +68,6 @@ class MessageContext:
     event: dict[str, Any]           # 原始事件
     cached_session: Any = None      # 缓存的会话对象（避免 TOCTOU 竞争）
 
-@dataclass
-class ProcessDecision:
-    """处理决策结果"""
-    should_process: bool     # 是否处理消息
-    smalltalk_mode: bool     # 是否以闲聊模式处理
-
 class MessageParser:
     """解析消息事件并构建 MessageContext"""
 
@@ -114,7 +108,7 @@ class MessageParser:
         user_id = event.get("user_id")
         group_id = event.get("group_id")
 
-        if not text and not message_scan.has_media:
+        if not text and not message_scan.has_media and not message_scan.is_at_me:
             logger.debug(
                 "Drop empty message: post_type=%s message_type=%s message_kind=%s",
                 event.get("post_type"),
@@ -153,65 +147,6 @@ class MessageParser:
             event=event,
         )
 
-class MessageHandler(Protocol):
-    async def handle(
-        self,
-        ctx: MessageContext,
-        smalltalk_mode: bool,
-    ) -> list[dict[str, Any]] | None:
-        ...
-
-class BotNameHandler:
-    def __init__(self, dispatcher: "Dispatcher") -> None:
-        self._dispatcher = dispatcher
-
-    async def handle(
-        self,
-        ctx: MessageContext,
-        smalltalk_mode: bool,
-    ) -> list[dict[str, Any]] | None:
-        if not ctx.is_only_bot_name:
-            return None
-        logger.info("[%s] Handling bot name only", ctx.request_id)
-        return await self._dispatcher._handle_bot_name_only(ctx)
-
-class CommandHandler:
-    def __init__(self, dispatcher: "Dispatcher") -> None:
-        self._dispatcher = dispatcher
-
-    async def handle(
-        self,
-        ctx: MessageContext,
-        smalltalk_mode: bool,
-    ) -> list[dict[str, Any]] | None:
-        return await self._dispatcher._try_handle_command(ctx)
-
-class SessionHandler:
-    def __init__(self, dispatcher: "Dispatcher") -> None:
-        self._dispatcher = dispatcher
-
-    async def handle(
-        self,
-        ctx: MessageContext,
-        smalltalk_mode: bool,
-    ) -> list[dict[str, Any]] | None:
-        return await self._dispatcher._try_handle_session(ctx)
-
-class SmalltalkHandler:
-    def __init__(self, dispatcher: "Dispatcher") -> None:
-        self._dispatcher = dispatcher
-
-    async def handle(
-        self,
-        ctx: MessageContext,
-        smalltalk_mode: bool,
-    ) -> list[dict[str, Any]] | None:
-        if not smalltalk_mode:
-            return None
-        provider = self._dispatcher._get_smalltalk_provider()
-        logger.info("[%s] Handling as smalltalk (provider=%s)", ctx.request_id, provider)
-        return await self._dispatcher._handle_smalltalk(ctx)
-
 # ============================================================
 # Dispatcher 类
 # ============================================================
@@ -223,8 +158,8 @@ class Dispatcher:
     负责接收 OneBot 消息事件并路由到对应的处理器：
     - 命令处理: 匹配命令触发词并执行对应 handler
     - 会话处理: 多轮对话支持
-    - 闲聊处理: 无命令时进行闲聊
-    - URL 解析: 自动检测并解析 URL
+    - 闲聊处理: 无命令或会话命中时进行闲聊回落
+    - URL 解析: clean_text 为单个 URL 时解析 URL
     """
 
     def __init__(
@@ -263,17 +198,14 @@ class Dispatcher:
         self.metrics = metrics
         self.clock = clock or SystemClock()
         self.random = random_gen or SystemRandom()
-        self.parser = parser or MessageParser(config_provider)
-        self._handlers: tuple[MessageHandler, ...] = (
-            BotNameHandler(self),
-            CommandHandler(self),
-            SessionHandler(self),
-            SmalltalkHandler(self),
-        )
+        if parser is None:
+            self.parser = MessageParser(config_provider)
+        else:
+            self.parser = parser
+            self.refresh_prefix_cache()
         
         # 静音管理：{group_id: unmute_time}
         self._muted_groups: dict[int, float] = {}
-        self.refresh_prefix_cache()
 
     # ============================================================
     # 公开 API
@@ -327,9 +259,8 @@ class Dispatcher:
         让机器人在指定群静音一段时间
         
         静音期间：
-        - 不随机回复
-        - 不主动闲聊
-        - 但仍响应命令和主动 @ 
+        - 跳过 smalltalk 回落
+        - 仍响应 URL-only、命令、只喊名字、主动 @ 和活跃会话
         """
         unmute_time = self.clock.now() + duration_minutes * constants.SECONDS_PER_MINUTE
         self._muted_groups[group_id] = unmute_time
@@ -372,163 +303,108 @@ class Dispatcher:
     # ============================================================
 
     async def _process_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
-        """
-        处理事件的核心逻辑
-        
-        处理流程:
-        1. 消息解析
-        2. URL 检测
-        3. 触发判断
-        4. 命令/会话/闲聊 处理
-        """
-        # Step 1: 解析消息
-        msg_ctx = self.parser.parse(event)
-        if not msg_ctx:
+        """Process a validated message event through the linear A-G flow."""
+        # Step 0: parse
+        ctx = self.parser.parse(event)
+        if ctx is None:
             return []
-        
+
         logger.info(
             "[%s] Received: user=%s, group=%s, text='%s'",
-            msg_ctx.request_id, msg_ctx.user_id, msg_ctx.group_id,
-            self._truncate_text(msg_ctx.text, constants.DEFAULT_LOG_TRUNCATE_LEN)
+            ctx.request_id, ctx.user_id, ctx.group_id,
+            self._truncate_text(ctx.text, constants.DEFAULT_LOG_TRUNCATE_LEN),
         )
 
-        await self._observe_message(msg_ctx)
+        await self._observe_message(ctx)
 
-        # Step 2: URL 检测（全局监听）
-        url_result = await self._try_handle_url(msg_ctx)
-        if url_result:
-            return url_result
+        # Step A: URL short-circuit
+        if ctx.is_url_only:
+            url = ctx.clean_text.strip()
+            if self._is_blocked_url_target(url):
+                logger.warning("[%s] Blocked suspicious URL: %s", ctx.request_id, url)
+                return []
+            return await self._invoke_url_parser(ctx, url) or []
 
-        # Step 3: 判断是否处理
-        decision = self._decide_process(msg_ctx)
-        should_process = decision.should_process
-        
-        # 特殊逻辑：如果有活跃会话，始终处理消息（除非是命令前缀的情况，前面已经 covered）
-        # 这允许用户在会话中直接输入内容而不必 @机器人
-        # M3: 使用单次 get() 代替 exists() + get() 避免 TOCTOU 竞争
-        if not should_process and self.session_manager and msg_ctx.user_id:
-            # 只有当消息不是纯粹的 bot 名字时才检查会话（防止打断 invoke bot）
-            if not msg_ctx.is_only_bot_name:
-                session = await self.session_manager.get(msg_ctx.user_id, msg_ctx.group_id)
-                if session:
-                    should_process = True
-                    msg_ctx.cached_session = session
-                    # 会话模式下不强制闲聊
-        
+        # Step B: process gate
+        config = self.config_provider.config
+        require_bot_name = config.get("require_bot_name_in_group", True)
+        should_process = (
+            ctx.is_private
+            or (not require_bot_name)
+            or ctx.has_prefix
+        )
+        if (
+            not should_process
+            and self.session_manager is not None
+            and ctx.user_id is not None
+            and not ctx.is_only_bot_name
+        ):
+            session = await self.session_manager.get(ctx.user_id, ctx.group_id)
+            if session:
+                should_process = True
+                ctx.cached_session = session
+
         if not should_process:
             return []
 
-        # Step 4: 分类处理
-        return await self._dispatch(msg_ctx, decision.smalltalk_mode)
+        # Step C: only bot_name
+        if ctx.is_only_bot_name:
+            logger.info("[%s] Handling bot name only", ctx.request_id)
+            return await self._handle_bot_name_only(ctx)
 
-    def _decide_process(self, ctx: MessageContext) -> ProcessDecision:
-        """
-        判断是否处理消息
-        
-        返回 (should_process, smalltalk_mode)
-        """
-        config = self.config_provider.config
-        
-        # 私聊始终处理，可闲聊
-        if ctx.is_private:
-            return ProcessDecision(True, True)
+        # Step D: command match
+        resolved = self.router.resolve(ctx.clean_text)
+        if resolved:
+            return await self._execute_command(resolved, ctx) or []
 
-        # 群聊中...
-        require_bot_name = config.get("require_bot_name_in_group", True)
-        random_reply_rate = config.get("random_reply_rate", 0.05)
-        is_muted = self.is_muted(ctx.group_id)
+        # Step E: strict-/ unknown-command hint
+        if ctx.has_command_prefix and ctx.clean_text:
+            first = ctx.clean_text[0]
+            if first.isalpha() or "一" <= first <= "鿿":
+                cmd_name = ctx.clean_text.split()[0]
+                safe_cmd = Dispatcher._truncate_text(cmd_name, max_len=20)
+                logger.info("[%s] Unknown command: '%s'", ctx.request_id, cmd_name)
+                return [{
+                    "type": "text",
+                    "data": {"text": f"❓ 未知命令: /{safe_cmd}\n💡 输入 /help 查看可用命令"},
+                }]
 
-        # 有命令前缀时始终处理（静音不影响命令）
-        if ctx.has_prefix:
-            return ProcessDecision(True, False)
+        # Step F: session continuation
+        if ctx.cached_session is None and self.session_manager is not None and ctx.user_id is not None:
+            ctx.cached_session = await self.session_manager.get(ctx.user_id, ctx.group_id)
+        if ctx.cached_session is not None:
+            session_result = await self._try_handle_session(ctx)
+            if session_result is not None:
+                return session_result
 
-        # xiaoqing_chat 需要拿到所有群消息并自行决定是否回复
-        if self._get_smalltalk_provider() == "xiaoqing_chat":
-            return ProcessDecision(True, True)
-
-        # 有 bot_name 或 @机器人 时处理
-        if ctx.has_bot_name or ctx.is_at_me:
-            # 静音时不闲聊，只处理命令
-            return ProcessDecision(True, not is_muted)
-
-        # 不要求 bot_name 时处理
-        if not require_bot_name:
-            return ProcessDecision(True, False)
-
-        # 静音模式下不随机回复
-        if is_muted:
-            return ProcessDecision(False, False)
-
-        # 其他 smalltalk 提供者（如 smalltalk）使用 random_reply_rate 控制随机回复
-        if random_reply_rate > 0 and self.random.random() < random_reply_rate:
-            return ProcessDecision(True, True)
-
-        return ProcessDecision(False, False)
-
-    async def _dispatch(self, ctx: MessageContext, smalltalk_mode: bool) -> list[dict[str, Any]]:
-        """
-        分发消息到对应的处理器
-        
-        处理优先级:
-        1. 只叫 bot_name
-        2. 命令匹配
-        3. 活跃会话
-        4. 闲聊
-        """
-        for handler in self._handlers:
-            result = await handler.handle(ctx, smalltalk_mode)
-            if result is not None:
-                return result
-
-        logger.debug("[%s] No action taken", ctx.request_id)
-        return []
+        # Step G: smalltalk fallback (mute blocks this step only)
+        if self.is_muted(ctx.group_id):
+            logger.debug("[%s] Group muted; skip smalltalk", ctx.request_id)
+            return []
+        provider = self._get_smalltalk_provider()
+        logger.info("[%s] Handling as smalltalk (provider=%s)", ctx.request_id, provider)
+        return await self._handle_smalltalk(ctx)
 
     # ============================================================
     # 命令处理
     # ============================================================
 
-    async def _try_handle_command(self, ctx: MessageContext) -> list[dict[str, Any]] | None:
-        """
-        尝试匹配并执行命令
-        
-        Returns:
-            命令执行结果，如果未匹配返回 None
-        """
-        resolved = self.router.resolve(ctx.clean_text)
-        if not resolved:
-            # 如果有命令前缀但没匹配到命令，给出提示
-            if ctx.has_prefix and ctx.clean_text:
-                # 检查是否像是一个命令（以字母或中文开头）
-                first_char = ctx.clean_text[0]
-                if first_char.isalpha() or '\u4e00' <= first_char <= '\u9fff':
-                    cmd_name = ctx.clean_text.split()[0] if ctx.clean_text else ctx.clean_text
-                    logger.info(
-                        "[%s] Unknown command: '%s'",
-                        ctx.request_id, cmd_name
-                    )
-                    # 提供更详细的错误消息，包含用户输入的命令
-                    safe_cmd = Dispatcher._truncate_text(cmd_name, max_len=20)
-                    return [{
-                        "type": "text",
-                        "data": {"text": f"❓ 未知命令: /{safe_cmd}\n💡 输入 /help 查看可用命令"}
-                    }]
-            return None
-        
+    async def _execute_command(
+        self,
+        resolved: tuple[Any, str],
+        ctx: MessageContext,
+    ) -> list[dict[str, Any]] | None:
+        """Execute a matched command (router-resolved)."""
         spec, args = resolved
         logger.info(
             "[%s] Command matched: %s.%s (args='%s')",
-            ctx.request_id, spec.plugin, spec.name, args
+            ctx.request_id, spec.plugin, spec.name, args,
         )
 
-        # 权限检查
         if spec.admin_only and not self.admin_check.is_admin(ctx.user_id):
-            logger.warning(
-                "[%s] Permission denied for user %s",
-                ctx.request_id, ctx.user_id
-            )
+            logger.warning("[%s] Permission denied for user %s", ctx.request_id, ctx.user_id)
             return [{"type": "text", "data": {"text": "权限不足"}}]
 
-        # 执行命令
         context = self.build_context(spec.plugin, ctx.user_id, ctx.group_id, ctx.request_id)
         start_time = time.perf_counter()
         try:
@@ -536,20 +412,14 @@ class Dispatcher:
             logger.info("[%s] Command completed", ctx.request_id)
             if self.metrics:
                 await self.metrics.record_plugin_execution(
-                    spec.plugin,
-                    spec.name,
-                    time.perf_counter() - start_time,
-                    is_error=False,
+                    spec.plugin, spec.name, time.perf_counter() - start_time, is_error=False,
                 )
             return result
         except Exception as exc:
             logger.exception("[%s] Command failed: %s", ctx.request_id, exc)
             if self.metrics:
                 await self.metrics.record_plugin_execution(
-                    spec.plugin,
-                    spec.name,
-                    time.perf_counter() - start_time,
-                    is_error=True,
+                    spec.plugin, spec.name, time.perf_counter() - start_time, is_error=True,
                 )
             return [{"type": "text", "data": {"text": "⚠️ 命令执行出错，请联系管理员查看日志"}}]
 
@@ -610,36 +480,15 @@ class Dispatcher:
     # URL 处理
     # ============================================================
 
-    async def _try_handle_url(self, ctx: MessageContext) -> list[dict[str, Any]] | None:
-        """
-        尝试检测并处理 URL
-        
-        仅当消息中包含 URL 且没有命令前缀时触发
-        """
-        # 有命令前缀时不处理 URL（避免干扰命令）
-        if ctx.has_prefix:
-            return None
-        
-        # 检测 URL
-        url_match = re.search(r'https?://[^\s]+', ctx.text)
-        if not url_match:
-            return None
-        
-        # 静音时不处理
-        if self.is_muted(ctx.group_id):
-            return None
-        
-        url = url_match.group()
-        if self._is_blocked_url_target(url):
-            logger.warning("[%s] Blocked suspicious URL target: %s", ctx.request_id, url)
-            return None
+    async def _invoke_url_parser(self, ctx: MessageContext, url: str) -> list[dict[str, Any]] | None:
+        """Invoke url_parser for a clean URL message (called by Step A)."""
         plugin = self.plugin_registry.get("url_parser")
         if not plugin or not hasattr(plugin.module, "handle_url"):
             return None
-        
+
         logger.info("[%s] URL detected: %s", ctx.request_id, url)
         context = self.build_context("url_parser", ctx.user_id, ctx.group_id, ctx.request_id)
-        
+
         try:
             result = await plugin.module.handle_url(url, ctx.event, context)
             if result:
@@ -647,7 +496,7 @@ class Dispatcher:
                 return result
         except Exception as exc:
             logger.error("[%s] URL handling failed: %s", ctx.request_id, exc)
-        
+
         return None
 
     @staticmethod
@@ -702,15 +551,12 @@ class Dispatcher:
 
     async def _observe_message(self, ctx: MessageContext) -> None:
         provider = self._get_smalltalk_provider()
-        try:
-            await self._call_provider(
-                provider,
-                "observe_message",
-                ctx,
-                (ctx.clean_text, ctx.event),
-            )
-        except Exception:
-            return None
+        await self._call_provider(
+            provider,
+            "observe_message",
+            ctx,
+            (ctx.clean_text, ctx.event),
+        )
 
     async def _dispatch_to_provider(
         self,

@@ -32,7 +32,7 @@ XiaoQing 的消息处理由以下核心模块协作完成。
 | **SessionManager** | `core/session.py` | 会话管理，支持多轮对话 |
 | **message** | `core/message.py` | 消息解析工具函数 |
 
-消息链路的核心原则是“框架判断入口，插件判断业务”。框架负责把 OneBot 事件规范化、判断是否进入 Handler 链、匹配命令、恢复会话和调用 smalltalk provider；插件负责自己的业务语义。典型例子如下。
+消息链路的核心原则是“框架判断入口，插件判断业务”。框架负责把 OneBot 事件规范化、生成统一的 `MessageContext`、执行 URL 短路、门控、命令匹配、会话恢复和 smalltalk 回落；插件负责自己的业务语义。典型例子如下。
 
 - `pendo` 的日程、待办、账本、Web 和提醒逻辑全部在插件内完成，框架只负责把 `/pendo ...` 和定时任务调过去。
 - `xiaoqing_chat` 作为 `smalltalk_provider` 时，框架把群聊消息交给插件观察；插件内部再用 attention gate、频控、planner、LLM 和 reply checker 决定是否回复。
@@ -47,13 +47,9 @@ Dispatcher.handle_event()
 ┌─────────────────────────────────────────────────────────────┐
 │  1. 事件类型检查（仅处理 message 类型）                      │
 │  2. 消息解析（提取文本、user_id、group_id）                  │
-│  3. URL 检测（全局监听，可选）                               │
-│  4. 决策判断（是否需要处理）                                 │
-│  5. Handler 链式处理（按优先级依次尝试）                     │
-│     - BotNameHandler  → 仅机器人名字                        │
-│     - CommandHandler  → 命令匹配                            │
-│     - SessionHandler  → 活跃会话                            │
-│     - SmalltalkHandler → 闲聊                               │
+│  3. URL-only 短路（clean_text 为单个 URL）                   │
+│  4. 处理门控（私聊 / 配置放行 / has_prefix / 活跃会话）       │
+│  5. 线性分发：只喊名字 → 命令 → 未知命令 → 会话 → 闲聊       │
 └─────────────────────────────────────────────────────────────┘
     ↓
 返回 OneBot 消息段列表
@@ -61,52 +57,26 @@ Dispatcher.handle_event()
 
 ---
 
-### 1.2 Handler 链式架构
+### 1.2 线性分发流程
 
-XiaoQing 采用 **责任链模式** 来处理消息，每个 Handler 按顺序尝试处理消息，如果处理成功则返回，否则传递给下一个 Handler。
+`Dispatcher._process_event()` 按固定 A-G 顺序执行：
 
-#### Handler 链顺序
-
-```python
-self._handlers: tuple[MessageHandler, ...] = (
-    BotNameHandler(self),      # 1. 处理仅提及机器人名字的消息
-    CommandHandler(self),       # 2. 匹配并执行命令
-    SessionHandler(self),       # 3. 处理活跃会话
-    SmalltalkHandler(self),    # 4. 处理闲聊
-)
+```
+Step A: URL short-circuit（clean_text 单 URL → url_parser；mute 不影响）
+Step B: 处理门控
+        - 私聊：处理
+        - require_bot_name_in_group=False：处理
+        - has_prefix（/ 开头 OR bot_name OR @me）：处理
+        - 有活跃 session 且非 is_only_bot_name：处理
+        - 否则：丢弃
+Step C: is_only_bot_name → 默认回应 / call_bot_name_only
+Step D: router 命中 → 执行命令
+Step E: has_command_prefix 且命令未命中 → 未知命令提示
+Step F: 活跃 session → 转 session 插件
+Step G: 回落 smalltalk provider（mute 仅在此步阻塞）
 ```
 
-#### 各 Handler 职责
-
-| Handler | 处理场景 | 返回条件 |
-|---------|---------|---------|
-| **BotNameHandler** | 用户仅发送机器人名字（如 "小青"） | 文本仅包含 bot_name 或其变体 |
-| **CommandHandler** | 用户发送命令（如 "/help"） | 命令路由匹配成功 |
-| **SessionHandler** | 用户处于活跃会话中 | 存在活跃会话 |
-| **SmalltalkHandler** | 其他情况（闲聊） | smalltalk_mode 为 True |
-
-#### 关键特性
-
-1. **短路机制**：一旦某个 Handler 处理成功，后续 Handler 不会执行
-2. **优先级明确**：命令优先于会话，会话优先于闲聊
-3. **独立决策**：每个 Handler 独立决定是否处理，互不影响
-
-#### xiaoqing_chat 特殊处理
-
-当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时，决策逻辑特殊：
-
-```python
-if self._get_smalltalk_provider() == "xiaoqing_chat":
-    return ProcessDecision(True, True)  # 所有消息都允许进入 SmalltalkHandler
-```
-
-该行为带来以下结果。
-- **`random_reply_rate` 配置失效** - 所有群聊消息都会进入 xiaoqing_chat
-- **插件自主控制** - xiaoqing_chat 插件内部有 attention gate、硬频控、普通插话概率、heartflow 和 PFC planner
-- **directed attention 属于强制回复** - 进入插件后，`/xc`、私聊、被 `@`、直接叫 `bot_name`、只喊名字后的追问、reply 引用小青、以及近期上下文锚定小青的“她/ta”共指召唤，会标记为 forced，跳过普通回复概率判断
-- **返回空列表不回复** - 插件决定不回复时返回 `[]`
-
-这种设计让 LLM 模型根据上下文判断回复时机，比固定随机概率更贴近实际对话。
+`xiaoqing_chat` 作为 `smalltalk_provider` 时，dispatcher 会先调用 `observe_message()` 让插件观察消息；只有消息通过门控并落到 Step G 时才调用 `handle_smalltalk()`。插件内部继续负责 attention gate、硬频控、普通插话概率、heartflow、PFC planner 和 reply checker。
 
 ---
 
@@ -130,13 +100,16 @@ XiaoQing 接收 OneBot 标准格式的消息事件：
 
 ### 2.2 消息解析
 
-`normalize_message()` 函数从事件中提取关键信息：
+`MessageParser.parse()` 从事件中提取关键信息并生成 `MessageContext`：
 
 ```python
-text, user_id, group_id = normalize_message(event)
-# text: "/help 查看帮助"
-# user_id: 123456789
-# group_id: 987654321 (私聊时为 None)
+ctx = MessageParser(config_provider).parse(event)
+# ctx.text: "/help 查看帮助"
+# ctx.clean_text: "help 查看帮助"
+# ctx.user_id: 123456789
+# ctx.group_id: 987654321 (私聊时为 None)
+# ctx.has_command_prefix: True
+# ctx.has_prefix: True
 ```
 
 ### 2.3 文本提取
@@ -166,30 +139,29 @@ text = "你好世界"
 
 ---
 
-## 3️⃣ 决策判断
+## 3️⃣ 触发条件判断
 
-### 3.1 决策逻辑
+### 3.1 处理门控
 
-`_decide_process()` 方法判断消息是否需要处理，返回 `ProcessDecision(should_process, smalltalk_mode)`：
+Dispatcher 在 URL-only 短路之后进入 Step B。满足以下任一条件时继续处理：
 
-| 场景 | should_process | smalltalk_mode | 说明 |
-|------|----------------|----------------|------|
-| **私聊** | ✅ True | ✅ True | 私聊消息始终处理，可闲聊 |
-| **群聊 + 命令前缀** | ✅ True | ❌ False | 如 `/help`，不触发闲聊 |
-| **群聊 + 包含 bot_name** | ✅ True | ⚠️ 取决于静音 | 如 `小青 你好` |
-| **群聊 + 随机触发** | ✅ True | ✅ True | 按 `random_reply_rate` 概率 |
-| **群聊 + 静音中** | ❌ False | ❌ False | 除非有命令前缀或 bot_name |
+| 条件 | 说明 |
+|------|------|
+| 私聊 | 私聊消息始终处理 |
+| `require_bot_name_in_group=False` | 群聊普通文本也进入后续流程 |
+| `has_prefix=True` | 命令前缀、bot_name 或 @me 任一信号命中 |
+| 活跃会话 | 用户处于 session，且当前消息不是 `is_only_bot_name` |
 
-### 3.2 决策与 Handler 链的关系
+否则直接返回 `[]`。`random_reply_rate` 不参与 dispatcher 分发，群聊回复概率由 smalltalk provider 自己决定。
 
-**重要理解**：决策判断的结果会影响 Handler 链的执行：
+### 3.2 `has_prefix` 与 `has_command_prefix`
 
-1. **`should_process = False`**：直接返回 `[]`，所有 Handler 都不会执行
-2. **`should_process = True`**：进入 Handler 链，按顺序尝试各个 Handler
+`has_prefix` 表示消息以命令前缀（默认 `/`）开头，或包含 `bot_name`（任意位置），或包含 @机器人（任意位置）。`has_command_prefix` 单独标识严格以命令前缀开头。
 
-**特殊场景**：
-- **活跃会话存在**：无论 `should_process` 如何，`SessionHandler` 都会处理（会话优先级最高）
-- **xiaoqing_chat 作为 smalltalk_provider**：决策逻辑特殊，所有群聊消息都返回 `(True, True)`，`random_reply_rate` 失效
+这两个字段的区别影响两个行为：
+
+- 处理门控使用 `has_prefix`，所以 `你好啊小青` 和 @me 消息都能进入后续流程。
+- 未知命令提示只使用 `has_command_prefix`，所以 `小青 不存在的指令` 不会被提示成未知 `/不存在的指令`。
 
 ### 3.3 配置项
 
@@ -197,15 +169,13 @@ text = "你好世界"
 {
     "bot_name": "小青",
     "command_prefixes": ["/"],
-    "require_bot_name_in_group": true,
-    "random_reply_rate": 0.05
+    "require_bot_name_in_group": true
 }
 ```
 
-- **bot_name**: 机器人名称，群聊中提及时触发
+- **bot_name**: 机器人名称，任意位置出现都会让 `has_prefix=True`
 - **command_prefixes**: 命令前缀列表，通常为 `["/"]`
-- **require_bot_name_in_group**: 群聊是否需要 @ 或提及 bot_name
-- **random_reply_rate**: 无触发条件时随机回复的概率 (0-1)
+- **require_bot_name_in_group**: 群聊是否需要 @、提及 bot_name 或命令前缀
 
 ### 3.4 前缀剥离
 
@@ -326,10 +296,10 @@ async def handle(command: str, args: str, event: dict, context) -> List[dict]:
 
 ### 5.1 会话触发
 
-**会话是 Handler 链的第三环**，在命令匹配失败后执行：
+会话处理在 Step F 执行，位于命令匹配和未知命令提示之后、smalltalk 回落之前：
 
 ```python
-# SessionHandler 处理逻辑
+# Step F 处理逻辑
 session = await session_manager.get(user_id, group_id)
 if session:
     # 路由到会话插件的 handle_session()
@@ -337,8 +307,8 @@ if session:
 
 **重要特性**：
 - **优先级**：会话处理在命令之后、闲聊之前
-- **绕过触发条件**：即使 `should_process = False`，活跃会话仍会处理
-- **独立处理**：会话处理不受 `random_reply_rate` 或 `bot_name` 影响
+- **绕过普通触发条件**：群聊普通文本没有 `has_prefix` 时，只要活跃会话存在仍会处理
+- **只喊名字优先**：`is_only_bot_name` 先走 Step C，不会被活跃会话抢走
 
 ### 5.2 会话创建
 
@@ -390,10 +360,11 @@ async def handle_session(text: str, event: dict, context, session) -> List[dict]
 
 ### 6.1 触发条件
 
-当以下条件都满足时进入闲聊模式：
+当以下条件都满足时进入 smalltalk 回落：
 1. 没有匹配到命令
 2. 没有活跃会话
-3. `smalltalk_mode = True`
+3. 消息已经通过 Step B 处理门控
+4. 当前群没有被静音
 
 ### 6.2 闲聊提供者
 
@@ -415,7 +386,7 @@ async def handle_session(text: str, event: dict, context, session) -> List[dict]
 
 当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时：
 
-- **`random_reply_rate` 不生效** - 所有群聊消息都会进入 `xiaoqing_chat` 处理
+- **`random_reply_rate`** - 兼容保留字段，不参与 dispatcher 分发
 - **插件自行决定是否回复** - `xiaoqing_chat` 有自己的 attention gate、频率控制和普通插话概率判断
 - **directed attention 会强制回复** - 一旦进入插件，`/xc`、私聊、`@`、直接叫 `bot_name`、只喊名字后的追问、reply 引用小青，或有近期上下文锚点的“她/ta”共指召唤会走 forced 路径
 - **返回空列表表示不回复** - 插件决定不回复时返回 `[]`
@@ -423,7 +394,7 @@ async def handle_session(text: str, event: dict, context, session) -> List[dict]
 - **混合图文会保留顺序** - `xiaoqing_chat` 会在插件层按原始 segment 顺序重建有效用户输入
 - **媒体回复是后处理步骤** - 主回复仍先生成纯文本，是否再补本地图片 / 表情包 / QQ 表情由插件第二阶段决定；旧图库坏条目则在后台补修
 
-这样设计的原因是 LLM 模型可以根据上下文判断回复时机，比固定随机概率更贴近实际对话。
+这样设计的原因是 LLM 模型可以根据上下文判断回复时机，比 dispatcher 固定随机概率更贴近实际对话。
 
 ### 6.4 处理函数
 
@@ -685,91 +656,35 @@ GET /metrics
 ## 9️⃣ 完整处理流程图
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     OneBot 消息事件到达                          │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                    ┌─────────────────┐
-                    │ post_type ==    │
-                    │  "message"      │
-                    └────────┬────────┘
-                             │
-                    ┌────────┴────────┐
-                    │                 │
-                   Yes               No ──────────────────► 忽略
-                    │
-                    ▼
-        ┌───────────────────────┐
-        │   normalize_message   │
-        │ 提取 text, user_id,   │
-        │      group_id         │
-        └───────────┬───────────┘
-                    │
-                    ▼
-        ┌───────────────────────┐
-        │   URL 检测            │──── 有 URL 且无前缀 ────► url_parser
-        └───────────┬───────────┘
-                    │
-                    ▼
-        ┌───────────────────────┐
-        │   _decide_process    │
-        │   判断是否处理消息     │
-        └───────────┬───────────┘
-                    │
-           ┌────────┴────────┐
-           │                 │
-    should_process        不处理 ──────────────────────► 返回 []
-        = True
-           │
-           ▼
-    ┌──────────────────────────────────────────────────────────┐
-    │                  Handler 链式处理                          │
-    │                   按优先级依次尝试                          │
-    └──────────────────────────────────────────────────────────┘
-                    │
-           ┌────────┴────────┐
-           │                 │
-        BotNameHandler      失败
-        仅机器人名字          │
-           │                 │
-      ┌────┴────┐            ▼
-     Yes       No    ┌─────────────────┐
-      │        │     │ CommandHandler  │
-      ▼        │     │  命令匹配        │
-  处理完成     │     └────────┬────────┘
-  _handle_bot  │              │
-    _name_only  │      ┌───────┴───────┐
-                │   匹配成功         未匹配
-                │      │              │
-                │      ▼              ▼
-                │  ┌───────────┐  ┌─────────────────┐
-                │  │ 权限检查   │  │ SessionHandler  │
-                │  └─────┬─────┘  │  活跃会话        │
-                │        │        └────────┬────────┘
-                │        ▼         ┌────────┴────────┐
-                │  ┌───────────┐ 有会话          无会话
-                │  │ 执行命令   │    │              │
-                │  │ handler() │    ▼              ▼
-                │  └─────┬─────┘  ┌──────────┐  ┌─────────────────┐
-                │        │        │handle_   │  │ SmalltalkHandler│
-                │        │        │session() │  │  smalltalk_mode  │
-                │        │        └─────┬────┘  └────────┬────────┘
-                │        │              │       ┌────────┴────────┐
-                │        │              │      Yes              No
-                │        │              │       │                │
-                │        │              │       ▼                ▼
-                │        │              │  ┌───────────┐      返回 []
-                │        │              │  │_handle_   │
-                │        │              │  │smalltalk() │
-                │        │              │  └─────┬─────┘
-                │        │              │        │
-                └────────┴──────────────┼────────┴────────┘
-                                       │
-                                       ▼
-                              ┌─────────────────┐
-                              │ 返回消息段列表   │
-                              └─────────────────┘
+OneBot 消息事件
+    ↓
+post_type == "message" ? ── 否 → 忽略
+    ↓ 是
+MessageParser.parse()
+    ↓
+observe_message()
+    ↓
+Step A: ctx.is_url_only ?
+    ├─ 是 → _invoke_url_parser()
+    └─ 否
+        ↓
+Step B: 处理门控
+    ├─ 私聊
+    ├─ require_bot_name_in_group=False
+    ├─ has_prefix
+    └─ 活跃 session
+        ↓
+Step C: is_only_bot_name ? ── 是 → _handle_bot_name_only()
+        ↓ 否
+Step D: router.resolve(clean_text) 命中 ? ── 是 → _execute_command()
+        ↓ 否
+Step E: has_command_prefix ? ── 是 → 未知命令提示
+        ↓ 否
+Step F: 活跃 session ? ── 是 → _try_handle_session()
+        ↓ 否
+Step G: 群静音 ? ── 是 → 返回 []
+        ↓ 否
+_handle_smalltalk()
 ```
 
 ---
@@ -778,10 +693,10 @@ GET /metrics
 
 | 功能 | 文件 | 函数/方法 |
 |------|------|----------|
-| 消息解析 | `core/message.py` | `normalize_message()`, `extract_text()` |
+| 消息解析 | `core/message.py` | `parse_text_command_context()`, `extract_text()` |
 | 前缀剥离 & 上下文解析 | `core/message.py` | `parse_text_command_context()` |
-| 决策判断 | `core/dispatcher.py` | `Dispatcher._decide_process()` |
+| 线性分发 | `core/dispatcher.py` | `Dispatcher._process_event()` |
 | 命令路由 | `core/router.py` | `CommandRouter.resolve()` |
 | 会话管理 | `core/session.py` | `SessionManager` |
 | 静音控制 | `core/dispatcher.py` | `mute_group()`, `is_muted()` |
-| Handler 链 | `core/dispatcher.py` | `BotNameHandler`, `CommandHandler`, `SessionHandler`, `SmalltalkHandler` |
+| URL-only 路由 | `core/dispatcher.py` | `Dispatcher._invoke_url_parser()` |

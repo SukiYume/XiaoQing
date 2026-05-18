@@ -4,22 +4,14 @@ Dispatcher 单元测试
 
 import asyncio
 import pytest
-from pathlib import Path
-from typing import Any, Optional
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 from core.dispatcher import (
     Dispatcher,
     MessageContext,
-    ProcessDecision,
     MessageParser,
-    BotNameHandler,
-    CommandHandler,
-    SessionHandler,
-    SmalltalkHandler,
 )
 from core.router import CommandRouter, CommandSpec
-from core.clock import SystemClock, SystemRandom
 
 # ============================================================
 # Fixtures
@@ -33,7 +25,6 @@ def mock_config_provider():
         "bot_name": "小青",
         "command_prefixes": ["/"],
         "require_bot_name_in_group": True,
-        "random_reply_rate": 0.05,
         "plugins": {
             "smalltalk_provider": "smalltalk",
         },
@@ -252,8 +243,8 @@ class TestMessageParser:
         assert ctx.user_id == 12345
         assert ctx.group_id == 67890
 
-    def test_parse_at_only_without_media_still_returns_none(self, mock_config_provider: MagicMock):
-        """测试无文本无媒体的消息仍会被丢弃"""
+    def test_parse_at_only_without_media_is_bot_name_only(self, mock_config_provider: MagicMock):
+        """测试只 @ 机器人等同于只喊机器人名字"""
         parser = MessageParser(mock_config_provider)
         event = {
             "post_type": "message",
@@ -265,7 +256,13 @@ class TestMessageParser:
         }
 
         ctx = parser.parse(event)
-        assert ctx is None
+        assert ctx is not None
+        assert ctx.text == ""
+        assert ctx.clean_text == ""
+        assert ctx.has_prefix is True
+        assert ctx.is_at_me is True
+        assert ctx.is_only_bot_name is True
+        assert ctx.is_url_only is False
 
     def test_parse_populates_has_command_prefix(self, mock_config_provider: MagicMock):
         parser = MessageParser(mock_config_provider)
@@ -325,13 +322,7 @@ class TestMessageParser:
         assert ctx.is_url_only is False
 
     def test_parse_at_me_with_empty_text_is_only_bot_name(self, mock_config_provider: MagicMock):
-        """@me with no following text yields is_only_bot_name=True and is_url_only=False (clean_text empty).
-
-        Note: in production, an @me-only message would be dropped by the parser's
-        empty-text-no-media guard at core/dispatcher.py. This test uses a face
-        segment to keep the event alive so the (is_at_me and not clean_text)
-        branch of is_only_bot_name can be exercised through MessageParser.parse.
-        """
+        """@me with no following text yields is_only_bot_name=True and is_url_only=False."""
         parser = MessageParser(mock_config_provider)
         ctx = parser.parse({
             "post_type": "message",
@@ -477,67 +468,6 @@ class TestDispatcherHandleEvent:
         cmd_handler.assert_awaited_once()
 
 # ============================================================
-# Dispatcher._decide_process 测试
-# ============================================================
-
-class TestDecideProcess:
-    """_decide_process 测试"""
-
-    def test_private_always_process(self, dispatcher: Dispatcher, sample_message_context: MessageContext):
-        """测试私聊消息始终处理"""
-        ctx = sample_message_context
-        ctx.is_private = True
-
-        decision = dispatcher._decide_process(ctx)
-
-        assert decision.should_process is True
-
-    def test_prefix_triggers_processing(self, dispatcher: Dispatcher, sample_message_context: MessageContext):
-        """测试命令前缀触发处理"""
-        ctx = sample_message_context
-        ctx.has_prefix = True
-
-        decision = dispatcher._decide_process(ctx)
-
-        assert decision.should_process is True
-        assert decision.smalltalk_mode is False
-
-    def test_bot_name_triggers_processing(self, dispatcher: Dispatcher, sample_message_context: MessageContext):
-        """测试 bot_name 触发处理"""
-        ctx = sample_message_context
-        ctx.has_bot_name = True
-
-        decision = dispatcher._decide_process(ctx)
-
-        assert decision.should_process is True
-
-    def test_at_me_triggers_processing(self, dispatcher: Dispatcher, sample_message_context: MessageContext):
-        """测试 @ 机器人触发处理"""
-        ctx = sample_message_context
-        ctx.is_at_me = True
-
-        decision = dispatcher._decide_process(ctx)
-
-        assert decision.should_process is True
-
-    def test_xiaoqing_chat_processes_all_group_messages_as_smalltalk(
-        self,
-        dispatcher: Dispatcher,
-        sample_message_context: MessageContext,
-        mock_config_provider: MagicMock,
-    ):
-        """测试 xiaoqing_chat 提供者下所有群聊都进入 smalltalk_mode。"""
-        mock_config_provider.config["require_bot_name_in_group"] = False
-        mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
-        sample_message_context.has_prefix = False
-        sample_message_context.has_bot_name = False
-        sample_message_context.is_at_me = False
-
-        decision = dispatcher._decide_process(sample_message_context)
-
-        assert decision == ProcessDecision(True, True)
-
-# ============================================================
 # Dispatcher 静音控制测试
 # ============================================================
 
@@ -587,57 +517,11 @@ class TestDispatcherMuteControl:
         assert remaining == 0
 
 # ============================================================
-# Dispatcher._try_handle_command 测试
+# Dispatcher._execute_command 测试
 # ============================================================
 
-class TestTryHandleCommand:
-    """_try_handle_command 测试"""
-
-    @pytest.mark.asyncio
-    async def test_command_not_matched_returns_none(
-        self,
-        dispatcher: Dispatcher,
-        sample_message_context: MessageContext,
-        mock_router: MagicMock,
-    ):
-        """测试未匹配命令返回 None（无前缀情况）"""
-        mock_router.resolve = Mock(return_value=None)
-
-        # 创建一个没有前缀的上下文
-        no_prefix_ctx = MessageContext(
-            request_id="test_002",
-            text="hello world",
-            clean_text="hello world",
-            user_id=12345,
-            group_id=67890,
-            is_private=False,
-            has_bot_name=False,
-            has_prefix=False,  # 没有命令前缀
-            has_command_prefix=False,
-            is_only_bot_name=False,
-            is_at_me=False,
-            is_url_only=False,
-            event={},
-        )
-
-        result = await dispatcher._try_handle_command(no_prefix_ctx)
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_command_not_matched_with_prefix_returns_help(
-        self,
-        dispatcher: Dispatcher,
-        sample_message_context: MessageContext,
-        mock_router: MagicMock,
-    ):
-        """测试有前缀但未匹配命令时返回帮助提示"""
-        mock_router.resolve = Mock(return_value=None)
-
-        result = await dispatcher._try_handle_command(sample_message_context)
-        assert result is not None
-        assert len(result) == 1
-        assert "未知命令" in result[0]["data"]["text"]
-        assert "/help" in result[0]["data"]["text"]
+class TestExecuteCommand:
+    """_execute_command 测试"""
 
     @pytest.mark.asyncio
     async def test_admin_only_denied(
@@ -659,9 +543,8 @@ class TestTryHandleCommand:
             handler=AsyncMock(),
             priority=0,
         )
-        mock_router.resolve = Mock(return_value=(spec, ""))
 
-        result = await dispatcher._try_handle_command(sample_message_context)
+        result = await dispatcher._execute_command((spec, ""), sample_message_context)
         assert result is not None
         assert result[0]["data"]["text"] == "权限不足"
 
@@ -680,55 +563,33 @@ class TestUrlFiltering:
 # Dispatcher URL 处理测试
 # ============================================================
 
-class TestTryHandleUrl:
-    """_try_handle_url 测试"""
+class TestInvokeUrlParser:
+    """_invoke_url_parser 测试"""
 
     @pytest.mark.asyncio
-    async def test_url_detected_and_handled(
+    async def test_url_invokes_plugin(
         self,
         dispatcher: Dispatcher,
         sample_message_context: MessageContext,
         mock_plugin_registry: MagicMock,
     ):
-        """测试 URL 检测和处理"""
-        ctx = sample_message_context
-        ctx.text = "Check out https://example.com"
-        ctx.has_prefix = False
-
-        # Mock url_parser 插件
         mock_plugin = MagicMock()
         mock_plugin.module.handle_url = AsyncMock(return_value=[{"type": "text", "data": {"text": "URL handled"}}])
         mock_plugin_registry.get = Mock(return_value=mock_plugin)
 
-        result = await dispatcher._try_handle_url(ctx)
+        result = await dispatcher._invoke_url_parser(sample_message_context, "https://example.com")
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_url_not_detected(
+    async def test_missing_url_plugin_returns_none(
         self,
         dispatcher: Dispatcher,
         sample_message_context: MessageContext,
+        mock_plugin_registry: MagicMock,
     ):
-        """测试无 URL 时返回 None"""
-        ctx = sample_message_context
-        ctx.text = "No URL here"
-        ctx.has_prefix = False
+        mock_plugin_registry.get = Mock(return_value=None)
 
-        result = await dispatcher._try_handle_url(ctx)
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_url_with_prefix_ignored(
-        self,
-        dispatcher: Dispatcher,
-        sample_message_context: MessageContext,
-    ):
-        """测试有命令前缀时不处理 URL"""
-        ctx = sample_message_context
-        ctx.text = "/command https://example.com"
-        ctx.has_prefix = True
-
-        result = await dispatcher._try_handle_url(ctx)
+        result = await dispatcher._invoke_url_parser(sample_message_context, "https://example.com")
         assert result is None
 
 # ============================================================
@@ -763,18 +624,286 @@ class TestMessageContext:
         assert ctx.group_id == 67890
         assert ctx.is_private is False
 
-# ============================================================
-# ProcessDecision 测试
-# ============================================================
+class TestProcessEventLinearFlow:
+    """Tests for the linear Step A-G flow in _process_event."""
 
-class TestProcessDecision:
-    """ProcessDecision 数据类测试"""
+    @pytest.fixture
+    def event_template(self):
+        def _build(**overrides):
+            base = {
+                "post_type": "message",
+                "message_type": "group",
+                "user_id": 12345,
+                "group_id": 67890,
+                "self_id": 11111,
+                "message": "",
+            }
+            base.update(overrides)
+            return base
 
-    def test_create_process_decision(self):
-        """测试创建处理决策"""
-        decision = ProcessDecision(should_process=True, smalltalk_mode=False)
-        assert decision.should_process is True
-        assert decision.smalltalk_mode is False
+        return _build
+
+    @pytest.mark.asyncio
+    async def test_group_plain_text_dropped(self, dispatcher, event_template):
+        result = await dispatcher.handle_event(event_template(message="今天天气真好"))
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_group_command_prefix_executes(
+        self, dispatcher, mock_router, event_template, mock_plugin_registry
+    ):
+        spec = CommandSpec(
+            plugin="echo",
+            name="echo",
+            triggers=["echo"],
+            help_text="echo",
+            handler=AsyncMock(return_value=[{"type": "text", "data": {"text": "hi"}}]),
+            admin_only=False,
+        )
+        mock_router.resolve.return_value = (spec, "")
+        result = await dispatcher.handle_event(event_template(message="/echo"))
+        assert result and result[0]["data"]["text"] == "hi"
+
+    @pytest.mark.asyncio
+    async def test_group_bot_name_in_middle_falls_to_smalltalk(
+        self, dispatcher, mock_router, mock_plugin_registry, event_template
+    ):
+        mock_router.resolve.return_value = None
+        smalltalk = MagicMock()
+        smalltalk.module.handle_smalltalk = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "嗯嗯"}}]
+        )
+        mock_plugin_registry.get.return_value = smalltalk
+        result = await dispatcher.handle_event(event_template(message="你好啊小青"))
+        assert result and result[0]["data"]["text"] == "嗯嗯"
+
+    @pytest.mark.asyncio
+    async def test_group_url_only_invokes_url_parser_without_prefix(
+        self, dispatcher, mock_plugin_registry, event_template
+    ):
+        url_parser = MagicMock()
+        url_parser.module.handle_url = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "parsed"}}]
+        )
+        mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+        result = await dispatcher.handle_event(event_template(message="https://example.com"))
+        assert result and result[0]["data"]["text"] == "parsed"
+
+    @pytest.mark.asyncio
+    async def test_group_url_with_text_not_url_parser(
+        self, dispatcher, mock_plugin_registry, event_template
+    ):
+        url_parser = MagicMock()
+        url_parser.module.handle_url = AsyncMock(return_value=[{"type": "text", "data": {"text": "x"}}])
+        mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+        result = await dispatcher.handle_event(event_template(message="看看 https://example.com"))
+        assert result == []
+        url_parser.module.handle_url.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_private_plain_text_falls_to_smalltalk(
+        self, dispatcher, mock_router, mock_plugin_registry, event_template
+    ):
+        mock_router.resolve.return_value = None
+        smalltalk = MagicMock()
+        smalltalk.module.handle_smalltalk = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "嗯"}}]
+        )
+        mock_plugin_registry.get.return_value = smalltalk
+        event = event_template(message_type="private", message="在吗")
+        event.pop("group_id")
+        result = await dispatcher.handle_event(event)
+        assert result and result[0]["data"]["text"] == "嗯"
+
+    @pytest.mark.asyncio
+    async def test_private_url_invokes_url_parser(
+        self, dispatcher, mock_plugin_registry, event_template
+    ):
+        url_parser = MagicMock()
+        url_parser.module.handle_url = AsyncMock(return_value=[{"type": "text", "data": {"text": "p"}}])
+        mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+        event = event_template(message_type="private", message="https://example.com")
+        event.pop("group_id")
+        result = await dispatcher.handle_event(event)
+        assert result and result[0]["data"]["text"] == "p"
+
+    @pytest.mark.asyncio
+    async def test_group_mute_blocks_smalltalk_only(
+        self, dispatcher, mock_router, mock_plugin_registry, event_template
+    ):
+        dispatcher.mute_group(67890, 5.0)
+        try:
+            mock_router.resolve.return_value = None
+            smalltalk = MagicMock()
+            smalltalk.module.handle_smalltalk = AsyncMock(return_value=[{"type": "text", "data": {"text": "no"}}])
+            mock_plugin_registry.get.return_value = smalltalk
+            result = await dispatcher.handle_event(event_template(message="小青 你好"))
+            assert result == []
+            smalltalk.module.handle_smalltalk.assert_not_called()
+        finally:
+            dispatcher.unmute_group(67890)
+
+    @pytest.mark.asyncio
+    async def test_group_mute_does_not_block_command(
+        self, dispatcher, mock_router, event_template
+    ):
+        dispatcher.mute_group(67890, 5.0)
+        try:
+            spec = CommandSpec(
+                plugin="echo",
+                name="echo",
+                triggers=["echo"],
+                help_text="echo",
+                handler=AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}]),
+                admin_only=False,
+            )
+            mock_router.resolve.return_value = (spec, "")
+            result = await dispatcher.handle_event(event_template(message="/echo"))
+            assert result and result[0]["data"]["text"] == "ok"
+        finally:
+            dispatcher.unmute_group(67890)
+
+    @pytest.mark.asyncio
+    async def test_group_mute_does_not_block_url(
+        self, dispatcher, mock_plugin_registry, event_template
+    ):
+        dispatcher.mute_group(67890, 5.0)
+        try:
+            url_parser = MagicMock()
+            url_parser.module.handle_url = AsyncMock(
+                return_value=[{"type": "text", "data": {"text": "p"}}]
+            )
+            mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+            result = await dispatcher.handle_event(event_template(message="https://example.com"))
+            assert result and result[0]["data"]["text"] == "p"
+        finally:
+            dispatcher.unmute_group(67890)
+
+    @pytest.mark.asyncio
+    async def test_require_bot_name_false_processes_group_plain_text(
+        self, dispatcher, mock_router, mock_config_provider, mock_plugin_registry, event_template
+    ):
+        mock_config_provider.config["require_bot_name_in_group"] = False
+        try:
+            mock_router.resolve.return_value = None
+            smalltalk = MagicMock()
+            smalltalk.module.handle_smalltalk = AsyncMock(
+                return_value=[{"type": "text", "data": {"text": "ok"}}]
+            )
+            mock_plugin_registry.get.return_value = smalltalk
+            result = await dispatcher.handle_event(event_template(message="任意话题"))
+            assert result and result[0]["data"]["text"] == "ok"
+        finally:
+            mock_config_provider.config["require_bot_name_in_group"] = True
+
+    @pytest.mark.asyncio
+    async def test_unknown_command_hint_only_for_slash_prefix(
+        self, dispatcher, mock_router, mock_plugin_registry, event_template
+    ):
+        mock_router.resolve.return_value = None
+        smalltalk = MagicMock()
+        smalltalk.module.handle_smalltalk = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "嗯"}}]
+        )
+        mock_plugin_registry.get.return_value = smalltalk
+        result = await dispatcher.handle_event(event_template(message="小青 不存在的指令"))
+        assert "未知命令" not in (result[0]["data"]["text"] if result else "")
+
+    @pytest.mark.asyncio
+    async def test_unknown_command_hint_for_slash_prefix(
+        self, dispatcher, mock_router, event_template
+    ):
+        mock_router.resolve.return_value = None
+        result = await dispatcher.handle_event(event_template(message="/未知命令"))
+        assert result and "未知命令" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_group_at_mention_triggers_has_prefix(
+        self, dispatcher, mock_router, mock_plugin_registry, event_template
+    ):
+        mock_router.resolve.return_value = None
+        smalltalk = MagicMock()
+        smalltalk.module.handle_smalltalk = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "嗯"}}]
+        )
+        mock_plugin_registry.get.return_value = smalltalk
+        event = event_template(message=[
+            {"type": "at", "data": {"qq": "11111"}},
+            {"type": "text", "data": {"text": " 帮我看看"}},
+        ])
+        event["raw_message"] = "[CQ:at,qq=11111] 帮我看看"
+        result = await dispatcher.handle_event(event)
+        assert result and result[0]["data"]["text"] == "嗯"
+
+    @pytest.mark.asyncio
+    async def test_group_at_only_calls_bot_name_only(
+        self, dispatcher, mock_plugin_registry, event_template
+    ):
+        smalltalk = MagicMock()
+        smalltalk.module.call_bot_name_only = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "在的"}}]
+        )
+        mock_plugin_registry.get.return_value = smalltalk
+        event = event_template(message=[{"type": "at", "data": {"qq": "11111"}}])
+        event["raw_message"] = "[CQ:at,qq=11111]"
+        result = await dispatcher.handle_event(event)
+        assert result and result[0]["data"]["text"] == "在的"
+
+    @pytest.mark.asyncio
+    async def test_private_only_bot_name_calls_bot_name_only(
+        self, dispatcher, mock_plugin_registry, event_template
+    ):
+        smalltalk = MagicMock()
+        smalltalk.module.call_bot_name_only = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "在的"}}]
+        )
+        mock_plugin_registry.get.return_value = smalltalk
+        event = event_template(message_type="private", message="小青")
+        event.pop("group_id")
+        result = await dispatcher.handle_event(event)
+        assert result and result[0]["data"]["text"] == "在的"
+
+    @pytest.mark.asyncio
+    async def test_group_no_prefix_with_active_session_routes_to_session(
+        self, dispatcher, mock_router, mock_plugin_registry, mock_session_manager, event_template
+    ):
+        mock_router.resolve.return_value = None
+        session = MagicMock()
+        session.plugin_name = "pendo"
+        mock_session_manager.get = AsyncMock(return_value=session)
+
+        pendo = MagicMock()
+        pendo.module.handle_session = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "session reply"}}]
+        )
+        mock_plugin_registry.get.return_value = pendo
+
+        result = await dispatcher.handle_event(event_template(message="第三个选项"))
+        assert result and result[0]["data"]["text"] == "session reply"
+
+    @pytest.mark.asyncio
+    async def test_group_only_bot_name_with_active_session_does_not_preempt(
+        self, dispatcher, mock_plugin_registry, mock_session_manager, event_template
+    ):
+        session = MagicMock()
+        session.plugin_name = "pendo"
+        mock_session_manager.get = AsyncMock(return_value=session)
+
+        smalltalk = MagicMock()
+        smalltalk.module.call_bot_name_only = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "在的"}}]
+        )
+        pendo = MagicMock()
+        pendo.module.handle_session = AsyncMock(return_value=[{"type": "text", "data": {"text": "WRONG"}}])
+
+        def _get(name):
+            return {"pendo": pendo}.get(name, smalltalk)
+
+        mock_plugin_registry.get.side_effect = _get
+
+        result = await dispatcher.handle_event(event_template(message="小青"))
+        assert result and result[0]["data"]["text"] == "在的"
+        pendo.module.handle_session.assert_not_called()
 
 # ============================================================
 # 运行测试
