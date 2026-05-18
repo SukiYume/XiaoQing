@@ -51,6 +51,9 @@ async def handle_session_message(
     if session_type == PendoConfig.SESSION_TYPE_EVENT_INFO:
         return await handle_event_info_session(user_id, text, session, context)
 
+    if session_type == PendoConfig.SESSION_TYPE_TASK_ADD:
+        return await handle_task_add_session(user_id, text, session, context)
+
     if session_type == PendoConfig.SESSION_TYPE_LEDGER_ADD:
         return await handle_ledger_add_session(user_id, text, session, context)
 
@@ -185,3 +188,12 @@ async def handle_ledger_add_session(
     services = _require_services(context)
     ledger_handler = services["ledger_handler"]
     return await ledger_handler.handle_session_step(user_id, text, session, context)
+
+
+async def handle_task_add_session(
+    user_id: str, text: str, session: SessionData, context: Any
+) -> dict[str, Any]:
+    """处理待办交互式添加会话"""
+    services = _require_services(context)
+    task_handler = services["task_handler"]
+    return await task_handler.handle_session_step(user_id, text, session, context)

@@ -2820,6 +2820,163 @@ class TestCrossTypeCommandRegression:
         finally:
             db.cleanup()
 
+    def test_todo_add_without_args_starts_interactive_session(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.config import PendoConfig
+        from plugins.pendo.handlers.task import TaskHandler
+
+        create_calls = []
+
+        class _Context:
+            async def create_session(self, initial_data=None, timeout=300.0):
+                create_calls.append((initial_data, timeout))
+
+        handler = TaskHandler(db=MagicMock())
+        result = asyncio.run(handler.handle("u1", "add", _Context(), group_id=42))
+
+        assert result["status"] == "success"
+        assert "开始添加待办" in result["message"]
+        assert "一条命令完成" in result["message"]
+        assert create_calls[0][0]["type"] == PendoConfig.SESSION_TYPE_TASK_ADD
+        assert create_calls[0][0]["step"] == "title"
+        assert create_calls[0][0]["group_id"] == 42
+
+    def test_todo_add_inline_still_uses_quick_parser(self, tmp_path):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.task import TaskHandler
+        from plugins.pendo.services.db import Database
+
+        class _Context:
+            async def create_session(self, initial_data=None, timeout=300.0):
+                raise AssertionError("inline todo add should not create a session")
+
+        db = Database(str(tmp_path / "pendo_todo_inline_add.db"))
+        try:
+            handler = TaskHandler(db=db)
+            result = asyncio.run(
+                handler.handle(
+                    "u1",
+                    "add 写项目周报 cat:工作 p:2 plan:2026-05-01 deadline:2026-05-01T18:00",
+                    _Context(),
+                )
+            )
+            item = db.items.get_item(result["item_id"], "u1")
+
+            assert result["status"] == "success"
+            assert item is not None
+            assert item.title == "写项目周报"
+            assert item.category == "工作"
+            assert item.priority == 2
+            assert item.plan_date == "2026-05-01"
+            assert item.deadline_at == "2026-05-01T18:00:00"
+        finally:
+            db.cleanup()
+
+    def test_todo_add_session_collects_content_then_allows_defaults(self, tmp_path, monkeypatch):
+        import sys
+        from datetime import datetime
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.task import TaskHandler
+        from plugins.pendo.services.db import Database
+
+        class _Session(dict):
+            def set(self, key, value):
+                self[key] = value
+
+        class _Context:
+            def __init__(self):
+                self.end_calls = 0
+
+            async def end_session(self):
+                self.end_calls += 1
+                return True
+
+        db = Database(str(tmp_path / "pendo_todo_session_defaults.db"))
+        try:
+            handler = TaskHandler(db=db)
+            monkeypatch.setattr(handler, "_user_local_now", lambda _user_id: datetime(2026, 5, 1, 10, 0))
+
+            context = _Context()
+            session = _Session({"step": "title", "data": {}, "group_id": 88})
+
+            result = asyncio.run(handler.handle_session_step("u1", "写周报", session, context))
+            assert result["status"] == "success"
+            assert session["step"] == "plan_date"
+            assert session["data"]["title"] == "写周报"
+
+            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
+            assert result["status"] == "success"
+            assert session["step"] == "deadline_at"
+            assert session["data"]["plan_date"] == "2026-05-01"
+
+            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
+            assert result["status"] == "success"
+            assert session["step"] == "remind_times"
+            assert session["data"]["deadline_at"] is None
+
+            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
+            assert result["status"] == "success"
+            assert session["step"] == "category"
+            assert session["data"]["remind_times"] == []
+
+            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
+            assert result["status"] == "success"
+            assert session["step"] == "priority"
+            assert session["data"]["category"] == "未分类"
+
+            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
+            assert result["status"] == "success"
+            assert session["step"] == "tags"
+            assert session["data"]["priority"] == 3
+
+            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
+            item = db.items.get_item(result["item_id"], "u1")
+
+            assert result["status"] == "success"
+            assert context.end_calls == 1
+            assert item is not None
+            assert item.title == "写周报"
+            assert item.plan_date == "2026-05-01"
+            assert item.deadline_at is None
+            assert item.remind_times == []
+            assert item.category == "未分类"
+            assert item.priority == 3
+            assert item.tags == []
+            assert item.context == {"group_id": 88}
+        finally:
+            db.cleanup()
+
+    def test_todo_add_session_reprompts_invalid_plan_date(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.handlers.task import TaskHandler
+
+        class _Session(dict):
+            def set(self, key, value):
+                self[key] = value
+
+        handler = TaskHandler(db=MagicMock())
+        session = _Session({"step": "plan_date", "data": {"title": "写周报"}})
+        result = asyncio.run(
+            handler.handle_session_step("u1", "不是日期", session, SimpleNamespace())
+        )
+
+        assert result["status"] == "info"
+        assert "无法解析计划日期" in result["message"]
+        assert session["step"] == "plan_date"
+
     def test_todo_view_returns_detail(self, tmp_path):
         import sys
 
