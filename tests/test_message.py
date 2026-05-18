@@ -135,11 +135,31 @@ class TestNormalizeMessage:
             "user_id": 12345,
             "message": "你好",
         }
-        
+
         text, user_id, group_id = normalize_message(event)
-        
+
         assert text == "你好"
         assert user_id == 12345
+        assert group_id is None
+
+    def test_normalize_strips_whitespace(self):
+        """测试去除首尾空白"""
+        event = {
+            "message": "  \n  Hello World  \t  ",
+            "user_id": 1,
+        }
+
+        text, _, _ = normalize_message(event)
+        assert text == "Hello World"
+
+    def test_normalize_missing_fields(self):
+        """测试缺失字段处理"""
+        event = {"message": "test"}
+
+        text, user_id, group_id = normalize_message(event)
+
+        assert text == "test"
+        assert user_id is None
         assert group_id is None
 
 
@@ -165,19 +185,20 @@ class TestHasMediaSegment:
 class TestParseTextCommandContext:
     def test_strips_bot_name_and_prefix(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
-        text = "小青，/echo hi"
-        is_at_me, clean_text, has_bot_name, has_prefix, is_only_bot_name = parse_text_command_context(
-            text,
+        result = parse_text_command_context(
+            "小青，/echo hi",
             event,
             bot_name="小青",
             prefixes=("/",),
             self_id="",
         )
-        assert is_at_me is False
-        assert clean_text == "echo hi"
-        assert has_bot_name is True
-        assert has_prefix is False
-        assert is_only_bot_name is False
+        assert result.is_at_me is False
+        assert result.clean_text == "echo hi"
+        assert result.has_bot_name is True
+        assert result.has_command_prefix is False  # "/" not at start of raw text
+        assert result.has_prefix is True            # union: has_bot_name
+        assert result.is_only_bot_name is False
+        assert result.is_url_only is False
 
     def test_detects_at_segment_as_mention(self):
         event = {
@@ -187,16 +208,106 @@ class TestParseTextCommandContext:
                 {"type": "text", "data": {"text": " 你好"}},
             ],
         }
-        text = "你好"
-        is_at_me, clean_text, _, _, _ = parse_text_command_context(
-            text,
+        result = parse_text_command_context(
+            "你好",
             event,
             bot_name="",
             prefixes=("/",),
             self_id="12345",
         )
-        assert is_at_me is True
-        assert clean_text == "你好"
+        assert result.is_at_me is True
+        assert result.clean_text == "你好"
+        assert result.has_prefix is True            # union: is_at_me
+
+    def test_strict_command_prefix_at_start(self):
+        event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
+        result = parse_text_command_context(
+            "/help",
+            event,
+            bot_name="小青",
+            prefixes=("/",),
+            self_id="",
+        )
+        assert result.has_command_prefix is True
+        assert result.has_prefix is True
+        assert result.has_bot_name is False
+        assert result.is_at_me is False
+        assert result.clean_text == "help"
+
+    def test_bot_name_in_middle_counts_as_has_prefix(self):
+        event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
+        result = parse_text_command_context(
+            "你好啊小青",
+            event,
+            bot_name="小青",
+            prefixes=("/",),
+            self_id="",
+        )
+        assert result.has_command_prefix is False
+        assert result.has_bot_name is True
+        assert result.has_prefix is True
+        assert result.is_at_me is False
+
+    def test_plain_text_no_signals(self):
+        event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
+        result = parse_text_command_context(
+            "在吗",
+            event,
+            bot_name="小青",
+            prefixes=("/",),
+            self_id="",
+        )
+        assert result.has_command_prefix is False
+        assert result.has_bot_name is False
+        assert result.is_at_me is False
+        assert result.has_prefix is False
+
+    def test_is_only_bot_name(self):
+        event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
+        result = parse_text_command_context(
+            "小青",
+            event,
+            bot_name="小青",
+            prefixes=("/",),
+            self_id="",
+        )
+        assert result.is_only_bot_name is True
+
+    def test_is_url_only_after_strip(self):
+        event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
+        result = parse_text_command_context(
+            "小青 https://example.com",
+            event,
+            bot_name="小青",
+            prefixes=("/",),
+            self_id="",
+        )
+        assert result.clean_text == "https://example.com"
+        assert result.is_url_only is True
+        assert result.has_prefix is True
+
+    def test_is_url_only_bare_url(self):
+        event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
+        result = parse_text_command_context(
+            "https://example.com",
+            event,
+            bot_name="小青",
+            prefixes=("/",),
+            self_id="",
+        )
+        assert result.is_url_only is True
+        assert result.has_prefix is False
+
+    def test_url_with_extra_text_is_not_url_only(self):
+        event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
+        result = parse_text_command_context(
+            "看看 https://example.com",
+            event,
+            bot_name="小青",
+            prefixes=("/",),
+            self_id="",
+        )
+        assert result.is_url_only is False
 
     def test_strip_message_prefix_with_cached_pattern(self):
         pattern = compile_bot_name_pattern("Bot")
@@ -207,26 +318,6 @@ class TestParseTextCommandContext:
             bot_name_pattern=pattern,
         )
         assert clean == "help"
-
-    def test_normalize_strips_whitespace(self):
-        """测试去除首尾空白"""
-        event = {
-            "message": "  \n  Hello World  \t  ",
-            "user_id": 1,
-        }
-        
-        text, _, _ = normalize_message(event)
-        assert text == "Hello World"
-
-    def test_normalize_missing_fields(self):
-        """测试缺失字段处理"""
-        event = {"message": "test"}
-        
-        text, user_id, group_id = normalize_message(event)
-        
-        assert text == "test"
-        assert user_id is None
-        assert group_id is None
 
 class TestIsCleanTextUrlOnly:
     def test_bare_url(self):
