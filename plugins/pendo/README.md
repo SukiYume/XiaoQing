@@ -28,6 +28,7 @@ Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程�
 /pendo                      # 查看模块化帮助
 /pendo help event            # 查看某个模块帮助
 /pendo event add 明天9点组会，提前30分钟提醒
+/pendo todo add              # 交互式添加待办
 /pendo todo add 写周报 cat:工作 p:2 plan:2026-05-01
 /pendo note add title:会议纪要 content 讨论迁移方案 cat:工作 #复盘
 /pendo diary add 今天完成了项目复盘 mood:happy score:8
@@ -57,6 +58,7 @@ Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程�
 ### 待办
 
 ```text
+/pendo todo add
 /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [remind:YYYY-MM-DDTHH:MM[,YYYY-MM-DDTHH:MM]] [cat:分类] [p:1-5] [#标签]
 /pendo todo list [today|open|done|cancelled|overdue|upcoming|inbox|分类] [open|done|cancelled] [p:1-5] [all|page:n]
 /pendo todo view <id>
@@ -68,6 +70,8 @@ Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程�
 ```
 
 `task`、`t`、`待办`、`任务` 都是 `todo` 的别名。状态只有 `open`、`done`、`cancelled`。
+
+`todo add` 后不带内容时会进入多轮交互：先输入待办内容，再依次填写计划日期、截止时间、提醒时间、分类、优先级和标签。除待办内容外，后续字段都可以输入 `0` 使用默认值：默认计划日期、无截止、无提醒、未分类、优先级 3、无标签。带内容时仍按一行快捷添加解析。
 
 ### 笔记
 

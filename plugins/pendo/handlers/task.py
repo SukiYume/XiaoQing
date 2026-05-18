@@ -20,8 +20,20 @@ from ..models.item import ItemType, TaskItem, TaskStatus
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import ItemFormatter, extract_metadata, paginate
-from ..utils.time_utils import TimezoneHelper, _parse_time_range_core, now_in_timezone
-from ..utils.validators import default_task_plan_date, normalize_task_fields
+from ..utils.session_utils import safe_create_session, safe_end_session
+from ..utils.time_utils import (
+    TimezoneHelper,
+    _parse_time_range_core,
+    now_in_timezone,
+    parse_date_optional,
+)
+from ..utils.validators import (
+    default_task_plan_date,
+    normalize_task_fields,
+    validate_category,
+    validate_tag,
+    validate_title,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +82,8 @@ def _task_sort_key(task: TaskItem) -> tuple:
 
 
 _TASK_TIME_KEYWORDS = {"today", "tomorrow", "week", "month", "year", "今天", "明天", "本周", "本月", "今年"}
+_DEFAULT_INPUTS = {"0", "默认", "跳过", "skip", "-"}
+_NONE_INPUTS = {"无", "不安排", "none", "null", "no", "不要", "清空"}
 
 
 def _looks_like_task_time_range(value: str) -> bool:
@@ -104,6 +118,7 @@ class TaskHandler(DbOpsMixin):
         """处理待办相关命令
 
         命令格式：
+        - /pendo todo add
         - /pendo todo add <内容> [plan:YYYY-MM-DD] [deadline:YYYY-MM-DDTHH:MM] [cat:xxx] [p:1-5]
         - /pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类] [all|page:n]
         - /pendo todo view <id>
@@ -121,7 +136,11 @@ class TaskHandler(DbOpsMixin):
         rest = parts[1] if len(parts) > 1 else ""
 
         handlers = {
-            "add": lambda: self.add_task(user_id, rest, context, group_id),
+            "add": lambda: (
+                self.add_task(user_id, rest, context, group_id)
+                if rest.strip()
+                else self.start_add_session(user_id, context, group_id)
+            ),
             "list": lambda: self.list_tasks(user_id, rest, context),
             "view": lambda: self.view_task(user_id, rest, context),
             "done": lambda: self.mark_done(user_id, rest, context),
@@ -146,6 +165,7 @@ class TaskHandler(DbOpsMixin):
             "message": (
                 f"❌ 未知待办命令: {command}\n\n"
                 "可用命令:\n"
+                "• /pendo todo add\n"
                 "• /pendo todo add <内容>\n"
                 "• /pendo todo list [分类]\n"
                 "• /pendo todo view <id>\n"
@@ -218,6 +238,59 @@ class TaskHandler(DbOpsMixin):
 
         return True
 
+    async def start_add_session(
+        self, user_id: str, context: PendoContext, group_id: int | None = None
+    ) -> CommandMessage:
+        """开始交互式添加待办会话。"""
+        await safe_create_session(
+            context,
+            initial_data={
+                "type": PendoConfig.SESSION_TYPE_TASK_ADD,
+                "owner_id": user_id,
+                "group_id": group_id,
+                "step": "title",
+                "data": {},
+            },
+            timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
+        )
+
+        return {
+            "status": "success",
+            "message": (
+                "✅ 开始添加待办，请先输入待办内容：\n\n"
+                "例如：写项目周报\n"
+                "后面的计划日期、截止时间、提醒、分类、优先级和标签都可以输入 0 使用默认值。\n\n"
+                "💡 如果想一条命令完成，也可以用：/pendo todo add 写周报 cat:工作 p:2 plan:2026-05-01\n"
+                "💡 输入\"退出\"可取消"
+            ),
+        }
+
+    async def handle_session_step(
+        self, user_id: str, text: str, session: dict[str, Any], context: PendoContext
+    ) -> CommandMessage:
+        """处理交互式添加待办会话的每一步。"""
+        step = session.get("step", "title")
+        data = session.get("data", {})
+        group_id = session.get("group_id")
+        value = str(text or "").strip()
+
+        if step == "title":
+            return await self._step_task_title(user_id, value, data, session)
+        if step == "plan_date":
+            return await self._step_task_plan_date(user_id, value, data, session)
+        if step == "deadline_at":
+            return await self._step_task_deadline_at(user_id, value, data, session)
+        if step == "remind_times":
+            return await self._step_task_remind_times(user_id, value, data, session)
+        if step == "category":
+            return await self._step_task_category(value, data, session)
+        if step == "priority":
+            return await self._step_task_priority(value, data, session)
+        if step == "tags":
+            return await self._step_task_tags(user_id, value, data, session, context, group_id)
+
+        return {"status": "error", "message": "❌ 会话状态异常"}
+
     async def add_task(
         self, user_id: str, text: str, context: PendoContext, group_id: int | None = None
     ) -> CommandMessage:
@@ -239,9 +312,12 @@ class TaskHandler(DbOpsMixin):
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
 
-        # 创建待办数据
-        from ..models.item import TaskItem
+        return await self._create_task_from_parsed(user_id, parsed, group_id)
 
+    async def _create_task_from_parsed(
+        self, user_id: str, parsed: dict[str, Any], group_id: int | None = None
+    ) -> CommandMessage:
+        """Create a task from parsed fields and return the standard add message."""
         local_now = self._user_local_now(user_id)
         task_payload = normalize_task_fields(
             {
@@ -262,12 +338,9 @@ class TaskHandler(DbOpsMixin):
         )
         task_item = TaskItem(**task_payload)
 
-        # 保存到数据库
         item_id = await self._db_create_with_log(task_item, owner_id=user_id, action="create_task")
-
         task_item.id = item_id
 
-        # 格式化返回消息
         priority_str = ItemFormatter.format_priority(parsed["priority"])
         message = "✅ 已添加待办\n\n"
         message += f"📝 {parsed['title']}\n"
@@ -285,6 +358,232 @@ class TaskHandler(DbOpsMixin):
         message += f"💡 用 /pendo todo done {item_id} 完成"
 
         return {"status": "success", "message": message, "item_id": item_id}
+
+    async def _step_task_title(
+        self, user_id: str, text: str, data: dict[str, Any], session: dict[str, Any]
+    ) -> CommandMessage:
+        if not text or self._is_default_input(text):
+            return {"status": "info", "message": "❌ 待办内容不能为空，请输入待办内容："}
+        try:
+            data["title"] = validate_title(text)
+        except ValueError as exc:
+            return {"status": "info", "message": f"❌ {exc}，请重新输入待办内容："}
+
+        session.set("data", data)
+        session.set("step", "plan_date")
+        default_plan = default_task_plan_date(self._user_local_now(user_id))
+        return {
+            "status": "success",
+            "message": (
+                "📅 计划日期？\n\n"
+                f"0. {default_plan}（默认）\n"
+                "也可以输入 today / 明天 / 2026-05-01 / 05-01。\n"
+                "输入 无 或 不安排 可放入未安排。"
+            ),
+        }
+
+    async def _step_task_plan_date(
+        self, user_id: str, text: str, data: dict[str, Any], session: dict[str, Any]
+    ) -> CommandMessage:
+        if self._is_default_input(text):
+            plan_date = default_task_plan_date(self._user_local_now(user_id))
+        elif self._is_none_input(text):
+            plan_date = None
+        else:
+            plan_date = parse_date_optional(text, self._user_local_now(user_id))
+            if not plan_date:
+                return {
+                    "status": "info",
+                    "message": "❌ 无法解析计划日期，请输入 today / 明天 / 2026-05-01，或输入 0 使用默认值：",
+                }
+
+        data["plan_date"] = plan_date
+        session.set("data", data)
+        session.set("step", "deadline_at")
+        return {
+            "status": "success",
+            "message": (
+                "⏰ 截止时间？\n\n"
+                "0. 无截止（默认）\n"
+                "也可以输入 2026-05-01 18:00 / 明天 09:00 / 05-01 18:00。"
+            ),
+        }
+
+    async def _step_task_deadline_at(
+        self, user_id: str, text: str, data: dict[str, Any], session: dict[str, Any]
+    ) -> CommandMessage:
+        if self._is_default_input(text) or self._is_none_input(text):
+            deadline_at = None
+        else:
+            try:
+                deadline_at = self._parse_task_datetime_input(text, user_id)
+            except ValueError as exc:
+                return {"status": "info", "message": f"❌ {exc}，或输入 0 使用默认值："}
+
+        data["deadline_at"] = deadline_at
+        session.set("data", data)
+        session.set("step", "remind_times")
+        return {
+            "status": "success",
+            "message": (
+                "🔔 提醒时间？\n\n"
+                "0. 无提醒（默认）\n"
+                "多个提醒用逗号分隔，例如：明天 09:00, 2026-05-01 17:00。"
+            ),
+        }
+
+    async def _step_task_remind_times(
+        self, user_id: str, text: str, data: dict[str, Any], session: dict[str, Any]
+    ) -> CommandMessage:
+        remind_times: list[str] = []
+        if not (self._is_default_input(text) or self._is_none_input(text)):
+            parts = [part.strip() for part in re.split(r"[,，;；]", text) if part.strip()]
+            if not parts:
+                return {"status": "info", "message": "❌ 请输入提醒时间，或输入 0 使用默认值："}
+            try:
+                remind_times = [self._parse_task_datetime_input(part, user_id) for part in parts]
+            except ValueError as exc:
+                return {"status": "info", "message": f"❌ {exc}，请重新输入提醒时间或输入 0："}
+
+        data["remind_times"] = remind_times
+        session.set("data", data)
+        session.set("step", "category")
+        return {
+            "status": "success",
+            "message": "📂 分类？\n\n0. 未分类（默认）\n也可以直接输入分类名，例如：工作。",
+        }
+
+    async def _step_task_category(
+        self, text: str, data: dict[str, Any], session: dict[str, Any]
+    ) -> CommandMessage:
+        category = "未分类" if self._is_default_input(text) else text
+        try:
+            data["category"] = validate_category(category or "未分类")
+        except ValueError as exc:
+            return {"status": "info", "message": f"❌ {exc}，请重新输入分类，或输入 0 使用默认值："}
+
+        session.set("data", data)
+        session.set("step", "priority")
+        return {
+            "status": "success",
+            "message": (
+                "⚡ 优先级？\n\n"
+                "0. 3-中（默认）\n"
+                "1. 紧急\n2. 高\n3. 中\n4. 低\n5. 最低"
+            ),
+        }
+
+    async def _step_task_priority(
+        self, text: str, data: dict[str, Any], session: dict[str, Any]
+    ) -> CommandMessage:
+        if self._is_default_input(text):
+            priority = 3
+        else:
+            try:
+                priority = int(text)
+            except ValueError:
+                return {"status": "info", "message": "❌ 优先级必须是 1-5，或输入 0 使用默认值："}
+            if priority not in range(1, 6):
+                return {"status": "info", "message": "❌ 优先级必须在 1-5 之间，或输入 0 使用默认值："}
+
+        data["priority"] = priority
+        session.set("data", data)
+        session.set("step", "tags")
+        return {
+            "status": "success",
+            "message": "🏷️ 标签？\n\n0. 无标签（默认）\n可输入 #周报 #项目，或用空格/逗号分隔多个标签。",
+        }
+
+    async def _step_task_tags(
+        self,
+        user_id: str,
+        text: str,
+        data: dict[str, Any],
+        session: dict[str, Any],
+        context: PendoContext,
+        group_id: int | None,
+    ) -> CommandMessage:
+        if self._is_default_input(text) or self._is_none_input(text):
+            tags: list[str] = []
+        else:
+            tags = self._parse_session_tags(text)
+            try:
+                tags = [validate_tag(tag) for tag in tags]
+            except ValueError as exc:
+                return {"status": "info", "message": f"❌ {exc}，请重新输入标签，或输入 0 使用默认值："}
+
+        parsed = {
+            "title": data.get("title", "无标题待办"),
+            "content": "",
+            "category": data.get("category", "未分类"),
+            "plan_date": data.get("plan_date"),
+            "deadline_at": data.get("deadline_at"),
+            "priority": data.get("priority", 3),
+            "tags": tags,
+            "remind_times": data.get("remind_times", []),
+        }
+        try:
+            result = await self._create_task_from_parsed(user_id, parsed, group_id)
+        except ValueError as exc:
+            return {"status": "info", "message": f"❌ {exc}，请重新输入标签，或输入 0 使用默认值："}
+
+        await safe_end_session(context)
+        return result
+
+    @staticmethod
+    def _is_default_input(text: str) -> bool:
+        return str(text or "").strip().lower() in _DEFAULT_INPUTS
+
+    @staticmethod
+    def _is_none_input(text: str) -> bool:
+        return str(text or "").strip().lower() in _NONE_INPUTS
+
+    def _parse_task_datetime_input(self, text: str, user_id: str) -> str:
+        value = str(text or "").strip().replace("：", ":")
+        if not value:
+            raise ValueError("请输入时间，例如 2026-05-01 18:00")
+
+        user_now = self._user_local_now(user_id)
+        date_time_match = re.fullmatch(r"(.+?)\s+(\d{1,2}:\d{2}(?::\d{2})?)", value)
+        if date_time_match:
+            date_part, time_part = date_time_match.groups()
+            parsed_date = parse_date_optional(date_part, user_now)
+            if parsed_date:
+                return self._normalize_session_datetime(f"{parsed_date}T{time_part}")
+
+        time_only_match = re.fullmatch(r"(\d{1,2}:\d{2}(?::\d{2})?)", value)
+        if time_only_match:
+            plan_date = str(default_task_plan_date(user_now))
+            return self._normalize_session_datetime(f"{plan_date}T{time_only_match.group(1)}")
+
+        parsed_date = parse_date_optional(value, user_now)
+        if parsed_date:
+            return f"{parsed_date}T23:59"
+
+        try:
+            return self._normalize_session_datetime(value.replace(" ", "T", 1))
+        except ValueError as exc:
+            raise ValueError("无法解析时间，请使用 2026-05-01 18:00、明天 09:00 或 0") from exc
+
+    @staticmethod
+    def _normalize_session_datetime(value: str) -> str:
+        parsed = datetime.fromisoformat(value)
+        return parsed.isoformat(timespec="minutes")
+
+    @staticmethod
+    def _parse_session_tags(text: str) -> list[str]:
+        tags: list[str] = []
+        seen: set[str] = set()
+        for raw in re.split(r"[\s,，;；]+", text):
+            tag = raw.strip().lstrip("#")
+            if not tag:
+                continue
+            key = tag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            tags.append(tag)
+        return tags
 
     def _parse_task_text(self, text: str, user_id: str) -> dict[str, Any]:
         """解析待办文本（纯规则解析，不用AI）
@@ -367,7 +666,7 @@ class TaskHandler(DbOpsMixin):
         if not tasks:
             return {
                 "status": "success",
-                "message": "📝 **待办列表**\n\n暂无待办事项\n\n💡 用 /pendo todo add <内容> 添加待办",
+                "message": "📝 **待办列表**\n\n暂无待办事项\n\n💡 用 /pendo todo add 交互式添加，或用 /pendo todo add <内容> 快捷添加",
             }
 
         # 按分类分组统计
