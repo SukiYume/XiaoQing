@@ -157,6 +157,16 @@ def strip_message_prefix(
 
     return stripped.strip()
 
+_URL_ONLY_PATTERN = re.compile(r"^https?://\S+$")
+
+
+def is_clean_text_url_only(clean_text: str) -> bool:
+    """Return True if `clean_text` (after strip) is exactly one http/https URL."""
+    if not clean_text:
+        return False
+    return _URL_ONLY_PATTERN.fullmatch(clean_text.strip()) is not None
+
+
 def parse_text_command_context(
     text: str,
     event: dict[str, Any],
@@ -193,6 +203,7 @@ __all__ = [
     "has_media_segment",
     "has_at_mention",
     "iter_message_segments",
+    "is_clean_text_url_only",
     "normalize_message",
     "is_bot_mentioned",
     "compile_bot_name_pattern",
