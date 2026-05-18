@@ -167,6 +167,18 @@ def is_clean_text_url_only(clean_text: str) -> bool:
     return _URL_ONLY_PATTERN.fullmatch(clean_text.strip()) is not None
 
 
+@dataclass(frozen=True)
+class TextCommandContext:
+    """Result of parsing a single text message for routing signals."""
+    clean_text: str
+    is_at_me: bool
+    has_bot_name: bool
+    has_command_prefix: bool   # text.startswith(any configured command prefix)
+    has_prefix: bool           # has_command_prefix OR has_bot_name OR is_at_me
+    is_only_bot_name: bool
+    is_url_only: bool
+
+
 def parse_text_command_context(
     text: str,
     event: dict[str, Any],
@@ -176,7 +188,7 @@ def parse_text_command_context(
     self_id: str = "",
     bot_name_pattern: Optional[re.Pattern[str]] = None,
     message_scan: MessageScan | None = None,
-) -> tuple[bool, str, bool, bool, bool]:
+) -> TextCommandContext:
     prefixes = prefixes or tuple()
     message_scan = message_scan or scan_message(
         event.get("message"),
@@ -192,12 +204,23 @@ def parse_text_command_context(
         bot_name_pattern=bot_name_pattern,
     )
     has_bot_name = contains_bot_name(text, bot_name)
-    has_prefix = any(text.startswith(p) for p in prefixes)
+    has_command_prefix = any(text.startswith(p) for p in prefixes)
+    has_prefix = has_command_prefix or has_bot_name or is_at_me
     is_only_bot_name = (text.strip() == bot_name) or (is_at_me and not clean_text)
-    return is_at_me, clean_text, has_bot_name, has_prefix, is_only_bot_name
+    is_url_only = is_clean_text_url_only(clean_text)
+    return TextCommandContext(
+        clean_text=clean_text,
+        is_at_me=is_at_me,
+        has_bot_name=has_bot_name,
+        has_command_prefix=has_command_prefix,
+        has_prefix=has_prefix,
+        is_only_bot_name=is_only_bot_name,
+        is_url_only=is_url_only,
+    )
 
 __all__ = [
     "MessageScan",
+    "TextCommandContext",
     "contains_bot_name",
     "extract_text",
     "has_media_segment",
