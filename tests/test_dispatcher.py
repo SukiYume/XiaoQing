@@ -267,6 +267,91 @@ class TestMessageParser:
         ctx = parser.parse(event)
         assert ctx is None
 
+    def test_parse_populates_has_command_prefix(self, mock_config_provider: MagicMock):
+        parser = MessageParser(mock_config_provider)
+        ctx = parser.parse({
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": "/help",
+        })
+        assert ctx is not None
+        assert ctx.has_command_prefix is True
+        assert ctx.has_prefix is True
+        assert ctx.is_url_only is False
+
+    def test_parse_has_prefix_from_bot_name_in_middle(self, mock_config_provider: MagicMock):
+        parser = MessageParser(mock_config_provider)
+        ctx = parser.parse({
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": "你好啊小青",
+        })
+        assert ctx is not None
+        assert ctx.has_command_prefix is False
+        assert ctx.has_bot_name is True
+        assert ctx.has_prefix is True
+
+    def test_parse_is_url_only_with_bot_name_prefix(self, mock_config_provider: MagicMock):
+        parser = MessageParser(mock_config_provider)
+        ctx = parser.parse({
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": "小青 https://example.com",
+        })
+        assert ctx is not None
+        assert ctx.is_url_only is True
+        assert ctx.clean_text == "https://example.com"
+
+    def test_parse_url_with_extra_text_is_not_url_only(self, mock_config_provider: MagicMock):
+        parser = MessageParser(mock_config_provider)
+        ctx = parser.parse({
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": "看看 https://example.com",
+        })
+        assert ctx is not None
+        assert ctx.is_url_only is False
+
+    def test_parse_at_me_with_empty_text_is_only_bot_name(self, mock_config_provider: MagicMock):
+        """@me with no following text is is_only_bot_name (short-circuits is_url_only).
+
+        A face segment is included to keep the parser's empty-text-and-no-media
+        guard from dropping the event (see
+        test_parse_at_only_without_media_still_returns_none). The face does not
+        contribute text, so clean_text remains empty and is_only_bot_name is
+        driven by the (is_at_me and not clean_text) branch.
+        """
+        parser = MessageParser(mock_config_provider)
+        ctx = parser.parse({
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": [
+                {"type": "at", "data": {"qq": "11111"}},
+                {"type": "face", "data": {"id": "14"}},
+            ],
+            "raw_message": "[CQ:at,qq=11111][CQ:face,id=14]",
+        })
+        assert ctx is not None
+        assert ctx.is_at_me is True
+        assert ctx.is_only_bot_name is True
+        assert ctx.is_url_only is False
+        assert ctx.has_prefix is True
+
 # ============================================================
 # Dispatcher.handle_event 测试
 # ============================================================
