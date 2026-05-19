@@ -538,7 +538,7 @@ if action:
     await context.send_action(action)
 ```
 
-`codex` 插件使用这种方式在 CLI 任务完成后主动发送 `[codex:<label> #<job_id>]` 文字和图片结果；发送链路会继续负责纯文本长消息分割、WS/HTTP 回退和错误日志，Codex 插件会在混合图片消息前先拆分过长文本。
+`codex` 插件使用这种方式在 CLI 任务完成后主动发送 `[codex:<label> #<job_id>]` 文字和图片结果；发送链路会继续负责纯文本长消息分割、WS/HTTP 回退和错误日志，Codex 插件会在混合图片消息前先拆分过长文本。`arxiv_filter` 的 Codex 摘要侧路也通过这种主动发送完成：论文列表由 `/arxiv` 正常返回，摘要或失败消息在后台任务结束后再发送。
 
 ---
 

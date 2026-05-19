@@ -68,7 +68,7 @@ XiaoQing/
 │   ├── bot_core/                    # 核心管理命令
 │   ├── xiaoqing_chat/               # 拟人聊天插件
 │   ├── pendo/                       # 个人时间与信息管理中枢
-│   ├── codex/                       # Codex 后台会话与任务队列
+│   ├── codex/                       # Codex 后台会话、任务队列和 arXiv 摘要会话
 │   ├── shell/                       # 管理员终端命令执行
 │   └── ...                          # 其它内置插件
 ├── docs/                            # 项目手册
@@ -228,6 +228,7 @@ python main.py
 | `/xc <内容>` | 进入 xiaoqing_chat 对话 |
 | `/pendo ...` | 进入 Pendo 个人管理功能 |
 | `/codex ...` | 管理 Codex 后台会话、任务队列和结果回发 |
+| `/arxiv` | 执行今日 arXiv 论文筛选，并触发 Codex 摘要侧路 |
 | `/shell <命令>` | 管理员执行白名单内终端命令 |
 
 ## 核心插件
@@ -278,7 +279,7 @@ python main.py
 | 聊天 | `chat` | 基于 Coze API 的 AI 对话 |
 | 个人管理 | `pendo` | 日程、待办、笔记、日记、账本、提醒、Web |
 | 工具 | `choice` | 随机选择、抽奖、多选、去重 |
-| 工具 | `codex` | Codex CLI 后台会话、串行队列、并行任务和图片结果透传 |
+| 工具 | `codex` | Codex CLI 后台会话、串行队列、并行任务、图片结果透传和 arXiv 摘要会话 |
 | 工具 | `color` | 中国传统色、颜色转换、恒星光谱颜色 |
 | 工具 | `wolframalpha` | Wolfram Alpha 计算 |
 | 工具 | `url_parser` | 链接预览解析 |
@@ -287,7 +288,7 @@ python main.py
 | 工具 | `jupyter` | Jupyter Python 代码执行和 REPL |
 | 工具 | `voice` | Azure TTS，内部 STT 工具函数 |
 | 天文 | `apod` | NASA 每日天文图 |
-| 天文 | `arxiv_filter` | arXiv 论文筛选和定时推送 |
+| 天文 | `arxiv_filter` | arXiv 论文筛选、定时推送和 Codex 摘要侧路 |
 | 天文 | `ads_paper` | ADS 论文检索、摘要和 BibTeX |
 | 天文 | `astro_tools` | 时间、坐标、单位、对象查询和公式速查 |
 | 天文 | `dict` | 天文学词典 |
@@ -331,6 +332,14 @@ python main.py
 ```
 
 Web Token 登录不需要账号密码；执行 `/pendo web token` 后把 token 粘贴到登录页。Scriptable 小组件使用 `/pendo web widget-token` 生成的只读 token。
+
+## Codex 与 arXiv 摘要
+
+`codex` 插件维护独立的 Codex 会话标签、任务队列和运行时历史，不占用框架多轮 Session。同一标签内任务串行执行，不同标签按 `max_parallel_jobs` 并行；任务完成后通过 `context.send_action()` 主动回发文字和图片。
+
+`arxiv_filter` 的每日流程会先发送筛选出的论文列表，再把所有 positive 论文链接后台投递到 Codex `astro-ph` 会话。`astro-ph` 首次没有 thread 时会先静默初始化，后续摘要 prompt 会要求 Codex 读取工作目录下的 `arxiv-summary-methodology.md`。同一天已有成功执行结果时，手动 `/arxiv` 会直接重发历史摘要；失败或没有记录时会重新总结。
+
+`astro-ph` 默认是受保护会话，删除时需要 `/codex delete astro-ph --force --protected`。删除不会直接抹掉旧目录，历史会归档到 `plugins/codex/data/deleted_sessions/`。
 
 ## 插件开发概览
 
@@ -403,7 +412,7 @@ async def handle(command: str, args: str, event: dict, context):
 /reload
 ```
 
-插件运行时数据通常位于各自的 `plugins/<name>/data/` 目录，不应提交。Pendo 的 SQLite 数据库、xiaoqing_chat 的媒体库/记忆/表达学习状态，以及 codex 的会话索引、`session/<name>/conversation.jsonl`、图片副本和任务 artifacts 都属于本地运行时数据。
+插件运行时数据通常位于各自的 `plugins/<name>/data/` 目录，不应提交。Pendo 的 SQLite 数据库、xiaoqing_chat 的媒体库/记忆/表达学习状态，以及 codex 的会话索引、`session/<name>/conversation.jsonl`、图片副本、任务 artifacts 和删除归档 `deleted_sessions/` 都属于本地运行时数据。
 
 ## 测试
 

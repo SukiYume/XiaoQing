@@ -24,6 +24,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 arxiv_filter = importlib.import_module("plugins.arxiv_filter.main")
+arxiv_codex_summary = importlib.import_module("plugins.arxiv_filter.codex_summary")
 arxiv_filter_utils = importlib.import_module("plugins.arxiv_filter.utils")
 
 
@@ -549,6 +550,105 @@ Probability: 0.7500
             assert result is not None
             result_text = str(result)
             assert "First Paper Title" in result_text or "Second Paper Title" in result_text or "论文" in result_text
+
+    def test_extract_arxiv_links_normalizes_and_dedupes(self):
+        text = """
+Link       : https://arxiv.org/abs/2605.16917v1
+PDF        : https://arxiv.org/pdf/2605.16917
+Link       : https://arxiv.org/abs/2605.18050
+"""
+        assert arxiv_codex_summary.extract_arxiv_links(text) == [
+            "https://arxiv.org/abs/2605.16917",
+            "https://arxiv.org/abs/2605.18050",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_run_filter_schedules_codex_summary_with_positive_links(self, mock_context):
+        mock_result = """
+----- Positive #1 -----
+Title      : First Paper Title
+Link       : https://arxiv.org/abs/2605.16917
+Probability: 0.9000
+
+----- Positive #2 -----
+Title      : Second Paper Title
+Link       : https://arxiv.org/abs/2605.18050
+Probability: 0.7500
+"""
+        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result):
+            with patch.object(arxiv_filter, "schedule_codex_summary_from_filter_result") as schedule_mock:
+                result = await arxiv_filter._run_filter(
+                    mock_context,
+                    user_id=123,
+                    group_id=100000001,
+                )
+
+        assert "First Paper Title" in str(result)
+        schedule_mock.assert_called_once_with(
+            mock_context,
+            date=date.today().isoformat(),
+            filter_text=mock_result,
+            user_id=123,
+            group_id=100000001,
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_filter_keeps_paper_list_when_codex_schedule_fails(self, mock_context):
+        mock_result = """
+----- Positive #1 -----
+Title      : First Paper Title
+Link       : https://arxiv.org/abs/2605.16917
+Probability: 0.9000
+"""
+        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result):
+            with patch.object(
+                arxiv_filter,
+                "schedule_codex_summary_from_filter_result",
+                side_effect=RuntimeError("queue unavailable"),
+            ):
+                result = await arxiv_filter._run_filter(mock_context)
+
+        assert "First Paper Title" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_codex_summary_missing_codex_does_not_raise(self, mock_context):
+        mock_context.send_action = AsyncMock()
+        task = arxiv_codex_summary.schedule_codex_summary(
+            mock_context,
+            date="2026-05-19",
+            links=["https://arxiv.org/abs/2605.16917"],
+            user_id=123,
+            group_id=100000001,
+        )
+
+        assert task is not None
+        with patch.dict(sys.modules, {"plugins.codex.manager": None}):
+            await task
+
+    def test_codex_summary_prefers_top_level_codex_module(self):
+        calls = []
+        top_module = types.ModuleType("codex.arxiv_summary")
+        nested_module = types.ModuleType("plugins.codex.arxiv_summary")
+
+        async def top_entrypoint(*args, **kwargs):
+            calls.append(("top", args, kwargs))
+
+        async def nested_entrypoint(*args, **kwargs):
+            calls.append(("nested", args, kwargs))
+
+        top_module.enqueue_or_replay_arxiv_summary = top_entrypoint
+        nested_module.enqueue_or_replay_arxiv_summary = nested_entrypoint
+
+        with patch.dict(
+            sys.modules,
+            {
+                "codex.arxiv_summary": top_module,
+                "plugins.codex.arxiv_summary": nested_module,
+            },
+        ):
+            entrypoint = arxiv_codex_summary._load_codex_summary_entrypoint()
+
+        assert entrypoint is top_entrypoint
 
 
 # ============================================================

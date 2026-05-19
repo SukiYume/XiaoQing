@@ -47,8 +47,8 @@ XiaoQing 是一个基于 **Python 异步**（asyncio）和 **OneBot 协议** 的
 | 个人管理 | `pendo` | 日程、待办、笔记、日记、账本、提醒、搜索、统计、Web 控制台、Scriptable 小组件 |
 | 核心管理 | `bot_core` | `/help`、`/reload`、`/plugins`、静音、配置管理、metrics |
 | 基础聊天 | `smalltalk`, `chat`, `voice` | 简单闲聊、Coze 对话、TTS 和内部 STT 工具 |
-| 运维与执行 | `qingssh`, `shell`, `codex`, `jupyter`, `minecraft` | SSH、受限 shell、Codex 后台会话队列、Jupyter REPL、Minecraft RCON |
-| 科研/天文 | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | 天文图、论文筛选、ADS、天文计算、词典、FRB 监测 |
+| 运维与执行 | `qingssh`, `shell`, `codex`, `jupyter`, `minecraft` | SSH、受限 shell、Codex 后台会话队列和 arXiv 摘要会话、Jupyter REPL、Minecraft RCON |
+| 科研/天文 | `apod`, `arxiv_filter`, `ads_paper`, `astro_tools`, `dict`, `chime` | 天文图、论文筛选与摘要侧路、ADS、天文计算、词典、FRB 监测 |
 | 外部信息 | `github`, `earthquake`, `twitter`, `url_parser`, `signin`, `adnmb` | Trending、地震、图片抓取、链接预览、签到、A 岛 |
 | 娱乐工具 | `choice`, `guess_number`, `qingpet`, `color`, `wolframalpha`, `echo` | 抽奖、猜数字、群宠物、颜色、计算、示例回显 |
 
@@ -198,7 +198,7 @@ return segments("你好")  # 自动转换为消息段
 │                   你的插件代码                               │
 └─────────────────────────────────────────────────────────────┘
 
-（pendo 插件额外内置 FastAPI Web Server，独立提供 HTTP 控制台服务；codex 插件维护自己的后台任务队列并通过 OneBot 主动回发文字和图片结果）
+（pendo 插件额外内置 FastAPI Web Server，独立提供 HTTP 控制台服务；codex 插件维护自己的后台任务队列并通过 OneBot 主动回发文字和图片结果，也为 arxiv_filter 提供 `astro-ph` 摘要会话）
 ```
 
 ---
@@ -279,14 +279,14 @@ XiaoQing/
 │   ├── bot_core/           # 核心命令（help、reload）
 │   ├── xiaoqing_chat/      # 多模态拟人聊天（attention gate、记忆、规划、reply checker）
 │   ├── pendo/              # 个人时间与信息管理中枢（日程/待办/笔记/日记/账本/提醒/Web 控制台）
-│   ├── codex/              # Codex 后台会话与任务队列
+│   ├── codex/              # Codex 后台会话、任务队列和 arXiv 摘要会话
 │   ├── qingpet/            # QQ群宠物养成系统
 │   ├── qingssh/            # SSH 远程控制
 │   ├── jupyter/            # Python 代码执行
 │   ├── astro_tools/        # 天文计算工具箱
 │   ├── ads_paper/          # NASA ADS 论文管理
 │   ├── github/             # GitHub Trending
-│   ├── arxiv_filter/       # arXiv 论文筛选
+│   ├── arxiv_filter/       # arXiv 论文筛选和 Codex 摘要侧路
 │   ├── apod/               # 每日天文图
 │   ├── chime/              # FRB 重复暴监测
 │   ├── minecraft/          # MC 服务器通信

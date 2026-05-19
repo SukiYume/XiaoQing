@@ -13,6 +13,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from .codex_summary import schedule_codex_summary_from_filter_result
 from .utils import load_plugin_config
 
 plugin_base = importlib.import_module("core.plugin_base")
@@ -124,7 +125,11 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> Any
             if subcommand == "help" or subcommand == "帮助":
                 return segments(_show_help())
 
-        return await _run_filter(context)
+        return await _run_filter(
+            context,
+            user_id=event.get("user_id"),
+            group_id=event.get("group_id"),
+        )
 
     except Exception as e:
         logger.exception("ArXiv Filter handle error: %s", e)
@@ -146,7 +151,12 @@ async def scheduled_final_check(context) -> Any:
     return await _check_arxiv_update(context, is_final_check=True)
 
 
-async def _run_filter(context) -> Any:
+async def _run_filter(
+    context,
+    *,
+    user_id: int | None = None,
+    group_id: int | None = None,
+) -> Any:
     """
     执行论文筛选
 
@@ -212,6 +222,16 @@ async def _run_filter(context) -> Any:
     # 格式化输出
     today = datetime.date.today()
     header = f"📚 今天是 {today}，以下是你可能感兴趣的论文：\n"
+    try:
+        schedule_codex_summary_from_filter_result(
+            context,
+            date=today.isoformat(),
+            filter_text=arxiv_text,
+            user_id=user_id,
+            group_id=group_id,
+        )
+    except Exception as exc:
+        logger.exception("failed to start Codex arXiv summary sidecar: %s", exc)
     return segments(header + arxiv_text)
 
 
