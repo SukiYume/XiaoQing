@@ -615,7 +615,9 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
 2. 后续命令显式带标签，例如 `/codex main <任务>`，插件立即返回“已收到”。
 3. 插件内部按标签串行、跨标签并行执行任务。
 4. 任务完成后用 `context.send_action(build_action(...))` 主动发送结果。
-5. 运行时状态写入 `context.data_dir`，例如 `plugins/codex/data/sessions.json`、`session/<label>/conversation.jsonl` 和任务图片 artifacts。
+5. 运行时状态写入 `context.data_dir`，例如 `plugins/codex/data/sessions.json`、`session/<label>/conversation.jsonl`、任务图片 artifacts 和删除归档。
+
+如果另一个插件需要触发后台任务，也可以像 `arxiv_filter` 一样把自身主响应和后台侧路分开：先正常返回用户需要立刻看到的结果，再用 `asyncio.create_task()` 或插件内部队列投递长任务。长任务失败时单独发送失败消息，不能阻塞主响应。
 
 这种设计不会占用框架活跃会话，因此不影响同一用户继续发送其他命令或闲聊。
 

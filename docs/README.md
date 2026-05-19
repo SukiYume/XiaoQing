@@ -2,7 +2,7 @@
 
 `docs/` 是 XiaoQingBot 的项目手册。00-09 文档按阅读顺序组织，先帮读者跑起来，再逐步展开项目概览、安装部署、架构、插件开发、核心模块、API、配置、高级用法、消息链路和内置插件清单。
 
-只想先部署运行时，主要阅读 `00`、`01`、`06` 和 `09`。框架维护和插件开发需要阅读 `00-09`。重点维护 `xiaoqing_chat` 或 `pendo` 时，还需要阅读对应插件目录下的 `README.md` 和 `ARCHITECTURE.md`；配置 Codex、shell 这类工具插件时，优先看 `06` 和 `09`。
+只想先部署运行时，主要阅读 `00`、`01`、`06` 和 `09`。框架维护和插件开发需要阅读 `00-09`。重点维护 `xiaoqing_chat` 或 `pendo` 时，还需要阅读对应插件目录下的 `README.md` 和 `ARCHITECTURE.md`；配置 Codex、arXiv 摘要和 shell 这类工具链时，优先看 `06` 和 `09`。
 
 ## 文档范围
 
@@ -56,10 +56,10 @@
 3. [plugins/pendo/ARCHITECTURE.md](../plugins/pendo/ARCHITECTURE.md): 理解数据模型、SQLite、Web API、调度和 Bundle。
 4. [pendo-scriptable-widget.md](pendo-scriptable-widget.md): 配置 iPhone 主屏小组件。
 
-### 配置 Codex 和 Shell 工具
+### 配置 Codex、arXiv 摘要和 Shell 工具
 
-1. [06-configuration.md](06-configuration.md): 配置 `plugins.codex` 的默认工作目录、允许目录、并发数和 sandbox；配置 shell 白名单。
-2. [09-plugins.md](09-plugins.md): 查看 `/codex create`、`/codex <name> <任务>`、`/codex cancel`、`/shell` 等命令示例。
+1. [06-configuration.md](06-configuration.md): 配置 `plugins.codex` 的默认工作目录、允许目录、并发数、sandbox、`astro-ph` 摘要会话和方法论文件名；配置 shell 白名单。
+2. [09-plugins.md](09-plugins.md): 查看 `/codex create`、`/codex <name> <任务>`、`/codex cancel`、`/arxiv`、`/shell` 等命令示例。
 3. [08-message-flow.md](08-message-flow.md): 理解普通 bot session 与 Codex 独立后台队列的区别。
 
 ### 开发新插件

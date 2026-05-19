@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import signal
 import subprocess
@@ -13,6 +14,8 @@ from typing import Any
 
 from .artifacts import IMAGE_EXTENSIONS, default_generated_images_dir
 from .config import CodexPluginConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -159,7 +162,7 @@ class CodexRunner:
             args.extend(["exec", "--json"])
         if self.config.skip_git_repo_check:
             args.append("--skip-git-repo-check")
-        args.extend(["-o", str(output_path), self._prompt_with_artifact_instruction(prompt, artifact_dir)])
+        args.extend(["-o", str(output_path), "-"])
         return args
 
     async def run(
@@ -188,8 +191,19 @@ class CodexRunner:
         else:
             kwargs["start_new_session"] = True
 
+        prompt_payload = self._prompt_with_artifact_instruction(prompt, artifact_dir)
+        args = self._build_args(cwd, prompt, thread_id, output_path, artifact_dir)
+        logger.info(
+            "Starting Codex CLI: label=%s thread=%s cwd=%s prompt_chars=%d prompt_lines=%d",
+            getattr(job, "label", "?"),
+            thread_id or "new",
+            cwd,
+            len(prompt_payload),
+            len(prompt_payload.splitlines()),
+        )
         process = await asyncio.create_subprocess_exec(
-            *self._build_args(cwd, prompt, thread_id, output_path, artifact_dir),
+            *args,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             **kwargs,
@@ -199,7 +213,7 @@ class CodexRunner:
         timed_out = False
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
+                process.communicate(prompt_payload.encode("utf-8")),
                 timeout=self.config.job_timeout_seconds,
             )
         except asyncio.TimeoutError:

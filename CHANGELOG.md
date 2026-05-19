@@ -6,6 +6,16 @@
 
 ## 未发布
 
+### arXiv 筛选自动摘要
+
+- `/arxiv` 和工作日定时筛选在发送论文列表后，会把所有 positive 论文链接后台投递给 Codex `astro-ph` 会话生成 Markdown 摘要；论文列表和摘要是两条独立消息链路，摘要失败不会阻塞列表推送。
+- Codex `astro-ph` 会话按需自动创建，首次无 thread 时先投递静默初始化任务，再投递当天链接；后续同一天如果已有成功执行结果则直接重发历史摘要，失败或没有成功记录则重新总结。
+- 摘要 prompt 明确要求 Codex 读取工作目录下的 `arxiv-summary-methodology.md`，不在 prompt 中拼接方法论文件正文。
+- `astro-ph` 默认受保护，删除需要 `/codex delete astro-ph --force --protected`，历史目录会归档到 `plugins/codex/data/deleted_sessions/`。
+- 将 arXiv 摘要业务收拢到 `plugins/codex/arxiv_summary.py` 和 `plugins/arxiv_filter/codex_summary.py`，Codex 主队列仅保留通用 metadata、队列、归档和发送能力。
+- 同步根 README、`docs/00-09` 中涉及 `arxiv_filter` 和 `codex` 的配置、消息流、运行时数据和插件手册说明。
+- 已执行 `python -m pytest tests/plugins/test_arxiv_filter.py tests/plugins/test_codex.py -q`、`git diff --check` 和新增/改动文件尾随空白检查。
+
 ## 2026-05-18
 
 ### Pendo 待办交互添加

@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.constants import MAX_MESSAGE_TEXT_LENGTH
+from plugins.codex import arxiv_summary as codex_arxiv_summary
 from plugins.codex import main as codex_main
 from plugins.codex.config import load_plugin_config
 from plugins.codex.manager import CodexQueueManager, reset_manager_for_tests
@@ -17,6 +19,16 @@ from plugins.codex.runner import CodexRunResult
 
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+
+
+def _valid_arxiv_summary(date: str, link: str, text: str = "summary") -> str:
+    return (
+        f"## {date}\n\n"
+        f"1. [Example Paper Title]({link})\n\n"
+        "   > Radio, Survey\n\n"
+        f"   {text} 第一段。\n\n"
+        f"   {text} 第二段。"
+    )
 
 
 class FakeContext:
@@ -48,6 +60,7 @@ class FakeRunner:
         self,
         *,
         result_text: str | None = None,
+        exit_code: int = 0,
         artifact_name: str | None = None,
         generated_image_name: str | None = None,
     ) -> None:
@@ -55,6 +68,7 @@ class FakeRunner:
         self.started: list[str] = []
         self.release = asyncio.Event()
         self.result_text = result_text
+        self.exit_code = exit_code
         self.artifact_name = artifact_name
         self.generated_image_name = generated_image_name
 
@@ -80,7 +94,7 @@ class FakeRunner:
             generated_dir.mkdir(parents=True, exist_ok=True)
             (generated_dir / self.generated_image_name).write_bytes(PNG_BYTES)
         return CodexRunResult(
-            exit_code=0,
+            exit_code=self.exit_code,
             thread_id=thread_id or f"thread-{job.label}",
             final_text=self.result_text if self.result_text is not None else f"done: {prompt}",
             stdout_tail="",
@@ -106,6 +120,10 @@ def _install_fake_manager(context: FakeContext, runner: FakeRunner) -> CodexQueu
     )
     manager_module._MANAGER = manager
     return manager
+
+
+def _arxiv_addon(manager: CodexQueueManager) -> codex_arxiv_summary.ArxivSummaryAddon:
+    return codex_arxiv_summary.ArxivSummaryAddon(manager)
 
 
 @pytest.fixture(autouse=True)
@@ -299,22 +317,396 @@ async def test_long_text_with_image_is_split_before_image(tmp_path: Path):
     assert any(seg.get("type") == "image" for seg in context.actions[-1]["params"]["message"])
 
 
+@pytest.mark.asyncio
+async def test_arxiv_summary_auto_creates_astro_ph_and_runs(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner(
+        result_text=_valid_arxiv_summary(
+            "2026-05-19",
+            "https://arxiv.org/abs/2605.16917",
+        )
+    )
+    manager = _install_fake_manager(context, runner)
+
+    result = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-19",
+        links=["https://arxiv.org/abs/2605.16917"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await manager.wait_idle()
+
+    assert "已投递" in result
+    assert "astro-ph" in manager.sessions
+    assert manager.sessions["astro-ph"].cwd == str(context.default_cwd.resolve(strict=False))
+    assert len(runner.calls) == 2
+    init_label, init_prompt, init_thread_id = runner.calls[0]
+    summary_label, summary_prompt, summary_thread_id = runner.calls[1]
+    assert init_label == "astro-ph"
+    assert init_thread_id is None
+    assert "arxiv-summary-methodology.md" in init_prompt
+    assert "这条消息只用于初始化会话规则" in init_prompt
+    assert "https://arxiv.org/abs/2605.16917" not in init_prompt
+    assert summary_label == "astro-ph"
+    assert summary_thread_id == "thread-astro-ph"
+    assert "请先读取当前工作目录下的 `arxiv-summary-methodology.md`" in summary_prompt
+    assert "不要把方法论文件内容复述出来" in summary_prompt
+    assert "## 2026-05-19\nhttps://arxiv.org/abs/2605.16917" in summary_prompt
+    sent_text = str(context.actions)
+    assert "[codex:astro-ph #1]" not in sent_text
+    assert "[codex:astro-ph #2] 完成" in sent_text
+    assert "summary" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_arxiv_summary_public_entrypoint_uses_addon(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner(
+        result_text=_valid_arxiv_summary(
+            "2026-05-19",
+            "https://arxiv.org/abs/2605.16917",
+            "entrypoint summary",
+        )
+    )
+    manager = _install_fake_manager(context, runner)
+
+    async def fake_get_manager(_context: Any) -> CodexQueueManager:
+        return manager
+
+    import plugins.codex.manager as manager_module
+
+    monkeypatch.setattr(manager_module, "get_manager", fake_get_manager)
+    result = await codex_arxiv_summary.enqueue_or_replay_arxiv_summary(
+        context,
+        date="2026-05-19",
+        links=["https://arxiv.org/abs/2605.16917"],
+        user_id=1,
+        group_id=2,
+    )
+    await manager.wait_idle()
+
+    assert "已投递" in result
+    assert len(runner.calls) == 2
+    assert "entrypoint summary" in str(context.actions)
+
+
+@pytest.mark.asyncio
+async def test_arxiv_summary_replays_existing_success_without_rerun(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner(
+        result_text=_valid_arxiv_summary(
+            "2026-05-19",
+            "https://arxiv.org/abs/2605.16917",
+            "cached summary",
+        )
+    )
+    manager = _install_fake_manager(context, runner)
+
+    await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-19",
+        links=["https://arxiv.org/abs/2605.16917"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await manager.wait_idle()
+    context.actions.clear()
+
+    result = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-19",
+        links=["https://arxiv.org/abs/2605.16917"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+
+    assert "已重发" in result
+    assert len(runner.calls) == 2
+    sent_text = str(context.actions)
+    assert "[codex:astro-ph #2] 完成" in sent_text
+    assert "cached summary" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_arxiv_summary_duplicate_inflight_reports_status(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner()
+    manager = _install_fake_manager(context, runner)
+
+    await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-20",
+        links=["block"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await _wait_until(lambda: runner.started == ["astro-ph", "astro-ph"])
+    context.actions.clear()
+
+    result = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-20",
+        links=["block"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+
+    assert "已在队列或运行中" in result
+    assert "已在运行中" in str(context.actions)
+    runner.release.set()
+    await manager.wait_idle()
+
+
+@pytest.mark.asyncio
+async def test_arxiv_summary_failed_history_is_retried(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner(result_text="network failed", exit_code=1)
+    manager = _install_fake_manager(context, runner)
+
+    await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-21",
+        links=["https://arxiv.org/abs/2605.18513"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await manager.wait_idle()
+    assert "2026-05-21 arXiv 总结失败" in str(context.actions)
+
+    retry_runner = FakeRunner(
+        result_text=_valid_arxiv_summary(
+            "2026-05-21",
+            "https://arxiv.org/abs/2605.18513",
+            "retry summary",
+        )
+    )
+    manager.runner = retry_runner  # type: ignore[assignment]
+    await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-21",
+        links=["https://arxiv.org/abs/2605.18513"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await manager.wait_idle()
+
+    assert len(retry_runner.calls) == 1
+    assert "retry summary" in str(context.actions)
+
+
+@pytest.mark.asyncio
+async def test_arxiv_summary_queue_full_reuses_manager_limit(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    context.config["plugins"]["codex"]["per_session_queue_limit"] = 1
+    runner = FakeRunner()
+    manager = _install_fake_manager(context, runner)
+
+    await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-22",
+        links=["block"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await _wait_until(lambda: runner.started == ["astro-ph", "astro-ph"])
+
+    queued = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-23",
+        links=["https://arxiv.org/abs/2605.16917"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    full = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-24",
+        links=["https://arxiv.org/abs/2605.18050"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+
+    assert "已投递" in queued
+    assert "队列已满" in full
+    runner.release.set()
+    await manager.wait_idle()
+
+
+@pytest.mark.asyncio
+async def test_protected_astro_ph_requires_explicit_protected_delete(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner()
+    _install_fake_manager(context, runner)
+
+    await codex_main.handle("codex", "create astro-ph", {"user_id": 1, "group_id": 2}, context)
+
+    denied = await codex_main.handle(
+        "codex",
+        "delete astro-ph --force",
+        {"user_id": 1, "group_id": 2},
+        context,
+    )
+    allowed = await codex_main.handle(
+        "codex",
+        "delete astro-ph --force --protected",
+        {"user_id": 1, "group_id": 2},
+        context,
+    )
+
+    assert "受保护" in str(denied)
+    assert "已删除" in str(allowed)
+    assert "历史已归档" in str(allowed)
+    assert not (context.data_dir / "session" / "astro-ph").exists()
+    archives = list((context.data_dir / "deleted_sessions").glob("astro-ph-*"))
+    assert len(archives) == 1
+    archived_history = (archives[0] / "conversation.jsonl").read_text(encoding="utf-8")
+    assert "session.created" in archived_history
+    assert "session.deleted" in archived_history
+
+
+@pytest.mark.asyncio
+async def test_delete_archives_history_and_recreate_uses_clean_session(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner()
+    _install_fake_manager(context, runner)
+
+    await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
+    deleted = await codex_main.handle("codex", "delete aaa --force", {"user_id": 1, "group_id": 2}, context)
+    recreated = await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
+
+    assert "已删除" in str(deleted)
+    assert "已创建" in str(recreated)
+    active_history = (context.data_dir / "session" / "aaa" / "conversation.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "session.created" in active_history
+    assert "session.deleted" not in active_history
+    archives = list((context.data_dir / "deleted_sessions").glob("aaa-*"))
+    assert len(archives) == 1
+    archived_history = (archives[0] / "conversation.jsonl").read_text(encoding="utf-8")
+    assert "session.deleted" in archived_history
+
+
+@pytest.mark.asyncio
+async def test_recreated_astro_ph_does_not_replay_archived_summary(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner(
+        result_text=_valid_arxiv_summary(
+            "2026-05-19",
+            "https://arxiv.org/abs/2605.16917",
+            "old summary",
+        )
+    )
+    manager = _install_fake_manager(context, runner)
+
+    await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-19",
+        links=["https://arxiv.org/abs/2605.16917"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await manager.wait_idle()
+    context.actions.clear()
+
+    await codex_main.handle(
+        "codex",
+        "delete astro-ph --force --protected",
+        {"user_id": 1, "group_id": 2},
+        context,
+    )
+
+    retry_runner = FakeRunner(
+        result_text=_valid_arxiv_summary(
+            "2026-05-19",
+            "https://arxiv.org/abs/2605.16917",
+            "new summary",
+        )
+    )
+    manager.runner = retry_runner  # type: ignore[assignment]
+    result = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-05-19",
+        links=["https://arxiv.org/abs/2605.16917"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await manager.wait_idle()
+
+    assert "已投递" in result
+    assert len(retry_runner.calls) == 2
+    sent_text = str(context.actions)
+    assert "new summary" in sent_text
+    assert "old summary" not in sent_text
+
+
 def test_runner_injects_default_image_artifact_prompt(tmp_path: Path):
     context = FakeContext(tmp_path)
     config = load_plugin_config(context)
     runner = CodexRunner(config, tmp_path / "outputs")
     artifact_dir = tmp_path / "session" / "aaa" / "jobs" / "job-0001" / "artifacts"
 
-    args = runner._build_args(  # noqa: SLF001 - regression coverage for CLI prompt composition.
+    args = runner._build_args(  # noqa: SLF001 - regression coverage for CLI prompt transport.
         tmp_path,
         "画一张图",
         None,
         tmp_path / "out.txt",
         artifact_dir,
     )
+    prompt = runner._prompt_with_artifact_instruction(  # noqa: SLF001
+        "画一张图",
+        artifact_dir,
+    )
 
-    prompt = args[-1]
+    assert args[-1] == "-"
+    assert "画一张图" not in args
     assert prompt.startswith("画一张图")
     assert "Codex 插件默认图片输出约定" in prompt
     assert "generated_images" in prompt
     assert artifact_dir.resolve().as_posix() in prompt
+
+
+@pytest.mark.asyncio
+async def test_runner_sends_multiline_prompt_via_stdin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    context = FakeContext(tmp_path)
+    config = load_plugin_config(context)
+    runner = CodexRunner(config, tmp_path / "outputs")
+    captured: dict[str, Any] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self, input: bytes | None = None):
+            captured["stdin"] = input.decode("utf-8") if input else ""
+            output_path = Path(captured["args"][captured["args"].index("-o") + 1])
+            output_path.write_text("## 2026-05-19\nsummary", encoding="utf-8")
+            stdout = b'{"type":"thread.started","thread_id":"thread-1"}\n'
+            return stdout, b""
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = list(args)
+        captured["stdin_pipe"] = kwargs.get("stdin")
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    prompt = "## 2026-05-19\nhttps://arxiv.org/abs/2605.16917\nhttps://arxiv.org/abs/2605.18050"
+    result = await runner.run(
+        cwd=tmp_path,
+        prompt=prompt,
+        thread_id="thread-old",
+        job=SimpleNamespace(label="astro-ph", cancel_requested=False),
+        artifact_dir=None,
+    )
+
+    assert captured["args"][-1] == "-"
+    assert prompt not in captured["args"]
+    assert captured["stdin_pipe"] == asyncio.subprocess.PIPE
+    assert captured["stdin"].startswith(prompt)
+    assert "https://arxiv.org/abs/2605.18050" in captured["stdin"]
+    assert result.final_text == "## 2026-05-19\nsummary"
