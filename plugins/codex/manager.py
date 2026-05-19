@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from collections import deque
@@ -15,6 +16,8 @@ from .artifacts import CodexImageArtifact, collect_image_artifacts, default_gene
 from .config import LABEL_PATTERN, CodexPluginConfig, load_plugin_config
 from .paths import CwdError, normalize_cwd
 from .runner import CodexRunResult, CodexRunner, terminate_process_tree
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,6 +48,7 @@ class RuntimeJob:
     image_artifacts: list[CodexImageArtifact] = field(default_factory=list)
     process: asyncio.subprocess.Process | None = None
     cancel_requested: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class CodexQueueManager:
@@ -62,6 +66,7 @@ class CodexQueueManager:
         self.sessions_path = self.data_dir / "sessions.json"
         self.output_dir = self.data_dir / "outputs"
         self.session_root = self.data_dir / "session"
+        self.deleted_session_root = self.data_dir / "deleted_sessions"
         self.session_root.mkdir(parents=True, exist_ok=True)
         self.runner = runner or CodexRunner(self.config, self.output_dir)
         self.sessions: dict[str, CodexSession] = {}
@@ -90,6 +95,22 @@ class CodexQueueManager:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def _archive_session_dir_locked(self, label: str) -> Path | None:
+        session_dir = self.session_root / label
+        if not session_dir.exists():
+            return None
+
+        self.deleted_session_root.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+        base_name = f"{label}-{stamp}"
+        target = self.deleted_session_root / base_name
+        suffix = 2
+        while target.exists():
+            target = self.deleted_session_root / f"{base_name}-{suffix}"
+            suffix += 1
+        session_dir.rename(target)
+        return target
+
     def _conversation_path(self, label: str) -> Path:
         return self._session_dir(label) / "conversation.jsonl"
 
@@ -111,6 +132,98 @@ class CodexQueueManager:
         line = json.dumps(event, ensure_ascii=False)
         with self._conversation_path(label).open("a", encoding="utf-8") as file:
             file.write(line + "\n")
+
+    def _is_protected_session(self, label: str) -> bool:
+        return label in self.config.protected_sessions
+
+    def _create_session_record_locked(
+        self,
+        label: str,
+        cwd: Path,
+        *,
+        user_id: int | None,
+        group_id: int | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> CodexSession:
+        session = CodexSession(
+            label=label,
+            cwd=str(cwd),
+            owner_user_id=user_id,
+            target_group_id=group_id,
+        )
+        self.sessions[label] = session
+        self._save()
+        payload: dict[str, Any] = {
+            "type": "session.created",
+            "label": label,
+            "cwd": str(cwd),
+            "owner_user_id": user_id,
+            "target_group_id": group_id,
+        }
+        if metadata:
+            payload["metadata"] = metadata
+        self._append_history(label, payload)
+        return session
+
+    def _enqueue_job_locked(
+        self,
+        session: CodexSession,
+        prompt: str,
+        *,
+        user_id: int | None,
+        group_id: int | None,
+        context: Any,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[RuntimeJob, int]:
+        queue = self.queues.setdefault(session.label, deque())
+        job_metadata = dict(metadata or {})
+        queued_count = sum(
+            1 for queued in queue if not queued.metadata.get("queue_overhead")
+        )
+        if (
+            queued_count >= self.config.per_session_queue_limit
+            and not job_metadata.get("queue_overhead")
+        ):
+            raise RuntimeError(
+                f"会话 `{session.label}` 的队列已满，当前限制为 {self.config.per_session_queue_limit}。"
+            )
+        session.total_jobs += 1
+        session.updated_at = time.time()
+        tasks_ahead = len(queue) + (1 if session.label in self.running else 0)
+        job = RuntimeJob(
+            job_id=session.total_jobs,
+            label=session.label,
+            prompt=prompt,
+            user_id=user_id,
+            group_id=group_id,
+            context=context,
+            metadata=job_metadata,
+        )
+        queue.append(job)
+        logger.info(
+            "Codex job queued: label=%s job_id=%s queue_ahead=%s metadata=%s prompt_chars=%d",
+            session.label,
+            job.job_id,
+            tasks_ahead,
+            job.metadata,
+            len(prompt),
+        )
+        self._save()
+        self._append_history(
+            session.label,
+            {
+                "type": "message",
+                "role": "user",
+                "job_id": job.job_id,
+                "content": prompt,
+                "user_id": user_id,
+                "group_id": group_id,
+                "status": "queued",
+                "metadata": job.metadata,
+            },
+        )
+        self._ensure_worker_locked(session.label)
+        return job, tasks_ahead
 
     async def ensure_default_cwd(self) -> None:
         normalize_cwd(None, self.config)
@@ -134,22 +247,11 @@ class CodexQueueManager:
         async with self.lock:
             if label in self.sessions:
                 return f"Codex 会话已存在: {label}"
-            self.sessions[label] = CodexSession(
+            self._create_session_record_locked(
                 label=label,
-                cwd=str(cwd),
-                owner_user_id=user_id,
-                target_group_id=group_id,
-            )
-            self._save()
-            self._append_history(
-                label,
-                {
-                    "type": "session.created",
-                    "label": label,
-                    "cwd": str(cwd),
-                    "owner_user_id": user_id,
-                    "target_group_id": group_id,
-                },
+                cwd=cwd,
+                user_id=user_id,
+                group_id=group_id,
             )
         return f"已创建 Codex 会话 `{label}`\n工作目录: {cwd}"
 
@@ -161,6 +263,7 @@ class CodexQueueManager:
         user_id: int | None,
         group_id: int | None,
         context: Any,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         prompt = prompt.strip()
         if not prompt:
@@ -170,36 +273,17 @@ class CodexQueueManager:
             session = self.sessions.get(label)
             if not session:
                 return f"Codex 会话不存在: {label}\n先用 /codex create {label} 创建。"
-            queue = self.queues.setdefault(label, deque())
-            queued_count = len(queue)
-            if queued_count >= self.config.per_session_queue_limit:
-                return f"会话 `{label}` 的队列已满，当前限制为 {self.config.per_session_queue_limit}。"
-            session.total_jobs += 1
-            session.updated_at = time.time()
-            tasks_ahead = queued_count + (1 if label in self.running else 0)
-            job = RuntimeJob(
-                job_id=session.total_jobs,
-                label=label,
-                prompt=prompt,
-                user_id=user_id,
-                group_id=group_id,
-                context=context,
-            )
-            queue.append(job)
-            self._save()
-            self._append_history(
-                label,
-                {
-                    "type": "message",
-                    "role": "user",
-                    "job_id": job.job_id,
-                    "content": prompt,
-                    "user_id": user_id,
-                    "group_id": group_id,
-                    "status": "queued",
-                },
-            )
-            self._ensure_worker_locked(label)
+            try:
+                job, tasks_ahead = self._enqueue_job_locked(
+                    session,
+                    prompt,
+                    user_id=user_id,
+                    group_id=group_id,
+                    context=context,
+                    metadata=metadata,
+                )
+            except RuntimeError as exc:
+                return str(exc)
             if tasks_ahead:
                 return f"已加入 Codex 队列: `{label}` #{job.job_id}\n前面还有 {tasks_ahead} 个任务。"
             return f"已收到 Codex 任务: `{label}` #{job.job_id}\n开始后台执行。"
@@ -228,6 +312,14 @@ class CodexQueueManager:
             artifact_dir = self._job_artifact_dir(label, job.job_id)
             try:
                 async with self.global_sem:
+                    logger.info(
+                        "Codex job started: label=%s job_id=%s cwd=%s metadata=%s prompt_chars=%d",
+                        label,
+                        job.job_id,
+                        session.cwd,
+                        job.metadata,
+                        len(job.prompt),
+                    )
                     result = await self.runner.run(
                         cwd=Path(session.cwd),
                         prompt=job.prompt,
@@ -237,7 +329,7 @@ class CodexQueueManager:
                     )
             except Exception as exc:  # noqa: BLE001 - keep bot task alive and report failure.
                 result = CodexRunResult(
-                    exit_code=None,
+                    exit_code=1,
                     thread_id=session.thread_id,
                     final_text=f"Codex 执行异常: {exc}",
                     stdout_tail="",
@@ -247,6 +339,14 @@ class CodexQueueManager:
                 job.finished_at = time.time()
                 job.status = "cancelled" if job.cancel_requested else "done"
                 job.result = result
+                logger.info(
+                    "Codex job finished: label=%s job_id=%s status=%s exit_code=%s timed_out=%s",
+                    label,
+                    job.job_id,
+                    job.status,
+                    result.exit_code if result else None,
+                    result.timed_out if result else False,
+                )
                 async with self.lock:
                     current = self.running.get(label)
                     if current is job:
@@ -308,6 +408,7 @@ class CodexQueueManager:
                 "finished_at": job.finished_at,
                 "stderr_tail": stderr_tail,
                 "images": [artifact.as_record() for artifact in job.image_artifacts],
+                "metadata": job.metadata,
             },
         )
 
@@ -325,25 +426,44 @@ class CodexQueueManager:
             return [text_batches[0] + image_segments]
         return text_batches + [image_segments]
 
+    def _metadata_failure_message(self, job: RuntimeJob, *, reason: str, detail: str) -> str | None:
+        title = str(job.metadata.get("failure_title") or "").strip()
+        if not title:
+            return None
+        return f"[codex:{job.label} #{job.job_id}] {title}失败{reason}\n{detail}"
+
     async def _send_job_result(
         self,
         session: CodexSession,
         job: RuntimeJob,
         result: CodexRunResult | None,
     ) -> None:
+        if job.metadata.get("suppress_delivery"):
+            return
+
         if result is None:
             content = f"[codex:{job.label} #{job.job_id}] 无执行结果。"
         elif result.cancelled:
             content = f"[codex:{job.label} #{job.job_id}] 已取消。"
         elif result.timed_out:
-            content = f"[codex:{job.label} #{job.job_id}] 执行超时。\n{result.final_text.strip()}"
+            detail = result.final_text.strip()
+            content = self._metadata_failure_message(
+                job,
+                reason="：执行超时。",
+                detail=detail,
+            ) or f"[codex:{job.label} #{job.job_id}] 执行超时。\n{detail}"
         elif result.exit_code not in (0, None):
             detail = result.final_text.strip()
             if result.stderr_tail:
                 detail = f"{detail}\n\nstderr:\n{result.stderr_tail.strip()}"
-            content = f"[codex:{job.label} #{job.job_id}] 执行失败，退出码 {result.exit_code}。\n{detail}"
+            content = self._metadata_failure_message(
+                job,
+                reason=f"，退出码 {result.exit_code}。",
+                detail=detail,
+            ) or f"[codex:{job.label} #{job.job_id}] 执行失败，退出码 {result.exit_code}。\n{detail}"
         else:
-            content = f"[codex:{job.label} #{job.job_id}] 完成:\n{result.final_text.strip()}"
+            final_text = result.final_text.strip()
+            content = f"[codex:{job.label} #{job.job_id}] 完成:\n{final_text}"
 
         for batch in self._result_message_batches(content, job.image_artifacts):
             action = build_action(
@@ -439,10 +559,18 @@ class CodexQueueManager:
             queue.clear()
             return f"已清空 `{label}` 的排队任务 {count} 个。"
 
-    async def delete_session(self, label: str, *, force: bool = False) -> str:
+    async def delete_session(
+        self,
+        label: str,
+        *,
+        force: bool = False,
+        allow_protected: bool = False,
+    ) -> str:
         async with self.lock:
             if label not in self.sessions:
                 return f"Codex 会话不存在: {label}"
+            if self._is_protected_session(label) and not (force and allow_protected):
+                return f"`{label}` 是受保护的 Codex 会话，删除需同时使用 --force --protected。"
             running = self.running.get(label)
             if running and not force:
                 return f"`{label}` 有任务运行中，先 /codex cancel {label}，或使用 /codex delete {label} --force。"
@@ -463,7 +591,9 @@ class CodexQueueManager:
                     "force": force,
                 },
             )
-        return f"已删除 Codex 会话 `{label}`，同时丢弃排队任务 {queued} 个。"
+            archive_path = self._archive_session_dir_locked(label)
+        suffix = f"\n历史已归档: {archive_path}" if archive_path else ""
+        return f"已删除 Codex 会话 `{label}`，同时丢弃排队任务 {queued} 个。{suffix}"
 
     async def shutdown(self) -> None:
         async with self.lock:

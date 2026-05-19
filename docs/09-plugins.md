@@ -747,7 +747,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 ### arxiv_filter - arXiv 论文筛选
 
-基于 BERT 模型的 arXiv 论文智能筛选插件。
+基于 BERT 模型的 arXiv 论文智能筛选插件。它先发送筛选出的论文列表，再把所有 positive 论文链接作为后台侧路交给 Codex `astro-ph` 会话生成中文 Markdown 摘要。
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
@@ -755,11 +755,21 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 #### 定时任务
 
-- 周一至周五 **11:00** 自动推送
+- 周一至周五 **10:00 / 10:30 / 11:00 / 11:30** 检查 arXiv 是否已经更新到当天；更新后执行筛选并推送论文列表。
+- 周一至周五 **12:00** 做最后一次检查；如果当天仍未更新，发送停更通知，不再继续追加定时任务。
+- 每天自动推送只执行一次，运行状态由 `plugins/arxiv_filter/data/update_status.json` 去重。
+- 用户仍可通过 `/arxiv` 手动执行一次筛选；这会重新发送论文列表，并触发 Codex 摘要侧路。
 
 #### 技术说明
 
-使用预训练的 BERT 模型对当日 arXiv 论文进行相关性评分和筛选。
+使用预训练的 BERT 模型对当日 arXiv 论文进行相关性评分和筛选。筛选结果发送后，`plugins/arxiv_filter/codex_summary.py` 会从结果文本中提取所有 arXiv 链接并异步投递给 Codex；如果 Codex 摘要模块不可用或执行失败，不会影响论文列表消息。
+
+Codex 侧会对同一天摘要做去重：
+
+- 已有成功执行结果时，手动 `/arxiv` 会直接重发历史摘要。
+- 已有同一天任务正在队列或运行中时，只发送状态提示。
+- 失败过或没有成功记录时，重新总结并发送结果。
+- Codex 执行失败时，会单独发送包含日期的总结失败消息。
 
 ---
 
@@ -1147,6 +1157,8 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 - **主动回发结果**：任务完成、失败、超时或取消后，插件主动发送 `[codex:<name> #<job_id>]` 文字和图片消息。
 - **图片透传**：每个任务自动获得 artifacts 目录；Codex 生成的本地图片会从 artifacts 或 `$CODEX_HOME/generated_images/` 复制到会话图片目录，并随文字一起发送。
 - **会话持久化**：`plugins/codex/data/sessions.json` 保存 label、cwd 和 thread id；`plugins/codex/data/session/<name>/conversation.jsonl` 保存每个会话的任务、回复和图片记录。
+- **受保护会话与归档**：`astro-ph` 等受保护会话不能被普通删除；删除会话时旧历史会移动到 `plugins/codex/data/deleted_sessions/`。
+- **arXiv 摘要会话**：为 arXiv Filter 提供固定 `astro-ph` 会话、首次静默初始化、历史摘要重发和失败重试。
 - **路径归一化**：QQ 中建议统一输入 `/` 斜杠路径，插件按 bot 所在系统解析。
 
 #### 命令列表
@@ -1160,7 +1172,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 | `/codex cancel <name> [job_id]` | 取消正在运行的任务；指定 `job_id` 时也可移除排队任务 |
 | `/codex stop <name> [job_id]` | `cancel` 的别名 |
 | `/codex clear <name>` | 清空指定会话的排队任务 |
-| `/codex delete <name> [--force]` | 删除会话；运行中任务需先取消，或使用 `--force` |
+| `/codex delete <name> [--force] [--protected]` | 删除会话并归档历史；受保护会话必须同时带 `--force --protected` |
 
 #### 配置说明
 
@@ -1172,6 +1184,12 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
     "codex": {
       "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
       "allowed_cwd_roots": ["C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"],
+      "protected_sessions": ["astro-ph"],
+      "arxiv_summary": {
+        "label": "astro-ph",
+        "cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
+        "methodology": "arxiv-summary-methodology.md"
+      },
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
       "job_timeout_seconds": 3600,
@@ -1183,7 +1201,27 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 }
 ```
 
-如果 Codex CLI 不在 PATH 中，可在 `config.json` 或 `secrets.json` 的 `plugins.codex.codex_bin` 指定完整路径。`allowed_cwd_roots` 是安全边界，用户创建会话时指定的 `cwd:` 必须位于这些目录下。
+如果 Codex CLI 不在 PATH 中，可在 `config.json` 或 `secrets.json` 的 `plugins.codex.codex_bin` 指定完整路径。`allowed_cwd_roots` 是安全边界，用户创建会话时指定的 `cwd:` 必须位于这些目录下。`arxiv_summary.cwd` 也应位于允许目录内，并提前放置 `arxiv-summary-methodology.md`。
+
+#### arXiv 摘要会话
+
+`arxiv_filter` 发送论文列表后，会把当天所有 positive 论文链接投递给 `arxiv_summary.label` 指定的 Codex 会话，默认是 `astro-ph`。如果该会话还没有 Codex thread，插件会先排入一条静默初始化任务，只写入会话历史，不推送到 QQ；随后再排入当天摘要任务。
+
+摘要任务的 prompt 会明确要求 Codex 读取当前工作目录下的 `arxiv_summary.methodology`，并发送：
+
+```markdown
+## 2026-05-19
+https://arxiv.org/abs/2605.16917
+https://arxiv.org/abs/2605.18050
+```
+
+同一天如果已经有成功执行结果，插件会直接重发历史摘要；如果上一轮失败或没有记录，会重新总结。受保护的 `astro-ph` 会话需要以下命令才会删除：
+
+```text
+/codex delete astro-ph --force --protected
+```
+
+删除后旧目录会归档，新建同名会话时从空历史开始，不会读取已归档摘要。
 
 #### 使用示例
 
@@ -1196,6 +1234,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 /codex status repo
 /codex cancel repo
 /codex delete repo --force
+/codex delete astro-ph --force --protected
 ```
 
 Windows 下可以写 `C:/Users/testuser/Desktop/project`。Linux/macOS 下照常写 `/home/user/project`。插件只负责路径解析和允许目录校验，不会绕过 Codex CLI 自身的 sandbox、审批策略和系统权限。

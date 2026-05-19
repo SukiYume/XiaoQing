@@ -15,7 +15,7 @@ HELP_TEXT = """Codex 会话队列:
 /codex status [name]              查看状态
 /codex cancel <name> [job_id]      取消运行中任务，或移除排队任务
 /codex clear <name>                清空排队任务
-/codex delete <name> [--force]     删除会话
+/codex delete <name> [--force] [--protected]  删除会话并归档历史
 
 路径建议统一输入 / 斜杠，例如 C:/Users/xxx/project。插件会按 bot 所在系统解析。"""
 
@@ -100,8 +100,14 @@ async def handle(command: str, args: str, event: dict[str, Any], context: Any) -
     if subcommand in {"delete", "del", "remove", "rm", "删除"}:
         label = parsed.second
         if not label:
-            return segments("用法: /codex delete <name> [--force]")
-        return segments(await manager.delete_session(label, force=parsed.has("force") or "--force" in lowered))
+            return segments("用法: /codex delete <name> [--force] [--protected]")
+        return segments(
+            await manager.delete_session(
+                label,
+                force=parsed.has("force") or "--force" in lowered,
+                allow_protected=parsed.has("protected") or "--protected" in lowered,
+            )
+        )
 
     if " " not in raw:
         return segments(f"缺少任务内容。用法: /codex {raw} <任务>")

@@ -7,6 +7,7 @@
 - 每日定时从 arXiv `astro-ph/new` 页面获取最新论文
 - 使用 SciBERT 模型（标题 + 摘要作为输入）进行二分类，筛选感兴趣的论文
 - 支持定时检查 arXiv 更新，自动推送筛选结果
+- 筛选出 positive 论文后，自动把全部 arXiv 链接交给 Codex `astro-ph` 会话生成中文 Markdown 摘要
 
 ## 使用方法
 
@@ -25,6 +26,14 @@
 | 周一~周五 12:00 | 最后一次检查，若仍未更新则发送停更通知 |
 
 每天只推送一次（通过 `data/update_status.json` 去重）。
+
+论文列表推送和 Codex 摘要是两条独立消息链路：arXiv Filter 会先发送筛选出的论文列表，然后在后台把所有 positive 论文链接交给 Codex 插件；Codex 完成后再单独回发摘要。如果 Codex 总结失败，失败消息由 Codex 插件单独发送，不会阻止论文列表消息。
+
+如果运行环境中 Codex 摘要模块不可用或加载失败，arXiv Filter 仍会正常筛选并发送论文列表；摘要侧路只记录日志并跳过，不影响 `/arxiv` 和定时任务。
+
+手动 `/arxiv` 会重新执行筛选并再次请求 Codex 处理当天链接。Codex 插件会自行判断当天是否已经成功总结过：成功过则重发历史摘要，失败过或没有成功记录则重新总结。
+
+摘要会话、工作目录和方法论文件名由 `plugins.codex.arxiv_summary` 配置控制，默认使用 `astro-ph` 会话和 `arxiv-summary-methodology.md`。
 
 ## 配置
 
@@ -66,6 +75,7 @@
 ```
 arxiv_filter/
 ├── main.py                   # 插件入口（命令处理、定时任务）
+├── codex_summary.py          # Codex 摘要侧路投递
 ├── arxiv_inference.py        # 模型推理
 ├── arxiv_today.py            # arXiv 数据获取（网页爬取 + API）
 ├── utils.py                  # 公共工具（配置加载）

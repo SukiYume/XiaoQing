@@ -54,6 +54,12 @@ XiaoQing 使用两个 JSON 配置文件：
     "codex": {
       "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
       "allowed_cwd_roots": ["C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"],
+      "protected_sessions": ["astro-ph"],
+      "arxiv_summary": {
+        "label": "astro-ph",
+        "cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
+        "methodology": "arxiv-summary-methodology.md"
+      },
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
       "job_timeout_seconds": 3600,
@@ -337,6 +343,12 @@ XiaoQing 使用两个 JSON 配置文件：
     "codex": {
       "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
       "allowed_cwd_roots": ["C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"],
+      "protected_sessions": ["astro-ph"],
+      "arxiv_summary": {
+        "label": "astro-ph",
+        "cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
+        "methodology": "arxiv-summary-methodology.md"
+      },
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
       "job_timeout_seconds": 3600,
@@ -359,10 +371,16 @@ XiaoQing 使用两个 JSON 配置文件：
 | `sandbox` | `string` | `"workspace-write"` | 传给 Codex CLI 的 sandbox 模式 |
 | `approval_policy` | `string` | `"never"` | 传给 Codex CLI 的审批策略 |
 | `skip_git_repo_check` | `boolean` | `true` | 是否给 `codex exec` 添加 `--skip-git-repo-check` |
+| `protected_sessions` | `string[]` | `[arxiv_summary.label]` | 受保护会话列表；删除这些会话必须同时使用 `--force --protected` |
+| `arxiv_summary.label` | `string` | `"astro-ph"` | arXiv Filter 自动摘要使用的固定 Codex 会话名 |
+| `arxiv_summary.cwd` | `string` | `default_cwd` | arXiv 摘要会话的工作目录；应位于 `allowed_cwd_roots` 下 |
+| `arxiv_summary.methodology` | `string` | `"arxiv-summary-methodology.md"` | 摘要 prompt 要求 Codex 在工作目录中读取的方法论文件名 |
 
 路径输入建议统一使用 `/` 斜杠。Windows 上可以写 `C:/Users/testuser/Desktop/project`，插件会按运行系统解析；Linux/macOS 上仍写 `/home/user/project`。如果 bot 运行在非 Windows 系统，Windows 盘符路径会被拒绝。
 
-Codex 插件会把运行时状态写入 `plugins/codex/data/`：`sessions.json` 保存会话标签和 thread id，`session/<label>/conversation.jsonl` 保存每个标签的用户任务、Codex 回复、取消、删除事件和图片记录，`session/<label>/images/` 保存已透传到 QQ 的图片副本，`session/<label>/jobs/` 保存单次任务的 artifacts 目录。该目录不应提交到 Git。
+arXiv Filter 会把筛选出的 positive 论文链接投递给 `arxiv_summary.label` 指定的 Codex 会话。首次没有 Codex thread 时，会先投递一条静默初始化任务；之后每次摘要 prompt 都会明确要求读取 `arxiv_summary.methodology`，但不会把该文件正文拼进 prompt。该文件需要提前放在 `arxiv_summary.cwd` 中。
+
+Codex 插件会把运行时状态写入 `plugins/codex/data/`：`sessions.json` 保存会话标签和 thread id，`session/<label>/conversation.jsonl` 保存每个标签的用户任务、Codex 回复、取消、删除事件和图片记录，`session/<label>/images/` 保存已透传到 QQ 的图片副本，`session/<label>/jobs/` 保存单次任务的 artifacts 目录，`deleted_sessions/` 保存删除会话时归档的旧历史。该目录不应提交到 Git。
 
 `cancel` 和 `stop` 是同一个操作：取消排队任务，或终止正在运行的 Codex CLI 子进程。能否保留已完成的中间文件取决于 Codex CLI 和任务自身行为。
 

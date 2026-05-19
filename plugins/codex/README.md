@@ -14,7 +14,7 @@ Codex 插件不使用 XiaoQing 的框架 Session。它维护自己的 Codex 会�
 /codex cancel <name> [job_id]
 /codex stop <name> [job_id]
 /codex clear <name>
-/codex delete <name> [--force]
+/codex delete <name> [--force] [--protected]
 ```
 
 ## 使用示例
@@ -31,6 +31,33 @@ Codex 插件不使用 XiaoQing 的框架 Session。它维护自己的 Codex 会�
 
 `cancel` 和 `stop` 是同一个操作：移除排队任务，或终止正在运行的 Codex CLI 子进程。
 
+## arXiv 摘要会话
+
+arXiv Filter 插件会把每天筛选出的所有 positive 论文链接交给固定 Codex 会话 `astro-ph`。该会话默认工作目录为 `C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex`，并假设工作目录下存在 `arxiv-summary-methodology.md`。如果运行时发现 `astro-ph` 还没有 Codex thread，插件会先发送一条静默初始化消息建立摘要规则；初始化结果只写入会话历史，不推送到 QQ。随后当天摘要任务按普通 Codex 队列任务投递。每次发送总结任务时，prompt 都会明确要求 Codex 先读取当前工作目录下的 `arxiv-summary-methodology.md`，并附上形如：
+
+```markdown
+## 2026-05-19
+https://arxiv.org/abs/2605.16917
+https://arxiv.org/abs/2605.18050
+```
+
+同一天的 arXiv 摘要请求会先查 `astro-ph` 的会话历史：
+
+- 如果已有成功执行结果，直接重发历史总结。
+- 如果已有任务正在队列或运行中，只发送状态提示，不重复排队。
+- 如果之前失败或没有成功记录，则重新投递 Codex 总结。
+- 如果 Codex 执行失败，插件会发送包含日期的失败消息。
+
+`astro-ph` 默认是受保护会话，普通删除会被拒绝。确需删除时必须使用：
+
+```text
+/codex delete astro-ph --force --protected
+```
+
+删除会话时不会丢弃历史目录；插件会把 `data/session/<label>` 移到 `data/deleted_sessions/<label>-YYYYMMDD-HHMMSS`。因此同名会话重新创建后会使用新的空白历史，不会继续读取已归档的旧总结。
+
+这部分业务逻辑独立放在 `arxiv_summary.py` 中；`manager.py` 只提供通用会话、队列、历史归档和结果发送能力。arXiv 失败提示通过任务 metadata 提供标题，不在主队列里写 arXiv 专用分支。
+
 ## 配置
 
 在 `config/config.json` 中配置：
@@ -41,6 +68,12 @@ Codex 插件不使用 XiaoQing 的框架 Session。它维护自己的 Codex 会�
     "codex": {
       "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
       "allowed_cwd_roots": ["C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"],
+      "protected_sessions": ["astro-ph"],
+      "arxiv_summary": {
+        "label": "astro-ph",
+        "cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
+        "methodology": "arxiv-summary-methodology.md"
+      },
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
       "job_timeout_seconds": 3600,
@@ -71,6 +104,7 @@ QQ 消息里建议统一使用 `/` 斜杠输入路径：
 - `session/<name>/conversation.jsonl`：每个标签的用户任务、Codex 回复、取消、删除事件和图片记录。
 - `session/<name>/images/`：该 Codex 会话已经透传到 QQ 的图片副本。
 - `session/<name>/jobs/job-0001/artifacts/`：单次任务的图片输出目录；插件会自动把这个目录写入 Codex prompt。
+- `deleted_sessions/<name>-YYYYMMDD-HHMMSS/`：删除会话时归档的旧历史目录。
 - `outputs/`：Codex CLI 临时输出目录。
 
 ## 图片结果

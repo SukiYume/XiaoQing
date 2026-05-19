@@ -323,6 +323,8 @@ Codex 插件不占用框架的多轮 session。先创建一个带标签的 Codex
 
 默认工作目录是 `C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex`。在 QQ 里建议统一使用 `/` 斜杠输入路径，例如 `/codex create demo cwd:C:/Users/testuser/Desktop/project`，插件会按 bot 所在系统解析。Codex 任务如果生成图片，插件会自动提供任务级 artifacts 目录，完成后把文字和图片一起回发到 QQ。
 
+`arxiv_filter` 会复用 Codex 插件的后台队列：筛选结果发出后，所有 positive 论文链接会投递到固定 `astro-ph` 会话。该会话默认受保护，工作目录需要存在 `arxiv-summary-methodology.md`，用于约束每日论文摘要格式。
+
 ### Shell 路径测试
 
 Shell 插件直接执行白名单命令，不经过系统 shell。Windows 下 `copy`、`del` 这类内建命令不能直接执行；复制文件优先使用 `cp`、`xcopy`、`robocopy`，或显式通过 `cmd /c copy`。
