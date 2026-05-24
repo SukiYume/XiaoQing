@@ -16,7 +16,7 @@ from ..models.item import DiaryItem, ItemType
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import ItemFormatter, TAG_TOKEN_RE
-from ..utils.session_utils import safe_create_session, safe_end_session
+from ..utils.session_utils import safe_create_reply_scoped_session, safe_end_session
 from ..utils.time_utils import now_in_timezone, parse_date_optional, parse_diary_range
 from ..utils.validators import normalize_diary_fields, normalize_diary_mood
 
@@ -450,7 +450,7 @@ class DiaryHandler(DbOpsMixin):
             return {"status": "error", "message": "❌ 该模板没有预设问题"}
 
         # 创建会话
-        if await safe_create_session(
+        if await safe_create_reply_scoped_session(
             context,
                 initial_data={
                     "type": "diary_template",

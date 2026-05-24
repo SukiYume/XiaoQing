@@ -21,7 +21,7 @@ from ..models.item import ItemType, LedgerItem
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import ItemFormatter, paginate
-from ..utils.session_utils import safe_create_session, safe_end_session
+from ..utils.session_utils import safe_create_reply_scoped_session, safe_end_session
 from ..utils.time_utils import _parse_time_range_core, now_in_timezone
 from ..utils.validators import normalize_ledger_fields
 
@@ -168,7 +168,7 @@ class LedgerHandler(DbOpsMixin):
         self, user_id: str, context: PendoContext, group_id: int | None = None
     ) -> CommandMessage:
         """开始交互式记账会话"""
-        await safe_create_session(
+        await safe_create_reply_scoped_session(
             context,
             initial_data={
                 "type": PendoConfig.SESSION_TYPE_LEDGER_ADD,

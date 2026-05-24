@@ -373,6 +373,11 @@ async def _handle_command_routing(
     # 公开命令：settings、无参数的子命令（显示帮助）
     public_subcommands = {"settings", "help"}
     is_public = subcommand in public_subcommands or not rest_args.strip()
+    if context is not None:
+        reply_private = bool(
+            group_id and not is_public and await _get_user_privacy_mode(user_id, context)
+        )
+        setattr(context, "_pendo_reply_private", reply_private)
 
     # 使用 CommandRouter 路由子命令
 
