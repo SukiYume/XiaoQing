@@ -135,6 +135,8 @@ Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程�
 /pendo settings privacy on/off
 ```
 
+隐私模式开启时，在群聊中触发 `todo add`、`ledger add`、`diary template` 或需要补充信息/确认的 `event add` 后，多轮填写会通过私聊继续；快捷添加仍可在群聊中一条命令完成。关闭隐私模式后，多轮填写保留在原群聊中继续。
+
 ## Web 控制台
 
 ### 启动和登录

@@ -16,6 +16,16 @@
 - 同步根 README、`docs/00-09` 中涉及 `arxiv_filter` 和 `codex` 的配置、消息流、运行时数据和插件手册说明。
 - 已执行 `python -m pytest tests/plugins/test_arxiv_filter.py tests/plugins/test_codex.py -q`、`git diff --check` 和新增/改动文件尾随空白检查。
 
+## 2026-05-24
+
+### Pendo 群聊隐私会话续写
+
+- 修复群聊中触发 `/pendo todo add` 等多轮 Pendo 命令时，首条提示被隐私模式转发到私聊，但 session 仍创建在群聊作用域，导致私聊回复无法继续会话的问题。
+- 新增 Pendo 回复作用域 session 创建辅助逻辑：隐私模式下的群聊多轮提示会把 session 建到私聊作用域，同时保留来源 `group_id`；关闭隐私模式时仍保留原群聊内续写。
+- 将该逻辑接入待办交互添加、账本交互记账、日记模板和日程补充信息/冲突确认会话，并更新 Pendo README 的群聊隐私模式说明。
+- 补充 Pendo session 回归测试，覆盖群聊隐私模式下的私聊续写，以及隐私模式关闭时继续使用群聊 session。
+- 已执行 `python -m pytest tests/plugins/test_pendo.py -q`、`python -m compileall plugins/pendo/main.py plugins/pendo/utils/session_utils.py plugins/pendo/handlers/task.py plugins/pendo/handlers/ledger.py plugins/pendo/handlers/diary.py plugins/pendo/handlers/event.py` 和 `git diff --check`。
+
 ## 2026-05-18
 
 ### Pendo 待办交互添加
