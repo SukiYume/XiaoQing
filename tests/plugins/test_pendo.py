@@ -4705,6 +4705,129 @@ class TestTriggerConflictRegression:
 
 
 class TestSessionRegression:
+    def test_group_private_reply_scope_is_marked_before_routing(self, monkeypatch):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo import main as pendo_main
+
+        seen = []
+
+        class _Router:
+            alias_map = {}
+
+            async def route(self, subcommand, user_id, rest_args, context):
+                seen.append(getattr(context, "_pendo_reply_private", None))
+                return {"status": "success", "message": "ok"}
+
+        async def _fake_privacy_mode(user_id, context):
+            return True
+
+        monkeypatch.setattr(pendo_main, "_build_command_router", lambda context, group_id=None: _Router())
+        monkeypatch.setattr(pendo_main, "_get_user_privacy_mode", _fake_privacy_mode)
+
+        result = asyncio.run(
+            pendo_main._handle_command_routing(
+                "1001",
+                "todo add",
+                SimpleNamespace(metrics=None),
+                group_id=2002,
+            )
+        )
+
+        assert seen == [True]
+        assert result[0]["data"]["text"] == "✅ 已发送私聊 (保护隐私)"
+
+    def test_group_private_todo_add_creates_private_session_for_continuation(self, monkeypatch):
+        import sys
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from core.session import SessionManager
+        from plugins.pendo.config import PendoConfig
+        from plugins.pendo.handlers.task import TaskHandler
+
+        manager = SessionManager()
+
+        class _Context:
+            plugin_name = "pendo"
+
+            def __init__(self, group_id):
+                self.current_user_id = 1001
+                self.current_group_id = group_id
+                self.session_manager = manager
+
+            async def create_session(self, initial_data=None, timeout=300.0):
+                return await manager.create(
+                    user_id=self.current_user_id,
+                    group_id=self.current_group_id,
+                    plugin_name=self.plugin_name,
+                    initial_data=initial_data,
+                    timeout=timeout,
+                )
+
+        handler = TaskHandler(db=MagicMock())
+        monkeypatch.setattr(handler, "_user_local_now", lambda _user_id: datetime(2026, 5, 1, 10, 0))
+
+        group_context = _Context(group_id=2002)
+        group_context._pendo_reply_private = True
+        result = asyncio.run(handler.handle("1001", "add", group_context, group_id=2002))
+
+        assert result["status"] == "success"
+        assert "开始添加待办" in result["message"]
+        assert asyncio.run(manager.get(1001, 2002)) is None
+
+        private_session = asyncio.run(manager.get(1001, None))
+        assert private_session is not None
+        assert private_session.plugin_name == "pendo"
+        assert private_session.get("type") == PendoConfig.SESSION_TYPE_TASK_ADD
+        assert private_session.get("group_id") == 2002
+
+        private_context = _Context(group_id=None)
+        next_result = asyncio.run(
+            handler.handle_session_step("1001", "写周报", private_session, private_context)
+        )
+
+        assert next_result["status"] == "success"
+        assert private_session.get("step") == "plan_date"
+        assert private_session.get("data")["title"] == "写周报"
+
+    def test_group_todo_add_keeps_group_session_when_reply_is_not_private(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.path.insert(0, str(ROOT))
+
+        from core.session import SessionManager
+        from plugins.pendo.handlers.task import TaskHandler
+
+        manager = SessionManager()
+
+        class _Context:
+            plugin_name = "pendo"
+            current_user_id = 1001
+            current_group_id = 2002
+            session_manager = manager
+
+            async def create_session(self, initial_data=None, timeout=300.0):
+                return await manager.create(
+                    user_id=self.current_user_id,
+                    group_id=self.current_group_id,
+                    plugin_name=self.plugin_name,
+                    initial_data=initial_data,
+                    timeout=timeout,
+                )
+
+        handler = TaskHandler(db=MagicMock())
+        result = asyncio.run(handler.handle("1001", "add", _Context(), group_id=2002))
+
+        assert result["status"] == "success"
+        assert asyncio.run(manager.get(1001, None)) is None
+        assert asyncio.run(manager.get(1001, 2002)) is not None
+
     def test_active_session_with_missing_raw_message_routes_explicit_command(self, monkeypatch):
         import sys
 

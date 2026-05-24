@@ -24,7 +24,7 @@ from ..utils.formatters import (
     MessageBuilder,
     is_tag_token,
 )
-from ..utils.session_utils import safe_create_session
+from ..utils.session_utils import safe_create_reply_scoped_session
 from ..utils.settings_utils import resolve_default_category
 from ..utils.time_utils import (
     TimezoneHelper,
@@ -209,21 +209,23 @@ class EventHandler(DbOpsMixin):
 
         # 处理需要补充信息的情况
         if result.get("status") == "need_info":
-            await safe_create_session(
+            await safe_create_reply_scoped_session(
                 context,
                 initial_data={
                     "type": PendoConfig.SESSION_TYPE_EVENT_INFO,
                     "owner_id": user_id,
+                    "group_id": group_id,
                     "data": result.get("data", parsed),
                 },
                 timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
             )
         elif result.get("status") == "need_confirm":
-            await safe_create_session(
+            await safe_create_reply_scoped_session(
                 context,
                 initial_data={
                     "type": PendoConfig.SESSION_TYPE_EVENT_CONFLICT,
                     "owner_id": user_id,
+                    "group_id": group_id,
                     "data": result.get("data", parsed),
                 },
                 timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
