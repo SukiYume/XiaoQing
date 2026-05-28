@@ -6,6 +6,13 @@
 
 ## 未发布
 
+### Pendo 待办轻量创建
+
+- 简化 `/pendo todo add` 无参数交互流程：默认只询问待办内容和计划日期，计划日期确认后立即创建待办，不再逐项追问截止时间、提醒、分类、优先级和标签；新增回执也会隐藏未分类、优先级 3 等默认值。
+- 保留 `/pendo todo add <内容> ...` 的单行快捷添加能力，继续支持 `plan:`、`deadline:`、`remind:`、`cat:`、`p:` 和 `#标签` 等高级参数；已有后续 session 步骤仍保留处理逻辑。
+- 同步 Pendo README、聊天帮助和插件文档，让默认交互与高级参数的分层更清楚。
+- 已执行 `python -m pytest tests/plugins/test_pendo.py -q`、`python -m pytest tests/plugins/test_pendo_review_regressions.py tests/plugins/test_pendo_fixes.py -q`、`python -m compileall plugins/pendo/main.py plugins/pendo/handlers/task.py -q` 和 `git diff --check`。
+
 ### arXiv 筛选自动摘要
 
 - `/arxiv` 和工作日定时筛选在发送论文列表后，会把所有 positive 论文链接后台投递给 Codex `astro-ph` 会话生成 Markdown 摘要；论文列表和摘要是两条独立消息链路，摘要失败不会阻塞列表推送。
