@@ -197,7 +197,8 @@ Pendo 的长期文档入口是 `plugins/pendo/README.md` 和 `plugins/pendo/ARCH
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo todo add <内容> [plan:日期] [deadline:时间] [remind:时间] [cat:分类] [p:1-5] [#标签]` | 添加待办 |
+| `/pendo todo add` | 交互式添加待办，只询问内容和计划日期 |
+| `/pendo todo add <内容> [plan:日期] [deadline:时间] [remind:时间] [cat:分类] [p:1-5] [#标签]` | 快捷添加待办，可带高级参数 |
 | `/pendo todo list [today/open/done/cancelled/overdue/upcoming/inbox/分类]` | 查看待办 |
 | `/pendo todo done <id>` | 完成待办 |
 | `/pendo todo cancel <id>` | 取消待办 |

@@ -259,8 +259,9 @@ class TaskHandler(DbOpsMixin):
             "message": (
                 "✅ 开始添加待办，请先输入待办内容：\n\n"
                 "例如：写项目周报\n"
-                "后面的计划日期、截止时间、提醒、分类、优先级和标签都可以输入 0 使用默认值。\n\n"
-                "💡 如果想一条命令完成，也可以用：/pendo todo add 写周报 cat:工作 p:2 plan:2026-05-01\n"
+                "下一步只需要填写计划日期，填写后会直接创建待办；输入 0 使用默认计划日期。\n\n"
+                "💡 截止、提醒、分类、优先级和标签请用一条命令或 edit 设置："
+                "/pendo todo add 写周报 cat:工作 p:2 plan:2026-05-01\n"
                 "💡 输入\"退出\"可取消"
             ),
         }
@@ -277,7 +278,7 @@ class TaskHandler(DbOpsMixin):
         if step == "title":
             return await self._step_task_title(user_id, value, data, session)
         if step == "plan_date":
-            return await self._step_task_plan_date(user_id, value, data, session)
+            return await self._step_task_plan_date(user_id, value, data, session, context, group_id)
         if step == "deadline_at":
             return await self._step_task_deadline_at(user_id, value, data, session)
         if step == "remind_times":
@@ -341,19 +342,30 @@ class TaskHandler(DbOpsMixin):
         item_id = await self._db_create_with_log(task_item, owner_id=user_id, action="create_task")
         task_item.id = item_id
 
-        priority_str = ItemFormatter.format_priority(parsed["priority"])
-        message = "✅ 已添加待办\n\n"
-        message += f"📝 {parsed['title']}\n"
-        message += f"📅 计划: {parsed['plan_date'] or '未安排'}\n"
-        if parsed.get("deadline_at"):
-            message += f"⏰ 截止: {ItemFormatter.format_datetime(parsed['deadline_at'])}\n"
-        message += f"📂 分类: {parsed['category']}"
-
+        explicit_fields = parsed.get("_explicit_fields", {})
+        category = parsed["category"]
+        priority = parsed["priority"]
+        tags = parsed.get("tags", [])
+        remind_times = parsed.get("remind_times", [])
+        plan_label = parsed["plan_date"] or "未安排"
         now = local_now
         if now.hour >= 20 and parsed["plan_date"] == (now + timedelta(days=1)).strftime("%Y-%m-%d"):
-            message += " (明天)"
+            plan_label += " (明天)"
 
-        message += f"\n⚡ 优先级: {priority_str}\n"
+        message = "✅ 已添加待办\n\n"
+        message += f"📝 {parsed['title']}\n"
+        message += f"📅 计划: {plan_label}\n"
+        if parsed.get("deadline_at"):
+            message += f"⏰ 截止: {ItemFormatter.format_datetime(parsed['deadline_at'])}\n"
+        if remind_times:
+            message += f"🔔 提醒: {len(remind_times)} 个\n"
+        if category != "未分类" or explicit_fields.get("category"):
+            message += f"📂 分类: {category}\n"
+        if priority != 3 or explicit_fields.get("priority"):
+            message += f"⚡ 优先级: {ItemFormatter.format_priority(priority)}\n"
+        if tags:
+            message += f"🏷️ 标签: {ItemFormatter.format_tags(tags)}\n"
+
         message += f"`{item_id}`\n\n"
         message += f"💡 用 /pendo todo done {item_id} 完成"
 
@@ -383,7 +395,13 @@ class TaskHandler(DbOpsMixin):
         }
 
     async def _step_task_plan_date(
-        self, user_id: str, text: str, data: dict[str, Any], session: dict[str, Any]
+        self,
+        user_id: str,
+        text: str,
+        data: dict[str, Any],
+        session: dict[str, Any],
+        context: PendoContext,
+        group_id: int | None,
     ) -> CommandMessage:
         if self._is_default_input(text):
             plan_date = default_task_plan_date(self._user_local_now(user_id))
@@ -399,15 +417,23 @@ class TaskHandler(DbOpsMixin):
 
         data["plan_date"] = plan_date
         session.set("data", data)
-        session.set("step", "deadline_at")
-        return {
-            "status": "success",
-            "message": (
-                "⏰ 截止时间？\n\n"
-                "0. 无截止（默认）\n"
-                "也可以输入 2026-05-01 18:00 / 明天 09:00 / 05-01 18:00。"
-            ),
+        parsed = {
+            "title": data.get("title", "无标题待办"),
+            "content": "",
+            "category": "未分类",
+            "plan_date": plan_date,
+            "deadline_at": None,
+            "priority": 3,
+            "tags": [],
+            "remind_times": [],
         }
+        try:
+            result = await self._create_task_from_parsed(user_id, parsed, group_id)
+        except ValueError as exc:
+            return {"status": "info", "message": f"❌ {exc}，请重新输入计划日期或输入 0 使用默认值："}
+
+        await safe_end_session(context)
+        return result
 
     async def _step_task_deadline_at(
         self, user_id: str, text: str, data: dict[str, Any], session: dict[str, Any]
