@@ -2840,7 +2840,8 @@ class TestCrossTypeCommandRegression:
 
         assert result["status"] == "success"
         assert "开始添加待办" in result["message"]
-        assert "一条命令完成" in result["message"]
+        assert "下一步只需要填写计划日期" in result["message"]
+        assert "一条命令或 edit" in result["message"]
         assert create_calls[0][0]["type"] == PendoConfig.SESSION_TYPE_TASK_ADD
         assert create_calls[0][0]["step"] == "title"
         assert create_calls[0][0]["group_id"] == 42
@@ -2863,7 +2864,8 @@ class TestCrossTypeCommandRegression:
             result = asyncio.run(
                 handler.handle(
                     "u1",
-                    "add 写项目周报 cat:工作 p:2 plan:2026-05-01 deadline:2026-05-01T18:00",
+                    "add 写项目周报 cat:工作 p:2 plan:2026-05-01 "
+                    "deadline:2026-05-01T18:00 remind:2026-04-30T09:00 #周报",
                     _Context(),
                 )
             )
@@ -2876,10 +2878,16 @@ class TestCrossTypeCommandRegression:
             assert item.priority == 2
             assert item.plan_date == "2026-05-01"
             assert item.deadline_at == "2026-05-01T18:00:00"
+            assert item.remind_times == ["2026-04-30T09:00:00"]
+            assert item.tags == ["周报"]
+            assert "分类: 工作" in result["message"]
+            assert "优先级" in result["message"]
+            assert "提醒: 1 个" in result["message"]
+            assert "标签: #周报" in result["message"]
         finally:
             db.cleanup()
 
-    def test_todo_add_session_collects_content_then_allows_defaults(self, tmp_path, monkeypatch):
+    def test_todo_add_session_collects_content_then_finishes_after_plan_date(self, tmp_path, monkeypatch):
         import sys
         from datetime import datetime
 
@@ -2914,31 +2922,6 @@ class TestCrossTypeCommandRegression:
             assert session["data"]["title"] == "写周报"
 
             result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
-            assert result["status"] == "success"
-            assert session["step"] == "deadline_at"
-            assert session["data"]["plan_date"] == "2026-05-01"
-
-            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
-            assert result["status"] == "success"
-            assert session["step"] == "remind_times"
-            assert session["data"]["deadline_at"] is None
-
-            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
-            assert result["status"] == "success"
-            assert session["step"] == "category"
-            assert session["data"]["remind_times"] == []
-
-            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
-            assert result["status"] == "success"
-            assert session["step"] == "priority"
-            assert session["data"]["category"] == "未分类"
-
-            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
-            assert result["status"] == "success"
-            assert session["step"] == "tags"
-            assert session["data"]["priority"] == 3
-
-            result = asyncio.run(handler.handle_session_step("u1", "0", session, context))
             item = db.items.get_item(result["item_id"], "u1")
 
             assert result["status"] == "success"
@@ -2952,6 +2935,8 @@ class TestCrossTypeCommandRegression:
             assert item.priority == 3
             assert item.tags == []
             assert item.context == {"group_id": 88}
+            assert "分类: 未分类" not in result["message"]
+            assert "优先级" not in result["message"]
         finally:
             db.cleanup()
 
