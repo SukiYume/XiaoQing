@@ -647,6 +647,9 @@ function ensureStyles() {
             grid-column: 1 / -1;
             width: 100%;
         }
+        .ledger-filter-item--date.is-custom {
+            grid-column: 1 / -1;
+        }
         .ledger-filter-item--date .ledger-filter-controls,
         .ledger-filter-item--transaction-type .ledger-filter-controls,
         .ledger-filter-item--category .ledger-filter-controls,
@@ -737,9 +740,11 @@ function ensureStyles() {
         .ledger-amount-input { -moz-appearance: textfield; }
         .ledger-filter-bar .ledger-custom-date-input {
             width: 100%;
-            min-width: 0;
+            min-width: 105px;
             max-width: 100%;
             flex: 1 1 auto;
+            font-weight: 400;
+            border-color: var(--color-border);
         }
         .ledger-range-apply {
             height: 40px;
@@ -773,11 +778,13 @@ function ensureStyles() {
             box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
         }
         .ledger-amount-input::placeholder { color: var(--color-text-secondary); }
-        .ledger-filter-bar .ledger-amount-input:hover {
+        .ledger-filter-bar .ledger-amount-input:hover,
+        .ledger-filter-bar .ledger-custom-date-input:hover {
             border-color: #9CA3AF;
             background: #EEF0F2;
         }
-        .ledger-filter-bar .ledger-amount-input:focus {
+        .ledger-filter-bar .ledger-amount-input:focus,
+        .ledger-filter-bar .ledger-custom-date-input:focus {
             border-color: var(--color-ledger);
             background: rgba(255,255,255,0.94);
             box-shadow: 0 0 0 3px rgba(239,68,68,0.12);
@@ -889,7 +896,7 @@ function ensureStyles() {
             .ledger-filter-bar .ledger-custom-date-input,
             .ledger-filter-bar .ledger-amount-input {
                 width: 100%;
-                min-width: 0;
+                min-width: 105px;
                 flex: 1 1 100%;
             }
             .ledger-range-apply {
@@ -1153,7 +1160,7 @@ function renderFilterBar() {
 
     return `
         <div class="ledger-filter-bar" id="ledger-filter-bar">
-            <div class="ledger-filter-item ledger-filter-item--date">
+            <div class="ledger-filter-item ledger-filter-item--date${_dateFilter === 'custom' ? ' is-custom' : ''}">
                 <label id="filter-date-label">时段：</label>
                 <div class="ledger-filter-controls">
                     ${renderCustomSelect({ id: 'filter-date', options: dateOptions, selected: _dateFilter, className: 'pselect-block pselect-theme-ledger ledger-filter-date', labelledBy: 'filter-date-label' })}

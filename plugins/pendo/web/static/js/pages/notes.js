@@ -656,9 +656,9 @@ function renderRangeControls() {
             </div>
             ${showCustom ? `
                 <div class="notes-custom-range">
-                    <input class="notes-date-field" id="notes-range-start" type="date" value="${_filters.customStart || ''}" aria-label="笔记范围开始日期">
+                    <input class="notes-date-field" id="notes-range-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${_filters.customStart || ''}" aria-label="笔记范围开始日期">
                     <span class="notes-range-sep">至</span>
-                    <input class="notes-date-field" id="notes-range-end" type="date" value="${_filters.customEnd || ''}" aria-label="笔记范围结束日期">
+                    <input class="notes-date-field" id="notes-range-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${_filters.customEnd || ''}" aria-label="笔记范围结束日期">
                     <button class="btn btn-secondary" id="notes-range-apply" type="button">应用</button>
                 </div>
             ` : ''}
