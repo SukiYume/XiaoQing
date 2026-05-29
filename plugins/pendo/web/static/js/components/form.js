@@ -32,7 +32,7 @@ export function buildFormHTML(fields) {
                 input = `<textarea id="${fieldId}" name="${name}" class="form-input" rows="${escapeAttr(field.rows || 4)}" placeholder="${placeholder}" aria-label="${ariaLabel}"${required}>${escapeHtml(value)}</textarea>`;
                 break;
             case 'datetime':
-                input = `<input id="${fieldId}" type="datetime-local" name="${name}" class="form-input" value="${escapeAttr(value)}" aria-label="${ariaLabel}"${required}>`;
+                input = `<input id="${fieldId}" type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" inputmode="numeric" placeholder="${escapeAttr(field.placeholder || 'YYYY-MM-DD HH:mm')}" aria-label="${ariaLabel}"${required}>`;
                 break;
             case 'date':
                 input = `<input id="${fieldId}" type="text" name="${name}" class="form-input" value="${escapeAttr(value)}" inputmode="numeric" placeholder="${escapeAttr(field.placeholder || 'YYYY-MM-DD')}" aria-label="${ariaLabel}"${required}>`;

@@ -264,8 +264,8 @@ function renderExportTab() {
                     <div class="transfer-preset-row">${PRESETS.map((item) => `<button type="button" class="transfer-pill ${state.preset === item.value ? 'active' : ''}" data-export-preset="${item.value}">${item.label}</button>`).join('')}</div>
                     ${state.preset === 'custom' ? `
                         <div class="transfer-date-row">
-                            <div class="transfer-field"><label for="transfer-export-start">开始日期</label><input id="transfer-export-start" type="date" value="${escapeHtml(state.start)}"></div>
-                            <div class="transfer-field"><label for="transfer-export-end">结束日期</label><input id="transfer-export-end" type="date" value="${escapeHtml(state.end)}"></div>
+                            <div class="transfer-field"><label for="transfer-export-start">开始日期</label><input id="transfer-export-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(state.start)}"></div>
+                            <div class="transfer-field"><label for="transfer-export-end">结束日期</label><input id="transfer-export-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(state.end)}"></div>
                         </div>` : ''}
                 </div>
                 <div class="transfer-section">
