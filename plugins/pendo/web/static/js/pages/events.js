@@ -829,7 +829,7 @@ async function loadOverview(options = {}) {
 function reminderRowHTML(value = '') {
     return `
         <div class="events-editor-row" data-reminder-row>
-            <input type="datetime-local" class="events-editor-reminder-input" value="${escapeHtml(value)}" aria-label="提醒时间">
+            <input type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" class="events-editor-reminder-input" value="${escapeHtml(value)}" aria-label="提醒时间">
             <button type="button" data-remove-row aria-label="删除提醒时间">×</button>
         </div>`;
 }
@@ -838,7 +838,7 @@ function nodeRowHTML(name = '', time = '', notes = '') {
     return `
         <div class="events-editor-row" data-node-row>
             <input type="text" class="events-editor-node-name" placeholder="节点名称" value="${escapeHtml(name)}" aria-label="节点名称">
-            <input type="datetime-local" class="events-editor-node-time" value="${escapeHtml(time)}" aria-label="节点时间">
+            <input type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" class="events-editor-node-time" value="${escapeHtml(time)}" aria-label="节点时间">
             <input type="text" class="events-editor-node-notes" placeholder="节点备注（仅该节点提醒显示）" value="${escapeHtml(notes)}" aria-label="节点备注">
             <button type="button" data-remove-row aria-label="删除节点">×</button>
         </div>`;
@@ -875,11 +875,11 @@ function editorModalHTML(existing = null, prefillDate = '') {
                 </div>
                 <div class="events-editor-field ${isMultiNode ? 'full' : ''}" data-single-section ${isMultiNode ? 'style="display:none;"' : ''}>
                     <label for="events-editor-start-time">开始时间</label>
-                    <input id="events-editor-start-time" name="start_time" type="datetime-local" value="${escapeHtml(startValue)}">
+                    <input id="events-editor-start-time" name="start_time" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" value="${escapeHtml(startValue)}">
                 </div>
                 <div class="events-editor-field ${isMultiNode ? 'full' : ''}" data-single-section ${isMultiNode ? 'style="display:none;"' : ''}>
                     <label for="events-editor-end-time">结束时间</label>
-                    <input id="events-editor-end-time" name="end_time" type="datetime-local" value="${escapeHtml(endValue)}">
+                    <input id="events-editor-end-time" name="end_time" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" value="${escapeHtml(endValue)}">
                 </div>
                 <div class="events-editor-field full" data-node-section ${isMultiNode ? '' : 'style="display:none;"'}>
                     <label>时间节点</label>

@@ -787,9 +787,9 @@ function renderFilters(tasks) {
                 <div class="tasks-filter-field tasks-filter-field--range">
                     <label>自定义范围</label>
                     <div class="tasks-filter-range">
-                        <input id="tasks-filter-plan-start" type="date" value="${_filters.customStart || ''}" aria-label="计划开始日期">
+                        <input id="tasks-filter-plan-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${_filters.customStart || ''}" aria-label="计划开始日期">
                         <span>至</span>
-                        <input id="tasks-filter-plan-end" type="date" value="${_filters.customEnd || ''}" aria-label="计划结束日期">
+                        <input id="tasks-filter-plan-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${_filters.customEnd || ''}" aria-label="计划结束日期">
                     </div>
                 </div>` : ''}
         </section>`;
