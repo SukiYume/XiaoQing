@@ -180,6 +180,23 @@ class TestSessionManager:
         assert session.updated_at == before
 
     @pytest.mark.asyncio
+    async def test_peek_does_not_refresh_session_timeout(self, session_manager: SessionManager):
+        """测试 peek 返回会话但不刷新会话时间戳"""
+        session = await session_manager.create(
+            user_id=12345,
+            group_id=None,
+            plugin_name="test",
+            timeout=10.0,
+        )
+        await asyncio.sleep(0.02)
+        before = session.updated_at
+
+        peeked = await session_manager.peek(12345, None)
+
+        assert peeked is session
+        assert session.updated_at == before
+
+    @pytest.mark.asyncio
     async def test_delete_nonexistent_session(self, session_manager: SessionManager):
         """测试删除不存在的会话"""
         result = await session_manager.delete(99999, None)

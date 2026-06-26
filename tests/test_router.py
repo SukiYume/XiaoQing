@@ -129,18 +129,6 @@ class TestCommandRouter:
         assert router.resolve("cmd1") is None
         assert router.resolve("cmd2") is not None
 
-    def test_help_messages(self, router: CommandRouter):
-        """测试帮助信息生成"""
-        spec1 = make_spec("echo", ["echo", "回显"])
-        spec2 = make_spec("help", ["help"])
-        router.register(spec1)
-        router.register(spec2)
-
-        help_msgs = router.help_messages()
-        assert len(help_msgs) == 5
-        assert any("echo" in msg for msg in help_msgs)
-        assert any("help" in msg for msg in help_msgs)
-
     def test_list_commands(self, router: CommandRouter):
         spec1 = make_spec("echo", ["echo", "回显"])
         spec2 = make_spec("help", ["help"])

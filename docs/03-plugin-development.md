@@ -33,9 +33,11 @@ plugins/
     └── data/           # 可选：数据目录（自动创建）
 ```
 
+插件目录名必须与 `plugin.json` 的 `name` 一致，并符合 Python 包命名规则：只使用字母、数字和下划线，且不要以数字开头。框架会把 `plugins/` 加入 `sys.path` 并按 `<插件目录>.<入口模块>` 导入，因此目录名还应避免与标准库或三方包重名，例如 `json`、`requests`、`github`。如果重名，插件内的绝对导入或其他代码的包解析可能出现遮蔽问题。
+
 ### 导入规范
 
-从 v2.0 开始，插件被加载为标准的 Python 包 (`xiaoqing_plugins.plugin_name`)。插件内部模块使用**相对导入**。
+插件会被加载为 `plugins/` 下的顶层 Python 包（目录名即包名）。插件内部模块使用**相对导入**。
 
 **plugins/myplugin/main.py**:
 ```python

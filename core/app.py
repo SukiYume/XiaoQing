@@ -7,6 +7,7 @@ XiaoQing 主应用
 import asyncio
 import functools
 import logging
+import time
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -51,29 +52,6 @@ def _build_shared_http_timeout() -> aiohttp.ClientTimeout:
 
 class XiaoQingApp:
     """XiaoQing 主应用类"""
-
-    root: Path
-    config_manager: ConfigManager
-    log_manager: LogManager
-    http_session: aiohttp.ClientSession | None
-    http_sender: OneBotHttpSender | None
-    ws_client: OneBotWsClient | None
-    inbound_manager: InboundManager | None
-    router: CommandRouter
-    plugins_dir: Path
-    plugin_manager: PluginManager
-    scheduler: SchedulerManager
-    metrics: MetricsCollector
-    session_manager: SessionManager
-    dispatcher: Dispatcher
-    _admin_set: set[int]
-    _session_cleanup_task: asyncio.Task[None] | None
-    _reload_lock: asyncio.Lock
-    _reload_task: asyncio.Task[None] | None
-    _ws_client_task: asyncio.Task[None] | None
-    _config_watch_task: asyncio.Task[None] | None
-    _plugin_watch_task: asyncio.Task[None] | None
-    _config_apply_task: asyncio.Task[None] | None
 
     def __init__(
         self,
@@ -135,6 +113,7 @@ class XiaoQingApp:
 
         # 消息分发器
         concurrency = int(self.config_manager.config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY))
+        self._dispatcher_concurrency = concurrency
         # Create Semaphore - if no event loop, defer creation
         try:
             semaphore = asyncio.Semaphore(concurrency)
@@ -163,6 +142,7 @@ class XiaoQingApp:
         self._config_watch_task: asyncio.Task[None] | None = None
         self._plugin_watch_task: asyncio.Task[None] | None = None
         self._config_apply_task: asyncio.Task[None] | None = None
+        self._last_connect_notification_ts: float = 0.0
 
         # 注册回调
         self.plugin_manager.on_change(self._reschedule)
@@ -189,7 +169,7 @@ class XiaoQingApp:
         return self._config_watch_task is not None
 
     def _configure_plugin_watch(self, config: dict[str, Any] | None = None) -> None:
-        self.plugin_manager._poll_interval = self._plugin_watch_poll_interval(config)
+        self.plugin_manager.update_poll_interval(self._plugin_watch_poll_interval(config))
         if not self._watch_runtime_active():
             return
 
@@ -403,6 +383,16 @@ class XiaoQingApp:
         connect_msg = self.config.get("connect_notification", "🟢 小青已上线~")
         if not connect_msg:
             return
+        now = time.monotonic()
+        min_interval = self._connect_notification_min_interval()
+        if (
+            min_interval > 0
+            and self._last_connect_notification_ts > 0
+            and now - self._last_connect_notification_ts < min_interval
+        ):
+            logger.info("Connect notification suppressed by min interval")
+            return
+        self._last_connect_notification_ts = now
         message = [{"type": "text", "data": {"text": connect_msg}}]
         for group_id in default_groups:
             action = {
@@ -413,6 +403,15 @@ class XiaoQingApp:
                 },
             }
             await self._send_action(action)
+
+    def _connect_notification_min_interval(self) -> float:
+        try:
+            return max(
+                0.0,
+                float(self.config.get("connect_notification_min_interval_seconds", 300)),
+            )
+        except (TypeError, ValueError):
+            return 300.0
 
     async def _process_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
         """处理事件并返回 action（通用逻辑）"""
@@ -526,33 +525,34 @@ class XiaoQingApp:
         except (KeyError, TypeError, ValueError) as exc:
             # 日志记录失败不影响消息发送，仅记录调试信息
             logger.debug("Failed to generate message preview: %s", exc)
-        bypass_sink = action.pop("_bypass_sink", False)
+        bypass_sink = bool(action.get("_bypass_sink", False))
+        delivery_action = {key: value for key, value in action.items() if key != "_bypass_sink"}
         sink = current_action_sink.get()
         if not bypass_sink and sink is not None and getattr(sink, "is_active", True):
-            await sink(action)
+            await sink(delivery_action)
             return
 
         if self.ws_client and self.ws_client.connected():
-            sent = await self.ws_client.send_action(action)
+            sent = await self.ws_client.send_action(delivery_action)
             if sent:
                 return
             
         # 尝试通过 Inbound WebSocket 广播（如果存在活跃连接）
         if self.inbound_manager and self.inbound_manager.has_active_ws_clients():
-            await self.inbound_manager.broadcast(action)
+            await self.inbound_manager.broadcast(delivery_action)
             return
 
         if wait_ws_seconds > 0 and self.ws_client:
             deadline = asyncio.get_running_loop().time() + float(wait_ws_seconds)
             while asyncio.get_running_loop().time() < deadline:
                 if self.ws_client.connected():
-                    sent = await self.ws_client.send_action(action)
+                    sent = await self.ws_client.send_action(delivery_action)
                     if sent:
                         return
                 await asyncio.sleep(0.1)
 
         if self._http_enabled():
-            await self.http_sender.send_action(action)  # pyright: ignore[reportOptionalMemberAccess]
+            await self.http_sender.send_action(delivery_action)  # pyright: ignore[reportOptionalMemberAccess]
             return
 
         logger.debug("Action dropped: no available sender (ws/http)")
@@ -596,10 +596,6 @@ class XiaoQingApp:
         actions = await self._collect_actions_for_event(event, default_source="upstream_ws")
         if not actions:
             return
-        ws_client = self.ws_client
-        if not ws_client or not ws_client.connected():
-            logger.warning("Upstream WS reply dropped: ws client not connected")
-            return
         for action in actions:
             await self._send_action(action)
 
@@ -634,7 +630,7 @@ class XiaoQingApp:
             send_action=send_action,
             reload_config=self.reload_config,
             reload_plugins=self._reload_plugins,
-            list_commands=self.router.help_messages,
+            list_commands=self.router.list_commands,
             list_plugins=self.plugin_manager.list_plugins,
             metrics=self.metrics,
             session_manager=self.session_manager,
@@ -692,7 +688,9 @@ class XiaoQingApp:
         self.session_manager.set_default_timeout(session_timeout)
 
         concurrency = int(config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY))
-        self.dispatcher.semaphore = asyncio.Semaphore(concurrency)
+        if concurrency != self._dispatcher_concurrency:
+            self.dispatcher.semaphore = asyncio.Semaphore(concurrency)
+            self._dispatcher_concurrency = concurrency
 
         timezone = str(config.get("timezone", "Asia/Shanghai") or "Asia/Shanghai")
         if timezone != self.scheduler.timezone:
@@ -823,19 +821,14 @@ class XiaoQingApp:
     def _inbound_manager_key(manager: InboundManager | None) -> tuple[Any, ...] | None:
         if manager is None:
             return None
-        return (
-            manager._inbound_http_base,
-            manager._inbound_ws_uri,
-            manager._ws_max_workers,
-            manager._ws_queue_size,
-        )
+        return manager.config_key
 
     def _bind_inbound_status_providers(self, manager: InboundManager) -> None:
         def _plugins_count() -> int:
             return len(self.plugin_manager.list_plugins())
 
         def _sessions_count() -> int:
-            return len(self.session_manager._sessions)
+            return self.session_manager.active_count
 
         def _pending_jobs() -> int:
             scheduler = self.scheduler.scheduler
@@ -844,12 +837,7 @@ class XiaoQingApp:
             return len(scheduler.get_jobs())
 
         def _metrics() -> dict[str, Any]:
-            return {
-                "uptime_seconds": round(self.metrics.uptime, 1),
-                "plugins_count": len(self.metrics._plugin_stats),
-                "commands_count": len(self.metrics._command_stats),
-                "global": self.metrics._global_stats.to_dict(),
-            }
+            return self.metrics.summary_snapshot()
 
         manager.set_status_providers(
             plugins_count=_plugins_count,

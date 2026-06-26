@@ -194,6 +194,14 @@ class TestParse:
         assert result.opt("b") == "true"
         assert result.opt("c") == "true"
 
+    def test_combined_short_option_is_single_key(self):
+        """测试 -abc 被视为单个短选项 key"""
+        result = parse("-abc")
+        assert result.opt("abc") == "true"
+        assert not result.has("a")
+        assert not result.has("b")
+        assert not result.has("c")
+
     def test_negative_numbers_are_tokens(self):
         """测试独立负数参数不会被当成选项"""
         result = parse("-1 -2.5 value")

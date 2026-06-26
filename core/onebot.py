@@ -5,7 +5,6 @@ OneBot 协议支持
 """
 
 import asyncio
-import hmac
 import json
 import logging
 import re
@@ -14,6 +13,7 @@ from typing import Any, Awaitable, Callable
 
 import aiohttp
 
+from .auth import verify_bearer_token
 from .constants import DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS, MAX_SHORT_TEXT_LENGTH
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,7 @@ _SENSITIVE_PATTERNS = [
     re.compile(rf"({key}\s*[:=]\s*)([^\s,;]+)", re.IGNORECASE)
     for key in _SENSITIVE_KEYS
 ]
-
-_token_warning_shown = False
+_CONNECT_SIGNATURE_CACHE: dict[int, set[str]] = {}
 
 def _verify_token_auth(auth_header: str, expected_token: str) -> bool:
     """
@@ -41,15 +40,7 @@ def _verify_token_auth(auth_header: str, expected_token: str) -> bool:
     Returns:
         验证是否成功
     """
-    global _token_warning_shown
-    if not expected_token:
-        if not _token_warning_shown:
-            logger.warning("Security: no token configured, all requests accepted")
-            _token_warning_shown = True
-        return True  # 没有配置 token 时跳过验证
-    expected = f"Bearer {expected_token}"
-    # 使用 hmac.compare_digest 防止时序攻击（不预先比较长度，避免泄露长度信息）
-    return hmac.compare_digest(auth_header.encode(), expected.encode())
+    return verify_bearer_token(auth_header, expected_token)
 
 def _mask_sensitive_text(text: str) -> str:
     masked = text
@@ -129,12 +120,19 @@ def _summarize_event(event: dict[str, Any]) -> str:
 def _get_connect_signature(websockets_module) -> set[str]:
     """获取 websockets.connect 函数支持的参数名"""
     import inspect
+    connect_func = websockets_module.connect
+    cache_key = id(connect_func)
+    if cache_key in _CONNECT_SIGNATURE_CACHE:
+        return _CONNECT_SIGNATURE_CACHE[cache_key]
+
     try:
-        sig = inspect.signature(websockets_module.connect)
-        return set(sig.parameters.keys())
+        sig = inspect.signature(connect_func)
+        result = set(sig.parameters.keys())
     except Exception:
         # 降级：尝试导入并检查
-        return {"additional_headers", "extra_headers"}
+        result = {"additional_headers", "extra_headers"}
+    _CONNECT_SIGNATURE_CACHE[cache_key] = result
+    return result
 
 class OneBotHttpSender:
     """OneBot HTTP 发送器"""
@@ -225,11 +223,23 @@ class OneBotWsClient:
 
     def connected(self) -> bool:
         """是否已连接"""
-        return self._ws is not None
+        ws = self._ws
+        if ws is None:
+            return False
+        if getattr(ws, "closed", False) is True:
+            return False
+        close_code = getattr(ws, "close_code", None)
+        if isinstance(close_code, int):
+            return False
+        state = getattr(ws, "state", None)
+        state_name = getattr(state, "name", "")
+        if isinstance(state_name, str) and state_name.upper() in {"CLOSING", "CLOSED"}:
+            return False
+        return True
 
     async def send_action(self, action: dict[str, Any]) -> bool:
         """发送 OneBot action，返回是否成功发送。"""
-        if not self._ws:
+        if not self.connected():
             return False
         
         # 提取消息内容用于日志
@@ -412,17 +422,28 @@ class OneBotWsClient:
             # 超时表示队列为空，正常退出
             pass
         finally:
-            # 清理已完成或取消的任务
-            if self._queue_tasks.get(key) and self._queue_tasks[key].done():
+            current_task = asyncio.current_task()
+            if self._queue_tasks.get(key) is not current_task:
+                return
+            if queue.empty():
                 self._queue_tasks.pop(key, None)
+            else:
+                self._queue_tasks[key] = asyncio.create_task(self._drain_queue(key, handler))
 
     async def stop(self) -> None:
         """停止客户端"""
         self._running = False
-        if self._cleanup_task and not self._cleanup_task.done():
-            self._cleanup_task.cancel()
+        cleanup_task = self._cleanup_task
+        if cleanup_task and not cleanup_task.done():
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
+        self._cleanup_task = None
         if self._ws:
             await self._ws.close()
+            self._ws = None
 
     async def _cleanup_inactive_queues_loop(self) -> None:
         while self._running:

@@ -4,6 +4,7 @@ PluginManager unit tests.
 
 import asyncio
 import os
+import time
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import AsyncMock, Mock
@@ -84,6 +85,24 @@ async def test_wait_inits_unloads_plugin_when_async_init_fails(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_wait_inits_logs_timeout_from_async_init(tmp_path: Path, caplog):
+    manager = _build_manager(tmp_path)
+
+    async def timeout():
+        raise asyncio.TimeoutError()
+
+    task = asyncio.create_task(timeout())
+    manager._init_tasks.append(task)
+    manager._init_task_plugins[task] = "demo"
+    manager.unload_plugin = AsyncMock()
+
+    with caplog.at_level("WARNING"):
+        await manager.wait_inits()
+
+    assert "Plugin demo init timed out" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_load_plugin_registers_after_async_init_completes(tmp_path: Path):
     manager = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
@@ -151,7 +170,32 @@ def test_get_mtime_tracks_submodule_changes(tmp_path: Path):
     os.utime(helper, None)
     after = manager._get_mtime(plugin_dir, definition)
 
-    assert after >= before
+    assert after != before
+
+
+def test_get_mtime_distinguishes_offsetting_file_mtimes(tmp_path: Path):
+    manager = _build_manager(tmp_path)
+    plugin_dir = manager.plugins_dir / "demo"
+    plugin_dir.mkdir()
+    definition = _build_definition()
+    main = plugin_dir / "main.py"
+    helper = plugin_dir / "helper.py"
+    (plugin_dir / "plugin.json").write_text(
+        '{"name":"demo","version":"1.0.0","entry":"main.py","commands":[],"schedule":[],"concurrency":"shared","enabled":true}',
+        encoding="utf-8",
+    )
+    main.write_text("VALUE = 1\n", encoding="utf-8")
+    helper.write_text("HELPER = 1\n", encoding="utf-8")
+
+    base = time.time_ns()
+    os.utime(main, ns=(base + 1_000, base + 1_000))
+    os.utime(helper, ns=(base + 3_000, base + 3_000))
+    before = manager._get_mtime(plugin_dir, definition)
+
+    os.utime(main, ns=(base + 2_000, base + 2_000))
+    os.utime(helper, ns=(base + 2_000, base + 2_000))
+    after = manager._get_mtime(plugin_dir, definition)
+
     assert after != before
 
 
@@ -173,6 +217,22 @@ def test_iter_watch_files_ignores_runtime_data_dir(tmp_path: Path):
     files = manager._iter_watch_files(plugin_dir, definition)
 
     assert runtime_state not in files
+
+
+def test_build_context_ensures_data_dir_once(tmp_path: Path, monkeypatch):
+    manager = _build_manager(tmp_path)
+    calls: list[Path] = []
+
+    def fake_ensure_dir(path: Path) -> None:
+        calls.append(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("core.plugin_manager.ensure_dir", fake_ensure_dir)
+
+    manager.build_context("demo")
+    manager.build_context("demo")
+
+    assert calls == [manager.plugins_dir / "demo" / "data"]
 
 
 @pytest.mark.asyncio

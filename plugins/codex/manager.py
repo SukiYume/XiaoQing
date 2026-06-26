@@ -432,6 +432,17 @@ class CodexQueueManager:
             return None
         return f"[codex:{job.label} #{job.job_id}] {title}失败{reason}\n{detail}"
 
+    def _delivery_target(
+        self,
+        session: CodexSession,
+        job: RuntimeJob,
+    ) -> tuple[int | None, int | None]:
+        if job.group_id is not None:
+            return job.user_id, job.group_id
+        if job.user_id is not None:
+            return job.user_id, None
+        return session.owner_user_id, session.target_group_id
+
     async def _send_job_result(
         self,
         session: CodexSession,
@@ -465,11 +476,12 @@ class CodexQueueManager:
             final_text = result.final_text.strip()
             content = f"[codex:{job.label} #{job.job_id}] 完成:\n{final_text}"
 
+        user_id, group_id = self._delivery_target(session, job)
         for batch in self._result_message_batches(content, job.image_artifacts):
             action = build_action(
                 batch,
-                job.user_id or session.owner_user_id,
-                job.group_id or session.target_group_id,
+                user_id,
+                group_id,
             )
             if action and hasattr(job.context, "send_action"):
                 action["_bypass_sink"] = True

@@ -183,6 +183,24 @@ async def test_same_label_queue_runs_serially_and_sends_results(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_private_job_result_stays_private_when_session_created_in_group(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner(result_text="private reply")
+    manager = _install_fake_manager(context, runner)
+
+    await codex_main.handle("codex", "create aaa", {"user_id": 1, "group_id": 2}, context)
+    await codex_main.handle("codex", "aaa hello", {"message_type": "private", "user_id": 1}, context)
+    await manager.wait_idle()
+
+    assert len(context.actions) == 1
+    action = context.actions[0]
+    assert action["action"] == "send_private_msg"
+    assert action["params"]["user_id"] == 1
+    assert "group_id" not in action["params"]
+    assert "private reply" in str(action["params"]["message"])
+
+
+@pytest.mark.asyncio
 async def test_different_labels_can_run_in_parallel(tmp_path: Path):
     context = FakeContext(tmp_path, max_parallel_jobs=2)
     runner = FakeRunner()

@@ -137,6 +137,46 @@ class TestMessageParser:
         assert parser._config_provider is mock_config_provider
         assert parser._cached_bot_name == "小青"
 
+    def test_parse_uses_cached_prefixes_until_explicit_refresh(self):
+        """测试 parse 热路径不重复读取配置"""
+        class CountingConfigProvider:
+            def __init__(self):
+                self.reads = 0
+                self.payload = {
+                    "bot_name": "小青",
+                    "command_prefixes": ["/"],
+                    "plugins": {},
+                }
+
+            @property
+            def config(self):
+                self.reads += 1
+                return self.payload
+
+        provider = CountingConfigProvider()
+        parser = MessageParser(provider)
+        event = {
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": "/help",
+        }
+
+        assert provider.reads == 1
+        assert parser.parse(event).has_command_prefix is True
+        assert provider.reads == 1
+
+        provider.payload["command_prefixes"] = ["!"]
+        assert parser.parse(event).has_command_prefix is True
+        assert provider.reads == 1
+
+        parser.refresh_prefix_cache()
+        assert provider.reads == 2
+        assert parser.parse(event).has_command_prefix is False
+        assert provider.reads == 2
+
     def test_parse_group_message(self, mock_config_provider: MagicMock):
         """测试解析群消息"""
         parser = MessageParser(mock_config_provider)
@@ -795,6 +835,24 @@ class TestProcessEventLinearFlow:
             assert result and result[0]["data"]["text"] == "ok"
         finally:
             mock_config_provider.config["require_bot_name_in_group"] = True
+
+    @pytest.mark.asyncio
+    async def test_xiaoqing_provider_receives_group_plain_text_for_own_reply_gate(
+        self, dispatcher, mock_router, mock_config_provider, mock_plugin_registry, event_template
+    ):
+        mock_config_provider.config["require_bot_name_in_group"] = True
+        mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
+        mock_router.resolve.return_value = None
+        xiaoqing = MagicMock()
+        xiaoqing.module.handle_smalltalk = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "接一句"}}]
+        )
+        mock_plugin_registry.get.return_value = xiaoqing
+
+        result = await dispatcher.handle_event(event_template(message="普通群聊消息"))
+
+        assert result and result[0]["data"]["text"] == "接一句"
+        xiaoqing.module.handle_smalltalk.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_unknown_command_hint_only_for_slash_prefix(

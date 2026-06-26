@@ -9,6 +9,7 @@
 """
 
 import logging
+import copy
 import sys
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
@@ -36,19 +37,12 @@ class ColoredFormatter(logging.Formatter):
         self.use_color = use_color
     
     def format(self, record: logging.LogRecord) -> str:
-        # 保存原始 levelname
-        original_levelname = record.levelname
-        
         if self.use_color and record.levelname in self.COLORS:
-            # 添加颜色
-            record.levelname = f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
-        
-        result = super().format(record)
-        
-        # 恢复原始 levelname
-        record.levelname = original_levelname
-        
-        return result
+            colored_record = copy.copy(record)
+            colored_record.levelname = f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
+            return super().format(colored_record)
+
+        return super().format(record)
 
 # ============================================================
 # 日志管理器

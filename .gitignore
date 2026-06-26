@@ -118,6 +118,7 @@ plugins/*deprecated/
 .worktrees/
 
 # Local planning notes and superpowers scratch space
+code_review.md
 docs/plans/
 docs/superpowers/*
 !docs/superpowers/specs/

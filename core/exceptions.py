@@ -2,8 +2,10 @@
 XiaoQing 异常定义
 
 自定义异常类，用于更精确的错误处理和调试。
+部分子类当前作为公共 API 和插件扩展预留，即使核心路径暂时只用返回值或日志处理错误，也不要按死代码删除。
 """
 
+from pathlib import Path
 from typing import Optional
 
 
@@ -85,7 +87,15 @@ class ConfigError(XiaoQingError):
 
 class ConfigLoadError(ConfigError):
     """配置加载错误"""
-    pass
+
+    def __init__(self, message_or_path: str | Path, original: Exception | None = None):
+        self.path: Path | None = Path(message_or_path) if original is not None else None
+        self.original = original
+        if original is None:
+            message = str(message_or_path)
+        else:
+            message = f"Failed to load config from {self.path}: {original}"
+        super().__init__(message)
 
 
 class ConfigValidationError(ConfigError):

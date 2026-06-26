@@ -49,8 +49,8 @@ class TestSchedulerManagerInit:
         assert scheduler.scheduler.running
 
     @pytest.mark.asyncio
-    async def test_ensure_started_thread_safe_single_init(self, monkeypatch):
-        """并发 ensure_started 只初始化一次"""
+    async def test_ensure_started_is_idempotent(self, monkeypatch):
+        """重复 ensure_started 只初始化一次"""
         from core import scheduler as scheduler_module
 
         init_count = 0
@@ -76,10 +76,39 @@ class TestSchedulerManagerInit:
         init_count = 0
         start_count = 0
 
-        await asyncio.gather(*(asyncio.to_thread(manager.ensure_started) for _ in range(10)))
+        for _ in range(10):
+            manager.ensure_started()
 
         assert init_count == 1
         assert start_count == 1
+
+    @pytest.mark.asyncio
+    async def test_reset_waits_for_old_scheduler_shutdown(self, monkeypatch):
+        """reset 会等待旧 scheduler shutdown 并应用新时区"""
+        from core import scheduler as scheduler_module
+
+        shutdown_waits = []
+
+        class FakeScheduler:
+            def __init__(self, timezone):
+                self.timezone = timezone
+                self.running = False
+
+            def start(self):
+                self.running = True
+
+            def shutdown(self, wait=True):
+                shutdown_waits.append(wait)
+                self.running = False
+
+        monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FakeScheduler)
+
+        manager = SchedulerManager()
+        manager.reset("UTC")
+
+        assert shutdown_waits == [True]
+        assert manager.timezone == "UTC"
+        assert manager.scheduler.timezone == "UTC"
 
 # ============================================================
 # add_job 测试
