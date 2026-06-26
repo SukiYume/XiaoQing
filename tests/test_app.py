@@ -82,6 +82,12 @@ def mock_dependencies():
     }
 
 
+def _set_app_config(app: XiaoQingApp, **updates: Any) -> None:
+    config = dict(app.config_manager.config)
+    config.update(updates)
+    app.config_manager._replace_snapshot(config, app.config_manager._secrets)
+
+
 # ============================================================
 # Initialization Tests
 # ============================================================
@@ -631,13 +637,14 @@ async def test_app_handle_upstream_event(temp_app_root: Path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_handle_upstream_event_not_connected(temp_app_root: Path):
-    """Test _handle_upstream_event when WS not connected"""
+    """Test _handle_upstream_event falls back when WS is not connected"""
     app = XiaoQingApp(temp_app_root)
 
     # Mock ws_client as not connected
     app.ws_client = MagicMock()
     app.ws_client.connected = Mock(return_value=False)
     app.ws_client.send_action = AsyncMock()
+    app.http_sender = SimpleNamespace(http_base="http://onebot", send_action=AsyncMock())
 
     # Mock dispatcher
     app.dispatcher.handle_event = AsyncMock(return_value=[{"type": "text", "data": {"text": "test"}}])
@@ -651,8 +658,9 @@ async def test_app_handle_upstream_event_not_connected(temp_app_root: Path):
 
     await app._handle_upstream_event(event)
 
-    # Verify action was NOT sent
+    # Verify fallback delivery was used
     app.ws_client.send_action.assert_not_called()
+    app.http_sender.send_action.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -715,6 +723,29 @@ async def test_app_send_single_action_falls_back_to_http_when_inbound_has_no_ws_
 
     app.inbound_manager.broadcast.assert_not_called()
     app.http_sender.send_action.assert_awaited_once_with(action)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_send_single_action_does_not_mutate_bypass_action(temp_app_root: Path):
+    """Test internal _bypass_sink marker is stripped from delivery copy only."""
+    app = XiaoQingApp(temp_app_root)
+    app.inbound_manager = MagicMock()
+    app.inbound_manager.has_active_ws_clients = Mock(return_value=False)
+    app.http_sender = MagicMock()
+    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender.send_action = AsyncMock()
+
+    action = {
+        "action": "send_group_msg",
+        "params": {"group_id": 1, "message": []},
+        "_bypass_sink": True,
+    }
+    await app._send_single_action(action)
+
+    assert action["_bypass_sink"] is True
+    sent_action = app.http_sender.send_action.await_args.args[0]
+    assert "_bypass_sink" not in sent_action
 
 
 @pytest.mark.asyncio
@@ -785,6 +816,29 @@ def test_app_apply_config_refreshes_prefix_cache(temp_app_root: Path):
     app._apply_config(new_snapshot)
 
     app.dispatcher.refresh_prefix_cache.assert_called_once()
+
+
+@pytest.mark.unit
+def test_app_apply_config_reuses_dispatcher_semaphore_when_concurrency_unchanged(
+    temp_app_root: Path,
+):
+    """Test _apply_config only replaces dispatcher semaphore when concurrency changes."""
+    from core.config import ConfigSnapshot
+
+    app = XiaoQingApp(temp_app_root)
+    original = app.dispatcher.semaphore
+
+    same_config = dict(app.config)
+    same_config["max_concurrency"] = app._dispatcher_concurrency
+    app._apply_config(ConfigSnapshot(config=same_config, secrets=app.secrets))
+
+    assert app.dispatcher.semaphore is original
+
+    changed_config = dict(same_config)
+    changed_config["max_concurrency"] = app._dispatcher_concurrency + 1
+    app._apply_config(ConfigSnapshot(config=changed_config, secrets=app.secrets))
+
+    assert app.dispatcher.semaphore is not original
 
 
 # ============================================================
@@ -1124,7 +1178,7 @@ async def test_app_on_ws_connected(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Set default groups (update internal config directly for test)
-    app.config_manager._config["default_group_ids"] = [123, 456]
+    _set_app_config(app, default_group_ids=[123, 456])
     
     # Also update via config property just in case (though it's read-only usually, this updates the temp dict if property logic changed)
     # But strictly speaking we need to update what ConfigManager returns.
@@ -1148,7 +1202,7 @@ async def test_app_on_ws_connected_no_groups(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # No default groups
-    app.config_manager.config["default_group_ids"] = []
+    _set_app_config(app, default_group_ids=[])
 
     # Mock ws_client
     app.ws_client = MagicMock()
@@ -1160,3 +1214,26 @@ async def test_app_on_ws_connected_no_groups(temp_app_root: Path):
 
         # No messages should be sent
         mock_send.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_on_ws_connected_throttles_reconnect_notifications(temp_app_root: Path):
+    """Test _on_ws_connected suppresses repeated reconnect notifications"""
+    app = XiaoQingApp(temp_app_root)
+    _set_app_config(
+        app,
+        default_group_ids=[123],
+        connect_notification_min_interval_seconds=300,
+    )
+    app.ws_client = MagicMock()
+
+    with (
+        patch("core.app.time.monotonic", side_effect=[100.0, 120.0, 450.0]),
+        patch.object(app, "_send_action", new=AsyncMock()) as mock_send,
+    ):
+        await app._on_ws_connected()
+        await app._on_ws_connected()
+        await app._on_ws_connected()
+
+        assert mock_send.call_count == 2

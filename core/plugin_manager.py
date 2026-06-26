@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import importlib
 import inspect
 import logging
@@ -63,6 +64,7 @@ class PluginManager:
         self._init_task_plugins: dict[asyncio.Task[None], str] = {}
         self._pending_plugins: dict[asyncio.Task[None], tuple[PluginDefinition, ModuleType, float]] = {}
         self._plugin_states: dict[str, dict[str, Any]] = {}
+        self._ensured_data_dirs: set[str] = set()
 
         # 一次性设置 sys.path（使用绝对路径防止路径遍历攻击）
         self._setup_sys_path()
@@ -85,6 +87,9 @@ class PluginManager:
 
     def on_change(self, handler) -> None:
         self._change_handlers.append(handler)
+
+    def update_poll_interval(self, poll_interval: float) -> None:
+        self._poll_interval = float(poll_interval)
 
     def _notify_change(self, name: str) -> None:
         for handler in self._change_handlers:
@@ -132,8 +137,12 @@ class PluginManager:
                     continue
                 if plugin_name:
                     failed_plugins.add(plugin_name)
-                if isinstance(result, (ImportError, AttributeError, ValueError, SyntaxError)):
-                    logger.warning("Plugin init error: %s", result)
+                if isinstance(result, asyncio.TimeoutError):
+                    logger.warning(
+                        "Plugin %s init timed out (>%ss)",
+                        plugin_name or "<unknown>",
+                        PLUGIN_INIT_TIMEOUT_SECONDS,
+                    )
                 else:
                     logger.warning("Plugin init error: %s", result)
                 if plugin_name:
@@ -163,6 +172,7 @@ class PluginManager:
         if not definition.enabled:
             logger.info("Plugin %s is disabled, skipping", definition.name)
             return
+        self._ensure_plugin_data_dir(definition.name, force=True)
         try:
             module, init_task = self._load_module(plugin_dir, definition)
         except PluginLoadError as exc:
@@ -322,12 +332,6 @@ class PluginManager:
                     self._init_task_plugins[init_task] = definition.name
                     return module, init_task
             return module, None
-        except asyncio.TimeoutError:
-            raise PluginLoadError(
-                definition.name,
-                f"Plugin init timeout (> {PLUGIN_INIT_TIMEOUT_SECONDS}s)",
-                None
-            ) from None
         except Exception as exc:
             raise PluginLoadError(definition.name, "Failed to load plugin", exc) from exc
 
@@ -348,12 +352,25 @@ class PluginManager:
             self.router.register(spec)
 
     def _get_mtime(self, plugin_dir: Path, definition: PluginDefinition) -> int:
-        """获取插件文件的聚合修改时间。
+        """获取插件文件的聚合修改指纹。
 
-        使用所有被监控文件 `st_mtime_ns` 的总和，而不是单个最大值。
-        这样即使变更发生在子模块且没有成为“最大 mtime”文件，也能被 watcher 感知。
+        指纹包含相对路径、`st_mtime_ns` 与文件大小，避免多个文件 mtime
+        一增一减时被简单求和抵消。
         """
-        return sum(path.stat().st_mtime_ns for path in self._iter_watch_files(plugin_dir, definition))
+        digest = hashlib.blake2b(digest_size=16)
+        for path in sorted(self._iter_watch_files(plugin_dir, definition), key=lambda item: item.as_posix()):
+            stat_result = path.stat()
+            try:
+                relative = path.relative_to(plugin_dir).as_posix()
+            except ValueError:
+                relative = path.as_posix()
+            digest.update(relative.encode("utf-8", errors="surrogatepass"))
+            digest.update(b"\0")
+            digest.update(str(stat_result.st_mtime_ns).encode("ascii"))
+            digest.update(b"\0")
+            digest.update(str(stat_result.st_size).encode("ascii"))
+            digest.update(b"\0")
+        return int.from_bytes(digest.digest(), "big")
 
     async def _get_mtime_async(self, plugin_dir: Path, definition: PluginDefinition) -> int:
         """获取插件文件的修改时间（异步版本，用于监控时避免阻塞事件循环）"""
@@ -393,6 +410,16 @@ class PluginManager:
         for mod_name in to_delete:
             del sys.modules[mod_name]
 
+    def _plugin_data_dir(self, plugin_name: str) -> Path:
+        return self.plugins_dir / plugin_name / "data"
+
+    def _ensure_plugin_data_dir(self, plugin_name: str, *, force: bool = False) -> Path:
+        data_dir = self._plugin_data_dir(plugin_name)
+        if force or plugin_name not in self._ensured_data_dirs:
+            ensure_dir(data_dir)
+            self._ensured_data_dirs.add(plugin_name)
+        return data_dir
+
     def build_context(
         self,
         plugin_name: str,
@@ -401,8 +428,7 @@ class PluginManager:
         request_id: Optional[str] = None,
     ) -> PluginContextProtocol:
         plugin_dir = self.plugins_dir / plugin_name
-        data_dir = plugin_dir / "data"
-        ensure_dir(data_dir)
+        data_dir = self._ensure_plugin_data_dir(plugin_name)
         
         # 获取或创建插件状态
         state = self._plugin_states.setdefault(plugin_name, {})

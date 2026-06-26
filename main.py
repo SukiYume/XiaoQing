@@ -1,7 +1,9 @@
 import asyncio
 import signal
 import sys, os
-# Workaround for Intel MKL library conflict when torch and numpy coexist
+# Windows local workaround for Intel MKL duplicate runtime conflicts when
+# torch and numpy coexist. This can mask a real MKL packaging issue; remove it
+# when the dependency stack is cleaned up.
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 # 尽早导入 torch 以避免 DLL 加载冲突 (WinError 127)

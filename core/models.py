@@ -29,7 +29,10 @@ class OneBotEvent(BaseModel):
             # 非空字符串：尝试解析为 JSON 列表，如果失败则返回 None
             try:
                 parsed = json.loads(v)
-                if isinstance(parsed, list):
+                if (
+                    isinstance(parsed, list)
+                    and all(isinstance(item, dict) and "type" in item for item in parsed)
+                ):
                     return parsed
             except (json.JSONDecodeError, TypeError):
                 pass

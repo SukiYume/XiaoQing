@@ -4,6 +4,7 @@ Tests for core/server.py - InboundServer and InboundManager classes
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -523,6 +524,35 @@ async def test_server_ws_handler_disabled():
         await server.ws_handler(request)
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_server_ws_handler_counts_invalid_json_frame(sample_server):
+    """Test WebSocket request_count increments before JSON parsing."""
+    class FakeWebSocket:
+        def __init__(self):
+            self._messages = iter([SimpleNamespace(type=web.WSMsgType.TEXT, data="{bad json")])
+
+        async def prepare(self, request):
+            return None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    sample_server._ensure_ws_workers = Mock()
+    request = _make_request_with_auth("GET", "/ws", "test_token")
+
+    with patch("core.server.web.WebSocketResponse", return_value=FakeWebSocket()):
+        await sample_server.ws_handler(request)
+
+    assert sample_server._request_count == 1
+
+
 # ============================================================
 # Broadcast Tests
 # ============================================================
@@ -570,13 +600,15 @@ async def test_server_broadcast_socket_error(sample_server):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_server_handle_ws_event_cleans_idle_lock(sample_server):
-    """Test per-key WS locks are released after handling."""
+async def test_server_handle_ws_event_reuses_per_key_lock(sample_server):
+    """Test per-key WS locks are retained and reused."""
     ws = AsyncMock()
 
     await sample_server._handle_ws_event(ws, {"user_id": 12345})
+    first_lock = sample_server._ws_event_locks["user:12345"]
+    await sample_server._handle_ws_event(ws, {"user_id": 12345})
 
-    assert "user:12345" not in sample_server._ws_event_locks
+    assert sample_server._ws_event_locks["user:12345"] is first_lock
 
 
 # ============================================================

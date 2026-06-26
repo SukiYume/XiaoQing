@@ -70,6 +70,12 @@ class TestOneBotEvent:
         assert isinstance(event.message, list)
         assert event.message[0]["type"] == "text"
 
+    def test_message_from_json_array_text(self):
+        """测试普通 JSON 数组文本不会被误判为消息段"""
+        event = OneBotEvent(message="[1, 2]")
+        assert isinstance(event.message, list)
+        assert event.message == [{"type": "text", "data": {"text": "[1, 2]"}}]
+
     def test_message_from_empty_string(self):
         """测试空字符串消息"""
         event = OneBotEvent(message="")

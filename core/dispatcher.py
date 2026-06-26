@@ -40,7 +40,7 @@ from pydantic import ValidationError
 from .router import CommandRouter
 
 if TYPE_CHECKING:
-    from .session import SessionManager
+    from .session import Session, SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class MessageContext:
     is_at_me: bool                  # 是否 @ 了机器人
     is_url_only: bool               # clean_text 严格匹配 ^https?://\S+$
     event: dict[str, Any]           # 原始事件
-    cached_session: Any = None      # 缓存的会话对象（避免 TOCTOU 竞争）
+    cached_session: Session | None = None  # 缓存的会话对象（避免 TOCTOU 竞争）
 
 class MessageParser:
     """解析消息事件并构建 MessageContext"""
@@ -95,7 +95,6 @@ class MessageParser:
 
     def parse(self, event: dict[str, Any]) -> MessageContext | None:
         """解析消息事件，构建消息上下文"""
-        self.refresh_prefix_cache()
         bot_name = self._cached_bot_name
         prefixes = self._cached_prefixes
         self_id = str(event.get("self_id", "") or "")
@@ -344,6 +343,14 @@ class Dispatcher:
                 should_process = True
                 ctx.cached_session = session
 
+        if not should_process and self._allow_plain_group_smalltalk(ctx):
+            if self.is_muted(ctx.group_id):
+                logger.debug("[%s] Group muted; skip smalltalk", ctx.request_id)
+                return []
+            provider = self._get_smalltalk_provider()
+            logger.info("[%s] Handling as smalltalk (provider=%s)", ctx.request_id, provider)
+            return await self._handle_smalltalk(ctx)
+
         if not should_process:
             return []
 
@@ -360,7 +367,7 @@ class Dispatcher:
         # Step E: strict-/ unknown-command hint
         if ctx.has_command_prefix and ctx.clean_text:
             first = ctx.clean_text[0]
-            if first.isalpha() or "一" <= first <= "鿿":
+            if first.isalpha():
                 cmd_name = ctx.clean_text.split()[0]
                 safe_cmd = Dispatcher._truncate_text(cmd_name, max_len=20)
                 logger.info("[%s] Unknown command: '%s'", ctx.request_id, cmd_name)
@@ -515,6 +522,8 @@ class Dispatcher:
         try:
             ip = ipaddress.ip_address(host.strip("[]"))
         except ValueError:
+            # Lightweight guard only: DNS names are not resolved here, so domains
+            # that resolve to private/link-local IPs remain a url_parser concern.
             return False
 
         if ip.is_loopback or ip.is_private or ip.is_link_local:
@@ -618,6 +627,11 @@ class Dispatcher:
         """获取配置的闲聊提供者"""
         plugins_config = self.config_provider.config.get("plugins", {})
         return plugins_config.get("smalltalk_provider", "smalltalk")
+
+    def _allow_plain_group_smalltalk(self, ctx: MessageContext) -> bool:
+        if ctx.is_private or ctx.has_prefix or ctx.is_only_bot_name:
+            return False
+        return self._get_smalltalk_provider() == "xiaoqing_chat"
 
     @staticmethod
     def _truncate_text(text: str, max_len: int = constants.DEFAULT_LOG_TRUNCATE_LEN) -> str:

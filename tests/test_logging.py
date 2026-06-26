@@ -44,6 +44,27 @@ class TestColoredFormatter:
         assert "\033[32m" in result  # 绿色
         assert "\033[0m" in result   # 重置
         assert "Test message" in result
+        assert record.levelname == "INFO"
+
+    def test_format_with_color_does_not_mutate_record(self):
+        """测试带颜色格式化不会修改原始 LogRecord"""
+        formatter = ColoredFormatter(
+            fmt="%(levelname)s: %(message)s",
+            use_color=True,
+        )
+        record = logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
+        )
+
+        formatter.format(record)
+
+        assert record.levelname == "WARNING"
 
     def test_format_without_color(self):
         """测试无颜色格式化"""

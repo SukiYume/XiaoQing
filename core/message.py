@@ -146,6 +146,8 @@ def strip_message_prefix(
         at_cq = f"[CQ:at,qq={self_id}]"
         if stripped.startswith(at_cq):
             stripped = stripped[len(at_cq):].lstrip(" ,，.。!！?？\t\n")
+        if at_cq in stripped:
+            stripped = re.sub(rf"\s*{re.escape(at_cq)}\s*", " ", stripped).strip()
 
     pattern = bot_name_pattern or compile_bot_name_pattern(bot_name)
     if pattern:
