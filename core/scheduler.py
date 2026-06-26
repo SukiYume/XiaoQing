@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import threading
 from typing import Any
 
 from apscheduler.jobstores.base import JobLookupError
@@ -13,7 +12,6 @@ class SchedulerManager:
         self.timezone = timezone
         self.scheduler: AsyncIOScheduler | None = None
         self._started = False
-        self._init_lock = threading.Lock()
         # Delay initialization until event loop is available
         try:
             asyncio.get_running_loop()
@@ -24,12 +22,11 @@ class SchedulerManager:
     
     def _init_scheduler(self) -> None:
         """Initialize and start the scheduler (requires event loop)"""
-        with self._init_lock:
-            if self.scheduler is None:
-                self.scheduler = AsyncIOScheduler(timezone=self.timezone)
-            if not self._started:
-                self.scheduler.start()
-                self._started = True
+        if self.scheduler is None:
+            self.scheduler = AsyncIOScheduler(timezone=self.timezone)
+        if not self._started:
+            self.scheduler.start()
+            self._started = True
     
     def ensure_started(self) -> None:
         """Ensure scheduler is initialized and started (requires event loop)"""
@@ -42,7 +39,7 @@ class SchedulerManager:
             self.timezone = timezone
         if self.scheduler is not None:
             try:
-                self.scheduler.shutdown(wait=False)
+                self.scheduler.shutdown(wait=True)
             except Exception:
                 pass
         self.scheduler = None

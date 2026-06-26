@@ -3,6 +3,7 @@ OneBot 模块单元测试
 """
 
 import asyncio
+import inspect
 import json
 import pytest
 from pathlib import Path
@@ -12,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from core.onebot import (
     OneBotHttpSender,
     OneBotWsClient,
+    _CONNECT_SIGNATURE_CACHE,
     _verify_token_auth,
     _mask_sensitive_text,
     _extract_message_preview,
@@ -364,6 +366,28 @@ class TestOneBotWsClient:
         client._ws = MagicMock()
         assert client.connected() is True
 
+    def test_connected_rejects_closed_websocket(self):
+        """测试 closed/close_code/state 会被识别为未连接"""
+        client = OneBotWsClient("ws://localhost:3000", "")
+
+        ws = MagicMock()
+        ws.closed = True
+        client._ws = ws
+        assert client.connected() is False
+
+        ws = MagicMock()
+        ws.closed = False
+        ws.close_code = 1000
+        client._ws = ws
+        assert client.connected() is False
+
+        ws = MagicMock()
+        ws.closed = False
+        ws.close_code = None
+        ws.state.name = "CLOSED"
+        client._ws = ws
+        assert client.connected() is False
+
     @pytest.mark.asyncio
     async def test_send_action_when_connected(self):
         """测试连接时发送动作"""
@@ -435,6 +459,28 @@ class TestOneBotWsClient:
         await client.stop()
 
         assert client._running is False
+        mock_ws.close.assert_awaited_once()
+        assert client._ws is None
+
+    @pytest.mark.asyncio
+    async def test_stop_awaits_cleanup_task_cancellation(self):
+        """测试 stop 会等待 cleanup task 完成取消清理"""
+        client = OneBotWsClient("ws://localhost:3000", "")
+        cleanup_finished = asyncio.Event()
+
+        async def cleanup_loop():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleanup_finished.set()
+
+        client._cleanup_task = asyncio.create_task(cleanup_loop())
+        await asyncio.sleep(0)
+
+        await client.stop()
+
+        assert cleanup_finished.is_set()
+        assert client._cleanup_task is None
 
     @pytest.mark.asyncio
     async def test_connect_once_reraises_connection_error_for_backoff(self):
@@ -451,6 +497,20 @@ class TestOneBotWsClient:
         ):
             with pytest.raises(RuntimeError, match="boom"):
                 await client._connect_once(AsyncMock())
+
+    def test_get_connect_signature_is_cached(self):
+        """测试 connect signature 只 inspect 一次"""
+        class DummyWebsockets:
+            @staticmethod
+            def connect(uri, additional_headers=None):
+                return None
+
+        _CONNECT_SIGNATURE_CACHE.clear()
+        with patch("inspect.signature", wraps=inspect.signature) as mock_signature:
+            assert "additional_headers" in _get_connect_signature(DummyWebsockets)
+            assert "additional_headers" in _get_connect_signature(DummyWebsockets)
+
+        assert mock_signature.call_count == 1
 
     def test_get_queue_key(self):
         """测试获取队列键"""
@@ -498,6 +558,40 @@ class TestOneBotWsClient:
         await asyncio.gather(*client._queue_tasks.values())
 
         assert max_seen == 1
+
+    @pytest.mark.asyncio
+    async def test_drain_queue_restarts_when_event_arrives_during_timeout_exit(self):
+        """测试 drain 超时退出窗口内入队的事件不会滞留"""
+        client = OneBotWsClient("ws://localhost:3000", "")
+        key = "user:1"
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        client._message_queues[key] = queue
+        handled: list[dict[str, Any]] = []
+        real_wait_for = asyncio.wait_for
+        wait_calls = 0
+
+        async def handler(event: dict[str, Any]) -> None:
+            handled.append(event)
+
+        async def fake_wait_for(awaitable, timeout):
+            nonlocal wait_calls
+            wait_calls += 1
+            if wait_calls == 1:
+                if hasattr(awaitable, "close"):
+                    awaitable.close()
+                queue.put_nowait({"user_id": 1})
+                raise asyncio.TimeoutError()
+            return await real_wait_for(awaitable, timeout)
+
+        task = asyncio.create_task(client._drain_queue(key, handler))
+        client._queue_tasks[key] = task
+
+        with patch("core.onebot.asyncio.wait_for", side_effect=fake_wait_for):
+            await task
+            restarted = client._queue_tasks[key]
+            await real_wait_for(restarted, timeout=2.0)
+
+        assert handled == [{"user_id": 1}]
 
 # ============================================================
 # 运行测试

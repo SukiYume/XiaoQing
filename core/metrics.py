@@ -84,6 +84,9 @@ class MetricsCollector:
         self._command_stats: dict[str, ExecutionStats] = defaultdict(ExecutionStats)
         self._global_stats = ExecutionStats()
         self._start_time = time.time()
+        # summary_snapshot() is intentionally synchronous, so this remains a
+        # threading lock. Keep protected sections in-memory only; never await
+        # or perform I/O while holding it.
         self._lock = threading.Lock()
     
     @property
@@ -146,9 +149,9 @@ class MetricsCollector:
                 name: stats.to_dict()
                 for name, stats in self._command_stats.items()
             }
-    
-    async def get_summary(self) -> dict[str, Any]:
-        """获取汇总统计"""
+
+    def summary_snapshot(self) -> dict[str, Any]:
+        """获取当前汇总统计快照。"""
         with self._lock:
             return {
                 "uptime_seconds": round(self.uptime, 1),
@@ -157,6 +160,10 @@ class MetricsCollector:
                 "commands_count": len(self._command_stats),
                 "top_slow_plugins": self._get_top_slow_plugins(5),
             }
+    
+    async def get_summary(self) -> dict[str, Any]:
+        """获取汇总统计"""
+        return self.summary_snapshot()
     
     def _get_top_slow_plugins(self, n: int = 5) -> list[dict[str, Any]]:
         """获取最慢的插件"""

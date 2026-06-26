@@ -18,18 +18,58 @@ from typing import Any, Callable, Optional, Union
 
 ConfigCallback = Union[Callable[["ConfigSnapshot"], None], Callable[["ConfigSnapshot"], Any]]
 
+from .exceptions import ConfigLoadError
 from .plugin_base import atomic_write_text, load_json
 
 logger = logging.getLogger(__name__)
 
 
-class ConfigLoadError(RuntimeError):
-    """Raised when config/secrets cannot be parsed into a valid snapshot."""
+class _FrozenConfigDict(dict[str, Any]):
+    """dict-compatible read-only config snapshot."""
 
-    def __init__(self, path: Path, original: Exception):
-        super().__init__(f"Failed to load config from {path}: {original}")
-        self.path = path
-        self.original = original
+    def _readonly(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("Config snapshots are read-only")
+
+    __setitem__ = _readonly
+    __delitem__ = _readonly
+    clear = _readonly
+    pop = _readonly
+    popitem = _readonly
+    setdefault = _readonly
+    update = _readonly
+
+
+class _FrozenConfigList(list[Any]):
+    """list-compatible read-only config snapshot."""
+
+    def _readonly(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("Config snapshots are read-only")
+
+    __setitem__ = _readonly
+    __delitem__ = _readonly
+    append = _readonly
+    clear = _readonly
+    extend = _readonly
+    insert = _readonly
+    pop = _readonly
+    remove = _readonly
+    reverse = _readonly
+    sort = _readonly
+
+
+def _freeze_config_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _FrozenConfigDict(
+            {key: _freeze_config_value(child) for key, child in value.items()}
+        )
+    if isinstance(value, list):
+        return _FrozenConfigList([_freeze_config_value(child) for child in value])
+    return value
+
+
+def _freeze_config_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    return _freeze_config_value(value)
+
 
 def _check_secrets_file_permissions(path: Path) -> None:
     """
@@ -88,6 +128,8 @@ class ConfigManager:
         self.secrets_path = secrets_path
         self._config: dict[str, Any] = {}
         self._secrets: dict[str, Any] = {}
+        self._config_view: dict[str, Any] = _freeze_config_mapping({})
+        self._secrets_view: dict[str, Any] = _freeze_config_mapping({})
         self._callbacks: list[ConfigCallback] = []
         self._last_config_mtime: float = 0
         self._last_secrets_mtime: float = 0
@@ -98,35 +140,41 @@ class ConfigManager:
         """初始加载配置（不触发回调）"""
         with self._lock:
             try:
-                self._config = self._load(self.config_path)
-                self._secrets = self._load(self.secrets_path)
+                self._replace_snapshot(
+                    self._load(self.config_path),
+                    self._load(self.secrets_path),
+                )
             except ConfigLoadError as exc:
                 logger.error("%s", exc)
-                self._config = {}
-                self._secrets = {}
+                self._replace_snapshot({}, {})
         logger.info("Config loaded")
         _check_secrets_file_permissions(self.secrets_path)
 
     @property
     def config(self) -> dict[str, Any]:
         with self._lock:
-            return copy.deepcopy(self._config)
+            return self._config_view
 
     @property
     def secrets(self) -> dict[str, Any]:
         with self._lock:
-            return copy.deepcopy(self._secrets)
+            return self._secrets_view
 
     def reload(self) -> None:
         """重新加载配置"""
         config = self._load(self.config_path)
         secrets = self._load(self.secrets_path)
         with self._lock:
-            self._config = config
-            self._secrets = secrets
+            self._replace_snapshot(config, secrets)
         self._update_mtime()
         logger.info("Config reloaded")
         _check_secrets_file_permissions(self.secrets_path)
+
+    def _replace_snapshot(self, config: dict[str, Any], secrets: dict[str, Any]) -> None:
+        self._config = config
+        self._secrets = secrets
+        self._config_view = _freeze_config_mapping(config)
+        self._secrets_view = _freeze_config_mapping(secrets)
 
     def save_secrets(self) -> None:
         """保存 secrets 配置到文件"""
@@ -152,7 +200,8 @@ class ConfigManager:
             ValueError: 如果路径中的某个键不是字典类型
         """
         keys = path.split(".")
-        original_secrets = self.secrets
+        with self._lock:
+            original_secrets = copy.deepcopy(self._secrets)
         with self._lock:
             current = self._secrets
 
@@ -168,12 +217,14 @@ class ConfigManager:
                 raise KeyError(f"键不存在: {path}")
 
             current[final_key] = value
+            self._secrets_view = _freeze_config_mapping(self._secrets)
 
         try:
             self.save_secrets()
         except Exception:
             with self._lock:
                 self._secrets = original_secrets
+                self._secrets_view = _freeze_config_mapping(self._secrets)
             raise
 
         self._update_mtime()
@@ -204,21 +255,24 @@ class ConfigManager:
                     continue
                 snapshot = await asyncio.to_thread(self.snapshot)
                 await self._notify_callbacks_async(snapshot)
-                await asyncio.to_thread(self._update_mtime)
 
     def _notify_callbacks_sync(self, snapshot: ConfigSnapshot) -> None:
         for cb in self._callbacks:
             try:
                 result = cb(snapshot)
                 if asyncio.iscoroutine(result):
-                    try:
-                        loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        asyncio.run(result)
-                    else:
-                        loop.create_task(result)
+                    self._run_callback_coroutine_sync(result)
             except Exception as exc:
                 logger.exception("Config callback failed: %s", exc)
+
+    @staticmethod
+    def _run_callback_coroutine_sync(result: Any) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(result)
+        else:
+            loop.create_task(result)
 
     async def _notify_callbacks_async(self, snapshot: ConfigSnapshot) -> None:
         for cb in self._callbacks:

@@ -84,6 +84,10 @@ class SessionManager:
     def default_timeout(self) -> float:
         return self._default_timeout
 
+    @property
+    def active_count(self) -> int:
+        return len(self._sessions)
+
     def set_default_timeout(self, timeout: float) -> None:
         self._default_timeout = float(timeout)
 
@@ -145,6 +149,27 @@ class SessionManager:
             session.update()
             return session
 
+    async def peek(self, user_id: int, group_id: int | None) -> Session | None:
+        """
+        只读查看用户会话。
+
+        如果会话已过期，会自动删除并返回 None。
+        成功返回会话时不会刷新超时计时器；需要续命时使用 get()。
+        """
+        async with self._lock:
+            key = self._make_key(user_id, group_id)
+            session = self._sessions.get(key)
+
+            if session is None:
+                return None
+
+            if session.is_expired():
+                del self._sessions[key]
+                logger.debug("Session expired and removed during peek(): user=%s, group=%s", user_id, group_id)
+                return None
+
+            return session
+
     async def delete(self, user_id: int, group_id: int | None) -> bool:
         """
         删除用户会话
@@ -160,7 +185,7 @@ class SessionManager:
             return False
 
     async def exists(self, user_id: int, group_id: int | None) -> bool:
-        """检查会话是否存在（且未过期）"""
+        """检查会话是否存在（且未过期），不会刷新超时计时器。"""
         async with self._lock:
             key = self._make_key(user_id, group_id)
             session = self._sessions.get(key)

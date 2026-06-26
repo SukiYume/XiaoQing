@@ -5,10 +5,8 @@ Inbound Server 模块
 """
 
 import asyncio
-import hmac
 import json
 import logging
-import threading
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -16,6 +14,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import ContentTypeError, web
 
+from .auth import verify_bearer_token
 from .constants import (
     DEFAULT_INBOUND_WS_MAX_WORKERS,
     DEFAULT_INBOUND_WS_QUEUE_SIZE,
@@ -73,7 +72,6 @@ class InboundServer:
         self._start_time = time.time()
         self._request_count = 0
         self._ws_connections = 0
-        self._ws_connections_lock = threading.Lock()
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
 
@@ -118,16 +116,13 @@ class InboundServer:
         self.token = token
 
     def _increment_ws_connections(self) -> None:
-        with self._ws_connections_lock:
-            self._ws_connections += 1
+        self._ws_connections += 1
 
     def _decrement_ws_connections(self) -> None:
-        with self._ws_connections_lock:
-            self._ws_connections -= 1
+        self._ws_connections -= 1
 
     def _get_ws_connections(self) -> int:
-        with self._ws_connections_lock:
-            return self._ws_connections
+        return self._ws_connections
 
     @staticmethod
     def _unauthorized_response() -> web.Response:
@@ -255,12 +250,8 @@ class InboundServer:
             return f"{days}d {hours}h"
 
     def _authorized(self, request: web.Request) -> bool:
-        if not self.token:
-            return True
         auth = request.headers.get("Authorization", "")
-        expected = f"Bearer {self.token}"
-        # 使用 hmac.compare_digest 防止时序攻击（不预先比较长度，避免泄露长度信息）
-        return hmac.compare_digest(auth.encode(), expected.encode())
+        return verify_bearer_token(auth, self.token)
 
     async def post_event(self, request: web.Request) -> web.Response:
         """处理 HTTP POST 事件"""
@@ -300,9 +291,9 @@ class InboundServer:
         try:
             async for msg in ws:
                 if msg.type == web.WSMsgType.TEXT:
+                    self._request_count += 1
                     try:
                         payload = json.loads(msg.data)
-                        self._request_count += 1
                     except json.JSONDecodeError:
                         continue
                     if not isinstance(payload, dict):
@@ -330,16 +321,20 @@ class InboundServer:
             return
 
         text = json.dumps(action, ensure_ascii=False)
-        failed_sockets: list[web.WebSocketResponse] = []
-        # 复制集合以防迭代时变更
-        for ws in list(self._active_sockets):
+        sockets = list(self._active_sockets)
+
+        async def send_one(ws: web.WebSocketResponse) -> web.WebSocketResponse | None:
             try:
                 await ws.send_str(text)
+                return None
             except Exception as exc:
                 logger.warning("Broadcast failed for one client: %s", exc)
-                failed_sockets.append(ws)
+                return ws
+
+        failed_sockets = await asyncio.gather(*(send_one(ws) for ws in sockets))
         for ws in failed_sockets:
-            self._active_sockets.discard(ws)
+            if ws is not None:
+                self._active_sockets.discard(ws)
 
     def active_ws_connections(self) -> int:
         return len(self._active_sockets)
@@ -359,8 +354,6 @@ class InboundServer:
 
     async def _handle_ws_event(self, ws: web.WebSocketResponse, payload: dict[str, Any]) -> None:
         """处理 WebSocket 事件（非阻塞）"""
-        key: str | None = None
-        lock: asyncio.Lock | None = None
         try:
             payload = dict(payload)
             payload["_source"] = "inbound_ws"
@@ -375,9 +368,6 @@ class InboundServer:
                 await ws.send_str(json.dumps(action, ensure_ascii=False))
         except Exception as exc:
             logger.exception("WebSocket event handler error: %s", exc)
-        finally:
-            if key and lock and not lock.locked():
-                self._ws_event_locks.pop(key, None)
 
     def _ensure_ws_workers(self) -> None:
         if not self.enable_ws or not self._ws_event_queue:
@@ -563,6 +553,15 @@ class InboundManager:
 
     def has_active_ws_clients(self) -> bool:
         return self.active_ws_connections() > 0
+
+    @property
+    def config_key(self) -> tuple[str, str, int, int]:
+        return (
+            self._inbound_http_base,
+            self._inbound_ws_uri,
+            self._ws_max_workers,
+            self._ws_queue_size,
+        )
 
     def set_status_providers(
         self,

@@ -4,7 +4,9 @@ ConfigManager 单元测试
 
 import json
 import logging
+import os
 import platform
+import time
 import pytest
 from pathlib import Path
 from typing import Any
@@ -89,23 +91,28 @@ class TestConfigManagerInit:
         assert secrets["admin_user_ids"] == [12345, 67890]
         assert secrets["plugins"]["echo"]["api_key"] == "test_key"
 
-    def test_returns_copy_of_config(self, config_manager: ConfigManager):
-        """测试返回配置的副本（不影响内部状态）"""
+    def test_returns_read_only_config_snapshot(self, config_manager: ConfigManager):
+        """测试返回只读配置快照"""
         config1 = config_manager.config
         config2 = config_manager.config
-        assert config1 is not config2
+        assert config1 is config2
         assert config1 == config2
+        with pytest.raises(TypeError):
+            config1["bot_name"] = "changed"
 
-    def test_returns_copy_of_secrets(self, config_manager: ConfigManager):
-        """测试返回密钥的副本"""
+    def test_returns_read_only_secrets_snapshot(self, config_manager: ConfigManager):
+        """测试返回只读密钥快照"""
         secrets1 = config_manager.secrets
         secrets2 = config_manager.secrets
-        assert secrets1 is not secrets2
+        assert secrets1 is secrets2
         assert secrets1 == secrets2
+        with pytest.raises(TypeError):
+            secrets1["admin_user_ids"] = []
 
     def test_config_nested_mutation_does_not_affect_internal_state(self, config_manager: ConfigManager):
         config = config_manager.config
-        config["plugins"]["echo"]["enabled"] = False
+        with pytest.raises(TypeError):
+            config["plugins"]["echo"]["enabled"] = False
 
         current = config_manager.config
         assert current["plugins"]["echo"]["enabled"] is True
@@ -230,6 +237,19 @@ class TestConfigManagerUpdateSecret:
         assert len(snapshots) == 1
         assert snapshots[0].secrets["admin_user_ids"] == [2024]
 
+    def test_update_secret_runs_async_reload_callbacks(self, config_manager: ConfigManager):
+        """测试 sync 路径下 update_secret 仍会执行 async reload 回调"""
+        snapshots: list[ConfigSnapshot] = []
+
+        async def callback(snapshot: ConfigSnapshot):
+            snapshots.append(snapshot)
+
+        config_manager.on_reload(callback)
+        config_manager.update_secret("admin_user_ids", [2025])
+
+        assert len(snapshots) == 1
+        assert snapshots[0].secrets["admin_user_ids"] == [2025]
+
     def test_update_secret_rolls_back_when_save_fails(
         self,
         config_manager: ConfigManager,
@@ -328,6 +348,50 @@ class TestConfigManagerWatch:
             pass
 
         assert len(changes_detected) > 0
+
+    @pytest.mark.asyncio
+    async def test_watch_detects_change_written_during_callback(
+        self,
+        config_manager: ConfigManager,
+        config_file: Path,
+    ):
+        """测试回调执行期间写入的新配置不会被 mtime 覆盖掉"""
+        import asyncio
+
+        changes_detected = []
+        first_mtime = time.time() + 10
+        second_mtime = first_mtime + 10
+
+        def write_config(bot_name: str, mtime: float) -> None:
+            with open(config_file, "w", encoding="utf-8") as f:
+                json.dump({"bot_name": bot_name}, f)
+            os.utime(config_file, (mtime, mtime))
+
+        def callback(snapshot: ConfigSnapshot):
+            changes_detected.append(snapshot.config.get("bot_name"))
+            if len(changes_detected) == 1:
+                write_config("second", second_mtime)
+
+        async def wait_for_changes(count: int) -> None:
+            while len(changes_detected) < count:
+                await asyncio.sleep(0.02)
+
+        config_manager.on_reload(callback)
+        watch_task = asyncio.create_task(config_manager.watch(interval=0.02))
+        await asyncio.sleep(0.05)
+
+        write_config("first", first_mtime)
+
+        try:
+            await asyncio.wait_for(wait_for_changes(2), timeout=1.0)
+        finally:
+            watch_task.cancel()
+            try:
+                await watch_task
+            except asyncio.CancelledError:
+                pass
+
+        assert changes_detected[:2] == ["first", "second"]
 
 # ============================================================
 # ConfigSnapshot 测试

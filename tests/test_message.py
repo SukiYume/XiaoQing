@@ -219,6 +219,24 @@ class TestParseTextCommandContext:
         assert result.clean_text == "你好"
         assert result.has_prefix is True            # union: is_at_me
 
+    def test_strips_inline_cq_at_from_clean_text(self):
+        event = {
+            "self_id": "12345",
+            "message": "帮我看看 [CQ:at,qq=12345] 这个",
+            "raw_message": "帮我看看 [CQ:at,qq=12345] 这个",
+        }
+        result = parse_text_command_context(
+            "帮我看看 [CQ:at,qq=12345] 这个",
+            event,
+            bot_name="",
+            prefixes=("/",),
+            self_id="12345",
+        )
+
+        assert result.is_at_me is True
+        assert "[CQ:at" not in result.clean_text
+        assert result.clean_text == "帮我看看 这个"
+
     def test_strict_command_prefix_at_start(self):
         event: dict[str, Any] = {"message": [{"type": "text", "data": {"text": "ignored"}}]}
         result = parse_text_command_context(

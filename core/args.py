@@ -90,6 +90,7 @@ def parse(raw: str) -> ParsedArgs:
     支持:
     - 位置参数: arg1 arg2
     - 短选项: -f value 或 -f
+      注意：-abc 会解析为 key="abc" 的单个短选项，不拆分为 -a -b -c
     - 长选项: --option=value 或 --option value 或 --flag
 
     返回: ParsedArgs 对象
