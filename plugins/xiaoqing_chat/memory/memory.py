@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -23,24 +24,19 @@ class StoredMessage:
     message_id: Optional[int] = None
     local_id: str = ""
     parts: tuple[dict[str, Any], ...] = field(default_factory=tuple)
-    content: InitVar[str] = ""
-    media_items: InitVar[Any] = None
+    content: str = ""
+    media_items: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
-    def __post_init__(self, content: str, media_items: Any) -> None:
+    def __post_init__(self) -> None:
         normalized_parts = _normalize_parts(self.parts)
         if not normalized_parts:
-            normalized_parts = build_message_parts(str(content or ""), _normalize_media_items(media_items))
+            normalized_parts = build_message_parts(
+                str(self.content or ""), _normalize_media_items(self.media_items)
+            )
         object.__setattr__(self, "parts", normalized_parts)
-
-    @property
-    def content(self) -> str:
-        content, _media_items = message_parts_to_legacy(self.parts)
-        return content
-
-    @property
-    def media_items(self) -> tuple[dict[str, Any], ...]:
-        _content, media_items = message_parts_to_legacy(self.parts)
-        return _normalize_media_items(media_items)
+        legacy_content, legacy_media = message_parts_to_legacy(normalized_parts)
+        object.__setattr__(self, "content", legacy_content)
+        object.__setattr__(self, "media_items", _normalize_media_items(legacy_media))
 
 
 def _normalize_media_items(values: Any) -> tuple[dict[str, Any], ...]:
@@ -107,14 +103,14 @@ class MemoryStore:
         # 不在持有锁时执行 I/O，避免阻塞事件循环。
         self._lock = asyncio.Lock()
         # 同步快照锁：仅用于极短的字典读写，不做 I/O
-        import threading
-
         self._sync_lock = threading.Lock()
+        self._write_locks: dict[str, threading.Lock] = {}
 
     def bind_data_dir(self, data_dir: Path) -> None:
         with self._sync_lock:
             if self._data_dir != data_dir:
                 self._messages.clear()
+                self._write_locks.clear()
             self._data_dir = data_dir
 
     @staticmethod
@@ -134,6 +130,36 @@ class MemoryStore:
                     path.unlink()
                 except OSError:
                     pass
+
+    @staticmethod
+    def _message_identity(message: StoredMessage) -> tuple[Any, ...]:
+        if message.local_id:
+            return ("local", message.local_id)
+        if message.message_id is not None:
+            return ("remote", message.message_id)
+        return (
+            "fallback",
+            message.role,
+            message.name,
+            message.user_id,
+            round(message.ts, 6),
+            message.content,
+        )
+
+    @classmethod
+    def _merge_history(
+        cls, loaded: list[StoredMessage], current: list[StoredMessage]
+    ) -> list[StoredMessage]:
+        merged: list[StoredMessage] = []
+        seen: set[tuple[Any, ...]] = set()
+        for message in [*loaded, *current]:
+            identity = cls._message_identity(message)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            merged.append(message)
+        merged.sort(key=lambda message: (message.ts, message.local_id))
+        return cls._trim_history(merged)
 
     def append(
         self,
@@ -166,24 +192,50 @@ class MemoryStore:
             if len(history) > MAX_CACHED_MESSAGES_PER_CHAT:
                 del history[:-MAX_CACHED_MESSAGES_PER_CHAT]
 
+    def attach_latest_assistant_message_id(self, chat_id: str, message_id: Any) -> bool:
+        try:
+            normalized_id = int(message_id)
+        except (TypeError, ValueError):
+            return False
+        with self._sync_lock:
+            history = self._messages.get(chat_id, [])
+            for index in range(len(history) - 1, -1, -1):
+                message = history[index]
+                if message.role != "assistant" or message.message_id is not None:
+                    continue
+                history[index] = StoredMessage(
+                    role=message.role,
+                    name=message.name,
+                    ts=message.ts,
+                    user_id=message.user_id,
+                    message_id=normalized_id,
+                    local_id=message.local_id,
+                    parts=message.parts,
+                )
+                return True
+        return False
+
     def get(self, chat_id: str) -> list[StoredMessage]:
         with self._sync_lock:
             cached = self._messages.get(chat_id)
         if cached is None:
             loaded = self._load(chat_id)
             with self._sync_lock:
-                self._messages[chat_id] = self._trim_history(loaded if loaded is not None else [])
+                current = self._messages.get(chat_id, [])
+                self._messages[chat_id] = self._merge_history(loaded or [], current)
                 cached = self._messages.get(chat_id) or []
         return list(cached)
 
     async def get_async(self, chat_id: str) -> list[StoredMessage]:
-        with self._sync_lock:
-            cached = self._messages.get(chat_id)
-        if cached is None:
-            loaded = await asyncio.to_thread(self._load, chat_id)
+        async with self._lock:
             with self._sync_lock:
-                self._messages[chat_id] = self._trim_history(loaded if loaded is not None else [])
-                cached = self._messages.get(chat_id) or []
+                cached = self._messages.get(chat_id)
+            if cached is None:
+                loaded = await asyncio.to_thread(self._load, chat_id)
+                with self._sync_lock:
+                    current = self._messages.get(chat_id, [])
+                    self._messages[chat_id] = self._merge_history(loaded or [], current)
+                    cached = self._messages.get(chat_id) or []
         return list(cached)
 
     def get_recent(self, chat_id: str, *, max_items: int) -> list[StoredMessage]:
@@ -204,15 +256,18 @@ class MemoryStore:
         仅短暂持有 _sync_lock 获取快照，然后在持锁外做 I/O。
         """
         with self._sync_lock:
-            data_dir = self._data_dir
-            history = self._messages.get(chat_id)
-            if not data_dir or history is None:
-                return
-            snapshot = list(history[-200:])
-        data_dir.mkdir(parents=True, exist_ok=True)
-        path = data_dir / f"{chat_id}.json"
-        payload = [_serialize_message(message) for message in snapshot]
-        write_json(path, payload)
+            write_lock = self._write_locks.setdefault(chat_id, threading.Lock())
+        with write_lock:
+            with self._sync_lock:
+                data_dir = self._data_dir
+                history = self._messages.get(chat_id)
+                if not data_dir or history is None:
+                    return
+                snapshot = list(history[-200:])
+            data_dir.mkdir(parents=True, exist_ok=True)
+            path = data_dir / f"{chat_id}.json"
+            payload = [_serialize_message(message) for message in snapshot]
+            write_json(path, payload)
 
     def _load(self, chat_id: str) -> Optional[list[StoredMessage]]:
         with self._sync_lock:

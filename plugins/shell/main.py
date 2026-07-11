@@ -2,13 +2,14 @@
 终端命令执行插件
 
 仅管理员可用。包含以下安全措施：
-1. 命令白名单（可配置）
+1. 管理员命令启用列表（可配置，防误触而非安全沙箱）
 2. 执行超时
 3. 输出截断
 4. 基本的命令注入防护
 
-安全策略说明：
-- 仅允许执行白名单中的命令
+权限策略说明：
+- 唯一安全边界是 Bot admin 权限与入站认证
+- 命令启用列表仅用于减少误触，不能限制解释器、参数、网络或子进程能力
 - 默认超时 30 秒
 - 输出最大 4000 字符
 - 禁止命令链接符（&&, ||, ;, |）除非在白名单
@@ -292,20 +293,67 @@ async def _execute_command(args: list[str], timeout: int) -> tuple[int, str, str
         **_subprocess_group_kwargs(),
     )
 
+    output_byte_limit = max(64 * 1024, MAX_OUTPUT_LENGTH * 4)
+    overflow = asyncio.Event()
+
+    async def read_limited(stream: asyncio.StreamReader | None) -> bytes:
+        if stream is None:
+            return b""
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = await stream.read(8192)
+            if not chunk:
+                break
+            remaining = output_byte_limit - total
+            if remaining > 0:
+                chunks.append(chunk[:remaining])
+                total += min(len(chunk), remaining)
+            if len(chunk) > remaining or total >= output_byte_limit:
+                overflow.set()
+                break
+        return b"".join(chunks)
+
+    stdout_task = asyncio.create_task(read_limited(proc.stdout))
+    stderr_task = asyncio.create_task(read_limited(proc.stderr))
+    wait_task = asyncio.create_task(proc.wait())
+    overflow_task = asyncio.create_task(overflow.wait())
+    status = 0
+    message = ""
+
     try:
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(),
+        done, _pending = await asyncio.wait(
+            {wait_task, overflow_task},
             timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
         )
-        
-        # 智能解码：Windows 中文系统使用 GBK，否则使用 UTF-8
-        stdout_str = _smart_decode(stdout_bytes)
+        if overflow_task in done and overflow.is_set():
+            status = -2
+            message = f"输出超过 {output_byte_limit} 字节安全上限，已终止进程树"
+            await _terminate_process_tree(proc)
+        elif wait_task not in done:
+            status = -1
+            message = f"命令执行超时（{timeout}秒）"
+            await _terminate_process_tree(proc)
+
+        stdout_bytes, stderr_bytes = await asyncio.gather(stdout_task, stderr_task)
+        if status == 0:
+            status = proc.returncode or 0
         stderr_str = _smart_decode(stderr_bytes)
-        
-        return proc.returncode or 0, stdout_str, stderr_str
-    except asyncio.TimeoutError:
+        if message:
+            stderr_str = f"{stderr_str}\n{message}".strip()
+        return status, _smart_decode(stdout_bytes), stderr_str
+    except asyncio.CancelledError:
         await _terminate_process_tree(proc)
-        return -1, "", f"命令执行超时（{timeout}秒）"
+        raise
+    finally:
+        overflow_task.cancel()
+        if proc.returncode is None:
+            await _terminate_process_tree(proc)
+        for task in (stdout_task, stderr_task, wait_task, overflow_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(stdout_task, stderr_task, wait_task, overflow_task, return_exceptions=True)
 
 def _truncate(text: str, max_len: int = MAX_OUTPUT_LENGTH) -> str:
     """截断输出"""
@@ -374,7 +422,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
 
 def _show_help(context) -> str:
     """显示帮助信息"""
-    whitelist_status = "已禁用（危险模式）" if _is_whitelist_disabled(context) else "已启用"
+    whitelist_status = "已禁用" if _is_whitelist_disabled(context) else "已启用"
     timeout = _get_timeout(context)
     
     return (
@@ -387,8 +435,8 @@ def _show_help(context) -> str:
         "   显示此帮助信息\n\n"
         "3️⃣ /shell list\n"
         "   查看允许的命令白名单\n\n"
-        f"🔒 安全设置:\n"
-        f"   • 白名单模式: {whitelist_status}\n"
+        f"🔧 管理员执行设置:\n"
+        f"   • 命令启用/防误触列表: {whitelist_status}\n"
         f"   • 执行超时: {timeout}秒\n"
         f"   • 输出限制: {MAX_OUTPUT_LENGTH}字符\n"
         f"   • 命令链接符: 已禁用\n\n"
@@ -401,16 +449,16 @@ def _show_help(context) -> str:
         "   • QQ 中建议统一使用 / 斜杠，例如 C:/Users/testuser/Desktop/a.py\n"
         "   • 插件会按 bot 所在系统转换为本机路径格式\n"
         "   • 路径包含空格时请加引号\n\n"
-        "⚠️ 注意: 此插件仅管理员可用\n"
+        "⚠️ 注意: 此插件仅管理员可用；启用列表不是安全沙箱，解释器和通用工具仍具有管理员授予的完整能力\n"
         "═══════════════════════"
     )
 
 def _list_whitelist(context) -> list[dict[str, Any]]:
     """列出白名单"""
     if _is_whitelist_disabled(context):
-        return segments("⚠️ 白名单已禁用（危险模式）")
+        return segments("⚠️ 管理员命令启用列表已禁用；权限边界仍是 admin_only")
 
     whitelist = sorted(_get_whitelist(context))
-    lines = ["允许的命令:"]
+    lines = ["管理员已启用的命令入口（防误触，不是安全沙箱）:"]
     lines.append(", ".join(whitelist))
     return segments("\n".join(lines))

@@ -34,6 +34,7 @@ COMMON_ITEM_FIELDS = {
     "ai_meta",
     "deleted",
     "deleted_at",
+    "version",
 }
 
 TYPE_SPECIFIC_ITEM_FIELDS = {

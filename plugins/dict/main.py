@@ -4,6 +4,7 @@
 """
 import re
 import logging
+import hashlib
 from pathlib import Path
 from functools import lru_cache
 
@@ -42,7 +43,9 @@ def _load_dictionary(dict_file: Path):
         if not dict_file.exists():
             return None
         import pandas as pd
-        return pd.read_csv(dict_file, sep='\t', header=None, names=['src', 'dst'])
+        frame = pd.read_csv(dict_file, sep='\t', header=None, names=['src', 'dst'])
+        frame["_src_lower"] = frame["src"].astype(str).str.lower()
+        return frame
     except ImportError:
         raise ImportError("天文词典功能需要 pandas 库，请运行: pip install pandas")
     except Exception as e:
@@ -76,6 +79,55 @@ def _extract_query(parsed, exact_match: bool) -> str:
     return ""
 
 
+def _query_astrodict_sync(
+    query: str,
+    plugin_dir: Path,
+    exact_match: bool,
+    max_results: int,
+) -> str:
+    lang = _detect_language(query)
+    manifest_file = plugin_dir / "assets" / "manifest.json"
+    manifest = load_json(manifest_file, {})
+    files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
+    direction_key = "chinese_to_english" if lang == "chinese" else "english_to_chinese"
+    file_spec = files.get(direction_key, {}) if isinstance(files, dict) else {}
+    filename = file_spec.get("filename", "") if isinstance(file_spec, dict) else ""
+    expected_sha256 = file_spec.get("sha256", "") if isinstance(file_spec, dict) else ""
+    direction = "中译英" if lang == "chinese" else "英译中"
+    if not filename or Path(filename).name != filename or not expected_sha256:
+        return "天文学词典资源清单无效；请重新安装完整发行包"
+    dict_file = plugin_dir / "assets" / filename
+    if not dict_file.is_file():
+        return f"天文学词典数据文件不存在: {filename}；请重新安装包含 package data 的发行包"
+    actual_sha256 = hashlib.sha256(dict_file.read_bytes()).hexdigest()
+    if actual_sha256.lower() != str(expected_sha256).lower():
+        return f"天文学词典数据校验失败: {filename}"
+    df = _load_dictionary(dict_file)
+    if df is None:
+        return f"天文学词典数据文件不存在: {filename}；请重新安装包含 package data 的发行包"
+    lowered = query.lower()
+    if exact_match:
+        matches = df[df["_src_lower"] == lowered]
+    else:
+        keywords = lowered.split()
+        mask = df["_src_lower"].str.contains(keywords[0], regex=False, na=False)
+        for keyword in keywords[1:]:
+            mask &= df["_src_lower"].str.contains(keyword, regex=False, na=False)
+        matches = df[mask]
+    if matches.empty:
+        return f"在天文学词典（{direction}）中未找到相关词条"
+    total_found = len(matches)
+    lines = [
+        f"{idx}. {row['src']} → {row['dst']}"
+        for idx, (_, row) in enumerate(matches.head(max_results).iterrows(), 1)
+    ]
+    lines.append(
+        f"\n共找到 {total_found} 条结果"
+        + (f"，仅显示前 {max_results} 条" if total_found > max_results else "")
+    )
+    return "\n".join(lines)
+
+
 # ============================================================
 # 天文学词典
 # ============================================================
@@ -101,66 +153,20 @@ async def query_astrodict(
     query = query.strip()
     if not query:
         return "请提供要查询的词汇"
-    
-    # 判断翻译方向
-    lang = _detect_language(query)
-    
-    # 选择词典文件
-    if lang == 'chinese':
-        dict_file = context.plugin_dir / "data" / "astrodict_ce.txt"
-        direction = "中译英"
-    else:
-        dict_file = context.plugin_dir / "data" / "astrodict_ec.txt"
-        direction = "英译中"
-    
-    # 加载词典数据
     try:
-        df = _load_dictionary(dict_file)
-        if df is None:
-            return f"天文学词典数据文件不存在: {dict_file.name}"
-    except ImportError as e:
-        context.logger.error(f"缺少依赖: {e}")
-        return str(e)
-    except Exception as e:
-        context.logger.error(f"加载词典失败: {e}")
-        return f"词典加载失败: {e}"
-    
-    # 执行搜索
-    try:
-        if exact_match:
-            # 精确匹配
-            matches = df[df['src'].str.lower() == query.lower()]
-        else:
-            # 模糊匹配（支持多关键词）
-            keywords = query.lower().split()
-            mask = df['src'].str.lower().str.contains(keywords[0], regex=False, na=False)
-            for keyword in keywords[1:]:
-                mask &= df['src'].str.lower().str.contains(keyword, regex=False, na=False)
-            matches = df[mask]
-        
-        if matches.empty:
-            return f"在天文学词典（{direction}）中未找到相关词条"
-        
-        # 限制结果数量
-        total_found = len(matches)
-        matches = matches.head(max_results)
-        
-        # 格式化输出
-        result_lines = []
-        for idx, (_, row) in enumerate(matches.iterrows(), 1):
-            result_lines.append(f"{idx}. {row['src']} → {row['dst']}")
-        
-        # 添加统计信息
-        if total_found > max_results:
-            result_lines.append(f"\n共找到 {total_found} 条结果，仅显示前 {max_results} 条")
-        else:
-            result_lines.append(f"\n共找到 {total_found} 条结果")
-        
-        return "\n".join(result_lines)
-        
-    except Exception as e:
-        context.logger.error(f"天文词典查询失败: {e}", exc_info=True)
-        return f"查询失败: {e}"
+        return await run_sync(
+            _query_astrodict_sync,
+            query,
+            context.plugin_dir,
+            exact_match,
+            max_results,
+        )
+    except ImportError as exc:
+        context.logger.error("缺少依赖: %s", exc)
+        return str(exc)
+    except Exception as exc:
+        context.logger.error("天文词典查询失败: %s", exc, exc_info=True)
+        return f"查询失败: {exc}"
 
 
 # ============================================================

@@ -11,7 +11,7 @@ import time
 import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..models.item import (
@@ -75,8 +75,12 @@ class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._local = threading.local()
-        self._all_connections: list[sqlite3.Connection] = []
+        # One connection per calling thread.  The registry lets shutdown close
+        # all live connections deterministically instead of relying on thread
+        # local destructors (which used to hide cross-thread close failures).
+        self._all_connections: dict[int, sqlite3.Connection] = {}
         self._lock = threading.Lock()
+        self._settings_lock = threading.Lock()
 
         # 使用 OrderedDict 实现 LRU 缓存
         self._cache: OrderedDict[str, tuple[float, Any]] = (
@@ -98,38 +102,49 @@ class Database:
     def get_connection(self) -> sqlite3.Connection:
         """获取当前线程的数据库连接"""
         if not hasattr(self._local, "conn") or self._local.conn is None:
-            conn = sqlite3.connect(self.db_path)
+            # Connections are never shared for queries (they remain thread
+            # local), but allowing close from the lifecycle thread makes
+            # shutdown safe when a worker exits before it can clean itself up.
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.row_factory = sqlite3.Row
             self._local.conn = conn
             with self._lock:
-                self._all_connections.append(conn)
+                self._all_connections[threading.get_ident()] = conn
         return self._local.conn
 
     def close_all_connections(self):
-        """关闭所有连接"""
-        if hasattr(self._local, "conn") and self._local.conn:
-            self._local.conn.close()
-            self._local.conn = None
+        """Close all registered thread-local connections and report failures."""
         with self._lock:
-            for conn in list(self._all_connections):
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+            connections = list(self._all_connections.items())
             self._all_connections.clear()
+
+        failures: list[BaseException] = []
+        for thread_id, conn in connections:
+            try:
+                conn.close()
+            except sqlite3.Error as exc:
+                logger.error("Failed to close Pendo SQLite connection from thread %s: %s", thread_id, exc)
+                failures.append(exc)
+
+        if hasattr(self._local, "conn"):
+            self._local.conn = None
+        if failures:
+            raise RuntimeError(f"Failed to close {len(failures)} Pendo SQLite connection(s)") from failures[0]
 
     def cleanup(self):
         """清理资源"""
         self.close_all_connections()
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *, immediate: bool = False):
         """事务上下文管理器"""
         conn = self.get_connection()
         try:
+            if immediate and not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception:
@@ -268,6 +283,7 @@ class Database:
                 counter_account_name TEXT,
                 merchant TEXT,
                 remark TEXT
+                ,version INTEGER NOT NULL DEFAULT 0
             )
             """)
 
@@ -301,9 +317,16 @@ class Database:
                 "ALTER TABLE items ADD COLUMN entry_time TEXT",
                 "ALTER TABLE items ADD COLUMN template_answers TEXT",
                 "ALTER TABLE items ADD COLUMN is_favorite INTEGER DEFAULT 0",
+                "ALTER TABLE items ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
                 # reminder_logs 重构：一行一个 (item_id, remind_time)，用 repeat_count 替代多行
                 "ALTER TABLE reminder_logs ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1",
                 "ALTER TABLE reminder_logs ADD COLUMN last_sent_at TEXT",
+                "ALTER TABLE reminder_logs ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'",
+                "ALTER TABLE reminder_logs ADD COLUMN claim_token TEXT",
+                "ALTER TABLE reminder_logs ADD COLUMN claim_expires_at TEXT",
+                "ALTER TABLE reminder_logs ADD COLUMN next_attempt_at TEXT",
+                "ALTER TABLE reminder_logs ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE user_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
             ]
             for sql in migrations:
                 try:
@@ -378,7 +401,12 @@ class Database:
                     confirmed_at TEXT,
                     user_action TEXT,
                     repeat_count INTEGER NOT NULL DEFAULT 1,
-                    last_sent_at TEXT
+                    last_sent_at TEXT,
+                    state TEXT NOT NULL DEFAULT 'pending',
+                    claim_token TEXT,
+                    claim_expires_at TEXT,
+                    next_attempt_at TEXT,
+                    failure_count INTEGER NOT NULL DEFAULT 0
                 )
             """)
 
@@ -419,6 +447,16 @@ class Database:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_reminder_logs_unique
                 ON reminder_logs(item_id, remind_time)
             """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reminder_logs_claim "
+                "ON reminder_logs(state, claim_expires_at, next_attempt_at)"
+            )
+            cursor.execute(
+                "UPDATE reminder_logs SET state = CASE "
+                "WHEN confirmed_at IS NOT NULL THEN 'confirmed' "
+                "WHEN sent_at IS NOT NULL THEN 'sent' ELSE 'pending' END "
+                "WHERE state IS NULL OR state = 'pending'"
+            )
 
             # 操作日志表
             cursor.execute("""
@@ -444,7 +482,8 @@ class Database:
                     diary_remind_time TEXT DEFAULT '21:30',
                     default_category TEXT DEFAULT '未分类',
                     settings_json TEXT,
-                    updated_at TEXT
+                    updated_at TEXT,
+                    version INTEGER NOT NULL DEFAULT 0
                 )
             """)
 
@@ -495,10 +534,11 @@ class Database:
         if custom_id:
             item_dict["id"] = custom_id
         elif "id" not in item_dict:
-            item_dict["id"] = uuid.uuid4().hex[:8]
+            item_dict["id"] = uuid.uuid4().hex
 
         item_dict.setdefault("created_at", datetime.now().isoformat())
         item_dict.setdefault("updated_at", datetime.now().isoformat())
+        item_dict.setdefault("version", 0)
 
         data = self._prepare_data(item_dict)
         columns = ", ".join(self._quote_col(k) for k in data.keys())
@@ -524,7 +564,13 @@ class Database:
     _FTS_FIELDS = frozenset({"title", "content", "tags", "category"})
 
     def update_item(
-        self, item_id: str, updates: dict[str, Any] | Item, owner_id: str | None = None
+        self,
+        item_id: str,
+        updates: dict[str, Any] | Item,
+        owner_id: str | None = None,
+        *,
+        expected_version: int | None = None,
+        item_type: str | None = None,
     ) -> bool:
         """更新条目，支持dict或Item dataclass实例"""
         conn = self.get_connection()
@@ -542,20 +588,26 @@ class Database:
             update_dict["updated_at"] = datetime.now().isoformat()
             data = self._prepare_data(update_dict)
             set_clause = ", ".join([f"{self._quote_col(k)} = ?" for k in data.keys()])
+            set_clause = f"{set_clause}, version = version + 1"
 
             # S-1修复：使用 with conn: 代替手动 BEGIN/COMMIT/ROLLBACK
             affected = 0
             with conn:
+                where = ["id = ?", "deleted = 0"]
+                params: list[Any] = [item_id]
                 if owner_id:
-                    cursor.execute(
-                        f"UPDATE items SET {set_clause} WHERE id = ? AND owner_id = ?",
-                        list(data.values()) + [item_id, owner_id],
-                    )
-                else:
-                    cursor.execute(
-                        f"UPDATE items SET {set_clause} WHERE id = ?",
-                        list(data.values()) + [item_id],
-                    )
+                    where.append("owner_id = ?")
+                    params.append(owner_id)
+                if item_type:
+                    where.append("type = ?")
+                    params.append(item_type)
+                if expected_version is not None:
+                    where.append("version = ?")
+                    params.append(expected_version)
+                cursor.execute(
+                    f"UPDATE items SET {set_clause} WHERE {' AND '.join(where)}",
+                    list(data.values()) + params,
+                )
                 affected = cursor.rowcount
 
                 if affected > 0 and "remind_times" in update_dict:
@@ -931,7 +983,7 @@ class Database:
         """Create a non-schedulable event collection/header row."""
         now = datetime.now().isoformat()
         collection = dict(payload)
-        collection.setdefault("id", uuid.uuid4().hex[:8])
+        collection.setdefault("id", uuid.uuid4().hex)
         collection.setdefault("content", "")
         collection.setdefault("category", "未分类")
         collection.setdefault("location", "")
@@ -961,6 +1013,80 @@ class Database:
                 f"INSERT INTO event_collections ({columns}) VALUES ({placeholders})",
                 list(data.values()),
             )
+        self.cache_invalidate(f"event_collections|{collection['owner_id']}")
+        return str(collection["id"])
+
+    def create_event_collection_with_children(
+        self,
+        payload: dict[str, Any],
+        children: list[tuple[str, dict[str, Any] | EventItem]],
+        *,
+        operation_action: str = "create_event_collection",
+    ) -> str:
+        """Create a collection, all occurrences and its audit record atomically."""
+        collection = dict(payload)
+        now = datetime.now(timezone.utc).isoformat()
+        collection.setdefault("id", uuid.uuid4().hex)
+        collection.setdefault("content", "")
+        collection.setdefault("category", "未分类")
+        collection.setdefault("location", "")
+        collection.setdefault("tags", [])
+        collection.setdefault("notes", "")
+        collection.setdefault("context", {})
+        collection.setdefault("visibility", "private")
+        collection.setdefault("timezone", "Asia/Shanghai")
+        collection.setdefault("reminder_rules", [])
+        collection.setdefault("created_at", now)
+        collection.setdefault("updated_at", now)
+        collection.setdefault("deleted", 0)
+        if collection.get("kind") not in {"multi_node", "recurring"}:
+            raise ValueError("Invalid event collection kind")
+        if not collection.get("owner_id") or not collection.get("title"):
+            raise ValueError("event collection owner_id and title are required")
+
+        collection_data = self._prepare_event_collection_data(collection)
+        collection_columns = ", ".join(self._quote_col(k) for k in collection_data)
+        collection_placeholders = ", ".join("?" for _ in collection_data)
+        child_ids: list[str] = []
+        with self.transaction(immediate=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"INSERT INTO event_collections ({collection_columns}) VALUES ({collection_placeholders})",
+                list(collection_data.values()),
+            )
+            for child_id, child in children:
+                item_data = child.to_dict() if isinstance(child, EventItem) else dict(child)
+                item_data["id"] = child_id
+                item_data.setdefault("owner_id", collection["owner_id"])
+                item_data.setdefault("type", ItemType.EVENT.value)
+                item_data.setdefault("created_at", now)
+                item_data.setdefault("updated_at", now)
+                validated = validate_item_data(item_data)
+                prepared = self._prepare_data(validated)
+                columns = ", ".join(self._quote_col(k) for k in prepared)
+                placeholders = ", ".join("?" for _ in prepared)
+                cursor.execute(
+                    f"INSERT INTO items ({columns}) VALUES ({placeholders})",
+                    list(prepared.values()),
+                )
+                self._update_fts(child_id, validated, conn)
+                child_ids.append(child_id)
+            cursor.execute(
+                """
+                INSERT INTO operation_logs (user_id, action, item_type, item_id, details, created_at)
+                VALUES (?, ?, 'event', ?, ?, ?)
+                """,
+                (
+                    str(collection["owner_id"]),
+                    operation_action,
+                    str(collection["id"]),
+                    json.dumps({"child_ids": child_ids}, ensure_ascii=False),
+                    now,
+                ),
+            )
+        for child_id in child_ids:
+            self.cache_invalidate(child_id)
+        self.cache_invalidate(f"items|{collection['owner_id']}")
         self.cache_invalidate(f"event_collections|{collection['owner_id']}")
         return str(collection["id"])
 
@@ -1051,10 +1177,12 @@ class Database:
     def delete_event_collection(
         self, collection_id: str, owner_id: str, *, cascade: bool = True
     ) -> bool:
+        # Operation logs and the existing undo query use the repository's
+        # legacy local ISO convention.  Keep this deletion timestamp in the
+        # same representation so a just-written delete_event_collection log
+        # is ordered correctly against its children.
         now = datetime.now().isoformat()
-        children = self.get_collection_events(collection_id, owner_id) if cascade else []
-        conn = self.get_connection()
-        with conn:
+        with self.transaction(immediate=True) as conn:
             cursor = conn.execute(
                 """
                 UPDATE event_collections
@@ -1064,9 +1192,29 @@ class Database:
                 (now, now, collection_id, owner_id),
             )
             affected = cursor.rowcount
-        if cascade and children:
-            self.batch_soft_delete([child.id for child in children], owner_id)
+            child_ids: list[str] = []
+            if affected and cascade:
+                rows = cursor.execute(
+                    """
+                    SELECT id FROM items
+                    WHERE owner_id = ? AND type = ? AND deleted = 0 AND event_collection_id = ?
+                    """,
+                    (owner_id, ItemType.EVENT.value, collection_id),
+                ).fetchall()
+                child_ids = [str(row["id"]) for row in rows]
+                if child_ids:
+                    placeholders = ",".join("?" for _ in child_ids)
+                    cursor.execute(
+                        f"UPDATE items SET deleted = 1, deleted_at = ?, updated_at = ? "
+                        f"WHERE id IN ({placeholders}) AND owner_id = ?",
+                        [now, now] + child_ids + [owner_id],
+                    )
+                    cursor.execute(f"DELETE FROM items_fts WHERE id IN ({placeholders})", child_ids)
+                    cursor.execute(f"DELETE FROM reminder_logs WHERE item_id IN ({placeholders})", child_ids)
         if affected:
+            for child_id in child_ids:
+                self.cache_invalidate(child_id)
+            self.cache_invalidate(f"items|{owner_id}")
             self.cache_invalidate(collection_id)
             self.cache_invalidate(f"event_collections|{owner_id}")
         return affected > 0
@@ -1219,6 +1367,25 @@ class Database:
 
         self._cache_set(cache_key, items)
         return items
+
+    def get_all_items(
+        self,
+        owner_id: str,
+        filters: dict[str, Any] | None = None,
+        *,
+        page_size: int = 200,
+    ) -> list[Item]:
+        """Read a complete filtered result through bounded database pages."""
+        if page_size <= 0:
+            raise ValueError("page_size must be positive")
+        results: list[Item] = []
+        offset = 0
+        while True:
+            page = self.get_items(owner_id, filters=filters, limit=page_size, offset=offset)
+            results.extend(page)
+            if len(page) < page_size:
+                return results
+            offset += len(page)
 
     def get_active_user_ids(self) -> list[str]:
         """Return distinct active users with at least one non-deleted item."""
@@ -2147,32 +2314,37 @@ class Database:
         return settings
 
     def update_user_settings(self, user_id: str, settings: dict[str, Any]) -> bool:
-        """更新用户设置（C-1修复：先读当前设置再合并，避免部分更新覆盖其他字段）"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-
-        # 读取当前设置作为 base（未登录用户返回默认值）
-        current = self.get_user_settings(user_id)
-
-        # 合并：新传入的字段覆盖现有字段，其余保留
-        merged = {**current, **settings}
-        merged_settings_json = {}
-        if isinstance(current.get("settings_json"), dict):
-            merged_settings_json.update(current["settings_json"])
-        if isinstance(settings.get("settings_json"), dict):
-            merged_settings_json.update(normalize_settings_json(settings["settings_json"], partial=True))
-        merged["settings_json"] = normalize_settings_json(merged_settings_json)
-
         try:
-            # S-1修复：使用 with conn: 代替手动 BEGIN/COMMIT/ROLLBACK
-            with conn:
+            # The in-process mutex closes the small gap before SQLite obtains
+            # its write lock; BEGIN IMMEDIATE gives the same serialization to
+            # callers in a separate process.
+            with self._settings_lock, self.transaction(immediate=True) as conn:
+                cursor = conn.cursor()
+                row = cursor.execute(
+                    "SELECT * FROM user_settings WHERE user_id = ?", (user_id,)
+                ).fetchone()
+                current = self._hydrate_user_settings_row(dict(row)) if row else self._default_user_settings(user_id)
+                merged = {**current, **settings}
+                custom_patch = normalize_settings_json(
+                    settings.get("settings_json", {}), partial=True
+                )
                 cursor.execute(
                     """
-                    INSERT OR REPLACE INTO user_settings
+                    INSERT INTO user_settings
                     (user_id, timezone, quiet_hours_start, quiet_hours_end, daily_report_time,
-                     diary_remind_time, default_category, settings_json, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                     diary_remind_time, default_category, settings_json, updated_at, version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        timezone = excluded.timezone,
+                        quiet_hours_start = excluded.quiet_hours_start,
+                        quiet_hours_end = excluded.quiet_hours_end,
+                        daily_report_time = excluded.daily_report_time,
+                        diary_remind_time = excluded.diary_remind_time,
+                        default_category = excluded.default_category,
+                        settings_json = json_patch(COALESCE(user_settings.settings_json, '{}'), excluded.settings_json),
+                        updated_at = excluded.updated_at,
+                        version = user_settings.version + 1
+                    """,
                     (
                         user_id,
                         merged.get("timezone", "Asia/Shanghai"),
@@ -2181,8 +2353,8 @@ class Database:
                         merged.get("daily_report_time", "08:00"),
                         merged.get("diary_remind_time", "21:30"),
                         merged.get("default_category", "未分类"),
-                        json.dumps(merged.get("settings_json", {}), ensure_ascii=False),
-                        datetime.now().isoformat(),
+                        json.dumps(custom_patch, ensure_ascii=False),
+                        datetime.now(timezone.utc).isoformat(),
                     ),
                 )
         except Exception as e:
@@ -2226,6 +2398,62 @@ class Database:
         except Exception as e:
             logger.exception("Failed to log operation: %s", e)
             return False
+
+    def prune_operation_logs(
+        self,
+        *,
+        now: datetime | None = None,
+        retention_days: int | None = None,
+        undo_snapshot_minutes: int | None = None,
+    ) -> dict[str, int]:
+        """Apply operation-log retention and erase expired undo snapshots.
+
+        A short-lived snapshot is needed for undo; it is deliberately removed
+        once that window closes, rather than becoming a second permanent copy
+        of a diary/note body.
+        """
+        from ..config import PendoConfig
+
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise ValueError("operation-log prune time must be timezone-aware")
+        retention_days = retention_days if retention_days is not None else PendoConfig.LOG_OPERATION_RETENTION_DAYS
+        undo_snapshot_minutes = (
+            undo_snapshot_minutes
+            if undo_snapshot_minutes is not None
+            else PendoConfig.LOG_OPERATION_UNDO_SNAPSHOT_MINUTES
+        )
+        delete_before = (current - timedelta(days=retention_days)).astimezone(timezone.utc).isoformat()
+        redact_before = (current - timedelta(minutes=undo_snapshot_minutes)).astimezone(timezone.utc).isoformat()
+        redacted = 0
+        with self.transaction(immediate=True) as conn:
+            cursor = conn.cursor()
+            rows = cursor.execute(
+                "SELECT id, details FROM operation_logs WHERE created_at < ? AND details IS NOT NULL",
+                (redact_before,),
+            ).fetchall()
+            for row in rows:
+                try:
+                    details = json.loads(row["details"] or "{}")
+                except (TypeError, json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(details, dict):
+                    continue
+                removed = False
+                for sensitive_key in ("item_data", "old_values", "updates"):
+                    if sensitive_key in details:
+                        details.pop(sensitive_key, None)
+                        removed = True
+                if removed:
+                    details["snapshot_redacted"] = True
+                    cursor.execute(
+                        "UPDATE operation_logs SET details = ? WHERE id = ?",
+                        (json.dumps(details, ensure_ascii=False), row["id"]),
+                    )
+                    redacted += 1
+            cursor.execute("DELETE FROM operation_logs WHERE created_at < ?", (delete_before,))
+            deleted = cursor.rowcount
+        return {"deleted": deleted, "redacted": redacted}
 
     # ==================== 数据迁移审计 ====================
 
@@ -2313,19 +2541,97 @@ class Database:
         """记录提醒发送（UPSERT：首次 INSERT，重复发送 UPDATE repeat_count + last_sent_at）"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        now = datetime.now().isoformat() if sent else None
+        now = datetime.now(timezone.utc).isoformat() if sent else None
         with conn:
             cursor.execute(
                 """
-                INSERT INTO reminder_logs (item_id, remind_time, sent_at, last_sent_at, repeat_count)
-                VALUES (?, ?, ?, ?, 1)
+                INSERT INTO reminder_logs (item_id, remind_time, sent_at, last_sent_at, repeat_count, state)
+                VALUES (?, ?, ?, ?, 1, CASE WHEN ? IS NULL THEN 'pending' ELSE 'sent' END)
                 ON CONFLICT(item_id, remind_time) DO UPDATE SET
                     repeat_count = repeat_count + 1,
-                    last_sent_at = excluded.sent_at
+                    last_sent_at = excluded.sent_at,
+                    state = 'sent', claim_token = NULL, claim_expires_at = NULL
                 WHERE excluded.sent_at IS NOT NULL
                 """,
-                (item_id, remind_time, now, now),
+                (item_id, remind_time, now, now, now),
             )
+
+    def claim_reminder(
+        self,
+        item_id: str,
+        remind_time: str,
+        *,
+        now: datetime | None = None,
+        lease_seconds: int = 120,
+    ) -> str | None:
+        """Atomically lease an unsent reminder to one worker."""
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise ValueError("reminder claim time must be timezone-aware")
+        token = uuid.uuid4().hex
+        current = current.astimezone(timezone.utc)
+        now_text = current.isoformat()
+        lease_text = (current + timedelta(seconds=lease_seconds)).isoformat()
+        conn = self.get_connection()
+        with conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO reminder_logs
+                    (item_id, remind_time, state, claim_token, claim_expires_at, repeat_count, failure_count)
+                VALUES (?, ?, 'claimed', ?, ?, 0, 0)
+                ON CONFLICT(item_id, remind_time) DO UPDATE SET
+                    state = 'claimed', claim_token = excluded.claim_token,
+                    claim_expires_at = excluded.claim_expires_at
+                WHERE reminder_logs.confirmed_at IS NULL
+                  AND reminder_logs.sent_at IS NULL
+                  AND (reminder_logs.next_attempt_at IS NULL OR reminder_logs.next_attempt_at <= ?)
+                  AND (reminder_logs.state != 'claimed'
+                       OR reminder_logs.claim_expires_at IS NULL
+                       OR reminder_logs.claim_expires_at <= ?)
+                """,
+                (item_id, remind_time, token, lease_text, now_text, now_text),
+            )
+        return token if cursor.rowcount > 0 else None
+
+    def complete_reminder_claim(self, item_id: str, remind_time: str, claim_token: str) -> bool:
+        """Persist delivery only if this worker still owns the lease."""
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self.get_connection()
+        with conn:
+            cursor = conn.execute(
+                """
+                UPDATE reminder_logs
+                SET state = 'sent', sent_at = COALESCE(sent_at, ?),
+                    last_sent_at = ?, repeat_count = MAX(repeat_count, 1),
+                    claim_token = NULL, claim_expires_at = NULL, next_attempt_at = NULL
+                WHERE item_id = ? AND remind_time = ? AND state = 'claimed' AND claim_token = ?
+                """,
+                (now, now, item_id, remind_time, claim_token),
+            )
+        return cursor.rowcount == 1
+
+    def release_reminder_claim(
+        self,
+        item_id: str,
+        remind_time: str,
+        claim_token: str,
+        *,
+        retry_at: datetime | None = None,
+    ) -> bool:
+        """Release a lease after a transient failure or quiet-hours deferral."""
+        retry_text = retry_at.astimezone(timezone.utc).isoformat() if retry_at else None
+        conn = self.get_connection()
+        with conn:
+            cursor = conn.execute(
+                """
+                UPDATE reminder_logs
+                SET state = 'pending', claim_token = NULL, claim_expires_at = NULL,
+                    next_attempt_at = ?, failure_count = failure_count + 1
+                WHERE item_id = ? AND remind_time = ? AND state = 'claimed' AND claim_token = ?
+                """,
+                (retry_text, item_id, remind_time, claim_token),
+            )
+        return cursor.rowcount == 1
 
     def confirm_reminder(
         self,

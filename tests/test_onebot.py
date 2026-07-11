@@ -5,21 +5,30 @@ OneBot 模块单元测试
 import asyncio
 import inspect
 import json
-import pytest
-from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from core.onebot import (
+    _CONNECT_SIGNATURE_CACHE,
     OneBotHttpSender,
     OneBotWsClient,
-    _CONNECT_SIGNATURE_CACHE,
-    _verify_token_auth,
-    _mask_sensitive_text,
     _extract_message_preview,
-    _summarize_event,
     _get_connect_signature,
+    _mask_sensitive_text,
+    _summarize_event,
+    _verify_token_auth,
 )
+
+
+async def _wait_for_ws_action_request(mock_ws: AsyncMock) -> dict[str, Any]:
+    for _ in range(10):
+        if mock_ws.send.await_count:
+            return json.loads(mock_ws.send.await_args.args[0])
+        await asyncio.sleep(0)
+    raise AssertionError("WebSocket action was not sent")
+
 
 # ============================================================
 # _verify_token_auth 测试
@@ -34,12 +43,12 @@ class TestVerifyTokenAuth:
         assert result is True
 
     def test_no_token_configured(self):
-        """测试未配置 token 时始终返回 True"""
+        """测试未配置 token 时默认拒绝，避免鉴权失败开放"""
         result = _verify_token_auth("Bearer anything", "")
-        assert result is True
+        assert result is False
 
         result = _verify_token_auth("Bearer anything", None)
-        assert result is True
+        assert result is False
 
     def test_invalid_token(self):
         """测试无效 token"""
@@ -262,10 +271,61 @@ class TestOneBotHttpSender:
         assert sender.auth_token == "new_token"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response_envelope",
+        [
+            {"status": "ok", "retcode": 0, "data": {"message_id": 7}},
+            {"status": "failed", "retcode": 100, "data": {}},
+        ],
+    )
+    async def test_request_action_returns_complete_onebot_envelope(
+        self,
+        sender: OneBotHttpSender,
+        mock_session,
+        response_envelope,
+    ):
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value=response_envelope)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_response)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session.post.return_value = cm
+        action = {"action": "get_msg", "params": {"message_id": 7}}
+
+        result = await sender.request_action(action)
+
+        assert result is response_envelope
+        assert action == {"action": "get_msg", "params": {"message_id": 7}}
+        mock_session.post.assert_called_once_with(
+            "http://localhost:3000/get_msg",
+            json={"message_id": 7},
+            headers={"Authorization": "Bearer test_token"},
+            timeout=mock_session.post.call_args.kwargs["timeout"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_request_action_rejects_non_mapping_response(
+        self,
+        sender: OneBotHttpSender,
+        mock_session,
+    ):
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value=[{"status": "ok"}])
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_response)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session.post.return_value = cm
+
+        assert await sender.request_action({"action": "get_msg", "params": {}}) is None
+
+    @pytest.mark.asyncio
     async def test_send_action(self, sender: OneBotHttpSender, mock_session):
         """测试发送动作"""
         mock_response = AsyncMock()
         mock_response.status = 200
+        mock_response.json = AsyncMock(return_value={"status": "ok", "retcode": 0})
         
         # Configure the context manager returned by post()
         cm = MagicMock()
@@ -281,7 +341,7 @@ class TestOneBotHttpSender:
             },
         }
 
-        await sender.send_action(action)
+        assert await sender.send_action(action) is True
 
         mock_session.post.assert_called_once()
         call_args = mock_session.post.call_args
@@ -292,6 +352,7 @@ class TestOneBotHttpSender:
     async def test_send_action_normalizes_emoji_segment(self, sender: OneBotHttpSender, mock_session):
         mock_response = AsyncMock()
         mock_response.status = 200
+        mock_response.json = AsyncMock(return_value={"status": "ok", "retcode": 0})
 
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=mock_response)
@@ -306,7 +367,7 @@ class TestOneBotHttpSender:
             },
         }
 
-        await sender.send_action(action)
+        assert await sender.send_action(action) is True
 
         posted_message = mock_session.post.call_args.kwargs["json"]["message"]
         assert posted_message == [
@@ -319,9 +380,21 @@ class TestOneBotHttpSender:
         sender = OneBotHttpSender("", "", mock_session)
         action = {"action": "test", "params": {}}
 
-        await sender.send_action(action)
+        assert await sender.send_action(action) is False
 
         mock_session.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_send_action_rejects_nonzero_onebot_retcode(self, sender, mock_session):
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value={"status": "failed", "retcode": 100})
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_response)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session.post.return_value = cm
+
+        assert await sender.send_action({"action": "send_group_msg", "params": {}}) is False
 
 # ============================================================
 # OneBotWsClient 测试
@@ -390,7 +463,7 @@ class TestOneBotWsClient:
 
     @pytest.mark.asyncio
     async def test_send_action_when_connected(self):
-        """测试连接时发送动作"""
+        """测试连接时只在匹配回执确认成功"""
         client = OneBotWsClient("ws://localhost:3000", "")
         mock_ws = AsyncMock()
         client._ws = mock_ws
@@ -400,10 +473,40 @@ class TestOneBotWsClient:
             "params": {"group_id": 12345, "message": []},
         }
 
-        result = await client.send_action(action)
+        pending = asyncio.create_task(client.send_action(action))
+        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        assert "echo" in sent_payload
+        assert client._resolve_action_response(
+            {"echo": sent_payload["echo"], "status": "ok", "retcode": 0}
+        )
+        result = await pending
 
         mock_ws.send.assert_called_once()
         assert result is True
+        assert client._pending_action_futures == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"status": "ok", "retcode": 0, "data": {"file": "image.png"}},
+            {"status": "failed", "retcode": 100, "data": {}},
+        ],
+    )
+    async def test_request_action_returns_echo_matched_envelope(self, response):
+        client = OneBotWsClient("ws://localhost:3000", "")
+        mock_ws = AsyncMock()
+        client._ws = mock_ws
+        action = {"action": "get_image", "params": {"file_id": "abc"}}
+
+        pending = asyncio.create_task(client.request_action(action))
+        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        envelope = {"echo": sent_payload["echo"], **response}
+        assert client._resolve_action_response(envelope) is True
+
+        assert await pending == envelope
+        assert action == {"action": "get_image", "params": {"file_id": "abc"}}
+        assert client._pending_action_futures == {}
 
     @pytest.mark.asyncio
     async def test_send_action_when_connected_normalizes_emoji_segment(self):
@@ -417,9 +520,13 @@ class TestOneBotWsClient:
             "params": {"group_id": 12345, "message": [{"type": "emoji", "data": {"file": "emoji.png"}}]},
         }
 
-        result = await client.send_action(action)
+        pending = asyncio.create_task(client.send_action(action))
+        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        client._resolve_action_response(
+            {"echo": sent_payload["echo"], "status": "ok", "retcode": 0}
+        )
+        result = await pending
 
-        sent_payload = json.loads(mock_ws.send.await_args.args[0])
         assert sent_payload["params"]["message"] == [
             {"type": "image", "data": {"file": "emoji.png", "sub_type": "emoji"}}
         ]
@@ -447,6 +554,100 @@ class TestOneBotWsClient:
 
         assert result is False
         assert client._ws is None
+
+    @pytest.mark.asyncio
+    async def test_send_action_rejects_nonzero_retcode(self):
+        client = OneBotWsClient("ws://localhost:3000", "")
+        mock_ws = AsyncMock()
+        client._ws = mock_ws
+
+        pending = asyncio.create_task(client.send_action({"action": "test", "params": {}}))
+        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        client._resolve_action_response(
+            {"echo": sent_payload["echo"], "status": "failed", "retcode": 100}
+        )
+
+        assert await pending is False
+        assert client._pending_action_futures == {}
+
+    @pytest.mark.asyncio
+    async def test_send_action_times_out_for_wrong_echo(self):
+        client = OneBotWsClient("ws://localhost:3000", "", action_response_timeout_seconds=0.01)
+        mock_ws = AsyncMock()
+        client._ws = mock_ws
+
+        pending = asyncio.create_task(client.send_action({"action": "test", "params": {}}))
+        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        assert client._resolve_action_response(
+            {"echo": f"wrong-{sent_payload['echo']}", "status": "ok", "retcode": 0}
+        )
+
+        assert await pending is False
+        assert client._pending_action_futures == {}
+
+    @pytest.mark.asyncio
+    async def test_stop_fails_pending_ws_action_response(self):
+        client = OneBotWsClient("ws://localhost:3000", "")
+        mock_ws = AsyncMock()
+        mock_ws.close = AsyncMock()
+        client._ws = mock_ws
+
+        pending = asyncio.create_task(client.send_action({"action": "test", "params": {}}))
+        await _wait_for_ws_action_request(mock_ws)
+        await client.stop()
+
+        assert await pending is False
+        assert client._pending_action_futures == {}
+
+    @pytest.mark.asyncio
+    async def test_duplicate_ws_action_response_does_not_change_completed_result(self):
+        client = OneBotWsClient("ws://localhost:3000", "")
+        mock_ws = AsyncMock()
+        client._ws = mock_ws
+
+        pending = asyncio.create_task(client.send_action({"action": "test", "params": {}}))
+        sent_payload = await _wait_for_ws_action_request(mock_ws)
+        response = {"echo": sent_payload["echo"], "status": "ok", "retcode": 0}
+        client._resolve_action_response(response)
+        assert await pending is True
+
+        assert client._resolve_action_response(response) is True
+        assert client._pending_action_futures == {}
+
+    @pytest.mark.asyncio
+    async def test_listen_routes_action_response_without_dispatching_it(self):
+        client = OneBotWsClient("ws://localhost:3000", "")
+        response_future = asyncio.get_running_loop().create_future()
+        client._pending_action_futures["request-echo"] = response_future
+        handler = AsyncMock()
+
+        class ResponseOnlyWebSocket:
+            def __init__(self):
+                self._messages = iter(
+                    [
+                        json.dumps(
+                            {"echo": "request-echo", "status": "ok", "retcode": 0}
+                        )
+                    ]
+                )
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._messages)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        await client._listen(ResponseOnlyWebSocket(), handler)
+
+        assert response_future.result() == {
+            "echo": "request-echo",
+            "status": "ok",
+            "retcode": 0,
+        }
+        handler.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_stop(self):
@@ -481,6 +682,47 @@ class TestOneBotWsClient:
 
         assert cleanup_finished.is_set()
         assert client._cleanup_task is None
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_all_keyed_drainers_and_clears_queues(self):
+        client = OneBotWsClient("ws://localhost:3000", "")
+        entered = asyncio.Event()
+
+        async def handler(_event):
+            entered.set()
+            await asyncio.Event().wait()
+
+        await client._dispatch_event(handler, {"user_id": 1})
+        await client._dispatch_event(handler, {"user_id": 2})
+        await entered.wait()
+        tasks = list(client._queue_tasks.values())
+
+        await client.stop()
+
+        assert tasks and all(task.cancelled() for task in tasks)
+        assert client._queue_tasks == {}
+        assert client._message_queues == {}
+        assert client._queue_last_activity == {}
+        await client._dispatch_event(handler, {"user_id": 3})
+        assert client._queue_tasks == {}
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_and_joins_its_own_listen_task(self, monkeypatch):
+        client = OneBotWsClient("ws://localhost:3000", "")
+        entered = asyncio.Event()
+
+        async def block_connect(_handler):
+            entered.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(client, "_connect_once", block_connect)
+        listen_task = asyncio.create_task(client.connect_and_listen(AsyncMock()))
+        await entered.wait()
+
+        await client.stop()
+
+        assert listen_task.cancelled()
+        assert client._main_task is None
 
     @pytest.mark.asyncio
     async def test_connect_once_reraises_connection_error_for_backoff(self):
@@ -592,6 +834,22 @@ class TestOneBotWsClient:
             await real_wait_for(restarted, timeout=2.0)
 
         assert handled == [{"user_id": 1}]
+
+    @pytest.mark.asyncio
+    async def test_drain_queue_does_not_suppress_an_unexpected_handler_failure(self, monkeypatch):
+        client = OneBotWsClient("ws://localhost:3000", "")
+        key = "user:unhandled-error"
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        queue.put_nowait({"user_id": 1})
+        client._message_queues[key] = queue
+
+        async def fail_handler(*_args, **_kwargs):
+            raise RuntimeError("handler exploded")
+
+        monkeypatch.setattr(client, "_handle_event_safely", fail_handler)
+
+        with pytest.raises(RuntimeError, match="handler exploded"):
+            await client._drain_queue(key, AsyncMock())
 
 # ============================================================
 # 运行测试

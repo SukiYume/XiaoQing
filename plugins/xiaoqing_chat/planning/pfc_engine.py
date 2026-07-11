@@ -227,26 +227,16 @@ async def run_pfc_once(
     _proxy = secrets.get("proxy", "") or ""
     _endpoint_path = secrets.get("endpoint_path", "") or runtime_cfg.endpoint_path
     _extra_payload = _llm_extra_payload(secrets)
-    if st.ignore_until_ts and now < float(st.ignore_until_ts):
-        _log_step(
-            context,
-            runtime_cfg,
-            chat_id=chat_id,
-            step="pfc.ignore_window",
-            fields={"until_ts": st.ignore_until_ts},
-        )
-        return PFCRunResult(
-            reply="", action="block_and_ignore", reason="ignore_window", ended=st.ended
-        )
+    # Old versions persisted model-controlled chat-wide ignore windows. Clear
+    # them on sight; only an administrator command may mute a whole chat.
+    if st.ignore_until_ts:
+        st.ignore_until_ts = 0.0
+        _pfc_dirty = True
     if st.ended:
         _log_step(context, runtime_cfg, chat_id=chat_id, step="pfc.ended", fields={})
         return PFCRunResult(reply="", action="end_conversation", reason="ended", ended=True)
 
     try:
-        if st.ignore_until_ts and now >= float(st.ignore_until_ts):
-            st.ignore_until_ts = 0.0
-            _pfc_dirty = True
-
         history = await memory_store.get_recent_async(
             chat_id, max_items=max(60, int(runtime_cfg.max_context_size) * 3)
         )
@@ -394,9 +384,6 @@ async def run_pfc_once(
             )
 
         if act == "block_and_ignore":
-            st.ignore_until_ts = now + 3600.0
-            # Don't set ended=True permanently - the ignore window will expire naturally
-            _pfc_dirty = True
             _log_step(
                 context,
                 runtime_cfg,
@@ -404,7 +391,9 @@ async def run_pfc_once(
                 step="pfc.block",
                 fields={"reason": plan.reason},
             )
-            return PFCRunResult(reply="", action=act, reason=plan.reason, ended=False)
+            return PFCRunResult(
+                reply="", action="wait", reason=f"current_message_blocked: {plan.reason}", ended=False
+            )
 
         if act in ("wait", "listening"):
             wait_s = plan.wait_seconds if plan.wait_seconds > 0 else 0

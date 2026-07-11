@@ -362,8 +362,8 @@ async def handle_ssh_add(
     if manager.get_server(name):
         return segments(f"❌ 服务器 '{name}' 已存在")
     
-    # 添加服务器（无密码，需要后续配置）
-    await manager.add_server(name, host, port, username)
+    # 快速模式不接收聊天密码，默认使用 SSH Agent/本机密钥。
+    await manager.add_server(name, host, port, username, auth_type="agent")
     
     return segments(
         f"✅ 服务器已添加\n"
@@ -371,9 +371,9 @@ async def handle_ssh_add(
         f"名称: {name}\n"
         f"主机: {host}:{port}\n"
         f"用户: {username}\n"
-        f"认证: 待配置\n"
+        f"认证: SSH Agent/本机密钥\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ 请编辑 data/servers.json 添加密码或密钥路径"
+        f"💡 如需密码认证，请在管理员私聊中使用引导式 /ssh add"
     )
 
 
@@ -387,8 +387,6 @@ async def handle_ssh_remove(
         return segments("❌ 请指定要删除的服务器名称\n\n用法: /ssh删除 <服务器名>")
     
     if await manager.remove_server(name):
-        # 此时只能尽量断开所有用户的连接(不支持)，目前仅断开请求用户的连接
-        manager.disconnect(str(context.current_user_id), str(context.current_group_id), name)
         return segments(f"✅ 服务器 '{name}' 已删除")
     else:
         return segments(f"❌ 服务器 '{name}' 不存在")

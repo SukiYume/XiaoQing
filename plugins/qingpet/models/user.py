@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Optional, List
+from ..utils.time import utc_now
 
 
 @dataclass
@@ -45,8 +46,8 @@ class User:
     is_banned: bool = False
     ban_until: Optional[datetime] = None
     
-    created_at: datetime = field(default_factory=datetime.now)
-    last_active: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=utc_now)
+    last_active: datetime = field(default_factory=utc_now)
     
     def can_earn_coins(self, amount: int, daily_limit: int) -> bool:
         return self.today_coins_earned + amount <= daily_limit
@@ -68,14 +69,14 @@ class User:
     def is_trustee_active(self) -> bool:
         if self.trustee_until is None:
             return False
-        return datetime.now() < self.trustee_until
+        return utc_now() < self.trustee_until
     
     def is_banned_active(self) -> bool:
         if not self.is_banned:
             return False
         if self.ban_until is None:
             return True
-        if datetime.now() >= self.ban_until:
+        if utc_now() >= self.ban_until:
             # 自动解除过期封禁
             self.is_banned = False
             self.ban_until = None

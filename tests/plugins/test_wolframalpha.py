@@ -148,7 +148,7 @@ class TestWolframAlphaPlugin:
         assert result is not None
         assert len(result) > 0
         result_text = str(result)
-        assert "42" in result_text or "计算" in result_text
+        assert "1+1" in result_text
 
     @pytest.mark.asyncio
     async def test_get_answer_success(self, mock_context):
@@ -175,8 +175,9 @@ class TestWolframAlphaPlugin:
                 pass
 
         class MockSession:
-            def get(self, url, *args, **kwargs):
+            def post(self, url, *args, **kwargs):
                 captured["url"] = url
+                captured.update(kwargs)
                 return MockContextManager()
 
         mock_context.http_session = MockSession()
@@ -184,6 +185,14 @@ class TestWolframAlphaPlugin:
         await wolframalpha._get_answer("2+2", "appid", mock_context)
 
         assert captured["url"].startswith("https://")
+        assert "appid" not in captured["url"]
+        assert captured["data"]["appid"] == "appid"
+
+    def test_manifest_defaults_quota_api_to_admin_only(self):
+        import json
+
+        manifest = json.loads((ROOT / "plugins" / "wolframalpha" / "plugin.json").read_text(encoding="utf-8"))
+        assert manifest["commands"][0]["admin_only"] is True
 
     @pytest.mark.asyncio
     async def test_get_answer_no_session(self):
@@ -209,7 +218,7 @@ class TestWolframAlphaPlugin:
                 pass
 
         class MockTimeoutSession:
-            def get(self, *args, **kwargs):
+            def post(self, *args, **kwargs):
                 return MockTimeoutContextManager()
 
         mock_context.http_session = MockTimeoutSession()

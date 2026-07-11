@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import io
 import json
+import re
 import shutil
 import sys
 import types
@@ -11,6 +12,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -34,7 +36,7 @@ from plugins.pendo.models.item import DiaryItem, EventItem, LedgerItem, NoteItem
 from plugins.pendo.services.db import Database, DuplicateBundleImportError
 
 try:
-    from plugins.pendo.web.auth import generate_token
+    from plugins.pendo.web.auth import issue_login_code
 except ModuleNotFoundError:
     pytest.skip("pendo web auth requires PyJWT", allow_module_level=True)
 from plugins.pendo.web.services import transfer_bundle as transfer_bundle_module
@@ -135,8 +137,11 @@ def client(temp_db: Database):
 
 
 @pytest.fixture()
-def auth_headers():
-    return {"Authorization": f"Bearer <redacted-historical-token>)}"}
+def auth_headers(client: TestClient):
+    code = issue_login_code(OWNER_ID)
+    response = client.post("/api/auth/exchange", json={"code": code})
+    assert response.status_code == 200
+    return {"X-CSRF-Token": response.json()["data"]["csrf_token"]}
 
 
 def test_web_validation_errors_use_safe_response_shape(client: TestClient, auth_headers: dict):
@@ -662,7 +667,7 @@ def test_resolve_range_supports_quarter_to_date():
     transfer_module = _load_transfer_module()
     start, end = transfer_module.resolve_range(
         transfer_module.ExportSelection(types=["task"], preset="quarter"),
-        now=datetime(2026, 3, 30, 9, 0, 0),
+        now=datetime(2026, 3, 30, 9, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
     )
 
     assert start.isoformat() == "2026-01-01"
@@ -680,6 +685,19 @@ def test_resolve_range_rejects_invalid_timezone():
 
     assert exc_info.value.status_code == 422
     assert "Invalid timezone" in exc_info.value.detail
+
+
+def test_resolve_range_rejects_naive_clock_instead_of_using_host_timezone():
+    transfer_module = _load_transfer_module()
+
+    with pytest.raises(transfer_module.HTTPException) as exc_info:
+        transfer_module.resolve_range(
+            transfer_module.ExportSelection(types=["task"], preset="month", timezone="Asia/Shanghai"),
+            now=datetime(2026, 3, 30, 9, 0, 0),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "timezone-aware" in exc_info.value.detail
 
 
 def test_export_preview_returns_counts_by_type_and_filters_by_time_field(client: TestClient, temp_db: Database, auth_headers: dict):
@@ -938,7 +956,7 @@ def test_import_inspect_preserves_original_line_number_for_normalization_errors(
     assert errors[1]["line"] == 2
 
 
-def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: TestClient, temp_db: Database, auth_headers: dict):
+def test_import_execute_isolates_external_ids_and_selected_types(client: TestClient, temp_db: Database, auth_headers: dict):
     temp_db.insert_item({
         "id": "task_existing",
         "owner_id": OWNER_ID,
@@ -984,14 +1002,14 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
     )
     assert skip_response.status_code == 200
     skip_body = skip_response.json()["data"]["results"]
-    assert skip_body["inserted"] == 0
+    assert skip_body["inserted"] == 1
     assert skip_body["updated"] == 0
-    assert skip_body["skipped"] == 1
-    assert skip_response.json()["data"]["details"]["skipped"][0]["reason"] == "ID 已存在，按策略跳过"
+    assert skip_body["skipped"] == 0
+    assert "内部 UUID" in skip_response.json()["data"]["details"]["inserted"][0]["reason"]
     assert temp_db.get_item("task_existing", owner_id=OWNER_ID).title == "旧任务"
     assert temp_db.get_item("note_subset", owner_id=OWNER_ID) is None
 
-    # overwrite uses a new bundle_id so no idempotency block
+    # A new bundle can never overwrite the current internal record through its source ID.
     overwrite_bundle = _build_sample_bundle_bytes({
         "task": [{
             "_type": "task",
@@ -1014,10 +1032,10 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
     )
     assert overwrite_response.status_code == 200
     overwrite_body = overwrite_response.json()["data"]["results"]
-    assert overwrite_body["updated"] == 1
-    assert overwrite_response.json()["data"]["details"]["updated"][0]["id"] == "task_existing"
+    assert overwrite_body["inserted"] == 1
+    assert overwrite_body["updated"] == 0
     overwritten = temp_db.get_item("task_existing", owner_id=OWNER_ID)
-    assert overwritten.title == "新任务标题"
+    assert overwritten.title == "旧任务"
     assert overwritten.owner_id == OWNER_ID
 
     duplicate_bundle = _build_sample_bundle_bytes({
@@ -1043,14 +1061,13 @@ def test_import_execute_supports_skip_overwrite_duplicate_and_subset(client: Tes
     assert duplicate_response.status_code == 200
     duplicate_body = duplicate_response.json()["data"]["results"]
     assert duplicate_body["inserted"] == 1
-    assert "已生成副本" in duplicate_response.json()["data"]["details"]["inserted"][0]["reason"]
+    assert "内部 UUID" in duplicate_response.json()["data"]["details"]["inserted"][0]["reason"]
 
     tasks = temp_db.get_items(OWNER_ID, filters={"type": "task"}, limit=20)
     imported_copies = [item for item in tasks if item.id != "task_existing" and item.title == "新任务标题"]
-    assert len(imported_copies) >= 1
-    assert imported_copies[0].context["import"]["source_id"] == "task_existing"
-    # duplicate ID should be 16 hex chars
-    assert len(imported_copies[0].id) == 16
+    assert len(imported_copies) == 3
+    assert {item.context["import"]["source_id"] for item in imported_copies} == {"task_existing"}
+    assert all(item.id != "task_existing" and len(item.id) == 32 for item in imported_copies)
 
 
 def test_import_execute_hides_internal_transaction_errors(client: TestClient, temp_db: Database, auth_headers: dict, monkeypatch):
@@ -1083,7 +1100,53 @@ def test_import_execute_hides_internal_transaction_errors(client: TestClient, te
     assert "SQL failed" not in str(body)
 
 
-def test_import_execute_handles_cross_owner_global_id_conflicts(temp_db: Database):
+def test_import_reassigns_hostile_external_id_and_preserves_only_source_metadata(
+    client: TestClient,
+    temp_db: Database,
+    auth_headers: dict,
+):
+    hostile_id = '\"><svg onload=alert(1)>'
+    bundle = _build_sample_bundle_bytes({
+        "note": [{
+            "_type": "note",
+            "_schema": 2,
+            "id": hostile_id,
+            "title": "hostile id regression",
+            "content": "literal text",
+            "category": "test",
+            "created_at": "2026-03-20T09:00:00+08:00",
+            "updated_at": "2026-03-20T09:00:00+08:00",
+        }],
+    })
+
+    response = client.post(
+        "/api/transfer/import/execute",
+        headers={**auth_headers, "X-Transfer-Options": json.dumps({"types": ["note"]})},
+        content=bundle,
+    )
+
+    assert response.status_code == 200
+    note = temp_db.get_items(OWNER_ID, filters={"type": "note"}, limit=10)[0]
+    assert re.fullmatch(r"[0-9a-f]{32}", note.id)
+    assert note.id != hostile_id
+    assert note.context["import"]["source_id"] == hostile_id
+
+
+def test_pendo_item_id_attributes_escape_historical_untrusted_values_and_csp_blocks_inline_script():
+    static_root = ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages"
+    diary = (static_root / "diary.js").read_text(encoding="utf-8")
+    notes = (static_root / "notes.js").read_text(encoding="utf-8")
+    events = (static_root / "events.js").read_text(encoding="utf-8")
+    server = (ROOT / "plugins" / "pendo" / "web" / "server.py").read_text(encoding="utf-8")
+
+    assert 'data-id="${item.id}"' not in diary
+    assert 'data-id="${note.id}"' not in notes
+    assert 'data-event-id="${item.event_id}"' not in events
+    assert "script-src 'self'" in server
+    assert "object-src 'none'" in server
+
+
+def test_import_execute_isolates_cross_owner_source_ids(temp_db: Database):
     transfer_api = _load_transfer_module()
     other_owner = "u-transfer-other"
     temp_db.insert_item({
@@ -1123,8 +1186,7 @@ def test_import_execute_handles_cross_owner_global_id_conflicts(temp_db: Databas
             db=temp_db,
         )
     )
-    assert skip_result["data"]["results"]["skipped"] == 1
-    assert temp_db.get_item("task_shared_global", owner_id=OWNER_ID) is None
+    assert skip_result["data"]["results"]["inserted"] == 1
     assert temp_db.get_item("task_shared_global", owner_id=other_owner).title == "其他用户任务"
 
     overwrite_result = asyncio.run(
@@ -1135,8 +1197,7 @@ def test_import_execute_handles_cross_owner_global_id_conflicts(temp_db: Databas
             db=temp_db,
         )
     )
-    assert overwrite_result["data"]["results"]["failed"] == 1
-    assert "拒绝覆盖" in overwrite_result["data"]["details"]["failed"][0]["reason"]
+    assert overwrite_result["data"]["results"]["inserted"] == 1
     assert temp_db.get_item("task_shared_global", owner_id=other_owner).title == "其他用户任务"
 
     duplicate_result = asyncio.run(
@@ -1306,8 +1367,8 @@ def test_import_relationship_rewrite_remaps_note_links_and_event_source_ids():
     )
 
     assert rewritten_note["references"][0]["id"] == "task_new"
-    assert rewritten_note["references"][1]["id"] == "event_keep"
-    assert rewritten_note["related_items"] == ["task_new", "event_keep"]
+    assert len(rewritten_note["references"]) == 1
+    assert rewritten_note["related_items"] == ["task_new"]
     assert rewritten_event["source_item_id"] == "event_new_source"
 
 
@@ -1358,11 +1419,19 @@ def test_import_execute_restores_event_collection_before_leaf_events(client: Tes
     )
 
     assert import_response.status_code == 200
-    collection = temp_db.get_event_collection("bundle_conf", OWNER_ID)
-    event = temp_db.get_item("bundle_conf_m01", owner_id=OWNER_ID)
+    event = [
+        item
+        for item in temp_db.get_items(OWNER_ID, filters={"type": "event"}, limit=20)
+        if item.title == "摘要截止"
+    ][0]
+    collection = temp_db.get_event_collection(event.event_collection_id, OWNER_ID)
     assert collection is not None
     assert collection["title"] == "导入会议"
-    assert event.event_collection_id == "bundle_conf"
+    assert collection["id"] != "bundle_conf"
+    assert collection["context"]["import"]["source_id"] == "bundle_conf"
+    assert event.id != "bundle_conf_m01"
+    assert event.context["import"]["source_id"] == "bundle_conf_m01"
+    assert event.event_collection_id == collection["id"]
     assert event.event_collection_kind == "multi_node"
 
 
@@ -1497,8 +1566,15 @@ def test_import_execute_transaction_atomicity(client: TestClient, temp_db: Datab
     assert resp.json()["data"]["results"]["inserted"] == 2
 
     # 两条记录都应该存在
-    assert temp_db.get_item("task_atom_new_1", owner_id=OWNER_ID) is not None
-    assert temp_db.get_item("task_atom_new_2", owner_id=OWNER_ID) is not None
+    imported = [
+        item
+        for item in temp_db.get_items(OWNER_ID, filters={"type": "task"}, limit=20)
+        if item.title in {"原子新1", "原子新2"}
+    ]
+    assert {item.context["import"]["source_id"] for item in imported} == {
+        "task_atom_new_1",
+        "task_atom_new_2",
+    }
 
 
 def test_import_execute_rejects_empty_selected_types(client: TestClient, auth_headers: dict):
@@ -1708,7 +1784,7 @@ def test_transfer_page_source_wires_export_and_import_endpoints():
     assert "context.import.extra" not in transfer_src
     assert "导入示例" in transfer_src
     assert "稳定自定义字符串" in transfer_src
-    assert "默认生成短随机 ID" in transfer_src
+    assert "外部 ID 只作为来源元数据" in transfer_src
     assert "操作记录" in transfer_src
     assert "bundle_id" in transfer_src
     assert "<sha256 可省略>" not in transfer_src

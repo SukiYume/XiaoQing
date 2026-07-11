@@ -41,6 +41,12 @@ class Context(Protocol):
         """从 secrets.json 获取密钥"""
         ...
 
+    def set_secret(self, key: str, value: str) -> None:
+        ...
+
+    def delete_secret(self, key: str) -> bool:
+        ...
+
 class Session(Protocol):
     """会话对象协议"""
     

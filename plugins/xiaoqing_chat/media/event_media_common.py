@@ -143,6 +143,8 @@ def _media_cfg_value(runtime, field: str, default: Any) -> Any:
 
 
 def _media_log(context, runtime, *, step: str, fields: dict[str, Any] | None = None, level: str = "info") -> None:
+    from ..logging_utils import sanitize_log_fields
+
     debug_cfg = getattr(getattr(runtime, "cfg", runtime), "debug", None)
     if debug_cfg is not None and not bool(getattr(debug_cfg, "log_steps", True)):
         return
@@ -152,14 +154,7 @@ def _media_log(context, runtime, *, step: str, fields: dict[str, Any] | None = N
 
     payload: dict[str, Any] = {"step": str(step)}
     if fields:
-        for key, value in fields.items():
-            if value is None:
-                continue
-            if isinstance(value, Path):
-                payload[str(key)] = str(value)
-                continue
-            text = str(value)
-            payload[str(key)] = text if len(text) <= 240 else text[:239] + "…"
+        payload.update(sanitize_log_fields(fields))
     try:
         log_fn = getattr(logger, level, None) or logger.info
         log_fn("xiaoqing_chat media=%s", json.dumps(payload, ensure_ascii=False))

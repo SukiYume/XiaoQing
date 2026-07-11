@@ -16,42 +16,70 @@ QQ群宠物养成系统主入口
 - Refactor: 引入 CommandRouter 优化命令解析与帮助系统
 """
 
+import asyncio
+import hashlib
 import logging
 import math
 import re
-import asyncio
-import hashlib
+import secrets
 from typing import Any, Optional
 
 from core.plugin_base import segments
 
-from .services.database import Database
-from .services.pet_service import PetService
-from .services.user_service import UserService
-from .services.item_service import ItemService
-from .services.social_service import SocialService
-from .services.economy_service import EconomyService
-from .services.admin_service import AdminService
-
 from .commands import (
-    handle_adopt, handle_status, handle_feed, handle_clean,
-    handle_play, handle_sleep, handle_wake,
-    handle_train, handle_explore, handle_treat,
-    handle_backpack, handle_shop, handle_buy, handle_use,
-    handle_gift, handle_visit, handle_ranking,
-    handle_activity, handle_task, handle_rename,
-    handle_view_pet, handle_like, handle_message,
-    handle_title, handle_minigame,
-    handle_dress, handle_trade, handle_show, handle_recall,
-    handle_manage_enable, handle_manage_disable, handle_manage_config,
-    handle_manage_reset, handle_manage_ban, handle_manage_unban,
-    handle_manage_log, handle_manage_stats,
-    handle_manage_delete, handle_manage_announce,
+    handle_activity,
+    handle_adopt,
+    handle_backpack,
+    handle_buy,
+    handle_clean,
+    handle_dress,
+    handle_explore,
+    handle_feed,
+    handle_gift,
+    handle_group_task,
+    handle_like,
+    handle_manage_activity,
+    handle_manage_announce,
+    handle_manage_ban,
+    handle_manage_config,
+    handle_manage_delete,
+    handle_manage_disable,
+    handle_manage_enable,
+    handle_manage_log,
+    handle_manage_reset,
+    handle_manage_stats,
+    handle_manage_unban,
+    handle_message,
+    handle_minigame,
+    handle_play,
+    handle_ranking,
+    handle_recall,
+    handle_rename,
+    handle_shop,
+    handle_show,
+    handle_sleep,
+    handle_status,
+    handle_task,
+    handle_title,
+    handle_trade,
+    handle_train,
+    handle_treat,
+    handle_use,
+    handle_view_pet,
+    handle_visit,
+    handle_wake,
 )
-
-from .utils.formatters import format_help_text
+from .services.admin_service import AdminService
+from .services.database import Database
+from .services.economy_service import EconomyService
+from .services.item_service import ItemService
+from .services.pet_service import PetService
+from .services.social_service import SocialService
+from .services.user_service import UserService
 from .utils.constants import ANTI_SPAM_CONFIG, GROUP_RATE_LIMIT
+from .utils.formatters import format_help_text
 from .utils.router import CommandRouter
+from .utils.time import business_date, business_week
 
 # ──────────────────── 全局单例（架构建议 #5）────────────────────
 
@@ -359,6 +387,35 @@ def _get_router() -> CommandRouter:
             return _extract_message(await handler(user_id, group_id, args, db, spam_decay_factor=spam))
         return wrapper
 
+    def _wrap_minigame(handler):
+        """Preserve anti-spam decay and the request id used for settlement replay."""
+        async def wrapper(user_id, group_id, args, db, **kwargs):
+            return _extract_message(
+                await handler(
+                    user_id,
+                    group_id,
+                    args,
+                    db,
+                    spam_decay_factor=kwargs.get('spam_decay', 1.0),
+                    message_id=kwargs.get("message_id"),
+                )
+            )
+        return wrapper
+
+    def _wrap_visit(handler):
+        """Visit wrapper preserving the event/request id for idempotent settlement."""
+        async def wrapper(user_id, group_id, args, db, **kwargs):
+            return _extract_message(
+                await handler(
+                    user_id,
+                    group_id,
+                    args,
+                    db,
+                    message_id=kwargs.get("message_id"),
+                )
+            )
+        return wrapper
+
     def _wrap_help(fixed_category=""):
         """帮助菜单包装器"""
         async def wrapper(user_id, group_id, args, db, **kwargs):
@@ -412,7 +469,7 @@ def _get_router() -> CommandRouter:
     router.register("dress", _wrap_std(handle_dress), ["装扮", "outfit"])
 
     # 社交/互动
-    router.register("visit", _wrap_spam(handle_visit), ["互访"])
+    router.register("visit", _wrap_visit(handle_visit), ["互访"])
     router.register("view", _wrap_std(handle_view_pet), ["查看"])
     router.register("like", _wrap_std(handle_like), ["摸摸", "点赞", "pat", "like"])
     router.register("message", _wrap_std(handle_message), ["留言", "msg"])
@@ -421,8 +478,9 @@ def _get_router() -> CommandRouter:
     router.register("show", _wrap_std(handle_show), ["展示", "展示会"])
 
     # 玩法
-    router.register("game", _wrap_spam(handle_minigame), ["游戏", "play_game"])
+    router.register("game", _wrap_minigame(handle_minigame), ["游戏", "play_game"])
     router.register("task", _wrap_std(handle_task), ["任务", "daily"])
+    router.register("group_task", _wrap_std(handle_group_task), ["群任务", "group-task"])
     router.register("title", _wrap_std(handle_title), ["称号", "titles"])
     router.register("activity", _wrap_std(handle_activity), ["活动"])
 
@@ -565,6 +623,12 @@ async def handle(command: str, args: str, event: dict[str, Any], context, **kwar
         # 传递必要的参数
         # Router 注册时已经包裹了适配器，这里只需传入核心参数和 kwargs
         try:
+            message_id = (
+                event.get("message_id")
+                or kwargs.get("request_id")
+                or getattr(context, "request_id", None)
+                or secrets.token_hex(16)
+            )
             return await router.route(
                 action,
                 user_id,
@@ -572,7 +636,8 @@ async def handle(command: str, args: str, event: dict[str, Any], context, **kwar
                 rest_args,
                 db,
                 context=context,
-                spam_decay=spam_decay
+                spam_decay=spam_decay,
+                message_id=str(message_id),
             )
         except Exception as e:
             log.exception(f"Error executing command '{action}': {e}")
@@ -584,8 +649,13 @@ async def handle(command: str, args: str, event: dict[str, Any], context, **kwar
 
         result = await asyncio.to_thread(_run_execute)
     except Exception as e:
-        log.exception(f"Error in qingpet handle thread execution: {e}")
-        return segments(f"执行命令时发生错误: {str(e)}")
+        request_id = str(getattr(context, "request_id", "") or secrets.token_hex(4))
+        log.exception(
+            "QingPet command failed request_id=%s error_type=%s",
+            request_id,
+            type(e).__name__,
+        )
+        return segments(f"宠物命令暂时执行失败，请稍后重试（请求ID: {request_id}）")
 
     return _normalize_plugin_output(result)
 
@@ -609,29 +679,20 @@ async def _handle_admin_command(args: str, user_id: str, group_id: int, context)
     if db is None:
         return (False, "宠物系统尚未初始化，请联系管理员")
 
-    # ── 管理员权限检查（Issue #1）──
-    def _in_admin_list(candidate_ids) -> bool:
-        if not candidate_ids:
-            return False
-        uid = str(user_id)
-        for admin_id in candidate_ids:
-            if str(admin_id) == uid:
-                return True
-        return False
-
-    is_admin = False
-    if context and hasattr(context, "is_admin"):
-        is_admin = context.is_admin(user_id, group_id)
-
-    if not is_admin and context and hasattr(context, "admin_ids"):
-        is_admin = _in_admin_list(getattr(context, "admin_ids", []))
-
-    if not is_admin and context and hasattr(context, "secrets"):
-        secrets = getattr(context, "secrets", {}) or {}
-        is_admin = _in_admin_list(secrets.get("admin_user_ids", []))
-
-    if not is_admin and context and hasattr(context, "check_permission"):
-        is_admin = context.check_permission(user_id, "admin")
+    # The principal is issued by core from the authenticated event.  Never
+    # fall back to plugin-scoped secrets or test-only ``admin_ids`` members.
+    principal = getattr(context, "principal", None) if context is not None else None
+    try:
+        same_actor = principal is not None and int(principal.user_id) == int(user_id)
+    except (TypeError, ValueError):
+        same_actor = False
+    capabilities = getattr(context, "capabilities", None) if context is not None else None
+    is_global_admin = bool(getattr(capabilities, "is_bot_admin", False))
+    is_group_manager = bool(
+        callable(getattr(principal, "can_manage_group", None))
+        and principal.can_manage_group(group_id)
+    )
+    is_admin = bool(same_actor and (is_global_admin or is_group_manager))
 
     if action in ["开启", "enable", "on"]:
         return await handle_manage_enable(user_id, group_id, rest_args, db, is_admin)
@@ -663,7 +724,10 @@ async def _handle_admin_command(args: str, user_id: str, group_id: int, context)
     if action in ["公告", "announce"]:
         return await handle_manage_announce(user_id, group_id, rest_args, db, is_admin)
 
-    return (True, f"未知管理命令: {action}\n可用命令: 开启, 关闭, 配置, 重置, 删除, 封禁, 解封, 日志, 统计, 公告")
+    if action in ["活动", "activity"]:
+        return await handle_manage_activity(user_id, group_id, rest_args, db, is_admin)
+
+    return (True, f"未知管理命令: {action}\n可用命令: 开启, 关闭, 配置, 重置, 删除, 封禁, 解封, 日志, 统计, 公告, 活动")
 
 
 # ──────────────────── 定时任务 ────────────────────
@@ -687,13 +751,24 @@ async def scheduled_decay(context) -> list[dict[str, Any]]:
             db.cleanup_old_timestamps()
             return messages
         pets = db.get_all_pets()
+        trustee_loader = getattr(db, "get_active_trustee_keys", None)
+        has_trustee_loader = callable(trustee_loader)
+        trustee_keys = trustee_loader() if has_trustee_loader else set()
 
         for pet in pets:
             decay_multiplier = enabled_group_decay.get(pet.group_id)
             if decay_multiplier is None:
                 continue
 
-            alert_msg = pet_service.apply_decay(pet, decay_multiplier)
+            if has_trustee_loader:
+                alert_msg = pet_service.apply_decay(
+                    pet,
+                    decay_multiplier,
+                    is_trustee_override=(getattr(pet, "user_id", ""), pet.group_id)
+                    in trustee_keys,
+                )
+            else:
+                alert_msg = pet_service.apply_decay(pet, decay_multiplier)
             if alert_msg:
                 messages.append({
                     "group_id": pet.group_id,
@@ -722,15 +797,18 @@ async def scheduled_daily_reset(context) -> list[dict[str, Any]]:
     if _db_instance is None or _user_service is None:
         return []
     db = _db_instance
-    user_service = _user_service
 
     def _run_job() -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
-        count = user_service.reset_daily_all()
-        log.info(f"Daily reset completed for {count} users")
-
-        db.increment_all_pet_ages()
-        log.info("Pet ages incremented")
+        period = business_date()
+        reset_count = 0
+        age_count = 0
+        for group_id in db.get_enabled_group_ids():
+            if not db.claim_scheduler_run("qingpet_daily_reset", f"{period}:{group_id}"):
+                continue
+            reset_count += db.batch_daily_reset(group_id)
+            age_count += db.increment_pet_ages_for_group(group_id)
+        log.info("Daily reset completed users=%s pets=%s", reset_count, age_count)
 
         db.cleanup_expired_titles()
         log.info("Expired titles cleaned up")
@@ -758,11 +836,11 @@ async def scheduled_weekly_activity(context) -> list[dict[str, Any]]:
 
     def _run_job() -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
-        group_ids = db.get_all_group_ids()
+        group_ids = db.get_enabled_group_ids(require_activity=True)
+        period = business_week()
 
         for group_id in group_ids:
-            group_config = db.get_group_config(group_id)
-            if not group_config.activity_enabled:
+            if not db.claim_scheduler_run("qingpet_weekly_activity", f"{period}:{group_id}"):
                 continue
 
             ranking = social_service.get_ranking(group_id, "care_score", 3)
@@ -779,8 +857,13 @@ async def scheduled_weekly_activity(context) -> list[dict[str, Any]]:
 
                     user = db.get_user(uid, group_id)
                     if user and i < len(reward_coins):
-                        user.coins += reward_coins[i]
-                        db.update_user(user)
+                        db.credit_coins_atomic(
+                            uid,
+                            group_id,
+                            reward_coins[i],
+                            reason="weekly_ranking",
+                            reference_id=f"weekly:{period}:{group_id}:{i}:{uid}",
+                        )
                     if i == 0 and user_service is not None:
                         user_service.grant_temporary_title(uid, group_id, "本周之星")
                         text += " 🏅本周之星"

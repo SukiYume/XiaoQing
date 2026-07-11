@@ -34,6 +34,7 @@ XiaoQing 使用两个 JSON 配置文件：
   
   "inbound_ws_uri": "ws://127.0.0.1:12000/ws",
   "inbound_http_base": "http://127.0.0.1:12000",
+  "inbound_trusted_tls_proxy": false,
   "ws_queue_size": 200,
   
   "max_concurrency": 5,
@@ -62,7 +63,21 @@ XiaoQing 使用两个 JSON 配置文件：
       },
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
+      "spawn_timeout_seconds": 30,
       "job_timeout_seconds": 3600,
+      "max_stdout_bytes": 16777216,
+      "max_stderr_bytes": 4194304,
+      "max_json_line_bytes": 1048576,
+      "max_final_output_bytes": 8388608,
+      "max_qq_text_chars": 60000,
+      "artifact_scan_max_entries": 5000,
+      "artifact_scan_max_depth": 8,
+      "max_image_artifacts": 20,
+      "max_image_bytes": 20971520,
+      "max_image_total_bytes": 104857600,
+      "max_image_pixels": 40000000,
+      "max_image_frames": 120,
+      "max_qq_images": 10,
       "sandbox": "workspace-write",
       "approval_policy": "never",
       "skip_git_repo_check": true
@@ -154,12 +169,17 @@ XiaoQing 使用两个 JSON 配置文件：
 #### inbound_http_base
 - **类型**：`string`
 - **默认**：`"http://127.0.0.1:12000"`
-- **说明**：Inbound HTTP 服务监听地址（提供 `/event`、`/health`、`/metrics`）。留空则不启动 HTTP Inbound。
+- **说明**：Inbound HTTP 服务监听地址（提供 `/event`、`/health`、`/metrics`）。留空则不启动 HTTP Inbound。XiaoQing 当前只实现明文 `http://` listener；`https://` 会被配置校验拒绝，TLS 应在反向代理处终止。
 
 #### inbound_ws_uri
 - **类型**：`string`
 - **默认**：`"ws://127.0.0.1:12000/ws"`
-- **说明**：Inbound WebSocket 服务监听地址（仅 WS）。支持与 `inbound_http_base` 使用不同端口；留空则不启动 WS Inbound。
+- **说明**：Inbound WebSocket 服务监听地址（仅 WS）。支持与 `inbound_http_base` 使用不同端口；留空则不启动 WS Inbound。XiaoQing 当前只实现 `ws://` listener；`wss://` 会被拒绝，WSS 应由 TLS 反向代理提供。
+
+#### inbound_trusted_tls_proxy
+- **类型**：`boolean`
+- **默认**：`false`
+- **说明**：非 loopback 明文 listener 的显式安全确认。默认情况下，Inbound 只能绑定 `localhost`、`127.0.0.0/8` 或 `::1`；绑定 `0.0.0.0`、`::`、局域网 IP 或普通主机名会直接拒绝启动。只有当 listener 位于受控网络中、外部访问必须经过可信 TLS 反向代理且防火墙已阻断直接明文访问时，才可设为 `true`。该开关不会为 XiaoQing 启用 TLS。
 
 #### ws_queue_size
 - **类型**：`int`
@@ -351,7 +371,21 @@ XiaoQing 使用两个 JSON 配置文件：
       },
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
+      "spawn_timeout_seconds": 30,
       "job_timeout_seconds": 3600,
+      "max_stdout_bytes": 16777216,
+      "max_stderr_bytes": 4194304,
+      "max_json_line_bytes": 1048576,
+      "max_final_output_bytes": 8388608,
+      "max_qq_text_chars": 60000,
+      "artifact_scan_max_entries": 5000,
+      "artifact_scan_max_depth": 8,
+      "max_image_artifacts": 20,
+      "max_image_bytes": 20971520,
+      "max_image_total_bytes": 104857600,
+      "max_image_pixels": 40000000,
+      "max_image_frames": 120,
+      "max_qq_images": 10,
       "sandbox": "workspace-write",
       "approval_policy": "never",
       "skip_git_repo_check": true
@@ -367,7 +401,21 @@ XiaoQing 使用两个 JSON 配置文件：
 | `allowed_cwd_roots` | `string[]` | `[default_cwd]` | 允许创建 Codex 会话的目录根；实际工作目录必须在这些根目录下 |
 | `max_parallel_jobs` | `int` | `2` | 全局最多同时运行的 Codex CLI 任务数 |
 | `per_session_queue_limit` | `int` | `10` | 每个 Codex 标签允许排队的任务数 |
+| `spawn_timeout_seconds` | `int` | `30` | 创建 Codex CLI 子进程的最长等待秒数（范围 1-120）；取消会等待 spawn handoff 收敛 |
 | `job_timeout_seconds` | `int` | `3600` | 单个 Codex 任务超时秒数 |
+| `max_stdout_bytes` | `int` | `16777216`（16 MiB） | JSON stdout 累计预算，范围 64 KiB-128 MiB；超限终止任务的整棵进程树 |
+| `max_stderr_bytes` | `int` | `4194304`（4 MiB） | stderr 累计预算，范围 64 KiB-64 MiB；超限终止任务的整棵进程树 |
+| `max_json_line_bytes` | `int` | `1048576`（1 MiB） | 单条 stdout JSON 事件预算，范围 16 KiB-8 MiB；超限立即终止任务 |
+| `max_final_output_bytes` | `int` | `8388608`（8 MiB） | 最终输出文件预算，范围 64 KiB-64 MiB；超限终止任务，只归档有界的头尾截断副本 |
+| `max_qq_text_chars` | `int` | `60000` | QQ 文本字符预算，范围 2,000-200,000；超限时完整结果归档，只投递截断文本和归档位置 |
+| `artifact_scan_max_entries` | `int` | `5000` | 单任务最多扫描的制品目录条目数，范围 10-20,000；到达上限即停止继续遍历 |
+| `artifact_scan_max_depth` | `int` | `8` | 制品目录最大扫描深度，范围 1-16；更深条目不进入收集流程 |
+| `max_image_artifacts` | `int` | `20` | 单任务最多接受的图片数，范围 1-100；超出数量的候选被拒绝 |
+| `max_image_bytes` | `int` | `20971520`（20 MiB） | 单张图片字节预算，范围 64 KiB-100 MiB；超限产物被拒绝 |
+| `max_image_total_bytes` | `int` | `104857600`（100 MiB） | 单任务已接受图片总字节预算，范围 64 KiB-512 MiB；超限的后续产物被拒绝 |
+| `max_image_pixels` | `int` | `40000000` | 单张图片真实解码像素预算，范围 1,024-100,000,000；超限或签名/解码失败的产物被拒绝 |
+| `max_image_frames` | `int` | `120` | 单张多帧图片帧数预算，范围 1-500；超限产物被拒绝 |
+| `max_qq_images` | `int` | `10` | 每个任务最多向 QQ 发送的已接受图片数，范围 1-20；其余已归档图片不发送 |
 | `sandbox` | `string` | `"workspace-write"` | 传给 Codex CLI 的 sandbox 模式 |
 | `approval_policy` | `string` | `"never"` | 传给 Codex CLI 的审批策略 |
 | `skip_git_repo_check` | `boolean` | `true` | 是否给 `codex exec` 添加 `--skip-git-repo-check` |
@@ -375,6 +423,10 @@ XiaoQing 使用两个 JSON 配置文件：
 | `arxiv_summary.label` | `string` | `"astro-ph"` | arXiv Filter 自动摘要使用的固定 Codex 会话名 |
 | `arxiv_summary.cwd` | `string` | `default_cwd` | arXiv 摘要会话的工作目录；应位于 `allowed_cwd_roots` 下 |
 | `arxiv_summary.methodology` | `string` | `"arxiv-summary-methodology.md"` | 摘要 prompt 要求 Codex 在工作目录中读取的方法论文件名 |
+
+四项输出字节预算是强制进程级限制，触发后任务会以输出超限结束；其中最终输出文件超限只归档有界头尾副本，QQ 文本字符超限则采用“完整结果写入任务归档、QQ 截断并附归档位置”；制品扫描和图片数量/字节/签名/解码/像素/帧数超限时，相关候选会被跳过或拒绝，并记录拒绝原因。`max_qq_images` 只约束发送，已通过校验的归档仍保留。配置值超出表中范围时会被钳制到最近边界。
+
+Codex 是可信管理员级高权限插件：全部 `/codex` 命令保持 `admin_only: true`，仅 `admin_user_ids` 中的 Bot 管理员可用。上述预算只保护 Bot 存活性与 QQ 投递链路，不限制管理员配置 `sandbox`、`approval_policy` 或允许工作目录的灵活性。
 
 路径输入建议统一使用 `/` 斜杠。Windows 上可以写 `C:/Users/testuser/Desktop/project`，插件会按运行系统解析；Linux/macOS 上仍写 `/home/user/project`。如果 bot 运行在非 Windows 系统，Windows 盘符路径会被拒绝。
 
@@ -889,11 +941,15 @@ Windows 的 `copy`、`del`、`type` 等命令是 shell 内建命令，不能直�
 ```
 
 ### 6. 公网部署
+
+XiaoQing 不直接终止 TLS。推荐让同机 Nginx/Caddy 监听公网 HTTPS/WSS，而 XiaoQing 继续只监听 loopback：
+
 ```json
 // config.json
 {
-  "inbound_http_base": "http://0.0.0.0:12000",
-  "inbound_ws_uri": "",
+  "inbound_http_base": "http://127.0.0.1:12000",
+  "inbound_ws_uri": "ws://127.0.0.1:12000/ws",
+  "inbound_trusted_tls_proxy": false,
   "log_level": "INFO"
 }
 
@@ -905,9 +961,27 @@ Windows 的 `copy`、`del`、`type` 等命令是 shell 内建命令，不能直�
 }
 ```
 
-⚠️ **公网部署必须设置 `inbound_token`！**
+反向代理对公网提供 `https://` / `wss://`，再转发到上述 loopback 地址。不要把 `inbound_http_base` 写成 `https://...` 或把 `inbound_ws_uri` 写成 `wss://...`：这两个字段描述 XiaoQing 自己的本地 listener，而它没有证书/TLS 配置，安全校验会拒绝这种伪 TLS 配置。
 
-⚠️ **公网部署建议使用强密码作为 Token！**
+代理至少要保留 Bearer 鉴权头，并为 WebSocket 转发 Upgrade：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:12000;
+    proxy_set_header Authorization $http_authorization;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+公网侧必须只开放代理的 HTTPS/WSS 端口；XiaoQing 的 12000 端口应由主机防火墙、容器 network policy 或安全组阻止客户端直连。
+
+若反向代理与 XiaoQing 位于不同容器或不同受控主机，确实必须监听 `0.0.0.0`/局域网 IP 时，才设置 `"inbound_trusted_tls_proxy": true`；同时必须用容器网络规则或主机防火墙确保客户端无法绕过代理直接访问明文端口。
+
+⚠️ **公网部署必须设置强随机 `inbound_token`，并强制所有外部流量经过 TLS 代理。**
+
+⚠️ **`inbound_trusted_tls_proxy` 只是部署责任确认，不会自动配置证书、加密或访问控制。**
 
 ---
 
@@ -945,7 +1019,7 @@ context.reload_config()
 ```
 
 **注意**：
-- 常用运行时配置都支持热重载；`enable_ws_client`、`onebot_ws_uri`、`enable_inbound_server`、`inbound_http_base`、`inbound_ws_uri`、`ws_queue_size`、`inbound_ws_max_workers`、`max_concurrency`、`session_timeout`、`timezone` 等修改后，可通过 watcher 或 `/reload config` 直接生效。
+- 常用运行时配置都支持热重载；`enable_ws_client`、`onebot_ws_uri`、`enable_inbound_server`、`inbound_http_base`、`inbound_ws_uri`、`inbound_trusted_tls_proxy`、`ws_queue_size`、`inbound_ws_max_workers`、`max_concurrency`、`session_timeout`、`timezone` 等修改后，可通过 watcher 或 `/reload config` 直接生效。listener 或 TLS proxy 声明变化会先停止旧 InboundManager，再按新策略重新 bind。
 - 配置 watcher 默认开启；插件 watcher 只有在 `enable_plugin_watcher=true` 时才会自动 reload 插件，且会忽略 `plugins/*/data/` 下的运行时状态文件。
 - 如果 `config.json` 或 `secrets.json` 一次写坏，运行时会保留最后一次有效快照；修复文件后重新 `/reload config` 即可。
 - 自动 watcher 能发现文件变化。配置刚修改完成且需要立即生效时，仍建议手动执行一次 `/reload`。
@@ -991,7 +1065,18 @@ python main.py
 PENDO_WEB_PORT=12003 python main.py
 ```
 
-访问 `http://127.0.0.1:12001`（或你自定义的新端口），使用 `/pendo web token` 获取的 Token 登录。
+访问 `http://127.0.0.1:12001`（或你自定义的新端口），使用 `/pendo web token` 私聊获得的一次性登录链接登录。链接 5 分钟内仅可兑换一次；浏览器随后使用短期 HttpOnly session cookie，不会把 bearer 写入 localStorage。
+
+默认 loopback HTTP 为本机开发保留非 Secure cookie 兼容性。若把 `PENDO_WEB_HOST` 改为非 loopback 地址，必须放在 HTTPS 反向代理之后，并在启动前显式设置：
+
+```text
+# PowerShell
+$env:PENDO_WEB_SESSION_COOKIE_SECURE="true"
+python main.py
+
+# bash
+PENDO_WEB_SESSION_COOKIE_SECURE=true python main.py
+```
 
 Web 控制台包含总览、日程、待办、账本、笔记、日记、搜索、统计、设置和迁移页面。迁移页面负责 `.pendo.zip` Bundle 的预览、导出、导入、冲突策略和审计日志；聊天端 `/pendo export` 只导出 Markdown 档案。
 

@@ -142,6 +142,7 @@ Copy-Item config/secrets.json.example config/secrets.json
   "enable_inbound_server": true,
   "onebot_http_base": "http://127.0.0.1:11001",
   "inbound_http_base": "http://127.0.0.1:12000",
+  "inbound_trusted_tls_proxy": false,
   "timezone": "Asia/Shanghai",
   "log_level": "INFO",
   "plugins": {
@@ -149,6 +150,8 @@ Copy-Item config/secrets.json.example config/secrets.json
   }
 }
 ```
+
+Inbound listener 默认只能绑定 loopback。不要为“启用 HTTPS”把它改成 `https://`/`wss://` 或直接暴露 `0.0.0.0`：XiaoQing 本身不终止 TLS。公网接入应由 Nginx/Caddy 提供 HTTPS/WSS 并转发到 loopback；只有跨容器受控网络确实需要非 loopback 明文 bind 时，才能显式设置 `inbound_trusted_tls_proxy: true`，同时用防火墙阻止绕过代理直连。详见 [配置与部署文档](docs/06-configuration.md#inbound_trusted_tls_proxy)。
 
 最小 `config/secrets.json` 示例内容如下。
 
@@ -331,7 +334,7 @@ $env:PENDO_WEB_PORT="12003"
 python main.py
 ```
 
-Web Token 登录不需要账号密码；执行 `/pendo web token` 后把 token 粘贴到登录页。Scriptable 小组件使用 `/pendo web widget-token` 生成的只读 token。
+浏览器登录不需要账号密码；执行 `/pendo web token` 后在私聊中打开一次性登录链接（5 分钟内仅可兑换一次）。浏览器会使用短期 HttpOnly 会话，而不会保存 bearer token。Scriptable 小组件使用 `/pendo web widget-token` 生成的只读 token。
 
 ## Codex 与 arXiv 摘要
 

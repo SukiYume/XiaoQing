@@ -100,11 +100,16 @@ async def handle_manage_reset(user_id: str, group_id: int, args: str,
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
 
-    match = re.match(r"@?(\d+)", args.strip())
+    match = re.fullmatch(r"@?(\d+)(?:\s+(确认|confirm))?", args.strip(), re.IGNORECASE)
     if not match:
         return False, "格式错误\n用法: /宠物 管理 重置 @QQ号"
 
     target_user_id = match.group(1)
+    if not match.group(2):
+        return False, (
+            f"⚠️ 将重置用户 {target_user_id} 的宠物状态。此操作不可自动撤销。\n"
+            f"确认执行请发送：/宠物 管理 重置 @{target_user_id} 确认"
+        )
 
     admin_service = AdminService(db)
     success = admin_service.reset_user_pet(target_user_id, group_id)
@@ -194,3 +199,26 @@ async def handle_manage_stats(user_id: str, group_id: int, args: str,
 
     economy_service = EconomyService(db)
     return True, economy_service.format_stats(group_id)
+
+
+async def handle_manage_activity(
+    user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
+) -> Tuple[bool, str]:
+    if not is_admin:
+        return False, "⚠️ 该操作需要管理员权限"
+    parts = args.strip().split(maxsplit=4)
+    if len(parts) < 4 or parts[0] not in {"创建", "create"}:
+        return False, "用法：/宠物 管理 活动 创建 <类型> <目标数> <奖励金币> [标题]"
+    activity_type = parts[1]
+    if not parts[2].isdigit() or not parts[3].isdigit():
+        return False, "目标数和奖励金币必须是非负整数"
+    title = parts[4] if len(parts) > 4 else activity_type
+    activity_id = db.create_activity(
+        group_id, activity_type, title, int(parts[2]), int(parts[3])
+    )
+    if activity_id is None:
+        return False, "活动创建失败"
+    AdminService(db).log_admin_operation(
+        group_id, user_id, "ACTIVITY_CREATE", f"activity_id={activity_id} type={activity_type}"
+    )
+    return True, f"✅ 活动 #{activity_id} 已创建；自然触发开关开启后对应行为会推进进度"

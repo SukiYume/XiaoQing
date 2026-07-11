@@ -562,7 +562,7 @@ function renderCalendarCell(day, month, calendarDay) {
                 <span class="events-calendar-date">${day.getDate()}</span>
             </div>
             <div class="events-calendar-items">
-                ${visibleItems.map((item) => `<button class="events-calendar-chip ${item.kind}" data-event-id="${item.event_id}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}"><span class="events-calendar-chip-text">${escapeHtml(item.label)}</span></button>`).join('')}
+                ${visibleItems.map((item) => `<button class="events-calendar-chip ${item.kind}" data-event-id="${escapeHtml(String(item.event_id || ''))}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}"><span class="events-calendar-chip-text">${escapeHtml(item.label)}</span></button>`).join('')}
                 ${count > visibleItems.length ? `<div class="events-calendar-overflow">+${count - visibleItems.length}<span class="events-calendar-overflow-suffix"> 更多</span></div>` : ''}
             </div>
         </div>`;
@@ -648,7 +648,7 @@ function renderTimelineEntries(items) {
         const collectionTitle = item.collection?.title || event?.collection?.title || '';
         const title = collectionTitle ? `${collectionTitle} · ${item.title || event?.title || '(无标题)'}` : (item.title || '(无标题)');
         return `
-                <article class="events-timeline-item" data-event-id="${item.event_id}">
+                <article class="events-timeline-item" data-event-id="${escapeHtml(String(item.event_id || ''))}">
                     <div class="events-timeline-time">${escapeHtml(item.time_label || '全天')}</div>
                     <div class="events-timeline-track"><span class="events-timeline-dot ${dotKind}"></span></div>
                     <div class="events-timeline-card">
@@ -663,7 +663,7 @@ function renderTimelineEntries(items) {
                             ${item.reminder_total ? `<span class="events-pill">🔔 ${item.reminder_total} 个提醒</span>` : ''}
                         </div>
                     </div>
-                    <button class="btn btn-secondary btn-sm" data-open-detail="${item.event_id}">详情</button>
+                    <button class="btn btn-secondary btn-sm" data-open-detail="${escapeHtml(String(item.event_id || ''))}">详情</button>
                 </article>`;
     }).join('');
 }
@@ -1132,7 +1132,7 @@ function renderCollectionDetailBody(detail) {
                                 <div style="font-weight:700;color:var(--color-text);">${escapeHtml(child.title || '(无标题)')}</div>
                                 <div style="margin-top:4px;font-size:12px;color:var(--color-text-secondary);">${escapeHtml(formatDateTime(child.start_time))} · ${escapeHtml(child.id)}</div>
                             </div>
-                            <button class="btn btn-secondary btn-sm" data-open-detail="${child.id}">详情</button>
+                            <button class="btn btn-secondary btn-sm" data-open-detail="${escapeHtml(String(child.id || ''))}">详情</button>
                         </div>
                     `).join('')}
                 </div>
@@ -1225,7 +1225,7 @@ function renderDetailBody(detail) {
             ${collection ? `
                 <section class="events-detail-block">
                     <h4>整体</h4>
-                    <button class="btn btn-secondary btn-sm" data-open-collection="${collection.id}">管理“${escapeHtml(collection.title || '多节点日程')}”</button>
+                    <button class="btn btn-secondary btn-sm" data-open-collection="${escapeHtml(String(collection.id || ''))}">管理“${escapeHtml(collection.title || '多节点日程')}”</button>
                 </section>` : ''}
         </div>`;
 }

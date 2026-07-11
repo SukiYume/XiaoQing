@@ -24,11 +24,31 @@ _thread: threading.Thread | None = None
 _last_error: str | None = None
 
 STATIC_DIR = Path(__file__).parent / "static"
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_CSP = (
+    "default-src 'self'; "
+    "base-uri 'self'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; "
+    "connect-src 'self'"
+)
 
 
 def create_app(db: Database) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(title="Pendo Web UI", docs_url=None, redoc_url=None)
+
+    @app.middleware("http")
+    async def add_security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("Content-Security-Policy", _CSP)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
 
     # Set database instance for dependency injection
     set_db(db)
@@ -126,6 +146,17 @@ def start(db: Database) -> bool:
     global _app, _server, _thread, _last_error
 
     if _thread is not None and _thread.is_alive():
+        return False
+
+    if (
+        PendoConfig.WEB_HOST.lower() not in _LOOPBACK_HOSTS
+        and not PendoConfig.WEB_SESSION_COOKIE_SECURE
+    ):
+        _last_error = (
+            "拒绝将 Pendo Web 绑定到非 loopback 地址而不使用 Secure session cookie；"
+            "请在 TLS 反向代理后设置 PENDO_WEB_SESSION_COOKIE_SECURE=true。"
+        )
+        logger.error(_last_error)
         return False
 
     _last_error = None

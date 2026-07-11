@@ -13,7 +13,7 @@
         "计算"
       ],
       "help": "🧮 万能计算器 | /wa <问题>",
-      "admin_only": false
+      "admin_only": true
     }
   ],
   "schedule": []

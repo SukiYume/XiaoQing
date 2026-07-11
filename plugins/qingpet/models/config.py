@@ -15,7 +15,7 @@ class GroupConfig:
     
     activity_enabled: bool = True
     
-    # 群级敏感词过滤列表
+    # 群级追加词；内置词始终生效，空列表表示仅继承内置词。
     sensitive_words: List[str] = field(default_factory=list)
     
     @classmethod

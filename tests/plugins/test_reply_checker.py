@@ -272,13 +272,13 @@ async def test_check_reply_rejects_when_llm_checker_call_fails(monkeypatch: pyte
         endpoint_path="/v1/chat/completions",
     )
 
-    assert result.suitable is True
-    assert result.need_replan is False
-    assert "failed" in result.reason.lower() or "checker" in result.reason.lower()
+    assert result.suitable is False
+    assert result.need_replan is True
+    assert "unavailable" in result.reason.lower()
 
 
 @pytest.mark.asyncio
-async def test_check_reply_allows_when_llm_checker_returns_invalid_json(
+async def test_check_reply_rejects_when_llm_checker_returns_invalid_json(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from plugins.xiaoqing_chat.llm.reply_checker import check_reply
@@ -311,8 +311,8 @@ async def test_check_reply_allows_when_llm_checker_returns_invalid_json(
         endpoint_path="/v1/chat/completions",
     )
 
-    assert result.suitable is True
-    assert result.need_replan is False
+    assert result.suitable is False
+    assert result.need_replan is True
     assert "invalid" in result.reason.lower()
 
 

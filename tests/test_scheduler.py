@@ -3,10 +3,10 @@ SchedulerManager 单元测试
 """
 
 import asyncio
+from datetime import datetime
+
 import pytest
 import pytest_asyncio
-from datetime import datetime
-from typing import Any
 
 from core.scheduler import SchedulerManager
 
@@ -134,6 +134,33 @@ class TestAddJob:
         # 验证任务已添加
         jobs = scheduler.scheduler.get_jobs()
         assert any(job.id == "test_job" for job in jobs)
+
+    @pytest.mark.asyncio
+    async def test_add_cron_job_uses_manifest_description_as_job_name(
+        self,
+        scheduler: SchedulerManager,
+    ):
+        scheduler.add_job(
+            "test_job",
+            lambda: None,
+            {"second": "*/1"},
+            description="Manifest-visible schedule",
+        )
+
+        job = next(job for job in scheduler.scheduler.get_jobs() if job.id == "test_job")
+        assert job.name == "Manifest-visible schedule"
+
+    @pytest.mark.asyncio
+    async def test_add_job_prevents_overlapping_backlog(self, scheduler: SchedulerManager):
+        def job_func():
+            return None
+
+        scheduler.add_job("bounded_job", job_func, {"second": "*/1"})
+        job = next(job for job in scheduler.scheduler.get_jobs() if job.id == "bounded_job")
+
+        assert job.max_instances == 1
+        assert job.coalesce is True
+        assert job.misfire_grace_time == 60
 
     @pytest.mark.asyncio
     async def test_add_job_removes_existing(self, scheduler: SchedulerManager):

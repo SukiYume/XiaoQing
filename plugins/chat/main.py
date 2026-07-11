@@ -3,6 +3,7 @@ AI 对话插件 (Coze API)
 提供与 AI 的对话功能
 """
 import asyncio
+import hashlib
 import logging
 from typing import Any, Optional
 
@@ -19,6 +20,7 @@ COZE_API_URL = "https://api.coze.com/open_api/v2/chat"
 DEFAULT_USER_ID = "123223"
 REQUEST_TIMEOUT = 30  # 秒
 MAX_QUERY_LENGTH = 2000  # 最大查询长度
+_API_SEMAPHORE = asyncio.Semaphore(2)
 
 # ============================================================
 # 插件初始化
@@ -80,7 +82,8 @@ def validate_config(config: dict[str, Any]) -> tuple[bool, Optional[str]]:
 async def call_coze_api(
     query: str,
     config: dict[str, Any],
-    context
+    context,
+    actor_id: Any = None,
 ) -> Optional[dict[str, Any]]:
     """调用 Coze API
     
@@ -94,7 +97,8 @@ async def call_coze_api(
     """
     token = config.get("token")
     bot_id = config.get("bot_id")
-    user_id = config.get("user", DEFAULT_USER_ID)
+    identity_source = f"{bot_id}:{actor_id if actor_id is not None else DEFAULT_USER_ID}"
+    user_id = hashlib.sha256(identity_source.encode("utf-8")).hexdigest()[:32]
     proxy = config.get("proxy")
     if config.get("stream"):
         context.logger.info("Chat 插件已固定使用非流式请求，忽略 stream 配置")
@@ -123,17 +127,17 @@ async def call_coze_api(
     
     if proxy:
         request_kwargs["proxy"] = proxy
-        context.logger.debug(f"使用代理: {proxy}")
+        context.logger.debug("使用已配置代理")
     
     # 发送请求
     try:
         context.logger.info(f"调用 Coze API，查询长度: {len(query)} 字符")
-        async with context.http_session.post(COZE_API_URL, **request_kwargs) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                context.logger.error(f"Coze API 返回错误: HTTP {response.status}, {error_text[:200]}")
-                return None
-            data = await response.json()
+        async with _API_SEMAPHORE:
+            async with context.http_session.post(COZE_API_URL, **request_kwargs) as response:
+                if response.status != 200:
+                    context.logger.error("Coze API 返回错误: HTTP %s", response.status)
+                    return None
+                data = await response.json()
 
             context.logger.info(f"Coze API 调用成功，响应消息数: {len(data.get('messages', []))}")
             return data
@@ -142,7 +146,7 @@ async def call_coze_api(
         context.logger.error(f"Coze API 请求超时 ({REQUEST_TIMEOUT}s)")
         return None
     except Exception as exc:
-        context.logger.error(f"Coze API 请求异常: {type(exc).__name__}: {exc}", exc_info=True)
+        context.logger.error("Coze API 请求异常: %s", type(exc).__name__, exc_info=True)
         return None
 
 def extract_answer(data: dict[str, Any], context) -> Optional[str]:
@@ -219,10 +223,21 @@ async def handle(
             logger.error(f"Chat 插件配置无效: {error_msg}")
             return segments(f"❌ 配置错误: {error_msg}")
         
-        logger.info(f"用户查询: {query[:50]}{'...' if len(query) > 50 else ''}")
+        logger.info("Chat query accepted: user=%s length=%d", event.get("user_id"), len(query))
+
+        state = getattr(context, "state", None)
+        if isinstance(state, dict):
+            usage = state.setdefault("chat_usage", {})
+            actor = str(event.get("user_id"))
+            per_user_limit = int(config.get("daily_user_limit", 20))
+            global_limit = int(config.get("daily_global_limit", 100))
+            if usage.get(actor, 0) >= per_user_limit or usage.get("__total__", 0) >= global_limit:
+                return segments("❌ 今日 AI 对话额度已用完")
+            usage[actor] = usage.get(actor, 0) + 1
+            usage["__total__"] = usage.get("__total__", 0) + 1
         
         # 调用 API
-        data = await call_coze_api(query, config, context)
+        data = await call_coze_api(query, config, context, event.get("user_id"))
         if data is None:
             return segments("❌ AI 对话失败，请稍后重试")
         

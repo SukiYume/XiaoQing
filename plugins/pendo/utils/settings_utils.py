@@ -12,6 +12,7 @@ DEFAULT_SETTINGS_JSON = {
     "reminder_enabled": True,
     "daily_briefing_enabled": True,
     "privacy_mode": True,
+    "ai_sensitive_data_consent": False,
 }
 
 PLUGIN_SETTINGS_HELP_LINES = (
@@ -85,6 +86,12 @@ def normalize_settings_json(settings_json: Any, *, partial: bool = False) -> dic
         normalized["privacy_mode"] = _coerce_setting_bool(
             normalized.get("privacy_mode"),
             DEFAULT_SETTINGS_JSON["privacy_mode"],
+        )
+
+    if "ai_sensitive_data_consent" in normalized or not partial:
+        normalized["ai_sensitive_data_consent"] = _coerce_setting_bool(
+            normalized.get("ai_sensitive_data_consent"),
+            DEFAULT_SETTINGS_JSON["ai_sensitive_data_consent"],
         )
 
     return normalized

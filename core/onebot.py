@@ -9,12 +9,17 @@ import json
 import logging
 import re
 import time
+import uuid
 from typing import Any, Awaitable, Callable
 
 import aiohttp
 
 from .auth import verify_bearer_token
-from .constants import DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS, MAX_SHORT_TEXT_LENGTH
+from .constants import (
+    DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS,
+    DEFAULT_ONEBOT_WS_ACTION_TIMEOUT_SECONDS,
+    MAX_SHORT_TEXT_LENGTH,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +108,15 @@ def _normalize_action_for_onebot(action: dict[str, Any]) -> dict[str, Any]:
     normalized["params"] = params
     return normalized
 
+
+def _onebot_action_succeeded(response: Any) -> bool:
+    """Return whether an OneBot action response confirms business success."""
+    return (
+        isinstance(response, dict)
+        and response.get("status") == "ok"
+        and response.get("retcode") == 0
+    )
+
 def _summarize_event(event: dict[str, Any]) -> str:
     post_type = event.get("post_type")
     message_type = event.get("message_type")
@@ -147,36 +161,63 @@ class OneBotHttpSender:
         self.http_base = http_base.rstrip("/")
         self.auth_token = auth_token
 
-    async def send_action(self, action: dict[str, Any]) -> None:
-        """发送 OneBot action"""
+    async def request_action(self, action: dict[str, Any]) -> dict[str, Any] | None:
+        """Send an action and return its parsed OneBot response envelope."""
+
         if not self.http_base:
-            return
+            return None
 
         normalized_action = _normalize_action_for_onebot(action)
         url = f"{self.http_base}/{normalized_action['action']}"
-        # 构建请求头（token 已在客户端配置时验证）
         headers = {"Authorization": f"Bearer {self.auth_token}"} if self.auth_token else {}
+        params = normalized_action.get("params", {})
 
-        # 提取消息内容用于日志
+        try:
+            async with self.session.post(url, json=params, headers=headers, timeout=_ONEBOT_HTTP_TIMEOUT) as resp:
+                if not 200 <= resp.status < 300:
+                    logger.warning("[HTTP] OneBot request failed with status=%s", resp.status)
+                    return None
+
+                try:
+                    response = await resp.json(content_type=None)
+                except (aiohttp.ContentTypeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                    logger.warning("[HTTP] Invalid OneBot action response: %s", exc)
+                    return None
+                return response if isinstance(response, dict) else None
+        except Exception as exc:
+            logger.warning("[HTTP] OneBot request failed: %s", exc)
+            return None
+
+    async def send_action(self, action: dict[str, Any]) -> bool:
+        """Send an OneBot action and return whether OneBot accepted it."""
+
+        response = await self.request_action(action)
+        normalized_action = _normalize_action_for_onebot(action)
         params = normalized_action.get("params", {})
         target = params.get("group_id") or params.get("user_id")
         message = action.get("params", {}).get("message", [])
         msg_preview = _extract_message_preview(message)
-        
-        try:
-            async with self.session.post(url, json=params, headers=headers, timeout=_ONEBOT_HTTP_TIMEOUT) as resp:
-                if resp.status == 200:
-                    logger.info(
-                        "[HTTP] Sent %s to %s: %s",
-                        action['action'], target, msg_preview
-                    )
-                else:
-                    logger.warning(
-                        "[HTTP] Send failed (status=%s) to %s: %s",
-                        resp.status, target, msg_preview
-                    )
-        except Exception as exc:
-            logger.warning("[HTTP] Send failed: %s", exc)
+        if _onebot_action_succeeded(response):
+            data = response.get("data") if isinstance(response, dict) else None
+            message_id = data.get("message_id") if isinstance(data, dict) else None
+            if message_id not in (None, ""):
+                action["_result_message_id"] = message_id
+            logger.info(
+                "[HTTP] Sent %s to %s: %s",
+                normalized_action.get("action", "unknown"),
+                target,
+                msg_preview,
+            )
+            return True
+        if response is not None:
+            logger.warning(
+                "[HTTP] OneBot rejected %s to %s (status=%r retcode=%r)",
+                normalized_action.get("action", "unknown"),
+                target,
+                response.get("status"),
+                response.get("retcode"),
+            )
+        return False
 
 class OneBotWsClient:
     """OneBot WebSocket 客户端"""
@@ -189,11 +230,13 @@ class OneBotWsClient:
         queue_size: int = 100,
         queue_ttl_seconds: float = 300.0,
         queue_cleanup_interval: float = 60.0,
+        action_response_timeout_seconds: float = DEFAULT_ONEBOT_WS_ACTION_TIMEOUT_SECONDS,
     ) -> None:
         self.ws_uri = ws_uri
         self.auth_token = auth_token
         self._ws: Any | None = None
         self._running = False
+        self._accepting_events = True
         self._on_connect: Callable[[], Awaitable[None]] | None = None
         self._message_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         self._queue_tasks: dict[str, asyncio.Task[None]] = {}
@@ -203,6 +246,12 @@ class OneBotWsClient:
         self._queue_cleanup_interval = queue_cleanup_interval
         self._pending_semaphore = asyncio.Semaphore(max_pending_events)
         self._cleanup_task: asyncio.Task[None] | None = None
+        self._main_task: asyncio.Task[None] | None = None
+        self._pending_action_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        try:
+            self._action_response_timeout_seconds = max(0.1, float(action_response_timeout_seconds))
+        except (TypeError, ValueError):
+            self._action_response_timeout_seconds = DEFAULT_ONEBOT_WS_ACTION_TIMEOUT_SECONDS
 
     def set_on_connect(self, callback: Callable[[], Awaitable[None]]) -> None:
         """设置连接成功回调"""
@@ -237,55 +286,145 @@ class OneBotWsClient:
             return False
         return True
 
+    async def request_action(self, action: dict[str, Any]) -> dict[str, Any] | None:
+        """Send an action and return the response matched by its ``echo``."""
+
+        ws = self._ws
+        if not self.connected() or ws is None:
+            return None
+
+        normalized_action = _normalize_action_for_onebot(action)
+        echo = f"xiaoqing-{uuid.uuid4().hex}"
+        request = dict(normalized_action)
+        request["echo"] = echo
+        response_future = asyncio.get_running_loop().create_future()
+        self._pending_action_futures[echo] = response_future
+        try:
+            await ws.send(json.dumps(request, ensure_ascii=False))
+            response = await asyncio.wait_for(
+                asyncio.shield(response_future),
+                timeout=self._action_response_timeout_seconds,
+            )
+            return response if isinstance(response, dict) else None
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[WS] Timed out waiting for OneBot response to %s",
+                normalized_action.get("action", "unknown"),
+            )
+            return None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("[WS] Send failed: %s", exc)
+            if self._ws is ws:
+                self._ws = None
+            self._fail_pending_action_futures(
+                "WebSocket send failed",
+                exclude=response_future,
+            )
+            return None
+        finally:
+            if self._pending_action_futures.get(echo) is response_future:
+                self._pending_action_futures.pop(echo, None)
+            if not response_future.done():
+                response_future.cancel()
+
     async def send_action(self, action: dict[str, Any]) -> bool:
-        """发送 OneBot action，返回是否成功发送。"""
-        if not self.connected():
-            return False
-        
-        # 提取消息内容用于日志
+        """Send an action and return whether the matched response accepted it."""
+
+        response = await self.request_action(action)
         normalized_action = _normalize_action_for_onebot(action)
         params = normalized_action.get("params", {})
         target = params.get("group_id") or params.get("user_id")
         message = action.get("params", {}).get("message", [])
         msg_preview = _extract_message_preview(message)
-        
-        try:
-            await self._ws.send(json.dumps(normalized_action, ensure_ascii=False))
+        if _onebot_action_succeeded(response):
+            data = response.get("data") if isinstance(response, dict) else None
+            message_id = data.get("message_id") if isinstance(data, dict) else None
+            if message_id not in (None, ""):
+                action["_result_message_id"] = message_id
             logger.info(
                 "[WS] Sent %s to %s: %s",
-                normalized_action.get('action', 'unknown'), target, msg_preview
+                normalized_action.get("action", "unknown"),
+                target,
+                msg_preview,
             )
             return True
-        except Exception as exc:
-            logger.warning("[WS] Send failed: %s", exc)
-            self._ws = None
+        if response is not None:
+            logger.warning(
+                "[WS] OneBot rejected %s to %s (status=%r retcode=%r)",
+                normalized_action.get("action", "unknown"),
+                target,
+                response.get("status"),
+                response.get("retcode"),
+            )
+        return False
+
+    @staticmethod
+    def _is_action_response(event: dict[str, Any]) -> bool:
+        return "echo" in event and ("status" in event or "retcode" in event)
+
+    def _resolve_action_response(self, event: dict[str, Any]) -> bool:
+        """Resolve a pending action by echo; action responses never reach plugins."""
+        if not self._is_action_response(event):
             return False
+        echo = event.get("echo")
+        if not isinstance(echo, str):
+            return True
+        future = self._pending_action_futures.get(echo)
+        if future is not None and not future.done():
+            future.set_result(event)
+        return True
+
+    def _fail_pending_action_futures(
+        self,
+        reason: str,
+        *,
+        exclude: asyncio.Future[dict[str, Any]] | None = None,
+    ) -> None:
+        pending = list(self._pending_action_futures.values())
+        self._pending_action_futures.clear()
+        for future in pending:
+            if future is not exclude and not future.done():
+                future.set_exception(ConnectionError(reason))
 
     async def connect_and_listen(self, handler: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
         """连接并监听消息"""
+        current_task = asyncio.current_task()
+        if current_task is None:
+            raise RuntimeError("connect_and_listen requires an asyncio task")
+        if self._main_task is not None and self._main_task is not current_task and not self._main_task.done():
+            raise RuntimeError("OneBot WS client is already running")
+        self._main_task = current_task
         self._running = True
+        self._accepting_events = True
         retry_delay = 5
 
         if not self._cleanup_task or self._cleanup_task.done():
             self._cleanup_task = asyncio.create_task(self._cleanup_inactive_queues_loop())
 
-        while self._running:
-            if not self.ws_uri:
-                await asyncio.sleep(5)
-                continue
+        try:
+            while self._running:
+                if not self.ws_uri:
+                    await asyncio.sleep(5)
+                    continue
 
-            try:
-                await self._connect_once(handler)
-                retry_delay = 5
-            except Exception as exc:
-                logger.warning(
-                    "OneBot WS error: %s, reconnecting in %ds...",
-                    exc,
-                    retry_delay,
-                )
-                self._ws = None
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 60)
+                try:
+                    await self._connect_once(handler)
+                    retry_delay = 5
+                except Exception as exc:
+                    logger.warning(
+                        "OneBot WS error: %s, reconnecting in %ds...",
+                        exc,
+                        retry_delay,
+                    )
+                    self._ws = None
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, 60)
+        finally:
+            self._running = False
+            if self._main_task is current_task:
+                self._main_task = None
 
     async def _connect_once(self, handler: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
         """单次连接"""
@@ -339,6 +478,8 @@ class OneBotWsClient:
                     logger.debug("[WS] Raw frame type=%s size=%s", type(raw).__name__, raw_len)
                     event = json.loads(raw)
                     logger.debug("[WS] Event received: %s", _summarize_event(event))
+                    if self._resolve_action_response(event):
+                        continue
                     await self._dispatch_event(handler, event)
                 except json.JSONDecodeError:
                     logger.debug("[WS] Non-JSON frame received")
@@ -350,6 +491,7 @@ class OneBotWsClient:
         except Exception as exc:
             logger.error("WebSocket listen loop error: %s", exc)
         finally:
+            self._fail_pending_action_futures("WebSocket connection closed")
             self._ws = None
 
     async def _handle_event_safely(self, handler: Callable[[dict[str, Any]], Awaitable[None]], event: dict[str, Any]) -> None:
@@ -373,6 +515,9 @@ class OneBotWsClient:
         handler: Callable[[dict[str, Any]], Awaitable[None]],
         event: dict[str, Any],
     ) -> None:
+        if not self._accepting_events:
+            logger.debug("Dropping OneBot event while client is stopping")
+            return
         key = self._get_queue_key(event)
         if not key:
             async with self._pending_semaphore:
@@ -423,16 +568,29 @@ class OneBotWsClient:
             pass
         finally:
             current_task = asyncio.current_task()
-            if self._queue_tasks.get(key) is not current_task:
-                return
-            if queue.empty():
-                self._queue_tasks.pop(key, None)
-            else:
-                self._queue_tasks[key] = asyncio.create_task(self._drain_queue(key, handler))
+            if self._queue_tasks.get(key) is current_task:
+                if queue.empty():
+                    self._queue_tasks.pop(key, None)
+                elif self._accepting_events:
+                    self._queue_tasks[key] = asyncio.create_task(self._drain_queue(key, handler))
+                else:
+                    self._queue_tasks.pop(key, None)
 
     async def stop(self) -> None:
         """停止客户端"""
         self._running = False
+        self._accepting_events = False
+        self._fail_pending_action_futures("WebSocket client stopped")
+
+        queue_tasks = [task for task in self._queue_tasks.values() if not task.done()]
+        for task in queue_tasks:
+            task.cancel()
+        if queue_tasks:
+            await asyncio.gather(*queue_tasks, return_exceptions=True)
+        self._queue_tasks.clear()
+        self._message_queues.clear()
+        self._queue_last_activity.clear()
+
         cleanup_task = self._cleanup_task
         if cleanup_task and not cleanup_task.done():
             cleanup_task.cancel()
@@ -444,6 +602,14 @@ class OneBotWsClient:
         if self._ws:
             await self._ws.close()
             self._ws = None
+        main_task = self._main_task
+        current_task = asyncio.current_task()
+        if main_task and main_task is not current_task and not main_task.done():
+            main_task.cancel()
+            try:
+                await main_task
+            except asyncio.CancelledError:
+                pass
 
     async def _cleanup_inactive_queues_loop(self) -> None:
         while self._running:

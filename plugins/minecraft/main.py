@@ -17,18 +17,21 @@ Minecraft 服务器通信插件
 import asyncio
 import json
 import logging
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from core.plugin_base import segments, PluginContextProtocol, build_action
 from core.args import parse
+from core.plugin_base import PluginContextProtocol, build_action, segments
 
 # 使用相对导入
-from . import rcon, log_monitor, connection
+from . import connection, log_monitor, rcon
 
 RconClient = rcon.RconClient
 LogMonitor = log_monitor.LogMonitor
 LogEventType = log_monitor.LogEventType
+LogBatch = log_monitor.LogBatch
 McConnection = connection.McConnection
 ConnectionManager = connection.ConnectionManager
 
@@ -36,6 +39,38 @@ logger = logging.getLogger(__name__)
 
 # 全局连接管理器
 _manager = ConnectionManager()
+
+MC_MAX_EVENTS_PER_CONNECTION = 12
+MC_MAX_ACTION_CHARS = 1800
+MC_MAX_ACTION_BYTES = 6000
+MC_MAX_ACTIONS_PER_TICK = 5
+MC_SEND_TIMEOUT_SECONDS = 3.0
+MC_MONITOR_TIMEOUT_SECONDS = 3.0
+MC_EVENT_BUCKET_CAPACITY = 24.0
+MC_EVENT_BUCKET_REFILL_PER_SECOND = 0.5
+
+
+@dataclass
+class _EventTokenBucket:
+    tokens: float = MC_EVENT_BUCKET_CAPACITY
+    updated_at: float = 0.0
+
+    def take(self, requested: int, *, now: float) -> int:
+        if self.updated_at <= 0:
+            self.updated_at = now
+        else:
+            elapsed = max(0.0, now - self.updated_at)
+            self.tokens = min(
+                MC_EVENT_BUCKET_CAPACITY,
+                self.tokens + elapsed * MC_EVENT_BUCKET_REFILL_PER_SECOND,
+            )
+            self.updated_at = now
+        granted = min(max(0, requested), int(self.tokens))
+        self.tokens -= granted
+        return granted
+
+
+_event_buckets: dict[tuple[str, int], _EventTokenBucket] = {}
 
 # ============================================================
 # 插件初始化
@@ -48,6 +83,7 @@ def init(context=None) -> None:
 
 async def shutdown(context: PluginContextProtocol | None) -> None:
     await _manager.cleanup_all()
+    _event_buckets.clear()
     logger.info("Minecraft plugin shutdown completed")
 
 def _show_help() -> str:
@@ -192,20 +228,9 @@ async def _handle_connect(
 
     logger.info("MC connect request: host=%s, port=%d, user=%s", host, port, user_id)
     
-    # 检查是否已有连接
-    if _manager.has_connection(group_id, user_id):
-        old_conn = _manager.get_connection(group_id, user_id)
-        if old_conn:
-            return segments(
-                f"已连接到 {old_conn.host}:{old_conn.port}\n请先使用 /mc disconnect 断开"
-            )
-        return segments("已存在连接，请先使用 /mc disconnect 断开")
-
     log_monitor_obj = None
     if log_file:
         log_path = Path(log_file)
-        if log_path.name != "latest.log":
-            return segments("❌ 日志文件必须是 latest.log")
         if not log_path.is_file():
             return segments("❌ 日志文件不存在或无法访问")
     
@@ -217,6 +242,8 @@ async def _handle_connect(
             return segments("❌ RCON 连接失败，请检查地址和密码")
     except Exception as e:
         logger.error("MC RCON connection failed: %s", e)
+        if "rcon_client" in locals():
+            await rcon_client.disconnect()
         return segments(f"❌ 连接失败: {e}")
     
     # 创建日志监控器
@@ -241,7 +268,7 @@ async def _handle_connect(
         rcon_client=rcon_client,
         log_monitor=log_monitor_obj,
     )
-    _manager.add_connection(conn)
+    await _manager.replace_connection(conn)
     
     log_status = "✅" if log_monitor_obj else "❌ (文件不存在或无法访问)"
     logger.info("MC connected: %s_%s -> %s:%s", target_type, target_id, host, port)
@@ -260,10 +287,7 @@ async def _handle_disconnect(
     if not _manager.has_connection(group_id, user_id):
         return segments("❌ 当前无连接")
     
-    conn = _manager.get_connection(group_id, user_id)
-    if conn:
-        await conn.cleanup()
-    _manager.remove_connection(group_id, user_id)
+    await _manager.disconnect_connection(group_id, user_id)
     
     logger.info("MC connection closed for user %s", user_id)
     return segments("✅ 已断开连接")
@@ -325,6 +349,88 @@ async def _handle_status_command(
 # 定时任务
 # ============================================================
 
+
+def _server_bucket_key(conn: McConnection) -> tuple[str, int]:
+    return (str(conn.host).strip().casefold(), int(conn.port))
+
+
+def _normalize_log_batch(value: Any) -> LogBatch:
+    if isinstance(value, LogBatch):
+        return value
+    events = list(value or [])
+    return LogBatch(events=events, matched_total=len(events))
+
+
+def _message_fits_budget(message: str) -> bool:
+    return (
+        len(message) <= MC_MAX_ACTION_CHARS
+        and len(message.encode("utf-8", errors="replace")) <= MC_MAX_ACTION_BYTES
+    )
+
+
+def _batch_message(conn: McConnection, batch: LogBatch, *, now: float) -> tuple[str, int]:
+    bucket = _event_buckets.setdefault(_server_bucket_key(conn), _EventTokenBucket())
+    candidate_count = min(len(batch.events), MC_MAX_EVENTS_PER_CONNECTION)
+    allowed = bucket.take(candidate_count, now=now)
+    event_lines = [
+        message
+        for event in batch.events[:allowed]
+        if (message := _format_event_message(event))
+    ]
+    dropped = max(0, batch.dropped_events) + max(0, len(batch.events) - len(event_lines))
+
+    def render() -> str:
+        lines = list(event_lines)
+        if not lines:
+            lines.append(f"🎮 [MC] {conn.host}:{conn.port} 日志摘要")
+        if dropped:
+            lines.append(f"⚠️ 另有 {dropped} 条 MC 事件被折叠/丢弃")
+        if batch.skipped_bytes:
+            line_text = "行数未知" if batch.skipped_lines is None else f"{batch.skipped_lines} 行"
+            lines.append(
+                f"⚠️ 日志积压跳过 {batch.skipped_bytes} 字节（{line_text}），仅处理有界 tail"
+            )
+        return "\n".join(lines)
+
+    message = render()
+    while event_lines and not _message_fits_budget(message):
+        event_lines.pop()
+        dropped += 1
+        message = render()
+    if not _message_fits_budget(message):
+        message = (
+            f"🎮 [MC] {conn.host}:{conn.port} 日志摘要\n"
+            f"⚠️ 本轮事件过多，已折叠/丢弃至少 {max(1, dropped)} 条"
+        )
+    return message, max(batch.matched_total, len(batch.events)) + max(0, batch.skipped_lines or 0)
+
+
+def _action_for_connection(conn: McConnection, message: str) -> dict[str, Any] | None:
+    if conn.target_type == "group":
+        return build_action(segments(message), None, conn.target_id)
+    return build_action(segments(message), conn.target_id, None)
+
+
+async def _send_mc_action(
+    context: PluginContextProtocol,
+    conn: McConnection,
+    message: str,
+) -> None:
+    action = _action_for_connection(conn, message)
+    if not action:
+        return
+    try:
+        sent = await asyncio.wait_for(
+            context.send_action(action),
+            timeout=MC_SEND_TIMEOUT_SECONDS,
+        )
+        if sent is False:
+            logger.warning("[MC] OneBot rejected log delivery for %s:%s", conn.host, conn.port)
+    except asyncio.TimeoutError:
+        logger.error("[MC] Log delivery timed out for %s:%s", conn.host, conn.port)
+    except Exception as exc:
+        logger.error("[MC] Log delivery failed for %s:%s: %s", conn.host, conn.port, exc)
+
 async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, Any]]]:
     """定时任务：检查所有连接的日志更新"""
     connections = _manager.all_connections()
@@ -332,37 +438,55 @@ async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, A
     if not connections:
         return None
     
+    active_bucket_keys = {_server_bucket_key(conn) for conn in connections}
+    for key in list(_event_buckets):
+        if key not in active_bucket_keys:
+            _event_buckets.pop(key, None)
+
+    deliveries: list[tuple[McConnection, str, int]] = []
     for conn in connections:
         if not conn.log_monitor:
             continue
         
         try:
             if hasattr(conn.log_monitor, "check_updates_async"):
-                events = await conn.log_monitor.check_updates_async()
+                raw_batch = await asyncio.wait_for(
+                    conn.log_monitor.check_updates_async(),
+                    timeout=MC_MONITOR_TIMEOUT_SECONDS,
+                )
             else:
-                events = await asyncio.to_thread(conn.log_monitor.check_updates)
-
-            for event in events:
-                message = _format_event_message(event)
-                
-                if message:
-                    logger.info(
-                        "[MC] 转发到 %s_%s: %s",
-                        conn.target_type,
-                        conn.target_id,
-                        message,
-                    )
-                    
-                    if conn.target_type == "group":
-                        action = build_action(segments(message), None, conn.target_id)
-                    else:
-                        action = build_action(segments(message), conn.target_id, None)
-                    
-                    if action:
-                        await context.send_action(action)
+                raw_batch = await asyncio.wait_for(
+                    asyncio.to_thread(conn.log_monitor.check_updates),
+                    timeout=MC_MONITOR_TIMEOUT_SECONDS,
+                )
+            batch = _normalize_log_batch(raw_batch)
+            if not batch.events and not batch.dropped_events and not batch.skipped_bytes:
+                continue
+            message, event_total = _batch_message(conn, batch, now=time.monotonic())
+            deliveries.append((conn, message, event_total))
         
         except Exception as e:
             logger.error("[MC] 处理连接 %s:%s 时出错: %s", conn.host, conn.port, e)
+
+    if len(deliveries) <= MC_MAX_ACTIONS_PER_TICK:
+        selected = deliveries
+        overflow: list[tuple[McConnection, str, int]] = []
+    else:
+        selected = deliveries[: MC_MAX_ACTIONS_PER_TICK - 1]
+        overflow = deliveries[MC_MAX_ACTIONS_PER_TICK - 1 :]
+
+    for conn, message, _event_total in selected:
+        logger.info("[MC] 批量转发到 %s_%s", conn.target_type, conn.target_id)
+        await _send_mc_action(context, conn, message)
+
+    if overflow:
+        overflow_conn = overflow[0][0]
+        overflow_events = sum(item[2] for item in overflow)
+        notice = (
+            f"🎮 [MC] 本轮达到 {MC_MAX_ACTIONS_PER_TICK} 条 QQ action 硬上限\n"
+            f"⚠️ 另有 {len(overflow)} 个连接、{overflow_events} 条日志事件未转发"
+        )
+        await _send_mc_action(context, overflow_conn, notice)
     
     return None
 

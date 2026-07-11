@@ -324,23 +324,13 @@ def _query_direct_memory_items(
 ) -> list[RetrievedItem]:
     items = memory_db.query(
         question,
+        chat_id=chat_id,
         top_k=max(6, int(cfg.top_k) * 4),
         min_score=cfg.min_score,
         type_filter=None,
         meta_filter=None,
     )
-    scoped_chat_id = (chat_id or "").strip()
-    filtered_items: list[RetrievedItem] = []
-    for it in items:
-        meta = it.meta if isinstance(it.meta, dict) else {}
-        item_chat_id = str(meta.get("chat_id", "") or "").strip()
-        item_type = str(meta.get("type", "") or "").strip()
-        if item_type in {"knowledge", "word_def"}:
-            filtered_items.append(it)
-            continue
-        if scoped_chat_id and item_chat_id == scoped_chat_id:
-            filtered_items.append(it)
-    return filtered_items
+    return items
 
 
 def _format_memory_items(items: Sequence[RetrievedItem]) -> str:

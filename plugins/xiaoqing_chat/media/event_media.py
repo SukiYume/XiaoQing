@@ -3,15 +3,16 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import ipaddress
 import json
 import mimetypes
 import re
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote_to_bytes, urlparse
 
-from core.plugin_base import ensure_dir
+from core.plugin_base import atomic_write_bytes, ensure_dir
+from core.safe_http import SafeHttpError, fetch_public_bytes
 
 from ..helper_utils import _iter_message_segments
 from ..media_registry import resolve_registered_media_items
@@ -25,13 +26,11 @@ from .event_media_analysis import (
     _should_refresh_cached_render,
 )
 from .event_media_common import (
-    RenderedMedia,
-    ResolvedMedia,
-    _DOWNLOAD_CHUNK_SIZE,
     _MEDIA_DOWNLOAD_TIMEOUT,
-    _ONEBOT_HTTP_TIMEOUT,
     _SUPPORTED_IMAGE_SUFFIXES,
     _SUPPORTED_MEDIA_TYPES,
+    RenderedMedia,
+    ResolvedMedia,
     _build_context_marker,
     _build_fallback_render,
     _build_marker,
@@ -59,75 +58,24 @@ from .event_media_common import (
 from .qq_face import describe_face_segment
 from .qq_face_catalog import record_face_observation
 
+
 async def _download_url_bytes(url: str, *, context, max_bytes: int) -> tuple[bytes, str]:
-    if _is_blocked_media_url_target(url):
-        raise ValueError("blocked unsafe media url target")
-    session = getattr(context, "http_session", None)
-    if session is None or not hasattr(session, "get"):
-        raise FileNotFoundError(f"HTTP session unavailable for {url}")
-
-    async with session.get(url, timeout=_MEDIA_DOWNLOAD_TIMEOUT) as resp:
-        if hasattr(resp, "raise_for_status"):
-            resp.raise_for_status()
-        headers = getattr(resp, "headers", {}) or {}
-        content_type = str(headers.get("Content-Type", "") or "")
-        content_length = headers.get("Content-Length")
-        if max_bytes > 0 and content_length:
-            try:
-                if int(content_length) > max_bytes:
-                    raise ValueError(f"media too large: {content_length} bytes")
-            except ValueError:
-                pass
-
-        stream = getattr(getattr(resp, "content", None), "iter_chunked", None)
-        if callable(stream):
-            chunks: list[bytes] = []
-            total = 0
-            async for chunk in stream(_DOWNLOAD_CHUNK_SIZE):
-                total += len(chunk)
-                if max_bytes > 0 and total > max_bytes:
-                    raise ValueError(f"media too large: {total} bytes")
-                chunks.append(chunk)
-            data = b"".join(chunks)
-        else:
-            data = await resp.read()
-            if max_bytes > 0 and len(data) > max_bytes:
-                raise ValueError(f"media too large: {len(data)} bytes")
-    return data, content_type
+    del context
+    try:
+        response = await fetch_public_bytes(
+            url,
+            timeout_seconds=float(_MEDIA_DOWNLOAD_TIMEOUT.total),
+            max_bytes=max(1, int(max_bytes)),
+            allowed_content_type_prefixes=("image/", "application/octet-stream"),
+        )
+    except SafeHttpError as exc:
+        raise ValueError(str(exc)) from exc
+    if response is None:
+        raise FileNotFoundError("media download failed")
+    return response.body, str(response.headers.get("Content-Type", "") or "")
 
 
-def _onebot_http_base(context) -> str:
-    return str((getattr(context, "config", {}) or {}).get("onebot_http_base", "") or "").strip().rstrip("/")
-
-
-def _onebot_headers(context) -> dict[str, str]:
-    token = str((getattr(context, "secrets", {}) or {}).get("onebot_token", "") or "").strip()
-    if not token:
-        return {}
-    return {"Authorization": f"Bearer {token}"}
-
-
-async def _onebot_api_post(context, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-    base = _onebot_http_base(context)
-    session = getattr(context, "http_session", None)
-    if not base or session is None or not hasattr(session, "post"):
-        return {}
-
-    url = f"{base}/{action.lstrip('/')}"
-    async with session.post(
-        url,
-        json=payload,
-        headers=_onebot_headers(context),
-        timeout=_ONEBOT_HTTP_TIMEOUT,
-    ) as resp:
-        if hasattr(resp, "raise_for_status"):
-            resp.raise_for_status()
-        data = await resp.json(content_type=None)
-    return data if isinstance(data, dict) else {}
-
-
-def _message_segments_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    data = payload.get("data", {}) or {}
+def _message_segments_from_data(data: dict[str, Any]) -> list[dict[str, Any]]:
     message = data.get("message")
     if isinstance(message, list):
         return [seg for seg in message if isinstance(seg, dict)]
@@ -237,6 +185,11 @@ async def _recover_mface_media_via_onebot(
     if event is None:
         return None
 
+    capabilities = getattr(context, "capabilities", None)
+    onebot_media = getattr(capabilities, "onebot_media", None)
+    if onebot_media is None:
+        return None
+
     message_id = event.get("message_id")
     summary_hint = _segment_summary_hint(segment)
     candidate_requests: list[dict[str, str]] = []
@@ -255,10 +208,10 @@ async def _recover_mface_media_via_onebot(
 
     if message_id is not None:
         try:
-            detail_payload = await _onebot_api_post(context, "get_msg", {"message_id": message_id})
+            detail_data = await onebot_media.get_message(message_id)
         except Exception:
-            detail_payload = {}
-        detail_segments = _message_segments_from_payload(detail_payload)
+            detail_data = {}
+        detail_segments = _message_segments_from_data(detail_data)
         _extend_requests(
             [
                 item
@@ -271,10 +224,12 @@ async def _recover_mface_media_via_onebot(
 
     for params in candidate_requests:
         try:
-            image_payload = await _onebot_api_post(context, "get_image", params)
+            image_data = await onebot_media.get_image(
+                file_id=params.get("file_id"),
+                file=params.get("file"),
+            )
         except Exception:
             continue
-        image_data = image_payload.get("data")
         if not isinstance(image_data, dict):
             continue
         resolved = await _resolve_onebot_image_result(
@@ -303,33 +258,6 @@ async def _recover_media_bytes_if_needed(
         event=event,
         context=context,
         max_bytes=max_bytes,
-    )
-
-
-def _is_blocked_media_url_target(url: str) -> bool:
-    try:
-        parsed = urlparse(str(url or ""))
-    except Exception:
-        return True
-
-    host = (parsed.hostname or "").strip().lower()
-    if not host:
-        return True
-    if host in {"localhost", "localhost.localdomain"}:
-        return True
-
-    try:
-        ip = ipaddress.ip_address(host.strip("[]"))
-    except ValueError:
-        return False
-
-    return (
-        ip.is_loopback
-        or ip.is_private
-        or ip.is_link_local
-        or ip.is_unspecified
-        or ip.is_reserved
-        or ip.is_multicast
     )
 
 
@@ -563,6 +491,10 @@ async def _resolve_segment_media(
     *,
     context,
     max_bytes: int,
+    max_pixels: int = 16_000_000,
+    max_frames: int = 120,
+    disk_quota_bytes: int = 256 * 1024 * 1024,
+    cache_ttl_seconds: float = 7 * 86400.0,
     event: dict[str, Any] | None = None,
 ) -> ResolvedMedia | None:
     payload, source_name, suffix = await _resolve_media_bytes(
@@ -572,11 +504,24 @@ async def _resolve_segment_media(
         event=event,
     )
     mime_type, suffix, width, height, is_animated = _inspect_image_payload(payload, fallback_suffix=suffix)
+    _validate_image_resource_limits(
+        payload,
+        width=width,
+        height=height,
+        max_pixels=max_pixels,
+        max_frames=max_frames,
+    )
     media_hash = _hash_bytes(payload)
     cached_path = _cached_media_path(context, media_hash, suffix)
     ensure_dir(cached_path.parent)
+    _prune_media_inbox(
+        cached_path.parent,
+        quota_bytes=disk_quota_bytes,
+        ttl_seconds=cache_ttl_seconds,
+        incoming_bytes=len(payload),
+    )
     if not cached_path.exists():
-        cached_path.write_bytes(payload)
+        atomic_write_bytes(cached_path, payload)
     resolved = ResolvedMedia(
         media_hash=media_hash,
         segment_type=str(segment.get("type", "") or ""),
@@ -588,6 +533,67 @@ async def _resolve_segment_media(
         is_animated=is_animated,
     )
     return resolved
+
+
+def _validate_image_resource_limits(
+    payload: bytes,
+    *,
+    width: int,
+    height: int,
+    max_pixels: int,
+    max_frames: int,
+) -> None:
+    if max_pixels > 0 and width > 0 and height > 0 and width * height > max_pixels:
+        raise ValueError("image pixel limit exceeded")
+    if max_frames <= 0:
+        return
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(payload)) as image:
+            if int(getattr(image, "n_frames", 1) or 1) > max_frames:
+                raise ValueError("image frame limit exceeded")
+    except ValueError:
+        raise
+    except Exception:
+        return
+
+
+def _prune_media_inbox(
+    root: Path,
+    *,
+    quota_bytes: int,
+    ttl_seconds: float,
+    incoming_bytes: int,
+) -> None:
+    now = time.time()
+    files: list[tuple[float, int, Path]] = []
+    for path in root.glob("*"):
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+            if ttl_seconds > 0 and now - stat.st_mtime > ttl_seconds:
+                path.unlink(missing_ok=True)
+                continue
+            files.append((stat.st_mtime, stat.st_size, path))
+        except OSError:
+            continue
+    if quota_bytes <= 0:
+        return
+    total = sum(size for _mtime, size, _path in files)
+    for _mtime, size, path in sorted(files):
+        if total + incoming_bytes <= quota_bytes:
+            break
+        try:
+            path.unlink(missing_ok=True)
+            total -= size
+        except OSError:
+            continue
+    if total + incoming_bytes > quota_bytes:
+        raise ValueError("media cache quota exceeded")
 
 
 async def _render_resolved_media(
@@ -1024,10 +1030,13 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
 
     rendered_items: list[RenderedMedia] = []
     new_emoji_markers: list[str] = []
+    max_media = max(0, int(_media_cfg_value(runtime, "max_media_per_message", 1)))
     for segment in _iter_message_segments(event):
         segment_type = str(segment.get("type", "") or "")
         if segment_type not in _SUPPORTED_MEDIA_TYPES:
             continue
+        if max_media == 0 or len(rendered_items) >= max_media:
+            break
         summary_hint = _segment_summary_hint(segment)
         prefer_emoji = _segment_prefers_emoji(segment)
         _media_log(
@@ -1060,6 +1069,14 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                 segment,
                 context=context,
                 max_bytes=int(_media_cfg_value(runtime, "max_analyze_bytes", 4 * 1024 * 1024)),
+                max_pixels=int(_media_cfg_value(runtime, "max_image_pixels", 16_000_000)),
+                max_frames=int(_media_cfg_value(runtime, "max_animation_frames", 120)),
+                disk_quota_bytes=int(
+                    _media_cfg_value(runtime, "inbox_disk_quota_bytes", 256 * 1024 * 1024)
+                ),
+                cache_ttl_seconds=float(
+                    _media_cfg_value(runtime, "inbox_ttl_seconds", 7 * 86400.0)
+                ),
                 event=event,
             )
         except Exception as exc:
@@ -1116,6 +1133,12 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                     runtime,
                     rendered,
                     source_path=rendered.cached_path,
+                    source_chat_id=(
+                        f"g{event.get('group_id')}"
+                        if event.get("group_id") not in (None, "")
+                        else f"u{event.get('user_id')}"
+                    ),
+                    source_user_id=str(event.get("user_id") or ""),
                 )
             except Exception:
                 collected = None

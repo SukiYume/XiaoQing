@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import functools
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntimeState, _ChatRuntime
@@ -43,11 +44,12 @@ class HandlerContext:
         runtime = runtime or _load_runtime(context)
         state = _state()
         _bind_all_stores(state, context.data_dir)
+        chat_id = _chat_id(event)
         return cls(
-            chat_id=_chat_id(event),
+            chat_id=chat_id,
             runtime=runtime,
             state=state,
-            secrets=_get_llm_secrets(context),
+            secrets=_get_llm_secrets(context, chat_id=chat_id),
             data_dir=context.data_dir,
             bot_name=_get_bot_name(context),
             context=context,
@@ -70,11 +72,17 @@ def handle_errors(label: str):
             try:
                 return await fn(*args, **kwargs)
             except Exception as exc:
+                request_id = str(getattr(context, "request_id", "") or secrets.token_hex(4))
                 if context and hasattr(context, "logger"):
-                    context.logger.exception("XiaoQing Chat %s 处理失败: %s", label, exc)
+                    context.logger.exception(
+                        "XiaoQing Chat handler failed label=%s request_id=%s error_type=%s",
+                        label,
+                        request_id,
+                        type(exc).__name__,
+                    )
                 from core.plugin_base import segments
 
-                return segments(f"\u274c {label}出错: {exc}")
+                return segments(f"❌ {label}暂时不可用，请稍后重试（请求ID: {request_id}）")
 
         return wrapper
 

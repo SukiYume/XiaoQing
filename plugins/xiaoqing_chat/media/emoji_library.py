@@ -30,6 +30,10 @@ class EmojiLibraryEntry:
     usage_count: int
     last_used_ts: float
     marker: str
+    source_chat_ids: tuple[str, ...] = ()
+    owner_id: str = ""
+    visibility: str = "chat"
+    global_approved: bool = False
 
 
 def _emoji_library_task_key(context, runtime) -> str:
@@ -239,6 +243,8 @@ def _normalize_entry_record(
     source: str,
     perceptual_hash: str,
     touch_collection: bool,
+    source_chat_id: str = "",
+    source_user_id: str = "",
 ) -> dict[str, Any]:
     existing = existing or {}
     first_collected_ts = float(existing.get("first_collected_ts", 0.0) or 0.0) or float(time.time())
@@ -248,6 +254,21 @@ def _normalize_entry_record(
     last_collected_ts = float(existing.get("last_collected_ts", 0.0) or 0.0)
     if touch_collection:
         last_collected_ts = float(time.time())
+    source_chat_ids = [
+        str(item).strip()
+        for item in existing.get("source_chat_ids", [])
+        if str(item).strip()
+    ]
+    legacy_chat_id = str(existing.get("source_chat_id", "") or "").strip()
+    if legacy_chat_id and legacy_chat_id not in source_chat_ids:
+        source_chat_ids.append(legacy_chat_id)
+    normalized_source_chat_id = str(source_chat_id or "").strip()
+    if normalized_source_chat_id and normalized_source_chat_id not in source_chat_ids:
+        source_chat_ids.append(normalized_source_chat_id)
+    visibility = str(existing.get("visibility", "") or "").strip().lower()
+    if visibility not in {"chat", "global"}:
+        visibility = "global" if source == "manual" else "chat"
+    global_approved = existing.get("global_approved") is True or source == "manual"
     return {
         "media_hash": entry.media_hash,
         "file_path": _to_data_relative_path(context, file_path),
@@ -262,6 +283,11 @@ def _normalize_entry_record(
         "first_collected_ts": first_collected_ts,
         "last_collected_ts": last_collected_ts,
         "seen_count": seen_count,
+        "source_chat_id": source_chat_ids[0] if source_chat_ids else "",
+        "source_chat_ids": source_chat_ids,
+        "owner_id": str(existing.get("owner_id", "") or source_user_id or "").strip(),
+        "visibility": visibility,
+        "global_approved": bool(global_approved),
     }
 
 
@@ -322,6 +348,7 @@ def _find_similar_entry(
     *,
     source_path: Path,
     perceptual_hash: str,
+    source_chat_id: str,
 ) -> tuple[str, dict[str, Any]] | None:
     threshold = max(0, int(_media_cfg_value(runtime, "emoji_auto_collect_similarity_threshold", 4)))
     if not perceptual_hash or threshold < 0:
@@ -331,6 +358,16 @@ def _find_similar_entry(
         if not isinstance(raw_record, dict):
             continue
         if _source_from_record(raw_record) != "auto":
+            continue
+        visible_chats = {
+            str(item).strip()
+            for item in raw_record.get("source_chat_ids", [])
+            if str(item).strip()
+        }
+        legacy_chat = str(raw_record.get("source_chat_id", "") or "").strip()
+        if legacy_chat:
+            visible_chats.add(legacy_chat)
+        if source_chat_id and source_chat_id not in visible_chats:
             continue
         candidate_hash = str(raw_record.get("perceptual_hash", "") or "").strip()
         if not candidate_hash:
@@ -401,6 +438,8 @@ def collect_emoji_candidate(
     rendered: "RenderedMedia",
     *,
     source_path: Path,
+    source_chat_id: str = "",
+    source_user_id: str = "",
 ) -> tuple[EmojiLibraryEntry, bool] | None:
     if rendered.kind != "emoji":
         return None
@@ -429,6 +468,7 @@ def collect_emoji_candidate(
             entries,
             source_path=source_path,
             perceptual_hash=perceptual_hash,
+            source_chat_id=str(source_chat_id or "").strip(),
         )
         if similar is not None:
             record_key, existing = similar
@@ -474,6 +514,8 @@ def collect_emoji_candidate(
         source=source,
         perceptual_hash=perceptual_hash,
         touch_collection=True,
+        source_chat_id=source_chat_id,
+        source_user_id=source_user_id,
     )
     normalized["media_hash"] = record_key
     entries[record_key] = normalized
@@ -523,6 +565,7 @@ async def load_emoji_library(
     *,
     repair_invalid: bool = True,
     schedule_background_repair: bool = False,
+    chat_id: str | None = None,
 ) -> list[EmojiLibraryEntry]:
     library_dir = resolve_emoji_library_dir(context, runtime)
     if library_dir is None:
@@ -533,7 +576,7 @@ async def load_emoji_library(
     if repair_invalid and not schedule_background_repair and cache_key and cache_signature is not None:
         cached = _LIBRARY_CACHE.get(cache_key)
         if cached is not None and cached[0] == cache_signature:
-            return list(cached[1])
+            return _filter_visible_entries(cached[1], chat_id)
 
     payload = _load_index(context, runtime)
     original_payload = deepcopy(payload)
@@ -580,6 +623,20 @@ async def load_emoji_library(
                 usage_count=int(existing.get("usage_count", 0) or 0),
                 last_used_ts=float(existing.get("last_used_ts", 0.0) or 0.0),
                 marker=str(existing.get("marker", "") or "").strip(),
+                source_chat_ids=tuple(
+                    str(item).strip()
+                    for item in existing.get("source_chat_ids", [])
+                    if str(item).strip()
+                ) or tuple(
+                    [str(existing.get("source_chat_id", "") or "").strip()]
+                    if str(existing.get("source_chat_id", "") or "").strip()
+                    else []
+                ),
+                owner_id=str(existing.get("owner_id", "") or "").strip(),
+                visibility=str(existing.get("visibility", "") or (
+                    "global" if source == "manual" else "chat"
+                )).strip().lower(),
+                global_approved=existing.get("global_approved") is True or source == "manual",
             )
         else:
             if status == "pending":
@@ -632,7 +689,7 @@ async def load_emoji_library(
                 rendered,
                 existing if isinstance(existing, dict) else None,
             )
-        retained_entries[entry.media_hash] = _normalize_entry_record(
+        normalized_record = _normalize_entry_record(
             context=context,
             file_path=file_path,
             entry=entry,
@@ -642,8 +699,23 @@ async def load_emoji_library(
             perceptual_hash=perceptual_hash,
             touch_collection=False,
         )
+        retained_entries[entry.media_hash] = normalized_record
         if status == "active":
-            results.append(entry)
+            results.append(
+                EmojiLibraryEntry(
+                    media_hash=entry.media_hash,
+                    file_path=entry.file_path,
+                    description=entry.description,
+                    emotion_tags=entry.emotion_tags,
+                    usage_count=entry.usage_count,
+                    last_used_ts=entry.last_used_ts,
+                    marker=entry.marker,
+                    source_chat_ids=tuple(normalized_record.get("source_chat_ids", [])),
+                    owner_id=str(normalized_record.get("owner_id", "") or ""),
+                    visibility=str(normalized_record.get("visibility", "chat") or "chat"),
+                    global_approved=normalized_record.get("global_approved") is True,
+                )
+            )
 
     payload["entries"] = retained_entries
     _save_index_if_changed(
@@ -658,7 +730,46 @@ async def load_emoji_library(
         updated_signature = _library_signature(context, runtime)
         if updated_signature is not None:
             _LIBRARY_CACHE[cache_key] = (updated_signature, list(results))
-    return results
+    return _filter_visible_entries(results, chat_id)
+
+
+def _filter_visible_entries(
+    entries: list[EmojiLibraryEntry],
+    chat_id: str | None,
+) -> list[EmojiLibraryEntry]:
+    scope = str(chat_id or "").strip()
+    if not scope:
+        return list(entries)
+    return [
+        entry
+        for entry in entries
+        if (entry.visibility == "global" and entry.global_approved)
+        or scope in set(entry.source_chat_ids)
+    ]
+
+
+def approve_emoji_global(context, runtime, media_hash: str, *, approved_by: str) -> bool:
+    payload = _load_index(context, runtime)
+    record = payload.setdefault("entries", {}).get(str(media_hash or "").strip())
+    if not isinstance(record, dict):
+        return False
+    record["visibility"] = "global"
+    record["global_approved"] = True
+    record["approved_by"] = str(approved_by or "").strip()
+    record["approved_at"] = float(time.time())
+    _save_index(context, runtime, payload)
+    return True
+
+
+def delete_emoji_entry(context, runtime, media_hash: str) -> bool:
+    payload = _load_index(context, runtime)
+    entries = payload.setdefault("entries", {})
+    record = entries.pop(str(media_hash or "").strip(), None)
+    if not isinstance(record, dict):
+        return False
+    _remove_library_file(context, runtime, record)
+    _save_index(context, runtime, payload)
+    return True
 
 
 def mark_emoji_used(context, runtime, entry: EmojiLibraryEntry) -> None:

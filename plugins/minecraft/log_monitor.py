@@ -5,12 +5,14 @@ Minecraft 服务器日志监控
 """
 
 import asyncio
-import re
 import logging
-from pathlib import Path
+import re
+from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Optional, Callable, Awaitable
 from enum import Enum
+from pathlib import Path
+from typing import Any, Optional, overload
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,32 @@ class LogEvent:
     message: Optional[str]
     raw_line: str
     timestamp: Optional[str] = None
+
+
+@dataclass
+class LogBatch:
+    """One bounded log poll and explicit information about discarded input."""
+
+    events: list[LogEvent]
+    matched_total: int = 0
+    dropped_events: int = 0
+    skipped_bytes: int = 0
+    skipped_lines: int | None = 0
+
+    def __len__(self) -> int:
+        return len(self.events)
+
+    def __iter__(self) -> Iterator[LogEvent]:
+        return iter(self.events)
+
+    @overload
+    def __getitem__(self, index: int) -> LogEvent: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[LogEvent]: ...
+
+    def __getitem__(self, index: int | slice) -> Any:
+        return self.events[index]
 
 class LogMonitor:
     """
@@ -68,6 +96,9 @@ class LogMonitor:
     
     # 时间戳提取
     TIMESTAMP_PATTERN = re.compile(r"\[([\d:]+)\]")
+    MAX_READ_BYTES = 1024 * 1024
+    MAX_EVENTS_PER_CHECK = 1000
+    MAX_SKIPPED_LINE_SCAN_BYTES = 4 * 1024 * 1024
 
     def __init__(self, log_path: str):
         self.log_path = Path(log_path)
@@ -91,7 +122,25 @@ class LogMonitor:
             logger.error("初始化日志监控失败: %s", e)
             return False
 
-    def check_updates(self) -> list[LogEvent]:
+    def _count_skipped_lines(self, start: int, end: int) -> int | None:
+        byte_count = max(0, end - start)
+        if byte_count <= 0:
+            return 0
+        if byte_count > self.MAX_SKIPPED_LINE_SCAN_BYTES:
+            return None
+        count = 0
+        with self.log_path.open("rb") as file:
+            file.seek(start)
+            remaining = byte_count
+            while remaining > 0:
+                chunk = file.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                count += chunk.count(b"\n")
+                remaining -= len(chunk)
+        return count
+
+    def check_updates(self) -> LogBatch:
         """
         检查日志文件更新
         
@@ -100,13 +149,16 @@ class LogMonitor:
         """
         if not self._initialized:
             if not self.initialize():
-                return []
+                return LogBatch(events=[])
         
         if not self.log_path.exists():
             logger.warning("日志文件不存在")
-            return []
+            return LogBatch(events=[])
         
-        events = []
+        retained_events: deque[LogEvent] = deque(maxlen=self.MAX_EVENTS_PER_CHECK)
+        matched_total = 0
+        skipped_bytes = 0
+        skipped_lines: int | None = 0
         
         try:
             current_size = self.log_path.stat().st_size
@@ -117,29 +169,59 @@ class LogMonitor:
                 self._last_position = 0
             
             if current_size == self._last_position:
-                return []  # 没有新内容
+                return LogBatch(events=[])  # 没有新内容
             
-            # 读取新内容
-            with open(self.log_path, "r", encoding="utf-8", errors="replace") as f:
-                f.seek(self._last_position)
-                new_content = f.read()
-                self._last_position = f.tell()
-            
+            # 只读取最新的有界 tail，避免一次更新把整个日志装入内存。
+            read_start = self._last_position
+            if current_size - read_start > self.MAX_READ_BYTES:
+                read_start = current_size - self.MAX_READ_BYTES
+                skipped_bytes = read_start - self._last_position
+                skipped_lines = self._count_skipped_lines(self._last_position, read_start)
+                logger.warning(
+                    "Minecraft 日志积压超过 %d 字节，仅处理最新 tail",
+                    self.MAX_READ_BYTES,
+                )
+            with open(self.log_path, "rb") as f:
+                f.seek(read_start)
+                new_content = f.read(self.MAX_READ_BYTES)
+            self._last_position = current_size
+
+            if read_start > 0 and new_content:
+                with self.log_path.open("rb") as file:
+                    file.seek(read_start - 1)
+                    starts_at_line_boundary = file.read(1) == b"\n"
+                if not starts_at_line_boundary:
+                    newline = new_content.find(b"\n")
+                    discarded = len(new_content) if newline < 0 else newline + 1
+                    skipped_bytes += discarded
+                    if skipped_lines is not None:
+                        skipped_lines += 1
+                    new_content = b"" if newline < 0 else new_content[newline + 1 :]
+
             # 解析每一行
-            for line in new_content.strip().split("\n"):
+            decoded = new_content.decode("utf-8", errors="replace")
+            for line in decoded.splitlines():
                 if line.strip():
                     event = self._parse_line(line)
                     if event and event.event_type != LogEventType.UNKNOWN:
-                        events.append(event)
+                        matched_total += 1
+                        retained_events.append(event)
             
             self._last_size = current_size
             
         except Exception as e:
             logger.error("读取日志文件失败: %s", e)
         
-        return events
+        events = list(retained_events)
+        return LogBatch(
+            events=events,
+            matched_total=matched_total,
+            dropped_events=max(0, matched_total - len(events)),
+            skipped_bytes=skipped_bytes,
+            skipped_lines=skipped_lines,
+        )
 
-    async def check_updates_async(self) -> list[LogEvent]:
+    async def check_updates_async(self) -> LogBatch:
         """在线程池中检查更新，避免阻塞事件循环"""
         return await asyncio.to_thread(self.check_updates)
 

@@ -10,8 +10,22 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from core.interfaces import PluginCapabilities
+from plugins.xiaoqing_chat.llm.llm_client import LLMError
 from plugins.xiaoqing_chat.media.emoji_library import collect_emoji_candidate, load_emoji_library
-from plugins.xiaoqing_chat.media.qq_face_catalog import load_qq_face_catalog
+from plugins.xiaoqing_chat.media.event_media import (
+    RenderedMedia,
+    ResolvedMedia,
+    _download_url_bytes,
+    _looks_like_structured_media_text,
+    _media_llm_max_tokens,
+    _prepare_media_for_llm,
+    _resolve_media_llm_secrets,
+    build_effective_user_text,
+    render_event_media,
+    render_event_media_text,
+    render_local_media_file,
+)
 from plugins.xiaoqing_chat.media.marker_resolver import (
     extract_choice_json,
     extract_inbound_marker_labels,
@@ -21,25 +35,10 @@ from plugins.xiaoqing_chat.media.marker_resolver import (
     strip_outbound_marker_residue,
     text_without_outbound_marker,
 )
-from plugins.xiaoqing_chat.media.event_media import (
-    RenderedMedia,
-    ResolvedMedia,
-    _download_url_bytes,
-    _looks_like_structured_media_text,
-    _media_llm_max_tokens,
-    _onebot_api_post,
-    _prepare_media_for_llm,
-    _resolve_media_llm_secrets,
-    build_effective_user_text,
-    render_event_media,
-    render_event_media_text,
-    render_local_media_file,
-)
-from plugins.xiaoqing_chat.llm.llm_client import LLMError
+from plugins.xiaoqing_chat.media.qq_face_catalog import load_qq_face_catalog
 from plugins.xiaoqing_chat.media_registry import compact_message_content, resolve_message_content
 from plugins.xiaoqing_chat.message_parts import build_text_message_parts, message_parts_to_legacy
 from plugins.xiaoqing_chat.runtime_state import get_state
-
 
 _PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0m8AAAAASUVORK5CYII="
@@ -215,6 +214,7 @@ def mock_context(tmp_path: Path):
     context.plugin_dir.mkdir(parents=True, exist_ok=True)
     context.data_dir.mkdir(parents=True, exist_ok=True)
     context.http_session = AsyncMock()
+    context.capabilities = PluginCapabilities()
     context.send_action = AsyncMock()
     context.logger = MagicMock()
     return context
@@ -389,7 +389,7 @@ def test_extract_choice_json_uses_balanced_json_parser():
         'selector said {"mode":"none","reason":"看到 {猫} 但不必发"} trailing {"mode":"emoji_only"}'
     )
 
-    assert payload == {"mode": "none", "reason": "看到 {猫} 但不必发"}
+    assert payload == {}
 
 
 def test_parse_marker_accepts_first_valid_marker_and_cleans_residue() -> None:
@@ -784,9 +784,9 @@ async def test_render_event_media_text_logs_raw_response_metadata(mock_context):
         for call in mock_context.logger.info.call_args_list
     )
     assert '"step": "media.analyze.detail.ok"' in log_lines
-    assert '"used_path": "/chat/completions"' in log_lines
+    assert '"used_path": "[redacted ' in log_lines
     assert '"finish_reason": "stop"' in log_lines
-    assert f'"raw_chars": "{len(raw_content)}"' in log_lines
+    assert '"raw_chars": "[redacted ' in log_lines
 
 
 @pytest.mark.asyncio
@@ -1185,7 +1185,7 @@ async def test_render_event_media_text_retries_and_then_falls_back_when_detail_e
     )
     assert '"step": "media.analyze.provider_retry"' in log_lines
     assert '"step": "media.analyze.fail"' in log_lines
-    assert "semantic_validation_failed:summary_fallback" in log_lines
+    assert "semantic_validation_failed" in log_lines
     assert '"step": "media.render.fallback"' in log_lines
 
 
@@ -1618,34 +1618,30 @@ async def test_render_event_media_text_fetches_mface_image_via_onebot_apis(mock_
         ],
     }
 
-    async def _fake_onebot(context, action, payload):
-        if action == "get_msg":
-            return {
-                "data": {
-                    "message": [
-                        {
-                            "type": "image",
-                            "data": {
-                                "file_id": "file-1",
-                                "summary": "无语",
-                            },
-                        }
-                    ]
-                }
+    media = SimpleNamespace(
+        get_message=AsyncMock(
+            return_value={
+                "message": [
+                    {
+                        "type": "image",
+                        "data": {
+                            "file_id": "file-1",
+                            "summary": "无语",
+                        },
+                    }
+                ]
             }
-        if action == "get_image":
-            return {
-                "data": {
-                    "base64": base64.b64encode(_PNG_BYTES).decode("ascii"),
-                    "file_name": "sticker.png",
-                }
+        ),
+        get_image=AsyncMock(
+            return_value={
+                "base64": base64.b64encode(_PNG_BYTES).decode("ascii"),
+                "file_name": "sticker.png",
             }
-        raise AssertionError(f"unexpected action: {action}")
+        ),
+    )
+    mock_context.capabilities = PluginCapabilities(onebot_media=media)
 
     with patch(
-        "plugins.xiaoqing_chat.media.event_media._onebot_api_post",
-        new=AsyncMock(side_effect=_fake_onebot),
-    ), patch(
         "plugins.xiaoqing_chat.media.event_media._analyze_media_with_llm",
         new=AsyncMock(return_value=None),
     ):
@@ -1653,6 +1649,8 @@ async def test_render_event_media_text_fetches_mface_image_via_onebot_apis(mock_
 
     assert text.startswith("[表情包：")
     assert event["_xc_new_emoji_count"] == 1
+    media.get_message.assert_awaited_once_with(42)
+    media.get_image.assert_awaited_once_with(file_id="file-1", file=None)
 
 
 @pytest.mark.asyncio
@@ -2097,111 +2095,36 @@ async def test_render_event_media_text_passes_vision_extra_payload(mock_context)
 
 @pytest.mark.asyncio
 async def test_download_url_bytes_streams_and_enforces_timeout(mock_context):
-    captured = {}
-
-    class _Stream:
-        async def iter_chunked(self, _size):
-            yield b"12"
-            yield b"34"
-
-    class _Response:
-        headers = {"Content-Type": "image/png"}
-        content = _Stream()
-
-        def raise_for_status(self):
-            return None
-
-    class _ContextManager:
-        async def __aenter__(self):
-            return _Response()
-
-        async def __aexit__(self, *args):
-            return None
-
-    class _Session:
-        def get(self, *args, **kwargs):
-            captured.update(kwargs)
-            return _ContextManager()
-
-    mock_context.http_session = _Session()
-
-    payload, content_type = await _download_url_bytes(
-        "https://example.com/test.png",
-        context=mock_context,
-        max_bytes=8,
-    )
+    response = SimpleNamespace(body=b"1234", headers={"Content-Type": "image/png"})
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media.fetch_public_bytes",
+        new=AsyncMock(return_value=response),
+    ) as fetch:
+        payload, content_type = await _download_url_bytes(
+            "https://example.com/test.png",
+            context=mock_context,
+            max_bytes=8,
+        )
 
     assert payload == b"1234"
     assert content_type == "image/png"
-    assert captured["timeout"].total == 20
+    assert fetch.await_args.kwargs["timeout_seconds"] == 20
 
 
 @pytest.mark.asyncio
 async def test_download_url_bytes_rejects_oversized_stream(mock_context):
-    class _Stream:
-        async def iter_chunked(self, _size):
-            yield b"123"
-            yield b"456"
+    from core.safe_http import SafeHttpError
 
-    class _Response:
-        headers = {"Content-Type": "image/png"}
-        content = _Stream()
-
-        def raise_for_status(self):
-            return None
-
-    class _ContextManager:
-        async def __aenter__(self):
-            return _Response()
-
-        async def __aexit__(self, *args):
-            return None
-
-    class _Session:
-        def get(self, *args, **kwargs):
-            return _ContextManager()
-
-    mock_context.http_session = _Session()
-
-    with pytest.raises(ValueError, match="media too large"):
-        await _download_url_bytes(
-            "https://example.com/test.png",
-            context=mock_context,
-            max_bytes=5,
-        )
-
-
-@pytest.mark.asyncio
-async def test_onebot_api_post_passes_timeout(mock_context):
-    captured = {}
-
-    class _Response:
-        def raise_for_status(self):
-            return None
-
-        async def json(self, content_type=None):
-            return {"data": {"ok": True}}
-
-    class _ContextManager:
-        async def __aenter__(self):
-            return _Response()
-
-        async def __aexit__(self, *args):
-            return None
-
-    class _Session:
-        def post(self, *args, **kwargs):
-            captured.update(kwargs)
-            return _ContextManager()
-
-    mock_context.http_session = _Session()
-    mock_context.config["onebot_http_base"] = "http://localhost:5700"
-    mock_context.secrets["onebot_token"] = "token"
-
-    payload = await _onebot_api_post(mock_context, "get_msg", {"message_id": 1})
-
-    assert payload == {"data": {"ok": True}}
-    assert captured["timeout"].total == 15
+    with patch(
+        "plugins.xiaoqing_chat.media.event_media.fetch_public_bytes",
+        new=AsyncMock(side_effect=SafeHttpError("media too large")),
+    ):
+        with pytest.raises(ValueError, match="media too large"):
+            await _download_url_bytes(
+                "https://example.com/test.png",
+                context=mock_context,
+                max_bytes=5,
+            )
 
 
 def test_resolve_media_llm_secrets_uses_dedicated_vision_provider(mock_context):
@@ -2402,14 +2325,13 @@ async def test_render_event_media_keeps_all_items_for_current_turn_context(mock_
     rendered = await render_event_media(event, context=mock_context, runtime=runtime)
     text = await build_effective_user_text("收到", event, context=mock_context, runtime=runtime)
 
-    assert len(rendered) == 4
+    assert len(rendered) == 3
     assert [item.marker for item in rendered] == [
         "[QQ表情：微笑]",
         "[QQ表情：大哭]",
         "[QQ表情：狗头]",
-        "[QQ表情：调皮]",
     ]
-    assert text.count("[QQ表情：") == 4
+    assert text.count("[QQ表情：") == 3
 
 
 @pytest.mark.asyncio

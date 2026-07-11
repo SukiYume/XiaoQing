@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.message import contains_bot_name, extract_text, has_at_mention, iter_message_segments
 
 from .config.config import XiaoQingChatConfig, load_xiaoqing_chat_config
+from .constants import FIND_BY_LOCAL_ID_LIMIT
 from .llm.llm_config import LLMCallConfig
 from .runtime_state import _ChatRuntime
-from .constants import FIND_BY_LOCAL_ID_LIMIT
 from .runtime_state import get_state as _state
 
 _LLM_SECRET_BASE_KEYS = {
@@ -216,7 +216,7 @@ def _load_runtime(context: Any) -> _ChatRuntime:
     return runtime
 
 
-def _get_llm_secrets(context: Any) -> dict[str, Any]:
+def _get_llm_secrets(context: Any, *, chat_id: str | None = None) -> dict[str, Any]:
     """Resolve LLM provider config into a flat dict.
 
     The ``xiaoqing_chat`` secrets block now uses a provider-based layout::
@@ -230,30 +230,30 @@ def _get_llm_secrets(context: Any) -> dict[str, Any]:
         }
 
     Resolution order:
-    1. If ``state.active_provider`` is set (via ``/xc 模型 <name>``), use that provider.
-    2. Otherwise use the ``default`` provider name.
-    3. Flatten the provider dict so downstream code can do ``secrets.get("api_base")`` etc.
+    1. The current chat's in-memory override.
+    2. The Bot-admin-controlled global in-memory override.
+    3. The configured ``default`` provider.
+    4. Flatten the provider dict so downstream code can use the legacy keys.
 
     Returns:
         Flat dict with keys: api_base, api_key, model, endpoint_path, proxy,
         plus ``_provider_name``, ``_providers`` for introspection.
     """
-    from .runtime_state import get_state as _state
-
     raw: dict[str, Any] = (context.secrets or {}).get("plugins", {}).get("xiaoqing_chat", {}) or {}
-    providers: dict[str, Any] = raw.get("providers") or {}
+    configured_providers = raw.get("providers") or {}
+    providers: dict[str, dict[str, Any]] = {
+        str(name): dict(value)
+        for name, value in configured_providers.items()
+        if isinstance(name, str) and isinstance(value, dict)
+    } if isinstance(configured_providers, dict) else {}
     default_name: str = raw.get("default", "") or ""
 
     state = _state()
-    active = state.active_provider or default_name
+    active = state.resolve_provider_name(chat_id, list(providers), default_name)
 
     provider: dict[str, Any] = {}
-    if active and active in providers:
-        provider = providers[active]
-    elif providers:
-        # Fallback: pick the first provider if name doesn't match
-        active = next(iter(providers))
-        provider = providers[active]
+    if active:
+        provider = providers.get(active, {})
 
     # Build flat dict for downstream consumption
     result: dict[str, Any] = {
@@ -300,7 +300,7 @@ def _llm_extra_payload(secrets: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_llm_config(
-    cfg: "XiaoQingChatConfig",
+    cfg: XiaoQingChatConfig,
     secrets: dict[str, Any],
     *,
     foreground: bool = False,
@@ -371,7 +371,7 @@ def _next_local_id(chat_id: str) -> str:
     return f"m{n}"
 
 
-def _find_by_local_id(chat_id: str, local_id: str) -> Optional[Any]:
+def _find_by_local_id(chat_id: str, local_id: str) -> Any | None:
     if not local_id:
         return None
     for msg in reversed(_state().memory_store.get(chat_id)[-FIND_BY_LOCAL_ID_LIMIT:]):

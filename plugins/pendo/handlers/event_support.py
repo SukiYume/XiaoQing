@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ..utils.formatters import ItemFormatter, MessageBuilder
-from ..utils.time_utils import parse_remind_times
+from ..utils.time_utils import TimezoneHelper, parse_remind_times
 from ..utils.validators import (
     build_remind_times_from_rules,
     derive_reminder_rules,
@@ -41,7 +41,9 @@ def default_reminders(start_time: str | None) -> list[str]:
         return []
     try:
         start_dt = datetime.fromisoformat(start_time)
-        now = datetime.now()
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=TimezoneHelper.DEFAULT_TZ)
+        now = TimezoneHelper.now(start_dt.tzinfo)
         offsets = [timedelta(days=1), timedelta(hours=1), timedelta(minutes=10)]
         return [(start_dt - offset).isoformat() for offset in offsets if start_dt - offset > now]
     except (ValueError, TypeError):

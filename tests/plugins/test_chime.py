@@ -319,3 +319,38 @@ async def test_chime_unknown_subcommand_returns_help(monkeypatch):
     result = await chime_main.handle("chime", "unknown-subcommand", {}, context)
 
     assert "未知命令" in str(result)
+
+
+@pytest.mark.asyncio
+async def test_manual_chime_query_does_not_advance_scheduled_history(monkeypatch):
+    context = MagicMock()
+    context.logger = MagicMock()
+    data = {"FRB1": {"240101": {"timestamp": {"value": "new"}}}}
+    save = Mock(return_value=True)
+    monkeypatch.setattr(chime_main, "fetch_chime_repeaters", AsyncMock(return_value=data))
+    monkeypatch.setattr(chime_main, "load_history", lambda _context: {"FRB1": "old"})
+    monkeypatch.setattr(chime_main, "save_history", save)
+
+    await chime_main.handle("chime", "", {}, context)
+
+    save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_chime_commits_history_only_after_delivery(monkeypatch):
+    context = MagicMock()
+    context.logger = MagicMock()
+    context.default_groups = lambda: [123]
+    context.send_action = AsyncMock(return_value=False)
+    data = {"FRB1": {"240101": {"timestamp": {"value": "new"}}}}
+    save = Mock(return_value=True)
+    monkeypatch.setattr(chime_main, "fetch_chime_repeaters", AsyncMock(return_value=data))
+    monkeypatch.setattr(chime_main, "load_history", lambda _context: {"FRB1": "old"})
+    monkeypatch.setattr(chime_main, "save_history", save)
+
+    await chime_main.scheduled_check(context)
+    save.assert_not_called()
+
+    context.send_action = AsyncMock(return_value=True)
+    await chime_main.scheduled_check(context)
+    save.assert_called_once()

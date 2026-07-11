@@ -223,6 +223,7 @@ class ReviewStore(StoreBase):
         payload: dict[str, Any],
         timeout_seconds: float,
         cooldown_seconds: float,
+        max_pending: int = 10,
         now: Optional[float] = None,
     ) -> Optional[ReviewSession]:
         now_ts = float(now or time.time())
@@ -237,6 +238,10 @@ class ReviewStore(StoreBase):
         for sid, obj in active.items():
             if isinstance(obj, dict) and str(obj.get("kind", "")) == kind and str(obj.get("chat_id", "")) == chat_id:
                 return _decode_session(str(sid), obj)
+
+        pending_limit = max(0, int(max_pending))
+        if pending_limit == 0 or len(active) >= pending_limit:
+            return None
 
         key = f"{chat_id}:{kind}"
         if cooldown_seconds > 0 and key in last_closed:
@@ -310,22 +315,22 @@ def _build_session_prompt(sess: ReviewSession) -> str:
                 f"- 目标：{goal or '自然聊天'}\n"
                 f"- 原因：{reason or '-'}\n\n"
                 "这属于需要长期规避的“模式”吗？\n"
-                f"- /xc_review ok {sess.session_id}\n"
-                f"- /xc_review no {sess.session_id}\n"
+                f"- /xc 审查 ok {sess.session_id}\n"
+                f"- /xc 审查 no {sess.session_id}\n"
             ).strip()
         if sess.step == 1:
             return (
                 f"{header}\n"
                 "请给一句“以后怎么避免/替代”的规则（越短越好）。\n"
-                f"- /xc_review answer {sess.session_id} <规则/替代说法>\n"
-                f"- /xc_review close {sess.session_id}\n"
+                f"- /xc 审查 answer {sess.session_id} <规则/替代说法>\n"
+                f"- /xc 审查 close {sess.session_id}\n"
             ).strip()
         summary = "\n".join(f"- {x}" for x in sess.answers[-3:]) if sess.answers else "-"
         return (
             f"{header}\n"
             "已记录：\n"
             f"{summary}\n\n"
-            f"- /xc_review close {sess.session_id}\n"
+            f"- /xc 审查 close {sess.session_id}\n"
         ).strip()
     if sess.kind == "goal_strategy":
         goal = str(sess.payload.get("goal", "") or "").strip()
@@ -336,22 +341,22 @@ def _build_session_prompt(sess: ReviewSession) -> str:
                 f"- 当前目标候选：{goal or '自然聊天'}\n"
                 f"{('- 现状：' + stats) if stats else ''}\n\n"
                 "这个目标/策略是否合适？\n"
-                f"- /xc_review ok {sess.session_id}\n"
-                f"- /xc_review answer {sess.session_id} goal: <更合适的目标>\n"
-                f"- /xc_review answer {sess.session_id} strategy: <策略备注/语气约束>\n"
-                f"- /xc_review no {sess.session_id}\n"
+                f"- /xc 审查 ok {sess.session_id}\n"
+                f"- /xc 审查 answer {sess.session_id} goal: <更合适的目标>\n"
+                f"- /xc 审查 answer {sess.session_id} strategy: <策略备注/语气约束>\n"
+                f"- /xc 审查 no {sess.session_id}\n"
             ).strip()
         summary = "\n".join(f"- {x}" for x in sess.answers[-3:]) if sess.answers else "-"
         return (
             f"{header}\n"
             "已记录：\n"
             f"{summary}\n\n"
-            f"- /xc_review close {sess.session_id}\n"
+            f"- /xc 审查 close {sess.session_id}\n"
         ).strip()
     return (
         f"{header}\n"
         "未知会话类型。\n"
-        f"- /xc_review close {sess.session_id}"
+        f"- /xc 审查 close {sess.session_id}"
     ).strip()
 
 async def maybe_push_session(
@@ -462,6 +467,7 @@ def register_bad_reply(
     goal: str,
     timeout_seconds: float,
     cooldown_seconds: float,
+    max_pending: int = 10,
 ) -> Optional[ReviewSession]:
     payload = {"reason": (reason or "").strip(), "goal": (goal or "").strip()}
     return store.open_session_if_allowed(
@@ -470,6 +476,7 @@ def register_bad_reply(
         payload=payload,
         timeout_seconds=timeout_seconds,
         cooldown_seconds=cooldown_seconds,
+        max_pending=max_pending,
     )
 
 def maybe_open_goal_strategy_review(
@@ -480,6 +487,7 @@ def maybe_open_goal_strategy_review(
     stats: str,
     timeout_seconds: float,
     cooldown_seconds: float,
+    max_pending: int = 10,
 ) -> Optional[ReviewSession]:
     g = (goal or "").strip()
     if not g:
@@ -491,6 +499,7 @@ def maybe_open_goal_strategy_review(
         payload=payload,
         timeout_seconds=timeout_seconds,
         cooldown_seconds=cooldown_seconds,
+        max_pending=max_pending,
     )
 
 def render_session_prompt(sess: ReviewSession) -> str:

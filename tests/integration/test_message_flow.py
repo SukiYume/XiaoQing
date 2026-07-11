@@ -2,15 +2,15 @@
 
 import asyncio
 import json
-import pytest
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, Mock
+
+import pytest
 
 from core.dispatcher import Dispatcher
 from core.router import CommandRouter, CommandSpec
 from core.session import SessionManager
-from core.plugin_manager import PluginManager
 
 
 class TestMessageFlow:
@@ -221,6 +221,44 @@ class TestMessageFlow:
         responses = await dispatcher.handle_event(event)
         # Session exists but plugin doesn't handle it - returns empty or exit message
         assert responses is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_dispatcher_serializes_same_session_handler_transactions(self, test_dispatcher):
+        """Two inbound events cannot lose a same-session update across an await."""
+        dispatcher, session_manager = test_dispatcher
+        await session_manager.create(
+            user_id=12345,
+            group_id=50001,
+            plugin_name="stateful",
+            initial_data={"counter": 0},
+        )
+
+        async def handle_session(_text, _event, _context, session):
+            counter = session.get("counter", 0)
+            await asyncio.sleep(0)
+            session.set("counter", counter + 1)
+            return []
+
+        loaded = SimpleNamespace(module=SimpleNamespace(handle_session=handle_session))
+        dispatcher.plugin_registry.get.side_effect = (
+            lambda name: loaded if name == "stateful" else None
+        )
+        event = {
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 50001,
+            "message": [{"type": "text", "data": {"text": "continue"}}],
+            "raw_message": "continue",
+            "self_id": 11111,
+        }
+
+        await asyncio.gather(dispatcher.handle_event(event), dispatcher.handle_event(event))
+
+        session = await session_manager.peek(12345, 50001)
+        assert session is not None
+        assert session.get("counter") == 2
 
 
 class TestDispatcherIntegration:

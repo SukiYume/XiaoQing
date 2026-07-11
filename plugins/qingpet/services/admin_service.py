@@ -4,6 +4,7 @@ from typing import Optional, List
 
 from ..models import Pet, User, GroupConfig, OperationLog
 from ..utils.constants import PetStage
+from ..utils.time import utc_now
 from .database import Database
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ class AdminService:
             return False
 
         user.is_banned = True
-        user.ban_until = datetime.now() + timedelta(days=days)
+        user.ban_until = utc_now() + timedelta(days=days)
 
         self.log_admin_operation(group_id, operator_user_id, "BAN", f"封禁{days}天", user_id)
 

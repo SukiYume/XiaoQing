@@ -2,8 +2,9 @@
 SessionManager 单元测试
 """
 
-import pytest
 import asyncio
+
+import pytest
 
 from core.session import Session, SessionManager
 
@@ -206,7 +207,7 @@ class TestSessionManager:
     async def test_session_isolation_by_group(self, session_manager: SessionManager):
         """测试同一用户在不同群的会话隔离"""
         # 用户在群 A 的会话
-        session_a = await session_manager.create(
+        await session_manager.create(
             user_id=12345,
             group_id=100,
             plugin_name="game_a",
@@ -214,7 +215,7 @@ class TestSessionManager:
         )
         
         # 同一用户在群 B 的会话
-        session_b = await session_manager.create(
+        await session_manager.create(
             user_id=12345,
             group_id=200,
             plugin_name="game_b",
@@ -388,7 +389,7 @@ class TestSessionTimeout:
 
     @pytest.mark.asyncio
     async def test_concurrent_session_access(self):
-        """测试并发会话访问"""
+        """同键 update 事务不会丢失跨 await 的读改写。"""
         manager = SessionManager()
 
         await manager.create(
@@ -400,10 +401,12 @@ class TestSessionTimeout:
 
         async def increment():
             for _ in range(100):
-                session = await manager.get(10001, 50001)
-                if session:
-                    session.data["counter"] += 1
-                await asyncio.sleep(0)
+                async def increment_once(session):
+                    value = session.get("counter", 0)
+                    await asyncio.sleep(0)
+                    session.set("counter", value + 1)
+
+                await manager.update(10001, 50001, increment_once)
 
         # 并发执行
         await asyncio.gather(increment(), increment())
@@ -411,6 +414,66 @@ class TestSessionTimeout:
         session = await manager.get(10001, 50001)
         assert session is not None
         assert session.data["counter"] == 200
+
+    @pytest.mark.asyncio
+    async def test_update_keeps_different_session_keys_parallel(self):
+        manager = SessionManager()
+        await manager.create(1, 1, "test")
+        await manager.create(2, 2, "test")
+        both_entered = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        max_active = 0
+
+        async def slow_update(_session):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            if active == 2:
+                both_entered.set()
+            await release.wait()
+            active -= 1
+
+        first = asyncio.create_task(manager.update(1, 1, slow_update))
+        second = asyncio.create_task(manager.update(2, 2, slow_update))
+        await both_entered.wait()
+        assert max_active == 2
+        release.set()
+        await asyncio.gather(first, second)
+
+    @pytest.mark.asyncio
+    async def test_cleanup_waits_for_active_transaction_then_keeps_refreshed_session(self):
+        manager = SessionManager(default_timeout=0.01)
+        await manager.create(1, 1, "test")
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_update(_session):
+            entered.set()
+            await release.wait()
+
+        update_task = asyncio.create_task(manager.update(1, 1, slow_update))
+        await entered.wait()
+        await asyncio.sleep(0.02)
+        cleanup_task = asyncio.create_task(manager.cleanup_expired())
+        await asyncio.sleep(0)
+        assert not cleanup_task.done()
+
+        release.set()
+        await update_task
+        assert await cleanup_task == 0
+        assert await manager.exists(1, 1) is True
+
+    @pytest.mark.asyncio
+    async def test_update_allows_handler_to_end_its_own_session(self):
+        manager = SessionManager()
+        await manager.create(1, 1, "test")
+
+        async def end_session(_session):
+            return await manager.delete(1, 1)
+
+        assert await manager.update(1, 1, end_session) is True
+        assert await manager.exists(1, 1) is False
 
 # ============================================================
 # 运行测试

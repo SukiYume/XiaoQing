@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from core.config import ConfigSnapshot
+from core.interfaces import PluginCapabilities
 
 # 添加项目根目录到路径
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -494,6 +494,9 @@ class _FakeItemsRepo:
             return list(self._tasks)
         return [task for task in self._tasks if task.status == status]
 
+    def get_all_items(self, user_id, filters):
+        return self.get_items(user_id, filters, limit=len(self._tasks))
+
 
 class _FakeDb:
     def __init__(self, tasks):
@@ -515,41 +518,68 @@ class TestPendoReviewFixes:
     def test_init_reads_demo_switch_from_global_config_and_updates_on_reload(self, monkeypatch):
         from plugins.pendo import main as pendo_main
         from plugins.pendo.config import PendoConfig
+        from plugins.pendo.utils import db_ops
 
         class _DummyDb:
-            def cleanup(self):
-                return None
+            def __init__(self):
+                self.cleanup_count = 0
 
-        class _DummyConfigManager:
+            def cleanup(self):
+                self.cleanup_count += 1
+
+        class _DummySubscription:
             def __init__(self):
                 self.callbacks = []
 
-            def on_reload(self, callback):
+            def subscribe(self, callback):
                 self.callbacks.append(callback)
+                active = True
 
-        config_manager = _DummyConfigManager()
+                def unsubscribe():
+                    nonlocal active
+                    if active:
+                        active = False
+                        self.callbacks.remove(callback)
+
+                return unsubscribe
+
+        subscription = _DummySubscription()
+        databases = []
+
+        def build_database(_path):
+            db = _DummyDb()
+            databases.append(db)
+            return db
+
         context = SimpleNamespace(
             config={"plugins": {"pendo": {"web_demo_enabled": True}}},
-            config_manager=config_manager,
+            config_manager=None,
+            capabilities=PluginCapabilities(config_subscription=subscription),
             state={},
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
         )
 
         monkeypatch.setattr(PendoConfig, "WEB_ENABLED", False)
-        monkeypatch.setattr(pendo_main, "Database", lambda path: _DummyDb())
+        monkeypatch.setattr(pendo_main, "Database", build_database)
         monkeypatch.setattr(pendo_main, "_startup_db", None, raising=False)
+        monkeypatch.setattr(pendo_main, "_get_database", lambda _context: databases[0])
+        monkeypatch.setattr(pendo_main, "cleanup_reminder_singleton", lambda: None)
+        monkeypatch.setattr(db_ops, "cleanup_db_singleton", lambda: None)
 
         pendo_main.init(context)
 
         assert PendoConfig.WEB_DEMO_ENABLED is True
-        assert len(config_manager.callbacks) == 1
+        assert len(subscription.callbacks) == 1
 
-        config_manager.callbacks[0](ConfigSnapshot(
-            config={"plugins": {"pendo": {"web_demo_enabled": False}}},
-            secrets={},
-        ))
+        subscription.callbacks[0]({"plugins": {"pendo": {"web_demo_enabled": False}}})
 
         assert PendoConfig.WEB_DEMO_ENABLED is False
+
+        pendo_main._cleanup_resources(context, stop_web=False)
+
+        assert subscription.callbacks == []
+        assert context.state["pendo_runtime"] == {}
+        assert databases[0].cleanup_count == 1
 
     def test_router_is_not_reused_across_group_contexts(self, monkeypatch):
         from plugins.pendo import main as pendo_main
@@ -1119,11 +1149,15 @@ class TestAIParserMilestones:
 
     def _make_parser(self):
         import sys
+        from datetime import datetime
 
         sys.path.insert(0, str(ROOT))
         from plugins.pendo.services.ai_parser import AIParser
 
-        return AIParser(context=None)
+        return AIParser(
+            context=None,
+            now_factory=lambda tz=None: datetime(2026, 1, 1, 9, 0, 0, tzinfo=tz),
+        )
 
     def test_build_remind_times_for_milestones(self):
         """多节点时 remind_times 是所有里程碑各自提醒的并集"""
@@ -1192,7 +1226,7 @@ class TestAIParserMilestones:
                 "remind_offsets": ["提前1周", "提前1天"],
                 "rrule": None,
                 "milestones": [
-                    {"name": "申请截止", "time": "2026-06-14T14:00:00"},
+                    {"name": "申请截止", "time": "2030-06-14T14:00:00"},
                 ],
                 "notes": "https://example.com/job",
             }
@@ -1204,7 +1238,7 @@ class TestAIParserMilestones:
 
         result = asyncio.run(run())
         assert result["title"] == "悉尼大学博后申请"
-        assert result["start_time"] == "2026-06-14T14:00:00"
+        assert result["start_time"] == "2030-06-14T14:00:00"
         assert "milestones" not in result
         assert result["notes"] == "https://example.com/job"
         assert len(result["remind_times"]) == 2
@@ -1377,10 +1411,12 @@ class TestRecurringEventRegression:
         inserted_items = []
 
         db = MagicMock()
-        db.items.insert_item.side_effect = lambda item, custom_id=None: (
-            inserted_items.append(item) or custom_id
+        db.items.create_event_collection_with_children.side_effect = (
+            lambda _collection, children, *, operation_action: (
+                inserted_items.extend(item for _item_id, item in children)
+                or _collection["id"]
+            )
         )
-        db.logs.log_operation.return_value = True
 
         handler = EventHandler(db=db, ai_parser=MagicMock(), reminder_service=MagicMock())
 
@@ -3969,6 +4005,43 @@ class TestScheduledRegression:
         assert result[0]["params"]["user_id"] == 1001
         assert db.logged == []
 
+    def test_check_reminders_does_not_confirm_onebot_rejection(self, monkeypatch):
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+
+        from plugins.pendo.commands import scheduled as scheduled_module
+
+        class _FakeReminderService:
+            def check_and_send_reminders(self, context=None):
+                return {
+                    "messages": [
+                        {
+                            "user_id": "1001",
+                            "message": "提醒消息",
+                            "item_id": "evt123",
+                            "remind_time": "2030-01-01T09:00:00",
+                        }
+                    ]
+                }
+
+        class _RejectedContext:
+            async def send_action(self, action):
+                return False
+
+        db = SimpleNamespace(logged=[])
+        db.log_reminder = lambda item_id, remind_time, sent=True: db.logged.append(
+            (item_id, remind_time, sent)
+        )
+
+        monkeypatch.setattr(scheduled_module, "get_database", lambda context: db)
+        monkeypatch.setattr(scheduled_module, "_reminder_service_singleton", _FakeReminderService())
+
+        result = asyncio.run(scheduled_module.check_reminders(_RejectedContext()))
+
+        assert result == []
+        assert db.logged == []
+
     def test_daily_briefing_respects_user_timezone_and_configured_time(self, monkeypatch):
         import sys
         from datetime import datetime, timezone
@@ -4582,6 +4655,7 @@ class TestBatchDeleteRefactor:
 
         db = MagicMock()
         db.items.get_items.return_value = [SimpleNamespace(id="t1"), SimpleNamespace(id="t2")]
+        db.items.get_all_items.return_value = [SimpleNamespace(id="t1"), SimpleNamespace(id="t2")]
         handler = TaskHandler(db)
         calls = []
 
@@ -4606,6 +4680,7 @@ class TestBatchDeleteRefactor:
 
         db = MagicMock()
         db.items.get_items.return_value = [SimpleNamespace(id="n1"), SimpleNamespace(id="n2")]
+        db.items.get_all_items.return_value = [SimpleNamespace(id="n1"), SimpleNamespace(id="n2")]
         handler = NoteHandler(db)
         calls = []
 
@@ -4709,6 +4784,9 @@ class TestSessionRegression:
         async def _fake_privacy_mode(user_id, context):
             return True
 
+        async def _confirmed_send(_action):
+            return True
+
         monkeypatch.setattr(pendo_main, "_build_command_router", lambda context, group_id=None: _Router())
         monkeypatch.setattr(pendo_main, "_get_user_privacy_mode", _fake_privacy_mode)
 
@@ -4716,7 +4794,7 @@ class TestSessionRegression:
             pendo_main._handle_command_routing(
                 "1001",
                 "todo add",
-                SimpleNamespace(metrics=None),
+                SimpleNamespace(metrics=None, send_action=_confirmed_send),
                 group_id=2002,
             )
         )
@@ -4960,7 +5038,7 @@ class TestOperationAndExportRegression:
         monkeypatch.setattr(
             operations,
             "_parse_snooze_time",
-            lambda time_arg, base_time=None: "2030-01-01T11:00:00+08:00",
+            lambda time_arg, base_time=None, now=None: "2030-01-01T11:00:00+08:00",
         )
 
         async def fake_last_sent_remind_time(db, item_id):
@@ -5205,7 +5283,7 @@ class TestPendoWebHandler:
 
         web_module = importlib.import_module("plugins.pendo.handlers.web")
 
-        monkeypatch.setattr(web_module, "generate_token", lambda *_args, **_kwargs: "mock-token")
+        monkeypatch.setattr(web_module, "issue_login_code", lambda *_args, **_kwargs: "mock-code")
         monkeypatch.setattr(web_module.web_server, "get_url", lambda: "http://127.0.0.1:8765")
         monkeypatch.setattr(web_module.web_server, "is_running", lambda: True)
 
@@ -5220,17 +5298,17 @@ class TestPendoWebHandler:
         result = asyncio.run(handler.handle("1001", "token", context=context))
 
         assert result["status"] == "success"
-        assert "Token 已单独私聊发送" in result["message"]
-        assert "mock-token" not in result["message"]
+        assert "一次性登录链接已单独私聊发送" in result["message"]
+        assert "mock-code" not in result["message"]
         assert len(actions) == 1
         assert actions[0]["action"] == "send_private_msg"
         assert actions[0]["params"]["user_id"] == 1001
         token_text = actions[0]["params"]["message"][0]["data"]["text"]
-        assert "Pendo Web 登录 Token" in token_text
-        assert "mock-token" in token_text
-        assert "直接复制这整条消息到网页登录框" in token_text
+        assert "Pendo Web 一次性登录链接" in token_text
+        assert "?code=mock-code" in token_text
+        assert "仅可使用一次" in token_text
 
-    def test_web_token_falls_back_to_inline_message_without_send_action(self, monkeypatch):
+    def test_web_token_fails_closed_when_private_delivery_is_unavailable(self, monkeypatch):
         import importlib
         import sys
         import types
@@ -5246,17 +5324,17 @@ class TestPendoWebHandler:
 
         web_module = importlib.import_module("plugins.pendo.handlers.web")
 
-        monkeypatch.setattr(web_module, "generate_token", lambda *_args, **_kwargs: "mock-token")
+        monkeypatch.setattr(web_module, "issue_login_code", lambda *_args, **_kwargs: "mock-code")
         monkeypatch.setattr(web_module.web_server, "get_url", lambda: "http://127.0.0.1:8765")
         monkeypatch.setattr(web_module.web_server, "is_running", lambda: False)
 
         handler = web_module.WebHandler(db=None)
         result = asyncio.run(handler.handle("1001", "token", context=None))
 
-        assert result["status"] == "success"
-        assert "登录 Token:" in result["message"]
-        assert "mock-token" in result["message"]
-        assert "直接复制这整条消息到网页登录框" in result["message"]
+        assert result["status"] == "error"
+        assert "无法通过私聊安全发送凭据" in result["message"]
+        assert "mock-code" not in result["message"]
+        assert "登录链接:" not in result["message"]
 
     def test_web_start_surfaces_last_start_error(self):
         import importlib

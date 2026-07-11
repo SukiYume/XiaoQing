@@ -15,6 +15,10 @@ import subprocess
 import sys
 import argparse
 import time
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 STEPS = [
@@ -31,7 +35,8 @@ def run_step(script: str, description: str) -> bool:
     print(f"{'=' * 60}\n")
 
     start = time.time()
-    result = subprocess.run([sys.executable, script])
+    script_path = SCRIPT_DIR / script
+    result = subprocess.run([sys.executable, str(script_path)], cwd=str(SCRIPT_DIR))
     elapsed = time.time() - start
 
     if result.returncode == 0:

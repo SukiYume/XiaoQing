@@ -20,11 +20,7 @@
             "handler": "scheduled",
             "cron": {
                 "minute": "*/5"
-            },
-            "group_ids": [
-                187217751,
-                100000001
-            ]
+            }
         }
     ]
 }

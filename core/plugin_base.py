@@ -8,13 +8,12 @@
 import asyncio
 import json
 import logging
-import os
-import tempfile
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
 from .constants import MAX_MESSAGE_TEXT_LENGTH
 from .interfaces import PluginContextProtocol
+from .atomic_store import AtomicJsonStore, atomic_write_bytes, atomic_write_text
 
 # 类型别名
 Segments = list[dict[str, Any]]
@@ -128,37 +127,18 @@ def load_json(
     raise_on_error: bool = False,
 ) -> dict[str, Any]:
     """加载 JSON 文件"""
-    if not path.exists():
-        return default or {}
+    fallback = default if default is not None else {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        return AtomicJsonStore(path).read(fallback, raise_on_error=raise_on_error)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.error("Failed to parse JSON %s: %s", path, exc)
         if raise_on_error:
             raise
-        logger.error("Failed to parse JSON %s: %s", path, exc)
-        return default or {}
-
-def atomic_write_text(path: Path, payload: str) -> None:
-    ensure_dir(path.parent)
-    fd, temp_path = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            file.write(payload)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temp_path, path)
-    except Exception:
-        try:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-        except OSError:
-            pass  # cleanup 失败不掩盖原始异常
-        raise
+        return fallback
 
 def write_json(path: Path, data: Any) -> None:
     """写入 JSON 文件"""
-    payload = json.dumps(data, ensure_ascii=False, indent=2)
-    atomic_write_text(path, payload)
+    AtomicJsonStore(path).write(data)
 
 # ============================================================
 # 消息分段（长消息自动拆分）

@@ -26,7 +26,9 @@
   "plugins": {
     "twitter": {
       "user_id": "Twitter用户ID",
-      "headers": {},
+      "headers": {
+        "authorization": "Bearer <TWITTER_BEARER_TOKEN>"
+      },
       "cookies": {},
       "proxy": "http://proxy.example.com:8080",
       "max_pages": 50
@@ -38,7 +40,7 @@
 ### 配置项说明
 
 - `user_id`：要抓取的目标用户 ID
-- `headers`：请求头，通常用于补充认证信息
+- `headers`：请求头；认证信息必须在 `context.secrets` 对应配置中显式提供，插件代码没有默认 Bearer
 - `cookies`：Cookie 配置
 - `proxy`：可选代理地址；只有显式配置时才启用
 - `max_pages`：单次抓取最多检查的页数
@@ -53,4 +55,5 @@
 ## 注意事项
 
 - 该插件依赖目标站点当前可用的网页接口与认证头。
+- 不要把真实认证头提交进仓库；上面的 `<TWITTER_BEARER_TOKEN>` 是占位符。
 - 若目标站点在当前网络环境不可达，再考虑显式配置 `proxy`。

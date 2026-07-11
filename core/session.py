@@ -7,12 +7,51 @@
 """
 
 import asyncio
-import time
-from dataclasses import dataclass, field
-from typing import Any, Callable
+import inspect
 import logging
+import time
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+class _ReentrantAsyncLock:
+    """Task-reentrant lock used by a single SessionManager key.
+
+    Session handlers frequently call ``context.end_session()`` while already
+    changing the session.  A plain asyncio.Lock would deadlock in that valid
+    flow, so the task holding a lock may re-enter it until its outer operation
+    finishes.
+    """
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: asyncio.Task[Any] | None = None
+        self._depth = 0
+
+    async def acquire(self) -> None:
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("session locks require an asyncio task")
+        if self._owner is task:
+            self._depth += 1
+            return
+        await self._lock.acquire()
+        self._owner = task
+        self._depth = 1
+
+    def release(self) -> None:
+        task = asyncio.current_task()
+        if task is None or self._owner is not task:
+            raise RuntimeError("session lock released by a non-owner task")
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._lock.release()
 
 @dataclass
 class Session:
@@ -25,10 +64,12 @@ class Session:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     timeout: float = 300.0  # 会话超时时间（秒），默认 5 分钟
+    version: int = 0  # 由 SessionManager 事务和写入操作递增
 
     def update(self) -> None:
         """更新会话时间戳"""
         self.updated_at = time.time()
+        self.version += 1
 
     def is_expired(self) -> bool:
         """检查会话是否过期"""
@@ -68,7 +109,7 @@ class SessionManager:
     支持：
     - 创建/获取/删除用户会话
     - 会话超时自动清理
-    - 线程安全（使用 asyncio.Lock）
+    - 每个会话键的事务性读改写（不同键可并行）
     
     会话键格式：(user_id, group_id)
     - group_id 为 None 时表示私聊会话
@@ -76,8 +117,9 @@ class SessionManager:
     """
 
     def __init__(self, default_timeout: float = 300.0) -> None:
-        self._sessions: dict[tuple, Session] = {}
+        self._sessions: dict[tuple[int, int | None], Session] = {}
         self._lock = asyncio.Lock()
+        self._key_locks: dict[tuple[int, int | None], _ReentrantAsyncLock] = {}
         self._default_timeout = default_timeout
 
     @property
@@ -91,9 +133,39 @@ class SessionManager:
     def set_default_timeout(self, timeout: float) -> None:
         self._default_timeout = float(timeout)
 
-    def _make_key(self, user_id: int, group_id: int | None) -> tuple:
+    def _make_key(self, user_id: int, group_id: int | None) -> tuple[int, int | None]:
         """生成会话键"""
         return (user_id, group_id)
+
+    async def _key_lock_for(self, key: tuple[int, int | None]) -> _ReentrantAsyncLock:
+        async with self._lock:
+            lock = self._key_locks.get(key)
+            if lock is None:
+                lock = _ReentrantAsyncLock()
+                self._key_locks[key] = lock
+            return lock
+
+    @asynccontextmanager
+    async def _lock_key(self, key: tuple[int, int | None]):
+        lock = await self._key_lock_for(key)
+        await lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+
+    async def _get_active_locked(self, key: tuple[int, int | None]) -> Session | None:
+        """Read an active session while its per-key lock is held."""
+
+        async with self._lock:
+            session = self._sessions.get(key)
+            if session is None:
+                return None
+            if session.is_expired():
+                del self._sessions[key]
+                logger.debug("Session expired and removed: user=%s, group=%s", key[0], key[1])
+                return None
+            return session
 
     async def create(
         self,
@@ -113,8 +185,8 @@ class SessionManager:
             logger.warning("Session object passed as initial_data, extracting .data dict")
             initial_data = initial_data.data if isinstance(initial_data.data, dict) else {}
 
-        async with self._lock:
-            key = self._make_key(user_id, group_id)
+        key = self._make_key(user_id, group_id)
+        async with self._lock_key(key):
             session = Session(
                 user_id=user_id,
                 group_id=group_id,
@@ -122,8 +194,14 @@ class SessionManager:
                 data=initial_data if isinstance(initial_data, dict) else {},
                 timeout=timeout or self._default_timeout,
             )
-            self._sessions[key] = session
-            logger.debug("Session created: user=%s, group=%s, plugin=%s", user_id, group_id, plugin_name)
+            async with self._lock:
+                self._sessions[key] = session
+            logger.debug(
+                "Session created: user=%s, group=%s, plugin=%s",
+                user_id,
+                group_id,
+                plugin_name,
+            )
             return session
 
     async def get(self, user_id: int, group_id: int | None) -> Session | None:
@@ -133,19 +211,13 @@ class SessionManager:
         如果会话已过期，会自动删除并返回 None。
         每次成功获取会话时刷新超时计时器。
         """
-        async with self._lock:
-            key = self._make_key(user_id, group_id)
-            session = self._sessions.get(key)
-
+        key = self._make_key(user_id, group_id)
+        async with self._lock_key(key):
+            session = await self._get_active_locked(key)
             if session is None:
                 return None
-
-            if session.is_expired():
-                del self._sessions[key]
-                logger.debug("Session expired and removed: user=%s, group=%s", user_id, group_id)
-                return None
-
-            # 刷新超时计时器，避免活跃对话意外过期
+            # Compatibility read API.  Mutable writes through this returned
+            # object are not transactional; use update() for read-modify-write.
             session.update()
             return session
 
@@ -156,19 +228,42 @@ class SessionManager:
         如果会话已过期，会自动删除并返回 None。
         成功返回会话时不会刷新超时计时器；需要续命时使用 get()。
         """
-        async with self._lock:
-            key = self._make_key(user_id, group_id)
-            session = self._sessions.get(key)
+        key = self._make_key(user_id, group_id)
+        async with self._lock_key(key):
+            return await self._get_active_locked(key)
 
+    async def update(
+        self,
+        user_id: int,
+        group_id: int | None,
+        callback: Callable[[Session], T | Awaitable[T]],
+    ) -> T | None:
+        """Atomically run a read-modify-write callback for one session.
+
+        The callback may await.  The manager retains the per-key lock until it
+        finishes, so same-session events cannot overwrite each other while
+        unrelated users/groups continue concurrently.  The session is touched
+        on entry and committed again on successful completion.  Returning
+        ``None`` means that no active session was available or the callback
+        itself produced ``None``.
+        """
+
+        key = self._make_key(user_id, group_id)
+        async with self._lock_key(key):
+            session = await self._get_active_locked(key)
             if session is None:
                 return None
-
-            if session.is_expired():
-                del self._sessions[key]
-                logger.debug("Session expired and removed during peek(): user=%s, group=%s", user_id, group_id)
-                return None
-
-            return session
+            session.update()
+            result = callback(session)
+            if inspect.isawaitable(result):
+                result = await result
+            # The per-key lock prevents create/delete/cleanup from changing
+            # this entry mid-transaction.  Re-check supports a callback that
+            # intentionally ended or replaced its own session.
+            async with self._lock:
+                if self._sessions.get(key) is session:
+                    session.update()
+            return result
 
     async def delete(self, user_id: int, group_id: int | None) -> bool:
         """
@@ -176,26 +271,20 @@ class SessionManager:
         
         返回是否成功删除。
         """
-        async with self._lock:
-            key = self._make_key(user_id, group_id)
-            if key in self._sessions:
-                del self._sessions[key]
-                logger.debug("Session deleted: user=%s, group=%s", user_id, group_id)
-                return True
-            return False
+        key = self._make_key(user_id, group_id)
+        async with self._lock_key(key):
+            async with self._lock:
+                if key in self._sessions:
+                    del self._sessions[key]
+                    logger.debug("Session deleted: user=%s, group=%s", user_id, group_id)
+                    return True
+                return False
 
     async def exists(self, user_id: int, group_id: int | None) -> bool:
         """检查会话是否存在（且未过期），不会刷新超时计时器。"""
-        async with self._lock:
-            key = self._make_key(user_id, group_id)
-            session = self._sessions.get(key)
-            if session is None:
-                return False
-            if session.is_expired():
-                del self._sessions[key]
-                logger.debug("Session expired and removed during exists(): user=%s, group=%s", user_id, group_id)
-                return False
-            return True
+        key = self._make_key(user_id, group_id)
+        async with self._lock_key(key):
+            return await self._get_active_locked(key) is not None
 
     async def cleanup_expired(self) -> int:
         """
@@ -204,17 +293,20 @@ class SessionManager:
         返回清理的会话数量。
         """
         async with self._lock:
-            expired_keys = [
-                key for key, session in self._sessions.items()
-                if session.is_expired()
-            ]
-            for key in expired_keys:
-                del self._sessions[key]
-            
-            if expired_keys:
-                logger.debug("Cleaned up %d expired sessions", len(expired_keys))
-            
-            return len(expired_keys)
+            keys = list(self._sessions)
+
+        expired_keys: list[tuple[int, int | None]] = []
+        for key in keys:
+            async with self._lock_key(key):
+                async with self._lock:
+                    session = self._sessions.get(key)
+                    if session is not None and session.is_expired():
+                        del self._sessions[key]
+                        expired_keys.append(key)
+
+        if expired_keys:
+            logger.debug("Cleaned up %d expired sessions", len(expired_keys))
+        return len(expired_keys)
 
     async def count(self) -> int:
         """返回活跃会话数量"""
@@ -236,17 +328,20 @@ class SessionManager:
             清理的会话数量
         """
         async with self._lock:
-            keys_to_remove = [
-                key for key, session in self._sessions.items()
-                if session.plugin_name == plugin_name
-            ]
-            for key in keys_to_remove:
-                del self._sessions[key]
+            candidate_keys = list(self._sessions)
 
-            if keys_to_remove:
-                logger.info("Cleared %d sessions for plugin '%s'", len(keys_to_remove), plugin_name)
+        keys_to_remove: list[tuple[int, int | None]] = []
+        for key in candidate_keys:
+            async with self._lock_key(key):
+                async with self._lock:
+                    session = self._sessions.get(key)
+                    if session is not None and session.plugin_name == plugin_name:
+                        del self._sessions[key]
+                        keys_to_remove.append(key)
 
-            return len(keys_to_remove)
+        if keys_to_remove:
+            logger.info("Cleared %d sessions for plugin '%s'", len(keys_to_remove), plugin_name)
+        return len(keys_to_remove)
 
     async def get_all_sessions(self, plugin_name: str | None = None) -> list[Session]:
         """获取所有活跃会话（可选按插件筛选）"""

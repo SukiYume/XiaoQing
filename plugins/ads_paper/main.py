@@ -33,6 +33,18 @@ def _get_user_id(event: dict[str, Any]) -> int:
     """获取用户ID"""
     return event.get("user_id", 0)
 
+
+def _get_storage(context) -> PaperStorage:
+    state = getattr(context, "state", None)
+    if isinstance(state, dict):
+        storage = state.get("paper_storage")
+        if isinstance(storage, PaperStorage):
+            return storage
+        storage = PaperStorage(context.data_dir)
+        state["paper_storage"] = storage
+        return storage
+    return PaperStorage(context.data_dir)
+
 async def handle(command: str, args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     """命令处理入口"""
     try:
@@ -44,7 +56,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
 
         # Use shared HTTP session for connection pooling
         client = ADSClient(token, context.http_session)
-        storage = PaperStorage(context.data_dir)
+        storage = _get_storage(context)
         user_id = _get_user_id(event)
         logger.debug(f"用户 ID: {user_id}")
 
@@ -68,12 +80,12 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
             "related": lambda: paper_commands.cmd_related(client, parsed.rest(1)),
             "note": lambda: note_commands.cmd_note(storage, parsed.rest(1), user_id),
             "writing": lambda: note_commands.cmd_writing(storage, parsed.rest(1), user_id),
-            "topics": lambda: note_commands.cmd_topics(storage, parsed.rest(1)),
+            "topics": lambda: note_commands.cmd_topics(storage, parsed.rest(1), user_id),
             "deadline": lambda: note_commands.cmd_deadline(storage, parsed.rest(1), user_id),
             "summarize": lambda: ai_commands.cmd_summarize(client, parsed.rest(1), context),
-            "daily": lambda: ai_commands.cmd_daily(client, context),
-            "ref_add": lambda: ai_commands.cmd_ref_add(client, parsed.rest(1), context),
-            "refs": lambda: ai_commands.cmd_refs(context),
+            "daily": lambda: ai_commands.cmd_daily(client, context, user_id),
+            "ref_add": lambda: ai_commands.cmd_ref_add(client, parsed.rest(1), context, user_id),
+            "refs": lambda: ai_commands.cmd_refs(context, user_id),
         }
 
         handler = COMMAND_MAP.get(subcommand)

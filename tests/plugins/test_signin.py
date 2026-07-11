@@ -537,8 +537,7 @@ class _RecordingSession:
 
 
 class TestYingshiTokenTransport:
-    def test_get_checkin_id_uses_get_params(self):
-        """API 返回 405 on POST，确认使用 GET+params 传递 token"""
+    def test_get_checkin_id_uses_authorization_header(self):
         response = MockResponse(json_data={"code": 0, "data": {"checkInId": "cid"}})
         session = _RecordingSession(response)
 
@@ -557,10 +556,10 @@ class TestYingshiTokenTransport:
         assert session.calls
         call = session.calls[0]
         assert "json" not in call
-        assert call["params"]["access_token"] == "token123"
+        assert "access_token" not in call["params"]
+        assert call["headers"]["Authorization"] == "Bearer token123"
 
-    def test_do_checkin_uses_get_params(self):
-        """API 返回 405 on POST，确认使用 GET+params 传递 token"""
+    def test_do_checkin_uses_authorization_header(self):
         response = MockResponse(json_data={"code": 0, "data": {"desc": "ok", "times": 1, "list": []}})
         session = _RecordingSession(response)
 
@@ -579,7 +578,13 @@ class TestYingshiTokenTransport:
         assert session.calls
         call = session.calls[0]
         assert "json" not in call
-        assert call["params"]["access_token"] == "token123"
+        assert "access_token" not in call["params"]
+        assert call["headers"]["Authorization"] == "Bearer token123"
+
+    def test_signin_manifest_is_admin_only(self):
+        manifest = json.loads((ROOT / "plugins" / "signin" / "plugin.json").read_text(encoding="utf-8"))
+
+        assert manifest["commands"][0]["admin_only"] is True
 
     def test_get_checkin_id_handles_missing_checkin_id(self):
         """API 结构异常时不应直接抛 KeyError"""

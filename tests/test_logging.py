@@ -2,18 +2,19 @@
 日志模块单元测试
 """
 
-import pytest
 import logging
 from pathlib import Path
 
+import pytest
+
 from core.logging_config import (
-    LogManager,
     ColoredFormatter,
-    setup_logging,
+    LogManager,
+    RequestContextFormatter,
     get_log_manager,
     get_logger,
+    setup_logging,
 )
-
 
 # ============================================================
 # ColoredFormatter 测试
@@ -88,6 +89,22 @@ class TestColoredFormatter:
         assert "\033[" not in result
         assert "INFO: Test message" in result
 
+    def test_format_includes_request_id_or_safe_background_placeholder(self):
+        formatter = RequestContextFormatter("[request_id=%(request_id)s] %(message)s")
+        request_record = logging.LogRecord(
+            name="test", level=logging.INFO, pathname="", lineno=0,
+            msg="correlated", args=(), exc_info=None,
+        )
+        request_record.request_id = "req-123"  # type: ignore[attr-defined]
+        background_record = logging.LogRecord(
+            name="test", level=logging.INFO, pathname="", lineno=0,
+            msg="background", args=(), exc_info=None,
+        )
+
+        assert formatter.format(request_record) == "[request_id=req-123] correlated"
+        assert formatter.format(background_record) == "[request_id=-] background"
+        assert not hasattr(background_record, "request_id")
+
 
 # ============================================================
 # LogManager 测试
@@ -145,6 +162,17 @@ class TestLogManager:
         # 读取并验证内容
         content = (log_dir / "xiaoqing_error.log").read_text(encoding="utf-8")
         assert "Test error message" in content
+
+    def test_file_logs_include_request_id(self, tmp_path: Path):
+        log_dir = tmp_path / "logs"
+        LogManager(log_dir=log_dir, level="INFO", console_output=False, file_output=True)
+        logger = logging.getLogger("test_request_id_file")
+        logger.info("correlated message", extra={"request_id": "req-file-1"})
+        logger.info("background message")
+
+        content = (log_dir / "xiaoqing.log").read_text(encoding="utf-8")
+        assert "[request_id=req-file-1]" in content
+        assert "[request_id=-]" in content
 
     def test_set_level(self, tmp_path: Path):
         """测试动态设置日志级别"""

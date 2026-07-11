@@ -11,19 +11,29 @@ twitter 插件单元测试
 - 配置管理
 """
 
-import json
-import os
-import pytest
+import hashlib
+from io import BytesIO
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import aiohttp
+import pytest
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 import importlib.util
+
 spec = importlib.util.spec_from_file_location("twitter_main", ROOT / "plugins" / "twitter" / "main.py")
 twitter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(twitter)
+
+
+def _image_bytes(image_format: str = "PNG", color=(10, 20, 30)) -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (2, 2), color).save(buffer, format=image_format)
+    return buffer.getvalue()
 
 
 # ============================================================
@@ -36,6 +46,26 @@ def temp_data_dir():
     import tempfile
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
+
+
+@pytest.fixture
+def install_media_fetch(monkeypatch):
+    def install(payload: bytes | None = None, *, error: Exception | None = None) -> AsyncMock:
+        response = (
+            None
+            if payload is None
+            else SimpleNamespace(
+                body=payload,
+                status=200,
+                url="https://pbs.twimg.com/media/final",
+                headers={"Content-Type": "image/png"},
+            )
+        )
+        fetch = AsyncMock(return_value=response, side_effect=error)
+        monkeypatch.setattr(twitter, "fetch_public_bytes", fetch)
+        return fetch
+
+    return install
 
 
 @pytest.fixture
@@ -197,6 +227,19 @@ class TestConfig:
         headers = twitter._get_headers(mock_context)
         assert "authorization" in headers
         assert "user-agent" in headers
+
+    def test_get_headers_has_no_code_default_authorization(self, mock_context_no_config):
+        headers = twitter._get_headers(mock_context_no_config)
+
+        assert "authorization" not in {key.lower() for key in headers}
+        assert "user-agent" in headers
+
+    def test_get_headers_ignores_non_mapping_secret_headers(self, mock_context_no_config):
+        mock_context_no_config.secrets = {"plugins": {"twitter": {"headers": "not-a-map"}}}
+
+        headers = twitter._get_headers(mock_context_no_config)
+
+        assert "authorization" not in {key.lower() for key in headers}
 
     def test_get_headers_with_custom(self, temp_data_dir):
         """测试自定义请求头"""
@@ -488,24 +531,15 @@ class TestImageDownload:
     """测试图片下载功能"""
 
     @pytest.mark.asyncio
-    async def test_download_image_success(self, mock_context, temp_data_dir):
+    async def test_download_image_success(
+        self,
+        mock_context,
+        temp_data_dir,
+        install_media_fetch,
+    ):
         """测试成功下载图片"""
-        class MockResponse:
-            status = 200
-            async def read(self):
-                return b"fake image data"
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
+        payload = _image_bytes("PNG")
+        fetch = install_media_fetch(payload)
         save_dir = temp_data_dir / "images"
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -516,41 +550,51 @@ class TestImageDownload:
         )
 
         assert result is True
-        # 检查文件是否创建
-        assert (save_dir / "ABC123.jpg").exists()
+        expected = save_dir / f"{hashlib.sha256(payload).hexdigest()}.png"
+        assert expected.read_bytes() == payload
+        assert not (save_dir / "ABC123.jpg").exists()
+        fetch.assert_awaited_once()
+        assert fetch.await_args.kwargs["allowed_hosts"] == twitter._ALLOWED_TWITTER_MEDIA_HOSTS
+        assert fetch.await_args.kwargs["allowed_schemes"] == ("https",)
+        assert fetch.await_args.kwargs["allowed_content_type_prefixes"] == ("image/",)
+        assert fetch.await_args.kwargs["max_bytes"] == twitter.MAX_IMAGE_BYTES
+        assert fetch.await_args.kwargs["timeout_seconds"] == twitter.REQUEST_TIMEOUT_SECONDS
+        assert "proxy" not in fetch.await_args.kwargs
 
     @pytest.mark.asyncio
-    async def test_download_image_already_exists(self, mock_context, temp_data_dir):
+    async def test_download_image_already_exists(
+        self,
+        mock_context,
+        temp_data_dir,
+        install_media_fetch,
+    ):
         """测试图片已存在"""
         save_dir = temp_data_dir / "images"
         save_dir.mkdir(parents=True, exist_ok=True)
-
-        # 创建已存在的文件
-        existing_file = save_dir / "ABC123.jpg"
-        existing_file.write_bytes(b"existing data")
+        payload = _image_bytes("JPEG")
+        existing_file = save_dir / f"{hashlib.sha256(payload).hexdigest()}.jpg"
+        existing_file.write_bytes(payload)
+        install_media_fetch(payload)
 
         result = await twitter._download_image(
             "https://pbs.twimg.com/media/ABC123.jpg",
             save_dir,
-            MagicMock()
+            mock_context,
         )
 
-        assert result is False  # 已存在，跳过
+        assert result is False
+        assert existing_file.read_bytes() == payload
+        assert not list(save_dir.glob("*.tmp"))
 
     @pytest.mark.asyncio
-    async def test_download_image_failure(self, mock_context, temp_data_dir):
+    async def test_download_image_failure(
+        self,
+        mock_context,
+        temp_data_dir,
+        install_media_fetch,
+    ):
         """测试下载失败"""
-        class MockGetContextManager:
-            async def __aenter__(self):
-                raise aiohttp.ClientError("Download failed")
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
+        install_media_fetch(error=aiohttp.ClientError("Download failed"))
         save_dir = temp_data_dir / "images"
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -561,24 +605,17 @@ class TestImageDownload:
         )
 
         assert result is False
+        assert not list(save_dir.iterdir())
 
     @pytest.mark.asyncio
-    async def test_download_image_http_error(self, mock_context, temp_data_dir):
+    async def test_download_image_http_error(
+        self,
+        mock_context,
+        temp_data_dir,
+        install_media_fetch,
+    ):
         """测试 HTTP 错误"""
-        class MockResponse:
-            status = 404
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
+        install_media_fetch(None)
         save_dir = temp_data_dir / "images"
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -591,9 +628,15 @@ class TestImageDownload:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_download_image_rejects_non_twitter_media_host(self, mock_context, temp_data_dir):
+    async def test_download_image_rejects_non_twitter_media_host(
+        self,
+        mock_context,
+        temp_data_dir,
+        install_media_fetch,
+    ):
         save_dir = temp_data_dir / "images"
         save_dir.mkdir(parents=True, exist_ok=True)
+        fetch = install_media_fetch(_image_bytes())
 
         result = await twitter._download_image(
             "https://example.com/media/ABC123.jpg",
@@ -602,6 +645,7 @@ class TestImageDownload:
         )
 
         assert result is False
+        fetch.assert_not_awaited()
 
 
 # ============================================================
@@ -614,7 +658,6 @@ class TestRandomImage:
     @pytest.mark.asyncio
     async def test_get_random_image_with_images(self, mock_context, temp_data_dir):
         """测试有图片时获取随机图片"""
-        import aiofiles
 
         # 创建测试图片
         images_dir = temp_data_dir / "images"
@@ -722,7 +765,12 @@ class TestHandleCommands:
         with patch.object(twitter, '_fetch_twitter_images', new=AsyncMock(return_value=0)) as mock_fetch:
             result = await twitter.handle("twimg", "", mock_event, mock_context)
             assert result is not None
-            mock_fetch.assert_called_once()
+            mock_fetch.assert_not_called()
+            assert "无法获取" in str(result)
+
+    def test_max_pages_is_clamped(self, mock_context):
+        mock_context.secrets["plugins"]["twitter"]["max_pages"] = 999999
+        assert twitter._get_max_pages(mock_context) == twitter.MAX_PAGES_TO_CHECK
 
     @pytest.mark.asyncio
     async def test_handle_exception(self, mock_context, mock_event):
@@ -937,38 +985,100 @@ class TestImageFilenameHandling:
     """测试图片文件名处理"""
 
     @pytest.mark.asyncio
-    async def test_download_various_formats(self, mock_context, temp_data_dir):
+    async def test_download_various_formats(
+        self,
+        mock_context,
+        temp_data_dir,
+        install_media_fetch,
+    ):
         """测试下载不同格式的图片"""
         formats = [
-            ("https://pbs.twimg.com/media/ABC.jpg", "ABC.jpg"),
-            ("https://pbs.twimg.com/media/DEF.png", "DEF.png"),
+            ("https://pbs.twimg.com/media/ABC.jpg", "JPEG", ".jpg"),
+            ("https://pbs.twimg.com/media/DEF.png", "PNG", ".png"),
+            ("https://pbs.twimg.com/media/GHI.bin", "WEBP", ".webp"),
         ]
 
-        for url, expected_filename in formats:
-            class MockResponse:
-                status = 200
-                async def read(self):
-                    return b"data"
-
-            class MockGetCtx:
-                async def __aenter__(self):
-                    return MockResponse()
-                async def __aexit__(self, *args):
-                    pass
-
-            class MockSession:
-                def get(self, *args, **kwargs):
-                    return MockGetCtx()
-
-            mock_context.http_session = MockSession()
+        for index, (url, image_format, extension) in enumerate(formats):
+            payload = _image_bytes(image_format, color=(index + 1, 2, 3))
+            install_media_fetch(payload)
             save_dir = temp_data_dir / "images"
             save_dir.mkdir(parents=True, exist_ok=True)
 
-            await twitter._download_image(url, save_dir, mock_context)
-            # 清理文件以便下次测试
-            file_path = save_dir / expected_filename
-            if file_path.exists():
-                file_path.unlink()
+            assert await twitter._download_image(url, save_dir, mock_context) is True
+            expected = save_dir / f"{hashlib.sha256(payload).hexdigest()}{extension}"
+            assert expected.read_bytes() == payload
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://pbs.twimg.com/media/..\\..\\escaped.png",
+            "https://pbs.twimg.com/media/../../escaped.png",
+            "https://pbs.twimg.com/media/%2e%2e%5c%2e%2e%5cescaped.png",
+            "https://pbs.twimg.com/media/%252e%252e%255cescaped.png",
+            "https://pbs.twimg.com/media/CON.jpg",
+            "https://pbs.twimg.com/media/NUL. ",
+            "https://pbs.twimg.com/media/",
+            f"https://pbs.twimg.com/media/{'x' * 500}.png?name=orig#fragment",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_untrusted_remote_name_never_controls_cache_path(
+        self,
+        url,
+        mock_context,
+        temp_data_dir,
+        install_media_fetch,
+    ):
+        payload = _image_bytes("PNG")
+        install_media_fetch(payload)
+        save_dir = temp_data_dir / "images"
+
+        assert await twitter._download_image(url, save_dir, mock_context) is True
+
+        files = [path for path in temp_data_dir.rglob("*") if path.is_file()]
+        assert files == [save_dir / f"{hashlib.sha256(payload).hexdigest()}.png"]
+        assert files[0].resolve().parent == save_dir.resolve()
+
+    @pytest.mark.asyncio
+    async def test_content_hash_deduplicates_without_remote_name_collisions(
+        self,
+        mock_context,
+        temp_data_dir,
+        install_media_fetch,
+    ):
+        save_dir = temp_data_dir / "images"
+        first = _image_bytes("PNG", color=(1, 2, 3))
+        second = _image_bytes("PNG", color=(4, 5, 6))
+        url = "https://pbs.twimg.com/media/same-name.png"
+
+        install_media_fetch(first)
+        assert await twitter._download_image(url, save_dir, mock_context) is True
+        install_media_fetch(first)
+        assert await twitter._download_image(url, save_dir, mock_context) is False
+        install_media_fetch(second)
+        assert await twitter._download_image(url, save_dir, mock_context) is True
+
+        assert {path.name for path in save_dir.iterdir()} == {
+            f"{hashlib.sha256(first).hexdigest()}.png",
+            f"{hashlib.sha256(second).hexdigest()}.png",
+        }
+
+    @pytest.mark.asyncio
+    async def test_invalid_image_cleans_random_temp_file(
+        self,
+        mock_context,
+        temp_data_dir,
+        install_media_fetch,
+    ):
+        install_media_fetch(b"not an image")
+        save_dir = temp_data_dir / "images"
+
+        assert await twitter._download_image(
+            "https://pbs.twimg.com/media/not-image.jpg",
+            save_dir,
+            mock_context,
+        ) is False
+        assert list(save_dir.iterdir()) == []
 
 
 if __name__ == "__main__":

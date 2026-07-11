@@ -1,0 +1,16 @@
+{
+  "format": "utf-8 tab-separated two-column text without header",
+  "source": "XiaoQing project bundled astronomy dictionary",
+  "source_url": null,
+  "license": "MIT",
+  "files": {
+    "english_to_chinese": {
+      "filename": "astrodict_ec.txt",
+      "sha256": "e656a3d0efdc6363dde90b66d46a10ece4891dffbbc967f1e3a1b4d13e360e76"
+    },
+    "chinese_to_english": {
+      "filename": "astrodict_ce.txt",
+      "sha256": "59db7b75117c9e98671de9bc3bb874b88b07c247174ae9dc58548ddff6736ace"
+    }
+  }
+}

@@ -10,16 +10,19 @@ arxiv_filter 插件单元测试
 - 错误处理
 """
 
-import json
-import os
-import sys
-import types
-import pytest
-from pathlib import Path
+import asyncio
 import importlib
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
-from datetime import date, datetime
+import json
+import sys
+import threading
+import types
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
+
+from core.interfaces import PluginCapabilities, PluginPrincipal
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -77,6 +80,9 @@ def mock_context(temp_plugin_dir):
             self.data_dir.mkdir(parents=True, exist_ok=True)
             self.config = {}
             self.logger = MagicMock()
+            self.principal = PluginPrincipal(kind="lifecycle")
+            self.capabilities = PluginCapabilities()
+            self.call_plugin = AsyncMock(return_value="queued")
 
     return MockContext(temp_plugin_dir)
 
@@ -161,8 +167,6 @@ class TestStatusManagement:
 
     def test_should_send_today_new_day(self, temp_plugin_dir):
         """测试检查是否应该发送（新的一天）"""
-        # 保存昨天的日期
-        yesterday = (date.today().isoformat())
         status = {"last_sent_date": "2026-01-01"}
         arxiv_filter._save_update_status(str(temp_plugin_dir), status)
 
@@ -172,7 +176,7 @@ class TestStatusManagement:
 
     def test_should_send_today_already_sent(self, temp_plugin_dir):
         """测试今天已经发送过"""
-        today = date.today().isoformat()
+        today = arxiv_filter._business_now().date().isoformat()
         status = {"last_sent_date": today}
         arxiv_filter._save_update_status(str(temp_plugin_dir), status)
 
@@ -183,7 +187,7 @@ class TestStatusManagement:
         """测试标记今天已发送"""
         arxiv_filter._mark_sent_today(str(temp_plugin_dir))
 
-        today = date.today().isoformat()
+        today = arxiv_filter._business_now().date().isoformat()
         status = arxiv_filter._load_update_status(str(temp_plugin_dir))
         assert status["last_sent_date"] == today
         assert "last_sent_time" in status
@@ -219,6 +223,37 @@ class TestHandle:
             result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
             assert result is not None
             mock_run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_enables_codex_sidecar_only_for_current_bot_admin(
+        self,
+        mock_context,
+        mock_event,
+    ):
+        mock_context.principal = PluginPrincipal(kind="user", user_id=12345, group_id=100000001)
+        mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
+        with patch.object(
+            arxiv_filter,
+            "_run_filter",
+            new=AsyncMock(return_value=arxiv_filter.segments("test")),
+        ) as mock_run:
+            await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
+
+        assert mock_run.await_args.kwargs == {
+            "user_id": 12345,
+            "group_id": 100000001,
+            "allow_codex_sidecar": True,
+        }
+
+        mock_event["user_id"] = 99999
+        with patch.object(
+            arxiv_filter,
+            "_run_filter",
+            new=AsyncMock(return_value=arxiv_filter.segments("test")),
+        ) as mock_run:
+            await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
+
+        assert mock_run.await_args.kwargs["allow_codex_sidecar"] is False
 
     @pytest.mark.asyncio
     async def test_handle_exception(self, mock_context, mock_event):
@@ -406,7 +441,7 @@ class TestCheckArxivUpdate:
     async def test_check_arxiv_update_updated_today(self, mock_context):
         """测试 arXiv 已更新到今天"""
         # 确保今天未发送
-        today = date.today().isoformat()
+        today = arxiv_filter._business_now(mock_context).date().isoformat()
 
         with patch.object(arxiv_filter, '_run_filter', new=AsyncMock(return_value=arxiv_filter.segments("Papers found"))):
             with patch.object(arxiv_filter, 'run_sync', return_value=today):
@@ -417,7 +452,7 @@ class TestCheckArxivUpdate:
 
     @pytest.mark.asyncio
     async def test_check_arxiv_update_failure_does_not_mark_sent(self, mock_context):
-        today = date.today().isoformat()
+        today = arxiv_filter._business_now(mock_context).date().isoformat()
 
         with patch.object(
             arxiv_filter,
@@ -446,8 +481,6 @@ class TestCheckArxivUpdate:
         """测试最后检查仍未更新"""
         # 返回旧日期
         old_date = "2026-01-01"
-        today = date.today().isoformat()
-
         with patch.object(arxiv_filter, 'run_sync', return_value=old_date):
             result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=True)
             assert result is not None
@@ -481,14 +514,14 @@ class TestScheduledTasks:
     async def test_scheduled_check(self, mock_context):
         """测试定时检查任务"""
         with patch.object(arxiv_filter, '_check_arxiv_update', new=AsyncMock(return_value=[])) as mock_check:
-            result = await arxiv_filter.scheduled_check(mock_context)
+            await arxiv_filter.scheduled_check(mock_context)
             mock_check.assert_called_once_with(mock_context, is_final_check=False)
 
     @pytest.mark.asyncio
     async def test_scheduled_final_check(self, mock_context):
         """测试最后检查任务"""
         with patch.object(arxiv_filter, '_check_arxiv_update', new=AsyncMock(return_value=[])) as mock_check:
-            result = await arxiv_filter.scheduled_final_check(mock_context)
+            await arxiv_filter.scheduled_final_check(mock_context)
             mock_check.assert_called_once_with(mock_context, is_final_check=True)
 
 
@@ -581,12 +614,13 @@ Probability: 0.7500
                     mock_context,
                     user_id=123,
                     group_id=100000001,
+                    allow_codex_sidecar=True,
                 )
 
         assert "First Paper Title" in str(result)
         schedule_mock.assert_called_once_with(
             mock_context,
-            date=date.today().isoformat(),
+            date=arxiv_filter._business_now(mock_context).date().isoformat(),
             filter_text=mock_result,
             user_id=123,
             group_id=100000001,
@@ -622,33 +656,125 @@ Probability: 0.9000
         )
 
         assert task is not None
-        with patch.dict(sys.modules, {"plugins.codex.manager": None}):
-            await task
+        mock_context.call_plugin.side_effect = RuntimeError("codex unavailable")
+        await task
+        mock_context.call_plugin.assert_awaited_once()
 
-    def test_codex_summary_prefers_top_level_codex_module(self):
-        calls = []
-        top_module = types.ModuleType("codex.arxiv_summary")
-        nested_module = types.ModuleType("plugins.codex.arxiv_summary")
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("user_id", "group_id", "is_system", "expected_user_id", "expected_group_id"),
+        [
+            pytest.param(123, None, False, 123, None, id="private-chat"),
+            pytest.param(123, 456, False, 123, 456, id="group-chat"),
+            pytest.param(None, None, True, None, 789, id="scheduler-default-group"),
+            pytest.param(123, None, True, 123, None, id="system-explicit-private-target"),
+        ],
+    )
+    async def test_codex_summary_preserves_interactive_delivery_target(
+        self,
+        mock_context,
+        user_id,
+        group_id,
+        is_system,
+        expected_user_id,
+        expected_group_id,
+    ):
+        mock_context.send_action = AsyncMock()
+        mock_context.current_user_id = 999
+        mock_context.current_group_id = None
+        mock_context.default_groups = Mock(return_value=[789])
+        mock_context.capabilities = PluginCapabilities(is_system=is_system)
+        task = arxiv_codex_summary.schedule_codex_summary(
+            mock_context,
+            date="2026-07-10",
+            links=["https://arxiv.org/abs/2607.00001"],
+            user_id=user_id,
+            group_id=group_id,
+        )
+        assert task is not None
+        await task
 
-        async def top_entrypoint(*args, **kwargs):
-            calls.append(("top", args, kwargs))
+        mock_context.call_plugin.assert_awaited_once_with(
+            "codex",
+            "enqueue_or_replay_arxiv_summary",
+            date="2026-07-10",
+            links=["https://arxiv.org/abs/2607.00001"],
+            user_id=expected_user_id,
+            group_id=expected_group_id,
+        )
 
-        async def nested_entrypoint(*args, **kwargs):
-            calls.append(("nested", args, kwargs))
+    @pytest.mark.asyncio
+    async def test_filter_inference_is_singleflight_and_cached_per_business_day(self, mock_context):
+        calls = 0
+        gate = threading.Event()
 
-        top_module.enqueue_or_replay_arxiv_summary = top_entrypoint
-        nested_module.enqueue_or_replay_arxiv_summary = nested_entrypoint
+        def inference(**_kwargs):
+            nonlocal calls
+            calls += 1
+            gate.wait(1)
+            return "No positive predictions"
 
-        with patch.dict(
-            sys.modules,
-            {
-                "codex.arxiv_summary": top_module,
-                "plugins.codex.arxiv_summary": nested_module,
-            },
-        ):
-            entrypoint = arxiv_codex_summary._load_codex_summary_entrypoint()
+        arxiv_filter._FILTER_CACHE.clear()
+        with patch.object(arxiv_filter, "_load_inference", return_value=inference):
+            first = asyncio.create_task(arxiv_filter._run_filter(mock_context))
+            second = asyncio.create_task(arxiv_filter._run_filter(mock_context))
+            await asyncio.sleep(0.05)
+            gate.set()
+            await asyncio.gather(first, second)
+            await arxiv_filter._run_filter(mock_context)
 
-        assert entrypoint is top_entrypoint
+        assert calls == 1
+
+
+def test_arxiv_daily_claim_is_atomic_and_releasable(temp_plugin_dir):
+    business_date = "2030-01-02"
+    plugin_dir = str(temp_plugin_dir)
+
+    assert arxiv_filter._claim_send_today(plugin_dir, business_date) is True
+    assert arxiv_filter._claim_send_today(plugin_dir, business_date) is False
+    arxiv_filter._release_claim(plugin_dir, business_date)
+    assert arxiv_filter._claim_send_today(plugin_dir, business_date) is True
+
+
+def test_arxiv_training_cache_publishes_only_completed_results(monkeypatch, tmp_path):
+    with patch.dict(sys.modules, {"feedparser": SimpleNamespace()}):
+        module = importlib.import_module(
+            "plugins.arxiv_filter.train_model.data_prep.step2_fetch_all_astro_ph"
+        )
+    monkeypatch.setattr(module, "MONTHLY_DIR", tmp_path)
+    result = module.FetchResult(
+        papers=[{"arxiv_id": "2607.00001", "title": "t", "abstract": "a"}],
+        completed=False,
+        next_offset=2000,
+        total_results=4000,
+    )
+
+    module.save_checkpoint(2607, result)
+
+    assert module.API_URL.startswith("https://")
+    assert "@" not in module.HEADERS["User-Agent"]
+    assert module.load_cache(2607) is None
+    checkpoint = module.load_checkpoint(2607)
+    assert checkpoint["completed"] is False
+    assert checkpoint["next_offset"] == 2000
+
+
+def test_arxiv_run_all_uses_script_directory_and_current_python(monkeypatch):
+    module = importlib.import_module("plugins.arxiv_filter.train_model.data_prep.run_all")
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(module.time, "time", Mock(side_effect=[0.0, 1.0]))
+
+    assert module.run_step("step1_extract_positive_ids.py", "step") is True
+    assert captured["args"][0] == sys.executable
+    assert Path(captured["args"][1]).is_absolute()
+    assert captured["cwd"] == str(module.SCRIPT_DIR)
 
 
 # ============================================================

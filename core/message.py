@@ -4,8 +4,8 @@
 提供消息解析功能。
 """
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Any, Optional
 
 _MEDIA_SEGMENT_TYPES = frozenset({"image", "mface", "face"})
@@ -18,6 +18,22 @@ class MessageScan:
     text: str
     has_media: bool
     is_at_me: bool
+
+
+def normalize_inbound_message(event: dict[str, Any]) -> dict[str, Any]:
+    """Fill an absent or empty OneBot ``message`` from ``raw_message``.
+
+    Several OneBot implementations send only ``raw_message``.  Normalizing at
+    the boundary gives all later consumers the standard segment-list contract
+    while preserving non-empty segment payloads such as images and mentions.
+    """
+    normalized = dict(event)
+    message = normalized.get("message")
+    raw_message = normalized.get("raw_message")
+    raw_text = raw_message.strip() if isinstance(raw_message, str) else ""
+    if raw_text and message in (None, "", []):
+        normalized["message"] = [{"type": "text", "data": {"text": raw_text}}]
+    return normalized
 
 
 def iter_message_segments(event_or_message: Any) -> tuple[dict[str, Any], ...]:
@@ -229,6 +245,7 @@ __all__ = [
     "has_at_mention",
     "iter_message_segments",
     "is_clean_text_url_only",
+    "normalize_inbound_message",
     "normalize_message",
     "is_bot_mentioned",
     "compile_bot_name_pattern",

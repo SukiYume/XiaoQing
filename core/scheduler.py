@@ -46,12 +46,28 @@ class SchedulerManager:
         self._started = False
         self.ensure_started()
 
-    def add_job(self, job_id: str, func, cron: dict[str, Any]) -> None:
+    def add_job(
+        self,
+        job_id: str,
+        func,
+        cron: dict[str, Any],
+        *,
+        description: str | None = None,
+    ) -> None:
         self.ensure_started()
         self.remove_job(job_id)
         if self.scheduler:
-            self.scheduler.add_job(func, trigger="cron", id=job_id, **cron)
-            logger.info("Scheduled job %s", job_id)
+            self.scheduler.add_job(
+                func,
+                trigger="cron",
+                id=job_id,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=60,
+                name=description or job_id,
+                **cron,
+            )
+            logger.info("Scheduled job %s (%s)", job_id, description or job_id)
 
     def remove_job(self, job_id: str) -> None:
         if not self.scheduler:

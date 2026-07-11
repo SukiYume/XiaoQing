@@ -13,7 +13,7 @@
                 "ai"
             ],
             "help": "与 AI 进行对话 | 用法: /chat <你的问题>",
-            "admin_only": false
+            "admin_only": true
         }
     ],
     "schedule": [],

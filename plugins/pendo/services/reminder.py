@@ -123,18 +123,33 @@ class ReminderService:
                 for remind_time_str in remind_times:
                     try:
                         remind_time = self._parse_user_time(remind_time_str, item.owner_id)
-                        time_diff = (current_time - remind_time).total_seconds()
-
-                        if 0 <= time_diff <= PendoConfig.REMINDER_CHECK_WINDOW_SECONDS:
-                            log = log_map.get(remind_time_str)
-                            if log and log.get("confirmed_at"):
-                                continue
-                            if not self.db.is_reminder_sent(item.id, remind_time_str):
-                                if self._should_suppress(item, remind_time):
-                                    continue
-                                message = self._build_reminder_message(item, remind_time_str)
-                                messages.append(self._make_msg(item, message, remind_time_str))
-                                sent_count += 1
+                        # Due reminders remain eligible after downtime.  A
+                        # persistent DB lease, rather than a 120-second window,
+                        # decides which overlapping scheduler may deliver it.
+                        if current_time < remind_time:
+                            continue
+                        log = log_map.get(remind_time_str)
+                        if log and log.get("confirmed_at"):
+                            continue
+                        claim_token = self.db.claim_reminder(
+                            item.id,
+                            remind_time_str,
+                            now=current_time,
+                            lease_seconds=PendoConfig.REMINDER_CLAIM_LEASE_SECONDS,
+                        )
+                        if not claim_token:
+                            continue
+                        if self._should_suppress(item, current_time):
+                            self.db.release_reminder_claim(
+                                item.id,
+                                remind_time_str,
+                                claim_token,
+                                retry_at=self._next_quiet_hours_end(item.owner_id, current_time),
+                            )
+                            continue
+                        message = self._build_reminder_message(item, remind_time_str)
+                        messages.append(self._make_msg(item, message, remind_time_str, claim_token))
+                        sent_count += 1
                     except Exception as e:
                         logger.warning("处理提醒失败: %s, error: %s", remind_time_str, e)
 
@@ -223,7 +238,7 @@ class ReminderService:
         return True
 
     @staticmethod
-    def _make_msg(item, message: str, remind_time_str: str) -> dict[str, Any]:
+    def _make_msg(item, message: str, remind_time_str: str, claim_token: str | None = None) -> dict[str, Any]:
         """构建统一的消息字典"""
         return {
             "user_id": item.owner_id,
@@ -231,6 +246,7 @@ class ReminderService:
             "message": message,
             "item_id": item.id,
             "remind_time": remind_time_str,
+            "claim_token": claim_token,
         }
 
     def confirm_reminder(
@@ -472,6 +488,22 @@ class ReminderService:
         except (AttributeError, KeyError, ValueError):
             # 设置获取失败或数据格式错误
             return False
+
+    def _next_quiet_hours_end(self, user_id: str, current_time: datetime) -> datetime:
+        """Calculate the next permitted local send time across midnight."""
+        settings = self.db.get_user_settings(user_id)
+        end_minutes = parse_hhmm_to_minutes(settings.get("quiet_hours_end", "07:00"))
+        if end_minutes is None:
+            return current_time + timedelta(minutes=1)
+        candidate = current_time.replace(
+            hour=end_minutes // 60,
+            minute=end_minutes % 60,
+            second=0,
+            microsecond=0,
+        )
+        if candidate <= current_time:
+            candidate += timedelta(days=1)
+        return candidate
 
     def _is_important_item(self, item) -> bool:
         """判断是否是重要事件

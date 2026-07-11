@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from core.interfaces import PluginCapabilities, PluginPrincipal
 from plugins.xiaoqing_chat.handler_context import HandlerContext, handle_errors
+from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
 from plugins.xiaoqing_chat.message_parts import build_text_message_parts, message_parts_to_legacy
 
 
@@ -39,6 +41,39 @@ def _make_hctx(
         bot_name=bot_name,
         context=context,
     )
+
+
+def _set_context_principal(
+    context,
+    event: dict[str, Any],
+    *,
+    group_role: str = "member",
+    is_bot_admin: bool = False,
+) -> None:
+    group_id = event.get("group_id")
+    context.principal = PluginPrincipal(
+        kind="user",
+        user_id=event.get("user_id"),
+        group_id=group_id,
+        is_bot_admin=is_bot_admin,
+        is_private=group_id in (None, ""),
+        group_role=group_role,
+    )
+    context.capabilities = PluginCapabilities(is_bot_admin=is_bot_admin)
+
+
+def _provider_test_secrets() -> dict[str, Any]:
+    return {
+        "plugins": {
+            "xiaoqing_chat": {
+                "default": "deepseek",
+                "providers": {
+                    "deepseek": {"model": "deepseek-chat", "api_base": "http://a"},
+                    "glm": {"model": "glm-4", "api_base": "http://b"},
+                },
+            }
+        }
+    }
 
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -2738,6 +2773,74 @@ async def test_spawn_post_reply_bg_tasks_uses_async_goal_and_action_history_read
 
 
 @pytest.mark.asyncio
+async def test_group_reset_requires_admin_confirmation_and_writes_audit_log(mock_context):
+    from plugins.xiaoqing_chat.handlers_internal import handle_internal_impl
+
+    state = MagicMock()
+    state.pop_persist_task.return_value = None
+    state.inc_stats = Mock()
+    hctx = SimpleNamespace(chat_id="g67890", runtime=MagicMock(), state=state)
+    reset_chat_session = AsyncMock()
+    event = {"message_type": "group", "group_id": 67890, "user_id": 12345}
+
+    async def call_reset(args: str, is_admin: bool):
+        return await handle_internal_impl(
+            "重置",
+            args,
+            event,
+            mock_context,
+            handler_context_from_event=lambda _event, _context: hctx,
+            get_lock=lambda _chat_id: asyncio.Lock(),
+            reset_chat_session=reset_chat_session,
+            cancel_pending_task=Mock(),
+            is_admin_operator_fn=lambda _event, _context: is_admin,
+        )
+
+    denied = await call_reset("确认", is_admin=False)
+    assert "仅限" in denied[0]["data"]["text"]
+    reset_chat_session.assert_not_awaited()
+
+    preview = await call_reset("", is_admin=True)
+    assert "会清空本群" in preview[0]["data"]["text"]
+    assert "/xc 重置 确认" in preview[0]["data"]["text"]
+    reset_chat_session.assert_not_awaited()
+
+    completed = await call_reset("确认", is_admin=True)
+    assert completed == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
+    reset_chat_session.assert_awaited_once_with(state, "g67890")
+    state.inc_stats.assert_called_once_with("g67890", "resets")
+    mock_context.logger.info.assert_called_once()
+    assert "reset_audit" in mock_context.logger.info.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_private_reset_remains_limited_to_callers_private_scope(mock_context):
+    from plugins.xiaoqing_chat.handlers_internal import handle_internal_impl
+
+    state = MagicMock()
+    state.pop_persist_task.return_value = None
+    hctx = SimpleNamespace(chat_id="u12345", runtime=MagicMock(), state=state)
+    reset_chat_session = AsyncMock()
+    event = {"message_type": "private", "user_id": 12345}
+
+    result = await handle_internal_impl(
+        "重置",
+        "",
+        event,
+        mock_context,
+        handler_context_from_event=lambda _event, _context: hctx,
+        get_lock=lambda _chat_id: asyncio.Lock(),
+        reset_chat_session=reset_chat_session,
+        cancel_pending_task=Mock(),
+        is_admin_operator_fn=lambda _event, _context: False,
+    )
+
+    assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
+    reset_chat_session.assert_awaited_once_with(state, "u12345")
+    assert "private" in mock_context.logger.info.call_args.args
+
+
+@pytest.mark.asyncio
 async def test_handle_internal_reset_uses_async_pfc_state_store(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.handlers import handle_internal
 
@@ -2757,9 +2860,10 @@ async def test_handle_internal_reset_uses_async_pfc_state_store(mock_context, sa
         "sync pfc state write should not be used"
     )
 
+    _set_context_principal(mock_context, sample_group_event, group_role="admin")
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context)
     with patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx):
-        result = await handle_internal("重置", "", sample_group_event, mock_context)
+        result = await handle_internal("重置", "确认", sample_group_event, mock_context)
 
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
     assert state.pfc_state_store.get_async.await_count == 1
@@ -2769,8 +2873,8 @@ async def test_handle_internal_reset_uses_async_pfc_state_store(mock_context, sa
 @pytest.mark.asyncio
 async def test_schedule_action_history_flush_uses_to_thread(mock_context):
     from plugins.xiaoqing_chat.task_scheduler import (
-        _schedule_action_history_flush,
         _action_flush_tasks,
+        _schedule_action_history_flush,
     )
 
     runtime = MagicMock()
@@ -2802,8 +2906,8 @@ async def test_schedule_action_history_flush_uses_to_thread(mock_context):
 @pytest.mark.asyncio
 async def test_schedule_pfc_state_flush_uses_to_thread(mock_context):
     from plugins.xiaoqing_chat.task_scheduler import (
-        _schedule_pfc_state_flush,
         _pfc_state_flush_tasks,
+        _schedule_pfc_state_flush,
     )
 
     runtime = MagicMock()
@@ -3637,115 +3741,198 @@ async def test_mode_indicator_is_emitted_when_brain_chat_is_active(
 @pytest.mark.asyncio
 async def test_handle_provider_denies_switch_for_non_admin(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.handlers import handle_provider
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = SimpleNamespace(active_provider=None)
-    mock_context.is_admin = Mock(return_value=False)
-    mock_context.check_permission = Mock(return_value=False)
-    mock_context.admin_ids = []
-    mock_context.secrets = {
-        "admin_user_ids": [],
-        "plugins": {
-            "xiaoqing_chat": {
-                "default": "deepseek",
-                "providers": {
-                    "deepseek": {"model": "deepseek-chat", "api_base": "http://a"},
-                    "glm": {"model": "glm-4", "api_base": "http://b"},
-                },
-            }
-        },
-    }
+    state = ChatRuntimeState()
+    mock_context.secrets = _provider_test_secrets()
+    _set_context_principal(mock_context, sample_group_event, group_role="member")
 
     with patch("plugins.xiaoqing_chat.handlers._state", return_value=state):
         result = await handle_provider("glm", sample_group_event, mock_context)
 
-    assert state.active_provider is None
+    assert state.get_chat_provider("g67890") is None
     assert "管理员" in result[0]["data"]["text"]
 
 
 @pytest.mark.asyncio
 async def test_handle_provider_list_mode_remains_public(mock_context, sample_group_event):
     from plugins.xiaoqing_chat.handlers import handle_provider
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = SimpleNamespace(active_provider=None)
-    mock_context.is_admin = Mock(return_value=False)
-    mock_context.check_permission = Mock(return_value=False)
-    mock_context.admin_ids = []
-    mock_context.secrets = {
-        "admin_user_ids": [],
-        "plugins": {
-            "xiaoqing_chat": {
-                "default": "deepseek",
-                "providers": {
-                    "deepseek": {"model": "deepseek-chat", "api_base": "http://a"},
-                    "glm": {"model": "glm-4", "api_base": "http://b"},
-                },
-            }
-        },
-    }
+    state = ChatRuntimeState()
+    mock_context.secrets = _provider_test_secrets()
+    _set_context_principal(mock_context, sample_group_event, group_role="member")
 
     with patch("plugins.xiaoqing_chat.handlers._state", return_value=state):
         result = await handle_provider("", sample_group_event, mock_context)
 
-    assert state.active_provider is None
+    assert state.get_chat_provider("g67890") is None
     assert "LLM 供应商" in result[0]["data"]["text"]
+    assert "当前会话覆盖" in result[0]["data"]["text"]
 
 
 @pytest.mark.asyncio
-async def test_handle_provider_allows_switch_for_admin(mock_context, sample_group_event):
+async def test_handle_provider_group_admin_switch_is_scoped_to_current_group(
+    mock_context,
+    sample_group_event,
+):
     from plugins.xiaoqing_chat.handlers import handle_provider
+    from plugins.xiaoqing_chat.helper_utils import _get_llm_secrets
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = SimpleNamespace(active_provider=None)
-    mock_context.is_admin = Mock(return_value=True)
-    mock_context.check_permission = Mock(return_value=False)
-    mock_context.admin_ids = []
-    mock_context.secrets = {
-        "admin_user_ids": [],
-        "plugins": {
-            "xiaoqing_chat": {
-                "default": "deepseek",
-                "providers": {
-                    "deepseek": {"model": "deepseek-chat", "api_base": "http://a"},
-                    "glm": {"model": "glm-4", "api_base": "http://b"},
-                },
-            }
-        },
-    }
+    state = ChatRuntimeState()
+    mock_context.secrets = _provider_test_secrets()
+    _set_context_principal(mock_context, sample_group_event, group_role="admin")
 
-    with patch("plugins.xiaoqing_chat.handlers._state", return_value=state):
+    with (
+        patch("plugins.xiaoqing_chat.handlers._state", return_value=state),
+        patch("plugins.xiaoqing_chat.helper_utils._state", return_value=state),
+    ):
         result = await handle_provider("glm", sample_group_event, mock_context)
+        group_a = _get_llm_secrets(mock_context, chat_id="g67890")
+        group_b = _get_llm_secrets(mock_context, chat_id="g99999")
 
-    assert state.active_provider == "glm"
-    assert "已切换到" in result[0]["data"]["text"]
+    assert state.get_chat_provider("g67890") == "glm"
+    assert state.global_active_provider is None
+    assert group_a["_provider_name"] == "glm"
+    assert group_b["_provider_name"] == "deepseek"
+    assert "已将当前会话供应商切换到" in result[0]["data"]["text"]
 
 
 @pytest.mark.asyncio
-async def test_handle_provider_allows_switch_via_admin_ids_fallback(
+async def test_handle_provider_global_scope_requires_bot_admin(
     mock_context, sample_group_event
 ):
     from plugins.xiaoqing_chat.handlers import handle_provider
+    from plugins.xiaoqing_chat.helper_utils import _get_llm_secrets
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
-    state = SimpleNamespace(active_provider=None)
-    mock_context.is_admin = Mock(return_value=False)
-    mock_context.check_permission = Mock(return_value=False)
-    mock_context.admin_ids = [sample_group_event["user_id"]]
-    mock_context.secrets = {
-        "admin_user_ids": [],
-        "plugins": {
-            "xiaoqing_chat": {
-                "default": "deepseek",
-                "providers": {
-                    "deepseek": {"model": "deepseek-chat", "api_base": "http://a"},
-                    "glm": {"model": "glm-4", "api_base": "http://b"},
-                },
-            }
-        },
-    }
+    state = ChatRuntimeState()
+    mock_context.secrets = _provider_test_secrets()
+    _set_context_principal(mock_context, sample_group_event, group_role="owner")
+
+    with (
+        patch("plugins.xiaoqing_chat.handlers._state", return_value=state),
+        patch("plugins.xiaoqing_chat.helper_utils._state", return_value=state),
+    ):
+        denied = await handle_provider("global glm", sample_group_event, mock_context)
+        _set_context_principal(
+            mock_context,
+            sample_group_event,
+            group_role="member",
+            is_bot_admin=True,
+        )
+        allowed = await handle_provider("global glm", sample_group_event, mock_context)
+        other_group = _get_llm_secrets(mock_context, chat_id="g99999")
+        await handle_provider("deepseek", sample_group_event, mock_context)
+        local = _get_llm_secrets(mock_context, chat_id="g67890")
+        await handle_provider("default", sample_group_event, mock_context)
+        inherited = _get_llm_secrets(mock_context, chat_id="g67890")
+        await handle_provider("global default", sample_group_event, mock_context)
+        reset_global = _get_llm_secrets(mock_context, chat_id="g99999")
+
+    assert "Bot 全局管理员" in denied[0]["data"]["text"]
+    assert "全局运行时供应商" in allowed[0]["data"]["text"]
+    assert other_group["_provider_name"] == "glm"
+    assert local["_provider_name"] == "deepseek"
+    assert inherited["_provider_name"] == "glm"
+    assert reset_global["_provider_name"] == "deepseek"
+    assert state.global_active_provider is None
+
+
+@pytest.mark.asyncio
+async def test_handle_provider_private_chat_requires_bot_admin(
+    mock_context,
+    sample_private_event,
+):
+    from plugins.xiaoqing_chat.handlers import handle_provider
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+
+    state = ChatRuntimeState()
+    mock_context.secrets = _provider_test_secrets()
+    _set_context_principal(mock_context, sample_private_event)
 
     with patch("plugins.xiaoqing_chat.handlers._state", return_value=state):
-        result = await handle_provider("glm", sample_group_event, mock_context)
+        denied = await handle_provider("glm", sample_private_event, mock_context)
+        _set_context_principal(mock_context, sample_private_event, is_bot_admin=True)
+        allowed = await handle_provider("glm", sample_private_event, mock_context)
 
-    assert state.active_provider == "glm"
-    assert "已切换到" in result[0]["data"]["text"]
+    assert "管理员" in denied[0]["data"]["text"]
+    assert "已将当前会话供应商切换到" in allowed[0]["data"]["text"]
+    assert state.get_chat_provider(f"u{sample_private_event['user_id']}") == "glm"
+
+
+@pytest.mark.asyncio
+async def test_handle_provider_does_not_trust_raw_sender_role(
+    mock_context,
+    sample_group_event,
+):
+    from plugins.xiaoqing_chat.handlers import handle_provider
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+
+    state = ChatRuntimeState()
+    event = dict(sample_group_event)
+    event["sender"] = dict(sample_group_event["sender"], role="owner")
+    mock_context.secrets = _provider_test_secrets()
+    _set_context_principal(mock_context, event, group_role="unknown")
+
+    with patch("plugins.xiaoqing_chat.handlers._state", return_value=state):
+        result = await handle_provider("glm", event, mock_context)
+
+    assert "管理员" in result[0]["data"]["text"]
+    assert state.get_chat_provider("g67890") is None
+
+
+@pytest.mark.asyncio
+async def test_handle_provider_concurrent_groups_do_not_overwrite_each_other():
+    from plugins.xiaoqing_chat.handlers import handle_provider
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+
+    state = ChatRuntimeState()
+    secrets = _provider_test_secrets()
+    event_a = {"user_id": 1, "group_id": 10}
+    event_b = {"user_id": 2, "group_id": 20}
+    context_a = SimpleNamespace(
+        secrets=secrets,
+        principal=PluginPrincipal(kind="user", user_id=1, group_id=10, group_role="admin"),
+        capabilities=PluginCapabilities(),
+        logger=MagicMock(),
+        request_id="provider-a",
+    )
+    context_b = SimpleNamespace(
+        secrets=secrets,
+        principal=PluginPrincipal(kind="user", user_id=2, group_id=20, group_role="owner"),
+        capabilities=PluginCapabilities(),
+        logger=MagicMock(),
+        request_id="provider-b",
+    )
+
+    with patch("plugins.xiaoqing_chat.handlers._state", return_value=state):
+        await asyncio.gather(
+            handle_provider("glm", event_a, context_a),
+            handle_provider("deepseek", event_b, context_b),
+        )
+
+    assert state.provider_overrides() == {"g10": "glm", "g20": "deepseek"}
+
+
+def test_provider_resolution_prunes_removed_provider_overrides() -> None:
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+
+    state = ChatRuntimeState()
+    state.set_chat_provider("g1", "removed")
+    state.set_chat_provider("g2", "still-present")
+    state.set_global_provider("removed")
+
+    resolved = state.resolve_provider_name(
+        "g1",
+        ["default-provider", "still-present"],
+        "default-provider",
+    )
+
+    assert resolved == "default-provider"
+    assert state.global_active_provider is None
+    assert state.provider_overrides() == {"g2": "still-present"}
 
 
 @pytest.mark.asyncio
@@ -4602,7 +4789,7 @@ async def test_handle_errors_uses_keyword_context_for_logging():
     result = await failing_handler(context=context)
 
     context.logger.exception.assert_called_once()
-    assert result[0]["data"]["text"] == "❌ 测试出错: boom"
+    assert result[0]["data"]["text"].startswith("❌ 测试暂时不可用，请稍后重试（请求ID: ")
 
 
 @pytest.mark.asyncio
@@ -4645,9 +4832,10 @@ async def test_handle_internal_reset_clears_goal_heartflow_and_action_history(
     pfc_st.knowledge_list = [{"text": "old"}]
     await state.pfc_state_store.save_async(chat_id)
 
+    _set_context_principal(mock_context, sample_group_event, group_role="admin")
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context, data_dir=tmp_path)
     with patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx):
-        result = await handle_internal("重置", "", sample_group_event, mock_context)
+        result = await handle_internal("重置", "确认", sample_group_event, mock_context)
 
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
     assert state.memory_store.get(chat_id) == []
@@ -4691,9 +4879,10 @@ async def test_handle_internal_reset_clears_review_policy_and_sessions_for_curre
     )
     assert session is not None
 
+    _set_context_principal(mock_context, sample_group_event, group_role="admin")
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context, data_dir=tmp_path)
     with patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx):
-        result = await handle_internal("重置", "", sample_group_event, mock_context)
+        result = await handle_internal("重置", "确认", sample_group_event, mock_context)
 
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
 
@@ -5717,12 +5906,16 @@ def test_memory_db_bind_clears_previous_store_when_switching_dirs(tmp_path):
 
     db = MemoryDB()
     db.bind(first_dir)
-    db.upsert_text(doc_id="doc1", text="旧目录里的记忆", meta={"type": "knowledge"})
-    assert db.query("旧目录", top_k=5)
+    db.upsert_text(
+        doc_id="doc1",
+        text="旧目录里的记忆",
+        meta={"type": "knowledge", "global_approved": True},
+    )
+    assert db.query_global("旧目录", top_k=5, type_filter="knowledge")
 
     db.bind(second_dir)
 
-    assert db.query("旧目录", top_k=5) == []
+    assert db.query_global("旧目录", top_k=5, type_filter="knowledge") == []
 
 
 @pytest.mark.asyncio
@@ -6027,21 +6220,19 @@ async def test_generate_reply_checker_timeout_allows_non_forced_reply(mock_conte
             )
         )
 
-        draft = await _generate_reply_draft(
-            text="你好",
-            event={"message_id": 1, "user_id": 1},
-            context=mock_context,
-            runtime=runtime,
-            state=state,
-            forced=False,
-            action=action,
-            plan_reasoning="",
-            bot_name="小青",
-            secrets=None,
-        )
-
-    assert draft is not None
-    assert draft.text == "这条回复需要检查"
+        with pytest.raises(ReplyRejected):
+            await _generate_reply_draft(
+                text="你好",
+                event={"message_id": 1, "user_id": 1},
+                context=mock_context,
+                runtime=runtime,
+                state=state,
+                forced=False,
+                action=action,
+                plan_reasoning="",
+                bot_name="小青",
+                secrets=None,
+            )
 
 
 @pytest.mark.asyncio
@@ -6208,21 +6399,19 @@ async def test_generate_reply_checker_unexpected_error_logs_error_not_timeout(mo
             patch("plugins.xiaoqing_chat.reply_generator._log_step")
         )
 
-        draft = await _generate_reply_draft(
-            text="你好",
-            event={"message_id": 1, "user_id": 1},
-            context=mock_context,
-            runtime=runtime,
-            state=state,
-            forced=False,
-            action=action,
-            plan_reasoning="",
-            bot_name="小青",
-            secrets=None,
-        )
-
-    assert draft is not None
-    assert draft.text == "这条回复需要检查"
+        with pytest.raises(ReplyRejected):
+            await _generate_reply_draft(
+                text="你好",
+                event={"message_id": 1, "user_id": 1},
+                context=mock_context,
+                runtime=runtime,
+                state=state,
+                forced=False,
+                action=action,
+                plan_reasoning="",
+                bot_name="小青",
+                secrets=None,
+            )
     assert any(call.kwargs.get("step") == "reply.check.error" for call in mock_log_step.call_args_list)
     assert not any(
         call.kwargs.get("step") == "reply.check.timeout" for call in mock_log_step.call_args_list
@@ -6362,9 +6551,10 @@ async def test_handle_internal_reset_cancels_pending_persist_task(
     persist_task = asyncio.create_task(_pending_persist())
     state.set_persist_task(chat_id, persist_task)
 
+    _set_context_principal(mock_context, sample_group_event, group_role="admin")
     hctx = _make_hctx(runtime=runtime, state=state, context=mock_context, data_dir=tmp_path)
     with patch("plugins.xiaoqing_chat.handlers.HandlerContext.from_event", return_value=hctx):
-        result = await handle_internal("重置", "", sample_group_event, mock_context)
+        result = await handle_internal("重置", "确认", sample_group_event, mock_context)
 
     assert result == [{"type": "text", "data": {"text": "✅ 已重置会话记忆"}}]
     assert state.get_persist_task(chat_id) is None

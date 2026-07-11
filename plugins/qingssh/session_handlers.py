@@ -8,38 +8,46 @@ SSH 会话处理器
 插件会拦截这些命令，先断开 SSH 连接再结束会话，避免连接泄露。
 """
 
+import asyncio
 import logging
 import os
 import re
-import asyncio
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 
-from core.plugin_base import segments
 from core.constants import EXIT_COMMANDS_SET
+from core.plugin_base import segments
 
 from .config import (
     CANCEL_KEYWORDS,
+    COMMAND_TIMEOUT,
+    EXIT_CODE_INTERRUPTED,
+    EXIT_CODE_TIMEOUT,
+    MAX_HISTORY_LENGTH,
     STOP_KEYWORDS,
     STREAM_BUFFER_SIZE,
     STREAM_FLUSH_INTERVAL,
-    EXIT_CODE_INTERRUPTED,
-    EXIT_CODE_TIMEOUT,
     SessionKeys,
     SSHDefaults,
-    MAX_HISTORY_LENGTH,
-    COMMAND_TIMEOUT,
 )
-from .path_resolver import is_cd_command, build_command, extract_cwd_from_output, resolve_remote_path
-from .ssh_manager import SSHManager, get_manager
-from .validators import validate_server_name, validate_hostname, validate_port
 from .message_formatter import format_server_added
-from .types import Context, Session, OneBotEvent, MessageSegments
+from .path_resolver import (
+    build_command,
+    extract_cwd_from_output,
+    is_cd_command,
+    resolve_remote_path,
+)
+from .ssh_manager import SSHManager, get_manager
+from .types import Context, MessageSegments, OneBotEvent, Session
+from .validators import validate_hostname, validate_port, validate_server_name
 
 logger = logging.getLogger(__name__)
 
 _SESSION_TASKS: dict[str, asyncio.Task[Any]] = {}
+MAX_SHOWIMG_FILES = 5
+MAX_SHOWIMG_BYTES = 10 * 1024 * 1024
 
 
 def _session_task_key(context: Context, session: Session) -> str:
@@ -57,6 +65,27 @@ def _set_session_task(context: Context, session: Session, task: asyncio.Task[Any
         _SESSION_TASKS.pop(key, None)
         return
     _SESSION_TASKS[key] = task
+
+
+async def close_session(context: Context, session: Session) -> None:
+    task = _get_session_task(context, session)
+    if task is not None and not task.done():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    _set_session_task(context, session, None)
+    manager = await get_manager(context)
+    server_name = session.get(SessionKeys.SERVER_NAME)
+    if server_name:
+        manager.disconnect(str(context.current_user_id), str(context.current_group_id), server_name)
+
+
+async def shutdown_tasks() -> None:
+    tasks = list(_SESSION_TASKS.values())
+    _SESSION_TASKS.clear()
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 async def ensure_session_connected(context: Context, session: Session, manager: SSHManager) -> tuple[bool, str]:
     """
@@ -177,6 +206,8 @@ async def _handle_adding_session(
     
     elif step == "auth_type":
         if text in {"1", "password", "密码"}:
+            if context.current_group_id is not None:
+                return segments("❌ 密码只能由管理员在私聊中输入；请私聊机器人重新执行 /ssh add")
             config["auth_type"] = "password"
             session.set("server_config", config)
             session.set("step", "password")
@@ -212,18 +243,26 @@ async def _handle_adding_session(
             return segments("❌ 请输入 1、2 或 3 选择认证方式")
     
     elif step == "password":
-        config["password"] = text
-        session.set("server_config", config)
+        if context.current_group_id is not None:
+            await context.end_session()
+            return segments("❌ 已终止：密码认证配置只能在管理员私聊中完成")
+
+        password_ref = f"passwords.{uuid.uuid4().hex}"
+        await asyncio.to_thread(context.set_secret, password_ref, text)
         
         # 完成添加
-        await manager.add_server(
-            config["name"],
-            config["host"],
-            config.get("port", SSHDefaults.PORT),
-            config.get("username", SSHDefaults.USERNAME),
-            "password",
-            password=config.get("password"),
-        )
+        try:
+            await manager.add_server(
+                config["name"],
+                config["host"],
+                config.get("port", SSHDefaults.PORT),
+                config.get("username", SSHDefaults.USERNAME),
+                "password",
+                password_ref=password_ref,
+            )
+        except Exception:
+            await asyncio.to_thread(context.delete_secret, password_ref)
+            raise
         
         await context.end_session()
         
@@ -291,10 +330,14 @@ async def _handle_connected_session(
     if session.get(SessionKeys.STATE) == "executing":
         # 只有在执行状态下，才通过消息来判断是否停止
         if text.lower() in STOP_KEYWORDS:
-            if manager.stop_command(user_id, group_id, server_name):
-                return segments("🛑 正在发送停止信号...")
-            else:
+            stop_result = await manager.stop_command(user_id, group_id, server_name)
+            if not stop_result.found:
                 return segments("⚠️ 未找到运行中的命令")
+            if stop_result.remote_confirmed:
+                return segments("🛑 远端命令已确认停止，命令通道已清理")
+            if stop_result.local_cleaned:
+                return segments("⚠️ 已关闭命令通道，但远端进程状态未知，请登录服务器确认")
+            return segments("⚠️ 命令通道清理失败，且远端进程状态未知，请登录服务器确认")
         else:
             return segments("⏳ 有命令正在运行中...\n发送「停止」可强制结束，或等待命令完成。")
 
@@ -409,6 +452,7 @@ async def _handle_connected_session(
     old_task = _get_session_task(context, session)
     if old_task and not old_task.done():
         old_task.cancel()
+        await asyncio.gather(old_task, return_exceptions=True)
 
     # 创建带超时的后台任务
     task = asyncio.create_task(
@@ -461,8 +505,9 @@ async def _run_background_command(
         group_id: 用于发送消息的群 ID
         is_cd: 是否为 cd 命令（成功后需从 pwd 输出提取新的 CWD）
     """
-    from core.plugin_base import build_action, segments
     import time
+
+    from core.plugin_base import build_action, segments
     
     buffer = []
     cd_output = []  # 用于 cd 命令捕获 pwd 输出
@@ -608,9 +653,18 @@ async def _handle_showimg_command(
     if not image_files:
         return segments(f"❌ 未找到图片文件\n匹配的文件: {', '.join(files)}")
     
+    image_files = image_files[:MAX_SHOWIMG_FILES]
+
     # 创建本地保存目录
     images_dir = Path(context.plugin_dir) / "data" / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
+    cutoff = time.time() - 3600
+    for stale in images_dir.iterdir():
+        try:
+            if stale.is_file() and stale.stat().st_mtime < cutoff:
+                stale.unlink(missing_ok=True)
+        except OSError:
+            pass
     
     # 下载图片并发送
     downloaded_files = []
@@ -624,7 +678,14 @@ async def _handle_showimg_command(
         local_path = images_dir / local_filename
         
         # 下载文件
-        success, message = await manager.download_file(user_id, group_id, server_name, remote_path, str(local_path))
+        success, message = await manager.download_file(
+            user_id,
+            group_id,
+            server_name,
+            remote_path,
+            str(local_path),
+            max_bytes=MAX_SHOWIMG_BYTES,
+        )
         
         if success:
             downloaded_files.append((filename, local_path))
@@ -651,4 +712,7 @@ async def _handle_showimg_command(
             error_msg += f"\n  ... 及其他 {len(errors) - 5} 个"
         message_segments.append(error_msg)
     
+    for _filename, local_path in downloaded_files:
+        local_path.unlink(missing_ok=True)
+
     return segments("".join(message_segments))

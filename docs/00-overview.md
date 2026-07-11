@@ -247,7 +247,7 @@ return segments("你好")  # 自动转换为消息段
 XiaoQing/
 ├── main.py                 # 程序入口
 ├── requirements.txt        # Python 依赖
-├── pytest.ini              # 测试配置
+├── pyproject.toml          # 打包、pytest、coverage 与静态检查配置
 │
 ├── config/                 # 配置文件
 │   ├── config.json         # 基础配置（可提交到 Git）
