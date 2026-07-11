@@ -182,7 +182,7 @@ def _build_knowledge_block(runtime: _ChatRuntime, state, data_dir, chat_id: str,
     """
     if not runtime.cfg.knowledge.enable_knowledge or runtime.cfg.knowledge.top_k <= 0:
         return ""
-    kb_items = state.memory_db.query(
+    kb_items = state.memory_db.query_global(
         text,
         top_k=runtime.cfg.knowledge.top_k,
         min_score=runtime.cfg.memory.min_score,
@@ -198,7 +198,7 @@ def _build_knowledge_block(runtime: _ChatRuntime, state, data_dir, chat_id: str,
 
 
 def _build_jargon_explanation(
-    runtime: _ChatRuntime, state, data_dir, unknown_words: list[str]
+    runtime: _ChatRuntime, state, data_dir, chat_id: str, unknown_words: list[str]
 ) -> str:
     """
     Build the jargon/slang explanation context block.
@@ -219,15 +219,17 @@ def _build_jargon_explanation(
     jargon_db = None
     items = []
     for w in unknown_words[:UNKNOWN_WORDS_MAX]:
-        hits = state.memory_db.query(w, top_k=1, min_score=0.0, type_filter="word_def")
+        hits = state.memory_db.query_global(w, top_k=1, min_score=0.0, type_filter="word_def")
         if hits:
             items.append(hits[0].text.strip())
         else:
             if jargon_db is None:
                 state.bw_jargon_store.bind(data_dir)
                 jargon_db = state.bw_jargon_store.load()
-            rec = jargon_db.get(w)
-            if rec and rec.meaning:
+            rec = jargon_db.get(state.bw_jargon_store.key_for(w, chat_id))
+            if rec is None:
+                rec = jargon_db.get(state.bw_jargon_store.key_for(w))
+            if rec and (rec.is_global or rec.scope_chat_id == chat_id) and rec.meaning:
                 items.append(f"{w}：{rec.meaning}".strip())
     if not items:
         return ""

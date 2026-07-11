@@ -7,19 +7,20 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config.config import XiaoQingChatConfig
-from .memory.memory_db import MemoryDB
-from .memory.memory import MemoryStore
-from .media_registry import MediaRegistryStore
-from .planning.action_history import ActionHistoryStore
-from .planning.plan_reply_logger import PlanReplyLogger
-from .planning.heartflow import HeartflowEngine
-from .planning.goal_state import GoalStore
-from .memory.review_sessions import ReviewStore
-from .planning.pfc_state import PFCStateStore
 from .expression.bw_expression_store import ExpressionStore
-from .expression.bw_reflect_tracker import ReflectTrackerStore
-from .expression.bw_message_recorder import MessageRecorder
 from .expression.bw_jargon_store import JargonStore
+from .expression.bw_message_recorder import MessageRecorder
+from .expression.bw_reflect_tracker import ReflectTrackerStore
+from .generation_limiter import GenerationLimiter
+from .media_registry import MediaRegistryStore
+from .memory.memory import MemoryStore
+from .memory.memory_db import MemoryDB
+from .memory.review_sessions import ReviewStore
+from .planning.action_history import ActionHistoryStore
+from .planning.goal_state import GoalStore
+from .planning.heartflow import HeartflowEngine
+from .planning.pfc_state import PFCStateStore
+from .planning.plan_reply_logger import PlanReplyLogger
 
 
 @dataclass
@@ -66,7 +67,9 @@ class ChatRuntimeState:
         "_per_chat",
         "_bg_tasks",
         "_vdb_save_task",
-        "_active_provider",
+        "_global_active_provider",
+        "_active_provider_by_chat",
+        "_generation_limiter",
     )
 
     def __init__(self) -> None:
@@ -90,7 +93,9 @@ class ChatRuntimeState:
         self._per_chat = _PerChatState()
         self._bg_tasks: set[asyncio.Task[Any]] = set()
         self._vdb_save_task: asyncio.Task[Any] | None = None
-        self._active_provider: str | None = None
+        self._global_active_provider: str | None = None
+        self._active_provider_by_chat: dict[str, str] = {}
+        self._generation_limiter = GenerationLimiter()
 
     @property
     def memory_store(self) -> MemoryStore:
@@ -143,6 +148,10 @@ class ChatRuntimeState:
     @property
     def bw_jargon_store(self) -> JargonStore:
         return self._bw_jargon_store
+
+    @property
+    def generation_limiter(self) -> GenerationLimiter:
+        return self._generation_limiter
 
     def get_runtime(self, config_key: str) -> _ChatRuntime | None:
         return self._runtime_cache.get(config_key)
@@ -347,11 +356,59 @@ class ChatRuntimeState:
 
     @property
     def active_provider(self) -> str | None:
-        return self._active_provider
+        """Backward-compatible alias for the global in-memory override."""
+
+        return self._global_active_provider
 
     @active_provider.setter
     def active_provider(self, name: str | None) -> None:
-        self._active_provider = name
+        self._global_active_provider = name
+
+    @property
+    def global_active_provider(self) -> str | None:
+        return self._global_active_provider
+
+    def set_global_provider(self, name: str | None) -> None:
+        self._global_active_provider = name
+
+    def get_chat_provider(self, chat_id: str) -> str | None:
+        return self._active_provider_by_chat.get(str(chat_id))
+
+    def set_chat_provider(self, chat_id: str, name: str | None) -> None:
+        normalized_chat_id = str(chat_id)
+        if name is None:
+            self._active_provider_by_chat.pop(normalized_chat_id, None)
+            return
+        self._active_provider_by_chat[normalized_chat_id] = str(name)
+
+    def provider_overrides(self) -> dict[str, str]:
+        return dict(self._active_provider_by_chat)
+
+    def resolve_provider_name(
+        self,
+        chat_id: str | None,
+        provider_names: list[str] | tuple[str, ...],
+        default_name: str,
+    ) -> str:
+        """Resolve chat -> global -> configured default and prune stale overrides."""
+
+        ordered_names = tuple(dict.fromkeys(str(name) for name in provider_names if name))
+        valid_names = set(ordered_names)
+        if self._global_active_provider not in valid_names:
+            self._global_active_provider = None
+        for scoped_chat_id, provider_name in tuple(self._active_provider_by_chat.items()):
+            if provider_name not in valid_names:
+                self._active_provider_by_chat.pop(scoped_chat_id, None)
+
+        if chat_id is not None:
+            scoped = self._active_provider_by_chat.get(str(chat_id))
+            if scoped in valid_names:
+                return scoped
+        if self._global_active_provider in valid_names:
+            return self._global_active_provider
+        if default_name in valid_names:
+            return default_name
+        return ordered_names[0] if ordered_names else ""
 
 
 _global_state: ChatRuntimeState | None = None

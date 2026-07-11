@@ -215,7 +215,7 @@ def build_events_overview(
 
     categories = sorted({
         (getattr(event, "category", "") or "未分类")
-        for event in db.get_items(owner_id, filters={"type": "event"}, limit=500)
+        for event in db.get_all_items(owner_id, filters={"type": "event"})
     })
 
     reminder_logs_by_event = _fetch_reminder_logs_by_event_ids(db, [event.id for event in events])

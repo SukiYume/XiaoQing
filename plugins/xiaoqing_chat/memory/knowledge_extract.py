@@ -113,7 +113,7 @@ async def upsert_word_defs(
         memory_db.upsert_text(
             doc_id=f"word:{it.word}",
             text=f"{it.word}：{it.definition}",
-            meta={"type": "word_def", "word": it.word},
+            meta={"type": "word_def", "word": it.word, "global_approved": True},
         )
 
 
@@ -179,6 +179,39 @@ def _parse_fact_json(text: str) -> list[PersonFact]:
     return out
 
 
+def _bind_facts_to_history_subjects(
+    facts: Sequence[PersonFact], history: Sequence[StoredMessage]
+) -> list[PersonFact]:
+    """Resolve model facts against authoritative user IDs from this history."""
+    trusted_names: dict[int, str] = {}
+    ids_by_name: dict[str, set[int]] = {}
+    for message in history:
+        if message.role != "user" or not message.user_id:
+            continue
+        subject_id = int(message.user_id)
+        trusted_name = (message.name or "用户").strip() or "用户"
+        trusted_names[subject_id] = trusted_name
+        ids_by_name.setdefault(trusted_name.casefold(), set()).add(subject_id)
+
+    bound: list[PersonFact] = []
+    for fact in facts:
+        subject_id = fact.subject_id
+        if subject_id not in trusted_names:
+            matches = ids_by_name.get(fact.subject_name.casefold(), set())
+            subject_id = next(iter(matches)) if len(matches) == 1 else None
+        if subject_id is None or subject_id not in trusted_names:
+            continue
+        bound.append(
+            PersonFact(
+                subject_id=subject_id,
+                subject_name=trusted_names[subject_id],
+                fact=fact.fact,
+                evidence=fact.evidence,
+            )
+        )
+    return bound
+
+
 async def maybe_extract_person_facts(
     *,
     data_dir: Path,
@@ -229,13 +262,13 @@ async def maybe_extract_person_facts(
         )
     except LLMError:
         return
-    facts = _parse_fact_json(out)
+    facts = _bind_facts_to_history_subjects(_parse_fact_json(out), history)
     if not facts:
         return
     by_subject: dict[int, list[str]] = {}
     by_name: dict[int, str] = {}
-    for i, f in enumerate(facts):
-        subject_id = f.subject_id if f.subject_id is not None else 0
+    for f in facts:
+        subject_id = int(f.subject_id or 0)
         doc_key = f"{subject_id}:{f.subject_name}:{f.fact}".strip()
         # Use stable hash (hashlib) instead of built-in hash() which varies
         # across Python processes due to hash randomization.
@@ -245,11 +278,11 @@ async def maybe_extract_person_facts(
         doc_id = f"person:{subject_id}:{stable_hash}"
         memory_db.upsert_text(
             doc_id=doc_id,
-            text=f"{f.subject_name}<{f.subject_id}>：{f.fact}\n证据：{f.evidence}".strip(),
+            text=f"{f.subject_name}<{subject_id}>：{f.fact}\n证据：{f.evidence}".strip(),
             meta={
                 "type": "person_info",
                 "chat_id": chat_id,
-                "subject_id": f.subject_id,
+                "subject_id": subject_id,
                 "subject_name": f.subject_name,
             },
         )

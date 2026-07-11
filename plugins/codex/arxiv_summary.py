@@ -4,7 +4,6 @@ import json
 import logging
 import re
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from core.plugin_base import build_action, segments, split_message_segments
@@ -26,17 +25,9 @@ def is_arxiv_summary_metadata(metadata: dict[str, Any]) -> bool:
 
 
 def codex_context_from(context: Any) -> Any:
-    plugin_dir = Path(__file__).resolve().parent
-    return SimpleNamespace(
-        config=getattr(context, "config", {}) or {},
-        secrets=getattr(context, "secrets", {}) or {},
-        plugin_name="codex",
-        plugin_dir=plugin_dir,
-        data_dir=plugin_dir / "data",
-        send_action=getattr(context, "send_action", None),
-        current_user_id=getattr(context, "current_user_id", None),
-        current_group_id=getattr(context, "current_group_id", None),
-    )
+    if getattr(context, "plugin_name", None) != "codex":
+        raise PermissionError("Codex arXiv entrypoint requires a Codex-scoped context")
+    return context
 
 
 async def enqueue_or_replay_arxiv_summary(
@@ -49,13 +40,25 @@ async def enqueue_or_replay_arxiv_summary(
 ) -> str:
     from .manager import get_manager
 
+    effective_user_id = user_id if user_id is not None else getattr(context, "current_user_id", None)
+    principal = getattr(context, "principal", None)
+    capabilities = getattr(context, "capabilities", None)
+    is_system = bool(capabilities is not None and getattr(capabilities, "is_system", False))
+    is_current_admin = False
+    if principal is not None and getattr(capabilities, "is_bot_admin", False):
+        try:
+            is_current_admin = int(principal.user_id) == int(effective_user_id)
+        except (TypeError, ValueError):
+            is_current_admin = False
+    if not is_system and not is_current_admin:
+        raise PermissionError("Codex arXiv sidecar requires current admin authorization")
     codex_context = codex_context_from(context)
     manager = await get_manager(codex_context)
     addon = ArxivSummaryAddon(manager)
     return await addon.enqueue_or_replay(
         date=date,
         links=links,
-        user_id=user_id if user_id is not None else getattr(context, "current_user_id", None),
+        user_id=effective_user_id,
         group_id=group_id if group_id is not None else getattr(context, "current_group_id", None),
         context=context,
     )

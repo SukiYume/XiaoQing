@@ -4,16 +4,18 @@ GitHub Trending 插件
 获取 GitHub 每日/每周/每月趋势项目。
 """
 
-import json
+import asyncio
 import logging
 import re
+import threading
 from datetime import datetime
 from typing import Any
 
 from bs4 import BeautifulSoup
 
-from core.plugin_base import segments
+from core.plugin_base import segments, write_json
 from core.args import parse
+from core.safe_http import fetch_public_html
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 VALID_RANGES: set[str] = {"daily", "weekly", "monthly"}
 RANGE_NAMES = {"daily": "每日", "weekly": "每周", "monthly": "每月"}
+MAX_HTML_BYTES = 2 * 1024 * 1024
+_HISTORY_LOCK = threading.RLock()
 
 # ============================================================
 # 插件初始化
@@ -111,21 +115,36 @@ async def _fetch_trending(time_range: str, context) -> list[dict[str, Any]]:
     request_kwargs["timeout"] = 15
 
     try:
-        async with context.http_session.get(url, **request_kwargs) as response:
-            if response.status != 200:
-                return segments(f"❌ HTTP {response.status}")
-            html = await response.text()
+        if context.http_session.__class__.__module__.startswith("aiohttp"):
+            fetched = await fetch_public_html(
+                url,
+                headers=headers,
+                timeout_seconds=15,
+                allowed_hosts={"github.com"},
+            )
+            if fetched is None:
+                return segments("❌ GitHub 返回了无效响应")
+            html = fetched.body.decode(fetched.charset or "utf-8", errors="replace")
+        else:
+            # Injected clients used by embedders/tests; production uses the
+            # DNS-pinned, bounded safe client above.
+            async with context.http_session.get(url, **request_kwargs) as response:
+                if response.status != 200:
+                    return segments(f"❌ HTTP {response.status}")
+                html = await response.text()
+                if len(html.encode("utf-8")) > MAX_HTML_BYTES:
+                    return segments("❌ GitHub 页面超过大小限制")
     except Exception as exc:
         logger.exception("GitHub fetch failed: %s", exc)
         return segments(f"❌ 获取失败: {exc}")
 
     # 解析 HTML
-    repos = _parse_trending_html(html)
+    repos = await asyncio.to_thread(_parse_trending_html, html)
     if not repos:
         return segments("❌ 未找到趋势项目")
 
     # 保存历史
-    _save_history(repos, time_range, context)
+    await asyncio.to_thread(_save_history, repos, time_range, context)
 
     # 格式化输出
     today = datetime.now().strftime("%Y-%m-%d")
@@ -227,11 +246,6 @@ def _save_history(repos: list[dict[str, Any]], time_range: str, context) -> None
         "repositories": repos,
     }
 
-    # 保存最新
-    (data_dir / f"trending_{time_range}_latest.json").write_text(
-        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    # 保存历史
-    (history_dir / f"trending_{time_range}_{today}.json").write_text(
-        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    with _HISTORY_LOCK:
+        write_json(data_dir / f"trending_{time_range}_latest.json", result)
+        write_json(history_dir / f"trending_{time_range}_{today}.json", result)

@@ -1,0 +1,69 @@
+# Deny by default. Only runtime source and public example configuration are
+# allowed into the Docker build context.
+**
+
+!main.py
+!requirements.txt
+!pyproject.toml
+!requirements/
+!requirements/python-3.13.lock
+
+!core/
+!core/**
+
+!plugins/
+!plugins/**
+
+!config/
+!config/*.example
+
+# Re-exclude local configuration, secrets, state, caches and deprecated code
+# after the broad plugin source allowlist above.
+config/config.json
+config/secrets.json
+plugins/minecraft/config.json
+
+plugins/*/data/
+plugins/*/data/**
+plugins/*/cache/
+plugins/*/cache/**
+plugins/*/test_reports/
+plugins/*/test_reports/**
+plugins/pendo/test_tools/
+plugins/pendo/test_tools/**
+plugins/xiaoqing_chat/figures/
+plugins/xiaoqing_chat/figures/**
+
+plugins/arxiv_filter/best_model*/
+plugins/arxiv_filter/best_model*/**
+plugins/arxiv_filter/train_model/**/cache/
+plugins/arxiv_filter/train_model/**/cache/**
+plugins/arxiv_filter/train_model/arxiv_papers_with_abstract.csv
+
+plugins/*_deprecated/
+plugins/*_deprecated/**
+
+**/__pycache__/
+**/__pycache__/**
+**/*.py[cod]
+**/*.old
+**/*.log
+**/*.trace
+**/*.trace.*
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/*.jsonl
+**/*.pid
+
+# Explicit documentation of high-value local paths already denied by the
+# default rule. Keeping them here makes future allowlist edits fail review.
+.git/
+.git/**
+.env
+.env.*
+logs/
+logs/**
+tests/
+tests/**
+code_review.md

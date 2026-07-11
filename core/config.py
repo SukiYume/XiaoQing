@@ -10,18 +10,107 @@ import json
 import logging
 import os
 import platform
+import re
 import stat
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Union
+from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 ConfigCallback = Union[Callable[["ConfigSnapshot"], None], Callable[["ConfigSnapshot"], Any]]
 
 from .exceptions import ConfigLoadError
+from .inbound_policy import validate_inbound_listener
 from .plugin_base import atomic_write_text, load_json
 
 logger = logging.getLogger(__name__)
+
+
+class _RuntimeConfigSchema(BaseModel):
+    """Validation for core runtime knobs while allowing plugin-specific keys."""
+
+    model_config = ConfigDict(extra="allow")
+
+    max_concurrency: int | None = Field(default=None, ge=1, le=1024)
+    session_timeout: float | None = Field(default=None, gt=0, le=604800)
+    plugin_poll_interval: float | None = Field(default=None, gt=0, le=86400)
+    ws_queue_size: int | None = Field(default=None, ge=1, le=10000)
+    inbound_ws_max_workers: int | None = Field(default=None, ge=1, le=128)
+    timezone: str | None = None
+    enable_ws_client: bool | None = None
+    enable_inbound_server: bool | None = None
+    inbound_trusted_tls_proxy: StrictBool | None = None
+    onebot_ws_uri: str | None = None
+    onebot_http_base: str | None = None
+    inbound_ws_uri: str | None = None
+    inbound_http_base: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("must be a valid IANA timezone") from exc
+        return value
+
+    @field_validator("onebot_ws_uri")
+    @classmethod
+    def _validate_ws_uri(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return value
+        parts = urlsplit(value)
+        if parts.scheme not in {"ws", "wss"} or not parts.hostname:
+            raise ValueError("must be an absolute ws:// or wss:// URL")
+        return value
+
+    @field_validator("onebot_http_base")
+    @classmethod
+    def _validate_http_uri(cls, value: str | None) -> str | None:
+        if value in (None, ""):
+            return value
+        parts = urlsplit(value)
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            raise ValueError("must be an absolute http:// or https:// URL")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_enabled_ws_client(self) -> "_RuntimeConfigSchema":
+        if self.enable_ws_client is True and not self.onebot_ws_uri:
+            raise ValueError("onebot_ws_uri is required when enable_ws_client is true")
+        trusted_tls_proxy = self.inbound_trusted_tls_proxy is True
+        validate_inbound_listener(
+            self.inbound_http_base,
+            "http",
+            trusted_tls_proxy=trusted_tls_proxy,
+        )
+        validate_inbound_listener(
+            self.inbound_ws_uri,
+            "ws",
+            trusted_tls_proxy=trusted_tls_proxy,
+        )
+        return self
+
+
+def _validate_runtime_config(config: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return _RuntimeConfigSchema.model_validate(config).model_dump(exclude_none=True)
+    except ValidationError as exc:
+        raise ConfigLoadError(f"Invalid runtime configuration: {exc}") from exc
 
 
 class _FrozenConfigDict(dict[str, Any]):
@@ -230,9 +319,98 @@ class ConfigManager:
         self._update_mtime()
         self._notify_callbacks_sync(self.snapshot())
 
-    def on_reload(self, callback: ConfigCallback) -> None:
-        """注册配置重载回调（支持同步和异步回调）"""
-        self._callbacks.append(callback)
+    @staticmethod
+    def _secret_path_parts(path: str) -> list[str]:
+        parts = path.split(".")
+        if not parts or any(not re.fullmatch(r"[A-Za-z0-9_-]+", part) for part in parts):
+            raise ValueError("invalid secret path")
+        return parts
+
+    def get_plugin_secret(self, plugin_name: str, path: str) -> Any:
+        parts = self._secret_path_parts(path)
+        with self._lock:
+            current: Any = self._secrets.get("plugins", {}).get(plugin_name, {})
+            for part in parts:
+                if not isinstance(current, dict) or part not in current:
+                    return None
+                current = current[part]
+            return copy.deepcopy(current)
+
+    def set_plugin_secret(self, plugin_name: str, path: str, value: Any) -> None:
+        parts = self._secret_path_parts(path)
+        with self._lock:
+            original_secrets = copy.deepcopy(self._secrets)
+            plugins = self._secrets.setdefault("plugins", {})
+            current = plugins.setdefault(plugin_name, {})
+            for part in parts[:-1]:
+                child = current.get(part)
+                if not isinstance(child, dict):
+                    child = {}
+                    current[part] = child
+                current = child
+            current[parts[-1]] = value
+            self._secrets_view = _freeze_config_mapping(self._secrets)
+        try:
+            self.save_secrets()
+        except Exception:
+            with self._lock:
+                self._secrets = original_secrets
+                self._secrets_view = _freeze_config_mapping(self._secrets)
+            raise
+        self._update_mtime()
+
+    def delete_plugin_secret(self, plugin_name: str, path: str) -> bool:
+        parts = self._secret_path_parts(path)
+        with self._lock:
+            original_secrets = copy.deepcopy(self._secrets)
+            current: Any = self._secrets.get("plugins", {}).get(plugin_name, {})
+            for part in parts[:-1]:
+                if not isinstance(current, dict) or part not in current:
+                    return False
+                current = current[part]
+            if not isinstance(current, dict) or parts[-1] not in current:
+                return False
+            del current[parts[-1]]
+            self._secrets_view = _freeze_config_mapping(self._secrets)
+        try:
+            self.save_secrets()
+        except Exception:
+            with self._lock:
+                self._secrets = original_secrets
+                self._secrets_view = _freeze_config_mapping(self._secrets)
+            raise
+        self._update_mtime()
+        return True
+
+    def on_reload(self, callback: ConfigCallback) -> Callable[[], None]:
+        """Register a reload callback and return an idempotent unsubscribe."""
+
+        if not callable(callback):
+            raise TypeError("config reload callback must be callable")
+        active = True
+
+        def guarded(snapshot: ConfigSnapshot) -> Any:
+            with self._lock:
+                enabled = active
+            if not enabled:
+                return None
+            return callback(snapshot)
+
+        with self._lock:
+            self._callbacks.append(guarded)
+
+        def unsubscribe() -> None:
+            nonlocal active
+            with self._lock:
+                if not active:
+                    return
+                active = False
+                try:
+                    self._callbacks.remove(guarded)
+                except ValueError:
+                    pass
+
+        return unsubscribe
 
     def snapshot(self) -> ConfigSnapshot:
         with self._lock:
@@ -257,7 +435,9 @@ class ConfigManager:
                 await self._notify_callbacks_async(snapshot)
 
     def _notify_callbacks_sync(self, snapshot: ConfigSnapshot) -> None:
-        for cb in self._callbacks:
+        with self._lock:
+            callbacks = tuple(self._callbacks)
+        for cb in callbacks:
             try:
                 result = cb(snapshot)
                 if asyncio.iscoroutine(result):
@@ -275,7 +455,9 @@ class ConfigManager:
             loop.create_task(result)
 
     async def _notify_callbacks_async(self, snapshot: ConfigSnapshot) -> None:
-        for cb in self._callbacks:
+        with self._lock:
+            callbacks = tuple(self._callbacks)
+        for cb in callbacks:
             try:
                 result = cb(snapshot)
                 if asyncio.iscoroutine(result):
@@ -286,9 +468,14 @@ class ConfigManager:
     def _load(self, path: Path) -> dict[str, Any]:
         """加载 JSON 文件"""
         try:
-            return load_json(path, raise_on_error=True)
+            payload = load_json(path, raise_on_error=True)
         except json.JSONDecodeError as exc:
             raise ConfigLoadError(path, exc) from exc
+        if not isinstance(payload, dict):
+            raise ConfigLoadError(f"Configuration at {path} must be a JSON object")
+        if path == self.config_path and payload:
+            return _validate_runtime_config(payload)
+        return payload
 
     def _update_mtime(self) -> None:
         """更新文件修改时间"""

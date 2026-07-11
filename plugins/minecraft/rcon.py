@@ -59,6 +59,8 @@ class RconClient:
     """
 
     MAX_COMMAND_RESPONSE_CHUNK_SIZE = 4096
+    MAX_PACKET_BYTES = 1024 * 1024
+    MAX_RESPONSE_BYTES = 4 * 1024 * 1024
     RESPONSE_CHUNK_TIMEOUT = 0.2
     
     def __init__(self, host: str, port: int, password: str, timeout: float = 10.0):
@@ -98,12 +100,15 @@ class RconClient:
             
         except asyncio.TimeoutError:
             logger.error("RCON 连接超时: %s:%d", self.host, self.port)
+            await self.disconnect()
             return False
         except ConnectionRefusedError:
             logger.error("RCON 连接被拒绝: %s:%d", self.host, self.port)
+            await self.disconnect()
             return False
         except Exception as e:
             logger.error("RCON 连接失败: %s", e)
+            await self.disconnect()
             return False
 
     async def disconnect(self) -> None:
@@ -139,7 +144,7 @@ class RconClient:
             return response.payload
         except Exception as e:
             logger.error("RCON 命令执行失败: %s", e)
-            self._connected = False
+            await self.disconnect()
             return None
 
     async def _read_packet(self, timeout: float) -> tuple[RconPacket, int]:
@@ -152,6 +157,8 @@ class RconClient:
             timeout=timeout,
         )
         packet_length = struct.unpack("<i", header)[0]
+        if packet_length < 10 or packet_length > self.MAX_PACKET_BYTES:
+            raise ValueError(f"非法 RCON 数据包长度: {packet_length}")
         body = await asyncio.wait_for(
             self._reader.readexactly(packet_length),
             timeout=timeout,
@@ -184,11 +191,20 @@ class RconClient:
                 return response
 
             payload_parts = [response.payload] if response.payload else []
+            response_bytes = len(response.payload.encode("utf-8"))
+            if response_bytes > self.MAX_RESPONSE_BYTES:
+                raise ValueError("RCON 累计响应超过安全上限")
+            response_deadline = asyncio.get_running_loop().time() + self.timeout
 
             # Source RCON 会把长响应拆成多个包；当包体达到上限时继续尝试读取后续包。
             while packet_length - 10 >= self.MAX_COMMAND_RESPONSE_CHUNK_SIZE:
+                remaining = response_deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError("RCON 累计响应超时")
                 try:
-                    next_response, packet_length = await self._read_packet(self.RESPONSE_CHUNK_TIMEOUT)
+                    next_response, packet_length = await self._read_packet(
+                        min(self.RESPONSE_CHUNK_TIMEOUT, remaining)
+                    )
                 except asyncio.IncompleteReadError:
                     break
                 except asyncio.TimeoutError:
@@ -199,6 +215,9 @@ class RconClient:
                 if not next_response.payload:
                     break
 
+                response_bytes += len(next_response.payload.encode("utf-8"))
+                if response_bytes > self.MAX_RESPONSE_BYTES:
+                    raise ValueError("RCON 累计响应超过安全上限")
                 payload_parts.append(next_response.payload)
 
             if payload_parts:

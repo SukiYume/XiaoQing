@@ -25,6 +25,7 @@ class PendoConfig:
 
     # 提醒配置
     REMINDER_CHECK_WINDOW_SECONDS = 120  # 提醒检查时间窗口（秒）
+    REMINDER_CLAIM_LEASE_SECONDS = 120  # 原子领取后的 worker lease
     REMINDER_MAX_RETRY = 3  # 提醒发送最大重试次数
     REMINDER_REPEAT_INTERVAL_SECONDS = 300  # 未确认提醒重复间隔（秒），默认5分钟
     REMINDER_MAX_REPEATS = 3  # 未确认提醒最大重复次数
@@ -58,6 +59,7 @@ class PendoConfig:
     # 日志配置
     LOG_OPERATION = True  # 是否记录操作日志
     LOG_OPERATION_RETENTION_DAYS = 90  # 操作日志保留天数
+    LOG_OPERATION_UNDO_SNAPSHOT_MINUTES = 5  # 可撤销窗口后立即删除正文快照
     # 消息配置
     MESSAGE_PRIVACY_MODE_DEFAULT = True  # 默认开启隐私模式
 
@@ -95,12 +97,20 @@ class PendoConfig:
     WEB_HOST = "127.0.0.1"
     WEB_PORT = 12001
     WEB_TOKEN_EXPIRE_HOURS = 24 * 7
+    WEB_LOGIN_CODE_EXPIRE_SECONDS = 5 * 60
+    WEB_SESSION_EXPIRE_SECONDS = 8 * 60 * 60
+    # Loopback HTTP development cannot use a Secure cookie. Public bindings
+    # are rejected by server.py unless this is explicitly enabled behind TLS.
+    WEB_SESSION_COOKIE_SECURE = False
     WEB_WIDGET_TOKEN_EXPIRE_HOURS = 24 * 180
     WEB_DEMO_ENABLED = False
     WEB_DEMO_EXPIRE_HOURS = 6
+    WEB_DEMO_MAX_ACTIVE_SESSIONS = 20
+    WEB_DEMO_REQUESTS_PER_HOUR = 3
     _RUNTIME_DEFAULTS = {
         "WEB_HOST": WEB_HOST,
         "WEB_PORT": WEB_PORT,
+        "WEB_SESSION_COOKIE_SECURE": WEB_SESSION_COOKIE_SECURE,
         "WEB_DEMO_ENABLED": WEB_DEMO_ENABLED,
     }
 
@@ -163,6 +173,10 @@ class PendoConfig:
                 "yes",
                 "on",
             }
+        if "PENDO_WEB_SESSION_COOKIE_SECURE" in os.environ:
+            cls.WEB_SESSION_COOKIE_SECURE = cls._parse_bool(
+                os.environ["PENDO_WEB_SESSION_COOKIE_SECURE"]
+            )
 
         # 允许通过环境变量覆盖部分配置，存储在实例字典中
         if "PENDO_TIMEZONE" in os.environ:

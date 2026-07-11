@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,8 @@ from plugins.pendo.services.db import Database
 
 try:
     from plugins.pendo.web import auth as auth_module
-    from plugins.pendo.web.auth import generate_token
+    from plugins.pendo.web.auth import create_web_session, issue_login_code
+    from plugins.pendo.web.deps import SESSION_COOKIE_NAME
     from plugins.pendo.web.services import demo_space as demo_space_module
 except ModuleNotFoundError:
     pytest.skip("pendo web demo requires PyJWT", allow_module_level=True)
@@ -42,9 +44,11 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture(autouse=True)
 def reset_pendo_config_state(monkeypatch):
     monkeypatch.delenv("PENDO_WEB_DEMO_ENABLED", raising=False)
+    monkeypatch.delenv("PENDO_WEB_SESSION_COOKIE_SECURE", raising=False)
     PendoConfig.reset_runtime_config()
     yield
     monkeypatch.delenv("PENDO_WEB_DEMO_ENABLED", raising=False)
+    monkeypatch.delenv("PENDO_WEB_SESSION_COOKIE_SECURE", raising=False)
     PendoConfig.reset_runtime_config()
 
 
@@ -76,6 +80,69 @@ def test_demo_auth_endpoint_is_disabled_by_default(client: TestClient):
     assert "disabled" in res.json()["message"]
 
 
+def test_login_code_exchange_is_single_use_and_creates_httponly_session(client: TestClient):
+    code = issue_login_code("private-owner", expires_seconds=60)
+
+    exchange = client.post("/api/auth/exchange", json={"code": code})
+
+    assert exchange.status_code == 200
+    assert "token" not in exchange.json()["data"]
+    assert exchange.json()["data"]["csrf_token"]
+    cookie = exchange.headers["set-cookie"].lower()
+    assert "httponly" in cookie
+    assert "samesite=strict" in cookie
+    assert client.get("/api/auth/session").json()["data"]["owner_id"] == "private-owner"
+
+    reused = client.post("/api/auth/exchange", json={"code": code})
+    assert reused.status_code == 401
+
+
+def test_production_session_cookie_is_marked_secure_when_configured(client: TestClient):
+    PendoConfig.WEB_SESSION_COOKIE_SECURE = True
+
+    response = client.post("/api/auth/exchange", json={"code": issue_login_code("secure-owner")})
+
+    assert response.status_code == 200
+    assert "secure" in response.headers["set-cookie"].lower()
+
+
+def test_server_rejects_public_binding_without_secure_session_cookie(temp_db: Database):
+    from plugins.pendo.web import server as server_module
+
+    PendoConfig.WEB_HOST = "0.0.0.0"
+    PendoConfig.WEB_SESSION_COOKIE_SECURE = False
+
+    assert server_module.start(temp_db) is False
+    assert "Secure session cookie" in server_module.get_last_error()
+
+
+def test_logout_requires_csrf_and_revokes_session(client: TestClient):
+    exchange = client.post("/api/auth/exchange", json={"code": issue_login_code("logout-owner")})
+    csrf = exchange.json()["data"]["csrf_token"]
+
+    denied = client.post("/api/auth/logout")
+    assert denied.status_code == 403
+    logged_out = client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
+    assert logged_out.status_code == 200
+    assert client.get("/api/auth/session").status_code == 401
+
+
+def test_session_device_list_and_revoke_route_require_cookie_and_csrf(client: TestClient):
+    exchange = client.post("/api/auth/exchange", json={"code": issue_login_code("device-owner")})
+    csrf = exchange.json()["data"]["csrf_token"]
+    sessions = client.get("/api/auth/sessions")
+
+    assert sessions.status_code == 200
+    device_id = sessions.json()["data"]["sessions"][0]["device_id"]
+    assert sessions.json()["data"]["sessions"][0]["current"] is True
+    assert client.delete(f"/api/auth/sessions/{device_id}").status_code == 403
+    assert client.delete(
+        f"/api/auth/sessions/{device_id}",
+        headers={"X-CSRF-Token": csrf},
+    ).status_code == 200
+    assert client.get("/api/auth/session").status_code == 401
+
+
 def test_demo_auth_endpoint_creates_seeded_demo_space(
     client: TestClient,
     temp_db: Database,
@@ -88,12 +155,15 @@ def test_demo_auth_endpoint_creates_seeded_demo_space(
     assert body["ok"] is True
     owner_id = body["data"]["owner_id"]
     assert owner_id.startswith("demo_web_")
-    assert body["data"]["token"]
     assert body["data"]["expires_at"]
-
-    payload = auth_module.verify_token(body["data"]["token"])
-    assert payload["owner_id"] == owner_id
-    assert payload["demo"] is True
+    assert body["data"]["csrf_token"]
+    assert "token" not in body["data"]
+    set_cookie = res.headers["set-cookie"].lower()
+    assert "httponly" in set_cookie
+    assert "samesite=strict" in set_cookie
+    session = client.get("/api/auth/session")
+    assert session.status_code == 200
+    assert session.json()["data"]["owner_id"] == owner_id
 
     tasks = temp_db.get_items(owner_id, filters={"type": "task"}, limit=20)
     notes = temp_db.get_items(owner_id, filters={"type": "note"}, limit=20)
@@ -132,7 +202,7 @@ def test_create_demo_session_seeds_items_without_fastapi(temp_db: Database):
     owner_id = payload["owner_id"]
     assert owner_id.startswith("demo_web_")
     assert payload["demo"] is True
-    assert auth_module.verify_token(payload["token"])["owner_id"] == owner_id
+    assert "token" not in payload
     events = temp_db.get_items(owner_id, filters={"type": "event"}, limit=20)
     tasks = temp_db.get_items(owner_id, filters={"type": "task"}, limit=20)
     ledger = temp_db.get_items(owner_id, filters={"type": "ledger"}, limit=30)
@@ -152,6 +222,17 @@ def test_create_demo_session_seeds_items_without_fastapi(temp_db: Database):
     diary_days = {item.diary_date for item in diaries}
     assert note_years == {"2025", "2026"}
     assert {"2025-12-31", "2026-01-01"} <= diary_days
+
+
+def test_demo_creation_enforces_per_client_rate_limit(temp_db: Database, monkeypatch):
+    monkeypatch.setattr(PendoConfig, "WEB_DEMO_REQUESTS_PER_HOUR", 1)
+    demo_space_module._DEMO_REQUESTS.clear()
+    now = datetime(2030, 1, 1, 12, 0, 0)
+
+    demo_space_module.create_demo_session(temp_db, now=now, client_key="test-client")
+
+    with pytest.raises(demo_space_module.DemoCapacityError, match="rate limit"):
+        demo_space_module.create_demo_session(temp_db, now=now + timedelta(minutes=1), client_key="test-client")
 
 
 def test_demo_template_bundle_exists_and_covers_time_filters():
@@ -226,7 +307,6 @@ def test_expired_demo_token_is_rejected_and_demo_data_is_purged(client: TestClie
         "created_at": "2026-04-08T08:00:00",
         "updated_at": "2026-04-08T08:00:00",
     })
-    token = generate_token(owner_id, expires_hours=24, extra_claims={"demo": True})
 
     class _FrozenDemoDateTime(__import__("datetime").datetime):
         @classmethod
@@ -234,9 +314,10 @@ def test_expired_demo_token_is_rejected_and_demo_data_is_purged(client: TestClie
             return cls(2026, 4, 8, 10, 0, 0)
 
     monkeypatch.setattr(demo_space_module, "datetime", _FrozenDemoDateTime)
-    headers = {"Authorization": f"Bearer {token}"}
+    session = create_web_session(owner_id, demo=True)
+    client.cookies.set(SESSION_COOKIE_NAME, session.session_id)
 
-    res = client.post("/api/auth/verify", headers=headers)
+    res = client.get("/api/auth/session")
 
     assert res.status_code == 401
     assert "expired" in res.json()["message"]
@@ -259,3 +340,9 @@ def test_login_page_sources_offer_demo_entry():
     assert 'id="login-demo-btn"' in html
     assert ">Demo<" in html
     assert '@router.post("/auth/demo")' in auth_src
+    assert "localStorage" not in api_src
+    assert "Authorization" not in api_src
+    assert "credentials: 'same-origin'" in api_src
+    assert "X-CSRF-Token" in api_src
+    assert "exchangeLoginCode" in app_src
+    assert "history.replaceState" in app_src

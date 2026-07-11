@@ -11,6 +11,7 @@ from ..store_base import StoreBase
 @dataclass
 class JargonRecord:
     content: str
+    scope_chat_id: str = ""
     meaning: str = ""
     raw_content: list[str] = field(default_factory=list)
     chat_id_counts: list[list[Any]] = field(default_factory=list)
@@ -29,6 +30,34 @@ class JargonStore(StoreBase):
 
     def _path(self) -> Optional[Path]:
         return self._resolve_path("bw_learner", "jargon.json")
+
+    @staticmethod
+    def key_for(content: str, chat_id: str = "") -> str:
+        term = str(content or "").strip()
+        scope = str(chat_id or "").strip()
+        return f"{scope}\x1f{term}" if scope else term
+
+    def visible_records(self, chat_id: str) -> list[JargonRecord]:
+        scope = str(chat_id or "").strip()
+        return [
+            record
+            for record in self.load().values()
+            if record.is_global or record.scope_chat_id == scope
+        ]
+
+    def promote_global(self, content: str, chat_id: str) -> bool:
+        """Explicit administrative promotion; model output never calls this path."""
+        items = self.load()
+        key = self.key_for(content, chat_id)
+        record = items.get(key)
+        if record is None:
+            return False
+        record.is_global = True
+        record.scope_chat_id = ""
+        items.pop(key, None)
+        items[self.key_for(record.content)] = record
+        self.save(list(items.values()))
+        return True
 
     def load(self) -> dict[str, JargonRecord]:
         if self._cache is not None:
@@ -52,6 +81,7 @@ class JargonStore(StoreBase):
                 )
                 rec = JargonRecord(
                     content=content,
+                    scope_chat_id=str(item.get("scope_chat_id", "") or "").strip(),
                     meaning=str(item.get("meaning", "") or "").strip(),
                     raw_content=[
                         str(x).strip()
@@ -66,7 +96,7 @@ class JargonStore(StoreBase):
                     last_inference_count=int(item.get("last_inference_count", 0) or 0),
                     updated_at=float(item.get("updated_at", time.time()) or time.time()),
                 )
-                out[content] = rec
+                out[self.key_for(content, "" if rec.is_global else rec.scope_chat_id)] = rec
             self._cache = out
             return dict(out)
         except Exception:
@@ -77,4 +107,6 @@ class JargonStore(StoreBase):
         payload = [asdict(x) for x in items]
         if not self._save_json_to_path_parts("bw_learner", "jargon.json", data=payload):
             return
-        self._cache = {x.content: x for x in items}
+        self._cache = {
+            self.key_for(x.content, "" if x.is_global else x.scope_chat_id): x for x in items
+        }

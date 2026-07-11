@@ -20,9 +20,7 @@ const PRESETS = [
     { value: 'all', label: '全部' },
 ];
 const CONFLICT_POLICIES = [
-    { value: 'skip', label: '跳过同 ID', desc: '最安全，已有记录保持不动。' },
-    { value: 'overwrite', label: '覆盖同 ID', desc: '用文件内容覆盖现有记录。' },
-    { value: 'duplicate', label: '生成副本', desc: '保留原记录，并生成新 ID 的副本。' },
+    { value: 'isolate', label: '隔离导入', desc: '所有外部 ID 都会重新生成内部 UUID，不会覆盖当前记录。' },
 ];
 const INVALID_POLICIES = [
     { value: 'abort', label: '有错误则终止', desc: '发现非法记录就停止导入。' },
@@ -48,7 +46,7 @@ function defaultState() {
             file: null,
             inspect: null,
             selectedTypes: [],
-            conflictPolicy: 'skip',
+            conflictPolicy: 'isolate',
             invalidPolicy: 'abort',
             forceReimport: false,
             inspecting: false,
@@ -569,7 +567,7 @@ function renderImportExamples() {
         renderExampleBlock('7. 笔记 notes.ndjson', 'title 必填；content、tags、category、references、related_items 都可以按需填写。references 必须带 id；外部网址请放在 content 中或转成一条 note 再引用。HTML/Markdown 会作为文本内容保存和安全展示。', notes),
         renderExampleBlock('8. 日记 diary.ndjson', 'diary_date 必填且格式为 YYYY-MM-DD；content 不能为空；mood_score 范围 1-10。', diary),
         renderExampleBlock('9. 完整记录格式', '完整模式下每条记录可带 _type 和 _schema: 2 元字段，导入时会按当前重构后的字段集合严格校验。', fullRecord),
-        `<div class="transfer-note">通用字段：<code>id、title、content、tags、category、created_at、updated_at、context、visibility、attachments、ai_meta、deleted、deleted_at</code>。日期时间统一用 ISO 8601 并带时区偏移；纯日期字段用 <code>YYYY-MM-DD</code>。每个 <code>ndjson</code> 文件一行一条 JSON。不传 ID 时系统会默认生成短随机 ID；未知字段会在预检阶段报错，旧字段需要先用迁移脚本转换成新结构。</div>`,
+        `<div class="transfer-note">通用字段：<code>id、title、content、tags、category、created_at、updated_at、context、visibility、attachments、ai_meta、deleted、deleted_at</code>。日期时间统一用 ISO 8601 并带时区偏移；纯日期字段用 <code>YYYY-MM-DD</code>。每个 <code>ndjson</code> 文件一行一条 JSON。导入时外部 ID 只作为来源元数据，系统会为每条记录生成新的内部 UUID；未知字段会在预检阶段报错。</div>`,
     ].join('');
 }
 

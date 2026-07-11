@@ -64,43 +64,14 @@ class ItemService:
                 return False, f"商品 '{item_id}' 不存在\n使用 /宠物 商店 查看可购买的道具"
 
         total_cost = item.price * amount
-        user = self.db.get_user(user_id, group_id)
-        if not user:
-            return False, "用户不存在"
-
-        if user.coins < total_cost:
-            return False, f"金币不足，需要{total_cost}金币，当前{user.coins}金币"
-
-        user.coins -= total_cost
-
-        inventory = self.db.get_or_create_inventory(user_id, group_id)
-        inventory.add_item(item_id, amount)
-
-        success = self.db.update_user(user) and self.db.update_inventory(inventory)
+        success, current_coins = self.db.purchase_item_atomic(
+            user_id, group_id, item_id, amount, total_cost
+        )
         if success:
             return True, f"购买成功！花费{total_cost}金币，获得{amount}个{item.name}"
+        if current_coins >= 0:
+            return False, f"金币不足，需要{total_cost}金币，当前{current_coins}金币"
         return False, "购买失败"
-
-    def use_item(self, user_id: str, group_id: int, item_id: str) -> Tuple[bool, str]:
-        item = self.get_item(item_id)
-        if not item:
-            return False, "道具不存在"
-
-        if not item.is_consumable():
-            return False, "该道具无法使用"
-
-        inventory = self.db.get_or_create_inventory(user_id, group_id)
-        if not inventory.has_item(item_id):
-            return False, "背包中没有该道具"
-
-        inventory.remove_item(item_id)
-
-        result = {
-            "item": item,
-            "effects": {}
-        }
-
-        return True, result
 
     def get_inventory(self, user_id: str, group_id: int) -> Inventory:
         return self.db.get_or_create_inventory(user_id, group_id)

@@ -12,7 +12,7 @@ from ..models.item import get_item_type_value
 from ..services.db import Database
 from ..services.reminder import ReminderService
 from ..utils.error_handlers import error_result, success_result
-from ..utils.time_utils import TimezoneHelper, parse_delay_time
+from ..utils.time_utils import TimezoneHelper, now_in_timezone, parse_delay_time
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +144,12 @@ async def handle_snooze(
             return error_result("该条目没有设置提醒")
 
         # S-2修复：以当前时间为基准，避免用户延迟 snooze 导致新提醒时间落在过去
-        new_remind_time = _parse_snooze_time(time_arg)
+        user_now = now_in_timezone(user_id, db)
+        new_remind_time = _parse_snooze_time(time_arg, now=user_now)
 
         # S-3修复：只移除刚触发的那个 remind_time，保留其他所有提醒时间（包括未来的）
         # 旧逻辑仅保留过去时间，会丢失事件的后续提醒点（如 T-1h snooze 后丢失 T、T+1h）
-        now = TimezoneHelper.now()
+        now = user_now
         snoozed_remind_time = await _get_last_sent_remind_time(db, item_id)
         if snoozed_remind_time and snoozed_remind_time in remind_times:
             other_times = [rt for rt in remind_times if rt != snoozed_remind_time]
@@ -241,7 +242,12 @@ async def handle_undo(user_id: str, args: str, db: Database) -> dict[str, str]:
         return error_result(f"撤销失败: {str(e)}")
 
 
-def _parse_snooze_time(time_arg: str, base_time: str | None = None) -> str:
+def _parse_snooze_time(
+    time_arg: str,
+    base_time: str | None = None,
+    *,
+    now=None,
+) -> str:
     """解析延后时间参数
 
     Args:
@@ -254,7 +260,7 @@ def _parse_snooze_time(time_arg: str, base_time: str | None = None) -> str:
     Raises:
         ValueError: 如果无法解析时间参数
     """
-    new_time = parse_delay_time(time_arg, current_due=base_time)
+    new_time = parse_delay_time(time_arg, current_due=base_time, now=now)
     if not new_time:
         raise ValueError(f"无法解析时间参数: {time_arg}")
     return new_time

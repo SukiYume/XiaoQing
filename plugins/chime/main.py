@@ -11,7 +11,7 @@ from pathlib import Path
 
 # 本地导入
 from core.args import parse
-from core.plugin_base import ensure_dir, load_json, segments, write_json
+from core.plugin_base import build_action, ensure_dir, load_json, segments, write_json
 
 
 logger = logging.getLogger(__name__)
@@ -337,9 +337,7 @@ async def handle(
         if not frb_list:
             return segments("❌ 未能解析到有效的 FRB 数据")
         
-        # 构建新的映射并保存
-        new_mapping = build_history_mapping(frb_list)
-        save_history(context, new_mapping)
+        # 手动查询只做 preview，不推进定时投递 ledger。
 
         if parsed and parsed.first:
             subcommand = parsed.first.lower()
@@ -429,9 +427,8 @@ async def scheduled_check(context) -> list:
         context.logger.warning("CHIME 定时检查: 未能解析到有效数据")
         return []
     
-    # 构建新的映射并保存
+    # 先构建候选映射，只有通知确认投递后才提交。
     new_mapping = build_history_mapping(frb_list)
-    save_history(context, new_mapping)
     
     # 查找更新
     new_repeaters, new_pulses = find_updates(data, old_mapping, context)
@@ -439,9 +436,23 @@ async def scheduled_check(context) -> list:
     # 如果没有更新，不发送消息
     if not new_repeaters and not new_pulses:
         context.logger.info("CHIME 定时检查: 没有新数据")
+        save_history(context, new_mapping)
         return []
     
     # 构建通知消息
     context.logger.info(f"CHIME 定时检查: 发现更新 (新重复暴: {len(new_repeaters)}, 新脉冲: {len(new_pulses)})")
     message = format_update_message(new_repeaters, new_pulses, is_scheduled=True)
-    return segments(message)
+    payload = segments(message)
+    targets = list(context.default_groups()) if hasattr(context, "default_groups") else []
+    if not targets:
+        context.logger.warning("CHIME notification has no configured target group; history retained")
+        return []
+    delivered = True
+    for group_id in targets:
+        action = build_action(payload, None, int(group_id))
+        delivered = bool(action) and bool(await context.send_action(action)) and delivered
+    if delivered:
+        save_history(context, new_mapping)
+    else:
+        context.logger.warning("CHIME notification delivery failed; history retained for retry")
+    return []

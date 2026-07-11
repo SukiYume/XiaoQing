@@ -30,6 +30,9 @@ pip install -r requirements.txt
 - `fastapi` + `uvicorn` - pendo Web 控制台服务器
 - `PyJWT` + `passlib[bcrypt]` - pendo Web 控制台身份验证
 
+> [!NOTE]
+> 若 NumPy/PyTorch 在特定 Windows 部署上报告重复 OpenMP runtime，请先统一依赖来源和版本。只有在已验证的兼容环境中，才由部署脚本显式设置 `KMP_DUPLICATE_LIB_OK=TRUE`；XiaoQing 不会自行设置该变量。
+
 ---
 
 ## ⚙️ 第二步：配置文件
@@ -64,6 +67,7 @@ Copy-Item config/secrets.json.example config/secrets.json
   "onebot_http_base": "http://127.0.0.1:11001",
   "inbound_http_base": "http://127.0.0.1:12000",
   "inbound_ws_uri": "ws://127.0.0.1:12000/ws",
+  "inbound_trusted_tls_proxy": false,
   
   "max_concurrency": 5,
   "session_timeout": 300,
@@ -84,6 +88,7 @@ Copy-Item config/secrets.json.example config/secrets.json
 | `command_prefixes` | 命令前缀，如 `/help` | `["/"]` |
 | `onebot_http_base` | OneBot 的 HTTP API 地址 | 根据你的 OneBot 配置；`xiaoqing_chat` 回收 NapCat `mface` 真实图片也依赖它 |
 | `inbound_http_base` | XiaoQing Inbound HTTP（接收 OneBot 推送） | `http://127.0.0.1:12000` |
+| `inbound_trusted_tls_proxy` | 非 loopback listener 的 TLS 代理安全确认；不会启用 TLS | 同机部署保持 `false` |
 | `plugins.smalltalk_provider` | 闲聊提供者插件 | `xiaoqing_chat` 或 `smalltalk` |
 
 ### config/secrets.json - 敏感配置
@@ -129,9 +134,12 @@ OneBot (NapCat) ──POST──> XiaoQing (端口 12000)
   "enable_ws_client": false,
   "enable_inbound_server": true,
   "inbound_http_base": "http://127.0.0.1:12000",
-  "inbound_ws_uri": ""
+  "inbound_ws_uri": "",
+  "inbound_trusted_tls_proxy": false
 }
 ```
+
+以上 loopback 配置是推荐默认值。XiaoQing 的 listener 只支持内部明文 `http://`/`ws://`；公网 URL 应由可信反向代理提供 HTTPS/WSS。强 Token 不能替代 TLS，因为 Bearer Token 和消息正文在明文链路上都会泄露。仅在跨容器/隔离网络必须绑定 wildcard 或局域网 IP 时才将 `inbound_trusted_tls_proxy` 设为 `true`，并确保外部客户端不能绕过代理直连 12000 端口。
 
 **NapCat 配置**（onebot11.json 或 WebUI）：
 ```json

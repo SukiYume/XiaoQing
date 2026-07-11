@@ -1,0 +1,6 @@
+galaxy	星系
+star	恒星
+fast radio burst	快速射电暴
+black hole	黑洞
+supernova	超新星
+redshift	红移

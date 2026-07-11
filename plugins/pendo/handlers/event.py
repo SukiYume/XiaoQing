@@ -176,7 +176,7 @@ class EventHandler(DbOpsMixin):
     def _new_event_collection_id(self) -> str:
         """Generate a collection ID that does not collide with known rows."""
         for _ in range(20):
-            candidate = uuid.uuid4().hex[:8]
+            candidate = uuid.uuid4().hex
             try:
                 collection = self.db.items.get_event_collection(candidate)
                 item = self.db.items.get_item(candidate)
@@ -186,7 +186,7 @@ class EventHandler(DbOpsMixin):
                 return candidate
             if not isinstance(collection, dict) and not isinstance(item, EventItem):
                 return candidate
-        return uuid.uuid4().hex[:12]
+        return uuid.uuid4().hex
 
     async def add_event(
         self, user_id: str, text: str, context: PendoContext, group_id: int | None = None
@@ -406,31 +406,28 @@ class EventHandler(DbOpsMixin):
                         return conflict
 
             collection_id = self._new_event_collection_id()
-            await run_sync(
-                self.db.items.create_event_collection,
-                {
-                    "id": collection_id,
-                    "owner_id": user_id,
-                    "kind": "recurring",
-                    "title": parsed_data.get("title", "无标题日程"),
-                    "content": parsed_data.get("content", ""),
-                    "category": parsed_data.get("category", "未分类"),
-                    "location": parsed_data.get("location", ""),
-                    "tags": parsed_data.get("tags", []),
-                    "notes": parsed_data.get("notes", ""),
-                    "context": parsed_data.get("context", {}),
-                    "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
-                    "rrule": parsed_data["rrule"],
-                    "reminder_rules": reminder_rules,
-                    "start_time": instances[0].isoformat(),
-                    "end_time": (
-                        (instances[-1] + duration).isoformat()
-                        if duration
-                        else instances[-1].isoformat()
-                    ),
-                },
-            )
-            created_ids = []
+            collection_payload = {
+                "id": collection_id,
+                "owner_id": user_id,
+                "kind": "recurring",
+                "title": parsed_data.get("title", "无标题日程"),
+                "content": parsed_data.get("content", ""),
+                "category": parsed_data.get("category", "未分类"),
+                "location": parsed_data.get("location", ""),
+                "tags": parsed_data.get("tags", []),
+                "notes": parsed_data.get("notes", ""),
+                "context": parsed_data.get("context", {}),
+                "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
+                "rrule": parsed_data["rrule"],
+                "reminder_rules": reminder_rules,
+                "start_time": instances[0].isoformat(),
+                "end_time": (
+                    (instances[-1] + duration).isoformat()
+                    if duration
+                    else instances[-1].isoformat()
+                ),
+            }
+            children: list[tuple[str, EventItem]] = []
 
             for index, instance_dt in enumerate(instances, 1):
                 instance_end_dt = instance_dt + duration if duration else None
@@ -461,19 +458,14 @@ class EventHandler(DbOpsMixin):
 
                 instance_id = f"{collection_id}_{instance_dt.strftime('%Y%m%d')}"
                 instance_item.id = instance_id
-
-                await run_sync(self.db.items.insert_item, instance_item, instance_id)
-                created_ids.append(instance_id)
-
-            # 记录日志
+                children.append((instance_id, instance_item))
             await run_sync(
-                self.db.logs.log_operation,
-                user_id=user_id,
-                action="create_recurring",
-                item_type="event",
-                item_id=collection_id,
-                details={"title": parsed_data.get("title"), "instances": len(created_ids)},
+                self.db.items.create_event_collection_with_children,
+                collection_payload,
+                children,
+                operation_action="create_recurring",
             )
+            created_ids = [child_id for child_id, _child in children]
 
             return {
                 "status": "success",
@@ -512,27 +504,24 @@ class EventHandler(DbOpsMixin):
             reminder_rules = ensure_event_reminder_rules(parsed_data, remind_times)
 
         collection_id = self._new_event_collection_id()
-        await run_sync(
-            self.db.items.create_event_collection,
-            {
-                "id": collection_id,
-                "owner_id": user_id,
-                "kind": "multi_node",
-                "title": parsed_data.get("title", "无标题日程"),
-                "content": parsed_data.get("content", ""),
-                "category": parsed_data.get("category", "未分类"),
-                "location": parsed_data.get("location", ""),
-                "tags": parsed_data.get("tags", []),
-                "notes": parsed_data.get("notes", ""),
-                "context": parsed_data.get("context", {}),
-                "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
-                "reminder_rules": reminder_rules,
-                "start_time": start_time,
-                "end_time": end_time,
-            },
-        )
+        collection_payload = {
+            "id": collection_id,
+            "owner_id": user_id,
+            "kind": "multi_node",
+            "title": parsed_data.get("title", "无标题日程"),
+            "content": parsed_data.get("content", ""),
+            "category": parsed_data.get("category", "未分类"),
+            "location": parsed_data.get("location", ""),
+            "tags": parsed_data.get("tags", []),
+            "notes": parsed_data.get("notes", ""),
+            "context": parsed_data.get("context", {}),
+            "timezone": parsed_data.get("timezone", "Asia/Shanghai"),
+            "reminder_rules": reminder_rules,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
 
-        created_nodes: list[EventItem] = []
+        children: list[tuple[str, EventItem]] = []
         all_reminders: set[str] = set()
         for index, milestone in enumerate(milestones, 1):
             node_time = milestone["time"]
@@ -562,19 +551,13 @@ class EventHandler(DbOpsMixin):
             )
             node_id = f"{collection_id}_{node_key}"
             node.id = node_id
-            await run_sync(self.db.items.insert_item, node, node_id)
-            created_nodes.append(node)
+            children.append((node_id, node))
 
         await run_sync(
-            self.db.logs.log_operation,
-            user_id=user_id,
-            action="create_multi_node",
-            item_type="event",
-            item_id=collection_id,
-            details={
-                "title": parsed_data.get("title"),
-                "child_ids": [node.id for node in created_nodes],
-            },
+            self.db.items.create_event_collection_with_children,
+            collection_payload,
+            children,
+            operation_action="create_multi_node",
         )
 
         event_payload = {
@@ -1880,13 +1863,17 @@ class EventHandler(DbOpsMixin):
         """判断是否像ID（collection id、recurring occurrence id 或 node id）"""
         if not text:
             return False
+        # New collection IDs are full UUID hex strings.  Keep accepting the
+        # historical 8-character IDs so old commands and imported records
+        # remain addressable.
+        collection_id_pattern = r"[0-9a-f]{8}(?:[0-9a-f]{24})?"
         if "_" in text:
             parts = text.rsplit("_", 1)
             return (
-                re.match(r"^[0-9a-f]{8}$", parts[0]) is not None
+                re.match(rf"^{collection_id_pattern}$", parts[0]) is not None
                 and re.match(r"^(\d{8}|m\d{2,})$", parts[1]) is not None
             )
-        return re.match(r"^[0-9a-f]{8}$", text) is not None
+        return re.match(rf"^{collection_id_pattern}$", text) is not None
 
     async def _resolve_single_event_id_or_message(
         self, user_id: str, event_id: str

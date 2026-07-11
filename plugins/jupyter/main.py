@@ -15,16 +15,16 @@ Jupyter 代码执行插件 v2.0
 import asyncio
 import logging
 import re
-import sys
-from pathlib import Path
 from typing import Any
 
-from core.plugin_base import segments, text, image, PluginContextProtocol
 from core.args import parse
+from core.plugin_base import PluginContextProtocol, image, segments, text
 
-# 使用相对导入
-from .jupyter_manager import JupyterKernelManager, lazy_import_jupyter, JUPYTER_AVAILABLE, IMPORT_ERROR
+# 使用模块属性读取惰性导入状态，避免按值导入得到陈旧快照。
+from . import jupyter_manager
 from .jupyter_config import DEFAULT_TIMEOUT
+
+JupyterKernelManager = jupyter_manager.JupyterKernelManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +34,14 @@ logger = logging.getLogger(__name__)
 
 def init(context=None) -> None:
     """插件初始化"""
-    lazy_import_jupyter()
-    if JUPYTER_AVAILABLE:
+    jupyter_manager.lazy_import_jupyter()
+    if jupyter_manager.JUPYTER_AVAILABLE:
         logger.info("Jupyter plugin initialized (jupyter_client available)")
     else:
-        logger.warning("Jupyter plugin initialized (jupyter_client NOT available: %s)", IMPORT_ERROR)
+        logger.warning(
+            "Jupyter plugin initialized (jupyter_client NOT available: %s)",
+            jupyter_manager.IMPORT_ERROR,
+        )
 
 # ============================================================
 # 命令处理
@@ -54,12 +57,12 @@ async def handle(
     
     try:
         # 检查依赖
-        lazy_import_jupyter()
-        if not JUPYTER_AVAILABLE:
-            # 再次检查状态，避免误报
-            from .jupyter_manager import JUPYTER_AVAILABLE as READY, IMPORT_ERROR as ERR
-            if not READY:
-                return segments(f"❌ jupyter_client 加载失败: {ERR}\n请运行: pip install jupyter_client ipykernel")
+        jupyter_manager.lazy_import_jupyter()
+        if not jupyter_manager.JUPYTER_AVAILABLE:
+            return segments(
+                f"❌ jupyter_client 加载失败: {jupyter_manager.IMPORT_ERROR}\n"
+                '请运行: pip install "xiaoqing[jupyter]"'
+            )
         
         parsed = parse(args)
         
@@ -138,6 +141,7 @@ async def _handle_kernel(args: str, context: PluginContextProtocol) -> list[dict
         try:
             km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
             await asyncio.to_thread(km.start_kernel)
+            km.ensure_idle_monitor()
             logger.info("Jupyter kernel started")
             return segments("🟢 内核已启动")
         except Exception as e:
@@ -148,6 +152,7 @@ async def _handle_kernel(args: str, context: PluginContextProtocol) -> list[dict
         try:
             km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
             await asyncio.to_thread(km.restart_kernel)
+            km.ensure_idle_monitor()
             logger.info("Jupyter kernel restarted")
             return segments("🔄 内核已重启")
         except Exception as e:
@@ -155,10 +160,14 @@ async def _handle_kernel(args: str, context: PluginContextProtocol) -> list[dict
             return segments(f"❌ 重启失败: {e}")
     
     elif action in ["shutdown", "stop", "关闭", "停止"]:
-        km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
-        await asyncio.to_thread(km.shutdown_kernel)
-        logger.info("Jupyter kernel shutdown")
-        return segments("⚫ 内核已关闭")
+        try:
+            km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
+            await asyncio.to_thread(km.shutdown_kernel)
+            logger.info("Jupyter kernel shutdown")
+            return segments("⚫ 内核已关闭")
+        except Exception as e:
+            logger.error("Kernel shutdown could not be confirmed: %s", e)
+            return segments(f"⚠️ 内核关闭状态无法确认，实例已隔离: {e}")
     
     elif action in ["help", "帮助", "-h", "?"]:
         return segments(_show_kernel_help())
@@ -374,13 +383,10 @@ def _show_kernel_help() -> str:
 async def shutdown(context: PluginContextProtocol) -> None:
     """插件卸载/关闭时的清理"""
     try:
-        lazy_import_jupyter()
-        # 再次检查状态
-        from .jupyter_manager import JUPYTER_AVAILABLE as READY, KernelManager as KM_CLS
-        
-        if READY and KM_CLS:
+        jupyter_manager.lazy_import_jupyter()
+        if jupyter_manager.JUPYTER_AVAILABLE and jupyter_manager.KernelManager:
             logger.info("正在关闭 Jupyter 内核...")
-            await asyncio.to_thread(JupyterKernelManager.shutdown_all)
+            await JupyterKernelManager.shutdown_all_async()
     except Exception as e:
         logger.error("关闭 Jupyter 内核失败: %s", e)
 

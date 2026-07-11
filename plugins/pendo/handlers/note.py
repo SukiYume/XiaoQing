@@ -16,8 +16,8 @@ from ..models.item import ItemType, NoteItem, get_item_type_value
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import (
-    ItemFormatter,
     TAG_TOKEN_RE,
+    ItemFormatter,
     extract_kv_param,
     extract_tags,
     paginate,
@@ -249,7 +249,7 @@ class NoteHandler(DbOpsMixin):
     async def _find_note_backlinks(self, user_id: str, note_id: str) -> list[NoteItem]:
         notes = cast(
             list[NoteItem],
-            await run_sync(self.db.items.get_items, user_id, {"type": ItemType.NOTE.value}, 1000),
+            await run_sync(self.db.items.get_all_items, user_id, {"type": ItemType.NOTE.value}),
         )
         backlinks: list[NoteItem] = []
         for note in notes:
@@ -598,9 +598,14 @@ class NoteHandler(DbOpsMixin):
                     return {"status": "error", "message": f"❌ 无效页码: page:{page_num}"}
 
         # 查询（如果显示全部或分页，增加limit）
-        query_limit = 1000 if show_all or page_num > 1 else PendoConfig.DEFAULT_SEARCH_LIMIT
         items = cast(
-            list[NoteItem], await run_sync(self.db.items.get_items, user_id, filters, query_limit)
+            list[NoteItem],
+            await run_sync(
+                self.db.items.get_all_items if (show_all or page_num > 1) else self.db.items.get_items,
+                user_id,
+                filters,
+                *([] if (show_all or page_num > 1) else [PendoConfig.DEFAULT_SEARCH_LIMIT]),
+            ),
         )
 
         if not items:
@@ -985,7 +990,7 @@ class NoteHandler(DbOpsMixin):
         """删除整个分类下的笔记"""
         filters = {"type": ItemType.NOTE.value, "category": category}
         notes = cast(
-            list[NoteItem], await run_sync(self.db.items.get_items, user_id, filters, 1000)
+            list[NoteItem], await run_sync(self.db.items.get_all_items, user_id, filters)
         )
 
         if not notes:

@@ -480,10 +480,10 @@ def test_widget_endpoint_rejects_missing_auth(client: TestClient):
     res = client.get("/api/widget/summary")
 
     assert res.status_code == 401
-    assert "Missing authorization" in res.json()["message"]
+    assert "Missing web session" in res.json()["message"]
 
 
-def test_web_handler_can_generate_widget_token_message(monkeypatch):
+def test_web_handler_never_inlines_widget_token_when_private_delivery_is_unavailable(monkeypatch):
     sys.path.insert(0, str(ROOT))
     sys.modules.pop("plugins.pendo.handlers.web", None)
     sys.modules["plugins.pendo.web.server"] = types.SimpleNamespace(
@@ -500,17 +500,16 @@ def test_web_handler_can_generate_widget_token_message(monkeypatch):
     handler = web_module.WebHandler(db=None)
     result = asyncio.run(handler.handle("1001", "widget token", context=None))
 
-    assert result["status"] == "success"
-    assert "Scriptable" in result["message"]
-    assert "mock-widget-token" in result["message"]
-    assert "/api/widget/summary" in result["message"]
+    assert result["status"] == "error"
+    assert "无法通过私聊安全发送凭据" in result["message"]
+    assert "mock-widget-token" not in result["message"]
 
 
-def test_regular_web_token_still_allows_dashboard_access(client: TestClient, temp_db: Database):
+def test_regular_web_bearer_token_cannot_access_browser_api(client: TestClient, temp_db: Database):
     owner_id = "u-widget-normal"
     _seed_widget_data(temp_db, owner_id)
     token = generate_token(owner_id)
 
     res = client.get("/api/dashboard", headers=_headers(token))
 
-    assert res.status_code == 200
+    assert res.status_code == 401

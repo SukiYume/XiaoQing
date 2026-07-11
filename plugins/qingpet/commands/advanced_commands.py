@@ -131,6 +131,15 @@ async def handle_treat(user_id: str, group_id: int, args: str, db: Database) -> 
     inventory = item_service.get_inventory(user_id, resolved_group_id)
     if not inventory.has_item(item_id):
         return False, "背包中没有该药品"
+    if not item.is_medicine():
+        return False, "该道具不是药品，不能用于治疗"
+    claimed, remaining = db.claim_action_quota(
+        user_id, resolved_group_id, "treat", daily_limit=20, cooldown_seconds=300
+    )
+    if not claimed:
+        return False, (
+            f"治疗冷却中，请等待{remaining}秒" if remaining > 0 else "今日治疗次数已达上限"
+        )
 
     pet.update_stat("health", item.health_gain)
     pet.update_stat("clean", item.clean_gain)
@@ -141,7 +150,7 @@ async def handle_treat(user_id: str, group_id: int, args: str, db: Database) -> 
 
     inventory.remove_item(item_id)
 
-    success = db.update_pet(pet) and db.update_inventory(inventory)
+    success = db.treat_pet_atomic(pet, inventory)
     if success:
         status_text = format_status_text(pet)
         return True, with_pet_name(pet, f"治疗成功！恢复了{item.health_gain}健康值\n\n{status_text}")
@@ -279,7 +288,13 @@ async def handle_gift(user_id: str, group_id: int, args: str, db: Database) -> T
     return success, message
 
 
-async def handle_visit(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> Tuple[bool, str]:
+async def handle_visit(
+    user_id: str,
+    group_id: int,
+    args: str,
+    db: Database,
+    **kwargs,
+) -> Tuple[bool, str]:
     match = re.match(r"@?(\d+)", args.strip())
     if not match:
         return False, "格式错误\n用法: /宠物 互访 @QQ号"
@@ -293,7 +308,12 @@ async def handle_visit(user_id: str, group_id: int, args: str, db: Database, **k
         return False, "你已被封禁，无法操作"
 
     social_service = SocialService(db)
-    success, message = social_service.visit_pet(user_id, target_user_id, group_id)
+    success, message = social_service.visit_pet(
+        user_id,
+        target_user_id,
+        group_id,
+        message_id=kwargs.get("message_id"),
+    )
 
     return success, message
 
@@ -355,6 +375,15 @@ async def handle_activity(user_id: str, group_id: int, args: str, db: Database) 
     """群活动系统（Issue #5: 不再是硬编码占位符）"""
     activities = db.get_active_activities(group_id)
 
+    if args.strip().startswith(("领取", "claim")):
+        parts = args.strip().split()
+        if len(parts) != 2 or not parts[1].isdigit():
+            return False, "用法：/宠物 活动 领取 <活动ID>"
+        reward = db.claim_activity_reward(int(parts[1]), user_id, group_id)
+        if reward is None:
+            return False, "活动未完成、已领取或不存在"
+        return True, f"🎁 活动奖励领取成功：{reward}金币"
+
     if not activities:
         return True, "🎉 **群活动**\n\n当前暂无进行中的活动\n敬请期待！"
 
@@ -367,11 +396,13 @@ async def handle_activity(user_id: str, group_id: int, args: str, db: Database) 
         reward = act.get('reward_coins', 0)
         progress = min(100, int(current / target * 100)) if target > 0 else 0
 
-        text += f"📌 **{title}**\n"
+        text += f"📌 **#{act['id']} {title}**\n"
         if desc:
             text += f"  {desc}\n"
         text += f"  进度: {current}/{target} ({progress}%)\n"
         text += f"  奖励: {reward}金币\n\n"
+
+    text += "完成后使用 /宠物 活动 领取 <活动ID>"
 
     return True, text
 
@@ -436,6 +467,32 @@ async def handle_task(user_id: str, group_id: int, args: str, db: Database) -> T
     return True, with_pet_name(pet, text)
 
 
+async def handle_group_task(
+    user_id: str, group_id: int, args: str, db: Database
+) -> Tuple[bool, str]:
+    tasks = db.get_or_create_group_tasks(group_id)
+    if args.strip() in {"领取", "claim"}:
+        claimed: list[str] = []
+        total = 0
+        for task in tasks:
+            reward = db.claim_group_task_reward(user_id, group_id, str(task["task_type"]))
+            if reward is not None:
+                claimed.append(str(task.get("description") or task["task_type"]))
+                total += reward
+        if not claimed:
+            return False, "暂无可领取的群任务奖励（未完成或已领取）"
+        return True, f"🎁 已领取群任务奖励：{total}金币\n" + "\n".join(claimed)
+    lines = ["📋 **今日群任务**"]
+    for task in tasks:
+        done = int(task["current_value"]) >= int(task["target_value"])
+        lines.append(
+            f"• {task['description']} {task['current_value']}/{task['target_value']} "
+            f"{'🎁 可领取' if done else ''} - {task['reward_coins']}金币"
+        )
+    lines.append("\n完成后使用 /宠物 群任务 领取")
+    return True, "\n".join(lines)
+
+
 async def handle_rename(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
     if not args.strip():
         return False, "请提供新名字\n用法: /宠物 改名 <新名字>"
@@ -486,22 +543,33 @@ async def handle_minigame(user_id: str, group_id: int, args: str, db: Database, 
     parts = args.strip().split(maxsplit=1)
     game_type = parts[0]
     game_args = parts[1] if len(parts) > 1 else ""
+    message_id = kwargs.get("message_id")
 
     social_service = SocialService(db)
 
     if game_type in ["猜拳", "rps"]:
         if not game_args:
             return False, "请选择出拳\n用法: /宠物 游戏 猜拳 <石头/剪刀/布>"
-        return social_service.play_rock_paper_scissors(user_id, group_id, game_args)
+        return social_service.play_rock_paper_scissors(
+            user_id,
+            group_id,
+            game_args,
+            message_id=message_id,
+        )
 
     elif game_type in ["骰子", "dice"]:
-        return social_service.play_dice(user_id, group_id)
+        return social_service.play_dice(user_id, group_id, message_id=message_id)
 
     elif game_type in ["赛跑", "race"]:
         match = re.match(r"@?(\d+)", game_args)
         if not match:
             return False, "请选择对手\n用法: /宠物 游戏 赛跑 @QQ号"
         target_user_id = match.group(1)
-        return social_service.race_pet(user_id, target_user_id, group_id)
+        return social_service.race_pet(
+            user_id,
+            target_user_id,
+            group_id,
+            message_id=message_id,
+        )
 
     return False, f"未知游戏类型: {game_type}\n可用游戏: 猜拳, 骰子, 赛跑"

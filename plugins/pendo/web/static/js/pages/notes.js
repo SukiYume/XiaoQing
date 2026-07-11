@@ -814,7 +814,7 @@ function renderSpotlight(note) {
     const preview = previewText(note.content, 220);
     const spotlightLabel = _page === 1 ? '最新更新' : '本页首条';
     return `
-        <article class="note-card notes-spotlight" data-id="${note.id}">
+        <article class="note-card notes-spotlight" data-id="${escapeHtml(String(note.id || ''))}">
             <div class="notes-spotlight-main">
                 <div class="notes-spotlight-kicker">
                     <span class="notes-spotlight-label">${spotlightLabel}</span>
@@ -844,7 +844,7 @@ function renderNoteRow(note, index) {
     const date = formatDate(note.updated_at || note.created_at);
     const wordCount = noteWordCount(note);
     return `
-        <article class="note-card note-row" data-id="${note.id}">
+        <article class="note-card note-row" data-id="${escapeHtml(String(note.id || ''))}">
             <div class="note-row-main">
                 <div class="note-row-top">
                     <h4 class="note-row-title">${escapeHtml(note.title || '(无标题)')}</h4>

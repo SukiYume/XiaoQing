@@ -299,6 +299,9 @@ async def test_trade_cancel_returns_item_to_listing_group_inventory(temp_db):
     assert ok is True
 
     ok, _ = _trade_cancel("seller", 999999, "1", temp_db)
+    assert ok is False
+
+    ok, _ = _trade_cancel("seller", 123456, "1", temp_db)
     assert ok is True
 
     listing_group_inventory = temp_db.get_or_create_inventory("seller", 123456)

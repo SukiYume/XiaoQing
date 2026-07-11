@@ -3,14 +3,18 @@ Dispatcher 单元测试
 """
 
 import asyncio
-import pytest
+import inspect
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
 
 from core.dispatcher import (
     Dispatcher,
     MessageContext,
     MessageParser,
 )
+from core.plugin_execution import PluginExecutionGate
 from core.router import CommandRouter, CommandSpec
 
 # ============================================================
@@ -70,6 +74,17 @@ def mock_session_manager():
     mock = MagicMock()
     mock.get = AsyncMock(return_value=None)
     mock.exists = AsyncMock(return_value=False)
+
+    async def update(user_id, group_id, callback):
+        session = await mock.get(user_id, group_id)
+        if session is None:
+            return None
+        result = callback(session)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    mock.update = AsyncMock(side_effect=update)
     return mock
 
 
@@ -416,14 +431,15 @@ class TestDispatcherHandleEvent:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_observe_message_runs_before_url_short_circuit(
+    async def test_observe_message_runs_before_authorised_url_route(
         self,
         dispatcher: Dispatcher,
         mock_plugin_registry: MagicMock,
         mock_config_provider: MagicMock,
     ):
-        """即使 URL 被提前处理，也应先调用 smalltalk provider 的 observe_message。"""
+        """通过群门控的 URL 在解析前仍应先通知 observe_message。"""
         mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
+        mock_config_provider.config["require_bot_name_in_group"] = False
 
         xq_plugin = MagicMock()
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
@@ -458,14 +474,14 @@ class TestDispatcherHandleEvent:
         url_plugin.module.handle_url.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_observe_message_runs_before_command_short_circuit(
+    async def test_observe_message_skips_command_short_circuit(
         self,
         dispatcher: Dispatcher,
         mock_plugin_registry: MagicMock,
         mock_config_provider: MagicMock,
         mock_router: MagicMock,
     ):
-        """即使命令命中提前返回，也应先调用 observe_message。"""
+        """命令正文属于结构化输入，不应进入闲聊记忆。"""
         mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
 
         xq_plugin = MagicMock()
@@ -504,7 +520,185 @@ class TestDispatcherHandleEvent:
         result = await dispatcher.handle_event(event)
 
         assert result == [{"type": "text", "data": {"text": "command ok"}}]
+        xq_plugin.module.observe_message.assert_not_awaited()
+        cmd_handler.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_observe_message_skips_denied_admin_command(
+        self,
+        dispatcher: Dispatcher,
+        mock_plugin_registry: MagicMock,
+        mock_config_provider: MagicMock,
+        mock_router: MagicMock,
+        mock_admin_check: MagicMock,
+    ):
+        mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
+        mock_admin_check.is_admin.return_value = False
+        xq_plugin = MagicMock()
+        xq_plugin.module.observe_message = AsyncMock(return_value=[])
+        mock_plugin_registry.get.side_effect = (
+            lambda name: xq_plugin if name == "xiaoqing_chat" else None
+        )
+        handler = AsyncMock()
+        spec = CommandSpec(
+            plugin="shell",
+            name="shell",
+            triggers=["shell"],
+            help_text="shell",
+            admin_only=True,
+            handler=handler,
+        )
+        mock_router.resolve.return_value = (spec, "authorization=Bearer-canary")
+        event = {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 12345,
+            "self_id": 11111,
+            "message": "/shell authorization=Bearer-canary",
+            "raw_message": "/shell authorization=Bearer-canary",
+        }
+
+        result = await dispatcher.handle_event(event)
+
+        assert result == [{"type": "text", "data": {"text": "权限不足"}}]
+        xq_plugin.module.observe_message.assert_not_awaited()
+        handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_observe_message_skips_unknown_prefixed_command(
+        self,
+        dispatcher: Dispatcher,
+        mock_plugin_registry: MagicMock,
+        mock_config_provider: MagicMock,
+        mock_router: MagicMock,
+    ):
+        mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
+        mock_router.resolve.return_value = None
+        xq_plugin = MagicMock()
+        xq_plugin.module.observe_message = AsyncMock(return_value=[])
+        mock_plugin_registry.get.side_effect = (
+            lambda name: xq_plugin if name == "xiaoqing_chat" else None
+        )
+        event = {
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": "/unknown authorization=Bearer-canary",
+            "raw_message": "/unknown authorization=Bearer-canary",
+        }
+
+        result = await dispatcher.handle_event(event)
+
+        assert result[0]["data"]["text"].startswith("❓ 未知命令")
+        xq_plugin.module.observe_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_observe_message_skips_privileged_session_input(
+        self,
+        dispatcher: Dispatcher,
+        mock_plugin_registry: MagicMock,
+        mock_config_provider: MagicMock,
+        mock_router: MagicMock,
+        mock_session_manager: MagicMock,
+    ):
+        mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
+        mock_router.resolve.return_value = None
+        session = MagicMock()
+        session.plugin_name = "qingssh"
+        mock_session_manager.get.return_value = session
+
+        xq_plugin = MagicMock()
+        xq_plugin.module.observe_message = AsyncMock(return_value=[])
+        ssh_plugin = MagicMock()
+        ssh_plugin.module.handle_session = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "configured"}}]
+        )
+        mock_plugin_registry.get.side_effect = lambda name: {
+            "xiaoqing_chat": xq_plugin,
+            "qingssh": ssh_plugin,
+        }.get(name)
+        event = {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 12345,
+            "self_id": 11111,
+            "message": "ssh-password-canary",
+            "raw_message": "ssh-password-canary",
+        }
+
+        result = await dispatcher.handle_event(event)
+
+        assert result == [{"type": "text", "data": {"text": "configured"}}]
+        xq_plugin.module.observe_message.assert_not_awaited()
+        ssh_plugin.module.handle_session.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_observe_message_keeps_plain_group_chatter(
+        self,
+        dispatcher: Dispatcher,
+        mock_plugin_registry: MagicMock,
+        mock_config_provider: MagicMock,
+        mock_router: MagicMock,
+        mock_session_manager: MagicMock,
+    ):
+        mock_config_provider.config["plugins"]["smalltalk_provider"] = "xiaoqing_chat"
+        mock_router.resolve.return_value = None
+        mock_session_manager.get.return_value = None
+        xq_plugin = MagicMock()
+        xq_plugin.module.observe_message = AsyncMock(return_value=[])
+        xq_plugin.module.handle_smalltalk = AsyncMock(return_value=[])
+        mock_plugin_registry.get.side_effect = (
+            lambda name: xq_plugin if name == "xiaoqing_chat" else None
+        )
+        event = {
+            "post_type": "message",
+            "message_type": "group",
+            "user_id": 12345,
+            "group_id": 67890,
+            "self_id": 11111,
+            "message": "普通群聊内容",
+            "raw_message": "普通群聊内容",
+        }
+
+        await dispatcher.handle_event(event)
+
         xq_plugin.module.observe_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_raw_message_only_event_reaches_command_handler(
+        self,
+        dispatcher: Dispatcher,
+        mock_router: MagicMock,
+    ):
+        """Direct upstream events follow the same raw-message normalization path."""
+        cmd_handler = AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}])
+        mock_router.resolve = Mock(
+            return_value=(
+                CommandSpec(
+                    plugin="echo",
+                    name="echo",
+                    triggers=["echo"],
+                    help_text="echo",
+                    admin_only=False,
+                    handler=cmd_handler,
+                    priority=0,
+                ),
+                "hello",
+            )
+        )
+        event = {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 12345,
+            "self_id": 11111,
+            "raw_message": "/echo hello",
+        }
+
+        result = await dispatcher.handle_event(event)
+
+        assert result == [{"type": "text", "data": {"text": "ok"}}]
         cmd_handler.assert_awaited_once()
 
 # ============================================================
@@ -574,19 +768,21 @@ class TestExecuteCommand:
         """测试管理员命令权限检查"""
         mock_admin_check.is_admin = Mock(return_value=False)
 
+        handler = AsyncMock()
         spec = CommandSpec(
             plugin="admin",
             name="reload",
             triggers=["reload"],
             help_text="重载",
             admin_only=True,
-            handler=AsyncMock(),
+            handler=handler,
             priority=0,
         )
 
         result = await dispatcher._execute_command((spec, ""), sample_message_context)
         assert result is not None
         assert result[0]["data"]["text"] == "权限不足"
+        handler.assert_not_awaited()
 
 
 class TestUrlFiltering:
@@ -595,6 +791,8 @@ class TestUrlFiltering:
         assert dispatcher._is_blocked_url_target("http://[::1]/a") is True
         assert dispatcher._is_blocked_url_target("http://169.254.169.254/latest/meta-data") is True
         assert dispatcher._is_blocked_url_target("http://localhost:8080") is True
+        assert dispatcher._is_blocked_url_target("http://2130706433/a") is True
+        assert dispatcher._is_blocked_url_target("http://0x7f000001/a") is True
 
     def test_allows_public_domain_targets(self, dispatcher: Dispatcher):
         assert dispatcher._is_blocked_url_target("https://example.com/path") is False
@@ -718,9 +916,23 @@ class TestProcessEventLinearFlow:
         assert result and result[0]["data"]["text"] == "嗯嗯"
 
     @pytest.mark.asyncio
-    async def test_group_url_only_invokes_url_parser_without_prefix(
+    async def test_group_url_only_is_blocked_by_process_gate(
         self, dispatcher, mock_plugin_registry, event_template
     ):
+        url_parser = MagicMock()
+        url_parser.module.handle_url = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "parsed"}}]
+        )
+        mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+        result = await dispatcher.handle_event(event_template(message="https://example.com"))
+        assert result == []
+        url_parser.module.handle_url.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_group_url_only_invokes_url_parser_when_group_processing_enabled(
+        self, dispatcher, mock_config_provider, mock_plugin_registry, event_template
+    ):
+        mock_config_provider.config["require_bot_name_in_group"] = False
         url_parser = MagicMock()
         url_parser.module.handle_url = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "parsed"}}]
@@ -804,7 +1016,7 @@ class TestProcessEventLinearFlow:
             dispatcher.unmute_group(67890)
 
     @pytest.mark.asyncio
-    async def test_group_mute_does_not_block_url(
+    async def test_group_mute_blocks_url(
         self, dispatcher, mock_plugin_registry, event_template
     ):
         dispatcher.mute_group(67890, 5.0)
@@ -815,7 +1027,8 @@ class TestProcessEventLinearFlow:
             )
             mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
             result = await dispatcher.handle_event(event_template(message="https://example.com"))
-            assert result and result[0]["data"]["text"] == "p"
+            assert result == []
+            url_parser.module.handle_url.assert_not_awaited()
         finally:
             dispatcher.unmute_group(67890)
 
@@ -962,6 +1175,96 @@ class TestProcessEventLinearFlow:
         result = await dispatcher.handle_event(event_template(message="小青"))
         assert result and result[0]["data"]["text"] == "在的"
         pendo.module.handle_session.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_command_uses_loaded_plugin_sequential_gate(
+        self, dispatcher, mock_router, mock_plugin_registry, event_template
+    ):
+        gate = PluginExecutionGate("sequential")
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        max_active = 0
+
+        async def slow_handler(*_args):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            entered.set()
+            await release.wait()
+            active -= 1
+            return [{"type": "text", "data": {"text": "ok"}}]
+
+        spec = CommandSpec(
+            plugin="stateful",
+            name="work",
+            triggers=["work"],
+            help_text="work",
+            handler=slow_handler,
+            admin_only=False,
+        )
+        mock_router.resolve.return_value = (spec, "")
+        loaded = SimpleNamespace(execution_gate=gate)
+        mock_plugin_registry.get.side_effect = lambda name: loaded if name == "stateful" else None
+
+        first = asyncio.create_task(dispatcher.handle_event(event_template(message="/work")))
+        await entered.wait()
+        second = asyncio.create_task(dispatcher.handle_event(event_template(message="/work")))
+        await asyncio.sleep(0)
+        assert max_active == 1
+
+        release.set()
+        assert await first
+        assert await second
+        assert max_active == 1
+
+    @pytest.mark.asyncio
+    async def test_provider_events_use_the_same_sequential_gate(
+        self, dispatcher, mock_plugin_registry, sample_message_context
+    ):
+        gate = PluginExecutionGate("sequential")
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        max_active = 0
+
+        async def observe_message(*_args):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            entered.set()
+            await release.wait()
+            active -= 1
+            return []
+
+        mock_plugin_registry.get.return_value = SimpleNamespace(
+            module=SimpleNamespace(observe_message=observe_message),
+            execution_gate=gate,
+        )
+
+        first = asyncio.create_task(
+            dispatcher._call_provider(
+                "stateful",
+                "observe_message",
+                sample_message_context,
+                ("one", {}),
+            )
+        )
+        await entered.wait()
+        second = asyncio.create_task(
+            dispatcher._call_provider(
+                "stateful",
+                "observe_message",
+                sample_message_context,
+                ("two", {}),
+            )
+        )
+        await asyncio.sleep(0)
+        assert max_active == 1
+
+        release.set()
+        await asyncio.gather(first, second)
+        assert max_active == 1
 
 # ============================================================
 # 运行测试

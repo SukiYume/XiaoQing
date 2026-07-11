@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -33,26 +34,31 @@ class ActionHistoryStore:
         self._dirty: set[str] = set()
         self._async_loading: set[str] = set()
         self._state_version: dict[str, int] = {}
+        self._lock = threading.RLock()
+        self._write_lock = threading.Lock()
 
     def bind(self, data_dir: Path) -> None:
-        self._data_dir = data_dir
+        with self._lock:
+            self._data_dir = data_dir
 
     def append(self, chat_id: str, record: ActionRecord) -> None:
-        if chat_id not in self._cache:
-            if chat_id in self._async_loading:
-                self._cache[chat_id] = []
-            else:
-                loaded = self._load(chat_id)
-                self._cache[chat_id] = loaded or []
-        self._cache[chat_id].append(record)
-        self._dirty.add(chat_id)
-        self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
+        with self._lock:
+            if chat_id not in self._cache:
+                if chat_id in self._async_loading:
+                    self._cache[chat_id] = []
+                else:
+                    loaded = self._load(chat_id)
+                    self._cache[chat_id] = loaded or []
+            self._cache[chat_id].append(record)
+            self._dirty.add(chat_id)
+            self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
 
     def clear(self, chat_id: str) -> None:
-        self._cache.pop(chat_id, None)
-        self._dirty.discard(chat_id)
-        self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
-        path = self._path(chat_id)
+        with self._lock:
+            self._cache.pop(chat_id, None)
+            self._dirty.discard(chat_id)
+            self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
+            path = self._path(chat_id)
         if path and path.exists():
             try:
                 path.unlink()
@@ -62,25 +68,25 @@ class ActionHistoryStore:
     def flush(self, chat_id: Optional[str] = None) -> None:
         """Persist dirty chat(s) to disk. Call from debounced scheduler."""
         if chat_id is not None:
-            if chat_id in self._dirty:
-                self._persist(chat_id)
-                self._dirty.discard(chat_id)
+            self._persist(chat_id)
         else:
-            for cid in list(self._dirty):
+            with self._lock:
+                dirty = list(self._dirty)
+            for cid in dirty:
                 self._persist(cid)
-            self._dirty.clear()
 
     def flush_all(self) -> None:
         """Flush all dirty chats — used during shutdown."""
         self.flush()
 
     def get_recent(self, chat_id: str, *, max_items: int = 20) -> list[ActionRecord]:
-        if chat_id not in self._cache:
-            loaded = self._load(chat_id)
-            self._cache[chat_id] = loaded or []
-        if max_items <= 0:
-            return []
-        return list(self._cache[chat_id][-max_items:])
+        with self._lock:
+            if chat_id not in self._cache:
+                loaded = self._load(chat_id)
+                self._cache[chat_id] = loaded or []
+            if max_items <= 0:
+                return []
+            return list(self._cache[chat_id][-max_items:])
 
     async def get_recent_async(self, chat_id: str, *, max_items: int = 20) -> list[ActionRecord]:
         if chat_id not in self._cache:
@@ -102,13 +108,20 @@ class ActionHistoryStore:
         return self._data_dir / "action_history" / f"{chat_id}.json"
 
     def _persist(self, chat_id: str) -> None:
-        path = self._path(chat_id)
-        if not path:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        items = self._cache.get(chat_id, [])
-        payload = [asdict(x) for x in items[-200:]]
-        write_json(path, payload)
+        with self._write_lock:
+            with self._lock:
+                if chat_id not in self._dirty:
+                    return
+                path = self._path(chat_id)
+                if not path:
+                    return
+                version = self._state_version.get(chat_id, 0)
+                payload = [asdict(x) for x in self._cache.get(chat_id, [])[-200:]]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_json(path, payload)
+            with self._lock:
+                if self._state_version.get(chat_id, 0) == version:
+                    self._dirty.discard(chat_id)
 
     def _load(self, chat_id: str) -> Optional[list[ActionRecord]]:
         path = self._path(chat_id)

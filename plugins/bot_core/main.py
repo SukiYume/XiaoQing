@@ -5,10 +5,9 @@
 import json
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import segments
-from core.args import parse
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +88,8 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
         消息段列表
     """
     try:
-        logger.info("核心命令: %s, 参数: %s", command, args[:50] if args else '')  
+        logged_args = "<redacted>" if command in {"set_secret", "get_secret"} else (args[:50] if args else "")
+        logger.info("核心命令: %s, 参数: %s", command, logged_args)
         
         if command == "help":
             return _handle_help(args, context)
@@ -107,9 +107,13 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
             return _handle_unmute(event, context)
 
         if command == "set_secret":
+            if event.get("group_id") is not None:
+                return segments("❌ /set_secret 只能由管理员在私聊中使用")
             return _handle_set_secret(args, context)
 
         if command == "get_secret":
+            if event.get("group_id") is not None:
+                return segments("❌ /get_secret 只能由管理员在私聊中使用")
             return _handle_get_secret(args, context)
 
         if command == "metrics":
@@ -424,13 +428,19 @@ def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
             # 如果不是有效 JSON，就作为字符串处理
             parsed_value = value
         
-        # 检查 config_manager 是否可用
-        if not context.config_manager:
-            logger.error("ConfigManager 不可用")
-            return segments("❌ ConfigManager 不可用")
-        
-        # 更新配置
-        context.config_manager.update_secret(path, parsed_value)
+        principal = getattr(context, "principal", None)
+        capabilities = getattr(context, "capabilities", None)
+        capability = getattr(capabilities, "secret_admin", None)
+        if (
+            principal is None
+            or not getattr(capabilities, "is_bot_admin", False)
+            or not getattr(principal, "is_private", False)
+            or capability is None
+        ):
+            logger.warning("Global secret update denied: capability unavailable")
+            return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
+
+        capability.set(path, parsed_value)
         
         logger.info("已更新配置: %s = %s", path, mask_secret(parsed_value))
         return segments(f"✅ 已更新 {path}\n新值: {mask_secret(parsed_value)}")
@@ -471,18 +481,19 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
         )
     
     try:
-        keys = path.split(".")
-        current = context.secrets
-        
-        for i, key in enumerate(keys):
-            if not isinstance(current, dict):
-                current_path = ".".join(keys[:i])
-                logger.warning("配置路径无效: %s 不是字典", current_path)
-                return segments(f"❌ 路径 {current_path} 不是字典类型")
-            if key not in current:
-                logger.info("配置路径不存在: %s", path)
-                return segments(f"❌ 路径 {path} 不存在")
-            current = current[key]
+        principal = getattr(context, "principal", None)
+        capabilities = getattr(context, "capabilities", None)
+        capability = getattr(capabilities, "secret_admin", None)
+        if (
+            principal is None
+            or not getattr(capabilities, "is_bot_admin", False)
+            or not getattr(principal, "is_private", False)
+            or capability is None
+        ):
+            logger.warning("Global secret read denied: capability unavailable")
+            return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
+
+        current = capability.get(path)
         
         if isinstance(current, dict):
             keys_list = list(current.keys())
@@ -501,6 +512,9 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
         
         logger.info("查询配置值: %s", path)
         return segments(f"🔑 {path} = {mask_secret(current)}")
+    except KeyError:
+        logger.info("配置路径不存在: %s", path)
+        return segments(f"❌ 路径 {path} 不存在")
     except Exception as exc:
         logger.error("查询密钥失败: %s", exc, exc_info=True)
         return segments(f"❌ 查询失败: {exc}")

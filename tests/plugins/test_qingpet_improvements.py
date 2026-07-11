@@ -336,7 +336,9 @@ def test_format_pet_card_travel_shows_hours_minutes(pet_and_user, temp_db):
     """旅行剩余时间包含小时和分钟"""
     pet, user = pet_and_user
     pet.status = PetStatus.TRAVELING
-    pet.status_expire_time = datetime.now() + timedelta(hours=3, minutes=15)
+    from plugins.qingpet.utils.time import utc_now
+
+    pet.status_expire_time = utc_now() + timedelta(hours=3, minutes=15)
     card = format_pet_card(pet, user)
     assert "小时" in card
     assert "分钟" in card

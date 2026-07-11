@@ -618,8 +618,8 @@ def test_send_action_type():
     """Test SendAction callable type"""
     from core.interfaces import SendAction
 
-    async def mock_send_action(action: dict) -> None:
-        pass
+    async def mock_send_action(action: dict) -> bool:
+        return True
 
     # Should match SendAction type
     send_action: SendAction = mock_send_action

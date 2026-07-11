@@ -5,7 +5,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .runtime_state import _ChatRuntime
@@ -34,12 +34,11 @@ from .helper_utils import (
     _replace_local_ids_with_text,
     _resolve_llm_config,
 )
-from .logging_utils import _log_step
 from .llm.llm_client import LLMError, chat_completions_with_fallback_paths
 from .llm.postprocess import join_reply, process_llm_response
 from .llm.prompt_builder import ChatMessage, build_dialogue_prompt, build_prompt_messages
 from .llm.reply_checker import ReplyCheckResult, ReplyRejected, _heuristic_check, check_reply
-from .message_parts import build_text_message_parts, merge_reply_media_parts, normalize_message_parts
+from .logging_utils import _log_step
 from .media.marker_resolver import (
     ResolvedMarker,
     marker_media_part,
@@ -50,9 +49,13 @@ from .media.marker_resolver import (
     text_without_outbound_marker,
 )
 from .memory.review_sessions import build_policy_block
+from .message_parts import (
+    build_text_message_parts,
+    merge_reply_media_parts,
+    normalize_message_parts,
+)
 from .planning.planner import PlannedAction
 from .reply_payload import build_reply_payload_from_parts
-
 
 _RE_GOAL = re.compile(r"(?:目标|要点|意图)[:：]\s*(.{2,120})")
 _SAFE_FORCED_REPLY_FALLBACK = "嗯，我先换个说法。"
@@ -210,7 +213,7 @@ async def _generate_reply_draft(
     reply_style_override: str = "",
     state_text: str = "",
     is_brain_chat: bool = False,
-    prefetched_memory_task: Optional["asyncio.Task[str]"] = None,
+    prefetched_memory_task: asyncio.Task[str] | None = None,
 ) -> ReplyDraft | None:
     if not context.http_session:
         raise RuntimeError("http_session not available")
@@ -238,7 +241,7 @@ async def _generate_reply_draft(
         },
     )
 
-    secrets = dict(secrets or _get_llm_secrets(context))
+    secrets = dict(secrets or _get_llm_secrets(context, chat_id=chat_id))
     api_base = secrets.get("api_base", "")
     api_key = secrets.get("api_key", "")
     model = secrets.get("model", "")
@@ -251,7 +254,7 @@ async def _generate_reply_draft(
     regen_used = 0
     extra_check_hint = ""
     _prefetched_mem = prefetched_memory_task
-    _cached_memory: Optional[str] = None
+    _cached_memory: str | None = None
 
     profile_block = _build_profile_block(state, context.data_dir, chat_id, event)
     state.review_store.bind(context.data_dir)
@@ -280,7 +283,7 @@ async def _generate_reply_draft(
         )
 
     jargon_explanation = _build_jargon_explanation(
-        runtime, state, context.data_dir, action.unknown_words
+        runtime, state, context.data_dir, chat_id, action.unknown_words
     )
 
     style_override = (reply_style_override or "").strip()
@@ -528,6 +531,7 @@ async def _generate_reply_draft(
                     context=context,
                     runtime=runtime,
                     history=trimmed_history,
+                    chat_id=chat_id,
                 )
             except Exception as exc:
                 _log_step(
@@ -647,9 +651,9 @@ async def _generate_reply_draft(
                         context, runtime, chat_id=chat_id, step="reply.check.timeout", fields={}
                     )
                     check = ReplyCheckResult(
-                        suitable=True,
+                        suitable=False,
                         reason="回复检查暂不可用",
-                        need_replan=False,
+                        need_replan=True,
                     )
                 except Exception as exc:
                     _log_step(
@@ -660,9 +664,9 @@ async def _generate_reply_draft(
                         fields={"error": f"{type(exc).__name__}: {exc}"},
                     )
                     check = ReplyCheckResult(
-                        suitable=True,
-                        reason=f"reply_checker error: {exc}",
-                        need_replan=False,
+                        suitable=False,
+                        reason="reply_checker unavailable",
+                        need_replan=True,
                     )
                 _log_step(
                     context,

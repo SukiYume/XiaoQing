@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Tuple, Optional
 
 from .constants import DEFAULT_SENSITIVE_WORDS
+from .time import utc_now
 
 
 def validate_pet_name(name: str, sensitive_words: list = None) -> Tuple[bool, str]:
@@ -17,7 +18,7 @@ def validate_pet_name(name: str, sensitive_words: list = None) -> Tuple[bool, st
         return False, "宠物名字包含非法字符"
     
     # 敏感词过滤（Issue #51）
-    words = sensitive_words if sensitive_words is not None else DEFAULT_SENSITIVE_WORDS
+    words = list(dict.fromkeys([*DEFAULT_SENSITIVE_WORDS, *(sensitive_words or [])]))
     for word in words:
         if word and word.lower() in name.lower():
             return False, "宠物名字包含不允许使用的词汇"
@@ -46,7 +47,7 @@ def validate_cooling(last_time: Optional[datetime], cooldown_seconds: int) -> Tu
     if last_time is None:
         return True, 0
     
-    elapsed = (datetime.now() - last_time).total_seconds()
+    elapsed = (utc_now() - last_time).total_seconds()
     if elapsed < cooldown_seconds:
         return False, int(cooldown_seconds - elapsed)
     
@@ -55,7 +56,7 @@ def validate_cooling(last_time: Optional[datetime], cooldown_seconds: int) -> Tu
 
 def validate_sensitive_content(text: str, sensitive_words: list = None) -> Tuple[bool, str]:
     """检查文本是否包含敏感词"""
-    words = sensitive_words if sensitive_words is not None else DEFAULT_SENSITIVE_WORDS
+    words = list(dict.fromkeys([*DEFAULT_SENSITIVE_WORDS, *(sensitive_words or [])]))
     for word in words:
         if word and word.lower() in text.lower():
             return False, f"内容包含不允许使用的词汇"

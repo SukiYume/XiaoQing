@@ -1,13 +1,15 @@
 """测试url_parser插件 - URL解析插件"""
 
-import pytest
+import importlib.util
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock
-from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+
+from core.safe_http import SafeHttpError, SafeHttpResponse
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-import importlib.util
 spec = importlib.util.spec_from_file_location("url_parser_main", ROOT / "plugins" / "url_parser" / "main.py")
 url_parser = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(url_parser)
@@ -17,7 +19,7 @@ class TestURLParserPlugin:
     """测试url_parser插件"""
 
     @pytest.fixture
-    def mock_context(self):
+    def mock_context(self, monkeypatch, tmp_path):
         """模拟插件上下文"""
         context = MagicMock()
         context.logger = MagicMock()
@@ -61,6 +63,41 @@ class TestURLParserPlugin:
                 return MockSuccessContextManager()
 
         context.http_session = MockHttpSession()
+        context.data_dir = tmp_path
+
+        # Unit-test adapter: production always uses core.safe_http's pinned
+        # client.  Keep parser tests focused on preview extraction by adapting
+        # the historical response doubles at that module boundary.
+        async def fake_fetch(url, **_kwargs):
+            async with context.http_session.get(url) as response:
+                if response.status != 200:
+                    return None
+                content = await response.content.read(url_parser.MAX_CONTENT_SIZE + 1)
+                if len(content) > url_parser.MAX_CONTENT_SIZE:
+                    raise SafeHttpError("response is too large")
+                return SafeHttpResponse(
+                    url=url,
+                    status=response.status,
+                    body=content,
+                    charset=getattr(response, "charset", None),
+                    headers={},
+                )
+
+        async def fake_validate(url):
+            return None, ("93.184.216.34",)
+
+        async def fake_fetch_bytes(url, **_kwargs):
+            return SafeHttpResponse(
+                url=url,
+                status=200,
+                body=b"fake-image",
+                charset=None,
+                headers={"Content-Type": "image/jpeg"},
+            )
+
+        monkeypatch.setattr(url_parser, "fetch_public_html", fake_fetch)
+        monkeypatch.setattr(url_parser, "validate_public_fetch_target", fake_validate)
+        monkeypatch.setattr(url_parser, "fetch_public_bytes", fake_fetch_bytes)
 
         return context
 
@@ -288,7 +325,7 @@ class TestURLParserPlugin:
         assert "OG Title" in result[0]["data"]["text"]
         assert "OG Description" in result[0]["data"]["text"]
         assert result[1]["type"] == "image"
-        assert result[1]["data"]["file"] == "https://example.com/og-image.jpg"
+        assert result[1]["data"]["file"].startswith("file:")
 
     @pytest.mark.asyncio
     async def test_handle_url_resolves_relative_image_url(self, mock_context, mock_event):
@@ -328,9 +365,31 @@ class TestURLParserPlugin:
         result = await url_parser.handle_url("https://example.com/post/1", mock_event, mock_context)
 
         assert any(
-            seg.get("type") == "image" and seg["data"]["file"] == "https://example.com/static/cover.jpg"
+            seg.get("type") == "image" and seg["data"]["file"].startswith("file:")
             for seg in result
         )
+
+    @pytest.mark.asyncio
+    async def test_handle_url_drops_private_og_image(self, mock_context, mock_event, monkeypatch):
+        html_content = b"""
+        <html><head><title>Safe page</title>
+        <meta property=\"og:image\" content=\"http://127.0.0.1/internal.png\">
+        </head></html>
+        """
+
+        async def fake_fetch(url, **_kwargs):
+            return SafeHttpResponse(url, 200, html_content, "utf-8", {})
+
+        async def reject_private_image(url):
+            if "127.0.0.1" in url:
+                raise url_parser.UnsafeUrlError("non-public image")
+            return None, ("93.184.216.34",)
+
+        monkeypatch.setattr(url_parser, "fetch_public_html", fake_fetch)
+        monkeypatch.setattr(url_parser, "validate_public_fetch_target", reject_private_image)
+
+        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
+        assert result == [{"type": "text", "data": {"text": "🔗 Safe page\n\n链接: https://example.com"}}]
 
     @pytest.mark.asyncio
     async def test_handle_url_with_twitter_tags(self, mock_context, mock_event):

@@ -1,4 +1,4 @@
-import { getToken, setToken, clearToken, verifyToken, createDemoSession } from './api.js';
+import { createDemoSession, exchangeLoginCode, getSession } from './api.js';
 import { init as initRouter, registerRoute, getCurrentPage, onRouteChange } from './router.js';
 
 // Register all page routes (lazy loaded)
@@ -26,27 +26,38 @@ const BACK_TO_TOP_THEME = {
     transfer: 'var(--color-dashboard)',
 };
 
-function extractLoginToken(rawValue) {
+function extractLoginCode(rawValue) {
     const text = String(rawValue || '').trim();
     if (!text) return '';
-
-    const match = text.match(/(?:^|[\s"'`])([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)(?=$|[\s"'`])/);
-    return match ? match[1] : text;
+    try {
+        const url = new URL(text);
+        return url.searchParams.get('code') || '';
+    } catch {
+        const match = text.match(/(?:[?&]code=|^)([A-Za-z0-9_-]{20,})(?:$|[&#\s])/);
+        return match ? match[1] : text;
+    }
 }
 
 async function bootstrap() {
-    const token = getToken();
-    if (token) {
-        const result = await verifyToken(token);
+    const url = new URL(window.location.href);
+    const loginCode = url.searchParams.get('code');
+    if (loginCode) {
+        url.searchParams.delete('code');
+        window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+        const result = await exchangeLoginCode(loginCode);
         if (result.ok) {
             await showApp();
             return;
         }
-        clearToken();
-        showLogin(result.message || '登录已失效，请重新粘贴令牌。');
+        showLogin(result.message || '登录链接已失效，请重新生成。');
         return;
     }
-    showLogin();
+    const result = await getSession();
+    if (result.ok) {
+        await showApp();
+        return;
+    }
+    showLogin(result.message || '');
 }
 
 function showLogin(initialError = '') {
@@ -68,32 +79,31 @@ function showLogin(initialError = '') {
     }
 
     const submit = async () => {
-        const token = extractLoginToken(input.value);
-        if (!token) {
-            error.textContent = '请先粘贴登录令牌';
+        const code = extractLoginCode(input.value);
+        if (!code) {
+            error.textContent = '请先粘贴一次性登录链接或登录码';
             error.style.display = 'block';
             input.focus();
             return;
         }
 
-        if (token !== input.value.trim()) {
-            input.value = token;
+        if (code !== input.value.trim()) {
+            input.value = code;
         }
 
         btn.disabled = true;
         clearBtn.disabled = true;
         btn.textContent = '验证中...';
         error.style.display = 'none';
-        helper.textContent = '正在校验令牌…';
+        helper.textContent = '正在交换一次性登录码…';
 
-        const result = await verifyToken(token);
+        const result = await exchangeLoginCode(code);
         if (result.ok) {
-            setToken(token);
             await showApp();
         } else {
-            error.textContent = result.message || '令牌无效或已过期';
+            error.textContent = result.message || '登录链接无效或已过期';
             error.style.display = 'block';
-            helper.textContent = '请回到聊天中重新生成令牌后再试。';
+            helper.textContent = '请回到聊天中重新生成一次性登录链接后再试。';
         }
         btn.disabled = false;
         clearBtn.disabled = false;
@@ -108,15 +118,14 @@ function showLogin(initialError = '') {
         helper.textContent = '正在创建临时演示空间…';
 
         const result = await createDemoSession();
-        if (result.ok && result.token) {
-            setToken(result.token);
+        if (result.ok) {
             await showApp();
             return;
         }
 
         error.textContent = result.message || '暂时无法进入演示空间';
         error.style.display = 'block';
-        helper.textContent = '你也可以回到聊天里生成自己的登录令牌。';
+        helper.textContent = '你也可以回到聊天里生成自己的一次性登录链接。';
         btn.disabled = false;
         clearBtn.disabled = false;
         demoBtn.disabled = false;
@@ -126,7 +135,7 @@ function showLogin(initialError = '') {
     clearBtn.onclick = () => {
         input.value = '';
         error.style.display = 'none';
-        helper.textContent = '令牌只保存在当前浏览器，可在设置页随时退出。';
+        helper.textContent = '一次性登录码不会保存在浏览器；会话可在设置页随时退出。';
         input.focus();
     };
     demoBtn.onclick = enterDemo;

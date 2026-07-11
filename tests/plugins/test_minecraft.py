@@ -1,16 +1,17 @@
 """测试 Minecraft 服务器通信插件"""
 
-import pytest
 import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock
 import json
+from pathlib import Path
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from core.interfaces import PluginContextProtocol
 from plugins.minecraft import main as mc_main
 from plugins.minecraft.log_monitor import LogEvent, LogEventType
 from plugins.minecraft.rcon import PacketType, RconClient, RconPacket
-from core.interfaces import PluginContextProtocol
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -269,6 +270,15 @@ class TestMinecraftPluginJson:
         assert "mcconnect" in commands
         assert "mcdisconnect" in commands
 
+    def test_all_rcon_commands_are_admin_only(self):
+        plugin_json = ROOT / "plugins" / "minecraft" / "plugin.json"
+        content = json.loads(plugin_json.read_text(encoding="utf-8"))
+
+        assert all(command["admin_only"] is True for command in content["commands"])
+        connect = next(command for command in content["commands"] if command["name"] == "mcconnect")
+        assert "<配置名>" in connect["help"]
+        assert "password" not in connect["help"]
+
     def test_schedule_config(self):
         """测试定时任务配置"""
         plugin_json = ROOT / "plugins" / "minecraft" / "plugin.json"
@@ -433,7 +443,7 @@ async def test_mc_connect_rejects_invalid_log_file_before_rcon_connect(monkeypat
     msg = await mc_main._handle_connect("default bad.log", group_id=None, user_id=10002, context=context)
     text = msg[0]["data"]["text"]
 
-    assert "latest.log" in text
+    assert "不存在" in text
     assert fake_client.connected is False
 
 
@@ -582,3 +592,75 @@ def test_rcon_send_packet_joins_split_command_response():
     response = asyncio.run(client._send_packet(PacketType.COMMAND, "list"))
 
     assert response.payload == first_payload + second_payload
+
+
+def test_rcon_rejects_oversized_packet_before_reading_body():
+    encoded_length = (RconClient.MAX_PACKET_BYTES + 1).to_bytes(4, "little", signed=True)
+    client = RconClient("127.0.0.1", 25575, "pw")
+    client._reader = cast(Any, _FakeRconReader(encoded_length))
+
+    with pytest.raises(ValueError, match="数据包长度"):
+        asyncio.run(client._read_packet(1.0))
+
+
+def test_rcon_rejects_cumulative_response_limit():
+    first_payload = "a" * 4096
+    second_payload = "b" * 512
+    encoded = (
+        RconPacket(request_id=1, packet_type=PacketType.RESPONSE, payload=first_payload).encode()
+        + RconPacket(request_id=1, packet_type=PacketType.RESPONSE, payload=second_payload).encode()
+    )
+    client = RconClient("127.0.0.1", 25575, "pw")
+    client.MAX_RESPONSE_BYTES = 4200
+    client._reader = cast(Any, _FakeRconReader(encoded))
+    client._writer = cast(Any, _FakeRconWriter())
+
+    with pytest.raises(ValueError, match="累计响应"):
+        asyncio.run(client._send_packet(PacketType.COMMAND, "list"))
+
+
+def test_log_monitor_reads_only_bounded_tail(tmp_path):
+    log_path = tmp_path / "server.log"
+    prefix = b"x" * 4096
+    line = b"\n[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
+    log_path.write_bytes(prefix + line)
+    monitor = mc_main.LogMonitor(str(log_path))
+    monitor.MAX_READ_BYTES = 256
+    monitor._initialized = True
+    monitor._last_position = 0
+
+    events = monitor.check_updates()
+
+    assert len(events) == 1
+    assert events[0].message == "bounded"
+    assert monitor._last_position == log_path.stat().st_size
+
+
+@pytest.mark.asyncio
+async def test_connection_manager_atomically_replaces_and_closes_old_client():
+    manager = mc_main.ConnectionManager()
+    old_rcon = _FakeDisconnectRcon()
+    old = mc_main.McConnection(
+        host="old",
+        port=25575,
+        password="p",
+        log_file="",
+        target_type="private",
+        target_id=7,
+        rcon_client=old_rcon,
+    )
+    new = mc_main.McConnection(
+        host="new",
+        port=25575,
+        password="p",
+        log_file="",
+        target_type="private",
+        target_id=7,
+    )
+    manager.add_connection(old)
+
+    replaced = await manager.replace_connection(new)
+
+    assert replaced is old
+    assert old_rcon.disconnected is True
+    assert manager.get_connection(None, 7) is new

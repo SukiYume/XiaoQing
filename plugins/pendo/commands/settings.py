@@ -80,6 +80,8 @@ async def handle_settings(user_id: str, args: str, db: Database) -> str:
         return await _set_diary_remind_time(user_id, value, db)
     elif action == "privacy":
         return await _set_privacy_mode(user_id, value, db)
+    elif action in {"ai_consent", "ai_privacy"}:
+        return await _set_ai_sensitive_data_consent(user_id, value, db)
     else:
         return (
             f"❌ 未知的设置项: {action}\n\n"
@@ -90,7 +92,8 @@ async def handle_settings(user_id: str, args: str, db: Database) -> str:
             "• daily_report - 每日简报时间\n"
             "• daily_briefing - 开关每日简报\n"
             "• diary_remind - 日记提醒时间\n"
-            "• privacy - 隐私模式"
+            "• privacy - 隐私模式\n"
+            "• ai_consent - 是否允许将日记正文发送到配置的 AI 服务"
         )
 
 async def _show_settings(user_id: str, db: Database) -> str:
@@ -256,4 +259,24 @@ async def _set_privacy_mode(user_id: str, value: str, db: Database) -> str:
             "💡 开启后，群聊中的非公开详情会改为私聊发送"
         ),
         is_custom=True
+    )
+
+
+async def _set_ai_sensitive_data_consent(user_id: str, value: str, db: Database) -> str:
+    """Record explicit, revocable consent before diary text may leave Pendo."""
+    return await _update_setting(
+        user_id,
+        "ai_sensitive_data_consent",
+        value,
+        db,
+        validator=parse_toggle_value,
+        formatter=lambda allowed: (
+            "⚙️ AI 日记数据共享设置已更新\n"
+            + (
+                "✅ 已同意：日记正文可发送给当前配置的第三方 AI 服务进行情绪分析。可随时用 `ai_consent off` 撤回。"
+                if allowed
+                else "🔒 已关闭：日记正文不会发送给外部 AI，系统仅使用本地规则分析。"
+            )
+        ),
+        is_custom=True,
     )

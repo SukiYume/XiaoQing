@@ -6,16 +6,19 @@ from core.plugin_base import build_action, segments
 from ..config import PendoConfig
 
 try:
-    auth_module = import_module("plugins.pendo.web.auth")
-    generate_token = auth_module.generate_token
+    # Construct the package-relative canonical name.  This resolves to
+    # ``plugins.pendo`` in production and to the shadow package during reload,
+    # never to a second hard-coded top-level ``pendo`` module.
+    _plugin_package = __package__.rsplit(".", 1)[0]
+    auth_module = import_module(f"{_plugin_package}.web.auth")
+    issue_login_code = auth_module.issue_login_code
     generate_widget_token = auth_module.generate_widget_token
-    # Import the submodule directly so reloads and test stubs do not depend on
-    # the cached `plugins.pendo.web.server` package attribute.
-    web_server = import_module("plugins.pendo.web.server")
+    web_server = import_module(f"{_plugin_package}.web.server")
+
     WEB_AVAILABLE = True
 except ImportError:
     WEB_AVAILABLE = False
-    generate_token = None
+    issue_login_code = None
     generate_widget_token = None
     web_server = None
 from ..utils.error_handlers import handle_command_errors
@@ -62,7 +65,11 @@ class WebHandler:
             return self._help()
 
     async def _generate_token(self, user_id: str, context=None):
-        token = generate_token(user_id, expires_hours=PendoConfig.WEB_TOKEN_EXPIRE_HOURS)
+        code = issue_login_code(
+            user_id,
+            expires_seconds=PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
+        )
+        login_url = f"{web_server.get_url()}/?code={code}"
         # url = web_server.get_url()
         running = web_server.is_running()
         status_text = "运行中" if running else "未启动"
@@ -71,11 +78,11 @@ class WebHandler:
             user_id,
             "\n".join(
                 [
-                    "🔑 Pendo Web 登录 Token",
-                    token,
+                    "🔑 Pendo Web 一次性登录链接",
+                    login_url,
                     "",
-                    f"⏳ 有效期: {PendoConfig.WEB_TOKEN_EXPIRE_HOURS} 小时",
-                    "💡 复制上面的 token，或直接复制这整条消息到网页登录框，都可以登录",
+                    f"⏳ 有效期: {PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS // 60} 分钟，仅可使用一次",
+                    "💡 打开链接会自动建立浏览器会话；链接失效后请重新生成。",
                 ]
             ),
         )
@@ -83,13 +90,10 @@ class WebHandler:
         return self._build_token_result(
             token_sent=token_sent,
             header="🌐 Pendo Web",
-            success_line="✅ 已生成登录令牌",
-            token_title="🔑 登录 Token:",
-            token=token,
-            expiry_hours=PendoConfig.WEB_TOKEN_EXPIRE_HOURS,
-            private_hint="🔒 Token 已单独私聊发送",
-            inline_hint="💡 复制 token，或直接复制这整条消息到网页登录框，都可以登录",
-            private_copy_hint="💡 复制 token，或直接复制整条私聊消息到网页登录框，都可以登录",
+            success_line="✅ 已生成一次性登录链接",
+            expiry_text=f"{PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS // 60} 分钟，仅可使用一次",
+            private_hint="🔒 一次性登录链接已单独私聊发送",
+            private_copy_hint="💡 请在私聊中打开链接；链接不会在群聊或命令回复中显示。",
             extra_lines=[
                 f"🌍 本地地址: {web_server.get_url()}",
                 f"⚙️ 服务状态: {status_text}",
@@ -121,11 +125,8 @@ class WebHandler:
             token_sent=token_sent,
             header="🧩 Pendo Web Widget Token",
             success_line="✅ 已生成只读小组件令牌",
-            token_title="🔑 Widget Token:",
-            token=token,
-            expiry_hours=PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS,
+            expiry_text=f"{PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS} 小时",
             private_hint="🔒 Widget Token 已单独私聊发送",
-            inline_hint="💡 建议只放进 Scriptable 脚本，不要当网页登录 token 使用",
             private_copy_hint="💡 请从私聊复制 token 到 Scriptable 脚本中使用",
             extra_lines=[
                 "用于 Scriptable 等只读小组件访问。",
@@ -145,7 +146,7 @@ class WebHandler:
                     "⚡ 服务已在运行\n\n"
                     f"🌍 地址: {url}\n"
                     f"🔌 端口: {PendoConfig.WEB_PORT}\n"
-                    "🔑 发送 /pendo web token 获取登录令牌"
+                    "🔑 发送 /pendo web token 获取一次性登录链接"
                 ),
             }
         started = web_server.start(self.db)
@@ -157,7 +158,7 @@ class WebHandler:
                     "✅ 服务已启动\n\n"
                     f"🌍 地址: {url}\n"
                     f"🔌 端口: {PendoConfig.WEB_PORT}\n"
-                    "🔑 下一步: 发送 /pendo web token 获取登录令牌"
+                    "🔑 下一步: 发送 /pendo web token 获取一次性登录链接"
                 ),
             }
         detail = None
@@ -210,7 +211,7 @@ class WebHandler:
                 f"📡 服务状态: {status}\n\n"
                 f"🌍 地址: {web_server.get_url()}\n"
                 f"🔌 端口: {PendoConfig.WEB_PORT}\n"
-                "🔑 登录令牌: /pendo web token\n"
+                "🔑 登录链接: /pendo web token\n"
                 "🧩 Widget Token: /pendo web widget-token"
             ),
         }
@@ -222,7 +223,7 @@ class WebHandler:
                 "🌐 Pendo Web\n"
                 "管理网页入口、登录令牌和服务状态。\n\n"
                 "可用命令:\n"
-                "• /pendo web token  - 生成登录令牌\n"
+                "• /pendo web token  - 生成一次性登录链接\n"
                 "• /pendo web widget-token - 生成 Scriptable 小组件令牌\n"
                 "• /pendo web start  - 启动 Web 服务\n"
                 "• /pendo web stop   - 停止 Web 服务\n"
@@ -248,11 +249,8 @@ class WebHandler:
         token_sent: bool,
         header: str,
         success_line: str,
-        token_title: str,
-        token: str,
-        expiry_hours: int,
+        expiry_text: str,
         private_hint: str,
-        inline_hint: str,
         private_copy_hint: str,
         extra_lines: list[str] | None = None,
     ) -> dict[str, str]:
@@ -261,11 +259,19 @@ class WebHandler:
             success_line,
             "",
             *(extra_lines or []),
-            f"⏳ 有效期: {expiry_hours} 小时",
+            f"⏳ 有效期: {expiry_text}",
             "",
         ]
         if token_sent:
             lines.extend([private_hint, private_copy_hint])
         else:
-            lines.extend([token_title, token, "", inline_hint])
-        return {"status": "success", "message": "\n".join(lines)}
+            lines.extend(
+                [
+                    "❌ 无法通过私聊安全发送凭据。",
+                    "请先允许 Bot 向你发送私聊消息，然后重新执行此命令。",
+                ]
+            )
+        return {
+            "status": "success" if token_sent else "error",
+            "message": "\n".join(lines),
+        }

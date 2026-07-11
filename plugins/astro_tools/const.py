@@ -45,8 +45,8 @@ async def handle_const(args: str, context) -> str:
             'au': ('天文单位', const.au),
             'pc': ('秒差距', const.pc),
             'parsec': ('秒差距', const.pc),
-            'ly': ('光年', const.pc.to(u.lightyear)), 
-            'light_year': ('光年', const.pc.to(u.lightyear)),
+            'ly': ('光年', 1 * u.lightyear),
+            'light_year': ('光年', 1 * u.lightyear),
             
             # 宇宙学
             'h0': ('哈勃常数 (近似值)', 70.0 * (u.km / u.s / u.Mpc)),

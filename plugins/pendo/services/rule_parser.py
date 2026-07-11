@@ -10,6 +10,7 @@ from typing import Any
 
 from ..models.item import ItemType
 from ..utils.formatters import extract_tags
+from ..utils.time_utils import TimezoneHelper
 
 
 class RuleParser:
@@ -46,7 +47,7 @@ class RuleParser:
             "每个月": "MONTHLY",
         }
 
-    def parse(self, text: str, user_id: str) -> dict[str, Any]:
+    def parse(self, text: str, user_id: str, *, now: datetime | None = None) -> dict[str, Any]:
         """解析自然语言，返回结构化数据"""
         result: dict[str, Any] = {
             "type": self._detect_type(text),
@@ -59,7 +60,10 @@ class RuleParser:
         }
 
         # 提取时间信息
-        time_info = self._extract_time(text)
+        current_time = now or TimezoneHelper.now()
+        if current_time.tzinfo is None:
+            raise ValueError("rule-parser now must be timezone-aware")
+        time_info = self._extract_time(text, current_time)
         if time_info:
             if result["type"] == ItemType.EVENT:
                 result["start_time"] = time_info.get("start_time")
@@ -84,7 +88,7 @@ class RuleParser:
             result["priority"] = priority
 
         # 提取提醒设置
-        remind_times = self._extract_reminders(text, time_info)
+        remind_times = self._extract_reminders(text, time_info, current_time)
         if remind_times:
             result["remind_times"] = remind_times
 
@@ -134,9 +138,8 @@ class RuleParser:
 
         return ItemType.NOTE
 
-    def _extract_time(self, text: str) -> dict[str, str] | None:
+    def _extract_time(self, text: str, now: datetime) -> dict[str, str] | None:
         """提取时间信息"""
-        now = datetime.now()
         result = {}
 
         # 相对时间
@@ -170,7 +173,7 @@ class RuleParser:
         date_match = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", text)
         if date_match:
             year, month, day = map(int, date_match.groups())
-            target_date = datetime(year, month, day)
+            target_date = datetime(year, month, day, tzinfo=now.tzinfo)
             result["start_time"] = target_date.isoformat()
 
         # 截止时间
@@ -241,7 +244,9 @@ class RuleParser:
                 return priority
         return None
 
-    def _extract_reminders(self, text: str, time_info: dict[str, str] | None) -> list[str]:
+    def _extract_reminders(
+        self, text: str, time_info: dict[str, str] | None, now: datetime
+    ) -> list[str]:
         """提取提醒时间"""
         if not time_info or "start_time" not in time_info:
             return []
@@ -268,7 +273,7 @@ class RuleParser:
                 else:
                     continue
 
-                if remind_time > datetime.now():
+                if remind_time > now:
                     reminders.append(remind_time.isoformat())
 
         return reminders

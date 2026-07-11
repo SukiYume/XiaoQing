@@ -75,13 +75,13 @@ async def cmd_writing(
     parsed = parse(args)
 
     if not parsed:
-        sections = await _run_storage(storage.list_writing_sections)
+        sections = await _run_storage(storage.list_writing_sections, user_id)
         if not sections:
             return segments("💡 写作灵感箱暂无内容\n\n提示: 使用 '/paper writing <章节> <想法>' 添加灵感")
 
         lines = ["💡 写作灵感箱:\n"]
         for section in sections:
-            ideas = await _run_storage(storage.get_writing_ideas, section)
+            ideas = await _run_storage(storage.get_writing_ideas, section, user_id)
             lines.append(f"  • {section} ({len(ideas)} 条)")
 
         return segments("\n".join(lines))
@@ -97,13 +97,13 @@ async def cmd_writing(
         except ValueError:
             return segments("❌ 序号必须是数字")
 
-        if await _run_storage(storage.delete_writing_idea, section, index):
+        if await _run_storage(storage.delete_writing_idea, section, index, user_id):
             return segments(f"✅ 已删除「{section}」中的灵感")
         return segments(f"❌ 删除失败，请检查章节和序号")
 
     if len(parsed) == 1:
         section = parsed.first
-        ideas = await _run_storage(storage.get_writing_ideas, section)
+        ideas = await _run_storage(storage.get_writing_ideas, section, user_id)
         if not ideas:
             return segments(f"💡 「{section}」暂无灵感")
 
@@ -124,18 +124,19 @@ async def cmd_writing(
         return segments("❌ 灵感内容不能为空")
 
     if await _run_storage(storage.add_writing_idea, section, content, user_id):
-        ideas = await _run_storage(storage.get_writing_ideas, section)
+        ideas = await _run_storage(storage.get_writing_ideas, section, user_id)
         return segments(f"💡 已添加到「{section}」灵感箱 (#{len(ideas)})")
     return segments("❌ 添加灵感失败")
 
 async def cmd_topics(
     storage: PaperStorage,
-    args: str
+    args: str,
+    user_id: int,
 ) -> list[dict[str, Any]]:
     parsed = parse(args)
 
     if not parsed:
-        topics = await _run_storage(storage.get_topics)
+        topics = await _run_storage(storage.get_topics, user_id)
         if not topics:
             return segments("🏷️ 暂无研究兴趣关键词\n\n提示: 使用 '/paper topics add <关键词>' 添加")
 
@@ -151,7 +152,7 @@ async def cmd_topics(
         if len(parsed) < 2:
             return segments("❌ 用法: /paper topics add <关键词>")
         keyword = parsed.rest(1)
-        if await _run_storage(storage.add_topic, keyword):
+        if await _run_storage(storage.add_topic, keyword, user_id):
             return segments(f"✅ 已添加关键词: {keyword}")
         return segments(f"⚠️ 关键词 '{keyword}' 已存在")
 
@@ -159,12 +160,12 @@ async def cmd_topics(
         if len(parsed) < 2:
             return segments("❌ 用法: /paper topics remove <关键词>")
         keyword = parsed.rest(1)
-        if await _run_storage(storage.remove_topic, keyword):
+        if await _run_storage(storage.remove_topic, keyword, user_id):
             return segments(f"✅ 已删除关键词: {keyword}")
         return segments(f"❌ 关键词 '{keyword}' 不存在")
 
     if first == "clear" or first == "清空":
-        if await _run_storage(storage.clear_topics):
+        if await _run_storage(storage.clear_topics, user_id):
             return segments("✅ 已清空所有关键词")
         return segments("❌ 清空失败")
 

@@ -3,6 +3,9 @@ import os
 import tempfile
 from datetime import datetime, timedelta
 
+import pytest
+
+from core.interfaces import PluginCapabilities, PluginPrincipal
 from plugins.qingpet import main as qingpet_main
 from plugins.qingpet.commands.advanced_commands import handle_explore, handle_view_pet
 from plugins.qingpet.commands.basic_commands import handle_feed, handle_status
@@ -11,8 +14,7 @@ from plugins.qingpet.services.item_service import ItemService
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.social_service import SocialService
 from plugins.qingpet.services.user_service import UserService
-from plugins.qingpet.utils.constants import PetStage
-from plugins.qingpet.utils.constants import DAILY_LIMITS
+from plugins.qingpet.utils.constants import DAILY_LIMITS, PetStage
 
 
 def _segments_text(payload) -> str:
@@ -40,17 +42,35 @@ def _cleanup_temp_db(db: Database, db_path: str) -> None:
         os.unlink(db_path)
 
 
-class _SecretsOnlyContext:
-    def __init__(self, admin_user_ids):
-        self.secrets = {"admin_user_ids": admin_user_ids}
+class _PrincipalContext:
+    def __init__(
+        self,
+        principal: PluginPrincipal,
+        capabilities: PluginCapabilities | None = None,
+    ):
+        self.principal = principal
+        self.capabilities = capabilities or PluginCapabilities()
 
 
-def test_admin_command_recognizes_admin_from_secrets_json():
+@pytest.mark.parametrize(
+    ("role", "is_bot_admin"),
+    [("owner", False), ("admin", False), ("member", True)],
+)
+def test_admin_command_uses_core_principal_for_current_group(role, is_bot_admin):
     temp_db, db_path = _make_temp_db()
     original_db = qingpet_main._db_instance
     qingpet_main._db_instance = temp_db
     try:
-        context = _SecretsOnlyContext([123456789])
+        context = _PrincipalContext(
+            PluginPrincipal(
+                kind="user",
+                user_id=123456789,
+                group_id=10001,
+                is_bot_admin=is_bot_admin,
+                group_role=role,
+            ),
+            PluginCapabilities(is_bot_admin=is_bot_admin),
+        )
         ok, msg = asyncio.run(
             qingpet_main._handle_admin_command("开启", "123456789", 10001, context)
         )
@@ -60,6 +80,42 @@ def test_admin_command_recognizes_admin_from_secrets_json():
 
     assert ok is True
     assert "已在群 10001 中启用" in msg
+
+
+@pytest.mark.parametrize(
+    "principal",
+    [
+        PluginPrincipal(kind="user", user_id=999, group_id=10001, group_role="owner"),
+        PluginPrincipal(kind="user", user_id=123456789, group_id=10002, group_role="admin"),
+        PluginPrincipal(kind="user", user_id=123456789, group_id=10001, group_role="member"),
+        PluginPrincipal(
+            kind="user",
+            user_id=123456789,
+            group_id=10001,
+            is_bot_admin=True,
+            group_role="member",
+        ),
+        PluginPrincipal(kind="lifecycle"),
+    ],
+)
+def test_admin_command_rejects_mismatched_or_unprivileged_principal(principal):
+    temp_db, db_path = _make_temp_db()
+    original_db = qingpet_main._db_instance
+    qingpet_main._db_instance = temp_db
+    try:
+        ok, _msg = asyncio.run(
+            qingpet_main._handle_admin_command(
+                "开启",
+                "123456789",
+                10001,
+                _PrincipalContext(principal),
+            )
+        )
+    finally:
+        qingpet_main._db_instance = original_db
+        _cleanup_temp_db(temp_db, db_path)
+
+    assert ok is False
 
 
 def test_private_backpack_uses_real_group_scope_and_private_rate_bucket():

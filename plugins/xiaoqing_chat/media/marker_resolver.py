@@ -291,8 +291,14 @@ def _merge_candidate_entries(*entry_groups: Sequence[ImageLibraryEntry]) -> list
     return merged
 
 
-async def _resolve_emoji_marker(parsed: ParsedMarker, *, context, runtime) -> ResolvedMarker | None:
-    entries = await load_emoji_library(context, runtime)
+async def _resolve_emoji_marker(
+    parsed: ParsedMarker,
+    *,
+    context,
+    runtime,
+    chat_id: str,
+) -> ResolvedMarker | None:
+    entries = await load_emoji_library(context, runtime, chat_id=chat_id)
     entry = find_candidate_by_hint(
         entries,
         parsed.hint,
@@ -368,9 +374,15 @@ async def resolve_marker(
     context,
     runtime,
     history: Sequence[Any] | None = None,
+    chat_id: str = "",
 ) -> ResolvedMarker | None:
     if parsed.kind == "emoji":
-        return await _resolve_emoji_marker(parsed, context=context, runtime=runtime)
+        return await _resolve_emoji_marker(
+            parsed,
+            context=context,
+            runtime=runtime,
+            chat_id=chat_id,
+        )
     if parsed.kind == "qq_face":
         return await _resolve_qq_face_marker(parsed, context=context, runtime=runtime)
     if parsed.kind == "image":

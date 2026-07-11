@@ -1,4 +1,5 @@
 """API route aggregation for Pendo Web UI."""
+
 from fastapi import APIRouter
 
 from .auth_routes import router as auth_router

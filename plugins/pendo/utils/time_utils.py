@@ -57,9 +57,9 @@ class TimezoneHelper:
 
     @staticmethod
     def format_for_storage(dt: datetime) -> str:
-        """格式化datetime用于存储"""
+        """Format an explicitly timezone-aware datetime as UTC for storage."""
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=TimezoneHelper.DEFAULT_TZ)
+            raise ValueError("naive datetime is not accepted for storage; supply an explicit timezone")
         return dt.astimezone(timezone.utc).isoformat()
 
 
@@ -276,7 +276,7 @@ def parse_delay_time(
     if not delay_str:
         return None
 
-    now = now or datetime.now()
+    now = now or TimezoneHelper.now()
     text = str(delay_str).strip().lower()
 
     # 相对时间: 1h, 30m, 2d

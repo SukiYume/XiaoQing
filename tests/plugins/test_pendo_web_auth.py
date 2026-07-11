@@ -10,8 +10,15 @@ try:
     from plugins.pendo.web import auth as auth_module
     from plugins.pendo.web.auth import (
         AuthError,
+        consume_login_code,
+        create_web_session,
         generate_token,
         generate_widget_token,
+        get_web_session,
+        issue_login_code,
+        list_web_sessions,
+        revoke_web_session,
+        revoke_web_session_device,
         verify_token,
     )
 except ModuleNotFoundError:
@@ -124,3 +131,31 @@ class TestTokenGeneration:
             assert payload["scope"] == "widget:read"
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+class TestBrowserSessionAuth:
+    def test_login_code_is_owner_bound_single_use_and_short_lived(self):
+        code = issue_login_code("owner-a", expires_seconds=60)
+
+        assert consume_login_code(code) == "owner-a"
+        with pytest.raises(AuthError, match="already used"):
+            consume_login_code(code)
+
+    def test_web_session_is_revocable(self):
+        session = create_web_session("owner-b", expires_seconds=60)
+
+        assert get_web_session(session.session_id).owner_id == "owner-b"
+        revoke_web_session(session.session_id)
+        with pytest.raises(AuthError, match="invalid or expired"):
+            get_web_session(session.session_id)
+
+    def test_owner_can_list_and_revoke_a_session_by_non_secret_device_id(self):
+        first = create_web_session("owner-c", expires_seconds=60)
+        second = create_web_session("owner-c", expires_seconds=60)
+
+        assert [session.device_id for session in list_web_sessions("owner-c")] == [
+            second.device_id,
+            first.device_id,
+        ]
+        assert revoke_web_session_device("owner-c", first.device_id) is True
+        assert [session.device_id for session in list_web_sessions("owner-c")] == [second.device_id]

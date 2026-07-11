@@ -204,6 +204,12 @@ async def handle_session(
     """
     return await _handle_session(text, event, context, session)
 
+
+async def close_session(event: OneBotEvent, context: Context, session: Session) -> None:
+    from .session_handlers import close_session as close_qingssh_session
+
+    await close_qingssh_session(context, session)
+
 # ============================================================
 # 插件生命周期管理
 # ============================================================
@@ -216,7 +222,10 @@ async def cleanup(context: Context) -> None:
     """
     try:
         manager = await get_manager(context)
-        manager.close_all()
+        from .session_handlers import shutdown_tasks
+
+        await shutdown_tasks()
+        await manager.shutdown()
         logger.info("SSH plugin cleaned up successfully")
     except Exception as e:
         logger.error("Error during SSH plugin cleanup: %s", e)

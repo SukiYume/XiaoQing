@@ -60,8 +60,8 @@ async def chat_completions_with_fallback_paths(
                         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                         return content, "main_path"
                     else:
-                        error_text = await resp.text()
-                        logger.warning("LLM API Error (Attempt %s): %s - %s", attempt+1, resp.status, error_text)
+                        await resp.read()
+                        logger.warning("LLM API Error (Attempt %s): status=%s", attempt + 1, resp.status)
             except Exception as e:
                 logger.warning("LLM Request Error (Attempt %s): %s", attempt+1, e)
 

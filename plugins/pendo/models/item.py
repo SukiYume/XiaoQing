@@ -87,6 +87,7 @@ class Item:
     ai_meta: dict[str, Any] = field(default_factory=dict)  # AI生成的摘要、关键词等
     deleted: bool = False  # 软删除标记
     deleted_at: str | None = None  # 软删除时间戳
+    version: int = 0  # optimistic-concurrency revision
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""

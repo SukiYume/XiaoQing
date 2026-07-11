@@ -66,6 +66,7 @@ async def check_reminders(context) -> list[dict[str, Any]]:
         message = msg.get("message")
         item_id = msg.get("item_id")
         remind_time = msg.get("remind_time")
+        claim_token = msg.get("claim_token")
         if not user_id:
             continue
         action = _build_private_action(user_id, message)
@@ -73,14 +74,23 @@ async def check_reminders(context) -> list[dict[str, Any]]:
             continue
         try:
             if hasattr(context, "send_action"):
-                await context.send_action(action)
-                if item_id and remind_time:
-                    db.log_reminder(item_id, remind_time, sent=True)
+                sent = await context.send_action(action)
+                if sent is True and item_id and remind_time:
+                    if claim_token:
+                        db.complete_reminder_claim(item_id, remind_time, claim_token)
+                    else:
+                        db.log_reminder(item_id, remind_time, sent=True)
+                else:
+                    logger.warning("提醒未被 OneBot 确认，保留待重试状态 item=%s", item_id)
+                    if item_id and remind_time and claim_token:
+                        db.release_reminder_claim(item_id, remind_time, claim_token)
             else:
                 messages.append(action)
         except Exception as e:
             # 发送失败不记录，下个周期会重试
             logger.warning("发送提醒失败 item=%s: %s", item_id, e)
+            if item_id and remind_time and claim_token:
+                db.release_reminder_claim(item_id, remind_time, claim_token)
 
     return messages
 
@@ -133,12 +143,13 @@ async def send_daily_briefings(context, db: Database) -> list[dict[str, Any]]:
                 action = _build_private_action(user_id, briefing_msg)
                 if action is None:
                     continue
-                if hasattr(context, "send_action"):
-                    await context.send_action(action)
-                else:
-                    messages.append(action)
+                if not await _send_private_or_collect(
+                    context, messages, user_id, briefing_msg
+                ):
+                    logger.warning("Daily briefing was not delivery-confirmed for user %s", user_id)
+                    continue
 
-                # 更新最后发送日期
+                # 仅在 OneBot 明确确认后更新最后发送日期
                 await run_sync(
                     save_user_setting, user_id, "last_daily_briefing_date", current_date, db
                 )
@@ -201,10 +212,14 @@ async def check_diary_reminders(context, db: Database) -> list[dict[str, Any]]:
                 )
                 if action is None:
                     continue
-                if hasattr(context, "send_action"):
-                    await context.send_action(action)
-                else:
-                    messages.append(action)
+                if not await _send_private_or_collect(
+                    context,
+                    messages,
+                    user_id,
+                    "📔 今天还没有写日记哦，记录一下美好的今天吧？\n发送 /pendo diary 开始",
+                ):
+                    logger.warning("Diary reminder was not delivery-confirmed for user %s", user_id)
+                    continue
 
                 await run_sync(
                     save_user_setting, user_id, "last_diary_remind_date", current_date, db
@@ -217,6 +232,17 @@ async def check_diary_reminders(context, db: Database) -> list[dict[str, Any]]:
         logger.exception("检查日记提醒时出错: %s", e)
 
     return messages
+
+
+async def prune_operation_logs(context, db: Database) -> list[dict[str, Any]]:
+    """Run daily privacy retention for audit/undo records."""
+    result = await run_sync(db.prune_operation_logs)
+    logger.info(
+        "Pendo operation-log retention finished: deleted=%s redacted=%s",
+        result["deleted"],
+        result["redacted"],
+    )
+    return []
 
 
 async def send_weekly_finance_summaries(context, db: Database) -> list[dict[str, Any]]:
@@ -385,10 +411,11 @@ async def _send_private_or_collect(
     if action is None:
         return False
     if hasattr(context, "send_action"):
-        await context.send_action(action)
-    else:
-        messages.append(action)
-    return True
+        return (await context.send_action(action)) is True
+    messages.append(action)
+    # Returning an action is not a delivery acknowledgement.  The caller must
+    # not persist a sent marker until a real sender confirms it.
+    return False
 
 
 def _is_time_reached(current_time: datetime, target_time_str: str) -> bool:

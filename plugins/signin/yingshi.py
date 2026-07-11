@@ -45,7 +45,8 @@ def _build_extra_data(sid: str) -> dict:
 
 async def _get_checkin_id(session, app_id, kdt_id, access_token, headers):
     url = f"{BASE_URL}/wscump/checkin/check-in-info.json"
-    payload_body = {"app_id": app_id, "kdt_id": kdt_id, "access_token": access_token}
+    payload_body = {"app_id": app_id, "kdt_id": kdt_id}
+    headers = {**headers, "Authorization": f"Bearer {access_token}"}
     async with session.get(url, params=payload_body, headers=headers, timeout=20) as resp:
         resp.raise_for_status()
         payload = await resp.json()
@@ -69,8 +70,8 @@ async def _do_checkin(session, checkin_id, app_id, kdt_id, access_token, headers
         "checkinId": checkin_id,
         "app_id": app_id,
         "kdt_id": kdt_id,
-        "access_token": access_token,
     }
+    headers = {**headers, "Authorization": f"Bearer {access_token}"}
     async with session.get(url, params=payload_body, headers=headers, timeout=20) as resp:
         resp.raise_for_status()
         payload = await resp.json()
@@ -123,5 +124,6 @@ async def yingshi_sign(context) -> list[dict]:
         prefix = "✅" if ok else "❌"
         return segments(f"{prefix} 影视签到\n{msg}")
     except Exception as exc:
-        logger.exception("Yingshi sign failed: %s", exc)
-        return segments(f"❌ 影视签到异常: {exc}")
+        error_code = type(exc).__name__
+        logger.error("Yingshi sign failed: code=%s", error_code, exc_info=True)
+        return segments(f"❌ 影视签到失败（错误码: {error_code}）")

@@ -5,10 +5,13 @@ jupyter 插件单元测试
 本测试主要测试模块结构和可导入性。
 """
 import asyncio
-import pytest
+import base64
+import struct
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-import sys
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -279,6 +282,109 @@ class TestJupyterCodeReviewFixes:
 
         assert result.success is True
         assert result.stdout == "kept"
+
+    @pytest.mark.asyncio
+    async def test_execute_interrupts_when_text_output_exceeds_memory_limit(self, tmp_path):
+        from plugins.jupyter.jupyter_config import MAX_OUTPUT_BYTES
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        manager = JupyterKernelManager(tmp_path / "jupyter")
+
+        class _FakeKernelManager:
+            def __init__(self):
+                self.interrupted = False
+
+            def is_alive(self):
+                return True
+
+            def interrupt_kernel(self):
+                self.interrupted = True
+
+        class _FakeKernelClient:
+            def __init__(self):
+                self.messages = [
+                    {
+                        "msg_type": "stream",
+                        "content": {"name": "stdout", "text": "x" * (MAX_OUTPUT_BYTES + 1)},
+                        "parent_header": {"msg_id": "msg-1"},
+                    },
+                    {
+                        "msg_type": "status",
+                        "content": {"execution_state": "idle"},
+                        "parent_header": {"msg_id": "msg-1"},
+                    },
+                ]
+
+            def execute(self, _code):
+                return "msg-1"
+
+            def get_iopub_msg(self, timeout):
+                return self.messages.pop(0)
+
+        fake_km = _FakeKernelManager()
+        manager._km = fake_km
+        manager._kc = _FakeKernelClient()
+
+        result = await manager.execute("print('large')", timeout=1)
+
+        assert result.success is False
+        assert len(result.stdout.encode("utf-8")) <= MAX_OUTPUT_BYTES
+        assert "安全上限" in result.error
+        assert fake_km.interrupted is True
+
+    def test_image_decode_rejects_size_and_pixel_bombs(self, tmp_path):
+        from plugins.jupyter.jupyter_config import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        manager = JupyterKernelManager(tmp_path / "jupyter")
+        oversized = "A" * ((((MAX_IMAGE_BYTES + 2) // 3) * 4) + 4)
+        assert manager._save_image(oversized, 0, manager.figures_dir / "oversized") is None
+
+        width = MAX_IMAGE_PIXELS + 1
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + struct.pack(">II", width, 1)
+        encoded = base64.b64encode(png_header).decode("ascii")
+        assert manager._save_image(encoded, 0, manager.figures_dir / "pixel-bomb") is None
+
+    def test_each_execution_uses_a_distinct_artifact_directory(self, tmp_path):
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        manager = JupyterKernelManager(tmp_path / "jupyter")
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + struct.pack(">II", 1, 1)
+        encoded = base64.b64encode(png_header).decode("ascii")
+
+        first = manager._save_image(encoded, 0, manager.figures_dir / "execution-a")
+        second = manager._save_image(encoded, 0, manager.figures_dir / "execution-b")
+
+        assert first is not None and second is not None
+        assert first != second
+        assert first.parent.name == "execution-a"
+        assert second.parent.name == "execution-b"
+
+    @pytest.mark.asyncio
+    async def test_manual_kernel_start_can_register_idle_monitor(self, tmp_path):
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        manager = JupyterKernelManager(tmp_path / "jupyter")
+        manager._km = SimpleNamespace(is_alive=lambda: True)
+        manager.ensure_idle_monitor()
+
+        assert manager._shutdown_task is not None
+        manager._shutdown_task.cancel()
+        await asyncio.gather(manager._shutdown_task, return_exceptions=True)
+
+    def test_main_reads_lazy_dependency_state_from_module(self, monkeypatch):
+        from plugins.jupyter import main as jupyter_main
+
+        def make_available():
+            jupyter_main.jupyter_manager.JUPYTER_AVAILABLE = True
+            jupyter_main.jupyter_manager.IMPORT_ERROR = None
+
+        monkeypatch.setattr(jupyter_main.jupyter_manager, "JUPYTER_AVAILABLE", False)
+        monkeypatch.setattr(jupyter_main.jupyter_manager, "lazy_import_jupyter", make_available)
+
+        jupyter_main.init()
+
+        assert jupyter_main.jupyter_manager.JUPYTER_AVAILABLE is True
 
 
 if __name__ == "__main__":

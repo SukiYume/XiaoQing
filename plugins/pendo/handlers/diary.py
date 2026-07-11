@@ -15,7 +15,7 @@ from ..models.constants import ItemFields
 from ..models.item import DiaryItem, ItemType
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
-from ..utils.formatters import ItemFormatter, TAG_TOKEN_RE
+from ..utils.formatters import TAG_TOKEN_RE, ItemFormatter
 from ..utils.session_utils import safe_create_reply_scoped_session, safe_end_session
 from ..utils.time_utils import now_in_timezone, parse_date_optional, parse_diary_range
 from ..utils.validators import normalize_diary_fields, normalize_diary_mood

@@ -172,11 +172,11 @@ class TestAdsPaperAsyncStorage:
             return func(*args, **kwargs)
 
         class Storage:
-            def get_topics(self):
+            def get_topics(self, user_id):
                 return []
 
         monkeypatch.setattr(note_commands.asyncio, "to_thread", fake_to_thread)
-        asyncio.run(note_commands.cmd_topics(cast(Any, Storage()), ""))
+        asyncio.run(note_commands.cmd_topics(cast(Any, Storage()), "", 1))
 
         assert "get_topics" in calls
 
@@ -224,11 +224,11 @@ class TestAdsPaperAsyncStorage:
         data_dir = tmp_path / "ads_paper"
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / "research_topics.json").write_text(
-            json.dumps({"keywords": ["LLM", "agents"]}),
+            json.dumps({"keywords": [{"value": "LLM", "user": 1}, {"value": "agents", "user": 1}]}),
             encoding="utf-8",
         )
 
-        result = asyncio.run(ai_commands.cmd_daily(cast(Any, Client()), MockContext(data_dir)))
+        result = asyncio.run(ai_commands.cmd_daily(cast(Any, Client()), MockContext(data_dir), 1))
 
         assert "get_topics" in calls
         assert "未找到" in str(result)
@@ -241,15 +241,15 @@ class TestPaperStorageBehavior:
         storage = PaperStorage(tmp_path)
 
         assert storage.add_paper_note("paper-1", "first note", 10001) is True
-        assert storage.get_paper_notes("paper-1")[0]["content"] == "first note"
+        assert storage.get_paper_notes("paper-1", 10001)[0]["content"] == "first note"
 
-        assert storage.add_topic("FRB") is True
-        assert storage.get_topics() == ["frb"]
-        assert storage.remove_topic("FRB") is True
-        assert storage.get_topics() == []
+        assert storage.add_topic("FRB", 10001) is True
+        assert storage.get_topics(10001) == ["frb"]
+        assert storage.remove_topic("FRB", 10001) is True
+        assert storage.get_topics(10001) == []
 
         assert storage.add_deadline("submit", "2026-05-01", 10001) is True
-        deadlines = storage.get_deadlines()
+        deadlines = storage.get_deadlines(10001)
         assert len(deadlines) == 1
         assert deadlines[0]["name"] == "submit"
 
@@ -275,6 +275,35 @@ class TestPaperStorageBehavior:
         remaining = storage.get_deadlines(10001)
         assert [deadline["name"] for deadline in remaining] == ["later"]
         assert [deadline["name"] for deadline in storage.get_deadlines(10002)] == ["other-user"]
+
+    def test_storage_instances_share_lock_and_do_not_lose_updates(self, tmp_path):
+        from concurrent.futures import ThreadPoolExecutor
+        from plugins.ads_paper.storage import PaperStorage
+
+        def add(index):
+            return PaperStorage(tmp_path).add_paper_note("paper", f"note-{index}", 1)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            assert all(pool.map(add, range(40)))
+
+        notes = PaperStorage(tmp_path).get_paper_notes("paper", 1)
+        assert len(notes) == 40
+
+    def test_writing_topics_and_references_are_owner_scoped(self, tmp_path):
+        from plugins.ads_paper.storage import PaperStorage
+
+        storage = PaperStorage(tmp_path)
+        storage.add_writing_idea("intro", "user-one", 1)
+        storage.add_writing_idea("intro", "user-two", 2)
+        storage.add_topic("FRB", 1)
+        storage.add_topic("AGN", 2)
+        storage.add_reference(1, "bib-1", "@article{bib-1, title={One}}")
+        storage.add_reference(2, "bib-2", "@article{bib-2, title={Two}}")
+
+        assert [item["content"] for item in storage.get_writing_ideas("intro", 1)] == ["user-one"]
+        assert storage.get_topics(1) == ["frb"]
+        assert "bib-1" in storage.get_references(1)
+        assert "bib-2" not in storage.get_references(1)
 
 
 @pytest.mark.asyncio

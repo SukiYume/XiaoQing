@@ -8,8 +8,8 @@
 - 统一格式化
 """
 
-import logging
 import copy
+import logging
 import sys
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
@@ -19,7 +19,19 @@ from typing import Any
 # 颜色格式化（控制台）
 # ============================================================
 
-class ColoredFormatter(logging.Formatter):
+class RequestContextFormatter(logging.Formatter):
+    """Formatter that makes request correlation visible without breaking background logs."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Do not mutate the shared record: one handler may receive an explicit
+        # request ID while another formatter still needs the original object.
+        safe_record = copy.copy(record)
+        if not getattr(safe_record, "request_id", None):
+            safe_record.request_id = "-"
+        return super().format(safe_record)
+
+
+class ColoredFormatter(RequestContextFormatter):
     """带颜色的日志格式化器（仅用于控制台）"""
     
     # ANSI 颜色代码
@@ -60,11 +72,14 @@ class LogManager:
     """
     
     # 默认格式
-    DEFAULT_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    DEFAULT_FORMAT = "%(asctime)s [%(levelname)s] [request_id=%(request_id)s] %(name)s: %(message)s"
     DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
     
     # 文件格式（更详细，包含文件名和行号）
-    FILE_FORMAT = "%(asctime)s [%(levelname)s] %(name)s (%(filename)s:%(lineno)d): %(message)s"
+    FILE_FORMAT = (
+        "%(asctime)s [%(levelname)s] [request_id=%(request_id)s] "
+        "%(name)s (%(filename)s:%(lineno)d): %(message)s"
+    )
     
     def __init__(
         self,
@@ -190,7 +205,7 @@ class LogManager:
             )
         
         handler.setLevel(self.level)
-        formatter = logging.Formatter(
+        formatter = RequestContextFormatter(
             fmt=self.FILE_FORMAT,
             datefmt=self.DEFAULT_DATE_FORMAT,
         )
@@ -210,7 +225,7 @@ class LogManager:
         )
         handler.setLevel(logging.ERROR)
         
-        formatter = logging.Formatter(
+        formatter = RequestContextFormatter(
             fmt=self.FILE_FORMAT,
             datefmt=self.DEFAULT_DATE_FORMAT,
         )
@@ -305,6 +320,7 @@ def get_logger(name: str) -> logging.Logger:
 
 __all__ = [
     "LogManager",
+    "RequestContextFormatter",
     "ColoredFormatter",
     "setup_logging",
     "get_log_manager",

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from ...config import PendoConfig
 from ...services.db import Database
-from ..auth import AuthError, generate_token
+from ..auth import AuthError
 from .bundle_import import inspect_bundle_bytes
 
 _DEMO_PREFIX = "demo_web_"
@@ -29,6 +31,12 @@ _DATETIME_FIELDS = {
     "deleted_at",
 }
 _REFERENCE_LIST_FIELDS = {"related_items"}
+_DEMO_CREATE_LOCK = threading.Lock()
+_DEMO_REQUESTS: dict[str, deque[datetime]] = {}
+
+
+class DemoCapacityError(RuntimeError):
+    """Raised when anonymous demo admission would exceed a safe quota."""
 
 
 def _iso(dt: datetime) -> str:
@@ -210,28 +218,45 @@ def _seed_demo_items(db: Database, owner_id: str, now: datetime) -> None:
     db.batch_insert_or_update(operations, owner_id)
 
 
-def create_demo_session(db: Database, now: datetime | None = None) -> dict[str, Any]:
-    """Create an isolated temporary demo user, seed data, and return a token."""
+def create_demo_session(
+    db: Database,
+    now: datetime | None = None,
+    *,
+    client_key: str = "unknown",
+) -> dict[str, Any]:
+    """Create an isolated temporary demo user and seed its data space."""
     now = now or datetime.now()
-    purge_expired_demo_users(db, now=now)
+    with _DEMO_CREATE_LOCK:
+        purge_expired_demo_users(db, now=now)
+        request_times = _DEMO_REQUESTS.setdefault(str(client_key or "unknown"), deque())
+        cutoff = now - timedelta(hours=1)
+        while request_times and request_times[0] <= cutoff:
+            request_times.popleft()
+        if len(request_times) >= PendoConfig.WEB_DEMO_REQUESTS_PER_HOUR:
+            raise DemoCapacityError("Demo creation rate limit exceeded; please try again later")
+        conn = db.get_connection()
+        active = conn.execute(
+            "SELECT COUNT(*) FROM user_settings WHERE user_id LIKE ?",
+            (f"{_DEMO_PREFIX}%",),
+        ).fetchone()[0]
+        if active >= PendoConfig.WEB_DEMO_MAX_ACTIVE_SESSIONS:
+            raise DemoCapacityError("Demo capacity is currently full; please try again later")
 
-    owner_id = f"{_DEMO_PREFIX}{uuid.uuid4().hex[:12]}"
-    expires_at = now + timedelta(hours=PendoConfig.WEB_DEMO_EXPIRE_HOURS)
+        owner_id = f"{_DEMO_PREFIX}{uuid.uuid4().hex[:12]}"
+        expires_at = now + timedelta(hours=PendoConfig.WEB_DEMO_EXPIRE_HOURS)
+        db.update_user_settings(owner_id, {
+            "timezone": "Asia/Shanghai",
+            "default_category": "未分类",
+            "settings_json": _demo_settings(expires_at),
+        })
+        try:
+            _seed_demo_items(db, owner_id, now)
+        except Exception:
+            purge_demo_owner(db, owner_id)
+            raise
+        request_times.append(now)
 
-    db.update_user_settings(owner_id, {
-        "timezone": "Asia/Shanghai",
-        "default_category": "未分类",
-        "settings_json": _demo_settings(expires_at),
-    })
-    _seed_demo_items(db, owner_id, now)
-
-    token = generate_token(
-        owner_id,
-        expires_hours=PendoConfig.WEB_DEMO_EXPIRE_HOURS,
-        extra_claims={"demo": True},
-    )
     return {
-        "token": token,
         "owner_id": owner_id,
         "expires_at": _iso(expires_at),
         "demo": True,

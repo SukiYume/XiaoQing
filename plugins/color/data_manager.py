@@ -4,9 +4,23 @@
 """
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+import threading
+from typing import Any
 
 from core.plugin_base import load_json, write_json, ensure_dir
+
+_CUSTOM_COLORS_LOCK = threading.RLock()
+
+
+def _custom_file(context) -> Path:
+    group_id = getattr(context, "current_group_id", None)
+    if group_id is not None:
+        scope = f"group_{int(group_id)}"
+    else:
+        user_id = getattr(context, "current_user_id", None)
+        scope = f"private_{int(user_id)}" if user_id is not None else "legacy"
+    name = "custom_colors.json" if scope == "legacy" else f"custom_colors_{scope}.json"
+    return context.data_dir / name
 
 
 @lru_cache(maxsize=4)
@@ -46,7 +60,7 @@ def load_colors(context) -> list[dict[str, Any]]:
     
     # 加载用户自定义颜色
     try:
-        custom_file = context.data_dir / "custom_colors.json"
+        custom_file = _custom_file(context)
         if custom_file.exists():
             custom_colors = load_json(custom_file, [])
             if isinstance(custom_colors, dict):
@@ -67,8 +81,10 @@ def load_custom_colors(context) -> list[dict[str, Any]]:
     Returns:
         自定义颜色列表
     """
-    custom_file = context.data_dir / "custom_colors.json"
-    return load_json(custom_file, [])
+    custom_file = _custom_file(context)
+    with _CUSTOM_COLORS_LOCK:
+        data = load_json(custom_file, [])
+        return data if isinstance(data, list) else []
 
 def save_custom_colors(colors: list[dict[str, Any]], context) -> None:
     """保存用户自定义颜色
@@ -77,9 +93,23 @@ def save_custom_colors(colors: list[dict[str, Any]], context) -> None:
         colors: 颜色列表
         context: 插件上下文
     """
-    custom_file = context.data_dir / "custom_colors.json"
-    ensure_dir(context.data_dir)
-    write_json(custom_file, colors)
+    custom_file = _custom_file(context)
+    with _CUSTOM_COLORS_LOCK:
+        ensure_dir(context.data_dir)
+        write_json(custom_file, colors)
+
+
+def mutate_custom_colors(context, callback):
+    """Atomically read, mutate and persist one chat/private color library."""
+    custom_file = _custom_file(context)
+    with _CUSTOM_COLORS_LOCK:
+        colors = load_json(custom_file, [])
+        if not isinstance(colors, list):
+            colors = []
+        result = callback(colors)
+        ensure_dir(context.data_dir)
+        write_json(custom_file, colors)
+        return result
 
 def get_color_systems(colors: list[dict[str, Any]]) -> set:
     """获取所有颜色色系

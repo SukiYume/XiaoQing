@@ -11,10 +11,10 @@
 """
 
 # 标准库
-import json
 import logging
 import random
-from pathlib import Path
+import threading
+from datetime import datetime, timezone
 
 # 本地导入
 from core.args import parse
@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 GROUP_RANDOM_REPLY_RATE = 0.05  # 群聊随机回复概率 5%
+MAX_QUESTIONS = 2_000
+MAX_ANSWERS_PER_QUESTION = 20
+MAX_QUESTION_LENGTH = 128
+MAX_ANSWER_LENGTH = 1_000
+MAX_AUDIT_ENTRIES = 5_000
+_QA_LOCK = threading.RLock()
 
 
 def init(context=None) -> None:
@@ -86,17 +92,48 @@ def call_bot_name_only(context) -> list:
 # 问答对管理
 # ============================================================
 
+def _qa_scope(context) -> str:
+    group_id = getattr(context, "current_group_id", None)
+    if group_id is not None:
+        return f"group_{int(group_id)}"
+    user_id = getattr(context, "current_user_id", None)
+    if user_id is not None:
+        return f"private_{int(user_id)}"
+    return "legacy"
+
+
+def _qa_file(context):
+    scope = _qa_scope(context)
+    return context.data_dir / ("QA.json" if scope == "legacy" else f"QA_{scope}.json")
+
+
 def _load_qa(context) -> dict:
     """加载问答对"""
-    qa_file = context.data_dir / "QA.json"
-    return load_json(qa_file, {})
+    with _QA_LOCK:
+        return load_json(_qa_file(context), {})
 
 
 def _save_qa(context, data: dict) -> None:
     """保存问答对"""
     ensure_dir(context.data_dir)
-    qa_file = context.data_dir / "QA.json"
-    write_json(qa_file, data)
+    with _QA_LOCK:
+        write_json(_qa_file(context), data)
+
+
+def _audit_qa_change(context, operation: str, question: str) -> None:
+    audit_file = context.data_dir / "QA_audit.json"
+    with _QA_LOCK:
+        audit = load_json(audit_file, {}).get("entries", [])
+        if not isinstance(audit, list):
+            audit = []
+        audit.append({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "operation": operation,
+            "scope": _qa_scope(context),
+            "owner": getattr(context, "current_user_id", None),
+            "question": question,
+        })
+        write_json(audit_file, {"entries": audit[-MAX_AUDIT_ENTRIES:]})
 
 
 def get_qa_answer(context, question: str) -> str | None:
@@ -219,17 +256,25 @@ def _add_qa(context, args: str) -> list[dict]:
     if len(parts) < 2:
         return segments("格式: 记忆 问题 回答")
     
-    question, answer = parts[0], parts[1]
-    data = _load_qa(context)
-    
-    if question in data:
-        if answer in data[question]:
-            return segments("这个我已经知道了。")
-        data[question].append(answer)
-    else:
-        data[question] = [answer]
-    
-    _save_qa(context, data)
+    question, answer = parts[0].strip(), parts[1].strip()
+    if not question or len(question) > MAX_QUESTION_LENGTH:
+        return segments(f"问题不能为空且不能超过 {MAX_QUESTION_LENGTH} 个字符。")
+    if not answer or len(answer) > MAX_ANSWER_LENGTH:
+        return segments(f"回答不能为空且不能超过 {MAX_ANSWER_LENGTH} 个字符。")
+    with _QA_LOCK:
+        data = _load_qa(context)
+        if question in data:
+            if answer in data[question]:
+                return segments("这个我已经知道了。")
+            if len(data[question]) >= MAX_ANSWERS_PER_QUESTION:
+                return segments("这个问题的回答数量已达上限。")
+            data[question].append(answer)
+        else:
+            if len(data) >= MAX_QUESTIONS:
+                return segments("当前会话的问答库已达上限。")
+            data[question] = [answer]
+        _save_qa(context, data)
+        _audit_qa_change(context, "add", question)
     return segments("对话添加成功了！")
 
 
@@ -261,25 +306,26 @@ def _remove_qa(context, args: str) -> list[dict]:
     question = parts[0]
     answer = parts[1].strip() if len(parts) > 1 else None
     
-    data = _load_qa(context)
-    
-    if question not in data:
-        return segments("似乎没有这个对话呢")
-    
-    if answer:
-        # 删除特定回答
-        if answer in data[question]:
-            data[question].remove(answer)
-            if not data[question]:
-                del data[question]
-            _save_qa(context, data)
-            return segments(f"对话: {question} - {answer} 删除成功了。")
-        else:
+    with _QA_LOCK:
+        data = _load_qa(context)
+        if question not in data:
+            return segments("似乎没有这个对话呢")
+
+        if answer:
+            # 删除特定回答
+            if answer in data[question]:
+                data[question].remove(answer)
+                if not data[question]:
+                    del data[question]
+                _save_qa(context, data)
+                _audit_qa_change(context, "remove_answer", question)
+                return segments(f"对话: {question} - {answer} 删除成功了。")
             return segments("没有这个回答")
-    else:
+
         # 删除整个问题
         removed = data.pop(question)
         _save_qa(context, data)
+        _audit_qa_change(context, "remove_question", question)
         return segments(f"对话: {question} - {'|'.join(removed)} 删除成功了。")
 
 
@@ -327,11 +373,8 @@ async def _maybe_convert_to_voice(reply: list[dict], context) -> list[dict]:
     if random.random() > voice_probability:
         return reply
     
-    # 尝试导入 voice 插件
-    try:
-        from plugins.voice import main as voice_plugin
-    except ImportError:
-        logger.warning("Voice plugin not found, cannot convert to voice")
+    if not hasattr(context, "call_plugin"):
+        logger.warning("Voice plugin provider unavailable")
         return reply
     
     # 提取文字内容
@@ -345,9 +388,9 @@ async def _maybe_convert_to_voice(reply: list[dict], context) -> list[dict]:
     
     # 转换为语音
     try:
-        voice_reply = await voice_plugin.convert_text_to_voice(text_content, context)
+        voice_reply = await context.call_plugin("voice", "convert_text_to_voice", text_content)
         if voice_reply:
-            logger.info("Converted text to voice: %s...", text_content[:30])
+            logger.info("Converted smalltalk response to voice")
             return voice_reply
     except Exception as exc:
         logger.error("Failed to convert to voice: %s", exc)
@@ -363,18 +406,14 @@ async def _call_chat_api(text_content: str, context) -> list[dict]:
     复用 chat 插件的 Coze API 调用逻辑，避免代码重复
     """
     try:
-        # 动态导入 chat 插件
-        from plugins.chat import main as chat_plugin
-        
-        # 构造一个空事件（chat 插件不使用 event）
-        dummy_event: dict = {}
-        
-        # 调用 chat 插件的 handle 函数
-        result = await chat_plugin.handle("chat", text_content, dummy_event, context)
+        if not hasattr(context, "call_plugin"):
+            raise RuntimeError("chat plugin provider unavailable")
+        provider_event = {
+            "user_id": getattr(context, "current_user_id", None),
+            "group_id": getattr(context, "current_group_id", None),
+        }
+        result = await context.call_plugin("chat", "handle", "chat", text_content, provider_event)
         return result
-    except ImportError:
-        logger.warning("Chat plugin not available")
-        return segments("暂时无法回复~")
     except Exception as exc:
         logger.warning("Chat plugin call failed: %s", exc)
         return segments("暂时无法回复，请稍后再试~")

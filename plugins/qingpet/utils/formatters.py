@@ -1,6 +1,7 @@
 from ..models import Pet, User
 from ..utils.constants import PetStage, PetStatus, MAX_STAT_VALUE, DEFAULT_DRESS_ITEMS
 from typing import List, Tuple
+from .time import utc_now
 
 
 def _progress_bar(value: int, max_val: int = MAX_STAT_VALUE, length: int = 10) -> str:
@@ -36,8 +37,7 @@ def format_pet_card(pet: Pet, user: User = None) -> str:
     text += f"• 状态: {s_emoji} {pet.status.value}\n"
     # 旅行状态显示剩余时间
     if pet.status == PetStatus.TRAVELING and pet.status_expire_time:
-        from datetime import datetime
-        remaining = pet.status_expire_time - datetime.now()
+        remaining = pet.status_expire_time - utc_now()
         if remaining.total_seconds() > 0:
             hours = int(remaining.total_seconds() // 3600)
             minutes = int((remaining.total_seconds() % 3600) // 60)

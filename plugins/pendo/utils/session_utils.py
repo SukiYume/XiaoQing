@@ -63,12 +63,12 @@ async def safe_create_reply_scoped_session(
         return True
 
     if hasattr(context, "current_group_id"):
-        original_group_id = getattr(context, "current_group_id")
+        original_group_id = context.current_group_id
         try:
-            setattr(context, "current_group_id", None)
+            context.current_group_id = None
             return await safe_create_session(context, initial_data=initial_data, timeout=timeout)
         finally:
-            setattr(context, "current_group_id", original_group_id)
+            context.current_group_id = original_group_id
 
     return await safe_create_session(context, initial_data=initial_data, timeout=timeout)
 

@@ -703,7 +703,7 @@ function renderRecentPanel() {
                 ${recent.length ? `
                     <div class="diary-recent-list">
                         ${recent.slice(0, 4).map((item) => `
-                            <button type="button" class="diary-recent-item" data-id="${escapeHtml(String(item.id))}" data-date="${item.diary_date}">
+                            <button type="button" class="diary-recent-item" data-id="${escapeHtml(String(item.id))}" data-date="${escapeHtml(String(item.diary_date || ''))}">
                                 <span class="diary-recent-top"><strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || item.diary_date)}</strong><span>${escapeHtml(item.entry_label || formatEntryTime(item))}</span></span>
                                 <span class="diary-recent-preview">${escapeHtml(item.content_preview || '点击查看详情')}</span>
                             </button>`).join('')}
@@ -721,8 +721,9 @@ function renderRecentPanel() {
 }
 
 function renderEntryCard(item) {
+    const itemId = escapeHtml(String(item.id || ''));
     return `
-        <article class="diary-entry-card" data-id="${item.id}">
+        <article class="diary-entry-card" data-id="${itemId}">
             <div class="diary-entry-head">
                 <div>
                     <div class="diary-entry-title-row"><span class="diary-entry-mood">${escapeHtml(moodEmoji(item.mood) || '📖')}</span><h4>${escapeHtml(item.title || '这一天的记录')}</h4></div>
@@ -735,9 +736,9 @@ function renderEntryCard(item) {
                     </div>
                 </div>
                 <div class="diary-entry-actions">
-                    <button class="btn btn-sm btn-secondary" data-action="view" data-id="${item.id}" type="button">查看</button>
-                    <button class="btn btn-sm btn-secondary" data-action="edit" data-id="${item.id}" type="button">编辑</button>
-                    <button class="btn btn-sm btn-danger" data-action="delete" data-id="${item.id}" type="button">删除</button>
+                    <button class="btn btn-sm btn-secondary" data-action="view" data-id="${itemId}" type="button">查看</button>
+                    <button class="btn btn-sm btn-secondary" data-action="edit" data-id="${itemId}" type="button">编辑</button>
+                    <button class="btn btn-sm btn-danger" data-action="delete" data-id="${itemId}" type="button">删除</button>
                 </div>
             </div>
             <div class="diary-entry-preview">${escapeHtml(previewText(item.content, 220) || '（无内容）')}</div>
@@ -775,7 +776,7 @@ function renderMonthStream() {
                 ${_items.length ? `
                     <div class="diary-stream-list">
                         ${_items.map((item) => `
-                            <button type="button" class="diary-stream-item" data-id="${item.id}">
+                            <button type="button" class="diary-stream-item" data-id="${escapeHtml(String(item.id || ''))}">
                                 <span class="diary-stream-date">${escapeHtml(formatEntryTime(item))}</span>
                                 <span class="diary-stream-main">
                                     <strong>${escapeHtml(moodEmoji(item.mood) || '📖')} ${escapeHtml(item.title || previewText(item.content, 18) || '这一天')}</strong>

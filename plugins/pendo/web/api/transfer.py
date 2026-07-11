@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from core.async_keyed_lock import AsyncKeyedLockPool
+
 from ...services.db import Database, DuplicateBundleImportError
 from ...utils.validators import get_item_normalizer
 from ..deps import get_current_user, get_db
@@ -33,19 +35,17 @@ from ..services.transfer_bundle import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-_IMPORT_BUNDLE_LOCKS: dict[str, asyncio.Lock] = {}
+_IMPORT_LOCK_POOL = AsyncKeyedLockPool(max_keys=2_048, max_key_length=256)
 
 
-def _get_import_lock(owner_id: str, bundle_id: str | None) -> asyncio.Lock:
+def _get_import_lock(owner_id: str, bundle_id: str | None):
     key = f"{owner_id}:{bundle_id or '__no_bundle__'}"
-    lock = _IMPORT_BUNDLE_LOCKS.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _IMPORT_BUNDLE_LOCKS[key] = lock
-    return lock
+    return _IMPORT_LOCK_POOL.hold(key)
 
-# 上传大小限制：100 MB
+# 上传大小限制：100 MB；同时约束记录数量，防止小体积压缩包展开成
+# 不受控的 Python/SQLite 工作量。
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+MAX_IMPORT_RECORDS = 20_000
 
 class ExportSelection(BaseModel):
     types: list[str] = Field(default_factory=list)
@@ -73,6 +73,11 @@ def _resolve_timezone(timezone: str | None) -> ZoneInfo:
 
 def resolve_range(selection: ExportSelection, now: datetime | None = None) -> tuple[date | None, date | None]:
     zone = _resolve_timezone(selection.timezone)
+    if now is not None and now.tzinfo is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Range clock must be timezone-aware; host local time is not a valid fallback",
+        )
     current = now.astimezone(zone) if now else datetime.now(zone)
     today = current.date()
     if selection.preset == "all":
@@ -363,7 +368,7 @@ def _get_item_identity(db: Database, item_id: str | None) -> dict[str, Any] | No
 
 def _new_import_item_id(db: Database) -> str:
     while True:
-        candidate = uuid.uuid4().hex[:16]
+        candidate = uuid.uuid4().hex
         if _get_item_identity(db, candidate) is None:
             return candidate
 
@@ -389,6 +394,30 @@ def _duplicate_import_payload(
         ctx_import["source_id"] = original_id
         duplicate["context"]["import"] = ctx_import
     return duplicate
+
+
+def _import_source_key(record: dict[str, Any], index: int) -> str:
+    """Return an import-local identifier without trusting it as a DB key."""
+
+    source_id = str(record.get("id") or "").strip()
+    return source_id or f"{record.get('type', 'record')}@line:{record.get('_bundle_line', index)}"
+
+
+def _assign_import_identity(
+    db: Database,
+    payload: dict[str, Any],
+    source_id: str,
+) -> dict[str, Any]:
+    """Generate a fresh internal ID and retain external identity as plain metadata."""
+
+    assigned = dict(payload)
+    assigned["id"] = _new_import_item_id(db)
+    context = assigned.get("context")
+    assigned["context"] = dict(context) if isinstance(context, dict) else {}
+    import_context = dict(assigned["context"].get("import") or {})
+    import_context["source_id"] = source_id
+    assigned["context"]["import"] = import_context
+    return assigned
 
 
 def _get_event_collection_identity(db: Database, collection_id: str | None) -> dict[str, Any] | None:
@@ -428,56 +457,20 @@ def _prepare_collection_import_operations(
 
     operations: list[tuple[str, dict[str, Any]]] = []
     collection_id_map: dict[str, str] = {}
-    for collection in collections:
+    for index, collection in enumerate(collections, start=1):
         payload = dict(collection)
-        original_id = str(payload.get("id") or "").strip()
-        if not original_id:
-            original_id = _new_import_collection_id(db, owner_id)
-            payload["id"] = original_id
-
-        identity = _get_event_collection_identity(db, original_id)
-        existing = (
-            db.get_event_collection(original_id, owner_id)
-            if identity and identity.get("owner_id") == owner_id and not identity.get("deleted")
-            else None
-        )
-        if existing and str(existing.get("kind") or "") != str(payload.get("kind") or ""):
-            raise HTTPException(
-                status_code=422,
-                detail=f"Event collection kind mismatch for {original_id}",
-            )
-
-        if identity and not existing:
-            duplicate_id = _new_import_collection_id(db, owner_id)
-            payload["id"] = duplicate_id
-            context = payload.get("context")
-            payload["context"] = dict(context) if isinstance(context, dict) else {}
-            context_import = dict(payload["context"].get("import") or {})
-            context_import["source_id"] = original_id
-            payload["context"]["import"] = context_import
-            collection_id_map[original_id] = duplicate_id
-            operations.append(("insert", payload))
-            continue
-
-        if existing and conflict_policy == "overwrite":
-            collection_id_map[original_id] = original_id
-            operations.append(("update", payload))
-            continue
-        if existing and conflict_policy == "duplicate":
-            duplicate_id = _new_import_collection_id(db, owner_id)
-            payload["id"] = duplicate_id
-            context = payload.get("context")
-            payload["context"] = dict(context) if isinstance(context, dict) else {}
-            context_import = dict(payload["context"].get("import") or {})
-            context_import["source_id"] = original_id
-            payload["context"]["import"] = context_import
-            collection_id_map[original_id] = duplicate_id
-            operations.append(("insert", payload))
-            continue
-
-        collection_id_map[original_id] = original_id
-        if not existing:
-            operations.append(("insert", payload))
+        original_id = _import_source_key({"type": "event_collection", **payload}, index)
+        if original_id in collection_id_map:
+            raise HTTPException(status_code=422, detail=f"Duplicate event collection source ID: {original_id}")
+        internal_id = _new_import_collection_id(db, owner_id)
+        payload["id"] = internal_id
+        context = payload.get("context")
+        payload["context"] = dict(context) if isinstance(context, dict) else {}
+        context_import = dict(payload["context"].get("import") or {})
+        context_import["source_id"] = original_id
+        payload["context"]["import"] = context_import
+        collection_id_map[original_id] = internal_id
+        operations.append(("insert", payload))
 
     return operations, collection_id_map
 
@@ -505,8 +498,9 @@ def _rewrite_import_item_relationships(payload: dict[str, Any], item_id_map: dic
                 continue
             next_ref = dict(ref)
             ref_id = str(next_ref.get("id") or "").strip()
-            if ref_id in item_id_map:
-                next_ref["id"] = item_id_map[ref_id]
+            if ref_id not in item_id_map:
+                continue
+            next_ref["id"] = item_id_map[ref_id]
             references.append(next_ref)
         if "references" in rewritten:
             rewritten["references"] = references
@@ -514,14 +508,16 @@ def _rewrite_import_item_relationships(payload: dict[str, Any], item_id_map: dic
         related_items = []
         for raw_id in rewritten.get("related_items") or []:
             related_id = str(raw_id).strip()
-            if related_id:
-                related_items.append(item_id_map.get(related_id, related_id))
+            if related_id in item_id_map:
+                related_items.append(item_id_map[related_id])
         if "related_items" in rewritten:
             rewritten["related_items"] = related_items
 
     source_item_id = str(rewritten.get("source_item_id") or "").strip()
     if source_item_id in item_id_map:
         rewritten["source_item_id"] = item_id_map[source_item_id]
+    elif "source_item_id" in rewritten:
+        rewritten.pop("source_item_id", None)
 
     return rewritten
 
@@ -585,6 +581,8 @@ async def inspect_import(
 ):
     file_bytes = await _read_upload_body(request)
     parsed, valid_records, errors = _inspect_bundle_data(file_bytes)
+    if len(valid_records) > MAX_IMPORT_RECORDS:
+        raise HTTPException(status_code=413, detail="Bundle contains too many records")
 
     bundle_id = parsed.manifest.get("bundle_id")
     already_imported = db.has_imported_bundle(owner_id, bundle_id) if bundle_id else False
@@ -676,8 +674,8 @@ async def execute_import(
         if errors and invalid_policy != "skip_invalid":
             raise HTTPException(status_code=422, detail={"errors": errors, "message": "Import validation failed"})
 
-        conflict_policy = parsed_options.get("conflict_policy", "skip")
-        if conflict_policy not in {"skip", "overwrite", "duplicate"}:
+        conflict_policy = parsed_options.get("conflict_policy", "isolate")
+        if conflict_policy not in {"isolate", "skip", "overwrite", "duplicate"}:
             raise HTTPException(status_code=422, detail="Unsupported conflict policy")
 
         results = {"inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
@@ -690,79 +688,32 @@ async def execute_import(
             conflict_policy=conflict_policy,
         )
 
-        # 构建批量操作列表（在事务前完成决策）
+        # Every imported record receives an internal UUID.  External bundle
+        # IDs are provenance only, never database or DOM identity.
         operations: list[tuple[str, dict[str, Any]]] = []
         item_id_map: dict[str, str] = {}
-        for record in valid_records:
-            if record["type"] not in selected_types:
-                continue
+        selected_records = [record for record in valid_records if record["type"] in selected_types]
+        for index, record in enumerate(selected_records, start=1):
+            source_id = _import_source_key(record, index)
+            if source_id in item_id_map:
+                raise HTTPException(status_code=422, detail=f"Duplicate item source ID: {source_id}")
+            item_id_map[source_id] = _new_import_item_id(db)
 
-            item_id = record.get("id")
-            identity = _get_item_identity(db, item_id)
-            existing = db.get_item(item_id, owner_id=owner_id) if item_id and identity and identity.get("owner_id") == owner_id and not identity.get("deleted") else None
-            payload = dict(record)
+        for index, record in enumerate(selected_records, start=1):
+            source_id = _import_source_key(record, index)
+            payload = _assign_import_identity(db, record, source_id)
+            payload["id"] = item_id_map[source_id]
             if payload.get("type") == "event":
                 collection_id = str(payload.get("event_collection_id") or "").strip()
                 if collection_id and collection_id in collection_id_map:
                     payload["event_collection_id"] = collection_id_map[collection_id]
-
-            if identity and not existing:
-                reason = _global_conflict_reason(identity, owner_id)
-                if conflict_policy == "skip":
-                    results["skipped"] += 1
-                    details["skipped"].append(_result_entry(record, f"{reason}，按策略跳过"))
-                    continue
-                if conflict_policy == "overwrite":
-                    results["failed"] += 1
-                    details["failed"].append(_result_entry(record, f"{reason}，拒绝覆盖"))
-                    continue
-
-                original_id = str(item_id) if item_id else None
-                payload = _duplicate_import_payload(db, payload, original_id)
-                if original_id:
-                    item_id_map[original_id] = payload["id"]
-                operations.append(("insert", payload))
-                results["inserted"] += 1
-                details["inserted"].append(_result_entry(record, "已生成副本，保留原始 source_id"))
-                continue
-
-            if existing:
-                existing_type = str(getattr(existing.type, "value", existing.type))
-                incoming_type = str(record.get("type", "") or "")
-                if existing_type != incoming_type:
-                    results["failed"] += 1
-                    details["failed"].append(
-                        _result_entry(
-                            record,
-                            f"同 ID 现有条目类型为 {existing_type}，导入类型为 {incoming_type}，拒绝覆盖",
-                        )
-                    )
-                    continue
-                if conflict_policy == "skip":
-                    results["skipped"] += 1
-                    details["skipped"].append(_result_entry(record, "ID 已存在，按策略跳过"))
-                    continue
-                if conflict_policy == "overwrite":
-                    operations.append(("update", payload))
-                    results["updated"] += 1
-                    details["updated"].append(_result_entry(record))
-                    continue
-                # duplicate: 生成足够长的 ID 避免碰撞 (16 hex = 64 bit)
-                original_id = str(item_id) if item_id else None
-                payload = _duplicate_import_payload(db, payload, original_id)
-                if original_id:
-                    item_id_map[str(original_id)] = payload["id"]
-                operations.append(("insert", payload))
-                results["inserted"] += 1
-                details["inserted"].append(_result_entry(record, "已生成副本，保留原始 source_id"))
-                continue
-
-            # 新记录插入
-            if not item_id:
-                payload["id"] = _new_import_item_id(db)
+                elif collection_id:
+                    payload.pop("event_collection_id", None)
             operations.append(("insert", payload))
             results["inserted"] += 1
-            details["inserted"].append(_result_entry(record))
+            details["inserted"].append(
+                _result_entry(record, "已生成内部 UUID；原 ID 仅保留为 import.source_id")
+            )
 
         if item_id_map:
             operations = [

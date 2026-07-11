@@ -1,0 +1,13 @@
+# xiaoqing-deploy-manifest-v1
+.xiaoqing-sync-root
+config/config.json.example
+config/secrets.json.example
+core
+deploy/runtime-paths.txt
+main.py
+plugins
+pyproject.toml
+requirements.txt
+requirements/python-3.13.lock
+run-bot.vbs
+scripts/run-bot-monitor.ps1

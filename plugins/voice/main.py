@@ -11,19 +11,59 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
+import wave
 from pathlib import Path
 from typing import Any, Optional, Tuple
 from xml.sax.saxutils import escape as xml_escape
 
 import aiohttp
 
-from core.plugin_base import segments, PluginContextProtocol
+from core.plugin_base import PluginContextProtocol, atomic_write_bytes, segments
 from core.args import parse
 
 
 logger = logging.getLogger(__name__)
 
 _AZURE_API_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=45)
+MAX_TTS_TEXT_LENGTH = 500
+MAX_AUDIO_BYTES = 10 * 1024 * 1024
+MAX_AUDIO_SECONDS = 120
+MAX_CACHE_BYTES = 256 * 1024 * 1024
+_VOICE_SEMAPHORE = asyncio.Semaphore(2)
+_TTS_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+async def _read_response_limited(response, max_bytes: int) -> bytes:
+    content = getattr(response, "content", None)
+    if content is not None and hasattr(content, "iter_chunked"):
+        chunks = []
+        total = 0
+        async for chunk in content.iter_chunked(64 * 1024):
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError("response exceeds byte limit")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    data = await response.read()
+    if len(data) > max_bytes:
+        raise ValueError("response exceeds byte limit")
+    return data
+
+
+def _cleanup_audio_cache(audio_dir: Path) -> None:
+    files = sorted(
+        (path for path in audio_dir.glob("tts_*.mp3") if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    total = 0
+    cutoff = time.time() - 7 * 86400
+    for path in files:
+        size = path.stat().st_size
+        total += size
+        if path.stat().st_mtime < cutoff or total > MAX_CACHE_BYTES:
+            path.unlink(missing_ok=True)
 
 
 def init(context=None) -> None:
@@ -70,12 +110,16 @@ async def text_to_speech(text: str, context: PluginContextProtocol) -> Optional[
     if not subscription_key:
         logger.warning("Azure TTS 未配置 subscription_key")
         return None
+    if not text or len(text) > MAX_TTS_TEXT_LENGTH:
+        logger.warning("Azure TTS text rejected: length=%d", len(text))
+        return None
     
     # 生成唯一文件名（文本 + 音色配置），避免不同音色误命中同一缓存
     cache_material = "|".join([text, region, voice_name, style, role])
-    text_hash = hashlib.md5(cache_material.encode('utf-8')).hexdigest()[:8]
+    text_hash = hashlib.sha256(cache_material.encode('utf-8')).hexdigest()
     audio_dir = context.data_dir / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(_cleanup_audio_cache, audio_dir)
     output_file = audio_dir / f"tts_{text_hash}.mp3"
     
     # 如果文件已存在，直接返回
@@ -106,21 +150,24 @@ async def text_to_speech(text: str, context: PluginContextProtocol) -> Optional[
     }
     
     try:
-        async with context.http_session.post(
-            url,
-            data=ssml.encode('utf-8'),
-            headers=headers,
-            timeout=_AZURE_API_TIMEOUT,
-        ) as response:
-            if response.status == 200:
-                content = await response.read()
-                output_file.write_bytes(content)
-                logger.info(f"生成音频: {output_file}")
+        lock = _TTS_LOCKS.setdefault(text_hash, asyncio.Lock())
+        async with lock:
+            if output_file.exists():
                 return str(output_file.absolute())
-            else:
-                error_text = await response.text()
-                logger.error(f"Azure TTS API 错误 {response.status}: {error_text}")
-                return None
+            async with _VOICE_SEMAPHORE:
+                async with context.http_session.post(
+                    url,
+                    data=ssml.encode('utf-8'),
+                    headers=headers,
+                    timeout=_AZURE_API_TIMEOUT,
+                ) as response:
+                    if response.status == 200:
+                        content = await _read_response_limited(response, MAX_AUDIO_BYTES)
+                        await asyncio.to_thread(atomic_write_bytes, output_file, content)
+                        logger.info("Azure TTS generated audio: bytes=%d", len(content))
+                        return str(output_file.absolute())
+                    logger.error("Azure TTS API 错误 %s", response.status)
+                    return None
     except Exception as exc:
         logger.error(f"Azure TTS API 调用失败: {exc}", exc_info=True)
         return None
@@ -149,6 +196,19 @@ async def speech_to_text(audio_path: str, context: PluginContextProtocol) -> Opt
     if not subscription_key:
         logger.warning("Azure STT 未配置 subscription_key")
         return None
+
+    audio_file = Path(audio_path)
+    if not audio_file.is_file() or audio_file.stat().st_size > MAX_AUDIO_BYTES:
+        logger.warning("Azure STT audio rejected by byte limit")
+        return None
+    try:
+        with wave.open(str(audio_file), "rb") as wav:
+            duration = wav.getnframes() / max(1, wav.getframerate())
+        if duration > MAX_AUDIO_SECONDS:
+            logger.warning("Azure STT audio rejected by duration limit")
+            return None
+    except (wave.Error, EOFError):
+        pass
     
     # 调用 Azure STT API
     url = f'https://{region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1'
@@ -161,7 +221,7 @@ async def speech_to_text(audio_path: str, context: PluginContextProtocol) -> Opt
     }
     
     try:
-        audio_data = await asyncio.to_thread(Path(audio_path).read_bytes)
+        audio_data = await asyncio.to_thread(audio_file.read_bytes)
         
         async with context.http_session.post(
             url,
@@ -174,17 +234,17 @@ async def speech_to_text(audio_path: str, context: PluginContextProtocol) -> Opt
                 if 'NBest' in data and len(data['NBest']) > 0:
                     lexical = data['NBest'][0].get('Lexical', '')
                     display = data['NBest'][0].get('Display', '')
-                    logger.info(f"语音识别成功: {display}")
+                    logger.info("Azure STT succeeded: lexical_length=%d display_length=%d", len(lexical), len(display))
                     return (lexical, display)
                 else:
                     logger.warning("未识别到语音内容")
                     return None
             else:
-                error_text = await response.text()
-                logger.error(f"Azure STT API 错误 {response.status}: {error_text}")
+                await response.read()
+                logger.error("Azure STT API 错误 %s", response.status)
                 return None
     except Exception as exc:
-        logger.error(f"Azure STT API 调用失败: {exc}", exc_info=True)
+        logger.error("Azure STT API 调用失败: %s", type(exc).__name__, exc_info=True)
         return None
 
 

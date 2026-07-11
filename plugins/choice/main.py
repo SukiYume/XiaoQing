@@ -221,9 +221,8 @@ async def handle(
         # 记录日志
         unique_options = list(set(options))
         logger.info(
-            f"随机选择: 问题='{question[:20]}...', "
-            f"选项数={len(options)} (去重后{len(unique_options)}), "
-            f"选择数={choice_count}, 去重={unique}"
+            "随机选择: question_length=%d, 选项数=%d (去重后%d), 选择数=%d, 去重=%s",
+            len(question), len(options), len(unique_options), choice_count, unique,
         )
         
         # 执行选择
@@ -232,7 +231,7 @@ async def handle(
         # 格式化结果
         result = format_choice_result(question, options, choices, len(options))
         
-        logger.debug(f"选择结果: {choices}")
+        logger.debug("选择完成: result_count=%d", len(choices))
         
         return segments(result)
         

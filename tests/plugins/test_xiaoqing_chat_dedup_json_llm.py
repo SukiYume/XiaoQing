@@ -4,35 +4,32 @@ from plugins.xiaoqing_chat.memory.knowledge_extract import _parse_fact_json, _pa
 from plugins.xiaoqing_chat.memory.memory_retrieval import _parse_question_json
 
 
-def test_parse_question_json_accepts_embedded_json_object() -> None:
+def test_parse_question_json_rejects_embedded_json_object() -> None:
     text = 'prefix {"question": "  今晚吃什么  "} suffix'
-    assert _parse_question_json(text) == "今晚吃什么"
+    assert _parse_question_json(text) == ""
 
 
-def test_parse_word_json_accepts_embedded_json_object() -> None:
+def test_parse_word_json_rejects_embedded_json_object() -> None:
     text = (
         "说明：\n"
         '{"items":[{"word":"YYDS","definition":"永远的神"},{"word":"","definition":"skip"}]}'
         "\n结束"
     )
     items = _parse_word_json(text)
-    assert [(item.word, item.definition) for item in items] == [("YYDS", "永远的神")]
+    assert items == []
 
 
-def test_parse_fact_json_accepts_embedded_json_object() -> None:
+def test_parse_fact_json_rejects_embedded_json_object() -> None:
     text = (
         "explain\n"
         '{"facts":[{"subject_id":"42","subject_name":"小王","fact":"喜欢火锅","evidence":"昨晚说过"}]}'
         "\nend"
     )
     facts = _parse_fact_json(text)
-    assert len(facts) == 1
-    assert facts[0].subject_id == 42
-    assert facts[0].subject_name == "小王"
-    assert facts[0].fact == "喜欢火锅"
+    assert facts == []
 
 
-def test_json_parsing_helper_extracts_embedded_object_and_named_list() -> None:
+def test_json_parsing_helper_rejects_embedded_object() -> None:
     from plugins.xiaoqing_chat.utils.json_parsing import (
         extract_named_list_field,
         parse_first_json_object,
@@ -41,20 +38,20 @@ def test_json_parsing_helper_extracts_embedded_object_and_named_list() -> None:
     text = 'note {"items": [{"k": 1}], "facts": [{"k": 2}]} done'
     obj = parse_first_json_object(text)
 
-    assert obj == {"items": [{"k": 1}], "facts": [{"k": 2}]}
-    assert extract_named_list_field(obj, "items") == [{"k": 1}]
+    assert obj is None
+    assert extract_named_list_field(obj, "items") == []
     assert extract_named_list_field(obj, "missing") == []
 
 
-def test_json_parsing_helper_strips_think_and_repairs_common_bad_json() -> None:
+def test_json_parsing_helper_rejects_think_prefix() -> None:
     from plugins.xiaoqing_chat.utils.json_parsing import parse_first_json_object
 
     text = '<think>先想一下</think>\n```json\n{suitable: true, reason: "ok",}\n```'
 
-    assert parse_first_json_object(text) == {"suitable": True, "reason": "ok"}
+    assert parse_first_json_object(text) is None
 
 
-def test_llm_content_extractor_ignores_reasoning_content_and_strips_think_tags() -> None:
+def test_llm_content_extractor_preserves_untrusted_think_prefix() -> None:
     from plugins.xiaoqing_chat.llm.llm_client import extract_response_content
 
     data = {
@@ -68,7 +65,7 @@ def test_llm_content_extractor_ignores_reasoning_content_and_strips_think_tags()
         ]
     }
 
-    assert extract_response_content(data) == '{"answer":"最终"}'
+    assert extract_response_content(data) == '<think>内部思考</think>\n{"answer":"最终"}'
 
 
 @pytest.mark.asyncio
@@ -83,8 +80,8 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
                     {
                         "message": {
                             "content": (
-                                '前缀 {"suitable": false, "reason": "重复", '
-                                '"need_replan": true} 后缀'
+                                '{"suitable": false, "reason": "重复", '
+                                '"need_replan": true}'
                             )
                         }
                     }

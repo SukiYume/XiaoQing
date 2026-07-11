@@ -7,31 +7,11 @@ import pytest
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, Mock, AsyncMock, patch
-import sys
-import importlib.util
-import types
+
+from plugins.shell import config as shell_config
+from plugins.shell import main as shell_main
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-
-# 动态加载 shell 插件配置模块
-spec_config = importlib.util.spec_from_file_location("shell_config", ROOT / "plugins" / "shell" / "config.py")
-shell_config = importlib.util.module_from_spec(spec_config)
-spec_config.loader.exec_module(shell_config)
-
-# 将配置模块添加到 sys.modules 以便导入
-sys.modules["shell_config"] = shell_config
-
-# 读取 shell main.py 源代码并修改相对导入
-with open(ROOT / "plugins" / "shell" / "main.py", "r", encoding="utf-8") as f:
-    main_source = f.read()
-
-# 替换相对导入为绝对导入
-main_source = main_source.replace("from .config import", "from shell_config import")
-main_source = main_source.replace("from __future__ import annotations\n", "")
-
-# 动态执行修改后的代码
-shell_main = types.ModuleType("shell_main")
-exec(main_source, shell_main.__dict__)
 
 
 # ============================================================
@@ -227,7 +207,8 @@ class TestShellHandle:
         """测试列出白名单"""
         result = await shell_main.handle("shell", "list", mock_event, mock_context)
         assert isinstance(result, list)
-        assert "允许" in str(result) or "白名单" in str(result)
+        assert "echo" in str(result)
+        assert "ls" in str(result)
 
     @pytest.mark.asyncio
     async def test_handle_invalid_command(self, mock_context, mock_event):
@@ -252,8 +233,15 @@ class TestShellExecutionSafety:
         class _Proc:
             returncode = 0
 
-            async def communicate(self):
-                return b"ok", b""
+            def __init__(self):
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.stdout.feed_data(b"ok")
+                self.stdout.feed_eof()
+                self.stderr.feed_eof()
+
+            async def wait(self):
+                return 0
 
         async def fake_create_subprocess_exec(*args, **kwargs):
             captured.update(kwargs)
@@ -277,13 +265,19 @@ class TestShellExecutionSafety:
     @pytest.mark.asyncio
     async def test_execute_command_timeout_terminates_process_tree(self):
         proc = MagicMock()
-        proc.communicate = AsyncMock()
-        proc.wait = AsyncMock()
+        proc.returncode = None
+        proc.stdout = asyncio.StreamReader()
+        proc.stderr = asyncio.StreamReader()
 
-        async def fake_wait_for(awaitable, timeout):
-            if hasattr(awaitable, "close"):
-                awaitable.close()
-            raise asyncio.TimeoutError
+        async def wait_forever():
+            await asyncio.Event().wait()
+
+        proc.wait = wait_forever
+
+        async def terminate(_proc):
+            proc.returncode = -9
+            proc.stdout.feed_eof()
+            proc.stderr.feed_eof()
 
         with (
             patch.object(
@@ -291,15 +285,80 @@ class TestShellExecutionSafety:
                 "create_subprocess_exec",
                 new=AsyncMock(return_value=proc),
             ),
-            patch.object(shell_main.asyncio, "wait_for", new=fake_wait_for),
-            patch.object(shell_main, "_terminate_process_tree", new=AsyncMock()) as mock_terminate,
+            patch.object(shell_main, "_terminate_process_tree", new=AsyncMock(side_effect=terminate)) as mock_terminate,
         ):
-            code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 1)
+            code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 0.01)
 
         assert code == -1
         assert stdout == ""
         assert "超时" in stderr
         mock_terminate.assert_awaited_once_with(proc)
+
+    @pytest.mark.asyncio
+    async def test_execute_command_output_limit_terminates_process_tree(self, monkeypatch):
+        proc = MagicMock()
+        proc.returncode = None
+        proc.stdout = asyncio.StreamReader()
+        proc.stderr = asyncio.StreamReader()
+        proc.stdout.feed_data(b"x" * (64 * 1024 + 1))
+
+        async def wait_forever():
+            await asyncio.Event().wait()
+
+        proc.wait = wait_forever
+
+        async def terminate(_proc):
+            proc.returncode = -9
+            proc.stdout.feed_eof()
+            proc.stderr.feed_eof()
+
+        monkeypatch.setattr(
+            shell_main.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=proc),
+        )
+        terminate_mock = AsyncMock(side_effect=terminate)
+        monkeypatch.setattr(shell_main, "_terminate_process_tree", terminate_mock)
+
+        code, stdout, stderr = await shell_main._execute_command(["echo", "ok"], 1)
+
+        assert code == -2
+        assert len(stdout.encode()) <= 64 * 1024
+        assert "安全上限" in stderr
+        terminate_mock.assert_awaited_once_with(proc)
+
+    @pytest.mark.asyncio
+    async def test_execute_command_cancellation_terminates_process_tree(self, monkeypatch):
+        proc = MagicMock()
+        proc.returncode = None
+        proc.stdout = asyncio.StreamReader()
+        proc.stderr = asyncio.StreamReader()
+
+        async def wait_forever():
+            await asyncio.Event().wait()
+
+        proc.wait = wait_forever
+
+        async def terminate(_proc):
+            proc.returncode = -9
+            proc.stdout.feed_eof()
+            proc.stderr.feed_eof()
+
+        monkeypatch.setattr(
+            shell_main.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=proc),
+        )
+        terminate_mock = AsyncMock(side_effect=terminate)
+        monkeypatch.setattr(shell_main, "_terminate_process_tree", terminate_mock)
+        task = asyncio.create_task(shell_main._execute_command(["sleep", "10"], 30))
+        await asyncio.sleep(0)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        terminate_mock.assert_awaited_once_with(proc)
 
 # ============================================================
 # 智能解码测试

@@ -798,7 +798,7 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
     async with context.http_session.post(
         "https://api.example.com/submit",
         json={"key": "value"},
-        headers={"Authorization": "Bearer token"}
+        headers={"Authorization": "Bearer <SERVICE_TOKEN>"}
     ) as resp:
         result = await resp.json()
     
@@ -878,12 +878,37 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 {
   "plugins": {
     "myplugin": {
-      "api_key": "your-api-key",
+      "api_key": "<MYPLUGIN_API_KEY>",
       "endpoint": "https://api.example.com"
     }
   }
 }
 ```
+
+真实密钥只能放在未跟踪的 `config/secrets.json` 或部署环境中，不能写入插件默认值、测试和文档。提交前扫描 Git 跟踪文件：
+
+```bash
+python scripts/scan_workspace_secrets.py --tracked .
+```
+
+排查本机忽略文件或待打包目录时使用 `--workspace`。扫描输出只包含相对路径、行号、稳定规则 ID 和秘密值的短 SHA-256 指纹，不会打印原值。文档示例使用 `<MYPLUGIN_API_KEY>`、`${SERVICE_TOKEN}` 这类完整占位符；真实值即使包含 `test`、`example` 或 `xxx` 仍会报告。
+
+确需保留兼容性 fixture 时，可在仓库根目录 `.secret-scan-allowlist.json` 使用精确条目；四个字段均必需，且 `fingerprint` 必须是完整 SHA-256：
+
+```json
+{
+  "entries": [
+    {
+      "path": "path/to/fixture.txt",
+      "rule_id": "credential.assignment.token.v1",
+      "fingerprint": "<FULL_64_CHARACTER_SHA256>",
+      "reason": "legacy interoperability fixture"
+    }
+  ]
+}
+```
+
+Allowlist 只匹配完全相同的路径、规则和指纹；秘密删除或变化后条目会变为 stale 并使扫描失败，必须同步删除或审查更新。
 
 ### 在插件中读取
 

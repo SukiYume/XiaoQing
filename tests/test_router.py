@@ -2,8 +2,9 @@
 CommandRouter 单元测试
 """
 
-import pytest
 from typing import Any
+
+import pytest
 
 from core.router import CommandRouter, CommandSpec
 
@@ -139,6 +140,13 @@ class TestCommandRouter:
         assert len(lines) == 5
         assert any("echo" in msg for msg in lines)
         assert any("help" in msg for msg in lines)
+
+    def test_list_commands_includes_manifest_usage(self, router: CommandRouter):
+        spec = make_spec("echo", ["echo"])
+        spec.usage = "/echo <text>"
+        router.register(spec)
+
+        assert "    ↳ 用法: /echo <text>" in router.list_commands()
 
     def test_admin_only_flag(self, router: CommandRouter):
         """测试管理员命令标记"""

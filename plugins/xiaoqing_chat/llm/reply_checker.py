@@ -11,7 +11,7 @@ from .control_payload import control_extra_payload
 from .llm_client import LLMError, chat_completions_raw_with_fallback_paths
 from ..message_parts import render_stored_message
 from ..memory.memory import StoredMessage
-from ..utils.json_parsing import parse_first_json_object
+from ..utils.json_parsing import parse_first_json_object, strict_json_bool
 
 import logging as _logging
 
@@ -318,10 +318,12 @@ async def _llm_check(
     content = llm_client.extract_response_content(resp)
     obj = parse_first_json_object(content)
     if not obj:
-        return ReplyCheckResult(True, "reply_checker invalid response", False)
-    suitable = bool(obj.get("suitable", True))
+        return ReplyCheckResult(False, "reply_checker invalid response", True)
+    suitable = strict_json_bool(obj.get("suitable"))
+    need_replan = strict_json_bool(obj.get("need_replan"))
+    if suitable is None or need_replan is None:
+        return ReplyCheckResult(False, "reply_checker invalid boolean fields", True)
     reason = str(obj.get("reason", "") or "").strip()
-    need_replan = bool(obj.get("need_replan", False))
     return ReplyCheckResult(suitable=suitable, reason=reason, need_replan=need_replan)
 
 
@@ -381,6 +383,6 @@ async def check_reply(
             endpoint_path=endpoint_path,
             extra_payload=extra_payload,
         )
-    except (LLMError, TimeoutError, asyncio.TimeoutError, Exception) as exc:
-        _log.warning("reply_checker LLM 调用失败，放行当前回复: %s", exc)
-        return ReplyCheckResult(True, f"reply_checker failed: {exc}", False)
+    except Exception as exc:
+        _log.warning("reply_checker LLM call failed: %s", type(exc).__name__)
+        return ReplyCheckResult(False, "reply_checker unavailable", True)

@@ -20,8 +20,13 @@ from ..utils.validators import (
 def backup_sqlite_database(db_path: Path, backup_path: Path) -> None:
     """Create a consistent SQLite backup, including uncheckpointed WAL pages."""
     backup_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path)) as source, sqlite3.connect(str(backup_path)) as target:
+    source = sqlite3.connect(str(db_path))
+    target = sqlite3.connect(str(backup_path))
+    try:
         source.backup(target)
+    finally:
+        target.close()
+        source.close()
 
 
 ITEM_COLUMNS = [

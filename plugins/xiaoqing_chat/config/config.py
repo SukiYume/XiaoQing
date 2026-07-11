@@ -215,6 +215,10 @@ class MediaConfig(BaseModel):
     emoji_auto_collect_max_entries: int = 200
     emoji_auto_collect_similarity_threshold: int = 4
     max_media_per_message: int = 1
+    max_image_pixels: int = 16_000_000
+    max_animation_frames: int = 120
+    inbox_disk_quota_bytes: int = 256 * 1024 * 1024
+    inbox_ttl_seconds: float = 7 * 86400.0
     enable_emoji_refine_background: bool = True
     emoji_refine_timeout_seconds: float = 2.0
     max_analyze_bytes: int = 4 * 1024 * 1024
@@ -233,6 +237,10 @@ class XiaoQingChatConfig(BaseModel):
     min_reply_interval_seconds: float = 12.0
     active_topic_min_reply_interval: float = 3.0
     max_replies_per_minute: int = 6
+    max_generation_inflight_global: int = 4
+    max_generation_inflight_per_chat: int = 1
+    max_generation_inflight_per_user: int = 1
+    max_generation_calls_per_user_per_day: int = 200
     continuous_reply_limit: int = 3
     continuous_cooldown_seconds: float = 25.0
     max_context_size: int = 30

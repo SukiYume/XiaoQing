@@ -5,14 +5,7 @@ from typing import Sequence
 
 from ..config.config import ResponsePostProcessConfig, ResponseSplitterConfig
 
-_RE_CHINESE_BRACKETS = re.compile(r"（[^）]*）")
-_RE_ASCII_PARENS = re.compile(r"\([^)]*\)")
 _RE_MULTI_SPACE = re.compile(r"[ \t]{2,}")
-
-def _strip_brackets(text: str) -> str:
-    out = _RE_CHINESE_BRACKETS.sub("", text)
-    out = _RE_ASCII_PARENS.sub("", out)
-    return out
 
 def _strip_prefix(text: str, bot_name: str) -> str:
     s = text.strip()
@@ -26,11 +19,11 @@ def _strip_prefix(text: str, bot_name: str) -> str:
 
 def _normalize(text: str) -> str:
     s = text.replace("\r\n", "\n").replace("\r", "\n")
-    # 将 LLM 输出的字面 \n（两字符转义序列）转换为真正的换行符
-    s = s.replace("\\n", "\n")
-    s = _RE_MULTI_SPACE.sub(" ", s)
-    s = re.sub(r"\n{3,}", "\n\n", s)
-    return s.strip()
+    chunks = s.split("```")
+    for index in range(0, len(chunks), 2):
+        chunks[index] = _RE_MULTI_SPACE.sub(" ", chunks[index])
+        chunks[index] = re.sub(r"\n{3,}", "\n\n", chunks[index])
+    return "```".join(chunks).strip()
 
 def _truncate(text: str, max_length: int) -> str:
     if max_length <= 0:
@@ -62,7 +55,6 @@ def process_llm_response(
 ) -> list[str]:
     text = response_text or ""
     if cfg.enable_response_post_process:
-        text = _strip_brackets(text)
         text = _strip_prefix(text, bot_name=bot_name)
         text = text.strip().strip('"').strip("'").strip()
         text = _normalize(text)

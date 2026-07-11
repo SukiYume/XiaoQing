@@ -12,7 +12,7 @@
                 "学习"
             ],
             "help": "💬 教我说话 | /记忆 help 查看详细帮助",
-            "admin_only": false
+            "admin_only": true
         },
         {
             "name": "qa_list",
@@ -20,7 +20,7 @@
                 "对话"
             ],
             "help": "📜 查看已学内容 | /对话 help 查看详细帮助",
-            "admin_only": false
+            "admin_only": true
         },
         {
             "name": "qa_remove",

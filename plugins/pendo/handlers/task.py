@@ -686,7 +686,7 @@ class TaskHandler(DbOpsMixin):
         """列出所有分类（/pendo todo list 不带参数时）"""
         # 查询所有未删除的待办，按分类分组
         tasks = cast(
-            list[TaskItem], await run_sync(self.db.items.get_items, user_id, {"type": ItemType.TASK.value}, 1000)
+            list[TaskItem], await run_sync(self.db.items.get_all_items, user_id, {"type": ItemType.TASK.value})
         )
 
         if not tasks:
@@ -832,9 +832,15 @@ class TaskHandler(DbOpsMixin):
             filters["status"] = TaskStatus.OPEN.value
 
         # 查询（如果显示全部或分页，增加limit）
-        query_limit = 1000 if all_for_python_filter or show_all or page_num > 1 or tag_filter else PendoConfig.DEFAULT_SEARCH_LIMIT
+        fetch_all = all_for_python_filter or show_all or page_num > 1 or bool(tag_filter)
         tasks = cast(
-            list[TaskItem], await run_sync(self.db.items.get_items, user_id, filters, query_limit)
+            list[TaskItem],
+            await run_sync(
+                self.db.items.get_all_items if fetch_all else self.db.items.get_items,
+                user_id,
+                filters,
+                *([] if fetch_all else [PendoConfig.DEFAULT_SEARCH_LIMIT]),
+            ),
         )
 
         category = category_filter or "全部"
@@ -950,10 +956,15 @@ class TaskHandler(DbOpsMixin):
                         pass
 
         # 查询所有指定状态的待办
-        query_limit = 1000 if show_all or page_num > 1 else PendoConfig.DEFAULT_SEARCH_LIMIT
         filters = {"type": ItemType.TASK.value, "status": status}
         tasks = cast(
-            list[TaskItem], await run_sync(self.db.items.get_items, user_id, filters, query_limit)
+            list[TaskItem],
+            await run_sync(
+                self.db.items.get_all_items if (show_all or page_num > 1) else self.db.items.get_items,
+                user_id,
+                filters,
+                *([] if (show_all or page_num > 1) else [PendoConfig.DEFAULT_SEARCH_LIMIT]),
+            ),
         )
 
         if not tasks:
@@ -1221,7 +1232,7 @@ class TaskHandler(DbOpsMixin):
         # 查询该分类下所有待办
         filters = {"type": ItemType.TASK.value, "category": category}
         tasks = cast(
-            list[TaskItem], await run_sync(self.db.items.get_items, user_id, filters, 1000)
+            list[TaskItem], await run_sync(self.db.items.get_all_items, user_id, filters)
         )
 
         if not tasks:

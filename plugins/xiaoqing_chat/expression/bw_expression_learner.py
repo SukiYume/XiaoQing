@@ -12,6 +12,7 @@ from ..llm.llm_client import chat_completions_raw_with_fallback_paths
 from ..message_parts import render_stored_message
 from ..memory.memory import StoredMessage
 from ..planning.pfc_utils import get_items_from_json, extract_first_json_list
+from ..utils.json_parsing import strict_json_bool
 
 _LEARN_PROMPT = """你是对话表达方式学习器。你会从对话里抽取“像真人的表达方式/口癖”，并总结成可复用的表达风格。
 
@@ -206,8 +207,10 @@ async def single_expression_check(
     )
     if not ok or not isinstance(obj, dict):
         return False, False, "", "", ""
-    checked = bool(obj.get("checked", False))
-    rejected = bool(obj.get("rejected", False))
+    checked = strict_json_bool(obj.get("checked"))
+    rejected = strict_json_bool(obj.get("rejected"))
+    if checked is None or rejected is None:
+        return False, False, "", "", ""
     reason = str(obj.get("reason", "") or "").strip()
     ms = str(obj.get("modified_situation", "") or "").strip()
     mt = str(obj.get("modified_style", "") or "").strip()
@@ -219,6 +222,7 @@ async def upsert_learned(
     chat_id: str,
     learned: Sequence[LearnedExpression],
     similarity_threshold: float = 0.72,
+    max_store: int = 2000,
     self_reflect: bool,
     http_session,
     secrets: dict[str, Any],
@@ -318,7 +322,10 @@ async def upsert_learned(
                 ex.rejected = False
                 ex.modified_by = "ai"
 
-    items.sort(key=lambda x: (x.chat_id, -x.last_active_time, -x.count))
-    items = items[:2000]
+    scoped = [item for item in items if item.chat_id == chat_id]
+    other = [item for item in items if item.chat_id != chat_id]
+    scoped.sort(key=lambda item: (item.last_active_time, item.count), reverse=True)
+    limit = max(0, int(max_store))
+    items = other + (scoped[:limit] if limit else [])
     store.save(items)
     return changed
