@@ -1,5 +1,5 @@
 import { onRouteChange, navigate } from '../router.js';
-import { clearToken } from '../api.js';
+import { logout } from '../api.js';
 
 const PAGE_TITLES = {
     dashboard: '总览', events: '日程', tasks: '待办', ledger: '记账',
@@ -52,8 +52,8 @@ export function renderHeader(container) {
     });
 
     // Logout
-    header.querySelector('.header-logout').addEventListener('click', () => {
-        clearToken();
+    header.querySelector('.header-logout').addEventListener('click', async () => {
+        await logout();
         window.location.reload();
     });
 }

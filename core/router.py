@@ -17,6 +17,7 @@ class CommandSpec:
     admin_only: bool
     handler: Handler
     priority: int = 0  # 优先级，数字越大越先匹配
+    usage: str | None = None
 
 class CommandRouter:
     def __init__(self) -> None:
@@ -118,6 +119,8 @@ class CommandRouter:
                 admin_mark = " 🔐" if spec.admin_only else ""
                 lines.append(f"  {triggers}{admin_mark}")
                 lines.append(f"    ↳ {spec.help_text}")
+                if spec.usage:
+                    lines.append(f"    ↳ 用法: {spec.usage}")
         
         return lines
 

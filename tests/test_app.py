@@ -3,16 +3,20 @@ Tests for core/app.py - XiaoQingApp main application class
 """
 
 import asyncio
+import copy
 import json
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 from core.app import XiaoQingApp, current_action_sink
-
+from core.interfaces import PluginPrincipal
+from core.plugin_execution import PluginExecutionGate
+from core.plugin_manager import LoadedPlugin, PluginDefinition
+from core.server import InboundManager
 
 # ============================================================
 # Fixtures
@@ -278,9 +282,59 @@ async def test_app_context_send_action(temp_app_root: Path):
         assert mock_send.await_args.args[0]["_source_plugin"] == "test"
 
 
+@pytest.mark.unit
+def test_app_plugin_context_scopes_and_freezes_config_and_secrets(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    config = dict(app.config_manager.config)
+    config["plugins"] = {"alpha": {"enabled": True}, "beta": {"enabled": True}}
+    secrets = {"admin_user_ids": [1], "plugins": {"alpha": {"token": "a"}, "beta": {"token": "b"}}}
+    app.config_manager._replace_snapshot(config, secrets)
+
+    context = app._build_plugin_context("alpha", Path("/alpha"), Path("/alpha/data"), {})
+
+    assert context.config["plugins"] == {"alpha": {"enabled": True}}
+    assert context.secrets == {"plugins": {"alpha": {"token": "a"}}}
+    assert context.config_manager is None
+    with pytest.raises(TypeError):
+        context.config["plugins"]["alpha"]["enabled"] = False
+    with pytest.raises(TypeError):
+        context.secrets["plugins"]["alpha"]["token"] = "changed"
+
+
 # ============================================================
 # Lifecycle Tests
 # ============================================================
+
+
+@pytest.mark.asyncio
+async def test_reconcile_inbound_restarts_when_proxy_security_declaration_changes(
+    temp_app_root: Path,
+):
+    app = XiaoQingApp(temp_app_root)
+    old_manager = InboundManager(
+        inbound_http_base="http://127.0.0.1:12000",
+        inbound_ws_uri="",
+        token="token",
+        handler=app._handle_inbound_event,
+        trusted_tls_proxy=False,
+    )
+    new_manager = InboundManager(
+        inbound_http_base="http://127.0.0.1:12000",
+        inbound_ws_uri="",
+        token="token",
+        handler=app._handle_inbound_event,
+        trusted_tls_proxy=True,
+    )
+    old_manager.stop = AsyncMock()
+    new_manager.start = AsyncMock()
+    app.inbound_manager = old_manager
+
+    with patch("core.app.InboundManager.from_config", return_value=new_manager):
+        await app._reconcile_inbound_manager({}, {"inbound_token": "token"})
+
+    old_manager.stop.assert_awaited_once()
+    new_manager.start.assert_awaited_once()
+    assert app.inbound_manager is new_manager
 
 @pytest.mark.asyncio
 @pytest.mark.integration
@@ -541,8 +595,6 @@ async def test_app_stop_unloads_plugins(temp_app_root: Path):
     """Test app stop unloads all plugins"""
     app = XiaoQingApp(temp_app_root)
 
-    # Create mock plugin
-    mock_plugin = MagicMock()
     app.plugin_manager.list_plugins = Mock(return_value=["test_plugin"])
     app.plugin_manager.unload_plugin = AsyncMock()
 
@@ -557,6 +609,87 @@ async def test_app_stop_unloads_plugins(temp_app_root: Path):
 
     # Verify unload was called
     app.plugin_manager.unload_plugin.assert_called_once_with("test_plugin")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_stop_continues_after_cleanup_failures(temp_app_root: Path):
+    """A failed shutdown hook must not prevent the remaining cleanup phases."""
+    app = XiaoQingApp(temp_app_root)
+    calls: list[str] = []
+
+    async def fail_inbound() -> None:
+        calls.append("inbound")
+        raise RuntimeError("inbound stop failed")
+
+    async def fail_ws() -> None:
+        calls.append("ws")
+        raise RuntimeError("ws stop failed")
+
+    async def fail_http() -> None:
+        calls.append("http")
+        raise RuntimeError("http close failed")
+
+    async def fail_background_task() -> None:
+        raise RuntimeError("watcher failed")
+
+    async def unload_plugin(name: str) -> None:
+        calls.append(f"plugin:{name}")
+        if name == "broken":
+            raise RuntimeError("plugin shutdown failed")
+
+    def fail_scheduler(**_: Any) -> None:
+        calls.append("scheduler")
+        raise RuntimeError("scheduler stop failed")
+
+    app.inbound_manager = MagicMock(stop=AsyncMock(side_effect=fail_inbound))
+    app.ws_client = MagicMock(stop=AsyncMock(side_effect=fail_ws))
+    app.http_session = MagicMock(close=AsyncMock(side_effect=fail_http))
+    app.scheduler.scheduler.shutdown = Mock(side_effect=fail_scheduler)
+    app.plugin_manager.list_plugins = Mock(return_value=["broken", "healthy"])
+    app.plugin_manager.unload_plugin = AsyncMock(side_effect=unload_plugin)
+    app._config_watch_task = asyncio.create_task(fail_background_task())
+    await asyncio.sleep(0)
+
+    await asyncio.wait_for(app.stop(), timeout=1)
+
+    assert calls == [
+        "inbound",
+        "ws",
+        "scheduler",
+        "plugin:broken",
+        "plugin:healthy",
+        "http",
+    ]
+    assert app.inbound_manager is None
+    assert app.ws_client is None
+    assert app.http_session is None
+    assert app._config_watch_task is None
+    assert any("inbound server" in error for error in app._last_shutdown_errors)
+    assert any("_config_watch_task" in error for error in app._last_shutdown_errors)
+    assert any("plugin broken" in error for error in app._last_shutdown_errors)
+    assert any("HTTP session" in error for error in app._last_shutdown_errors)
+
+
+@pytest.mark.unit
+def test_app_ignores_config_and_schedule_updates_while_stopping(temp_app_root: Path):
+    """Configuration callbacks cannot recreate runtime components after stop begins."""
+    from core.config import ConfigSnapshot
+
+    app = XiaoQingApp(temp_app_root)
+    app._stopping = True
+    app.dispatcher.refresh_prefix_cache = Mock()
+    app.scheduler.clear_prefix = Mock()
+    app.config_manager.reload = Mock()
+
+    snapshot = ConfigSnapshot(config=app.config, secrets=app.secrets)
+    app._apply_config(snapshot)
+    app.reload_config()
+    app._reschedule("startup")
+
+    app.dispatcher.refresh_prefix_cache.assert_not_called()
+    app.config_manager.reload.assert_not_called()
+    app.scheduler.clear_prefix.assert_not_called()
 
 
 # ============================================================
@@ -708,6 +841,39 @@ async def test_app_handle_inbound_event_with_source(temp_app_root: Path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_app_deduplicates_message_id_across_inbound_transports(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    app.dispatcher.handle_event = AsyncMock(return_value=[])
+    event = {
+        "post_type": "message",
+        "message_type": "private",
+        "self_id": 10000,
+        "user_id": 12345,
+        "message_id": 99,
+        "message": [{"type": "text", "data": {"text": "hello"}}],
+    }
+
+    await app._handle_upstream_event(event)
+    await app._handle_inbound_event(event)
+
+    app.dispatcher.handle_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_does_not_deduplicate_events_without_message_id(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    app.dispatcher.handle_event = AsyncMock(return_value=[])
+    event = {"post_type": "message", "message_type": "private", "user_id": 12345, "message": "same"}
+
+    await app._handle_upstream_event(event)
+    await app._handle_inbound_event(event)
+
+    assert app.dispatcher.handle_event.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_app_send_single_action_falls_back_to_http_when_inbound_has_no_ws_clients(temp_app_root: Path):
     """Test inbound manager does not swallow actions when no inbound WS clients are connected."""
     app = XiaoQingApp(temp_app_root)
@@ -765,6 +931,524 @@ async def test_app_send_single_action_falls_back_to_http_when_ws_send_fails(temp
 
     app.ws_client.send_action.assert_awaited_once_with(action)
     app.http_sender.send_action.assert_awaited_once_with(action)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_send_action_propagates_onebot_business_rejection(temp_app_root: Path):
+    """Plugin callers can distinguish an acknowledged send from a OneBot rejection."""
+    app = XiaoQingApp(temp_app_root)
+    app.http_sender = MagicMock()
+    app.http_sender.http_base = "http://localhost:5700"
+    app.http_sender.send_action = AsyncMock(return_value=False)
+    app.plugin_manager.get = Mock(return_value=None)
+
+    action = {"action": "send_group_msg", "params": {"group_id": 1, "message": []}}
+    assert await app._send_action(action) is False
+
+    context = app._build_plugin_context("test", Path("/test"), Path("/test"), {})
+    assert await context.send_action(action) is False
+
+
+# ============================================================
+# Plugin principal and capability tests
+# ============================================================
+
+
+def _plugin_context_for(
+    app: XiaoQingApp,
+    plugin_name: str,
+    *,
+    user_id: int | None = None,
+    group_id: int | None = None,
+    principal: PluginPrincipal | None = None,
+):
+    return app._build_plugin_context(
+        plugin_name,
+        app.root / "plugins" / plugin_name,
+        app.root / "plugins" / plugin_name / "data",
+        {},
+        user_id,
+        group_id,
+        "capability-test",
+        principal,
+    )
+
+
+@pytest.mark.unit
+def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    secrets = {
+        "admin_user_ids": [12345],
+        "onebot_token": "top-level-token",
+        "inbound_token": "inbound-token",
+        "plugins": {
+            "bot_core": {"own_key": "own-value"},
+            "other": {"hidden_key": "hidden-value"},
+            "xiaoqing_chat": {"chat_key": "chat-value"},
+        },
+    }
+    mutable_config = json.loads(json.dumps(app.config))
+    app.config_manager._replace_snapshot(mutable_config, secrets)
+    app._load_admins(secrets)
+    principal = app.issue_user_principal(
+        {"user_id": 12345},
+        user_id=12345,
+        group_id=None,
+        is_private=True,
+    )
+
+    bot_context = _plugin_context_for(
+        app,
+        "bot_core",
+        user_id=12345,
+        principal=principal,
+    )
+    assert bot_context.config_manager is None
+    assert set(bot_context.secrets["plugins"]) == {"bot_core"}
+    assert "onebot_token" not in bot_context.secrets
+    assert bot_context.capabilities.is_bot_admin is True
+    assert bot_context.capabilities.is_system is False
+    assert bot_context.capabilities.secret_admin is not None
+    assert (
+        bot_context.capabilities.secret_admin.get("plugins.other.hidden_key")
+        == "hidden-value"
+    )
+
+    ordinary_context = _plugin_context_for(
+        app,
+        "other",
+        user_id=12345,
+        principal=principal,
+    )
+    assert set(ordinary_context.secrets["plugins"]) == {"other"}
+    assert ordinary_context.capabilities.secret_admin is None
+    assert ordinary_context.capabilities.onebot_media is None
+    assert ordinary_context.capabilities.config_subscription is None
+
+    media_context = _plugin_context_for(
+        app,
+        "xiaoqing_chat",
+        user_id=12345,
+        principal=principal,
+    )
+    assert media_context.capabilities.onebot_media is not None
+    assert "onebot_http_base" not in media_context.config
+    assert "onebot_token" not in media_context.secrets
+
+    pendo_context = _plugin_context_for(
+        app,
+        "pendo",
+        user_id=12345,
+        principal=principal,
+    )
+    assert pendo_context.capabilities.config_subscription is not None
+    assert pendo_context.capabilities.secret_admin is None
+
+
+@pytest.mark.unit
+def test_app_rejects_forged_copied_and_mismatched_principals(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    issued = app.issue_user_principal(
+        {"user_id": 12345},
+        user_id=12345,
+        group_id=None,
+        is_private=True,
+    )
+    forged = PluginPrincipal(
+        kind="user",
+        user_id=12345,
+        is_bot_admin=True,
+        is_private=True,
+    )
+    copied = copy.copy(issued)
+    deep_copied = copy.deepcopy(issued)
+    assert copied is not issued
+    assert deep_copied is not issued
+
+    for principal in (forged, copied, deep_copied, PluginPrincipal(kind="scheduled_system")):
+        with pytest.raises(PermissionError, match="not issued"):
+            _plugin_context_for(
+                app,
+                "test",
+                user_id=principal.user_id,
+                group_id=principal.group_id,
+                principal=principal,
+            )
+
+    with pytest.raises(PermissionError, match="do not match"):
+        _plugin_context_for(app, "test", user_id=67890, principal=issued)
+
+
+@pytest.mark.unit
+def test_app_recomputes_admin_capability_after_revocation(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    principal = app.issue_user_principal(
+        {"user_id": 12345},
+        user_id=12345,
+        group_id=None,
+        is_private=True,
+    )
+    before = _plugin_context_for(
+        app,
+        "bot_core",
+        user_id=12345,
+        principal=principal,
+    )
+    assert before.capabilities.is_bot_admin is True
+    assert before.capabilities.secret_admin is not None
+
+    app._admin_set.clear()
+    after = _plugin_context_for(
+        app,
+        "bot_core",
+        user_id=12345,
+        principal=principal,
+    )
+    assert after.capabilities.is_bot_admin is False
+    assert after.capabilities.secret_admin is None
+
+
+@pytest.mark.unit
+def test_app_issues_group_role_only_for_matching_sender(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    matching = app.issue_user_principal(
+        {"sender": {"user_id": 111, "role": "admin"}},
+        user_id=111,
+        group_id=222,
+        is_private=False,
+    )
+    mismatched = app.issue_user_principal(
+        {"sender": {"user_id": 999, "role": "owner"}},
+        user_id=111,
+        group_id=222,
+        is_private=False,
+    )
+    private = app.issue_user_principal(
+        {"sender": {"user_id": 111, "role": "owner"}},
+        user_id=111,
+        group_id=None,
+        is_private=True,
+    )
+
+    assert matching.can_manage_group(222) is True
+    assert matching.can_manage_group(333) is False
+    assert mismatched.group_role == "unknown"
+    assert mismatched.can_manage_group(222) is False
+    assert private.group_role == "unknown"
+    assert private.can_manage_group(222) is False
+
+
+@pytest.mark.unit
+def test_pendo_config_subscription_is_scoped_and_unsubscribable(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    config = json.loads(json.dumps(app.config))
+    config["plugins"] = {
+        "pendo": {"web_demo_enabled": True},
+        "other": {"private_option": "hidden"},
+    }
+    secrets = json.loads(json.dumps(app.secrets))
+    app.config_manager._replace_snapshot(config, secrets)
+    context = _plugin_context_for(app, "pendo")
+    subscription = context.capabilities.config_subscription
+    assert subscription is not None
+    received = []
+    unsubscribe = subscription.subscribe(received.append)
+
+    app.config_manager.update_secret("admin_user_ids", [12345])
+    unsubscribe()
+    unsubscribe()
+    app.config_manager.update_secret("admin_user_ids", [12345, 67890])
+
+    assert len(received) == 1
+    assert set(received[0]["plugins"]) == {"pendo"}
+    assert received[0]["plugins"]["pendo"]["web_demo_enabled"] is True
+    assert "other" not in received[0]["plugins"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_bot_core_secret_admin_works_with_production_context(temp_app_root: Path):
+    from plugins.bot_core import main as bot_core
+
+    app = XiaoQingApp(temp_app_root)
+    secrets = {
+        "admin_user_ids": [12345],
+        "onebot_token": "",
+        "inbound_token": "",
+        "plugins": {"bot_core": {"managed": "before"}},
+    }
+    mutable_config = json.loads(json.dumps(app.config))
+    app.config_manager._replace_snapshot(mutable_config, secrets)
+    app._load_admins(secrets)
+    principal = app.issue_user_principal(
+        {"user_id": 12345},
+        user_id=12345,
+        group_id=None,
+        is_private=True,
+    )
+    context = _plugin_context_for(
+        app,
+        "bot_core",
+        user_id=12345,
+        principal=principal,
+    )
+
+    result = await bot_core.handle(
+        "set_secret",
+        "plugins.bot_core.managed after",
+        {"user_id": 12345, "message_type": "private"},
+        context,
+    )
+
+    assert "已更新" in result[0]["data"]["text"]
+    assert app.config_manager.snapshot().secrets["plugins"]["bot_core"]["managed"] == "after"
+    assert "after" not in repr(context.secrets)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_onebot_request_uses_correlated_outbound_transport_only(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    failed_response = {"status": "failed", "retcode": 100, "data": {}}
+    app.ws_client = SimpleNamespace(
+        connected=lambda: True,
+        request_action=AsyncMock(return_value=failed_response),
+    )
+    app.http_sender = SimpleNamespace(
+        http_base="http://onebot",
+        request_action=AsyncMock(return_value={"status": "ok", "retcode": 0}),
+    )
+    app.inbound_manager = SimpleNamespace(broadcast=AsyncMock())
+
+    result = await app._request_onebot_action("get_msg", {"message_id": 42})
+
+    assert result is failed_response
+    app.http_sender.request_action.assert_not_awaited()
+    app.inbound_manager.broadcast.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_onebot_request_falls_back_to_http_on_ws_transport_failure(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    http_response = {"status": "ok", "retcode": 0, "data": {"message_id": 42}}
+    app.ws_client = SimpleNamespace(
+        connected=lambda: True,
+        request_action=AsyncMock(return_value=None),
+    )
+    app.http_sender = SimpleNamespace(
+        http_base="http://onebot",
+        request_action=AsyncMock(return_value=http_response),
+    )
+
+    result = await app._request_onebot_action("get_msg", {"message_id": 42})
+
+    assert result is http_response
+    app.http_sender.request_action.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_xiaoqing_media_capability_validates_and_crops_onebot_responses(
+    temp_app_root: Path,
+):
+    app = XiaoQingApp(temp_app_root)
+    app._request_onebot_action = AsyncMock(
+        side_effect=[
+            {"status": "ok", "retcode": 0, "data": {"message_id": 7, "raw": "ok"}},
+            {"status": "ok", "retcode": 0, "data": {"file": "cached.png"}},
+            {"status": "failed", "retcode": 100, "data": {"secret": "ignored"}},
+        ]
+    )
+    context = _plugin_context_for(app, "xiaoqing_chat")
+    media = context.capabilities.onebot_media
+    assert media is not None
+
+    assert await media.get_message(7) == {"message_id": 7, "raw": "ok"}
+    assert await media.get_image(file_id="abc") == {"file": "cached.png"}
+    assert await media.get_image(file="bad") == {}
+    assert app._request_onebot_action.await_args_list[0].args == (
+        "get_msg",
+        {"message_id": 7},
+    )
+    assert app._request_onebot_action.await_args_list[1].args == (
+        "get_image",
+        {"file_id": "abc"},
+    )
+
+    with pytest.raises(ValueError):
+        await media.get_message(True)
+    with pytest.raises(ValueError):
+        await media.get_image()
+    with pytest.raises(ValueError):
+        await media.get_image(file_id="a", file="b")
+    with pytest.raises(ValueError):
+        await media.get_image(file_id=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_cross_plugin_call_preserves_signed_principal_and_target_scope(
+    temp_app_root: Path,
+):
+    app = XiaoQingApp(temp_app_root)
+    secrets = {
+        "admin_user_ids": [12345],
+        "onebot_token": "",
+        "inbound_token": "",
+        "plugins": {"source": {"source_key": "s"}, "target": {"target_key": "t"}},
+    }
+    config = json.loads(json.dumps(app.config))
+    config["plugins"] = {"source": {"source_option": 1}, "target": {"target_option": 2}}
+    app.config_manager._replace_snapshot(config, secrets)
+    app._load_admins(secrets)
+    principal = app.issue_user_principal(
+        {"user_id": 12345},
+        user_id=12345,
+        group_id=None,
+        is_private=True,
+    )
+    seen_contexts = []
+
+    async def exported(value, context):
+        seen_contexts.append(context)
+        return value
+
+    module = ModuleType("plugins.target.main")
+    module.exported = exported
+    definition = PluginDefinition(
+        name="target",
+        version="1.0.0",
+        entry="main.py",
+        commands=[],
+        schedule=[],
+        concurrency="sequential",
+    )
+    app.plugin_manager._plugins["target"] = LoadedPlugin(
+        definition=definition,
+        module=module,
+        mtime=0.0,
+        execution_gate=PluginExecutionGate("sequential", plugin_name="target"),
+    )
+    source = _plugin_context_for(
+        app,
+        "source",
+        user_id=12345,
+        principal=principal,
+    )
+
+    assert await source.call_plugin("target", "exported", "first") == "first"
+    first = seen_contexts[-1]
+    assert first.principal is principal
+    assert first.capabilities.is_bot_admin is True
+    assert set(first.secrets["plugins"]) == {"target"}
+    assert set(first.config["plugins"]) == {"target"}
+    assert first.state is app.plugin_manager._plugin_states["target"]
+
+    app._admin_set.clear()
+    assert await source.call_plugin("target", "exported", "second") == "second"
+    assert seen_contexts[-1].capabilities.is_bot_admin is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_job_builds_real_system_capability_context(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    captured = []
+
+    async def handler(context):
+        captured.append(context)
+        return []
+
+    await app._run_job(handler, "scheduled-test", group_ids=[123, 456])
+
+    assert len(captured) == 1
+    context = captured[0]
+    assert context.principal.kind == "scheduled_system"
+    assert context.principal.user_id is None
+    assert context.principal.group_id is None
+    assert context.capabilities.is_system is True
+    assert context.capabilities.is_bot_admin is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
+    temp_app_root: Path,
+):
+    from plugins.xiaoqing_chat.handlers import handle_provider
+    from plugins.xiaoqing_chat.helper_utils import _get_llm_secrets
+    from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
+
+    app = XiaoQingApp(temp_app_root)
+    secrets = json.loads(json.dumps(app.secrets))
+    secrets["plugins"] = {
+        "xiaoqing_chat": {
+            "default": "deepseek",
+            "providers": {
+                "deepseek": {"model": "deepseek-chat", "api_base": "https://a.example"},
+                "glm": {"model": "glm-4", "api_base": "https://b.example"},
+            },
+        }
+    }
+    app.config_manager._replace_snapshot(json.loads(json.dumps(app.config)), secrets)
+    app._load_admins(secrets)
+    group_admin_event = {
+        "user_id": 777,
+        "group_id": 100,
+        "sender": {"user_id": 777, "role": "admin"},
+    }
+    group_admin = app.issue_user_principal(
+        group_admin_event,
+        user_id=777,
+        group_id=100,
+        is_private=False,
+    )
+    group_context = _plugin_context_for(
+        app,
+        "xiaoqing_chat",
+        user_id=777,
+        group_id=100,
+        principal=group_admin,
+    )
+    state = ChatRuntimeState()
+
+    with (
+        patch("plugins.xiaoqing_chat.handlers._state", return_value=state),
+        patch("plugins.xiaoqing_chat.helper_utils._state", return_value=state),
+    ):
+        local_result = await handle_provider("glm", group_admin_event, group_context)
+        denied_global = await handle_provider("global glm", group_admin_event, group_context)
+        group_a = _get_llm_secrets(group_context, chat_id="g100")
+        group_b = _get_llm_secrets(group_context, chat_id="g200")
+
+        bot_admin_event = {
+            "user_id": 12345,
+            "group_id": 200,
+            "sender": {"user_id": 12345, "role": "member"},
+        }
+        bot_admin = app.issue_user_principal(
+            bot_admin_event,
+            user_id=12345,
+            group_id=200,
+            is_private=False,
+        )
+        bot_context = _plugin_context_for(
+            app,
+            "xiaoqing_chat",
+            user_id=12345,
+            group_id=200,
+            principal=bot_admin,
+        )
+        global_result = await handle_provider("global glm", bot_admin_event, bot_context)
+
+    assert "当前会话供应商" in local_result[0]["data"]["text"]
+    assert "Bot 全局管理员" in denied_global[0]["data"]["text"]
+    assert group_a["_provider_name"] == "glm"
+    assert group_b["_provider_name"] == "deepseek"
+    assert "全局运行时供应商" in global_result[0]["data"]["text"]
+    assert state.global_active_provider == "glm"
 
 
 # ============================================================
@@ -928,7 +1612,47 @@ async def test_app_run_job(temp_app_root: Path):
     await app._run_job(mock_handler, "test_plugin", [123, 456])
 
     # Verify context was built
-    app.plugin_manager.build_context.assert_called_once_with("test_plugin")
+    app.plugin_manager.build_context.assert_called_once()
+    call = app.plugin_manager.build_context.call_args
+    assert call.args == ("test_plugin",)
+    assert call.kwargs["principal"].kind == "scheduled_system"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_app_run_job_uses_plugin_sequential_gate(temp_app_root: Path):
+    """Scheduled calls share the same manifest gate as message handlers."""
+    from core.plugin_execution import PluginExecutionGate
+
+    app = XiaoQingApp(temp_app_root)
+    gate = PluginExecutionGate("sequential")
+    loaded = SimpleNamespace(execution_gate=gate)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+    max_active = 0
+
+    async def slow_handler(_context):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        entered.set()
+        await release.wait()
+        active -= 1
+        return []
+
+    app.plugin_manager.get = Mock(return_value=loaded)
+    app.plugin_manager.build_context = Mock(return_value=MagicMock())
+
+    first = asyncio.create_task(app._run_job(slow_handler, "stateful"))
+    await entered.wait()
+    second = asyncio.create_task(app._run_job(slow_handler, "stateful"))
+    await asyncio.sleep(0)
+    assert max_active == 1
+
+    release.set()
+    await asyncio.gather(first, second)
+    assert max_active == 1
 
 
 @pytest.mark.asyncio
@@ -940,6 +1664,7 @@ async def test_send_action_notifies_xiaoqing_for_external_plugin_text(temp_app_r
     xiaoqing_context = MagicMock()
     app.plugin_manager.get = Mock(return_value=loaded)
     app.plugin_manager.build_context = Mock(return_value=xiaoqing_context)
+    app._send_single_action = AsyncMock(return_value=True)
 
     action = {
         "action": "send_group_msg",
@@ -953,11 +1678,12 @@ async def test_send_action_notifies_xiaoqing_for_external_plugin_text(temp_app_r
     await app._send_action(action)
 
     app.plugin_manager.get.assert_called_once_with("xiaoqing_chat")
-    app.plugin_manager.build_context.assert_called_once_with(
-        "xiaoqing_chat",
-        user_id=None,
-        group_id=123,
-    )
+    app.plugin_manager.build_context.assert_called_once()
+    build_call = app.plugin_manager.build_context.call_args
+    assert build_call.args == ("xiaoqing_chat",)
+    assert build_call.kwargs["user_id"] is None
+    assert build_call.kwargs["group_id"] == 123
+    assert build_call.kwargs["principal"].kind == "lifecycle"
     observer.assert_awaited_once_with(
         action,
         xiaoqing_context,
@@ -1071,6 +1797,67 @@ def test_app_reschedule_single_plugin(temp_app_root: Path):
     app.scheduler.clear_prefix.assert_called_once_with("plugin.test_plugin.")
 
 
+@pytest.mark.unit
+def test_app_reschedule_skips_manifest_disabled_schedule(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    module = MagicMock()
+    definition = PluginDefinition(
+        name="test_plugin",
+        version="1.0.0",
+        entry="main.py",
+        commands=[],
+        schedule=[
+            {
+                "id": "disabled",
+                "handler": "scheduled",
+                "cron": {"minute": "*"},
+                "enabled": False,
+            }
+        ],
+        concurrency="parallel",
+    )
+    loaded = LoadedPlugin(definition=definition, module=module, mtime=0.0)
+    app.scheduler.clear_prefix = Mock()
+    app.scheduler.add_job = Mock()
+    app.plugin_manager.schedule_definitions = Mock(return_value=[loaded])
+
+    app._reschedule("startup")
+
+    app.scheduler.add_job.assert_not_called()
+
+
+@pytest.mark.unit
+def test_app_reschedule_preserves_manifest_schedule_description(temp_app_root: Path):
+    app = XiaoQingApp(temp_app_root)
+    module = MagicMock()
+    module.scheduled = AsyncMock()
+    definition = PluginDefinition(
+        name="test_plugin",
+        version="1.0.0",
+        entry="main.py",
+        commands=[],
+        schedule=[
+            {
+                "id": "enabled",
+                "handler": "scheduled",
+                "cron": {"minute": "*"},
+                "description": "visible scheduler metadata",
+                "enabled": True,
+            }
+        ],
+        concurrency="parallel",
+    )
+    loaded = LoadedPlugin(definition=definition, module=module, mtime=0.0)
+    app.scheduler.clear_prefix = Mock()
+    app.scheduler.add_job = Mock()
+    app.plugin_manager.schedule_definitions = Mock(return_value=[loaded])
+
+    app._reschedule("startup")
+
+    app.scheduler.add_job.assert_called_once()
+    assert app.scheduler.add_job.call_args.kwargs["description"] == "visible scheduler metadata"
+
+
 # ============================================================
 # Action Sink Tests
 # ============================================================
@@ -1157,7 +1944,7 @@ async def test_app_cleanup_sessions_loop(temp_app_root: Path):
         # But since this is a mock for sleep, we can just return None first time
         pass
 
-    with patch("asyncio.sleep", side_effect=[None, stop_exc]) as mock_sleep:
+    with patch("asyncio.sleep", side_effect=[None, stop_exc]):
         try:
             await app._cleanup_sessions_loop()
         except asyncio.CancelledError:

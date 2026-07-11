@@ -7,8 +7,8 @@
 处理流程:
 1. 事件过滤 - 仅处理 message 类型事件
 2. 消息解析 - 提取文本、user_id、group_id
-3. URL-only 短路 - clean_text 为单个 URL 时路由到 url_parser
-4. 触发门控 - 私聊、配置放行、has_prefix 或活跃会话
+3. 触发门控 - 私聊、配置放行、has_prefix 或活跃会话
+4. URL-only 路由 - 通过门控后才交给 url_parser
 5. 命令路由 - 匹配命令并执行
 6. 会话处理 - 多轮对话支持
 7. 闲聊处理 - 无命令时进行闲聊
@@ -17,32 +17,47 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import logging
-import time
 import re
+import time
 import uuid
-from urllib.parse import urlsplit
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from pydantic import ValidationError
 
 from . import constants
 from .clock import IClock, IRandom, SystemClock, SystemRandom
-from .metrics import MetricsCollector
-from .interfaces import AdminCheck, ConfigProvider, ContextFactory, PluginRegistry
+from .interfaces import (
+    AdminCheck,
+    ConfigProvider,
+    ContextFactory,
+    PluginPrincipal,
+    PluginRegistry,
+)
 from .message import (
     compile_bot_name_pattern,
     parse_text_command_context,
     scan_message,
 )
+from .metrics import MetricsCollector
 from .models import OneBotEvent
-from pydantic import ValidationError
+from .plugin_execution import (
+    PluginExecutionClosed,
+    PluginExecutionTimeout,
+    PluginExecutionUnavailable,
+    call_plugin_callback,
+    invoke_loaded_plugin,
+)
 from .router import CommandRouter
+from .safe_http import UnsafeUrlError, validate_public_url
 
 if TYPE_CHECKING:
     from .session import Session, SessionManager
 
 logger = logging.getLogger(__name__)
+
+_ADMIN_SESSION_PLUGINS = frozenset({"codex", "shell", "jupyter", "qingssh", "minecraft"})
 
 
 
@@ -259,7 +274,7 @@ class Dispatcher:
         
         静音期间：
         - 跳过 smalltalk 回落
-        - 仍响应 URL-only、命令、只喊名字、主动 @ 和活跃会话
+        - 仍响应命令、只喊名字、主动 @ 和活跃会话
         """
         unmute_time = self.clock.now() + duration_minutes * constants.SECONDS_PER_MINUTE
         self._muted_groups[group_id] = unmute_time
@@ -309,22 +324,16 @@ class Dispatcher:
             return []
 
         logger.info(
-            "[%s] Received: user=%s, group=%s, text='%s'",
-            ctx.request_id, ctx.user_id, ctx.group_id,
-            self._truncate_text(ctx.text, constants.DEFAULT_LOG_TRUNCATE_LEN),
+            "[%s] Received: user=%s, group=%s, text_length=%s, command_prefix=%s, url_only=%s",
+            ctx.request_id,
+            ctx.user_id,
+            ctx.group_id,
+            len(ctx.text),
+            ctx.has_command_prefix,
+            ctx.is_url_only,
         )
 
-        await self._observe_message(ctx)
-
-        # Step A: URL short-circuit
-        if ctx.is_url_only:
-            url = ctx.clean_text.strip()
-            if self._is_blocked_url_target(url):
-                logger.warning("[%s] Blocked suspicious URL: %s", ctx.request_id, url)
-                return []
-            return await self._invoke_url_parser(ctx, url) or []
-
-        # Step B: process gate
+        # Step A: process gate
         config = self.config_provider.config
         require_bot_name = config.get("require_bot_name_in_group", True)
         should_process = (
@@ -332,6 +341,7 @@ class Dispatcher:
             or (not require_bot_name)
             or ctx.has_prefix
         )
+        session_checked = False
         if (
             not should_process
             and self.session_manager is not None
@@ -339,9 +349,51 @@ class Dispatcher:
             and not ctx.is_only_bot_name
         ):
             session = await self.session_manager.get(ctx.user_id, ctx.group_id)
+            session_checked = True
             if session:
                 should_process = True
                 ctx.cached_session = session
+
+        # Resolve commands before observation so command bodies never become
+        # Xiaoqing chat memory.  Unaddressed group chatter is intentionally not
+        # resolved and remains observable.
+        resolved = None
+        if should_process and not ctx.is_url_only and not ctx.is_only_bot_name:
+            resolved = self.router.resolve(ctx.clean_text)
+
+        unknown_command_short_circuit = bool(
+            should_process
+            and resolved is None
+            and ctx.has_command_prefix
+            and ctx.clean_text
+            and ctx.clean_text[0].isalpha()
+        )
+        if (
+            should_process
+            and resolved is None
+            and not unknown_command_short_circuit
+            and not ctx.is_url_only
+            and not ctx.is_only_bot_name
+            and not session_checked
+            and self.session_manager is not None
+            and ctx.user_id is not None
+        ):
+            ctx.cached_session = await self.session_manager.get(ctx.user_id, ctx.group_id)
+            session_checked = True
+
+        observation_skip_reason = self._observation_skip_reason(ctx, resolved)
+        if observation_skip_reason is None:
+            await self._observe_message(ctx)
+        else:
+            logger.info(
+                "[%s] Observer skipped sensitive input category=%s",
+                ctx.request_id,
+                observation_skip_reason,
+            )
+
+        if not should_process and ctx.is_url_only:
+            logger.debug("[%s] URL skipped by group process gate", ctx.request_id)
+            return []
 
         if not should_process and self._allow_plain_group_smalltalk(ctx):
             if self.is_muted(ctx.group_id):
@@ -354,13 +406,24 @@ class Dispatcher:
         if not should_process:
             return []
 
+        # Step B: URL parser.  This must stay after the normal process and
+        # mute gates so URL messages cannot create an unauthorised network path.
+        if ctx.is_url_only:
+            if self.is_muted(ctx.group_id):
+                logger.debug("[%s] Group muted; skip URL parser", ctx.request_id)
+                return []
+            url = ctx.clean_text.strip()
+            if self._is_blocked_url_target(url):
+                logger.warning("[%s] Blocked suspicious URL", ctx.request_id)
+                return []
+            return await self._invoke_url_parser(ctx, url) or []
+
         # Step C: only bot_name
         if ctx.is_only_bot_name:
             logger.info("[%s] Handling bot name only", ctx.request_id)
             return await self._handle_bot_name_only(ctx)
 
         # Step D: command match
-        resolved = self.router.resolve(ctx.clean_text)
         if resolved:
             return await self._execute_command(resolved, ctx) or []
 
@@ -377,7 +440,12 @@ class Dispatcher:
                 }]
 
         # Step F: session continuation
-        if ctx.cached_session is None and self.session_manager is not None and ctx.user_id is not None:
+        if (
+            ctx.cached_session is None
+            and not session_checked
+            and self.session_manager is not None
+            and ctx.user_id is not None
+        ):
             ctx.cached_session = await self.session_manager.get(ctx.user_id, ctx.group_id)
         if ctx.cached_session is not None:
             session_result = await self._try_handle_session(ctx)
@@ -396,6 +464,48 @@ class Dispatcher:
     # 命令处理
     # ============================================================
 
+    def _principal_for_event(self, ctx: MessageContext) -> PluginPrincipal:
+        issuer = getattr(self.admin_check, "issue_user_principal", None)
+        if callable(issuer):
+            return issuer(
+                ctx.event,
+                user_id=ctx.user_id,
+                group_id=ctx.group_id,
+                is_private=ctx.is_private,
+            )
+        role = "unknown"
+        sender = ctx.event.get("sender")
+        if ctx.group_id is not None and isinstance(sender, dict):
+            sender_user_id = sender.get("user_id")
+            try:
+                sender_matches = (
+                    sender_user_id is not None
+                    and ctx.user_id is not None
+                    and int(sender_user_id) == int(ctx.user_id)
+                )
+            except (TypeError, ValueError):
+                sender_matches = False
+            candidate_role = str(sender.get("role", "") or "").strip().lower()
+            if sender_matches and candidate_role in {"owner", "admin", "member"}:
+                role = candidate_role
+        return PluginPrincipal(
+            kind="user" if ctx.user_id is not None else "lifecycle",
+            user_id=ctx.user_id,
+            group_id=ctx.group_id,
+            is_bot_admin=self.admin_check.is_admin(ctx.user_id),
+            is_private=ctx.is_private,
+            group_role=role,
+        )
+
+    def _build_event_context(self, plugin_name: str, ctx: MessageContext) -> Any:
+        return self.build_context(
+            plugin_name,
+            ctx.user_id,
+            ctx.group_id,
+            ctx.request_id,
+            self._principal_for_event(ctx),
+        )
+
     async def _execute_command(
         self,
         resolved: tuple[Any, str],
@@ -404,24 +514,35 @@ class Dispatcher:
         """Execute a matched command (router-resolved)."""
         spec, args = resolved
         logger.info(
-            "[%s] Command matched: %s.%s (args='%s')",
-            ctx.request_id, spec.plugin, spec.name, args,
+            "[%s] Command matched: %s.%s (args_length=%s)",
+            ctx.request_id,
+            spec.plugin,
+            spec.name,
+            len(args),
         )
 
         if spec.admin_only and not self.admin_check.is_admin(ctx.user_id):
             logger.warning("[%s] Permission denied for user %s", ctx.request_id, ctx.user_id)
             return [{"type": "text", "data": {"text": "权限不足"}}]
 
-        context = self.build_context(spec.plugin, ctx.user_id, ctx.group_id, ctx.request_id)
+        context = self._build_event_context(spec.plugin, ctx)
         start_time = time.perf_counter()
         try:
-            result = await spec.handler(spec.name, args, ctx.event, context)
+            loaded_plugin = self.plugin_registry.get(spec.plugin)
+
+            async def run_handler() -> list[dict[str, Any]]:
+                return await call_plugin_callback(spec.handler, spec.name, args, ctx.event, context)
+
+            result = await invoke_loaded_plugin(loaded_plugin, run_handler)
             logger.info("[%s] Command completed", ctx.request_id)
             if self.metrics:
                 await self.metrics.record_plugin_execution(
                     spec.plugin, spec.name, time.perf_counter() - start_time, is_error=False,
                 )
             return result
+        except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
+            logger.info("[%s] Command unavailable: %s", ctx.request_id, exc)
+            return [{"type": "text", "data": {"text": "⚠️ 插件暂时不可用，请稍后重试"}}]
         except Exception as exc:
             logger.exception("[%s] Command failed: %s", ctx.request_id, exc)
             if self.metrics:
@@ -448,59 +569,123 @@ class Dispatcher:
             return None
 
         user_id = ctx.user_id
-        # M3: 优先使用缓存的会话对象，避免重复查询和 TOCTOU 竞争
-        session = ctx.cached_session or await self.session_manager.get(user_id, ctx.group_id)
-        if not session:
+
+        async def handle_active_session(session: Session) -> list[dict[str, Any]] | None:
+            """Run the full continuation inside SessionManager's key transaction."""
+
+            async def close_plugin_session() -> None:
+                plugin = self.plugin_registry.get(session.plugin_name)
+                if not plugin or not hasattr(plugin.module, "close_session"):
+                    return
+                close_context = self._build_event_context(session.plugin_name, ctx)
+                try:
+                    await call_plugin_callback(
+                        plugin.module.close_session,
+                        ctx.event,
+                        close_context,
+                        session,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] Session close hook failed for %s: %s",
+                        ctx.request_id,
+                        session.plugin_name,
+                        exc,
+                    )
+
+            logger.info(
+                "[%s] Session active: plugin=%s",
+                ctx.request_id,
+                session.plugin_name,
+            )
+
+            if (
+                session.plugin_name in _ADMIN_SESSION_PLUGINS
+                and not self.admin_check.is_admin(user_id)
+            ):
+                await close_plugin_session()
+                await self.session_manager.delete(user_id, ctx.group_id)
+                logger.warning(
+                    "[%s] Revoked privileged session plugin=%s user=%s",
+                    ctx.request_id,
+                    session.plugin_name,
+                    user_id,
+                )
+                return [{"type": "text", "data": {"text": "权限已变更，高权限会话已关闭"}}]
+
+            # This re-enters the key lock safely, so deletion cannot race with
+            # another incoming continuation or expiry cleanup.
+            if ctx.text.strip().lower() in constants.EXIT_COMMANDS_SET:
+                await close_plugin_session()
+                await self.session_manager.delete(user_id, ctx.group_id)
+                logger.info("[%s] Session exited by user", ctx.request_id)
+                return [{"type": "text", "data": {"text": "已退出当前对话"}}]
+
+            context = self._build_event_context(session.plugin_name, ctx)
+            try:
+                plugin = self.plugin_registry.get(session.plugin_name)
+                if plugin and hasattr(plugin.module, "handle_session"):
+                    async def run_session() -> list[dict[str, Any]]:
+                        return await call_plugin_callback(
+                            plugin.module.handle_session,
+                            ctx.clean_text, ctx.event, context, session
+                        )
+
+                    return await invoke_loaded_plugin(plugin, run_session)
+                if plugin and hasattr(plugin.module, "handle"):
+                    async def run_session_fallback() -> list[dict[str, Any]]:
+                        return await call_plugin_callback(
+                            plugin.module.handle,
+                            "__session__", ctx.clean_text, ctx.event, context
+                        )
+
+                    return await invoke_loaded_plugin(plugin, run_session_fallback)
+            except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
+                logger.info("[%s] Session unavailable: %s", ctx.request_id, exc)
+                return [{"type": "text", "data": {"text": "⚠️ 会话插件暂时不可用，请稍后重试"}}]
+            except Exception as exc:
+                logger.exception("[%s] Session handler failed: %s", ctx.request_id, exc)
+                await close_plugin_session()
+                await self.session_manager.delete(user_id, ctx.group_id)
+                return [{"type": "text", "data": {"text": "⚠️ 对话处理出错，请联系管理员查看日志"}}]
             return None
-        
-        logger.info(
-            "[%s] Session active: plugin=%s",
-            ctx.request_id, session.plugin_name
+
+        # Do not use ctx.cached_session here: it only serves the pre-routing
+        # gate.  update() re-reads the live entry and locks the whole handler
+        # transaction, preventing a stale Session from being modified.
+        return await self.session_manager.update(
+            user_id,
+            ctx.group_id,
+            handle_active_session,
         )
-
-        # 检查退出命令
-        if ctx.text.strip().lower() in constants.EXIT_COMMANDS_SET:
-            await self.session_manager.delete(user_id, ctx.group_id)
-            logger.info("[%s] Session exited by user", ctx.request_id)
-            return [{"type": "text", "data": {"text": "已退出当前对话"}}]
-
-        # 路由到会话插件
-        context = self.build_context(session.plugin_name, user_id, ctx.group_id, ctx.request_id)
-        try:
-            plugin = self.plugin_registry.get(session.plugin_name)
-            if plugin and hasattr(plugin.module, "handle_session"):
-                return await plugin.module.handle_session(
-                    ctx.clean_text, ctx.event, context, session
-                )
-            elif plugin and hasattr(plugin.module, "handle"):
-                return await plugin.module.handle(
-                    "__session__", ctx.clean_text, ctx.event, context
-                )
-        except Exception as exc:
-            logger.exception("[%s] Session handler failed: %s", ctx.request_id, exc)
-            await self.session_manager.delete(user_id, ctx.group_id)
-            return [{"type": "text", "data": {"text": "⚠️ 对话处理出错，请联系管理员查看日志"}}]
-        
-        return None
 
     # ============================================================
     # URL 处理
     # ============================================================
 
-    async def _invoke_url_parser(self, ctx: MessageContext, url: str) -> list[dict[str, Any]] | None:
-        """Invoke url_parser for a clean URL message (called by Step A)."""
+    async def _invoke_url_parser(
+        self,
+        ctx: MessageContext,
+        url: str,
+    ) -> list[dict[str, Any]] | None:
+        """Invoke url_parser for a clean URL message after dispatcher gates."""
         plugin = self.plugin_registry.get("url_parser")
         if not plugin or not hasattr(plugin.module, "handle_url"):
             return None
 
         logger.info("[%s] URL detected: %s", ctx.request_id, url)
-        context = self.build_context("url_parser", ctx.user_id, ctx.group_id, ctx.request_id)
+        context = self._build_event_context("url_parser", ctx)
 
         try:
-            result = await plugin.module.handle_url(url, ctx.event, context)
+            async def run_url_parser() -> list[dict[str, Any]]:
+                return await call_plugin_callback(plugin.module.handle_url, url, ctx.event, context)
+
+            result = await invoke_loaded_plugin(plugin, run_url_parser)
             if result:
                 logger.info("[%s] URL handled", ctx.request_id)
                 return result
+        except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
+            logger.info("[%s] URL parser unavailable: %s", ctx.request_id, exc)
         except Exception as exc:
             logger.error("[%s] URL handling failed: %s", ctx.request_id, exc)
 
@@ -509,26 +694,8 @@ class Dispatcher:
     @staticmethod
     def _is_blocked_url_target(url: str) -> bool:
         try:
-            parsed = urlsplit(url)
-        except Exception:
-            return True
-
-        host = (parsed.hostname or "").strip().lower()
-        if not host:
-            return True
-        if host in {"localhost", "localhost.localdomain"}:
-            return True
-
-        try:
-            ip = ipaddress.ip_address(host.strip("[]"))
-        except ValueError:
-            # Lightweight guard only: DNS names are not resolved here, so domains
-            # that resolve to private/link-local IPs remain a url_parser concern.
-            return False
-
-        if ip.is_loopback or ip.is_private or ip.is_link_local:
-            return True
-        if ip.is_unspecified or ip.is_reserved or ip.is_multicast:
+            validate_public_url(url)
+        except UnsafeUrlError:
             return True
         return False
 
@@ -566,6 +733,21 @@ class Dispatcher:
             ctx,
             (ctx.clean_text, ctx.event),
         )
+
+    @staticmethod
+    def _observation_skip_reason(
+        ctx: MessageContext,
+        resolved: tuple[Any, str] | None,
+    ) -> str | None:
+        """Classify structured inputs that must not enter chat memory."""
+        if resolved is not None:
+            spec, _args = resolved
+            return f"command:{getattr(spec, 'plugin', 'unknown')}"
+        if ctx.has_command_prefix:
+            return "command-prefix"
+        if ctx.cached_session is not None:
+            return f"session:{ctx.cached_session.plugin_name}"
+        return None
 
     async def _dispatch_to_provider(
         self,
@@ -605,12 +787,17 @@ class Dispatcher:
             return None
 
         try:
-            context = self.build_context(provider, ctx.user_id, ctx.group_id, ctx.request_id)
+            context = self._build_event_context(provider, ctx)
             method = getattr(plugin.module, method_name)
-            result = method(*args, context)
-            if asyncio.iscoroutine(result):
-                result = await result
+
+            async def run_provider() -> Any:
+                return await call_plugin_callback(method, *args, context)
+
+            result = await invoke_loaded_plugin(plugin, run_provider)
             return result if result else []
+        except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
+            logger.info("%s unavailable for plugin %s: %s", method_name, provider, exc)
+            return None
         except Exception as exc:
             label = "Fallback " if fallback else ""
             logger.warning("%s%s failed: %s", label, method_name, exc)

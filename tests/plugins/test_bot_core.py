@@ -1,12 +1,16 @@
 """测试bot_core插件"""
 
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from core.interfaces import PluginCapabilities, PluginPrincipal
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 import importlib.util
+
 spec = importlib.util.spec_from_file_location("bot_core_main", ROOT / "plugins" / "bot_core" / "main.py")
 bot_core = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bot_core)
@@ -23,17 +27,37 @@ def mock_context():
         def __init__(self):
             self.plugin_dir = ROOT / "plugins" / "bot_core"
             self.data_dir = self.plugin_dir / "data"
-            self.secrets = {
-                "admin_user_ids": [12345, 67890],
+            self.secrets = {"plugins": {"bot_core": {}}}
+            self.config_manager = None
+            self.principal = PluginPrincipal(
+                kind="user",
+                user_id=12345,
+                is_bot_admin=True,
+                is_private=True,
+            )
+            secret_admin = MagicMock()
+            values = {
                 "plugins": {
                     "signin": {
-                        "yingshijufeng": {
-                            "sid": "test_sid_12345"
-                        }
-                    }
-                }
+                        "yingshijufeng": {"sid": "test_sid_12345"},
+                    },
+                },
+                "admin_user_ids": [12345, 67890],
             }
-            self.config_manager = MagicMock()
+
+            def get_secret(path):
+                current = values
+                for part in path.split("."):
+                    if not isinstance(current, dict) or part not in current:
+                        raise KeyError(path)
+                    current = current[part]
+                return current
+
+            secret_admin.get.side_effect = get_secret
+            self.capabilities = PluginCapabilities(
+                is_bot_admin=True,
+                secret_admin=secret_admin,
+            )
 
         def list_commands(self):
             """返回命令列表"""
@@ -423,15 +447,55 @@ class TestSetSecretCommand:
         """测试 set_secret 不再额外触发 reload_config。"""
         class Ctx:
             def __init__(self):
-                self.config_manager = MagicMock()
+                self.principal = PluginPrincipal(
+                    kind="user",
+                    user_id=1,
+                    is_bot_admin=True,
+                    is_private=True,
+                )
+                self.secret_admin = MagicMock()
+                self.capabilities = PluginCapabilities(
+                    is_bot_admin=True,
+                    secret_admin=self.secret_admin,
+                )
                 self.reload_config = MagicMock()
 
         ctx = Ctx()
         result = await bot_core.handle("set_secret", "plugins.signin.yingshijufeng.sid new_sid", {}, ctx)
 
         assert result is not None
-        ctx.config_manager.update_secret.assert_called_once()
+        ctx.secret_admin.set.assert_called_once_with(
+            "plugins.signin.yingshijufeng.sid",
+            "new_sid",
+        )
         ctx.reload_config.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_secret_rejects_group_chat(self, mock_context):
+        result = await bot_core.handle(
+            "set_secret",
+            "plugins.signin.token CANARY-secret",
+            {"user_id": 1, "group_id": 2},
+            mock_context,
+        )
+
+        assert "私聊" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_set_secret_redacts_command_log_before_handler(self, mock_context, monkeypatch):
+        info = MagicMock()
+        monkeypatch.setattr(bot_core.logger, "info", info)
+
+        await bot_core.handle(
+            "set_secret",
+            "plugins.signin.yingshijufeng.sid CANARY-secret",
+            {"user_id": 1, "group_id": None},
+            mock_context,
+        )
+
+        serialized_calls = str(info.call_args_list)
+        assert "CANARY-secret" not in serialized_calls
+        assert "<redacted>" in serialized_calls
 
 
 # ============================================================

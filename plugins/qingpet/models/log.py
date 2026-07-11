@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
+from ..utils.time import utc_now
 
 @dataclass
 class OperationLog:
@@ -15,4 +16,4 @@ class OperationLog:
     
     def __post_init__(self):
         if self.created_at is None:
-            self.created_at = datetime.now()
+            self.created_at = utc_now()

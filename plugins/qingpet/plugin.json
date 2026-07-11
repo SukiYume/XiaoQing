@@ -38,7 +38,7 @@
             "id": "qingpet_weekly_activity",
             "handler": "scheduled_weekly_activity",
             "cron": {
-                "day_of_week": 1,
+                "day_of_week": "mon",
                 "hour": 10,
                 "minute": 0
             },

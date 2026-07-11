@@ -75,6 +75,7 @@ async def _spawn_post_reply_bg_tasks(
                 min_interval_seconds=EXPRESSION_LEARN_MIN_INTERVAL,
                 min_messages=EXPRESSION_LEARN_MIN_MESSAGES,
                 self_reflect=True,
+                max_store=int(runtime.cfg.expression.max_store),
                 **bg.to_model_kwargs(),
                 **bg.to_dict(),
             ),
@@ -98,6 +99,7 @@ async def _spawn_post_reply_bg_tasks(
                 stats=stats,
                 timeout_seconds=float(runtime.cfg.reflection.session_timeout_seconds),
                 cooldown_seconds=float(runtime.cfg.reflection.session_cooldown_seconds),
+                max_pending=int(runtime.cfg.reflection.max_pending),
             )
         else:
             sess = None

@@ -1,69 +1,14 @@
-# GitHub Trending 插件
+# GitHub Trending
 
-获取 GitHub 每日/每周/每月趋势项目。
+当前实现抓取 GitHub 官方 Trending HTML，并支持时间范围，不提供语言过滤参数。
 
-## 功能介绍
+## 命令
 
-GitHub Trending 插件可以获取 GitHub 上的热门趋势项目，支持每日、每周、每月三种时间范围。
+- `/github` 或 `/github daily`
+- `/github weekly`
+- `/github monthly`
+- `/github help`
 
-## 使用方法
+每天 08:30 的 schedule 使用部署侧 `default_group_ids`。HTML 下载限制为 2 MiB/15 秒并验证公网 DNS、重定向和 `github.com` 域名；解析在线程执行。每次成功抓取会原子写入 `data/trending_<range>_latest.json` 和按日期历史文件，这些文件是历史快照，不是跳过网络请求的响应缓存。
 
-### 基本命令
-
-```
-/github [时间范围] [语言]
-/github help
-```
-
-### 时间范围
-
-- `daily` - 每日趋势（默认）
-- `weekly` - 每周趋势
-- `monthly` - 每月趋势
-
-### 示例
-
-```
-/github                    # 获取每日趋势（所有语言）
-/github daily              # 获取每日趋势
-/github weekly python      # 获取每周 Python 趋势
-/github monthly javascript # 获取每月 JavaScript 趋势
-/github help               # 显示帮助信息
-```
-
-## 配置说明
-
-在 `config/secrets.json` 中配置（可选）：
-
-```json
-{
-  "plugins": {
-    "github": {
-      "proxy": "http://proxy.example.com:8080"  // 如需代理
-    }
-  }
-}
-```
-
-## 功能特性
-
-- 支持三种时间范围（每日/每周/每月）
-- 可指定编程语言筛选
-- 展示项目名称、描述、星标数等信息
-- 自动缓存减少请求
-- 代理支持
-
-## 数据来源
-
-- GitHub Trending: https://github.com/trending
-
-## 依赖
-
-- beautifulsoup4
-- aiohttp
-
-## 注意事项
-
-- 数据直接从 GitHub Trending 页面抓取
-- 网络不稳定时可能需要使用代理
-- 结果会在一定时间内缓存
+可选的 `plugins.github.proxy` secret 仅为兼容旧部署保留；生产安全抓取路径不会把代理地址写入日志。

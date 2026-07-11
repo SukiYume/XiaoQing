@@ -1,57 +1,25 @@
-# APOD 插件
+# NASA Astronomy Picture of the Day
 
-每日一天文图插件，提供每日天文图片的获取和展示功能。
+`/apod` 抓取 NASA `https://apod.nasa.gov/apod/astropix.html` 的当天页面，返回图片或视频链接、标题和说明。当前版本不支持日期参数，也不使用 UCL mirror 或 API key。
 
-## 功能介绍
+## 命令
 
-APOD (Astronomy Picture of the Day) 插件可以从 UCL 的 APOD 镜像站获取每日天文图片，包括图片、标题、说明和版权信息。
+- `/apod`：获取当天 APOD
+- `/apod help`：帮助
 
-## 使用方法
+每天 13:30 的 schedule 使用部署侧 `default_group_ids`；干净安装没有目标群时不会发送。
 
-### 基本命令
-
-```
-/apod [日期]
-```
-
-- 不带参数：获取今天的天文图
-- 带日期参数：获取指定日期的天文图（格式：YYMMDD）
-
-### 示例
-
-```
-/apod                # 获取今天的天文图
-/apod 231225         # 获取 2023年12月25日的天文图
-/apod help           # 显示帮助信息
-```
-
-## 配置说明
-
-在 `config/secrets.json` 中配置：
+## 可选公开配置
 
 ```json
 {
   "plugins": {
     "apod": {
-      "proxy": "http://proxy.example.com:8080"  // 可选，如需代理
+      "url": "https://apod.nasa.gov/apod/astropix.html",
+      "allowed_hosts": ["apod.nasa.gov"]
     }
   }
 }
 ```
 
-## 功能特性
-
-- 自动获取图片并缓存
-- 支持指定日期查询历史图片
-- 提供中英文混合的说明文本
-- 代理支持
-- 错误处理和日志记录
-
-## 依赖
-
-- aiohttp
-- beautifulsoup4
-
-## 数据来源
-
-- UCL APOD Mirror: http://www.star.ucl.ac.uk/~apod/apod
+页面和图片只允许 HTTPS；每次重定向都会重新校验公网 DNS 和 `allowed_hosts`。HTML、图片字节数、MIME 和解码像素均有限制，缓存名使用最终 URL 的 SHA-256。

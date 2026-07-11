@@ -11,7 +11,7 @@
 				"签到"
 			],
 			"help": "📝 自动签到 | /signin help 查看详细帮助",
-			"admin_only": false
+			"admin_only": true
 		}
 	],
 	"schedule": [
@@ -21,10 +21,7 @@
 			"cron": {
 				"hour": 0,
 				"minute": 30
-			},
-			"group_ids": [
-				100000001
-			]
+			}
 		}
 	]
 }

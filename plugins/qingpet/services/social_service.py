@@ -1,5 +1,7 @@
+import hashlib
 import logging
 import random
+import secrets
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict
 
@@ -9,7 +11,8 @@ from ..utils.constants import (
     DEFAULT_ITEMS, PetStage, PetStatus # Added new constants
 )
 from ..utils.validators import validate_cooling, validate_sensitive_content
-from .database import Database
+from ..utils.time import utc_now
+from .database import Database, MinigameOutcome
 from .user_service import UserService
 
 logger = logging.getLogger(__name__)
@@ -19,68 +22,70 @@ class SocialService:
     def __init__(self, db: Database):
         self.db = db
 
-    def _check_minigame_cooldown(self, user_id: str, group_id: int, game_type: str) -> tuple[bool, str]:
-        config = MINIGAME_CONFIG.get(game_type, {})
-        cooldown = int(config.get("cooldown", 0) or 0)
-        if cooldown <= 0:
-            return True, ""
-        remaining = self.db.check_and_consume_minigame_cooldown(user_id, group_id, game_type, cooldown)
-        if remaining > 0:
-            return False, f"小游戏冷却中，请等待{remaining}秒"
-        return True, ""
+    @staticmethod
+    def _minigame_reference(
+        game_type: str,
+        user_id: str,
+        group_id: int,
+        *,
+        opponent_user_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> str:
+        request_token = str(message_id or secrets.token_hex(16))
+        material = (
+            f"{request_token}\0{game_type}\0{group_id}\0{user_id}\0"
+            f"{opponent_user_id or ''}"
+        )
+        return f"pet-minigame:v1:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
+
+    @staticmethod
+    def _reward_suffix(result, *, offered_coins: bool) -> str:
+        suffix = ""
+        if offered_coins:
+            suffix += f" 获得{result.coin_grant}金币"
+        if result.experience_grant > 0:
+            suffix += f" + {result.experience_grant}经验"
+        if result.energy_cost > 0:
+            suffix += f" 消耗{result.energy_cost}精力"
+        return suffix
 
     # ──────────────────── 互访 ────────────────────
 
-    def visit_pet(self, visitor_user_id: str, target_user_id: str, group_id: int) -> Tuple[bool, str]:
-        if visitor_user_id == target_user_id:
-            return False, "不能访问自己的宠物"
+    def visit_pet(
+        self,
+        visitor_user_id: str,
+        target_user_id: str,
+        group_id: int,
+        *,
+        message_id: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        request_token = str(message_id or secrets.token_hex(16))
+        material = f"{request_token}\0{group_id}\0{visitor_user_id}\0{target_user_id}"
+        reference_id = f"pet-visit:v1:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
+        result = self.db.visit_pet_atomic(
+            visitor_user_id,
+            target_user_id,
+            group_id,
+            coin_reward=5,
+            daily_visit_limit=DAILY_LIMITS["visit"],
+            daily_coin_limit=DAILY_LIMITS["coins"],
+            cooldown_seconds=COOLDOWN_TIMES["visit"],
+            reference_id=reference_id,
+        )
+        if not result.success:
+            return False, result.reason or "访问失败"
 
-        visitor = self.db.get_user(visitor_user_id, group_id)
-        if not visitor:
-            return False, "访客用户不存在"
-
-        target_pet = self.db.get_pet(target_user_id, group_id)
-        if not target_pet:
-            return False, "目标宠物不存在"
-
-        if not target_pet.can_interact():
-            return False, "该宠物现在无法互动"
-
-        # 使用 validate_cooling 替代硬编码冷却检查（Issue #3 & #16）
-        cooled, remaining = validate_cooling(visitor.last_visit_time, COOLDOWN_TIMES["visit"])
-        if not cooled:
-            return False, f"访问冷却中，请等待{remaining}秒"
-
-        if not visitor.can_do_action("visit", 1, DAILY_LIMITS["visit"]):
-            return False, "今日访问次数已达上限"
-
-        coins_gain = 5
-        if visitor.can_earn_coins(coins_gain, DAILY_LIMITS["coins"]):
-            visitor.coins += coins_gain
-            visitor.today_coins_earned += coins_gain
+        if result.visitor_grant == result.target_grant:
+            reward_text = f"双方各获得{result.visitor_grant}金币"
         else:
-            coins_gain = 0
-
-        visitor.increment_action("visit")
-        visitor.last_visit_time = datetime.now()
-
-        target_user = self.db.get_user(target_user_id, group_id)
-        if target_user and target_user.can_earn_coins(coins_gain, DAILY_LIMITS["coins"]):
-            target_user.coins += coins_gain
-            target_user.today_coins_earned += coins_gain
-            self.db.update_user(target_user)
-
-        target_pet.intimacy += 1
-        self.db.update_pet(target_pet)
-
-        success = self.db.update_user(visitor)
-
-        # 更新任务进度
-        self.db.update_task_progress(visitor_user_id, group_id, "visit")
-
-        if success:
-            return True, f"访问了{target_pet.name}，双方都获得了亲密度和{coins_gain}金币"
-        return False, "访问失败"
+            reward_text = (
+                f"访客获得{result.visitor_grant}金币，"
+                f"宠物主人获得{result.target_grant}金币"
+            )
+        return (
+            True,
+            f"访问了{result.pet_name}，宠物亲密度+{result.intimacy_grant}；{reward_text}",
+        )
 
     # ──────────────────── 送礼 ────────────────────
 
@@ -89,44 +94,21 @@ class SocialService:
         if from_user_id == to_user_id:
             return False, "不能给自己送礼物"
 
-        from_user = self.db.get_user(from_user_id, group_id)
-        if not from_user:
-            return False, "发送者用户不存在"
-
-        to_user = self.db.get_user(to_user_id, group_id)
-        if not to_user:
-            return False, "接收者用户不存在"
-
-        # 使用 validate_cooling（Issue #3）
-        cooled, remaining = validate_cooling(from_user.last_gift_time, COOLDOWN_TIMES["gift"])
-        if not cooled:
-            return False, f"送礼冷却中，请等待{remaining}秒"
-
-        if not from_user.can_do_action("gift", 1, DAILY_LIMITS["gift"]):
-            return False, "今日送礼次数已达上限"
-
-        from_inventory = self.db.get_or_create_inventory(from_user_id, group_id)
-        if not from_inventory.has_item(item_id, amount):
-            return False, "背包中没有足够的道具"
-
-        from_inventory.remove_item(item_id, amount)
-        to_inventory = self.db.get_or_create_inventory(to_user_id, group_id)
-        to_inventory.add_item(item_id, amount)
-
         friendship_gain = 2
-        from_user.friendship_points += friendship_gain
-        to_user.friendship_points += friendship_gain
-        from_user.last_gift_time = datetime.now()
-        from_user.increment_action("gift")
-
-        success = (self.db.update_inventory(from_inventory) and
-                   self.db.update_inventory(to_inventory) and
-                   self.db.update_user(from_user) and
-                   self.db.update_user(to_user))
+        success, reason = self.db.gift_item_atomic(
+            from_user_id,
+            to_user_id,
+            group_id,
+            item_id,
+            amount,
+            friendship_gain,
+            DAILY_LIMITS["gift"],
+            COOLDOWN_TIMES["gift"],
+        )
 
         if success:
             return True, f"礼物发送成功！双方各获得{friendship_gain}友情点"
-        return False, "送礼失败"
+        return False, reason or "送礼失败"
 
     # ──────────────────── 查看他人宠物卡片（Issue #42）────────────────────
 
@@ -156,20 +138,11 @@ class SocialService:
         if not target_pet:
             return False, "对方没有宠物"
 
-        # CR Review Issue #4: 检查每日对同一目标的点赞次数
         like_limit = DAILY_LIMITS.get("like_per_target", 3)
-        today_like_count = self.db.get_daily_like_count(user_id, target_user_id, group_id)
-        if today_like_count >= like_limit:
-            return False, f"今日对该宠物的点赞次数已达上限({like_limit}次)"
-
-        success = self.db.like_pet(target_user_id, group_id)
+        success = self.db.like_pet_atomic(user_id, target_user_id, group_id, like_limit)
         if success:
-            target_pet.intimacy += 1
-            self.db.update_pet(target_pet)
-            # 记录点赞
-            self.db.record_daily_like(user_id, target_user_id, group_id)
             return True, f"你摸了摸{target_pet.name}，它看起来很开心！👋"
-        return False, "操作失败"
+        return False, f"今日对该宠物的点赞次数已达上限({like_limit}次)或操作失败"
 
     # ──────────────────── 留言板（Issue #44）────────────────────
 
@@ -188,25 +161,16 @@ class SocialService:
         if len(message) > 200:
             return False, "留言内容不能超过200字"
 
-        # CR Review Issue #3: 留言频率限制
-        from_user = self.db.get_user(from_user_id, group_id)
-        if from_user:
-            msg_limit = DAILY_LIMITS.get("message", 10)
-            if not from_user.can_do_action("message", 1, msg_limit):
-                return False, f"今日留言次数已达上限({msg_limit}次)"
-
-        target_pet = self.db.get_pet(to_user_id, group_id)
-        if not target_pet:
-            return False, "该用户没有宠物"
-
-        success = self.db.add_message(group_id, from_user_id, to_user_id, message)
-        if success:
-            # 更新每日留言计数
-            if from_user:
-                from_user.increment_action("message")
-                self.db.update_user(from_user)
-            return True, f"已给{target_pet.name}留言：{message}"
-        return False, "留言失败"
+        result = self.db.leave_message_atomic(
+            from_user_id,
+            to_user_id,
+            group_id,
+            message,
+            DAILY_LIMITS.get("message", 10),
+        )
+        if result.success:
+            return True, f"已给{result.pet_name}留言：{message}"
+        return False, result.reason or "留言失败"
 
     def get_messages(self, user_id: str, group_id: int) -> Tuple[bool, str]:
         """查看我的宠物收到的留言"""
@@ -226,26 +190,17 @@ class SocialService:
 
     def get_ranking(self, group_id: int, ranking_type: str = "care_score",
                     limit: int = 10) -> List[Tuple[str, str, float]]:
-        pets = self.db.get_all_pets_in_group(group_id)
-
-        if ranking_type == "care_score":
-            pets.sort(key=lambda p: p.care_score, reverse=True)
-            # 返回百分制而非 int(0~1)（Issue #15）
-            return [(pet.user_id, pet.name,
-                     round(pet.care_score * 100, 1))
-                    for pet in pets[:limit]]
-
-        elif ranking_type == "intimacy":
-            pets.sort(key=lambda p: p.intimacy, reverse=True)
-            return [(pet.user_id, pet.name, pet.intimacy)
-                    for pet in pets[:limit]]
-
-        elif ranking_type == "experience":
-            pets.sort(key=lambda p: p.experience, reverse=True)
-            return [(pet.user_id, pet.name, pet.experience)
-                    for pet in pets[:limit]]
-
-        elif ranking_type == "coins":
+        if ranking_type in {"care_score", "intimacy", "experience"}:
+            rows = self.db.get_pet_ranking(group_id, ranking_type, limit)
+            return [
+                (
+                    row["user_id"],
+                    row["pet_name"],
+                    round(float(row["score"]), 1),
+                )
+                for row in rows
+            ]
+        if ranking_type == "coins":
             # CR Review: 使用优化的 JOIN 查询替代 N+1 循环
             rows = self.db.get_coins_ranking(group_id, limit)
             return [(r['user_id'], r['pet_name'], r['coins']) for r in rows]
@@ -254,8 +209,14 @@ class SocialService:
 
     # ──────────────────── 小游戏（Issue #46）────────────────────
 
-    def play_rock_paper_scissors(self, user_id: str, group_id: int,
-                                  player_choice: str) -> Tuple[bool, str]:
+    def play_rock_paper_scissors(
+        self,
+        user_id: str,
+        group_id: int,
+        player_choice: str,
+        *,
+        message_id: Optional[str] = None,
+    ) -> Tuple[bool, str]:
         """猜拳小游戏"""
         choices = {"石头": "rock", "剪刀": "scissors", "布": "paper",
                    "rock": "rock", "scissors": "scissors", "paper": "paper"}
@@ -264,164 +225,205 @@ class SocialService:
         if not normalized:
             return False, "请选择：石头、剪刀 或 布"
 
-        pet = self.db.get_pet(user_id, group_id)
-        if not pet:
-            return False, "你还没有宠物"
-
-        if not pet.can_interact():
-            return False, "宠物现在无法互动"
-
-        cooled, reason = self._check_minigame_cooldown(user_id, group_id, "rock_paper_scissors")
-        if not cooled:
-            return False, reason
-
-        npc_choice = random.choice(["rock", "scissors", "paper"])
         cn = {"rock": "石头", "scissors": "剪刀", "paper": "布"}
-
         config = MINIGAME_CONFIG["rock_paper_scissors"]
 
-        if normalized == npc_choice:
-            result = "平局"
-            coins = config["draw_coins"]
-            exp = 0
-        elif (normalized == "rock" and npc_choice == "scissors") or \
-             (normalized == "scissors" and npc_choice == "paper") or \
-             (normalized == "paper" and npc_choice == "rock"):
-            result = "你赢了"
-            coins = config["win_coins"]
-            exp = config["win_exp"]
-        else:
-            result = "你输了"
-            coins = config["lose_coins"]
-            exp = 0
+        def outcome_factory(_pet: Pet, _opponent: Optional[Pet]) -> MinigameOutcome:
+            npc_choice = random.choice(["rock", "scissors", "paper"])
+            if normalized == npc_choice:
+                outcome_text = "平局"
+                coins = config["draw_coins"]
+                exp = 0
+            elif (
+                (normalized == "rock" and npc_choice == "scissors")
+                or (normalized == "scissors" and npc_choice == "paper")
+                or (normalized == "paper" and npc_choice == "rock")
+            ):
+                outcome_text = "你赢了"
+                coins = config["win_coins"]
+                exp = config["win_exp"]
+            else:
+                outcome_text = "你输了"
+                coins = config["lose_coins"]
+                exp = 0
+            return MinigameOutcome(
+                requested_coins=coins,
+                experience=exp,
+                payload={
+                    "player_choice": normalized,
+                    "npc_choice": npc_choice,
+                    "result": outcome_text,
+                    "offered_coins": coins > 0,
+                },
+            )
 
-        pet.experience += exp
-        user = self.db.get_user(user_id, group_id)
-        if user and coins > 0 and user.can_earn_coins(coins, DAILY_LIMITS["coins"]):
-            user.coins += coins
-            user.today_coins_earned += coins
-            self.db.update_user(user)
-        self.db.update_pet(pet)
+        settlement = self.db.settle_minigame_atomic(
+            user_id,
+            group_id,
+            "rock_paper_scissors",
+            reference_id=self._minigame_reference(
+                "rock_paper_scissors", user_id, group_id, message_id=message_id
+            ),
+            daily_coin_limit=DAILY_LIMITS["coins"],
+            cooldown_seconds=int(config.get("cooldown", 0) or 0),
+            outcome_factory=outcome_factory,
+        )
+        if not settlement.success:
+            return False, settlement.reason or "猜拳结算失败"
+        payload = settlement.payload or {}
 
         msg = f"✊✌️✋ **猜拳**\n\n"
-        msg += f"你出了：{cn[normalized]}\n"
-        msg += f"{pet.name}出了：{cn[npc_choice]}\n\n"
-        msg += f"**{result}！**"
-        if coins > 0:
-            msg += f" 获得{coins}金币"
-        if exp > 0:
-            msg += f" + {exp}经验"
+        msg += f"你出了：{cn[str(payload['player_choice'])]}\n"
+        msg += f"{settlement.pet_name}出了：{cn[str(payload['npc_choice'])]}\n\n"
+        msg += f"**{payload['result']}！**"
+        msg += self._reward_suffix(
+            settlement,
+            offered_coins=bool(payload.get("offered_coins")),
+        )
         return True, msg
 
-    def play_dice(self, user_id: str, group_id: int) -> Tuple[bool, str]:
+    def play_dice(
+        self,
+        user_id: str,
+        group_id: int,
+        *,
+        message_id: Optional[str] = None,
+    ) -> Tuple[bool, str]:
         """骰子小游戏"""
-        pet = self.db.get_pet(user_id, group_id)
-        if not pet:
-            return False, "你还没有宠物"
-
-        if not pet.can_interact():
-            return False, "宠物现在无法互动"
-
-        cooled, reason = self._check_minigame_cooldown(user_id, group_id, "dice")
-        if not cooled:
-            return False, reason
-
         config = MINIGAME_CONFIG["dice"]
 
-        player_dice = random.randint(1, 6)
-        pet_dice = random.randint(1, 6)
+        def outcome_factory(_pet: Pet, _opponent: Optional[Pet]) -> MinigameOutcome:
+            player_dice = random.randint(1, 6)
+            pet_dice = random.randint(1, 6)
+            if player_dice > pet_dice:
+                outcome_text = "你赢了"
+                coins = config["win_coins"]
+                exp = config["win_exp"]
+            elif player_dice == pet_dice:
+                outcome_text = "平局"
+                coins = 5
+                exp = 0
+            else:
+                outcome_text = "你输了"
+                coins = config["lose_coins"]
+                exp = 0
+            return MinigameOutcome(
+                requested_coins=coins,
+                experience=exp,
+                payload={
+                    "player_dice": player_dice,
+                    "pet_dice": pet_dice,
+                    "result": outcome_text,
+                    "offered_coins": coins > 0,
+                },
+            )
 
-        if player_dice > pet_dice:
-            result = "你赢了"
-            coins = config["win_coins"]
-            exp = config["win_exp"]
-        elif player_dice == pet_dice:
-            result = "平局"
-            coins = 5
-            exp = 0
-        else:
-            result = "你输了"
-            coins = config["lose_coins"]
-            exp = 0
-
-        pet.experience += exp
-        user = self.db.get_user(user_id, group_id)
-        if user and coins > 0 and user.can_earn_coins(coins, DAILY_LIMITS["coins"]):
-            user.coins += coins
-            user.today_coins_earned += coins
-            self.db.update_user(user)
-        self.db.update_pet(pet)
+        settlement = self.db.settle_minigame_atomic(
+            user_id,
+            group_id,
+            "dice",
+            reference_id=self._minigame_reference(
+                "dice", user_id, group_id, message_id=message_id
+            ),
+            daily_coin_limit=DAILY_LIMITS["coins"],
+            cooldown_seconds=int(config.get("cooldown", 0) or 0),
+            outcome_factory=outcome_factory,
+        )
+        if not settlement.success:
+            return False, settlement.reason or "骰子结算失败"
+        payload = settlement.payload or {}
 
         msg = f"🎲 **骰子**\n\n"
-        msg += f"你掷出了：{player_dice}\n"
-        msg += f"{pet.name}掷出了：{pet_dice}\n\n"
-        msg += f"**{result}！**"
-        if coins > 0:
-            msg += f" 获得{coins}金币"
-        if exp > 0:
-            msg += f" + {exp}经验"
+        msg += f"你掷出了：{payload['player_dice']}\n"
+        msg += f"{settlement.pet_name}掷出了：{payload['pet_dice']}\n\n"
+        msg += f"**{payload['result']}！**"
+        msg += self._reward_suffix(
+            settlement,
+            offered_coins=bool(payload.get("offered_coins")),
+        )
         return True, msg
 
-    def race_pet(self, user_id: str, target_user_id: str, group_id: int) -> Tuple[bool, str]:
+    def race_pet(
+        self,
+        user_id: str,
+        target_user_id: str,
+        group_id: int,
+        *,
+        message_id: Optional[str] = None,
+    ) -> Tuple[bool, str]:
         """宠物赛跑"""
         if user_id == target_user_id:
             return False, "不能跟自己的宠物赛跑"
 
-        pet = self.db.get_pet(user_id, group_id)
-        if not pet or not pet.can_interact():
-            return False, "你的宠物无法参赛"
-
-        target_pet = self.db.get_pet(target_user_id, group_id)
-        if not target_pet or not target_pet.can_interact():
-            return False, "对方的宠物无法参赛"
-
         config = MINIGAME_CONFIG["race"]
-        cooled, reason = self._check_minigame_cooldown(user_id, group_id, "race")
-        if not cooled:
-            return False, reason
-        if pet.energy < config["energy_cost"]:
-            return False, "你的宠物精力不足"
 
-        pet.update_stat("energy", -config["energy_cost"], min_val=0)
+        def outcome_factory(pet: Pet, opponent: Optional[Pet]) -> MinigameOutcome:
+            if opponent is None:
+                raise RuntimeError("race opponent disappeared")
+            energy_cost = int(config["energy_cost"])
+            my_speed = random.randint(1, 100) + (pet.energy - energy_cost) // 5
+            target_speed = random.randint(1, 100) + opponent.energy // 5
+            if pet.personality == PetPersonality.LIVELY:
+                my_speed += 10
+            if opponent.personality == PetPersonality.LIVELY:
+                target_speed += 10
+            if my_speed > target_speed:
+                coins = config["win_coins"]
+                exp = config["win_exp"]
+                outcome_key = "win"
+            elif my_speed == target_speed:
+                coins = config["second_coins"]
+                exp = 3
+                outcome_key = "draw"
+            else:
+                coins = config["lose_coins"]
+                exp = 2
+                outcome_key = "lose"
+            return MinigameOutcome(
+                requested_coins=coins,
+                experience=exp,
+                energy_cost=energy_cost,
+                payload={
+                    "result": outcome_key,
+                    "offered_coins": coins > 0,
+                },
+            )
 
-        # 速度受精力和性格影响
-        my_speed = random.randint(1, 100) + pet.energy // 5
-        target_speed = random.randint(1, 100) + target_pet.energy // 5
-
-        if pet.personality == PetPersonality.LIVELY:
-            my_speed += 10
-        if target_pet.personality == PetPersonality.LIVELY:
-            target_speed += 10
-
-        user = self.db.get_user(user_id, group_id)
-
-        if my_speed > target_speed:
-            coins = config["win_coins"]
-            exp = config["win_exp"]
-            result = f"🏆 {pet.name}赢了！"
-        elif my_speed == target_speed:
-            coins = config["second_coins"]
-            exp = 3
-            result = f"🤝 平局！"
+        settlement = self.db.settle_minigame_atomic(
+            user_id,
+            group_id,
+            "race",
+            opponent_user_id=target_user_id,
+            reference_id=self._minigame_reference(
+                "race",
+                user_id,
+                group_id,
+                opponent_user_id=target_user_id,
+                message_id=message_id,
+            ),
+            daily_coin_limit=DAILY_LIMITS["coins"],
+            cooldown_seconds=int(config.get("cooldown", 0) or 0),
+            minimum_energy=int(config["energy_cost"]),
+            outcome_factory=outcome_factory,
+        )
+        if not settlement.success:
+            return False, settlement.reason or "赛跑结算失败"
+        payload = settlement.payload or {}
+        outcome_key = payload.get("result")
+        if outcome_key == "win":
+            outcome_text = f"🏆 {settlement.pet_name}赢了！"
+        elif outcome_key == "draw":
+            outcome_text = "🤝 平局！"
         else:
-            coins = config["lose_coins"]
-            exp = 2
-            result = f"😔 {target_pet.name}赢了！"
-
-        pet.experience += exp
-        if user and coins > 0 and user.can_earn_coins(coins, DAILY_LIMITS["coins"]):
-            user.coins += coins
-            user.today_coins_earned += coins
-            self.db.update_user(user)
-        self.db.update_pet(pet)
+            outcome_text = f"😔 {settlement.opponent_pet_name}赢了！"
 
         msg = f"🏃 **宠物赛跑**\n\n"
-        msg += f"{pet.name} 🆚 {target_pet.name}\n\n"
-        msg += f"{result}"
-        if coins > 0:
-            msg += f" 获得{coins}金币"
-        if exp > 0:
-            msg += f" + {exp}经验"
+        msg += f"{settlement.pet_name} 🆚 {settlement.opponent_pet_name}\n\n"
+        msg += outcome_text
+        msg += self._reward_suffix(
+            settlement,
+            offered_coins=bool(payload.get("offered_coins")),
+        )
         return True, msg
 
     # ──────────────────── 展示会结算（新增）────────────────────
@@ -458,8 +460,13 @@ class SocialService:
                 text += f" +{reward}金币"
                 user = self.db.get_user(uid, group_id)
                 if user:
-                    user.coins += reward
-                    self.db.update_user(user)
+                    self.db.credit_coins_atomic(
+                        uid,
+                        group_id,
+                        reward,
+                        reason="pet_show",
+                        reference_id=f"show:{show['id']}:{i}:{uid}",
+                    )
             if i == 0:
                 UserService(self.db).grant_temporary_title(uid, group_id, "展示会冠军")
                 text += " 🏅展示会冠军"

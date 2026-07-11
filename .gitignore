@@ -103,12 +103,9 @@ plugins/arxiv_filter/best_model*/
 plugins/arxiv_filter/train_model/**/cache/
 plugins/arxiv_filter/train_model/arxiv_papers_with_abstract.csv
 
-# Deprecated plugin workspaces, except the tracked memo compatibility stub
+# Deprecated plugin workspaces are never part of the production tree.
 plugins/*deprecated/
-!plugins/memo_deprecated/
-!plugins/memo_deprecated/__init__.py
-!plugins/memo_deprecated/main.py
-!plugins/memo_deprecated/README.md
+.local_archive/
 
 # Local automation / agent / browser artifacts
 .agent/
@@ -131,6 +128,3 @@ docs/superpowers/specs/*
 *.bak
 *.orig
 *.rej
-
-# Personal scripts
-sync_to_remote.sh

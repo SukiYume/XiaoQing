@@ -18,6 +18,8 @@ from . import stellar
 
 
 logger = logging.getLogger(__name__)
+MAX_CUSTOM_COLORS_PER_SCOPE = 200
+MAX_CUSTOM_COLOR_NAME_LENGTH = 64
 
 
 # ============================================================
@@ -263,15 +265,10 @@ async def _add_custom_color(definition: str, context, img_dir: Path) -> list[dic
             return segments("❌ 格式错误。\n\n支持格式：\n  颜色名 R G B\n  颜色名 #HEX\n\n示例：\n  /color -w 我的红 255 0 0\n  /color -w 我的蓝 #0000FF")
     except ValueError as e:
         return segments(f"❌ 解析颜色值失败：{e}")
-    
-    # 加载现有自定义颜色
-    custom_colors = data_manager.load_custom_colors(context)
-    
-    # 检查是否已存在
-    if any(c['name'] == name for c in custom_colors):
-        return segments(f"❌ 「{name}」已经定义过了哦")
-    
-    # 添加新颜色
+    name = name.strip()
+    if not name or len(name) > MAX_CUSTOM_COLOR_NAME_LENGTH:
+        return segments(f"❌ 颜色名不能为空且不能超过 {MAX_CUSTOM_COLOR_NAME_LENGTH} 个字符")
+
     new_color = {
         'name': name,
         'RGB': rgb,
@@ -279,9 +276,20 @@ async def _add_custom_color(definition: str, context, img_dir: Path) -> list[dic
         'hex': hex_value,
         'pinyin': ''
     }
-    custom_colors.append(new_color)
-    
-    data_manager.save_custom_colors(custom_colors, context)
+
+    def add(colors):
+        if any(c.get('name') == name for c in colors):
+            return "duplicate"
+        if len(colors) >= MAX_CUSTOM_COLORS_PER_SCOPE:
+            return "full"
+        colors.append(new_color)
+        return "added"
+
+    outcome = data_manager.mutate_custom_colors(context, add)
+    if outcome == "duplicate":
+        return segments(f"❌ 「{name}」已经定义过了哦")
+    if outcome == "full":
+        return segments("❌ 当前会话的自定义颜色数量已达上限")
     
     context.logger.info(f"添加自定义颜色: {name} = {rgb}")
     
@@ -305,14 +313,12 @@ def _delete_custom_color(name: str, context) -> list[dict]:
     Returns:
         消息段列表
     """
-    custom_colors = data_manager.load_custom_colors(context)
-    
-    original_len = len(custom_colors)
-    custom_colors = [c for c in custom_colors if c['name'] != name]
-    
-    if len(custom_colors) == original_len:
+    def remove(colors):
+        original_len = len(colors)
+        colors[:] = [c for c in colors if c.get('name') != name]
+        return len(colors) != original_len
+
+    if not data_manager.mutate_custom_colors(context, remove):
         return segments(f"❌ 自定义颜色中没有「{name}」")
-    
-    data_manager.save_custom_colors(custom_colors, context)
     context.logger.info(f"删除自定义颜色: {name}")
     return segments(f"✅ 颜色「{name}」已删除")

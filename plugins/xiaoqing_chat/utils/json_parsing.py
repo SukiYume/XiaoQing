@@ -4,23 +4,16 @@ import json
 import re
 from typing import Any
 
-_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
-_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>[\s\S]*?</think>", re.IGNORECASE)
-_LEADING_THINK_RE = re.compile(
-    r"^\s*(?:思考|推理|reasoning|thinking)\s*[:：][\s\S]*?(?=[{\[])",
-    re.IGNORECASE,
-)
+_JSON_BLOCK_RE = re.compile(r"^\s*```json[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$", re.IGNORECASE)
 
 
 def normalize_llm_text(text: str) -> str:
     if not text:
         return ""
     s = str(text).strip()
-    s = _THINK_BLOCK_RE.sub("", s).strip()
-    s = _LEADING_THINK_RE.sub("", s).strip()
-    blocks = _JSON_BLOCK_RE.findall(s)
-    if blocks:
-        return blocks[0].strip()
+    match = _JSON_BLOCK_RE.fullmatch(s)
+    if match:
+        return match.group(1).strip()
     return s
 
 
@@ -41,9 +34,9 @@ def extract_first_json_object_text(text: str) -> str:
     s = normalize_llm_text(text)
     if not s:
         return ""
-    start = s.find("{")
-    if start < 0:
+    if not s.startswith("{"):
         return ""
+    start = 0
 
     depth = 0
     in_string = False
@@ -67,7 +60,7 @@ def extract_first_json_object_text(text: str) -> str:
         if ch == "}":
             depth -= 1
             if depth == 0:
-                return s[start : i + 1]
+                return s if not s[i + 1 :].strip() else ""
     return ""
 
 
@@ -75,9 +68,9 @@ def extract_first_json_array_text(text: str) -> str:
     s = normalize_llm_text(text)
     if not s:
         return ""
-    start = s.find("[")
-    if start < 0:
+    if not s.startswith("["):
         return ""
+    start = 0
 
     depth = 0
     in_string = False
@@ -101,7 +94,7 @@ def extract_first_json_array_text(text: str) -> str:
         if ch == "]":
             depth -= 1
             if depth == 0:
-                return s[start : i + 1]
+                return s if not s[i + 1 :].strip() else ""
     return ""
 
 
@@ -190,14 +183,12 @@ def parse_first_json_array(text: str) -> list[dict[str, Any]]:
 
 def parse_first_json_value(text: str) -> dict[str, Any] | list[dict[str, Any]] | None:
     s = normalize_llm_text(text)
-    obj_pos = s.find("{") if s else -1
-    arr_pos = s.find("[") if s else -1
-    if obj_pos < 0 and arr_pos < 0:
-        return None
-    if arr_pos >= 0 and (obj_pos < 0 or arr_pos < obj_pos):
+    if s.startswith("["):
         arr = parse_first_json_array(s)
         return arr if arr else None
-    return parse_first_json_object(s)
+    if s.startswith("{"):
+        return parse_first_json_object(s)
+    return None
 
 
 def extract_named_list_field(obj: dict[str, Any] | None, field: str) -> list[Any]:
@@ -205,3 +196,8 @@ def extract_named_list_field(obj: dict[str, Any] | None, field: str) -> list[Any
         return []
     value = obj.get(field)
     return value if isinstance(value, list) else []
+
+
+def strict_json_bool(value: Any) -> bool | None:
+    """Accept only JSON booleans, never truthy strings or numbers."""
+    return value if type(value) is bool else None

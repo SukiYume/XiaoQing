@@ -6,6 +6,7 @@ Wolfram|Alpha 插件
 
 import asyncio
 import logging
+import json
 from typing import Any
 from xml.etree import ElementTree
 
@@ -18,6 +19,27 @@ logger = logging.getLogger(__name__)
 
 WA_RESULT_URL = "https://api.wolframalpha.com/v1/result"
 WA_QUERY_URL = "https://api.wolframalpha.com/v2/query"
+MAX_RESPONSE_BYTES = 1024 * 1024
+MAX_QUERY_LENGTH = 500
+MAX_RESULT_ITEMS = 20
+_WA_SEMAPHORE = asyncio.Semaphore(2)
+
+
+async def _read_text_limited(response) -> str:
+    content = getattr(response, "content", None)
+    if content is not None and hasattr(content, "iter_chunked"):
+        chunks = []
+        total = 0
+        async for chunk in content.iter_chunked(64 * 1024):
+            total += len(chunk)
+            if total > MAX_RESPONSE_BYTES:
+                raise ValueError("WolframAlpha response too large")
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8", errors="replace")
+    text_value = await response.text()
+    if len(text_value.encode("utf-8")) > MAX_RESPONSE_BYTES:
+        raise ValueError("WolframAlpha response too large")
+    return text_value
 
 def init(context=None) -> None:
     """插件初始化"""
@@ -36,6 +58,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         question = parsed.rest()
         if not question:
             return segments("请输入问题\n输入 /alpha help 查看帮助")
+        if len(question) > MAX_QUERY_LENGTH:
+            return segments(f"❌ 查询过长，最多 {MAX_QUERY_LENGTH} 字符")
         
         # 获取 App ID
         appid = _get_appid(context)
@@ -117,14 +141,14 @@ async def _get_answer(question: str, appid: str, context) -> list:
             return segments(f"🔢 **计算结果:**\n\n{result}")
 
         # 简单查询 - 使用 v1/result API (最快速)
-        params = {"appid": appid, "i": question}
+        data = {"appid": appid, "i": question}
         
-        async with session.get(WA_RESULT_URL, params=params, timeout=30) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                logger.error("WolframAlpha API error: status=%d, body=%s", resp.status, error_text)
-                return segments(f"❌ 查询失败: {error_text}")
-            result = await resp.text()
+        async with _WA_SEMAPHORE:
+            async with session.post(WA_RESULT_URL, data=data, timeout=30) as resp:
+                if resp.status != 200:
+                    logger.error("WolframAlpha API error: status=%d", resp.status)
+                    return segments(f"❌ 查询失败（HTTP {resp.status}）")
+                result = await _read_text_limited(resp)
         
         return segments(f"🔢 **{question}**\n\n{result}")
         
@@ -133,10 +157,10 @@ async def _get_answer(question: str, appid: str, context) -> list:
         return segments("❌ 查询超时，请稍后重试")
     except aiohttp.ClientError as e:
         logger.exception("WolframAlpha network error: %s", e)
-        return segments(f"❌ 网络错误: {str(e)}")
+        return segments("❌ 网络错误，请稍后重试")
     except Exception as e:
         logger.exception("WolframAlpha query failed: %s", e)
-        return segments(f"❌ 查询失败: {str(e)}")
+        return segments(f"❌ 查询失败（错误码: {type(e).__name__}）")
 
 async def _query_step(question: str, appid: str, session) -> str:
     """获取步骤解答"""
@@ -149,13 +173,12 @@ async def _query_step(question: str, appid: str, session) -> str:
     
     async with session.post(WA_QUERY_URL, data=data, timeout=30) as resp:
         if resp.status != 200:
-            error_text = await resp.text()
-            raise ValueError(f"API returned status {resp.status}: {error_text}")
-        payload = await resp.text()
+            raise ValueError(f"API returned status {resp.status}")
+        payload = await _read_text_limited(resp)
     
     root = ElementTree.fromstring(payload)
     lines = []
-    for item in root.iter("plaintext"):
+    for item in list(root.iter("plaintext"))[:MAX_RESULT_ITEMS]:
         if item.text:
             lines.append(item.text.strip())
     
@@ -176,13 +199,17 @@ async def _query_complete(question: str, appid: str, session) -> str:
     
     async with session.post(WA_QUERY_URL, data=data, timeout=30) as resp:
         if resp.status != 200:
-            error_text = await resp.text()
-            raise ValueError(f"API returned status {resp.status}: {error_text}")
-        payload = await resp.json()
+            raise ValueError(f"API returned status {resp.status}")
+        content = getattr(resp, "content", None)
+        if content is not None and hasattr(content, "iter_chunked"):
+            payload = json.loads(await _read_text_limited(resp))
+        else:
+            payload = await resp.json()
     
     # 提取结果
     try:
-        result = payload["queryresult"]["pods"][0]["subpods"][0]["plaintext"]
+        pods = payload["queryresult"]["pods"][:MAX_RESULT_ITEMS]
+        result = pods[0]["subpods"][0]["plaintext"]
         if not result:
             return "未找到结果"
         return result

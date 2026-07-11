@@ -6,7 +6,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ...models.item import EventItem
 from ...services.db import Database
 from ...utils.settings_utils import resolve_default_category
 from ...utils.time_utils import now_in_timezone
@@ -98,11 +97,9 @@ def get_event_categories(
 
 
 def _new_collection_id(db: Database, owner_id: str) -> str:
-    for _ in range(20):
-        candidate = uuid.uuid4().hex[:8]
-        if not db.get_event_collection(candidate, owner_id) and not db.get_item(candidate, owner_id):
-            return candidate
-    return uuid.uuid4().hex[:12]
+    # Full UUID entropy makes cross-request and same-day occurrence collisions
+    # negligible; database primary keys remain the final integrity guard.
+    return uuid.uuid4().hex
 
 
 @router.post("/events/collections", status_code=201)
@@ -156,7 +153,7 @@ def create_event_collection(
         start_time = min(row["start_time"] for _, row in child_rows)
         end_time = max((row.get("end_time") or row["start_time"]) for _, row in child_rows)
 
-        db.create_event_collection(
+        db.create_event_collection_with_children(
             {
                 "id": collection_id,
                 "owner_id": owner_id,
@@ -173,21 +170,11 @@ def create_event_collection(
                 "end_time": end_time,
                 "created_at": now,
                 "updated_at": now,
-            }
+            },
+            child_rows,
+            operation_action="create_event_collection",
         )
-
-        child_ids: list[str] = []
-        for node_id, normalized in child_rows:
-            db.insert_item(EventItem(**{k: v for k, v in normalized.items() if k in EventItem.__dataclass_fields__}), node_id)
-            child_ids.append(node_id)
-
-        db.log_operation(
-            owner_id,
-            "create_event_collection",
-            item_type="event",
-            item_id=collection_id,
-            details={"child_ids": child_ids},
-        )
+        child_ids = [node_id for node_id, _ in child_rows]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

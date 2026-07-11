@@ -53,6 +53,15 @@
             "description": "待办迁移 - 每天00:05执行"
         },
         {
+            "id": "pendo_prune_operation_logs",
+            "handler": "scheduled_prune_operation_logs",
+            "cron": {
+                "hour": 0,
+                "minute": 15
+            },
+            "description": "操作日志保留与撤销快照清理 - 每天00:15执行"
+        },
+        {
             "id": "pendo_weekly_finance_summary",
             "handler": "scheduled_weekly_finance_summary",
             "cron": {

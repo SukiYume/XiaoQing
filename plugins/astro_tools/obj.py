@@ -8,12 +8,15 @@ import threading
 
 _SIMBAD_CLIENT = None
 _SIMBAD_CLIENT_LOCK = threading.RLock()
+SIMBAD_REQUEST_TIMEOUT_SECONDS = 12
+SIMBAD_TOTAL_TIMEOUT_SECONDS = 15
 
 
 def _build_simbad_client():
     from astroquery.simbad import Simbad
 
     client = Simbad()
+    client.TIMEOUT = SIMBAD_REQUEST_TIMEOUT_SECONDS
     client.reset_votable_fields()
     client.add_votable_fields("otype", "V", "sp")
     return client
@@ -28,8 +31,9 @@ def _get_simbad_client():
 
 
 def _query_simbad_object(name: str):
-    with _SIMBAD_CLIENT_LOCK:
-        return _get_simbad_client().query_object(name)
+    # A client is deliberately not shared across requests: astroquery clients
+    # are mutable, and a stalled request must not hold a process-wide lock.
+    return _build_simbad_client().query_object(name)
 
 
 async def handle_obj(args: str, context) -> str:
@@ -50,7 +54,10 @@ async def handle_obj(args: str, context) -> str:
         from astropy.coordinates import SkyCoord
         from astropy import units as u
 
-        result = await asyncio.to_thread(_query_simbad_object, args)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_query_simbad_object, args),
+            timeout=SIMBAD_TOTAL_TIMEOUT_SECONDS,
+        )
         
         if result is None or len(result) == 0:
             return f"未找到天体: {args}\n\n提示: 可以尝试使用英文名称，如 'Crab Nebula', 'Betelgeuse' 等"
@@ -84,6 +91,8 @@ async def handle_obj(args: str, context) -> str:
             result_text += f"光谱型: {row['SP_TYPE']}"
         
         return result_text
+    except asyncio.TimeoutError:
+        return "SIMBAD 查询超时，请稍后再试。"
     except Exception as exc:
         return f"查询失败: {exc}\n\n建议: 使用标准天体名称，如 'M31', 'NGC 1952', 'Sirius' 等"
 

@@ -4,7 +4,6 @@
 从微博中国地震台网获取地震快讯。
 仅推送 4 级及以上地震。
 """
-import json
 import logging
 import re
 import uuid
@@ -12,7 +11,7 @@ from typing import Any, Optional
 
 import requests
 
-from core.plugin_base import segments, text, image, run_sync
+from core.plugin_base import atomic_write_bytes, build_action, image, load_json, run_sync, segments, text, write_json
 from core.args import parse
 
 logger = logging.getLogger(__name__)
@@ -45,13 +44,13 @@ def _load_since(context) -> str:
     path = _since_path(context)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
-        path.write_text(json.dumps({"since_id": "0"}), encoding="utf-8")
+        write_json(path, {"since_id": "0"})
         return "0"
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, TypeError) as exc:
+        data = load_json(path, {}, raise_on_error=True)
+    except (ValueError, OSError, TypeError) as exc:
         logger.warning("Invalid earthquake state file %s, resetting: %s", path, exc)
-        path.write_text(json.dumps({"since_id": "0"}), encoding="utf-8")
+        write_json(path, {"since_id": "0"})
         return "0"
     return str(data.get("since_id", "0") or "0")
 
@@ -59,7 +58,7 @@ def _save_since(context, since_id: str) -> None:
     """保存最新处理的微博 ID"""
     path = _since_path(context)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"since_id": since_id}), encoding="utf-8")
+    write_json(path, {"since_id": since_id})
 
 # ============================================================
 # 微博 API
@@ -185,9 +184,31 @@ def _show_help() -> str:
 
 async def scheduled(context) -> list:
     """定时任务入口"""
-    return await _fetch_earthquake_news(context, force=False)
+    result = await _fetch_earthquake_news(context, force=False, advance_cursor=False)
+    pending_since = getattr(context, "state", {}).pop("earthquake_pending_since", None)
+    payload = segments(result)
+    if not payload:
+        if pending_since:
+            _save_since(context, pending_since)
+        return []
+    targets = list(context.default_groups()) if hasattr(context, "default_groups") else []
+    if not targets:
+        logger.warning("Earthquake notification has no configured target group; cursor retained")
+        return []
+    delivered = True
+    for group_id in targets:
+        action = build_action(payload, None, int(group_id))
+        delivered = bool(action) and bool(await context.send_action(action)) and delivered
+    if delivered and pending_since:
+        _save_since(context, pending_since)
+    return []
 
-async def _fetch_earthquake_news(context, force: bool = False) -> list:
+async def _fetch_earthquake_news(
+    context,
+    force: bool = False,
+    *,
+    advance_cursor: bool = True,
+) -> list:
     """
     获取地震快讯
 
@@ -203,6 +224,7 @@ async def _fetch_earthquake_news(context, force: bool = False) -> list:
         data = _fetch_weibo(session)
 
         found_card = None
+        found_cards = []
         newest_seen_id = since_id_int
 
         for card in data.get("data", {}).get("cards", []):
@@ -228,8 +250,6 @@ async def _fetch_earthquake_news(context, force: bool = False) -> list:
             # 手动触发：直接返回最新的有效地震信息，不论是否看过或震级大小
             if force:
                 found_card = card
-                if is_new:
-                    _save_since(context, mid)
                 break
 
             # 定时任务：遇到旧消息后停止处理更旧数据
@@ -240,43 +260,43 @@ async def _fetch_earthquake_news(context, force: bool = False) -> list:
             magnitude = _extract_magnitude(clean_text)
 
             if magnitude is not None and magnitude >= 4:
-                found_card = card
-                break
+                found_cards.append(card)
+                continue
 
             logger.info("Earthquake M%.1f < 4, skipping", magnitude or 0)
 
         if not force and newest_seen_id > since_id_int:
-            _save_since(context, str(newest_seen_id))
+            if advance_cursor or not found_cards:
+                _save_since(context, str(newest_seen_id))
+            elif isinstance(getattr(context, "state", None), dict):
+                context.state["earthquake_pending_since"] = str(newest_seen_id)
 
-        if not found_card:
+        cards_to_render = [found_card] if force and found_card else found_cards
+        if not cards_to_render:
             if force:
                 return segments("未获取到地震快讯数据")
             return []
 
-        # 处理找到的消息
-        mblog = found_card.get("mblog", {})
-        raw_text = mblog.get("text", "")
-        clean_text = _extract_clean_text(raw_text)
-        magnitude = _extract_magnitude(clean_text)
-
-        # 下载图片
-        figure_url = mblog.get("original_pic")
-        if figure_url:
-            try:
-                img_data = session.get(figure_url, timeout=20).content
-                figure_dir = context.data_dir / "EarthquakeFigures"
-                figure_dir.mkdir(parents=True, exist_ok=True)
-                filename = figure_url.split("/")[-1]
-                file_path = figure_dir / filename
-                file_path.write_bytes(img_data)
-
-                logger.info("Earthquake: %s (M%.1f)", clean_text[:50], magnitude or 0)
-                return [text(clean_text), image(str(file_path))]
-            except Exception as e:
-                logger.warning("Failed to download earthquake image: %s", e)
-                return segments(clean_text)
-
-        return segments(clean_text)
+        output = []
+        for card in reversed(cards_to_render):
+            mblog = card.get("mblog", {})
+            raw_text = mblog.get("text", "")
+            clean_text = _extract_clean_text(raw_text)
+            magnitude = _extract_magnitude(clean_text)
+            output.append(text(clean_text))
+            figure_url = mblog.get("original_pic")
+            if figure_url:
+                try:
+                    img_data = session.get(figure_url, timeout=20).content
+                    figure_dir = context.data_dir / "EarthquakeFigures"
+                    figure_dir.mkdir(parents=True, exist_ok=True)
+                    file_path = figure_dir / f"{mblog.get('id', uuid.uuid4().hex)}.jpg"
+                    atomic_write_bytes(file_path, img_data)
+                    output.append(image(str(file_path)))
+                except Exception as e:
+                    logger.warning("Failed to download earthquake image: %s", e)
+            logger.info("Earthquake: %s (M%.1f)", clean_text[:50], magnitude or 0)
+        return output
 
     try:
         return await run_sync(_do_fetch)

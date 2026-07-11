@@ -1,9 +1,13 @@
 """Typed models for core data structures."""
 
 import json
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .message import normalize_inbound_message
+from .plugin_execution import PluginConcurrency
+
 
 class OneBotEvent(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -43,30 +47,61 @@ class OneBotEvent(BaseModel):
             return v
         return None
 
+    @model_validator(mode="after")
+    def _fill_message_from_raw_message(self) -> "OneBotEvent":
+        normalized = normalize_inbound_message(
+            {"message": self.message, "raw_message": self.raw_message}
+        )
+        self.message = normalized["message"]
+        return self
+
 class PluginCommandManifest(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     triggers: list[str]
     help: str
     admin_only: bool = False
     priority: int = 0
+    usage: str | None = None
 
 class PluginScheduleManifest(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     handler: str
     cron: dict[str, Any]
     id: Optional[str] = None
     group_ids: Optional[list[int]] = None
+    description: str | None = None
+    enabled: bool = True
 
-class PluginManifest(BaseModel):
-    model_config = ConfigDict(extra="allow")
+
+class PluginDependencyManifest(BaseModel):
+    """A Python module dependency checked before the plugin is imported."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
+    required: bool = True
+    description: str | None = None
+
+class PluginManifest(BaseModel):
+    """Versioned, strict manifest for a plugin's runtime contract.
+
+    `description` and `author` are operational metadata emitted at load time;
+    `dependencies` names importable Python modules, not plugin load-order edges.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    schema_version: Literal[1] = 1
     version: str = "0.0.0"
+    description: str | None = None
+    author: str | None = None
     entry: str = "main.py"
     commands: list[PluginCommandManifest] = Field(default_factory=list)
     schedule: list[PluginScheduleManifest] = Field(default_factory=list)
-    concurrency: str = "parallel"
+    dependencies: list[PluginDependencyManifest] = Field(default_factory=list)
+    concurrency: PluginConcurrency = "parallel"
     enabled: bool = True

@@ -127,30 +127,14 @@ def _dress_buy(user_id: str, group_id: int, item_id: str, db: Database) -> Tuple
         return False, f"装扮 '{item_id}' 不存在"
 
     item = DEFAULT_DRESS_ITEMS[item_id]
-    owned = db.get_dress_inventory(user_id, group_id)
-    if item_id in owned:
-        return False, "你已经拥有该装扮"
-
-    user = db.get_user(user_id, group_id)
-    if not user:
-        return False, "用户不存在"
-
     currency = item.get("currency", "coins")
     price = item["price"]
-
-    if currency == "friendship":
-        if user.friendship_points < price:
-            return False, f"友情点不足，需要{price}友情点，当前{user.friendship_points}"
-        user.friendship_points -= price
-        cost_msg = f"{price}友情点"
-    else:
-        if user.coins < price:
-            return False, f"金币不足，需要{price}金币，当前{user.coins}金币"
-        user.coins -= price
-        cost_msg = f"{price}金币"
-
-    db.update_user(user)
-    db.add_dress_item(user_id, group_id, item_id)
+    success, reason = db.purchase_dress_atomic(user_id, group_id, item_id, currency, price)
+    if not success:
+        if reason == "余额不足":
+            reason = "友情点不足" if currency == "friendship" else "金币不足"
+        return False, reason
+    cost_msg = f"{price}友情点" if currency == "friendship" else f"{price}金币"
 
     return True, f"✅ 购买成功！花费{cost_msg}，获得 {item['name']}\n使用 /宠物 装扮 穿戴 {item_id} 穿戴"
 
@@ -243,7 +227,6 @@ def _trade_list(group_id: int, db: Database) -> Tuple[bool, str]:
         return True, "🏪 当前没有挂单"
 
     text = "🏪 **交易市场**\n\n"
-    from ..services.item_service import ItemService
     item_service = ItemService(db)
     for listing in listings:
         item = item_service.get_item(listing['item_id'])
@@ -263,18 +246,16 @@ def _trade_sell(user_id: str, group_id: int, args: str, db: Database) -> Tuple[b
     if price < TRADE_CONFIG["min_price"] or price > TRADE_CONFIG["max_price"]:
         return False, f"价格范围: {TRADE_CONFIG['min_price']} ~ {TRADE_CONFIG['max_price']}"
 
-    count = db.get_user_listing_count(user_id, group_id)
-    if count >= TRADE_CONFIG["max_listings"]:
-        return False, f"挂单数量已达上限({TRADE_CONFIG['max_listings']})"
-
-    inventory = db.get_or_create_inventory(user_id, group_id)
-    if not inventory.has_item(item_id, amount):
-        return False, "背包中道具数量不足"
-
-    inventory.remove_item(item_id, amount)
-    db.update_inventory(inventory)
-    db.create_trade_listing(user_id, group_id, item_id, amount, price,
-                            TRADE_CONFIG["listing_expire_hours"])
+    if not db.create_trade_listing_atomic(
+        user_id,
+        group_id,
+        item_id,
+        amount,
+        price,
+        TRADE_CONFIG["listing_expire_hours"],
+        TRADE_CONFIG["max_listings"],
+    ):
+        return False, "背包数量不足、挂单已达上限或创建失败"
 
     # CR Review Issue #7: 交易操作记录日志
     admin_service = AdminService(db)
@@ -315,13 +296,13 @@ def _trade_cancel(user_id: str, group_id: int, args: str, db: Database) -> Tuple
         return False, "请指定订单号"
 
     listing_id = int(listing_id_str)
-    listing = db.get_listing_by_id(listing_id)
+    listing = db.get_listing_by_id(listing_id, group_id)
     if not listing:
         return False, "订单不存在"
 
     if listing['seller_user_id'] != user_id:
         return False, "只能撤销自己的挂单"
-    if not db.cancel_trade_listing(listing_id, user_id):
+    if not db.cancel_trade_listing(listing_id, user_id, group_id):
         return False, "撤单失败"
 
     # CR Review Issue #7: 交易操作记录日志
@@ -377,7 +358,7 @@ def _show_info(group_id: int, db: Database) -> Tuple[bool, str]:
 
 
 def _show_vote(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
-    match = re.match(r"@?(\d+)", args.strip())
+    match = re.fullmatch(r"@?(\d+)", args.strip())
     if not match:
         return False, "格式错误\n用法: /宠物 展示 投票 @QQ号"
 
@@ -389,15 +370,14 @@ def _show_vote(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bo
     if not show:
         return False, "当前没有进行中的展示会"
 
-    vote_count = db.get_user_vote_count(show['id'], user_id)
-    if vote_count >= PET_SHOW_CONFIG['max_votes_per_user']:
-        return False, f"你已投满{PET_SHOW_CONFIG['max_votes_per_user']}票"
-
     target_pet = db.get_pet(target_id, group_id)
     if not target_pet:
         return False, "对方没有宠物"
 
-    db.vote_pet_show(show['id'], user_id, target_id)
+    if not db.vote_pet_show_atomic(
+        show["id"], user_id, target_id, PET_SHOW_CONFIG["max_votes_per_user"]
+    ):
+        return False, f"你已投满{PET_SHOW_CONFIG['max_votes_per_user']}票或投票失败"
     return True, f"✅ 成功为 {target_pet.name} 投票！"
 
 
@@ -409,11 +389,16 @@ async def handle_manage_delete(user_id: str, group_id: int, args: str,
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
 
-    match = re.match(r"@?(\d+)", args.strip())
+    match = re.fullmatch(r"@?(\d+)(?:\s+(确认|confirm))?", args.strip(), re.IGNORECASE)
     if not match:
         return False, "格式错误\n用法: /宠物 管理 删除 @QQ号"
 
     target_user_id = match.group(1)
+    if not match.group(2):
+        return False, (
+            f"⚠️ 将永久删除用户 {target_user_id} 的宠物。\n"
+            f"确认执行请发送：/宠物 管理 删除 @{target_user_id} 确认"
+        )
     success = db.delete_pet(target_user_id, group_id)
     if success:
         return True, f"✅ 用户 {target_user_id} 的宠物已删除"

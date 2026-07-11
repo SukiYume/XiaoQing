@@ -12,7 +12,8 @@
                 "exec"
             ],
             "help": "💻 执行终端命令 | /shell help 查看详细帮助",
-            "admin_only": true
+            "admin_only": true,
+            "priority": 20
         }
     ],
     "schedule": []

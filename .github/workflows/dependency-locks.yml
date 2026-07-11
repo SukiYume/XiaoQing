@@ -1,0 +1,39 @@
+name: Refresh dependency locks
+
+on:
+  schedule:
+    - cron: '23 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh-locks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+      - name: Regenerate locks with pinned tooling
+        run: |
+          python -m pip install uv==0.11.28
+          python scripts/compile_locks.py --upgrade
+      - name: Open dependency lock pull request when changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- requirements/; then
+            echo "Dependency locks are already current"
+            exit 0
+          fi
+          BRANCH="automation/dependency-locks-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add requirements/
+          git commit -m "chore: refresh dependency locks"
+          git push origin "$BRANCH"
+          gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" --title "chore: refresh dependency locks" --body "Automated weekly refresh of hashed Python dependency locks."

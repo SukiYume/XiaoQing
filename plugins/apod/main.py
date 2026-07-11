@@ -5,17 +5,22 @@
 
 # 标准库
 import asyncio
+import hashlib
+import io
 import logging
 import re
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 # 第三方库
 import aiohttp
 from bs4 import BeautifulSoup
+from PIL import Image
 
 # 本地导入
 from core.args import parse
-from core.plugin_base import image, segments, text
+from core.plugin_base import atomic_write_bytes, image, segments, text
+from core.safe_http import UnsafeUrlError, fetch_public_bytes, fetch_public_html
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +37,11 @@ HEADERS = {
 
 DEFAULT_APOD_URL = 'https://apod.nasa.gov/apod/astropix.html'
 TIMEOUT_SECONDS = 60
+HTML_TIMEOUT_SECONDS = 15
+IMAGE_TIMEOUT_SECONDS = 20
+MAX_HTML_BYTES = 2 * 1024 * 1024
+MAX_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_IMAGE_PIXELS = 40_000_000
 DEFAULT_FALLBACK_TITLE = "Today's Astronomy Picture of the Day"
 NO_EXPLANATION_TEXT = "No explanation found."
 EXPLANATION_UNAVAILABLE = "Explanation unavailable."
@@ -67,6 +77,69 @@ def _sanitize_filename(url: str) -> str:
     if '.' not in filename:
         filename += '.jpg'
     return filename
+
+
+def _cache_filename(url: str, content_type: str) -> str:
+    """Build a Windows-safe, collision-resistant cache name."""
+    extension = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+    }.get(content_type.split(";", 1)[0].strip().lower(), ".img")
+    return f"{hashlib.sha256(url.encode('utf-8')).hexdigest()}{extension}"
+
+
+def _allowed_hosts(context) -> set[str]:
+    configured = _get_config(context).get("allowed_hosts", [])
+    hosts = {"apod.nasa.gov"}
+    if isinstance(configured, list):
+        hosts.update(str(host).strip().rstrip(".").lower() for host in configured if host)
+    return hosts
+
+
+def _require_allowed_url(url: str, context) -> str:
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if parsed.scheme.lower() != "https" or host not in _allowed_hosts(context):
+        raise UnsafeUrlError("APOD URL host is not allowed")
+    return url
+
+
+def _require_https_display_url(url: str) -> str:
+    """Validate a link that is displayed but never fetched by the bot."""
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        raise UnsafeUrlError("media link is not an absolute HTTPS URL")
+    return url
+
+
+async def _safe_download_image(url: str, images_dir: Path, context) -> Path | None:
+    _require_allowed_url(url, context)
+    fetched = await fetch_public_bytes(
+        url,
+        headers={**HEADERS, "accept-encoding": "identity"},
+        timeout_seconds=IMAGE_TIMEOUT_SECONDS,
+        max_bytes=MAX_IMAGE_BYTES,
+        allowed_content_type_prefixes=("image/",),
+        allowed_hosts=_allowed_hosts(context),
+    )
+    if fetched is None:
+        return None
+
+    def validate() -> None:
+        with Image.open(io.BytesIO(fetched.body)) as candidate:
+            width, height = candidate.size
+            if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+                raise ValueError("image pixel budget exceeded")
+            candidate.verify()
+
+    await asyncio.to_thread(validate)
+    content_type = fetched.headers.get("Content-Type", "")
+    target = images_dir / _cache_filename(fetched.url, content_type)
+    if not target.exists() or target.stat().st_size != len(fetched.body):
+        await asyncio.to_thread(atomic_write_bytes, target, fetched.body)
+    return target
 
 def _extract_title(soup: BeautifulSoup, context) -> str:
     """提取标题，使用多种策略增强鲁棒性"""
@@ -121,11 +194,15 @@ async def _fetch_with_retry(
             if response.status == 200:
                 if is_binary:
                     result = await response.read()
+                    if len(result) > (MAX_IMAGE_BYTES if is_binary else MAX_HTML_BYTES):
+                        raise ValueError("response exceeds byte budget")
                 else:
                     try:
                         result = await response.text()
                     except UnicodeDecodeError:
                         result = await response.text(errors='replace')
+                    if len(result.encode("utf-8")) > MAX_HTML_BYTES:
+                        raise ValueError("response exceeds byte budget")
                 context.logger.info("直接访问成功")
                 return result
             else:
@@ -141,11 +218,15 @@ async def _fetch_with_retry(
                 if response.status == 200:
                     if is_binary:
                         result = await response.read()
+                        if len(result) > MAX_IMAGE_BYTES:
+                            raise ValueError("response exceeds byte budget")
                     else:
                         try:
                             result = await response.text()
                         except UnicodeDecodeError:
                             result = await response.text(errors='replace')
+                        if len(result.encode("utf-8")) > MAX_HTML_BYTES:
+                            raise ValueError("response exceeds byte budget")
                     context.logger.info("代理访问成功")
                     return result
                 else:
@@ -214,9 +295,7 @@ async def download_image(
             context.logger.error(f"图片下载失败: {url}")
             return False
         
-        # 写入文件
-        with open(file_path, 'wb') as f:
-            f.write(content)
+        await asyncio.to_thread(atomic_write_bytes, file_path, content)
         
         context.logger.info(f"图片下载成功: {file_path}")
         return True
@@ -266,15 +345,27 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         session = context.http_session
         timeout = aiohttp.ClientTimeout(total=TIMEOUT_SECONDS)
         
-        # 使用统一的重试逻辑获取 HTML
-        html = await _fetch_with_retry(
-            session=session,
-            url=url,
-            proxy=proxy,
-            timeout=timeout,
-            is_binary=True,  # Fetch as bytes so BeautifulSoup handles encoding
-            context=context
-        )
+        page_url = _require_allowed_url(url, context)
+        safe_response = None
+        if isinstance(session, aiohttp.ClientSession):
+            safe_response = await fetch_public_html(
+                page_url,
+                headers={**HEADERS, "accept-encoding": "identity"},
+                timeout_seconds=HTML_TIMEOUT_SECONDS,
+                allowed_hosts=_allowed_hosts(context),
+            )
+            html = safe_response.body if safe_response else None
+        else:
+            # Test/embedder compatibility; the production app always supplies
+            # an aiohttp ClientSession and therefore uses the pinned safe path.
+            html = await _fetch_with_retry(
+                session=session,
+                url=page_url,
+                proxy=proxy,
+                timeout=timeout,
+                is_binary=True,
+                context=context
+            )
         
         if not html:
             error_msg = "❌ 获取失败: 网络错误" + ("且未配置代理" if not proxy else "")
@@ -282,7 +373,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             return segments(error_msg)
 
         # 解析 HTML
-        soup = BeautifulSoup(html, 'html.parser')
+        soup = await asyncio.to_thread(BeautifulSoup, html, 'html.parser')
         
         # 获取标题（使用增强的提取函数）
         title = _extract_title(soup, context)
@@ -299,20 +390,20 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                 return segments("❌ 无法获取图片链接")
             
             # 构造完整 URL
-            if 'http' not in img_src:
-                from urllib.parse import urljoin
-                imgurl = urljoin(url, img_src)
-            else:
-                imgurl = img_src
-            
-            # 使用净化后的文件名
-            imgname = _sanitize_filename(imgurl)
-            img_path = images_dir / imgname
+            base_url = safe_response.url if safe_response else page_url
+            imgurl = urljoin(base_url, img_src)
+            _require_allowed_url(imgurl, context)
+            img_path: Path | None = None
             
             context.logger.info(f"发现图片: {imgurl}")
             
             # 下载图片 (如果不存在或文件大小为0)
-            if not img_path.exists() or img_path.stat().st_size == 0:
+            if isinstance(session, aiohttp.ClientSession):
+                img_path = await _safe_download_image(imgurl, images_dir, context)
+            else:
+                # Compatibility path for injected test clients. It still has a
+                # byte budget and atomic persistence, but is never used by the app.
+                img_path = images_dir / _cache_filename(imgurl, "image/jpeg")
                 context.logger.info("开始下载图片...")
                 success = await download_image(
                     session=session,
@@ -327,6 +418,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                     error_msg = f"❌ 图片下载失败，请查看链接: {imgurl}\n\n{title}\n\n{explanation}"
                     context.logger.error(error_msg)
                     return segments(error_msg)
+            if img_path is None:
+                return segments(f"❌ 图片下载失败\n\n{title}\n\n{explanation}")
             
             # 返回图片和文字，让框架统一处理发送
             return [
@@ -338,7 +431,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         # Case B: Iframe Video
         # -------------------------------------------------------------
         elif soup.find('iframe'):
-            videourl = soup.find('iframe').attrs.get('src', 'Video URL unavailable')
+            videourl = urljoin(page_url, soup.find('iframe').attrs.get('src', ''))
+            _require_https_display_url(videourl)
             context.logger.info(f"发现 iframe 视频: {videourl}")
             return segments(f"{videourl}\n\n{title}\n\n{explanation}")
             
@@ -357,10 +451,10 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                 video_src = video_element.attrs['src']
                 
             if video_src and not (video_src.startswith('http://') or video_src.startswith('https://')):
-                from urllib.parse import urljoin
                 video_src = urljoin(url, video_src)
                 
             if video_src:
+                _require_https_display_url(video_src)
                 return segments(f"{video_src}\n\n{title}\n\n{explanation}")
             else:
                 return segments(f"[视频无法获取链接]\n\n{title}\n\n{explanation}\n\n原网址: {url}")

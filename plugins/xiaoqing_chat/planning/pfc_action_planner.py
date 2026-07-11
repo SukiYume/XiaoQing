@@ -47,7 +47,7 @@ direct_reply: 直接回复对方
 wait: 暂时等待，给对方留出空间（需指定等待秒数）
 rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择
 end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择
-block_and_ignore: 更加极端的结束对话方式，直接结束对话并在一段时间内无视对方所有发言（屏蔽），当对话让你感到十分不适，或你遭到各类骚扰时选择
+block_and_ignore: 仅跳过当前这一条消息；不得让整个群或私聊进入持续屏蔽状态
 
 请先输出你的思考过程，再输出行动决策。JSON格式：
 {{
@@ -56,7 +56,7 @@ block_and_ignore: 更加极端的结束对话方式，直接结束对话并在�
     "reason": "选择该行动的详细原因",
     "wait_seconds": 0
 }}
-说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，表示等待秒数（5~120），其余 action 填 0。
+说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，必须是 JSON 整数，表示等待秒数（0~30），其余 action 填 0。
 注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
 
 PROMPT_INITIAL_REPLY_COMPACT = """{persona_text}。你在QQ{channel}闲聊。
@@ -89,7 +89,7 @@ fetch_knowledge / listening / direct_reply / wait / rethink_goal / end_conversat
   "reason": "选择该行动的原因",
   "wait_seconds": 0
 }}
-说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，表示等待秒数（5~120），其余 action 填 0。"""
+说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，必须是 JSON 整数，表示等待秒数（0~30），其余 action 填 0。"""
 
 PROMPT_FOLLOW_UP = """{persona_text}。现在你在参与一场QQ{channel}，刚刚你已经回复了对方，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以继续发送新消息，可以等待，可以倾听，可以调取知识，甚至可以屏蔽对方：
 
@@ -123,7 +123,7 @@ listening: 倾听对方发言（如果对方立刻回复且明显话没说完，
 send_new_message: 发送一条新消息继续对话，允许适当的追问、补充、深入话题，或开启相关新话题。避免在因重复被拒后立即使用，也不要过多轰炸
 rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择
 end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择
-block_and_ignore: 更加极端的结束对话方式，直接结束对话并在一段时间内无视对方所有发言（屏蔽），当对话让你感到十分不适，或你遭到各类骚扰时选择
+block_and_ignore: 仅跳过当前这一条消息；不得让整个群或私聊进入持续屏蔽状态
 
 请先输出你的思考过程，再输出行动决策。JSON格式：
 {{
@@ -132,7 +132,7 @@ block_and_ignore: 更加极端的结束对话方式，直接结束对话并在�
     "reason": "选择该行动的详细原因",
     "wait_seconds": 0
 }}
-说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，表示等待秒数（5~120），其余 action 填 0。
+说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，必须是 JSON 整数，表示等待秒数（0~30），其余 action 填 0。
 注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
 
 PROMPT_FOLLOW_UP_COMPACT = """{persona_text}。你在QQ{channel}闲聊，刚刚你已经回复过对方。
@@ -164,7 +164,7 @@ fetch_knowledge / wait / listening / send_new_message / rethink_goal / end_conve
   "reason": "选择该行动的原因",
   "wait_seconds": 0
 }}
-说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，表示等待秒数（5~120），其余 action 填 0。"""
+说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，必须是 JSON 整数，表示等待秒数（0~30），其余 action 填 0。"""
 
 PROMPT_END_DECISION = """{persona_text}。刚刚你决定结束一场 QQ {channel}。
 
@@ -358,11 +358,9 @@ async def plan_next_action(
     act = str(obj.get("action", "") or "").strip()
     reason = str(obj.get("reason", "") or "").strip()
     thinking = str(obj.get("thinking", "") or "").strip()
-    try:
-        wait_seconds = int(obj.get("wait_seconds", 0) or 0)
-    except (ValueError, TypeError):
-        wait_seconds = 0
-    wait_seconds = max(0, min(120, wait_seconds))
+    raw_wait_seconds = obj.get("wait_seconds", 0)
+    wait_seconds = raw_wait_seconds if type(raw_wait_seconds) is int else 0
+    wait_seconds = max(0, min(30, wait_seconds))
     return PFCPlan(action=act, reason=reason, thinking=thinking, wait_seconds=wait_seconds)
 
 async def decide_say_bye(

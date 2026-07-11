@@ -14,6 +14,7 @@ from typing import Any
 from dateutil import parser
 
 from ..config import MOOD_ANALYSIS_CONFIG
+from ..utils.settings_utils import parse_custom_settings
 from ..utils.time_utils import now_in_timezone, parse_and_localize
 from ..utils.validators import normalize_reminder_rules
 from .rule_parser import RuleParser
@@ -130,16 +131,34 @@ class AIParser:
 - score 表示情绪强度，1 最弱，10 最强
 - 只返回 JSON，不要解释。"""
 
-    def __init__(self, context=None, db=None):
+    def __init__(self, context=None, db=None, *, now_factory=None):
         self.context = context
         self.db = db
         self.rule_parser = RuleParser()
+        self._now_factory = now_factory
+
+    def _now(self, tz=None) -> datetime:
+        """Injectable clock keeps date-sensitive parsing deterministic in tests."""
+        if self._now_factory is not None:
+            return self._now_factory(tz)
+        return datetime.now(tz)
 
     def _get_llm_secrets(self):
         """获取LLM配置"""
         if self.context and hasattr(self.context, "secrets"):
             return self.context.secrets.get("plugins", {}).get("pendo", {})
         return {}
+
+    def has_sensitive_data_consent(self, user_id: str) -> bool:
+        """Return whether this user explicitly permits external diary analysis."""
+        if self.db is None:
+            return False
+        try:
+            settings = self.db.get_user_settings(user_id)
+            return bool(parse_custom_settings(settings).get("ai_sensitive_data_consent", False))
+        except Exception as exc:
+            logger.warning("Unable to read AI consent for user=%s: %s", user_id, exc)
+            return False
 
     async def _call_llm(
         self, messages: list[dict[str, str]], temperature: float = 0.3
@@ -246,7 +265,7 @@ class AIParser:
             except (json.JSONDecodeError, ValueError):
                 return self._fallback_event_result(source_text, user_id, partial=partial)
 
-            logger.info("AI解析结果: %s", json.dumps(parsed, ensure_ascii=False))
+            logger.info("AI event parse completed: user=%s fields=%s", user_id, sorted(parsed))
 
             return self._build_event_result(parsed, source_text, user_id, partial=partial)
 
@@ -256,15 +275,19 @@ class AIParser:
 
     async def analyze_diary_mood(self, text: str, user_id: str) -> tuple[str | None, int | None]:
         """使用 AI 分析日记主情绪，失败时降级到规则情绪分析。"""
+        if not self.has_sensitive_data_consent(user_id):
+            logger.info("AI diary analysis skipped: user=%s has not consented (chars=%d)", user_id, len(text))
+            return self._fallback_diary_mood(text)
         allowed, wait_seconds = self._rate_limiter.check_rate_limit(user_id)
         if not allowed:
             logger.warning("用户 %s 超过AI情绪分析速率限制，等待 %s 秒", user_id, wait_seconds)
             return self._fallback_diary_mood(text)
 
         try:
-            current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+            user_now = now_in_timezone(user_id, self.db)
+            current_date = user_now.strftime("%Y-%m-%d %H:%M")
             weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-            current_weekday = weekday_names[datetime.now().weekday()]
+            current_weekday = weekday_names[user_now.weekday()]
 
             prompt = self.DIARY_MOOD_PROMPT_TEMPLATE.format(
                 current_date=current_date, current_weekday=current_weekday, text=text
@@ -474,7 +497,7 @@ class AIParser:
             return []
 
         start_dt = parse_and_localize(start_time, user_id, self.db)
-        now = now_in_timezone(user_id, self.db) if user_id else datetime.now(start_dt.tzinfo)
+        now = now_in_timezone(user_id, self.db) if user_id else self._now(start_dt.tzinfo)
         remind_times = []
 
         for offset in offsets:

@@ -1,8 +1,6 @@
-const TOKEN_KEY = 'pendo_token';
+let csrfToken = '';
 
-export function getToken() { return localStorage.getItem(TOKEN_KEY); }
-export function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
-export function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function formatErrorDetail(detail) {
     if (Array.isArray(detail)) {
@@ -17,24 +15,38 @@ function formatErrorDetail(detail) {
     return detail || '';
 }
 
-async function request(path, options = {}) {
-    const token = getToken();
+function rememberSession(data) {
+    csrfToken = String(data?.csrf_token || '');
+    return {
+        ok: Boolean(data?.owner_id && csrfToken),
+        ownerId: data?.owner_id || '',
+        expiresAt: data?.expires_at || null,
+        message: '',
+    };
+}
+
+function sessionHeaders(options = {}) {
     const headers = { ...options.headers };
+    const method = String(options.method || 'GET').toUpperCase();
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
     const isBinary = typeof Blob !== 'undefined' && options.body instanceof Blob;
     if (!isFormData && !isBinary && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json';
     }
-    if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
+    if (!SAFE_METHODS.has(method) && csrfToken) {
+        headers['X-CSRF-Token'] = csrfToken;
     }
+    return headers;
+}
 
-    const res = await fetch(`api${path}`, { ...options, headers });
-
+async function request(path, options = {}) {
+    const res = await fetch(`api${path}`, {
+        ...options,
+        headers: sessionHeaders(options),
+        credentials: 'same-origin',
+    });
     if (res.status === 401) {
-        clearToken();
-        window.location.hash = '';
-        window.location.reload();
+        csrfToken = '';
         throw new Error('Unauthorized');
     }
 
@@ -75,22 +87,14 @@ export async function apiUpload(path, body, headers = {}) {
 }
 
 export async function apiDownload(path, body) {
-    const token = getToken();
-    const headers = { 'Content-Type': 'application/json' };
-    if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-    }
-
+    const options = { method: 'POST', body: JSON.stringify(body) };
     const res = await fetch(`api${path}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
+        ...options,
+        headers: sessionHeaders(options),
+        credentials: 'same-origin',
     });
-
     if (res.status === 401) {
-        clearToken();
-        window.location.hash = '';
-        window.location.reload();
+        csrfToken = '';
         throw new Error('Unauthorized');
     }
     if (!res.ok) {
@@ -100,35 +104,38 @@ export async function apiDownload(path, body) {
     const blob = await res.blob();
     const disposition = res.headers.get('content-disposition') || '';
     const match = disposition.match(/filename="?([^"]+)"?/i);
-    return {
-        blob,
-        filename: match?.[1] || 'download.bin',
-    };
+    return { blob, filename: match?.[1] || 'download.bin' };
 }
 
-export async function verifyToken(token) {
+export async function getSession() {
     try {
-        const res = await fetch('api/auth/verify', {
+        const res = await fetch('api/auth/session', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+            csrfToken = '';
+            return { ok: false, message: data?.message || '登录已失效' };
+        }
+        return rememberSession(data.data);
+    } catch {
+        return { ok: false, message: '无法连接到 Web 服务' };
+    }
+}
+
+export async function exchangeLoginCode(code) {
+    try {
+        const res = await fetch('api/auth/exchange', {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-            },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
         });
         const data = await res.json().catch(() => ({}));
-        return {
-            ok: Boolean(res.ok && data.ok),
-            ownerId: data?.data?.owner_id || '',
-            expiresAt: data?.data?.expires_at || null,
-            message: data?.message || data?.detail || '',
-        };
+        if (!res.ok || !data.ok) {
+            return { ok: false, message: data?.message || '登录链接无效或已失效' };
+        }
+        return rememberSession(data.data);
     } catch {
-        return {
-            ok: false,
-            ownerId: '',
-            expiresAt: null,
-            message: '无法连接到 Web 服务',
-        };
+        return { ok: false, message: '无法连接到 Web 服务' };
     }
 }
 
@@ -136,25 +143,23 @@ export async function createDemoSession() {
     try {
         const res = await fetch('api/auth/demo', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
         });
         const data = await res.json().catch(() => ({}));
-        return {
-            ok: Boolean(res.ok && data.ok && data?.data?.token),
-            token: data?.data?.token || '',
-            ownerId: data?.data?.owner_id || '',
-            expiresAt: data?.data?.expires_at || null,
-            message: data?.message || data?.detail || '',
-        };
+        if (!res.ok || !data.ok) {
+            return { ok: false, message: data?.message || '无法创建演示空间' };
+        }
+        return rememberSession(data.data);
     } catch {
-        return {
-            ok: false,
-            token: '',
-            ownerId: '',
-            expiresAt: null,
-            message: '无法创建演示空间',
-        };
+        return { ok: false, message: '无法创建演示空间' };
+    }
+}
+
+export async function logout() {
+    try {
+        await request('/auth/logout', { method: 'POST' });
+    } finally {
+        csrfToken = '';
     }
 }

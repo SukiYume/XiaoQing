@@ -448,14 +448,14 @@ Web 控制台提供以下页面：
 **11. Web 控制台**
 
 ```
-/pendo web token                             # 获取浏览器登录令牌
+/pendo web token                             # 获取一次性浏览器登录链接（私聊）
 /pendo web widget-token                      # 获取 Scriptable 小组件令牌
 /pendo web start                             # 启动 Web 服务（默认端口 12001）
 /pendo web status                            # 查看访问地址
 /pendo web stop                              # 停止服务
 ```
 
-启动后默认通过 `http://127.0.0.1:12001` 访问。反向代理部署时，也可以通过自己的外网地址访问。浏览器登录用 `/pendo web token`，iPhone Scriptable 小组件用 `/pendo web widget-token`。
+启动后默认通过 `http://127.0.0.1:12001` 访问。反向代理部署时，也可以通过自己的外网地址访问。浏览器登录用 `/pendo web token` 的私聊一次性链接（5 分钟、仅一次）；登录后使用短期 HttpOnly session cookie。iPhone Scriptable 小组件仍使用 `/pendo web widget-token` 的只读 bearer。
 
 Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚本仓库版本只保留 `BASE_URL` 和 `TOKEN` 占位值，导入 Scriptable 后需要替换成你自己的 Pendo Web 地址和 widget token。它可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏，并支持 `small` / `medium` / `large` 三种尺寸。
 
@@ -480,6 +480,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - 支持会话式交互，使用"退出"或"q"结束会话
 - Pendo 的本地运行时数据包括 SQLite 数据库和 Web Token 签名密钥
 - Web 控制台需要额外依赖：`PyJWT`、`fastapi`、`uvicorn`、`passlib[bcrypt]`（已包含在根目录 `requirements.txt`）
+- 默认仅绑定 loopback。部署到非 loopback/TLS 反向代理时必须设置 `PENDO_WEB_SESSION_COOKIE_SECURE=true`，否则服务拒绝启动；请同时由反向代理提供 HTTPS。
 
 ---
 
@@ -1144,7 +1145,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 
 ### codex - Codex 后台任务队列
 
-通过 QQ 命令调用生产环境 Codex CLI。插件自己维护 Codex 会话标签、任务队列和对话记录，不占用 XiaoQing 的框架 Session。
+通过 QQ 命令调用生产环境 Codex CLI。插件自己维护 Codex 会话标签、任务队列和对话记录，不占用 XiaoQing 的框架 Session。全部 `/codex` 命令保持 `admin_only: true`，只有 `admin_user_ids` 中的 Bot 管理员可以使用。
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
@@ -1193,7 +1194,21 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
       },
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
+      "spawn_timeout_seconds": 30,
       "job_timeout_seconds": 3600,
+      "max_stdout_bytes": 16777216,
+      "max_stderr_bytes": 4194304,
+      "max_json_line_bytes": 1048576,
+      "max_final_output_bytes": 8388608,
+      "max_qq_text_chars": 60000,
+      "artifact_scan_max_entries": 5000,
+      "artifact_scan_max_depth": 8,
+      "max_image_artifacts": 20,
+      "max_image_bytes": 20971520,
+      "max_image_total_bytes": 104857600,
+      "max_image_pixels": 40000000,
+      "max_image_frames": 120,
+      "max_qq_images": 10,
       "sandbox": "workspace-write",
       "approval_policy": "never",
       "skip_git_repo_check": true
@@ -1203,6 +1218,26 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 ```
 
 如果 Codex CLI 不在 PATH 中，可在 `config.json` 或 `secrets.json` 的 `plugins.codex.codex_bin` 指定完整路径。`allowed_cwd_roots` 是安全边界，用户创建会话时指定的 `cwd:` 必须位于这些目录下。`arxiv_summary.cwd` 也应位于允许目录内，并提前放置 `arxiv-summary-methodology.md`。
+
+资源预算字段及默认值如下。配置值超出范围时会被钳制到最近边界。
+
+| 字段 | 默认值 | 合法范围 | 超限行为 |
+|---|---:|---:|---|
+| `max_stdout_bytes` | 16 MiB | 64 KiB-128 MiB | stdout 累计超限时终止整棵 Codex 进程树。 |
+| `max_stderr_bytes` | 4 MiB | 64 KiB-64 MiB | stderr 累计超限时终止整棵 Codex 进程树。 |
+| `max_json_line_bytes` | 1 MiB | 16 KiB-8 MiB | 单条 JSON 事件超限时立即终止任务。 |
+| `max_final_output_bytes` | 8 MiB | 64 KiB-64 MiB | 最终输出文件超限时终止任务，只归档有界的头尾截断副本。 |
+| `max_qq_text_chars` | 60,000 字符 | 2,000-200,000 | 完整结果写入任务归档，QQ 仅发送截断文本和归档位置。 |
+| `artifact_scan_max_entries` | 5,000 项 | 10-20,000 | 到达条目上限后停止扫描，未扫描候选不收集。 |
+| `artifact_scan_max_depth` | 8 层 | 1-16 | 更深条目不扫描。 |
+| `max_image_artifacts` | 20 张 | 1-100 | 超出数量的图片候选被拒绝。 |
+| `max_image_bytes` | 20 MiB | 64 KiB-100 MiB | 超过单文件字节上限的图片被拒绝。 |
+| `max_image_total_bytes` | 100 MiB | 64 KiB-512 MiB | 超过累计字节预算的后续图片被拒绝。 |
+| `max_image_pixels` | 40,000,000 像素 | 1,024-100,000,000 | 真实解码像素超限或签名/解码失败的图片被拒绝。 |
+| `max_image_frames` | 120 帧 | 1-500 | 多帧图片超限时被拒绝。 |
+| `max_qq_images` | 10 张 | 1-20 | 只发送前 N 张已接受图片，其余已归档图片不发送。 |
+
+输出流/最终输出超限属于进程级硬限制；最终输出文件超限只归档有界头尾副本，QQ 文本字符超限采用“完整归档、截断投递”；图片扫描、数量、字节、签名/解码、像素与帧数超限采用“拒绝不合格产物”，拒绝原因进入任务记录。`max_qq_images` 只限制 QQ 发送数量。资源预算保护 Bot 存活性与投递链路，不改变 Codex 面向可信管理员的 sandbox、审批策略和工作目录灵活性。
 
 #### arXiv 摘要会话
 
@@ -1255,10 +1290,10 @@ Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，
 
 #### 功能特性
 
-- **命令白名单**：仅允许执行白名单中的命令（可配置）
+- **管理员命令启用列表**：控制默认开放哪些命令入口，用于防误触；它不是安全沙箱，Python、PowerShell、Docker 等通用工具仍可执行任意管理员操作
 - **执行超时**：默认 30 秒超时
 - **输出限制**：输出最大 4000 字符
-- **安全防护**：禁止命令链接符（&&, ||, ;, |）除非在白名单
+- **权限边界**：唯一安全边界是可靠的 `admin_only` 与入站认证；参数检查和命令链接符限制只降低误操作概率
 - **超时清理**：超时后会终止整棵子进程树，而不只是直接子进程
 - **路径归一化**：QQ 中可统一输入 `/` 斜杠路径，插件按 bot 所在系统转换
 
@@ -1487,7 +1522,7 @@ SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 #### 注意事项
 
 - 插件默认要求管理员权限
-- 支持 `Ctrl+C` 中断信号（发送 "停止" 或 "stop"）
+- 发送“停止”或 `stop` 时，按远端进程组执行 `TERM` → `KILL` 的有界终止，并无条件清理本地通道；若 PID 尚未解析或控制连接已丢失，会明确报告远端状态未知
 - 会话超时会自动断开连接，避免资源泄露
 - 使用 `user@server` 格式时，确保该用户在服务器上存在
 - 密钥文件路径支持 `~` 展开
@@ -1668,6 +1703,7 @@ Python 代码执行环境，支持绘图。
 - **自动管理**: 空闲自动关闭，按需自动启动
 - **隔离粒度**: 内核按“用户 + 群”隔离，同一用户跨群不会共享变量
 - **超时处理**: 代码超时会主动中断当前执行，避免继续污染内核状态
+- **启动回滚**: 只有 ready 握手完成后才发布内核；任一启动阶段失败都会完整回滚，无法确认退出的实例会隔离且不再复用
       
 #### 使用示例
       
@@ -1712,10 +1748,10 @@ A岛匿名版 (ADNMB) 客户端，支持浏览时间线和串内容。
 | **状态系统** | 饱食度、心情、清洁度、健康、体力、经验 |
 | **成长进化** | 宠物随时间成长，等级提升 |
 | **物品系统** | 食物、玩具、药品、装扮等多类道具 |
-| **社交互动** | 访问他人宠物、送礼、点赞、留言 |
+| **社交互动** | 访问他人宠物、送礼、点赞、留言；互访原子结算双方资产，留言将每日配额、记录和计数原子提交 |
 | **装扮展示** | 多种装扮，宠物展示会 |
 | **交易系统** | 玩家间物品交易 |
-| **小游戏** | 内置小游戏赚取奖励 |
+| **小游戏** | 猜拳、骰子、赛跑；按消息 ID 幂等，并将冷却、实际封顶金币、账本、经验和精力原子结算 |
 | **每日任务** | 每日签到和任务系统 |
 | **排行榜** | 等级榜、财富榜、人气榜 |
 | **管理功能** | 群组启用/禁用、封禁、数据管理 |
@@ -1881,7 +1917,7 @@ Minecraft 服务器通信插件，支持多服务器、双向聊天和状态查�
 
 | 命令 | 触发词 | 说明 | 优先级 |
 |------|--------|------|--------|
-| `mc` | `/mc`, `/minecraft` | 发送消息或查询状态 | - |
+| `mc` | `/mc`, `/minecraft` | 管理员执行 Minecraft RCON 命令或查询状态 | Bot 管理员 |
 | `mcconnect` | `/mcconnect`, `/mc连接` | 连接服务器 | 1 |
 | `mcdisconnect` | `/mcdisconnect`, `/mc断开` | 断开连接 | 1 |
 
@@ -1890,7 +1926,7 @@ Minecraft 服务器通信插件，支持多服务器、双向聊天和状态查�
 - **RCON 协议**: 标准 Minecraft RCON 通信
 - **双向聊天**: QQ ↔ MC 实时消息同步
 - **多服务器**: 支持连接多个服务器（不同群/私聊可连接不同服务器）
-- **日志监控**: 自动读取服务器 `latest.log`
+- **日志监控**: 自动读取服务器 `latest.log`；以有界 tail、批量摘要、每服务器跨轮 token bucket、单 action 字符/字节上限和全局每 tick action 上限防止日志洪泛，摘要会写明折叠/跳过数量
 
 #### 使用示例
 

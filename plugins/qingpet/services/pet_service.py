@@ -13,6 +13,7 @@ from ..utils.constants import (
     EXPLORE_LOCATIONS,
 )
 from ..utils.validators import validate_cooling, validate_sensitive_content
+from ..utils.time import utc_now
 from .database import Database
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,19 @@ class PetService:
         limit = DAILY_LIMITS.get(action)
         if not limit:
             return True, ""
-        if user.can_do_action(action, 1, limit):
+        if not user.can_do_action(action, 1, limit):
+            return False, self._daily_limit_message(action, limit)
+        claimed, remaining = self.db.claim_action_quota(
+            user.user_id,
+            user.group_id,
+            action,
+            limit,
+            int(COOLDOWN_TIMES.get(action, 0)),
+        )
+        if claimed:
             return True, ""
+        if remaining > 0:
+            return False, f"{action}冷却中，请等待{remaining}秒"
         return False, self._daily_limit_message(action, limit)
 
     @staticmethod
@@ -110,7 +122,7 @@ class PetService:
 
         pet.stage = PetStage.YOUNG
         pet.experience = pet.experience - 10
-        pet.last_update = datetime.now()
+        pet.last_update = utc_now()
 
         success = self.db.update_pet(pet)
         if success:
@@ -153,7 +165,6 @@ class PetService:
             free_apple_hint = f"\n🍎 今日免费苹果剩余: {free_left}/{free_feed_limit}"
         else:
             inventory.remove_item(actual_item_id)
-            self.db.update_inventory(inventory)
 
         hunger_gain = item_data.get("hunger_gain", 0)
         mood_gain = item_data.get("mood_gain", 0)
@@ -173,20 +184,24 @@ class PetService:
         pet.update_stat("mood", mood_gain)
         pet.experience += exp_gain
         pet.intimacy += intimacy_gain
-        pet.last_feed = datetime.now()
-        pet.last_update = datetime.now()
+        pet.last_feed = utc_now()
+        pet.last_update = utc_now()
 
         group_config = self.db.get_group_config(pet.group_id)
         # CR Review Issue #2: 应用反脚本衰减因子
         coins_gain = int(5 * group_config.economy_multiplier * spam_decay_factor)
         coins_gain = self._apply_action_reward(user, "feed", coins_gain)
 
-        success = self.db.atomic_update_pet_and_user(pet, user)
-
-        self.db.update_task_progress(user.user_id, pet.group_id, "feed")
-        self.db.update_group_task_progress(pet.group_id, "group_feed")
+        success = self.db.atomic_update_pet_and_user(
+            pet,
+            user,
+            inventory=inventory,
+            task_type="feed",
+            group_task_type="group_feed",
+        )
 
         if success:
+            self.db.trigger_activities(pet.group_id, "feed")
             evo_success, evo_msg = self.check_evolution(pet)
             extra_msg = f"\n\n{evo_msg}" if evo_success else ""
             fav_msg = " 💖喂了喜欢的食物！" if pet.favorite_food and actual_item_id == pet.favorite_food else ""
@@ -213,8 +228,8 @@ class PetService:
 
         pet.update_stat("clean", clean_gain)
         pet.update_stat("health", health_gain)
-        pet.last_clean = datetime.now()
-        pet.last_update = datetime.now()
+        pet.last_clean = utc_now()
+        pet.last_update = utc_now()
 
         group_config = self.db.get_group_config(pet.group_id)
         # CR Review Issue #2: 应用反脚本衰减因子
@@ -226,6 +241,7 @@ class PetService:
         self.db.update_group_task_progress(pet.group_id, "group_clean")
 
         if success:
+            self.db.trigger_activities(pet.group_id, "clean")
             evo_success, evo_msg = self.check_evolution(pet)
             extra_msg = f"\n\n{evo_msg}" if evo_success else ""
             return True, f"清洁完成！{pet.name}变得香喷喷的{extra_msg}", coins_gain
@@ -253,8 +269,8 @@ class PetService:
         pet.update_stat("mood", mood_gain)
         pet.update_stat("energy", -energy_cost, min_val=0)
         pet.intimacy += intimacy_gain
-        pet.last_play = datetime.now()
-        pet.last_update = datetime.now()
+        pet.last_play = utc_now()
+        pet.last_update = utc_now()
 
         group_config = self.db.get_group_config(pet.group_id)
         coins_gain = int(5 * group_config.economy_multiplier * spam_decay_factor)
@@ -264,6 +280,7 @@ class PetService:
         self.db.update_task_progress(user.user_id, pet.group_id, "play")
 
         if success:
+            self.db.trigger_activities(pet.group_id, "play")
             evo_success, evo_msg = self.check_evolution(pet)
             extra_msg = f"\n\n{evo_msg}" if evo_success else ""
             return True, f"玩得很开心！{pet.name}的亲密度提升了{extra_msg}", coins_gain
@@ -298,8 +315,8 @@ class PetService:
 
         energy_cost = config["energy_cost"]
         pet.update_stat("energy", -energy_cost, min_val=0)
-        pet.last_train = datetime.now()
-        pet.last_update = datetime.now()
+        pet.last_train = utc_now()
+        pet.last_update = utc_now()
 
         if random.random() > success_rate:
             self._apply_action_reward(user, "train", 0)
@@ -407,8 +424,8 @@ class PetService:
         coins_gain = int(chosen.get("coins", 0) * group_config.economy_multiplier * spam_decay_factor)
 
         pet.experience += exp_gain
-        pet.last_explore = datetime.now()
-        pet.last_update = datetime.now()
+        pet.last_explore = utc_now()
+        pet.last_update = utc_now()
 
         for stat in ("mood", "clean", "health"):
             if stat in chosen:
@@ -447,7 +464,8 @@ class PetService:
             return False, "宠物已经在睡觉了"
 
         pet.status = PetStatus.SLEEPING
-        pet.last_update = datetime.now()
+        pet.last_update = utc_now()
+        pet.status_expire_time = pet.last_update + timedelta(seconds=60)
 
         success = self.db.update_pet(pet)
         if success:
@@ -457,14 +475,15 @@ class PetService:
     def wake_pet(self, pet: Pet) -> Tuple[bool, str]:
         if pet.status != PetStatus.SLEEPING:
             return False, "宠物现在没有在睡觉"
+        now = utc_now()
 
         pet.status = PetStatus.NORMAL
-        pet.update_stat("energy", 50)
-        pet.last_update = datetime.now()
+        pet.status_expire_time = None
+        pet.last_update = now
 
         success = self.db.update_pet(pet)
         if success:
-            return True, f"{pet.name}睡醒了，精神饱满！"
+            return True, f"{pet.name}睡醒了！睡眠期间已按实际时长恢复精力（立即唤醒不恢复）。"
         return False, "唤醒宠物失败"
 
     # ──────────────────── 进化检查（Issue #10: 之前从未被调用）────────────────────
@@ -518,9 +537,15 @@ class PetService:
 
     # ──────────────────── 衰减（含疾病概率系统 Issue #41）────────────────────
 
-    def apply_decay(self, pet: Pet, decay_multiplier: float = 1.0) -> Optional[str]:
+    def apply_decay(
+        self,
+        pet: Pet,
+        decay_multiplier: float = 1.0,
+        *,
+        is_trustee_override: Optional[bool] = None,
+    ) -> Optional[str]:
         """应用状态衰减，并检查疾病概率。返回警报消息或None。"""
-        now = datetime.now()
+        now = utc_now()
         elapsed_minutes = max(0.0, (now - pet.last_update).total_seconds() / 60.0)
         if elapsed_minutes < 1.0:
             return None
@@ -552,8 +577,11 @@ class PetService:
         if pet.status != PetStatus.NORMAL:
             return None
 
-        user = self.db.get_user(pet.user_id, pet.group_id)
-        is_trustee = user and user.is_trustee_active()
+        if is_trustee_override is None:
+            user = self.db.get_user(pet.user_id, pet.group_id)
+            is_trustee = bool(user and user.is_trustee_active())
+        else:
+            is_trustee = is_trustee_override
         actual_multiplier = decay_multiplier * (0.5 if is_trustee else 1.0)
 
         changed = False
@@ -650,7 +678,7 @@ class PetService:
             return False, "背包中没有托管券"
 
         hours = DEFAULT_ITEMS["trusteeship_coupon"]["trustee_hours"]
-        user.trustee_until = datetime.now() + timedelta(hours=hours)
+        user.trustee_until = utc_now() + timedelta(hours=hours)
         inventory.remove_item("trusteeship_coupon")
 
         success = self.db.update_user(user) and self.db.update_inventory(inventory)
@@ -679,7 +707,7 @@ class PetService:
         pet.clean = 60
         pet.energy = 60
         pet.health = 80
-        pet.last_update = datetime.now()
+        pet.last_update = utc_now()
 
         success = self.db.atomic_update_pet_and_user(pet, user)
         if success:

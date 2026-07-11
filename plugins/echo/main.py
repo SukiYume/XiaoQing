@@ -23,7 +23,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             if not args.strip():
                 return segments(_show_echo_help())
             
-            logger.info("Echo command: %s", args)
+            logger.info("Echo command accepted: length=%d", len(args))
             return segments(args.strip())
         
         # hello 命令：打招呼

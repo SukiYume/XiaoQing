@@ -9,6 +9,9 @@ A岛匿名版 API 封装模块
 5. 更好的图片下载与缓存机制
 """
 
+import asyncio
+import hashlib
+import io
 import re
 import time
 import aiohttp
@@ -17,6 +20,11 @@ from dataclasses import dataclass
 from typing import Optional, Any
 from pathlib import Path
 import logging
+
+from PIL import Image
+
+from core.plugin_base import atomic_write_bytes
+from core.safe_http import SafeHttpError, fetch_public_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +36,9 @@ API_HOST = "https://www.nmbxd1.com"
 IMAGE_CDN = "https://image.nmb.best"
 APP_ID = "A-Island-IOS-App"
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_PIXELS = 20_000_000
+IMAGE_TIMEOUT_SECONDS = 15
 
 # API 端点
 ENDPOINTS = {
@@ -204,7 +215,10 @@ class AdnmbClient:
         url = f"{IMAGE_CDN}/{cdn_type}/{img_path}"
         
         # 本地文件路径
-        filename = img_path.split("/")[-1]
+        suffix = Path(img_path).suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+            suffix = ".img"
+        filename = f"{hashlib.sha256(url.encode('utf-8')).hexdigest()}{suffix}"
         local_path = self.cache_dir / filename
         
         # 如果已缓存，直接返回
@@ -212,13 +226,28 @@ class AdnmbClient:
             return local_path
         
         try:
-            async with self.session.get(url) as resp:
-                if resp.status == 200:
-                    content = await resp.read()
-                    local_path.write_bytes(content)
-                    return local_path
-                else:
-                    logger.warning("Image download failed (status=%s): %s", resp.status, url)
+            fetched = await fetch_public_bytes(
+                url,
+                timeout_seconds=IMAGE_TIMEOUT_SECONDS,
+                max_bytes=MAX_IMAGE_BYTES,
+                allowed_content_type_prefixes=("image/",),
+            )
+            if fetched is None:
+                logger.warning("Image download failed: %s", url)
+                return None
+
+            def validate_image() -> None:
+                with Image.open(io.BytesIO(fetched.body)) as image:
+                    width, height = image.size
+                    if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
+                        raise ValueError("image pixel budget exceeded")
+                    image.verify()
+
+            await asyncio.to_thread(validate_image)
+            await asyncio.to_thread(atomic_write_bytes, local_path, fetched.body)
+            return local_path
+        except (SafeHttpError, ValueError) as exc:
+            logger.warning("Image download rejected for %s: %s", url, exc)
         except Exception as exc:
             logger.warning("Image download error for %s: %s", url, exc)
 

@@ -116,6 +116,8 @@ async def start(self) -> None:
     if self.config.get("enable_inbound_server"):
         # inbound_http_base 非空则启动 HTTP Inbound
         # inbound_ws_uri 非空则启动 WS Inbound（可与 HTTP 使用不同端口）
+        # 最终 bind 前再次执行安全策略：仅 loopback，或显式确认受可信 TLS proxy 保护
+        # TCPSite 本身固定为明文；https/wss listener 配置会 fail closed
         ...
 
 async def stop(self) -> None:

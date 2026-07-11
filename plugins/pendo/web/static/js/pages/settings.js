@@ -1,4 +1,4 @@
-import { api, clearToken } from '../api.js';
+import { api, logout } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 import { navigate } from '../router.js';
@@ -339,8 +339,8 @@ async function handleSave() {
     }
 }
 
-function handleLogout() {
-    clearToken();
+async function handleLogout() {
+    await logout();
     window.location.reload();
 }
 

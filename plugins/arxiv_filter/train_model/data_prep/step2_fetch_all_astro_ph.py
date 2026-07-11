@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,7 +34,10 @@ import requests
 
 feedparser = importlib.import_module("feedparser")
 
-from utils import clean_arxiv_id
+try:
+    from .utils import clean_arxiv_id
+except ImportError:  # Direct script execution.
+    from utils import clean_arxiv_id
 
 # ============================================================
 # 配置
@@ -42,8 +46,13 @@ DATA_PREP_DIR = Path(__file__).resolve().parent
 CACHE_DIR = DATA_PREP_DIR / "cache"
 DATE_RANGE_FILE = CACHE_DIR / "date_range.json"
 
-API_URL = "http://export.arxiv.org/api/query"
-HEADERS = {"User-Agent": "arxiv-scraper/2.0 (SukiYume@users.noreply.github.com)"}
+API_URL = "https://export.arxiv.org/api/query"
+HEADERS = {
+    "User-Agent": os.environ.get(
+        "ARXIV_USER_AGENT",
+        "XiaoQingBot-arxiv-research/2.0 (+https://github.com/xiaoqing-bot/xiaoqing)",
+    )
+}
 MAX_RESULTS = 2000  # 每页最大结果数
 RETRY_LIMIT = 5  # 单次请求重试次数
 DELAY = 3  # 请求间隔（秒）
@@ -110,6 +119,14 @@ def yymm_to_label(yymm: int) -> str:
 MONTHLY_DIR = CACHE_DIR / "monthly"
 
 
+@dataclass
+class FetchResult:
+    papers: list[dict[str, str]]
+    completed: bool
+    next_offset: int
+    total_results: int | None
+
+
 def load_cache(yymm: int) -> list[dict[str, str]] | None:
     """加载某月的缓存，不存在返回 None"""
     cache_file = MONTHLY_DIR / f"{yymm}.json"
@@ -123,8 +140,39 @@ def save_cache(yymm: int, papers: list[dict[str, str]]):
     """保存某月的缓存"""
     MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
     cache_file = MONTHLY_DIR / f"{yymm}.json"
-    with open(cache_file, "w", encoding="utf-8") as f:
-        json.dump(papers, f, ensure_ascii=False)
+    temp_file = cache_file.with_suffix(".json.tmp")
+    temp_file.write_text(json.dumps(papers, ensure_ascii=False), encoding="utf-8")
+    temp_file.replace(cache_file)
+
+
+def _partial_path(yymm: int) -> Path:
+    return MONTHLY_DIR / f"{yymm}.partial.json"
+
+
+def load_checkpoint(yymm: int) -> dict:
+    path = _partial_path(yymm)
+    if not path.exists():
+        return {"papers": [], "next_offset": 0, "total_results": None, "completed": False}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_checkpoint(yymm: int, result: FetchResult) -> None:
+    MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
+    path = _partial_path(yymm)
+    temp = path.with_suffix(".json.tmp")
+    temp.write_text(
+        json.dumps(
+            {
+                "papers": result.papers,
+                "next_offset": result.next_offset,
+                "total_results": result.total_results,
+                "completed": result.completed,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    temp.replace(path)
 
 
 def is_month_finalized(yymm: int) -> bool:
@@ -142,13 +190,19 @@ def is_month_finalized(yymm: int) -> bool:
 # ============================================================
 
 
-def fetch_month(api_start: str, api_end: str) -> list[dict[str, str]]:
+def fetch_month(
+    api_start: str,
+    api_end: str,
+    *,
+    initial_papers: list[dict[str, str]] | None = None,
+    start_offset: int = 0,
+) -> FetchResult:
     """
     获取指定月份的所有 astrophysics 论文（标题 + 摘要）。
     自动分页，处理重试和速率限制。
     """
-    papers = []
-    offset = 0
+    papers = list(initial_papers or [])
+    offset = start_offset
     total_results = None
 
     while True:
@@ -176,11 +230,12 @@ def fetch_month(api_start: str, api_end: str) -> list[dict[str, str]]:
                 print(f"      [重试 {attempt}/{RETRY_LIMIT}] {e}, 等待 {wait}s")
                 if attempt == RETRY_LIMIT:
                     print(f"      跳过当前批次 (offset={offset})")
-                    return papers
+                    return FetchResult(papers, False, offset, total_results)
                 time.sleep(wait)
 
         if not feed or not feed.entries:
-            break
+            completed = total_results is None or offset >= total_results
+            return FetchResult(papers, completed, offset, total_results)
 
         # 解析结果
         batch = []
@@ -207,13 +262,11 @@ def fetch_month(api_start: str, api_end: str) -> list[dict[str, str]]:
             print(f"      {len(papers)}/{total_results} ({pct:.0f}%)", end="\r")
 
         # 没有更多结果
+        offset += len(feed.entries)
         if len(feed.entries) < MAX_RESULTS:
-            break
+            return FetchResult(papers, True, offset, total_results)
 
-        offset += MAX_RESULTS
         time.sleep(DELAY)
-
-    return papers
 
 
 # ============================================================
@@ -253,13 +306,26 @@ def main():
 
         # 从 API 获取
         print(f"  {progress} {label}: 获取中...")
-        papers = fetch_month(api_start, api_end)
+        checkpoint = load_checkpoint(yymm)
+        result = fetch_month(
+            api_start,
+            api_end,
+            initial_papers=checkpoint.get("papers", []),
+            start_offset=int(checkpoint.get("next_offset", 0)),
+        )
 
-        if papers:
-            save_cache(yymm, papers)
-            all_papers.extend(papers)
-            fetched_count += len(papers)
-            print(f"  {progress} {label}: {len(papers):>5} 篇 (已保存)")
+        if result.completed:
+            save_cache(yymm, result.papers)
+            _partial_path(yymm).unlink(missing_ok=True)
+            all_papers.extend(result.papers)
+            fetched_count += len(result.papers)
+            print(f"  {progress} {label}: {len(result.papers):>5} 篇 (完整缓存已发布)")
+        elif result.papers:
+            save_checkpoint(yymm, result)
+            print(
+                f"  {progress} {label}: {len(result.papers):>5} 篇 "
+                f"(partial, 下次从 offset={result.next_offset} 续传)"
+            )
         else:
             print(f"  {progress} {label}: 无数据")
 

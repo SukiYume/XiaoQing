@@ -31,6 +31,7 @@ from .commands.scheduled import (
     cleanup_expired_demo_data,
     cleanup_reminder_singleton,
     migrate_undone_todos,
+    prune_operation_logs,
     send_daily_briefings,
     send_month_end_finance_summaries,
     send_weekly_finance_summaries,
@@ -89,24 +90,19 @@ def _apply_runtime_config(config: dict[str, Any] | None = None) -> None:
 
 
 def _register_config_reload_hook(context: PluginContextProtocol | None) -> None:
-    config_manager = getattr(context, "config_manager", None) if context is not None else None
-    if config_manager is None:
+    capabilities = getattr(context, "capabilities", None) if context is not None else None
+    subscription = getattr(capabilities, "config_subscription", None)
+    if subscription is None:
         return
 
     runtime_state = _get_plugin_runtime_state(context)
-    if runtime_state.get("config_reload_hook_registered"):
+    if callable(runtime_state.get("config_reload_unsubscribe")):
         return
 
-    token = object()
-    runtime_state["config_reload_hook_registered"] = True
-    runtime_state["config_reload_hook_token"] = token
+    def _on_reload(config: dict[str, Any]) -> None:
+        _apply_runtime_config(config)
 
-    def _on_reload(snapshot) -> None:
-        if runtime_state.get("config_reload_hook_token") is not token:
-            return
-        _apply_runtime_config(snapshot.config)
-
-    config_manager.on_reload(_on_reload)
+    runtime_state["config_reload_unsubscribe"] = subscription.subscribe(_on_reload)
 
 
 def init(context=None) -> None:
@@ -172,6 +168,14 @@ async def _stop_web_server_async() -> None:
 def _cleanup_resources(context=None, *, stop_web: bool) -> None:
     """Release Pendo resources shared by cleanup and shutdown hooks."""
     global _startup_db
+
+    try:
+        runtime_state = _get_plugin_runtime_state(context, create=False)
+        unsubscribe = runtime_state.pop("config_reload_unsubscribe", None)
+        if callable(unsubscribe):
+            unsubscribe()
+    except Exception as e:
+        logger.exception("Error while removing Pendo config subscription: %s", e)
 
     if stop_web:
         _stop_web_server()
@@ -377,7 +381,7 @@ async def _handle_command_routing(
         reply_private = bool(
             group_id and not is_public and await _get_user_privacy_mode(user_id, context)
         )
-        setattr(context, "_pendo_reply_private", reply_private)
+        context._pendo_reply_private = reply_private
 
     # 使用 CommandRouter 路由子命令
 
@@ -470,6 +474,15 @@ async def scheduled_migrate_todos(context) -> list[dict[str, Any]]:
         context, "migrate_todos", lambda: migrate_undone_todos(context, db), log
     )
     return result
+
+
+async def scheduled_prune_operation_logs(context) -> list[dict[str, Any]]:
+    """Daily operation-log privacy retention task."""
+    log = _get_logger(context)
+    db = _get_database(context)
+    return await _run_scheduled_task(
+        context, "prune_operation_logs", lambda: prune_operation_logs(context, db), log
+    )
 
 
 async def scheduled_weekly_finance_summary(context) -> list[dict[str, Any]]:
@@ -585,14 +598,22 @@ async def _format_result(
     # 隐私模式开启时，隐私内容发私聊
     if privacy_mode:
         group_message = "✅ 已发送私聊 (保护隐私)"
+        failure_message = "⚠️ 私聊发送失败，出于隐私保护未在群内显示内容"
         if context is not None and hasattr(context, "send_action"):
             try:
                 action = build_action(segments(message), int(user_id), None)
                 if action:
-                    await context.send_action(action)
+                    delivered = await context.send_action(action)
+                    if delivered is not True:
+                        logger.warning("Private Pendo reply was not confirmed")
+                        return segments(failure_message)
+                else:
+                    return segments(failure_message)
             except Exception:
                 logger.exception("Failed to send private message for group reply")
-                return segments(message)
+                return segments(failure_message)
+        else:
+            return segments(failure_message)
         return segments(group_message)
     else:
         return segments(message)

@@ -2,15 +2,16 @@
 Pydantic Models 单元测试
 """
 
-import json
+
 import pytest
-from typing import Any
+from pydantic import ValidationError
 
 from core.models import (
     OneBotEvent,
     PluginCommandManifest,
-    PluginScheduleManifest,
+    PluginDependencyManifest,
     PluginManifest,
+    PluginScheduleManifest,
 )
 
 # ============================================================
@@ -81,6 +82,17 @@ class TestOneBotEvent:
         event = OneBotEvent(message="")
         assert event.message == ""
 
+    def test_raw_message_fills_missing_or_empty_message(self):
+        """raw_message-only events use the standard text-segment contract."""
+        for message in (None, "", []):
+            event = OneBotEvent(message=message, raw_message="/help")
+            assert event.message == [{"type": "text", "data": {"text": "/help"}}]
+
+    def test_raw_message_does_not_replace_nonempty_segment_payload(self):
+        message = [{"type": "image", "data": {"file": "image.png"}}]
+        event = OneBotEvent(message=message, raw_message="[CQ:image,file=image.png]")
+        assert event.message == message
+
     def test_message_from_invalid_json_string(self):
         """测试无效 JSON 字符串消息"""
         event = OneBotEvent(message="not json")
@@ -134,6 +146,7 @@ class TestPluginCommandManifest:
         assert manifest.help == "回显消息"
         assert manifest.admin_only is False
         assert manifest.priority == 0
+        assert manifest.usage is None
 
     def test_default_values(self):
         """测试默认值"""
@@ -173,6 +186,23 @@ class TestPluginScheduleManifest:
         )
         assert manifest.id is None
         assert manifest.group_ids is None
+        assert manifest.enabled is True
+
+    def test_schedule_rejects_unknown_fields(self):
+        with pytest.raises(ValidationError):
+            PluginScheduleManifest(
+                handler="job",
+                cron={"hour": "*"},
+                dangerous_unimplemented_option=True,
+            )
+
+
+class TestPluginDependencyManifest:
+    def test_dependency_defaults_to_required(self):
+        dependency = PluginDependencyManifest(name="aiohttp")
+
+        assert dependency.required is True
+        assert dependency.description is None
 
 # ============================================================
 # PluginManifest 测试
@@ -191,6 +221,8 @@ class TestPluginManifest:
         assert manifest.schedule == []
         assert manifest.concurrency == "parallel"
         assert manifest.enabled is True
+        assert manifest.schema_version == 1
+        assert manifest.dependencies == []
 
     def test_create_full_manifest(self):
         """测试创建完整清单"""
@@ -220,6 +252,10 @@ class TestPluginManifest:
         assert len(manifest.commands) == 1
         assert len(manifest.schedule) == 1
         assert manifest.concurrency == "sequential"
+
+    def test_manifest_rejects_unknown_runtime_fields(self):
+        with pytest.raises(ValidationError):
+            PluginManifest(name="test", pretend_concurrency_limit=1)
 
     def test_model_validate_from_dict(self):
         """测试从字典验证"""

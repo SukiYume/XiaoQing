@@ -13,16 +13,20 @@ import json
 import os
 import re
 import shlex
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from core.plugin_base import atomic_write_text
+
 from .config import (
-    COMMAND_TIMEOUT, 
-    MAX_OUTPUT_LENGTH, 
+    COMMAND_TIMEOUT,
     CONNECT_TIMEOUT,
+    EXIT_CODE_ERROR,
     EXIT_CODE_INTERRUPTED,
     EXIT_CODE_TIMEOUT,
-    EXIT_CODE_ERROR,
+    MAX_OUTPUT_LENGTH,
 )
 
 # 尝试导入 paramiko，如果未安装则提供友好提示
@@ -40,6 +44,26 @@ _SSH_OPTIONS_WITH_ARG = {
     "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-Q", "-R",
     "-S", "-W", "-w",
 }
+
+
+@dataclass(frozen=True)
+class CommandTerminationResult:
+    """Outcome of cleaning one captured SSH command record."""
+
+    found: bool
+    local_cleaned: bool
+    remote_confirmed: bool
+    signal_attempted: bool = False
+    error: str | None = None
+
+    @property
+    def remote_unknown(self) -> bool:
+        return self.found and not self.remote_confirmed
+
+    def __bool__(self) -> bool:
+        """Keep legacy truth checks equivalent to confirmed remote termination."""
+
+        return self.remote_confirmed
 
 
 def _expand_proxycommand(proxycommand: str, server: dict[str, Any]) -> str:
@@ -151,6 +175,8 @@ class SSHManager:
         self.servers = {}  # 初始化为空，等待异步加载
         # 活跃的命令通道：user_id:server_name -> channel
         self.active_channels: dict[str, Any] = {}
+        self._config_lock = asyncio.Lock()
+        self._connection_locks: dict[str, asyncio.Lock] = {}
         # 标记是否已初始化
         self._initialized = False
 
@@ -205,6 +231,19 @@ class SSHManager:
                         return json.load(f)
                 
                 self.servers = await asyncio.to_thread(_read_servers)
+                migrated = False
+                for server in self.servers.values():
+                    password = server.pop("password", None)
+                    if not password:
+                        continue
+                    if not self.context or not hasattr(self.context, "set_secret"):
+                        raise RuntimeError("legacy SSH plaintext password requires plugin secret store")
+                    password_ref = f"passwords.{uuid.uuid4().hex}"
+                    await asyncio.to_thread(self.context.set_secret, password_ref, password)
+                    server["password_ref"] = password_ref
+                    migrated = True
+                if migrated:
+                    await self._save_servers()
             except Exception as e:
                 self._log("error", f"Failed to load servers.json: {e}")
                 self.servers = {}
@@ -298,8 +337,11 @@ class SSHManager:
         if config.get('proxycommand'):
             server_config["proxycommand"] = config['proxycommand']
         
-        self.servers[name] = server_config
-        await self._save_servers()
+        async with self._config_lock:
+            if name in self.servers:
+                return False, f"服务器 '{name}' 已存在"
+            self.servers[name] = server_config
+            await self._save_servers()
         
         # 根据是否有 proxycommand 生成不同的提示信息
         if config.get('proxycommand'):
@@ -324,8 +366,8 @@ class SSHManager:
         在线程池中执行文件写入，避免阻塞事件循环。
         """
         def _write_servers():
-            with open(self.servers_file, "w", encoding="utf-8") as f:
-                json.dump(self.servers, f, ensure_ascii=False, indent=4)
+            payload = json.dumps(self.servers, ensure_ascii=False, indent=4)
+            atomic_write_text(self.servers_file, payload)
         
         await asyncio.to_thread(_write_servers)
     
@@ -356,21 +398,23 @@ class SSHManager:
         Returns:
             是否添加成功
         """
-        self.servers[name] = {
-            "host": host,
-            "port": port,
-            "username": username,
-            "auth_type": auth_type,
-            "key_path": key_path,
-        }
-        
-        # 优先使用 password_ref，否则存储密码（不推荐）
-        if password_ref:
-            self.servers[name]["password_ref"] = password_ref
-        elif password:
-            self.servers[name]["password"] = password
-            
-        await self._save_servers()
+        if password and not password_ref:
+            if not self.context or not hasattr(self.context, "set_secret"):
+                raise RuntimeError("plaintext SSH passwords cannot be stored in servers.json")
+            password_ref = f"passwords.{uuid.uuid4().hex}"
+            await asyncio.to_thread(self.context.set_secret, password_ref, password)
+
+        async with self._config_lock:
+            self.servers[name] = {
+                "host": host,
+                "port": port,
+                "username": username,
+                "auth_type": auth_type,
+                "key_path": key_path,
+            }
+            if password_ref:
+                self.servers[name]["password_ref"] = password_ref
+            await self._save_servers()
         
         self._log("info", f"Server '{name}' added: {host}:{port}")
         
@@ -378,11 +422,18 @@ class SSHManager:
     
     async def remove_server(self, name: str) -> bool:
         """删除服务器配置"""
-        if name in self.servers:
-            del self.servers[name]
+        async with self._config_lock:
+            server = self.servers.pop(name, None)
+            if server is None:
+                return False
             await self._save_servers()
-            return True
-        return False
+        password_ref = server.get("password_ref")
+        if password_ref and self.context and hasattr(self.context, "delete_secret"):
+            await asyncio.to_thread(self.context.delete_secret, password_ref)
+        for key in list(self.connections):
+            if self._parse_connection_key(key)[2] == name:
+                self._disconnect_key(key, send_interrupt=True)
+        return True
     
     def get_server(self, name: str) -> Optional[dict]:
         """获取服务器配置"""
@@ -410,9 +461,20 @@ class SSHManager:
         user_id, group_id, name = key.split(":", 2)
         return user_id, group_id, name
 
-    def _close_channel(self, channel: Any, send_interrupt: bool = False) -> None:
+    def _connection_lock_for(self, key: str) -> asyncio.Lock:
+        lock = self._connection_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._connection_locks[key] = lock
+        return lock
+
+    @staticmethod
+    def _active_channel(active: Any) -> Any:
+        return active.get("channel") if isinstance(active, dict) else active
+
+    def _close_channel(self, channel: Any, send_interrupt: bool = False) -> bool:
         if channel is None:
-            return
+            return True
 
         if send_interrupt:
             try:
@@ -425,7 +487,8 @@ class SSHManager:
         try:
             channel.close()
         except Exception:
-            pass
+            return False
+        return True
 
     def _close_jump_client(self, client: Any) -> None:
         jump_client = getattr(client, "_jump_client", None)
@@ -438,7 +501,8 @@ class SSHManager:
             self._log("warning", f"Error closing jump host: {e}")
 
     def _disconnect_key(self, key: str, *, send_interrupt: bool) -> bool:
-        channel = self.active_channels.pop(key, None)
+        active = self.active_channels.pop(key, None)
+        channel = self._active_channel(active)
         if channel is not None:
             self._close_channel(channel, send_interrupt=send_interrupt)
 
@@ -471,6 +535,12 @@ class SSHManager:
         """
         if not PARAMIKO_AVAILABLE:
             return False, "❌ 未安装 paramiko 库，请运行: pip install paramiko"
+
+        plugin_config = (getattr(self.context, "config", {}) or {}).get("plugins", {}).get("qingssh", {})
+        max_connections = max(1, int(plugin_config.get("max_connections", 32)))
+        key = self._build_connection_key(user_id, group_id, name)
+        if key not in self.connections and len(self.connections) >= max_connections:
+            return False, f"❌ SSH 活跃连接已达到配置上限 ({max_connections})"
         
         server = self.get_server(name)
         ssh_config = None
@@ -519,6 +589,9 @@ class SSHManager:
                 "port": server["port"],
                 "username": server["username"],
                 "timeout": CONNECT_TIMEOUT,
+                "banner_timeout": CONNECT_TIMEOUT,
+                "auth_timeout": CONNECT_TIMEOUT,
+                "channel_timeout": CONNECT_TIMEOUT,
             }
             
             auth_type = server.get("auth_type", "agent")
@@ -534,9 +607,6 @@ class SSHManager:
                     except Exception:
                         pass
                 
-                if not password and server.get("password"):
-                    password = server["password"]
-                    
                 if password:
                     connect_kwargs["password"] = password
             elif auth_type == "agent":
@@ -572,7 +642,10 @@ class SSHManager:
                 jump_client.set_missing_host_key_policy(paramiko.RejectPolicy())
                 self._load_host_keys(jump_client, known_hosts_path)
 
-                await asyncio.to_thread(jump_client.connect, **j_kwargs)
+                await asyncio.wait_for(
+                    asyncio.to_thread(jump_client.connect, **j_kwargs),
+                    timeout=CONNECT_TIMEOUT + 5,
+                )
                 dest_addr = (server["host"], server["port"])
                 src_addr = ("0.0.0.0", 0)
                 proxy_sock = jump_client.get_transport().open_channel("direct-tcpip", dest_addr, src_addr)
@@ -583,10 +656,19 @@ class SSHManager:
 
             self._log("info", f"User {user_id} (Group {group_id}) connecting to {name}...")
 
-            await asyncio.to_thread(client.connect, **connect_kwargs)
+            await asyncio.wait_for(
+                asyncio.to_thread(client.connect, **connect_kwargs),
+                timeout=CONNECT_TIMEOUT + 5,
+            )
 
-            key = self._build_connection_key(user_id, group_id, name)
-            self.connections[key] = client
+            async with self._connection_lock_for(key):
+                old_client = self.connections.get(key)
+                self.connections[key] = client
+                if old_client is not None and old_client is not client:
+                    try:
+                        old_client.close()
+                    finally:
+                        self._close_jump_client(old_client)
 
             self._log("info", f"Connected to {name} successfully")
             
@@ -674,8 +756,7 @@ class SSHManager:
             return transport is not None and transport.is_active()
         except Exception:
             # 如果底层断开了，清理一下
-            if key in self.connections:
-                del self.connections[key]
+            self._disconnect_key(key, send_interrupt=False)
             return False
     
     def get_active_connections(self) -> list[dict[str, str]]:
@@ -697,18 +778,95 @@ class SSHManager:
                 })
         return active_list
 
-    def stop_command(self, user_id: str, group_id: Optional[str], name: str) -> bool:
+    async def stop_command(
+        self,
+        user_id: str,
+        group_id: Optional[str],
+        name: str,
+    ) -> CommandTerminationResult:
         """
         停止指定服务器上正在运行的命令（用户+群隔离）
         
-        先尝试发送 Ctrl+C (SIGINT) 优雅终止，然后关闭通道。
+        先尝试向远端进程组发送 TERM/KILL，再无条件关闭本地通道。
         """
         key = self._build_connection_key(user_id, group_id, name)
-        if key in self.active_channels:
-            channel = self.active_channels.pop(key, None)
-            self._close_channel(channel, send_interrupt=True)
-            return True
-        return False
+        return await self._terminate_active_command(key)
+
+    async def _terminate_active_command(self, key: str) -> CommandTerminationResult:
+        captured = self.active_channels.get(key)
+        if captured is None:
+            return CommandTerminationResult(
+                found=False,
+                local_cleaned=True,
+                remote_confirmed=False,
+            )
+        channel = self._active_channel(captured)
+        remote_pid = captured.get("remote_pid") if isinstance(captured, dict) else None
+        client = self.connections.get(key)
+        remote_confirmed = False
+        signal_attempted = False
+        errors: list[str] = []
+
+        async def send_signal(signal_name: str) -> None:
+            command = f"kill -{signal_name} -- -{int(remote_pid)}"
+            await asyncio.wait_for(
+                asyncio.to_thread(client.exec_command, command),
+                timeout=5,
+            )
+
+        async def wait_for_remote_exit() -> bool:
+            if channel is None:
+                return False
+            for _ in range(20):
+                try:
+                    if channel.exit_status_ready() or not getattr(channel, "active", True):
+                        return True
+                except Exception as exc:
+                    errors.append(f"channel status: {exc}")
+                    return False
+                await asyncio.sleep(0.1)
+            return False
+
+        try:
+            if remote_pid and client is not None:
+                for signal_name in ("TERM", "KILL"):
+                    signal_attempted = True
+                    try:
+                        await send_signal(signal_name)
+                    except Exception as exc:
+                        errors.append(f"{signal_name}: {exc}")
+                        continue
+                    if await wait_for_remote_exit():
+                        remote_confirmed = True
+                        break
+            else:
+                missing = "remote PID" if not remote_pid else "SSH client"
+                errors.append(f"missing {missing}")
+        finally:
+            local_cleaned = True
+            try:
+                local_cleaned = self._close_channel(channel, send_interrupt=False)
+            except Exception as exc:
+                # _close_channel currently absorbs channel errors, but retain this
+                # guard so cleanup stays correct if its implementation changes.
+                local_cleaned = False
+                errors.append(f"channel close: {exc}")
+            if self.active_channels.get(key) is captured:
+                self.active_channels.pop(key, None)
+
+        error = "; ".join(errors) or None
+        if not remote_confirmed:
+            self._log(
+                "warning",
+                f"Unable to confirm remote process termination for {key}: {error or 'unknown'}",
+            )
+        return CommandTerminationResult(
+            found=True,
+            local_cleaned=local_cleaned,
+            remote_confirmed=remote_confirmed,
+            signal_attempted=signal_attempted,
+            error=error,
+        )
     
     async def execute_command_stream(
         self, 
@@ -737,8 +895,15 @@ class SSHManager:
                 timeout=COMMAND_TIMEOUT,
             )
         except asyncio.TimeoutError:
-            self.stop_command(user_id, group_id, name)
+            key = self._build_connection_key(user_id, group_id, name)
+            termination = await self._terminate_active_command(key)
+            if termination.remote_unknown:
+                await output_callback("\n⚠️ 远端进程终止状态未知，请登录服务器确认")
             return EXIT_CODE_TIMEOUT
+        except asyncio.CancelledError:
+            key = self._build_connection_key(user_id, group_id, name)
+            await self._terminate_active_command(key)
+            raise
 
     async def _execute_command_stream_impl(
         self,
@@ -760,6 +925,8 @@ class SSHManager:
             
         channel = None  # Initialize to prevent UnboundLocalError in finally block
         decoder = None
+        keep_registered = False
+        active_record: dict[str, Any] | None = None
         
         try:
             client = self.connections[key]
@@ -771,35 +938,61 @@ class SSHManager:
                 if use_pty:
                     ch.get_pty()
                 ch.set_combine_stderr(True)
-                ch.exec_command(command)
+                wrapped = (
+                    f"setsid sh -c {shlex.quote(command)} & pid=$!; "
+                    "printf '__XQ_PID__%s\\n' \"$pid\"; wait \"$pid\""
+                )
+                ch.exec_command(wrapped)
                 return ch
             
             channel = await asyncio.to_thread(open_channel)
             
             # 使用隔离的 Key
-            self.active_channels[key] = channel
+            active_record = {"channel": channel, "remote_pid": None}
+            self.active_channels[key] = active_record
             
             # 创建增量 UTF-8 解码器
             import codecs
             decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
             
             # 主循环：等待命令执行完成
+            marker_buffer = ""
+            marker_seen = False
+
+            async def emit_data(data: bytes) -> None:
+                nonlocal marker_buffer, marker_seen
+                text = decoder.decode(data)
+                if marker_seen:
+                    if text:
+                        await output_callback(text)
+                    return
+                marker_buffer += text
+                if "\n" not in marker_buffer:
+                    return
+                lines = marker_buffer.splitlines(keepends=True)
+                marker_buffer = ""
+                for line in lines:
+                    match = re.fullmatch(r"__XQ_PID__(\d+)\r?\n?", line)
+                    if match:
+                        if self.active_channels.get(key) is active_record:
+                            active_record["remote_pid"] = int(match.group(1))
+                        marker_seen = True
+                    elif line:
+                        await output_callback(line)
+
             while not channel.exit_status_ready():
                 # 使用 to_thread 包装阻塞的 recv 调用
                 if channel.recv_ready():
                     data = await asyncio.to_thread(channel.recv, 4096)
                     if data:
                         # 使用增量解码器正确处理多字节字符
-                        text = decoder.decode(data)
-                        if text:
-                            await output_callback(text)
+                        await emit_data(data)
                 
                 await asyncio.sleep(0.05)  # 减少延迟提高响应性
                 
                 # 检查是否被中断
-                if key not in self.active_channels:
-                    if not channel.active:
-                        return EXIT_CODE_INTERRUPTED
+                if self.active_channels.get(key) is not active_record:
+                    return EXIT_CODE_INTERRUPTED
             
             # 命令执行完成，读取剩余输出直到 EOF
             # recv_ready() 不可靠，应该读取直到返回空字节 b''
@@ -807,12 +1000,12 @@ class SSHManager:
                 data = await asyncio.to_thread(channel.recv, 4096)
                 if not data:  # EOF
                     break
-                text = decoder.decode(data)
-                if text:
-                    await output_callback(text)
+                await emit_data(data)
             
             # 解码剩余的缓冲区
             remaining = decoder.decode(b'', final=True)
+            if marker_buffer:
+                remaining = marker_buffer + remaining
             if remaining:
                 await output_callback(remaining)
             
@@ -821,14 +1014,19 @@ class SSHManager:
             exit_code = channel.exit_status
             return exit_code
             
+        except asyncio.CancelledError:
+            keep_registered = True
+            raise
         except Exception as e:
             await output_callback(f"\n❌ 执行出错: {e}")
             if self.context and hasattr(self.context, 'logger'):
                 self.context.logger.error(f"Command execution error: {e}", exc_info=True)
             return EXIT_CODE_ERROR
         finally:
-            self.active_channels.pop(key, None)
-            if channel is not None:
+            if not keep_registered:
+                if self.active_channels.get(key) is active_record:
+                    self.active_channels.pop(key, None)
+            if channel is not None and not keep_registered:
                 try:
                     # 包装 close 调用以防阻塞
                     await asyncio.to_thread(channel.close)
@@ -853,13 +1051,22 @@ class SSHManager:
             if exit_code == EXIT_CODE_TIMEOUT:
                 return False, f"❌ 命令执行超时 ({COMMAND_TIMEOUT}s)"
             if len(result) > MAX_OUTPUT_LENGTH:
-                result = result[:MAX_OUTPUT_LENGTH] + f"\n\n... (输出被截断)"
+                result = result[:MAX_OUTPUT_LENGTH] + "\n\n... (输出被截断)"
                 
             return True, result.strip() if result.strip() else "(无输出)"
         except Exception as e:
             return False, f"❌ 执行失败: {e}"
 
-    async def download_file(self, user_id: str, group_id: Optional[str], name: str, remote_path: str, local_path: str) -> tuple[bool, str]:
+    async def download_file(
+        self,
+        user_id: str,
+        group_id: Optional[str],
+        name: str,
+        remote_path: str,
+        local_path: str,
+        *,
+        max_bytes: int = 10 * 1024 * 1024,
+    ) -> tuple[bool, str]:
         """
         从远程服务器下载文件到本地
         
@@ -886,7 +1093,13 @@ class SSHManager:
             sftp = await asyncio.to_thread(client.open_sftp)
             
             try:
+                stat_result = await asyncio.to_thread(sftp.stat, remote_path)
+                if int(getattr(stat_result, "st_size", 0)) > max_bytes:
+                    return False, f"❌ 文件超过 {max_bytes // (1024 * 1024)} MiB 安全上限"
                 await asyncio.to_thread(sftp.get, remote_path, local_path)
+                if Path(local_path).stat().st_size > max_bytes:
+                    Path(local_path).unlink(missing_ok=True)
+                    return False, f"❌ 文件超过 {max_bytes // (1024 * 1024)} MiB 安全上限"
                 return True, f"✅ 文件已下载: {remote_path}"
             finally:
                 await asyncio.to_thread(sftp.close)
@@ -939,7 +1152,7 @@ class SSHManager:
                     if fnmatch.fnmatch(filename, pattern):
                         files.append(filename)
                 
-                return True, files
+                return True, sorted(files)[:100]
             finally:
                 await asyncio.to_thread(sftp.close)
                 
@@ -961,6 +1174,9 @@ class SSHManager:
             self._disconnect_key(key, send_interrupt=False)
 
         self.active_channels.clear()
+
+    async def shutdown(self) -> None:
+        self.close_all()
 
 async def get_manager(context) -> SSHManager:
     """

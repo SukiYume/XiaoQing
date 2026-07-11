@@ -12,7 +12,7 @@
                 "tts"
             ],
             "help": "🔊 文字转语音 | /语音 <文本> 或 /语音 help 查看详细帮助",
-            "admin_only": false
+            "admin_only": true
         }
     ]
 }

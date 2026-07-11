@@ -12,7 +12,7 @@
                 "minecraft"
             ],
             "help": "Minecraft RCON 工具 | /mc help 查看详细帮助",
-            "admin_only": false
+            "admin_only": true
         },
         {
             "name": "mcconnect",
@@ -20,8 +20,8 @@
                 "mcconnect",
                 "mc连接"
             ],
-            "help": "连接 MC 服务器 | /mc connect <ip:port> <password> [log_file]",
-            "admin_only": false,
+            "help": "连接 MC 服务器 | /mc connect <配置名> [log_file_path]",
+            "admin_only": true,
             "priority": 1
         },
         {
@@ -31,7 +31,7 @@
                 "mc断开"
             ],
             "help": "断开当前 MC 服务器连接 | /mc disconnect",
-            "admin_only": false,
+            "admin_only": true,
             "priority": 1
         }
     ],

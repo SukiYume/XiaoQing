@@ -127,8 +127,8 @@ async def _start_game(difficulty: str, context) -> list[dict]:
     )
     
     logger.info(
-        "Game started: target=%d, range=%d-%d, max_attempts=%d, user=%s",
-        target, min_num, max_num, max_attempts, context.current_user_id
+        "Game started: range=%d-%d, max_attempts=%d, user=%s",
+        min_num, max_num, max_attempts, context.current_user_id
     )
     
     difficulty_text = _get_difficulty_name(difficulty)
@@ -245,8 +245,8 @@ async def handle_session(
         history_str = " → ".join(str(g) for g in history)
         
         logger.info(
-            "Game won: user=%s, attempts=%d, target=%d",
-            context.current_user_id, attempts, target
+            "Game won: user=%s, attempts=%d",
+            context.current_user_id, attempts
         )
         
         return segments(
@@ -265,8 +265,8 @@ async def handle_session(
         history_str = " → ".join(str(g) for g in history)
         
         logger.info(
-            "Game lost: user=%s, attempts=%d, target=%d",
-            context.current_user_id, attempts, target
+            "Game lost: user=%s, attempts=%d",
+            context.current_user_id, attempts
         )
         
         return segments(

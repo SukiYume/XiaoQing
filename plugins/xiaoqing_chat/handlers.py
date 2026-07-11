@@ -16,19 +16,49 @@ from typing import Any
 from core.message import extract_text
 from core.plugin_base import segments
 
-from .llm.reply_checker import ReplyRejected
+from .attention_gate import decide_attention
 from .brain_chat import (
     is_brain_chat_active,
     maybe_add_mode_indicator,
 )
-from .attention_gate import decide_attention
+from .context_builder import _build_memory_block
+from .expression.bw_expression_reflector import maybe_ask_for_reflection
+from .expression.bw_reflect_tracker import tick_reflect_tracker
+from .frequency_control import _freq_record, _should_reply
+from .generation_limiter import GenerationLimitExceeded
+from .handler_context import HandlerContext, handle_errors
+from .handlers_helper import _spawn_post_reply_bg_tasks
+from .handlers_internal import (
+    get_bound_state as _get_bound_state_impl,
+)
+from .handlers_internal import (
+    get_data_dir as _get_data_dir_impl,
+)
+from .handlers_internal import (
+    handle_config_impl,
+    handle_expression_impl,
+    handle_internal_impl,
+    handle_jargon_impl,
+    handle_memory_impl,
+    handle_provider_impl,
+    handle_review_impl,
+)
+from .handlers_internal import (
+    is_admin_operator as _is_admin_operator_impl,
+)
+from .handlers_internal import (
+    is_global_admin_operator as _is_global_admin_operator_impl,
+)
+from .handlers_internal import (
+    short_base as _short_base_impl,
+)
 from .helper_utils import (
     _chat_id,
     _extract_sender_name,
-    _get_lock,
     _get_bot_name,
-    _is_at_me,
+    _get_lock,
     _has_bot_name,
+    _is_at_me,
     _is_private,
     _load_runtime,
     _most_recent_user_local_id,
@@ -36,46 +66,21 @@ from .helper_utils import (
     _resolve_llm_config,
     _should_ignore_text,
 )
+from .llm.reply_checker import ReplyRejected
 from .logging_utils import _log_step
+from .media import build_effective_user_text
+from .memory.review_sessions import get_goal_override
 from .message_parts import (
     build_message_parts,
     build_text_message_parts,
     normalize_message_parts,
 )
-from .runtime_state import get_state as _state
-from .store_binding import _bind_all_stores
-from .task_scheduler import (
-    _schedule_memory_persist,
-    _spawn_bg_task,
-    _schedule_media_registry_flush,
-    _schedule_pfc_state_flush,
-    _schedule_action_history_flush,
-)
-from .context_builder import _build_memory_block
-from .reply_generator import _generate_reply_draft
-from .frequency_control import _freq_record, _should_reply
-from .media import build_effective_user_text
-from .planning.goal_state import derive_goal_async
-from .memory.review_sessions import get_goal_override
-from .expression.bw_expression_reflector import maybe_ask_for_reflection
-from .expression.bw_reflect_tracker import tick_reflect_tracker
-from .planning.pfc_engine import run_pfc_once
 from .planning.action_history import ActionRecord
-from .handler_context import HandlerContext, handle_errors
-from .handlers_helper import _spawn_post_reply_bg_tasks
-from .handlers_internal import (
-    get_bound_state as _get_bound_state_impl,
-    get_data_dir as _get_data_dir_impl,
-    handle_config_impl,
-    handle_expression_impl,
-    handle_internal_impl,
-    handle_jargon_impl,
-    handle_memory_impl,
-    handle_provider_impl,
-    is_admin_operator as _is_admin_operator_impl,
-    short_base as _short_base_impl,
-)
+from .planning.goal_state import derive_goal_async
+from .planning.pfc_engine import run_pfc_once
+from .reply_generator import _generate_reply_draft
 from .reply_payload import build_reply_payload_from_parts
+from .runtime_state import get_state as _state
 from .smalltalk_execution import (
     finalize_smalltalk_turn_impl,
     generate_smalltalk_turn_impl,
@@ -92,6 +97,14 @@ from .smalltalk_media_helpers import (
     _sync_message_parts_to_registry,
 )
 from .smalltalk_models import _GeneratedSmalltalkTurn, _PreparedSmalltalkTurn, _ReplyEnvelope
+from .store_binding import _bind_all_stores
+from .task_scheduler import (
+    _schedule_action_history_flush,
+    _schedule_media_registry_flush,
+    _schedule_memory_persist,
+    _schedule_pfc_state_flush,
+    _spawn_bg_task,
+)
 
 
 def _refresh_mood_state(runtime, state, chat_id: str) -> str:
@@ -423,9 +436,6 @@ async def observe_outgoing_action(
 ) -> list[dict[str, Any]]:
     """Record text sent by other plugins as XiaoQing's own dialogue context."""
     try:
-        if str(source_plugin or "").strip() == "xiaoqing_chat":
-            return []
-
         runtime = _load_runtime(context)
         if not runtime.cfg.enable_smalltalk:
             return []
@@ -443,11 +453,19 @@ async def observe_outgoing_action(
         chat_id = _chat_id(event)
         state = _get_bound_state(context)
         async with _get_lock(chat_id):
+            result_message_id = action.get("_result_message_id")
+            if str(source_plugin or "").strip() == "xiaoqing_chat":
+                if state.memory_store.attach_latest_assistant_message_id(
+                    chat_id, result_message_id
+                ):
+                    _schedule_memory_persist(context, runtime, chat_id=chat_id)
+                return []
             local_id = _next_local_id(chat_id)
             state.memory_store.append(
                 chat_id,
                 role="assistant",
                 name=_get_bot_name(context),
+                message_id=result_message_id,
                 local_id=local_id,
                 parts=build_text_message_parts(text),
             )
@@ -927,15 +945,42 @@ async def _maybe_reply_smalltalk(
     if prepared is None:
         return []
 
-    generated = await _generate_smalltalk_turn(prepared, event, context, hctx)
-    return await _finalize_smalltalk_turn(
-        prepared,
-        generated,
-        event,
-        context,
-        hctx,
-        started_at=t0,
-    )
+    user_scope = str(event.get("user_id") or "anonymous")
+    try:
+        async with hctx.state.generation_limiter.admit(
+            chat_id=hctx.chat_id,
+            user_id=user_scope,
+            max_global=max(
+                0, int(getattr(runtime.cfg, "max_generation_inflight_global", 4))
+            ),
+            max_per_chat=max(
+                0, int(getattr(runtime.cfg, "max_generation_inflight_per_chat", 1))
+            ),
+            max_per_user=max(
+                0, int(getattr(runtime.cfg, "max_generation_inflight_per_user", 1))
+            ),
+            max_calls_per_user_per_day=max(
+                0, int(getattr(runtime.cfg, "max_generation_calls_per_user_per_day", 200))
+            ),
+        ):
+            generated = await _generate_smalltalk_turn(prepared, event, context, hctx)
+            return await _finalize_smalltalk_turn(
+                prepared,
+                generated,
+                event,
+                context,
+                hctx,
+                started_at=t0,
+            )
+    except GenerationLimitExceeded as exc:
+        _log_step(
+            context,
+            runtime,
+            chat_id=hctx.chat_id,
+            step="smalltalk.generation_limited",
+            fields={"limit": str(exc), "forced": prepared.forced},
+        )
+        return segments("⏳ 当前请求较多，请稍后再试") if prepared.forced else []
 
 
 async def call_bot_name_only_internal(context) -> list[dict[str, Any]]:
@@ -995,6 +1040,7 @@ async def handle_internal(
         get_lock=_get_lock,
         reset_chat_session=_reset_chat_session,
         cancel_pending_task=_cancel_pending_task,
+        is_admin_operator_fn=_is_admin_operator,
     )
 
 
@@ -1038,6 +1084,17 @@ async def handle_jargon(args: str, event: dict[str, Any], context) -> list[dict[
     )
 
 
+@handle_errors("审查处理")
+async def handle_review(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
+    return await handle_review_impl(
+        args,
+        event,
+        context,
+        handler_context_from_event=HandlerContext.from_event,
+        is_admin_operator_fn=_is_admin_operator,
+    )
+
+
 def _get_data_dir(context) -> Path:
     return _get_data_dir_impl(context)
 
@@ -1054,6 +1111,10 @@ def _is_admin_operator(event: dict[str, Any], context) -> bool:
     return _is_admin_operator_impl(event, context)
 
 
+def _is_global_admin_operator(event: dict[str, Any], context) -> bool:
+    return _is_global_admin_operator_impl(event, context)
+
+
 @handle_errors("供应商切换")
 async def handle_provider(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     return await handle_provider_impl(
@@ -1061,7 +1122,9 @@ async def handle_provider(args: str, event: dict[str, Any], context) -> list[dic
         event,
         context,
         state_getter=_state,
+        chat_id_from_event=_chat_id,
         is_admin_operator_fn=_is_admin_operator,
+        is_global_admin_operator_fn=_is_global_admin_operator,
         short_base_fn=_short_base,
     )
 

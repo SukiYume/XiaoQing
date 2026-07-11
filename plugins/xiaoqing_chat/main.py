@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import Any
 
 from core.plugin_base import segments
@@ -21,6 +22,7 @@ from .handlers import (
     handle_expression,
     handle_jargon,
     handle_provider,
+    handle_review,
 )
 from .runtime_state import get_state as _state
 
@@ -40,6 +42,7 @@ _SUBCOMMANDS: dict[str, str] = {
     "memory": "记忆", "记忆": "记忆",
     "expression": "表达", "表达": "表达",
     "jargon": "黑话", "黑话": "黑话",
+    "review": "审查", "审查": "审查",
     "model": "模型",  "模型": "模型",   "provider": "模型",  "供应商": "模型",
 }
 
@@ -52,6 +55,7 @@ _HANDLERS: dict[str, Any] = {
     "表达": handle_expression,
     "黑话": handle_jargon,
     "模型": handle_provider,
+    "审查": handle_review,
 }
 
 
@@ -96,9 +100,14 @@ async def handle(
         return await handle_smalltalk(text, event, context)
 
     except Exception as e:
+        request_id = str(getattr(context, "request_id", "") or secrets.token_hex(4))
         log = getattr(context, "logger", logger)
-        log.exception("XiaoQing Chat handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+        log.exception(
+            "XiaoQing Chat handle failed request_id=%s error_type=%s",
+            request_id,
+            type(e).__name__,
+        )
+        return segments(f"处理请求暂时失败，请稍后重试（请求ID: {request_id}）")
 
 
 def _show_help() -> str:
@@ -112,7 +121,8 @@ def _show_help() -> str:
 • 启用媒体能力后，小青也能理解图片/表情包消息
 
 **会话管理:**
-• /xc 清空 - 清空当前会话的上下文记忆
+• /xc 清空 - 私聊中清空自己的上下文记忆
+• /xc 清空 确认 - 群管理员/群主清空当前群的共享状态（需二次确认）
 • /xc 统计 - 查看当前会话的统计信息
 
 **高级功能:**
@@ -122,6 +132,7 @@ def _show_help() -> str:
 • /xc 表达 - 查看学到的表达方式
 • /xc 黑话 - 查看学到的黑话
 • /xc 模型 - 查看/切换 LLM 供应商
+• /xc 审查 <ok|no|answer|close> <会话ID> [内容] - 管理员处理反思会话
 
 **使用提示:**
 • 群聊中需要 @小青 或使用命令触发

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sqlite3
 import sys
 from dataclasses import dataclass, field
@@ -31,8 +33,39 @@ else:
 def backup_sqlite_database(db_path: Path, backup_path: Path) -> None:
     """Create a consistent SQLite backup, including uncheckpointed WAL pages."""
     backup_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path)) as source, sqlite3.connect(str(backup_path)) as target:
+    source = sqlite3.connect(str(db_path))
+    target = sqlite3.connect(str(backup_path))
+    try:
         source.backup(target)
+    finally:
+        target.close()
+        source.close()
+
+
+def _migration_lock_path(db_path: Path) -> Path:
+    return db_path.with_name(f"{db_path.name}.pendo-redesign.lock")
+
+
+def _acquire_migration_lock(db_path: Path) -> Path:
+    lock_path = _migration_lock_path(db_path)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise RuntimeError(f"Migration already in progress: {lock_path}") from exc
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"pid": os.getpid(), "db": str(db_path), "started_at": datetime.now().isoformat()}, handle)
+    return lock_path
+
+
+def _validate_database_file(db_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0]).lower()
+        foreign_keys = conn.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        conn.close()
+    if integrity != "ok" or foreign_keys:
+        raise RuntimeError(f"Migration validation failed: integrity={integrity}, foreign_keys={len(foreign_keys)}")
 
 
 LEGACY_EVENT_ITEM_COLUMNS = ("rrule", "parent_id", "remind_policy_id", "milestones")
@@ -1005,27 +1038,61 @@ def migrate_pendo_redesign(db_path: str | Path, *, apply: bool = False) -> dict[
     started_at = datetime.now().isoformat(timespec="seconds")
     backup_path: Path | None = None
     report_path: Path | None = None
+    work_path: Path | None = None
+    lock_path: Path | None = None
+    journal_path = db_path.with_name(f"{db_path.name}.pendo-redesign-journal.json")
 
     if apply:
+        lock_path = _acquire_migration_lock(db_path)
         backup_path = db_path.with_name(
             f"{db_path.name}.pendo-redesign-backup-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         )
         backup_sqlite_database(db_path, backup_path)
+        _validate_database_file(backup_path)
+        work_path = db_path.with_name(f"{db_path.name}.pendo-redesign-working-{os.getpid()}")
+        shutil.copy2(backup_path, work_path)
+        journal_path.write_text(
+            json.dumps({"state": "running", "backup": str(backup_path), "working_copy": str(work_path)}, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
-    event_report = migrate_event_graph(
-        db_path,
-        apply=apply,
-        create_backup=False,
-        write_report=False,
-    )
-    note_report = migrate_note_fields(db_path, apply=apply)
-    task_report = migrate_task_fields(db_path, apply=apply)
-    diary_report = migrate_diary_fields(db_path, apply=apply)
-    ledger_report = migrate_ledger_fields(db_path, apply=apply)
-    cleanup_report = cleanup_legacy_event_item_columns(db_path, apply=apply)
-    task_cleanup_report = cleanup_legacy_task_item_columns(db_path, apply=apply)
-    ledger_cleanup_report = cleanup_legacy_ledger_item_columns(db_path, apply=apply)
-    fts_report = rebuild_fts_index(db_path, apply=apply)
+    target_path = work_path if work_path is not None else db_path
+
+    try:
+        event_report = migrate_event_graph(
+            target_path,
+            apply=apply,
+            create_backup=False,
+            write_report=False,
+        )
+        note_report = migrate_note_fields(target_path, apply=apply)
+        task_report = migrate_task_fields(target_path, apply=apply)
+        diary_report = migrate_diary_fields(target_path, apply=apply)
+        ledger_report = migrate_ledger_fields(target_path, apply=apply)
+        cleanup_report = cleanup_legacy_event_item_columns(target_path, apply=apply)
+        task_cleanup_report = cleanup_legacy_task_item_columns(target_path, apply=apply)
+        ledger_cleanup_report = cleanup_legacy_ledger_item_columns(target_path, apply=apply)
+        fts_report = rebuild_fts_index(target_path, apply=apply)
+        if apply and work_path is not None:
+            _validate_database_file(work_path)
+            os.replace(work_path, db_path)
+            work_path = None
+            journal_path.write_text(
+                json.dumps({"state": "completed", "backup": str(backup_path)}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+    except Exception as exc:
+        if apply:
+            journal_path.write_text(
+                json.dumps({"state": "failed", "backup": str(backup_path), "error": str(exc)}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        raise
+    finally:
+        if work_path is not None:
+            work_path.unlink(missing_ok=True)
+        if lock_path is not None:
+            lock_path.unlink(missing_ok=True)
 
     report = {
         "mode": "apply" if apply else "dry-run",

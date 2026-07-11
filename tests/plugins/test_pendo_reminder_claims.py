@@ -1,0 +1,126 @@
+import threading
+from datetime import datetime, timedelta, timezone
+
+from plugins.pendo.services.db import Database
+
+
+def test_reminder_claim_is_atomic_and_recovers_after_lease(tmp_path):
+    db = Database(str(tmp_path / "pendo.db"))
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+    first = db.claim_reminder("event-1", "2030-01-01T00:00:00+00:00", now=now, lease_seconds=30)
+    assert first
+    assert db.claim_reminder("event-1", "2030-01-01T00:00:00+00:00", now=now) is None
+
+    recovered = db.claim_reminder(
+        "event-1",
+        "2030-01-01T00:00:00+00:00",
+        now=now + timedelta(seconds=31),
+    )
+    assert recovered and recovered != first
+    assert db.complete_reminder_claim("event-1", "2030-01-01T00:00:00+00:00", recovered)
+    assert db.claim_reminder(
+        "event-1", "2030-01-01T00:00:00+00:00", now=now + timedelta(hours=1)
+    ) is None
+
+
+def test_reminder_release_respects_next_attempt_time(tmp_path):
+    db = Database(str(tmp_path / "pendo.db"))
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    token = db.claim_reminder("event-2", "2030-01-01T00:00:00+00:00", now=now)
+    assert token
+    assert db.release_reminder_claim(
+        "event-2", "2030-01-01T00:00:00+00:00", token, retry_at=now + timedelta(minutes=10)
+    )
+    assert db.claim_reminder("event-2", "2030-01-01T00:00:00+00:00", now=now + timedelta(minutes=9)) is None
+    assert db.claim_reminder("event-2", "2030-01-01T00:00:00+00:00", now=now + timedelta(minutes=10))
+
+
+def test_database_cleanup_closes_connections_created_by_worker_threads(tmp_path):
+    db = Database(str(tmp_path / "pendo.db"))
+    worker = threading.Thread(target=lambda: db.get_connection())
+    worker.start()
+    worker.join()
+
+    db.close_all_connections()
+
+    assert db._all_connections == {}
+
+
+def test_item_update_uses_owner_type_and_version_compare_and_swap(tmp_path):
+    db = Database(str(tmp_path / "pendo.db"))
+    item_id = db.insert_item({"type": "note", "owner_id": "u1", "title": "before"})
+
+    assert db.update_item(
+        item_id,
+        {"title": "after"},
+        owner_id="u1",
+        item_type="note",
+        expected_version=0,
+    )
+    assert not db.update_item(
+        item_id,
+        {"title": "stale"},
+        owner_id="u1",
+        item_type="note",
+        expected_version=0,
+    )
+    assert not db.update_item(
+        item_id,
+        {"title": "wrong type"},
+        owner_id="u1",
+        item_type="task",
+        expected_version=1,
+    )
+    assert db.get_item(item_id, "u1").title == "after"
+
+
+def test_operation_log_retention_redacts_snapshots_then_deletes_expired_rows(tmp_path):
+    db = Database(str(tmp_path / "pendo.db"))
+    old = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    db.log_operation("u1", "edit_note", details={"old_values": {"content": "secret"}})
+    conn = db.get_connection()
+    conn.execute("UPDATE operation_logs SET created_at = ?", ((old - timedelta(minutes=10)).isoformat(),))
+    conn.commit()
+
+    result = db.prune_operation_logs(now=old, retention_days=90, undo_snapshot_minutes=5)
+    row = conn.execute("SELECT details FROM operation_logs").fetchone()
+    assert result == {"deleted": 0, "redacted": 1}
+    assert "secret" not in row["details"]
+
+    result = db.prune_operation_logs(now=old + timedelta(days=91), retention_days=90)
+    assert result["deleted"] == 1
+
+
+def test_concurrent_user_setting_updates_preserve_disjoint_json_keys(tmp_path):
+    db = Database(str(tmp_path / "pendo.db"))
+    start = threading.Barrier(2)
+    results: list[bool] = []
+
+    def write(key: str):
+        start.wait()
+        results.append(db.update_user_settings("u1", {"settings_json": {key: True}}))
+
+    left = threading.Thread(target=write, args=("feature_a",))
+    right = threading.Thread(target=write, args=("feature_b",))
+    left.start()
+    right.start()
+    left.join()
+    right.join()
+
+    assert results == [True, True]
+
+    settings = db.get_user_settings("u1")
+    assert settings["settings_json"].get("feature_a") is True, settings
+    assert settings["settings_json"].get("feature_b") is True, settings
+    assert settings["version"] == 1
+
+
+def test_get_all_items_iterates_past_legacy_large_query_limits(tmp_path):
+    db = Database(str(tmp_path / "pendo.db"))
+    for index in range(1, 1_501):
+        db.insert_item({"type": "note", "owner_id": "u1", "title": f"note {index}"})
+
+    items = db.get_all_items("u1", {"type": "note"}, page_size=137)
+
+    assert len(items) == 1_500

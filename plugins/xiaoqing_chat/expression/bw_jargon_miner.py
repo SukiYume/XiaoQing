@@ -158,15 +158,16 @@ async def mine_jargon(
         term = str(it.get("term", "") or "").strip()
         if not term or len(term) > 32:
             continue
-        is_jargon = bool(it.get("is_jargon", True))
+        is_jargon = it.get("is_jargon") is True
         meaning = str(it.get("meaning", "") or "").strip()
         if not is_jargon:
             continue
 
-        rec = db.get(term)
+        record_key = store.key_for(term, chat_id)
+        rec = db.get(record_key)
         if not rec:
-            rec = JargonRecord(content=term, count=0, updated_at=now)
-            db[term] = rec
+            rec = JargonRecord(content=term, scope_chat_id=chat_id, count=0, updated_at=now)
+            db[record_key] = rec
         rec.count = int(rec.count or 0) + 1
         rec.updated_at = now
         rec.is_jargon = True
@@ -181,14 +182,16 @@ async def mine_jargon(
         changed += 1
 
     to_infer: list[tuple[str, JargonRecord]] = []
-    for term, rec in db.items():
+    for _record_key, rec in db.items():
+        if rec.is_global or rec.scope_chat_id != chat_id:
+            continue
         if rec.is_complete:
             continue
         if rec.count < int(infer_threshold):
             continue
         if rec.last_inference_count >= rec.count:
             continue
-        to_infer.append((term, rec))
+        to_infer.append((rec.content, rec))
 
     for term, rec in to_infer[:6]:
         it0 = time.monotonic()
@@ -231,11 +234,11 @@ async def mine_jargon(
             chat_id=chat_id,
             fields={"term": term, "elapsed_s": round(time.monotonic() - it0, 3)},
         )
-        is_global = bool(obj.get("is_global", False))
         if meaning:
             rec.meaning = meaning[:200].strip()
             rec.is_complete = True
-        rec.is_global = bool(is_global)
+        # Model output may explain a term but may never widen its visibility.
+        rec.is_global = False
         rec.last_inference_count = rec.count
         rec.updated_at = time.time()
         changed += 1

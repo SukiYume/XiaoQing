@@ -163,6 +163,7 @@ class ItemCreate(BaseModel):
 
 
 class ItemUpdate(BaseModel):
+    version: int | None = None
     title: str | None = None
     content: str | None = None
     tags: list[str] | None = None
@@ -726,6 +727,21 @@ def update_item(
     requested_update_fields = set(updates.keys())
 
     item_type = item.type.value if hasattr(item.type, "value") else item.type
+    requested_update_fields.discard("version")
+    updates.pop("version", None)
+    allowed_fields_by_type = {
+        "event": EVENT_MUTABLE_FIELDS,
+        "task": TASK_MUTABLE_FIELDS,
+        "note": NOTE_MUTABLE_FIELDS,
+        "diary": DIARY_MUTABLE_FIELDS,
+        "ledger": LEDGER_MUTABLE_FIELDS,
+    }
+    invalid_fields = requested_update_fields - allowed_fields_by_type.get(item_type, set())
+    if invalid_fields:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Fields are not valid for {item_type}: {', '.join(sorted(invalid_fields))}",
+        )
     if item_type == "event":
         try:
             merged = item.to_dict()
@@ -823,9 +839,16 @@ def update_item(
             note_old_values = _snapshot_item_fields(item, set(note_logged_updates.keys()))
 
     updates["updated_at"] = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
-    success = db.update_item(item_id, updates, owner_id=owner_id)
+    expected_version = body.version if body.version is not None else getattr(item, "version", 0)
+    success = db.update_item(
+        item_id,
+        updates,
+        owner_id=owner_id,
+        expected_version=expected_version,
+        item_type=item_type,
+    )
     if not success:
-        raise HTTPException(status_code=500, detail="Update failed")
+        raise HTTPException(status_code=409, detail="Item changed by another request; refresh and retry")
 
     if item_type == "note" and note_logged_updates:
         db.log_operation(
@@ -837,7 +860,7 @@ def update_item(
         )
     else:
         db.log_operation(owner_id, "update", item_type=item_type, item_id=item_id)
-    return {"ok": True, "data": {"id": item_id}, "message": "更新成功"}
+    return {"ok": True, "data": {"id": item_id, "version": expected_version + 1}, "message": "更新成功"}
 
 
 @router.delete("/items/{item_id}")

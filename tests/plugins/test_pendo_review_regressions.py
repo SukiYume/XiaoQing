@@ -194,6 +194,14 @@ def test_reminder_dispatch_uses_owner_timezone(monkeypatch):
         def is_reminder_sent(self, item_id, remind_time):
             return False
 
+        def claim_reminder(self, item_id, remind_time, *, now, lease_seconds):
+            assert item_id == "evt-la"
+            assert remind_time == "2030-01-01T09:00:00"
+            return "test-claim-token"
+
+        def release_reminder_claim(self, item_id, remind_time, claim_token, *, retry_at):
+            raise AssertionError("the test reminder is outside quiet hours")
+
         def get_unconfirmed_sent_reminders(self):
             return []
 
@@ -505,6 +513,9 @@ def test_task_today_shortcut_uses_user_timezone(monkeypatch):
                     created_at="2030-01-02T08:00:00",
                 ),
             ]
+
+        def get_all_items(self, owner_id, filters):
+            return self.get_items(owner_id, filters, limit=None)
 
     items_repo = _ItemsRepo()
     handler = TaskHandler(db=SimpleNamespace(items=items_repo))

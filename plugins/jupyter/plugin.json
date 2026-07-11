@@ -13,7 +13,8 @@
                 "exec"
             ],
             "help": "执行 Python 代码或启动 REPL | /py <代码> | /py repl | /py help",
-            "admin_only": true
+            "admin_only": true,
+            "priority": 10
         },
         {
             "name": "jupyter_kernel",

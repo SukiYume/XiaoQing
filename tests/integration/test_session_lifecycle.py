@@ -1,10 +1,10 @@
 """Test complete session lifecycle"""
 
 import asyncio
-import pytest
-from typing import Any
 
-from core.session import Session, SessionManager
+import pytest
+
+from core.session import SessionManager
 
 
 class TestSessionLifecycle:
@@ -83,7 +83,7 @@ class TestSessionLifecycle:
         manager = SessionManager()
 
         # Create private session
-        private_session = await manager.create(
+        await manager.create(
             user_id=10001,
             group_id=None,
             plugin_name="private_game",
@@ -91,7 +91,7 @@ class TestSessionLifecycle:
         )
 
         # Create group session for same user
-        group_session = await manager.create(
+        await manager.create(
             user_id=10001,
             group_id=50001,
             plugin_name="group_game",
@@ -217,9 +217,12 @@ class TestSessionLifecycle:
         async def increment_session():
             """Increment session counter multiple times"""
             for _ in range(10):
-                session = await manager.get(10001, 50001)
-                if session:
-                    session.data["counter"] += 1
+                async def increment_once(session):
+                    value = session.get("counter", 0)
+                    await asyncio.sleep(0.001)
+                    session.set("counter", value + 1)
+
+                await manager.update(10001, 50001, increment_once)
                 await asyncio.sleep(0.001)
 
         # Run concurrent operations

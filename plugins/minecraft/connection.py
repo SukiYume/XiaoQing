@@ -4,6 +4,7 @@ Minecraft 连接管理
 管理多个 MC 服务器连接。
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -36,6 +37,15 @@ class ConnectionManager:
     def __init__(self):
         # key: "group_{group_id}" 或 "private_{user_id}"
         self._connections: dict[str, McConnection] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._manager_lock = asyncio.Lock()
+
+    def _lock_for(self, key: str) -> asyncio.Lock:
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[key] = lock
+        return lock
     
     def get_key(self, group_id: Optional[int], user_id: Optional[int]) -> str:
         """根据 group_id 或 user_id 生成 key"""
@@ -58,6 +68,28 @@ class ConnectionManager:
         """添加连接"""
         key = conn.connection_key()
         self._connections[key] = conn
+
+    async def replace_connection(self, conn: McConnection) -> Optional[McConnection]:
+        """Atomically publish a connection and close the previously published client."""
+        key = conn.connection_key()
+        async with self._lock_for(key):
+            old = self._connections.get(key)
+            self._connections[key] = conn
+            if old is not None and old is not conn:
+                await old.cleanup()
+            return old
+
+    async def disconnect_connection(
+        self,
+        group_id: Optional[int],
+        user_id: Optional[int],
+    ) -> Optional[McConnection]:
+        key = self.get_key(group_id, user_id)
+        async with self._lock_for(key):
+            conn = self._connections.pop(key, None)
+            if conn is not None:
+                await conn.cleanup()
+            return conn
     
     def remove_connection(self, group_id: Optional[int], user_id: Optional[int]) -> Optional[McConnection]:
         """移除并返回连接"""
@@ -73,6 +105,9 @@ class ConnectionManager:
         return len(self._connections)
 
     async def cleanup_all(self) -> None:
-        for conn in list(self._connections.values()):
-            await conn.cleanup()
-        self._connections.clear()
+        async with self._manager_lock:
+            items = list(self._connections.items())
+            self._connections.clear()
+        for key, conn in items:
+            async with self._lock_for(key):
+                await conn.cleanup()

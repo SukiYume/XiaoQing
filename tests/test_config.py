@@ -7,11 +7,18 @@ import logging
 import os
 import platform
 import time
-import pytest
 from pathlib import Path
 from typing import Any
 
-from core.config import ConfigLoadError, ConfigManager, ConfigSnapshot, _check_secrets_file_permissions
+import pytest
+
+from core.config import (
+    ConfigLoadError,
+    ConfigManager,
+    ConfigSnapshot,
+    _check_secrets_file_permissions,
+    _validate_runtime_config,
+)
 
 # ============================================================
 # Fixtures
@@ -180,6 +187,109 @@ class TestConfigManagerReload:
 
         assert config_manager.config == original
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("max_concurrency", 0),
+            ("plugin_poll_interval", -1),
+            ("ws_queue_size", 0),
+            ("timezone", "Mars/Olympus"),
+            ("onebot_http_base", "ftp://example.com"),
+            ("inbound_http_base", "https://127.0.0.1:12000"),
+            ("inbound_ws_uri", "wss://127.0.0.1:12000/ws"),
+            ("inbound_http_base", "http://0.0.0.0:12000"),
+            ("inbound_trusted_tls_proxy", "true"),
+        ],
+    )
+    def test_reload_rejects_invalid_runtime_field_before_replacing_snapshot(
+        self,
+        config_manager: ConfigManager,
+        config_file: Path,
+        field: str,
+        value: Any,
+    ):
+        original = config_manager.config
+        candidate = dict(original)
+        candidate[field] = value
+        config_file.write_text(json.dumps(candidate), encoding="utf-8")
+
+        with pytest.raises(ConfigLoadError, match="Invalid runtime configuration"):
+            config_manager.reload()
+
+        assert config_manager.config == original
+
+    @pytest.mark.parametrize(
+        ("http_base", "ws_uri"),
+        [
+            ("http://localhost:12000", "ws://localhost:12000/ws"),
+            ("http://127.0.0.1:12000", "ws://127.0.0.1:12000/ws"),
+            ("http://[::1]:12000", "ws://[::1]:12000/ws"),
+        ],
+    )
+    def test_reload_accepts_plaintext_inbound_on_loopback(
+        self,
+        config_manager: ConfigManager,
+        config_file: Path,
+        http_base: str,
+        ws_uri: str,
+    ):
+        candidate = dict(config_manager.config)
+        candidate.update(
+            {
+                "inbound_http_base": http_base,
+                "inbound_ws_uri": ws_uri,
+            }
+        )
+        config_file.write_text(json.dumps(candidate), encoding="utf-8")
+
+        config_manager.reload()
+
+        assert config_manager.config["inbound_http_base"] == http_base
+        assert config_manager.config["inbound_ws_uri"] == ws_uri
+
+    def test_reload_accepts_non_loopback_only_with_trusted_tls_proxy_acknowledgement(
+        self,
+        config_manager: ConfigManager,
+        config_file: Path,
+    ):
+        candidate = dict(config_manager.config)
+        candidate.update(
+            {
+                "inbound_http_base": "http://0.0.0.0:12000",
+                "inbound_ws_uri": "ws://0.0.0.0:12000/ws",
+                "inbound_trusted_tls_proxy": True,
+            }
+        )
+        config_file.write_text(json.dumps(candidate), encoding="utf-8")
+
+        config_manager.reload()
+
+        assert config_manager.config["inbound_trusted_tls_proxy"] is True
+
+    def test_reload_rejects_enabled_ws_without_uri_before_replacing_snapshot(
+        self,
+        config_manager: ConfigManager,
+        config_file: Path,
+    ):
+        original = config_manager.config
+        candidate = dict(original)
+        candidate["enable_ws_client"] = True
+        candidate["onebot_ws_uri"] = ""
+        config_file.write_text(json.dumps(candidate), encoding="utf-8")
+
+        with pytest.raises(ConfigLoadError, match="onebot_ws_uri"):
+            config_manager.reload()
+
+        assert config_manager.config == original
+
+    def test_example_config_matches_runtime_schema(self):
+        example_path = Path(__file__).resolve().parents[1] / "config" / "config.json.example"
+        example = json.loads(example_path.read_text(encoding="utf-8"))
+
+        validated = _validate_runtime_config(example)
+
+        assert validated["inbound_trusted_tls_proxy"] is False
+
 # ============================================================
 # ConfigManager.update_secret 测试
 # ============================================================
@@ -236,6 +346,37 @@ class TestConfigManagerUpdateSecret:
 
         assert len(snapshots) == 1
         assert snapshots[0].secrets["admin_user_ids"] == [2024]
+
+    def test_reload_subscription_can_be_removed_idempotently(
+        self,
+        config_manager: ConfigManager,
+    ):
+        snapshots: list[ConfigSnapshot] = []
+        unsubscribe = config_manager.on_reload(snapshots.append)
+
+        config_manager.update_secret("admin_user_ids", [2024])
+        unsubscribe()
+        unsubscribe()
+        config_manager.update_secret("admin_user_ids", [2025])
+
+        assert [snapshot.secrets["admin_user_ids"] for snapshot in snapshots] == [[2024]]
+
+    def test_reload_callback_can_unsubscribe_itself_during_notification(
+        self,
+        config_manager: ConfigManager,
+    ):
+        seen: list[list[int]] = []
+        unsubscribe = lambda: None
+
+        def callback(snapshot: ConfigSnapshot) -> None:
+            seen.append(list(snapshot.secrets["admin_user_ids"]))
+            unsubscribe()
+
+        unsubscribe = config_manager.on_reload(callback)
+        config_manager.update_secret("admin_user_ids", [2026])
+        config_manager.update_secret("admin_user_ids", [2027])
+
+        assert seen == [[2026]]
 
     def test_update_secret_runs_async_reload_callbacks(self, config_manager: ConfigManager):
         """测试 sync 路径下 update_secret 仍会执行 async reload 回调"""
@@ -515,6 +656,15 @@ class TestConfigManagerThreadSafety:
 
         assert len(results) == 1000
         assert all(r == "测试机器人" for r in results)
+
+def test_plugin_secret_store_creates_reads_and_deletes_scoped_values(config_manager: ConfigManager):
+    config_manager.set_plugin_secret("qingssh", "passwords.ref-1", "top-secret")
+
+    assert config_manager.get_plugin_secret("qingssh", "passwords.ref-1") == "top-secret"
+    assert config_manager.get_plugin_secret("other", "passwords.ref-1") is None
+    assert config_manager.delete_plugin_secret("qingssh", "passwords.ref-1") is True
+    assert config_manager.get_plugin_secret("qingssh", "passwords.ref-1") is None
+
 
 # ============================================================
 # 运行测试

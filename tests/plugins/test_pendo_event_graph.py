@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from plugins.pendo.handlers.event import EventHandler
@@ -344,6 +345,41 @@ def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Pat
             "2030-04-03T08:00:00",
             "2030-04-03T09:00:00",
         ]
+    finally:
+        db.cleanup()
+
+
+def test_atomic_collection_create_rolls_back_header_and_children_on_failure(tmp_path: Path):
+    db = Database(str(tmp_path / "pendo_event_graph_atomic_rollback.db"))
+    collection_id = "c" * 32
+    child = {
+        "owner_id": "u1",
+        "type": "event",
+        "title": "节点",
+        "category": "工作",
+        "start_time": "2030-04-01T09:00:00",
+        "event_role": "multi_node_child",
+        "event_collection_id": collection_id,
+        "event_collection_kind": "multi_node",
+    }
+    try:
+        try:
+            db.create_event_collection_with_children(
+                {
+                    "id": collection_id,
+                    "owner_id": "u1",
+                    "kind": "multi_node",
+                    "title": "原子集合",
+                },
+                [("duplicate-child", child), ("duplicate-child", child)],
+            )
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AssertionError("duplicate child ID must fail the transaction")
+
+        assert db.get_event_collection(collection_id, "u1") is None
+        assert db.get_item("duplicate-child", "u1") is None
     finally:
         db.cleanup()
 

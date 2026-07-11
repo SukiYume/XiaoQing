@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import re
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 from core.plugin_base import write_json
@@ -79,6 +81,7 @@ class VectorStore:
         *,
         top_k: int = 5,
         min_score: float = 0.12,
+        predicate: Callable[[VectorDoc], bool] | None = None,
     ) -> list[tuple[VectorDoc, float]]:
         if top_k <= 0:
             return []
@@ -90,7 +93,15 @@ class VectorStore:
         scores = self._matrix @ q
         if scores.size == 0:
             return []
-        idxs = np.argsort(scores)[::-1][:top_k]
+        candidate_idxs = np.asarray(
+            [index for index, doc in enumerate(self._docs) if predicate is None or predicate(doc)],
+            dtype=np.int64,
+        )
+        if candidate_idxs.size == 0:
+            return []
+        candidate_scores = scores[candidate_idxs]
+        ranked = np.argsort(candidate_scores)[::-1][:top_k]
+        idxs = candidate_idxs[ranked]
         out: list[tuple[VectorDoc, float]] = []
         for idx in idxs.tolist():
             score = float(scores[idx])
@@ -169,7 +180,16 @@ def write_vector_store_files(
     npz_path = dir_path / f"{name}.vecs.npz"
     docs_payload = [asdict(d) for d in docs]
     write_json(docs_path, docs_payload)
-    np.savez_compressed(npz_path, dim=np.int32(dim), matrix=matrix)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".npz", dir=dir_path)
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        np.savez_compressed(tmp_path, dim=np.int32(dim), matrix=matrix)
+        with tmp_path.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, npz_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _tokenize(text: str) -> list[str]:

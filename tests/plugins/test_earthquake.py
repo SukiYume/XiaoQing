@@ -566,7 +566,34 @@ class TestScheduled:
         """测试定时任务入口"""
         with patch.object(earthquake, '_fetch_earthquake_news', new=AsyncMock(return_value=[])) as mock_fetch:
             result = await earthquake.scheduled(mock_context)
-            mock_fetch.assert_called_once_with(mock_context, force=False)
+            mock_fetch.assert_called_once_with(mock_context, force=False, advance_cursor=False)
+
+    @pytest.mark.asyncio
+    async def test_scheduled_commits_cursor_only_after_confirmed_delivery(self, mock_context):
+        mock_context.state = {}
+        mock_context.default_groups = lambda: [123]
+        mock_context.send_action = AsyncMock(return_value=False)
+
+        async def fake_fetch(context, force=False, advance_cursor=True):
+            context.state["earthquake_pending_since"] = "200"
+            return earthquake.segments("M5 event")
+
+        with (
+            patch.object(earthquake, "_fetch_earthquake_news", new=fake_fetch),
+            patch.object(earthquake, "_save_since") as save,
+        ):
+            await earthquake.scheduled(mock_context)
+
+        save.assert_not_called()
+
+        mock_context.send_action = AsyncMock(return_value=True)
+        with (
+            patch.object(earthquake, "_fetch_earthquake_news", new=fake_fetch),
+            patch.object(earthquake, "_save_since") as save,
+        ):
+            await earthquake.scheduled(mock_context)
+
+        save.assert_called_once_with(mock_context, "200")
 
 
 # ============================================================

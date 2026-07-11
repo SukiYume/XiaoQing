@@ -50,6 +50,6 @@ def ensure_knowledge_index(
             memory_db.upsert_text(
                 doc_id=doc_id,
                 text=c,
-                meta={"type": "knowledge", "source": str(p), "chunk": i},
+                meta={"type": "knowledge", "source": str(p), "chunk": i, "global_approved": True},
             )
     memory_db.save()

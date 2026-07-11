@@ -366,6 +366,26 @@ class TestVoicePlugin:
 
         assert "文字转语音(TTS)" in plugin_json["description"]
         assert "内部 STT 工具函数" in plugin_json["description"]
+        assert plugin_json["commands"][0]["admin_only"] is True
+
+    @pytest.mark.asyncio
+    async def test_tts_rejects_oversized_text_before_http(self, mock_context):
+        post = MagicMock()
+        mock_context.http_session.post = post
+
+        result = await voice.text_to_speech("x" * (voice.MAX_TTS_TEXT_LENGTH + 1), mock_context)
+
+        assert result is None
+        post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stt_rejects_oversized_audio_before_read(self, mock_context, tmp_path):
+        audio = tmp_path / "large.wav"
+        audio.write_bytes(b"x" * (voice.MAX_AUDIO_BYTES + 1))
+
+        result = await voice.speech_to_text(str(audio), mock_context)
+
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_handle_tts_success(self, mock_context, mock_event):

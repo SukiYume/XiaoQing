@@ -6,15 +6,23 @@ URL 解析插件
 
 # 标准库
 import logging
-from urllib.parse import urljoin
+import hashlib
+from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 # 第三方库
-import aiohttp
 from bs4 import BeautifulSoup
 
 # 本地导入
-from core.plugin_base import image_url as image_segment, run_sync, segments
-
+from core.plugin_base import image as image_segment
+from core.plugin_base import atomic_write_bytes, run_sync, segments
+from core.safe_http import (
+    SafeHttpError,
+    UnsafeUrlError,
+    fetch_public_html,
+    fetch_public_bytes,
+    validate_public_fetch_target,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,35 +55,29 @@ async def handle_url(url: str, event: dict, context) -> list:
         if not context.http_session:
             logger.debug("HTTP session 不可用，跳过 URL 解析")
             return []
-        
-        # 使用 aiohttp 异步获取内容
+
+        # Do not use the application's shared session here.  The safe client
+        # validates all DNS answers and pins the address used for the TCP
+        # connection, which prevents DNS rebinding and unsafe redirects.
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
-        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT, sock_read=5)
-        
-        async with context.http_session.get(url, headers=headers, timeout=timeout) as response:
-            if response.status != 200:
-                logger.debug(f"URL 请求失败: {response.status} - {url}")
-                return []
+        fetched = await fetch_public_html(url, headers=headers, timeout_seconds=REQUEST_TIMEOUT)
+        if fetched is None:
+            return []
 
-            content = await response.content.read(MAX_CONTENT_SIZE + 1)
-            if len(content) > MAX_CONTENT_SIZE:
-                logger.warning(f"URL 响应过大，已跳过: {url}")
-                return []
-
-            charset = response.charset or "utf-8"
-            try:
-                html = content.decode(charset, errors="ignore")
-            except LookupError:
-                html = content.decode("utf-8", errors="ignore")
+        charset = fetched.charset or "utf-8"
+        try:
+            html = fetched.body.decode(charset, errors="ignore")
+        except LookupError:
+            html = fetched.body.decode("utf-8", errors="ignore")
 
         # 在线程池中解析 HTML
         def _parse(html_content):
             soup = BeautifulSoup(html_content, 'html.parser')
-            
+
             title = str(soup.title.string).strip() if soup.title and soup.title.string else ''
-            
+
             # 获取描述
             desc = ''
             meta_desc = soup.find('meta', attrs={'name': 'description'}) or \
@@ -84,7 +86,7 @@ async def handle_url(url: str, event: dict, context) -> list:
                 content = meta_desc.get('content')
                 if isinstance(content, str):
                     desc = content.strip()
-            
+
             # 获取图片
             image_url = ''
             meta_img = soup.find('meta', attrs={'property': 'og:image'}) or \
@@ -96,10 +98,34 @@ async def handle_url(url: str, event: dict, context) -> list:
 
         title, desc, image_url = await run_sync(_parse, html)
         if image_url:
-            image_url = urljoin(url, image_url)
-        
+            image_url = urljoin(fetched.url, image_url)
+            try:
+                await validate_public_fetch_target(image_url)
+                fetched_image = await fetch_public_bytes(
+                    image_url,
+                    timeout_seconds=REQUEST_TIMEOUT,
+                    max_bytes=5 * 1024 * 1024,
+                )
+                if fetched_image is None:
+                    image_url = ""
+                else:
+                    content_type = fetched_image.headers.get("Content-Type", "image/jpeg").lower()
+                    extension = ".png" if "png" in content_type else ".webp" if "webp" in content_type else ".jpg"
+                    preview_dir = Path(context.data_dir) / "url_previews"
+                    preview_dir.mkdir(parents=True, exist_ok=True)
+                    digest = hashlib.sha256(fetched_image.url.encode("utf-8")).hexdigest()
+                    image_path = preview_dir / f"{digest}{extension}"
+                    await run_sync(atomic_write_bytes, image_path, fetched_image.body)
+                    image_url = str(image_path)
+            except UnsafeUrlError:
+                logger.warning("URL preview image target was rejected")
+                image_url = ""
+            except SafeHttpError:
+                logger.warning("URL preview image download failed safely")
+                image_url = ""
+
         if not title and not desc and not image_url:
-            logger.debug(f"未找到标题、描述和图片: {url}")
+            logger.debug("URL 未提取到预览内容: host=%s", urlsplit(url).hostname or "")
             return []
 
         response = []
@@ -112,21 +138,21 @@ async def handle_url(url: str, event: dict, context) -> list:
                 if len(desc) > MAX_DESC_LENGTH:
                     desc = desc[:MAX_DESC_LENGTH] + "..."
                 msg += f"{desc}\n"
-            
+
             msg += f"\n链接: {url}"
             response.extend(segments(msg))
 
         if image_url:
             response.append(image_segment(image_url))
-        
-        logger.info(f"解析 URL 成功: {title[:30] if title else url}")
+
+        logger.info("URL 解析成功: host=%s title_length=%d", urlsplit(url).hostname or "", len(title))
         return response
 
-    except aiohttp.ClientError as exc:
-        logger.debug(f"URL 请求错误: {exc}")
+    except (SafeHttpError, UnsafeUrlError) as exc:
+        logger.debug("URL 请求 rejected or failed safely: %s", exc)
         return []
     except Exception as exc:
-        logger.exception(f"URL 解析失败: {exc}")
+        logger.exception("URL 解析失败: %s", type(exc).__name__)
         return []
 
 
@@ -136,7 +162,7 @@ async def handle_url(url: str, event: dict, context) -> list:
 
 async def handle(command: str, args: str, event: dict, context) -> list:
     """占位符，避免 PluginManager 警告
-    
+
     此插件通过 dispatcher 直接调用 handle_url() 处理消息中的链接
     """
     return []

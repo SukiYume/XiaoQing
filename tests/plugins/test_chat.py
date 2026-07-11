@@ -74,6 +74,12 @@ class TestChatPlugin:
         chat.init()
         assert True
 
+    def test_manifest_defaults_paid_chat_to_admin_only(self):
+        import json
+
+        manifest = json.loads((ROOT / "plugins" / "chat" / "plugin.json").read_text(encoding="utf-8"))
+        assert manifest["commands"][0]["admin_only"] is True
+
     def test_get_config_valid(self, mock_context):
         """测试获取有效配置"""
         config = chat.get_config(mock_context)
@@ -238,6 +244,8 @@ class TestChatPlugin:
 
         assert result == {"messages": [{"type": "answer", "content": "测试回答"}]}
         assert captured_payload["stream"] is False
+        assert captured_payload["user"] != chat.DEFAULT_USER_ID
+        assert len(captured_payload["user"]) == 32
 
     @pytest.mark.asyncio
     async def test_call_coze_api_error_response(self, mock_context):

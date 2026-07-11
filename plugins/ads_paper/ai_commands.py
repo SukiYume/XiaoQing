@@ -75,12 +75,13 @@ async def cmd_summarize(
 
 async def cmd_daily(
     client: ADSClient,
-    context  # Type: PluginContext, but avoid circular import
+    context,  # Type: PluginContext, but avoid circular import
+    user_id: int,
 ) -> list[dict[str, Any]]:
     from .storage import PaperStorage
     storage = PaperStorage(context.data_dir)
 
-    topics = await asyncio.to_thread(storage.get_topics)
+    topics = await asyncio.to_thread(storage.get_topics, user_id)
     if not topics:
         return segments("🏷️ 请先添加研究兴趣关键词\n用法: /paper topics add <关键词>")
 
@@ -99,7 +100,8 @@ async def cmd_daily(
 async def cmd_ref_add(
     client: ADSClient,
     args: str,
-    context  # Type: PluginContext, but avoid circular import
+    context,  # Type: PluginContext, but avoid circular import
+    user_id: int,
 ) -> list[dict[str, Any]]:
     if not args.strip():
         return segments("❌ 请提供论文标识符\n用法: /paper ref_add <arXiv ID / arXiv链接 / Bibcode>")
@@ -117,19 +119,9 @@ async def cmd_ref_add(
     from .storage import PaperStorage
     storage = PaperStorage(context.data_dir)
 
-    ref_file = context.data_dir / "references.bib"
-    
     try:
-        existing = ""
-        if ref_file.exists():
-            existing = ref_file.read_text(encoding="utf-8")
-
-        # Check for existing entry using regex to ensure accurate matching of the bibcode key
-        # Pattern looks for @type{bibcode,
-        if re.search(r'@\w+\{' + re.escape(bibcode) + r',', existing):
+        if not await asyncio.to_thread(storage.add_reference, user_id, bibcode, bibtex):
             return segments(f"⚠️ 该引用已在文献库中 (Bibcode: {bibcode})")
-
-        ref_file.write_text(existing + "\n" + bibtex + "\n", encoding="utf-8")
 
         lines = [
             "✅ 已添加到文献库\n",
@@ -147,15 +139,15 @@ async def cmd_ref_add(
         return segments(f"❌ 添加引用失败: {e}")
 
 async def cmd_refs(
-    context  # Type: PluginContext, but avoid circular import
+    context,  # Type: PluginContext, but avoid circular import
+    user_id: int,
 ) -> list[dict[str, Any]]:
-    ref_file = context.data_dir / "references.bib"
-
-    if not ref_file.exists():
-        return segments("📚 文献库为空\n\n提示: 使用 '/paper ref_add <ID>' 添加引用")
-
     try:
-        content = ref_file.read_text(encoding="utf-8")
+        from .storage import PaperStorage
+        storage = PaperStorage(context.data_dir)
+        content = await asyncio.to_thread(storage.get_references, user_id)
+        if not content:
+            return segments("📚 文献库为空\n\n提示: 使用 '/paper ref_add <ID>' 添加引用")
         entries = [e.strip() for e in content.split("@") if e.strip()]
 
         if not entries:

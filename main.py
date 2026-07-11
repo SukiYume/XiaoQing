@@ -1,26 +1,33 @@
+import argparse
 import asyncio
 import signal
-import sys, os
-# Windows local workaround for Intel MKL duplicate runtime conflicts when
-# torch and numpy coexist. This can mask a real MKL packaging issue; remove it
-# when the dependency stack is cleaned up.
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
-
-# 尽早导入 torch 以避免 DLL 加载冲突 (WinError 127)
-try:
-    import torch
-except ImportError:
-    pass
-
+import sys
+from collections.abc import Sequence
 from pathlib import Path
 
-# 将当前目录添加到 sys.path，使项目不依赖文件夹名称
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from core.app import XiaoQingApp
+def _build_parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="xiaoqing",
+        description="XiaoQing QQ Bot framework",
+    )
+
+
+def _prepare_runtime() -> None:
+    """Load optional runtime dependencies without changing operator environment."""
+    # Some optional plugins require torch. Importing it early preserves the
+    # established DLL-load behavior, but OpenMP compatibility settings remain
+    # an explicit deployment decision rather than a process-wide workaround.
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        pass
 
 
 async def main() -> None:
+    _prepare_runtime()
+    from core.app import XiaoQingApp
+
     app = XiaoQingApp(Path(__file__).resolve().parent)
     stop_event = asyncio.Event()
 
@@ -39,13 +46,6 @@ async def main() -> None:
 
     try:
         await app.start()
-    except Exception:
-        try:
-            await asyncio.shield(app.stop())
-        except Exception:
-            pass
-        raise
-    try:
         await stop_event.wait()
     except KeyboardInterrupt:
         pass
@@ -56,7 +56,8 @@ async def main() -> None:
             pass
 
 
-def cli() -> None:
+def cli(argv: Sequence[str] | None = None) -> None:
+    _build_parser().parse_args(argv)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

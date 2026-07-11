@@ -56,7 +56,8 @@ async def test_build_memory_block_fallback_keeps_global_memory_hits() -> None:
     async def fake_react_retrieve(**kwargs) -> str:
         return ""
 
-    def fake_query(question, *, top_k, min_score, type_filter=None, meta_filter=None):
+    def fake_query(question, *, chat_id, top_k, min_score, type_filter=None, meta_filter=None):
+        assert chat_id == "group-1"
         assert meta_filter is None
         return [
             RetrievedItem(
@@ -122,7 +123,8 @@ async def test_build_memory_block_uses_current_text_when_question_generation_fai
     async def fake_react_retrieve(**kwargs) -> str:
         return ""
 
-    def fake_query(question, *, top_k, min_score, type_filter=None, meta_filter=None):
+    def fake_query(question, *, chat_id, top_k, min_score, type_filter=None, meta_filter=None):
+        assert chat_id == "g1"
         queried.append(question)
         return [
             RetrievedItem(
@@ -188,7 +190,8 @@ async def test_build_memory_block_uses_control_payload_for_react() -> None:
         captured["extra_payload"] = kwargs.get("extra_payload")
         return "记得她之前说过喜欢吃辣"
 
-    def fake_query(question, *, top_k, min_score, type_filter=None, meta_filter=None):
+    def fake_query(question, *, chat_id, top_k, min_score, type_filter=None, meta_filter=None):
+        assert chat_id == "g1"
         return []
 
     memory_db = MemoryDB()

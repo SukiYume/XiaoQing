@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import logging
 import re
 from typing import Any
@@ -37,16 +36,20 @@ def _default_group_id(context: Any) -> int | None:
     return None
 
 
-def _load_codex_summary_entrypoint() -> Any:
-    errors: list[Exception] = []
-    for module_name in ("codex.arxiv_summary", "plugins.codex.arxiv_summary"):
-        try:
-            module = importlib.import_module(module_name)
-            logger.info("using Codex arXiv summary module: %s", module_name)
-            return module.enqueue_or_replay_arxiv_summary
-        except Exception as exc:
-            errors.append(exc)
-    raise ImportError("Codex arXiv summary module is unavailable") from errors[-1]
+def _resolve_delivery_target(
+    context: Any,
+    *,
+    user_id: int | None,
+    group_id: int | None,
+) -> tuple[int | None, int | None]:
+    """Resolve the sidecar target without confusing a private chat with a scheduler run."""
+    capabilities = getattr(context, "capabilities", None)
+    if capabilities is not None and getattr(capabilities, "is_system", False):
+        if user_id is None and group_id is None:
+            return None, _default_group_id(context)
+        return user_id, group_id
+    effective_user_id = user_id if user_id is not None else getattr(context, "current_user_id", None)
+    return effective_user_id, group_id
 
 
 def schedule_codex_summary_from_filter_result(
@@ -89,26 +92,39 @@ def schedule_codex_summary(
 
     async def _runner() -> None:
         try:
-            enqueue_or_replay_arxiv_summary = _load_codex_summary_entrypoint()
+            target_user_id, target_group_id = _resolve_delivery_target(
+                context,
+                user_id=user_id,
+                group_id=group_id,
+            )
 
             logger.info(
-                "enqueue Codex arXiv summary sidecar: date=%s links=%d",
+                "enqueue Codex arXiv summary sidecar: date=%s links=%d user=%s group=%s",
                 date,
                 len(links),
+                target_user_id,
+                target_group_id,
             )
-            result = await enqueue_or_replay_arxiv_summary(
-                context,
+            result = await context.call_plugin(
+                "codex",
+                "enqueue_or_replay_arxiv_summary",
                 date=date,
                 links=links,
-                user_id=user_id or getattr(context, "current_user_id", None),
-                group_id=group_id or _default_group_id(context),
+                user_id=target_user_id,
+                group_id=target_group_id,
             )
             logger.info("Codex arXiv summary sidecar enqueue result: %s", result)
         except Exception as exc:
             logger.exception("failed to enqueue Codex arXiv summary for %s: %s", date, exc)
 
     try:
-        return asyncio.create_task(_runner())
+        task = asyncio.create_task(_runner())
+        state = getattr(context, "state", None)
+        if isinstance(state, dict):
+            tasks = state.setdefault("arxiv_background_tasks", set())
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+        return task
     except Exception as exc:
         logger.exception("failed to schedule Codex arXiv summary for %s: %s", date, exc)
         return None
