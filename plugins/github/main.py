@@ -13,8 +13,16 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
-from core.plugin_base import segments, write_json
 from core.args import parse
+from core.bounded_http import (
+    HTML_MIME_POLICY,
+    BodyLimits,
+    HttpStatusError,
+    RedirectPolicy,
+    aiohttp_request_bounded,
+)
+from core.plugin_base import segments, write_json
+from core.public_errors import public_error_response
 from core.safe_http import fetch_public_html
 
 logger = logging.getLogger(__name__)
@@ -26,6 +34,16 @@ logger = logging.getLogger(__name__)
 VALID_RANGES: set[str] = {"daily", "weekly", "monthly"}
 RANGE_NAMES = {"daily": "每日", "weekly": "每周", "monthly": "每月"}
 MAX_HTML_BYTES = 2 * 1024 * 1024
+_GITHUB_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=MAX_HTML_BYTES,
+    max_decoded_bytes=4 * 1024 * 1024,
+)
+_GITHUB_PROXY_REDIRECTS = RedirectPolicy(
+    max_hops=3,
+    allowed_schemes=frozenset({"https"}),
+    allowed_origins=frozenset({"https://github.com"}),
+    same_origin_only=True,
+)
 _HISTORY_LOCK = threading.RLock()
 
 # ============================================================
@@ -70,9 +88,8 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
         # 未知命令时显示帮助
         return segments(f"未知命令: {subcommand}\n{_show_help()}")
         
-    except Exception as e:
-        logger.exception("GitHub handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="github.handle")
 
 async def scheduled(context) -> list[dict[str, Any]]:
     """定时任务入口"""
@@ -107,15 +124,10 @@ async def _fetch_trending(time_range: str, context) -> list[dict[str, Any]]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    # 发送请求
     proxy = _get_proxy(context)
-    request_kwargs: dict[str, Any] = {"headers": headers}
-    if proxy:
-        request_kwargs["proxy"] = proxy
-    request_kwargs["timeout"] = 15
 
     try:
-        if context.http_session.__class__.__module__.startswith("aiohttp"):
+        if not proxy:
             fetched = await fetch_public_html(
                 url,
                 headers=headers,
@@ -126,17 +138,26 @@ async def _fetch_trending(time_range: str, context) -> list[dict[str, Any]]:
                 return segments("❌ GitHub 返回了无效响应")
             html = fetched.body.decode(fetched.charset or "utf-8", errors="replace")
         else:
-            # Injected clients used by embedders/tests; production uses the
-            # DNS-pinned, bounded safe client above.
-            async with context.http_session.get(url, **request_kwargs) as response:
-                if response.status != 200:
-                    return segments(f"❌ HTTP {response.status}")
-                html = await response.text()
-                if len(html.encode("utf-8")) > MAX_HTML_BYTES:
-                    return segments("❌ GitHub 页面超过大小限制")
+            # A configured proxy resolves/connects to the target itself, so a
+            # local pinned resolver cannot constrain that DNS hop.  The proxy
+            # is administrator-trusted; every visible target and redirect is
+            # still restricted to the exact HTTPS GitHub origin, and the body
+            # remains bounded before decoding or parsing.
+            fetched = await aiohttp_request_bounded(
+                context.http_session,
+                "GET",
+                url,
+                limits=_GITHUB_BODY_LIMITS,
+                mime_policy=HTML_MIME_POLICY,
+                redirect_policy=_GITHUB_PROXY_REDIRECTS,
+                headers=headers,
+                request_kwargs={"proxy": proxy, "timeout": 15},
+            )
+            html = fetched.body.decode(fetched.charset or "utf-8", errors="replace")
+    except HttpStatusError as exc:
+        return segments(f"❌ HTTP {exc.status}")
     except Exception as exc:
-        logger.exception("GitHub fetch failed: %s", exc)
-        return segments(f"❌ 获取失败: {exc}")
+        return public_error_response(context, exc, logger=logger, component="github.fetch")
 
     # 解析 HTML
     repos = await asyncio.to_thread(_parse_trending_html, html)

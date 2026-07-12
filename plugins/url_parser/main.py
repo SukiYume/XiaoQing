@@ -5,22 +5,24 @@ URL 解析插件
 """
 
 # 标准库
-import logging
 import hashlib
+import logging
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 # 第三方库
 from bs4 import BeautifulSoup
 
+from core.plugin_base import atomic_write_bytes, run_sync, segments
+
 # 本地导入
 from core.plugin_base import image as image_segment
-from core.plugin_base import atomic_write_bytes, run_sync, segments
+from core.public_errors import public_error_message
 from core.safe_http import (
     SafeHttpError,
     UnsafeUrlError,
-    fetch_public_html,
     fetch_public_bytes,
+    fetch_public_html,
     validate_public_fetch_target,
 )
 
@@ -40,6 +42,7 @@ REQUEST_TIMEOUT = 10
 # 插件初始化
 # ============================================================
 
+
 def init(context=None) -> None:
     """插件初始化"""
     logger.info("URL 解析插件已加载 (URL Parser Plugin Loaded)")
@@ -48,6 +51,7 @@ def init(context=None) -> None:
 # ============================================================
 # URL 解析处理
 # ============================================================
+
 
 async def handle_url(url: str, event: dict, context) -> list:
     """处理 URL 解析"""
@@ -74,25 +78,27 @@ async def handle_url(url: str, event: dict, context) -> list:
 
         # 在线程池中解析 HTML
         def _parse(html_content):
-            soup = BeautifulSoup(html_content, 'html.parser')
+            soup = BeautifulSoup(html_content, "html.parser")
 
-            title = str(soup.title.string).strip() if soup.title and soup.title.string else ''
+            title = str(soup.title.string).strip() if soup.title and soup.title.string else ""
 
             # 获取描述
-            desc = ''
-            meta_desc = soup.find('meta', attrs={'name': 'description'}) or \
-                        soup.find('meta', attrs={'property': 'og:description'})
+            desc = ""
+            meta_desc = soup.find("meta", attrs={"name": "description"}) or soup.find(
+                "meta", attrs={"property": "og:description"}
+            )
             if meta_desc:
-                content = meta_desc.get('content')
+                content = meta_desc.get("content")
                 if isinstance(content, str):
                     desc = content.strip()
 
             # 获取图片
-            image_url = ''
-            meta_img = soup.find('meta', attrs={'property': 'og:image'}) or \
-                       soup.find('meta', attrs={'name': 'twitter:image'})
+            image_url = ""
+            meta_img = soup.find("meta", attrs={"property": "og:image"}) or soup.find(
+                "meta", attrs={"name": "twitter:image"}
+            )
             if meta_img:
-                image_url = str(meta_img.get('content', '') or '').strip()
+                image_url = str(meta_img.get("content", "") or "").strip()
 
             return title, desc, image_url
 
@@ -110,7 +116,13 @@ async def handle_url(url: str, event: dict, context) -> list:
                     image_url = ""
                 else:
                     content_type = fetched_image.headers.get("Content-Type", "image/jpeg").lower()
-                    extension = ".png" if "png" in content_type else ".webp" if "webp" in content_type else ".jpg"
+                    extension = (
+                        ".png"
+                        if "png" in content_type
+                        else ".webp"
+                        if "webp" in content_type
+                        else ".jpg"
+                    )
                     preview_dir = Path(context.data_dir) / "url_previews"
                     preview_dir.mkdir(parents=True, exist_ok=True)
                     digest = hashlib.sha256(fetched_image.url.encode("utf-8")).hexdigest()
@@ -145,20 +157,31 @@ async def handle_url(url: str, event: dict, context) -> list:
         if image_url:
             response.append(image_segment(image_url))
 
-        logger.info("URL 解析成功: host=%s title_length=%d", urlsplit(url).hostname or "", len(title))
+        logger.info(
+            "URL 解析成功: host=%s title_length=%d", urlsplit(url).hostname or "", len(title)
+        )
         return response
 
     except (SafeHttpError, UnsafeUrlError) as exc:
-        logger.debug("URL 请求 rejected or failed safely: %s", exc)
+        logger.debug(
+            "URL request rejected or failed safely error_type=%s",
+            type(exc).__name__,
+        )
         return []
     except Exception as exc:
-        logger.exception("URL 解析失败: %s", type(exc).__name__)
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="url_parser.handle_url",
+        )
         return []
 
 
 # ============================================================
 # 主处理函数（占位符）
 # ============================================================
+
 
 async def handle(command: str, args: str, event: dict, context) -> list:
     """占位符，避免 PluginManager 警告

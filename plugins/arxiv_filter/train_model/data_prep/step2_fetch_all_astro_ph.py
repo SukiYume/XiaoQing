@@ -30,9 +30,29 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
-
 feedparser = importlib.import_module("feedparser")
+
+try:
+    from core.bounded_http import (
+        XML_MIME_POLICY,
+        BodyLimits,
+        RedirectPolicy,
+        XmlLimits,
+        requests_request_bounded,
+        validate_bounded_xml,
+    )
+except ModuleNotFoundError:  # Direct script execution outside the repository root.
+    repository_root = Path(__file__).resolve().parents[4]
+    if str(repository_root) not in sys.path:
+        sys.path.insert(0, str(repository_root))
+    from core.bounded_http import (
+        XML_MIME_POLICY,
+        BodyLimits,
+        RedirectPolicy,
+        XmlLimits,
+        requests_request_bounded,
+        validate_bounded_xml,
+    )
 
 try:
     from .utils import clean_arxiv_id
@@ -56,6 +76,25 @@ HEADERS = {
 MAX_RESULTS = 2000  # 每页最大结果数
 RETRY_LIMIT = 5  # 单次请求重试次数
 DELAY = 3  # 请求间隔（秒）
+ATOM_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=16 * 1024 * 1024,
+    max_decoded_bytes=32 * 1024 * 1024,
+    max_decompression_ratio=100,
+)
+ATOM_XML_LIMITS = XmlLimits(
+    max_bytes=ATOM_BODY_LIMITS.max_decoded_bytes,
+    max_depth=64,
+    max_nodes=100_000,
+    max_attributes=200_000,
+    max_attribute_chars=4 * 1024 * 1024,
+    max_name_chars=512,
+    max_text_chars=24 * 1024 * 1024,
+)
+ARXIV_REDIRECT_POLICY = RedirectPolicy(
+    max_hops=3,
+    allowed_schemes=frozenset({"https"}),
+    same_origin_only=True,
+)
 
 
 # ============================================================
@@ -219,9 +258,17 @@ def fetch_month(
         feed = None
         for attempt in range(1, RETRY_LIMIT + 1):
             try:
-                r = requests.get(API_URL, params=params, headers=HEADERS, timeout=120)
-                r.raise_for_status()
-                feed = feedparser.parse(r.content)
+                response = requests_request_bounded(
+                    "GET",
+                    API_URL,
+                    limits=ATOM_BODY_LIMITS,
+                    mime_policy=XML_MIME_POLICY,
+                    redirect_policy=ARXIV_REDIRECT_POLICY,
+                    headers=HEADERS,
+                    request_kwargs={"params": params, "timeout": 120},
+                )
+                xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
+                feed = feedparser.parse(xml_body)
                 if offset == 0 and "opensearch_totalresults" in feed.feed:
                     total_results = int(feed.feed.opensearch_totalresults)
                 break

@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from core.plugin_base import segments
+from core.public_errors import public_error_response
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def mask_secret(value: Any) -> str:
             return f"{{<{len(value)} keys>}}"
         return "[hidden]"
     except Exception as e:
-        logger.error("遮罩密钥失败: %s", e)
+        logger.error("遮罩密钥失败 error_type=%s", type(e).__name__)
         return "[error]"
 
 async def handle(command: str, args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
@@ -122,9 +123,13 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
         logger.warning("未知命令: %s", command)
         return segments("❌ 未知命令")
         
-    except Exception as e:
-        logger.error("处理命令 %s 失败: %s", command, e, exc_info=True)
-        return segments(f"❌ 命令执行失败: {e}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="bot_core.handle",
+        )
 
 # ============================================================
 # 子命令处理函数
@@ -169,9 +174,13 @@ def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
         logger.debug("显示全部帮助: %d 行", len(lines))
         return segments(header + body + footer)
         
-    except Exception as e:
-        logger.error("处理 help 命令失败: %s", e, exc_info=True)
-        return segments(f"❌ 查询帮助失败: {e}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="bot_core.help",
+        )
 
 def _filter_help_lines(lines: list[str], keyword: str) -> list[str]:
     """
@@ -280,9 +289,13 @@ async def _handle_reload(context) -> list[dict[str, Any]]:
             await reload_task
         logger.info("配置和插件重载成功")
         return segments("✅ 配置与插件已重载")
-    except Exception as e:
-        logger.error("重载失败: %s", e, exc_info=True)
-        return segments(f"❌ 重载失败: {e}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="bot_core.reload",
+        )
 
 def _handle_plugins(context) -> list[dict[str, Any]]:
     """列出已加载的插件
@@ -303,9 +316,13 @@ def _handle_plugins(context) -> list[dict[str, Any]]:
         body = "\n".join(f"  • {name}" for name in plugins)
         logger.info("显示插件列表: %d 个", len(plugins))
         return segments(header + body)
-    except Exception as e:
-        logger.error("获取插件列表失败: %s", e, exc_info=True)
-        return segments(f"❌ 获取插件列表失败: {e}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="bot_core.plugins",
+        )
 
 def _handle_mute(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     """处理闭嘴命令
@@ -354,9 +371,13 @@ def _handle_mute(args: str, event: dict[str, Any], context) -> list[dict[str, An
         logger.info("群 %s 设置静音: %s 分钟", group_id, duration)
         return segments(f"🤐 好的，我会安静 {time_str}")
         
-    except Exception as e:
-        logger.error("处理静音命令失败: %s", e, exc_info=True)
-        return segments(f"❌ 设置静音失败: {e}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="bot_core.mute",
+        )
 
 def _handle_unmute(event: dict[str, Any], context) -> list[dict[str, Any]]:
     """处理说话命令
@@ -386,9 +407,13 @@ def _handle_unmute(event: dict[str, Any], context) -> list[dict[str, Any]]:
         logger.info("群 %s 解除静音，剩余 %.1f 分钟", group_id, remaining)
         return segments("😊 好的，我又可以说话啦！")
         
-    except Exception as e:
-        logger.error("处理说话命令失败: %s", e, exc_info=True)
-        return segments(f"❌ 解除静音失败: {e}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="bot_core.unmute",
+        )
 
 def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
     """设置 secrets 中的某个值
@@ -453,8 +478,12 @@ def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
         logger.warning("配置路径类型错误: %s", path)
         return segments(f"❌ {exc}")
     except Exception as exc:
-        logger.error("设置密钥失败: %s", exc, exc_info=True)
-        return segments(f"❌ 更新失败: {exc}")
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="bot_core.set_secret",
+        )
 
 def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
     """查看 secrets 中的某个值
@@ -516,8 +545,12 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
         logger.info("配置路径不存在: %s", path)
         return segments(f"❌ 路径 {path} 不存在")
     except Exception as exc:
-        logger.error("查询密钥失败: %s", exc, exc_info=True)
-        return segments(f"❌ 查询失败: {exc}")
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="bot_core.get_secret",
+        )
 
 async def _handle_metrics(context) -> list[dict[str, Any]]:
     """查看运行指标
@@ -563,9 +596,13 @@ async def _handle_metrics(context) -> list[dict[str, Any]]:
         logger.info("查询运行指标")
         return segments("\n".join(lines))
         
-    except Exception as e:
-        logger.error("查询 Metrics 失败: %s", e, exc_info=True)
-        return segments(f"❌ 查询 Metrics 失败: {e}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="bot_core.metrics",
+        )
 
 def _parse_duration(text: str) -> float:
     """解析时长字符串

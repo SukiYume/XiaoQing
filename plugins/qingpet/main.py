@@ -25,6 +25,7 @@ import secrets
 from typing import Any, Optional
 
 from core.plugin_base import segments
+from core.public_errors import public_error_message, public_error_response
 
 from .commands import (
     handle_activity,
@@ -191,8 +192,13 @@ async def init(context) -> None:
         _admin_service = AdminService(_db_instance)
 
         log.info("Qingpet plugin initialized successfully")
-    except Exception as e:
-        log.exception(f"Failed to initialize Qingpet plugin: {e}")
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=log,
+            component="qingpet.init",
+        )
 
 
 async def cleanup(context) -> None:
@@ -639,23 +645,26 @@ async def handle(command: str, args: str, event: dict[str, Any], context, **kwar
                 spam_decay=spam_decay,
                 message_id=str(message_id),
             )
-        except Exception as e:
-            log.exception(f"Error executing command '{action}': {e}")
-            return f"执行命令时发生错误: {str(e)}"
+        except Exception as exc:
+            return public_error_message(
+                context,
+                exc,
+                logger=log,
+                component="qingpet.command",
+            )
 
     try:
         def _run_execute() -> Any:
             return asyncio.run(_execute())
 
         result = await asyncio.to_thread(_run_execute)
-    except Exception as e:
-        request_id = str(getattr(context, "request_id", "") or secrets.token_hex(4))
-        log.exception(
-            "QingPet command failed request_id=%s error_type=%s",
-            request_id,
-            type(e).__name__,
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=log,
+            component="qingpet.handle",
         )
-        return segments(f"宠物命令暂时执行失败，请稍后重试（请求ID: {request_id}）")
 
     return _normalize_plugin_output(result)
 
@@ -781,8 +790,13 @@ async def scheduled_decay(context) -> list[dict[str, Any]]:
 
     try:
         return await asyncio.to_thread(_run_job)
-    except Exception as e:
-        log.exception(f"Error in scheduled decay: {e}")
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=log,
+            component="qingpet.schedule.decay",
+        )
         return []
 
 
@@ -816,8 +830,13 @@ async def scheduled_daily_reset(context) -> list[dict[str, Any]]:
 
     try:
         return await asyncio.to_thread(_run_job)
-    except Exception as e:
-        log.exception(f"Error in daily reset: {e}")
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=log,
+            component="qingpet.schedule.daily_reset",
+        )
         return []
 
 
@@ -885,6 +904,11 @@ async def scheduled_weekly_activity(context) -> list[dict[str, Any]]:
 
     try:
         return await asyncio.to_thread(_run_job)
-    except Exception as e:
-        log.exception(f"Error in weekly activity: {e}")
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=log,
+            component="qingpet.schedule.weekly_activity",
+        )
         return []

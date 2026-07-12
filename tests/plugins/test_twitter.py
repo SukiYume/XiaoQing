@@ -12,6 +12,7 @@ twitter 插件单元测试
 """
 
 import hashlib
+import json
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,9 +26,30 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 import importlib.util
 
-spec = importlib.util.spec_from_file_location("twitter_main", ROOT / "plugins" / "twitter" / "main.py")
+spec = importlib.util.spec_from_file_location(
+    "twitter_main", ROOT / "plugins" / "twitter" / "main.py"
+)
 twitter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(twitter)
+
+
+@pytest.fixture(autouse=True)
+def bounded_transport_adapter(monkeypatch):
+    """Adapt the historical response mocks to the bounded transport API."""
+
+    async def request(session, method, url, **kwargs):
+        request_kwargs = dict(kwargs.get("request_kwargs") or {})
+        response_cm = getattr(session, method.lower())(
+            url,
+            headers=kwargs.get("headers"),
+            **request_kwargs,
+        )
+        async with response_cm as response:
+            if response.status != 200:
+                raise twitter.HttpStatusError(response.status)
+            return json.dumps(await response.json()).encode("utf-8")
+
+    monkeypatch.setattr(twitter, "aiohttp_request_bounded", request)
 
 
 def _image_bytes(image_format: str = "PNG", color=(10, 20, 30)) -> bytes:
@@ -40,10 +62,12 @@ def _image_bytes(image_format: str = "PNG", color=(10, 20, 30)) -> bytes:
 # Fixtures
 # ============================================================
 
+
 @pytest.fixture
 def temp_data_dir():
     """创建临时数据目录"""
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
 
@@ -71,6 +95,7 @@ def install_media_fetch(monkeypatch):
 @pytest.fixture
 def mock_context(temp_data_dir):
     """模拟插件上下文"""
+
     class MockContext:
         def __init__(self, data_dir):
             self.data_dir = data_dir
@@ -81,7 +106,7 @@ def mock_context(temp_data_dir):
                         "headers": {"authorization": "Bearer test_token"},
                         "cookies": {"ct0": "test_csrf"},
                         "proxy": "http://proxy.example.com:8080",
-                        "max_pages": 50
+                        "max_pages": 50,
                     }
                 }
             }
@@ -97,6 +122,7 @@ def mock_context(temp_data_dir):
 @pytest.fixture
 def mock_context_no_config(temp_data_dir):
     """模拟没有配置的上下文"""
+
     class MockContext:
         def __init__(self, data_dir):
             self.data_dir = data_dir
@@ -113,11 +139,7 @@ def mock_context_no_config(temp_data_dir):
 @pytest.fixture
 def mock_event():
     """模拟事件"""
-    return {
-        "user_id": 12345,
-        "group_id": 100000001,
-        "message_type": "group"
-    }
+    return {"user_id": 12345, "group_id": 100000001, "message_type": "group"}
 
 
 # ============================================================
@@ -145,7 +167,7 @@ SAMPLE_TWITTER_TIMELINE_RESPONSE = {
                                                                 "media": [
                                                                     {
                                                                         "type": "photo",
-                                                                        "media_url_https": "https://pbs.twimg.com/media/ABC123.jpg"
+                                                                        "media_url_https": "https://pbs.twimg.com/media/ABC123.jpg",
                                                                     }
                                                                 ]
                                                             }
@@ -153,15 +175,13 @@ SAMPLE_TWITTER_TIMELINE_RESPONSE = {
                                                     }
                                                 }
                                             }
-                                        }
+                                        },
                                     },
                                     {
                                         "entryId": "cursor-bottom-12345",
-                                        "content": {
-                                            "value": "next_cursor_token"
-                                        }
-                                    }
-                                ]
+                                        "content": {"value": "next_cursor_token"},
+                                    },
+                                ],
                             }
                         ]
                     }
@@ -176,14 +196,7 @@ SAMPLE_TWITTER_EMPTY_RESPONSE = {
         "user": {
             "result": {
                 "timeline": {
-                    "timeline": {
-                        "instructions": [
-                            {
-                                "type": "TimelineAddEntries",
-                                "entries": []
-                            }
-                        ]
-                    }
+                    "timeline": {"instructions": [{"type": "TimelineAddEntries", "entries": []}]}
                 }
             }
         }
@@ -194,6 +207,7 @@ SAMPLE_TWITTER_EMPTY_RESPONSE = {
 # ============================================================
 # Test Init
 # ============================================================
+
 
 class TestInit:
     """测试插件初始化"""
@@ -207,6 +221,7 @@ class TestInit:
 # ============================================================
 # Test Config
 # ============================================================
+
 
 class TestConfig:
     """测试配置功能"""
@@ -243,17 +258,12 @@ class TestConfig:
 
     def test_get_headers_with_custom(self, temp_data_dir):
         """测试自定义请求头"""
+
         class MockContext:
             def __init__(self, data_dir):
                 self.data_dir = data_dir
                 self.secrets = {
-                    "plugins": {
-                        "twitter": {
-                            "headers": {
-                                "x-custom-header": "custom_value"
-                            }
-                        }
-                    }
+                    "plugins": {"twitter": {"headers": {"x-custom-header": "custom_value"}}}
                 }
                 self.http_session = None
                 self.logger = MagicMock()
@@ -303,6 +313,7 @@ class TestConfig:
 # Test Image Extraction
 # ============================================================
 
+
 class TestImageExtraction:
     """测试图片提取功能"""
 
@@ -318,7 +329,7 @@ class TestImageExtraction:
                                     "media": [
                                         {
                                             "type": "photo",
-                                            "media_url_https": "https://pbs.twimg.com/media/ABC123.jpg"
+                                            "media_url_https": "https://pbs.twimg.com/media/ABC123.jpg",
                                         }
                                     ]
                                 }
@@ -345,16 +356,16 @@ class TestImageExtraction:
                                     "media": [
                                         {
                                             "type": "photo",
-                                            "media_url_https": "https://pbs.twimg.com/media/ABC123.jpg"
+                                            "media_url_https": "https://pbs.twimg.com/media/ABC123.jpg",
                                         },
                                         {
                                             "type": "photo",
-                                            "media_url_https": "https://pbs.twimg.com/media/DEF456.jpg"
+                                            "media_url_https": "https://pbs.twimg.com/media/DEF456.jpg",
                                         },
                                         {
                                             "type": "photo",
-                                            "media_url_https": "https://pbs.twimg.com/media/GHI789.jpg"
-                                        }
+                                            "media_url_https": "https://pbs.twimg.com/media/GHI789.jpg",
+                                        },
                                     ]
                                 }
                             }
@@ -369,17 +380,7 @@ class TestImageExtraction:
 
     def test_extract_image_urls_no_media(self):
         """测试没有媒体时返回空列表"""
-        tweet = {
-            "content": {
-                "itemContent": {
-                    "tweet_results": {
-                        "result": {
-                            "legacy": {}
-                        }
-                    }
-                }
-            }
-        }
+        tweet = {"content": {"itemContent": {"tweet_results": {"result": {"legacy": {}}}}}}
 
         urls = twitter._extract_image_urls(tweet)
         assert len(urls) == 0
@@ -396,12 +397,12 @@ class TestImageExtraction:
                                     "media": [
                                         {
                                             "type": "photo",
-                                            "media_url_https": "https://pbs.twimg.com/media/ABC123.jpg"
+                                            "media_url_https": "https://pbs.twimg.com/media/ABC123.jpg",
                                         },
                                         {
                                             "type": "video",
-                                            "media_url_https": "https://pbs.twimg.com/media/VIDEO.mp4"
-                                        }
+                                            "media_url_https": "https://pbs.twimg.com/media/VIDEO.mp4",
+                                        },
                                     ]
                                 }
                             }
@@ -420,6 +421,7 @@ class TestImageExtraction:
 # Test Timeline Fetching
 # ============================================================
 
+
 class TestTimelineFetching:
     """测试时间线获取功能"""
 
@@ -430,12 +432,14 @@ class TestTimelineFetching:
 
         class MockResponse:
             status = 200
+
             async def json(self):
                 return SAMPLE_TWITTER_TIMELINE_RESPONSE
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -457,14 +461,17 @@ class TestTimelineFetching:
     @pytest.mark.asyncio
     async def test_fetch_timeline_with_cursor(self, mock_context):
         """测试带 cursor 获取时间线"""
+
         class MockResponse:
             status = 200
+
             async def json(self):
                 return SAMPLE_TWITTER_TIMELINE_RESPONSE
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -480,14 +487,17 @@ class TestTimelineFetching:
     @pytest.mark.asyncio
     async def test_fetch_timeline_http_error(self, mock_context):
         """测试 HTTP 错误"""
+
         class MockResponse:
             status = 403
+
             async def text(self):
                 return "Forbidden"
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -505,9 +515,11 @@ class TestTimelineFetching:
     @pytest.mark.asyncio
     async def test_fetch_timeline_exception(self, mock_context):
         """测试异常情况"""
+
         class MockGetContextManager:
             async def __aenter__(self):
                 raise aiohttp.ClientError("Connection error")
+
             async def __aexit__(self, *args):
                 pass
 
@@ -527,6 +539,7 @@ class TestTimelineFetching:
 # Test Image Download
 # ============================================================
 
+
 class TestImageDownload:
     """测试图片下载功能"""
 
@@ -544,9 +557,7 @@ class TestImageDownload:
         save_dir.mkdir(parents=True, exist_ok=True)
 
         result = await twitter._download_image(
-            "https://pbs.twimg.com/media/ABC123.jpg",
-            save_dir,
-            mock_context
+            "https://pbs.twimg.com/media/ABC123.jpg", save_dir, mock_context
         )
 
         assert result is True
@@ -560,6 +571,15 @@ class TestImageDownload:
         assert fetch.await_args.kwargs["max_bytes"] == twitter.MAX_IMAGE_BYTES
         assert fetch.await_args.kwargs["timeout_seconds"] == twitter.REQUEST_TIMEOUT_SECONDS
         assert "proxy" not in fetch.await_args.kwargs
+        media_headers = {
+            key.casefold(): value for key, value in fetch.await_args.kwargs["headers"].items()
+        }
+        assert media_headers["accept"] == "image/*"
+        assert media_headers["accept-encoding"] == "identity"
+        assert "user-agent" in media_headers
+        assert "authorization" not in media_headers
+        assert "cookie" not in media_headers
+        assert "x-custom-header" not in media_headers
 
     @pytest.mark.asyncio
     async def test_download_image_already_exists(
@@ -599,9 +619,7 @@ class TestImageDownload:
         save_dir.mkdir(parents=True, exist_ok=True)
 
         result = await twitter._download_image(
-            "https://pbs.twimg.com/media/ABC123.jpg",
-            save_dir,
-            mock_context
+            "https://pbs.twimg.com/media/ABC123.jpg", save_dir, mock_context
         )
 
         assert result is False
@@ -620,9 +638,7 @@ class TestImageDownload:
         save_dir.mkdir(parents=True, exist_ok=True)
 
         result = await twitter._download_image(
-            "https://pbs.twimg.com/media/ABC123.jpg",
-            save_dir,
-            mock_context
+            "https://pbs.twimg.com/media/ABC123.jpg", save_dir, mock_context
         )
 
         assert result is False
@@ -651,6 +667,7 @@ class TestImageDownload:
 # ============================================================
 # Test Random Image Selection
 # ============================================================
+
 
 class TestRandomImage:
     """测试随机图片选择功能"""
@@ -702,6 +719,7 @@ class TestRandomImage:
 # Test Handle Commands
 # ============================================================
 
+
 class TestHandleCommands:
     """测试命令处理"""
 
@@ -732,7 +750,9 @@ class TestHandleCommands:
     @pytest.mark.asyncio
     async def test_handle_tw_fetch(self, mock_context, mock_event):
         """测试 tw_fetch 命令"""
-        with patch.object(twitter, '_fetch_twitter_images', new=AsyncMock(return_value=5)) as mock_fetch:
+        with patch.object(
+            twitter, "_fetch_twitter_images", new=AsyncMock(return_value=5)
+        ) as mock_fetch:
             result = await twitter.handle("tw_fetch", "", mock_event, mock_context)
             assert result is not None
             result_text = str(result)
@@ -762,7 +782,9 @@ class TestHandleCommands:
             for f in images_dir.iterdir():
                 f.unlink()
 
-        with patch.object(twitter, '_fetch_twitter_images', new=AsyncMock(return_value=0)) as mock_fetch:
+        with patch.object(
+            twitter, "_fetch_twitter_images", new=AsyncMock(return_value=0)
+        ) as mock_fetch:
             result = await twitter.handle("twimg", "", mock_event, mock_context)
             assert result is not None
             mock_fetch.assert_not_called()
@@ -775,7 +797,9 @@ class TestHandleCommands:
     @pytest.mark.asyncio
     async def test_handle_exception(self, mock_context, mock_event):
         """测试处理异常"""
-        with patch.object(twitter, '_get_random_image', new=AsyncMock(side_effect=Exception("Test error"))):
+        with patch.object(
+            twitter, "_get_random_image", new=AsyncMock(side_effect=Exception("Test error"))
+        ):
             result = await twitter.handle("twimg", "", mock_event, mock_context)
             assert result is not None
             result_text = str(result)
@@ -785,6 +809,7 @@ class TestHandleCommands:
 # ============================================================
 # Test Image Fetching
 # ============================================================
+
 
 class TestImageFetching:
     """测试图片抓取功能"""
@@ -797,6 +822,7 @@ class TestImageFetching:
 
         class MockResponse:
             status = 200
+
             async def json(self):
                 call_count[0] += 1
                 if call_count[0] == 1:
@@ -807,6 +833,7 @@ class TestImageFetching:
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -814,15 +841,20 @@ class TestImageFetching:
             def get(self, *args, **kwargs):
                 # 图片下载请求
                 if "pbs.twimg.com" in args[0]:
+
                     class ImgResp:
                         status = 200
+
                         async def read(self):
                             return b"image data"
+
                     class ImgGetCtx:
                         async def __aenter__(self):
                             return ImgResp()
+
                         async def __aexit__(self, *args):
                             pass
+
                     return ImgGetCtx()
                 return MockGetContextManager()
 
@@ -834,14 +866,17 @@ class TestImageFetching:
     @pytest.mark.asyncio
     async def test_fetch_twitter_images_empty_timeline(self, mock_context):
         """测试空时间线"""
+
         class MockResponse:
             status = 200
+
             async def json(self):
                 return SAMPLE_TWITTER_EMPTY_RESPONSE
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -859,13 +894,16 @@ class TestImageFetching:
 # Test Scheduled
 # ============================================================
 
+
 class TestScheduled:
     """测试定时任务"""
 
     @pytest.mark.asyncio
     async def test_scheduled_fetch(self, mock_context):
         """测试定时抓取任务"""
-        with patch.object(twitter, '_fetch_twitter_images', new=AsyncMock(return_value=10)) as mock_fetch:
+        with patch.object(
+            twitter, "_fetch_twitter_images", new=AsyncMock(return_value=10)
+        ) as mock_fetch:
             result = await twitter.scheduled_fetch(mock_context)
             assert result == []
             mock_fetch.assert_called_once()
@@ -873,7 +911,9 @@ class TestScheduled:
     @pytest.mark.asyncio
     async def test_scheduled_fetch_logs_new_images(self, mock_context):
         """测试定时抓取记录日志"""
-        with patch.object(twitter, '_fetch_twitter_images', new=AsyncMock(return_value=5)) as mock_fetch:
+        with patch.object(
+            twitter, "_fetch_twitter_images", new=AsyncMock(return_value=5)
+        ) as mock_fetch:
             result = await twitter.scheduled_fetch(mock_context)
             assert result == []
             # 验证函数被调用
@@ -883,6 +923,7 @@ class TestScheduled:
 # ============================================================
 # Test Help
 # ============================================================
+
 
 class TestHelp:
     """测试帮助信息"""
@@ -904,23 +945,25 @@ class TestHelp:
 # Test Constants
 # ============================================================
 
+
 class TestConstants:
     """测试常量"""
 
     def test_max_pages_const(self):
         """测试 MAX_PAGES_TO_CHECK 常量"""
-        assert hasattr(twitter, 'MAX_PAGES_TO_CHECK')
+        assert hasattr(twitter, "MAX_PAGES_TO_CHECK")
         assert twitter.MAX_PAGES_TO_CHECK > 0
 
     def test_max_pages_without_new_images(self):
         """测试 MAX_PAGES_WITHOUT_NEW_IMAGES 常量"""
-        assert hasattr(twitter, 'MAX_PAGES_WITHOUT_NEW_IMAGES')
+        assert hasattr(twitter, "MAX_PAGES_WITHOUT_NEW_IMAGES")
         assert twitter.MAX_PAGES_WITHOUT_NEW_IMAGES > 0
 
 
 # ============================================================
 # Test Edge Cases
 # ============================================================
+
 
 class TestEdgeCases:
     """测试边界情况"""
@@ -934,8 +977,8 @@ class TestEdgeCases:
             for f in images_dir.iterdir():
                 f.unlink()
 
-        with patch.object(twitter, '_fetch_twitter_images', new=AsyncMock(return_value=0)):
-            with patch.object(twitter, '_get_random_image', new=AsyncMock(return_value=None)):
+        with patch.object(twitter, "_fetch_twitter_images", new=AsyncMock(return_value=0)):
+            with patch.object(twitter, "_get_random_image", new=AsyncMock(return_value=None)):
                 result = await twitter.handle("twimg", "", mock_event, mock_context)
                 assert result is not None
                 result_text = str(result)
@@ -950,12 +993,40 @@ class TestEdgeCases:
             pages_fetched[0] += 1
             if pages_fetched[0] <= 2:
                 # Return tweets with image URLs
-                return [{"entryId": "tweet-1", "content": {"itemContent": {"tweet_results": {"result": {"legacy": {"extended_entities": {"media": [{"type": "photo", "media_url_https": "https://example.com/img.jpg"}]}}}}}}}], "cursor", True
+                return (
+                    [
+                        {
+                            "entryId": "tweet-1",
+                            "content": {
+                                "itemContent": {
+                                    "tweet_results": {
+                                        "result": {
+                                            "legacy": {
+                                                "extended_entities": {
+                                                    "media": [
+                                                        {
+                                                            "type": "photo",
+                                                            "media_url_https": "https://example.com/img.jpg",
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    ],
+                    "cursor",
+                    True,
+                )
             return [], None, False
 
-        with patch.object(twitter, '_fetch_timeline', new=mock_fetch):
-            with patch.object(twitter, '_extract_image_urls', return_value=["https://example.com/img.jpg"]):
-                with patch.object(twitter, '_download_image', new=AsyncMock(return_value=False)):
+        with patch.object(twitter, "_fetch_timeline", new=mock_fetch):
+            with patch.object(
+                twitter, "_extract_image_urls", return_value=["https://example.com/img.jpg"]
+            ):
+                with patch.object(twitter, "_download_image", new=AsyncMock(return_value=False)):
                     count = await twitter._fetch_twitter_images(mock_context)
                     # Since download returns False (already exists), count is 0
                     assert count == 0
@@ -971,8 +1042,8 @@ class TestEdgeCases:
                 return [{"entryId": "tweet-1"}], "cursor", True
             return [], None, False
 
-        with patch.object(twitter, '_fetch_timeline', new=mock_fetch):
-            with patch.object(twitter, '_extract_image_urls', return_value=[]):
+        with patch.object(twitter, "_fetch_timeline", new=mock_fetch):
+            with patch.object(twitter, "_extract_image_urls", return_value=[]):
                 count = await twitter._fetch_twitter_images(mock_context)
                 assert count == 0
 
@@ -980,6 +1051,7 @@ class TestEdgeCases:
 # ============================================================
 # Test Image Filename Handling
 # ============================================================
+
 
 class TestImageFilenameHandling:
     """测试图片文件名处理"""
@@ -1073,11 +1145,14 @@ class TestImageFilenameHandling:
         install_media_fetch(b"not an image")
         save_dir = temp_data_dir / "images"
 
-        assert await twitter._download_image(
-            "https://pbs.twimg.com/media/not-image.jpg",
-            save_dir,
-            mock_context,
-        ) is False
+        assert (
+            await twitter._download_image(
+                "https://pbs.twimg.com/media/not-image.jpg",
+                save_dir,
+                mock_context,
+            )
+            is False
+        )
         assert list(save_dir.iterdir()) == []
 
 

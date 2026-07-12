@@ -4,11 +4,32 @@ import json
 import logging
 import time
 
+from core.bounded_http import (
+    JSON_MIME_POLICY,
+    BodyLimits,
+    JsonLimits,
+    ResponseFormatError,
+    aiohttp_request_bounded,
+    parse_bounded_json,
+)
 from core.plugin_base import segments
+from core.public_errors import public_error_response
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://h5.youzan.com"
+_RESPONSE_LIMITS = BodyLimits(
+    max_wire_bytes=512 * 1024,
+    max_decoded_bytes=1024 * 1024,
+    max_decompression_ratio=20,
+)
+_JSON_LIMITS = JsonLimits(
+    max_bytes=1024 * 1024,
+    max_depth=24,
+    max_nodes=10_000,
+    max_string_chars=256_000,
+)
+_SUCCESS_STATUSES = range(200, 300)
 
 
 def _get_config(context) -> dict:
@@ -47,9 +68,19 @@ async def _get_checkin_id(session, app_id, kdt_id, access_token, headers):
     url = f"{BASE_URL}/wscump/checkin/check-in-info.json"
     payload_body = {"app_id": app_id, "kdt_id": kdt_id}
     headers = {**headers, "Authorization": f"Bearer {access_token}"}
-    async with session.get(url, params=payload_body, headers=headers, timeout=20) as resp:
-        resp.raise_for_status()
-        payload = await resp.json()
+    response = await aiohttp_request_bounded(
+        session,
+        "GET",
+        url,
+        limits=_RESPONSE_LIMITS,
+        mime_policy=JSON_MIME_POLICY,
+        success_statuses=_SUCCESS_STATUSES,
+        headers=headers,
+        request_kwargs={"params": payload_body, "timeout": 20},
+    )
+    payload = parse_bounded_json(response, limits=_JSON_LIMITS)
+    if not isinstance(payload, dict):
+        raise ResponseFormatError("YouZan response must be a JSON object")
     if payload.get("code") != 0:
         return False, "", payload.get("msg", "获取签到信息失败")
 
@@ -72,9 +103,19 @@ async def _do_checkin(session, checkin_id, app_id, kdt_id, access_token, headers
         "kdt_id": kdt_id,
     }
     headers = {**headers, "Authorization": f"Bearer {access_token}"}
-    async with session.get(url, params=payload_body, headers=headers, timeout=20) as resp:
-        resp.raise_for_status()
-        payload = await resp.json()
+    response = await aiohttp_request_bounded(
+        session,
+        "GET",
+        url,
+        limits=_RESPONSE_LIMITS,
+        mime_policy=JSON_MIME_POLICY,
+        success_statuses=_SUCCESS_STATUSES,
+        headers=headers,
+        request_kwargs={"params": payload_body, "timeout": 20},
+    )
+    payload = parse_bounded_json(response, limits=_JSON_LIMITS)
+    if not isinstance(payload, dict):
+        raise ResponseFormatError("YouZan response must be a JSON object")
     if payload.get("code") != 0:
         return False, payload.get("msg", "签到失败")
 
@@ -112,18 +153,17 @@ async def yingshi_sign(context) -> list[dict]:
         headers = _build_headers(app_id)
         headers["Extra-Data"] = json.dumps(_build_extra_data(sid))
 
-        ok, checkin_id, msg = await _get_checkin_id(
-            session, app_id, kdt_id, access_token, headers
-        )
+        ok, checkin_id, msg = await _get_checkin_id(session, app_id, kdt_id, access_token, headers)
         if not ok:
             return segments(f"❌ 影视签到\n{msg}")
 
-        ok, msg = await _do_checkin(
-            session, checkin_id, app_id, kdt_id, access_token, headers
-        )
+        ok, msg = await _do_checkin(session, checkin_id, app_id, kdt_id, access_token, headers)
         prefix = "✅" if ok else "❌"
         return segments(f"{prefix} 影视签到\n{msg}")
     except Exception as exc:
-        error_code = type(exc).__name__
-        logger.error("Yingshi sign failed: code=%s", error_code, exc_info=True)
-        return segments(f"❌ 影视签到失败（错误码: {error_code}）")
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="signin.yingshi",
+        )

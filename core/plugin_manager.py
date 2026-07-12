@@ -6,10 +6,10 @@ import logging
 import re
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
-from typing import Any, Optional
+from types import MappingProxyType, ModuleType
+from typing import Any, Callable, Mapping, Optional
 
 from .constants import PLUGIN_INIT_TIMEOUT_SECONDS, VALID_PLUGIN_NAME_PATTERN
 from .exceptions import PluginLoadError
@@ -18,6 +18,7 @@ from .models import PluginManifest
 from .plugin_base import ensure_dir, load_json
 from .plugin_execution import (
     PluginConcurrency,
+    PluginExecutionDrainResult,
     PluginExecutionGate,
     PluginExecutionPolicy,
     call_plugin_callback,
@@ -27,6 +28,7 @@ from .router import CommandRouter, CommandSpec
 
 logger = logging.getLogger(__name__)
 _TRUSTED_ADMIN_TIMEOUT_EXEMPT_PLUGINS = frozenset({"codex", "jupyter", "qingssh", "shell"})
+
 
 def _validate_plugin_name(name: str) -> bool:
     """
@@ -40,6 +42,7 @@ def _validate_plugin_name(name: str) -> bool:
     """
     return bool(re.match(VALID_PLUGIN_NAME_PATTERN, name))
 
+
 @dataclass
 class PluginDefinition:
     name: str
@@ -52,6 +55,23 @@ class PluginDefinition:
     description: str | None = None
     author: str | None = None
     dependencies: list[str] | None = None
+    services: tuple["PluginServiceDefinition", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PluginServiceDefinition:
+    name: str
+    callback: str
+    callers: frozenset[str]
+    required_capability: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedPluginService:
+    owner: str
+    definition: PluginServiceDefinition
+    callback: Callable[..., Any]
+
 
 @dataclass
 class LoadedPlugin:
@@ -59,6 +79,10 @@ class LoadedPlugin:
     module: ModuleType
     mtime: int | float
     execution_gate: PluginExecutionGate | None = None
+    services: Mapping[str, LoadedPluginService] = field(
+        default_factory=lambda: MappingProxyType({}),
+    )
+
 
 class PluginManager:
     def __init__(
@@ -72,18 +96,20 @@ class PluginManager:
         self.router = router
         self.context_factory = context_factory
         self._plugins: dict[str, LoadedPlugin] = {}
+        self._services: dict[str, LoadedPluginService] = {}
         self._poll_interval = float(poll_interval)
         self._change_handlers: list[Any] = []
         self._init_tasks: list[asyncio.Task[None]] = []
         self._init_task_plugins: dict[asyncio.Task[None], str] = {}
-        self._pending_plugins: dict[asyncio.Task[None], tuple[PluginDefinition, ModuleType, float]] = {}
+        self._pending_plugins: dict[
+            asyncio.Task[None], tuple[PluginDefinition, ModuleType, float]
+        ] = {}
         self._plugin_states: dict[str, dict[str, Any]] = {}
         self._execution_gates: dict[str, PluginExecutionGate] = {}
         self._quarantined_plugins: set[str] = set()
         self._execution_policy = PluginExecutionPolicy()
         self._execution_policy_overrides: dict[str, dict[str, Any]] = {
-            name: {"timeout_seconds": 0}
-            for name in _TRUSTED_ADMIN_TIMEOUT_EXEMPT_PLUGINS
+            name: {"timeout_seconds": 0} for name in _TRUSTED_ADMIN_TIMEOUT_EXEMPT_PLUGINS
         }
         self._ensured_data_dirs: set[str] = set()
 
@@ -133,14 +159,17 @@ class PluginManager:
         raw_policy = raw_policy if isinstance(raw_policy, dict) else {}
         self._execution_policy = PluginExecutionPolicy.from_mapping(raw_policy)
         raw_overrides = raw_policy.get("overrides", {})
-        configured_overrides = {
-            str(name): values
-            for name, values in raw_overrides.items()
-            if isinstance(name, str) and isinstance(values, dict)
-        } if isinstance(raw_overrides, dict) else {}
+        configured_overrides = (
+            {
+                str(name): values
+                for name, values in raw_overrides.items()
+                if isinstance(name, str) and isinstance(values, dict)
+            }
+            if isinstance(raw_overrides, dict)
+            else {}
+        )
         self._execution_policy_overrides = {
-            name: {"timeout_seconds": 0}
-            for name in _TRUSTED_ADMIN_TIMEOUT_EXEMPT_PLUGINS
+            name: {"timeout_seconds": 0} for name in _TRUSTED_ADMIN_TIMEOUT_EXEMPT_PLUGINS
         }
         for name, values in configured_overrides.items():
             self._execution_policy_overrides[name] = {
@@ -167,8 +196,97 @@ class PluginManager:
     def list_plugins(self) -> list[str]:
         return sorted(self._plugins.keys())
 
+    def _quarantine_undrained_gate(
+        self,
+        name: str,
+        plugin: LoadedPlugin | None,
+        gate: PluginExecutionGate,
+        result: PluginExecutionDrainResult,
+        *,
+        phase: str,
+    ) -> None:
+        """Keep code/state/modules alive while an executor callback still runs."""
+
+        if plugin is not None:
+            self._plugins[name] = plugin
+            plugin.execution_gate = gate
+        self._execution_gates[name] = gate
+        self.router.clear_plugin(name)
+        self._quarantined_plugins.add(name)
+        logger.warning(
+            "Plugin %s quarantined during %s: async=%d sync=%d waited=%.2fs",
+            name,
+            phase,
+            result.pending_async_tasks,
+            result.pending_sync_callbacks,
+            result.waited_seconds,
+        )
+        self._notify_change(name)
+
     def get(self, name: str) -> Optional[LoadedPlugin]:
         return self._plugins.get(name)
+
+    @staticmethod
+    def _bind_declared_services(
+        definition: PluginDefinition,
+        module: ModuleType,
+    ) -> Mapping[str, LoadedPluginService]:
+        bindings: dict[str, LoadedPluginService] = {}
+        for service in definition.services:
+            callback = getattr(module, service.callback, None)
+            if not callable(callback):
+                raise PluginLoadError(
+                    definition.name,
+                    f"Declared service callback is unavailable: {service.callback}",
+                )
+            bindings[service.name] = LoadedPluginService(
+                owner=definition.name,
+                definition=service,
+                callback=callback,
+            )
+        return MappingProxyType(bindings)
+
+    def _unregister_services_owned_by(self, plugin_name: str) -> None:
+        for service_name, binding in list(self._services.items()):
+            if binding.owner == plugin_name:
+                self._services.pop(service_name, None)
+
+    def resolve_service(
+        self,
+        *,
+        caller_plugin: str,
+        service_name: str,
+        granted_capabilities: frozenset[str] = frozenset(),
+    ) -> tuple[LoadedPlugin, LoadedPluginService]:
+        """Resolve the current immutable binding and recheck lifecycle policy.
+
+        This method is deliberately available only to the core.  Plugin
+        contexts receive fixed, typed capability objects and cannot provide an
+        arbitrary service or callback name.
+        """
+
+        binding = self._services.get(service_name)
+        if binding is None:
+            raise RuntimeError(f"plugin service is unavailable: {service_name}")
+        loaded = self._plugins.get(binding.owner)
+        if loaded is None or loaded.services.get(service_name) is not binding:
+            raise RuntimeError(f"plugin service is stale: {service_name}")
+        gate = loaded.execution_gate
+        if (
+            not loaded.definition.enabled
+            or binding.owner in self._quarantined_plugins
+            or gate is None
+            or gate.closed
+        ):
+            raise RuntimeError(f"plugin service is not accepting calls: {service_name}")
+        if caller_plugin not in binding.definition.callers:
+            raise PermissionError(
+                f"plugin {caller_plugin} is not allowed to call service {service_name}"
+            )
+        required = binding.definition.required_capability
+        if required is not None and required not in granted_capabilities:
+            raise PermissionError(f"service {service_name} requires capability {required}")
+        return loaded, binding
 
     def _is_plugin_dir(self, path: Path) -> bool:
         """检查是否为有效的插件目录（排除特殊目录与 deprecated 目录）"""
@@ -218,7 +336,9 @@ class PluginManager:
                 self._register_loaded_plugin(definition, module, mtime)
         for plugin_name in failed_plugins:
             if plugin_name in self._plugins:
-                logger.warning("Plugin %s init failed; unloading partially initialized plugin", plugin_name)
+                logger.warning(
+                    "Plugin %s init failed; unloading partially initialized plugin", plugin_name
+                )
                 await self.unload_plugin(plugin_name)
 
     def load_plugin(self, plugin_dir: Path) -> None:
@@ -227,7 +347,7 @@ class PluginManager:
             logger.warning(
                 "Skipping plugin with invalid name '%s': must match %s",
                 plugin_dir.name,
-                VALID_PLUGIN_NAME_PATTERN
+                VALID_PLUGIN_NAME_PATTERN,
             )
             return
 
@@ -255,7 +375,11 @@ class PluginManager:
             self._register_loaded_plugin(definition, module, mtime)
 
     async def unload_plugin(self, name: str) -> None:
-        tasks_to_cancel = [task for task, plugin_name in list(self._init_task_plugins.items()) if plugin_name == name]
+        tasks_to_cancel = [
+            task
+            for task, plugin_name in list(self._init_task_plugins.items())
+            if plugin_name == name
+        ]
         for task in tasks_to_cancel:
             self._init_task_plugins.pop(task, None)
             if task in self._init_tasks:
@@ -269,19 +393,32 @@ class PluginManager:
             if definition.name == name:
                 self._pending_plugins.pop(task, None)
 
-        gate = self._execution_gates.get(name)
+        plugin = self._plugins.get(name)
+        gate = self._execution_gates.get(name) or (
+            plugin.execution_gate if plugin is not None else None
+        )
         if gate is not None:
-            await gate.close()
+            drain = await gate.close()
+            if not drain.drained:
+                self._quarantine_undrained_gate(
+                    name,
+                    plugin,
+                    gate,
+                    drain,
+                    phase="unload admission drain",
+                )
+                return
 
         plugin = self._plugins.pop(name, None)
         if not plugin:
+            self._unregister_services_owned_by(name)
             self._plugin_states.pop(name, None)
             self._execution_gates.pop(name, None)
             self._quarantined_plugins.discard(name)
             self._purge_plugin_modules(name)
             return
         self.router.clear_plugin(name)
-        
+
         if hasattr(plugin.module, "shutdown"):
             try:
                 shutdown = plugin.module.shutdown
@@ -297,18 +434,33 @@ class PluginManager:
                     timeout=PLUGIN_INIT_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
-                logger.warning("Plugin %s shutdown timed out (>%ss)", name, PLUGIN_INIT_TIMEOUT_SECONDS)
+                logger.warning(
+                    "Plugin %s shutdown timed out (>%ss)", name, PLUGIN_INIT_TIMEOUT_SECONDS
+                )
             except Exception as exc:
                 logger.warning("Plugin %s shutdown error: %s", name, exc)
-        
+
+        if gate is not None:
+            shutdown_drain = await gate.close()
+            if not shutdown_drain.drained:
+                self._quarantine_undrained_gate(
+                    name,
+                    plugin,
+                    gate,
+                    shutdown_drain,
+                    phase="shutdown callback drain",
+                )
+                return
+
         # 清理插件状态
         self._plugin_states.pop(name, None)
         self._execution_gates.pop(name, None)
         self._quarantined_plugins.discard(name)
-        
+        self._unregister_services_owned_by(name)
+
         # 清理 sys.modules 中的相关模块，确保 reload 能加载新代码
         self._purge_plugin_modules(name)
-        
+
         logger.info("Unloaded plugin %s", name)
         self._notify_change(name)
 
@@ -320,6 +472,7 @@ class PluginManager:
         plugin_dir = self.plugins_dir / name
         definition = self._load_definition(plugin_dir)
         if definition is None or not definition.enabled:
+            self._unregister_services_owned_by(name)
             logger.warning("Plugin reload rejected for %s: invalid or disabled definition", name)
             return
 
@@ -331,7 +484,9 @@ class PluginManager:
         )
         try:
             staged_module, staged_package = self._load_shadow_module(plugin_dir, definition)
-            await self._initialize_shadow_plugin(definition, staged_module, staged_gate, staged_state)
+            await self._initialize_shadow_plugin(
+                definition, staged_module, staged_gate, staged_state
+            )
         except Exception as exc:
             logger.warning("Plugin %s shadow reload failed; keeping old instance: %s", name, exc)
             await staged_gate.close()
@@ -360,7 +515,22 @@ class PluginManager:
         old_gate = old_plugin.execution_gate or self._execution_gates.get(name)
         if old_gate is not None:
             old_plugin.execution_gate = old_gate
-            await old_gate.close()
+            old_drain = await old_gate.close()
+            if not old_drain.drained:
+                self._quarantine_undrained_gate(
+                    name,
+                    old_plugin,
+                    old_gate,
+                    old_drain,
+                    phase="reload admission drain",
+                )
+                await self._dispose_staged_plugin(
+                    name,
+                    staged_plugin,
+                    staged_state,
+                    staged_package,
+                )
+                return
         try:
             old_shutdown_ok = await self._shutdown_plugin_instance(name, old_plugin)
         except BaseException:
@@ -578,6 +748,7 @@ class PluginManager:
         sys.modules[module_name] = module
         try:
             spec.loader.exec_module(module)
+            self._bind_declared_services(definition, module)
         except Exception:
             self._purge_shadow_modules(package_name)
             raise
@@ -678,7 +849,9 @@ class PluginManager:
                 mtime = await self._get_mtime_async(plugin_dir, definition)
                 existing = self._plugins.get(definition.name)
                 if definition.name in self._quarantined_plugins:
-                    logger.debug("Skipping automatic reload of quarantined plugin %s", definition.name)
+                    logger.debug(
+                        "Skipping automatic reload of quarantined plugin %s", definition.name
+                    )
                     continue
                 if not existing:
                     self.load_plugin(plugin_dir)
@@ -723,6 +896,15 @@ class PluginManager:
             description=manifest.description,
             author=manifest.author,
             dependencies=[dependency.name for dependency in manifest.dependencies],
+            services=tuple(
+                PluginServiceDefinition(
+                    name=service.name,
+                    callback=service.callback,
+                    callers=frozenset(service.callers),
+                    required_capability=service.required_capability,
+                )
+                for service in manifest.services
+            ),
         )
 
     @staticmethod
@@ -750,7 +932,9 @@ class PluginManager:
             )
         return True
 
-    def _load_module(self, plugin_dir: Path, definition: PluginDefinition) -> tuple[Optional[ModuleType], asyncio.Task[None] | None]:
+    def _load_module(
+        self, plugin_dir: Path, definition: PluginDefinition
+    ) -> tuple[Optional[ModuleType], asyncio.Task[None] | None]:
         entry_path = plugin_dir / definition.entry
         if not entry_path.exists():
             logger.error("Plugin %s entry missing: %s", definition.name, entry_path)
@@ -760,7 +944,7 @@ class PluginManager:
         # plugins directory itself to sys.path: doing so creates a second
         # top-level package (for example ``pendo``) with independent globals.
         module_name = f"plugins.{plugin_dir.name}"
-        entry_stem = definition.entry.removesuffix('.py').replace('/', '.').replace('\\', '.')
+        entry_stem = definition.entry.removesuffix(".py").replace("/", ".").replace("\\", ".")
         full_module_name = f"{module_name}.{entry_stem}"
 
         aliases = self._plugin_module_aliases(plugin_dir, definition.name)
@@ -785,8 +969,11 @@ class PluginManager:
                     f"Non-canonical plugin module aliases detected: {', '.join(aliases)}",
                 )
 
+            self._bind_declared_services(definition, module)
+
             if hasattr(module, "init"):
                 init_func = module.init
+
                 async def run_init() -> None:
                     if len(inspect.signature(init_func).parameters) > 0:
                         await call_plugin_callback(init_func, self.build_context(definition.name))
@@ -805,10 +992,12 @@ class PluginManager:
                     if inspect.isawaitable(result):
                         raise RuntimeError("async plugin init requires a running event loop")
                 else:
-                    init_task = asyncio.create_task(asyncio.wait_for(
-                        gate.run(run_init),
-                        timeout=PLUGIN_INIT_TIMEOUT_SECONDS,
-                    ))
+                    init_task = asyncio.create_task(
+                        asyncio.wait_for(
+                            gate.run(run_init),
+                            timeout=PLUGIN_INIT_TIMEOUT_SECONDS,
+                        )
+                    )
                     self._init_tasks.append(init_task)
                     self._init_task_plugins[init_task] = definition.name
                     return module, init_task
@@ -840,7 +1029,9 @@ class PluginManager:
         一增一减时被简单求和抵消。
         """
         digest = hashlib.blake2b(digest_size=16)
-        for path in sorted(self._iter_watch_files(plugin_dir, definition), key=lambda item: item.as_posix()):
+        for path in sorted(
+            self._iter_watch_files(plugin_dir, definition), key=lambda item: item.as_posix()
+        ):
             stat_result = path.stat()
             try:
                 relative = path.relative_to(plugin_dir).as_posix()
@@ -874,14 +1065,28 @@ class PluginManager:
             files.extend([plugin_dir / definition.entry, plugin_dir / "plugin.json"])
         return files
 
-    def _register_loaded_plugin(self, definition: PluginDefinition, module: ModuleType, mtime: float) -> None:
+    def _register_loaded_plugin(
+        self, definition: PluginDefinition, module: ModuleType, mtime: float
+    ) -> None:
+        services = self._bind_declared_services(definition, module)
+        for service_name in services:
+            existing = self._services.get(service_name)
+            if existing is not None and existing.owner != definition.name:
+                raise PluginLoadError(
+                    definition.name,
+                    f"Service name is already registered by {existing.owner}: {service_name}",
+                )
         self._register_commands(definition, module)
-        self._plugins[definition.name] = LoadedPlugin(
+        loaded = LoadedPlugin(
             definition=definition,
             module=module,
             mtime=mtime,
             execution_gate=self._execution_gate_for(definition),
+            services=services,
         )
+        self._unregister_services_owned_by(definition.name)
+        self._services.update(services)
+        self._plugins[definition.name] = loaded
         self._quarantined_plugins.discard(definition.name)
         logger.info(
             "Loaded plugin name=%s version=%s author=%s description=%s",
@@ -969,10 +1174,10 @@ class PluginManager:
     ) -> PluginContextProtocol:
         plugin_dir = self.plugins_dir / plugin_name
         data_dir = self._ensure_plugin_data_dir(plugin_name)
-        
+
         # 获取或创建插件状态
         state = self._plugin_states.setdefault(plugin_name, {})
-        
+
         return self.context_factory(
             plugin_name,
             plugin_dir,

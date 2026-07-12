@@ -5,8 +5,8 @@ from typing import Any
 from core.args import parse
 from core.plugin_base import segments
 
-from .manager import get_manager
-
+from .arxiv_summary import enqueue_or_replay_arxiv_summary
+from .manager import get_manager, shutdown_existing_manager
 
 HELP_TEXT = """Codex 会话队列:
 /codex create <name> [cwd:<path>]  创建会话，默认目录为 C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex
@@ -25,10 +25,43 @@ def init(context: Any = None) -> None:
 
 
 async def shutdown(context: Any = None) -> None:
-    if context is None:
-        return
-    manager = await get_manager(context)
-    await manager.shutdown()
+    await shutdown_existing_manager()
+
+
+async def enqueue_arxiv_summary(
+    context: Any,
+    *,
+    date: str,
+    links: list[str],
+    user_id: int | None = None,
+    group_id: int | None = None,
+) -> str:
+    """The only exported Codex sidecar operation used by the core capability."""
+    return await enqueue_or_replay_arxiv_summary(
+        context,
+        date=date,
+        links=links,
+        user_id=user_id,
+        group_id=group_id,
+    )
+
+
+async def enqueue_arxiv_summary_service(
+    date: str,
+    links: list[str],
+    user_id: int | None,
+    group_id: int | None,
+    context: Any,
+) -> str:
+    """Manifest-declared adapter with the common service-context-last contract."""
+
+    return await enqueue_arxiv_summary(
+        context,
+        date=date,
+        links=links,
+        user_id=user_id,
+        group_id=group_id,
+    )
 
 
 def _event_user_group(event: dict[str, Any], context: Any) -> tuple[int | None, int | None]:
@@ -49,7 +82,9 @@ def _cwd_from_args(parsed: Any) -> str | None:
     return None
 
 
-async def handle(command: str, args: str, event: dict[str, Any], context: Any) -> list[dict[str, Any]]:
+async def handle(
+    command: str, args: str, event: dict[str, Any], context: Any
+) -> list[dict[str, Any]]:
     manager = await get_manager(context)
     raw = (args or "").strip()
     if not raw or raw.lower() in {"help", "帮助", "?"}:

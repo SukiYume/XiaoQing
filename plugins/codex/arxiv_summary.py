@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from core.interfaces import DeliveryTarget
 from core.plugin_base import build_action, segments, split_message_segments
 
 from .paths import normalize_cwd
@@ -52,6 +53,13 @@ async def enqueue_or_replay_arxiv_summary(
             is_current_admin = False
     if not is_system and not is_current_admin:
         raise PermissionError("Codex arXiv sidecar requires current admin authorization")
+    principal_targets = tuple(getattr(principal, "delivery_targets", ()))
+    if is_system:
+        delivery_targets = principal_targets
+    elif principal_targets:
+        delivery_targets = principal_targets
+    else:
+        delivery_targets = _targets_from_ids(effective_user_id, group_id)
     codex_context = codex_context_from(context)
     manager = await get_manager(codex_context)
     addon = ArxivSummaryAddon(manager)
@@ -61,7 +69,19 @@ async def enqueue_or_replay_arxiv_summary(
         user_id=effective_user_id,
         group_id=group_id if group_id is not None else getattr(context, "current_group_id", None),
         context=context,
+        delivery_targets=delivery_targets,
     )
+
+
+def _targets_from_ids(
+    user_id: int | None,
+    group_id: int | None,
+) -> tuple[DeliveryTarget, ...]:
+    if group_id is not None:
+        return (DeliveryTarget("group", int(group_id)),)
+    if user_id is not None:
+        return (DeliveryTarget("private", int(user_id)),)
+    return ()
 
 
 class ArxivSummaryAddon:
@@ -76,6 +96,7 @@ class ArxivSummaryAddon:
         user_id: int | None,
         group_id: int | None,
         context: Any,
+        delivery_targets: tuple[DeliveryTarget, ...] | None = None,
     ) -> str:
         date = date.strip()
         normalized_links = self._normalize_links(links)
@@ -83,6 +104,11 @@ class ArxivSummaryAddon:
             return "arXiv 总结任务缺少日期或链接。"
 
         label = self.manager.config.arxiv_summary_label
+        explicit_targets = (
+            delivery_targets
+            if delivery_targets is not None
+            else _targets_from_ids(user_id, group_id)
+        )
         logger.info(
             "arXiv summary request: label=%s date=%s links=%d",
             label,
@@ -118,6 +144,7 @@ class ArxivSummaryAddon:
                                 group_id=group_id,
                                 context=context,
                                 metadata=self._init_metadata(),
+                                delivery_targets=explicit_targets,
                             )
                         job, _tasks_ahead = self.manager._enqueue_job_locked(
                             session,
@@ -126,6 +153,7 @@ class ArxivSummaryAddon:
                             group_id=group_id,
                             context=context,
                             metadata=self._metadata(date, normalized_links),
+                            delivery_targets=explicit_targets,
                         )
                     except RuntimeError as exc:
                         return str(exc)
@@ -157,6 +185,7 @@ class ArxivSummaryAddon:
                 user_id=user_id,
                 group_id=group_id,
                 context=context,
+                delivery_targets=explicit_targets,
             )
             return f"已重发 {date} arXiv 历史总结。"
         if inflight_message is not None:
@@ -165,6 +194,7 @@ class ArxivSummaryAddon:
                 user_id=user_id,
                 group_id=group_id,
                 context=context,
+                delivery_targets=explicit_targets,
             )
             return f"{date} arXiv 总结任务已在队列或运行中。"
         return "未执行 arXiv 总结任务。"
@@ -176,12 +206,19 @@ class ArxivSummaryAddon:
         user_id: int | None,
         group_id: int | None,
         context: Any,
+        delivery_targets: tuple[DeliveryTarget, ...] | None = None,
     ) -> None:
-        for batch in split_message_segments(segments(content)):
-            action = build_action(batch, user_id, group_id)
-            if action and hasattr(context, "send_action"):
-                action["_bypass_sink"] = True
-                await context.send_action(action)
+        targets = (
+            delivery_targets
+            if delivery_targets is not None
+            else _targets_from_ids(user_id, group_id)
+        )
+        for target in targets:
+            for batch in split_message_segments(segments(content)):
+                action = build_action(batch, target.user_id, target.group_id)
+                if action and hasattr(context, "send_action"):
+                    action["_bypass_sink"] = True
+                    await context.send_action(action)
 
     def _metadata(self, date: str, links: list[str]) -> dict[str, Any]:
         return {

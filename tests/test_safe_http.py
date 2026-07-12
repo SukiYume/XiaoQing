@@ -81,7 +81,9 @@ def test_rejects_noncanonical_and_private_url_literals():
 
 @pytest.mark.asyncio
 async def test_rejects_dns_result_when_any_address_is_not_public(monkeypatch):
-    monkeypatch.setattr(safe_http.asyncio, "get_running_loop", lambda: _FakeLoop(["8.8.8.8", "127.0.0.1"]))
+    monkeypatch.setattr(
+        safe_http.asyncio, "get_running_loop", lambda: _FakeLoop(["8.8.8.8", "127.0.0.1"])
+    )
     with pytest.raises(safe_http.UnsafeUrlError, match="non-public DNS"):
         await safe_http.resolve_public_host("rebind.example", 443)
 
@@ -117,6 +119,30 @@ async def test_each_redirect_target_is_validated_before_a_connection(monkeypatch
     with pytest.raises(safe_http.UnsafeUrlError, match="non-public redirect"):
         await safe_http.fetch_public_html("https://example.com/redirect")
     assert requested_urls == ["https://example.com/redirect"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("location", ["file:///etc/passwd", "https://example.com:bad/"])
+async def test_malformed_redirect_has_stable_error_before_second_request(
+    monkeypatch,
+    location,
+):
+    responses = [_Response(302, headers={"Location": location})]
+    requested_urls: list[str] = []
+
+    async def validate(url):
+        return safe_http.validate_public_url(url), ("93.184.216.34",)
+
+    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    monkeypatch.setattr(
+        safe_http.aiohttp,
+        "ClientSession",
+        lambda **kwargs: _Session(responses, requested_urls, **kwargs),
+    )
+
+    with pytest.raises(safe_http.UnsafeUrlError, match="invalid redirect URL"):
+        await safe_http.fetch_public_html("https://example.com/start")
+    assert requested_urls == ["https://example.com/start"]
 
 
 @pytest.mark.asyncio
@@ -259,8 +285,7 @@ async def test_binary_fetch_rejects_missing_and_excessive_redirects(monkeypatch)
     assert await safe_http.fetch_public_bytes("https://example.com/start") is None
 
     responses.extend(
-        _Response(302, headers={"Location": "/again"})
-        for _ in range(safe_http.MAX_REDIRECTS + 1)
+        _Response(302, headers={"Location": "/again"}) for _ in range(safe_http.MAX_REDIRECTS + 1)
     )
     with pytest.raises(safe_http.UnsafeUrlError, match="too many redirects"):
         await safe_http.fetch_public_bytes("https://example.com/start")
@@ -301,6 +326,35 @@ async def test_binary_fetch_enforces_mime_encoding_and_actual_byte_limit(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_binary_fetch_exact_mime_rejects_spoof_before_body_read(monkeypatch):
+    class NeverReadContent:
+        async def iter_chunked(self, _size):
+            raise AssertionError("invalid exact MIME body must not be read")
+            yield b""  # pragma: no cover
+
+    response = _Response(200, headers={"Content-Type": "image/jpeg-malformed"})
+    response.content = NeverReadContent()
+    requested_urls: list[str] = []
+
+    async def validate(url):
+        return urlsplit(url), ("8.8.8.8",)
+
+    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    monkeypatch.setattr(
+        safe_http.aiohttp,
+        "ClientSession",
+        lambda **kwargs: _Session([response], requested_urls, **kwargs),
+    )
+
+    with pytest.raises(safe_http.SafeHttpError, match="content type"):
+        await safe_http.fetch_public_bytes(
+            "https://example.com/image",
+            allowed_content_types={"image/jpeg"},
+        )
+    assert requested_urls == ["https://example.com/image"]
+
+
+@pytest.mark.asyncio
 async def test_redirects_are_manual_and_timeout_is_bounded(monkeypatch):
     responses = [
         _Response(307, headers={"Location": "/next"}),
@@ -322,8 +376,14 @@ async def test_redirects_are_manual_and_timeout_is_bounded(monkeypatch):
     response = await safe_http.fetch_public_html("https://example.com/start", timeout_seconds=4)
     assert response is not None and response.body.startswith(b"<html")
     assert requested_urls == ["https://example.com/start", "https://example.com/next"]
-    assert all(options["auto_decompress"] is False and options["trust_env"] is False for options in session_options)
-    assert all(options["timeout"].total == 4 and options["timeout"].sock_read == 4 for options in session_options)
+    assert all(
+        options["auto_decompress"] is False and options["trust_env"] is False
+        for options in session_options
+    )
+    assert all(
+        options["timeout"].total == 4 and options["timeout"].sock_read == 4
+        for options in session_options
+    )
 
 
 @pytest.mark.asyncio
@@ -335,7 +395,10 @@ async def test_rejects_compressed_response_bomb():
         headers={"Content-Encoding": "gzip", "Content-Type": "text/html"},
         chunks=[compressed],
     )
-    with pytest.raises(safe_http.SafeHttpError, match="decompressed response is too large"):
+    with pytest.raises(
+        safe_http.SafeHttpError,
+        match="decompressed response is too large|decompression ratio",
+    ):
         await safe_http._read_limited_body(response)
 
 
@@ -349,3 +412,76 @@ async def test_rejects_excessive_decompression_ratio_before_response_limit():
     )
     with pytest.raises(safe_http.SafeHttpError, match="decompression ratio"):
         await safe_http._read_limited_body(response)
+
+
+@pytest.mark.asyncio
+async def test_public_html_rejects_spoofed_html_mime(monkeypatch):
+    class NeverReadContent:
+        async def iter_chunked(self, _size):
+            raise AssertionError("spoofed MIME body must not be read")
+            yield b""  # pragma: no cover
+
+    async def validate(url):
+        return safe_http.validate_public_url(url), ("93.184.216.34",)
+
+    response = _Response(
+        200,
+        headers={"Content-Type": "text/htmlx"},
+        chunks=[b"<html>spoof</html>"],
+    )
+    response.content = NeverReadContent()
+    requested_urls: list[str] = []
+    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    monkeypatch.setattr(
+        safe_http.aiohttp,
+        "ClientSession",
+        lambda **kwargs: _Session([response], requested_urls, **kwargs),
+    )
+
+    assert await safe_http.fetch_public_html("https://example.com/") is None
+    assert requested_urls == ["https://example.com/"]
+
+
+@pytest.mark.asyncio
+async def test_cross_origin_redirect_strips_caller_secrets(monkeypatch):
+    responses = [
+        _Response(302, headers={"Location": "https://cdn.example.com/final"}),
+        _Response(200, headers={"Content-Type": "text/html"}, chunks=[b"<html/>"]),
+    ]
+    requested_urls: list[str] = []
+    requested_headers: list[dict[str, str]] = []
+
+    async def validate(url):
+        return safe_http.validate_public_url(url), ("93.184.216.34",)
+
+    class CapturingSession(_Session):
+        def get(self, url, **kwargs):
+            requested_headers.append(dict(kwargs["headers"]))
+            return super().get(url, **kwargs)
+
+    monkeypatch.setattr(safe_http, "validate_public_fetch_target", validate)
+    monkeypatch.setattr(
+        safe_http.aiohttp,
+        "ClientSession",
+        lambda **kwargs: CapturingSession(responses, requested_urls, **kwargs),
+    )
+
+    result = await safe_http.fetch_public_html(
+        "https://example.com/start",
+        headers={
+            "Authorization": "Bearer cross-origin-canary",
+            "Cookie": "session=cross-origin-canary",
+            "X-API-Key": "cross-origin-canary",
+            "User-Agent": "safe-agent",
+            "Accept": "text/html",
+        },
+        allowed_hosts={"example.com", "cdn.example.com"},
+    )
+
+    assert result is not None and result.body == b"<html/>"
+    assert requested_headers[0]["Authorization"] == "Bearer cross-origin-canary"
+    assert requested_headers[1] == {
+        "User-Agent": "safe-agent",
+        "Accept": "text/html",
+        "Accept-Encoding": "gzip, deflate",
+    }

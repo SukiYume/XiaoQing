@@ -18,6 +18,8 @@ SSH 远程控制插件，支持保存服务器配置、从 `~/.ssh/config` 导�
 
 连接建立后，直接发送命令即可执行；发送 `停止` 会优先向该命令的远端进程组发送 `TERM`，必要时升级为 `KILL`，并始终清理本地命令通道。若停止发生在远端 PID 标记返回前，Bot 会明确提示“远端状态未知”，不会把本地通道关闭误报成远端进程已退出。发送 `退出` / `取消` 可结束会话。
 
+远端命令本身不受 allowlist 或内容截断限制。为避免高输出命令淹没 OneBot/QQ群，QQ 侧只投影有界的开头与末尾，并限制单条命令的 action 数、累计文字量、发送频率和单次发送等待时间；超出 QQ 预算时，完整输出会保存到仅本机可访问的 `data/command_outputs/ssh-output-*.txt`。归档也有独立磁盘硬上限，超过时明确保留受控首尾。取消任务会先回收远端命令，再删除未提交的临时归档。
+
 ## 会话与隔离
 
 - 连接按 `用户 + 群 + 服务器` 隔离。
@@ -62,3 +64,27 @@ SSH 远程控制插件，支持保存服务器配置、从 `~/.ssh/config` 导�
 - 仅管理员可用。
 - 会话空闲 10 分钟后会自动断开。
 - 远程命令具有高权限，请谨慎开放服务器配置和导入来源。
+
+## 输出与超时配置
+
+以下选项位于全局配置的 `plugins.qingssh`；`command_timeout_seconds = 0` 明确表示不设置命令时限，适合可信管理员的长任务。QQ 与归档预算只保护 Bot/消息通道，不会修改或提前截断远端命令。
+
+```json
+{
+  "plugins": {
+    "qingssh": {
+      "command_timeout_seconds": 30,
+      "qq_max_actions": 6,
+      "qq_max_text_chars": 10000,
+      "qq_max_message_chars": 1800,
+      "qq_head_chars": 6000,
+      "qq_tail_chars": 2000,
+      "qq_send_interval_seconds": 0.35,
+      "qq_send_timeout_seconds": 5,
+      "archive_max_bytes": 67108864,
+      "archive_tail_bytes": 1048576,
+      "archive_retention_files": 20
+    }
+  }
+}
+```

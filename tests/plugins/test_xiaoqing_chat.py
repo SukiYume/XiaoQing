@@ -4780,7 +4780,11 @@ async def test_smalltalk_pre_gate_clears_goal_store_when_no_goal_is_derived(
 
 @pytest.mark.asyncio
 async def test_handle_errors_uses_keyword_context_for_logging():
-    context = SimpleNamespace(logger=MagicMock())
+    context = SimpleNamespace(
+        logger=MagicMock(),
+        request_id="req-xc-handler",
+        secrets={},
+    )
 
     @handle_errors("测试")
     async def failing_handler(*, context=None):
@@ -4788,8 +4792,12 @@ async def test_handle_errors_uses_keyword_context_for_logging():
 
     result = await failing_handler(context=context)
 
-    context.logger.exception.assert_called_once()
-    assert result[0]["data"]["text"].startswith("❌ 测试暂时不可用，请稍后重试（请求ID: ")
+    context.logger.error.assert_called_once()
+    context.logger.exception.assert_not_called()
+    text = result[0]["data"]["text"]
+    assert "XQ-PLUGIN-UNEXPECTED" in text
+    assert "req-xc-handler" in text
+    assert "boom" not in text
 
 
 @pytest.mark.asyncio

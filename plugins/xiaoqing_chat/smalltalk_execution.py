@@ -11,8 +11,8 @@ from core.plugin_base import build_action, segments
 from .brain_chat import get_brain_chat_max_context, get_brain_chat_think_level
 from .llm.reply_checker import ReplyRejected
 from .planning.action_history import ActionRecord
-from .planning.planned_action import PlannedAction
 from .planning.pfc_engine import PFCRunResult
+from .planning.planned_action import PlannedAction
 
 
 def _fallback_idle_reply(runtime) -> str:
@@ -276,7 +276,10 @@ async def generate_smalltalk_turn_impl(
                     runtime,
                     chat_id=chat_id,
                     step="smalltalk.planner.disabled",
-                    fields={"is_private": prepared.is_private, "brain_chat": prepared.brain_chat_active},
+                    fields={
+                        "is_private": prepared.is_private,
+                        "brain_chat": prepared.brain_chat_active,
+                    },
                 )
                 _ensure_speculative_memory_task()
                 direct_act = PlannedAction(
@@ -483,7 +486,8 @@ async def finalize_smalltalk_turn_impl(
                         ActionRecord(
                             ts=time.time(),
                             local_target=generated.local_id,
-                            action=str(generated.pfc_result.action or "no_reply").strip() or "no_reply",
+                            action=str(generated.pfc_result.action or "no_reply").strip()
+                            or "no_reply",
                             reasoning=str(generated.pfc_result.action or "").strip()
                             + (
                                 f":{generated.pfc_result.reason}"
@@ -535,8 +539,12 @@ async def finalize_smalltalk_turn_impl(
     )
 
     if runtime.cfg.debug.log_latency:
-        context.logger.info(
-            "xiaoqing_chat smalltalk chat_id=%s latency=%.3fs", chat_id, time.monotonic() - started_at
+        log_step(
+            context,
+            runtime,
+            chat_id=chat_id,
+            step="smalltalk.latency",
+            fields={"latency_s": round(time.monotonic() - started_at, 3)},
         )
     log_step(
         context,
@@ -594,7 +602,9 @@ async def finalize_smalltalk_turn_impl(
                 batch_chars = _batch_text_length(batch)
                 if batch_chars:
                     cfg = _humanize_cfg(runtime)
-                    type_per = float(getattr(cfg, "type_per_char_seconds", 0.05) or 0.0) if cfg else 0.0
+                    type_per = (
+                        float(getattr(cfg, "type_per_char_seconds", 0.05) or 0.0) if cfg else 0.0
+                    )
                     extra = min(1.2, type_per * batch_chars * 0.6)
                     gap += extra
                 if gap > 0:

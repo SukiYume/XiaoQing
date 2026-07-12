@@ -8,6 +8,7 @@ import asyncio
 import base64
 import struct
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -238,6 +239,184 @@ class TestJupyterCodeReviewFixes:
         assert result.success is False
         assert "超时" in result.error
         assert fake_km.interrupted is True
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_kernel_start_waits_then_shuts_down(self, tmp_path):
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        manager = JupyterKernelManager(tmp_path / "jupyter")
+        start_entered = threading.Event()
+        release_start = threading.Event()
+        shutdown_finished = threading.Event()
+
+        class _FakeKernelManager:
+            def is_alive(self):
+                return True
+
+        def blocking_start():
+            start_entered.set()
+            assert release_start.wait(timeout=2)
+            manager._km = _FakeKernelManager()
+            manager._kc = SimpleNamespace()
+
+        def shutdown():
+            manager._km = None
+            manager._kc = None
+            shutdown_finished.set()
+
+        manager.start_kernel = blocking_start
+        manager.shutdown_kernel = shutdown
+        manager.ensure_idle_monitor = lambda: None
+
+        execution = asyncio.create_task(manager.execute("1 + 1"))
+        assert await asyncio.to_thread(start_entered.wait, 1)
+        execution.cancel()
+        await asyncio.sleep(0)
+        assert not execution.done()
+
+        release_start.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(execution, timeout=2)
+
+        assert shutdown_finished.is_set()
+        assert manager._km is None and manager._kc is None
+        assert not {
+            task.get_name()
+            for task in asyncio.all_tasks()
+            if not task.done() and task.get_name().startswith("jupyter-")
+        }
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_submit_waits_interrupts_and_survives_repeat_cancel(self, tmp_path):
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        manager = JupyterKernelManager(tmp_path / "jupyter")
+        submit_entered = threading.Event()
+        release_submit = threading.Event()
+
+        class _FakeKernelManager:
+            def __init__(self):
+                self.interrupt_calls = 0
+
+            def is_alive(self):
+                return True
+
+            def interrupt_kernel(self):
+                self.interrupt_calls += 1
+
+        class _FakeKernelClient:
+            def execute(self, _code):
+                submit_entered.set()
+                assert release_submit.wait(timeout=2)
+                return "msg-cancel"
+
+            def get_iopub_msg(self, _timeout):
+                return {
+                    "msg_type": "status",
+                    "content": {"execution_state": "idle"},
+                    "parent_header": {"msg_id": "msg-cancel"},
+                }
+
+        fake_km = _FakeKernelManager()
+        manager._km = fake_km
+        manager._kc = _FakeKernelClient()
+        manager.ensure_idle_monitor = lambda: None
+
+        execution = asyncio.create_task(manager.execute("1 + 1"))
+        assert await asyncio.to_thread(submit_entered.wait, 1)
+        execution.cancel()
+        await asyncio.sleep(0)
+        execution.cancel()
+        await asyncio.sleep(0)
+        assert not execution.done()
+
+        release_submit.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(execution, timeout=2)
+
+        assert fake_km.interrupt_calls == 1
+        assert not {
+            task.get_name()
+            for task in asyncio.all_tasks()
+            if not task.done() and task.get_name().startswith("jupyter-")
+        }
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_read_drains_reader_before_recovery(self, tmp_path):
+        from plugins.jupyter.jupyter_manager import JupyterKernelManager
+
+        manager = JupyterKernelManager(tmp_path / "jupyter")
+        read_entered = threading.Event()
+        release_read = threading.Event()
+        reader_lock = threading.Lock()
+
+        class _FakeKernelManager:
+            def __init__(self):
+                self.interrupt_calls = 0
+
+            def is_alive(self):
+                return True
+
+            def interrupt_kernel(self):
+                self.interrupt_calls += 1
+
+        class _FakeKernelClient:
+            def __init__(self):
+                self.read_calls = 0
+                self.active_readers = 0
+                self.max_active_readers = 0
+
+            def execute(self, _code):
+                return "msg-cancel"
+
+            def get_iopub_msg(self, _timeout):
+                with reader_lock:
+                    self.read_calls += 1
+                    call = self.read_calls
+                    self.active_readers += 1
+                    self.max_active_readers = max(self.max_active_readers, self.active_readers)
+                try:
+                    if call == 1:
+                        read_entered.set()
+                        assert release_read.wait(timeout=2)
+                        return {
+                            "msg_type": "stream",
+                            "content": {"name": "stdout", "text": "partial"},
+                            "parent_header": {"msg_id": "msg-cancel"},
+                        }
+                    return {
+                        "msg_type": "status",
+                        "content": {"execution_state": "idle"},
+                        "parent_header": {"msg_id": "msg-cancel"},
+                    }
+                finally:
+                    with reader_lock:
+                        self.active_readers -= 1
+
+        fake_km = _FakeKernelManager()
+        fake_kc = _FakeKernelClient()
+        manager._km = fake_km
+        manager._kc = fake_kc
+        manager.ensure_idle_monitor = lambda: None
+
+        execution = asyncio.create_task(manager.execute("print('partial')"))
+        assert await asyncio.to_thread(read_entered.wait, 1)
+        execution.cancel()
+        await asyncio.sleep(0)
+        assert not execution.done()
+
+        release_read.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(execution, timeout=2)
+
+        assert fake_km.interrupt_calls == 1
+        assert fake_kc.read_calls == 2
+        assert fake_kc.max_active_readers == 1
+        assert not {
+            task.get_name()
+            for task in asyncio.all_tasks()
+            if not task.done() and task.get_name().startswith("jupyter-")
+        }
 
     @pytest.mark.asyncio
     async def test_execute_filters_iopub_messages_by_parent_msg_id(self, tmp_path):

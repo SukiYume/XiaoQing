@@ -15,6 +15,13 @@ from typing import Any, Awaitable, Callable
 import aiohttp
 
 from .auth import verify_bearer_token
+from .bounded_http import (
+    BodyLimits,
+    JsonLimits,
+    MimePolicy,
+    aiohttp_request_bounded,
+    parse_bounded_json,
+)
 from .constants import (
     DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS,
     DEFAULT_ONEBOT_WS_ACTION_TIMEOUT_SECONDS,
@@ -24,6 +31,23 @@ from .constants import (
 logger = logging.getLogger(__name__)
 
 _ONEBOT_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=DEFAULT_ONEBOT_HTTP_TIMEOUT_SECONDS)
+_ONEBOT_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=2 * 1024 * 1024,
+    max_decoded_bytes=2 * 1024 * 1024,
+    max_decompression_ratio=20,
+)
+_ONEBOT_JSON_LIMITS = JsonLimits(
+    max_bytes=2 * 1024 * 1024,
+    max_depth=32,
+    max_nodes=20_000,
+    max_string_chars=512_000,
+)
+_ONEBOT_JSON_MIME_POLICY = MimePolicy(
+    exact=frozenset({"application/json", "text/json", "text/plain"}),
+    structured_suffixes=frozenset({"+json"}),
+    allow_missing=True,
+)
+_ONEBOT_SUCCESS_STATUSES = range(200, 300)
 
 _SENSITIVE_KEYS = {"token", "appid", "api_key", "secret", "password", "authorization"}
 
@@ -173,19 +197,20 @@ class OneBotHttpSender:
         params = normalized_action.get("params", {})
 
         try:
-            async with self.session.post(url, json=params, headers=headers, timeout=_ONEBOT_HTTP_TIMEOUT) as resp:
-                if not 200 <= resp.status < 300:
-                    logger.warning("[HTTP] OneBot request failed with status=%s", resp.status)
-                    return None
-
-                try:
-                    response = await resp.json(content_type=None)
-                except (aiohttp.ContentTypeError, json.JSONDecodeError, TypeError, ValueError) as exc:
-                    logger.warning("[HTTP] Invalid OneBot action response: %s", exc)
-                    return None
-                return response if isinstance(response, dict) else None
+            bounded_response = await aiohttp_request_bounded(
+                self.session,
+                "POST",
+                url,
+                limits=_ONEBOT_BODY_LIMITS,
+                mime_policy=_ONEBOT_JSON_MIME_POLICY,
+                success_statuses=_ONEBOT_SUCCESS_STATUSES,
+                headers=headers,
+                request_kwargs={"json": params, "timeout": _ONEBOT_HTTP_TIMEOUT},
+            )
+            response = parse_bounded_json(bounded_response, limits=_ONEBOT_JSON_LIMITS)
+            return response if isinstance(response, dict) else None
         except Exception as exc:
-            logger.warning("[HTTP] OneBot request failed: %s", exc)
+            logger.warning("[HTTP] OneBot request failed error_type=%s", type(exc).__name__)
             return None
 
     async def send_action(self, action: dict[str, Any]) -> bool:

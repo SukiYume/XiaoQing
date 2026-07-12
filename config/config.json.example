@@ -19,6 +19,7 @@
                 "parallel_limit": 4,
                 "failure_threshold": 3,
                 "cooldown_seconds": 60,
+                "drain_timeout_seconds": 5,
                 "overrides": {
                         "codex": {"timeout_seconds": 0},
                         "qingssh": {"timeout_seconds": 0},
@@ -43,6 +44,19 @@
                 "smalltalk_provider": "xiaoqing_chat",
                 "pendo": {
                         "web_demo_enabled": false
+                },
+                "qingssh": {
+                        "command_timeout_seconds": 30,
+                        "qq_max_actions": 6,
+                        "qq_max_text_chars": 10000,
+                        "qq_max_message_chars": 1800,
+                        "qq_head_chars": 6000,
+                        "qq_tail_chars": 2000,
+                        "qq_send_interval_seconds": 0.35,
+                        "qq_send_timeout_seconds": 5,
+                        "archive_max_bytes": 67108864,
+                        "archive_tail_bytes": 1048576,
+                        "archive_retention_files": 20
                 },
                 "codex": {
                         "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",

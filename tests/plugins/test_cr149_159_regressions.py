@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
+from core.interfaces import PluginCapabilities
 from core.safe_http import SafeHttpResponse
 from plugins.adnmb import adapi
 from plugins.apod import main as apod
@@ -31,7 +32,11 @@ class _ScopedContext:
         self.current_group_id = group_id
         self.config = {"plugins": {"smalltalk": {"voice_probability": 0}}}
         self.logger = MagicMock()
-        self.call_plugin = AsyncMock(return_value=smalltalk.segments("provider response"))
+        self.chat_reply = MagicMock()
+        self.chat_reply.reply = AsyncMock(
+            return_value=smalltalk.segments("provider response"),
+        )
+        self.capabilities = PluginCapabilities(chat_reply=self.chat_reply)
 
 
 @pytest.mark.asyncio
@@ -41,10 +46,7 @@ async def test_smalltalk_calls_loaded_plugin_provider_with_actor(tmp_path: Path)
     result = await smalltalk._call_chat_api("private prompt", context)
 
     assert result == smalltalk.segments("provider response")
-    context.call_plugin.assert_awaited_once_with(
-        "chat",
-        "handle",
-        "chat",
+    context.chat_reply.reply.assert_awaited_once_with(
         "private prompt",
         {"user_id": 42, "group_id": 84},
     )
@@ -91,13 +93,15 @@ async def test_adnmb_image_download_is_bounded_validated_and_hashed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     body = _png_bytes()
-    fetch = AsyncMock(return_value=SafeHttpResponse(
-        url="https://image.nmb.best/image/a.png",
-        status=200,
-        body=body,
-        charset=None,
-        headers={"Content-Type": "image/png"},
-    ))
+    fetch = AsyncMock(
+        return_value=SafeHttpResponse(
+            url="https://image.nmb.best/image/a.png",
+            status=200,
+            body=body,
+            charset=None,
+            headers={"Content-Type": "image/png"},
+        )
+    )
     monkeypatch.setattr(adapi, "fetch_public_bytes", fetch)
     client = adapi.AdnmbClient(MagicMock(), tmp_path)
 
@@ -182,7 +186,10 @@ def test_sensitive_log_regressions_are_absent() -> None:
         "guess_number/main.py": ("target=%d",),
         "chat/main.py": ("使用代理: {proxy}",),
         "voice/main.py": ("{error_text}",),
-        "url_parser/main.py": ("标题、描述和图片: {url}", "else url}",),
+        "url_parser/main.py": (
+            "标题、描述和图片: {url}",
+            "else url}",
+        ),
     }
     for relative_path, forbidden in expectations.items():
         source = (ROOT / "plugins" / relative_path).read_text(encoding="utf-8")

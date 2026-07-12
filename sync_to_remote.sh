@@ -12,6 +12,8 @@ readonly DEPLOY_MANIFEST="deploy/runtime-paths.txt"
 readonly REMOTE_HOST="${XIAOQING_SYNC_HOST:-production-host}"
 readonly REMOTE_DIR="${XIAOQING_SYNC_DIR:-/c/Users/testuser/Desktop/XiaoQing/XiaoQing_V3}"
 readonly PYTHON_BIN="${PYTHON:-python}"
+readonly SSH_BIN="${XIAOQING_SSH_BIN:-ssh}"
+readonly RSYNC_BIN="${XIAOQING_RSYNC_BIN:-rsync}"
 readonly SENTINEL_NAME=".xiaoqing-sync-root"
 readonly SENTINEL_VALUE="xiaoqing-sync-root-v1"
 readonly PLAN_SCHEMA="xiaoqing-rsync-plan-v1"
@@ -108,8 +110,8 @@ fi
 [[ "$REMOTE_DIR" != "/" ]] || die "remote directory cannot be filesystem root"
 
 command -v "$PYTHON_BIN" >/dev/null || die "Python is required"
-command -v ssh >/dev/null || die "ssh is required"
-command -v rsync >/dev/null || die "rsync is required"
+command -v "$SSH_BIN" >/dev/null || die "ssh is required"
+command -v "$RSYNC_BIN" >/dev/null || die "rsync is required"
 command -v mktemp >/dev/null || die "mktemp is required"
 
 temp_root="$(mktemp -d "${TMPDIR:-/tmp}/xiaoqing-sync.XXXXXXXX")"
@@ -171,7 +173,7 @@ readonly file_count="${metadata_values[3]}"
 [[ "$(<"$stage_dir/$SENTINEL_NAME")" == "$SENTINEL_VALUE" ]] \
     || die "immutable stage sentinel content does not match"
 
-ssh "$REMOTE_HOST" sh -s -- "$REMOTE_DIR" "$SENTINEL_NAME" "$SENTINEL_VALUE" \
+"$SSH_BIN" "$REMOTE_HOST" sh -s -- "$REMOTE_DIR" "$SENTINEL_NAME" "$SENTINEL_VALUE" \
     >"$remote_output" <<'REMOTE'
 set -eu
 requested=$1
@@ -239,7 +241,7 @@ printf 'Destination: %s\n' "$remote_target"
 printf 'Mode:        %s\n\n' "$mode"
 
 printf '%s\n' '--- rsync dry-run (this exact plan is hashed below) ---'
-rsync "${rsync_args[@]}" --dry-run "$stage_dir/" "$remote_target" | tee "$dry_run_plan"
+"$RSYNC_BIN" "${rsync_args[@]}" --dry-run "$stage_dir/" "$remote_target" | tee "$dry_run_plan"
 
 plan_sha256="$({
     "$PYTHON_BIN" - \
@@ -276,5 +278,5 @@ fi
     || die "dry-run plan digest does not match --expect-plan; preview again"
 
 printf '%s\n' '--- applying the verified immutable plan with delete-delay ---'
-rsync "${rsync_args[@]}" "$stage_dir/" "$remote_target"
+"$RSYNC_BIN" "${rsync_args[@]}" "$stage_dir/" "$remote_target"
 printf 'Deployment completed from commit %s with plan %s.\n' "$commit" "$plan_sha256"

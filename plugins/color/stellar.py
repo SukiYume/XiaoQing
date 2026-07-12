@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.plugin_base import segments, text, image
+from core.public_errors import public_error_response
 from .convert import hex_to_rgb
 from .image_gen import generate_color_image
 
@@ -44,13 +45,9 @@ def load_stellar_colors(context) -> Optional[Any]:
         context.logger.warning(f"恒星颜色数据文件不存在: {stellar_file}")
         return None
     
-    try:
-        df = _load_stellar_dataframe(str(stellar_file), stellar_file.stat().st_mtime_ns)
-        context.logger.debug(f"加载恒星颜色数据: {len(df)} 条")
-        return df
-    except Exception as exc:
-        context.logger.error(f"加载恒星颜色数据失败: {exc}", exc_info=True)
-        return None
+    df = _load_stellar_dataframe(str(stellar_file), stellar_file.stat().st_mtime_ns)
+    context.logger.debug("加载恒星颜色数据: %s 条", len(df))
+    return df
 
 async def query_stellar_color(spec_type: str, context, img_dir: Path) -> list[dict[str, Any]]:
     """查询恒星光谱颜色
@@ -90,8 +87,9 @@ async def query_stellar_color(spec_type: str, context, img_dir: Path) -> list[di
         return result
         
     except Exception as exc:
-        context.logger.error(f"查询恒星颜色失败: {spec_type}, 错误: {exc}", exc_info=True)
-        return segments(f"❌ 查询恒星颜色时出错: {exc}")
+        return public_error_response(
+            context, exc, logger=context.logger, component="color.stellar.query"
+        )
 
 def list_spectral_types(prefix: str, context) -> list[dict[str, Any]]:
     """列出符合前缀的光谱型
@@ -129,5 +127,6 @@ def list_spectral_types(prefix: str, context) -> list[dict[str, Any]]:
         return segments(title + "\n" + ", ".join(display_types) + suffix)
         
     except Exception as exc:
-        context.logger.error(f"查询光谱型失败: prefix={prefix}, 错误: {exc}", exc_info=True)
-        return segments(f"❌ 查询光谱型时出错: {exc}")
+        return public_error_response(
+            context, exc, logger=context.logger, component="color.stellar.list"
+        )

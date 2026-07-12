@@ -23,6 +23,7 @@ from typing import Any
 
 from core.interfaces import PluginContextProtocol
 from core.plugin_base import build_action, run_sync, segments
+from core.public_errors import public_error_message
 
 from .commands.operations import handle_confirm, handle_snooze, handle_undo
 from .commands.scheduled import (
@@ -65,7 +66,7 @@ from .utils.db_ops import (
 from .utils.db_ops import (
     set_database_singleton,
 )
-from .utils.error_handlers import error_result, handle_command_errors_with_segments, success_result
+from .utils.error_handlers import handle_command_errors_with_segments, success_result
 from .utils.session_utils import safe_end_session
 from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 
@@ -140,14 +141,10 @@ def _start_web_server(db: Database) -> bool:
 
         started = web_server.start(db)
         if not started:
-            detail = web_server.get_last_error() if hasattr(web_server, "get_last_error") else ""
-            if detail:
-                logger.warning("Failed to auto-start web UI: %s", detail)
-            else:
-                logger.warning("Failed to auto-start web UI")
+            logger.warning("Failed to auto-start web UI")
         return bool(started)
-    except Exception as e:
-        logger.warning("Failed to auto-start web UI: %s", e)
+    except Exception as exc:
+        public_error_message(None, exc, logger=logger, component="pendo.web.start")
         return False
 
 
@@ -156,8 +153,8 @@ def _stop_web_server() -> bool:
         from .web import server as web_server
 
         return bool(web_server.stop())
-    except Exception as e:
-        logger.warning("Failed to stop Pendo Web UI: %s", e)
+    except Exception as exc:
+        public_error_message(None, exc, logger=logger, component="pendo.web.stop")
         return False
 
 
@@ -174,8 +171,13 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
         unsubscribe = runtime_state.pop("config_reload_unsubscribe", None)
         if callable(unsubscribe):
             unsubscribe()
-    except Exception as e:
-        logger.exception("Error while removing Pendo config subscription: %s", e)
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=getattr(context, "logger", None) or logger,
+            component="pendo.cleanup.config_subscription",
+        )
 
     if stop_web:
         _stop_web_server()
@@ -184,33 +186,58 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
     try:
         runtime_db = _get_database(context)
         runtime_db.cleanup()
-    except Exception as e:
-        logger.exception("Error during Pendo runtime DB cleanup: %s", e)
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=getattr(context, "logger", None) or logger,
+            component="pendo.cleanup.runtime_db",
+        )
 
     try:
         from .utils.db_ops import cleanup_db_singleton
 
         cleanup_db_singleton()
-    except Exception as e:
-        logger.exception("Error during Pendo singleton DB cleanup: %s", e)
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=getattr(context, "logger", None) or logger,
+            component="pendo.cleanup.singleton_db",
+        )
 
     if _startup_db is not None and _startup_db is not runtime_db:
         try:
             _startup_db.cleanup()
-        except Exception as e:
-            logger.exception("Error during Pendo startup DB cleanup: %s", e)
+        except Exception as exc:
+            public_error_message(
+                context,
+                exc,
+                logger=getattr(context, "logger", None) or logger,
+                component="pendo.cleanup.startup_db",
+            )
     _startup_db = None
 
     try:
         cleanup_reminder_singleton()  # L-5修复：清除 reminder service 单例
-    except Exception as e:
-        logger.exception("Error during reminder cleanup: %s", e)
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=getattr(context, "logger", None) or logger,
+            component="pendo.cleanup.reminders",
+        )
 
     try:
         runtime_state = _get_plugin_runtime_state(context, create=False)
         runtime_state.clear()
-    except Exception as e:
-        logger.exception("Error during runtime state cleanup: %s", e)
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=getattr(context, "logger", None) or logger,
+            component="pendo.cleanup.runtime_state",
+        )
 
     log = _get_logger(context)
     log.info("Pendo plugin cleanup completed")
@@ -272,7 +299,12 @@ async def handle(
 
 def _is_explicit_pendo_command(raw_message: str) -> bool:
     text = str(raw_message or "").strip().lower()
-    if text == "/pendo" or text.startswith("/pendo ") or text == "pendo" or text.startswith("pendo "):
+    if (
+        text == "/pendo"
+        or text.startswith("/pendo ")
+        or text == "pendo"
+        or text.startswith("pendo ")
+    ):
         return True
     stripped = text.lstrip("/")
     return any(
@@ -391,10 +423,9 @@ async def _handle_command_routing(
         result = await router.route(subcommand, user_id, rest_args, context)
         if isinstance(result, dict) and result.get("status") == "error":
             is_error = True
-    except Exception as e:
+    except Exception:
         is_error = True
-        log.exception("Error routing command '%s' for user %s: %s", subcommand, user_id, e)
-        result = error_result(f"处理命令时出错: {str(e)}")
+        raise
     finally:
         cmd_name = f"subcommand.{router.alias_map.get(subcommand.lower(), subcommand)}"
         await _record_metric(context, cmd_name, time.perf_counter() - start_time, is_error=is_error)
@@ -555,16 +586,19 @@ async def _run_scheduled_task(
         await _record_metric(context, f"scheduled.{task_name}", time.perf_counter() - start)
         return result if result else []
     except asyncio.CancelledError:
-        await _record_metric(
-            context, f"scheduled.{task_name}", time.perf_counter() - start
-        )
+        await _record_metric(context, f"scheduled.{task_name}", time.perf_counter() - start)
         log.info("Scheduled task '%s' cancelled during shutdown", task_name)
         return []
-    except Exception as e:
+    except Exception as exc:
         await _record_metric(
             context, f"scheduled.{task_name}", time.perf_counter() - start, is_error=True
         )
-        log.exception("Scheduled task '%s' failed: %s", task_name, e)
+        public_error_message(
+            context,
+            exc,
+            logger=log,
+            component=f"pendo.scheduled.{task_name}",
+        )
         return []
 
 
@@ -609,8 +643,13 @@ async def _format_result(
                         return segments(failure_message)
                 else:
                     return segments(failure_message)
-            except Exception:
-                logger.exception("Failed to send private message for group reply")
+            except Exception as exc:
+                public_error_message(
+                    context,
+                    exc,
+                    logger=getattr(context, "logger", logger),
+                    component="pendo.private_reply_delivery",
+                )
                 return segments(failure_message)
         else:
             return segments(failure_message)
@@ -626,8 +665,15 @@ async def _get_user_privacy_mode(user_id: str, context) -> bool:
     try:
         custom_settings = await _get_user_custom_settings(user_id, context)
         return custom_settings.get("privacy_mode", PendoConfig.MESSAGE_PRIVACY_MODE_DEFAULT)
-    except Exception:
-        return PendoConfig.MESSAGE_PRIVACY_MODE_DEFAULT
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=getattr(context, "logger", logger),
+            component="pendo.privacy_mode",
+        )
+        # Privacy lookup failures must not make sensitive content public.
+        return True
 
 
 async def _get_user_custom_settings(user_id: str, context) -> dict[str, Any]:
@@ -674,8 +720,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
 
         if ctx is None or not hasattr(ctx, "send_action"):
             result["message"] = (
-                f"{result.get('message', '导出完成')}\n"
-                f"文件已保存在本地: {file_path}"
+                f"{result.get('message', '导出完成')}\n文件已保存在本地: {file_path}"
             )
             return result
 
@@ -695,17 +740,10 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
                     },
                 }
             )
-        except Exception as exc:
-            logger.exception("Failed to send exported markdown file to user %s: %s", user_id, exc)
-            return error_result(
-                "导出文件已生成，但通过 OneBot 私聊发送失败\n"
-                f"本地文件: {file_path}"
-            )
+        except Exception:
+            raise
 
-        result["message"] = (
-            f"{result.get('message', '导出完成')}\n"
-            "已通过 QQ 私聊文件发送给你"
-        )
+        result["message"] = f"{result.get('message', '导出完成')}\n已通过 QQ 私聊文件发送给你"
         return result
 
     async def _search_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
@@ -928,7 +966,7 @@ HELP_MAP = {
         "• /pendo ledger quick <金额> <描述> [cat:分类] [in|out|transfer|type:expense/income/transfer] [account:账户] [to:账户] [merchant:商户] [date:YYYY-MM-DD] [remark:备注] - 快速记账",
         "  - 默认支出；in 标记收入，out/expense 标记支出，transfer 标记账户间转账",
         "  - account/from 表示账户，to/counter 表示转入账户，merchant/payee 表示商户",
-        "  - 带空格的值可加英文双引号，例如 merchant:\"星巴克 人民广场店\"",
+        '  - 带空格的值可加英文双引号，例如 merchant:"星巴克 人民广场店"',
         "  - 例: /pendo ledger quick 35.5 午饭 cat:餐饮 account:微信 merchant:食堂",
         "  - 例: /pendo ledger quick 5000 工资 cat:工资 in account:招行",
         "  - 例: /pendo ledger quick 1000 还款 transfer account:微信 to:招行 date:2026-05-01",
@@ -974,7 +1012,7 @@ HELP_MAP = {
         "  - 文件名会自动加 .md；含空格请加英文引号",
         "  - 例: /pendo export 我的档案",
         "  - 例: /pendo export 工作回顾 last30d event,todo",
-        "  - 例: /pendo export \"三月 账本\" 2026-03 ledger",
+        '  - 例: /pendo export "三月 账本" 2026-03 ledger',
         "  - 例: /pendo export 账本快照 2026-03 ledger",
     ],
     "import": [
@@ -1137,10 +1175,7 @@ def _get_services(context: PendoContext | None) -> PendoServices:
 
     db = _get_database(context)
     ai_parser = AIParser(context)
-    try:
-        ai_parser.db = db
-    except Exception:
-        pass
+    ai_parser.db = db
     reminder_service = ReminderService(db)
     exporter = ExporterService(db)
 

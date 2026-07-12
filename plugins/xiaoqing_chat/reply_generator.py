@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from core.sensitive_audit import summarize_sensitive
+
 if TYPE_CHECKING:
     from .runtime_state import _ChatRuntime
 
@@ -38,7 +40,7 @@ from .llm.llm_client import LLMError, chat_completions_with_fallback_paths
 from .llm.postprocess import join_reply, process_llm_response
 from .llm.prompt_builder import ChatMessage, build_dialogue_prompt, build_prompt_messages
 from .llm.reply_checker import ReplyCheckResult, ReplyRejected, _heuristic_check, check_reply
-from .logging_utils import _log_step
+from .logging_utils import _log_step, _safe_correlation_id
 from .media.marker_resolver import (
     ResolvedMarker,
     marker_media_part,
@@ -79,6 +81,36 @@ class ReplyDraft:
     raw_text: str = ""
     rewritten_text: str = ""
     media_marker: ResolvedMarker | None = None
+
+
+def _log_prompt_audit_metadata(
+    context: Any,
+    messages: list[ChatMessage],
+    *,
+    request_id: str,
+) -> None:
+    """Keep debug prompt observability without writing prompt content."""
+
+    safe_request_id = _safe_correlation_id(request_id)
+    for index, message in enumerate(messages):
+        content = message.content if isinstance(message.content, str) else ""
+        summary = summarize_sensitive(content)
+        role = (
+            message.role if message.role in {"system", "user", "assistant", "tool"} else "unknown"
+        )
+        try:
+            context.logger.info(
+                "xiaoqing_chat sensitive_audit operation=reply_prompt status=prepared "
+                "request_id=%s role=%s role_index=%d length=%d bytes=%d fingerprint=%s",
+                safe_request_id,
+                role,
+                index,
+                summary.length,
+                summary.byte_length,
+                summary.fingerprint,
+            )
+        except Exception:
+            return
 
 
 def _normalize_reply_text_parts(values: Any) -> tuple[str, ...]:
@@ -128,8 +160,7 @@ def _forced_reply_draft() -> ReplyDraft:
 
 def _draft_has_media(parts: Any) -> bool:
     return any(
-        str(part.get("kind", "") or "").strip() != "text"
-        for part in normalize_message_parts(parts)
+        str(part.get("kind", "") or "").strip() != "text" for part in normalize_message_parts(parts)
     )
 
 
@@ -401,8 +432,7 @@ async def _generate_reply_draft(
             msgs.append(ChatMessage(role="user", content=extra_check_hint))
         payload_msgs = [{"role": m.role, "content": m.content} for m in msgs]
         if runtime.cfg.debug.show_reply_prompt:
-            context.logger.info("reply_prompt.system=%s", msgs[0].content)
-            context.logger.info("reply_prompt.user=%s", msgs[1].content)
+            _log_prompt_audit_metadata(context, msgs, request_id=request_id)
         state.inc_stats(chat_id, "calls")
         _log_step(
             context,
@@ -444,7 +474,8 @@ async def _generate_reply_draft(
                 },
             )
         except LLMError as exc:
-            if str(exc) == "request_too_large" and max_items > 2:
+            error_code = str(exc)
+            if error_code == "request_too_large" and max_items > 2:
                 _log_step(
                     context,
                     runtime,
@@ -461,14 +492,16 @@ async def _generate_reply_draft(
                 runtime,
                 chat_id=chat_id,
                 step="reply.llm.error",
-                fields={"error": str(exc)},
+                fields={"error_type": type(exc).__name__},
             )
             raise
 
         # ── Pre-heuristic: fast local check before checker / replan. ──
         if raw and runtime.cfg.reply_check.enable_reply_checker:
             _precheck_text = text_without_outbound_marker(raw)
-            _raw_parts = process_llm_response(_precheck_text, runtime.cfg.postprocess, bot_name=bot_name)
+            _raw_parts = process_llm_response(
+                _precheck_text, runtime.cfg.postprocess, bot_name=bot_name
+            )
             _raw_draft = _build_reply_draft(_raw_parts, raw_text=raw, rewritten_text=raw)
             if _raw_draft is not None:
                 _pre_h = _heuristic_check(
@@ -542,7 +575,7 @@ async def _generate_reply_draft(
                     fields={
                         "kind": parsed_marker.kind,
                         "hint": parsed_marker.hint,
-                        "reason": f"{type(exc).__name__}: {exc}",
+                        "reason": type(exc).__name__,
                     },
                 )
                 resolved_marker = None
@@ -661,7 +694,7 @@ async def _generate_reply_draft(
                         runtime,
                         chat_id=chat_id,
                         step="reply.check.error",
-                        fields={"error": f"{type(exc).__name__}: {exc}"},
+                        fields={"error_type": type(exc).__name__},
                     )
                     check = ReplyCheckResult(
                         suitable=False,

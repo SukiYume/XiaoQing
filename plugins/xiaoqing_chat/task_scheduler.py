@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from core.public_errors import public_error_message
+
 if TYPE_CHECKING:
     from .runtime_state import _ChatRuntime
 
@@ -19,10 +21,12 @@ def _track_bg_task(context: Any, task: asyncio.Task[None], *, name: str) -> None
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            try:
-                context.logger.exception("xiaoqing_chat bg_task=%s failed: %s", name, exc)
-            except Exception as log_exc:
-                context.logger.error("xiaoqing_chat failed to log bg_task error: %s", log_exc)
+            public_error_message(
+                context,
+                exc,
+                logger=context.logger,
+                component=f"xiaoqing_chat.bg_task.{name}",
+            )
 
     task.add_done_callback(_done)
 
@@ -42,7 +46,10 @@ def _schedule_memory_persist(context: Any, runtime: _ChatRuntime, *, chat_id: st
         try:
             old.cancel()
         except Exception as exc:
-            context.logger.debug("xiaoqing_chat failed to cancel persist task: %s", exc)
+            context.logger.debug(
+                "xiaoqing_chat failed to cancel persist task error_type=%s",
+                type(exc).__name__,
+            )
 
     async def _run() -> None:
         if delay:
@@ -74,7 +81,10 @@ def _schedule_memory_db_save(context: Any, runtime: _ChatRuntime) -> None:
         try:
             old.cancel()
         except Exception as exc:
-            context.logger.debug("xiaoqing_chat failed to cancel vdb save task: %s", exc)
+            context.logger.debug(
+                "xiaoqing_chat failed to cancel vdb save task error_type=%s",
+                type(exc).__name__,
+            )
 
     async def _run() -> None:
         if delay:

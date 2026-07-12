@@ -4,6 +4,8 @@
 
 import re
 
+from core.public_errors import public_error_message
+
 
 UNIX_TIMESTAMP_MIN_ABS = 100_000_000
 
@@ -77,10 +79,12 @@ async def handle_time(args: str, context) -> str:
         # 处理其他时间格式（ISO等）
         t = Time(args)
         return _build_time_response(args, t)
-    except ValueError as e:
-        return f"时间格式错误: {e}\n\n支持的格式:\n- ISO: 2026-01-30 或 2026-01-30T12:00:00\n- JD: 2460419.5 (使用 'jd' 子命令)\n- MJD: 60419.5 (使用 'mjd' 子命令)\n- Unix时间戳: 1706616000"
+    except ValueError:
+        return "时间格式错误，请检查输入。\n\n支持的格式:\n- ISO: 2026-01-30 或 2026-01-30T12:00:00\n- JD: 2460419.5 (使用 'jd' 子命令)\n- MJD: 60419.5 (使用 'mjd' 子命令)\n- Unix时间戳: 1706616000"
     except Exception as exc:
-        return f"时间转换失败: {exc}"
+        return public_error_message(
+            context, exc, logger=context.logger, component="astro_tools.time"
+        )
 
 
 def _get_current_time() -> str:

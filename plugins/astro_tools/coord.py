@@ -2,6 +2,8 @@
 坐标转换模块
 """
 
+from core.public_errors import public_error_message
+
 
 def _is_hms_format(s: str) -> bool:
     """判断是否为 HMS 格式"""
@@ -101,13 +103,12 @@ async def handle_coord(args: str, context) -> str:
                f"**黄道坐标:**\n" \
                f"λ: {ecliptic_coord.lon.deg:.6f}°\n" \
                f"β: {ecliptic_coord.lat.deg:.6f}°"
-    except ValueError as e:
-        return f"坐标格式错误: {e}\n\n支持的格式:\n" \
+    except ValueError:
+        return "坐标格式错误，请检查输入。\n\n支持的格式:\n" \
                "- 赤道: /astro coord 12:34:56 +12:34:56\n" \
                "- 银道: /astro coord galactic 120 30\n" \
                "- 黄道: /astro coord ecliptic 90 23.5"
     except Exception as exc:
-        return f"坐标转换失败: {exc}\n\n支持的格式:\n" \
-               "- HMS: 12:34:56 或 12h34m56s\n" \
-               "- DMS: +12:34:56 或 +12d34m56s\n" \
-               "- 度数: 123.456"
+        return public_error_message(
+            context, exc, logger=context.logger, component="astro_tools.coord"
+        )

@@ -38,6 +38,13 @@ XiaoQing 使用两个 JSON 配置文件：
   "ws_queue_size": 200,
   
   "max_concurrency": 5,
+  "plugin_execution": {
+    "timeout_seconds": 60,
+    "parallel_limit": 4,
+    "failure_threshold": 3,
+    "cooldown_seconds": 60,
+    "drain_timeout_seconds": 5
+  },
   "enable_plugin_watcher": false,
   "session_timeout": 300,
   "timezone": "Asia/Shanghai",
@@ -214,6 +221,28 @@ XiaoQing 使用两个 JSON 配置文件：
 ```
 
 ⚠️ **注意**：过高的并发数可能导致资源耗尽，建议根据服务器性能调整。
+
+#### plugin_execution
+
+插件入口统一经过 execution gate。`timeout_seconds` 控制普通插件 callback 的等待时限，`0` 表示不设置时限；`parallel_limit`、`failure_threshold` 和 `cooldown_seconds` 控制并发与熔断。`drain_timeout_seconds`（默认 5 秒）只控制 reload/unload/shutdown 最多等待多久，不会强行终止 Python 线程：若同步 callback 在该时间后仍未真正返回，旧插件会保留代码、状态和模块并进入关闭的 quarantine，绝不会同时安装新实例。线程结束后可再次手动 unload/reload 完成清理。日志会报告仍在运行的 async/sync 数量。
+
+```json
+{
+  "plugin_execution": {
+    "timeout_seconds": 60,
+    "parallel_limit": 4,
+    "failure_threshold": 3,
+    "cooldown_seconds": 60,
+    "drain_timeout_seconds": 5,
+    "overrides": {
+      "codex": {"timeout_seconds": 0},
+      "qingssh": {"timeout_seconds": 0},
+      "jupyter": {"timeout_seconds": 0},
+      "shell": {"timeout_seconds": 0}
+    }
+  }
+}
+```
 
 #### enable_plugin_watcher
 - **类型**：`boolean`
@@ -718,9 +747,17 @@ Windows 上遇到 `WinError 10013` 时，常见原因是系统拒绝绑定端口
   "plugins": {
     "qingssh": {
       "max_connections": 5,
-      "connection_timeout": 30,
-      "command_timeout": 60,
-      "auto_disconnect": true
+      "command_timeout_seconds": 30,
+      "qq_max_actions": 6,
+      "qq_max_text_chars": 10000,
+      "qq_max_message_chars": 1800,
+      "qq_head_chars": 6000,
+      "qq_tail_chars": 2000,
+      "qq_send_interval_seconds": 0.35,
+      "qq_send_timeout_seconds": 5,
+      "archive_max_bytes": 67108864,
+      "archive_tail_bytes": 1048576,
+      "archive_retention_files": 20
     }
   }
 }
@@ -730,14 +767,23 @@ Windows 上遇到 `WinError 10013` 时，常见原因是系统拒绝绑定端口
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|---------|------|
-| `max_connections` | `int` | `5` | 最大并发连接数 |
-| `connection_timeout` | `int` | `30` | 连接超时（秒） |
-| `command_timeout` | `int` | `60` | 命令执行超时（秒） |
-| `auto_disconnect` | `boolean` | `true` | 是否自动断开空闲连接 |
+| `max_connections` | `int` | `32` | 最大并发连接数 |
+| `command_timeout_seconds` | `number` | `30` | 单条远端命令时限；`0` 表示可信管理员显式关闭时限 |
+| `qq_max_actions` | `int` | `6` | 单条命令最多尝试的 QQ 输出/状态 action 数 |
+| `qq_max_text_chars` | `int` | `10000` | 单条命令 QQ 投影累计字符硬上限 |
+| `qq_max_message_chars` | `int` | `1800` | 每个 QQ action 的文字上限 |
+| `qq_head_chars` | `int` | `6000` | QQ 开头摘要预算 |
+| `qq_tail_chars` | `int` | `2000` | QQ 末尾摘要候选预算 |
+| `qq_send_interval_seconds` | `number` | `0.35` | QQ action 最小发送间隔 |
+| `qq_send_timeout_seconds` | `number` | `5` | 单次 OneBot 发送最长等待时间 |
+| `archive_max_bytes` | `int` | `67108864` | 本地输出归档硬上限；超出后只保留首尾并明确标记 |
+| `archive_tail_bytes` | `int` | `1048576` | 归档硬上限触发后保留的末尾预算 |
+| `archive_retention_files` | `int` | `20` | 最多保留的已提交命令输出归档数 |
 
 补充说明：
 - QingSSH 严格校验 `~/.ssh/known_hosts` 中的 Host Key；未知主机或 Host Key 变更不会自动放行。
 - 从 `~/.ssh/config` 导入时，支持 `ProxyJump` 以及安全的 `ssh -W` 跳板形式；其他会在本地执行命令的 `ProxyCommand` 会被拒绝。
+- 以上预算只约束 QQ 投影和 Bot 本地归档，不修改管理员提交的远端命令；QQ 截断时完整输出路径会随最终状态返回。
 
 #### shell 配置
 

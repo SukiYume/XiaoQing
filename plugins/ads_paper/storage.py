@@ -33,14 +33,20 @@ class PaperStorage:
                 return {}
             try:
                 return json.loads(path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as e:
-                logger.error("Failed to parse JSON from %s: %s", path, e)
+            except json.JSONDecodeError:
+                logger.error("Paper storage load failed: error_type=JSONDecodeError")
                 return {}
-            except IOError as e:
-                logger.error("Failed to read file %s: %s", path, e)
+            except OSError as exc:
+                logger.error(
+                    "Paper storage load failed: error_type=%s",
+                    type(exc).__name__,
+                )
                 return {}
-            except Exception as e:
-                logger.exception("Unexpected error loading %s: %s", path, e)
+            except Exception as exc:
+                logger.error(
+                    "Paper storage load failed: error_type=%s",
+                    type(exc).__name__,
+                )
                 return {}
 
     def _save_json(self, path: Path, data: dict[str, Any]) -> bool:
@@ -54,11 +60,11 @@ class PaperStorage:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
                 return True
-            except IOError as e:
-                logger.error("Failed to write file %s: %s", path, e)
-                return False
-            except Exception as e:
-                logger.exception("Unexpected error saving %s: %s", path, e)
+            except Exception as exc:
+                logger.error(
+                    "Paper storage save failed: error_type=%s",
+                    type(exc).__name__,
+                )
                 return False
 
     def add_paper_note(self, paper_id: str, content: str, user_id: int) -> bool:

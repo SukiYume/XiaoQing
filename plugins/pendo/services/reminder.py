@@ -117,8 +117,11 @@ class ReminderService:
                         log_map = {
                             log["remind_time"]: log for log in self.db.get_reminder_logs(item.id)
                         }
-                    except Exception as e:
-                        logger.warning("读取提醒日志失败: %s", e)
+                    except Exception as exc:
+                        logger.warning(
+                            "读取提醒日志失败 error_type=%s",
+                            type(exc).__name__,
+                        )
 
                 for remind_time_str in remind_times:
                     try:
@@ -150,16 +153,20 @@ class ReminderService:
                         message = self._build_reminder_message(item, remind_time_str)
                         messages.append(self._make_msg(item, message, remind_time_str, claim_token))
                         sent_count += 1
-                    except Exception as e:
-                        logger.warning("处理提醒失败: %s, error: %s", remind_time_str, e)
+                    except Exception as exc:
+                        logger.warning(
+                            "处理提醒失败 error_type=%s",
+                            type(exc).__name__,
+                        )
 
             # 2. 重复发送未确认的提醒
             repeat_messages = self._check_unconfirmed_repeats()
             messages.extend(repeat_messages)
             sent_count += len(repeat_messages)
 
-        except Exception as e:
-            logger.exception("检查提醒时出错: %s", e)
+        except Exception:
+            # The scheduled entry point owns the final redacted diagnostic.
+            raise
 
         return {
             "status": "success",
@@ -210,8 +217,11 @@ class ReminderService:
                 message = self._build_reminder_message(item, remind_time_str, repeat_count=repeat_count)
                 messages.append(self._make_msg(item, message, remind_time_str))
 
-        except Exception as e:
-            logger.warning("检查未确认提醒重复时出错: %s", e)
+        except Exception as exc:
+            logger.warning(
+                "检查未确认提醒重复时出错 error_type=%s",
+                type(exc).__name__,
+            )
 
         return messages
 
@@ -425,8 +435,11 @@ class ReminderService:
             return None
         try:
             return self.db.get_event_collection(collection_id, getattr(item, "owner_id", None))
-        except Exception as e:
-            logger.warning("读取日程集合失败: %s", e)
+        except Exception as exc:
+            logger.warning(
+                "读取日程集合失败 error_type=%s",
+                type(exc).__name__,
+            )
             return None
 
     def _format_reminder_slot(self, remind_time: str, target_time: str | None) -> str:

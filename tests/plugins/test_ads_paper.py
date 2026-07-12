@@ -5,15 +5,16 @@ ads_paper 插件单元测试
 由于 ads_paper 插件使用相对导入，我们只测试文件结构和配置。
 """
 
-import json
-import pytest
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
+from plugins.ads_paper import note_commands
 from plugins.ads_paper.ads_client import ADSClient
 from plugins.ads_paper.llm_client import generate_summary
-from plugins.ads_paper import note_commands
 
 # 添加项目根目录到路径
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -278,6 +279,7 @@ class TestPaperStorageBehavior:
 
     def test_storage_instances_share_lock_and_do_not_lose_updates(self, tmp_path):
         from concurrent.futures import ThreadPoolExecutor
+
         from plugins.ads_paper.storage import PaperStorage
 
         def add(index):
@@ -310,23 +312,30 @@ class TestPaperStorageBehavior:
 async def test_ads_client_search_passes_timeout():
     captured = {}
 
+    class MockContent:
+        async def iter_chunked(self, _size):
+            yield b'{"response":{"docs":[]}}'
+
     class MockResponse:
         status = 200
+        url = "https://api.adsabs.harvard.edu/v1/search/query"
+        headers = {"Content-Type": "application/json"}
+        content_length = None
+        content = MockContent()
 
-        async def json(self):
-            return {"response": {"docs": []}}
-
-    class MockContextManager:
         async def __aenter__(self):
-            return MockResponse()
+            return self
 
         async def __aexit__(self, *args):
             return None
 
+        def close(self):
+            return None
+
     class MockSession:
-        def get(self, *args, **kwargs):
+        def request(self, *args, **kwargs):
             captured.update(kwargs)
-            return MockContextManager()
+            return MockResponse()
 
     client = ADSClient("token", MockSession())
     result = await client.search_papers("frb")
@@ -339,23 +348,30 @@ async def test_ads_client_search_passes_timeout():
 async def test_ads_llm_generate_summary_passes_timeout():
     captured = {}
 
+    class MockContent:
+        async def iter_chunked(self, _size):
+            yield b'{"choices":[{"message":{"content":"summary"}}]}'
+
     class MockResponse:
         status = 200
+        url = "https://example.com/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        content_length = None
+        content = MockContent()
 
-        async def json(self):
-            return {"choices": [{"message": {"content": "summary"}}]}
-
-    class MockContextManager:
         async def __aenter__(self):
-            return MockResponse()
+            return self
 
         async def __aexit__(self, *args):
             return None
 
+        def close(self):
+            return None
+
     class MockSession:
-        def post(self, *args, **kwargs):
+        def request(self, *args, **kwargs):
             captured.update(kwargs)
-            return MockContextManager()
+            return MockResponse()
 
     result = await generate_summary(
         session=MockSession(),

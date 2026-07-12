@@ -475,6 +475,20 @@ class TestSessionTimeout:
         assert await manager.update(1, 1, end_session) is True
         assert await manager.exists(1, 1) is False
 
+    @pytest.mark.asyncio
+    async def test_high_cardinality_missing_sessions_leave_no_key_locks(self):
+        manager = SessionManager()
+
+        await asyncio.gather(
+            *(manager.exists(user_id, None) for user_id in range(1000, 2000))
+        )
+        await asyncio.gather(
+            *(manager.peek(user_id, user_id) for user_id in range(2000, 3000))
+        )
+
+        assert manager.active_count == 0
+        assert manager.active_key_lock_count == 0
+
 # ============================================================
 # 运行测试
 # ============================================================

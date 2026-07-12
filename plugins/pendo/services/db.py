@@ -126,7 +126,11 @@ class Database:
             try:
                 conn.close()
             except sqlite3.Error as exc:
-                logger.error("Failed to close Pendo SQLite connection from thread %s: %s", thread_id, exc)
+                logger.error(
+                    "Failed to close Pendo SQLite connection thread=%s error_type=%s",
+                    thread_id,
+                    type(exc).__name__,
+                )
                 failures.append(exc)
 
         if hasattr(self._local, "conn"):
@@ -556,8 +560,7 @@ class Database:
             self.cache_invalidate(item_dict["id"])
             self.cache_invalidate(f"items|{item_dict.get('owner_id', '')}")
             return item_dict["id"]
-        except Exception as e:
-            logger.exception("Failed to insert item: %s", e)
+        except Exception:
             raise
 
     # FTS 相关字段，只有这些字段被修改时才需要更新全文索引
@@ -629,12 +632,11 @@ class Database:
                     if row:
                         resolved_owner = row[0]
                 except Exception:
-                    pass
+                    raise
             if resolved_owner:
                 self.cache_invalidate(f"items|{resolved_owner}")
             return affected > 0
-        except Exception as e:
-            logger.exception("Failed to update item: %s", e)
+        except Exception:
             raise
 
     def batch_update_items(
@@ -711,7 +713,7 @@ class Database:
                         refreshed_item_ids.append(item_id)
                 results.append((action, item_id, None))
             except Exception as exc:
-                raise RuntimeError(f"导入记录 {item_id} 失败: {exc}") from exc
+                raise RuntimeError(f"导入记录 {item_id} 失败") from exc
         return results, refreshed_item_ids
 
     def _log_transfer_with_cursor(
@@ -1454,8 +1456,7 @@ class Database:
                 cursor.execute("DELETE FROM items_fts WHERE id = ?", (item_id,))
             self.cache_clear()
             return affected > 0
-        except Exception as e:
-            logger.exception("Failed to delete item: %s", e)
+        except Exception:
             raise
 
     def _sync_reminder_logs(self, cursor, item_id: str, remind_times: list[str] | None):
@@ -1566,8 +1567,11 @@ class Database:
                 fts_params,
             )
             fts_ids = [row[0] for row in cursor.fetchall()]
-        except Exception as e:
-            logger.warning("FTS search failed, falling back to LIKE: %s", e)
+        except Exception as exc:
+            logger.warning(
+                "FTS search failed; falling back to LIKE error_type=%s",
+                type(exc).__name__,
+            )
 
         # LIKE补充搜索（FTS的unicode61分词器对CJK子字符串匹配不完整，需要LIKE兜底）
         like = f"%{query}%"
@@ -1980,9 +1984,8 @@ class Database:
                 return self._undo_delete_from_log(conn, cursor, owner_id, log_row)
 
             return self._undo_delete_from_item_row(conn, cursor, owner_id, item_row)
-        except Exception as e:
-            logger.exception("Failed to undo delete: %s", e)
-            return {"status": "error", "message": f"恢复失败: {e}"}
+        except Exception:
+            raise
 
     def undo_edit(self, owner_id: str, minutes: int = 5) -> dict[str, Any]:
         """撤销编辑操作
@@ -2051,9 +2054,8 @@ class Database:
                 "affected": affected,
                 "instance_count": len(instance_ids),
             }
-        except Exception as e:
-            logger.exception("Failed to undo edit: %s", e)
-            return {"status": "error", "message": f"撤销编辑失败: {e}"}
+        except Exception:
+            raise
 
     def get_latest_undoable_operation(self, owner_id: str, minutes: int = 5) -> dict[str, Any]:
         """查找最近可撤销的操作（删除 或 编辑）
@@ -2357,9 +2359,8 @@ class Database:
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
-        except Exception as e:
-            logger.exception("Failed to update user settings: %s", e)
-            return False
+        except Exception:
+            raise
 
         self.cache_clear()
         return True
@@ -2395,9 +2396,8 @@ class Database:
                     ),
                 )
             return True
-        except Exception as e:
-            logger.exception("Failed to log operation: %s", e)
-            return False
+        except Exception:
+            raise
 
     def prune_operation_logs(
         self,
@@ -2870,7 +2870,7 @@ class Database:
             try:
                 data["type"] = ItemType(data["type"])
             except ValueError:
-                logger.warning("Unknown item type: %s", data["type"])
+                logger.warning("Unknown item type while decoding Pendo row")
                 return None
 
         # 解析JSON字段
@@ -2915,9 +2915,8 @@ class Database:
                 valid_fields = {f.name for f in item_class.__dataclass_fields__.values()}
                 filtered_data = {k: v for k, v in data.items() if k in valid_fields}
                 return item_class(**filtered_data)
-            except Exception as e:
-                logger.error("Failed to create item from row: %s", e)
-                return None
+            except Exception:
+                raise
 
         return None
 

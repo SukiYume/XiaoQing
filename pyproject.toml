@@ -76,6 +76,9 @@ ssh = [
 
 # 开发和测试依赖
 dev = [
+    "build==1.5.1",
+    "setuptools==83.0.0",
+    "wheel==0.47.0",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
@@ -115,9 +118,9 @@ arxiv-ml = [
     "tqdm>=4.66.0",
 ]
 
-# 完整安装（所有可选依赖）
+# 完整运行时安装（不包含测试、审计、格式化等开发工具）
 all = [
-    "xiaoqing[plugins,ml,web,jupyter,arxiv-ml,astro,ssh,dev]",
+    "xiaoqing[plugins,ml,web,jupyter,arxiv-ml,astro,ssh]",
 ]
 
 [project.urls]

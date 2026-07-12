@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import segments
+from core.public_errors import public_error_message, public_error_response
 
 from .ads_client import ADSClient
-from .paper_commands import resolve_paper_id_to_bibcode
 from .constants import DEFAULT_DAILY_PAPERS
+from .paper_commands import resolve_paper_id_to_bibcode
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +65,17 @@ async def cmd_summarize(
             f"🤖 AI 摘要:\n{summary}"
         ]
         return segments("\n".join(lines))
-    except Exception as e:
-        logger.exception(f"AI summary error: {e}")
+    except Exception as exc:
+        error_message = public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="ads_paper.summarize",
+        )
         lines = [
             f"📄 论文: {title}\n",
             f"📝 原始摘要:\n{abstract}\n",
-            f"❌ AI 摘要生成失败: {e}"
+            f"❌ AI 摘要生成失败\n{error_message}",
         ]
         return segments("\n".join(lines))
 
@@ -131,12 +137,13 @@ async def cmd_ref_add(
             "```"
         ]
         return segments("\n".join(lines))
-    except IOError as e:
-        logger.exception(f"Failed to write reference file: {e}")
-        return segments(f"❌ 文件操作失败: {e}")
-    except Exception as e:
-        logger.exception(f"Unexpected error in cmd_ref_add: {e}")
-        return segments(f"❌ 添加引用失败: {e}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="ads_paper.ref_add",
+        )
 
 async def cmd_refs(
     context,  # Type: PluginContext, but avoid circular import
@@ -171,9 +178,10 @@ async def cmd_refs(
                 lines.append(f"  {i}. @entry...")
 
         return segments("\n".join(lines))
-    except IOError as e:
-        logger.exception(f"Failed to read reference file: {e}")
-        return segments(f"❌ 读取文献库失败: {e}")
-    except Exception as e:
-        logger.exception(f"Unexpected error in cmd_refs: {e}")
-        return segments(f"❌ 查看文献库失败: {e}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="ads_paper.refs",
+        )

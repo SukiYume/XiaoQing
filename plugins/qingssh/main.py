@@ -35,23 +35,24 @@ SSH远程控制插件
 import logging
 from typing import Any
 
-from core.plugin_base import segments
 from core.args import parse
+from core.plugin_base import segments
 
 # 使用相对导入
-from .ssh_manager import get_manager
-from .types import Context, Session, OneBotEvent, MessageSegments
+from .audit import audit_error_type
 from .handlers import (
-    handle_ssh_main,
-    handle_ssh_disconnect,
-    handle_ssh_list,
     handle_ssh_add,
-    handle_ssh_remove,
-    handle_ssh_import,
     handle_ssh_config_list,
+    handle_ssh_disconnect,
+    handle_ssh_import,
+    handle_ssh_list,
+    handle_ssh_main,
+    handle_ssh_remove,
     handle_ssh_status,
 )
 from .session_handlers import handle_session as _handle_session
+from .ssh_manager import get_manager
+from .types import Context, MessageSegments, OneBotEvent, Session
 
 logger = logging.getLogger(__name__)
 
@@ -59,39 +60,57 @@ logger = logging.getLogger(__name__)
 # 插件初始化
 # ============================================================
 
+
 def init(context=None) -> None:
     """插件初始化"""
     logger.info("QingSSH plugin initialized")
+
 
 # ============================================================
 # 主命令入口
 # ============================================================
 
+
 async def handle(command: str, args: str, event: OneBotEvent, context: Context) -> MessageSegments:
     """
     命令处理入口
-    
+
     根据不同子命令分发到对应的处理函数。
     """
     try:
         manager = await get_manager(context)
         parsed = parse(args)
-        
+
         # 主 SSH 命令使用统一入口
         if command in {"ssh", "SSH", "远程", "ssh连接", "sshconnect"}:
             # 如果没有参数或第一个参数不是子命令，显示帮助或连接
             if not parsed or parsed.first.lower() not in {
-                "help", "帮助", "?", "list", "列表", "add", "添加",
-                "remove", "删除", "del", "import", "导入", "config", "配置",
-                "status", "状态", "disconnect", "断开"
+                "help",
+                "帮助",
+                "?",
+                "list",
+                "列表",
+                "add",
+                "添加",
+                "remove",
+                "删除",
+                "del",
+                "import",
+                "导入",
+                "config",
+                "配置",
+                "status",
+                "状态",
+                "disconnect",
+                "断开",
             }:
                 # 处理连接或显示帮助
                 return await handle_ssh_main(args, event, context, manager)
-            
+
             # 处理子命令
             subcommand = parsed.first.lower()
             rest_args = parsed.rest(1) if parsed else ""
-            
+
             if subcommand in {"help", "帮助", "?"}:
                 return segments(_show_help())
             elif subcommand in {"list", "列表"}:
@@ -108,9 +127,9 @@ async def handle(command: str, args: str, event: OneBotEvent, context: Context) 
                 return await handle_ssh_status(rest_args, event, context, manager)
             elif subcommand in {"disconnect", "断开"}:
                 return await handle_ssh_disconnect(rest_args, event, context, manager)
-            
+
             return segments(f"未知子命令: {subcommand}\n输入 /ssh help 查看帮助")
-        
+
         # 兼容旧的独立命令（保持向后兼容）
         elif command in {"ssh断开", "sshdisconnect", "ssh退出"}:
             return await handle_ssh_disconnect(args, event, context, manager)
@@ -126,16 +145,18 @@ async def handle(command: str, args: str, event: OneBotEvent, context: Context) 
             return await handle_ssh_config_list(args, event, context, manager)
         elif command in {"ssh状态", "sshstatus", "ssh连接数", "sshactive"}:
             return await handle_ssh_status(args, event, context, manager)
-        
+
         return segments("❓ 未知命令")
-        
-    except Exception as e:
-        logger.exception("QingSSH handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+
+    except Exception as exc:
+        logger.error("QingSSH handle failed error_type=%s", audit_error_type(exc))
+        return segments(f"处理请求时出错: {str(exc)}")
+
 
 # ============================================================
 # 辅助函数
 # ============================================================
+
 
 def _show_help() -> str:
     """显示帮助信息"""
@@ -180,9 +201,11 @@ def _show_help() -> str:
 • 命令执行有 30 秒超时限制
 """.strip()
 
+
 # ============================================================
 # 会话处理（多轮对话核心）
 # ============================================================
+
 
 async def handle_session(
     text: str,
@@ -192,10 +215,10 @@ async def handle_session(
 ) -> MessageSegments:
     """
     处理会话消息
-    
+
     当用户有活跃会话时，Dispatcher 会调用这个函数处理后续消息。
     框架已自动处理退出命令（退出/取消/exit/quit/q），插件无需再处理。
-    
+
     参数:
         text: 用户发送的原始文本
         event: OneBot 事件
@@ -210,14 +233,16 @@ async def close_session(event: OneBotEvent, context: Context, session: Session) 
 
     await close_qingssh_session(context, session)
 
+
 # ============================================================
 # 插件生命周期管理
 # ============================================================
 
+
 async def cleanup(context: Context) -> None:
     """
     插件清理函数
-    
+
     在插件卸载或重启时调用，用于释放资源。
     """
     try:
@@ -227,55 +252,58 @@ async def cleanup(context: Context) -> None:
         await shutdown_tasks()
         await manager.shutdown()
         logger.info("SSH plugin cleaned up successfully")
-    except Exception as e:
-        logger.error("Error during SSH plugin cleanup: %s", e)
+    except Exception as exc:
+        logger.error("SSH plugin cleanup failed error_type=%s", audit_error_type(exc))
+
 
 async def shutdown(context: Context) -> None:
     await cleanup(context)
+
 
 # ============================================================
 # 定时任务
 # ============================================================
 
+
 async def cleanup_orphans(context: Context) -> None:
     """
     清理孤儿连接（定时任务）
-    
+
     检查所有 SSH 连接，如果对应的会话已不存在（过期），则断开连接。
     防止用户直接关掉会话导致连接泄露。
     """
     from .config import SessionKeys
-    
+
     manager = await get_manager(context)
     if not manager.connections:
         return
-        
+
     # 获取所有 qingssh 的活跃会话
     try:
         if not context.session_manager:
             return
-            
+
         # 使用新添加的 get_all_sessions 方法
         sessions = await context.session_manager.get_all_sessions("qingssh")
-        
+
         # 构建活跃连接键集合 {user_id:group_id:server_name}
         active_keys = set()
         for session in sessions:
             server_name = session.get(SessionKeys.SERVER_NAME)
             user_id = str(session.user_id)
             group_id = str(session.group_id)
-            
+
             if server_name:
                 key = manager._build_connection_key(user_id, group_id, server_name)
                 active_keys.add(key)
-        
+
         # 检查现有的连接
         orphans = []
         for key in list(manager.connections.keys()):
             # 忽略非标准的 key (防卫性)
             if key not in active_keys:
                 orphans.append(key)
-        
+
         # 清理孤儿连接
         if orphans:
             count = 0
@@ -285,11 +313,14 @@ async def cleanup_orphans(context: Context) -> None:
                         user_id, group_id, server_name = manager._parse_connection_key(key)
                         manager.disconnect(user_id, group_id, server_name)
                         count += 1
-                except Exception as e:
-                    logger.warning("Error closing orphan connection %s: %s", key, e)
+                except Exception as exc:
+                    logger.warning(
+                        "SSH orphan cleanup failed error_type=%s",
+                        audit_error_type(exc),
+                    )
 
             if count > 0:
                 logger.info("Cleaned up %d orphan SSH connections", count)
-                
-    except Exception as e:
-        logger.error("Error checking orphan connections: %s", e)
+
+    except Exception as exc:
+        logger.error("SSH orphan scan failed error_type=%s", audit_error_type(exc))

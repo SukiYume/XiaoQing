@@ -95,23 +95,21 @@ def create_app(db: Database) -> FastAPI:
 def _format_start_error(host: str, port: int, exc: BaseException) -> str:
     """Format startup failures with lightweight, actionable diagnostics."""
     target = f"{host}:{port}"
-    detail = str(exc)
     if isinstance(exc, OSError):
         winerror = getattr(exc, "winerror", None)
         errno = getattr(exc, "errno", None)
 
         if winerror == 10048:
-            return f"无法绑定到 {target}，端口已被其他进程占用。原始错误: {detail}"
+            return f"无法绑定到 {target}，端口已被其他进程占用。"
 
         if winerror == 10013 or errno == 13:
             return (
                 f"无法绑定到 {target}，系统拒绝了这次套接字绑定（WinError 10013）。"
                 "这通常与 Windows 保留端口、虚拟化网络组件或安全策略有关，"
                 "可尝试改用其他端口。"
-                f" 原始错误: {detail}"
             )
 
-    return f"无法绑定到 {target}。原始错误: {detail}"
+    return f"无法绑定到 {target}（错误类型: {type(exc).__name__}）。"
 
 
 def _reset_state() -> None:
@@ -135,7 +133,10 @@ def _run_server() -> None:
         _server.run()
     except Exception as exc:
         _last_error = _format_start_error(PendoConfig.WEB_HOST, PendoConfig.WEB_PORT, exc)
-        logger.exception("Pendo Web UI crashed during startup")
+        logger.error(
+            "Pendo Web UI crashed during startup error_type=%s",
+            type(exc).__name__,
+        )
 
 
 def start(db: Database) -> bool:

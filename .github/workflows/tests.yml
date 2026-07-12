@@ -24,7 +24,7 @@ jobs:
     - name: Install locked lint dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install --require-hashes -r requirements/python-3.13.lock
+        python -m pip install --require-hashes -r requirements/python-3.13-ci.lock
 
     - name: Reject Ruff diagnostics on changed Python lines
       env:
@@ -53,10 +53,15 @@ jobs:
 
     - name: Install dependencies
       env:
-        LOCK_FILE: requirements/python-${{ matrix.python-version }}.lock
+        LOCK_FILE: requirements/python-${{ matrix.python-version }}-ci.lock
       run: |
         python -m pip install --upgrade pip
         python -m pip install --require-hashes -r "$LOCK_FILE"
+
+    - name: Verify dependency lock freshness
+      if: matrix.python-version == '3.13'
+      run: |
+        python scripts/compile_locks.py --check
 
     - name: Verify full test collection
       run: |
@@ -79,20 +84,15 @@ jobs:
       run: |
         python -m pytest tests/plugins/test_codex.py tests/plugins/test_shell_plugin.py tests/plugins/test_jupyter.py tests/plugins/test_qingssh.py tests/plugins/test_minecraft.py --cov=plugins/codex --cov=plugins/shell --cov=plugins/jupyter --cov=plugins/qingssh --cov=plugins/minecraft --cov-branch --cov-report=term --cov-fail-under=45
 
-    - name: Python 3.13 wheel and import smoke test
+    - name: Python 3.13 isolated wheel and sdist release smoke
       if: matrix.python-version == '3.13'
       run: |
-        python -m pip wheel . --no-deps --wheel-dir dist
-        python -m venv /tmp/xiaoqing-wheel-smoke
-        WHEEL_PATH=$(find dist -name '*.whl' -print -quit)
-        /tmp/xiaoqing-wheel-smoke/bin/python -m pip install --no-deps "$WHEEL_PATH"
-        (cd /tmp && /tmp/xiaoqing-wheel-smoke/bin/xiaoqing --help)
-        python -c "import aiohttp, apscheduler, pydantic; import plugins.pendo.main, plugins.xiaoqing_chat.main"
+        python scripts/verify_python_release.py
 
     - name: Audit locked dependencies
       if: matrix.python-version == '3.13'
       env:
-        LOCK_FILE: requirements/python-${{ matrix.python-version }}.lock
+        LOCK_FILE: requirements/python-${{ matrix.python-version }}-ci.lock
       run: |
         pip-audit --require-hashes -r "$LOCK_FILE"
         pip-licenses --format=markdown
@@ -102,3 +102,29 @@ jobs:
       with:
         file: ./coverage.xml
         flags: unittests
+
+  docker-release-smoke:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.13"
+
+    - name: Build and verify the isolated Docker release
+      run: |
+        build_root="$(mktemp -d)"
+        trap 'rm -rf -- "$build_root"' EXIT
+        mkdir "$build_root/dist"
+        python -m pip wheel . --no-deps --wheel-dir "$build_root/dist"
+        python scripts/build_docker_context.py \
+          --dist-dir "$build_root/dist" \
+          --context-dir "$build_root/context"
+        python scripts/verify_docker_release.py \
+          --context-dir "$build_root/context" \
+          --image-tag "xiaoqing-ci:${GITHUB_SHA}" \
+          --require-docker

@@ -15,7 +15,14 @@ from typing import Any, Awaitable, Callable
 
 import aiohttp
 
-from .capabilities import ConfigSubscriptionService, OneBotMediaService, SecretAdminService
+from .capabilities import (
+    ChatReplyService,
+    CodexArxivSummaryService,
+    ConfigSubscriptionService,
+    OneBotMediaService,
+    SecretAdminService,
+    VoiceSynthesisService,
+)
 from .config import ConfigManager, ConfigSnapshot, _freeze_config_mapping
 from .constants import (
     DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
@@ -30,7 +37,7 @@ from .constants import (
 )
 from .context import PluginContext
 from .dispatcher import Dispatcher
-from .interfaces import PluginCapabilities, PluginPrincipal
+from .interfaces import DeliveryTarget, PluginCapabilities, PluginPrincipal
 from .logging_config import LogManager, setup_logging
 from .metrics import MetricsCollector
 from .onebot import OneBotHttpSender, OneBotWsClient, _extract_message_preview
@@ -77,7 +84,15 @@ class _PrincipalAuthority:
         is_bot_admin: bool = False,
         is_private: bool = False,
         group_role: str = "unknown",
+        delivery_targets: tuple[DeliveryTarget, ...] | None = None,
     ) -> PluginPrincipal:
+        if delivery_targets is None:
+            if kind == "user" and group_id is not None:
+                delivery_targets = (DeliveryTarget("group", int(group_id)),)
+            elif kind == "user" and user_id is not None:
+                delivery_targets = (DeliveryTarget("private", int(user_id)),)
+            else:
+                delivery_targets = ()
         principal = PluginPrincipal(
             kind=kind,  # type: ignore[arg-type]
             user_id=user_id,
@@ -85,6 +100,7 @@ class _PrincipalAuthority:
             is_bot_admin=is_bot_admin,
             is_private=is_private,
             group_role=group_role,  # type: ignore[arg-type]
+            delivery_targets=delivery_targets,
         )
         self._issued[principal] = kind
         return principal
@@ -113,7 +129,7 @@ class XiaoQingApp:
             root / "config" / "config.json",
             root / "config" / "secrets.json",
         )
-        
+
         # 初始化日志系统（使用新的日志模块）
         self.log_manager: LogManager = setup_logging(
             self.config_manager.config,
@@ -129,7 +145,6 @@ class XiaoQingApp:
         self.inbound_manager: InboundManager | None = None
         self._admin_set: set[int] = set()
         self._principal_authority = _PrincipalAuthority()
-
 
         # 核心组件
         self.router: CommandRouter = router or CommandRouter()
@@ -148,7 +163,7 @@ class XiaoQingApp:
             self.config_manager.config.get("timezone", "Asia/Shanghai")
         )
         self.metrics: MetricsCollector = MetricsCollector()
-        
+
         # 会话管理器（用于多轮对话）
         session_timeout = float(
             self.config_manager.config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC)
@@ -158,7 +173,9 @@ class XiaoQingApp:
         )
 
         # 消息分发器
-        concurrency = int(self.config_manager.config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY))
+        concurrency = int(
+            self.config_manager.config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY)
+        )
         self._dispatcher_concurrency = concurrency
         # Create Semaphore - if no event loop, defer creation
         try:
@@ -166,7 +183,7 @@ class XiaoQingApp:
         except RuntimeError:
             # No event loop running - will be created later or mocked in tests
             semaphore = None  # type: ignore
-        
+
         self.dispatcher: Dispatcher = dispatcher or Dispatcher(
             self.router,
             self,
@@ -197,7 +214,7 @@ class XiaoQingApp:
         # 注册回调
         self.plugin_manager.on_change(self._reschedule)
         self.config_manager.on_reload(self._apply_config)
-    
+
     def _ensure_reload_lock(self) -> asyncio.Lock:
         """Ensure reload lock is initialized (requires event loop)"""
         if self._reload_lock is None:
@@ -475,7 +492,15 @@ class XiaoQingApp:
                 lambda name=name: self.plugin_manager.unload_plugin(name),
                 errors,
             )
-        logger.info("All plugins unloaded (%d total)", len(plugin_names))
+        remaining = list(self.plugin_manager.list_plugins())
+        if remaining:
+            message = "plugin drain incomplete; quarantined callbacks still running: " + ", ".join(
+                remaining
+            )
+            errors.append(message)
+            logger.warning(message)
+        else:
+            logger.info("All plugins unloaded (%d total)", len(plugin_names))
 
     async def _close_http_session(self) -> None:
         session = self.http_session
@@ -618,7 +643,10 @@ class XiaoQingApp:
         source_plugin = str(action.get("_source_plugin", "") or "").strip()
         if not source_plugin:
             return
-        if str(action.get("action", "") or "").strip() not in ("send_group_msg", "send_private_msg"):
+        if str(action.get("action", "") or "").strip() not in (
+            "send_group_msg",
+            "send_private_msg",
+        ):
             return
 
         loaded = self.plugin_manager.get("xiaoqing_chat")
@@ -639,6 +667,7 @@ class XiaoQingApp:
                     group_id=group_id,
                 ),
             )
+
             async def run_observer() -> None:
                 await call_plugin_callback(observer, action, context, source_plugin=source_plugin)
 
@@ -681,11 +710,14 @@ class XiaoQingApp:
 
         logger.debug(
             "Split long message into %d chunks (action=%s)",
-            len(results), act_name,
+            len(results),
+            act_name,
         )
         return results
 
-    async def _send_single_action(self, action: dict[str, Any], wait_ws_seconds: float = 0.0) -> bool:
+    async def _send_single_action(
+        self, action: dict[str, Any], wait_ws_seconds: float = 0.0
+    ) -> bool:
         try:
             act = str(action.get("action", "") or "")
             if act in ("send_group_msg", "send_private_msg"):
@@ -696,7 +728,7 @@ class XiaoQingApp:
                     if isinstance(msg, list):
                         preview = _extract_message_preview(msg[:12]).replace("\n", "\\n").strip()
                     if len(preview) > MAX_MESSAGE_PREVIEW_LENGTH:
-                        preview = preview[:MAX_MESSAGE_PREVIEW_LENGTH - 1] + "…"
+                        preview = preview[: MAX_MESSAGE_PREVIEW_LENGTH - 1] + "…"
                     logger.info(
                         "Sending: action=%s group=%s user=%s message_length=%s",
                         act,
@@ -713,6 +745,7 @@ class XiaoQingApp:
         def copy_delivery_result() -> None:
             if "_result_message_id" in delivery_action:
                 action["_result_message_id"] = delivery_action["_result_message_id"]
+
         sink = current_action_sink.get()
         if not bypass_sink and sink is not None and getattr(sink, "is_active", True):
             await sink(delivery_action)
@@ -723,7 +756,7 @@ class XiaoQingApp:
             if sent:
                 copy_delivery_result()
                 return True
-            
+
         # 尝试通过 Inbound WebSocket 广播（如果存在活跃连接）
         if self.inbound_manager and self.inbound_manager.has_active_ws_clients():
             await self.inbound_manager.broadcast(delivery_action)
@@ -769,10 +802,10 @@ class XiaoQingApp:
 
         async def _collect(action: dict[str, Any]) -> None:
             collected.append(action)
-        
+
         # 标记 sink 为活动状态
         setattr(_collect, "is_active", True)
-        
+
         token = current_action_sink.set(_collect)
         try:
             action = await self._process_event(event)
@@ -880,33 +913,10 @@ class XiaoQingApp:
                 self._tag_action_source(action, plugin_name),
                 wait_ws_seconds=2.0,
             )
-        async def call_plugin(
-            target_name: str,
-            callback_name: str,
-            *args: Any,
-            **kwargs: Any,
-        ) -> Any:
-            loaded = self.plugin_manager.get(target_name)
-            if loaded is None:
-                raise RuntimeError(f"plugin is not loaded: {target_name}")
-            callback = getattr(loaded.module, callback_name, None)
-            if not callable(callback):
-                raise RuntimeError(f"plugin callback is unavailable: {target_name}.{callback_name}")
-            target_context = self.plugin_manager.build_context(
-                target_name,
-                user_id,
-                group_id,
-                request_id,
-                principal,
-            )
 
-            async def operation() -> Any:
-                return await call_plugin_callback(callback, *args, target_context, **kwargs)
-
-            return await invoke_loaded_plugin(loaded, operation)
         plugin_config = self._plugin_config_view(plugin_name)
         plugin_secrets = self._plugin_secrets_view(plugin_name)
-        capabilities = self._build_plugin_capabilities(plugin_name, principal)
+        capabilities = self._build_plugin_capabilities(plugin_name, principal, request_id)
         return PluginContext(
             config=plugin_config,
             secrets=plugin_secrets,
@@ -930,17 +940,84 @@ class XiaoQingApp:
                 plugin_name, path, value
             ),
             secret_deleter=lambda path: self.config_manager.delete_plugin_secret(plugin_name, path),
-            plugin_caller=call_plugin,
             principal=principal,
             capabilities=capabilities,
             request_id=request_id,
             state=state,
         )
 
+    async def _invoke_declared_service(
+        self,
+        *,
+        caller_plugin: str,
+        service_name: str,
+        principal: PluginPrincipal,
+        request_id: str | None,
+        args: tuple[Any, ...],
+        granted_capabilities: frozenset[str] = frozenset(),
+    ) -> Any:
+        """Invoke one current manifest binding selected by a core capability."""
+
+        if not self._principal_authority.owns(principal):
+            raise PermissionError("plugin service principal was not issued by this application")
+        loaded, service = self.plugin_manager.resolve_service(
+            caller_plugin=caller_plugin,
+            service_name=service_name,
+            granted_capabilities=granted_capabilities,
+        )
+        user_id = principal.user_id if principal.kind == "user" else None
+        group_id = principal.group_id if principal.kind == "user" else None
+        target_context = self.plugin_manager.build_context(
+            service.owner,
+            user_id,
+            group_id,
+            request_id,
+            principal,
+        )
+
+        async def operation() -> Any:
+            return await call_plugin_callback(service.callback, *args, target_context)
+
+        return await invoke_loaded_plugin(loaded, operation)
+
+    def _codex_arxiv_authorized(self, principal: PluginPrincipal) -> bool:
+        if not self._principal_authority.owns(principal):
+            return False
+        if principal.is_system:
+            return True
+        return (
+            principal.kind == "user"
+            and principal.user_id is not None
+            and principal.is_bot_admin
+            and self.is_admin(principal.user_id)
+        )
+
+    async def _enqueue_codex_arxiv_summary(
+        self,
+        *,
+        principal: PluginPrincipal,
+        request_id: str | None,
+        date: str,
+        links: list[str],
+    ) -> str:
+        if not self._codex_arxiv_authorized(principal):
+            raise PermissionError("Codex arXiv capability is no longer authorized")
+        user_id = principal.user_id if principal.kind == "user" else None
+        group_id = principal.group_id if principal.kind == "user" else None
+        return await self._invoke_declared_service(
+            caller_plugin="arxiv_filter",
+            service_name="codex.enqueue_arxiv_summary",
+            principal=principal,
+            request_id=request_id,
+            args=(date, list(links), user_id, group_id),
+            granted_capabilities=frozenset({"codex_arxiv_summary"}),
+        )
+
     def _build_plugin_capabilities(
         self,
         plugin_name: str,
         principal: PluginPrincipal,
+        request_id: str | None = None,
     ) -> PluginCapabilities:
         is_system = principal.is_system and self._principal_authority.owns(principal)
         is_bot_admin = (
@@ -966,6 +1043,7 @@ class XiaoQingApp:
 
         config_subscription = None
         if plugin_name == "pendo":
+
             def subscribe(callback: Callable[[dict[str, Any]], Any]) -> Callable[[], None]:
                 def relay(_snapshot: ConfigSnapshot) -> Any:
                     return callback(self._plugin_config_view(plugin_name))
@@ -974,12 +1052,54 @@ class XiaoQingApp:
 
             config_subscription = ConfigSubscriptionService(subscribe)
 
+        codex_arxiv_summary = None
+        if plugin_name == "arxiv_filter" and (is_system or is_bot_admin):
+            codex_arxiv_summary = CodexArxivSummaryService(
+                _authorized=lambda: self._codex_arxiv_authorized(principal),
+                _enqueue=functools.partial(
+                    self._enqueue_codex_arxiv_summary,
+                    principal=principal,
+                    request_id=request_id,
+                ),
+            )
+
+        voice_synthesis = None
+        chat_reply = None
+        if plugin_name == "smalltalk":
+
+            async def synthesize_text(text: str) -> list[dict[str, Any]] | None:
+                return await self._invoke_declared_service(
+                    caller_plugin="smalltalk",
+                    service_name="voice.synthesize_text",
+                    principal=principal,
+                    request_id=request_id,
+                    args=(text,),
+                )
+
+            async def reply_via_chat(
+                text: str,
+                event: dict[str, Any],
+            ) -> list[dict[str, Any]]:
+                return await self._invoke_declared_service(
+                    caller_plugin="smalltalk",
+                    service_name="chat.reply",
+                    principal=principal,
+                    request_id=request_id,
+                    args=(text, dict(event)),
+                )
+
+            voice_synthesis = VoiceSynthesisService(synthesize_text)
+            chat_reply = ChatReplyService(reply_via_chat)
+
         return PluginCapabilities(
             is_bot_admin=is_bot_admin,
             is_system=is_system,
             secret_admin=secret_admin,
             onebot_media=onebot_media,
             config_subscription=config_subscription,
+            codex_arxiv_summary=codex_arxiv_summary,
+            voice_synthesis=voice_synthesis,
+            chat_reply=chat_reply,
         )
 
     def _plugin_config_view(self, plugin_name: str) -> dict[str, Any]:
@@ -1040,7 +1160,6 @@ class XiaoQingApp:
                 logger.info("Plugin reload completed successfully")
         except Exception as exc:
             logger.exception("Plugin reload failed: %s", exc)
-
 
     # ============================================================
     # 配置热更新
@@ -1272,7 +1391,9 @@ class XiaoQingApp:
                 handler = getattr(loaded.module, handler_name)
                 # 获取定时任务配置的 group_ids（可选）
                 raw_group_ids = entry.get("group_ids")
-                group_ids = [int(x) for x in raw_group_ids] if raw_group_ids else None
+                group_ids = (
+                    tuple(int(x) for x in raw_group_ids) if raw_group_ids is not None else None
+                )
 
                 self.scheduler.add_job(
                     job_id,
@@ -1291,7 +1412,7 @@ class XiaoQingApp:
         self,
         handler,
         plugin_name: str,
-        group_ids: list[int] | None = None,
+        group_ids: tuple[int, ...] | list[int] | None = None,
         *,
         loaded_plugin: Any | None = None,
     ) -> None:
@@ -1299,15 +1420,23 @@ class XiaoQingApp:
         if self._stopping:
             logger.debug("Scheduled job skipped while stopping: %s", plugin_name)
             return
+        raw_target_groups = (
+            group_ids if group_ids is not None else list(self.config.get("default_group_ids", []))
+        )
+        delivery_targets = tuple(DeliveryTarget("group", int(value)) for value in raw_target_groups)
+        principal = self._principal_authority.issue(
+            kind="scheduled_system",
+            is_private=False,
+            delivery_targets=delivery_targets,
+        )
         context = self.plugin_manager.build_context(
             plugin_name,
-            principal=self._principal_authority.issue(
-                kind="scheduled_system",
-                is_private=False,
-            ),
+            principal=principal,
         )
         try:
-            loaded = loaded_plugin if loaded_plugin is not None else self.plugin_manager.get(plugin_name)
+            loaded = (
+                loaded_plugin if loaded_plugin is not None else self.plugin_manager.get(plugin_name)
+            )
 
             async def run_job_handler() -> Any:
                 return await call_plugin_callback(handler, context)
@@ -1318,10 +1447,8 @@ class XiaoQingApp:
             if not segs:
                 return
 
-            # 优先使用任务配置的 group_ids，否则使用默认群组
-            target_groups = group_ids if group_ids else context.default_groups()
-            for group_id in target_groups:
-                action = build_action(segs, None, group_id)
+            for target in principal.delivery_targets:
+                action = build_action(segs, target.user_id, target.group_id)
                 if action:
                     action = self._tag_action_source(action, plugin_name)
                     # 使用统一的 _send_action 方法（优先 WS，备选 HTTP）

@@ -7,12 +7,19 @@ CHIME FRB 重复暴监测插件
 import asyncio
 import logging
 import re
-from pathlib import Path
 
 # 本地导入
 from core.args import parse
+from core.bounded_http import (
+    JSON_MIME_POLICY,
+    BodyLimits,
+    HttpStatusError,
+    JsonLimits,
+    aiohttp_request_bounded,
+    parse_bounded_json,
+)
 from core.plugin_base import build_action, ensure_dir, load_json, segments, write_json
-
+from core.public_errors import public_error_message, public_error_response
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +31,16 @@ logger = logging.getLogger(__name__)
 CHIME_API_URL = 'https://catalog.chime-frb.ca/repeaters'
 PULSE_DATE_PATTERN = r'\d{6}'  # 用于匹配脉冲日期键（如 "201225"）
 MAX_DISPLAY_FRBS = 5  # 最多显示的 FRB 数量
+_CHIME_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=4 * 1024 * 1024,
+    max_decoded_bytes=8 * 1024 * 1024,
+)
+_CHIME_JSON_LIMITS = JsonLimits(
+    max_bytes=_CHIME_BODY_LIMITS.max_decoded_bytes,
+    max_depth=64,
+    max_nodes=100_000,
+    max_string_chars=6 * 1024 * 1024,
+)
 
 
 # ============================================================
@@ -108,22 +125,33 @@ async def fetch_chime_repeaters(context) -> dict | None:
     """
     try:
         context.logger.info(f"正在请求 CHIME API: {CHIME_API_URL}")
-        async with context.http_session.post(CHIME_API_URL, json={}, timeout=30) as response:
-            if response.status == 200:
-                data = await response.json()
-                if not isinstance(data, dict):
-                    context.logger.error(f"CHIME API 返回数据格式错误: 期望字典，得到 {type(data)}")
-                    return None
-                context.logger.info(f"成功获取 CHIME 数据，共 {len(data)} 个重复暴")
-                return data
-            else:
-                context.logger.warning(f"CHIME API 请求失败: HTTP {response.status}")
-                return None
+        response = await aiohttp_request_bounded(
+            context.http_session,
+            "POST",
+            CHIME_API_URL,
+            limits=_CHIME_BODY_LIMITS,
+            mime_policy=JSON_MIME_POLICY,
+            request_kwargs={"json": {}, "timeout": 30},
+        )
+        data = parse_bounded_json(response, limits=_CHIME_JSON_LIMITS)
+        if not isinstance(data, dict):
+            context.logger.error("CHIME API 返回数据格式错误: 期望字典")
+            return None
+        context.logger.info(f"成功获取 CHIME 数据，共 {len(data)} 个重复暴")
+        return data
+    except HttpStatusError as exc:
+        context.logger.warning("CHIME API 请求失败: HTTP %s", exc.status)
+        return None
     except asyncio.TimeoutError:
         context.logger.error("CHIME API 请求超时")
         return None
     except Exception as exc:
-        context.logger.error(f"CHIME API 请求异常: {type(exc).__name__}: {exc}", exc_info=True)
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="chime.fetch",
+        )
         return None
 
 
@@ -151,7 +179,12 @@ def parse_frb_data(data: dict, context) -> list:
             else:
                 context.logger.debug(f"跳过无效 FRB 数据: {name}")
         except Exception as exc:
-            context.logger.warning(f"解析 FRB {name} 数据时出错: {exc}")
+            public_error_message(
+                context,
+                exc,
+                logger=context.logger,
+                component="chime.parse_frb",
+            )
             continue
     
     return frb_list
@@ -204,7 +237,12 @@ def find_updates(
                 new_pulses.append(frb)
                 context.logger.info(f"检测到新脉冲: {name} ({old_timestamp} -> {frb.timestamp})")
         except Exception as exc:
-            context.logger.warning(f"处理 FRB {name} 更新时出错: {exc}")
+            public_error_message(
+                context,
+                exc,
+                logger=context.logger,
+                component="chime.find_updates",
+            )
             continue
     
     return new_repeaters, new_pulses
@@ -241,7 +279,12 @@ def save_history(context, mapping: dict) -> bool:
         context.logger.debug(f"历史记录已保存: {len(mapping)} 条")
         return True
     except Exception as exc:
-        context.logger.error(f"保存历史记录失败: {exc}", exc_info=True)
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="chime.save_history",
+        )
         return False
 
 
@@ -374,9 +417,8 @@ async def handle(
             ]
             return segments("\n".join(lines))
         
-    except Exception as e:
-        logger.exception("CHIME handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="chime.handle")
 
 
 def _show_help() -> str:

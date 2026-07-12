@@ -10,13 +10,29 @@
 import functools
 import inspect
 import logging
-import uuid
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any
+
+from core.public_errors import public_error_message
 
 from ..core.exceptions import PendoException
 
 logger = logging.getLogger(__name__)
+_command_error_depth: ContextVar[int] = ContextVar("pendo_command_error_depth", default=0)
+
+
+def _context_from_call(
+    target: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> Any | None:
+    """Resolve a named context argument without guessing from positional slots."""
+    explicit = kwargs.get("context")
+    if explicit is not None:
+        return explicit
+    try:
+        return inspect.signature(target).bind_partial(*args, **kwargs).arguments.get("context")
+    except (TypeError, ValueError):
+        return None
 
 
 def build_result(status: str, message: str, **extra: Any) -> dict[str, Any]:
@@ -72,27 +88,40 @@ def handle_command_errors(
     def decorator(target: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(target)
         async def wrapper(*args, **kwargs) -> Any:
+            parent_depth = _command_error_depth.get()
+            depth_token = _command_error_depth.set(parent_depth + 1)
             try:
                 return await target(*args, **kwargs)
-            except PendoException as e:
-                e.log_error()
-                if return_segments:
-                    return [{"type": "text", "data": {"text": e.get_user_message()}}]
-                return error_result(e.get_user_message(), error_code=e.error_code)
-            except Exception as e:
-                error_id = uuid.uuid4().hex[:8]
-                logger.exception("[%s] Unexpected error in %s: %s", error_id, target.__name__, e)
-                if return_segments:
-                    return [
-                        {
-                            "type": "text",
-                            "data": {"text": f"❌ 系统错误 (ID: {error_id})\n请联系管理员"},
-                        }
-                    ]
-                return error_result(
-                    f"❌ 系统错误 (ID: {error_id})\n请联系管理员",
-                    error_id=error_id,
+            except PendoException as exc:
+                if parent_depth:
+                    raise
+                context = _context_from_call(target, args, kwargs)
+                request_id = str(getattr(context, "request_id", "") or "-")
+                logger.warning(
+                    "Pendo business error error_code=%s error_type=%s",
+                    exc.error_code,
+                    type(exc).__name__,
+                    extra={"request_id": request_id},
                 )
+                if return_segments:
+                    return [{"type": "text", "data": {"text": exc.get_user_message()}}]
+                return error_result(exc.get_user_message(), error_code=exc.error_code)
+            except Exception as exc:
+                if parent_depth:
+                    raise
+                context = _context_from_call(target, args, kwargs)
+                log = getattr(context, "logger", None) or logger
+                message = public_error_message(
+                    context,
+                    exc,
+                    logger=log,
+                    component=f"pendo.{target.__name__}",
+                )
+                if return_segments:
+                    return [{"type": "text", "data": {"text": message}}]
+                return error_result(message)
+            finally:
+                _command_error_depth.reset(depth_token)
 
         return wrapper
 
@@ -132,8 +161,15 @@ def handle_scheduled_task_errors(task_name: str) -> Callable[..., Any]:
             try:
                 result = await func(*args, **kwargs)
                 return result if result else []
-            except Exception as e:
-                logger.exception("Scheduled task '%s' failed: %s", task_name, e)
+            except Exception as exc:
+                context = _context_from_call(func, args, kwargs)
+                log = getattr(context, "logger", None) or logger
+                public_error_message(
+                    context,
+                    exc,
+                    logger=log,
+                    component=f"pendo.scheduled.{task_name}",
+                )
                 return []
 
         return wrapper
@@ -142,10 +178,7 @@ def handle_scheduled_task_errors(task_name: str) -> Callable[..., Any]:
 
 
 def log_exceptions(logger_instance: logging.Logger | None = None) -> Callable[..., Any]:
-    """通用异常日志装饰器
-
-    记录函数执行中的所有异常，但不影响异常传播。
-    适用于需要记录异常但不处理的场景。
+    """兼容旧接口：保留包装器，但把异常原样交给最外层边界。
 
     Args:
         logger_instance: 日志记录器实例，不提供则使用模块logger
@@ -161,23 +194,15 @@ def log_exceptions(logger_instance: logging.Logger | None = None) -> Callable[..
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        _ = logger_instance
+
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
-            log = logger_instance or logger
-            try:
-                return await func(*args, **kwargs)
-            except Exception as e:
-                log.exception("Exception in %s: %s", func.__name__, e)
-                raise
+            return await func(*args, **kwargs)
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
-            log = logger_instance or logger
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                log.exception("Exception in %s: %s", func.__name__, e)
-                raise
+            return func(*args, **kwargs)
 
         # 判断是否为协程函数
         if inspect.iscoroutinefunction(func):

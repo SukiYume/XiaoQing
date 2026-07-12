@@ -2,6 +2,8 @@
 公式速查和计算模块
 """
 
+from core.public_errors import public_error_message
+
 # 公式定义常量
 FORMULAS = {
     'dm': {
@@ -174,8 +176,10 @@ async def _handle_calculation(args: str, context) -> str:
                    f"- luminosity <质量> - 主序星光度\n" \
                    f"- lifetime <质量> - 主序星寿命"
     
-    except Exception as e:
-        return f"计算失败: {e}"
+    except Exception as exc:
+        return public_error_message(
+            context, exc, logger=context.logger, component="astro_tools.formula"
+        )
 
 
 def _get_formula_list() -> str:

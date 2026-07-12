@@ -5,27 +5,30 @@
 from __future__ import annotations
 
 import logging
-import secrets
 from typing import Any
 
-from core.plugin_base import segments
 from core.args import parse
+from core.plugin_base import segments
+from core.public_errors import public_error_message, public_error_response
 
 from .handlers import (
-    handle_smalltalk,
-    observe_message as observe_message_internal,
-    observe_outgoing_action as observe_outgoing_action_internal,
     call_bot_name_only_internal,
-    handle_internal,
     handle_config,
-    handle_memory,
     handle_expression,
+    handle_internal,
     handle_jargon,
+    handle_memory,
     handle_provider,
     handle_review,
+    handle_smalltalk,
+)
+from .handlers import (
+    observe_message as observe_message_internal,
+)
+from .handlers import (
+    observe_outgoing_action as observe_outgoing_action_internal,
 )
 from .runtime_state import get_state as _state
-
 
 logger = logging.getLogger(__name__)
 
@@ -99,15 +102,14 @@ async def handle(
         event["_xc_command_forced"] = True
         return await handle_smalltalk(text, event, context)
 
-    except Exception as e:
-        request_id = str(getattr(context, "request_id", "") or secrets.token_hex(4))
+    except Exception as exc:
         log = getattr(context, "logger", logger)
-        log.exception(
-            "XiaoQing Chat handle failed request_id=%s error_type=%s",
-            request_id,
-            type(e).__name__,
+        return public_error_response(
+            context,
+            exc,
+            logger=log,
+            component="xiaoqing_chat.handle",
         )
-        return segments(f"处理请求暂时失败，请稍后重试（请求ID: {request_id}）")
 
 
 def _show_help() -> str:
@@ -195,19 +197,34 @@ async def shutdown(context) -> None:
     try:
         state.action_history.flush_all()
     except Exception as exc:
-        log.warning("XiaoQing Chat: action_history flush failed: %s", exc)
+        public_error_message(
+            context,
+            exc,
+            logger=log,
+            component="xiaoqing_chat.shutdown.action_history",
+        )
 
     try:
         state.media_store.flush_all()
     except Exception as exc:
-        log.warning("XiaoQing Chat: media_store flush failed: %s", exc)
+        public_error_message(
+            context,
+            exc,
+            logger=log,
+            component="xiaoqing_chat.shutdown.media_store",
+        )
 
     # 3. Save vector DB if dirty
     try:
         if state.memory_db.is_dirty():
             await asyncio.to_thread(state.memory_db.save)
     except Exception as exc:
-        log.warning("XiaoQing Chat: memory_db save failed: %s", exc)
+        public_error_message(
+            context,
+            exc,
+            logger=log,
+            component="xiaoqing_chat.shutdown.memory_db",
+        )
 
     log.info("XiaoQing Chat plugin shutdown complete")
     # 当前没有需要清理的资源

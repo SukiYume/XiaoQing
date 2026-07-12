@@ -8,7 +8,9 @@ import inspect
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from concurrent.futures import Future as ConcurrentFuture
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
@@ -18,6 +20,10 @@ logger = logging.getLogger(__name__)
 _SYNC_PLUGIN_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="xiaoqing-plugin",
+)
+_CURRENT_EXECUTION_GATE: ContextVar[PluginExecutionGate | None] = ContextVar(
+    "xiaoqing_current_plugin_execution_gate",
+    default=None,
 )
 
 
@@ -29,14 +35,15 @@ class PluginExecutionPolicy:
     parallel_limit: int = 4
     failure_threshold: int = 3
     cooldown_seconds: float = 60.0
+    drain_timeout_seconds: float = 5.0
 
     @classmethod
     def from_mapping(
         cls,
         values: dict[str, Any] | None,
         *,
-        fallback: "PluginExecutionPolicy | None" = None,
-    ) -> "PluginExecutionPolicy":
+        fallback: PluginExecutionPolicy | None = None,
+    ) -> PluginExecutionPolicy:
         base = fallback or cls()
         values = values if isinstance(values, dict) else {}
 
@@ -63,7 +70,21 @@ class PluginExecutionPolicy:
             parallel_limit=positive_int("parallel_limit", base.parallel_limit),
             failure_threshold=positive_int("failure_threshold", base.failure_threshold),
             cooldown_seconds=positive_float("cooldown_seconds", base.cooldown_seconds),
+            drain_timeout_seconds=positive_float(
+                "drain_timeout_seconds",
+                base.drain_timeout_seconds,
+            ),
         )
+
+
+@dataclass(frozen=True)
+class PluginExecutionDrainResult:
+    """Bounded close result, including work Python cannot force-stop."""
+
+    drained: bool
+    pending_async_tasks: int
+    pending_sync_callbacks: int
+    waited_seconds: float
 
 
 class PluginExecutionClosed(RuntimeError):
@@ -104,10 +125,12 @@ class PluginExecutionGate:
         self._parallel_semaphore: asyncio.Semaphore | None = None
         self._active_tasks: set[asyncio.Task[Any]] = set()
         self._operation_tasks: set[asyncio.Task[Any]] = set()
+        self._sync_futures: set[ConcurrentFuture[Any]] = set()
         self._closed = False
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
         self._poisoned_by_timeout = False
+        self._poisoned_by_sync_callback = False
 
     @property
     def closed(self) -> bool:
@@ -116,6 +139,16 @@ class PluginExecutionGate:
     @property
     def policy(self) -> PluginExecutionPolicy:
         return self._policy
+
+    @property
+    def pending_sync_callbacks(self) -> int:
+        return sum(not future.done() for future in self._sync_futures)
+
+    @property
+    def drained(self) -> bool:
+        return not any(not task.done() for task in self._active_tasks | self._operation_tasks) and not any(
+            not future.done() for future in self._sync_futures
+        )
 
     def set_policy(self, policy: PluginExecutionPolicy) -> None:
         """Apply new limits to future calls without disturbing active work."""
@@ -144,13 +177,17 @@ class PluginExecutionGate:
             raise PluginExecutionClosed("plugin is unloading")
         if allow_closed:
             return
-        if self._poisoned_by_timeout or time.monotonic() < self._circuit_open_until:
+        if (
+            self._poisoned_by_timeout
+            or self._poisoned_by_sync_callback
+            or time.monotonic() < self._circuit_open_until
+        ):
             raise PluginExecutionUnavailable("plugin circuit is temporarily open")
 
     async def _record_success(self) -> None:
         async with self._get_state_lock():
             self._consecutive_failures = 0
-            if not self._poisoned_by_timeout:
+            if not self._poisoned_by_timeout and not self._poisoned_by_sync_callback:
                 self._circuit_open_until = 0.0
 
     async def _record_failure(self, *, force_open: bool = False) -> None:
@@ -165,11 +202,53 @@ class PluginExecutionGate:
             task.exception()
         except (asyncio.CancelledError, Exception):
             pass
-        if self._poisoned_by_timeout and not self._operation_tasks:
+        if self._poisoned_by_timeout and not any(
+            not operation.done() for operation in self._operation_tasks
+        ):
             self._poisoned_by_timeout = False
 
+    def _discard_sync_future(self, future: ConcurrentFuture[Any]) -> None:
+        self._sync_futures.discard(future)
+        try:
+            future.exception()
+        except Exception:
+            pass
+        if self._poisoned_by_sync_callback and not any(
+            not item.done() for item in self._sync_futures
+        ):
+            self._poisoned_by_sync_callback = False
+
+    def _register_sync_future(self, future: ConcurrentFuture[Any]) -> None:
+        """Track the actual executor future, not its cancellable asyncio facade."""
+
+        self._sync_futures.add(future)
+        loop = asyncio.get_running_loop()
+
+        def completed(item: ConcurrentFuture[Any]) -> None:
+            try:
+                loop.call_soon_threadsafe(self._discard_sync_future, item)
+            except RuntimeError:
+                # Event-loop teardown cannot make a running thread disappear;
+                # retain only genuinely unfinished futures for diagnostics.
+                self._sync_futures.discard(item)
+
+        future.add_done_callback(completed)
+
+    def _mark_unfinished_child(self, task: asyncio.Task[Any]) -> None:
+        if not task.done():
+            self._poisoned_by_timeout = True
+        if any(not future.done() for future in self._sync_futures):
+            self._poisoned_by_sync_callback = True
+
     async def _run_bounded(self, operation: Callable[[], Awaitable[T]]) -> T:
-        task = asyncio.create_task(operation())
+        async def run_in_gate_scope() -> T:
+            token = _CURRENT_EXECUTION_GATE.set(self)
+            try:
+                return await operation()
+            finally:
+                _CURRENT_EXECUTION_GATE.reset(token)
+
+        task = asyncio.create_task(run_in_gate_scope())
         self._operation_tasks.add(task)
         task.add_done_callback(self._discard_operation_task)
         try:
@@ -181,11 +260,7 @@ class PluginExecutionGate:
         except asyncio.TimeoutError as exc:
             await self._record_failure(force_open=True)
             task.cancel()
-            if not task.done():
-                # Python cannot force-stop a coroutine which ignores
-                # CancelledError.  Quarantine the plugin until every timed-out
-                # child actually exits, rather than allowing overlapping work.
-                self._poisoned_by_timeout = True
+            self._mark_unfinished_child(task)
             logger.warning(
                 "Plugin callback timed out: plugin=%s timeout=%.1fs",
                 self.plugin_name,
@@ -194,6 +269,7 @@ class PluginExecutionGate:
             raise PluginExecutionTimeout("plugin callback timed out") from exc
         except asyncio.CancelledError:
             task.cancel()
+            self._mark_unfinished_child(task)
             raise
         except Exception:
             await self._record_failure()
@@ -237,27 +313,71 @@ class PluginExecutionGate:
             async with state_lock:
                 self._active_tasks.discard(task)
 
-    async def close(self) -> None:
-        """Stop admitting work and cancel outstanding invocations."""
+    async def close(
+        self,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> PluginExecutionDrainResult:
+        """Close admission and wait a bounded time for real executor work."""
 
+        started = time.monotonic()
+        timeout = (
+            self._policy.drain_timeout_seconds
+            if timeout_seconds is None
+            else max(0.0, float(timeout_seconds))
+        )
+        deadline = started + timeout
         current_task = asyncio.current_task()
         async with self._get_state_lock():
             self._closed = True
-            tasks_to_cancel = [
+            tasks_to_cancel = {
                 task
-                for task in self._active_tasks
+                for task in self._active_tasks | self._operation_tasks
                 if task is not current_task and not task.done()
-            ]
-            tasks_to_cancel.extend(
-                task
-                for task in self._operation_tasks
-                if task is not current_task and not task.done()
-            )
+            }
 
-        for task in set(tasks_to_cancel):
+        for task in tasks_to_cancel:
             task.cancel()
-        if tasks_to_cancel:
-            await asyncio.gather(*set(tasks_to_cancel), return_exceptions=True)
+
+        while True:
+            pending_async = {
+                task
+                for task in self._active_tasks | self._operation_tasks
+                if task is not current_task and not task.done()
+            }
+            pending_sync = {
+                future for future in self._sync_futures if not future.done()
+            }
+            if not pending_async and not pending_sync:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(0.01, remaining))
+
+        pending_async_count = sum(
+            task is not current_task and not task.done()
+            for task in self._active_tasks | self._operation_tasks
+        )
+        pending_sync_count = sum(not future.done() for future in self._sync_futures)
+        drained = pending_async_count == 0 and pending_sync_count == 0
+        waited = time.monotonic() - started
+        if drained and tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+        if not drained:
+            logger.warning(
+                "Plugin gate close left quarantined work: plugin=%s async=%d sync=%d waited=%.2fs",
+                self.plugin_name,
+                pending_async_count,
+                pending_sync_count,
+                waited,
+            )
+        return PluginExecutionDrainResult(
+            drained=drained,
+            pending_async_tasks=pending_async_count,
+            pending_sync_callbacks=pending_sync_count,
+            waited_seconds=waited,
+        )
 
 
 async def invoke_loaded_plugin(
@@ -285,10 +405,20 @@ async def call_plugin_callback(callback: Callable[..., T], *args: Any, **kwargs:
         result = callback(*args, **kwargs)
     else:
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            _SYNC_PLUGIN_EXECUTOR,
-            functools.partial(callback, *args, **kwargs),
+        future = _SYNC_PLUGIN_EXECUTOR.submit(
+            functools.partial(callback, *args, **kwargs)
         )
+        gate = _CURRENT_EXECUTION_GATE.get()
+        if gate is not None:
+            gate._register_sync_future(future)
+        wrapped = asyncio.wrap_future(future, loop=loop)
+        try:
+            result = await asyncio.shield(wrapped)
+        except asyncio.CancelledError:
+            # Queued work can still be cancelled; a callback already running
+            # in a Python thread remains registered until its real future ends.
+            future.cancel()
+            raise
     if inspect.isawaitable(result):
         return await result
     return result

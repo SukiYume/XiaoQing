@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from core.public_errors import public_error_message, public_error_response
+
 from .codex_summary import schedule_codex_summary_from_filter_result
 from .utils import load_plugin_config
 
@@ -91,7 +93,7 @@ async def _cached_inference(
                     _FILTER_INFLIGHT.pop(key, None)
 
 
-def _load_inference(force_reload: bool = False):
+def _load_inference(force_reload: bool = False, context: Any | None = None):
     """
     动态加载推理模块
 
@@ -133,12 +135,31 @@ def _load_inference(force_reload: bool = False):
         _inference_func = get_positive_arxiv_today_as_string
         logger.info("成功加载 arxiv_inference 模块")
         return _inference_func
-    except ImportError as e:
-        logger.error(f"导入 arxiv_inference 模块失败: {e}")
+    except ImportError as exc:
+        if context is not None:
+            public_error_message(
+                context,
+                exc,
+                logger=logger,
+                component="arxiv_filter.load_inference",
+            )
+        else:
+            logger.error("导入 arxiv_inference 模块失败: error_type=ImportError")
         logger.error("请确保安装了所需依赖: torch, transformers")
         return None
-    except Exception as e:
-        logger.exception(f"加载推理模块时发生异常: {e}")
+    except Exception as exc:
+        if context is not None:
+            public_error_message(
+                context,
+                exc,
+                logger=logger,
+                component="arxiv_filter.load_inference",
+            )
+        else:
+            logger.error(
+                "加载推理模块时发生异常: error_type=%s",
+                type(exc).__name__,
+            )
         return None
 
 
@@ -177,18 +198,18 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> Any
 
         return await _run_filter(
             context,
-            user_id=event.get("user_id"),
-            group_id=event.get("group_id"),
             allow_codex_sidecar=_is_admin_user(context, event.get("user_id")),
         )
 
-    except Exception as e:
-        logger.exception("ArXiv Filter handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="arxiv_filter.handle")
 
 
 async def scheduled(context) -> Any:
     """定时任务入口"""
+    if _scheduled_without_delivery_targets(context):
+        logger.info("skip scheduled arXiv filter: no explicit delivery targets")
+        return []
     return await _run_filter(context, allow_codex_sidecar=True)
 
 
@@ -215,6 +236,13 @@ def _is_admin_user(context: Any, user_id: Any) -> bool:
         return False
 
 
+def _scheduled_without_delivery_targets(context: Any) -> bool:
+    principal = getattr(context, "principal", None)
+    return bool(
+        principal is not None
+        and getattr(principal, "kind", None) == "scheduled_system"
+        and not tuple(getattr(principal, "delivery_targets", ()))
+    )
 async def scheduled_check(context) -> Any:
     """定时检查 arXiv 是否更新"""
     return await _check_arxiv_update(context, is_final_check=False)
@@ -228,8 +256,6 @@ async def scheduled_final_check(context) -> Any:
 async def _run_filter(
     context,
     *,
-    user_id: int | None = None,
-    group_id: int | None = None,
     allow_codex_sidecar: bool = False,
 ) -> Any:
     """
@@ -247,7 +273,7 @@ async def _run_filter(
     configured_model_path = model_config.get("path", "best_model")
 
     # 加载推理函数
-    inference = _load_inference()
+    inference = _load_inference(context=context)
     if inference is None:
         error_msg = (
             "⚠️ 无法加载 AI 模型或依赖，请检查模型配置；"
@@ -257,7 +283,10 @@ async def _run_filter(
         return segments(error_msg)
 
     try:
-        logger.info(f"开始执行 arXiv 论文筛选，模型路径配置: {configured_model_path}")
+        logger.info(
+            "开始执行 arXiv 论文筛选，model_path_configured=%s",
+            bool(configured_model_path),
+        )
         start_time = time.time()
         arxiv_text = await _cached_inference(context, inference, configured_model_path)
         elapsed = time.time() - start_time
@@ -267,8 +296,12 @@ async def _run_filter(
 
         # 检查是否有错误消息
         if arxiv_text.startswith("Error:"):
-            logger.error(f"推理过程返回错误: {arxiv_text}")
-            return segments("❌ 论文获取失败，请稍后再试。")
+            return public_error_response(
+                context,
+                RuntimeError("arXiv inference returned an error result"),
+                logger=logger,
+                component="arxiv_filter.inference_result",
+            )
 
         # 检查是否没有结果
         if "No positive predictions" in arxiv_text:
@@ -278,18 +311,27 @@ async def _run_filter(
 
         logger.debug(f"筛选结果预览: {arxiv_text[:200]}...")
 
-    except FileNotFoundError as e:
-        logger.error(f"文件未找到: {e}")
-        logger.error(f"检查的模型配置路径: {configured_model_path}")
-        return segments("❌ 模型文件不完整，请联系管理员。")
-    except ImportError as e:
-        logger.error(f"缺少依赖库: {e}")
-        logger.error("请安装: pip install torch transformers")
-        return segments("❌ 系统依赖不完整，请联系管理员。")
+    except FileNotFoundError as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="arxiv_filter.model_file",
+        )
+    except ImportError as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="arxiv_filter.dependencies",
+        )
     except Exception as exc:
-        logger.exception(f"arXiv 筛选器运行异常: {exc}")
-        logger.error(f"模型配置路径: {configured_model_path}")
-        return segments("❌ 论文筛选服务暂时不可用，请稍后再试。")
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="arxiv_filter.run",
+        )
 
     # 格式化输出
     today = _business_now(context).date()
@@ -300,11 +342,14 @@ async def _run_filter(
                 context,
                 date=today.isoformat(),
                 filter_text=arxiv_text,
-                user_id=user_id,
-                group_id=group_id,
             )
         except Exception as exc:
-            logger.exception("failed to start Codex arXiv summary sidecar: %s", exc)
+            public_error_message(
+                context,
+                exc,
+                logger=logger,
+                component="arxiv_filter.codex_sidecar",
+            )
     return segments(header + arxiv_text)
 
 
@@ -347,8 +392,11 @@ def _load_update_status(plugin_dir: str) -> dict[str, object]:
         try:
             with open(status_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            logger.warning(f"加载状态文件失败: {e}")
+        except Exception as exc:
+            logger.warning(
+                "加载状态文件失败: error_type=%s",
+                type(exc).__name__,
+            )
     return {}
 
 
@@ -357,8 +405,11 @@ def _save_update_status(plugin_dir: str, status: Mapping[str, object]) -> None:
     status_file = _get_status_file_path(plugin_dir)
     try:
         atomic_write_text(Path(status_file), json.dumps(status, ensure_ascii=False, indent=2))
-    except Exception as e:
-        logger.error(f"保存状态文件失败: {e}")
+    except Exception as exc:
+        logger.error(
+            "保存状态文件失败: error_type=%s",
+            type(exc).__name__,
+        )
 
 
 def _should_send_today(plugin_dir: str, business_date: str | None = None) -> bool:
@@ -444,6 +495,10 @@ async def _check_arxiv_update(context, is_final_check: bool = False) -> Any:
     Returns:
         消息段列表
     """
+    if _scheduled_without_delivery_targets(context):
+        logger.info("skip scheduled arXiv update check: no explicit delivery targets")
+        return []
+
     plugin_dir = str(context.plugin_dir)
 
     today = _business_now(context).date().isoformat()
@@ -462,8 +517,13 @@ async def _check_arxiv_update(context, is_final_check: bool = False) -> Any:
 
     try:
         arxiv_date = await run_sync(_check_date)
-    except Exception as e:
-        logger.error(f"检查 arXiv 日期时出错: {e}")
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="arxiv_filter.check_date",
+        )
         _release_claim(plugin_dir, today)
         return []
 

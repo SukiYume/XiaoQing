@@ -1,11 +1,12 @@
 """
 astro_tools 插件单元测试
 """
-import pytest
-import sys
-from pathlib import Path
 import importlib.util
+import sys
 import types
+from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -32,12 +33,12 @@ with open(ROOT / "plugins" / "astro_tools" / "main.py", "r", encoding="utf-8") a
 
 # 替换相对导入
 main_source = main_source.replace("from . import time as astro_time", "import astro_tools_time as astro_time")
-main_source = main_source.replace("from . import coord", "import astro_tools_coord as astro_coord")
-main_source = main_source.replace("from . import convert", "import astro_tools_convert as astro_convert")
-main_source = main_source.replace("from . import redshift", "import astro_tools_redshift as astro_redshift")
-main_source = main_source.replace("from . import formula", "import astro_tools_formula as astro_formula")
-main_source = main_source.replace("from . import obj", "import astro_tools_obj as astro_obj")
-main_source = main_source.replace("from . import const", "import astro_tools_const as astro_const")
+main_source = main_source.replace("from . import coord", "import astro_tools_coord as coord")
+main_source = main_source.replace("from . import convert", "import astro_tools_convert as convert")
+main_source = main_source.replace("from . import redshift", "import astro_tools_redshift as redshift")
+main_source = main_source.replace("from . import formula", "import astro_tools_formula as formula")
+main_source = main_source.replace("from . import obj", "import astro_tools_obj as obj")
+main_source = main_source.replace("from . import const", "import astro_tools_const as const")
 
 # 重命名模块以便导入
 sys.modules["astro_tools_time"] = loaded_modules["time"]
@@ -209,25 +210,24 @@ class TestAstroToolsErrorHandling:
         assert calls["count"] == 1
         assert "未找到天体" in result or "查询失败" not in result
 
-    def test_obj_query_caches_simbad_client(self, monkeypatch):
-        calls = {"count": 0}
+    def test_obj_query_uses_astroquery_only_for_offline_payload(self, monkeypatch):
+        calls = []
 
         class FakeClient:
-            def query_object(self, _name):
-                return None
+            def query_object(self, name, **kwargs):
+                calls.append((name, kwargs))
+                return {"QUERY": "SELECT TOP 1 ra FROM basic"}
 
-        def _fake_build():
-            calls["count"] += 1
-            return FakeClient()
+        monkeypatch.setattr(
+            loaded_modules["obj"],
+            "_build_simbad_client",
+            lambda: FakeClient(),
+        )
 
-        monkeypatch.setattr(loaded_modules["obj"], "_SIMBAD_CLIENT", None)
-        monkeypatch.setattr(loaded_modules["obj"], "_build_simbad_client", _fake_build)
+        query = loaded_modules["obj"]._build_simbad_query("M31")
 
-        first = loaded_modules["obj"]._get_simbad_client()
-        second = loaded_modules["obj"]._get_simbad_client()
-
-        assert first is second
-        assert calls["count"] == 1
+        assert query == "SELECT TOP 1 ra FROM basic"
+        assert calls == [("M31", {"get_query_payload": True})]
 
 
 def test_init():

@@ -102,9 +102,9 @@ async def _show_settings(user_id: str, db: Database) -> str:
         logger.debug("Showing settings for user %s", user_id)
         settings = await run_sync(db.settings.get_user_settings, user_id)
         return format_plugin_settings_message(settings)
-    except Exception as e:
-        logger.exception("Error showing settings for user %s: %s", user_id, e)
-        return f"获取设置失败: {str(e)}"
+    except Exception:
+        # The command boundary owns unexpected-error logging and redaction.
+        raise
 
 async def _update_setting(
     user_id: str,

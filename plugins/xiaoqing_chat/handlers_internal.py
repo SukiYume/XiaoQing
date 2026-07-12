@@ -6,6 +6,7 @@ from typing import Any
 
 from core.plugin_base import segments
 
+from .logging_utils import _redacted_value
 from .memory.review_sessions import apply_review_answer, render_session_prompt
 
 
@@ -13,7 +14,9 @@ def get_data_dir(context) -> Path:
     return context.data_dir
 
 
-def get_bound_state(context, *, state_loader: Callable[[], Any], bind_all_stores: Callable[[Any, Path], None]):
+def get_bound_state(
+    context, *, state_loader: Callable[[], Any], bind_all_stores: Callable[[Any, Path], None]
+):
     state = state_loader()
     bind_all_stores(state, get_data_dir(context))
     return state
@@ -111,8 +114,10 @@ async def handle_internal_impl(
 
         jargons = state.bw_jargon_store.load()
         scoped_jargons = [
-            item for item in jargons.values()
-            if item.is_global or any(str(pair[0]) == chat_id for pair in item.chat_id_counts if pair)
+            item
+            for item in jargons.values()
+            if item.is_global
+            or any(str(pair[0]) == chat_id for pair in item.chat_id_counts if pair)
         ]
         lines.append(f"• 学到的黑话 (本会话): {len(scoped_jargons)}")
 
@@ -131,8 +136,7 @@ async def handle_internal_impl(
         if is_group_reset:
             if not is_admin_operator_fn(event, context):
                 return segments(
-                    "❌ 群会话重置仅限 Bot 管理员、群管理员或群主执行；"
-                    "普通成员不能清除群共享状态。"
+                    "❌ 群会话重置仅限 Bot 管理员、群管理员或群主执行；普通成员不能清除群共享状态。"
                 )
             if confirmation not in {"确认", "confirm"}:
                 return segments(
@@ -150,9 +154,9 @@ async def handle_internal_impl(
         context.logger.info(
             "XiaoQing Chat reset_audit scope=%s chat_id=%s group_id=%s operator_user_id=%s",
             "group" if is_group_reset else "private",
-            chat_id,
-            event.get("group_id"),
-            event.get("user_id"),
+            _redacted_value(chat_id),
+            _redacted_value(event.get("group_id")),
+            _redacted_value(event.get("user_id")),
         )
         return segments("✅ 已重置会话记忆")
 
@@ -174,7 +178,9 @@ async def handle_internal_impl(
     return segments(f"❌ 未知的内部命令: {command}")
 
 
-async def handle_config_impl(args: str, event: dict[str, Any], context, *, handler_context_from_event) -> list[dict[str, Any]]:
+async def handle_config_impl(
+    args: str, event: dict[str, Any], context, *, handler_context_from_event
+) -> list[dict[str, Any]]:
     hctx = handler_context_from_event(event, context)
     runtime, secrets = hctx.runtime, hctx.secrets
     cfg = runtime.cfg
@@ -264,10 +270,14 @@ async def handle_review_impl(
     return segments(f"✅ {applied}\n\n{render_session_prompt(session)}")
 
 
-async def handle_memory_impl(args: str, event: dict[str, Any], context, *, handler_context_from_event) -> list[dict[str, Any]]:
+async def handle_memory_impl(
+    args: str, event: dict[str, Any], context, *, handler_context_from_event
+) -> list[dict[str, Any]]:
     query = args.strip() if args else ""
     if not query:
-        return segments("🔍 **记忆检索**\n\n使用方法: /xc 记忆 <关键词>\n\n示例: /xc 记忆 喜欢的食物")
+        return segments(
+            "🔍 **记忆检索**\n\n使用方法: /xc 记忆 <关键词>\n\n示例: /xc 记忆 喜欢的食物"
+        )
 
     hctx = handler_context_from_event(event, context)
     runtime, state = hctx.runtime, hctx.state
@@ -276,7 +286,10 @@ async def handle_memory_impl(args: str, event: dict[str, Any], context, *, handl
         return segments("❌ 记忆数据库未初始化")
 
     results = memory_db.query(
-        query, chat_id=hctx.chat_id, top_k=runtime.cfg.memory.top_k, min_score=runtime.cfg.memory.min_score
+        query,
+        chat_id=hctx.chat_id,
+        top_k=runtime.cfg.memory.top_k,
+        min_score=runtime.cfg.memory.min_score,
     )
     if not results:
         return segments(f"🔍 **记忆检索结果**\n\n关键词: {query}\n\n未找到相关记忆")
@@ -289,7 +302,9 @@ async def handle_memory_impl(args: str, event: dict[str, Any], context, *, handl
     return segments("\n".join(lines))
 
 
-async def handle_expression_impl(args: str, event: dict[str, Any], context, *, handler_context_from_event) -> list[dict[str, Any]]:
+async def handle_expression_impl(
+    args: str, event: dict[str, Any], context, *, handler_context_from_event
+) -> list[dict[str, Any]]:
     hctx = handler_context_from_event(event, context)
     state = hctx.state
     expression_store = state.bw_expr_store
@@ -312,7 +327,9 @@ async def handle_expression_impl(args: str, event: dict[str, Any], context, *, h
     return segments("\n".join(lines))
 
 
-async def handle_jargon_impl(args: str, event: dict[str, Any], context, *, handler_context_from_event) -> list[dict[str, Any]]:
+async def handle_jargon_impl(
+    args: str, event: dict[str, Any], context, *, handler_context_from_event
+) -> list[dict[str, Any]]:
     hctx = handler_context_from_event(event, context)
     state = hctx.state
     jargon_store = state.bw_jargon_store
@@ -324,8 +341,10 @@ async def handle_jargon_impl(args: str, event: dict[str, Any], context, *, handl
 
     jargon_list = sorted(
         [
-            item for item in jargons.values()
-            if item.is_global or any(str(pair[0]) == hctx.chat_id for pair in item.chat_id_counts if pair)
+            item
+            for item in jargons.values()
+            if item.is_global
+            or any(str(pair[0]) == hctx.chat_id for pair in item.chat_id_counts if pair)
         ],
         key=lambda x: x.count,
         reverse=True,
@@ -356,11 +375,15 @@ async def handle_provider_impl(
         "xiaoqing_chat", {}
     ) or {}
     configured_providers = secrets_base.get("providers") or {}
-    providers: dict[str, dict[str, Any]] = {
-        str(name): dict(value)
-        for name, value in configured_providers.items()
-        if isinstance(name, str) and isinstance(value, dict)
-    } if isinstance(configured_providers, dict) else {}
+    providers: dict[str, dict[str, Any]] = (
+        {
+            str(name): dict(value)
+            for name, value in configured_providers.items()
+            if isinstance(name, str) and isinstance(value, dict)
+        }
+        if isinstance(configured_providers, dict)
+        else {}
+    )
     default_name: str = secrets_base.get("default", "") or ""
     current = state.resolve_provider_name(chat_id, list(providers), default_name)
 

@@ -786,7 +786,7 @@ async def test_render_event_media_text_logs_raw_response_metadata(mock_context):
     assert '"step": "media.analyze.detail.ok"' in log_lines
     assert '"used_path": "[redacted ' in log_lines
     assert '"finish_reason": "stop"' in log_lines
-    assert '"raw_chars": "[redacted ' in log_lines
+    assert f'"raw_chars": {len(raw_content)}' in log_lines
 
 
 @pytest.mark.asyncio
@@ -882,7 +882,7 @@ async def test_render_event_media_text_retries_when_finish_reason_length(mock_co
         str(call.args[1]) if len(call.args) > 1 else ""
         for call in mock_context.logger.warning.call_args_list
     )
-    assert '"reason": "length_truncated"' in warning_lines
+    assert '"reason_code": "length_truncated"' in warning_lines
     assert '"step": "media.analyze.provider_retry"' in warning_lines
 
 
