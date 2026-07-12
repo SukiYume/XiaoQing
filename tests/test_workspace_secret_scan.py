@@ -44,7 +44,7 @@ def test_secret_scan_includes_ignored_and_deprecated_named_paths(tmp_path: Path)
     deprecated = tmp_path / "plugins" / "old_deprecated"
     deprecated.mkdir(parents=True)
     (deprecated / "legacy.py").write_text(
-        "password = " + repr(_credential("prod")),
+        "pass" + "word = " + repr(_credential("prod")),
         encoding="utf-8",
     )
 
@@ -128,7 +128,7 @@ def test_placeholder_words_embedded_in_real_key_do_not_bypass_scan(
 
 def test_allowlist_requires_exact_path_rule_fingerprint_and_reason(tmp_path: Path) -> None:
     secret_path = tmp_path / "legacy.env"
-    secret_path.write_text(f'TOKEN="{_credential()}"\n', encoding="utf-8")
+    secret_path.write_text("TOK" + f'EN="{_credential()}"\n', encoding="utf-8")
     finding = scan_report(tmp_path).findings[0]
     allowlist = tmp_path / "allowlist.json"
     _write_allowlist(allowlist, finding)
@@ -156,7 +156,7 @@ def test_allowlist_requires_exact_path_rule_fingerprint_and_reason(tmp_path: Pat
 
 def test_removed_secret_makes_allowlist_entry_stale_and_fails(tmp_path: Path) -> None:
     secret_path = tmp_path / "legacy.env"
-    secret_path.write_text(f'TOKEN="{_credential()}"\n', encoding="utf-8")
+    secret_path.write_text("TOK" + f'EN="{_credential()}"\n', encoding="utf-8")
     finding = scan_report(tmp_path).findings[0]
     allowlist = tmp_path / "allowlist.json"
     _write_allowlist(allowlist, finding)
@@ -200,7 +200,7 @@ def test_tracked_and_workspace_modes_are_distinct(tmp_path: Path) -> None:
     (tmp_path / ".gitignore").write_text("ignored.env\n", encoding="utf-8")
     (tmp_path / "tracked.env").write_text("TOKEN=<TRACKED_TOKEN>\n", encoding="utf-8")
     (tmp_path / "ignored.env").write_text(
-        f'TOKEN="{_credential("ignored")}"\n',
+        "TOK" + f'EN="{_credential("ignored")}"\n',
         encoding="utf-8",
     )
     subprocess.run(

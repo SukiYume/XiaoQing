@@ -16,7 +16,10 @@ def test_ci_runs_full_suite_without_sparse_marker_filters() -> None:
 
     assert '-m "unit"' not in workflow
     assert '-m "plugin"' not in workflow
-    assert "python -m pytest tests/ --cov=core --cov=plugins --cov-branch --cov-report=xml --cov-report=json:coverage.json" in workflow
+    assert (
+        "python -m pytest tests/ --cov=core --cov=plugins --cov-branch --cov-report=xml --cov-report=json:coverage.json"
+        in workflow
+    )
 
 
 def test_ci_enforces_collection_floor_before_running_tests() -> None:
@@ -53,9 +56,16 @@ def test_ci_requires_python_313_with_release_smoke_checks() -> None:
 
     assert 'python-version: ["3.10", "3.11", "3.12", "3.13"]' in workflow
     assert "if: matrix.python-version == '3.13'" in workflow
-    assert "python -m pip wheel . --no-deps --wheel-dir dist" in workflow
-    assert "/tmp/xiaoqing-wheel-smoke/bin/xiaoqing --help" in workflow
-    assert "import plugins.pendo.main, plugins.xiaoqing_chat.main" in workflow
+    assert "Python 3.13 isolated wheel and sdist release smoke" in workflow
+    assert "python scripts/verify_python_release.py" in workflow
+    assert "xiaoqing-wheel-smoke" not in workflow
+    assert "import plugins.pendo.main, plugins.xiaoqing_chat.main" not in workflow
+
+    verifier = (ROOT / "scripts" / "verify_python_release.py").read_text(encoding="utf-8")
+    assert '"-m",\n            "build",\n            "--no-isolation"' in verifier
+    assert '"-I", str(probe_script), str(spec_path)' in verifier
+    assert 'kind="wheel"' in verifier
+    assert 'kind="sdist"' in verifier
 
 
 def test_ci_blocks_new_ruff_diagnostics_without_hiding_legacy_debt() -> None:
@@ -64,10 +74,43 @@ def test_ci_blocks_new_ruff_diagnostics_without_hiding_legacy_debt() -> None:
 
     assert "lint-changed-python:" in workflow
     assert "fetch-depth: 0" in workflow
-    assert "python scripts/check_ruff_changed.py --base \"$BASE_SHA\"" in workflow
+    assert 'python scripts/check_ruff_changed.py --base "$BASE_SHA"' in workflow
     checker_source = checker.read_text(encoding="utf-8")
     assert '"--unified=0"' in checker_source
     assert '"--output-format=json"' in checker_source
     assert '"--exit-zero"' in checker_source
     assert "parse_added_ranges" in checker_source
     assert '"--diff"' not in checker_source
+
+
+def test_ci_has_independent_fail_closed_docker_release_gate() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    docker_job = workflow.split("  docker-release-smoke:", maxsplit=1)[1]
+
+    assert "    needs: test" in docker_job
+    assert 'python-version: "3.13"' in docker_job
+    assert 'build_root="$(mktemp -d)"' in docker_job
+    assert 'python -m pip wheel . --no-deps --wheel-dir "$build_root/dist"' in docker_job
+    assert "python scripts/build_docker_context.py" in docker_job
+    assert "python scripts/verify_docker_release.py" in docker_job
+    assert "--require-docker" in docker_job
+
+    wheel = docker_job.index("python -m pip wheel")
+    context = docker_job.index("python scripts/build_docker_context.py")
+    verification = docker_job.index("python scripts/verify_docker_release.py")
+    assert wheel < context < verification
+
+
+def test_ci_does_not_export_docker_outputs_before_security_verification() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    docker_job = workflow.split("  docker-release-smoke:", maxsplit=1)[1]
+    before_verification = docker_job.split("python scripts/verify_docker_release.py", maxsplit=1)[0]
+
+    for forbidden in (
+        "docker push",
+        "docker/build-push-action",
+        "actions/upload-artifact",
+        "--cache-to",
+        "--cache-from",
+    ):
+        assert forbidden not in before_verification

@@ -3,8 +3,6 @@
 处理确认、延后、撤销等操作
 """
 
-import logging
-
 from core.args import parse
 from core.plugin_base import run_sync
 
@@ -13,9 +11,6 @@ from ..services.db import Database
 from ..services.reminder import ReminderService
 from ..utils.error_handlers import error_result, success_result
 from ..utils.time_utils import TimezoneHelper, now_in_timezone, parse_delay_time
-
-logger = logging.getLogger(__name__)
-
 
 def _parse_remind_time_for_compare(remind_time: str):
     """将提醒时间统一到带时区的 datetime，避免 aware/naive 混用。"""
@@ -101,9 +96,8 @@ async def handle_confirm(
             "status": result.get("status", "error"),
             "message": result.get("message", "确认成功"),
         }
-    except Exception as e:
-        logger.exception("确认提醒失败: %s", e)
-        return error_result(f"❌ 确认失败: {str(e)}")
+    except Exception:
+        raise
 
 
 async def handle_snooze(
@@ -145,7 +139,10 @@ async def handle_snooze(
 
         # S-2修复：以当前时间为基准，避免用户延迟 snooze 导致新提醒时间落在过去
         user_now = now_in_timezone(user_id, db)
-        new_remind_time = _parse_snooze_time(time_arg, now=user_now)
+        try:
+            new_remind_time = _parse_snooze_time(time_arg, now=user_now)
+        except ValueError:
+            return error_result("无法解析延后时间，请使用 10m、1h、1d 或 19:00 等格式")
 
         # S-3修复：只移除刚触发的那个 remind_time，保留其他所有提醒时间（包括未来的）
         # 旧逻辑仅保留过去时间，会丢失事件的后续提醒点（如 T-1h snooze 后丢失 T、T+1h）
@@ -171,9 +168,8 @@ async def handle_snooze(
 
         return success_result(f"已将提醒延后到: {new_remind_time}")
 
-    except Exception as e:
-        logger.exception("延后提醒失败: %s", e)
-        return error_result(f"延后失败: {str(e)}")
+    except Exception:
+        raise
 
 
 async def handle_undo(user_id: str, args: str, db: Database) -> dict[str, str]:
@@ -237,9 +233,8 @@ async def handle_undo(user_id: str, args: str, db: Database) -> dict[str, str]:
 
         return error_result("未找到可撤销的操作")
 
-    except Exception as e:
-        logger.exception("撤销失败: %s", e)
-        return error_result(f"撤销失败: {str(e)}")
+    except Exception:
+        raise
 
 
 def _parse_snooze_time(

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from core.constants import MAX_MESSAGE_TEXT_LENGTH
-from core.interfaces import PluginCapabilities, PluginPrincipal
+from core.interfaces import DeliveryTarget, PluginCapabilities, PluginPrincipal
 from plugins.codex import arxiv_summary as codex_arxiv_summary
 from plugins.codex import main as codex_main
 from plugins.codex.artifacts import CodexImageArtifact
@@ -790,7 +790,10 @@ async def test_arxiv_summary_public_entrypoint_uses_addon(
     monkeypatch: pytest.MonkeyPatch,
 ):
     context = FakeContext(tmp_path)
-    context.principal = PluginPrincipal(kind="scheduled_system")
+    context.principal = PluginPrincipal(
+        kind="scheduled_system",
+        delivery_targets=(DeliveryTarget("group", 2),),
+    )
     context.capabilities = PluginCapabilities(is_system=True)
     runner = FakeRunner(
         result_text=_valid_arxiv_summary(
@@ -822,6 +825,68 @@ async def test_arxiv_summary_public_entrypoint_uses_addon(
 
 
 @pytest.mark.asyncio
+async def test_system_arxiv_summary_fans_out_once_and_never_uses_old_session_owner(
+    tmp_path: Path,
+):
+    targets = (DeliveryTarget("group", 11), DeliveryTarget("group", 22))
+    context = FakeContext(tmp_path)
+    context.principal = PluginPrincipal(kind="scheduled_system", delivery_targets=targets)
+    context.capabilities = PluginCapabilities(is_system=True)
+    runner = FakeRunner(
+        result_text=_valid_arxiv_summary(
+            "2026-07-11",
+            "https://arxiv.org/abs/2607.00001",
+            "fanout summary",
+        )
+    )
+    manager = _install_fake_manager(context, runner)
+    await manager.create_session("astro-ph", None, user_id=999, group_id=333)
+    manager.sessions["astro-ph"].thread_id = "existing-thread"
+
+    result = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-07-11",
+        links=["https://arxiv.org/abs/2607.00001"],
+        user_id=None,
+        group_id=None,
+        context=context,
+        delivery_targets=targets,
+    )
+    await manager.wait_idle()
+
+    assert "已投递" in result
+    assert len(runner.calls) == 1
+    assert [action["params"].get("group_id") for action in context.actions] == [11, 22]
+    assert all(action["action"] == "send_group_msg" for action in context.actions)
+
+    context.actions.clear()
+    replay_targets = (DeliveryTarget("group", 44), DeliveryTarget("group", 55))
+    replay = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-07-11",
+        links=["https://arxiv.org/abs/2607.00001"],
+        user_id=None,
+        group_id=None,
+        context=context,
+        delivery_targets=replay_targets,
+    )
+    assert "已重发" in replay
+    assert len(runner.calls) == 1
+    assert [action["params"].get("group_id") for action in context.actions] == [44, 55]
+
+    context.actions.clear()
+    await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-07-12",
+        links=["https://arxiv.org/abs/2607.00002"],
+        user_id=None,
+        group_id=None,
+        context=context,
+        delivery_targets=(),
+    )
+    await manager.wait_idle()
+    assert len(runner.calls) == 2
+    assert context.actions == []
+
+
+@pytest.mark.asyncio
 async def test_arxiv_summary_public_entrypoint_rejects_unprivileged_or_wrong_context(
     tmp_path: Path,
 ):
@@ -848,6 +913,66 @@ async def test_arxiv_summary_public_entrypoint_rejects_unprivileged_or_wrong_con
             group_id=2,
         )
 
+
+@pytest.mark.asyncio
+async def test_codex_main_exports_only_the_fixed_arxiv_summary_entrypoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    context = FakeContext(tmp_path)
+    exported = AsyncMock(return_value="queued")
+    monkeypatch.setattr(codex_main, "enqueue_or_replay_arxiv_summary", exported)
+
+    assert await codex_main.enqueue_arxiv_summary(
+        context,
+        date="2026-07-11",
+        links=["https://arxiv.org/abs/2607.00001"],
+        user_id=1,
+        group_id=2,
+    ) == "queued"
+    exported.assert_awaited_once_with(
+        context,
+        date="2026-07-11",
+        links=["https://arxiv.org/abs/2607.00001"],
+        user_id=1,
+        group_id=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_codex_shutdown_without_manager_does_not_construct_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import plugins.codex.manager as manager_module
+
+    def forbidden_constructor(_context):
+        raise AssertionError("shutdown constructed a manager")
+
+    monkeypatch.setattr(manager_module, "CodexQueueManager", forbidden_constructor)
+
+    await codex_main.shutdown(FakeContext(tmp_path))
+    assert manager_module._MANAGER is None
+
+
+@pytest.mark.asyncio
+async def test_codex_manager_is_singleton_and_rejects_context_replacement(tmp_path: Path):
+    import plugins.codex.manager as manager_module
+
+    context = FakeContext(tmp_path)
+    first, second = await asyncio.gather(
+        manager_module.get_manager(context),
+        manager_module.get_manager(context),
+    )
+    assert first is second
+
+    other = FakeContext(tmp_path / "other")
+    with pytest.raises(RuntimeError, match="different data directory"):
+        await manager_module.get_manager(other)
+
+    first.shutting_down = True
+    with pytest.raises(RuntimeError, match="shutting down"):
+        await manager_module.get_manager(context)
 
 @pytest.mark.asyncio
 async def test_arxiv_summary_replays_existing_success_without_rerun(tmp_path: Path):

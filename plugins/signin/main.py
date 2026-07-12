@@ -8,6 +8,7 @@ import logging
 
 from core.args import parse
 from core.plugin_base import segments
+from core.public_errors import public_error_response
 
 from . import yingshi
 
@@ -34,9 +35,13 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             return await yingshi.yingshi_sign(context)
 
         return segments(f"未知平台: {target}\n\n{_show_help()}")
-    except Exception as e:
-        logger.exception("Signin handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="signin.handle",
+        )
 
 
 def _show_help() -> str:

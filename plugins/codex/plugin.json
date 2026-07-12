@@ -4,6 +4,16 @@
     "description": "Codex CLI 后台任务队列插件",
     "entry": "main.py",
     "concurrency": "parallel",
+    "services": [
+        {
+            "name": "codex.enqueue_arxiv_summary",
+            "callback": "enqueue_arxiv_summary_service",
+            "callers": [
+                "arxiv_filter"
+            ],
+            "required_capability": "codex_arxiv_summary"
+        }
+    ],
     "commands": [
         {
             "name": "codex",

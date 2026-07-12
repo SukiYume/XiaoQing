@@ -3,37 +3,192 @@
 """
 
 import asyncio
-import threading
+import math
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
+from core.bounded_http import (
+    JSON_MIME_POLICY,
+    BodyLimits,
+    JsonLimits,
+    ResponseFormatError,
+    parse_bounded_json,
+    requests_request_bounded,
+)
+from core.public_errors import public_error_message
 
 
-_SIMBAD_CLIENT = None
-_SIMBAD_CLIENT_LOCK = threading.RLock()
+SIMBAD_TAP_SYNC_URL = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
+SIMBAD_CONNECT_TIMEOUT_SECONDS = 3
 SIMBAD_REQUEST_TIMEOUT_SECONDS = 12
+SIMBAD_TRANSPORT_TOTAL_TIMEOUT_SECONDS = 14
 SIMBAD_TOTAL_TIMEOUT_SECONDS = 15
+SIMBAD_MAX_OBJECT_NAME_CHARS = 256
+
+_SIMBAD_MAX_COLUMNS = 32
+_SIMBAD_MAX_COLUMN_NAME_CHARS = 64
+_SIMBAD_MAX_TEXT_CHARS = 128
+_SIMBAD_MAX_QUERY_CHARS = 64 * 1024
+_SIMBAD_COLUMN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_SIMBAD_REQUIRED_COLUMNS = frozenset({"ra", "dec", "otype", "v", "sp_type"})
+_SIMBAD_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=128 * 1024,
+    max_decoded_bytes=256 * 1024,
+    max_decompression_ratio=20,
+    ratio_grace_bytes=8 * 1024,
+    chunk_bytes=16 * 1024,
+)
+_SIMBAD_JSON_LIMITS = JsonLimits(
+    max_bytes=_SIMBAD_BODY_LIMITS.max_decoded_bytes,
+    max_depth=8,
+    max_nodes=1_024,
+    max_string_chars=64 * 1024,
+    max_number_chars=128,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SimbadRow:
+    """Validated subset of one SIMBAD TAP row consumed by ``handle_obj``."""
+
+    ra_deg: float
+    dec_deg: float
+    otype: str | None
+    v_magnitude: float | None
+    sp_type: str | None
 
 
 def _build_simbad_client():
     from astroquery.simbad import Simbad
 
     client = Simbad()
+    client.ROW_LIMIT = 1
     client.TIMEOUT = SIMBAD_REQUEST_TIMEOUT_SECONDS
     client.reset_votable_fields()
     client.add_votable_fields("otype", "V", "sp")
     return client
 
 
-def _get_simbad_client():
-    global _SIMBAD_CLIENT
-    with _SIMBAD_CLIENT_LOCK:
-        if _SIMBAD_CLIENT is None:
-            _SIMBAD_CLIENT = _build_simbad_client()
-        return _SIMBAD_CLIENT
+def _build_simbad_query(name: str) -> str:
+    """Use astroquery only as an offline, escaping-aware ADQL builder."""
+
+    if not isinstance(name, str) or not name or len(name) > SIMBAD_MAX_OBJECT_NAME_CHARS:
+        raise ValueError("invalid SIMBAD object name")
+    payload = _build_simbad_client().query_object(name, get_query_payload=True)
+    if not isinstance(payload, Mapping):
+        raise ResponseFormatError("invalid SIMBAD query payload")
+    query = payload.get("QUERY")
+    if not isinstance(query, str) or not query or len(query) > _SIMBAD_MAX_QUERY_CHARS:
+        raise ResponseFormatError("invalid SIMBAD ADQL query")
+    if re.search(r"\bSELECT\s+TOP\s+1\b", query, flags=re.IGNORECASE) is None:
+        raise ResponseFormatError("SIMBAD ADQL query is not row bounded")
+    return query
 
 
-def _query_simbad_object(name: str):
-    # A client is deliberately not shared across requests: astroquery clients
-    # are mutable, and a stalled request must not hold a process-wide lock.
-    return _build_simbad_client().query_object(name)
+def _finite_number(value: object, *, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ResponseFormatError(f"invalid SIMBAD {field} value")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ResponseFormatError(f"invalid SIMBAD {field} value")
+    return result
+
+
+def _optional_text(value: object, *, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) > _SIMBAD_MAX_TEXT_CHARS:
+        raise ResponseFormatError(f"invalid SIMBAD {field} value")
+    return value or None
+
+
+def _validate_simbad_payload(payload: object) -> SimbadRow | None:
+    if not isinstance(payload, Mapping):
+        raise ResponseFormatError("invalid SIMBAD JSON root")
+    metadata = payload.get("metadata")
+    data = payload.get("data")
+    if not isinstance(metadata, list) or not isinstance(data, list):
+        raise ResponseFormatError("invalid SIMBAD JSON table")
+    if not metadata or len(metadata) > _SIMBAD_MAX_COLUMNS:
+        raise ResponseFormatError("invalid SIMBAD metadata column count")
+
+    column_indexes: dict[str, int] = {}
+    for index, item in enumerate(metadata):
+        if not isinstance(item, Mapping):
+            raise ResponseFormatError("invalid SIMBAD metadata entry")
+        name = item.get("name")
+        if (
+            not isinstance(name, str)
+            or not name
+            or len(name) > _SIMBAD_MAX_COLUMN_NAME_CHARS
+            or _SIMBAD_COLUMN_NAME.fullmatch(name) is None
+        ):
+            raise ResponseFormatError("invalid SIMBAD metadata column name")
+        normalized = name.casefold()
+        if normalized in column_indexes:
+            raise ResponseFormatError("duplicate SIMBAD metadata column")
+        column_indexes[normalized] = index
+
+    if not _SIMBAD_REQUIRED_COLUMNS <= column_indexes.keys():
+        raise ResponseFormatError("SIMBAD response is missing required columns")
+    if len(data) > 1:
+        raise ResponseFormatError("SIMBAD response exceeded MAXREC")
+    if not data:
+        return None
+
+    raw_row = data[0]
+    if not isinstance(raw_row, list) or len(raw_row) != len(metadata):
+        raise ResponseFormatError("invalid SIMBAD data row width")
+
+    def cell(name: str) -> Any:
+        return raw_row[column_indexes[name]]
+
+    ra_deg = _finite_number(cell("ra"), field="RA")
+    dec_deg = _finite_number(cell("dec"), field="Dec")
+    if not 0.0 <= ra_deg < 360.0:
+        raise ResponseFormatError("SIMBAD RA is out of range")
+    if not -90.0 <= dec_deg <= 90.0:
+        raise ResponseFormatError("SIMBAD Dec is out of range")
+
+    raw_v = cell("v")
+    v_magnitude = None if raw_v is None else _finite_number(raw_v, field="V")
+    return SimbadRow(
+        ra_deg=ra_deg,
+        dec_deg=dec_deg,
+        otype=_optional_text(cell("otype"), field="otype"),
+        v_magnitude=v_magnitude,
+        sp_type=_optional_text(cell("sp_type"), field="sp_type"),
+    )
+
+
+def _query_simbad_object(name: str) -> SimbadRow | None:
+    query = _build_simbad_query(name)
+    response = requests_request_bounded(
+        "POST",
+        SIMBAD_TAP_SYNC_URL,
+        limits=_SIMBAD_BODY_LIMITS,
+        mime_policy=JSON_MIME_POLICY,
+        headers={"Accept": "application/json"},
+        request_kwargs={
+            "data": {
+                "REQUEST": "doQuery",
+                "LANG": "ADQL",
+                "FORMAT": "json",
+                "MAXREC": "1",
+                "QUERY": query,
+            },
+            "timeout": (
+                SIMBAD_CONNECT_TIMEOUT_SECONDS,
+                SIMBAD_REQUEST_TIMEOUT_SECONDS,
+            ),
+        },
+        total_timeout_seconds=SIMBAD_TRANSPORT_TOTAL_TIMEOUT_SECONDS,
+    )
+    return _validate_simbad_payload(
+        parse_bounded_json(response, limits=_SIMBAD_JSON_LIMITS)
+    )
 
 
 async def handle_obj(args: str, context) -> str:
@@ -41,60 +196,55 @@ async def handle_obj(args: str, context) -> str:
     args = args.strip()
     if not args:
         return "请提供天体名称\n示例: /astro obj Crab Pulsar\n或: /astro obj sun"
-    
+
     obj_name = args.lower()
-    
+
     # from .obj import SOLAR_SYSTEM # if circular import was an issue, but here it is same file
-    
+
     if obj_name in SOLAR_SYSTEM:
         return SOLAR_SYSTEM[obj_name]()
-    
+
     # 从SIMBAD查询其他天体
     try:
-        from astropy.coordinates import SkyCoord
         from astropy import units as u
+        from astropy.coordinates import SkyCoord
 
         result = await asyncio.wait_for(
             asyncio.to_thread(_query_simbad_object, args),
             timeout=SIMBAD_TOTAL_TIMEOUT_SECONDS,
         )
-        
-        if result is None or len(result) == 0:
+
+        if result is None:
             return f"未找到天体: {args}\n\n提示: 可以尝试使用英文名称，如 'Crab Nebula', 'Betelgeuse' 等"
-        
-        row = result[0]
-        
-        ra_str = str(row['RA'])
-        dec_str = str(row['DEC'])
-        
-        coord = SkyCoord(ra=ra_str, dec=dec_str, unit=(u.hourangle, u.deg), frame='icrs')
+
+        coord = SkyCoord(ra=result.ra_deg * u.deg, dec=result.dec_deg * u.deg, frame='icrs')
         ra_hms = coord.ra.to_string(unit=u.hour, sep=':', pad=True, precision=2)
         dec_dms = coord.dec.to_string(unit=u.deg, sep=':', pad=True, precision=1, alwayssign=True)
-        
+
         result_text = f"🌟 {args}\n\n"
-        result_text += f"**坐标 (J2000):**\n"
+        result_text += "**坐标 (J2000):**\n"
         result_text += f"RA: {ra_hms} ({coord.ra.deg:.6f}°)\n"
         result_text += f"Dec: {dec_dms} ({coord.dec.deg:.6f}°)\n\n"
-        
+
         # 添加天体类型
-        if 'OTYPE' in row.colnames and row['OTYPE']:
-            result_text += f"类型: {row['OTYPE']}\n"
-        
+        if result.otype:
+            result_text += f"类型: {result.otype}\n"
+
         # 添加V波段星等
-        if 'V' in row.colnames and row['V']:
-            result_text += f"V星等: {row['V']:.2f}\n"
-        elif 'FLUX_V' in row.colnames and row['FLUX_V']:
-            result_text += f"V星等: {row['FLUX_V']:.2f}\n"
-        
+        if result.v_magnitude is not None:
+            result_text += f"V星等: {result.v_magnitude:.2f}\n"
+
         # 添加光谱型
-        if 'SP_TYPE' in row.colnames and row['SP_TYPE']:
-            result_text += f"光谱型: {row['SP_TYPE']}"
-        
+        if result.sp_type:
+            result_text += f"光谱型: {result.sp_type}"
+
         return result_text
     except asyncio.TimeoutError:
         return "SIMBAD 查询超时，请稍后再试。"
     except Exception as exc:
-        return f"查询失败: {exc}\n\n建议: 使用标准天体名称，如 'M31', 'NGC 1952', 'Sirius' 等"
+        return public_error_message(
+            context, exc, logger=context.logger, component="astro_tools.obj"
+        )
 
 
 def _get_sun_info() -> str:

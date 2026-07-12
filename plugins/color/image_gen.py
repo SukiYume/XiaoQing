@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.plugin_base import ensure_dir, run_sync
+from core.public_errors import public_error_message
 
 # 检查可选依赖
 try:
@@ -64,5 +65,10 @@ async def generate_color_image(name: str, rgb: list[int], output_dir: Path, cont
         return str(img_path)
         
     except Exception as exc:
-        context.logger.error(f"生成颜色图片失败: {name}, 错误: {exc}", exc_info=True)
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="color.generate_image",
+        )
         return None

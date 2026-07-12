@@ -222,3 +222,88 @@ async def test_sync_callbacks_use_bounded_shared_executor():
     assert max_active == 4
     release.set()
     await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+async def test_sync_timeout_tracks_real_future_and_close_reports_undrained_work():
+    gate = PluginExecutionGate(
+        "sequential",
+        plugin_name="blocking-sync",
+        policy=PluginExecutionPolicy(
+            timeout_seconds=0.01,
+            cooldown_seconds=0.01,
+            drain_timeout_seconds=0.01,
+        ),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    side_effects: list[str] = []
+
+    def blocking_callback() -> None:
+        started.set()
+        release.wait(timeout=2)
+        side_effects.append("finished")
+        finished.set()
+
+    async def operation() -> None:
+        await call_plugin_callback(blocking_callback)
+
+    with pytest.raises(PluginExecutionTimeout):
+        await gate.run(operation)
+    assert started.is_set()
+    assert gate.pending_sync_callbacks == 1
+    await asyncio.sleep(0.02)
+    with pytest.raises(PluginExecutionUnavailable):
+        await gate.run(lambda: asyncio.sleep(0))
+
+    first_close = await gate.close()
+    assert first_close.drained is False
+    assert first_close.pending_sync_callbacks == 1
+    assert side_effects == []
+
+    release.set()
+    assert await asyncio.to_thread(finished.wait, 1)
+    await asyncio.sleep(0)
+    second_close = await gate.close()
+
+    assert second_close.drained is True
+    assert second_close.pending_sync_callbacks == 0
+    assert side_effects == ["finished"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_sync_callback_poison_blocks_sequential_overlap_until_thread_ends():
+    gate = PluginExecutionGate(
+        "sequential",
+        policy=PluginExecutionPolicy(
+            timeout_seconds=None,
+            drain_timeout_seconds=0.01,
+        ),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocking_callback() -> None:
+        started.set()
+        release.wait(timeout=2)
+        finished.set()
+
+    running = asyncio.create_task(
+        gate.run(lambda: call_plugin_callback(blocking_callback))
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    with pytest.raises(PluginExecutionUnavailable):
+        await gate.run(lambda: asyncio.sleep(0))
+    assert gate.pending_sync_callbacks == 1
+
+    release.set()
+    assert await asyncio.to_thread(finished.wait, 1)
+    await asyncio.sleep(0)
+    assert gate.pending_sync_callbacks == 0
+    assert await gate.run(lambda: asyncio.sleep(0, result="safe")) == "safe"

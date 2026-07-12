@@ -6,6 +6,7 @@ import logging
 
 from core.plugin_base import segments
 from core.args import parse
+from core.public_errors import public_error_response
 
 import time as std_time # Rename standard library time just in case, though we might not need it if we use datetime
 from . import time as astro_time # Safe import of local time.py
@@ -62,9 +63,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         
         return segments(f"未知命令: {subcommand}\n输入 /astro help 查看帮助")
         
-    except Exception as e:
-        logger.exception("AstroTools handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="astro_tools.handle")
 
 
 def _show_help() -> str:

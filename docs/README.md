@@ -25,6 +25,7 @@
 |---|---|
 | [../CHANGELOG.md](../CHANGELOG.md) | 项目更新记录，按日期整理每次维护内容 |
 | [pendo-scriptable-widget.md](pendo-scriptable-widget.md) | Pendo iPhone Scriptable 小组件配置和只读 API |
+| [python-release.md](python-release.md) | wheel/sdist 构建、隔离安装、清单和资源发布门禁 |
 
 ## 核心插件文档
 

@@ -24,9 +24,11 @@ from typing import Any, Optional
 
 from core.args import parse
 from core.plugin_base import PluginContextProtocol, build_action, segments
+from core.sensitive_audit import summarize_sensitive
 
 # 使用相对导入
 from . import connection, log_monitor, rcon
+from .audit import audit_error_type, audit_request_id
 
 RconClient = rcon.RconClient
 LogMonitor = log_monitor.LogMonitor
@@ -76,6 +78,7 @@ _event_buckets: dict[tuple[str, int], _EventTokenBucket] = {}
 # 插件初始化
 # ============================================================
 
+
 def init(context=None) -> None:
     """插件初始化"""
     logger.info("Minecraft plugin initialized")
@@ -85,6 +88,7 @@ async def shutdown(context: PluginContextProtocol | None) -> None:
     await _manager.cleanup_all()
     _event_buckets.clear()
     logger.info("Minecraft plugin shutdown completed")
+
 
 def _show_help() -> str:
     """
@@ -120,7 +124,9 @@ def _connect_usage() -> str:
     )
 
 
-def _load_default_server(context: PluginContextProtocol, profile: str = "default") -> tuple[str, int, str, str] | None:
+def _load_default_server(
+    context: PluginContextProtocol, profile: str = "default"
+) -> tuple[str, int, str, str] | None:
     """从 plugins/minecraft/config.json 读取服务器配置，避免密码通过聊天传递"""
     config_path = context.plugin_dir / "config.json"
     if not config_path.is_file():
@@ -130,7 +136,7 @@ def _load_default_server(context: PluginContextProtocol, profile: str = "default
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
     except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Failed to load minecraft config: %s", exc)
+        logger.warning("Minecraft config load failed error_type=%s", audit_error_type(exc))
         return None
 
     server = config.get(profile)
@@ -152,26 +158,30 @@ def _load_default_server(context: PluginContextProtocol, profile: str = "default
 
     return host, port, password, log_file
 
+
 # ============================================================
 # 命令处理
 # ============================================================
 
-async def handle(command: str, args: str, event: dict[str, Any], context: PluginContextProtocol) -> list[dict[str, Any]]:
+
+async def handle(
+    command: str, args: str, event: dict[str, Any], context: PluginContextProtocol
+) -> list[dict[str, Any]]:
     """命令处理入口"""
     try:
         group_id = event.get("group_id")
         user_id = event.get("user_id")
         parsed = parse(args)
-        
+
         # 主 MC 命令使用统一入口
         if command.lower() in {"mc", "minecraft"}:
             # 如果没有参数，显示帮助
             if not parsed or not parsed.first:
                 return segments(_show_help())
-            
+
             # 检查子命令
             subcommand = parsed.first.lower()
-            
+
             if subcommand in {"help", "帮助", "?"}:
                 return segments(_show_help())
             elif subcommand in {"connect", "连接"}:
@@ -183,18 +193,19 @@ async def handle(command: str, args: str, event: dict[str, Any], context: Plugin
             else:
                 # 默认：发送消息
                 return await _handle_mc_message(args, event, context)
-        
+
         # 兼容旧的独立命令（保持向后兼容）
         elif command.lower() in {"mcconnect", "mc连接"}:
             return await _handle_connect(args, group_id, user_id, context)
         elif command.lower() in {"mcdisconnect", "mc断开"}:
             return await _handle_disconnect(group_id, user_id, context)
-        
+
         return segments("未知命令")
-        
-    except Exception as e:
-        logger.exception("Minecraft handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+
+    except Exception as exc:
+        logger.error("Minecraft handle failed error_type=%s", audit_error_type(exc))
+        return segments(f"处理请求时出错: {str(exc)}")
+
 
 async def _handle_connect(
     args: str,
@@ -221,42 +232,92 @@ async def _handle_connect(
     if server is None:
         return segments(
             f"❌ 未找到配置 '{profile}'，请在 plugins/minecraft/config.json 中添加\n"
-            f"格式: {{\"{profile}\": {{\"host\": \"...\", \"port\": 25575, \"password\": \"...\"}}}}"
+            f'格式: {{"{profile}": {{"host": "...", "port": 25575, "password": "..."}}}}'
         )
     host, port, password, default_log_file = server
     log_file = parts[1] if len(parts) > 1 else default_log_file
 
-    logger.info("MC connect request: host=%s, port=%d, user=%s", host, port, user_id)
-    
+    target_audit = summarize_sensitive("\0".join((host, str(port), log_file)))
+    request_id = audit_request_id(context)
+    logger.info(
+        "sensitive_audit operation=minecraft.connect request_id=%s status=started "
+        "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
+        request_id,
+        target_audit.kind,
+        target_audit.length,
+        target_audit.byte_length,
+        target_audit.fingerprint,
+    )
+
     log_monitor_obj = None
     if log_file:
         log_path = Path(log_file)
         if not log_path.is_file():
+            logger.warning(
+                "sensitive_audit operation=minecraft.connect request_id=%s status=rejected "
+                "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
+                request_id,
+                target_audit.kind,
+                target_audit.length,
+                target_audit.byte_length,
+                target_audit.fingerprint,
+            )
             return segments("❌ 日志文件不存在或无法访问")
-    
+
     # 创建 RCON 客户端
     try:
         rcon_client = RconClient(host, port, password)
-        connected = await rcon_client.connect()
-        if not connected:
-            return segments("❌ RCON 连接失败，请检查地址和密码")
-    except Exception as e:
-        logger.error("MC RCON connection failed: %s", e)
+        connect_result = await rcon_client.connect()
+        if not connect_result.success:
+            logger.warning(
+                "sensitive_audit operation=minecraft.connect request_id=%s status=failed "
+                "error_kind=%s payload_kind=%s payload_length=%d payload_bytes=%d "
+                "payload_fingerprint=%s",
+                request_id,
+                connect_result.error_kind.value if connect_result.error_kind else "unknown",
+                target_audit.kind,
+                target_audit.length,
+                target_audit.byte_length,
+                target_audit.fingerprint,
+            )
+            await rcon_client.disconnect()
+            return segments(f"❌ {connect_result.error_message}")
+    except Exception as exc:
+        logger.error(
+            "sensitive_audit operation=minecraft.connect request_id=%s status=failed "
+            "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
+            "error_type=%s",
+            request_id,
+            target_audit.kind,
+            target_audit.length,
+            target_audit.byte_length,
+            target_audit.fingerprint,
+            audit_error_type(exc),
+        )
         if "rcon_client" in locals():
             await rcon_client.disconnect()
-        return segments(f"❌ 连接失败: {e}")
-    
+        return segments(f"❌ 连接失败: {exc}")
+
     # 创建日志监控器
     if log_file:
         log_monitor_obj = LogMonitor(str(log_path))
         if not log_monitor_obj.initialize():
-            logger.warning("MC log file inaccessible: %s", log_file)
+            logger.warning(
+                "sensitive_audit operation=minecraft.log_monitor request_id=%s "
+                "status=unavailable payload_kind=%s payload_length=%d payload_bytes=%d "
+                "payload_fingerprint=%s",
+                request_id,
+                target_audit.kind,
+                target_audit.length,
+                target_audit.byte_length,
+                target_audit.fingerprint,
+            )
             log_monitor_obj = None
-    
+
     # 确定目标
     target_type = "group" if group_id else "private"
     target_id = group_id if group_id else user_id
-    
+
     # 保存连接
     conn = McConnection(
         host=host,
@@ -269,11 +330,20 @@ async def _handle_connect(
         log_monitor=log_monitor_obj,
     )
     await _manager.replace_connection(conn)
-    
+
     log_status = "✅" if log_monitor_obj else "❌ (文件不存在或无法访问)"
-    logger.info("MC connected: %s_%s -> %s:%s", target_type, target_id, host, port)
-    
+    logger.info(
+        "sensitive_audit operation=minecraft.connect request_id=%s status=success "
+        "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
+        request_id,
+        target_audit.kind,
+        target_audit.length,
+        target_audit.byte_length,
+        target_audit.fingerprint,
+    )
+
     return segments(f"✅ 已连接到 {host}:{port}\n📝 日志监控: {log_status}")
+
 
 async def _handle_disconnect(
     group_id: Optional[int],
@@ -283,43 +353,90 @@ async def _handle_disconnect(
     """处理断开连接命令"""
     if user_id is None:
         return segments("❌ 无法识别用户信息")
-    
+
     if not _manager.has_connection(group_id, user_id):
         return segments("❌ 当前无连接")
-    
+
     await _manager.disconnect_connection(group_id, user_id)
-    
-    logger.info("MC connection closed for user %s", user_id)
+
+    logger.info(
+        "Minecraft audit operation=disconnect request_id=%s status=success",
+        audit_request_id(context),
+    )
     return segments("✅ 已断开连接")
 
-async def _handle_mc_message(args: str, event: dict[str, Any], context: PluginContextProtocol) -> list[dict[str, Any]]:
+
+async def _handle_mc_message(
+    args: str, event: dict[str, Any], context: PluginContextProtocol
+) -> list[dict[str, Any]]:
     """处理发送到 MC 服务器的命令"""
     group_id = event.get("group_id")
     user_id = event.get("user_id")
-    
+
     if user_id is None:
         return segments("❌ 无法识别用户信息")
-    
+
     if not _manager.has_connection(group_id, user_id):
         return segments("❌ 未连接到服务器，请先使用 /mc connect 连接")
-    
+
     conn = _manager.get_connection(group_id, user_id)
     if not conn or not conn.rcon_client:
         return segments("❌ 连接无效")
-    
+
     command = args.strip()
     if not command:
         return segments("❌ 请提供要执行的命令")
-    
+    command_audit = summarize_sensitive(command)
+    request_id = audit_request_id(context)
+
     try:
-        response = await conn.rcon_client.command(command)
-        logger.info("MC command executed: %s", command)
-        if response:
-            return segments(f"📤 {response}")
-        return segments("✅ 命令已发送（无返回）")
-    except Exception as e:
-        logger.error("MC command execution failed: %s", e)
-        return segments(f"❌ 命令执行失败: {e}")
+        result = await conn.rcon_client.command(command)
+        if not result.success:
+            logger.warning(
+                "sensitive_audit operation=minecraft.command request_id=%s status=failed "
+                "error_kind=%s payload_kind=%s payload_length=%d payload_bytes=%d "
+                "payload_fingerprint=%s",
+                request_id,
+                result.error_kind.value if result.error_kind else "unknown",
+                command_audit.kind,
+                command_audit.length,
+                command_audit.byte_length,
+                command_audit.fingerprint,
+            )
+            return segments(f"❌ {result.error_message}")
+        response_audit = summarize_sensitive(result.response)
+        logger.info(
+            "sensitive_audit operation=minecraft.command request_id=%s status=success "
+            "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
+            "response_kind=%s response_length=%d response_bytes=%d "
+            "response_fingerprint=%s",
+            request_id,
+            command_audit.kind,
+            command_audit.length,
+            command_audit.byte_length,
+            command_audit.fingerprint,
+            response_audit.kind,
+            response_audit.length,
+            response_audit.byte_length,
+            response_audit.fingerprint,
+        )
+        if result.response:
+            return segments(f"📤 {result.response}")
+        return segments("✅ 命令执行成功（空响应）")
+    except Exception as exc:
+        logger.error(
+            "sensitive_audit operation=minecraft.command request_id=%s status=failed "
+            "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s "
+            "error_type=%s",
+            request_id,
+            command_audit.kind,
+            command_audit.length,
+            command_audit.byte_length,
+            command_audit.fingerprint,
+            audit_error_type(exc),
+        )
+        return segments(f"❌ 命令执行失败: {exc}")
+
 
 async def _handle_status_command(
     group_id: Optional[int],
@@ -329,21 +446,21 @@ async def _handle_status_command(
     """处理状态查询命令"""
     if user_id is None:
         return segments("❌ 无法识别用户信息")
-    
+
     if not _manager.has_connection(group_id, user_id):
         return segments("❌ 未连接到任何服务器")
-    
+
     conn = _manager.get_connection(group_id, user_id)
     if not conn:
         return segments("❌ 连接信息获取失败")
-    
+
     log_status = "✅ 正常" if conn.log_monitor else "❌ 未启用"
-    logger.debug("MC status checked: %s:%d", conn.host, conn.port)
-    return segments(
-        f"📊 连接状态\n"
-        f"服务器: {conn.host}:{conn.port}\n"
-        f"日志监控: {log_status}"
+    logger.debug(
+        "Minecraft audit operation=status request_id=%s status=success",
+        audit_request_id(context),
     )
+    return segments(f"📊 连接状态\n服务器: {conn.host}:{conn.port}\n日志监控: {log_status}")
+
 
 # ============================================================
 # 定时任务
@@ -373,9 +490,7 @@ def _batch_message(conn: McConnection, batch: LogBatch, *, now: float) -> tuple[
     candidate_count = min(len(batch.events), MC_MAX_EVENTS_PER_CONNECTION)
     allowed = bucket.take(candidate_count, now=now)
     event_lines = [
-        message
-        for event in batch.events[:allowed]
-        if (message := _format_event_message(event))
+        message for event in batch.events[:allowed] if (message := _format_event_message(event))
     ]
     dropped = max(0, batch.dropped_events) + max(0, len(batch.events) - len(event_lines))
 
@@ -425,19 +540,26 @@ async def _send_mc_action(
             timeout=MC_SEND_TIMEOUT_SECONDS,
         )
         if sent is False:
-            logger.warning("[MC] OneBot rejected log delivery for %s:%s", conn.host, conn.port)
+            logger.warning(
+                "Minecraft log delivery status=rejected target_type=%s", conn.target_type
+            )
     except asyncio.TimeoutError:
-        logger.error("[MC] Log delivery timed out for %s:%s", conn.host, conn.port)
+        logger.error("Minecraft log delivery status=timeout target_type=%s", conn.target_type)
     except Exception as exc:
-        logger.error("[MC] Log delivery failed for %s:%s: %s", conn.host, conn.port, exc)
+        logger.error(
+            "Minecraft log delivery status=failed target_type=%s error_type=%s",
+            conn.target_type,
+            audit_error_type(exc),
+        )
+
 
 async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, Any]]]:
     """定时任务：检查所有连接的日志更新"""
     connections = _manager.all_connections()
-    
+
     if not connections:
         return None
-    
+
     active_bucket_keys = {_server_bucket_key(conn) for conn in connections}
     for key in list(_event_buckets):
         if key not in active_bucket_keys:
@@ -447,7 +569,7 @@ async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, A
     for conn in connections:
         if not conn.log_monitor:
             continue
-        
+
         try:
             if hasattr(conn.log_monitor, "check_updates_async"):
                 raw_batch = await asyncio.wait_for(
@@ -464,9 +586,12 @@ async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, A
                 continue
             message, event_total = _batch_message(conn, batch, now=time.monotonic())
             deliveries.append((conn, message, event_total))
-        
-        except Exception as e:
-            logger.error("[MC] 处理连接 %s:%s 时出错: %s", conn.host, conn.port, e)
+
+        except Exception as exc:
+            logger.error(
+                "Minecraft log polling status=failed error_type=%s",
+                audit_error_type(exc),
+            )
 
     if len(deliveries) <= MC_MAX_ACTIONS_PER_TICK:
         selected = deliveries
@@ -475,8 +600,12 @@ async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, A
         selected = deliveries[: MC_MAX_ACTIONS_PER_TICK - 1]
         overflow = deliveries[MC_MAX_ACTIONS_PER_TICK - 1 :]
 
-    for conn, message, _event_total in selected:
-        logger.info("[MC] 批量转发到 %s_%s", conn.target_type, conn.target_id)
+    for conn, message, event_total in selected:
+        logger.info(
+            "Minecraft log delivery status=started target_type=%s event_count=%d",
+            conn.target_type,
+            event_total,
+        )
         await _send_mc_action(context, conn, message)
 
     if overflow:
@@ -487,24 +616,25 @@ async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, A
             f"⚠️ 另有 {len(overflow)} 个连接、{overflow_events} 条日志事件未转发"
         )
         await _send_mc_action(context, overflow_conn, notice)
-    
+
     return None
+
 
 def _format_event_message(event) -> Optional[str]:
     """格式化日志事件为消息"""
     if event.event_type == LogEventType.CHAT:
         return f"🎮 [MC] {event.player}: {event.message}"
-    
+
     elif event.event_type == LogEventType.JOIN:
         return f"🎮 {event.player} 加入了游戏"
-    
+
     elif event.event_type == LogEventType.LEAVE:
         return f"🎮 {event.player} 离开了游戏"
-    
+
     elif event.event_type == LogEventType.DEATH:
         return f"💀 {event.player} {event.message}"
-    
+
     elif event.event_type == LogEventType.ADVANCEMENT:
         return f"🏆 {event.player} 获得成就 [{event.message}]"
-    
+
     return None

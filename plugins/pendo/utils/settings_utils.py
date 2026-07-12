@@ -155,8 +155,7 @@ def save_user_setting(user_id: str, key: str, value: Any, db):
         custom[key] = value
         settings["settings_json"] = normalize_settings_json(custom, partial=True)
         db.settings.update_user_settings(user_id, settings)
-    except Exception as e:
-        logger.exception("Failed to save setting for user %s: %s", user_id, e)
+    except Exception:
         raise
 
 
@@ -164,8 +163,11 @@ def resolve_default_category(db, user_id: str, fallback: str = "未分类") -> s
     """Return the user's preferred default category when available."""
     try:
         settings = db.settings.get_user_settings(user_id)
-    except Exception:
-        logger.exception("Failed to load settings for user %s", user_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to load default category error_type=%s",
+            type(exc).__name__,
+        )
         return fallback
 
     category = str(settings.get("default_category") or "").strip()

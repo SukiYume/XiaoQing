@@ -76,6 +76,8 @@ def resolve_commit(repo: Path, ref: str) -> str:
 def _safe_repo_path(raw: str) -> str:
     if not raw or "\\" in raw:
         raise StagingError("manifest paths must be non-empty POSIX paths")
+    if re.fullmatch(r"[A-Za-z0-9._/][A-Za-z0-9._/-]*", raw) is None or raw.startswith("-"):
+        raise StagingError(f"manifest path contains unsafe characters: {raw!r}")
     path = PurePosixPath(raw)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise StagingError(f"unsafe manifest path: {raw!r}")

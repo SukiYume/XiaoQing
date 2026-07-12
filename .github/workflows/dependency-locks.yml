@@ -17,10 +17,11 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: '3.13'
-      - name: Regenerate locks with pinned tooling
+      - name: Regenerate runtime and CI locks with pinned tooling
         run: |
           python -m pip install uv==0.11.28
           python scripts/compile_locks.py --upgrade
+          python scripts/compile_locks.py --check
       - name: Open dependency lock pull request when changed
         env:
           GH_TOKEN: ${{ github.token }}
@@ -36,4 +37,4 @@ jobs:
           git add requirements/
           git commit -m "chore: refresh dependency locks"
           git push origin "$BRANCH"
-          gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" --title "chore: refresh dependency locks" --body "Automated weekly refresh of hashed Python dependency locks."
+          gh pr create --base "$GITHUB_REF_NAME" --head "$BRANCH" --title "chore: refresh dependency locks" --body "Automated weekly refresh of the hashed runtime and CI Python dependency lock matrices."

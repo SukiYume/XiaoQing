@@ -5,14 +5,15 @@
 import logging
 from typing import Any
 
-from core.plugin_base import segments
 from core.args import parse
+from core.plugin_base import segments
+from core.public_errors import public_error_response
 
+from . import ai_commands
+from . import note_commands
+from . import paper_commands
 from .ads_client import ADSClient
 from .storage import PaperStorage
-from . import paper_commands
-from . import note_commands
-from . import ai_commands
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
             return segments("❌ 未配置 ADS Token\n请在 secrets.json 中配置:\n  \"plugins\": {\"ads_paper\": {\"ads_token\": \"your-token\"}}")
 
         # Use shared HTTP session for connection pooling
-        client = ADSClient(token, context.http_session)
+        client = ADSClient(token, context.http_session, context)
         storage = _get_storage(context)
         user_id = _get_user_id(event)
         logger.debug(f"用户 ID: {user_id}")
@@ -94,9 +95,13 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
 
         return segments(f"未知命令: {subcommand}\n输入 /paper help 查看帮助")
         
-    except Exception as e:
-        logger.exception("ADS Paper handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=logger,
+            component="ads_paper.handle",
+        )
 
 def _show_help() -> list[dict[str, Any]]:
     """显示帮助信息"""

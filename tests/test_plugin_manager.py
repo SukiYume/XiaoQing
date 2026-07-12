@@ -5,6 +5,7 @@ PluginManager unit tests.
 import asyncio
 import os
 import textwrap
+import threading
 import time
 from pathlib import Path
 from types import ModuleType
@@ -13,8 +14,19 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.exceptions import PluginLoadError
-from core.plugin_execution import PluginExecutionClosed, PluginExecutionGate
-from core.plugin_manager import LoadedPlugin, PluginDefinition, PluginManager
+from core.plugin_execution import (
+    PluginExecutionClosed,
+    PluginExecutionGate,
+    PluginExecutionPolicy,
+    PluginExecutionTimeout,
+    call_plugin_callback,
+)
+from core.plugin_manager import (
+    LoadedPlugin,
+    PluginDefinition,
+    PluginManager,
+    PluginServiceDefinition,
+)
 from core.router import CommandRouter
 
 
@@ -78,6 +90,104 @@ def test_load_definition_rejects_unknown_concurrency_mode(tmp_path: Path, caplog
     assert "Invalid plugin.json" in caplog.text
 
 
+def _service_definition(
+    *,
+    owner: str = "voice",
+    name: str = "voice.synthesize_text",
+    callback: str = "synthesize",
+    callers: frozenset[str] = frozenset({"smalltalk"}),
+    required_capability: str | None = None,
+) -> PluginDefinition:
+    definition = _build_definition(owner)
+    definition.services = (
+        PluginServiceDefinition(
+            name=name,
+            callback=callback,
+            callers=callers,
+            required_capability=required_capability,
+        ),
+    )
+    return definition
+
+
+def test_declared_service_registry_is_immutable_and_caller_scoped(tmp_path: Path):
+    manager = _build_manager(tmp_path)
+    module = ModuleType("plugins.voice.main")
+
+    async def synthesize(text, context):
+        return text, context
+
+    module.synthesize = synthesize
+    manager._register_loaded_plugin(_service_definition(), module, 0)
+
+    loaded, service = manager.resolve_service(
+        caller_plugin="smalltalk",
+        service_name="voice.synthesize_text",
+    )
+    assert service.callback is synthesize
+    assert loaded.services["voice.synthesize_text"] is service
+    with pytest.raises(TypeError):
+        loaded.services["voice.synthesize_text"] = service  # type: ignore[index]
+    with pytest.raises(PermissionError):
+        manager.resolve_service(
+            caller_plugin="shell",
+            service_name="voice.synthesize_text",
+        )
+    with pytest.raises(RuntimeError):
+        manager.resolve_service(
+            caller_plugin="smalltalk",
+            service_name="voice.shutdown",
+        )
+
+
+def test_declared_service_callback_and_required_capability_fail_closed(tmp_path: Path):
+    manager = _build_manager(tmp_path)
+    module = ModuleType("plugins.codex.main")
+    definition = _service_definition(
+        owner="codex",
+        name="codex.enqueue_arxiv_summary",
+        callback="enqueue",
+        callers=frozenset({"arxiv_filter"}),
+        required_capability="codex_arxiv_summary",
+    )
+    with pytest.raises(PluginLoadError, match="Declared service callback"):
+        manager._register_loaded_plugin(definition, module, 0)
+
+    async def enqueue(*args):
+        return args
+
+    module.enqueue = enqueue
+    manager._register_loaded_plugin(definition, module, 0)
+    with pytest.raises(PermissionError, match="requires capability"):
+        manager.resolve_service(
+            caller_plugin="arxiv_filter",
+            service_name="codex.enqueue_arxiv_summary",
+        )
+    loaded, _ = manager.resolve_service(
+        caller_plugin="arxiv_filter",
+        service_name="codex.enqueue_arxiv_summary",
+        granted_capabilities=frozenset({"codex_arxiv_summary"}),
+    )
+    assert loaded.definition.name == "codex"
+
+    manager._quarantined_plugins.add("codex")
+    with pytest.raises(RuntimeError, match="not accepting calls"):
+        manager.resolve_service(
+            caller_plugin="arxiv_filter",
+            service_name="codex.enqueue_arxiv_summary",
+            granted_capabilities=frozenset({"codex_arxiv_summary"}),
+        )
+    manager._quarantined_plugins.discard("codex")
+
+    loaded.execution_gate._closed = True  # lifecycle fail-closed probe
+    with pytest.raises(RuntimeError, match="not accepting calls"):
+        manager.resolve_service(
+            caller_plugin="arxiv_filter",
+            service_name="codex.enqueue_arxiv_summary",
+            granted_capabilities=frozenset({"codex_arxiv_summary"}),
+        )
+
+
 def test_load_definition_rejects_unknown_manifest_field(tmp_path: Path, caplog):
     manager = _build_manager(tmp_path)
     plugin_dir = manager.plugins_dir / "demo"
@@ -96,8 +206,7 @@ def test_load_definition_rejects_missing_required_python_dependency(tmp_path: Pa
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "plugin.json").write_text(
-        '{"name":"demo","dependencies":[{"name":"missing_xiaoqing_dependency"'
-        ',"required":true}]}',
+        '{"name":"demo","dependencies":[{"name":"missing_xiaoqing_dependency","required":true}]}',
         encoding="utf-8",
     )
 
@@ -110,8 +219,7 @@ def test_load_definition_allows_missing_optional_python_dependency(tmp_path: Pat
     plugin_dir = manager.plugins_dir / "demo"
     plugin_dir.mkdir()
     (plugin_dir / "plugin.json").write_text(
-        '{"name":"demo","dependencies":[{"name":"missing_xiaoqing_dependency"'
-        ',"required":false}]}',
+        '{"name":"demo","dependencies":[{"name":"missing_xiaoqing_dependency","required":false}]}',
         encoding="utf-8",
     )
 
@@ -146,6 +254,7 @@ def test_configure_execution_applies_per_plugin_timeout_override(tmp_path: Path)
         {
             "timeout_seconds": 12,
             "parallel_limit": 2,
+            "drain_timeout_seconds": 7,
             "overrides": {"codex": {"timeout_seconds": 0}},
         }
     )
@@ -155,6 +264,7 @@ def test_configure_execution_applies_per_plugin_timeout_override(tmp_path: Path)
 
     assert ordinary.policy.timeout_seconds == 12
     assert ordinary.policy.parallel_limit == 2
+    assert ordinary.policy.drain_timeout_seconds == 7
     assert codex.policy.timeout_seconds is None
 
 
@@ -290,9 +400,7 @@ async def test_reload_plugin_closes_old_gate_before_shutdown(tmp_path: Path):
     manager._plugins["demo"] = old_plugin
     manager._execution_gates["demo"] = old_gate
     manager._load_definition = Mock(return_value=definition)
-    manager._load_shadow_module = Mock(
-        return_value=(ModuleType("shadow.demo.main"), "shadow.demo")
-    )
+    manager._load_shadow_module = Mock(return_value=(ModuleType("shadow.demo.main"), "shadow.demo"))
     manager._initialize_shadow_plugin = AsyncMock()
     manager._get_mtime = Mock(return_value=1.0)
     manager._purge_shadow_modules = Mock()
@@ -422,9 +530,7 @@ async def test_reload_quarantines_old_when_shadow_shutdown_fails(tmp_path: Path)
     manager._plugins["demo"] = old_plugin
     manager._execution_gates["demo"] = old_gate
     manager._load_definition = Mock(return_value=definition)
-    manager._load_shadow_module = Mock(
-        return_value=(ModuleType("shadow.demo.main"), "shadow.demo")
-    )
+    manager._load_shadow_module = Mock(return_value=(ModuleType("shadow.demo.main"), "shadow.demo"))
     manager._initialize_shadow_plugin = AsyncMock()
     manager._shutdown_plugin_instance = AsyncMock(side_effect=[True, False])
     manager._get_mtime = Mock(return_value=1.0)
@@ -458,9 +564,7 @@ async def test_reload_restores_old_plugin_after_canonical_failure(
 
     manager = _build_manager(tmp_path)
     definition = _build_definition()
-    definition.commands = [
-        {"name": "demo", "triggers": ["demo"], "help": "demo"}
-    ]
+    definition.commands = [{"name": "demo", "triggers": ["demo"], "help": "demo"}]
     old_state = {"resource": object()}
     old_module = ModuleType("plugins.demo.main")
 
@@ -484,9 +588,7 @@ async def test_reload_restores_old_plugin_after_canonical_failure(
     manager._execution_gates["demo"] = old_gate
     manager._register_commands(definition, old_module)
     manager._load_definition = Mock(return_value=definition)
-    manager._load_shadow_module = Mock(
-        return_value=(ModuleType("shadow.demo.main"), "shadow.demo")
-    )
+    manager._load_shadow_module = Mock(return_value=(ModuleType("shadow.demo.main"), "shadow.demo"))
     manager._get_mtime = Mock(return_value=1.0)
     manager._purge_shadow_modules = Mock()
     manager._load_canonical_candidate = AsyncMock(side_effect=canonical_failure)
@@ -545,9 +647,7 @@ async def test_reload_real_canonical_init_failure_restores_old_module(tmp_path: 
     importlib.invalidate_caches()
     old_module = importlib.import_module("plugins.demo.main")
     definition = _build_definition()
-    definition.commands = [
-        {"name": "demo", "triggers": ["demo"], "help": "demo"}
-    ]
+    definition.commands = [{"name": "demo", "triggers": ["demo"], "help": "demo"}]
     old_gate = PluginExecutionGate("parallel", plugin_name="demo")
     old_state = {"sentinel": object()}
     old_plugin = LoadedPlugin(
@@ -580,9 +680,7 @@ async def test_reload_real_canonical_init_failure_restores_old_module(tmp_path: 
     )
     importlib.invalidate_caches()
     manager._load_definition = Mock(return_value=definition)
-    manager._load_shadow_module = Mock(
-        return_value=(ModuleType("shadow.demo.main"), "shadow.demo")
-    )
+    manager._load_shadow_module = Mock(return_value=(ModuleType("shadow.demo.main"), "shadow.demo"))
     manager._purge_shadow_modules = Mock()
 
     try:
@@ -857,3 +955,129 @@ async def test_unload_cancels_running_plugin_gate_before_shutdown(tmp_path: Path
     assert "demo" not in manager._plugins
     assert "demo" not in manager._execution_gates
     assert not manager._pending_plugins
+
+
+@pytest.mark.asyncio
+async def test_unload_quarantines_until_timed_out_sync_callback_really_finishes(
+    tmp_path: Path,
+):
+    manager = _build_manager(tmp_path)
+    definition = _build_definition()
+    gate = PluginExecutionGate(
+        "sequential",
+        plugin_name="demo",
+        policy=PluginExecutionPolicy(
+            timeout_seconds=0.01,
+            drain_timeout_seconds=0.01,
+        ),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    shutdown_called = asyncio.Event()
+    module = ModuleType("plugins.demo.main")
+
+    def blocking_handler() -> None:
+        started.set()
+        release.wait(timeout=2)
+        finished.set()
+
+    async def shutdown() -> None:
+        shutdown_called.set()
+
+    module.shutdown = shutdown
+    plugin = LoadedPlugin(
+        definition=definition,
+        module=module,
+        mtime=0.0,
+        execution_gate=gate,
+    )
+    state = {"owned": object()}
+    manager._plugins["demo"] = plugin
+    manager._plugin_states["demo"] = state
+    manager._execution_gates["demo"] = gate
+    manager._purge_plugin_modules = Mock()
+
+    with pytest.raises(PluginExecutionTimeout):
+        await gate.run(lambda: call_plugin_callback(blocking_handler))
+    assert started.is_set()
+
+    await manager.unload_plugin("demo")
+
+    assert manager._plugins["demo"] is plugin
+    assert manager._plugin_states["demo"] is state
+    assert manager._execution_gates["demo"] is gate
+    assert "demo" in manager._quarantined_plugins
+    assert shutdown_called.is_set() is False
+    manager._purge_plugin_modules.assert_not_called()
+
+    release.set()
+    assert await asyncio.to_thread(finished.wait, 1)
+    await asyncio.sleep(0)
+    await manager.unload_plugin("demo")
+
+    assert shutdown_called.is_set()
+    assert "demo" not in manager._plugins
+    assert "demo" not in manager._plugin_states
+    assert "demo" not in manager._execution_gates
+    assert "demo" not in manager._quarantined_plugins
+    manager._purge_plugin_modules.assert_called_once_with("demo")
+
+
+@pytest.mark.asyncio
+async def test_reload_never_installs_candidate_beside_timed_out_sync_callback(
+    tmp_path: Path,
+):
+    manager = _build_manager(tmp_path)
+    definition = _build_definition()
+    gate = PluginExecutionGate(
+        "sequential",
+        plugin_name="demo",
+        policy=PluginExecutionPolicy(
+            timeout_seconds=0.01,
+            drain_timeout_seconds=0.01,
+        ),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocking_handler() -> None:
+        started.set()
+        release.wait(timeout=2)
+        finished.set()
+
+    old_plugin = LoadedPlugin(
+        definition=definition,
+        module=ModuleType("plugins.demo.main"),
+        mtime=0.0,
+        execution_gate=gate,
+    )
+    manager._plugins["demo"] = old_plugin
+    manager._execution_gates["demo"] = gate
+    manager._plugin_states["demo"] = {"old": True}
+    manager._load_definition = Mock(return_value=definition)
+    manager._load_shadow_module = Mock(return_value=(ModuleType("shadow.demo.main"), "shadow.demo"))
+    manager._initialize_shadow_plugin = AsyncMock()
+    manager._shutdown_plugin_instance = AsyncMock(return_value=True)
+    manager._get_mtime = Mock(return_value=1.0)
+    manager._purge_shadow_modules = Mock()
+    manager._load_canonical_candidate = AsyncMock()
+
+    with pytest.raises(PluginExecutionTimeout):
+        await gate.run(lambda: call_plugin_callback(blocking_handler))
+    assert started.is_set()
+
+    await manager.reload_plugin("demo")
+
+    assert manager._plugins["demo"] is old_plugin
+    assert manager._execution_gates["demo"] is gate
+    assert gate.closed is True
+    assert "demo" in manager._quarantined_plugins
+    manager._load_canonical_candidate.assert_not_awaited()
+    manager._shutdown_plugin_instance.assert_awaited_once()
+
+    release.set()
+    assert await asyncio.to_thread(finished.wait, 1)
+    await asyncio.sleep(0)
+    assert (await gate.close()).drained is True

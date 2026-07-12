@@ -1,11 +1,30 @@
 import logging
-from typing import Any
 
 import aiohttp
+
+from core.bounded_http import (
+    BodyLimits,
+    HttpStatusError,
+    JsonLimits,
+    MimePolicy,
+    aiohttp_request_bounded,
+    parse_bounded_json,
+)
 
 logger = logging.getLogger(__name__)
 
 _ADS_LLM_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10, sock_read=45)
+_ADS_LLM_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=2 * 1024 * 1024,
+    max_decoded_bytes=4 * 1024 * 1024,
+)
+_ADS_LLM_JSON_LIMITS = JsonLimits(max_bytes=_ADS_LLM_BODY_LIMITS.max_decoded_bytes)
+_ADS_LLM_JSON_MIME = MimePolicy(
+    exact=frozenset({"application/json"}),
+    structured_suffixes=frozenset({"+json"}),
+    allow_missing=True,
+)
+
 
 async def generate_summary(
     session: aiohttp.ClientSession,
@@ -43,14 +62,27 @@ async def generate_summary(
         "max_tokens": 500
     }
 
-    async with session.post(url, headers=headers, json=payload, timeout=_ADS_LLM_TIMEOUT) as resp:
-        if resp.status != 200:
-            text = await resp.text()
-            raise RuntimeError(f"LLM API error: {resp.status} - {text}")
+    try:
+        response = await aiohttp_request_bounded(
+            session,
+            "POST",
+            url,
+            limits=_ADS_LLM_BODY_LIMITS,
+            mime_policy=_ADS_LLM_JSON_MIME,
+            headers=headers,
+            request_kwargs={"json": payload, "timeout": _ADS_LLM_TIMEOUT},
+        )
+    except HttpStatusError as exc:
+        raise RuntimeError(f"LLM API error: {exc.status}") from exc
 
-        data = await resp.json()
-        choices = data.get("choices", [])
-        if not choices:
-            raise RuntimeError("Empty response from LLM")
-
-        return choices[0].get("message", {}).get("content", "").strip()
+    data = parse_bounded_json(response, limits=_ADS_LLM_JSON_LIMITS)
+    if not isinstance(data, dict):
+        raise RuntimeError("Invalid response from LLM")
+    choices = data.get("choices", [])
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise RuntimeError("Empty response from LLM")
+    message = choices[0].get("message", {})
+    if not isinstance(message, dict):
+        raise RuntimeError("Invalid response from LLM")
+    content = message.get("content", "")
+    return content.strip() if isinstance(content, str) else ""

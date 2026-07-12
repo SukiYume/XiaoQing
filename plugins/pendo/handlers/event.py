@@ -177,11 +177,8 @@ class EventHandler(DbOpsMixin):
         """Generate a collection ID that does not collide with known rows."""
         for _ in range(20):
             candidate = uuid.uuid4().hex
-            try:
-                collection = self.db.items.get_event_collection(candidate)
-                item = self.db.items.get_item(candidate)
-            except Exception:
-                return candidate
+            collection = self.db.items.get_event_collection(candidate)
+            item = self.db.items.get_item(candidate)
             if collection is None and item is None:
                 return candidate
             if not isinstance(collection, dict) and not isinstance(item, EventItem):
@@ -477,9 +474,8 @@ class EventHandler(DbOpsMixin):
                 ),
                 "item_id": collection_id,
             }
-        except Exception as e:
-            logger.exception("创建重复日程失败: %s", e)
-            return {"status": "error", "message": f"❌ 创建重复日程失败: {str(e)}"}
+        except Exception:
+            raise
 
     async def _create_milestone_event(
         self,
@@ -825,6 +821,16 @@ class EventHandler(DbOpsMixin):
 
         try:
             start_date, end_date = parse_event_time_range(time_range, strict=True)
+        except ValueError:
+            return {
+                "status": "error",
+                "message": (
+                    "❌ 无法解析时间范围，请使用 today/week/month/year、"
+                    "last7d 或 YYYY-MM-DD..YYYY-MM-DD"
+                ),
+            }
+
+        try:
             events = await self._fetch_event_rows(
                 user_id, start_date, end_date
             )
@@ -890,11 +896,8 @@ class EventHandler(DbOpsMixin):
             message += "\n💡 /pendo event reminders <id> 查看提醒 · event edit <id> <内容> 编辑"
 
             return {"status": "success", "message": message}
-        except ValueError as e:
-            return {"status": "error", "message": f"❌ {str(e)}"}
-        except Exception as e:
-            logger.exception("Failed to list events: %s", e)
-            return {"status": "error", "message": f"❌ 获取日程失败: {str(e)}"}
+        except Exception:
+            raise
 
     # ==================== 编辑日程 ====================
 
@@ -1002,9 +1005,8 @@ class EventHandler(DbOpsMixin):
                 "status": "success",
                 "message": f"✅ 已更新日程: {updates.get('title', title)}\n\n💡 /pendo event reminders {instance_id} 查看提醒 | /pendo undo 撤销编辑",
             }
-        except Exception as e:
-            logger.exception("Failed to edit instance: %s", e)
-            return {"status": "error", "message": f"❌ 编辑失败: {str(e)}"}
+        except Exception:
+            raise
 
     @staticmethod
     def _snapshot_old_values(event: EventItem, updates: dict[str, Any]) -> dict[str, Any]:
@@ -1361,9 +1363,8 @@ class EventHandler(DbOpsMixin):
                 self.ai_parser.build_reminder_rules_from_description,
                 reminder_desc,
             )
-        except Exception as e:
-            logger.exception("解析提醒描述失败: %s", e)
-            return {"status": "error", "message": f"❌ 解析提醒描述失败: {e}"}
+        except Exception:
+            raise
 
         if not reminder_rules:
             return {
@@ -1403,9 +1404,8 @@ class EventHandler(DbOpsMixin):
                 self.ai_parser.build_reminder_rules_from_description,
                 reminder_desc,
             )
-        except Exception as e:
-            logger.exception("解析提醒描述失败: %s", e)
-            return {"status": "error", "message": f"❌ 解析提醒描述失败: {e}"}
+        except Exception:
+            raise
 
         if not reminder_rules:
             return {
@@ -1498,9 +1498,8 @@ class EventHandler(DbOpsMixin):
                     message += f"  ⏰ {t_str} {status}\n"
 
             return {"status": "success", "message": message}
-        except Exception as e:
-            logger.exception("Failed to list reminders: %s", e)
-            return {"status": "error", "message": f"❌ 获取提醒失败: {str(e)}"}
+        except Exception:
+            raise
 
     async def _format_reminders_by_id(self, user_id: str, query_id: str) -> CommandMessage:
         """按ID格式化提醒信息
@@ -1632,8 +1631,11 @@ class EventHandler(DbOpsMixin):
                 partial=True,
                 fallback_text=changes,
             )
-        except Exception as e:
-            logger.warning("AI解析失败，降级到规则解析: %s", e)
+        except Exception as exc:
+            logger.warning(
+                "AI解析失败，降级到规则解析 error_type=%s",
+                type(exc).__name__,
+            )
             parsed = self.ai_parser.parse_natural_language(changes, current_event.owner_id)
 
         updates = dict(explicit_updates)

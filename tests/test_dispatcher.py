@@ -4,6 +4,7 @@ Dispatcher 单元测试
 
 import asyncio
 import inspect
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 
@@ -20,6 +21,7 @@ from core.router import CommandRouter, CommandSpec
 # ============================================================
 # Fixtures
 # ============================================================
+
 
 @pytest.fixture
 def mock_config_provider():
@@ -63,8 +65,10 @@ def mock_admin_check():
 @pytest.fixture
 def mock_context_factory():
     """模拟上下文工厂"""
+
     def _factory(*args, **kwargs):
         return MagicMock()
+
     return _factory
 
 
@@ -73,6 +77,11 @@ def mock_session_manager():
     """模拟会话管理器"""
     mock = MagicMock()
     mock.get = AsyncMock(return_value=None)
+
+    async def peek(user_id, group_id):
+        return await mock.get(user_id, group_id)
+
+    mock.peek = AsyncMock(side_effect=peek)
     mock.exists = AsyncMock(return_value=False)
 
     async def update(user_id, group_id, callback):
@@ -139,9 +148,11 @@ def dispatcher(
         metrics=mock_metrics,
     )
 
+
 # ============================================================
 # MessageParser 测试
 # ============================================================
+
 
 class TestMessageParser:
     """MessageParser 测试"""
@@ -154,6 +165,7 @@ class TestMessageParser:
 
     def test_parse_uses_cached_prefixes_until_explicit_refresh(self):
         """测试 parse 热路径不重复读取配置"""
+
         class CountingConfigProvider:
             def __init__(self):
                 self.reads = 0
@@ -321,14 +333,16 @@ class TestMessageParser:
 
     def test_parse_populates_has_command_prefix(self, mock_config_provider: MagicMock):
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse({
-            "post_type": "message",
-            "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "/help",
-        })
+        ctx = parser.parse(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "user_id": 12345,
+                "group_id": 67890,
+                "self_id": 11111,
+                "message": "/help",
+            }
+        )
         assert ctx is not None
         assert ctx.has_command_prefix is True
         assert ctx.has_prefix is True
@@ -336,14 +350,16 @@ class TestMessageParser:
 
     def test_parse_has_prefix_from_bot_name_in_middle(self, mock_config_provider: MagicMock):
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse({
-            "post_type": "message",
-            "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "你好啊小青",
-        })
+        ctx = parser.parse(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "user_id": 12345,
+                "group_id": 67890,
+                "self_id": 11111,
+                "message": "你好啊小青",
+            }
+        )
         assert ctx is not None
         assert ctx.has_command_prefix is False
         assert ctx.has_bot_name is True
@@ -351,55 +367,63 @@ class TestMessageParser:
 
     def test_parse_is_url_only_with_bot_name_prefix(self, mock_config_provider: MagicMock):
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse({
-            "post_type": "message",
-            "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "小青 https://example.com",
-        })
+        ctx = parser.parse(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "user_id": 12345,
+                "group_id": 67890,
+                "self_id": 11111,
+                "message": "小青 https://example.com",
+            }
+        )
         assert ctx is not None
         assert ctx.is_url_only is True
         assert ctx.clean_text == "https://example.com"
 
     def test_parse_url_with_extra_text_is_not_url_only(self, mock_config_provider: MagicMock):
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse({
-            "post_type": "message",
-            "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": "看看 https://example.com",
-        })
+        ctx = parser.parse(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "user_id": 12345,
+                "group_id": 67890,
+                "self_id": 11111,
+                "message": "看看 https://example.com",
+            }
+        )
         assert ctx is not None
         assert ctx.is_url_only is False
 
     def test_parse_at_me_with_empty_text_is_only_bot_name(self, mock_config_provider: MagicMock):
         """@me with no following text yields is_only_bot_name=True and is_url_only=False."""
         parser = MessageParser(mock_config_provider)
-        ctx = parser.parse({
-            "post_type": "message",
-            "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "self_id": 11111,
-            "message": [
-                {"type": "at", "data": {"qq": "11111"}},
-                {"type": "face", "data": {"id": "14"}},
-            ],
-            "raw_message": "[CQ:at,qq=11111][CQ:face,id=14]",
-        })
+        ctx = parser.parse(
+            {
+                "post_type": "message",
+                "message_type": "group",
+                "user_id": 12345,
+                "group_id": 67890,
+                "self_id": 11111,
+                "message": [
+                    {"type": "at", "data": {"qq": "11111"}},
+                    {"type": "face", "data": {"id": "14"}},
+                ],
+                "raw_message": "[CQ:at,qq=11111][CQ:face,id=14]",
+            }
+        )
         assert ctx is not None
         assert ctx.is_at_me is True
         assert ctx.is_only_bot_name is True
         assert ctx.is_url_only is False
         assert ctx.has_prefix is True
 
+
 # ============================================================
 # Dispatcher.handle_event 测试
 # ============================================================
+
 
 class TestDispatcherHandleEvent:
     """Dispatcher.handle_event 测试"""
@@ -445,7 +469,9 @@ class TestDispatcherHandleEvent:
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
 
         url_plugin = MagicMock()
-        url_plugin.module.handle_url = AsyncMock(return_value=[{"type": "text", "data": {"text": "url ok"}}])
+        url_plugin.module.handle_url = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "url ok"}}]
+        )
 
         def _get_plugin(name: str):
             if name == "xiaoqing_chat":
@@ -536,8 +562,8 @@ class TestDispatcherHandleEvent:
         mock_admin_check.is_admin.return_value = False
         xq_plugin = MagicMock()
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
-        mock_plugin_registry.get.side_effect = (
-            lambda name: xq_plugin if name == "xiaoqing_chat" else None
+        mock_plugin_registry.get.side_effect = lambda name: (
+            xq_plugin if name == "xiaoqing_chat" else None
         )
         handler = AsyncMock()
         spec = CommandSpec(
@@ -576,8 +602,8 @@ class TestDispatcherHandleEvent:
         mock_router.resolve.return_value = None
         xq_plugin = MagicMock()
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
-        mock_plugin_registry.get.side_effect = (
-            lambda name: xq_plugin if name == "xiaoqing_chat" else None
+        mock_plugin_registry.get.side_effect = lambda name: (
+            xq_plugin if name == "xiaoqing_chat" else None
         )
         event = {
             "post_type": "message",
@@ -649,8 +675,8 @@ class TestDispatcherHandleEvent:
         xq_plugin = MagicMock()
         xq_plugin.module.observe_message = AsyncMock(return_value=[])
         xq_plugin.module.handle_smalltalk = AsyncMock(return_value=[])
-        mock_plugin_registry.get.side_effect = (
-            lambda name: xq_plugin if name == "xiaoqing_chat" else None
+        mock_plugin_registry.get.side_effect = lambda name: (
+            xq_plugin if name == "xiaoqing_chat" else None
         )
         event = {
             "post_type": "message",
@@ -701,9 +727,11 @@ class TestDispatcherHandleEvent:
         assert result == [{"type": "text", "data": {"text": "ok"}}]
         cmd_handler.assert_awaited_once()
 
+
 # ============================================================
 # Dispatcher 静音控制测试
 # ============================================================
+
 
 class TestDispatcherMuteControl:
     """Dispatcher 静音控制测试"""
@@ -736,6 +764,7 @@ class TestDispatcherMuteControl:
         dispatcher.mute_group(12345, 0.001)  # 非常短的静音时间
         # 等待过期
         import time
+
         time.sleep(0.1)
         assert dispatcher.is_muted(12345) is False
 
@@ -750,9 +779,11 @@ class TestDispatcherMuteControl:
         remaining = dispatcher.get_mute_remaining(12345)
         assert remaining == 0
 
+
 # ============================================================
 # Dispatcher._execute_command 测试
 # ============================================================
+
 
 class TestExecuteCommand:
     """_execute_command 测试"""
@@ -784,6 +815,88 @@ class TestExecuteCommand:
         assert result[0]["data"]["text"] == "权限不足"
         handler.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_unexpected_command_error_uses_redacted_public_response(
+        self,
+        dispatcher: Dispatcher,
+        sample_message_context: MessageContext,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        canary = "CR219_DISPATCHER_SECRET"
+        context = SimpleNamespace(
+            request_id=sample_message_context.request_id,
+            secrets={"token": canary},
+        )
+        dispatcher.build_context = Mock(return_value=context)
+        handler = AsyncMock(
+            side_effect=RuntimeError(f"Authorization: Bearer {canary} C:\\private\\{canary}.txt")
+        )
+        spec = CommandSpec(
+            plugin="public_demo",
+            name="demo",
+            triggers=["demo"],
+            help_text="demo",
+            admin_only=False,
+            handler=handler,
+        )
+
+        with caplog.at_level("ERROR"):
+            result = await dispatcher._execute_command((spec, ""), sample_message_context)
+
+        assert result is not None
+        response_text = result[0]["data"]["text"]
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "XQ-PLUGIN-UNEXPECTED" in response_text
+        assert sample_message_context.request_id in response_text
+        assert sample_message_context.request_id in log_text
+        assert "RuntimeError" in log_text
+        assert canary not in response_text
+        assert canary not in log_text
+        assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_unexpected_session_error_is_redacted_and_closes_session(
+    dispatcher: Dispatcher,
+    sample_message_context: MessageContext,
+    mock_plugin_registry: MagicMock,
+    mock_session_manager: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    canary = "CR219_SESSION_SECRET"
+    session = SimpleNamespace(plugin_name="public_session")
+    mock_session_manager.get.return_value = session
+    mock_session_manager.delete = AsyncMock(return_value=True)
+    plugin = SimpleNamespace(
+        module=SimpleNamespace(
+            handle_session=AsyncMock(
+                side_effect=RuntimeError(f"https://user:{canary}@example.test/?token={canary}")
+            )
+        ),
+        execution_gate=None,
+    )
+    mock_plugin_registry.get.return_value = plugin
+    context = SimpleNamespace(
+        request_id=sample_message_context.request_id,
+        secrets={"password": canary},
+    )
+    dispatcher.build_context = Mock(return_value=context)
+
+    with caplog.at_level("ERROR"):
+        result = await dispatcher._try_handle_session(sample_message_context)
+
+    assert result is not None
+    response_text = result[0]["data"]["text"]
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "XQ-PLUGIN-UNEXPECTED" in response_text
+    assert sample_message_context.request_id in response_text
+    assert canary not in response_text
+    assert canary not in log_text
+    mock_session_manager.delete.assert_awaited_once_with(
+        sample_message_context.user_id,
+        sample_message_context.group_id,
+    )
+
 
 class TestUrlFiltering:
     def test_blocks_private_and_loopback_targets(self, dispatcher: Dispatcher):
@@ -797,9 +910,11 @@ class TestUrlFiltering:
     def test_allows_public_domain_targets(self, dispatcher: Dispatcher):
         assert dispatcher._is_blocked_url_target("https://example.com/path") is False
 
+
 # ============================================================
 # Dispatcher URL 处理测试
 # ============================================================
+
 
 class TestInvokeUrlParser:
     """_invoke_url_parser 测试"""
@@ -812,7 +927,9 @@ class TestInvokeUrlParser:
         mock_plugin_registry: MagicMock,
     ):
         mock_plugin = MagicMock()
-        mock_plugin.module.handle_url = AsyncMock(return_value=[{"type": "text", "data": {"text": "URL handled"}}])
+        mock_plugin.module.handle_url = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "URL handled"}}]
+        )
         mock_plugin_registry.get = Mock(return_value=mock_plugin)
 
         result = await dispatcher._invoke_url_parser(sample_message_context, "https://example.com")
@@ -830,9 +947,11 @@ class TestInvokeUrlParser:
         result = await dispatcher._invoke_url_parser(sample_message_context, "https://example.com")
         assert result is None
 
+
 # ============================================================
 # MessageContext 测试
 # ============================================================
+
 
 class TestMessageContext:
     """MessageContext 数据类测试"""
@@ -861,6 +980,7 @@ class TestMessageContext:
         assert ctx.user_id == 12345
         assert ctx.group_id == 67890
         assert ctx.is_private is False
+
 
 class TestProcessEventLinearFlow:
     """Tests for the linear Step A-G flow in _process_event."""
@@ -923,7 +1043,9 @@ class TestProcessEventLinearFlow:
         url_parser.module.handle_url = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "parsed"}}]
         )
-        mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+        mock_plugin_registry.get.side_effect = lambda name: (
+            url_parser if name == "url_parser" else None
+        )
         result = await dispatcher.handle_event(event_template(message="https://example.com"))
         assert result == []
         url_parser.module.handle_url.assert_not_awaited()
@@ -937,7 +1059,9 @@ class TestProcessEventLinearFlow:
         url_parser.module.handle_url = AsyncMock(
             return_value=[{"type": "text", "data": {"text": "parsed"}}]
         )
-        mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+        mock_plugin_registry.get.side_effect = lambda name: (
+            url_parser if name == "url_parser" else None
+        )
         result = await dispatcher.handle_event(event_template(message="https://example.com"))
         assert result and result[0]["data"]["text"] == "parsed"
 
@@ -946,8 +1070,12 @@ class TestProcessEventLinearFlow:
         self, dispatcher, mock_plugin_registry, event_template
     ):
         url_parser = MagicMock()
-        url_parser.module.handle_url = AsyncMock(return_value=[{"type": "text", "data": {"text": "x"}}])
-        mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+        url_parser.module.handle_url = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "x"}}]
+        )
+        mock_plugin_registry.get.side_effect = lambda name: (
+            url_parser if name == "url_parser" else None
+        )
         result = await dispatcher.handle_event(event_template(message="看看 https://example.com"))
         assert result == []
         url_parser.module.handle_url.assert_not_called()
@@ -972,8 +1100,12 @@ class TestProcessEventLinearFlow:
         self, dispatcher, mock_plugin_registry, event_template
     ):
         url_parser = MagicMock()
-        url_parser.module.handle_url = AsyncMock(return_value=[{"type": "text", "data": {"text": "p"}}])
-        mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+        url_parser.module.handle_url = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "p"}}]
+        )
+        mock_plugin_registry.get.side_effect = lambda name: (
+            url_parser if name == "url_parser" else None
+        )
         event = event_template(message_type="private", message="https://example.com")
         event.pop("group_id")
         result = await dispatcher.handle_event(event)
@@ -987,7 +1119,9 @@ class TestProcessEventLinearFlow:
         try:
             mock_router.resolve.return_value = None
             smalltalk = MagicMock()
-            smalltalk.module.handle_smalltalk = AsyncMock(return_value=[{"type": "text", "data": {"text": "no"}}])
+            smalltalk.module.handle_smalltalk = AsyncMock(
+                return_value=[{"type": "text", "data": {"text": "no"}}]
+            )
             mock_plugin_registry.get.return_value = smalltalk
             result = await dispatcher.handle_event(event_template(message="小青 你好"))
             assert result == []
@@ -996,9 +1130,7 @@ class TestProcessEventLinearFlow:
             dispatcher.unmute_group(67890)
 
     @pytest.mark.asyncio
-    async def test_group_mute_does_not_block_command(
-        self, dispatcher, mock_router, event_template
-    ):
+    async def test_group_mute_does_not_block_command(self, dispatcher, mock_router, event_template):
         dispatcher.mute_group(67890, 5.0)
         try:
             spec = CommandSpec(
@@ -1016,16 +1148,16 @@ class TestProcessEventLinearFlow:
             dispatcher.unmute_group(67890)
 
     @pytest.mark.asyncio
-    async def test_group_mute_blocks_url(
-        self, dispatcher, mock_plugin_registry, event_template
-    ):
+    async def test_group_mute_blocks_url(self, dispatcher, mock_plugin_registry, event_template):
         dispatcher.mute_group(67890, 5.0)
         try:
             url_parser = MagicMock()
             url_parser.module.handle_url = AsyncMock(
                 return_value=[{"type": "text", "data": {"text": "p"}}]
             )
-            mock_plugin_registry.get.side_effect = lambda name: url_parser if name == "url_parser" else None
+            mock_plugin_registry.get.side_effect = lambda name: (
+                url_parser if name == "url_parser" else None
+            )
             result = await dispatcher.handle_event(event_template(message="https://example.com"))
             assert result == []
             url_parser.module.handle_url.assert_not_awaited()
@@ -1098,10 +1230,12 @@ class TestProcessEventLinearFlow:
             return_value=[{"type": "text", "data": {"text": "嗯"}}]
         )
         mock_plugin_registry.get.return_value = smalltalk
-        event = event_template(message=[
-            {"type": "at", "data": {"qq": "11111"}},
-            {"type": "text", "data": {"text": " 帮我看看"}},
-        ])
+        event = event_template(
+            message=[
+                {"type": "at", "data": {"qq": "11111"}},
+                {"type": "text", "data": {"text": " 帮我看看"}},
+            ]
+        )
         event["raw_message"] = "[CQ:at,qq=11111] 帮我看看"
         result = await dispatcher.handle_event(event)
         assert result and result[0]["data"]["text"] == "嗯"
@@ -1165,7 +1299,9 @@ class TestProcessEventLinearFlow:
             return_value=[{"type": "text", "data": {"text": "在的"}}]
         )
         pendo = MagicMock()
-        pendo.module.handle_session = AsyncMock(return_value=[{"type": "text", "data": {"text": "WRONG"}}])
+        pendo.module.handle_session = AsyncMock(
+            return_value=[{"type": "text", "data": {"text": "WRONG"}}]
+        )
 
         def _get(name):
             return {"pendo": pendo}.get(name, smalltalk)
@@ -1265,6 +1401,45 @@ class TestProcessEventLinearFlow:
         release.set()
         await asyncio.gather(first, second)
         assert max_active == 1
+
+    @pytest.mark.asyncio
+    async def test_provider_failure_logs_only_correlated_redacted_diagnostics(
+        self,
+        dispatcher,
+        mock_plugin_registry,
+        sample_message_context,
+        caplog,
+    ):
+        canary = "CR219_PROVIDER_SECRET"
+
+        async def observe_message(*_args):
+            raise RuntimeError(
+                f"Authorization: Bearer {canary} "
+                f"https://user:password@example.test/{canary} "
+                rf"C:\private\{canary}.txt"
+            )
+
+        mock_plugin_registry.get.return_value = SimpleNamespace(
+            module=SimpleNamespace(observe_message=observe_message),
+            execution_gate=PluginExecutionGate("parallel"),
+        )
+
+        with caplog.at_level(logging.ERROR):
+            result = await dispatcher._call_provider(
+                "stateful",
+                "observe_message",
+                sample_message_context,
+                ("hello", {}),
+            )
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert result is None
+        assert "XQ-PLUGIN-UNEXPECTED" in log_text
+        assert canary not in log_text
+        assert "user:password" not in log_text
+        assert "C:\\private" not in log_text
+        assert all(record.exc_info is None for record in caplog.records)
+
 
 # ============================================================
 # 运行测试

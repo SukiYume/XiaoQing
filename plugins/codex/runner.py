@@ -262,6 +262,114 @@ class _FinalOutputCapture:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class _OwnedTaskOutcome:
+    result: Any = None
+    error: BaseException | None = None
+    cancellation: asyncio.CancelledError | None = None
+
+
+async def _settle_owned_task(task: asyncio.Task[Any]) -> _OwnedTaskOutcome:
+    """Settle an owned task and separately retain caller cancellation."""
+
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancellation = cancellation or exc
+    try:
+        result = task.result()
+    except BaseException as exc:  # task failure is returned for ordered cleanup handling.
+        return _OwnedTaskOutcome(error=exc, cancellation=cancellation)
+    return _OwnedTaskOutcome(result=result, cancellation=cancellation)
+
+
+async def _run_cleanup_cancellation_resistant(awaitable: Awaitable[Any]) -> Any:
+    """Finish cleanup first, then preserve cancellation or the cleanup failure."""
+
+    task = asyncio.create_task(awaitable, name="codex-resource-cleanup")
+    outcome = await _settle_owned_task(task)
+    if outcome.cancellation is not None:
+        if outcome.error is not None:
+            logger.warning(
+                "Codex resource cleanup also failed during cancellation: error_type=%s",
+                type(outcome.error).__name__,
+            )
+        raise outcome.cancellation
+    if outcome.error is not None:
+        raise outcome.error
+    return outcome.result
+
+
+async def _remove_output_path_with_retry(
+    path: Path,
+    *,
+    attempts: int = 5,
+    delay_seconds: float = 0.05,
+) -> bool:
+    """Remove a transient/abandoned output after Windows handles have closed."""
+
+    attempts = max(1, int(attempts))
+    last_error: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                await asyncio.sleep(delay_seconds * (attempt + 1))
+    logger.warning(
+        "Failed to remove Codex output after bounded retries: name=%s error_type=%s",
+        path.name,
+        type(last_error).__name__ if last_error is not None else "OSError",
+    )
+    return False
+
+
+def _remove_partial_archive(path: Path) -> None:
+    """Best-effort rollback for an archive that was never published to a result."""
+
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "Failed to roll back partial Codex archive: name=%s error_type=%s",
+            path.name,
+            type(exc).__name__,
+        )
+
+
+async def _capture_in_thread(
+    function: Callable[..., _FinalOutputCapture],
+    /,
+    *args: Any,
+    orphan_archives: set[Path],
+    **kwargs: Any,
+) -> _FinalOutputCapture:
+    """Run bounded file capture without racing cancellation against Windows unlink."""
+
+    task = asyncio.create_task(
+        asyncio.to_thread(function, *args, **kwargs),
+        name="codex-output-capture",
+    )
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError as cancellation:
+        outcome = await _settle_owned_task(task)
+        if outcome.error is not None:
+            logger.warning(
+                "Codex output capture failed while cancellation was settling: error_type=%s",
+                type(outcome.error).__name__,
+            )
+        else:
+            capture = outcome.result
+            if capture.archive_path:
+                orphan_archives.add(Path(capture.archive_path))
+        raise cancellation
+
+
 async def _read_stdout_stream(
     stream: asyncio.StreamReader,
     accumulator: _StdoutEventAccumulator,
@@ -351,9 +459,16 @@ def _archive_destination(output_dir: Path, job: Any) -> Path:
         suffix=".txt",
         dir=output_dir,
     )
-    os.close(descriptor)
     destination = Path(name)
-    destination.unlink(missing_ok=True)
+    try:
+        os.close(descriptor)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        _remove_partial_archive(destination)
+        raise
     return destination
 
 
@@ -406,37 +521,43 @@ def _capture_final_output(
         return _FinalOutputCapture(text=decoded)
 
     destination = _archive_destination(output_dir, job)
-    if exceeds_disk_budget:
-        archive_payload = decoded.encode("utf-8", errors="replace")
-        if len(archive_payload) > config.max_final_output_bytes:
-            archive_payload = (
-                archive_payload[: config.max_final_output_bytes]
-                .decode(
-                    "utf-8",
-                    errors="ignore",
+    try:
+        if exceeds_disk_budget:
+            archive_payload = decoded.encode("utf-8", errors="replace")
+            if len(archive_payload) > config.max_final_output_bytes:
+                archive_payload = (
+                    archive_payload[: config.max_final_output_bytes]
+                    .decode(
+                        "utf-8",
+                        errors="ignore",
+                    )
+                    .encode("utf-8")
                 )
-                .encode("utf-8")
+            destination.write_bytes(archive_payload)
+            path.unlink(missing_ok=True)
+            reason = (
+                f"final output was {observed_size} bytes; archived a bounded "
+                f"{len(archive_payload)}-byte head/tail capture"
             )
-        destination.write_bytes(archive_payload)
-        path.unlink(missing_ok=True)
-        reason = (
-            f"final output was {observed_size} bytes; archived a bounded "
-            f"{len(archive_payload)}-byte head/tail capture"
+        else:
+            os.replace(path, destination)
+            reason = (
+                "final output exceeded the QQ preview limit of "
+                f"{config.max_qq_text_chars} characters"
+            )
+        resolved_destination = destination.resolve()
+        preview = _qq_preview(decoded, config.max_qq_text_chars)
+        notice = f"\n\n[完整/受控输出已保存到: {resolved_destination}]"
+        preview_budget = max(1, config.max_qq_text_chars - len(notice))
+        return _FinalOutputCapture(
+            text=f"{_qq_preview(preview, preview_budget)}{notice}",
+            archive_path=str(resolved_destination),
+            limited=True,
+            reason=reason,
         )
-    else:
-        os.replace(path, destination)
-        reason = (
-            f"final output exceeded the QQ preview limit of {config.max_qq_text_chars} characters"
-        )
-    preview = _qq_preview(decoded, config.max_qq_text_chars)
-    notice = f"\n\n[完整/受控输出已保存到: {destination.resolve()}]"
-    preview_budget = max(1, config.max_qq_text_chars - len(notice))
-    return _FinalOutputCapture(
-        text=f"{_qq_preview(preview, preview_budget)}{notice}",
-        archive_path=str(destination.resolve()),
-        limited=True,
-        reason=reason,
-    )
+    except BaseException:
+        _remove_partial_archive(destination)
+        raise
 
 
 def _archive_large_message(
@@ -454,15 +575,20 @@ def _archive_large_message(
         return _FinalOutputCapture(text=text)
 
     destination = _archive_destination(output_dir, job)
-    destination.write_bytes(limited_bytes)
-    notice = f"\n\n[受控输出已保存到: {destination.resolve()}]"
-    preview_budget = max(1, config.max_qq_text_chars - len(notice))
-    return _FinalOutputCapture(
-        text=f"{_qq_preview(bounded_text, preview_budget)}{notice}",
-        archive_path=str(destination.resolve()),
-        limited=True,
-        reason="agent message exceeded a configured output budget",
-    )
+    try:
+        destination.write_bytes(limited_bytes)
+        resolved_destination = destination.resolve()
+        notice = f"\n\n[受控输出已保存到: {resolved_destination}]"
+        preview_budget = max(1, config.max_qq_text_chars - len(notice))
+        return _FinalOutputCapture(
+            text=f"{_qq_preview(bounded_text, preview_budget)}{notice}",
+            archive_path=str(resolved_destination),
+            limited=True,
+            reason="agent message exceeded a configured output budget",
+        )
+    except BaseException:
+        _remove_partial_archive(destination)
+        raise
 
 
 def _process_group_exists(process_group_id: int) -> bool:
@@ -484,6 +610,8 @@ async def _wait_for_parent(
     try:
         await asyncio.wait_for(process.wait(), timeout=max(0.01, timeout_seconds))
     except asyncio.TimeoutError:
+        return process.returncode is not None
+    except (OSError, RuntimeError):
         return process.returncode is not None
     return True
 
@@ -518,7 +646,10 @@ async def _terminate_windows_process_tree(
         except asyncio.TimeoutError:
             helper_error = "taskkill timed out"
             if helper.returncode is None:
-                helper.kill()
+                try:
+                    helper.kill()
+                except (ProcessLookupError, OSError, RuntimeError):
+                    pass
                 await _wait_for_parent(helper, kill_timeout_seconds)
         else:
             helper_succeeded = helper_code == 0
@@ -535,7 +666,7 @@ async def _terminate_windows_process_tree(
         forced = True
         try:
             process.kill()
-        except (ProcessLookupError, OSError):
+        except (ProcessLookupError, OSError, RuntimeError):
             pass
         parent_reaped = await _wait_for_parent(process, kill_timeout_seconds)
 
@@ -648,7 +779,7 @@ def _close_process_pipe_transports(process: asyncio.subprocess.Process) -> None:
     if stdin is not None:
         try:
             stdin.close()
-        except (AttributeError, RuntimeError):
+        except (AttributeError, OSError, RuntimeError):
             pass
     transport = getattr(process, "_transport", None)
     get_pipe_transport = getattr(transport, "get_pipe_transport", None)
@@ -659,7 +790,7 @@ def _close_process_pipe_transports(process: asyncio.subprocess.Process) -> None:
             pipe_transport = get_pipe_transport(descriptor)
             if pipe_transport is not None:
                 pipe_transport.close()
-        except (AttributeError, RuntimeError):
+        except (AttributeError, OSError, RuntimeError):
             continue
 
 
@@ -673,7 +804,12 @@ async def _drain_process_after_termination(
             process.communicate(),
             timeout=max(0.01, timeout_seconds),
         )
-    except (asyncio.TimeoutError, RuntimeError):
+    except Exception as exc:  # noqa: BLE001 - cleanup must close every pipe on read failure.
+        logger.warning(
+            "Codex process pipe drain failed: pid=%s error_type=%s",
+            getattr(process, "pid", None),
+            type(exc).__name__,
+        )
         _close_process_pipe_transports(process)
         return b"", b""
 
@@ -681,14 +817,38 @@ async def _drain_process_after_termination(
 async def _terminate_and_drain_process(
     process: asyncio.subprocess.Process,
 ) -> tuple[ProcessTreeTerminationResult, bytes, bytes]:
-    termination = await terminate_process_tree(process)
+    try:
+        termination = await terminate_process_tree(process)
+    except Exception as exc:  # noqa: BLE001 - final ownership fallback must still reap.
+        logger.error(
+            "Codex process-tree helper failed; using parent fallback: pid=%s error_type=%s",
+            getattr(process, "pid", None),
+            type(exc).__name__,
+        )
+        forced = False
+        if getattr(process, "returncode", None) is None:
+            try:
+                process.kill()
+                forced = True
+            except (ProcessLookupError, OSError, RuntimeError):
+                pass
+        parent_reaped = await _wait_for_parent(process, 5)
+        termination = ProcessTreeTerminationResult(
+            tree_confirmed=False,
+            parent_reaped=parent_reaped,
+            forced=forced,
+            helper_error=type(exc).__name__,
+        )
     if not termination.tree_confirmed or not termination.parent_reaped:
         logger.error(
             "Codex process tree termination was not fully confirmed: pid=%s result=%s",
             getattr(process, "pid", None),
             termination,
         )
-    stdout, stderr = await _drain_process_after_termination(process)
+    try:
+        stdout, stderr = await _drain_process_after_termination(process)
+    finally:
+        _close_process_pipe_transports(process)
     return termination, stdout, stderr
 
 
@@ -875,13 +1035,20 @@ async def _run_streaming_io(
                 continue
             raise error
         return stdout_accumulator, stderr_accumulator, outcome
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as cancellation:
         for name in ("stdin", "monitor", "cancel"):
             task = tasks.get(name)
             if task is not None and not task.done():
                 task.cancel()
-        await asyncio.shield(_terminate_streaming_process(process, tasks))
-        raise
+        try:
+            await _run_cleanup_cancellation_resistant(_terminate_streaming_process(process, tasks))
+        except BaseException as exc:
+            logger.warning(
+                "Codex streaming cancellation cleanup failed: pid=%s error_type=%s",
+                getattr(process, "pid", None),
+                type(exc).__name__,
+            )
+        raise cancellation
     finally:
         for task in tasks.values():
             if not task.done():
@@ -959,34 +1126,41 @@ class CodexRunner:
         | None = None,
         prompt_handoff: Callable[[], Awaitable[bool]] | None = None,
     ) -> CodexRunResult:
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            suffix=".txt",
-            prefix="codex-last-",
-            dir=self.output_dir,
-            delete=False,
-        ) as tmp:
-            output_path = Path(tmp.name)
-
-        kwargs: dict[str, Any] = {}
-        if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            kwargs["start_new_session"] = True
-
-        prompt_payload = self._prompt_with_artifact_instruction(prompt, artifact_dir)
-        args = self._build_args(cwd, prompt, thread_id, output_path, artifact_dir)
-        logger.info(
-            "Starting Codex CLI: label=%s thread=%s cwd=%s prompt_chars=%d prompt_lines=%d",
-            getattr(job, "label", "?"),
-            thread_id or "new",
-            cwd,
-            len(prompt_payload),
-            len(prompt_payload.splitlines()),
-        )
+        output_path: Path | None = None
+        process: asyncio.subprocess.Process | None = None
+        process_cleanup_required = False
+        result_committed = False
+        orphan_archives: set[Path] = set()
         try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            # delete=False is intentional: Codex must reopen this path on Windows.
+            # The handle is closed before spawn, while the surrounding try owns the name.
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                suffix=".txt",
+                prefix="codex-last-",
+                dir=self.output_dir,
+                delete=False,
+            ) as tmp:
+                output_path = Path(tmp.name)
+
+            kwargs: dict[str, Any] = {}
+            if sys.platform == "win32":
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                kwargs["start_new_session"] = True
+
+            prompt_payload = self._prompt_with_artifact_instruction(prompt, artifact_dir)
+            args = self._build_args(cwd, prompt, thread_id, output_path, artifact_dir)
+            logger.info(
+                "Starting Codex CLI: label=%s thread=%s cwd=%s prompt_chars=%d prompt_lines=%d",
+                getattr(job, "label", "?"),
+                thread_id or "new",
+                cwd,
+                len(prompt_payload),
+                len(prompt_payload.splitlines()),
+            )
             try:
                 process = await asyncio.wait_for(
                     asyncio.create_subprocess_exec(
@@ -1002,6 +1176,7 @@ class CodexRunner:
                 raise RuntimeError(
                     f"Codex process spawn timed out after {self.config.spawn_timeout_seconds}s"
                 ) from exc
+            process_cleanup_required = True
 
             try:
                 if process_handoff is None:
@@ -1009,12 +1184,30 @@ class CodexRunner:
                     may_continue = not bool(getattr(job, "cancel_requested", False))
                 else:
                     may_continue = await process_handoff(process)
-            except BaseException:
-                await _terminate_and_drain_process(process)
-                raise
+            except BaseException as handoff_error:
+                try:
+                    termination, _, _ = await _run_cleanup_cancellation_resistant(
+                        _terminate_and_drain_process(process)
+                    )
+                except BaseException as cleanup_error:
+                    logger.warning(
+                        "Codex process handoff cleanup failed: pid=%s error_type=%s",
+                        getattr(process, "pid", None),
+                        type(cleanup_error).__name__,
+                    )
+                else:
+                    process_cleanup_required = not (
+                        termination.tree_confirmed and termination.parent_reaped
+                    )
+                raise handoff_error
             if not may_continue:
-                await _terminate_and_drain_process(process)
-                return CodexRunResult(
+                termination, _, _ = await _run_cleanup_cancellation_resistant(
+                    _terminate_and_drain_process(process)
+                )
+                process_cleanup_required = not (
+                    termination.tree_confirmed and termination.parent_reaped
+                )
+                result = CodexRunResult(
                     exit_code=process.returncode,
                     thread_id=thread_id,
                     final_text="任务在 Codex 进程登记后、prompt 发送前已取消。",
@@ -1022,6 +1215,8 @@ class CodexRunner:
                     stderr_tail="",
                     cancelled=True,
                 )
+                result_committed = True
+                return result
 
             try:
                 if prompt_handoff is None:
@@ -1030,12 +1225,30 @@ class CodexRunner:
                         job.prompt_started = True
                 else:
                     may_send_prompt = await prompt_handoff()
-            except BaseException:
-                await _terminate_and_drain_process(process)
-                raise
+            except BaseException as handoff_error:
+                try:
+                    termination, _, _ = await _run_cleanup_cancellation_resistant(
+                        _terminate_and_drain_process(process)
+                    )
+                except BaseException as cleanup_error:
+                    logger.warning(
+                        "Codex prompt handoff cleanup failed: pid=%s error_type=%s",
+                        getattr(process, "pid", None),
+                        type(cleanup_error).__name__,
+                    )
+                else:
+                    process_cleanup_required = not (
+                        termination.tree_confirmed and termination.parent_reaped
+                    )
+                raise handoff_error
             if not may_send_prompt:
-                await _terminate_and_drain_process(process)
-                return CodexRunResult(
+                termination, _, _ = await _run_cleanup_cancellation_resistant(
+                    _terminate_and_drain_process(process)
+                )
+                process_cleanup_required = not (
+                    termination.tree_confirmed and termination.parent_reaped
+                )
+                result = CodexRunResult(
                     exit_code=process.returncode,
                     thread_id=thread_id,
                     final_text="任务在 prompt 发送前已取消。",
@@ -1043,6 +1256,8 @@ class CodexRunner:
                     stderr_tail="",
                     cancelled=True,
                 )
+                result_committed = True
+                return result
 
             cancel_event = getattr(job, "cancel_event", None)
             typed_cancel_event = cancel_event if isinstance(cancel_event, asyncio.Event) else None
@@ -1056,6 +1271,7 @@ class CodexRunner:
             image_paths: list[str] = []
             stdout_tail = ""
             stderr_tail = ""
+            execution_forced_stop = False
 
             if _has_streaming_pipes(process):
                 stdout_accumulator, stderr_accumulator, io_outcome = await _run_streaming_io(
@@ -1069,6 +1285,9 @@ class CodexRunner:
                 cancelled_while_running = io_outcome.cancelled
                 output_limited = io_outcome.output_limited
                 limit_reason = io_outcome.limit_reason
+                execution_forced_stop = (
+                    io_outcome.timed_out or io_outcome.cancelled or io_outcome.output_limited
+                )
                 new_thread_id = stdout_accumulator.thread_id
                 message_text = stdout_accumulator.last_message
                 usage = stdout_accumulator.usage
@@ -1102,14 +1321,30 @@ class CodexRunner:
                             cancel_wait_task is not None and cancel_wait_task in done
                         )
                         timed_out = not cancelled_while_running
+                        execution_forced_stop = True
                         communicate_task.cancel()
                         await asyncio.gather(communicate_task, return_exceptions=True)
-                        _, stdout_bytes, stderr_bytes = await _terminate_and_drain_process(process)
-                except asyncio.CancelledError:
+                        _, stdout_bytes, stderr_bytes = await _run_cleanup_cancellation_resistant(
+                            _terminate_and_drain_process(process)
+                        )
+                except asyncio.CancelledError as cancellation:
                     communicate_task.cancel()
                     await asyncio.gather(communicate_task, return_exceptions=True)
-                    await asyncio.shield(_terminate_and_drain_process(process))
-                    raise
+                    try:
+                        termination, _, _ = await _run_cleanup_cancellation_resistant(
+                            _terminate_and_drain_process(process)
+                        )
+                    except BaseException as exc:
+                        logger.warning(
+                            "Codex communicate cancellation cleanup failed: pid=%s error_type=%s",
+                            getattr(process, "pid", None),
+                            type(exc).__name__,
+                        )
+                    else:
+                        process_cleanup_required = not (
+                            termination.tree_confirmed and termination.parent_reaped
+                        )
+                    raise cancellation
                 finally:
                     if cancel_wait_task is not None and not cancel_wait_task.done():
                         cancel_wait_task.cancel()
@@ -1132,25 +1367,31 @@ class CodexRunner:
                 stdout_tail = _tail(stdout_text)
                 stderr_tail = _tail(stderr_text)
 
-            file_capture = await asyncio.to_thread(
+            file_capture = await _capture_in_thread(
                 _capture_final_output,
                 output_path,
+                orphan_archives=orphan_archives,
                 output_dir=self.output_dir,
                 job=job,
                 config=self.config,
             )
+            if file_capture.archive_path:
+                orphan_archives.add(Path(file_capture.archive_path))
             output_limited = output_limited or file_capture.limited
             limit_reason = limit_reason or file_capture.reason
 
             result_capture = file_capture
             if not result_capture.text and message_text:
-                result_capture = await asyncio.to_thread(
+                result_capture = await _capture_in_thread(
                     _archive_large_message,
                     message_text,
+                    orphan_archives=orphan_archives,
                     output_dir=self.output_dir,
                     job=job,
                     config=self.config,
                 )
+                if result_capture.archive_path:
+                    orphan_archives.add(Path(result_capture.archive_path))
                 output_limited = output_limited or result_capture.limited
                 limit_reason = limit_reason or result_capture.reason
 
@@ -1171,7 +1412,7 @@ class CodexRunner:
                     final_text = stderr_tail or stdout_tail or "Codex 没有返回文本结果。"
             final_text = _qq_preview(final_text, self.config.max_qq_text_chars)
 
-            return CodexRunResult(
+            result = CodexRunResult(
                 exit_code=process.returncode,
                 thread_id=new_thread_id or thread_id,
                 final_text=final_text,
@@ -1186,8 +1427,52 @@ class CodexRunner:
                 image_paths=image_paths,
                 usage=usage,
             )
+            result_committed = True
+            process_cleanup_required = execution_forced_stop or bool(
+                getattr(job, "cancel_requested", False)
+            )
+            return result
         finally:
-            try:
-                output_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            cleanup_cancellation: asyncio.CancelledError | None = None
+            if process_cleanup_required and process is not None:
+                try:
+                    await _run_cleanup_cancellation_resistant(_terminate_and_drain_process(process))
+                except asyncio.CancelledError as exc:
+                    cleanup_cancellation = cleanup_cancellation or exc
+                except Exception as exc:  # noqa: BLE001 - file cleanup must still run.
+                    logger.error(
+                        "Final Codex process cleanup failed: pid=%s error_type=%s",
+                        getattr(process, "pid", None),
+                        type(exc).__name__,
+                    )
+            if output_path is not None:
+                try:
+                    await _run_cleanup_cancellation_resistant(
+                        _remove_output_path_with_retry(output_path)
+                    )
+                except asyncio.CancelledError as exc:
+                    cleanup_cancellation = cleanup_cancellation or exc
+                except Exception as exc:  # noqa: BLE001 - cleanup cannot mask run outcome.
+                    logger.warning(
+                        "Failed to finalize Codex transient output: name=%s error_type=%s",
+                        output_path.name,
+                        type(exc).__name__,
+                    )
+            # A result is not actually committed until Python finishes this finally.
+            # If cleanup observed cancellation, its archive has no receiving result.
+            if not result_committed or cleanup_cancellation is not None:
+                for archive_path in sorted(orphan_archives):
+                    try:
+                        await _run_cleanup_cancellation_resistant(
+                            _remove_output_path_with_retry(archive_path)
+                        )
+                    except asyncio.CancelledError as exc:
+                        cleanup_cancellation = cleanup_cancellation or exc
+                    except Exception as exc:  # noqa: BLE001 - finish all owned cleanup.
+                        logger.warning(
+                            "Failed to discard orphan Codex archive: name=%s error_type=%s",
+                            archive_path.name,
+                            type(exc).__name__,
+                        )
+            if cleanup_cancellation is not None:
+                raise cleanup_cancellation

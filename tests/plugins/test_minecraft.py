@@ -11,7 +11,16 @@ import pytest
 from core.interfaces import PluginContextProtocol
 from plugins.minecraft import main as mc_main
 from plugins.minecraft.log_monitor import LogEvent, LogEventType
-from plugins.minecraft.rcon import PacketType, RconClient, RconPacket
+from plugins.minecraft.rcon import (
+    PacketType,
+    RconClient,
+    RconCommandResult,
+    RconConnectResult,
+    RconErrorKind,
+    RconPacket,
+    RconProtocolError,
+    RconResponseLimitError,
+)
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -355,7 +364,10 @@ class _FakeRconClient:
 
     async def connect(self):
         self.connected = True
-        return True
+        return RconConnectResult(success=True)
+
+    async def disconnect(self):
+        self.connected = False
 
 
 class _FakeDisconnectRcon:
@@ -373,7 +385,7 @@ class _FakeCommandRcon:
 
     async def command(self, cmd):
         self.commands.append(cmd)
-        return self.response
+        return RconCommandResult(success=True, response=self.response)
 
 
 @pytest.mark.asyncio
@@ -599,7 +611,7 @@ def test_rcon_rejects_oversized_packet_before_reading_body():
     client = RconClient("127.0.0.1", 25575, "pw")
     client._reader = cast(Any, _FakeRconReader(encoded_length))
 
-    with pytest.raises(ValueError, match="数据包长度"):
+    with pytest.raises(RconProtocolError, match="packet length"):
         asyncio.run(client._read_packet(1.0))
 
 
@@ -615,7 +627,7 @@ def test_rcon_rejects_cumulative_response_limit():
     client._reader = cast(Any, _FakeRconReader(encoded))
     client._writer = cast(Any, _FakeRconWriter())
 
-    with pytest.raises(ValueError, match="累计响应"):
+    with pytest.raises(RconResponseLimitError, match="cumulative response"):
         asyncio.run(client._send_packet(PacketType.COMMAND, "list"))
 
 

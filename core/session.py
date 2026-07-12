@@ -15,43 +15,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
+from .async_keyed_lock import AsyncKeyedLockPool
+
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
-
-
-class _ReentrantAsyncLock:
-    """Task-reentrant lock used by a single SessionManager key.
-
-    Session handlers frequently call ``context.end_session()`` while already
-    changing the session.  A plain asyncio.Lock would deadlock in that valid
-    flow, so the task holding a lock may re-enter it until its outer operation
-    finishes.
-    """
-
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._owner: asyncio.Task[Any] | None = None
-        self._depth = 0
-
-    async def acquire(self) -> None:
-        task = asyncio.current_task()
-        if task is None:
-            raise RuntimeError("session locks require an asyncio task")
-        if self._owner is task:
-            self._depth += 1
-            return
-        await self._lock.acquire()
-        self._owner = task
-        self._depth = 1
-
-    def release(self) -> None:
-        task = asyncio.current_task()
-        if task is None or self._owner is not task:
-            raise RuntimeError("session lock released by a non-owner task")
-        self._depth -= 1
-        if self._depth == 0:
-            self._owner = None
-            self._lock.release()
 
 @dataclass
 class Session:
@@ -119,7 +86,7 @@ class SessionManager:
     def __init__(self, default_timeout: float = 300.0) -> None:
         self._sessions: dict[tuple[int, int | None], Session] = {}
         self._lock = asyncio.Lock()
-        self._key_locks: dict[tuple[int, int | None], _ReentrantAsyncLock] = {}
+        self._key_lock_pool = AsyncKeyedLockPool(max_keys=4096, max_key_length=128)
         self._default_timeout = default_timeout
 
     @property
@@ -130,6 +97,10 @@ class SessionManager:
     def active_count(self) -> int:
         return len(self._sessions)
 
+    @property
+    def active_key_lock_count(self) -> int:
+        return self._key_lock_pool.active_key_count
+
     def set_default_timeout(self, timeout: float) -> None:
         self._default_timeout = float(timeout)
 
@@ -137,22 +108,10 @@ class SessionManager:
         """生成会话键"""
         return (user_id, group_id)
 
-    async def _key_lock_for(self, key: tuple[int, int | None]) -> _ReentrantAsyncLock:
-        async with self._lock:
-            lock = self._key_locks.get(key)
-            if lock is None:
-                lock = _ReentrantAsyncLock()
-                self._key_locks[key] = lock
-            return lock
-
     @asynccontextmanager
     async def _lock_key(self, key: tuple[int, int | None]):
-        lock = await self._key_lock_for(key)
-        await lock.acquire()
-        try:
+        async with self._key_lock_pool.hold(key):
             yield
-        finally:
-            lock.release()
 
     async def _get_active_locked(self, key: tuple[int, int | None]) -> Session | None:
         """Read an active session while its per-key lock is held."""

@@ -1,10 +1,11 @@
 """测试 CHIME FRB 重复暴监测插件"""
 
-import pytest
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock
-import tempfile
-import json
+
+import pytest
+
 from plugins.chime import main as chime_main
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -92,8 +93,8 @@ class TestChimeApi:
         content = main_file.read_text(encoding='utf-8')
 
         assert "def fetch_chime_repeaters" in content
-        assert "async with" in content
-        assert "response.json()" in content
+        assert "aiohttp_request_bounded" in content
+        assert "parse_bounded_json" in content
 
     def test_error_handling(self):
         """测试错误处理"""

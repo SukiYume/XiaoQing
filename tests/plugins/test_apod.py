@@ -12,6 +12,7 @@ apod 插件单元测试
 
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import aiohttp
 
@@ -100,6 +101,59 @@ SAMPLE_APOD_HTML_WITH_IFRAME = """
 </body>
 </html>
 """
+
+
+@pytest.fixture(autouse=True)
+def safe_transport_adapter(monkeypatch, mock_context):
+    """Adapt historical in-memory sessions to the pinned APOD fetch API."""
+
+    async def response_bytes(url: str) -> bytes | None:
+        session = mock_context.http_session
+        if session is None:
+            return None
+        async with session.get(url) as response:
+            if response.status != 200:
+                return None
+            if hasattr(response, "read"):
+                value = await response.read()
+            else:
+                value = (await response.text()).encode("utf-8")
+            return value if isinstance(value, bytes) else None
+
+    async def fetch_html(url, **_kwargs):
+        body = await response_bytes(url)
+        if body is None:
+            return None
+        return SimpleNamespace(
+            url=url,
+            status=200,
+            body=body,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+        )
+
+    async def fetch_bytes(url, **_kwargs):
+        body = await response_bytes(url)
+        if body is None:
+            return None
+        return SimpleNamespace(
+            url=url,
+            status=200,
+            body=body,
+            headers={"Content-Type": "image/jpeg"},
+        )
+
+    async def download(url, images_dir, _context):
+        body = await response_bytes(url)
+        if not body:
+            return None
+        target = images_dir / "legacy-test-image.jpg"
+        target.write_bytes(body)
+        return target
+
+    monkeypatch.setattr(apod, "fetch_public_html", fetch_html)
+    monkeypatch.setattr(apod, "fetch_public_bytes", fetch_bytes)
+    monkeypatch.setattr(apod, "_safe_download_image", download)
+
 
 SAMPLE_APOD_HTML_WITH_VIDEO = """
 <!DOCTYPE html>
@@ -446,9 +500,11 @@ class TestNetworkRequests:
             def get(self, *args, **kwargs):
                 return MockGetContextManager()
 
+        session = MockSession()
+        mock_context.http_session = session
         result = await apod._fetch_with_retry(
-            session=MockSession(),
-            url="http://test.com",
+            session=session,
+            url="https://apod.nasa.gov/apod/test.html",
             proxy=None,
             timeout=aiohttp.ClientTimeout(total=60),
             is_binary=False,
@@ -482,9 +538,11 @@ class TestNetworkRequests:
             def get(self, *args, **kwargs):
                 return MockGetContextManager()
 
+        session = MockSession()
+        mock_context.http_session = session
         result = await apod._fetch_with_retry(
-            session=MockSession(),
-            url="http://test.com/image.jpg",
+            session=session,
+            url="https://apod.nasa.gov/apod/image.jpg",
             proxy=None,
             timeout=aiohttp.ClientTimeout(total=60),
             is_binary=True,
@@ -522,9 +580,11 @@ class TestDownloadImage:
 
         file_path = temp_data_dir / "test_image.jpg"
 
+        session = MockSession()
+        mock_context.http_session = session
         result = await apod.download_image(
-            session=MockSession(),
-            url="http://example.com/image.jpg",
+            session=session,
+            url="https://apod.nasa.gov/apod/image.jpg",
             file_path=file_path,
             proxy=None,
             timeout=aiohttp.ClientTimeout(total=60),
@@ -558,9 +618,11 @@ class TestDownloadImage:
         # 使用不存在的子目录
         file_path = temp_data_dir / "subdir" / "nested" / "image.jpg"
 
+        session = MockSession()
+        mock_context.http_session = session
         result = await apod.download_image(
-            session=MockSession(),
-            url="http://example.com/image.jpg",
+            session=session,
+            url="https://apod.nasa.gov/apod/image.jpg",
             file_path=file_path,
             proxy=None,
             timeout=aiohttp.ClientTimeout(total=60),
@@ -587,7 +649,7 @@ class TestDownloadImage:
 
         result = await apod.download_image(
             session=MockSession(),
-            url="http://example.com/image.jpg",
+            url="https://apod.nasa.gov/apod/image.jpg",
             file_path=file_path,
             proxy=None,
             timeout=aiohttp.ClientTimeout(total=60),

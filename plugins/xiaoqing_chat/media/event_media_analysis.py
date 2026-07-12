@@ -20,11 +20,11 @@ from ..llm.llm_client import (
 from ..task_scheduler import _spawn_bg_task
 from ..utils.json_parsing import parse_first_json_object, parse_first_json_object_with_status
 from .event_media_common import (
+    _MEDIA_ANALYSIS_PROMPT_VERSION,
     MediaAnalysisDraft,
     PreparedMediaForLLM,
     RenderedMedia,
     ResolvedMedia,
-    _MEDIA_ANALYSIS_PROMPT_VERSION,
     _build_marker,
     _can_use_raw_media_description,
     _fallback_kind,
@@ -36,8 +36,8 @@ from .event_media_common import (
     _normalize_emotion_tags,
     _normalize_source_label,
     _render_animation_contact_sheet,
-    _same_rendered_media,
     _safe_source_name,
+    _same_rendered_media,
     write_render_cache_entry,
 )
 
@@ -46,7 +46,9 @@ _MEDIA_DETAIL_TRUNCATED_RETRY_MAX_TOKENS = 720
 
 
 def _vision_plugin_secrets(context) -> tuple[dict[str, Any], dict[str, Any], str]:
-    plugin_secrets = (getattr(context, "secrets", {}) or {}).get("plugins", {}).get("xiaoqing_chat", {}) or {}
+    plugin_secrets = (getattr(context, "secrets", {}) or {}).get("plugins", {}).get(
+        "xiaoqing_chat", {}
+    ) or {}
     vision = plugin_secrets.get("vision") or {}
     providers = vision.get("providers") or {}
     default_name = str(vision.get("default", "") or "").strip()
@@ -178,16 +180,18 @@ def _explicit_media_llm_requested(context, runtime) -> bool:
 def _resolve_media_llm_secret_candidates(context, runtime) -> list[dict[str, Any]]:
     cfg = _media_cfg(runtime)
     if cfg is None:
-        return [{
-            "api_base": "",
-            "api_key": "",
-            "model": "",
-            "endpoint_path": "",
-            "proxy": "",
-            "_provider_name": "",
-            "_provider_scope": "none",
-            "_vision_enabled": False,
-        }]
+        return [
+            {
+                "api_base": "",
+                "api_key": "",
+                "model": "",
+                "endpoint_path": "",
+                "proxy": "",
+                "_provider_name": "",
+                "_provider_scope": "none",
+                "_vision_enabled": False,
+            }
+        ]
 
     plugin_secrets, vision_providers, vision_default = _vision_plugin_secrets(context)
     vision_cfg = plugin_secrets.get("vision") or {}
@@ -212,11 +216,15 @@ def _resolve_media_llm_secret_candidates(context, runtime) -> list[dict[str, Any
 
     if provider_name and provider_name in vision_providers:
         provider_names.append(provider_name)
-        provider_names.extend(_normalize_provider_list((vision_providers.get(provider_name) or {}).get("fallbacks")))
+        provider_names.extend(
+            _normalize_provider_list((vision_providers.get(provider_name) or {}).get("fallbacks"))
+        )
         provider_names.extend(root_fallbacks)
     elif not provider_name and vision_default and vision_default in vision_providers:
         provider_names.append(vision_default)
-        provider_names.extend(_normalize_provider_list((vision_providers.get(vision_default) or {}).get("fallbacks")))
+        provider_names.extend(
+            _normalize_provider_list((vision_providers.get(vision_default) or {}).get("fallbacks"))
+        )
         provider_names.extend(root_fallbacks)
     elif provider_name and provider_name in chat_providers:
         provider_candidates.append(
@@ -257,7 +265,9 @@ def _has_media_llm_capability(context, runtime) -> bool:
     if not _explicit_media_llm_requested(context, runtime):
         return False
     for secrets in _resolve_media_llm_secret_candidates(context, runtime):
-        if all(str(secrets.get(field, "") or "").strip() for field in ("api_base", "api_key", "model")):
+        if all(
+            str(secrets.get(field, "") or "").strip() for field in ("api_base", "api_key", "model")
+        ):
             return True
     return False
 
@@ -273,9 +283,8 @@ def _looks_like_source_placeholder(
     full_source_label = _normalize_source_label(summary_hint or resolved.source_name)
     if not full_source_label:
         return False
-    return (
-        rendered.description == full_source_label
-        and rendered.marker == _build_marker(rendered.kind, rendered.description, rendered.emotion_tags)
+    return rendered.description == full_source_label and rendered.marker == _build_marker(
+        rendered.kind, rendered.description, rendered.emotion_tags
     )
 
 
@@ -307,7 +316,9 @@ def _should_refresh_cached_render(
         return False
     if normalized_source == "fallback":
         return True
-    return _same_rendered_media(cached_rendered, fallback_rendered) or _looks_like_source_placeholder(
+    return _same_rendered_media(
+        cached_rendered, fallback_rendered
+    ) or _looks_like_source_placeholder(
         cached_rendered,
         summary_hint=summary_hint,
         resolved=resolved,
@@ -316,7 +327,18 @@ def _should_refresh_cached_render(
 
 def _prepare_media_for_llm(resolved: ResolvedMedia) -> PreparedMediaForLLM:
     payload = resolved.cached_path.read_bytes()
-    source_mime = str(resolved.mime_type or _inspect_image_payload(payload, fallback_suffix=resolved.cached_path.suffix or ".png")[0]).split(";", 1)[0].strip().lower() or "image/png"
+    source_mime = (
+        str(
+            resolved.mime_type
+            or _inspect_image_payload(
+                payload, fallback_suffix=resolved.cached_path.suffix or ".png"
+            )[0]
+        )
+        .split(";", 1)[0]
+        .strip()
+        .lower()
+        or "image/png"
+    )
     if source_mime.startswith("image/") and source_mime not in {"image/svg+xml"}:
         try:
             if resolved.is_animated:
@@ -388,8 +410,8 @@ def _merge_visible_text(description: str, visible_text: str) -> str:
     if normalized_text and normalized_text in normalized_desc:
         return desc
     if desc:
-        return f'{desc}，文字内容是“{text}”'
-    return f'文字内容是“{text}”'
+        return f"{desc}，文字内容是“{text}”"
+    return f"文字内容是“{text}”"
 
 
 async def _call_media_llm(
@@ -463,7 +485,9 @@ async def _call_media_llm_once(
 ) -> MediaLLMCallResult:
     cfg = _media_cfg(runtime)
     if cfg is None:
-        return MediaLLMCallResult(text="", used_secrets={}, used_path="", finish_reason="", raw_chars=0)
+        return MediaLLMCallResult(
+            text="", used_secrets={}, used_path="", finish_reason="", raw_chars=0
+        )
 
     effective_max_tokens = _media_llm_max_tokens(secrets, max_tokens)
     used_secrets = dict(secrets)
@@ -568,7 +592,9 @@ def _finalize_media_analysis(
         else:
             description = _safe_source_name(resolved.source_name) or "一张表情包"
             used_summary_fallback = True
-        emotion_tags = refined.emotion_tags if refined and refined.emotion_tags else detail.emotion_tags
+        emotion_tags = (
+            refined.emotion_tags if refined and refined.emotion_tags else detail.emotion_tags
+        )
         if not emotion_tags:
             emotion_tags = _normalize_emotion_tags(description or detail.visible_text)
     else:
@@ -587,11 +613,15 @@ def _finalize_media_analysis(
         marker=marker,
         cached_path=resolved.cached_path,
     )
-    quality = "generic" if _is_low_quality_rendered_media(
-        rendered,
-        summary_hint=resolved.source_name,
-        resolved=resolved,
-    ) else "detailed"
+    quality = (
+        "generic"
+        if _is_low_quality_rendered_media(
+            rendered,
+            summary_hint=resolved.source_name,
+            resolved=resolved,
+        )
+        else "detailed"
+    )
     return rendered, used_summary_fallback, quality
 
 
@@ -613,7 +643,9 @@ def _semantic_retry_reason(
         return "empty_description"
     if _is_generic_media_label(rendered.description):
         return "generic_description"
-    if _is_low_quality_rendered_media(rendered, summary_hint=resolved.source_name, resolved=resolved):
+    if _is_low_quality_rendered_media(
+        rendered, summary_hint=resolved.source_name, resolved=resolved
+    ):
         return "low_quality_render"
     return ""
 
@@ -728,7 +760,7 @@ def _schedule_background_emoji_refine(
                 step="media.analyze.refine.background.fail",
                 fields={
                     "media_hash": resolved.media_hash[:12],
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error_type": type(exc).__name__,
                 },
                 level="warning",
             )
@@ -752,7 +784,7 @@ def _schedule_background_emoji_refine(
                 step="media.analyze.refine.background.skip",
                 fields={
                     "media_hash": resolved.media_hash[:12],
-                    "reason": semantic_reason,
+                    "reason_code": semantic_reason,
                     "description": refined_rendered.description,
                 },
                 level="warning",
@@ -819,7 +851,9 @@ async def _analyze_media_with_llm(
     complete_candidates = [
         secrets
         for secrets in candidates
-        if all(str(secrets.get(field, "") or "").strip() for field in ("api_base", "api_key", "model"))
+        if all(
+            str(secrets.get(field, "") or "").strip() for field in ("api_base", "api_key", "model")
+        )
     ]
     if not complete_candidates:
         _media_log(
@@ -873,8 +907,14 @@ async def _analyze_media_with_llm(
         "如果图里有清晰文字，description 和 visible_text 里至少要有一个包含这些文字的核心信息。"
     )
     if prefer_emoji:
-        prompt += " 这张图来自表情包库，请优先按聊天表情包理解，并尽量提炼出适合聊天使用的情绪标签。"
-    if prepared.is_animated and prepared.frame_strategy == "animation_contact_sheet" and prepared.frame_count > 1:
+        prompt += (
+            " 这张图来自表情包库，请优先按聊天表情包理解，并尽量提炼出适合聊天使用的情绪标签。"
+        )
+    if (
+        prepared.is_animated
+        and prepared.frame_strategy == "animation_contact_sheet"
+        and prepared.frame_count > 1
+    ):
         prompt += (
             f" 这张图是从同一个动画表情里抽取的 {prepared.frame_count} 帧拼图，不是多个人物。"
             " 如果看到相似角色重复出现，要理解成同一角色在不同帧里的动作或表情变化。"
@@ -965,10 +1005,14 @@ async def _analyze_media_with_llm(
                     runtime,
                     step="media.analyze.fail",
                     fields={
-                        "provider": getattr(exc, "_media_provider_name", provider_secrets.get("_provider_name", "")),
-                        "model": getattr(exc, "_media_provider_model", provider_secrets.get("model", "")),
+                        "provider": getattr(
+                            exc, "_media_provider_name", provider_secrets.get("_provider_name", "")
+                        ),
+                        "model": getattr(
+                            exc, "_media_provider_model", provider_secrets.get("model", "")
+                        ),
                         "media_hash": resolved.media_hash[:12],
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "error_type": type(exc).__name__,
                     },
                     level="warning",
                 )
@@ -1022,7 +1066,7 @@ async def _analyze_media_with_llm(
                         "provider": llm_result.used_secrets.get("_provider_name", ""),
                         "model": llm_result.used_secrets.get("model", ""),
                         "media_hash": resolved.media_hash[:12],
-                        "reason": semantic_reason,
+                        "reason_code": semantic_reason,
                         "semantic_attempt": semantic_attempt,
                         "semantic_retry_limit": semantic_retry_limit,
                         "description": rendered.description,
@@ -1039,7 +1083,7 @@ async def _analyze_media_with_llm(
                             "provider": llm_result.used_secrets.get("_provider_name", ""),
                             "model": llm_result.used_secrets.get("model", ""),
                             "media_hash": resolved.media_hash[:12],
-                            "reason": semantic_reason,
+                            "reason_code": semantic_reason,
                             "semantic_attempt": semantic_attempt,
                             "semantic_retry_limit": semantic_retry_limit,
                         },
@@ -1058,7 +1102,8 @@ async def _analyze_media_with_llm(
                         "provider": llm_result.used_secrets.get("_provider_name", ""),
                         "model": llm_result.used_secrets.get("model", ""),
                         "media_hash": resolved.media_hash[:12],
-                        "error": f"semantic_validation_failed:{semantic_reason}",
+                        "error_type": "semantic_validation_failed",
+                        "reason_code": semantic_reason,
                     },
                     level="warning",
                 )
@@ -1154,8 +1199,7 @@ async def _extract_cultural_hint(
         "如果你认得这个梗（中文互联网常见的谐音梗、引用梗、表情包模板、网络流行语等），"
         "用一句不超过 24 字的中文说出梗的来源或常见用法。"
         "不知道、不确定、需要更多上下文、内容只是普通画面就直接输出空字符串。"
-        '只输出 JSON：{"hint":"..."}。\n输入：'
-        + json.dumps(payload, ensure_ascii=False)
+        '只输出 JSON：{"hint":"..."}。\n输入：' + json.dumps(payload, ensure_ascii=False)
     )
     messages = [
         {"role": "system", "content": "你是中文网络梗解读器，只输出 JSON。"},
@@ -1193,7 +1237,7 @@ async def _extract_cultural_hint(
             step="media.cultural_hint.fail",
             fields={
                 "media_hash": resolved.media_hash[:12],
-                "error": f"{type(exc).__name__}: {exc}",
+                "error_type": type(exc).__name__,
             },
             level="warning",
         )

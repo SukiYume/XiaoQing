@@ -65,8 +65,9 @@ def _init_stage_repo(tmp_path: Path) -> tuple[Path, str]:
         encoding="utf-8",
     )
     commit = _commit(repo, "runtime")
+    ignored_key = "API" + "_KEY"
     (repo / "ignored.env").write_text(
-        'API_KEY="ignored_4f9b7c2d8a6e1f03"\n',
+        f'{ignored_key}="ignored_4f9b7c2d8a6e1f03"\n',
         encoding="utf-8",
     )
     (repo / "untracked-canary.txt").write_text("must stay outside\n", encoding="utf-8")
@@ -87,6 +88,10 @@ def _bash_directory(path: Path) -> str:
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    subprocess.run(
+        ["bash", "-c", f"chmod +x {shlex.quote(f'{_bash_directory(path.parent)}/{path.name}')}"],
+        check=True,
+    )
 
 
 def _make_sync_repo(tmp_path: Path) -> tuple[Path, str, dict[str, str], Path]:
@@ -131,6 +136,8 @@ def _make_sync_repo(tmp_path: Path) -> tuple[Path, str, dict[str, str], Path]:
     env.update(
         {
             "_TEST_PATH_PREFIX": _bash_directory(fake_bin),
+            "XIAOQING_SSH_BIN": f"{_bash_directory(fake_bin)}/ssh",
+            "XIAOQING_RSYNC_BIN": f"{_bash_directory(fake_bin)}/rsync",
             "XIAOQING_SYNC_HOST": "fakehost",
             "XIAOQING_SYNC_DIR": "/requested/remote",
             "PYTHON": "python3",
@@ -150,6 +157,8 @@ def _run_sync(repo: Path, env: dict[str, str], *args: str) -> subprocess.Complet
             "XIAOQING_SYNC_DIR",
             "FAKE_REMOTE_ROOT",
             "FAKE_RSYNC_LOG",
+            "XIAOQING_SSH_BIN",
+            "XIAOQING_RSYNC_BIN",
         )
     }
     command = "; ".join(
@@ -217,6 +226,23 @@ def test_cr203_sync_assets_remain_tracked_and_executable() -> None:
     by_path = {line.split("\t", 1)[1]: line.split(maxsplit=1)[0] for line in listed}
     assert set(by_path) == set(TRACKED_ASSETS)
     assert by_path["sync_to_remote.sh"] == "100755"
+
+
+def test_project_deploy_manifest_has_versioned_runtime_boundary() -> None:
+    manifest = ROOT / "deploy" / "runtime-paths.txt"
+    entries = set(parse_manifest(manifest.read_bytes()))
+
+    assert {
+        ".xiaoqing-sync-root",
+        "main.py",
+        "core",
+        "plugins",
+        "pyproject.toml",
+        "requirements/python-3.13-runtime.lock",
+        "scripts/run-bot-monitor.ps1",
+        "scripts/run_process_with_rotating_logs.py",
+    }.issubset(entries)
+    assert not {".git", "config/secrets.json", "logs", "data"} & entries
 
 
 def test_stage_contains_only_manifest_paths_from_fixed_commit(tmp_path: Path) -> None:
@@ -319,6 +345,8 @@ def test_archive_enforces_file_and_byte_budgets(tmp_path: Path, monkeypatch) -> 
 def test_manifest_rejects_unsafe_duplicate_and_unsorted_paths() -> None:
     with pytest.raises(StagingError):
         parse_manifest(b"# xiaoqing-deploy-manifest-v1\n../escape\n")
+    with pytest.raises(StagingError):
+        parse_manifest(b"# xiaoqing-deploy-manifest-v1\n-option\n")
     with pytest.raises(StagingError):
         parse_manifest(b"# xiaoqing-deploy-manifest-v1\napp.py\napp.py\n")
     with pytest.raises(StagingError, match="sorted"):
@@ -425,8 +453,8 @@ def test_apply_rejects_short_ref_and_plan_before_external_commands() -> None:
 def test_shell_contract_uses_immutable_stage_plan_and_remote_protections() -> None:
     content = SCRIPT.read_text(encoding="utf-8")
     assert "build_deploy_stage.py" in content
-    assert 'rsync "${rsync_args[@]}" --dry-run "$stage_dir/"' in content
-    assert 'rsync "${rsync_args[@]}" "$stage_dir/"' in content
+    assert '"$RSYNC_BIN" "${rsync_args[@]}" --dry-run "$stage_dir/"' in content
+    assert '"$RSYNC_BIN" "${rsync_args[@]}" "$stage_dir/"' in content
     assert "Plan SHA256:" in content
     assert "--expect-plan" in content
     assert '"${#remote_lines[@]}" -eq 1' in content

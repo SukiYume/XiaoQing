@@ -13,6 +13,8 @@ from typing import Any
 
 from dateutil import parser
 
+from core.public_errors import public_error_message
+
 from ..config import MOOD_ANALYSIS_CONFIG
 from ..utils.settings_utils import parse_custom_settings
 from ..utils.time_utils import now_in_timezone, parse_and_localize
@@ -149,6 +151,22 @@ class AIParser:
             return self.context.secrets.get("plugins", {}).get("pendo", {})
         return {}
 
+    def _record_degraded_error(self, exc: BaseException, *, component: str) -> None:
+        """Record a recoverable failure without exposing its raw text."""
+        if self.context is not None:
+            public_error_message(
+                self.context,
+                exc,
+                logger=logger,
+                component=component,
+            )
+            return
+        logger.warning(
+            "%s degraded error_type=%s",
+            component,
+            type(exc).__name__,
+        )
+
     def has_sensitive_data_consent(self, user_id: str) -> bool:
         """Return whether this user explicitly permits external diary analysis."""
         if self.db is None:
@@ -157,7 +175,7 @@ class AIParser:
             settings = self.db.get_user_settings(user_id)
             return bool(parse_custom_settings(settings).get("ai_sensitive_data_consent", False))
         except Exception as exc:
-            logger.warning("Unable to read AI consent for user=%s: %s", user_id, exc)
+            self._record_degraded_error(exc, component="pendo.ai_parser.consent")
             return False
 
     async def _call_llm(
@@ -194,8 +212,8 @@ class AIParser:
                 proxy=proxy,
             )
             return raw
-        except Exception as e:
-            logger.warning("LLM调用失败: %s", e)
+        except Exception as exc:
+            self._record_degraded_error(exc, component="pendo.ai_parser.llm")
             return None
 
     def parse_natural_language(self, text: str, user_id: str) -> dict[str, Any]:
@@ -269,8 +287,8 @@ class AIParser:
 
             return self._build_event_result(parsed, source_text, user_id, partial=partial)
 
-        except Exception as e:
-            logger.exception("AI解析失败: %s", e)
+        except Exception as exc:
+            self._record_degraded_error(exc, component="pendo.ai_parser.event")
             return self._fallback_event_result(source_text, user_id, partial=partial)
 
     async def analyze_diary_mood(self, text: str, user_id: str) -> tuple[str | None, int | None]:
@@ -328,8 +346,8 @@ class AIParser:
             if score is None:
                 return mood, None
             return mood, min(10, max(1, score))
-        except Exception as e:
-            logger.exception("AI 日记情绪分析失败: %s", e)
+        except Exception as exc:
+            self._record_degraded_error(exc, component="pendo.ai_parser.diary_mood")
             return self._fallback_diary_mood(text)
 
     def _build_event_result(

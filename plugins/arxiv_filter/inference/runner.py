@@ -95,11 +95,10 @@ def run_inference_for_dataframe(
     if data.empty:
         return None, "No papers found."
 
-    try:
-        probs, preds = _dispatch_inference(params, data)
-    except Exception as e:
-        logger.exception("Inference failed: %s", e)
-        return None, f"Error: {e}"
+    # This is an internal API without a request context.  Unexpected backend
+    # failures must retain their traceback so the public plugin boundary can
+    # produce one redacted, request-scoped response.
+    probs, preds = _dispatch_inference(params, data)
 
     output = data.copy()
     output["Probability"] = probs
@@ -131,11 +130,7 @@ def run_inference_for_today(
     """获取今日 arXiv 论文并执行推理。"""
     from ..arxiv_today import get_today_arxiv
 
-    try:
-        data = get_today_arxiv()
-    except Exception as e:
-        logger.error("Error fetching today's papers: %s", e)
-        return None, f"Error fetching today's papers: {e}"
+    data = get_today_arxiv()
 
     return run_inference_for_dataframe(data, model_path, threshold, batch_size, max_len)
 

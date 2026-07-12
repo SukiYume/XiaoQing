@@ -29,6 +29,7 @@ from pathlib import Path
 
 from core.plugin_base import segments, text, image, ensure_dir, PluginContextProtocol
 from core.args import parse
+from core.public_errors import public_error_response
 
 # 使用相对导入
 from .adapi import AdnmbClient, Post, Thread
@@ -302,9 +303,8 @@ async def handle(command: str, args: str, event: dict, context: PluginContextPro
         # 默认显示帮助
         return segments(_get_help())
         
-    except Exception as e:
-        logger.exception("adnmb handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="adnmb.handle")
 
 
 def _get_help() -> str:

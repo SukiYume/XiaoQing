@@ -5,6 +5,16 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 import aiohttp
 
+from core.bounded_http import (
+    BodyLimits,
+    BoundedHttpError,
+    HttpStatusError,
+    JsonLimits,
+    MimePolicy,
+    aiohttp_request_bounded,
+    parse_bounded_json,
+)
+
 from ..utils.json_parsing import normalize_response_content
 
 
@@ -13,6 +23,16 @@ class LLMError(RuntimeError):
 
 
 _EXTRA_PAYLOAD_RESERVED_KEYS = frozenset({"model", "messages", "stream"})
+_LLM_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=2 * 1024 * 1024,
+    max_decoded_bytes=4 * 1024 * 1024,
+)
+_LLM_JSON_LIMITS = JsonLimits(max_bytes=_LLM_BODY_LIMITS.max_decoded_bytes)
+_LLM_JSON_MIME = MimePolicy(
+    exact=frozenset({"application/json"}),
+    structured_suffixes=frozenset({"+json"}),
+    allow_missing=True,
+)
 
 
 def _join_url(api_base: str, path: str) -> str:
@@ -143,23 +163,32 @@ async def chat_completions_raw(
     while True:
         attempt += 1
         try:
-            req_kwargs: dict[str, Any] = {
-                "headers": headers,
+            request_kwargs: dict[str, Any] = {
                 "json": payload,
                 "timeout": aiohttp.ClientTimeout(total=timeout_seconds),
             }
             if proxy:
-                req_kwargs["proxy"] = proxy
+                request_kwargs["proxy"] = proxy
 
-            async with session.post(url, **req_kwargs) as resp:
-                if resp.status == 413:
-                    raise LLMError("request_too_large")
-                if resp.status >= 400:
-                    text = await resp.text()
-                    if _is_retryable_status(resp.status):
-                        raise LLMError(f"retryable_http_{resp.status}:{text[:200]}")
-                    raise LLMError(f"http_{resp.status}:{text[:200]}")
-                data = await resp.json()
+            try:
+                response = await aiohttp_request_bounded(
+                    session,
+                    "POST",
+                    url,
+                    limits=_LLM_BODY_LIMITS,
+                    mime_policy=_LLM_JSON_MIME,
+                    headers=headers,
+                    request_kwargs=request_kwargs,
+                )
+                data = parse_bounded_json(response, limits=_LLM_JSON_LIMITS)
+            except HttpStatusError as exc:
+                if exc.status == 413:
+                    raise LLMError("request_too_large") from exc
+                if _is_retryable_status(exc.status):
+                    raise LLMError(f"retryable_http_{exc.status}") from exc
+                raise LLMError(f"http_{exc.status}") from exc
+            except BoundedHttpError as exc:
+                raise LLMError(f"invalid_response_{type(exc).__name__}") from exc
 
             if not isinstance(data, dict):
                 raise LLMError("invalid_response")
@@ -177,7 +206,7 @@ async def chat_completions_raw(
             await asyncio.sleep(_retry_delay(retry_interval_seconds, attempt))
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             if attempt > max_retry + 1:
-                raise LLMError(str(exc)) from exc
+                raise LLMError(f"transport_{type(exc).__name__}") from exc
             await asyncio.sleep(_retry_delay(retry_interval_seconds, attempt))
 
 

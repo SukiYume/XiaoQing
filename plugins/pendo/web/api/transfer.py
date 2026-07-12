@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 import logging
+import sqlite3
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -36,6 +36,24 @@ from ..services.transfer_bundle import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _IMPORT_LOCK_POOL = AsyncKeyedLockPool(max_keys=2_048, max_key_length=256)
+
+
+def _is_unique_constraint_failure(exc: BaseException) -> bool:
+    """Inspect a bounded exception chain without parsing exception messages."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    unique_codes = {
+        getattr(sqlite3, "SQLITE_CONSTRAINT_PRIMARYKEY", -1),
+        getattr(sqlite3, "SQLITE_CONSTRAINT_UNIQUE", -2),
+    }
+    for _ in range(8):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, sqlite3.IntegrityError):
+            return getattr(current, "sqlite_errorcode", None) in unique_codes
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _get_import_lock(owner_id: str, bundle_id: str | None):
@@ -210,8 +228,8 @@ def _validate_export_record(record: dict[str, Any]) -> tuple[dict[str, Any], str
     try:
         normalizer(record, partial=True)
         return record, None
-    except (ValueError, TypeError, KeyError) as exc:
-        return record, f"{item_type}/{record.get('id', '?')}: {exc}"
+    except (ValueError, TypeError, KeyError):
+        return record, f"{item_type}/{record.get('id', '?')}: 记录字段校验失败"
 
 
 def _build_export_dataset(db: Database, owner_id: str, selection: ExportSelection) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int], tuple[date | None, date | None], list[str]]:
@@ -322,7 +340,7 @@ def _inspect_bundle_data(file_bytes: bytes) -> tuple[Any, list[dict[str, Any]], 
     try:
         return inspect_bundle_bytes(file_bytes)
     except BundleValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="导入包格式或内容校验失败") from exc
 
 
 def _normalize_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -737,15 +755,21 @@ async def execute_import(
         except DuplicateBundleImportError as exc:
             raise HTTPException(
                 status_code=409,
-                detail={"message": "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」", "bundle_id": str(exc)},
+                detail={
+                    "message": "此 bundle 已导入过，如需重新导入请勾选「强制重新导入」",
+                    "bundle_id": bundle_id or "",
+                },
             ) from exc
         except Exception as exc:
-            if "UNIQUE constraint failed: items.id" in str(exc):
+            if _is_unique_constraint_failure(exc):
                 raise HTTPException(
                     status_code=409,
                     detail="导入记录 ID 与现有数据冲突，请选择跳过或生成副本后重试",
                 ) from exc
-            logger.exception("Import transaction failed for owner=%s bundle=%s", owner_id, bundle_id)
+            logger.error(
+                "Import transaction failed error_type=%s",
+                type(exc).__name__,
+            )
             raise HTTPException(
                 status_code=500,
                 detail="导入事务失败，已全部回滚；请检查导入预检结果或稍后重试",

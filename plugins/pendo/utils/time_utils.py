@@ -8,7 +8,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..config import PendoConfig
 
@@ -30,8 +30,11 @@ class TimezoneHelper:
                 settings = db.settings.get_user_settings(user_id)
                 tz_str = settings.get("timezone", PendoConfig.DEFAULT_TIMEZONE)
                 return ZoneInfo(tz_str)
-            except Exception as e:
-                logger.warning("Failed to get user timezone: %s", e)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to get user timezone error_type=%s",
+                    type(exc).__name__,
+                )
         return TimezoneHelper.DEFAULT_TZ
 
     @staticmethod
@@ -51,8 +54,7 @@ class TimezoneHelper:
             if dt.tzinfo is not None:
                 return dt.astimezone(tz) if tz else dt
             return dt.replace(tzinfo=tz or TimezoneHelper.DEFAULT_TZ)
-        except ValueError as e:
-            logger.error("Failed to parse datetime: %s, error: %s", dt_str, e)
+        except ValueError:
             raise
 
     @staticmethod
@@ -77,7 +79,7 @@ def get_user_now_from_settings(settings: dict[str, Any], current_utc: datetime) 
     tz_name = settings.get("timezone", PendoConfig.DEFAULT_TIMEZONE)
     try:
         tz = ZoneInfo(tz_name)
-    except Exception:
+    except (ZoneInfoNotFoundError, TypeError, ValueError):
         tz = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
     return current_utc.astimezone(tz)
 
@@ -220,8 +222,8 @@ def _parse_time_range_core(
             except ValueError:
                 _, end = _parse_ym_range(e)
             return start, end
-        except (ValueError, AttributeError) as exc:
-            logger.warning("Failed to parse time range '%s': %s", time_range, exc)
+        except (ValueError, AttributeError):
+            pass
 
     if strict:
         raise ValueError(f"无法解析时间范围: {time_range}")
@@ -247,7 +249,7 @@ def parse_search_date_range(
     try:
         start, end = _parse_time_range_core(range_str, now, strict=strict)
         return start.isoformat(), end.isoformat()
-    except Exception:
+    except (ValueError, AttributeError):
         if strict:
             raise
         return None, None

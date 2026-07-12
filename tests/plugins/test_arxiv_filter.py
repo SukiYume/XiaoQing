@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from core.interfaces import PluginCapabilities, PluginPrincipal
+from core.interfaces import DeliveryTarget, PluginCapabilities, PluginPrincipal
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -35,10 +35,12 @@ arxiv_filter_utils = importlib.import_module("plugins.arxiv_filter.utils")
 # Fixtures
 # ============================================================
 
+
 @pytest.fixture
 def temp_data_dir():
     """创建临时数据目录"""
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
 
@@ -47,6 +49,7 @@ def temp_data_dir():
 def temp_plugin_dir():
     """创建临时插件目录（包含模型目录）"""
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         plugin_dir = Path(tmpdir)
         # 创建模拟模型目录
@@ -55,16 +58,8 @@ def temp_plugin_dir():
         # 创建模型配置文件
         config_file = plugin_dir / "config.json"
         config_data = {
-            "model": {
-                "path": "best_model",
-                "threshold": 0.5,
-                "batch_size": 32,
-                "max_len": 64
-            },
-            "arxiv": {
-                "url": "https://arxiv.org/list/astro-ph/new",
-                "proxy": None
-            }
+            "model": {"path": "best_model", "threshold": 0.5, "batch_size": 32, "max_len": 64},
+            "arxiv": {"url": "https://arxiv.org/list/astro-ph/new", "proxy": None},
         }
         config_file.write_text(json.dumps(config_data), encoding="utf-8")
         yield plugin_dir
@@ -73,6 +68,7 @@ def temp_plugin_dir():
 @pytest.fixture
 def mock_context(temp_plugin_dir):
     """模拟插件上下文"""
+
     class MockContext:
         def __init__(self, plugin_dir):
             self.plugin_dir = plugin_dir
@@ -82,7 +78,6 @@ def mock_context(temp_plugin_dir):
             self.logger = MagicMock()
             self.principal = PluginPrincipal(kind="lifecycle")
             self.capabilities = PluginCapabilities()
-            self.call_plugin = AsyncMock(return_value="queued")
 
     return MockContext(temp_plugin_dir)
 
@@ -90,16 +85,13 @@ def mock_context(temp_plugin_dir):
 @pytest.fixture
 def mock_event():
     """模拟事件"""
-    return {
-        "user_id": 12345,
-        "group_id": 100000001,
-        "message_type": "group"
-    }
+    return {"user_id": 12345, "group_id": 100000001, "message_type": "group"}
 
 
 # ============================================================
 # Test Config Loading
 # ============================================================
+
 
 class TestConfigLoading:
     """测试配置加载功能"""
@@ -110,7 +102,7 @@ class TestConfigLoading:
         config_file = temp_plugin_dir / "config.json"
         config_data = {
             "model": {"path": "custom_model"},
-            "arxiv": {"url": "https://arxiv.org/list/astro-ph/new"}
+            "arxiv": {"url": "https://arxiv.org/list/astro-ph/new"},
         }
         config_file.write_text(json.dumps(config_data), encoding="utf-8")
 
@@ -139,6 +131,7 @@ class TestConfigLoading:
 # Test Status Management
 # ============================================================
 
+
 class TestStatusManagement:
     """测试状态管理功能"""
 
@@ -155,10 +148,7 @@ class TestStatusManagement:
 
     def test_save_and_load_status(self, temp_plugin_dir):
         """测试保存和加载状态"""
-        test_status = {
-            "last_sent_date": "2026-02-04",
-            "last_sent_time": "2026-02-04T10:00:00"
-        }
+        test_status = {"last_sent_date": "2026-02-04", "last_sent_time": "2026-02-04T10:00:00"}
         arxiv_filter._save_update_status(str(temp_plugin_dir), test_status)
 
         loaded = arxiv_filter._load_update_status(str(temp_plugin_dir))
@@ -197,6 +187,7 @@ class TestStatusManagement:
 # Test Handle
 # ============================================================
 
+
 class TestHandle:
     """测试命令处理"""
 
@@ -219,7 +210,9 @@ class TestHandle:
     @pytest.mark.asyncio
     async def test_handle_default_calls_run_filter(self, mock_context, mock_event):
         """测试默认命令调用 _run_filter"""
-        with patch.object(arxiv_filter, '_run_filter', new=AsyncMock(return_value=arxiv_filter.segments("test"))) as mock_run:
+        with patch.object(
+            arxiv_filter, "_run_filter", new=AsyncMock(return_value=arxiv_filter.segments("test"))
+        ) as mock_run:
             result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
             assert result is not None
             mock_run.assert_called_once()
@@ -240,8 +233,6 @@ class TestHandle:
             await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
 
         assert mock_run.await_args.kwargs == {
-            "user_id": 12345,
-            "group_id": 100000001,
             "allow_codex_sidecar": True,
         }
 
@@ -258,16 +249,19 @@ class TestHandle:
     @pytest.mark.asyncio
     async def test_handle_exception(self, mock_context, mock_event):
         """测试处理异常"""
-        with patch.object(arxiv_filter, '_run_filter', new=AsyncMock(side_effect=Exception("Test error"))):
+        with patch.object(
+            arxiv_filter, "_run_filter", new=AsyncMock(side_effect=Exception("Test error"))
+        ):
             result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
             assert result is not None
             result_text = str(result)
-            assert "出错" in result_text or "error" in result_text.lower()
+            assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
 
 # ============================================================
 # Test Run Filter
 # ============================================================
+
 
 class TestRunFilter:
     """测试论文筛选功能"""
@@ -276,7 +270,7 @@ class TestRunFilter:
     async def test_run_filter_model_not_loaded(self, mock_context, mock_event):
         """测试模型未加载"""
         # 模拟模型加载失败
-        with patch.object(arxiv_filter, '_load_inference', return_value=None):
+        with patch.object(arxiv_filter, "_load_inference", return_value=None):
             result = await arxiv_filter._run_filter(mock_context)
             assert result is not None
             result_text = str(result)
@@ -293,7 +287,7 @@ class TestRunFilter:
         # 注: _run_filter 通过 load_plugin_config() 加载配置（基于 __file__），
         #     不直接依赖 context.plugin_dir 来解析模型路径。
         #     因此当推理函数正常返回时，结果会被正常格式化。
-        with patch.object(arxiv_filter, '_load_inference', return_value=lambda **kwargs: "result"):
+        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: "result"):
             mock_context.plugin_dir = empty_dir
             result = await arxiv_filter._run_filter(mock_context)
             assert result is not None
@@ -312,7 +306,9 @@ Link       : https://arxiv.org/abs/1234.5678
 Probability: 0.8000
 """
 
-        with patch.object(arxiv_filter, '_load_inference', return_value=lambda **kwargs: mock_inference_result):
+        with patch.object(
+            arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_inference_result
+        ):
             result = await arxiv_filter._run_filter(mock_context)
             assert result is not None
             result_text = str(result)
@@ -321,7 +317,9 @@ Probability: 0.8000
     @pytest.mark.asyncio
     async def test_run_filter_no_papers(self, mock_context, mock_event):
         """测试没有符合条件的论文"""
-        with patch.object(arxiv_filter, '_load_inference', return_value=lambda **kwargs: "No positive predictions"):
+        with patch.object(
+            arxiv_filter, "_load_inference", return_value=lambda **kwargs: "No positive predictions"
+        ):
             result = await arxiv_filter._run_filter(mock_context)
             assert result is not None
             result_text = str(result)
@@ -330,55 +328,67 @@ Probability: 0.8000
     @pytest.mark.asyncio
     async def test_run_filter_error_response(self, mock_context, mock_event):
         """测试推理返回错误"""
-        with patch.object(arxiv_filter, '_load_inference', return_value=lambda **kwargs: "Error: Network error"):
+        with patch.object(
+            arxiv_filter, "_load_inference", return_value=lambda **kwargs: "Error: Network error"
+        ):
             result = await arxiv_filter._run_filter(mock_context)
             assert result is not None
             result_text = str(result)
-            assert "失败" in result_text or "获取失败" in result_text
+            assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
     @pytest.mark.asyncio
     async def test_run_filter_file_not_found(self, mock_context, mock_event):
         """测试 FileNotFoundError"""
+
         async def raise_file_not_found(*args, **kwargs):
             raise FileNotFoundError("Model file not found")
 
-        with patch.object(arxiv_filter, '_load_inference', return_value=lambda **kwargs: None):
-            with patch.object(arxiv_filter, 'run_sync', new=AsyncMock(side_effect=raise_file_not_found)):
+        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: None):
+            with patch.object(
+                arxiv_filter, "run_sync", new=AsyncMock(side_effect=raise_file_not_found)
+            ):
                 result = await arxiv_filter._run_filter(mock_context)
                 assert result is not None
                 result_text = str(result)
-                assert "不完整" in result_text or "失败" in result_text
+                assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
     @pytest.mark.asyncio
     async def test_run_filter_import_error(self, mock_context, mock_event):
         """测试 ImportError（缺少依赖）"""
+
         async def raise_import_error(*args, **kwargs):
             raise ImportError("No module named 'tensorflow'")
 
-        with patch.object(arxiv_filter, '_load_inference', return_value=lambda **kwargs: "result"):
-            with patch.object(arxiv_filter, 'run_sync', new=AsyncMock(side_effect=raise_import_error)):
+        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: "result"):
+            with patch.object(
+                arxiv_filter, "run_sync", new=AsyncMock(side_effect=raise_import_error)
+            ):
                 result = await arxiv_filter._run_filter(mock_context)
                 assert result is not None
                 result_text = str(result)
-                assert "依赖" in result_text or "不完整" in result_text
+                assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
     @pytest.mark.asyncio
     async def test_run_filter_generic_exception(self, mock_context, mock_event):
         """测试通用异常"""
+
         async def raise_generic_error():
             raise RuntimeError("Unexpected error")
 
-        with patch.object(arxiv_filter, '_load_inference', return_value=lambda **kwargs: "result"):
-            with patch.object(arxiv_filter, 'run_sync', new=AsyncMock(side_effect=raise_generic_error)):
+        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: "result"):
+            with patch.object(
+                arxiv_filter, "run_sync", new=AsyncMock(side_effect=raise_generic_error)
+            ):
                 result = await arxiv_filter._run_filter(mock_context)
                 assert result is not None
                 result_text = str(result)
-                assert "不可用" in result_text or "失败" in result_text
+                assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
 
 # ============================================================
 # Test Inference Loading
 # ============================================================
+
 
 class TestInferenceLoading:
     """测试推理模块加载"""
@@ -425,6 +435,7 @@ class TestInferenceLoading:
 # Test Check ArXiv Update
 # ============================================================
 
+
 class TestCheckArxivUpdate:
     """测试 arXiv 更新检查"""
 
@@ -443,8 +454,12 @@ class TestCheckArxivUpdate:
         # 确保今天未发送
         today = arxiv_filter._business_now(mock_context).date().isoformat()
 
-        with patch.object(arxiv_filter, '_run_filter', new=AsyncMock(return_value=arxiv_filter.segments("Papers found"))):
-            with patch.object(arxiv_filter, 'run_sync', return_value=today):
+        with patch.object(
+            arxiv_filter,
+            "_run_filter",
+            new=AsyncMock(return_value=arxiv_filter.segments("Papers found")),
+        ):
+            with patch.object(arxiv_filter, "run_sync", return_value=today):
                 result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
                 # 应该调用 _run_filter
                 assert result is not None
@@ -457,7 +472,9 @@ class TestCheckArxivUpdate:
         with patch.object(
             arxiv_filter,
             "_run_filter",
-            new=AsyncMock(return_value=arxiv_filter.segments("❌ 论文筛选服务暂时不可用，请稍后再试。")),
+            new=AsyncMock(
+                return_value=arxiv_filter.segments("❌ 论文筛选服务暂时不可用，请稍后再试。")
+            ),
         ):
             with patch.object(arxiv_filter, "run_sync", return_value=today):
                 result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
@@ -471,7 +488,7 @@ class TestCheckArxivUpdate:
         # 返回昨天的日期
         yesterday = "2026-01-01"
 
-        with patch.object(arxiv_filter, 'run_sync', return_value=yesterday):
+        with patch.object(arxiv_filter, "run_sync", return_value=yesterday):
             result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
             # 应该返回空列表
             assert result == []
@@ -481,7 +498,7 @@ class TestCheckArxivUpdate:
         """测试最后检查仍未更新"""
         # 返回旧日期
         old_date = "2026-01-01"
-        with patch.object(arxiv_filter, 'run_sync', return_value=old_date):
+        with patch.object(arxiv_filter, "run_sync", return_value=old_date):
             result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=True)
             assert result is not None
             result_text = str(result)
@@ -490,7 +507,7 @@ class TestCheckArxivUpdate:
     @pytest.mark.asyncio
     async def test_check_arxiv_update_error(self, mock_context):
         """测试检查更新时出错"""
-        with patch.object(arxiv_filter, 'run_sync', side_effect=Exception("Network error")):
+        with patch.object(arxiv_filter, "run_sync", side_effect=Exception("Network error")):
             result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
             assert result == []
 
@@ -499,13 +516,18 @@ class TestCheckArxivUpdate:
 # Test Scheduled Tasks
 # ============================================================
 
+
 class TestScheduledTasks:
     """测试定时任务"""
 
     @pytest.mark.asyncio
     async def test_scheduled(self, mock_context):
         """测试定时任务入口"""
-        with patch.object(arxiv_filter, '_run_filter', new=AsyncMock(return_value=arxiv_filter.segments("scheduled"))) as mock_run:
+        with patch.object(
+            arxiv_filter,
+            "_run_filter",
+            new=AsyncMock(return_value=arxiv_filter.segments("scheduled")),
+        ) as mock_run:
             result = await arxiv_filter.scheduled(mock_context)
             assert result is not None
             mock_run.assert_called_once()
@@ -513,14 +535,18 @@ class TestScheduledTasks:
     @pytest.mark.asyncio
     async def test_scheduled_check(self, mock_context):
         """测试定时检查任务"""
-        with patch.object(arxiv_filter, '_check_arxiv_update', new=AsyncMock(return_value=[])) as mock_check:
+        with patch.object(
+            arxiv_filter, "_check_arxiv_update", new=AsyncMock(return_value=[])
+        ) as mock_check:
             await arxiv_filter.scheduled_check(mock_context)
             mock_check.assert_called_once_with(mock_context, is_final_check=False)
 
     @pytest.mark.asyncio
     async def test_scheduled_final_check(self, mock_context):
         """测试最后检查任务"""
-        with patch.object(arxiv_filter, '_check_arxiv_update', new=AsyncMock(return_value=[])) as mock_check:
+        with patch.object(
+            arxiv_filter, "_check_arxiv_update", new=AsyncMock(return_value=[])
+        ) as mock_check:
             await arxiv_filter.scheduled_final_check(mock_context)
             mock_check.assert_called_once_with(mock_context, is_final_check=True)
 
@@ -528,6 +554,7 @@ class TestScheduledTasks:
 # ============================================================
 # Test Help
 # ============================================================
+
 
 class TestHelp:
     """测试帮助信息"""
@@ -545,6 +572,7 @@ class TestHelp:
 # Test Init
 # ============================================================
 
+
 class TestInit:
     """测试插件初始化"""
 
@@ -560,6 +588,7 @@ class TestInit:
 # ============================================================
 # Test Multiple Papers
 # ============================================================
+
 
 class TestMultiplePapers:
     """测试多论文场景"""
@@ -578,11 +607,17 @@ Title      : Second Paper Title
 Link       : https://arxiv.org/abs/2222.2222
 Probability: 0.7500
 """
-        with patch.object(arxiv_filter, '_load_inference', return_value=lambda **kwargs: mock_result):
+        with patch.object(
+            arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result
+        ):
             result = await arxiv_filter._run_filter(mock_context)
             assert result is not None
             result_text = str(result)
-            assert "First Paper Title" in result_text or "Second Paper Title" in result_text or "论文" in result_text
+            assert (
+                "First Paper Title" in result_text
+                or "Second Paper Title" in result_text
+                or "论文" in result_text
+            )
 
     def test_extract_arxiv_links_normalizes_and_dedupes(self):
         text = """
@@ -608,12 +643,14 @@ Title      : Second Paper Title
 Link       : https://arxiv.org/abs/2605.18050
 Probability: 0.7500
 """
-        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result):
-            with patch.object(arxiv_filter, "schedule_codex_summary_from_filter_result") as schedule_mock:
+        with patch.object(
+            arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result
+        ):
+            with patch.object(
+                arxiv_filter, "schedule_codex_summary_from_filter_result"
+            ) as schedule_mock:
                 result = await arxiv_filter._run_filter(
                     mock_context,
-                    user_id=123,
-                    group_id=100000001,
                     allow_codex_sidecar=True,
                 )
 
@@ -622,8 +659,6 @@ Probability: 0.7500
             mock_context,
             date=arxiv_filter._business_now(mock_context).date().isoformat(),
             filter_text=mock_result,
-            user_id=123,
-            group_id=100000001,
         )
 
     @pytest.mark.asyncio
@@ -634,7 +669,9 @@ Title      : First Paper Title
 Link       : https://arxiv.org/abs/2605.16917
 Probability: 0.9000
 """
-        with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result):
+        with patch.object(
+            arxiv_filter, "_load_inference", return_value=lambda **kwargs: mock_result
+        ):
             with patch.object(
                 arxiv_filter,
                 "schedule_codex_summary_from_filter_result",
@@ -647,61 +684,98 @@ Probability: 0.9000
     @pytest.mark.asyncio
     async def test_codex_summary_missing_codex_does_not_raise(self, mock_context):
         mock_context.send_action = AsyncMock()
+        service = Mock()
+        service.enqueue_or_replay = AsyncMock(side_effect=RuntimeError("codex unavailable"))
+        mock_context.capabilities = PluginCapabilities(codex_arxiv_summary=service)
         task = arxiv_codex_summary.schedule_codex_summary(
             mock_context,
             date="2026-05-19",
             links=["https://arxiv.org/abs/2605.16917"],
-            user_id=123,
-            group_id=100000001,
         )
 
         assert task is not None
-        mock_context.call_plugin.side_effect = RuntimeError("codex unavailable")
         await task
-        mock_context.call_plugin.assert_awaited_once()
+        service.enqueue_or_replay.assert_awaited_once()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("user_id", "group_id", "is_system", "expected_user_id", "expected_group_id"),
+        ("principal", "is_system"),
         [
-            pytest.param(123, None, False, 123, None, id="private-chat"),
-            pytest.param(123, 456, False, 123, 456, id="group-chat"),
-            pytest.param(None, None, True, None, 789, id="scheduler-default-group"),
-            pytest.param(123, None, True, 123, None, id="system-explicit-private-target"),
+            pytest.param(
+                PluginPrincipal(
+                    kind="user",
+                    user_id=123,
+                    is_bot_admin=True,
+                    is_private=True,
+                    delivery_targets=(DeliveryTarget("private", 123),),
+                ),
+                False,
+                id="private-chat",
+            ),
+            pytest.param(
+                PluginPrincipal(
+                    kind="user",
+                    user_id=123,
+                    group_id=456,
+                    is_bot_admin=True,
+                    delivery_targets=(DeliveryTarget("group", 456),),
+                ),
+                False,
+                id="group-chat",
+            ),
+            pytest.param(
+                PluginPrincipal(
+                    kind="scheduled_system",
+                    delivery_targets=(DeliveryTarget("group", 789),),
+                ),
+                True,
+                id="scheduler-signed-group",
+            ),
         ],
     )
-    async def test_codex_summary_preserves_interactive_delivery_target(
+    async def test_codex_summary_uses_only_core_signed_delivery_targets(
         self,
         mock_context,
-        user_id,
-        group_id,
+        principal,
         is_system,
-        expected_user_id,
-        expected_group_id,
     ):
         mock_context.send_action = AsyncMock()
-        mock_context.current_user_id = 999
-        mock_context.current_group_id = None
-        mock_context.default_groups = Mock(return_value=[789])
-        mock_context.capabilities = PluginCapabilities(is_system=is_system)
+        service = Mock()
+        service.enqueue_or_replay = AsyncMock(return_value="queued")
+        mock_context.principal = principal
+        mock_context.capabilities = PluginCapabilities(
+            is_system=is_system,
+            codex_arxiv_summary=service,
+        )
         task = arxiv_codex_summary.schedule_codex_summary(
             mock_context,
             date="2026-07-10",
             links=["https://arxiv.org/abs/2607.00001"],
-            user_id=user_id,
-            group_id=group_id,
         )
         assert task is not None
         await task
 
-        mock_context.call_plugin.assert_awaited_once_with(
-            "codex",
-            "enqueue_or_replay_arxiv_summary",
+        service.enqueue_or_replay.assert_awaited_once_with(
             date="2026-07-10",
             links=["https://arxiv.org/abs/2607.00001"],
-            user_id=expected_user_id,
-            group_id=expected_group_id,
         )
+
+    @pytest.mark.asyncio
+    async def test_scheduled_zero_targets_skip_before_claim_or_inference(
+        self,
+        mock_context,
+    ):
+        mock_context.principal = PluginPrincipal(kind="scheduled_system", delivery_targets=())
+        mock_context.capabilities = PluginCapabilities(is_system=True)
+
+        with patch.object(
+            arxiv_filter,
+            "_claim_send_today",
+            side_effect=AssertionError("zero-target schedule must not claim"),
+        ):
+            assert await arxiv_filter.scheduled_check(mock_context) == []
+            assert await arxiv_filter.scheduled_final_check(mock_context) == []
+            assert await arxiv_filter.scheduled(mock_context) == []
 
     @pytest.mark.asyncio
     async def test_filter_inference_is_singleflight_and_cached_per_business_day(self, mock_context):
@@ -780,6 +854,7 @@ def test_arxiv_run_all_uses_script_directory_and_current_python(monkeypatch):
 # ============================================================
 # Test Date Handling
 # ============================================================
+
 
 class TestDateHandling:
     """测试日期处理"""

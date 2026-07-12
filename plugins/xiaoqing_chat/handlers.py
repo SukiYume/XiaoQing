@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import random
 import re
 import time
@@ -15,6 +14,7 @@ from typing import Any
 
 from core.message import extract_text
 from core.plugin_base import segments
+from core.public_errors import public_error_message, public_error_response
 
 from .attention_gate import decide_attention
 from .brain_chat import (
@@ -126,7 +126,9 @@ def _refresh_mood_state(runtime, state, chat_id: str) -> str:
     last_observe = float(state.get_last_observe_ts(chat_id) or 0.0)
     last_reply = float(state.get_last_reply_ts(chat_id) or 0.0)
     last_active = max(last_observe, last_reply)
-    idle_threshold = max(0.0, float(getattr(cfg, "state_force_refresh_after_idle_seconds", 14400.0)))
+    idle_threshold = max(
+        0.0, float(getattr(cfg, "state_force_refresh_after_idle_seconds", 14400.0))
+    )
 
     current = state.get_mood_state(chat_id)
     if current and idle_threshold > 0 and last_active and (now - last_active) > idle_threshold:
@@ -341,13 +343,23 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
             except Exception:
                 pass
             if exc.need_replan and attempt < max_replan:
-                context.logger.info("XiaoQing Chat 回复被拒绝，触发重规划重试: %s", exc)
+                context.logger.info(
+                    "XiaoQing Chat 回复被拒绝，触发重规划重试 rejection_type=%s",
+                    type(exc).__name__,
+                )
                 continue
-            context.logger.warning("XiaoQing Chat 回复被拒绝(已耗尽重试): %s", exc)
+            context.logger.warning(
+                "XiaoQing Chat 回复被拒绝(已耗尽重试) rejection_type=%s",
+                type(exc).__name__,
+            )
             return []
         except Exception as exc:
-            context.logger.exception("XiaoQing Chat smalltalk 处理失败: %s", exc)
-            return segments("❌ 对话处理出错，请稍后再试")
+            return public_error_response(
+                context,
+                exc,
+                logger=context.logger,
+                component="xiaoqing_chat.smalltalk",
+            )
     return []
 
 
@@ -397,11 +409,13 @@ async def observe_message(clean_text: str, event: dict[str, Any], context) -> li
         state = _get_bound_state(context)
         async with _get_lock(chat_id):
             await _ensure_user_message_recorded(text, event, context, runtime, state=state)
-    except Exception:
-        try:
-            context.logger.warning("xiaoqing_chat observe_message failed", exc_info=True)
-        except Exception:
-            pass
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="xiaoqing_chat.observe_message",
+        )
         return []
     return []
 
@@ -490,11 +504,13 @@ async def observe_outgoing_action(
                 step="smalltalk.memory.append_external_bot",
                 fields={"local_id": local_id, "source_plugin": str(source_plugin or "").strip()},
             )
-    except Exception:
-        try:
-            context.logger.warning("xiaoqing_chat observe_outgoing_action failed", exc_info=True)
-        except Exception:
-            pass
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="xiaoqing_chat.observe_outgoing",
+        )
         return []
     return []
 
@@ -627,6 +643,7 @@ async def _record_bot_reply(
     _schedule_action_history_flush(context, runtime, chat_id=chat_id)
     return history_snapshot
 
+
 def _build_generated_reply_output(
     context,
     runtime,
@@ -656,6 +673,7 @@ def _build_generated_reply_output(
         send_parts=send_parts,
         payload=payload,
     )
+
 
 def _cancel_pending_task(task: Any) -> None:
     if task is not None and not task.done():
@@ -950,15 +968,9 @@ async def _maybe_reply_smalltalk(
         async with hctx.state.generation_limiter.admit(
             chat_id=hctx.chat_id,
             user_id=user_scope,
-            max_global=max(
-                0, int(getattr(runtime.cfg, "max_generation_inflight_global", 4))
-            ),
-            max_per_chat=max(
-                0, int(getattr(runtime.cfg, "max_generation_inflight_per_chat", 1))
-            ),
-            max_per_user=max(
-                0, int(getattr(runtime.cfg, "max_generation_inflight_per_user", 1))
-            ),
+            max_global=max(0, int(getattr(runtime.cfg, "max_generation_inflight_global", 4))),
+            max_per_chat=max(0, int(getattr(runtime.cfg, "max_generation_inflight_per_chat", 1))),
+            max_per_user=max(0, int(getattr(runtime.cfg, "max_generation_inflight_per_user", 1))),
             max_calls_per_user_per_day=max(
                 0, int(getattr(runtime.cfg, "max_generation_calls_per_user_per_day", 200))
             ),
@@ -996,6 +1008,7 @@ async def call_bot_name_only_internal(context) -> list[dict[str, Any]]:
         包含单个文本消息段的列表
     """
     replies = list(_DEFAULT_BOT_NAME_ONLY_REPLIES)
+    runtime = None
     try:
         runtime = _load_runtime(context)
         configured = [
@@ -1014,16 +1027,16 @@ async def call_bot_name_only_internal(context) -> list[dict[str, Any]]:
             user_id,
             ttl_seconds=_BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS,
         )
-        try:
-            payload = {
-                "step": "smalltalk.bot_name_only",
-                "chat_id": chat_id,
+        _log_step(
+            context,
+            runtime,
+            chat_id=chat_id,
+            step="smalltalk.bot_name_only",
+            fields={
                 "user_id": user_id,
                 "followup_ttl_s": _BOT_NAME_ONLY_FOLLOWUP_TTL_SECONDS,
-            }
-            context.logger.info("xiaoqing_chat step=%s", json.dumps(payload, ensure_ascii=False))
-        except Exception:
-            pass
+            },
+        )
     return segments(random.choice(replies))
 
 

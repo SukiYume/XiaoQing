@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from core.public_errors import public_error_message
 
 if TYPE_CHECKING:
     from .runtime_state import _ChatRuntime
@@ -100,6 +102,12 @@ async def _build_memory_block(
         )
     except Exception as exc:
         memory_block = ""
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="xiaoqing_chat.memory_context",
+        )
         _log_step(
             context,
             runtime,
@@ -108,7 +116,6 @@ async def _build_memory_block(
             fields={
                 "elapsed_s": round(time.monotonic() - mem_t0, 3),
                 "reason": type(exc).__name__,
-                "error": str(exc)[:160],
             },
         )
     return memory_block

@@ -220,6 +220,40 @@ cd XiaoQing
 python main.py
 ```
 
+Windows 也可以双击仓库根目录的 `run-bot.vbs`，由隐藏窗口中的
+`scripts/run-bot-monitor.ps1` 同时看护 XiaoQing 和本机 NapCat。监控器不会
+接管同名的其他进程，只会复用自身 PID 文件中且命令行同时匹配本仓库
+`main.py` 和日志泵的进程。XiaoQing 异常退出后按有界指数退避重启；稳定运行
+达到阈值后退避恢复初值。
+
+本机路径、Conda 环境、QQ 账号和额外启动参数都必须由部署者配置，不再内置
+账号。在当前 PowerShell 会话直接启动监控器时，可以这样设置进程环境变量：
+
+```powershell
+$env:XIAOQING_NAPCAT_ACCOUNT = "你的QQ号"
+& .\scripts\run-bot-monitor.ps1 `
+  -PythonPath "$env:USERPROFILE\miniconda3\python.exe" `
+  -CondaPath "$env:USERPROFILE\miniconda3\Scripts\conda.exe" `
+  -CondaEnvironment "base"
+```
+
+如果要继续从资源管理器双击 `run-bot.vbs`，应通过 Windows 用户环境变量界面
+持久设置 `XIAOQING_NAPCAT_ACCOUNT`，并在重新登录后启动；仅在另一个已打开的
+PowerShell 窗口设置 `$env:` 不会改变资源管理器已经继承的环境。
+
+高级部署可以通过 `-BotPythonCommand`、`-BotArguments`、`-NapCatPath` 和
+`-NapCatArguments` 传入实际命令。`-MonitorIntervalSeconds`、重启退避、稳定
+运行阈值、`-MaximumLogBytes`（64 KiB～10 GiB）和 `-LogBackupCount`（1～100）
+都有启动时范围校验，且最大退避不得小于初始退避。
+
+stdout 和 stderr 分别写入 `logs/*-monitor.log`。日志由标准库 Python 辅助进程
+持续读取；达到阈值时由持有者先关闭 Windows 文件句柄，再依次轮转并重开，
+因此运行中的长寿命进程也能轮转。每个日志最多保留配置数量的备份，每个活动
+日志和备份均受字节上限约束；写盘失败会终止其创建的进程树，让监控器按退避
+策略重启，而不是让机器人在无日志状态下继续运行。日志泵脚本已列入
+`deploy/runtime-paths.txt` 的运行时清单；若部署不完整而缺少它，监控器会在
+启动任何子进程前明确失败。
+
 看到以下日志说明启动成功：
 
 ```

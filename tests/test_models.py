@@ -2,7 +2,6 @@
 Pydantic Models 单元测试
 """
 
-
 import pytest
 from pydantic import ValidationError
 
@@ -12,11 +11,13 @@ from core.models import (
     PluginDependencyManifest,
     PluginManifest,
     PluginScheduleManifest,
+    PluginServiceManifest,
 )
 
 # ============================================================
 # OneBotEvent 测试
 # ============================================================
+
 
 class TestOneBotEvent:
     """OneBotEvent 模型测试"""
@@ -125,9 +126,11 @@ class TestOneBotEvent:
         # extra="allow" 模式下额外字段被保留
         assert event.model_dump()["custom_field"] == "custom_value"
 
+
 # ============================================================
 # PluginCommandManifest 测试
 # ============================================================
+
 
 class TestPluginCommandManifest:
     """PluginCommandManifest 测试"""
@@ -158,9 +161,11 @@ class TestPluginCommandManifest:
         assert manifest.admin_only is False
         assert manifest.priority == 0
 
+
 # ============================================================
 # PluginScheduleManifest 测试
 # ============================================================
+
 
 class TestPluginScheduleManifest:
     """PluginScheduleManifest 测试"""
@@ -196,6 +201,23 @@ class TestPluginScheduleManifest:
                 dangerous_unimplemented_option=True,
             )
 
+    def test_schedule_preserves_explicit_empty_groups_and_rejects_invalid_ids(self):
+        assert (
+            PluginScheduleManifest(
+                handler="job",
+                cron={"hour": "*"},
+                group_ids=[],
+            ).group_ids
+            == []
+        )
+        for group_ids in ([0], [-1], [True], [123, 123]):
+            with pytest.raises(ValidationError):
+                PluginScheduleManifest(
+                    handler="job",
+                    cron={"hour": "*"},
+                    group_ids=group_ids,
+                )
+
 
 class TestPluginDependencyManifest:
     def test_dependency_defaults_to_required(self):
@@ -204,9 +226,11 @@ class TestPluginDependencyManifest:
         assert dependency.required is True
         assert dependency.description is None
 
+
 # ============================================================
 # PluginManifest 测试
 # ============================================================
+
 
 class TestPluginManifest:
     """PluginManifest 测试"""
@@ -223,6 +247,7 @@ class TestPluginManifest:
         assert manifest.enabled is True
         assert manifest.schema_version == 1
         assert manifest.dependencies == []
+        assert manifest.services == []
 
     def test_create_full_manifest(self):
         """测试创建完整清单"""
@@ -275,6 +300,61 @@ class TestPluginManifest:
         assert manifest.version == "2.0.0"
         assert len(manifest.commands) == 1
         assert manifest.commands[0].name == "hello"
+
+    def test_service_contracts_are_closed_and_provider_scoped(self):
+        service = PluginServiceManifest(
+            name="voice.synthesize_text",
+            callback="convert_text_to_voice",
+            callers=["smalltalk"],
+        )
+        manifest = PluginManifest(name="voice", services=[service])
+        assert manifest.services == [service]
+
+        invalid_services = [
+            {
+                "name": "voice.synthesize_text",
+                "callback": "_private",
+                "callers": ["smalltalk"],
+            },
+            {
+                "name": "voice.synthesize_text",
+                "callback": "convert_text_to_voice",
+                "callers": ["shell"],
+            },
+            {
+                "name": "shell.handle",
+                "callback": "handle",
+                "callers": ["smalltalk"],
+            },
+        ]
+        for raw_service in invalid_services:
+            with pytest.raises(ValidationError):
+                PluginManifest(name="voice", services=[raw_service])
+
+        with pytest.raises(ValidationError):
+            PluginManifest(
+                name="voice",
+                services=[service.model_dump(), service.model_dump()],
+            )
+
+        with pytest.raises(ValidationError):
+            PluginManifest(name="chat", services=[service])
+
+    def test_codex_service_requires_exact_capability_and_caller(self):
+        valid = {
+            "name": "codex.enqueue_arxiv_summary",
+            "callback": "enqueue_arxiv_summary_service",
+            "callers": ["arxiv_filter"],
+            "required_capability": "codex_arxiv_summary",
+        }
+        assert PluginManifest(name="codex", services=[valid]).services
+        for changed in (
+            {**valid, "required_capability": None},
+            {**valid, "callers": ["smalltalk"]},
+        ):
+            with pytest.raises(ValidationError):
+                PluginManifest(name="codex", services=[changed])
+
 
 # ============================================================
 # 运行测试

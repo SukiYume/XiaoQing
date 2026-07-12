@@ -5,6 +5,7 @@
 import logging
 
 from core.plugin_base import segments
+from core.public_errors import public_error_response
 
 
 logger = logging.getLogger(__name__)
@@ -33,9 +34,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         
         return segments(f"未知命令: {command}")
         
-    except Exception as e:
-        logger.exception("Echo plugin error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="echo.handle")
 
 
 def _show_echo_help() -> str:

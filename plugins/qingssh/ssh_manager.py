@@ -10,6 +10,7 @@ SSH 连接管理器
 
 import asyncio
 import json
+import math
 import os
 import re
 import shlex
@@ -19,7 +20,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.plugin_base import atomic_write_text
+from core.sensitive_audit import summarize_sensitive
 
+from .audit import audit_error_type, audit_request_id
 from .config import (
     COMMAND_TIMEOUT,
     CONNECT_TIMEOUT,
@@ -33,6 +36,7 @@ from .config import (
 try:
     import paramiko
     from paramiko.config import SSHConfig
+
     PARAMIKO_AVAILABLE = True
 except ImportError:
     PARAMIKO_AVAILABLE = False
@@ -40,9 +44,27 @@ except ImportError:
     SSHConfig = None  # type: ignore
 
 _SSH_OPTIONS_WITH_ARG = {
-    "-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i",
-    "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-Q", "-R",
-    "-S", "-W", "-w",
+    "-B",
+    "-b",
+    "-c",
+    "-D",
+    "-E",
+    "-e",
+    "-F",
+    "-I",
+    "-i",
+    "-J",
+    "-L",
+    "-l",
+    "-m",
+    "-O",
+    "-o",
+    "-p",
+    "-Q",
+    "-R",
+    "-S",
+    "-W",
+    "-w",
 }
 
 
@@ -68,8 +90,7 @@ class CommandTerminationResult:
 
 def _expand_proxycommand(proxycommand: str, server: dict[str, Any]) -> str:
     return (
-        proxycommand
-        .replace("%h", server["host"])
+        proxycommand.replace("%h", server["host"])
         .replace("%p", str(server["port"]))
         .replace("%r", server["username"])
     )
@@ -157,6 +178,7 @@ def _parse_proxyjump_command(proxycommand: str) -> Optional[dict[str, Any]]:
         "jump_port": jump_port,
     }
 
+
 class SSHManager:
     """
     SSH 连接管理器
@@ -180,47 +202,78 @@ class SSHManager:
         # 标记是否已初始化
         self._initialized = False
 
-    def _log(self, level: str, message: str, **kwargs):
+    def _log(self, level: str, message: str) -> None:
         """
         辅助方法：记录日志（如果上下文有 logger）
 
         Args:
             level: 日志级别 (debug, info, warning, error)
             message: 日志消息
-            **kwargs: 传递给 logger 的额外参数
         """
-        if self.context and hasattr(self.context, 'logger'):
+        if self.context and hasattr(self.context, "logger"):
             logger = self.context.logger
             log_method = getattr(logger, level, None)
             if log_method and callable(log_method):
-                log_method(message, **kwargs)
+                log_method(message)
+
+    def _log_sensitive(
+        self,
+        level: str,
+        *,
+        operation: str,
+        status: str,
+        value: str,
+        exc: BaseException | None = None,
+    ) -> None:
+        summary = summarize_sensitive(value)
+        self._log(
+            level,
+            "sensitive_audit operation=%s request_id=%s status=%s error_type=%s "
+            "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s"
+            % (
+                operation,
+                audit_request_id(self.context),
+                status,
+                audit_error_type(exc),
+                summary.kind,
+                summary.length,
+                summary.byte_length,
+                summary.fingerprint,
+            ),
+        )
 
     def _load_host_keys(self, client: "paramiko.SSHClient", known_hosts_path: Path) -> None:
         try:
             client.load_system_host_keys()
-        except Exception as e:
-            self._log("warning", f"Failed to load system host keys: {e}")
+        except Exception as exc:
+            self._log(
+                "warning",
+                f"SSH host key load status=failed error_type={audit_error_type(exc)}",
+            )
 
         if known_hosts_path.exists():
             try:
                 client.load_host_keys(str(known_hosts_path))
-            except Exception as e:
-                self._log("warning", f"Failed to load known_hosts: {e}")
+            except Exception as exc:
+                self._log(
+                    "warning",
+                    f"SSH known_hosts load status=failed error_type={audit_error_type(exc)}",
+                )
 
     async def initialize(self):
         """
         初始化管理器
-        
+
         异步加载服务器配置和 SSH Config。
         """
         await self._load_servers()
         await self._load_ssh_config()
         self._initialized = True
-    
+
     async def _load_servers(self):
         """
         加载服务器配置（异步）
-        
+
         在线程池中执行文件读取，避免阻塞事件循环。
         """
         if self.servers_file.exists():
@@ -229,7 +282,7 @@ class SSHManager:
                 def _read_servers():
                     with open(self.servers_file, "r", encoding="utf-8") as f:
                         return json.load(f)
-                
+
                 self.servers = await asyncio.to_thread(_read_servers)
                 migrated = False
                 for server in self.servers.values():
@@ -237,29 +290,34 @@ class SSHManager:
                     if not password:
                         continue
                     if not self.context or not hasattr(self.context, "set_secret"):
-                        raise RuntimeError("legacy SSH plaintext password requires plugin secret store")
+                        raise RuntimeError(
+                            "legacy SSH plaintext password requires plugin secret store"
+                        )
                     password_ref = f"passwords.{uuid.uuid4().hex}"
                     await asyncio.to_thread(self.context.set_secret, password_ref, password)
                     server["password_ref"] = password_ref
                     migrated = True
                 if migrated:
                     await self._save_servers()
-            except Exception as e:
-                self._log("error", f"Failed to load servers.json: {e}")
+            except Exception as exc:
+                self._log(
+                    "error",
+                    f"SSH server config load status=failed error_type={audit_error_type(exc)}",
+                )
                 self.servers = {}
         else:
             self.servers = {}
-    
+
     async def _load_ssh_config(self):
         """
         加载 ~/.ssh/config 文件（异步）
-        
+
         在线程池中执行文件读取，避免阻塞事件循环。
         对于挂载在网络驱动器上的 config 文件尤其重要。
         """
         if not PARAMIKO_AVAILABLE or SSHConfig is None:
             return
-        
+
         ssh_config_path = Path.home() / ".ssh" / "config"
         if ssh_config_path.exists():
             try:
@@ -269,85 +327,87 @@ class SSHManager:
                     with open(ssh_config_path, "r", encoding="utf-8") as f:
                         config.parse(f)
                     return config
-                
+
                 self._ssh_config = await asyncio.to_thread(_read_and_parse_config)
             except Exception:
                 self._ssh_config = None
-    
+
     def get_ssh_config_hosts(self) -> list[str]:
         """获取 ~/.ssh/config 中的所有 Host 名称"""
         if self._ssh_config is None:
             return []
-        
+
         hosts = []
         for host in self._ssh_config.get_hostnames():
             # 跳过通配符和 * 配置
-            if '*' not in host and '?' not in host:
+            if "*" not in host and "?" not in host:
                 hosts.append(host)
         return hosts
-    
+
     def get_ssh_config_for_host(self, host: str) -> Optional[dict]:
         """获取 ~/.ssh/config 中特定 Host 的配置"""
         if self._ssh_config is None:
             return None
-        
+
         try:
             config = self._ssh_config.lookup(host)
             # 有 hostname 或有 proxycommand 都是有效配置
             # 对于使用 ProxyCommand 跳转的配置，可能没有 hostname，此时使用 host 名称
-            if config.get('hostname') or config.get('proxycommand'):
+            if config.get("hostname") or config.get("proxycommand"):
                 return {
-                    'hostname': config.get('hostname', host),
-                    'port': int(config.get('port', 22)),
-                    'user': config.get('user', 'root'),
-                    'identityfile': config.get('identityfile', []),
-                    'proxycommand': config.get('proxycommand'),
+                    "hostname": config.get("hostname", host),
+                    "port": int(config.get("port", 22)),
+                    "user": config.get("user", "root"),
+                    "identityfile": config.get("identityfile", []),
+                    "proxycommand": config.get("proxycommand"),
                 }
         except Exception:
             pass
         return None
-    
-    async def import_from_ssh_config(self, host_name: str, alias: Optional[str] = None) -> tuple[bool, str]:
+
+    async def import_from_ssh_config(
+        self, host_name: str, alias: Optional[str] = None
+    ) -> tuple[bool, str]:
         """从 ~/.ssh/config 导入服务器配置"""
         config = self.get_ssh_config_for_host(host_name)
         if not config:
             return False, f"在 ~/.ssh/config 中未找到 Host: {host_name}"
-        
+
         name = alias or host_name
         if name in self.servers:
             return False, f"服务器 '{name}' 已存在"
-        
+
         # 确定密钥路径
         key_path = None
-        if config.get('identityfile'):
+        if config.get("identityfile"):
             # identityfile 是一个列表，取第一个
-            key_path = Path(os.path.expanduser(config['identityfile'][0])).as_posix()
-        
+            key_path = Path(os.path.expanduser(config["identityfile"][0])).as_posix()
+
         server_config = {
-            "host": config['hostname'],
-            "port": config['port'],
-            "username": config['user'],
+            "host": config["hostname"],
+            "port": config["port"],
+            "username": config["user"],
             "auth_type": "key" if key_path else "agent",
             "key_path": key_path,
             "from_ssh_config": True,  # 标记来源
             "ssh_config_host": host_name,  # 原始 Host 名
         }
-        
+
         # 保存 ProxyCommand（如果有）
-        if config.get('proxycommand'):
-            server_config["proxycommand"] = config['proxycommand']
-        
+        if config.get("proxycommand"):
+            server_config["proxycommand"] = config["proxycommand"]
+
         async with self._config_lock:
             if name in self.servers:
                 return False, f"服务器 '{name}' 已存在"
             self.servers[name] = server_config
             await self._save_servers()
-        
+
         # 根据是否有 proxycommand 生成不同的提示信息
-        if config.get('proxycommand'):
+        if config.get("proxycommand"):
             return True, f"✅ 已导入: {name} (通过跳板机: {config['proxycommand'][:50]}...)"
         return True, f"✅ 已导入: {name} ({config['hostname']}:{config['port']})"
-    
+
     async def import_all_from_ssh_config(self) -> tuple[int, list[str]]:
         """从 ~/.ssh/config 导入所有服务器"""
         hosts = self.get_ssh_config_hosts()
@@ -358,19 +418,20 @@ class SSHManager:
                 if success:
                     imported.append(host)
         return len(imported), imported
-    
+
     async def _save_servers(self):
         """
         保存服务器配置（异步）
-        
+
         在线程池中执行文件写入，避免阻塞事件循环。
         """
+
         def _write_servers():
             payload = json.dumps(self.servers, ensure_ascii=False, indent=4)
             atomic_write_text(self.servers_file, payload)
-        
+
         await asyncio.to_thread(_write_servers)
-    
+
     async def add_server(
         self,
         name: str,
@@ -384,7 +445,7 @@ class SSHManager:
     ) -> bool:
         """
         添加服务器配置
-        
+
         Args:
             name: 服务器名称
             host: 主机地址
@@ -394,7 +455,7 @@ class SSHManager:
             password: 密码（不推荐，建议使用 password_ref）
             password_ref: 密码引用（指向 secrets.json 中的 key）
             key_path: 密钥文件路径
-            
+
         Returns:
             是否添加成功
         """
@@ -415,11 +476,16 @@ class SSHManager:
             if password_ref:
                 self.servers[name]["password_ref"] = password_ref
             await self._save_servers()
-        
-        self._log("info", f"Server '{name}' added: {host}:{port}")
-        
+
+        self._log_sensitive(
+            "info",
+            operation="qingssh.server_add",
+            status="success",
+            value="\0".join((name, host, str(port))),
+        )
+
         return True
-    
+
     async def remove_server(self, name: str) -> bool:
         """删除服务器配置"""
         async with self._config_lock:
@@ -434,24 +500,24 @@ class SSHManager:
             if self._parse_connection_key(key)[2] == name:
                 self._disconnect_key(key, send_interrupt=True)
         return True
-    
+
     def get_server(self, name: str) -> Optional[dict]:
         """获取服务器配置"""
         return self.servers.get(name)
-    
+
     def list_servers(self) -> dict[str, dict]:
         """列出所有服务器"""
         return self.servers
-    
+
     def _build_connection_key(self, user_id, group_id, name: str) -> str:
         """
         生成用户隔离的连接标识符
-        
+
         Args:
             user_id: 用户 ID
             group_id: 群 ID (可为 None)
             name: 服务器名称
-            
+
         Returns:
             格式为 "user_id:group_id:server_name" 的连接键
         """
@@ -497,8 +563,11 @@ class SSHManager:
 
         try:
             jump_client.close()
-        except Exception as e:
-            self._log("warning", f"Error closing jump host: {e}")
+        except Exception as exc:
+            self._log(
+                "warning",
+                f"SSH jump client close status=failed error_type={audit_error_type(exc)}",
+            )
 
     def _disconnect_key(self, key: str, *, send_interrupt: bool) -> bool:
         active = self.active_channels.pop(key, None)
@@ -512,20 +581,33 @@ class SSHManager:
 
         try:
             client.close()
-        except Exception as e:
-            self._log("warning", f"Error closing SSH client for {key}: {e}")
+        except Exception as exc:
+            self._log_sensitive(
+                "warning",
+                operation="qingssh.disconnect",
+                status="failed",
+                value=key,
+                exc=exc,
+            )
         finally:
             self._close_jump_client(client)
             self.connections.pop(key, None)
 
         return True
 
-    async def connect(self, user_id: str, group_id: Optional[str], name: str, use_ssh_config_direct: bool = False, username_override: str = None) -> tuple[bool, str]:
+    async def connect(
+        self,
+        user_id: str,
+        group_id: Optional[str],
+        name: str,
+        use_ssh_config_direct: bool = False,
+        username_override: str = None,
+    ) -> tuple[bool, str]:
         """
         连接到服务器（用户+群隔离）
-        
+
         使用线程池执行同步的 SSH 连接操作，避免阻塞事件循环。
-        
+
         Args:
             user_id: 用户 ID
             group_id: 群 ID
@@ -536,29 +618,33 @@ class SSHManager:
         if not PARAMIKO_AVAILABLE:
             return False, "❌ 未安装 paramiko 库，请运行: pip install paramiko"
 
-        plugin_config = (getattr(self.context, "config", {}) or {}).get("plugins", {}).get("qingssh", {})
+        plugin_config = (
+            (getattr(self.context, "config", {}) or {}).get("plugins", {}).get("qingssh", {})
+        )
         max_connections = max(1, int(plugin_config.get("max_connections", 32)))
         key = self._build_connection_key(user_id, group_id, name)
         if key not in self.connections and len(self.connections) >= max_connections:
             return False, f"❌ SSH 活跃连接已达到配置上限 ({max_connections})"
-        
+
         server = self.get_server(name)
         ssh_config = None
-        
+
         # 如果没有保存的配置，或者明确要求使用 ssh_config，尝试从 ~/.ssh/config 获取
         if server is None or use_ssh_config_direct:
             ssh_config = self.get_ssh_config_for_host(name)
             if ssh_config:
                 server = {
-                    "host": ssh_config['hostname'],
-                    "port": ssh_config['port'],
-                    "username": ssh_config['user'],
-                    "auth_type": "key" if ssh_config.get('identityfile') else "agent",
-                    "key_path": os.path.expanduser(ssh_config['identityfile'][0]) if ssh_config.get('identityfile') else None,
+                    "host": ssh_config["hostname"],
+                    "port": ssh_config["port"],
+                    "username": ssh_config["user"],
+                    "auth_type": "key" if ssh_config.get("identityfile") else "agent",
+                    "key_path": os.path.expanduser(ssh_config["identityfile"][0])
+                    if ssh_config.get("identityfile")
+                    else None,
                 }
-                if ssh_config.get('proxycommand'):
-                    server["proxycommand"] = ssh_config['proxycommand']
-        
+                if ssh_config.get("proxycommand"):
+                    server["proxycommand"] = ssh_config["proxycommand"]
+
         if not server:
             available_hosts = self.get_ssh_config_hosts()
             if available_hosts:
@@ -567,12 +653,12 @@ class SSHManager:
                     hint += f" ... (共 {len(available_hosts)} 个)"
                 return False, f"❌ 服务器 '{name}' 不存在{hint}"
             return False, f"❌ 服务器 '{name}' 不存在"
-        
+
         # 如果提供了用户名覆盖，创建副本并修改用户名
         if username_override:
             server = server.copy()
-            server['username'] = username_override
-        
+            server["username"] = username_override
+
         client = None
         jump_client = None
         proxy_sock = None
@@ -580,10 +666,10 @@ class SSHManager:
         try:
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.RejectPolicy())
-            
+
             known_hosts_path = Path.home() / ".ssh" / "known_hosts"
             self._load_host_keys(client, known_hosts_path)
-            
+
             connect_kwargs = {
                 "hostname": server["host"],
                 "port": server["port"],
@@ -593,9 +679,9 @@ class SSHManager:
                 "auth_timeout": CONNECT_TIMEOUT,
                 "channel_timeout": CONNECT_TIMEOUT,
             }
-            
+
             auth_type = server.get("auth_type", "agent")
-            
+
             if auth_type == "key":
                 if server.get("key_path"):
                     connect_kwargs["key_filename"] = server["key_path"]
@@ -606,19 +692,22 @@ class SSHManager:
                         password = self.context.get_secret(server["password_ref"])
                     except Exception:
                         pass
-                
+
                 if password:
                     connect_kwargs["password"] = password
             elif auth_type == "agent":
                 connect_kwargs["allow_agent"] = True
                 connect_kwargs["look_for_keys"] = True
-            
+
             proxycommand = server.get("proxycommand")
             if proxycommand:
                 proxycommand = _expand_proxycommand(proxycommand, server)
                 jump_target = _parse_proxyjump_command(proxycommand)
                 if not jump_target:
-                    return False, "❌ ProxyCommand 仅支持安全的 ssh -W 跳板配置，请改用 ProxyJump 或移除本地命令代理"
+                    return (
+                        False,
+                        "❌ ProxyCommand 仅支持安全的 ssh -W 跳板配置，请改用 ProxyJump 或移除本地命令代理",
+                    )
 
                 jump_host_name = jump_target["jump_host"]
                 jump_conf = self.get_ssh_config_for_host(jump_host_name) or {
@@ -648,13 +737,28 @@ class SSHManager:
                 )
                 dest_addr = (server["host"], server["port"])
                 src_addr = ("0.0.0.0", 0)
-                proxy_sock = jump_client.get_transport().open_channel("direct-tcpip", dest_addr, src_addr)
+                proxy_sock = jump_client.get_transport().open_channel(
+                    "direct-tcpip", dest_addr, src_addr
+                )
 
                 connect_kwargs["sock"] = proxy_sock
                 client._jump_client = jump_client
-                self._log("info", f"Jump host connected: {jump_host_name}")
+                self._log_sensitive(
+                    "info",
+                    operation="qingssh.jump_connect",
+                    status="success",
+                    value=jump_host_name,
+                )
 
-            self._log("info", f"User {user_id} (Group {group_id}) connecting to {name}...")
+            connection_audit_value = "\0".join(
+                (name, str(server["host"]), str(server["port"]), str(server["username"]))
+            )
+            self._log_sensitive(
+                "info",
+                operation="qingssh.connect",
+                status="started",
+                value=connection_audit_value,
+            )
 
             await asyncio.wait_for(
                 asyncio.to_thread(client.connect, **connect_kwargs),
@@ -670,10 +774,15 @@ class SSHManager:
                     finally:
                         self._close_jump_client(old_client)
 
-            self._log("info", f"Connected to {name} successfully")
-            
+            self._log_sensitive(
+                "info",
+                operation="qingssh.connect",
+                status="success",
+                value=connection_audit_value,
+            )
+
             return True, f"✅ 成功连接到 {name} ({server['host']})"
-        
+
         except paramiko.AuthenticationException as e:
             if client is not None:
                 try:
@@ -687,7 +796,15 @@ class SSHManager:
                     pass
             if jump_client is not None and client is not None:
                 self._close_jump_client(client)
-            self._log("error", f"Authentication failed for {name}: {e}")
+            self._log_sensitive(
+                "error",
+                operation="qingssh.connect",
+                status="failed",
+                value="\0".join(
+                    (name, str(server["host"]), str(server["port"]), str(server["username"]))
+                ),
+                exc=e,
+            )
             return False, (
                 "❌ 认证失败\n"
                 f"服务器: {server['host']}:{server['port']}\n"
@@ -711,9 +828,21 @@ class SSHManager:
             if jump_client is not None and client is not None:
                 self._close_jump_client(client)
             error_msg = str(e)
-            self._log("error", f"SSH error for {name}: {e}")
-            
-            if "does not match" in error_msg or "Host key" in error_msg or "known_hosts" in error_msg:
+            self._log_sensitive(
+                "error",
+                operation="qingssh.connect",
+                status="failed",
+                value="\0".join(
+                    (name, str(server["host"]), str(server["port"]), str(server["username"]))
+                ),
+                exc=e,
+            )
+
+            if (
+                "does not match" in error_msg
+                or "Host key" in error_msg
+                or "known_hosts" in error_msg
+            ):
                 known_hosts_path = Path.home() / ".ssh" / "known_hosts"
                 return False, (
                     "❌ SSH Host Key 不匹配\n"
@@ -723,7 +852,7 @@ class SSHManager:
                     "  • 服务器重新生成了密钥\n\n"
                     f"请确认服务器 Host Key 已存在于 known_hosts 中: {known_hosts_path}"
                 )
-            
+
             return False, f"❌ SSH 连接错误: {e}\n\n💡 请检查网络连接和服务器状态"
         except Exception as e:
             if client is not None:
@@ -738,14 +867,22 @@ class SSHManager:
                     pass
             if jump_client is not None and client is not None:
                 self._close_jump_client(client)
-            self._log("error", f"Connection failed for {name}: {e}", exc_info=True)
+            self._log_sensitive(
+                "error",
+                operation="qingssh.connect",
+                status="failed",
+                value="\0".join(
+                    (name, str(server["host"]), str(server["port"]), str(server["username"]))
+                ),
+                exc=e,
+            )
             return False, f"❌ 连接失败: {e}"
-    
+
     def disconnect(self, user_id: str, group_id: Optional[str], name: str) -> bool:
         """断开连接（用户+群隔离）"""
         key = self._build_connection_key(user_id, group_id, name)
         return self._disconnect_key(key, send_interrupt=True)
-    
+
     def is_connected(self, user_id: str, group_id: Optional[str], name: str) -> bool:
         """检查是否已连接（用户+群隔离）"""
         key = self._build_connection_key(user_id, group_id, name)
@@ -758,11 +895,11 @@ class SSHManager:
             # 如果底层断开了，清理一下
             self._disconnect_key(key, send_interrupt=False)
             return False
-    
+
     def get_active_connections(self) -> list[dict[str, str]]:
         """
         获取当前活跃连接列表 (解析 key)
-        
+
         Returns:
             list[dict]: 包含 user_id, group_id, server_name 的字典列表
         """
@@ -771,11 +908,9 @@ class SSHManager:
             # key format: user_id:group_id:server_name
             parts = key.split(":", 2)
             if len(parts) == 3:
-                active_list.append({
-                    "user_id": parts[0],
-                    "group_id": parts[1],
-                    "server_name": parts[2]
-                })
+                active_list.append(
+                    {"user_id": parts[0], "group_id": parts[1], "server_name": parts[2]}
+                )
         return active_list
 
     async def stop_command(
@@ -786,7 +921,7 @@ class SSHManager:
     ) -> CommandTerminationResult:
         """
         停止指定服务器上正在运行的命令（用户+群隔离）
-        
+
         先尝试向远端进程组发送 TERM/KILL，再无条件关闭本地通道。
         """
         key = self._build_connection_key(user_id, group_id, name)
@@ -856,9 +991,11 @@ class SSHManager:
 
         error = "; ".join(errors) or None
         if not remote_confirmed:
-            self._log(
+            self._log_sensitive(
                 "warning",
-                f"Unable to confirm remote process termination for {key}: {error or 'unknown'}",
+                operation="qingssh.terminate",
+                status="remote_unknown",
+                value=key,
             )
         return CommandTerminationResult(
             found=True,
@@ -867,32 +1004,40 @@ class SSHManager:
             signal_attempted=signal_attempted,
             error=error,
         )
-    
+
     async def execute_command_stream(
-        self, 
+        self,
         user_id: str,
         group_id: Optional[str],
-        name: str, 
-        command: str, 
+        name: str,
+        command: str,
         output_callback,
-        use_pty: bool = False
+        use_pty: bool = False,
+        *,
+        timeout: float | None = None,
     ) -> int:
         """
         流式执行命令（用户+群隔离）
 
         通过回调函数实时推送命令输出。
         """
+        effective_timeout = COMMAND_TIMEOUT if timeout is None else float(timeout)
+        if not math.isfinite(effective_timeout) or effective_timeout < 0:
+            raise ValueError("SSH command timeout must be finite and non-negative")
+        operation = self._execute_command_stream_impl(
+            user_id,
+            group_id,
+            name,
+            command,
+            output_callback,
+            use_pty=use_pty,
+        )
         try:
+            if effective_timeout == 0:
+                return await operation
             return await asyncio.wait_for(
-                self._execute_command_stream_impl(
-                    user_id,
-                    group_id,
-                    name,
-                    command,
-                    output_callback,
-                    use_pty=use_pty,
-                ),
-                timeout=COMMAND_TIMEOUT,
+                operation,
+                timeout=effective_timeout,
             )
         except asyncio.TimeoutError:
             key = self._build_connection_key(user_id, group_id, name)
@@ -902,17 +1047,35 @@ class SSHManager:
             return EXIT_CODE_TIMEOUT
         except asyncio.CancelledError:
             key = self._build_connection_key(user_id, group_id, name)
-            await self._terminate_active_command(key)
+            cleanup = asyncio.create_task(
+                self._terminate_active_command(key),
+                name="qingssh-remote-command-cleanup",
+            )
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            try:
+                cleanup.result()
+            except Exception as exc:
+                self._log_sensitive(
+                    "error",
+                    operation="qingssh.cancel_cleanup",
+                    status="failed",
+                    value=key,
+                    exc=exc,
+                )
             raise
 
     async def _execute_command_stream_impl(
         self,
         user_id: str,
         group_id: Optional[str],
-        name: str, 
-        command: str, 
+        name: str,
+        command: str,
         output_callback,
-        use_pty: bool = False
+        use_pty: bool = False,
     ) -> int:
         """
         execute_command_stream 的实际执行逻辑。
@@ -920,18 +1083,18 @@ class SSHManager:
         if not self.is_connected(user_id, group_id, name):
             await output_callback("❌ 未连接到服务器")
             return EXIT_CODE_ERROR
-        
+
         key = self._build_connection_key(user_id, group_id, name)
-            
+
         channel = None  # Initialize to prevent UnboundLocalError in finally block
         decoder = None
         keep_registered = False
         active_record: dict[str, Any] | None = None
-        
+
         try:
             client = self.connections[key]
             transport = client.get_transport()
-            
+
             # 使用 asyncio.to_thread 包装所有阻塞的 paramiko 调用
             def open_channel():
                 ch = transport.open_session()
@@ -940,21 +1103,22 @@ class SSHManager:
                 ch.set_combine_stderr(True)
                 wrapped = (
                     f"setsid sh -c {shlex.quote(command)} & pid=$!; "
-                    "printf '__XQ_PID__%s\\n' \"$pid\"; wait \"$pid\""
+                    'printf \'__XQ_PID__%s\\n\' "$pid"; wait "$pid"'
                 )
                 ch.exec_command(wrapped)
                 return ch
-            
+
             channel = await asyncio.to_thread(open_channel)
-            
+
             # 使用隔离的 Key
             active_record = {"channel": channel, "remote_pid": None}
             self.active_channels[key] = active_record
-            
+
             # 创建增量 UTF-8 解码器
             import codecs
-            decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
-            
+
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
             # 主循环：等待命令执行完成
             marker_buffer = ""
             marker_seen = False
@@ -987,13 +1151,13 @@ class SSHManager:
                     if data:
                         # 使用增量解码器正确处理多字节字符
                         await emit_data(data)
-                
+
                 await asyncio.sleep(0.05)  # 减少延迟提高响应性
-                
+
                 # 检查是否被中断
                 if self.active_channels.get(key) is not active_record:
                     return EXIT_CODE_INTERRUPTED
-            
+
             # 命令执行完成，读取剩余输出直到 EOF
             # recv_ready() 不可靠，应该读取直到返回空字节 b''
             while True:
@@ -1001,26 +1165,37 @@ class SSHManager:
                 if not data:  # EOF
                     break
                 await emit_data(data)
-            
+
             # 解码剩余的缓冲区
-            remaining = decoder.decode(b'', final=True)
+            remaining = decoder.decode(b"", final=True)
             if marker_buffer:
                 remaining = marker_buffer + remaining
             if remaining:
                 await output_callback(remaining)
-            
+
             # exit_status_ready() 为 True 时，退出码已经可用
             # 使用 exit_status 属性获取（非阻塞），而不是 recv_exit_status() 方法（阻塞）
             exit_code = channel.exit_status
             return exit_code
-            
+
         except asyncio.CancelledError:
             keep_registered = True
             raise
         except Exception as e:
             await output_callback(f"\n❌ 执行出错: {e}")
-            if self.context and hasattr(self.context, 'logger'):
-                self.context.logger.error(f"Command execution error: {e}", exc_info=True)
+            if self.context and hasattr(self.context, "logger"):
+                command_audit = summarize_sensitive(command)
+                self.context.logger.error(
+                    "SSH audit operation=command status=failed request_id=%s "
+                    "payload_kind=%s payload_length=%d payload_bytes=%d "
+                    "payload_fingerprint=%s error_type=%s",
+                    audit_request_id(self.context),
+                    command_audit.kind,
+                    command_audit.length,
+                    command_audit.byte_length,
+                    command_audit.fingerprint,
+                    audit_error_type(e),
+                )
             return EXIT_CODE_ERROR
         finally:
             if not keep_registered:
@@ -1033,26 +1208,31 @@ class SSHManager:
                 except Exception:
                     pass
 
-    async def execute_command(self, user_id: str, group_id: Optional[str], name: str, command: str) -> tuple[bool, str]:
+    async def execute_command(
+        self, user_id: str, group_id: Optional[str], name: str, command: str
+    ) -> tuple[bool, str]:
         """
         执行命令并返回完整输出（非流式）
         """
         if not self.is_connected(user_id, group_id, name):
             return False, "❌ 未连接到服务器"
-        
+
         output_buffer = []
+
         async def collector(text):
             output_buffer.append(text)
-            
+
         try:
-            exit_code = await self.execute_command_stream(user_id, group_id, name, command, collector)
-            
+            exit_code = await self.execute_command_stream(
+                user_id, group_id, name, command, collector
+            )
+
             result = "".join(output_buffer)
             if exit_code == EXIT_CODE_TIMEOUT:
                 return False, f"❌ 命令执行超时 ({COMMAND_TIMEOUT}s)"
             if len(result) > MAX_OUTPUT_LENGTH:
                 result = result[:MAX_OUTPUT_LENGTH] + "\n\n... (输出被截断)"
-                
+
             return True, result.strip() if result.strip() else "(无输出)"
         except Exception as e:
             return False, f"❌ 执行失败: {e}"
@@ -1069,29 +1249,29 @@ class SSHManager:
     ) -> tuple[bool, str]:
         """
         从远程服务器下载文件到本地
-        
+
         Args:
             user_id: 用户 ID
             group_id: 群 ID
             name: 服务器名称
             remote_path: 远程文件路径
             local_path: 本地保存路径
-            
+
         Returns:
             (success, message)
         """
         if not self.is_connected(user_id, group_id, name):
             return False, "❌ 未连接到服务器"
-        
+
         key = self._build_connection_key(user_id, group_id, name)
-        
+
         if key not in self.connections:
             return False, f"❌ 服务器 '{name}' 未连接"
-        
+
         try:
             client = self.connections[key]
             sftp = await asyncio.to_thread(client.open_sftp)
-            
+
             try:
                 stat_result = await asyncio.to_thread(sftp.stat, remote_path)
                 if int(getattr(stat_result, "st_size", 0)) > max_bytes:
@@ -1103,73 +1283,100 @@ class SSHManager:
                 return True, f"✅ 文件已下载: {remote_path}"
             finally:
                 await asyncio.to_thread(sftp.close)
-                
+
         except FileNotFoundError:
             return False, f"❌ 远程文件不存在: {remote_path}"
         except PermissionError:
             return False, f"❌ 权限不足，无法访问: {remote_path}"
         except Exception as e:
-            if self.context and hasattr(self.context, 'logger'):
-                self.context.logger.error(f"Download failed for {remote_path}: {e}", exc_info=True)
+            if self.context and hasattr(self.context, "logger"):
+                path_audit = summarize_sensitive("\0".join((remote_path, local_path)))
+                self.context.logger.error(
+                    "SSH audit operation=download status=failed request_id=%s "
+                    "payload_kind=%s payload_length=%d payload_bytes=%d "
+                    "payload_fingerprint=%s error_type=%s",
+                    audit_request_id(self.context),
+                    path_audit.kind,
+                    path_audit.length,
+                    path_audit.byte_length,
+                    path_audit.fingerprint,
+                    audit_error_type(e),
+                )
             return False, f"❌ 下载失败: {e}"
 
-    async def list_files(self, user_id: str, group_id: Optional[str], name: str, remote_dir: str, pattern: str = "*") -> tuple[bool, list]:
+    async def list_files(
+        self, user_id: str, group_id: Optional[str], name: str, remote_dir: str, pattern: str = "*"
+    ) -> tuple[bool, list]:
         """
         列出远程目录中匹配模式的文件
-        
+
         Args:
             user_id: 用户 ID
             group_id: 群 ID
             name: 服务器名称
             remote_dir: 远程目录路径
             pattern: 文件匹配模式（支持通配符）
-            
+
         Returns:
             (success, file_list)
         """
         if not self.is_connected(user_id, group_id, name):
             return False, []
-        
+
         key = self._build_connection_key(user_id, group_id, name)
-        
+
         if key not in self.connections:
             return False, []
-        
+
         try:
             client = self.connections[key]
             sftp = await asyncio.to_thread(client.open_sftp)
-            
+
             try:
                 import fnmatch
+
                 files = []
-                
+
                 def _list_files():
                     return sftp.listdir(remote_dir)
-                
+
                 all_files = await asyncio.to_thread(_list_files)
-                
+
                 for filename in all_files:
                     if fnmatch.fnmatch(filename, pattern):
                         files.append(filename)
-                
+
                 return True, sorted(files)[:100]
             finally:
                 await asyncio.to_thread(sftp.close)
-                
+
         except Exception as e:
-            if self.context and hasattr(self.context, 'logger'):
-                self.context.logger.error(f"List files failed for {remote_dir}: {e}", exc_info=True)
+            if self.context and hasattr(self.context, "logger"):
+                path_audit = summarize_sensitive("\0".join((remote_dir, pattern)))
+                self.context.logger.error(
+                    "SSH audit operation=list_files status=failed request_id=%s "
+                    "payload_kind=%s payload_length=%d payload_bytes=%d "
+                    "payload_fingerprint=%s error_type=%s",
+                    audit_request_id(self.context),
+                    path_audit.kind,
+                    path_audit.length,
+                    path_audit.byte_length,
+                    path_audit.fingerprint,
+                    audit_error_type(e),
+                )
             return False, []
-    
+
     def close_all(self):
         """
         关闭所有连接
-        
+
         应在插件卸载或重启时调用以释放资源。
         """
-        if self.context and hasattr(self.context, 'logger'):
-            self.context.logger.info(f"Closing all SSH connections ({len(self.connections)} active)")
-            
+        if self.context and hasattr(self.context, "logger"):
+            self.context.logger.info(
+                f"Closing all SSH connections ({len(self.connections)} active)"
+            )
+
         for key in list(self.connections.keys()):
             self._disconnect_key(key, send_interrupt=False)
 
@@ -1178,40 +1385,41 @@ class SSHManager:
     async def shutdown(self) -> None:
         self.close_all()
 
+
 async def get_manager(context) -> SSHManager:
     """
     获取 SSH 管理器实例
-    
+
     使用 context.state 存储单例，实现插件级别的持久化。
     创建后会自动进行异步初始化（加载配置文件）。
-    
+
     Args:
         context: 插件上下文
-        
+
     Returns:
         SSHManager 实例（已初始化）
     """
     # 从 context.state 中获取管理器
     manager = context.state.get("ssh_manager")
-    
+
     if manager is not None:
         # 更新上下文以便日志能关联到当前请求
         manager.context = context
         if not manager._initialized:
             await manager.initialize()
         return manager
-    
+
     # 创建新实例
     data_dir = Path(context.plugin_dir) / "data"
     manager = SSHManager(data_dir, context=context)
-    
+
     # 异步初始化（加载配置文件）
     await manager.initialize()
-    
+
     # 保存到 state 中
     context.state["ssh_manager"] = manager
-    
-    if hasattr(context, 'logger'):
+
+    if hasattr(context, "logger"):
         context.logger.info("SSH manager initialized")
-    
+
     return manager

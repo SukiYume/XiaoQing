@@ -96,3 +96,65 @@ class ConfigSubscriptionService:
         if not callable(callback):
             raise TypeError("config subscription callback must be callable")
         return self._subscriber(callback)
+
+
+@dataclass(frozen=True)
+class CodexArxivSummaryService:
+    """A fixed Codex operation with authorization rechecked on every call."""
+
+    _authorized: Callable[[], bool]
+    _enqueue: Callable[..., Awaitable[str]]
+
+    async def enqueue_or_replay(
+        self,
+        *,
+        date: str,
+        links: list[str],
+    ) -> str:
+        if not self._authorized():
+            raise PermissionError("Codex arXiv capability is no longer authorized")
+        normalized_date = str(date).strip()
+        if not normalized_date:
+            raise ValueError("arXiv summary date is required")
+        if (
+            not isinstance(links, list)
+            or not links
+            or any(not isinstance(link, str) or not link.strip() for link in links)
+        ):
+            raise ValueError("arXiv summary links must be non-empty strings")
+        return await self._enqueue(
+            date=normalized_date,
+            links=list(links),
+        )
+
+
+@dataclass(frozen=True)
+class VoiceSynthesisService:
+    """Fixed smalltalk-to-voice service; no callback name is caller-controlled."""
+
+    _invoke: Callable[[str], Awaitable[list[dict[str, Any]] | None]]
+
+    async def synthesize_text(self, text: str) -> list[dict[str, Any]] | None:
+        normalized = str(text)
+        if not normalized.strip():
+            raise ValueError("voice synthesis text is required")
+        return await self._invoke(normalized)
+
+
+@dataclass(frozen=True)
+class ChatReplyService:
+    """Fixed smalltalk-to-chat provider service."""
+
+    _invoke: Callable[[str, dict[str, Any]], Awaitable[list[dict[str, Any]]]]
+
+    async def reply(
+        self,
+        text: str,
+        event: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        normalized = str(text)
+        if not normalized.strip():
+            raise ValueError("chat reply text is required")
+        if not isinstance(event, dict):
+            raise TypeError("chat reply event must be a mapping")
+        return await self._invoke(normalized, dict(event))

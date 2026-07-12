@@ -2,6 +2,8 @@
 天文常数查询模块
 """
 
+from core.public_errors import public_error_message
+
 
 async def handle_const(args: str, context) -> str:
     """处理天文常数查询命令"""
@@ -63,7 +65,9 @@ async def handle_const(args: str, context) -> str:
         
         return f"未找到常数: {args}\n\n可用常数: {', '.join(sorted(set(k for k in const_map.keys())))}"
     except Exception as exc:
-        return f"查询失败: {exc}"
+        return public_error_message(
+            context, exc, logger=context.logger, component="astro_tools.const"
+        )
 
 
 def _get_const_list() -> str:

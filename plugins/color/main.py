@@ -8,6 +8,7 @@ from pathlib import Path
 
 from core.plugin_base import segments, text, image, ensure_dir
 from core.args import parse
+from core.public_errors import public_error_response
 
 # 使用相对导入引入各个功能模块
 from . import convert
@@ -182,9 +183,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         # 默认：显示帮助
         return segments(_get_help())
         
-    except Exception as e:
-        logger.exception("Color handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="color.handle")
 
 
 

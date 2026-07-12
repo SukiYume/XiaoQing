@@ -1,4 +1,4 @@
-# Compatibility entry point for the current Python 3.13 release environment.
-# Direct dependencies are declared once in pyproject.toml. Regenerate all
-# Python-version locks with: python scripts/compile_locks.py
--r requirements/python-3.13.lock
+# Compatibility entry point for the current Python 3.13 runtime environment.
+# Direct dependencies are declared once in pyproject.toml. Regenerate the
+# runtime and CI lock matrices with: python scripts/compile_locks.py
+-r requirements/python-3.13-runtime.lock

@@ -5,10 +5,11 @@ import logging
 import time
 from typing import Any, Sequence
 
+from ..llm.llm_client import LLMError, chat_completions_raw_with_fallback_paths
+from ..logging_utils import _redacted_value, sanitize_log_fields
+from ..memory.memory import StoredMessage
 from .bw_jargon_store import JargonRecord, JargonStore
 from .expr_utils import extract_json_array, extract_json_obj, render_dialogue
-from ..llm.llm_client import LLMError, chat_completions_raw_with_fallback_paths
-from ..memory.memory import StoredMessage
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
 
@@ -44,6 +45,7 @@ _INFER_PROMPT = """你是黑话/缩写解释器。你会根据上下文给出一
   "is_global": false
 }}"""
 
+
 def _bump_chat_count(chat_counts: list[list[Any]], chat_id: str) -> list[list[Any]]:
     out: list[list[Any]] = []
     found = False
@@ -70,9 +72,9 @@ def _log_jargon_step(
     fields: dict[str, Any] | None = None,
     warning: bool = False,
 ) -> None:
-    payload = {"step": step, "chat_id": chat_id}
+    payload = {"step": step, "chat_id": _redacted_value(chat_id)}
     if fields:
-        payload.update(fields)
+        payload.update(sanitize_log_fields(fields))
     try:
         message = "xiaoqing_chat step=%s"
         encoded = json.dumps(payload, ensure_ascii=False)
@@ -136,7 +138,10 @@ async def mine_jargon(
         _log_jargon_step(
             "jargon.extract.fail",
             chat_id=chat_id,
-            fields={"error": str(exc), "elapsed_s": round(time.monotonic() - t0, 3)},
+            fields={
+                "error_type": type(exc).__name__,
+                "elapsed_s": round(time.monotonic() - t0, 3),
+            },
             warning=True,
         )
         return 0
@@ -220,7 +225,7 @@ async def mine_jargon(
                 chat_id=chat_id,
                 fields={
                     "term": term,
-                    "error": str(exc),
+                    "error_type": type(exc).__name__,
                     "elapsed_s": round(time.monotonic() - it0, 3),
                 },
                 warning=True,

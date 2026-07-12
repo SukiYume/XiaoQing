@@ -1,27 +1,56 @@
-import json
 import logging
-import re
 from typing import Any, Optional
 
 import aiohttp
 
+from core.bounded_http import (
+    JSON_MIME_POLICY,
+    BodyLimits,
+    JsonLimits,
+    MimePolicy,
+    aiohttp_request_bounded,
+    parse_bounded_json,
+)
+from core.public_errors import public_error_message
+
 from .constants import (
-    DEFAULT_MAX_RESULTS,
+    ARXIV_NEW_FORMAT_PATTERN,
+    ARXIV_OLD_FORMAT_PATTERN,
+    ARXIV_URL_PATTERN,
+    ARXIV_VERSION_PATTERN,
     DEFAULT_MAX_AUTHORS,
     DEFAULT_MAX_CITATIONS,
     DEFAULT_MAX_REFERENCES,
-    ARXIV_URL_PATTERN,
-    ARXIV_VERSION_PATTERN,
-    ARXIV_NEW_FORMAT_PATTERN,
-    ARXIV_OLD_FORMAT_PATTERN,
+    DEFAULT_MAX_RESULTS,
 )
 
 logger = logging.getLogger(__name__)
 
 _ADS_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
+_ADS_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=2 * 1024 * 1024,
+    max_decoded_bytes=4 * 1024 * 1024,
+)
+_ADS_JSON_LIMITS = JsonLimits(
+    max_bytes=_ADS_BODY_LIMITS.max_decoded_bytes,
+    max_depth=32,
+    max_nodes=25_000,
+    max_string_chars=3 * 1024 * 1024,
+)
+_ADS_BIBTEX_MIME_POLICY = MimePolicy(
+    exact=frozenset(
+        {
+            "application/json",
+            "text/json",
+            "text/plain",
+        }
+    ),
+    structured_suffixes=frozenset({"+json"}),
+)
+
 
 class ADSClient:
-    def __init__(self, token: str, session: aiohttp.ClientSession):
+    def __init__(self, token: str, session: aiohttp.ClientSession, context: Any | None = None):
         """Initialize ADS client with API token and shared HTTP session.
         
         Args:
@@ -30,11 +59,34 @@ class ADSClient:
         """
         self.token = token
         self.session = session
+        self.context = context
         self.base_url = "https://api.adsabs.harvard.edu/v1"
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
+
+    async def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        request_kwargs: dict[str, Any],
+        mime_policy: MimePolicy = JSON_MIME_POLICY,
+    ) -> Any:
+        response = await aiohttp_request_bounded(
+            self.session,
+            method,
+            url,
+            limits=_ADS_BODY_LIMITS,
+            mime_policy=mime_policy,
+            headers=self.headers,
+            request_kwargs={
+                **request_kwargs,
+                "timeout": _ADS_REQUEST_TIMEOUT,
+            },
+        )
+        return parse_bounded_json(response, limits=_ADS_JSON_LIMITS)
 
     async def search_papers(
         self,
@@ -65,52 +117,56 @@ class ADSClient:
         }
 
         try:
-            async with self.session.get(
+            data = await self._request_json(
+                "GET",
                 url,
-                headers=self.headers,
-                params=params,
-                timeout=_ADS_REQUEST_TIMEOUT,
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.error(f"ADS search failed: {resp.status} - {text}")
-                    return []
-                data = await resp.json()
-                return data.get("response", {}).get("docs", [])
-        except Exception as e:
-            logger.exception(f"ADS search error: {e}")
+                request_kwargs={"params": params},
+            )
+            if not isinstance(data, dict):
+                return []
+            response = data.get("response", {})
+            if not isinstance(response, dict):
+                return []
+            docs = response.get("docs", [])
+            return docs if isinstance(docs, list) else []
+        except Exception as exc:
+            public_error_message(
+                self.context,
+                exc,
+                logger=logger,
+                component="ads_paper.search",
+            )
             return []
 
     async def get_bibtex(self, bibcode: str) -> Optional[str]:
         """
         Get BibTeX citation for a paper.
         
-        The ADS export API returns JSON with 'msg' and 'export' fields,
-        but the Content-Type header may not be 'application/json'.
-        We need to get text first, then parse JSON manually.
+        The ADS export API returns JSON with 'msg' and 'export' fields, but
+        historically also labels that JSON as text.  Only this endpoint uses
+        the narrow legacy text MIME compatibility policy.
         """
         url = f"{self.base_url}/export/bibtex"
         payload = {"bibcode": [bibcode]}
 
         try:
-            async with self.session.post(
+            data = await self._request_json(
+                "POST",
                 url,
-                headers=self.headers,
-                json=payload,
-                timeout=_ADS_REQUEST_TIMEOUT,
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.error(f"ADS bibtex failed: {resp.status} - {text}")
-                    return None
-                # Get text first, then manually parse JSON
-                # (ADS API may return JSON with unexpected Content-Type)
-                text = await resp.text()
-                data = json.loads(text)
-                bibtex = data.get("export", "")
-                return bibtex.strip() if bibtex else None
-        except Exception as e:
-            logger.exception(f"ADS bibtex error: {e}")
+                request_kwargs={"json": payload},
+                mime_policy=_ADS_BIBTEX_MIME_POLICY,
+            )
+            if not isinstance(data, dict):
+                return None
+            bibtex = data.get("export", "")
+            return bibtex.strip() if isinstance(bibtex, str) and bibtex else None
+        except Exception as exc:
+            public_error_message(
+                self.context,
+                exc,
+                logger=logger,
+                component="ads_paper.bibtex",
+            )
             return None
 
     async def get_paper_by_bibcode(self, bibcode: str) -> Optional[dict[str, Any]]:
@@ -122,19 +178,23 @@ class ADSClient:
         }
 
         try:
-            async with self.session.get(
+            data = await self._request_json(
+                "GET",
                 url,
-                headers=self.headers,
-                params=params,
-                timeout=_ADS_REQUEST_TIMEOUT,
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-                docs = data.get("response", {}).get("docs", [])
-                return docs[0] if docs else None
-        except Exception as e:
-            logger.exception(f"ADS get paper error: {e}")
+                request_kwargs={"params": params},
+            )
+            if not isinstance(data, dict):
+                return None
+            response = data.get("response", {})
+            docs = response.get("docs", []) if isinstance(response, dict) else []
+            return docs[0] if isinstance(docs, list) and docs else None
+        except Exception as exc:
+            public_error_message(
+                self.context,
+                exc,
+                logger=logger,
+                component="ads_paper.get_paper",
+            )
             return None
 
     async def get_citations(self, bibcode: str, max_results: int = DEFAULT_MAX_CITATIONS) -> list[dict[str, Any]]:
@@ -147,18 +207,23 @@ class ADSClient:
         }
 
         try:
-            async with self.session.get(
+            data = await self._request_json(
+                "GET",
                 url,
-                headers=self.headers,
-                params=params,
-                timeout=_ADS_REQUEST_TIMEOUT,
-            ) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
-                return data.get("response", {}).get("docs", [])
-        except Exception as e:
-            logger.exception(f"ADS citations error: {e}")
+                request_kwargs={"params": params},
+            )
+            if not isinstance(data, dict):
+                return []
+            response = data.get("response", {})
+            docs = response.get("docs", []) if isinstance(response, dict) else []
+            return docs if isinstance(docs, list) else []
+        except Exception as exc:
+            public_error_message(
+                self.context,
+                exc,
+                logger=logger,
+                component="ads_paper.citations",
+            )
             return []
 
     async def get_references(self, bibcode: str, max_results: int = DEFAULT_MAX_REFERENCES) -> list[dict[str, Any]]:
@@ -171,18 +236,23 @@ class ADSClient:
         }
 
         try:
-            async with self.session.get(
+            data = await self._request_json(
+                "GET",
                 url,
-                headers=self.headers,
-                params=params,
-                timeout=_ADS_REQUEST_TIMEOUT,
-            ) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json()
-                return data.get("response", {}).get("docs", [])
-        except Exception as e:
-            logger.exception(f"ADS references error: {e}")
+                request_kwargs={"params": params},
+            )
+            if not isinstance(data, dict):
+                return []
+            response = data.get("response", {})
+            docs = response.get("docs", []) if isinstance(response, dict) else []
+            return docs if isinstance(docs, list) else []
+        except Exception as exc:
+            public_error_message(
+                self.context,
+                exc,
+                logger=logger,
+                component="ads_paper.references",
+            )
             return []
 
     async def search_by_author(self, author: str, max_results: int = DEFAULT_MAX_RESULTS) -> list[dict[str, Any]]:

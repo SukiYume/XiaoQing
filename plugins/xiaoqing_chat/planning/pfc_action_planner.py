@@ -9,9 +9,9 @@ from typing import Any, Optional, Sequence
 
 from ..config.config import PersonalityConfig
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage
 from .pfc_utils import get_items_from_json
-from ..llm.prompt_builder import build_dialogue_prompt
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
 
@@ -339,7 +339,15 @@ async def plan_next_action(
         try:
             _logger.info(
                 "xiaoqing_chat step=%s",
-                json.dumps({"step": "pfc.planner.error", "error": str(exc), "timeout_s": float(timeout_seconds), "model": model}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "step": "pfc.planner.error",
+                        "error_type": type(exc).__name__,
+                        "timeout_s": float(timeout_seconds),
+                        "model": model,
+                    },
+                    ensure_ascii=False,
+                ),
             )
         except Exception:
             pass
