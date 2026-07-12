@@ -1,16 +1,42 @@
 """测试voice插件 - 语音功能插件"""
 
-import pytest
+import importlib.util
+import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock
-from typing import Any, Optional, Tuple
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-import importlib.util
 spec = importlib.util.spec_from_file_location("voice_main", ROOT / "plugins" / "voice" / "main.py")
 voice = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(voice)
+
+
+class _ChunkedContent:
+    def __init__(self, body: bytes):
+        self.body = body
+
+    async def iter_chunked(self, _size: int):
+        yield self.body
+
+
+class _BoundedResponse:
+    status = 200
+
+    def __init__(self, body: bytes, content_type: str):
+        self.headers = {"Content-Type": content_type}
+        self.content = _ChunkedContent(body)
+        self.content_length = len(body)
+        self.url = "https://voice.test/"
+
+
+def _bounded_json_response(payload) -> _BoundedResponse:
+    return _BoundedResponse(
+        json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        "application/json",
+    )
 
 
 class TestVoicePlugin:
@@ -35,20 +61,14 @@ class TestVoicePlugin:
         context.data_dir = tmp_path / "data"
         context.data_dir.mkdir(parents=True, exist_ok=True)
 
-        # 创建成功的HTTP响应mock
-        class MockTTSResponse:
-            status = 200
-            async def read(self):
-                return b"fake_audio_data"
-
         class MockTTSContextManager:
             async def __aenter__(self):
-                return MockTTSResponse()
+                return _BoundedResponse(b"fake_audio_data", "audio/mpeg")
             async def __aexit__(self, *args):
                 pass
 
         class MockHttpSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockTTSContextManager()
 
         context.http_session = MockHttpSession()
@@ -87,21 +107,15 @@ class TestVoicePlugin:
     async def test_text_to_speech_sets_request_timeout(self, mock_context):
         captured = {}
 
-        class MockResponse:
-            status = 200
-
-            async def read(self):
-                return b"fake_audio_data"
-
         class MockContextManager:
             async def __aenter__(self):
-                return MockResponse()
+                return _BoundedResponse(b"fake_audio_data", "audio/mpeg")
 
             async def __aexit__(self, *args):
                 return None
 
         class MockSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 captured.update(kwargs)
                 return MockContextManager()
 
@@ -162,7 +176,7 @@ class TestVoicePlugin:
                 pass
 
         class MockErrorSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockErrorContextManager()
 
         mock_context.http_session = MockErrorSession()
@@ -180,7 +194,7 @@ class TestVoicePlugin:
                 pass
 
         class MockExceptionSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockExceptionContextManager()
 
         mock_context.http_session = MockExceptionSession()
@@ -196,26 +210,16 @@ class TestVoicePlugin:
         audio_file.write_bytes(b"fake_wav_data")
 
         # 模拟STT响应
-        class MockSTTResponse:
-            status = 200
-            async def json(self):
-                return {
-                    "NBest": [
-                        {
-                            "Lexical": "识别结果",
-                            "Display": "显示结果"
-                        }
-                    ]
-                }
-
         class MockSTTContextManager:
             async def __aenter__(self):
-                return MockSTTResponse()
+                return _bounded_json_response(
+                    {"NBest": [{"Lexical": "识别结果", "Display": "显示结果"}]}
+                )
             async def __aexit__(self, *args):
                 pass
 
         class MockSTTSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockSTTContextManager()
 
         mock_context.http_session = MockSTTSession()
@@ -232,21 +236,17 @@ class TestVoicePlugin:
         audio_file.write_bytes(b"fake_wav_data")
         captured = {}
 
-        class MockResponse:
-            status = 200
-
-            async def json(self):
-                return {"NBest": [{"Lexical": "a", "Display": "b"}]}
-
         class MockContextManager:
             async def __aenter__(self):
-                return MockResponse()
+                return _bounded_json_response(
+                    {"NBest": [{"Lexical": "a", "Display": "b"}]}
+                )
 
             async def __aexit__(self, *args):
                 return None
 
         class MockSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 captured.update(kwargs)
                 return MockContextManager()
 
@@ -288,7 +288,7 @@ class TestVoicePlugin:
                 pass
 
         class MockSTTErrorSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockSTTErrorContextManager()
 
         mock_context.http_session = MockSTTErrorSession()
@@ -302,19 +302,14 @@ class TestVoicePlugin:
         audio_file = tmp_path / "test_audio.wav"
         audio_file.write_bytes(b"fake_wav_data")
 
-        class MockSTTNoResultResponse:
-            status = 200
-            async def json(self):
-                return {"NBest": []}
-
         class MockSTTNoResultContextManager:
             async def __aenter__(self):
-                return MockSTTNoResultResponse()
+                return _bounded_json_response({"NBest": []})
             async def __aexit__(self, *args):
                 pass
 
         class MockSTTNoResultSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockSTTNoResultContextManager()
 
         mock_context.http_session = MockSTTNoResultSession()
@@ -335,7 +330,7 @@ class TestVoicePlugin:
                 pass
 
         class MockSTTExceptionSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockSTTExceptionContextManager()
 
         mock_context.http_session = MockSTTExceptionSession()
@@ -425,7 +420,7 @@ class TestVoicePlugin:
                 pass
 
         class MockFailureSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockFailureContextManager()
 
         mock_context.http_session = MockFailureSession()
@@ -462,7 +457,7 @@ class TestVoicePlugin:
                 pass
 
         class MockConvertExceptionSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockConvertExceptionContextManager()
 
         mock_context.http_session = MockConvertExceptionSession()
@@ -485,19 +480,14 @@ class TestVoicePlugin:
         context.data_dir = tmp_path / "data"
         # 不预先创建audio目录
 
-        class MockCreateDirResponse:
-            status = 200
-            async def read(self):
-                return b"audio"
-
         class MockCreateDirContextManager:
             async def __aenter__(self):
-                return MockCreateDirResponse()
+                return _BoundedResponse(b"audio", "audio/mpeg")
             async def __aexit__(self, *args):
                 pass
 
         class MockCreateDirSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockCreateDirContextManager()
 
         context.http_session = MockCreateDirSession()

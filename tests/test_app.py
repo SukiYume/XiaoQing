@@ -13,14 +13,14 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from core.app import XiaoQingApp, current_action_sink
-from core.interfaces import PluginPrincipal
-from core.plugin_execution import PluginExecutionGate
-from core.plugin_manager import LoadedPlugin, PluginDefinition
+from core.interfaces import DeliveryTarget, PluginPrincipal
+from core.plugin_manager import LoadedPlugin, PluginDefinition, PluginServiceDefinition
 from core.server import InboundManager
 
 # ============================================================
 # Fixtures
 # ============================================================
+
 
 @pytest.fixture
 def temp_app_root(temp_dir: Path) -> Path:
@@ -67,7 +67,7 @@ def temp_app_root(temp_dir: Path) -> Path:
     # Create logs directory
     logs_dir = temp_dir / "logs"
     logs_dir.mkdir()
-    
+
     # Patch setup_logging to avoid file locks
     with patch("core.app.setup_logging") as mock_setup:
         mock_setup.return_value = MagicMock()
@@ -95,6 +95,7 @@ def _set_app_config(app: XiaoQingApp, **updates: Any) -> None:
 # ============================================================
 # Initialization Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_app_init_with_minimal_args(temp_app_root: Path):
@@ -148,6 +149,7 @@ def test_app_plugins_dir_path(temp_app_root: Path):
 # Config and Secrets Access Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_app_config_property(temp_app_root: Path):
     """Test config property access"""
@@ -171,6 +173,7 @@ def test_app_secrets_property(temp_app_root: Path):
 # ============================================================
 # Admin Check Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_app_is_admin_valid_user(temp_app_root: Path):
@@ -233,6 +236,7 @@ def test_app_load_admins_invalid_config(temp_app_root: Path):
 # ============================================================
 # Plugin Context Building Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_app_build_plugin_context(temp_app_root: Path):
@@ -335,6 +339,7 @@ async def test_reconcile_inbound_restarts_when_proxy_security_declaration_change
     old_manager.stop.assert_awaited_once()
     new_manager.start.assert_awaited_once()
     assert app.inbound_manager is new_manager
+
 
 @pytest.mark.asyncio
 @pytest.mark.integration
@@ -470,18 +475,22 @@ async def test_app_apply_config_toggles_plugin_watch_task(temp_app_root: Path):
     app.plugin_manager.watch = plugin_watch
     app._config_watch_task = MagicMock()
 
-    app._apply_config(ConfigSnapshot(
-        config={**app.config, "enable_plugin_watcher": True},
-        secrets=app.secrets,
-    ))
+    app._apply_config(
+        ConfigSnapshot(
+            config={**app.config, "enable_plugin_watcher": True},
+            secrets=app.secrets,
+        )
+    )
     await asyncio.sleep(0)
 
     assert app._plugin_watch_task is not None
 
-    app._apply_config(ConfigSnapshot(
-        config={**app.config, "enable_plugin_watcher": False},
-        secrets=app.secrets,
-    ))
+    app._apply_config(
+        ConfigSnapshot(
+            config={**app.config, "enable_plugin_watcher": False},
+            secrets=app.secrets,
+        )
+    )
     await asyncio.sleep(0)
 
     assert task_cancelled["plugin"] is True
@@ -696,6 +705,7 @@ def test_app_ignores_config_and_schedule_updates_while_stopping(temp_app_root: P
 # Event Handling Tests
 # ============================================================
 
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_process_event(temp_app_root: Path):
@@ -703,7 +713,9 @@ async def test_app_process_event(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(return_value=[{"type": "text", "data": {"text": "test"}}])
+    app.dispatcher.handle_event = AsyncMock(
+        return_value=[{"type": "text", "data": {"text": "test"}}]
+    )
 
     event = {
         "post_type": "message",
@@ -752,7 +764,9 @@ async def test_app_handle_upstream_event(temp_app_root: Path):
     app.ws_client.send_action = AsyncMock()
 
     # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(return_value=[{"type": "text", "data": {"text": "test"}}])
+    app.dispatcher.handle_event = AsyncMock(
+        return_value=[{"type": "text", "data": {"text": "test"}}]
+    )
 
     event = {
         "post_type": "message",
@@ -780,7 +794,9 @@ async def test_app_handle_upstream_event_not_connected(temp_app_root: Path):
     app.http_sender = SimpleNamespace(http_base="http://onebot", send_action=AsyncMock())
 
     # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(return_value=[{"type": "text", "data": {"text": "test"}}])
+    app.dispatcher.handle_event = AsyncMock(
+        return_value=[{"type": "text", "data": {"text": "test"}}]
+    )
 
     event = {
         "post_type": "message",
@@ -803,7 +819,9 @@ async def test_app_handle_inbound_event(temp_app_root: Path):
     app = XiaoQingApp(temp_app_root)
 
     # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(return_value=[{"type": "text", "data": {"text": "test"}}])
+    app.dispatcher.handle_event = AsyncMock(
+        return_value=[{"type": "text", "data": {"text": "test"}}]
+    )
 
     event = {
         "post_type": "message",
@@ -874,7 +892,9 @@ async def test_app_does_not_deduplicate_events_without_message_id(temp_app_root:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_app_send_single_action_falls_back_to_http_when_inbound_has_no_ws_clients(temp_app_root: Path):
+async def test_app_send_single_action_falls_back_to_http_when_inbound_has_no_ws_clients(
+    temp_app_root: Path,
+):
     """Test inbound manager does not swallow actions when no inbound WS clients are connected."""
     app = XiaoQingApp(temp_app_root)
     app.inbound_manager = MagicMock()
@@ -1010,10 +1030,7 @@ def test_app_grants_only_plugin_scoped_capabilities(temp_app_root: Path):
     assert bot_context.capabilities.is_bot_admin is True
     assert bot_context.capabilities.is_system is False
     assert bot_context.capabilities.secret_admin is not None
-    assert (
-        bot_context.capabilities.secret_admin.get("plugins.other.hidden_key")
-        == "hidden-value"
-    )
+    assert bot_context.capabilities.secret_admin.get("plugins.other.hidden_key") == "hidden-value"
 
     ordinary_context = _plugin_context_for(
         app,
@@ -1289,7 +1306,7 @@ async def test_xiaoqing_media_capability_validates_and_crops_onebot_responses(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_cross_plugin_call_preserves_signed_principal_and_target_scope(
+async def test_declared_voice_service_preserves_signed_principal_and_target_scope(
     temp_app_root: Path,
 ):
     app = XiaoQingApp(temp_app_root)
@@ -1297,10 +1314,18 @@ async def test_cross_plugin_call_preserves_signed_principal_and_target_scope(
         "admin_user_ids": [12345],
         "onebot_token": "",
         "inbound_token": "",
-        "plugins": {"source": {"source_key": "s"}, "target": {"target_key": "t"}},
+        "plugins": {
+            "smalltalk": {"source_key": "s"},
+            "voice": {"target_key": "t"},
+            "chat": {"chat_key": "c"},
+        },
     }
     config = json.loads(json.dumps(app.config))
-    config["plugins"] = {"source": {"source_option": 1}, "target": {"target_option": 2}}
+    config["plugins"] = {
+        "smalltalk": {"source_option": 1},
+        "voice": {"target_option": 2},
+        "chat": {"chat_option": 3},
+    }
     app.config_manager._replace_snapshot(config, secrets)
     app._load_admins(secrets)
     principal = app.issue_user_principal(
@@ -1311,44 +1336,263 @@ async def test_cross_plugin_call_preserves_signed_principal_and_target_scope(
     )
     seen_contexts = []
 
-    async def exported(value, context):
+    async def synthesize(value, context):
         seen_contexts.append(context)
-        return value
+        return [{"type": "text", "data": {"text": value}}]
 
-    module = ModuleType("plugins.target.main")
-    module.exported = exported
+    module = ModuleType("plugins.voice.main")
+    module.synthesize = synthesize
     definition = PluginDefinition(
-        name="target",
+        name="voice",
         version="1.0.0",
         entry="main.py",
         commands=[],
         schedule=[],
         concurrency="sequential",
+        services=(
+            PluginServiceDefinition(
+                name="voice.synthesize_text",
+                callback="synthesize",
+                callers=frozenset({"smalltalk"}),
+            ),
+        ),
     )
-    app.plugin_manager._plugins["target"] = LoadedPlugin(
-        definition=definition,
-        module=module,
-        mtime=0.0,
-        execution_gate=PluginExecutionGate("sequential", plugin_name="target"),
-    )
+    app.plugin_manager._register_loaded_plugin(definition, module, 0.0)
     source = _plugin_context_for(
         app,
-        "source",
+        "smalltalk",
         user_id=12345,
         principal=principal,
     )
+    service = source.capabilities.voice_synthesis
+    chat_service = source.capabilities.chat_reply
+    assert service is not None
+    assert chat_service is not None
+    assert not hasattr(source, "call_plugin")
 
-    assert await source.call_plugin("target", "exported", "first") == "first"
+    chat_contexts = []
+
+    async def reply(text, event, context):
+        chat_contexts.append(context)
+        return [{"type": "text", "data": {"text": f"{text}:{event['user_id']}"}}]
+
+    chat_module = ModuleType("plugins.chat.main")
+    chat_module.reply = reply
+    chat_definition = PluginDefinition(
+        name="chat",
+        version="1.0.0",
+        entry="main.py",
+        commands=[],
+        schedule=[],
+        concurrency="parallel",
+        services=(
+            PluginServiceDefinition(
+                name="chat.reply",
+                callback="reply",
+                callers=frozenset({"smalltalk"}),
+            ),
+        ),
+    )
+    app.plugin_manager._register_loaded_plugin(chat_definition, chat_module, 0.0)
+    assert await chat_service.reply("hello", {"user_id": 12345}) == [
+        {"type": "text", "data": {"text": "hello:12345"}},
+    ]
+    assert chat_contexts[-1].plugin_name == "chat"
+
+    assert await service.synthesize_text("first") == [
+        {"type": "text", "data": {"text": "first"}},
+    ]
     first = seen_contexts[-1]
     assert first.principal is principal
     assert first.capabilities.is_bot_admin is True
-    assert set(first.secrets["plugins"]) == {"target"}
-    assert set(first.config["plugins"]) == {"target"}
-    assert first.state is app.plugin_manager._plugin_states["target"]
+    assert set(first.secrets["plugins"]) == {"voice"}
+    assert set(first.config["plugins"]) == {"voice"}
+    assert first.state is app.plugin_manager._plugin_states["voice"]
 
     app._admin_set.clear()
-    assert await source.call_plugin("target", "exported", "second") == "second"
+    assert await service.synthesize_text("second") == [
+        {"type": "text", "data": {"text": "second"}},
+    ]
     assert seen_contexts[-1].capabilities.is_bot_admin is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_arxiv_codex_capability_uses_real_target_context_and_rechecks_admin(
+    temp_app_root: Path,
+):
+    app = XiaoQingApp(temp_app_root)
+    secrets = {
+        "admin_user_ids": [12345],
+        "onebot_token": "",
+        "inbound_token": "",
+        "plugins": {"arxiv_filter": {"source": "s"}, "codex": {"target": "t"}},
+    }
+    config = json.loads(json.dumps(app.config))
+    config["plugins"] = {"arxiv_filter": {"source_option": 1}, "codex": {"target_option": 2}}
+    app.config_manager._replace_snapshot(config, secrets)
+    app._load_admins(secrets)
+    principal = app.issue_user_principal(
+        {"user_id": 12345},
+        user_id=12345,
+        group_id=None,
+        is_private=True,
+    )
+    captured = []
+
+    async def enqueue_arxiv_summary(date, links, user_id, group_id, context):
+        captured.append(
+            (
+                context,
+                {
+                    "date": date,
+                    "links": links,
+                    "user_id": user_id,
+                    "group_id": group_id,
+                },
+            )
+        )
+        return "queued"
+
+    module = ModuleType("plugins.codex.main")
+    module.enqueue_arxiv_summary = enqueue_arxiv_summary
+    definition = PluginDefinition(
+        name="codex",
+        version="1.0.0",
+        entry="main.py",
+        commands=[],
+        schedule=[],
+        concurrency="sequential",
+        services=(
+            PluginServiceDefinition(
+                name="codex.enqueue_arxiv_summary",
+                callback="enqueue_arxiv_summary",
+                callers=frozenset({"arxiv_filter"}),
+                required_capability="codex_arxiv_summary",
+            ),
+        ),
+    )
+    app.plugin_manager._register_loaded_plugin(definition, module, 0.0)
+    source = _plugin_context_for(
+        app,
+        "arxiv_filter",
+        user_id=12345,
+        principal=principal,
+    )
+    service = source.capabilities.codex_arxiv_summary
+    assert service is not None
+
+    assert (
+        await service.enqueue_or_replay(
+            date="2026-07-11",
+            links=["https://arxiv.org/abs/2607.00001"],
+        )
+        == "queued"
+    )
+    target, kwargs = captured[-1]
+    assert target.plugin_name == "codex"
+    assert target.principal is principal
+    assert target.request_id == "capability-test"
+    assert target.state is app.plugin_manager._plugin_states["codex"]
+    assert set(target.config["plugins"]) == {"codex"}
+    assert set(target.secrets["plugins"]) == {"codex"}
+    assert kwargs["user_id"] == 12345
+
+    app._admin_set.clear()
+    with pytest.raises(PermissionError, match="no longer authorized"):
+        await service.enqueue_or_replay(
+            date="2026-07-11",
+            links=["https://arxiv.org/abs/2607.00001"],
+        )
+    assert len(captured) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_arxiv_codex_capability_is_source_scoped_and_resolves_current_loaded_gate(
+    temp_app_root: Path,
+):
+    app = XiaoQingApp(temp_app_root)
+    principal = app.issue_user_principal(
+        {"user_id": 12345},
+        user_id=12345,
+        group_id=None,
+        is_private=True,
+    )
+    assert (
+        _plugin_context_for(
+            app,
+            "other",
+            user_id=12345,
+            principal=principal,
+        ).capabilities.codex_arxiv_summary
+        is None
+    )
+    service = _plugin_context_for(
+        app,
+        "arxiv_filter",
+        user_id=12345,
+        principal=principal,
+    ).capabilities.codex_arxiv_summary
+    assert service is not None
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        await service.enqueue_or_replay(
+            date="2026-07-11",
+            links=["https://arxiv.org/abs/2607.00001"],
+        )
+
+    calls: list[str] = []
+
+    def install(value: str) -> None:
+        async def enqueue_arxiv_summary(_date, _links, _user_id, _group_id, _context):
+            calls.append(value)
+            return value
+
+        module = ModuleType(f"plugins.codex.{value}")
+        module.enqueue_arxiv_summary = enqueue_arxiv_summary
+        definition = PluginDefinition(
+            name="codex",
+            version="1.0.0",
+            entry="main.py",
+            commands=[],
+            schedule=[],
+            concurrency="sequential",
+            services=(
+                PluginServiceDefinition(
+                    name="codex.enqueue_arxiv_summary",
+                    callback="enqueue_arxiv_summary",
+                    callers=frozenset({"arxiv_filter"}),
+                    required_capability="codex_arxiv_summary",
+                ),
+            ),
+        )
+        app.plugin_manager._register_loaded_plugin(definition, module, 0.0)
+
+    install("first")
+    assert (
+        await service.enqueue_or_replay(
+            date="2026-07-11",
+            links=["https://arxiv.org/abs/2607.00001"],
+        )
+        == "first"
+    )
+    install("second")
+    assert (
+        await service.enqueue_or_replay(
+            date="2026-07-11",
+            links=["https://arxiv.org/abs/2607.00001"],
+        )
+        == "second"
+    )
+    assert calls == ["first", "second"]
+
+    app.plugin_manager._plugins["codex"].definition.enabled = False
+    with pytest.raises(RuntimeError, match="not accepting calls"):
+        await service.enqueue_or_replay(
+            date="2026-07-11",
+            links=["https://arxiv.org/abs/2607.00001"],
+        )
 
 
 @pytest.mark.asyncio
@@ -1368,8 +1612,39 @@ async def test_run_job_builds_real_system_capability_context(temp_app_root: Path
     assert context.principal.kind == "scheduled_system"
     assert context.principal.user_id is None
     assert context.principal.group_id is None
+    assert context.principal.delivery_targets == (
+        DeliveryTarget("group", 123),
+        DeliveryTarget("group", 456),
+    )
     assert context.capabilities.is_system is True
     assert context.capabilities.is_bot_admin is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_scheduled_job_freezes_default_explicit_and_empty_delivery_targets(
+    temp_app_root: Path,
+):
+    app = XiaoQingApp(temp_app_root)
+    _set_app_config(app, default_group_ids=[9])
+    captured: list[tuple[DeliveryTarget, ...]] = []
+
+    async def handler(context):
+        captured.append(context.principal.delivery_targets)
+        return "scheduled result"
+
+    app._send_action = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    await app._run_job(handler, "scheduled-test", group_ids=None)
+    await app._run_job(handler, "scheduled-test", group_ids=[])
+    await app._run_job(handler, "scheduled-test", group_ids=[11, 22])
+
+    assert captured == [
+        (DeliveryTarget("group", 9),),
+        (),
+        (DeliveryTarget("group", 11), DeliveryTarget("group", 22)),
+    ]
+    sent = app._send_action.await_args_list  # type: ignore[attr-defined]
+    assert [call.args[0]["params"]["group_id"] for call in sent] == [9, 11, 22]
 
 
 @pytest.mark.asyncio
@@ -1455,6 +1730,7 @@ async def test_xiaoqing_provider_scope_uses_production_principal_capabilities(
 # Configuration Reload Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_app_reload_config(temp_app_root: Path):
     """Test reload_config triggers config reload"""
@@ -1529,6 +1805,7 @@ def test_app_apply_config_reuses_dispatcher_semaphore_when_concurrency_unchanged
 # Plugin Reload Tests
 # ============================================================
 
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_reload_plugins_async(temp_app_root: Path):
@@ -1563,7 +1840,7 @@ async def test_app_reload_plugins_non_blocking(temp_app_root: Path):
 
     # Should create a task
     assert app._reload_task is not None
-    
+
     # Wait for it to finish to avoid pending task warning
     if app._reload_task:
         await app._reload_task
@@ -1590,6 +1867,7 @@ def test_app_reload_plugins_already_in_progress(temp_app_root: Path):
 # ============================================================
 # Scheduled Job Tests
 # ============================================================
+
 
 @pytest.mark.asyncio
 @pytest.mark.unit
@@ -1763,6 +2041,7 @@ async def test_app_run_job_swallows_cancelled_error(temp_app_root: Path):
 # Reschedule Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_app_reschedule_startup(temp_app_root: Path):
     """Test _reschedule with startup event"""
@@ -1862,6 +2141,7 @@ def test_app_reschedule_preserves_manifest_schedule_description(temp_app_root: P
 # Action Sink Tests
 # ============================================================
 
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_collect_actions_with_sink(temp_app_root: Path):
@@ -1878,14 +2158,11 @@ async def test_app_collect_actions_with_sink(temp_app_root: Path):
     token = current_action_sink.set(mock_sink)
 
     # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(return_value=[{"type": "text", "data": {"text": "test"}}])
+    app.dispatcher.handle_event = AsyncMock(
+        return_value=[{"type": "text", "data": {"text": "test"}}]
+    )
 
-    event = {
-        "post_type": "message",
-        "message_type": "private",
-        "user_id": 12345,
-        "message": "test"
-    }
+    event = {"post_type": "message", "message_type": "private", "user_id": 12345, "message": "test"}
     result = await app._collect_actions_for_event(event, default_source="test")
 
     # Reset sink
@@ -1907,14 +2184,11 @@ async def test_app_collect_actions_without_sink(temp_app_root: Path):
     current_action_sink.reset(token)
 
     # Mock dispatcher
-    app.dispatcher.handle_event = AsyncMock(return_value=[{"type": "text", "data": {"text": "test"}}])
+    app.dispatcher.handle_event = AsyncMock(
+        return_value=[{"type": "text", "data": {"text": "test"}}]
+    )
 
-    event = {
-        "post_type": "message",
-        "message_type": "private",
-        "user_id": 12345,
-        "message": "test"
-    }
+    event = {"post_type": "message", "message_type": "private", "user_id": 12345, "message": "test"}
     result = await app._collect_actions_for_event(event, default_source="test")
 
     # Should return collected actions
@@ -1925,6 +2199,7 @@ async def test_app_collect_actions_without_sink(temp_app_root: Path):
 # ============================================================
 # Session Cleanup Tests
 # ============================================================
+
 
 @pytest.mark.asyncio
 @pytest.mark.unit
@@ -1938,7 +2213,7 @@ async def test_app_cleanup_sessions_loop(temp_app_root: Path):
     # Mock asyncio.sleep to return immediately first time, then raise CancelledError
     # This ensures one loop iteration runs
     stop_exc = asyncio.CancelledError("Stop loop")
-    
+
     async def mock_sleep_side_effect(*args):
         # We need to yield to let other tasks run, even if we return immediately
         # But since this is a mock for sleep, we can just return None first time
@@ -1958,6 +2233,7 @@ async def test_app_cleanup_sessions_loop(temp_app_root: Path):
 # WebSocket Connected Callback Tests
 # ============================================================
 
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_app_on_ws_connected(temp_app_root: Path):
@@ -1966,10 +2242,10 @@ async def test_app_on_ws_connected(temp_app_root: Path):
 
     # Set default groups (update internal config directly for test)
     _set_app_config(app, default_group_ids=[123, 456])
-    
+
     # Also update via config property just in case (though it's read-only usually, this updates the temp dict if property logic changed)
     # But strictly speaking we need to update what ConfigManager returns.
-    
+
     # Mock ws_client
     app.ws_client = MagicMock()
     app.ws_client.send_action = AsyncMock()

@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from core.dispatcher import Dispatcher
+from core.dispatcher import Dispatcher, MessageContext
+from core.plugin_execution import PluginExecutionGate
 from core.router import CommandRouter, CommandSpec
 from core.session import SessionManager
 
@@ -259,6 +260,60 @@ class TestMessageFlow:
         session = await session_manager.peek(12345, 50001)
         assert session is not None
         assert session.get("counter") == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_plugin_gate_precedes_session_lock_to_avoid_abba_deadlock(
+        self,
+        test_dispatcher,
+    ):
+        dispatcher, session_manager = test_dispatcher
+        await session_manager.create(12345, 50001, "stateful")
+        gate = PluginExecutionGate("sequential", plugin_name="stateful")
+        loaded = SimpleNamespace(
+            module=SimpleNamespace(handle_session=MagicMock()),
+            execution_gate=gate,
+        )
+        dispatcher.plugin_registry.get.side_effect = (
+            lambda name: loaded if name == "stateful" else None
+        )
+        command_holds_gate = asyncio.Event()
+        allow_command_delete = asyncio.Event()
+
+        async def command_operation() -> bool:
+            command_holds_gate.set()
+            await allow_command_delete.wait()
+            return await session_manager.delete(12345, 50001)
+
+        command_task = asyncio.create_task(gate.run(command_operation))
+        await command_holds_gate.wait()
+        context = MessageContext(
+            request_id="abba-regression",
+            text="continue",
+            clean_text="continue",
+            user_id=12345,
+            group_id=50001,
+            is_private=False,
+            has_bot_name=False,
+            has_prefix=False,
+            has_command_prefix=False,
+            is_only_bot_name=False,
+            is_at_me=False,
+            is_url_only=False,
+            event={"user_id": 12345, "group_id": 50001},
+        )
+        session_task = asyncio.create_task(dispatcher._try_handle_session(context))
+        await asyncio.sleep(0)
+
+        allow_command_delete.set()
+        command_result, session_result = await asyncio.wait_for(
+            asyncio.gather(command_task, session_task),
+            timeout=1,
+        )
+
+        assert command_result is True
+        assert session_result is None
+        assert session_manager.active_key_lock_count == 0
 
 
 class TestDispatcherIntegration:

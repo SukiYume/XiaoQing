@@ -1,16 +1,15 @@
 """测试 ADnMB 论坛插件"""
 
-import pytest
-import asyncio
+import json
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock
-import json
 from typing import cast
 
+import pytest
+
+from core.interfaces import PluginContextProtocol
 from plugins.adnmb import main as adnmb_main
 from plugins.adnmb.adapi import AdnmbClient
-from core.interfaces import PluginContextProtocol
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -340,22 +339,34 @@ def test_adnmb_get_client_isolates_subscription_uuid_per_user(tmp_path):
 async def test_adnmb_client_get_passes_timeout(tmp_path):
     captured = {}
 
+    class _Content:
+        async def iter_chunked(self, _size):
+            yield b"{}"
+
     class _Response:
+        status = 200
+        url = "https://www.nmbxd1.com/Api/getForumList"
+        headers = {"Content-Type": "application/json"}
+        content_length = None
+        content = _Content()
+
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *args):
             pass
 
-        async def json(self):
-            return {}
+        def close(self):
+            pass
 
     class _Session:
-        def get(self, url, params=None, timeout=None):
-            captured["timeout"] = timeout
+        def request(self, _method, _url, **kwargs):
+            captured.update(kwargs)
             return _Response()
 
     client = AdnmbClient(session=_Session(), cache_dir=tmp_path, uuid="")
     await client._get("forum_list")
 
     assert captured["timeout"] is not None
+    assert captured["allow_redirects"] is False
+    assert captured["auto_decompress"] is False

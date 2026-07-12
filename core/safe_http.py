@@ -12,13 +12,19 @@ import asyncio
 import ipaddress
 import re
 import socket
-import zlib
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from urllib.parse import SplitResult, urljoin, urlsplit
 
 import aiohttp
 from aiohttp.abc import AbstractResolver
+
+from core.bounded_http import (
+    HTML_MIME_POLICY,
+    BodyLimits,
+    BoundedHttpError,
+    read_aiohttp_response,
+)
 
 ALLOWED_SCHEMES = {"http", "https"}
 DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -27,6 +33,9 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_DECOMPRESSION_RATIO = 20
 MAX_COMPRESSED_BYTES = 2 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 10
+_CROSS_ORIGIN_HEADER_ALLOWLIST = frozenset(
+    {"accept", "accept-encoding", "accept-language", "range", "user-agent"}
+)
 
 
 class UnsafeUrlError(ValueError):
@@ -135,7 +144,9 @@ async def validate_public_fetch_target(url: str) -> tuple[SplitResult, tuple[str
     """Validate URL and DNS records before an untrusted resource is used."""
 
     parsed = validate_public_url(url)
-    addresses = await resolve_public_host(parsed.hostname or "", parsed.port or DEFAULT_PORTS[parsed.scheme.lower()])
+    addresses = await resolve_public_host(
+        parsed.hostname or "", parsed.port or DEFAULT_PORTS[parsed.scheme.lower()]
+    )
     return parsed, addresses
 
 
@@ -161,14 +172,16 @@ class _PinnedResolver(AbstractResolver):
             address_family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
             if family not in (socket.AF_UNSPEC, address_family):
                 continue
-            records.append({
-                "hostname": host,
-                "host": address,
-                "port": port,
-                "family": address_family,
-                "proto": 0,
-                "flags": 0,
-            })
+            records.append(
+                {
+                    "hostname": host,
+                    "host": address,
+                    "port": port,
+                    "family": address_family,
+                    "proto": 0,
+                    "flags": 0,
+                }
+            )
         if not records:
             raise OSError("no validated address matches requested family")
         return records
@@ -184,59 +197,68 @@ def _response_charset(response: aiohttp.ClientResponse) -> str | None:
         return None
 
 
+def _url_origin(url: str) -> tuple[str, str, int]:
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise UnsafeUrlError("invalid redirect URL") from exc
+    scheme = parsed.scheme.casefold()
+    host = (parsed.hostname or "").rstrip(".").casefold()
+    if scheme not in DEFAULT_PORTS or not host:
+        raise UnsafeUrlError("invalid redirect URL")
+    return scheme, host, port or DEFAULT_PORTS[scheme]
+
+
+def _headers_after_redirect(
+    headers: Mapping[str, str],
+    *,
+    current_url: str,
+    next_url: str,
+) -> dict[str, str]:
+    if _url_origin(current_url) == _url_origin(next_url):
+        return dict(headers)
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.casefold() in _CROSS_ORIGIN_HEADER_ALLOWLIST
+    }
+
+
+def _public_request_headers(
+    headers: Mapping[str, str] | None,
+    *,
+    binary: bool,
+) -> dict[str, str]:
+    result = {str(key): str(value) for key, value in (headers or {}).items()}
+    requested_encoding = ""
+    for key in tuple(result):
+        if key.casefold() == "accept-encoding":
+            requested_encoding = result.pop(key).strip().casefold()
+    if binary or requested_encoding == "identity":
+        result["Accept-Encoding"] = "identity"
+    else:
+        result["Accept-Encoding"] = "gzip, deflate"
+    return result
+
+
 async def _read_limited_body(response: aiohttp.ClientResponse) -> bytes:
     """Read a response with compressed and decompressed size limits."""
-
-    encoding = response.headers.get("Content-Encoding", "identity").strip().lower()
-    if encoding in {"", "identity"}:
-        decompressor: zlib.decompressobj | None = None
-    elif encoding == "gzip":
-        decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16)
-    elif encoding == "deflate":
-        decompressor = zlib.decompressobj()
-    else:
-        raise SafeHttpError("unsupported content encoding")
-
-    content_length = response.content_length
-    if content_length is not None and content_length > MAX_COMPRESSED_BYTES:
-        raise SafeHttpError("response is too large")
-
-    raw_size = 0
-    decoded = bytearray()
-    async for chunk in response.content.iter_chunked(64 * 1024):
-        raw_size += len(chunk)
-        if raw_size > MAX_COMPRESSED_BYTES:
-            raise SafeHttpError("compressed response is too large")
-        try:
-            if decompressor is None:
-                output = chunk
-            else:
-                # Bound output *inside* zlib too; checking only after
-                # decompress() would still allocate a decompression bomb.
-                output = decompressor.decompress(
-                    chunk,
-                    MAX_RESPONSE_BYTES - len(decoded) + 1,
-                )
-        except zlib.error as exc:
-            raise SafeHttpError("invalid compressed response") from exc
-        decoded.extend(output)
-        if decompressor is not None and decompressor.unconsumed_tail:
-            raise SafeHttpError("decompressed response is too large")
-        if len(decoded) > MAX_RESPONSE_BYTES:
-            raise SafeHttpError("decompressed response is too large")
-        if len(decoded) > max(64 * 1024, raw_size * MAX_DECOMPRESSION_RATIO):
-            raise SafeHttpError("response decompression ratio is too large")
-
-    if decompressor is not None:
-        try:
-            decoded.extend(decompressor.flush(MAX_RESPONSE_BYTES - len(decoded) + 1))
-        except zlib.error as exc:
-            raise SafeHttpError("invalid compressed response") from exc
-    if len(decoded) > MAX_RESPONSE_BYTES:
-        raise SafeHttpError("decompressed response is too large")
-    if len(decoded) > max(64 * 1024, raw_size * MAX_DECOMPRESSION_RATIO):
-        raise SafeHttpError("response decompression ratio is too large")
-    return bytes(decoded)
+    limits = BodyLimits(
+        max_wire_bytes=MAX_COMPRESSED_BYTES,
+        max_decoded_bytes=MAX_RESPONSE_BYTES,
+        max_decompression_ratio=MAX_DECOMPRESSION_RATIO,
+        ratio_grace_bytes=64 * 1024,
+        chunk_bytes=64 * 1024,
+    )
+    try:
+        return (await read_aiohttp_response(response, limits=limits)).body
+    except BoundedHttpError as exc:
+        message = str(exc).replace(
+            "decoded response body is too large",
+            "decompressed response is too large",
+        )
+        raise SafeHttpError(message) from exc
 
 
 async def fetch_public_html(
@@ -249,6 +271,7 @@ async def fetch_public_html(
     """Fetch one public HTML document with DNS pinning and checked redirects."""
 
     current_url = url
+    current_headers = _public_request_headers(headers, binary=False)
     timeout = aiohttp.ClientTimeout(total=timeout_seconds, sock_read=min(5, timeout_seconds))
     for _ in range(MAX_REDIRECTS + 1):
         parsed, addresses = await validate_public_fetch_target(current_url)
@@ -271,22 +294,27 @@ async def fetch_public_html(
             ) as session:
                 async with session.get(
                     current_url,
-                    headers=headers,
+                    headers=current_headers,
                     allow_redirects=False,
                 ) as response:
                     if response.status in {301, 302, 303, 307, 308}:
                         location = response.headers.get("Location")
                         if not location:
                             return None
-                        current_url = urljoin(current_url, location)
+                        next_url = urljoin(current_url, location)
+                        current_headers = _headers_after_redirect(
+                            current_headers,
+                            current_url=current_url,
+                            next_url=next_url,
+                        )
+                        current_url = next_url
                         continue
                     if response.status != 200:
                         return None
-                    content_type = response.headers.get("Content-Type", "").lower()
-                    if not (
-                        content_type.startswith("text/html")
-                        or content_type.startswith("application/xhtml+xml")
-                    ):
+                    content_type = (
+                        response.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
+                    )
+                    if not HTML_MIME_POLICY.accepts(content_type or None):
                         return None
                     body = await _read_limited_body(response)
                     return SafeHttpResponse(
@@ -312,15 +340,21 @@ async def _read_identity_body_limited(
     encoding = response.headers.get("Content-Encoding", "identity").strip().lower()
     if encoding not in {"", "identity"}:
         raise SafeHttpError("encoded binary responses are not allowed")
-    content_length = response.content_length
-    if content_length is not None and content_length > max_bytes:
-        raise SafeHttpError("response is too large")
-    body = bytearray()
-    async for chunk in response.content.iter_chunked(64 * 1024):
-        body.extend(chunk)
-        if len(body) > max_bytes:
-            raise SafeHttpError("response is too large")
-    return bytes(body)
+    try:
+        return (
+            await read_aiohttp_response(
+                response,
+                limits=BodyLimits(
+                    max_wire_bytes=max_bytes,
+                    max_decoded_bytes=max_bytes,
+                    max_decompression_ratio=1,
+                    ratio_grace_bytes=1,
+                    chunk_bytes=64 * 1024,
+                ),
+            )
+        ).body
+    except BoundedHttpError as exc:
+        raise SafeHttpError("response is too large") from exc
 
 
 async def fetch_public_bytes(
@@ -330,6 +364,7 @@ async def fetch_public_bytes(
     timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     max_bytes: int = MAX_RESPONSE_BYTES,
     allowed_content_type_prefixes: tuple[str, ...] = ("image/",),
+    allowed_content_types: Collection[str] | None = None,
     allowed_hosts: Collection[str] | None = None,
     allowed_schemes: Collection[str] | None = None,
 ) -> SafeHttpResponse | None:
@@ -337,6 +372,7 @@ async def fetch_public_bytes(
     if max_bytes <= 0:
         raise ValueError("max_bytes must be positive")
     current_url = url
+    current_headers = _public_request_headers(headers, binary=True)
     timeout = aiohttp.ClientTimeout(total=timeout_seconds, sock_read=min(5, timeout_seconds))
     for _ in range(MAX_REDIRECTS + 1):
         parsed, addresses = await validate_public_fetch_target(current_url)
@@ -361,16 +397,30 @@ async def fetch_public_bytes(
                 auto_decompress=False,
                 trust_env=False,
             ) as session:
-                async with session.get(current_url, headers=headers, allow_redirects=False) as response:
+                async with session.get(
+                    current_url,
+                    headers=current_headers,
+                    allow_redirects=False,
+                ) as response:
                     if response.status in {301, 302, 303, 307, 308}:
                         location = response.headers.get("Location")
                         if not location:
                             return None
-                        current_url = urljoin(current_url, location)
+                        next_url = urljoin(current_url, location)
+                        current_headers = _headers_after_redirect(
+                            current_headers,
+                            current_url=current_url,
+                            next_url=next_url,
+                        )
+                        current_url = next_url
                         continue
                     if response.status != 200:
                         return None
                     content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+                    if allowed_content_types is not None and content_type not in {
+                        value.strip().casefold() for value in allowed_content_types
+                    }:
+                        raise SafeHttpError("response content type is not allowed")
                     if allowed_content_type_prefixes and not any(
                         content_type.startswith(prefix.lower())
                         for prefix in allowed_content_type_prefixes

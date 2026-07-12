@@ -17,7 +17,6 @@ Twitter 图片抓取与随机发送插件
 # 标准库
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import random
@@ -31,7 +30,17 @@ from PIL import Image, UnidentifiedImageError
 
 # 本地导入
 from core.args import parse
+from core.bounded_http import (
+    JSON_MIME_POLICY,
+    BodyLimits,
+    HttpStatusError,
+    JsonLimits,
+    ResponseFormatError,
+    aiohttp_request_bounded,
+    parse_bounded_json,
+)
 from core.plugin_base import ensure_dir, image, segments
+from core.public_errors import public_error_message, public_error_response
 from core.safe_http import fetch_public_bytes
 
 logger = logging.getLogger(__name__)
@@ -40,6 +49,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # 插件初始化
 # ============================================================
+
 
 def init(context=None) -> None:
     """插件初始化"""
@@ -103,11 +113,28 @@ _IMAGE_FORMAT_EXTENSIONS = {
     "PNG": ".png",
     "WEBP": ".webp",
 }
+_API_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=MAX_API_BYTES,
+    max_decoded_bytes=MAX_API_BYTES,
+    max_decompression_ratio=20,
+)
+_API_JSON_LIMITS = JsonLimits(
+    max_bytes=MAX_API_BYTES,
+    max_depth=48,
+    max_nodes=100_000,
+    max_string_chars=2 * 1024 * 1024,
+)
+_TWITTER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/136.0.0.0 Safari/537.36"
+)
 
 
 # ============================================================
 # 配置获取
 # ============================================================
+
 
 def _get_config(context) -> dict:
     """获取 Twitter 配置"""
@@ -120,9 +147,9 @@ def _get_headers(context) -> dict:
 
     # 默认请求头
     default_headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "user-agent": _TWITTER_USER_AGENT,
     }
 
     # 合并自定义头
@@ -137,6 +164,15 @@ def _get_headers(context) -> dict:
         )
 
     return default_headers
+
+
+def _get_media_headers() -> dict[str, str]:
+    """Return public CDN headers without API credentials or custom secrets."""
+    return {
+        "Accept": "image/*",
+        "Accept-Encoding": "identity",
+        "User-Agent": _TWITTER_USER_AGENT,
+    }
 
 
 def _get_proxy(context) -> str | None:
@@ -173,90 +209,84 @@ def _get_max_pages(context) -> int:
         return MAX_PAGES_TO_CHECK
 
 
-async def _response_json_limited(response, max_bytes: int = MAX_API_BYTES):
-    content = getattr(response, "content", None)
-    if content is None or not hasattr(content, "iter_chunked"):
-        return await response.json()
-    chunks = []
-    total = 0
-    async for chunk in content.iter_chunked(64 * 1024):
-        total += len(chunk)
-        if total > max_bytes:
-            raise ValueError("Twitter API response too large")
-        chunks.append(chunk)
-    return json.loads(b"".join(chunks))
-
-
 # ============================================================
 # Twitter API 交互
 # ============================================================
 
+
 async def _fetch_timeline(context, cursor: str | None = None) -> tuple:
     """获取用户时间线"""
-    url = 'https://x.com/i/api/graphql/mF05yo9gtSsl1tFPPHNEgQ/UserTweets'
+    url = "https://x.com/i/api/graphql/mF05yo9gtSsl1tFPPHNEgQ/UserTweets"
 
     user_id = _get_user_id(context)
 
     variables = {
-        'userId': user_id,
-        'count': 100,
-        'includePromotedContent': False,
-        'withCommunity': False,
-        'withVoice': False,
-        'include_entities': True,
-        'include_user_entities': True,
-        'include_ext_media_availability': True,
-        'include_ext_alt_text': True,
-        'include_cards': True,
-        'tweet_mode': 'extended'
+        "userId": user_id,
+        "count": 100,
+        "includePromotedContent": False,
+        "withCommunity": False,
+        "withVoice": False,
+        "include_entities": True,
+        "include_user_entities": True,
+        "include_ext_media_availability": True,
+        "include_ext_alt_text": True,
+        "include_cards": True,
+        "tweet_mode": "extended",
     }
 
     if cursor:
-        variables['cursor'] = cursor
+        variables["cursor"] = cursor
 
     features = {
-        'responsive_web_enhance_cards_enabled': True,
-        'rweb_video_screen_enabled': False,
-        'profile_label_improvements_pcf_label_in_post_enabled': False,
-        'rweb_tipjar_consumption_enabled': False,
-        'verified_phone_label_enabled': False,
-        'creator_subscriptions_tweet_preview_api_enabled': False,
-        'responsive_web_graphql_timeline_navigation_enabled': False,
-        'responsive_web_graphql_skip_user_profile_image_extensions_enabled': False,
-        'premium_content_api_read_enabled': False,
-        'communities_web_enable_tweet_community_results_fetch': False,
-        'c9s_tweet_anatomy_moderator_badge_enabled': False,
-        'responsive_web_grok_analyze_button_fetch_trends_enabled': False,
-        'responsive_web_grok_analyze_post_followups_enabled': False,
-        'responsive_web_jetfuel_frame': False,
-        'responsive_web_grok_share_attachment_enabled': False,
-        'articles_preview_enabled': True,
-        'responsive_web_edit_tweet_api_enabled': True,
-        'graphql_is_translatable_rweb_tweet_is_translatable_enabled': True,
-        'view_counts_everywhere_api_enabled': True,
-        'longform_notetweets_consumption_enabled': True,
-        'responsive_web_twitter_article_tweet_consumption_enabled': True,
-        'tweet_awards_web_tipping_enabled': False,
-        'responsive_web_grok_show_grok_translated_post': False,
-        'responsive_web_grok_analysis_button_from_backend': False,
-        'creator_subscriptions_quote_tweet_preview_enabled': False,
-        'freedom_of_speech_not_reach_fetch_enabled': True,
-        'standardized_nudges_misinfo': True,
-        'tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled': True,
-        'longform_notetweets_rich_text_read_enabled': True,
-        'longform_notetweets_inline_media_enabled': True,
-        'responsive_web_grok_image_annotation_enabled': False,
+        "responsive_web_enhance_cards_enabled": True,
+        "rweb_video_screen_enabled": False,
+        "profile_label_improvements_pcf_label_in_post_enabled": False,
+        "rweb_tipjar_consumption_enabled": False,
+        "verified_phone_label_enabled": False,
+        "creator_subscriptions_tweet_preview_api_enabled": False,
+        "responsive_web_graphql_timeline_navigation_enabled": False,
+        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+        "premium_content_api_read_enabled": False,
+        "communities_web_enable_tweet_community_results_fetch": False,
+        "c9s_tweet_anatomy_moderator_badge_enabled": False,
+        "responsive_web_grok_analyze_button_fetch_trends_enabled": False,
+        "responsive_web_grok_analyze_post_followups_enabled": False,
+        "responsive_web_jetfuel_frame": False,
+        "responsive_web_grok_share_attachment_enabled": False,
+        "articles_preview_enabled": True,
+        "responsive_web_edit_tweet_api_enabled": True,
+        "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+        "view_counts_everywhere_api_enabled": True,
+        "longform_notetweets_consumption_enabled": True,
+        "responsive_web_twitter_article_tweet_consumption_enabled": True,
+        "tweet_awards_web_tipping_enabled": False,
+        "responsive_web_grok_show_grok_translated_post": False,
+        "responsive_web_grok_analysis_button_from_backend": False,
+        "creator_subscriptions_quote_tweet_preview_enabled": False,
+        "freedom_of_speech_not_reach_fetch_enabled": True,
+        "standardized_nudges_misinfo": True,
+        "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+        "longform_notetweets_rich_text_read_enabled": True,
+        "longform_notetweets_inline_media_enabled": True,
+        "responsive_web_grok_image_annotation_enabled": False,
     }
 
     # 字段开关
-    field_toggles = {
-        'withArticlePlainText': False
-    }
+    field_toggles = {"withArticlePlainText": False}
 
     params = {
-        'variables': str(variables).replace("'", '"').replace('True', 'true').replace('False', 'false'),
-        'features': str(features).replace("'", '"').replace('True', 'true').replace('False', 'false'),
-        'fieldToggles': str(field_toggles).replace("'", '"').replace('True', 'true').replace('False', 'false'),
+        "variables": str(variables)
+        .replace("'", '"')
+        .replace("True", "true")
+        .replace("False", "false"),
+        "features": str(features)
+        .replace("'", '"')
+        .replace("True", "true")
+        .replace("False", "false"),
+        "fieldToggles": str(field_toggles)
+        .replace("'", '"')
+        .replace("True", "true")
+        .replace("False", "false"),
     }
 
     headers = _get_headers(context)
@@ -264,60 +294,78 @@ async def _fetch_timeline(context, cursor: str | None = None) -> tuple:
     proxy = _get_proxy(context)
 
     try:
-        async with context.http_session.get(
+        response = await aiohttp_request_bounded(
+            context.http_session,
+            "GET",
             url,
-            params=params,
+            limits=_API_BODY_LIMITS,
+            mime_policy=JSON_MIME_POLICY,
             headers=headers,
-            cookies=cookies,
-            proxy=proxy,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        ) as response:
-            if response.status != 200:
-                logger.warning("Twitter API 返回 %s", response.status)
-                return [], None, False
+            request_kwargs={
+                "params": params,
+                "cookies": cookies,
+                "proxy": proxy,
+                "timeout": REQUEST_TIMEOUT_SECONDS,
+            },
+        )
+        data = parse_bounded_json(response, limits=_API_JSON_LIMITS)
+        if not isinstance(data, dict):
+            raise ResponseFormatError("Twitter API response must be a JSON object")
 
-            data = await _response_json_limited(response)
+        timeline = (
+            data.get("data", {})
+            .get("user", {})
+            .get("result", {})
+            .get("timeline", {})
+            .get("timeline", {})
+        )
+        instructions = timeline.get("instructions", [])
 
-            timeline = data.get('data', {}).get('user', {}).get('result', {}).get('timeline', {}).get('timeline', {})
-            instructions = timeline.get('instructions', [])
+        # 找到 TimelineAddEntries
+        entries = []
+        for inst in instructions:
+            if inst.get("type") == "TimelineAddEntries":
+                entries = inst.get("entries", [])
+                break
 
-            # 找到 TimelineAddEntries
-            entries = []
-            for inst in instructions:
-                if inst.get('type') == 'TimelineAddEntries':
-                    entries = inst.get('entries', [])
-                    break
+        # 提取推文
+        tweets = [e for e in entries if e.get("entryId", "").startswith("tweet-")]
 
-            # 提取推文
-            tweets = [e for e in entries if e.get('entryId', '').startswith('tweet-')]
+        # 找到下一页 cursor
+        next_cursor = None
+        for entry in entries:
+            if entry.get("entryId", "").startswith("cursor-bottom-"):
+                next_cursor = entry.get("content", {}).get("value")
+                break
 
-            # 找到下一页 cursor
-            next_cursor = None
-            for entry in entries:
-                if entry.get('entryId', '').startswith('cursor-bottom-'):
-                    next_cursor = entry.get('content', {}).get('value')
-                    break
+        has_next = next_cursor is not None
+        return tweets, next_cursor, has_next
 
-            has_next = next_cursor is not None
-            return tweets, next_cursor, has_next
-
+    except HttpStatusError as exc:
+        logger.warning("Twitter API 返回 %s", exc.status)
+        return [], None, False
     except Exception as exc:
-        logger.error(f"Twitter API 请求失败: {exc}")
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="twitter.fetch_timeline",
+        )
         return [], None, False
 
 
 def _extract_image_urls(tweet: dict) -> list:
     """从推文中提取图片 URL"""
     media = (
-        tweet.get('content', {})
-        .get('itemContent', {})
-        .get('tweet_results', {})
-        .get('result', {})
-        .get('legacy', {})
-        .get('extended_entities', {})
-        .get('media', [])
+        tweet.get("content", {})
+        .get("itemContent", {})
+        .get("tweet_results", {})
+        .get("result", {})
+        .get("legacy", {})
+        .get("extended_entities", {})
+        .get("media", [])
     )
-    return [m['media_url_https'] for m in media if m.get('type') == 'photo']
+    return [m["media_url_https"] for m in media if m.get("type") == "photo"]
 
 
 def _contained_cache_path(cache_root: Path, filename: str) -> Path:
@@ -351,12 +399,12 @@ async def _download_image(url: str, save_dir: Path, context) -> bool:
     cache_root = save_dir.resolve(strict=True)
 
     # 请求高清原图
-    orig_url = url.split('.jpg')[0] + '?format=jpg&name=4096x4096' if '.jpg' in url else url
+    orig_url = url.split(".jpg")[0] + "?format=jpg&name=4096x4096" if ".jpg" in url else url
     if not _is_allowed_media_url(orig_url):
         logger.warning(f"拒绝下载可疑原图地址: {orig_url}")
         return False
 
-    headers = _get_headers(context)  # 使用相同的 headers，包含 User-Agent
+    headers = _get_media_headers()
 
     temp_path: Path | None = None
     try:
@@ -398,13 +446,19 @@ async def _download_image(url: str, save_dir: Path, context) -> bool:
     except Exception as exc:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
-        logger.warning(f"下载图片失败 {url}: {exc}")
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="twitter.download_image",
+        )
         return False
 
 
 # ============================================================
 # 图片抓取
 # ============================================================
+
 
 async def _fetch_twitter_images(context) -> int:
     """抓取 Twitter 图片"""
@@ -444,7 +498,7 @@ async def _fetch_twitter_images(context) -> int:
         new_count = 0
         if total_new >= MAX_IMAGES_PER_FETCH:
             break
-        for url in all_urls[:MAX_IMAGES_PER_FETCH - total_new]:
+        for url in all_urls[: MAX_IMAGES_PER_FETCH - total_new]:
             if await _download_image(url, save_dir, context):
                 new_count += 1
 
@@ -473,6 +527,7 @@ async def _fetch_twitter_images(context) -> int:
 # 随机图片
 # ============================================================
 
+
 async def _get_random_image(context) -> str | None:
     """获取随机图片路径"""
     save_dir = context.data_dir / "images"
@@ -481,7 +536,9 @@ async def _get_random_image(context) -> str | None:
     ensure_dir(save_dir)
 
     # 获取所有本地图片
-    local_images = [f for f in os.listdir(save_dir) if f.endswith(('.jpg', '.png', '.jpeg', '.webp'))]
+    local_images = [
+        f for f in os.listdir(save_dir) if f.endswith((".jpg", ".png", ".jpeg", ".webp"))
+    ]
 
     if not local_images:
         return None
@@ -489,9 +546,9 @@ async def _get_random_image(context) -> str | None:
     async with _POSTED_LOCK:
         posted = set()
         if posted_file.exists():
-            async with aiofiles.open(posted_file, encoding='utf-8') as f:
+            async with aiofiles.open(posted_file, encoding="utf-8") as f:
                 content = await f.read()
-                posted = {line.strip() for line in content.split('\n') if line.strip()}
+                posted = {line.strip() for line in content.split("\n") if line.strip()}
         available = [img for img in local_images if img not in posted]
         if not available:
             logger.info("所有图片都已发送过，重置列表")
@@ -500,7 +557,7 @@ async def _get_random_image(context) -> str | None:
         selected = random.choice(available)
         posted.add(selected)
         temp_file = posted_file.with_suffix(".tmp")
-        async with aiofiles.open(temp_file, 'w', encoding='utf-8') as f:
+        async with aiofiles.open(temp_file, "w", encoding="utf-8") as f:
             await f.write("\n".join(sorted(posted)) + "\n")
         temp_file.replace(posted_file)
 
@@ -511,6 +568,7 @@ async def _get_random_image(context) -> str | None:
 # 主处理函数
 # ============================================================
 
+
 async def handle(command: str, args: str, event: dict, context) -> list:
     """命令处理入口"""
     try:
@@ -518,7 +576,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         parsed = parse(args)
 
         # 手动抓取命令
-        if command in ('tw_fetch', '抓取推特'):
+        if command in ("tw_fetch", "抓取推特"):
             # 检查是否请求帮助
             if parsed and parsed.first.lower() in ["help", "帮助"]:
                 return segments(_show_help_tw_fetch())
@@ -528,7 +586,9 @@ async def handle(command: str, args: str, event: dict, context) -> list:
 
             # 发送开始消息
             start_msg = segments("🔄 开始抓取 Twitter 图片...")
-            start_action = build_action(start_msg, context.current_user_id, context.current_group_id)
+            start_action = build_action(
+                start_msg, context.current_user_id, context.current_group_id
+            )
             if start_action:
                 await context.send_action(start_action)
 
@@ -553,8 +613,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                 return segments("无法获取 Twitter 图片，请稍后再试")
 
     except Exception as exc:
-        logger.error(f"处理命令时出错: {exc}", exc_info=True)
-        return segments(f"❌ 处理失败: {str(exc)}")
+        return public_error_response(context, exc, logger=logger, component="twitter.handle")
 
 
 async def scheduled_fetch(context) -> list:

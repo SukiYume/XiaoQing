@@ -2,6 +2,8 @@
 红移计算模块
 """
 
+from core.public_errors import public_error_message
+
 
 async def handle_redshift(args: str, context) -> str:
     """处理红移计算命令"""
@@ -69,7 +71,7 @@ async def handle_redshift(args: str, context) -> str:
             result += f"\n💡 极高红移 - 早期宇宙"
         
         return result
-    except ValueError as e:
-        return f"计算错误: {e}"
     except Exception as exc:
-        return f"红移计算失败: {exc}"
+        return public_error_message(
+            context, exc, logger=context.logger, component="astro_tools.redshift"
+        )

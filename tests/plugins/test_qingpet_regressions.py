@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import tempfile
 from datetime import datetime, timedelta
@@ -40,6 +41,31 @@ def _cleanup_temp_db(db: Database, db_path: str) -> None:
     db.cleanup()
     if os.path.exists(db_path):
         os.unlink(db_path)
+
+
+def test_database_failure_log_omits_exception_text_path_and_query_data(
+    monkeypatch,
+    caplog,
+):
+    db, db_path = _make_temp_db()
+    sensitive = "password=do-not-log C:\\private\\qingpet.db user=private-user"
+
+    def fail_connection():
+        raise RuntimeError(sensitive)
+
+    try:
+        monkeypatch.setattr(db, "_get_connection", fail_connection)
+        with caplog.at_level(logging.ERROR):
+            assert db.get_user("private-user", 70099) is None
+    finally:
+        _cleanup_temp_db(db, db_path)
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "operation=get_user" in log_text
+    assert "error_type=RuntimeError" in log_text
+    assert sensitive not in log_text
+    assert "private-user" not in log_text
+    assert "qingpet.db" not in log_text
 
 
 class _PrincipalContext:
@@ -283,7 +309,9 @@ def test_private_feed_with_group_uses_target_group_pet():
     pet_service.adopt_pet("u_multi2", 50002, "阿黑")
 
     try:
-        ok, msg = asyncio.run(handle_feed("u_multi2", 0, "50002 apple", temp_db, spam_decay_factor=1.0))
+        ok, msg = asyncio.run(
+            handle_feed("u_multi2", 0, "50002 apple", temp_db, spam_decay_factor=1.0)
+        )
     finally:
         _cleanup_temp_db(temp_db, db_path)
 
@@ -489,7 +517,9 @@ def test_explore_uses_numeric_event_reward_values():
     import plugins.qingpet.services.pet_service as pet_service_module
 
     original_choices = pet_service_module.random.choices
-    pet_service_module.random.choices = lambda _events, weights=None, k=1: [{"msg": "固定事件", "coins": 20, "exp": 5}]
+    pet_service_module.random.choices = lambda _events, weights=None, k=1: [
+        {"msg": "固定事件", "coins": 20, "exp": 5}
+    ]
 
     try:
         ok, msg, coins = pet_service.explore(pet, user, spam_decay_factor=1.0)

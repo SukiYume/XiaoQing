@@ -7,6 +7,8 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from core.public_errors import public_error_message
+
 from core.plugin_base import run_sync
 
 from ..config import DIARY_TEMPLATES, MOOD_ANALYSIS_CONFIG, PendoConfig
@@ -787,8 +789,14 @@ class DiaryHandler(DbOpsMixin):
         if self.ai_parser and hasattr(self.ai_parser, "analyze_diary_mood"):
             try:
                 return await self.ai_parser.analyze_diary_mood(content, user_id)
-            except Exception:
-                logger.exception("AI 情绪分析失败，回退到规则分析")
+            except Exception as exc:
+                context = getattr(self.ai_parser, "context", None)
+                public_error_message(
+                    context,
+                    exc,
+                    logger=getattr(context, "logger", None) or logger,
+                    component="pendo.diary.mood_fallback",
+                )
 
         return self._analyze_mood_rule(content)
 

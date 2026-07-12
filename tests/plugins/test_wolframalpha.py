@@ -1,9 +1,12 @@
 """测试wolframalpha插件 - Wolfram|Alpha计算引擎"""
 
+import json
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock
 from typing import Any
+
+from core.bounded_http import BoundedHttpResponse
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -11,6 +14,44 @@ import importlib.util
 spec = importlib.util.spec_from_file_location("wolframalpha_main", ROOT / "plugins" / "wolframalpha" / "main.py")
 wolframalpha = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wolframalpha)
+
+
+@pytest.fixture(autouse=True)
+def bounded_transport_adapter(monkeypatch):
+    """Adapt old endpoint mocks while retaining real JSON/XML parsing tests."""
+
+    async def request(session, method, url, **kwargs):
+        request_kwargs = dict(kwargs.get("request_kwargs") or {})
+        response_cm = getattr(session, method.lower())(
+            url,
+            headers=kwargs.get("headers"),
+            **request_kwargs,
+        )
+        async with response_cm as response:
+            if response.status != 200:
+                raise wolframalpha.HttpStatusError(response.status)
+            if hasattr(response, "json"):
+                body = json.dumps(await response.json()).encode("utf-8")
+                media_type = "application/json"
+            else:
+                body = (await response.text()).encode("utf-8")
+                media_type = (
+                    "application/xml"
+                    if kwargs.get("mime_policy") is wolframalpha.XML_MIME_POLICY
+                    else "text/plain"
+                )
+            return BoundedHttpResponse(
+                url=url,
+                status=200,
+                body=body,
+                media_type=media_type,
+                charset="utf-8",
+                headers={},
+                wire_bytes=len(body),
+                decoded_bytes=len(body),
+            )
+
+    monkeypatch.setattr(wolframalpha, "aiohttp_request_bounded", request)
 
 
 class TestWolframAlphaPlugin:
@@ -318,7 +359,7 @@ class TestWolframAlphaPlugin:
             def post(self, *args, **kwargs):
                 return MockStepErrorContextManager()
 
-        with pytest.raises(ValueError):
+        with pytest.raises(wolframalpha.HttpStatusError):
             await wolframalpha._query_step("test", "appid", MockStepErrorSession())
 
     @pytest.mark.asyncio

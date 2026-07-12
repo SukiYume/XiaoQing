@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.interfaces import DeliveryTarget
 from core.plugin_base import (
     build_action,
     image,
@@ -56,6 +57,7 @@ class RuntimeJob:
     user_id: int | None
     group_id: int | None
     context: Any
+    delivery_targets: tuple[DeliveryTarget, ...] | None = None
     status: str = "queued"
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -234,7 +236,11 @@ class CodexQueueManager:
         group_id: int | None,
         context: Any,
         metadata: dict[str, Any] | None = None,
+        delivery_targets: tuple[DeliveryTarget, ...] | None = None,
     ) -> tuple[RuntimeJob, int]:
+        capabilities = getattr(context, "capabilities", None)
+        if getattr(capabilities, "is_system", False) and delivery_targets is None:
+            raise RuntimeError("system Codex jobs require explicit delivery targets")
         queue = self.queues.setdefault(session.label, deque())
         job_metadata = dict(metadata or {})
         queued_count = sum(1 for queued in queue if not queued.metadata.get("queue_overhead"))
@@ -257,6 +263,7 @@ class CodexQueueManager:
             user_id=user_id,
             group_id=group_id,
             context=context,
+            delivery_targets=delivery_targets,
             metadata=job_metadata,
         )
         queue.append(job)
@@ -278,6 +285,11 @@ class CodexQueueManager:
                 "content": prompt,
                 "user_id": user_id,
                 "group_id": group_id,
+                "delivery_targets": (
+                    [asdict(target) for target in delivery_targets]
+                    if delivery_targets is not None
+                    else None
+                ),
                 "status": "queued",
                 "metadata": job.metadata,
             },
@@ -718,16 +730,22 @@ class CodexQueueManager:
             return None
         return f"[codex:{job.label} #{job.job_id}] {title}失败{reason}\n{detail}"
 
-    def _delivery_target(
+    def _delivery_targets(
         self,
         session: CodexSession,
         job: RuntimeJob,
-    ) -> tuple[int | None, int | None]:
+    ) -> tuple[DeliveryTarget, ...]:
+        if job.delivery_targets is not None:
+            return job.delivery_targets
         if job.group_id is not None:
-            return job.user_id, job.group_id
+            return (DeliveryTarget("group", int(job.group_id)),)
         if job.user_id is not None:
-            return job.user_id, None
-        return session.owner_user_id, session.target_group_id
+            return (DeliveryTarget("private", int(job.user_id)),)
+        if session.target_group_id is not None:
+            return (DeliveryTarget("group", int(session.target_group_id)),)
+        if session.owner_user_id is not None:
+            return (DeliveryTarget("private", int(session.owner_user_id)),)
+        return ()
 
     async def _send_job_result(
         self,
@@ -771,16 +789,16 @@ class CodexQueueManager:
         if result is not None and result.output_path and result.output_path not in content:
             content = f"{content}\n\n受控输出路径: {result.output_path}"
 
-        user_id, group_id = self._delivery_target(session, job)
-        for batch in self._result_message_batches(content, job.image_artifacts):
-            action = build_action(
-                batch,
-                user_id,
-                group_id,
-            )
-            if action and hasattr(job.context, "send_action"):
-                action["_bypass_sink"] = True
-                await job.context.send_action(action)
+        for target in self._delivery_targets(session, job):
+            for batch in self._result_message_batches(content, job.image_artifacts):
+                action = build_action(
+                    batch,
+                    target.user_id,
+                    target.group_id,
+                )
+                if action and hasattr(job.context, "send_action"):
+                    action["_bypass_sink"] = True
+                    await job.context.send_action(action)
 
     async def list_sessions(self) -> str:
         async with self.lock:
@@ -1052,18 +1070,52 @@ class CodexQueueManager:
 
 
 _MANAGER: CodexQueueManager | None = None
+_MANAGER_LOCK: asyncio.Lock | None = None
+
+
+def _manager_lock() -> asyncio.Lock:
+    global _MANAGER_LOCK
+    if _MANAGER_LOCK is None:
+        _MANAGER_LOCK = asyncio.Lock()
+    return _MANAGER_LOCK
 
 
 async def get_manager(context: Any) -> CodexQueueManager:
     global _MANAGER
-    data_dir = Path(getattr(context, "data_dir", Path("data") / "codex"))
-    if _MANAGER is None or _MANAGER.data_dir != data_dir:
-        _MANAGER = CodexQueueManager(context)
-        await _MANAGER.ensure_default_cwd()
-        await _MANAGER.maintenance()
-    return _MANAGER
+    data_dir = Path(getattr(context, "data_dir", Path("data") / "codex")).resolve()
+    async with _manager_lock():
+        if _MANAGER is not None:
+            if _MANAGER.shutting_down:
+                raise RuntimeError("Codex manager is shutting down")
+            if _MANAGER.data_dir.resolve() != data_dir:
+                raise RuntimeError("Codex manager is already bound to a different data directory")
+            return _MANAGER
+
+        manager = CodexQueueManager(context)
+        try:
+            await manager.ensure_default_cwd()
+            await manager.maintenance()
+        except BaseException:
+            await manager.shutdown()
+            raise
+        _MANAGER = manager
+        return manager
+
+
+async def shutdown_existing_manager() -> bool:
+    """Shut down the singleton if it exists, without constructing one."""
+    global _MANAGER
+    async with _manager_lock():
+        manager = _MANAGER
+        if manager is None:
+            return False
+        await manager.shutdown()
+        if _MANAGER is manager:
+            _MANAGER = None
+        return True
 
 
 def reset_manager_for_tests() -> None:
-    global _MANAGER
+    global _MANAGER, _MANAGER_LOCK
     _MANAGER = None
+    _MANAGER_LOCK = None

@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from core.plugin_base import segments
 from core.args import parse, tokenize
+from core.public_errors import public_error_response
 
 logger = logging.getLogger(__name__)
 
@@ -235,9 +236,8 @@ async def handle(
         
         return segments(result)
         
-    except Exception as e:
-        logger.exception("Choice handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="choice.handle")
 
 def _show_help() -> str:
     """显示帮助信息"""

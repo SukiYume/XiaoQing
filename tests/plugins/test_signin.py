@@ -17,6 +17,29 @@ if plugins_dir not in sys.path:
 from signin import main as signin
 from signin import yingshi as signin_yingshi
 from signin import sony as signin_sony
+from core.bounded_http import HttpStatusError
+
+
+@pytest.fixture(autouse=True)
+def bounded_transport_adapter(monkeypatch):
+    """Keep legacy provider mocks while production uses the bounded transport."""
+
+    async def request(session, method, url, **kwargs):
+        request_kwargs = dict(kwargs.get("request_kwargs") or {})
+        headers = kwargs.get("headers")
+        response_cm = getattr(session, method.lower())(
+            url,
+            headers=headers,
+            **request_kwargs,
+        )
+        async with response_cm as response:
+            status = int(response.status)
+            if status not in kwargs.get("success_statuses", {200}):
+                raise HttpStatusError(status)
+            return json.dumps(response._json_data).encode("utf-8")
+
+    monkeypatch.setattr(signin_yingshi, "aiohttp_request_bounded", request)
+    monkeypatch.setattr(signin_sony, "aiohttp_request_bounded", request)
 
 
 class MockResponse:

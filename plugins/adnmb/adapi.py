@@ -12,17 +12,24 @@ A岛匿名版 API 封装模块
 import asyncio
 import hashlib
 import io
+import logging
 import re
 import time
-import aiohttp
 import uuid as uuidlib
 from dataclasses import dataclass
-from typing import Optional, Any
 from pathlib import Path
-import logging
+from typing import Any, Optional
 
+import aiohttp
 from PIL import Image
 
+from core.bounded_http import (
+    JSON_MIME_POLICY,
+    BodyLimits,
+    JsonLimits,
+    aiohttp_request_bounded,
+    parse_bounded_json,
+)
 from core.plugin_base import atomic_write_bytes
 from core.safe_http import SafeHttpError, fetch_public_bytes
 
@@ -39,6 +46,16 @@ REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 IMAGE_TIMEOUT_SECONDS = 15
+_ADNMB_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=4 * 1024 * 1024,
+    max_decoded_bytes=8 * 1024 * 1024,
+)
+_ADNMB_JSON_LIMITS = JsonLimits(
+    max_bytes=_ADNMB_BODY_LIMITS.max_decoded_bytes,
+    max_depth=32,
+    max_nodes=100_000,
+    max_string_chars=6 * 1024 * 1024,
+)
 
 # API 端点
 ENDPOINTS = {
@@ -134,12 +151,18 @@ class AdnmbClient:
     async def _get(self, endpoint: str, **params) -> Any:
         """发送 GET 请求"""
         url = f"{API_HOST}{ENDPOINTS.get(endpoint, endpoint)}"
-        async with self.session.get(
+        response = await aiohttp_request_bounded(
+            self.session,
+            "GET",
             url,
-            params=self._build_params(**params),
-            timeout=REQUEST_TIMEOUT,
-        ) as resp:
-            return await resp.json()
+            limits=_ADNMB_BODY_LIMITS,
+            mime_policy=JSON_MIME_POLICY,
+            request_kwargs={
+                "params": self._build_params(**params),
+                "timeout": REQUEST_TIMEOUT,
+            },
+        )
+        return parse_bounded_json(response, limits=_ADNMB_JSON_LIMITS)
     
     async def get_forum_list(self) -> dict[str, str]:
         """获取板块列表"""
@@ -231,6 +254,8 @@ class AdnmbClient:
                 timeout_seconds=IMAGE_TIMEOUT_SECONDS,
                 max_bytes=MAX_IMAGE_BYTES,
                 allowed_content_type_prefixes=("image/",),
+                allowed_hosts={"image.nmb.best"},
+                allowed_schemes={"https"},
             )
             if fetched is None:
                 logger.warning("Image download failed: %s", url)
@@ -247,8 +272,14 @@ class AdnmbClient:
             await asyncio.to_thread(atomic_write_bytes, local_path, fetched.body)
             return local_path
         except (SafeHttpError, ValueError) as exc:
-            logger.warning("Image download rejected for %s: %s", url, exc)
+            logger.warning(
+                "Image download rejected error_type=%s",
+                type(exc).__name__,
+            )
         except Exception as exc:
-            logger.warning("Image download error for %s: %s", url, exc)
+            logger.warning(
+                "Image download error error_type=%s",
+                type(exc).__name__,
+            )
 
         return None

@@ -933,14 +933,24 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 使用 `context.logger`：
 
 ```python
+from core.sensitive_audit import summarize_sensitive
+
 async def handle(command: str, args: str, event: Dict, context) -> List:
-    context.logger.debug(f"收到命令: {command}, 参数: {args}")
-    context.logger.info(f"处理用户 {event.get('user_id')} 的请求")
-    context.logger.warning("这是一个警告")
-    context.logger.error("发生错误", exc_info=True)  # 包含堆栈
-    
+    payload = summarize_sensitive(args)
+    context.logger.info(
+        "request accepted command=%s payload_kind=%s payload_length=%d "
+        "payload_bytes=%d payload_fingerprint=%s actor=%s",
+        command,  # manifest 中的稳定命令名，不是用户参数
+        payload.kind,
+        payload.length,
+        payload.byte_length,
+        payload.fingerprint,
+        event.get("user_id"),
+    )
     return segments("OK")
 ```
+
+`DEBUG` 仍属于普通日志，不能写完整或截断的命令、Prompt、聊天历史、URL、路径、认证信息或模型响应。`summarize_sensitive()` 返回字符/字节长度和进程内可关联、重启即轮换的 HMAC 指纹；它不会保留原文，也不能用于授权、缓存或持久化标识。不要用无密钥 SHA-256 代替，因为短命令可被离线枚举。异常应按下文“错误处理”接入统一脱敏 helper，不能使用 `logger.exception()` 或 `exc_info=True`。
 
 **日志级别**：
 - `DEBUG` - 调试信息，生产环境通常关闭
@@ -989,35 +999,56 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 ### 基本模式
 
 ```python
+from core.public_errors import public_error_response
+
 async def handle(command: str, args: str, event: Dict, context) -> List:
     try:
         result = await do_something(args)
         return segments(f"成功: {result}")
-    except ValueError as e:
-        context.logger.warning(f"参数错误: {e}")
-        return segments(f"参数错误: {e}")
-    except Exception as e:
-        context.logger.error(f"未知错误: {e}", exc_info=True)
-        return segments("处理失败，请稍后重试")
+    except KnownInputError:
+        # 仅返回由本插件定义、内容固定且经过审查的业务提示；不要回显
+        # 第三方库或系统异常的 str(exc)。
+        return segments("参数格式无效，请按 /example help 中的格式重试")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=context.logger,
+            component="example.handle",
+        )
 ```
+
+`public_error_response()` 会向用户返回稳定错误码和本次 `request_id`，并将经过脱敏和长度限制的异常链写入日志。不要使用 `logger.exception()`、`exc_info=True`，也不要把 `str(exc)`、URL、路径、认证头或 secret 拼进回复；这些写法会绕过统一脱敏边界。框架 Dispatcher 还有同样的兜底，但插件入口主动使用 helper 可以保留准确的 component。
 
 ### 优雅降级
 
 ```python
+from core.public_errors import public_error_message
+
 async def handle(command: str, args: str, event: Dict, context) -> List:
     # 尝试主要方案
     try:
         result = await primary_api()
         return segments(result)
-    except Exception:
-        context.logger.warning("主 API 失败，尝试备用")
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="example.primary_api",
+        )
     
     # 降级到备用方案
     try:
         result = await backup_api()
         return segments(result)
-    except Exception:
-        context.logger.error("备用 API 也失败")
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="example.backup_api",
+        )
         return segments("服务暂时不可用")
 ```
 

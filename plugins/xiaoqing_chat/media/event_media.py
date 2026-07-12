@@ -435,7 +435,9 @@ async def _resolve_media_bytes(
                 return payload, source_name or "image", _guess_suffix_from_mime(mime_type)
 
             if _looks_like_url(source_value):
-                payload, content_type = await _download_url_bytes(source_value, context=context, max_bytes=max_bytes)
+                payload, content_type = await _download_url_bytes(
+                    source_value, context=context, max_bytes=max_bytes
+                )
                 suffix = Path(urlparse(source_value).path).suffix
                 if not suffix:
                     suffix = _guess_suffix_from_mime(content_type)
@@ -469,7 +471,9 @@ def _event_media_log_fields(event: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _log_resolved_media(context, runtime, resolved: ResolvedMedia, *, event: dict[str, Any] | None = None) -> None:
+def _log_resolved_media(
+    context, runtime, resolved: ResolvedMedia, *, event: dict[str, Any] | None = None
+) -> None:
     fields = _event_media_log_fields(event)
     fields.update(
         {
@@ -503,7 +507,9 @@ async def _resolve_segment_media(
         max_bytes=max_bytes,
         event=event,
     )
-    mime_type, suffix, width, height, is_animated = _inspect_image_payload(payload, fallback_suffix=suffix)
+    mime_type, suffix, width, height, is_animated = _inspect_image_payload(
+        payload, fallback_suffix=suffix
+    )
     _validate_image_resource_limits(
         payload,
         width=width,
@@ -725,7 +731,9 @@ async def render_local_media_file(
     max_bytes = int(_media_cfg_value(runtime, "max_analyze_bytes", 4 * 1024 * 1024))
     if max_bytes > 0 and len(payload) > max_bytes:
         return None
-    mime_type, _, width, height, is_animated = _inspect_image_payload(payload, fallback_suffix=path.suffix or ".png")
+    mime_type, _, width, height, is_animated = _inspect_image_payload(
+        payload, fallback_suffix=path.suffix or ".png"
+    )
     resolved = ResolvedMedia(
         media_hash=_hash_bytes(payload),
         segment_type="image",
@@ -767,7 +775,11 @@ def _render_summary_only_media(
     prefer_emoji: bool,
 ) -> RenderedMedia:
     cleaned = _safe_source_name(summary)
-    kind = "emoji" if prefer_emoji else _fallback_kind(cleaned, width=0, height=0, segment_type=segment_type)
+    kind = (
+        "emoji"
+        if prefer_emoji
+        else _fallback_kind(cleaned, width=0, height=0, segment_type=segment_type)
+    )
     if kind == "emoji":
         emotion_tags = _normalize_emotion_tags(cleaned)
         description = cleaned or "一张表情包"
@@ -796,9 +808,12 @@ def _render_face_segment(segment: dict[str, Any]) -> RenderedMedia:
     if face_id:
         media_hash = f"qq_face:{face_id}"
     else:
-        media_hash = "qq_face:" + hashlib.sha1(
-            json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-        ).hexdigest()
+        media_hash = (
+            "qq_face:"
+            + hashlib.sha1(
+                json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+        )
     return RenderedMedia(
         media_hash=media_hash,
         kind="qq_face",
@@ -810,7 +825,9 @@ def _render_face_segment(segment: dict[str, Any]) -> RenderedMedia:
     )
 
 
-def _upgrade_rendered_media_from_registry(rendered_items: list[RenderedMedia]) -> list[RenderedMedia]:
+def _upgrade_rendered_media_from_registry(
+    rendered_items: list[RenderedMedia],
+) -> list[RenderedMedia]:
     if not rendered_items:
         return rendered_items
     try:
@@ -846,9 +863,7 @@ def _upgrade_rendered_media_from_registry(rendered_items: list[RenderedMedia]) -
             upgraded.append(original)
             continue
         tags = tuple(
-            str(tag).strip()
-            for tag in resolved.get("emotion_tags", [])
-            if str(tag).strip()
+            str(tag).strip() for tag in resolved.get("emotion_tags", []) if str(tag).strip()
         )
         upgraded.append(
             RenderedMedia(
@@ -909,7 +924,9 @@ def _compose_effective_user_text(
     if not segments:
         return (clean_text or "").strip()
 
-    has_media = any(str(segment.get("type", "") or "") in _SUPPORTED_MEDIA_TYPES for segment in segments)
+    has_media = any(
+        str(segment.get("type", "") or "") in _SUPPORTED_MEDIA_TYPES for segment in segments
+    )
     if not has_media:
         return (clean_text or "").strip()
 
@@ -982,7 +999,9 @@ def _compose_effective_user_parts(
     if not segments:
         return build_text_message_parts((clean_text or "").strip())
 
-    has_media = any(str(segment.get("type", "") or "") in _SUPPORTED_MEDIA_TYPES for segment in segments)
+    has_media = any(
+        str(segment.get("type", "") or "") in _SUPPORTED_MEDIA_TYPES for segment in segments
+    )
     if not has_media:
         return build_text_message_parts((clean_text or "").strip())
 
@@ -1089,7 +1108,7 @@ async def render_event_media(event: dict[str, Any], *, context, runtime) -> list
                     "segment_type": segment_type,
                     "summary_hint": summary_hint,
                     "prefer_emoji": prefer_emoji,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error_type": type(exc).__name__,
                 },
                 level="warning",
             )

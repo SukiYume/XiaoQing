@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import aiohttp
 
@@ -16,6 +16,7 @@ from .interfaces import (
 if TYPE_CHECKING:
     from .metrics import MetricsCollector
     from .session import Session, SessionManager
+
 
 class _RequestLogger:
     def __init__(self, base_logger: logging.Logger, request_id: str | None) -> None:
@@ -45,6 +46,7 @@ class _RequestLogger:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._base_logger, name)
 
+
 @dataclass
 class PluginContext:
     config: dict[str, Any]
@@ -71,7 +73,6 @@ class PluginContext:
     secret_reader: Callable[[str], Any] | None = field(default=None, repr=False)
     secret_writer: Callable[[str, Any], None] | None = field(default=None, repr=False)
     secret_deleter: Callable[[str], bool] | None = field(default=None, repr=False)
-    plugin_caller: Callable[..., Awaitable[Any]] | None = field(default=None, repr=False)
     principal: PluginPrincipal = field(
         default_factory=lambda: PluginPrincipal(kind="lifecycle"),
     )
@@ -79,6 +80,7 @@ class PluginContext:
     request_id: str | None = None
     state: dict[str, Any] = field(default_factory=dict)
     logger: Any = field(init=False, repr=False)
+
     def __post_init__(self) -> None:
         self.logger = _RequestLogger(
             logging.getLogger(f"plugin.{self.plugin_name}"),
@@ -120,18 +122,6 @@ class PluginContext:
             raise RuntimeError("plugin secret deleter unavailable")
         return self.secret_deleter(path)
 
-    async def call_plugin(
-        self,
-        plugin_name: str,
-        callback_name: str,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        """Invoke another loaded plugin through its lifecycle/execution gate."""
-        if self.plugin_caller is None:
-            raise RuntimeError("inter-plugin caller unavailable")
-        return await self.plugin_caller(plugin_name, callback_name, *args, **kwargs)
-
     # ============================================================
     # 静音控制方法
     # ============================================================
@@ -139,7 +129,7 @@ class PluginContext:
     def mute_group(self, group_id: int, duration_minutes: float) -> None:
         """
         让机器人在指定群静音一段时间
-        
+
         Args:
             group_id: 群号
             duration_minutes: 静音时长（分钟）
@@ -176,11 +166,11 @@ class PluginContext:
     ) -> "Session":
         """
         为当前用户创建会话
-        
+
         Args:
             initial_data: 初始会话数据
             timeout: 会话超时时间（秒），默认使用 SessionManager 默认值
-        
+
         Returns:
             新创建的 Session 对象
         """
@@ -188,7 +178,7 @@ class PluginContext:
             raise RuntimeError("SessionManager not available")
         if self.current_user_id is None:
             raise RuntimeError("No current user context")
-        
+
         return await self.session_manager.create(
             user_id=self.current_user_id,
             group_id=self.current_group_id,
@@ -200,7 +190,7 @@ class PluginContext:
     async def get_session(self) -> "Session | None":
         """
         获取当前用户的会话
-        
+
         Returns:
             Session 对象，如果不存在或已过期则返回 None
         """
@@ -208,7 +198,7 @@ class PluginContext:
             return None
         if self.current_user_id is None:
             return None
-        
+
         return await self.session_manager.get(
             user_id=self.current_user_id,
             group_id=self.current_group_id,
@@ -234,7 +224,7 @@ class PluginContext:
     async def end_session(self) -> bool:
         """
         结束当前用户的会话
-        
+
         Returns:
             是否成功删除会话
         """
@@ -242,7 +232,7 @@ class PluginContext:
             return False
         if self.current_user_id is None:
             return False
-        
+
         return await self.session_manager.delete(
             user_id=self.current_user_id,
             group_id=self.current_group_id,

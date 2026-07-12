@@ -3,6 +3,7 @@ Tests for core/interfaces.py - Protocol interface definitions
 Uses duck typing instead of isinstance checks for Protocol classes
 """
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock
@@ -21,8 +22,24 @@ from core.interfaces import (
     SessionAccess,
     PluginContextProtocol,
     ContextFactory,
+    DeliveryTarget,
     PluginContextFactory,
 )
+
+
+def test_delivery_target_is_validated_and_immutable() -> None:
+    private = DeliveryTarget("private", 123)
+    group = DeliveryTarget("group", 456)
+
+    assert (private.user_id, private.group_id) == (123, None)
+    assert (group.user_id, group.group_id) == (None, 456)
+    with pytest.raises(FrozenInstanceError):
+        group.target_id = 789  # type: ignore[misc]
+    for invalid in (0, -1, True):
+        with pytest.raises((TypeError, ValueError)):
+            DeliveryTarget("group", invalid)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        DeliveryTarget("broadcast", 1)  # type: ignore[arg-type]
 
 
 # ============================================================

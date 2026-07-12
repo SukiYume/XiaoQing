@@ -75,3 +75,43 @@ async def test_key_length_and_pool_capacity_are_bounded() -> None:
         with pytest.raises(RuntimeError, match="capacity"):
             async with pool.hold("two"):
                 pass
+
+
+@pytest.mark.asyncio
+async def test_same_task_can_reenter_without_releasing_to_waiter() -> None:
+    pool = AsyncKeyedLockPool()
+    inner_entered = asyncio.Event()
+    release_outer = asyncio.Event()
+    waiter_entered = asyncio.Event()
+
+    async def owner() -> None:
+        async with pool.hold((1, None)):
+            async with pool.hold((1, None)):
+                inner_entered.set()
+            await release_outer.wait()
+
+    async def waiter() -> None:
+        async with pool.hold((1, None)):
+            waiter_entered.set()
+
+    owner_task = asyncio.create_task(owner())
+    await inner_entered.wait()
+    waiter_task = asyncio.create_task(waiter())
+    await asyncio.sleep(0)
+    assert waiter_entered.is_set() is False
+
+    release_outer.set()
+    await asyncio.gather(owner_task, waiter_task)
+    assert waiter_entered.is_set()
+    assert pool.active_key_count == 0
+
+
+@pytest.mark.asyncio
+async def test_unhashable_key_is_rejected_without_allocating_entry() -> None:
+    pool = AsyncKeyedLockPool()
+
+    with pytest.raises(ValueError, match="hashable"):
+        async with pool.hold(["not", "hashable"]):  # type: ignore[arg-type]
+            pass
+
+    assert pool.active_key_count == 0

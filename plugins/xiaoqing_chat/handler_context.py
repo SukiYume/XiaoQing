@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import functools
-import secrets
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from core.public_errors import public_error_response
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .runtime_state import ChatRuntimeState, _ChatRuntime
@@ -72,17 +76,12 @@ def handle_errors(label: str):
             try:
                 return await fn(*args, **kwargs)
             except Exception as exc:
-                request_id = str(getattr(context, "request_id", "") or secrets.token_hex(4))
-                if context and hasattr(context, "logger"):
-                    context.logger.exception(
-                        "XiaoQing Chat handler failed label=%s request_id=%s error_type=%s",
-                        label,
-                        request_id,
-                        type(exc).__name__,
-                    )
-                from core.plugin_base import segments
-
-                return segments(f"❌ {label}暂时不可用，请稍后重试（请求ID: {request_id}）")
+                return public_error_response(
+                    context,
+                    exc,
+                    logger=getattr(context, "logger", logger),
+                    component=f"xiaoqing_chat.handler.{fn.__name__}",
+                )
 
         return wrapper
 

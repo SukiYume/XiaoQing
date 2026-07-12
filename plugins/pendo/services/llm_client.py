@@ -4,7 +4,28 @@ from typing import Any
 
 import aiohttp
 
+from core.bounded_http import (
+    BodyLimits,
+    HttpStatusError,
+    JsonLimits,
+    MimePolicy,
+    aiohttp_request_bounded,
+    parse_bounded_json,
+)
+
 logger = logging.getLogger(__name__)
+
+_LLM_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=2 * 1024 * 1024,
+    max_decoded_bytes=4 * 1024 * 1024,
+)
+_LLM_JSON_LIMITS = JsonLimits(max_bytes=_LLM_BODY_LIMITS.max_decoded_bytes)
+_LLM_JSON_MIME = MimePolicy(
+    exact=frozenset({"application/json"}),
+    structured_suffixes=frozenset({"+json"}),
+    allow_missing=True,
+)
+
 
 async def chat_completions_with_fallback_paths(
     session: aiohttp.ClientSession | None,
@@ -48,22 +69,41 @@ async def chat_completions_with_fallback_paths(
     try:
         for attempt in range(max_retry + 1):
             try:
-                async with session.post(
+                request_kwargs: dict[str, Any] = {
+                    "json": payload,
+                    "timeout": aiohttp.ClientTimeout(total=timeout_seconds),
+                }
+                if proxy:
+                    request_kwargs["proxy"] = proxy
+                response = await aiohttp_request_bounded(
+                    session,
+                    "POST",
                     url,
+                    limits=_LLM_BODY_LIMITS,
+                    mime_policy=_LLM_JSON_MIME,
                     headers=headers,
-                    json=payload,
-                    proxy=proxy,
-                    timeout=aiohttp.ClientTimeout(total=timeout_seconds)
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                        return content, "main_path"
-                    else:
-                        await resp.read()
-                        logger.warning("LLM API Error (Attempt %s): status=%s", attempt + 1, resp.status)
-            except Exception as e:
-                logger.warning("LLM Request Error (Attempt %s): %s", attempt+1, e)
+                    request_kwargs=request_kwargs,
+                )
+                data = parse_bounded_json(response, limits=_LLM_JSON_LIMITS)
+                if not isinstance(data, dict):
+                    raise ValueError("LLM response must be a JSON object")
+                choices = data.get("choices", [])
+                choice = choices[0] if isinstance(choices, list) and choices else {}
+                message = choice.get("message", {}) if isinstance(choice, dict) else {}
+                content = message.get("content", "") if isinstance(message, dict) else ""
+                return (content if isinstance(content, str) else ""), "main_path"
+            except HttpStatusError as exc:
+                logger.warning(
+                    "LLM API Error (Attempt %s): status=%s",
+                    attempt + 1,
+                    exc.status,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "LLM request failed attempt=%s error_type=%s",
+                    attempt + 1,
+                    type(exc).__name__,
+                )
 
             if attempt < max_retry:
                 await asyncio.sleep(retry_interval_seconds)

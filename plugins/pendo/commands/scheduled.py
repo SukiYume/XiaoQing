@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core.plugin_base import run_sync, segments
+from core.public_errors import public_error_message
 
 from ..models.item import ItemType
 from ..services.ai_parser import AIParser
@@ -86,9 +87,14 @@ async def check_reminders(context) -> list[dict[str, Any]]:
                         db.release_reminder_claim(item_id, remind_time, claim_token)
             else:
                 messages.append(action)
-        except Exception as e:
+        except Exception as exc:
             # 发送失败不记录，下个周期会重试
-            logger.warning("发送提醒失败 item=%s: %s", item_id, e)
+            public_error_message(
+                context,
+                exc,
+                logger=logger,
+                component="pendo.scheduled.reminder_delivery",
+            )
             if item_id and remind_time and claim_token:
                 db.release_reminder_claim(item_id, remind_time, claim_token)
 
@@ -155,11 +161,21 @@ async def send_daily_briefings(context, db: Database) -> list[dict[str, Any]]:
                 )
                 logger.info("Sent daily briefing to user %s", user_id)
 
-            except Exception as e:
-                logger.exception("为用户 %s 发送每日简报失败: %s", user_id, e)
+            except Exception as exc:
+                public_error_message(
+                    context,
+                    exc,
+                    logger=logger,
+                    component="pendo.scheduled.daily_briefing_user",
+                )
 
-    except Exception as e:
-        logger.exception("发送每日简报时出错: %s", e)
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="pendo.scheduled.daily_briefing",
+        )
 
     return messages
 
@@ -225,11 +241,21 @@ async def check_diary_reminders(context, db: Database) -> list[dict[str, Any]]:
                     save_user_setting, user_id, "last_diary_remind_date", current_date, db
                 )
 
-            except Exception as e:
+            except Exception as exc:
                 # L-1修复：记录日志，避免静默吞掉异常
-                logger.warning("为用户 %s 处理日记提醒失败: %s", user_id, e)
-    except Exception as e:
-        logger.exception("检查日记提醒时出错: %s", e)
+                public_error_message(
+                    context,
+                    exc,
+                    logger=logger,
+                    component="pendo.scheduled.diary_reminder_user",
+                )
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="pendo.scheduled.diary_reminder",
+        )
 
     return messages
 
@@ -301,10 +327,20 @@ async def send_weekly_finance_summaries(context, db: Database) -> list[dict[str,
                     current_date,
                     db,
                 )
-            except Exception as e:
-                logger.exception("为用户 %s 发送每周财务总结失败: %s", user_id, e)
-    except Exception as e:
-        logger.exception("发送每周财务总结时出错: %s", e)
+            except Exception as exc:
+                public_error_message(
+                    context,
+                    exc,
+                    logger=logger,
+                    component="pendo.scheduled.weekly_finance_user",
+                )
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="pendo.scheduled.weekly_finance",
+        )
 
     return messages
 
@@ -363,10 +399,20 @@ async def send_month_end_finance_summaries(context, db: Database) -> list[dict[s
                     current_date,
                     db,
                 )
-            except Exception as e:
-                logger.exception("为用户 %s 发送月底财务总结失败: %s", user_id, e)
-    except Exception as e:
-        logger.exception("发送月底财务总结时出错: %s", e)
+            except Exception as exc:
+                public_error_message(
+                    context,
+                    exc,
+                    logger=logger,
+                    component="pendo.scheduled.monthly_finance_user",
+                )
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="pendo.scheduled.monthly_finance",
+        )
 
     return messages
 
@@ -377,8 +423,13 @@ async def cleanup_expired_demo_data(context, db: Database) -> list[dict[str, Any
         cleaned = await run_sync(purge_expired_demo_users, db)
         if cleaned:
             logger.info("Cleaned up %s expired Pendo Web demo users", cleaned)
-    except Exception as e:
-        logger.exception("清理过期 demo 数据时出错: %s", e)
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="pendo.scheduled.demo_cleanup",
+        )
     return []
 
 
@@ -769,11 +820,21 @@ async def migrate_undone_todos(context, db: Database) -> list[dict[str, Any]]:
                     today,
                 )
 
-            except Exception as e:
-                logger.exception("为用户 %s 迁移待办失败: %s", user_id, e)
+            except Exception as exc:
+                public_error_message(
+                    context,
+                    exc,
+                    logger=logger,
+                    component="pendo.scheduled.todo_migration_user",
+                )
 
-    except Exception as e:
-        logger.exception("迁移待办时出错: %s", e)
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="pendo.scheduled.todo_migration",
+        )
 
     return messages
 

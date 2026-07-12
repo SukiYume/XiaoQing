@@ -83,7 +83,7 @@ def test_smalltalk_docs_cover_manifest_commands_and_provider_boundary() -> None:
     readme = _read("smalltalk")
     manifest = _manifest("smalltalk")
     assert all(command["admin_only"] for command in manifest["commands"])
-    for marker in ("/记忆", "/对话", "/删除对话", "call_plugin"):
+    for marker in ("/记忆", "/对话", "/删除对话", "chat.reply", "voice.synthesize_text"):
         assert marker in readme
     assert "不存在笑话命令" in readme
 

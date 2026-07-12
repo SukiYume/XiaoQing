@@ -4,6 +4,15 @@
     "description": "AI 对话助手（基于 Coze API）- 支持智能问答和对话交互",
     "author": "XiaoQing Bot",
     "entry": "main.py",
+    "services": [
+        {
+            "name": "chat.reply",
+            "callback": "reply",
+            "callers": [
+                "smalltalk"
+            ]
+        }
+    ],
     "commands": [
         {
             "name": "chat",

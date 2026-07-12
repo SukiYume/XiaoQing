@@ -3,28 +3,44 @@ Logging utilities for xiaoqing_chat plugin.
 
 Centralized logging functions to avoid code duplication and ensure consistent logging behavior.
 """
+
 from __future__ import annotations
 
 import json
-import hashlib
-from typing import Any, Optional, TYPE_CHECKING, Union
+import re
+from typing import TYPE_CHECKING, Any, Optional, Union
+
+from core.sensitive_audit import summarize_sensitive
 
 if TYPE_CHECKING:
-    from .runtime_state import _ChatRuntime
     from core.plugin_base import Context
-    from .config.config import XiaoQingChatConfig
 
-from .constants import DEFAULT_SHORT_TEXT_LIMIT, LOG_TEXT_LIMIT
+    from .config.config import XiaoQingChatConfig
+    from .runtime_state import _ChatRuntime
+
+from .constants import DEFAULT_SHORT_TEXT_LIMIT
 
 _SENSITIVE_LOG_KEY_PARTS = (
     "text",
     "content",
+    "message",
+    "history",
+    "dialogue",
     "reply",
     "prompt",
     "response",
     "raw",
+    "output",
+    "input",
     "thinking",
+    "reason",
     "reasoning",
+    "goal",
+    "hint",
+    "description",
+    "marker",
+    "term",
+    "emotion",
     "summary",
     "evidence",
     "path",
@@ -33,11 +49,78 @@ _SENSITIVE_LOG_KEY_PARTS = (
     "secret",
 )
 
+_IDENTIFIER_LOG_KEY_PARTS = (
+    "chat_id",
+    "user_id",
+    "group_id",
+    "owner_id",
+    "message_id",
+    "msg_id",
+    "local_id",
+)
+
+_STATUS_LOG_KEYS = {
+    "action",
+    "analysis_quality",
+    "analysis_source",
+    "cached_quality",
+    "cached_source",
+    "finish_reason",
+    "frame_strategy",
+    "from",
+    "from_provider",
+    "kind",
+    "llm_mime",
+    "model",
+    "operation",
+    "provider",
+    "provider_scope",
+    "quality",
+    "role",
+    "segment_type",
+    "source_mime",
+    "source_plugin",
+    "stage",
+    "status",
+    "step",
+    "to",
+    "to_model",
+    "to_provider",
+}
+
+_CORRELATION_LOG_KEYS = {"request_id", "task_id", "job_id"}
+_TYPE_LOG_KEYS = {"error_type", "exception_type", "rejection_type"}
+_REASON_CODE_LOG_KEYS = {"force_reason", "reason_code"}
+_SAFE_STATUS_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,127}\Z")
+_SAFE_REASON_CODE = re.compile(r"[a-z][a-z0-9_.:-]{0,63}\Z")
+_SAFE_CORRELATION_ID = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
+
+
+def _safe_correlation_id(value: Any) -> str:
+    if not isinstance(value, str) or not _SAFE_CORRELATION_ID.fullmatch(value):
+        return "-"
+    return value
+
 
 def _redacted_value(value: Any) -> str:
-    text = str(value or "")
-    digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:12]
-    return f"[redacted len={len(text)} sha256={digest}]"
+    if isinstance(value, (str, bytes, bytearray, memoryview)):
+        payload = value
+    else:
+        try:
+            payload = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=lambda item: f"<type:{type(item).__name__}>",
+            )
+        except (TypeError, ValueError):
+            payload = f"<type:{type(value).__name__}>"
+    summary = summarize_sensitive(payload)
+    return (
+        f"[redacted kind={summary.kind} length={summary.length} "
+        f"bytes={summary.byte_length} fingerprint={summary.fingerprint}]"
+    )
 
 
 def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
@@ -47,18 +130,36 @@ def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
             continue
         key = str(raw_key)
         lowered = key.lower()
-        if "error" in lowered or "exception" in lowered:
-            safe[key] = str(value).split(":", 1)[0][:80] or "Error"
-        elif any(part in lowered for part in _SENSITIVE_LOG_KEY_PARTS):
+        if any(part in lowered for part in _IDENTIFIER_LOG_KEY_PARTS):
             safe[key] = _redacted_value(value)
+        elif lowered in _CORRELATION_LOG_KEYS:
+            safe[key] = _safe_correlation_id(value)
+        elif lowered in _TYPE_LOG_KEYS:
+            type_name = str(value)
+            safe[key] = type_name if _SAFE_STATUS_TOKEN.fullmatch(type_name) else "Error"
+        elif lowered in _REASON_CODE_LOG_KEYS:
+            reason = str(value)
+            safe[key] = reason if _SAFE_REASON_CODE.fullmatch(reason) else _redacted_value(reason)
+        elif lowered in _STATUS_LOG_KEYS:
+            status = str(value)
+            safe[key] = status if _SAFE_STATUS_TOKEN.fullmatch(status) else _redacted_value(status)
+        elif isinstance(value, (bool, int, float)):
+            safe[key] = value
         elif isinstance(value, dict):
             safe[key] = sanitize_log_fields(value)
         elif isinstance(value, (list, tuple)):
             safe[key] = f"[items={len(value)}]"
+        elif "error" in lowered or "exception" in lowered:
+            safe[key] = _redacted_value(value)
+        elif any(part in lowered for part in _SENSITIVE_LOG_KEY_PARTS):
+            safe[key] = _redacted_value(value)
         elif isinstance(value, str):
-            safe[key] = _short_text(value, limit=LOG_TEXT_LIMIT)
+            # Unknown free-form strings fail closed. New observability fields
+            # must be explicitly classified above before their content can be
+            # written to an ordinary log.
+            safe[key] = _redacted_value(value)
         else:
-            safe[key] = value
+            safe[key] = f"[type={type(value).__name__}]"
     return safe
 
 

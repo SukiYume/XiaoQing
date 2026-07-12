@@ -2,43 +2,41 @@ FROM python:3.13-slim AS builder
 
 WORKDIR /build
 
-# 编译工具只存在于 builder，不进入最终运行镜像。
+# Compilation tools remain in the builder stage and never enter the runtime image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements/python-3.13.lock ./requirements/python-3.13.lock
+COPY requirements/python-3.13-runtime.lock ./requirements/python-3.13-runtime.lock
 RUN python -m venv /opt/xiaoqing-venv \
     && /opt/xiaoqing-venv/bin/pip install --no-cache-dir --require-hashes \
-        -r requirements/python-3.13.lock
+        -r requirements/python-3.13-runtime.lock
+
+# The context builder fixes the validated release artifact at this exact path.
+# Dependencies are installed only from the hashed lock above, never from wheel metadata.
+COPY artifacts/xiaoqing.whl ./artifacts/xiaoqing.whl
+RUN /opt/xiaoqing-venv/bin/pip install --no-cache-dir --no-deps \
+        --target /opt/xiaoqing-app artifacts/xiaoqing.whl
 
 
 FROM python:3.13-slim AS runtime
 
 WORKDIR /app
 
-# 确保 Python 输出实时显示（不缓冲），并设置模块搜索路径
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 ENV PATH=/opt/xiaoqing-venv/bin:$PATH
 
-# 只复制 builder 中已解析、已哈希校验的 Python 环境。
 COPY --from=builder /opt/xiaoqing-venv /opt/xiaoqing-venv
+COPY --from=builder /opt/xiaoqing-app /app
+COPY config/config.json.example ./config/config.json.example
+COPY config/secrets.json.example ./config/secrets.json.example
 
-# 只复制运行源码和公开示例配置。.dockerignore 进一步拒绝本地密钥、
-# 数据库、日志、缓存、模型产物、废弃插件与 Git 历史。
-COPY main.py pyproject.toml ./
-COPY core/ ./core/
-COPY plugins/ ./plugins/
-COPY config/*.example ./config/
-
-# 真实 config.json / secrets.json 必须在运行时通过 volume/secret mount 注入。
+# Real config.json and secrets.json must be injected at runtime via a volume or
+# secret mount. The trusted-admin model intentionally retains container root;
+# never mount the Docker socket or host paths outside the admin's authority.
 RUN mkdir -p logs config
 
-# 按项目的可信 admin 模型保留容器内 root；不要挂载 Docker socket，且仅挂载
-# admin 明确允许 Bot 修改的宿主目录。完整边界见 docs/container-security.md。
-
-# XiaoQing 默认监听端口
 EXPOSE 12000
 
-CMD ["python", "main.py"]
+CMD ["python", "/app/main.py"]

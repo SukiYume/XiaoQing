@@ -2,30 +2,77 @@
 .SYNOPSIS
     Single-instance, fail-safe Windows monitor for XiaoQing and NapCat.
 
-The script never terminates a process it did not create.  It recognises the
-bot only through this repository's PID file plus the absolute main.py path,
-uses a named mutex to prevent competing monitors, rotates redirected logs,
-and backs off after crashes.
+The script never terminates a process it did not create. It recognises the
+bot only through this repository's PID file plus the absolute helper/main.py
+paths, uses a named mutex to prevent competing monitors, and backs off after
+crashes. A Python helper owns stdout/stderr and rotates each active log after
+closing its Windows file handle.
 #>
 
 [CmdletBinding()]
 param(
     [string]$BotRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$PythonPath = (Join-Path $env:USERPROFILE "miniconda3\python.exe"),
     [string]$CondaPath = (Join-Path $env:USERPROFILE "miniconda3\Scripts\conda.exe"),
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$CondaEnvironment = "base",
+    [ValidateNotNullOrEmpty()]
+    [string]$BotPythonCommand = "python",
+    [string[]]$BotArguments = @(),
     [string]$NapCatPath = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "NapCat.Shell\NapCatWinBootMain.exe"),
+    [AllowEmptyString()]
+    [string]$NapCatAccount = $env:XIAOQING_NAPCAT_ACCOUNT,
+    [string[]]$NapCatArguments = @(),
+    [ValidateRange(1, 3600)]
     [int]$MonitorIntervalSeconds = 10,
+    [ValidateRange(1, 86400)]
     [int]$InitialRestartDelaySeconds = 10,
+    [ValidateRange(1, 86400)]
     [int]$MaximumRestartDelaySeconds = 300,
+    [ValidateRange(1, 604800)]
     [int]$StableRunSeconds = 300,
+    [ValidateRange(65536, 10737418240)]
     [long]$MaximumLogBytes = 10MB,
+    [ValidateRange(1, 100)]
     [int]$LogBackupCount = 5
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$BotRoot = [IO.Path]::GetFullPath($BotRoot)
+function Get-NormalizedDirectoryPath {
+    param([string]$Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $pathRoot = [IO.Path]::GetPathRoot($fullPath)
+    if ($fullPath.Length -le $pathRoot.Length) {
+        return $fullPath
+    }
+    $separators = [char[]]@(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    )
+    return $fullPath.TrimEnd($separators)
+}
+
+if ($MaximumRestartDelaySeconds -lt $InitialRestartDelaySeconds) {
+    throw "MaximumRestartDelaySeconds must be greater than or equal to InitialRestartDelaySeconds"
+}
+if ($NapCatAccount -and $NapCatAccount -notmatch '^\d{5,20}$') {
+    throw "NapCatAccount must contain 5 to 20 decimal digits"
+}
+foreach ($argument in @($BotArguments) + @($NapCatArguments)) {
+    if ($null -eq $argument) {
+        throw "BotArguments and NapCatArguments cannot contain null values"
+    }
+}
+
+$BotRoot = Get-NormalizedDirectoryPath $BotRoot
+$PythonPath = [IO.Path]::GetFullPath($PythonPath)
+$CondaPath = [IO.Path]::GetFullPath($CondaPath)
+$NapCatPath = [IO.Path]::GetFullPath($NapCatPath)
 $MainScript = Join-Path $BotRoot "main.py"
+$LogPumpScript = Join-Path $BotRoot "scripts\run_process_with_rotating_logs.py"
 $LogDirectory = Join-Path $BotRoot "logs"
 $PidFile = Join-Path $LogDirectory "xiaoqing-bot.pid.json"
 $BotLog = Join-Path $LogDirectory "bot-monitor.log"
@@ -36,6 +83,12 @@ $NapCatErrorLog = Join-Path $LogDirectory "napcat-monitor-error.log"
 if (-not (Test-Path -LiteralPath $MainScript -PathType Leaf)) {
     throw "XiaoQing entry point not found: $MainScript"
 }
+if (-not (Test-Path -LiteralPath $LogPumpScript -PathType Leaf)) {
+    throw "Rotating log helper not found: $LogPumpScript"
+}
+if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
+    throw "Python executable not found: $PythonPath"
+}
 if (-not (Test-Path -LiteralPath $CondaPath -PathType Leaf)) {
     throw "Conda executable not found: $CondaPath"
 }
@@ -44,31 +97,109 @@ New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 function Get-MutexName {
     param([string]$Path)
 
-    $bytes = [Text.Encoding]::UTF8.GetBytes($Path.ToLowerInvariant())
-    $hash = [Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+    $normalizedPath = Get-NormalizedDirectoryPath $Path
+    $bytes = [Text.Encoding]::UTF8.GetBytes($normalizedPath.ToLowerInvariant())
+    $hashAlgorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $hashAlgorithm.ComputeHash($bytes)
+    } finally {
+        $hashAlgorithm.Dispose()
+    }
     $suffix = ([BitConverter]::ToString($hash)).Replace("-", "").Substring(0, 16)
     return "Global\XiaoQing.BotMonitor.$suffix"
 }
 
-function Rotate-Log {
-    param([string]$Path)
+function Write-Utf8NoBomAtomically {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return
-    }
-    if ((Get-Item -LiteralPath $Path).Length -lt $MaximumLogBytes) {
-        return
-    }
-
-    for ($index = $LogBackupCount; $index -ge 1; $index--) {
-        $older = "$Path.$index"
-        if ($index -eq $LogBackupCount) {
-            Remove-Item -LiteralPath $older -Force -ErrorAction SilentlyContinue
-        } elseif (Test-Path -LiteralPath $older) {
-            Move-Item -LiteralPath $older -Destination "$Path.$($index + 1)" -Force
+    $absolutePath = [IO.Path]::GetFullPath($Path)
+    $directory = [IO.Path]::GetDirectoryName($absolutePath)
+    $leaf = [IO.Path]::GetFileName($absolutePath)
+    $temporaryPath = Join-Path $directory ".$leaf.$PID.$([Guid]::NewGuid().ToString('N')).tmp"
+    $encoding = [Text.UTF8Encoding]::new($false)
+    try {
+        [IO.File]::WriteAllText($temporaryPath, $Content, $encoding)
+        if ([IO.File]::Exists($absolutePath)) {
+            [IO.File]::Replace($temporaryPath, $absolutePath, $null)
+        } else {
+            [IO.File]::Move($temporaryPath, $absolutePath)
+        }
+    } finally {
+        if ([IO.File]::Exists($temporaryPath)) {
+            [IO.File]::Delete($temporaryPath)
         }
     }
-    Move-Item -LiteralPath $Path -Destination "$Path.1" -Force
+}
+
+function ConvertTo-NativeArgument {
+    param([AllowEmptyString()][string]$Value)
+
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') {
+        return $Value
+    }
+
+    # Follow CommandLineToArgvW/CRT quoting rules so paths, quotes and trailing
+    # backslashes survive PowerShell 5.1's string-only Start-Process API.
+    $builder = [Text.StringBuilder]::new()
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq [char]'\') {
+            $backslashes++
+            continue
+        }
+        if ($character -eq [char]'"') {
+            [void]$builder.Append([char]'\', (2 * $backslashes) + 1)
+            [void]$builder.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append([char]'\', $backslashes)
+            $backslashes = 0
+        }
+        [void]$builder.Append($character)
+    }
+    if ($backslashes -gt 0) {
+        [void]$builder.Append([char]'\', 2 * $backslashes)
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Join-NativeArguments {
+    param([string[]]$Values)
+
+    return (($Values | ForEach-Object { ConvertTo-NativeArgument $_ }) -join " ")
+}
+
+function Start-LogPumpedProcess {
+    param(
+        [string[]]$CommandArguments,
+        [string]$WorkingDirectory,
+        [string]$StandardOutputLog,
+        [string]$StandardErrorLog
+    )
+
+    $pumpArguments = @(
+        $LogPumpScript,
+        "--stdout-log", $StandardOutputLog,
+        "--stderr-log", $StandardErrorLog,
+        "--max-bytes", $MaximumLogBytes.ToString([Globalization.CultureInfo]::InvariantCulture),
+        "--backup-count", $LogBackupCount.ToString([Globalization.CultureInfo]::InvariantCulture),
+        "--cwd", $WorkingDirectory,
+        "--"
+    ) + $CommandArguments
+
+    return Start-Process `
+        -FilePath $PythonPath `
+        -ArgumentList (Join-NativeArguments $pumpArguments) `
+        -WorkingDirectory $WorkingDirectory `
+        -WindowStyle Hidden `
+        -PassThru
 }
 
 function Get-ProcessByIdSafely {
@@ -101,7 +232,9 @@ function Get-TrackedBotProcess {
     try {
         $saved = Get-Content -LiteralPath $PidFile -Raw | ConvertFrom-Json
         $process = Get-ProcessByIdSafely -ProcessId ([int]$saved.process_id)
-        if ($null -ne $process -and (Test-CommandLineContains $process.CommandLine $MainScript)) {
+        if ($null -ne $process -and
+            (Test-CommandLineContains $process.CommandLine $LogPumpScript) -and
+            (Test-CommandLineContains $process.CommandLine $MainScript)) {
             return $process
         }
     } catch {
@@ -111,23 +244,102 @@ function Get-TrackedBotProcess {
     return $null
 }
 
-function Start-TrackedBot {
-    Rotate-Log $BotLog
-    Rotate-Log $BotErrorLog
-    Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+function Stop-OwnedProcessTree {
+    param([Diagnostics.Process]$Process)
 
-    $process = Start-Process `
-        -FilePath $CondaPath `
-        -ArgumentList @("run", "-n", "base", "--no-capture-output", "python", "`"$MainScript`"") `
+    try {
+        if ($Process.HasExited) {
+            return
+        }
+    } catch {
+        # The PID is still owned by this start attempt. A failed status query
+        # must not silently turn a live helper and its descendants into orphans.
+    }
+
+    $taskKillPath = Join-Path ([Environment]::SystemDirectory) "taskkill.exe"
+    $treeCleanupError = $null
+    $killer = $null
+    try {
+        if (-not (Test-Path -LiteralPath $taskKillPath -PathType Leaf)) {
+            throw "Windows taskkill executable not found: $taskKillPath"
+        }
+        $killer = Start-Process `
+            -FilePath $taskKillPath `
+            -ArgumentList @("/PID", $Process.Id.ToString(), "/T", "/F") `
+            -WindowStyle Hidden `
+            -PassThru
+        if (-not $killer.WaitForExit(5000)) {
+            $killer.Kill()
+            [void]$killer.WaitForExit(1000)
+            throw "taskkill timed out for owned process tree $($Process.Id)"
+        }
+        if ($killer.ExitCode -ne 0) {
+            throw "taskkill failed for owned process tree $($Process.Id) with exit code $($killer.ExitCode)"
+        }
+    } catch {
+        $treeCleanupError = $_
+    } finally {
+        if ($null -ne $killer) {
+            try {
+                if (-not $killer.HasExited) {
+                    $killer.Kill()
+                }
+            } catch {
+                # Preserve the primary tree-cleanup result.
+            }
+            $killer.Dispose()
+        }
+    }
+
+    try {
+        if (-not $Process.HasExited) {
+            $Process.Kill()
+        }
+        if (-not $Process.WaitForExit(5000)) {
+            throw "owned process $($Process.Id) did not exit within 5 seconds"
+        }
+    } catch {
+        if ($null -ne $treeCleanupError) {
+            throw "tree cleanup failed ($($treeCleanupError.Exception.Message)); direct cleanup also failed ($($_.Exception.Message))"
+        }
+        throw
+    }
+    if ($null -ne $treeCleanupError) {
+        throw $treeCleanupError
+    }
+}
+
+function Start-TrackedBot {
+    Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+    $botCommand = @(
+        $CondaPath,
+        "run", "-n", $CondaEnvironment,
+        "--no-capture-output",
+        $BotPythonCommand,
+        $MainScript
+    ) + $BotArguments
+    $process = Start-LogPumpedProcess `
+        -CommandArguments $botCommand `
         -WorkingDirectory $BotRoot `
-        -RedirectStandardOutput $BotLog `
-        -RedirectStandardError $BotErrorLog `
-        -PassThru
-    [pscustomobject]@{
-        process_id = $process.Id
-        main_script = $MainScript
-        started_at = (Get-Date).ToUniversalTime().ToString("o")
-    } | ConvertTo-Json | Set-Content -LiteralPath $PidFile -Encoding utf8NoBOM
+        -StandardOutputLog $BotLog `
+        -StandardErrorLog $BotErrorLog
+    try {
+        $record = [pscustomobject]@{
+            process_id = $process.Id
+            main_script = $MainScript
+            log_pump = $LogPumpScript
+            started_at = (Get-Date).ToUniversalTime().ToString("o")
+        } | ConvertTo-Json -Compress
+        Write-Utf8NoBomAtomically -Path $PidFile -Content "$record`n"
+    } catch {
+        $pidCommitError = $_
+        try {
+            Stop-OwnedProcessTree -Process $process
+        } catch {
+            throw "PID commit failed ($($pidCommitError.Exception.Message)); owned process cleanup failed ($($_.Exception.Message))"
+        }
+        throw $pidCommitError
+    }
     return $process
 }
 
@@ -136,21 +348,24 @@ function Test-NapCatRunning {
         return $true
     }
     $expected = [IO.Path]::GetFullPath($NapCatPath)
+    $expectedName = [IO.Path]::GetFileName($expected).Replace("'", "''")
     return @(
-        Get-CimInstance -ClassName Win32_Process -Filter "Name = 'NapCatWinBootMain.exe'" -ErrorAction SilentlyContinue |
+        Get-CimInstance -ClassName Win32_Process -Filter "Name = '$expectedName'" -ErrorAction SilentlyContinue |
             Where-Object { Test-CommandLineContains $_.CommandLine $expected }
     ).Count -gt 0
 }
 
 function Start-NapCat {
-    Rotate-Log $NapCatLog
-    Rotate-Log $NapCatErrorLog
-    Start-Process `
-        -FilePath $NapCatPath `
-        -ArgumentList "1000000001" `
+    $napCatCommand = @($NapCatPath)
+    if ($NapCatAccount) {
+        $napCatCommand += $NapCatAccount
+    }
+    $napCatCommand += $NapCatArguments
+    Start-LogPumpedProcess `
+        -CommandArguments $napCatCommand `
         -WorkingDirectory (Split-Path -Parent $NapCatPath) `
-        -RedirectStandardOutput $NapCatLog `
-        -RedirectStandardError $NapCatErrorLog | Out-Null
+        -StandardOutputLog $NapCatLog `
+        -StandardErrorLog $NapCatErrorLog | Out-Null
 }
 
 [bool]$createdNew = $false

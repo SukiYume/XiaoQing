@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.bounded_http import HttpStatusError
 from core.onebot import (
     _CONNECT_SIGNATURE_CACHE,
     OneBotHttpSender,
@@ -20,6 +21,26 @@ from core.onebot import (
     _summarize_event,
     _verify_token_auth,
 )
+
+
+@pytest.fixture(autouse=True)
+def bounded_transport_adapter(monkeypatch):
+    """Adapt the historical OneBot response mocks to bounded JSON bytes."""
+
+    async def request(session, method, url, **kwargs):
+        request_kwargs = dict(kwargs.get("request_kwargs") or {})
+        response_cm = session.post(
+            url,
+            headers=kwargs.get("headers"),
+            **request_kwargs,
+        )
+        async with response_cm as response:
+            status = int(response.status)
+            if status not in kwargs.get("success_statuses", {200}):
+                raise HttpStatusError(status)
+            return json.dumps(await response.json()).encode("utf-8")
+
+    monkeypatch.setattr("core.onebot.aiohttp_request_bounded", request)
 
 
 async def _wait_for_ws_action_request(mock_ws: AsyncMock) -> dict[str, Any]:
@@ -295,7 +316,7 @@ class TestOneBotHttpSender:
 
         result = await sender.request_action(action)
 
-        assert result is response_envelope
+        assert result == response_envelope
         assert action == {"action": "get_msg", "params": {"message_id": 7}}
         mock_session.post.assert_called_once_with(
             "http://localhost:3000/get_msg",

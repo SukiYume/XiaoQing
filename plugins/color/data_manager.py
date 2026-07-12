@@ -8,6 +8,7 @@ import threading
 from typing import Any
 
 from core.plugin_base import load_json, write_json, ensure_dir
+from core.public_errors import public_error_message
 
 _CUSTOM_COLORS_LOCK = threading.RLock()
 
@@ -56,7 +57,12 @@ def load_colors(context) -> list[dict[str, Any]]:
         else:
             context.logger.warning(f"内置颜色库文件不存在: {builtin_file}")
     except Exception as exc:
-        context.logger.error(f"加载内置颜色库失败: {exc}", exc_info=True)
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="color.load_builtin",
+        )
     
     # 加载用户自定义颜色
     try:
@@ -68,7 +74,12 @@ def load_colors(context) -> list[dict[str, Any]]:
             colors.extend(custom_colors)
             context.logger.debug(f"加载自定义颜色: {len(custom_colors)} 个")
     except Exception as exc:
-        context.logger.error(f"加载自定义颜色失败: {exc}", exc_info=True)
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="color.load_custom",
+        )
     
     return colors
 

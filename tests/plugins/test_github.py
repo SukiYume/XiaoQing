@@ -1,14 +1,18 @@
 """
 github 插件单元测试
 """
-import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
+
 import aiohttp
+import pytest
+
+from core.safe_http import SafeHttpResponse
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 import importlib.util
+
 spec = importlib.util.spec_from_file_location("github_main", ROOT / "plugins" / "github" / "main.py")
 github = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(github)
@@ -82,6 +86,16 @@ SAMPLE_TRENDING_HTML = """
 """
 
 
+def _html_response(html: str) -> SafeHttpResponse:
+    return SafeHttpResponse(
+        url="https://github.com/trending?since=daily",
+        status=200,
+        body=html.encode("utf-8"),
+        charset="utf-8",
+        headers={"Content-Type": "text/html; charset=utf-8"},
+    )
+
+
 # ============================================================
 # Test Handle
 # ============================================================
@@ -148,25 +162,12 @@ class TestFetchTrending:
     @pytest.mark.asyncio
     async def test_fetch_trending_success(self, mock_context, mock_event):
         """测试成功获取趋势"""
-        # 创建 mock HTTP session
-        class MockResponse:
-            status = 200
-            async def text(self):
-                return SAMPLE_TRENDING_HTML
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
-
-        result = await github._fetch_trending("daily", mock_context)
+        with patch.object(
+            github,
+            "fetch_public_html",
+            new=AsyncMock(return_value=_html_response(SAMPLE_TRENDING_HTML)),
+        ):
+            result = await github._fetch_trending("daily", mock_context)
         assert result is not None
         result_text = str(result)
         assert "octocat/Hello-World" in result_text or "torvalds/linux" in result_text
@@ -174,67 +175,34 @@ class TestFetchTrending:
     @pytest.mark.asyncio
     async def test_fetch_trending_http_error(self, mock_context, mock_event):
         """测试 HTTP 错误"""
-        class MockResponse:
-            status = 404
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
-
-        result = await github._fetch_trending("daily", mock_context)
+        with patch.object(github, "fetch_public_html", new=AsyncMock(return_value=None)):
+            result = await github._fetch_trending("daily", mock_context)
         assert result is not None
         result_text = str(result)
-        assert "404" in result_text or "HTTP" in result_text
+        assert "无效响应" in result_text
 
     @pytest.mark.asyncio
     async def test_fetch_trending_network_error(self, mock_context, mock_event):
         """测试网络错误"""
-        class MockGetContextManager:
-            async def __aenter__(self):
-                raise aiohttp.ClientError("Connection error")
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
-
-        result = await github._fetch_trending("daily", mock_context)
+        with patch.object(
+            github,
+            "fetch_public_html",
+            new=AsyncMock(side_effect=aiohttp.ClientError("Connection error")),
+        ):
+            result = await github._fetch_trending("daily", mock_context)
         assert result is not None
         result_text = str(result)
-        assert "失败" in result_text or "获取失败" in result_text
+        assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
     @pytest.mark.asyncio
     async def test_fetch_trending_empty_response(self, mock_context, mock_event):
         """测试空响应"""
-        class MockResponse:
-            status = 200
-            async def text(self):
-                return "<html><body></body></html>"
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
-
-        result = await github._fetch_trending("daily", mock_context)
+        with patch.object(
+            github,
+            "fetch_public_html",
+            new=AsyncMock(return_value=_html_response("<html><body></body></html>")),
+        ):
+            result = await github._fetch_trending("daily", mock_context)
         assert result is not None
         result_text = str(result)
         assert "未找到" in result_text or "没有" in result_text
@@ -242,26 +210,12 @@ class TestFetchTrending:
     @pytest.mark.asyncio
     async def test_fetch_trending_invalid_time_range(self, mock_context, mock_event):
         """测试无效时间范围（默认为 daily）"""
-        class MockResponse:
-            status = 200
-            async def text(self):
-                return SAMPLE_TRENDING_HTML
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
-
-        # 无效的时间范围应该默认为 daily
-        result = await github._fetch_trending("invalid", mock_context)
+        fetch = AsyncMock(return_value=_html_response(SAMPLE_TRENDING_HTML))
+        with patch.object(github, "fetch_public_html", new=fetch):
+            # 无效的时间范围应该默认为 daily
+            result = await github._fetch_trending("invalid", mock_context)
         assert result is not None
+        assert fetch.await_args.args[0].endswith("since=daily")
 
 
 # ============================================================
@@ -468,66 +422,37 @@ class TestErrorHandling:
             result = await github.handle("github", "daily", mock_event, mock_context)
             assert result is not None
             result_text = str(result)
-            assert "出错" in result_text or "error" in result_text.lower()
+            assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
     @pytest.mark.asyncio
     async def test_timeout_error(self, mock_context, mock_event):
         """测试超时错误"""
         import asyncio
 
-        class MockGetContextManager:
-            async def __aenter__(self):
-                raise asyncio.TimeoutError("Request timeout")
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
-
-        result = await github._fetch_trending("daily", mock_context)
+        with patch.object(
+            github,
+            "fetch_public_html",
+            new=AsyncMock(side_effect=asyncio.TimeoutError("Request timeout")),
+        ):
+            result = await github._fetch_trending("daily", mock_context)
         assert result is not None
         result_text = str(result)
-        assert "失败" in result_text or "timeout" in result_text.lower() or "获取失败" in result_text
+        assert "XQ-PLUGIN-UNEXPECTED" in result_text
 
     @pytest.mark.asyncio
     async def test_fetch_trending_sets_request_timeout(self, mock_context):
         captured = {}
 
-        class MockResponse:
-            status = 200
+        async def fake_fetch(*args, **kwargs):
+            captured.update(kwargs)
+            return _html_response(SAMPLE_TRENDING_HTML)
 
-            async def text(self):
-                return """
-                <article class="Box-row">
-                    <h2><a href="/user/repo">user/repo</a></h2>
-                    <p>Description</p>
-                    <span itemprop="programmingLanguage">Python</span>
-                    <a href="/user/repo/stargazers">100 stars</a>
-                    <span class="d-inline-block float-sm-right">10 stars today</span>
-                </article>
-                """
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                captured.update(kwargs)
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
-
-        result = await github._fetch_trending("daily", mock_context)
+        with patch.object(github, "fetch_public_html", new=fake_fetch):
+            result = await github._fetch_trending("daily", mock_context)
 
         assert result is not None
-        assert captured["timeout"] == 15
+        assert captured["timeout_seconds"] == 15
+        assert captured["allowed_hosts"] == {"github.com"}
 
 
 # ============================================================

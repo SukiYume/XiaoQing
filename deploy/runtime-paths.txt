@@ -8,6 +8,7 @@ main.py
 plugins
 pyproject.toml
 requirements.txt
-requirements/python-3.13.lock
+requirements/python-3.13-runtime.lock
 run-bot.vbs
 scripts/run-bot-monitor.ps1
+scripts/run_process_with_rotating_logs.py

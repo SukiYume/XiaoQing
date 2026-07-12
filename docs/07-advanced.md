@@ -507,7 +507,7 @@ smalltalk 回落并调用 handle_smalltalk()
 }
 ```
 
-日志会包含收到的消息、命令匹配、URL 处理、会话处理、群聊静音跳过 smalltalk 等信息。
+日志只包含消息类型/长度/不可逆指纹、命令匹配结果、URL 主机类别、会话状态和群聊静音等分发元数据；不会包含消息正文、命令参数、URL/path、Prompt、模型响应或认证信息。`DEBUG` 也是普通日志，不能用来绕过这条边界。
 
 ---
 
@@ -857,16 +857,27 @@ result = await run_sync(blocking_function, arg1, arg2)
 ### 2. 在插件中打印详细信息
 
 ```python
+from core.sensitive_audit import summarize_sensitive
+
 async def handle(command: str, args: str, event: Dict, context) -> List:
-    context.logger.debug(f"收到事件: {event}")
-    context.logger.debug(f"命令: {command}, 参数: {args}")
-    
+    payload = summarize_sensitive(args)
+    context.logger.debug(
+        "plugin request command=%s payload_length=%d payload_bytes=%d "
+        "payload_fingerprint=%s",
+        command,
+        payload.length,
+        payload.byte_length,
+        payload.fingerprint,
+    )
+
     # 处理逻辑
     result = ...
-    
-    context.logger.debug(f"返回结果: {result}")
+
+    context.logger.debug("plugin request completed command=%s", command)
     return result
 ```
+
+不要打印 `event`、`args`、`result` 的原文或任意截断前缀；它们可能包含聊天内容、管理员命令、密码、Token、路径或模型生成内容。需要关联一次执行时使用 `request_id` 和 `summarize_sensitive()` 的进程内 HMAC 指纹。
 
 ### 3. 使用 test.ipynb
 

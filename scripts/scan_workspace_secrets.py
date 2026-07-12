@@ -295,12 +295,20 @@ def scan_report(
     *,
     mode: str = "workspace",
     allowlist_path: Path | None = None,
+    use_default_allowlist: bool = True,
 ) -> ScanReport:
     root = root.resolve()
-    default_allowlist = root / DEFAULT_ALLOWLIST
-    effective_allowlist = allowlist_path.resolve() if allowlist_path else default_allowlist
+    effective_allowlist = (
+        allowlist_path.resolve()
+        if allowlist_path is not None
+        else (root / DEFAULT_ALLOWLIST if use_default_allowlist else None)
+    )
     entries, errors = _load_allowlist(effective_allowlist)
-    if allowlist_path is not None and not effective_allowlist.exists():
+    if (
+        allowlist_path is not None
+        and effective_allowlist is not None
+        and not effective_allowlist.exists()
+    ):
         errors.append(f"explicit allowlist does not exist: {effective_allowlist.name}")
     findings = sorted(
         (
@@ -331,12 +339,14 @@ def scan(
     *,
     mode: str = "workspace",
     allowlist_path: Path | None = None,
+    use_default_allowlist: bool = True,
 ) -> list[str]:
     """Compatibility wrapper returning redacted, human-readable problems."""
     return scan_report(
         Path(root),
         mode=mode,
         allowlist_path=allowlist_path,
+        use_default_allowlist=use_default_allowlist,
     ).rendered_problems()
 
 

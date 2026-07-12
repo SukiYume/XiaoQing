@@ -49,6 +49,7 @@ from .plugin_execution import (
     call_plugin_callback,
     invoke_loaded_plugin,
 )
+from .public_errors import public_error_message, public_error_response
 from .router import CommandRouter
 from .safe_http import UnsafeUrlError, validate_public_url
 
@@ -60,28 +61,30 @@ logger = logging.getLogger(__name__)
 _ADMIN_SESSION_PLUGINS = frozenset({"codex", "shell", "jupyter", "qingssh", "minecraft"})
 
 
-
 # ============================================================
 # 数据类
 # ============================================================
 
+
 @dataclass
 class MessageContext:
     """消息上下文，封装消息相关的所有信息"""
-    request_id: str                 # 请求追踪 ID
-    text: str                       # 原始文本
-    clean_text: str                 # 去除前缀后的文本
-    user_id: int | None             # 用户 ID
-    group_id: int | None            # 群 ID (私聊为 None)
-    is_private: bool                # 是否私聊
-    has_bot_name: bool              # 是否包含 bot_name（任意位置）
-    has_prefix: bool                # 是否"指向 bot"：/开头 OR bot_name OR @me（任意位置）
-    has_command_prefix: bool        # 是否以命令前缀（默认 "/"）开头
-    is_only_bot_name: bool          # 是否只叫 bot_name
-    is_at_me: bool                  # 是否 @ 了机器人
-    is_url_only: bool               # clean_text 严格匹配 ^https?://\S+$
-    event: dict[str, Any]           # 原始事件
+
+    request_id: str  # 请求追踪 ID
+    text: str  # 原始文本
+    clean_text: str  # 去除前缀后的文本
+    user_id: int | None  # 用户 ID
+    group_id: int | None  # 群 ID (私聊为 None)
+    is_private: bool  # 是否私聊
+    has_bot_name: bool  # 是否包含 bot_name（任意位置）
+    has_prefix: bool  # 是否"指向 bot"：/开头 OR bot_name OR @me（任意位置）
+    has_command_prefix: bool  # 是否以命令前缀（默认 "/"）开头
+    is_only_bot_name: bool  # 是否只叫 bot_name
+    is_at_me: bool  # 是否 @ 了机器人
+    is_url_only: bool  # clean_text 严格匹配 ^https?://\S+$
+    event: dict[str, Any]  # 原始事件
     cached_session: Session | None = None  # 缓存的会话对象（避免 TOCTOU 竞争）
+
 
 class MessageParser:
     """解析消息事件并构建 MessageContext"""
@@ -161,14 +164,16 @@ class MessageParser:
             event=event,
         )
 
+
 # ============================================================
 # Dispatcher 类
 # ============================================================
 
+
 class Dispatcher:
     """
     消息分发器
-    
+
     负责接收 OneBot 消息事件并路由到对应的处理器：
     - 命令处理: 匹配命令触发词并执行对应 handler
     - 会话处理: 多轮对话支持
@@ -192,7 +197,7 @@ class Dispatcher:
     ) -> None:
         """
         初始化分发器
-        
+
         Args:
             router: 命令路由器
             config_provider: 配置提供者
@@ -217,7 +222,7 @@ class Dispatcher:
         else:
             self.parser = parser
             self.refresh_prefix_cache()
-        
+
         # 静音管理：{group_id: unmute_time}
         self._muted_groups: dict[int, float] = {}
 
@@ -228,10 +233,10 @@ class Dispatcher:
     async def handle_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         """
         处理事件（入口方法，带并发控制）
-        
+
         Args:
             event: OneBot 事件
-            
+
         Returns:
             OneBot 消息段列表
         """
@@ -271,7 +276,7 @@ class Dispatcher:
     def mute_group(self, group_id: int, duration_minutes: float) -> None:
         """
         让机器人在指定群静音一段时间
-        
+
         静音期间：
         - 跳过 smalltalk 回落
         - 仍响应命令、只喊名字、主动 @ 和活跃会话
@@ -292,17 +297,17 @@ class Dispatcher:
         """检查群是否在静音中"""
         if group_id is None:
             return False  # 私聊不受静音影响
-        
+
         if group_id not in self._muted_groups:
             return False
-        
+
         # 检查是否过期
         unmute_time = self._muted_groups[group_id]
         if self.clock.now() >= unmute_time:
             del self._muted_groups[group_id]
             logger.info("Group %s mute expired", group_id)
             return False
-        
+
         return True
 
     def get_mute_remaining(self, group_id: int) -> float:
@@ -336,11 +341,7 @@ class Dispatcher:
         # Step A: process gate
         config = self.config_provider.config
         require_bot_name = config.get("require_bot_name_in_group", True)
-        should_process = (
-            ctx.is_private
-            or (not require_bot_name)
-            or ctx.has_prefix
-        )
+        should_process = ctx.is_private or (not require_bot_name) or ctx.has_prefix
         session_checked = False
         if (
             not should_process
@@ -434,10 +435,12 @@ class Dispatcher:
                 cmd_name = ctx.clean_text.split()[0]
                 safe_cmd = Dispatcher._truncate_text(cmd_name, max_len=20)
                 logger.info("[%s] Unknown command: '%s'", ctx.request_id, cmd_name)
-                return [{
-                    "type": "text",
-                    "data": {"text": f"❓ 未知命令: /{safe_cmd}\n💡 输入 /help 查看可用命令"},
-                }]
+                return [
+                    {
+                        "type": "text",
+                        "data": {"text": f"❓ 未知命令: /{safe_cmd}\n💡 输入 /help 查看可用命令"},
+                    }
+                ]
 
         # Step F: session continuation
         if (
@@ -537,19 +540,29 @@ class Dispatcher:
             logger.info("[%s] Command completed", ctx.request_id)
             if self.metrics:
                 await self.metrics.record_plugin_execution(
-                    spec.plugin, spec.name, time.perf_counter() - start_time, is_error=False,
+                    spec.plugin,
+                    spec.name,
+                    time.perf_counter() - start_time,
+                    is_error=False,
                 )
             return result
         except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
             logger.info("[%s] Command unavailable: %s", ctx.request_id, exc)
             return [{"type": "text", "data": {"text": "⚠️ 插件暂时不可用，请稍后重试"}}]
         except Exception as exc:
-            logger.exception("[%s] Command failed: %s", ctx.request_id, exc)
             if self.metrics:
                 await self.metrics.record_plugin_execution(
-                    spec.plugin, spec.name, time.perf_counter() - start_time, is_error=True,
+                    spec.plugin,
+                    spec.name,
+                    time.perf_counter() - start_time,
+                    is_error=True,
                 )
-            return [{"type": "text", "data": {"text": "⚠️ 命令执行出错，请联系管理员查看日志"}}]
+            return public_error_response(
+                context,
+                exc,
+                logger=logger,
+                component=f"dispatcher.command.{spec.plugin}.{spec.name}",
+            )
 
     # ============================================================
     # 会话处理
@@ -558,7 +571,7 @@ class Dispatcher:
     async def _try_handle_session(self, ctx: MessageContext) -> list[dict[str, Any]] | None:
         """
         尝试处理活跃会话
-        
+
         Returns:
             会话处理结果，如果没有活跃会话返回 None
         """
@@ -569,95 +582,134 @@ class Dispatcher:
             return None
 
         user_id = ctx.user_id
+        session_changed = object()
 
-        async def handle_active_session(session: Session) -> list[dict[str, Any]] | None:
-            """Run the full continuation inside SessionManager's key transaction."""
+        # A session can be replaced between this routing snapshot and the
+        # transaction. Retry once instead of invoking it through a stale gate.
+        for _attempt in range(2):
+            observed = await self.session_manager.peek(user_id, ctx.group_id)
+            if observed is None:
+                return None
+            expected_plugin_name = observed.plugin_name
+            plugin = self.plugin_registry.get(expected_plugin_name)
 
-            async def close_plugin_session() -> None:
-                plugin = self.plugin_registry.get(session.plugin_name)
-                if not plugin or not hasattr(plugin.module, "close_session"):
-                    return
-                close_context = self._build_event_context(session.plugin_name, ctx)
-                try:
-                    await call_plugin_callback(
-                        plugin.module.close_session,
-                        ctx.event,
-                        close_context,
-                        session,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[%s] Session close hook failed for %s: %s",
-                        ctx.request_id,
-                        session.plugin_name,
-                        exc,
-                    )
+            async def handle_active_session(
+                session: Session,
+            ) -> list[dict[str, Any]] | object | None:
+                """Run one continuation under gate -> per-key-lock ordering."""
 
-            logger.info(
-                "[%s] Session active: plugin=%s",
-                ctx.request_id,
-                session.plugin_name,
-            )
+                if session.plugin_name != expected_plugin_name:
+                    return session_changed
 
-            if (
-                session.plugin_name in _ADMIN_SESSION_PLUGINS
-                and not self.admin_check.is_admin(user_id)
-            ):
-                await close_plugin_session()
-                await self.session_manager.delete(user_id, ctx.group_id)
-                logger.warning(
-                    "[%s] Revoked privileged session plugin=%s user=%s",
+                async def close_plugin_session() -> None:
+                    if not plugin or not hasattr(plugin.module, "close_session"):
+                        return
+                    close_context = self._build_event_context(expected_plugin_name, ctx)
+                    try:
+                        await call_plugin_callback(
+                            plugin.module.close_session,
+                            ctx.event,
+                            close_context,
+                            session,
+                        )
+                    except Exception as exc:
+                        public_error_message(
+                            close_context,
+                            exc,
+                            logger=logger,
+                            component=f"dispatcher.session_close.{expected_plugin_name}",
+                        )
+
+                logger.info(
+                    "[%s] Session active: plugin=%s",
                     ctx.request_id,
-                    session.plugin_name,
-                    user_id,
+                    expected_plugin_name,
                 )
-                return [{"type": "text", "data": {"text": "权限已变更，高权限会话已关闭"}}]
 
-            # This re-enters the key lock safely, so deletion cannot race with
-            # another incoming continuation or expiry cleanup.
-            if ctx.text.strip().lower() in constants.EXIT_COMMANDS_SET:
-                await close_plugin_session()
-                await self.session_manager.delete(user_id, ctx.group_id)
-                logger.info("[%s] Session exited by user", ctx.request_id)
-                return [{"type": "text", "data": {"text": "已退出当前对话"}}]
+                if expected_plugin_name in _ADMIN_SESSION_PLUGINS and not self.admin_check.is_admin(
+                    user_id
+                ):
+                    await close_plugin_session()
+                    await self.session_manager.delete(user_id, ctx.group_id)
+                    logger.warning(
+                        "[%s] Revoked privileged session plugin=%s user=%s",
+                        ctx.request_id,
+                        expected_plugin_name,
+                        user_id,
+                    )
+                    return [{"type": "text", "data": {"text": "权限已变更，高权限会话已关闭"}}]
 
-            context = self._build_event_context(session.plugin_name, ctx)
-            try:
-                plugin = self.plugin_registry.get(session.plugin_name)
-                if plugin and hasattr(plugin.module, "handle_session"):
-                    async def run_session() -> list[dict[str, Any]]:
+                # end_session()/delete() re-enters this same key from the same
+                # operation task, so it cannot race another continuation.
+                if ctx.text.strip().lower() in constants.EXIT_COMMANDS_SET:
+                    await close_plugin_session()
+                    await self.session_manager.delete(user_id, ctx.group_id)
+                    logger.info("[%s] Session exited by user", ctx.request_id)
+                    return [{"type": "text", "data": {"text": "已退出当前对话"}}]
+
+                context = self._build_event_context(expected_plugin_name, ctx)
+                try:
+                    if plugin and hasattr(plugin.module, "handle_session"):
                         return await call_plugin_callback(
                             plugin.module.handle_session,
-                            ctx.clean_text, ctx.event, context, session
+                            ctx.clean_text,
+                            ctx.event,
+                            context,
+                            session,
                         )
-
-                    return await invoke_loaded_plugin(plugin, run_session)
-                if plugin and hasattr(plugin.module, "handle"):
-                    async def run_session_fallback() -> list[dict[str, Any]]:
+                    if plugin and hasattr(plugin.module, "handle"):
                         return await call_plugin_callback(
                             plugin.module.handle,
-                            "__session__", ctx.clean_text, ctx.event, context
+                            "__session__",
+                            ctx.clean_text,
+                            ctx.event,
+                            context,
                         )
+                except (
+                    PluginExecutionClosed,
+                    PluginExecutionTimeout,
+                    PluginExecutionUnavailable,
+                ) as exc:
+                    logger.info("[%s] Session unavailable: %s", ctx.request_id, exc)
+                    return [{"type": "text", "data": {"text": "⚠️ 会话插件暂时不可用，请稍后重试"}}]
+                except Exception as exc:
+                    response = public_error_response(
+                        context,
+                        exc,
+                        logger=logger,
+                        component=f"dispatcher.session.{expected_plugin_name}",
+                    )
+                    await close_plugin_session()
+                    await self.session_manager.delete(user_id, ctx.group_id)
+                    return response
+                return None
 
-                    return await invoke_loaded_plugin(plugin, run_session_fallback)
-            except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
+            async def run_transaction() -> list[dict[str, Any]] | object | None:
+                return await self.session_manager.update(
+                    user_id,
+                    ctx.group_id,
+                    handle_active_session,
+                )
+
+            try:
+                if plugin is not None:
+                    result = await invoke_loaded_plugin(plugin, run_transaction)
+                else:
+                    result = await run_transaction()
+            except (
+                PluginExecutionClosed,
+                PluginExecutionTimeout,
+                PluginExecutionUnavailable,
+            ) as exc:
                 logger.info("[%s] Session unavailable: %s", ctx.request_id, exc)
                 return [{"type": "text", "data": {"text": "⚠️ 会话插件暂时不可用，请稍后重试"}}]
-            except Exception as exc:
-                logger.exception("[%s] Session handler failed: %s", ctx.request_id, exc)
-                await close_plugin_session()
-                await self.session_manager.delete(user_id, ctx.group_id)
-                return [{"type": "text", "data": {"text": "⚠️ 对话处理出错，请联系管理员查看日志"}}]
+            if result is session_changed:
+                continue
+            if result is None or isinstance(result, list):
+                return result
+            logger.warning("[%s] Session handler returned an invalid result", ctx.request_id)
             return None
-
-        # Do not use ctx.cached_session here: it only serves the pre-routing
-        # gate.  update() re-reads the live entry and locks the whole handler
-        # transaction, preventing a stale Session from being modified.
-        return await self.session_manager.update(
-            user_id,
-            ctx.group_id,
-            handle_active_session,
-        )
+        return None
 
     # ============================================================
     # URL 处理
@@ -677,6 +729,7 @@ class Dispatcher:
         context = self._build_event_context("url_parser", ctx)
 
         try:
+
             async def run_url_parser() -> list[dict[str, Any]]:
                 return await call_plugin_callback(plugin.module.handle_url, url, ctx.event, context)
 
@@ -687,7 +740,12 @@ class Dispatcher:
         except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
             logger.info("[%s] URL parser unavailable: %s", ctx.request_id, exc)
         except Exception as exc:
-            logger.error("[%s] URL handling failed: %s", ctx.request_id, exc)
+            public_error_message(
+                context,
+                exc,
+                logger=logger,
+                component="dispatcher.url_parser",
+            )
 
         return None
 
@@ -786,6 +844,7 @@ class Dispatcher:
         if not plugin or not hasattr(plugin.module, method_name):
             return None
 
+        context = None
         try:
             context = self._build_event_context(provider, ctx)
             method = getattr(plugin.module, method_name)
@@ -796,11 +855,20 @@ class Dispatcher:
             result = await invoke_loaded_plugin(plugin, run_provider)
             return result if result else []
         except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable) as exc:
-            logger.info("%s unavailable for plugin %s: %s", method_name, provider, exc)
+            logger.info(
+                "%s unavailable for plugin %s error_type=%s",
+                method_name,
+                provider,
+                type(exc).__name__,
+            )
             return None
         except Exception as exc:
-            label = "Fallback " if fallback else ""
-            logger.warning("%s%s failed: %s", label, method_name, exc)
+            public_error_message(
+                context or ctx,
+                exc,
+                logger=logger,
+                component=("dispatcher.fallback_provider" if fallback else "dispatcher.provider"),
+            )
             return None
 
     # ============================================================

@@ -5,6 +5,8 @@ import logging
 import re
 from typing import Any
 
+from core.public_errors import public_error_message
+
 logger = logging.getLogger(__name__)
 
 _ARXIV_ABS_LINK_RE = re.compile(r"https://arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v\d+)?")
@@ -17,48 +19,11 @@ def extract_arxiv_links(text: str) -> list[str]:
     return list(dict.fromkeys(links))
 
 
-def _default_group_id(context: Any) -> int | None:
-    current = getattr(context, "current_group_id", None)
-    if current:
-        return int(current)
-    default_groups = []
-    if hasattr(context, "default_groups"):
-        try:
-            default_groups = list(context.default_groups())
-        except Exception:
-            default_groups = []
-    if not default_groups:
-        config = getattr(context, "config", {}) or {}
-        if isinstance(config, dict):
-            default_groups = list(config.get("default_group_ids", []) or [])
-    if len(default_groups) == 1:
-        return int(default_groups[0])
-    return None
-
-
-def _resolve_delivery_target(
-    context: Any,
-    *,
-    user_id: int | None,
-    group_id: int | None,
-) -> tuple[int | None, int | None]:
-    """Resolve the sidecar target without confusing a private chat with a scheduler run."""
-    capabilities = getattr(context, "capabilities", None)
-    if capabilities is not None and getattr(capabilities, "is_system", False):
-        if user_id is None and group_id is None:
-            return None, _default_group_id(context)
-        return user_id, group_id
-    effective_user_id = user_id if user_id is not None else getattr(context, "current_user_id", None)
-    return effective_user_id, group_id
-
-
 def schedule_codex_summary_from_filter_result(
     context: Any,
     *,
     date: str,
     filter_text: str,
-    user_id: int | None,
-    group_id: int | None,
 ) -> asyncio.Task | None:
     links = extract_arxiv_links(filter_text)
     logger.info(
@@ -70,8 +35,6 @@ def schedule_codex_summary_from_filter_result(
         context,
         date=date,
         links=links,
-        user_id=user_id,
-        group_id=group_id,
     )
 
 
@@ -80,8 +43,6 @@ def schedule_codex_summary(
     *,
     date: str,
     links: list[str],
-    user_id: int | None,
-    group_id: int | None,
 ) -> asyncio.Task | None:
     if not links:
         logger.info("skip Codex arXiv summary enqueue for %s: no links", date)
@@ -92,30 +53,33 @@ def schedule_codex_summary(
 
     async def _runner() -> None:
         try:
-            target_user_id, target_group_id = _resolve_delivery_target(
-                context,
-                user_id=user_id,
-                group_id=group_id,
-            )
-
             logger.info(
-                "enqueue Codex arXiv summary sidecar: date=%s links=%d user=%s group=%s",
+                "enqueue Codex arXiv summary sidecar: date=%s links=%d targets=%d",
                 date,
                 len(links),
-                target_user_id,
-                target_group_id,
+                len(tuple(getattr(getattr(context, "principal", None), "delivery_targets", ()))),
             )
-            result = await context.call_plugin(
-                "codex",
-                "enqueue_or_replay_arxiv_summary",
+            capabilities = getattr(context, "capabilities", None)
+            service = (
+                getattr(capabilities, "codex_arxiv_summary", None)
+                if capabilities is not None
+                else None
+            )
+            if service is None:
+                logger.info("skip Codex arXiv summary enqueue: capability unavailable")
+                return
+            result = await service.enqueue_or_replay(
                 date=date,
                 links=links,
-                user_id=target_user_id,
-                group_id=target_group_id,
             )
             logger.info("Codex arXiv summary sidecar enqueue result: %s", result)
         except Exception as exc:
-            logger.exception("failed to enqueue Codex arXiv summary for %s: %s", date, exc)
+            public_error_message(
+                context,
+                exc,
+                logger=logger,
+                component="arxiv_filter.codex_enqueue",
+            )
 
     try:
         task = asyncio.create_task(_runner())
@@ -126,5 +90,10 @@ def schedule_codex_summary(
             task.add_done_callback(tasks.discard)
         return task
     except Exception as exc:
-        logger.exception("failed to schedule Codex arXiv summary for %s: %s", date, exc)
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="arxiv_filter.codex_schedule",
+        )
         return None

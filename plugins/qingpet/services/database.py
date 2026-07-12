@@ -19,6 +19,22 @@ from ..utils.time import utc_now
 logger = logging.getLogger(__name__)
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SAFE_OPERATION_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_SAFE_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
+
+
+def _log_database_failure(operation: str, exc: BaseException) -> None:
+    """Record a stable failure marker without database data or exception text."""
+
+    safe_operation = operation if _SAFE_OPERATION_RE.fullmatch(operation) else "unknown"
+    error_type = type(exc).__name__
+    if not _SAFE_ERROR_TYPE_RE.fullmatch(error_type):
+        error_type = "Exception"
+    logger.error(
+        "QingPet database operation failed operation=%s error_type=%s",
+        safe_operation,
+        error_type,
+    )
 
 
 @dataclass(frozen=True)
@@ -574,8 +590,8 @@ class Database:
                 ))
                 conn.commit()
                 return cursor.rowcount == 1
-            except Exception as e:
-                logger.error(f"Failed to create user: {e}")
+            except Exception as exc:
+                _log_database_failure("create_user", exc)
                 return False
 
     def get_user(self, user_id: str, group_id: int) -> Optional[User]:
@@ -587,8 +603,8 @@ class Database:
                     (user_id, group_id))
                 row = cursor.fetchone()
                 return self._row_to_user(row) if row else None
-            except Exception as e:
-                logger.error(f"Failed to get user: {e}")
+            except Exception as exc:
+                _log_database_failure("get_user", exc)
                 return None
 
     def update_user(self, user: User) -> bool:
@@ -626,8 +642,8 @@ class Database:
                 ))
                 conn.commit()
                 return cursor.rowcount == 1
-            except Exception as e:
-                logger.error(f"Failed to update user: {e}")
+            except Exception as exc:
+                _log_database_failure("update_user", exc)
                 return False
 
     # ──────────────────── Pet CRUD ────────────────────
@@ -656,8 +672,8 @@ class Database:
                 ))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to create pet: {e}")
+            except Exception as exc:
+                _log_database_failure("create_pet", exc)
                 return False
 
     def get_pet(self, user_id: str, group_id: int) -> Optional[Pet]:
@@ -669,8 +685,8 @@ class Database:
                     (user_id, group_id))
                 row = cursor.fetchone()
                 return self._row_to_pet(row) if row else None
-            except Exception as e:
-                logger.error(f"Failed to get pet: {e}")
+            except Exception as exc:
+                _log_database_failure("get_pet", exc)
                 return None
 
     def update_pet(self, pet: Pet) -> bool:
@@ -704,8 +720,8 @@ class Database:
                 ))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to update pet: {e}")
+            except Exception as exc:
+                _log_database_failure("update_pet", exc)
                 return False
 
     def delete_pet(self, user_id: str, group_id: int) -> bool:
@@ -718,8 +734,8 @@ class Database:
                 )
                 conn.commit()
                 return cursor.rowcount == 1
-            except Exception as e:
-                logger.error(f"Failed to delete pet: {e}")
+            except Exception as exc:
+                _log_database_failure("delete_pet", exc)
                 return False
 
     def get_all_pets_in_group(self, group_id: int) -> List[Pet]:
@@ -728,8 +744,8 @@ class Database:
                 conn = self._get_connection()
                 cursor = conn.execute("SELECT * FROM pets WHERE group_id = ?", (group_id,))
                 return [self._row_to_pet(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get pets in group: {e}")
+            except Exception as exc:
+                _log_database_failure("get_pets_by_group", exc)
                 return []
 
     def get_all_pets(self) -> List[Pet]:
@@ -738,8 +754,8 @@ class Database:
                 conn = self._get_connection()
                 cursor = conn.execute("SELECT * FROM pets")
                 return [self._row_to_pet(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get all pets: {e}")
+            except Exception as exc:
+                _log_database_failure("get_all_pets", exc)
                 return []
 
     def get_enabled_group_decay_map(self) -> Dict[int, float]:
@@ -750,8 +766,8 @@ class Database:
                     "SELECT group_id, decay_multiplier FROM group_configs WHERE enabled = 1"
                 )
                 return {int(row["group_id"]): float(row["decay_multiplier"]) for row in cursor.fetchall()}
-            except Exception as e:
-                logger.error(f"Failed to get enabled group decay map: {e}")
+            except Exception as exc:
+                _log_database_failure("get_enabled_group_decay_map", exc)
                 return {}
 
     def get_pets_by_user(self, user_id: str) -> List[Pet]:
@@ -763,8 +779,8 @@ class Database:
                     (user_id,),
                 )
                 return [self._row_to_pet(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get pets by user: {e}")
+            except Exception as exc:
+                _log_database_failure("get_pets_by_user", exc)
                 return []
 
     def increment_all_pet_ages(self) -> int:
@@ -775,8 +791,8 @@ class Database:
                 cursor = conn.execute("UPDATE pets SET age = age + 1")
                 conn.commit()
                 return cursor.rowcount
-            except Exception as e:
-                logger.error(f"Failed to increment pet ages: {e}")
+            except Exception as exc:
+                _log_database_failure("increment_pet_ages", exc)
                 return 0
 
     def increment_pet_ages_for_group(self, group_id: int) -> int:
@@ -788,8 +804,8 @@ class Database:
                 )
                 conn.commit()
                 return cursor.rowcount
-            except Exception:
-                logger.exception("Failed to increment group pet ages")
+            except Exception as exc:
+                _log_database_failure("increment_group_pet_ages", exc)
                 return 0
 
     def like_pet(self, user_id: str, group_id: int) -> bool:
@@ -802,8 +818,8 @@ class Database:
                 )
                 conn.commit()
                 return cursor.rowcount == 1
-            except Exception as e:
-                logger.error(f"Failed to like pet: {e}")
+            except Exception as exc:
+                _log_database_failure("like_pet", exc)
                 return False
 
     # ──────────────────── Inventory CRUD ────────────────────
@@ -823,8 +839,8 @@ class Database:
                              (user_id, group_id, json.dumps({})))
                 conn.commit()
                 return Inventory(user_id=user_id, group_id=group_id, items={})
-            except Exception as e:
-                logger.error(f"Failed to get/create inventory: {e}")
+            except Exception as exc:
+                _log_database_failure("get_or_create_inventory", exc)
                 return Inventory(user_id=user_id, group_id=group_id, items={})
 
     def update_inventory(self, inventory: Inventory) -> bool:
@@ -837,8 +853,8 @@ class Database:
                 )
                 conn.commit()
                 return cursor.rowcount == 1
-            except Exception as e:
-                logger.error(f"Failed to update inventory: {e}")
+            except Exception as exc:
+                _log_database_failure("update_inventory", exc)
                 return False
 
     # ──────────────────── Group Config ────────────────────
@@ -878,8 +894,8 @@ class Database:
                 )
                 conn.commit()
                 return default
-            except Exception as e:
-                logger.error(f"Failed to get group config: {e}")
+            except Exception as exc:
+                _log_database_failure("get_group_config", exc)
                 return GroupConfig.default(group_id)
 
     def update_group_config(self, config: GroupConfig) -> bool:
@@ -897,8 +913,8 @@ class Database:
                       json.dumps(config.sensitive_words)))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to update group config: {e}")
+            except Exception as exc:
+                _log_database_failure("update_group_config", exc)
                 return False
 
     # ──────────────────── Plugin Config (CR Fix: 全局配置接入) ────────
@@ -910,8 +926,8 @@ class Database:
                 cursor = conn.execute("SELECT value FROM plugin_configs WHERE key = ?", (key,))
                 row = cursor.fetchone()
                 return row['value'] if row else None
-            except Exception as e:
-                logger.error(f"Failed to get plugin config: {e}")
+            except Exception as exc:
+                _log_database_failure("get_plugin_config", exc)
                 return None
 
     def set_plugin_config(self, key: str, value: str) -> bool:
@@ -921,8 +937,8 @@ class Database:
                 conn.execute("INSERT OR REPLACE INTO plugin_configs (key, value) VALUES (?, ?)", (key, value))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to set plugin config: {e}")
+            except Exception as exc:
+                _log_database_failure("set_plugin_config", exc)
                 return False
 
     # ──────────────────── Operation Logs ────────────────────
@@ -938,8 +954,8 @@ class Database:
                      log.operation_type, log.params, log.result, log.created_at.isoformat()))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to log operation: {e}")
+            except Exception as exc:
+                _log_database_failure("log_operation", exc)
                 return False
 
     def get_operation_logs(self, group_id: int, limit: int = 50) -> List[OperationLog]:
@@ -955,8 +971,8 @@ class Database:
                     params=row['params'], result=row['result'],
                     created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else utc_now()
                 ) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get operation logs: {e}")
+            except Exception as exc:
+                _log_database_failure("get_operation_logs", exc)
                 return []
 
     # ──────────────────── Tasks (CR Fix #10: date范围查询替代LIKE) ────
@@ -985,8 +1001,8 @@ class Database:
                     "SELECT * FROM tasks WHERE user_id = ? AND group_id = ? AND created_date = ?",
                     (user_id, group_id, today))
                 return [dict(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get/create daily tasks: {e}")
+            except Exception as exc:
+                _log_database_failure("get_or_create_daily_tasks", exc)
                 return []
 
     def update_task_progress(self, user_id: str, group_id: int, task_type: str, increment: int = 1) -> bool:
@@ -1009,8 +1025,8 @@ class Database:
                     (increment, user_id, group_id, task_type, today))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to update task progress: {e}")
+            except Exception as exc:
+                _log_database_failure("update_task_progress", exc)
                 return False
 
     def claim_task_reward(self, user_id: str, group_id: int, task_type: str) -> Optional[int]:
@@ -1034,8 +1050,8 @@ class Database:
                     (reward, reward, user_id, group_id))
                 conn.commit()
                 return reward
-            except Exception as e:
-                logger.error(f"Failed to claim task reward: {e}")
+            except Exception as exc:
+                _log_database_failure("claim_task_reward", exc)
                 return None
 
     # ──────────────────── Activities ────────────────────
@@ -1046,8 +1062,8 @@ class Database:
                 conn = self._get_connection()
                 cursor = conn.execute("SELECT * FROM activities WHERE group_id = ? AND is_active = 1", (group_id,))
                 return [dict(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get active activities: {e}")
+            except Exception as exc:
+                _log_database_failure("get_active_activities", exc)
                 return []
 
     def update_activity_progress(self, activity_id: int, increment: int = 1) -> bool:
@@ -1058,8 +1074,8 @@ class Database:
                              (increment, activity_id))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to update activity progress: {e}")
+            except Exception as exc:
+                _log_database_failure("update_activity_progress", exc)
                 return False
 
     # ──────────────────── Message Board ────────────────────
@@ -1073,8 +1089,8 @@ class Database:
                     (group_id, from_user_id, to_user_id, message, utc_now().isoformat()))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to add message: {e}")
+            except Exception as exc:
+                _log_database_failure("add_message", exc)
                 return False
 
     def leave_message_atomic(
@@ -1142,9 +1158,9 @@ class Database:
                     raise RuntimeError("message quota changed during settlement")
                 conn.commit()
                 return LeaveMessageAtomicResult(True, pet_name=str(pet["name"]))
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic pet-board message failed")
+                _log_database_failure("leave_message_atomic", exc)
                 return LeaveMessageAtomicResult(False, "留言失败")
 
     def get_messages(self, to_user_id: str, group_id: int, limit: int = 10) -> List[Dict]:
@@ -1155,8 +1171,8 @@ class Database:
                     WHERE to_user_id = ? AND group_id = ? ORDER BY created_at DESC LIMIT ?""",
                     (to_user_id, group_id, limit))
                 return [dict(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get messages: {e}")
+            except Exception as exc:
+                _log_database_failure("get_messages", exc)
                 return []
 
     # ──────────────────── Anti-Spam ────────────────────
@@ -1168,8 +1184,8 @@ class Database:
                 conn.execute("INSERT INTO command_timestamps (user_id, group_id, timestamp) VALUES (?, ?, ?)",
                              (user_id, group_id, time.time()))
                 conn.commit()
-            except Exception as e:
-                logger.error(f"Failed to record command timestamp: {e}")
+            except Exception as exc:
+                _log_database_failure("record_command_timestamp", exc)
 
     def get_recent_command_count(self, user_id: str, group_id: int, window_seconds: int) -> int:
         with self._lock:
@@ -1181,8 +1197,8 @@ class Database:
                     (user_id, group_id, threshold))
                 row = cursor.fetchone()
                 return row['cnt'] if row else 0
-            except Exception as e:
-                logger.error(f"Failed to get recent command count: {e}")
+            except Exception as exc:
+                _log_database_failure("get_recent_command_count", exc)
                 return 0
 
     def get_group_recent_command_count(self, group_id: int, window_seconds: int) -> int:
@@ -1195,8 +1211,8 @@ class Database:
                     (group_id, threshold))
                 row = cursor.fetchone()
                 return row['cnt'] if row else 0
-            except Exception as e:
-                logger.error(f"Failed to get group recent command count: {e}")
+            except Exception as exc:
+                _log_database_failure("get_group_recent_command_count", exc)
                 return 0
 
     def cleanup_old_timestamps(self, max_age_seconds: int = 3600) -> None:
@@ -1206,8 +1222,8 @@ class Database:
                 threshold = time.time() - max_age_seconds
                 conn.execute("DELETE FROM command_timestamps WHERE timestamp < ?", (threshold,))
                 conn.commit()
-            except Exception as e:
-                logger.error(f"Failed to cleanup timestamps: {e}")
+            except Exception as exc:
+                _log_database_failure("cleanup_old_timestamps", exc)
 
     def check_and_consume_minigame_cooldown(
         self, user_id: str, group_id: int, game_type: str, cooldown_seconds: int
@@ -1238,8 +1254,8 @@ class Database:
                 )
                 conn.commit()
                 return 0
-            except Exception as e:
-                logger.error(f"Failed to check minigame cooldown: {e}")
+            except Exception as exc:
+                _log_database_failure("check_minigame_cooldown", exc)
                 return 0
 
     # ──────────────────── Trade Market (新增) ────────────────────
@@ -1257,8 +1273,8 @@ class Database:
                     (seller_id, group_id, item_id, amount, price, now.isoformat(), expires.isoformat()))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to create trade listing: {e}")
+            except Exception as exc:
+                _log_database_failure("create_trade_listing", exc)
                 return False
 
     def get_active_listings(self, group_id: int) -> List[Dict]:
@@ -1271,8 +1287,8 @@ class Database:
                     WHERE group_id = ? AND is_active = 1 AND expires_at > ?
                     ORDER BY created_at DESC""", (group_id, now))
                 return [dict(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get active listings: {e}")
+            except Exception as exc:
+                _log_database_failure("get_active_trade_listings", exc)
                 return []
 
     def get_user_listing_count(self, user_id: str, group_id: int) -> int:
@@ -1285,8 +1301,8 @@ class Database:
                     (user_id, group_id, now))
                 row = cursor.fetchone()
                 return row['cnt'] if row else 0
-            except Exception as e:
-                logger.error(f"Failed to get user listing count: {e}")
+            except Exception as exc:
+                _log_database_failure("get_user_listing_count", exc)
                 return 0
 
     def get_listing_by_id(self, listing_id: int, group_id: Optional[int] = None) -> Optional[Dict]:
@@ -1304,8 +1320,8 @@ class Database:
                     )
                 row = cursor.fetchone()
                 return dict(row) if row else None
-            except Exception as e:
-                logger.error(f"Failed to get listing: {e}")
+            except Exception as exc:
+                _log_database_failure("get_trade_listing", exc)
                 return None
 
     def deactivate_listing(self, listing_id: int) -> bool:
@@ -1315,8 +1331,8 @@ class Database:
                 conn.execute("UPDATE trade_listings SET is_active = 0 WHERE id = ?", (listing_id,))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to deactivate listing: {e}")
+            except Exception as exc:
+                _log_database_failure("deactivate_trade_listing", exc)
                 return False
 
     def cancel_trade_listing(self, listing_id: int, seller_id: str, group_id: int) -> bool:
@@ -1363,9 +1379,9 @@ class Database:
 
                 conn.commit()
                 return True
-            except Exception as e:
+            except Exception as exc:
                 conn.rollback()
-                logger.error(f"Failed to cancel trade listing: {e}")
+                _log_database_failure("cancel_trade_listing", exc)
                 return False
 
     def purchase_trade_listing(
@@ -1444,9 +1460,9 @@ class Database:
                 conn.commit()
                 listing["tax"] = tax
                 return True, listing
-            except Exception as e:
+            except Exception as exc:
                 conn.rollback()
-                logger.error(f"Failed to purchase trade listing: {e}")
+                _log_database_failure("purchase_trade_listing", exc)
                 return False, "购买失败，请稍后重试"
 
     # ──────────────────── Pet Show (新增完整实现) ────────────────────
@@ -1463,8 +1479,8 @@ class Database:
                     (group_id, title, now.isoformat(), end.isoformat()))
                 conn.commit()
                 return cursor.lastrowid
-            except Exception as e:
-                logger.error(f"Failed to create pet show: {e}")
+            except Exception as exc:
+                _log_database_failure("create_pet_show", exc)
                 return None
 
     def get_active_pet_show(self, group_id: int) -> Optional[Dict]:
@@ -1475,8 +1491,8 @@ class Database:
                     WHERE group_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1""", (group_id,))
                 row = cursor.fetchone()
                 return dict(row) if row else None
-            except Exception as e:
-                logger.error(f"Failed to get active pet show: {e}")
+            except Exception as exc:
+                _log_database_failure("get_active_pet_show", exc)
                 return None
 
     def vote_pet_show(self, show_id: int, voter_id: str, pet_user_id: str) -> bool:
@@ -1489,8 +1505,8 @@ class Database:
                     (show_id, voter_id, pet_user_id, utc_now().isoformat()))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to vote: {e}")
+            except Exception as exc:
+                _log_database_failure("vote_pet_show", exc)
                 return False
 
     def get_pet_show_votes(self, show_id: int) -> Dict[str, int]:
@@ -1501,8 +1517,8 @@ class Database:
                     FROM pet_show_votes WHERE show_id = ?
                     GROUP BY pet_user_id ORDER BY votes DESC""", (show_id,))
                 return {row['pet_user_id']: row['votes'] for row in cursor.fetchall()}
-            except Exception as e:
-                logger.error(f"Failed to get votes: {e}")
+            except Exception as exc:
+                _log_database_failure("get_pet_show_votes", exc)
                 return {}
 
     def get_user_vote_count(self, show_id: int, voter_id: str) -> int:
@@ -1513,7 +1529,8 @@ class Database:
                     WHERE show_id = ? AND voter_user_id = ?""", (show_id, voter_id))
                 row = cursor.fetchone()
                 return row['cnt'] if row else 0
-            except Exception as e:
+            except Exception as exc:
+                _log_database_failure("get_user_vote_count", exc)
                 return 0
 
     def end_pet_show(self, show_id: int) -> bool:
@@ -1523,8 +1540,8 @@ class Database:
                 conn.execute("UPDATE pet_shows SET is_active = 0 WHERE id = ?", (show_id,))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to end pet show: {e}")
+            except Exception as exc:
+                _log_database_failure("end_pet_show", exc)
                 return False
 
     # ──────────────────── Dress Inventory (新增) ────────────────────
@@ -1536,8 +1553,8 @@ class Database:
                 cursor = conn.execute("""SELECT dress_item_id FROM dress_inventory
                     WHERE user_id = ? AND group_id = ?""", (user_id, group_id))
                 return [row['dress_item_id'] for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get dress inventory: {e}")
+            except Exception as exc:
+                _log_database_failure("get_dress_inventory", exc)
                 return []
 
     def add_dress_item(self, user_id: str, group_id: int, dress_item_id: str) -> bool:
@@ -1549,8 +1566,8 @@ class Database:
                     (user_id, group_id, dress_item_id))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to add dress item: {e}")
+            except Exception as exc:
+                _log_database_failure("add_dress_item", exc)
                 return False
 
     # ──────────────────── Group Tasks (新增: 群累计任务) ────────────────
@@ -1579,8 +1596,8 @@ class Database:
                     "SELECT * FROM group_tasks WHERE group_id = ? AND created_date = ?",
                     (group_id, today))
                 return [dict(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get/create group tasks: {e}")
+            except Exception as exc:
+                _log_database_failure("get_or_create_group_tasks", exc)
                 return []
 
     def update_group_task_progress(self, group_id: int, task_type: str, increment: int = 1) -> bool:
@@ -1609,8 +1626,8 @@ class Database:
                     (increment, increment, group_id, task_type, today))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to update group task: {e}")
+            except Exception as exc:
+                _log_database_failure("update_group_task", exc)
                 return False
 
     # ──────────────────── Batch Operations ────────────────────
@@ -1627,8 +1644,8 @@ class Database:
                     WHERE group_id = ?""", (group_id,))
                 conn.commit()
                 return cursor.rowcount
-            except Exception as e:
-                logger.error(f"Failed to batch daily reset: {e}")
+            except Exception as exc:
+                _log_database_failure("batch_daily_reset", exc)
                 return 0
 
     def batch_daily_reset_all(self) -> int:
@@ -1642,8 +1659,8 @@ class Database:
                     today_free_feed_count = 0, today_message_count = 0""")
                 conn.commit()
                 return cursor.rowcount
-            except Exception as e:
-                logger.error(f"Failed to batch daily reset all: {e}")
+            except Exception as exc:
+                _log_database_failure("batch_daily_reset_all", exc)
                 return 0
 
     # ──────────────────── Transaction helpers (CR Fix #5 & #9) ────────
@@ -1657,9 +1674,9 @@ class Database:
                     conn.execute(sql, params)
                 conn.commit()
                 return True
-            except Exception as e:
+            except Exception as exc:
                 conn.rollback()
-                logger.error(f"Transaction failed: {e}")
+                _log_database_failure("transaction", exc)
                 return False
 
     def create_activity(
@@ -1692,8 +1709,8 @@ class Database:
                 )
                 conn.commit()
                 return int(cursor.lastrowid)
-            except Exception:
-                logger.exception("Failed to create activity")
+            except Exception as exc:
+                _log_database_failure("create_activity", exc)
                 return None
 
     def trigger_activities(self, group_id: int, activity_type: str, increment: int = 1) -> int:
@@ -1716,8 +1733,8 @@ class Database:
                 )
                 conn.commit()
                 return cursor.rowcount
-            except Exception:
-                logger.exception("Failed to trigger activities")
+            except Exception as exc:
+                _log_database_failure("trigger_activities", exc)
                 return 0
 
     def claim_activity_reward(self, activity_id: int, user_id: str, group_id: int) -> Optional[int]:
@@ -1766,9 +1783,9 @@ class Database:
                 )
                 conn.commit()
                 return reward
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Activity reward claim failed")
+                _log_database_failure("claim_activity_reward", exc)
                 return None
 
     def claim_group_task_reward(
@@ -1827,9 +1844,9 @@ class Database:
                 )
                 conn.commit()
                 return reward
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Group task claim failed")
+                _log_database_failure("claim_group_task_reward", exc)
                 return None
 
     @staticmethod
@@ -1874,9 +1891,9 @@ class Database:
                 self._save_inventory_items(conn, user_id, group_id, items)
                 conn.commit()
                 return True, 0
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic item purchase failed")
+                _log_database_failure("purchase_item_atomic", exc)
                 return False, -1
 
     def claim_action_quota(
@@ -1905,9 +1922,9 @@ class Database:
                     return False, remaining
                 conn.commit()
                 return True, 0
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Action quota claim failed")
+                _log_database_failure("claim_action_quota", exc)
                 return False, -1
 
     @staticmethod
@@ -2212,13 +2229,13 @@ class Database:
                     energy_cost=energy_cost,
                     payload=payload,
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
                 conn.rollback()
-                logger.exception("Idempotent minigame settlement conflicted")
+                _log_database_failure("settle_minigame_conflict", exc)
                 return MinigameAtomicResult(False, "小游戏请求冲突，请稍后重试")
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic minigame settlement failed")
+                _log_database_failure("settle_minigame_atomic", exc)
                 return MinigameAtomicResult(False, "小游戏结算失败")
 
     def visit_pet_atomic(
@@ -2393,13 +2410,13 @@ class Database:
                     target_grant=target_grant,
                     intimacy_grant=1,
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
                 conn.rollback()
-                logger.exception("Idempotent pet visit settlement conflicted")
+                _log_database_failure("visit_pet_conflict", exc)
                 return VisitPetAtomicResult(False, "访问请求冲突，请稍后重试")
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic pet visit failed")
+                _log_database_failure("visit_pet_atomic", exc)
                 return VisitPetAtomicResult(False, "访问失败")
 
     def credit_coins_atomic(
@@ -2455,9 +2472,9 @@ class Database:
             except sqlite3.IntegrityError:
                 conn.rollback()
                 return 0
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic coin credit failed")
+                _log_database_failure("credit_coins_atomic", exc)
                 return 0
 
     def gift_item_atomic(
@@ -2520,9 +2537,9 @@ class Database:
                 )
                 conn.commit()
                 return True, ""
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic gift failed")
+                _log_database_failure("gift_item_atomic", exc)
                 return False, "送礼失败"
 
     def create_trade_listing_atomic(
@@ -2572,9 +2589,9 @@ class Database:
                 )
                 conn.commit()
                 return True
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic listing creation failed")
+                _log_database_failure("create_trade_listing_atomic", exc)
                 return False
 
     def purchase_dress_atomic(
@@ -2608,9 +2625,9 @@ class Database:
             except sqlite3.IntegrityError:
                 conn.rollback()
                 return False, "你已经拥有该装扮"
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic dress purchase failed")
+                _log_database_failure("purchase_dress_atomic", exc)
                 return False, "购买失败"
 
     def vote_pet_show_atomic(
@@ -2633,9 +2650,9 @@ class Database:
                 )
                 conn.commit()
                 return True
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic show vote failed")
+                _log_database_failure("vote_pet_show_atomic", exc)
                 return False
 
     def like_pet_atomic(
@@ -2671,9 +2688,9 @@ class Database:
                 )
                 conn.commit()
                 return True
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic pet like failed")
+                _log_database_failure("like_pet_atomic", exc)
                 return False
 
     def treat_pet_atomic(self, pet: Pet, inventory: Inventory) -> bool:
@@ -2701,9 +2718,9 @@ class Database:
                 )
                 conn.commit()
                 return True
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Atomic treatment failed")
+                _log_database_failure("treat_pet_atomic", exc)
                 return False
 
     def atomic_update_pet_and_user(
@@ -2816,9 +2833,9 @@ class Database:
                     )
                 conn.commit()
                 return True
-            except Exception as e:
+            except Exception as exc:
                 conn.rollback()
-                logger.error(f"Atomic update failed: {e}")
+                _log_database_failure("atomic_update_pet_and_user", exc)
                 return False
 
     def get_all_group_ids(self) -> List[int]:
@@ -2827,8 +2844,8 @@ class Database:
                 conn = self._get_connection()
                 cursor = conn.execute("SELECT DISTINCT group_id FROM users")
                 return [row['group_id'] for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get group ids: {e}")
+            except Exception as exc:
+                _log_database_failure("get_all_group_ids", exc)
                 return []
     def settle_expired_trade_listings(self, group_id: Optional[int] = None) -> int:
         with self._lock:
@@ -2878,9 +2895,9 @@ class Database:
                     settled += 1
                 conn.commit()
                 return settled
-            except Exception:
+            except Exception as exc:
                 conn.rollback()
-                logger.exception("Expired listing settlement failed")
+                _log_database_failure("settle_expired_trade_listings", exc)
                 return 0
 
     def get_enabled_group_ids(self, *, require_activity: bool = False) -> List[int]:
@@ -2892,8 +2909,8 @@ class Database:
                     f"SELECT group_id FROM group_configs WHERE {condition} ORDER BY group_id"
                 ).fetchall()
                 return [int(row["group_id"]) for row in rows]
-            except Exception:
-                logger.exception("Failed to list enabled groups")
+            except Exception as exc:
+                _log_database_failure("get_enabled_group_ids", exc)
                 return []
 
     def claim_scheduler_run(self, job_name: str, period_key: str) -> bool:
@@ -2906,8 +2923,8 @@ class Database:
                 )
                 conn.commit()
                 return cursor.rowcount == 1
-            except Exception:
-                logger.exception("Failed to claim scheduler run")
+            except Exception as exc:
+                _log_database_failure("claim_scheduler_run", exc)
                 return False
 
     # ─────────────────── CR Review: 点赞频率限制 ──────────────────
@@ -2925,8 +2942,8 @@ class Database:
                     (user_id, target_user_id, group_id, today))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to record daily like: {e}")
+            except Exception as exc:
+                _log_database_failure("record_daily_like", exc)
                 return False
 
     def get_daily_like_count(self, user_id: str, target_user_id: str, group_id: int) -> int:
@@ -2940,8 +2957,8 @@ class Database:
                     (user_id, target_user_id, group_id, today))
                 row = cursor.fetchone()
                 return row['like_count'] if row else 0
-            except Exception as e:
-                logger.error(f"Failed to get daily like count: {e}")
+            except Exception as exc:
+                _log_database_failure("get_daily_like_count", exc)
                 return 0
 
     # ─────────────────── CR Review: 称号过期清理 ──────────────────
@@ -2959,8 +2976,8 @@ class Database:
                     (user_id, group_id, title, expires_at))
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to add title with expiry: {e}")
+            except Exception as exc:
+                _log_database_failure("add_title_with_expiry", exc)
                 return False
 
     def grant_temporary_title(self, user_id: str, group_id: int, title: str, duration_days: int) -> bool:
@@ -2992,8 +3009,8 @@ class Database:
                 )
                 conn.commit()
                 return True
-            except Exception as e:
-                logger.error(f"Failed to grant temporary title: {e}")
+            except Exception as exc:
+                _log_database_failure("grant_temporary_title", exc)
                 return False
 
     def cleanup_expired_titles(self) -> int:
@@ -3027,8 +3044,8 @@ class Database:
                 conn.execute("DELETE FROM title_expiry WHERE expires_at < ?", (now,))
                 conn.commit()
                 return count
-            except Exception as e:
-                logger.error(f"Failed to cleanup expired titles: {e}")
+            except Exception as exc:
+                _log_database_failure("cleanup_expired_titles", exc)
                 return 0
 
     # ─────────────────── CR Review: 优化金币排行（解决 N+1 问题） ────────
@@ -3047,8 +3064,8 @@ class Database:
                     LIMIT ?
                 """, (group_id, limit))
                 return [dict(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get coins ranking: {e}")
+            except Exception as exc:
+                _log_database_failure("get_coins_ranking", exc)
                 return []
 
     def get_pet_ranking(self, group_id: int, ranking_type: str, limit: int = 10) -> List[Dict]:
@@ -3069,8 +3086,8 @@ class Database:
                     (group_id, max(0, int(limit))),
                 ).fetchall()
                 return [dict(row) for row in rows]
-            except Exception:
-                logger.exception("Failed to query pet ranking")
+            except Exception as exc:
+                _log_database_failure("get_pet_ranking", exc)
                 return []
 
     def get_active_trustee_keys(self) -> set[tuple[str, int]]:
@@ -3081,8 +3098,8 @@ class Database:
                     (utc_now().isoformat(),),
                 ).fetchall()
                 return {(str(row["user_id"]), int(row["group_id"])) for row in rows}
-            except Exception:
-                logger.exception("Failed to load trustee keys")
+            except Exception as exc:
+                _log_database_failure("get_active_trustee_keys", exc)
                 return set()
 
     # ─────────────────── CR Review: 管理员清空留言 ──────────────────
@@ -3102,8 +3119,8 @@ class Database:
                         (group_id,))
                 conn.commit()
                 return cursor.rowcount
-            except Exception as e:
-                logger.error(f"Failed to clear messages: {e}")
+            except Exception as exc:
+                _log_database_failure("clear_messages", exc)
                 return 0
 
     # ─────────────────── CR Review: 交易记录查询 ──────────────────
@@ -3120,6 +3137,6 @@ class Database:
                     LIMIT ?
                 """, (group_id, limit))
                 return [dict(row) for row in cursor.fetchall()]
-            except Exception as e:
-                logger.error(f"Failed to get trade history: {e}")
+            except Exception as exc:
+                _log_database_failure("get_trade_history", exc)
                 return []

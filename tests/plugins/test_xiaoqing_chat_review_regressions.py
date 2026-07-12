@@ -42,7 +42,10 @@ async def test_handle_smalltalk_hides_internal_exception_details() -> None:
         )
         result = await handle_smalltalk("你好", event, context)
 
-    assert result == [{"type": "text", "data": {"text": "❌ 对话处理出错，请稍后再试"}}]
+    rendered = str(result)
+    assert "XQ-PLUGIN-UNEXPECTED" in rendered
+    assert "internal" not in rendered
+    assert "/tmp/secrets" not in rendered
 
 
 @pytest.mark.asyncio
@@ -295,12 +298,6 @@ async def test_chat_completions_raw_uses_exponential_backoff() -> None:
     class FakeResponse:
         status = 500
 
-        async def text(self) -> str:
-            return "server busy"
-
-        async def json(self):
-            return {}
-
     class FakePostContext:
         async def __aenter__(self):
             return FakeResponse()
@@ -309,7 +306,7 @@ async def test_chat_completions_raw_uses_exponential_backoff() -> None:
             return False
 
     session_mock = MagicMock(spec=aiohttp.ClientSession)
-    session_mock.post = MagicMock(return_value=FakePostContext())
+    session_mock.request = MagicMock(return_value=FakePostContext())
     session = cast(aiohttp.ClientSession, session_mock)
 
     with pytest.MonkeyPatch.context() as mp:
@@ -338,14 +335,16 @@ async def test_chat_completions_raw_uses_exponential_backoff() -> None:
 async def test_chat_completions_raw_merges_extra_payload_without_streaming() -> None:
     from plugins.xiaoqing_chat.llm.llm_client import chat_completions_raw
 
+    class FakeContent:
+        async def iter_chunked(self, _size: int):
+            yield b'{"choices":[{"message":{"content":"ok"}}]}'
+
     class FakeResponse:
         status = 200
-
-        async def text(self) -> str:
-            return ""
-
-        async def json(self):
-            return {"choices": [{"message": {"content": "ok"}}]}
+        url = "https://example.com/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        content_length = None
+        content = FakeContent()
 
     class FakePostContext:
         async def __aenter__(self):
@@ -355,7 +354,7 @@ async def test_chat_completions_raw_merges_extra_payload_without_streaming() -> 
             return False
 
     session_mock = MagicMock(spec=aiohttp.ClientSession)
-    session_mock.post = MagicMock(return_value=FakePostContext())
+    session_mock.request = MagicMock(return_value=FakePostContext())
     session = cast(aiohttp.ClientSession, session_mock)
     messages = [{"role": "user", "content": "hi"}]
 
@@ -382,7 +381,7 @@ async def test_chat_completions_raw_merges_extra_payload_without_streaming() -> 
         },
     )
 
-    payload = session_mock.post.call_args.kwargs["json"]
+    payload = session_mock.request.call_args.kwargs["json"]
     assert payload["thinking"] == {"type": "enabled"}
     assert payload["reasoning_effort"] == "high"
     assert payload["stream"] is False

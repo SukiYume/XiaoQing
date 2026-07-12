@@ -10,16 +10,17 @@ import io
 import logging
 import re
 from pathlib import Path
+from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 # 第三方库
-import aiohttp
 from bs4 import BeautifulSoup
 from PIL import Image
 
 # 本地导入
 from core.args import parse
 from core.plugin_base import atomic_write_bytes, image, segments, text
+from core.public_errors import public_error_message, public_error_response
 from core.safe_http import UnsafeUrlError, fetch_public_bytes, fetch_public_html
 
 
@@ -36,10 +37,8 @@ HEADERS = {
 }
 
 DEFAULT_APOD_URL = 'https://apod.nasa.gov/apod/astropix.html'
-TIMEOUT_SECONDS = 60
 HTML_TIMEOUT_SECONDS = 15
 IMAGE_TIMEOUT_SECONDS = 20
-MAX_HTML_BYTES = 2 * 1024 * 1024
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 DEFAULT_FALLBACK_TITLE = "Today's Astronomy Picture of the Day"
@@ -141,6 +140,37 @@ async def _safe_download_image(url: str, images_dir: Path, context) -> Path | No
         await asyncio.to_thread(atomic_write_bytes, target, fetched.body)
     return target
 
+
+async def _fetch_with_retry(
+    session: Any,
+    url: str,
+    proxy: str | None,
+    timeout: Any,
+    is_binary: bool = False,
+    context=None,
+) -> bytes | None:
+    """Compatibility entry point backed exclusively by the pinned safe client."""
+    del session, proxy, timeout
+    _require_allowed_url(url, context)
+    if is_binary:
+        response = await fetch_public_bytes(
+            url,
+            headers={**HEADERS, "accept-encoding": "identity"},
+            timeout_seconds=IMAGE_TIMEOUT_SECONDS,
+            max_bytes=MAX_IMAGE_BYTES,
+            allowed_content_type_prefixes=("image/",),
+            allowed_hosts=_allowed_hosts(context),
+            allowed_schemes=("https",),
+        )
+    else:
+        response = await fetch_public_html(
+            url,
+            headers={**HEADERS, "accept-encoding": "identity"},
+            timeout_seconds=HTML_TIMEOUT_SECONDS,
+            allowed_hosts=_allowed_hosts(context),
+        )
+    return response.body if response else None
+
 def _extract_title(soup: BeautifulSoup, context) -> str:
     """提取标题，使用多种策略增强鲁棒性"""
     try:
@@ -160,81 +190,15 @@ def _extract_title(soup: BeautifulSoup, context) -> str:
         if soup.title and soup.title.string:
             return soup.title.string.strip()
             
-    except Exception as e:
-        context.logger.warning(f"标题提取失败: {e}")
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="apod.extract_title",
+        )
     
     return DEFAULT_FALLBACK_TITLE
-
-async def _fetch_with_retry(
-    session: aiohttp.ClientSession,
-    url: str,
-    proxy: str | None,
-    timeout: aiohttp.ClientTimeout,
-    is_binary: bool = False,
-    context = None
-) -> bytes | None:
-    """
-    统一的网络请求重试逻辑
-    
-    Args:
-        session: HTTP 会话
-        url: 请求的 URL
-        proxy: 可选的代理地址
-        timeout: 超时设置
-        is_binary: True 返回 bytes，False 返回 text
-        context: 上下文对象
-    
-    Returns:
-        bytes 或 str，失败返回 None
-    """
-    # 1. 尝试直连
-    try:
-        context.logger.info(f"尝试直接访问: {url}")
-        async with session.get(url, headers=HEADERS, timeout=timeout) as response:
-            if response.status == 200:
-                if is_binary:
-                    result = await response.read()
-                    if len(result) > (MAX_IMAGE_BYTES if is_binary else MAX_HTML_BYTES):
-                        raise ValueError("response exceeds byte budget")
-                else:
-                    try:
-                        result = await response.text()
-                    except UnicodeDecodeError:
-                        result = await response.text(errors='replace')
-                    if len(result.encode("utf-8")) > MAX_HTML_BYTES:
-                        raise ValueError("response exceeds byte budget")
-                context.logger.info("直接访问成功")
-                return result
-            else:
-                context.logger.warning(f"直接访问返回状态码: {response.status}")
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        context.logger.warning(f"直接访问失败: {e}")
-    
-    # 2. 尝试代理
-    if proxy:
-        try:
-            context.logger.info(f"使用代理访问: {proxy}")
-            async with session.get(url, headers=HEADERS, proxy=proxy, timeout=timeout) as response:
-                if response.status == 200:
-                    if is_binary:
-                        result = await response.read()
-                        if len(result) > MAX_IMAGE_BYTES:
-                            raise ValueError("response exceeds byte budget")
-                    else:
-                        try:
-                            result = await response.text()
-                        except UnicodeDecodeError:
-                            result = await response.text(errors='replace')
-                        if len(result.encode("utf-8")) > MAX_HTML_BYTES:
-                            raise ValueError("response exceeds byte budget")
-                    context.logger.info("代理访问成功")
-                    return result
-                else:
-                    context.logger.error(f"代理访问返回状态码: {response.status}")
-        except Exception as e:
-            context.logger.error(f"代理访问失败: {e}")
-    
-    return None
 
 async def get_explanation(soup: BeautifulSoup, context) -> str:
     """从页面提取解释文本"""
@@ -251,60 +215,46 @@ async def get_explanation(soup: BeautifulSoup, context) -> str:
                 parts = re.split(r'Tomorrow\'s picture:', text)
                 return parts[0].strip() if parts else text
         return NO_EXPLANATION_TEXT
-    except (AttributeError, IndexError) as e:
-        context.logger.warning(f"解析 explanation 失败: {e}")
+    except (AttributeError, IndexError) as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="apod.parse_explanation",
+        )
         return EXPLANATION_UNAVAILABLE
 
+
 async def download_image(
-    session: aiohttp.ClientSession, 
-    url: str, 
-    file_path: Path, 
+    session: Any,
+    url: str,
+    file_path: Path,
     proxy: str | None,
-    timeout: aiohttp.ClientTimeout,
-    context
+    timeout: Any,
+    context,
 ) -> bool:
-    """
-    下载图片到本地文件
-    
-    Args:
-        session: HTTP 会话
-        url: 图片 URL
-        file_path: 保存路径
-        proxy: 可选的代理地址
-        timeout: 超时设置
-        context: 上下文对象
-    
-    Returns:
-        下载是否成功
-    """
+    """Persist an APOD image fetched through the pinned bounded client."""
     try:
-        # 确保父目录存在
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # 使用统一的重试逻辑下载
         content = await _fetch_with_retry(
             session=session,
             url=url,
             proxy=proxy,
             timeout=timeout,
             is_binary=True,
-            context=context
+            context=context,
         )
-        
         if not content:
-            context.logger.error(f"图片下载失败: {url}")
             return False
-        
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(atomic_write_bytes, file_path, content)
-        
-        context.logger.info(f"图片下载成功: {file_path}")
         return True
-        
-    except IOError as e:
-        context.logger.error(f"文件写入失败 {file_path}: {e}")
-        return False
-    except Exception as e:
-        context.logger.error(f"下载图片时发生未知错误: {e}")
+    except Exception as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="apod.download_image",
+        )
         return False
 
 # ============================================================
@@ -342,30 +292,14 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         images_dir.mkdir(parents=True, exist_ok=True)
         
         proxy = _get_proxy(context)
-        session = context.http_session
-        timeout = aiohttp.ClientTimeout(total=TIMEOUT_SECONDS)
-        
         page_url = _require_allowed_url(url, context)
-        safe_response = None
-        if isinstance(session, aiohttp.ClientSession):
-            safe_response = await fetch_public_html(
-                page_url,
-                headers={**HEADERS, "accept-encoding": "identity"},
-                timeout_seconds=HTML_TIMEOUT_SECONDS,
-                allowed_hosts=_allowed_hosts(context),
-            )
-            html = safe_response.body if safe_response else None
-        else:
-            # Test/embedder compatibility; the production app always supplies
-            # an aiohttp ClientSession and therefore uses the pinned safe path.
-            html = await _fetch_with_retry(
-                session=session,
-                url=page_url,
-                proxy=proxy,
-                timeout=timeout,
-                is_binary=True,
-                context=context
-            )
+        safe_response = await fetch_public_html(
+            page_url,
+            headers={**HEADERS, "accept-encoding": "identity"},
+            timeout_seconds=HTML_TIMEOUT_SECONDS,
+            allowed_hosts=_allowed_hosts(context),
+        )
+        html = safe_response.body if safe_response else None
         
         if not html:
             error_msg = "❌ 获取失败: 网络错误" + ("且未配置代理" if not proxy else "")
@@ -397,27 +331,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             
             context.logger.info(f"发现图片: {imgurl}")
             
-            # 下载图片 (如果不存在或文件大小为0)
-            if isinstance(session, aiohttp.ClientSession):
-                img_path = await _safe_download_image(imgurl, images_dir, context)
-            else:
-                # Compatibility path for injected test clients. It still has a
-                # byte budget and atomic persistence, but is never used by the app.
-                img_path = images_dir / _cache_filename(imgurl, "image/jpeg")
-                context.logger.info("开始下载图片...")
-                success = await download_image(
-                    session=session,
-                    url=imgurl,
-                    file_path=img_path,
-                    proxy=proxy,
-                    timeout=timeout,
-                    context=context
-                )
-                
-                if not success:
-                    error_msg = f"❌ 图片下载失败，请查看链接: {imgurl}\n\n{title}\n\n{explanation}"
-                    context.logger.error(error_msg)
-                    return segments(error_msg)
+            img_path = await _safe_download_image(imgurl, images_dir, context)
             if img_path is None:
                 return segments(f"❌ 图片下载失败\n\n{title}\n\n{explanation}")
             
@@ -465,9 +379,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         else:
             return segments(f"今天的 APOD 内容格式不支持，请直接访问: {url}")
              
-    except Exception as e:
-        logger.exception("APOD handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="apod.handle")
 
 
 def _show_help() -> str:

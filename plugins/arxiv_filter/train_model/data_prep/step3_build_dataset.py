@@ -33,7 +33,36 @@ import requests
 
 feedparser = importlib.import_module("feedparser")
 
-from utils import clean_arxiv_id
+try:
+    from core.bounded_http import (
+        XML_MIME_POLICY,
+        BodyLimits,
+        BoundedHttpError,
+        HttpStatusError,
+        RedirectPolicy,
+        XmlLimits,
+        requests_request_bounded,
+        validate_bounded_xml,
+    )
+except ModuleNotFoundError:  # Direct script execution outside the repository root.
+    repository_root = Path(__file__).resolve().parents[4]
+    if str(repository_root) not in sys.path:
+        sys.path.insert(0, str(repository_root))
+    from core.bounded_http import (
+        XML_MIME_POLICY,
+        BodyLimits,
+        BoundedHttpError,
+        HttpStatusError,
+        RedirectPolicy,
+        XmlLimits,
+        requests_request_bounded,
+        validate_bounded_xml,
+    )
+
+try:
+    from .utils import clean_arxiv_id
+except ImportError:  # Direct script execution.
+    from utils import clean_arxiv_id
 
 # ============================================================
 # 配置
@@ -50,6 +79,25 @@ BATCH_SIZE = 100
 SLEEP_SECONDS = 3
 API_TIMEOUT = 120
 MAX_RETRIES = 3
+ATOM_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=8 * 1024 * 1024,
+    max_decoded_bytes=16 * 1024 * 1024,
+    max_decompression_ratio=100,
+)
+ATOM_XML_LIMITS = XmlLimits(
+    max_bytes=ATOM_BODY_LIMITS.max_decoded_bytes,
+    max_depth=64,
+    max_nodes=50_000,
+    max_attributes=100_000,
+    max_attribute_chars=2 * 1024 * 1024,
+    max_name_chars=512,
+    max_text_chars=12 * 1024 * 1024,
+)
+ARXIV_REDIRECT_POLICY = RedirectPolicy(
+    max_hops=3,
+    allowed_schemes=frozenset({"https"}),
+    same_origin_only=True,
+)
 
 
 # ============================================================
@@ -105,38 +153,36 @@ def fetch_abstracts_batch(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
         "max_results": len(arxiv_ids),
     }
 
-    response: requests.Response | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = requests.get(
+            response = requests_request_bounded(
+                "GET",
                 url,
-                params=params,
-                timeout=API_TIMEOUT,
+                limits=ATOM_BODY_LIMITS,
+                mime_policy=XML_MIME_POLICY,
+                redirect_policy=ARXIV_REDIRECT_POLICY,
                 headers={"User-Agent": "arxiv-training-data-builder/2.0"},
+                request_kwargs={"params": params, "timeout": API_TIMEOUT},
             )
-            response.raise_for_status()
+            xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
+            feed = feedparser.parse(xml_body)
             break
-        except requests.HTTPError as e:
-            if response is not None and response.status_code == 400:
+        except HttpStatusError as e:
+            if e.status == 400:
                 # 可能有无效 ID，尝试逐个获取
                 return _fetch_one_by_one(arxiv_ids)
-            status_code = response.status_code if response is not None else "unknown"
-            print(f"  [重试 {attempt}/{MAX_RETRIES}] HTTP {status_code}: {e}")
+            print(f"  [重试 {attempt}/{MAX_RETRIES}] HTTP {e.status}: {e}")
             if attempt < MAX_RETRIES:
                 time.sleep(SLEEP_SECONDS * attempt)
             else:
                 return {}
-        except requests.RequestException as e:
+        except (requests.RequestException, BoundedHttpError) as e:
             print(f"  [重试 {attempt}/{MAX_RETRIES}] 请求异常: {e}")
             if attempt < MAX_RETRIES:
                 time.sleep(SLEEP_SECONDS * attempt)
             else:
                 return {}
 
-    if response is None:
-        return {}
-
-    feed = feedparser.parse(response.content)
     results: dict[str, dict[str, str]] = {}
     for entry in feed.entries:
         aid = clean_arxiv_id(entry.id)
@@ -165,15 +211,17 @@ def fetch_abstracts_batch_single(arxiv_id: str) -> dict[str, dict[str, str]]:
     url = "https://export.arxiv.org/api/query"
     params = {"id_list": arxiv_id, "max_results": 1}
 
-    r = requests.get(
+    response = requests_request_bounded(
+        "GET",
         url,
-        params=params,
-        timeout=API_TIMEOUT,
+        limits=ATOM_BODY_LIMITS,
+        mime_policy=XML_MIME_POLICY,
+        redirect_policy=ARXIV_REDIRECT_POLICY,
         headers={"User-Agent": "arxiv-training-data-builder/2.0"},
+        request_kwargs={"params": params, "timeout": API_TIMEOUT},
     )
-    r.raise_for_status()
-
-    feed = feedparser.parse(r.content)
+    xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
+    feed = feedparser.parse(xml_body)
     results: dict[str, dict[str, str]] = {}
     for entry in feed.entries:
         aid = clean_arxiv_id(entry.id)

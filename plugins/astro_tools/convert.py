@@ -2,6 +2,8 @@
 单位转换模块
 """
 
+from core.public_errors import public_error_message
+
 
 async def handle_convert(args: str, context) -> str:
     """处理单位转换命令"""
@@ -107,4 +109,6 @@ async def handle_convert(args: str, context) -> str:
             return f"无法在 {from_unit_str} 和 {to_unit_str} 之间转换\n" \
                    f"这两个单位的物理量纲不兼容"
     except Exception as exc:
-        return f"单位转换失败: {exc}"
+        return public_error_message(
+            context, exc, logger=context.logger, component="astro_tools.convert"
+        )

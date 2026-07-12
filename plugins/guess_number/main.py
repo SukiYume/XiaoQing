@@ -23,6 +23,7 @@ import random
 # 本地导入
 from core.args import parse
 from core.plugin_base import segments
+from core.public_errors import public_error_response
 
 
 logger = logging.getLogger(__name__)
@@ -85,9 +86,8 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         # 无参数，直接开始游戏
         return await _start_game("", context)
         
-    except Exception as e:
-        logger.exception("GuessNumber handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="guess_number.handle")
 
 
 async def _start_game(difficulty: str, context) -> list[dict]:

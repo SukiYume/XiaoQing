@@ -10,6 +10,7 @@ from functools import lru_cache
 
 from core.plugin_base import segments, run_sync, load_json
 from core.args import parse
+from core.public_errors import public_error_message, public_error_response
 
 
 logger = logging.getLogger(__name__)
@@ -48,8 +49,8 @@ def _load_dictionary(dict_file: Path):
         return frame
     except ImportError:
         raise ImportError("天文词典功能需要 pandas 库，请运行: pip install pandas")
-    except Exception as e:
-        raise RuntimeError(f"加载词典文件失败: {e}")
+    except Exception as exc:
+        raise RuntimeError("加载词典文件失败") from exc
 
 
 def _detect_language(text: str) -> str:
@@ -162,11 +163,9 @@ async def query_astrodict(
             max_results,
         )
     except ImportError as exc:
-        context.logger.error("缺少依赖: %s", exc)
-        return str(exc)
+        return public_error_message(context, exc, logger=context.logger, component="dict.search")
     except Exception as exc:
-        context.logger.error("天文词典查询失败: %s", exc, exc_info=True)
-        return f"查询失败: {exc}"
+        return public_error_message(context, exc, logger=context.logger, component="dict.search")
 
 
 # ============================================================
@@ -221,9 +220,8 @@ async def handle(
         
         return segments(result)
         
-    except Exception as e:
-        logger.exception("Dict handle error: %s", e)
-        return segments(f"处理请求时出错: {str(e)}")
+    except Exception as exc:
+        return public_error_response(context, exc, logger=logger, component="dict.handle")
 
 
 def _get_help() -> str:

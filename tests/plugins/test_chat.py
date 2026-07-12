@@ -1,16 +1,36 @@
 """测试chat插件 - AI对话助手"""
 
-import pytest
+import importlib.util
+import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock
-from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-import importlib.util
 spec = importlib.util.spec_from_file_location("chat_main", ROOT / "plugins" / "chat" / "main.py")
 chat = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(chat)
+
+
+class _ChunkedContent:
+    def __init__(self, body: bytes):
+        self.body = body
+
+    async def iter_chunked(self, _size: int):
+        yield self.body
+
+
+class _BoundedJsonResponse:
+    status = 200
+
+    def __init__(self, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.headers = {"Content-Type": "application/json"}
+        self.content = _ChunkedContent(body)
+        self.content_length = len(body)
+        self.url = chat.COZE_API_URL
 
 
 class TestChatPlugin:
@@ -34,26 +54,16 @@ class TestChatPlugin:
         context.plugin_dir = ROOT / "plugins" / "chat"
         context.data_dir = tmp_path / "data"
 
-        # 创建成功的HTTP响应mock
-        class MockSuccessResponse:
-            status = 200
-            async def text(self):
-                return "{}"
-            async def json(self):
-                return {
-                    "messages": [
-                        {"type": "answer", "content": "测试回答"}
-                    ]
-                }
-
         class MockSuccessContextManager:
             async def __aenter__(self):
-                return MockSuccessResponse()
+                return _BoundedJsonResponse(
+                    {"messages": [{"type": "answer", "content": "测试回答"}]}
+                )
             async def __aexit__(self, *args):
                 pass
 
         class MockHttpSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockSuccessContextManager()
 
         context.http_session = MockHttpSession()
@@ -213,24 +223,17 @@ class TestChatPlugin:
     async def test_call_coze_api_ignores_stream_config(self, mock_context):
         captured_payload = {}
 
-        class MockSuccessResponse:
-            status = 200
-            async def json(self):
-                return {
-                    "messages": [
-                        {"type": "answer", "content": "测试回答"}
-                    ]
-                }
-
         class MockSuccessContextManager:
             async def __aenter__(self):
-                return MockSuccessResponse()
+                return _BoundedJsonResponse(
+                    {"messages": [{"type": "answer", "content": "测试回答"}]}
+                )
 
             async def __aexit__(self, *args):
                 pass
 
         class MockHttpSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 captured_payload.update(kwargs.get("json", {}))
                 return MockSuccessContextManager()
 
@@ -262,7 +265,7 @@ class TestChatPlugin:
                 pass
 
         class MockErrorSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockErrorContextManager()
 
         mock_context.http_session = MockErrorSession()
@@ -288,7 +291,7 @@ class TestChatPlugin:
                 pass
 
         class MockTimeoutSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockTimeoutContextManager()
 
         mock_context.http_session = MockTimeoutSession()
@@ -312,7 +315,7 @@ class TestChatPlugin:
                 pass
 
         class MockExceptionSession:
-            def post(self, *args, **kwargs):
+            def request(self, *args, **kwargs):
                 return MockExceptionContextManager()
 
         mock_context.http_session = MockExceptionSession()

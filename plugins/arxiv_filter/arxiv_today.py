@@ -10,11 +10,22 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import feedparser
 import pandas as pd
 import requests
-import feedparser
 import urllib3
 from bs4 import BeautifulSoup
+
+from core.bounded_http import (
+    HTML_MIME_POLICY,
+    XML_MIME_POLICY,
+    BodyLimits,
+    BoundedHttpError,
+    RedirectPolicy,
+    XmlLimits,
+    requests_request_bounded,
+    validate_bounded_xml,
+)
 
 from .utils import load_plugin_config
 
@@ -22,6 +33,31 @@ logger = logging.getLogger(__name__)
 
 # 空结果的列定义（避免魔法字面量重复）
 _EMPTY_COLUMNS = ['arXiv ID', 'Title', 'Abstract']
+_HTML_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=4 * 1024 * 1024,
+    max_decoded_bytes=8 * 1024 * 1024,
+    max_decompression_ratio=100,
+)
+_ATOM_BODY_LIMITS = BodyLimits(
+    max_wire_bytes=8 * 1024 * 1024,
+    max_decoded_bytes=16 * 1024 * 1024,
+    max_decompression_ratio=100,
+)
+_ATOM_XML_LIMITS = XmlLimits(
+    max_bytes=_ATOM_BODY_LIMITS.max_decoded_bytes,
+    max_depth=64,
+    max_nodes=50_000,
+    max_attributes=100_000,
+    max_attribute_chars=2 * 1024 * 1024,
+    max_name_chars=512,
+    max_text_chars=12 * 1024 * 1024,
+)
+_ARXIV_REDIRECT_POLICY = RedirectPolicy(
+    max_hops=3,
+    allowed_schemes=frozenset({"http", "https"}),
+    same_origin_only=True,
+    allow_https_upgrade_same_host=True,
+)
 
 
 def _get_request_params(config: Optional[dict] = None) -> tuple:
@@ -70,19 +106,27 @@ def _fetch_arxiv_page(url: Optional[str] = None, config: Optional[dict] = None) 
     proxies, verify, timeout = _get_request_params(config)
 
     try:
-        response = requests.get(
+        response = requests_request_bounded(
+            "GET",
             url,
+            limits=_HTML_BODY_LIMITS,
+            mime_policy=HTML_MIME_POLICY,
+            redirect_policy=_ARXIV_REDIRECT_POLICY,
             headers={'User-Agent': 'Mozilla/5.0'},
-            timeout=timeout,
-            proxies=proxies,
-            verify=verify,
+            request_kwargs={
+                "timeout": timeout,
+                "proxies": proxies,
+                "verify": verify,
+            },
         )
-        response.raise_for_status()
-    except requests.RequestException as err:
-        logger.error(f'Error fetching arXiv page: {err}')
+    except (requests.RequestException, BoundedHttpError) as err:
+        logger.error(
+            "Error fetching arXiv page error_type=%s",
+            type(err).__name__,
+        )
         return None
 
-    return BeautifulSoup(response.content, 'html.parser')
+    return BeautifulSoup(response.body, 'html.parser')
 
 
 def get_today_arxiv(url: Optional[str] = None) -> pd.DataFrame:
@@ -164,7 +208,7 @@ def get_today_arxiv_api(days: Optional[int] = None) -> pd.DataFrame:
     
     proxies, verify, timeout = _get_request_params(config)
 
-    BASE_URL = 'http://export.arxiv.org/api/query?'
+    BASE_URL = 'https://export.arxiv.org/api/query'
     HEADERS = {'User-Agent': 'arxiv-scraper/1.0 (SukiYume@users.noreply.github.com)'}
 
     today = datetime.now(timezone.utc).date()
@@ -180,21 +224,30 @@ def get_today_arxiv_api(days: Optional[int] = None) -> pd.DataFrame:
     }
     
     try:
-        r = requests.get(
-            BASE_URL, 
-            params=params, 
-            headers=HEADERS, 
-            proxies=proxies, 
-            verify=verify,
-            timeout=timeout
+        response = requests_request_bounded(
+            "GET",
+            BASE_URL,
+            limits=_ATOM_BODY_LIMITS,
+            mime_policy=XML_MIME_POLICY,
+            redirect_policy=_ARXIV_REDIRECT_POLICY,
+            headers=HEADERS,
+            request_kwargs={
+                "params": params,
+                "proxies": proxies,
+                "verify": verify,
+                "timeout": timeout,
+            },
         )
-        r.raise_for_status()
-    except requests.RequestException as err:
-        logger.error(f'Error fetching from API: {err}')
+        xml_body = validate_bounded_xml(response, limits=_ATOM_XML_LIMITS)
+        feed = feedparser.parse(xml_body)
+        total_results = int(feed.feed.opensearch_totalresults)
+    except (requests.RequestException, BoundedHttpError, AttributeError, TypeError, ValueError) as err:
+        logger.error(
+            "Error fetching from API error_type=%s",
+            type(err).__name__,
+        )
         return pd.DataFrame(columns=_EMPTY_COLUMNS)
-    
-    feed = feedparser.parse(r.content)
-    total_results = int(feed.feed.opensearch_totalresults)
+
     logger.info(f"该时间段总共有 {total_results} 篇文章")
 
     records = []
