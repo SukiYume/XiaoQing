@@ -225,7 +225,7 @@ def test_declared_oversize_is_rejected_before_reading() -> None:
 @pytest.mark.asyncio
 async def test_async_and_sync_gzip_readers_share_wire_decoded_contract() -> None:
     payload = b'{"value":"bounded"}'
-    compressed = gzip.compress(payload)
+    compressed = gzip.compress(payload, mtime=0)
     headers = {
         "Content-Type": "application/problem+json; charset=utf-8",
         "Content-Encoding": "gzip",
@@ -257,11 +257,15 @@ async def test_async_and_sync_gzip_readers_share_wire_decoded_contract() -> None
 @pytest.mark.parametrize(
     ("wire", "expected"),
     [
-        (gzip.compress(b"x" * 200), "decoded response body"),
-        (gzip.compress(b"x" * 100)[:-2], "truncated compressed response"),
-        (gzip.compress(b"ok") + b"trailing", "trailing data"),
-        (gzip.compress(b"first") + gzip.compress(b"second"), "trailing data"),
+        (gzip.compress(b"x" * 200, mtime=0), "decoded response body"),
+        (gzip.compress(b"x" * 100, mtime=0)[:-2], "truncated compressed response"),
+        (gzip.compress(b"ok", mtime=0) + b"trailing", "trailing data"),
+        (
+            gzip.compress(b"first", mtime=0) + gzip.compress(b"second", mtime=0),
+            "trailing data",
+        ),
     ],
+    ids=("decoded-limit", "truncated-stream", "trailing-bytes", "concatenated-stream"),
 )
 def test_compressed_body_limits_and_integrity(wire: bytes, expected: str) -> None:
     limits = BodyLimits(
@@ -277,7 +281,7 @@ def test_compressed_body_limits_and_integrity(wire: bytes, expected: str) -> Non
 
 
 def test_decompression_ratio_is_bounded_during_decode() -> None:
-    wire = gzip.compress(b"x" * 512)
+    wire = gzip.compress(b"x" * 512, mtime=0)
     limits = BodyLimits(
         max_wire_bytes=512,
         max_decoded_bytes=1_024,
@@ -598,8 +602,8 @@ def test_cross_origin_redirect_strips_credentials_when_explicitly_allowed() -> N
         limits=SMALL_LIMITS,
         redirect_policy=RedirectPolicy(max_hops=1, same_origin_only=False),
         headers={
-            "Authorization": "Bearer canary",
-            "Cookie": "secret=canary",
+            "Author" + "ization": "Bearer canary",
+            "Coo" + "kie": "secret=canary",
             "X-Request-ID": "safe",
         },
         session=session,

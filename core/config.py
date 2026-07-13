@@ -14,9 +14,10 @@ import re
 import stat
 import threading
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, TypeVar, Union
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -30,12 +31,12 @@ from pydantic import (
     model_validator,
 )
 
-ConfigCallback = Union[Callable[["ConfigSnapshot"], None], Callable[["ConfigSnapshot"], Any]]
-T = TypeVar("T")
-
 from .exceptions import ConfigLoadError
 from .inbound_policy import validate_inbound_listener
 from .plugin_base import atomic_write_text, load_json
+
+ConfigCallback = Callable[["ConfigSnapshot"], None] | Callable[["ConfigSnapshot"], Any]
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 

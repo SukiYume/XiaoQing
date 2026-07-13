@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from ..planning.goal_state import load_latest_topic_and_summary
+
 
 def build_tool_info_block(
     *,

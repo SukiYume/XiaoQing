@@ -8,7 +8,6 @@ from typing import Any
 
 from core.message import contains_bot_name, iter_message_segments
 
-
 _PRONOUN_RE = r"(?:她|他|它|ta)"
 _RECENT_BOT_ANCHOR_MAX_AGE_SECONDS = 10 * 60
 

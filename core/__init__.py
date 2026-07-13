@@ -18,56 +18,55 @@ XiaoQing 核心模块
 - metrics: 性能监控
 
 """
-from .config import ConfigManager, ConfigSnapshot
-from .router import CommandRouter, CommandSpec
-from .dispatcher import Dispatcher
-from .plugin_manager import PluginManager, LoadedPlugin
-
 # 参数解析
-from .args import tokenize, parse, parse_kv, ParsedArgs
-
-# 插件基础工具
-from .plugin_base import (
-    segments,
-    build_action,
-    text,
-    image,
-    image_url,
-    run_sync,
-    ensure_dir,
-    load_json,
-    write_json,
-)
-
-# 日志配置
-from .logging_config import setup_logging, get_logger, get_log_manager, LogManager
-
-# 会话管理
-from .session import Session, SessionManager
+from .args import ParsedArgs, parse, parse_kv, tokenize
+from .config import ConfigManager, ConfigSnapshot
+from .dispatcher import Dispatcher
 
 # 异常
 from .exceptions import (
-    XiaoQingError,
-    PluginError,
-    PluginLoadError,
-    PluginExecutionError,
-    PluginTimeoutError,
+    CommandArgumentError,
     CommandError,
     CommandNotFoundError,
     CommandPermissionError,
-    CommandArgumentError,
     ConfigError,
+    PluginError,
+    PluginExecutionError,
+    PluginLoadError,
+    PluginTimeoutError,
     SessionError,
+    XiaoQingError,
 )
+
+# 日志配置
+from .logging_config import LogManager, get_log_manager, get_logger, setup_logging
 
 # 性能监控
 from .metrics import (
-    MetricsCollector,
     ExecutionStats,
     ExecutionTimer,
+    MetricsCollector,
     get_metrics_collector,
     set_metrics_collector,
 )
+
+# 插件基础工具
+from .plugin_base import (
+    build_action,
+    ensure_dir,
+    image,
+    image_url,
+    load_json,
+    run_sync,
+    segments,
+    text,
+    write_json,
+)
+from .plugin_manager import LoadedPlugin, PluginManager
+from .router import CommandRouter, CommandSpec
+
+# 会话管理
+from .session import Session, SessionManager
 
 __all__ = [
     # 参数解析

@@ -2,21 +2,22 @@
 plugin_base 工具函数单元测试
 """
 
-import pytest
 from pathlib import Path
 
+import pytest
+
 from core.plugin_base import (
-    text,
+    build_action,
     emoji,
+    ensure_dir,
+    face,
     image,
     image_url,
-    face,
-    segments,
-    build_action,
     load_json,
-    write_json,
-    ensure_dir,
+    segments,
     split_message_segments,
+    text,
+    write_json,
 )
 
 # ============================================================
@@ -107,7 +108,7 @@ class TestBuildAction:
         """测试构建群消息"""
         segs = [{"type": "text", "data": {"text": "Hello"}}]
         action = build_action(segs, user_id=12345, group_id=67890)
-        
+
         assert action is not None
         assert action["action"] == "send_group_msg"
         assert action["params"]["group_id"] == 67890
@@ -117,7 +118,7 @@ class TestBuildAction:
         """测试构建私聊消息"""
         segs = [{"type": "text", "data": {"text": "Hello"}}]
         action = build_action(segs, user_id=12345, group_id=None)
-        
+
         assert action is not None
         assert action["action"] == "send_private_msg"
         assert action["params"]["user_id"] == 12345
@@ -127,7 +128,7 @@ class TestBuildAction:
         """测试同时有 user_id 和 group_id 时优先群消息"""
         segs = [{"type": "text", "data": {"text": "Hello"}}]
         action = build_action(segs, user_id=12345, group_id=67890)
-        
+
         assert action["action"] == "send_group_msg"
 
     def test_build_action_empty_segments(self):
@@ -162,17 +163,17 @@ class TestJsonUtils:
         """测试写入和读取 JSON"""
         json_path = tmp_path / "test.json"
         data = {"name": "测试", "count": 42, "items": [1, 2, 3]}
-        
+
         write_json(json_path, data)
         loaded = load_json(json_path)
-        
+
         assert loaded == data
 
     def test_load_invalid_json(self, tmp_path: Path):
         """测试加载无效 JSON 文件"""
         json_path = tmp_path / "invalid.json"
         json_path.write_text("not valid json {{{", encoding="utf-8")
-        
+
         result = load_json(json_path)
         assert result == {}
 
@@ -187,9 +188,9 @@ class TestDirUtils:
         """测试创建目录"""
         new_dir = tmp_path / "new" / "nested" / "dir"
         assert not new_dir.exists()
-        
+
         ensure_dir(new_dir)
-        
+
         assert new_dir.exists()
         assert new_dir.is_dir()
 
@@ -197,10 +198,10 @@ class TestDirUtils:
         """测试对已存在目录无影响"""
         existing_dir = tmp_path / "existing"
         existing_dir.mkdir()
-        
+
         # 应该不报错
         ensure_dir(existing_dir)
-        
+
         assert existing_dir.exists()
 
 # ============================================================
@@ -229,7 +230,7 @@ class TestSplitMessageSegments:
         long_text = "\n".join(lines)
         segs = segments(long_text)
         result = split_message_segments(segs, max_length=500)
-        
+
         # 应该拆分为多条
         assert len(result) > 1
         # 每条消息的文本长度不应超过限制
@@ -244,7 +245,7 @@ class TestSplitMessageSegments:
         long_line = "A" * 1000
         segs = segments(long_line)
         result = split_message_segments(segs, max_length=300)
-        
+
         # 应该拆分为多条
         assert len(result) >= 4  # 1000 / 300 = ~4
         # 拼接后应该与原始文本相同
@@ -272,7 +273,7 @@ class TestSplitMessageSegments:
         original = "\n".join(lines)
         segs = segments(original)
         result = split_message_segments(segs, max_length=100)
-        
+
         reconstructed = "\n".join(
             seg["data"]["text"]
             for chunk in result

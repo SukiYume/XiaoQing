@@ -316,7 +316,7 @@ class TestConfigManagerUpdateSecret:
         config_manager.update_secret("admin_user_ids", [55555])
 
         # 重新读取文件验证
-        with open(secrets_file, "r", encoding="utf-8") as f:
+        with open(secrets_file, encoding="utf-8") as f:
             data = json.load(f)
         assert data["admin_user_ids"] == [55555]
 
@@ -368,10 +368,11 @@ class TestConfigManagerUpdateSecret:
         config_manager: ConfigManager,
     ):
         seen: list[list[int]] = []
-        unsubscribe = lambda: None
+        unsubscribe = None
 
         def callback(snapshot: ConfigSnapshot) -> None:
             seen.append(list(snapshot.secrets["admin_user_ids"]))
+            assert unsubscribe is not None
             unsubscribe()
 
         unsubscribe = config_manager.on_reload(callback)
@@ -425,7 +426,7 @@ class TestConfigManagerSaveSecrets:
 
         config_manager.save_secrets()
 
-        with open(secrets_file, "r", encoding="utf-8") as f:
+        with open(secrets_file, encoding="utf-8") as f:
             data = json.load(f)
         assert data == {"test": "value"}
 

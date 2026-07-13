@@ -20,8 +20,8 @@ Step 2: 获取日期范围内所有 astro-ph 论文（标题 + 摘要）
   pip install requests feedparser
 """
 
-import json
 import importlib
+import json
 import os
 import re
 import sys
@@ -104,7 +104,7 @@ ARXIV_REDIRECT_POLICY = RedirectPolicy(
 
 def load_date_range() -> tuple[str, str]:
     """加载日期范围"""
-    with open(DATE_RANGE_FILE, "r", encoding="utf-8") as f:
+    with open(DATE_RANGE_FILE, encoding="utf-8") as f:
         dr = json.load(f)
     return dr["start"], dr["end"]
 
@@ -170,7 +170,7 @@ def load_cache(yymm: int) -> list[dict[str, str]] | None:
     """加载某月的缓存，不存在返回 None"""
     cache_file = MONTHLY_DIR / f"{yymm}.json"
     if cache_file.exists():
-        with open(cache_file, "r", encoding="utf-8") as f:
+        with open(cache_file, encoding="utf-8") as f:
             return json.load(f)
     return None
 

@@ -6,7 +6,6 @@ from pathlib import Path
 
 from plugins.choice.main import make_choice
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 

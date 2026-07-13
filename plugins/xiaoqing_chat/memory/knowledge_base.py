@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from .memory_db import MemoryDB
+
 
 def _hash_id(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8")).hexdigest()[:16]

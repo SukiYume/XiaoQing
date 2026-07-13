@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable, Optional, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 import aiohttp
 
@@ -81,7 +82,7 @@ def _retry_delay(retry_interval_seconds: float, attempt: int) -> float:
     return base * (2 ** max(0, attempt - 1))
 
 
-def _merge_extra_payload(payload: dict[str, Any], extra_payload: Optional[dict[str, Any]]) -> None:
+def _merge_extra_payload(payload: dict[str, Any], extra_payload: dict[str, Any] | None) -> None:
     if not extra_payload:
         return
     for key, value in extra_payload.items():
@@ -105,7 +106,7 @@ async def _call_with_fallback_paths(
     endpoint_path: str,
     invoke: Callable[[str], Awaitable[T]],
 ) -> tuple[T, str]:
-    last_exc: Optional[BaseException] = None
+    last_exc: BaseException | None = None
     for path in _candidate_paths(endpoint_path):
         try:
             return await invoke(path), path
@@ -131,9 +132,9 @@ async def chat_completions_raw(
     retry_interval_seconds: float,
     proxy: str = "",
     endpoint_path: str = "/v1/chat/completions",
-    tools: Optional[list[dict[str, Any]]] = None,
-    tool_choice: Optional[Any] = None,
-    extra_payload: Optional[dict[str, Any]] = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not api_base or not api_key or not model:
         raise LLMError("LLM secrets missing: api_base/api_key/model")
@@ -225,9 +226,9 @@ async def chat_completions(
     retry_interval_seconds: float,
     proxy: str = "",
     endpoint_path: str = "/v1/chat/completions",
-    tools: Optional[list[dict[str, Any]]] = None,
-    tool_choice: Optional[Any] = None,
-    extra_payload: Optional[dict[str, Any]] = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> str:
     data = await chat_completions_raw(
         session=session,
@@ -265,9 +266,9 @@ async def chat_completions_with_fallback_paths(
     retry_interval_seconds: float,
     proxy: str = "",
     endpoint_path: str = "/v1/chat/completions",
-    tools: Optional[list[dict[str, Any]]] = None,
-    tool_choice: Optional[Any] = None,
-    extra_payload: Optional[dict[str, Any]] = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     return await _call_with_fallback_paths(
         endpoint_path=endpoint_path,
@@ -307,9 +308,9 @@ async def chat_completions_raw_with_fallback_paths(
     retry_interval_seconds: float,
     proxy: str = "",
     endpoint_path: str = "/v1/chat/completions",
-    tools: Optional[list[dict[str, Any]]] = None,
-    tool_choice: Optional[Any] = None,
-    extra_payload: Optional[dict[str, Any]] = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     return await _call_with_fallback_paths(
         endpoint_path=endpoint_path,

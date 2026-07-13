@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import os
 import re
 import tempfile
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any
 
 import numpy as np
+
 from core.plugin_base import write_json
 
 _RE_WS = re.compile(r"\s+")
@@ -27,7 +28,7 @@ class VectorStore:
     def __init__(self, *, dim: int = 2048) -> None:
         self._dim = dim
         self._docs: list[VectorDoc] = []
-        self._matrix: Optional[np.ndarray] = None
+        self._matrix: np.ndarray | None = None
         self._id_to_idx: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
@@ -55,7 +56,7 @@ class VectorStore:
     def all_docs(self) -> list[VectorDoc]:
         return list(self._docs)
 
-    def get_doc(self, doc_id: str) -> Optional[VectorDoc]:
+    def get_doc(self, doc_id: str) -> VectorDoc | None:
         idx = self._id_to_idx.get(doc_id)
         if idx is None:
             return None

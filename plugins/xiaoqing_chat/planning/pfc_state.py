@@ -4,7 +4,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ..store_base import StoreBase
 
@@ -29,7 +29,7 @@ class PFCStateStore(StoreBase):
         super().__init__()
         self._cache: dict[str, PFCConversationState] = {}
 
-    def _path(self, chat_id: str) -> Optional[Path]:
+    def _path(self, chat_id: str) -> Path | None:
         return self._resolve_path("pfc_state", f"{chat_id}.json")
 
     def get(self, chat_id: str) -> PFCConversationState:

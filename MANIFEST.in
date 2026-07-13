@@ -1,0 +1,33 @@
+# PyPI source distributions contain only the files needed to build XiaoQing.
+include LICENSE
+include README.md
+include pyproject.toml
+
+recursive-include plugins plugin.json
+include plugins/arxiv_filter/config.json
+include plugins/color/color.json
+include plugins/color/stellar_colors.txt
+recursive-include plugins/dict/assets *.txt manifest.json
+recursive-include plugins/pendo/web/scriptable *.js
+recursive-include plugins/pendo/web/static *.html *.svg *.css *.js
+recursive-include plugins/pendo/web/services/assets *.zip
+include plugins/xiaoqing_chat/config/xiaoqing_config.json
+include plugins/xiaoqing_chat/media/qq_face_builtin_catalog.json
+
+# Repository-only training, migration, experiment, test, and release tooling.
+prune plugins/arxiv_filter/train_model
+prune plugins/pendo/scripts
+prune plugins/pendo/web/migrations
+prune plugins/xiaoqing_chat/experiments
+prune tests
+prune scripts
+prune docs
+prune release
+prune .github
+prune .codex
+prune .pytest_cache
+prune .ruff_cache
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude .DS_Store

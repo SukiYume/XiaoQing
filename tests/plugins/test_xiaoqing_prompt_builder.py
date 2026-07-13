@@ -1,6 +1,6 @@
 from plugins.xiaoqing_chat.config.config import PersonalityConfig
-from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.llm.prompt_builder import build_prompt_messages
+from plugins.xiaoqing_chat.memory.memory import StoredMessage
 from plugins.xiaoqing_chat.runtime_state import get_state
 
 

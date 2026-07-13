@@ -5,11 +5,12 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from core.plugin_base import write_json
-from core.plugin_base import build_action, segments, text
+from core.plugin_base import build_action, segments, text, write_json
+
 from ..store_base import StoreBase
+
 
 @dataclass
 class ReviewPolicy:
@@ -33,15 +34,15 @@ class ReviewSession:
 class ReviewStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
-        self._cache_sessions: Optional[dict[str, Any]] = None
+        self._cache_sessions: dict[str, Any] | None = None
         self._cache_policies: dict[str, ReviewPolicy] = {}
 
-    def _sessions_path(self) -> Optional[Path]:
+    def _sessions_path(self) -> Path | None:
         if not self._data_dir:
             return None
         return self._data_dir / "review_sessions" / "sessions.json"
 
-    def _policy_path(self, chat_id: str) -> Optional[Path]:
+    def _policy_path(self, chat_id: str) -> Path | None:
         if not self._data_dir:
             return None
         return self._data_dir / "review_sessions" / "policies" / f"{chat_id}.json"
@@ -137,10 +138,10 @@ class ReviewStore(StoreBase):
         return removed
 
     def _new_session_id(self, chat_id: str, kind: str) -> str:
-        raw = f"{chat_id}|{kind}|{time.time()}".encode("utf-8")
+        raw = f"{chat_id}|{kind}|{time.time()}".encode()
         return hashlib.md5(raw).hexdigest()[:10]
 
-    def cleanup_expired(self, *, now: Optional[float] = None) -> int:
+    def cleanup_expired(self, *, now: float | None = None) -> int:
         st = self._load_sessions_state()
         active = st.get("active", {})
         if not isinstance(active, dict):
@@ -180,7 +181,7 @@ class ReviewStore(StoreBase):
         out.sort(key=lambda x: x.created_at, reverse=True)
         return out
 
-    def get_session(self, session_id: str) -> Optional[ReviewSession]:
+    def get_session(self, session_id: str) -> ReviewSession | None:
         sid = (session_id or "").strip()
         if not sid:
             return None
@@ -193,7 +194,7 @@ class ReviewStore(StoreBase):
             return None
         return _decode_session(sid, obj)
 
-    def close_session(self, session_id: str, *, now: Optional[float] = None) -> bool:
+    def close_session(self, session_id: str, *, now: float | None = None) -> bool:
         sid = (session_id or "").strip()
         if not sid:
             return False
@@ -224,8 +225,8 @@ class ReviewStore(StoreBase):
         timeout_seconds: float,
         cooldown_seconds: float,
         max_pending: int = 10,
-        now: Optional[float] = None,
-    ) -> Optional[ReviewSession]:
+        now: float | None = None,
+    ) -> ReviewSession | None:
         now_ts = float(now or time.time())
         st = self._load_sessions_state()
         active = st.get("active", {})
@@ -393,7 +394,7 @@ def apply_review_answer(
     answer: str,
     goal_lock_seconds: float,
     max_avoid_patterns: int,
-) -> tuple[ReviewSession, Optional[str]]:
+) -> tuple[ReviewSession, str | None]:
     a = (answer or "").strip()
     if not a:
         return sess, None
@@ -468,7 +469,7 @@ def register_bad_reply(
     timeout_seconds: float,
     cooldown_seconds: float,
     max_pending: int = 10,
-) -> Optional[ReviewSession]:
+) -> ReviewSession | None:
     payload = {"reason": (reason or "").strip(), "goal": (goal or "").strip()}
     return store.open_session_if_allowed(
         kind="bad_reply_pattern",
@@ -488,7 +489,7 @@ def maybe_open_goal_strategy_review(
     timeout_seconds: float,
     cooldown_seconds: float,
     max_pending: int = 10,
-) -> Optional[ReviewSession]:
+) -> ReviewSession | None:
     g = (goal or "").strip()
     if not g:
         return None

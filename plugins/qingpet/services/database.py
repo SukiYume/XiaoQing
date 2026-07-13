@@ -1,19 +1,18 @@
-import sqlite3
 import json
 import logging
-import threading
-import time
 import re
 import shutil
+import sqlite3
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional, List, Dict, Tuple
 from pathlib import Path
+from typing import Any
 
-from ..models import Pet, User, Item, Inventory, GroupConfig, PluginConfig, OperationLog
-from ..utils.constants import (
-    DEFAULT_ITEMS, PetStage, PetPersonality, PetStatus
-)
+from ..models import GroupConfig, Inventory, OperationLog, Pet, User
+from ..utils.constants import PetPersonality, PetStage, PetStatus
 from ..utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -57,7 +56,7 @@ class MinigameOutcome:
     requested_coins: int = 0
     experience: int = 0
     energy_cost: int = 0
-    payload: Optional[Dict[str, Any]] = None
+    payload: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +70,7 @@ class MinigameAtomicResult:
     coin_grant: int = 0
     experience_grant: int = 0
     energy_cost: int = 0
-    payload: Optional[Dict[str, Any]] = None
+    payload: dict[str, Any] | None = None
     duplicate: bool = False
 
 
@@ -127,7 +126,7 @@ class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._lock = threading.RLock()
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         path = Path(db_path)
         if path.exists() and path.stat().st_size > 0:
             backup = path.with_suffix(path.suffix + ".pre-migration.bak")
@@ -594,7 +593,7 @@ class Database:
                 _log_database_failure("create_user", exc)
                 return False
 
-    def get_user(self, user_id: str, group_id: int) -> Optional[User]:
+    def get_user(self, user_id: str, group_id: int) -> User | None:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -676,7 +675,7 @@ class Database:
                 _log_database_failure("create_pet", exc)
                 return False
 
-    def get_pet(self, user_id: str, group_id: int) -> Optional[Pet]:
+    def get_pet(self, user_id: str, group_id: int) -> Pet | None:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -738,7 +737,7 @@ class Database:
                 _log_database_failure("delete_pet", exc)
                 return False
 
-    def get_all_pets_in_group(self, group_id: int) -> List[Pet]:
+    def get_all_pets_in_group(self, group_id: int) -> list[Pet]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -748,7 +747,7 @@ class Database:
                 _log_database_failure("get_pets_by_group", exc)
                 return []
 
-    def get_all_pets(self) -> List[Pet]:
+    def get_all_pets(self) -> list[Pet]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -758,7 +757,7 @@ class Database:
                 _log_database_failure("get_all_pets", exc)
                 return []
 
-    def get_enabled_group_decay_map(self) -> Dict[int, float]:
+    def get_enabled_group_decay_map(self) -> dict[int, float]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -770,7 +769,7 @@ class Database:
                 _log_database_failure("get_enabled_group_decay_map", exc)
                 return {}
 
-    def get_pets_by_user(self, user_id: str) -> List[Pet]:
+    def get_pets_by_user(self, user_id: str) -> list[Pet]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -919,7 +918,7 @@ class Database:
 
     # ──────────────────── Plugin Config (CR Fix: 全局配置接入) ────────
 
-    def get_plugin_config(self, key: str) -> Optional[str]:
+    def get_plugin_config(self, key: str) -> str | None:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -958,7 +957,7 @@ class Database:
                 _log_database_failure("log_operation", exc)
                 return False
 
-    def get_operation_logs(self, group_id: int, limit: int = 50) -> List[OperationLog]:
+    def get_operation_logs(self, group_id: int, limit: int = 50) -> list[OperationLog]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -977,7 +976,7 @@ class Database:
 
     # ──────────────────── Tasks (CR Fix #10: date范围查询替代LIKE) ────
 
-    def get_or_create_daily_tasks(self, user_id: str, group_id: int) -> List[Dict]:
+    def get_or_create_daily_tasks(self, user_id: str, group_id: int) -> list[dict]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1029,7 +1028,7 @@ class Database:
                 _log_database_failure("update_task_progress", exc)
                 return False
 
-    def claim_task_reward(self, user_id: str, group_id: int, task_type: str) -> Optional[int]:
+    def claim_task_reward(self, user_id: str, group_id: int, task_type: str) -> int | None:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1056,7 +1055,7 @@ class Database:
 
     # ──────────────────── Activities ────────────────────
 
-    def get_active_activities(self, group_id: int) -> List[Dict]:
+    def get_active_activities(self, group_id: int) -> list[dict]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1163,7 +1162,7 @@ class Database:
                 _log_database_failure("leave_message_atomic", exc)
                 return LeaveMessageAtomicResult(False, "留言失败")
 
-    def get_messages(self, to_user_id: str, group_id: int, limit: int = 10) -> List[Dict]:
+    def get_messages(self, to_user_id: str, group_id: int, limit: int = 10) -> list[dict]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1277,7 +1276,7 @@ class Database:
                 _log_database_failure("create_trade_listing", exc)
                 return False
 
-    def get_active_listings(self, group_id: int) -> List[Dict]:
+    def get_active_listings(self, group_id: int) -> list[dict]:
         self.settle_expired_trade_listings(group_id)
         with self._lock:
             try:
@@ -1305,7 +1304,7 @@ class Database:
                 _log_database_failure("get_user_listing_count", exc)
                 return 0
 
-    def get_listing_by_id(self, listing_id: int, group_id: Optional[int] = None) -> Optional[Dict]:
+    def get_listing_by_id(self, listing_id: int, group_id: int | None = None) -> dict | None:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1390,7 +1389,7 @@ class Database:
         buyer_id: str,
         group_id: int,
         tax_rate: float,
-    ) -> tuple[bool, Dict | str]:
+    ) -> tuple[bool, dict | str]:
         with self._lock:
             conn = self._get_connection()
             try:
@@ -1467,7 +1466,7 @@ class Database:
 
     # ──────────────────── Pet Show (新增完整实现) ────────────────────
 
-    def create_pet_show(self, group_id: int, title: str, duration_hours: int) -> Optional[int]:
+    def create_pet_show(self, group_id: int, title: str, duration_hours: int) -> int | None:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1483,7 +1482,7 @@ class Database:
                 _log_database_failure("create_pet_show", exc)
                 return None
 
-    def get_active_pet_show(self, group_id: int) -> Optional[Dict]:
+    def get_active_pet_show(self, group_id: int) -> dict | None:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1509,7 +1508,7 @@ class Database:
                 _log_database_failure("vote_pet_show", exc)
                 return False
 
-    def get_pet_show_votes(self, show_id: int) -> Dict[str, int]:
+    def get_pet_show_votes(self, show_id: int) -> dict[str, int]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1546,7 +1545,7 @@ class Database:
 
     # ──────────────────── Dress Inventory (新增) ────────────────────
 
-    def get_dress_inventory(self, user_id: str, group_id: int) -> List[str]:
+    def get_dress_inventory(self, user_id: str, group_id: int) -> list[str]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1572,7 +1571,7 @@ class Database:
 
     # ──────────────────── Group Tasks (新增: 群累计任务) ────────────────
 
-    def get_or_create_group_tasks(self, group_id: int) -> List[Dict]:
+    def get_or_create_group_tasks(self, group_id: int) -> list[dict]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1687,7 +1686,7 @@ class Database:
         target_value: int,
         reward_coins: int,
         duration_hours: int = 24,
-    ) -> Optional[int]:
+    ) -> int | None:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -1737,7 +1736,7 @@ class Database:
                 _log_database_failure("trigger_activities", exc)
                 return 0
 
-    def claim_activity_reward(self, activity_id: int, user_id: str, group_id: int) -> Optional[int]:
+    def claim_activity_reward(self, activity_id: int, user_id: str, group_id: int) -> int | None:
         with self._lock:
             conn = self._get_connection()
             try:
@@ -1790,7 +1789,7 @@ class Database:
 
     def claim_group_task_reward(
         self, user_id: str, group_id: int, task_type: str, daily_coin_limit: int = 500
-    ) -> Optional[int]:
+    ) -> int | None:
         with self._lock:
             conn = self._get_connection()
             try:
@@ -1937,7 +1936,7 @@ class Database:
         cooldown_seconds: int = 0,
         *,
         now=None,
-        now_ts: Optional[float] = None,
+        now_ts: float | None = None,
     ) -> tuple[bool, int]:
         """Claim a persisted quota using the caller's open transaction."""
         current = now or utc_now()
@@ -2049,8 +2048,8 @@ class Database:
         reference_id: str,
         daily_coin_limit: int,
         cooldown_seconds: int,
-        outcome_factory: Callable[[Pet, Optional[Pet]], MinigameOutcome],
-        opponent_user_id: Optional[str] = None,
+        outcome_factory: Callable[[Pet, Pet | None], MinigameOutcome],
+        opponent_user_id: str | None = None,
         minimum_energy: int = 0,
     ) -> MinigameAtomicResult:
         """Validate and settle a minigame in one immediate transaction.
@@ -2113,7 +2112,7 @@ class Database:
                     conn.rollback()
                     return MinigameAtomicResult(False, "宠物现在无法互动")
 
-                opponent_pet: Optional[Pet] = None
+                opponent_pet: Pet | None = None
                 opponent_pet_name = ""
                 if normalized_opponent:
                     opponent_user = conn.execute(
@@ -2428,7 +2427,7 @@ class Database:
         reason: str,
         daily_limit: int = 500,
         exempt: bool = False,
-        reference_id: Optional[str] = None,
+        reference_id: str | None = None,
     ) -> int:
         with self._lock:
             conn = self._get_connection()
@@ -2728,9 +2727,9 @@ class Database:
         pet: Pet,
         user: User,
         *,
-        inventory: Optional[Inventory] = None,
-        task_type: Optional[str] = None,
-        group_task_type: Optional[str] = None,
+        inventory: Inventory | None = None,
+        task_type: str | None = None,
+        group_task_type: str | None = None,
     ) -> bool:
         """CR Fix #5: 原子性更新宠物和用户"""
         with self._lock:
@@ -2838,7 +2837,7 @@ class Database:
                 _log_database_failure("atomic_update_pet_and_user", exc)
                 return False
 
-    def get_all_group_ids(self) -> List[int]:
+    def get_all_group_ids(self) -> list[int]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -2847,7 +2846,7 @@ class Database:
             except Exception as exc:
                 _log_database_failure("get_all_group_ids", exc)
                 return []
-    def settle_expired_trade_listings(self, group_id: Optional[int] = None) -> int:
+    def settle_expired_trade_listings(self, group_id: int | None = None) -> int:
         with self._lock:
             conn = self._get_connection()
             try:
@@ -2900,7 +2899,7 @@ class Database:
                 _log_database_failure("settle_expired_trade_listings", exc)
                 return 0
 
-    def get_enabled_group_ids(self, *, require_activity: bool = False) -> List[int]:
+    def get_enabled_group_ids(self, *, require_activity: bool = False) -> list[int]:
         with self._lock:
             try:
                 conn = self._get_connection()
@@ -3050,7 +3049,7 @@ class Database:
 
     # ─────────────────── CR Review: 优化金币排行（解决 N+1 问题） ────────
 
-    def get_coins_ranking(self, group_id: int, limit: int = 10) -> List[Dict]:
+    def get_coins_ranking(self, group_id: int, limit: int = 10) -> list[dict]:
         """CR Review: 使用 JOIN 查询替代 N+1 循环"""
         with self._lock:
             try:
@@ -3068,7 +3067,7 @@ class Database:
                 _log_database_failure("get_coins_ranking", exc)
                 return []
 
-    def get_pet_ranking(self, group_id: int, ranking_type: str, limit: int = 10) -> List[Dict]:
+    def get_pet_ranking(self, group_id: int, ranking_type: str, limit: int = 10) -> list[dict]:
         expressions = {
             "care_score": "(hunger + mood + clean + energy + health) / 5.0",
             "intimacy": "intimacy",
@@ -3104,7 +3103,7 @@ class Database:
 
     # ─────────────────── CR Review: 管理员清空留言 ──────────────────
 
-    def clear_messages(self, group_id: int, target_user_id: Optional[str] = None) -> int:
+    def clear_messages(self, group_id: int, target_user_id: str | None = None) -> int:
         """清空留言（管理员功能）"""
         with self._lock:
             try:
@@ -3125,7 +3124,7 @@ class Database:
 
     # ─────────────────── CR Review: 交易记录查询 ──────────────────
 
-    def get_trade_history(self, group_id: int, limit: int = 20) -> List[Dict]:
+    def get_trade_history(self, group_id: int, limit: int = 20) -> list[dict]:
         """查询交易历史日志"""
         with self._lock:
             try:

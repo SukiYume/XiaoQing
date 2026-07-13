@@ -78,7 +78,10 @@ class Database:
         # One connection per calling thread.  The registry lets shutdown close
         # all live connections deterministically instead of relying on thread
         # local destructors (which used to hide cross-thread close failures).
-        self._all_connections: dict[int, sqlite3.Connection] = {}
+        # Key by connection identity rather than thread id. Thread identifiers
+        # may be reused after short-lived workers exit; retaining every
+        # connection slot lets cleanup close them all deterministically.
+        self._all_connections: dict[int, tuple[int, sqlite3.Connection]] = {}
         self._lock = threading.Lock()
         self._settings_lock = threading.Lock()
 
@@ -112,13 +115,14 @@ class Database:
             conn.row_factory = sqlite3.Row
             self._local.conn = conn
             with self._lock:
-                self._all_connections[threading.get_ident()] = conn
+                thread_id = threading.get_ident()
+                self._all_connections[id(conn)] = (thread_id, conn)
         return self._local.conn
 
     def close_all_connections(self):
         """Close all registered thread-local connections and report failures."""
         with self._lock:
-            connections = list(self._all_connections.items())
+            connections = list(self._all_connections.values())
             self._all_connections.clear()
 
         failures: list[BaseException] = []

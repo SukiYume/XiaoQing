@@ -11,6 +11,7 @@ from core.plugin_base import build_action, segments, text, write_json
 from .bw_expression_store import ExpressionRecord, ExpressionStore
 from .bw_reflect_tracker import ReflectTrackerStore
 
+
 def _state_path(data_dir: Path) -> Path:
     return data_dir / "bw_learner" / "reflector_state.json"
 

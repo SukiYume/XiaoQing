@@ -1,9 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict
-from enum import Enum
 
-from ..utils.constants import PetStage, PetPersonality, PetStatus, MAX_STAT_VALUE
+from ..utils.constants import MAX_STAT_VALUE, PetPersonality, PetStage, PetStatus
 
 
 @dataclass
@@ -26,23 +24,23 @@ class Pet:
     intimacy: int = 0
 
     personality: PetPersonality = PetPersonality.LIVELY
-    favorite_food: Optional[str] = None
+    favorite_food: str | None = None
 
     status: PetStatus = PetStatus.NORMAL
-    status_expire_time: Optional[datetime] = None
+    status_expire_time: datetime | None = None
 
     # 装扮系统 (新增功能)
-    dress_hat: Optional[str] = None
-    dress_clothes: Optional[str] = None
-    dress_accessory: Optional[str] = None
-    dress_background: Optional[str] = None
+    dress_hat: str | None = None
+    dress_clothes: str | None = None
+    dress_accessory: str | None = None
+    dress_background: str | None = None
 
     last_update: datetime = field(default_factory=datetime.now)
-    last_feed: Optional[datetime] = None
-    last_clean: Optional[datetime] = None
-    last_play: Optional[datetime] = None
-    last_train: Optional[datetime] = None
-    last_explore: Optional[datetime] = None
+    last_feed: datetime | None = None
+    last_clean: datetime | None = None
+    last_play: datetime | None = None
+    last_train: datetime | None = None
+    last_explore: datetime | None = None
 
     likes: int = 0
 
@@ -69,7 +67,7 @@ class Pet:
     def is_traveling(self) -> bool:
         return self.status == PetStatus.TRAVELING
 
-    def get_dress_slots(self) -> Dict[str, Optional[str]]:
+    def get_dress_slots(self) -> dict[str, str | None]:
         """获取所有装扮槽位"""
         return {
             "帽子": self.dress_hat,

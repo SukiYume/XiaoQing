@@ -7,11 +7,11 @@ import json
 import os
 import tempfile
 import threading
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator, TypeVar
-
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 MISSING_ETAG = "missing"
@@ -119,7 +119,7 @@ class AtomicJsonStore:
                 recovered = self._decode(backup_payload)
             except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
                 if raise_on_error:
-                    raise primary_error
+                    raise primary_error from None
                 return default
             atomic_write_bytes(self.path, backup_payload)
             return recovered

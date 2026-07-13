@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.plugin_base import ensure_dir, load_json, write_json
+
 from ..task_scheduler import _spawn_bg_task
 
 _SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 _PENDING_DIR_NAME = "pending"
 _EMOJI_REPAIR_TASKS: set[str] = set()
-_LIBRARY_CACHE: dict[str, tuple[tuple[float, float], list["EmojiLibraryEntry"]]] = {}
+_LIBRARY_CACHE: dict[str, tuple[tuple[float, float], list[EmojiLibraryEntry]]] = {}
 
 if TYPE_CHECKING:
     from .event_media import RenderedMedia
@@ -138,7 +139,7 @@ def _hash_file(path: Path) -> str:
 def _entry_from_render(
     context,
     file_path: Path,
-    rendered: "RenderedMedia",
+    rendered: RenderedMedia,
     existing: dict[str, Any] | None = None,
 ) -> EmojiLibraryEntry:
     existing = existing or {}
@@ -435,7 +436,7 @@ def _is_usable_library_metadata(description: str, marker: str, emotion_tags: tup
 def collect_emoji_candidate(
     context,
     runtime,
-    rendered: "RenderedMedia",
+    rendered: RenderedMedia,
     *,
     source_path: Path,
     source_chat_id: str = "",

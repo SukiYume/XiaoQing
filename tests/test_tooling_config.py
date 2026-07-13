@@ -22,6 +22,7 @@ def test_all_python_310_toml_entrypoints_have_tomli_fallback() -> None:
     for relative_path in (
         "tests/test_ci_workflow.py",
         "tests/test_tooling_config.py",
+        "scripts/check_test_collection.py",
         "scripts/check_coverage_floors.py",
     ):
         source = (ROOT / relative_path).read_text(encoding="utf-8")

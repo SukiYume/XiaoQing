@@ -17,7 +17,7 @@ _LEGACY_QQ_FACE_LABEL_OVERRIDES: dict[str, tuple[str, ...]] = {
     "279": ("踩",),
 }
 _BUNDLED_QQ_FACE_LABELS: dict[str, tuple[str, ...]] | None = None
-_CATALOG_CACHE: dict[str, tuple[tuple[float, float], list["QQFaceEntry"]]] = {}
+_CATALOG_CACHE: dict[str, tuple[tuple[float, float], list[QQFaceEntry]]] = {}
 
 
 @dataclass(frozen=True)

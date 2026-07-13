@@ -14,7 +14,7 @@ import logging
 import time
 import wave
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
 import aiohttp
@@ -97,7 +97,7 @@ def _show_help() -> str:
 # ============================================================
 
 
-async def text_to_speech(text: str, context: PluginContextProtocol) -> Optional[str]:
+async def text_to_speech(text: str, context: PluginContextProtocol) -> str | None:
     """
     将文字转换为语音文件
 
@@ -206,7 +206,7 @@ async def text_to_speech(text: str, context: PluginContextProtocol) -> Optional[
 
 async def speech_to_text(
     audio_path: str, context: PluginContextProtocol
-) -> Optional[Tuple[str, str]]:
+) -> tuple[str, str] | None:
     """
     将语音文件转换为文字
 
@@ -363,7 +363,7 @@ async def _handle_tts(args: str, context: PluginContextProtocol) -> list[dict[st
 
 async def convert_text_to_voice(
     text: str, context: PluginContextProtocol
-) -> Optional[list[dict[str, Any]]]:
+) -> list[dict[str, Any]] | None:
     """
     将文本转换为语音消息段
 

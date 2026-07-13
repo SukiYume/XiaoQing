@@ -1,23 +1,26 @@
 """测试signin插件"""
 
-import json
-import pytest
 import asyncio
+import importlib
+import json
+import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
+
+from core.bounded_http import HttpStatusError
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-import sys
 # Add plugins dir to sys.path so signin can be imported as a package
 plugins_dir = str(ROOT / "plugins")
 if plugins_dir not in sys.path:
     sys.path.insert(0, plugins_dir)
 
-from signin import main as signin
-from signin import yingshi as signin_yingshi
-from signin import sony as signin_sony
-from core.bounded_http import HttpStatusError
+# These package imports must happen after the plugins directory is available.
+signin = importlib.import_module("signin.main")
+signin_sony = importlib.import_module("signin.sony")
+signin_yingshi = importlib.import_module("signin.yingshi")
 
 
 @pytest.fixture(autouse=True)

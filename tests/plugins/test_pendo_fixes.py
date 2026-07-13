@@ -25,9 +25,16 @@ class TestLRUCache:
         db.CACHE_MAX_SIZE = cache_size
         return db
 
-    def test_lru_evicts_least_recently_used_not_least_recently_inserted(self):
+    @pytest.fixture
+    def db(self):
+        database = self._make_db(cache_size=3)
+        try:
+            yield database
+        finally:
+            database.cleanup()
+
+    def test_lru_evicts_least_recently_used_not_least_recently_inserted(self, db):
         """填满缓存后，读取最旧的条目，再插入新条目时，应淘汰第二旧的（未访问的）而非最旧的"""
-        db = self._make_db(cache_size=3)
 
         # 填满缓存：插入 key1, key2, key3
         db._cache_set("key1", "val1")
@@ -60,9 +67,16 @@ class TestUpdateItemCacheInvalidation:
         db._init_database()
         return db
 
-    def test_update_without_owner_id_invalidates_user_list_cache(self):
+    @pytest.fixture
+    def db(self):
+        database = self._make_db()
+        try:
+            yield database
+        finally:
+            database.cleanup()
+
+    def test_update_without_owner_id_invalidates_user_list_cache(self, db):
         """不带 owner_id 的 update_item 后，get_items 应返回更新后的数据"""
-        db = self._make_db()
 
         # 插入一条记录
         item_id = db.items.insert_item({

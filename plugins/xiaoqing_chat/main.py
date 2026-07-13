@@ -147,7 +147,7 @@ def _show_help() -> str:
 async def call_bot_name_only(context) -> list[dict[str, Any]]:
     """
     当消息只有 bot_name 时的随机回复
-    
+
     注意：此函数由 dispatcher 调用，作为 smalltalk provider 的一部分
     """
     return await call_bot_name_only_internal(context)
@@ -173,7 +173,7 @@ async def observe_outgoing_action(
 async def shutdown(context) -> None:
     """
     插件卸载时清理
-    
+
     等待后台任务完成（带超时），然后执行兆底数据保存。
     """
     log = getattr(context, "logger", logger)

@@ -6,7 +6,7 @@
 
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 _MEDIA_SEGMENT_TYPES = frozenset({"image", "mface", "face"})
 
@@ -40,7 +40,7 @@ def iter_message_segments(event_or_message: Any) -> tuple[dict[str, Any], ...]:
     """Return normalized message segments from either an event or raw payload."""
     message = event_or_message.get("message") if isinstance(event_or_message, dict) else event_or_message
     if not isinstance(message, list):
-        return tuple()
+        return ()
     return tuple(item for item in message if isinstance(item, dict))
 
 
@@ -122,7 +122,7 @@ def has_at_mention(
         raw_message = str(event_or_message.get("raw_message", "") or "")
     return scan_message(message, self_id=self_id, raw_message=raw_message).is_at_me
 
-def normalize_message(event: dict[str, Any]) -> tuple[str, Optional[int], Optional[int]]:
+def normalize_message(event: dict[str, Any]) -> tuple[str, int | None, int | None]:
     """
     标准化消息事件
 
@@ -139,7 +139,7 @@ def is_bot_mentioned(
 ) -> bool:
     return contains_bot_name(text, bot_name) or has_at_mention(event, self_id=self_id)
 
-def compile_bot_name_pattern(bot_name: str) -> Optional[re.Pattern[str]]:
+def compile_bot_name_pattern(bot_name: str) -> re.Pattern[str] | None:
     if not bot_name:
         return None
     return re.compile(
@@ -151,12 +151,12 @@ def strip_message_prefix(
     text: str,
     *,
     bot_name: str = "",
-    prefixes: Optional[tuple[str, ...]] = None,
+    prefixes: tuple[str, ...] | None = None,
     self_id: str = "",
-    bot_name_pattern: Optional[re.Pattern[str]] = None,
+    bot_name_pattern: re.Pattern[str] | None = None,
 ) -> str:
     stripped = text.strip()
-    prefixes = prefixes or tuple()
+    prefixes = prefixes or ()
 
     if self_id:
         at_cq = f"[CQ:at,qq={self_id}]"
@@ -202,12 +202,12 @@ def parse_text_command_context(
     event: dict[str, Any],
     *,
     bot_name: str = "",
-    prefixes: Optional[tuple[str, ...]] = None,
+    prefixes: tuple[str, ...] | None = None,
     self_id: str = "",
-    bot_name_pattern: Optional[re.Pattern[str]] = None,
+    bot_name_pattern: re.Pattern[str] | None = None,
     message_scan: MessageScan | None = None,
 ) -> TextCommandContext:
-    prefixes = prefixes or tuple()
+    prefixes = prefixes or ()
     message_scan = message_scan or scan_message(
         event.get("message"),
         self_id=self_id,

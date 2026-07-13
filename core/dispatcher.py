@@ -94,7 +94,7 @@ class MessageParser:
         self._prefix_cache_key: tuple[str, tuple[str, ...]] | None = None
         self._bot_name_pattern: re.Pattern[str] | None = None
         self._cached_bot_name: str = ""
-        self._cached_prefixes: tuple[str, ...] = tuple()
+        self._cached_prefixes: tuple[str, ...] = ()
         self.refresh_prefix_cache()
 
     def refresh_prefix_cache(self) -> None:
@@ -595,19 +595,21 @@ class Dispatcher:
 
             async def handle_active_session(
                 session: Session,
+                _expected_plugin_name: str = expected_plugin_name,
+                _plugin: Any = plugin,
             ) -> list[dict[str, Any]] | object | None:
                 """Run one continuation under gate -> per-key-lock ordering."""
 
-                if session.plugin_name != expected_plugin_name:
+                if session.plugin_name != _expected_plugin_name:
                     return session_changed
 
                 async def close_plugin_session() -> None:
-                    if not plugin or not hasattr(plugin.module, "close_session"):
+                    if not _plugin or not hasattr(_plugin.module, "close_session"):
                         return
-                    close_context = self._build_event_context(expected_plugin_name, ctx)
+                    close_context = self._build_event_context(_expected_plugin_name, ctx)
                     try:
                         await call_plugin_callback(
-                            plugin.module.close_session,
+                            _plugin.module.close_session,
                             ctx.event,
                             close_context,
                             session,
@@ -617,16 +619,16 @@ class Dispatcher:
                             close_context,
                             exc,
                             logger=logger,
-                            component=f"dispatcher.session_close.{expected_plugin_name}",
+                            component=f"dispatcher.session_close.{_expected_plugin_name}",
                         )
 
                 logger.info(
                     "[%s] Session active: plugin=%s",
                     ctx.request_id,
-                    expected_plugin_name,
+                    _expected_plugin_name,
                 )
 
-                if expected_plugin_name in _ADMIN_SESSION_PLUGINS and not self.admin_check.is_admin(
+                if _expected_plugin_name in _ADMIN_SESSION_PLUGINS and not self.admin_check.is_admin(
                     user_id
                 ):
                     await close_plugin_session()
@@ -634,7 +636,7 @@ class Dispatcher:
                     logger.warning(
                         "[%s] Revoked privileged session plugin=%s user=%s",
                         ctx.request_id,
-                        expected_plugin_name,
+                        _expected_plugin_name,
                         user_id,
                     )
                     return [{"type": "text", "data": {"text": "权限已变更，高权限会话已关闭"}}]
@@ -647,19 +649,19 @@ class Dispatcher:
                     logger.info("[%s] Session exited by user", ctx.request_id)
                     return [{"type": "text", "data": {"text": "已退出当前对话"}}]
 
-                context = self._build_event_context(expected_plugin_name, ctx)
+                context = self._build_event_context(_expected_plugin_name, ctx)
                 try:
-                    if plugin and hasattr(plugin.module, "handle_session"):
+                    if _plugin and hasattr(_plugin.module, "handle_session"):
                         return await call_plugin_callback(
-                            plugin.module.handle_session,
+                            _plugin.module.handle_session,
                             ctx.clean_text,
                             ctx.event,
                             context,
                             session,
                         )
-                    if plugin and hasattr(plugin.module, "handle"):
+                    if _plugin and hasattr(_plugin.module, "handle"):
                         return await call_plugin_callback(
-                            plugin.module.handle,
+                            _plugin.module.handle,
                             "__session__",
                             ctx.clean_text,
                             ctx.event,
@@ -677,7 +679,7 @@ class Dispatcher:
                         context,
                         exc,
                         logger=logger,
-                        component=f"dispatcher.session.{expected_plugin_name}",
+                        component=f"dispatcher.session.{_expected_plugin_name}",
                     )
                     await close_plugin_session()
                     await self.session_manager.delete(user_id, ctx.group_id)

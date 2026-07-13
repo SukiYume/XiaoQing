@@ -1,14 +1,12 @@
 import logging
 import re
-from typing import Tuple
 
-from ..models import Pet
-from ..services.pet_service import PetService
-from ..services.user_service import UserService
-from ..services.item_service import ItemService
-from ..services.social_service import SocialService
 from ..services.database import Database
-from ..utils.formatters import format_status_text, format_ranking_list
+from ..services.item_service import ItemService
+from ..services.pet_service import PetService
+from ..services.social_service import SocialService
+from ..services.user_service import UserService
+from ..utils.formatters import format_ranking_list, format_status_text
 from ..utils.validators import validate_item_amount
 from .basic_commands import resolve_pet_for_self_command, with_pet_name
 
@@ -31,7 +29,7 @@ def _extract_target_user_id(args: str) -> str:
     return ""
 
 
-async def handle_train(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> Tuple[bool, str]:
+async def handle_train(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> tuple[bool, str]:
     pet, resolved_group_id, resolved_args, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "训练"
     )
@@ -65,7 +63,7 @@ async def handle_train(user_id: str, group_id: int, args: str, db: Database, **k
     return success, with_pet_name(pet, message)
 
 
-async def handle_explore(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> Tuple[bool, str]:
+async def handle_explore(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> tuple[bool, str]:
     pet, resolved_group_id, resolved_args, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "探索"
     )
@@ -100,7 +98,7 @@ async def handle_explore(user_id: str, group_id: int, args: str, db: Database, *
     return success, with_pet_name(pet, message)
 
 
-async def handle_treat(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_treat(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     pet, resolved_group_id, resolved_args, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "治疗"
     )
@@ -157,7 +155,7 @@ async def handle_treat(user_id: str, group_id: int, args: str, db: Database) -> 
     return False, with_pet_name(pet, "治疗失败")
 
 
-async def handle_backpack(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_backpack(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     item_service = ItemService(db)
     inventory = item_service.get_inventory(user_id, group_id)
 
@@ -170,10 +168,10 @@ async def handle_backpack(user_id: str, group_id: int, args: str, db: Database) 
         if item:
             items_list.append(f"• {item.name} x{count} ({item.rarity.value})")
 
-    return True, f"📦 **背包内容**\n\n" + "\n".join(items_list)
+    return True, "📦 **背包内容**\n\n" + "\n".join(items_list)
 
 
-async def handle_shop(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_shop(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     item_service = ItemService(db)
     items = item_service.get_all_items()
 
@@ -195,10 +193,10 @@ async def handle_shop(user_id: str, group_id: int, args: str, db: Database) -> T
         effect_str = " ".join(effects) if effects else "特殊道具"
         shop_list.append(f"• [{item_id}] {item.name} ({item.rarity.value}) - {item.price}金币\n  效果: {effect_str}")
 
-    return True, f"🛒 **道具商店**\n\n使用 /宠物 购买 <道具ID/名字> [数量] 购买\n\n" + "\n\n".join(shop_list)
+    return True, "🛒 **道具商店**\n\n使用 /宠物 购买 <道具ID/名字> [数量] 购买\n\n" + "\n\n".join(shop_list)
 
 
-async def handle_buy(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_buy(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     parts = args.strip().split()
     if not parts:
         return False, "请指定要购买的道具\n用法: /宠物 购买 <道具名> [数量]"
@@ -225,7 +223,7 @@ async def handle_buy(user_id: str, group_id: int, args: str, db: Database) -> Tu
     return success, message
 
 
-async def handle_use(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_use(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """使用道具（加速卡、托管券等）"""
     pet, resolved_group_id, resolved_args, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "使用"
@@ -267,7 +265,7 @@ async def handle_use(user_id: str, group_id: int, args: str, db: Database) -> Tu
         return False, "该道具暂不支持手动使用"
 
 
-async def handle_gift(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_gift(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     match = re.match(r"@?(\d+)\s+(\S+)\s*(\d*)", args.strip())
     if not match:
         return False, "格式错误\n用法: /宠物 送礼 @QQ号 <道具名> [数量]"
@@ -294,7 +292,7 @@ async def handle_visit(
     args: str,
     db: Database,
     **kwargs,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     match = re.match(r"@?(\d+)", args.strip())
     if not match:
         return False, "格式错误\n用法: /宠物 互访 @QQ号"
@@ -318,7 +316,7 @@ async def handle_visit(
     return success, message
 
 
-async def handle_view_pet(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_view_pet(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """查看他人宠物卡片（Issue #42）"""
     target_user_id = _extract_target_user_id(args)
     if not target_user_id:
@@ -328,7 +326,7 @@ async def handle_view_pet(user_id: str, group_id: int, args: str, db: Database) 
     return social_service.view_pet_card(user_id, target_user_id, group_id)
 
 
-async def handle_like(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_like(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """点赞/摸摸他人宠物（Issue #43）"""
     match = re.match(r"@?(\d+)", args.strip())
     if not match:
@@ -340,7 +338,7 @@ async def handle_like(user_id: str, group_id: int, args: str, db: Database) -> T
     return social_service.like_pet(user_id, target_user_id, group_id)
 
 
-async def handle_message(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_message(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """留言板操作（Issue #44）"""
     if not args.strip():
         # 查看自己收到的留言
@@ -358,7 +356,7 @@ async def handle_message(user_id: str, group_id: int, args: str, db: Database) -
     return social_service.leave_message(user_id, target_user_id, group_id, message_text)
 
 
-async def handle_ranking(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_ranking(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     ranking_type = args.strip() if args.strip() else "care_score"
 
     valid_types = ["care_score", "intimacy", "experience", "coins"]
@@ -371,7 +369,7 @@ async def handle_ranking(user_id: str, group_id: int, args: str, db: Database) -
     return True, format_ranking_list(ranking, ranking_type)
 
 
-async def handle_activity(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_activity(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """群活动系统（Issue #5: 不再是硬编码占位符）"""
     activities = db.get_active_activities(group_id)
 
@@ -407,7 +405,7 @@ async def handle_activity(user_id: str, group_id: int, args: str, db: Database) 
     return True, text
 
 
-async def handle_task(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_task(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """每日任务系统（Issue #4: 不再是硬编码，真正读写数据库）"""
     pet, resolved_group_id, _, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "任务"
@@ -438,7 +436,7 @@ async def handle_task(user_id: str, group_id: int, args: str, db: Database) -> T
 
     task_names = {"feed": "喂食宠物", "clean": "清洁宠物", "play": "玩耍互动", "visit": "访问他人宠物"}
 
-    text = f"📋 **每日任务**\n\n"
+    text = "📋 **每日任务**\n\n"
     all_completed = True
     for task in tasks:
         task_type = task['task_type']
@@ -469,7 +467,7 @@ async def handle_task(user_id: str, group_id: int, args: str, db: Database) -> T
 
 async def handle_group_task(
     user_id: str, group_id: int, args: str, db: Database
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     tasks = db.get_or_create_group_tasks(group_id)
     if args.strip() in {"领取", "claim"}:
         claimed: list[str] = []
@@ -493,7 +491,7 @@ async def handle_group_task(
     return True, "\n".join(lines)
 
 
-async def handle_rename(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_rename(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     if not args.strip():
         return False, "请提供新名字\n用法: /宠物 改名 <新名字>"
 
@@ -521,7 +519,7 @@ async def handle_rename(user_id: str, group_id: int, args: str, db: Database) ->
     return success, with_pet_name(pet, message)
 
 
-async def handle_title(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_title(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """称号系统（Issue #48）"""
     user_service = UserService(db)
     # 先检查是否有新称号
@@ -532,7 +530,7 @@ async def handle_title(user_id: str, group_id: int, args: str, db: Database) -> 
     return True, text
 
 
-async def handle_minigame(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> Tuple[bool, str]:
+async def handle_minigame(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> tuple[bool, str]:
     """小游戏入口（Issue #46）"""
     if not args.strip():
         return True, ("🎮 **小游戏**\n\n"

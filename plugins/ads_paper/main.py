@@ -9,9 +9,7 @@ from core.args import parse
 from core.plugin_base import segments
 from core.public_errors import public_error_response
 
-from . import ai_commands
-from . import note_commands
-from . import paper_commands
+from . import ai_commands, note_commands, paper_commands
 from .ads_client import ADSClient
 from .storage import PaperStorage
 
@@ -94,7 +92,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
             return await handler()
 
         return segments(f"未知命令: {subcommand}\n输入 /paper help 查看帮助")
-        
+
     except Exception as exc:
         return public_error_response(
             context,

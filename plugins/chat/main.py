@@ -6,7 +6,7 @@ AI 对话插件 (Coze API)
 import asyncio
 import hashlib
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from core.args import parse
 from core.bounded_http import (
@@ -78,7 +78,7 @@ def get_config(context) -> dict[str, Any]:
     return config
 
 
-def validate_config(config: dict[str, Any]) -> tuple[bool, Optional[str]]:
+def validate_config(config: dict[str, Any]) -> tuple[bool, str | None]:
     """验证配置的完整性
 
     Args:
@@ -109,7 +109,7 @@ async def call_coze_api(
     config: dict[str, Any],
     context,
     actor_id: Any = None,
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     """调用 Coze API
 
     Args:
@@ -190,7 +190,7 @@ async def call_coze_api(
         return None
 
 
-def extract_answer(data: dict[str, Any], context) -> Optional[str]:
+def extract_answer(data: dict[str, Any], context) -> str | None:
     """从 API 响应中提取答案
 
     Args:

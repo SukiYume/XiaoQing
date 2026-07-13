@@ -3,10 +3,10 @@ Shell 插件单元测试
 """
 
 import asyncio
-import pytest
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from plugins.shell import config as shell_config
 from plugins.shell import main as shell_main
@@ -369,7 +369,7 @@ class TestSmartDecode:
 
     def test_decode_utf8(self):
         """测试 UTF-8 解码"""
-        data = "hello".encode("utf-8")
+        data = b"hello"
         result = shell_main._smart_decode(data)
         assert result == "hello"
 

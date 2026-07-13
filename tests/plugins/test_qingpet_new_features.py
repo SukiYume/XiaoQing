@@ -1,15 +1,17 @@
-import pytest
-import tempfile
-import os
 import asyncio
 import inspect
+import os
+import tempfile
+
+import pytest
+
+from plugins.qingpet import main as qingpet_main
+from plugins.qingpet.commands.new_commands import _dress_buy, _dress_equip, _dress_shop
 from plugins.qingpet.services.database import Database
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.user_service import UserService
-from plugins.qingpet.commands.new_commands import _dress_shop, _dress_buy, _dress_equip
 from plugins.qingpet.utils.formatters import format_help_text, format_pet_card
-from plugins.qingpet.utils.constants import DEFAULT_DRESS_ITEMS, DressSlot
-from plugins.qingpet import main as qingpet_main
+
 
 @pytest.fixture
 def temp_db():
@@ -25,11 +27,11 @@ def test_help_menu_categories():
     default_text = format_help_text()
     assert "基础" in default_text
     assert "进阶" in default_text
-    
+
     social_text = format_help_text("social")
     assert "社交互动" in social_text
     assert "互访" in social_text
-    
+
     shop_text = format_help_text("shop")
     assert "道具与装扮" in shop_text
 
@@ -45,32 +47,32 @@ def test_dress_shop_display():
 def test_dress_buy_with_friendship_points(temp_db):
     user_id = "test_fp_user"
     group_id = 1001
-    
+
     user_service = UserService(temp_db)
     user = user_service.get_or_create_user(user_id, group_id)
     user.friendship_points = 300
     user.coins = 0
     temp_db.update_user(user)
-    
+
     success, msg = _dress_buy(user_id, group_id, "halo", temp_db)
     assert success
     assert "花费100友情点" in msg
-    
+
     user = temp_db.get_user(user_id, group_id)
     assert user.friendship_points == 200
-    
+
     owned = temp_db.get_dress_inventory(user_id, group_id)
     assert "halo" in owned
 
 def test_dress_buy_insufficient_friendship_points(temp_db):
     user_id = "test_poor_fp_user"
     group_id = 1002
-    
+
     user_service = UserService(temp_db)
     user = user_service.get_or_create_user(user_id, group_id)
     user.friendship_points = 50
     temp_db.update_user(user)
-    
+
     success, msg = _dress_buy(user_id, group_id, "halo", temp_db)
     assert not success
     assert "友情点不足" in msg
@@ -78,18 +80,18 @@ def test_dress_buy_insufficient_friendship_points(temp_db):
 def test_pet_card_with_dress(temp_db):
     user_id = "test_dress_user"
     group_id = 1003
-    
+
     user_service = UserService(temp_db)
     user = user_service.get_or_create_user(user_id, group_id)
     pet_service = PetService(temp_db)
     pet_service.adopt_pet(user_id, group_id, "FashionPet")
-    
+
     temp_db.add_dress_item(user_id, group_id, "halo")
     _dress_equip(user_id, group_id, "halo", temp_db)
-    
+
     pet = temp_db.get_pet(user_id, group_id)
     card = format_pet_card(pet, user)
-    
+
     assert "🎩 帽子: 天使光环" in card
     assert "✨ 心情加成" in card
     assert "🪙 金币" in card

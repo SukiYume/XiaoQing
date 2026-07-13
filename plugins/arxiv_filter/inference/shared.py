@@ -12,7 +12,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from ..utils import load_plugin_config
 
@@ -45,19 +44,24 @@ def _join_plugin_path(path: str) -> str:
     return path if os.path.isabs(path) else os.path.join(_PLUGIN_DIR, path)
 
 
-def resolve_model_path(model_path: Optional[str] = None) -> str:
+def resolve_model_path(model_path: str | None = None) -> str:
     """解析并返回模型目录的绝对路径。
 
     优先级：
     1. 显式传入的 model_path
-    2. config.json 中的 model.path
-    3. 自动搜索 best_model* 目录（优先 best_model_interest）
+    2. ARXIV_MODEL_PATH 环境变量
+    3. config.json 中的 model.path
+    4. 自动搜索 best_model* 目录（优先 best_model_interest）
     """
     config = load_plugin_config()
     configured = config.get("model", {}).get("path", "best_model")
+    environment_path = os.environ.get("ARXIV_MODEL_PATH", "").strip() or None
+    if model_path:
+        return _join_plugin_path(model_path)
+    if environment_path:
+        return _join_plugin_path(environment_path)
 
-    candidates = [model_path] if model_path else []
-    candidates.append(configured)
+    candidates = [configured]
 
     # 固定 fallback
     candidates += ["best_model", "best_model_interest", "best_model_abs", "best_model_title"]
@@ -69,14 +73,16 @@ def resolve_model_path(model_path: Optional[str] = None) -> str:
         seen.add(c)
         resolved = _join_plugin_path(c)
         if os.path.isdir(resolved):
-            if c != (model_path or configured):
+            if c != configured:
                 logger.warning(
-                    "Configured path '%s' not found; falling back to '%s'", configured, c
+                    "Preferred model path '%s' not found; falling back to '%s'",
+                    configured,
+                    c,
                 )
             return resolved
 
     # 万一都找不到，返回 configured（让后续报错更清晰）
-    return _join_plugin_path(model_path or configured)
+    return _join_plugin_path(configured)
 
 
 # =============================================================================
@@ -89,7 +95,7 @@ def load_training_config(model_path: str) -> dict:
     cfg_file = os.path.join(model_path, "training_config.json")
     if not os.path.exists(cfg_file):
         return {}
-    with open(cfg_file, "r", encoding="utf-8") as f:
+    with open(cfg_file, encoding="utf-8") as f:
         cfg = json.load(f)
     logger.info("Loaded training config from %s", cfg_file)
     return cfg
@@ -127,10 +133,10 @@ def resolve_multi_interest_model_path(model_path: str, training_config: dict) ->
 
 
 def resolve_params(
-    model_path: Optional[str] = None,
-    threshold: Optional[float] = None,
-    batch_size: Optional[int] = None,
-    max_len: Optional[int] = None,
+    model_path: str | None = None,
+    threshold: float | None = None,
+    batch_size: int | None = None,
+    max_len: int | None = None,
 ) -> InferenceParams:
     """解析所有推理参数，自动从 training_config / plugin config 读取默认值。"""
     plugin_cfg = load_plugin_config().get("model", {})

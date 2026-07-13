@@ -25,6 +25,100 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_PLUGIN_COUNT = 29
+EXPECTED_RESOURCE_COUNT = 39
+RUNTIME_SNAPSHOT = "release/python-runtime-files.txt"
+EXPECTED_RUNTIME_PACKAGES = (
+    "core",
+    "plugins",
+    "plugins.adnmb",
+    "plugins.ads_paper",
+    "plugins.apod",
+    "plugins.arxiv_filter",
+    "plugins.arxiv_filter.inference",
+    "plugins.astro_tools",
+    "plugins.bot_core",
+    "plugins.chat",
+    "plugins.chime",
+    "plugins.choice",
+    "plugins.codex",
+    "plugins.color",
+    "plugins.dict",
+    "plugins.earthquake",
+    "plugins.echo",
+    "plugins.github",
+    "plugins.guess_number",
+    "plugins.jupyter",
+    "plugins.minecraft",
+    "plugins.pendo",
+    "plugins.pendo.commands",
+    "plugins.pendo.core",
+    "plugins.pendo.handlers",
+    "plugins.pendo.models",
+    "plugins.pendo.services",
+    "plugins.pendo.utils",
+    "plugins.pendo.web",
+    "plugins.pendo.web.analytics",
+    "plugins.pendo.web.api",
+    "plugins.pendo.web.services",
+    "plugins.qingpet",
+    "plugins.qingpet.commands",
+    "plugins.qingpet.models",
+    "plugins.qingpet.services",
+    "plugins.qingpet.utils",
+    "plugins.qingssh",
+    "plugins.shell",
+    "plugins.signin",
+    "plugins.smalltalk",
+    "plugins.twitter",
+    "plugins.url_parser",
+    "plugins.voice",
+    "plugins.wolframalpha",
+    "plugins.xiaoqing_chat",
+    "plugins.xiaoqing_chat.config",
+    "plugins.xiaoqing_chat.expression",
+    "plugins.xiaoqing_chat.llm",
+    "plugins.xiaoqing_chat.media",
+    "plugins.xiaoqing_chat.memory",
+    "plugins.xiaoqing_chat.planning",
+    "plugins.xiaoqing_chat.utils",
+)
+FORBIDDEN_RELEASE_PREFIXES = (
+    ".github/",
+    ".codex/",
+    "docs/",
+    "release/",
+    "scripts/",
+    "tests/",
+    "plugins/arxiv_filter/train_model/",
+    "plugins/pendo/scripts/",
+    "plugins/pendo/web/migrations/",
+    "plugins/xiaoqing_chat/experiments/",
+)
+FORBIDDEN_RELEASE_FILES = frozenset({"plugins/arxiv_filter/arxiv_test.py"})
+WHEEL_METADATA_FILES = (
+    "METADATA",
+    "RECORD",
+    "WHEEL",
+    "entry_points.txt",
+    "licenses/LICENSE",
+    "top_level.txt",
+)
+SDIST_ROOT_FILES = (
+    "LICENSE",
+    "MANIFEST.in",
+    "PKG-INFO",
+    "README.md",
+    "pyproject.toml",
+    "setup.cfg",
+)
+SDIST_EGG_INFO_FILES = (
+    "PKG-INFO",
+    "SOURCES.txt",
+    "dependency_links.txt",
+    "entry_points.txt",
+    "requires.txt",
+    "top_level.txt",
+)
 MAX_ARCHIVE_MEMBERS = 50_000
 MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_METADATA_BYTES = 4 * 1024 * 1024
@@ -92,6 +186,41 @@ def _project_identity(document: dict[str, Any]) -> tuple[str, str]:
     if not name or not version:
         raise ReleaseVerificationError("project name/version must be non-empty")
     return name, version
+
+
+def _runtime_packages(repo: Path, document: dict[str, Any]) -> tuple[str, ...]:
+    tool = document.get("tool")
+    setuptools = tool.get("setuptools") if isinstance(tool, dict) else None
+    packages = setuptools.get("packages") if isinstance(setuptools, dict) else None
+    if not isinstance(packages, list) or not packages:
+        raise ReleaseVerificationError("setuptools packages must be a non-empty explicit array")
+    if not all(
+        isinstance(package, str) and re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", package)
+        for package in packages
+    ):
+        raise ReleaseVerificationError("setuptools packages contains an invalid package name")
+    normalized = tuple(packages)
+    if len(set(normalized)) != len(normalized):
+        raise ReleaseVerificationError("setuptools packages contains duplicate entries")
+    if normalized != EXPECTED_RUNTIME_PACKAGES:
+        missing = sorted(set(EXPECTED_RUNTIME_PACKAGES) - set(normalized))[:10]
+        extra = sorted(set(normalized) - set(EXPECTED_RUNTIME_PACKAGES))[:10]
+        raise ReleaseVerificationError(
+            f"explicit runtime package contract mismatch: missing={missing!r} extra={extra!r}"
+        )
+    for package in normalized:
+        path = repo / Path(*package.split("."))
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise ReleaseVerificationError(
+                f"runtime package directory is missing: {package}"
+            ) from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise ReleaseVerificationError(
+                f"runtime package directory must be a real directory: {package}"
+            )
+    return normalized
 
 
 def _run(
@@ -178,19 +307,15 @@ def _manifest_plugins(repo: Path, tracked: set[str]) -> dict[str, str]:
     return plugins
 
 
-def _package_directories(tracked: set[str]) -> set[PurePosixPath]:
-    directories: set[PurePosixPath] = set()
-    for relative in tracked:
-        path = PurePosixPath(relative)
-        if path.suffix == ".py" and path.parts[0] in {"core", "plugins"}:
-            directories.add(path.parent)
-    return directories
+def _package_directories(packages: tuple[str, ...]) -> set[PurePosixPath]:
+    return {PurePosixPath(*package.split(".")) for package in packages}
 
 
 def _package_data_resources(
     repo: Path,
     document: dict[str, Any],
     tracked: set[str],
+    packages: tuple[str, ...],
 ) -> set[str]:
     tool = document.get("tool")
     setuptools = tool.get("setuptools") if isinstance(tool, dict) else None
@@ -198,7 +323,7 @@ def _package_data_resources(
     if not isinstance(package_data, dict):
         raise ReleaseVerificationError("pyproject.toml is missing [tool.setuptools.package-data]")
 
-    package_directories = _package_directories(tracked)
+    package_directories = _package_directories(packages)
     resources: set[str] = set()
     for raw_package, raw_patterns in package_data.items():
         if not isinstance(raw_package, str) or not isinstance(raw_patterns, list):
@@ -228,28 +353,80 @@ def _package_data_resources(
     return resources
 
 
+def _runtime_snapshot(repo: Path) -> tuple[str, ...]:
+    snapshot = _ordinary_file(repo / RUNTIME_SNAPSHOT, RUNTIME_SNAPSHOT)
+    try:
+        payload = snapshot.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ReleaseVerificationError("cannot read the runtime file snapshot") from exc
+    if payload.startswith("\ufeff") or not payload.endswith("\n"):
+        raise ReleaseVerificationError(
+            "runtime file snapshot must be UTF-8 without BOM and newline-terminated"
+        )
+    lines = payload.splitlines()
+    if not lines or any(not line or line != line.strip() for line in lines):
+        raise ReleaseVerificationError("runtime file snapshot must contain one clean path per line")
+    normalized = tuple(
+        _safe_relative_path(line, description="runtime file snapshot") for line in lines
+    )
+    if normalized != tuple(sorted(set(normalized))):
+        raise ReleaseVerificationError("runtime file snapshot must be sorted and unique")
+    return normalized
+
+
+def _runtime_python_files(
+    repo: Path,
+    tracked: set[str],
+    package_directories: set[PurePosixPath],
+) -> set[str]:
+    files = {"main.py"}
+    _ordinary_file(repo / "main.py", "main.py")
+    for package in package_directories:
+        directory = repo / Path(*package.parts)
+        for candidate in directory.glob("*.py"):
+            relative = candidate.relative_to(repo).as_posix()
+            _ordinary_file(candidate, relative)
+            if relative not in tracked:
+                raise ReleaseVerificationError(
+                    f"runtime Python file must be Git-tracked: {relative}"
+                )
+            files.add(relative)
+    return files
+
+
 def build_runtime_inventory(repo: Path) -> RuntimeInventory:
     """Return the exact Git-backed runtime file contract for built artifacts."""
     repo = repo.resolve()
     document = _project_document(repo)
+    packages = _runtime_packages(repo, document)
     tracked = _git_tracked_files(repo)
     plugins = _manifest_plugins(repo, tracked)
-    python_files = {
-        relative
-        for relative in tracked
-        if relative == "main.py"
-        or (
-            relative.endswith(".py")
-            and (relative.startswith("core/") or relative.startswith("plugins/"))
-        )
-    }
+    package_directories = _package_directories(packages)
+    python_files = _runtime_python_files(repo, tracked, package_directories)
     manifests = {f"plugins/{name}/plugin.json" for name in plugins}
-    resources = _package_data_resources(repo, document, tracked) - manifests
+    resources = _package_data_resources(repo, document, tracked, packages) - manifests
+    if len(resources) != EXPECTED_RESOURCE_COUNT:
+        raise ReleaseVerificationError(
+            f"expected {EXPECTED_RESOURCE_COUNT} runtime resources, found {len(resources)}"
+        )
+    for name, entry in plugins.items():
+        entry_path = f"plugins/{name}/{entry}"
+        if entry_path not in python_files:
+            raise ReleaseVerificationError(
+                f"plugins/{name}/plugin.json entry is outside the runtime package contract"
+            )
     files = python_files | manifests | resources
     for relative in files:
         _ordinary_file(repo / Path(*PurePosixPath(relative).parts), relative)
+    snapshot = _runtime_snapshot(repo)
+    if files != set(snapshot):
+        missing = sorted(files - set(snapshot))[:10]
+        extra = sorted(set(snapshot) - files)[:10]
+        raise ReleaseVerificationError(
+            f"runtime snapshot mismatch: add={missing!r} remove={extra!r}"
+        )
     return RuntimeInventory(
-        files=tuple(sorted(files)),
+        files=snapshot,
         plugins=tuple(sorted(plugins.items())),
         resources=tuple(sorted(resources)),
     )
@@ -258,6 +435,26 @@ def build_runtime_inventory(repo: Path) -> RuntimeInventory:
 def _archive_member_name(raw: str, *, directory: bool) -> str:
     value = raw.rstrip("/") if directory else raw
     return _safe_relative_path(value, description="release archive")
+
+
+def _forbidden_release_member(relative: str) -> bool:
+    if relative in FORBIDDEN_RELEASE_FILES:
+        return True
+    return any(
+        relative == prefix.rstrip("/") or relative.startswith(prefix)
+        for prefix in FORBIDDEN_RELEASE_PREFIXES
+    )
+
+
+def _allowed_archive_directories(files: set[str]) -> set[str]:
+    directories: set[str] = set()
+    for raw in files:
+        path = PurePosixPath(raw)
+        for parent in path.parents:
+            if parent == PurePosixPath("."):
+                break
+            directories.add(parent.as_posix())
+    return directories
 
 
 def _metadata_identity(payload: bytes, description: str) -> tuple[str, str]:
@@ -286,6 +483,7 @@ def inspect_wheel(
         raise ReleaseVerificationError("wheel filename does not match pyproject.toml")
     seen: set[str] = set()
     files: set[str] = set()
+    directories: set[str] = set()
     metadata_payloads: list[bytes] = []
     total_bytes = 0
     try:
@@ -302,6 +500,8 @@ def inspect_wheel(
             if name in seen:
                 raise ReleaseVerificationError(f"wheel contains a duplicate member: {name}")
             seen.add(name)
+            if _forbidden_release_member(name):
+                raise ReleaseVerificationError(f"wheel contains a repository-only member: {name}")
             if member.flag_bits & 0x1:
                 raise ReleaseVerificationError(f"wheel contains an encrypted member: {name}")
             mode = member.external_attr >> 16
@@ -311,6 +511,7 @@ def inspect_wheel(
             if directory:
                 if file_type not in {0, stat.S_IFDIR}:
                     raise ReleaseVerificationError(f"wheel contains a special directory: {name}")
+                directories.add(name)
                 continue
             if file_type not in {0, stat.S_IFREG}:
                 raise ReleaseVerificationError(f"wheel contains a non-regular member: {name}")
@@ -339,6 +540,19 @@ def inspect_wheel(
         raise ReleaseVerificationError(
             f"wheel runtime inventory mismatch: missing={missing!r} extra={extra!r}"
         )
+    dist_info = f"{expected_distribution}-{project_version}.dist-info"
+    allowed_files = expected | {f"{dist_info}/{relative}" for relative in WHEEL_METADATA_FILES}
+    if files != allowed_files:
+        missing = sorted(allowed_files - files)[:10]
+        extra = sorted(files - allowed_files)[:10]
+        raise ReleaseVerificationError(
+            f"wheel archive boundary mismatch: missing={missing!r} extra={extra!r}"
+        )
+    unknown_directories = sorted(directories - _allowed_archive_directories(allowed_files))
+    if unknown_directories:
+        raise ReleaseVerificationError(
+            f"wheel contains unknown directories: {unknown_directories[:10]!r}"
+        )
 
 
 def inspect_sdist(
@@ -355,6 +569,7 @@ def inspect_sdist(
         raise ReleaseVerificationError("sdist filename does not match pyproject.toml")
     seen: set[str] = set()
     files: set[str] = set()
+    directories: set[str] = set()
     metadata_payloads: list[bytes] = []
     roots: set[str] = set()
     total_bytes = 0
@@ -375,6 +590,7 @@ def inspect_sdist(
             if not (member.isdir() or member.isreg()):
                 raise ReleaseVerificationError(f"sdist contains a non-regular member: {name}")
             if member.isdir():
+                directories.add(name)
                 continue
             total_bytes += member.size
             if total_bytes > MAX_ARCHIVE_BYTES:
@@ -385,8 +601,9 @@ def inspect_sdist(
                 if source is None:
                     raise ReleaseVerificationError("sdist PKG-INFO has no payload")
                 metadata_payloads.append(source.read(MAX_METADATA_BYTES + 1))
-    if len(roots) != 1:
-        raise ReleaseVerificationError("sdist must contain one top-level directory")
+    expected_root = f"{expected_distribution}-{project_version}"
+    if roots != {expected_root}:
+        raise ReleaseVerificationError("sdist must contain its one canonical top-level directory")
     if len(metadata_payloads) != 1:
         raise ReleaseVerificationError("sdist must contain exactly one root PKG-INFO")
     metadata_name, metadata_version = _metadata_identity(metadata_payloads[0], "sdist PKG-INFO")
@@ -399,9 +616,45 @@ def inspect_sdist(
         for name in files
         if len(PurePosixPath(name).parts) > 1
     }
-    missing = sorted(set(inventory.files) - stripped)
-    if missing:
-        raise ReleaseVerificationError(f"sdist is missing runtime files: {missing[:10]!r}")
+    forbidden = sorted(relative for relative in stripped if _forbidden_release_member(relative))
+    if forbidden:
+        raise ReleaseVerificationError(
+            f"sdist contains repository-only members: {forbidden[:10]!r}"
+        )
+    app_files = {
+        relative
+        for relative in stripped
+        if relative == "main.py" or relative.startswith("core/") or relative.startswith("plugins/")
+    }
+    expected = set(inventory.files)
+    if app_files != expected:
+        missing = sorted(expected - app_files)[:10]
+        extra = sorted(app_files - expected)[:10]
+        raise ReleaseVerificationError(
+            f"sdist runtime inventory mismatch: missing={missing!r} extra={extra!r}"
+        )
+    egg_info = f"{expected_distribution}.egg-info"
+    allowed_files = (
+        expected
+        | set(SDIST_ROOT_FILES)
+        | {f"{egg_info}/{relative}" for relative in SDIST_EGG_INFO_FILES}
+    )
+    if stripped != allowed_files:
+        missing = sorted(allowed_files - stripped)[:10]
+        extra = sorted(stripped - allowed_files)[:10]
+        raise ReleaseVerificationError(
+            f"sdist archive boundary mismatch: missing={missing!r} extra={extra!r}"
+        )
+    stripped_directories = {
+        PurePosixPath(*PurePosixPath(name).parts[1:]).as_posix()
+        for name in directories
+        if len(PurePosixPath(name).parts) > 1
+    }
+    unknown_directories = sorted(stripped_directories - _allowed_archive_directories(allowed_files))
+    if unknown_directories:
+        raise ReleaseVerificationError(
+            f"sdist contains unknown directories: {unknown_directories[:10]!r}"
+        )
 
 
 def _find_artifacts(dist_dir: Path, project_name: str) -> tuple[Path, Path]:
@@ -460,9 +713,12 @@ _PROBE_SOURCE = r"""from __future__ import annotations
 import hashlib
 import importlib
 import importlib.metadata
+import importlib.util
 import json
+import py_compile
 import sys
 import sysconfig
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -473,6 +729,21 @@ def fail(message: str) -> None:
 
 spec = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 source_root = Path(spec["source_root"]).resolve()
+probe_root = Path(sys.argv[1]).resolve().parent
+project_version = str(spec["project_version"])
+expected_plugin_count = int(spec["expected_plugin_count"])
+expected_python_file_count = int(spec["expected_python_file_count"])
+expected_resource_count = int(spec["expected_resource_count"])
+expected_runtime_file_count = int(spec["expected_runtime_file_count"])
+expected_runtime = frozenset(str(path) for path in spec["runtime_files"])
+expected_plugins = dict(spec["plugins"])
+expected_resources = tuple(str(path) for path in spec["resources"])
+if len(expected_runtime) != expected_runtime_file_count:
+    fail("release specification runtime count mismatch")
+if len(expected_plugins) != expected_plugin_count:
+    fail("release specification plugin count mismatch")
+if len(expected_resources) != expected_resource_count:
+    fail("release specification resource count mismatch")
 purelib = Path(sysconfig.get_path("purelib")).resolve()
 cwd = Path.cwd().resolve()
 try:
@@ -481,6 +752,12 @@ except ValueError:
     pass
 else:
     fail("probe cwd is inside the source repository")
+try:
+    probe_root.relative_to(source_root)
+except ValueError:
+    pass
+else:
+    fail("probe workspace is inside the source repository")
 for raw in sys.path:
     if not raw:
         continue
@@ -499,7 +776,7 @@ def require_installed(path: Path, description: str) -> Path:
 
 
 distribution = importlib.metadata.distribution("xiaoqing")
-if distribution.version != spec["project_version"]:
+if distribution.version != project_version:
     fail("installed distribution version mismatch")
 installed_files = {str(item).replace("\\", "/") for item in distribution.files or ()}
 generated_bytecode = {
@@ -512,7 +789,6 @@ installed_runtime = {
     for path in installed_files
     if path == "main.py" or path.startswith("core/") or path.startswith("plugins/")
 } - generated_bytecode
-expected_runtime = set(spec["runtime_files"])
 if installed_runtime != expected_runtime:
     fail(
         f"installed runtime inventory mismatch: "
@@ -527,11 +803,47 @@ for package_name in ("main", "core", "plugins"):
         fail(f"{package_name} has no module file")
     require_installed(Path(module_file), package_name)
 
+runtime_python = sorted(path for path in expected_runtime if path.endswith(".py"))
+if len(runtime_python) != expected_python_file_count:
+    fail("installed Python source count mismatch")
+with tempfile.TemporaryDirectory(
+    prefix="xiaoqing-runtime-bytecode-",
+    dir=probe_root,
+) as raw_bytecode:
+    bytecode_root = Path(raw_bytecode)
+    for index, relative in enumerate(runtime_python):
+        source = require_installed(purelib / Path(*relative.split("/")), relative)
+        parts = relative.removesuffix(".py").split("/")
+        is_package = parts[-1] == "__init__"
+        if is_package:
+            parts.pop()
+        module_name = ".".join(parts)
+        module_spec = importlib.util.spec_from_file_location(
+            module_name,
+            source,
+            submodule_search_locations=[str(source.parent)] if is_package else None,
+        )
+        if (
+            module_spec is None
+            or module_spec.loader is None
+            or Path(str(module_spec.origin)).resolve() != source
+        ):
+            fail(f"installed module spec is invalid: {relative}")
+        try:
+            py_compile.compile(
+                str(source),
+                cfile=str(bytecode_root / f"{index}.pyc"),
+                doraise=True,
+            )
+        except py_compile.PyCompileError as exc:
+            raise RuntimeError(
+                f"installed Python source does not compile: {relative}"
+            ) from exc
+
 plugins_root = require_installed(purelib / "plugins", "plugins root")
 manifest_paths = sorted(plugins_root.glob("*/plugin.json"))
-if len(manifest_paths) != spec["expected_plugin_count"]:
+if len(manifest_paths) != expected_plugin_count:
     fail(f"installed plugin count mismatch: {len(manifest_paths)}")
-expected_plugins = dict(spec["plugins"])
 seen_plugins: dict[str, str] = {}
 for manifest_path in manifest_paths:
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -561,7 +873,7 @@ for module_name, module in list(sys.modules.items()):
     if module_file:
         require_installed(Path(module_file), module_name)
 
-for relative in spec["resources"]:
+for relative in expected_resources:
     path = require_installed(purelib / Path(*relative.split("/")), relative)
     payload = path.read_bytes()
     if not payload:
@@ -604,8 +916,9 @@ with zipfile.ZipFile(pendo_root / "services/assets/demo_bundle.pendo.zip") as bu
 
 print(json.dumps({
     "plugin_count": len(seen_plugins),
+    "python_file_count": len(runtime_python),
     "runtime_file_count": len(installed_runtime),
-    "resource_count": len(spec["resources"]),
+    "resource_count": len(expected_resources),
 }, sort_keys=True))
 """
 
@@ -625,6 +938,9 @@ def _write_probe_inputs(
         "source_root": str(repo.resolve()),
         "project_version": project_version,
         "expected_plugin_count": EXPECTED_PLUGIN_COUNT,
+        "expected_python_file_count": sum(relative.endswith(".py") for relative in inventory.files),
+        "expected_resource_count": len(inventory.resources),
+        "expected_runtime_file_count": len(inventory.files),
         "runtime_files": list(inventory.files),
         "plugins": [list(item) for item in inventory.plugins],
         "resources": list(inventory.resources),
@@ -650,6 +966,28 @@ def verify_installed_artifact(
     probe_cwd: Path,
 ) -> dict[str, Any]:
     """Install one artifact in its own venv and run an isolated import/resource probe."""
+    try:
+        specification = json.loads(
+            _ordinary_file(spec_path, "release probe specification").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ReleaseVerificationError("cannot read the release probe specification") from exc
+    if not isinstance(specification, dict):
+        raise ReleaseVerificationError("release probe specification must be an object")
+    summary_keys = {
+        "plugin_count": "expected_plugin_count",
+        "python_file_count": "expected_python_file_count",
+        "resource_count": "expected_resource_count",
+        "runtime_file_count": "expected_runtime_file_count",
+    }
+    expected_payload: dict[str, int] = {}
+    for result_key, specification_key in summary_keys.items():
+        value = specification.get(specification_key)
+        if type(value) is not int or value < 0:
+            raise ReleaseVerificationError(
+                f"release probe specification has invalid {specification_key}"
+            )
+        expected_payload[result_key] = value
     venv = work_dir / f"{kind}-venv"
     _run(
         [sys.executable, "-m", "venv", "--system-site-packages", str(venv)],
@@ -684,6 +1022,10 @@ def verify_installed_artifact(
         raise ReleaseVerificationError(f"{kind} probe returned invalid JSON") from exc
     if not isinstance(payload, dict):
         raise ReleaseVerificationError(f"{kind} probe returned a non-object")
+    if payload != expected_payload:
+        raise ReleaseVerificationError(
+            f"{kind} probe summary mismatch: expected={expected_payload!r} actual={payload!r}"
+        )
     return payload
 
 

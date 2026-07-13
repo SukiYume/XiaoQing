@@ -2,16 +2,16 @@ import hashlib
 import logging
 import random
 import secrets
-from datetime import datetime
-from typing import List, Tuple, Optional, Dict
 
-from ..models import Pet, User
+from ..models import Pet
 from ..utils.constants import (
-    COOLDOWN_TIMES, DAILY_LIMITS, MINIGAME_CONFIG, PetPersonality, PET_SHOW_CONFIG,
-    DEFAULT_ITEMS, PetStage, PetStatus # Added new constants
+    COOLDOWN_TIMES,
+    DAILY_LIMITS,
+    MINIGAME_CONFIG,
+    PET_SHOW_CONFIG,
+    PetPersonality,
 )
-from ..utils.validators import validate_cooling, validate_sensitive_content
-from ..utils.time import utc_now
+from ..utils.validators import validate_sensitive_content
 from .database import Database, MinigameOutcome
 from .user_service import UserService
 
@@ -28,8 +28,8 @@ class SocialService:
         user_id: str,
         group_id: int,
         *,
-        opponent_user_id: Optional[str] = None,
-        message_id: Optional[str] = None,
+        opponent_user_id: str | None = None,
+        message_id: str | None = None,
     ) -> str:
         request_token = str(message_id or secrets.token_hex(16))
         material = (
@@ -57,8 +57,8 @@ class SocialService:
         target_user_id: str,
         group_id: int,
         *,
-        message_id: Optional[str] = None,
-    ) -> Tuple[bool, str]:
+        message_id: str | None = None,
+    ) -> tuple[bool, str]:
         request_token = str(message_id or secrets.token_hex(16))
         material = f"{request_token}\0{group_id}\0{visitor_user_id}\0{target_user_id}"
         reference_id = f"pet-visit:v1:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
@@ -90,7 +90,7 @@ class SocialService:
     # ──────────────────── 送礼 ────────────────────
 
     def gift_item(self, from_user_id: str, to_user_id: str, group_id: int,
-                  item_id: str, amount: int = 1) -> Tuple[bool, str]:
+                  item_id: str, amount: int = 1) -> tuple[bool, str]:
         if from_user_id == to_user_id:
             return False, "不能给自己送礼物"
 
@@ -113,7 +113,7 @@ class SocialService:
     # ──────────────────── 查看他人宠物卡片（Issue #42）────────────────────
 
     def view_pet_card(self, viewer_user_id: str, target_user_id: str,
-                      group_id: int) -> Tuple[bool, str]:
+                      group_id: int) -> tuple[bool, str]:
         """查看他人的宠物卡片"""
         target_pet = self.db.get_pet(target_user_id, group_id)
         if not target_pet:
@@ -129,7 +129,7 @@ class SocialService:
 
     # ──────────────────── 点赞/摸摸（Issue #43）────────────────────
 
-    def like_pet(self, user_id: str, target_user_id: str, group_id: int) -> Tuple[bool, str]:
+    def like_pet(self, user_id: str, target_user_id: str, group_id: int) -> tuple[bool, str]:
         """CR Review Issue #4/#9: 添加每日每用户点赞次数限制"""
         if user_id == target_user_id:
             return False, "不能给自己点赞"
@@ -147,7 +147,7 @@ class SocialService:
     # ──────────────────── 留言板（Issue #44）────────────────────
 
     def leave_message(self, from_user_id: str, to_user_id: str,
-                      group_id: int, message: str) -> Tuple[bool, str]:
+                      group_id: int, message: str) -> tuple[bool, str]:
         """CR Review Issue #3/#8: 添加每日留言次数限制"""
         if from_user_id == to_user_id:
             return False, "不能给自己留言"
@@ -172,7 +172,7 @@ class SocialService:
             return True, f"已给{result.pet_name}留言：{message}"
         return False, result.reason or "留言失败"
 
-    def get_messages(self, user_id: str, group_id: int) -> Tuple[bool, str]:
+    def get_messages(self, user_id: str, group_id: int) -> tuple[bool, str]:
         """查看我的宠物收到的留言"""
         messages = self.db.get_messages(user_id, group_id)
         if not messages:
@@ -189,7 +189,7 @@ class SocialService:
     # ──────────────────── 排行榜（修复 care_score 显示问题 Issue #15）────────────
 
     def get_ranking(self, group_id: int, ranking_type: str = "care_score",
-                    limit: int = 10) -> List[Tuple[str, str, float]]:
+                    limit: int = 10) -> list[tuple[str, str, float]]:
         if ranking_type in {"care_score", "intimacy", "experience"}:
             rows = self.db.get_pet_ranking(group_id, ranking_type, limit)
             return [
@@ -215,8 +215,8 @@ class SocialService:
         group_id: int,
         player_choice: str,
         *,
-        message_id: Optional[str] = None,
-    ) -> Tuple[bool, str]:
+        message_id: str | None = None,
+    ) -> tuple[bool, str]:
         """猜拳小游戏"""
         choices = {"石头": "rock", "剪刀": "scissors", "布": "paper",
                    "rock": "rock", "scissors": "scissors", "paper": "paper"}
@@ -228,7 +228,7 @@ class SocialService:
         cn = {"rock": "石头", "scissors": "剪刀", "paper": "布"}
         config = MINIGAME_CONFIG["rock_paper_scissors"]
 
-        def outcome_factory(_pet: Pet, _opponent: Optional[Pet]) -> MinigameOutcome:
+        def outcome_factory(_pet: Pet, _opponent: Pet | None) -> MinigameOutcome:
             npc_choice = random.choice(["rock", "scissors", "paper"])
             if normalized == npc_choice:
                 outcome_text = "平局"
@@ -272,7 +272,7 @@ class SocialService:
             return False, settlement.reason or "猜拳结算失败"
         payload = settlement.payload or {}
 
-        msg = f"✊✌️✋ **猜拳**\n\n"
+        msg = "✊✌️✋ **猜拳**\n\n"
         msg += f"你出了：{cn[str(payload['player_choice'])]}\n"
         msg += f"{settlement.pet_name}出了：{cn[str(payload['npc_choice'])]}\n\n"
         msg += f"**{payload['result']}！**"
@@ -287,12 +287,12 @@ class SocialService:
         user_id: str,
         group_id: int,
         *,
-        message_id: Optional[str] = None,
-    ) -> Tuple[bool, str]:
+        message_id: str | None = None,
+    ) -> tuple[bool, str]:
         """骰子小游戏"""
         config = MINIGAME_CONFIG["dice"]
 
-        def outcome_factory(_pet: Pet, _opponent: Optional[Pet]) -> MinigameOutcome:
+        def outcome_factory(_pet: Pet, _opponent: Pet | None) -> MinigameOutcome:
             player_dice = random.randint(1, 6)
             pet_dice = random.randint(1, 6)
             if player_dice > pet_dice:
@@ -333,7 +333,7 @@ class SocialService:
             return False, settlement.reason or "骰子结算失败"
         payload = settlement.payload or {}
 
-        msg = f"🎲 **骰子**\n\n"
+        msg = "🎲 **骰子**\n\n"
         msg += f"你掷出了：{payload['player_dice']}\n"
         msg += f"{settlement.pet_name}掷出了：{payload['pet_dice']}\n\n"
         msg += f"**{payload['result']}！**"
@@ -349,15 +349,15 @@ class SocialService:
         target_user_id: str,
         group_id: int,
         *,
-        message_id: Optional[str] = None,
-    ) -> Tuple[bool, str]:
+        message_id: str | None = None,
+    ) -> tuple[bool, str]:
         """宠物赛跑"""
         if user_id == target_user_id:
             return False, "不能跟自己的宠物赛跑"
 
         config = MINIGAME_CONFIG["race"]
 
-        def outcome_factory(pet: Pet, opponent: Optional[Pet]) -> MinigameOutcome:
+        def outcome_factory(pet: Pet, opponent: Pet | None) -> MinigameOutcome:
             if opponent is None:
                 raise RuntimeError("race opponent disappeared")
             energy_cost = int(config["energy_cost"])
@@ -417,7 +417,7 @@ class SocialService:
         else:
             outcome_text = f"😔 {settlement.opponent_pet_name}赢了！"
 
-        msg = f"🏃 **宠物赛跑**\n\n"
+        msg = "🏃 **宠物赛跑**\n\n"
         msg += f"{settlement.pet_name} 🆚 {settlement.opponent_pet_name}\n\n"
         msg += outcome_text
         msg += self._reward_suffix(

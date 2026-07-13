@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, overload
+from typing import Any, overload
 
 from core.sensitive_audit import summarize_sensitive
 
@@ -37,10 +37,10 @@ class LogEvent:
     """日志事件"""
 
     event_type: LogEventType
-    player: Optional[str]
-    message: Optional[str]
+    player: str | None
+    message: str | None
     raw_line: str
-    timestamp: Optional[str] = None
+    timestamp: str | None = None
 
 
 @dataclass
@@ -266,7 +266,7 @@ class LogMonitor:
         """在线程池中检查更新，避免阻塞事件循环"""
         return await asyncio.to_thread(self.check_updates)
 
-    def _parse_line(self, line: str) -> Optional[LogEvent]:
+    def _parse_line(self, line: str) -> LogEvent | None:
         """解析单行日志"""
         # 提取时间戳
         timestamp = None

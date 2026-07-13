@@ -18,15 +18,15 @@ arXiv 论文标题分类器训练脚本
 
 from __future__ import annotations
 
-import json
 import importlib
+import json
 import os
 import random
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -439,7 +439,9 @@ def eval_model(
             all_labels.extend(labels.cpu().tolist())
             all_preds.extend(preds.cpu().tolist())
 
-    accuracy = sum(pred == label for pred, label in zip(all_preds, all_labels)) / len(all_labels)
+    accuracy = sum(
+        pred == label for pred, label in zip(all_preds, all_labels, strict=True)
+    ) / len(all_labels)
     report = cast(
         str,
         classification_report(
@@ -620,10 +622,7 @@ def main(config: TrainingConfig = CONFIG) -> None:
         if is_best:
             best_accuracy = val_metrics.accuracy
             _log(
-                "      | ★ New best (acc={acc:.4f}), saving -> {output_dir}".format(
-                    acc=best_accuracy,
-                    output_dir=config.output_dir,
-                )
+                f"      | ★ New best (acc={best_accuracy:.4f}), saving -> {config.output_dir}"
             )
             model.save_pretrained(config.output_dir)
             tokenizer.save_pretrained(config.output_dir)

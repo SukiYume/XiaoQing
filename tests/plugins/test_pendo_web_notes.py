@@ -52,6 +52,7 @@ def test_build_notes_overview_tracks_categories_tags_and_cadence():
         assert len(result["cadence"]) == 14
         assert "工作" in result["all_categories"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -96,6 +97,7 @@ def test_build_notes_overview_clips_current_period_cadence_to_today():
         assert [item["count"] for item in result["cadence"]] == [0, 1]
     finally:
         notes_overview_module.datetime = original_datetime
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -139,6 +141,7 @@ def test_build_notes_overview_filters_tags_by_exact_match():
         assert result["summary"]["total_count"] == 1
         assert result["recent_notes"][0]["id"] == "n_work"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 

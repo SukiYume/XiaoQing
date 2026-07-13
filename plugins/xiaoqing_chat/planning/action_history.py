@@ -6,7 +6,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import write_json
 
@@ -29,7 +29,7 @@ class ActionHistoryStore:
     """
 
     def __init__(self) -> None:
-        self._data_dir: Optional[Path] = None
+        self._data_dir: Path | None = None
         self._cache: dict[str, list[ActionRecord]] = {}
         self._dirty: set[str] = set()
         self._async_loading: set[str] = set()
@@ -65,7 +65,7 @@ class ActionHistoryStore:
             except OSError:
                 pass
 
-    def flush(self, chat_id: Optional[str] = None) -> None:
+    def flush(self, chat_id: str | None = None) -> None:
         """Persist dirty chat(s) to disk. Call from debounced scheduler."""
         if chat_id is not None:
             self._persist(chat_id)
@@ -102,7 +102,7 @@ class ActionHistoryStore:
             return []
         return list(self._cache.get(chat_id, [])[-max_items:])
 
-    def _path(self, chat_id: str) -> Optional[Path]:
+    def _path(self, chat_id: str) -> Path | None:
         if not self._data_dir:
             return None
         return self._data_dir / "action_history" / f"{chat_id}.json"
@@ -123,7 +123,7 @@ class ActionHistoryStore:
                 if self._state_version.get(chat_id, 0) == version:
                     self._dirty.discard(chat_id)
 
-    def _load(self, chat_id: str) -> Optional[list[ActionRecord]]:
+    def _load(self, chat_id: str) -> list[ActionRecord] | None:
         path = self._path(chat_id)
         if not path or not path.exists():
             return None

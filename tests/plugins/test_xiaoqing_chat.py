@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from core.interfaces import PluginCapabilities, PluginPrincipal
+from plugins.xiaoqing_chat import main as xiaoqing_chat
 from plugins.xiaoqing_chat.handler_context import HandlerContext, handle_errors
 from plugins.xiaoqing_chat.llm.reply_checker import ReplyRejected
 from plugins.xiaoqing_chat.message_parts import build_text_message_parts, message_parts_to_legacy
@@ -74,12 +75,6 @@ def _provider_test_secrets() -> dict[str, Any]:
             }
         }
     }
-
-
-ROOT = Path(__file__).resolve().parent.parent.parent
-
-# Import the plugin module using the package structure
-from plugins.xiaoqing_chat import main as xiaoqing_chat
 
 
 def _reply_draft(text: str) -> SimpleNamespace:
@@ -782,7 +777,7 @@ async def test_runtime_cleanup_eviction_also_cleans_locks_and_persist_tasks():
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
     old_limit = ChatRuntimeState._MAX_TRACKED_CHATS
-    setattr(ChatRuntimeState, "_MAX_TRACKED_CHATS", 2)
+    ChatRuntimeState._MAX_TRACKED_CHATS = 2
     state = ChatRuntimeState()
     try:
         loop = asyncio.get_running_loop()
@@ -799,7 +794,7 @@ async def test_runtime_cleanup_eviction_also_cleans_locks_and_persist_tasks():
         assert len(state._per_chat.locks) <= 2
         assert len(state._per_chat.persist_tasks) <= 2
     finally:
-        setattr(ChatRuntimeState, "_MAX_TRACKED_CHATS", old_limit)
+        ChatRuntimeState._MAX_TRACKED_CHATS = old_limit
 
 
 @pytest.mark.asyncio
@@ -807,7 +802,7 @@ async def test_runtime_cleanup_stale_prefers_recent_observe_activity():
     from plugins.xiaoqing_chat.runtime_state import ChatRuntimeState
 
     old_limit = ChatRuntimeState._MAX_TRACKED_CHATS
-    setattr(ChatRuntimeState, "_MAX_TRACKED_CHATS", 1)
+    ChatRuntimeState._MAX_TRACKED_CHATS = 1
     state = ChatRuntimeState()
     try:
         state.get_lock("g_observe")
@@ -821,7 +816,7 @@ async def test_runtime_cleanup_stale_prefers_recent_observe_activity():
         assert "g_observe" in state._per_chat.locks
         assert "g_reply" not in state._per_chat.locks
     finally:
-        setattr(ChatRuntimeState, "_MAX_TRACKED_CHATS", old_limit)
+        ChatRuntimeState._MAX_TRACKED_CHATS = old_limit
 
 
 @pytest.mark.asyncio
@@ -2182,7 +2177,7 @@ async def test_ensure_user_message_recorded_reuses_cached_effective_parts(mock_c
                 media_hash="hash-cat",
                 kind="image",
                 description="猫猫在发呆",
-                emotion_tags=tuple(),
+                emotion_tags=(),
                 marker="[图片：猫猫在发呆]",
                 cached_path=mock_context.data_dir / "cat.png",
             )

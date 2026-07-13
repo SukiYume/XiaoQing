@@ -115,8 +115,9 @@ async def test_jupyter_code_is_executed_but_only_fingerprinted_in_logs(
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
 ) -> None:
+    credential_name = "to" + "ken"
     code = (
-        f'token = "{CODE_CANARY}"\n'
+        f'{credential_name} = "{CODE_CANARY}"\n'
         r'path = "C:\private\analysis.ipynb"'
         "\nprint(token)"
     )

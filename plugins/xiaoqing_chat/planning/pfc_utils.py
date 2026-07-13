@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Optional, Union
+from typing import Any
 
 from ..utils.json_parsing import (
     normalize_llm_text,
@@ -22,10 +22,10 @@ def _strip_code_block(text: str) -> str:
 def get_items_from_json(
     content: str,
     *items: str,
-    default_values: Optional[dict[str, Any]] = None,
-    required_types: Optional[dict[str, type]] = None,
+    default_values: dict[str, Any] | None = None,
+    required_types: dict[str, type] | None = None,
     allow_array: bool = True,
-) -> tuple[bool, Union[dict[str, Any], list[dict[str, Any]]]]:
+) -> tuple[bool, dict[str, Any] | list[dict[str, Any]]]:
     s = (content or "").strip()
     result: dict[str, Any] = {}
     if default_values:
@@ -87,6 +87,6 @@ def extract_first_json_list(text: str) -> list[dict[str, Any]]:
     """Extract the first JSON list from text, handling code blocks."""
     return parse_first_json_array(text)
 
-def extract_first_json_dict(text: str) -> Optional[dict[str, Any]]:
+def extract_first_json_dict(text: str) -> dict[str, Any] | None:
     """Extract the first JSON object from text, handling code blocks."""
     return parse_first_json_object(text)

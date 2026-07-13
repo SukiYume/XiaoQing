@@ -17,6 +17,31 @@ MONITOR = ROOT / "scripts" / "run-bot-monitor.ps1"
 LOG_PUMP = ROOT / "scripts" / "run_process_with_rotating_logs.py"
 
 
+def _assert_process_not_running(process_id: int) -> None:
+    if os.name == "nt":
+        executable = _powershell_executable()
+        assert executable is not None
+        environment = {**os.environ, "XIAOQING_TEST_CHILD_PID": str(process_id)}
+        result = subprocess.run(
+            [
+                executable,
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "if (Get-Process -Id $env:XIAOQING_TEST_CHILD_PID "
+                "-ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }",
+            ],
+            check=False,
+            capture_output=True,
+            env=environment,
+            timeout=10,
+        )
+        assert result.returncode == 0
+    else:
+        with pytest.raises(ProcessLookupError):
+            os.kill(process_id, 0)
+
+
 def test_vbs_launcher_delegates_to_the_monitor() -> None:
     source = (ROOT / "run-bot.vbs").read_text(encoding="utf-8")
 
@@ -221,12 +246,9 @@ def test_thread_start_failure_reaps_owned_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pid_marker = tmp_path / "child-started.txt"
-    survivor_marker = tmp_path / "child-survived.txt"
     child = (
         "import os, pathlib, sys, time; "
         "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='utf-8'); "
-        "time.sleep(1); "
-        "pathlib.Path(sys.argv[2]).write_text('orphaned', encoding='utf-8'); "
         "time.sleep(60)"
     )
     original_start = log_pump.threading.Thread.start
@@ -246,7 +268,7 @@ def test_thread_start_failure_reaps_owned_child(
 
     with pytest.raises(RuntimeError, match="simulated thread start failure"):
         log_pump.run_process(
-            [sys.executable, "-c", child, str(pid_marker), str(survivor_marker)],
+            [sys.executable, "-c", child, str(pid_marker)],
             working_directory=tmp_path,
             stdout_log=tmp_path / "stdout.log",
             stderr_log=tmp_path / "stderr.log",
@@ -256,30 +278,7 @@ def test_thread_start_failure_reaps_owned_child(
 
     assert pid_marker.is_file()
     child_pid = int(pid_marker.read_text(encoding="utf-8"))
-    time.sleep(1.2)
-    assert not survivor_marker.exists()
-    if os.name == "nt":
-        executable = _powershell_executable()
-        assert executable is not None
-        environment = {**os.environ, "XIAOQING_TEST_CHILD_PID": str(child_pid)}
-        process_check = subprocess.run(
-            [
-                executable,
-                "-NoLogo",
-                "-NoProfile",
-                "-Command",
-                "if (Get-Process -Id $env:XIAOQING_TEST_CHILD_PID "
-                "-ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }",
-            ],
-            check=False,
-            capture_output=True,
-            env=environment,
-            timeout=10,
-        )
-        assert process_check.returncode == 0
-    else:
-        with pytest.raises(ProcessLookupError):
-            os.kill(child_pid, 0)
+    _assert_process_not_running(child_pid)
 
 
 def test_second_thread_construction_failure_reaps_owned_child(
@@ -287,12 +286,9 @@ def test_second_thread_construction_failure_reaps_owned_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     started_marker = tmp_path / "constructor-child-started.txt"
-    survivor_marker = tmp_path / "constructor-child-survived.txt"
     child = (
-        "import pathlib, sys, time; "
-        "pathlib.Path(sys.argv[1]).write_text('started', encoding='utf-8'); "
-        "time.sleep(1); "
-        "pathlib.Path(sys.argv[2]).write_text('orphaned', encoding='utf-8'); "
+        "import os, pathlib, sys, time; "
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='utf-8'); "
         "time.sleep(60)"
     )
     original_thread = log_pump.threading.Thread
@@ -312,7 +308,7 @@ def test_second_thread_construction_failure_reaps_owned_child(
 
     with pytest.raises(RuntimeError, match="simulated thread construction failure"):
         log_pump.run_process(
-            [sys.executable, "-c", child, str(started_marker), str(survivor_marker)],
+            [sys.executable, "-c", child, str(started_marker)],
             working_directory=tmp_path,
             stdout_log=tmp_path / "constructor-stdout.log",
             stderr_log=tmp_path / "constructor-stderr.log",
@@ -321,8 +317,7 @@ def test_second_thread_construction_failure_reaps_owned_child(
         )
 
     assert started_marker.is_file()
-    time.sleep(1.2)
-    assert not survivor_marker.exists()
+    _assert_process_not_running(int(started_marker.read_text(encoding="utf-8")))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="taskkill fallback is Windows-specific")
@@ -610,6 +605,10 @@ $normalizedUncRoot = Get-NormalizedDirectoryPath $uncRoot
 if (-not $normalizedUncRoot -or $normalizedUncRoot -ne [IO.Path]::GetFullPath($uncRoot)) {
     Write-Error "UNC share root was damaged: '$normalizedUncRoot'"
     exit 42
+}
+if ((Get-MutexName '\\server\share') -ne (Get-MutexName $uncRoot)) {
+    Write-Error 'UNC share root separator changed the mutex identity'
+    exit 43
 }
 exit 0
 """

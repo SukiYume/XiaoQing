@@ -2,21 +2,16 @@
 中国传统色彩查询插件
 提供颜色查询、转换和可视化功能
 """
-import re
 import logging
+import re
 from pathlib import Path
 
-from core.plugin_base import segments, text, image, ensure_dir
 from core.args import parse
+from core.plugin_base import ensure_dir, image, segments, text
 from core.public_errors import public_error_response
 
 # 使用相对导入引入各个功能模块
-from . import convert
-from . import data_manager
-from . import query
-from . import image_gen
-from . import stellar
-
+from . import convert, data_manager, image_gen, query, stellar
 
 logger = logging.getLogger(__name__)
 MAX_CUSTOM_COLORS_PER_SCOPE = 200
@@ -40,22 +35,22 @@ async def handle(command: str, args: str, event: dict, context) -> list:
     """命令处理入口"""
     try:
         parsed = parse(args)
-        
+
         logger.info(f"颜色查询命令: {command} {args[:50]}{'...' if len(args) > 50 else ''}")
-        
+
         # 加载颜色数据
         colors = data_manager.load_colors(context)
         if not colors:
             return segments("❌ 颜色数据加载失败，请检查插件配置")
-        
+
         # 确保输出目录存在
         img_dir = context.data_dir / "images"
         ensure_dir(img_dir)
-        
+
         # 空命令或帮助信息
         if not parsed or parsed.first.lower() in ['help', 'h', 'list', 'l', '帮助']:
             return segments(_get_help())
-        
+
         # 按名称查询
         if parsed.has('n') or parsed.has('name'):
             name = parsed.opt('n') or parsed.opt('name')
@@ -70,7 +65,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                 return result
             logger.info(f"查询颜色名称: {name} - 未找到")
             return segments(f"中国色里没有收录「{name}」这个颜色哦。")
-        
+
         # 按 RGB 查询
         if parsed.has('r') or parsed.has('rgb'):
             rgb_str = parsed.opt('r') or parsed.opt('rgb')
@@ -81,7 +76,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                     return segments(f"❌ {error_msg}")
             except ValueError as e:
                 return segments(f"❌ RGB 格式错误：{e}\n请使用格式: 255,128,0 或 255 128 0")
-            
+
             color = query.find_by_rgb(colors, rgb)
             if color:
                 result = [text(data_manager.format_color_info(color))]
@@ -91,7 +86,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                         result.append(image(img_path))
                 logger.info(f"查询 RGB: {rgb} - 找到: {color['name']}")
                 return result
-            
+
             # 没找到，但可以显示这个颜色
             logger.info(f"查询 RGB: {rgb} - 未找到，显示预览")
             img_path = await image_gen.generate_color_image('自定义颜色', rgb, img_dir, context)
@@ -100,7 +95,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                 result.insert(0, text("虽然没有收录，这个颜色长这个样子："))
                 result.append(image(img_path))
             return result
-        
+
         # 按 HEX 查询
         if parsed.has('x') or parsed.has('hex'):
             hex_value = parsed.opt('x') or parsed.opt('hex')
@@ -108,7 +103,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                 rgb = convert.hex_to_rgb(hex_value)  # 验证格式
             except ValueError as e:
                 return segments(f"❌ HEX 格式错误：{e}\n请使用格式: #FF5733 或 FF5733")
-            
+
             color = query.find_by_hex(colors, hex_value)
             if color:
                 result = [text(data_manager.format_color_info(color))]
@@ -118,10 +113,10 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                         result.append(image(img_path))
                 logger.info(f"查询 HEX: {hex_value} - 找到: {color['name']}")
                 return result
-            
+
             logger.info(f"查询 HEX: {hex_value} - 未找到")
             return segments(f"中国色里没有收录这个颜色哦。\nHEX: {hex_value}\nRGB: {rgb}")
-        
+
         # 按 CMYK 查询
         if parsed.has('c') or parsed.has('cmyk'):
             cmyk_str = parsed.opt('c') or parsed.opt('cmyk')
@@ -132,7 +127,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                     return segments(f"❌ {error_msg}")
             except ValueError as e:
                 return segments(f"❌ CMYK 格式错误：{e}\n请使用格式: 0,100,100,0")
-            
+
             color = query.find_by_cmyk(colors, cmyk)
             if color:
                 result = [text(data_manager.format_color_info(color))]
@@ -142,10 +137,10 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                         result.append(image(img_path))
                 context.logger.info(f"查询 CMYK: {cmyk} - 找到: {color['name']}")
                 return result
-            
+
             context.logger.info(f"查询 CMYK: {cmyk} - 未找到")
             return segments("中国色里没有收录这个颜色哦。")
-        
+
         # 按色系搜索
         if parsed.has('a') or parsed.has('accord'):
             keyword = parsed.opt('a') or parsed.opt('accord')
@@ -157,32 +152,32 @@ async def handle(command: str, args: str, event: dict, context) -> list:
                 return segments("，".join(names) + suffix)
             logger.info(f"搜索色系: {keyword} - 未找到")
             return segments(f"中国色里没有收录「{keyword}」色系哦。")
-        
+
         # 添加自定义颜色
         if parsed.has('w') or parsed.has('write'):
             definition = parsed.opt('w') or parsed.opt('write')
             return await _add_custom_color(definition, context, img_dir)
-        
+
         # 删除自定义颜色
         if parsed.has('d') or parsed.has('delete'):
             name = parsed.opt('d') or parsed.opt('delete')
             return _delete_custom_color(name, context)
-        
+
         # 恒星光谱颜色查询
         if parsed.has('s') or parsed.has('stellar'):
             spec_type = parsed.opt('s') or parsed.opt('stellar')
             return await stellar.query_stellar_color(spec_type, context, img_dir)
-        
+
         # 列出光谱型
         if parsed.has('t') or parsed.has('spectype'):
             prefix = (parsed.opt('t') or parsed.opt('spectype') or '').strip()
             if prefix.lower() == "true":
                 prefix = ""
             return stellar.list_spectral_types(prefix, context)
-        
+
         # 默认：显示帮助
         return segments(_get_help())
-        
+
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="color.handle")
 
@@ -234,17 +229,17 @@ def _get_help() -> str:
 
 async def _add_custom_color(definition: str, context, img_dir: Path) -> list[dict]:
     """添加自定义颜色
-    
+
     Args:
         definition: 颜色定义字符串
         context: 插件上下文
         img_dir: 图片输出目录
-        
+
     Returns:
         消息段列表
     """
     parts = [p for p in re.split(r'[\s,，]+', definition) if p]
-    
+
     try:
         if len(parts) == 2:
             # 名称 + HEX
@@ -290,26 +285,26 @@ async def _add_custom_color(definition: str, context, img_dir: Path) -> list[dic
         return segments(f"❌ 「{name}」已经定义过了哦")
     if outcome == "full":
         return segments("❌ 当前会话的自定义颜色数量已达上限")
-    
+
     context.logger.info(f"添加自定义颜色: {name} = {rgb}")
-    
+
     # 生成图片
     img_path = await image_gen.generate_color_image(name, rgb, img_dir, context)
-    
+
     result = [text(f"✅ 颜色「{name}」添加成功！\n\n{data_manager.format_color_info(new_color)}")]
     if img_path:
         result.append(image(img_path))
-    
+
     return result
 
 
 def _delete_custom_color(name: str, context) -> list[dict]:
     """删除自定义颜色
-    
+
     Args:
         name: 颜色名称
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """

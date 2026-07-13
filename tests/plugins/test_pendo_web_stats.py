@@ -124,6 +124,7 @@ def test_ledger_stats_returns_expense_amount_histogram():
         assert histogram["1000+"] == 1
         assert sum(histogram.values()) == 3
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -180,6 +181,7 @@ def test_ledger_stats_respects_range_for_totals_categories_and_trend_data():
         assert histogram["0-20"] == 1
         assert sum(histogram.values()) == 1
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -220,6 +222,7 @@ def test_ledger_stats_all_range_stops_at_today_and_excludes_future_entries():
         assert all(item["date"] != future_date for item in data["daily"])
         assert sum(item["count"] for item in data["expense_amount_histogram"]) == 1
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -267,6 +270,7 @@ def test_event_stats_filters_range_and_builds_weekday_slot_matrix():
         assert any(item["slot"] == "09-12" and item["count"] == 1 for item in weekday_slots)
         assert any(item["slot"] == "14-18" and item["count"] == 1 for item in weekday_slots)
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -309,6 +313,7 @@ def test_event_stats_counts_event_graph_leaves_and_collection_category_fallback(
         assert sum(item["count"] for item in data["weekly"]) == 2
         assert data["by_category"] == [{"category": "学术", "count": 2}]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -353,6 +358,7 @@ def test_task_stats_separates_created_and_completed_weeks():
         assert result["data"]["new_this_week"] == 2
         assert result["data"]["by_category"] == [{"category": "生活", "count": 1}]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -398,6 +404,7 @@ def test_diary_overview_accepts_explicit_range_and_auto_cadence():
         assert sum(item["count"] for item in data["cadence"]) == 3
         assert data["mood_breakdown"][0]["mood"] == "happy"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -439,6 +446,7 @@ def test_notes_overview_accepts_explicit_range():
         assert {item["tag"] for item in result["hot_tags"]} == {"alpha", "beta"}
         assert sum(item["count"] for item in result["cadence"]) == 2
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -476,6 +484,7 @@ def test_ledger_stats_accepts_explicit_date_bounds():
         assert data["expense_by_category"] == [{"category": "测试", "total": 66}]
         assert data["daily"] == [{"date": "2026-03-18", "income": 0, "expense": 66}]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -514,6 +523,7 @@ def test_notes_overview_uses_yearly_cadence_for_cross_year_ranges():
         assert [item["label"] for item in result["cadence"]] == ["2024", "2025", "2026"]
         assert [item["count"] for item in result["cadence"]] == [1, 1, 1]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -756,4 +766,5 @@ def test_ledger_comparison_fills_missing_months_and_keeps_prev_month_baseline():
         assert months[5]["prev_expense"] == 240
     finally:
         stats_module.datetime = original_datetime
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)

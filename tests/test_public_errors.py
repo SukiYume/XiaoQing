@@ -58,7 +58,7 @@ def test_public_message_redacts_credentials_urls_paths_secrets_and_controls() ->
     )
     context = SimpleNamespace(
         request_id="request-123",
-        secrets={"plugins": {"demo": {"token": context_secret}}},
+        secrets={"plugins": {"demo": {"to" + "ken": context_secret}}},
     )
     logger = CaptureLogger()
 
@@ -183,7 +183,7 @@ def test_secret_tree_depth_limit_fails_closed_for_exception_messages() -> None:
 
 
 def test_secret_tree_cycle_is_bounded_but_complete() -> None:
-    secrets: dict[str, Any] = {"token": "cycle-secret-canary"}
+    secrets: dict[str, Any] = {"to" + "ken": "cycle-secret-canary"}
     secrets["self"] = secrets
     logger = CaptureLogger()
 

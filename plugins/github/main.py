@@ -70,24 +70,24 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
     """命令处理入口"""
     try:
         parsed = parse(args)
-        
+
         if not parsed:
             # 没有参数时默认显示每日趋势
             return await _fetch_trending("daily", context)
-        
+
         subcommand = parsed.first.lower()
-        
+
         # 命令路由
         if subcommand == "help" or subcommand == "帮助":
             return segments(_show_help())
-        
+
         # 如果是有效的时间范围，获取对应趋势
         if subcommand in VALID_RANGES:
             return await _fetch_trending(subcommand, context)
-        
+
         # 未知命令时显示帮助
         return segments(f"未知命令: {subcommand}\n{_show_help()}")
-        
+
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="github.handle")
 

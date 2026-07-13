@@ -20,7 +20,6 @@ from plugins.color import data_manager as color_data
 from plugins.github import main as github
 from plugins.smalltalk import main as smalltalk
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 

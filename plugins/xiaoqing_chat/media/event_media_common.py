@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 import aiohttp
+
 from core.plugin_base import load_json, write_json
 
 _SUPPORTED_MEDIA_TYPES = frozenset({"image", "mface", "face"})
@@ -640,7 +641,7 @@ def _build_fallback_render(
         emotion_tags = _normalize_emotion_tags(label)
         description = label or "一张聊天表情包"
     else:
-        emotion_tags = tuple()
+        emotion_tags = ()
         description = label or "一张图片"
     marker = _build_marker(kind, description, emotion_tags)
     return RenderedMedia(

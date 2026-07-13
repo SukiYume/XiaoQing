@@ -22,7 +22,7 @@ import logging
 import math
 import re
 import secrets
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import segments
 from core.public_errors import public_error_message, public_error_response
@@ -84,16 +84,16 @@ from .utils.time import business_date, business_week
 
 # ──────────────────── 全局单例（架构建议 #5）────────────────────
 
-_db_instance: Optional[Database] = None
+_db_instance: Database | None = None
 
-_pet_service: Optional[PetService] = None
-_user_service: Optional[UserService] = None
-_item_service: Optional[ItemService] = None
-_social_service: Optional[SocialService] = None
-_economy_service: Optional[EconomyService] = None
-_admin_service: Optional[AdminService] = None
+_pet_service: PetService | None = None
+_user_service: UserService | None = None
+_item_service: ItemService | None = None
+_social_service: SocialService | None = None
+_economy_service: EconomyService | None = None
+_admin_service: AdminService | None = None
 
-_router: Optional[CommandRouter] = None
+_router: CommandRouter | None = None
 
 def _get_logger(context):
     if context and hasattr(context, "logger"):
@@ -115,7 +115,7 @@ class _SimpleParser:
         return parts[-1] if parts else ""
 
 
-def parse(raw: str) -> Optional[_SimpleParser]:
+def parse(raw: str) -> _SimpleParser | None:
     if not raw or not raw.strip():
         return None
     return _SimpleParser(raw.strip())
@@ -234,7 +234,7 @@ def _get_spam_decay_factor(user_id: str, group_id: int) -> float:
     return math.pow(base, excess)
 
 
-def _check_anti_spam(user_id: str, group_id: int) -> Optional[str]:
+def _check_anti_spam(user_id: str, group_id: int) -> str | None:
     """检查用户指令频率（Issue #50: 反脚本 / 指数衰减）"""
     if _db_instance is None:
         return None
@@ -252,7 +252,7 @@ def _check_anti_spam(user_id: str, group_id: int) -> Optional[str]:
     return None
 
 
-def _check_group_rate_limit(group_id: int) -> Optional[str]:
+def _check_group_rate_limit(group_id: int) -> str | None:
     """
     群级响应频率限制（Issue #52）。
     CR Fix #1: 原来两种情况都返回 None，等于完全没有限制。
@@ -379,7 +379,7 @@ def _get_router() -> CommandRouter:
     router = CommandRouter()
 
     # 包装器：统一各 Handler 的参数调用
-    
+
     def _wrap_std(handler):
         """标准包装器: (user_id, group_id, args, db)"""
         async def wrapper(user_id, group_id, args, db, **kwargs):
@@ -427,14 +427,14 @@ def _get_router() -> CommandRouter:
         async def wrapper(user_id, group_id, args, db, **kwargs):
             log = _get_logger(None)
             log.info(f"[DEBUG] _wrap_help called. fixed_category='{fixed_category}', args='{args}', user_id={user_id}")
-            
+
             # 如果注册时指定了固定类别（如 /pet basic -> 基础），优先使用
             target = fixed_category
-            
+
             # 如果没有固定类别（如 /pet help），则尝试从用户参数中获取（/pet help 基础）
             if not target and args:
                 target = args.strip()
-            
+
             result = format_help_text(target)
             log.info(f"[DEBUG] format_help_text result (first 50 chars): {result[:50]}...")
             return result
@@ -458,7 +458,7 @@ def _get_router() -> CommandRouter:
     router.register("play", _wrap_spam(handle_play), ["玩耍"])
     router.register("sleep", _wrap_std(handle_sleep), ["睡觉"])
     router.register("wake", _wrap_std(handle_wake), ["起床"])
-    
+
     # 进阶
     router.register("train", _wrap_spam(handle_train), ["训练"])
     router.register("explore", _wrap_spam(handle_explore), ["探索", "adventure"])

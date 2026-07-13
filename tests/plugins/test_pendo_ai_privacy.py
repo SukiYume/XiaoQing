@@ -1,11 +1,21 @@
 import asyncio
 
+import pytest
+
 from plugins.pendo.services.ai_parser import AIParser
 from plugins.pendo.services.db import Database
 
 
-def test_diary_text_is_not_sent_to_ai_without_explicit_consent(tmp_path, monkeypatch):
-    db = Database(str(tmp_path / "pendo.db"))
+@pytest.fixture
+def db(tmp_path):
+    database = Database(str(tmp_path / "pendo.db"))
+    try:
+        yield database
+    finally:
+        database.cleanup()
+
+
+def test_diary_text_is_not_sent_to_ai_without_explicit_consent(db, monkeypatch):
     parser = AIParser(db=db)
     calls: list[object] = []
 
@@ -19,8 +29,7 @@ def test_diary_text_is_not_sent_to_ai_without_explicit_consent(tmp_path, monkeyp
     assert calls == []
 
 
-def test_diary_ai_consent_is_explicit_and_revocable(tmp_path, monkeypatch):
-    db = Database(str(tmp_path / "pendo.db"))
+def test_diary_ai_consent_is_explicit_and_revocable(db, monkeypatch):
     parser = AIParser(db=db)
     db.update_user_settings("u1", {"settings_json": {"ai_sensitive_data_consent": True}})
     calls: list[object] = []

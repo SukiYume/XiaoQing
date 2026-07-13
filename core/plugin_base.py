@@ -8,12 +8,19 @@
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, TypeVar
 
+from .atomic_store import (
+    AtomicJsonStore,
+    atomic_write_text,
+)
+from .atomic_store import (
+    atomic_write_bytes as atomic_write_bytes,
+)
 from .constants import MAX_MESSAGE_TEXT_LENGTH
 from .interfaces import PluginContextProtocol
-from .atomic_store import AtomicJsonStore, atomic_write_bytes, atomic_write_text
 
 # 类型别名
 Segments = list[dict[str, Any]]
@@ -86,7 +93,7 @@ def segments(payload: Any) -> Segments:
         return [text(payload)]
     return []
 
-def build_action(segs: Segments, user_id: Optional[int], group_id: Optional[int]) -> Optional[dict[str, Any]]:
+def build_action(segs: Segments, user_id: int | None, group_id: int | None) -> dict[str, Any] | None:
     """
     构建 OneBot action。
 
@@ -122,7 +129,7 @@ def ensure_dir(path: Path) -> None:
 
 def load_json(
     path: Path,
-    default: Optional[dict[str, Any]] = None,
+    default: dict[str, Any] | None = None,
     *,
     raise_on_error: bool = False,
 ) -> dict[str, Any]:

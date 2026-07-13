@@ -12,6 +12,7 @@ twitter 插件单元测试
 """
 
 import hashlib
+import importlib.util
 import json
 from io import BytesIO
 from pathlib import Path
@@ -23,8 +24,6 @@ import pytest
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-
-import importlib.util
 
 spec = importlib.util.spec_from_file_location(
     "twitter_main", ROOT / "plugins" / "twitter" / "main.py"

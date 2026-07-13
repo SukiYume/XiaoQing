@@ -10,11 +10,11 @@ async def handle_const(args: str, context) -> str:
     args = args.strip().lower()
     if not args:
         return _get_const_list()
-    
+
     try:
         from astropy import constants as const
         from astropy import units as u
-        
+
         # 定义常数映射
         # (中文名, 值)
         const_map = {
@@ -34,7 +34,7 @@ async def handle_const(args: str, context) -> str:
             'electron': ('电子质量', const.m_e),
             'mp': ('质子质量', const.m_p),
             'proton': ('质子质量', const.m_p),
-            
+
             # 天文常数 - 太阳
             'm_sun': ('太阳质量', const.M_sun),
             'sun_mass': ('太阳质量', const.M_sun),
@@ -42,19 +42,19 @@ async def handle_const(args: str, context) -> str:
             'sun_radius': ('太阳半径', const.R_sun),
             'l_sun': ('太阳光度', const.L_sun),
             'sun_luminosity': ('太阳光度', const.L_sun),
-            
+
             # 天文单位
             'au': ('天文单位', const.au),
             'pc': ('秒差距', const.pc),
             'parsec': ('秒差距', const.pc),
             'ly': ('光年', 1 * u.lightyear),
             'light_year': ('光年', 1 * u.lightyear),
-            
+
             # 宇宙学
             'h0': ('哈勃常数 (近似值)', 70.0 * (u.km / u.s / u.Mpc)),
             'hubble': ('哈勃常数 (近似值)', 70.0 * (u.km / u.s / u.Mpc)),
         }
-        
+
         const_info = const_map.get(args)
         if const_info:
             name, value = const_info
@@ -62,8 +62,8 @@ async def handle_const(args: str, context) -> str:
                    f"值: {value}\n" \
                    f"单位: {value.unit}\n" \
                    f"数值: {value.value:.6e}"
-        
-        return f"未找到常数: {args}\n\n可用常数: {', '.join(sorted(set(k for k in const_map.keys())))}"
+
+        return f"未找到常数: {args}\n\n可用常数: {', '.join(sorted(set(const_map)))}"
     except Exception as exc:
         return public_error_message(
             context, exc, logger=context.logger, component="astro_tools.const"

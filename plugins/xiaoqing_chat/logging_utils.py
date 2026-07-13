@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from core.sensitive_audit import summarize_sensitive
 
@@ -182,11 +182,11 @@ def _short_text(s: Any, *, limit: int = DEFAULT_SHORT_TEXT_LIMIT) -> str:
 
 def _log_step(
     context: Context,
-    runtime: Union[_ChatRuntime, "XiaoQingChatConfig"],
+    runtime: _ChatRuntime | XiaoQingChatConfig,
     *,
     chat_id: str,
     step: str,
-    fields: Optional[dict[str, Any]] = None,
+    fields: dict[str, Any] | None = None,
 ) -> None:
     """
     Log a step in the conversation flow with structured JSON output.

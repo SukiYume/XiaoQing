@@ -9,9 +9,10 @@ import functools
 import logging
 import time
 import weakref
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 import aiohttp
 
@@ -804,7 +805,7 @@ class XiaoQingApp:
             collected.append(action)
 
         # 标记 sink 为活动状态
-        setattr(_collect, "is_active", True)
+        _collect.is_active = True
 
         token = current_action_sink.set(_collect)
         try:
@@ -813,7 +814,7 @@ class XiaoQingApp:
                 collected.append(action)
         finally:
             # 标记 sink 为失效，使后续（后台任务）调用能直通发送逻辑
-            setattr(_collect, "is_active", False)
+            _collect.is_active = False
             current_action_sink.reset(token)
 
         return collected

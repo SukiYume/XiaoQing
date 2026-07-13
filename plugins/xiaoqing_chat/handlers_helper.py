@@ -1,14 +1,15 @@
 from __future__ import annotations
-from typing import Any, TYPE_CHECKING
 
-from .helper_utils import _is_private, _resolve_llm_config
-from .task_scheduler import _spawn_bg_task, _schedule_memory_db_save
-from .logging_utils import _log_step
-from .llm.summarizer import maybe_update_topic_summary
-from .expression.bw_message_recorder import extract_and_learn
+from typing import TYPE_CHECKING, Any
+
 from .constants import EXPRESSION_LEARN_MIN_INTERVAL, EXPRESSION_LEARN_MIN_MESSAGES
-from .memory.review_sessions import maybe_open_goal_strategy_review, maybe_push_session
+from .expression.bw_message_recorder import extract_and_learn
+from .helper_utils import _is_private, _resolve_llm_config
+from .llm.summarizer import maybe_update_topic_summary
+from .logging_utils import _log_step
 from .memory.knowledge_extract import maybe_extract_person_facts
+from .memory.review_sessions import maybe_open_goal_strategy_review, maybe_push_session
+from .task_scheduler import _schedule_memory_db_save, _spawn_bg_task
 
 if TYPE_CHECKING:
     from .handler_context import HandlerContext

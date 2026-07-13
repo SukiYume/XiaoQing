@@ -92,6 +92,7 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
         assert result["board_columns"]["cancelled"][0]["id"] == "t5"
         assert len(result["completion_bars"]) == 7
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -121,6 +122,7 @@ def test_build_task_overview_returns_all_focus_tasks():
         assert len(result["focus_tasks"]) == 8
         assert [task["id"] for task in result["focus_tasks"]] == [f"today-{index}" for index in range(8)]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -198,4 +200,5 @@ def test_build_task_overview_loads_more_than_500_tasks():
         assert len(result["all_tasks"]) == 505
         assert len(result["board_columns"]["open"]) == 505
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)

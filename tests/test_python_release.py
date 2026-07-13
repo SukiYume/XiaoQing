@@ -49,6 +49,9 @@ def _wheel(
             "xiaoqing-4.1.0.dist-info/METADATA",
             (f"Metadata-Version: 2.1\nName: {metadata_name}\nVersion: {metadata_version}\n\n"),
         )
+        for relative in release.WHEEL_METADATA_FILES:
+            if relative != "METADATA":
+                archive.writestr(f"xiaoqing-4.1.0.dist-info/{relative}", b"\n")
         if extra is not None:
             archive.writestr(*extra)
     return path
@@ -72,6 +75,13 @@ def _sdist(
             f"Metadata-Version: 2.1\nName: {metadata_name}\nVersion: {metadata_version}\n\n"
         ).encode(),
     }
+    files.update(
+        {relative: b"\n" for relative in release.SDIST_ROOT_FILES if relative != "PKG-INFO"}
+    )
+    for relative in release.SDIST_EGG_INFO_FILES:
+        files[f"xiaoqing.egg-info/{relative}"] = (
+            files["PKG-INFO"] if relative == "PKG-INFO" else b"\n"
+        )
     with tarfile.open(path, "w:gz") as archive:
         for relative, payload in files.items():
             if relative == omit:
@@ -88,14 +98,28 @@ def _sdist(
 def test_current_runtime_inventory_is_exact_and_git_backed() -> None:
     inventory = release.build_runtime_inventory(ROOT)
 
-    assert len(inventory.files) == 393
+    snapshot = (ROOT / release.RUNTIME_SNAPSHOT).read_text(encoding="utf-8").splitlines()
+    assert len(inventory.files) == 384
     assert len(inventory.plugins) == 29
     assert len(inventory.resources) == 39
+    assert list(inventory.files) == snapshot
     assert inventory.plugin_map["arxiv_filter"] == "main.py"
     assert "plugins/dict/assets/manifest.json" in inventory.resources
     assert "plugins/pendo/web/static/index.html" in inventory.resources
     assert "plugins/xiaoqing_chat/media/qq_face_builtin_catalog.json" in inventory.resources
     assert not any("/data/" in path for path in inventory.resources)
+    assert "plugins/arxiv_filter/arxiv_test.py" not in inventory.files
+    assert not any("/train_model/" in path for path in inventory.files)
+    assert not any(path.startswith("plugins/pendo/scripts/") for path in inventory.files)
+    assert not any("/experiments/" in path for path in inventory.files)
+
+
+def test_runtime_inventory_rejects_snapshot_drift(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = release._runtime_snapshot(ROOT)
+    monkeypatch.setattr(release, "_runtime_snapshot", lambda _repo: snapshot[:-1])
+
+    with pytest.raises(release.ReleaseVerificationError, match="runtime snapshot mismatch"):
+        release.build_runtime_inventory(ROOT)
 
 
 def test_wheel_inspection_accepts_exact_runtime_inventory(tmp_path: Path) -> None:
@@ -197,9 +221,64 @@ def test_sdist_inspection_accepts_required_runtime_inventory(tmp_path: Path) -> 
 def test_sdist_inspection_rejects_missing_resource(tmp_path: Path) -> None:
     sdist = _sdist(tmp_path / "xiaoqing-4.1.0.tar.gz", omit="plugins/demo/data.json")
 
-    with pytest.raises(release.ReleaseVerificationError, match="missing runtime files"):
+    with pytest.raises(release.ReleaseVerificationError, match="runtime inventory mismatch"):
         release.inspect_sdist(
             sdist,
+            project_name="xiaoqing",
+            project_version="4.1.0",
+            inventory=_inventory(),
+        )
+
+
+def test_sdist_inspection_rejects_unknown_runtime_and_top_level_files(tmp_path: Path) -> None:
+    unknown_runtime = tarfile.TarInfo("xiaoqing-4.1.0/plugins/demo/tool.py")
+    unknown_runtime.size = 1
+    sdist = _sdist(tmp_path / "xiaoqing-4.1.0.tar.gz", extra=unknown_runtime)
+    with pytest.raises(release.ReleaseVerificationError, match="runtime inventory mismatch"):
+        release.inspect_sdist(
+            sdist,
+            project_name="xiaoqing",
+            project_version="4.1.0",
+            inventory=_inventory(),
+        )
+
+    secret = tarfile.TarInfo("xiaoqing-4.1.0/secret.env")
+    secret.size = 1
+    sdist = _sdist(tmp_path / "xiaoqing-4.1.0.tar.gz", extra=secret)
+    with pytest.raises(release.ReleaseVerificationError, match="archive boundary mismatch"):
+        release.inspect_sdist(
+            sdist,
+            project_name="xiaoqing",
+            project_version="4.1.0",
+            inventory=_inventory(),
+        )
+
+
+@pytest.mark.parametrize("name", ["tests/test_leak.py", "scripts/tool.py", "release/files.txt"])
+def test_sdist_inspection_rejects_repository_only_trees(tmp_path: Path, name: str) -> None:
+    member = tarfile.TarInfo(f"xiaoqing-4.1.0/{name}")
+    member.size = 1
+    sdist = _sdist(tmp_path / "xiaoqing-4.1.0.tar.gz", extra=member)
+
+    with pytest.raises(release.ReleaseVerificationError, match="repository-only"):
+        release.inspect_sdist(
+            sdist,
+            project_name="xiaoqing",
+            project_version="4.1.0",
+            inventory=_inventory(),
+        )
+
+
+@pytest.mark.parametrize("name", ["evil.py", "payload.bin", "scripts/tool.py"])
+def test_wheel_inspection_rejects_every_non_contract_file(tmp_path: Path, name: str) -> None:
+    wheel = _wheel(
+        tmp_path / "xiaoqing-4.1.0-py3-none-any.whl",
+        extra=(name, b"x"),
+    )
+
+    with pytest.raises(release.ReleaseVerificationError, match="repository-only|boundary mismatch"):
+        release.inspect_wheel(
+            wheel,
             project_name="xiaoqing",
             project_version="4.1.0",
             inventory=_inventory(),
@@ -272,7 +351,15 @@ def test_install_probe_uses_each_venv_python_isolated_and_sanitized(
     probe = tmp_path / "probe.py"
     probe.write_text("pass\n", encoding="utf-8")
     spec = tmp_path / "spec.json"
-    spec.write_text("{}", encoding="utf-8")
+    spec.write_text(
+        """{
+            "expected_plugin_count": 29,
+            "expected_python_file_count": 316,
+            "expected_resource_count": 39,
+            "expected_runtime_file_count": 384
+        }""",
+        encoding="utf-8",
+    )
     cwd = tmp_path / "cwd"
     cwd.mkdir()
     calls: list[tuple[list[str], Path, dict[str, str] | None]] = []
@@ -287,13 +374,23 @@ def test_install_probe_uses_each_venv_python_isolated_and_sanitized(
             python.parent.mkdir(parents=True)
             python.write_bytes(b"python")
             console.write_bytes(b"console")
+            # Installed build/probe code must not be able to change the expected
+            # summary after verification has started.
+            spec.write_text(
+                '{"expected_plugin_count":0,"expected_python_file_count":0,'
+                '"expected_resource_count":0,"expected_runtime_file_count":0}',
+                encoding="utf-8",
+            )
         if command[-1] == "--help":
             return subprocess.CompletedProcess(command, 0, "XiaoQing QQ Bot framework\n", "")
         if len(command) >= 3 and command[1] == "-I" and command[2] == str(probe):
             return subprocess.CompletedProcess(
                 command,
                 0,
-                '{"plugin_count":29,"resource_count":39,"runtime_file_count":393}\n',
+                (
+                    '{"plugin_count":29,"python_file_count":316,"resource_count":39,'
+                    '"runtime_file_count":384}\n'
+                ),
                 "",
             )
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -325,12 +422,63 @@ def test_install_probe_uses_each_venv_python_isolated_and_sanitized(
     assert payload["plugin_count"] == 29
 
 
+def test_release_runs_the_full_probe_for_wheel_and_sdist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel = tmp_path / "xiaoqing-4.1.0-py3-none-any.whl"
+    sdist = tmp_path / "xiaoqing-4.1.0.tar.gz"
+    wheel.write_bytes(b"wheel")
+    sdist.write_bytes(b"sdist")
+    probe = tmp_path / "probe.py"
+    spec = tmp_path / "spec.json"
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    seen: list[str] = []
+
+    monkeypatch.setattr(
+        release,
+        "build_artifacts",
+        lambda _repo, _work, _name: (wheel, sdist),
+    )
+    monkeypatch.setattr(release, "inspect_wheel", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(release, "inspect_sdist", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        release,
+        "_write_probe_inputs",
+        lambda *_args, **_kwargs: (probe, spec, cwd),
+    )
+
+    def fake_verify(_artifact, *, kind, **_kwargs):
+        seen.append(kind)
+        return {
+            "plugin_count": 29,
+            "python_file_count": 316,
+            "resource_count": 39,
+            "runtime_file_count": 384,
+        }
+
+    monkeypatch.setattr(release, "verify_installed_artifact", fake_verify)
+
+    metadata = release.verify_release(ROOT)
+
+    assert seen == ["wheel", "sdist"]
+    assert metadata.runtime_file_count == 384
+
+
 def test_probe_contract_rejects_source_origins_and_reads_key_resources() -> None:
     source = release._PROBE_SOURCE
 
     assert "source repository is present on sys.path" in source
     assert "was not loaded from venv site-packages" in source
     assert "installed runtime inventory mismatch" in source
+    assert "py_compile.compile" in source
+    assert "installed Python source does not compile" in source
+    assert '"python_file_count": len(runtime_python)' in source
+    assert "dir=probe_root" in source
+    assert source.index("expected_resources = tuple") < source.index(
+        'for package_name in ("main", "core", "plugins")'
+    )
     assert 'importlib.import_module(f"plugins.{name}.{module_suffix}")' in source
     assert "dictionary resource digest mismatch" in source
     assert "Pendo demo bundle failed CRC validation" in source

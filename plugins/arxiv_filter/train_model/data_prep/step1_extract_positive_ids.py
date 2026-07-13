@@ -14,10 +14,10 @@ Step 1: 从 apod 笔记中提取正样本 arXiv ID 和日期范围
 默认读取本机 APOD 笔记目录，也可以通过 APOD_ROOT 环境变量覆盖。
 """
 
-import os
-import re
 import csv
 import json
+import os
+import re
 from pathlib import Path
 
 # ============================================================

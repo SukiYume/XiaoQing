@@ -172,6 +172,7 @@ def test_build_dashboard_overview_uses_month_events_and_mixed_task_buckets():
         assert result["spending_trend"][-1] == {"date": "2026-03-25", "amount": 0.0}
         assert any(point == {"date": "2026-03-20", "amount": 25.5} for point in result["spending_trend"])
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -217,6 +218,7 @@ def test_dashboard_overview_prefers_amount_cents_and_paginates_month_ledger():
         assert result["month_summary"]["income"] == 123.45
         assert any(point == {"date": "2026-03-20", "amount": 505.0} for point in result["spending_trend"])
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 

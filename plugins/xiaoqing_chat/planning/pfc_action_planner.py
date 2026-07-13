@@ -4,8 +4,9 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from ..config.config import PersonalityConfig
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
@@ -247,7 +248,7 @@ async def plan_next_action(
     action_history_summary: str,
     last_action_context: str,
     timeout_context: str,
-    last_successful_reply_action: Optional[str],
+    last_successful_reply_action: str | None,
     temperature: float,
     top_p: float,
     max_tokens: int,

@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import atomic_write_text
 
+
 class PlanReplyLogger:
     def __init__(self) -> None:
-        self._data_dir: Optional[Path] = None
+        self._data_dir: Path | None = None
 
     def bind(self, data_dir: Path) -> None:
         self._data_dir = data_dir

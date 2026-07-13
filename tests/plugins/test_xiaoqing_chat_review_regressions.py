@@ -52,8 +52,7 @@ async def test_handle_smalltalk_hides_internal_exception_details() -> None:
 async def test_build_memory_block_fallback_keeps_global_memory_hits() -> None:
     from plugins.xiaoqing_chat.config.config import MemoryConfig
     from plugins.xiaoqing_chat.memory.memory import StoredMessage
-    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
-    from plugins.xiaoqing_chat.memory.memory_db import RetrievedItem
+    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB, RetrievedItem
     from plugins.xiaoqing_chat.memory.memory_retrieval import build_memory_block
 
     async def fake_react_retrieve(**kwargs) -> str:
@@ -117,8 +116,7 @@ async def test_build_memory_block_fallback_keeps_global_memory_hits() -> None:
 async def test_build_memory_block_uses_current_text_when_question_generation_fails() -> None:
     from plugins.xiaoqing_chat.config.config import MemoryConfig
     from plugins.xiaoqing_chat.memory.memory import StoredMessage
-    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB
-    from plugins.xiaoqing_chat.memory.memory_db import RetrievedItem
+    from plugins.xiaoqing_chat.memory.memory_db import MemoryDB, RetrievedItem
     from plugins.xiaoqing_chat.memory.memory_retrieval import build_memory_block
 
     queried: list[str] = []
