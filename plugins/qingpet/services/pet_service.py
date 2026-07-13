@@ -1,19 +1,28 @@
 import logging
 import random
-from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from datetime import timedelta
 
 from ..models import Pet, User
 from ..utils.constants import (
-    PetStage, PetPersonality, PetStatus, MAX_STAT_VALUE, MIN_STAT_VALUE,
-    DECAY_RATES, COOLDOWN_TIMES, EVOLUTION_CONDITIONS, DEFAULT_ITEMS,
-    DISEASE_THRESHOLDS, TRAVEL_THRESHOLDS, AGE_EVOLUTION_THRESHOLDS,
-    DAILY_LIMITS, FAVORITE_FOOD_BONUS,
-    TRAINING_CONFIG, TRAINING_SPECIAL_EVENTS, TRAINING_MESSAGES,
+    AGE_EVOLUTION_THRESHOLDS,
+    COOLDOWN_TIMES,
+    DAILY_LIMITS,
+    DECAY_RATES,
+    DEFAULT_ITEMS,
+    DISEASE_THRESHOLDS,
+    EVOLUTION_CONDITIONS,
     EXPLORE_LOCATIONS,
+    FAVORITE_FOOD_BONUS,
+    TRAINING_CONFIG,
+    TRAINING_MESSAGES,
+    TRAINING_SPECIAL_EVENTS,
+    TRAVEL_THRESHOLDS,
+    PetPersonality,
+    PetStage,
+    PetStatus,
 )
-from ..utils.validators import validate_cooling, validate_sensitive_content
 from ..utils.time import utc_now
+from ..utils.validators import validate_cooling, validate_sensitive_content
 from .database import Database
 
 logger = logging.getLogger(__name__)
@@ -78,7 +87,7 @@ class PetService:
 
     # ──────────────────── 领养 ────────────────────
 
-    def adopt_pet(self, user_id: str, group_id: int, name: str) -> Tuple[bool, str]:
+    def adopt_pet(self, user_id: str, group_id: int, name: str) -> tuple[bool, str]:
         if len(name) > 20:
             return False, "宠物名字不能超过20个字符"
 
@@ -113,7 +122,7 @@ class PetService:
 
     # ──────────────────── 孵化 ────────────────────
 
-    def hatch_egg(self, pet: Pet) -> Tuple[bool, str]:
+    def hatch_egg(self, pet: Pet) -> tuple[bool, str]:
         if pet.stage != PetStage.EGG:
             return False, "只有宠物蛋才能孵化"
 
@@ -131,8 +140,8 @@ class PetService:
 
     # ──────────────────── 喂食 ────────────────────
 
-    def feed_pet(self, pet: Pet, user: User, item_id: Optional[str] = None,
-                 spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
+    def feed_pet(self, pet: Pet, user: User, item_id: str | None = None,
+                 spam_decay_factor: float = 1.0) -> tuple[bool, str, int]:
         """CR Review: 应用反脚本衰减因子，实现免费喂食限制，启用喜好食物加成"""
         if not pet.can_interact():
             return False, self._get_cannot_interact_msg(pet), 0
@@ -211,7 +220,7 @@ class PetService:
     # ──────────────────── 清洁 ────────────────────
 
     def clean_pet(self, pet: Pet, user: User,
-                  spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
+                  spam_decay_factor: float = 1.0) -> tuple[bool, str, int]:
         if not pet.can_interact():
             return False, self._get_cannot_interact_msg(pet), 0
 
@@ -250,7 +259,7 @@ class PetService:
     # ──────────────────── 玩耍 ────────────────────
 
     def play_with_pet(self, pet: Pet, user: User,
-                      spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
+                      spam_decay_factor: float = 1.0) -> tuple[bool, str, int]:
         if not pet.can_interact():
             return False, self._get_cannot_interact_msg(pet), 0
 
@@ -290,7 +299,7 @@ class PetService:
 
     def train_pet(self, pet: Pet, user: User,
                   training_type: str = "strength",
-                  spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
+                  spam_decay_factor: float = 1.0) -> tuple[bool, str, int]:
         if not pet.can_interact():
             return False, self._get_cannot_interact_msg(pet), 0
 
@@ -374,7 +383,7 @@ class PetService:
 
     def explore(self, pet: Pet, user: User,
                 location: str = "forest",
-                spam_decay_factor: float = 1.0) -> Tuple[bool, str, int]:
+                spam_decay_factor: float = 1.0) -> tuple[bool, str, int]:
         if not pet.can_interact():
             return False, self._get_cannot_interact_msg(pet), 0
 
@@ -456,7 +465,7 @@ class PetService:
 
     # ──────────────────── 睡觉 / 起床 ────────────────────
 
-    def sleep_pet(self, pet: Pet) -> Tuple[bool, str]:
+    def sleep_pet(self, pet: Pet) -> tuple[bool, str]:
         if not pet.can_interact():
             return False, self._get_cannot_interact_msg(pet)
 
@@ -472,7 +481,7 @@ class PetService:
             return True, f"{pet.name}开始睡觉了，Zzz..."
         return False, "让宠物睡觉失败"
 
-    def wake_pet(self, pet: Pet) -> Tuple[bool, str]:
+    def wake_pet(self, pet: Pet) -> tuple[bool, str]:
         if pet.status != PetStatus.SLEEPING:
             return False, "宠物现在没有在睡觉"
         now = utc_now()
@@ -488,7 +497,7 @@ class PetService:
 
     # ──────────────────── 进化检查（Issue #10: 之前从未被调用）────────────────────
 
-    def check_evolution(self, pet: Pet) -> Tuple[bool, str]:
+    def check_evolution(self, pet: Pet) -> tuple[bool, str]:
         """CR Review Issue #5: 进化现在同时检查经验和年龄阈值"""
         if pet.stage == PetStage.OLD:
             return False, ""
@@ -542,8 +551,8 @@ class PetService:
         pet: Pet,
         decay_multiplier: float = 1.0,
         *,
-        is_trustee_override: Optional[bool] = None,
-    ) -> Optional[str]:
+        is_trustee_override: bool | None = None,
+    ) -> str | None:
         """应用状态衰减，并检查疾病概率。返回警报消息或None。"""
         now = utc_now()
         elapsed_minutes = max(0.0, (now - pet.last_update).total_seconds() / 60.0)
@@ -628,7 +637,7 @@ class PetService:
 
     # ──────────────────── 改名 ────────────────────
 
-    def rename_pet(self, pet: Pet, new_name: str) -> Tuple[bool, str]:
+    def rename_pet(self, pet: Pet, new_name: str) -> tuple[bool, str]:
         if len(new_name) > 20:
             return False, "宠物名字不能超过20个字符"
 
@@ -648,7 +657,7 @@ class PetService:
 
     # ──────────────────── 使用加速卡 ────────────────────
 
-    def use_acceleration_card(self, pet: Pet, user: User) -> Tuple[bool, str]:
+    def use_acceleration_card(self, pet: Pet, user: User) -> tuple[bool, str]:
         """使用加速卡加给宠物加经验"""
         from .item_service import ItemService
         item_service = ItemService(self.db)
@@ -669,7 +678,7 @@ class PetService:
 
     # ──────────────────── 使用托管券 ────────────────────
 
-    def use_trusteeship_coupon(self, pet: Pet, user: User) -> Tuple[bool, str]:
+    def use_trusteeship_coupon(self, pet: Pet, user: User) -> tuple[bool, str]:
         """使用托管券，在指定时间内衰减减半"""
         from .item_service import ItemService
         item_service = ItemService(self.db)
@@ -688,7 +697,7 @@ class PetService:
 
     # ──────────────────── 召回旅行中的宠物（新增）────────────────────
 
-    def recall_pet(self, pet: Pet, user: User) -> Tuple[bool, str]:
+    def recall_pet(self, pet: Pet, user: User) -> tuple[bool, str]:
         """召回旅行中的宠物"""
         if not pet.is_traveling():
             return False, "宠物没有在旅行中"

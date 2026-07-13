@@ -68,16 +68,16 @@ async def handle_formula(args: str, context) -> str:
     args = args.strip().lower()
     if not args:
         return _get_formula_list()
-    
+
     parts = args.split(None, 1)
     subcommand = parts[0]
-    
+
     # 处理计算子命令
     if subcommand == "calc":
         if len(parts) < 2:
             return "请提供计算类型和参数\n示例: /astro formula calc schwarzschild 10"
         return await _handle_calculation(parts[1], context)
-    
+
     # 查询公式定义
     formula = FORMULAS.get(args)
     if formula:
@@ -89,7 +89,7 @@ async def handle_formula(args: str, context) -> str:
         if 'notes' in formula:
             result += f"备注: {formula['notes']}"
         return result
-    
+
     return f"未找到公式: {args}\n\n可用公式: {', '.join(FORMULAS.keys())}\n\n输入 /astro formula 查看列表"
 
 
@@ -98,13 +98,13 @@ async def _handle_calculation(args: str, context) -> str:
     parts = args.strip().split(None, 1)
     if len(parts) < 1:
         return "请指定计算类型\n示例: /astro formula calc schwarzschild 10"
-    
+
     calc_type = parts[0].lower()
-    
+
     try:
         from astropy import constants as const
         from astropy import units as u
-        
+
         if calc_type == "schwarzschild":
             if len(parts) < 2:
                 return "请提供质量（以太阳质量为单位）\n示例: /astro formula calc schwarzschild 10"
@@ -112,14 +112,14 @@ async def _handle_calculation(args: str, context) -> str:
                 mass_solar = float(parts[1])
                 mass = mass_solar * const.M_sun
                 r_s = (2 * const.G * mass / const.c**2).to(u.km)
-                
+
                 return f"⚫ 史瓦西半径计算\n\n" \
                        f"质量: {mass_solar} M☉\n" \
                        f"史瓦西半径: {r_s.value:.3f} km\n" \
                        f"参考: 太阳的史瓦西半径约为 3 km"
             except ValueError:
                 return "无效的质量值"
-        
+
         elif calc_type == "luminosity":
             if len(parts) < 2:
                 return "请提供质量（以太阳质量为单位）\n示例: /astro formula calc luminosity 2"
@@ -134,9 +134,9 @@ async def _handle_calculation(args: str, context) -> str:
                     alpha = 3.5
                 else:
                     alpha = 1.0
-                
+
                 luminosity = mass_solar ** alpha
-                
+
                 return f"⭐ 主序星光度估算\n\n" \
                        f"质量: {mass_solar} M☉\n" \
                        f"估算光度: {luminosity:.3e} L☉\n" \
@@ -144,7 +144,7 @@ async def _handle_calculation(args: str, context) -> str:
                        f"备注: 这是基于质光关系 L/L☉ ≈ (M/M☉)^α 的估算"
             except ValueError:
                 return "无效的质量值"
-        
+
         elif calc_type == "lifetime":
             if len(parts) < 2:
                 return "请提供质量（以太阳质量为单位）\n示例: /astro formula calc lifetime 2"
@@ -152,7 +152,7 @@ async def _handle_calculation(args: str, context) -> str:
                 mass_solar = float(parts[1])
                 # 主序星寿命估算
                 lifetime_years = 1e10 * (mass_solar ** -2.5)
-                
+
                 # 转换为合适的时间单位
                 if lifetime_years > 1e9:
                     time_str = f"{lifetime_years/1e9:.3f} Gyr (十亿年)"
@@ -160,7 +160,7 @@ async def _handle_calculation(args: str, context) -> str:
                     time_str = f"{lifetime_years/1e6:.3f} Myr (百万年)"
                 else:
                     time_str = f"{lifetime_years:.3e} 年"
-                
+
                 return f"⏳ 主序星寿命估算\n\n" \
                        f"质量: {mass_solar} M☉\n" \
                        f"估算主序寿命: {time_str}\n" \
@@ -168,14 +168,14 @@ async def _handle_calculation(args: str, context) -> str:
                        f"参考: 太阳的主序寿命约为 10 Gyr"
             except ValueError:
                 return "无效的质量值"
-        
+
         else:
             return f"未知的计算类型: {calc_type}\n\n" \
                    f"可用计算:\n" \
                    f"- schwarzschild <质量> - 史瓦西半径\n" \
                    f"- luminosity <质量> - 主序星光度\n" \
                    f"- lifetime <质量> - 主序星寿命"
-    
+
     except Exception as exc:
         return public_error_message(
             context, exc, logger=context.logger, component="astro_tools.formula"

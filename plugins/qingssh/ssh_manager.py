@@ -17,7 +17,7 @@ import shlex
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import atomic_write_text
 from core.sensitive_audit import summarize_sensitive
@@ -96,7 +96,7 @@ def _expand_proxycommand(proxycommand: str, server: dict[str, Any]) -> str:
     )
 
 
-def _parse_proxyjump_command(proxycommand: str) -> Optional[dict[str, Any]]:
+def _parse_proxyjump_command(proxycommand: str) -> dict[str, Any] | None:
     try:
         parts = shlex.split(proxycommand, posix=(os.name != "nt"))
     except ValueError:
@@ -191,8 +191,8 @@ class SSHManager:
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.servers_file = data_dir / "servers.json"
-        self.connections: dict[str, "paramiko.SSHClient"] = {}
-        self._ssh_config: Optional["SSHConfig"] = None
+        self.connections: dict[str, paramiko.SSHClient] = {}
+        self._ssh_config: SSHConfig | None = None
         self.context = context  # 用于日志记录
         self.servers = {}  # 初始化为空，等待异步加载
         # 活跃的命令通道：user_id:server_name -> channel
@@ -228,18 +228,11 @@ class SSHManager:
         summary = summarize_sensitive(value)
         self._log(
             level,
-            "sensitive_audit operation=%s request_id=%s status=%s error_type=%s "
-            "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s"
-            % (
-                operation,
-                audit_request_id(self.context),
-                status,
-                audit_error_type(exc),
-                summary.kind,
-                summary.length,
-                summary.byte_length,
-                summary.fingerprint,
-            ),
+            f"sensitive_audit operation={operation} "
+            f"request_id={audit_request_id(self.context)} status={status} "
+            f"error_type={audit_error_type(exc)} payload_kind={summary.kind} "
+            f"payload_length={summary.length} payload_bytes={summary.byte_length} "
+            f"payload_fingerprint={summary.fingerprint}",
         )
 
     def _load_host_keys(self, client: "paramiko.SSHClient", known_hosts_path: Path) -> None:
@@ -280,7 +273,7 @@ class SSHManager:
             try:
                 # 在线程池中执行文件读取
                 def _read_servers():
-                    with open(self.servers_file, "r", encoding="utf-8") as f:
+                    with open(self.servers_file, encoding="utf-8") as f:
                         return json.load(f)
 
                 self.servers = await asyncio.to_thread(_read_servers)
@@ -324,7 +317,7 @@ class SSHManager:
                 # 在线程池中执行文件读取和解析
                 def _read_and_parse_config():
                     config = SSHConfig()
-                    with open(ssh_config_path, "r", encoding="utf-8") as f:
+                    with open(ssh_config_path, encoding="utf-8") as f:
                         config.parse(f)
                     return config
 
@@ -344,7 +337,7 @@ class SSHManager:
                 hosts.append(host)
         return hosts
 
-    def get_ssh_config_for_host(self, host: str) -> Optional[dict]:
+    def get_ssh_config_for_host(self, host: str) -> dict | None:
         """获取 ~/.ssh/config 中特定 Host 的配置"""
         if self._ssh_config is None:
             return None
@@ -366,7 +359,7 @@ class SSHManager:
         return None
 
     async def import_from_ssh_config(
-        self, host_name: str, alias: Optional[str] = None
+        self, host_name: str, alias: str | None = None
     ) -> tuple[bool, str]:
         """从 ~/.ssh/config 导入服务器配置"""
         config = self.get_ssh_config_for_host(host_name)
@@ -439,9 +432,9 @@ class SSHManager:
         port: int = 22,
         username: str = "root",
         auth_type: str = "password",
-        password: Optional[str] = None,
-        password_ref: Optional[str] = None,
-        key_path: Optional[str] = None,
+        password: str | None = None,
+        password_ref: str | None = None,
+        key_path: str | None = None,
     ) -> bool:
         """
         添加服务器配置
@@ -501,7 +494,7 @@ class SSHManager:
                 self._disconnect_key(key, send_interrupt=True)
         return True
 
-    def get_server(self, name: str) -> Optional[dict]:
+    def get_server(self, name: str) -> dict | None:
         """获取服务器配置"""
         return self.servers.get(name)
 
@@ -523,7 +516,7 @@ class SSHManager:
         """
         return f"{str(user_id)}:{str(group_id)}:{name}"
 
-    def _parse_connection_key(self, key: str) -> tuple[str, Optional[str], str]:
+    def _parse_connection_key(self, key: str) -> tuple[str, str | None, str]:
         user_id, group_id, name = key.split(":", 2)
         return user_id, group_id, name
 
@@ -598,7 +591,7 @@ class SSHManager:
     async def connect(
         self,
         user_id: str,
-        group_id: Optional[str],
+        group_id: str | None,
         name: str,
         use_ssh_config_direct: bool = False,
         username_override: str = None,
@@ -878,12 +871,12 @@ class SSHManager:
             )
             return False, f"❌ 连接失败: {e}"
 
-    def disconnect(self, user_id: str, group_id: Optional[str], name: str) -> bool:
+    def disconnect(self, user_id: str, group_id: str | None, name: str) -> bool:
         """断开连接（用户+群隔离）"""
         key = self._build_connection_key(user_id, group_id, name)
         return self._disconnect_key(key, send_interrupt=True)
 
-    def is_connected(self, user_id: str, group_id: Optional[str], name: str) -> bool:
+    def is_connected(self, user_id: str, group_id: str | None, name: str) -> bool:
         """检查是否已连接（用户+群隔离）"""
         key = self._build_connection_key(user_id, group_id, name)
         if key not in self.connections:
@@ -916,7 +909,7 @@ class SSHManager:
     async def stop_command(
         self,
         user_id: str,
-        group_id: Optional[str],
+        group_id: str | None,
         name: str,
     ) -> CommandTerminationResult:
         """
@@ -1008,7 +1001,7 @@ class SSHManager:
     async def execute_command_stream(
         self,
         user_id: str,
-        group_id: Optional[str],
+        group_id: str | None,
         name: str,
         command: str,
         output_callback,
@@ -1071,7 +1064,7 @@ class SSHManager:
     async def _execute_command_stream_impl(
         self,
         user_id: str,
-        group_id: Optional[str],
+        group_id: str | None,
         name: str,
         command: str,
         output_callback,
@@ -1209,7 +1202,7 @@ class SSHManager:
                     pass
 
     async def execute_command(
-        self, user_id: str, group_id: Optional[str], name: str, command: str
+        self, user_id: str, group_id: str | None, name: str, command: str
     ) -> tuple[bool, str]:
         """
         执行命令并返回完整输出（非流式）
@@ -1240,7 +1233,7 @@ class SSHManager:
     async def download_file(
         self,
         user_id: str,
-        group_id: Optional[str],
+        group_id: str | None,
         name: str,
         remote_path: str,
         local_path: str,
@@ -1305,7 +1298,7 @@ class SSHManager:
             return False, f"❌ 下载失败: {e}"
 
     async def list_files(
-        self, user_id: str, group_id: Optional[str], name: str, remote_dir: str, pattern: str = "*"
+        self, user_id: str, group_id: str | None, name: str, remote_dir: str, pattern: str = "*"
     ) -> tuple[bool, list]:
         """
         列出远程目录中匹配模式的文件

@@ -619,7 +619,7 @@ async def test_server_ws_handler_counts_invalid_json_frame(sample_server):
             try:
                 return next(self._messages)
             except StopIteration:
-                raise StopAsyncIteration
+                raise StopAsyncIteration from None
 
     sample_server._ensure_ws_workers = Mock()
     request = _make_request_with_auth("GET", "/ws", "test_token")

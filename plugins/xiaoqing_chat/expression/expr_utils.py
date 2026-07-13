@@ -1,10 +1,11 @@
 """Shared utilities for the expression module."""
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from ..message_parts import render_stored_message
 from ..memory.memory import StoredMessage
+from ..message_parts import render_stored_message
 from ..utils.json_parsing import parse_first_json_array, parse_first_json_object
 
 

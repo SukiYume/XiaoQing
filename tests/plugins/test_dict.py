@@ -1,12 +1,12 @@
 """
 dict 插件单元测试
 """
-import pytest
+import importlib.util
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+import pytest
 
-import importlib.util
+ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 动态加载 dict 插件
 spec = importlib.util.spec_from_file_location("dict_main", ROOT / "plugins" / "dict" / "main.py")

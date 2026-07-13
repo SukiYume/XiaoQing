@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
+
 
 class DebugConfig(BaseModel):
     show_planner_prompt: bool = False
@@ -300,7 +301,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def load_xiaoqing_chat_config(
     *,
-    context_config: Optional[dict[str, Any]],
+    context_config: dict[str, Any] | None,
     plugin_dir: Path,
     filename: str = "xiaoqing_config.json",
 ) -> XiaoQingChatConfig:

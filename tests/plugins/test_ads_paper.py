@@ -32,7 +32,7 @@ class TestAdsPaperPlugin:
         constants_path = ROOT / "plugins" / "ads_paper" / "constants.py"
         assert constants_path.exists()
 
-        with open(constants_path, "r", encoding="utf-8") as f:
+        with open(constants_path, encoding="utf-8") as f:
             content = f.read()
             # 检查是否定义了必要的常量
             assert "ADS_API_BASE" in content or "ADS" in content.upper()
@@ -42,7 +42,7 @@ class TestAdsPaperPlugin:
         storage_path = ROOT / "plugins" / "ads_paper" / "storage.py"
         assert storage_path.exists()
 
-        with open(storage_path, "r", encoding="utf-8") as f:
+        with open(storage_path, encoding="utf-8") as f:
             content = f.read()
             assert "class" in content or "def" in content
 
@@ -51,7 +51,7 @@ class TestAdsPaperPlugin:
         client_path = ROOT / "plugins" / "ads_paper" / "ads_client.py"
         assert client_path.exists()
 
-        with open(client_path, "r", encoding="utf-8") as f:
+        with open(client_path, encoding="utf-8") as f:
             content = f.read()
             assert "class" in content
 
@@ -60,7 +60,7 @@ class TestAdsPaperPlugin:
         commands_path = ROOT / "plugins" / "ads_paper" / "paper_commands.py"
         assert commands_path.exists()
 
-        with open(commands_path, "r", encoding="utf-8") as f:
+        with open(commands_path, encoding="utf-8") as f:
             content = f.read()
             assert "async def" in content or "def" in content
 
@@ -69,7 +69,7 @@ class TestAdsPaperPlugin:
         note_path = ROOT / "plugins" / "ads_paper" / "note_commands.py"
         assert note_path.exists()
 
-        with open(note_path, "r", encoding="utf-8") as f:
+        with open(note_path, encoding="utf-8") as f:
             content = f.read()
             assert "async def" in content or "def" in content
 
@@ -78,7 +78,7 @@ class TestAdsPaperPlugin:
         ai_path = ROOT / "plugins" / "ads_paper" / "ai_commands.py"
         assert ai_path.exists()
 
-        with open(ai_path, "r", encoding="utf-8") as f:
+        with open(ai_path, encoding="utf-8") as f:
             content = f.read()
             assert "async def" in content or "def" in content
 
@@ -89,7 +89,7 @@ class TestAdsPaperConfig:
     def test_plugin_json_structure(self):
         """测试 plugin.json 结构"""
         plugin_json_path = ROOT / "plugins" / "ads_paper" / "plugin.json"
-        with open(plugin_json_path, "r", encoding="utf-8") as f:
+        with open(plugin_json_path, encoding="utf-8") as f:
             config = json.load(f)
 
         assert "name" in config
@@ -100,7 +100,7 @@ class TestAdsPaperConfig:
     def test_plugin_commands_have_help(self):
         """测试命令有帮助信息"""
         plugin_json_path = ROOT / "plugins" / "ads_paper" / "plugin.json"
-        with open(plugin_json_path, "r", encoding="utf-8") as f:
+        with open(plugin_json_path, encoding="utf-8") as f:
             config = json.load(f)
 
         for cmd in config.get("commands", []):
@@ -115,7 +115,7 @@ class TestAdsPaperModules:
     def test_main_exports_plugin(self):
         """测试 main.py 导出 Plugin 类"""
         main_path = ROOT / "plugins" / "ads_paper" / "main.py"
-        with open(main_path, "r", encoding="utf-8") as f:
+        with open(main_path, encoding="utf-8") as f:
             content = f.read()
 
         assert "class Plugin" in content or "plugin" in content.lower()
@@ -136,7 +136,7 @@ class TestAdsPaperModules:
             assert module_path.exists(), f"Module {module_name} does not exist"
 
             # 尝试读取文件内容
-            with open(module_path, "r", encoding="utf-8") as f:
+            with open(module_path, encoding="utf-8") as f:
                 content = f.read()
                 # 确保文件有实际内容
                 assert len(content.strip()) > 0, f"Module {module_name} is empty"
@@ -148,7 +148,7 @@ class TestAdsPaperArxivPatterns:
     def test_arxiv_id_patterns_in_constants(self):
         """测试常量文件中有 arXiv ID 模式"""
         constants_path = ROOT / "plugins" / "ads_paper" / "constants.py"
-        with open(constants_path, "r", encoding="utf-8") as f:
+        with open(constants_path, encoding="utf-8") as f:
             content = f.read()
 
         # 检查是否包含 arXiv 相关的正则表达式
@@ -157,7 +157,7 @@ class TestAdsPaperArxivPatterns:
     def test_ads_client_has_arxiv_methods(self):
         """测试 ADS 客户端有 arXiv 处理方法"""
         client_path = ROOT / "plugins" / "ads_paper" / "ads_client.py"
-        with open(client_path, "r", encoding="utf-8") as f:
+        with open(client_path, encoding="utf-8") as f:
             content = f.read()
 
         # 检查是否有 arXiv 相关的方法

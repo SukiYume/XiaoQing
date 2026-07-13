@@ -3,20 +3,17 @@ Tests for core/metrics.py - MetricsCollector and related classes
 """
 
 import asyncio
-import time
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from core.metrics import (
     ExecutionStats,
-    MetricsCollector,
     ExecutionTimer,
-    timed_async,
+    MetricsCollector,
     get_metrics_collector,
     set_metrics_collector,
+    timed_async,
 )
-
 
 # ============================================================
 # ExecutionStats Tests

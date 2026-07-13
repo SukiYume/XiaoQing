@@ -736,7 +736,9 @@ class TestPendoReviewFixes:
         assert actions[0]["params"]["user_id"] == 1001
         assert actions[0]["params"]["name"] == "pendo-export.md"
 
-    def test_export_month_week_and_type_combinations_use_list_style_ranges(self, tmp_path, monkeypatch):
+    def test_export_month_week_and_type_combinations_use_list_style_ranges(
+        self, tmp_path, monkeypatch, request
+    ):
         import shutil
         from datetime import datetime as real_datetime
 
@@ -759,6 +761,7 @@ class TestPendoReviewFixes:
         )
 
         db = Database(str(tmp_path / "pendo-export.db"))
+        request.addfinalizer(db.cleanup)
         owner = "u-export-ranges"
         rows = [
             {
@@ -5504,7 +5507,7 @@ class TestPendoSearchAndImportRegression:
             assert updated_row is not None
             assert updated_row["content"] == "更新后的导入内容"
         finally:
-            db.get_connection().close()
+            db.cleanup()
 
 
 class TestPendoRedesignRegression:

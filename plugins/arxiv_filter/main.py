@@ -270,7 +270,8 @@ async def _run_filter(
     # 加载配置
     config = load_plugin_config()
     model_config = config.get("model", {})
-    configured_model_path = model_config.get("path", "best_model")
+    environment_model_path = os.environ.get("ARXIV_MODEL_PATH", "").strip()
+    configured_model_path = environment_model_path or model_config.get("path", "best_model")
 
     # 加载推理函数
     inference = _load_inference(context=context)
@@ -390,7 +391,7 @@ def _load_update_status(plugin_dir: str) -> dict[str, object]:
     status_file = _get_status_file_path(plugin_dir)
     if os.path.exists(status_file):
         try:
-            with open(status_file, "r", encoding="utf-8") as f:
+            with open(status_file, encoding="utf-8") as f:
                 return json.load(f)
         except Exception as exc:
             logger.warning(

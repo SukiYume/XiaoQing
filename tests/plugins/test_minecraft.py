@@ -16,7 +16,6 @@ from plugins.minecraft.rcon import (
     RconClient,
     RconCommandResult,
     RconConnectResult,
-    RconErrorKind,
     RconPacket,
     RconProtocolError,
     RconResponseLimitError,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional, TypeVar
+from typing import Any, TypeVar
 
 from core.plugin_base import write_json
 
@@ -23,7 +23,7 @@ class StoreBase:
     """
 
     def __init__(self) -> None:
-        self._data_dir: Optional[Path] = None
+        self._data_dir: Path | None = None
 
     def bind(self, data_dir: Path) -> None:
         """
@@ -43,7 +43,7 @@ class StoreBase:
         """
         return self._data_dir is not None
 
-    def _ensure_dir(self, *parts: str) -> Optional[Path]:
+    def _ensure_dir(self, *parts: str) -> Path | None:
         """
         确保目录存在，返回目录路径。
 
@@ -59,7 +59,7 @@ class StoreBase:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def _resolve_path(self, *parts: str) -> Optional[Path]:
+    def _resolve_path(self, *parts: str) -> Path | None:
         """
         解析路径，但不确保目录存在。
 

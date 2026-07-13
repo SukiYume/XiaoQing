@@ -1,22 +1,21 @@
+# ruff: noqa: I001  # Keep imports separate for the source-based plugin loader.
 """
 天文工具插件
 提供天文计算、坐标转换、时间转换等功能
 """
 import logging
 
-from core.plugin_base import segments
 from core.args import parse
+from core.plugin_base import segments
 from core.public_errors import public_error_response
 
-import time as std_time # Rename standard library time just in case, though we might not need it if we use datetime
-from . import time as astro_time # Safe import of local time.py
-from . import coord
+from . import const
 from . import convert
-from . import redshift
+from . import coord
 from . import formula
 from . import obj
-from . import const
-
+from . import redshift
+from . import time as astro_time
 
 logger = logging.getLogger(__name__)
 
@@ -30,39 +29,39 @@ async def handle(command: str, args: str, event: dict, context) -> list:
     """命令处理入口"""
     try:
         parsed = parse(args)
-        
+
         if not parsed:
             return segments(_show_help())
-        
+
         subcommand = parsed.first.lower()
-        
+
         # 命令路由
         if subcommand == "help" or subcommand == "帮助":
             return segments(_show_help())
-        
+
         if subcommand == "time":
             return segments(await astro_time.handle_time(parsed.rest(1), context))
-        
+
         if subcommand == "coord":
             return segments(await coord.handle_coord(parsed.rest(1), context))
-        
+
         if subcommand == "convert":
             return segments(await convert.handle_convert(parsed.rest(1), context))
-        
+
         if subcommand == "redshift":
             return segments(await redshift.handle_redshift(parsed.rest(1), context))
-        
+
         if subcommand == "formula":
             return segments(await formula.handle_formula(parsed.rest(1), context))
-        
+
         if subcommand == "obj":
             return segments(await obj.handle_obj(parsed.rest(1), context))
-        
+
         if subcommand == "const":
             return segments(await const.handle_const(parsed.rest(1), context))
-        
+
         return segments(f"未知命令: {subcommand}\n输入 /astro help 查看帮助")
-        
+
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="astro_tools.handle")
 

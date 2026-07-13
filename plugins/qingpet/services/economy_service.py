@@ -1,7 +1,6 @@
 import logging
-from typing import Dict, List
 
-from ..models import Pet, User, GroupConfig
+from ..models import GroupConfig, User
 from .database import Database
 
 logger = logging.getLogger(__name__)
@@ -11,7 +10,7 @@ class EconomyService:
     def __init__(self, db: Database):
         self.db = db
 
-    def get_group_stats(self, group_id: int) -> Dict:
+    def get_group_stats(self, group_id: int) -> dict:
         """获取群统计数据（实现 Issue #55: 数据统计 日活/留存/通胀指标）"""
         pets = self.db.get_all_pets_in_group(group_id)
 

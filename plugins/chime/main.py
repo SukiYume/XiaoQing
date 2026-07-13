@@ -62,16 +62,16 @@ class FRBData:
         self.name = name
         self.raw_info = info
         self._parse_data()
-    
+
     def _parse_data(self):
         """解析 FRB 数据"""
         # 提取所有脉冲日期
         self.pulses = sorted([k for k in self.raw_info.keys() if re.match(PULSE_DATE_PATTERN, k)])
-        
+
         if self.pulses:
             self.latest_pulse = self.pulses[-1]
             pulse_data = self.raw_info.get(self.latest_pulse, {})
-            
+
             # 提取各字段的值，支持嵌套结构
             self.timestamp = self._get_value(pulse_data, 'timestamp')
             self.dm = self._get_value(pulse_data, 'dm')
@@ -81,18 +81,18 @@ class FRBData:
             self.timestamp = None
             self.dm = None
             self.snr = None
-        
+
         # 位置信息
         self.ra = self._get_value(self.raw_info, 'ra')
         self.dec = self._get_value(self.raw_info, 'dec')
-    
+
     def _get_value(self, data: dict, key: str) -> str:
         """安全获取嵌套字典中的值"""
         item = data.get(key, {})
         if isinstance(item, dict):
             return str(item.get('value', 'N/A'))
         return str(item) if item else 'N/A'
-    
+
     def format_info(self) -> str:
         """格式化 FRB 信息为可读文本"""
         lines = [
@@ -104,7 +104,7 @@ class FRBData:
             f"SNR: {self.snr}"
         ]
         return "\n".join(lines)
-    
+
     def is_valid(self) -> bool:
         """检查数据是否有效"""
         return self.latest_pulse is not None and self.timestamp is not None
@@ -116,10 +116,10 @@ class FRBData:
 
 async def fetch_chime_repeaters(context) -> dict | None:
     """从 CHIME FRB 网站获取重复暴数据
-    
+
     Args:
         context: 插件上下文
-        
+
     Returns:
         包含 FRB 数据的字典，失败时返回 None
     """
@@ -161,16 +161,16 @@ async def fetch_chime_repeaters(context) -> dict | None:
 
 def parse_frb_data(data: dict, context) -> list:
     """解析 FRB 数据，提取关键信息
-    
+
     Args:
         data: 从 CHIME API 获取的原始数据
         context: 插件上下文
-        
+
     Returns:
         FRBData 对象列表
     """
     frb_list = []
-    
+
     for name, info in data.items():
         try:
             frb = FRBData(name, info)
@@ -186,16 +186,16 @@ def parse_frb_data(data: dict, context) -> list:
                 component="chime.parse_frb",
             )
             continue
-    
+
     return frb_list
 
 
 def build_history_mapping(frb_list: list) -> dict:
     """构建历史记录映射 {name: latest_timestamp}
-    
+
     Args:
         frb_list: FRBData 对象列表
-        
+
     Returns:
         名称到最新时间戳的映射
     """
@@ -203,31 +203,31 @@ def build_history_mapping(frb_list: list) -> dict:
 
 
 def find_updates(
-    new_data: dict, 
+    new_data: dict,
     old_mapping: dict,
     context
 ) -> tuple:
     """比较新旧数据，找出更新
-    
+
     Args:
         new_data: 新获取的原始数据
         old_mapping: 旧的历史记录映射
         context: 插件上下文
-        
+
     Returns:
         (新重复暴列表, 新脉冲列表)
     """
     new_repeaters = []
     new_pulses = []
-    
+
     for name, info in new_data.items():
         try:
             frb = FRBData(name, info)
             if not frb.is_valid():
                 continue
-            
+
             old_timestamp = old_mapping.get(name)
-            
+
             if old_timestamp is None:
                 # 新发现的重复暴
                 new_repeaters.append(frb)
@@ -244,16 +244,16 @@ def find_updates(
                 component="chime.find_updates",
             )
             continue
-    
+
     return new_repeaters, new_pulses
 
 
 def load_history(context) -> dict:
     """加载历史记录
-    
+
     Args:
         context: 插件上下文
-        
+
     Returns:
         历史记录映射
     """
@@ -264,11 +264,11 @@ def load_history(context) -> dict:
 
 def save_history(context, mapping: dict) -> bool:
     """保存历史记录
-    
+
     Args:
         context: 插件上下文
         mapping: 要保存的映射
-        
+
     Returns:
         是否保存成功
     """
@@ -294,21 +294,21 @@ def format_update_message(
     is_scheduled: bool = False
 ) -> str:
     """格式化更新消息
-    
+
     Args:
         new_repeaters: 新重复暴列表
         new_pulses: 新脉冲列表
         is_scheduled: 是否为定时检查
-        
+
     Returns:
         格式化的消息文本
     """
     lines = []
-    
+
     if is_scheduled:
         lines.append("🔔 **CHIME FRB 更新通知**")
         lines.append("")
-    
+
     if new_repeaters:
         lines.append("🆕 **新发现的重复暴:**")
         for frb in new_repeaters[:MAX_DISPLAY_FRBS]:
@@ -317,7 +317,7 @@ def format_update_message(
         if len(new_repeaters) > MAX_DISPLAY_FRBS:
             lines.append(f"... 还有 {len(new_repeaters) - MAX_DISPLAY_FRBS} 个")
             lines.append("")
-    
+
     if new_pulses:
         lines.append("📡 **检测到新脉冲:**")
         for frb in new_pulses[:MAX_DISPLAY_FRBS]:
@@ -326,7 +326,7 @@ def format_update_message(
         if len(new_pulses) > MAX_DISPLAY_FRBS:
             lines.append(f"... 还有 {len(new_pulses) - MAX_DISPLAY_FRBS} 个")
             lines.append("")
-    
+
     return "\n".join(lines)
 
 
@@ -347,39 +347,39 @@ def _find_frb(frb_list: list[FRBData], query: str) -> FRBData | None:
 # ============================================================
 
 async def handle(
-    command: str, 
-    args: str, 
-    event: dict, 
+    command: str,
+    args: str,
+    event: dict,
     context
 ) -> list:
     """命令处理入口"""
     try:
         parsed = parse(args)
-        
+
         # 解析子命令
         if parsed and parsed.first:
             subcommand = parsed.first.lower()
-            
+
             if subcommand == "help" or subcommand == "帮助":
                 return segments(_show_help())
             if subcommand not in {"list", "列表"} and not re.match(r"^frb[\w.+-]*$", subcommand, re.IGNORECASE):
                 return segments(f"未知命令: {parsed.first}\n{_show_help()}")
-        
+
         logger.info(f"处理 CHIME 命令: {command} {args}")
-        
+
         # 获取最新数据
         data = await fetch_chime_repeaters(context)
         if not data:
             return segments("❌ 无法获取 CHIME FRB 数据，请稍后重试")
-        
+
         # 加载历史数据
         old_mapping = load_history(context)
-        
+
         # 解析新数据
         frb_list = parse_frb_data(data, context)
         if not frb_list:
             return segments("❌ 未能解析到有效的 FRB 数据")
-        
+
         # 手动查询只做 preview，不推进定时投递 ledger。
 
         if parsed and parsed.first:
@@ -398,10 +398,10 @@ async def handle(
                 if frb is None:
                     return segments(f"❌ 未找到 FRB「{parsed.first}」")
                 return segments(frb.format_info())
-        
+
         # 查找更新
         new_repeaters, new_pulses = find_updates(data, old_mapping, context)
-        
+
         # 构建响应消息
         if new_repeaters or new_pulses:
             message = format_update_message(new_repeaters, new_pulses, is_scheduled=False)
@@ -416,7 +416,7 @@ async def handle(
                 f"当前共追踪 {len(frb_list)} 个重复暴"
             ]
             return segments("\n".join(lines))
-        
+
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="chime.handle")
 
@@ -445,42 +445,42 @@ def _show_help() -> str:
 
 async def scheduled_check(context) -> list:
     """定时检查任务
-    
+
     Args:
         context: 插件上下文
-        
+
     Returns:
         消息段列表（如有更新）或空列表
     """
     context.logger.info("CHIME 定时检查开始")
-    
+
     # 获取最新数据
     data = await fetch_chime_repeaters(context)
     if not data:
         context.logger.warning("CHIME 定时检查: 无法获取数据")
         return []
-    
+
     # 加载历史数据
     old_mapping = load_history(context)
-    
+
     # 解析新数据
     frb_list = parse_frb_data(data, context)
     if not frb_list:
         context.logger.warning("CHIME 定时检查: 未能解析到有效数据")
         return []
-    
+
     # 先构建候选映射，只有通知确认投递后才提交。
     new_mapping = build_history_mapping(frb_list)
-    
+
     # 查找更新
     new_repeaters, new_pulses = find_updates(data, old_mapping, context)
-    
+
     # 如果没有更新，不发送消息
     if not new_repeaters and not new_pulses:
         context.logger.info("CHIME 定时检查: 没有新数据")
         save_history(context, new_mapping)
         return []
-    
+
     # 构建通知消息
     context.logger.info(f"CHIME 定时检查: 发现更新 (新重复暴: {len(new_repeaters)}, 新脉冲: {len(new_pulses)})")
     message = format_update_message(new_repeaters, new_pulses, is_scheduled=True)

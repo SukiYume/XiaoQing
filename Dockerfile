@@ -1,4 +1,7 @@
-FROM python:3.13-slim AS builder
+FROM python:3.13.14-slim-trixie@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280 AS python-base
+
+
+FROM python-base AS builder
 
 WORKDIR /build
 
@@ -19,7 +22,7 @@ RUN /opt/xiaoqing-venv/bin/pip install --no-cache-dir --no-deps \
         --target /opt/xiaoqing-app artifacts/xiaoqing.whl
 
 
-FROM python:3.13-slim AS runtime
+FROM python-base AS runtime
 
 WORKDIR /app
 

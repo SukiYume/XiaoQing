@@ -2,16 +2,15 @@
 综合词典插件
 提供天文学专业术语的中英互译功能
 """
-import re
-import logging
 import hashlib
-from pathlib import Path
+import logging
+import re
 from functools import lru_cache
+from pathlib import Path
 
-from core.plugin_base import segments, run_sync, load_json
 from core.args import parse
+from core.plugin_base import load_json, run_sync, segments
 from core.public_errors import public_error_message, public_error_response
-
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +32,10 @@ def init(context=None) -> None:
 def _load_dictionary(dict_file: Path):
     """
     加载词典数据文件（带缓存）
-    
+
     Args:
         dict_file: 词典文件路径
-        
+
     Returns:
         DataFrame 或 None（加载失败时）
     """
@@ -47,8 +46,8 @@ def _load_dictionary(dict_file: Path):
         frame = pd.read_csv(dict_file, sep='\t', header=None, names=['src', 'dst'])
         frame["_src_lower"] = frame["src"].astype(str).str.lower()
         return frame
-    except ImportError:
-        raise ImportError("天文词典功能需要 pandas 库，请运行: pip install pandas")
+    except ImportError as exc:
+        raise ImportError("天文词典功能需要 pandas 库，请运行: pip install pandas") from exc
     except Exception as exc:
         raise RuntimeError("加载词典文件失败") from exc
 
@@ -56,10 +55,10 @@ def _load_dictionary(dict_file: Path):
 def _detect_language(text: str) -> str:
     """
     检测文本是中文还是英文
-    
+
     Args:
         text: 待检测文本
-        
+
     Returns:
         'chinese' 或 'english'
     """
@@ -134,20 +133,20 @@ def _query_astrodict_sync(
 # ============================================================
 
 async def query_astrodict(
-    query: str, 
+    query: str,
     context,
     exact_match: bool = False,
     max_results: int = 10
 ) -> str:
     """
     查询天文学词典
-    
+
     Args:
         query: 查询词汇
         context: 插件上下文
         exact_match: 是否精确匹配
         max_results: 最大返回结果数
-        
+
     Returns:
         查询结果字符串
     """
@@ -173,53 +172,53 @@ async def query_astrodict(
 # ============================================================
 
 async def handle(
-    command: str, 
-    args: str, 
-    event: dict, 
+    command: str,
+    args: str,
+    event: dict,
     context
 ) -> list[dict]:
     """命令处理入口"""
     try:
         parsed = parse(args)
-        
+
         # 空命令或帮助信息
         if not parsed or parsed.first.lower() in ['help', 'h', 'list', 'l', '帮助']:
             return segments(_get_help())
-        
+
         exact_match = parsed.has('e') or parsed.has('exact')
         # 精确匹配的 bare flag 可能把查询词吃进 option value，需要单独回收。
         query = _extract_query(parsed, exact_match)
-        
+
         if not query:
             return segments(_get_help())
-        
+
         # 获取参数
         max_results_str = parsed.opt('n') or parsed.opt('num')
         try:
             max_results = int(max_results_str) if max_results_str else 10
         except ValueError:
             max_results = 10
-        
+
         # 验证参数
         if max_results < 1:
             max_results = 10
         elif max_results > 100:
             max_results = 100
-        
+
         # 执行查询
         logger.info(
             f"天文词典查询: query='{query}', exact={exact_match}, max={max_results}"
         )
-        
+
         result = await query_astrodict(
             query=query,
             context=context,
             exact_match=exact_match,
             max_results=max_results
         )
-        
+
         return segments(result)
-        
+
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="dict.handle")
 

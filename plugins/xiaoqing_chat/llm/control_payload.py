@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 _REASONING_PAYLOAD_KEYS = frozenset({"reasoning_effort"})
 
 

@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional, Sequence
+from typing import Any
 
-from .action_history import ActionHistoryStore
 from ..config.config import XiaoQingChatConfig
 from ..helper_utils import _llm_extra_payload
 from ..logging_utils import _log_step, _short_text
 from ..memory.memory import MemoryStore, StoredMessage
 from ..memory.memory_db import MemoryDB
 from ..memory.memory_retrieval import build_memory_block
+from .action_history import ActionHistoryStore
 from .pfc_action_planner import PFCPlan, decide_say_bye, plan_next_action
 from .pfc_goal_analyzer import analyze_goals
 from .pfc_state import PFCConversationState, PFCStateStore
@@ -182,7 +183,7 @@ async def run_pfc_once(
     memory_db: MemoryDB,
     pfc_state_store: PFCStateStore,
     generate_reply: GenerateReplyFn,
-    state_override: Optional[PFCConversationState] = None,
+    state_override: PFCConversationState | None = None,
     persist_state: bool = True,
 ) -> PFCRunResult:
     """

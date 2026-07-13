@@ -28,7 +28,7 @@ for mod_name in modules_to_load:
     sys.modules[f"astro_tools_{mod_name}"] = module
 
 # 读取主模块源代码
-with open(ROOT / "plugins" / "astro_tools" / "main.py", "r", encoding="utf-8") as f:
+with open(ROOT / "plugins" / "astro_tools" / "main.py", encoding="utf-8") as f:
     main_source = f.read()
 
 # 替换相对导入

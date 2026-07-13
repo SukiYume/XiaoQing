@@ -21,12 +21,12 @@ DEFAULT_WHITELIST: set[str] = {
     "env", "printenv", "id", "groups", "w", "who", "last", "lastlog",
     "lscpu", "lsmem", "lsblk", "lsusb", "lspci", "dmidecode",  # 硬件信息
     "arch", "nproc", "getconf", "nvidia-smi", # 系统架构
-    
+
     # ============================================================
     # 文件操作
     # ============================================================
     # 只读
-    "find", "grep", "egrep", "fgrep", "wc", "sort", "uniq", "diff", "file", 
+    "find", "grep", "egrep", "fgrep", "wc", "sort", "uniq", "diff", "file",
     "stat", "tree", "less", "more", "strings", "xxd", "hexdump",
     "locate", "whereis", "readlink", "realpath", "basename", "dirname",
     "md5sum", "sha256sum", "sha1sum", "cksum",  # 校验
@@ -35,17 +35,17 @@ DEFAULT_WHITELIST: set[str] = {
     "tar", "gzip", "gunzip", "zip", "unzip", "7z", "rar", "unrar",  # 压缩
     "sed", "awk", "cut", "tr", "paste", "join", "split",  # 文本处理
     "tee", "xargs",
-    
+
     # ============================================================
     # 进程管理
     # ============================================================
-    "ps", "top", "htop", "pgrep", "pkill", "killall", "kill",
+    "htop", "pgrep", "pkill", "killall", "kill",
     "jobs", "bg", "fg", "nohup", "screen", "tmux",
     "nice", "renice", "ionice", "timeout", "time",
     "lsof", "fuser", "pstree",
     # Windows 进程
     "tasklist", "taskkill", "wmic",
-    
+
     # ============================================================
     # 网络诊断
     # ============================================================
@@ -56,15 +56,15 @@ DEFAULT_WHITELIST: set[str] = {
     "whois", "nmap", "tcpdump", "iptables", "firewall-cmd",
     # Windows 网络
     "netsh", "getmac", "nbtstat", "net",
-    
+
     # ============================================================
     # 磁盘管理
     # ============================================================
-    "df", "du", "mount", "umount", "fdisk", "parted", "blkid",
-    "lsblk", "findmnt", "sync",
+    "mount", "umount", "fdisk", "parted", "blkid",
+    "findmnt", "sync",
     # Windows 磁盘
     "chkdsk", "diskpart", "fsutil", "vol", "label",
-    
+
     # ============================================================
     # 服务/系统管理
     # ============================================================
@@ -72,16 +72,16 @@ DEFAULT_WHITELIST: set[str] = {
     "crontab", "at", "batch",
     "shutdown", "reboot", "poweroff", "halt",  # 慎用!
     # Windows 服务
-    "sc", "net", "schtasks", "reg",
-    
+    "sc", "schtasks", "reg",
+
     # ============================================================
     # 用户管理（只读）
     # ============================================================
-    "id", "groups", "whoami", "finger", "getent", "passwd",
-    "last", "lastlog", "who", "w", "users",
+    "finger", "getent", "passwd",
+    "users",
     # Windows 用户
-    "net", "whoami", "query",
-    
+    "query",
+
     # ============================================================
     # Python/开发工具
     # ============================================================
@@ -92,7 +92,7 @@ DEFAULT_WHITELIST: set[str] = {
     "java", "javac", "mvn", "gradle", "go", "ruby", "perl", "php",
     "docker", "docker-compose", "podman", "kubectl", "helm",
     "code", "vim", "nano", "vi", "emacs",
-    
+
     # ============================================================
     # 其他实用工具
     # ============================================================
@@ -103,13 +103,13 @@ DEFAULT_WHITELIST: set[str] = {
     "jq", "yq", "xmllint",  # JSON/YAML/XML 处理
     "base64", "openssl", "gpg",  # 编码/加密
     "convert", "identify", "ffmpeg", "ffprobe",  # 媒体处理
-    
+
     # ============================================================
     # Windows 特有命令
     # ============================================================
-    "cmd", "powershell", "pwsh", "where", "type", "more", "find", "findstr",
+    "cmd", "powershell", "pwsh", "where", "findstr",
     "attrib", "icacls", "cacls", "takeown",
-    "systeminfo", "hostname", "ver", "set", "path",
+    "systeminfo", "ver", "set", "path",
     "copy", "xcopy", "robocopy", "move", "del", "rd", "rmdir", "md",
     "start", "explorer", "notepad", "mspaint", "calc",
     "control", "mmc", "msconfig", "devmgmt.msc", "diskmgmt.msc",

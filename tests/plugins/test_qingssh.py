@@ -483,12 +483,12 @@ class TestQingsshPathResolver:
         # cd 无 CWD
         result = pr.build_command("cd /tmp", None)
         assert result == "cd /tmp && pwd"
-        
+
         # cd 有 CWD
         cwd = "/home/user/low.iops.files"
         result = pr.build_command("cd FRB121102", cwd)
         assert result == f"cd {shlex.quote(cwd)} && cd FRB121102 && pwd"
-        
+
         # bare cd 有 CWD
         cwd2 = "/home/user/data"
         result = pr.build_command("cd", cwd2)
@@ -509,10 +509,10 @@ class TestQingsshPathResolver:
         pr = self._import_path_resolver()
         # 正常 pwd 输出
         assert pr.extract_cwd_from_output("/home/user/data\n") == "/home/user/data"
-        
+
         # 多行输出（pwd 在最后）
         assert pr.extract_cwd_from_output("some output\n/home/user/data\n") == "/home/user/data"
-        
+
         # 无有效路径
         assert pr.extract_cwd_from_output("error message\n") is None
         assert pr.extract_cwd_from_output("") is None
@@ -529,13 +529,13 @@ class TestQingsshPathResolver:
         pr = self._import_path_resolver()
         # 绝对路径直接返回
         assert pr.resolve_remote_path("/tmp/file.png") == "/tmp/file.png"
-        
+
         # 相对路径拼接 CWD
         assert pr.resolve_remote_path("image.png", "/home/user/data") == "/home/user/data/image.png"
-        
+
         # 无 CWD 时直接返回文件名
         assert pr.resolve_remote_path("image.png") == "image.png"
-        
+
         # CWD 末尾有斜杠
         assert pr.resolve_remote_path("image.png", "/home/user/data/") == "/home/user/data/image.png"
 

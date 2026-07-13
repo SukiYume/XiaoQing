@@ -10,15 +10,16 @@ apod 插件单元测试
 - 定时任务
 """
 
-import pytest
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock
+
 import aiohttp
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-import importlib.util
 spec = importlib.util.spec_from_file_location("apod_main", ROOT / "plugins" / "apod" / "main.py")
 apod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(apod)
@@ -561,7 +562,6 @@ class TestDownloadImage:
     @pytest.mark.asyncio
     async def test_download_image_success(self, mock_context, temp_data_dir):
         """测试成功下载图片"""
-        import asyncio
 
         class MockResponse:
             status = 200
@@ -598,7 +598,6 @@ class TestDownloadImage:
     @pytest.mark.asyncio
     async def test_download_image_creates_directory(self, mock_context, temp_data_dir):
         """测试下载时创建目录"""
-        import asyncio
 
         class MockResponse:
             status = 200

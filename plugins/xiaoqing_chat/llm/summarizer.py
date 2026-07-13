@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from core.plugin_base import write_json
 
-from .llm_client import chat_completions
 from ..memory.memory import StoredMessage
 from ..memory.memory_db import MemoryDB
 from ..memory.topic_summary_cache import load_topic_summary_entries, topic_summary_cache_path
+from ..planning.pfc_utils import extract_first_json_dict
+from .llm_client import chat_completions
 from .prompt_builder import ChatMessage, build_dialogue_prompt
+
 
 @dataclass
 class TopicSummary:
@@ -61,8 +63,6 @@ def _save_cache(data_dir: Path, chat_id: str, topics: Sequence[TopicSummary]) ->
         )
     write_json(path, payload)
 
-from ..planning.pfc_utils import extract_first_json_dict
-
 _TOPIC_SYSTEM = (
     "你是聊天记录总结助手。你会把最近的对话压缩成一个话题摘要，用于机器人长期记忆检索。\n"
     "要求：只输出 JSON，不要输出解释文字。\n"
@@ -73,10 +73,10 @@ def build_topic_messages(*, bot_name: str, history: Sequence[StoredMessage]) -> 
     dialogue = build_dialogue_prompt(history, bot_name=bot_name, truncate=True, max_chars=1600)
     user = (
         "对话如下：\n"
-        "{dialogue}\n\n"
+        f"{dialogue}\n\n"
         "输出 JSON：\n"
-        '{{"topic":"...","keywords":["..."],"summary":"...","key_points":["..."]}}'
-    ).format(dialogue=dialogue)
+        '{"topic":"...","keywords":["..."],"summary":"...","key_points":["..."]}'
+    )
     return [
         ChatMessage(role="system", content=_TOPIC_SYSTEM.strip()),
         ChatMessage(role="user", content=user.strip()),

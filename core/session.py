@@ -72,12 +72,12 @@ class Session:
 class SessionManager:
     """
     会话管理器
-    
+
     支持：
     - 创建/获取/删除用户会话
     - 会话超时自动清理
     - 每个会话键的事务性读改写（不同键可并行）
-    
+
     会话键格式：(user_id, group_id)
     - group_id 为 None 时表示私聊会话
     - group_id 有值时表示群聊会话（同一用户在不同群有不同会话）
@@ -227,7 +227,7 @@ class SessionManager:
     async def delete(self, user_id: int, group_id: int | None) -> bool:
         """
         删除用户会话
-        
+
         返回是否成功删除。
         """
         key = self._make_key(user_id, group_id)
@@ -248,7 +248,7 @@ class SessionManager:
     async def cleanup_expired(self) -> int:
         """
         清理所有过期会话
-        
+
         返回清理的会话数量。
         """
         async with self._lock:
@@ -307,10 +307,10 @@ class SessionManager:
         async with self._lock:
             if plugin_name:
                 return [
-                    s for s in self._sessions.values() 
+                    s for s in self._sessions.values()
                     if s.plugin_name == plugin_name and not s.is_expired()
                 ]
             return [
-                s for s in self._sessions.values() 
+                s for s in self._sessions.values()
                 if not s.is_expired()
             ]

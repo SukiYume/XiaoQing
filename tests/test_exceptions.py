@@ -5,26 +5,25 @@ Tests for core/exceptions.py - Custom exception classes
 import pytest
 
 from core.exceptions import (
-    XiaoQingError,
-    PluginError,
-    PluginLoadError,
-    PluginExecutionError,
-    PluginTimeoutError,
+    AuthenticationError,
+    CommandArgumentError,
     CommandError,
     CommandNotFoundError,
     CommandPermissionError,
-    CommandArgumentError,
+    CommunicationError,
     ConfigError,
     ConfigLoadError,
     ConfigValidationError,
-    SessionError,
-    SessionNotFoundError,
-    SessionExpiredError,
-    CommunicationError,
     OneBotError,
-    AuthenticationError,
+    PluginError,
+    PluginExecutionError,
+    PluginLoadError,
+    PluginTimeoutError,
+    SessionError,
+    SessionExpiredError,
+    SessionNotFoundError,
+    XiaoQingError,
 )
-
 
 # ============================================================
 # Base Exception Tests

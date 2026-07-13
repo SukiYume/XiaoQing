@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from plugins.xiaoqing_chat.generation_limiter import (
-    GenerationLimitExceeded,
     GenerationLimiter,
+    GenerationLimitExceeded,
 )
 from plugins.xiaoqing_chat.media.emoji_library import (
     approve_emoji_global,
@@ -24,7 +24,6 @@ from plugins.xiaoqing_chat.media.event_media import (
     _validate_image_resource_limits,
     render_event_media,
 )
-
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="

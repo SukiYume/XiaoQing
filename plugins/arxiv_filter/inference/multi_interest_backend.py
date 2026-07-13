@@ -11,7 +11,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import joblib
 import numpy as np
@@ -38,15 +38,15 @@ class ModelArtifacts:
     embedding_dim: int
     interest_centers: np.ndarray
     pos_centroid: np.ndarray
-    neg_centroid: Optional[np.ndarray]
+    neg_centroid: np.ndarray | None
     classifier: LogisticRegression
     threshold: float
     threshold_beta: float
-    cluster_keywords: List[str]
-    cluster_sizes: List[int]
-    cluster_examples: List[List[str]]
-    feature_names: List[str]
-    columns: Dict[str, Optional[str]]
+    cluster_keywords: list[str]
+    cluster_sizes: list[int]
+    cluster_examples: list[list[str]]
+    feature_names: list[str]
+    columns: dict[str, str | None]
 
 
 # =============================================================================
@@ -70,13 +70,16 @@ def _softmax(x: np.ndarray, axis: int = 1) -> np.ndarray:
     return e / (np.sum(e, axis=axis, keepdims=True) + 1e-12)
 
 
-def _build_texts(df: pd.DataFrame, title_col: str, abstract_col: Optional[str]) -> List[str]:
+def _build_texts(df: pd.DataFrame, title_col: str, abstract_col: str | None) -> list[str]:
     """根据是否有 abstract 列构建输入文本。"""
     titles = df[title_col].fillna("").astype(str).tolist()
     if abstract_col is None or abstract_col not in df.columns:
         return [f"Title: {_clean(t)}" for t in titles]
     abstracts = df[abstract_col].fillna("").astype(str).tolist()
-    return [f"Title: {_clean(t)}\nAbstract: {_clean(a)}" for t, a in zip(titles, abstracts)]
+    return [
+        f"Title: {_clean(t)}\nAbstract: {_clean(a)}"
+        for t, a in zip(titles, abstracts, strict=True)
+    ]
 
 
 # =============================================================================
@@ -97,15 +100,15 @@ class MultiInterestInferenceModel:
         self.encoder = _load_sentence_transformer()(self.artifacts.encoder_name)
         self._use_fp16 = torch.cuda.is_available()
 
-    def encode_texts(self, texts: List[str]) -> np.ndarray:
+    def encode_texts(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.artifacts.embedding_dim), dtype=np.float32)
-        kw: Dict[str, Any] = dict(
-            batch_size=self.batch_size,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
+        kw: dict[str, Any] = {
+            "batch_size": self.batch_size,
+            "show_progress_bar": False,
+            "convert_to_numpy": True,
+            "normalize_embeddings": True,
+        }
         if self._use_fp16:
             with torch.amp.autocast("cuda"):
                 emb = self.encoder.encode(texts, **kw)
@@ -165,8 +168,8 @@ class MultiInterestInferenceModel:
 
 
 def _resolve_col(
-    df: pd.DataFrame, trained_col: Optional[str], fallbacks: List[str]
-) -> Optional[str]:
+    df: pd.DataFrame, trained_col: str | None, fallbacks: list[str]
+) -> str | None:
     """在 df 中找到实际可用的列名。"""
     if trained_col and trained_col in df.columns:
         return trained_col

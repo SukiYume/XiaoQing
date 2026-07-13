@@ -1,11 +1,9 @@
 import logging
 import re
-from typing import Tuple
 
 from ..services.admin_service import AdminService
-from ..services.economy_service import EconomyService
 from ..services.database import Database
-from ..models import OperationLog
+from ..services.economy_service import EconomyService
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +22,7 @@ def _format_config_text(config) -> str:
 
 
 async def handle_manage_enable(user_id: str, group_id: int, args: str,
-                               db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                               db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """开启插件（需要管理员权限 Issue #1）"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
@@ -40,7 +38,7 @@ async def handle_manage_enable(user_id: str, group_id: int, args: str,
 
 
 async def handle_manage_disable(user_id: str, group_id: int, args: str,
-                                db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                                db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """关闭插件（需要管理员权限 Issue #1）"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
@@ -55,7 +53,7 @@ async def handle_manage_disable(user_id: str, group_id: int, args: str,
 
 
 async def handle_manage_config(user_id: str, group_id: int, args: str,
-                               db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                               db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """查看/设置配置（需要管理员权限 Issue #1）"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
@@ -95,7 +93,7 @@ async def handle_manage_config(user_id: str, group_id: int, args: str,
 
 
 async def handle_manage_reset(user_id: str, group_id: int, args: str,
-                              db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                              db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """重置用户宠物（需要管理员权限 Issue #1）"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
@@ -121,7 +119,7 @@ async def handle_manage_reset(user_id: str, group_id: int, args: str,
 
 
 async def handle_manage_ban(user_id: str, group_id: int, args: str,
-                            db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                            db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """封禁用户（需要管理员权限 Issue #1）"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
@@ -142,7 +140,7 @@ async def handle_manage_ban(user_id: str, group_id: int, args: str,
 
 
 async def handle_manage_unban(user_id: str, group_id: int, args: str,
-                              db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                              db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """解封用户（需要管理员权限 Issue #1）"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
@@ -162,7 +160,7 @@ async def handle_manage_unban(user_id: str, group_id: int, args: str,
 
 
 async def handle_manage_log(user_id: str, group_id: int, args: str,
-                            db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                            db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """查看操作日志"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
@@ -192,7 +190,7 @@ async def handle_manage_log(user_id: str, group_id: int, args: str,
 
 
 async def handle_manage_stats(user_id: str, group_id: int, args: str,
-                              db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                              db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """查看群统计数据（Issue #55: 数据统计）"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
@@ -203,7 +201,7 @@ async def handle_manage_stats(user_id: str, group_id: int, args: str,
 
 async def handle_manage_activity(
     user_id: str, group_id: int, args: str, db: Database, is_admin: bool = False
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
     parts = args.strip().split(maxsplit=4)

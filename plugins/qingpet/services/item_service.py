@@ -1,7 +1,6 @@
 import logging
-from typing import Dict, Tuple
 
-from ..models import Item, Inventory
+from ..models import Inventory, Item
 from ..utils.constants import DEFAULT_ITEMS
 from ..utils.validators import validate_item_amount
 from .database import Database
@@ -14,7 +13,7 @@ class ItemService:
         self.db = db
         self.items_cache = self._load_items()
 
-    def _load_items(self) -> Dict[str, Item]:
+    def _load_items(self) -> dict[str, Item]:
         items = {}
         for item_id, data in DEFAULT_ITEMS.items():
             items[item_id] = Item(
@@ -37,17 +36,17 @@ class ItemService:
     def get_item(self, item_id: str) -> Item:
         return self.items_cache.get(item_id)
 
-    def get_item_by_name(self, name: str) -> Tuple[str, Item]:
+    def get_item_by_name(self, name: str) -> tuple[str, Item]:
         """通过道具名搜索道具"""
         for item_id, item in self.items_cache.items():
             if item.name == name or item_id == name:
                 return item_id, item
         return None, None
 
-    def get_all_items(self) -> Dict[str, Item]:
+    def get_all_items(self) -> dict[str, Item]:
         return self.items_cache
 
-    def buy_item(self, user_id: str, group_id: int, item_id: str, amount: int = 1) -> Tuple[bool, str]:
+    def buy_item(self, user_id: str, group_id: int, item_id: str, amount: int = 1) -> tuple[bool, str]:
         # 校验购买数量（Issue #17）
         valid, msg = validate_item_amount(amount)
         if not valid:

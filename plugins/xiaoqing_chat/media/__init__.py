@@ -23,7 +23,12 @@ from .marker_resolver import (
     resolve_marker,
     strip_outbound_marker_residue,
 )
-from .qq_face_catalog import QQFaceEntry, load_qq_face_catalog, mark_qq_face_used, record_face_observation
+from .qq_face_catalog import (
+    QQFaceEntry,
+    load_qq_face_catalog,
+    mark_qq_face_used,
+    record_face_observation,
+)
 
 __all__ = [
     "EmojiLibraryEntry",

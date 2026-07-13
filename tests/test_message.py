@@ -2,12 +2,13 @@
 消息处理工具单元测试
 """
 
-import pytest
 from typing import Any
 
+import pytest
+
 from core.message import (
-    contains_bot_name,
     compile_bot_name_pattern,
+    contains_bot_name,
     extract_text,
     has_at_mention,
     has_media_segment,
@@ -120,9 +121,9 @@ class TestNormalizeMessage:
             "group_id": 67890,
             "message": [{"type": "text", "data": {"text": "  /echo test  "}}],
         }
-        
+
         text, user_id, group_id = normalize_message(event)
-        
+
         assert text == "/echo test"
         assert user_id == 12345
         assert group_id == 67890

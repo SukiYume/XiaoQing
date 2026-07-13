@@ -4,7 +4,7 @@ import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import atomic_write_text
 

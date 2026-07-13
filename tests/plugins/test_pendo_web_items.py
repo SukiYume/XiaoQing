@@ -119,6 +119,7 @@ def test_database_get_items_supports_ledger_category_filter():
         assert items[0].ledger_category == "餐饮"
         assert items[0].title == "午饭"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -173,6 +174,7 @@ def test_items_list_applies_priority_before_pagination_and_total_count():
         assert result["data"]["total"] == 2
         assert [item["id"] for item in result["data"]["items"]] == ["task_match_1"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -270,6 +272,7 @@ def test_database_get_items_supports_diary_date_sort_field():
         )
         assert [item["id"] for item in response["data"]["items"]] == ["d2", "d3", "d1"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -335,6 +338,7 @@ def test_update_ledger_item_recomputes_amount_cents_when_amount_changes():
         assert item.amount == 56.78
         assert item.amount_cents == 5678
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -369,6 +373,7 @@ def test_database_row_to_item_does_not_mask_incomplete_ledger_rows():
         assert item.currency is None
         assert item.account_name is None
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -485,6 +490,7 @@ def test_ledger_aggregate_tracks_transfer_separately_and_lists_accounts():
         }
         assert accounts == ["微信", "招行", "招行信用卡"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -564,6 +570,7 @@ def test_event_update_route_preserves_event_notes_when_title_changes():
         assert updated.title == "学术会议（更新标题）"
         assert updated.notes == "全局备注"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -701,6 +708,7 @@ def test_database_get_items_filters_note_tags_exactly_and_keyword():
         assert [item.id for item in tagged] == ["note_work"]
         assert [item.id for item in keyword] == ["note_workflow"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -763,6 +771,7 @@ def test_items_list_keyword_matches_extended_fields_and_total_count():
         assert event_result["data"]["total"] == 1
         assert [item["id"] for item in event_result["data"]["items"]] == ["event_location"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -905,6 +914,7 @@ def test_item_update_note_logs_edit_details_for_web_undo():
         assert details["old_values"]["content"] == "旧正文"
         assert details["updates"]["content"] == "新正文"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -948,6 +958,7 @@ def test_item_update_note_preserves_unchanged_missing_reference_for_web_edit():
         ]
         assert updated.related_items == ["deleted_task"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -984,6 +995,7 @@ def test_item_update_note_rejects_new_missing_reference():
         assert exc_info.value.status_code == 422
         assert "Referenced item not found: missing_task" in exc_info.value.detail
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1063,9 +1075,12 @@ def test_normalize_item_fields_rejects_legacy_event_and_task_fields():
         }, partial=False)
 
 
-def test_items_api_create_diary_defaults_entry_time_to_diary_date(monkeypatch, tmp_path):
+def test_items_api_create_diary_defaults_entry_time_to_diary_date(
+    monkeypatch, tmp_path, request
+):
     mod = _load_items_module()
     db = Database(str(tmp_path / "pendo_diary_api.db"))
+    request.addfinalizer(db.cleanup)
     owner_id = "u-diary-api"
     monkeypatch.setattr(
         mod,
@@ -1167,6 +1182,7 @@ def test_item_create_event_accepts_reminder_rules_and_builds_cache():
             "2030-01-02T09:00:00",
         ]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1211,6 +1227,7 @@ def test_item_update_event_rebuilds_stale_remind_times_from_existing_rules():
             "2030-01-03T10:00:00",
         ]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1251,6 +1268,7 @@ def test_item_update_event_start_time_preserves_duration_when_end_time_omitted()
             "2030-01-03T10:00:00",
         ]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1287,6 +1305,7 @@ def test_event_reminder_log_sync_preserves_sent_history_but_excludes_removed_rem
         assert db.delete_item("ev1", soft=True, owner_id=owner_id) is True
         assert db.get_reminder_logs("ev1") == []
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1364,6 +1383,7 @@ def test_build_ledger_insights_uses_filtered_ledger_category_and_builds_svg_data
         assert result["expense_candles"][0]["high"] == 24
         assert result["expense_candles"][0]["low"] == 12
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1429,6 +1449,7 @@ def test_build_ledger_insights_switches_focus_with_income_filter():
             "2026-03-18": 800,
         }
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1496,6 +1517,7 @@ def test_build_ledger_insights_year_mode_compares_against_last_year_to_date():
         assert result["summary"]["delta_label"] == "较去年同期"
         assert result["summary"]["delta_vs_previous"] == 0.5
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1559,6 +1581,7 @@ def test_build_ledger_insights_month_bucket_orders_candles_by_ledger_date_not_cr
         assert result["expense_candles"][-1]["high"] == 40
         assert result["expense_candles"][-1]["low"] == 10
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1618,6 +1641,7 @@ def test_build_ledger_insights_clips_current_period_visuals_to_today():
         assert result["expense_candles"][-1]["key"] == "2026-04-08"
     finally:
         ledger_insights_module.datetime = original_datetime
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 

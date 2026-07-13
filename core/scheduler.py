@@ -19,7 +19,7 @@ class SchedulerManager:
         except RuntimeError:
             # No event loop - will initialize later
             pass
-    
+
     def _init_scheduler(self) -> None:
         """Initialize and start the scheduler (requires event loop)"""
         if self.scheduler is None:
@@ -27,7 +27,7 @@ class SchedulerManager:
         if not self._started:
             self.scheduler.start()
             self._started = True
-    
+
     def ensure_started(self) -> None:
         """Ensure scheduler is initialized and started (requires event loop)"""
         if not self._started:

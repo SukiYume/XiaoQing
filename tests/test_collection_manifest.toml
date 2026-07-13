@@ -1,0 +1,1042 @@
+# Exact pytest inventory. Update only after reviewing every collection change.
+schema_version = 1
+
+[paths]
+tests = "tests"
+plugins = "plugins"
+
+[inventory]
+total_items = 3327
+total_modules = 150
+active_plugins = 29
+
+[allowed_outcomes]
+skip = [
+  "tests/plugins/test_codex_process_tree.py::test_real_posix_parent_and_term_ignoring_child_are_reaped",
+  "tests/plugins/test_earthquake.py::test_animated_webp_is_rejected",
+  "tests/plugins/test_earthquake.py::test_image_container_rejects_trailing_polyglot_bytes[WEBP-image/webp]",
+  "tests/plugins/test_earthquake.py::test_valid_single_frame_image_formats[WEBP-image/webp-.webp]",
+  "tests/test_run_bot_monitor_script.py::test_taskkill_failure_is_recorded_and_falls_back_to_direct_termination",
+]
+xfail = [
+]
+
+[groups.core]
+items = 885
+modules = 30
+
+[groups.integration]
+items = 223
+modules = 17
+
+[groups.tooling]
+items = 327
+modules = 21
+
+[groups."plugin.adnmb"]
+items = 25
+modules = 1
+
+[groups."plugin.ads_paper"]
+items = 21
+modules = 1
+
+[groups."plugin.apod"]
+items = 36
+modules = 1
+
+[groups."plugin.arxiv_filter"]
+items = 56
+modules = 2
+
+[groups."plugin.astro_tools"]
+items = 16
+modules = 1
+
+[groups."plugin.bot_core"]
+items = 49
+modules = 1
+
+[groups."plugin.chat"]
+items = 29
+modules = 1
+
+[groups."plugin.chime"]
+items = 32
+modules = 1
+
+[groups."plugin.choice"]
+items = 41
+modules = 1
+
+[groups."plugin.codex"]
+items = 76
+modules = 5
+
+[groups."plugin.color"]
+items = 22
+modules = 1
+
+[groups."plugin.dict"]
+items = 10
+modules = 1
+
+[groups."plugin.earthquake"]
+items = 46
+modules = 1
+
+[groups."plugin.echo"]
+items = 9
+modules = 1
+
+[groups."plugin.github"]
+items = 29
+modules = 1
+
+[groups."plugin.guess_number"]
+items = 28
+modules = 1
+
+[groups."plugin.jupyter"]
+items = 41
+modules = 2
+
+[groups."plugin.minecraft"]
+items = 64
+modules = 3
+
+[groups."plugin.pendo"]
+items = 474
+modules = 24
+
+[groups."plugin.qingpet"]
+items = 134
+modules = 7
+
+[groups."plugin.qingssh"]
+items = 87
+modules = 2
+
+[groups."plugin.shell"]
+items = 32
+modules = 1
+
+[groups."plugin.signin"]
+items = 35
+modules = 1
+
+[groups."plugin.smalltalk"]
+items = 46
+modules = 1
+
+[groups."plugin.twitter"]
+items = 60
+modules = 1
+
+[groups."plugin.url_parser"]
+items = 22
+modules = 1
+
+[groups."plugin.voice"]
+items = 28
+modules = 1
+
+[groups."plugin.wolframalpha"]
+items = 27
+modules = 1
+
+[groups."plugin.xiaoqing_chat"]
+items = 317
+modules = 16
+
+[plugins]
+adnmb = [
+  "tests/plugins/test_adnmb.py",
+]
+ads_paper = [
+  "tests/plugins/test_ads_paper.py",
+]
+apod = [
+  "tests/plugins/test_apod.py",
+]
+arxiv_filter = [
+  "tests/plugins/test_arxiv_filter.py",
+  "tests/plugins/test_arxiv_model_path.py",
+]
+astro_tools = [
+  "tests/plugins/test_astro_tools.py",
+]
+bot_core = [
+  "tests/plugins/test_bot_core.py",
+]
+chat = [
+  "tests/plugins/test_chat.py",
+]
+chime = [
+  "tests/plugins/test_chime.py",
+]
+choice = [
+  "tests/plugins/test_choice.py",
+]
+codex = [
+  "tests/plugins/test_codex.py",
+  "tests/plugins/test_codex_artifacts.py",
+  "tests/plugins/test_codex_output_budgets.py",
+  "tests/plugins/test_codex_process_tree.py",
+  "tests/plugins/test_codex_temp_lifecycle.py",
+]
+color = [
+  "tests/plugins/test_color_plugin.py",
+]
+dict = [
+  "tests/plugins/test_dict.py",
+]
+earthquake = [
+  "tests/plugins/test_earthquake.py",
+]
+echo = [
+  "tests/plugins/test_echo.py",
+]
+github = [
+  "tests/plugins/test_github.py",
+]
+guess_number = [
+  "tests/plugins/test_guess_number.py",
+]
+jupyter = [
+  "tests/plugins/test_jupyter.py",
+  "tests/plugins/test_jupyter_lifecycle.py",
+]
+minecraft = [
+  "tests/plugins/test_minecraft.py",
+  "tests/plugins/test_minecraft_flood.py",
+  "tests/plugins/test_minecraft_rcon_results.py",
+]
+pendo = [
+  "tests/plugins/test_pendo.py",
+  "tests/plugins/test_pendo_ai_privacy.py",
+  "tests/plugins/test_pendo_dashboard.py",
+  "tests/plugins/test_pendo_database_leak_guard.py",
+  "tests/plugins/test_pendo_event_graph.py",
+  "tests/plugins/test_pendo_event_migration.py",
+  "tests/plugins/test_pendo_fixes.py",
+  "tests/plugins/test_pendo_legacy_scripts.py",
+  "tests/plugins/test_pendo_migration_safety.py",
+  "tests/plugins/test_pendo_reminder_claims.py",
+  "tests/plugins/test_pendo_review_regressions.py",
+  "tests/plugins/test_pendo_web_accessibility.py",
+  "tests/plugins/test_pendo_web_auth.py",
+  "tests/plugins/test_pendo_web_demo.py",
+  "tests/plugins/test_pendo_web_diary.py",
+  "tests/plugins/test_pendo_web_events.py",
+  "tests/plugins/test_pendo_web_items.py",
+  "tests/plugins/test_pendo_web_notes.py",
+  "tests/plugins/test_pendo_web_search.py",
+  "tests/plugins/test_pendo_web_settings.py",
+  "tests/plugins/test_pendo_web_stats.py",
+  "tests/plugins/test_pendo_web_tasks.py",
+  "tests/plugins/test_pendo_web_transfer.py",
+  "tests/plugins/test_pendo_web_widget.py",
+]
+qingpet = [
+  "tests/plugins/test_qingpet.py",
+  "tests/plugins/test_qingpet_improvements.py",
+  "tests/plugins/test_qingpet_leave_message_atomic.py",
+  "tests/plugins/test_qingpet_minigame_atomic.py",
+  "tests/plugins/test_qingpet_new_features.py",
+  "tests/plugins/test_qingpet_regressions.py",
+  "tests/plugins/test_qingpet_visit_atomic.py",
+]
+qingssh = [
+  "tests/plugins/test_qingssh.py",
+  "tests/plugins/test_qingssh_output_relay.py",
+]
+shell = [
+  "tests/plugins/test_shell_plugin.py",
+]
+signin = [
+  "tests/plugins/test_signin.py",
+]
+smalltalk = [
+  "tests/plugins/test_smalltalk.py",
+]
+twitter = [
+  "tests/plugins/test_twitter.py",
+]
+url_parser = [
+  "tests/plugins/test_url_parser.py",
+]
+voice = [
+  "tests/plugins/test_voice.py",
+]
+wolframalpha = [
+  "tests/plugins/test_wolframalpha.py",
+]
+xiaoqing_chat = [
+  "tests/plugins/test_reply_checker.py",
+  "tests/plugins/test_xiaoqing_chat.py",
+  "tests/plugins/test_xiaoqing_chat_anthropomorphic_experiment.py",
+  "tests/plugins/test_xiaoqing_chat_dedup_json_llm.py",
+  "tests/plugins/test_xiaoqing_chat_expression_store_persistence.py",
+  "tests/plugins/test_xiaoqing_chat_media.py",
+  "tests/plugins/test_xiaoqing_chat_memory_save_dedup.py",
+  "tests/plugins/test_xiaoqing_chat_refactor_cleanup.py",
+  "tests/plugins/test_xiaoqing_chat_review_regressions.py",
+  "tests/plugins/test_xiaoqing_chat_runtime_hardening.py",
+  "tests/plugins/test_xiaoqing_chat_store_base_helpers.py",
+  "tests/plugins/test_xiaoqing_chat_task_scheduler_dedup.py",
+  "tests/plugins/test_xiaoqing_chat_tenant_scope.py",
+  "tests/plugins/test_xiaoqing_prompt_builder.py",
+  "tests/plugins/test_xiaoqing_reply_payload.py",
+  "tests/plugins/test_xiaoqing_review_fixes.py",
+]
+
+[modules."tests/integration/test_message_flow.py"]
+items = 12
+group = "integration"
+nodeids_sha256 = "6a44d6859469ba6215db060eaca828a9e29c81832131e2ab6ac288e8a59ca247"
+
+[modules."tests/integration/test_session_lifecycle.py"]
+items = 14
+group = "integration"
+nodeids_sha256 = "6e7e822e2353ebed8edafc0ec3b7e137e22d742ca507d114c78a0565de3e141a"
+
+[modules."tests/plugins/test_adnmb.py"]
+items = 25
+group = "plugin.adnmb"
+nodeids_sha256 = "c67b06bb2d95566927675abae0e68c557ac3d50b207959748342b74685f724e2"
+
+[modules."tests/plugins/test_ads_paper.py"]
+items = 21
+group = "plugin.ads_paper"
+nodeids_sha256 = "6480d528503a69ecf011a277c714e17e0945bd2b456f8dfa77876add78600c9a"
+
+[modules."tests/plugins/test_apod.py"]
+items = 36
+group = "plugin.apod"
+nodeids_sha256 = "564863117ed2e8fded940d333fc39722f5cb933d10b952356388694cdc07cb65"
+
+[modules."tests/plugins/test_arxiv_filter.py"]
+items = 52
+group = "plugin.arxiv_filter"
+nodeids_sha256 = "ecaff1e1f859e12068daf6982c6c4696f6aa3695a75692650916da6d48390e9b"
+
+[modules."tests/plugins/test_arxiv_model_path.py"]
+items = 4
+group = "plugin.arxiv_filter"
+nodeids_sha256 = "e4cf8226112a7fcdee60462912458c1869640abd8e82ca64ae62eb6a428cbe00"
+
+[modules."tests/plugins/test_astro_tools.py"]
+items = 16
+group = "plugin.astro_tools"
+nodeids_sha256 = "e98e59ef895214dbad4b55b70b861388f26dd8f33c2cc99f0d4bd1cd37daa3bd"
+
+[modules."tests/plugins/test_bot_core.py"]
+items = 49
+group = "plugin.bot_core"
+nodeids_sha256 = "70936fb47d9b883c2b74ef45270deff6493ef58b418ac53c5da9d143e0531aa7"
+
+[modules."tests/plugins/test_chat.py"]
+items = 29
+group = "plugin.chat"
+nodeids_sha256 = "fb6930d86311eb5a491d79d8e5b3559b24dd0e52e203043daff799cfab556bbb"
+
+[modules."tests/plugins/test_chime.py"]
+items = 32
+group = "plugin.chime"
+nodeids_sha256 = "7f6ee869ee9482959e4a59d750aa27704afa40cb50ea743528a08097f510b323"
+
+[modules."tests/plugins/test_choice.py"]
+items = 41
+group = "plugin.choice"
+nodeids_sha256 = "66397482db4e93220b95a2f73c87db383acdc434437333ede8d8518233434e4c"
+
+[modules."tests/plugins/test_codex.py"]
+items = 36
+group = "plugin.codex"
+nodeids_sha256 = "f50e16f44b563f8701c1cf7c2a2321421a004125a8123c22330858990aa6cd3c"
+
+[modules."tests/plugins/test_codex_artifacts.py"]
+items = 10
+group = "plugin.codex"
+nodeids_sha256 = "9238ca02b818709d4c7dbca63a3462669a3b4eb13751a6857589e2eb5414585e"
+
+[modules."tests/plugins/test_codex_output_budgets.py"]
+items = 8
+group = "plugin.codex"
+nodeids_sha256 = "d9d136d5bff7589be4c97cde8979158e12b1ea950af6161cd3d7237ff05c2cc2"
+
+[modules."tests/plugins/test_codex_process_tree.py"]
+items = 7
+group = "plugin.codex"
+nodeids_sha256 = "bae7e7fbd739e4394fd2c0d621ef3c744df865ea0c587a9b65599acd656d2a80"
+
+[modules."tests/plugins/test_codex_temp_lifecycle.py"]
+items = 15
+group = "plugin.codex"
+nodeids_sha256 = "c9768ac1fdcd64c850ab167b11b33242b60ba25e79858f4ee5a1ddd412f60358"
+
+[modules."tests/plugins/test_color_plugin.py"]
+items = 22
+group = "plugin.color"
+nodeids_sha256 = "d3719273b012f823a069e23f1669ba6122442f7f917e31cc35383209c0b3c436"
+
+[modules."tests/plugins/test_cr149_159_regressions.py"]
+items = 10
+group = "integration"
+nodeids_sha256 = "808b3917a5802746ea5332ea5c89f5b8bbc5769acde602f6b7e20a9e24b7e14c"
+
+[modules."tests/plugins/test_cr160_170_docs.py"]
+items = 11
+group = "integration"
+nodeids_sha256 = "4c1ebcf80e8c1bc7f6ab50291fd8af85985cc2485efc571e5efd2136e73dcb54"
+
+[modules."tests/plugins/test_cr172_privacy.py"]
+items = 8
+group = "integration"
+nodeids_sha256 = "362a88ce32a256179e01ae6e3cfc9c440e971fed34b5e80b8a9a1a0896fefdaf"
+
+[modules."tests/plugins/test_cr173_delivery_ack.py"]
+items = 4
+group = "integration"
+nodeids_sha256 = "728e3de5f997fb6eef5b6bca04c6369fb16a775592bfeaffa86467469205942c"
+
+[modules."tests/plugins/test_cr174_snooze_timezone.py"]
+items = 2
+group = "integration"
+nodeids_sha256 = "6662c0e767da6ef21ff1e44f6ecdb160ce75206e6304d621aebc346f9093947f"
+
+[modules."tests/plugins/test_cr219_internal_log_redaction.py"]
+items = 8
+group = "integration"
+nodeids_sha256 = "128069e7dd68416df1d031579f2ffeeb6c63296fb2f67bf01ea8f5353e7fce7b"
+
+[modules."tests/plugins/test_cr219_public_errors.py"]
+items = 33
+group = "integration"
+nodeids_sha256 = "9fc4dc44232e05d8df056b43714de221af1df9ffcb875221d4f3d96cca4a2aa5"
+
+[modules."tests/plugins/test_cr220_sensitive_audit.py"]
+items = 5
+group = "integration"
+nodeids_sha256 = "212d20fb1975a7f8e0f4fbe492a1f311dd9da99af6b0c4c049a08efa4afa42b3"
+
+[modules."tests/plugins/test_cr220_shell_jupyter_log_privacy.py"]
+items = 5
+group = "integration"
+nodeids_sha256 = "0c7848f3715d3c457dcecd60f7f1168f8101d1e2c4c04854743b98d979fe3026"
+
+[modules."tests/plugins/test_cr220_xiaoqing_log_privacy.py"]
+items = 31
+group = "integration"
+nodeids_sha256 = "8948a44701d12e5bdc4badcd85f605f63190ac563eaad64ceaa83461761f2d99"
+
+[modules."tests/plugins/test_cr221_arxiv_bounded_http.py"]
+items = 10
+group = "integration"
+nodeids_sha256 = "2116033e0ffca77975ef693efb7e1bb41970012880f6e4bb99087c1e215498a9"
+
+[modules."tests/plugins/test_cr221_configured_http.py"]
+items = 11
+group = "integration"
+nodeids_sha256 = "740a50bad368e7e21fa02f4aa9ae26fc2c2bb35039fbb18351f96a7db758f252"
+
+[modules."tests/plugins/test_cr221_fixed_http.py"]
+items = 19
+group = "integration"
+nodeids_sha256 = "effbc915118819e75be09c27ed76cdecdf027e67463905154eedc07f279f3e94"
+
+[modules."tests/plugins/test_cr221_remaining_http.py"]
+items = 18
+group = "integration"
+nodeids_sha256 = "47c46e74aaa01106d0c0d6047353eb9a38f78c9af9b83c30501035aca7e1581e"
+
+[modules."tests/plugins/test_cr221_simbad_bounded_http.py"]
+items = 22
+group = "integration"
+nodeids_sha256 = "e9fc7c51a4cae8ca112fa2bf7860ecdc234ee2dcf21e4f7b06546d40d0694715"
+
+[modules."tests/plugins/test_dict.py"]
+items = 10
+group = "plugin.dict"
+nodeids_sha256 = "92866b2d2696c8ffd559297a576ea59cfbee59a93628f75ee8eee61b8145d448"
+
+[modules."tests/plugins/test_earthquake.py"]
+items = 46
+group = "plugin.earthquake"
+nodeids_sha256 = "44452303aff5d6bc2573f09825e04503677ec9146d76a28ac0646752a1ac9ebd"
+
+[modules."tests/plugins/test_echo.py"]
+items = 9
+group = "plugin.echo"
+nodeids_sha256 = "2abd1fed2dcec9e3297a36e750a2fe7a3930267a40597075c343add2eb15c866"
+
+[modules."tests/plugins/test_github.py"]
+items = 29
+group = "plugin.github"
+nodeids_sha256 = "9635dc6c98420aad76b676a564fbccaadf39702c418899240fd2ba0f57854e67"
+
+[modules."tests/plugins/test_guess_number.py"]
+items = 28
+group = "plugin.guess_number"
+nodeids_sha256 = "b35fca19fe931d9c6aff56b6b71b34ed5729d05cefb1f849d3dc166130a91ffa"
+
+[modules."tests/plugins/test_jupyter.py"]
+items = 28
+group = "plugin.jupyter"
+nodeids_sha256 = "f960e6d6d88baacd7d59e3a5163c1ffb9acfb2cde3da96be55118b6bab4d343f"
+
+[modules."tests/plugins/test_jupyter_lifecycle.py"]
+items = 13
+group = "plugin.jupyter"
+nodeids_sha256 = "de7d69215bfc7d8cb557e22c808b2c42ce77de4ffe74ba8581e03eab0349b7ce"
+
+[modules."tests/plugins/test_minecraft.py"]
+items = 46
+group = "plugin.minecraft"
+nodeids_sha256 = "514acb18545261dca3346c535030c88afd89baf4b02483fcd3ee1e5dc78d4f59"
+
+[modules."tests/plugins/test_minecraft_flood.py"]
+items = 8
+group = "plugin.minecraft"
+nodeids_sha256 = "7f82178ed59a9032c887cc4cbb2b9bfd45b66a770b282fd238224dd5c9fa07e7"
+
+[modules."tests/plugins/test_minecraft_rcon_results.py"]
+items = 10
+group = "plugin.minecraft"
+nodeids_sha256 = "7d2ee54c1c398d934a9446dfa929b1a11b307cdbaf6e7e146ac8e4a8c073a344"
+
+[modules."tests/plugins/test_pendo.py"]
+items = 153
+group = "plugin.pendo"
+nodeids_sha256 = "9cb8ea71b2bbbc4c675c61aada52ce57834faa282b7cf3074cb843852de38353"
+
+[modules."tests/plugins/test_pendo_ai_privacy.py"]
+items = 2
+group = "plugin.pendo"
+nodeids_sha256 = "11ea2f31ee6c043d7064add25f33d0216263d2248f9ef07c40ca26165cae4151"
+
+[modules."tests/plugins/test_pendo_dashboard.py"]
+items = 6
+group = "plugin.pendo"
+nodeids_sha256 = "66a473759fcf51929f6a941cae22c7becff0b0d9a1340cda803038ba13bfb7f6"
+
+[modules."tests/plugins/test_pendo_database_leak_guard.py"]
+items = 9
+group = "plugin.pendo"
+nodeids_sha256 = "e901cd9a80d2f4468f93d5674c51082da0828d6cbbd10d055fe82eb5391ae5a1"
+
+[modules."tests/plugins/test_pendo_event_graph.py"]
+items = 13
+group = "plugin.pendo"
+nodeids_sha256 = "a470a4e5875874c0f504f394c19562f8e0a5e0429960a6399cd5b8f711a5ed43"
+
+[modules."tests/plugins/test_pendo_event_migration.py"]
+items = 5
+group = "plugin.pendo"
+nodeids_sha256 = "be9466493ca10644ab59356ee09f4736f38dc29213a62ff75c74aa8d470613a4"
+
+[modules."tests/plugins/test_pendo_fixes.py"]
+items = 12
+group = "plugin.pendo"
+nodeids_sha256 = "5758441ff9f32cd4b158c6bfa3069b50467a7f816e1534db289fa9315f9ccc99"
+
+[modules."tests/plugins/test_pendo_legacy_scripts.py"]
+items = 1
+group = "plugin.pendo"
+nodeids_sha256 = "297046c9bc1bc476534ff6c7803c8a6dcc53cadc165064f13f14fa485e8775db"
+
+[modules."tests/plugins/test_pendo_migration_safety.py"]
+items = 1
+group = "plugin.pendo"
+nodeids_sha256 = "5e217d26020d09a1bf4d09458907454f26aff688afe725ace9bd0e0c4e26308e"
+
+[modules."tests/plugins/test_pendo_reminder_claims.py"]
+items = 8
+group = "plugin.pendo"
+nodeids_sha256 = "0426a3e154d0ee917c0ce0c5ca72d11793404653ed17b1710cbec7bcf6a3bd08"
+
+[modules."tests/plugins/test_pendo_review_regressions.py"]
+items = 32
+group = "plugin.pendo"
+nodeids_sha256 = "ad1b8b7e92100d985cb24a22785cb503080bc6ef7406e5c7f4b56f34edc44135"
+
+[modules."tests/plugins/test_pendo_web_accessibility.py"]
+items = 2
+group = "plugin.pendo"
+nodeids_sha256 = "e7707e75d3f287717698612f30aaf2e9186f8245e585d377d5c4ab5f199c85f4"
+
+[modules."tests/plugins/test_pendo_web_auth.py"]
+items = 13
+group = "plugin.pendo"
+nodeids_sha256 = "73e227d16a0dd00afee036274a9cd701664859dcd076210748b919bfc0ad37fa"
+
+[modules."tests/plugins/test_pendo_web_demo.py"]
+items = 15
+group = "plugin.pendo"
+nodeids_sha256 = "6021993d30bc0dca737c087c3ce77390499eeb9b4c4ac248e75f65eb2ecf62bb"
+
+[modules."tests/plugins/test_pendo_web_diary.py"]
+items = 8
+group = "plugin.pendo"
+nodeids_sha256 = "e81ff6ca8da6dd06a4c5fd46ba681fb16b195bf501fff0261ef10c5b740bc0fd"
+
+[modules."tests/plugins/test_pendo_web_events.py"]
+items = 15
+group = "plugin.pendo"
+nodeids_sha256 = "0aea91d880a0f44676300a575d1aaee3aa1c9785a61a35291ffcca2a50cee1bc"
+
+[modules."tests/plugins/test_pendo_web_items.py"]
+items = 50
+group = "plugin.pendo"
+nodeids_sha256 = "aa76f2fdd5595d8a711598367f50f5abda7a53ff397d5c0e93fc6e081cc21175"
+
+[modules."tests/plugins/test_pendo_web_notes.py"]
+items = 4
+group = "plugin.pendo"
+nodeids_sha256 = "5f95669d8a755b7f36e0add1ba9dad9617a6115cd17617670382ee5531977adf"
+
+[modules."tests/plugins/test_pendo_web_search.py"]
+items = 7
+group = "plugin.pendo"
+nodeids_sha256 = "7e605e6849fa459405c6319fdd0e523c450c4c581b9b091a8161ed16e7fa6a04"
+
+[modules."tests/plugins/test_pendo_web_settings.py"]
+items = 18
+group = "plugin.pendo"
+nodeids_sha256 = "6788998119248aa42d895d70bc5ecee28f20e0519317059e122a2c1f19a94a06"
+
+[modules."tests/plugins/test_pendo_web_stats.py"]
+items = 27
+group = "plugin.pendo"
+nodeids_sha256 = "8d0fbb40b5fa38973b17a8d88137bc9fbf641dd5471771c312e973ecd6ab4729"
+
+[modules."tests/plugins/test_pendo_web_tasks.py"]
+items = 8
+group = "plugin.pendo"
+nodeids_sha256 = "21e58c8988567912bb6628352fafda828dff11a662af8edbfe4f6de753bb1c5b"
+
+[modules."tests/plugins/test_pendo_web_transfer.py"]
+items = 52
+group = "plugin.pendo"
+nodeids_sha256 = "5c977d68a4331cbf6c9f1e3cd22969e4399a30f4c71c302d8f1c7d76dcf99717"
+
+[modules."tests/plugins/test_pendo_web_widget.py"]
+items = 13
+group = "plugin.pendo"
+nodeids_sha256 = "28ed75289a13ec3da681190fa5b28e06eb3ef4d92786bd4f6f664719657c3ddd"
+
+[modules."tests/plugins/test_qingpet.py"]
+items = 23
+group = "plugin.qingpet"
+nodeids_sha256 = "b0017c78e1c3524516407d393021f0cafa34cd708f5686bf0926a713b7977059"
+
+[modules."tests/plugins/test_qingpet_improvements.py"]
+items = 29
+group = "plugin.qingpet"
+nodeids_sha256 = "e09fd6878831d44bedd8d289f1254df1872b77de3b818e105d1f6d1820282819"
+
+[modules."tests/plugins/test_qingpet_leave_message_atomic.py"]
+items = 10
+group = "plugin.qingpet"
+nodeids_sha256 = "43db8f43ff45c1bbe585fb4be0ac1a74f9eec992efe7833aea9d38b881ad3df5"
+
+[modules."tests/plugins/test_qingpet_minigame_atomic.py"]
+items = 16
+group = "plugin.qingpet"
+nodeids_sha256 = "d5aa44ad273d890da58ace745218522fffb497c9d71cfadddebbd4c6fdf59381"
+
+[modules."tests/plugins/test_qingpet_new_features.py"]
+items = 10
+group = "plugin.qingpet"
+nodeids_sha256 = "30e7233b7829f8beb5c6d4b64945554c0f19fb41d5a6e092c44f6b2a3d3f5b63"
+
+[modules."tests/plugins/test_qingpet_regressions.py"]
+items = 29
+group = "plugin.qingpet"
+nodeids_sha256 = "6551b3baa63b7a0ddd308ebbebab2bee1bec8d95e228fa60d2dfa359a3e8595e"
+
+[modules."tests/plugins/test_qingpet_visit_atomic.py"]
+items = 17
+group = "plugin.qingpet"
+nodeids_sha256 = "5b5687c4a4e7a5a40f57206346a776d3fe95eb0803e41b906e01729200044bee"
+
+[modules."tests/plugins/test_qingssh.py"]
+items = 73
+group = "plugin.qingssh"
+nodeids_sha256 = "7e4cd4b14cc6c37b34d3880ad1129a64b54ad09c27af3cb9aadfc98256c5447f"
+
+[modules."tests/plugins/test_qingssh_output_relay.py"]
+items = 14
+group = "plugin.qingssh"
+nodeids_sha256 = "16d4647d530822960fe1ae99f1f032f70774bfdbf58ea5c6e8e0aefe56e8df4f"
+
+[modules."tests/plugins/test_reply_checker.py"]
+items = 17
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "8de50a01c4a594824f51f25c61bac03dd20ec592ff597d3b78cd9a555da414d8"
+
+[modules."tests/plugins/test_shell_plugin.py"]
+items = 32
+group = "plugin.shell"
+nodeids_sha256 = "ea0de2252438cd5db609e9c36d194f61c492e245fd70bef98a05e4246a340295"
+
+[modules."tests/plugins/test_signin.py"]
+items = 35
+group = "plugin.signin"
+nodeids_sha256 = "abc3a6df118e8b3c0dcd7a7a8fe1600f4567f5b2eaae2986f1151ca558347731"
+
+[modules."tests/plugins/test_smalltalk.py"]
+items = 46
+group = "plugin.smalltalk"
+nodeids_sha256 = "af01a674cda1cefe4d3992d88ee136c5c969e0aedeef51a435e5c5d3f7049656"
+
+[modules."tests/plugins/test_twitter.py"]
+items = 60
+group = "plugin.twitter"
+nodeids_sha256 = "d242dbabd7ef2a4fb236eb6953306c46f2595f8461d02e86e31693fb59814ed9"
+
+[modules."tests/plugins/test_url_parser.py"]
+items = 22
+group = "plugin.url_parser"
+nodeids_sha256 = "668d263bd4e8d757934289f39a0b2a0e59b47d9cb198973210ef5120037517f4"
+
+[modules."tests/plugins/test_voice.py"]
+items = 28
+group = "plugin.voice"
+nodeids_sha256 = "d0042f76933b020933a53d2f619862d1eeea92aff9aa69383ff254dbe31d33ad"
+
+[modules."tests/plugins/test_wolframalpha.py"]
+items = 27
+group = "plugin.wolframalpha"
+nodeids_sha256 = "74be7cba9aa058fc8f4f5afdd95ce539c6262ab7863d1145511ddadfbd3e7e21"
+
+[modules."tests/plugins/test_xiaoqing_chat.py"]
+items = 138
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "3e55fded61126740f72f40fad11166ccfb2f1d39765e0dd54ac295aa472ecc91"
+
+[modules."tests/plugins/test_xiaoqing_chat_anthropomorphic_experiment.py"]
+items = 8
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "8561dd0cb082806a4b0046ecc047fb239a2ad97a028b99571b8afe3f00de1a8b"
+
+[modules."tests/plugins/test_xiaoqing_chat_dedup_json_llm.py"]
+items = 10
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "032d59df81427c6b32cd77d93ef13ee180d012a25d95cea10da7eb1ef4f112cf"
+
+[modules."tests/plugins/test_xiaoqing_chat_expression_store_persistence.py"]
+items = 5
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "b7d6cd84d686b41aa41c2691b5cdb8d1a6f5712eb76bf03b1ee80602d0fa1319"
+
+[modules."tests/plugins/test_xiaoqing_chat_media.py"]
+items = 81
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "03fcd653006d2947f5dbda43185dc8db8388df03f74ae683b4847319e125d8d1"
+
+[modules."tests/plugins/test_xiaoqing_chat_memory_save_dedup.py"]
+items = 4
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "cbec5c5f5eaa044a486963e48fcabf1940f8eade14e5330e71000b466150c10a"
+
+[modules."tests/plugins/test_xiaoqing_chat_refactor_cleanup.py"]
+items = 6
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "c3463aff7dede3811b4e1c1f63323a1e5e321d0c13c6f8887d35eeba6418a401"
+
+[modules."tests/plugins/test_xiaoqing_chat_review_regressions.py"]
+items = 10
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "c4469abd5f2849fdc7f91f05c87542804d94a0f63b70592ffa1b2eaef7bc0ae1"
+
+[modules."tests/plugins/test_xiaoqing_chat_runtime_hardening.py"]
+items = 10
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "87567e70879dd5444c273f1207472d6b9361429860fba3bd959eeaa59d43f4e5"
+
+[modules."tests/plugins/test_xiaoqing_chat_store_base_helpers.py"]
+items = 5
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "db7582873df30c0578be4e8cb8594ce57534c228fbb13cfc417e42cc627deb33"
+
+[modules."tests/plugins/test_xiaoqing_chat_task_scheduler_dedup.py"]
+items = 3
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "cbaaf1ace17aee862c4b579cb44f0d35dc61e81cf1e3de36e72e888e988fd9d4"
+
+[modules."tests/plugins/test_xiaoqing_chat_tenant_scope.py"]
+items = 2
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "9a116717f53a1140c86319b41412963e33ce71b723f5b576f91ebd5e0d06f1f6"
+
+[modules."tests/plugins/test_xiaoqing_prompt_builder.py"]
+items = 10
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "aa193693755415ba25f980e052a55581f496eb2359eb1af320a97ac892ecd922"
+
+[modules."tests/plugins/test_xiaoqing_reply_payload.py"]
+items = 5
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "b9fbd5f8c6cb47814a7ac065d0ce718205af4784cccc3ff5cfc237784836c341"
+
+[modules."tests/plugins/test_xiaoqing_review_fixes.py"]
+items = 3
+group = "plugin.xiaoqing_chat"
+nodeids_sha256 = "659285c8adc55a9f761bf4f4425b6fd285bb187eba1bf7922021ee3ccc3e3967"
+
+[modules."tests/test_app.py"]
+items = 76
+group = "core"
+nodeids_sha256 = "1ecd08e2de67a5e0476a8aa72dae72d4db5ef8781b176a364111faa38ddcf506"
+
+[modules."tests/test_args.py"]
+items = 43
+group = "core"
+nodeids_sha256 = "588546556a01e0d63395fc231247d117e15cdd04331848c5bf41b2623d976284"
+
+[modules."tests/test_async_keyed_lock.py"]
+items = 6
+group = "core"
+nodeids_sha256 = "b0e8f50aed3dfd6d9cd995bd7f2d6ecd02fd62148f34e38b1beb6a3ff1ffd939"
+
+[modules."tests/test_asyncio_support.py"]
+items = 1
+group = "core"
+nodeids_sha256 = "e0f9f1773c5f9851d8ffa6ff4b2aa11e44b3bf2cd54ad1e48964630328b9bc36"
+
+[modules."tests/test_atomic_store.py"]
+items = 4
+group = "core"
+nodeids_sha256 = "0ae2bb9fb47125657500b23e7acf940c4093fb173d5c4dca95ea29d6712b5b58"
+
+[modules."tests/test_bounded_http.py"]
+items = 71
+group = "core"
+nodeids_sha256 = "f08ea268b239fa84ccb5aab5f08b6b1550298926f88714a7401e7fce4aec8b50"
+
+[modules."tests/test_bounded_http_adoption.py"]
+items = 20
+group = "tooling"
+nodeids_sha256 = "95527b280fb5bdabb27d2f98df521e0741beccca6fd88084fc7d777289e20be0"
+
+[modules."tests/test_code_review.py"]
+items = 51
+group = "tooling"
+nodeids_sha256 = "b7979845288d41a5d4dafedae246fc939ac7905ce655bccd7126f01b71c3502a"
+
+[modules."tests/test_ci_workflow.py"]
+items = 14
+group = "tooling"
+nodeids_sha256 = "a089a7b78ce54bdd32d23a74d7f4559f56b0f67ffc655a706063f2cf38757d0c"
+
+[modules."tests/test_clock.py"]
+items = 20
+group = "core"
+nodeids_sha256 = "f907d63a570673bf371acec5e22b59a9fa8bd0936c1faf0e52273104be5693e4"
+
+[modules."tests/test_command_conflicts.py"]
+items = 3
+group = "tooling"
+nodeids_sha256 = "d58a38a43f13d3f10a87350e6d730e1ba62a39e1d8909fb6e9d5ada3751b4336"
+
+[modules."tests/test_config.py"]
+items = 56
+group = "core"
+nodeids_sha256 = "b3e0ed0b29c8035e0a44b1d716c391d7f4bba08e53f903cccbe5b63a76dd58b6"
+
+[modules."tests/test_constants.py"]
+items = 22
+group = "core"
+nodeids_sha256 = "ea8a23e0e7386e879e05df13f62c6628b6e7e3370a5c1bad2aafeb8ea62db3a7"
+
+[modules."tests/test_context.py"]
+items = 20
+group = "core"
+nodeids_sha256 = "41327348f636add27bee6fcfa87462c077d1bab9d7c4b9310627125b4253d890"
+
+[modules."tests/test_coverage_floors.py"]
+items = 45
+group = "tooling"
+nodeids_sha256 = "4e364b12608b727e02fc27640f8e8c64ab9db210e3cb7977a666f8ab8a1a035a"
+
+[modules."tests/test_cr175_shutdown_admission.py"]
+items = 2
+group = "core"
+nodeids_sha256 = "37c30907a3bb387068885cba3b5f050ac7aa2fd9f71bfc8cc44aee63fde13138"
+
+[modules."tests/test_dependency_extras.py"]
+items = 3
+group = "tooling"
+nodeids_sha256 = "d7d6855ee22a1deb0a51240e3ef19cc27151e0376b4b28cee19147a324853a75"
+
+[modules."tests/test_dependency_locks.py"]
+items = 17
+group = "tooling"
+nodeids_sha256 = "1354c60412edba04b4d71f784fa370df3a6690dafb25c1b87d1d46a5ffb6039b"
+
+[modules."tests/test_dispatcher.py"]
+items = 61
+group = "core"
+nodeids_sha256 = "df5e74ea2280bb3faf9508c7e7efb2d2bbffd78751d8b05fc0532974f82d2b99"
+
+[modules."tests/test_docker_context.py"]
+items = 17
+group = "tooling"
+nodeids_sha256 = "13642168622a14063becb0ad7c6a5223e36ade050e138142c3f39db00f83f39b"
+
+[modules."tests/test_docker_image_security.py"]
+items = 12
+group = "tooling"
+nodeids_sha256 = "21e90d3d55f4526cc95b1e81d90dbbb7a5736750c62841619b6d5d999c0eea13"
+
+[modules."tests/test_exceptions.py"]
+items = 35
+group = "core"
+nodeids_sha256 = "79477a3faddebea66a30c956015de0a703709b499c9034548b38f683b1fa642f"
+
+[modules."tests/test_interfaces.py"]
+items = 25
+group = "core"
+nodeids_sha256 = "9ea1d9075a10fd28f3bcd44e4d4b5575220cdab4ec1c087478d96a1e6e553f22"
+
+[modules."tests/test_license_distribution.py"]
+items = 1
+group = "tooling"
+nodeids_sha256 = "8db220a92fc71c4bd01bd03df25668d45f7b49ba8e76d6073a40dd4206115bd2"
+
+[modules."tests/test_logging.py"]
+items = 17
+group = "core"
+nodeids_sha256 = "4e1d198e84871ba8a546f6d228f27dce09e3ce42533250acf9a6e8fdc3669a6a"
+
+[modules."tests/test_main_runtime.py"]
+items = 2
+group = "core"
+nodeids_sha256 = "2bda2a184e1466e651c50d71a68beb8b92c4c4bb3a7da958249ac6d82397cc08"
+
+[modules."tests/test_message.py"]
+items = 38
+group = "core"
+nodeids_sha256 = "da674dabe986400548f1ba3a007585894e560f181fe49bc6166ebddb41e7a30d"
+
+[modules."tests/test_metrics.py"]
+items = 38
+group = "core"
+nodeids_sha256 = "85246f8d5dd53fcdc17cef858748386c925cb622318d38b23b23a3d5c3288fd0"
+
+[modules."tests/test_models.py"]
+items = 25
+group = "core"
+nodeids_sha256 = "2df66697348d1d701d42d607ff84d9fcd7ea287ae6ba8f964d34e553ebebd95e"
+
+[modules."tests/test_onebot.py"]
+items = 59
+group = "core"
+nodeids_sha256 = "71ef8a8878ba6ed278e49f3c1440aa7b2762c6f15330f5fba76bd86206559518"
+
+[modules."tests/test_packaging_entrypoint.py"]
+items = 2
+group = "tooling"
+nodeids_sha256 = "91c46164275cf57ae2d9ce84586b2d3980d271ea2fdf10d9e77593f414f92dd9"
+
+[modules."tests/test_packaging_resources.py"]
+items = 3
+group = "tooling"
+nodeids_sha256 = "160bc7c0237f1144991f6db938ab5d9f0d041f9dcc05f6a4551e3a8b9d370d4f"
+
+[modules."tests/test_packaging_security.py"]
+items = 2
+group = "tooling"
+nodeids_sha256 = "a12988703a444a635a2ca085f326664b069f70acd49326de9348b681c873df85"
+
+[modules."tests/test_plugin_base.py"]
+items = 28
+group = "core"
+nodeids_sha256 = "fd2951b6743aa0e63dde64bf7ac3a4ec7b6f6579ec851dcb766cb92df77b5034"
+
+[modules."tests/test_plugin_execution.py"]
+items = 10
+group = "core"
+nodeids_sha256 = "589b6284175761dc173cd7abc5a79ed1f06cc4f0cf47ee2981438658cbd9e640"
+
+[modules."tests/test_plugin_manager.py"]
+items = 34
+group = "core"
+nodeids_sha256 = "a8c0cb70dfba660d90b3d477e35282be38507b65ba1e683ff88c0a532fd7cbf3"
+
+[modules."tests/test_public_errors.py"]
+items = 13
+group = "core"
+nodeids_sha256 = "5fb5fcbbe95c2bdc25031d64839e5c48fbeb8c368e8f404ed27d376b5d30b8a1"
+
+[modules."tests/test_python_release.py"]
+items = 22
+group = "tooling"
+nodeids_sha256 = "ef354b8855294cfa6cac4f51f0be4c1562a4c2ff0b4c4000fbdfc6357407cc3d"
+
+[modules."tests/test_router.py"]
+items = 14
+group = "core"
+nodeids_sha256 = "2b9d5fffad547d3b6419c6a756cecb6442b0275e998004c729c3c3e0f8f9b81e"
+
+[modules."tests/test_ruff_changed_script.py"]
+items = 14
+group = "tooling"
+nodeids_sha256 = "60a53592a3dd163638bd5a6a4ab894194c60ac4db58798c840162dc22643cfe4"
+
+[modules."tests/test_run_bot_monitor_script.py"]
+items = 27
+group = "tooling"
+nodeids_sha256 = "012aad90c6493f696711f92baebf90a827c971700cddf0ff879512d407044125"
+
+[modules."tests/test_safe_http.py"]
+items = 25
+group = "core"
+nodeids_sha256 = "c8b98c8d0cdfe57c14d009f8cf877efbd34e6c1777411f4d1318c62bb1b874db"
+
+[modules."tests/test_scheduler.py"]
+items = 21
+group = "core"
+nodeids_sha256 = "5df860b48da75f1315bb9fc7c47bc14e9a3c664eb92dccdef5e2d6e3b3af17ae"
+
+[modules."tests/test_secret_hygiene.py"]
+items = 2
+group = "tooling"
+nodeids_sha256 = "d7ca8cabbdf0c521c3e8e28dacb254e70698f3ea12be219896118c82b2397521"
+
+[modules."tests/test_sensitive_audit.py"]
+items = 5
+group = "core"
+nodeids_sha256 = "762a5fde7b77c2e0f89e5d317db303a884403990008f5c2f03e418451c4fdf0f"
+
+[modules."tests/test_server.py"]
+items = 89
+group = "core"
+nodeids_sha256 = "8c2a865998b0f67734de4da173e5b1bb9e55f35aba2485b90cf60b7aad42e9b0"
+
+[modules."tests/test_session.py"]
+items = 25
+group = "core"
+nodeids_sha256 = "f4e4cef901d1a970aa9c6f6da4881a55397975585113e0bfb6b5dafe140da36e"
+
+[modules."tests/test_sync_to_remote.py"]
+items = 20
+group = "tooling"
+nodeids_sha256 = "0b3315e385a8f7c8b6b4643bdb7336907bc0b0a8ad527168d39d581fad6f681b"
+
+[modules."tests/test_test_collection_guard.py"]
+items = 33
+group = "tooling"
+nodeids_sha256 = "b4de6d81f20c2423518ffe37706bab43e830011bfc9f111380505515d6bbd33f"
+
+[modules."tests/test_tooling_config.py"]
+items = 2
+group = "tooling"
+nodeids_sha256 = "d1fee223beaa3ae34b87cc3729e4a074c81e21072829441cbeceeefa8484ea75"
+
+[modules."tests/test_workspace_secret_scan.py"]
+items = 17
+group = "tooling"
+nodeids_sha256 = "3cd2b7dc21dbf265e387a7952489b58ae0ebba7cfe8de09757d2f6df5903172b"

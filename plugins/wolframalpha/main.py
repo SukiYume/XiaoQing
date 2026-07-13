@@ -124,7 +124,7 @@ def _show_help() -> str:
 **特殊后缀:**
 • step - 显示步骤解答
   示例: /alpha integrate x^2 step
-  
+
 • cp - 仅返回完整结果
   示例: /alpha 1+1 cp
 

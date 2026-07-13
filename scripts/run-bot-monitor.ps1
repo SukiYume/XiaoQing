@@ -45,14 +45,20 @@ function Get-NormalizedDirectoryPath {
 
     $fullPath = [IO.Path]::GetFullPath($Path)
     $pathRoot = [IO.Path]::GetPathRoot($fullPath)
-    if ($fullPath.Length -le $pathRoot.Length) {
-        return $fullPath
-    }
     $separators = [char[]]@(
         [IO.Path]::DirectorySeparatorChar,
         [IO.Path]::AltDirectorySeparatorChar
     )
-    return $fullPath.TrimEnd($separators)
+    $trimmedFullPath = $fullPath.TrimEnd($separators)
+    $trimmedPathRoot = $pathRoot.TrimEnd($separators)
+    if ([string]::Equals(
+        $trimmedFullPath,
+        $trimmedPathRoot,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        return $trimmedFullPath + [IO.Path]::DirectorySeparatorChar
+    }
+    return $trimmedFullPath
 }
 
 if ($MaximumRestartDelaySeconds -lt $InitialRestartDelaySeconds) {

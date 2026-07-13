@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal, Optional, Protocol
+from typing import Any, Literal, Protocol
 
 
 class AdminCheck(Protocol):
-    def is_admin(self, user_id: Optional[int]) -> bool: ...
+    def is_admin(self, user_id: int | None) -> bool: ...
 
 
 class ConfigProvider(Protocol):
@@ -25,7 +26,7 @@ class MuteControl(Protocol):
 
     def unmute_group(self, group_id: int) -> bool: ...
 
-    def is_muted(self, group_id: Optional[int]) -> bool: ...
+    def is_muted(self, group_id: int | None) -> bool: ...
 
     def get_mute_remaining(self, group_id: int) -> float: ...
 
@@ -189,8 +190,8 @@ class PluginRuntime(Protocol):
 
 class SessionAccess(Protocol):
     session_manager: Any
-    current_user_id: Optional[int]
-    current_group_id: Optional[int]
+    current_user_id: int | None
+    current_group_id: int | None
 
     async def update_session(self, callback: Callable[[Any], Any]) -> Any: ...
 
@@ -211,9 +212,9 @@ class ContextFactory(Protocol):
     def __call__(
         self,
         plugin_name: str,
-        user_id: Optional[int] = None,
-        group_id: Optional[int] = None,
-        request_id: Optional[str] = None,
+        user_id: int | None = None,
+        group_id: int | None = None,
+        request_id: str | None = None,
         principal: PluginPrincipal | None = None,
     ) -> Any: ...
 
@@ -225,7 +226,7 @@ class PluginContextFactory(Protocol):
         plugin_dir: Path,
         data_dir: Path,
         state: dict[str, Any],
-        user_id: Optional[int] = None,
-        group_id: Optional[int] = None,
-        request_id: Optional[str] = None,
+        user_id: int | None = None,
+        group_id: int | None = None,
+        request_id: str | None = None,
     ) -> Any: ...

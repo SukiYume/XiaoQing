@@ -4,18 +4,19 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from ..config.config import MemoryConfig
 from ..llm.control_payload import control_extra_payload
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..llm.prompt_builder import ChatMessage, build_dialogue_prompt
 from ..message_parts import render_stored_message
 from ..utils.json_parsing import parse_first_json_object
 from .memory import StoredMessage
 from .memory_db import MemoryDB, RetrievedItem
-from ..llm.prompt_builder import ChatMessage, build_dialogue_prompt
 from .thinking_back import append_record, get_cached_answer
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
@@ -158,11 +159,11 @@ def build_question_messages(
 ) -> list[ChatMessage]:
     dialogue = build_dialogue_prompt(history, bot_name=bot_name, truncate=True, max_chars=1200)
     user = (
-        "对话如下（你是“{bot}(你)”）：\n"
-        "{dialogue}\n\n"
-        "当前一句话：{text}\n"
-        '输出 JSON：{{"question":"..."}}'
-    ).format(bot=bot_name, dialogue=dialogue, text=current_text.strip())
+        f"对话如下（你是“{bot_name}(你)”）：\n"
+        f"{dialogue}\n\n"
+        f"当前一句话：{current_text.strip()}\n"
+        '输出 JSON：{"question":"..."}'
+    )
     return [
         ChatMessage(role="system", content=_QUESTION_SYSTEM.strip()),
         ChatMessage(role="user", content=user.strip()),

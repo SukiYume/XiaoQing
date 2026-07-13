@@ -1,6 +1,7 @@
 """
 github 插件单元测试
 """
+import importlib.util
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -10,8 +11,6 @@ import pytest
 from core.safe_http import SafeHttpResponse
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-
-import importlib.util
 
 spec = importlib.util.spec_from_file_location("github_main", ROOT / "plugins" / "github" / "main.py")
 github = importlib.util.module_from_spec(spec)

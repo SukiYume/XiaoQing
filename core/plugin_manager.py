@@ -6,10 +6,11 @@ import logging
 import re
 import sys
 import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType, ModuleType
-from typing import Any, Callable, Mapping, Optional
+from typing import Any
 
 from .constants import PLUGIN_INIT_TIMEOUT_SECONDS, VALID_PLUGIN_NAME_PATTERN
 from .exceptions import PluginLoadError
@@ -223,7 +224,7 @@ class PluginManager:
         )
         self._notify_change(name)
 
-    def get(self, name: str) -> Optional[LoadedPlugin]:
+    def get(self, name: str) -> LoadedPlugin | None:
         return self._plugins.get(name)
 
     @staticmethod
@@ -309,7 +310,7 @@ class PluginManager:
         self._init_tasks.clear()
         results = await asyncio.gather(*tasks, return_exceptions=True)
         failed_plugins: set[str] = set()
-        for task, result in zip(tasks, results):
+        for task, result in zip(tasks, results, strict=True):
             plugin_name = self._init_task_plugins.pop(task, None)
             pending = self._pending_plugins.pop(task, None)
             if isinstance(result, BaseException):
@@ -860,7 +861,7 @@ class PluginManager:
                     logger.info("Detected changes in plugin %s", definition.name)
                     await self.reload_plugin(definition.name)
 
-    def _load_definition(self, plugin_dir: Path) -> Optional[PluginDefinition]:
+    def _load_definition(self, plugin_dir: Path) -> PluginDefinition | None:
         definition_path = plugin_dir / "plugin.json"
         data = load_json(definition_path)
         if not data:
@@ -934,7 +935,7 @@ class PluginManager:
 
     def _load_module(
         self, plugin_dir: Path, definition: PluginDefinition
-    ) -> tuple[Optional[ModuleType], asyncio.Task[None] | None]:
+    ) -> tuple[ModuleType | None, asyncio.Task[None] | None]:
         entry_path = plugin_dir / definition.entry
         if not entry_path.exists():
             logger.error("Plugin %s entry missing: %s", definition.name, entry_path)
@@ -990,7 +991,9 @@ class PluginManager:
                     else:
                         result = init_func()
                     if inspect.isawaitable(result):
-                        raise RuntimeError("async plugin init requires a running event loop")
+                        raise RuntimeError(
+                            "async plugin init requires a running event loop"
+                        ) from None
                 else:
                     init_task = asyncio.create_task(
                         asyncio.wait_for(
@@ -1167,9 +1170,9 @@ class PluginManager:
     def build_context(
         self,
         plugin_name: str,
-        user_id: Optional[int] = None,
-        group_id: Optional[int] = None,
-        request_id: Optional[str] = None,
+        user_id: int | None = None,
+        group_id: int | None = None,
+        request_id: str | None = None,
         principal: PluginPrincipal | None = None,
     ) -> PluginContextProtocol:
         plugin_dir = self.plugins_dir / plugin_name

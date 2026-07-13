@@ -2,12 +2,12 @@
 颜色数据管理模块
 负责加载和管理颜色数据
 """
+import threading
 from functools import lru_cache
 from pathlib import Path
-import threading
 from typing import Any
 
-from core.plugin_base import load_json, write_json, ensure_dir
+from core.plugin_base import ensure_dir, load_json, write_json
 from core.public_errors import public_error_message
 
 _CUSTOM_COLORS_LOCK = threading.RLock()
@@ -35,15 +35,15 @@ def _load_builtin_colors_cached(color_file: str, mtime_ns: int) -> list[dict[str
 
 def load_colors(context) -> list[dict[str, Any]]:
     """加载所有颜色数据
-    
+
     Args:
         context: 插件上下文
-        
+
     Returns:
         颜色数据列表
     """
     colors = []
-    
+
     # 加载内置颜色库
     try:
         builtin_file = context.plugin_dir / "color.json"
@@ -63,7 +63,7 @@ def load_colors(context) -> list[dict[str, Any]]:
             logger=context.logger,
             component="color.load_builtin",
         )
-    
+
     # 加载用户自定义颜色
     try:
         custom_file = _custom_file(context)
@@ -80,15 +80,15 @@ def load_colors(context) -> list[dict[str, Any]]:
             logger=context.logger,
             component="color.load_custom",
         )
-    
+
     return colors
 
 def load_custom_colors(context) -> list[dict[str, Any]]:
     """加载用户自定义颜色
-    
+
     Args:
         context: 插件上下文
-        
+
     Returns:
         自定义颜色列表
     """
@@ -99,7 +99,7 @@ def load_custom_colors(context) -> list[dict[str, Any]]:
 
 def save_custom_colors(colors: list[dict[str, Any]], context) -> None:
     """保存用户自定义颜色
-    
+
     Args:
         colors: 颜色列表
         context: 插件上下文
@@ -124,10 +124,10 @@ def mutate_custom_colors(context, callback):
 
 def get_color_systems(colors: list[dict[str, Any]]) -> set:
     """获取所有颜色色系
-    
+
     Args:
         colors: 颜色列表
-        
+
     Returns:
         色系集合
     """
@@ -144,10 +144,10 @@ def get_color_systems(colors: list[dict[str, Any]]) -> set:
 
 def format_color_info(color: dict) -> str:
     """格式化颜色信息
-    
+
     Args:
         color: 颜色数据字典
-        
+
     Returns:
         格式化的颜色信息字符串
     """

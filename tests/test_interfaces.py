@@ -5,25 +5,12 @@ Uses duck typing instead of isinstance checks for Protocol classes
 
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from core.interfaces import (
-    AdminCheck,
-    ConfigProvider,
-    PluginRegistry,
-    MuteControl,
-    ConfigManagerLike,
-    CommandLister,
-    PluginConfig,
-    PluginRuntime,
-    SessionAccess,
-    PluginContextProtocol,
-    ContextFactory,
     DeliveryTarget,
-    PluginContextFactory,
 )
 
 

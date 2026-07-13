@@ -1,6 +1,5 @@
 """自定义断言函数"""
 
-from typing import Any
 
 
 def assert_message_segment(actual: dict, expected_type: str, expected_text: str | None = None):

@@ -102,6 +102,7 @@ def test_database_search_items_matches_additional_text_fields():
         assert [item.id for item in by_location] == ["ev1"]
         assert [item.id for item in by_weather] == ["dy1"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -169,6 +170,7 @@ def test_database_search_items_supports_ledger_category_filter():
         )
         assert [item.id for item in transfer_results] == ["ld3"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -207,6 +209,7 @@ def test_database_search_items_matches_event_collection_text():
 
         assert [item.id for item in results] == ["col-frb_m01"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -248,6 +251,7 @@ def test_search_route_adds_event_collection_payload():
         assert item["id"] == "col-import_m01"
         assert item["collection"]["title"] == "导入会议"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 

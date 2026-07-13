@@ -4,8 +4,9 @@ import hashlib
 import re
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .store_base import StoreBase
 

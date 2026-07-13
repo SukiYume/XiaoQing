@@ -163,7 +163,10 @@ async def cmd_refs(
         lines = [f"📚 文献库 ({len(entries)} 条引用):\n"]
         for i, entry in enumerate(entries, 1):
             entry_lines = entry.split("\n")
-            title_line = next((l for l in entry_lines if "title" in l.lower()), "")
+            title_line = next(
+                (line for line in entry_lines if "title" in line.lower()),
+                "",
+            )
             if title_line:
                 # Improved title extraction with error handling
                 # Improved title extraction using regex to handle various BibTeX formats

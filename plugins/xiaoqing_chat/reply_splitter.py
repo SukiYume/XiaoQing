@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
+
 
 def _split_chat_reply(text: str) -> list[str]:
     """
     将聊天回复按连贯文本块拆分成多条消息，同时保护代码块不被拆分
-    
+
     Args:
         text: 完整的聊天回复文本
-    
+
     Returns:
         拆分后的消息列表
     """
@@ -22,7 +23,7 @@ def _split_chat_reply(text: str) -> list[str]:
 
     for line in lines:
         stripped = line.strip()
-        
+
         # 处理代码块标记
         if stripped.startswith("```"):
             if in_code_block:
@@ -54,17 +55,17 @@ def _split_chat_reply(text: str) -> list[str]:
     # 处理未闭合的代码块或普通最后一段
     if current_message:
         messages.append("\n".join(current_message).strip())
-    
+
     return [m for m in messages if m]
 
-def _build_reply_segments(text: str, *, reply_to_message_id: Optional[int]) -> list[dict[str, Any]]:
+def _build_reply_segments(text: str, *, reply_to_message_id: int | None) -> list[dict[str, Any]]:
     """
     构建回复消息段
-    
+
     Args:
         text: 回复文本
         reply_to_message_id: 引用的消息ID（可选）
-    
+
     Returns:
         消息段列表
     """

@@ -3,11 +3,11 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from core.plugin_base import segments
 from core.args import parse
+from core.plugin_base import segments
 
-from .storage import PaperStorage
 from .constants import DATE_FORMAT
+from .storage import PaperStorage
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ async def cmd_note(
 
         if await _run_storage(storage.delete_paper_note, paper_id, index, user_id):
             return segments(f"✅ 已删除论文 {paper_id} 的笔记")
-        return segments(f"❌ 删除失败，请检查 ID 和序号")
+        return segments("❌ 删除失败，请检查 ID 和序号")
 
     if len(parsed) == 1:
         paper_id = parsed.first
@@ -99,7 +99,7 @@ async def cmd_writing(
 
         if await _run_storage(storage.delete_writing_idea, section, index, user_id):
             return segments(f"✅ 已删除「{section}」中的灵感")
-        return segments(f"❌ 删除失败，请检查章节和序号")
+        return segments("❌ 删除失败，请检查章节和序号")
 
     if len(parsed) == 1:
         section = parsed.first
@@ -198,13 +198,13 @@ async def cmd_deadline(
             return segments("❌ 用法: /paper deadline add <名称> <日期 (YYYY-MM-DD)>")
         name = parsed.get(1)
         date = parsed.rest(2)
-        
+
         # Validate date format
         try:
             datetime.strptime(date, DATE_FORMAT)
         except ValueError:
             return segments("❌ 日期格式错误，请使用 YYYY-MM-DD 格式（如：2026-03-15）")
-        
+
         if await _run_storage(storage.add_deadline, name, date, user_id):
             return segments(f"✅ 已添加截稿日期: {name} - {date}")
         return segments("❌ 添加失败")

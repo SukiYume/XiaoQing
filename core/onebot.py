@@ -10,7 +10,8 @@ import logging
 import re
 import time
 import uuid
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import aiohttp
 
@@ -81,7 +82,7 @@ def _extract_message_preview(message: list[dict[str, Any]], max_len: int = MAX_S
     """从消息段中提取预览文本（供日志使用）"""
     if not message:
         return "(empty)"
-    
+
     parts = []
     for seg in message:
         if isinstance(seg, dict):
@@ -99,7 +100,7 @@ def _extract_message_preview(message: list[dict[str, Any]], max_len: int = MAX_S
                 parts.append(f"[@{seg.get('data', {}).get('qq', '')}]")
             else:
                 parts.append(f"[{seg_type}]")
-    
+
     text = "".join(parts)
     if len(text) > max_len:
         text = text[:max_len] + "..."

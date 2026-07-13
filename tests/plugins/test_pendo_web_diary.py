@@ -89,6 +89,7 @@ def test_build_diary_overview_tracks_fill_rate_streaks_and_moods():
         assert result["cadence"][22]["words"] == len("这一天有些疲惫。")
         assert result["recent_entries"][0]["id"] == "d3"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -137,6 +138,7 @@ def test_build_diary_overview_supports_range_based_weekly_cadence():
         assert result["mood_breakdown"][0]["mood"] == "calm"
         assert result["template_usage"][0]["template_id"] in {"free_write", "night_review"}
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -176,6 +178,7 @@ def test_build_diary_overview_supports_cross_year_yearly_cadence():
         assert [item["label"] for item in result["cadence"]] == ["2024", "2025", "2026"]
         assert [item["count"] for item in result["cadence"]] == [1, 1, 1]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 

@@ -11,11 +11,10 @@ from __future__ import annotations
 import importlib
 import json
 import re
-import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import joblib
 import numpy as np
@@ -101,11 +100,11 @@ def normalize_col_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name).strip().lower())
 
 
-def resolve_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
+def resolve_columns(df: pd.DataFrame) -> dict[str, str | None]:
     """自动识别列名。"""
     norm_map = {normalize_col_name(c): c for c in df.columns}
 
-    def pick(candidates: List[str], required: bool) -> Optional[str]:
+    def pick(candidates: list[str], required: bool) -> str | None:
         for c in candidates:
             if c in norm_map:
                 return norm_map[c]
@@ -144,21 +143,22 @@ def clean_text(x: object) -> str:
 
 def _paired_texts(
     df: pd.DataFrame, title_col: str, abstract_col: str, template: str = "{t} {a}"
-) -> List[str]:
+) -> list[str]:
     """统一构建文本对。template 中 {t} 和 {a} 分别代表标题和摘要。"""
     titles = df[title_col].fillna("").astype(str).tolist()
     abstracts = df[abstract_col].fillna("").astype(str).tolist()
     return [
-        template.format(t=clean_text(t), a=clean_text(a)).strip() for t, a in zip(titles, abstracts)
+        template.format(t=clean_text(t), a=clean_text(a)).strip()
+        for t, a in zip(titles, abstracts, strict=True)
     ]
 
 
-def build_model_texts(df: pd.DataFrame, title_col: str, abstract_col: str) -> List[str]:
+def build_model_texts(df: pd.DataFrame, title_col: str, abstract_col: str) -> list[str]:
     """给 embedding 模型输入的文本。"""
     return _paired_texts(df, title_col, abstract_col, "Title: {t}\nAbstract: {a}")
 
 
-def build_raw_texts(df: pd.DataFrame, title_col: str, abstract_col: str) -> List[str]:
+def build_raw_texts(df: pd.DataFrame, title_col: str, abstract_col: str) -> list[str]:
     """给关键词抽取用的原始文本。"""
     return _paired_texts(df, title_col, abstract_col, "{t} {a}")
 
@@ -185,7 +185,7 @@ def best_fbeta_threshold(
     y_true: np.ndarray,
     y_score: np.ndarray,
     beta: float = 2.0,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """在 PR 曲线上找最优 F-beta 阈值。"""
     if len(np.unique(y_true)) < 2:
         return 0.5, 0.0
@@ -204,7 +204,7 @@ def best_fbeta_threshold(
     return float(thresholds[best_idx]), float(fbeta[best_idx])
 
 
-def top_keywords_for_texts(texts: List[str], topn: int = 6) -> str:
+def top_keywords_for_texts(texts: list[str], topn: int = 6) -> str:
     texts = [t for t in texts if str(t).strip()]
     if not texts:
         return "misc"
@@ -219,7 +219,11 @@ def top_keywords_for_texts(texts: List[str], topn: int = 6) -> str:
         scores = np.asarray(X.mean(axis=0)).ravel()
         feats = np.asarray(vec.get_feature_names_out())
         keywords = feats[np.argsort(scores)[::-1]][:topn]
-        keywords = [w for w, s in zip(keywords, scores[np.argsort(scores)[::-1]]) if s > 0]
+        keywords = [
+            w
+            for w, s in zip(keywords, scores[np.argsort(scores)[::-1]], strict=False)
+            if s > 0
+        ]
         return ", ".join(keywords) if keywords else "misc"
     except ValueError:
         return "misc"
@@ -235,9 +239,9 @@ def split_dataframe(
     val_size: float,
     split_mode: str,
     seed: int = 42,
-    date_col: Optional[str] = None,
-    label_col: Optional[str] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    date_col: str | None = None,
+    label_col: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = df.copy()
 
     if split_mode == "time":
@@ -288,15 +292,15 @@ class ModelArtifacts:
     embedding_dim: int
     interest_centers: np.ndarray
     pos_centroid: np.ndarray
-    neg_centroid: Optional[np.ndarray]
+    neg_centroid: np.ndarray | None
     classifier: LogisticRegression
     threshold: float
     threshold_beta: float
-    cluster_keywords: List[str]
-    cluster_sizes: List[int]
-    cluster_examples: List[List[str]]
-    feature_names: List[str]
-    columns: Dict[str, Optional[str]]
+    cluster_keywords: list[str]
+    cluster_sizes: list[int]
+    cluster_examples: list[list[str]]
+    feature_names: list[str]
+    columns: dict[str, str | None]
 
 
 # =============================================================================
@@ -322,20 +326,20 @@ class MultiInterestArxivModel:
         _log(f"Loading encoder: {encoder_name}")
         self.encoder = _load_sentence_transformer_class()(encoder_name)
         self.embedding_dim = int(self.encoder.get_sentence_embedding_dimension())
-        self.artifacts: Optional[ModelArtifacts] = None
+        self.artifacts: ModelArtifacts | None = None
         self._use_fp16 = torch.cuda.is_available()
         if self._use_fp16:
             _log("Enabled fp16 encoding (CUDA detected)")
 
-    def encode_texts(self, texts: List[str]) -> np.ndarray:
+    def encode_texts(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.embedding_dim), dtype=np.float32)
-        kw: Dict[str, Any] = dict(
-            batch_size=self.batch_size,
-            show_progress_bar=True,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
+        kw: dict[str, Any] = {
+            "batch_size": self.batch_size,
+            "show_progress_bar": True,
+            "convert_to_numpy": True,
+            "normalize_embeddings": True,
+        }
         if self._use_fp16:
             with torch.amp.autocast("cuda"):
                 emb = self.encoder.encode(texts, **kw)
@@ -350,9 +354,9 @@ class MultiInterestArxivModel:
     def _balance_cluster_input(
         self,
         pos_embeddings: np.ndarray,
-        pos_raw_texts: List[str],
-        pos_titles: List[str],
-    ) -> Tuple[np.ndarray, List[str], List[str]]:
+        pos_raw_texts: list[str],
+        pos_titles: list[str],
+    ) -> tuple[np.ndarray, list[str], list[str]]:
         """均衡 KMeans 的输入样本，防止高频紧凑话题（如 FRB）占据过多 cluster center。
 
         根本问题：FRB 论文在 embedding 空间里天然聚集（词汇高度相似），KMeans 会把
@@ -383,7 +387,7 @@ class MultiInterestArxivModel:
         coarse_labels = km_coarse.fit_predict(pos_embeddings)
 
         rng = np.random.RandomState(self.random_state)
-        selected: List[int] = []
+        selected: list[int] = []
         for ci in range(n_coarse):
             idxs = np.where(coarse_labels == ci)[0]
             if len(idxs) <= max_per_coarse:
@@ -405,9 +409,9 @@ class MultiInterestArxivModel:
     def _fit_interest_centers(
         self,
         pos_embeddings: np.ndarray,
-        pos_raw_texts: List[str],
-        pos_titles: List[str],
-    ) -> Tuple[np.ndarray, List[str], List[int], List[List[str]]]:
+        pos_raw_texts: list[str],
+        pos_titles: list[str],
+    ) -> tuple[np.ndarray, list[str], list[int], list[list[str]]]:
         if len(pos_embeddings) == 0:
             raise ValueError("训练集中没有 label=1 的正样本，无法构建多兴趣中心。")
 
@@ -453,8 +457,8 @@ class MultiInterestArxivModel:
         embeddings: np.ndarray,
         interest_centers: np.ndarray,
         pos_centroid: np.ndarray,
-        neg_centroid: Optional[np.ndarray],
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
+        neg_centroid: np.ndarray | None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
         """返回 (feature_matrix, best_interest, max_sim, feature_names)"""
         n_k = interest_centers.shape[0]
         feature_names = [f"sim_interest_{i}" for i in range(n_k)] + [
@@ -514,7 +518,7 @@ class MultiInterestArxivModel:
     def fit(
         self,
         train_df: pd.DataFrame,
-        precomputed_embeddings: Optional[np.ndarray] = None,
+        precomputed_embeddings: np.ndarray | None = None,
     ) -> None:
         columns = resolve_columns(train_df)
         label_col = columns["label"]
@@ -545,8 +549,8 @@ class MultiInterestArxivModel:
         _log(f"Fitting interest centers on {pos_mask.sum()} positive samples...")
         centers, kw, sizes, examples = self._fit_interest_centers(
             pos_emb,
-            [t for t, m in zip(raw_texts, pos_mask) if m],
-            [t for t, m in zip(titles, pos_mask) if m],
+            [t for t, m in zip(raw_texts, pos_mask, strict=True) if m],
+            [t for t, m in zip(titles, pos_mask, strict=True) if m],
         )
 
         # 用各 cluster center 的均值代替全量正样本均值，避免 FRB 等高频话题
@@ -597,8 +601,8 @@ class MultiInterestArxivModel:
     def select_threshold_on_validation(
         self,
         val_df: pd.DataFrame,
-        precomputed_embeddings: Optional[np.ndarray] = None,
-    ) -> Tuple[float, float]:
+        precomputed_embeddings: np.ndarray | None = None,
+    ) -> tuple[float, float]:
         assert self.artifacts is not None, "模型尚未训练或加载。"
         columns = resolve_columns(val_df)
         label_col = columns["label"]
@@ -626,7 +630,7 @@ class MultiInterestArxivModel:
         df: pd.DataFrame,
         sort_output: bool = True,
         use_current_threshold: bool = True,
-        precomputed_embeddings: Optional[np.ndarray] = None,
+        precomputed_embeddings: np.ndarray | None = None,
     ) -> pd.DataFrame:
         assert self.artifacts is not None, "模型尚未训练或加载。"
         a = self.artifacts
@@ -679,8 +683,8 @@ class MultiInterestArxivModel:
         self,
         df: pd.DataFrame,
         name: str = "Eval",
-        precomputed_embeddings: Optional[np.ndarray] = None,
-    ) -> Dict[str, float]:
+        precomputed_embeddings: np.ndarray | None = None,
+    ) -> dict[str, float]:
         assert self.artifacts is not None, "模型尚未训练或加载。"
         columns = resolve_columns(df)
         label_col = columns["label"]
@@ -694,7 +698,7 @@ class MultiInterestArxivModel:
         y_score, y_pred = scored["interest_prob"].to_numpy(), scored["pred_label"].to_numpy()
 
         has_both = len(np.unique(y_true)) >= 2
-        metrics: Dict[str, float] = {
+        metrics: dict[str, float] = {
             "roc_auc": float(roc_auc_score(y_true, y_score)) if has_both else float("nan"),
             "pr_auc": float(average_precision_score(y_true, y_score)) if has_both else float("nan"),
             "f1": float(f1_score(y_true, y_pred, zero_division=0)),

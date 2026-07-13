@@ -1,6 +1,7 @@
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .context import PluginContext
@@ -67,14 +68,14 @@ class CommandRouter:
         self._commands = [cmd for cmd in self._commands if cmd.plugin != plugin_name]
         self._mark_index_dirty()
 
-    def resolve(self, text: str) -> Optional[tuple[CommandSpec, str]]:
+    def resolve(self, text: str) -> tuple[CommandSpec, str] | None:
         """
         解析命令
-        
+
         排序优先级：
         1. priority 数字越大越优先
         2. 同优先级时，trigger 越长越优先（避免短命令抢匹配）
-        
+
         匹配规则：
         - trigger 必须是完整的词，不能是其他词的前缀
         - trigger 后面要么是空格（有参数），要么是字符串结束（无参数）
@@ -106,13 +107,13 @@ class CommandRouter:
             if spec.plugin not in plugins_dict:
                 plugins_dict[spec.plugin] = []
             plugins_dict[spec.plugin].append(spec)
-        
+
         # 遍历每个插件
         for plugin_name in sorted(plugins_dict.keys()):
             specs = plugins_dict[plugin_name]
             # 添加插件标题
             lines.append(f"\n[{plugin_name}]")
-            
+
             for spec in specs:
                 trigger = "/" + spec.name if spec.name else ""
                 triggers = ", ".join(spec.triggers) if spec.triggers else trigger
@@ -121,6 +122,6 @@ class CommandRouter:
                 lines.append(f"    ↳ {spec.help_text}")
                 if spec.usage:
                     lines.append(f"    ↳ 用法: {spec.usage}")
-        
+
         return lines
 

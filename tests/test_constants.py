@@ -8,7 +8,6 @@ import pytest
 
 from core import constants
 
-
 # ============================================================
 # Default Configuration Values Tests
 # ============================================================

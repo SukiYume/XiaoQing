@@ -5,11 +5,11 @@
 职责：
 - 根据 model_type 自动分发到 transformers / multi_interest 后端
 - 统一输入输出格式
-- 提供便捷函数给 main.py / arxiv_test.py 调用
+- 提供便捷函数给 main.py / scripts/arxiv_inference_cli.py 调用
 """
 
 import logging
-from typing import Optional, cast
+from typing import cast
 
 import pandas as pd
 import torch
@@ -84,10 +84,10 @@ def format_positives(positives: pd.DataFrame) -> str:
 
 def run_inference_for_dataframe(
     data: pd.DataFrame,
-    model_path: Optional[str] = None,
-    threshold: Optional[float] = None,
-    batch_size: Optional[int] = None,
-    max_len: Optional[int] = None,
+    model_path: str | None = None,
+    threshold: float | None = None,
+    batch_size: int | None = None,
+    max_len: int | None = None,
 ) -> tuple[pd.DataFrame, float] | tuple[None, str]:
     """对给定的 DataFrame 执行推理，返回 (带 Probability/Prediction 列的 df, threshold) 或 (None, error_msg)。"""
     params = resolve_params(model_path, threshold, batch_size, max_len)
@@ -109,10 +109,10 @@ def run_inference_for_dataframe(
 def run_single_paper_inference(
     title: str,
     abstract: str,
-    model_path: Optional[str] = None,
-    threshold: Optional[float] = None,
-    batch_size: Optional[int] = None,
-    max_len: Optional[int] = None,
+    model_path: str | None = None,
+    threshold: float | None = None,
+    batch_size: int | None = None,
+    max_len: int | None = None,
 ) -> tuple[list[float], list[int], InferenceParams]:
     """对单篇论文执行推理，返回 (probs, preds, params)。"""
     params = resolve_params(model_path, threshold, batch_size, max_len)
@@ -122,10 +122,10 @@ def run_single_paper_inference(
 
 
 def run_inference_for_today(
-    model_path: Optional[str] = None,
-    threshold: Optional[float] = None,
-    batch_size: Optional[int] = None,
-    max_len: Optional[int] = None,
+    model_path: str | None = None,
+    threshold: float | None = None,
+    batch_size: int | None = None,
+    max_len: int | None = None,
 ) -> tuple[pd.DataFrame, float] | tuple[None, str]:
     """获取今日 arXiv 论文并执行推理。"""
     from ..arxiv_today import get_today_arxiv
@@ -136,10 +136,10 @@ def run_inference_for_today(
 
 
 def get_positive_arxiv_today_as_string(
-    model_path: Optional[str] = None,
-    threshold: Optional[float] = None,
-    batch_size: Optional[int] = None,
-    max_len: Optional[int] = None,
+    model_path: str | None = None,
+    threshold: float | None = None,
+    batch_size: int | None = None,
+    max_len: int | None = None,
 ) -> str:
     """获取今日正预测论文的格式化字符串。被 main.py 调用。"""
     data, result = run_inference_for_today(model_path, threshold, batch_size, max_len)

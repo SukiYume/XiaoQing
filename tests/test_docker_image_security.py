@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import tarfile
 from pathlib import Path
 
@@ -19,6 +20,14 @@ from scripts.verify_docker_release import (
 
 ROOT = Path(__file__).resolve().parents[1]
 VERIFIER = ROOT / "scripts" / "verify_docker_release.py"
+FROM_PATTERN = re.compile(
+    r"^\s*from\s+([^\s]+)(?:\s+as\s+([^\s]+))?\s*$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _docker_from_stages(source: str) -> list[tuple[str, str | None]]:
+    return [(match.group(1), match.group(2)) for match in FROM_PATTERN.finditer(source)]
 
 
 def _tar_bytes(files: dict[str, bytes]) -> bytes:
@@ -68,9 +77,57 @@ def _write_exact_context(context_dir: Path) -> None:
 
 def test_runtime_image_is_separate_from_compiler_stage() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    builder, runtime = dockerfile.split("FROM python:3.13-slim AS runtime", maxsplit=1)
+    parser_probe = "# escape=`\n# syntax=docker/dockerfile:latest\nFROM ubuntu:latest\n"
+    parser_directive = re.compile(
+        r"^\s*#\s*(?:escape|syntax)\s*=",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    assert len(parser_directive.findall(parser_probe)) == 2
+    assert not parser_directive.search(dockerfile)
+    assert _docker_from_stages("  from ubuntu:latest AS hidden\n") == [
+        ("ubuntu:latest", "hidden")
+    ]
+    platform_probe = "FROM --platform=linux/amd64 ubuntu:latest AS hidden\n"
+    assert len(re.findall(r"(?im)^\s*from(?:\s|$)", platform_probe)) == 1
+    assert _docker_from_stages(platform_probe) == []
+    stages = _docker_from_stages(dockerfile)
+    all_from_directives = re.findall(r"(?im)^\s*from(?:\s|$)", dockerfile)
+    assert len(all_from_directives) == len(stages) == 3
+    assert re.fullmatch(
+        r"python:3\.13\.\d+-slim-trixie@sha256:[0-9a-f]{64}",
+        stages[0][0],
+    )
+    assert stages[0][1] == "python-base"
+    assert stages[1:] == [("python-base", "builder"), ("python-base", "runtime")]
 
-    assert builder.startswith("FROM python:3.13-slim AS builder")
+    known_stages: set[str] = set()
+    external_sources: list[str] = []
+    for source, alias in stages:
+        if source.casefold() not in known_stages:
+            external_sources.append(source)
+        if alias is not None:
+            assert alias.casefold() not in known_stages
+            known_stages.add(alias.casefold())
+    assert external_sources == [stages[0][0]]
+
+    copy_probe = "COPY \\\n  --from=nginx:latest /tmp/source /tmp/target\n"
+    probe_copy_lines = re.findall(r"(?im)^\s*copy(?:\s|$)[^\n]*", copy_probe)
+    assert len(probe_copy_lines) == 1
+    assert probe_copy_lines[0].rstrip().endswith("\\")
+    copy_lines = re.findall(r"(?im)^\s*copy(?:\s|$)[^\n]*", dockerfile)
+    assert copy_lines
+    assert all(not line.rstrip().endswith("\\") for line in copy_lines)
+    copy_sources = [
+        match.group(1)
+        for line in copy_lines
+        for match in re.finditer(r"(?i)(?:^|\s)--from=([^\s]+)", line)
+    ]
+    assert copy_sources
+    assert {source.casefold() for source in copy_sources} <= known_stages
+
+    builder, runtime = dockerfile.split("FROM python-base AS runtime", maxsplit=1)
+
+    assert "FROM python-base AS builder" in builder
     assert "apt-get install" in builder
     assert "gcc" in builder
     assert "apt-get install" not in runtime

@@ -53,10 +53,10 @@ def _parse_help_header(line: str) -> tuple[str, str | None] | None:
 
 def mask_secret(value: Any) -> str:
     """遮罩敏感信息的显示
-    
+
     Args:
         value: 要遮罩的值
-        
+
     Returns:
         遮罩后的字符串
     """
@@ -78,20 +78,20 @@ def mask_secret(value: Any) -> str:
 
 async def handle(command: str, args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     """命令处理入口
-    
+
     Args:
         command: plugin.json 中定义的 command name
         args: 用户输入的参数字符串
         event: 原始事件数据
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """
     try:
         logged_args = "<redacted>" if command in {"set_secret", "get_secret"} else (args[:50] if args else "")
         logger.info("核心命令: %s, 参数: %s", command, logged_args)
-        
+
         if command == "help":
             return _handle_help(args, context)
 
@@ -122,7 +122,7 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
 
         logger.warning("未知命令: %s", command)
         return segments("❌ 未知命令")
-        
+
     except Exception as exc:
         return public_error_response(
             context,
@@ -137,11 +137,11 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
 
 def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
     """显示帮助信息
-    
+
     Args:
         keyword: 搜索关键词
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """
@@ -173,7 +173,7 @@ def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
 
         logger.debug("显示全部帮助: %d 行", len(lines))
         return segments(header + body + footer)
-        
+
     except Exception as exc:
         return public_error_response(
             context,
@@ -185,19 +185,19 @@ def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
 def _filter_help_lines(lines: list[str], keyword: str) -> list[str]:
     """
     过滤帮助行，以插件为单元进行过滤
-    
+
     如果关键词匹配到插件名、任何命令或任何说明，
     则显示该插件的所有命令
-    
+
     lines 格式:
         [插件名]        - 插件标题
-          /命令         - 命令触发词  
+          /命令         - 命令触发词
             ↳ 说明      - 命令说明
     """
     # 第一步：按插件分组
     plugins: dict[str, list[str]] = {}
     current_plugin_name = None
-    
+
     for line in lines:
         parsed_header = _parse_help_header(line)
 
@@ -206,31 +206,31 @@ def _filter_help_lines(lines: list[str], keyword: str) -> list[str]:
             current_plugin_name, _ = parsed_header
             plugins[current_plugin_name] = [line]
             continue
-        
+
         # 其他行归入当前插件
         if current_plugin_name and line.strip():
             plugins[current_plugin_name].append(line)
-    
+
     # 第二步：检查每个插件是否匹配
     filtered = []
     for plugin_name, plugin_lines in plugins.items():
         plugin_matches = False
-        
+
         # 检查插件名是否匹配
         if keyword in plugin_name.lower():
             plugin_matches = True
-        
+
         # 检查插件内任何行是否匹配
         if not plugin_matches:
             for line in plugin_lines[1:]:  # 跳过插件标题行
                 if keyword in line.lower():
                     plugin_matches = True
                     break
-        
+
         # 如果匹配，添加该插件的所有行
         if plugin_matches:
             filtered.extend(plugin_lines)
-    
+
     return filtered
 
 def _format_help_lines(lines: list[str]) -> str:
@@ -238,7 +238,7 @@ def _format_help_lines(lines: list[str]) -> str:
     格式化帮助行，生成美观的纯文本输出
     """
     result = []
-    
+
     for line in lines:
         parsed_header = _parse_help_header(line)
 
@@ -254,30 +254,30 @@ def _format_help_lines(lines: list[str]) -> str:
         stripped = line.strip()
 
         # 命令行
-        if stripped.startswith("/") or (stripped and not "↳" in stripped):
+        if stripped.startswith("/") or (stripped and "↳" not in stripped):
             # 移除前导空格，添加命令图标
             result.append(f"  ⌘ {stripped}")
             continue
-        
+
         # 说明行
         if "↳" in stripped:
             # 提取说明文本
             desc = stripped.replace("↳", "").strip()
             result.append(f"      {desc}")
             continue
-        
+
         # 其他行原样保留
         if stripped:
             result.append(line)
-    
+
     return "\n".join(result)
 
 async def _handle_reload(context) -> list[dict[str, Any]]:
     """重载配置和插件
-    
+
     Args:
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """
@@ -299,10 +299,10 @@ async def _handle_reload(context) -> list[dict[str, Any]]:
 
 def _handle_plugins(context) -> list[dict[str, Any]]:
     """列出已加载的插件
-    
+
     Args:
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """
@@ -326,51 +326,51 @@ def _handle_plugins(context) -> list[dict[str, Any]]:
 
 def _handle_mute(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     """处理闭嘴命令
-    
+
     用法:
         /闭嘴         - 默认静音 10 分钟
         /闭嘴 30      - 静音 30 分钟
         /闭嘴 1h      - 静音 1 小时
-    
+
     Args:
         args: 命令参数
         event: 事件对象
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """
     try:
         group_id = event.get("group_id")
-        
+
         # 私聊不支持静音
         if group_id is None:
             logger.info("私聊不支持静音命令")
             return segments("❌ 私聊不支持此命令")
-        
+
         # 解析时长
         duration = _parse_duration(args.strip())
         if duration <= 0:
             duration = DEFAULT_MUTE_MINUTES
-        
+
         # 限制最大时长
         if duration > MAX_MUTE_MINUTES:
             logger.warning("静音时长超过限制: %s > %s", duration, MAX_MUTE_MINUTES)
             return segments(f"❌ 静音时长过长，最多支持 {MAX_MUTE_MINUTES//60} 小时")
-        
+
         # 执行静音
         context.mute_group(group_id, duration)
-        
+
         # 生成友好的时间显示
         if duration >= 60:
             hours = duration / 60
             time_str = f"{hours:.1f} 小时" if hours != int(hours) else f"{int(hours)} 小时"
         else:
             time_str = f"{int(duration)} 分钟"
-        
+
         logger.info("群 %s 设置静音: %s 分钟", group_id, duration)
         return segments(f"🤐 好的，我会安静 {time_str}")
-        
+
     except Exception as exc:
         return public_error_response(
             context,
@@ -381,32 +381,32 @@ def _handle_mute(args: str, event: dict[str, Any], context) -> list[dict[str, An
 
 def _handle_unmute(event: dict[str, Any], context) -> list[dict[str, Any]]:
     """处理说话命令
-    
+
     Args:
         event: 事件对象
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """
     try:
         group_id = event.get("group_id")
-        
+
         if group_id is None:
             logger.info("私聊不支持说话命令")
             return segments("❌ 私聊不支持此命令")
-        
+
         # 检查是否在静音中
         remaining = context.get_mute_remaining(group_id)
         if remaining <= 0:
             logger.info("群 %s 未在静音中", group_id)
             return segments("😊 我本来就没闭嘴啊~")
-        
+
         # 解除静音
         context.unmute_group(group_id)
         logger.info("群 %s 解除静音，剩余 %.1f 分钟", group_id, remaining)
         return segments("😊 好的，我又可以说话啦！")
-        
+
     except Exception as exc:
         return public_error_response(
             context,
@@ -417,15 +417,15 @@ def _handle_unmute(event: dict[str, Any], context) -> list[dict[str, Any]]:
 
 def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
     """设置 secrets 中的某个值
-    
+
     用法:
         /set_secret plugins.signin.yingshijufeng.sid NEW_VALUE
         /设置密钥 plugins.signin.yingshijufeng.sid NEW_VALUE
-    
+
     Args:
         args: 命令参数
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """
@@ -438,21 +438,21 @@ def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
             "  /set_secret admin_user_ids [123456,789012]\n\n"
             "💡 提示: 使用 /get_secret 查看现有配置路径"
         )
-    
+
     path, value = parts
-    
+
     try:
         # 验证路径格式
         if not re.match(r'^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$', path):
             return segments("❌ 路径格式错误，请使用 . 分隔，如: plugins.signin.sid")
-        
+
         # 尝试解析为 JSON（支持设置数字、布尔值等）
         try:
             parsed_value = json.loads(value)
         except json.JSONDecodeError:
             # 如果不是有效 JSON，就作为字符串处理
             parsed_value = value
-        
+
         principal = getattr(context, "principal", None)
         capabilities = getattr(context, "capabilities", None)
         capability = getattr(capabilities, "secret_admin", None)
@@ -466,7 +466,7 @@ def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
             return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
 
         capability.set(path, parsed_value)
-        
+
         logger.info("已更新配置: %s = %s", path, mask_secret(parsed_value))
         return segments(f"✅ 已更新 {path}\n新值: {mask_secret(parsed_value)}")
     except KeyError as exc:
@@ -487,15 +487,15 @@ def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
 
 def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
     """查看 secrets 中的某个值
-    
+
     用法:
         /get_secret plugins.signin.yingshijufeng.sid
         /查看密钥 plugins.signin.yingshijufeng.sid
-    
+
     Args:
         args: 命令参数
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """
@@ -508,7 +508,7 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
             "  /get_secret admin_user_ids\n\n"
             "💡 提示: 使用 /get_secret plugins 查看插件配置列表"
         )
-    
+
     try:
         principal = getattr(context, "principal", None)
         capabilities = getattr(context, "capabilities", None)
@@ -523,7 +523,7 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
             return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
 
         current = capability.get(path)
-        
+
         if isinstance(current, dict):
             keys_list = list(current.keys())
             if len(keys_list) > 20:
@@ -534,11 +534,11 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
                 suffix = ""
             logger.info("查询配置目录: %s, %d 个键", path, len(keys_list))
             return segments(f"🔑 {path} 包含以下键:\n  {', '.join(display_keys)}{suffix}")
-        
+
         if isinstance(current, list):
             logger.info("查询配置列表: %s, %d 个元素", path, len(current))
             return segments(f"🔑 {path} = {mask_secret(current)}")
-        
+
         logger.info("查询配置值: %s", path)
         return segments(f"🔑 {path} = {mask_secret(current)}")
     except KeyError:
@@ -554,10 +554,10 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
 
 async def _handle_metrics(context) -> list[dict[str, Any]]:
     """查看运行指标
-    
+
     Args:
         context: 插件上下文
-        
+
     Returns:
         消息段列表
     """
@@ -571,7 +571,7 @@ async def _handle_metrics(context) -> list[dict[str, Any]]:
         if not summary:
             logger.warning("无法获取 Metrics 数据")
             return segments("❌ 无法获取 Metrics 数据")
-        
+
         global_stats = summary.get("global", {})
         lines = [
             "📈 运行指标",
@@ -595,7 +595,7 @@ async def _handle_metrics(context) -> list[dict[str, Any]]:
 
         logger.info("查询运行指标")
         return segments("\n".join(lines))
-        
+
     except Exception as exc:
         return public_error_response(
             context,
@@ -606,36 +606,36 @@ async def _handle_metrics(context) -> list[dict[str, Any]]:
 
 def _parse_duration(text: str) -> float:
     """解析时长字符串
-    
+
     支持格式:
         10      -> 10 分钟
         30m     -> 30 分钟
         1h      -> 60 分钟
         1.5h    -> 90 分钟
-    
+
     Args:
         text: 时长字符串
-        
+
     Returns:
         时长(分钟)，解析失败返回 0
     """
     if not text:
         return 0
-    
+
     text = text.lower().strip()
-    
+
     try:
         # 小时格式
         if text.endswith("h") or text.endswith("小时"):
             num = re.sub(r'[h小时]+$', '', text)
             hours = float(num)
             return hours * 60
-        
+
         # 分钟格式
         if text.endswith("m") or text.endswith("分钟") or text.endswith("min"):
             num = re.sub(r'(min|分钟|m)$', '', text)
             return float(num)
-        
+
         # 纯数字默认为分钟
         minutes = float(text)
         return minutes

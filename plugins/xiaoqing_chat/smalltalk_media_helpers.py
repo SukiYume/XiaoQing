@@ -3,9 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from .media import render_event_media
-from .media.qq_face_catalog import mark_qq_face_used_by_id
-from .media.qq_face_catalog import mark_qq_face_used
 from .media.emoji_library import mark_emoji_used, mark_emoji_used_by_hash
+from .media.qq_face_catalog import mark_qq_face_used, mark_qq_face_used_by_id
 from .media_registry import upsert_registered_media_items
 from .message_parts import (
     build_text_message_parts,
@@ -14,7 +13,6 @@ from .message_parts import (
     replace_message_media_parts,
 )
 from .smalltalk_models import _GeneratedSmalltalkTurn
-
 
 _MEDIA_PART_KINDS = ("emoji", "qq_face", "image")
 

@@ -89,6 +89,7 @@ def test_search_items_applies_date_range_filters():
 
         assert [item.id for item in results] == ["note_april"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -308,6 +309,7 @@ def test_ledger_cli_edit_recomputes_amount_cents_when_amount_changes():
         assert item.amount == 56.78
         assert item.amount_cents == 5678
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -355,6 +357,7 @@ def test_daily_briefing_orders_urgent_tasks_first():
 
         assert [task.id for task in tasks] == ["task-urgent", "task-later"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -403,6 +406,7 @@ def test_daily_briefing_excludes_cancelled_tasks():
         assert [task.id for task in tasks] == ["task-open-today"]
         assert overdue == []
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -448,6 +452,7 @@ def test_daily_migration_updates_plan_date_and_invalidates_task_cache():
         ).fetchone()
         assert raw["category"] == "工作"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -569,6 +574,7 @@ def test_todo_edit_only_updates_explicit_fields_and_accepts_24_hour_deadline():
         assert task.plan_date == "2026-05-01"
         assert task.deadline_at == "2026-05-02T00:00:00"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -607,6 +613,7 @@ def test_todo_edit_title_phrase_updates_title_only():
         assert task.deadline_at == "2026-05-01T18:00:00"
         assert task.priority == 2
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -651,6 +658,7 @@ def test_todo_edit_plain_text_and_metadata_update_only_mentioned_fields():
             assert task.deadline_at == "2026-05-01T18:00:00"
             assert task.priority == 2
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -687,6 +695,7 @@ def test_todo_edit_keeps_title_when_only_reminder_changes():
         assert task.title == "提交材料"
         assert task.remind_times == ["2026-05-02T00:00:00"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -735,6 +744,7 @@ def test_note_list_accepts_bare_time_range_before_category_inference(monkeypatch
         assert "四月 RustDesk" not in result["message"]
         assert "六月 RustDesk" not in result["message"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -823,6 +833,7 @@ def test_event_edit_explicit_fields_do_not_become_title_without_ai():
         assert event.notes == "原备注"
         assert event.start_time == "2026-05-05T00:00:00"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -854,6 +865,7 @@ def test_note_edit_only_updates_explicit_metadata_when_no_body():
         assert note.category == "新分类"
         assert note.tags == ["新标签"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -912,6 +924,7 @@ def test_task_list_supports_cat_tag_and_date_filters():
         bad_page = asyncio.run(handler.list_tasks(owner_id, "工作 page:x", SimpleNamespace()))
         assert bad_page["status"] == "error"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -949,6 +962,7 @@ def test_diary_list_supports_cat_tag_and_rejects_invalid_range():
         invalid = asyncio.run(handler.list_diaries(owner_id, "not-a-range", SimpleNamespace()))
         assert invalid["status"] == "error"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1015,6 +1029,7 @@ def test_search_supports_tag_filter_and_ledger_category_filter():
         bad_range = asyncio.run(handler.search(owner_id, "CmdAudit range=not-a-range", SimpleNamespace()))
         assert bad_range["status"] == "error"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1092,6 +1107,7 @@ def test_view_commands_reject_extra_arguments():
             assert result["status"] == "error"
             assert "只接受" in result["message"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1206,6 +1222,7 @@ def test_undo_delete_restores_logged_task_and_note_batches():
         assert db.get_item("note-a", owner_id).title == "NA"
         assert db.get_item("note-b", owner_id).title == "NB"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1256,6 +1273,7 @@ def test_undo_delete_restores_event_collection_and_children_from_log():
         assert db.get_item("coll-undo_m01", owner_id).title == "提审"
         assert db.get_item("coll-undo_m02", owner_id).title == "上线"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -1299,4 +1317,5 @@ def test_rebuild_fts_index_repairs_missing_and_stale_rows():
         assert conn.execute("SELECT 1 FROM items_fts WHERE id = ?", ("note-live",)).fetchone() is not None
         assert conn.execute("SELECT 1 FROM items_fts WHERE id = ?", ("note-deleted",)).fetchone() is None
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)

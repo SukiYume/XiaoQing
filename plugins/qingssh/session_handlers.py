@@ -792,7 +792,7 @@ async def _handle_showimg_command(
         message_segments.append(f"📷 已下载 {len(downloaded_files)} 张图片\n")
 
         # 发送图片消息
-        for filename, local_path in downloaded_files:
+        for _filename, local_path in downloaded_files:
             img_segment = image(str(local_path))
             action = build_action([img_segment], context.current_user_id, context.current_group_id)
             if action:

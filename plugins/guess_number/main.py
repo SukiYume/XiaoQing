@@ -25,7 +25,6 @@ from core.args import parse
 from core.plugin_base import segments
 from core.public_errors import public_error_response
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -55,37 +54,37 @@ def init(context=None) -> None:
 async def handle(command: str, args: str, event: dict, context) -> list:
     """
     命令处理入口
-    
+
     处理初始命令和子命令。
     后续的猜测消息由 handle_session() 处理。
     """
     try:
         parsed = parse(args)
-        
+
         # 如果有参数，检查是否为子命令
         if parsed and parsed.first:
             subcommand = parsed.first.lower()
-            
+
             # 帮助命令
             if subcommand in {"help", "帮助", "?"}:
                 return segments(_show_help())
-            
+
             # 状态查询
             if subcommand in {"status", "状态", "info", "信息"}:
                 return await _handle_status(context)
-            
+
             # 重新开始（结束当前游戏并开始新游戏）
             if subcommand in {"restart", "重新开始", "重开"}:
                 await context.end_session()
                 # 不带参数重新开始
                 return await _start_game("", context)
-            
+
             # 如果不是子命令，作为难度参数处理
             return await _start_game(subcommand, context)
-        
+
         # 无参数，直接开始游戏
         return await _start_game("", context)
-        
+
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="guess_number.handle")
 
@@ -103,13 +102,13 @@ async def _start_game(difficulty: str, context) -> list[dict]:
             "发送「退出」/「取消」放弃游戏\n"
             "发送 /猜数字 restart 重新开始"
         )
-    
+
     # 解析难度参数
     min_num, max_num, max_attempts = _parse_difficulty(difficulty)
-    
+
     # 生成目标数字
     target = random.randint(min_num, max_num)
-    
+
     # 创建会话
     await context.create_session(
         initial_data={
@@ -125,14 +124,14 @@ async def _start_game(difficulty: str, context) -> list[dict]:
         },
         timeout=SESSION_TIMEOUT,
     )
-    
+
     logger.info(
         "Game started: range=%d-%d, max_attempts=%d, user=%s",
         min_num, max_num, max_attempts, context.current_user_id
     )
-    
+
     difficulty_text = _get_difficulty_name(difficulty)
-    
+
     return segments(
         f"🎮 猜数字游戏开始！\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -153,10 +152,10 @@ async def _handle_status(context) -> list[dict]:
             "📊 当前没有进行中的游戏\n"
             "发送 /猜数字 开始新游戏"
         )
-    
+
     history = session.get("history", [])
     history_str = " → ".join(str(g) for g in history) if history else "（尚未开始）"
-    
+
     return segments(
         f"📊 游戏状态\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -181,10 +180,10 @@ async def handle_session(
 ) -> list[dict]:
     """
     处理会话消息
-    
+
     当用户有活跃会话时，Dispatcher 会调用这个函数处理后续消息。
     框架已自动处理退出命令（退出/取消/exit/quit/q），插件无需再处理。
-    
+
     参数:
         text: 用户发送的原始文本
         event: OneBot 事件
@@ -198,10 +197,10 @@ async def handle_session(
     attempts = session.get("attempts", 0)
     max_attempts = session.get("max_attempts", MAX_ATTEMPTS)
     history = session.get("history", [])
-    
+
     # 解析用户输入
     guess_text = text.strip()
-    
+
     # 检查特殊命令
     if guess_text.lower() in {"status", "状态", "info", "信息", "?"}:
         history_str = " → ".join(str(g) for g in history) if history else "（尚未开始）"
@@ -211,7 +210,7 @@ async def handle_session(
             f"剩余次数: {session.get('remaining', 0)}/{max_attempts}\n"
             f"猜测历史: {history_str}"
         )
-    
+
     # 尝试解析为数字
     try:
         guess = int(guess_text)
@@ -220,35 +219,35 @@ async def handle_session(
             f"❓ 请输入一个数字（{min_num}-{max_num}）\n"
             f"💡 输入「退出」/「取消」可以放弃游戏"
         )
-    
+
     # 验证范围
     if guess < min_num or guess > max_num:
         return segments(
             f"⚠️ 请输入 {min_num} 到 {max_num} 之间的数字！"
         )
-    
+
     # 更新尝试次数
     attempts += 1
     remaining = max_attempts - attempts
     history.append(guess)
-    
+
     session.set("attempts", attempts)
     session.set("history", history)
     session.set("remaining", remaining)
-    
+
     # 判断结果
     if guess == target:
         # 猜对了！
         await context.end_session()
-        
+
         # 生成历史记录展示
         history_str = " → ".join(str(g) for g in history)
-        
+
         logger.info(
             "Game won: user=%s, attempts=%d",
             context.current_user_id, attempts
         )
-        
+
         return segments(
             f"🎉 恭喜你猜对了！\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -258,17 +257,17 @@ async def handle_session(
             f"━━━━━━━━━━━━━━━━━━\n"
             f"{_get_rating(attempts, max_attempts)}"
         )
-    
+
     # 检查是否用尽次数
     if remaining <= 0:
         await context.end_session()
         history_str = " → ".join(str(g) for g in history)
-        
+
         logger.info(
             "Game lost: user=%s, attempts=%d",
             context.current_user_id, attempts
         )
-        
+
         return segments(
             f"😢 游戏结束，次数用尽！\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -277,7 +276,7 @@ async def handle_session(
             f"━━━━━━━━━━━━━━━━━━\n"
             f"再接再厉！发送 /猜数字 开始新游戏"
         )
-    
+
     # 给出提示
     if guess < target:
         hint_emoji = "📈"
@@ -293,7 +292,7 @@ async def handle_session(
         new_max = min(max_num, guess - 1)
         session.set("max", new_max)
         session.set("hint", f"{min_num}-{new_max}")
-    
+
     return segments(
         f"{hint_emoji} {hint_text}\n"
         f"剩余次数: {remaining}\n"
@@ -358,7 +357,7 @@ def _get_difficulty_name(difficulty: str) -> str:
 def _parse_difficulty(difficulty: str) -> tuple:
     """
     解析难度参数
-    
+
     Returns:
         (min_num, max_num, max_attempts) 元组
     """
@@ -376,7 +375,7 @@ def _parse_difficulty(difficulty: str) -> tuple:
 def _get_rating(attempts: int, max_attempts: int) -> str:
     """根据尝试次数给出评价"""
     ratio = attempts / max_attempts
-    
+
     if attempts == 1:
         return "🏆 难以置信！一发入魂！"
     elif ratio <= 0.3:

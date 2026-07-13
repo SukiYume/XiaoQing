@@ -8,7 +8,6 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import feedparser
 import pandas as pd
@@ -60,7 +59,7 @@ _ARXIV_REDIRECT_POLICY = RedirectPolicy(
 )
 
 
-def _get_request_params(config: Optional[dict] = None) -> tuple:
+def _get_request_params(config: dict | None = None) -> tuple:
     """
     获取请求参数（代理、SSL验证、超时）
 
@@ -87,7 +86,7 @@ def _get_request_params(config: Optional[dict] = None) -> tuple:
     return proxies, verify, timeout
 
 
-def _fetch_arxiv_page(url: Optional[str] = None, config: Optional[dict] = None) -> Optional[BeautifulSoup]:
+def _fetch_arxiv_page(url: str | None = None, config: dict | None = None) -> BeautifulSoup | None:
     """
     获取 arXiv 页面并解析为 BeautifulSoup 对象。
 
@@ -129,7 +128,7 @@ def _fetch_arxiv_page(url: Optional[str] = None, config: Optional[dict] = None) 
     return BeautifulSoup(response.body, 'html.parser')
 
 
-def get_today_arxiv(url: Optional[str] = None) -> pd.DataFrame:
+def get_today_arxiv(url: str | None = None) -> pd.DataFrame:
     """
     从 arXiv 网页获取今日论文列表（含标题和摘要）
 
@@ -192,20 +191,20 @@ def get_today_arxiv(url: Optional[str] = None) -> pd.DataFrame:
     return data
 
 # 注意：此函数目前未被推理流程调用。若需启用，可在 config.json 中添加 "source": "api" 开关并在 arxiv_inference.py 中适配。
-def get_today_arxiv_api(days: Optional[int] = None) -> pd.DataFrame:
+def get_today_arxiv_api(days: int | None = None) -> pd.DataFrame:
     """
     从 arXiv API 获取最近几日的论文列表（含标题和摘要）
-    
+
     Args:
         days: 查询最近多少天的论文，默认使用配置文件中的值（默认2天）
-        
+
     Returns:
         包含 'arXiv ID', 'Title', 'Abstract' 列的 DataFrame
     """
     config = load_plugin_config()
     if days is None:
         days = config.get("arxiv", {}).get("api_days", 2)
-    
+
     proxies, verify, timeout = _get_request_params(config)
 
     BASE_URL = 'https://export.arxiv.org/api/query'
@@ -222,7 +221,7 @@ def get_today_arxiv_api(days: Optional[int] = None) -> pd.DataFrame:
         'sortBy': 'submittedDate',
         'sortOrder': 'ascending'
     }
-    
+
     try:
         response = requests_request_bounded(
             "GET",
@@ -266,15 +265,15 @@ def get_today_arxiv_api(days: Optional[int] = None) -> pd.DataFrame:
 
     return data
 
-def check_arxiv_update_date(url: Optional[str] = None) -> Optional[str]:
+def check_arxiv_update_date(url: str | None = None) -> str | None:
     """
     检查 arXiv 页面的更新日期
-    
+
     从页面中提取类似 "Showing new listings for Wednesday, 4 February 2026" 的日期信息。
-    
+
     Args:
         url: arXiv 列表页 URL，默认使用配置文件中的 URL
-        
+
     Returns:
         日期字符串（格式如 "2026-02-04"），如果无法获取则返回 None
     """

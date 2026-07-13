@@ -400,7 +400,7 @@ async def test_app_start_creates_shared_http_session_with_default_timeout(temp_a
 async def test_app_start_tracks_and_stops_background_tasks(temp_app_root: Path):
     """Test app start/stop manages WS and watch background tasks."""
     config_file = temp_app_root / "config" / "config.json"
-    with open(config_file, "r", encoding="utf-8") as f:
+    with open(config_file, encoding="utf-8") as f:
         config = json.load(f)
     config["enable_ws_client"] = True
     config["onebot_ws_uri"] = "ws://localhost:6700/ws"

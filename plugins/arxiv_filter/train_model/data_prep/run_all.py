@@ -11,12 +11,11 @@
   Step 3: 合并、标记正负样本，输出最终训练数据集
 """
 
+import argparse
 import subprocess
 import sys
-import argparse
 import time
 from pathlib import Path
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 

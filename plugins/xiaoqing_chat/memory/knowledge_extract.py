@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from ..llm.llm_client import LLMError, chat_completions
+from ..llm.prompt_builder import ChatMessage
+from ..message_parts import render_stored_message
 from ..utils.json_parsing import extract_named_list_field, parse_first_json_object
 from .memory import StoredMessage
 from .memory_db import MemoryDB
 from .person_profile import update_profile_and_index
-from ..llm.prompt_builder import ChatMessage
-from ..message_parts import render_stored_message
 
 
 @dataclass(frozen=True)
@@ -21,7 +22,7 @@ class WordDef:
 
 @dataclass(frozen=True)
 class PersonFact:
-    subject_id: Optional[int]
+    subject_id: int | None
     subject_name: str
     fact: str
     evidence: str
@@ -149,7 +150,7 @@ def _build_fact_dialogue(history: Sequence[StoredMessage], *, max_chars: int = 1
 
 def build_fact_messages(*, bot_name: str, history: Sequence[StoredMessage]) -> list[ChatMessage]:
     dialogue = _build_fact_dialogue(history, max_chars=1800)
-    user = ("对话如下：\n{dialogue}\n\n从中提炼 0-6 条事实。").format(dialogue=dialogue)
+    user = (f"对话如下：\n{dialogue}\n\n从中提炼 0-6 条事实。")
     return [
         ChatMessage(role="system", content=_FACT_SYSTEM.strip()),
         ChatMessage(role="user", content=user.strip()),
@@ -163,7 +164,7 @@ def _parse_fact_json(text: str) -> list[PersonFact]:
         if not isinstance(item, dict):
             continue
         subject_id_raw = item.get("subject_id", None)
-        subject_id: Optional[int] = None
+        subject_id: int | None = None
         if subject_id_raw is not None:
             try:
                 subject_id = int(subject_id_raw)

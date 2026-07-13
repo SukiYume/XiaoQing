@@ -230,6 +230,7 @@ def test_humanize_typing_delay_disabled_when_flag_off():
 def test_refresh_mood_state_reuses_active_mood_without_reroll():
     import random
     import time
+
     from plugins.xiaoqing_chat.handlers import _refresh_mood_state
 
     state = MagicMock()
@@ -257,6 +258,7 @@ def test_refresh_mood_state_reuses_active_mood_without_reroll():
 
 def test_refresh_mood_state_resets_after_long_idle():
     import time
+
     from plugins.xiaoqing_chat.handlers import _refresh_mood_state
 
     state = MagicMock()

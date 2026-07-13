@@ -4,7 +4,7 @@
 
 import pytest
 
-from core.args import parse, tokenize, ParsedArgs
+from core.args import parse, tokenize
 
 # ============================================================
 # tokenize 测试
@@ -246,6 +246,7 @@ class TestParsedArgs:
         original_tokens = args.tokens.copy()
         args.tokens.append("four")
         # 这是预期的行为 - tokens 是可变列表
+        assert original_tokens == ["one", "two", "three"]
         assert args.tokens == ["one", "two", "three", "four"]
 
 # ============================================================

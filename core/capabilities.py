@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 
 def _secret_path_parts(path: str) -> list[str]:
