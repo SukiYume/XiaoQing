@@ -1,7 +1,7 @@
 """Typed models for core data structures."""
 
 import json
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -12,20 +12,20 @@ from .plugin_execution import PluginConcurrency
 class OneBotEvent(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    time: Optional[int] = Field(default=None, description="事件时间戳")
-    self_id: Optional[int] = Field(default=None, description="机器人 QQ 号")
-    post_type: Optional[str] = Field(default=None, description="事件类型")
-    message_type: Optional[str] = None
-    sub_type: Optional[str] = None
-    message_id: Optional[int] = None
-    user_id: Optional[int] = None
-    group_id: Optional[int] = None
-    message: Optional[Union[list[dict[str, Any]], str]] = None
-    raw_message: Optional[str] = None
+    time: int | None = Field(default=None, description="事件时间戳")
+    self_id: int | None = Field(default=None, description="机器人 QQ 号")
+    post_type: str | None = Field(default=None, description="事件类型")
+    message_type: str | None = None
+    sub_type: str | None = None
+    message_id: int | None = None
+    user_id: int | None = None
+    group_id: int | None = None
+    message: list[dict[str, Any]] | str | None = None
+    raw_message: str | None = None
 
     @field_validator("message", mode="before")
     @classmethod
-    def _coerce_message(cls, v: Any) -> Optional[Union[list[dict[str, Any]], str]]:
+    def _coerce_message(cls, v: Any) -> list[dict[str, Any]] | str | None:
         """处理 message 字段的各种格式，某些 OneBot 实现可能发送空字符串而非列表"""
         if v is None or v == "":
             return v
@@ -71,8 +71,8 @@ class PluginScheduleManifest(BaseModel):
 
     handler: str
     cron: dict[str, Any]
-    id: Optional[str] = None
-    group_ids: Optional[list[int]] = None
+    id: str | None = None
+    group_ids: list[int] | None = None
     description: str | None = None
     enabled: bool = True
 

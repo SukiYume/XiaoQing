@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -52,7 +52,7 @@ _ADS_BIBTEX_MIME_POLICY = MimePolicy(
 class ADSClient:
     def __init__(self, token: str, session: aiohttp.ClientSession, context: Any | None = None):
         """Initialize ADS client with API token and shared HTTP session.
-        
+
         Args:
             token: ADS API token
             session: Shared aiohttp ClientSession for connection pooling
@@ -92,16 +92,16 @@ class ADSClient:
         self,
         query: str,
         max_results: int = DEFAULT_MAX_RESULTS,
-        fields: Optional[list[str]] = None
+        fields: list[str] | None = None
     ) -> list[dict[str, Any]]:
         """
         Search for papers using ADS search API.
-        
+
         Args:
             query: Search query string (supports ADS query syntax)
             max_results: Maximum number of results to return
             fields: list of fields to retrieve
-            
+
         Returns:
             List of paper dictionaries from ADS API response
         """
@@ -138,10 +138,10 @@ class ADSClient:
             )
             return []
 
-    async def get_bibtex(self, bibcode: str) -> Optional[str]:
+    async def get_bibtex(self, bibcode: str) -> str | None:
         """
         Get BibTeX citation for a paper.
-        
+
         The ADS export API returns JSON with 'msg' and 'export' fields, but
         historically also labels that JSON as text.  Only this endpoint uses
         the narrow legacy text MIME compatibility policy.
@@ -169,7 +169,7 @@ class ADSClient:
             )
             return None
 
-    async def get_paper_by_bibcode(self, bibcode: str) -> Optional[dict[str, Any]]:
+    async def get_paper_by_bibcode(self, bibcode: str) -> dict[str, Any] | None:
         url = f"{self.base_url}/search/query"
         params = {
             "q": f"bibcode:{bibcode}",
@@ -259,7 +259,7 @@ class ADSClient:
         query = f'author:"{author}"'
         return await self.search_papers(query, max_results)
 
-    async def search_by_arxiv_id(self, arxiv_id: str) -> Optional[dict[str, Any]]:
+    async def search_by_arxiv_id(self, arxiv_id: str) -> dict[str, Any] | None:
         arxiv_id = self._normalize_arxiv_id(arxiv_id)
         query = f"arxiv:{arxiv_id}"
         papers = await self.search_papers(query, max_results=1)
@@ -287,7 +287,7 @@ class ADSClient:
         return arxiv_id
 
     @staticmethod
-    def extract_arxiv_id(text: str) -> Optional[str]:
+    def extract_arxiv_id(text: str) -> str | None:
         """
         Extract arXiv ID from text (e.g., bibcode).
         Supports:

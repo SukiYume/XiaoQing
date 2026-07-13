@@ -784,7 +784,7 @@ def _render_summary_only_media(
         emotion_tags = _normalize_emotion_tags(cleaned)
         description = cleaned or "一张表情包"
     else:
-        emotion_tags = tuple()
+        emotion_tags = ()
         description = cleaned or "一张图片"
     marker = _build_marker(kind, description, emotion_tags)
     summary_key = f"{segment_type}:{kind}:{summary or description}"
@@ -802,7 +802,7 @@ def _render_face_segment(segment: dict[str, Any]) -> RenderedMedia:
     data = segment.get("data", {}) or {}
     face_id = str(data.get("id", "") or "").strip()
     label = describe_face_segment(segment)
-    emotion_tags = tuple()
+    emotion_tags = ()
     if not label.startswith("id=") and "系统表情" not in label:
         emotion_tags = _normalize_emotion_tags(label)
     if face_id:
@@ -858,7 +858,7 @@ def _upgrade_rendered_media_from_registry(
         return rendered_items
 
     upgraded: list[RenderedMedia] = []
-    for original, resolved in zip(rendered_items, resolved_refs):
+    for original, resolved in zip(rendered_items, resolved_refs, strict=False):
         if not isinstance(resolved, dict):
             upgraded.append(original)
             continue

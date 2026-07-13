@@ -1,16 +1,16 @@
 """测试wolframalpha插件 - Wolfram|Alpha计算引擎"""
 
+import importlib.util
 import json
-import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock
-from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
 
 from core.bounded_http import BoundedHttpResponse
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-import importlib.util
 spec = importlib.util.spec_from_file_location("wolframalpha_main", ROOT / "plugins" / "wolframalpha" / "main.py")
 wolframalpha = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wolframalpha)

@@ -70,6 +70,22 @@
 | arxiv | `use_ssl_verify` | 是否验证 SSL 证书 |
 | arxiv | `timeout` | 请求超时（秒） |
 
+模型权重属于外部运行资产，不包含在 PyPI 的 wheel 或 sdist 中。干净的
+`pip install xiaoqing[arxiv-ml]` 只安装推理代码和依赖，部署时还必须提供一个
+完整模型目录。推荐把模型放在包目录之外，并设置绝对路径：
+
+```bash
+export ARXIV_MODEL_PATH=/srv/xiaoqing-models/arxiv
+```
+
+Windows PowerShell 可使用
+`$env:ARXIV_MODEL_PATH = 'D:\models\xiaoqing-arxiv'`。环境变量优先于
+`config.json` 的 `model.path`；仓库工具
+`python scripts/arxiv_inference_cli.py --model-path <目录>` 的命令行参数优先级最高。
+显式参数或环境变量一旦设置即为权威路径：路径不存在时推理会明确失败，不会静默
+回退到另一套模型。模型目录必须来自可信来源；部分后端会读取可执行的序列化模型
+文件。Python 发布门禁只验证推理代码，不验证外部模型权重的来源或完整性。
+
 ## 项目结构
 
 ```
@@ -81,9 +97,8 @@ arxiv_filter/
 ├── utils.py                  # 公共工具（配置加载）
 ├── config.json               # 插件配置
 ├── plugin.json               # 插件元数据
-├── best_model/               # 预训练 SciBERT 模型
 ├── data/                     # 运行时数据（更新状态等）
-└── train_model/              # 模型训练代码和数据
+└── train_model/              # 仅仓库开发使用，不进入 PyPI 产物
     ├── run_all.py            # 一键构建训练数据集
     ├── step1_extract_positive_ids.py
     ├── step2_fetch_all_astro_ph.py
@@ -99,6 +114,8 @@ arxiv_filter/
 - 任务: 二分类（感兴趣 / 不感兴趣）
 - 损失函数: Focal Loss (γ=4) + 类别加权 + WeightedRandomSampler
 - 输出: 正类概率 (0-1)
+- 发布边界: 模型权重不随 Python 包发布，必须通过 `ARXIV_MODEL_PATH` 或
+  `model.path` 指向外部目录
 
 ## 依赖
 

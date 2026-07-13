@@ -1,6 +1,6 @@
 {
   "model": {
-    "path": "best_mode",
+    "path": "best_model",
     "threshold": 0.3826,
     "batch_size": 256,
     "max_len": 512

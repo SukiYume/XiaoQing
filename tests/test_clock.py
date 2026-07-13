@@ -2,17 +2,14 @@
 Tests for core/clock.py - Clock and random interfaces for testability
 """
 
-import sys
 import time
-from typing import Sequence
+from collections.abc import Sequence
 from typing import TypeVar
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock
 
 import pytest
 
 from core.clock import (
-    IClock,
-    IRandom,
     SystemClock,
     SystemRandom,
 )

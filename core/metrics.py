@@ -4,14 +4,14 @@
 提供插件执行时间统计、消息处理监控等功能。
 """
 
-import asyncio
 import functools
 import logging
 import threading
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class ExecutionStats:
     slow_calls: int = 0  # 超过阈值的调用次数
     errors: int = 0
     last_call_time: float = 0.0
-    
+
     def record(self, duration: float, slow_threshold: float = 5.0, is_error: bool = False) -> None:
         """记录一次执行"""
         self.total_calls += 1
@@ -33,27 +33,27 @@ class ExecutionStats:
         self.min_time = min(self.min_time, duration)
         self.max_time = max(self.max_time, duration)
         self.last_call_time = time.time()
-        
+
         if duration > slow_threshold:
             self.slow_calls += 1
-        
+
         if is_error:
             self.errors += 1
-    
+
     @property
     def avg_time(self) -> float:
         """平均执行时间"""
         if self.total_calls == 0:
             return 0.0
         return self.total_time / self.total_calls
-    
+
     @property
     def success_rate(self) -> float:
         """成功率"""
         if self.total_calls == 0:
             return 1.0
         return (self.total_calls - self.errors) / self.total_calls
-    
+
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         return {
@@ -70,10 +70,10 @@ class ExecutionStats:
 class MetricsCollector:
     """
     性能指标收集器
-    
+
     用于收集和统计插件执行、命令处理等性能数据。
     """
-    
+
     def __init__(self, slow_threshold: float = 5.0):
         """
         Args:
@@ -88,12 +88,12 @@ class MetricsCollector:
         # threading lock. Keep protected sections in-memory only; never await
         # or perform I/O while holding it.
         self._lock = threading.Lock()
-    
+
     @property
     def uptime(self) -> float:
         """运行时间（秒）"""
         return time.time() - self._start_time
-    
+
     async def record_plugin_execution(
         self,
         plugin_name: str,
@@ -103,7 +103,7 @@ class MetricsCollector:
     ) -> None:
         """
         记录插件执行
-        
+
         Args:
             plugin_name: 插件名称
             command_name: 命令名称
@@ -118,18 +118,18 @@ class MetricsCollector:
                 duration, self._slow_threshold, is_error
             )
             self._global_stats.record(duration, self._slow_threshold, is_error)
-        
+
         # 慢调用日志
         if duration > self._slow_threshold:
             logger.warning(
                 "Slow plugin execution: %s.%s took %.2fs",
                 plugin_name, command_name, duration
             )
-    
-    async def get_plugin_stats(self, plugin_name: Optional[str] = None) -> dict[str, Any]:
+
+    async def get_plugin_stats(self, plugin_name: str | None = None) -> dict[str, Any]:
         """
         获取插件统计数据
-        
+
         Args:
             plugin_name: 指定插件名称，None 表示获取所有插件
         """
@@ -141,7 +141,7 @@ class MetricsCollector:
                 name: stats.to_dict()
                 for name, stats in self._plugin_stats.items()
             }
-    
+
     async def get_command_stats(self) -> dict[str, Any]:
         """获取命令统计数据"""
         with self._lock:
@@ -160,11 +160,11 @@ class MetricsCollector:
                 "commands_count": len(self._command_stats),
                 "top_slow_plugins": self._get_top_slow_plugins(5),
             }
-    
+
     async def get_summary(self) -> dict[str, Any]:
         """获取汇总统计"""
         return self.summary_snapshot()
-    
+
     def _get_top_slow_plugins(self, n: int = 5) -> list[dict[str, Any]]:
         """获取最慢的插件"""
         sorted_plugins = sorted(
@@ -177,7 +177,7 @@ class MetricsCollector:
             for name, stats in sorted_plugins
             if stats.total_calls > 0
         ]
-    
+
     async def reset(self) -> None:
         """重置所有统计数据"""
         with self._lock:
@@ -190,7 +190,7 @@ class MetricsCollector:
 def timed_async(collector: MetricsCollector, plugin_name: str, command_name: str):
     """
     异步函数计时装饰器
-    
+
     用法:
         @timed_async(metrics, "my_plugin", "my_command")
         async def my_handler(...):
@@ -217,14 +217,14 @@ def timed_async(collector: MetricsCollector, plugin_name: str, command_name: str
 class ExecutionTimer:
     """
     执行计时器（上下文管理器）
-    
+
     用法:
         async with ExecutionTimer(metrics, "plugin", "command") as timer:
             # 执行代码
             pass
         print(f"耗时: {timer.duration}s")
     """
-    
+
     def __init__(
         self,
         collector: MetricsCollector,
@@ -237,11 +237,11 @@ class ExecutionTimer:
         self.start_time: float = 0
         self.duration: float = 0
         self._is_error = False
-    
+
     async def __aenter__(self) -> "ExecutionTimer":
         self.start_time = time.perf_counter()
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         self.duration = time.perf_counter() - self.start_time
         self._is_error = exc_type is not None

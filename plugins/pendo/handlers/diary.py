@@ -7,9 +7,8 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from core.public_errors import public_error_message
-
 from core.plugin_base import run_sync
+from core.public_errors import public_error_message
 
 from ..config import DIARY_TEMPLATES, MOOD_ANALYSIS_CONFIG, PendoConfig
 from ..core.types import CommandMessage, PendoContext

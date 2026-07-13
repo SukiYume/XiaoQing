@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import ensure_dir
 
@@ -140,9 +140,9 @@ class JupyterKernelManager:
         self.figures_dir = data_dir / "figures"
         ensure_dir(self.figures_dir)
 
-        self._km: Optional[Any] = None
-        self._kc: Optional[Any] = None
-        self._started_at: Optional[float] = None
+        self._km: Any | None = None
+        self._kc: Any | None = None
+        self._started_at: float | None = None
         self._execution_count = 0
         self._execute_lock = asyncio.Lock()
         self._lifecycle_lock = threading.RLock()
@@ -153,7 +153,7 @@ class JupyterKernelManager:
 
         # 自动关闭相关
         self._last_activity = 0.0
-        self._shutdown_task: Optional[asyncio.Task] = None
+        self._shutdown_task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
     @staticmethod
@@ -524,7 +524,7 @@ try:
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     plt.ioff()
-    
+
     try:
         from IPython import get_ipython
         ipython = get_ipython()
@@ -949,7 +949,7 @@ except ImportError:
                 )
                 return "quarantined"
 
-    def _save_image(self, base64_data: str, index: int, execution_dir: Path) -> Optional[Path]:
+    def _save_image(self, base64_data: str, index: int, execution_dir: Path) -> Path | None:
         """保存 base64 图片到文件"""
         try:
             if len(base64_data) > ((MAX_IMAGE_BYTES + 2) // 3) * 4:

@@ -26,21 +26,12 @@ import shlex
 import signal
 import subprocess
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from core.args import parse
-from core.plugin_base import segments, text
+from core.plugin_base import segments
 from core.sensitive_audit import summarize_sensitive
 
-logger = logging.getLogger(__name__)
-
-URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
-WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
-AUDIT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
-AUDIT_STATUS_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
-ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
-
-# 从配置文件导入常量
 from .config import (
     DANGEROUS_PATTERNS,
     DEFAULT_TIMEOUT,
@@ -49,6 +40,13 @@ from .config import (
     UNSUPPORTED_SHELL_BUILTINS,
 )
 
+logger = logging.getLogger(__name__)
+
+URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+AUDIT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
+AUDIT_STATUS_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
+ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
 
 def init(context=None) -> None:
     """插件初始化"""
@@ -214,7 +212,7 @@ def _normalize_command_args(parts: list[str]) -> list[str]:
     return [_normalize_path_token(_strip_outer_quotes(part)) for part in parts]
 
 
-def _split_command(cmd_line: str) -> Optional[list[str]]:
+def _split_command(cmd_line: str) -> list[str] | None:
     """安全拆分命令参数，并按运行系统规范化路径参数。"""
     try:
         parts = shlex.split(cmd_line, posix=sys.platform != "win32")
@@ -224,7 +222,7 @@ def _split_command(cmd_line: str) -> Optional[list[str]]:
     return parts if parts else None
 
 
-def _extract_command(cmd_line: str) -> Optional[str]:
+def _extract_command(cmd_line: str) -> str | None:
     """提取命令名"""
     parts = _split_command(cmd_line)
     if not parts:
@@ -232,7 +230,7 @@ def _extract_command(cmd_line: str) -> Optional[str]:
     return re.split(r"[\\/]", parts[0])[-1]
 
 
-def _check_dangerous_patterns(cmd_line: str) -> Optional[str]:
+def _check_dangerous_patterns(cmd_line: str) -> str | None:
     """检查危险模式"""
     for pattern in DANGEROUS_PATTERNS:
         if re.search(pattern, cmd_line):
@@ -240,7 +238,7 @@ def _check_dangerous_patterns(cmd_line: str) -> Optional[str]:
     return None
 
 
-def _validate_command(cmd_line: str, context) -> Optional[str]:
+def _validate_command(cmd_line: str, context) -> str | None:
     """
     验证命令是否可执行。
 

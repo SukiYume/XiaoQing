@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from ..config.config import PersonalityConfig
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage
 from .pfc_utils import get_items_from_json
-from ..llm.prompt_builder import build_dialogue_prompt
+
 
 async def analyze_goals(
     *,

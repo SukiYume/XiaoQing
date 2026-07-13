@@ -136,6 +136,61 @@ xiaoqing = "main:cli"
 [tool.setuptools]
 py-modules = ["main"]
 include-package-data = true
+packages = [
+    "core",
+    "plugins",
+    "plugins.adnmb",
+    "plugins.ads_paper",
+    "plugins.apod",
+    "plugins.arxiv_filter",
+    "plugins.arxiv_filter.inference",
+    "plugins.astro_tools",
+    "plugins.bot_core",
+    "plugins.chat",
+    "plugins.chime",
+    "plugins.choice",
+    "plugins.codex",
+    "plugins.color",
+    "plugins.dict",
+    "plugins.earthquake",
+    "plugins.echo",
+    "plugins.github",
+    "plugins.guess_number",
+    "plugins.jupyter",
+    "plugins.minecraft",
+    "plugins.pendo",
+    "plugins.pendo.commands",
+    "plugins.pendo.core",
+    "plugins.pendo.handlers",
+    "plugins.pendo.models",
+    "plugins.pendo.services",
+    "plugins.pendo.utils",
+    "plugins.pendo.web",
+    "plugins.pendo.web.analytics",
+    "plugins.pendo.web.api",
+    "plugins.pendo.web.services",
+    "plugins.qingpet",
+    "plugins.qingpet.commands",
+    "plugins.qingpet.models",
+    "plugins.qingpet.services",
+    "plugins.qingpet.utils",
+    "plugins.qingssh",
+    "plugins.shell",
+    "plugins.signin",
+    "plugins.smalltalk",
+    "plugins.twitter",
+    "plugins.url_parser",
+    "plugins.voice",
+    "plugins.wolframalpha",
+    "plugins.xiaoqing_chat",
+    "plugins.xiaoqing_chat.config",
+    "plugins.xiaoqing_chat.expression",
+    "plugins.xiaoqing_chat.llm",
+    "plugins.xiaoqing_chat.media",
+    "plugins.xiaoqing_chat.memory",
+    "plugins.xiaoqing_chat.planning",
+    "plugins.xiaoqing_chat.utils",
+]
 
 [tool.setuptools.package-data]
 "*" = ["plugin.json"]
@@ -153,16 +208,6 @@ include-package-data = true
 "plugins.pendo.web.services" = ["assets/*.zip"]
 "plugins.xiaoqing_chat.config" = ["xiaoqing_config.json"]
 "plugins.xiaoqing_chat.media" = ["qq_face_builtin_catalog.json"]
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["core*", "plugins*"]
-exclude = [
-    "plugins.*_deprecated",
-    "plugins.*_deprecated.*",
-    "plugins.*deprecated",
-    "plugins.*deprecated.*",
-]
 
 # ============================================================
 # 工具配置
@@ -212,11 +257,11 @@ exclude_lines = [
 
 [tool.xiaoqing.coverage_floors]
 core = { line = 70, branch = 55 }
-"plugins.codex" = { line = 65, branch = 45 }
-"plugins.shell" = { line = 65, branch = 45 }
-"plugins.jupyter" = { line = 35, branch = 20 }
-"plugins.qingssh" = { line = 20, branch = 10 }
-"plugins.minecraft" = { line = 50, branch = 30 }
+"plugins.codex" = { line = 70, branch = 55 }
+"plugins.shell" = { line = 75, branch = 60 }
+"plugins.jupyter" = { line = 60, branch = 40 }
+"plugins.qingssh" = { line = 45, branch = 25 }
+"plugins.minecraft" = { line = 70, branch = 45 }
 "plugins.pendo" = { line = 60, branch = 40 }
 "plugins.xiaoqing_chat" = { line = 60, branch = 40 }
 "plugins.qingpet" = { line = 40, branch = 20 }

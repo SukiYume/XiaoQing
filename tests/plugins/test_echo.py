@@ -1,11 +1,12 @@
 """测试echo插件"""
 
-import pytest
+import importlib.util
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-import importlib.util
 spec = importlib.util.spec_from_file_location("echo_main", ROOT / "plugins" / "echo" / "main.py")
 echo = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(echo)

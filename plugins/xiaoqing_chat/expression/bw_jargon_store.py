@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence, cast
+from typing import Any, cast
 
 from ..store_base import StoreBase
 
@@ -26,9 +27,9 @@ class JargonRecord:
 class JargonStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
-        self._cache: Optional[dict[str, JargonRecord]] = None
+        self._cache: dict[str, JargonRecord] | None = None
 
-    def _path(self) -> Optional[Path]:
+    def _path(self) -> Path | None:
         return self._resolve_path("bw_learner", "jargon.json")
 
     @staticmethod

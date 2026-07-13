@@ -10,7 +10,6 @@ import importlib
 import logging
 import os
 from functools import partial
-from typing import Optional
 
 import pandas as pd
 import torch
@@ -33,7 +32,7 @@ _MODEL_CACHE: dict[tuple[str, str], tuple[object, object]] = {}
 # =============================================================================
 
 class TitleAbstractDataset(Dataset):
-    def __init__(self, titles: list[str], tokenizer, abstracts: Optional[list[str]] = None,
+    def __init__(self, titles: list[str], tokenizer, abstracts: list[str] | None = None,
                  max_len: int = 512):
         truncation = "only_second" if abstracts is not None else True
         enc = tokenizer(titles, text_pair=abstracts, add_special_tokens=True,

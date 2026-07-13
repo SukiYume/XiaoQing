@@ -1,7 +1,6 @@
 import logging
-from typing import Optional, Tuple, List
 
-from ..models import User, Pet
+from ..models import User
 from ..utils.constants import TITLES, PetStage
 from .database import Database
 
@@ -32,7 +31,7 @@ class UserService:
 
     # ──────────────────── 称号系统（Issue #48）────────────────────
 
-    def check_and_award_titles(self, user_id: str, group_id: int) -> List[str]:
+    def check_and_award_titles(self, user_id: str, group_id: int) -> list[str]:
         """检查并颁发称号，返回新获得的称号列表"""
         user = self.db.get_user(user_id, group_id)
         if not user:
@@ -79,7 +78,7 @@ class UserService:
 
         return new_titles
 
-    def get_user_titles(self, user_id: str, group_id: int) -> List[str]:
+    def get_user_titles(self, user_id: str, group_id: int) -> list[str]:
         """获取用户称号列表"""
         user = self.db.get_user(user_id, group_id)
         if not user:

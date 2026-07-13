@@ -18,15 +18,15 @@ arXiv 论文标题+摘要分类器训练脚本
 
 from __future__ import annotations
 
-import json
 import importlib
+import json
 import os
 import random
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -749,7 +749,9 @@ def eval_model(
         beta=threshold_beta,
     )
     all_preds = [1 if prob >= optimal_threshold else 0 for prob in all_positive_probs]
-    accuracy = sum(pred == label for pred, label in zip(all_preds, all_labels)) / len(all_labels)
+    accuracy = sum(
+        pred == label for pred, label in zip(all_preds, all_labels, strict=True)
+    ) / len(all_labels)
     # 生成分类报告
     report = cast(
         str,
@@ -1048,13 +1050,7 @@ def main(config: TrainingConfig = CONFIG) -> None:
             best_threshold_score = val_metrics.threshold_score
             best_threshold = val_metrics.optimal_threshold
             _log(
-                "      | ★ New best (recall={recall:.4f}, pos_f1={pos_f1:.4f}, fbeta={fbeta:.4f}, thr={thr:.4f}), saving -> {output_dir}".format(
-                    recall=val_metrics.positive_recall,
-                    pos_f1=best_positive_f1,
-                    fbeta=best_threshold_score,
-                    thr=best_threshold,
-                    output_dir=config.output_dir,
-                )
+                f"      | ★ New best (recall={val_metrics.positive_recall:.4f}, pos_f1={best_positive_f1:.4f}, fbeta={best_threshold_score:.4f}, thr={best_threshold:.4f}), saving -> {config.output_dir}"
             )
             model.save_pretrained(config.output_dir)
             tokenizer.save_pretrained(config.output_dir)

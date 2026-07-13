@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 # ── Shared question detection ──
 # Used across frequency_control, heartflow, goal_state, reply_checker.
 

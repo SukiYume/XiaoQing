@@ -130,8 +130,9 @@ def test_ci_and_docker_enforce_hash_checking() -> None:
     assert "requirements/python-${{ matrix.python-version }}-ci.lock" in ci
     assert "requirements/python-3.13-ci.lock" in ci
     assert "requirements/python-${{ matrix.python-version }}.lock" not in ci
-    assert ci.count("requirements/python-${{ matrix.python-version }}-ci.lock") == 2
-    assert 'pip install --require-hashes -r "$LOCK_FILE"' in ci
+    assert 'pip install --require-hashes -r "$CI_LOCK_FILE"' in ci
+    assert 'pip-audit --require-hashes -r "$CI_LOCK_FILE"' in ci
+    assert 'pip-audit --require-hashes -r "$RUNTIME_LOCK_FILE"' in ci
     assert "pip install --no-cache-dir --require-hashes" in dockerfile
     assert "requirements/python-3.13-runtime.lock" in dockerfile
     assert "python-3.13-ci.lock" not in dockerfile
@@ -139,14 +140,65 @@ def test_ci_and_docker_enforce_hash_checking() -> None:
     assert "python-3.13-ci.lock" not in compatibility_requirements
 
 
-def test_lock_refresh_workflow_uses_pinned_compiler_and_pull_request() -> None:
+def test_lock_refresh_workflow_isolates_generation_from_publication() -> None:
     workflow = (ROOT / ".github" / "workflows" / "dependency-locks.yml").read_text(encoding="utf-8")
+    generate, publish = workflow.split("  publish:", maxsplit=1)
 
-    assert "python -m pip install uv==0.11.28" in workflow
-    assert "python scripts/compile_locks.py --upgrade" in workflow
-    assert "python scripts/compile_locks.py --check" in workflow
-    assert workflow.index("compile_locks.py --upgrade") < workflow.index("compile_locks.py --check")
-    assert re.search(r"gh pr create\b", workflow)
+    assert "permissions: {}" in workflow.split("jobs:", maxsplit=1)[0]
+    assert "  generate:" in generate
+    assert "contents: read" in generate
+    assert "contents: write" not in generate
+    assert "pull-requests: write" not in generate
+    assert "GH_TOKEN" not in generate
+    assert "git push" not in generate
+    assert "gh pr create" not in generate
+    assert "python -m pip install uv" not in workflow
+    assert "python -m pip install --require-hashes -r requirements/python-3.13-ci.lock" in generate
+    assert generate.count("python -m pip install") == 1
+    assert "python scripts/compile_locks.py --upgrade" in generate
+    assert "python scripts/compile_locks.py --check" in generate
+    assert generate.index("compile_locks.py --upgrade") < generate.index("compile_locks.py --check")
+
+    assert "contents: write" in publish
+    assert "pull-requests: write" in publish
+    assert "setup-python" not in publish
+    assert "pip install" not in publish
+    assert "scripts/compile_locks.py" not in publish
+    assert "artifact-ids: ${{ needs.generate.outputs.artifact_id }}" in publish
+    assert "merge-multiple: true" in publish
+    assert publish.count("GH_TOKEN:") == 1
+    token_step = publish.split("GH_TOKEN:", maxsplit=1)[1]
+    assert "gh auth setup-git" in token_step
+    assert 'git push --force-with-lease="$lease" --set-upstream origin' in token_step
+    assert re.search(r"gh pr create\b", token_step)
+    assert "x-access-token" not in workflow
+
+
+def test_lock_refresh_bundle_has_fixed_files_and_strict_shell_validation() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "dependency-locks.yml").read_text(encoding="utf-8")
+    expected_locks = {
+        f"python-{version}-{profile}.lock" for version in VERSIONS for profile in ("ci", "runtime")
+    }
+
+    for filename in expected_locks:
+        assert filename in workflow
+    assert "SOURCE_COMMIT" in workflow
+    assert "SHA256SUMS" in workflow
+    assert "Lock bundle must contain exactly 10 members" in workflow
+    assert "SHA256SUMS must contain exactly nine records" in workflow
+    assert "sha256sum --check --strict SHA256SUMS" in workflow
+    assert "EXPECTED_MANIFEST_SHA256" in workflow
+    assert "actual_manifest_sha256" in workflow
+    assert "SOURCE_SHA: ${{ github.sha }}" in workflow
+    assert "SOURCE_COMMIT does not match the workflow source commit" in workflow
+    assert '[[ ! -f "$member" || -L "$member" ]]' in workflow
+    assert workflow.count("size < 1 || size > 16777216") == 2
+    assert workflow.count("bundle_total_size > 134217728") == 2
+    assert "Checksum manifest repeats a file" in workflow
+    assert "Checksum manifest omits a required file" in workflow
+    assert "install -m 0644" in workflow
+    assert workflow.count("ref: ${{ github.sha }}") == 2
+    assert "Publish checkout does not match the workflow source commit" in workflow
 
 
 def test_ci_mandatorily_checks_all_lock_freshness() -> None:

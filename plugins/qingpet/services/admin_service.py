@@ -1,8 +1,7 @@
 import logging
-from datetime import datetime, timedelta
-from typing import Optional, List
+from datetime import timedelta
 
-from ..models import Pet, User, GroupConfig, OperationLog
+from ..models import GroupConfig, OperationLog
 from ..utils.constants import PetStage
 from ..utils.time import utc_now
 from .database import Database
@@ -115,7 +114,7 @@ class AdminService:
 
         return self.db.update_user(user)
 
-    def get_logs(self, group_id: int, limit: int = 50) -> List[OperationLog]:
+    def get_logs(self, group_id: int, limit: int = 50) -> list[OperationLog]:
         return self.db.get_operation_logs(group_id, limit)
 
     def log_admin_operation(self, group_id: int, user_id: str, operation_type: str,

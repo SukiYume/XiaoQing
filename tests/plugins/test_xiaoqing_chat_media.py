@@ -230,7 +230,7 @@ async def test_render_local_media_file_uses_render_cache(mock_context):
             media_hash=resolved.media_hash,
             kind="image",
             description="海边落日",
-            emotion_tags=tuple(),
+            emotion_tags=(),
             marker="[图片：海边落日]",
             cached_path=resolved.cached_path,
         )
@@ -552,7 +552,7 @@ async def test_render_local_media_file_retries_generic_llm_cache_on_next_send(mo
         media_hash="",
         kind="emoji",
         description="动画表情",
-        emotion_tags=tuple(),
+        emotion_tags=(),
         marker="[表情包：动画表情]",
         cached_path=image_path,
     )
@@ -1477,7 +1477,7 @@ async def test_build_effective_user_text_preserves_mixed_media_order(mock_contex
                 media_hash="hash-1",
                 kind="image",
                 description="一只猫歪着头",
-                emotion_tags=tuple(),
+                emotion_tags=(),
                 marker="[图片：一只猫歪着头]",
             )
         ],
@@ -1507,7 +1507,7 @@ async def test_build_effective_user_text_keeps_media_position_after_prefix_strip
                 media_hash="hash-2",
                 kind="image",
                 description="一只猫歪着头",
-                emotion_tags=tuple(),
+                emotion_tags=(),
                 marker="[图片：一只猫歪着头]",
             )
         ],
@@ -2410,7 +2410,7 @@ async def test_render_resolved_media_writes_cache_once_on_cache_miss(mock_contex
         media_hash="hash-cache-miss",
         kind="image",
         description="一只猫在打哈欠",
-        emotion_tags=tuple(),
+        emotion_tags=(),
         marker="[图片：一只猫在打哈欠]",
         cached_path=cached_path,
     )
@@ -2542,7 +2542,7 @@ async def test_render_local_media_file_merges_latest_cache_before_save(mock_cont
             media_hash=resolved.media_hash,
             kind="image",
             description="新的图片描述",
-            emotion_tags=tuple(),
+            emotion_tags=(),
             marker="[图片：新的图片描述]",
             cached_path=resolved.cached_path,
         )

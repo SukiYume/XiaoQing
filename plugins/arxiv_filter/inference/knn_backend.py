@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -44,18 +44,21 @@ def _clean(x: object) -> str:
 
 
 def _build_texts(
-    df: pd.DataFrame, title_col: Optional[str], abstract_col: Optional[str]
-) -> List[str]:
+    df: pd.DataFrame, title_col: str | None, abstract_col: str | None
+) -> list[str]:
     titles = df[title_col].fillna("").astype(str).tolist() if title_col else [""] * len(df)
     if abstract_col and abstract_col in df.columns:
         abstracts = df[abstract_col].fillna("").astype(str).tolist()
-        return [f"Title: {_clean(t)}\nAbstract: {_clean(a)}" for t, a in zip(titles, abstracts)]
+        return [
+            f"Title: {_clean(t)}\nAbstract: {_clean(a)}"
+            for t, a in zip(titles, abstracts, strict=True)
+        ]
     return [f"Title: {_clean(t)}" for t in titles]
 
 
 def _resolve_col(
-    df: pd.DataFrame, trained_col: Optional[str], fallbacks: List[str]
-) -> Optional[str]:
+    df: pd.DataFrame, trained_col: str | None, fallbacks: list[str]
+) -> str | None:
     if trained_col and trained_col in df.columns:
         return trained_col
     for fb in fallbacks:
@@ -97,7 +100,7 @@ class KNNInferenceModel:
         self.neg_k: int = int(meta.get("neg_k", 5))
         self.neg_weight: float = float(meta.get("neg_weight", 0.5))
         self.threshold: float = float(meta.get("threshold", 0.5))
-        self.columns: Dict[str, Any] = meta.get("columns", {})
+        self.columns: dict[str, Any] = meta.get("columns", {})
 
         # ── 加载 embedding 库 ───────────────────────────────────────────
         pos_path = self.model_dir / "pos_embeddings.npy"
@@ -108,7 +111,7 @@ class KNNInferenceModel:
 
         neg_path = self.model_dir / "neg_embeddings.npy"
         if neg_path.exists():
-            self.neg_embeddings: Optional[np.ndarray] = np.load(neg_path)  # (n_neg, D)
+            self.neg_embeddings: np.ndarray | None = np.load(neg_path)  # (n_neg, D)
             logger.info("Loaded neg_embeddings: %s", self.neg_embeddings.shape)
         else:
             self.neg_embeddings = None
@@ -122,15 +125,15 @@ class KNNInferenceModel:
     # Encoding
     # ------------------------------------------------------------------
 
-    def encode(self, texts: List[str]) -> np.ndarray:
+    def encode(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.embed_dim), dtype=np.float32)
-        kw: Dict[str, Any] = dict(
-            batch_size=self.batch_size,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
+        kw: dict[str, Any] = {
+            "batch_size": self.batch_size,
+            "show_progress_bar": False,
+            "convert_to_numpy": True,
+            "normalize_embeddings": True,
+        }
         if self._fp16:
             with torch.amp.autocast("cuda"):
                 emb = self.encoder.encode(texts, **kw)

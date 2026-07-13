@@ -10,7 +10,6 @@
 """
 
 import shlex
-from typing import Optional
 
 
 def is_cd_command(text: str) -> bool:
@@ -21,8 +20,8 @@ def is_cd_command(text: str) -> bool:
 
 def build_command(
     text: str,
-    cwd: Optional[str] = None,
-    env_vars: Optional[dict] = None,
+    cwd: str | None = None,
+    env_vars: dict | None = None,
 ) -> str:
     """
     构建带工作目录和环境变量前缀的完整 shell 命令。
@@ -61,7 +60,7 @@ def build_command(
     return " && ".join(parts)
 
 
-def extract_cwd_from_output(accumulated_output: str) -> Optional[str]:
+def extract_cwd_from_output(accumulated_output: str) -> str | None:
     """
     从 cd 命令的输出中提取 pwd 结果（绝对路径）。
 
@@ -86,7 +85,7 @@ def extract_cwd_from_output(accumulated_output: str) -> Optional[str]:
     return None
 
 
-def resolve_remote_path(filename: str, cwd: Optional[str] = None) -> str:
+def resolve_remote_path(filename: str, cwd: str | None = None) -> str:
     """
     将文件名解析为远程服务器上的完整路径。
 

@@ -17,8 +17,9 @@ try:
     import torch  # noqa: F401
 except ImportError:
     pass
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest

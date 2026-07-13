@@ -18,17 +18,15 @@ arXiv k-NN 兴趣模型训练脚本
   [NEW]  per-topic recall 分析：训练结束时输出 FRB / Pulsar / WD / Gaia 等子领域通过率
 """
 
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations  # noqa: I001 - torch must load before NumPy on Windows
 
-import hashlib
 import importlib
 import json
 import re
-import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 
@@ -104,7 +102,7 @@ CONFIG = KNNConfig()
 
 # ── per-topic 评估关键词（title 模糊匹配，大小写不敏感）────────────────────
 # 每个 topic 匹配其中任意一个关键词即算作该 topic 的正样本
-TOPIC_KEYWORDS: Dict[str, List[str]] = {
+TOPIC_KEYWORDS: dict[str, list[str]] = {
     "FRB": ["fast radio burst", r"\bfrb\b", "repeating burst"],
     "Pulsar": [r"\bpulsar\b", "magnetar", r"\bneutron star\b", "spin-down", "timing noise"],
     "WD": ["white dwarf", r"\bwd\b", r"\bdwd\b", "cataclysmic variable", "AM CVn"],
@@ -162,10 +160,10 @@ def normalize_col_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name).strip().lower())
 
 
-def resolve_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
+def resolve_columns(df: pd.DataFrame) -> dict[str, str | None]:
     norm = {normalize_col_name(c): c for c in df.columns}
 
-    def pick(candidates: List[str], required: bool = False) -> Optional[str]:
+    def pick(candidates: list[str], required: bool = False) -> str | None:
         for c in candidates:
             if c in norm:
                 return norm[c]
@@ -188,17 +186,20 @@ def clean_text(x: object) -> str:
     return re.sub(r"\s+", " ", str(x)).strip()
 
 
-def build_texts(df: pd.DataFrame, title_col: str, abstract_col: str) -> List[str]:
+def build_texts(df: pd.DataFrame, title_col: str, abstract_col: str) -> list[str]:
     titles = df[title_col].fillna("").astype(str).tolist()
     abstracts = df[abstract_col].fillna("").astype(str).tolist()
-    return [f"Title: {clean_text(t)}\nAbstract: {clean_text(a)}" for t, a in zip(titles, abstracts)]
+    return [
+        f"Title: {clean_text(t)}\nAbstract: {clean_text(a)}"
+        for t, a in zip(titles, abstracts, strict=True)
+    ]
 
 
 def best_fbeta_threshold(
     y_true: np.ndarray,
     y_score: np.ndarray,
     beta: float = 1.0,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     if len(np.unique(y_true)) < 2:
         return 0.5, 0.0
     precision, recall, thresholds = precision_recall_curve(y_true, y_score)
@@ -225,9 +226,9 @@ def split_dataframe(
     val_size: float,
     split_mode: str,
     seed: int = 42,
-    date_col: Optional[str] = None,
-    label_col: Optional[str] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    date_col: str | None = None,
+    label_col: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """切分数据集，返回的 DataFrame 保留 _orig_idx 列以便对齐预计算 embedding。"""
     df = df.copy()
     if split_mode == "time":
@@ -270,7 +271,7 @@ def _encoder_short_name(encoder_name: str) -> str:
     return re.sub(r"[^a-z0-9\-]", "-", encoder_name.split("/")[-1].lower())
 
 
-def _cache_paths(cache_dir: Path, encoder_name: str) -> Tuple[Path, Path]:
+def _cache_paths(cache_dir: Path, encoder_name: str) -> tuple[Path, Path]:
     short = _encoder_short_name(encoder_name)
     return (
         cache_dir / f"all_embeddings_{short}.npy",
@@ -315,7 +316,7 @@ def load_or_encode(
         _log("[cache] 行数不符，重新编码")
 
     _log(f"[encode] 编码 {len(df)} 篇论文（encoder={encoder_name}）…")
-    _log(f"[encode] 预计耗时（CPU ~5-15 min；GPU ~1 min）")
+    _log("[encode] 预计耗时（CPU ~5-15 min；GPU ~1 min）")
 
     SentenceTransformer = _load_st()
     model = SentenceTransformer(encoder_name)
@@ -324,12 +325,12 @@ def load_or_encode(
         _log("[encode] CUDA 可用，启用 fp16")
 
     texts = build_texts(df, title_col, abstract_col)
-    kw: Dict[str, Any] = dict(
-        batch_size=batch_size,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
+    kw: dict[str, Any] = {
+        "batch_size": batch_size,
+        "show_progress_bar": True,
+        "convert_to_numpy": True,
+        "normalize_embeddings": True,
+    }
     if fp16:
         with torch.amp.autocast("cuda"):
             emb = model.encode(texts, **kw)
@@ -361,9 +362,9 @@ def evaluate_per_topic(
     threshold: float,
     title_col: str,
     label_col: str,
-    topic_keywords: Dict[str, List[str]] = TOPIC_KEYWORDS,
+    topic_keywords: dict[str, list[str]] = TOPIC_KEYWORDS,
     name: str = "Validation",
-) -> Dict[str, Dict[str, float]]:
+) -> dict[str, dict[str, float]]:
     """
     对验证集的正样本按话题关键词分组，报告每个话题的通过率和均分。
 
@@ -375,8 +376,8 @@ def evaluate_per_topic(
     labels = df[label_col].astype(int).to_numpy()
     preds = (scores >= threshold).astype(int)
 
-    results: Dict[str, Dict[str, float]] = {}
-    lines: List[str] = []
+    results: dict[str, dict[str, float]] = {}
+    lines: list[str] = []
 
     header = f"\n{'=' * 72}\n[{name}] Per-topic Recall Breakdown\n{'=' * 72}"
     lines.append(header)
@@ -500,24 +501,24 @@ class KNNInterestModel:
             _log("Enabled fp16 encoding (CUDA detected)")
 
         # 训练后填充
-        self.pos_embeddings: Optional[np.ndarray] = None  # (n_pos, D)
-        self.neg_embeddings: Optional[np.ndarray] = None  # (n_neg_sample, D)
+        self.pos_embeddings: np.ndarray | None = None  # (n_pos, D)
+        self.neg_embeddings: np.ndarray | None = None  # (n_neg_sample, D)
         self.threshold: float = 0.5
-        self.columns: Dict[str, Optional[str]] = {}
+        self.columns: dict[str, str | None] = {}
 
     # ------------------------------------------------------------------
     # Encoding（用于在没有外部缓存时进行按需编码）
     # ------------------------------------------------------------------
 
-    def encode(self, texts: List[str]) -> np.ndarray:
+    def encode(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.embed_dim), dtype=np.float32)
-        kw: Dict[str, Any] = dict(
-            batch_size=self.batch_size,
-            show_progress_bar=True,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
+        kw: dict[str, Any] = {
+            "batch_size": self.batch_size,
+            "show_progress_bar": True,
+            "convert_to_numpy": True,
+            "normalize_embeddings": True,
+        }
         if self._fp16:
             with torch.amp.autocast("cuda"):
                 emb = self.encoder.encode(texts, **kw)
@@ -561,7 +562,7 @@ class KNNInterestModel:
     def fit(
         self,
         train_df: pd.DataFrame,
-        precomputed_embeddings: Optional[np.ndarray] = None,
+        precomputed_embeddings: np.ndarray | None = None,
     ) -> None:
         self.columns = resolve_columns(train_df)
         label_col = self.columns["label"]
@@ -615,9 +616,9 @@ class KNNInterestModel:
     def select_threshold(
         self,
         val_df: pd.DataFrame,
-        precomputed_embeddings: Optional[np.ndarray] = None,
+        precomputed_embeddings: np.ndarray | None = None,
         min_threshold: float = 0.35,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         cols = resolve_columns(val_df)
         label_col = cols["label"]
         if label_col is None:
@@ -642,7 +643,7 @@ class KNNInterestModel:
     def predict_proba(
         self,
         df: pd.DataFrame,
-        precomputed_embeddings: Optional[np.ndarray] = None,
+        precomputed_embeddings: np.ndarray | None = None,
     ) -> np.ndarray:
         """返回每篇论文的得分（作为 pseudo-probability 使用）。"""
         assert self.pos_embeddings is not None, "模型未训练"
@@ -672,8 +673,8 @@ class KNNInterestModel:
         self,
         df: pd.DataFrame,
         name: str = "Eval",
-        precomputed_embeddings: Optional[np.ndarray] = None,
-    ) -> Dict[str, float]:
+        precomputed_embeddings: np.ndarray | None = None,
+    ) -> dict[str, float]:
         assert self.pos_embeddings is not None
         cols = resolve_columns(df)
         label_col = cols["label"]
@@ -685,7 +686,7 @@ class KNNInterestModel:
         y_pred = (y_score >= self.threshold).astype(int)
 
         has_both = len(np.unique(y_true)) >= 2
-        metrics: Dict[str, float] = {
+        metrics: dict[str, float] = {
             "roc_auc": float(roc_auc_score(y_true, y_score)) if has_both else float("nan"),
             "pr_auc": float(average_precision_score(y_true, y_score)) if has_both else float("nan"),
             "f1": float(f1_score(y_true, y_pred, zero_division=0)),

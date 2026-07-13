@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from .media_registry import (
     compact_media_items,
     compact_message_content,
     rebuild_message_content,
-    resolve_registered_media_items,
     resolve_message_content,
+    resolve_registered_media_items,
 )
 
 _MEDIA_PLACEHOLDER_RE = re.compile(r"\[\[xc_media_(\d+)\]\]")

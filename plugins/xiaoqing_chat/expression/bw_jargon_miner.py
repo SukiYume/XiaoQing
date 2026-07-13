@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from ..llm.llm_client import LLMError, chat_completions_raw_with_fallback_paths
 from ..logging_utils import _redacted_value, sanitize_log_fields

@@ -46,6 +46,7 @@ def test_user_settings_round_trip_parses_and_merges_settings_json():
         assert settings["settings_json"]["daily_briefing_enabled"] is True
         assert settings["settings_json"]["privacy_mode"] is True
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -136,6 +137,7 @@ def test_resolve_default_category_prefers_user_setting():
         assert db.update_user_settings(owner_id, {"default_category": "工作手稿"}) is True
         assert resolve_default_category(db, owner_id) == "工作手稿"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -156,6 +158,7 @@ def test_user_settings_normalizes_legacy_daily_report_enabled_key():
         assert settings["settings_json"]["daily_briefing_enabled"] is False
         assert "daily_report_enabled" not in settings["settings_json"]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -178,6 +181,7 @@ def test_save_user_setting_updates_dict_backed_settings_json():
         assert settings["settings_json"]["privacy_mode"] is True
         assert settings["settings_json"]["weekly_report_enabled"] is True
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -193,6 +197,7 @@ def test_default_settings_enable_reminder_briefing_and_privacy():
         assert settings["settings_json"]["daily_briefing_enabled"] is True
         assert settings["settings_json"]["privacy_mode"] is True
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -223,6 +228,7 @@ def test_web_saved_settings_reflect_in_plugin_settings_output():
         assert "🔒 隐私模式: 关闭" in message
         assert "默认视图" not in message
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -240,6 +246,7 @@ def test_plugin_settings_defaults_match_config_defaults():
         assert f"🔒 隐私模式: {'开启' if PendoConfig.MESSAGE_PRIVACY_MODE_DEFAULT else '关闭'}" in message
         assert "默认视图" not in message
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 

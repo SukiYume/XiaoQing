@@ -1,5 +1,6 @@
 """测试bot_core插件"""
 
+import importlib.util
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -8,8 +9,6 @@ import pytest
 from core.interfaces import PluginCapabilities, PluginPrincipal
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-
-import importlib.util
 
 spec = importlib.util.spec_from_file_location("bot_core_main", ROOT / "plugins" / "bot_core" / "main.py")
 bot_core = importlib.util.module_from_spec(spec)

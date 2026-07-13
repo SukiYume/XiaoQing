@@ -20,7 +20,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.args import parse
 from core.plugin_base import PluginContextProtocol, build_action, segments
@@ -133,7 +133,7 @@ def _load_default_server(
         return None
 
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Minecraft config load failed error_type=%s", audit_error_type(exc))
@@ -209,8 +209,8 @@ async def handle(
 
 async def _handle_connect(
     args: str,
-    group_id: Optional[int],
-    user_id: Optional[int],
+    group_id: int | None,
+    user_id: int | None,
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
     """
@@ -346,8 +346,8 @@ async def _handle_connect(
 
 
 async def _handle_disconnect(
-    group_id: Optional[int],
-    user_id: Optional[int],
+    group_id: int | None,
+    user_id: int | None,
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
     """处理断开连接命令"""
@@ -439,8 +439,8 @@ async def _handle_mc_message(
 
 
 async def _handle_status_command(
-    group_id: Optional[int],
-    user_id: Optional[int],
+    group_id: int | None,
+    user_id: int | None,
     context: PluginContextProtocol,
 ) -> list[dict[str, Any]]:
     """处理状态查询命令"""
@@ -553,7 +553,7 @@ async def _send_mc_action(
         )
 
 
-async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, Any]]]:
+async def scheduled(context: PluginContextProtocol) -> list[dict[str, Any]] | None:
     """定时任务：检查所有连接的日志更新"""
     connections = _manager.all_connections()
 
@@ -620,7 +620,7 @@ async def scheduled(context: PluginContextProtocol) -> Optional[list[dict[str, A
     return None
 
 
-def _format_event_message(event) -> Optional[str]:
+def _format_event_message(event) -> str | None:
     """格式化日志事件为消息"""
     if event.event_type == LogEventType.CHAT:
         return f"🎮 [MC] {event.player}: {event.message}"

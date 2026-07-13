@@ -347,7 +347,7 @@ class TestOneBotHttpSender:
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value={"status": "ok", "retcode": 0})
-        
+
         # Configure the context manager returned by post()
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=mock_response)
@@ -659,7 +659,7 @@ class TestOneBotWsClient:
                 try:
                     return next(self._messages)
                 except StopIteration:
-                    raise StopAsyncIteration
+                    raise StopAsyncIteration from None
 
         await client._listen(ResponseOnlyWebSocket(), handler)
 

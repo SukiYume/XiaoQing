@@ -19,14 +19,14 @@ Step 3: 构建最终训练数据集
 依赖: requests, feedparser, pandas
 """
 
-import json
 import importlib
+import json
 import os
 import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pandas as pd
 import requests
@@ -108,7 +108,7 @@ ARXIV_REDIRECT_POLICY = RedirectPolicy(
 def load_abstract_cache() -> dict[str, dict[str, str]]:
     """加载补充摘要缓存"""
     if os.path.exists(ABSTRACT_CACHE_FILE):
-        with open(ABSTRACT_CACHE_FILE, "r", encoding="utf-8") as f:
+        with open(ABSTRACT_CACHE_FILE, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
@@ -254,7 +254,7 @@ def main():
     monthly_dir = CACHE_DIR / "monthly"
     cache_files = sorted(monthly_dir.glob("[0-9][0-9][0-9][0-9].json"))
     for cf in cache_files:
-        with open(cf, "r", encoding="utf-8") as f:
+        with open(cf, encoding="utf-8") as f:
             month_data = json.load(f)
         all_records.extend(month_data)
         print(f"  {cf.stem}: {len(month_data)} 篇")
@@ -286,7 +286,7 @@ def main():
 
     # ── 4. 补充获取缺失的正样本 ──────────────────────────────
     if missing_positive:
-        print(f"\n" + "=" * 60)
+        print("\n" + "=" * 60)
         print(f"补充获取 {len(missing_positive)} 个缺失正样本")
         print("=" * 60)
 

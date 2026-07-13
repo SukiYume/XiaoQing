@@ -2,12 +2,12 @@
 随机选择插件
 提供从多个选项中随机选择的功能
 """
-import random
 import logging
-from typing import Any, Optional
+import random
+from typing import Any
 
-from core.plugin_base import segments
 from core.args import parse, tokenize
+from core.plugin_base import segments
 from core.public_errors import public_error_response
 
 logger = logging.getLogger(__name__)
@@ -35,28 +35,28 @@ def init(context=None) -> None:
 # 参数解析
 # ============================================================
 
-def parse_choice_args(args: str) -> tuple[Optional[str], list[str], int, bool]:
+def parse_choice_args(args: str) -> tuple[str | None, list[str], int, bool]:
     """解析选择命令的参数
-    
+
     Args:
         args: 命令参数字符串
-        
+
     Returns:
         (问题, 选项列表, 选择数量, 是否去重)
     """
     if not args or not args.strip():
         return None, [], DEFAULT_CHOICES, False
-    
+
     # 分割参数
     tokens = tokenize(args)
-    
+
     if len(tokens) < 2:
         return None, [], DEFAULT_CHOICES, False
-    
+
     # 检查是否有 -n 参数指定选择数量
     choice_count = DEFAULT_CHOICES
     unique = False
-    
+
     # 从后往前检查特殊参数
     filtered_tokens = []
     i = 0
@@ -75,39 +75,39 @@ def parse_choice_args(args: str) -> tuple[Optional[str], list[str], int, bool]:
             unique = True
             i += 1
             continue
-        
+
         filtered_tokens.append(token)
         i += 1
-    
+
     if len(filtered_tokens) < 2:
         return None, [], DEFAULT_CHOICES, False
-    
+
     # 第一个是问题，其余是选项
     question = filtered_tokens[0]
     options = filtered_tokens[1:]
-    
+
     return question, options, choice_count, unique
 
-def validate_options(options: list[str], choice_count: int, context) -> tuple[bool, Optional[str]]:
+def validate_options(options: list[str], choice_count: int, context) -> tuple[bool, str | None]:
     """验证选项的有效性
-    
+
     Args:
         options: 选项列表
         choice_count: 要选择的数量
         context: 插件上下文
-        
+
     Returns:
         (是否有效, 错误信息)
     """
     if len(options) < MIN_OPTIONS:
         return False, f"至少需要 {MIN_OPTIONS} 个选项"
-    
+
     if len(options) > MAX_OPTIONS:
         return False, f"选项过多，最多支持 {MAX_OPTIONS} 个选项"
-    
+
     if choice_count < 1:
         return False, "选择数量必须至少为 1"
-    
+
     if choice_count > MAX_CHOICES:
         return False, f"选择数量过多，最多支持一次选择 {MAX_CHOICES} 个"
 
@@ -118,17 +118,17 @@ def validate_options(options: list[str], choice_count: int, context) -> tuple[bo
 # ============================================================
 
 def make_choice(
-    options: list[str], 
-    count: int = 1, 
+    options: list[str],
+    count: int = 1,
     unique: bool = False
 ) -> list[str]:
     """从选项中随机选择
-    
+
     Args:
         options: 选项列表
         count: 选择数量
         unique: 是否去重（不重复选择同一项）
-        
+
     Returns:
         选中的选项列表
     """
@@ -154,18 +154,18 @@ def format_choice_result(
     total_options: int
 ) -> str:
     """格式化选择结果
-    
+
     Args:
         question: 问题
         options: 原始选项列表
         choices: 选中的选项
         total_options: 总选项数
-        
+
     Returns:
         格式化的结果文本
     """
     emoji = random.choice(CHOICE_EMOJIS)
-    
+
     if len(choices) == 1:
         # 单个选择
         result = f"{emoji} {question}：**{choices[0]}**"
@@ -175,11 +175,11 @@ def format_choice_result(
         for i, choice in enumerate(choices, 1):
             result_lines.append(f"  {i}. **{choice}**")
         result = "\n".join(result_lines)
-    
+
     # 添加统计信息
     if len(choices) > 1:
         result += f"\n\n已从 {total_options} 个选项中选择 {len(choices)} 个"
-    
+
     return result
 
 # ============================================================
@@ -187,28 +187,28 @@ def format_choice_result(
 # ============================================================
 
 async def handle(
-    command: str, 
-    args: str, 
-    event: dict[str, Any], 
+    command: str,
+    args: str,
+    event: dict[str, Any],
     context
 ) -> list[dict[str, Any]]:
     """命令处理入口"""
     try:
         parsed = parse(args)
-        
+
         # 解析子命令或检查help
         if parsed and parsed.first:
             subcommand = parsed.first.lower()
-            
+
             if subcommand == "help" or subcommand == "帮助":
                 return segments(_show_help())
-        
+
         # 解析参数
         question, options, choice_count, unique = parse_choice_args(args)
-        
+
         if question is None or not options:
             return segments(_show_help())
-        
+
         # 验证选项
         is_valid, error_msg = validate_options(options, choice_count, context)
         if not is_valid:
@@ -218,24 +218,24 @@ async def handle(
             return segments(
                 f"❌ 去重模式下，选择数量不能超过选项数量（{choice_count} > {len(options)}）"
             )
-        
+
         # 记录日志
         unique_options = list(set(options))
         logger.info(
             "随机选择: question_length=%d, 选项数=%d (去重后%d), 选择数=%d, 去重=%s",
             len(question), len(options), len(unique_options), choice_count, unique,
         )
-        
+
         # 执行选择
         choices = make_choice(options, choice_count, unique)
-        
+
         # 格式化结果
         result = format_choice_result(question, options, choices, len(options))
-        
+
         logger.debug("选择完成: result_count=%d", len(choices))
-        
+
         return segments(result)
-        
+
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="choice.handle")
 

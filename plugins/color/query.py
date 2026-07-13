@@ -2,17 +2,15 @@
 颜色查询模块
 提供颜色的各种查询功能
 """
-from typing import Any, Optional
-
 MAX_SEARCH_RESULTS = 20
 
-def find_by_name(colors: list[dict], name: str) -> Optional[dict]:
+def find_by_name(colors: list[dict], name: str) -> dict | None:
     """按名称查找颜色
-    
+
     Args:
         colors: 颜色列表
         name: 颜色名称
-        
+
     Returns:
         找到的颜色数据，未找到返回 None
     """
@@ -21,13 +19,13 @@ def find_by_name(colors: list[dict], name: str) -> Optional[dict]:
             return color
     return None
 
-def find_by_rgb(colors: list[dict], rgb: list[int]) -> Optional[dict]:
+def find_by_rgb(colors: list[dict], rgb: list[int]) -> dict | None:
     """按 RGB 查找颜色
-    
+
     Args:
         colors: 颜色列表
         rgb: RGB 值列表 [R, G, B]
-        
+
     Returns:
         找到的颜色数据，未找到返回 None
     """
@@ -36,13 +34,13 @@ def find_by_rgb(colors: list[dict], rgb: list[int]) -> Optional[dict]:
             return color
     return None
 
-def find_by_hex(colors: list[dict], hex_value: str) -> Optional[dict]:
+def find_by_hex(colors: list[dict], hex_value: str) -> dict | None:
     """按 HEX 查找颜色
-    
+
     Args:
         colors: 颜色列表
         hex_value: HEX 颜色值
-        
+
     Returns:
         找到的颜色数据，未找到返回 None
     """
@@ -53,13 +51,13 @@ def find_by_hex(colors: list[dict], hex_value: str) -> Optional[dict]:
             return color
     return None
 
-def find_by_cmyk(colors: list[dict], cmyk: list[int]) -> Optional[dict]:
+def find_by_cmyk(colors: list[dict], cmyk: list[int]) -> dict | None:
     """按 CMYK 查找颜色
-    
+
     Args:
         colors: 颜色列表
         cmyk: CMYK 值列表 [C, M, Y, K]
-        
+
     Returns:
         找到的颜色数据，未找到返回 None
     """
@@ -70,11 +68,11 @@ def find_by_cmyk(colors: list[dict], cmyk: list[int]) -> Optional[dict]:
 
 def find_by_keyword(colors: list[dict], keyword: str) -> list[dict]:
     """按关键词搜索颜色
-    
+
     Args:
         colors: 颜色列表
         keyword: 搜索关键词
-        
+
     Returns:
         匹配的颜色列表
     """

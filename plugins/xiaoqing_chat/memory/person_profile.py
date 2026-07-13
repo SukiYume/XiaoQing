@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
 
 from core.plugin_base import write_json
 
 from .memory_db import MemoryDB
+
 
 @dataclass
 class PersonProfile:
@@ -22,7 +23,7 @@ def _profile_path(data_dir: Path, chat_id: str, subject_id: int) -> Path:
     safe_chat_id = (chat_id or "").strip() or "default"
     return data_dir / "person_profiles" / safe_chat_id / f"{subject_id}.json"
 
-def load_profile(data_dir: Path, *, chat_id: str, subject_id: int) -> Optional[PersonProfile]:
+def load_profile(data_dir: Path, *, chat_id: str, subject_id: int) -> PersonProfile | None:
     path = _profile_path(data_dir, chat_id, subject_id)
     if not path.exists():
         return None
@@ -98,7 +99,7 @@ def update_profile_and_index(
         meta={"type": "person_profile", "chat_id": chat_id, "subject_id": subject_id, "subject_name": existing.subject_name},
     )
 
-def build_profile_block(memory_db: MemoryDB, *, chat_id: str, subject_id: Optional[int]) -> str:
+def build_profile_block(memory_db: MemoryDB, *, chat_id: str, subject_id: int | None) -> str:
     if not subject_id:
         return ""
     chat_id = (chat_id or "").strip()

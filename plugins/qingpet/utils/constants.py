@@ -1,5 +1,4 @@
 import enum
-from typing import Dict, Tuple
 
 
 class PetStage(enum.Enum):
@@ -56,7 +55,7 @@ MAX_STAT_VALUE = 100
 MIN_STAT_VALUE = 0
 
 # 每次衰减量（每分钟调用一次）
-DECAY_RATES: Dict[str, float] = {
+DECAY_RATES: dict[str, float] = {
     "hunger": 0.5,
     "mood": 0.8,
     "clean": 0.6,
@@ -65,7 +64,7 @@ DECAY_RATES: Dict[str, float] = {
 }
 
 # 冷却时间（秒）
-COOLDOWN_TIMES: Dict[str, int] = {
+COOLDOWN_TIMES: dict[str, int] = {
     "feed": 60,
     "clean": 180,
     "play": 120,
@@ -77,7 +76,7 @@ COOLDOWN_TIMES: Dict[str, int] = {
 }
 
 # 每日次数上限
-DAILY_LIMITS: Dict[str, int] = {
+DAILY_LIMITS: dict[str, int] = {
     "coins": 500,
     "feed": 20,
     "clean": 10,
@@ -91,7 +90,7 @@ DAILY_LIMITS: Dict[str, int] = {
     "free_feed": 5,          # CR Review #6: 每日免费苹果喂食次数限制
 }
 
-EVOLUTION_CONDITIONS: Dict[Tuple[PetStage, str], Tuple[PetStage, str]] = {
+EVOLUTION_CONDITIONS: dict[tuple[PetStage, str], tuple[PetStage, str]] = {
     (PetStage.EGG, "hatched"): (PetStage.YOUNG, "破壳"),
     (PetStage.YOUNG, "excellent_care"): (PetStage.GROWTH, "优秀"),
     (PetStage.YOUNG, "good_care"): (PetStage.GROWTH, "良好"),
@@ -103,7 +102,7 @@ EVOLUTION_CONDITIONS: Dict[Tuple[PetStage, str], Tuple[PetStage, str]] = {
 }
 
 # 年龄触发进化的阈值（Day计）— CR Fix #8: age 从未递增
-AGE_EVOLUTION_THRESHOLDS: Dict[PetStage, int] = {
+AGE_EVOLUTION_THRESHOLDS: dict[PetStage, int] = {
     PetStage.EGG: 1,         # 1天后有资格孵化
     PetStage.YOUNG: 7,       # 7天后有资格进入成长期
     PetStage.GROWTH: 21,     # 21天后有资格进入成熟期
@@ -111,13 +110,13 @@ AGE_EVOLUTION_THRESHOLDS: Dict[PetStage, int] = {
 }
 
 # 疾病概率：清洁度低于阈值时，每次衰减有概率生病
-DISEASE_THRESHOLDS: Dict[str, float] = {
+DISEASE_THRESHOLDS: dict[str, float] = {
     "clean_threshold": 30,   # 清洁度低于此值有概率生病
     "disease_chance": 0.05,  # 每次衰减检查5%概率生病
 }
 
 # 温和离家旅行阈值 (新增功能: 替代直接死亡)
-TRAVEL_THRESHOLDS: Dict[str, float] = {
+TRAVEL_THRESHOLDS: dict[str, float] = {
     "care_score_threshold": 0.15,   # 综合评分低于15%触发旅行
     "travel_duration_hours": 24,     # 旅行持续时间（小时）
     "recall_cost_coins": 50,         # 召回费用
@@ -209,7 +208,7 @@ PET_SHOW_CONFIG = {
 }
 
 # 装扮系统道具 (新增功能)
-DEFAULT_DRESS_ITEMS: Dict[str, Dict] = {
+DEFAULT_DRESS_ITEMS: dict[str, dict] = {
     "red_hat": {
         "name": "红色小帽",
         "slot": DressSlot.HAT,
@@ -285,7 +284,7 @@ DEFAULT_DRESS_ITEMS: Dict[str, Dict] = {
     },
 }
 
-DEFAULT_ITEMS: Dict[str, Dict] = {
+DEFAULT_ITEMS: dict[str, dict] = {
     "apple": {
         "name": "苹果",
         "type": ItemType.FOOD,
@@ -362,7 +361,7 @@ GROUP_TASK_TEMPLATES = [
 ]
 
 # 训练系统配置
-TRAINING_CONFIG: Dict[str, Dict] = {
+TRAINING_CONFIG: dict[str, dict] = {
     "strength": {
         "name": "体力训练",
         "exp_gain": 15,
@@ -406,7 +405,7 @@ TRAINING_MESSAGES = {
 }
 
 # 探索地点配置
-EXPLORE_LOCATIONS: Dict[str, Dict] = {
+EXPLORE_LOCATIONS: dict[str, dict] = {
     "forest": {
         "name": "森林",
         "energy_cost": 30,

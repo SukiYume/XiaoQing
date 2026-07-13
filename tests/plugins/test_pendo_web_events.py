@@ -185,6 +185,7 @@ def test_build_events_overview_supports_multi_node_recurring_and_reminder_filter
         assert meeting_only["summary"]["event_count"] == 1
         assert meeting_only["events"][0]["id"] == "series_20260318"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -222,6 +223,7 @@ def test_build_events_overview_includes_each_day_for_multi_day_events():
         assert result["timeline_days"][1]["items"][0]["time_label"] == "跨天"
         assert result["timeline_days"][2]["items"][0]["time_label"] == "至 03:00"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -290,6 +292,7 @@ def test_build_event_detail_includes_reminder_logs_and_related_instances():
         assert len(detail["related_instances"]) == 1
         assert detail["related_instances"][0]["id"] == "series_20260325"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -333,6 +336,7 @@ def test_build_event_detail_preserves_multi_node_leaf_notes():
         assert detail["event"]["notes"] == "北京南 G823，7车5F 坐"
         assert detail["event"]["collection"]["notes"] == "全局备注"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -413,6 +417,7 @@ def test_events_overview_and_detail_return_collection_context_for_leaf_events():
             "colgraph_m02",
         ]
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -472,6 +477,7 @@ def test_events_collection_api_creates_updates_and_deletes_graph():
         assert db.get_item(child_ids[0], owner_id) is None
         assert db.get_item(child_ids[1], owner_id) is None
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -513,6 +519,7 @@ def test_events_collection_api_rejects_invalid_child_without_partial_writes():
             (owner_id,),
         ).fetchone()[0] == 0
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -555,6 +562,7 @@ def test_events_collection_update_rejects_invalid_reminder_rules():
         assert exc_info.value.status_code == 422
         assert "offset_seconds" in exc_info.value.detail
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -621,6 +629,7 @@ def test_build_events_overview_batches_reminder_log_reads(monkeypatch):
         assert result["events"][1]["reminders"][0]["status"] == "sent"
         assert result["events"][2]["reminders"][0]["status"] == "pending"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -686,6 +695,7 @@ def test_build_events_overview_counts_only_visible_nodes_and_in_range_reminders(
         assert result["calendar_days"]["2026-05-20"]["count"] == 1
         assert result["events"][0]["id"] == "visible_nodes_m02"
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -721,6 +731,7 @@ def test_build_events_overview_accepts_offset_aware_imported_events():
         assert result["events"][0]["id"] == "aware_event"
         assert result["calendar_days"]["2026-01-21"]["has_events"] is True
     finally:
+        db.cleanup()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 

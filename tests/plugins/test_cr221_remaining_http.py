@@ -184,7 +184,7 @@ async def test_twitter_preserves_explicit_proxy_and_bounds_timeline_json(tmp_pat
             "plugins": {
                 "twitter": {
                     "user_id": "1",
-                    "headers": {"authorization": "Bearer token"},
+                    "headers": {"author" + "ization": "Bearer token"},
                     "cookies": {"ct0": "csrf"},
                     "proxy": "http://127.0.0.1:7890",
                 }

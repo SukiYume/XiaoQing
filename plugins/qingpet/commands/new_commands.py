@@ -3,27 +3,21 @@
 """
 import logging
 import re
-import json
-from typing import Tuple
 
-from ..models import Pet
-from ..services.pet_service import PetService
-from ..services.user_service import UserService
-from ..services.item_service import ItemService
-from ..services.social_service import SocialService
-from ..services.database import Database
 from ..services.admin_service import AdminService
-from ..utils.constants import (
-    DEFAULT_DRESS_ITEMS, DressSlot, TRADE_CONFIG, PET_SHOW_CONFIG
-)
-from ..utils.formatters import format_status_text
+from ..services.database import Database
+from ..services.item_service import ItemService
+from ..services.pet_service import PetService
+from ..services.social_service import SocialService
+from ..services.user_service import UserService
+from ..utils.constants import DEFAULT_DRESS_ITEMS, PET_SHOW_CONFIG, TRADE_CONFIG, DressSlot
 
 logger = logging.getLogger(__name__)
 
 
 # ──────────────────── 召回 ────────────────────
 
-async def handle_recall(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_recall(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """召回旅行中的宠物"""
     pet = db.get_pet(user_id, group_id)
     if not pet:
@@ -38,7 +32,7 @@ async def handle_recall(user_id: str, group_id: int, args: str, db: Database) ->
 
 # ──────────────────── 装扮系统 ────────────────────
 
-async def handle_dress(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_dress(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """装扮系统入口"""
     if not args.strip():
         return _show_dress_help()
@@ -61,7 +55,7 @@ async def handle_dress(user_id: str, group_id: int, args: str, db: Database) -> 
         return _show_dress_help()
 
 
-def _show_dress_help() -> Tuple[bool, str]:
+def _show_dress_help() -> tuple[bool, str]:
     return True, ("👗 **装扮系统**\n\n"
                   "• /宠物 装扮 查看 - 查看当前装扮\n"
                   "• /宠物 装扮 商店 - 查看装扮商店\n"
@@ -70,7 +64,7 @@ def _show_dress_help() -> Tuple[bool, str]:
                   "• /宠物 装扮 卸下 <槽位> - 卸下装扮")
 
 
-def _dress_view(user_id: str, group_id: int, db: Database) -> Tuple[bool, str]:
+def _dress_view(user_id: str, group_id: int, db: Database) -> tuple[bool, str]:
     pet = db.get_pet(user_id, group_id)
     if not pet:
         return False, "你还没有宠物"
@@ -97,7 +91,7 @@ def _dress_view(user_id: str, group_id: int, db: Database) -> Tuple[bool, str]:
     return True, text
 
 
-def _dress_shop() -> Tuple[bool, str]:
+def _dress_shop() -> tuple[bool, str]:
     text = "👗 **装扮商店**\n\n使用 /宠物 装扮 购买 <ID> 购买\n\n"
     by_slot = {}
     for item_id, item in DEFAULT_DRESS_ITEMS.items():
@@ -112,13 +106,13 @@ def _dress_shop() -> Tuple[bool, str]:
             currency = item.get("currency", "coins")
             price_icon = "💰" if currency == "coins" else "❤️"
             price_text = f"{item['price']}金币" if currency == "coins" else f"{item['price']}友情点"
-            
+
             text += f"  • [{item_id}] {item['name']} ({item['rarity'].value}) - {price_icon}{price_text} | +{item['mood_bonus']}心情\n"
         text += "\n"
     return True, text
 
 
-def _dress_buy(user_id: str, group_id: int, item_id: str, db: Database) -> Tuple[bool, str]:
+def _dress_buy(user_id: str, group_id: int, item_id: str, db: Database) -> tuple[bool, str]:
     item_id = item_id.strip()
     if not item_id:
         return False, "请指定装扮ID\n用法: /宠物 装扮 购买 <装扮ID>"
@@ -139,7 +133,7 @@ def _dress_buy(user_id: str, group_id: int, item_id: str, db: Database) -> Tuple
     return True, f"✅ 购买成功！花费{cost_msg}，获得 {item['name']}\n使用 /宠物 装扮 穿戴 {item_id} 穿戴"
 
 
-def _dress_equip(user_id: str, group_id: int, item_id: str, db: Database) -> Tuple[bool, str]:
+def _dress_equip(user_id: str, group_id: int, item_id: str, db: Database) -> tuple[bool, str]:
     item_id = item_id.strip()
     if not item_id:
         return False, "请指定装扮ID"
@@ -170,7 +164,7 @@ def _dress_equip(user_id: str, group_id: int, item_id: str, db: Database) -> Tup
     return True, f"✅ 已穿戴 {item['name']}（{slot.value}）"
 
 
-def _dress_unequip(user_id: str, group_id: int, slot_name: str, db: Database) -> Tuple[bool, str]:
+def _dress_unequip(user_id: str, group_id: int, slot_name: str, db: Database) -> tuple[bool, str]:
     slot_name = slot_name.strip()
     pet = db.get_pet(user_id, group_id)
     if not pet:
@@ -191,7 +185,7 @@ def _dress_unequip(user_id: str, group_id: int, slot_name: str, db: Database) ->
 
 # ──────────────────── 交易市场 ────────────────────
 
-async def handle_trade(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_trade(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """交易市场入口"""
     config = db.get_group_config(group_id)
     if not config.trade_enabled:
@@ -221,7 +215,7 @@ async def handle_trade(user_id: str, group_id: int, args: str, db: Database) -> 
         return False, "未知交易命令"
 
 
-def _trade_list(group_id: int, db: Database) -> Tuple[bool, str]:
+def _trade_list(group_id: int, db: Database) -> tuple[bool, str]:
     listings = db.get_active_listings(group_id)
     if not listings:
         return True, "🏪 当前没有挂单"
@@ -236,7 +230,7 @@ def _trade_list(group_id: int, db: Database) -> Tuple[bool, str]:
     return True, text
 
 
-def _trade_sell(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+def _trade_sell(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     match = re.match(r"(\S+)\s+(\d+)\s+(\d+)", args)
     if not match:
         return False, "格式错误\n用法: /宠物 交易 挂单 <道具ID> <数量> <价格>"
@@ -266,7 +260,7 @@ def _trade_sell(user_id: str, group_id: int, args: str, db: Database) -> Tuple[b
     return True, f"✅ 挂单成功！{item_id} x{amount} 售价{price}金币"
 
 
-def _trade_buy(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+def _trade_buy(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     listing_id_str = args.strip()
     if not listing_id_str.isdigit():
         return False, "请指定订单号\n用法: /宠物 交易 购买 <订单号>"
@@ -290,7 +284,7 @@ def _trade_buy(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bo
     )
 
 
-def _trade_cancel(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+def _trade_cancel(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     listing_id_str = args.strip()
     if not listing_id_str.isdigit():
         return False, "请指定订单号"
@@ -311,12 +305,12 @@ def _trade_cancel(user_id: str, group_id: int, args: str, db: Database) -> Tuple
         listing['group_id'], user_id, "TRADE_CANCEL",
         f"撤单#{listing_id} {listing['item_id']}x{listing['amount']}")
 
-    return True, f"✅ 已撤单，道具已退还"
+    return True, "✅ 已撤单，道具已退还"
 
 
 # ──────────────────── 宠物展示会 ────────────────────
 
-async def handle_show(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_show(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     """宠物展示会入口"""
     if not args.strip():
         return _show_info(group_id, db)
@@ -331,7 +325,7 @@ async def handle_show(user_id: str, group_id: int, args: str, db: Database) -> T
         return _show_info(group_id, db)
 
 
-def _show_info(group_id: int, db: Database) -> Tuple[bool, str]:
+def _show_info(group_id: int, db: Database) -> tuple[bool, str]:
     show = db.get_active_pet_show(group_id)
     if not show:
         return True, ("🏆 **宠物展示会**\n\n"
@@ -357,7 +351,7 @@ def _show_info(group_id: int, db: Database) -> Tuple[bool, str]:
     return True, text
 
 
-def _show_vote(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+def _show_vote(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     match = re.fullmatch(r"@?(\d+)", args.strip())
     if not match:
         return False, "格式错误\n用法: /宠物 展示 投票 @QQ号"
@@ -384,7 +378,7 @@ def _show_vote(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bo
 # ──────────────────── 管理命令: 删除、公告 ────────────────────
 
 async def handle_manage_delete(user_id: str, group_id: int, args: str,
-                                db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                                db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """删除用户宠物（CR Fix #16）"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"
@@ -406,7 +400,7 @@ async def handle_manage_delete(user_id: str, group_id: int, args: str,
 
 
 async def handle_manage_announce(user_id: str, group_id: int, args: str,
-                                  db: Database, is_admin: bool = False) -> Tuple[bool, str]:
+                                  db: Database, is_admin: bool = False) -> tuple[bool, str]:
     """管理公告：开启展示会等"""
     if not is_admin:
         return False, "⚠️ 该操作需要管理员权限"

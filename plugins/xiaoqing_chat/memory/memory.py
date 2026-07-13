@@ -6,11 +6,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import write_json
-from ..message_parts import build_message_parts, message_parts_to_legacy, normalize_message_parts
 
+from ..message_parts import build_message_parts, message_parts_to_legacy, normalize_message_parts
 
 MAX_CACHED_MESSAGES_PER_CHAT = 200
 
@@ -20,8 +20,8 @@ class StoredMessage:
     role: str
     name: str
     ts: float
-    user_id: Optional[int] = None
-    message_id: Optional[int] = None
+    user_id: int | None = None
+    message_id: int | None = None
     local_id: str = ""
     parts: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     content: str = ""
@@ -96,7 +96,7 @@ class MemoryStore:
     persist() 是同步 I/O，可以在 asyncio.to_thread 中安全调用。
     """
 
-    def __init__(self, data_dir: Optional[Path] = None) -> None:
+    def __init__(self, data_dir: Path | None = None) -> None:
         self._data_dir = data_dir
         self._messages: dict[str, list[StoredMessage]] = {}
         # 使用普通 Lock 而非 RLock，仅保护内存字典的短临界区，
@@ -167,13 +167,13 @@ class MemoryStore:
         *,
         role: str,
         name: str,
-        user_id: Optional[int] = None,
-        message_id: Optional[int] = None,
+        user_id: int | None = None,
+        message_id: int | None = None,
         local_id: str = "",
         content: str = "",
         media_items: Any = None,
         parts: Any = None,
-        ts: Optional[float] = None,
+        ts: float | None = None,
     ) -> None:
         msg = StoredMessage(
             role=role,
@@ -269,7 +269,7 @@ class MemoryStore:
             payload = [_serialize_message(message) for message in snapshot]
             write_json(path, payload)
 
-    def _load(self, chat_id: str) -> Optional[list[StoredMessage]]:
+    def _load(self, chat_id: str) -> list[StoredMessage] | None:
         with self._sync_lock:
             data_dir = self._data_dir
         if not data_dir:
@@ -289,14 +289,14 @@ class MemoryStore:
                 name = str(item.get("name", ""))
                 content = str(item.get("content", ""))
                 user_id_raw = item.get("user_id", None)
-                user_id: Optional[int] = None
+                user_id: int | None = None
                 if user_id_raw is not None:
                     try:
                         user_id = int(user_id_raw)
                     except (TypeError, ValueError):
                         user_id = None
                 message_id_raw = item.get("message_id", None)
-                message_id: Optional[int] = None
+                message_id: int | None = None
                 if message_id_raw is not None:
                     try:
                         message_id = int(message_id_raw)

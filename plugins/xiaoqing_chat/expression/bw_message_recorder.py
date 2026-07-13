@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ..config.config import PersonalityConfig
 from ..logging_utils import _log_step
@@ -20,7 +20,7 @@ class MessageRecorder(StoreBase):
         self._state: dict[str, Any] = {}
         self._active_chats: set[str] = set()
 
-    def _path(self) -> Optional[Path]:
+    def _path(self) -> Path | None:
         return self._resolve_path("bw_learner", "message_recorder.json")
 
     def _load(self) -> None:
@@ -76,7 +76,7 @@ async def extract_and_learn(
     chat_id: str,
     memory_store: MemoryStore,
     expr_store: ExpressionStore,
-    jargon_store: Optional[JargonStore],
+    jargon_store: JargonStore | None,
     recorder: MessageRecorder,
     personality: PersonalityConfig,
     min_interval_seconds: float = 60.0,

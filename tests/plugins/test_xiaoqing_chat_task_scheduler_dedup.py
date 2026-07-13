@@ -1,12 +1,13 @@
-import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+
 from plugins.xiaoqing_chat.task_scheduler import (
+    _action_flush_tasks,
+    _pfc_state_flush_tasks,
     _schedule_action_history_flush,
     _schedule_media_registry_flush,
     _schedule_pfc_state_flush,
-    _action_flush_tasks,
-    _pfc_state_flush_tasks,
 )
 
 

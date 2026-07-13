@@ -1,16 +1,23 @@
-import pytest
 import os
 import tempfile
 from datetime import datetime, timedelta
+
+import pytest
+
+from plugins.qingpet.models import User
 from plugins.qingpet.services import Database
 from plugins.qingpet.services.pet_service import PetService
 from plugins.qingpet.services.user_service import UserService
-from plugins.qingpet.models import Pet, User
 from plugins.qingpet.utils.constants import (
-    PetStage, PetPersonality, PetStatus,
-    TRAINING_CONFIG, TRAINING_SPECIAL_EVENTS, TRAINING_MESSAGES,
     EXPLORE_LOCATIONS,
+    TRAINING_CONFIG,
+    TRAINING_MESSAGES,
+    TRAINING_SPECIAL_EVENTS,
+    PetPersonality,
+    PetStage,
+    PetStatus,
 )
+from plugins.qingpet.utils.formatters import format_pet_card
 
 
 @pytest.fixture
@@ -142,7 +149,7 @@ def test_training_config_has_three_types():
 
 
 def test_training_config_fields():
-    for key, cfg in TRAINING_CONFIG.items():
+    for _key, cfg in TRAINING_CONFIG.items():
         assert "name" in cfg
         assert "exp_gain" in cfg
         assert "energy_cost" in cfg
@@ -293,7 +300,7 @@ def test_explore_smart_personality_accepted_by_service(pet_and_user, temp_db):
 
 
 def test_explore_location_fields():
-    for loc_key, loc in EXPLORE_LOCATIONS.items():
+    for _loc_key, loc in EXPLORE_LOCATIONS.items():
         assert "name" in loc
         assert "energy_cost" in loc
         assert "events" in loc
@@ -304,10 +311,6 @@ def test_explore_event_probabilities_sum_to_one():
     for loc_key, loc in EXPLORE_LOCATIONS.items():
         total = sum(e["prob"] for e in loc["events"])
         assert abs(total - 1.0) < 0.001, f"{loc_key} 概率之和={total}"
-
-
-from plugins.qingpet.utils.formatters import format_pet_card
-from plugins.qingpet.models import User
 
 
 def make_test_user(user_id="test_user", group_id=123456):

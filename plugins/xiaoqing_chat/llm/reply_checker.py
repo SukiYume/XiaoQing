@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import asyncio
 import difflib
+import logging as _logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any
 
+from ..memory.memory import StoredMessage
+from ..message_parts import render_stored_message
+from ..utils.json_parsing import parse_first_json_object, strict_json_bool
 from . import llm_client
 from .control_payload import control_extra_payload
 from .llm_client import LLMError, chat_completions_raw_with_fallback_paths
-from ..message_parts import render_stored_message
-from ..memory.memory import StoredMessage
-from ..utils.json_parsing import parse_first_json_object, strict_json_bool
-
-import logging as _logging
 
 _log = _logging.getLogger(__name__)
 
@@ -82,7 +81,7 @@ def _heuristic_check(
     max_repeat_compare: int,
     similarity_threshold: float,
     max_assistant_in_row: int,
-) -> Optional[ReplyCheckResult]:
+) -> ReplyCheckResult | None:
     r = _normalize_text(reply)
     if not r:
         return ReplyCheckResult(False, "回复为空", True)
@@ -166,7 +165,7 @@ def _current_media_only_anchors(current_text: str) -> tuple[str, ...]:
     return tuple(deduped)
 
 
-def _media_meta_reply_check(*, reply: str, current_text: str) -> Optional[ReplyCheckResult]:
+def _media_meta_reply_check(*, reply: str, current_text: str) -> ReplyCheckResult | None:
     anchors = _current_media_only_anchors(current_text)
     if not anchors:
         return None

@@ -11,12 +11,12 @@ DIVIDER = "━" * DIVIDER_LENGTH
 def format_list_item(text: str, level: int = 0, marker: str = "•") -> str:
     """
     格式化列表项
-    
+
     Args:
         text: 列表项内容
         level: 缩进级别
         marker: 列表标记符号
-        
+
     Returns:
         格式化后的列表项
     """
@@ -26,12 +26,12 @@ def format_list_item(text: str, level: int = 0, marker: str = "•") -> str:
 def format_section(title: str, *lines: str, use_divider: bool = True) -> str:
     """
     格式化消息节
-    
+
     Args:
         title: 节标题
         *lines: 节内容（多行）
         use_divider: 是否使用分割线
-        
+
     Returns:
         格式化后的消息节
     """
@@ -44,30 +44,30 @@ def format_section(title: str, *lines: str, use_divider: bool = True) -> str:
 def format_info_field(label: str, value: str, indent: int = 0) -> str:
     """
     格式化信息字段（键值对）
-    
+
     Args:
         label: 字段标签
         value: 字段值
         indent: 缩进级别
-        
+
     Returns:
         格式化后的字段
     """
     prefix = "  " * indent
     return f"{prefix}{label}: {value}"
 
-def format_server_info(name: str, host: str, port: int = 22, username: str = "root", 
+def format_server_info(name: str, host: str, port: int = 22, username: str = "root",
                       extra_info: str = "") -> str:
     """
     格式化服务器信息
-    
+
     Args:
         name: 服务器名称
         host: 主机地址
         port: 端口号
         username: 用户名
         extra_info: 额外信息
-        
+
     Returns:
         格式化后的服务器信息
     """
@@ -103,14 +103,14 @@ def format_status(message: str) -> str:
 def format_server_added(name: str, host: str, port: int, username: str, auth_type: str) -> str:
     """
     格式化服务器添加成功消息
-    
+
     Args:
         name: 服务器名称
         host: 主机地址
         port: 端口号
         username: 用户名
         auth_type: 认证类型（password/key/agent）
-        
+
     Returns:
         格式化后的成功消息
     """
@@ -119,7 +119,7 @@ def format_server_added(name: str, host: str, port: int, username: str, auth_typ
         "key": "密钥",
         "agent": "SSH Agent"
     }.get(auth_type, auth_type)
-    
+
     return (
         f"✅ 服务器添加成功！\n"
         f"{DIVIDER}\n"

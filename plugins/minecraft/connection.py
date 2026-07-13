@@ -6,7 +6,7 @@ Minecraft 连接管理
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -47,7 +47,7 @@ class ConnectionManager:
             self._locks[key] = lock
         return lock
 
-    def get_key(self, group_id: Optional[int], user_id: Optional[int]) -> str:
+    def get_key(self, group_id: int | None, user_id: int | None) -> str:
         """根据 group_id 或 user_id 生成 key"""
         if group_id:
             return f"group_{group_id}"
@@ -55,13 +55,13 @@ class ConnectionManager:
             return f"private_{user_id}"
 
     def get_connection(
-        self, group_id: Optional[int], user_id: Optional[int]
-    ) -> Optional[McConnection]:
+        self, group_id: int | None, user_id: int | None
+    ) -> McConnection | None:
         """获取当前 id 的连接"""
         key = self.get_key(group_id, user_id)
         return self._connections.get(key)
 
-    def has_connection(self, group_id: Optional[int], user_id: Optional[int]) -> bool:
+    def has_connection(self, group_id: int | None, user_id: int | None) -> bool:
         """检查是否有连接"""
         key = self.get_key(group_id, user_id)
         return key in self._connections
@@ -71,7 +71,7 @@ class ConnectionManager:
         key = conn.connection_key()
         self._connections[key] = conn
 
-    async def replace_connection(self, conn: McConnection) -> Optional[McConnection]:
+    async def replace_connection(self, conn: McConnection) -> McConnection | None:
         """Atomically publish a connection and close the previously published client."""
         key = conn.connection_key()
         async with self._lock_for(key):
@@ -83,9 +83,9 @@ class ConnectionManager:
 
     async def disconnect_connection(
         self,
-        group_id: Optional[int],
-        user_id: Optional[int],
-    ) -> Optional[McConnection]:
+        group_id: int | None,
+        user_id: int | None,
+    ) -> McConnection | None:
         key = self.get_key(group_id, user_id)
         async with self._lock_for(key):
             conn = self._connections.pop(key, None)
@@ -94,8 +94,8 @@ class ConnectionManager:
             return conn
 
     def remove_connection(
-        self, group_id: Optional[int], user_id: Optional[int]
-    ) -> Optional[McConnection]:
+        self, group_id: int | None, user_id: int | None
+    ) -> McConnection | None:
         """移除并返回连接"""
         key = self.get_key(group_id, user_id)
         return self._connections.pop(key, None)

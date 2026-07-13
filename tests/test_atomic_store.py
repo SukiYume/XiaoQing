@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from core import atomic_store
-from core.atomic_store import AtomicJsonStore, MISSING_ETAG, active_keyed_lock_count
+from core.atomic_store import MISSING_ETAG, AtomicJsonStore, active_keyed_lock_count
 
 
 def test_atomic_json_store_recovers_last_valid_backup(tmp_path: Path) -> None:

@@ -2,12 +2,14 @@
 Color 插件单元测试
 """
 
-import pytest
-from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, Mock
 import importlib.util
 import json
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+from core.plugin_base import ensure_dir, load_json, write_json
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -24,7 +26,6 @@ spec_data_manager = importlib.util.spec_from_file_location("color_data_manager",
 color_data_manager = importlib.util.module_from_spec(spec_data_manager)
 
 # 设置 data_manager 的依赖
-from core.plugin_base import load_json, write_json, ensure_dir
 color_data_manager.load_json = load_json
 color_data_manager.write_json = write_json
 color_data_manager.ensure_dir = ensure_dir

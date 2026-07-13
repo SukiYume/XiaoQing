@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
+from ..llm.llm_client import chat_completions_raw_with_fallback_paths
+from ..memory.memory import MemoryStore
+from ..store_base import StoreBase
 from .bw_expression_store import ExpressionRecord, ExpressionStore
 from .expr_utils import extract_json_obj, render_dialogue
-from ..llm.llm_client import chat_completions_raw_with_fallback_paths
-from ..memory.memory import MemoryStore, StoredMessage
-from ..store_base import StoreBase
 
 _JUDGE_PROMPT = """
 你是一个表达反思助手。Bot之前询问了表达方式是否合适。
@@ -51,7 +52,7 @@ class ReflectTrackerStore(StoreBase):
         super().__init__()
         self._cache: dict[str, ReflectTrackerState] = {}
 
-    def _path(self) -> Optional[Path]:
+    def _path(self) -> Path | None:
         return self._resolve_path("bw_learner", "reflect_trackers.json")
 
     def load(self) -> dict[str, ReflectTrackerState]:
@@ -110,14 +111,14 @@ class ReflectTrackerStore(StoreBase):
             self._cache.pop(operator_chat_id, None)
             self.save()
 
-    def get_tracker(self, operator_chat_id: str) -> Optional[ReflectTrackerState]:
+    def get_tracker(self, operator_chat_id: str) -> ReflectTrackerState | None:
         self.load()
         return self._cache.get(operator_chat_id)
 
 
 def _find_expression(
     items: Sequence[ExpressionRecord], expression_id: str
-) -> Optional[ExpressionRecord]:
+) -> ExpressionRecord | None:
     for it in items:
         if it.expression_id == expression_id:
             return it

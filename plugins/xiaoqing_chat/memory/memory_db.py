@@ -5,12 +5,11 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
 from .vector_store import VectorDoc, VectorStore, write_vector_store_files
-
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
 
@@ -26,7 +25,7 @@ class RetrievedItem:
 class MemoryDB:
     def __init__(self) -> None:
         self._store = VectorStore(dim=2048)
-        self._loaded_dir: Optional[Path] = None
+        self._loaded_dir: Path | None = None
         self._dirty = False
         self._dirty_version = 0
         self._lock = threading.RLock()
@@ -74,7 +73,7 @@ class MemoryDB:
         with self._lock:
             return bool(self._dirty)
 
-    def get(self, doc_id: str) -> Optional[RetrievedItem]:
+    def get(self, doc_id: str) -> RetrievedItem | None:
         with self._lock:
             doc = self._store.get_doc(doc_id)
         if not doc:
@@ -96,8 +95,8 @@ class MemoryDB:
         chat_id: str,
         top_k: int = 5,
         min_score: float = 0.12,
-        type_filter: Optional[str] = None,
-        meta_filter: Optional[dict[str, Any]] = None,
+        type_filter: str | None = None,
+        meta_filter: dict[str, Any] | None = None,
     ) -> list[RetrievedItem]:
         """Query tenant-scoped memories; a chat scope is never optional."""
         scoped_chat_id = str(chat_id or "").strip()

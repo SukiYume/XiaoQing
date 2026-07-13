@@ -4,11 +4,10 @@ import asyncio
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ..constants import is_question
 from ..store_base import StoreBase
-
 
 _LEGACY_SCORE_KWARGS = (
     "threshold",
@@ -40,7 +39,7 @@ class HeartflowEngine(StoreBase):
         super().__init__()
         self._cache: dict[str, HeartflowState] = {}
 
-    def _path(self, chat_id: str) -> Optional[Path]:
+    def _path(self, chat_id: str) -> Path | None:
         return self._resolve_path("heartflow", f"{chat_id}.json")
 
     def _load(self, chat_id: str) -> HeartflowState:

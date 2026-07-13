@@ -22,18 +22,16 @@ A岛匿名版插件 (adnmb)
 注意：用户登录/回复功能已禁用，仅保留浏览功能。
 """
 
-import sys
 import logging
 import uuid as uuidlib
 from pathlib import Path
 
-from core.plugin_base import segments, text, image, ensure_dir, PluginContextProtocol
 from core.args import parse
+from core.plugin_base import PluginContextProtocol, ensure_dir, image, segments, text
 from core.public_errors import public_error_response
 
 # 使用相对导入
-from .adapi import AdnmbClient, Post, Thread
-
+from .adapi import AdnmbClient
 
 logger = logging.getLogger(__name__)
 
@@ -95,43 +93,43 @@ def init(context=None) -> None:
 # ============================================================
 
 async def format_posts(
-    posts: list, 
+    posts: list,
     client: AdnmbClient,
     max_items: int = 10,
     download_images: bool = True
 ) -> list:
     """
     将帖子列表格式化为消息段
-    
+
     参数:
         posts: 帖子列表
         client: API 客户端（用于下载图片）
         max_items: 最大显示数量
         download_images: 是否下载图片
-    
+
     返回:
         消息段列表
     """
     if not posts:
         return segments("暂无内容")
-    
+
     result = []
     for post in posts[:max_items]:
         # 添加帖子文本
         result.append(text(post.format_text()))
-        
+
         # 如果有图片，下载并添加
         if download_images and post.img:
             img_path = await client.download_image(post.img)
             if img_path:
                 result.append(image(str(img_path)))
-        
+
         result.append(text("\n\n"))
-    
+
     # 移除最后的空行
     if result and result[-1].get("data", {}).get("text") == "\n\n":
         result.pop()
-    
+
     return result
 
 
@@ -143,26 +141,26 @@ async def format_threads(
 ) -> list:
     """
     将串列表格式化为消息段
-    
+
     参数:
         threads: 串列表
         client: API 客户端
         max_items: 最大显示数量
         show_replies: 是否显示回复
-    
+
     返回:
         消息段列表
     """
     if not threads:
         return segments("暂无内容")
-    
+
     # 收集所有帖子
     all_posts = []
     for thread in threads[:max_items]:
         all_posts.append(thread.main_post)
         if show_replies:
             all_posts.extend(thread.replies[:3])  # 每串最多显示 3 条回复
-    
+
     return await format_posts(all_posts, client, max_items=len(all_posts))
 
 
@@ -180,7 +178,7 @@ async def handle(command: str, args: str, event: dict, context: PluginContextPro
         cache_dir = context.plugin_dir / "cache"
         ensure_dir(cache_dir)
         logger.debug(f"缓存目录: {cache_dir}")
-        
+
         client = _get_client(context, cache_dir, user_id=str(event.get("user_id", "") or ""))
         logger.debug("API 客户端已创建")
 
@@ -302,7 +300,7 @@ async def handle(command: str, args: str, event: dict, context: PluginContextPro
 
         # 默认显示帮助
         return segments(_get_help())
-        
+
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="adnmb.handle")
 

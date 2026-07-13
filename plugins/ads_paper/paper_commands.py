@@ -1,30 +1,30 @@
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from core.plugin_base import segments
 
 from .ads_client import ADSClient
-from .constants import DEFAULT_MAX_RESULTS, MAX_TITLE_DISPLAY_LENGTH
+from .constants import MAX_TITLE_DISPLAY_LENGTH
 
 logger = logging.getLogger(__name__)
 
 async def resolve_paper_id_to_bibcode(
     client: ADSClient,
     paper_id: str
-) -> Optional[str]:
+) -> str | None:
     """
     将各种格式的论文标识符转换为 bibcode
-    
+
     支持的输入格式:
     - arXiv ID: 2401.12345, astro-ph/0701089
     - arXiv URL: https://arxiv.org/abs/2401.12345
     - Bibcode: 2026arXiv260122115P
-    
+
     Returns:
         bibcode 字符串，如果未找到则返回 None
     """
     paper_id = paper_id.strip()
-    
+
     # 如果看起来像 arXiv ID 或 URL，先尝试通过 arXiv 搜索
     # 使用 normalize 处理 URL，extract 处理纯 ID
     normalized_id = ADSClient._normalize_arxiv_id(paper_id)
@@ -33,7 +33,7 @@ async def resolve_paper_id_to_bibcode(
         paper = await client.search_by_arxiv_id(paper_id)
         if paper:
             return paper.get("bibcode")
-    
+
     # 否则假设是 bibcode，直接返回
     return paper_id
 

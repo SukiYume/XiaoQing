@@ -6,7 +6,6 @@ XiaoQing 异常定义
 """
 
 from pathlib import Path
-from typing import Optional
 
 
 class XiaoQingError(Exception):
@@ -20,8 +19,8 @@ class XiaoQingError(Exception):
 
 class PluginError(XiaoQingError):
     """插件执行错误"""
-    
-    def __init__(self, plugin_name: str, message: str, cause: Optional[Exception] = None):
+
+    def __init__(self, plugin_name: str, message: str, cause: Exception | None = None):
         self.plugin_name = plugin_name
         self.cause = cause
         super().__init__(f"[{plugin_name}] {message}")
@@ -53,7 +52,7 @@ class CommandError(XiaoQingError):
 
 class CommandNotFoundError(CommandError):
     """命令未找到"""
-    
+
     def __init__(self, command: str):
         self.command = command
         super().__init__(f"Command not found: {command}")
@@ -61,7 +60,7 @@ class CommandNotFoundError(CommandError):
 
 class CommandPermissionError(CommandError):
     """命令权限不足"""
-    
+
     def __init__(self, command: str, user_id: int):
         self.command = command
         self.user_id = user_id
@@ -70,7 +69,7 @@ class CommandPermissionError(CommandError):
 
 class CommandArgumentError(CommandError):
     """命令参数错误"""
-    
+
     def __init__(self, command: str, message: str):
         self.command = command
         super().__init__(f"Invalid arguments for '{command}': {message}")
@@ -114,8 +113,8 @@ class SessionError(XiaoQingError):
 
 class SessionNotFoundError(SessionError):
     """会话不存在"""
-    
-    def __init__(self, user_id: int, group_id: Optional[int] = None):
+
+    def __init__(self, user_id: int, group_id: int | None = None):
         self.user_id = user_id
         self.group_id = group_id
         location = f"group {group_id}" if group_id else "private"

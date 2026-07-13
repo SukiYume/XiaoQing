@@ -1,12 +1,11 @@
 import logging
-from typing import Optional, Tuple
 
 from ..models import Pet
+from ..services.database import Database
 from ..services.pet_service import PetService
 from ..services.user_service import UserService
-from ..services.database import Database
-from ..utils.validators import validate_pet_name
 from ..utils.formatters import format_pet_card, format_status_text
+from ..utils.validators import validate_pet_name
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +19,7 @@ def with_pet_name(pet: Pet, message: str) -> str:
     return f"{header}\n{message}"
 
 
-def _split_group_prefix(args: str) -> Tuple[Optional[int], str]:
+def _split_group_prefix(args: str) -> tuple[int | None, str]:
     raw = args.strip()
     if not raw:
         return None, ""
@@ -37,7 +36,7 @@ def resolve_pet_for_self_command(
     group_id: int,
     args: str,
     command_name: str,
-) -> Tuple[Optional[Pet], int, str, Optional[str]]:
+) -> tuple[Pet | None, int, str, str | None]:
     def _validate_scope(target_pet: Pet, resolved_group_id: int, resolved_args: str):
         group_config = db.get_group_config(resolved_group_id)
         if not group_config.enabled:
@@ -80,11 +79,11 @@ def resolve_pet_for_self_command(
 
 
 
-def _get_services(db: Database) -> Tuple[PetService, UserService]:
+def _get_services(db: Database) -> tuple[PetService, UserService]:
     return PetService(db), UserService(db)
 
 
-async def handle_adopt(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_adopt(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     if not args.strip():
         return False, "请提供宠物名字\n用法: /宠物 领养 <名字>"
 
@@ -103,7 +102,7 @@ async def handle_adopt(user_id: str, group_id: int, args: str, db: Database) -> 
     return success, message
 
 
-async def handle_status(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_status(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     if group_id == 0 and args.strip().isdigit():
         group_id = int(args.strip())
 
@@ -140,7 +139,7 @@ async def handle_status(user_id: str, group_id: int, args: str, db: Database) ->
     return True, result
 
 
-async def handle_feed(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> Tuple[bool, str]:
+async def handle_feed(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> tuple[bool, str]:
     pet, resolved_group_id, resolved_args, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "喂食"
     )
@@ -169,7 +168,7 @@ async def handle_feed(user_id: str, group_id: int, args: str, db: Database, **kw
     return success, with_pet_name(pet, message)
 
 
-async def handle_clean(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> Tuple[bool, str]:
+async def handle_clean(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> tuple[bool, str]:
     pet, resolved_group_id, _, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "清洁"
     )
@@ -195,7 +194,7 @@ async def handle_clean(user_id: str, group_id: int, args: str, db: Database, **k
     return success, with_pet_name(pet, message)
 
 
-async def handle_play(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> Tuple[bool, str]:
+async def handle_play(user_id: str, group_id: int, args: str, db: Database, **kwargs) -> tuple[bool, str]:
     pet, resolved_group_id, _, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "玩耍"
     )
@@ -221,7 +220,7 @@ async def handle_play(user_id: str, group_id: int, args: str, db: Database, **kw
     return success, with_pet_name(pet, message)
 
 
-async def handle_sleep(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_sleep(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     pet, resolved_group_id, _, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "睡觉"
     )
@@ -241,7 +240,7 @@ async def handle_sleep(user_id: str, group_id: int, args: str, db: Database) -> 
     return success, with_pet_name(pet, message)
 
 
-async def handle_wake(user_id: str, group_id: int, args: str, db: Database) -> Tuple[bool, str]:
+async def handle_wake(user_id: str, group_id: int, args: str, db: Database) -> tuple[bool, str]:
     pet, resolved_group_id, _, err = resolve_pet_for_self_command(
         db, user_id, group_id, args, "起床"
     )

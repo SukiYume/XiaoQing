@@ -15,13 +15,13 @@ import random
 import re
 import statistics
 import time
-from collections import Counter, defaultdict
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterable, Literal
-
+from typing import Any, Literal
 
 Action = Literal["reply", "silence", "optional_reply"]
 
@@ -161,7 +161,6 @@ def score_turn(
 
     turn_record = _turn_record(turn)
     expected = str(turn_record["expected_action"])
-    scenario = str(turn_record.get("scenario", ""))
     rubric_tags = set(turn_record.get("rubric_tags") or [])
     reply_text = _segments_text(reply_segments or [])
     did_reply = bool(reply_text or reply_segments)
@@ -171,7 +170,7 @@ def score_turn(
         if isinstance(seg, dict)
     )
 
-    scores = {dimension: 5 for dimension in DIMENSIONS}
+    scores = dict.fromkeys(DIMENSIONS, 5)
     failures: list[str] = []
 
     if expected == "reply" and not did_reply:
@@ -339,7 +338,7 @@ async def run_real_experiment(
     completed_case_ids = {str(row.get("case_id") or "") for row in rows}
     executed_this_run = 0
     async with aiohttp.ClientSession() as session:
-        for index, turn in enumerate(_iter_turn_records(matrix), start=1):
+        for turn in _iter_turn_records(matrix):
             if str(turn["case_id"]) in completed_case_ids:
                 continue
             if max_real_turns is not None and executed_this_run >= max_real_turns:

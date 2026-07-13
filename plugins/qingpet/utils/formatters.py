@@ -1,6 +1,6 @@
+
 from ..models import Pet, User
-from ..utils.constants import PetStage, PetStatus, MAX_STAT_VALUE, DEFAULT_DRESS_ITEMS
-from typing import List, Tuple
+from ..utils.constants import DEFAULT_DRESS_ITEMS, MAX_STAT_VALUE, PetStage, PetStatus
 from .time import utc_now
 
 
@@ -43,12 +43,12 @@ def format_pet_card(pet: Pet, user: User = None) -> str:
             minutes = int((remaining.total_seconds() % 3600) // 60)
             text += f"• 旅行剩余: {hours}小时{minutes}分钟\n"
         else:
-            text += f"• 旅行剩余: 即将返回\n"
+            text += "• 旅行剩余: 即将返回\n"
     text += f"• 年龄: {pet.age}天\n"
     text += f"• 亲密度: {pet.intimacy}\n"
     text += f"• 经验值: {pet.experience}\n"
     text += f"• 点赞: {pet.likes}\n\n"
-    text += f"📊 **属性**\n"
+    text += "📊 **属性**\n"
     text += f"  饥饿: {_progress_bar(pet.hunger)}\n"
     text += f"  心情: {_progress_bar(pet.mood)}\n"
     text += f"  清洁: {_progress_bar(pet.clean)}\n"
@@ -66,7 +66,7 @@ def format_pet_card(pet: Pet, user: User = None) -> str:
             "饰品": "🎀",
             "背景": "🖼️"
         }
-        text += f"\n👗 **装扮**\n"
+        text += "\n👗 **装扮**\n"
         for slot_name, item_id in equipped.items():
             if item_id in DEFAULT_DRESS_ITEMS:
                 emoji = slot_emojis.get(slot_name, "🔸")
@@ -76,7 +76,7 @@ def format_pet_card(pet: Pet, user: User = None) -> str:
             text += f"  ✨ 心情加成: +{bonus}\n"
 
     if user:
-        text += f"\n💰 **用户信息**\n"
+        text += "\n💰 **用户信息**\n"
         text += f"  🪙 金币: {user.coins}\n"
         text += f"  ❤️ 友情点: {user.friendship_points}\n"
         if user.titles:
@@ -85,7 +85,7 @@ def format_pet_card(pet: Pet, user: User = None) -> str:
                 text += f" 等{len(user.titles)}个"
             text += "\n"
         if user.is_trustee_active():
-            text += f"  🛡️ 托管中（衰减减半）\n"
+            text += "  🛡️ 托管中（衰减减半）\n"
 
     return text
 
@@ -113,7 +113,7 @@ def format_status_text(pet: Pet) -> str:
     return "\n".join(alerts)
 
 
-def format_ranking_list(ranking: List[Tuple[str, str, float]], ranking_type: str) -> str:
+def format_ranking_list(ranking: list[tuple[str, str, float]], ranking_type: str) -> str:
     type_labels = {
         "care_score": "🏆 照顾评分排行",
         "intimacy": "💕 亲密度排行",
@@ -224,7 +224,7 @@ def format_help_text(category: str = "") -> str:
     }
 
     key = category.strip().lower()
-    
+
     # 尝试映射别名
     target_key = aliases.get(key, key)
 
@@ -246,5 +246,5 @@ def format_help_text(category: str = "") -> str:
     display_names = ["基础", "进阶", "道具", "社交", "玩法", "管理"]
     for name in display_names:
         menu += f"• {name}\n"
-    
+
     return menu

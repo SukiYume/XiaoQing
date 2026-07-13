@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Sequence, TypeVar
+from typing import Any, Literal, TypeVar
 
 from ..media_registry import resolve_registered_media_items
 from ..message_parts import normalize_message_parts

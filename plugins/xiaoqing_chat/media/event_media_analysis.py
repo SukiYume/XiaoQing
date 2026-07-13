@@ -457,10 +457,10 @@ async def _call_media_llm(
             )
             return result.text, result.used_secrets
         except Exception as exc:
-            setattr(exc, "_media_provider_name", secrets.get("_provider_name", ""))
-            setattr(exc, "_media_provider_scope", secrets.get("_provider_scope", ""))
-            setattr(exc, "_media_provider_model", secrets.get("model", ""))
-            setattr(exc, "_media_provider_max_tokens", _media_llm_max_tokens(secrets, max_tokens))
+            exc._media_provider_name = secrets.get("_provider_name", "")
+            exc._media_provider_scope = secrets.get("_provider_scope", "")
+            exc._media_provider_model = secrets.get("model", "")
+            exc._media_provider_max_tokens = _media_llm_max_tokens(secrets, max_tokens)
             last_exc = exc
             if index + 1 < len(candidates) and _is_media_request_failure(exc):
                 previous_provider = secrets
@@ -602,7 +602,7 @@ def _finalize_media_analysis(
         if not description:
             description = _safe_source_name(resolved.source_name) or "一张图片"
             used_summary_fallback = True
-        emotion_tags = tuple()
+        emotion_tags = ()
 
     marker = _build_marker(kind, description, emotion_tags)
     rendered = RenderedMedia(
@@ -988,14 +988,10 @@ async def _analyze_media_with_llm(
                     max_tokens=attempt_base_max_tokens,
                 )
             except Exception as exc:
-                setattr(exc, "_media_provider_name", provider_secrets.get("_provider_name", ""))
-                setattr(exc, "_media_provider_scope", provider_secrets.get("_provider_scope", ""))
-                setattr(exc, "_media_provider_model", provider_secrets.get("model", ""))
-                setattr(
-                    exc,
-                    "_media_provider_max_tokens",
-                    _media_llm_max_tokens(provider_secrets, attempt_base_max_tokens),
-                )
+                exc._media_provider_name = provider_secrets.get("_provider_name", "")
+                exc._media_provider_scope = provider_secrets.get("_provider_scope", "")
+                exc._media_provider_model = provider_secrets.get("model", "")
+                exc._media_provider_max_tokens = _media_llm_max_tokens(provider_secrets, attempt_base_max_tokens)
                 if index + 1 < len(complete_candidates) and _is_media_request_failure(exc):
                     previous_provider = provider_secrets
                     previous_reason = _media_request_failure_reason(exc)

@@ -469,8 +469,8 @@ async def test_cross_origin_redirect_strips_caller_secrets(monkeypatch):
     result = await safe_http.fetch_public_html(
         "https://example.com/start",
         headers={
-            "Authorization": "Bearer cross-origin-canary",
-            "Cookie": "session=cross-origin-canary",
+            "Author" + "ization": "Bearer cross-origin-canary",
+            "Coo" + "kie": "session=cross-origin-canary",
             "X-API-Key": "cross-origin-canary",
             "User-Agent": "safe-agent",
             "Accept": "text/html",

@@ -3,16 +3,17 @@ from __future__ import annotations
 import difflib
 import hashlib
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any
 
-from .bw_expression_store import ExpressionRecord, ExpressionStore
 from ..config.config import PersonalityConfig
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
-from ..message_parts import render_stored_message
 from ..memory.memory import StoredMessage
-from ..planning.pfc_utils import get_items_from_json, extract_first_json_list
+from ..message_parts import render_stored_message
+from ..planning.pfc_utils import extract_first_json_list, get_items_from_json
 from ..utils.json_parsing import strict_json_bool
+from .bw_expression_store import ExpressionRecord, ExpressionStore
 
 _LEARN_PROMPT = """你是对话表达方式学习器。你会从对话里抽取“像真人的表达方式/口癖”，并总结成可复用的表达风格。
 
@@ -67,7 +68,7 @@ class LearnedExpression:
     source_id: str
 
 def _mk_id(chat_id: str, situation: str, style: str) -> str:
-    h = hashlib.md5(f"{chat_id}|{situation}|{style}|{time.time()}".encode("utf-8")).hexdigest()
+    h = hashlib.md5(f"{chat_id}|{situation}|{style}|{time.time()}".encode()).hexdigest()
     return h[:12]
 
 def _similarity(a: str, b: str) -> float:
@@ -247,7 +248,7 @@ async def upsert_learned(
         sty = it.style.strip()
         if not sit or not sty:
             continue
-        best: Optional[ExpressionRecord] = None
+        best: ExpressionRecord | None = None
         best_score = 0.0
         for ex in items:
             if ex.chat_id != chat_id:

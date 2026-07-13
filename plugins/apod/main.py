@@ -23,7 +23,6 @@ from core.plugin_base import atomic_write_bytes, image, segments, text
 from core.public_errors import public_error_message, public_error_response
 from core.safe_http import UnsafeUrlError, fetch_public_bytes, fetch_public_html
 
-
 logger = logging.getLogger(__name__)
 
 # ============================================================
@@ -66,8 +65,8 @@ def _get_proxy(context) -> str | None:
 
 def _sanitize_filename(url: str) -> str:
     """从 URL 提取并清理文件名"""
-    from urllib.parse import urlparse, unquote
-    
+    from urllib.parse import unquote, urlparse
+
     parsed = urlparse(url)
     filename = unquote(parsed.path.split('/')[-1])
     # 移除非法字符
@@ -180,16 +179,16 @@ def _extract_title(soup: BeautifulSoup, context) -> str:
             title_text = centers[1].b.string
             if title_text:
                 return title_text.strip()
-        
+
         # 策略2: 查找任何有内容的 center 标签中的 b 标签
         for center in centers:
             if center.b and center.b.string:
                 return center.b.string.strip()
-        
+
         # 策略3: 使用 title 标签
         if soup.title and soup.title.string:
             return soup.title.string.strip()
-            
+
     except Exception as exc:
         public_error_message(
             context,
@@ -197,14 +196,14 @@ def _extract_title(soup: BeautifulSoup, context) -> str:
             logger=context.logger,
             component="apod.extract_title",
         )
-    
+
     return DEFAULT_FALLBACK_TITLE
 
 async def get_explanation(soup: BeautifulSoup, context) -> str:
     """从页面提取解释文本"""
     if not soup:
         return NO_EXPLANATION_TEXT
-    
+
     try:
         paragraphs = soup.find_all('p')
         for paragraph in paragraphs:
@@ -274,23 +273,23 @@ async def handle(command: str, args: str, event: dict, context) -> list:
     """命令处理入口"""
     try:
         parsed = parse(args)
-        
+
         # 解析子命令
         if parsed and parsed.first:
             subcommand = parsed.first.lower()
-            
+
             if subcommand == "help" or subcommand == "帮助":
                 return segments(_show_help())
-        
+
         logger.info("开始获取 APOD...")
-        
+
         # 从配置获取 URL
         url = _get_config(context).get("url", DEFAULT_APOD_URL)
-        
+
         # 准备图片存储目录
         images_dir = context.data_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
-        
+
         proxy = _get_proxy(context)
         page_url = _require_allowed_url(url, context)
         safe_response = await fetch_public_html(
@@ -300,7 +299,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             allowed_hosts=_allowed_hosts(context),
         )
         html = safe_response.body if safe_response else None
-        
+
         if not html:
             error_msg = "❌ 获取失败: 网络错误" + ("且未配置代理" if not proxy else "")
             logger.error(error_msg)
@@ -308,13 +307,13 @@ async def handle(command: str, args: str, event: dict, context) -> list:
 
         # 解析 HTML
         soup = await asyncio.to_thread(BeautifulSoup, html, 'html.parser')
-        
+
         # 获取标题（使用增强的提取函数）
         title = _extract_title(soup, context)
-        
+
         # 获取解释
         explanation = await get_explanation(soup, context)
-        
+
         # -------------------------------------------------------------
         # Case A: Image
         # -------------------------------------------------------------
@@ -322,25 +321,25 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             img_src = soup.find('img').attrs.get('src', '')
             if not img_src:
                 return segments("❌ 无法获取图片链接")
-            
+
             # 构造完整 URL
             base_url = safe_response.url if safe_response else page_url
             imgurl = urljoin(base_url, img_src)
             _require_allowed_url(imgurl, context)
             img_path: Path | None = None
-            
+
             context.logger.info(f"发现图片: {imgurl}")
-            
+
             img_path = await _safe_download_image(imgurl, images_dir, context)
             if img_path is None:
                 return segments(f"❌ 图片下载失败\n\n{title}\n\n{explanation}")
-            
+
             # 返回图片和文字，让框架统一处理发送
             return [
                 image(str(img_path)),
                 text(f"{title}\n\n{explanation}")
             ]
-            
+
         # -------------------------------------------------------------
         # Case B: Iframe Video
         # -------------------------------------------------------------
@@ -349,7 +348,7 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             _require_https_display_url(videourl)
             context.logger.info(f"发现 iframe 视频: {videourl}")
             return segments(f"{videourl}\n\n{title}\n\n{explanation}")
-            
+
         # -------------------------------------------------------------
         # Case C: Video Tag
         # -------------------------------------------------------------
@@ -357,28 +356,28 @@ async def handle(command: str, args: str, event: dict, context) -> list:
             context.logger.info("发现 video 标签视频")
             video_element = soup.find('video')
             video_src = None
-            
+
             if video_element.find('source'):
                 video_src = video_element.find('source').attrs.get('src', '')
-            
+
             if not video_src and 'src' in video_element.attrs:
                 video_src = video_element.attrs['src']
-                
+
             if video_src and not (video_src.startswith('http://') or video_src.startswith('https://')):
                 video_src = urljoin(url, video_src)
-                
+
             if video_src:
                 _require_https_display_url(video_src)
                 return segments(f"{video_src}\n\n{title}\n\n{explanation}")
             else:
                 return segments(f"[视频无法获取链接]\n\n{title}\n\n{explanation}\n\n原网址: {url}")
-        
+
         # -------------------------------------------------------------
         # Case D: Other
         # -------------------------------------------------------------
         else:
             return segments(f"今天的 APOD 内容格式不支持，请直接访问: {url}")
-             
+
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="apod.handle")
 
@@ -410,11 +409,11 @@ def _show_help() -> str:
 async def scheduled(context) -> list:
     """
     定时任务入口
-    
+
     每天 13:30 自动推送 APOD 到配置的群组
     """
     context.logger.info("执行 APOD 定时任务...")
-    
+
     # 构造事件对象，包含消息类型信息
     # group_id 将由定时任务框架根据 plugin.json 中的配置自动填充
     event = {
@@ -422,7 +421,7 @@ async def scheduled(context) -> list:
         "group_id": None,
         "user_id": None
     }
-    
+
     return await handle(
         command="apod",
         args="",

@@ -9,16 +9,15 @@ smalltalk 插件单元测试
 5. 错误处理
 """
 
+import importlib.util
 import json
-import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
-import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-
-import importlib.util
 
 # 动态加载 smalltalk 插件
 spec = importlib.util.spec_from_file_location(
@@ -492,7 +491,7 @@ class TestSmalltalkHandler:
     async def test_smalltalk_chat_plugin_unavailable(self, mock_context, mock_event):
         """测试 chat 插件不可用的情况"""
         import sys
-        
+
         # 使用 patch.dict 将 plugins.chat 设置为 None，强制引发 ImportError
         with patch.dict(sys.modules, {'plugins.chat': None, 'plugins.chat.main': None}):
             result = await smalltalk.handle_smalltalk("测试", mock_event, mock_context)

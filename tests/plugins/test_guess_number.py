@@ -1,12 +1,13 @@
 """
 guess_number 插件单元测试
 """
-import pytest
+import importlib.util
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-import importlib.util
 spec = importlib.util.spec_from_file_location("guess_number_main", ROOT / "plugins" / "guess_number" / "main.py")
 guess_number = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guess_number)

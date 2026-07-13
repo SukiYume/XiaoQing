@@ -6,7 +6,6 @@ import re
 
 from core.public_errors import public_error_message
 
-
 UNIX_TIMESTAMP_MIN_ABS = 100_000_000
 
 
@@ -31,22 +30,22 @@ def _parse_numeric_time(value: float, Time):
 async def handle_time(args: str, context) -> str:
     """处理时间转换命令"""
     args = args.strip()
-    
+
     # 如果没有参数，显示当前时间
     if not args:
         return _get_current_time()
-    
+
     try:
         from astropy.time import Time
-        
+
         # 解析子命令
         parts = args.split(None, 1)
         subcommand = parts[0].lower()
-        
+
         # 处理 now 子命令
         if subcommand == "now":
             return _get_current_time()
-        
+
         # 处理 jd 子命令
         if subcommand == "jd":
             if len(parts) < 2:
@@ -57,7 +56,7 @@ async def handle_time(args: str, context) -> str:
                 return _build_time_response(f"JD {jd_val}", t)
             except ValueError:
                 return "无效的儒略日数值"
-        
+
         # 处理 mjd 子命令
         if subcommand == "mjd":
             if len(parts) < 2:
@@ -68,14 +67,14 @@ async def handle_time(args: str, context) -> str:
                 return _build_time_response(f"MJD {mjd_val}", t)
             except ValueError:
                 return "无效的修正儒略日数值"
-        
+
         # 处理一般的时间格式（单个数字依次识别 Unix / JD / MJD）
         numeric_match = re.match(r'^(-?\d+\.?\d*)$', args)
         if numeric_match:
             numeric_value = float(numeric_match.group(1))
             t, time_type = _parse_numeric_time(numeric_value, Time)
             return _build_time_response(f"{time_type} {numeric_value}", t)
-        
+
         # 处理其他时间格式（ISO等）
         t = Time(args)
         return _build_time_response(args, t)

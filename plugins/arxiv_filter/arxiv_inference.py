@@ -2,8 +2,8 @@
 """
 arXiv 推理 facade — re-export runner 的公开 API。
 
-main.py 通过 ``from .arxiv_inference import get_positive_arxiv_today_as_string``
-arxiv_test.py 通过 ``from . import arxiv_inference`` 使用。
+main.py 通过 ``from .arxiv_inference import get_positive_arxiv_today_as_string``，
+仓库工具 ``scripts/arxiv_inference_cli.py`` 通过公开 facade 使用。
 """
 
 import importlib

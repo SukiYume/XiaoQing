@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence
 
 from ..store_base import StoreBase
 
@@ -25,9 +25,9 @@ class ExpressionRecord:
 class ExpressionStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
-        self._cache: Optional[list[ExpressionRecord]] = None
+        self._cache: list[ExpressionRecord] | None = None
 
-    def _path(self) -> Optional[Path]:
+    def _path(self) -> Path | None:
         return self._resolve_path("bw_learner", "expressions.json")
 
     def load(self) -> list[ExpressionRecord]:

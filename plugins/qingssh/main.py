@@ -33,7 +33,6 @@ SSH远程控制插件
 """
 
 import logging
-from typing import Any
 
 from core.args import parse
 from core.plugin_base import segments

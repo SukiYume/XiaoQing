@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 from ..config.config import PersonalityConfig
 from ..memory.memory import StoredMessage
@@ -14,6 +15,7 @@ from ..message_parts import (
     render_message_parts,
     render_stored_message,
 )
+
 
 @dataclass(frozen=True)
 class ChatMessage:
