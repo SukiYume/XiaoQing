@@ -1,114 +1,100 @@
-"""
-颜色转换模块
-提供 RGB、CMYK、HEX 之间的转换和验证功能
-"""
-# 常量配置
+"""验证并转换 RGB、CMYK 与 HEX 颜色值。"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Sequence
+from typing import cast
+
 RGB_MIN = 0
 RGB_MAX = 255
 CMYK_MIN = 0
 CMYK_MAX = 100
+_HEX_PATTERN = re.compile(r"#?(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})")
 
-def validate_rgb(rgb: list[int]) -> tuple[bool, str | None]:
-    """验证 RGB 值的有效性
 
-    Args:
-        rgb: RGB 值列表 [R, G, B]
+def _validate_channels(
+    values: Sequence[object],
+    *,
+    label: str,
+    expected_count: int,
+    minimum: int,
+    maximum: int,
+) -> tuple[bool, str | None]:
+    if len(values) != expected_count:
+        return False, f"{label} 需要 {expected_count} 个值，实际提供了 {len(values)} 个"
 
-    Returns:
-        (是否有效, 错误信息)
-    """
-    if len(rgb) != 3:
-        return False, f"RGB 需要3个值，实际提供了 {len(rgb)} 个"
-
-    for i, val in enumerate(rgb):
-        if not isinstance(val, int):
-            return False, f"RGB 第 {i+1} 个值必须是整数"
-        if not (RGB_MIN <= val <= RGB_MAX):
-            return False, f"RGB 值必须在 {RGB_MIN}-{RGB_MAX} 范围内，第 {i+1} 个值为 {val}"
-
+    for index, value in enumerate(values, start=1):
+        if type(value) is not int:
+            return False, f"{label} 第 {index} 个值必须是整数"
+        if not minimum <= value <= maximum:
+            return False, f"{label} 值必须在 {minimum}-{maximum} 范围内，第 {index} 个值为 {value}"
     return True, None
 
-def validate_cmyk(cmyk: list[int]) -> tuple[bool, str | None]:
-    """验证 CMYK 值的有效性
 
-    Args:
-        cmyk: CMYK 值列表 [C, M, Y, K]
+def validate_rgb(rgb: Sequence[object]) -> tuple[bool, str | None]:
+    """验证三个精确整数 RGB 通道，布尔值不视为整数。"""
 
-    Returns:
-        (是否有效, 错误信息)
-    """
-    if len(cmyk) != 4:
-        return False, f"CMYK 需要4个值，实际提供了 {len(cmyk)} 个"
+    return _validate_channels(
+        rgb,
+        label="RGB",
+        expected_count=3,
+        minimum=RGB_MIN,
+        maximum=RGB_MAX,
+    )
 
-    for i, val in enumerate(cmyk):
-        if not isinstance(val, int):
-            return False, f"CMYK 第 {i+1} 个值必须是整数"
-        if not (CMYK_MIN <= val <= CMYK_MAX):
-            return False, f"CMYK 值必须在 {CMYK_MIN}-{CMYK_MAX} 范围内，第 {i+1} 个值为 {val}"
 
-    return True, None
+def validate_cmyk(cmyk: Sequence[object]) -> tuple[bool, str | None]:
+    """验证四个精确整数 CMYK 通道，布尔值不视为整数。"""
 
-def rgb_to_cmyk(rgb: list[int]) -> list[int]:
-    """RGB 转 CMYK
+    return _validate_channels(
+        cmyk,
+        label="CMYK",
+        expected_count=4,
+        minimum=CMYK_MIN,
+        maximum=CMYK_MAX,
+    )
 
-    Args:
-        rgb: RGB 值列表 [R, G, B]
 
-    Returns:
-        CMYK 值列表 [C, M, Y, K]
-    """
-    r, g, b = [int(x) for x in rgb]
-    RGB_SCALE = RGB_MAX
-    CMYK_SCALE = CMYK_MAX
+def _require_rgb(rgb: Sequence[object]) -> tuple[int, int, int]:
+    valid, error = validate_rgb(rgb)
+    if not valid:
+        raise ValueError(error or "RGB 颜色值无效")
+    return cast(tuple[int, int, int], tuple(rgb))
 
-    if (r, g, b) == (0, 0, 0):
-        return [0, 0, 0, CMYK_SCALE]
 
-    c = 1 - r / RGB_SCALE
-    m = 1 - g / RGB_SCALE
-    y = 1 - b / RGB_SCALE
-    min_cmy = min(c, m, y)
+def rgb_to_cmyk(rgb: Sequence[object]) -> list[int]:
+    """把有效 RGB 转成 0-100 的整数 CMYK。"""
 
-    c = (c - min_cmy) / (1 - min_cmy)
-    m = (m - min_cmy) / (1 - min_cmy)
-    y = (y - min_cmy) / (1 - min_cmy)
-    k = min_cmy
+    red, green, blue = _require_rgb(rgb)
+    if (red, green, blue) == (0, 0, 0):
+        return [0, 0, 0, CMYK_MAX]
 
-    return [int(c * CMYK_SCALE), int(m * CMYK_SCALE), int(y * CMYK_SCALE), int(k * CMYK_SCALE)]
+    cyan = 1 - red / RGB_MAX
+    magenta = 1 - green / RGB_MAX
+    yellow = 1 - blue / RGB_MAX
+    black = min(cyan, magenta, yellow)
+    scale = 1 - black
+    return [
+        round((cyan - black) / scale * CMYK_MAX),
+        round((magenta - black) / scale * CMYK_MAX),
+        round((yellow - black) / scale * CMYK_MAX),
+        round(black * CMYK_MAX),
+    ]
+
 
 def hex_to_rgb(hex_value: str) -> list[int]:
-    """HEX 转 RGB
+    """解析一个可带单个 ``#`` 的三位或六位 ASCII HEX 值。"""
 
-    Args:
-        hex_value: HEX 颜色值，支持 #RRGGBB 或 RRGGBB 格式
-
-    Returns:
-        RGB 值列表 [R, G, B]
-
-    Raises:
-        ValueError: 如果 HEX 格式无效
-    """
-    value = hex_value.lstrip('#')
-    if len(value) not in [3, 6]:
-        raise ValueError(f"HEX 颜色值长度必须是3或6，当前为 {len(value)}")
-
+    if not isinstance(hex_value, str) or _HEX_PATTERN.fullmatch(hex_value) is None:
+        raise ValueError("HEX 颜色值必须是 #RGB、RGB、#RRGGBB 或 RRGGBB")
+    value = hex_value.removeprefix("#")
     if len(value) == 3:
-        # 支持简写格式 #RGB -> #RRGGBB
-        value = ''.join([c*2 for c in value])
+        value = "".join(character * 2 for character in value)
+    return [int(value[index : index + 2], 16) for index in range(0, 6, 2)]
 
-    try:
-        return [int(value[i:i+2], 16) for i in range(0, 6, 2)]
-    except ValueError as e:
-        raise ValueError(f"无效的 HEX 颜色值: {hex_value}") from e
 
-def rgb_to_hex(rgb: list[int]) -> str:
-    """RGB 转 HEX
+def rgb_to_hex(rgb: Sequence[object]) -> str:
+    """把有效 RGB 规范化为小写 ``#rrggbb``。"""
 
-    Args:
-        rgb: RGB 值列表 [R, G, B]
-
-    Returns:
-        HEX 颜色值字符串，格式为 #RRGGBB
-    """
-    red, green, blue = (int(value) for value in rgb)
-    return f"#{red:02x}{green:02x}{blue:02x}"
+    return "#{:02x}{:02x}{:02x}".format(*_require_rgb(rgb))

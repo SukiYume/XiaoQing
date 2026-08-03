@@ -1,18 +1,6 @@
 import asyncio
 
-import pytest
-
 from plugins.pendo.services.ai_parser import AIParser
-from plugins.pendo.services.db import Database
-
-
-@pytest.fixture
-def db(tmp_path):
-    database = Database(str(tmp_path / "pendo.db"))
-    try:
-        yield database
-    finally:
-        database.cleanup()
 
 
 def test_diary_text_is_not_sent_to_ai_without_explicit_consent(db, monkeypatch):

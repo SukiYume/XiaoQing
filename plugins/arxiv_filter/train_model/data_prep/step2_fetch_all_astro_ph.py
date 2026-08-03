@@ -33,6 +33,7 @@ from pathlib import Path
 feedparser = importlib.import_module("feedparser")
 
 try:
+    from core.atomic_store import atomic_write_text
     from core.bounded_http import (
         XML_MIME_POLICY,
         BodyLimits,
@@ -45,6 +46,7 @@ except ModuleNotFoundError:  # Direct script execution outside the repository ro
     repository_root = Path(__file__).resolve().parents[4]
     if str(repository_root) not in sys.path:
         sys.path.insert(0, str(repository_root))
+    from core.atomic_store import atomic_write_text
     from core.bounded_http import (
         XML_MIME_POLICY,
         BodyLimits,
@@ -54,10 +56,8 @@ except ModuleNotFoundError:  # Direct script execution outside the repository ro
         validate_bounded_xml,
     )
 
-try:
-    from .utils import clean_arxiv_id
-except ImportError:  # Direct script execution.
-    from utils import clean_arxiv_id
+_utils_module = importlib.import_module(f"{__package__}.utils" if __package__ else "utils")
+clean_arxiv_id = _utils_module.clean_arxiv_id
 
 # ============================================================
 # 配置
@@ -70,7 +70,7 @@ API_URL = "https://export.arxiv.org/api/query"
 HEADERS = {
     "User-Agent": os.environ.get(
         "ARXIV_USER_AGENT",
-        "XiaoQingBot-arxiv-research/2.0 (+https://github.com/xiaoqing-bot/xiaoqing)",
+        "XiaoQingBot-arxiv-research/2.0 (+https://github.com/SukiYume/XiaoQing)",
     )
 }
 MAX_RESULTS = 2000  # 每页最大结果数
@@ -105,8 +105,17 @@ ARXIV_REDIRECT_POLICY = RedirectPolicy(
 def load_date_range() -> tuple[str, str]:
     """加载日期范围"""
     with open(DATE_RANGE_FILE, encoding="utf-8") as f:
-        dr = json.load(f)
-    return dr["start"], dr["end"]
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise ValueError("date_range.json must contain a JSON object")
+    start, end = payload.get("start"), payload.get("end")
+    if not isinstance(start, str) or not isinstance(end, str):
+        raise ValueError("date_range.json must contain string start/end fields")
+    start_date = datetime.strptime(start, "%Y-%m-%d")
+    end_date = datetime.strptime(end, "%Y-%m-%d")
+    if start_date > end_date:
+        raise ValueError("date range start must not be after end")
+    return start, end
 
 
 def generate_monthly_ranges(start_str: str, end_str: str) -> list[tuple[str, str, int]]:
@@ -158,7 +167,7 @@ def yymm_to_label(yymm: int) -> str:
 MONTHLY_DIR = CACHE_DIR / "monthly"
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class FetchResult:
     papers: list[dict[str, str]]
     completed: bool
@@ -171,35 +180,66 @@ def load_cache(yymm: int) -> list[dict[str, str]] | None:
     cache_file = MONTHLY_DIR / f"{yymm}.json"
     if cache_file.exists():
         with open(cache_file, encoding="utf-8") as f:
-            return json.load(f)
+            payload = json.load(f)
+        if not isinstance(payload, list) or any(
+            not isinstance(record, dict)
+            or any(
+                not isinstance(record.get(field), str)
+                for field in ("arxiv_id", "title", "abstract")
+            )
+            for record in payload
+        ):
+            raise ValueError(f"invalid monthly cache: {cache_file}")
+        return payload
     return None
 
 
-def save_cache(yymm: int, papers: list[dict[str, str]]):
+def save_cache(yymm: int, papers: list[dict[str, str]]) -> None:
     """保存某月的缓存"""
     MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
     cache_file = MONTHLY_DIR / f"{yymm}.json"
-    temp_file = cache_file.with_suffix(".json.tmp")
-    temp_file.write_text(json.dumps(papers, ensure_ascii=False), encoding="utf-8")
-    temp_file.replace(cache_file)
+    atomic_write_text(cache_file, json.dumps(papers, ensure_ascii=False))
 
 
 def _partial_path(yymm: int) -> Path:
     return MONTHLY_DIR / f"{yymm}.partial.json"
 
 
-def load_checkpoint(yymm: int) -> dict:
+def load_checkpoint(yymm: int) -> FetchResult:
     path = _partial_path(yymm)
     if not path.exists():
-        return {"papers": [], "next_offset": 0, "total_results": None, "completed": False}
-    return json.loads(path.read_text(encoding="utf-8"))
+        return FetchResult([], False, 0, None)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"invalid checkpoint: {path}")
+    papers = payload.get("papers")
+    completed = payload.get("completed")
+    next_offset = payload.get("next_offset")
+    total_results = payload.get("total_results")
+    if (
+        not isinstance(papers, list)
+        or any(
+            not isinstance(record, dict)
+            or any(
+                not isinstance(record.get(field), str)
+                for field in ("arxiv_id", "title", "abstract")
+            )
+            for record in papers
+        )
+        or type(completed) is not bool
+        or type(next_offset) is not int
+        or next_offset < 0
+        or (total_results is not None and (type(total_results) is not int or total_results < 0))
+    ):
+        raise ValueError(f"invalid checkpoint: {path}")
+    return FetchResult(papers, completed, next_offset, total_results)
 
 
 def save_checkpoint(yymm: int, result: FetchResult) -> None:
     MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
     path = _partial_path(yymm)
-    temp = path.with_suffix(".json.tmp")
-    temp.write_text(
+    atomic_write_text(
+        path,
         json.dumps(
             {
                 "papers": result.papers,
@@ -209,9 +249,7 @@ def save_checkpoint(yymm: int, result: FetchResult) -> None:
             },
             ensure_ascii=False,
         ),
-        encoding="utf-8",
     )
-    temp.replace(path)
 
 
 def is_month_finalized(yymm: int) -> bool:
@@ -221,7 +259,7 @@ def is_month_finalized(yymm: int) -> bool:
     """
     today = datetime.now(timezone.utc)
     current_yymm = (today.year - 2000) * 100 + today.month
-    return load_cache(yymm) is not None and yymm < current_yymm
+    return (MONTHLY_DIR / f"{yymm}.json").is_file() and yymm < current_yymm
 
 
 # ============================================================
@@ -235,14 +273,21 @@ def fetch_month(
     *,
     initial_papers: list[dict[str, str]] | None = None,
     start_offset: int = 0,
+    initial_total_results: int | None = None,
 ) -> FetchResult:
     """
     获取指定月份的所有 astrophysics 论文（标题 + 摘要）。
     自动分页，处理重试和速率限制。
     """
+    if type(start_offset) is not int or start_offset < 0:
+        raise ValueError("start_offset must be a non-negative integer")
+    if initial_total_results is not None and (
+        type(initial_total_results) is not int or initial_total_results < 0
+    ):
+        raise ValueError("initial_total_results must be a non-negative integer or None")
     papers = list(initial_papers or [])
     offset = start_offset
-    total_results = None
+    total_results = initial_total_results
 
     while True:
         search_query = f"astrophysics AND submittedDate:[{api_start} TO {api_end}]"
@@ -269,7 +314,7 @@ def fetch_month(
                 )
                 xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
                 feed = feedparser.parse(xml_body)
-                if offset == 0 and "opensearch_totalresults" in feed.feed:
+                if total_results is None and "opensearch_totalresults" in feed.feed:
                     total_results = int(feed.feed.opensearch_totalresults)
                 break
             except Exception as e:
@@ -308,9 +353,13 @@ def fetch_month(
             pct = len(papers) / total_results * 100
             print(f"      {len(papers)}/{total_results} ({pct:.0f}%)", end="\r")
 
-        # 没有更多结果
-        offset += len(feed.entries)
-        if len(feed.entries) < MAX_RESULTS:
+        # 以 API 返回的原始条目数推进 offset；无效条目只影响本地记录数，不影响分页游标。
+        batch_count = len(feed.entries)
+        offset += batch_count
+        completed = (
+            offset >= total_results if total_results is not None else batch_count < MAX_RESULTS
+        )
+        if completed:
             return FetchResult(papers, True, offset, total_results)
 
         time.sleep(DELAY)
@@ -321,7 +370,7 @@ def fetch_month(
 # ============================================================
 
 
-def main():
+def main() -> None:
     # 1. 加载日期范围
     print("=" * 60)
     print("Step 2: 获取 astro-ph 论文（arXiv API）")
@@ -357,8 +406,9 @@ def main():
         result = fetch_month(
             api_start,
             api_end,
-            initial_papers=checkpoint.get("papers", []),
-            start_offset=int(checkpoint.get("next_offset", 0)),
+            initial_papers=checkpoint.papers,
+            start_offset=checkpoint.next_offset,
+            initial_total_results=checkpoint.total_results,
         )
 
         if result.completed:
@@ -393,7 +443,7 @@ def main():
             try:
                 ym = int(p["arxiv_id"][:4])
                 month_counts[ym] = month_counts.get(ym, 0) + 1
-            except (ValueError, IndexError):
+            except ValueError:
                 pass
 
     print(f"总计: {len(all_papers)} 条, 去重后 {total_unique} 条")

@@ -1,33 +1,31 @@
+"""发现、验证并归档 Codex 任务生成的图片制品。"""
+
 from __future__ import annotations
 
 import os
 import re
 import stat
 import tempfile
-import warnings
 from collections import Counter, deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
-from typing import overload
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
+from core.image_validation import (
+    ImageValidationError,
+    ImageValidationLimits,
+    stat_identity,
+    validate_image_fd,
+)
+
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-IMAGE_FORMAT_EXTENSIONS = {
-    "GIF": {".gif"},
-    "JPEG": {".jpeg", ".jpg"},
-    "PNG": {".png"},
-    "WEBP": {".webp"},
-}
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\n]+)\)")
 IMAGE_LINE_RE = re.compile(r"(?im)^\s*(?:图片|image|img|artifact)\s*[:：]\s*(.+?)\s*$")
 COPY_CHUNK_BYTES = 1024 * 1024
-
-
-def default_generated_images_dir() -> Path:
-    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "generated_images"
+MAX_REFERENCED_PATH_CHARS = 32_768
 
 
 @dataclass(frozen=True)
@@ -48,10 +46,10 @@ class CodexImageArtifact:
 
 @dataclass(frozen=True)
 class ArtifactLimits:
-    """Hard limits for one artifact collection pass.
+    """单次制品收集的硬预算。
 
-    ``scan_max_depth=0`` scans files in the artifact root but does not descend.
-    All limits may be set to zero to disable the corresponding resource.
+    ``scan_max_depth=0`` 只扫描制品根目录中的文件而不向下递归；各项上限均可设为零，
+    以禁用对应资源。
     """
 
     scan_max_entries: int = 512
@@ -69,34 +67,13 @@ class ArtifactLimits:
 
 
 @dataclass
-class ArtifactCollectionResult(Sequence[CodexImageArtifact]):
-    """Collected artifacts plus bounded-loss diagnostics.
-
-    ``dropped_count`` counts known image candidates that were rejected. Scan
-    truncation can hide an unknown number of candidates, so it is reported
-    separately by ``scan_truncated``. ``reasons`` also records scan-limit events.
-    The sequence methods preserve the previous list-like call-site behaviour.
-    """
+class ArtifactCollectionResult:
+    """已归档图片和有界丢弃诊断；调用方必须显式读取 ``artifacts``。"""
 
     artifacts: list[CodexImageArtifact] = field(default_factory=list)
     dropped_count: int = 0
     reasons: dict[str, int] = field(default_factory=dict)
     scan_truncated: bool = False
-
-    def __len__(self) -> int:
-        return len(self.artifacts)
-
-    def __iter__(self) -> Iterator[CodexImageArtifact]:
-        return iter(self.artifacts)
-
-    @overload
-    def __getitem__(self, index: int) -> CodexImageArtifact: ...
-
-    @overload
-    def __getitem__(self, index: slice) -> list[CodexImageArtifact]: ...
-
-    def __getitem__(self, index: int | slice) -> CodexImageArtifact | list[CodexImageArtifact]:
-        return self.artifacts[index]
 
 
 @dataclass(frozen=True)
@@ -125,6 +102,8 @@ class _ArtifactRejected(Exception):
 
 
 def _clean_path_text(value: str) -> str:
+    if len(value) > MAX_REFERENCED_PATH_CHARS or any(ord(char) < 32 for char in value):
+        return ""
     text = value.strip().strip("`").strip()
     if text.startswith("<") and text.endswith(">"):
         text = text[1:-1].strip()
@@ -150,18 +129,14 @@ def _is_within(path: Path, root: Path) -> bool:
     return True
 
 
-def _stat_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
-    return (
-        int(info.st_dev),
-        int(info.st_ino),
-        stat.S_IFMT(info.st_mode),
-        int(info.st_size),
-        int(info.st_mtime_ns),
-    )
+def _path_key(path: Path) -> str:
+    """仅在宿主文件系统本身大小写不敏感时折叠路径。"""
+
+    return os.path.normcase(str(path.resolve(strict=False)))
 
 
 def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
-    return _stat_identity(left) == _stat_identity(right)
+    return stat_identity(left) == stat_identity(right)
 
 
 def _candidate_paths(raw_value: str, *, cwd: Path, artifact_dir: Path) -> list[Path]:
@@ -186,9 +161,7 @@ def _resolve_image_path(
     *,
     cwd: Path,
     artifact_dir: Path,
-    session_dir: Path,
 ) -> Path | None:
-    del session_dir
     allowed_roots = [cwd, artifact_dir]
     for candidate in _candidate_paths(raw_value, cwd=cwd, artifact_dir=artifact_dir):
         if candidate.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -232,7 +205,7 @@ def _scan_directory_entries(
                 is_symlink = entry.is_symlink() or stat.S_ISLNK(entry_info.st_mode)
                 is_directory = stat.S_ISDIR(entry_info.st_mode)
                 is_file = stat.S_ISREG(entry_info.st_mode)
-                identity = _stat_identity(entry_info)
+                identity = stat_identity(entry_info)
                 metadata_error = False
             except OSError:
                 is_symlink = False
@@ -255,38 +228,87 @@ def _scan_directory_entries(
     return entries, consumed, truncated
 
 
-def _artifact_images(artifact_dir: Path, limits: ArtifactLimits) -> _ArtifactScanResult:
-    result = _ArtifactScanResult()
+def _scan_root_identity(
+    artifact_dir: Path,
+    result: _ArtifactScanResult,
+) -> tuple[int, int, int, int, int] | None:
     try:
         root_info = os.lstat(artifact_dir)
     except FileNotFoundError:
-        return result
+        return None
     except OSError:
         result.truncated = True
         result.scan_reasons["scan_error"] += 1
-        return result
+        return None
     if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
         result.truncated = True
         result.scan_reasons["unsafe_scan_root"] += 1
+        return None
+    return stat_identity(root_info)
+
+
+def _directory_identity_is_current(
+    directory: Path,
+    expected_identity: tuple[int, int, int, int, int],
+) -> bool:
+    try:
+        current = os.lstat(directory)
+    except OSError:
+        return False
+    return (
+        not stat.S_ISLNK(current.st_mode)
+        and stat.S_ISDIR(current.st_mode)
+        and stat_identity(current) == expected_identity
+    )
+
+
+def _record_scanned_entry(
+    entry: _ScannedEntry,
+    *,
+    depth: int,
+    limits: ArtifactLimits,
+    directories: deque[tuple[Path, int, tuple[int, int, int, int, int]]],
+    result: _ArtifactScanResult,
+) -> None:
+    suffix_is_image = entry.path.suffix.lower() in IMAGE_EXTENSIONS
+    if entry.metadata_error:
+        if suffix_is_image:
+            result.dropped_reasons["metadata_error"] += 1
+        return
+    if entry.is_symlink:
+        if suffix_is_image:
+            result.dropped_reasons["symlink"] += 1
+        return
+    if entry.is_directory:
+        if depth >= limits.scan_max_depth:
+            result.truncated = True
+            result.scan_reasons["scan_max_depth"] += 1
+        elif entry.identity is not None:
+            directories.append((entry.path, depth + 1, entry.identity))
+        return
+    if not suffix_is_image:
+        return
+    if entry.is_file:
+        result.paths.append(entry.path)
+    else:
+        result.dropped_reasons["not_regular_file"] += 1
+
+
+def _artifact_images(artifact_dir: Path, limits: ArtifactLimits) -> _ArtifactScanResult:
+    """按条目数和深度预算扫描本任务目录，不跟随任何链接。"""
+
+    result = _ArtifactScanResult()
+    root_identity = _scan_root_identity(artifact_dir, result)
+    if root_identity is None:
         return result
 
     directories: deque[tuple[Path, int, tuple[int, int, int, int, int]]] = deque(
-        [(artifact_dir, 0, _stat_identity(root_info))]
+        [(artifact_dir, 0, root_identity)]
     )
     scanned_entries = 0
     while directories:
         directory, depth, expected_identity = directories.popleft()
-        try:
-            current_directory = os.lstat(directory)
-        except OSError:
-            result.truncated = True
-            result.scan_reasons["scan_source_changed"] += 1
-            continue
-        if (
-            stat.S_ISLNK(current_directory.st_mode)
-            or not stat.S_ISDIR(current_directory.st_mode)
-            or _stat_identity(current_directory) != expected_identity
-        ):
+        if not _directory_identity_is_current(directory, expected_identity):
             result.truncated = True
             result.scan_reasons["scan_source_changed"] += 1
             continue
@@ -305,27 +327,13 @@ def _artifact_images(artifact_dir: Path, limits: ArtifactLimits) -> _ArtifactSca
             result.scan_reasons["scan_max_entries"] += 1
 
         for entry in entries:
-            suffix_is_image = entry.path.suffix.lower() in IMAGE_EXTENSIONS
-            if entry.metadata_error:
-                if suffix_is_image:
-                    result.dropped_reasons["metadata_error"] += 1
-                continue
-            if entry.is_symlink:
-                if suffix_is_image:
-                    result.dropped_reasons["symlink"] += 1
-                continue
-            if entry.is_directory:
-                if depth >= limits.scan_max_depth:
-                    result.truncated = True
-                    result.scan_reasons["scan_max_depth"] += 1
-                elif entry.identity is not None:
-                    directories.append((entry.path, depth + 1, entry.identity))
-                continue
-            if suffix_is_image:
-                if entry.is_file:
-                    result.paths.append(entry.path)
-                else:
-                    result.dropped_reasons["not_regular_file"] += 1
+            _record_scanned_entry(
+                entry,
+                depth=depth,
+                limits=limits,
+                directories=directories,
+                result=result,
+            )
 
         if entry_truncated:
             break
@@ -378,54 +386,6 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[written:]
 
 
-def _duplicate_fd_stream(fd: int):
-    os.lseek(fd, 0, os.SEEK_SET)
-    return os.fdopen(os.dup(fd), "rb")
-
-
-def _validate_image_fd(fd: int, *, suffix: str, limits: ArtifactLimits) -> str | None:
-    try:
-        from PIL import Image
-    except ImportError:
-        return "pillow_unavailable"
-
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with _duplicate_fd_stream(fd) as stream, Image.open(stream) as image:
-                image_format = str(image.format or "").upper()
-                if suffix not in IMAGE_FORMAT_EXTENSIONS.get(image_format, set()):
-                    return "format_mismatch"
-                width, height = image.size
-                if width <= 0 or height <= 0:
-                    return "invalid_dimensions"
-                if width * height > limits.max_pixels:
-                    return "pixel_limit"
-                image.verify()
-
-            with _duplicate_fd_stream(fd) as stream, Image.open(stream) as image:
-                if str(image.format or "").upper() != image_format:
-                    return "format_changed"
-                frame_count = 0
-                while True:
-                    if frame_count >= limits.max_frames:
-                        return "frame_limit"
-                    width, height = image.size
-                    if width <= 0 or height <= 0:
-                        return "invalid_dimensions"
-                    if width * height > limits.max_pixels:
-                        return "pixel_limit"
-                    image.load()
-                    frame_count += 1
-                    try:
-                        image.seek(frame_count)
-                    except EOFError:
-                        break
-    except Exception:
-        return "invalid_image"
-    return None
-
-
 def _verify_source_unchanged(
     source_fd: int,
     source_path: Path,
@@ -445,6 +405,43 @@ def _verify_source_unchanged(
         raise _ArtifactRejected("source_changed")
 
 
+def _check_copy_budget(size: int, *, committed_bytes: int, limits: ArtifactLimits) -> None:
+    if size > limits.max_single_bytes:
+        raise _ArtifactRejected("single_bytes_limit")
+    if committed_bytes + size > limits.max_total_bytes:
+        raise _ArtifactRejected("total_bytes_limit")
+
+
+def _copy_source_bytes(
+    source_fd: int,
+    temp_fd: int,
+    *,
+    committed_bytes: int,
+    limits: ArtifactLimits,
+) -> int:
+    copied_bytes = 0
+    while True:
+        chunk = os.read(source_fd, COPY_CHUNK_BYTES)
+        if not chunk:
+            return copied_bytes
+        copied_bytes += len(chunk)
+        _check_copy_budget(
+            copied_bytes,
+            committed_bytes=committed_bytes,
+            limits=limits,
+        )
+        _write_all(temp_fd, chunk)
+
+
+def _close_fd(fd: int | None) -> None:
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
 def _copy_validated_image(
     source_path: Path,
     destination: Path,
@@ -457,10 +454,11 @@ def _copy_validated_image(
     temp_path: Path | None = None
     try:
         source_fd, initial = _safe_open_source(source_path)
-        if initial.st_size > limits.max_single_bytes:
-            raise _ArtifactRejected("single_bytes_limit")
-        if committed_bytes + initial.st_size > limits.max_total_bytes:
-            raise _ArtifactRejected("total_bytes_limit")
+        _check_copy_budget(
+            initial.st_size,
+            committed_bytes=committed_bytes,
+            limits=limits,
+        )
 
         temp_fd, raw_temp_path = tempfile.mkstemp(
             prefix=f".{destination.name}.",
@@ -468,17 +466,12 @@ def _copy_validated_image(
             dir=destination.parent,
         )
         temp_path = Path(raw_temp_path)
-        copied_bytes = 0
-        while True:
-            chunk = os.read(source_fd, COPY_CHUNK_BYTES)
-            if not chunk:
-                break
-            copied_bytes += len(chunk)
-            if copied_bytes > limits.max_single_bytes:
-                raise _ArtifactRejected("single_bytes_limit")
-            if committed_bytes + copied_bytes > limits.max_total_bytes:
-                raise _ArtifactRejected("total_bytes_limit")
-            _write_all(temp_fd, chunk)
+        copied_bytes = _copy_source_bytes(
+            source_fd,
+            temp_fd,
+            committed_bytes=committed_bytes,
+            limits=limits,
+        )
 
         _verify_source_unchanged(source_fd, source_path, initial)
         if copied_bytes != initial.st_size:
@@ -486,13 +479,29 @@ def _copy_validated_image(
         if os.fstat(temp_fd).st_size != copied_bytes:
             raise _ArtifactRejected("copy_size_mismatch")
 
-        validation_reason = _validate_image_fd(
-            temp_fd,
-            suffix=source_path.suffix.lower(),
-            limits=limits,
-        )
-        if validation_reason is not None:
-            raise _ArtifactRejected(validation_reason)
+        if limits.max_single_bytes <= 0:
+            raise _ArtifactRejected("single_bytes_limit")
+        if limits.max_pixels <= 0:
+            raise _ArtifactRejected("pixel_limit")
+        if limits.max_frames <= 0:
+            raise _ArtifactRejected("frame_limit")
+        try:
+            validate_image_fd(
+                temp_fd,
+                expected_suffix=source_path.suffix.lower(),
+                limits=ImageValidationLimits(
+                    max_bytes=limits.max_single_bytes,
+                    max_pixels=limits.max_pixels,
+                    max_frames=limits.max_frames,
+                ),
+            )
+        except ImageValidationError as exc:
+            reason = (
+                "invalid_image"
+                if exc.reason in {"empty_image", "invalid_container", "invalid_type"}
+                else exc.reason
+            )
+            raise _ArtifactRejected(reason) from exc
         os.fsync(temp_fd)
 
         os.close(temp_fd)
@@ -507,21 +516,71 @@ def _copy_validated_image(
     except OSError:
         return None, "copy_error"
     finally:
-        if temp_fd is not None:
-            try:
-                os.close(temp_fd)
-            except OSError:
-                pass
-        if source_fd is not None:
-            try:
-                os.close(source_fd)
-            except OSError:
-                pass
+        _close_fd(temp_fd)
+        _close_fd(source_fd)
         if temp_path is not None:
             try:
                 temp_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def _prepare_archive_directory(session_dir: Path, images_dir: Path) -> tuple[Path, Path]:
+    """确认图片归档目录是会话目录内的真实目录，而不是链接跳板。"""
+
+    try:
+        session_root = session_dir.resolve(strict=True)
+        images_dir.mkdir(parents=True, exist_ok=True)
+        archive_info = os.lstat(images_dir)
+        if stat.S_ISLNK(archive_info.st_mode) or not stat.S_ISDIR(archive_info.st_mode):
+            raise ValueError("Codex image archive must be a regular directory")
+        archive_dir = images_dir.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("Codex image archive could not be prepared") from exc
+    if not archive_dir.is_relative_to(session_root):
+        raise ValueError("Codex image archive must stay inside the session directory")
+    return session_root, archive_dir
+
+
+def _discover_candidates(
+    final_text: str,
+    referenced_paths: list[str] | None,
+    *,
+    cwd: Path,
+    artifact_dir: Path,
+    limits: ArtifactLimits,
+) -> tuple[list[tuple[Path, str, str]], Counter[str], int, bool]:
+    candidates: list[tuple[Path, str, str]] = []
+    seen: set[str] = set()
+    reasons: Counter[str] = Counter()
+    dropped_count = 0
+
+    reference_values = chain(referenced_paths or (), _referenced_image_values(final_text))
+    for raw_value in reference_values:
+        if not isinstance(raw_value, str):
+            dropped_count += 1
+            reasons["invalid_reference"] += 1
+            continue
+        resolved = _resolve_image_path(raw_value, cwd=cwd, artifact_dir=artifact_dir)
+        if resolved is None:
+            continue
+        key = _path_key(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append((resolved, "reference", _clean_path_text(raw_value)))
+
+    scan_result = _artifact_images(artifact_dir, limits)
+    reasons.update(scan_result.dropped_reasons)
+    reasons.update(scan_result.scan_reasons)
+    dropped_count += sum(scan_result.dropped_reasons.values())
+    for path in scan_result.paths:
+        key = _path_key(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append((path, "artifact", str(path)))
+    return candidates, reasons, dropped_count, scan_result.truncated
 
 
 def collect_image_artifacts(
@@ -533,47 +592,21 @@ def collect_image_artifacts(
     session_dir: Path,
     images_dir: Path,
     job_id: int,
-    generated_images_dir: Path | None = None,
-    started_at: float | None = None,
-    finished_at: float | None = None,
     limits: ArtifactLimits | None = None,
 ) -> ArtifactCollectionResult:
-    # Legacy timing/global-directory arguments are intentionally ignored.
-    # Artifacts must be explicitly referenced or written into this job's dir.
-    del generated_images_dir, started_at, finished_at
+    """收集显式引用或本任务目录中的图片，并复制到会话归档。"""
+
+    if type(job_id) is not int or not 1 <= job_id <= 2**63 - 1:
+        raise ValueError("job_id must be a positive 64-bit integer")
     effective_limits = limits or ArtifactLimits()
-    images_dir.mkdir(parents=True, exist_ok=True)
-    candidates: list[tuple[Path, str, str]] = []
-    seen: set[str] = set()
-    reason_counts: Counter[str] = Counter()
-    dropped_count = 0
-
-    reference_values = chain(referenced_paths or (), _referenced_image_values(final_text))
-    for raw_value in reference_values:
-        resolved = _resolve_image_path(
-            raw_value,
-            cwd=cwd,
-            artifact_dir=artifact_dir,
-            session_dir=session_dir,
-        )
-        if resolved is None:
-            continue
-        key = str(resolved).casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        candidates.append((resolved, "reference", _clean_path_text(raw_value)))
-
-    scan_result = _artifact_images(artifact_dir, effective_limits)
-    reason_counts.update(scan_result.dropped_reasons)
-    reason_counts.update(scan_result.scan_reasons)
-    dropped_count += sum(scan_result.dropped_reasons.values())
-    for path in scan_result.paths:
-        key = str(path).casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        candidates.append((path, "artifact", str(path)))
+    session_root, archive_dir = _prepare_archive_directory(session_dir, images_dir)
+    candidates, reason_counts, dropped_count, scan_truncated = _discover_candidates(
+        final_text,
+        referenced_paths,
+        cwd=cwd,
+        artifact_dir=artifact_dir,
+        limits=effective_limits,
+    )
 
     artifacts: list[CodexImageArtifact] = []
     committed_bytes = 0
@@ -591,7 +624,7 @@ def collect_image_artifacts(
 
         artifact_index = len(artifacts) + 1
         suffix = source_path.suffix.lower()
-        destination = images_dir / f"job-{job_id:04d}-{artifact_index:02d}{suffix}"
+        destination = archive_dir / f"job-{job_id:04d}-{artifact_index:02d}{suffix}"
         copied_bytes, rejection_reason = _copy_validated_image(
             source_path,
             destination,
@@ -604,7 +637,7 @@ def collect_image_artifacts(
             continue
 
         committed_bytes += copied_bytes
-        relative_path = destination.relative_to(session_dir).as_posix()
+        relative_path = destination.relative_to(session_root).as_posix()
         artifacts.append(
             CodexImageArtifact(
                 path=relative_path,
@@ -618,5 +651,5 @@ def collect_image_artifacts(
         artifacts=artifacts,
         dropped_count=dropped_count,
         reasons=dict(sorted(reason_counts.items())),
-        scan_truncated=scan_result.truncated,
+        scan_truncated=scan_truncated,
     )

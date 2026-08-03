@@ -12,16 +12,19 @@ from plugins.codex.config import CodexPluginConfig, load_plugin_config
 from plugins.codex.runner import (
     CodexRunner,
     OutputBudgetExceeded,
+    _archive_large_message,
     _capture_final_output,
     _StderrAccumulator,
     _StdoutEventAccumulator,
     _truncate_utf8,
 )
+from tests.helpers.settings_snapshot import with_settings_reader
 
 
 @pytest.fixture
 def codex_config(tmp_path: Path) -> CodexPluginConfig:
     context = SimpleNamespace(
+        data_dir=tmp_path / "plugin-data",
         config={
             "plugins": {
                 "codex": {
@@ -38,7 +41,7 @@ def codex_config(tmp_path: Path) -> CodexPluginConfig:
         },
         secrets={},
     )
-    return load_plugin_config(context)
+    return load_plugin_config(with_settings_reader(context))
 
 
 def _json_line(event: dict[str, object]) -> bytes:
@@ -111,14 +114,14 @@ def test_chunked_stdout_keeps_events_then_enforces_total_budget(
     _feed_in_chunks(accumulator, payload)
     accumulator.finish()
 
-    assert accumulator.thread_id == "thread-budget"
-    assert accumulator.last_message == "最后答案"
-    assert accumulator.usage == {
+    assert accumulator.summary.thread_id == "thread-budget"
+    assert accumulator.summary.last_message == "最后答案"
+    assert accumulator.summary.usage == {
         "input_tokens": 13,
         "cached_input_tokens": 5,
         "output_tokens": 8,
     }
-    assert accumulator.image_paths == ["C:/tmp/chart.PNG"]
+    assert accumulator.summary.image_paths == ["C:/tmp/chart.PNG"]
 
     remaining = codex_config.max_stdout_bytes - accumulator.total_bytes
     full_lines, tail_bytes = divmod(remaining, 1024)
@@ -127,6 +130,47 @@ def test_chunked_stdout_keeps_events_then_enforces_total_budget(
 
     with pytest.raises(OutputBudgetExceeded, match="stdout exceeded"):
         accumulator.feed(b"\n")
+
+
+def test_streaming_event_parser_rejects_non_objects_and_ambiguous_counters(
+    codex_config: CodexPluginConfig,
+) -> None:
+    payload = "\n".join(
+        (
+            "[]",
+            json.dumps({"type": "thread.started", "thread_id": "bad\nthread"}),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": True,
+                        "cached_input_tokens": 1.5,
+                        "output_tokens": 8,
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": "safe answer",
+                        "image": "bad\npath.png",
+                    },
+                }
+            ),
+        )
+    )
+
+    accumulator = _StdoutEventAccumulator(codex_config)
+    accumulator.feed(f"{payload}\n".encode())
+    accumulator.finish()
+    summary = accumulator.summary
+
+    assert summary.thread_id is None
+    assert summary.last_message == "safe answer"
+    assert summary.usage == {"output_tokens": 8}
+    assert summary.image_paths == []
 
 
 def test_stderr_budget_is_a_hard_limit(codex_config: CodexPluginConfig) -> None:
@@ -199,7 +243,28 @@ def test_qq_preview_limit_preserves_the_complete_bounded_file(
     assert capture.archive_path is not None
     assert Path(capture.archive_path).read_text(encoding="utf-8") == original
     assert len(capture.text) <= codex_config.max_qq_text_chars
+    assert str(output_dir.resolve()) not in capture.text
+    assert Path(capture.archive_path).name in capture.text
     assert not raw_output.exists()
+
+
+def test_large_agent_message_notice_exposes_only_archive_name(
+    tmp_path: Path,
+    codex_config: CodexPluginConfig,
+) -> None:
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+
+    capture = _archive_large_message(
+        "m" * (codex_config.max_qq_text_chars + 1),
+        output_dir=output_dir,
+        job=SimpleNamespace(label="message", job_id=9),
+        config=codex_config,
+    )
+
+    assert str(output_dir.resolve()) not in capture.text
+    assert capture.archive_path is not None
+    assert Path(capture.archive_path).name in capture.text
 
 
 def test_runner_streams_real_subprocess_events(

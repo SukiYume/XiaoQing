@@ -1,7 +1,7 @@
 {
     "name": "guess_number",
-    "version": "2.0.0",
-    "description": "猜数字游戏 - 多轮对话示例插件。支持多种难度，动态提示范围，会话管理。",
+    "version": "2.1.0",
+    "description": "具有会话所有权保护和动态范围提示的猜数字游戏",
     "entry": "main.py",
     "commands": [
         {
@@ -11,8 +11,78 @@
                 "guess",
                 "猜"
             ],
-            "help": "🎲 猜数字游戏 - 支持多难度，多轮对话示例"
+            "help": "猜数字游戏 | /猜数字 [简单|普通|困难|地狱|status|restart]",
+            "admin_only": false,
+            "usage": "/猜数字 [简单|普通|困难|地狱|status|restart]",
+            "examples": ["/猜数字"],
+            "invalid_examples": ["/猜数字 impossible"],
+            "subcommands": [
+                {
+                    "name": "easy",
+                    "aliases": ["简单", "e"],
+                    "help": "开始 1-50、10 次机会的简单游戏",
+                    "usage": "/猜数字 easy",
+                    "match": "exact",
+                    "examples": ["/猜数字 easy"],
+                    "invalid_examples": ["/猜数字 easy extra"]
+                },
+                {
+                    "name": "normal",
+                    "aliases": ["普通", "n"],
+                    "help": "开始 1-100、7 次机会的普通游戏",
+                    "usage": "/猜数字 normal",
+                    "match": "exact",
+                    "examples": ["/猜数字 normal"],
+                    "invalid_examples": ["/猜数字 normal extra"]
+                },
+                {
+                    "name": "hard",
+                    "aliases": ["困难", "h"],
+                    "help": "开始 1-200、8 次机会的困难游戏",
+                    "usage": "/猜数字 hard",
+                    "match": "exact",
+                    "examples": ["/猜数字 hard"],
+                    "invalid_examples": ["/猜数字 hard extra"]
+                },
+                {
+                    "name": "hell",
+                    "aliases": ["nightmare", "地狱"],
+                    "help": "开始 1-1000、10 次机会的地狱游戏",
+                    "usage": "/猜数字 hell",
+                    "match": "exact",
+                    "examples": ["/猜数字 hell"],
+                    "invalid_examples": ["/猜数字 hell extra"]
+                },
+                {
+                    "name": "status",
+                    "aliases": ["状态", "info", "信息"],
+                    "help": "查看当前猜数字会话状态",
+                    "usage": "/猜数字 status",
+                    "match": "exact",
+                    "examples": ["/猜数字 status"],
+                    "invalid_examples": ["/猜数字 status extra"]
+                },
+                {
+                    "name": "restart",
+                    "aliases": ["重新开始", "重开"],
+                    "help": "结束旧游戏并按普通难度重开",
+                    "usage": "/猜数字 restart",
+                    "match": "exact",
+                    "examples": ["/猜数字 restart"],
+                    "invalid_examples": ["/猜数字 restart extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示猜数字规则",
+                    "usage": "/猜数字 help",
+                    "match": "exact",
+                    "examples": ["/猜数字 help"],
+                    "invalid_examples": ["/猜数字 help extra"]
+                }
+            ]
         }
     ],
+    "schedule": [],
     "concurrency": "parallel"
 }

@@ -1,134 +1,211 @@
-"""
-恒星光谱颜色模块
-提供恒星光谱型颜色查询和列举功能
-"""
-import importlib
+"""读取小型恒星色表并提供光谱型查询，无需 DataFrame 依赖。"""
+
+from __future__ import annotations
+
+import math
+import re
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from core.plugin_base import image, segments, text
+from core.plugin_base import has_control_characters, image, segments, text
 from core.public_errors import public_error_response
 
 from .convert import hex_to_rgb
 from .image_gen import generate_color_image
 
-# 检查可选依赖
-try:
-    pd = importlib.import_module("pandas")
-    PANDAS_AVAILABLE = True
-except ImportError:
-    PANDAS_AVAILABLE = False
-
+MAX_STELLAR_FILE_BYTES = 64 * 1024
+MAX_STELLAR_ROWS = 512
+MAX_STELLAR_LINE_CHARS = 256
 MAX_SPECTRAL_TYPES = 30
+_STELLAR_HEADER = ("SpT", "Teff", "log(g)", "RGB", "Hex")
+_SPECTRAL_TYPE_PATTERN = re.compile(r"[OBAFGKM][0-9](?:\.5)?V", re.IGNORECASE)
+_HEX_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
+Messages = list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class StellarColor:
+    spectral_type: str
+    temperature_k: int
+    log_g: float
+    linear_rgb: tuple[float, float, float]
+    hex_value: str
+
+
+def _parse_stellar_row(line: str, *, line_number: int) -> StellarColor:
+    if not line or len(line) > MAX_STELLAR_LINE_CHARS:
+        raise ValueError(f"invalid stellar row length at line {line_number}")
+    parts = line.split()
+    if len(parts) != len(_STELLAR_HEADER):
+        raise ValueError(f"invalid stellar column count at line {line_number}")
+    spectral_type, raw_temperature, raw_log_g, raw_rgb, hex_value = parts
+    if _SPECTRAL_TYPE_PATTERN.fullmatch(spectral_type) is None:
+        raise ValueError(f"invalid spectral type at line {line_number}")
+    try:
+        temperature = int(raw_temperature)
+        log_g = float(raw_log_g)
+        rgb_values = tuple(float(value) for value in raw_rgb.split(","))
+    except ValueError as exc:
+        raise ValueError(f"invalid stellar numeric value at line {line_number}") from exc
+    if not 1_000 <= temperature <= 100_000 or not math.isfinite(log_g) or not 0 <= log_g <= 10:
+        raise ValueError(f"stellar parameter out of range at line {line_number}")
+    if len(rgb_values) != 3 or any(
+        not math.isfinite(value) or not 0 <= value <= 1 for value in rgb_values
+    ):
+        raise ValueError(f"invalid linear RGB at line {line_number}")
+    if _HEX_PATTERN.fullmatch(hex_value) is None:
+        raise ValueError(f"invalid stellar HEX value at line {line_number}")
+    # 论文表格的线性 RGB 只保留三位小数，HEX 来自更高精度原值，因此不反推二者相等。
+    return StellarColor(
+        spectral_type=spectral_type.upper(),
+        temperature_k=temperature,
+        log_g=log_g,
+        linear_rgb=rgb_values,
+        hex_value=hex_value.casefold(),
+    )
 
 
 @lru_cache(maxsize=4)
-def _load_stellar_dataframe(stellar_file: str, mtime_ns: int):
-    import pandas as pd
+def _load_stellar_rows_cached(
+    stellar_file: str,
+    mtime_ns: int,
+    size: int,
+) -> tuple[StellarColor, ...]:
+    del mtime_ns, size  # 两项只参与缓存身份。
+    path = Path(stellar_file)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("stellar color path must be a regular non-link file")
+    if path.stat().st_size > MAX_STELLAR_FILE_BYTES:
+        raise ValueError("stellar color file exceeds byte budget")
+    content = path.read_text(encoding="utf-8")
+    if len(content.encode("utf-8")) > MAX_STELLAR_FILE_BYTES:
+        raise ValueError("stellar color file changed while reading")
+    lines = content.splitlines()
+    if not lines or tuple(lines[0].split()) != _STELLAR_HEADER:
+        raise ValueError("stellar color header is invalid")
+    if not 1 <= len(lines) - 1 <= MAX_STELLAR_ROWS:
+        raise ValueError("stellar color row count is invalid")
+    return tuple(
+        _parse_stellar_row(line, line_number=line_number)
+        for line_number, line in enumerate(lines[1:], start=2)
+    )
 
-    return pd.read_csv(Path(stellar_file), sep=r"\s+")
 
-def load_stellar_colors(context) -> Any | None:
-    """加载恒星光谱颜色数据
+def load_stellar_colors(context: Any) -> tuple[StellarColor, ...]:
+    plugin_dir = getattr(context, "plugin_dir", None)
+    if not isinstance(plugin_dir, Path):
+        raise ValueError("color plugin_dir must be a Path")
+    path = plugin_dir / "stellar_colors.txt"
+    info = path.stat()
+    rows = _load_stellar_rows_cached(str(path), info.st_mtime_ns, info.st_size)
+    context.logger.debug("加载恒星颜色数据: count=%d", len(rows))
+    return rows
 
-    Args:
-        context: 插件上下文
 
-    Returns:
-        pandas DataFrame 或 None
-    """
-    if not PANDAS_AVAILABLE:
-        context.logger.warning("恒星颜色功能不可用：缺少 pandas 依赖")
-        return None
+def _clean_spectral_term(value: str, *, allow_empty: bool) -> str:
+    if not isinstance(value, str):
+        raise ValueError("光谱型必须是字符串")
+    cleaned = value.strip().upper()
+    if (not cleaned and not allow_empty) or len(cleaned) > 16:
+        raise ValueError("光谱型为空或超过长度上限")
+    if has_control_characters(cleaned):
+        raise ValueError("光谱型包含控制字符")
+    return cleaned
 
-    stellar_file = context.plugin_dir / "stellar_colors.txt"
-    if not stellar_file.exists():
-        context.logger.warning(f"恒星颜色数据文件不存在: {stellar_file}")
-        return None
 
-    df = _load_stellar_dataframe(str(stellar_file), stellar_file.stat().st_mtime_ns)
-    context.logger.debug("加载恒星颜色数据: %s 条", len(df))
-    return df
-
-async def query_stellar_color(spec_type: str, context, img_dir: Path) -> list[dict[str, Any]]:
-    """查询恒星光谱颜色
-
-    Args:
-        spec_type: 光谱型
-        context: 插件上下文
-        img_dir: 图片输出目录
-
-    Returns:
-        消息段列表
-    """
-    if not PANDAS_AVAILABLE:
-        return segments("❌ 恒星颜色查询功能不可用\n需要安装 pandas 依赖：pip install pandas")
+async def query_stellar_color(
+    spec_type: str,
+    context: Any,
+    image_dir: Path,
+) -> Messages:
+    """查询光谱型；重复类型保持论文表顺序并采用第一条温度采样。"""
 
     try:
-        df = load_stellar_colors(context)
-        if df is None:
-            return segments("❌ 恒星颜色数据文件不存在")
+        normalized = _clean_spectral_term(spec_type, allow_empty=False)
+        matches = [row for row in load_stellar_colors(context) if row.spectral_type == normalized]
+        if not matches:
+            return cast(
+                Messages,
+                segments(
+                    f"❌ 没有找到光谱型「{normalized}」的恒星颜色\n\n"
+                    "提示：使用 /color -t 查看可用的光谱型"
+                ),
+            )
 
-        match = df[df['SpT'] == spec_type]
-        if match.empty:
-            return segments(f"❌ 没有找到光谱型「{spec_type}」的恒星颜色\n\n提示：使用 /color -t 查看可用的光谱型")
-
-        row = match.iloc[0]
-        hex_value = row.get('Hex', '#FFFFFF')
-        rgb = hex_to_rgb(hex_value)
-
-        info = f"🌟 恒星光谱颜色\n\n光谱型: {spec_type}\nHEX: {hex_value}\nRGB: {rgb}"
-        img_path = await generate_color_image(spec_type, rgb, img_dir, context)
-
-        context.logger.info(f"查询恒星颜色: {spec_type}")
-
+        selected = matches[0]
+        rgb = hex_to_rgb(selected.hex_value)
+        sample_note = ""
+        if len(matches) > 1:
+            sample_note = (
+                f"\n温度采样: {matches[0].temperature_k:,}-"
+                f"{matches[-1].temperature_k:,} K（展示第一条）"
+            )
+        info = (
+            "🌟 恒星光谱颜色\n\n"
+            f"光谱型: {selected.spectral_type}\n"
+            f"有效温度: {selected.temperature_k:,} K\n"
+            f"HEX: {selected.hex_value}\n"
+            f"RGB: {rgb}{sample_note}"
+        )
+        image_path = await generate_color_image(selected.spectral_type, rgb, image_dir, context)
+        context.logger.info("查询恒星颜色: matches=%d", len(matches))
         result = [text(info)]
-        if img_path:
-            result.append(image(img_path))
+        if image_path:
+            result.append(image(image_path))
         return result
-
+    except ValueError as exc:
+        return cast(Messages, segments(f"❌ {exc}"))
     except Exception as exc:
-        return public_error_response(
-            context, exc, logger=context.logger, component="color.stellar.query"
+        return cast(
+            Messages,
+            public_error_response(
+                context, exc, logger=context.logger, component="color.stellar.query"
+            ),
         )
 
-def list_spectral_types(prefix: str, context) -> list[dict[str, Any]]:
-    """列出符合前缀的光谱型
 
-    Args:
-        prefix: 光谱型前缀
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
-    if not PANDAS_AVAILABLE:
-        return segments("❌ 光谱型查询功能不可用\n需要安装 pandas 依赖：pip install pandas")
+def list_spectral_types(prefix: str, context: Any) -> Messages:
+    """按字面子串筛选并列出不重复的光谱型。"""
 
     try:
-        df = load_stellar_colors(context)
-        if df is None:
-            return segments("❌ 恒星颜色数据文件不存在")
+        normalized_prefix = _clean_spectral_term(prefix, allow_empty=True)
+        unique_types = list(
+            dict.fromkeys(row.spectral_type for row in load_stellar_colors(context))
+        )
+        matches = [
+            spectral_type for spectral_type in unique_types if normalized_prefix in spectral_type
+        ]
+        if not matches:
+            return cast(
+                Messages,
+                segments(f"❌ 没有找到包含「{normalized_prefix}」的光谱型"),
+            )
 
-        if prefix:
-            matches = df[df['SpT'].str.contains(prefix, case=False)]
-            if matches.empty:
-                return segments(f"❌ 没有找到包含「{prefix}」的光谱型")
-            types = matches['SpT'].tolist()
-            title = f"包含「{prefix}」的光谱型（共 {len(types)} 个）："
-        else:
-            types = df['SpT'].tolist()
-            title = f"所有光谱型（共 {len(types)} 个）："
-
-        # 限制显示数量
-        display_types = types[:MAX_SPECTRAL_TYPES]
-        suffix = f"\n\n... 还有 {len(types) - MAX_SPECTRAL_TYPES} 个" if len(types) > MAX_SPECTRAL_TYPES else ""
-
-        context.logger.info(f"列出光谱型: prefix={prefix}, count={len(types)}")
-        return segments(title + "\n" + ", ".join(display_types) + suffix)
-
+        title = (
+            f"包含「{normalized_prefix}」的光谱型（共 {len(matches)} 个）："
+            if normalized_prefix
+            else f"所有光谱型（共 {len(matches)} 个）："
+        )
+        displayed = matches[:MAX_SPECTRAL_TYPES]
+        suffix = (
+            f"\n\n... 还有 {len(matches) - MAX_SPECTRAL_TYPES} 个"
+            if len(matches) > MAX_SPECTRAL_TYPES
+            else ""
+        )
+        context.logger.info(
+            "列出光谱型: prefix_chars=%d count=%d",
+            len(normalized_prefix),
+            len(matches),
+        )
+        return cast(Messages, segments(f"{title}\n{', '.join(displayed)}{suffix}"))
+    except ValueError as exc:
+        return cast(Messages, segments(f"❌ {exc}"))
     except Exception as exc:
-        return public_error_response(
-            context, exc, logger=context.logger, component="color.stellar.list"
+        return cast(
+            Messages,
+            public_error_response(
+                context, exc, logger=context.logger, component="color.stellar.list"
+            ),
         )

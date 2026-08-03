@@ -1,55 +1,31 @@
-"""Dashboard overview aggregation for the web UI."""
+"""聚合 Pendo Web 看板所需的日程、任务、账本和日记摘要。"""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import Any
+from datetime import date, datetime, timedelta
+from typing import Any, cast
 
+from ...models.item import EventItem
 from ...services.db import Database
+from ...utils.time_utils import TimezoneHelper
 from ..utils import collection_payload, item_to_dict
 from .event_schedule import build_event_schedule
 
-
-def _month_bounds(now: datetime) -> tuple[str, str, str]:
-    month_start_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if now.month == 12:
-        next_month = now.replace(year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    else:
-        next_month = now.replace(month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    month_end_dt = next_month - timedelta(seconds=1)
-    return (
-        month_start_dt.strftime("%Y-%m-%d"),
-        month_start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-        month_end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-    )
+JsonObject = dict[str, Any]
+ScheduledEvent = tuple[date, JsonObject]
 
 
-def _ledger_amount_value(item) -> float:
-    cents = getattr(item, "amount_cents", None)
-    if cents not in (None, ""):
-        try:
-            return int(cents) / 100
-        except (TypeError, ValueError):
-            pass
-    try:
-        return float(getattr(item, "amount", 0) or 0)
-    except (TypeError, ValueError):
-        return 0.0
+def _month_bounds(day: date) -> tuple[date, date]:
+    """返回给定日期所在自然月的首日和末日。"""
+
+    month_start = day.replace(day=1)
+    next_month = (month_start + timedelta(days=32)).replace(day=1)
+    return month_start, next_month - timedelta(days=1)
 
 
-def _get_all_items(db: Database, owner_id: str, filters: dict[str, Any], batch_size: int = 500) -> list:
-    items: list = []
-    offset = 0
-    while True:
-        chunk = db.get_items(owner_id, filters=filters, limit=batch_size, offset=offset)
-        items.extend(chunk)
-        if len(chunk) < batch_size:
-            break
-        offset += batch_size
-    return items
+def _display_fields(row: JsonObject, collection: JsonObject | None) -> JsonObject:
+    """将多节点集合标题、地点和分类叠加到日程显示行。"""
 
-
-def _display_fields(row: dict[str, Any], collection: dict[str, Any] | None) -> dict[str, Any]:
     title = row["title"]
     subtitle = row["subtitle"]
     location = row["location"]
@@ -72,186 +48,244 @@ def _display_fields(row: dict[str, Any], collection: dict[str, Any] | None) -> d
     }
 
 
-def _event_entries(item, range_start: str, range_end: str, collection: dict[str, Any] | None = None) -> list[dict]:
-    entries: list[dict] = []
-    schedule = build_event_schedule(
-        item,
-        datetime.strptime(range_start[:10], "%Y-%m-%d").date(),
-        datetime.strptime(range_end[:10], "%Y-%m-%d").date(),
-    )
+def _event_entries(
+    item: EventItem,
+    range_start: date,
+    range_end: date,
+    user_timezone: Any,
+    collection: JsonObject | None = None,
+) -> list[ScheduledEvent]:
+    """把单个日程展开为带显示日期的看板行。"""
+
+    entries: list[ScheduledEvent] = []
+    schedule = build_event_schedule(item, range_start, range_end, user_timezone)
     item_dict = item_to_dict(item)
     event_collection = collection_payload(collection)
     for day in schedule["display_days"]:
         for row in schedule["day_entries"].get(day, []):
             display = _display_fields(row, collection)
-            entries.append({
-                **item_dict,
-                "id": getattr(item, "id", ""),
-                "title": display["title"],
-                "display_title": display["display_title"],
-                "display_subtitle": display["display_subtitle"],
-                "node_title": row["title"],
-                "collection": event_collection,
-                "start_time": row["start_time"],
-                "end_time": row["end_time"],
-                "location": display["location"],
-                "category": display["category"],
-                "entry_kind": row["kind"],
-            })
+            entries.append(
+                (
+                    date.fromisoformat(day),
+                    {
+                        **item_dict,
+                        "id": getattr(item, "id", ""),
+                        "title": display["title"],
+                        "display_title": display["display_title"],
+                        "display_subtitle": display["display_subtitle"],
+                        "node_title": row["title"],
+                        "collection": event_collection,
+                        "start_time": row["start_time"],
+                        "end_time": row["end_time"],
+                        "location": display["location"],
+                        "category": display["category"],
+                        "entry_kind": row["kind"],
+                    },
+                ),
+            )
     return entries
 
 
-def _date_range(start_date: str, end_date: str) -> list[str]:
-    start = datetime.strptime(start_date, "%Y-%m-%d").date()
-    end = datetime.strptime(end_date, "%Y-%m-%d").date()
-    days: list[str] = []
-    cursor = start
-    while cursor <= end:
-        days.append(cursor.strftime("%Y-%m-%d"))
-        cursor += timedelta(days=1)
-    return days
-
-
-def _collection_for_event(
+def _local_datetime(
     db: Database,
     owner_id: str,
-    item,
-    cache: dict[str, dict[str, Any] | None],
-) -> dict[str, Any] | None:
-    collection_id = getattr(item, "event_collection_id", None)
-    if not collection_id:
-        return None
-    if collection_id not in cache:
-        cache[collection_id] = db.get_event_collection(collection_id, owner_id)
-    return cache[collection_id]
+    value: datetime | None,
+) -> datetime:
+    """把当前时间统一到用户时区下的无时区墙钟。"""
+
+    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
+    if value is None:
+        return cast(datetime, TimezoneHelper.now(user_timezone)).replace(
+            tzinfo=None,
+            microsecond=0,
+        )
+    if value.tzinfo is not None:
+        return value.astimezone(user_timezone).replace(tzinfo=None, microsecond=0)
+    return value.replace(microsecond=0)
+
+
+def _scheduled_events(
+    db: Database,
+    owner_id: str,
+    range_start: date,
+    range_end: date,
+) -> list[ScheduledEvent]:
+    """一次读取覆盖区间和集合头，再展开全部日程显示行。"""
+
+    raw_events = db.get_events_for_range(
+        owner_id,
+        f"{range_start.isoformat()}T00:00:00",
+        f"{range_end.isoformat()}T23:59:59",
+    )
+    collection_ids = list(
+        dict.fromkeys(
+            str(collection_id) for item in raw_events if (collection_id := item.event_collection_id)
+        )
+    )
+    collections = (
+        db.get_event_collections_by_ids(owner_id, collection_ids) if collection_ids else {}
+    )
+    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
+
+    entries: list[ScheduledEvent] = []
+    for item in raw_events:
+        collection_id = item.event_collection_id
+        collection = collections.get(str(collection_id)) if collection_id else None
+        entries.extend(_event_entries(item, range_start, range_end, user_timezone, collection))
+    return entries
+
+
+def _recent_counts(
+    db: Database,
+    owner_id: str,
+    start_date: date,
+    start_time: datetime,
+    end_time: datetime,
+) -> tuple[int, int]:
+    """用一次聚合查询统计近三十天日记和已完成任务。"""
+
+    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
+    start_epoch = TimezoneHelper.parse(start_time.isoformat(), user_timezone).timestamp()
+    end_epoch = TimezoneHelper.parse(end_time.isoformat(), user_timezone).timestamp()
+
+    row = (
+        db.get_connection()
+        .execute(
+            """
+        SELECT
+          COUNT(CASE
+            WHEN type = 'diary' AND diary_date BETWEEN ? AND ? THEN 1
+          END) AS recent_diary_count,
+          COUNT(CASE
+            WHEN type = 'task'
+             AND status = 'done'
+             AND pendo_utc_epoch(
+                   COALESCE(NULLIF(completed_at, ''), NULLIF(updated_at, '')), ?
+                 ) BETWEEN ? AND ?
+            THEN 1
+          END) AS recent_completed_count
+        FROM items
+        WHERE owner_id = ? AND deleted = 0
+        """,
+            (
+                start_date.isoformat(),
+                end_time.date().isoformat(),
+                user_timezone.key,
+                start_epoch,
+                end_epoch,
+                owner_id,
+            ),
+        )
+        .fetchone()
+    )
+    return (int(row[0]), int(row[1])) if row else (0, 0)
 
 
 def build_dashboard_overview(
     db: Database,
     owner_id: str,
     now: datetime | None = None,
-) -> dict:
-    now = now or datetime.now()
-    today = now.strftime("%Y-%m-%d")
-    now_iso = now.strftime("%Y-%m-%dT%H:%M:%S")
-    month_start_date, month_start_iso, month_end_iso = _month_bounds(now)
-    agenda_end_iso = (now + timedelta(days=21)).replace(hour=23, minute=59, second=59, microsecond=0).strftime("%Y-%m-%dT%H:%M:%S")
-    month_ago = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-    month_ago_iso = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+) -> JsonObject:
+    """构建当前用户的完整看板响应。"""
 
-    raw_events_month = db.get_events_for_range(owner_id, month_start_iso, month_end_iso)
-    raw_events_agenda = db.get_events_for_range(owner_id, month_start_iso, agenda_end_iso)
+    current = _local_datetime(db, owner_id, now)
+    today_date = current.date()
+    month_start_date, month_end_date = _month_bounds(today_date)
+    agenda_end_date = (current + timedelta(days=21)).date()
+    coverage_end_date = max(month_end_date, agenda_end_date)
+    today = today_date.isoformat()
+    month_ago_date = today_date - timedelta(days=30)
+    month_ago_time = current - timedelta(days=30)
 
-    tasks_open = db.get_items(owner_id, filters={
-        "type": "task",
-        "status": "open",
-        "sort_field": "plan_date",
-        "sort_order": "ASC",
-    }, limit=20)
-    tasks_completed = db.get_items(owner_id, filters={
-        "type": "task",
-        "status": "done",
-        "sort_field": "updated_at",
-        "sort_order": "DESC",
-    }, limit=16)
+    active_task_filters = {"type": "task", "status": "open"}
+    active_task_count = db.count_items(owner_id, active_task_filters)
+    active_tasks = db.get_active_task_preview(owner_id, limit=8)
+    tasks_completed = db.get_items(
+        owner_id,
+        filters={
+            "type": "task",
+            "status": "done",
+            "sort_field": "updated_at",
+            "sort_order": "DESC",
+        },
+        limit=16,
+        use_cache=True,
+    )
 
-    recent_ledger = db.get_items(owner_id, filters={
-        "type": "ledger",
-        "date_field": "ledger_date",
-        "start_date": month_start_date,
-        "end_date": today,
-        "sort_field": "ledger_date",
-        "sort_order": "DESC",
-    }, limit=8)
+    recent_ledger = db.get_items(
+        owner_id,
+        filters={
+            "type": "ledger",
+            "date_field": "ledger_date",
+            "start_date": month_start_date.isoformat(),
+            "end_date": today,
+            "sort_field": "ledger_date",
+            "sort_order": "DESC",
+        },
+        limit=8,
+        use_cache=True,
+    )
 
-    month_ledger = _get_all_items(db, owner_id, filters={
-        "type": "ledger",
-        "date_field": "ledger_date",
-        "start_date": month_start_date,
-        "end_date": today,
-    })
+    month_ledger = db.aggregate_ledger_amounts_by_day(
+        owner_id,
+        {
+            "type": "ledger",
+            "date_field": "ledger_date",
+            "start_date": month_start_date.isoformat(),
+            "end_date": today,
+        },
+    )
 
-    spending_by_day: dict[str, float] = {}
-    month_income = 0.0
-    month_expense = 0.0
-    for item in month_ledger:
-        day = getattr(item, "ledger_date", None) or today
-        amount = _ledger_amount_value(item)
-        transaction_type = getattr(item, "transaction_type", "expense")
-        if transaction_type == "expense":
-            spending_by_day[day] = spending_by_day.get(day, 0.0) + amount
-            month_expense += amount
-        elif transaction_type == "income":
-            month_income += amount
+    spending_by_day = {
+        day: expense_cents / 100 for day, (expense_cents, _income_cents) in month_ledger.items()
+    }
+    month_expense = sum(expense_cents for expense_cents, _ in month_ledger.values()) / 100
+    month_income = sum(income_cents for _, income_cents in month_ledger.values()) / 100
 
-    spending_trend = [{
-        "date": day,
-        "amount": round(spending_by_day.get(day, 0.0), 2),
-    } for day in _date_range(month_start_date, today)]
+    spending_trend: list[JsonObject] = []
+    for offset in range((today_date - month_start_date).days + 1):
+        day = (month_start_date + timedelta(days=offset)).isoformat()
+        spending_trend.append({"date": day, "amount": round(spending_by_day.get(day, 0.0), 2)})
 
-    events_month: list[dict] = []
-    collection_cache: dict[str, dict[str, Any] | None] = {}
-    for item in raw_events_month:
-        events_month.extend(_event_entries(
-            item,
-            month_start_iso,
-            month_end_iso,
-            _collection_for_event(db, owner_id, item, collection_cache),
-        ))
+    scheduled_events = _scheduled_events(db, owner_id, month_start_date, coverage_end_date)
+
+    events_month = [
+        payload
+        for display_day, payload in scheduled_events
+        if month_start_date <= display_day <= month_end_date
+    ]
     events_month.sort(key=lambda event: event.get("start_time") or "")
 
-    events_agenda: list[dict] = []
-    for item in raw_events_agenda:
-        events_agenda.extend(_event_entries(
-            item,
-            month_start_iso,
-            agenda_end_iso,
-            _collection_for_event(db, owner_id, item, collection_cache),
-        ))
+    events_agenda = [
+        payload
+        for display_day, payload in scheduled_events
+        if month_start_date <= display_day <= agenda_end_date
+    ]
     events_agenda.sort(key=lambda event: event.get("start_time") or "")
 
-    conn = db.get_connection()
-    active_tasks_count = conn.execute(
-        """
-        SELECT COUNT(*) FROM items
-        WHERE type='task' AND owner_id=? AND deleted=0 AND status = 'open'
-        """,
-        (owner_id,),
-    ).fetchone()[0]
-    recent_diary_count = conn.execute(
-        """
-        SELECT COUNT(*) FROM items
-        WHERE type='diary' AND owner_id=? AND deleted=0 AND diary_date BETWEEN ? AND ?
-        """,
-        (owner_id, month_ago, today),
-    ).fetchone()[0]
-    recent_completed_count = conn.execute(
-        """
-        SELECT COUNT(*) FROM items
-        WHERE type='task'
-          AND owner_id=?
-          AND deleted=0
-          AND status='done'
-          AND COALESCE(NULLIF(completed_at, ''), NULLIF(updated_at, '')) BETWEEN ? AND ?
-        """,
-        (owner_id, month_ago_iso, now_iso),
-    ).fetchone()[0]
-
-    active_tasks = list(tasks_open)
-    active_tasks.sort(key=lambda task: (
-        getattr(task, "priority", 99) if getattr(task, "priority", None) is not None else 99,
-        getattr(task, "plan_date", "") or "9999-99-99",
-        getattr(task, "deadline_at", "") or "9999-99-99T99:99:99",
-    ))
-    tasks_completed.sort(
-        key=lambda task: getattr(task, "completed_at", "") or getattr(task, "updated_at", "") or "",
-        reverse=True,
+    recent_diary_count, recent_completed_count = _recent_counts(
+        db,
+        owner_id,
+        month_ago_date,
+        month_ago_time,
+        current,
     )
+
+    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
+
+    def completed_sort_key(item: object) -> float:
+        value = getattr(item, "completed_at", "") or getattr(item, "updated_at", "") or ""
+        try:
+            return TimezoneHelper.parse(str(value), user_timezone).timestamp()
+        except (OverflowError, TypeError, ValueError):
+            return float("-inf")
+
+    tasks_completed.sort(key=completed_sort_key, reverse=True)
 
     return {
         "summary": {
             "events_month": len(events_month),
-            "tasks_pending": active_tasks_count,
+            "tasks_pending": active_task_count,
             "tasks_done_recent": recent_completed_count,
             "ledger_month_expense": round(month_expense, 2),
             "diary_month": recent_diary_count,
@@ -259,7 +293,7 @@ def build_dashboard_overview(
         "events_month": events_month,
         "events_agenda": events_agenda,
         "tasks": {
-            "active": [item_to_dict(task) for task in active_tasks[:8]],
+            "active": [item_to_dict(task) for task in active_tasks],
             "completed": [item_to_dict(task) for task in tasks_completed[:4]],
         },
         "recent_ledger": [item_to_dict(item) for item in recent_ledger],

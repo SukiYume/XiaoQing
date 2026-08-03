@@ -4,16 +4,12 @@
 
 from typing import Any
 
-import pytest
-
 from core.message import (
     compile_bot_name_pattern,
     contains_bot_name,
     extract_text,
     has_at_mention,
-    has_media_segment,
     iter_message_segments,
-    normalize_message,
     parse_text_command_context,
     scan_message,
     strip_message_prefix,
@@ -22,6 +18,7 @@ from core.message import (
 # ============================================================
 # extract_text 测试
 # ============================================================
+
 
 class TestExtractText:
     """extract_text() 函数测试"""
@@ -86,7 +83,12 @@ class TestMessageScan:
         assert result.is_at_me is True
 
     def test_iter_message_segments_filters_invalid_items(self):
-        message = [{"type": "text", "data": {"text": "hi"}}, None, "bad", {"type": "face", "data": {}}]
+        message = [
+            {"type": "text", "data": {"text": "hi"}},
+            None,
+            "bad",
+            {"type": "face", "data": {}},
+        ]
         assert iter_message_segments(message) == (
             {"type": "text", "data": {"text": "hi"}},
             {"type": "face", "data": {}},
@@ -105,83 +107,6 @@ class TestMessageScan:
         assert contains_bot_name("你好小青", "") is False
         assert contains_bot_name("你好小青", "小青") is True
 
-# ============================================================
-# normalize_message 测试
-# ============================================================
-
-class TestNormalizeMessage:
-    """normalize_message() 函数测试"""
-
-    def test_normalize_group_message(self):
-        """测试群消息解析"""
-        event = {
-            "post_type": "message",
-            "message_type": "group",
-            "user_id": 12345,
-            "group_id": 67890,
-            "message": [{"type": "text", "data": {"text": "  /echo test  "}}],
-        }
-
-        text, user_id, group_id = normalize_message(event)
-
-        assert text == "/echo test"
-        assert user_id == 12345
-        assert group_id == 67890
-
-    def test_normalize_private_message(self):
-        """测试私聊消息解析"""
-        event = {
-            "post_type": "message",
-            "message_type": "private",
-            "user_id": 12345,
-            "message": "你好",
-        }
-
-        text, user_id, group_id = normalize_message(event)
-
-        assert text == "你好"
-        assert user_id == 12345
-        assert group_id is None
-
-    def test_normalize_strips_whitespace(self):
-        """测试去除首尾空白"""
-        event = {
-            "message": "  \n  Hello World  \t  ",
-            "user_id": 1,
-        }
-
-        text, _, _ = normalize_message(event)
-        assert text == "Hello World"
-
-    def test_normalize_missing_fields(self):
-        """测试缺失字段处理"""
-        event = {"message": "test"}
-
-        text, user_id, group_id = normalize_message(event)
-
-        assert text == "test"
-        assert user_id is None
-        assert group_id is None
-
-
-class TestHasMediaSegment:
-    def test_detects_image_segment(self):
-        message = [{"type": "image", "data": {"file": "file:///tmp/test.png"}}]
-        assert has_media_segment(message) is True
-
-    def test_detects_face_segment(self):
-        message = [{"type": "face", "data": {"id": "14"}}]
-        assert has_media_segment(message) is True
-
-    def test_ignores_text_and_at_only(self):
-        message = [
-            {"type": "at", "data": {"qq": "12345"}},
-            {"type": "text", "data": {"text": ""}},
-        ]
-        assert has_media_segment(message) is False
-
-    def test_non_list_message_returns_false(self):
-        assert has_media_segment("hello") is False
 
 class TestParseTextCommandContext:
     def test_strips_bot_name_and_prefix(self):
@@ -197,7 +122,7 @@ class TestParseTextCommandContext:
         assert result.clean_text == "echo hi"
         assert result.has_bot_name is True
         assert result.has_command_prefix is False  # "/" not at start of raw text
-        assert result.has_prefix is True            # union: has_bot_name
+        assert result.has_prefix is True  # union: has_bot_name
         assert result.is_only_bot_name is False
         assert result.is_url_only is False
 
@@ -218,7 +143,7 @@ class TestParseTextCommandContext:
         )
         assert result.is_at_me is True
         assert result.clean_text == "你好"
-        assert result.has_prefix is True            # union: is_at_me
+        assert result.has_prefix is True  # union: is_at_me
 
     def test_strips_inline_cq_at_from_clean_text(self):
         event = {
@@ -338,46 +263,49 @@ class TestParseTextCommandContext:
         )
         assert clean == "help"
 
+
 class TestIsCleanTextUrlOnly:
     def test_bare_url(self):
         from core.message import is_clean_text_url_only
+
         assert is_clean_text_url_only("https://example.com") is True
 
     def test_http_url(self):
         from core.message import is_clean_text_url_only
+
         assert is_clean_text_url_only("http://example.com/path?q=1") is True
 
     def test_url_with_surrounding_whitespace(self):
         from core.message import is_clean_text_url_only
+
         assert is_clean_text_url_only("  https://example.com  ") is True
 
     def test_text_before_url_rejected(self):
         from core.message import is_clean_text_url_only
+
         assert is_clean_text_url_only("看看 https://example.com") is False
 
     def test_text_after_url_rejected(self):
         from core.message import is_clean_text_url_only
+
         assert is_clean_text_url_only("https://example.com 看看") is False
 
     def test_multiple_urls_rejected(self):
         from core.message import is_clean_text_url_only
+
         assert is_clean_text_url_only("https://a.com https://b.com") is False
 
     def test_empty_rejected(self):
         from core.message import is_clean_text_url_only
+
         assert is_clean_text_url_only("") is False
 
     def test_non_http_scheme_rejected(self):
         from core.message import is_clean_text_url_only
+
         assert is_clean_text_url_only("ftp://example.com") is False
 
     def test_plain_text_rejected(self):
         from core.message import is_clean_text_url_only
+
         assert is_clean_text_url_only("你好") is False
-
-# ============================================================
-# 运行测试
-# ============================================================
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

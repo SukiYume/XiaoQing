@@ -14,7 +14,7 @@ recursive-include plugins/pendo/web/services/assets *.zip
 include plugins/xiaoqing_chat/config/xiaoqing_config.json
 include plugins/xiaoqing_chat/media/qq_face_builtin_catalog.json
 
-# Repository-only training, migration, experiment, test, and release tooling.
+# Repository-only training, migration, experiment, test, and development tooling.
 prune plugins/arxiv_filter/train_model
 prune plugins/pendo/scripts
 prune plugins/pendo/web/migrations
@@ -22,7 +22,6 @@ prune plugins/xiaoqing_chat/experiments
 prune tests
 prune scripts
 prune docs
-prune release
 prune .github
 prune .codex
 prune .pytest_cache

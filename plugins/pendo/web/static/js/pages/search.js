@@ -1,8 +1,16 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
 import { renderPagination } from '../components/pagination.js';
-import { formatDateTime, previewText } from '../utils/format.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import {
+    errorMessage,
+    finiteNumber,
+    formatDateTime,
+    isRecord,
+    nonNegativeInteger,
+    previewText,
+    textValue,
+} from '../utils/format.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 import { openEventDetail } from './events.js';
 import { openTaskModal } from './tasks.js';
 import { openDetailModal as openLedgerDetailModal } from './ledger.js';
@@ -12,16 +20,22 @@ import { openDiaryViewModal } from './diary.js';
 const CSS_ID = 'pendo-search-redesign-styles';
 const PAGE_SIZE = 20;
 
-const TYPE_CONFIG = {
-    event: { label: '日程', icon: '📅', color: '#F59E0B' },
-    task: { label: '待办', icon: '✅', color: '#10B981' },
-    ledger: { label: '记账', icon: '💰', color: '#EF4444' },
-    note: { label: '笔记', icon: '📝', color: '#3B82F6' },
-    diary: { label: '日记', icon: '📔', color: '#EC4899' },
-};
+const TYPE_CONFIG = Object.freeze({
+    event: { label: '日程', icon: '📅' },
+    task: { label: '待办', icon: '✅' },
+    ledger: { label: '记账', icon: '💰' },
+    note: { label: '笔记', icon: '📝' },
+    diary: { label: '日记', icon: '📔' },
+});
 
-const TYPE_ORDER = ['event', 'task', 'ledger', 'note', 'diary'];
-const FILTER_TABS = [{ value: '', label: '全部' }, ...TYPE_ORDER.map((type) => ({ value: type, label: TYPE_CONFIG[type].label }))];
+const TYPE_ORDER = Object.freeze(['event', 'task', 'ledger', 'note', 'diary']);
+const ITEM_TYPES = new Set(TYPE_ORDER);
+const CATEGORY_FIELDS = new Set(['category', 'ledger_category']);
+const TRANSACTION_TYPES = new Set(['expense', 'income', 'transfer']);
+const FILTER_TABS = [
+    { value: '', label: '全部' },
+    ...TYPE_ORDER.map((type) => ({ value: type, label: TYPE_CONFIG[type].label })),
+];
 const SUGGESTIONS = [
     { label: '找会议', query: '会议', type: 'event' },
     { label: '找逾期任务', query: '截止', type: 'task' },
@@ -41,27 +55,76 @@ let _total = 0;
 let _page = 1;
 let _loading = false;
 let _hasSearched = false;
-let _debounceTimer = null;
-let _dataChangedHandler = null;
+let _unsubscribeDataChanges = null;
+let _searchVersion = 0;
+let _lastSearchSignature = '';
 
-function formatDate(value) {
-    return value ? formatDateTime(value, '') : '';
+// ---------------------------------------------------------------------------
+// 数据边界：未知类型与缺少 ID 的结果不进入页面，其余字段先收敛再渲染
+// ---------------------------------------------------------------------------
+
+function normalizeCollection(value) {
+    if (!isRecord(value)) return null;
+    return {
+        ...value,
+        title: textValue(value.title).trim(),
+        notes: textValue(value.notes),
+        location: textValue(value.location).trim(),
+        category: textValue(value.category).trim(),
+    };
 }
 
-function alphaColor(hex, alpha = 0.12) {
-    const value = String(hex || '').trim();
-    const normalized = value.startsWith('#') ? value.slice(1) : value;
-    if (![3, 6].includes(normalized.length) || /[^0-9a-f]/i.test(normalized)) {
-        return `rgba(148,163,184,${alpha})`;
-    }
-    const full = normalized.length === 3
-        ? normalized.split('').map((part) => `${part}${part}`).join('')
-        : normalized;
-    const int = Number.parseInt(full, 16);
-    const r = (int >> 16) & 255;
-    const g = (int >> 8) & 255;
-    const b = int & 255;
-    return `rgba(${r},${g},${b},${alpha})`;
+function normalizeSearchItem(value) {
+    if (!isRecord(value)) return null;
+    const id = textValue(value.id).trim();
+    const type = textValue(value.type).trim();
+    if (!id || !ITEM_TYPES.has(type)) return null;
+    const rawTransactionType = textValue(value.transaction_type).trim();
+    const rawAmount = value.amount == null || value.amount === '' ? null : finiteNumber(value.amount, null);
+    const rawPriority = value.priority == null || value.priority === '' ? null : finiteNumber(value.priority, null);
+    const rawMoodScore =
+        value.mood_score == null || value.mood_score === '' ? null : finiteNumber(value.mood_score, null);
+    return {
+        ...value,
+        id,
+        type,
+        title: textValue(value.title).trim(),
+        content: textValue(value.content),
+        notes: textValue(value.notes),
+        remark: textValue(value.remark),
+        location: textValue(value.location).trim(),
+        category: textValue(value.category).trim(),
+        status: textValue(value.status).trim(),
+        priority: rawPriority,
+        plan_date: textValue(value.plan_date).trim(),
+        deadline_at: textValue(value.deadline_at).trim(),
+        start_time: textValue(value.start_time).trim(),
+        transaction_type: TRANSACTION_TYPES.has(rawTransactionType) ? rawTransactionType : 'expense',
+        amount: rawAmount,
+        ledger_category: textValue(value.ledger_category).trim(),
+        account_name: textValue(value.account_name).trim(),
+        counter_account_name: textValue(value.counter_account_name).trim(),
+        merchant: textValue(value.merchant).trim(),
+        ledger_date: textValue(value.ledger_date).trim(),
+        diary_date: textValue(value.diary_date).trim(),
+        entry_time: textValue(value.entry_time).trim(),
+        weather: textValue(value.weather).trim(),
+        mood: textValue(value.mood).trim(),
+        mood_score: rawMoodScore,
+        is_favorite: value.is_favorite === true,
+        updated_at: textValue(value.updated_at).trim(),
+        created_at: textValue(value.created_at).trim(),
+        collection: normalizeCollection(value.collection),
+    };
+}
+
+function normalizeSearchResponse(value) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const items = (Array.isArray(source.items) ? source.items : []).map(normalizeSearchItem).filter(Boolean);
+    return {
+        items,
+        total: Math.max(items.length, nonNegativeInteger(source.total)),
+    };
 }
 
 function itemTitle(item) {
@@ -74,7 +137,11 @@ function itemTitle(item) {
 }
 
 function itemPreview(item) {
-    if (item.type === 'event') return previewText(item.notes || item.content || item.collection?.notes || item.collection?.location || item.location || '');
+    if (item.type === 'event') {
+        return previewText(
+            item.notes || item.content || item.collection?.notes || item.collection?.location || item.location || '',
+        );
+    }
     if (item.type === 'task') return previewText(item.content || '');
     if (item.type === 'ledger') return previewText(item.remark || item.content || '');
     if (item.type === 'diary') return previewText(item.content || '');
@@ -84,7 +151,7 @@ function itemPreview(item) {
 function itemMeta(item) {
     if (item.type === 'event') {
         return [
-            item.start_time ? formatDate(item.start_time) : '',
+            item.start_time ? formatDateTime(item.start_time, '') : '',
             item.location || item.collection?.location ? `📍 ${item.location || item.collection.location}` : '',
             item.category || item.collection?.category || '',
         ].filter(Boolean);
@@ -92,36 +159,42 @@ function itemMeta(item) {
     if (item.type === 'task') {
         return [
             item.status || '',
-            item.priority ? `优先级 ${item.priority}` : '',
-            item.plan_date ? `计划 ${formatDate(item.plan_date)}` : '',
-            item.deadline_at ? `截止 ${formatDate(item.deadline_at)}` : '',
+            item.priority != null ? `优先级 ${item.priority}` : '',
+            item.plan_date ? `计划 ${formatDateTime(item.plan_date, '')}` : '',
+            item.deadline_at ? `截止 ${formatDateTime(item.deadline_at, '')}` : '',
             item.category || '',
         ].filter(Boolean);
     }
     if (item.type === 'ledger') {
         const txType = item.transaction_type || 'expense';
-        const sign = txType === 'income' ? '+' : (txType === 'transfer' ? '↔ ' : '-');
-        const amount = item.amount != null ? `${sign}¥${Number(item.amount).toFixed(2)}` : '';
-        const account = txType === 'transfer' && item.counter_account_name
-            ? `${item.account_name || '现金'}→${item.counter_account_name}`
-            : (item.account_name || '');
-        return [amount, item.ledger_category || '', account, item.merchant || '', item.ledger_date || ''].filter(Boolean);
+        const sign = txType === 'income' ? '+' : txType === 'transfer' ? '↔ ' : '-';
+        const amount = item.amount != null ? `${sign}¥${item.amount.toFixed(2)}` : '';
+        const account =
+            txType === 'transfer' && item.counter_account_name
+                ? `${item.account_name || '现金'}→${item.counter_account_name}`
+                : item.account_name || '';
+        return [amount, item.ledger_category || '', account, item.merchant || '', item.ledger_date || ''].filter(
+            Boolean,
+        );
     }
     if (item.type === 'diary') {
-        const entryTime = item.entry_time ? formatDate(item.entry_time) : '';
+        const entryTime = item.entry_time ? formatDateTime(item.entry_time, '') : '';
         return [
             entryTime || item.diary_date || '',
             item.weather || '',
             item.mood ? `心情 ${item.mood}` : '',
-            item.mood_score ? `${item.mood_score}/10` : '',
+            item.mood_score != null ? `${item.mood_score}/10` : '',
             item.is_favorite ? '收藏' : '',
         ].filter(Boolean);
     }
-    return [item.category || '', formatDate(item.updated_at || item.created_at)].filter(Boolean);
+    return [
+        item.category || '',
+        item.updated_at || item.created_at ? formatDateTime(item.updated_at || item.created_at, '') : '',
+    ].filter(Boolean);
 }
 
 function resultCounts() {
-    const counts = {};
+    const counts = Object.fromEntries(TYPE_ORDER.map((type) => [type, 0]));
     _results.forEach((item) => {
         counts[item.type] = (counts[item.type] || 0) + 1;
     });
@@ -129,7 +202,7 @@ function resultCounts() {
 }
 
 function totalPages() {
-    return Math.max(1, Math.ceil((_total || 0) / PAGE_SIZE));
+    return Math.max(1, Math.ceil(nonNegativeInteger(_total) / PAGE_SIZE));
 }
 
 function matchingCategories() {
@@ -144,21 +217,23 @@ function matchingCategories() {
         if (entry.typeHint !== item.type) entry.typeHint = '';
         map.set(key, entry);
     });
-    return [...map.values()]
-        .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category))
-        .slice(0, 6);
+    return [...map.values()].sort((a, b) => b.count - a.count || a.category.localeCompare(b.category)).slice(0, 6);
 }
 
 function groupedResults() {
     if (_activeType) return [{ type: _activeType, items: _results }];
-    return TYPE_ORDER
-        .map((type) => ({ type, items: _results.filter((item) => item.type === type) }))
-        .filter((group) => group.items.length);
+    return TYPE_ORDER.map((type) => ({ type, items: _results.filter((item) => item.type === type) })).filter(
+        (group) => group.items.length,
+    );
 }
 
 function ensureStyles() {
-    injectStyles(CSS_ID, `
+    injectStyles(
+        CSS_ID,
+        `
         ${pageShellCss('search-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
+
+        /* 搜索头部与查询输入 */
         .search-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
             padding: 24px 26px; border-radius: 28px; margin-bottom: 18px;
@@ -215,6 +290,14 @@ function ensureStyles() {
         }
         .search-tab.active, .search-chip.active { background: #475569; color: #fff; border-color: #475569; }
         .search-chip.search-suggestion { background: rgba(241,245,249,0.9); }
+        .search-tab:focus-visible,
+        .search-chip:focus-visible,
+        .search-card:focus-visible {
+            outline: 3px solid rgba(100,116,139,0.24);
+            outline-offset: 2px;
+        }
+
+        /* 汇总、分组与结果卡片 */
         .search-summary {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start;
             padding: 16px 18px; margin-bottom: 16px; border-radius: 24px; background: rgba(255,255,255,0.92);
@@ -233,18 +316,25 @@ function ensureStyles() {
         .search-card-list { display: flex; flex-direction: column; gap: 12px; }
         .search-card {
             display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: start;
+            width: 100%; appearance: none; text-align: left; color: inherit; font: inherit;
             padding: 14px; border-radius: 20px; border: 1px solid rgba(203,213,225,0.82); background: rgba(255,255,255,0.96);
             cursor: pointer; transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
         }
         .search-card:hover { transform: translateY(-1px); border-color: rgba(100,116,139,0.28); box-shadow: 0 14px 28px rgba(15,23,42,0.06); }
+        .search-type-event { --search-type-color: #B45309; --search-type-soft: rgba(245,158,11,0.14); }
+        .search-type-task { --search-type-color: #047857; --search-type-soft: rgba(16,185,129,0.14); }
+        .search-type-ledger { --search-type-color: #DC2626; --search-type-soft: rgba(239,68,68,0.14); }
+        .search-type-note { --search-type-color: #2563EB; --search-type-soft: rgba(59,130,246,0.14); }
+        .search-type-diary { --search-type-color: #DB2777; --search-type-soft: rgba(236,72,153,0.14); }
         .search-card-icon {
             width: 42px; height: 42px; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center;
-            font-size: 18px;
+            background: var(--search-type-soft); color: var(--search-type-color); font-size: 18px;
         }
+        .search-card-body { display: block; min-width: 0; }
         .search-card-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .search-card-title { margin: 0; font-size: 15px; font-weight: 780; color: var(--color-text); }
-        .search-card-badge { padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; color: #fff; }
-        .search-card-preview { margin-top: 6px; font-size: 13px; line-height: 1.65; color: var(--color-text-secondary); }
+        .search-card-title { display: block; margin: 0; font-size: 15px; font-weight: 780; color: var(--color-text); }
+        .search-card-badge { padding: 4px 8px; border-radius: 999px; background: var(--search-type-color); font-size: 11px; font-weight: 700; color: #fff; }
+        .search-card-preview { display: block; margin-top: 6px; font-size: 13px; line-height: 1.65; color: var(--color-text-secondary); }
         .search-card-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
         .search-card-meta span {
             display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 999px;
@@ -256,30 +346,53 @@ function ensureStyles() {
             border: 1px dashed rgba(148,163,184,0.28); color: var(--color-text-secondary);
         }
         .search-empty-icon { font-size: 40px; margin-bottom: 10px; }
-        ${mediaMax(BREAKPOINTS.MOBILE, `
+        ${mediaMax(
+            BREAKPOINTS.MOBILE,
+            `
             .search-hero, .search-query-bar, .search-summary { grid-template-columns: 1fr; }
             .search-query-meta { justify-content: flex-start; }
             .search-card { grid-template-columns: auto minmax(0, 1fr); }
             .search-card-arrow { display: none; }
-        `)}
-    `);
+        `,
+        )}
+    `,
+    );
 }
 
 function renderTabs() {
-    return `<div class="search-filter-tabs">${FILTER_TABS.map((tab) => {
+    return `<div class="search-filter-tabs" role="group" aria-label="结果类型">${FILTER_TABS.map((tab) => {
         const active = _activeType === tab.value;
-        return `<button type="button" class="search-tab${active ? ' active' : ''}" data-type="${tab.value}">${tab.label}</button>`;
+        return `<button type="button" class="search-tab${active ? ' active' : ''}"
+                        data-type="${escapeHtml(tab.value)}" aria-pressed="${active}">${escapeHtml(tab.label)}</button>`;
     }).join('')}</div>`;
 }
 
 function renderSuggestions() {
-    return `<div class="search-chip-row">${SUGGESTIONS.map((item) => `<button type="button" class="search-chip search-suggestion" data-suggest-query="${item.query}" data-suggest-type="${item.type}">${item.label}</button>`).join('')}</div>`;
+    return `<div class="search-chip-row" aria-label="搜索建议">${SUGGESTIONS.map(
+        (item) => `
+        <button type="button" class="search-chip search-suggestion"
+                data-suggest-query="${escapeHtml(item.query)}" data-suggest-type="${escapeHtml(item.type)}">
+            ${escapeHtml(item.label)}
+        </button>
+    `,
+    ).join('')}</div>`;
 }
 
 function renderCategoryChips() {
     const categories = matchingCategories();
     if (!categories.length || !_hasSearched) return '';
-    return `<div class="search-chip-row">${categories.map((item) => `<button type="button" class="search-chip${_activeCategory === item.category && _activeCategoryField === item.field ? ' active' : ''}" data-category="${escapeHtml(item.category)}" data-category-field="${item.field}" data-category-type="${item.typeHint || ''}">${escapeHtml(item.category)} · ${item.count}</button>`).join('')}</div>`;
+    return `<div class="search-chip-row" role="group" aria-label="本页主题">${categories
+        .map((item) => {
+            const active = _activeCategory === item.category && _activeCategoryField === item.field;
+            return `
+            <button type="button" class="search-chip${active ? ' active' : ''}"
+                    data-category="${escapeHtml(item.category)}"
+                    data-category-field="${escapeHtml(item.field)}"
+                    data-category-type="${escapeHtml(item.typeHint || '')}"
+                    aria-pressed="${active}">${escapeHtml(item.category)} · ${item.count}</button>
+        `;
+        })
+        .join('')}</div>`;
 }
 
 function renderSummary() {
@@ -287,9 +400,9 @@ function renderSummary() {
     const counts = resultCounts();
     const activeTypes = TYPE_ORDER.filter((type) => counts[type]);
     const visibleCount = _results.length;
-    const summary = _total > visibleCount
-        ? `当前共命中 ${_total} 条，本页展示 ${visibleCount} 条`
-        : `当前共命中 ${_total} 条`;
+    const total = nonNegativeInteger(_total);
+    const summary =
+        total > visibleCount ? `当前共命中 ${total} 条，本页展示 ${visibleCount} 条` : `当前共命中 ${total} 条`;
     return `
         <section class="search-summary">
             <div>
@@ -305,40 +418,48 @@ function renderSummary() {
 }
 
 function renderCard(item) {
-    const cfg = TYPE_CONFIG[item.type] || { label: item.type, icon: '❓', color: '#94A3B8' };
-    const iconBg = alphaColor(cfg.color, 0.14);
+    const cfg = TYPE_CONFIG[item.type];
+    const title = itemTitle(item);
+    const preview = itemPreview(item);
+    const metadata = itemMeta(item);
     return `
-        <article class="search-card" data-id="${escapeHtml(String(item.id))}">
-            <span class="search-card-icon" style="background:${iconBg};color:${cfg.color};">${cfg.icon}</span>
-            <div>
-                <div class="search-card-title-row">
-                    <h4 class="search-card-title">${escapeHtml(itemTitle(item))}</h4>
-                    <span class="search-card-badge" style="background:${cfg.color};">${cfg.label}</span>
-                </div>
-                ${itemPreview(item) ? `<div class="search-card-preview">${escapeHtml(itemPreview(item))}</div>` : ''}
-                <div class="search-card-meta">${itemMeta(item).map((meta) => `<span>${escapeHtml(meta)}</span>`).join('')}</div>
-            </div>
-            <span class="search-card-arrow">→</span>
-        </article>
+        <button class="search-card search-type-${item.type}" type="button"
+                data-open-result="${escapeHtml(item.id)}" aria-label="${escapeHtml(`打开${cfg.label}：${title}`)}">
+            <span class="search-card-icon" aria-hidden="true">${cfg.icon}</span>
+            <span class="search-card-body">
+                <span class="search-card-title-row">
+                    <span class="search-card-title">${escapeHtml(title)}</span>
+                    <span class="search-card-badge">${cfg.label}</span>
+                </span>
+                ${preview ? `<span class="search-card-preview">${escapeHtml(preview)}</span>` : ''}
+                <span class="search-card-meta">${metadata.map((meta) => `<span>${escapeHtml(meta)}</span>`).join('')}</span>
+            </span>
+            <span class="search-card-arrow" aria-hidden="true">→</span>
+        </button>
     `;
 }
 
 function renderResults() {
-    if (_loading) return '<div class="search-empty"><div class="search-empty-icon">⏳</div><div>正在搜索...</div></div>';
+    if (_loading)
+        return '<div class="search-empty" role="status"><div class="search-empty-icon">⏳</div><div>正在搜索...</div></div>';
     if (!_query.trim()) {
         return `<div class="search-empty"><div class="search-empty-icon">🔎</div><div>输入关键词开始检索，下面的建议可以直接点。</div></div>`;
     }
     if (_hasSearched && !_results.length) {
         return `<div class="search-empty"><div class="search-empty-icon">🧭</div><div>没有找到结果。试试换关键词、切类型，或先清空主题切片。</div></div>`;
     }
-    return `<div class="search-results-stack">${groupedResults().map((group) => `
+    return `<div class="search-results-stack">${groupedResults()
+        .map(
+            (group) => `
         <section class="search-group">
             <div class="search-group-head">
                 <div class="search-group-title">${TYPE_CONFIG[group.type].icon} ${TYPE_CONFIG[group.type].label}</div>
                 <span class="search-group-count">${group.items.length}</span>
             </div>
             <div class="search-card-list">${group.items.map(renderCard).join('')}</div>
-        </section>`).join('')}</div>`;
+        </section>`,
+        )
+        .join('')}</div>`;
 }
 
 function renderPage() {
@@ -354,12 +475,17 @@ function renderPage() {
                     <p>在日程、待办、记账、笔记和日记中统一搜索。</p>
                     <div class="search-hero-tags">
                         <span class="search-hero-tag">${_activeType ? TYPE_CONFIG[_activeType].label : '全部类型'}</span>
-                        <span class="search-hero-tag">${_activeCategory || '全部主题'}</span>
-                        <span class="search-hero-tag">${_hasSearched ? `${_total} 条命中` : '等待检索'}</span>
+                        <span class="search-hero-tag">${escapeHtml(_activeCategory || '全部主题')}</span>
+                        <span class="search-hero-tag">${_hasSearched ? `${nonNegativeInteger(_total)} 条命中` : '等待检索'}</span>
                     </div>
                 </div>
                 <div class="search-query-meta">
-                    ${activeTypes.slice(0, 3).map((type) => `<span class="search-pill">${TYPE_CONFIG[type].label} ${typeCounts[type]}</span>`).join('')}
+                    ${activeTypes
+                        .slice(0, 3)
+                        .map(
+                            (type) => `<span class="search-pill">${TYPE_CONFIG[type].label} ${typeCounts[type]}</span>`,
+                        )
+                        .join('')}
                 </div>
             </section>
 
@@ -394,7 +520,9 @@ function renderPage() {
             pageSize: PAGE_SIZE,
             total: _total,
             onChange: async (page) => {
-                _page = page;
+                const nextPage = Math.max(1, nonNegativeInteger(page));
+                if (nextPage === _page) return;
+                _page = nextPage;
                 await doSearch();
             },
         });
@@ -408,128 +536,157 @@ function renderPage() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 详情与查询：详情按声明类型分发，查询采用“后发请求胜出”的版本门禁
+// ---------------------------------------------------------------------------
+
 async function openResultDetail(item) {
-    if (!item?.id || !item?.type) return;
-    if (item.type === 'event') {
-        await openEventDetail(item.id);
+    const normalizedItem = normalizeSearchItem(item);
+    if (!normalizedItem) return;
+    if (normalizedItem.type === 'event') {
+        await openEventDetail(normalizedItem.id);
         return;
     }
     try {
-        const res = await api.get(`/items/${item.id}`);
-        const latest = res?.data || item;
-        if (item.type === 'task') {
+        const res = await api.get(`/items/${encodeURIComponent(normalizedItem.id)}`);
+        const rawLatest =
+            res?.data && typeof res.data === 'object' && !Array.isArray(res.data) ? res.data : normalizedItem;
+        const latest =
+            normalizeSearchItem({
+                ...rawLatest,
+                id: normalizedItem.id,
+                type: normalizedItem.type,
+            }) || normalizedItem;
+        if (normalizedItem.type === 'task') {
             openTaskModal(latest);
             return;
         }
-        if (item.type === 'ledger') {
+        if (normalizedItem.type === 'ledger') {
             openLedgerDetailModal(latest);
             return;
         }
-        if (item.type === 'note') {
+        if (normalizedItem.type === 'note') {
             openNoteViewModal(latest);
             return;
         }
-        if (item.type === 'diary') {
+        if (normalizedItem.type === 'diary') {
             openDiaryViewModal(latest);
             return;
         }
         showToast('暂不支持打开这种搜索结果', 'warning');
-    } catch (err) {
-        showToast(`加载详情失败：${err.message}`, 'error');
+    } catch (error) {
+        showToast(`加载详情失败：${errorMessage(error)}`, 'error');
     }
 }
 
-async function doSearch(options = {}) {
-    const { resetPage = false } = options;
+function searchParams(query, page) {
+    const params = { q: query, page, page_size: PAGE_SIZE };
+    if (_activeType) params.type = _activeType;
+    if (_activeCategoryField === 'ledger_category' && _activeCategory) {
+        params.ledger_category = _activeCategory;
+        if (!_activeType && _activeCategoryTypeHint === 'ledger') params.type = 'ledger';
+    } else if (_activeCategory) {
+        params.category = _activeCategory;
+    }
+    return params;
+}
+
+function searchSignature(query, page) {
+    return JSON.stringify([query, page, _activeType, _activeCategory, _activeCategoryField, _activeCategoryTypeHint]);
+}
+
+async function doSearch({ resetPage = false, force = false } = {}) {
     if (resetPage) _page = 1;
     const q = _query.trim();
     if (!q) {
+        _searchVersion += 1;
+        _query = '';
         _results = [];
         _total = 0;
         _page = 1;
         _loading = false;
         _hasSearched = false;
+        _lastSearchSignature = '';
         renderPage();
         return;
     }
+    const root = _container;
+    if (!root) return;
+    const requestedPage = Math.max(1, nonNegativeInteger(_page));
+    const signature = searchSignature(q, requestedPage);
+    if (!force && signature === _lastSearchSignature && (_loading || _hasSearched)) return;
+
+    const version = ++_searchVersion;
+    _query = q;
+    _page = requestedPage;
+    _lastSearchSignature = signature;
     _loading = true;
     renderPage();
     try {
-        const params = { q, page: _page, page_size: PAGE_SIZE };
-        if (_activeType) params.type = _activeType;
-        if (_activeCategoryField === 'ledger_category' && _activeCategory) {
-            params.ledger_category = _activeCategory;
-            if (!_activeType && _activeCategoryTypeHint === 'ledger') params.type = 'ledger';
-        } else if (_activeCategory) {
-            params.category = _activeCategory;
-        }
-        const res = await api.get('/search', params);
-        _results = res?.data?.items || [];
-        _total = Number(res?.data?.total || 0);
-        _hasSearched = true;
-        const lastPage = totalPages();
-        if (_page > lastPage) {
+        let response = normalizeSearchResponse((await api.get('/search', searchParams(q, requestedPage)))?.data);
+        if (_container !== root || version !== _searchVersion) return;
+
+        const lastPage = Math.max(1, Math.ceil(response.total / PAGE_SIZE));
+        if (requestedPage > lastPage) {
             _page = lastPage;
-            await doSearch();
-            return;
+            response = normalizeSearchResponse((await api.get('/search', searchParams(q, lastPage)))?.data);
+            if (_container !== root || version !== _searchVersion) return;
+            _lastSearchSignature = searchSignature(q, lastPage);
         }
-    } catch (err) {
+        _results = response.items;
+        _total = response.total;
+        _hasSearched = true;
+    } catch (error) {
+        if (_container !== root || version !== _searchVersion) return;
         _results = [];
         _total = 0;
         _hasSearched = true;
-        showToast(`搜索失败：${err.message}`, 'error');
+        _lastSearchSignature = '';
+        showToast(`搜索失败：${errorMessage(error)}`, 'error');
+    } finally {
+        if (_container === root && version === _searchVersion) {
+            _loading = false;
+            renderPage();
+        }
     }
-    _loading = false;
-    renderPage();
 }
 
+// 每次重绘都会替换内部节点，因此监听器只绑定到本轮 DOM，避免累积。
 function attachListeners() {
-    if (!_container) return;
-    const input = _container.querySelector('#search-input');
+    const root = _container;
+    if (!root) return;
+    const input = root.querySelector('#search-input');
     if (input) {
         input.oninput = () => {
             _query = input.value;
         };
         input.onchange = async () => {
             _query = input.value;
-            clearTimeout(_debounceTimer);
-            if (!_query.trim()) {
-                _results = [];
-                _total = 0;
-                _page = 1;
-                _hasSearched = false;
-                _loading = false;
-                renderPage();
-                return;
-            }
             await doSearch({ resetPage: true });
         };
         input.onkeydown = async (event) => {
-            if (event.key === 'Enter') {
+            if (event.key === 'Enter' && !event.isComposing) {
                 event.preventDefault();
-                clearTimeout(_debounceTimer);
                 _query = input.value;
                 await doSearch({ resetPage: true });
             }
             if (event.key === 'Escape') {
-                clearTimeout(_debounceTimer);
+                event.preventDefault();
                 _query = '';
                 _activeCategory = '';
                 _activeCategoryField = 'category';
                 _activeCategoryTypeHint = '';
-                _results = [];
-                _total = 0;
-                _page = 1;
-                _hasSearched = false;
-                _loading = false;
-                renderPage();
+                await doSearch({ resetPage: true });
             }
         };
     }
 
-    _container.querySelectorAll('.search-tab[data-type]').forEach((button) => {
+    root.querySelectorAll('.search-tab[data-type]').forEach((button) => {
         button.onclick = async () => {
-            _activeType = button.dataset.type || '';
+            const requestedType = textValue(button.dataset.type).trim();
+            const nextType = ITEM_TYPES.has(requestedType) ? requestedType : '';
+            if (nextType === _activeType && !_activeCategory) return;
+            _activeType = nextType;
             _activeCategory = '';
             _activeCategoryField = 'category';
             _activeCategoryTypeHint = '';
@@ -538,11 +695,13 @@ function attachListeners() {
         };
     });
 
-    _container.querySelectorAll('.search-chip[data-category]').forEach((button) => {
+    root.querySelectorAll('.search-chip[data-category]').forEach((button) => {
         button.onclick = async () => {
-            const category = button.dataset.category || '';
-            const field = button.dataset.categoryField || 'category';
-            const typeHint = button.dataset.categoryType || '';
+            const category = textValue(button.dataset.category).trim();
+            const requestedField = textValue(button.dataset.categoryField).trim();
+            const field = CATEGORY_FIELDS.has(requestedField) ? requestedField : 'category';
+            const requestedHint = textValue(button.dataset.categoryType).trim();
+            const typeHint = ITEM_TYPES.has(requestedHint) ? requestedHint : '';
             const isSame = _activeCategory === category && _activeCategoryField === field;
             _activeCategory = isSame ? '' : category;
             _activeCategoryField = isSame ? 'category' : field;
@@ -552,10 +711,11 @@ function attachListeners() {
         };
     });
 
-    _container.querySelectorAll('.search-suggestion[data-suggest-query]').forEach((button) => {
+    root.querySelectorAll('.search-suggestion[data-suggest-query]').forEach((button) => {
         button.onclick = async () => {
-            _query = button.dataset.suggestQuery || '';
-            _activeType = button.dataset.suggestType || '';
+            _query = textValue(button.dataset.suggestQuery).trim();
+            const requestedType = textValue(button.dataset.suggestType).trim();
+            _activeType = ITEM_TYPES.has(requestedType) ? requestedType : '';
             _activeCategory = '';
             _activeCategoryField = 'category';
             _activeCategoryTypeHint = '';
@@ -563,15 +723,22 @@ function attachListeners() {
         };
     });
 
-    _container.querySelectorAll('.search-card[data-id]').forEach((card) => {
+    root.querySelectorAll('[data-open-result]').forEach((card) => {
         card.onclick = async () => {
-            const item = _results.find((entry) => String(entry.id) === String(card.dataset.id));
+            const id = textValue(card.dataset.openResult);
+            const item = _results.find((entry) => entry.id === id);
             if (item) await openResultDetail(item);
         };
     });
 }
 
-export function render(container) {
+export async function render(container) {
+    if (!container || typeof container.querySelector !== 'function') {
+        throw new TypeError('搜索页需要有效的容器元素');
+    }
+    _searchVersion += 1;
+    _unsubscribeDataChanges?.();
+    _unsubscribeDataChanges = null;
     _container = container;
     _results = [];
     _total = 0;
@@ -582,36 +749,34 @@ export function render(container) {
     _activeCategoryTypeHint = '';
     _loading = false;
     _hasSearched = false;
-    renderPage();
-    _dataChangedHandler = async () => {
+    _lastSearchSignature = '';
+    _unsubscribeDataChanges = subscribeDataChanges(null, async () => {
         if (!_query.trim() || !_hasSearched) return;
-        await doSearch();
-    };
-    window.addEventListener('pendo-data-changed', _dataChangedHandler);
+        await doSearch({ force: true });
+    });
+    if (_query.trim()) await doSearch({ resetPage: true, force: true });
+    else renderPage();
 }
 
 export function destroy() {
-    clearTimeout(_debounceTimer);
-    _debounceTimer = null;
-    if (_dataChangedHandler) {
-        window.removeEventListener('pendo-data-changed', _dataChangedHandler);
-        _dataChangedHandler = null;
-    }
+    _searchVersion += 1;
+    _unsubscribeDataChanges?.();
+    _unsubscribeDataChanges = null;
     _container = null;
     _results = [];
     _total = 0;
     _page = 1;
+    _query = '';
+    _activeType = '';
     _activeCategory = '';
     _activeCategoryField = 'category';
     _activeCategoryTypeHint = '';
     _loading = false;
     _hasSearched = false;
+    _lastSearchSignature = '';
 }
 
 export function onRouteEnter(params) {
-    const q = params ? params.get('q') : '';
-    if (!q) return;
-    _query = q;
-    _page = 1;
-    doSearch();
+    const q = params && typeof params.get === 'function' ? params.get('q') : '';
+    _query = textValue(q).trim();
 }

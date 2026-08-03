@@ -1,1 +1,1 @@
-"""Pendo Web UI - FastAPI backend + static SPA frontend."""
+"""Pendo Web 后端、静态前端与相关服务的包入口。"""

@@ -3,6 +3,7 @@
     "version": "2.0.0",
     "description": "语音功能插件 - 支持文字转语音(TTS)，并提供内部 STT 工具函数，使用 Azure 认知服务",
     "entry": "main.py",
+    "concurrency": "parallel",
     "services": [
         {
             "name": "voice.synthesize_text",
@@ -21,7 +22,28 @@
                 "tts"
             ],
             "help": "🔊 文字转语音 | /语音 <文本> 或 /语音 help 查看详细帮助",
-            "admin_only": true
+            "admin_only": true,
+            "usage": "/语音 <文本>",
+            "examples": ["/语音 你好，我是小青"],
+            "invalid_examples": ["/语音"],
+            "subcommands": [
+                {
+                    "name": "help",
+                    "aliases": ["帮助"],
+                    "help": "显示文字转语音说明",
+                    "usage": "/语音 help",
+                    "match": "exact",
+                    "examples": ["/语音 help"],
+                    "invalid_examples": ["/语音 help extra"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "aiohttp",
+            "required": true,
+            "description": "文字转语音 HTTP 请求在入口模块中直接使用 aiohttp"
         }
     ]
 }

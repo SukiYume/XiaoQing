@@ -1,97 +1,122 @@
+"""生成青宠状态卡、提醒、排行榜和帮助文本。"""
 
 from ..models import Pet, User
-from ..utils.constants import DEFAULT_DRESS_ITEMS, MAX_STAT_VALUE, PetStage, PetStatus
+from .constants import DEFAULT_DRESS_ITEMS, MAX_STAT_VALUE, PetStage, PetStatus
 from .time import utc_now
+
+_STAGE_EMOJI = {
+    PetStage.EGG: "🥚",
+    PetStage.YOUNG: "🐣",
+    PetStage.GROWTH: "🐥",
+    PetStage.MATURE: "🐔",
+    PetStage.OLD: "🐦",
+}
+
+_STATUS_EMOJI = {
+    PetStatus.NORMAL: "✅",
+    PetStatus.SICK: "🤒",
+    PetStatus.SLEEPING: "😴",
+    PetStatus.TRAVELING: "✈️",
+    PetStatus.DEAD: "💀",
+}
+
+_DRESS_SLOT_EMOJI = {
+    "帽子": "🎩",
+    "衣服": "👕",
+    "饰品": "🎀",
+    "背景": "🖼️",
+}
+
+_RANKING_FORMAT = {
+    "care_score": ("🏆 照顾评分排行", "%"),
+    "intimacy": ("💕 亲密度排行", ""),
+    "experience": ("🎯 经验值排行", ""),
+    "coins": ("💰 金币排行", "💰"),
+}
 
 
 def _progress_bar(value: int, max_val: int = MAX_STAT_VALUE, length: int = 10) -> str:
-    filled = int(value / max_val * length) if max_val > 0 else 0
-    bar = "█" * filled + "░" * (length - filled)
+    """把属性值转换为固定宽度进度条，并限制异常值造成的绘制溢出。"""
+    safe_length = max(0, length)
+    filled = int(value / max_val * safe_length) if max_val > 0 else 0
+    filled = min(safe_length, max(0, filled))
+    bar = "█" * filled + "░" * (safe_length - filled)
     return f"[{bar}] {value}/{max_val}"
 
 
-def format_pet_card(pet: Pet, user: User = None) -> str:
-    stage_emoji = {
-        PetStage.EGG: "🥚",
-        PetStage.YOUNG: "🐣",
-        PetStage.GROWTH: "🐥",
-        PetStage.MATURE: "🐔",
-        PetStage.OLD: "🐦",
-    }
+def format_pet_card(pet: Pet, user: User | None = None) -> str:
+    """生成包含宠物属性、装扮和可选用户资产的状态卡。"""
+    lines = [
+        f"🐾 **{pet.name}** {_STAGE_EMOJI.get(pet.stage, '🐾')}",
+        "═" * 20,
+        f"• 阶段: {pet.stage.value} ({pet.form})",
+        f"• 性格: {pet.personality.value}",
+        f"• 状态: {_STATUS_EMOJI.get(pet.status, '❓')} {pet.status.value}",
+    ]
 
-    status_emoji = {
-        PetStatus.NORMAL: "✅",
-        PetStatus.SICK: "🤒",
-        PetStatus.SLEEPING: "😴",
-        PetStatus.TRAVELING: "✈️",
-        PetStatus.DEAD: "💀",
-    }
-
-    emoji = stage_emoji.get(pet.stage, "🐾")
-    s_emoji = status_emoji.get(pet.status, "❓")
-
-    text = f"🐾 **{pet.name}** {emoji}\n"
-    text += f"{'═' * 20}\n"
-    text += f"• 阶段: {pet.stage.value} ({pet.form})\n"
-    text += f"• 性格: {pet.personality.value}\n"
-    text += f"• 状态: {s_emoji} {pet.status.value}\n"
-    # 旅行状态显示剩余时间
     if pet.status == PetStatus.TRAVELING and pet.status_expire_time:
-        remaining = pet.status_expire_time - utc_now()
-        if remaining.total_seconds() > 0:
-            hours = int(remaining.total_seconds() // 3600)
-            minutes = int((remaining.total_seconds() % 3600) // 60)
-            text += f"• 旅行剩余: {hours}小时{minutes}分钟\n"
+        remaining_seconds = (pet.status_expire_time - utc_now()).total_seconds()
+        if remaining_seconds > 0:
+            hours, remainder = divmod(int(remaining_seconds), 3600)
+            minutes = remainder // 60
+            lines.append(f"• 旅行剩余: {hours}小时{minutes}分钟")
         else:
-            text += "• 旅行剩余: 即将返回\n"
-    text += f"• 年龄: {pet.age}天\n"
-    text += f"• 亲密度: {pet.intimacy}\n"
-    text += f"• 经验值: {pet.experience}\n"
-    text += f"• 点赞: {pet.likes}\n\n"
-    text += "📊 **属性**\n"
-    text += f"  饥饿: {_progress_bar(pet.hunger)}\n"
-    text += f"  心情: {_progress_bar(pet.mood)}\n"
-    text += f"  清洁: {_progress_bar(pet.clean)}\n"
-    text += f"  精力: {_progress_bar(pet.energy)}\n"
-    text += f"  健康: {_progress_bar(pet.health)}\n"
-    text += f"  照顾评分: {round(pet.care_score * 100, 1)}%\n"
+            lines.append("• 旅行剩余: 即将返回")
 
-    # 装扮展示
-    dress_slots = pet.get_dress_slots()
-    equipped = {k: v for k, v in dress_slots.items() if v}
+    lines.extend(
+        [
+            f"• 年龄: {pet.age}天",
+            f"• 亲密度: {pet.intimacy}",
+            f"• 经验值: {pet.experience}",
+            f"• 点赞: {pet.likes}",
+            "",
+            "📊 **属性**",
+            f"  饥饿: {_progress_bar(pet.hunger)}",
+            f"  心情: {_progress_bar(pet.mood)}",
+            f"  清洁: {_progress_bar(pet.clean)}",
+            f"  精力: {_progress_bar(pet.energy)}",
+            f"  健康: {_progress_bar(pet.health)}",
+            f"  照顾评分: {round(pet.care_score * 100, 1)}%",
+        ]
+    )
+
+    equipped = [
+        (slot_name, item_id)
+        for slot_name, item_id in pet.get_dress_slots().items()
+        if item_id in DEFAULT_DRESS_ITEMS
+    ]
     if equipped:
-        slot_emojis = {
-            "帽子": "🎩",
-            "衣服": "👕",
-            "饰品": "🎀",
-            "背景": "🖼️"
-        }
-        text += "\n👗 **装扮**\n"
-        for slot_name, item_id in equipped.items():
-            if item_id in DEFAULT_DRESS_ITEMS:
-                emoji = slot_emojis.get(slot_name, "🔸")
-                text += f"  {emoji} {slot_name}: {DEFAULT_DRESS_ITEMS[item_id]['name']}\n"
+        lines.extend(["", "👗 **装扮**"])
+        for slot_name, item_id in equipped:
+            slot_emoji = _DRESS_SLOT_EMOJI.get(slot_name, "🔸")
+            lines.append(f"  {slot_emoji} {slot_name}: {DEFAULT_DRESS_ITEMS[item_id]['name']}")
         bonus = pet.get_dress_mood_bonus()
         if bonus > 0:
-            text += f"  ✨ 心情加成: +{bonus}\n"
+            lines.append(f"  ✨ 心情加成: +{bonus}")
 
-    if user:
-        text += "\n💰 **用户信息**\n"
-        text += f"  🪙 金币: {user.coins}\n"
-        text += f"  ❤️ 友情点: {user.friendship_points}\n"
+    if user is not None:
+        lines.extend(
+            [
+                "",
+                "💰 **用户信息**",
+                f"  🪙 金币: {user.coins}",
+                f"  ❤️ 友情点: {user.friendship_points}",
+            ]
+        )
         if user.titles:
-            text += f"  🏷️ 称号: {'、'.join(user.titles[:3])}"
+            title_line = f"  🏷️ 称号: {'、'.join(user.titles[:3])}"
             if len(user.titles) > 3:
-                text += f" 等{len(user.titles)}个"
-            text += "\n"
+                title_line += f" 等{len(user.titles)}个"
+            lines.append(title_line)
         if user.is_trustee_active():
-            text += "  🛡️ 托管中（衰减减半）\n"
+            lines.append("  🛡️ 托管中（衰减减半）")
 
-    return text
+    return "\n".join(lines) + "\n"
 
 
 def format_status_text(pet: Pet) -> str:
-    alerts = []
+    """根据宠物的低属性和特殊状态生成照料提醒。"""
+    alerts: list[str] = []
     if pet.hunger < 30:
         alerts.append("🍖 宠物饿了！快去喂食")
     if pet.clean < 30:
@@ -107,144 +132,20 @@ def format_status_text(pet: Pet) -> str:
     if pet.status == PetStatus.TRAVELING:
         alerts.append("✈️ 宠物正在旅行中，使用 /宠物 召回 提前召回")
 
-    if not alerts:
-        return "✨ 宠物状态良好"
-
-    return "\n".join(alerts)
+    return "\n".join(alerts) if alerts else "✨ 宠物状态良好"
 
 
 def format_ranking_list(ranking: list[tuple[str, str, float]], ranking_type: str) -> str:
-    type_labels = {
-        "care_score": "🏆 照顾评分排行",
-        "intimacy": "💕 亲密度排行",
-        "experience": "🎯 经验值排行",
-        "coins": "💰 金币排行"
-    }
-
-    type_units = {
-        "care_score": "%",
-        "intimacy": "",
-        "experience": "",
-        "coins": "💰"
-    }
-
-    title = type_labels.get(ranking_type, "排行榜")
-    unit = type_units.get(ranking_type, "")
-
-    text = f"{title}\n{'═' * 20}\n\n"
-
+    """生成指定指标的排行榜文本。"""
+    title, unit = _RANKING_FORMAT.get(ranking_type, ("排行榜", ""))
+    header = f"{title}\n{'═' * 20}\n\n"
     if not ranking:
-        return text + "暂无数据"
+        return header + "暂无数据"
 
-    medal_emoji = ["🥇", "🥈", "🥉"]
-    for i, (user_id, pet_name, value) in enumerate(ranking):
-        emoji = medal_emoji[i] if i < 3 else f"#{i + 1}"
+    rows: list[str] = []
+    medal_emoji = ("🥇", "🥈", "🥉")
+    for index, (user_id, pet_name, value) in enumerate(ranking):
+        position = medal_emoji[index] if index < len(medal_emoji) else f"#{index + 1}"
         display_value = f"{value}{unit}" if unit else str(value)
-        text += f"{emoji} {pet_name} ({user_id}) - {display_value}\n"
-
-    return text
-
-
-def format_help_text(category: str = "") -> str:
-    """
-    格式化帮助文档，支持按类别查看
-    """
-    # 使用英文键名以增强编码兼容性
-    categories = {
-        "basic": (
-            "📌 **基础命令**\n"
-            "• /宠物 领养 <名字> - 领养宠物\n"
-            "• /宠物 状态 - 查看宠物状态\n"
-            "• /宠物 喂食 [道具名] - 喂食\n"
-            "• /宠物 清洁 - 清洁\n"
-            "• /宠物 玩耍 - 玩耍\n"
-            "• /宠物 睡觉 - 让宠物睡觉\n"
-            "• /宠物 起床 - 唤醒宠物\n"
-            "• /宠物 召回 - 召回旅行中的宠物"
-        ),
-        "advanced": (
-            "🎯 **进阶命令**\n"
-            "• /宠物 训练 [体力/敏捷/智力] - 训练\n"
-            "• /宠物 探索 [森林/海边/山洞/废墟] - 探索冒险\n"
-            "• /宠物 治疗 [药品名] - 治疗宠物\n"
-            "• /宠物 改名 <新名字> - 改名"
-        ),
-        "items": (
-            "📦 **道具与装扮**\n"
-            "• /宠物 背包 - 查看背包\n"
-            "• /宠物 商店 - 查看商店\n"
-            "• /宠物 购买 <道具> [数量] - 购买道具\n"
-            "• /宠物 使用 <道具> - 使用道具\n"
-            "• /宠物 装扮 [查看/商店/购买/穿戴/卸下]"
-        ),
-        "social": (
-            "🤝 **社交互动**\n"
-            "• /宠物 互访 @QQ号 - 互访\n"
-            "• /宠物 送礼 @QQ号 <道具> [数量]\n"
-            "• /宠物 查看 @QQ号 - 看他人宠物\n"
-            "• /宠物 摸摸 @QQ号 - 点赞/摸摸\n"
-            "• /宠物 留言 [@QQ号 <内容>] - 留言板\n"
-            "• /宠物 排行 [类型] - 排行榜\n"
-            "• /宠物 交易 [列表/挂单/购买/撤单]"
-        ),
-        "gameplay": (
-            "🎮 **更多玩法**\n"
-            "• /宠物 游戏 [猜拳/骰子/赛跑]\n"
-            "• /宠物 任务 [领取] - 每日任务\n"
-            "• /宠物 称号 - 查看我的称号\n"
-            "• /宠物 活动 - 查看群活动\n"
-            "• /宠物 展示 [投票] - 宠物展示会"
-        ),
-        "management": (
-            "⚙️ **管理命令** (需管理员)\n"
-            "• /宠物 管理 开启/关闭\n"
-            "• /宠物 管理 配置 [查看/设置]\n"
-            "• /宠物 管理 重置 @QQ号\n"
-            "• /宠物 管理 删除 @QQ号\n"
-            "• /宠物 管理 封禁/解封 @QQ号\n"
-            "• /宠物 管理 [日志/统计]\n"
-            "• /宠物 管理 公告 展示会"
-        )
-    }
-
-    # 统一映射到英文键名
-    aliases = {
-        # 基础
-        "basic": "basic", "base": "basic", "基础": "basic",
-        # 进阶
-        "advanced": "advanced", "adv": "advanced", "进阶": "advanced",
-        # 道具
-        "item": "items", "items": "items", "shop": "items", "dress": "items", "道具": "items",
-        # 社交
-        "social": "social", "visit": "social", "社交": "social",
-        # 玩法
-        "game": "gameplay", "play": "gameplay", "task": "gameplay", "玩法": "gameplay", "gameplay": "gameplay",
-        # 管理
-        "admin": "management", "manage": "management", "management": "management", "管理": "management"
-    }
-
-    key = category.strip().lower()
-
-    # 尝试映射别名
-    target_key = aliases.get(key, key)
-
-    if target_key in categories:
-        # 这里的 key 可能还是原始输入（如果没有在 aliases 中找到），
-        # 但我们用 target_key 来取内容。
-        # 为了标题显示友好，我们可以做一个反向映射或者直接用中文标题
-        titles = {
-            "basic": "基础", "advanced": "进阶", "items": "道具",
-            "social": "社交", "gameplay": "玩法", "management": "管理"
-        }
-        title_chn = titles.get(target_key, target_key)
-        return f"🐾 **宠物系统帮助 - {title_chn}篇**\n\n{categories[target_key]}"
-
-    # 默认返回目录
-    menu = "🐾 **宠物系统帮助菜单**\n\n请使用 `/宠物 帮助 <类别>` 查看详细指令\n\n"
-    menu += "📌 **可用类别**\n"
-    # 这里我们手动列出中文名称，保证顺序和可读性
-    display_names = ["基础", "进阶", "道具", "社交", "玩法", "管理"]
-    for name in display_names:
-        menu += f"• {name}\n"
-
-    return menu
+        rows.append(f"{position} {pet_name} ({user_id}) - {display_value}")
+    return header + "\n".join(rows) + "\n"

@@ -1,23 +1,12 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from ..utils.json_parsing import (
-    normalize_llm_text,
-    parse_first_json_array,
     parse_first_json_object,
     parse_first_json_value,
 )
 
-_RE_ARRAY = re.compile(r"\[[\s\S]*\]")
-_RE_OBJ = re.compile(r"\{[\s\S]*\}")
-_RE_JSON_BLOCK = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
-
-
-def _strip_code_block(text: str) -> str:
-    """Strip markdown code blocks from text before JSON extraction."""
-    return normalize_llm_text(text)
 
 def get_items_from_json(
     content: str,
@@ -82,11 +71,3 @@ def get_items_from_json(
             return False, result
 
     return True, result
-
-def extract_first_json_list(text: str) -> list[dict[str, Any]]:
-    """Extract the first JSON list from text, handling code blocks."""
-    return parse_first_json_array(text)
-
-def extract_first_json_dict(text: str) -> dict[str, Any] | None:
-    """Extract the first JSON object from text, handling code blocks."""
-    return parse_first_json_object(text)

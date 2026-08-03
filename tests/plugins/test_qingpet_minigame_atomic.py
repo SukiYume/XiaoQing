@@ -34,20 +34,20 @@ def _seed(db: Database, *, energy: int = 100) -> None:
 def _state(db: Database) -> tuple:
     conn = db._get_connection()
     user = conn.execute(
-        "SELECT coins, today_coins_earned FROM users "
-        "WHERE user_id = 'player' AND group_id = ?",
+        "SELECT coins, today_coins_earned FROM users WHERE user_id = 'player' AND group_id = ?",
         (GROUP,),
     ).fetchone()
     pet = conn.execute(
-        "SELECT experience, energy FROM pets "
-        "WHERE user_id = 'player' AND group_id = ?",
+        "SELECT experience, energy FROM pets WHERE user_id = 'player' AND group_id = ?",
         (GROUP,),
     ).fetchone()
     return (
         tuple(user),
         tuple(pet),
         conn.execute("SELECT COUNT(*) FROM minigame_cooldowns").fetchone()[0],
-        conn.execute("SELECT COUNT(*) FROM asset_ledger").fetchone()[0],
+        conn.execute(
+            "SELECT COUNT(*) FROM asset_ledger WHERE reason != 'account_opening'"
+        ).fetchone()[0],
         conn.execute("SELECT COUNT(*) FROM minigame_settlements").fetchone()[0],
     )
 
@@ -112,7 +112,7 @@ def test_failure_at_each_minigame_write_rolls_back_everything(tmp_path, fragment
     db = Database(str(tmp_path / "failure.db"))
     _seed(db)
     before = _state(db)
-    db._conn = _FailingConnection(db._get_connection(), fragment)
+    db._local.conn = _FailingConnection(db._get_connection(), fragment)
 
     result = _settle(db)
 
@@ -125,7 +125,7 @@ def test_minigame_commit_failure_rolls_back_everything(tmp_path):
     db = Database(str(tmp_path / "commit.db"))
     _seed(db)
     before = _state(db)
-    db._conn = _CommitFailingConnection(db._get_connection())
+    db._local.conn = _CommitFailingConnection(db._get_connection())
 
     result = _settle(db)
 
@@ -217,9 +217,7 @@ def test_all_three_games_use_atomic_actual_settlement(
     elif game == "dice":
         ok, message = service.play_dice("player", GROUP, message_id="dice-message")
     else:
-        ok, message = service.race_pet(
-            "player", "opponent", GROUP, message_id="race-message"
-        )
+        ok, message = service.race_pet("player", "opponent", GROUP, message_id="race-message")
 
     assert ok is True
     assert f"获得{expected_coins}金币" in message
@@ -227,10 +225,15 @@ def test_all_three_games_use_atomic_actual_settlement(
     pet = db.get_pet("player", GROUP)
     assert pet.experience == expected_exp
     assert pet.energy == 100 - expected_energy
-    ledger = db._get_connection().execute(
-        "SELECT delta, reason FROM asset_ledger"
-    ).fetchone()
-    assert tuple(ledger) == (expected_coins, f"minigame_{'rock_paper_scissors' if game == 'rps' else game}")
+    ledger = (
+        db._get_connection()
+        .execute("SELECT delta, reason FROM asset_ledger WHERE reason LIKE 'minigame_%'")
+        .fetchone()
+    )
+    assert tuple(ledger) == (
+        expected_coins,
+        f"minigame_{'rock_paper_scissors' if game == 'rps' else game}",
+    )
     db.cleanup()
 
 
@@ -245,8 +248,7 @@ def test_minigame_clips_reward_to_latest_daily_capacity_and_reports_actual(
     _seed(db)
     conn = db._get_connection()
     conn.execute(
-        "UPDATE users SET today_coins_earned = ? "
-        "WHERE user_id = 'player' AND group_id = ?",
+        "UPDATE users SET today_coins_earned = ? WHERE user_id = 'player' AND group_id = ?",
         (earned, GROUP),
     )
     conn.commit()
@@ -259,7 +261,9 @@ def test_minigame_clips_reward_to_latest_daily_capacity_and_reports_actual(
     assert ok is True
     assert f"获得{actual}金币" in message
     assert db.get_user("player", GROUP).coins == 100 + actual
-    ledger = conn.execute("SELECT delta FROM asset_ledger").fetchone()
+    ledger = conn.execute(
+        "SELECT delta FROM asset_ledger WHERE reason = 'minigame_rock_paper_scissors'"
+    ).fetchone()
     assert ledger["delta"] == actual
     assert db.get_pet("player", GROUP).experience == 5
     db.cleanup()
@@ -269,9 +273,7 @@ def test_race_insufficient_energy_does_not_consume_cooldown(tmp_path):
     db = Database(str(tmp_path / "no-energy.db"))
     _seed(db, energy=14)
 
-    ok, message = SocialService(db).race_pet(
-        "player", "opponent", GROUP, message_id="no-energy"
-    )
+    ok, message = SocialService(db).race_pet("player", "opponent", GROUP, message_id="no-energy")
 
     assert ok is False
     assert "精力不足" in message

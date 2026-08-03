@@ -1,707 +1,512 @@
-"""测试signin插件"""
+"""Signin 的路由、配置、传输和第三方响应契约测试。"""
 
-import asyncio
-import importlib
 import json
-import sys
+import logging
+from collections.abc import Mapping
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
-from core.bounded_http import HttpStatusError
+from core.config import ConfigSnapshot
+from plugins.signin import main as signin
+from plugins.signin import yingshi
+from tests.aiohttp_fakes import wrap_legacy_aiohttp_session
+from tests.helpers.assertions import text_segments_text
+from tests.helpers.settings_snapshot import settings_snapshot
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-
-# Add plugins dir to sys.path so signin can be imported as a package
-plugins_dir = str(ROOT / "plugins")
-if plugins_dir not in sys.path:
-    sys.path.insert(0, plugins_dir)
-
-# These package imports must happen after the plugins directory is available.
-signin = importlib.import_module("signin.main")
-signin_sony = importlib.import_module("signin.sony")
-signin_yingshi = importlib.import_module("signin.yingshi")
+ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.fixture(autouse=True)
-def bounded_transport_adapter(monkeypatch):
-    """Keep legacy provider mocks while production uses the bounded transport."""
-
-    async def request(session, method, url, **kwargs):
-        request_kwargs = dict(kwargs.get("request_kwargs") or {})
-        headers = kwargs.get("headers")
-        response_cm = getattr(session, method.lower())(
-            url,
-            headers=headers,
-            **request_kwargs,
-        )
-        async with response_cm as response:
-            status = int(response.status)
-            if status not in kwargs.get("success_statuses", {200}):
-                raise HttpStatusError(status)
-            return json.dumps(response._json_data).encode("utf-8")
-
-    monkeypatch.setattr(signin_yingshi, "aiohttp_request_bounded", request)
-    monkeypatch.setattr(signin_sony, "aiohttp_request_bounded", request)
-
-
-class MockResponse:
-    """模拟HTTP响应"""
-
-    def __init__(self, status_code=200, json_data=None, text_data=None):
-        self.status = status_code
-        self._json_data = json_data or {}
-        self._text_data = text_data or ""
-
-    async def json(self):
-        return self._json_data
-
-    async def text(self):
-        return self._text_data
-
-    def raise_for_status(self):
-        if self.status >= 400:
-            raise Exception(f"HTTP {self.status}")
+class _Response:
+    def __init__(self, payload: object, *, status: int = 200) -> None:
+        self.status = status
+        self._json_data = payload
+        self.closed = False
 
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, *args):
-        pass
+    async def __aexit__(self, *_args):
+        return None
+
+    def close(self) -> None:
+        self.closed = True
 
 
-class MockHTTPSession:
-    """模拟HTTP会话"""
+class _Session:
+    def __init__(self) -> None:
+        self.responses: list[_Response] = []
+        self.calls: list[dict[str, object]] = []
 
-    def __init__(self):
-        self._responses = []
+    def queue(self, *responses: _Response) -> None:
+        self.responses.extend(responses)
 
-    def set_response(self, response):
-        self._responses.append(response)
-
-    def get(self, *args, **kwargs):
-        if self._responses:
-            return self._responses.pop(0)
-        return MockResponse(json_data={"code": 0, "data": {"checkInId": "test123"}})
-
-    def post(self, *args, **kwargs):
-        if self._responses:
-            return self._responses.pop(0)
-        return MockResponse(json_data={"resultData": {"access_token": "test_token"}})
+    def get(self, url: str, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        if not self.responses:
+            raise AssertionError("unexpected signin HTTP request")
+        return self.responses.pop(0)
 
 
-# ============================================================================
-# 模块级 fixtures
-# ============================================================================
-
-@pytest.fixture
-def mock_context():
-    """模拟插件上下文"""
-    class MockContext:
-        def __init__(self):
-            self.plugin_dir = ROOT / "plugins" / "signin"
-            self.data_dir = self.plugin_dir / "data"
-            self.http_session = MockHTTPSession()
-            self.secrets = {
-                "plugins": {
-                    "signin": {
-                        "sony": {
-                            "login_id": "test_user",
-                            "password": "test_pass"
-                        },
-                        "yingshijufeng": {
-                            "app_id": "test_app_id",
-                            "kdt_id": "test_kdt_id",
-                            "access_token": "test_access_token",
-                            "sid": "test_sid"
-                        }
-                    }
-                }
+class _Context:
+    def __init__(self, *, configured: bool = True, with_http: bool = True) -> None:
+        self.request_id = "signin-test-request"
+        self.logger = logging.getLogger("test.signin")
+        self.raw_session = _Session()
+        self.http_session = wrap_legacy_aiohttp_session(self.raw_session) if with_http else None
+        platform_config = (
+            {
+                "app_id": "test_app_id",
+                "kdt_id": "test_kdt_id",
+                "access_token": "test_access_token",
+                "sid": "test_sid",
             }
+            if configured
+            else {}
+        )
+        self.secrets = {"plugins": {"signin": {"yingshijufeng": platform_config}}}
 
-    return MockContext()
+    def queue(self, *payloads: object) -> None:
+        self.raw_session.queue(*(_Response(payload) for payload in payloads))
 
-
-@pytest.fixture
-def mock_context_no_config():
-    """模拟无配置的插件上下文"""
-    class MockContext:
-        def __init__(self):
-            self.plugin_dir = ROOT / "plugins" / "signin"
-            self.data_dir = self.plugin_dir / "data"
-            self.http_session = MockHTTPSession()
-            self.secrets = {
-                "plugins": {
-                    "signin": {}
-                }
-            }
-
-    return MockContext()
+    def get_settings_snapshot(self):
+        secrets = self.secrets if isinstance(self.secrets, Mapping) else {}
+        return settings_snapshot(secrets=secrets)
 
 
-@pytest.fixture
-def mock_context_no_http():
-    """模拟无HTTP会话的插件上下文"""
-    class MockContext:
-        def __init__(self):
-            self.plugin_dir = ROOT / "plugins" / "signin"
-            self.data_dir = self.plugin_dir / "data"
-            self.http_session = None
-            self.secrets = {
-                "plugins": {
-                    "signin": {
-                        "sony": {
-                            "login_id": "test_user",
-                            "password": "test_pass"
-                        }
-                    }
-                }
-            }
+class _FalseySession:
+    """验证合法但 falsey 的会话不会被误判为未初始化。"""
 
-    return MockContext()
+    def __init__(self, delegate) -> None:
+        self.delegate = delegate
+
+    def __bool__(self) -> bool:
+        return False
+
+    def request(self, *args, **kwargs):
+        return self.delegate.request(*args, **kwargs)
 
 
 @pytest.fixture
-def mock_event():
-    """模拟事件"""
-    return {
-        "user_id": "12345",
-        "message": "test",
-        "message_type": "private"
+def context() -> _Context:
+    return _Context()
+
+
+@pytest.fixture
+def event() -> dict[str, object]:
+    return {"user_id": "12345", "message_type": "private"}
+
+
+def _queue_success(
+    context: _Context,
+    *,
+    checkin_id: object = "checkin-123",
+    description: object = "连续签到 3 天",
+    times: object = 5,
+    rewards: object | None = None,
+) -> None:
+    if rewards is None:
+        rewards = []
+    context.queue(
+        {"code": 0, "data": {"checkInId": checkin_id}},
+        {
+            "code": 0,
+            "data": {"desc": description, "times": times, "list": rewards},
+        },
+    )
+
+
+def test_init_and_help_describe_current_contract() -> None:
+    assert signin.init() is None
+    help_text = signin._HELP_TEXT
+    assert "/signin yingshi" in help_text
+    assert "plugins.signin.yingshijufeng" in help_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", ["", "help", "帮助", "?"])
+async def test_help_routes(args: str, context: _Context, event: dict[str, object]) -> None:
+    result = await signin.handle("signin", args, event, context)
+
+    assert "/signin yingshi" in text_segments_text(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["unknown", "sony", "s"])
+async def test_unknown_platform_returns_help(
+    target: str,
+    context: _Context,
+    event: dict[str, object],
+) -> None:
+    result = await signin.handle("signin", target, event, context)
+
+    text = text_segments_text(result)
+    assert f"未知平台: {target}" in text
+    assert "/signin yingshi" in text
+    assert context.raw_session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_platform_echo_is_bounded(context: _Context) -> None:
+    result = await signin.handle("signin", "x" * 500, {}, context)
+    text = text_segments_text(result)
+    visible = text.split("未知平台: ", 1)[1].split("\n", 1)[0]
+    assert len(visible) <= 32
+    assert "x" * 100 not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", ["yingshi", "yingshijufeng", "y"])
+async def test_all_yingshi_aliases_execute_same_flow(
+    alias: str,
+    context: _Context,
+    event: dict[str, object],
+) -> None:
+    _queue_success(context)
+
+    result = await signin.handle("signin", alias, event, context)
+
+    text = text_segments_text(result)
+    assert "✅ 影视签到" in text
+    assert "累计签到: 5 次" in text
+    assert len(context.raw_session.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_success_formats_only_valid_reward_records(
+    context: _Context,
+    event: dict[str, object],
+) -> None:
+    _queue_success(
+        context,
+        rewards=[
+            None,
+            {"isSuccess": False, "times": "忽略"},
+            {"isSuccess": True, "times": "第 5 天", "infos": "invalid"},
+            {
+                "isSuccess": True,
+                "times": "第 6 天",
+                "infos": {"title": "积分", "desc": "+10"},
+            },
+        ],
+    )
+
+    result = await signin.handle("signin", "yingshi", event, context)
+
+    text = text_segments_text(result)
+    assert "第 6 天: 积分 - +10" in text
+    assert "🎁 奖励 第 5 天" in text
+    assert ":  -" not in text
+    assert "忽略" not in text
+
+
+@pytest.mark.asyncio
+async def test_missing_or_invalid_credentials_fail_before_http(event: dict[str, object]) -> None:
+    context = _Context(configured=False)
+    context.secrets["plugins"]["signin"]["yingshijufeng"] = {
+        "app_id": "app",
+        "kdt_id": "kdt",
+        "access_token": {"nested": "invalid"},
+        "sid": "sid",
     }
 
+    result = await signin.handle("signin", "yingshi", event, context)
 
-class TestSigninPlugin:
-    """测试signin插件 - 基础测试类"""
-
-
-class TestShowHelp:
-    """测试帮助信息"""
-
-    def test_show_help(self):
-        """测试显示帮助信息"""
-        help_text = signin._show_help()
-        assert help_text is not None
-        assert "signin" in help_text.lower()
-        assert "yingshi" in help_text.lower() or "影视" in help_text
-
-    def test_help_contains_commands(self):
-        """测试帮助包含命令说明"""
-        help_text = signin._show_help()
-        assert "/signin" in help_text
-        assert "yingshi" in help_text.lower() or "影视" in help_text
+    assert "未配置" in text_segments_text(result)
+    assert context.raw_session.calls == []
 
 
-class TestHandleCommand:
-    """测试命令处理"""
+@pytest.mark.asyncio
+async def test_missing_http_session_is_reported(event: dict[str, object]) -> None:
+    context = _Context(with_http=False)
 
-    @pytest.mark.asyncio
-    async def test_handle_empty_args(self, mock_context, mock_event):
-        """测试空参数"""
-        result = await signin.handle("signin", "", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
+    result = await signin.handle("signin", "yingshi", event, context)
 
-    @pytest.mark.asyncio
-    async def test_handle_help_command(self, mock_context, mock_event):
-        """测试帮助命令"""
-        result = await signin.handle("signin", "help", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_handle_chinese_help(self, mock_context, mock_event):
-        """测试中文帮助命令"""
-        result = await signin.handle("signin", "帮助", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_handle_question_mark(self, mock_context, mock_event):
-        """测试问号帮助"""
-        result = await signin.handle("signin", "?", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_handle_unknown_platform(self, mock_context, mock_event):
-        """测试未知平台"""
-        result = await signin.handle("signin", "unknown_platform", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "未知" in result_text or "unknown" in result_text.lower()
+    assert "HTTP 会话未初始化" in text_segments_text(result)
 
 
-class TestSonySignin:
-    """测试Sony签到"""
+@pytest.mark.asyncio
+async def test_falsey_http_session_is_still_used(context: _Context) -> None:
+    _queue_success(context)
+    context.http_session = _FalseySession(context.http_session)
 
-    @pytest.mark.asyncio
-    async def test_sony_signin_success(self, mock_context, mock_event):
-        """测试Sony签到成功"""
-        # 模拟成功的登录和签到响应
-        login_response = MockResponse(json_data={
-            "resultData": {
-                "access_token": "test_token_123"
+    result = await yingshi.yingshi_sign(context)
+
+    assert "✅ 影视签到" in text_segments_text(result)
+
+
+@pytest.mark.asyncio
+async def test_query_and_checkin_provider_failures_are_reported(context: _Context) -> None:
+    context.queue({"code": -1, "msg": "查询失败"})
+    query_result = await yingshi.yingshi_sign(context)
+    assert "查询失败" in text_segments_text(query_result)
+
+    _queue_success(context)
+    context.raw_session.responses[-1] = _Response({"code": -1, "msg": "今日已签到"})
+    checkin_result = await yingshi.yingshi_sign(context)
+    assert "今日已签到" in text_segments_text(checkin_result)
+
+
+@pytest.mark.asyncio
+async def test_structured_provider_message_uses_safe_fallback(context: _Context) -> None:
+    context.queue({"code": -1, "msg": {"secret": "must-not-echo"}})
+
+    result = await yingshi.yingshi_sign(context)
+
+    text = text_segments_text(result)
+    assert "获取签到信息失败" in text
+    assert "must-not-echo" not in text
+
+
+@pytest.mark.asyncio
+async def test_query_response_requires_json_object(context: _Context) -> None:
+    context.queue([])
+
+    result = await yingshi.yingshi_sign(context)
+
+    assert "XQ-PLUGIN-UNEXPECTED" in text_segments_text(result)
+    assert len(context.raw_session.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [None, [], "invalid"])
+async def test_query_response_data_requires_mapping(
+    data: object,
+    context: _Context,
+) -> None:
+    context.queue({"code": 0, "data": data})
+
+    ok, normalized, message = await yingshi._get_checkin_id(
+        context.http_session,
+        "app",
+        "kdt",
+        "token",
+        {},
+    )
+
+    assert (ok, normalized, message) == (False, "", "获取签到信息失败")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("checkin_id", "expected_ok", "expected_id"),
+    [
+        ("cid", True, "cid"),
+        (123, True, "123"),
+        ("   ", False, ""),
+        (True, False, ""),
+        ([], False, ""),
+    ],
+)
+async def test_checkin_id_requires_string_or_integer(
+    checkin_id: object,
+    expected_ok: bool,
+    expected_id: str,
+    context: _Context,
+) -> None:
+    context.queue({"code": 0, "data": {"checkInId": checkin_id}})
+
+    ok, normalized, _message = await yingshi._get_checkin_id(
+        context.http_session,
+        "app",
+        "kdt",
+        "token",
+        {},
+    )
+
+    assert ok is expected_ok
+    assert normalized == expected_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [None, [], "invalid"])
+async def test_checkin_response_requires_mapping(data: object, context: _Context) -> None:
+    context.queue({"code": 0, "data": data})
+
+    ok, message = await yingshi._do_checkin(
+        context.http_session,
+        "cid",
+        "app",
+        "kdt",
+        "token",
+        {},
+    )
+
+    assert ok is False
+    assert message == "签到响应格式异常"
+
+
+@pytest.mark.asyncio
+async def test_provider_fields_and_rewards_are_bounded(context: _Context) -> None:
+    long_text = "x" * 1000
+    rewards = [
+        None,
+        {
+            "isSuccess": True,
+            "times": " ",
+            "infos": {"title": "", "desc": ""},
+        },
+        *[
+            {
+                "isSuccess": True,
+                "times": index,
+                "infos": {"title": long_text, "desc": long_text},
             }
-        })
-        sign_response = MockResponse(json_data={
-            "resultMsg": [{"message": "签到成功"}]
-        })
-
-        mock_context.http_session.set_response(login_response)
-        mock_context.http_session.set_response(sign_response)
-
-        result = await signin.handle("signin", "sony", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "Sony" in result_text or "sony" in result_text.lower()
-
-    @pytest.mark.asyncio
-    async def test_sony_signin_short_command(self, mock_context, mock_event):
-        """测试Sony签到简写命令"""
-        login_response = MockResponse(json_data={
-            "resultData": {
-                "access_token": "test_token_123"
-            }
-        })
-        sign_response = MockResponse(json_data={
-            "resultMsg": [{"message": "签到完成"}]
-        })
-
-        mock_context.http_session.set_response(login_response)
-        mock_context.http_session.set_response(sign_response)
-
-        result = await signin.handle("signin", "s", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_sony_signin_no_config(self, mock_context_no_config, mock_event):
-        """测试Sony签到无配置 - Sony已弃用，应返回弃用消息"""
-        result = await signin.handle("signin", "sony", mock_event, mock_context_no_config)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "弃用" in result_text or "Deprecated" in result_text
-
-    @pytest.mark.asyncio
-    async def test_sony_signin_no_http_session(self, mock_context_no_http, mock_event):
-        """测试Sony签到无HTTP会话 - Sony已弃用，应返回弃用消息"""
-        result = await signin.handle("signin", "sony", mock_event, mock_context_no_http)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "弃用" in result_text or "Deprecated" in result_text
-
-    @pytest.mark.asyncio
-    async def test_sony_signin_partial_config(self, mock_context, mock_event):
-        """测试Sony签到配置不完整 - Sony已弃用，应返回弃用消息"""
-        mock_context.secrets["plugins"]["signin"]["sony"] = {
-            "login_id": "test_only"
+            for index in range(30)
+        ],
+    ]
+    context.queue(
+        {
+            "code": 0,
+            "data": {"desc": long_text, "times": 30, "list": rewards},
         }
+    )
 
-        result = await signin.handle("signin", "sony", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "弃用" in result_text or "Deprecated" in result_text
+    ok, message = await yingshi._do_checkin(
+        context.http_session,
+        "cid",
+        "app",
+        "kdt",
+        "token",
+        {},
+    )
+
+    assert ok is True
+    assert message.count("🎁") == yingshi._MAX_REWARD_LINES
+    assert "…" in message
+    assert len(message) < 12_000
 
 
-class TestYingshiSignin:
-    """测试影视飓风签到"""
+@pytest.mark.asyncio
+async def test_non_list_rewards_are_ignored(context: _Context) -> None:
+    context.queue({"code": 0, "data": {"desc": "完成", "times": 1, "list": {}}})
 
-    @pytest.mark.asyncio
-    async def test_yingshi_signin_success(self, mock_context, mock_event):
-        """测试影视飓风签到成功"""
-        # 模拟获取签到ID和签到的响应
-        checkin_info_response = MockResponse(json_data={
-            "code": 0,
-            "data": {
-                "checkInId": "test_checkin_id_123"
-            }
-        })
-        signin_response = MockResponse(json_data={
-            "code": 0,
-            "data": {
-                "desc": "连续签到3天",
-                "times": 5,
-                "list": [
-                    {
-                        "isSuccess": True,
-                        "times": "第5天",
-                        "infos": {
-                            "title": "积分奖励",
-                            "desc": "+10积分"
-                        }
+    ok, message = await yingshi._do_checkin(
+        context.http_session,
+        "cid",
+        "app",
+        "kdt",
+        "token",
+        {},
+    )
+
+    assert ok is True
+    assert "签到成功！完成" in message
+    assert "🎁" not in message
+
+
+def test_safe_text_uses_default_for_blank_scalar() -> None:
+    assert yingshi._safe_text("   ", "fallback") == "fallback"
+
+
+def test_headers_leave_transport_managed_fields_to_aiohttp() -> None:
+    headers = yingshi._build_headers("wx12345")
+
+    assert headers["content-type"] == "application/json"
+    assert "wx12345" in headers["Referer"]
+    assert "User-Agent" in headers
+    assert "Host" not in headers
+    assert "Connection" not in headers
+    assert "Accept-Encoding" not in headers
+
+
+def test_extra_data_uses_one_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(yingshi.time, "time", lambda: 1234.567)
+
+    extra = yingshi._build_extra_data("sid-value")
+
+    assert extra["sid"] == "sid-value"
+    assert extra["ftime"] == 1_234_567
+    assert str(extra["uuid"]).endswith("1234567")
+
+
+@pytest.mark.asyncio
+async def test_token_uses_authorization_header_not_query(context: _Context) -> None:
+    _queue_success(context)
+
+    await yingshi.yingshi_sign(context)
+
+    assert len(context.raw_session.calls) == 2
+    for call in context.raw_session.calls:
+        assert call["headers"]["Authorization"] == "Bearer test_access_token"
+        assert "access_token" not in call["params"]
+        assert "json" not in call
+
+
+@pytest.mark.asyncio
+async def test_scheduled_entry_delegates_to_signin(
+    monkeypatch: pytest.MonkeyPatch,
+    context: _Context,
+) -> None:
+    expected = [{"type": "text", "data": {"text": "scheduled"}}]
+    sign = AsyncMock(return_value=expected)
+    monkeypatch.setattr(signin.yingshi, "yingshi_sign", sign)
+
+    assert await signin.scheduled_yingshi(context) == expected
+    sign.assert_awaited_once_with(context)
+
+
+def test_get_config_accepts_frozen_and_malformed_mappings(context: _Context) -> None:
+    context.secrets = ConfigSnapshot(
+        config={},
+        secrets={
+            "plugins": {
+                "signin": {
+                    "yingshijufeng": {
+                        "app_id": "frozen-app",
+                        "kdt_id": "frozen-kdt",
                     }
-                ]
+                }
             }
-        })
-
-        mock_context.http_session.set_response(checkin_info_response)
-        mock_context.http_session.set_response(signin_response)
-
-        result = await signin.handle("signin", "yingshi", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "影视" in result_text or "yingshi" in result_text.lower()
-
-    @pytest.mark.asyncio
-    async def test_yingshi_signin_short_command(self, mock_context, mock_event):
-        """测试影视飓风签到简写命令"""
-        checkin_info_response = MockResponse(json_data={
-            "code": 0,
-            "data": {
-                "checkInId": "test_checkin_id_123"
-            }
-        })
-        signin_response = MockResponse(json_data={
-            "code": 0,
-            "data": {
-                "desc": "签到成功",
-                "times": 1,
-                "list": []
-            }
-        })
-
-        mock_context.http_session.set_response(checkin_info_response)
-        mock_context.http_session.set_response(signin_response)
-
-        result = await signin.handle("signin", "y", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_yingshi_signin_full_name(self, mock_context, mock_event):
-        """测试影视飓风完整名称命令"""
-        checkin_info_response = MockResponse(json_data={
-            "code": 0,
-            "data": {
-                "checkInId": "test_checkin_id_456"
-            }
-        })
-        signin_response = MockResponse(json_data={
-            "code": 0,
-            "data": {
-                "desc": "签到成功",
-                "times": 2,
-                "list": []
-            }
-        })
-
-        mock_context.http_session.set_response(checkin_info_response)
-        mock_context.http_session.set_response(signin_response)
-
-        result = await signin.handle("signin", "yingshijufeng", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_yingshi_signin_no_config(self, mock_context_no_config, mock_event):
-        """测试影视飓风签到无配置"""
-        result = await signin.handle("signin", "yingshi", mock_event, mock_context_no_config)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "未配置" in result_text or "配置" in result_text
-
-    @pytest.mark.asyncio
-    async def test_yingshi_signin_no_http_session(self, mock_context_no_http, mock_event):
-        """测试影视飓风签到无HTTP会话"""
-        # 需要添加yingshijufeng配置才能测试到no http session的分支
-        mock_context_no_http.secrets["plugins"]["signin"]["yingshijufeng"] = {
-            "app_id": "test_app_id",
-            "kdt_id": "test_kdt_id",
-            "access_token": "test_access_token",
-            "sid": "test_sid"
-        }
-        result = await signin.handle("signin", "yingshi", mock_event, mock_context_no_http)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "会话" in result_text or "http" in result_text.lower()
-
-    @pytest.mark.asyncio
-    async def test_yingshi_signin_partial_config(self, mock_context, mock_event):
-        """测试影视飓风签到配置不完整"""
-        mock_context.secrets["plugins"]["signin"]["yingshijufeng"] = {
-            "app_id": "test_app_id"
-        }
-
-        result = await signin.handle("signin", "yingshi", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "未配置" in result_text or "配置" in result_text
-
-
-class TestYingshiSigninAPIError:
-    """测试影视飓风API错误处理"""
-
-    @pytest.mark.asyncio
-    async def test_yingshi_checkin_info_error(self, mock_context, mock_event):
-        """测试获取签到信息失败"""
-        error_response = MockResponse(json_data={
-            "code": -1,
-            "msg": "获取签到信息失败"
-        })
-
-        mock_context.http_session.set_response(error_response)
-
-        result = await signin.handle("signin", "yingshi", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "影视" in result_text or "yingshi" in result_text.lower()
-
-    @pytest.mark.asyncio
-    async def test_yingshi_checkin_error(self, mock_context, mock_event):
-        """测试执行签到失败"""
-        checkin_info_response = MockResponse(json_data={
-            "code": 0,
-            "data": {
-                "checkInId": "test_checkin_id"
-            }
-        })
-        signin_response = MockResponse(json_data={
-            "code": -1,
-            "msg": "今日已签到"
-        })
-
-        mock_context.http_session.set_response(checkin_info_response)
-        mock_context.http_session.set_response(signin_response)
-
-        result = await signin.handle("signin", "yingshi", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-
-class TestScheduledYingshi:
-    """测试定时影视飓风签到"""
-
-    @pytest.mark.asyncio
-    async def test_scheduled_yingshi(self, mock_context):
-        """测试定时签到函数"""
-        checkin_info_response = MockResponse(json_data={
-            "code": 0,
-            "data": {
-                "checkInId": "scheduled_checkin_id"
-            }
-        })
-        signin_response = MockResponse(json_data={
-            "code": 0,
-            "data": {
-                "desc": "定时签到成功",
-                "times": 10,
-                "list": []
-            }
-        })
-
-        mock_context.http_session.set_response(checkin_info_response)
-        mock_context.http_session.set_response(signin_response)
-
-        result = await signin.scheduled_yingshi(mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-
-class TestBuildYingshiHeaders:
-    """测试影视飓风请求头构建"""
-
-    def test_build_yingshi_headers(self):
-        """测试构建请求头"""
-        headers = signin_yingshi._build_headers("test_app_id")
-        assert headers is not None
-        assert "Host" in headers
-        assert "User-Agent" in headers
-        assert "test_app_id" in headers.get("Referer", "")
-
-    def test_build_yingshi_headers_contains_required_fields(self):
-        """测试请求头包含必需字段"""
-        headers = signin_yingshi._build_headers("wx12345")
-        assert headers["Host"] == "h5.youzan.com"
-        assert headers["content-type"] == "application/json"
-        assert "wx12345" in headers["Referer"]
-
-
-class TestBuildExtraData:
-    """测试Extra-Data构建"""
-
-    def test_build_extra_data(self):
-        """测试构建Extra-Data"""
-        extra_data = signin_yingshi._build_extra_data("test_sid")
-        assert extra_data is not None
-        assert "is_weapp" in extra_data
-        assert "sid" in extra_data
-        assert extra_data["sid"] == "test_sid"
-        assert "uuid" in extra_data
-        assert "ftime" in extra_data
-
-    def test_build_extra_data_uuid_format(self):
-        """测试Extra-Data中UUID格式"""
-        extra_data = signin_yingshi._build_extra_data("my_sid")
-        uuid = extra_data.get("uuid", "")
-        assert "xncgEoy8XBh9siy" in uuid
-        assert isinstance(extra_data["ftime"], int)
-
-
-class _RecordingSession:
-    def __init__(self, response):
-        self.response = response
-        self.calls = []
-
-    def get(self, url, **kwargs):
-        self.calls.append({"url": url, **kwargs})
-        return self.response
-
-    def post(self, url, **kwargs):
-        self.calls.append({"url": url, **kwargs})
-        return self.response
-
-
-class TestYingshiTokenTransport:
-    def test_get_checkin_id_uses_authorization_header(self):
-        response = MockResponse(json_data={"code": 0, "data": {"checkInId": "cid"}})
-        session = _RecordingSession(response)
-
-        ok, checkin_id, _ = asyncio.run(
-            signin_yingshi._get_checkin_id(
-                session,
-                "app",
-                "kdt",
-                "token123",
-                {"X": "1"},
-            )
-        )
-
-        assert ok is True
-        assert checkin_id == "cid"
-        assert session.calls
-        call = session.calls[0]
-        assert "json" not in call
-        assert "access_token" not in call["params"]
-        assert call["headers"]["Authorization"] == "Bearer token123"
-
-    def test_do_checkin_uses_authorization_header(self):
-        response = MockResponse(json_data={"code": 0, "data": {"desc": "ok", "times": 1, "list": []}})
-        session = _RecordingSession(response)
-
-        ok, _ = asyncio.run(
-            signin_yingshi._do_checkin(
-                session,
-                "cid",
-                "app",
-                "kdt",
-                "token123",
-                {"X": "1"},
-            )
-        )
-
-        assert ok is True
-        assert session.calls
-        call = session.calls[0]
-        assert "json" not in call
-        assert "access_token" not in call["params"]
-        assert call["headers"]["Authorization"] == "Bearer token123"
-
-    def test_signin_manifest_is_admin_only(self):
-        manifest = json.loads((ROOT / "plugins" / "signin" / "plugin.json").read_text(encoding="utf-8"))
-
-        assert manifest["commands"][0]["admin_only"] is True
-
-    def test_get_checkin_id_handles_missing_checkin_id(self):
-        """API 结构异常时不应直接抛 KeyError"""
-        response = MockResponse(json_data={"code": 0, "data": {}})
-        session = _RecordingSession(response)
-
-        ok, checkin_id, msg = asyncio.run(
-            signin_yingshi._get_checkin_id(
-                session,
-                "app",
-                "kdt",
-                "token123",
-                {"X": "1"},
-            )
-        )
-
-        assert ok is False
-        assert checkin_id == ""
-        assert "失败" in msg
-
-
-class TestGetConfig:
-    """测试配置获取"""
-
-    def test_get_config_with_secrets(self, mock_context):
-        """测试从context获取影视飓风配置"""
-        config = signin_yingshi._get_config(mock_context)
-        assert config is not None
-        assert "app_id" in config
-        assert "kdt_id" in config
-
-    def test_get_config_empty_secrets(self, mock_context_no_config):
-        """测试空配置"""
-        config = signin_yingshi._get_config(mock_context_no_config)
-        assert config is not None
-        assert config == {}
-
-
-class TestSonySigninAPIErrors:
-    """测试Sony API错误处理"""
-
-    @pytest.mark.asyncio
-    async def test_sony_login_error(self, mock_context, mock_event):
-        """测试Sony登录失败"""
-        error_response = MockResponse(status_code=401)
-
-        # 创建会话并设置错误响应
-        class ErrorSession:
-            def post(self, *args, **kwargs):
-                error_response.raise_for_status()
-                return error_response
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
-
-        mock_context.http_session = ErrorSession()
-
-        result = await signin.handle("signin", "sony", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "弃用" in result_text or "Deprecated" in result_text
-
-
-class TestInit:
-    """测试插件初始化"""
-
-    def test_init(self):
-        """测试插件初始化"""
-        signin.init()
-        assert True
-
-
-class TestConstants:
-    """测试常量定义"""
-
-    def test_sony_urls(self):
-        """测试Sony URL常量"""
-        assert hasattr(signin_sony, 'SONY_LOGIN_URL')
-        assert hasattr(signin_sony, 'SONY_SIGN_URL')
-        assert signin_sony.SONY_LOGIN_URL.startswith("https://")
-        assert signin_sony.SONY_SIGN_URL.startswith("https://")
-
-    def test_sony_urls_contain_correct_domain(self):
-        """测试Sony URL域名正确"""
-        assert "sonystyle.com.cn" in signin_sony.SONY_LOGIN_URL
-        assert "sonystyle.com.cn" in signin_sony.SONY_SIGN_URL
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        },
+    ).secrets
+    frozen = yingshi._get_config(context)
+    assert not isinstance(frozen, dict)
+    assert frozen["app_id"] == "frozen-app"
+
+    for secrets in (None, [], {"plugins": []}, {"plugins": {"signin": []}}):
+        context.secrets = secrets
+        assert yingshi._get_config(context) == {}
+
+
+@pytest.mark.asyncio
+async def test_unexpected_error_uses_public_error_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    context: _Context,
+) -> None:
+    monkeypatch.setattr(
+        yingshi,
+        "_get_checkin_id",
+        AsyncMock(side_effect=RuntimeError("private upstream detail")),
+    )
+
+    result = await yingshi.yingshi_sign(context)
+
+    text = text_segments_text(result)
+    assert "XQ-PLUGIN-UNEXPECTED" in text
+    assert "private upstream detail" not in text
+
+
+def test_manifest_and_readme_match_runtime_contract() -> None:
+    plugin_dir = ROOT / "plugins" / "signin"
+    manifest = json.loads((plugin_dir / "plugin.json").read_text(encoding="utf-8"))
+    command = manifest["commands"][0]
+    schedule = manifest["schedule"][0]
+    readme = (plugin_dir / "README.md").read_text(encoding="utf-8")
+
+    assert manifest["entry"] == "main.py"
+    assert (plugin_dir / manifest["entry"]).is_file()
+    assert command["admin_only"] is True
+    assert set(command["triggers"]) == {"signin", "签到"}
+    assert manifest["concurrency"] == "sequential"
+    assert schedule == {
+        "id": "yingshi",
+        "handler": "scheduled_yingshi",
+        "cron": {"hour": 0, "minute": 30},
+    }
+    assert callable(getattr(signin, schedule["handler"]))
+    for trigger in command["triggers"]:
+        assert f"/{trigger}" in readme
+    assert not (plugin_dir / "sony.py").exists()
+    assert "sony" not in readme.casefold()

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import json
 import random
 import time
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-from core.plugin_base import build_action, segments, text, write_json
+from core.delivery import DeliveryReceipt, send_with_receipt
+from core.plugin_base import build_action, load_json, segments, text, write_json
 
 from .bw_expression_store import ExpressionRecord, ExpressionStore
 from .bw_reflect_tracker import ReflectTrackerStore
@@ -15,15 +16,17 @@ from .bw_reflect_tracker import ReflectTrackerStore
 def _state_path(data_dir: Path) -> Path:
     return data_dir / "bw_learner" / "reflector_state.json"
 
+
 def _load_state(data_dir: Path) -> dict[str, Any]:
     path = _state_path(data_dir)
     if not path.exists():
         return {"last_sent_ts": 0.0}
     try:
-        obj = json.loads(path.read_text(encoding="utf-8"))
+        obj = load_json(path, default=None)
         return obj if isinstance(obj, dict) else {"last_sent_ts": 0.0}
     except Exception:
         return {"last_sent_ts": 0.0}
+
 
 def _save_state(data_dir: Path, st: dict[str, Any]) -> None:
     path = _state_path(data_dir)
@@ -32,6 +35,7 @@ def _save_state(data_dir: Path, st: dict[str, Any]) -> None:
         write_json(path, st)
     except OSError:
         return
+
 
 def _pick_candidates(items: list[ExpressionRecord], *, max_pick: int) -> list[ExpressionRecord]:
     cands = [x for x in items if (not x.checked) and (not x.rejected) and x.situation and x.style]
@@ -42,10 +46,12 @@ def _pick_candidates(items: list[ExpressionRecord], *, max_pick: int) -> list[Ex
     random.shuffle(top)
     return top[: max(1, int(max_pick))]
 
+
 def _operator_chat_id(operator_user_id: int, operator_group_id: int) -> str:
     if operator_group_id:
         return f"g{int(operator_group_id)}"
     return f"u{int(operator_user_id)}"
+
 
 async def maybe_ask_for_reflection(
     *,
@@ -68,7 +74,6 @@ async def maybe_ask_for_reflection(
 
     expr_store.bind(data_dir)
     tracker_store.bind(data_dir)
-    tracker_store.load()
 
     items = expr_store.load()
     picks = _pick_candidates(items, max_pick=int(ask_per_check or 1))
@@ -86,7 +91,7 @@ async def maybe_ask_for_reflection(
             "你可以直接回复：\n"
             "- 同意 / 可以\n"
             "- 不行 / 拒绝\n"
-            "- 给修改意见（例如：‘情景改成… 风格改成…’）\n"
+            "- 按‘情景改成… 风格改成…’给修改意见\n"
         ).strip()
         segs = segments([text(msg)])
         action = build_action(
@@ -95,8 +100,19 @@ async def maybe_ask_for_reflection(
             group_id=int(operator_group_id) if operator_group_id else None,
         )
         if action:
-            await context.send_action(action)
-            tracker_store.set_tracker(op_chat_id, ex.expression_id)
+            confirm = partial(tracker_store.set_tracker, op_chat_id, ex.expression_id)
+            receipt = DeliveryReceipt(
+                expected_actions=1,
+                commit=confirm,
+                rollback=lambda: None,
+                # 审查提示若可能已经送达，就登记 tracker，避免重复追问同一条表达。
+                unknown=confirm,
+            )
+            outcome = await send_with_receipt(context.send_action, action, receipt)
+            if receipt.callback_error is not None:
+                raise receipt.callback_error
+            if outcome is False:
+                continue
             sent += 1
 
     if sent:

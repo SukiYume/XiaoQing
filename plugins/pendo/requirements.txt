@@ -1,4 +1,0 @@
-# Canonical dependencies live in the repository-root pyproject.toml.
-# Pendo core dependencies use the `plugins` extra. Pendo Web is enabled by
-# default, so its FastAPI/Uvicorn/PyJWT dependencies are in the base install.
-#   pip install ".[plugins,web]"

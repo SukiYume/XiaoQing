@@ -10,12 +10,57 @@ if TYPE_CHECKING:
 
 from .runtime_state import get_state as _state
 
+_SINGLEFLIGHT_BG_TASK_KINDS = frozenset(
+    {
+        "expression_learn",
+        "facts",
+        "media_refine",
+        "reflection",
+        "review_push",
+        "summarizer",
+    }
+)
 
-def _track_bg_task(context: Any, task: asyncio.Task[None], *, name: str) -> None:
-    _state().add_bg_task(task)
+
+def _singleflight_key(name: str) -> str | None:
+    normalized_name = str(name or "").strip()
+    kind, separator, _scope = normalized_name.partition(":")
+    if separator and kind in _SINGLEFLIGHT_BG_TASK_KINDS:
+        return normalized_name
+    return None
+
+
+def _close_awaitable(awaitable: Any) -> None:
+    close = getattr(awaitable, "close", None)
+    if callable(close):
+        close()
+
+
+def _create_task_safely(coro: Any) -> asyncio.Task[Any] | None:
+    """创建任务；事件循环已关闭时关闭调用方预先构造的协程。"""
+
+    try:
+        return asyncio.create_task(coro)
+    except RuntimeError:
+        _close_awaitable(coro)
+        return None
+    except BaseException:
+        _close_awaitable(coro)
+        raise
+
+
+def _track_bg_task(
+    context: Any,
+    task: asyncio.Task[None],
+    *,
+    name: str,
+    singleflight_key: str | None = None,
+) -> None:
+    state = _state()
+    tracked = state.add_bg_task(task, key=singleflight_key)
 
     def _done(t: asyncio.Task[None]) -> None:
-        _state().remove_bg_task(t)
+        state.remove_bg_task(t)
         try:
             t.result()
         except asyncio.CancelledError:
@@ -29,18 +74,33 @@ def _track_bg_task(context: Any, task: asyncio.Task[None], *, name: str) -> None
             )
 
     task.add_done_callback(_done)
+    if not tracked:
+        task.cancel()
 
 
 def _spawn_bg_task(context: Any, coro, *, name: str) -> None:
-    try:
-        task = asyncio.create_task(coro)
-    except RuntimeError:
+    state = _state()
+    singleflight_key = _singleflight_key(name)
+    if not state.can_add_bg_task(key=singleflight_key):
+        _close_awaitable(coro)
+        context.logger.debug(
+            "xiaoqing_chat background task dropped kind=%s",
+            str(name or "").partition(":")[0] or "unknown",
+        )
         return
-    _track_bg_task(context, task, name=name)
+    task = _create_task_safely(coro)
+    if task is None:
+        return
+    _track_bg_task(
+        context,
+        task,
+        name=name,
+        singleflight_key=singleflight_key,
+    )
 
 
 def _schedule_memory_persist(context: Any, runtime: _ChatRuntime, *, chat_id: str) -> None:
-    delay = max(0.0, float(getattr(runtime.cfg, "io_persist_debounce_seconds", 0.8) or 0.0))
+    delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
     old = _state().get_persist_task(chat_id)
     if old is not None and not old.done():
         try:
@@ -56,7 +116,9 @@ def _schedule_memory_persist(context: Any, runtime: _ChatRuntime, *, chat_id: st
             await asyncio.sleep(delay)
         await asyncio.to_thread(_state().memory_store.persist, chat_id)
 
-    task = asyncio.create_task(_run())
+    task = _create_task_safely(_run())
+    if task is None:
+        return
     _state().set_persist_task(chat_id, task)
 
     def _cleanup_done(t: asyncio.Task[Any]) -> None:
@@ -68,14 +130,8 @@ def _schedule_memory_persist(context: Any, runtime: _ChatRuntime, *, chat_id: st
     _track_bg_task(context, task, name=f"persist:{chat_id}")
 
 
-def _cancel_memory_persist_task(chat_id: str) -> None:
-    task = _state().pop_persist_task(chat_id)
-    if task is not None and not task.done():
-        task.cancel()
-
-
 def _schedule_memory_db_save(context: Any, runtime: _ChatRuntime) -> None:
-    delay = max(0.0, float(getattr(runtime.cfg, "memory_db_save_debounce_seconds", 20.0) or 0.0))
+    delay = max(0.0, runtime.cfg.memory_db_save_debounce_seconds)
     old = _state().get_vdb_save_task()
     if old is not None and not old.done():
         try:
@@ -93,7 +149,9 @@ def _schedule_memory_db_save(context: Any, runtime: _ChatRuntime) -> None:
             return
         await asyncio.to_thread(_state().memory_db.save)
 
-    task = asyncio.create_task(_run())
+    task = _create_task_safely(_run())
+    if task is None:
+        return
     _state().set_vdb_save_task(task)
     _track_bg_task(context, task, name="memory_db_save")
 
@@ -112,8 +170,8 @@ def _schedule_debounced_flush(
     flush_func: Any,
     name_prefix: str,
 ) -> None:
-    """Shared internal helper for debounced flush scheduling."""
-    delay = max(0.0, float(getattr(runtime.cfg, "io_persist_debounce_seconds", 0.8) or 0.0))
+    """调度防抖刷盘任务的内部公共实现。"""
+    delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
     old = task_registry.get(chat_id)
     if old is not None and not old.done():
         try:
@@ -126,9 +184,8 @@ def _schedule_debounced_flush(
             await asyncio.sleep(delay)
         await asyncio.to_thread(flush_func, chat_id)
 
-    try:
-        task = asyncio.create_task(_run())
-    except RuntimeError:
+    task = _create_task_safely(_run())
+    if task is None:
         return
     task_registry[chat_id] = task
 
@@ -142,7 +199,7 @@ def _schedule_debounced_flush(
 
 
 def _schedule_action_history_flush(context: Any, runtime: _ChatRuntime, *, chat_id: str) -> None:
-    """Debounced flush for ActionHistoryStore to avoid writing on every append."""
+    """防抖刷盘动作历史，避免每次追加都写磁盘。"""
     _schedule_debounced_flush(
         context,
         runtime,
@@ -154,6 +211,7 @@ def _schedule_action_history_flush(context: Any, runtime: _ChatRuntime, *, chat_
 
 
 def _schedule_pfc_state_flush(context: Any, runtime: _ChatRuntime, *, chat_id: str) -> None:
+    _state().pfc_state_store.mark_dirty(chat_id)
     _schedule_debounced_flush(
         context,
         runtime,
@@ -167,7 +225,7 @@ def _schedule_pfc_state_flush(context: Any, runtime: _ChatRuntime, *, chat_id: s
 def _schedule_media_registry_flush(context: Any, runtime: _ChatRuntime) -> None:
     global _media_registry_flush_task
 
-    delay = max(0.0, float(getattr(runtime.cfg, "io_persist_debounce_seconds", 0.8) or 0.0))
+    delay = max(0.0, runtime.cfg.io_persist_debounce_seconds)
     old = _media_registry_flush_task
     if old is not None and not old.done():
         try:
@@ -180,9 +238,8 @@ def _schedule_media_registry_flush(context: Any, runtime: _ChatRuntime) -> None:
             await asyncio.sleep(delay)
         await asyncio.to_thread(_state().media_store.flush)
 
-    try:
-        task = asyncio.create_task(_run())
-    except RuntimeError:
+    task = _create_task_safely(_run())
+    if task is None:
         return
     _media_registry_flush_task = task
 

@@ -1,67 +1,81 @@
-"""
-自动签到插件
-
-支持影视飓风等平台的自动签到（Sony 已弃用）。
-"""
+"""影视飓风签到的命令路由与定时入口。"""
 
 import logging
+from typing import cast
 
 from core.args import parse
-from core.plugin_base import segments
+from core.plugin_base import bounded_external_text
 from core.public_errors import public_error_response
 
 from . import yingshi
+from .types import Context, MessageSegments, OneBotEvent, segments
 
 logger = logging.getLogger(__name__)
 
+_HELP_ALIASES = {"help", "帮助", "?"}
+_YINGSHI_ALIASES = {"yingshi", "yingshijufeng", "y"}
+_HELP_TEXT = (
+    "📝 影视飓风远端签到\n"
+    "━━━━━━━━━━━━━━━━━━\n"
+    "/signin yingshi - 立即签到\n"
+    "/signin y - 立即签到（简写）\n"
+    "/signin help - 显示帮助\n\n"
+    "凭据配置路径: plugins.signin.yingshijufeng"
+)
 
-def init(context=None) -> None:
+
+def init(context: Context | None = None) -> None:
+    """记录插件初始化完成。"""
+
     logger.info("Signin plugin initialized")
 
 
-async def handle(command: str, args: str, event: dict, context) -> list:
+async def handle(
+    command: str,
+    args: str,
+    event: OneBotEvent,
+    context: Context,
+) -> MessageSegments:
+    """分派帮助和影视飓风签到命令。"""
+
     try:
         parsed = parse(args)
         if not parsed:
-            return segments(_show_help())
+            return segments(_HELP_TEXT)
 
-        target = parsed.first.lower()
-
-        if target in {"help", "帮助", "?"}:
-            return segments(_show_help())
-        if target in {"sony", "s"}:
-            return segments("❌ Sony 签到已弃用 (Deprecated)")
-        if target in {"yingshi", "yingshijufeng", "y"}:
+        target = parsed.first.casefold()
+        if target in _HELP_ALIASES:
+            if len(parsed) != 1 or parsed.options:
+                return segments("❌ 用法: /signin help")
+            return segments(_HELP_TEXT)
+        if target in _YINGSHI_ALIASES:
+            if len(parsed) != 1 or parsed.options:
+                return segments("❌ 用法: /signin yingshi")
             return await yingshi.yingshi_sign(context)
-
-        return segments(f"未知平台: {target}\n\n{_show_help()}")
+        visible_target = bounded_external_text(
+            target,
+            max_chars=32,
+            max_bytes=128,
+            default="未知",
+        )
+        return segments(f"❓ 未知平台: {visible_target}\n\n{_HELP_TEXT}")
     except Exception as exc:
-        return public_error_response(
-            context,
-            exc,
-            logger=logger,
-            component="signin.handle",
+        return cast(
+            MessageSegments,
+            public_error_response(
+                context,
+                exc,
+                logger=logger,
+                component="signin.handle",
+            ),
         )
 
 
-def _show_help() -> str:
-    return """
-📝 **自动签到**
+async def scheduled_yingshi(context: Context) -> MessageSegments:
+    """Execute the manifest-targeted daily sign-in.
 
-**基本用法:**
-• /signin yingshi - 影视飓风签到
-• /signin y - 影视飓风签到（简写）
-• /signin help - 显示帮助
+    The core scheduler supplies delivery targets from the schedule entry; this
+    handler returns content only and must not invent a target in the payload.
+    """
 
-**示例:**
-• /signin yingshi
-
-**配置说明:**
-需要在 secrets.json 中配置相应平台的账号信息
-
-输入 /signin <平台> 进行签到
-""".strip()
-
-
-async def scheduled_yingshi(context) -> list[dict]:
     return await yingshi.yingshi_sign(context)

@@ -6,11 +6,195 @@
     "commands": [
         {
             "name": "paper",
-            "triggers": [
-                "paper"
-            ],
-            "help": "📚 论文管理 | /paper help 查看用法",
-            "admin_only": false
+            "triggers": ["paper"],
+            "help": "论文搜索、笔记、写作灵感、主题、截稿日期、摘要与文献库",
+            "admin_only": false,
+            "usage": "/paper <子命令> [参数]",
+            "examples": ["/paper search \"fast radio burst\"", "/paper topics"],
+            "invalid_examples": ["/paper unknown", "/paper help extra"],
+            "subcommands": [
+                {
+                    "name": "search",
+                    "help": "按关键词搜索 ADS 论文",
+                    "usage": "/paper search <关键词>",
+                    "examples": ["/paper search \"fast radio burst\""],
+                    "invalid_examples": ["/paper search"]
+                },
+                {
+                    "name": "author",
+                    "help": "按作者搜索 ADS 论文",
+                    "usage": "/paper author <作者>",
+                    "examples": ["/paper author Einstein"],
+                    "invalid_examples": ["/paper author"]
+                },
+                {
+                    "name": "cite",
+                    "help": "获取 arXiv ID、链接或 ADS Bibcode 对应的 BibTeX",
+                    "usage": "/paper cite <arXiv ID|arXiv 链接|Bibcode>",
+                    "examples": ["/paper cite 2401.12345"],
+                    "invalid_examples": ["/paper cite"]
+                },
+                {
+                    "name": "cite-network",
+                    "help": "查看论文的引用与被引网络",
+                    "usage": "/paper cite-network <arXiv ID|arXiv 链接|Bibcode>",
+                    "examples": ["/paper cite-network 2401.12345"],
+                    "invalid_examples": ["/paper cite-network"]
+                },
+                {
+                    "name": "related",
+                    "help": "查找与指定论文相关的论文",
+                    "usage": "/paper related <arXiv ID|arXiv 链接|Bibcode>",
+                    "examples": ["/paper related 2401.12345"],
+                    "invalid_examples": ["/paper related"]
+                },
+                {
+                    "name": "note",
+                    "help": "查看、添加或删除个人论文笔记",
+                    "contexts": ["private"],
+                    "usage": "/paper note <ID> [内容] | /paper note del <ID> <序号>",
+                    "examples": ["/paper note 2401.12345", "/paper note 2401.12345 值得复现"],
+                    "invalid_examples": ["/paper note"],
+                    "subcommands": [
+                        {
+                            "name": "del",
+                            "aliases": ["delete", "删除"],
+                            "help": "删除指定论文的一条笔记",
+                            "usage": "/paper note del <ID> <序号>",
+                            "examples": ["/paper note del 2401.12345 1"],
+                            "invalid_examples": ["/paper note del 2401.12345"]
+                        }
+                    ]
+                },
+                {
+                    "name": "writing",
+                    "help": "列出、查看、添加或删除写作灵感",
+                    "contexts": ["private"],
+                    "usage": "/paper writing [章节 [想法]] | /paper writing del <章节> <序号>",
+                    "examples": ["/paper writing", "/paper writing introduction 补充样本选择说明"],
+                    "invalid_examples": ["/paper writing del"],
+                    "subcommands": [
+                        {
+                            "name": "del",
+                            "aliases": ["delete", "删除"],
+                            "help": "删除指定章节的一条写作灵感",
+                            "usage": "/paper writing del <章节> <序号>",
+                            "examples": ["/paper writing del introduction 1"],
+                            "invalid_examples": ["/paper writing del introduction"]
+                        }
+                    ]
+                },
+                {
+                    "name": "topics",
+                    "help": "查看或维护每日推荐使用的研究兴趣关键词",
+                    "contexts": ["private"],
+                    "usage": "/paper topics [add|remove|clear] [关键词]",
+                    "examples": ["/paper topics"],
+                    "invalid_examples": ["/paper topics unknown"],
+                    "subcommands": [
+                        {
+                            "name": "add",
+                            "aliases": ["添加"],
+                            "help": "添加研究兴趣关键词",
+                            "usage": "/paper topics add <关键词>",
+                            "examples": ["/paper topics add fast radio burst"],
+                            "invalid_examples": ["/paper topics add"]
+                        },
+                        {
+                            "name": "remove",
+                            "aliases": ["rm", "删除"],
+                            "help": "删除研究兴趣关键词",
+                            "usage": "/paper topics remove <关键词>",
+                            "examples": ["/paper topics remove fast radio burst"],
+                            "invalid_examples": ["/paper topics remove"]
+                        },
+                        {
+                            "name": "clear",
+                            "aliases": ["清空"],
+                            "help": "清空全部研究兴趣关键词",
+                            "usage": "/paper topics clear",
+                            "match": "exact",
+                            "examples": ["/paper topics clear"],
+                            "invalid_examples": ["/paper topics clear extra"]
+                        }
+                    ]
+                },
+                {
+                    "name": "deadline",
+                    "help": "查看或维护截稿日期",
+                    "contexts": ["private"],
+                    "usage": "/paper deadline [add <名称> <YYYY-MM-DD>|del <序号>]",
+                    "examples": ["/paper deadline"],
+                    "invalid_examples": ["/paper deadline unknown"],
+                    "subcommands": [
+                        {
+                            "name": "add",
+                            "aliases": ["添加"],
+                            "help": "添加截稿日期",
+                            "usage": "/paper deadline add <名称> <YYYY-MM-DD>",
+                            "examples": ["/paper deadline add FRB2026 2026-10-01"],
+                            "invalid_examples": ["/paper deadline add FRB2026 tomorrow"]
+                        },
+                        {
+                            "name": "del",
+                            "aliases": ["delete", "删除"],
+                            "help": "按序号删除截稿日期",
+                            "usage": "/paper deadline del <序号>",
+                            "examples": ["/paper deadline del 1"],
+                            "invalid_examples": ["/paper deadline del nope"]
+                        }
+                    ]
+                },
+                {
+                    "name": "summarize",
+                    "help": "生成论文中文摘要；没有 AI 能力时回退到原始摘要",
+                    "usage": "/paper summarize <arXiv ID|arXiv 链接|Bibcode>",
+                    "examples": ["/paper summarize 2401.12345"],
+                    "invalid_examples": ["/paper summarize"]
+                },
+                {
+                    "name": "daily",
+                    "help": "按研究兴趣推荐当天新论文",
+                    "contexts": ["private"],
+                    "usage": "/paper daily",
+                    "match": "exact",
+                    "examples": ["/paper daily"],
+                    "invalid_examples": ["/paper daily extra"]
+                },
+                {
+                    "name": "ref_add",
+                    "help": "把论文 BibTeX 添加到个人文献库",
+                    "contexts": ["private"],
+                    "usage": "/paper ref_add <arXiv ID|arXiv 链接|Bibcode>",
+                    "examples": ["/paper ref_add 2401.12345"],
+                    "invalid_examples": ["/paper ref_add"]
+                },
+                {
+                    "name": "refs",
+                    "help": "查看个人 BibTeX 文献库",
+                    "contexts": ["private"],
+                    "usage": "/paper refs",
+                    "match": "exact",
+                    "examples": ["/paper refs"],
+                    "invalid_examples": ["/paper refs extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助"],
+                    "help": "显示论文管理助手的全部命令",
+                    "usage": "/paper help",
+                    "match": "exact",
+                    "examples": ["/paper help"],
+                    "invalid_examples": ["/paper help extra"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "aiohttp",
+            "required": true,
+            "description": "NASA ADS 客户端在入口导入链中直接使用 aiohttp"
         }
     ],
     "schedule": []

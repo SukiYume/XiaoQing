@@ -1,622 +1,658 @@
-"""
-Jupyter 代码执行插件 v2.0
+"""管理员专用的有界 Jupyter 执行、内核管理和多轮代码缓冲入口。"""
 
-功能：
-- /jupyter (py): 执行 Python 代码
-- /jupyter_kernel (kernel): 管理内核
-- /jupyter repl: 交互式 REPL 模式
-
-架构：
-- main.py: 命令处理
-- manager.py: 内核管理和执行逻辑
-- models.py: 数据模型
-- config.py: 配置常量
-"""
+from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import re
+import shlex
 import uuid
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
-from core.args import parse
-from core.plugin_base import PluginContextProtocol, image, segments, text
-from core.sensitive_audit import summarize_sensitive
+from core.interfaces import PluginContextProtocol
+from core.plugin_base import Segments, has_control_characters, image_url, segments, text
+from core.session import Session
 
-# 使用模块属性读取惰性导入状态，避免按值导入得到陈旧快照。
 from . import jupyter_manager
-from .jupyter_config import DEFAULT_TIMEOUT
+from .jupyter_audit import context_request_id, log_sensitive_audit
+from .jupyter_config import (
+    DEFAULT_TIMEOUT,
+    MAX_CODE_BYTES,
+    MAX_CODE_CHARS,
+    MAX_EXECUTION_TIMEOUT,
+    MAX_IMAGES,
+    MAX_REPL_EXECUTIONS,
+    MAX_REPL_LINE_CHARS,
+    MAX_REPL_LINES,
+    MAX_REPL_PREVIEW_CHARS,
+    MAX_TOTAL_IMAGE_BYTES,
+    MIN_EXECUTION_TIMEOUT,
+    REPL_SESSION_TIMEOUT,
+)
+from .jupyter_models import ExecutionResult
 
+# 保留稳定的测试/扩展接缝；依赖可用状态始终从模块属性实时读取。
 JupyterKernelManager = jupyter_manager.JupyterKernelManager
 
 logger = logging.getLogger(__name__)
-AUDIT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
-AUDIT_LABEL_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,95}\Z")
-ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
+
+PLUGIN_NAME = "jupyter"
+MAX_KERNEL_ARGUMENT_CHARS = 64
+_TIMEOUT_PREFIX_ALLOWANCE = 64
+
+MainAction = Literal["execute", "help", "repl"]
+KernelAction = Literal["status", "start", "restart", "shutdown", "help"]
+ReplAction = Literal["run", "clear", "show", "help", "append"]
+
+_MAIN_HELP_ALIASES = frozenset({"help", "帮助", "?"})
+_REPL_ALIASES = frozenset({"repl", "interactive", "交互"})
+_REPL_ACTIONS: dict[str, ReplAction] = {
+    **dict.fromkeys({"run", "执行", "运行"}, "run"),
+    **dict.fromkeys({"clear", "清空", "reset"}, "clear"),
+    **dict.fromkeys({"show", "显示", "buffer", "缓冲区"}, "show"),
+    **dict.fromkeys({"help", "帮助", "?"}, "help"),
+}
+_KERNEL_ACTIONS: dict[str, KernelAction] = {
+    **dict.fromkeys({"status", "状态"}, "status"),
+    **dict.fromkeys({"start", "启动"}, "start"),
+    **dict.fromkeys({"restart", "重启"}, "restart"),
+    **dict.fromkeys({"shutdown", "stop", "关闭", "停止"}, "shutdown"),
+    **dict.fromkeys({"help", "帮助", "-h", "?"}, "help"),
+}
+_TIMEOUT_OPTION = re.compile(
+    r"\A(?:-t|--timeout)(?:[ \t]+|=)([0-9]+(?:\.[0-9]+)?)(?:[ \t]|\Z)",
+    re.IGNORECASE | re.ASCII,
+)
+_TIMEOUT_TOKEN = re.compile(
+    r"\A(?:-t|--timeout)(?=[ \t=]|\Z)",
+    re.IGNORECASE | re.ASCII,
+)
+
+HELP_TEXT = """
+📓 **Jupyter 代码执行器**
+
+**执行与 REPL：**
+• /py <代码> - 在当前隔离内核执行代码
+• /py -t 60 <代码> - 设置 0.1–600 秒超时
+• /py repl - 启动 10 分钟代码缓冲会话
+• /py help - 显示帮助
+
+**内核管理：**
+• /kernel status - 查看内核状态
+• /kernel start - 启动内核
+• /kernel restart - 重启并清除变量
+• /kernel shutdown - 关闭内核
+
+代码最多 16000 字/32 KiB；输出和图片另有独立硬预算。内核空闲约 5 分钟后关闭。
+""".strip()
+
+KERNEL_HELP_TEXT = """
+🔧 **Jupyter 内核管理**
+
+• /kernel status - 查看状态
+• /kernel start - 启动内核
+• /kernel restart - 重启并清除变量
+• /kernel shutdown - 关闭内核
+
+内核按用户与群聊/私聊隔离，空闲约 5 分钟后自动关闭。
+""".strip()
+
+REPL_HELP_TEXT = """
+📝 Jupyter REPL 帮助
+━━━━━━━━━━━━━━━━━━
+💡 直接输入代码添加到缓冲区；若代码行恰好等于控制词，请在开头留一个空格
+💡 输入「run」/「执行」运行代码
+💡 输入「show」/「显示」查看缓冲区
+💡 输入「clear」/「清空」清空缓冲区
+💡 输入「退出」/「取消」结束会话
+━━━━━━━━━━━━━━━━━━
+""".strip()
+
+DEPENDENCY_TEXT = '❌ Jupyter 依赖不可用；请运行 pip install "xiaoqing[jupyter]"'
+OTHER_SESSION_TEXT = "⚠️ 当前已有其他插件会话；请先发送「退出」，再启动 Jupyter REPL。"
+INVALID_SESSION_TEXT = "⚠️ Jupyter REPL 状态无效，已安全结束；请重新启动。"
+_DEPENDENCY_PROBED = False
 
 
-def _safe_audit_id(value: object) -> str:
-    candidate = value if isinstance(value, str) else ""
-    return candidate if AUDIT_ID_RE.fullmatch(candidate) else "-"
+class JupyterCommandError(ValueError):
+    """表示可直接反馈给管理员的输入边界错误。"""
 
 
-def _audit_request_id(context: object) -> str:
-    return _safe_audit_id(getattr(context, "request_id", ""))
+class InvalidReplState(ValueError):
+    """表示 REPL 会话不满足结构或资源不变量。"""
 
 
-def _safe_audit_label(value: str) -> str:
-    return value if AUDIT_LABEL_RE.fullmatch(value) else "unknown"
+@dataclass(frozen=True, slots=True)
+class ReplState:
+    lines: tuple[str, ...]
+    execution_count: int
+
+    @property
+    def code(self) -> str:
+        return "\n".join(self.lines)
 
 
-def _audit_error_type(exc: BaseException | None, fallback: str = "-") -> str:
-    candidate = type(exc).__name__ if exc is not None else fallback
-    return candidate if ERROR_TYPE_RE.fullmatch(candidate) else "Exception"
+def _validate_code_text(value: object, *, allow_empty: bool) -> str:
+    if type(value) is not str:
+        raise TypeError("Jupyter code must be a string")
+    if len(value) > MAX_CODE_CHARS or len(value.encode("utf-8")) > MAX_CODE_BYTES:
+        raise JupyterCommandError(
+            f"代码不能超过 {MAX_CODE_CHARS} 字或 {MAX_CODE_BYTES // 1024} KiB"
+        )
+    if has_control_characters(
+        value,
+        allow_formatting_whitespace=True,
+        include_c1=True,
+    ):
+        raise JupyterCommandError("代码包含不允许的控制字符")
+    if not allow_empty and not value.strip():
+        raise JupyterCommandError("请输入要执行的代码")
+    return value
 
 
-def _log_jupyter_audit(
-    operation: str,
-    context: object,
-    *,
-    status: str,
-    payload: str | None = None,
-    job_id: str | None = None,
-    exc: BaseException | None = None,
-    error_type: str = "-",
-    level: int = logging.INFO,
-) -> None:
-    if payload is None:
-        payload_kind = "none"
-        payload_length = 0
-        payload_bytes = 0
-        payload_fingerprint = "-"
+def extract_code_and_timeout(args: object) -> tuple[str, float]:
+    """只解析开头至多一个 timeout 选项，后续文本逐字作为代码。"""
+
+    if type(args) is not str:
+        raise TypeError("Jupyter code must be a string")
+    if (
+        len(args) > MAX_CODE_CHARS + _TIMEOUT_PREFIX_ALLOWANCE
+        or len(args.encode("utf-8")) > MAX_CODE_BYTES + _TIMEOUT_PREFIX_ALLOWANCE
+    ):
+        raise JupyterCommandError(
+            f"代码不能超过 {MAX_CODE_CHARS} 字或 {MAX_CODE_BYTES // 1024} KiB"
+        )
+    if has_control_characters(
+        args,
+        allow_formatting_whitespace=True,
+        include_c1=True,
+    ):
+        raise JupyterCommandError("代码包含不允许的控制字符")
+
+    raw = args.lstrip(" \t")
+    timeout = DEFAULT_TIMEOUT
+    match = _TIMEOUT_OPTION.match(raw)
+    if match is not None:
+        timeout = float(match.group(1))
+        if not MIN_EXECUTION_TIMEOUT <= timeout <= MAX_EXECUTION_TIMEOUT:
+            raise JupyterCommandError(
+                f"执行超时必须在 {MIN_EXECUTION_TIMEOUT:g}–{MAX_EXECUTION_TIMEOUT:g} 秒之间"
+            )
+        code = raw[match.end() :]
+    elif _TIMEOUT_TOKEN.match(raw) is not None:
+        raise JupyterCommandError("timeout 选项缺少有效的 ASCII 数值")
     else:
-        summary = summarize_sensitive(payload)
-        payload_kind = summary.kind
-        payload_length = summary.length
-        payload_bytes = summary.byte_length
-        payload_fingerprint = summary.fingerprint
-    safe_error_type = _audit_error_type(exc, error_type)
-    selected_level = logging.ERROR if exc is not None else level
-    logger.log(
-        selected_level,
-        "sensitive_audit operation=%s request_id=%s job_id=%s status=%s "
-        "error_type=%s payload_kind=%s payload_length=%d payload_bytes=%d "
-        "payload_fingerprint=%s",
-        _safe_audit_label(operation),
-        _audit_request_id(context),
-        _safe_audit_id(job_id),
-        _safe_audit_label(status),
-        safe_error_type,
-        payload_kind,
-        payload_length,
-        payload_bytes,
-        payload_fingerprint,
+        code = args
+    return _validate_code_text(code, allow_empty=True), timeout
+
+
+def _parse_main_action(args: object) -> MainAction:
+    if type(args) is not str:
+        raise TypeError("Jupyter arguments must be a string")
+    normalized = args.strip().casefold()
+    if normalized in _MAIN_HELP_ALIASES:
+        return "help"
+    if normalized in _REPL_ALIASES:
+        return "repl"
+    return "execute"
+
+
+def _parse_kernel_action(args: object) -> KernelAction:
+    if type(args) is not str:
+        raise TypeError("Jupyter kernel arguments must be a string")
+    if len(args) > MAX_KERNEL_ARGUMENT_CHARS:
+        raise JupyterCommandError(f"内核命令参数不能超过 {MAX_KERNEL_ARGUMENT_CHARS} 个字符")
+    if has_control_characters(args, include_c1=True):
+        raise JupyterCommandError("内核命令不能包含控制字符")
+    try:
+        tokens = shlex.split(args, posix=True)
+    except ValueError as exc:
+        raise JupyterCommandError("内核命令中的引号没有闭合") from exc
+    if not tokens:
+        return "status"
+    if len(tokens) != 1:
+        raise JupyterCommandError("用法：/kernel [status|start|restart|shutdown|help]")
+    action = _KERNEL_ACTIONS.get(tokens[0].casefold())
+    if action is None:
+        raise JupyterCommandError("未知内核操作；请使用 status、start、restart 或 shutdown")
+    return action
+
+
+def _dependencies_available() -> bool:
+    global _DEPENDENCY_PROBED
+    if not _DEPENDENCY_PROBED:
+        jupyter_manager.lazy_import_jupyter()
+        _DEPENDENCY_PROBED = True
+    return bool(jupyter_manager.JUPYTER_AVAILABLE and jupyter_manager.KernelManager is not None)
+
+
+def init(context: PluginContextProtocol | None = None) -> None:
+    """在插件代加载时探测可选依赖，不启动任何内核。"""
+
+    global _DEPENDENCY_PROBED
+    _DEPENDENCY_PROBED = False
+    available = _dependencies_available()
+    log_sensitive_audit(
+        logger,
+        "jupyter.init",
+        request_id=context_request_id(context),
+        status="available" if available else "unavailable",
+        error_type="-" if available else "ImportError",
+        level=logging.INFO if available else logging.WARNING,
     )
 
 
-# ============================================================
-# 插件初始化
-# ============================================================
+def _owner_key(context: PluginContextProtocol) -> str:
+    """拒绝缺失身份的共享全局内核，按用户与会话场景生成稳定键。"""
+
+    user_id = context.current_user_id
+    group_id = context.current_group_id
+    if type(user_id) is not int or user_id <= 0:
+        raise RuntimeError("Jupyter execution requires an exact positive user id")
+    if group_id is None:
+        return f"user:{user_id}:private"
+    if type(group_id) is not int or group_id <= 0:
+        raise RuntimeError("Jupyter execution requires an exact positive group id")
+    return f"user:{user_id}:group:{group_id}"
 
 
-def init(context=None) -> None:
-    """插件初始化"""
-    jupyter_manager.lazy_import_jupyter()
-    if jupyter_manager.JUPYTER_AVAILABLE:
-        _log_jupyter_audit("jupyter.init", context, status="available")
-    else:
-        _log_jupyter_audit(
-            "jupyter.init",
-            context,
-            status="unavailable",
-            error_type="ImportError",
-            level=logging.WARNING,
-        )
+def _build_result_segments(
+    result: ExecutionResult,
+    *,
+    header: str | None = None,
+    footer: str | None = None,
+) -> Segments:
+    response: Segments = []
+    if header:
+        response.append(text(header))
+    response.append(text(f"```\n{result.format_output()}\n```"))
+
+    total_image_bytes = 0
+    for image_data in result.images[:MAX_IMAGES]:
+        if (
+            not jupyter_manager.validate_png_bytes(image_data)
+            or total_image_bytes + len(image_data) > MAX_TOTAL_IMAGE_BYTES
+        ):
+            continue
+        total_image_bytes += len(image_data)
+        encoded = base64.b64encode(image_data).decode("ascii")
+        response.append(image_url(f"base64://{encoded}"))
+    if footer:
+        response.append(text(footer))
+    return response
 
 
-# ============================================================
-# 命令处理
-# ============================================================
+async def _handle_execute(args: str, context: PluginContextProtocol) -> Segments:
+    """执行一次有界代码请求；异常正文只进入安全审计的类型字段。"""
 
-
-async def handle(
-    command: str, args: str, event: dict[str, Any], context: PluginContextProtocol
-) -> list[dict[str, Any]]:
-    """命令处理入口"""
-
-    try:
-        # 检查依赖
-        jupyter_manager.lazy_import_jupyter()
-        if not jupyter_manager.JUPYTER_AVAILABLE:
-            return segments(
-                f"❌ jupyter_client 加载失败: {jupyter_manager.IMPORT_ERROR}\n"
-                '请运行: pip install "xiaoqing[jupyter]"'
-            )
-
-        parsed = parse(args)
-
-        # 主 Jupyter 命令
-        if command in {"jupyter", "py", "python", "exec"}:
-            # 检查子命令
-            if (
-                parsed
-                and parsed.first
-                and parsed.first.lower() in {"help", "帮助", "?", "repl", "interactive", "交互"}
-            ):
-                subcommand = parsed.first.lower()
-
-                if subcommand in {"help", "帮助", "?"}:
-                    return segments(_show_help())
-                elif subcommand in {"repl", "interactive", "交互"}:
-                    return await _start_repl_session(context)
-
-            # 默认：执行代码
-            return await _handle_execute(args, context)
-
-        # 内核管理命令
-        elif command in {"kernel", "内核", "jupyter_kernel"}:
-            return await _handle_kernel(args, context)
-
-        return segments("未知命令")
-
-    except Exception as exc:
-        _log_jupyter_audit(
-            "jupyter.handle",
-            context,
-            status="error",
-            payload=args,
-            exc=exc,
-        )
-        return segments(f"处理请求时出错: {str(exc)}")
-
-
-async def _handle_execute(args: str, context: PluginContextProtocol) -> list[dict[str, Any]]:
-    """处理代码执行命令"""
     code, timeout = extract_code_and_timeout(args)
-    if not code:
-        return segments(
-            "请输入要执行的代码\n用法: /py print('hello')\n\n输入 /py help 查看完整帮助"
-        )
+    if not code.strip():
+        return segments("请输入要执行的代码\n用法: /py print('hello')\n输入 /py help 查看帮助")
     job_id = uuid.uuid4().hex
-
+    request_id = context_request_id(context)
     try:
-        # 获取内核管理器
-        km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
-        _log_jupyter_audit(
+        manager = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
+        log_sensitive_audit(
+            logger,
             "jupyter.execute",
-            context,
+            request_id=request_id,
+            job_id=job_id,
             status="started",
             payload=code,
-            job_id=job_id,
         )
-
-        # 执行代码
-        result = await km.execute(code, timeout=timeout, audit_id=job_id)
-        _log_jupyter_audit(
+        result = await manager.execute(code, timeout=timeout, audit_id=job_id)
+        log_sensitive_audit(
+            logger,
             "jupyter.execute",
-            context,
+            request_id=request_id,
+            job_id=job_id,
             status="succeeded" if result.success else "failed",
             payload=code,
-            job_id=job_id,
         )
-
-        # 构建响应
-        response: list[dict[str, Any]] = []
-
-        # 文本输出
-        output_text = result.format_output()
-        response.append(text(f"```\n{output_text}\n```"))
-
-        # 图片输出
-        for img_path in result.images:
-            response.append(image(str(img_path)))
-
-        return response
-
+        return _build_result_segments(result)
     except Exception as exc:
-        _log_jupyter_audit(
+        log_sensitive_audit(
+            logger,
             "jupyter.execute",
-            context,
+            request_id=request_id,
+            job_id=job_id,
             status="error",
             payload=code,
-            job_id=job_id,
             exc=exc,
         )
-        return segments(f"❌ 执行失败: {exc}")
+        return segments("❌ 执行失败，请稍后重试")
 
 
-async def _handle_kernel(args: str, context: PluginContextProtocol) -> list[dict[str, Any]]:
-    """处理内核管理命令"""
-    action = args.strip().lower()
+async def _handle_kernel(action: KernelAction, context: PluginContextProtocol) -> Segments:
+    """执行已经过严格解析的内核状态或生命周期操作。"""
+
     job_id = uuid.uuid4().hex
+    request_id = context_request_id(context)
+    try:
+        manager = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
+        if action == "status":
+            status = manager.get_status()
+            marker = "🟢" if status["running"] else "⚫"
+            return segments(f"{marker} {status['message']}")
 
-    if not action or action in ["status", "状态"]:
-        km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
-        status = km.get_status()
-
-        if status["running"]:
-            return segments(f"🟢 {status['message']}")
-        else:
-            return segments(f"⚫ {status['message']}")
-
-    elif action in ["start", "启动"]:
-        try:
-            km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
-            await asyncio.to_thread(km.start_kernel)
-            km.ensure_idle_monitor()
-            _log_jupyter_audit(
-                "jupyter.kernel.start",
-                context,
-                status="succeeded",
-                job_id=job_id,
-            )
-            return segments("🟢 内核已启动")
-        except Exception as exc:
-            _log_jupyter_audit(
-                "jupyter.kernel.start",
-                context,
-                status="error",
-                job_id=job_id,
-                exc=exc,
-            )
-            return segments(f"❌ 启动失败: {exc}")
-
-    elif action in ["restart", "重启"]:
-        try:
-            km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
-            await asyncio.to_thread(km.restart_kernel)
-            km.ensure_idle_monitor()
-            _log_jupyter_audit(
-                "jupyter.kernel.restart",
-                context,
-                status="succeeded",
-                job_id=job_id,
-            )
-            return segments("🔄 内核已重启")
-        except Exception as exc:
-            _log_jupyter_audit(
-                "jupyter.kernel.restart",
-                context,
-                status="error",
-                job_id=job_id,
-                exc=exc,
-            )
-            return segments(f"❌ 重启失败: {exc}")
-
-    elif action in ["shutdown", "stop", "关闭", "停止"]:
-        try:
-            km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
-            await asyncio.to_thread(km.shutdown_kernel)
-            _log_jupyter_audit(
-                "jupyter.kernel.shutdown",
-                context,
-                status="succeeded",
-                job_id=job_id,
-            )
-            return segments("⚫ 内核已关闭")
-        except Exception as exc:
-            _log_jupyter_audit(
-                "jupyter.kernel.shutdown",
-                context,
-                status="quarantined",
-                job_id=job_id,
-                exc=exc,
-            )
-            return segments(f"⚠️ 内核关闭状态无法确认，实例已隔离: {exc}")
-
-    elif action in ["help", "帮助", "-h", "?"]:
-        return segments(_show_kernel_help())
-
-    else:
-        return segments(f"未知操作: {action}\n使用 /kernel help 查看帮助")
-
-
-async def _start_repl_session(context: PluginContextProtocol) -> list[dict[str, Any]]:
-    """启动交互式 REPL 会话"""
-    # 检查是否已有会话
-    existing_session = await context.get_session()
-    if existing_session:
-        code_buffer = existing_session.get("code_buffer", [])
-        buffer_preview = "\n".join(code_buffer[-5:]) if code_buffer else "（空）"
-        return segments(
-            "📝 你已在 Jupyter REPL 会话中\n"
-            f"当前缓冲区（最后5行）:\n```python\n{buffer_preview}\n```\n\n"
-            "继续输入代码，或:\n"
-            "• 输入「run」/「执行」运行代码\n"
-            "• 输入「clear」/「清空」清空缓冲区\n"
-            "• 输入「show」/「显示」查看完整缓冲区\n"
-            "• 输入「退出」/「取消」结束会话"
+        log_sensitive_audit(
+            logger,
+            f"jupyter.kernel.{action}",
+            request_id=request_id,
+            job_id=job_id,
+            status="started",
         )
+        if action == "start":
+            await asyncio.to_thread(manager.start_kernel)
+            manager.ensure_idle_monitor()
+            success_text = "🟢 内核已启动"
+        elif action == "restart":
+            await asyncio.to_thread(manager.restart_kernel)
+            manager.ensure_idle_monitor()
+            success_text = "🔄 内核已重启"
+        else:
+            await asyncio.to_thread(manager.shutdown_kernel)
+            success_text = "⚫ 内核已关闭"
+        log_sensitive_audit(
+            logger,
+            f"jupyter.kernel.{action}",
+            request_id=request_id,
+            job_id=job_id,
+            status="succeeded",
+        )
+        return segments(success_text)
+    except Exception as exc:
+        log_sensitive_audit(
+            logger,
+            f"jupyter.kernel.{action}",
+            request_id=request_id,
+            job_id=job_id,
+            status="quarantined" if action == "shutdown" else "error",
+            exc=exc,
+        )
+        if action == "shutdown":
+            return segments("⚠️ 内核关闭状态无法确认，实例已隔离")
+        return segments("❌ 内核操作失败，请稍后重试")
 
-    # 创建新会话
+
+def _load_repl_state(session: Session) -> ReplState:
+    raw_lines = session.get("code_buffer")
+    execution_count = session.get("execution_count")
+    if type(raw_lines) is not list or len(raw_lines) > MAX_REPL_LINES:
+        raise InvalidReplState("code buffer shape is invalid")
+    if type(execution_count) is not int or not 0 <= execution_count <= MAX_REPL_EXECUTIONS:
+        raise InvalidReplState("execution count is invalid")
+
+    lines: list[str] = []
+    for line in raw_lines:
+        if (
+            type(line) is not str
+            or "\n" in line
+            or "\r" in line
+            or len(line) > MAX_REPL_LINE_CHARS
+            or has_control_characters(
+                line,
+                allow_formatting_whitespace=True,
+                include_c1=True,
+            )
+        ):
+            raise InvalidReplState("code buffer line is invalid")
+        lines.append(line)
+    code = "\n".join(lines)
+    try:
+        _validate_code_text(code, allow_empty=True)
+    except (JupyterCommandError, TypeError) as exc:
+        raise InvalidReplState("code buffer budget is invalid") from exc
+    return ReplState(tuple(lines), execution_count)
+
+
+def _code_preview(code: str) -> str:
+    suffix = "\n…（预览已截断，执行仍使用完整缓冲区）"
+    if len(code) <= MAX_REPL_PREVIEW_CHARS:
+        return code
+    kept = MAX_REPL_PREVIEW_CHARS - len(suffix)
+    return f"{code[:kept]}{suffix}"
+
+
+def _append_repl_text(state: ReplState, user_text: object) -> tuple[str, ...]:
+    if type(user_text) is not str:
+        raise TypeError("Jupyter REPL input must be a string")
+    normalized = user_text.replace("\r\n", "\n").replace("\r", "\n")
+    incoming = tuple(normalized.split("\n"))
+    if len(state.lines) + len(incoming) > MAX_REPL_LINES:
+        raise JupyterCommandError(f"REPL 缓冲区最多 {MAX_REPL_LINES} 行")
+    if any(
+        len(line) > MAX_REPL_LINE_CHARS
+        or has_control_characters(
+            line,
+            allow_formatting_whitespace=True,
+            include_c1=True,
+        )
+        for line in incoming
+    ):
+        raise JupyterCommandError(f"REPL 单行不能超过 {MAX_REPL_LINE_CHARS} 字，且不能包含控制字符")
+    combined = (*state.lines, *incoming)
+    _validate_code_text("\n".join(combined), allow_empty=True)
+    return combined
+
+
+async def _start_repl_session(context: PluginContextProtocol) -> Segments:
+    """创建最小 REPL 状态；检测到其他插件会话时不读取其数据。"""
+
+    existing = await context.get_session()
+    if existing is not None:
+        if type(existing.plugin_name) is not str or existing.plugin_name != PLUGIN_NAME:
+            return segments(OTHER_SESSION_TEXT)
+        try:
+            state = _load_repl_state(existing)
+        except InvalidReplState:
+            await context.end_session()
+            log_sensitive_audit(
+                logger,
+                "jupyter.repl.state",
+                request_id=context_request_id(context),
+                status="discarded",
+                error_type="InvalidReplState",
+                level=logging.WARNING,
+            )
+        else:
+            tail = "\n".join(state.lines[-5:]) if state.lines else "（空）"
+            return segments(
+                "📝 你已在 Jupyter REPL 会话中\n"
+                f"当前缓冲区（最后 5 行）:\n```python\n{_code_preview(tail)}\n```\n\n"
+                "继续输入代码，或输入 run/show/clear；发送「退出」结束会话"
+            )
+
     await context.create_session(
-        initial_data={
-            "code_buffer": [],
-            "execution_count": 0,
-        },
-        timeout=600.0,  # 10分钟超时
+        initial_data={"code_buffer": [], "execution_count": 0},
+        timeout=REPL_SESSION_TIMEOUT,
     )
-
-    _log_jupyter_audit(
+    log_sensitive_audit(
+        logger,
         "jupyter.repl.start",
-        context,
-        status="succeeded",
+        request_id=context_request_id(context),
         job_id=uuid.uuid4().hex,
+        status="succeeded",
     )
-
     return segments(
-        "📝 Jupyter 交互式 REPL 已启动\n"
+        "📝 Jupyter REPL 已启动\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "💡 连续输入多行代码\n"
-        "💡 输入「run」/「执行」运行代码\n"
-        "💡 输入「clear」/「清空」清空缓冲区\n"
-        "💡 输入「show」/「显示」查看缓冲区\n"
-        "💡 输入「退出」/「取消」结束会话\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "现在可以开始输入代码..."
+        "直接输入代码；run 执行，show 查看，clear 清空\n"
+        "发送「退出」/「取消」结束会话\n"
+        "━━━━━━━━━━━━━━━━━━"
     )
 
 
-# ============================================================
-# 会话处理（多轮对话核心）
-# ============================================================
+async def _execute_repl_buffer(
+    state: ReplState,
+    session: Session,
+    context: PluginContextProtocol,
+) -> Segments:
+    if not state.code.strip():
+        return segments("⚠️ 缓冲区为空，请先输入代码")
+    if state.execution_count >= MAX_REPL_EXECUTIONS:
+        return segments("⚠️ REPL 执行计数已达上限，请退出后重新启动")
+
+    job_id = uuid.uuid4().hex
+    request_id = context_request_id(context)
+    try:
+        manager = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
+        log_sensitive_audit(
+            logger,
+            "jupyter.repl.execute",
+            request_id=request_id,
+            job_id=job_id,
+            status="started",
+            payload=state.code,
+        )
+        result = await manager.execute(state.code, timeout=DEFAULT_TIMEOUT, audit_id=job_id)
+        log_sensitive_audit(
+            logger,
+            "jupyter.repl.execute",
+            request_id=request_id,
+            job_id=job_id,
+            status="succeeded" if result.success else "failed",
+            payload=state.code,
+        )
+        if result.success:
+            next_count = state.execution_count + 1
+            session.set("code_buffer", [])
+            session.set("execution_count", next_count)
+            header = f"✅ 执行完成 (#{next_count})"
+            footer = "继续输入代码，或发送「退出」结束会话"
+        else:
+            header = "⚠️ 执行未成功，缓冲区已保留"
+            footer = "可修改后再次输入 run"
+        return _build_result_segments(result, header=header, footer=footer)
+    except Exception as exc:
+        log_sensitive_audit(
+            logger,
+            "jupyter.repl.execute",
+            request_id=request_id,
+            job_id=job_id,
+            status="error",
+            payload=state.code,
+            exc=exc,
+        )
+        return segments("❌ 执行失败，缓冲区已保留；请稍后重试")
 
 
 async def handle_session(
     user_text: str,
     event: dict[str, Any],
     context: PluginContextProtocol,
-    session,
-) -> list[dict[str, Any]]:
-    """
-    处理会话消息
+    session: Session,
+) -> Segments:
+    """在框架的单会话事务内处理 REPL 管理动作或追加代码。"""
 
-    当用户有活跃会话时，Dispatcher 会调用这个函数处理后续消息。
-    框架已自动处理退出命令（退出/取消/exit/quit/q），插件无需再处理。
+    del event
+    if type(session.plugin_name) is not str or session.plugin_name != PLUGIN_NAME:
+        raise ValueError("Jupyter received a foreign session")
+    try:
+        state = _load_repl_state(session)
+    except InvalidReplState:
+        await context.end_session()
+        return segments(INVALID_SESSION_TEXT)
+    if type(user_text) is not str:
+        raise TypeError("Jupyter REPL input must be a string")
 
-    参数:
-        user_text: 用户发送的原始文本
-        event: OneBot 事件
-        context: 插件上下文
-        session: 当前会话对象
-    """
-    user_input = user_text.strip()
-    code_buffer = session.get("code_buffer", [])
-    execution_count = session.get("execution_count", 0)
-
-    # 特殊命令
-    if user_input.lower() in {"run", "执行", "运行"}:
-        if not code_buffer:
-            return segments("⚠️ 缓冲区为空，请先输入代码")
-
-        # 执行缓冲区中的代码
-        code = "\n".join(code_buffer)
-        job_id = uuid.uuid4().hex
-
-        try:
-            km = JupyterKernelManager.get_instance(context.data_dir, _owner_key(context))
-            _log_jupyter_audit(
-                "jupyter.repl.execute",
-                context,
-                status="started",
-                payload=code,
-                job_id=job_id,
-            )
-
-            result = await km.execute(code, timeout=DEFAULT_TIMEOUT, audit_id=job_id)
-            _log_jupyter_audit(
-                "jupyter.repl.execute",
-                context,
-                status="succeeded" if result.success else "failed",
-                payload=code,
-                job_id=job_id,
-            )
-
-            # 清空缓冲区并更新计数
-            session.set("code_buffer", [])
-            session.set("execution_count", execution_count + 1)
-
-            # 构建响应
-            response: list[dict[str, Any]] = []
-            response.append(text(f"✅ 执行完成 (#{execution_count + 1})"))
-
-            # 文本输出
-            output_text = result.format_output()
-            response.append(text(f"```\n{output_text}\n```"))
-
-            # 图片输出
-            for img_path in result.images:
-                response.append(image(str(img_path)))
-
-            response.append(text("继续输入代码，或输入「退出」结束会话"))
-
-            return response
-
-        except Exception as exc:
-            _log_jupyter_audit(
-                "jupyter.repl.execute",
-                context,
-                status="error",
-                payload=code,
-                job_id=job_id,
-                exc=exc,
-            )
-            return segments(f"❌ 执行失败: {exc}\n\n缓冲区已保留，可以修改后重试")
-
-    elif user_input.lower() in {"clear", "清空", "reset"}:
+    normalized_action = (
+        user_text.strip().casefold()
+        if "\n" not in user_text and not user_text[:1].isspace()
+        else ""
+    )
+    action = _REPL_ACTIONS.get(normalized_action, "append")
+    if action == "run":
+        return await _execute_repl_buffer(state, session, context)
+    if action == "clear":
         session.set("code_buffer", [])
         return segments("🗑️ 缓冲区已清空")
-
-    elif user_input.lower() in {"show", "显示", "buffer", "缓冲区"}:
-        if not code_buffer:
+    if action == "show":
+        if not state.lines:
             return segments("📄 缓冲区为空")
-
-        code = "\n".join(code_buffer)
         return segments(
-            f"📄 当前缓冲区 ({len(code_buffer)} 行):\n"
-            f"```python\n{code}\n```\n\n"
-            "输入「run」执行，「clear」清空"
+            f"📄 当前缓冲区 ({len(state.lines)} 行):\n"
+            f"```python\n{_code_preview(state.code)}\n```\n\n"
+            "输入 run 执行，clear 清空"
         )
+    if action == "help":
+        return segments(REPL_HELP_TEXT)
 
-    elif user_input.lower() in {"help", "帮助", "?"}:
-        return segments(
-            "📝 Jupyter REPL 帮助\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "💡 直接输入代码添加到缓冲区\n"
-            "💡 输入「run」/「执行」运行代码\n"
-            "💡 输入「show」/「显示」查看缓冲区\n"
-            "💡 输入「clear」/「清空」清空缓冲区\n"
-            "💡 输入「退出」/「取消」结束会话\n"
-            "━━━━━━━━━━━━━━━━━━"
-        )
-
-    # 默认：添加到代码缓冲区
-    code_buffer.append(user_input)
-    session.set("code_buffer", code_buffer)
-
-    return segments(
-        f"✓ 已添加 (共 {len(code_buffer)} 行)\n输入「run」执行，「show」查看，「clear」清空"
-    )
-
-
-# ============================================================
-# 帮助信息
-# ============================================================
-
-
-def _show_help() -> str:
-    """显示帮助信息"""
-    return """
-📓 **Jupyter 代码执行器**
-
-**基本命令:**
-• /py <代码> - 执行单行Python代码
-• /py help - 显示此帮助
-• /py repl - 启动交互式REPL模式
-
-**执行选项:**
-• /py -t 60 <代码> - 设置超时时间（秒）
-• /py --timeout 30 <代码> - 同上
-
-**交互式 REPL:**
-• /py repl - 进入多行代码输入模式
-• 在 REPL 中连续输入多行代码
-• 输入「run」执行，「clear」清空
-• 输入「退出」/「取消」结束会话
-
-**内核管理:**
-• /kernel status - 查看内核状态
-• /kernel restart - 重启内核（清除所有变量）
-• /kernel shutdown - 关闭内核
-
-**示例:**
-• /py print("Hello, World!")
-• /py import numpy as np; np.random.rand(3)
-• /py import matplotlib.pyplot as plt; plt.plot([1,2,3])
-• /py repl （进入交互模式）
-
-**特性:**
-• 支持自动显示图表（matplotlib等）
-• 变量在内核重启前持久保存
-• 支持长时间运行的代码（可设置超时）
-• 10分钟无操作自动关闭内核
-""".strip()
-
-
-def _show_kernel_help() -> str:
-    """返回内核管理帮助"""
-    return """
-🔧 **Jupyter 内核管理**
-
-**命令:**
-• /kernel status - 查看内核状态
-• /kernel start - 启动内核
-• /kernel restart - 重启内核
-• /kernel shutdown - 关闭内核
-
-**说明:**
-• 内核会自动按需启动
-• 重启会清除所有变量
-• 关闭后再执行会自动重启
-• 10分钟无操作自动关闭
-""".strip()
-
-
-# ============================================================
-# 生命周期钩子
-# ============================================================
-
-
-async def shutdown(context: PluginContextProtocol) -> None:
-    """插件卸载/关闭时的清理"""
     try:
-        jupyter_manager.lazy_import_jupyter()
-        if jupyter_manager.JUPYTER_AVAILABLE and jupyter_manager.KernelManager:
-            _log_jupyter_audit("jupyter.shutdown", context, status="started")
-            await JupyterKernelManager.shutdown_all_async()
-            _log_jupyter_audit("jupyter.shutdown", context, status="succeeded")
+        lines = _append_repl_text(state, user_text)
+    except JupyterCommandError as exc:
+        return segments(str(exc))
+    session.set("code_buffer", list(lines))
+    return segments(f"✓ 已添加 (共 {len(lines)} 行)\n输入 run 执行，show 查看，clear 清空")
+
+
+async def handle(
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> Segments:
+    """按清单规范命令名路由执行、REPL 和内核管理。"""
+
+    del event
+    try:
+        if command == "jupyter":
+            main_action = _parse_main_action(args)
+            if main_action == "help":
+                return segments(HELP_TEXT)
+            if not _dependencies_available():
+                return segments(DEPENDENCY_TEXT)
+            if main_action == "repl":
+                return await _start_repl_session(context)
+            return await _handle_execute(args, context)
+        if command == "jupyter_kernel":
+            kernel_action = _parse_kernel_action(args)
+            if kernel_action == "help":
+                return segments(KERNEL_HELP_TEXT)
+            if not _dependencies_available():
+                return segments(DEPENDENCY_TEXT)
+            return await _handle_kernel(kernel_action, context)
+        return segments("未知 Jupyter 命令")
+    except JupyterCommandError as exc:
+        return segments(str(exc))
     except Exception as exc:
-        _log_jupyter_audit(
-            "jupyter.shutdown",
-            context,
+        log_sensitive_audit(
+            logger,
+            "jupyter.handle",
+            request_id=context_request_id(context),
             status="error",
             exc=exc,
         )
+        return segments("处理请求失败，请稍后重试")
 
 
-def _owner_key(context: PluginContextProtocol) -> str:
-    user_id = getattr(context, "current_user_id", None)
-    if user_id is None:
-        return "global"
-    group_id = getattr(context, "current_group_id", None)
-    if group_id is not None:
-        return f"{user_id}:{group_id}"
-    return str(user_id)
+async def shutdown(context: PluginContextProtocol) -> None:
+    """插件卸载时等待所有空闲监视器与内核清理完成。"""
 
-
-def extract_code_and_timeout(args: str) -> tuple[str, float]:
-    """
-    提取代码和超时参数
-
-    参数必须在字符串开头，支持的格式：
-    - /py -t 30 code...
-    - /py --timeout 30 code...
-    - /py --timeout=30 code...
-    - /py -t 30 -t 60 code...  (多个参数时，最后一个生效)
-
-    重要：参数只在开头解析，之后的所有内容都被视为代码。
-    这样可以避免误删用户代码中的 -t 字符串。
-
-    示例：
-    - "/py -t 30 print('hello')" → timeout=30, code="print('hello')"
-    - "/py print('-t 30')" → timeout=30(默认), code="print('-t 30')"
-    - "/py -t 60 x = -t" → timeout=60, code="x = -t"
-    """
-    timeout = DEFAULT_TIMEOUT
-    remaining = args.strip()
-
-    # 循环处理开头的所有参数
-    # 每次循环尝试从开头匹配一个参数
-    # 一旦开头不是参数格式，就停止（剩余的都是代码）
-    while remaining:
-        # 匹配格式：-t <number> 或 --timeout <number> 或 --timeout=<number>
-        # ^ 确保只匹配字符串开头
-        match = re.match(
-            r"^\s*(?:-t|--timeout)(?:\s+|=)(\d+(?:\.\d+)?)\s*", remaining, re.IGNORECASE
+    try:
+        if not _dependencies_available():
+            return
+        request_id = context_request_id(context)
+        log_sensitive_audit(
+            logger,
+            "jupyter.shutdown",
+            request_id=request_id,
+            status="started",
         )
-
-        if not match:
-            # 开头不是参数格式，停止解析
-            break
-
-        # 提取超时值（使用第一个捕获组）
-        try:
-            timeout = float(match.group(1))
-        except (ValueError, IndexError):
-            pass
-
-        # 移除已处理的参数，继续检查是否还有参数
-        remaining = remaining[match.end() :]
-
-    # remaining 就是代码部分（可能为空）
-    return remaining, timeout
+        await JupyterKernelManager.shutdown_all_async()
+        log_sensitive_audit(
+            logger,
+            "jupyter.shutdown",
+            request_id=request_id,
+            status="succeeded",
+        )
+    except Exception as exc:
+        log_sensitive_audit(
+            logger,
+            "jupyter.shutdown",
+            request_id=context_request_id(context),
+            status="error",
+            exc=exc,
+        )

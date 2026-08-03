@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.helpers.git import run_git
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_all_deprecated_plugin_workspaces_are_absent() -> None:
-    for name in ("ads_deprecated", "covid_deprecated", "memo_deprecated"):
-        deprecated_dir = ROOT / "plugins" / name
-        assert not deprecated_dir.exists(), (
-            f"plugins/{name} is unsupported historical code and must not be restored "
-            "to the production workspace"
-        )
+def test_no_deprecated_plugin_workspace_is_tracked() -> None:
+    deprecated_paths = tuple(
+        f"plugins/{name}" for name in ("ads_deprecated", "covid_deprecated", "memo_deprecated")
+    )
+    tracked = run_git(ROOT, "ls-files", "--", *deprecated_paths).splitlines()
+
+    assert not tracked, f"unsupported historical plugin code is tracked: {tracked}"
 
 
 def test_local_archive_is_ignored_and_docker_denied() -> None:

@@ -47,9 +47,8 @@ class FailingAsyncContent:
 
 
 class NeverReadAsyncContent:
-    async def iter_chunked(self, _size: int):
+    def iter_chunked(self, _size: int):
         raise AssertionError("invalid headers must be rejected before body read")
-        yield b""  # pragma: no cover
 
 
 @dataclass
@@ -434,6 +433,45 @@ def test_sync_slow_drip_is_stopped_by_total_deadline(
     assert response.closed is True
 
 
+def test_sync_redirects_receive_only_the_remaining_total_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [10.0]
+    monkeypatch.setattr(bounded_http.time, "monotonic", lambda: clock[0])
+    redirect = SyncResponse(
+        status_code=302,
+        url="https://example.test/start",
+        headers={"Location": "/final"},
+        fail_if_read=True,
+    )
+    final = SyncResponse(url="https://example.test/final")
+
+    class AdvancingSession(SyncSession):
+        def request(self, method: str, url: str, **kwargs: Any) -> SyncResponse:
+            response = super().request(method, url, **kwargs)
+            clock[0] += 1.25
+            return response
+
+    session = AdvancingSession([redirect, final])
+    result = requests_request_bounded(
+        "GET",
+        "https://example.test/start",
+        limits=SMALL_LIMITS,
+        redirect_policy=RedirectPolicy(max_hops=1),
+        session=session,
+        request_kwargs={"timeout": 20},
+        total_timeout_seconds=5,
+    )
+
+    assert result.body == b"{}"
+    first_timeout = session.calls[0][2]["timeout"]
+    redirected_timeout = session.calls[1][2]["timeout"]
+    assert first_timeout.total == pytest.approx(5)
+    assert redirected_timeout.total == pytest.approx(3.75)
+    assert first_timeout.connect_timeout <= first_timeout.total
+    assert redirected_timeout.connect_timeout <= redirected_timeout.total
+
+
 @pytest.mark.asyncio
 async def test_async_midstream_transport_failure_is_normalized_and_closed() -> None:
     response = AsyncResponse(headers={"Content-Type": "application/json"})
@@ -493,7 +531,8 @@ def test_sync_wrapper_forces_transport_guards_and_raw_wire_mode() -> None:
     assert kwargs["allow_redirects"] is False
     assert kwargs["stream"] is True
     assert kwargs["headers"]["Accept-Encoding"] == "gzip, deflate"
-    assert kwargs["timeout"] == 3
+    assert kwargs["timeout"].total == pytest.approx(3, abs=0.01)
+    assert kwargs["timeout"].connect_timeout <= kwargs["timeout"].total
     assert response.raw.calls == [(17, False)]
     assert response.closed is True
 

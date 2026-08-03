@@ -1,8 +1,21 @@
 {
     "name": "url_parser",
     "version": "2.0.0",
-    "description": "自动解析消息中的链接预览 - 提取标题、描述、图片",
+    "description": "完整单 URL 网页预览 - 提取标题、描述和安全缓存图片",
     "entry": "main.py",
+    "concurrency": "parallel",
     "commands": [],
+    "dependencies": [
+        {
+            "name": "bs4",
+            "required": true,
+            "description": "用于解析网页标题、描述和图片元数据"
+        },
+        {
+            "name": "PIL",
+            "required": true,
+            "description": "用于验证和转换网页预览图片"
+        }
+    ],
     "schedule": []
 }

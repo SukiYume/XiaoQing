@@ -1,19 +1,19 @@
-"""
-数据库通用操作封装
-用于复用各 Handler 的基础 CRUD 操作
-"""
+"""供 Pendo 各 Handler 复用的异步数据库操作与审计日志组合。"""
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable, Iterable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from core.plugin_base import run_sync
 
-from ..core.exceptions import ItemAlreadyDeletedException, ItemNotFoundException
+from ..core.exceptions import (
+    ItemAlreadyDeletedException,
+    ItemNotFoundException,
+    ItemVersionConflictException,
+)
 from ..models.item import Item, ItemType, get_item_type_value
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 模块级单例缓存，用于 context 为 None 时的 fallback
+# 插件进程只维护一个数据库实例；运行时上下文和 Handler 共用该所有权入口。
 _db_singleton: Database | None = None
 
 
@@ -31,81 +31,67 @@ def set_database_singleton(db: Database | None) -> None:
     _db_singleton = db
 
 
-def get_database(context: Any) -> Database:
-    """获取数据库实例（带缓存）
+def claim_database_singleton(db: Database) -> None:
+    """Publish one lifecycle-owned database without overwriting another generation."""
 
-    统一的数据库获取入口，避免在多处重复代码
-
-    Args:
-        context: 上下文对象
-
-    Returns:
-        Database实例
-    """
     global _db_singleton
+    if _db_singleton is not None and _db_singleton is not db:
+        raise RuntimeError("Pendo database singleton is already owned")
+    _db_singleton = db
+
+
+def detach_database_singleton() -> Database | None:
+    """Remove and return the published database without closing it."""
+
+    global _db_singleton
+    database, _db_singleton = _db_singleton, None
+    return database
+
+
+def resolve_database_path(context: Any) -> Path:
+    """Resolve Pendo's only database path from Core's writable data boundary."""
+
     from ..config import PendoConfig
+
+    raw_data_dir = getattr(context, "data_dir", None)
+    if raw_data_dir is None:
+        raise RuntimeError("Pendo requires context.data_dir")
+    try:
+        data_dir = Path(raw_data_dir)
+    except TypeError as exc:
+        raise RuntimeError("Pendo context.data_dir must be path-like") from exc
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return data_dir / PendoConfig.DB_FILENAME
+
+
+def get_database(context: Any) -> Database:
+    """返回进程内唯一数据库实例，首次访问时按插件数据目录创建。"""
+    global _db_singleton
     from ..services.db import Database
 
-    db_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "data", PendoConfig.DB_FILENAME
-    )
-
-    if _db_singleton is not None:
-        if context is not None:
-            try:
-                context.pendo_db = _db_singleton
-            except Exception:
-                pass
-        return _db_singleton
-
-    # 如果context中有缓存，优先使用
-    if hasattr(context, "pendo_db") and getattr(context, "pendo_db", None) is not None:
-        cached_db = context.pendo_db
-        if getattr(cached_db, "db_path", None) == db_path:
-            set_database_singleton(cached_db)
-            return cached_db
-
-    # context 为 None 时使用单例
-    if _db_singleton is None or getattr(_db_singleton, "db_path", None) != db_path:
-        _db_singleton = Database(db_path)
-    db = _db_singleton
-
-    # 尝试缓存到context（如果可能）
-    try:
-        if context is not None and not hasattr(context, "pendo_db"):
-            context.pendo_db = db
-    except Exception:
-        pass  # 忽略缓存失败
-
-    return db
+    if _db_singleton is None:
+        db_path = resolve_database_path(context)
+        _db_singleton = Database(str(db_path))
+    return _db_singleton
 
 
 def cleanup_db_singleton() -> None:
-    """清理数据库单例"""
-    global _db_singleton
-    if _db_singleton:
-        _db_singleton.cleanup()
-        _db_singleton = None
-
-
-async def get_user_custom_settings(user_id: str, db: Database) -> dict[str, Any]:
-    """获取用户自定义设置（统一入口）"""
-    from ..utils.settings_utils import parse_custom_settings
-
-    settings = await run_sync(db.settings.get_user_settings, user_id)
-    return parse_custom_settings(settings)
+    """关闭并清空数据库单例，即使关闭动作本身失败也不保留失效引用。"""
+    db = detach_database_singleton()
+    if db is not None:
+        db.cleanup()
 
 
 async def get_user_settings_bundle_map(
     user_ids: list[str], db: Database
 ) -> dict[str, dict[str, Any]]:
-    """Batch load raw and custom user settings for scheduled jobs."""
-    from ..utils.settings_utils import parse_custom_settings
+    """批量读取定时任务需要的原始设置和自定义设置。"""
+    from .settings_utils import parse_custom_settings
 
     if not user_ids:
         return {}
 
-    settings_map = await run_sync(db.settings.get_user_settings_batch, user_ids)
+    settings_map = await run_sync(db.get_user_settings_batch, user_ids)
     return {
         user_id: {
             "settings": settings,
@@ -116,14 +102,10 @@ async def get_user_settings_bundle_map(
 
 
 class DbOpsMixin:
-    """数据库操作混入类
+    """依赖 ``self.db``，统一桥接同步数据库调用、异常和审计日志。"""
 
-    依赖: self.db
-    提供统一的数据库操作接口，包括错误处理和日志记录
-    """
-
-    db: Database = cast(Any, None)
-    _ITEM_TYPE_LABELS = {
+    db: Database
+    _ITEM_TYPE_LABELS: ClassVar[dict[str, str]] = {
         ItemType.EVENT.value: "日程",
         ItemType.TASK.value: "待办",
         ItemType.NOTE.value: "笔记",
@@ -131,19 +113,15 @@ class DbOpsMixin:
         ItemType.LEDGER.value: "账目",
     }
 
-    # ============================================================
-    # 通用工具
-    # ============================================================
-
     @staticmethod
     def _single_token_error(value: str, message: str) -> dict[str, str] | None:
-        """Return an error result when a command argument contains extra tokens."""
+        """命令参数混入额外令牌时返回统一错误。"""
         if value.strip() and len(value.split()) != 1:
             return {"status": "error", "message": message}
         return None
 
     @staticmethod
-    def _snapshot_item_values(item: Any, update_keys: Any) -> dict[str, Any]:
+    def _snapshot_item_values(item: Item, update_keys: Iterable[str]) -> dict[str, Any]:
         """Snapshot old field values for undo support.
 
         Args:
@@ -168,53 +146,69 @@ class DbOpsMixin:
                 old_values[key] = None
         return old_values
 
-    # ============================================================
-    # 基础操作 - 直接封装数据库调用
-    # ============================================================
-
     async def _db_get_item(self, item_id: str, owner_id: str | None = None) -> Item | None:
         """获取单个条目"""
-        return await run_sync(self.db.items.get_item, item_id, owner_id)
+        return await run_sync(self.db.get_item, item_id, owner_id)
 
     async def _db_update_item(
-        self, item_id: str, updates: dict[str, Any] | Item, owner_id: str | None = None
-    ) -> Any:
+        self,
+        item_id: str,
+        updates: dict[str, Any] | Item,
+        owner_id: str | None = None,
+        *,
+        expected_version: int,
+        operation_log: dict[str, Any] | None = None,
+        touch: bool = True,
+    ) -> None:
         """更新条目"""
-        return await run_sync(self.db.items.update_item, item_id, updates, owner_id)
+        updated = await run_sync(
+            self.db.update_item,
+            item_id,
+            updates,
+            owner_id,
+            expected_version=expected_version,
+            operation_log=operation_log,
+            touch=touch,
+        )
+        if not updated:
+            raise ItemVersionConflictException(item_id)
 
     async def _db_insert_item(
-        self, item_data: dict[str, Any] | Item, custom_id: str | None = None
+        self,
+        item_data: dict[str, Any] | Item,
+        custom_id: str | None = None,
+        *,
+        operation_log: dict[str, Any] | None = None,
     ) -> str:
         """插入条目"""
-        if custom_id:
-            return await run_sync(self.db.items.insert_item, item_data, custom_id)
-        return await run_sync(self.db.items.insert_item, item_data)
+        return cast(
+            str,
+            await run_sync(
+                self.db.insert_item,
+                item_data,
+                custom_id,
+                operation_log=operation_log,
+            ),
+        )
 
     async def _db_delete_item(
-        self, item_id: str, soft: bool = True, owner_id: str | None = None
+        self,
+        item_id: str,
+        soft: bool = True,
+        *,
+        owner_id: str,
+        operation_log: dict[str, Any] | None = None,
     ) -> Any:
         """删除条目"""
-        return await run_sync(self.db.items.delete_item, item_id, soft, owner_id)
+        return await run_sync(
+            self.db.delete_item,
+            item_id,
+            soft,
+            owner_id=owner_id,
+            operation_log=operation_log,
+        )
 
-    async def _db_batch_update_items(
-        self, per_item_updates: dict[str, Any], owner_id: str,
-    ) -> int:
-        """批量更新条目"""
-        return await run_sync(self.db.items.batch_update_items, per_item_updates, owner_id)
-
-    async def _db_batch_soft_delete(self, item_ids: list[str], owner_id: str) -> int:
-        """批量软删除"""
-        return await run_sync(self.db.items.batch_soft_delete, item_ids, owner_id)
-
-    async def _db_log_operation(self, **kwargs):
-        """记录操作日志"""
-        return await run_sync(self.db.logs.log_operation, **kwargs)
-
-    # ============================================================
-    # 组合操作 - 常用操作的封装
-    # ============================================================
-
-    async def _db_get_and_check(self, item_id: str, owner_id: str) -> Any:
+    async def _db_get_and_check(self, item_id: str, owner_id: str) -> Item:
         """获取并检查所有权和状态
 
         统一的错误处理：
@@ -296,6 +290,7 @@ class DbOpsMixin:
         updates: dict[str, Any] | Item,
         owner_id: str,
         action: str,
+        expected_version: int,
         details: dict[str, Any] | None = None,
     ) -> None:
         """更新并记录日志（含编辑前快照，支持撤销）
@@ -311,7 +306,7 @@ class DbOpsMixin:
         if isinstance(updates, Item):
             log_updates = updates.to_dict()
         else:
-            log_updates = updates
+            log_updates = dict(updates)
 
         # 编辑操作：保存修改前的旧值快照，用于 undo
         old_values = {}
@@ -320,23 +315,24 @@ class DbOpsMixin:
             if current_item:
                 old_values = self._snapshot_item_values(current_item, log_updates)
 
-        # 更新条目
-        await self._db_update_item(item_id, updates, owner_id)
-
-        # 记录日志
-        log_details = details or {}
+        log_details = dict(details or {})
         log_details["updates"] = log_updates
         if old_values:
             log_details["old_values"] = old_values
 
-        item_type = log_updates.get("type", "unknown")
-
-        await self._db_log_operation(
-            user_id=owner_id,
-            action=action,
-            item_type=item_type,
-            item_id=item_id,
-            details=log_details,
+        item_type = get_item_type_value(log_updates.get("type"), default="unknown")
+        await self._db_update_item(
+            item_id,
+            updates,
+            owner_id,
+            expected_version=expected_version,
+            operation_log={
+                "user_id": owner_id,
+                "action": action,
+                "item_type": item_type,
+                "item_id": item_id,
+                "details": log_details,
+            },
         )
 
         logger.info(
@@ -348,7 +344,7 @@ class DbOpsMixin:
 
     async def _db_soft_delete_with_log(
         self, item_id: str, owner_id: str, item_type: str = "unknown"
-    ):
+    ) -> None:
         """软删除并记录日志
 
         Args:
@@ -356,16 +352,17 @@ class DbOpsMixin:
             owner_id: 所有者ID
             item_type: 条目类型（用于日志）
         """
-        # 执行软删除
-        await self._db_delete_item(item_id, soft=True, owner_id=owner_id)
-
-        # 记录日志
-        await self._db_log_operation(
-            user_id=owner_id,
-            action="delete",
-            item_type=item_type,
-            item_id=item_id,
-            details={"soft_delete": True},
+        await self._db_delete_item(
+            item_id,
+            soft=True,
+            owner_id=owner_id,
+            operation_log={
+                "user_id": owner_id,
+                "action": "delete",
+                "item_type": item_type,
+                "item_id": item_id,
+                "details": {"soft_delete": True},
+            },
         )
 
         logger.info(
@@ -380,61 +377,20 @@ class DbOpsMixin:
         owner_id: str,
         item_type: str,
         action: str,
-        details_factory=None,
+        details_factory: Callable[[str], dict[str, Any]] | None = None,
     ) -> int:
-        """批量软删除并记录日志。"""
-        if not item_ids:
-            return 0
-
-        def _delete() -> int:
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            now = datetime.now().isoformat()
-            placeholders = ",".join(["?" for _ in item_ids])
-            log_records = [
-                (
-                    owner_id,
-                    action,
-                    item_type,
-                    item_id,
-                    json.dumps(
-                        details_factory(item_id) if details_factory else {"soft_delete": True},
-                        ensure_ascii=False,
-                    ),
-                    now,
-                )
-                for item_id in item_ids
-            ]
-
-            with conn:
-                cursor.execute(
-                    f"""
-                    UPDATE items
-                    SET deleted = 1, deleted_at = ?, updated_at = ?
-                    WHERE id IN ({placeholders}) AND owner_id = ? AND type = ?
-                    """,
-                    [now, now] + item_ids + [owner_id, item_type],
-                )
-                updated_count = cursor.rowcount
-
-                cursor.executemany(
-                    """
-                    INSERT INTO operation_logs (user_id, action, item_type, item_id, details, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    log_records,
-                )
-
-                for item_id in item_ids:
-                    cursor.execute("DELETE FROM items_fts WHERE id = ?", (item_id,))
-
-            # 精确失效：只清除受影响条目及该用户的列表缓存
-            for iid in item_ids:
-                self.db.items.cache_invalidate(iid)
-            self.db.items.cache_invalidate(f"items|{owner_id}")
-            return updated_count
-
-        return await run_sync(_delete)
+        """由数据库事务原子完成批量软删除、附属清理和逐条审计。"""
+        return cast(
+            int,
+            await run_sync(
+                self.db.batch_soft_delete,
+                item_ids,
+                owner_id,
+                item_type=item_type,
+                operation_action=action,
+                details_factory=details_factory,
+            ),
+        )
 
     async def _db_create_with_log(
         self,
@@ -454,24 +410,22 @@ class DbOpsMixin:
         Returns:
             创建的条目ID
         """
-        # 插入条目
-        item_id = await self._db_insert_item(item_data, custom_id)
-
         # 处理 item_data 可能是 Item 对象的情况
         if isinstance(item_data, Item):
             log_data = item_data.to_dict()
         else:
-            log_data = item_data
+            log_data = dict(item_data)
 
-        # 记录日志
-        item_type = log_data.get("type", "unknown")
-
-        await self._db_log_operation(
-            user_id=owner_id,
-            action=action,
-            item_type=item_type,
-            item_id=item_id,
-            details={"item_data": log_data},
+        item_type = get_item_type_value(log_data.get("type"), default="unknown")
+        item_id = await self._db_insert_item(
+            item_data,
+            custom_id,
+            operation_log={
+                "user_id": owner_id,
+                "action": action,
+                "item_type": item_type,
+                "details": {"item_data": log_data},
+            },
         )
 
         logger.info(

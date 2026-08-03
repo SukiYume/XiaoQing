@@ -75,7 +75,7 @@ plugins/xiaoqing_chat
 - 文本、多图片、QQ face、NapCat mface、普通 image、reply、混合消息段。
 - 本地图库图片回复、表情包回复、QQ face 回复。
 - 记忆、长期记忆、表达学习、黑话、知识、目标、PFC、心流、回复检查、深度对话。
-- 配置、secrets、provider、vision provider、模型切换、权限控制。
+- 统一 AI registry、route、聊天/视觉 profile、模型切换、权限控制。
 - 异步锁、后台任务、debounce 持久化、shutdown flush、热重载。
 - 安全性、稳健性、性能、并发、冗余代码和文档一致性。
 
@@ -90,7 +90,7 @@ plugins/xiaoqing_chat
 1. 如果存在：
 
 ```text
-plugins/xiaoqing_chat/test_reports/CURRENT_RUN_ID.txt
+test_reports/runs/plugins/xiaoqing_chat/CURRENT_RUN_ID.txt
 ```
 
 读取其中的 `RUN_ID` 并继续这个运行。
@@ -104,34 +104,34 @@ RUN_ID = xiaoqing-chat-fulltest-YYYYMMDD-HHMMSS
 并写入：
 
 ```text
-plugins/xiaoqing_chat/test_reports/CURRENT_RUN_ID.txt
+test_reports/runs/plugins/xiaoqing_chat/CURRENT_RUN_ID.txt
 ```
 
 3. 所有产物写入：
 
 ```text
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/
 ```
 
 ### 2.2 必须维护的文件
 
 ```text
-plugins/xiaoqing_chat/test_reports/CURRENT_RUN_ID.txt
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-run-state.json
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-command-inventory.json
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-command-parameter-matrix.json
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-onebot-event-matrix.json
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-trigger-matrix.json
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-storage-matrix.json
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-script-matrix.json
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-test-results.jsonl
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-llm-call-log.jsonl
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-transcripts/
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-next-actions.md
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-session-handoff.md
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-coverage-summary.md
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-defects.md
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-final-report.md
+test_reports/runs/plugins/xiaoqing_chat/CURRENT_RUN_ID.txt
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-run-state.json
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-command-inventory.json
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-command-parameter-matrix.json
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-onebot-event-matrix.json
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-trigger-matrix.json
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-storage-matrix.json
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-group-script-matrix.json
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-test-results.jsonl
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-llm-call-log.jsonl
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-group-transcripts/
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-next-actions.md
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-session-handoff.md
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-coverage-summary.md
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-defects.md
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-final-report.md
 ```
 
 ### 2.3 每次开始工作必须恢复状态
@@ -206,13 +206,13 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-final-report.md
 优先使用独立临时 data_dir，例如：
 
 ```text
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/isolated_data_dir/
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/isolated_data_dir/
 ```
 
 如果必须使用插件默认数据目录，先做备份：
 
 ```text
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/backup_before_test/
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/backup_before_test/
 ```
 
 持久化验证必须基于插件实际使用的数据源，包括但不限于：
@@ -263,7 +263,7 @@ plugins/xiaoqing_chat/expression/
 plugins/xiaoqing_chat/planning/
 plugins/xiaoqing_chat/context_builder.py
 plugins/xiaoqing_chat/reply_generator.py
-plugins/xiaoqing_chat/reply_checker*
+plugins/xiaoqing_chat/llm/reply_checker.py
 plugins/xiaoqing_chat/reply_splitter.py
 plugins/xiaoqing_chat/reply_payload.py
 plugins/xiaoqing_chat/smalltalk_execution.py
@@ -295,7 +295,7 @@ README、docs、AGENTS.md 中所有提到 xiaoqing_chat、/xc、smalltalk、medi
 - 文本、图片、face、mface、reply、混合消息链路。
 - 入站媒体分析链路。
 - 出站图片、表情包、QQ face 选择和发送链路。
-- LLM provider 和 vision provider 配置/调用链路。
+- core AI route 和聊天/视觉 profile 配置与调用链路。
 - 记忆、长期记忆、向量库、主题摘要、表达学习、黑话、知识、用户画像。
 - PFC / goal / action_history / heartflow / review session 数据流。
 - 回复检查、重规划、重试、postprocess、拆分回复。
@@ -452,6 +452,7 @@ xiaoqing-command-parameter-matrix.json
 - 插件 `handle()`。
 - dispatcher/plugin manager 调用路径，如果可用。
 - OneBot HTTP 入站事件，如果服务可启动。
+- 管理员 `/event` 构造的真实 OneBot 事件；文本、点名、reply 和媒体 case 都必须从该入口至少执行一次。
 - `observe_message`。
 - `handle_smalltalk`。
 - 私聊普通消息。
@@ -556,12 +557,11 @@ xiaoqing-trigger-matrix.json
 
 记录但必须脱敏：
 
-- provider 名称。
-- model。
-- api_base 域名或类型，不含 key。
+- route 名称和有序 profile 链。
+- 实际命中的 provider、profile 和 model。
 - temperature / top_p / think_level / reply_style。
 - memory、planner、reply_checker、media、group trigger 相关开关。
-- vision provider 是否可用。
+- vision route 是否存在可用的 `text + image` profile。
 
 不得记录：
 
@@ -646,8 +646,8 @@ xiaoqing-group-script-matrix.json
 保存到：
 
 ```text
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-transcripts/<script_id>.md
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-transcripts/<script_id>.jsonl
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-group-transcripts/<script_id>.md
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-group-transcripts/<script_id>.jsonl
 ```
 
 ### 8.4 可复用拟人大群实验 runner
@@ -720,6 +720,15 @@ runner 输出必须写入当前运行目录，并与 `xiaoqing-test-results.json
 - 是否在冷场时自然插话。
 - 是否在争论中火上浇油。
 - 是否像人在聊天，而不是每次生成 AI 答案。
+- 句首叫了 bot name 后的普通知识问题是否仍被直接回答，而不是误判成人物履历问题。
+- 被问到精确学校、城市、家庭、现实关系、重大经历或现实承诺时，是否守住稳定人设，不补成可核验资料，也不靠固定反问敷衍。
+- 被邀请分享近况或趣事时，是否能讲普通、低风险、符合人设且不冒充事实证据的日常小片段；不能把这项许可扩展到真实群友或第三方。
+- 能直接回应、表态、接梗或调侃时是否直接说，避免把追问当默认结尾；只有确实缺关键信息或对方想展开时才问。
+- 调侃是否紧贴当前内容并留有分寸，不拿隐私、真实伤处或脆弱状态开刀。
+- 用户对本轮语气、回答范围或禁止项作出明确要求时，回复是否真正遵守。
+- 评论群友时，是否只依据可见言行，不补写习惯、动机、缺席原因或群体状态。
+- 面向全群的问题是否只回答自己的立场，不顺手猜测本群成员的数量、倾向或当前状态。
+- 明确面向全群的开放问题是否有合理参与率；点给其他人的消息和纯协议表情是否保持安静。
 
 ### 8.7 失败类型分类
 
@@ -729,8 +738,16 @@ runner 输出必须写入当前运行目录，并与 `xiaoqing-test-results.json
 - 漏回复。
 - 对象识别错误。
 - 话题串线。
+- 长时间空档后继续追逐旧话题、旧图片或旧追问。
 - 跨群/跨私聊记忆泄露。
 - 人设漂移。
+- 人物日常创作越界为精确身份、重大经历、现实关系或现实承诺。
+- 人物日常小故事与稳定人设或可靠记忆冲突，或者被拿来给外部事实背书。
+- 臆测第三方习惯、动机、是否在场或群体状态。
+- 没有信息缺口却习惯性反问、连续追问或每条都用问题收尾。
+- 调侃脱离当前内容、冒犯隐私或拿真实伤处开玩笑。
+- 忽略用户最新明确交流约束。
+- 普通知识问题被人物门禁误杀并返回固定回避话术。
 - 客服腔/助手腔。
 - 说教腔。
 - 回复过长。
@@ -808,7 +825,7 @@ runner 输出必须写入当前运行目录，并与 `xiaoqing-test-results.json
 - metadata 缺字段。
 - raw_message 与 segments 不一致。
 
-如果真实 vision provider 可用，核心图片理解和图片群聊效果尽量使用真实 vision。mock/fake vision 只用于超时、异常、格式错误、不可访问图片、坏图和安全边界。
+如果真实 vision route 可用，核心图片理解和图片群聊效果尽量使用真实视觉 profile。mock/fake vision 只用于超时、异常、格式错误、不可访问图片、坏图和安全边界。
 
 ### 10.2 出站媒体
 
@@ -843,6 +860,8 @@ runner 输出必须写入当前运行目录，并与 `xiaoqing-test-results.json
 必须测试：
 
 - 当前会话上下文写入和读取。
+- 相邻消息超过 `memory.conversation_idle_gap_seconds` 后，即时历史只保留空档后的片段，旧 goal、PFC、action history、thinking-back 和 topic summary 被清除。
+- 使用三天前图片/话题与当前新图片/新问题构造回归，确认回复不再回到旧媒体；同时确认完整 `MemoryStore` 未删除，明确回忆旧事仍可检索。
 - 长期记忆写入、检索、去重、衰减或清理。
 - 用户画像、昵称、群名片变化。
 - 表达学习。
@@ -906,7 +925,7 @@ runner 输出必须写入当前运行目录，并与 `xiaoqing-test-results.json
 
 ---
 
-## 13. 配置、secrets、provider 和热重载
+## 13. 配置、统一 AI registry 和热重载
 
 必须检查：
 
@@ -914,14 +933,14 @@ runner 输出必须写入当前运行目录，并与 `xiaoqing-test-results.json
 - config 示例和实际读取字段一致。
 - secrets 示例和实际读取字段一致。
 - 缺字段。
-- 空 provider。
-- provider 名称不存在。
-- model 为空。
-- api_base 为空。
+- route 的 `models` 为空或包含重复 profile。
+- model profile、provider 引用不存在。
+- model ID 或 provider API Base 为空。
+- `secrets.ai.providers.<provider>.api_key` 缺失。
 - temperature / top_p / timeout 非法值。
-- vision provider 缺失。
-- 环境变量覆盖。
-- runtime provider 切换。
+- vision route 缺失或 profile 不含 `image` 模态。
+- route fallback 顺序、错误类别和总超时。
+- runtime profile 固定与 `/xc 模型 默认` 恢复 fallback。
 - admin 权限控制。
 - non-admin 禁止切换或读取敏感配置。
 - 热重载后状态和任务不重复。
@@ -1025,7 +1044,7 @@ runner 输出必须写入当前运行目录，并与 `xiaoqing-test-results.json
 - README / docs 是否和实现一致。
 - 配置示例字段是否完整。
 - secrets 示例是否完整且不含真实 secrets。
-- provider/vision provider 配置说明是否能让新人跑起来。
+- provider/model/route 和统一凭据说明是否能让新人跑起来。
 - 群聊触发、频率、概率、冷却说明是否准确。
 - media、mface、face、图片目录说明是否准确。
 - 深度对话、PFC、记忆、表达、黑话说明是否准确。
@@ -1111,13 +1130,7 @@ P0/P1 必须尽力修复。P2 尽量修复。P3 可以记录，但容易修复�
 ```bash
 git status
 git diff
-python -m pytest tests/plugins/test_xiaoqing_chat.py
-python -m pytest tests/plugins/test_xiaoqing_chat_media.py
-python -m pytest tests/plugins/test_reply_checker.py
-python -m pytest tests/plugins/test_xiaoqing_prompt_builder.py
-python -m pytest tests/plugins/test_xiaoqing_reply_payload.py
-python -m pytest tests/plugins -k xiaoqing
-python -m pytest tests -k "xiaoqing or reply_checker"
+python -m pytest tests/plugins -k "xiaoqing_chat or reply_checker"
 ```
 
 还应新增或执行：
@@ -1154,7 +1167,7 @@ python -m pytest tests -k "xiaoqing or reply_checker"
 8. mock/fake LLM 结果没有被用作真实拟人效果通过依据。
 9. 真实 store / data_dir / db / json 持久化已校验。
 10. 多群、多用户、私聊隔离已校验。
-11. provider、vision、secrets、配置脱敏已校验。
+11. provider、model profile、文本/视觉 route、统一凭据和配置脱敏已校验。
 12. 安全专项至少覆盖 prompt injection、secrets 泄露、路径穿越、SSRF、CQ/segment 注入和大输入。
 13. 并发、后台任务、shutdown flush 已覆盖。
 14. 冗余代码候选经过动态入口核查，删除项已回归。
@@ -1170,18 +1183,18 @@ python -m pytest tests -k "xiaoqing or reply_checker"
 必须生成：
 
 ```text
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-final-report.md
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-coverage-summary.md
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-defects.md
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-transcripts/
-plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-test-results.jsonl
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-final-report.md
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-coverage-summary.md
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-defects.md
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-group-transcripts/
+test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-test-results.jsonl
 ```
 
 最终报告至少包含：
 
 1. 执行摘要。
 2. RUN_ID 和测试环境。
-3. 真实 LLM provider/model/config 摘要，不含 secrets。
+3. 真实 LLM route/provider/profile/model 摘要，不含 secrets。
 4. 真实 LLM 与 mock/fake LLM 边界说明。
 5. 状态文件和断点续测说明。
 6. 代码阅读总结。
@@ -1204,7 +1217,7 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-test-results.jsonl
 23. 多群、多用户、私聊隔离结果。
 24. PFC、目标、心流、回复检查结果。
 25. 深度对话模式结果。
-26. provider、vision provider、配置、secrets、热重载结果。
+26. provider、model profile、文本/视觉 route、统一凭据和热重载结果。
 27. 真实持久化 store 校验结果。
 28. HTTP/OneBot 入站集成结果，若可执行。
 29. 安全专项结果。
@@ -1317,7 +1330,7 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-test-results.jsonl
 14. 最严重的群聊拟人问题是什么，是否已修复。
 15. 是否认为小青在真实 LLM 群聊 transcript 中已经像自然群友，而不是客服型机器人。
 16. 记忆、表达、黑话、PFC、回复检查、深度对话是否通过。
-17. 配置、secrets、provider、vision provider 是否通过。
+17. 统一 AI 配置、凭据、provider、文本/视觉 route 是否通过。
 18. 发现问题数量，按 P0/P1/P2/P3 分类。
 19. 修复问题数量。
 20. 新增或修改的测试。
@@ -1339,17 +1352,17 @@ plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-test-results.jsonl
 ```text
 不要根据聊天摘要继续。请读取：
 
-1. plugins/xiaoqing_chat/test_reports/CURRENT_RUN_ID.txt
-2. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-run-state.json
-3. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-command-inventory.json
-4. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-command-parameter-matrix.json
-5. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-onebot-event-matrix.json
-6. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-trigger-matrix.json
-7. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-storage-matrix.json
-8. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-group-script-matrix.json
-9. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-test-results.jsonl
-10. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-next-actions.md
-11. plugins/xiaoqing_chat/test_reports/runs/<RUN_ID>/xiaoqing-session-handoff.md
+1. test_reports/runs/plugins/xiaoqing_chat/CURRENT_RUN_ID.txt
+2. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-run-state.json
+3. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-command-inventory.json
+4. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-command-parameter-matrix.json
+5. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-onebot-event-matrix.json
+6. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-trigger-matrix.json
+7. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-storage-matrix.json
+8. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-group-script-matrix.json
+9. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-test-results.jsonl
+10. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-next-actions.md
+11. test_reports/runs/plugins/xiaoqing_chat/<RUN_ID>/xiaoqing-session-handoff.md
 
 按 case_id 和 attempt 重建真实进度，输出 PASS / FAIL / BLOCKED / SKIPPED / NEEDS_RETEST / PENDING 数量，列出接下来 10 个待执行 case_id，然后从第一个 pending 或需要回归的 case 继续。
 ```

@@ -34,36 +34,15 @@ async def _build_memory_block(
     planner_question: str,
     bot_name: str,
 ) -> str:
-    """
-    Build the memory context block by retrieving relevant conversational memories.
-
-    This function performs vector similarity search to find relevant past
-    conversations and returns them as a formatted context block for the LLM.
-
-    Args:
-        context: The plugin context
-        runtime: The chat runtime configuration
-        state: The global state object
-        secrets: API secrets for LLM calls
-        data_dir: The data directory for persistence
-        chat_id: The chat/group identifier
-        history: The conversation history
-        current_text: The current user message
-        planner_question: The question from the planner (for retrieval)
-        bot_name: The bot's name
-
-    Returns:
-        A formatted string containing relevant memories, or empty string if retrieval fails.
-    """
+    """检索相关会话记忆，并构造成供模型使用的上下文片段。"""
     mem_t0 = time.monotonic()
     memory_block = ""
     try:
-        fg = _resolve_llm_config(runtime.cfg, secrets, foreground=True)
+        fg = _resolve_llm_config(runtime.cfg, foreground=True)
         memory_block = await asyncio.wait_for(
             build_memory_block(
                 data_dir=data_dir,
                 chat_id=chat_id,
-                http_session=context.http_session,
                 secrets=secrets,
                 cfg=runtime.cfg.memory,
                 bot_name=bot_name,
@@ -74,7 +53,7 @@ async def _build_memory_block(
                 temperature=runtime.cfg.temperature,
                 top_p=runtime.cfg.top_p,
                 max_tokens=runtime.cfg.max_tokens,
-                **fg.to_dict(),
+                timeout_seconds=fg.timeout_seconds,
             ),
             timeout=MEMORY_RETRIEVAL_TIMEOUT,
         )
@@ -122,18 +101,7 @@ async def _build_memory_block(
 
 
 def _build_profile_block(state, data_dir, chat_id: str, event: dict[str, Any]) -> str:
-    """
-    Build the user profile context block.
-
-    Args:
-        state: The global state object
-        data_dir: The data directory for persistence
-        chat_id: The chat/group identifier
-        event: The OneBot event dictionary
-
-    Returns:
-        A formatted string containing user profile information.
-    """
+    """读取当前发送者画像并构造上下文片段。"""
     state.memory_db.bind(data_dir)
     return build_profile_block(state.memory_db, chat_id=chat_id, subject_id=event.get("user_id"))
 
@@ -144,49 +112,35 @@ def _build_expression_block(runtime: _ChatRuntime, state, data_dir, chat_id: str
     state.bw_expr_store.bind(data_dir)
     expr_items = state.bw_expr_store.load()
     candidates = []
-    auto_min = max(0, int(getattr(runtime.cfg.expression, "auto_inject_min_count", 0)))
     for ex in expr_items:
         if ex.rejected:
             continue
         if ex.chat_id != chat_id:
             continue
-        reflection_cfg = getattr(runtime.cfg, "reflection", None)
-        require_checked = bool(
-            getattr(reflection_cfg, "enable_expression_reflection", False)
-            or getattr(reflection_cfg, "require_approval_for_injection", True)
-        )
+        require_checked = runtime.cfg.reflection.require_approval_for_injection
         if require_checked and not ex.checked:
-            # auto_inject_min_count 阈值：count 足够高时跳过审核要求
-            if auto_min <= 0 or int(getattr(ex, "count", 0) or 0) < auto_min:
-                continue
+            # “需要审核”必须是硬约束，出现次数不能绕过人工判断。
+            continue
         candidates.append(ex)
     candidates.sort(key=lambda x: (-x.count, -x.last_active_time))
-    max_inj = max(0, int(runtime.cfg.expression.max_injected or EXPRESSION_MAX_INJ_DEFAULT))
+    # 即使管理员主动开启选择器，每轮也只给一个提示，避免全局高频口癖淹没上下文。
+    max_inj = min(
+        1,
+        max(0, int(runtime.cfg.expression.max_injected or EXPRESSION_MAX_INJ_DEFAULT)),
+    )
     picked = candidates[:max_inj] if max_inj else []
     if not picked:
         return ""
     lines = []
     for ex in picked:
-        lines.append(f"- 当{ex.situation}：{ex.style}")
+        situation = str(ex.situation or "").strip()
+        prefix = "" if situation.startswith("当") else "当"
+        lines.append(f"- {prefix}{situation}：{ex.style}")
     return "表达习惯（可参考，别生硬照抄）：\n" + "\n".join(lines)
 
 
-def _build_knowledge_block(runtime: _ChatRuntime, state, data_dir, chat_id: str, text: str) -> str:
-    """
-    Build the knowledge base context block.
-
-    Queries the vector knowledge base for relevant entries and formats them.
-
-    Args:
-        runtime: The chat runtime configuration
-        state: The global state object
-        data_dir: The data directory for persistence
-        chat_id: The chat/group identifier
-        text: The text to query against
-
-    Returns:
-        A formatted string with relevant knowledge entries, or empty string if none found.
-    """
+def _build_knowledge_block(runtime: _ChatRuntime, state, text: str) -> str:
+    """查询全局知识库并构造提示词片段。"""
     if not runtime.cfg.knowledge.enable_knowledge or runtime.cfg.knowledge.top_k <= 0:
         return ""
     kb_items = state.memory_db.query_global(
@@ -204,23 +158,8 @@ def _build_knowledge_block(runtime: _ChatRuntime, state, data_dir, chat_id: str,
     return kb_block
 
 
-def _build_jargon_explanation(
-    runtime: _ChatRuntime, state, data_dir, chat_id: str, unknown_words: list[str]
-) -> str:
-    """
-    Build the jargon/slang explanation context block.
-
-    Looks up definitions for unknown words detected by the planner.
-
-    Args:
-        runtime: The chat runtime configuration
-        state: The global state object
-        data_dir: The data directory for persistence
-        unknown_words: List of words to look up
-
-    Returns:
-        A formatted string with word definitions, or empty string if none found.
-    """
+def _build_jargon_explanation(state, data_dir, chat_id: str, unknown_words: list[str]) -> str:
+    """优先从长期记忆、再从当前会话黑话库解释未知词。"""
     if not unknown_words:
         return ""
     jargon_db = None
@@ -244,7 +183,6 @@ def _build_jargon_explanation(
 
 
 async def _build_tool_info_block(
-    runtime: _ChatRuntime,
     state,
     data_dir,
     bot_name: str,
@@ -252,16 +190,12 @@ async def _build_tool_info_block(
     event: dict[str, Any],
     goal: str,
 ) -> str:
-    """Build the tool info context block.
-
-    Note: This is a pure builder — it does NOT modify external state.
-    Timestamp window cleanup is the caller's responsibility.
-    """
+    """只读构造工具状态片段；时间窗口清理由调用方负责。"""
     now = time.time()
     last = state.get_last_reply_ts(chat_id)
     cooldown_until = state.get_continuous_cooldown_until(chat_id)
     cooldown_left = max(0.0, cooldown_until - now)
-    # Read-only: filter but don't persist the cleaned window
+    # 这里只过滤快照，不在构造提示词时修改持久状态。
     window = [t for t in state.get_reply_timestamps(chat_id) if now - t < 60.0]
     recent_actions = []
     for r in await state.action_history.get_recent_async(chat_id, max_items=8):

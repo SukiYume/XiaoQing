@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 
 def _split_chat_reply(text: str) -> list[str]:
     """
@@ -57,25 +55,3 @@ def _split_chat_reply(text: str) -> list[str]:
         messages.append("\n".join(current_message).strip())
 
     return [m for m in messages if m]
-
-def _build_reply_segments(text: str, *, reply_to_message_id: int | None) -> list[dict[str, Any]]:
-    """
-    构建回复消息段
-
-    Args:
-        text: 回复文本
-        reply_to_message_id: 引用的消息ID（可选）
-
-    Returns:
-        消息段列表
-    """
-    from core.plugin_base import segments
-
-    segs = segments(text)
-    if reply_to_message_id is None:
-        return segs
-    try:
-        msg_id = int(reply_to_message_id)
-    except (TypeError, ValueError):
-        return segs
-    return [{"type": "reply", "data": {"id": str(msg_id)}}, *segs]

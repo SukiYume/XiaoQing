@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import random
 import re
 import time
 from pathlib import Path
 from typing import Any
 
+from core.interfaces import ACTION_RESULT_MESSAGE_ID_KEY
 from core.message import extract_text
 from core.plugin_base import segments
 from core.public_errors import public_error_message, public_error_response
@@ -32,9 +34,6 @@ from .handlers_internal import (
     get_bound_state as _get_bound_state_impl,
 )
 from .handlers_internal import (
-    get_data_dir as _get_data_dir_impl,
-)
-from .handlers_internal import (
     handle_config_impl,
     handle_expression_impl,
     handle_internal_impl,
@@ -44,13 +43,10 @@ from .handlers_internal import (
     handle_review_impl,
 )
 from .handlers_internal import (
-    is_admin_operator as _is_admin_operator_impl,
+    is_admin_operator as _is_admin_operator,
 )
 from .handlers_internal import (
-    is_global_admin_operator as _is_global_admin_operator_impl,
-)
-from .handlers_internal import (
-    short_base as _short_base_impl,
+    is_global_admin_operator as _is_global_admin_operator,
 )
 from .helper_utils import (
     _chat_id,
@@ -68,15 +64,19 @@ from .helper_utils import (
 )
 from .llm.reply_checker import ReplyRejected
 from .logging_utils import _log_step
-from .media import build_effective_user_text
+from .media.event_media import build_effective_user_text
+from .memory.fact_extraction_checkpoint import clear_fact_extraction_checkpoint
+from .memory.memory import idle_gap_before_turn
 from .memory.review_sessions import get_goal_override
+from .memory.thinking_back import clear_records as clear_thinking_back_records
+from .memory.topic_summary_cache import clear_topic_summary_entries
 from .message_parts import (
     build_message_parts,
     build_text_message_parts,
     normalize_message_parts,
 )
 from .planning.action_history import ActionRecord
-from .planning.goal_state import derive_goal_async
+from .planning.goal_state import derive_goal_async, is_low_information_turn
 from .planning.pfc_engine import run_pfc_once
 from .reply_generator import _generate_reply_draft
 from .reply_payload import build_reply_payload_from_parts
@@ -86,7 +86,6 @@ from .smalltalk_execution import (
     generate_smalltalk_turn_impl,
 )
 from .smalltalk_media_helpers import (
-    _assistant_reply_parts,
     _display_reply_text,
     _event_media_items_for_memory,
     _mark_reply_media_used,
@@ -117,8 +116,8 @@ def _refresh_mood_state(runtime, state, chat_id: str) -> str:
     - 没有可用 mood → 按 state_probability 摇是否进入某个 state；
       命中后随机一个时长（在 [min,max] 之间），写入 state 缓存。
     """
-    cfg = getattr(runtime.cfg, "personality", None)
-    states = list(getattr(cfg, "states", []) or [])
+    cfg = runtime.cfg.personality
+    states = list(cfg.states)
     if not states:
         return ""
 
@@ -126,9 +125,7 @@ def _refresh_mood_state(runtime, state, chat_id: str) -> str:
     last_observe = float(state.get_last_observe_ts(chat_id) or 0.0)
     last_reply = float(state.get_last_reply_ts(chat_id) or 0.0)
     last_active = max(last_observe, last_reply)
-    idle_threshold = max(
-        0.0, float(getattr(cfg, "state_force_refresh_after_idle_seconds", 14400.0))
-    )
+    idle_threshold = max(0.0, cfg.state_force_refresh_after_idle_seconds)
 
     current = state.get_mood_state(chat_id)
     if current and idle_threshold > 0 and last_active and (now - last_active) > idle_threshold:
@@ -138,12 +135,12 @@ def _refresh_mood_state(runtime, state, chat_id: str) -> str:
     if current:
         return current
 
-    if random.random() >= float(getattr(cfg, "state_probability", 0.30)):
+    if random.random() >= cfg.state_probability:
         return ""
 
     new_mood = random.choice(states)
-    min_d = max(60.0, float(getattr(cfg, "state_min_duration_seconds", 7200.0)))
-    max_d = max(min_d, float(getattr(cfg, "state_max_duration_seconds", 21600.0)))
+    min_d = max(60.0, cfg.state_min_duration_seconds)
+    max_d = max(min_d, cfg.state_max_duration_seconds)
     duration = random.uniform(min_d, max_d)
     state.set_mood_state(chat_id, new_mood, duration_seconds=duration)
     return new_mood
@@ -165,7 +162,7 @@ def _should_skip_external_bot_memory(text: str, source_plugin: str, cfg: Any | N
     source = str(source_plugin or "").strip().lower()
     noisy_plugins = {
         str(item or "").strip().lower()
-        for item in getattr(cfg, "noisy_external_source_plugins", []) or []
+        for item in (cfg.noisy_external_source_plugins if cfg is not None else ())
         if str(item or "").strip()
     }
     if source in noisy_plugins:
@@ -260,19 +257,11 @@ def _clear_review_state(state, chat_id: str) -> None:
         clear_sessions(chat_id)
 
 
-async def _reset_pfc_state(state, chat_id: str) -> None:
-    pfc_st = await state.pfc_state_store.get_async(chat_id)
-    pfc_st.ended = False
-    pfc_st.ignore_until_ts = 0.0
-    pfc_st.last_successful_reply_action = ""
-    pfc_st.goal_list = []
-    pfc_st.knowledge_list = []
-    pfc_st.planner_fail_ts = []
-    pfc_st.planner_skip_until = 0.0
-    await state.pfc_state_store.save_async(chat_id)
-
-
 def _reset_reply_tracking(state, chat_id: str) -> None:
+    clear_transient = getattr(state, "clear_transient_chat_state", None)
+    if callable(clear_transient):
+        clear_transient(chat_id)
+        return
     if hasattr(state, "set_continuous_reply_count"):
         state.set_continuous_reply_count(chat_id, 0)
     if hasattr(state, "set_continuous_cooldown_until"):
@@ -283,15 +272,100 @@ def _reset_reply_tracking(state, chat_id: str) -> None:
         state.set_last_reply_ts(chat_id, 0.0)
 
 
-async def _reset_chat_session(state, chat_id: str) -> None:
-    state.memory_store.clear(chat_id)
+async def _reset_chat_session(state, chat_id: str, data_dir: Path) -> None:
+    """清除会话私有状态；媒体注册表按 media_key 全局共享，不能按 chat_id 删除。"""
+
+    # clear() 需要等待已经进入 asyncio.to_thread()、无法取消的持久化任务，
+    # 因此把这段等待也放到事件循环之外。
+    await asyncio.to_thread(state.memory_store.clear, chat_id)
+    memory_db = getattr(state, "memory_db", None)
+    delete_chat = getattr(memory_db, "delete_chat", None)
+    if callable(delete_chat):
+        deleted = await asyncio.to_thread(delete_chat, chat_id)
+        save = getattr(memory_db, "save", None)
+        if deleted and callable(save):
+            # save() 自带串行保存锁；即使旧的防抖保存已经进入线程，
+            # 这里的最终保存也会在其后提交删除后的最新快照。
+            await asyncio.to_thread(save)
     await _clear_store_entry(state.goal_store, chat_id)
     await _clear_store_entry(state.heartflow, chat_id)
     if hasattr(state.action_history, "clear"):
-        state.action_history.clear(chat_id)
-    _clear_review_state(state, chat_id)
-    await _reset_pfc_state(state, chat_id)
+        await asyncio.to_thread(state.action_history.clear, chat_id)
+    await asyncio.to_thread(_clear_review_state, state, chat_id)
+    await _clear_store_entry(state.pfc_state_store, chat_id)
+    await asyncio.to_thread(clear_thinking_back_records, data_dir=data_dir, chat_id=chat_id)
+    await asyncio.to_thread(clear_topic_summary_entries, data_dir, chat_id)
+    await asyncio.to_thread(clear_fact_extraction_checkpoint, data_dir, chat_id)
+    await _clear_store_entry(state.bw_expr_store, chat_id)
+    await _clear_store_entry(state.bw_jargon_store, chat_id)
+    await _clear_store_entry(state.bw_recorder, chat_id)
+    await _clear_store_entry(state.bw_tracker_store, chat_id)
     _reset_reply_tracking(state, chat_id)
+
+
+async def _reset_transient_conversation_state(state, chat_id: str, data_dir: Path) -> None:
+    """长空档后清掉旧话题的短期状态，但保留可显式检索的完整聊天历史。"""
+
+    await _clear_store_entry(state.goal_store, chat_id)
+    await _clear_store_entry(state.heartflow, chat_id)
+    if hasattr(state.action_history, "clear"):
+        await asyncio.to_thread(state.action_history.clear, chat_id)
+    await _clear_store_entry(state.pfc_state_store, chat_id)
+    await asyncio.to_thread(clear_thinking_back_records, data_dir=data_dir, chat_id=chat_id)
+    await asyncio.to_thread(clear_topic_summary_entries, data_dir, chat_id)
+    _reset_reply_tracking(state, chat_id)
+
+
+async def _maybe_reset_idle_conversation(
+    event: dict[str, Any],
+    context,
+    runtime,
+    state,
+    *,
+    chat_id: str,
+) -> float:
+    """识别本轮前的长时间空档，并且每个事件最多重置一次。"""
+
+    if event.get("_xc_idle_context_checked"):
+        return 0.0
+    event["_xc_idle_context_checked"] = True
+
+    memory_cfg = getattr(runtime.cfg, "memory", None)
+    threshold = max(
+        0.0,
+        float(getattr(memory_cfg, "conversation_idle_gap_seconds", 1800.0) or 0.0),
+    )
+    if threshold <= 0:
+        return 0.0
+
+    getter = getattr(state.memory_store, "get_recent_async", None)
+    if not callable(getter):
+        return 0.0
+    pending_history = getter(chat_id, max_items=2)
+    if not inspect.isawaitable(pending_history):
+        return 0.0
+    history = await pending_history
+    if not isinstance(history, (list, tuple)):
+        return 0.0
+    idle_gap = idle_gap_before_turn(
+        history,
+        current_local_id=str(event.get("_xc_user_recorded_local_id") or ""),
+    )
+    if idle_gap <= threshold:
+        return 0.0
+
+    await _reset_transient_conversation_state(state, chat_id, context.data_dir)
+    _log_step(
+        context,
+        runtime,
+        chat_id=chat_id,
+        step="smalltalk.context.reset_idle",
+        fields={
+            "idle_seconds": round(idle_gap, 3),
+            "threshold_seconds": round(threshold, 3),
+        },
+    )
+    return idle_gap
 
 
 async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
@@ -314,7 +388,7 @@ async def handle_smalltalk(clean_text: str, event: dict[str, Any], context) -> l
     max_replan = 1
     try:
         runtime = _load_runtime(context)
-        max_replan = max(0, int(getattr(runtime.cfg.reply_check, "max_replan", 1)))
+        max_replan = max(0, runtime.cfg.reply_check.max_replan)
         hctx = HandlerContext.from_event(event, context, runtime=runtime)
     except Exception:
         hctx = None
@@ -378,7 +452,7 @@ def _is_prefixed_xc_command_observation(clean_text: str, event: dict[str, Any], 
     if not raw_text:
         return False
 
-    config = getattr(context, "config", {}) or {}
+    config = context.get_settings_snapshot().config
     prefixes = tuple(config.get("command_prefixes", ["/"]) or ["/"])
     for prefix in prefixes:
         prefix_text = str(prefix)
@@ -442,13 +516,28 @@ def _outgoing_action_text(action: dict[str, Any]) -> str:
     return extract_text(message).strip()
 
 
+def _event_message_timestamp(event: dict[str, Any]) -> float | None:
+    """采用可信 OneBot 秒级时间；明显无效或来自未来的值回退到本机时钟。"""
+
+    raw = event.get("time")
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        timestamp = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if timestamp <= 0 or timestamp > time.time() + 300.0:
+        return None
+    return timestamp
+
+
 async def observe_outgoing_action(
     action: dict[str, Any],
     context,
     *,
     source_plugin: str = "",
 ) -> list[dict[str, Any]]:
-    """Record text sent by other plugins as XiaoQing's own dialogue context."""
+    """把其他插件以小青身份发送的文本记入对话上下文。"""
     try:
         runtime = _load_runtime(context)
         if not runtime.cfg.enable_smalltalk:
@@ -467,7 +556,7 @@ async def observe_outgoing_action(
         chat_id = _chat_id(event)
         state = _get_bound_state(context)
         async with _get_lock(chat_id):
-            result_message_id = action.get("_result_message_id")
+            result_message_id = action.get(ACTION_RESULT_MESSAGE_ID_KEY)
             if str(source_plugin or "").strip() == "xiaoqing_chat":
                 if state.memory_store.attach_latest_assistant_message_id(
                     chat_id, result_message_id
@@ -576,6 +665,7 @@ async def _ensure_user_message_recorded(
         message_id=msg_id,
         local_id=local_id,
         parts=message_parts,
+        ts=_event_message_timestamp(event),
     )
     _schedule_memory_persist(context, runtime, chat_id=chat_id)
     await state.heartflow.on_user_message_async(chat_id=chat_id)
@@ -605,9 +695,9 @@ async def _record_bot_reply(
     detail: dict[str, Any],
     parts: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
 ) -> list[Any]:
-    """Record assistant reply in memory and action history. Returns history snapshot.
+    """将助手回复写入记忆和动作历史，并返回最新历史快照。
 
-    Must be called inside an async lock for chat_id.
+    调用方必须已经持有 ``chat_id`` 对应的异步锁。
     """
     assistant_local_id = _next_local_id(chat_id)
     state.memory_store.append(
@@ -645,7 +735,6 @@ async def _record_bot_reply(
 
 
 def _build_generated_reply_output(
-    context,
     runtime,
     generated: _GeneratedSmalltalkTurn,
     *,
@@ -715,6 +804,15 @@ async def _prepare_smalltalk_turn(
         )
         return None
 
+    async with _get_lock(chat_id):
+        await _maybe_reset_idle_conversation(
+            event,
+            context,
+            runtime,
+            state,
+            chat_id=chat_id,
+        )
+
     direct_mentioned = _is_at_me(event) or _has_bot_name(event, bot_name)
     is_private = _is_private(event)
     command_forced = bool(event.get("_xc_command_forced"))
@@ -767,6 +865,19 @@ async def _prepare_smalltalk_turn(
         },
     )
 
+    reply_gate_allowed = True
+    if not forced:
+        reply_gate_allowed = await _should_reply(
+            runtime,
+            state,
+            chat_id,
+            text,
+            is_private,
+            runtime.cfg.brain_chat.enable_private_brain_chat,
+        )
+
+    # 先用上一轮状态完成回复门控，再记录本轮观察到的新目标。这样当前消息不会先把
+    # 自己标成“活跃话题”，同时即使本轮不回复，后续仍能看到真正的新话题。
     if runtime.cfg.goal.enable_goal:
         pfc_state_before_gate = await state.pfc_state_store.get_async(chat_id)
         planner_top_goal = ""
@@ -776,12 +887,13 @@ async def _prepare_smalltalk_turn(
                 planner_top_goal = str(planner_goal_list[0].get("goal", "") or "").strip()
         goal = ""
         goal_source = "user"
+        preserve_existing_goal = is_low_information_turn(text)
         if runtime.cfg.reflection.enable_review_sessions:
             override_goal = get_goal_override(state.review_store, chat_id)
             if override_goal:
                 goal = override_goal
                 goal_source = "review"
-        if not goal and not planner_top_goal:
+        if not goal and not planner_top_goal and not preserve_existing_goal:
             goal = await derive_goal_async(
                 data_dir=context.data_dir,
                 chat_id=chat_id,
@@ -793,19 +905,14 @@ async def _prepare_smalltalk_turn(
             _log_step(
                 context, runtime, chat_id=chat_id, step="smalltalk.goal.set", fields={"goal": goal}
             )
-        elif not planner_top_goal:
+        elif not planner_top_goal and not preserve_existing_goal:
             await _clear_store_entry(state.goal_store, chat_id)
             _log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.clear", fields={})
+        elif preserve_existing_goal:
+            _log_step(context, runtime, chat_id=chat_id, step="smalltalk.goal.keep", fields={})
 
     if not forced:
-        if not await _should_reply(
-            runtime,
-            state,
-            chat_id,
-            text,
-            is_private,
-            runtime.cfg.brain_chat.enable_private_brain_chat,
-        ):
+        if not reply_gate_allowed:
             gate_fields = _last_reply_gate_log_fields(state, chat_id)
             gate_fields.update({"text": text})
             if "reason" not in gate_fields:
@@ -823,7 +930,7 @@ async def _prepare_smalltalk_turn(
             return None
 
     if runtime.cfg.reflection.enable_expression_reflection:
-        bg = _resolve_llm_config(runtime.cfg, secrets, foreground=False)
+        bg = _resolve_llm_config(runtime.cfg, foreground=False)
 
         async def _run_reflection() -> None:
             await tick_reflect_tracker(
@@ -848,7 +955,7 @@ async def _prepare_smalltalk_turn(
         _spawn_bg_task(context, _run_reflection(), name=f"reflection:{chat_id}")
         _log_step(context, runtime, chat_id=chat_id, step="smalltalk.reflection.spawn", fields={})
 
-    brain_chat_active = is_brain_chat_active(runtime, is_private, forced)
+    brain_chat_active = is_brain_chat_active(runtime, is_private)
     mood_text = _refresh_mood_state(runtime, state, chat_id)
 
     return _PreparedSmalltalkTurn(
@@ -908,7 +1015,6 @@ async def _finalize_smalltalk_turn(
         get_lock=_get_lock,
         most_recent_user_local_id=_most_recent_user_local_id,
         cancel_generated_tasks=_cancel_generated_tasks,
-        assistant_reply_parts=_assistant_reply_parts,
         build_generated_reply_output=_build_generated_reply_output,
         sync_message_parts_to_registry=_sync_message_parts_to_registry,
         schedule_media_registry_flush=_schedule_media_registry_flush,
@@ -932,25 +1038,11 @@ async def _maybe_reply_smalltalk(
     *,
     hctx: HandlerContext | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    核心闲聊处理逻辑，基于 PFC 规划和回复生成
+    """协调闲聊门控、限流、生成和投递确认。
 
-    该函数协调整个闲聊流程：
-    1. 验证配置并忽略禁用文本
-    2. 将用户消息存储到记忆中
-    3. 如果启用则运行反思任务
-    4. 根据频率规则检查是否应该发送回复
-    5. 在锁外运行 PFC 规划和回复生成
-    6. 在短临界区内存储机器人的回复
-    7. 为摘要和表达学习生成后台任务
-
-    Args:
-        clean_text: 清理后的用户消息文本
-        event: OneBot 事件字典
-        context: 插件上下文
-
-    Returns:
-        回复的消息段字典列表，或空列表
+    准备阶段先重建有效输入并完成 attention/频率门控；进入生成配额后才确保用户消息
+    已记录，并在锁外执行 PFC 或直接回复。机器人状态只在外发成功后提交，摘要和表达
+    学习等后台任务也只在投递确认后启动。
     """
     hctx = hctx or HandlerContext.from_event(event, context)
     runtime = hctx.runtime
@@ -968,12 +1060,10 @@ async def _maybe_reply_smalltalk(
         async with hctx.state.generation_limiter.admit(
             chat_id=hctx.chat_id,
             user_id=user_scope,
-            max_global=max(0, int(getattr(runtime.cfg, "max_generation_inflight_global", 4))),
-            max_per_chat=max(0, int(getattr(runtime.cfg, "max_generation_inflight_per_chat", 1))),
-            max_per_user=max(0, int(getattr(runtime.cfg, "max_generation_inflight_per_user", 1))),
-            max_calls_per_user_per_day=max(
-                0, int(getattr(runtime.cfg, "max_generation_calls_per_user_per_day", 200))
-            ),
+            max_global=max(0, runtime.cfg.max_generation_inflight_global),
+            max_per_chat=max(0, runtime.cfg.max_generation_inflight_per_chat),
+            max_per_user=max(0, runtime.cfg.max_generation_inflight_per_user),
+            max_calls_per_user_per_day=max(0, runtime.cfg.max_generation_calls_per_user_per_day),
         ):
             generated = await _generate_smalltalk_turn(prepared, event, context, hctx)
             return await _finalize_smalltalk_turn(
@@ -1012,9 +1102,7 @@ async def call_bot_name_only_internal(context) -> list[dict[str, Any]]:
     try:
         runtime = _load_runtime(context)
         configured = [
-            str(item).strip()
-            for item in getattr(runtime.cfg, "bot_name_only_replies", []) or []
-            if str(item).strip()
+            str(item).strip() for item in runtime.cfg.bot_name_only_replies if str(item).strip()
         ]
         if configured:
             replies = configured
@@ -1040,7 +1128,7 @@ async def call_bot_name_only_internal(context) -> list[dict[str, Any]]:
     return segments(random.choice(replies))
 
 
-@handle_errors("命令处理")
+@handle_errors
 async def handle_internal(
     command: str, args: str, event: dict[str, Any], context
 ) -> list[dict[str, Any]]:
@@ -1057,17 +1145,16 @@ async def handle_internal(
     )
 
 
-@handle_errors("配置查询")
-async def handle_config(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
+@handle_errors
+async def handle_config(_args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     return await handle_config_impl(
-        args,
         event,
         context,
         handler_context_from_event=HandlerContext.from_event,
     )
 
 
-@handle_errors("记忆检索")
+@handle_errors
 async def handle_memory(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     return await handle_memory_impl(
         args,
@@ -1077,27 +1164,25 @@ async def handle_memory(args: str, event: dict[str, Any], context) -> list[dict[
     )
 
 
-@handle_errors("表达查询")
-async def handle_expression(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
+@handle_errors
+async def handle_expression(_args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     return await handle_expression_impl(
-        args,
         event,
         context,
         handler_context_from_event=HandlerContext.from_event,
     )
 
 
-@handle_errors("黑话查询")
-async def handle_jargon(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
+@handle_errors
+async def handle_jargon(_args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     return await handle_jargon_impl(
-        args,
         event,
         context,
         handler_context_from_event=HandlerContext.from_event,
     )
 
 
-@handle_errors("审查处理")
+@handle_errors
 async def handle_review(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     return await handle_review_impl(
         args,
@@ -1108,10 +1193,6 @@ async def handle_review(args: str, event: dict[str, Any], context) -> list[dict[
     )
 
 
-def _get_data_dir(context) -> Path:
-    return _get_data_dir_impl(context)
-
-
 def _get_bound_state(context):
     return _get_bound_state_impl(
         context,
@@ -1120,15 +1201,7 @@ def _get_bound_state(context):
     )
 
 
-def _is_admin_operator(event: dict[str, Any], context) -> bool:
-    return _is_admin_operator_impl(event, context)
-
-
-def _is_global_admin_operator(event: dict[str, Any], context) -> bool:
-    return _is_global_admin_operator_impl(event, context)
-
-
-@handle_errors("供应商切换")
+@handle_errors
 async def handle_provider(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     return await handle_provider_impl(
         args,
@@ -1138,9 +1211,4 @@ async def handle_provider(args: str, event: dict[str, Any], context) -> list[dic
         chat_id_from_event=_chat_id,
         is_admin_operator_fn=_is_admin_operator,
         is_global_admin_operator_fn=_is_global_admin_operator,
-        short_base_fn=_short_base,
     )
-
-
-def _short_base(url: str) -> str:
-    return _short_base_impl(url)

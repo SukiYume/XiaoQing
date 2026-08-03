@@ -1,27 +1,36 @@
-"""Unified items CRUD API."""
-from datetime import datetime
+"""提供五类 Pendo 条目的统一查询、汇总和原子增删改查端点。"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from ...models.item import ItemType, get_item_type_value
+from ...models.item import get_item_type_value
 from ...services.db import Database
 from ...utils.settings_utils import resolve_default_category
 from ...utils.time_utils import now_in_timezone
 from ...utils.validators import (
+    LEDGER_TRANSACTION_TYPES,
+    TASK_STATUSES,
     derive_reminder_rules,
-    normalize_diary_fields,
-    normalize_event_fields,
-    normalize_ledger_fields,
+    normalize_item_fields,
     normalize_note_fields,
-    normalize_task_fields,
 )
 from ..deps import get_current_user, get_db
-from ..utils import amount_filter_cents
+from ..utils import (
+    amount_filter_cents,
+    infer_item_query_type,
+    item_to_dict,
+    normalize_choice_query,
+    normalize_item_type_query,
+)
 
 router = APIRouter()
 
-DEFAULT_DATE_FIELDS: dict[str | None, str] = {
+DEFAULT_DATE_FIELDS: Final[dict[str | None, str]] = {
     "event": "start_time",
     "task": "plan_date",
     "diary": "diary_date",
@@ -30,17 +39,22 @@ DEFAULT_DATE_FIELDS: dict[str | None, str] = {
     None: "created_at",
 }
 
-ALLOWED_DATE_FIELDS_BY_TYPE: dict[str | None, set[str]] = {
-    "event": {"created_at", "start_time", "end_time"},
-    "task": {"created_at", "plan_date", "deadline_at", "completed_at", "cancelled_at"},
-    "diary": {"created_at", "diary_date", "entry_time"},
-    "ledger": {"created_at", "ledger_date"},
-    "note": {"created_at"},
-    None: set(Database.ALLOWED_DATE_FIELDS),
+ALLOWED_DATE_FIELDS_BY_TYPE: Final[dict[str | None, frozenset[str]]] = {
+    "event": frozenset({"created_at", "start_time", "end_time"}),
+    "task": frozenset({"created_at", "plan_date", "deadline_at", "completed_at", "cancelled_at"}),
+    "diary": frozenset({"created_at", "diary_date", "entry_time"}),
+    "ledger": frozenset({"created_at", "ledger_date"}),
+    "note": frozenset({"created_at"}),
+    None: frozenset(Database.ALLOWED_DATE_FIELDS),
 }
+
+DATE_ONLY_FIELDS: Final = frozenset({"plan_date", "diary_date", "ledger_date"})
+ALLOWED_SORT_FIELDS: Final = frozenset(Database._ALLOWED_SORT_FIELDS)
 
 
 def _entry_time_for_diary_date(now_iso: str, diary_date: str | None) -> str:
+    """把当前本地时间的时分秒附到用户选择的日记日期。"""
+
     date_part = str(diary_date or "").strip()
     if not date_part:
         return now_iso
@@ -48,133 +62,144 @@ def _entry_time_for_diary_date(now_iso: str, diary_date: str | None) -> str:
     return f"{date_part}T{time_part}"
 
 
-EVENT_MUTABLE_FIELDS = {
-    "title",
-    "category",
-    "start_time",
-    "end_time",
-    "location",
-    "timezone",
-    "remind_times",
-    "reminder_rules",
-    "notes",
+EVENT_MUTABLE_FIELDS: Final = frozenset(
+    {
+        "title",
+        "category",
+        "start_time",
+        "end_time",
+        "location",
+        "timezone",
+        "remind_times",
+        "reminder_rules",
+        "notes",
+    }
+)
+
+TASK_MUTABLE_FIELDS: Final = frozenset(
+    {
+        "title",
+        "content",
+        "category",
+        "plan_date",
+        "deadline_at",
+        "priority",
+        "status",
+        "remind_times",
+        "reminder_rules",
+        "repeat_rule",
+        "completed_at",
+        "cancelled_at",
+    }
+)
+
+NOTE_MUTABLE_FIELDS: Final = frozenset(
+    {
+        "title",
+        "content",
+        "category",
+        "tags",
+        "references",
+        "related_items",
+        "last_viewed",
+    }
+)
+
+DIARY_MUTABLE_FIELDS: Final = frozenset(
+    {
+        "title",
+        "content",
+        "diary_date",
+        "mood",
+        "mood_score",
+        "weather",
+        "location",
+        "template_id",
+        "entry_time",
+        "template_answers",
+        "is_favorite",
+    }
+)
+
+LEDGER_MUTABLE_FIELDS: Final = frozenset(
+    {
+        "title",
+        "content",
+        "amount",
+        "amount_cents",
+        "currency",
+        "transaction_type",
+        "ledger_category",
+        "ledger_date",
+        "account_name",
+        "counter_account_name",
+        "merchant",
+        "remark",
+    }
+)
+
+MUTABLE_FIELDS_BY_TYPE: Final[dict[str, frozenset[str]]] = {
+    "event": EVENT_MUTABLE_FIELDS,
+    "task": TASK_MUTABLE_FIELDS,
+    "note": NOTE_MUTABLE_FIELDS,
+    "diary": DIARY_MUTABLE_FIELDS,
+    "ledger": LEDGER_MUTABLE_FIELDS,
 }
 
-TASK_MUTABLE_FIELDS = {
-    "title",
-    "content",
-    "category",
-    "plan_date",
-    "deadline_at",
-    "priority",
-    "status",
-    "remind_times",
-    "reminder_rules",
-    "repeat_rule",
-    "completed_at",
-    "cancelled_at",
-}
-
-NOTE_MUTABLE_FIELDS = {
-    "title",
-    "content",
-    "category",
-    "tags",
-    "references",
-    "related_items",
-    "last_viewed",
-}
-
-DIARY_MUTABLE_FIELDS = {
-    "title",
-    "content",
-    "diary_date",
-    "mood",
-    "mood_score",
-    "weather",
-    "location",
-    "template_id",
-    "entry_time",
-    "template_answers",
-    "is_favorite",
-}
-
-LEDGER_MUTABLE_FIELDS = {
-    "title",
-    "content",
-    "amount",
-    "amount_cents",
-    "currency",
-    "transaction_type",
-    "ledger_category",
-    "ledger_date",
-    "account_name",
-    "counter_account_name",
-    "merchant",
-    "remark",
+FieldDependency = tuple[frozenset[str], frozenset[str]]
+UPDATE_FIELD_DEPENDENCIES: Final[dict[str, tuple[FieldDependency, ...]]] = {
+    "event": (
+        (
+            frozenset({"start_time"}),
+            frozenset({"end_time", "reminder_rules", "remind_times"}),
+        ),
+        (
+            frozenset({"reminder_rules", "remind_times"}),
+            frozenset({"reminder_rules", "remind_times"}),
+        ),
+    ),
+    "task": (
+        (
+            frozenset({"deadline_at", "reminder_rules", "remind_times"}),
+            frozenset({"reminder_rules", "remind_times"}),
+        ),
+        (
+            frozenset({"status", "completed_at", "cancelled_at"}),
+            frozenset({"completed_at", "cancelled_at"}),
+        ),
+    ),
+    "note": (
+        (
+            frozenset({"references", "related_items"}),
+            frozenset({"references", "related_items"}),
+        ),
+    ),
+    "ledger": (
+        (
+            frozenset({"amount", "amount_cents"}),
+            frozenset({"amount", "amount_cents"}),
+        ),
+    ),
 }
 
 
-class ItemCreate(BaseModel):
-    type: str
-    title: str | None = ""
-    content: str | None = ""
-    tags: list[str] = []
-    category: str | None = None
-    # Event fields
-    start_time: str | None = None
-    end_time: str | None = None
-    location: str | None = None
-    timezone: str | None = None
-    remind_times: list[str] | None = None
-    reminder_rules: list[dict] | None = None
-    notes: str | None = None
-    # Task fields
-    plan_date: str | None = None
-    deadline_at: str | None = None
-    priority: int | None = None
-    status: str | None = None
-    repeat_rule: str | None = None
-    completed_at: str | None = None
-    cancelled_at: str | None = None
-    # Diary fields
-    diary_date: str | None = None
-    mood: str | None = None
-    mood_score: int | None = None
-    weather: str | None = None
-    template_id: str | None = None
-    entry_time: str | None = None
-    template_answers: list[dict] | None = None
-    is_favorite: bool | None = None
-    # Ledger fields
-    amount: float | None = None
-    amount_cents: int | None = None
-    currency: str | None = None
-    transaction_type: str | None = None
-    ledger_category: str | None = None
-    ledger_date: str | None = None
-    account_name: str | None = None
-    counter_account_name: str | None = None
-    merchant: str | None = None
-    remark: str | None = None
-    # Note fields
-    references: list[dict] | None = None
-    related_items: list[str] | None = None
+# 当前 Pydantic 运行依赖没有向 Mypy 暴露基类类型，请求字段仍由 FastAPI 校验。
+class _ItemPayload(BaseModel):  # type: ignore[misc]
+    """创建与更新接口共用的可写字段。"""
 
-
-class ItemUpdate(BaseModel):
-    version: int | None = None
     title: str | None = None
     content: str | None = None
     tags: list[str] | None = None
     category: str | None = None
+    # 日程字段
     start_time: str | None = None
     end_time: str | None = None
     location: str | None = None
     timezone: str | None = None
     remind_times: list[str] | None = None
-    reminder_rules: list[dict] | None = None
+    reminder_rules: list[dict[str, Any]] | None = None
     notes: str | None = None
+    # 待办字段
     plan_date: str | None = None
     deadline_at: str | None = None
     priority: int | None = None
@@ -182,14 +207,16 @@ class ItemUpdate(BaseModel):
     repeat_rule: str | None = None
     completed_at: str | None = None
     cancelled_at: str | None = None
+    # 日记字段
     diary_date: str | None = None
     mood: str | None = None
     mood_score: int | None = None
     weather: str | None = None
     template_id: str | None = None
     entry_time: str | None = None
-    template_answers: list[dict] | None = None
+    template_answers: list[dict[str, Any]] | None = None
     is_favorite: bool | None = None
+    # 账目字段
     amount: float | None = None
     amount_cents: int | None = None
     currency: str | None = None
@@ -200,23 +227,29 @@ class ItemUpdate(BaseModel):
     counter_account_name: str | None = None
     merchant: str | None = None
     remark: str | None = None
-    references: list[dict] | None = None
+    # 笔记字段
+    references: list[dict[str, Any]] | None = None
     related_items: list[str] | None = None
 
 
-def _item_to_dict(item) -> dict:
-    """Convert Item dataclass to API response dict."""
-    if hasattr(item, "to_dict"):
-        return item.to_dict()
-    return {}
+class ItemCreate(_ItemPayload):
+    """创建一个受支持类型条目的请求体。"""
+
+    type: str
+    title: str | None = ""
+    content: str | None = ""
+    tags: list[str] = Field(default_factory=list)
 
 
-def _snapshot_item_fields(item, fields: set[str]) -> dict:
-    data = _item_to_dict(item)
-    return {field: data.get(field) for field in fields if field in data and field != "updated_at"}
+class ItemUpdate(_ItemPayload):
+    """按乐观版本号部分更新一个条目的请求体。"""
+
+    version: int | None = None
 
 
-def _collect_note_reference_ids(payload: dict) -> list[str]:
+def _collect_note_reference_ids(payload: dict[str, Any]) -> list[str]:
+    """按首次出现顺序合并笔记引用对象和关联 ID。"""
+
     ids: list[str] = []
     seen: set[str] = set()
     for ref in payload.get("references") or []:
@@ -234,36 +267,12 @@ def _collect_note_reference_ids(payload: dict) -> list[str]:
     return ids
 
 
-def _note_reference_ids_match(left: dict, right: dict) -> bool:
-    left_ids = _collect_note_reference_ids(left)
-    right_ids = _collect_note_reference_ids(right)
-    return len(left_ids) == len(right_ids) and set(left_ids) == set(right_ids)
-
-
-def _requested_note_reference_payload(updates: dict, requested_fields: set[str]) -> dict:
-    payload = {}
-    if "references" in requested_fields:
-        payload["references"] = updates.get("references") or []
-    if "related_items" in requested_fields:
-        payload["related_items"] = updates.get("related_items") or []
-    return normalize_note_fields(payload, partial=True)
-
-
-def _preserve_existing_note_references(item, payload: dict) -> dict:
-    current = _item_to_dict(item)
-    references = current.get("references") if isinstance(current.get("references"), list) else []
-    related_items = (
-        current.get("related_items")
-        if isinstance(current.get("related_items"), list)
-        else _collect_note_reference_ids({"references": references})
-    )
-    payload["references"] = references
-    payload["related_items"] = related_items
-    return payload
-
-
-def _resolve_note_reference_payload(db: Database, owner_id: str, payload: dict) -> dict:
-    """Validate and enrich note references from references/related_items."""
+def _resolve_note_reference_payload(
+    db: Database,
+    owner_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """在所有者范围内批量验证并补齐笔记引用快照。"""
     ids = _collect_note_reference_ids(payload)
 
     if not ids:
@@ -271,26 +280,36 @@ def _resolve_note_reference_payload(db: Database, owner_id: str, payload: dict) 
         payload["related_items"] = []
         return payload
 
-    references: list[dict] = []
+    targets = db.get_items_by_ids(owner_id, ids)
+    missing_ids = [ref_id for ref_id in ids if ref_id not in targets]
+    if missing_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Referenced item not found: {missing_ids[0]}",
+        )
+
+    references: list[dict[str, str]] = []
     for ref_id in ids:
-        target = db.get_item(ref_id, owner_id=owner_id)
-        if target is None:
-            raise HTTPException(status_code=422, detail=f"Referenced item not found: {ref_id}")
+        target = targets[ref_id]
         item_type = get_item_type_value(getattr(target, "type", None), default="item")
-        references.append({
-            "kind": "item",
-            "id": ref_id,
-            "type": item_type,
-            "title": getattr(target, "title", "") or "无标题",
-        })
+        references.append(
+            {
+                "kind": "item",
+                "id": ref_id,
+                "type": item_type,
+                "title": getattr(target, "title", "") or "无标题",
+            }
+        )
 
     payload["references"] = references
     payload["related_items"] = ids
     return payload
 
 
-def _resolve_date_field(type: str | None, date_field: str | None) -> str:
-    item_type = type if type in ALLOWED_DATE_FIELDS_BY_TYPE else None
+def _resolve_date_field(item_type: str | None, date_field: str | None) -> str:
+    """按条目类型选择并校验可用于 SQL 的日期列。"""
+
+    item_type = normalize_item_type_query(item_type)
     if not date_field:
         return DEFAULT_DATE_FIELDS.get(item_type, "created_at")
 
@@ -305,16 +324,106 @@ def _resolve_date_field(type: str | None, date_field: str | None) -> str:
     return date_field
 
 
-def _resolve_category_field(type: str | None) -> str:
-    return "ledger_category" if type == "ledger" else "category"
+def _resolve_category_field(item_type: str | None) -> str:
+    """账目使用专属分类列，其余类型使用通用分类列。"""
+
+    return "ledger_category" if item_type == "ledger" else "category"
 
 
-def _ledger_amount_expr() -> str:
-    return Database._LEDGER_AMOUNT_CENTS_EXPR
+def _normalize_amount_bounds(
+    amount_min: float | None,
+    amount_max: float | None,
+) -> tuple[float | None, float | None]:
+    """按账目整数分规则校验金额边界，并拒绝反向区间。"""
+
+    try:
+        minimum_cents = amount_filter_cents(amount_min) if amount_min is not None else None
+        maximum_cents = amount_filter_cents(amount_max) if amount_max is not None else None
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if minimum_cents is not None and maximum_cents is not None and minimum_cents > maximum_cents:
+        raise HTTPException(status_code=422, detail="amount_min cannot exceed amount_max")
+    return (
+        minimum_cents / 100 if minimum_cents is not None else None,
+        maximum_cents / 100 if maximum_cents is not None else None,
+    )
 
 
-def _shift_event_end_time_if_start_moved(current: dict, updates: dict) -> None:
-    """Preserve event duration when only start_time is patched."""
+def _merge_date_range_inputs(
+    start_date: str | None,
+    end_date: str | None,
+    date_range: str | None,
+) -> tuple[str, str]:
+    """合并两种日期区间输入形式，并拒绝残缺或冲突的参数。"""
+
+    start_text = str(start_date or "").strip()
+    end_text = str(end_date or "").strip()
+    range_text = str(date_range or "").strip()
+    if range_text:
+        if start_text or end_text:
+            raise HTTPException(
+                status_code=422,
+                detail="range cannot be combined with start_date or end_date",
+            )
+        parts = [part.strip() for part in range_text.split("..")]
+        if len(parts) != 2 or not all(parts):
+            raise HTTPException(status_code=422, detail="range must use start..end")
+        start_text, end_text = parts
+    if bool(start_text) != bool(end_text):
+        raise HTTPException(
+            status_code=422,
+            detail="start_date and end_date must be provided together",
+        )
+    return start_text, end_text
+
+
+def _validate_iso_date_order(start_text: str, end_text: str) -> None:
+    """校验 ISO 日期可解析且起点不晚于终点。"""
+
+    try:
+        parsed_start = datetime.fromisoformat(start_text.replace("Z", "+00:00"))
+        parsed_end = datetime.fromisoformat(end_text.replace("Z", "+00:00"))
+        if parsed_start > parsed_end:
+            raise HTTPException(status_code=422, detail="start_date cannot exceed end_date")
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid ISO date range") from exc
+
+
+def _resolve_date_filters(
+    item_type: str | None,
+    date_field: str | None,
+    start_date: str | None,
+    end_date: str | None,
+    date_range: str | None = None,
+) -> dict[str, str]:
+    """校验直接或 ``start..end`` 日期区间，并生成数据库过滤字段。"""
+
+    start_text, end_text = _merge_date_range_inputs(start_date, end_date, date_range)
+    resolved_field = _resolve_date_field(item_type, date_field) if date_field else None
+    if not start_text:
+        return {}
+    resolved_field = resolved_field or _resolve_date_field(item_type, None)
+    _validate_iso_date_order(start_text, end_text)
+    if resolved_field not in DATE_ONLY_FIELDS:
+        if len(start_text) == 10:
+            start_text = f"{start_text}T00:00:00"
+        if len(end_text) == 10:
+            end_text = f"{end_text}T23:59:59"
+    return {
+        "date_field": resolved_field,
+        "start_date": start_text,
+        "end_date": end_text,
+    }
+
+
+def _shift_event_end_time_if_start_moved(
+    current: dict[str, Any],
+    updates: dict[str, Any],
+) -> None:
+    """只修改起始时间时保留原日程持续时长。"""
+
     if "start_time" not in updates or "end_time" in updates:
         return
     old_start = current.get("start_time")
@@ -326,68 +435,132 @@ def _shift_event_end_time_if_start_moved(current: dict, updates: dict) -> None:
         old_start_dt = datetime.fromisoformat(str(old_start))
         old_end_dt = datetime.fromisoformat(str(old_end))
         new_start_dt = datetime.fromisoformat(str(new_start))
-    except ValueError:
+    except (TypeError, ValueError):
         return
     if old_end_dt < old_start_dt:
         return
     updates["end_time"] = (new_start_dt + (old_end_dt - old_start_dt)).isoformat(timespec="seconds")
 
 
-def _build_count_where(
-    type, status, category, priority, start_date, end_date, date_field,
-    amount_min, amount_max, owner_id, keyword: str | None = None,
-    transaction_type: str | None = None, account_name: str | None = None,
-    counter_account_name: str | None = None, merchant: str | None = None,
-):
-    where = ["owner_id = ?", "deleted = 0"]
-    params: list = [owner_id]
-    category_field = _resolve_category_field(type)
-    if type:
-        where.append("type = ?")
-        params.append(type)
-    if status:
-        where.append("status = ?")
-        params.append(status)
-    if category:
-        where.append(f"{category_field} = ?")
-        params.append(category)
-    if priority is not None:
-        where.append("priority = ?")
-        params.append(priority)
-    if transaction_type:
-        where.append("transaction_type = ?")
-        params.append(transaction_type)
-    if account_name:
-        where.append("(account_name = ? OR counter_account_name = ?)")
-        params.extend([account_name, account_name])
-    if counter_account_name:
-        where.append("counter_account_name = ?")
-        params.append(counter_account_name)
-    if merchant:
-        where.append("merchant = ?")
-        params.append(merchant)
-    if amount_min is not None:
-        where.append(f"{_ledger_amount_expr()} >= ?")
-        params.append(amount_filter_cents(amount_min))
-    if amount_max is not None:
-        where.append(f"{_ledger_amount_expr()} <= ?")
-        params.append(amount_filter_cents(amount_max))
-    if start_date and end_date and date_field:
-        where.append(f"{date_field} >= ?")
-        params.append(start_date)
-        where.append(f"{date_field} <= ?")
-        params.append(end_date)
-    if keyword:
-        like = f"%{keyword}%"
-        where.append(
-            """(
-                title LIKE ? OR content LIKE ? OR category LIKE ? OR tags LIKE ? OR
-                ledger_category LIKE ? OR account_name LIKE ? OR counter_account_name LIKE ? OR
-                merchant LIKE ? OR remark LIKE ? OR location LIKE ? OR notes LIKE ? OR weather LIKE ?
-            )"""
+def _prepare_event_update(
+    current: dict[str, Any],
+    updates: dict[str, Any],
+) -> None:
+    """补齐移动日程时必须同步更新的结束时间和相对提醒规则。"""
+
+    _shift_event_end_time_if_start_moved(current, updates)
+    if "reminder_rules" in updates and not updates.get("reminder_rules"):
+        updates["reminder_rules"] = []
+        updates["remind_times"] = []
+    elif "start_time" in updates and "reminder_rules" not in updates:
+        old_rules = current.get("reminder_rules") or derive_reminder_rules(
+            current.get("start_time"),
+            current.get("remind_times"),
         )
-        params.extend([like] * 12)
-    return where, params
+        if old_rules:
+            current["reminder_rules"] = old_rules
+
+
+def _dependent_update_fields(item_type: str, requested_fields: set[str]) -> set[str]:
+    """返回规范化时由请求字段连带生成、也必须落库的字段。"""
+
+    fields: set[str] = set()
+    for triggers, dependents in UPDATE_FIELD_DEPENDENCIES.get(item_type, ()):
+        if triggers & requested_fields:
+            fields.update(dependents)
+    return fields
+
+
+def _resolve_note_reference_update(
+    db: Database,
+    owner_id: str,
+    current: dict[str, Any],
+    updates: dict[str, Any],
+    requested_fields: set[str],
+    normalized: dict[str, Any],
+) -> None:
+    """解析新引用；ID 集合未变时保留旧快照，允许编辑含悬空旧引用的笔记。"""
+
+    reference_fields = {"references", "related_items"} & requested_fields
+    if not reference_fields:
+        return
+    reference_payload = normalize_note_fields(
+        {field: updates.get(field) or [] for field in reference_fields},
+        partial=True,
+    )
+    if set(_collect_note_reference_ids(reference_payload)) == set(
+        _collect_note_reference_ids(current)
+    ):
+        references = current.get("references")
+        reference_payload["references"] = references if isinstance(references, list) else []
+        related_items = current.get("related_items")
+        reference_payload["related_items"] = (
+            related_items
+            if isinstance(related_items, list)
+            else _collect_note_reference_ids({"references": reference_payload["references"]})
+        )
+    else:
+        reference_payload = _resolve_note_reference_payload(db, owner_id, reference_payload)
+    normalized["references"] = reference_payload["references"]
+    normalized["related_items"] = reference_payload["related_items"]
+
+
+def _normalize_update_payload(
+    db: Database,
+    owner_id: str,
+    item_type: str,
+    current: dict[str, Any],
+    requested_updates: dict[str, Any],
+    requested_fields: set[str],
+) -> dict[str, Any]:
+    """合并当前条目，执行统一规范化，并只返回请求字段及必要联动字段。"""
+
+    updates = dict(requested_updates)
+    merged = dict(current)
+    if item_type == "event":
+        _prepare_event_update(merged, updates)
+    if item_type == "ledger" and "amount" in requested_fields:
+        if "amount_cents" not in requested_fields:
+            merged.pop("amount_cents", None)
+    merged.update(updates)
+    normalized = normalize_item_fields(merged, partial=False)
+    if item_type == "note":
+        _resolve_note_reference_update(
+            db,
+            owner_id,
+            current,
+            updates,
+            requested_fields,
+            normalized,
+        )
+    fields_to_apply = requested_fields | _dependent_update_fields(item_type, requested_fields)
+    return {field: normalized[field] for field in fields_to_apply if field in normalized}
+
+
+def _build_update_operation_log(
+    owner_id: str,
+    item_type: str,
+    current: dict[str, Any],
+    updates: dict[str, Any],
+) -> dict[str, Any]:
+    """构造更新审计；笔记记录可恢复的字段前后值。"""
+
+    note_updates = {
+        field: value
+        for field, value in updates.items()
+        if item_type == "note" and field in NOTE_MUTABLE_FIELDS and field != "last_viewed"
+    }
+    if not note_updates:
+        return {"user_id": owner_id, "action": "update", "item_type": item_type}
+    return {
+        "user_id": owner_id,
+        "action": "edit_note",
+        "item_type": "note",
+        "details": {
+            "updates": note_updates,
+            "old_values": {field: current.get(field) for field in note_updates if field in current},
+        },
+    }
 
 
 @router.get("/items/aggregate")
@@ -405,42 +578,52 @@ def aggregate_items(
     amount_max: float | None = None,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    """Return income/expense totals for the given filters (full result set, not paginated)."""
-    _df = _resolve_date_field(type, date_field) if (start_date and end_date) else None
-    where, params = _build_count_where(
-        type, None, category, None, start_date, end_date, _df, amount_min, amount_max, owner_id,
-        transaction_type=transaction_type,
-        account_name=account_name,
-        counter_account_name=counter_account_name,
-        merchant=merchant,
+) -> dict[str, object]:
+    """按完整过滤结果汇总账目收入、支出、转账和条目数。"""
+
+    item_type = normalize_item_type_query(type or "ledger")
+    if item_type != "ledger":
+        raise HTTPException(status_code=422, detail="Aggregate endpoint requires type=ledger")
+    transaction_type = normalize_choice_query(
+        transaction_type,
+        LEDGER_TRANSACTION_TYPES,
+        "transaction_type",
     )
-    conn = db.get_connection()
-    rows = conn.execute(
-        f"""SELECT transaction_type, COALESCE(SUM({_ledger_amount_expr()}), 0), COUNT(*)
-            FROM items WHERE {' AND '.join(where)}
-            GROUP BY transaction_type""",
-        params,
-    ).fetchall()
-    income = expense = transfer = count = 0
-    for row in rows:
-        total = round(float(row[1] or 0) / 100.0, 2)
-        if row[0] == "income":
-            income = total
-        elif row[0] == "expense":
-            expense = total
-        elif row[0] == "transfer":
-            transfer = total
-        count += int(row[2] or 0)
+    amount_min, amount_max = _normalize_amount_bounds(amount_min, amount_max)
+    filters: dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("type", item_type),
+            ("transaction_type", transaction_type),
+            ("account_name", str(account_name or "").strip() or None),
+            ("counter_account_name", str(counter_account_name or "").strip() or None),
+            ("merchant", str(merchant or "").strip() or None),
+            ("amount_min", amount_min),
+            ("amount_max", amount_max),
+        )
+        if value is not None
+    }
+    if category and category.strip():
+        filters["ledger_category"] = category.strip()
+    filters.update(_resolve_date_filters(item_type, date_field, start_date, end_date))
+
+    summary = db.aggregate_item_amounts(owner_id, filters)
+    amounts: dict[str, int] = dict.fromkeys(LEDGER_TRANSACTION_TYPES, 0)
+    count = 0
+    for kind, (amount_cents, item_count) in summary.items():
+        if kind in amounts:
+            amounts[kind] = amount_cents
+        count += item_count
     return {
         "ok": True,
         "data": {
-            "income": income,
-            "expense": expense,
-            "transfer": transfer,
-            "balance": income - expense,
+            "income": amounts["income"] / 100,
+            "expense": amounts["expense"] / 100,
+            "transfer": amounts["transfer"] / 100,
+            "balance": (amounts["income"] - amounts["expense"]) / 100,
             "count": count,
         },
+        "message": "",
     }
 
 
@@ -449,36 +632,46 @@ def list_categories(
     type: str | None = None,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    """Return distinct category values for the given type."""
+) -> dict[str, object]:
+    """返回当前所有者指定类型的非空去重分类。"""
+
+    item_type = normalize_item_type_query(type)
     conn = db.get_connection()
-    category_field = _resolve_category_field(type)
-    where = ["owner_id = ?", "deleted = 0", f"{category_field} IS NOT NULL", f"{category_field} != ''"]
-    params: list = [owner_id]
-    if type:
+    category_field = _resolve_category_field(item_type)
+    where = [
+        "owner_id = ?",
+        "deleted = 0",
+        f"{category_field} IS NOT NULL",
+        f"TRIM({category_field}) != ''",
+    ]
+    params: list[Any] = [owner_id]
+    if item_type:
         where.append("type = ?")
-        params.append(type)
+        params.append(item_type)
     rows = conn.execute(
-        f"SELECT DISTINCT {category_field} FROM items WHERE {' AND '.join(where)} ORDER BY {category_field}",
+        f"SELECT DISTINCT TRIM({category_field}) AS category "
+        f"FROM items WHERE {' AND '.join(where)} ORDER BY category",
         params,
     ).fetchall()
-    return {"ok": True, "data": {"categories": [r[0] for r in rows]}}
+    categories = [str(row[0]) for row in rows]
+    return {"ok": True, "data": {"categories": categories}, "message": ""}
 
 
 @router.get("/items/ledger/accounts")
 def list_ledger_accounts(
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    """Return distinct ledger account names from both sides of transfers."""
+) -> dict[str, object]:
+    """返回账目两侧出现过的账户名；空数据提供现金默认项。"""
+
     conn = db.get_connection()
     rows = conn.execute(
         """
-        SELECT account_name AS account FROM items
+        SELECT TRIM(account_name) AS account FROM items
         WHERE owner_id = ? AND type = 'ledger' AND deleted = 0
           AND account_name IS NOT NULL AND TRIM(account_name) != ''
         UNION
-        SELECT counter_account_name AS account FROM items
+        SELECT TRIM(counter_account_name) AS account FROM items
         WHERE owner_id = ? AND type = 'ledger' AND deleted = 0
           AND counter_account_name IS NOT NULL AND TRIM(counter_account_name) != ''
         ORDER BY account
@@ -488,7 +681,7 @@ def list_ledger_accounts(
     accounts = [str(row[0]) for row in rows if row[0]]
     if not accounts:
         accounts = ["现金"]
-    return {"ok": True, "data": {"accounts": accounts}}
+    return {"ok": True, "data": {"accounts": accounts}, "message": ""}
 
 
 @router.get("/items")
@@ -508,104 +701,86 @@ def list_items(
     end_date: str | None = None,
     amount_min: float | None = None,
     amount_max: float | None = None,
-    range: str | None = Query(None, alias="range"),
+    date_range: Annotated[str | None, Query(alias="range")] = None,
     sort: str = "created_at",
     order: str = "desc",
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    """List items with filtering and pagination."""
-    filters: dict = {}
-    if type:
-        filters["type"] = type
-    if status:
-        filters["status"] = status
-    if category:
-        filters[_resolve_category_field(type)] = category
-    if tags:
-        filters["tags"] = tags
-    if keyword and keyword.strip():
-        filters["keyword"] = keyword.strip()
-    if priority is not None:
-        filters["priority"] = priority
-    if transaction_type:
-        filters["transaction_type"] = transaction_type
-    if account_name:
-        filters["account_name"] = account_name
-    if counter_account_name:
-        filters["counter_account_name"] = counter_account_name
-    if merchant:
-        filters["merchant"] = merchant
-    if amount_min is not None:
-        filters["amount_min"] = amount_min
-    if amount_max is not None:
-        filters["amount_max"] = amount_max
+) -> dict[str, object]:
+    """按同一过滤契约返回当前页条目和完整匹配总数。"""
 
-    # Sorting
-    _allowed_sort = {
-        "created_at",
-        "updated_at",
-        "ledger_date",
-        "plan_date",
-        "deadline_at",
-        "completed_at",
-        "cancelled_at",
-        "start_time",
-        "diary_date",
-        "entry_time",
-        "amount",
-        "amount_cents",
+    item_type = normalize_item_type_query(type)
+    status = normalize_choice_query(status, TASK_STATUSES, "status")
+    transaction_type = normalize_choice_query(
+        transaction_type,
+        LEDGER_TRANSACTION_TYPES,
+        "transaction_type",
+    )
+    if priority is not None and not 1 <= priority <= 5:
+        raise HTTPException(status_code=422, detail="priority must be between 1 and 5")
+    item_type = infer_item_query_type(
+        item_type,
+        has_task_filters=status is not None or priority is not None,
+        has_ledger_filters=any(
+            value is not None
+            for value in (
+                transaction_type,
+                account_name,
+                counter_account_name,
+                merchant,
+                amount_min,
+                amount_max,
+            )
+        ),
+    )
+    amount_min, amount_max = _normalize_amount_bounds(amount_min, amount_max)
+    if not 1 <= page or not 1 <= page_size <= 100:
+        raise HTTPException(status_code=422, detail="Invalid pagination")
+    if sort not in ALLOWED_SORT_FIELDS:
+        raise HTTPException(status_code=422, detail=f"Invalid sort field: {sort}")
+    normalized_order = str(order).strip().upper()
+    if normalized_order not in {"ASC", "DESC"}:
+        raise HTTPException(status_code=422, detail=f"Invalid sort order: {order}")
+
+    filters: dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("type", item_type),
+            ("status", status),
+            ("tags", str(tags or "").strip() or None),
+            ("keyword", str(keyword or "").strip() or None),
+            ("priority", priority),
+            ("transaction_type", transaction_type),
+            ("account_name", str(account_name or "").strip() or None),
+            ("counter_account_name", str(counter_account_name or "").strip() or None),
+            ("merchant", str(merchant or "").strip() or None),
+            ("amount_min", amount_min),
+            ("amount_max", amount_max),
+        )
+        if value is not None
     }
-    if sort in _allowed_sort:
-        filters["sort_field"] = sort
-        filters["sort_order"] = order.upper()
-
-    # Date filtering: support both direct params and range="start..end" syntax
-    resolved_df: str | None = None
-    if start_date and end_date:
-        resolved_df = _resolve_date_field(type, date_field)
-        filters["date_field"] = resolved_df
-        filters["start_date"] = start_date
-        filters["end_date"] = end_date
-    elif range:
-        parts = range.split("..")
-        if len(parts) == 2:
-            resolved_df = _resolve_date_field(type, date_field)
-            filters["date_field"] = resolved_df
-            filters["start_date"] = parts[0]
-            filters["end_date"] = parts[1]
-            start_date, end_date = parts[0], parts[1]
+    if category and category.strip():
+        filters[_resolve_category_field(item_type)] = category.strip()
+    filters.update(_resolve_date_filters(item_type, date_field, start_date, end_date, date_range))
+    filters["sort_field"] = sort
+    filters["sort_order"] = normalized_order
 
     offset = (page - 1) * page_size
-    items = db.get_items(owner_id, filters=filters, limit=page_size, offset=offset)
-
-    # Count matching all filters
-    count_where, count_params = _build_count_where(
-        type, status, category, priority, start_date, end_date, resolved_df,
-        amount_min, amount_max, owner_id, keyword.strip() if keyword else None,
-        transaction_type=transaction_type,
-        account_name=account_name,
-        counter_account_name=counter_account_name,
-        merchant=merchant,
+    items = db.get_items(
+        owner_id,
+        filters=filters,
+        limit=page_size,
+        offset=offset,
+        use_cache=True,
     )
-    conn = db.get_connection()
-    if tags:
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM items WHERE {' AND '.join(count_where)} AND tags LIKE ?",
-            count_params + [Database.tag_filter_pattern(tags)],
-        ).fetchone()[0]
-    else:
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM items WHERE {' AND '.join(count_where)}",
-            count_params,
-        ).fetchone()[0]
+    total = db.count_items(owner_id, filters)
 
     return {
         "ok": True,
         "data": {
-            "items": [_item_to_dict(item) for item in items],
+            "items": [item_to_dict(item) for item in items],
             "total": total,
         },
         "message": "",
@@ -617,12 +792,13 @@ def get_item(
     item_id: str,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    """Get single item by ID."""
+) -> dict[str, object]:
+    """按所有者和 ID 返回一个未删除条目。"""
+
     item = db.get_item(item_id, owner_id=owner_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
-    return {"ok": True, "data": _item_to_dict(item), "message": ""}
+    return {"ok": True, "data": item_to_dict(item), "message": ""}
 
 
 @router.post("/items", status_code=201)
@@ -630,81 +806,60 @@ def create_item(
     body: ItemCreate,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    """Create a new item."""
-    try:
-        ItemType(body.type)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid type: {body.type}") from exc
+) -> dict[str, object]:
+    """统一规范化请求，并原子写入条目及创建审计。"""
 
-    now = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
-    item_data = {
-        "type": body.type,
-        "title": body.title,
-        "content": body.content,
-        "tags": body.tags,
-        "category": body.category,
-        "owner_id": owner_id,
-        "created_at": now,
-        "updated_at": now,
-        "context": {},
-        "deleted": False,
-    }
+    item_type = normalize_item_type_query(body.type)
+    if item_type is None:  # ``type`` 是必填字段，仅用于帮助类型检查器收窄。
+        raise HTTPException(status_code=422, detail="Item type is required")
 
-    if body.type in {"event", "note"} and not str(item_data.get("category") or "").strip():
+    local_now = now_in_timezone(owner_id, db)
+    local_now_iso = local_now.replace(tzinfo=None).isoformat()
+    storage_now = local_now.astimezone(timezone.utc).isoformat(timespec="seconds")
+    item_data = body.model_dump(exclude_none=True)
+    item_data.update(
+        {
+            "type": item_type,
+            "owner_id": owner_id,
+            "created_at": storage_now,
+            "updated_at": storage_now,
+            "context": {},
+            "deleted": False,
+        }
+    )
+
+    category = str(item_data.get("category") or "").strip()
+    if item_type in {"event", "note"} and (not category or category == "未分类"):
         item_data["category"] = resolve_default_category(db, owner_id)
-    elif body.type in {"event", "note"} and str(item_data.get("category") or "").strip() == "未分类":
-        item_data["category"] = resolve_default_category(db, owner_id)
-
-    # Add type-specific fields (only non-None)
-    for field in type(body).model_fields:
-        if field in ("type", "title", "content", "tags", "category"):
-            continue
-        value = getattr(body, field)
-        if value is not None:
-            item_data[field] = value
-
-    if body.type == "event":
-        try:
-            item_data = normalize_event_fields(item_data, partial=False)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if body.type == "task":
-        try:
-            item_data = normalize_task_fields(item_data, partial=False)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if body.type == "note":
-        try:
-            item_data = normalize_note_fields(item_data, partial=False)
-            if item_data.get("references") or item_data.get("related_items"):
-                item_data = _resolve_note_reference_payload(db, owner_id, item_data)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if body.type == "diary":
+    if item_type == "diary":
         if not item_data.get("entry_time"):
+            # 日记发生时间是用户墙钟；数据库入口会按用户时区唯一化并转 UTC。
             item_data["entry_time"] = _entry_time_for_diary_date(
-                now,
+                local_now_iso,
                 str(item_data.get("diary_date") or ""),
             )
-        try:
-            item_data = normalize_diary_fields(item_data, partial=False)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if not str(item_data.get("title") or "").strip():
-            entry_time = str(item_data.get("entry_time") or now)
-            entry_label = entry_time[11:16] if len(entry_time) >= 16 else ""
-            item_data["title"] = f"{item_data['diary_date']} {entry_label} 日记".strip()
-    if body.type == "ledger":
-        if not item_data.get("ledger_date"):
-            item_data["ledger_date"] = now[:10]
-        try:
-            item_data = normalize_ledger_fields(item_data, partial=False)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if item_type == "ledger" and not item_data.get("ledger_date"):
+        item_data["ledger_date"] = local_now_iso[:10]
 
-    item_id = db.insert_item(item_data)
-    db.log_operation(owner_id, "create", item_type=body.type, item_id=item_id)
+    try:
+        item_data = normalize_item_fields(item_data, partial=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if item_type == "note" and _collect_note_reference_ids(item_data):
+        item_data = _resolve_note_reference_payload(db, owner_id, item_data)
+    if item_type == "diary" and not str(item_data.get("title") or "").strip():
+        entry_time = str(item_data["entry_time"])
+        entry_label = entry_time[11:16] if len(entry_time) >= 16 else ""
+        item_data["title"] = f"{item_data['diary_date']} {entry_label} 日记".strip()
+
+    item_id = db.insert_item(
+        item_data,
+        operation_log={
+            "user_id": owner_id,
+            "action": "create",
+            "item_type": item_type,
+        },
+    )
 
     return {"ok": True, "data": {"id": item_id}, "message": "创建成功"}
 
@@ -715,152 +870,79 @@ def update_item(
     body: ItemUpdate,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    """Update an item."""
+) -> dict[str, object]:
+    """规范化有效变更，并以乐观版本号原子更新条目和审计。"""
+
     item = db.get_item(item_id, owner_id=owner_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    updates = body.model_dump(exclude_unset=True)
-    if not updates:
+    requested_updates = body.model_dump(exclude_unset=True)
+    if not requested_updates:
         raise HTTPException(status_code=422, detail="No fields to update")
-    requested_update_fields = set(updates.keys())
+    requested_updates.pop("version", None)
+    requested_fields = set(requested_updates)
+    if not requested_fields:
+        raise HTTPException(status_code=422, detail="No mutable fields to update")
 
-    item_type = item.type.value if hasattr(item.type, "value") else item.type
-    requested_update_fields.discard("version")
-    updates.pop("version", None)
-    allowed_fields_by_type = {
-        "event": EVENT_MUTABLE_FIELDS,
-        "task": TASK_MUTABLE_FIELDS,
-        "note": NOTE_MUTABLE_FIELDS,
-        "diary": DIARY_MUTABLE_FIELDS,
-        "ledger": LEDGER_MUTABLE_FIELDS,
-    }
-    invalid_fields = requested_update_fields - allowed_fields_by_type.get(item_type, set())
+    item_type = get_item_type_value(getattr(item, "type", None), default="")
+    allowed_fields = MUTABLE_FIELDS_BY_TYPE.get(item_type)
+    if allowed_fields is None:
+        raise HTTPException(status_code=500, detail="Stored item has an unsupported type")
+    invalid_fields = requested_fields - allowed_fields
     if invalid_fields:
         raise HTTPException(
             status_code=422,
             detail=f"Fields are not valid for {item_type}: {', '.join(sorted(invalid_fields))}",
         )
-    if item_type == "event":
-        try:
-            merged = item.to_dict()
-            _shift_event_end_time_if_start_moved(merged, updates)
-            if "reminder_rules" in updates and updates.get("reminder_rules") == []:
-                merged["remind_times"] = []
-                updates["remind_times"] = []
-            elif "start_time" in updates and "reminder_rules" not in updates:
-                old_rules = getattr(item, "reminder_rules", None) or derive_reminder_rules(
-                    getattr(item, "start_time", None),
-                    getattr(item, "remind_times", None),
-                )
-                if old_rules:
-                    merged["reminder_rules"] = old_rules
-            merged.update(updates)
-            normalized = normalize_event_fields(merged, partial=False)
-            for field in EVENT_MUTABLE_FIELDS:
-                if field in normalized:
-                    updates[field] = normalized[field]
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if item_type == "task":
-        try:
-            merged = item.to_dict()
-            merged.update(updates)
-            normalized = normalize_task_fields(merged, partial=False)
-            for field in TASK_MUTABLE_FIELDS:
-                if field in normalized:
-                    updates[field] = normalized[field]
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if item_type == "note":
-        try:
-            merged = item.to_dict()
-            merged.update(updates)
-            normalized = normalize_note_fields(merged, partial=False)
-            note_reference_requested = bool({"references", "related_items"} & requested_update_fields)
-            if note_reference_requested:
-                reference_payload = _requested_note_reference_payload(updates, requested_update_fields)
-                if _note_reference_ids_match(reference_payload, _item_to_dict(item)):
-                    reference_payload = _preserve_existing_note_references(item, reference_payload)
-                else:
-                    reference_payload = _resolve_note_reference_payload(db, owner_id, reference_payload)
-                normalized["references"] = reference_payload["references"]
-                normalized["related_items"] = reference_payload["related_items"]
-            fields_to_apply = NOTE_MUTABLE_FIELDS & requested_update_fields
-            if note_reference_requested:
-                fields_to_apply.update({"references", "related_items"})
-            updates = {
-                field: normalized[field]
-                for field in fields_to_apply
-                if field in normalized
-            }
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if item_type == "diary":
-        try:
-            merged = item.to_dict()
-            merged.update(updates)
-            normalized = normalize_diary_fields(merged, partial=False)
-            for field in DIARY_MUTABLE_FIELDS:
-                if field in normalized:
-                    updates[field] = normalized[field]
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if item_type == "ledger":
-        try:
-            merged = item.to_dict()
-            if "amount" in updates and "amount_cents" not in updates:
-                merged.pop("amount_cents", None)
-            merged.update(updates)
-            normalized = normalize_ledger_fields(merged, partial=False)
-            updates = {
-                field: normalized[field]
-                for field in LEDGER_MUTABLE_FIELDS & requested_update_fields
-                if field in normalized
-            }
-            if {"amount", "amount_cents"} & requested_update_fields:
-                updates["amount"] = normalized["amount"]
-                updates["amount_cents"] = normalized["amount_cents"]
-            if "transaction_type" in requested_update_fields:
-                updates["transaction_type"] = normalized["transaction_type"]
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    note_old_values = None
-    note_logged_updates = None
-    if item_type == "note":
-        note_logged_updates = {
-            field: updates[field]
-            for field in NOTE_MUTABLE_FIELDS
-            if field in updates and field != "last_viewed"
+    current = item_to_dict(item)
+    current_version = int(current.get("version") or 0)
+    if body.version is not None and body.version != current_version:
+        raise HTTPException(
+            status_code=409,
+            detail="Item changed by another request; refresh and retry",
+        )
+    try:
+        normalized_updates = _normalize_update_payload(
+            db,
+            owner_id,
+            item_type,
+            current,
+            requested_updates,
+            requested_fields,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    updates = {
+        field: value for field, value in normalized_updates.items() if current.get(field) != value
+    }
+    if not updates:
+        return {
+            "ok": True,
+            "data": {"id": item_id, "version": current_version},
+            "message": "无变化",
         }
-        if note_logged_updates:
-            note_old_values = _snapshot_item_fields(item, set(note_logged_updates.keys()))
 
-    updates["updated_at"] = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
-    expected_version = body.version if body.version is not None else getattr(item, "version", 0)
+    operation_log = _build_update_operation_log(owner_id, item_type, current, updates)
+
     success = db.update_item(
         item_id,
         updates,
         owner_id=owner_id,
-        expected_version=expected_version,
+        expected_version=current_version,
         item_type=item_type,
+        operation_log=operation_log,
     )
     if not success:
-        raise HTTPException(status_code=409, detail="Item changed by another request; refresh and retry")
-
-    if item_type == "note" and note_logged_updates:
-        db.log_operation(
-            owner_id,
-            "edit_note",
-            item_type="note",
-            item_id=item_id,
-            details={"updates": note_logged_updates, "old_values": note_old_values or {}},
+        raise HTTPException(
+            status_code=409, detail="Item changed by another request; refresh and retry"
         )
-    else:
-        db.log_operation(owner_id, "update", item_type=item_type, item_id=item_id)
-    return {"ok": True, "data": {"id": item_id, "version": expected_version + 1}, "message": "更新成功"}
+
+    return {
+        "ok": True,
+        "data": {"id": item_id, "version": current_version + 1},
+        "message": "更新成功",
+    }
 
 
 @router.delete("/items/{item_id}")
@@ -868,15 +950,31 @@ def delete_item(
     item_id: str,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    """Soft delete an item."""
+) -> dict[str, object]:
+    """原子软删除条目；日程使用图感知删除，避免遗留空集合头。"""
+
     item = db.get_item(item_id, owner_id=owner_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    success = db.delete_item(item_id, soft=True, owner_id=owner_id)
+    item_type = get_item_type_value(getattr(item, "type", None), default="")
+    if item_type == "event":
+        success = db.delete_event_instance(item_id, owner_id) is not None
+    else:
+        success = db.delete_item(
+            item_id,
+            soft=True,
+            owner_id=owner_id,
+            operation_log={
+                "user_id": owner_id,
+                "action": "delete",
+                "item_type": item_type,
+            },
+        )
     if not success:
-        raise HTTPException(status_code=500, detail="Delete failed")
+        raise HTTPException(
+            status_code=409,
+            detail="Item changed by another request; refresh and retry",
+        )
 
-    db.log_operation(owner_id, "delete", item_id=item_id)
     return {"ok": True, "data": {"id": item_id}, "message": "已删除"}

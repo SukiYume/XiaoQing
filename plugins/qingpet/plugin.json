@@ -1,48 +1,143 @@
 {
-    "name": "qingpet",
-    "version": "1.0.0",
-    "description": "QQ群宠物养成系统 - 领养、喂养、互动、社交",
-    "author": "XiaoQing",
-    "commands": [
+  "name": "qingpet",
+  "version": "1.0.0",
+  "description": "QQ群宠物养成系统：领养、喂养、互动与社交",
+  "author": "XiaoQing",
+  "commands": [
+    {
+      "name": "qingpet",
+      "triggers": ["qingpet", "宠物", "pet"],
+      "help": "QQ群宠物养成系统：照料、道具、社交、玩法与群管理",
+      "usage": "/宠物 <子命令> [参数]",
+      "examples": ["/宠物 状态", "/宠物 help"],
+      "invalid_examples": ["/宠物 unknown"],
+      "subcommands": [
+        {"name":"adopt","aliases":["领养","adoption"],"help":"在当前群领养并命名一只宠物","usage":"/宠物 adopt <名字>","contexts":["group"],"examples":["/宠物 adopt 小青"],"invalid_examples":["/宠物 adopt"]},
+        {"name":"status","aliases":["状态","info","stat"],"help":"查看自己的宠物状态和资产","usage":"/宠物 status [群号]","examples":["/宠物 status"],"invalid_examples":["/宠物 status unknown-group"]},
+        {"name":"feed","aliases":["喂食","eat"],"help":"使用指定食物或默认食物喂宠物","usage":"/宠物 feed [群号] [道具名]","examples":["/宠物 feed"],"invalid_examples":["/宠物 feed 不存在的食物"]},
+        {"name":"clean","aliases":["清洁","bath"],"help":"清洁自己的宠物","usage":"/宠物 clean [群号]","examples":["/宠物 clean"],"invalid_examples":["/宠物 clean unknown-group"]},
+        {"name":"play","aliases":["玩耍"],"help":"和自己的宠物玩耍","usage":"/宠物 play [群号]","examples":["/宠物 play"],"invalid_examples":["/宠物 play unknown-group"]},
+        {"name":"sleep","aliases":["睡觉"],"help":"让自己的宠物睡觉","usage":"/宠物 sleep [群号]","examples":["/宠物 sleep"],"invalid_examples":["/宠物 sleep extra"]},
+        {"name":"wake","aliases":["起床"],"help":"唤醒自己的宠物","usage":"/宠物 wake [群号]","examples":["/宠物 wake"],"invalid_examples":["/宠物 wake extra"]},
+        {"name":"train","aliases":["训练"],"help":"训练宠物的体力、敏捷或智力","usage":"/宠物 train [群号] [体力|敏捷|智力]","examples":["/宠物 train 体力"],"invalid_examples":["/宠物 train 魔法"]},
+        {"name":"explore","aliases":["探索","adventure"],"help":"让宠物前往指定区域探索","usage":"/宠物 explore [群号] [森林|海边|山洞|废墟]","examples":["/宠物 explore 森林"],"invalid_examples":["/宠物 explore 火星"]},
+        {"name":"treat","aliases":["治疗","heal","cure"],"help":"使用药品治疗自己的宠物","usage":"/宠物 treat [群号] [药品名]","examples":["/宠物 treat"],"invalid_examples":["/宠物 treat 不存在的药品"]},
+        {"name":"rename","aliases":["改名"],"help":"修改自己的宠物名字","usage":"/宠物 rename [群号] <新名字>","examples":["/宠物 rename 小蓝"],"invalid_examples":["/宠物 rename"]},
+        {"name":"recall","aliases":["召回"],"help":"召回旅行中的宠物","usage":"/宠物 recall [群号]","examples":["/宠物 recall"],"invalid_examples":["/宠物 recall extra"]},
+        {"name":"backpack","aliases":["背包","bag","inventory"],"help":"查看自己的道具背包","usage":"/宠物 backpack","examples":["/宠物 backpack"],"invalid_examples":["/宠物 backpack extra"]},
+        {"name":"shop","aliases":["商店","store"],"help":"查看普通道具商店","usage":"/宠物 shop","examples":["/宠物 shop"],"invalid_examples":["/宠物 shop extra"]},
+        {"name":"buy","aliases":["购买"],"help":"购买普通道具","usage":"/宠物 buy <道具> [数量]","examples":["/宠物 buy apple 2"],"invalid_examples":["/宠物 buy"]},
+        {"name":"use","aliases":["使用"],"help":"使用背包中的加速卡或托管券","usage":"/宠物 use [群号] <道具>","examples":["/宠物 use acceleration_card"],"invalid_examples":["/宠物 use"]},
+        {"name":"gift","aliases":["送礼"],"help":"向群友赠送道具","usage":"/宠物 gift <@QQ号> <道具> [数量]","examples":["/宠物 gift @10001 apple 1"],"invalid_examples":["/宠物 gift @10001"]},
         {
-            "name": "qingpet",
-            "triggers": [
-                "宠物",
-                "pet"
-            ],
-            "help": "QQ群宠物养成系统\n\n使用 /宠物 help 查看详细帮助",
-            "usage": "/宠物 <子命令> [args...]"
-        }
-    ],
-    "dependencies": [],
-    "entry": "main.py",
-    "schedule": [
+          "name":"dress","aliases":["装扮","outfit"],"help":"查看、购买、穿戴或卸下宠物装扮","usage":"/宠物 dress <view|shop|buy|equip|unequip> [参数]","examples":["/宠物 dress view"],"invalid_examples":["/宠物 dress unknown"],
+          "subcommands":[
+            {"name":"view","aliases":["查看","状态"],"help":"查看当前装扮和已拥有装扮","usage":"/宠物 dress view","match":"exact","examples":["/宠物 dress view"],"invalid_examples":["/宠物 dress view extra"]},
+            {"name":"shop","aliases":["商店"],"help":"查看装扮商店","usage":"/宠物 dress shop","match":"exact","examples":["/宠物 dress shop"],"invalid_examples":["/宠物 dress shop extra"]},
+            {"name":"buy","aliases":["购买"],"help":"购买指定装扮","usage":"/宠物 dress buy <装扮ID>","examples":["/宠物 dress buy red_hat"],"invalid_examples":["/宠物 dress buy"]},
+            {"name":"equip","aliases":["穿戴","穿"],"help":"穿戴指定装扮","usage":"/宠物 dress equip <装扮ID>","examples":["/宠物 dress equip red_hat"],"invalid_examples":["/宠物 dress equip"]},
+            {"name":"unequip","aliases":["卸下","脱"],"help":"卸下指定槽位装扮","usage":"/宠物 dress unequip <帽子|衣服|饰品|背景>","examples":["/宠物 dress unequip 帽子"],"invalid_examples":["/宠物 dress unequip unknown"]}
+          ]
+        },
+        {"name":"visit","aliases":["互访"],"help":"访问群友的宠物","usage":"/宠物 visit <@QQ号>","examples":["/宠物 visit @10001"],"invalid_examples":["/宠物 visit"]},
+        {"name":"view","aliases":["查看"],"help":"查看群友的宠物资料","usage":"/宠物 view <@QQ号>","examples":["/宠物 view @10001"],"invalid_examples":["/宠物 view"]},
+        {"name":"like","aliases":["摸摸","点赞","pat"],"help":"给群友的宠物点赞或摸摸","usage":"/宠物 like <@QQ号>","examples":["/宠物 like @10001"],"invalid_examples":["/宠物 like"]},
+        {"name":"message","aliases":["留言","msg"],"help":"查看自己的留言或给群友留言","usage":"/宠物 message [@QQ号 <内容>]","examples":["/宠物 message", "/宠物 message @10001 加油"],"invalid_examples":["/宠物 message @10001"]},
+        {"name":"ranking","aliases":["排行","rank","top"],"help":"查看照顾、亲密度、经验或金币排行","usage":"/宠物 ranking [care_score|intimacy|experience|coins]","examples":["/宠物 ranking care_score"],"invalid_examples":["/宠物 ranking unknown"]},
         {
-            "id": "qingpet_decay",
-            "handler": "scheduled_decay",
-            "cron": {
-                "minute": "*"
-            },
-            "description": "每分钟衰减宠物状态"
+          "name":"trade","aliases":["交易","market"],"help":"查看或操作群交易市场","usage":"/宠物 trade [list|sell|buy|cancel] [参数]","examples":["/宠物 trade list"],"invalid_examples":["/宠物 trade unknown"],
+          "subcommands":[
+            {"name":"list","aliases":["列表"],"help":"查看当前群交易挂单","usage":"/宠物 trade list","match":"exact","examples":["/宠物 trade list"],"invalid_examples":["/宠物 trade list extra"]},
+            {"name":"sell","aliases":["挂单"],"help":"上架背包道具","usage":"/宠物 trade sell <道具ID> <数量> <价格>","examples":["/宠物 trade sell apple 2 20"],"invalid_examples":["/宠物 trade sell apple 2"]},
+            {"name":"buy","aliases":["购买"],"help":"购买交易列表返回的订单号","usage":"/宠物 trade buy <订单号>","examples":["/宠物 trade buy <订单号>"],"invalid_examples":["/宠物 trade buy"]},
+            {"name":"cancel","aliases":["撤单"],"help":"撤销交易列表中自己的订单号","usage":"/宠物 trade cancel <订单号>","examples":["/宠物 trade cancel <自己的订单号>"],"invalid_examples":["/宠物 trade cancel"]}
+          ]
         },
         {
-            "id": "qingpet_daily_reset",
-            "handler": "scheduled_daily_reset",
-            "cron": {
-                "hour": 0,
-                "minute": 0
-            },
-            "description": "每日重置 - 每天00:00执行"
+          "name":"show","aliases":["展示","展示会"],"help":"查看宠物展示会或投票","usage":"/宠物 show [vote <@QQ号>]","examples":["/宠物 show"],"invalid_examples":["/宠物 show unknown"],
+          "subcommands":[
+            {"name":"vote","aliases":["投票"],"help":"在当前展示会中给群友宠物投票","usage":"/宠物 show vote <@QQ号>","examples":["/宠物 show vote @10001"],"invalid_examples":["/宠物 show vote"]}
+          ]
         },
         {
-            "id": "qingpet_weekly_activity",
-            "handler": "scheduled_weekly_activity",
-            "cron": {
-                "day_of_week": "mon",
-                "hour": 10,
-                "minute": 0
+          "name":"game","aliases":["游戏","play_game"],"help":"玩猜拳、骰子或宠物赛跑","usage":"/宠物 game <rps|dice|race> [参数]","examples":["/宠物 game dice"],"invalid_examples":["/宠物 game unknown"],
+          "subcommands":[
+            {"name":"rps","aliases":["猜拳"],"help":"与系统猜拳","usage":"/宠物 game rps <石头|剪刀|布>","examples":["/宠物 game rps 石头"],"invalid_examples":["/宠物 game rps"]},
+            {"name":"dice","aliases":["骰子"],"help":"进行一次骰子比大小","usage":"/宠物 game dice","match":"exact","examples":["/宠物 game dice"],"invalid_examples":["/宠物 game dice extra"]},
+            {"name":"race","aliases":["赛跑"],"help":"和群友的宠物赛跑","usage":"/宠物 game race <@QQ号>","examples":["/宠物 game race @10001"],"invalid_examples":["/宠物 game race"]}
+          ]
+        },
+        {
+          "name":"task","aliases":["任务","daily"],"help":"查看或领取个人每日任务","usage":"/宠物 task [群号] [claim]","examples":["/宠物 task"],"invalid_examples":["/宠物 task unknown"],
+          "subcommands":[{"name":"claim","aliases":["领取"],"help":"领取已完成的个人每日任务奖励","usage":"/宠物 task claim","match":"exact","examples":["/宠物 task claim"],"invalid_examples":["/宠物 task claim extra"]}]
+        },
+        {
+          "name":"group_task","aliases":["群任务","group-task"],"help":"查看或领取当前群的每日任务","usage":"/宠物 group_task [claim]","contexts":["group"],"examples":["/宠物 group_task"],"invalid_examples":["/宠物 group_task unknown"],
+          "subcommands":[{"name":"claim","aliases":["领取"],"help":"领取已完成的群任务奖励","usage":"/宠物 group_task claim","match":"exact","examples":["/宠物 group_task claim"],"invalid_examples":["/宠物 group_task claim extra"]}]
+        },
+        {"name":"title","aliases":["称号","titles"],"help":"查看自己的宠物称号并结算新称号","usage":"/宠物 title","examples":["/宠物 title"],"invalid_examples":["/宠物 title extra"]},
+        {
+          "name":"activity","aliases":["活动"],"help":"查看群活动或领取活动奖励","usage":"/宠物 activity [claim <活动ID>]","examples":["/宠物 activity"],"invalid_examples":["/宠物 activity claim"],
+          "subcommands":[{"name":"claim","aliases":["领取"],"help":"领取活动列表返回的已完成活动 ID","usage":"/宠物 activity claim <活动ID>","examples":["/宠物 activity claim <活动ID>"],"invalid_examples":["/宠物 activity claim"]}]
+        },
+        {
+          "name":"admin","aliases":["管理","manage"],"help":"管理当前群宠物系统、用户、审计与活动","usage":"/宠物 admin <子命令> [参数]","permission":"group_admin","contexts":["group"],"examples":["/宠物 admin config"],"invalid_examples":["/宠物 admin unknown"],
+          "subcommands":[
+            {"name":"enable","aliases":["开启","on"],"help":"开启当前群宠物系统","usage":"/宠物 admin enable","match":"exact","examples":["/宠物 admin enable"],"invalid_examples":["/宠物 admin enable extra"]},
+            {"name":"disable","aliases":["关闭","off"],"help":"关闭当前群宠物系统","usage":"/宠物 admin disable","match":"exact","examples":["/宠物 admin disable"],"invalid_examples":["/宠物 admin disable extra"]},
+            {
+              "name":"config","aliases":["配置","设置","setting"],"help":"查看或修改当前群宠物配置","usage":"/宠物 admin config [查看|设置 <key> <value>]","examples":["/宠物 admin config"],"invalid_examples":["/宠物 admin config unknown"],
+              "subcommands":[
+                {"name":"查看","help":"查看当前群宠物配置","usage":"/宠物 admin config 查看","match":"exact","examples":["/宠物 admin config 查看"],"invalid_examples":["/宠物 admin config 查看 extra"]},
+                {"name":"设置","help":"修改一个允许的群配置项","usage":"/宠物 admin config 设置 <key> <value>","examples":["/宠物 admin config 设置 trade_enabled true"],"invalid_examples":["/宠物 admin config 设置 trade_enabled"]}
+              ]
             },
-            "description": "每周活动结算 - 每周一10:00执行"
-        }
-    ]
+            {"name":"reset","aliases":["重置"],"help":"重置指定用户宠物状态，需二次确认","usage":"/宠物 admin reset <@QQ号> [确认]","examples":["/宠物 admin reset @10001 确认"],"invalid_examples":["/宠物 admin reset"]},
+            {"name":"delete","aliases":["删除"],"help":"永久删除指定用户宠物，需二次确认","usage":"/宠物 admin delete <@QQ号> [确认]","examples":["/宠物 admin delete @10001 确认"],"invalid_examples":["/宠物 admin delete"]},
+            {"name":"ban","aliases":["封禁"],"help":"在当前群封禁用户若干天","usage":"/宠物 admin ban <@QQ号> <天数>","examples":["/宠物 admin ban @10001 7"],"invalid_examples":["/宠物 admin ban @10001"]},
+            {"name":"unban","aliases":["解封"],"help":"解除用户在当前群的封禁","usage":"/宠物 admin unban <@QQ号>","examples":["/宠物 admin unban @10001"],"invalid_examples":["/宠物 admin unban"]},
+            {"name":"log","aliases":["日志"],"help":"查看最近 1 至 100 条管理员操作日志","usage":"/宠物 admin log [条数]","examples":["/宠物 admin log 20"],"invalid_examples":["/宠物 admin log 0"]},
+            {"name":"stats","aliases":["统计"],"help":"查看当前群宠物聚合统计","usage":"/宠物 admin stats","match":"exact","examples":["/宠物 admin stats"],"invalid_examples":["/宠物 admin stats extra"]},
+            {
+              "name":"announce","aliases":["公告"],"help":"开启或结束宠物展示会","usage":"/宠物 admin announce [show [标题]|end_show]","examples":["/宠物 admin announce show 夏日展示会"],"invalid_examples":["/宠物 admin announce unknown"],
+              "subcommands":[
+                {"name":"show","aliases":["展示会"],"help":"开启宠物展示会","usage":"/宠物 admin announce show [标题]","examples":["/宠物 admin announce show 夏日展示会"],"invalid_examples":["/宠物 admin announce show a b c d e"]},
+                {"name":"end_show","aliases":["结束展示会"],"help":"立即结束并结算当前展示会","usage":"/宠物 admin announce end_show","match":"exact","examples":["/宠物 admin announce end_show"],"invalid_examples":["/宠物 admin announce end_show extra"]}
+              ]
+            },
+            {
+              "name":"activity","aliases":["活动"],"help":"创建宠物行为驱动的限时群活动","usage":"/宠物 admin activity create <类型> <目标数> <奖励金币> [标题]","examples":["/宠物 admin activity create feed 20 100 喂食挑战"],"invalid_examples":["/宠物 admin activity create unknown 20 100"],
+              "subcommands":[{"name":"create","aliases":["创建"],"help":"创建群活动","usage":"/宠物 admin activity create <feed|clean|play|train|explore> <目标数> <奖励金币> [标题]","examples":["/宠物 admin activity create feed 20 100 喂食挑战"],"invalid_examples":["/宠物 admin activity create feed zero 100"]}]
+            }
+          ]
+        },
+        {
+          "name":"help","aliases":["帮助","h","?"],"help":"显示完整宠物命令目录，可附帮助类别","usage":"/宠物 help [basic|advanced|item|social|gameplay|management]","examples":["/宠物 help", "/宠物 help social"],"invalid_examples":["/宠物 help unknown"],
+          "subcommands":[
+            {"name":"basic","aliases":["基础","base"],"help":"筛选基础照料命令帮助","usage":"/宠物 help basic","match":"exact","examples":["/宠物 help basic"],"invalid_examples":["/宠物 help basic extra"]},
+            {"name":"advanced","aliases":["进阶","adv"],"help":"筛选进阶成长命令帮助","usage":"/宠物 help advanced","match":"exact","examples":["/宠物 help advanced"],"invalid_examples":["/宠物 help advanced extra"]},
+            {"name":"item","aliases":["道具","items"],"help":"筛选道具与装扮命令帮助","usage":"/宠物 help item","match":"exact","examples":["/宠物 help item"],"invalid_examples":["/宠物 help item extra"]},
+            {"name":"social","aliases":["社交"],"help":"筛选社交互动命令帮助","usage":"/宠物 help social","match":"exact","examples":["/宠物 help social"],"invalid_examples":["/宠物 help social extra"]},
+            {"name":"gameplay","aliases":["玩法"],"help":"筛选玩法命令帮助","usage":"/宠物 help gameplay","match":"exact","examples":["/宠物 help gameplay"],"invalid_examples":["/宠物 help gameplay extra"]},
+            {"name":"management","aliases":["管理"],"help":"筛选管理员命令帮助","usage":"/宠物 help management","match":"exact","examples":["/宠物 help management"],"invalid_examples":["/宠物 help management extra"]}
+          ]
+        },
+        {"name":"basic","aliases":["基础","base"],"help":"显示基础照料命令帮助","usage":"/宠物 basic","match":"exact","examples":["/宠物 basic"],"invalid_examples":["/宠物 basic extra"]},
+        {"name":"advanced","aliases":["进阶","adv"],"help":"显示进阶成长命令帮助","usage":"/宠物 advanced","match":"exact","examples":["/宠物 advanced"],"invalid_examples":["/宠物 advanced extra"]},
+        {"name":"item","aliases":["道具","items"],"help":"显示道具与装扮命令帮助","usage":"/宠物 item","match":"exact","examples":["/宠物 item"],"invalid_examples":["/宠物 item extra"]},
+        {"name":"social","aliases":["社交"],"help":"显示社交互动命令帮助","usage":"/宠物 social","match":"exact","examples":["/宠物 social"],"invalid_examples":["/宠物 social extra"]},
+        {"name":"gameplay","aliases":["玩法"],"help":"显示玩法命令帮助","usage":"/宠物 gameplay","match":"exact","examples":["/宠物 gameplay"],"invalid_examples":["/宠物 gameplay extra"]},
+        {"name":"management","help":"显示群管理命令帮助","usage":"/宠物 management","match":"exact","examples":["/宠物 management"],"invalid_examples":["/宠物 management extra"]}
+      ]
+    }
+  ],
+  "dependencies": [],
+  "entry": "main.py",
+  "schedule": [
+    {"id":"qingpet_decay","handler":"scheduled_decay","cron":{"minute":"*"},"description":"每分钟衰减宠物状态"},
+    {"id":"qingpet_daily_reset","handler":"scheduled_daily_reset","cron":{"hour":0,"minute":0},"description":"每天 00:00 重置每日状态"},
+    {"id":"qingpet_trade_expiry","handler":"scheduled_trade_expiry","cron":{"minute":"*/5"},"description":"每 5 分钟结算到期交易挂单"},
+    {"id":"qingpet_pet_show_settlement","handler":"scheduled_pet_show_settlement","cron":{"minute":"*"},"description":"每分钟结算到期展示会"},
+    {"id":"qingpet_weekly_activity","handler":"scheduled_weekly_activity","cron":{"day_of_week":"mon","hour":10,"minute":0},"description":"每周一 10:00 结算周活动"}
+  ]
 }

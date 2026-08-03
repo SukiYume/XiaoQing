@@ -7,10 +7,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 BOUNDED_RUNTIME_FILES = (
+    "core/ai.py",
     "core/onebot.py",
     "plugins/adnmb/adapi.py",
     "plugins/ads_paper/ads_client.py",
-    "plugins/ads_paper/llm_client.py",
     "plugins/apod/main.py",
     "plugins/arxiv_filter/arxiv_today.py",
     "plugins/arxiv_filter/train_model/data_prep/step2_fetch_all_astro_ph.py",
@@ -20,13 +20,10 @@ BOUNDED_RUNTIME_FILES = (
     "plugins/chime/main.py",
     "plugins/earthquake/main.py",
     "plugins/github/main.py",
-    "plugins/pendo/services/llm_client.py",
-    "plugins/signin/sony.py",
     "plugins/signin/yingshi.py",
     "plugins/twitter/main.py",
     "plugins/voice/main.py",
     "plugins/wolframalpha/main.py",
-    "plugins/xiaoqing_chat/llm/llm_client.py",
 )
 HTTP_VERBS = frozenset({"get", "post", "put", "patch", "delete", "request"})
 HTTP_CLIENT_NAMES = frozenset(
@@ -39,9 +36,7 @@ HTTP_CLIENT_NAMES = frozenset(
         "session",
     }
 )
-UNBOUNDED_RESPONSE_MEMBERS = frozenset(
-    {"content", "iter_content", "json", "read", "text"}
-)
+UNBOUNDED_RESPONSE_MEMBERS = frozenset({"content", "iter_content", "json", "read", "text"})
 
 
 def _attribute_chain(node: ast.AST) -> tuple[str, ...]:
@@ -79,18 +74,14 @@ def test_runtime_http_paths_have_no_direct_unbounded_response_reads(
         chain = _attribute_chain(node)
         if not chain:
             continue
-        if (
-            node.attr.casefold() in HTTP_VERBS
-            and any(part in HTTP_CLIENT_NAMES for part in chain[:-1])
+        if node.attr.casefold() in HTTP_VERBS and any(
+            part in HTTP_CLIENT_NAMES for part in chain[:-1]
         ):
             violations.append(f"line {node.lineno}: direct HTTP call {'.'.join(chain)}")
-        if (
-            node.attr.casefold() in UNBOUNDED_RESPONSE_MEMBERS
-            and _looks_like_response_name(chain[:-1])
+        if node.attr.casefold() in UNBOUNDED_RESPONSE_MEMBERS and _looks_like_response_name(
+            chain[:-1]
         ):
-            violations.append(
-                f"line {node.lineno}: unbounded response read {'.'.join(chain)}"
-            )
+            violations.append(f"line {node.lineno}: unbounded response read {'.'.join(chain)}")
 
     assert not violations, f"{relative_path}:\n" + "\n".join(violations)
     assert "bounded_http" in source or "safe_http" in source

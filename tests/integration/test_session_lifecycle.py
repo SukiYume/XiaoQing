@@ -21,7 +21,7 @@ class TestSessionLifecycle:
             user_id=10001,
             group_id=50001,
             plugin_name="test_plugin",
-            initial_data={"step": 1, "value": None}
+            initial_data={"step": 1, "value": None},
         )
         assert session is not None
 
@@ -30,10 +30,12 @@ class TestSessionLifecycle:
         assert retrieved is not None
         assert retrieved.data["step"] == 1
 
-        # Update session data
-        retrieved.data["step"] = 2
-        retrieved.data["value"] = "test"
-        retrieved.update()  # Refresh timestamp
+        # Update through the transaction boundary; retrieved is a snapshot.
+        def update_values(working):
+            working.data["step"] = 2
+            working.data["value"] = "test"
+
+        await manager.update(10001, 50001, update_values)
 
         # Verify updates persisted (session still valid)
         updated = await manager.get(10001, 50001)
@@ -87,15 +89,12 @@ class TestSessionLifecycle:
             user_id=10001,
             group_id=None,
             plugin_name="private_game",
-            initial_data={"mode": "private"}
+            initial_data={"mode": "private"},
         )
 
         # Create group session for same user
         await manager.create(
-            user_id=10001,
-            group_id=50001,
-            plugin_name="group_game",
-            initial_data={"mode": "group"}
+            user_id=10001, group_id=50001, plugin_name="group_game", initial_data={"mode": "group"}
         )
 
         # Verify both exist independently
@@ -120,22 +119,27 @@ class TestSessionLifecycle:
             user_id=10001,
             group_id=50001,
             plugin_name="test",
-            initial_data={"counter": 0, "history": []}
+            initial_data={"counter": 0, "history": []},
         )
 
-        # First access - modify data
-        session1 = await manager.get(10001, 50001)
-        session1.data["counter"] = 1
-        session1.data["history"].append("action1")
+        # First transactional modification.
+        def first_update(session):
+            session.data["counter"] = 1
+            session.data["history"].append("action1")
+
+        await manager.update(10001, 50001, first_update)
 
         # Second access - verify data persists
         session2 = await manager.get(10001, 50001)
         assert session2.data["counter"] == 1
         assert session2.data["history"] == ["action1"]
 
-        # Third access - modify again
-        session2.data["counter"] = 2
-        session2.data["history"].append("action2")
+        # Third access - modify again through a transaction.
+        def second_update(session):
+            session.data["counter"] = 2
+            session.data["history"].append("action2")
+
+        await manager.update(10001, 50001, second_update)
 
         # Fourth access - verify all changes
         session3 = await manager.get(10001, 50001)
@@ -150,10 +154,7 @@ class TestSessionLifecycle:
 
         # Create session
         await manager.create(
-            user_id=10001,
-            group_id=50001,
-            plugin_name="test",
-            initial_data={"active": True}
+            user_id=10001, group_id=50001, plugin_name="test", initial_data={"active": True}
         )
 
         # Verify exists
@@ -179,19 +180,14 @@ class TestSessionLifecycle:
         manager = SessionManager(default_timeout=0.3)
 
         # Create session
-        await manager.create(
-            user_id=10001,
-            group_id=50001,
-            plugin_name="test"
-        )
+        await manager.create(user_id=10001, group_id=50001, plugin_name="test")
 
         # Wait half the timeout
         await asyncio.sleep(0.15)
 
-        # Access and update the session (refreshes timeout)
+        # Access refreshes the stored idle lease and returns a snapshot.
         session = await manager.get(10001, 50001)
-        if session:
-            session.update()
+        assert session is not None
 
         # Wait for original timeout to pass
         await asyncio.sleep(0.2)
@@ -208,15 +204,13 @@ class TestSessionLifecycle:
 
         # Create session
         await manager.create(
-            user_id=10001,
-            group_id=50001,
-            plugin_name="test",
-            initial_data={"counter": 0}
+            user_id=10001, group_id=50001, plugin_name="test", initial_data={"counter": 0}
         )
 
         async def increment_session():
             """Increment session counter multiple times"""
             for _ in range(10):
+
                 async def increment_once(session):
                     value = session.get("counter", 0)
                     await asyncio.sleep(0.001)
@@ -293,18 +287,16 @@ class TestSessionLifecycle:
         """Test session state field and lifecycle"""
         manager = SessionManager()
 
-        session = await manager.create(
-            user_id=10001,
-            group_id=50001,
-            plugin_name="test"
-        )
+        session = await manager.create(user_id=10001, group_id=50001, plugin_name="test")
 
         # Default state
         assert session.state == "active"
 
-        # Change state
-        session.state = "paused"
-        session.update()
+        # Change state through the transaction boundary.
+        def pause(working):
+            working.state = "paused"
+
+        await manager.update(10001, 50001, pause)
 
         # Verify state persists
         retrieved = await manager.get(10001, 50001)
@@ -341,19 +333,10 @@ class TestSessionLifecycle:
         manager = SessionManager(default_timeout=1.0)  # Default 1 second
 
         # Create session with custom short timeout
-        await manager.create(
-            user_id=1,
-            group_id=None,
-            plugin_name="test",
-            timeout=0.1
-        )
+        await manager.create(user_id=1, group_id=None, plugin_name="test", timeout=0.1)
 
         # Create session with default timeout
-        await manager.create(
-            user_id=2,
-            group_id=None,
-            plugin_name="test"
-        )
+        await manager.create(user_id=2, group_id=None, plugin_name="test")
 
         # Wait for short timeout session to expire
         await asyncio.sleep(0.15)
@@ -380,7 +363,7 @@ class TestSessionDataOperations:
             user_id=10001,
             group_id=50001,
             plugin_name="test",
-            initial_data={"key1": "value1", "key2": 42}
+            initial_data={"key1": "value1", "key2": 42},
         )
 
         # Test get
@@ -393,9 +376,12 @@ class TestSessionDataOperations:
         session.set("key3", "new_value")
         assert session.get("key3") == "new_value"
 
-        # Test update
+        # Windows 时钟允许同一 tick 内连续读数相等；用版本号验证 touch 确实发生。
+        previous_updated_at = session.updated_at
+        previous_version = session.version
         session.update()
-        assert session.updated_at > session.created_at
+        assert session.updated_at >= previous_updated_at >= session.created_at
+        assert session.version == previous_version + 1
 
         # Test clear
         session.clear()
@@ -409,7 +395,7 @@ class TestSessionDataOperations:
         """Test session data with lists, dicts, and nested structures"""
         manager = SessionManager()
 
-        session = await manager.create(
+        await manager.create(
             user_id=10001,
             group_id=50001,
             plugin_name="test",
@@ -417,22 +403,17 @@ class TestSessionDataOperations:
                 "list": [1, 2, 3],
                 "dict": {"nested": "value"},
                 "empty_list": [],
-            }
+            },
         )
 
-        # Modify list
-        session.data["list"].append(4)
-        assert session.data["list"] == [1, 2, 3, 4]
+        # Modify nested values transactionally; create() returned a snapshot.
+        def mutate_nested(working):
+            working.data["list"].append(4)
+            working.data["dict"]["new_key"] = "new_value"
 
-        # Modify nested dict
-        session.data["dict"]["new_key"] = "new_value"
-        assert session.data["dict"]["new_key"] == "new_value"
+        await manager.update(10001, 50001, mutate_nested)
 
         # Verify persistence
         retrieved = await manager.get(10001, 50001)
         assert retrieved.data["list"] == [1, 2, 3, 4]
         assert retrieved.data["dict"]["new_key"] == "new_value"
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-m", "integration"])

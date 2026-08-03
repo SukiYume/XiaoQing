@@ -10,7 +10,7 @@
 ```python
 from core.plugin_base import (
     text, image, image_url, record, record_url,
-    segments, build_action, run_sync,
+    segments, build_action, bounded_external_text, run_sync,
     ensure_dir, load_json, write_json, atomic_write_text,
     split_message_segments,
 )
@@ -89,10 +89,24 @@ build_action(segs, user_id=123, group_id=456)
 # }
 ```
 
+#### bounded_external_text(value, *, max_chars, max_bytes, ...)
+
+把第三方标量收窄成可展示文本：拒绝容器、布尔值和非有限浮点数，剥离 ANSI 与 C0/C1 控制字符，并同时满足字符数和 UTF-8 字节数上限。协议字段不能接受半截值时传 `truncate=False`，会改用 `default`。
+
+```python
+safe_name = bounded_external_text(
+    remote_payload.get("name"),
+    max_chars=128,
+    max_bytes=512,
+    default="未知",
+    truncate=False,
+)
+```
+
 ### 异步工具
 
 #### run_sync(func, *args, **kwargs)
-在线程池中运行同步函数。
+经当前插件的有界同步 bulkhead 运行同步函数，避免阻塞事件循环，同时遵守单插件并发/排队限制、跨插件公平调度和 unload/reload 隔离。
 
 ```python
 import requests
@@ -101,6 +115,28 @@ async def handle(...):
     # 避免阻塞事件循环
     response = await run_sync(requests.get, "https://api.example.com")
     return segments(response.text)
+```
+
+当插件或全局同步队列已满时，该调用会快速失败，不会无界积压。取消尚未启动的调用会从队列移除；若函数已经进入线程，取消不能强制停止 Python 代码，框架会继续持有并跟踪真实 future，关闭时有界 drain，必要时隔离旧插件代。普通插件不得以 `asyncio.to_thread()` 绕过该路径；自管线程仅适用于拥有专用有界 executor 和完整 `init`/`shutdown` 生命周期的底层组件。
+
+### image_validation 模块
+
+网络图片不得只信 URL、MIME、扩展名或 Pillow header。用 `validate_image_bytes()` 同时校验字节、像素、帧数、格式/声明一致性、容器终止边界、解压炸弹，并在 `verify()` 后重新打开逐帧真实解码。本地缓存用 `validate_image_path()`；它还拒绝符号链接和硬链接，并以 `lstat → O_NOFOLLOW open → fstat/lstat → 读取后复核` 防止 check/open 竞态。
+
+```python
+from core.image_validation import ImageValidationLimits, validate_image_bytes
+
+validated = await run_sync(
+    validate_image_bytes,
+    response.body,
+    limits=ImageValidationLimits(
+        max_bytes=8 * 1024 * 1024,
+        max_pixels=20_000_000,
+        max_frames=120,
+    ),
+    expected_format="PNG",
+)
+filename = f"{digest}{validated.extension}"
 ```
 
 ### 文件工具
@@ -155,8 +191,8 @@ parts = split_message_segments(long_segs, max_length=500)
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `config` | `Dict[str, Any]` | config.json 完整内容 |
-| `secrets` | `Dict[str, Any]` | secrets.json 完整内容 |
+| `config` | `Mapping[str, Any]` | 构造期的插件作用域只读视图；运行时配置读取使用 `get_settings_snapshot()` |
+| `secrets` | `Mapping[str, Any]` | 构造期的插件秘密作用域只读视图；运行时配置读取使用 `get_settings_snapshot()` |
 | `plugin_name` | `str` | 当前插件名 |
 | `plugin_dir` | `Path` | 插件目录路径 |
 | `data_dir` | `Path` | 数据目录路径 |
@@ -167,8 +203,64 @@ parts = split_message_segments(long_segs, max_length=500)
 | `current_user_id` | `int \| None` | 当前消息的用户 ID |
 | `current_group_id` | `int \| None` | 当前消息的群 ID |
 | `state` | `Dict[str, Any]` | 插件私有状态（当次请求生命周期） |
+| `principal` | `PluginPrincipal` | 核心签发的当前调用身份 |
+| `capabilities` | `PluginCapabilities` | 当前插件与调用身份获授权的窄能力集合 |
+| `command_invocation` | `CommandInvocation \| None` | 当前命令的递归目录匹配结果；生命周期、schedule 和非命令入口为 `None` |
 
 ### 方法
+
+#### get_settings_snapshot()
+
+返回一个不可变的 `PluginSettingsSnapshot`，其中公开配置、秘密和 `revision` 来自同一次原子发布。`plugin_config(context.plugin_name)` 与 `plugin_secrets(context.plugin_name)` 提取当前插件命名空间；插件看不到其他插件的秘密命名空间。
+
+```python
+settings = context.get_settings_snapshot()
+config = settings.plugin_config(context.plugin_name)
+secrets = settings.plugin_secrets(context.plugin_name)
+revision = settings.revision
+```
+
+同一个业务操作需要多个设置时只获取一次快照。长期管理器用 `revision` 拒绝过期回调，并在校验整组候选设置后一次发布。
+
+#### get_config(path) / get_secret(path)
+分别读取当前插件命名空间中的配置或秘密，并返回分离副本；不存在时返回 `None`。路径使用
+点号分隔，例如 `context.get_secret("provider.api_key")`。插件无法借此读取其他插件或全局秘密。它们各自读取调用时的当前代；若多个值必须保持同代，请使用 `get_settings_snapshot()`。
+
+#### is_global_admin(user_id=None)
+仅在待检查用户等于核心签发 principal 的当前用户，且当前 capability 仍标记为机器人管理员时
+返回 `True`。它不会暴露管理员 ID 列表，也不能用来检查任意第三方用户。
+
+#### capabilities.ai
+
+通过当前插件自己的命名 route 调用统一 LLM/VLM 注册表。统一 provider 密钥不会进入 `context.secrets`。
+
+```python
+result = await context.capabilities.ai.complete(
+    "summary",
+    [{"role": "user", "content": "请总结这段内容"}],
+    required_modalities=("text",),
+    temperature=0.3,
+    max_tokens=400,
+)
+
+text = result.content
+profile = result.profile
+attempts = result.attempts
+```
+
+`complete()` 的可选关键字包括：
+
+| 参数 | 说明 |
+|------|------|
+| `required_modalities` | 请求所需模态；视觉请求使用 `("text", "image")` |
+| `pinned_model` | 严格固定到 route 内的一个 profile，不跨模型 fallback |
+| `temperature` / `top_p` / `max_tokens` | 覆盖 route 的任务级生成参数 |
+| `timeout_seconds` / `total_timeout_seconds` | 单次尝试和整条链的超时 |
+| `max_retry` / `retry_interval_seconds` | 每个模型的重试控制 |
+| `tools` / `tool_choice` | OpenAI-compatible 工具调用字段 |
+| `extra_payload` | 服务商特有的非保留请求字段；不能覆盖 model/messages/采样参数/工具字段 |
+
+`list_models(route, required_modalities=...)` 返回 route 的有序 `AIModelInfo` 元组，只含 `name/provider/model/modalities`，不含 URL、代理或密钥。模型、provider、route 以及凭据的配置格式见 [06-configuration.md](06-configuration.md#统一-aivlm-注册表)。
 
 #### default_groups()
 获取配置的默认群列表。
@@ -191,12 +283,36 @@ context.reload_config()
 context.reload_plugins()
 ```
 
-#### list_commands()
-获取所有已注册命令。
+#### get_command_catalog()
+获取当前已发布插件代的完整、不可变、结构化命令目录。
 
 ```python
-commands = context.list_commands()  # -> ["help", "echo", ...]
+roots = context.get_command_catalog()
+for root in roots:
+    for node in root.walk():
+        print(node.code, node.usage)
 ```
+
+每个 `CommandCatalogNode` 都包含 `code`、`plugin`、`path`、`name`、`aliases`、
+`help_text`、`usage`、`match_mode`、`permission`、`contexts`、`examples`、
+`invalid_examples` 和 `children`。`to_dict()` 返回可直接 JSON 序列化、且不包含处理器的
+公开视图。不要从 `/help` 格式化文本反向解析命令。
+
+#### command_invocation
+
+命令请求中，Dispatcher 会注入 `CommandInvocation`：
+
+```python
+invocation = context.command_invocation
+if invocation is not None:
+    print(invocation.root.code)       # 顶层稳定码
+    print(invocation.node.code)       # 最深命中节点
+    print(invocation.arguments)       # 最深节点后的业务参数
+    print(invocation.remainder_after(1))
+```
+
+复杂插件可调用 `core.router.resolve_context_command_invocation(context, root_code, args)`；
+它优先复用 Dispatcher 的解析结果，直接单测调用时再从同一目录快照解析。
 
 #### list_plugins()
 获取所有已加载插件。
@@ -237,13 +353,14 @@ session = await context.create_session(
 ```
 
 **参数**：
-- `initial_data` - 初始会话数据
+- `initial_data` - 初始会话数据；必须是字符串键的有界 JSON-like 值树（内建
+  `dict/list/tuple` 与 `str/bytes/int/float/bool/None`），不接受自定义对象或循环引用
 - `timeout` - 超时时间（秒）
 
-**返回**：`Session` 对象
+**返回**：新会话的隔离 `Session` 快照。快照包含稳定的 `session_id`，但修改快照不会写回。
 
 #### get_session()
-获取当前用户的会话。
+获取当前用户会话的隔离快照，并刷新空闲超时。
 
 ```python
 session = await context.get_session()
@@ -251,7 +368,23 @@ if session:
     step = session.get("step")
 ```
 
-**返回**：`Session` 或 `None`（无会话或已过期）
+**返回**：`Session` 快照或 `None`（无会话或已过期）。持久修改必须使用
+`update_session()`，不能直接修改此快照。
+
+#### update_session(callback)
+
+对当前会话执行原子读改写。callback 收到私有工作副本，可为同步函数或直接调用得到的
+coroutine；同步和异步 callback 都在框架自建任务中运行并经过提交前取消检查。成功时版本只
+增加一次，异常、取消和值树校验失败均不提交。callback 不得返回已调度的 `asyncio.Task` 或
+裸 `Future`（误返对象会被取消并 drain），也不能对同一会话嵌套调用 `update_session()`。
+
+```python
+async def advance(working):
+    working.set("step", working.get("step", 0) + 1)
+    await do_other_work()
+
+await context.update_session(advance)
+```
 
 #### end_session()
 结束当前用户的会话。
@@ -263,7 +396,7 @@ await context.end_session()
 **返回**：`bool` - 是否成功删除
 
 #### has_session()
-检查当前用户是否有活跃会话。
+检查当前用户是否有活跃会话，不刷新空闲超时。
 
 ```python
 if await context.has_session():
@@ -295,13 +428,13 @@ if context.is_group_muted(123456):
 ```
 
 #### get_mute_remaining(group_id)
-获取剩余静音时间（秒）。
+获取剩余静音时间（分钟）。
 
 ```python
-remaining = context.get_mute_remaining(123456)  # -> 930.5 (秒)
+remaining = context.get_mute_remaining(123456)  # -> 15.5（分钟）
 ```
 
-**返回值**：`float` - 剩余静音时间（秒），0 表示未静音
+**返回值**：`float` - 剩余静音时间（分钟），0 表示未静音
 
 ---
 
@@ -345,17 +478,18 @@ Dispatcher 的入口由 `MessageParser.parse()` 构建 `MessageContext`，随后
 | `is_only_bot_name` | `bool` | 只叫机器人名字或只 @ 机器人 |
 | `is_at_me` | `bool` | OneBot at 段或 raw_message 中 @ 机器人 |
 | `is_url_only` | `bool` | `clean_text.strip()` 整体匹配 `^https?://\S+$` |
+| `is_empty` | `bool` | 无文本、媒体或 @；仅允许活跃会话消费 |
 
 ### 处理顺序
 
 ```
-Step A: URL short-circuit（clean_text 单 URL → url_parser；mute 不影响）
-Step B: 处理门控（私聊、require_bot_name_in_group=False、has_prefix、活跃 session）
+Step A: 处理门控（私聊、require_bot_name_in_group=False、has_prefix、活跃 session；先 resolve 再按类别 observe）
+Step B: is_url_only → url_parser（在门控与静音之后；静音时跳过）
 Step C: is_only_bot_name → 默认回应 / call_bot_name_only
-Step D: router 命中 → 执行命令
-Step E: has_command_prefix 且命令未命中 → 未知命令提示
-Step F: 活跃 session → 转 session 插件
-Step G: 回落 smalltalk provider（mute 仅在此步阻塞）
+Step D: 活跃 session → 转 session 插件
+Step E: router 命中 → 执行命令
+Step F: has_command_prefix 且命令未命中且首字母为字母 → 未知命令提示
+Step G: 回落 smalltalk provider（mute 仅在此步及普通群闲聊阻塞）
 ```
 
 ### URL 与未知命令
@@ -377,7 +511,7 @@ Step G: 回落 smalltalk provider（mute 仅在此步阻塞）
 | `group_id` | `Optional[int]` | 群 ID（私聊为 None） |
 | `plugin_name` | `str` | 所属插件 |
 | `state` | `str` | 会话状态 |
-| `data` | `Dict` | 会话数据 |
+| `data` | `Dict[str, SessionValue]` | 有界 JSON-like 会话数据；不接受自定义对象或循环引用 |
 | `timeout` | `float` | 超时时间（秒） |
 
 ### 方法
@@ -390,18 +524,22 @@ step = session.get("step", 1)
 ```
 
 #### set(key, value)
-设置会话数据（自动更新时间戳）。
+修改 `update_session()` callback 收到的工作副本。不要在 `get_session()` 返回的读取快照上
+调用它来尝试持久化；快照修改不会写回。
 
 ```python
-session.set("step", 2)
-session.set("attempts", session.get("attempts", 0) + 1)
+def update_progress(working):
+    working.set("step", 2)
+    working.set("attempts", working.get("attempts", 0) + 1)
+
+await context.update_session(update_progress)
 ```
 
 #### clear()
-清空会话数据。
+清空 `update_session()` callback 收到的工作副本。
 
 ```python
-session.clear()
+await context.update_session(lambda working: working.clear())
 ```
 
 #### is_expired()
@@ -458,7 +596,7 @@ event = {
 
 ### 概述
 
-当用户处于活跃会话时，此函数会被调用处理用户的后续消息。在 dispatcher 线性流程中，Step F 负责调用此函数。
+当用户处于活跃会话时，此函数会被调用处理用户的后续消息。在 dispatcher 线性流程中，Step D 负责调用此函数。
 
 ### 函数签名
 
@@ -502,7 +640,7 @@ Dispatcher Step F 捕获
     ↓
 插件处理并返回回复
     ↓
-会话更新（session.set()）
+原子更新（context.update_session(callback)）
     ↓
 ┌─────────────┬─────────────┐
 │ 继续对话      │ 结束对话      │
@@ -553,7 +691,7 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
     
     # 更新尝试次数
     attempts = session.get("attempts", 0) + 1
-    session.set("attempts", attempts)
+    await context.update_session(lambda working: working.set("attempts", attempts))
     
     # 获取目标数字
     target = session.get("target")
@@ -579,15 +717,16 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
 
 在 dispatcher 线性流程中：
 
-1. **优先级明确**：会话处理在命令匹配之后、闲聊之前
+1. **模态优先级**：会话处理先于全局命令；处理器明确返回 `None` 时才回落到命令匹配
 2. **绕过普通触发条件**：群聊普通文本没有 `has_prefix` 时，只要活跃会话存在仍会处理
 3. **独立处理**：会话处理不依赖 bot_name；只有 `is_only_bot_name` 会先走只叫名字回应，避免打断“叫机器人”语义
+4. **空白输入**：无会话时丢弃，有会话时交给处理器，用于表单默认值等语义
 
 ### 注意事项
 
 1. **会话超时**
    - 超过 `timeout` 时间后，会话自动过期
-   - 用户下次发送消息时会创建新会话
+   - 下一次读取会清理过期项并返回空；只有插件再次调用 `create_session()` 才会创建新会话
 
 2. **每个用户独立**
    - 每个 `(user_id, group_id)` 组合有独立的会话
@@ -598,8 +737,8 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
    - 否则用户需要等待超时才能开始新会话
 
 4. **数据更新**
-   - 使用 `session.set()` 更新数据会自动刷新 `updated_at` 时间戳
-   - 这会延长会话的有效期
+   - 只有 `context.update_session(callback)` 成功提交才会持久化 callback 中的 `set/delete/clear`
+   - 成功提交会刷新 `updated_at` 并延长会话有效期；读取快照上的修改不会写回
 
 ---
 
@@ -672,7 +811,6 @@ async def handle_smalltalk(text: str, event: Dict, context) -> List:
 当 `smalltalk_provider` 配置为 `xiaoqing_chat` 时：
 
 1. **进入 smalltalk 回落时会调用此函数**
-   - `random_reply_rate` 不参与 dispatcher 分发
    - 由插件内部控制 attention、回复频率、普通插话概率、PFC planner 和 reply checker
 
 2. **插件可以自主决定是否回复**

@@ -1,4 +1,1 @@
-# Jupyter 代码执行插件
-# 注意：__init__.py 不需要导入 main，因为 plugin_manager 会直接导入 jupyter.main
-
-__all__ = []
+"""隔离式 Jupyter 内核执行与多轮代码缓冲插件。"""

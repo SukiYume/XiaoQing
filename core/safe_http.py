@@ -4,20 +4,26 @@ Plugins must use this module when a chat message controls the request target.
 It validates every DNS result before connecting and pins the validated address
 in an aiohttp resolver, which prevents a hostname from being rebound between
 validation and the TCP connection.
+
+这里处理的是聊天内容可控的 URL：每一跳都重新校验 URL 与全部 DNS 结果，再把已验证
+地址固定到本次连接。外层总超时覆盖 DNS、重定向和正文读取，跨源重定向只继承明确
+允许的无凭据请求头；任何一步无法证明目标仍是公网地址时都必须拒绝请求。
 """
 
 from __future__ import annotations
 
 import asyncio
 import ipaddress
+import math
 import re
 import socket
-from collections.abc import Collection, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
-from urllib.parse import SplitResult, urljoin, urlsplit
+from typing import cast
+from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
 
 import aiohttp
-from aiohttp.abc import AbstractResolver
+from aiohttp.abc import AbstractResolver, ResolveResult
 
 from core.bounded_http import (
     HTML_MIME_POLICY,
@@ -46,6 +52,35 @@ class SafeHttpError(RuntimeError):
     """Raised when a remote response exceeds the safe client limits."""
 
 
+def redact_url_for_log(value: str, *, max_length: int = 256) -> str:
+    """Return a bounded URL diagnostic without credentials, query or fragment."""
+
+    if type(max_length) is not int or max_length <= 0:
+        raise ValueError("max_length must be a positive integer")
+    try:
+        parsed = urlsplit(str(value or "").strip())
+        hostname = parsed.hostname
+        if not parsed.scheme or not hostname:
+            return "<redacted-url>"
+        host = f"[{hostname}]" if ":" in hostname else hostname
+        port = parsed.port
+        netloc = host if port is None else f"{host}:{port}"
+        redacted = urlunsplit(
+            (
+                parsed.scheme,
+                netloc,
+                parsed.path,
+                "<redacted>" if parsed.query else "",
+                "<redacted>" if parsed.fragment else "",
+            )
+        )
+    except (TypeError, ValueError):
+        return "<redacted-url>"
+    if len(redacted) <= max_length:
+        return redacted
+    return redacted[: max_length - 1] + "…"
+
+
 @dataclass(frozen=True)
 class SafeHttpResponse:
     """The bounded, decoded body returned by :func:`fetch_public_html`."""
@@ -55,6 +90,12 @@ class SafeHttpResponse:
     body: bytes
     charset: str | None
     headers: Mapping[str, str]
+
+
+_ResponseReader = Callable[
+    [aiohttp.ClientResponse, str],
+    Awaitable[SafeHttpResponse | None],
+]
 
 
 def _is_public_ip(address: str) -> bool:
@@ -134,7 +175,13 @@ async def resolve_public_host(host: str, port: int) -> tuple[str, ...]:
     except socket.gaierror as exc:
         raise UnsafeUrlError("hostname could not be resolved") from exc
 
-    addresses = tuple(dict.fromkeys(info[4][0] for info in infos))
+    resolved: list[str] = []
+    for info in infos:
+        address = info[4][0]
+        if not isinstance(address, str):
+            raise UnsafeUrlError("hostname has an invalid DNS result")
+        resolved.append(address)
+    addresses = tuple(dict.fromkeys(resolved))
     if not addresses or any(not _is_public_ip(address) for address in addresses):
         raise UnsafeUrlError("hostname has a non-public DNS result")
     return addresses
@@ -162,25 +209,25 @@ class _PinnedResolver(AbstractResolver):
         host: str,
         port: int = 0,
         family: socket.AddressFamily = socket.AF_UNSPEC,
-    ) -> list[dict[str, object]]:
+    ) -> list[ResolveResult]:
         if host.rstrip(".").lower() != self._hostname:
             raise OSError("resolver hostname mismatch")
 
-        records: list[dict[str, object]] = []
+        records: list[ResolveResult] = []
         for address in self._addresses:
             ip = ipaddress.ip_address(address)
             address_family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
             if family not in (socket.AF_UNSPEC, address_family):
                 continue
             records.append(
-                {
-                    "hostname": host,
-                    "host": address,
-                    "port": port,
-                    "family": address_family,
-                    "proto": 0,
-                    "flags": 0,
-                }
+                ResolveResult(
+                    hostname=host,
+                    host=address,
+                    port=port,
+                    family=address_family,
+                    proto=0,
+                    flags=0,
+                )
             )
         if not records:
             raise OSError("no validated address matches requested family")
@@ -192,9 +239,10 @@ class _PinnedResolver(AbstractResolver):
 
 def _response_charset(response: aiohttp.ClientResponse) -> str | None:
     try:
-        return response.charset
+        charset = response.charset
     except (LookupError, ValueError):
         return None
+    return charset if isinstance(charset, str) else None
 
 
 def _url_origin(url: str) -> tuple[str, str, int]:
@@ -218,6 +266,7 @@ def _headers_after_redirect(
 ) -> dict[str, str]:
     if _url_origin(current_url) == _url_origin(next_url):
         return dict(headers)
+    # 跨源时采用正向白名单，调用方后来新增的认证类请求头不会被意外透传。
     return {
         key: value
         for key, value in headers.items()
@@ -252,7 +301,7 @@ async def _read_limited_body(response: aiohttp.ClientResponse) -> bytes:
         chunk_bytes=64 * 1024,
     )
     try:
-        return (await read_aiohttp_response(response, limits=limits)).body
+        return cast(bytes, (await read_aiohttp_response(response, limits=limits)).body)
     except BoundedHttpError as exc:
         message = str(exc).replace(
             "decoded response body is too large",
@@ -268,17 +317,110 @@ async def fetch_public_html(
     timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     allowed_hosts: Collection[str] | None = None,
 ) -> SafeHttpResponse | None:
+    """Fetch HTML within one deadline covering DNS and every redirect hop."""
+
+    timeout = _validated_total_timeout(timeout_seconds)
+    return await asyncio.wait_for(
+        _fetch_public_html(
+            url,
+            headers=headers,
+            timeout_seconds=timeout,
+            allowed_hosts=allowed_hosts,
+        ),
+        timeout=timeout,
+    )
+
+
+def _validated_total_timeout(value: float) -> float:
+    if isinstance(value, bool):
+        raise ValueError("timeout_seconds must be a positive finite number")
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("timeout_seconds must be a positive finite number") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout_seconds must be a positive finite number")
+    return timeout
+
+
+async def _fetch_public_html(
+    url: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
+    allowed_hosts: Collection[str] | None = None,
+) -> SafeHttpResponse | None:
     """Fetch one public HTML document with DNS pinning and checked redirects."""
 
+    async def read_html_response(
+        response: aiohttp.ClientResponse,
+        response_url: str,
+    ) -> SafeHttpResponse | None:
+        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
+        if not HTML_MIME_POLICY.accepts(content_type or None):
+            return None
+        body = await _read_limited_body(response)
+        return SafeHttpResponse(
+            url=response_url,
+            status=response.status,
+            body=body,
+            charset=_response_charset(response),
+            headers=response.headers,
+        )
+
+    return await _fetch_with_pinned_redirects(
+        url,
+        headers=headers,
+        binary=False,
+        timeout_seconds=timeout_seconds,
+        allowed_hosts=allowed_hosts,
+        allowed_schemes=None,
+        read_response=read_html_response,
+    )
+
+
+async def _fetch_with_pinned_redirects(
+    url: str,
+    *,
+    headers: Mapping[str, str] | None,
+    binary: bool,
+    timeout_seconds: float,
+    allowed_hosts: Collection[str] | None,
+    allowed_schemes: Collection[str] | None,
+    read_response: _ResponseReader,
+) -> SafeHttpResponse | None:
+    """Run the shared validate-pin-request-redirect lifecycle for one fetch.
+
+    HTML and binary callers deliberately share this transport skeleton so DNS
+    pinning, redirect header stripping, connector cleanup and hop limits cannot
+    drift apart.  The callback only validates and reads a successful response.
+    Each hop owns and closes its connector/session so a connection pool cannot
+    carry a previously pinned address into the next, independently validated
+    redirect target.
+    """
+
     current_url = url
-    current_headers = _public_request_headers(headers, binary=False)
+    current_headers = _public_request_headers(headers, binary=binary)
     timeout = aiohttp.ClientTimeout(total=timeout_seconds, sock_read=min(5, timeout_seconds))
+    normalized_hosts = (
+        {host.rstrip(".").casefold() for host in allowed_hosts}
+        if allowed_hosts is not None
+        else None
+    )
+    normalized_schemes = (
+        {scheme.casefold() for scheme in allowed_schemes} if allowed_schemes is not None else None
+    )
+
     for _ in range(MAX_REDIRECTS + 1):
+        # 不能复用上一跳的解析结果：每个重定向目标都必须重新解析并固定地址，
+        # 否则攻击者可借下一跳或 DNS 重绑定绕过首次校验。
         parsed, addresses = await validate_public_fetch_target(current_url)
-        if allowed_hosts is not None and (parsed.hostname or "").rstrip(".").lower() not in {
-            host.rstrip(".").lower() for host in allowed_hosts
-        }:
+        if normalized_schemes is not None and parsed.scheme.casefold() not in normalized_schemes:
+            raise UnsafeUrlError("URL scheme is not allowed")
+        host = (parsed.hostname or "").rstrip(".").casefold()
+        if normalized_hosts is not None and host not in normalized_hosts:
             raise UnsafeUrlError("URL host is not allowed")
+
         resolver = _PinnedResolver(parsed.hostname or "", addresses)
         connector = aiohttp.TCPConnector(
             resolver=resolver,
@@ -311,20 +453,10 @@ async def fetch_public_html(
                         continue
                     if response.status != 200:
                         return None
-                    content_type = (
-                        response.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
-                    )
-                    if not HTML_MIME_POLICY.accepts(content_type or None):
-                        return None
-                    body = await _read_limited_body(response)
-                    return SafeHttpResponse(
-                        url=current_url,
-                        status=response.status,
-                        body=body,
-                        charset=_response_charset(response),
-                        headers=response.headers,
-                    )
+                    return await read_response(response, current_url)
         finally:
+            # ClientSession 构造或请求阶段失败时也要回收本跳专用连接器；连接器不跨跳
+            # 复用，确保下一跳只能连接它自己刚刚通过校验的地址集合。
             await resolver.close()
             await connector.close()
 
@@ -341,18 +473,21 @@ async def _read_identity_body_limited(
     if encoding not in {"", "identity"}:
         raise SafeHttpError("encoded binary responses are not allowed")
     try:
-        return (
-            await read_aiohttp_response(
-                response,
-                limits=BodyLimits(
-                    max_wire_bytes=max_bytes,
-                    max_decoded_bytes=max_bytes,
-                    max_decompression_ratio=1,
-                    ratio_grace_bytes=1,
-                    chunk_bytes=64 * 1024,
-                ),
-            )
-        ).body
+        return cast(
+            bytes,
+            (
+                await read_aiohttp_response(
+                    response,
+                    limits=BodyLimits(
+                        max_wire_bytes=max_bytes,
+                        max_decoded_bytes=max_bytes,
+                        max_decompression_ratio=1,
+                        ratio_grace_bytes=1,
+                        chunk_bytes=64 * 1024,
+                    ),
+                )
+            ).body,
+        )
     except BoundedHttpError as exc:
         raise SafeHttpError("response is too large") from exc
 
@@ -368,73 +503,71 @@ async def fetch_public_bytes(
     allowed_hosts: Collection[str] | None = None,
     allowed_schemes: Collection[str] | None = None,
 ) -> SafeHttpResponse | None:
+    """Fetch bytes within one deadline covering DNS and every redirect hop."""
+
+    timeout = _validated_total_timeout(timeout_seconds)
+    return await asyncio.wait_for(
+        _fetch_public_bytes(
+            url,
+            headers=headers,
+            timeout_seconds=timeout,
+            max_bytes=max_bytes,
+            allowed_content_type_prefixes=allowed_content_type_prefixes,
+            allowed_content_types=allowed_content_types,
+            allowed_hosts=allowed_hosts,
+            allowed_schemes=allowed_schemes,
+        ),
+        timeout=timeout,
+    )
+
+
+async def _fetch_public_bytes(
+    url: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
+    max_bytes: int = MAX_RESPONSE_BYTES,
+    allowed_content_type_prefixes: tuple[str, ...] = ("image/",),
+    allowed_content_types: Collection[str] | None = None,
+    allowed_hosts: Collection[str] | None = None,
+    allowed_schemes: Collection[str] | None = None,
+) -> SafeHttpResponse | None:
     """Fetch bounded bytes from a public URL with DNS pinning on every hop."""
     if max_bytes <= 0:
         raise ValueError("max_bytes must be positive")
-    current_url = url
-    current_headers = _public_request_headers(headers, binary=True)
-    timeout = aiohttp.ClientTimeout(total=timeout_seconds, sock_read=min(5, timeout_seconds))
-    for _ in range(MAX_REDIRECTS + 1):
-        parsed, addresses = await validate_public_fetch_target(current_url)
-        if allowed_schemes is not None and parsed.scheme.lower() not in {
-            scheme.lower() for scheme in allowed_schemes
-        }:
-            raise UnsafeUrlError("URL scheme is not allowed")
-        if allowed_hosts is not None and (parsed.hostname or "").rstrip(".").lower() not in {
-            host.rstrip(".").lower() for host in allowed_hosts
-        }:
-            raise UnsafeUrlError("URL host is not allowed")
-        resolver = _PinnedResolver(parsed.hostname or "", addresses)
-        connector = aiohttp.TCPConnector(
-            resolver=resolver,
-            use_dns_cache=False,
-            force_close=True,
+    normalized_types = (
+        {value.strip().casefold() for value in allowed_content_types}
+        if allowed_content_types is not None
+        else None
+    )
+    normalized_prefixes = tuple(prefix.casefold() for prefix in allowed_content_type_prefixes)
+
+    async def read_binary_response(
+        response: aiohttp.ClientResponse,
+        response_url: str,
+    ) -> SafeHttpResponse | None:
+        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
+        if normalized_types is not None and content_type not in normalized_types:
+            raise SafeHttpError("response content type is not allowed")
+        if normalized_prefixes and not any(
+            content_type.startswith(prefix) for prefix in normalized_prefixes
+        ):
+            raise SafeHttpError("response content type is not allowed")
+        body = await _read_identity_body_limited(response, max_bytes=max_bytes)
+        return SafeHttpResponse(
+            url=response_url,
+            status=response.status,
+            body=body,
+            charset=None,
+            headers=response.headers,
         )
-        try:
-            async with aiohttp.ClientSession(
-                connector=connector,
-                timeout=timeout,
-                auto_decompress=False,
-                trust_env=False,
-            ) as session:
-                async with session.get(
-                    current_url,
-                    headers=current_headers,
-                    allow_redirects=False,
-                ) as response:
-                    if response.status in {301, 302, 303, 307, 308}:
-                        location = response.headers.get("Location")
-                        if not location:
-                            return None
-                        next_url = urljoin(current_url, location)
-                        current_headers = _headers_after_redirect(
-                            current_headers,
-                            current_url=current_url,
-                            next_url=next_url,
-                        )
-                        current_url = next_url
-                        continue
-                    if response.status != 200:
-                        return None
-                    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
-                    if allowed_content_types is not None and content_type not in {
-                        value.strip().casefold() for value in allowed_content_types
-                    }:
-                        raise SafeHttpError("response content type is not allowed")
-                    if allowed_content_type_prefixes and not any(
-                        content_type.startswith(prefix.lower())
-                        for prefix in allowed_content_type_prefixes
-                    ):
-                        raise SafeHttpError("response content type is not allowed")
-                    body = await _read_identity_body_limited(response, max_bytes=max_bytes)
-                    return SafeHttpResponse(
-                        url=current_url,
-                        status=response.status,
-                        body=body,
-                        charset=None,
-                        headers=response.headers,
-                    )
-        finally:
-            await resolver.close()
-            await connector.close()
-    raise UnsafeUrlError("too many redirects")
+
+    return await _fetch_with_pinned_redirects(
+        url,
+        headers=headers,
+        binary=True,
+        timeout_seconds=timeout_seconds,
+        allowed_hosts=allowed_hosts,
+        allowed_schemes=allowed_schemes,
+        read_response=read_binary_response,
+    )

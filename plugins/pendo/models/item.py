@@ -1,40 +1,8 @@
-"""
-统一的Item数据模型
-根据AGENTS.md第四章节定义的统一模型
-
-当前状态说明：
-==================
-本文件定义了完整的类型体系（ItemType枚举、Item dataclass继承体系、工厂方法等），
-Database层已经支持dataclass实例的读写操作（见services/db.py）：
-- get_item() 返回 Item dataclass 实例
-- get_items() 返回 Item dataclass 列表
-- insert_item() 接受 dict 或 Item dataclass 实例
-- update_item() 接受 dict 或 Item dataclass 实例
-
-保留原因：
-==========
-1. ItemType枚举已在全代码库中统一使用（修复了CodeReview 4.9问题）
-2. dataclass为Database层提供类型安全的读写操作
-3. 提供类型提示，增强IDE自动补全和静态类型检查支持
-4. Handler层可以直接使用dataclass实例获得类型安全
-
-未来优化路径：
-=============
-1. 修改Handler层方法接受和返回dataclass实例，而非dict
-2. 使用mypy/pyright等静态类型检查工具确保类型安全
-3. 在新功能中优先使用dataclass，验证稳定性
-
-使用说明：
-=========
-Database层已自动处理dataclass与数据库行的转换：
-- 从数据库读取：_row_to_item() 自动创建对应的子类实例（EventItem/TaskItem等）
-- 写入数据库：to_dict() 自动转换为dict并处理枚举类型
-- Handler层可以灵活选择使用dict或dataclass实例
-"""
+"""数据库读写共享的条目数据模型。"""
 
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -57,16 +25,6 @@ class TaskStatus(Enum):
     CANCELLED = "cancelled"  # 已取消
 
 
-class Priority(Enum):
-    """优先级 (1=紧急, 2=高, 3=中, 4=低, 5=最低)"""
-
-    URGENT = 1  # 紧急
-    HIGH = 2  # 高
-    MEDIUM = 3  # 中
-    LOW = 4  # 低
-    LOWEST = 5  # 最低
-
-
 @dataclass
 class Item:
     """统一的条目基类"""
@@ -78,8 +36,12 @@ class Item:
     content: str = ""
     tags: list[str] = field(default_factory=list)
     category: str = "未分类"
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    created_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
+    )
+    updated_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
+    )
     owner_id: str = ""
     context: dict[str, Any] = field(default_factory=dict)  # 来源上下文(群id、私聊等)
     visibility: str = "private"  # private/group_scope
@@ -97,13 +59,6 @@ class Item:
             if isinstance(value, Enum):
                 data[key] = value.value
         return data
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Item":
-        """从字典创建"""
-        if "type" in data and isinstance(data["type"], str):
-            data["type"] = ItemType(data["type"])
-        return cls(**data)
 
 
 @dataclass
@@ -169,7 +124,7 @@ class DiaryItem(Item):
     mood: str | None = None  # 情绪(如: happy, sad, calm等)
     mood_score: int | None = None  # 情绪评分(1-10)
     weather: str | None = None
-    location: str = ""  # L-7修复：缺失的 location 字段，缺少时 asdict() 不序列化导致无法持久化
+    location: str = ""  # 字段必须始终存在，确保 asdict() 可稳定持久化位置。
     template_id: str | None = None  # 使用的模板ID
     diary_date: str | None = None  # 日记对应的日期(YYYY-MM-DD)
     entry_time: str | None = None  # 记录发生/写下的具体时间(ISO datetime)
@@ -184,32 +139,26 @@ class LedgerItem(Item):
     type: ItemType = ItemType.LEDGER
 
     # Ledger特有字段
-    amount: float = 0.0                        # 金额镜像（由 amount_cents 派生，正数）
-    amount_cents: int = 0                      # 金额（分，正整数，账本计算主字段）
-    currency: str = "CNY"                      # 币种
-    transaction_type: str = "expense"          # expense | income | transfer
-    ledger_category: str = "其他"              # 账目分类（餐饮、交通等）
-    ledger_date: str | None = None          # 账目日期 YYYY-MM-DD
-    account_name: str = "现金"                 # 账户/钱包
-    counter_account_name: str = ""             # 转账目标账户
-    merchant: str = ""                         # 商户/付款方/收款方
-    remark: str = ""                           # 备注
+    amount: float = 0.0  # 金额镜像（由 amount_cents 派生，正数）
+    amount_cents: int = 0  # 金额（分，正整数，账本计算主字段）
+    currency: str = "CNY"  # 币种
+    transaction_type: str = "expense"  # expense | income | transfer
+    ledger_category: str = "其他"  # 账目分类（餐饮、交通等）
+    ledger_date: str | None = None  # 账目日期 YYYY-MM-DD
+    account_name: str = "现金"  # 账户/钱包
+    counter_account_name: str = ""  # 转账目标账户
+    merchant: str = ""  # 商户/付款方/收款方
+    remark: str = ""  # 备注
 
 
 # 类型映射
-ITEM_TYPE_CLASS_MAP = {
+ITEM_TYPE_CLASS_MAP: dict[ItemType, type[Item]] = {
     ItemType.EVENT: EventItem,
     ItemType.TASK: TaskItem,
     ItemType.NOTE: NoteItem,
     ItemType.DIARY: DiaryItem,
     ItemType.LEDGER: LedgerItem,
 }
-
-
-def create_item(item_type: ItemType, **kwargs) -> Item:
-    """工厂方法：根据类型创建对应的Item实例"""
-    item_class = ITEM_TYPE_CLASS_MAP.get(item_type, Item)
-    return item_class(**kwargs)
 
 
 def get_item_type_value(item_type: Any, default: str = "item") -> str:

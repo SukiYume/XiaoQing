@@ -1,157 +1,330 @@
-"""
-Shell 插件配置
+"""Shell 插件的默认命令入口、拒绝规则与资源上限。"""
 
-包含命令白名单、危险模式、默认超时等配置常量。
-"""
+DEFAULT_TIMEOUT = 30
+MAX_OUTPUT_LENGTH = 4000
 
-from __future__ import annotations
+# 该列表只减少管理员误触，不能限制程序参数、解释器代码、网络或子进程能力。
+DEFAULT_WHITELIST: frozenset[str] = frozenset(
+    {
+        # 系统与硬件信息
+        "ls",
+        "pwd",
+        "cat",
+        "head",
+        "tail",
+        "echo",
+        "date",
+        "uptime",
+        "whoami",
+        "hostname",
+        "uname",
+        "df",
+        "du",
+        "free",
+        "top",
+        "ps",
+        "which",
+        "env",
+        "printenv",
+        "id",
+        "groups",
+        "w",
+        "who",
+        "last",
+        "lastlog",
+        "lscpu",
+        "lsmem",
+        "lsblk",
+        "lsusb",
+        "lspci",
+        "dmidecode",
+        "arch",
+        "nproc",
+        "getconf",
+        "nvidia-smi",
+        # 文件、归档与文本处理
+        "find",
+        "grep",
+        "egrep",
+        "fgrep",
+        "wc",
+        "sort",
+        "uniq",
+        "diff",
+        "file",
+        "stat",
+        "tree",
+        "less",
+        "more",
+        "strings",
+        "xxd",
+        "hexdump",
+        "locate",
+        "whereis",
+        "readlink",
+        "realpath",
+        "basename",
+        "dirname",
+        "md5sum",
+        "sha256sum",
+        "sha1sum",
+        "cksum",
+        "cp",
+        "mv",
+        "mkdir",
+        "touch",
+        "ln",
+        "tar",
+        "gzip",
+        "gunzip",
+        "zip",
+        "unzip",
+        "7z",
+        "rar",
+        "unrar",
+        "sed",
+        "awk",
+        "cut",
+        "tr",
+        "paste",
+        "join",
+        "split",
+        "tee",
+        "xargs",
+        # 进程与任务管理
+        "htop",
+        "pgrep",
+        "pkill",
+        "killall",
+        "kill",
+        "nohup",
+        "screen",
+        "tmux",
+        "nice",
+        "renice",
+        "ionice",
+        "timeout",
+        "time",
+        "lsof",
+        "fuser",
+        "pstree",
+        "tasklist",
+        "taskkill",
+        "wmic",
+        # 网络与远程访问
+        "ping",
+        "ping6",
+        "curl",
+        "wget",
+        "nslookup",
+        "dig",
+        "host",
+        "traceroute",
+        "tracert",
+        "mtr",
+        "pathping",
+        "netstat",
+        "ss",
+        "ip",
+        "ifconfig",
+        "ipconfig",
+        "arp",
+        "route",
+        "nc",
+        "ncat",
+        "telnet",
+        "ssh",
+        "scp",
+        "rsync",
+        "ftp",
+        "sftp",
+        "whois",
+        "nmap",
+        "tcpdump",
+        "iptables",
+        "firewall-cmd",
+        "netsh",
+        "getmac",
+        "nbtstat",
+        "net",
+        # 磁盘、服务与账户管理（部分命令可修改系统）
+        "mount",
+        "umount",
+        "fdisk",
+        "parted",
+        "blkid",
+        "findmnt",
+        "sync",
+        "chkdsk",
+        "diskpart",
+        "fsutil",
+        "label",
+        "systemctl",
+        "service",
+        "journalctl",
+        "dmesg",
+        "sysctl",
+        "crontab",
+        "at",
+        "batch",
+        "shutdown",
+        "reboot",
+        "poweroff",
+        "halt",
+        "sc",
+        "schtasks",
+        "reg",
+        "finger",
+        "getent",
+        "passwd",
+        "users",
+        "query",
+        # 开发与容器工具
+        "python",
+        "python3",
+        "pip",
+        "pip3",
+        "pipx",
+        "conda",
+        "mamba",
+        "node",
+        "npm",
+        "npx",
+        "yarn",
+        "pnpm",
+        "deno",
+        "bun",
+        "git",
+        "gh",
+        "svn",
+        "hg",
+        "make",
+        "cmake",
+        "ninja",
+        "gcc",
+        "g++",
+        "clang",
+        "rustc",
+        "cargo",
+        "java",
+        "javac",
+        "mvn",
+        "gradle",
+        "go",
+        "ruby",
+        "perl",
+        "php",
+        "docker",
+        "docker-compose",
+        "podman",
+        "kubectl",
+        "helm",
+        "code",
+        "vim",
+        "nano",
+        "vi",
+        "emacs",
+        # 通用工具、媒体工具和 Windows 外部程序
+        "man",
+        "info",
+        "clear",
+        "reset",
+        "tput",
+        "sleep",
+        "watch",
+        "yes",
+        "bc",
+        "expr",
+        "factor",
+        "seq",
+        "shuf",
+        "jq",
+        "yq",
+        "xmllint",
+        "base64",
+        "openssl",
+        "gpg",
+        "convert",
+        "identify",
+        "ffmpeg",
+        "ffprobe",
+        "cmd",
+        "powershell",
+        "pwsh",
+        "where",
+        "findstr",
+        "attrib",
+        "icacls",
+        "cacls",
+        "takeown",
+        "systeminfo",
+        "xcopy",
+        "robocopy",
+        "explorer",
+        "notepad",
+        "mspaint",
+        "calc",
+        "control",
+        "mmc",
+        "msconfig",
+        "devmgmt.msc",
+        "diskmgmt.msc",
+        "eventvwr",
+        "perfmon",
+        "resmon",
+        "taskmgr",
+        "gpresult",
+        "gpupdate",
+        "sfc",
+        "dism",
+        "certutil",
+        "cipher",
+        "compact",
+        "mode",
+        "chcp",
+    }
+)
 
-import sys
+# 这些名称依赖命令解释器内建语义，无法由 create_subprocess_exec 直接启动。
+UNSUPPORTED_SHELL_BUILTINS: frozenset[str] = frozenset(
+    {
+        "alias",
+        "bg",
+        "cd",
+        "cls",
+        "color",
+        "copy",
+        "del",
+        "dir",
+        "fg",
+        "help",
+        "history",
+        "jobs",
+        "md",
+        "move",
+        "path",
+        "prompt",
+        "rd",
+        "rmdir",
+        "set",
+        "start",
+        "title",
+        "type",
+        "ver",
+        "vol",
+        "wait",
+    }
+)
 
-# ============================================================
-# 默认允许的命令白名单
-# ============================================================
-
-DEFAULT_WHITELIST: set[str] = {
-    # ============================================================
-    # 系统信息
-    # ============================================================
-    "ls", "dir", "pwd", "cd", "cat", "head", "tail", "echo", "date", "uptime",
-    "whoami", "hostname", "uname", "df", "du", "free", "top", "ps", "which",
-    "env", "printenv", "id", "groups", "w", "who", "last", "lastlog",
-    "lscpu", "lsmem", "lsblk", "lsusb", "lspci", "dmidecode",  # 硬件信息
-    "arch", "nproc", "getconf", "nvidia-smi", # 系统架构
-
-    # ============================================================
-    # 文件操作
-    # ============================================================
-    # 只读
-    "find", "grep", "egrep", "fgrep", "wc", "sort", "uniq", "diff", "file",
-    "stat", "tree", "less", "more", "strings", "xxd", "hexdump",
-    "locate", "whereis", "readlink", "realpath", "basename", "dirname",
-    "md5sum", "sha256sum", "sha1sum", "cksum",  # 校验
-    # 读写（谨慎使用）
-    "cp", "mv", "mkdir", "touch", "ln",  # 基本操作
-    "tar", "gzip", "gunzip", "zip", "unzip", "7z", "rar", "unrar",  # 压缩
-    "sed", "awk", "cut", "tr", "paste", "join", "split",  # 文本处理
-    "tee", "xargs",
-
-    # ============================================================
-    # 进程管理
-    # ============================================================
-    "htop", "pgrep", "pkill", "killall", "kill",
-    "jobs", "bg", "fg", "nohup", "screen", "tmux",
-    "nice", "renice", "ionice", "timeout", "time",
-    "lsof", "fuser", "pstree",
-    # Windows 进程
-    "tasklist", "taskkill", "wmic",
-
-    # ============================================================
-    # 网络诊断
-    # ============================================================
-    "ping", "ping6", "curl", "wget", "nslookup", "dig", "host",
-    "traceroute", "tracert", "mtr", "pathping",
-    "netstat", "ss", "ip", "ifconfig", "ipconfig", "arp", "route",
-    "nc", "ncat", "telnet", "ssh", "scp", "rsync", "ftp", "sftp",
-    "whois", "nmap", "tcpdump", "iptables", "firewall-cmd",
-    # Windows 网络
-    "netsh", "getmac", "nbtstat", "net",
-
-    # ============================================================
-    # 磁盘管理
-    # ============================================================
-    "mount", "umount", "fdisk", "parted", "blkid",
-    "findmnt", "sync",
-    # Windows 磁盘
-    "chkdsk", "diskpart", "fsutil", "vol", "label",
-
-    # ============================================================
-    # 服务/系统管理
-    # ============================================================
-    "systemctl", "service", "journalctl", "dmesg", "sysctl",
-    "crontab", "at", "batch",
-    "shutdown", "reboot", "poweroff", "halt",  # 慎用!
-    # Windows 服务
-    "sc", "schtasks", "reg",
-
-    # ============================================================
-    # 用户管理（只读）
-    # ============================================================
-    "finger", "getent", "passwd",
-    "users",
-    # Windows 用户
-    "query",
-
-    # ============================================================
-    # Python/开发工具
-    # ============================================================
-    "python", "python3", "pip", "pip3", "pipx", "conda", "mamba",
-    "node", "npm", "npx", "yarn", "pnpm", "deno", "bun",
-    "git", "gh", "svn", "hg",
-    "make", "cmake", "ninja", "gcc", "g++", "clang", "rustc", "cargo",
-    "java", "javac", "mvn", "gradle", "go", "ruby", "perl", "php",
-    "docker", "docker-compose", "podman", "kubectl", "helm",
-    "code", "vim", "nano", "vi", "emacs",
-
-    # ============================================================
-    # 其他实用工具
-    # ============================================================
-    "man", "info", "help", "type", "alias", "history",
-    "clear", "cls", "reset", "tput",
-    "sleep", "wait", "watch", "yes",
-    "bc", "expr", "factor", "seq", "shuf",
-    "jq", "yq", "xmllint",  # JSON/YAML/XML 处理
-    "base64", "openssl", "gpg",  # 编码/加密
-    "convert", "identify", "ffmpeg", "ffprobe",  # 媒体处理
-
-    # ============================================================
-    # Windows 特有命令
-    # ============================================================
-    "cmd", "powershell", "pwsh", "where", "findstr",
-    "attrib", "icacls", "cacls", "takeown",
-    "systeminfo", "ver", "set", "path",
-    "copy", "xcopy", "robocopy", "move", "del", "rd", "rmdir", "md",
-    "start", "explorer", "notepad", "mspaint", "calc",
-    "control", "mmc", "msconfig", "devmgmt.msc", "diskmgmt.msc",
-    "eventvwr", "perfmon", "resmon", "taskmgr",
-    "gpresult", "gpupdate", "sfc", "dism",
-    "certutil", "cipher", "compact",
-    "mode", "chcp", "title", "color", "prompt",
-}
-
-# 这些命令依赖 shell 内建语义，无法通过 create_subprocess_exec 直接执行。
-UNSUPPORTED_SHELL_BUILTINS: set[str] = {
-    "alias", "bg", "cd", "cls", "color", "copy", "del", "fg", "help",
-    "history", "jobs", "path", "prompt", "rd", "rmdir", "set", "start",
-    "title", "type", "wait",
-}
-
-# ============================================================
-# 危险模式（正则表达式）
-# ============================================================
-
-DANGEROUS_PATTERNS: list[str] = [
-    r"[;&|`$]",            # 命令链接和变量扩展
-    r"[\r\n]",             # 换行
-    r"\$\(",               # 命令替换
-    r">\s*>",              # 追加重定向
-    r">\s*/",              # 重定向到根目录
-    r"rm\s+-rf",           # 危险删除
-    r"mkfs",               # 格式化
-    r"dd\s+if=",           # dd 命令
-    r":()\{",              # Fork bomb
-    r"chmod\s+777",        # 危险权限
-]
-
-# ============================================================
-# 其他默认配置
-# ============================================================
-
-# 执行超时（秒）
-DEFAULT_TIMEOUT: int = 30
-
-# 输出最大字符数
-MAX_OUTPUT_LENGTH: int = 4000
-
-# Windows 中文系统编码
-WINDOWS_ENCODING: str = "gbk" if sys.platform == "win32" else "utf-8"
+# 即使管理员关闭启用列表，仍拒绝明显的复合 shell 语法和高风险误触形式。
+DANGEROUS_PATTERNS: tuple[str, ...] = (
+    r"[;&|`$]",  # 命令链接、管道、替换或变量扩展
+    r"[\r\n]",  # 多行命令
+    r">\s*>",  # 追加重定向
+    r">\s*/",  # 重定向到根路径
+    r"(?:^|\s)rm\s+-[^\s]*r[^\s]*f",
+    r"(?:^|\s)mkfs(?:\.[^\s]+)?(?:\s|$)",
+    r"(?:^|\s)dd\s+if=",
+    r":\(\)\{",  # Fork bomb
+    r"(?:^|\s)chmod\s+777(?:\s|$)",
+)

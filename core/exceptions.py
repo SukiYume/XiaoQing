@@ -10,12 +10,12 @@ from pathlib import Path
 
 class XiaoQingError(Exception):
     """XiaoQing 框架基础异常"""
-    pass
 
 
 # ============================================================
 # 插件相关异常
 # ============================================================
+
 
 class PluginError(XiaoQingError):
     """插件执行错误"""
@@ -28,26 +28,34 @@ class PluginError(XiaoQingError):
 
 class PluginLoadError(PluginError):
     """插件加载错误"""
-    pass
+
+
+class PluginLifecycleFatalError(PluginError):
+    """Task-safe carrier for a fatal plugin lifecycle BaseException."""
+
+    def __init__(self, plugin_name: str, original: BaseException):
+        self.original = original
+        super().__init__(
+            plugin_name,
+            f"fatal lifecycle error: {type(original).__name__}: {original}",
+        )
 
 
 class PluginExecutionError(PluginError):
     """插件执行错误"""
-    pass
 
 
 class PluginTimeoutError(PluginError):
     """插件执行超时"""
-    pass
 
 
 # ============================================================
 # 命令相关异常
 # ============================================================
 
+
 class CommandError(XiaoQingError):
     """命令错误"""
-    pass
 
 
 class CommandNotFoundError(CommandError):
@@ -79,9 +87,9 @@ class CommandArgumentError(CommandError):
 # 配置相关异常
 # ============================================================
 
+
 class ConfigError(XiaoQingError):
     """配置错误"""
-    pass
 
 
 class ConfigLoadError(ConfigError):
@@ -99,16 +107,15 @@ class ConfigLoadError(ConfigError):
 
 class ConfigValidationError(ConfigError):
     """配置校验错误"""
-    pass
 
 
 # ============================================================
 # 会话相关异常
 # ============================================================
 
+
 class SessionError(XiaoQingError):
     """会话错误"""
-    pass
 
 
 class SessionNotFoundError(SessionError):
@@ -117,32 +124,29 @@ class SessionNotFoundError(SessionError):
     def __init__(self, user_id: int, group_id: int | None = None):
         self.user_id = user_id
         self.group_id = group_id
-        location = f"group {group_id}" if group_id else "private"
+        location = f"group {group_id}" if group_id is not None else "private"
         super().__init__(f"No active session for user {user_id} in {location}")
 
 
 class SessionExpiredError(SessionError):
     """会话已过期"""
-    pass
 
 
 # ============================================================
 # 通信相关异常
 # ============================================================
 
+
 class CommunicationError(XiaoQingError):
     """通信错误"""
-    pass
 
 
 class OneBotError(CommunicationError):
     """OneBot 通信错误"""
-    pass
 
 
 class AuthenticationError(CommunicationError):
     """认证错误"""
-    pass
 
 
 __all__ = [
@@ -151,6 +155,7 @@ __all__ = [
     # 插件
     "PluginError",
     "PluginLoadError",
+    "PluginLifecycleFatalError",
     "PluginExecutionError",
     "PluginTimeoutError",
     # 命令

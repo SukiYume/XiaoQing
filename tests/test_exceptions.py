@@ -29,6 +29,7 @@ from core.exceptions import (
 # Base Exception Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_xiaoqing_error_base():
     """Test XiaoQingError is a proper exception"""
@@ -48,6 +49,7 @@ def test_xiaoqing_error_can_be_raised():
 # ============================================================
 # Plugin Exceptions Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_plugin_error_base():
@@ -116,6 +118,7 @@ def test_plugin_exception_hierarchy():
 # Command Exceptions Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_command_error_base():
     """Test CommandError"""
@@ -161,6 +164,7 @@ def test_command_argument_error():
 # Config Exceptions Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_config_error_base():
     """Test ConfigError"""
@@ -189,6 +193,7 @@ def test_config_validation_error():
 # ============================================================
 # Session Exceptions Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_session_error_base():
@@ -222,6 +227,16 @@ def test_session_not_found_error_group():
 
 
 @pytest.mark.unit
+def test_session_not_found_error_distinguishes_zero_group_from_private():
+    """错误格式以 None 表示私聊，不能把其他整数悄悄改写成私聊。"""
+
+    exc = SessionNotFoundError(12345, 0)
+
+    assert exc.group_id == 0
+    assert "group 0" in str(exc)
+
+
+@pytest.mark.unit
 def test_session_expired_error():
     """Test SessionExpiredError"""
     exc = SessionExpiredError("Session has expired")
@@ -233,6 +248,7 @@ def test_session_expired_error():
 # ============================================================
 # Communication Exceptions Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_communication_error_base():
@@ -263,6 +279,7 @@ def test_authentication_error():
 # ============================================================
 # Exception Catching Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_catch_plugin_error_by_base():
@@ -347,6 +364,7 @@ def test_catch_xiaoqing_error_catches_all():
 # Exception __all__ Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_exceptions_all_exports():
     """Test that __all__ contains expected exceptions"""
@@ -380,6 +398,7 @@ def test_exceptions_all_exports():
 # ============================================================
 # Exception Message Format Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_plugin_error_message_format():
@@ -420,6 +439,7 @@ def test_session_not_found_group_message_format():
 # ============================================================
 # Exception Re-raising Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_exception_from_cause():

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import is_question
-from ..store_base import StoreBase
+from ..store_base import AsyncKeyedStore, delete_json_artifacts
 
 _LEGACY_SCORE_KWARGS = (
     "threshold",
@@ -34,7 +34,7 @@ class HeartflowState:
     no_reply_streak: int = 0
 
 
-class HeartflowEngine(StoreBase):
+class HeartflowEngine(AsyncKeyedStore[HeartflowState]):
     def __init__(self) -> None:
         super().__init__()
         self._cache: dict[str, HeartflowState] = {}
@@ -42,7 +42,7 @@ class HeartflowEngine(StoreBase):
     def _path(self, chat_id: str) -> Path | None:
         return self._resolve_path("heartflow", f"{chat_id}.json")
 
-    def _load(self, chat_id: str) -> HeartflowState:
+    def get(self, chat_id: str) -> HeartflowState:
         if chat_id in self._cache:
             return self._cache[chat_id]
         st = HeartflowState()
@@ -73,11 +73,10 @@ class HeartflowEngine(StoreBase):
         self._save_json(path, payload)
 
     async def get_async(self, chat_id: str) -> HeartflowState:
-        if chat_id in self._cache:
-            return self._cache[chat_id]
-        st = await asyncio.to_thread(self._load, chat_id)
-        self._cache[chat_id] = st
-        return st
+        cached = self._cache.get(chat_id)
+        if cached is not None:
+            return cached
+        return await super().get_async(chat_id)
 
     async def on_user_message_async(self, *, chat_id: str) -> HeartflowState:
         st = await self.get_async(chat_id)
@@ -103,14 +102,8 @@ class HeartflowEngine(StoreBase):
     def clear(self, chat_id: str) -> None:
         self._cache.pop(chat_id, None)
         path = self._path(chat_id)
-        if path and path.exists():
-            try:
-                path.unlink()
-            except OSError:
-                pass
-
-    async def clear_async(self, chat_id: str) -> None:
-        await asyncio.to_thread(self.clear, chat_id)
+        if path:
+            delete_json_artifacts(path)
 
     @staticmethod
     def _calculate_score(
@@ -142,8 +135,8 @@ class HeartflowEngine(StoreBase):
         return max(0.0, min(1.0, s))
 
     def score(self, *, chat_id: str, **kwargs: Any) -> float:
-        st = self._load(chat_id)
-        # Drop legacy gate params that are now handled before heartflow.
+        st = self.get(chat_id)
+        # 丢弃已经移到 heartflow 之前处理的旧门控参数。
         _drop_legacy_score_kwargs(kwargs)
         return self._calculate_score(st, **kwargs)
 

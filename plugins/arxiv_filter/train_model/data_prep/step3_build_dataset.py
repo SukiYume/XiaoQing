@@ -21,12 +21,12 @@ Step 3: 构建最终训练数据集
 
 import importlib
 import json
-import os
 import re
 import sys
 import time
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pandas as pd
 import requests
@@ -34,6 +34,7 @@ import requests
 feedparser = importlib.import_module("feedparser")
 
 try:
+    from core.atomic_store import atomic_write_text
     from core.bounded_http import (
         XML_MIME_POLICY,
         BodyLimits,
@@ -48,6 +49,7 @@ except ModuleNotFoundError:  # Direct script execution outside the repository ro
     repository_root = Path(__file__).resolve().parents[4]
     if str(repository_root) not in sys.path:
         sys.path.insert(0, str(repository_root))
+    from core.atomic_store import atomic_write_text
     from core.bounded_http import (
         XML_MIME_POLICY,
         BodyLimits,
@@ -59,10 +61,8 @@ except ModuleNotFoundError:  # Direct script execution outside the repository ro
         validate_bounded_xml,
     )
 
-try:
-    from .utils import clean_arxiv_id
-except ImportError:  # Direct script execution.
-    from utils import clean_arxiv_id
+_utils_module = importlib.import_module(f"{__package__}.utils" if __package__ else "utils")
+clean_arxiv_id = _utils_module.clean_arxiv_id
 
 # ============================================================
 # 配置
@@ -107,16 +107,24 @@ ARXIV_REDIRECT_POLICY = RedirectPolicy(
 
 def load_abstract_cache() -> dict[str, dict[str, str]]:
     """加载补充摘要缓存"""
-    if os.path.exists(ABSTRACT_CACHE_FILE):
-        with open(ABSTRACT_CACHE_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+    if not ABSTRACT_CACHE_FILE.exists():
+        return {}
+    with ABSTRACT_CACHE_FILE.open(encoding="utf-8") as stream:
+        payload = json.load(stream)
+    if not isinstance(payload, dict) or any(
+        not isinstance(arxiv_id, str)
+        or not isinstance(record, Mapping)
+        or not isinstance(record.get("title"), str)
+        or not isinstance(record.get("abstract"), str)
+        for arxiv_id, record in payload.items()
+    ):
+        raise ValueError("abstract_cache.json has an invalid schema")
+    return {arxiv_id: dict(record) for arxiv_id, record in payload.items()}
 
 
 def save_abstract_cache(cache: dict[str, dict[str, str]]) -> None:
-    """保存补充摘要缓存"""
-    with open(ABSTRACT_CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False)
+    """原子发布补充摘要缓存，避免中断后留下半个 JSON 文件。"""
+    atomic_write_text(ABSTRACT_CACHE_FILE, json.dumps(cache, ensure_ascii=False))
 
 
 def compute_positive_coverage(df_output: pd.DataFrame, positive_ids: set[str]) -> dict[str, int]:
@@ -143,6 +151,21 @@ def ensure_positive_coverage(df_output: pd.DataFrame, positive_ids: set[str]) ->
 # ============================================================
 # arXiv API（用于补充获取缺失的正样本）
 # ============================================================
+
+
+def _parse_feed_entries(entries: Iterable[Any]) -> dict[str, dict[str, str]]:
+    """把批量和单篇 API 共用的 Atom 条目转换为缓存记录。"""
+
+    results: dict[str, dict[str, str]] = {}
+    for entry in entries:
+        try:
+            aid = clean_arxiv_id(entry.id)
+            title = re.sub(r"\s+", " ", entry.title.strip())
+            abstract = re.sub(r"\s+", " ", entry.summary.strip())
+        except (AttributeError, TypeError):
+            continue
+        results[aid] = {"title": title, "abstract": abstract}
+    return results
 
 
 def fetch_abstracts_batch(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
@@ -183,14 +206,7 @@ def fetch_abstracts_batch(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
             else:
                 return {}
 
-    results: dict[str, dict[str, str]] = {}
-    for entry in feed.entries:
-        aid = clean_arxiv_id(entry.id)
-        title = re.sub(r"\s+", " ", entry.title.strip())
-        abstract = re.sub(r"\s+", " ", entry.summary.strip())
-        results[aid] = {"title": title, "abstract": abstract}
-
-    return results
+    return _parse_feed_entries(feed.entries)
 
 
 def _fetch_one_by_one(arxiv_ids: list[str]) -> dict[str, dict[str, str]]:
@@ -222,13 +238,7 @@ def fetch_abstracts_batch_single(arxiv_id: str) -> dict[str, dict[str, str]]:
     )
     xml_body = validate_bounded_xml(response, limits=ATOM_XML_LIMITS)
     feed = feedparser.parse(xml_body)
-    results: dict[str, dict[str, str]] = {}
-    for entry in feed.entries:
-        aid = clean_arxiv_id(entry.id)
-        title = re.sub(r"\s+", " ", entry.title.strip())
-        abstract = re.sub(r"\s+", " ", entry.summary.strip())
-        results[aid] = {"title": title, "abstract": abstract}
-    return results
+    return _parse_feed_entries(feed.entries)
 
 
 # ============================================================
@@ -236,7 +246,7 @@ def fetch_abstracts_batch_single(arxiv_id: str) -> dict[str, dict[str, str]]:
 # ============================================================
 
 
-def main():
+def main() -> None:
     # ── 1. 读取正样本 ID ──────────────────────────────────────
     print("=" * 60)
     print("读取正样本 ID")
@@ -250,7 +260,7 @@ def main():
     print("\n" + "=" * 60)
     print("从缓存加载论文数据")
     print("=" * 60)
-    all_records = []
+    all_records: list[dict[str, str]] = []
     monthly_dir = CACHE_DIR / "monthly"
     cache_files = sorted(monthly_dir.glob("[0-9][0-9][0-9][0-9].json"))
     for cf in cache_files:
@@ -259,6 +269,8 @@ def main():
         all_records.extend(month_data)
         print(f"  {cf.stem}: {len(month_data)} 篇")
     print(f"总计加载: {len(all_records)} 篇")
+    if not all_records:
+        raise RuntimeError("月度缓存为空，无法构建训练数据集")
 
     df_all = pd.DataFrame(all_records)
     df_all["arxiv_id"] = df_all["arxiv_id"].apply(clean_arxiv_id)
@@ -391,6 +403,8 @@ def main():
     n_pos = (df_output["label"] == 1).sum()
     n_neg = (df_output["label"] == 0).sum()
     total = len(df_output)
+    if total == 0:
+        raise RuntimeError("过滤后训练数据集为空，拒绝写出无效文件")
 
     print(f"\n最终数据集: {total} 条")
     print(f"  正样本: {n_pos} ({n_pos / total * 100:.2f}%)")

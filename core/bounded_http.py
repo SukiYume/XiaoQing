@@ -5,6 +5,10 @@ URL is trusted.  Chat-controlled URLs still require :mod:`core.safe_http` for
 DNS pinning and SSRF protection.  Fixed or administrator-configured providers
 can use these readers without losing private-host, proxy, or non-standard-port
 support.
+
+本模块只负责“响应有界”，不负责判断目标地址是否可信。核心不变量是同时限制线上的
+压缩字节、解压后字节和解压倍率；重定向必须逐跳验证且跨源时剥离敏感请求头；结构化
+数据在交给业务代码前还要独立通过 JSON/XML 的深度、节点数与标量大小检查。
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ import zlib
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urljoin, urlsplit
 from xml.parsers import expat
 
@@ -315,7 +319,7 @@ class _BoundedDecoder:
         self._wire_bytes = 0
         self._decoded = bytearray()
         if encoding == "identity":
-            self._decompressor: zlib.decompressobj | None = None
+            self._decompressor: zlib._Decompress | None = None
         elif encoding == "gzip":
             self._decompressor = zlib.decompressobj(zlib.MAX_WBITS | 16)
         elif encoding == "deflate":
@@ -345,6 +349,8 @@ class _BoundedDecoder:
             self._append(payload)
             return
         try:
+            # 每次只允许解压“剩余预算 + 1”；多出的一个字节用于可靠识别越界，
+            # 避免先完整解压恶意压缩包、再检查大小所造成的内存峰值。
             output = self._decompressor.decompress(
                 payload,
                 self._remaining_output_budget() + 1,
@@ -423,7 +429,7 @@ def decode_limited_chunks(
 
 
 def _ensure_before_deadline(deadline_monotonic: float | None) -> None:
-    if deadline_monotonic is not None and time.monotonic() > deadline_monotonic:
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
         raise ResponseTransportError("response total timeout exceeded")
 
 
@@ -485,7 +491,7 @@ def read_requests_response(
     if not callable(stream):
         raise ResponseFormatError("requests response has no bounded raw stream")
     try:
-        raw.decode_content = False
+        cast(Any, raw).decode_content = False
     except (AttributeError, TypeError):
         pass
     try:
@@ -654,6 +660,7 @@ async def aiohttp_request_bounded(
                     location=location,
                     policy=redirect_policy,
                 )
+                # Authorization/Cookie 只能留在原始源；显式允许的跨源跳转也不能继承。
                 if not same_origin:
                     current_headers = _without_sensitive_headers(current_headers)
                 current_url = next_url
@@ -709,8 +716,12 @@ def requests_request_bounded(
         request_fn = session.request
 
     for hop in range(redirect_policy.max_hops + 1):
-        _ensure_before_deadline(deadline_monotonic)
+        remaining_seconds = _remaining_before_deadline(deadline_monotonic)
         kwargs = dict(base_kwargs)
+        kwargs["timeout"] = _requests_deadline_timeout(
+            base_kwargs["timeout"],
+            remaining_seconds=remaining_seconds,
+        )
         if hop:
             kwargs.pop("params", None)
         response = request_fn(
@@ -750,10 +761,53 @@ def requests_request_bounded(
                 deadline_monotonic=deadline_monotonic,
             )
         finally:
-            close = getattr(response, "close", None)
-            if callable(close):
-                close()
+            _close_response(response)
     raise RedirectPolicyError("too many redirects")
+
+
+def _remaining_before_deadline(deadline_monotonic: float) -> float:
+    """Return the positive budget shared by redirects and response reading."""
+
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        raise ResponseTransportError("response total timeout exceeded")
+    return remaining
+
+
+def _requests_deadline_timeout(configured: Any, *, remaining_seconds: float) -> Any:
+    """Build a fresh urllib3 timeout capped by the shared request deadline.
+
+    ``requests`` otherwise gives every redirect the original timeout again.
+    urllib3's ``total`` timeout also subtracts connection time from the first
+    response read; the explicit deadline checks between streamed chunks cover
+    slow-drip responses across subsequent reads.
+    """
+
+    from requests.adapters import TimeoutSauce
+
+    if isinstance(configured, (tuple, list)) and len(configured) == 2:
+        connect, read = configured
+    else:
+        connect = read = configured
+
+    def capped(value: Any) -> float:
+        if value is None:
+            return remaining_seconds
+        if isinstance(value, bool):
+            raise ValueError("request timeout must be a positive finite number")
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("request timeout must be a positive finite number") from exc
+        if not math.isfinite(seconds) or seconds <= 0:
+            raise ValueError("request timeout must be a positive finite number")
+        return min(seconds, remaining_seconds)
+
+    return TimeoutSauce(
+        total=remaining_seconds,
+        connect=capped(connect),
+        read=capped(read),
+    )
 
 
 def _requests_total_timeout(
@@ -796,7 +850,13 @@ def parse_bounded_json(
     *,
     limits: JsonLimits = JsonLimits(),
 ) -> Any:
-    """Preflight and parse JSON with depth, node, and scalar limits."""
+    """Preflight and parse JSON with depth, node, and scalar limits.
+
+    The raw-text preflight, ``json.loads`` and parsed-tree validation are three
+    intentional passes over untrusted input.  They enforce different limits
+    before recursion, during syntax decoding and after materialization; do not
+    replace them with a provider-specific fast path at this security boundary.
+    """
 
     body = _body_bytes(source)
     if len(body) > limits.max_bytes:

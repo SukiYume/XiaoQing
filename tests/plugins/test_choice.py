@@ -1,384 +1,293 @@
-"""测试choice插件"""
+"""随机选择插件的解析、抽样和消息契约测试。"""
 
-import importlib.util
+from __future__ import annotations
+
+import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+from plugins.choice import main as choice
 
-spec = importlib.util.spec_from_file_location("choice_main", ROOT / "plugins" / "choice" / "main.py")
-choice = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(choice)
+ROOT = Path(__file__).resolve().parents[2]
 
 
-class TestChoicePlugin:
-    """测试choice插件"""
+@pytest.fixture
+def context() -> SimpleNamespace:
+    return SimpleNamespace(
+        logger=MagicMock(),
+        request_id="test-choice",
+        secrets={},
+    )
 
-    @pytest.fixture
-    def mock_context(self):
-        """模拟插件上下文"""
-        class MockContext:
-            def __init__(self):
-                self.plugin_dir = ROOT / "plugins" / "choice"
-                self.data_dir = self.plugin_dir / "data"
-                self.logger = __import__('logging').getLogger(__name__)
 
-        return MockContext()
+class TestChoicePackageContract:
+    def test_entrypoints_and_constants(self) -> None:
+        assert callable(choice.handle)
+        assert choice.MIN_OPTIONS == 2
+        assert choice.MAX_OPTIONS == 50
+        assert choice.MAX_CHOICES == 10
+        assert "随机选择" in choice.HELP_TEXT
 
-    @pytest.fixture
-    def mock_event(self):
-        """模拟事件"""
-        return {
-            "user_id": "12345",
-            "message": "test",
-            "message_type": "private"
-        }
+    def test_manifest_matches_runtime_entrypoints(self) -> None:
+        manifest = json.loads(
+            (ROOT / "plugins" / "choice" / "plugin.json").read_text(encoding="utf-8")
+        )
+        assert manifest["name"] == "choice"
+        assert manifest["entry"] == "main.py"
+        assert manifest["commands"][0]["triggers"] == ["choice", "决定", "选择", "抽奖"]
+        assert manifest["schedule"] == []
 
 
 class TestParseChoiceArgs:
-    """测试参数解析"""
+    def test_basic_arguments(self) -> None:
+        assert choice.parse_choice_args("问题 A B C") == (
+            "问题",
+            ["A", "B", "C"],
+            1,
+            False,
+        )
 
-    def test_parse_basic_args(self):
-        """测试基本参数解析"""
-        question, options, choice_count, unique = choice.parse_choice_args("问题 A B C")
-        assert question == "问题"
-        assert options == ["A", "B", "C"]
-        assert choice_count == 1
-        assert unique is False
+    def test_quoted_text_and_both_flags(self) -> None:
+        assert choice.parse_choice_args('"吃什么好" "ice cream" pizza -n 2 --unique') == (
+            "吃什么好",
+            ["ice cream", "pizza"],
+            2,
+            True,
+        )
 
-    def test_parse_with_count_flag(self):
-        """测试带数量标志的参数解析"""
-        question, options, choice_count, unique = choice.parse_choice_args("问题 A B C -n 2")
-        assert question == "问题"
-        assert options == ["A", "B", "C"]
-        assert choice_count == 2
-        assert unique is False
+    def test_flags_may_appear_before_positional_text(self) -> None:
+        assert choice.parse_choice_args("-u -n 2 问题 A B C") == (
+            "问题",
+            ["A", "B", "C"],
+            2,
+            True,
+        )
 
-    def test_parse_with_unique_flag(self):
-        """测试带去重标志的参数解析"""
-        question, options, choice_count, unique = choice.parse_choice_args("问题 A B C -u")
-        assert question == "问题"
-        assert options == ["A", "B", "C"]
-        assert choice_count == 1
-        assert unique is True
+    @pytest.mark.parametrize("args", ["", "   ", "help", "帮助", "-u"])
+    def test_empty_or_help_arguments_return_empty_request(self, args: str) -> None:
+        assert choice.parse_choice_args(args) == (None, [], 1, False)
 
-    def test_parse_with_unique_long_flag(self):
-        """测试带长去重标志的参数解析"""
-        question, options, choice_count, unique = choice.parse_choice_args("问题 A B C --unique")
-        assert question == "问题"
-        assert options == ["A", "B", "C"]
-        assert choice_count == 1
-        assert unique is True
+    @pytest.mark.parametrize("alias", ["help", "HELP", "帮助"])
+    def test_help_with_extra_text_is_not_an_exact_help_request(self, alias: str) -> None:
+        assert choice.parse_choice_args(f"{alias} 其余内容") == (
+            alias,
+            ["其余内容"],
+            1,
+            False,
+        )
 
-    def test_parse_with_both_flags(self):
-        """测试同时带数量和去重标志"""
-        question, options, choice_count, unique = choice.parse_choice_args("问题 A B C D -n 3 -u")
-        assert question == "问题"
-        assert options == ["A", "B", "C", "D"]
-        assert choice_count == 3
-        assert unique is True
+    def test_double_dash_treats_following_flags_as_text(self) -> None:
+        assert choice.parse_choice_args("符号 -- -n -u") == (
+            "符号",
+            ["-n", "-u"],
+            1,
+            False,
+        )
 
-    def test_parse_empty_args(self):
-        """测试空参数"""
-        question, options, choice_count, unique = choice.parse_choice_args("")
-        assert question is None
-        assert options == []
-        assert choice_count == 1
-        assert unique is False
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            (None, "必须是文本"),
+            ("x" * 4_097, "参数过长"),
+            ('问题 "A B', "引号"),
+            ("问题 A B -n", "必须提供"),
+            ("问题 A B -n two", "ASCII"),
+            ("问题 A B -n １２", "ASCII"),
+            ("问题 A B -n -1", "ASCII"),
+            ("问题 A B -n 2 -n 3", "只能指定一次"),
+            ("问题 A B --other", "不支持"),
+        ],
+    )
+    def test_invalid_arguments_fail_with_stable_messages(
+        self,
+        args: object,
+        message: str,
+    ) -> None:
+        with pytest.raises(choice.ChoiceArgumentError, match=message):
+            choice.parse_choice_args(args)
 
-    def test_parse_single_option(self):
-        """测试单个选项"""
-        question, options, choice_count, unique = choice.parse_choice_args("问题 A")
-        # 有2个tokens，所以能通过初步检查，但只有一个选项
-        assert question == "问题"
-        assert options == ["A"]
-        assert choice_count == 1
-        assert unique is False
+    def test_question_must_be_bounded_and_printable(self) -> None:
+        with pytest.raises(choice.ChoiceArgumentError, match="问题必须"):
+            choice.parse_choice_args(f"{'问' * 101} A B")
+        with pytest.raises(choice.ChoiceArgumentError, match="问题必须"):
+            choice.parse_choice_args('"问\n题" A B')
 
-    def test_parse_with_duplicate_options(self):
-        """测试重复选项（用于加权选择）"""
-        question, options, choice_count, unique = choice.parse_choice_args("问题 A A B C")
-        assert question == "问题"
-        assert options == ["A", "A", "B", "C"]
-
-    def test_parse_supports_quoted_multiword_options(self):
-        question, options, choice_count, unique = choice.parse_choice_args('吃什么 "ice cream" pizza -n 2 -u')
-        assert question == "吃什么"
-        assert options == ["ice cream", "pizza"]
-        assert choice_count == 2
-        assert unique is True
-
-
-class TestValidateOptions:
-    """测试选项验证"""
-
-    @pytest.fixture
-    def mock_context(self):
-        class MockContext:
-            logger = __import__('logging').getLogger(__name__)
-        return MockContext()
-
-    def test_valid_options(self, mock_context):
-        """测试有效选项"""
-        is_valid, error_msg = choice.validate_options(["A", "B"], 1, mock_context)
-        assert is_valid is True
-        assert error_msg is None
-
-    def test_too_few_options(self, mock_context):
-        """测试选项过少"""
-        is_valid, error_msg = choice.validate_options(["A"], 1, mock_context)
-        assert is_valid is False
-        assert "至少需要" in error_msg
-
-    def test_too_many_options(self, mock_context):
-        """测试选项过多"""
-        options = [f"option{i}" for i in range(51)]
-        is_valid, error_msg = choice.validate_options(options, 1, mock_context)
-        assert is_valid is False
-        assert "选项过多" in error_msg or "最多支持" in error_msg
-
-    def test_invalid_choice_count_zero(self, mock_context):
-        """测试选择数量为零"""
-        is_valid, error_msg = choice.validate_options(["A", "B"], 0, mock_context)
-        assert is_valid is False
-        assert "至少为" in error_msg
-
-    def test_invalid_choice_count_too_high(self, mock_context):
-        """测试选择数量过多"""
-        is_valid, error_msg = choice.validate_options(["A", "B"], 11, mock_context)
-        assert is_valid is False
-        assert "选择数量过多" in error_msg or "最多支持" in error_msg
-
-    def test_choice_count_exceeds_options(self, mock_context):
-        """测试选择数量超过选项数量"""
-        is_valid, error_msg = choice.validate_options(["A", "B"], 5, mock_context)
-        # 应该返回有效，但会记录警告日志
-        assert is_valid is True
+    def test_question_without_options_is_left_for_sampling_validation(self) -> None:
+        assert choice.parse_choice_args("问题") == ("问题", [], 1, False)
 
 
 class TestMakeChoice:
-    """测试选择逻辑"""
+    def test_non_unique_mode_preserves_duplicate_weight_and_requested_count(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        rng = MagicMock()
+        rng.choices.return_value = ["A", "A", "B", "A", "B"]
+        monkeypatch.setattr(choice, "_RNG", rng)
 
-    def test_single_choice(self):
-        """测试单个选择"""
-        options = ["A", "B", "C"]
-        result = choice.make_choice(options, 1, False)
-        assert len(result) == 1
-        assert result[0] in options
+        result = choice.make_choice(["A", "A", "B"], 5, unique=False)
 
-    def test_multiple_choices(self):
-        """测试多个选择"""
-        options = ["A", "B", "C", "D", "E"]
-        result = choice.make_choice(options, 3, False)
-        assert len(result) == 3
-        for item in result:
-            assert item in options
+        assert result == ["A", "A", "B", "A", "B"]
+        rng.choices.assert_called_once_with(["A", "A", "B"], k=5)
+        rng.sample.assert_not_called()
 
-    def test_unique_choices(self):
-        """测试去重选择"""
-        options = ["A", "B", "C", "D", "E"]
-        result = choice.make_choice(options, 3, True)
-        assert len(result) == 3
-        assert len(set(result)) == 3  # 确保没有重复
-        for item in result:
-            assert item in options
+    def test_unique_mode_deduplicates_by_text_before_sampling(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        rng = MagicMock()
+        rng.sample.return_value = ["A", "C"]
+        monkeypatch.setattr(choice, "_RNG", rng)
 
-    def test_choices_with_repetition_allowed(self):
-        """测试允许重复的选择"""
-        options = ["A", "B", "C", "D", "E"]
-        result = choice.make_choice(options, 5, False)
-        assert len(result) == 5
-        for item in result:
-            assert item in options
-        # 允许重复时，可能得到重复项
+        result = choice.make_choice(["A", "A", "B", "C", "B"], 2, unique=True)
 
-    def test_choice_count_exceeds_options(self):
-        """测试选择数量超过选项数量"""
-        options = ["A", "B", "C"]
-        with pytest.raises(ValueError):
-            choice.make_choice(options, 10, True)
+        assert result == ["A", "C"]
+        rng.sample.assert_called_once_with(["A", "B", "C"], k=2)
+        rng.choices.assert_not_called()
 
-    def test_choice_count_exceeds_options_non_unique_keeps_requested_count(self):
-        """测试非去重模式不会静默截断选择数量"""
-        options = ["A", "B", "C"]
-        result = choice.make_choice(options, 10, False)
-        assert len(result) == 10
-        assert all(item in options for item in result)
+    def test_unique_count_uses_distinct_option_count(self) -> None:
+        with pytest.raises(choice.ChoiceArgumentError, match="不同选项数量"):
+            choice.make_choice(["A", "A", "B"], 3, unique=True)
 
-    def test_all_options_selected(self):
-        """测试选择所有选项"""
-        options = ["A", "B", "C"]
-        result = choice.make_choice(options, 3, True)
-        assert len(result) == 3
-        assert set(result) == set(options)
+    @pytest.mark.parametrize(
+        ("options", "count", "unique", "message"),
+        [
+            (("A", "B"), 1, False, "必须是列表"),
+            (["A"], 1, False, "至少需要"),
+            ([str(index) for index in range(51)], 1, False, "选项过多"),
+            (["", "B"], 1, False, "每个选项"),
+            (["A\nB", "C"], 1, False, "每个选项"),
+            (["A" * 201, "B"], 1, False, "每个选项"),
+            (["A", "B"], 0, False, "1–10"),
+            (["A", "B"], 11, False, "1–10"),
+            (["A", "B"], True, False, "1–10"),
+            (["A", "B"], 1, 1, "布尔值"),
+        ],
+    )
+    def test_invalid_sampling_inputs_are_rejected(
+        self,
+        options: object,
+        count: object,
+        unique: object,
+        message: str,
+    ) -> None:
+        with pytest.raises(choice.ChoiceArgumentError, match=message):
+            choice.make_choice(options, count, unique)  # type: ignore[arg-type]
 
 
 class TestFormatChoiceResult:
-    """测试结果格式化"""
+    def test_single_result_is_compact(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        rng = MagicMock()
+        rng.choice.return_value = "🎲"
+        monkeypatch.setattr(choice, "_RNG", rng)
 
-    def test_format_single_choice(self):
-        """测试单个选择的格式化"""
-        result = choice.format_choice_result("问题", ["A", "B"], ["A"], 2)
-        assert "问题" in result
-        assert "**A**" in result
+        assert choice.format_choice_result("午饭", ["火锅"], 3) == "🎲 午饭：**火锅**"
 
-    def test_format_multiple_choices(self):
-        """测试多个选择的格式化"""
-        result = choice.format_choice_result("问题", ["A", "B", "C", "D"], ["A", "B"], 4)
-        assert "问题" in result
-        assert "**A**" in result
-        assert "**B**" in result
-        # 应该包含统计信息
-        assert "4 个选项" in result or "4" in result
+    def test_multiple_results_include_order_and_statistics(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        rng = MagicMock()
+        rng.choice.return_value = "🎯"
+        monkeypatch.setattr(choice, "_RNG", rng)
 
-    def test_format_includes_emoji(self):
-        """测试结果包含 emoji"""
-        result = choice.format_choice_result("问题", ["A"], ["A"], 1)
-        # CHOICE_EMOJIS 中的任何一个
-        has_emoji = any(emoji in result for emoji in choice.CHOICE_EMOJIS)
-        assert has_emoji
+        result = choice.format_choice_result("午饭", ["火锅", "日料"], 3)
+
+        assert result == "🎯 午饭：\n  1. **火锅**\n  2. **日料**\n\n已从 3 个选项中选择 2 个"
 
 
 class TestChoiceCommand:
-    """测试命令处理"""
-
-    @pytest.fixture
-    def mock_context(self):
-        class MockContext:
-            plugin_dir = ROOT / "plugins" / "choice"
-            data_dir = ROOT / "plugins" / "choice" / "data"
-            logger = __import__('logging').getLogger(__name__)
-        return MockContext()
-
-    @pytest.fixture
-    def mock_event(self):
-        return {
-            "user_id": "12345",
-            "message": "test",
-            "message_type": "private"
-        }
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("args", ["", "help", "帮助"])
+    async def test_help_is_local(self, args: str, context: SimpleNamespace) -> None:
+        result = await choice.handle("choice", args, {}, context)
+        assert "随机选择助手" in str(result)
+        context.logger.info.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_simple_choice(self, mock_context, mock_event):
-        """测试简单选择"""
-        result = await choice.handle("choice", "吃什么 火锅 烤肉 披萨", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        # 应该包含问题或选中的选项
-        assert "吃什么" in result_text or "火锅" in result_text or "烤肉" in result_text or "披萨" in result_text
+    async def test_default_choice_uses_original_weighted_pool(
+        self,
+        context: SimpleNamespace,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        rng = MagicMock()
+        rng.choices.return_value = ["火锅"]
+        rng.choice.return_value = "🎲"
+        monkeypatch.setattr(choice, "_RNG", rng)
+
+        result = await choice.handle("choice", "午饭 火锅 火锅 日料", {}, context)
+
+        assert "🎲 午饭：**火锅**" in str(result)
+        rng.choices.assert_called_once_with(["火锅", "火锅", "日料"], k=1)
+        logged = "\n".join(str(call) for call in context.logger.mock_calls)
+        assert "午饭" not in logged
+        assert "火锅" not in logged
 
     @pytest.mark.asyncio
-    async def test_help_command(self, mock_context, mock_event):
-        """测试帮助命令"""
-        result = await choice.handle("choice", "help", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "帮助" in result_text or "随机选择" in result_text or "choice" in result_text.lower()
+    async def test_non_unique_overdraw_keeps_requested_count(
+        self,
+        context: SimpleNamespace,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        rng = MagicMock()
+        rng.choices.return_value = ["A", "B", "A", "A", "B"]
+        rng.choice.return_value = "🎯"
+        monkeypatch.setattr(choice, "_RNG", rng)
+
+        result = await choice.handle("choice", "抽取 A B -n 5", {}, context)
+
+        assert "已从 2 个选项中选择 5 个" in str(result)
 
     @pytest.mark.asyncio
-    async def test_chinese_help(self, mock_context, mock_event):
-        """测试中文帮助命令"""
-        result = await choice.handle("choice", "帮助", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
+    async def test_unique_mode_reports_distinct_pool_size(
+        self,
+        context: SimpleNamespace,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        rng = MagicMock()
+        rng.sample.return_value = ["A", "B"]
+        rng.choice.return_value = "✨"
+        monkeypatch.setattr(choice, "_RNG", rng)
+
+        result = await choice.handle("choice", "抽取 A A B C -n 2 -u", {}, context)
+
+        assert "已从 3 个选项中选择 2 个" in str(result)
+        rng.sample.assert_called_once_with(["A", "B", "C"], k=2)
 
     @pytest.mark.asyncio
-    async def test_invalid_args_shows_help(self, mock_context, mock_event):
-        """测试无效参数显示帮助"""
-        result = await choice.handle("choice", "only_one_option", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            ("问题 A", "至少需要"),
+            ("问题 A A -n 2 -u", "不同选项数量"),
+            ("问题 A B -n nope", "ASCII"),
+            ("问题 A B --bad", "不支持"),
+        ],
+    )
+    async def test_user_input_errors_are_stable(
+        self,
+        args: str,
+        message: str,
+        context: SimpleNamespace,
+    ) -> None:
+        result = await choice.handle("choice", args, {}, context)
+        assert message in str(result)
+        context.logger.info.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_too_few_options_error(self, mock_context, mock_event):
-        """测试选项过少错误"""
-        result = await choice.handle("choice", "问题 A", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "至少需要" in result_text or "帮助" in result_text
+    async def test_unexpected_random_failure_uses_public_error(
+        self,
+        context: SimpleNamespace,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        rng = MagicMock()
+        rng.choices.side_effect = RuntimeError("internal detail")
+        monkeypatch.setattr(choice, "_RNG", rng)
 
-    @pytest.mark.asyncio
-    async def test_choice_with_n_flag(self, mock_context, mock_event):
-        """测试带 -n 标志的选择"""
-        result = await choice.handle("choice", "选择 A B C D -n 2", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
+        result = await choice.handle("choice", "问题 A B", {}, context)
 
-    @pytest.mark.asyncio
-    async def test_choice_with_n_flag_overflow_non_unique_keeps_count(self, mock_context, mock_event):
-        """测试 -n 超过选项数时非 unique 模式仍按请求数量选择"""
-        result = await choice.handle("choice", "选择 A B -n 5", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "已从 2 个选项中选择 5 个" in result_text
-
-    @pytest.mark.asyncio
-    async def test_choice_with_u_flag(self, mock_context, mock_event):
-        """测试带 -u 标志的去重选择"""
-        result = await choice.handle("choice", "选择 A B C D -u", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_choice_with_u_flag_overflow_errors(self, mock_context, mock_event):
-        """测试 unique 模式下数量超限会明确报错"""
-        result = await choice.handle("choice", "选择 A B -n 5 -u", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "去重模式" in result_text and "不能超过选项数量" in result_text
-
-    @pytest.mark.asyncio
-    async def test_weighted_choice_duplicates(self, mock_context, mock_event):
-        """测试加权选择（重复选项）"""
-        result = await choice.handle("choice", "抽奖 A A A B C", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_empty_string_args(self, mock_context, mock_event):
-        """测试空字符串参数"""
-        result = await choice.handle("choice", "", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_whitespace_only_args(self, mock_context, mock_event):
-        """测试仅包含空白的参数"""
-        result = await choice.handle("choice", "   ", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_unicode_options(self, mock_context, mock_event):
-        """测试 Unicode 选项"""
-        result = await choice.handle("choice", "选择 OptionA OptionB 你好", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_emoji_options(self, mock_context, mock_event):
-        """测试 Emoji 选项"""
-        result = await choice.handle("choice", "选择 😀 🎉 ✨", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_special_characters_in_options(self, mock_context, mock_event):
-        """测试选项中的特殊字符"""
-        result = await choice.handle("choice", "选择 A! B@ C# D$", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-
-def test_init():
-    """测试插件初始化"""
-    choice.init()
-    assert True
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+        assert "internal detail" not in str(result)

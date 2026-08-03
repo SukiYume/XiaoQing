@@ -1,25 +1,30 @@
-"""自定义断言函数"""
+"""跨测试模块复用的领域无关断言。"""
+
+from collections.abc import Callable
+from typing import Any
+
+import pytest
 
 
+def text_segments_text(
+    segments: list[dict],
+    *,
+    separator: str = "",
+) -> str:
+    """按顺序拼接 OneBot 文本消息段，并允许调用方保留段间分隔。"""
+    return separator.join(
+        str(segment.get("data", {}).get("text", ""))
+        for segment in segments
+        if segment.get("type") == "text"
+    )
 
-def assert_message_segment(actual: dict, expected_type: str, expected_text: str | None = None):
-    """断言消息段类型和内容"""
-    assert actual["type"] == expected_type, f"Expected type {expected_type}, got {actual['type']}"
-    if expected_text is not None:
-        assert actual["data"]["text"] == expected_text
 
+def assert_http_error(status_code: int, call: Callable[[], Any]) -> Any:
+    """执行调用并返回指定状态码的 FastAPI HTTP 异常。"""
 
-def assert_text_message(actual: list, expected_text: str):
-    """断言纯文本消息"""
-    assert len(actual) == 1
-    assert_message_segment(actual[0], "text", expected_text)
+    from fastapi import HTTPException
 
-
-def assert_success_response(response: dict | str | list):
-    """断言响应不为空/错误"""
-    if isinstance(response, dict):
-        assert "error" not in response or not response["error"]
-    elif isinstance(response, str):
-        assert len(response) > 0
-    elif isinstance(response, list):
-        assert len(response) > 0
+    with pytest.raises(HTTPException) as captured:
+        call()
+    assert captured.value.status_code == status_code
+    return captured.value

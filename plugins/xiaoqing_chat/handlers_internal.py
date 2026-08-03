@@ -1,50 +1,80 @@
+"""小青内部管理命令的实现层。
+
+主处理器只负责错误边界和依赖注入，本模块负责统计、重置、审查、记忆与模型切换等
+命令。权限判断必须同时匹配事件用户、事件会话范围和当前 Principal，不能只相信
+事件字典中的身份字段；所有模型覆盖仅修改本次运行状态，不写回配置文件。
+"""
+
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from core.plugin_base import segments
 
+from .helper_utils import _get_ai_route_context
 from .logging_utils import _redacted_value
 from .memory.review_sessions import apply_review_answer, render_session_prompt
-
-
-def get_data_dir(context) -> Path:
-    return context.data_dir
 
 
 def get_bound_state(
     context, *, state_loader: Callable[[], Any], bind_all_stores: Callable[[Any, Path], None]
 ):
     state = state_loader()
-    bind_all_stores(state, get_data_dir(context))
+    bind_all_stores(state, context.data_dir)
     return state
 
 
-def is_admin_operator(event: dict[str, Any], context) -> bool:
+def _matching_user_principal(event: dict[str, Any], context) -> Any | None:
+    """返回与事件用户一致的 Principal；事件字段不能单独构成授权依据。"""
     principal = getattr(context, "principal", None) if context is not None else None
     if principal is None or getattr(principal, "kind", None) != "user":
-        return False
+        return None
+    event_user_id = event.get("user_id")
+    if event_user_id is None:
+        return None
     try:
-        if int(principal.user_id) != int(event.get("user_id")):
-            return False
+        if int(getattr(principal, "user_id", 0)) != int(event_user_id):
+            return None
     except (TypeError, ValueError):
+        return None
+    return principal
+
+
+def _principal_matches_event_scope(principal: Any, event: dict[str, Any]) -> bool:
+    event_group_id = event.get("group_id")
+    if event_group_id in (None, ""):
+        return getattr(principal, "group_id", None) is None and bool(
+            getattr(principal, "is_private", False)
+        )
+    try:
+        return int(getattr(principal, "group_id", 0)) == int(event_group_id) and not getattr(
+            principal, "is_private", False
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _visible_jargons(jargons: Mapping[Any, Any], chat_id: str) -> list[Any]:
+    """统一统计页与黑话页的会话可见范围，避免两个入口口径漂移。"""
+    return [
+        item
+        for item in jargons.values()
+        if item.is_global or any(str(pair[0]) == chat_id for pair in item.chat_id_counts if pair)
+    ]
+
+
+def is_admin_operator(event: dict[str, Any], context) -> bool:
+    principal = _matching_user_principal(event, context)
+    if principal is None or not _principal_matches_event_scope(principal, event):
         return False
 
     event_group_id = event.get("group_id")
     if event_group_id in (None, ""):
-        if getattr(principal, "group_id", None) is not None or not getattr(
-            principal, "is_private", False
-        ):
-            return False
         return is_global_admin_operator(event, context)
 
-    try:
-        if int(principal.group_id) != int(event_group_id):
-            return False
-    except (TypeError, ValueError):
-        return False
     if is_global_admin_operator(event, context):
         return True
     can_manage_group = getattr(principal, "can_manage_group", None)
@@ -52,39 +82,11 @@ def is_admin_operator(event: dict[str, Any], context) -> bool:
 
 
 def is_global_admin_operator(event: dict[str, Any], context) -> bool:
-    principal = getattr(context, "principal", None) if context is not None else None
+    principal = _matching_user_principal(event, context)
     capabilities = getattr(context, "capabilities", None) if context is not None else None
-    if (
-        principal is None
-        or getattr(principal, "kind", None) != "user"
-        or not getattr(capabilities, "is_bot_admin", False)
-    ):
+    if principal is None or not getattr(capabilities, "is_bot_admin", False):
         return False
-    try:
-        if int(principal.user_id) != int(event.get("user_id")):
-            return False
-    except (TypeError, ValueError):
-        return False
-    event_group_id = event.get("group_id")
-    if event_group_id in (None, ""):
-        return getattr(principal, "group_id", None) is None and bool(
-            getattr(principal, "is_private", False)
-        )
-    try:
-        return int(principal.group_id) == int(event_group_id) and not getattr(
-            principal, "is_private", False
-        )
-    except (TypeError, ValueError):
-        return False
-
-
-def short_base(url: str) -> str:
-    url = (url or "").rstrip("/")
-    for prefix in ("https://", "http://"):
-        if url.startswith(prefix):
-            url = url[len(prefix) :]
-    parts = url.split("/")
-    return parts[0] if parts else url
+    return _principal_matches_event_scope(principal, event)
 
 
 async def handle_internal_impl(
@@ -113,12 +115,7 @@ async def handle_internal_impl(
         lines.append(f"• 学到的表达 (本会话/全部): {len(expr_this_chat)}/{len(expressions)}")
 
         jargons = state.bw_jargon_store.load()
-        scoped_jargons = [
-            item
-            for item in jargons.values()
-            if item.is_global
-            or any(str(pair[0]) == chat_id for pair in item.chat_id_counts if pair)
-        ]
+        scoped_jargons = _visible_jargons(jargons, chat_id)
         lines.append(f"• 学到的黑话 (本会话): {len(scoped_jargons)}")
 
         recent_actions = await state.action_history.get_recent_async(chat_id, max_items=100)
@@ -149,7 +146,7 @@ async def handle_internal_impl(
         if pending is not None:
             cancel_pending_task(pending)
         async with get_lock(chat_id):
-            await reset_chat_session(state, chat_id)
+            await reset_chat_session(state, chat_id, hctx.data_dir)
         state.inc_stats(chat_id, "resets")
         context.logger.info(
             "XiaoQing Chat reset_audit scope=%s chat_id=%s group_id=%s operator_user_id=%s",
@@ -179,7 +176,7 @@ async def handle_internal_impl(
 
 
 async def handle_config_impl(
-    args: str, event: dict[str, Any], context, *, handler_context_from_event
+    event: dict[str, Any], context, *, handler_context_from_event
 ) -> list[dict[str, Any]]:
     hctx = handler_context_from_event(event, context)
     runtime, secrets = hctx.runtime, hctx.secrets
@@ -217,10 +214,10 @@ async def handle_config_impl(
         lines.append(f"• 上下文大小: {cfg.brain_chat.brain_max_context_size} 条")
         lines.append(f"• 思考等级: {cfg.brain_chat.brain_think_level}")
 
-    provider_name = secrets.get("_provider_name", "?")
-    provider_model = secrets.get("model", "?")
-    lines.append(f"\n**LLM 供应商:** {provider_name} ({provider_model})")
-    lines.append("\n**提示:** 详细配置请查看 config/xiaoqing_config.json")
+    model_alias = secrets.get("_provider_name", "?")
+    model_name = secrets.get("model", "?")
+    lines.append(f"\n**当前 LLM 模型:** {model_alias} ({model_name})")
+    lines.append("\n**提示:** 模型路由由 config/config.json 统一配置")
     return segments("\n".join(lines))
 
 
@@ -285,7 +282,8 @@ async def handle_memory_impl(
     if not memory_db:
         return segments("❌ 记忆数据库未初始化")
 
-    results = memory_db.query(
+    results = await asyncio.to_thread(
+        memory_db.query,
         query,
         chat_id=hctx.chat_id,
         top_k=runtime.cfg.memory.top_k,
@@ -303,7 +301,7 @@ async def handle_memory_impl(
 
 
 async def handle_expression_impl(
-    args: str, event: dict[str, Any], context, *, handler_context_from_event
+    event: dict[str, Any], context, *, handler_context_from_event
 ) -> list[dict[str, Any]]:
     hctx = handler_context_from_event(event, context)
     state = hctx.state
@@ -328,7 +326,7 @@ async def handle_expression_impl(
 
 
 async def handle_jargon_impl(
-    args: str, event: dict[str, Any], context, *, handler_context_from_event
+    event: dict[str, Any], context, *, handler_context_from_event
 ) -> list[dict[str, Any]]:
     hctx = handler_context_from_event(event, context)
     state = hctx.state
@@ -340,12 +338,7 @@ async def handle_jargon_impl(
         )
 
     jargon_list = sorted(
-        [
-            item
-            for item in jargons.values()
-            if item.is_global
-            or any(str(pair[0]) == hctx.chat_id for pair in item.chat_id_counts if pair)
-        ],
+        _visible_jargons(jargons, hctx.chat_id),
         key=lambda x: x.count,
         reverse=True,
     )
@@ -367,44 +360,34 @@ async def handle_provider_impl(
     chat_id_from_event: Callable[[dict[str, Any]], str],
     is_admin_operator_fn: Callable[[dict[str, Any], Any], bool],
     is_global_admin_operator_fn: Callable[[dict[str, Any], Any], bool],
-    short_base_fn: Callable[[str], str],
 ) -> list[dict[str, Any]]:
     state = state_getter()
     chat_id = chat_id_from_event(event)
-    secrets_base: dict[str, Any] = (context.secrets or {}).get("plugins", {}).get(
-        "xiaoqing_chat", {}
-    ) or {}
-    configured_providers = secrets_base.get("providers") or {}
-    providers: dict[str, dict[str, Any]] = (
-        {
-            str(name): dict(value)
-            for name, value in configured_providers.items()
-            if isinstance(name, str) and isinstance(value, dict)
-        }
-        if isinstance(configured_providers, dict)
-        else {}
-    )
-    default_name: str = secrets_base.get("default", "") or ""
-    current = state.resolve_provider_name(chat_id, list(providers), default_name)
+    route = _get_ai_route_context(context, chat_id=chat_id)
+    providers = route.get("_providers", {})
+    providers = providers if isinstance(providers, Mapping) else {}
+    default_name = str(route.get("_default", "") or "")
+    current = str(route.get("_provider_name", "") or "")
 
     target = (args or "").strip()
     if not target:
-        lines = ["🤖 **LLM 供应商**\n"]
+        lines = ["🤖 **LLM 模型**\n"]
         for name, pcfg in providers.items():
-            if not isinstance(pcfg, dict):
+            if not isinstance(pcfg, Mapping):
                 continue
             model_name = pcfg.get("model", "?")
-            base = pcfg.get("api_base", "?")
+            provider_name = pcfg.get("provider", "?")
             marker = " ✅" if current == name else ""
-            lines.append(f"• **{name}** ({model_name} @ {short_base_fn(base)}){marker}")
+            lines.append(f"• **{name}** ({model_name} / {provider_name}){marker}")
         if not providers:
-            lines.append("(未配置任何供应商)")
+            lines.append("(当前路由未配置任何模型)")
         local_override = state.get_chat_provider(chat_id)
         global_override = state.global_active_provider
         lines.append(f"\n当前会话覆盖: {local_override or '(继承)'}")
         lines.append(f"全局运行时覆盖: {global_override or '(未设置)'}")
-        lines.append("切换当前会话: /xc 模型 <名称|default>")
-        lines.append("Bot 管理员切换全局: /xc 模型 global <名称|default>")
+        lines.append("默认状态按上列顺序自动回退；手动选择后会严格固定该模型。")
+        lines.append("固定当前会话: /xc 模型 <名称|default>")
+        lines.append("Bot 管理员全局固定: /xc 模型 global <名称|default>")
         return segments("\n".join(lines))
 
     parts = target.split(maxsplit=1)
@@ -413,11 +396,11 @@ async def handle_provider_impl(
         if len(parts) != 2 or not parts[1].strip():
             return segments("用法: /xc 模型 global <名称|default>")
         if not is_global_admin_operator_fn(event, context):
-            return segments("❌ 只有 Bot 全局管理员可切换全局 LLM 供应商")
+            return segments("❌ 只有 Bot 全局管理员可切换全局 LLM 模型")
         selection = parts[1].strip()
     else:
         if not is_admin_operator_fn(event, context):
-            return segments("❌ 仅 Bot 管理员、当前群管理员或群主可切换本会话供应商")
+            return segments("❌ 仅 Bot 管理员、当前群管理员或群主可切换本会话模型")
         selection = target
 
     if selection.casefold() in {"默认", "default", "reset"}:
@@ -437,14 +420,14 @@ async def handle_provider_impl(
 
     if selection not in providers:
         available = ", ".join(providers.keys()) if providers else "(无)"
-        return segments(f"❌ 未知供应商 '{selection}'\n可用: {available}")
+        return segments(f"❌ 未知模型别名 '{selection}'\n可用: {available}")
 
     if global_scope:
         state.set_global_provider(selection)
-        scope_label = "全局运行时供应商"
+        scope_label = "全局运行时模型"
     else:
         state.set_chat_provider(chat_id, selection)
-        scope_label = "当前会话供应商"
+        scope_label = "当前会话模型"
     pcfg = providers[selection]
     model_name = pcfg.get("model", "?")
     return segments(

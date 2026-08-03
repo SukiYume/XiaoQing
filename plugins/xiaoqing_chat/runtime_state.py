@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,7 +21,6 @@ from .planning.action_history import ActionHistoryStore
 from .planning.goal_state import GoalStore
 from .planning.heartflow import HeartflowEngine
 from .planning.pfc_state import PFCStateStore
-from .planning.plan_reply_logger import PlanReplyLogger
 
 
 @dataclass
@@ -40,9 +40,9 @@ class _PerChatState:
     stats: dict[str, dict[str, int]] = field(default_factory=dict)
     persist_tasks: dict[str, asyncio.Task[Any]] = field(default_factory=dict)
     next_local_id: dict[str, int] = field(default_factory=dict)
-    # chat_id -> (mood_text, expires_at_timestamp)
+    # chat_id ->（情绪文本，过期时间戳）
     mood_state: dict[str, tuple[str, float]] = field(default_factory=dict)
-    # chat_id -> (caller_user_id, expires_at_timestamp)
+    # chat_id ->（调用者用户 ID，过期时间戳）
     pending_bot_name_call: dict[str, tuple[int | None, float]] = field(default_factory=dict)
     reply_gate_decision: dict[str, Any] = field(default_factory=dict)
 
@@ -53,7 +53,6 @@ class ChatRuntimeState:
         "_memory_db",
         "_media_store",
         "_action_history",
-        "_plan_reply_logger",
         "_heartflow",
         "_goal_store",
         "_review_store",
@@ -64,12 +63,15 @@ class ChatRuntimeState:
         "_bw_jargon_store",
         "_runtime_cache",
         "_runtime_mtime",
+        "_runtime_revision",
         "_per_chat",
         "_bg_tasks",
+        "_bg_tasks_by_key",
         "_vdb_save_task",
         "_global_active_provider",
         "_active_provider_by_chat",
         "_generation_limiter",
+        "_accepting_background_tasks",
     )
 
     def __init__(self) -> None:
@@ -77,7 +79,6 @@ class ChatRuntimeState:
         self._memory_db = MemoryDB()
         self._media_store = MediaRegistryStore()
         self._action_history = ActionHistoryStore()
-        self._plan_reply_logger = PlanReplyLogger()
         self._heartflow = HeartflowEngine()
         self._goal_store = GoalStore()
         self._review_store = ReviewStore()
@@ -87,15 +88,18 @@ class ChatRuntimeState:
         self._bw_recorder = MessageRecorder()
         self._bw_jargon_store = JargonStore()
 
-        self._runtime_cache: dict[str, _ChatRuntime] = {}
+        self._runtime_cache: OrderedDict[str, _ChatRuntime] = OrderedDict()
         self._runtime_mtime: dict[str, int] = {}
+        self._runtime_revision: dict[str, int] = {}
 
         self._per_chat = _PerChatState()
         self._bg_tasks: set[asyncio.Task[Any]] = set()
+        self._bg_tasks_by_key: dict[str, asyncio.Task[Any]] = {}
         self._vdb_save_task: asyncio.Task[Any] | None = None
         self._global_active_provider: str | None = None
-        self._active_provider_by_chat: dict[str, str] = {}
+        self._active_provider_by_chat: OrderedDict[str, str] = OrderedDict()
         self._generation_limiter = GenerationLimiter()
+        self._accepting_background_tasks = True
 
     @property
     def memory_store(self) -> MemoryStore:
@@ -112,10 +116,6 @@ class ChatRuntimeState:
     @property
     def action_history(self) -> ActionHistoryStore:
         return self._action_history
-
-    @property
-    def plan_reply_logger(self) -> PlanReplyLogger:
-        return self._plan_reply_logger
 
     @property
     def heartflow(self) -> HeartflowEngine:
@@ -153,15 +153,36 @@ class ChatRuntimeState:
     def generation_limiter(self) -> GenerationLimiter:
         return self._generation_limiter
 
-    def get_runtime(self, config_key: str) -> _ChatRuntime | None:
-        return self._runtime_cache.get(config_key)
+    _MAX_RUNTIME_CACHES = 32
+    _MAX_PROVIDER_OVERRIDES = 500
 
-    def set_runtime(self, config_key: str, runtime: _ChatRuntime, mtime: int) -> None:
+    def get_runtime(self, config_key: str) -> _ChatRuntime | None:
+        cached = self._runtime_cache.get(config_key)
+        if cached is not None:
+            self._runtime_cache.move_to_end(config_key)
+        return cached
+
+    def set_runtime(
+        self,
+        config_key: str,
+        runtime: _ChatRuntime,
+        mtime: int,
+        revision: int,
+    ) -> None:
         self._runtime_cache[config_key] = runtime
+        self._runtime_cache.move_to_end(config_key)
         self._runtime_mtime[config_key] = mtime
+        self._runtime_revision[config_key] = revision
+        while len(self._runtime_cache) > self._MAX_RUNTIME_CACHES:
+            stale_key, _stale_runtime = self._runtime_cache.popitem(last=False)
+            self._runtime_mtime.pop(stale_key, None)
+            self._runtime_revision.pop(stale_key, None)
 
     def get_runtime_mtime(self, config_key: str) -> int | None:
         return self._runtime_mtime.get(config_key)
+
+    def get_runtime_revision(self, config_key: str) -> int | None:
+        return self._runtime_revision.get(config_key)
 
     _MAX_TRACKED_CHATS = 500
 
@@ -170,13 +191,13 @@ class ChatRuntimeState:
         if lock is None:
             lock = asyncio.Lock()
             self._per_chat.locks[chat_id] = lock
-        # Periodic cleanup: only run every 100 new chats
+        # 每新增 100 个会话才执行一次定期清理。
         if len(self._per_chat.locks) % 100 == 0:
             self.cleanup_stale_chats()
         return lock
 
     def cleanup_stale_chats(self) -> None:
-        """Evict per-chat entries beyond the limit, keeping those with recent activity."""
+        """淘汰超出上限的会话状态，优先保留近期活跃会话。"""
         pc = self._per_chat
         all_ids: set[str] = set()
         for d in (
@@ -192,6 +213,7 @@ class ChatRuntimeState:
             pc.mood_state,
             pc.pending_bot_name_call,
             pc.reply_gate_decision,
+            self._active_provider_by_chat,
         ):
             all_ids.update(d.keys())
         if len(all_ids) <= self._MAX_TRACKED_CHATS:
@@ -235,6 +257,9 @@ class ChatRuntimeState:
         for cid in list(pc.locks.keys()):
             if cid not in keep and not pc.locks[cid].locked():
                 del pc.locks[cid]
+        for cid in list(self._active_provider_by_chat):
+            if cid not in keep:
+                self._active_provider_by_chat.pop(cid, None)
 
     def get_reply_timestamps(self, chat_id: str) -> list[float]:
         return self._per_chat.reply_timestamps.get(chat_id, [])
@@ -269,9 +294,6 @@ class ChatRuntimeState:
     def get_stats(self, chat_id: str) -> dict[str, int]:
         return self._per_chat.stats.get(chat_id, {"replies": 0, "calls": 0})
 
-    def set_stats(self, chat_id: str, stats: dict[str, int]) -> None:
-        self._per_chat.stats[chat_id] = stats
-
     def inc_stats(self, chat_id: str, key: str) -> None:
         d = self._per_chat.stats.setdefault(chat_id, {"replies": 0, "calls": 0})
         d[key] = int(d.get(key, 0)) + 1
@@ -285,11 +307,73 @@ class ChatRuntimeState:
     def pop_persist_task(self, chat_id: str) -> asyncio.Task[Any] | None:
         return self._per_chat.persist_tasks.pop(chat_id, None)
 
-    def add_bg_task(self, task: asyncio.Task[Any]) -> None:
+    def clear_transient_chat_state(self, chat_id: str) -> None:
+        """移除一次会话重置后不应继续生效的纯内存状态。"""
+        pc = self._per_chat
+        for values in (
+            pc.reply_timestamps,
+            pc.last_reply_ts,
+            pc.last_observe_ts,
+            pc.continuous_reply_count,
+            pc.continuous_cooldown_until,
+            pc.next_local_id,
+            pc.mood_state,
+            pc.pending_bot_name_call,
+            pc.reply_gate_decision,
+        ):
+            values.pop(chat_id, None)
+
+    def start_accepting_background_tasks(self) -> None:
+        self._accepting_background_tasks = True
+
+    def stop_accepting_background_tasks(self) -> None:
+        self._accepting_background_tasks = False
+
+    _MAX_BACKGROUND_TASKS = 64
+
+    def _discard_finished_bg_tasks(self) -> None:
+        for task in tuple(self._bg_tasks):
+            if task.done():
+                self.remove_bg_task(task)
+
+    def can_add_bg_task(self, *, key: str | None = None) -> bool:
+        self._discard_finished_bg_tasks()
+        if not self._accepting_background_tasks:
+            return False
+        if len(self._bg_tasks) >= self._MAX_BACKGROUND_TASKS:
+            return False
+        normalized_key = str(key or "").strip()
+        if normalized_key:
+            current = self._bg_tasks_by_key.get(normalized_key)
+            if current is not None and not current.done():
+                return False
+        return True
+
+    def add_bg_task(
+        self,
+        task: asyncio.Task[Any],
+        *,
+        key: str | None = None,
+    ) -> bool:
+        normalized_key = str(key or "").strip()
+        if not self.can_add_bg_task(key=normalized_key or None):
+            return False
         self._bg_tasks.add(task)
+        if normalized_key:
+            self._bg_tasks_by_key[normalized_key] = task
+        return True
 
     def remove_bg_task(self, task: asyncio.Task[Any]) -> None:
         self._bg_tasks.discard(task)
+        for key, current in tuple(self._bg_tasks_by_key.items()):
+            if current is task:
+                self._bg_tasks_by_key.pop(key, None)
+
+    def background_tasks(self) -> set[asyncio.Task[Any]]:
+        """返回后台任务快照，避免生命周期代码直接访问内部集合。"""
+
+        self._discard_finished_bg_tasks()
+        return set(self._bg_tasks)
 
     def get_vdb_save_task(self) -> asyncio.Task[Any] | None:
         return self._vdb_save_task
@@ -297,20 +381,14 @@ class ChatRuntimeState:
     def set_vdb_save_task(self, task: asyncio.Task[Any] | None) -> None:
         self._vdb_save_task = task
 
-    def get_next_local_id(self, chat_id: str) -> int:
-        return self._per_chat.next_local_id.get(chat_id, 1)
-
-    def set_next_local_id(self, chat_id: str, next_id: int) -> None:
-        self._per_chat.next_local_id[chat_id] = next_id
-
     def fetch_and_increment_local_id(self, chat_id: str) -> int:
-        """Atomically get current local_id and increment. Returns the old value."""
+        """原子读取并递增 local_id，返回递增前的值。"""
         n = self._per_chat.next_local_id.get(chat_id, 1)
         self._per_chat.next_local_id[chat_id] = n + 1
         return n
 
     def get_mood_state(self, chat_id: str) -> str:
-        """Return current mood text if still active, else empty string."""
+        """返回仍有效的情绪文本；过期时返回空字符串。"""
         entry = self._per_chat.mood_state.get(chat_id)
         if not entry:
             return ""
@@ -323,7 +401,7 @@ class ChatRuntimeState:
     def set_mood_state(
         self, chat_id: str, mood_text: str, duration_seconds: float = 1800.0
     ) -> None:
-        """Persist a mood state for this chat for the given duration."""
+        """在指定时长内保存当前会话的情绪状态。"""
         self._per_chat.mood_state[chat_id] = (mood_text, time.time() + duration_seconds)
 
     def set_pending_bot_name_call(
@@ -355,16 +433,6 @@ class ChatRuntimeState:
         return self._per_chat.reply_gate_decision.get(chat_id)
 
     @property
-    def active_provider(self) -> str | None:
-        """Backward-compatible alias for the global in-memory override."""
-
-        return self._global_active_provider
-
-    @active_provider.setter
-    def active_provider(self, name: str | None) -> None:
-        self._global_active_provider = name
-
-    @property
     def global_active_provider(self) -> str | None:
         return self._global_active_provider
 
@@ -372,7 +440,11 @@ class ChatRuntimeState:
         self._global_active_provider = name
 
     def get_chat_provider(self, chat_id: str) -> str | None:
-        return self._active_provider_by_chat.get(str(chat_id))
+        normalized_chat_id = str(chat_id)
+        provider = self._active_provider_by_chat.get(normalized_chat_id)
+        if provider is not None:
+            self._active_provider_by_chat.move_to_end(normalized_chat_id)
+        return provider
 
     def set_chat_provider(self, chat_id: str, name: str | None) -> None:
         normalized_chat_id = str(chat_id)
@@ -380,9 +452,9 @@ class ChatRuntimeState:
             self._active_provider_by_chat.pop(normalized_chat_id, None)
             return
         self._active_provider_by_chat[normalized_chat_id] = str(name)
-
-    def provider_overrides(self) -> dict[str, str]:
-        return dict(self._active_provider_by_chat)
+        self._active_provider_by_chat.move_to_end(normalized_chat_id)
+        while len(self._active_provider_by_chat) > self._MAX_PROVIDER_OVERRIDES:
+            self._active_provider_by_chat.popitem(last=False)
 
     def resolve_provider_name(
         self,
@@ -390,7 +462,7 @@ class ChatRuntimeState:
         provider_names: list[str] | tuple[str, ...],
         default_name: str,
     ) -> str:
-        """Resolve chat -> global -> configured default and prune stale overrides."""
+        """按会话、全局、配置默认值的顺序解析服务商，并清理过期覆盖项。"""
 
         ordered_names = tuple(dict.fromkeys(str(name) for name in provider_names if name))
         valid_names = set(ordered_names)
@@ -401,8 +473,10 @@ class ChatRuntimeState:
                 self._active_provider_by_chat.pop(scoped_chat_id, None)
 
         if chat_id is not None:
-            scoped = self._active_provider_by_chat.get(str(chat_id))
+            scoped_chat_id = str(chat_id)
+            scoped = self._active_provider_by_chat.get(scoped_chat_id)
             if scoped in valid_names:
+                self._active_provider_by_chat.move_to_end(scoped_chat_id)
                 return scoped
         if self._global_active_provider in valid_names:
             return self._global_active_provider

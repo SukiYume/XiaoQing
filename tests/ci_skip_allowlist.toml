@@ -1,0 +1,146 @@
+version = 1
+
+# Optional local-ML extras are intentionally outside requirements.txt.
+[[allow]]
+nodeid = "tests/plugins/test_arxiv_filter.py::TestInferenceBackendCaching::test_transformers_backend_caches_model_objects"
+reason = "could not import *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_arxiv_filter.py::TestInferenceBackendCaching::test_knn_backend_caches_runtime_model"
+reason = "could not import *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_arxiv_filter.py::TestInferenceBackendCaching::test_multi_interest_backend_caches_runtime_model"
+reason = "could not import *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_arxiv_training_utils.py::test_bert_loader_shuffles_training_but_not_validation"
+reason = "could not import *"
+platforms = ["all"]
+
+# Filesystem link capabilities differ by host policy even on supported runners.
+[[allow]]
+nodeid = "tests/test_plugin_manager_import_safety.py::test_runtime_rejects_entry_symlink_without_executing_its_target"
+reason = "symbolic links are unavailable: *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/test_plugin_manager_import_safety.py::test_runtime_rejects_linked_manifest_authorization"
+reason = "symbolic links are unavailable: *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/test_plugin_manager_import_safety.py::test_watcher_isolates_unsafe_linked_entry_and_loads_safe_sibling"
+reason = "symbolic links are unavailable: *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_codex_artifacts.py::test_rejects_symlinks_and_hardlinks"
+reason = "symlinks are unavailable: *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_codex_artifacts.py::test_rejects_symlinks_and_hardlinks"
+reason = "hardlinks are unavailable: *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/test_plugin_generation_integrity.py::test_unload_ignores_external_module_after_plugin_path_becomes_link"
+reason = "directory links are unavailable: *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_earthquake.py::test_state_symlink_is_quarantined_without_touching_target"
+reason = "symlink creation is unavailable: *"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_github.py::test_save_history_refuses_symlinked_history_directory"
+reason = "directory symlinks are unavailable: *"
+platforms = ["all"]
+
+# WebP support is an optional Pillow build capability.
+[[allow]]
+nodeid = "tests/plugins/test_earthquake.py::test_valid_single_frame_image_formats[WEBP-*]"
+reason = "Pillow has no WebP support"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_earthquake.py::test_image_container_rejects_trailing_polyglot_bytes[WEBP-*]"
+reason = "Pillow has no WebP support"
+platforms = ["all"]
+
+[[allow]]
+nodeid = "tests/plugins/test_earthquake.py::test_animated_webp_is_rejected"
+reason = "Pillow has no WebP support"
+platforms = ["all"]
+
+# POSIX runners cannot execute Windows-only process and Windows PowerShell branches.
+[[allow]]
+nodeid = "tests/plugins/test_codex_process_tree.py::test_real_windows_parent_child_and_grandchild_are_reaped"
+reason = "Windows process-tree integration test"
+platforms = ["posix"]
+
+[[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_taskkill_failure_is_recorded_and_falls_back_to_direct_termination"
+reason = "taskkill fallback is Windows-specific"
+platforms = ["posix"]
+
+[[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_pid_commit_failure_invokes_owned_tree_cleanup"
+reason = "PowerShell is not installed"
+platforms = ["posix"]
+
+[[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_windows_powershell_native_argument_quoting_round_trip"
+reason = "Windows PowerShell 5.1 is not installed"
+platforms = ["posix"]
+
+[[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_monitor_parses_in_windows_powershell_and_pwsh"
+reason = "PowerShell is not installed"
+platforms = ["posix"]
+
+[[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_mutex_identity_normalizes_trailing_separators_without_damaging_roots"
+reason = "Windows PowerShell 5.1 is not installed"
+platforms = ["posix"]
+
+[[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_monitor_rejects_invalid_ranges_before_launch*"
+reason = "PowerShell is not installed"
+platforms = ["posix"]
+
+[[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_monitor_fails_closed_when_napcat_executable_is_missing"
+reason = "PowerShell is not installed"
+platforms = ["posix"]
+
+[[allow]]
+nodeid = "tests/test_run_bot_monitor_script.py::test_monitor_explicit_disable_is_the_only_missing_napcat_bypass"
+reason = "PowerShell is not installed"
+platforms = ["posix"]
+
+# Windows runners intentionally skip POSIX-only process and shell branches.
+[[allow]]
+nodeid = "tests/plugins/test_codex_process_tree.py::test_real_posix_parent_and_term_ignoring_child_are_reaped"
+reason = "POSIX process-group integration test"
+platforms = ["windows"]
+
+[[allow]]
+nodeid = "tests/test_operational_truth.py::test_clean_pycache_is_anchored_to_script_repository"
+reason = "POSIX bash is unavailable"
+platforms = ["windows"]
+
+[[allow]]
+nodeid = "tests/test_operational_truth.py::test_clean_pycache_refuses_a_directory_without_all_sentinels"
+reason = "POSIX bash is unavailable"
+platforms = ["windows"]
+
+[[allow]]
+nodeid = "tests/test_sync_to_remote.py::test_sync_script_has_valid_bash_syntax_and_help"
+reason = "bash is unavailable"
+platforms = ["windows"]

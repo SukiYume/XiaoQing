@@ -1,8 +1,9 @@
 {
 	"name": "arxiv_filter",
 	"version": "0.1.0",
-	"description": "arXiv 论文筛选（基于 BERT 模型）",
+	"description": "arXiv 论文筛选（支持 Transformer 与兴趣模型）",
 	"entry": "main.py",
+	"uses_services": ["codex.enqueue_arxiv_summary"],
 	"commands": [
 		{
 			"name": "arxiv",
@@ -11,7 +12,73 @@
 				"论文"
 			],
 			"help": "今日 arXiv 论文推荐 (AI筛选)",
-			"admin_only": false
+			"admin_only": false,
+			"usage": "/arxiv",
+			"examples": ["/arxiv"],
+			"invalid_examples": ["/arxiv unknown"],
+			"subcommands": [
+				{
+					"name": "help",
+					"aliases": ["帮助"],
+					"help": "显示 arXiv 筛选命令说明",
+					"usage": "/arxiv help",
+					"match": "exact",
+					"examples": ["/arxiv help"],
+					"invalid_examples": ["/arxiv help extra"]
+				}
+			]
+		}
+	],
+	"dependencies": [
+		{
+			"name": "requests",
+			"required": false,
+			"description": "可选 arXiv 页面抓取客户端；缺失时插件仍可加载并显示安装提示"
+		},
+		{
+			"name": "bs4",
+			"required": false,
+			"description": "可选 arXiv HTML 解析器"
+		},
+		{
+			"name": "urllib3",
+			"required": false,
+			"description": "可选 requests 重试策略实现"
+		},
+		{
+			"name": "pandas",
+			"required": false,
+			"description": "可选论文表格与推理数据层"
+		},
+		{
+			"name": "torch",
+			"required": false,
+			"description": "可选本地模型推理运行时"
+		},
+		{
+			"name": "transformers",
+			"required": false,
+			"description": "可选 Transformer 分类模型后端"
+		},
+		{
+			"name": "numpy",
+			"required": false,
+			"description": "可选 k-NN 和多兴趣模型数值运行时"
+		},
+		{
+			"name": "joblib",
+			"required": false,
+			"description": "可选多兴趣模型 artifact 加载器"
+		},
+		{
+			"name": "sklearn",
+			"required": false,
+			"description": "可选多兴趣模型分类器运行时"
+		},
+		{
+			"name": "sentence_transformers",
+			"required": false,
+			"description": "可选 k-NN 和多兴趣文本编码器"
 		}
 	],
 	"schedule": [
@@ -22,10 +89,7 @@
 				"day_of_week": "mon-fri",
 				"hour": 10,
 				"minute": 0
-			},
-			"group_ids": [
-				100000001
-			]
+			}
 		},
 		{
 			"id": "check_10_30",
@@ -34,10 +98,7 @@
 				"day_of_week": "mon-fri",
 				"hour": 10,
 				"minute": 30
-			},
-			"group_ids": [
-				100000001
-			]
+			}
 		},
 		{
 			"id": "check_11_00",
@@ -46,10 +107,7 @@
 				"day_of_week": "mon-fri",
 				"hour": 11,
 				"minute": 0
-			},
-			"group_ids": [
-				100000001
-			]
+			}
 		},
 		{
 			"id": "check_11_30",
@@ -58,10 +116,7 @@
 				"day_of_week": "mon-fri",
 				"hour": 11,
 				"minute": 30
-			},
-			"group_ids": [
-				100000001
-			]
+			}
 		},
 		{
 			"id": "final_check_12_00",
@@ -70,10 +125,7 @@
 				"day_of_week": "mon-fri",
 				"hour": 12,
 				"minute": 0
-			},
-			"group_ids": [
-				100000001
-			]
+			}
 		}
 	]
 }

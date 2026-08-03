@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-import copy
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from .config import materialize_snapshot_value
+
+if TYPE_CHECKING:
+    from .ai import AICompletionResult, AIModelInfo
 
 
 def _secret_path_parts(path: str) -> list[str]:
@@ -19,7 +23,7 @@ def _secret_path_parts(path: str) -> list[str]:
 @dataclass(frozen=True)
 class SecretAdminService:
     _authorized: Callable[[], bool]
-    _snapshot: Callable[[], dict[str, Any]]
+    _snapshot: Callable[[], Mapping[str, Any]]
     _writer: Callable[[str, Any], None]
 
     def _ensure_authorized(self) -> None:
@@ -30,10 +34,10 @@ class SecretAdminService:
         self._ensure_authorized()
         current: Any = self._snapshot()
         for part in _secret_path_parts(path):
-            if not isinstance(current, dict) or part not in current:
+            if not isinstance(current, Mapping) or part not in current:
                 raise KeyError(f"secret path does not exist: {path}")
             current = current[part]
-        return copy.deepcopy(current)
+        return materialize_snapshot_value(current)
 
     def set(self, path: str, value: Any) -> None:
         self._ensure_authorized()
@@ -86,13 +90,13 @@ class OneBotMediaService:
 @dataclass(frozen=True)
 class ConfigSubscriptionService:
     _subscriber: Callable[
-        [Callable[[dict[str, Any]], Any]],
+        [Callable[[Mapping[str, Any]], Any]],
         Callable[[], None],
     ]
 
     def subscribe(
         self,
-        callback: Callable[[dict[str, Any]], Any],
+        callback: Callable[[Mapping[str, Any]], Any],
     ) -> Callable[[], None]:
         if not callable(callback):
             raise TypeError("config subscription callback must be callable")
@@ -159,3 +163,63 @@ class ChatReplyService:
         if not isinstance(event, dict):
             raise TypeError("chat reply event must be a mapping")
         return await self._invoke(normalized, dict(event))
+
+
+@dataclass(frozen=True)
+class AIService:
+    """只允许插件通过自己的命名 route 使用全局模型注册表。"""
+
+    _complete: Callable[..., Awaitable[AICompletionResult]]
+    _list_models: Callable[..., tuple[AIModelInfo, ...]]
+
+    async def complete(
+        self,
+        route: str,
+        messages: list[dict[str, Any]],
+        *,
+        required_modalities: tuple[str, ...] = ("text",),
+        pinned_model: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+        total_timeout_seconds: float | None = None,
+        max_retry: int | None = None,
+        retry_interval_seconds: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+        extra_payload: Mapping[str, Any] | None = None,
+    ) -> AICompletionResult:
+        normalized_route = str(route or "").strip()
+        if not normalized_route:
+            raise ValueError("AI route is required")
+        return await self._complete(
+            route_name=normalized_route,
+            messages=messages,
+            required_modalities=required_modalities,
+            pinned_model=pinned_model,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+            total_timeout_seconds=total_timeout_seconds,
+            max_retry=max_retry,
+            retry_interval_seconds=retry_interval_seconds,
+            tools=tools,
+            tool_choice=tool_choice,
+            extra_payload=extra_payload,
+        )
+
+    def list_models(
+        self,
+        route: str,
+        *,
+        required_modalities: tuple[str, ...] = ("text",),
+    ) -> tuple[AIModelInfo, ...]:
+        normalized_route = str(route or "").strip()
+        if not normalized_route:
+            raise ValueError("AI route is required")
+        return self._list_models(
+            route_name=normalized_route,
+            required_modalities=required_modalities,
+        )

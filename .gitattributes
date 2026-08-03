@@ -1,1 +1,26 @@
+# 仓库内文本统一以 LF 存储和检出；Windows 脚本中只有 cmd/vbs 保留 CRLF。
+* text=auto
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.in text eol=lf
+*.example text eol=lf
 *.sh text eol=lf
+*.ps1 text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.svg text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.vbs text eol=crlf
+*.zip binary
+
+# Upstream, license-bound dictionary payloads are byte/hash locked.
+plugins/dict/assets/astrodict_*.txt text eol=lf -whitespace

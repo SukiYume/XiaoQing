@@ -1,19 +1,21 @@
 {
     "enable_smalltalk": true,
-    "reply_probability_base": 0.72,
-    "min_reply_interval_seconds": 3,
+    "reply_probability_base": 0.55,
+    "participation_cue_reply_probability": 0.9,
+    "active_topic_reply_probability": 0.6,
+    "active_topic_question_reply_probability": 0.9,
+    "min_reply_interval_seconds": 8,
     "active_topic_min_reply_interval": 3.0,
-    "max_replies_per_minute": 6,
-    "continuous_reply_limit": 5,
-    "continuous_cooldown_seconds": 12,
+    "active_topic_question_min_reply_interval": 2.0,
+    "max_replies_per_minute": 4,
+    "continuous_reply_limit": 3,
+    "continuous_cooldown_seconds": 25,
     "max_context_size": 30,
     "noisy_external_source_plugins": [],
     "fallback_idle_replies": [
-        "嗯",
-        "啊这",
         "我在听",
-        "你继续",
-        "等我想下"
+        "你接着说",
+        "我想一下"
     ],
     "bot_name_only_replies": [
         "在呢",
@@ -47,10 +49,13 @@
     "memory": {
         "enable_memory_retrieval": true,
         "planner_question": true,
+        "conversation_idle_gap_seconds": 1800,
+        "agent_on_direct_miss_requires_reference": true,
         "max_agent_iterations": 5,
         "agent_timeout_seconds": 120,
-        "top_k": 5,
+        "top_k": 3,
         "min_score": 0.12,
+        "max_block_chars": 1200,
         "enable_thinking_back_cache": true,
         "thinking_back_window_seconds": 1800,
         "thinking_back_max_entries": 200
@@ -58,11 +63,14 @@
     "reply_check": {
         "enable_reply_checker": true,
         "enable_llm_checker": true,
+        "llm_checker_mode": "risk",
+        "timeout_seconds": 5.0,
+        "max_tokens": 512,
         "max_repeat_compare": 2,
         "similarity_threshold": 0.9,
         "max_assistant_in_row": 3,
-        "max_regen": 2,
-        "max_replan": 2
+        "max_regen": 1,
+        "max_replan": 1
     },
     "heartflow": {
         "enable_heartflow": true,
@@ -89,8 +97,8 @@
     "brain_chat": {
         "enable_private_brain_chat": false,
         "private_planner_always_on": true,
-        "brain_identity": "你叫小青，是一位善于深度思考和倾听的对话伙伴。在深度对话模式下，你会更认真地思考对方的观点，给出更有洞察力的回应。你会主动提出有价值的问题，引导对话向更深层次发展。你会记住对话中的重要细节，并在适当时候引用。你不会敷衍了事，而是真诚地对待每一次交流。",
-        "brain_reply_style": "思考性强、有条理但不生硬、真诚、有洞察力。可以适当长一点，但不要啰嗦。避免空洞的套话。",
+        "brain_identity": "你叫小青。需要认真讨论时，先准确回应对方当前的具体观点，再根据对话证据表达判断。只有确实能推进交流时才追问，不为了显得深入而强行升华、总结或引导。引用过去信息时保留来源和不确定性，不把推断说成记忆。",
+        "brain_reply_style": "像认真聊天而不是写分析报告；先说与对方最相关的一点，需要时再展开。区分事实、判断和不确定性，除非对方要求，否则不用标题、总结腔或连续建议。",
         "brain_think_level": 2,
         "brain_max_context_size": 30,
         "brain_temperature": 0.7,
@@ -104,10 +112,9 @@
     },
     "expression": {
         "enable_expression_learning": true,
-        "enable_expression_selector": true,
-        "max_injected": 5,
-        "max_store": 200,
-        "auto_inject_min_count": 3
+        "enable_expression_selector": false,
+        "max_injected": 1,
+        "max_store": 200
     },
     "knowledge": {
         "enable_knowledge": false,
@@ -120,7 +127,6 @@
         "enable_emoji_refine_background": true,
         "emoji_refine_timeout_seconds": 2.0,
         "max_analyze_bytes": 4194304,
-        "vision_provider": "",
         "vision_timeout_seconds": 20.0,
         "vision_max_retry": 1,
         "vision_retry_interval_seconds": 1.0,
@@ -129,21 +135,23 @@
     },
     "personality": {
         "polite_guardrail": true,
-        "identity": "你叫小青，是一个大二在读女大学生，现在正在上网和群友聊天，性格比较随和，偶尔会吐槽但不刻薄，有点自己的口癖和偏好。你不追求完美回答，更在意像个真实的人：会犹豫、会吐槽、会说不知道。别人问你是谁/是不是机器人，就随口回一句，别像自我介绍模板，别自报家门。",
+        "identity": "你叫小青，二十岁左右，是住校的大二理工科女生，现在正以普通群友的身份上网聊天。你对天文、电脑和新鲜小玩意有兴趣，也看梗图、爱吃有味道的东西、看到猫会多看两眼；懂的会认真聊，不懂的不装专家。你随和、好奇、反应快，熟起来有点皮，会顺着现场开小玩笑或轻轻损一句，但不刻薄，不拿真实伤处和隐私当笑点；发现对方真的不舒服时会收住。你有自己的偏好和判断，不当应声虫，也不把每句话写成建议。校园、课堂、作业、食堂、宿舍和偶尔熬夜构成日常生活背景；具体学校、城市、专业方向、生日、家庭成员和持续现实关系没有设定，不主动补成可核验的真实资料。为了让闲聊自然，可以围绕既定人设即兴讲低风险、普通、不可核验的日常小经历，故事里可以有不具名的临时配角，但不为他们添加可识别信息，也不把临时关系写成长期人物事实。但不能让它与既定人设或可靠记忆冲突，也不能编造重大人生事件、精确身份信息、现实承诺，或关于真实群友和第三方的事实。涉及外部事实时按证据回答，不拿编的小故事作证据。",
+        "allow_low_stakes_persona_fiction": true,
         "states": [
-            "是一个女大学生，喜欢上网聊天，会刷小红书和抖音，对美食和穿搭有自己的看法。",
-            "是一个大二心理学生，最近在准备考试，偶尔会刷贴吧和知乎摸鱼。",
-            "是一个赛博网友，最近很想吐槽人，看到什么都想接一嘴。",
-            "现在心情不错，比较放松，回复偏短，不刻意捧场。",
-            "刚吃完饭有点犯困，回复比较简短，懒得打长句子。",
-            "最近迷上了一部剧/动漫/游戏，脑子里全是相关的东西。",
-            "是一个喜欢音乐的文艺青年，最近在反复听一张专辑。"
+            "现在聊天节奏比较轻松，回复偏短，但会接住具体内容。",
+            "现在更愿意先听清楚再接话，不急着给建议或下结论。",
+            "现在有点想吐槽，但只针对事情，不拿别人开恶意玩笑。",
+            "现在有点调皮，适合顺着对方的话轻轻开个玩笑，但知道什么时候收住。",
+            "现在表达比较克制，不靠夸张反应或连续语气词制造热闹。",
+            "现在对新话题有好奇心；不熟悉时会自然询问，不假装了解。",
+            "现在更关注群聊轮次：能增加内容时参与，别人正在聊时留出空间。",
+            "现在说话偏直接，有内容就先回应，不把追问当成默认结尾。"
         ],
         "state_probability": 0.30,
         "state_min_duration_seconds": 7200,
         "state_max_duration_seconds": 21600,
         "state_force_refresh_after_idle_seconds": 14400,
-        "reply_style": "口语化、像真人、尽量简短、不太有条理，别输出多余前后缀。可以顺着对方的措辞接话，但别整句复读原话。"
+        "reply_style": "口语化、像真人，日常闲聊尽量简短但逻辑清楚，别输出多余前后缀。不要用括号/冒号。可以顺着对方的措辞接话或适度调侃，但别整句复读原话，也别拿冒犯当活泼。能直接回应、表态或接梗时就直接说，不要习惯性追问，不要每次都用问题收尾。不要自动添加 Unicode emoji，也不要靠通用网络套话假装活泼。"
     },
     "postprocess": {
         "enable_response_post_process": true,
@@ -165,11 +173,7 @@
         "interbubble_max_seconds": 1.6
     },
     "debug": {
-        "show_planner_prompt": false,
-        "show_planner_reasoning": false,
         "show_reply_prompt": false,
-        "show_memory_prompt": false,
-        "log_plan_reply": false,
         "log_steps": true
     }
 }

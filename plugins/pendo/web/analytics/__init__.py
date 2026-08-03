@@ -1,2 +1,1 @@
-"""Analytics helpers for the Pendo web UI."""
-
+"""为 Pendo Web 的聚合视图提供分析辅助模块。"""

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import math
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.plugin_base import write_json
+from core.plugin_base import load_json, write_json
 
 from ..message_parts import build_message_parts, message_parts_to_legacy, normalize_message_parts
+from ..store_base import delete_json_artifacts
 
 MAX_CACHED_MESSAGES_PER_CHAT = 200
 
@@ -28,7 +30,7 @@ class StoredMessage:
     media_items: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
-        normalized_parts = _normalize_parts(self.parts)
+        normalized_parts = normalize_message_parts(self.parts)
         if not normalized_parts:
             normalized_parts = build_message_parts(
                 str(self.content or ""), _normalize_media_items(self.media_items)
@@ -37,6 +39,71 @@ class StoredMessage:
         legacy_content, legacy_media = message_parts_to_legacy(normalized_parts)
         object.__setattr__(self, "content", legacy_content)
         object.__setattr__(self, "media_items", _normalize_media_items(legacy_media))
+
+
+def _valid_message_ts(value: Any) -> float:
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        return 0.0
+    return timestamp
+
+
+def active_conversation_suffix(
+    history: list[StoredMessage] | tuple[StoredMessage, ...],
+    *,
+    idle_gap_seconds: float,
+) -> list[StoredMessage]:
+    """返回最近一次长空档后的连续会话片段。
+
+    原始 ``MemoryStore`` 不会被裁剪；这里只为即时生成与规划建立短期会话边界，
+    因而用户明确追溯旧事时仍可走持久记忆检索。
+    """
+
+    items = list(history)
+    threshold = max(0.0, float(idle_gap_seconds or 0.0))
+    if len(items) < 2 or threshold <= 0:
+        return items
+    for index in range(len(items) - 1, 0, -1):
+        current_ts = _valid_message_ts(getattr(items[index], "ts", 0.0))
+        previous_ts = _valid_message_ts(getattr(items[index - 1], "ts", 0.0))
+        if current_ts and previous_ts and current_ts - previous_ts > threshold:
+            return items[index:]
+    return items
+
+
+def idle_gap_before_turn(
+    history: list[StoredMessage] | tuple[StoredMessage, ...],
+    *,
+    current_local_id: str = "",
+    now: float | None = None,
+) -> float:
+    """计算本轮消息与上一条消息之间的空档；没有可靠时间时返回零。"""
+
+    items = list(history)
+    if not items:
+        return 0.0
+
+    local_id = str(current_local_id or "").strip()
+    if local_id:
+        for index in range(len(items) - 1, -1, -1):
+            if str(getattr(items[index], "local_id", "") or "").strip() != local_id:
+                continue
+            if index == 0:
+                return 0.0
+            current_ts = _valid_message_ts(getattr(items[index], "ts", 0.0))
+            previous_ts = _valid_message_ts(getattr(items[index - 1], "ts", 0.0))
+            if not current_ts or not previous_ts:
+                return 0.0
+            return max(0.0, current_ts - previous_ts)
+
+    previous_ts = _valid_message_ts(getattr(items[-1], "ts", 0.0))
+    current_ts = _valid_message_ts(time.time() if now is None else now)
+    if not current_ts or not previous_ts:
+        return 0.0
+    return max(0.0, current_ts - previous_ts)
 
 
 def _normalize_media_items(values: Any) -> tuple[dict[str, Any], ...]:
@@ -68,12 +135,8 @@ def _normalize_media_items(values: Any) -> tuple[dict[str, Any], ...]:
     return tuple(normalized_items)
 
 
-def _normalize_parts(values: Any) -> tuple[dict[str, Any], ...]:
-    return normalize_message_parts(values)
-
-
 def _serialize_message(message: StoredMessage) -> dict[str, Any]:
-    parts = _normalize_parts(message.parts)
+    parts = normalize_message_parts(message.parts)
     payload: dict[str, Any] = {
         "role": str(message.role or ""),
         "name": str(message.name or ""),
@@ -90,7 +153,7 @@ def _serialize_message(message: StoredMessage) -> dict[str, Any]:
 
 
 class MemoryStore:
-    """会话记忆存储，使用 asyncio 兼容的锁保护内部状态。
+    """会话记忆存储，使用按会话隔离的异步锁保护冷加载。
 
     注意：所有公开方法都是线程安全的（通过内部快照），
     persist() 是同步 I/O，可以在 asyncio.to_thread 中安全调用。
@@ -99,18 +162,25 @@ class MemoryStore:
     def __init__(self, data_dir: Path | None = None) -> None:
         self._data_dir = data_dir
         self._messages: dict[str, list[StoredMessage]] = {}
-        # 使用普通 Lock 而非 RLock，仅保护内存字典的短临界区，
-        # 不在持有锁时执行 I/O，避免阻塞事件循环。
-        self._lock = asyncio.Lock()
         # 同步快照锁：仅用于极短的字典读写，不做 I/O
         self._sync_lock = threading.Lock()
+        self._load_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         self._write_locks: dict[str, threading.Lock] = {}
+        self._generations: dict[str, int] = {}
+        self._tombstones: set[str] = set()
+        self._dirty: set[str] = set()
 
     def bind_data_dir(self, data_dir: Path) -> None:
         with self._sync_lock:
             if self._data_dir != data_dir:
                 self._messages.clear()
+                self._load_locks.clear()
                 self._write_locks.clear()
+                self._generations.clear()
+                self._tombstones.clear()
+                self._dirty.clear()
             self._data_dir = data_dir
 
     @staticmethod
@@ -121,15 +191,19 @@ class MemoryStore:
 
     def clear(self, chat_id: str) -> None:
         with self._sync_lock:
-            self._messages.pop(chat_id, None)
-            data_dir = self._data_dir
-        if data_dir:
-            path = data_dir / f"{chat_id}.json"
-            if path.exists():
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
+            write_lock = self._write_locks.setdefault(chat_id, threading.Lock())
+        # 持久化线程会持有同一把锁直至原子提交完成；此处等待可确保删除操作
+        # 成为旧数据世代的最后一次 I/O。
+        with write_lock:
+            with self._sync_lock:
+                self._generations[chat_id] = self._generations.get(chat_id, 0) + 1
+                self._tombstones.add(chat_id)
+                self._messages.pop(chat_id, None)
+                self._dirty.discard(chat_id)
+                data_dir = self._data_dir
+            if data_dir:
+                path = data_dir / f"{chat_id}.json"
+                delete_json_artifacts(path)
 
     @staticmethod
     def _message_identity(message: StoredMessage) -> tuple[Any, ...]:
@@ -183,12 +257,15 @@ class MemoryStore:
             local_id=local_id or "",
             content=str(content or ""),
             media_items=media_items,
-            parts=_normalize_parts(parts),
+            parts=normalize_message_parts(parts),
             ts=ts if ts is not None else time.time(),
         )
         with self._sync_lock:
+            self._tombstones.discard(chat_id)
+            self._generations[chat_id] = self._generations.get(chat_id, 0) + 1
             history = self._messages.setdefault(chat_id, [])
             history.append(msg)
+            self._dirty.add(chat_id)
             if len(history) > MAX_CACHED_MESSAGES_PER_CHAT:
                 del history[:-MAX_CACHED_MESSAGES_PER_CHAT]
 
@@ -212,37 +289,57 @@ class MemoryStore:
                     local_id=message.local_id,
                     parts=message.parts,
                 )
+                self._generations[chat_id] = self._generations.get(chat_id, 0) + 1
+                self._dirty.add(chat_id)
                 return True
         return False
 
     def get(self, chat_id: str) -> list[StoredMessage]:
         with self._sync_lock:
             cached = self._messages.get(chat_id)
+            generation = self._generations.get(chat_id, 0)
+            tombstoned = chat_id in self._tombstones
+        if tombstoned:
+            return []
         if cached is None:
             loaded = self._load(chat_id)
             with self._sync_lock:
                 current = self._messages.get(chat_id, [])
-                self._messages[chat_id] = self._merge_history(loaded or [], current)
+                if (
+                    self._generations.get(chat_id, 0) == generation
+                    and chat_id not in self._tombstones
+                ):
+                    self._messages[chat_id] = self._merge_history(loaded or [], current)
                 cached = self._messages.get(chat_id) or []
         return list(cached)
 
+    def _async_load_lock(self, chat_id: str) -> asyncio.Lock:
+        with self._sync_lock:
+            lock = self._load_locks.get(chat_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._load_locks[chat_id] = lock
+            return lock
+
     async def get_async(self, chat_id: str) -> list[StoredMessage]:
-        async with self._lock:
+        async with self._async_load_lock(chat_id):
             with self._sync_lock:
                 cached = self._messages.get(chat_id)
+                generation = self._generations.get(chat_id, 0)
+                tombstoned = chat_id in self._tombstones
+            if tombstoned:
+                return []
             if cached is None:
                 loaded = await asyncio.to_thread(self._load, chat_id)
                 with self._sync_lock:
                     current = self._messages.get(chat_id, [])
-                    self._messages[chat_id] = self._merge_history(loaded or [], current)
+                    if (
+                        self._generations.get(chat_id, 0) == generation
+                        and chat_id not in self._tombstones
+                    ):
+                        self._messages[chat_id] = self._merge_history(loaded or [], current)
                     cached = self._messages.get(chat_id) or []
         return list(cached)
-
-    def get_recent(self, chat_id: str, *, max_items: int) -> list[StoredMessage]:
-        history = self.get(chat_id)
-        if max_items <= 0:
-            return []
-        return history[-max_items:]
 
     async def get_recent_async(self, chat_id: str, *, max_items: int) -> list[StoredMessage]:
         history = await self.get_async(chat_id)
@@ -261,13 +358,35 @@ class MemoryStore:
             with self._sync_lock:
                 data_dir = self._data_dir
                 history = self._messages.get(chat_id)
-                if not data_dir or history is None:
+                generation = self._generations.get(chat_id, 0)
+                if not data_dir or history is None or chat_id in self._tombstones:
                     return
                 snapshot = list(history[-200:])
             data_dir.mkdir(parents=True, exist_ok=True)
             path = data_dir / f"{chat_id}.json"
             payload = [_serialize_message(message) for message in snapshot]
+            with self._sync_lock:
+                if (
+                    self._generations.get(chat_id, 0) != generation
+                    or chat_id in self._tombstones
+                    or self._messages.get(chat_id) is None
+                ):
+                    return
             write_json(path, payload)
+            with self._sync_lock:
+                if (
+                    self._generations.get(chat_id, 0) == generation
+                    and chat_id not in self._tombstones
+                    and self._messages.get(chat_id) is not None
+                ):
+                    self._dirty.discard(chat_id)
+
+    def persist_all(self) -> None:
+        """持久化全部脏会话，供插件关闭时绕过尚未触发的防抖任务。"""
+        with self._sync_lock:
+            dirty_chat_ids = list(self._dirty)
+        for chat_id in dirty_chat_ids:
+            self.persist(chat_id)
 
     def _load(self, chat_id: str) -> list[StoredMessage] | None:
         with self._sync_lock:
@@ -278,7 +397,7 @@ class MemoryStore:
         if not path.exists():
             return None
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = load_json(path, default=None)
             if not isinstance(raw, list):
                 return None
             out: list[StoredMessage] = []
@@ -304,7 +423,7 @@ class MemoryStore:
                         message_id = None
                 local_id = str(item.get("local_id", "") or "")
                 media_items = _normalize_media_items(item.get("media_items", []))
-                parts = _normalize_parts(item.get("parts", []))
+                parts = normalize_message_parts(item.get("parts", []))
                 ts_val = item.get("ts", time.time())
                 try:
                     ts = float(ts_val)

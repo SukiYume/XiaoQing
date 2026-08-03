@@ -1,11 +1,12 @@
-"""
-Wolfram|Alpha 插件
+"""通过 Wolfram|Alpha 的固定 HTTPS 端点执行有限的计算查询。"""
 
-调用 Wolfram|Alpha API 进行计算和查询。
-"""
+from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from collections.abc import Callable, Mapping
+from typing import Any, Literal, Protocol, cast
 from xml.etree import ElementTree
 
 import aiohttp
@@ -24,16 +25,72 @@ from core.bounded_http import (
     parse_bounded_json,
     validate_bounded_xml,
 )
-from core.plugin_base import segments
-from core.public_errors import public_error_message, public_error_response
+from core.interfaces import PluginSettingsSnapshot
+from core.plugin_base import has_control_characters as _has_control_chars
+from core.plugin_base import segments as _core_segments
+from core.public_errors import public_error_message
+from core.public_errors import public_error_response as _core_public_error_response
+
+MessageSegment = dict[str, Any]
+MessageSegments = list[MessageSegment]
+OneBotEvent = dict[str, Any]
+QueryMode = Literal["simple", "step", "complete"]
+
+
+class Context(Protocol):
+    """本插件实际读取的最小运行时上下文。"""
+
+    http_session: Any
+
+    def get_settings_snapshot(self) -> PluginSettingsSnapshot: ...
+
+
+class _BoundedResponse(Protocol):
+    body: bytes
+    charset: str | None
+
+
+segments = cast(Callable[[object], MessageSegments], _core_segments)
+public_error_response = cast(Callable[..., MessageSegments], _core_public_error_response)
 
 logger = logging.getLogger(__name__)
 
 WA_RESULT_URL = "https://api.wolframalpha.com/v1/result"
 WA_QUERY_URL = "https://api.wolframalpha.com/v2/query"
-MAX_RESPONSE_BYTES = 1024 * 1024
+
 MAX_QUERY_LENGTH = 500
+MAX_APPID_LENGTH = 128
+MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_RESULT_ITEMS = 20
+MAX_RESULT_TEXT_LENGTH = 2_400
+
+_APPID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+_HELP_ALIASES = frozenset({"help", "帮助"})
+_EXACT_HELP_ARGUMENTS = frozenset({*_HELP_ALIASES, "-h", "--help"})
+_SUPPORTED_OPTIONS = frozenset({"h", "help", "mode"})
+_MODE_ALIASES: dict[str, QueryMode] = {
+    "simple": "simple",
+    "step": "step",
+    "complete": "complete",
+    "cp": "complete",
+}
+_HELP_TEXT = """🧮 Wolfram|Alpha 万能计算器
+
+基本用法：
+• /alpha <问题> - 快速查询
+• /alpha help - 显示此帮助
+
+显式模式：
+• --mode=step - 显示步骤解答
+• --mode=complete - 仅查询完整结果（cp 是兼容别名）
+
+示例：
+• /alpha 1+1
+• /alpha sin(pi/4)
+• /alpha --mode=step integrate x^2
+• /alpha --mode=complete population of China"""
+
+_WA_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=25)
 _WA_SEMAPHORE = asyncio.Semaphore(2)
 _RESPONSE_LIMITS = BodyLimits(
     max_wire_bytes=MAX_RESPONSE_BYTES,
@@ -57,7 +114,39 @@ _XML_LIMITS = XmlLimits(
 )
 
 
-def _decode_text_response(response) -> str:
+def init(context: Context | None = None) -> None:
+    """记录插件加载完成。"""
+
+    del context
+    logger.info("Wolfram|Alpha 插件已加载")
+
+
+def _get_appid(context: Context) -> str:
+    """从唯一支持的 secret 层级读取并收窄 App ID。"""
+
+    value = context.get_settings_snapshot().plugin_secrets("wolframalpha").get("appid")
+    if type(value) is not str or _has_control_chars(value):
+        return ""
+    appid = value.strip()
+    return appid if _APPID_PATTERN.fullmatch(appid) is not None else ""
+
+
+def _bound_result_text(value: object, *, empty_message: str) -> str:
+    """收窄 API 文本，保证最终 OneBot 消息不超过平台预算。"""
+
+    if not isinstance(value, str):
+        return empty_message
+    text = value.strip()
+    if not text:
+        return empty_message
+    if len(text) <= MAX_RESULT_TEXT_LENGTH:
+        return text
+    return f"{text[: MAX_RESULT_TEXT_LENGTH - 1].rstrip()}…"
+
+
+def _decode_text_response(response: _BoundedResponse) -> str:
+    """仅按受支持的无歧义字符集解码快速查询响应。"""
+
     charset = (response.charset or "utf-8").casefold().replace("_", "-")
     if charset not in {"utf-8", "utf8", "us-ascii", "ascii"}:
         raise ResponseFormatError("unsupported WolframAlpha response charset")
@@ -67,42 +156,48 @@ def _decode_text_response(response) -> str:
         raise ResponseFormatError("invalid WolframAlpha text response") from exc
 
 
-def init(context=None) -> None:
-    """插件初始化"""
-    pass
+async def handle(
+    command: str,
+    args: str,
+    event: OneBotEvent,
+    context: Context,
+) -> MessageSegments:
+    """解析管理员查询命令并选择显式查询模式。"""
 
-
-async def handle(command: str, args: str, event: dict, context) -> list:
-    """命令处理入口"""
+    del event
     try:
+        if command != "alpha":
+            return segments("未知命令")
+
         parsed = parse(args)
+        if not parsed or args.strip().casefold() in _EXACT_HELP_ARGUMENTS:
+            return segments(_HELP_TEXT)
+        if parsed.has("h") or parsed.has("help"):
+            return segments("❌ 帮助选项不接受额外参数")
+        if unsupported := set(parsed.options) - _SUPPORTED_OPTIONS:
+            names = "、".join(f"--{name}" for name in sorted(unsupported))
+            return segments(f"❌ 不支持的选项：{names}")
 
-        # 检查帮助命令
-        if (
-            not parsed
-            or parsed.has("h")
-            or parsed.has("help")
-            or parsed.first.lower() in ["help", "帮助"]
-        ):
-            return segments(_show_help())
+        mode = _MODE_ALIASES.get(parsed.opt("mode", "simple").strip().casefold())
+        if mode is None:
+            return segments("❌ mode 仅支持 simple、step、complete 或 cp")
 
-        # 获取问题内容
-        question = parsed.rest()
+        # 模式必须通过选项指定；普通问题末尾的 step/cp 始终属于正文。
+        question = parsed.rest().strip()
         if not question:
             return segments("请输入问题\n输入 /alpha help 查看帮助")
         if len(question) > MAX_QUERY_LENGTH:
             return segments(f"❌ 查询过长，最多 {MAX_QUERY_LENGTH} 字符")
+        if _has_control_chars(question):
+            return segments("❌ 查询包含不支持的控制字符")
 
-        # 获取 App ID
         appid = _get_appid(context)
         if not appid:
             return segments(
-                "❌ Wolfram|Alpha 未配置 appid\n请在 secrets.json 中配置 plugins.wolframalpha.appid"
+                "❌ Wolfram|Alpha 未配置有效 appid\n"
+                "请在 config/secrets.json 的 plugins.wolframalpha.appid 中配置"
             )
-
-        # 执行查询
-        return await _get_answer(question, appid, context)
-
+        return await _get_answer(question, appid, context, mode=mode)
     except Exception as exc:
         return public_error_response(
             context,
@@ -112,99 +207,43 @@ async def handle(command: str, args: str, event: dict, context) -> list:
         )
 
 
-def _show_help() -> str:
-    """显示帮助信息"""
-    return """
-🧮 **Wolfram|Alpha 万能计算器**
+async def _get_answer(
+    question: str,
+    appid: str,
+    context: Context,
+    *,
+    mode: QueryMode = "simple",
+) -> MessageSegments:
+    """执行一种查询模式，并把传输错误统一转换为稳定的公开回复。"""
 
-**基本用法:**
-• /alpha <问题> - 查询或计算
-• /alpha help - 显示此帮助
-
-**特殊后缀:**
-• step - 显示步骤解答
-  示例: /alpha integrate x^2 step
-
-• cp - 仅返回完整结果
-  示例: /alpha 1+1 cp
-
-**查询示例:**
-• /alpha 1+1 - 简单计算
-• /alpha sin(pi/4) - 三角函数
-• /alpha integrate x^2 - 积分
-• /alpha solve x^2+2x+1=0 - 方程求解
-• /alpha derivative of sin(x) - 求导
-• /alpha population of China - 查询数据
-• /alpha weather in Beijing - 天气查询
-• /alpha convert 100 USD to CNY - 单位转换
-
-**支持的内容:**
-• 数学计算（代数、微积分、统计）
-• 物理公式和常数
-• 化学数据
-• 单位转换
-• 日期和时间计算
-• 地理和天文数据
-• 语言翻译
-
-输入 /alpha help 查看此帮助
-""".strip()
-
-
-# ============================================================
-# 配置获取
-# ============================================================
-
-
-def _get_appid(context) -> str:
-    """获取 App ID"""
-    return context.secrets.get("plugins", {}).get("wolframalpha", {}).get("appid", "")
-
-
-# ============================================================
-# 查询处理函数
-# ============================================================
-
-
-async def _get_answer(question: str, appid: str, context) -> list:
-    """执行 Wolfram|Alpha 查询"""
-    session = context.http_session
-    if not session:
+    session = getattr(context, "http_session", None)
+    if session is None:
         return segments("❌ HTTP 会话未初始化")
 
     try:
-        # 检查是否需要步骤解答
-        if question.strip().endswith("step"):
-            result = await _query_step(question[:-4].strip(), appid, session)
-            return segments(f"📝 **步骤解答:**\n\n{result}")
+        if mode == "step":
+            result = await _query_step(question, appid, session)
+            return segments(f"📝 步骤解答：\n\n{result}")
+        if mode == "complete":
+            result = await _query_complete(question, appid, session)
+            return segments(f"🔢 计算结果：\n\n{result}")
 
-        # 检查是否需要完整结果
-        if question.strip().endswith("cp"):
-            result = await _query_complete(question[:-2].strip(), appid, session)
-            return segments(f"🔢 **计算结果:**\n\n{result}")
-
-        # 简单查询 - 使用 v1/result API (最快速)
-        data = {"appid": appid, "i": question}
-
-        async with _WA_SEMAPHORE:
-            try:
-                response = await aiohttp_request_bounded(
-                    session,
-                    "POST",
-                    WA_RESULT_URL,
-                    limits=_RESPONSE_LIMITS,
-                    mime_policy=_TEXT_MIME_POLICY,
-                    request_kwargs={"data": data, "timeout": 30},
-                )
-            except HttpStatusError as exc:
-                logger.error("WolframAlpha API error: status=%d", exc.status)
-                return segments(f"❌ 查询失败（HTTP {exc.status}）")
-            result = _decode_text_response(response)
-
-        return segments(f"🔢 **{question}**\n\n{result}")
-
+        response = await _request_wolfram(
+            session,
+            WA_RESULT_URL,
+            params={"appid": appid, "i": question},
+            mime_policy=_TEXT_MIME_POLICY,
+        )
+        result = _bound_result_text(
+            _decode_text_response(response),
+            empty_message="未找到结果",
+        )
+        return segments(f"🔢 {question}\n\n{result}")
+    except HttpStatusError as exc:
+        logger.error("WolframAlpha API 返回非成功状态：%d", exc.status)
+        return segments(f"❌ 查询失败（HTTP {exc.status}）")
     except asyncio.TimeoutError:
-        logger.error("WolframAlpha query timeout")
+        logger.error("WolframAlpha 查询超时")
         return segments("❌ 查询超时，请稍后重试")
     except aiohttp.ClientError as exc:
         public_error_message(
@@ -214,6 +253,14 @@ async def _get_answer(question: str, appid: str, context) -> list:
             component="wolframalpha.network",
         )
         return segments("❌ 网络错误，请稍后重试")
+    except ResponseFormatError as exc:
+        public_error_message(
+            context,
+            exc,
+            logger=logger,
+            component="wolframalpha.response",
+        )
+        return segments("❌ 服务返回格式异常，请稍后重试")
     except Exception as exc:
         return public_error_response(
             context,
@@ -223,68 +270,95 @@ async def _get_answer(question: str, appid: str, context) -> list:
         )
 
 
-async def _query_step(question: str, appid: str, session) -> str:
-    """获取步骤解答"""
-    data = {
-        "appid": appid,
-        "input": question,
-        "podstate": "Result__Step-by-step solution",
-        "format": "plaintext",
-    }
+async def _query_step(question: str, appid: str, session: Any) -> str:
+    """读取步骤模式的有限 XML，并保留前二十个非空文本项。"""
 
-    response = await aiohttp_request_bounded(
+    response = await _request_wolfram(
         session,
-        "POST",
         WA_QUERY_URL,
-        limits=_RESPONSE_LIMITS,
+        params={
+            "appid": appid,
+            "input": question,
+            "podstate": "Result__Step-by-step solution",
+            "format": "plaintext",
+        },
         mime_policy=XML_MIME_POLICY,
-        request_kwargs={"data": data, "timeout": 30},
     )
     payload = validate_bounded_xml(response, limits=_XML_LIMITS)
     root = ElementTree.fromstring(payload)
-    lines = []
-    for item in list(root.iter("plaintext"))[:MAX_RESULT_ITEMS]:
-        if item.text:
-            lines.append(item.text.strip())
+    lines: list[str] = []
+    for item in root.iter("plaintext"):
+        text = item.text.strip() if isinstance(item.text, str) else ""
+        if text:
+            lines.append(text)
+        if len(lines) == MAX_RESULT_ITEMS:
+            break
+    return _bound_result_text(
+        "\n\n".join(lines),
+        empty_message="未找到步骤解答",
+    )
 
-    if not lines:
-        return "未找到步骤解答"
 
-    return "\n\n".join(lines)
+async def _query_complete(question: str, appid: str, session: Any) -> str:
+    """读取完整模式的有限 JSON，安全遍历 Result pod 的纯文本结果。"""
 
-
-async def _query_complete(question: str, appid: str, session) -> str:
-    """获取完整结果"""
-    data = {
-        "appid": appid,
-        "input": question,
-        "includepodid": "Result",
-        "format": "plaintext",
-        "output": "json",
-    }
-
-    response = await aiohttp_request_bounded(
+    response = await _request_wolfram(
         session,
-        "POST",
         WA_QUERY_URL,
-        limits=_RESPONSE_LIMITS,
+        params={
+            "appid": appid,
+            "input": question,
+            "includepodid": "Result",
+            "format": "plaintext",
+            "output": "json",
+        },
         mime_policy=JSON_MIME_POLICY,
-        request_kwargs={"data": data, "timeout": 30},
     )
     payload = parse_bounded_json(response, limits=_JSON_LIMITS)
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         raise ResponseFormatError("WolframAlpha response must be a JSON object")
-
-    # 提取结果
-    try:
-        pods = payload["queryresult"]["pods"][:MAX_RESULT_ITEMS]
-        result = pods[0]["subpods"][0]["plaintext"]
-        if not result:
-            return "未找到结果"
-        return result
-    except (KeyError, IndexError) as exc:
-        logger.error(
-            "Failed to parse WolframAlpha response error_type=%s",
-            type(exc).__name__,
-        )
+    query_result = payload.get("queryresult")
+    pods = query_result.get("pods") if isinstance(query_result, Mapping) else None
+    if not isinstance(pods, list):
+        logger.error("WolframAlpha 完整结果缺少 pods 列表")
         return "结果解析失败"
+
+    results: list[str] = []
+    for pod in pods[:MAX_RESULT_ITEMS]:
+        subpods = pod.get("subpods") if isinstance(pod, Mapping) else None
+        if not isinstance(subpods, list):
+            continue
+        for subpod in subpods:
+            plaintext = subpod.get("plaintext") if isinstance(subpod, Mapping) else None
+            text = plaintext.strip() if isinstance(plaintext, str) else ""
+            if text:
+                results.append(text)
+            if len(results) == MAX_RESULT_ITEMS:
+                break
+        if len(results) == MAX_RESULT_ITEMS:
+            break
+    return _bound_result_text(
+        "\n\n".join(results),
+        empty_message="未找到结果",
+    )
+
+
+async def _request_wolfram(
+    session: Any,
+    url: str,
+    *,
+    params: dict[str, str],
+    mime_policy: MimePolicy,
+) -> _BoundedResponse:
+    """按 Wolfram API 的 GET 约定发送有界请求。"""
+
+    async with _WA_SEMAPHORE:
+        response = await aiohttp_request_bounded(
+            session,
+            "GET",
+            url,
+            limits=_RESPONSE_LIMITS,
+            mime_policy=mime_policy,
+            request_kwargs={"params": params, "timeout": _WA_TIMEOUT},
+        )
+    return cast(_BoundedResponse, response)

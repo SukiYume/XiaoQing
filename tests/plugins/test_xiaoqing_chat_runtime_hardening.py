@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+from pydantic import ValidationError
+
 from plugins.xiaoqing_chat.config.config import (
     ExpressionConfig,
     HumanizeConfig,
@@ -13,6 +16,100 @@ from plugins.xiaoqing_chat.expression.bw_expression_learner import _build_dialog
 from plugins.xiaoqing_chat.expression.bw_expression_store import ExpressionRecord
 from plugins.xiaoqing_chat.memory.knowledge_extract import build_fact_messages
 from plugins.xiaoqing_chat.memory.memory import StoredMessage
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"reply_probability_base": 1.01},
+        {"max_generation_inflight_global": 0},
+        {"timeout_seconds": 0},
+        {"max_context_size": 0},
+        {"temperature": float("nan")},
+        {"media": {"max_image_pixels": 0}},
+        {"media": {"max_analyze_bytes": 128 * 1024 * 1024}},
+        {"humanize": {"interbubble_min_seconds": 2.0, "interbubble_max_seconds": 1.0}},
+        {"ban_regex": ["("]},
+        {"ban_regex": ["x" * 513]},
+        {"ban_regex": ["(a+)+$"]},
+        {
+            "keyword_reaction": {
+                "regex_rules": [{"pattern": "(broken", "prompt": "never used"}],
+            }
+        },
+    ],
+)
+def test_config_rejects_unsafe_numeric_and_regex_values(payload):
+    with pytest.raises(ValidationError):
+        XiaoQingChatConfig.model_validate(payload)
+
+
+def test_config_accepts_safe_zero_disable_values_and_probability_boundaries():
+    cfg = XiaoQingChatConfig.model_validate(
+        {
+            "reply_probability_base": 0.0,
+            "participation_cue_reply_probability": 1.0,
+            "max_retry": 0,
+            "retry_interval_seconds": 0.0,
+            "io_persist_debounce_seconds": 0.0,
+            "media": {
+                "vision_max_retry": 0,
+                "vision_retry_interval_seconds": 0.0,
+            },
+        }
+    )
+
+    assert cfg.reply_probability_base == 0.0
+    assert cfg.participation_cue_reply_probability == 1.0
+    assert cfg.max_retry == 0
+    assert cfg.io_persist_debounce_seconds == 0.0
+
+
+def test_config_file_loader_surfaces_validation_error(tmp_path):
+    import json
+
+    from plugins.xiaoqing_chat.config.config import load_xiaoqing_chat_config
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "xiaoqing_config.json").write_text(
+        json.dumps({"max_generation_inflight_per_chat": 0}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError):
+        load_xiaoqing_chat_config(context_config={}, plugin_dir=tmp_path)
+
+
+def test_config_file_deep_merge_preserves_unoverridden_nested_values(tmp_path):
+    import json
+
+    from plugins.xiaoqing_chat.config.config import load_xiaoqing_chat_config
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "xiaoqing_config.json").write_text(
+        json.dumps({"media": {"enable_inbound_media_context": False}}),
+        encoding="utf-8",
+    )
+    context_config = {
+        "plugins": {
+            "xiaoqing_chat": {
+                "media": {
+                    "max_media_per_message": 3,
+                    "enable_inbound_media_context": True,
+                }
+            }
+        }
+    }
+
+    loaded = load_xiaoqing_chat_config(
+        context_config=context_config,
+        plugin_dir=tmp_path,
+    )
+
+    assert loaded.media.max_media_per_message == 3
+    assert loaded.media.enable_inbound_media_context is False
 
 
 def test_expression_block_requires_checked_records_when_approval_required(tmp_path):
@@ -43,8 +140,6 @@ def test_expression_block_requires_checked_records_when_approval_required(tmp_pa
             expression=ExpressionConfig(
                 enable_expression_selector=True,
                 max_injected=5,
-                # 关闭自动注入，回到旧的"必须 checked 才注入"行为
-                auto_inject_min_count=0,
             ),
             reflection=ReflectionConfig(
                 enable_expression_reflection=False,
@@ -59,7 +154,7 @@ def test_expression_block_requires_checked_records_when_approval_required(tmp_pa
     assert "好家伙" not in block
 
 
-def test_expression_block_auto_injects_unchecked_high_count_records(tmp_path):
+def test_expression_block_never_auto_injects_unchecked_high_count_records(tmp_path):
     low_count_unchecked = ExpressionRecord(
         expression_id="low",
         chat_id="g1",
@@ -87,7 +182,6 @@ def test_expression_block_auto_injects_unchecked_high_count_records(tmp_path):
             expression=ExpressionConfig(
                 enable_expression_selector=True,
                 max_injected=5,
-                auto_inject_min_count=3,
             ),
             reflection=ReflectionConfig(
                 enable_expression_reflection=False,
@@ -98,7 +192,7 @@ def test_expression_block_auto_injects_unchecked_high_count_records(tmp_path):
 
     block = _build_expression_block(runtime, state, tmp_path, "g1")
 
-    assert "好家伙" in block
+    assert "好家伙" not in block
     assert "哦这样啊" not in block
 
 
@@ -106,10 +200,12 @@ def test_expression_block_default_config_requires_approval_for_injection():
     cfg = XiaoQingChatConfig()
 
     assert cfg.reflection.require_approval_for_injection is True
+    assert cfg.expression.enable_expression_selector is False
+    assert cfg.expression.max_injected == 1
 
 
 def test_expression_learning_dialogue_excludes_assistant_messages():
-    dialogue = _build_dialogue(
+    dialogue, source_ids = _build_dialogue(
         [
             StoredMessage(role="assistant", name="小青", content="好家伙，又来了", ts=1.0),
             StoredMessage(
@@ -120,17 +216,16 @@ def test_expression_learning_dialogue_excludes_assistant_messages():
                 ts=2.0,
             ),
         ],
-        bot_name="小青",
     )
 
     assert "这不比卖烤鸭香" in dialogue
     assert "好家伙，又来了" not in dialogue
     assert "你(小青)" not in dialogue
+    assert source_ids == {"t2"}
 
 
 def test_fact_prompt_uses_real_user_ids_and_skips_assistant_messages():
     messages = build_fact_messages(
-        bot_name="小青",
         history=[
             StoredMessage(role="assistant", name="小青", content="我也喜欢这个", ts=1.0),
             StoredMessage(
@@ -210,9 +305,7 @@ def test_humanize_typing_delay_scales_with_lengths_and_caps():
 
     short = _compute_typing_delay(runtime, input_text="嗨", output_text="嗨")
     assert short > 0
-    long_in_short_out = _compute_typing_delay(
-        runtime, input_text="一" * 50, output_text=""
-    )
+    long_in_short_out = _compute_typing_delay(runtime, input_text="一" * 50, output_text="")
     assert long_in_short_out > short
 
     capped = _compute_typing_delay(runtime, input_text="x" * 5000, output_text="y" * 5000)

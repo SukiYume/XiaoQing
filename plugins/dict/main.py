@@ -1,82 +1,309 @@
-"""
-综合词典插件
-提供天文学专业术语的中英互译功能
-"""
+"""提供有界、可校验的天文学中英词典查询。"""
+
+from __future__ import annotations
+
 import hashlib
-import logging
+import json
 import re
+import stat
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, Literal, NamedTuple, cast
 
-from core.args import parse
-from core.plugin_base import load_json, run_sync, segments
+from core.args import tokenize
+from core.plugin_base import (
+    has_control_characters as _contains_control_characters,
+)
+from core.plugin_base import run_sync, segments
 from core.public_errors import public_error_message, public_error_response
 
-logger = logging.getLogger(__name__)
+MAX_ARGUMENT_CHARS = 512
+MAX_QUERY_CHARS = 256
+MAX_RESULTS = 100
+DEFAULT_RESULTS = 10
+MAX_MANIFEST_BYTES = 32 * 1024
+MAX_DICTIONARY_BYTES = 4 * 1024 * 1024
+MAX_DICTIONARY_ENTRIES = 50_000
+MAX_DICTIONARY_LINE_CHARS = 2_048
+MAX_SOURCE_CHARS = 256
+MAX_DESTINATION_CHARS = 1_024
+
+_HELP_ALIASES = frozenset({"help", "h", "list", "l", "帮助"})
+_EXACT_OPTIONS = frozenset({"-e", "--exact"})
+_LIMIT_OPTIONS = frozenset({"-n", "--num"})
+_SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
+_POSITIVE_INTEGER_PATTERN = re.compile(r"[1-9][0-9]{0,2}\Z")
+_CHINESE_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f]")
+
+Messages = list[dict[str, Any]]
+QueryDirection = Literal["chinese_to_english", "english_to_chinese"]
+
+HELP_TEXT = """
+📖 **天文学词典**
+
+查询中国天文学会天文学名词审定委员会发布的中英天文学名词。
+
+**用法：**
+• /dict <词汇> - 模糊查询；多词按“全部包含”匹配
+• /dict -e <词汇> - 精确匹配
+• /dict -n <1-100> <词汇> - 指定最多显示条数
+• /dict -- <以连字符开头的词汇> - 停止解析选项
+• /dict help - 显示帮助
+
+**示例：**
+• /dict galaxy
+• /dict 星系
+• /dict -e "fast radio burst"
+• /dict -n 20 star
+""".strip()
 
 
-# ============================================================
-# 插件初始化
-# ============================================================
-
-def init(context=None) -> None:
-    """插件初始化"""
-    pass
+class DictionaryDataError(RuntimeError):
+    """表示可向用户稳定说明的内置资源错误。"""
 
 
-# ============================================================
-# 数据加载与缓存
-# ============================================================
+class DictionaryEntry(NamedTuple):
+    """保存原始词条及用于不区分大小写查询的源词。"""
 
-@lru_cache(maxsize=2)
-def _load_dictionary(dict_file: Path):
-    """
-    加载词典数据文件（带缓存）
+    source: str
+    destination: str
+    source_folded: str
 
-    Args:
-        dict_file: 词典文件路径
 
-    Returns:
-        DataFrame 或 None（加载失败时）
-    """
+@dataclass(frozen=True)
+class ResourceSpec:
+    """清单中一份词典资源的完整校验约束。"""
+
+    filename: str
+    sha256: str
+    byte_count: int
+    entry_count: int
+
+
+@dataclass(frozen=True)
+class DictionaryRequest:
+    """一次已经消除选项歧义的词典请求。"""
+
+    action: Literal["help", "query"]
+    query: str = ""
+    exact_match: bool = False
+    max_results: int = DEFAULT_RESULTS
+
+
+def _clean_query(value: object) -> str:
+    """规范化用户查询，同时阻止巨型或不可显示的扫描请求。"""
+
+    if not isinstance(value, str):
+        raise ValueError("查询词必须是字符串")
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("请提供要查询的词汇")
+    if len(cleaned) > MAX_QUERY_CHARS:
+        raise ValueError(f"查询词不能超过 {MAX_QUERY_CHARS} 个字符")
+    if _contains_control_characters(cleaned):
+        raise ValueError("查询词不能包含控制字符")
+    return cleaned
+
+
+def _parse_limit(value: str) -> int:
+    if _POSITIVE_INTEGER_PATTERN.fullmatch(value) is None:
+        raise ValueError("显示数量必须是 1 到 100 的 ASCII 整数")
+    parsed = int(value)
+    if parsed > MAX_RESULTS:
+        raise ValueError("显示数量必须是 1 到 100 的 ASCII 整数")
+    return parsed
+
+
+def _tokenize_request(args: object) -> list[str]:
+    """在进入选项状态机前完成类型、预算、控制字符和引号校验。"""
+
+    if not isinstance(args, str):
+        raise TypeError("dict arguments must be a string")
+    if len(args) > MAX_ARGUMENT_CHARS:
+        raise ValueError(f"命令参数不能超过 {MAX_ARGUMENT_CHARS} 个字符")
+    if _contains_control_characters(args):
+        raise ValueError("命令参数不能包含控制字符")
     try:
-        if not dict_file.exists():
-            return None
-        import pandas as pd
-        frame = pd.read_csv(dict_file, sep='\t', header=None, names=['src', 'dst'])
-        frame["_src_lower"] = frame["src"].astype(str).str.lower()
-        return frame
-    except ImportError as exc:
-        raise ImportError("天文词典功能需要 pandas 库，请运行: pip install pandas") from exc
-    except Exception as exc:
-        raise RuntimeError("加载词典文件失败") from exc
+        tokens = tokenize(args, strict=True)
+    except ValueError as exc:
+        raise ValueError("命令中的引号没有闭合") from exc
+    return tokens
 
 
-def _detect_language(text: str) -> str:
-    """
-    检测文本是中文还是英文
+def _parse_request(args: object) -> DictionaryRequest:
+    """按单一状态机解析选项，避免通用解析器吞掉查询词。"""
 
-    Args:
-        text: 待检测文本
+    tokens = _tokenize_request(args)
+    if not tokens:
+        return DictionaryRequest("help")
+    if tokens[0].casefold() in _HELP_ALIASES:
+        if len(tokens) == 1:
+            return DictionaryRequest("help")
+        raise ValueError("help 子命令不接受额外参数；用法：/dict help")
 
-    Returns:
-        'chinese' 或 'english'
-    """
-    return 'chinese' if re.search(r'[\u4e00-\u9fff]', text) else 'english'
+    exact_match = False
+    limit_seen = False
+    max_results = DEFAULT_RESULTS
+    query_tokens: list[str] = []
+    options_enabled = True
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if options_enabled and token == "--":
+            options_enabled = False
+        elif options_enabled and token in _EXACT_OPTIONS:
+            if exact_match:
+                raise ValueError("精确匹配选项不能重复")
+            exact_match = True
+        elif options_enabled and token in _LIMIT_OPTIONS:
+            if limit_seen:
+                raise ValueError("显示数量选项不能重复")
+            index += 1
+            if index >= len(tokens):
+                raise ValueError("显示数量选项缺少数值")
+            max_results = _parse_limit(tokens[index])
+            limit_seen = True
+        elif options_enabled and token.startswith("-") and token != "-":
+            raise ValueError(f"未知选项：{token}")
+        else:
+            query_tokens.append(token)
+        index += 1
+
+    return DictionaryRequest(
+        "query",
+        query=_clean_query(" ".join(query_tokens)),
+        exact_match=exact_match,
+        max_results=max_results,
+    )
 
 
-def _extract_query(parsed, exact_match: bool) -> str:
-    query = parsed.rest().strip()
-    if query:
-        return query
+def _read_manifest(path: Path) -> dict[str, Any]:
+    """读取小型 JSON 清单；链接、非常规文件和越界文件均失败关闭。"""
 
-    if exact_match:
-        for key in ("e", "exact"):
-            value = parsed.opt(key).strip()
-            if value and value.lower() != "true":
-                return value
+    try:
+        file_info = path.lstat()
+        if not stat.S_ISREG(file_info.st_mode) or file_info.st_size > MAX_MANIFEST_BYTES:
+            raise ValueError("invalid manifest file")
+        payload = path.read_bytes()
+        if len(payload) != file_info.st_size:
+            raise ValueError("manifest changed while reading")
+        decoded: object = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise DictionaryDataError("天文学词典资源清单无效；请重新安装完整发行包") from exc
+    if not isinstance(decoded, dict):
+        raise DictionaryDataError("天文学词典资源清单无效；请重新安装完整发行包")
+    return cast(dict[str, Any], decoded)
 
-    return ""
+
+def _resource_spec(manifest: dict[str, Any], direction: QueryDirection) -> ResourceSpec:
+    """提取一项资源约束，并同时施加独立于清单的硬上限。"""
+
+    files = manifest.get("files")
+    raw_spec = files.get(direction) if isinstance(files, dict) else None
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
+        raw_spec = None
+    if not isinstance(raw_spec, dict):
+        raise DictionaryDataError("天文学词典资源清单无效；请重新安装完整发行包")
+
+    filename = raw_spec.get("filename")
+    expected_sha256 = raw_spec.get("sha256")
+    expected_bytes = raw_spec.get("bytes")
+    expected_entries = raw_spec.get("entries")
+    valid_filename = (
+        isinstance(filename, str)
+        and 0 < len(filename) <= 64
+        and "/" not in filename
+        and "\\" not in filename
+        and not _contains_control_characters(filename)
+        and filename.endswith(".txt")
+    )
+    if (
+        not valid_filename
+        or not isinstance(expected_sha256, str)
+        or _SHA256_PATTERN.fullmatch(expected_sha256) is None
+        or type(expected_bytes) is not int
+        or not 0 < expected_bytes <= MAX_DICTIONARY_BYTES
+        or type(expected_entries) is not int
+        or not 0 < expected_entries <= MAX_DICTIONARY_ENTRIES
+    ):
+        raise DictionaryDataError("天文学词典资源清单无效；请重新安装完整发行包")
+    return ResourceSpec(
+        cast(str, filename),
+        expected_sha256.casefold(),
+        expected_bytes,
+        expected_entries,
+    )
+
+
+@lru_cache(maxsize=4)
+def _load_dictionary(
+    dict_file: Path,
+    spec: ResourceSpec,
+    fingerprint: tuple[int, int, int],
+) -> tuple[DictionaryEntry, ...]:
+    """一次读取、校验并解析词典；缓存最多保留四代有界词库。"""
+
+    _ = fingerprint
+    try:
+        payload = dict_file.read_bytes()
+    except OSError as exc:
+        raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}") from exc
+    if len(payload) != spec.byte_count or hashlib.sha256(payload).hexdigest() != spec.sha256:
+        raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
+    try:
+        lines = payload.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}") from exc
+    if len(lines) != spec.entry_count:
+        raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
+
+    entries: list[DictionaryEntry] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for line in lines:
+        if not line or len(line) > MAX_DICTIONARY_LINE_CHARS:
+            raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
+        fields = line.split("\t")
+        if len(fields) != 2:
+            raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
+        source, destination = fields
+        if (
+            not source
+            or not destination
+            or source != source.strip()
+            or destination != destination.strip()
+            or len(source) > MAX_SOURCE_CHARS
+            or len(destination) > MAX_DESTINATION_CHARS
+            or _contains_control_characters(source)
+            or _contains_control_characters(destination)
+        ):
+            raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
+        pair = (source, destination)
+        if pair in seen_pairs:
+            raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
+        seen_pairs.add(pair)
+        entries.append(DictionaryEntry(source, destination, source.casefold()))
+    return tuple(entries)
+
+
+def _load_direction(plugin_dir: Path, direction: QueryDirection) -> tuple[DictionaryEntry, ...]:
+    """根据清单定位一份发行资产，并以文件元数据刷新解析缓存。"""
+
+    manifest = _read_manifest(plugin_dir / "assets" / "manifest.json")
+    spec = _resource_spec(manifest, direction)
+    dict_file = plugin_dir / "assets" / spec.filename
+    try:
+        file_info = dict_file.lstat()
+    except FileNotFoundError as exc:
+        raise DictionaryDataError(
+            f"天文学词典数据文件不存在: {spec.filename}；请重新安装包含 package data 的发行包"
+        ) from exc
+    except OSError as exc:
+        raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}") from exc
+    if not stat.S_ISREG(file_info.st_mode) or file_info.st_size != spec.byte_count:
+        raise DictionaryDataError(f"天文学词典数据校验失败: {spec.filename}")
+    fingerprint = (file_info.st_mtime_ns, file_info.st_ctime_ns, file_info.st_size)
+    return _load_dictionary(dict_file, spec, fingerprint)
 
 
 def _query_astrodict_sync(
@@ -85,171 +312,121 @@ def _query_astrodict_sync(
     exact_match: bool,
     max_results: int,
 ) -> str:
-    lang = _detect_language(query)
-    manifest_file = plugin_dir / "assets" / "manifest.json"
-    manifest = load_json(manifest_file, {})
-    files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
-    direction_key = "chinese_to_english" if lang == "chinese" else "english_to_chinese"
-    file_spec = files.get(direction_key, {}) if isinstance(files, dict) else {}
-    filename = file_spec.get("filename", "") if isinstance(file_spec, dict) else ""
-    expected_sha256 = file_spec.get("sha256", "") if isinstance(file_spec, dict) else ""
-    direction = "中译英" if lang == "chinese" else "英译中"
-    if not filename or Path(filename).name != filename or not expected_sha256:
-        return "天文学词典资源清单无效；请重新安装完整发行包"
-    dict_file = plugin_dir / "assets" / filename
-    if not dict_file.is_file():
-        return f"天文学词典数据文件不存在: {filename}；请重新安装包含 package data 的发行包"
-    actual_sha256 = hashlib.sha256(dict_file.read_bytes()).hexdigest()
-    if actual_sha256.lower() != str(expected_sha256).lower():
-        return f"天文学词典数据校验失败: {filename}"
-    df = _load_dictionary(dict_file)
-    if df is None:
-        return f"天文学词典数据文件不存在: {filename}；请重新安装包含 package data 的发行包"
-    lowered = query.lower()
-    if exact_match:
-        matches = df[df["_src_lower"] == lowered]
+    """在已校验的内置词条中执行确定性的精确或多关键词查询。"""
+
+    if _CHINESE_PATTERN.search(query) is not None:
+        direction_key: QueryDirection = "chinese_to_english"
+        direction_label = "中译英"
     else:
-        keywords = lowered.split()
-        mask = df["_src_lower"].str.contains(keywords[0], regex=False, na=False)
-        for keyword in keywords[1:]:
-            mask &= df["_src_lower"].str.contains(keyword, regex=False, na=False)
-        matches = df[mask]
-    if matches.empty:
-        return f"在天文学词典（{direction}）中未找到相关词条"
-    total_found = len(matches)
+        direction_key = "english_to_chinese"
+        direction_label = "英译中"
+    try:
+        entries = _load_direction(plugin_dir, direction_key)
+    except DictionaryDataError as exc:
+        return str(exc)
+
+    folded = query.casefold()
+    keywords = folded.split()
+    matches: list[DictionaryEntry] = []
+    total_found = 0
+    for entry in entries:
+        matched = (
+            entry.source_folded == folded
+            if exact_match
+            else all(keyword in entry.source_folded for keyword in keywords)
+        )
+        if not matched:
+            continue
+        total_found += 1
+        if len(matches) < max_results:
+            matches.append(entry)
+    if not matches:
+        return f"在天文学词典（{direction_label}）中未找到相关词条"
+
     lines = [
-        f"{idx}. {row['src']} → {row['dst']}"
-        for idx, (_, row) in enumerate(matches.head(max_results).iterrows(), 1)
+        f"{index}. {entry.source} → {entry.destination}" for index, entry in enumerate(matches, 1)
     ]
-    lines.append(
-        f"\n共找到 {total_found} 条结果"
-        + (f"，仅显示前 {max_results} 条" if total_found > max_results else "")
-    )
+    suffix = f"，仅显示前 {max_results} 条" if total_found > max_results else ""
+    lines.append(f"\n共找到 {total_found} 条结果{suffix}")
     return "\n".join(lines)
 
 
-# ============================================================
-# 天文学词典
-# ============================================================
-
 async def query_astrodict(
-    query: str,
-    context,
+    query: object,
+    context: Any,
     exact_match: bool = False,
-    max_results: int = 10
+    max_results: int = DEFAULT_RESULTS,
 ) -> str:
-    """
-    查询天文学词典
+    """校验公开调用参数，并在线程池中完成文件读取与词条扫描。"""
 
-    Args:
-        query: 查询词汇
-        context: 插件上下文
-        exact_match: 是否精确匹配
-        max_results: 最大返回结果数
-
-    Returns:
-        查询结果字符串
-    """
-    query = query.strip()
-    if not query:
-        return "请提供要查询的词汇"
     try:
-        return await run_sync(
-            _query_astrodict_sync,
-            query,
-            context.plugin_dir,
-            exact_match,
-            max_results,
+        cleaned_query = _clean_query(query)
+        if type(exact_match) is not bool:
+            raise ValueError("精确匹配参数必须是布尔值")
+        if type(max_results) is not int or not 1 <= max_results <= MAX_RESULTS:
+            raise ValueError("显示数量必须是 1 到 100 的整数")
+        plugin_dir = getattr(context, "plugin_dir", None)
+        if not isinstance(plugin_dir, Path):
+            raise RuntimeError("dictionary plugin directory is unavailable")
+        return cast(
+            str,
+            await run_sync(
+                _query_astrodict_sync,
+                cleaned_query,
+                plugin_dir,
+                exact_match,
+                max_results,
+            ),
         )
-    except ImportError as exc:
-        return public_error_message(context, exc, logger=context.logger, component="dict.search")
+    except ValueError as exc:
+        return f"❌ {exc}"
     except Exception as exc:
-        return public_error_message(context, exc, logger=context.logger, component="dict.search")
+        return cast(
+            str,
+            public_error_message(
+                context,
+                exc,
+                logger=context.logger,
+                component="dict.search",
+            ),
+        )
 
-
-# ============================================================
-# 主处理函数
-# ============================================================
 
 async def handle(
     command: str,
     args: str,
-    event: dict,
-    context
-) -> list[dict]:
-    """命令处理入口"""
+    event: dict[str, Any],
+    context: Any,
+) -> Messages:
+    """解析一条词典命令，并返回稳定的公开消息。"""
+
+    del command, event
     try:
-        parsed = parse(args)
-
-        # 空命令或帮助信息
-        if not parsed or parsed.first.lower() in ['help', 'h', 'list', 'l', '帮助']:
-            return segments(_get_help())
-
-        exact_match = parsed.has('e') or parsed.has('exact')
-        # 精确匹配的 bare flag 可能把查询词吃进 option value，需要单独回收。
-        query = _extract_query(parsed, exact_match)
-
-        if not query:
-            return segments(_get_help())
-
-        # 获取参数
-        max_results_str = parsed.opt('n') or parsed.opt('num')
-        try:
-            max_results = int(max_results_str) if max_results_str else 10
-        except ValueError:
-            max_results = 10
-
-        # 验证参数
-        if max_results < 1:
-            max_results = 10
-        elif max_results > 100:
-            max_results = 100
-
-        # 执行查询
-        logger.info(
-            f"天文词典查询: query='{query}', exact={exact_match}, max={max_results}"
+        request = _parse_request(args)
+        if request.action == "help":
+            return segments(HELP_TEXT)
+        context.logger.info(
+            "天文词典查询: query_chars=%d exact=%s max=%d",
+            len(request.query),
+            request.exact_match,
+            request.max_results,
         )
-
         result = await query_astrodict(
-            query=query,
-            context=context,
-            exact_match=exact_match,
-            max_results=max_results
+            request.query,
+            context,
+            exact_match=request.exact_match,
+            max_results=request.max_results,
         )
-
         return segments(result)
-
+    except ValueError as exc:
+        return segments(f"❌ {exc}")
     except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="dict.handle")
-
-
-def _get_help() -> str:
-    """显示帮助信息"""
-    return """
-📖 **天文学词典**
-
-查询天文学专业术语，支持中英互译
-
-**基础用法:**
-• /dict <词汇> - 查询词汇翻译
-• /dict help - 显示此帮助
-
-**高级选项:**
-• /dict -e <词汇> - 精确匹配
-• /dict -n <数量> <词汇> - 显示指定数量结果
-
-**功能特点:**
-- 自动识别中英文
-- 支持模糊搜索
-- 支持精确匹配
-- 专业天文术语库
-
-**示例:**
-• /dict galaxy - 查询 "galaxy"
-• /dict 星系 - 查询 "星系"
-• /dict -e galaxy - 精确匹配 "galaxy"
-• /dict -n 20 star - 显示最多 20 条结果
-• /dict black hole - 支持多词查询
-
-输入 /dict help 查看此帮助
-""".strip()
+        return cast(
+            Messages,
+            public_error_response(
+                context,
+                exc,
+                logger=context.logger,
+                component="dict.handle",
+            ),
+        )

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from core import atomic_store
-from core.atomic_store import MISSING_ETAG, AtomicJsonStore, active_keyed_lock_count
+from core.atomic_store import AtomicJsonStore, active_keyed_lock_count
 
 
 def test_atomic_json_store_recovers_last_valid_backup(tmp_path: Path) -> None:
@@ -20,29 +20,42 @@ def test_atomic_json_store_recovers_last_valid_backup(tmp_path: Path) -> None:
     assert json.loads(store.path.read_text(encoding="utf-8")) == {"version": 1}
 
 
-def test_atomic_json_store_concurrent_mutations_do_not_lose_updates(tmp_path: Path) -> None:
-    store = AtomicJsonStore(tmp_path / "counter.json")
-    store.write({"count": 0})
+def test_atomic_json_store_strict_read_rejects_corrupt_primary_with_backup(
+    tmp_path: Path,
+) -> None:
+    store = AtomicJsonStore(tmp_path / "state.json")
+    store.write({"version": 1})
+    store.write({"version": 2})
+    store.path.write_text('{"truncated":', encoding="utf-8")
+    before = store.path.read_bytes()
 
-    def increment(_index: int) -> None:
-        store.mutate({"count": 0}, lambda value: {"count": value["count"] + 1})
+    with pytest.raises(json.JSONDecodeError):
+        store.read({}, raise_on_error=True)
+
+    assert store.path.read_bytes() == before
+    assert json.loads(store.backup_path.read_text(encoding="utf-8")) == {"version": 1}
+
+
+def test_atomic_json_store_concurrent_writes_remain_complete(tmp_path: Path) -> None:
+    store = AtomicJsonStore(tmp_path / "counter.json")
+
+    def write_value(index: int) -> None:
+        store.write({"count": index})
 
     with ThreadPoolExecutor(max_workers=12) as pool:
-        list(pool.map(increment, range(200)))
+        list(pool.map(write_value, range(200)))
 
-    assert store.read({}) == {"count": 200}
+    assert store.read({})["count"] in range(200)
     assert active_keyed_lock_count() == 0
 
 
-def test_atomic_json_store_compare_and_swap_rejects_stale_writer(tmp_path: Path) -> None:
+def test_atomic_json_store_write_with_backup_publishes_same_generation(tmp_path: Path) -> None:
     store = AtomicJsonStore(tmp_path / "state.json")
-    value, initial_etag = store.read_versioned({})
-    assert value == {} and initial_etag == MISSING_ETAG
-    swapped, current_etag = store.compare_and_swap(initial_etag, {"owner": "first"})
-    assert swapped is True
-    stale, observed_etag = store.compare_and_swap(initial_etag, {"owner": "stale"})
-    assert stale is False and observed_etag == current_etag
-    assert store.read({}) == {"owner": "first"}
+
+    store.write_with_backup({"version": 2})
+
+    assert json.loads(store.path.read_text(encoding="utf-8")) == {"version": 2}
+    assert json.loads(store.backup_path.read_text(encoding="utf-8")) == {"version": 2}
 
 
 def test_atomic_write_failure_preserves_previous_complete_file(
@@ -63,4 +76,29 @@ def test_atomic_write_failure_preserves_previous_complete_file(
         atomic_store.atomic_write_bytes(path, b"new")
 
     assert path.read_bytes() == b"old"
+    assert not list(tmp_path.glob(".state.bin.*"))
+
+
+def test_atomic_write_retries_transient_permission_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "state.bin"
+    real_replace = atomic_store.os.replace
+    attempts = 0
+
+    def flaky_replace(source, destination):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError("target is temporarily busy")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(atomic_store.os, "replace", flaky_replace)
+    monkeypatch.setattr(atomic_store.time, "sleep", lambda _delay: None)
+
+    atomic_store.atomic_write_bytes(path, b"complete")
+
+    assert attempts == 3
+    assert path.read_bytes() == b"complete"
     assert not list(tmp_path.glob(".state.bin.*"))

@@ -9,10 +9,10 @@
 """
 
 import logging
+import math
 from typing import cast
 
 import pandas as pd
-import torch
 
 from .shared import InferenceParams, resolve_params
 
@@ -42,18 +42,35 @@ def _dispatch_inference(
         from .knn_backend import run_knn_inference
 
         logger.info("model_type=knn: 使用 k-NN 兴趣库推理")
-        return run_knn_inference(params, data)
+        probabilities, predictions = run_knn_inference(params, data)
     elif params.model_type == "multi_interest":
         from .multi_interest_backend import run_multi_interest_inference
 
         logger.info("model_type=multi_interest: 使用多兴趣模型推理")
-        return run_multi_interest_inference(params, data)
+        probabilities, predictions = run_multi_interest_inference(params, data)
     else:
+        import torch
+
         from .transformers_backend import run_transformers_inference
 
         logger.info("model_type=transformers: 使用 BERT 分类推理")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        return run_transformers_inference(params, data, device)
+        probabilities, predictions = run_transformers_inference(params, data, device)
+
+    # 后端是独立实现，必须在统一入口核对行数和数值，避免 pandas 静默错位。
+    expected_count = len(data)
+    if len(probabilities) != expected_count or len(predictions) != expected_count:
+        raise ValueError("inference backend returned a result count that does not match the input")
+    if any(
+        isinstance(probability, bool)
+        or not isinstance(probability, (int, float))
+        or not math.isfinite(float(probability))
+        for probability in probabilities
+    ):
+        raise ValueError("inference backend returned a non-finite probability")
+    if any(type(prediction) is not int or prediction not in {0, 1} for prediction in predictions):
+        raise ValueError("inference backend returned a non-binary prediction")
+    return [float(value) for value in probabilities], predictions
 
 
 # =============================================================================
@@ -88,9 +105,21 @@ def run_inference_for_dataframe(
     threshold: float | None = None,
     batch_size: int | None = None,
     max_len: int | None = None,
+    *,
+    artifact_fingerprint: str | None = None,
 ) -> tuple[pd.DataFrame, float] | tuple[None, str]:
     """对给定的 DataFrame 执行推理，返回 (带 Probability/Prediction 列的 df, threshold) 或 (None, error_msg)。"""
-    params = resolve_params(model_path, threshold, batch_size, max_len)
+    params = (
+        resolve_params(model_path, threshold, batch_size, max_len)
+        if artifact_fingerprint is None
+        else resolve_params(
+            model_path,
+            threshold,
+            batch_size,
+            max_len,
+            artifact_fingerprint=artifact_fingerprint,
+        )
+    )
 
     if data.empty:
         return None, "No papers found."
@@ -113,9 +142,21 @@ def run_single_paper_inference(
     threshold: float | None = None,
     batch_size: int | None = None,
     max_len: int | None = None,
+    *,
+    artifact_fingerprint: str | None = None,
 ) -> tuple[list[float], list[int], InferenceParams]:
     """对单篇论文执行推理，返回 (probs, preds, params)。"""
-    params = resolve_params(model_path, threshold, batch_size, max_len)
+    params = (
+        resolve_params(model_path, threshold, batch_size, max_len)
+        if artifact_fingerprint is None
+        else resolve_params(
+            model_path,
+            threshold,
+            batch_size,
+            max_len,
+            artifact_fingerprint=artifact_fingerprint,
+        )
+    )
     sample = pd.DataFrame([{"Title": title, "Abstract": abstract}])
     probs, preds = _dispatch_inference(params, sample)
     return probs, preds, params
@@ -126,13 +167,24 @@ def run_inference_for_today(
     threshold: float | None = None,
     batch_size: int | None = None,
     max_len: int | None = None,
+    *,
+    artifact_fingerprint: str | None = None,
 ) -> tuple[pd.DataFrame, float] | tuple[None, str]:
     """获取今日 arXiv 论文并执行推理。"""
     from ..arxiv_today import get_today_arxiv
 
     data = get_today_arxiv()
 
-    return run_inference_for_dataframe(data, model_path, threshold, batch_size, max_len)
+    if artifact_fingerprint is None:
+        return run_inference_for_dataframe(data, model_path, threshold, batch_size, max_len)
+    return run_inference_for_dataframe(
+        data,
+        model_path,
+        threshold,
+        batch_size,
+        max_len,
+        artifact_fingerprint=artifact_fingerprint,
+    )
 
 
 def get_positive_arxiv_today_as_string(
@@ -140,9 +192,25 @@ def get_positive_arxiv_today_as_string(
     threshold: float | None = None,
     batch_size: int | None = None,
     max_len: int | None = None,
+    *,
+    artifact_fingerprint: str | None = None,
 ) -> str:
     """获取今日正预测论文的格式化字符串。被 main.py 调用。"""
-    data, result = run_inference_for_today(model_path, threshold, batch_size, max_len)
+    if artifact_fingerprint is None:
+        data, result = run_inference_for_today(
+            model_path,
+            threshold,
+            batch_size,
+            max_len,
+        )
+    else:
+        data, result = run_inference_for_today(
+            model_path,
+            threshold,
+            batch_size,
+            max_len,
+            artifact_fingerprint=artifact_fingerprint,
+        )
     if data is None:
         return str(result)
     positives = select_positives(data)

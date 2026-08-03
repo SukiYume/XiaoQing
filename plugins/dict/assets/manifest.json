@@ -1,16 +1,32 @@
 {
-  "format": "utf-8 tab-separated two-column text without header",
-  "source": "XiaoQing project bundled astronomy dictionary",
-  "source_url": null,
-  "license": "MIT",
-  "files": {
-    "english_to_chinese": {
-      "filename": "astrodict_ec.txt",
-      "sha256": "e656a3d0efdc6363dde90b66d46a10ece4891dffbbc967f1e3a1b4d13e360e76"
-    },
-    "chinese_to_english": {
-      "filename": "astrodict_ce.txt",
-      "sha256": "59db7b75117c9e98671de9bc3bb874b88b07c247174ae9dc58548ddff6736ace"
+    "schema_version": 1,
+    "format": "utf-8 tab-separated two-column text without header",
+    "source": "英汉天文学名词数据库",
+    "source_version": "r241020",
+    "source_url": "https://nadc.china-vo.org/astrodict/",
+    "source_archive": "https://nadc.china-vo.org/astrodict/s/2024/astrodict_241020.zip",
+    "source_archive_sha256": "2520bb8bd4d3382b560199a708506bead5f26b167e904b9b87465efd3cc55e2e",
+    "usage_terms": "https://nadc.china-vo.org/astrodict/article/download",
+    "ownership": "中国天文学会",
+    "attribution": "英汉天文学名词数据库由中国天文学会天文学名词审定委员会提供",
+    "license": "开放自由使用；不得未经授权用于营利性商业产品或活动；不得修改词库内容或与其他词库整合后二次发布",
+    "normalization": "从官方 UTF-8 文件移除 BOM，统一 LF 结尾，并清理 13 条记录的字段首尾空白；除上述格式空白外，词条顺序和文字内容与官方版本一致",
+    "files": {
+        "english_to_chinese": {
+            "filename": "astrodict_ec.txt",
+            "source_filename": "astrodict241020_ec.txt",
+            "source_sha256": "7e2ef2b022961b3b5a7b84028b105366950bb33b05795420cbb4d2af91705699",
+            "sha256": "0032184cf36458d7c44c40fae022c5be1de1d516ea7fc3f9ed3f42cab33f88e4",
+            "bytes": 1083530,
+            "entries": 30094
+        },
+        "chinese_to_english": {
+            "filename": "astrodict_ce.txt",
+            "source_filename": "astrodict241020_ce.txt",
+            "source_sha256": "c5648c7dabcd4725725d1a8760a08d25a76ec32c04fd5fd3c1527d78af4349bb",
+            "sha256": "27c824995c8d4ba276a67bcf7798fdc1ca569dc3299d55b34ffa4fc658c6fa59",
+            "bytes": 967935,
+            "entries": 26770
+        }
     }
-  }
 }

@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from core.interfaces import DeliveryTarget, PluginCapabilities, PluginPrincipal
+from tests.helpers.settings_snapshot import with_settings_reader
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -34,15 +35,6 @@ arxiv_filter_utils = importlib.import_module("plugins.arxiv_filter.utils")
 # ============================================================
 # Fixtures
 # ============================================================
-
-
-@pytest.fixture
-def temp_data_dir():
-    """创建临时数据目录"""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
 
 
 @pytest.fixture
@@ -79,7 +71,7 @@ def mock_context(temp_plugin_dir):
             self.principal = PluginPrincipal(kind="lifecycle")
             self.capabilities = PluginCapabilities()
 
-    return MockContext(temp_plugin_dir)
+    return with_settings_reader(MockContext(temp_plugin_dir))
 
 
 @pytest.fixture
@@ -135,50 +127,59 @@ class TestConfigLoading:
 class TestStatusManagement:
     """测试状态管理功能"""
 
-    def test_get_status_file_path(self, temp_plugin_dir):
+    def test_get_status_file_path(self, temp_data_dir):
         """测试获取状态文件路径"""
-        status_path = arxiv_filter._get_status_file_path(str(temp_plugin_dir))
-        expected = str(temp_plugin_dir / "data" / "update_status.json")
+        status_path = arxiv_filter._get_status_file_path(temp_data_dir)
+        expected = temp_data_dir / "update_status.json"
         assert status_path == expected
 
-    def test_load_status_creates_default(self, temp_plugin_dir):
+    def test_load_status_creates_default(self, temp_data_dir):
         """测试加载状态时创建默认状态"""
-        status = arxiv_filter._load_update_status(str(temp_plugin_dir))
+        status = arxiv_filter._load_update_status(temp_data_dir)
         assert status == {}
 
-    def test_save_and_load_status(self, temp_plugin_dir):
+    def test_save_and_load_status(self, temp_data_dir):
         """测试保存和加载状态"""
         test_status = {"last_sent_date": "2026-02-04", "last_sent_time": "2026-02-04T10:00:00"}
-        arxiv_filter._save_update_status(str(temp_plugin_dir), test_status)
+        arxiv_filter._save_update_status(temp_data_dir, test_status)
 
-        loaded = arxiv_filter._load_update_status(str(temp_plugin_dir))
+        loaded = arxiv_filter._load_update_status(temp_data_dir)
         assert loaded["last_sent_date"] == "2026-02-04"
         assert loaded["last_sent_time"] == "2026-02-04T10:00:00"
 
-    def test_should_send_today_new_day(self, temp_plugin_dir):
+    def test_should_send_today_new_day(self, temp_data_dir):
         """测试检查是否应该发送（新的一天）"""
         status = {"last_sent_date": "2026-01-01"}
-        arxiv_filter._save_update_status(str(temp_plugin_dir), status)
+        arxiv_filter._save_update_status(temp_data_dir, status)
 
         # 应该返回 True（因为日期不同）
-        result = arxiv_filter._should_send_today(str(temp_plugin_dir))
+        result = arxiv_filter._should_send_today(
+            temp_data_dir,
+            arxiv_filter._business_now().date().isoformat(),
+        )
         assert result is True
 
-    def test_should_send_today_already_sent(self, temp_plugin_dir):
+    def test_should_send_today_already_sent(self, temp_data_dir):
         """测试今天已经发送过"""
         today = arxiv_filter._business_now().date().isoformat()
         status = {"last_sent_date": today}
-        arxiv_filter._save_update_status(str(temp_plugin_dir), status)
+        arxiv_filter._save_update_status(temp_data_dir, status)
 
-        result = arxiv_filter._should_send_today(str(temp_plugin_dir))
+        result = arxiv_filter._should_send_today(
+            temp_data_dir,
+            arxiv_filter._business_now().date().isoformat(),
+        )
         assert result is False
 
-    def test_mark_sent_today(self, temp_plugin_dir):
+    def test_mark_sent_today(self, temp_data_dir):
         """测试标记今天已发送"""
-        arxiv_filter._mark_sent_today(str(temp_plugin_dir))
+        arxiv_filter._mark_sent_today(
+            temp_data_dir,
+            arxiv_filter._business_now().date().isoformat(),
+        )
 
         today = arxiv_filter._business_now().date().isoformat()
-        status = arxiv_filter._load_update_status(str(temp_plugin_dir))
+        status = arxiv_filter._load_update_status(temp_data_dir)
         assert status["last_sent_date"] == today
         assert "last_sent_time" in status
 
@@ -206,6 +207,16 @@ class TestHandle:
         assert result is not None
         result_text = str(result)
         assert "arXiv" in result_text or "论文" in result_text
+
+    @pytest.mark.asyncio
+    async def test_handle_unknown_command_echo_is_bounded(self, mock_context, mock_event):
+        unknown = "x" * 200
+
+        result = await arxiv_filter.handle("arxiv", unknown, mock_event, mock_context)
+
+        result_text = str(result)
+        assert len(result_text) < 200
+        assert "未知命令" in result_text
 
     @pytest.mark.asyncio
     async def test_handle_default_calls_run_filter(self, mock_context, mock_event):
@@ -246,6 +257,13 @@ class TestHandle:
 
         assert mock_run.await_args.kwargs["allow_codex_sidecar"] is False
 
+    def test_admin_identity_rejects_string_and_boolean_ids(self, mock_context):
+        mock_context.principal = PluginPrincipal(kind="user", user_id=12345)
+        mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
+
+        assert arxiv_filter._is_admin_user(mock_context, "12345") is False
+        assert arxiv_filter._is_admin_user(mock_context, True) is False
+
     @pytest.mark.asyncio
     async def test_handle_exception(self, mock_context, mock_event):
         """测试处理异常"""
@@ -277,8 +295,8 @@ class TestRunFilter:
             assert "无法加载AI模型" in result_text or "模型" in result_text
 
     @pytest.mark.asyncio
-    async def test_run_filter_model_path_not_exists(self, mock_context, mock_event):
-        """测试模型路径不存在时，推理仍可通过（推理函数自行解析路径）"""
+    async def test_run_filter_rejects_unknown_inference_result(self, mock_context, mock_event):
+        """未知推理文本不能被当成可提交的成功结果。"""
         # 创建一个没有模型目录的上下文
         empty_dir = mock_context.plugin_dir / "empty"
         empty_dir.mkdir()
@@ -286,14 +304,13 @@ class TestRunFilter:
         # 模拟模型函数存在但路径不存在
         # 注: _run_filter 通过 load_plugin_config() 加载配置（基于 __file__），
         #     不直接依赖 context.plugin_dir 来解析模型路径。
-        #     因此当推理函数正常返回时，结果会被正常格式化。
+        #     因此这里直接验证推理输出协议，而不是目录存在性。
         with patch.object(arxiv_filter, "_load_inference", return_value=lambda **kwargs: "result"):
             mock_context.plugin_dir = empty_dir
             result = await arxiv_filter._run_filter(mock_context)
             assert result is not None
-            result_text = str(result)
-            # 推理函数成功返回 "result"，应被正常格式化输出
-            assert "论文" in result_text or "result" in result_text
+            assert result.succeeded is False
+            assert result.outcome == "unknown_result"
 
     @pytest.mark.asyncio
     async def test_run_filter_success_with_papers(self, mock_context, mock_event):
@@ -410,8 +427,8 @@ class TestInferenceLoading:
         assert func2 is fake_func
         assert func1 is func2
 
-    def test_load_inference_force_reload(self, temp_plugin_dir):
-        """测试强制重新加载：清除缓存并重新从模块读取函数"""
+    def test_plugin_init_clears_inference_cache(self, temp_plugin_dir):
+        """插件代加载清除函数缓存，由 core 负责模块代际重载。"""
         fake_module = types.ModuleType("plugins.arxiv_filter.arxiv_inference")
         fake_func1 = lambda **kwargs: "ok1"  # noqa: E731
         fake_func2 = lambda **kwargs: "ok2"  # noqa: E731
@@ -422,10 +439,10 @@ class TestInferenceLoading:
             func1 = arxiv_filter._load_inference()
             assert func1 is fake_func1
 
-            # 模拟模块内容变更，然后 force_reload
+            # 模拟模块内容变更，然后由插件 init 清除函数缓存。
             fake_module.get_positive_arxiv_today_as_string = fake_func2
-            with patch("importlib.reload", side_effect=lambda m: m):
-                func2 = arxiv_filter._load_inference(force_reload=True)
+            arxiv_filter.init()
+            func2 = arxiv_filter._load_inference()
 
         assert func2 is fake_func2
         assert func2 is not func1
@@ -443,7 +460,10 @@ class TestCheckArxivUpdate:
     async def test_check_arxiv_update_already_sent(self, mock_context):
         """测试今天已经发送过"""
         # 标记今天已发送
-        arxiv_filter._mark_sent_today(str(mock_context.plugin_dir))
+        arxiv_filter._mark_sent_today(
+            mock_context.data_dir,
+            arxiv_filter._business_now(mock_context).date().isoformat(),
+        )
 
         result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
         assert result == []
@@ -457,13 +477,27 @@ class TestCheckArxivUpdate:
         with patch.object(
             arxiv_filter,
             "_run_filter",
-            new=AsyncMock(return_value=arxiv_filter.segments("Papers found")),
+            new=AsyncMock(
+                return_value=arxiv_filter._filter_result(
+                    "Papers found",
+                    succeeded=True,
+                    outcome="papers",
+                )
+            ),
         ):
             with patch.object(arxiv_filter, "run_sync", return_value=today):
                 result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
                 # 应该调用 _run_filter
                 assert result is not None
-        assert arxiv_filter._should_send_today(str(mock_context.plugin_dir)) is False
+        assert arxiv_filter._should_send_today(
+            mock_context.data_dir,
+            today,
+        ) is True
+        await result.delivery_receipt.record(True)
+        assert arxiv_filter._should_send_today(
+            mock_context.data_dir,
+            today,
+        ) is False
 
     @pytest.mark.asyncio
     async def test_check_arxiv_update_failure_does_not_mark_sent(self, mock_context):
@@ -480,7 +514,10 @@ class TestCheckArxivUpdate:
                 result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
 
         assert "暂时不可用" in str(result)
-        assert arxiv_filter._should_send_today(str(mock_context.plugin_dir)) is True
+        assert arxiv_filter._should_send_today(
+            mock_context.data_dir,
+            today,
+        ) is True
 
     @pytest.mark.asyncio
     async def test_check_arxiv_update_not_updated_yet(self, mock_context):
@@ -507,7 +544,14 @@ class TestCheckArxivUpdate:
     @pytest.mark.asyncio
     async def test_check_arxiv_update_error(self, mock_context):
         """测试检查更新时出错"""
-        with patch.object(arxiv_filter, "run_sync", side_effect=Exception("Network error")):
+        async def run_sync_for_test(function, *args, **kwargs):
+            if function is arxiv_filter._claim_send_today:
+                return function(*args, **kwargs)
+            if function is arxiv_filter._release_claim:
+                return function(*args, **kwargs)
+            raise Exception("Network error")
+
+        with patch.object(arxiv_filter, "run_sync", side_effect=run_sync_for_test):
             result = await arxiv_filter._check_arxiv_update(mock_context, is_final_check=False)
             assert result == []
 
@@ -800,14 +844,13 @@ Probability: 0.9000
         assert calls == 1
 
 
-def test_arxiv_daily_claim_is_atomic_and_releasable(temp_plugin_dir):
+def test_arxiv_daily_claim_is_atomic_and_releasable(temp_data_dir):
     business_date = "2030-01-02"
-    plugin_dir = str(temp_plugin_dir)
 
-    assert arxiv_filter._claim_send_today(plugin_dir, business_date) is True
-    assert arxiv_filter._claim_send_today(plugin_dir, business_date) is False
-    arxiv_filter._release_claim(plugin_dir, business_date)
-    assert arxiv_filter._claim_send_today(plugin_dir, business_date) is True
+    assert arxiv_filter._claim_send_today(temp_data_dir, business_date) is True
+    assert arxiv_filter._claim_send_today(temp_data_dir, business_date) is False
+    arxiv_filter._release_claim(temp_data_dir, business_date)
+    assert arxiv_filter._claim_send_today(temp_data_dir, business_date) is True
 
 
 def test_arxiv_training_cache_publishes_only_completed_results(monkeypatch, tmp_path):
@@ -829,8 +872,9 @@ def test_arxiv_training_cache_publishes_only_completed_results(monkeypatch, tmp_
     assert "@" not in module.HEADERS["User-Agent"]
     assert module.load_cache(2607) is None
     checkpoint = module.load_checkpoint(2607)
-    assert checkpoint["completed"] is False
-    assert checkpoint["next_offset"] == 2000
+    assert checkpoint.completed is False
+    assert checkpoint.next_offset == 2000
+    assert checkpoint.total_results == 4000
 
 
 def test_arxiv_run_all_uses_script_directory_and_current_python(monkeypatch):
@@ -843,7 +887,7 @@ def test_arxiv_run_all_uses_script_directory_and_current_python(monkeypatch):
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
-    monkeypatch.setattr(module.time, "time", Mock(side_effect=[0.0, 1.0]))
+    monkeypatch.setattr(module.time, "perf_counter", Mock(side_effect=[0.0, 1.0]))
 
     assert module.run_step("step1_extract_positive_ids.py", "step") is True
     assert captured["args"][0] == sys.executable
@@ -859,10 +903,13 @@ def test_arxiv_run_all_uses_script_directory_and_current_python(monkeypatch):
 class TestDateHandling:
     """测试日期处理"""
 
-    def test_date_format_in_status(self, temp_plugin_dir):
+    def test_date_format_in_status(self, temp_data_dir):
         """测试状态中的日期格式"""
-        arxiv_filter._mark_sent_today(str(temp_plugin_dir))
-        status = arxiv_filter._load_update_status(str(temp_plugin_dir))
+        arxiv_filter._mark_sent_today(
+            temp_data_dir,
+            arxiv_filter._business_now().date().isoformat(),
+        )
+        status = arxiv_filter._load_update_status(temp_data_dir)
 
         # 检查日期格式
         assert "last_sent_date" in status
@@ -876,6 +923,8 @@ class TestInferenceBackendCaching:
         pytest.importorskip("transformers")
         backend = importlib.import_module("plugins.arxiv_filter.inference.transformers_backend")
         backend._MODEL_CACHE.clear()
+        artifact = tmp_path / "artifact.json"
+        artifact.write_text('{"version": 1}', encoding="utf-8")
 
         class DummyModel:
             def to(self, _device):
@@ -900,10 +949,13 @@ class TestInferenceBackendCaching:
         device = backend.torch.device("cpu")
         first = backend.load_model_and_tokenizer(str(tmp_path), device)
         second = backend.load_model_and_tokenizer(str(tmp_path), device)
+        artifact.write_text('{"version": 2}', encoding="utf-8")
+        third = backend.load_model_and_tokenizer(str(tmp_path), device)
 
         assert first == second
-        assert model_loader.call_count == 1
-        assert tokenizer_loader.call_count == 1
+        assert third == first
+        assert model_loader.call_count == 2
+        assert tokenizer_loader.call_count == 2
 
     def test_knn_backend_caches_runtime_model(self, monkeypatch, tmp_path):
         pytest.importorskip("torch")
@@ -911,6 +963,8 @@ class TestInferenceBackendCaching:
         backend = importlib.import_module("plugins.arxiv_filter.inference.knn_backend")
         shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
         backend._MODEL_CACHE.clear()
+        artifact = tmp_path / "artifact.json"
+        artifact.write_text('{"version": 1}', encoding="utf-8")
 
         class DummyModel:
             def predict_proba(self, _data, input_mode="title_abstract"):
@@ -931,8 +985,10 @@ class TestInferenceBackendCaching:
 
         backend.run_knn_inference(params, data)
         backend.run_knn_inference(params, data)
+        artifact.write_text('{"version": 2}', encoding="utf-8")
+        backend.run_knn_inference(params, data)
 
-        assert constructor.call_count == 1
+        assert constructor.call_count == 2
 
     def test_multi_interest_backend_caches_runtime_model(self, monkeypatch, tmp_path):
         pytest.importorskip("torch")
@@ -940,6 +996,8 @@ class TestInferenceBackendCaching:
         backend = importlib.import_module("plugins.arxiv_filter.inference.multi_interest_backend")
         shared = importlib.import_module("plugins.arxiv_filter.inference.shared")
         backend._MODEL_CACHE.clear()
+        artifact = tmp_path / "artifact.json"
+        artifact.write_text('{"version": 1}', encoding="utf-8")
 
         class DummyModel:
             def predict_proba(self, _data, input_mode="title_abstract"):
@@ -960,9 +1018,7 @@ class TestInferenceBackendCaching:
 
         backend.run_multi_interest_inference(params, data)
         backend.run_multi_interest_inference(params, data)
+        artifact.write_text('{"version": 2}', encoding="utf-8")
+        backend.run_multi_interest_inference(params, data)
 
-        assert constructor.call_count == 1
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        assert constructor.call_count == 2

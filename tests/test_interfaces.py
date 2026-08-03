@@ -3,6 +3,7 @@ Tests for core/interfaces.py - Protocol interface definitions
 Uses duck typing instead of isinstance checks for Protocol classes
 """
 
+import inspect
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -10,7 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.interfaces import (
+    ConfigManagerLike,
     DeliveryTarget,
+    PluginPrincipal,
 )
 
 
@@ -29,38 +32,71 @@ def test_delivery_target_is_validated_and_immutable() -> None:
         DeliveryTarget("broadcast", 1)  # type: ignore[arg-type]
 
 
+def test_plugin_principal_validates_identity_and_group_authority() -> None:
+    principal = PluginPrincipal(
+        kind="user",
+        user_id=123,
+        group_id=456,
+        group_role="admin",
+    )
+
+    assert principal.can_manage_group(456) is True
+    assert principal.can_manage_group(True) is False
+    assert principal.can_manage_group("456") is False  # type: ignore[arg-type]
+    for invalid_id in (0, -1, True, "123"):
+        with pytest.raises((TypeError, ValueError)):
+            PluginPrincipal(kind="user", user_id=invalid_id)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        PluginPrincipal(kind="unknown")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        PluginPrincipal(kind="user", user_id=1, is_private=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="requires user_id"):
+        PluginPrincipal(kind="user")
+    with pytest.raises(ValueError, match="must not have group_id"):
+        PluginPrincipal(kind="user", user_id=1, group_id=2, is_private=True)
+    with pytest.raises(ValueError, match="must not carry user scope"):
+        PluginPrincipal(kind="lifecycle", user_id=1)
+
+
 # ============================================================
 # Helper Fixtures
 # ============================================================
 
+
 @pytest.fixture
 def mock_admin_checker():
     """Create a mock AdminCheck implementation"""
+
     class MockAdminChecker:
         def is_admin(self, user_id):
             return user_id in [12345, 67890]
+
     return MockAdminChecker()
 
 
 @pytest.fixture
 def mock_config_provider():
     """Create a mock ConfigProvider implementation"""
+
     class MockConfigProvider:
         @property
         def config(self):
             return {"bot_name": "测试"}
+
     return MockConfigProvider()
 
 
 @pytest.fixture
 def mock_mute_control():
     """Create a mock MuteControl implementation"""
+
     class MockMuteControl:
         def __init__(self):
             self._muted_groups = {}
 
         def mute_group(self, group_id, duration_minutes):
             import time
+
             self._muted_groups[group_id] = time.time() + duration_minutes * 60
 
         def unmute_group(self, group_id):
@@ -71,22 +107,26 @@ def mock_mute_control():
 
         def is_muted(self, group_id):
             import time
+
             if group_id not in self._muted_groups:
                 return False
             return self._muted_groups[group_id] > time.time()
 
         def get_mute_remaining(self, group_id):
             import time
+
             if group_id not in self._muted_groups:
                 return 0
             remaining = self._muted_groups[group_id] - time.time()
             return max(0, remaining)
+
     return MockMuteControl()
 
 
 # ============================================================
 # AdminCheck Protocol Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_admin_check_protocol(mock_admin_checker):
@@ -115,6 +155,7 @@ def test_admin_check_negative_user_id(mock_admin_checker):
 # ConfigProvider Protocol Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_config_provider_protocol(mock_config_provider):
     """Test ConfigProvider protocol implementation (duck typing)"""
@@ -126,10 +167,12 @@ def test_config_provider_protocol(mock_config_provider):
 @pytest.mark.unit
 def test_config_provider_empty_config():
     """Test ConfigProvider with empty config"""
+
     class EmptyConfigProvider:
         @property
         def config(self):
             return {}
+
     provider = EmptyConfigProvider()
     assert hasattr(provider, "config")
     assert provider.config == {}
@@ -139,9 +182,11 @@ def test_config_provider_empty_config():
 # PluginRegistry Protocol Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_plugin_registry_protocol():
     """Test PluginRegistry protocol implementation (duck typing)"""
+
     class MockPluginRegistry:
         def __init__(self):
             self._plugins = {
@@ -151,6 +196,7 @@ def test_plugin_registry_protocol():
 
         def get(self, name):
             return self._plugins.get(name)
+
     registry = MockPluginRegistry()
 
     assert hasattr(registry, "get")
@@ -162,6 +208,7 @@ def test_plugin_registry_protocol():
 # ============================================================
 # MuteControl Protocol Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_mute_control_protocol(mock_mute_control):
@@ -213,9 +260,24 @@ def test_mute_control_remaining_time(mock_mute_control):
 # ConfigManagerLike Protocol Tests
 # ============================================================
 
+
+@pytest.mark.unit
+def test_config_manager_like_declares_atomic_reload_and_snapshot_contract() -> None:
+    from core.config import ConfigManager
+
+    for owner in (ConfigManagerLike, ConfigManager):
+        reload_signature = inspect.signature(owner.reload)
+        notify = reload_signature.parameters["notify"]
+        assert notify.kind is inspect.Parameter.KEYWORD_ONLY
+        assert notify.default is False
+        assert hasattr(owner, "snapshot")
+        assert hasattr(owner, "on_security_update")
+
+
 @pytest.mark.unit
 def test_config_manager_like_protocol():
     """Test ConfigManagerLike protocol implementation (duck typing)"""
+
     class MockConfigManager:
         def __init__(self):
             self._config = {"test": "value"}
@@ -241,6 +303,7 @@ def test_config_manager_like_protocol():
         @property
         def secrets(self):
             return self._secrets
+
     manager = MockConfigManager()
 
     # Verify has required methods
@@ -258,6 +321,7 @@ def test_config_manager_like_protocol():
 @pytest.mark.unit
 def test_config_manager_like_update_secret():
     """Test ConfigManagerLike update_secret method"""
+
     class MockConfigManager:
         def __init__(self):
             self._secrets = {}
@@ -268,6 +332,7 @@ def test_config_manager_like_update_secret():
         @property
         def secrets(self):
             return self._secrets
+
     manager = MockConfigManager()
 
     manager.update_secret("token", "new_token")
@@ -275,50 +340,19 @@ def test_config_manager_like_update_secret():
 
 
 # ============================================================
-# CommandLister Protocol Tests
-# ============================================================
-
-@pytest.mark.unit
-def test_command_lister_protocol():
-    """Test CommandLister protocol implementation (duck typing)"""
-    class MockCommandLister:
-        def __call__(self):
-            return [
-                "echo: 回显消息",
-                "help: 查看帮助",
-                "stats: 统计信息",
-            ]
-    lister = MockCommandLister()
-
-    assert callable(lister)
-    commands = lister()
-    assert len(commands) == 3
-    assert "echo: 回显消息" in commands
-
-
-@pytest.mark.unit
-def test_command_lister_empty():
-    """Test CommandLister with no commands"""
-    class EmptyCommandLister:
-        def __call__(self):
-            return []
-    lister = EmptyCommandLister()
-
-    assert callable(lister)
-    assert lister() == []
-
-
-# ============================================================
 # PluginConfig Protocol Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_plugin_config_protocol():
     """Test PluginConfig protocol implementation (duck typing)"""
+
     class MockPluginConfig:
         def __init__(self):
             self.config = {"bot_name": "测试"}
             self.secrets = {"admin_ids": [12345]}
+
     plugin_config = MockPluginConfig()
 
     assert hasattr(plugin_config, "config")
@@ -331,9 +365,11 @@ def test_plugin_config_protocol():
 # PluginRuntime Protocol Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_plugin_runtime_protocol():
     """Test PluginRuntime protocol implementation (duck typing)"""
+
     class MockPluginRuntime:
         def __init__(self):
             self.actions_sent = []
@@ -347,17 +383,18 @@ def test_plugin_runtime_protocol():
         def reload_plugins(self):
             pass
 
-        def list_commands(self):
-            return ["help: 查看帮助"]
+        def get_command_catalog(self):
+            return ()
 
         def list_plugins(self):
             return ["test_plugin", "echo"]
+
     runtime = MockPluginRuntime()
 
     assert callable(runtime.send_action)
     assert callable(runtime.reload_config)
     assert callable(runtime.reload_plugins)
-    assert callable(runtime.list_commands)
+    assert callable(runtime.get_command_catalog)
     assert callable(runtime.list_plugins)
 
 
@@ -365,14 +402,17 @@ def test_plugin_runtime_protocol():
 # SessionAccess Protocol Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_session_access_protocol():
     """Test SessionAccess protocol implementation (duck typing)"""
+
     class MockSessionAccess:
         def __init__(self):
             self.session_manager = MagicMock()
             self.current_user_id = 12345
             self.current_group_id = 67890
+
     access = MockSessionAccess()
 
     assert hasattr(access, "session_manager")
@@ -386,11 +426,13 @@ def test_session_access_protocol():
 @pytest.mark.unit
 def test_session_access_with_none_values():
     """Test SessionAccess with None values"""
+
     class MockSessionAccess:
         def __init__(self):
             self.session_manager = None
             self.current_user_id = None
             self.current_group_id = None
+
     access = MockSessionAccess()
 
     assert access.current_user_id is None
@@ -401,9 +443,11 @@ def test_session_access_with_none_values():
 # PluginContext Protocol Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_plugin_context_protocol():
     """Test PluginContext protocol implementation (duck typing)"""
+
     class MockPluginContext:
         def __init__(self):
             # PluginConfig
@@ -413,10 +457,11 @@ def test_plugin_context_protocol():
             # PluginRuntime
             async def send_action(action):
                 pass
+
             self.send_action = send_action
             self.reload_config = lambda: None
             self.reload_plugins = lambda: None
-            self.list_commands = lambda: ["help"]
+            self.get_command_catalog = lambda: ()
             self.list_plugins = lambda: ["test"]
 
             # SessionAccess
@@ -433,6 +478,7 @@ def test_plugin_context_protocol():
 
         def default_groups(self):
             return [123, 456]
+
     context = MockPluginContext()
 
     assert hasattr(context, "plugin_name")
@@ -452,9 +498,11 @@ def test_plugin_context_protocol():
 # ContextFactory Protocol Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_context_factory_protocol():
     """Test ContextFactory protocol implementation (duck typing)"""
+
     class MockContext:
         def __init__(self, plugin_name):
             self.plugin_name = plugin_name
@@ -462,6 +510,7 @@ def test_context_factory_protocol():
     class MockContextFactory:
         def __call__(self, plugin_name, user_id=None, group_id=None, request_id=None):
             return MockContext(plugin_name)
+
     factory = MockContextFactory()
 
     assert callable(factory)
@@ -471,77 +520,9 @@ def test_context_factory_protocol():
 
 
 # ============================================================
-# PluginContextFactory Protocol Tests
-# ============================================================
-
-@pytest.mark.unit
-def test_plugin_context_factory_protocol():
-    """Test PluginContextFactory protocol implementation (duck typing)"""
-    class MockPluginContext:
-        def __init__(
-            self,
-            plugin_name,
-            plugin_dir,
-            data_dir,
-            state,
-            user_id=None,
-            group_id=None,
-            request_id=None,
-        ):
-            self.plugin_name = plugin_name
-            self.plugin_dir = plugin_dir
-            self.data_dir = data_dir
-            self.state = state
-            self.user_id = user_id
-            self.group_id = group_id
-            self.request_id = request_id
-
-    class MockPluginContextFactory:
-        def __call__(
-            self,
-            plugin_name,
-            plugin_dir,
-            data_dir,
-            state,
-            user_id=None,
-            group_id=None,
-            request_id=None,
-        ):
-            return MockPluginContext(
-                plugin_name,
-                plugin_dir,
-                data_dir,
-                state,
-                user_id,
-                group_id,
-                request_id,
-            )
-    factory = MockPluginContextFactory()
-
-    assert callable(factory)
-
-    context = factory(
-        plugin_name="test_plugin",
-        plugin_dir=Path("/test/plugin"),
-        data_dir=Path("/test/data"),
-        state={"key": "value"},
-        user_id=123,
-        group_id=456,
-        request_id="req-123",
-    )
-
-    assert context.plugin_name == "test_plugin"
-    assert context.plugin_dir == Path("/test/plugin")
-    assert context.data_dir == Path("/test/data")
-    assert context.state["key"] == "value"
-    assert context.user_id == 123
-    assert context.group_id == 456
-    assert context.request_id == "req-123"
-
-
-# ============================================================
 # Protocol Compatibility Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_protocol_compatibility_with_core_context():
@@ -558,7 +539,7 @@ def test_protocol_compatibility_with_core_context():
         send_action=AsyncMock(),
         reload_config=lambda: None,
         reload_plugins=lambda: None,
-        list_commands=lambda: ["help"],
+        get_command_catalog=lambda: (),
         list_plugins=lambda: ["test"],
         session_manager=None,
         current_user_id=123,
@@ -577,7 +558,7 @@ def test_protocol_compatibility_with_core_context():
     assert hasattr(context, "send_action")
     assert hasattr(context, "reload_config")
     assert hasattr(context, "reload_plugins")
-    assert hasattr(context, "list_commands")
+    assert hasattr(context, "get_command_catalog")
     assert hasattr(context, "list_plugins")
     assert hasattr(context, "session_manager")
     assert hasattr(context, "current_user_id")
@@ -588,6 +569,7 @@ def test_protocol_compatibility_with_core_context():
 # ============================================================
 # Protocol Static Type Checking Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_protocols_allow_structural_subtyping():
@@ -616,6 +598,7 @@ def test_protocols_allow_structural_subtyping():
 # ============================================================
 # SendAction Type Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_send_action_type():

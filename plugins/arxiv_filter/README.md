@@ -1,11 +1,12 @@
 # arXiv Filter 插件
 
-基于 BERT 模型自动筛选每日 arXiv 天体物理论文，推荐你可能感兴趣的论文。
+自动筛选每日 arXiv 天体物理论文。运行时根据模型目录中的
+`training_config.json` 自动选择 Transformer、k-NN 或多兴趣后端。
 
 ## 功能
 
 - 每日定时从 arXiv `astro-ph/new` 页面获取最新论文
-- 使用 SciBERT 模型（标题 + 摘要作为输入）进行二分类，筛选感兴趣的论文
+- 支持标题模型、标题+摘要模型、k-NN 兴趣库和多兴趣聚类模型
 - 支持定时检查 arXiv 更新，自动推送筛选结果
 - 筛选出 positive 论文后，自动把全部 arXiv 链接交给 Codex `astro-ph` 会话生成中文 Markdown 摘要
 
@@ -26,6 +27,7 @@
 | 周一~周五 12:00 | 最后一次检查，若仍未更新则发送停更通知 |
 
 每天只推送一次（通过 `data/update_status.json` 去重）。
+`plugin.json` 不写死群号，定时任务使用部署配置中的 `default_group_ids`；未配置投递目标时会安全跳过。
 
 论文列表推送和 Codex 摘要是两条独立消息链路：arXiv Filter 会先发送筛选出的论文列表，然后在后台把所有 positive 论文链接交给 Codex 插件；Codex 完成后再单独回发摘要。如果 Codex 总结失败，失败消息由 Codex 插件单独发送，不会阻止论文列表消息。
 
@@ -43,14 +45,13 @@
 {
     "model": {
         "path": "best_model",
-        "threshold": 0.5,
-        "batch_size": 32,
-        "max_len": 256
+        "threshold": 0.3826,
+        "batch_size": 256,
+        "max_len": 512
     },
     "arxiv": {
         "url": "https://arxiv.org/list/astro-ph/new",
         "proxy": null,
-        "api_days": 2,
         "use_ssl_verify": true,
         "timeout": 30
     }
@@ -62,7 +63,7 @@
 | 分组 | 字段 | 说明 |
 |------|------|------|
 | model | `path` | 模型目录（相对于插件目录） |
-| model | `threshold` | 正类概率阈值 |
+| model | `threshold` | 模型目录未提供 `optimal_threshold` 时的后备阈值；显式调用参数优先级最高 |
 | model | `batch_size` | 推理批大小 |
 | model | `max_len` | 最大 token 长度 |
 | arxiv | `url` | arXiv 列表页 URL |
@@ -92,35 +93,32 @@ Windows PowerShell 可使用
 arxiv_filter/
 ├── main.py                   # 插件入口（命令处理、定时任务）
 ├── codex_summary.py          # Codex 摘要侧路投递
-├── arxiv_inference.py        # 模型推理
+├── arxiv_inference.py        # 对外兼容 facade
 ├── arxiv_today.py            # arXiv 数据获取（网页爬取 + API）
+├── numerics.py               # 稳定数值计算
 ├── utils.py                  # 公共工具（配置加载）
+├── inference/                # 参数解析、后端分发和三种推理后端
 ├── config.json               # 插件配置
 ├── plugin.json               # 插件元数据
-├── data/                     # 运行时数据（更新状态等）
 └── train_model/              # 仅仓库开发使用，不进入 PyPI 产物
-    ├── run_all.py            # 一键构建训练数据集
-    ├── step1_extract_positive_ids.py
-    ├── step2_fetch_all_astro_ph.py
-    ├── step3_build_dataset.py
-    ├── arxiv_class_v2.py     # 训练脚本（标题+摘要）
-    └── cache/                # 月度论文缓存
+    ├── training_common.py    # 各训练入口共享的轻量工具
+    ├── bert_model/           # 标题、标题+摘要 Transformer 训练
+    ├── interest_model/       # k-NN 与多兴趣模型训练
+    └── data_prep/            # 三步数据构建脚本及月度缓存
 ```
 
 ## AI 模型
 
-- 基座模型: SciBERT (`allenai/scibert_scivocab_cased`)
-- 输入: 标题 (Segment A) + 摘要 (Segment B)，`max_len=256`
-- 任务: 二分类（感兴趣 / 不感兴趣）
-- 损失函数: Focal Loss (γ=4) + 类别加权 + WeightedRandomSampler
-- 输出: 正类概率 (0-1)
-- 发布边界: 模型权重不随 Python 包发布，必须通过 `ARXIV_MODEL_PATH` 或
-  `model.path` 指向外部目录
+| `model_type` | 运行资产 | 输出 |
+|---|---|---|
+| `transformers`（默认） | Hugging Face 分类模型与 tokenizer | 正类概率 |
+| `knn` | 编码器、正/负样本 embedding 与 `meta.json` | k 近邻推荐分数 |
+| `multi_interest` | 编码器与可信的 `artifacts.joblib` | 逻辑回归正类概率 |
+
+模型权重不随 Python 包发布，必须通过 `ARXIV_MODEL_PATH` 或 `model.path`
+指向外部目录。`artifacts.joblib` 只能从可信来源加载。
 
 ## 依赖
 
-```bash
-pip install torch transformers pandas requests beautifulsoup4 feedparser urllib3
-```
-
-详见 `requirements.txt`。
+仓库的基础环境使用 `python -m pip install -r requirements.txt`。本地模型推理是
+可选功能，还需执行 `python -m pip install ".[arxiv-ml]"` 并提供模型文件。

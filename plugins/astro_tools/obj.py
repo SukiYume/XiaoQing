@@ -50,7 +50,7 @@ _SIMBAD_JSON_LIMITS = JsonLimits(
 
 @dataclass(frozen=True, slots=True)
 class SimbadRow:
-    """Validated subset of one SIMBAD TAP row consumed by ``handle_obj``."""
+    """``handle_obj`` 实际使用且已通过边界验证的一行 SIMBAD 数据。"""
 
     ra_deg: float
     dec_deg: float
@@ -59,30 +59,30 @@ class SimbadRow:
     sp_type: str | None
 
 
-def _build_simbad_client():
-    from astroquery.simbad import Simbad
-
-    client = Simbad()
-    client.ROW_LIMIT = 1
-    client.TIMEOUT = SIMBAD_REQUEST_TIMEOUT_SECONDS
-    client.reset_votable_fields()
-    client.add_votable_fields("otype", "V", "sp")
-    return client
-
-
 def _build_simbad_query(name: str) -> str:
-    """Use astroquery only as an offline, escaping-aware ADQL builder."""
+    """纯本地生成正确转义、字段固定且限制为一行的 ADQL。"""
 
-    if not isinstance(name, str) or not name or len(name) > SIMBAD_MAX_OBJECT_NAME_CHARS:
+    if not isinstance(name, str):
         raise ValueError("invalid SIMBAD object name")
-    payload = _build_simbad_client().query_object(name, get_query_payload=True)
-    if not isinstance(payload, Mapping):
-        raise ResponseFormatError("invalid SIMBAD query payload")
-    query = payload.get("QUERY")
-    if not isinstance(query, str) or not query or len(query) > _SIMBAD_MAX_QUERY_CHARS:
+    normalized_name = name.strip()
+    if (
+        not normalized_name
+        or len(normalized_name) > SIMBAD_MAX_OBJECT_NAME_CHARS
+        or any(ord(char) < 32 for char in normalized_name)
+    ):
+        raise ValueError("invalid SIMBAD object name")
+
+    escaped_name = normalized_name.replace("'", "''")
+    query = (
+        'SELECT TOP 1 basic."ra" AS "ra", basic."dec" AS "dec", '
+        'basic."otype" AS "otype", allfluxes."V" AS "V", '
+        'basic."sp_type" AS "sp_type" FROM basic '
+        'JOIN ident ON basic."oid" = ident."oidref" '
+        'JOIN allfluxes ON basic."oid" = allfluxes."oidref" '
+        f"""WHERE ident."id" = '{escaped_name}'"""
+    )
+    if len(query) > _SIMBAD_MAX_QUERY_CHARS:
         raise ResponseFormatError("invalid SIMBAD ADQL query")
-    if re.search(r"\bSELECT\s+TOP\s+1\b", query, flags=re.IGNORECASE) is None:
-        raise ResponseFormatError("SIMBAD ADQL query is not row bounded")
     return query
 
 
@@ -100,10 +100,13 @@ def _optional_text(value: object, *, field: str) -> str | None:
         return None
     if not isinstance(value, str) or len(value) > _SIMBAD_MAX_TEXT_CHARS:
         raise ResponseFormatError(f"invalid SIMBAD {field} value")
-    return value or None
+    normalized = " ".join(value.split())
+    return normalized or None
 
 
 def _validate_simbad_payload(payload: object) -> SimbadRow | None:
+    """验证 TAP JSON 表结构，并只返回渲染所需字段。"""
+
     if not isinstance(payload, Mapping):
         raise ResponseFormatError("invalid SIMBAD JSON root")
     metadata = payload.get("metadata")
@@ -163,6 +166,8 @@ def _validate_simbad_payload(payload: object) -> SimbadRow | None:
 
 
 def _query_simbad_object(name: str) -> SimbadRow | None:
+    """通过受限同步 HTTP 请求查询单个 SIMBAD 对象。"""
+
     query = _build_simbad_query(name)
     response = requests_request_bounded(
         "POST",
@@ -185,65 +190,7 @@ def _query_simbad_object(name: str) -> SimbadRow | None:
         },
         total_timeout_seconds=SIMBAD_TRANSPORT_TOTAL_TIMEOUT_SECONDS,
     )
-    return _validate_simbad_payload(
-        parse_bounded_json(response, limits=_SIMBAD_JSON_LIMITS)
-    )
-
-
-async def handle_obj(args: str, context) -> str:
-    """处理天文对象查询命令"""
-    args = args.strip()
-    if not args:
-        return "请提供天体名称\n示例: /astro obj Crab Pulsar\n或: /astro obj sun"
-
-    obj_name = args.lower()
-
-    # from .obj import SOLAR_SYSTEM # if circular import was an issue, but here it is same file
-
-    if obj_name in SOLAR_SYSTEM:
-        return SOLAR_SYSTEM[obj_name]()
-
-    # 从SIMBAD查询其他天体
-    try:
-        from astropy import units as u
-        from astropy.coordinates import SkyCoord
-
-        result = await asyncio.wait_for(
-            asyncio.to_thread(_query_simbad_object, args),
-            timeout=SIMBAD_TOTAL_TIMEOUT_SECONDS,
-        )
-
-        if result is None:
-            return f"未找到天体: {args}\n\n提示: 可以尝试使用英文名称，如 'Crab Nebula', 'Betelgeuse' 等"
-
-        coord = SkyCoord(ra=result.ra_deg * u.deg, dec=result.dec_deg * u.deg, frame='icrs')
-        ra_hms = coord.ra.to_string(unit=u.hour, sep=':', pad=True, precision=2)
-        dec_dms = coord.dec.to_string(unit=u.deg, sep=':', pad=True, precision=1, alwayssign=True)
-
-        result_text = f"🌟 {args}\n\n"
-        result_text += "**坐标 (J2000):**\n"
-        result_text += f"RA: {ra_hms} ({coord.ra.deg:.6f}°)\n"
-        result_text += f"Dec: {dec_dms} ({coord.dec.deg:.6f}°)\n\n"
-
-        # 添加天体类型
-        if result.otype:
-            result_text += f"类型: {result.otype}\n"
-
-        # 添加V波段星等
-        if result.v_magnitude is not None:
-            result_text += f"V星等: {result.v_magnitude:.2f}\n"
-
-        # 添加光谱型
-        if result.sp_type:
-            result_text += f"光谱型: {result.sp_type}"
-
-        return result_text
-    except asyncio.TimeoutError:
-        return "SIMBAD 查询超时，请稍后再试。"
-    except Exception as exc:
-        return public_error_message(
-            context, exc, logger=context.logger, component="astro_tools.obj"
-        )
+    return _validate_simbad_payload(parse_bounded_json(response, limits=_SIMBAD_JSON_LIMITS))
 
 
 def _get_sun_info() -> str:
@@ -255,219 +202,258 @@ def _get_sun_info() -> str:
     radius = const.R_sun.to(u.km)
     luminosity = const.L_sun.to(u.W)
 
-    return f"☀️ 太阳 (Sun)\n\n" \
-           f"**基本参数:**\n" \
-           f"质量: {mass.value:.3e} kg (1 M☉)\n" \
-           f"半径: {radius.value:,.0f} km (109 R⊕)\n" \
-           f"光度: {luminosity.value:.3e} W (1 L☉)\n" \
-           f"有效温度: 5778 K\n" \
-           f"光谱型: G2V\n" \
-           f"年龄: ~4.6 Gyr\n\n" \
-           f"**轨道参数:**\n" \
-           f"到地球平均距离: 1 AU = 1.496×10⁸ km\n" \
-           f"银河系轨道周期: ~230 Myr\n\n" \
-           f"**组成:**\n" \
-           f"氢: ~73%\n" \
-           f"氦: ~25%\n" \
-           f"其他元素: ~2%"
+    return (
+        "☀️ 太阳 (Sun)\n\n"
+        "**基本参数:**\n"
+        f"质量: {mass.value:.3e} kg (1 M☉)\n"
+        f"半径: {radius.value:,.0f} km (109 R⊕)\n"
+        f"光度: {luminosity.value:.3e} W (1 L☉)\n"
+        "有效温度: 5778 K\n"
+        "光谱型: G2V\n"
+        "年龄: ~4.6 Gyr\n\n"
+        "**轨道参数:**\n"
+        "到地球平均距离: 1 AU = 1.496×10⁸ km\n"
+        "银河系轨道周期: ~230 Myr\n\n"
+        "**组成:**\n"
+        "氢: ~73%\n"
+        "氦: ~25%\n"
+        "其他元素: ~2%"
+    )
 
 
-def _get_moon_info() -> str:
-    """获取月球信息"""
-    return "🌙 月球 (Moon)\n\n" \
-           "**基本参数:**\n" \
-           "质量: 7.342×10²² kg (0.0123 M⊕)\n" \
-           "半径: 1,737 km (0.273 R⊕)\n" \
-           "密度: 3.344 g/cm³\n" \
-           "表面重力: 1.62 m/s² (0.165 g)\n" \
-           "逃逸速度: 2.38 km/s\n\n" \
-           "**轨道参数:**\n" \
-           "半长轴: 384,400 km\n" \
-           "轨道周期: 27.32 天 (恒星月)\n" \
-           "同步自转周期: 27.32 天\n" \
-           "轨道离心率: 0.0549\n" \
-           "轨道倾角: 5.145°\n\n" \
-           "**表面特征:**\n" \
-           "表面温度: -173°C 到 127°C\n" \
-           "月球正面总有朝向地球（潮汐锁定）"
-
-
-def _get_earth_info() -> str:
-    """获取地球信息"""
-    return "🌍 地球 (Earth)\n\n" \
-           "**基本参数:**\n" \
-           "质量: 5.972×10²⁴ kg (1 M⊕)\n" \
-           "赤道半径: 6,378 km (1 R⊕)\n" \
-           "极半径: 6,357 km\n" \
-           "平均密度: 5.514 g/cm³\n" \
-           "表面重力: 9.807 m/s² (1 g)\n" \
-           "逃逸速度: 11.2 km/s\n\n" \
-           "**轨道参数:**\n" \
-           "半长轴: 1 AU = 1.496×10⁸ km\n" \
-           "轨道周期: 365.25 天\n" \
-           "自转周期: 23小时56分4秒\n" \
-           "轨道离心率: 0.0167\n" \
-           "轨道倾角: 0° (定义)\n" \
-           "自转轴倾角: 23.44°\n\n" \
-           "**大气组成:**\n" \
-           "氮: 78%\n" \
-           "氧: 21%\n" \
-           "氩和其他: 1%"
-
-
-def _get_mercury_info() -> str:
-    """获取水星信息"""
-    return "☿️ 水星 (Mercury)\n\n" \
-           "**基本参数:**\n" \
-           "质量: 3.30×10²³ kg (0.055 M⊕)\n" \
-           "半径: 2,440 km (0.383 R⊕)\n" \
-           "密度: 5.427 g/cm³\n" \
-           "表面重力: 3.7 m/s² (0.38 g)\n\n" \
-           "**轨道参数:**\n" \
-           "半长轴: 0.387 AU\n" \
-           "轨道周期: 87.97 天\n" \
-           "自转周期: 58.65 天\n" \
-           "轨道离心率: 0.206 (太阳系最大)\n\n" \
-           "**特点:**\n" \
-           "表面温度: -173°C 到 427°C\n" \
-           "几乎没有大气\n" \
-           "表面有大量陨石坑"
-
-
-def _get_venus_info() -> str:
-    """获取金星信息"""
-    return "♀️ 金星 (Venus)\n\n" \
-           "**基本参数:**\n" \
-           "质量: 4.87×10²⁴ kg (0.815 M⊕)\n" \
-           "半径: 6,052 km (0.949 R⊕)\n" \
-           "密度: 5.243 g/cm³\n" \
-           "表面重力: 8.87 m/s² (0.91 g)\n\n" \
-           "**轨道参数:**\n" \
-           "半长轴: 0.723 AU\n" \
-           "轨道周期: 224.7 天\n" \
-           "自转周期: 243 天 (逆向)\n" \
-           "轨道离心率: 0.007 (最接近圆形)\n\n" \
-           "**特点:**\n" \
-           "表面温度: ~462°C (太阳系最热)\n" \
-           "浓厚的CO₂大气\n" \
-           "表面气压: 92个地球大气压\n" \
-           "强烈的温室效应"
-
-
-def _get_mars_info() -> str:
-    """获取火星信息"""
-    return "♂️ 火星 (Mars)\n\n" \
-           "**基本参数:**\n" \
-           "质量: 6.42×10²³ kg (0.107 M⊕)\n" \
-           "半径: 3,390 km (0.532 R⊕)\n" \
-           "密度: 3.934 g/cm³\n" \
-           "表面重力: 3.71 m/s² (0.38 g)\n\n" \
-           "**轨道参数:**\n" \
-           "半长轴: 1.524 AU\n" \
-           "轨道周期: 687 天\n" \
-           "自转周期: 24.6 小时\n" \
-           "轨道离心率: 0.093\n" \
-           "自转轴倾角: 25.19°\n\n" \
-           "**特点:**\n" \
-           "表面温度: -140°C 到 20°C\n" \
-           "稀薄的CO₂大气\n" \
-           "有两颗小卫星: 火卫一和火卫二\n" \
-           "表面有极冠和古河道"
-
-
-def _get_jupiter_info() -> str:
-    """获取木星信息"""
-    return "♃ 木星 (Jupiter)\n\n" \
-           "**基本参数:**\n" \
-           "质量: 1.90×10²⁷ kg (318 M⊕)\n" \
-           "赤道半径: 71,492 km (11.2 R⊕)\n" \
-           "密度: 1.326 g/cm³\n" \
-           "表面重力: 24.79 m/s² (2.53 g)\n\n" \
-           "**轨道参数:**\n" \
-           "半长轴: 5.204 AU\n" \
-           "轨道周期: 11.86 年\n" \
-           "自转周期: 9.93 小时 (最快)\n" \
-           "轨道离心率: 0.049\n\n" \
-           "**特点:**\n" \
-           "气态巨行星\n" \
-           "大红斑 - 巨型风暴\n" \
-           "已知卫星: 95颗+\n" \
-           "主要卫星: 木卫一、二、三、四(伽利略卫星)\n" \
-           "强大的磁场"
-
-
-def _get_saturn_info() -> str:
-    """获取土星信息"""
-    return "♄ 土星 (Saturn)\n\n" \
-           "**基本参数:**\n" \
-           "质量: 5.68×10²⁶ kg (95.2 M⊕)\n" \
-           "赤道半径: 60,268 km (9.45 R⊕)\n" \
-           "密度: 0.687 g/cm³ (最低)\n" \
-           "表面重力: 10.44 m/s² (1.07 g)\n\n" \
-           "**轨道参数:**\n" \
-           "半长轴: 9.537 AU\n" \
-           "轨道周期: 29.46 年\n" \
-           "自转周期: 10.66 小时\n" \
-           "轨道离心率: 0.056\n\n" \
-           "**特点:**\n" \
-           "壮观的行星环系统\n" \
-           "已知卫星: 146颗+\n" \
-           "最大卫星: 土卫六(泰坦)，有浓厚大气\n" \
-           "密度小于水"
-
-
-def _get_uranus_info() -> str:
-    """获取天王星信息"""
-    return "♅ 天王星 (Uranus)\n\n" \
-           "**基本参数:**\n" \
-           "质量: 8.68×10²⁵ kg (14.5 M⊕)\n" \
-           "赤道半径: 25,559 km (4.01 R⊕)\n" \
-           "密度: 1.270 g/cm³\n" \
-           "表面重力: 8.69 m/s² (0.89 g)\n\n" \
-           "**轨道参数:**\n" \
-           "半长轴: 19.19 AU\n" \
-           "轨道周期: 84.02 年\n" \
-           "自转周期: 17.24 小时 (逆向)\n" \
-           "轨道离心率: 0.046\n" \
-           "自转轴倾角: 97.77° (几乎侧躺)\n\n" \
-           "**特点:**\n" \
-           "冰巨星\n" \
-           "蓝绿色(甲烷大气)\n" \
-           "已知卫星: 27颗\n" \
-           "有暗淡的行星环"
-
-
-def _get_neptune_info() -> str:
-    """获取海王星信息"""
-    return "♆ 海王星 (Neptune)\n\n" \
-           "**基本参数:**\n" \
-           "质量: 1.02×10²⁶ kg (17.1 M⊕)\n" \
-           "赤道半径: 24,764 km (3.88 R⊕)\n" \
-           "密度: 1.638 g/cm³\n" \
-           "表面重力: 11.15 m/s² (1.14 g)\n\n" \
-           "**轨道参数:**\n" \
-           "半长轴: 30.07 AU\n" \
-           "轨道周期: 164.8 年\n" \
-           "自转周期: 16.11 小时\n" \
-           "轨道离心率: 0.009\n\n" \
-           "**特点:**\n" \
-           "冰巨星\n" \
-           "深蓝色(甲烷大气)\n" \
-           "太阳系风速最快的行星\n" \
-           "已知卫星: 14颗\n" \
-           "最大卫星: 海卫一(特里同)，逆向轨道"
-
-
-# 太阳系天体字典
-SOLAR_SYSTEM = {
-    'sun': _get_sun_info,
-    'moon': _get_moon_info,
-    'earth': _get_earth_info,
-    'mercury': _get_mercury_info,
-    'venus': _get_venus_info,
-    'mars': _get_mars_info,
-    'jupiter': _get_jupiter_info,
-    'saturn': _get_saturn_info,
-    'uranus': _get_uranus_info,
-    'neptune': _get_neptune_info,
+# 其余太阳系对象都是静态说明，直接存文本，避免九个只返回常量的单行函数。
+# 卫星总数会随新发现变化，因此只保留定性描述，避免硬编码迅速过期的数字。
+SOLAR_SYSTEM_INFO: dict[str, str] = {
+    "moon": (
+        "🌙 月球 (Moon)\n\n"
+        "**基本参数:**\n"
+        "质量: 7.342×10²² kg (0.0123 M⊕)\n"
+        "半径: 1,737 km (0.273 R⊕)\n"
+        "密度: 3.344 g/cm³\n"
+        "表面重力: 1.62 m/s² (0.165 g)\n"
+        "逃逸速度: 2.38 km/s\n\n"
+        "**轨道参数:**\n"
+        "半长轴: 384,400 km\n"
+        "轨道周期: 27.32 天 (恒星月)\n"
+        "同步自转周期: 27.32 天\n"
+        "轨道离心率: 0.0549\n"
+        "轨道倾角: 5.145°\n\n"
+        "**表面特征:**\n"
+        "表面温度: -173°C 到 127°C\n"
+        "月球正面总有朝向地球（潮汐锁定）"
+    ),
+    "earth": (
+        "🌍 地球 (Earth)\n\n"
+        "**基本参数:**\n"
+        "质量: 5.972×10²⁴ kg (1 M⊕)\n"
+        "赤道半径: 6,378 km (1 R⊕)\n"
+        "极半径: 6,357 km\n"
+        "平均密度: 5.514 g/cm³\n"
+        "表面重力: 9.807 m/s² (1 g)\n"
+        "逃逸速度: 11.2 km/s\n\n"
+        "**轨道参数:**\n"
+        "半长轴: 1 AU = 1.496×10⁸ km\n"
+        "轨道周期: 365.25 天\n"
+        "自转周期: 23小时56分4秒\n"
+        "轨道离心率: 0.0167\n"
+        "轨道倾角: 0° (定义)\n"
+        "自转轴倾角: 23.44°\n\n"
+        "**大气组成:**\n"
+        "氮: 78%\n"
+        "氧: 21%\n"
+        "氩和其他: 1%"
+    ),
+    "mercury": (
+        "☿️ 水星 (Mercury)\n\n"
+        "**基本参数:**\n"
+        "质量: 3.30×10²³ kg (0.055 M⊕)\n"
+        "半径: 2,440 km (0.383 R⊕)\n"
+        "密度: 5.427 g/cm³\n"
+        "表面重力: 3.7 m/s² (0.38 g)\n\n"
+        "**轨道参数:**\n"
+        "半长轴: 0.387 AU\n"
+        "轨道周期: 87.97 天\n"
+        "自转周期: 58.65 天\n"
+        "轨道离心率: 0.206 (太阳系最大)\n\n"
+        "**特点:**\n"
+        "表面温度: -173°C 到 427°C\n"
+        "几乎没有大气\n"
+        "表面有大量陨石坑"
+    ),
+    "venus": (
+        "♀️ 金星 (Venus)\n\n"
+        "**基本参数:**\n"
+        "质量: 4.87×10²⁴ kg (0.815 M⊕)\n"
+        "半径: 6,052 km (0.949 R⊕)\n"
+        "密度: 5.243 g/cm³\n"
+        "表面重力: 8.87 m/s² (0.91 g)\n\n"
+        "**轨道参数:**\n"
+        "半长轴: 0.723 AU\n"
+        "轨道周期: 224.7 天\n"
+        "自转周期: 243 天 (逆向)\n"
+        "轨道离心率: 0.007 (最接近圆形)\n\n"
+        "**特点:**\n"
+        "表面温度: ~462°C (太阳系最热)\n"
+        "浓厚的CO₂大气\n"
+        "表面气压: 92个地球大气压\n"
+        "强烈的温室效应"
+    ),
+    "mars": (
+        "♂️ 火星 (Mars)\n\n"
+        "**基本参数:**\n"
+        "质量: 6.42×10²³ kg (0.107 M⊕)\n"
+        "半径: 3,390 km (0.532 R⊕)\n"
+        "密度: 3.934 g/cm³\n"
+        "表面重力: 3.71 m/s² (0.38 g)\n\n"
+        "**轨道参数:**\n"
+        "半长轴: 1.524 AU\n"
+        "轨道周期: 687 天\n"
+        "自转周期: 24.6 小时\n"
+        "轨道离心率: 0.093\n"
+        "自转轴倾角: 25.19°\n\n"
+        "**特点:**\n"
+        "表面温度: -140°C 到 20°C\n"
+        "稀薄的CO₂大气\n"
+        "有两颗小卫星: 火卫一和火卫二\n"
+        "表面有极冠和古河道"
+    ),
+    "jupiter": (
+        "♃ 木星 (Jupiter)\n\n"
+        "**基本参数:**\n"
+        "质量: 1.90×10²⁷ kg (318 M⊕)\n"
+        "赤道半径: 71,492 km (11.2 R⊕)\n"
+        "密度: 1.326 g/cm³\n"
+        "表面重力: 24.79 m/s² (2.53 g)\n\n"
+        "**轨道参数:**\n"
+        "半长轴: 5.204 AU\n"
+        "轨道周期: 11.86 年\n"
+        "自转周期: 9.93 小时 (最快)\n"
+        "轨道离心率: 0.049\n\n"
+        "**特点:**\n"
+        "气态巨行星\n"
+        "大红斑 - 巨型风暴\n"
+        "拥有众多卫星\n"
+        "主要卫星: 木卫一、二、三、四(伽利略卫星)\n"
+        "强大的磁场"
+    ),
+    "saturn": (
+        "♄ 土星 (Saturn)\n\n"
+        "**基本参数:**\n"
+        "质量: 5.68×10²⁶ kg (95.2 M⊕)\n"
+        "赤道半径: 60,268 km (9.45 R⊕)\n"
+        "密度: 0.687 g/cm³ (最低)\n"
+        "表面重力: 10.44 m/s² (1.07 g)\n\n"
+        "**轨道参数:**\n"
+        "半长轴: 9.537 AU\n"
+        "轨道周期: 29.46 年\n"
+        "自转周期: 10.66 小时\n"
+        "轨道离心率: 0.056\n\n"
+        "**特点:**\n"
+        "壮观的行星环系统\n"
+        "拥有众多卫星\n"
+        "最大卫星: 土卫六(泰坦)，有浓厚大气\n"
+        "密度小于水"
+    ),
+    "uranus": (
+        "♅ 天王星 (Uranus)\n\n"
+        "**基本参数:**\n"
+        "质量: 8.68×10²⁵ kg (14.5 M⊕)\n"
+        "赤道半径: 25,559 km (4.01 R⊕)\n"
+        "密度: 1.270 g/cm³\n"
+        "表面重力: 8.69 m/s² (0.89 g)\n\n"
+        "**轨道参数:**\n"
+        "半长轴: 19.19 AU\n"
+        "轨道周期: 84.02 年\n"
+        "自转周期: 17.24 小时 (逆向)\n"
+        "轨道离心率: 0.046\n"
+        "自转轴倾角: 97.77° (几乎侧躺)\n\n"
+        "**特点:**\n"
+        "冰巨星\n"
+        "蓝绿色(甲烷大气)\n"
+        "拥有多颗卫星\n"
+        "有暗淡的行星环"
+    ),
+    "neptune": (
+        "♆ 海王星 (Neptune)\n\n"
+        "**基本参数:**\n"
+        "质量: 1.02×10²⁶ kg (17.1 M⊕)\n"
+        "赤道半径: 24,764 km (3.88 R⊕)\n"
+        "密度: 1.638 g/cm³\n"
+        "表面重力: 11.15 m/s² (1.14 g)\n\n"
+        "**轨道参数:**\n"
+        "半长轴: 30.07 AU\n"
+        "轨道周期: 164.8 年\n"
+        "自转周期: 16.11 小时\n"
+        "轨道离心率: 0.009\n\n"
+        "**特点:**\n"
+        "冰巨星\n"
+        "深蓝色(甲烷大气)\n"
+        "太阳系风速最快的行星\n"
+        "拥有多颗卫星\n"
+        "最大卫星: 海卫一(特里同)，逆向轨道"
+    ),
 }
+
+
+async def handle_obj(args: str, context) -> str:
+    """处理天文对象查询命令。"""
+
+    args = args.strip()
+    if not args:
+        return "请提供天体名称\n示例: /astro obj Crab Pulsar\n或: /astro obj sun"
+
+    # 内置天体和 help 都是目录中的精确子命令；若后接参数，不能降级成
+    # SIMBAD 自由文本查询，否则非法命令会触发无关网络请求。
+    parts = args.split(maxsplit=1)
+    reserved_names = {"sun", "help", "帮助", *SOLAR_SYSTEM_INFO}
+    if len(parts) > 1 and parts[0].casefold() in reserved_names:
+        return f"不接受额外参数\n用法: /astro obj {parts[0]}"
+
+    obj_name = args.casefold()
+    if obj_name == "sun":
+        return _get_sun_info()
+    solar_system_info = SOLAR_SYSTEM_INFO.get(obj_name)
+    if solar_system_info is not None:
+        return solar_system_info
+    if len(args) > SIMBAD_MAX_OBJECT_NAME_CHARS:
+        return f"天体名称过长，最多允许 {SIMBAD_MAX_OBJECT_NAME_CHARS} 个字符"
+
+    # 从 SIMBAD 查询其他天体；查询构造纯本地，实际网络只发生在受限 TAP POST 中。
+    try:
+        from astropy import units as u
+        from astropy.coordinates import SkyCoord
+
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_query_simbad_object, args),
+            timeout=SIMBAD_TOTAL_TIMEOUT_SECONDS,
+        )
+        if result is None:
+            return f"未找到天体: {args}\n\n提示: 可以尝试使用英文名称，如 'Crab Nebula', 'Betelgeuse' 等"
+
+        coord = SkyCoord(ra=result.ra_deg * u.deg, dec=result.dec_deg * u.deg, frame="icrs")
+        ra_hms = coord.ra.to_string(unit=u.hour, sep=":", pad=True, precision=2)
+        dec_dms = coord.dec.to_string(unit=u.deg, sep=":", pad=True, precision=1, alwayssign=True)
+        result_lines = [
+            f"🌟 {args}",
+            "",
+            "**坐标 (ICRS):**",
+            f"RA: {ra_hms} ({coord.ra.deg:.6f}°)",
+            f"Dec: {dec_dms} ({coord.dec.deg:.6f}°)",
+            "",
+        ]
+        if result.otype:
+            result_lines.append(f"类型: {result.otype}")
+        if result.v_magnitude is not None:
+            result_lines.append(f"V星等: {result.v_magnitude:.2f}")
+        if result.sp_type:
+            result_lines.append(f"光谱型: {result.sp_type}")
+        return "\n".join(result_lines).rstrip()
+    except asyncio.TimeoutError:
+        return "SIMBAD 查询超时，请稍后再试。"
+    except Exception as exc:
+        return public_error_message(
+            context,
+            exc,
+            logger=context.logger,
+            component="astro_tools.obj",
+        )

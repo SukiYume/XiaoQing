@@ -9,14 +9,16 @@ Transformers (BERT) 模型推理后端。
 import importlib
 import logging
 import os
+from collections.abc import Mapping
 from functools import partial
+from typing import Any
 
 import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from .shared import InferenceParams
+from .shared import InferenceParams, model_artifact_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -24,34 +26,50 @@ transformers = importlib.import_module("transformers")
 AutoModelForSequenceClassification = transformers.AutoModelForSequenceClassification
 AutoTokenizer = transformers.AutoTokenizer
 
-_MODEL_CACHE: dict[tuple[str, str], tuple[object, object]] = {}
+_MODEL_CACHE: dict[tuple[str, str, str], tuple[object, object]] = {}
 
 
 # =============================================================================
 # Dataset & Collate
 # =============================================================================
 
+
 class TitleAbstractDataset(Dataset):
-    def __init__(self, titles: list[str], tokenizer, abstracts: list[str] | None = None,
-                 max_len: int = 512):
+    def __init__(
+        self, titles: list[str], tokenizer, abstracts: list[str] | None = None, max_len: int = 512
+    ):
+        if abstracts is not None and len(abstracts) != len(titles):
+            raise ValueError("titles and abstracts must contain the same number of rows")
         truncation = "only_second" if abstracts is not None else True
-        enc = tokenizer(titles, text_pair=abstracts, add_special_tokens=True,
-                        max_length=max_len, padding=False, truncation=truncation)
+        enc = tokenizer(
+            titles,
+            text_pair=abstracts,
+            add_special_tokens=True,
+            max_length=max_len,
+            padding=False,
+            truncation=truncation,
+        )
+        if not isinstance(enc, Mapping):
+            raise TypeError("tokenizer must return a mapping")
         self.input_ids = enc["input_ids"]
         self.attention_mask = enc["attention_mask"]
         self.token_type_ids = enc.get("token_type_ids")
+        if len(self.input_ids) != len(titles) or len(self.attention_mask) != len(titles):
+            raise ValueError("tokenizer output row count does not match input")
 
     def __len__(self) -> int:
         return len(self.input_ids)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         item = {"input_ids": self.input_ids[idx], "attention_mask": self.attention_mask[idx]}
         if self.token_type_ids is not None:
             item["token_type_ids"] = self.token_type_ids[idx]
         return item
 
 
-def dynamic_pad_collate(batch, pad_id: int = 0):
+def dynamic_pad_collate(batch: list[dict[str, list[int]]], pad_id: int = 0) -> dict[str, Any]:
+    if not batch:
+        raise ValueError("cannot collate an empty batch")
     max_len = max(len(b["input_ids"]) for b in batch)
     has_tti = "token_type_ids" in batch[0]
     input_ids, attn, tti = [], [], []
@@ -74,41 +92,69 @@ def dynamic_pad_collate(batch, pad_id: int = 0):
 # 模型加载 & 预测
 # =============================================================================
 
-def load_model_and_tokenizer(model_path: str, device: torch.device):
+
+def load_model_and_tokenizer(
+    model_path: str,
+    device: torch.device,
+    *,
+    artifact_fingerprint: str | None = None,
+):
     if not os.path.isdir(model_path):
         raise FileNotFoundError(f"Model path does not exist or is not a directory: {model_path}")
-    cache_key = (os.path.abspath(model_path), str(device))
+    resolved_path = os.path.abspath(model_path)
+    cache_key = (
+        resolved_path,
+        artifact_fingerprint or model_artifact_fingerprint(resolved_path),
+        str(device),
+    )
     cached = _MODEL_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
     model = AutoModelForSequenceClassification.from_pretrained(model_path).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path)
+    for stale_key in [key for key in _MODEL_CACHE if key[0] == resolved_path]:
+        _MODEL_CACHE.pop(stale_key, None)
     _MODEL_CACHE[cache_key] = (model, tokenizer)
     return model, tokenizer
 
 
 def run_transformers_inference(
-    params: InferenceParams, data: pd.DataFrame, device: torch.device,
+    params: InferenceParams,
+    data: pd.DataFrame,
+    device: torch.device,
 ) -> tuple[list[float], list[int]]:
     """执行 BERT 类推理，根据 input_mode 自动决定是否使用 abstract。"""
-    model, tokenizer = load_model_and_tokenizer(params.model_path, device)
+    model, tokenizer = load_model_and_tokenizer(
+        params.model_path,
+        device,
+        artifact_fingerprint=params.artifact_fingerprint,
+    )
 
     if "Title" not in data.columns:
         raise ValueError("Input data must contain a 'Title' column.")
     titles = data["Title"].fillna("").astype(str).tolist()
 
     abstracts = None
-    if params.input_mode != "title_only" and "Abstract" in data.columns:
+    if params.input_mode == "title_abstract":
+        if "Abstract" not in data.columns:
+            raise ValueError("title_abstract input requires an 'Abstract' column")
         abstracts = data["Abstract"].fillna("").astype(str).tolist()
-        logger.info("input_mode=%s: 使用标题+摘要推理 (%d/%d 篇有摘要)",
-                     params.input_mode, sum(1 for a in abstracts if a), len(abstracts))
+        logger.info(
+            "input_mode=%s: 使用标题+摘要推理 (%d/%d 篇有摘要)",
+            params.input_mode,
+            sum(1 for a in abstracts if a),
+            len(abstracts),
+        )
     else:
         logger.info("input_mode=%s: 仅使用标题推理", params.input_mode)
 
     ds = TitleAbstractDataset(titles, tokenizer, abstracts=abstracts, max_len=params.max_len)
-    loader = DataLoader(ds, batch_size=params.batch_size,
-                        collate_fn=partial(dynamic_pad_collate, pad_id=tokenizer.pad_token_id or 0))
+    loader = DataLoader(
+        ds,
+        batch_size=params.batch_size,
+        collate_fn=partial(dynamic_pad_collate, pad_id=tokenizer.pad_token_id or 0),
+    )
 
     all_probs: list[float] = []
     with torch.no_grad():

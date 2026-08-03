@@ -1,7 +1,9 @@
-import { createDemoSession, exchangeLoginCode, getSession } from './api.js';
-import { init as initRouter, registerRoute, getCurrentPage, onRouteChange } from './router.js';
+/** Pendo Web 的登录引导、页面路由和全局交互入口。 */
 
-// Register all page routes (lazy loaded)
+import { createDemoSession, exchangeLoginCode, getSession } from './api.js';
+import { init as initRouter, onRouteChange, registerRoute } from './router.js';
+
+// 页面模块保持按需加载，避免登录页预先下载整套管理台代码。
 registerRoute('dashboard', () => import('./pages/dashboard.js?v=20260430'));
 registerRoute('events', () => import('./pages/events.js'));
 registerRoute('tasks', () => import('./pages/tasks.js'));
@@ -27,7 +29,7 @@ const BACK_TO_TOP_THEME = {
 };
 
 function extractLoginCode(rawValue) {
-    const text = String(rawValue || '').trim();
+    const text = String(rawValue ?? '').trim();
     if (!text) return '';
     try {
         const url = new URL(text);
@@ -57,7 +59,8 @@ async function bootstrap() {
         await showApp();
         return;
     }
-    showLogin(result.message || '');
+    // 首次匿名访问和会话自然过期都是正常登录态，不应暴露后端内部认证错误。
+    showLogin(result.httpStatus === 401 ? '' : result.message || '');
 }
 
 function showLogin(initialError = '') {
@@ -70,15 +73,26 @@ function showLogin(initialError = '') {
     const input = document.getElementById('token-input');
     const error = document.getElementById('login-error');
     const helper = document.getElementById('login-helper');
+    let pending = false;
 
     if (initialError) {
         error.textContent = initialError;
         error.style.display = 'block';
     } else {
+        error.textContent = '';
         error.style.display = 'none';
     }
 
+    const setPending = (value) => {
+        pending = value;
+        btn.disabled = value;
+        clearBtn.disabled = value;
+        demoBtn.disabled = value;
+        input.disabled = value;
+    };
+
     const submit = async () => {
+        if (pending) return;
         const code = extractLoginCode(input.value);
         if (!code) {
             error.textContent = '请先粘贴一次性登录链接或登录码';
@@ -91,44 +105,55 @@ function showLogin(initialError = '') {
             input.value = code;
         }
 
-        btn.disabled = true;
-        clearBtn.disabled = true;
+        setPending(true);
         btn.textContent = '验证中...';
         error.style.display = 'none';
         helper.textContent = '正在交换一次性登录码…';
 
-        const result = await exchangeLoginCode(code);
-        if (result.ok) {
-            await showApp();
-        } else {
+        try {
+            const result = await exchangeLoginCode(code);
+            if (result.ok) {
+                await showApp();
+                return;
+            }
             error.textContent = result.message || '登录链接无效或已过期';
             error.style.display = 'block';
             helper.textContent = '请回到聊天中重新生成一次性登录链接后再试。';
+        } catch (cause) {
+            console.error('Pendo Web 登录初始化失败:', cause);
+            error.textContent = '登录时发生错误，请稍后重试';
+            error.style.display = 'block';
+            helper.textContent = '页面组件加载失败；你可以刷新页面后重试。';
+        } finally {
+            setPending(false);
+            btn.textContent = '进入 Pendo';
         }
-        btn.disabled = false;
-        clearBtn.disabled = false;
-        btn.textContent = '进入 Pendo';
     };
 
     const enterDemo = async () => {
-        btn.disabled = true;
-        clearBtn.disabled = true;
-        demoBtn.disabled = true;
+        if (pending) return;
+        setPending(true);
         error.style.display = 'none';
         helper.textContent = '正在创建临时演示空间…';
 
-        const result = await createDemoSession();
-        if (result.ok) {
-            await showApp();
-            return;
-        }
+        try {
+            const result = await createDemoSession();
+            if (result.ok) {
+                await showApp();
+                return;
+            }
 
-        error.textContent = result.message || '暂时无法进入演示空间';
-        error.style.display = 'block';
-        helper.textContent = '你也可以回到聊天里生成自己的一次性登录链接。';
-        btn.disabled = false;
-        clearBtn.disabled = false;
-        demoBtn.disabled = false;
+            error.textContent = result.message || '暂时无法进入演示空间';
+            error.style.display = 'block';
+            helper.textContent = '你也可以回到聊天里生成自己的一次性登录链接。';
+        } catch (cause) {
+            console.error('Pendo Web 演示空间初始化失败:', cause);
+            error.textContent = '暂时无法进入演示空间';
+            error.style.display = 'block';
+            helper.textContent = '页面组件加载失败；你可以刷新页面后重试。';
+        } finally {
+            setPending(false);
+        }
     };
 
     btn.onclick = submit;
@@ -147,93 +172,59 @@ function showLogin(initialError = '') {
 }
 
 function initBackToTop() {
+    if (document.getElementById('back-to-top')) return;
+
     const btn = document.createElement('button');
     btn.id = 'back-to-top';
+    btn.type = 'button';
     btn.setAttribute('aria-label', '回到顶部');
-    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>';
-    document.body.appendChild(btn);
-
-    const style = document.createElement('style');
-    style.id = 'pendo-back-to-top-style';
-    style.textContent = `
-        #back-to-top {
-            --btt-accent: var(--color-dashboard);
-            position: fixed;
-            bottom: 24px;
-            right: 20px;
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            background: color-mix(in srgb, var(--btt-accent) 68%, transparent);
-            color: #fff;
-            border: none;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 8px 18px color-mix(in srgb, var(--btt-accent) 18%, transparent);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            opacity: 0;
-            transform: translateY(10px) scale(0.92);
-            transition: opacity 0.2s ease, transform 0.2s ease, background 0.15s ease;
-            pointer-events: none;
-            z-index: 500;
-            outline: none;
-            user-select: none;
-            -webkit-tap-highlight-color: transparent;
-        }
-        #back-to-top.btt-visible {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-            pointer-events: auto;
-        }
-        #back-to-top:hover {
-            background: color-mix(in srgb, var(--btt-accent) 82%, transparent);
-            transform: translateY(-2px) scale(1);
-        }
-        #back-to-top:active { transform: translateY(0) scale(0.94); }
-        #back-to-top:focus,
-        #back-to-top:focus-visible {
-            outline: none;
-            box-shadow:
-                0 0 0 2px rgba(255,255,255,0.88),
-                0 0 0 5px color-mix(in srgb, var(--btt-accent) 16%, transparent);
-        }
-        #back-to-top svg { width: 16px; height: 16px; }
+    btn.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="18 15 12 9 6 15"></polyline>
+        </svg>
     `;
-    document.head.appendChild(style);
+    document.body.appendChild(btn);
 
     const applyTheme = (path) => {
         btn.style.setProperty('--btt-accent', BACK_TO_TOP_THEME[path] || 'var(--color-dashboard)');
     };
-    applyTheme(getCurrentPage());
-    onRouteChange((path) => applyTheme(path));
+    onRouteChange(applyTheme);
 
-    window.addEventListener('scroll', () => {
-        btn.classList.toggle('btt-visible', window.scrollY > 240);
-    }, { passive: true });
+    window.addEventListener(
+        'scroll',
+        () => {
+            btn.classList.toggle('btt-visible', window.scrollY > 240);
+        },
+        { passive: true },
+    );
 
     btn.addEventListener('click', () => {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
     });
 }
 
 async function showApp() {
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-
-    // Init layout components
-    const { renderSidebar } = await import('./components/sidebar.js');
-    const { renderHeader } = await import('./components/header.js');
+    // 两个独立布局组件并行加载；加载失败前仍保留可操作的登录界面。
+    const [{ renderSidebar }, { renderHeader }] = await Promise.all([
+        import('./components/sidebar.js'),
+        import('./components/header.js'),
+    ]);
 
     renderSidebar(document.getElementById('sidebar-container'));
     renderHeader(document.getElementById('header-container'));
 
-    // Init router (loads current page)
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+
+    // 路由初始化会立即加载当前页面，因此必须等布局可见后再执行。
     await initRouter(document.getElementById('content'));
 
     initBackToTop();
 }
 
-bootstrap();
+bootstrap().catch((cause) => {
+    console.error('Pendo Web 启动失败:', cause);
+    showLogin('页面初始化失败，请刷新后重试。');
+});

@@ -3,6 +3,7 @@
     "version": "2.0.0",
     "description": "Twitter 图片抓取与随机发送 - 自动抓取、随机推送、智能去重",
     "entry": "main.py",
+    "concurrency": "parallel",
     "commands": [
         {
             "name": "twimg",
@@ -12,7 +13,21 @@
                 "推特"
             ],
             "help": "🎨 随机推特美图 | /twimg help 查看详细帮助",
-            "admin_only": false
+            "admin_only": false,
+            "usage": "/twimg",
+            "examples": ["/twimg"],
+            "invalid_examples": ["/twimg extra"],
+            "subcommands": [
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示本地图片缓存说明",
+                    "usage": "/twimg help",
+                    "match": "exact",
+                    "examples": ["/twimg help"],
+                    "invalid_examples": ["/twimg help extra"]
+                }
+            ]
         },
         {
             "name": "tw_fetch",
@@ -20,8 +35,29 @@
                 "tw_fetch",
                 "抓取推特"
             ],
-            "help": "🔄 手动抓取新图 | /tw_fetch help 查看详细帮助",
-            "admin_only": true
+            "help": "🔄 后台抓取新图 | /tw_fetch help 查看详细帮助",
+            "admin_only": true,
+            "usage": "/tw_fetch",
+            "examples": ["/tw_fetch"],
+            "invalid_examples": ["/tw_fetch extra"],
+            "subcommands": [
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示后台抓取与通知说明",
+                    "usage": "/tw_fetch help",
+                    "match": "exact",
+                    "examples": ["/tw_fetch help"],
+                    "invalid_examples": ["/tw_fetch help extra"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "PIL",
+            "required": true,
+            "description": "用于验证、转换和缓存 Twitter 图片"
         }
     ],
     "schedule": [
@@ -31,8 +67,7 @@
             "cron": {
                 "hour": 3,
                 "minute": 0
-            },
-            "group_ids": []
+            }
         }
     ]
 }

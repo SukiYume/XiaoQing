@@ -2,32 +2,41 @@
 红移计算模块
 """
 
+import math
+
+from core.plugin_base import run_sync
 from core.public_errors import public_error_message
 
 
-async def handle_redshift(args: str, context) -> str:
+def _handle_redshift_sync(args: str, context) -> str:
     """处理红移计算命令"""
     args = args.strip()
     if not args:
-        return "请提供红移值\n示例: /astro redshift 0.5\n\n" \
-               "红移范围: 0 到 ~10 (宇宙学红移)\n" \
-               "使用 Planck 2018 宇宙学参数"
+        return (
+            "请提供红移值\n示例: /astro redshift 0.5\n\n"
+            "常用红移范围: 0 到 ~10；计算上限为 1100\n"
+            "使用 Planck 2018 宇宙学参数"
+        )
 
     try:
         # 验证输入
         try:
             z = float(args)
-        except ValueError:
+        except (ValueError, OverflowError):
             return f"无效的红移值: {args}\n请提供有效的数字"
 
+        if not math.isfinite(z):
+            return "红移值必须是有限数字"
+
         if z < 0:
-            return "红移值必须 >= 0\n\n" \
-                   "注: z=0 表示当前宇宙，z>0 表示过去的宇宙"
+            return "红移值必须 >= 0\n\n注: z=0 表示当前宇宙，z>0 表示过去的宇宙"
 
         if z > 1100:
-            return f"红移值 {z} 过大\n\n" \
-                   f"注: 宇宙微波背景辐射的红移约为 z≈1100\n" \
-                   f"观测到的最远星系红移约为 z≈13"
+            return (
+                f"红移值 {z} 过大\n\n"
+                f"注: 宇宙微波背景辐射的红移约为 z≈1100\n"
+                f"观测到的最远星系红移约为 z≈13"
+            )
 
         from astropy import units as u
         from astropy.cosmology import Planck18 as cosmo
@@ -39,39 +48,45 @@ async def handle_redshift(args: str, context) -> str:
         t_lookback = cosmo.lookback_time(z)
         age_at_z = cosmo.age(z)
 
-        result = "🌌 红移计算 (Planck 2018)\n\n"
-        result += f"**输入红移: z = {z}**\n\n"
-        result += "**距离:**\n"
+        # 低于 1000 Mpc 时保留 Mpc，避免把近邻天体显示成难读的 0.00x Gpc。
+        distance_unit = u.Mpc if d_L.to_value(u.Mpc) < 1000 else u.Gpc
+        distance_precision = 3 if distance_unit == u.Mpc else 4
+        result_lines = [
+            "🌌 红移计算 (Planck 2018)",
+            "",
+            f"**输入红移: z = {z}**",
+            "",
+            "**距离:**",
+            f"光度距离: {d_L.to(distance_unit):.{distance_precision}f}",
+            f"角直径距离: {d_A.to(distance_unit):.{distance_precision}f}",
+            f"共动距离: {d_C.to(distance_unit):.{distance_precision}f}",
+            "",
+            "**时间:**",
+            f"光行时: {t_lookback.to(u.Gyr):.3f}",
+            f"宇宙年龄(当时): {age_at_z.to(u.Gyr):.3f}",
+            "",
+            "**其他参数:**",
+            f"尺度因子: a = 1/(1+z) = {1 / (1 + z):.6f}",
+        ]
 
-        # 根据距离大小选择合适的单位
-        if d_L.value < 1:
-            result += f"光度距离: {d_L.to(u.Mpc):.3f}\n"
-            result += f"角直径距离: {d_A.to(u.Mpc):.3f}\n"
-            result += f"共动距离: {d_C.to(u.Mpc):.3f}\n"
-        else:
-            result += f"光度距离: {d_L.to(u.Gpc):.4f}\n"
-            result += f"角直径距离: {d_A.to(u.Gpc):.4f}\n"
-            result += f"共动距离: {d_C.to(u.Gpc):.4f}\n"
-
-        result += "\n**时间:**\n"
-        result += f"光行时: {t_lookback.to(u.Gyr):.3f}\n"
-        result += f"宇宙年龄(当时): {age_at_z.to(u.Gyr):.3f}\n"
-
-        result += "\n**其他参数:**\n"
-        result += f"尺度因子: a = 1/(1+z) = {1/(1+z):.6f}\n"
-
-        # 添加物理意义说明
+        # 根据红移给出简短的物理语境，不参与数值计算。
         if z < 0.1:
-            result += "\n💡 近邻宇宙 - 可用于局部星系研究"
+            context_note = "💡 近邻宇宙 - 可用于局部星系研究"
         elif z < 1:
-            result += "\n💡 中等红移 - 星系演化的重要阶段"
+            context_note = "💡 中等红移 - 星系演化的重要阶段"
         elif z < 3:
-            result += "\n💡 高红移 - 星系形成活跃时期"
+            context_note = "💡 高红移 - 星系形成活跃时期"
         else:
-            result += "\n💡 极高红移 - 早期宇宙"
+            context_note = "💡 极高红移 - 早期宇宙"
 
-        return result
+        return "\n".join((*result_lines, "", context_note))
     except Exception as exc:
         return public_error_message(
             context, exc, logger=context.logger, component="astro_tools.redshift"
         )
+
+
+async def handle_redshift(args: str, context) -> str:
+    """在线程 bulkhead 中执行 astropy 宇宙学计算。"""
+
+    return await run_sync(_handle_redshift_sync, args, context)

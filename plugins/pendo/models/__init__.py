@@ -1,10 +1,1 @@
-"""数据模型初始化"""
-from . import types
-from .constants import ItemFields
-from .item import DiaryItem, EventItem, Item, ItemType, NoteItem, TaskItem
-
-__all__ = [
-    'Item', 'ItemType', 'EventItem', 'TaskItem', 'NoteItem', 'DiaryItem',
-    'ItemFields',
-    'types'
-]
+"""Pendo 数据模型；调用方应从具体子模块导入所需类型。"""

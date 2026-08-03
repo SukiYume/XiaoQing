@@ -1,16 +1,24 @@
-"""
-Pendo插件配置管理
-集中管理所有可配置项，避免硬编码
-"""
+"""Pendo 的静态默认值与少量运行期覆盖项。"""
 
-from copy import deepcopy
-from typing import Any
+from collections.abc import Mapping
+from dataclasses import dataclass
+from threading import Lock
+from typing import Any, ClassVar
+
+
+@dataclass(frozen=True, slots=True)
+class PendoRuntimeSettings:
+    """Atomically published settings that may change while the plugin is loaded."""
+
+    web_enabled: bool = True
+    web_host: str = "127.0.0.1"
+    web_port: int = 12001
+    web_session_cookie_secure: bool = False
+    web_demo_enabled: bool = False
 
 
 class PendoConfig:
     """Pendo插件配置类"""
-
-    _env_overrides: dict[str, Any] = {}
 
     # 数据库配置
     DB_FILENAME = "pendo.db"
@@ -30,25 +38,14 @@ class PendoConfig:
     REMINDER_REPEAT_INTERVAL_SECONDS = 300  # 未确认提醒重复间隔（秒），默认5分钟
     REMINDER_MAX_REPEATS = 3  # 未确认提醒最大重复次数
     REMINDER_AUTO_CONFIRM_AFTER_FINAL_SEND_SECONDS = 600
-
-    # 撤销配置
-    UNDO_DELETE_WINDOW_MINUTES = 5  # 撤销删除时间窗口（分钟）
+    REMINDER_STALE_AFTER_SECONDS = 24 * 60 * 60  # 服务长时间离线后不复活旧提醒
+    REMINDER_LOG_RETENTION_DAYS = 90  # 已确认提醒历史保留天数
 
     # 搜索配置
     DEFAULT_SEARCH_LIMIT = 50  # 默认搜索结果数量
-    FTS_LANGUAGE = "chinese"  # 全文搜索语言
-
-    # 导出配置
-    EXPORT_MAX_ITEMS = 10000  # 单次导出最大条目数
-    EXPORT_FORMAT_DEFAULT = "by_type"  # 默认导出格式
 
     # 日程配置
     EVENT_MAX_RRULE_COUNT = 365  # 重复日程最大次数
-    EVENT_CONFLICT_WARNING = True  # 是否警告日程冲突
-
-    # 任务配置
-    TASK_TODAY_SHOW_OVERDUE = True  # 今日清单是否显示逾期任务
-    TASK_OVERDUE_MAX_SHOW = 10  # 最多显示逾期任务数量
 
     # AI配置
     AI_PARSE_TIMEOUT = 30  # AI解析超时时间（秒）
@@ -56,34 +53,31 @@ class PendoConfig:
     AI_MAX_TOKENS = 1000  # AI最大token数
     AI_FALLBACK_TO_RULES = True  # AI失败时是否回退到规则解析
 
-    # 日志配置
-    LOG_OPERATION = True  # 是否记录操作日志
     LOG_OPERATION_RETENTION_DAYS = 90  # 操作日志保留天数
-    LOG_OPERATION_UNDO_SNAPSHOT_MINUTES = 5  # 可撤销窗口后立即删除正文快照
-    # 消息配置
-    MESSAGE_PRIVACY_MODE_DEFAULT = True  # 默认开启隐私模式
-
+    UNDO_WINDOW_MINUTES = 5  # 删除与编辑共享的固定可撤销窗口
+    UNDO_HINT = f"💡 {UNDO_WINDOW_MINUTES}分钟内可用 /pendo undo 撤销"
     # 分页配置
     LIST_PAGE_SIZE = 10  # 列表分页大小
-    LIST_MAX_ITEMS_INLINE = 5  # 内联显示最大条目数
 
     # 任务展示配置
     TASK_OVERDUE_PREVIEW_COUNT = 5  # 逾期任务预览数量
-    TASK_HIGH_PRIORITY_THRESHOLD = 2  # 高优先级阈值 (1=紧急, 2=高)
-
-    # 事件冲突配置
-    EVENT_CONFLICT_MAX_SHOW = 3  # 最多显示冲突事件数量
 
     # 搜索展示配置
     SEARCH_CONTENT_PREVIEW_LENGTH = 50  # 搜索结果内容预览长度
 
     # 会话配置
     SESSION_TIMEOUT_SECONDS = 300.0  # 会话超时时间（秒）
-    SESSION_EXIT_COMMANDS = ["退出", "exit", "quit", "cancel", "取消"]  # 退出会话的命令
+    SESSION_EXIT_COMMANDS: ClassVar[tuple[str, ...]] = (
+        "退出",
+        "exit",
+        "quit",
+        "cancel",
+        "取消",
+    )  # 退出会话的命令
 
     # 确认命令
-    CONFIRM_POSITIVE = ["yes", "y", "是", "确认"]
-    CONFIRM_NEGATIVE = ["no", "n", "否", "取消"]
+    CONFIRM_POSITIVE: ClassVar[tuple[str, ...]] = ("yes", "y", "是", "确认")
+    CONFIRM_NEGATIVE: ClassVar[tuple[str, ...]] = ("no", "n", "否", "取消")
 
     # 会话类型常量
     SESSION_TYPE_DIARY_TEMPLATE = "diary_template"
@@ -93,29 +87,19 @@ class PendoConfig:
     SESSION_TYPE_LEDGER_ADD = "ledger_add"
 
     # Web UI
-    WEB_ENABLED = True
-    WEB_HOST = "127.0.0.1"
-    WEB_PORT = 12001
-    WEB_TOKEN_EXPIRE_HOURS = 24 * 7
     WEB_LOGIN_CODE_EXPIRE_SECONDS = 5 * 60
     WEB_SESSION_EXPIRE_SECONDS = 8 * 60 * 60
-    # Loopback HTTP development cannot use a Secure cookie. Public bindings
-    # are rejected by server.py unless this is explicitly enabled behind TLS.
-    WEB_SESSION_COOKIE_SECURE = False
-    WEB_WIDGET_TOKEN_EXPIRE_HOURS = 24 * 180
-    WEB_DEMO_ENABLED = False
+    WEB_WIDGET_TOKEN_EXPIRE_HOURS = 24 * 30
     WEB_DEMO_EXPIRE_HOURS = 6
     WEB_DEMO_MAX_ACTIVE_SESSIONS = 20
     WEB_DEMO_REQUESTS_PER_HOUR = 3
-    _RUNTIME_DEFAULTS = {
-        "WEB_HOST": WEB_HOST,
-        "WEB_PORT": WEB_PORT,
-        "WEB_SESSION_COOKIE_SECURE": WEB_SESSION_COOKIE_SECURE,
-        "WEB_DEMO_ENABLED": WEB_DEMO_ENABLED,
-    }
+    _RUNTIME_DEFAULTS: ClassVar[PendoRuntimeSettings] = PendoRuntimeSettings()
+    _runtime_settings: ClassVar[PendoRuntimeSettings] = _RUNTIME_DEFAULTS
+    _runtime_revision: ClassVar[int | None] = None
+    _runtime_lock: ClassVar[Lock] = Lock()
 
     @classmethod
-    def validate(cls):
+    def validate(cls) -> None:
         """验证配置合理性"""
         if cls.TASK_OVERDUE_PREVIEW_COUNT <= 0:
             raise ValueError("TASK_OVERDUE_PREVIEW_COUNT must be positive")
@@ -125,152 +109,106 @@ class PendoConfig:
             raise ValueError("EVENT_MAX_RRULE_COUNT must be positive")
         if cls.REMINDER_CHECK_WINDOW_SECONDS <= 0:
             raise ValueError("REMINDER_CHECK_WINDOW_SECONDS must be positive")
+        if cls.UNDO_WINDOW_MINUTES <= 0:
+            raise ValueError("UNDO_WINDOW_MINUTES must be positive")
+        if cls.REMINDER_STALE_AFTER_SECONDS <= cls.REMINDER_REPEAT_INTERVAL_SECONDS:
+            raise ValueError("REMINDER_STALE_AFTER_SECONDS must exceed the repeat interval")
+        if cls.WEB_WIDGET_TOKEN_EXPIRE_HOURS <= 0:
+            raise ValueError("WEB_WIDGET_TOKEN_EXPIRE_HOURS must be positive")
 
     @classmethod
     def reset_runtime_config(cls) -> None:
         """重置运行期可覆盖配置，避免热更新和测试间串值。"""
-        cls._env_overrides = {}
-        for key, value in cls._RUNTIME_DEFAULTS.items():
-            setattr(cls, key, deepcopy(value))
+        with cls._runtime_lock:
+            cls._runtime_settings = cls._RUNTIME_DEFAULTS
+            cls._runtime_revision = None
 
     @classmethod
-    def _parse_bool(cls, value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return bool(value)
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-        return bool(value)
+    def runtime(cls) -> PendoRuntimeSettings:
+        """Return one immutable runtime settings generation."""
+
+        with cls._runtime_lock:
+            return cls._runtime_settings
+
+    @staticmethod
+    def _boolean(config: Mapping[str, Any], key: str, default: bool) -> bool:
+        value = config.get(key, default)
+        if type(value) is not bool:
+            raise TypeError(f"plugins.pendo.{key} must be a boolean")
+        return value
 
     @classmethod
-    def from_global_config(cls, config: dict[str, Any] | None) -> None:
-        """从全局 config.json 的 plugins.pendo 节点加载配置。"""
-        if not isinstance(config, dict):
-            return
-        plugins = config.get("plugins")
-        if not isinstance(plugins, dict):
-            return
-        pendo = plugins.get("pendo")
-        if not isinstance(pendo, dict):
-            return
-        if "web_demo_enabled" in pendo:
-            cls.WEB_DEMO_ENABLED = cls._parse_bool(pendo.get("web_demo_enabled"))
+    def _host(cls, config: Mapping[str, Any]) -> str:
+        value = config.get("web_host", cls._RUNTIME_DEFAULTS.web_host)
+        if (
+            type(value) is not str
+            or not value
+            or value != value.strip()
+            or len(value) > 255
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise ValueError("plugins.pendo.web_host must be a non-empty host string")
+        return value
 
     @classmethod
-    def from_env(cls):
-        """从环境变量加载配置（可选的环境变量覆盖）"""
-        import os
-
-        if "PENDO_WEB_HOST" in os.environ:
-            cls.WEB_HOST = os.environ["PENDO_WEB_HOST"]
-        if "PENDO_WEB_PORT" in os.environ:
-            cls.WEB_PORT = int(os.environ["PENDO_WEB_PORT"])
-        if "PENDO_WEB_DEMO_ENABLED" in os.environ:
-            cls.WEB_DEMO_ENABLED = os.environ["PENDO_WEB_DEMO_ENABLED"].strip().lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }
-        if "PENDO_WEB_SESSION_COOKIE_SECURE" in os.environ:
-            cls.WEB_SESSION_COOKIE_SECURE = cls._parse_bool(
-                os.environ["PENDO_WEB_SESSION_COOKIE_SECURE"]
-            )
-
-        # 允许通过环境变量覆盖部分配置，存储在实例字典中
-        if "PENDO_TIMEZONE" in os.environ:
-            cls._env_overrides["DEFAULT_TIMEZONE"] = os.environ["PENDO_TIMEZONE"]
-        if "PENDO_REMINDER_CHECK_WINDOW" in os.environ:
-            cls._env_overrides["REMINDER_CHECK_WINDOW_SECONDS"] = int(
-                os.environ["PENDO_REMINDER_CHECK_WINDOW"]
-            )
+    def _port(cls, config: Mapping[str, Any]) -> int:
+        value = config.get("web_port", cls._RUNTIME_DEFAULTS.web_port)
+        if type(value) is not int or not 1 <= value <= 65_535:
+            raise ValueError("plugins.pendo.web_port must be an integer from 1 to 65535")
+        return value
 
     @classmethod
-    def configure(cls, config: dict[str, Any] | None = None) -> None:
-        """按默认值 -> 全局 config.json -> 环境变量 的顺序应用配置。"""
-        cls.reset_runtime_config()
-        cls.from_global_config(config)
-        cls.from_env()
+    def configure(
+        cls,
+        config: Mapping[str, Any],
+        *,
+        settings_revision: int | None = None,
+    ) -> bool:
+        """Validate and atomically publish one ``plugins.pendo`` generation."""
 
-    @classmethod
-    def get(cls, key: str, default: Any = None) -> Any:
-        """获取配置值，优先使用环境变量覆盖"""
-        if key in cls._env_overrides:
-            return cls._env_overrides[key]
-        return getattr(cls, key, default)
+        if not isinstance(config, Mapping):
+            raise TypeError("plugins.pendo must be a mapping")
+        if settings_revision is not None and (
+            type(settings_revision) is not int or settings_revision < 0
+        ):
+            raise ValueError("Pendo settings revision must be a non-negative integer")
 
-    @classmethod
-    def get_user_settings_defaults(cls) -> dict[str, Any]:
-        """获取用户设置默认值字典"""
-        return {
-            "timezone": cls.DEFAULT_TIMEZONE,
-            "quiet_hours_start": cls.DEFAULT_QUIET_HOURS_START,
-            "quiet_hours_end": cls.DEFAULT_QUIET_HOURS_END,
-            "daily_report_time": cls.DEFAULT_DAILY_REPORT_TIME,
-            "diary_remind_time": cls.DEFAULT_DIARY_REMIND_TIME,
-            "default_category": cls.DEFAULT_CATEGORY,
-        }
+        candidate = PendoRuntimeSettings(
+            web_enabled=cls._boolean(config, "web_enabled", cls._RUNTIME_DEFAULTS.web_enabled),
+            web_host=cls._host(config),
+            web_port=cls._port(config),
+            web_session_cookie_secure=cls._boolean(
+                config,
+                "web_session_cookie_secure",
+                cls._RUNTIME_DEFAULTS.web_session_cookie_secure,
+            ),
+            web_demo_enabled=cls._boolean(
+                config,
+                "web_demo_enabled",
+                cls._RUNTIME_DEFAULTS.web_demo_enabled,
+            ),
+        )
 
-    @classmethod
-    def get_reminder_config(cls) -> dict[str, Any]:
-        """获取提醒配置字典"""
-        return {
-            "check_window_seconds": cls.REMINDER_CHECK_WINDOW_SECONDS,
-            "max_retry": cls.REMINDER_MAX_RETRY,
-        }
+        with cls._runtime_lock:
+            current_revision = cls._runtime_revision
+            if (
+                settings_revision is not None
+                and current_revision is not None
+                and settings_revision < current_revision
+            ):
+                return False
+            if (
+                settings_revision is not None
+                and settings_revision == current_revision
+                and candidate != cls._runtime_settings
+            ):
+                raise RuntimeError("conflicting Pendo settings for the same revision")
+            changed = candidate != cls._runtime_settings
+            cls._runtime_settings = candidate
+            if settings_revision is not None:
+                cls._runtime_revision = settings_revision
+            return changed
 
-    @classmethod
-    def get_ai_config(cls) -> dict[str, Any]:
-        """获取AI配置字典"""
-        return {
-            "timeout": cls.AI_PARSE_TIMEOUT,
-            "temperature": cls.AI_PARSE_TEMPERATURE,
-            "max_tokens": cls.AI_MAX_TOKENS,
-            "fallback_to_rules": cls.AI_FALLBACK_TO_RULES,
-        }
-
-
-# 提醒策略配置
-REMINDER_POLICIES = {
-    "meeting": {
-        "name": "会议提醒",
-        "reminders": [
-            {"offset_days": -1, "offset_hours": 12, "message": "明天有会议"},
-            {"offset_hours": -2, "message": "2小时后有会议"},
-            {"offset_minutes": -15, "message": "15分钟后会议开始"},
-        ],
-    },
-    "travel": {
-        "name": "出行提醒",
-        "reminders": [
-            {"offset_days": -1, "message": "明天有行程"},
-            {"offset_hours": -3, "message": "3小时后出发"},
-            {"offset_hours": -1, "message": "1小时后出发"},
-        ],
-    },
-    "deadline": {
-        "name": "截止日期提醒",
-        "reminders": [
-            {"offset_days": -7, "message": "还有7天截止"},
-            {"offset_days": -3, "message": "还有3天截止"},
-            {"offset_days": -1, "message": "明天截止"},
-            {"offset_hours": -2, "message": "2小时后截止"},
-        ],
-    },
-    "habit": {
-        "name": "习惯打卡提醒",
-        "reminders": [
-            {"offset_minutes": 0, "message": "该打卡了"},
-        ],
-    },
-    "default": {
-        "name": "默认提醒",
-        "reminders": [
-            {"offset_hours": -1, "message": "1小时后"},
-        ],
-    },
-}
 
 # 日记模板配置
 DIARY_TEMPLATES = {
@@ -392,4 +330,3 @@ LEDGER_INCOME_CATEGORIES = [
     {"id": "reimburse", "name": "报销", "icon": "🧾"},
     {"id": "other", "name": "其他", "icon": "📌"},
 ]
-

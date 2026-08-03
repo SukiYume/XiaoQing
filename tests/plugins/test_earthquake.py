@@ -85,6 +85,9 @@ class TrackingSession:
     def __exit__(self, exc_type, exc, traceback) -> None:
         self.closed = True
 
+    def close(self) -> None:
+        self.closed = True
+
 
 @pytest.fixture
 def context(tmp_path: Path):
@@ -106,7 +109,7 @@ def test_create_session_only_constructs_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_api_pipeline_uses_one_session_and_one_worker_thread(context) -> None:
+async def test_api_pipeline_uses_one_session_and_one_worker_per_scan(context) -> None:
     session = TrackingSession()
     calls: list[tuple[str, str, object, int, dict]] = []
 
@@ -124,14 +127,21 @@ async def test_api_pipeline_uses_one_session_and_one_worker_thread(context) -> N
         patch.object(earthquake, "requests_request_bounded", side_effect=bounded),
     ):
         result = await earthquake._fetch_earthquake_news(context, force=True)
+        second = await earthquake._fetch_earthquake_news(context, force=True)
 
     assert "4.5级地震" in str(result)
-    assert [call[0] for call in calls] == ["POST", "GET", "GET"]
-    assert len({call[3] for call in calls}) == 1
-    assert calls[0][3] != main_thread
+    assert "4.5级地震" in str(second)
+    assert [call[0] for call in calls] == ["POST", "GET", "GET", "GET"]
+    assert len({call[3] for call in calls[:3]}) == 1
+    assert all(call[3] != main_thread for call in calls)
     assert all(call[2] is session for call in calls)
     assert all(call[4]["redirect_policy"].max_hops == 0 for call in calls)
-    assert session.entered and session.closed
+    visitor_data = calls[0][4]["request_kwargs"]["data"]
+    assert visitor_data["ver"] == earthquake._WEIBO_VISITOR_VERSION
+    assert visitor_data["rid"] == earthquake._WEIBO_VISITOR_RID
+    assert not session.closed
+    await earthquake.shutdown(context)
+    assert session.closed
 
 
 @pytest.mark.asyncio
@@ -158,7 +168,26 @@ async def test_bootstrap_failures_are_logged_but_index_is_still_attempted(contex
     assert "4.5级地震" in str(result)
     assert len(calls) == 3
     assert report.call_count == 2
+    await earthquake.shutdown(context)
     assert session.closed
+
+
+def test_repeated_bootstrap_failures_are_escalated(context, caplog) -> None:
+    session = TrackingSession()
+    with (
+        patch.object(
+            earthquake,
+            "requests_request_bounded",
+            side_effect=requests.RequestException("visitor unavailable"),
+        ),
+        patch.object(earthquake, "public_error_message", return_value="safe"),
+        caplog.at_level("ERROR", logger="plugins.earthquake.main"),
+    ):
+        assert all(not earthquake._bootstrap_session(session, context) for _ in range(3))
+
+    assert context.state["earthquake_bootstrap_failures"] == 3
+    assert "failed consecutively" in caplog.text
+    earthquake._close_session(session)
 
 
 @pytest.mark.asyncio
@@ -180,6 +209,7 @@ async def test_index_failure_closes_session_and_returns_stable_error(context) ->
         result = await earthquake._fetch_earthquake_news(context, force=True)
 
     assert "XQ-PLUGIN-UNEXPECTED" in str(result)
+    await earthquake.shutdown(context)
     assert session.closed
 
 
@@ -203,8 +233,6 @@ def test_api_limits_and_mime_policies_are_explicit() -> None:
         ({"ok": True, "data": {}}, False),
         ({"data": {"cards": []}}, True),
         ({"data": {"cards": {}}}, True),
-        ({"data": {"cards": [None]}}, True),
-        ({"data": {"cards": [{"mblog": []}]}}, True),
     ],
 )
 def test_api_envelope_rejects_malformed_structures(payload, require_cards: bool) -> None:
@@ -218,21 +246,91 @@ def test_api_envelope_rejects_excess_cards() -> None:
         earthquake._validate_api_envelope(payload, require_cards=True)
 
 
+@pytest.mark.parametrize(
+    "cards",
+    [
+        [None],
+        [{"mblog": []}],
+        [{"card_group": {}}],
+        [{"card_group": [None]}],
+    ],
+)
+def test_card_expansion_rejects_malformed_nodes(cards: object) -> None:
+    with pytest.raises(ResponseFormatError):
+        earthquake._iter_mblogs(cards)
+
+
+def test_card_expansion_applies_one_budget_to_nested_nodes() -> None:
+    cards = [{"card_group": [{}] * earthquake._MAX_WEIBO_CARDS}]
+    with pytest.raises(ResponseLimitError, match="nested"):
+        earthquake._iter_mblogs(cards)
+
+
+def test_grouped_cards_keep_their_display_order() -> None:
+    first = {"id": "3"}
+    nested = {"id": "2"}
+    last = {"id": "1"}
+    cards = [
+        {"mblog": first, "card_group": [{"mblog": nested}]},
+        {"mblog": last},
+    ]
+    assert earthquake._iter_mblogs(cards) == [first, nested, last]
+
+
 def test_state_round_trip_and_corrupt_recovery(context) -> None:
     earthquake._save_since(context, "42")
     assert earthquake._load_since(context) == "42"
     (context.data_dir / "earthquake.json").write_text("{broken", encoding="utf-8")
-    assert earthquake._load_since(context) == "0"
-    assert json.loads((context.data_dir / "earthquake.json").read_text()) == {"since_id": "0"}
+    assert earthquake._load_since(context) == "42"
+    assert json.loads((context.data_dir / "earthquake.json").read_text()) == {"since_id": "42"}
+    assert len(list(context.data_dir.glob("earthquake.json.corrupt-*"))) == 1
 
 
-@pytest.mark.parametrize("payload", [[], {"since_id": "x"}, {"since_id": -1}, {"since_id": True}])
-def test_state_wrong_shape_or_cursor_resets_safely(context, payload) -> None:
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {"since_id": "x"},
+        {"since_id": -1},
+        {"since_id": True},
+        {"since_id": 1.0},
+        {"since_id": "17", "extra": True},
+    ],
+)
+def test_state_wrong_shape_or_cursor_recovers_checkpoint(context, payload) -> None:
+    earthquake._save_since(context, "17")
     state_path = context.data_dir / "earthquake.json"
     state_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    assert earthquake._load_since(context) == "0"
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {"since_id": "0"}
+    assert earthquake._load_since(context) == "17"
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"since_id": "17"}
+
+
+def test_state_file_size_is_bounded_before_json_decode(context) -> None:
+    earthquake._save_since(context, "23")
+    state_path = context.data_dir / "earthquake.json"
+    state_path.write_bytes(b"0" * (earthquake.MAX_STATE_BYTES + 1))
+
+    assert earthquake._load_since(context) == "23"
+    quarantined = list(context.data_dir.glob("earthquake.json.corrupt-*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].stat().st_size == earthquake.MAX_STATE_BYTES + 1
+
+
+def test_state_symlink_is_quarantined_without_touching_target(context) -> None:
+    earthquake._save_since(context, "29")
+    state_path = context.data_dir / "earthquake.json"
+    target = context.data_dir / "external-state.json"
+    target.write_text('{"since_id":"999"}', encoding="utf-8")
+    state_path.unlink()
+    try:
+        state_path.symlink_to(target.name)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+
+    assert earthquake._load_since(context) == "29"
+    assert target.read_text(encoding="utf-8") == '{"since_id":"999"}'
+    assert not state_path.is_symlink()
 
 
 def test_magnitude_and_clean_text_parsing() -> None:
@@ -241,6 +339,41 @@ def test_magnitude_and_clean_text_parsing() -> None:
     assert "<a href=" not in clean
     assert earthquake._extract_magnitude(clean) == 4.5
     assert earthquake._extract_magnitude("无震级") is None
+    assert earthquake._extract_magnitude("发生999级地震") is None
+
+
+def test_text_cleaning_removes_hidden_nodes_and_enforces_budget(monkeypatch) -> None:
+    raw = (
+        "<script>secret</script><style>hidden</style>"
+        "#地震快讯#<b>中国地震台网正式测定</b>\x00：发生4.0级地震"
+    )
+    cleaned = earthquake._extract_clean_text(raw)
+    assert "secret" not in cleaned
+    assert "hidden" not in cleaned
+    assert "\x00" not in cleaned
+
+    monkeypatch.setattr(earthquake, "MAX_RAW_TEXT_CHARS", 3)
+    with pytest.raises(ResponseLimitError, match="raw text"):
+        earthquake._extract_clean_text("1234")
+
+
+def test_prepared_card_keeps_text_but_drops_untrusted_figure_url() -> None:
+    for figure_url in (
+        "https://example.test/map.jpg",
+        "https://[broken",
+        "https://user@wx1.sinaimg.cn/map.jpg",
+        "https://wx1.sinaimg.cn:444/map.jpg",
+    ):
+        prepared = earthquake._prepare_mblog(
+            {
+                "id": "42",
+                "text": EARTHQUAKE_TEXT,
+                "original_pic": figure_url,
+            }
+        )
+        assert prepared is not None
+        assert prepared.event_id == "42"
+        assert prepared.figure_url is None
 
 
 @pytest.mark.asyncio
@@ -250,12 +383,28 @@ async def test_manual_query_does_not_advance_cursor(context) -> None:
     with (
         patch.object(earthquake, "_create_session", return_value=session),
         patch.object(earthquake, "_bootstrap_session"),
-        patch.object(earthquake, "_fetch_weibo", return_value=_index([_card("11")])),
+        patch.object(earthquake, "_fetch_weibo", return_value=[_card("11")["mblog"]]),
     ):
         result = await earthquake._fetch_earthquake_news(context, force=True)
     assert result
     assert earthquake._load_since(context) == "10"
+    await earthquake.shutdown(context)
     assert session.closed
+
+
+@pytest.mark.asyncio
+async def test_manual_query_does_not_read_or_repair_corrupt_cursor(context) -> None:
+    state_path = context.data_dir / "earthquake.json"
+    state_path.write_text("{broken", encoding="utf-8")
+    with (
+        patch.object(earthquake, "_create_session", return_value=TrackingSession()),
+        patch.object(earthquake, "_bootstrap_session"),
+        patch.object(earthquake, "_fetch_weibo", return_value=[_card("11")["mblog"]]),
+    ):
+        result = await earthquake._fetch_earthquake_news(context, force=True)
+    assert result
+    assert state_path.read_text(encoding="utf-8") == "{broken"
+    assert not list(context.data_dir.glob("earthquake.json.corrupt-*"))
 
 
 @pytest.mark.asyncio
@@ -265,12 +414,34 @@ async def test_scheduled_scan_keeps_scanning_after_low_magnitude(context) -> Non
     with (
         patch.object(earthquake, "_create_session", return_value=TrackingSession()),
         patch.object(earthquake, "_bootstrap_session"),
-        patch.object(earthquake, "_fetch_weibo", return_value=_index(cards)),
+        patch.object(
+            earthquake,
+            "_fetch_weibo",
+            return_value=[card["mblog"] for card in cards],
+        ),
     ):
         result = await earthquake._fetch_earthquake_news(context, force=False)
     assert "5.0级地震" in str(result)
     assert "3.5级地震" not in str(result)
     assert earthquake._load_since(context) == "200"
+
+
+def test_feed_selection_scans_sorts_and_deduplicates_out_of_order_events() -> None:
+    mblogs = [
+        _card("198", magnitude="5.0")["mblog"],
+        _card("202", magnitude="5.2")["mblog"],
+        _card("200", magnitude="5.0")["mblog"],
+        _card("202", magnitude="6.0")["mblog"],
+        _card("201", magnitude="5.1")["mblog"],
+    ]
+
+    scheduled = earthquake._select_earthquakes(mblogs, since_id="199", force=False)
+    manual = earthquake._select_earthquakes(mblogs, since_id="199", force=True)
+
+    assert scheduled.event_ids == ("200", "201", "202")
+    assert scheduled.newest_seen_id == "202"
+    assert len(scheduled.cards) == 3
+    assert manual.event_ids == ("202",)
 
 
 @pytest.mark.asyncio
@@ -300,11 +471,30 @@ async def test_scheduled_pending_cursor_is_committed_only_after_delivery(context
 
 
 @pytest.mark.asyncio
+async def test_scheduled_unknown_delivery_advances_cursor_without_retry(context) -> None:
+    context.default_groups = lambda: [123]
+    context.send_action = AsyncMock(return_value=None)
+
+    async def fake_fetch(ctx, force=False, advance_cursor=True):
+        del force, advance_cursor
+        ctx.state["earthquake_pending_since"] = "200"
+        return earthquake.segments("M5 event")
+
+    with (
+        patch.object(earthquake, "_fetch_earthquake_news", new=fake_fetch),
+        patch.object(earthquake, "_save_since") as save,
+    ):
+        await earthquake.scheduled(context)
+
+    save.assert_called_once_with(context, "200")
+
+
+@pytest.mark.asyncio
 async def test_empty_manual_query_has_bounded_user_message(context) -> None:
     with (
         patch.object(earthquake, "_create_session", return_value=TrackingSession()),
         patch.object(earthquake, "_bootstrap_session"),
-        patch.object(earthquake, "_fetch_weibo", return_value=_index([])),
+        patch.object(earthquake, "_fetch_weibo", return_value=[]),
     ):
         result = await earthquake._fetch_earthquake_news(context, force=True)
     assert "未获取到地震快讯数据" in str(result)
@@ -340,6 +530,20 @@ def test_valid_single_frame_image_formats(
 def test_image_mime_format_mismatch_is_rejected() -> None:
     with pytest.raises(ResponseFormatError):
         earthquake._validate_image_bytes(_image_bytes("PNG"), media_type="image/jpeg")
+
+
+def test_image_body_and_declared_type_are_bounded() -> None:
+    with pytest.raises(ResponseFormatError, match="empty"):
+        earthquake._validate_image_bytes(b"", media_type="image/png")
+    with pytest.raises(ResponseFormatError, match="MIME"):
+        earthquake._validate_image_bytes(b"not-an-image", media_type="image/gif")
+
+
+def test_image_cache_has_entry_byte_and_age_limits() -> None:
+    limits = earthquake._IMAGE_CACHE_LIMITS
+    assert limits.max_entries == 64
+    assert limits.max_bytes == 64 * 1024 * 1024
+    assert limits.ttl_seconds == 30 * 24 * 60 * 60
 
 
 @pytest.mark.parametrize(
@@ -427,12 +631,14 @@ def test_animated_webp_is_rejected() -> None:
 
 
 def test_pillow_decompression_warning_is_an_error() -> None:
+    from core import image_validation
+
     def warn_on_open(*args, **kwargs):
         del args, kwargs
         warnings.warn("bomb", Image.DecompressionBombWarning, stacklevel=2)
 
     with (
-        patch.object(earthquake.Image, "open", side_effect=warn_on_open),
+        patch.object(image_validation.Image, "open", side_effect=warn_on_open),
         pytest.raises(ResponseLimitError, match="decompression-bomb"),
     ):
         earthquake._validate_image_bytes(_image_bytes("PNG"), media_type="image/png")
@@ -473,6 +679,7 @@ async def test_download_uses_pinned_public_fetch_minimal_headers_and_worker(cont
     kwargs = fetch.await_args.kwargs
     assert kwargs["max_bytes"] == 8 * 1024 * 1024
     assert kwargs["allowed_content_types"] == tuple(earthquake._IMAGE_MIME_FORMATS)
+    assert kwargs["allowed_content_type_prefixes"] == ()
     assert kwargs["allowed_hosts"] == {
         "wx1.sinaimg.cn",
         "wx2.sinaimg.cn",
@@ -498,11 +705,11 @@ def test_invalid_image_is_not_persisted(context) -> None:
         headers={"Content-Type": "image/jpeg"},
     )
     with (
-        patch.object(earthquake, "atomic_write_bytes") as write,
+        patch.object(earthquake.BoundedFileCache, "put_if_absent") as store,
         pytest.raises(ResponseFormatError),
     ):
         earthquake._validate_and_store_figure(context, response)
-    write.assert_not_called()
+    store.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -511,9 +718,14 @@ async def test_image_failure_keeps_already_appended_text(context) -> None:
         clean_text="中国地震台网正式测定：发生5.0级地震",
         magnitude=5.0,
         figure_url="https://wx1.sinaimg.cn/map.jpg",
+        event_id="123",
     )
     with (
-        patch.object(earthquake, "run_sync", new=AsyncMock(return_value=[prepared])),
+        patch.object(
+            earthquake,
+            "run_sync",
+            new=AsyncMock(return_value=earthquake._FetchBatch((prepared,), "0")),
+        ),
         patch.object(
             earthquake,
             "_download_figure",
@@ -551,6 +763,17 @@ async def test_scheduled_api_failure_is_not_broadcast_and_keeps_cursor(context) 
 
 
 @pytest.mark.asyncio
+async def test_scheduled_corrupt_cursor_fails_closed_without_raising(context) -> None:
+    context.default_groups = lambda: [123]
+    (context.data_dir / "earthquake.json").write_text("{broken", encoding="utf-8")
+    with patch.object(earthquake, "public_error_message", return_value="safe") as report:
+        result = await earthquake.scheduled(context)
+    assert result == []
+    context.send_action.assert_not_awaited()
+    assert report.call_count >= 1
+
+
+@pytest.mark.asyncio
 async def test_handle_routes_help_latest_and_default(context) -> None:
     help_result = await earthquake.handle("earthquake", "help", {}, context)
     assert "地震快讯" in str(help_result)
@@ -560,6 +783,24 @@ async def test_handle_routes_help_latest_and_default(context) -> None:
         await earthquake.handle("earthquake", "", {}, context)
     assert fetch.await_count == 2
     fetch.assert_awaited_with(context, force=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", ["unknown", "latest extra", '"unterminated', "latest\n"])
+async def test_handle_rejects_invalid_commands_without_fetching(context, args: str) -> None:
+    fetch = AsyncMock(return_value=earthquake.segments("quake"))
+    with patch.object(earthquake, "_fetch_earthquake_news", new=fetch):
+        result = await earthquake.handle("earthquake", args, {}, context)
+    assert result
+    fetch.assert_not_awaited()
+
+
+def test_notification_id_is_order_independent_and_rejects_bad_event_ids() -> None:
+    first = earthquake._notification_id("200", ["002", 1])
+    second = earthquake._notification_id("0200", ["1", "2", "2"])
+    assert first == second
+    with pytest.raises(ValueError, match="event id"):
+        earthquake._notification_id("200", [True])
 
 
 def test_runtime_has_no_direct_unbounded_response_reads() -> None:

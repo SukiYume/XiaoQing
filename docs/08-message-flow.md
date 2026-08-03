@@ -47,9 +47,9 @@ Dispatcher.handle_event()
 ┌─────────────────────────────────────────────────────────────┐
 │  1. 事件类型检查（仅处理 message 类型）                      │
 │  2. 消息解析（提取文本、user_id、group_id）                  │
-│  3. URL-only 短路（clean_text 为单个 URL）                   │
-│  4. 处理门控（私聊 / 配置放行 / has_prefix / 活跃会话）       │
-│  5. 线性分发：只喊名字 → 命令 → 未知命令 → 会话 → 闲聊       │
+│  3. 处理门控（私聊 / 配置放行 / has_prefix / 活跃会话）       │
+│  4. URL-only → url_parser（门控与静音之后，静音时跳过）      │
+│  5. 线性分发：只喊名字 → 会话 → 命令 → 未知命令 → 闲聊       │
 └─────────────────────────────────────────────────────────────┘
     ↓
 返回 OneBot 消息段列表
@@ -62,21 +62,22 @@ Dispatcher.handle_event()
 `Dispatcher._process_event()` 按固定 A-G 顺序执行：
 
 ```
-Step A: URL short-circuit（clean_text 单 URL → url_parser；mute 不影响）
-Step B: 处理门控
+Step A: 处理门控
         - 私聊：处理
         - require_bot_name_in_group=False：处理
         - has_prefix（/ 开头 OR bot_name OR @me）：处理
         - 有活跃 session 且非 is_only_bot_name：处理
-        - 否则：丢弃
+        - 否则：丢弃（单 URL 直接丢弃；允许的普通群闲聊交 smalltalk）
+        · 命令解析（router.resolve）在观察之前完成；命令/URL/会话/命令前缀输入不进入观察
+Step B: is_url_only → url_parser（在门控与静音之后；静音时跳过，SSRF 目标被拦截）
 Step C: is_only_bot_name → 默认回应 / call_bot_name_only
-Step D: router 命中 → 执行命令
-Step E: has_command_prefix 且命令未命中 → 未知命令提示
-Step F: 活跃 session → 转 session 插件
-Step G: 回落 smalltalk provider（mute 仅在此步阻塞）
+Step D: 活跃 session → 转 session 插件
+Step E: router 命中 → 执行命令（含 permission/contexts 调用前校验）
+Step F: has_command_prefix 且命令未命中且首字母为字母 → 未知命令提示
+Step G: 回落 smalltalk provider（mute 仅在此步及普通群闲聊阻塞）
 ```
 
-`xiaoqing_chat` 作为 `smalltalk_provider` 时，dispatcher 会先调用 `observe_message()` 让插件观察消息；只有消息通过门控并落到 Step G 时才调用 `handle_smalltalk()`。插件内部继续负责 attention gate、硬频控、普通插话概率、heartflow、PFC planner 和 reply checker。
+`xiaoqing_chat` 作为 `smalltalk_provider` 时，dispatcher 会在解析命令之后、按敏感类别决定是否调用 `observe_message()` 让插件观察消息（命令、URL、活跃会话和命令前缀输入不进入观察）；只有消息通过门控并落到 Step G 时才调用 `handle_smalltalk()`。插件内部继续负责 attention gate、硬频控、普通插话概率、heartflow、PFC planner 和 reply checker。
 
 ---
 
@@ -143,7 +144,7 @@ text = "你好世界"
 
 ### 3.1 处理门控
 
-Dispatcher 在 URL-only 短路之后进入 Step B。满足以下任一条件时继续处理：
+处理门控是流程的第一步（Step A）。满足以下任一条件时继续处理：
 
 | 条件 | 说明 |
 |------|------|
@@ -152,7 +153,7 @@ Dispatcher 在 URL-only 短路之后进入 Step B。满足以下任一条件时�
 | `has_prefix=True` | 命令前缀、bot_name 或 @me 任一信号命中 |
 | 活跃会话 | 用户处于 session，且当前消息不是 `is_only_bot_name` |
 
-否则直接返回 `[]`。`random_reply_rate` 不参与 dispatcher 分发，群聊回复概率由 smalltalk provider 自己决定。
+否则直接返回 `[]`。群聊回复概率由 smalltalk provider 自己决定。
 
 ### 3.2 `has_prefix` 与 `has_command_prefix`
 
@@ -296,17 +297,18 @@ async def handle(command: str, args: str, event: dict, context) -> List[dict]:
 
 ### 5.1 会话触发
 
-会话处理在 Step F 执行，位于命令匹配和未知命令提示之后、smalltalk 回落之前：
+会话处理在 Step D 执行，位于命令匹配和未知命令提示之前：
 
 ```python
-# Step F 处理逻辑
-session = await session_manager.get(user_id, group_id)
+# Step D 处理逻辑
+session = await session_manager.peek(user_id, group_id)
 if session:
     # 路由到会话插件的 handle_session()
 ```
 
 **重要特性**：
-- **优先级**：会话处理在命令之后、闲聊之前
+- **模态优先级**：活跃会话先消费输入；仅当会话处理器明确返回 `None` 时才回落到全局命令
+- **空白输入**：无会话时继续静默丢弃，有会话时可用于“直接回车采用默认值”
 - **绕过普通触发条件**：群聊普通文本没有 `has_prefix` 时，只要活跃会话存在仍会处理
 - **只喊名字优先**：`is_only_bot_name` 先走 Step C，不会被活跃会话抢走
 
@@ -316,7 +318,7 @@ if session:
 
 ```python
 async def handle(command, args, event, context):
-    session = await context.create_session(
+    await context.create_session(
         initial_data={"target": 42},
         timeout=180  # 3 分钟超时
     )
@@ -342,6 +344,20 @@ async def handle_session(text: str, event: dict, context, session) -> List[dict]
         await context.end_session()
         return segments("恭喜，猜对了！")
 ```
+
+`SessionManager` 不向插件暴露正式存储对象：`create/get/peek/list/get_all` 返回的都是受控
+值树克隆快照。会话数据仅接受字符串键的内建 `dict/list/tuple` 与不可变标量，拒绝循环、
+自定义复制钩子、超过 64 层或 100,000 节点的数据。Dispatcher 传给 `handle_session()` 的对象
+是一次 `update()` 事务的工作副本；只有 handler 成功返回时才以第二次受控克隆一次性提交，
+`version` 只增加 1。异常、`BaseException`、值校验失败或任务取消不会改动正式数据、时间戳、
+版本或 `session_id`。
+同一会话被 create 替换时会生成新的 `session_id`，普通 update 保留原 ID，因此 Dispatcher
+能区分“同插件名但已被替换”的新会话。
+
+事务 callback 对同一键的 `get/peek/exists/create/delete` 使用暂存视图，嵌套 update 会被
+拒绝；callback 创建的子任务不继承事务，必须等当前键提交后才能读取。同步和异步 callback
+都在框架自建任务中运行并经过提交前取消检查。callback 应直接返回普通值或 coroutine，不得
+返回已经调度的 `Task`/`Future`；误返对象会被取消并完整回收。
 
 ### 5.4 退出命令
 
@@ -388,7 +404,6 @@ async def handle_session(text: str, event: dict, context, session) -> List[dict]
 
 当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时：
 
-- **`random_reply_rate`** - 兼容保留字段，不参与 dispatcher 分发
 - **插件自行决定是否回复** - `xiaoqing_chat` 有自己的 attention gate、频率控制和普通插话概率判断
 - **directed attention 会强制回复** - 一旦进入插件，`/xc`、私聊、`@`、直接叫 `bot_name`、只喊名字后的追问、reply 引用小青，或有近期上下文锚点的“她/ta”共指召唤会走 forced 路径
 - **返回空列表表示不回复** - 插件决定不回复时返回 `[]`
@@ -433,6 +448,7 @@ async def handle_smalltalk(text: str, event: dict, context) -> List[dict]:
 |----------|---------------|
 | 带命令前缀的消息 | ✅ 处理 |
 | 主动 @ 机器人 | ✅ 处理命令，❌ 不闲聊 |
+| 单 URL | ❌ 静音时跳过 `url_parser`（URL 解析在门控与静音之后） |
 | 随机回复 | ❌ 不回复 |
 | 定时任务 | ❌ 不发送（由插件自行判断） |
 
@@ -445,6 +461,8 @@ async def handle_smalltalk(text: str, event: dict, context) -> List[dict]:
 XiaoQing 使用多层并发控制机制来管理消息处理，确保系统稳定性和响应性能。
 
 ### 8.2 OneBot WebSocket Client 处理流程
+
+上游连接正常关闭、异常关闭或短暂建立后都会先进入带连续抖动的 5–60 秒指数退避，避免远端立即关闭时形成忙循环；连续连接至少 30 秒才重置退避。配置地址、token 或凭据可信状态的代际更新会唤醒当前等待与连接 attempt；旧代即使吞掉取消或 close 失败，也只会进入隔离集合，不会阻塞新代。非空 token 只有在客户端签名明确支持以关键字传入 `additional_headers` 或 `extra_headers` 时才允许连接。只有 VALID secrets 中的缺省/空字符串代表匿名；来源异常或 token 类型错误时 HTTP/WS 均 fail closed。发送方在等待 WebSocket 恢复期间每轮重新捕获当前可信 client，因此热更新后的新代可以接手发送，而旧代迟到事件会在来源门禁处被丢弃。
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -545,38 +563,42 @@ queue_key = f"user:{user_id}"
 | T7 | 群F用户6 | `group:F:user:6` | ⏸️ **等待并发槽释放** |
 | T8 | 群A用户1 | `group:A:user:1` | ⏳ 在队列中等待（排在 T2 后面） |
 
-### 8.5 Inbound WebSocket Server 队列机制
+### 8.5 Inbound HTTP/WS 统一接纳与排序
 
-对于 Inbound Server（被动接收推送），有额外的队列机制：
+Inbound HTTP `/event` 与被动 WebSocket `/ws` 不再分别调度。两种传输都先完成鉴权、JSON 解析和事件归一化，再进入同一个 manager-owned dispatcher；即使 HTTP 与 WS 监听在不同端口，它们也共享这一实例。
 
+```text
+HTTP /event ─┐
+             ├─ 鉴权、解析、归一化 ─ admit（接纳序号）─ 按会话键 FIFO lane
+WS /ws ──────┘                                      ├─ 最多 N 个 worker
+                                                    └─ Dispatcher.handle_event()
 ```
-WebSocket 消息到达
-    ↓
-放入队列 (maxsize = ws_queue_size, 默认 200)
-    ↓
-inbound_ws_max_workers 个 worker 从队列取消息 (默认 8 个)
-    ↓
-通过 Semaphore 获取处理许可 (max_concurrency, 默认 5)
-    ↓
-处理消息 (Dispatcher)
-```
+
+`admit` 是到达顺序的线性化点。私聊键为用户，群聊键为群与用户的组合；同一键每次只运行一个事件，因此 `HTTP → WS`、`WS → HTTP` 和单一传输内都按接纳序号严格执行。不同键由 ready-key 轮转调度，可以并行且不会被一个持续繁忙的会话长期饿死。缺少可用会话键的事件获得独立 lane，不会被错误地全局串行化。
+
+FIFO 契约覆盖 handler 调用及其状态副作用，到 handler 返回 Action 列表为止；不同 HTTP 连接的响应写入与 WS socket 的 Action 写入属于独立、有界的传输阶段，不承诺跨传输的网络到达顺序。这样慢客户端不会重新阻塞同会话的业务状态机。
+
+dispatcher 的总接纳容量为“正在运行的 worker 数 + `ws_queue_size` 个等待项”。队列满时 HTTP 立即返回 `503`，WS 返回过载错误；取消尚未运行的请求会把 ticket 从 lane 中物理删除。`inbound_token` 更新后，排队事件会在执行前再次核对鉴权代：旧凭据已接纳但尚未运行的事件不会调用业务 handler，已经运行的事件可以结束，但旧代响应会被丢弃。
+
+停止或配置热切换会先关闭接纳并有界排空旧 dispatcher。不同端口的候选监听器可预先绑定，但必须等旧代排空后才统一提交接纳，避免两代 dispatcher 对同一会话并行执行；部分监听器关闭失败时，旧 dispatcher 的所有权会保留以便重试。WebSocket Action 发送另有独立的有界超时，慢连接或发送异常不会卡住同键事件的后续处理。
 
 **配置参数**：
 
 | 参数 | 默认值 | 作用范围 | 说明 |
 |------|--------|----------|------|
-| `ws_queue_size` | 200 | Inbound + OneBot | 等待处理的消息队列长度 |
-| `inbound_ws_max_workers` | 8 | Inbound Server | 并发处理队列消息的 worker 数 |
+| `ws_queue_size` | 200 | Inbound HTTP/WS + OneBot WS Client | Inbound 统一 dispatcher 的等待上限；也作为主动 OneBot WS Client 的接收缓冲上限。配置范围 `1..10000` |
+| `inbound_ws_max_workers` | 8 | Inbound HTTP/WS | 统一 dispatcher 的 worker 数；名称为兼容旧配置保留，范围 `1..128` |
 
-⚠️ **注意**：`inbound_ws_max_workers` 仅对 Inbound WS Server 有效；`ws_queue_size` 同时影响 Inbound WS Server 与 OneBot WS Client。
+`inbound_ws_max_workers` 不影响主动连接 NapCat 的 OneBot WS Client。Inbound worker 取出事件后仍会经过全局 `max_concurrency` 门禁；增加 worker 不能绕过全局并发上限。
 
 ### 8.6 核心配置参数
 
 | 参数 | 默认值 | 适用范围 | 说明 |
 |------|--------|----------|------|
 | **`max_concurrency`** | 5 | 全局 | 🔥 最重要！全局并发控制 |
-| `inbound_ws_max_workers` | 8 | Inbound Server | Worker 协程数 |
-| `ws_queue_size` | 200 | Inbound + OneBot | 队列长度（0 表示不限制） |
+| `inbound_ws_max_workers` | 8 | Inbound HTTP/WS | 统一入站 dispatcher 的 worker 数 |
+| `ws_queue_size` | 200 | Inbound + OneBot | 有界等待长度；配置值必须为 `1..10000` |
+| `inbound_ws_broadcast_timeout_seconds` | 5.0 | Inbound Server | 单个 WS 客户端的 Action 广播超时；失败后允许 HTTP 回退 |
 
 ### 8.7 配置建议
 
@@ -606,8 +628,8 @@ inbound_ws_max_workers 个 worker 从队列取消息 (默认 8 个)
 ```
 
 **优化原则**：
-1. `inbound_ws_max_workers >= max_concurrency`（避免 worker 空闲）
-2. `ws_queue_size` 足够大以吸收突发流量（或设为 0 不限制）
+1. `inbound_ws_max_workers` 通常不必高于 `max_concurrency`；额外 worker 只会在下游门禁等待
+2. `ws_queue_size` 应足以吸收可接受的短时突发，但必须保持有界；队列越大，最坏等待时间和内存占用越高
 3. `max_concurrency` 不要设置过高，避免资源耗尽
 
 ### 8.8 性能监控
@@ -664,25 +686,23 @@ post_type == "message" ? ── 否 → 忽略
     ↓ 是
 MessageParser.parse()
     ↓
-observe_message()
-    ↓
-Step A: ctx.is_url_only ?
-    ├─ 是 → _invoke_url_parser()
-    └─ 否
-        ↓
-Step B: 处理门控
+Step A: 处理门控
     ├─ 私聊
     ├─ require_bot_name_in_group=False
     ├─ has_prefix
     └─ 活跃 session
-        ↓
+    │   （先 router.resolve；再按敏感类别决定 observe_message()）
+    └─ 未通过 → 单 URL 丢弃 / 允许的普通群闲聊交 smalltalk / 否则返回 []
+        ↓ 通过
+Step B: ctx.is_url_only ? ── 是 → 群静音? 是→返回[] 否→_invoke_url_parser()
+        ↓ 否
 Step C: is_only_bot_name ? ── 是 → _handle_bot_name_only()
         ↓ 否
-Step D: router.resolve(clean_text) 命中 ? ── 是 → _execute_command()
+Step D: 活跃 session ? ── 是 → _try_handle_session()
         ↓ 否
-Step E: has_command_prefix ? ── 是 → 未知命令提示
+Step E: router.resolve(clean_text) 命中 ? ── 是 → _execute_command()
         ↓ 否
-Step F: 活跃 session ? ── 是 → _try_handle_session()
+Step F: has_command_prefix 且首字母为字母 ? ── 是 → 未知命令提示
         ↓ 否
 Step G: 群静音 ? ── 是 → 返回 []
         ↓ 否

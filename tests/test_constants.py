@@ -12,6 +12,7 @@ from core import constants
 # Default Configuration Values Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_default_session_timeout():
     """Test DEFAULT_SESSION_TIMEOUT_SEC is reasonable"""
@@ -55,6 +56,13 @@ def test_default_inbound_ws_queue_size():
 
 
 @pytest.mark.unit
+def test_default_inbound_ws_broadcast_timeout():
+    """A stalled inbound client must have a finite delivery deadline."""
+    assert constants.DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS == 5.0
+    assert constants.DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS > 0
+
+
+@pytest.mark.unit
 def test_default_log_truncate_len():
     """Test DEFAULT_LOG_TRUNCATE_LEN is positive"""
     assert constants.DEFAULT_LOG_TRUNCATE_LEN == 50
@@ -64,6 +72,7 @@ def test_default_log_truncate_len():
 # ============================================================
 # Time Conversion Constants Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_seconds_per_minute():
@@ -80,6 +89,7 @@ def test_minutes_per_hour():
 # ============================================================
 # Session Exit Commands Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_exit_commands_set():
@@ -112,6 +122,7 @@ def test_exit_commands_membership():
 # Default Bot Name Responses Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_default_bot_name_responses():
     """Test DEFAULT_BOT_NAME_RESPONSES_LIST contains values"""
@@ -132,6 +143,7 @@ def test_default_bot_name_responses_content():
 # ============================================================
 # Plugin Security Constants Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_plugin_init_timeout():
@@ -191,6 +203,7 @@ def test_plugin_name_pattern_invalid_names():
 # Message Preview Length Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_max_message_preview_length():
     """Test MAX_MESSAGE_PREVIEW_LENGTH is positive"""
@@ -209,6 +222,7 @@ def test_max_short_text_length():
 # ============================================================
 # Constant Immutability Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_constants_are_immutable_strings():
@@ -235,6 +249,7 @@ def test_constants_are_immutable_strings():
 # Constant Type Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_constant_types():
     """Test that constants have correct types"""
@@ -242,6 +257,7 @@ def test_constant_types():
     assert isinstance(constants.DEFAULT_INBOUND_PORT, int)
     assert isinstance(constants.DEFAULT_WS_PATH, str)
     assert isinstance(constants.DEFAULT_MAX_CONCURRENCY, int)
+    assert isinstance(constants.DEFAULT_INBOUND_WS_BROADCAST_TIMEOUT_SECONDS, float)
     assert isinstance(constants.SECONDS_PER_MINUTE, int)
     assert isinstance(constants.MINUTES_PER_HOUR, int)
     assert isinstance(constants.EXIT_COMMANDS_SET, frozenset)

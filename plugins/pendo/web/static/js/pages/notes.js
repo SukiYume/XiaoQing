@@ -1,15 +1,43 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
+import { showModal, closeModal, showConfirmModal, safeHtml } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
 import { renderPagination } from '../components/pagination.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
-import { formatDateTime, formatMonthDay, previewText } from '../utils/format.js';
+import {
+    errorMessage,
+    finiteNumber,
+    formatDateTime,
+    formatMonthDay,
+    noteCadenceSubtitle,
+    nonNegativeInteger,
+    previewText,
+    textValue,
+} from '../utils/format.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
 const PAGE_SIZE = 18;
 const CSS_ID = 'pendo-notes-styles';
+const RANGE_KEYS = new Set(RANGE_PRESET_OPTIONS.map(({ key }) => key));
+const RANGE_LABELS = new Map(RANGE_PRESET_OPTIONS.map(({ key, label }) => [key, label]));
+const CADENCE_GRANULARITIES = new Set(['day', 'week', 'month', 'year']);
+const DEFAULT_FILTERS = Object.freeze({
+    range: 'year',
+    customStart: '',
+    customEnd: '',
+    category: '',
+    tag: '',
+    keyword: '',
+});
+const REFERENCE_LABELS = Object.freeze({
+    event: '日程',
+    task: '待办',
+    note: '笔记',
+    diary: '日记',
+    ledger: '账目',
+    item: '条目',
+});
 
 const NOTE_FIELDS = [
     { name: 'title', label: '标题', type: 'text', required: true },
@@ -25,33 +53,28 @@ let _overview = null;
 let _total = 0;
 let _page = 1;
 let _loading = false;
-let _dataChangedHandler = null;
-let _filters = {
-    range: 'year',
-    customStart: '',
-    customEnd: '',
-    category: '',
-    tag: '',
-    keyword: '',
-};
+let _unsubscribeDataChanges = null;
+let _loadVersion = 0;
+let _filters = { ...DEFAULT_FILTERS };
 let _activeRange = { start: '', end: '' };
+const _pendingDeletes = new Set();
 
-function todayKey() {
-    return todayRangeKey();
+// ---------------------------------------------------------------------------
+// 数据边界：所有接口响应先归一化，再进入模板和交互逻辑
+// ---------------------------------------------------------------------------
+
+function unitInterval(value) {
+    return Math.min(1, Math.max(0, finiteNumber(value)));
 }
 
-function formatDate(value) {
-    return formatMonthDay(value);
-}
-
-function tagList(value) {
+function uniqueTextList(value, { caseInsensitive = false } = {}) {
     const list = Array.isArray(value) ? value : [];
     const seen = new Set();
     return list
-        .map((tag) => String(tag || '').trim())
+        .map((item) => textValue(item).trim())
         .filter(Boolean)
-        .filter((tag) => {
-            const key = tag.toLowerCase();
+        .filter((item) => {
+            const key = caseInsensitive ? item.toLocaleLowerCase() : item;
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
@@ -59,16 +82,16 @@ function tagList(value) {
 }
 
 function tagsToString(tags) {
-    return tagList(tags).join(', ');
+    return uniqueTextList(tags, { caseInsensitive: true }).join(', ');
 }
 
 function tagsFromInput(value) {
-    return tagList(String(value || '').split(','));
+    return uniqueTextList(textValue(value).split(/[,，]/), { caseInsensitive: true });
 }
 
 function idListFromInput(value) {
     const seen = new Set();
-    return String(value || '')
+    return textValue(value)
         .split(/[,，\s]+/)
         .map((item) => item.trim())
         .filter(Boolean)
@@ -79,33 +102,116 @@ function idListFromInput(value) {
         });
 }
 
+function normalizeReference(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const id = textValue(value.id).trim();
+    if (!id) return null;
+    return {
+        id,
+        kind: textValue(value.kind, 'item').trim() || 'item',
+        type: textValue(value.type).trim(),
+        title: textValue(value.title).trim(),
+    };
+}
+
+function normalizeReferences(value) {
+    const seen = new Set();
+    return (Array.isArray(value) ? value : []).map(normalizeReference).filter((reference) => {
+        if (!reference || seen.has(reference.id)) return false;
+        seen.add(reference.id);
+        return true;
+    });
+}
+
+function normalizeNote(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const id = textValue(value.id).trim();
+    if (!id) return null;
+    return {
+        id,
+        title: textValue(value.title).trim(),
+        category: textValue(value.category).trim(),
+        tags: uniqueTextList(value.tags, { caseInsensitive: true }),
+        content: textValue(value.content),
+        references: normalizeReferences(value.references),
+        related_items: uniqueTextList(value.related_items),
+        created_at: textValue(value.created_at).trim(),
+        updated_at: textValue(value.updated_at).trim(),
+    };
+}
+
+function normalizeOverview(value) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const rawSummary =
+        source.summary && typeof source.summary === 'object' && !Array.isArray(source.summary) ? source.summary : {};
+    const categories = (Array.isArray(source.categories) ? source.categories : [])
+        .map((item) => ({
+            category: textValue(item?.category).trim(),
+            count: nonNegativeInteger(item?.count),
+            share: unitInterval(item?.share),
+        }))
+        .filter(({ category }) => category);
+    const hotTags = (Array.isArray(source.hot_tags) ? source.hot_tags : [])
+        .map((item) => ({
+            tag: textValue(item?.tag).trim(),
+            count: nonNegativeInteger(item?.count),
+        }))
+        .filter(({ tag }) => tag);
+    const cadence = (Array.isArray(source.cadence) ? source.cadence : [])
+        .map((item) => ({
+            label: textValue(item?.label || item?.date).trim(),
+            count: nonNegativeInteger(item?.count),
+        }))
+        .filter(({ label }) => label);
+    const granularity = textValue(source.cadence_granularity).trim();
+    return {
+        summary: {
+            total_count: nonNegativeInteger(rawSummary.total_count),
+            week_new_count: nonNegativeInteger(rawSummary.week_new_count),
+            average_length: Math.max(0, finiteNumber(rawSummary.average_length)),
+            tagged_rate: unitInterval(rawSummary.tagged_rate),
+        },
+        categories,
+        hot_tags: hotTags,
+        cadence,
+        cadence_granularity: CADENCE_GRANULARITIES.has(granularity) ? granularity : 'day',
+        all_categories: uniqueTextList(
+            [
+                ...(Array.isArray(source.all_categories) ? source.all_categories : []),
+                ...categories.map(({ category }) => category),
+            ],
+            { caseInsensitive: true },
+        ),
+    };
+}
+
 function refsToString(note) {
     const values = [
-        ...((Array.isArray(note?.references) ? note.references : []).map((ref) => ref?.id)),
+        ...(Array.isArray(note?.references) ? note.references : []).map((ref) => ref?.id),
         ...(Array.isArray(note?.related_items) ? note.related_items : []),
     ];
     return idListFromInput(values.join(',')).join(', ');
 }
 
-function referencesForPayload(value) {
-    return idListFromInput(value).map((id) => ({ kind: 'item', id }));
-}
-
 function noteWordCount(note) {
-    return String(note?.content || '').trim().length;
+    return textValue(note?.content).trim().length;
 }
 
+// 只支持页面需要的 Markdown 子集；先转义原文，再添加受控标签，避免正文注入 HTML。
 function renderInlineMarkdown(text) {
-    let html = escapeHtml(text || '');
+    let html = escapeHtml(textValue(text));
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+    html = html.replace(
+        /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+    );
     return html;
 }
 
 function renderMarkdown(content) {
-    const lines = String(content || '').replace(/\r\n/g, '\n').split('\n');
+    const lines = textValue(content).replace(/\r\n?/g, '\n').split('\n');
     const html = [];
     let listOpen = false;
     let codeOpen = false;
@@ -167,10 +273,10 @@ function renderMarkdown(content) {
 }
 
 function noteReferences(note) {
-    const refs = Array.isArray(note?.references) ? [...note.references] : [];
+    const refs = normalizeReferences(note?.references);
     const existing = new Set(refs.map((ref) => String(ref?.id || '')).filter(Boolean));
-    (Array.isArray(note?.related_items) ? note.related_items : []).forEach((id) => {
-        const refId = String(id || '').trim();
+    uniqueTextList(note?.related_items).forEach((id) => {
+        const refId = textValue(id).trim();
         if (refId && !existing.has(refId)) {
             existing.add(refId);
             refs.push({ kind: 'item', id: refId });
@@ -182,17 +288,18 @@ function noteReferences(note) {
 function renderNoteReferences(note) {
     const refs = noteReferences(note);
     if (!refs.length) return '';
-    const labels = { event: '日程', task: '待办', note: '笔记', diary: '日记', ledger: '账目', item: '条目' };
     return `
         <section class="note-reference-panel">
             <h4>关联条目</h4>
             <div class="note-reference-list">
-                ${refs.map((ref) => {
-                    const type = ref.type || ref.kind || 'item';
-                    const label = labels[type] || labels[ref.kind] || '条目';
-                    const title = ref.title || ref.id;
-                    return `<div class="note-reference-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(title)}</strong><code>${escapeHtml(ref.id)}</code></div>`;
-                }).join('')}
+                ${refs
+                    .map((ref) => {
+                        const type = ref.type || ref.kind || 'item';
+                        const label = REFERENCE_LABELS[type] || REFERENCE_LABELS[ref.kind] || '条目';
+                        const title = ref.title || ref.id;
+                        return `<div class="note-reference-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(title)}</strong><code>${escapeHtml(ref.id)}</code></div>`;
+                    })
+                    .join('')}
             </div>
         </section>
     `;
@@ -205,7 +312,7 @@ function categoryOptions() {
 
 function deriveRangeDates() {
     return derivePresetRange(_filters.range, {
-        today: todayKey(),
+        today: todayRangeKey(),
         customStart: _filters.customStart,
         customEnd: _filters.customEnd,
         customFallback: 'month',
@@ -213,35 +320,23 @@ function deriveRangeDates() {
 }
 
 function rangeLabel() {
-    const option = RANGE_PRESET_OPTIONS.find((item) => item.key === _filters.range);
-    return option?.label || '当前范围';
-}
-
-function noteCadenceSubtitle(granularity) {
-    if (granularity === 'year') return `按${rangeLabel()}查看每年新增笔记数量。`;
-    if (granularity === 'month') return `按${rangeLabel()}查看每月新增笔记数量。`;
-    if (granularity === 'week') return `按${rangeLabel()}查看每周新增笔记数量。`;
-    return `按${rangeLabel()}查看每天的笔记输入频率。`;
-}
-
-async function fetchNoteRangeBounds(fallbackEnd = todayKey()) {
-    return fetchItemRangeBounds(api, {
-        type: 'note',
-        sortField: 'created_at',
-        startField: 'created_at',
-        endField: 'created_at',
-        fallbackEnd,
-    });
+    return RANGE_LABELS.get(_filters.range) || '当前范围';
 }
 
 async function resolveActiveRange() {
     const range = deriveRangeDates();
     if (_filters.range !== 'all') return range;
-    return fetchNoteRangeBounds(range.end);
+    return fetchItemRangeBounds(api, {
+        type: 'note',
+        sortField: 'created_at',
+        startField: 'created_at',
+        endField: 'created_at',
+        fallbackEnd: range.end,
+    });
 }
 
 function overviewReferenceDay(range) {
-    const today = todayKey();
+    const today = todayRangeKey();
     if (range?.start && range?.end && range.start <= today && today <= range.end) {
         return today;
     }
@@ -256,9 +351,25 @@ function dateTimeRangeForQuery(range) {
     };
 }
 
+function sharedFilterParams() {
+    const params = {};
+    if (_filters.category) params.category = _filters.category;
+    if (_filters.tag) params.tags = _filters.tag;
+    return params;
+}
+
+function visualLevel(value, maximum = 1) {
+    if (maximum <= 0) return 0;
+    return Math.min(10, Math.max(0, Math.round((finiteNumber(value) / maximum) * 10)));
+}
+
 function ensureStyles() {
-    injectStyles(CSS_ID, `
+    injectStyles(
+        CSS_ID,
+        `
         ${pageShellCss('notes-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
+
+        /* 页面头部、日期范围与摘要 */
         .notes-hero {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
@@ -299,6 +410,12 @@ function ensureStyles() {
         .notes-range-btn.active {
             background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.28); color: #1d4ed8;
         }
+        .notes-range-btn:focus-visible,
+        .notes-tag-chip:focus-visible,
+        .note-card:focus-visible {
+            outline: 3px solid rgba(59,130,246,0.26);
+            outline-offset: 2px;
+        }
         .notes-custom-range { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
         .notes-date-field {
             width: 100%; max-width: 220px; height: 40px; border-radius: 14px; border: 1px solid rgba(59,130,246,0.14);
@@ -322,6 +439,8 @@ function ensureStyles() {
             overflow-wrap: anywhere; word-break: break-word;
         }
         .notes-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
+
+        /* 概览图表与筛选区 */
         .notes-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.92fr); gap: 16px; align-items: start; }
         .notes-layout-main,
         .notes-layout-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
@@ -335,14 +454,29 @@ function ensureStyles() {
         .notes-panel-head p { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
         .notes-panel-body { padding: 16px 20px 20px; }
         .notes-meter {
-            display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); gap: 8px; align-items: end;
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(34px, 1fr)); gap: 8px; align-items: end;
         }
         .notes-meter-col { display: flex; flex-direction: column; align-items: center; gap: 4px; }
         .notes-meter-value { font-size: 10px; font-weight: 700; color: var(--color-text); }
+        .notes-meter-track {
+            display: flex; align-items: flex-end; width: 100%; height: 50px; overflow: hidden;
+            border-radius: 999px 999px 10px 10px; background: rgba(191,219,254,0.34);
+        }
         .notes-meter-stick {
-            width: 100%; min-height: 8px; border-radius: 999px 999px 10px 10px;
+            width: 100%; height: var(--notes-level, 0%); min-height: 0; border-radius: inherit;
             background: linear-gradient(180deg, rgba(59,130,246,0.9), rgba(14,165,233,0.46));
         }
+        .notes-level-0 { --notes-level: 0%; }
+        .notes-level-1 { --notes-level: 10%; }
+        .notes-level-2 { --notes-level: 20%; }
+        .notes-level-3 { --notes-level: 30%; }
+        .notes-level-4 { --notes-level: 40%; }
+        .notes-level-5 { --notes-level: 50%; }
+        .notes-level-6 { --notes-level: 60%; }
+        .notes-level-7 { --notes-level: 70%; }
+        .notes-level-8 { --notes-level: 80%; }
+        .notes-level-9 { --notes-level: 90%; }
+        .notes-level-10 { --notes-level: 100%; }
         .notes-meter-label { font-size: 10px; color: var(--color-text-secondary); }
         .notes-cadence-panel .notes-panel-body { padding-top: 10px; padding-bottom: 16px; }
         .notes-category-list { display: flex; flex-direction: column; gap: 12px; }
@@ -351,7 +485,10 @@ function ensureStyles() {
         .notes-category-name { font-weight: 700; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .notes-category-count { color: var(--color-text-secondary); font-weight: 700; }
         .notes-category-track { height: 10px; border-radius: 999px; background: rgba(191,219,254,0.42); overflow: hidden; }
-        .notes-category-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgba(59,130,246,0.88), rgba(14,165,233,0.55)); }
+        .notes-category-fill {
+            width: var(--notes-level, 0%); height: 100%; border-radius: inherit;
+            background: linear-gradient(90deg, rgba(59,130,246,0.88), rgba(14,165,233,0.55));
+        }
         .notes-tag-list { display: flex; flex-wrap: wrap; gap: 8px; }
         .notes-tag-chip {
             display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 999px;
@@ -385,6 +522,8 @@ function ensureStyles() {
             background: rgba(255,255,255,0.97);
         }
         .notes-filter-actions { display: flex; align-items: flex-end; justify-content: flex-end; gap: 10px; }
+
+        /* 笔记工作区：焦点卡片与紧凑列表共用原生按钮交互 */
         .notes-workspace {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(239,246,255,0.95));
             border: 1px solid rgba(59,130,246,0.12); border-radius: 26px; box-shadow: 0 18px 34px rgba(37,99,235,0.05);
@@ -398,6 +537,7 @@ function ensureStyles() {
         .notes-workspace-body { padding: 18px 20px 22px; display: flex; flex-direction: column; gap: 16px; }
         .notes-collection { display: flex; flex-direction: column; gap: 14px; }
         .note-card {
+            width: 100%; border: 0; appearance: none; text-align: left; color: inherit; font: inherit;
             cursor: pointer;
             transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
         }
@@ -418,7 +558,7 @@ function ensureStyles() {
             background: rgba(29,78,216,0.10); color: #1d4ed8; font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
             white-space: nowrap; line-height: 1; flex-shrink: 0;
         }
-        .notes-spotlight-title { margin: 0; font-size: 24px; font-weight: 820; line-height: 1.24; letter-spacing: -0.03em; color: var(--color-text); }
+        .notes-spotlight-title { display: block; margin: 0; font-size: 24px; font-weight: 820; line-height: 1.24; letter-spacing: -0.03em; color: var(--color-text); }
         .notes-spotlight-preview {
             font-size: 14px; line-height: 1.8; color: var(--color-text-secondary); word-break: break-word;
             display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
@@ -429,10 +569,11 @@ function ensureStyles() {
             padding-left: 18px; border-left: 1px solid rgba(191,219,254,0.56);
         }
         .notes-spotlight-stat {
+            display: block;
             padding: 12px 14px; border-radius: 16px; background: rgba(255,255,255,0.82); border: 1px solid rgba(191,219,254,0.54);
         }
         .notes-spotlight-stat-label { font-size: 11px; font-weight: 800; color: var(--color-text-secondary); letter-spacing: 0.04em; text-transform: uppercase; }
-        .notes-spotlight-stat-value { margin-top: 6px; font-size: 18px; font-weight: 760; color: var(--color-text); }
+        .notes-spotlight-stat-value { display: block; margin-top: 6px; font-size: 18px; font-weight: 760; color: var(--color-text); }
         .notes-list-shell {
             border: 1px solid rgba(59,130,246,0.10); border-radius: 20px; background: rgba(255,255,255,0.76);
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
@@ -448,7 +589,7 @@ function ensureStyles() {
         .notes-list { display: flex; flex-direction: column; }
         .note-row {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: flex-start;
-            padding: 16px; border-bottom: 1px solid rgba(226,232,240,0.82);
+            padding: 16px; border-bottom: 1px solid rgba(226,232,240,0.82); border-radius: 0;
             background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(248,250,252,0.78));
         }
         .note-row:last-child { border-bottom: none; }
@@ -470,21 +611,18 @@ function ensureStyles() {
             border-radius: 999px; background: rgba(219,234,254,0.8); color: #1d4ed8; font-size: 11px; font-weight: 800;
             white-space: nowrap; line-height: 1; flex-shrink: 0;
         }
-        .note-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-        .note-card-title { margin: 0; font-size: 16px; font-weight: 760; color: var(--color-text); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .note-card-category {
             display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px; background: rgba(59,130,246,0.10);
             color: #1d4ed8; font-size: 11px; font-weight: 700; flex-shrink: 0;
             white-space: nowrap; line-height: 1;
         }
-        .note-card-preview { font-size: 13px; line-height: 1.7; color: var(--color-text-secondary); min-height: 52px; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-        .note-card-tags { display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px; }
         .note-tag {
             display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px;
             background: rgba(219,234,254,0.8); color: #1e40af; font-size: 11px; font-weight: 700;
             white-space: nowrap; line-height: 1; flex-shrink: 0;
         }
-        .note-card-meta { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 11px; color: var(--color-text-secondary); }
+        .note-tag-muted { opacity: 0.72; }
+        .note-muted { opacity: 0.45; }
         .note-row-footer { display: none; }
         .note-row-footer-sep { font-size: 10px; color: var(--color-text-secondary); opacity: 0.6; }
         .note-row-footer-meta { font-size: 11px; color: var(--color-text-secondary); }
@@ -503,6 +641,7 @@ function ensureStyles() {
         .note-view-content code { padding: 2px 5px; border-radius: 6px; background: rgba(15,23,42,0.06); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; }
         .note-view-content pre { overflow-x: auto; padding: 12px; border-radius: 12px; background: #0f172a; color: #e2e8f0; }
         .note-view-content pre code { padding: 0; background: transparent; color: inherit; }
+        .note-view-content a { color: #1d4ed8; overflow-wrap: anywhere; }
         .note-reference-panel { margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(226,232,240,0.85); }
         .note-reference-panel h4 { margin: 0 0 10px; font-size: 13px; font-weight: 800; color: var(--color-text); }
         .note-reference-list { display: flex; flex-direction: column; gap: 8px; }
@@ -511,13 +650,19 @@ function ensureStyles() {
         .note-reference-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
         .note-reference-row code { color: var(--color-text-secondary); font-size: 11px; }
         .note-view-secondary { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
-        ${mediaMax(BREAKPOINTS.XL, `
+        .note-modal-delete { margin-right: auto; }
+        ${mediaMax(
+            BREAKPOINTS.XL,
+            `
             .notes-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .notes-layout { grid-template-columns: 1fr; }
             .notes-spotlight { grid-template-columns: 1fr; }
             .notes-spotlight-side { padding-left: 0; border-left: none; padding-top: 4px; }
-        `)}
-        ${mediaMax(BREAKPOINTS.MOBILE, `
+        `,
+        )}
+        ${mediaMax(
+            BREAKPOINTS.MOBILE,
+            `
             .notes-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .notes-hero-actions { align-items: flex-start; }
             .notes-summary-grid { grid-template-columns: 1fr; }
@@ -549,12 +694,13 @@ function ensureStyles() {
                 display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 6px;
             }
             .note-row-order, .note-card-category, .note-tag { height: 22px; padding: 0 7px; font-size: 10px; }
-            .notes-list-head { padding: 12px 14px; }
-            .notes-list-head { align-items: flex-start; flex-direction: column; }
+            .notes-list-head { padding: 12px 14px; align-items: flex-start; flex-direction: column; }
             .notes-meter { gap: 6px; }
             .notes-cadence-panel .notes-panel-body { padding-bottom: 14px; }
-        `)}
-    `);
+        `,
+        )}
+    `,
+    );
 }
 
 async function fetchOverview(range = _activeRange) {
@@ -562,36 +708,39 @@ async function fetchOverview(range = _activeRange) {
         today: overviewReferenceDay(range),
         start_date: range?.start || '',
         end_date: range?.end || '',
+        ...sharedFilterParams(),
     };
-    if (_filters.category) params.category = _filters.category;
-    if (_filters.tag) params.tags = _filters.tag;
     const res = await api.get('/stats/notes/overview', params);
-    return res.data || null;
+    return normalizeOverview(res?.data);
 }
 
 async function fetchNotes(page = 1, range = _activeRange) {
     const params = {
         type: 'note',
         date_field: 'created_at',
-        page,
+        page: Math.max(1, nonNegativeInteger(page)),
         page_size: PAGE_SIZE,
         sort: 'updated_at',
         order: 'desc',
+        ...sharedFilterParams(),
     };
     const dateRange = dateTimeRangeForQuery(range);
     if (dateRange.start && dateRange.end) {
         params.start_date = dateRange.start;
         params.end_date = dateRange.end;
     }
-    if (_filters.category) params.category = _filters.category;
-    if (_filters.tag) params.tags = _filters.tag;
     if (_filters.keyword) params.keyword = _filters.keyword;
     const res = await api.get('/items', params);
+    const items = (Array.isArray(res?.data?.items) ? res.data.items : []).map(normalizeNote).filter(Boolean);
     return {
-        items: res?.data?.items || [],
-        total: res?.data?.total || 0,
+        items,
+        total: Math.max(items.length, nonNegativeInteger(res?.data?.total)),
     };
 }
+
+// ---------------------------------------------------------------------------
+// 页面渲染：模板只接收已经归一化的数据，动态文本一律转义
+// ---------------------------------------------------------------------------
 
 function renderHero() {
     const summary = _overview?.summary || {};
@@ -601,13 +750,13 @@ function renderHero() {
                 <h2>📝 笔记</h2>
                 <p>集中整理灵感、摘录和工作草稿。</p>
                 <div class="notes-hero-tags">
-                    <span class="notes-hero-tag">${rangeLabel()} ${summary.total_count || 0} 条笔记</span>
+                    <span class="notes-hero-tag">${escapeHtml(rangeLabel())} ${summary.total_count || 0} 条笔记</span>
                     <span class="notes-hero-tag">范围尾端近 7 天 ${summary.week_new_count || 0} 条新增</span>
-                    <span class="notes-hero-tag">${_filters.category || '全部分类'}</span>
+                    <span class="notes-hero-tag">${escapeHtml(_filters.category || '全部分类')}</span>
                 </div>
             </div>
             <div class="notes-hero-actions">
-                <button class="btn btn-primary" id="notes-add-top">＋ 新建笔记</button>
+                <button class="btn btn-primary" id="notes-add-top" type="button">＋ 新建笔记</button>
             </div>
         </section>
     `;
@@ -619,7 +768,7 @@ function renderSummary() {
     return `
         <section class="notes-summary-grid">
             <div class="notes-summary-card">
-                <div class="notes-summary-label">${rangeLabel()}笔记数</div>
+                <div class="notes-summary-label">${escapeHtml(rangeLabel())}笔记数</div>
                 <div class="notes-summary-value">${summary.total_count || 0}</div>
                 <div class="notes-summary-meta">当前时间范围内的累计条目</div>
             </div>
@@ -631,12 +780,12 @@ function renderSummary() {
             <div class="notes-summary-card">
                 <div class="notes-summary-label">平均字数</div>
                 <div class="notes-summary-value">${Math.round(summary.average_length || 0)}</div>
-                <div class="notes-summary-meta">${rangeLabel()}内笔记概况</div>
+                <div class="notes-summary-meta">${escapeHtml(rangeLabel())}内笔记概况</div>
             </div>
             <div class="notes-summary-card">
                 <div class="notes-summary-label">已打标签</div>
                 <div class="notes-summary-value">${taggedRate}%</div>
-                <div class="notes-summary-meta">${rangeLabel()}内便于后续回看与筛选</div>
+                <div class="notes-summary-meta">${escapeHtml(rangeLabel())}内便于后续回看与筛选</div>
             </div>
         </section>
     `;
@@ -644,25 +793,33 @@ function renderSummary() {
 
 function renderRangeControls() {
     const showCustom = _filters.range === 'custom';
-    const rangeText = _activeRange.start && _activeRange.end ? `${_activeRange.start} → ${_activeRange.end}` : '当前范围';
+    const rangeText =
+        _activeRange.start && _activeRange.end ? `${_activeRange.start} → ${_activeRange.end}` : '当前范围';
     return `
         <section class="notes-range-panel">
             <div class="notes-range-row">
-                ${RANGE_PRESET_OPTIONS.map((item) => `
-                    <button class="notes-range-btn ${_filters.range === item.key ? 'active' : ''}" type="button" data-range="${item.key}">
-                        ${item.label}
+                ${RANGE_PRESET_OPTIONS.map(
+                    (item) => `
+                    <button class="notes-range-btn ${_filters.range === item.key ? 'active' : ''}" type="button"
+                            data-range="${escapeHtml(item.key)}" aria-pressed="${_filters.range === item.key}">
+                        ${escapeHtml(item.label)}
                     </button>
-                `).join('')}
+                `,
+                ).join('')}
             </div>
-            ${showCustom ? `
+            ${
+                showCustom
+                    ? `
                 <div class="notes-custom-range">
-                    <input class="notes-date-field" id="notes-range-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${_filters.customStart || ''}" aria-label="笔记范围开始日期">
+                    <input class="notes-date-field" id="notes-range-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_filters.customStart)}" aria-label="笔记范围开始日期">
                     <span class="notes-range-sep">至</span>
-                    <input class="notes-date-field" id="notes-range-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${_filters.customEnd || ''}" aria-label="笔记范围结束日期">
+                    <input class="notes-date-field" id="notes-range-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_filters.customEnd)}" aria-label="笔记范围结束日期">
                     <button class="btn btn-secondary" id="notes-range-apply" type="button">应用</button>
                 </div>
-            ` : ''}
-            <div class="notes-range-meta">${rangeText}</div>
+            `
+                    : ''
+            }
+            <div class="notes-range-meta">${escapeHtml(rangeText)}</div>
         </section>
     `;
 }
@@ -671,24 +828,30 @@ function renderCadencePanel() {
     const cadence = _overview?.cadence || [];
     const maxCount = Math.max(1, ...cadence.map((item) => item.count || 0));
     const granularity = _overview?.cadence_granularity || 'day';
-    const columns = Math.min(Math.max(cadence.length, 1), 12);
-    const style = columns ? ` style="grid-template-columns:repeat(${columns}, minmax(0, 1fr));"` : '';
     return `
         <section class="notes-panel notes-cadence-panel">
             <div class="notes-panel-head">
                 <div>
                     <h3>书写节奏</h3>
-                    <p>${noteCadenceSubtitle(granularity)}</p>
+                    <p>${escapeHtml(noteCadenceSubtitle(granularity, rangeLabel()))}</p>
                 </div>
             </div>
             <div class="notes-panel-body">
-                <div class="notes-meter"${style}>
-                    ${cadence.map((item) => `
+                <div class="notes-meter">
+                    ${cadence
+                        .map((item) => {
+                            const level = visualLevel(item.count, maxCount);
+                            const label = `${item.label}：${item.count} 条`;
+                            return `
                         <div class="notes-meter-col">
                             <div class="notes-meter-value">${item.count}</div>
-                            <div class="notes-meter-stick" style="height:${8 + (item.count / maxCount) * 42}px;"></div>
-                            <div class="notes-meter-label">${item.label}</div>
-                        </div>`).join('')}
+                            <div class="notes-meter-track" role="img" aria-label="${escapeHtml(label)}">
+                                <div class="notes-meter-stick notes-level-${level}"></div>
+                            </div>
+                            <div class="notes-meter-label">${escapeHtml(item.label)}</div>
+                        </div>`;
+                        })
+                        .join('')}
                 </div>
             </div>
         </section>
@@ -712,15 +875,18 @@ function renderCategoryPanel() {
     }
     return `
         <section class="notes-panel">
-                <div class="notes-panel-head">
-                    <div>
-                        <h3>分类分布</h3>
-                        <p>查看${rangeLabel()}内笔记主要集中在哪些主题。</p>
-                    </div>
+            <div class="notes-panel-head">
+                <div>
+                    <h3>分类分布</h3>
+                    <p>查看${escapeHtml(rangeLabel())}内笔记主要集中在哪些主题。</p>
                 </div>
+            </div>
             <div class="notes-panel-body">
                 <div class="notes-category-list">
-                    ${categories.map((item) => `
+                    ${categories
+                        .map((item) => {
+                            const percent = Math.round(item.share * 100);
+                            return `
                         <div class="notes-category-row">
                             <div>
                                 <div class="notes-category-top">
@@ -728,11 +894,14 @@ function renderCategoryPanel() {
                                     <span class="notes-category-count">${item.count} 条</span>
                                 </div>
                                 <div class="notes-category-track">
-                                    <div class="notes-category-fill" style="width:${Math.max(10, Math.round(item.share * 100))}%;"></div>
+                                    <div class="notes-category-fill notes-level-${visualLevel(item.share)}"
+                                         role="img" aria-label="${escapeHtml(`${item.category}：${percent}%`)}"></div>
                                 </div>
                             </div>
-                            <div class="note-tag">${Math.round(item.share * 100)}%</div>
-                        </div>`).join('')}
+                            <div class="note-tag">${percent}%</div>
+                        </div>`;
+                        })
+                        .join('')}
                 </div>
             </div>
         </section>
@@ -756,19 +925,23 @@ function renderTagPanel() {
     }
     return `
         <section class="notes-panel">
-                <div class="notes-panel-head">
-                    <div>
-                        <h3>热门标签</h3>
-                        <p>点击标签可直接筛选当前范围内的笔记。</p>
-                    </div>
+            <div class="notes-panel-head">
+                <div>
+                    <h3>热门标签</h3>
+                    <p>点击标签可直接筛选当前范围内的笔记。</p>
                 </div>
+            </div>
             <div class="notes-panel-body">
                 <div class="notes-tag-list">
-                    ${tags.map((item) => `
+                    ${tags
+                        .map(
+                            (item) => `
                         <button class="notes-tag-chip" data-tag="${escapeHtml(item.tag)}" type="button">
                             <span>#${escapeHtml(item.tag)}</span>
                             <span>${item.count}</span>
-                        </button>`).join('')}
+                        </button>`,
+                        )
+                        .join('')}
                 </div>
             </div>
         </section>
@@ -805,69 +978,76 @@ function renderFilters() {
 }
 
 function renderNoteTags(tags, limit = 4, emptyLabel = '未打标签') {
-    if (!tags.length) return `<span class="note-tag" style="opacity:0.72;">${emptyLabel}</span>`;
-    return tags.slice(0, limit).map((tag) => `<span class="note-tag">#${escapeHtml(tag)}</span>`).join('');
+    if (!tags.length) return `<span class="note-tag note-tag-muted">${escapeHtml(emptyLabel)}</span>`;
+    return tags
+        .slice(0, limit)
+        .map((tag) => `<span class="note-tag">#${escapeHtml(tag)}</span>`)
+        .join('');
 }
 
 function renderSpotlight(note) {
-    const tags = tagList(note.tags);
+    const tags = uniqueTextList(note.tags, { caseInsensitive: true });
     const preview = previewText(note.content, 220);
     const spotlightLabel = _page === 1 ? '最新更新' : '本页首条';
+    const title = note.title || '(无标题)';
     return `
-        <article class="note-card notes-spotlight" data-id="${escapeHtml(String(note.id || ''))}">
-            <div class="notes-spotlight-main">
-                <div class="notes-spotlight-kicker">
+        <button class="note-card notes-spotlight" type="button" data-open-note="${escapeHtml(note.id)}"
+                aria-label="${escapeHtml(`打开笔记：${title}`)}">
+            <span class="notes-spotlight-main">
+                <span class="notes-spotlight-kicker">
                     <span class="notes-spotlight-label">${spotlightLabel}</span>
                     <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
-                </div>
-                <h4 class="notes-spotlight-title">${escapeHtml(note.title || '(无标题)')}</h4>
-                <div class="notes-spotlight-preview">${preview ? escapeHtml(preview) : '<span style="opacity:0.45;">（无内容）</span>'}</div>
-                <div class="notes-spotlight-tags">${renderNoteTags(tags, 5)}</div>
-            </div>
-            <div class="notes-spotlight-side">
-                <div class="notes-spotlight-stat">
-                    <div class="notes-spotlight-stat-label">更新日期</div>
-                    <div class="notes-spotlight-stat-value">${formatDate(note.updated_at || note.created_at)}</div>
-                </div>
-                <div class="notes-spotlight-stat">
-                    <div class="notes-spotlight-stat-label">内容长度</div>
-                    <div class="notes-spotlight-stat-value">${noteWordCount(note)} 字</div>
-                </div>
-            </div>
-        </article>
+                </span>
+                <span class="notes-spotlight-title">${escapeHtml(title)}</span>
+                <span class="notes-spotlight-preview">${preview ? escapeHtml(preview) : '<span class="note-muted">（无内容）</span>'}</span>
+                <span class="notes-spotlight-tags">${renderNoteTags(tags, 5)}</span>
+            </span>
+            <span class="notes-spotlight-side">
+                <span class="notes-spotlight-stat">
+                    <span class="notes-spotlight-stat-label">更新日期</span>
+                    <span class="notes-spotlight-stat-value">${escapeHtml(formatMonthDay(note.updated_at || note.created_at))}</span>
+                </span>
+                <span class="notes-spotlight-stat">
+                    <span class="notes-spotlight-stat-label">内容长度</span>
+                    <span class="notes-spotlight-stat-value">${noteWordCount(note)} 字</span>
+                </span>
+            </span>
+        </button>
     `;
 }
 
 function renderNoteRow(note, index) {
-    const tags = tagList(note.tags);
+    const tags = uniqueTextList(note.tags, { caseInsensitive: true });
     const preview = previewText(note.content, 96);
-    const date = formatDate(note.updated_at || note.created_at);
+    const date = formatMonthDay(note.updated_at || note.created_at);
     const wordCount = noteWordCount(note);
+    const title = note.title || '(无标题)';
     return `
-        <article class="note-card note-row" data-id="${escapeHtml(String(note.id || ''))}">
-            <div class="note-row-main">
-                <div class="note-row-top">
-                    <h4 class="note-row-title">${escapeHtml(note.title || '(无标题)')}</h4>
+        <button class="note-card note-row" type="button" data-open-note="${escapeHtml(note.id)}"
+                aria-label="${escapeHtml(`打开笔记：${title}`)}">
+            <span class="note-row-main">
+                <span class="note-row-top">
+                    <span class="note-row-title">${escapeHtml(title)}</span>
                     <span class="note-card-category note-row-cat-desktop">${escapeHtml(note.category || '未分类')}</span>
-                </div>
-                <div class="note-row-preview">${preview ? escapeHtml(preview) : '<span style="opacity:0.45;">（无内容）</span>'}</div>
-                <div class="note-row-tags">${renderNoteTags(tags, 3)}</div>
-                <div class="note-row-footer">
+                </span>
+                <span class="note-row-preview">${preview ? escapeHtml(preview) : '<span class="note-muted">（无内容）</span>'}</span>
+                <span class="note-row-tags">${renderNoteTags(tags, 3)}</span>
+                <span class="note-row-footer">
                     <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
                     ${renderNoteTags(tags, 3)}
                     <span class="note-row-footer-sep">·</span>
-                    <span class="note-row-footer-meta">${date}</span>
+                    <span class="note-row-footer-meta">${escapeHtml(date)}</span>
                     <span class="note-row-footer-meta">${wordCount} 字</span>
-                </div>
-            </div>
-            <div class="note-row-side">
+                </span>
+            </span>
+            <span class="note-row-side">
                 <span class="note-row-order">${String(index + 1).padStart(2, '0')}</span>
-                <div class="note-row-meta">
-                    <span>${date}</span>
+                <span class="note-row-meta">
+                    <span>${escapeHtml(date)}</span>
                     <span>${wordCount} 字</span>
-                </div>
-            </div>
-        </article>
+                </span>
+            </span>
+        </button>
     `;
 }
 
@@ -879,7 +1059,9 @@ function renderWorkspaceCollection() {
     return `
         <div class="notes-collection">
             ${spotlight ? renderSpotlight(spotlight) : ''}
-            ${rest.length ? `
+            ${
+                rest.length
+                    ? `
                 <div class="notes-list-shell">
                     <div class="notes-list-head">
                         <div>
@@ -888,16 +1070,16 @@ function renderWorkspaceCollection() {
                         </div>
                         <div class="note-tag">${rest.length} 条</div>
                     </div>
-                    <div class="notes-list">${rest.map((note, index) => renderNoteRow(note, index + ((_page - 1) * PAGE_SIZE) + 1)).join('')}</div>
-                </div>` : ''}
+                    <div class="notes-list">${rest.map((note, index) => renderNoteRow(note, index + (_page - 1) * PAGE_SIZE + 1)).join('')}</div>
+                </div>`
+                    : ''
+            }
         </div>
     `;
 }
 
 function renderWorkspace() {
-    const subtitle = _page === 1
-        ? '先看最新更新，再快速扫读其余笔记。'
-        : '当前页继续按更新时间浏览笔记。';
+    const subtitle = _page === 1 ? '先看最新更新，再快速扫读其余笔记。' : '当前页继续按更新时间浏览笔记。';
     return `
         <section class="notes-workspace">
             <div class="notes-workspace-head">
@@ -905,7 +1087,7 @@ function renderWorkspace() {
                     <h3 class="notes-workspace-title">最近笔记</h3>
                     <p class="notes-workspace-subtitle">${subtitle}</p>
                 </div>
-                <div class="note-tag">${_total} 条匹配</div>
+                <div class="note-tag">${nonNegativeInteger(_total)} 条匹配</div>
             </div>
             <div class="notes-workspace-body">
                 ${renderWorkspaceCollection()}
@@ -920,7 +1102,11 @@ function renderPage() {
     ensureStyles();
 
     if (_loading && !_overview) {
-        _container.innerHTML = `<div class="notes-shell"><div class="notes-empty">正在加载笔记空间...</div></div>`;
+        _container.innerHTML = `
+            <div class="notes-shell" aria-busy="true">
+                <div class="notes-empty" role="status">正在加载笔记空间...</div>
+            </div>
+        `;
         return;
     }
 
@@ -952,7 +1138,9 @@ function renderPage() {
             pageSize: PAGE_SIZE,
             total: _total,
             onChange: async (page) => {
-                _page = page;
+                const nextPage = Math.max(1, nonNegativeInteger(page));
+                if (nextPage === _page) return;
+                _page = nextPage;
                 await loadAndRender();
             },
         });
@@ -962,176 +1150,237 @@ function renderPage() {
 }
 
 async function loadAndRender() {
+    const root = _container;
+    if (!root) return;
+    const version = ++_loadVersion;
+    const requestedPage = _page;
     _loading = true;
     renderPage();
     try {
         const activeRange = await resolveActiveRange();
-        const [overview, list] = await Promise.all([
+        if (_container !== root || version !== _loadVersion) return;
+        const [overview, initialList] = await Promise.all([
             fetchOverview(activeRange),
-            fetchNotes(_page, activeRange),
+            fetchNotes(requestedPage, activeRange),
         ]);
+        if (_container !== root || version !== _loadVersion) return;
+
+        let list = initialList;
+        const maxPage = Math.max(1, Math.ceil(list.total / PAGE_SIZE));
+        if (requestedPage > maxPage) {
+            _page = maxPage;
+            list = await fetchNotes(maxPage, activeRange);
+            if (_container !== root || version !== _loadVersion) return;
+        } else {
+            _page = requestedPage;
+        }
         _activeRange = activeRange;
         _overview = overview;
         _items = list.items;
         _total = list.total;
     } catch (err) {
+        if (_container !== root || version !== _loadVersion) return;
         _activeRange = deriveRangeDates();
         _overview = null;
         _items = [];
         _total = 0;
-        showToast(`加载笔记失败：${err.message}`, 'error');
+        showToast(`加载笔记失败：${errorMessage(err)}`, 'error');
     } finally {
-        _loading = false;
+        if (_container === root && version === _loadVersion) {
+            _loading = false;
+            renderPage();
+        }
     }
-    renderPage();
 }
 
-export function openNoteViewModal(note) {
+// ---------------------------------------------------------------------------
+// 详情与编辑：删除逻辑只有一个入口，所有变更只广播一次失效事件
+// ---------------------------------------------------------------------------
+
+function dispatchNoteChange() {
+    window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'note' } }));
+}
+
+async function confirmAndDeleteNote(note, cancelText, reopen) {
+    if (_pendingDeletes.has(note.id)) return false;
+    _pendingDeletes.add(note.id);
+    try {
+        const confirmed = await showConfirmModal({
+            title: '删除笔记',
+            message: `确定要删除“${note.title || '这条笔记'}”吗？删除后内容将无法恢复。`,
+            confirmText: '删除',
+            cancelText,
+            tone: 'danger',
+        });
+        if (!confirmed) {
+            reopen?.();
+            return false;
+        }
+        await api.delete(`/items/${encodeURIComponent(note.id)}`);
+        showToast('笔记已删除', 'success');
+        dispatchNoteChange();
+        return true;
+    } catch (error) {
+        showToast(`删除失败：${errorMessage(error)}`, 'error');
+        reopen?.();
+        return false;
+    } finally {
+        _pendingDeletes.delete(note.id);
+    }
+}
+
+export function openNoteViewModal(rawNote) {
     ensureStyles();
-    const tags = tagList(note.tags);
+    const note = normalizeNote(rawNote);
+    if (!note) {
+        showToast('无法打开无效笔记', 'warning');
+        return null;
+    }
+    const tags = note.tags;
     const bodyHTML = `
         <div class="note-view-meta">
             <span class="note-card-category">${escapeHtml(note.category || '未分类')}</span>
             ${tags.map((tag) => `<span class="note-tag">#${escapeHtml(tag)}</span>`).join('')}
-            <span class="note-view-secondary">更新于 ${formatDateTime(note.updated_at || note.created_at)}</span>
+            <span class="note-view-secondary">更新于 ${escapeHtml(formatDateTime(note.updated_at || note.created_at))}</span>
         </div>
         <div class="note-view-content">${renderMarkdown(note.content || '')}</div>
         ${renderNoteReferences(note)}
     `;
     const footer = `
-        <button class="btn btn-danger btn-sm" id="note-delete" style="margin-right:auto;">删除</button>
-        <button class="btn btn-secondary" id="note-close">关闭</button>
-        <button class="btn btn-primary" id="note-edit">编辑</button>
+        <button class="btn btn-danger btn-sm note-modal-delete" id="note-delete" type="button">删除</button>
+        <button class="btn btn-secondary" id="note-close" type="button">关闭</button>
+        <button class="btn btn-primary" id="note-edit" type="button">编辑</button>
     `;
-    const content = showModal(note.title || '(无标题)', bodyHTML, { footer });
-    content.querySelector('#note-close').onclick = closeModal;
-    content.querySelector('#note-edit').onclick = () => {
+    const content = showModal(note.title || '(无标题)', safeHtml(bodyHTML), {
+        footer: safeHtml(footer),
+    });
+    const closeButton = content.querySelector('#note-close');
+    const editButton = content.querySelector('#note-edit');
+    const deleteButton = content.querySelector('#note-delete');
+    closeButton.onclick = closeModal;
+    editButton.onclick = () => {
         closeModal();
         openNoteFormModal(note);
     };
-    content.querySelector('#note-delete').onclick = async () => {
+    deleteButton.onclick = async () => {
+        if (deleteButton.disabled) return;
+        deleteButton.disabled = true;
         closeModal();
-        const confirmed = await showConfirmModal({
-            title: '删除笔记',
-            message: `确定要删除“${note.title || '这条笔记'}”吗？删除后内容将无法恢复。`,
-            confirmText: '删除',
-            cancelText: '返回详情',
-            tone: 'danger',
-        });
-        if (!confirmed) {
-            openNoteViewModal(note);
-            return;
-        }
-        try {
-            await api.delete(`/items/${note.id}`);
-            showToast('笔记已删除', 'success');
-            closeModal();
-            window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'note' } }));
-            await loadAndRender();
-        } catch (err) {
-            showToast(`删除失败：${err.message}`, 'error');
-        }
+        await confirmAndDeleteNote(note, '返回详情', () => openNoteViewModal(note));
     };
+    return content;
 }
 
-export function openNoteFormModal(existing = null) {
+function openNoteFormModal(existing = null) {
     ensureStyles();
-    const isEdit = Boolean(existing);
+    const note = existing ? normalizeNote(existing) : null;
+    if (existing && !note) {
+        showToast('无法编辑无效笔记', 'warning');
+        return null;
+    }
+    const isEdit = Boolean(note);
     const fields = NOTE_FIELDS.map((field) => {
         let value = '';
-        if (existing) {
-            if (field.name === 'tags') value = tagsToString(existing.tags);
-            else if (field.name === 'related_items') value = refsToString(existing);
-            else value = existing[field.name] ?? '';
+        if (note) {
+            if (field.name === 'tags') value = tagsToString(note.tags);
+            else if (field.name === 'related_items') value = refsToString(note);
+            else value = note[field.name] ?? '';
         }
         return { ...field, value };
     });
 
     const content = showModal(
         isEdit ? '编辑笔记' : '新建笔记',
-        `<form id="note-form">${buildFormHTML(fields)}</form>`,
+        safeHtml(`<form id="note-form">${buildFormHTML(fields)}</form>`),
         {
-            footer: `
-                ${isEdit ? '<button class="btn btn-danger btn-sm" id="note-modal-delete" style="margin-right:auto;">删除</button>' : ''}
-                <button class="btn btn-secondary" id="note-modal-cancel">取消</button>
-                <button class="btn btn-primary" id="note-modal-save">保存</button>
-            `,
+            footer: safeHtml(`
+                ${isEdit ? '<button class="btn btn-danger btn-sm note-modal-delete" id="note-modal-delete" type="button">删除</button>' : ''}
+                <button class="btn btn-secondary" id="note-modal-cancel" type="button">取消</button>
+                <button class="btn btn-primary" id="note-modal-save" type="button">保存</button>
+            `),
         },
     );
 
     initFormInteractions(content);
+    const form = content.querySelector('#note-form');
+    const saveButton = content.querySelector('#note-modal-save');
     content.querySelector('#note-modal-cancel').onclick = closeModal;
 
-    if (isEdit) {
-        content.querySelector('#note-modal-delete').onclick = async () => {
+    if (note) {
+        const deleteButton = content.querySelector('#note-modal-delete');
+        deleteButton.onclick = async () => {
+            if (deleteButton.disabled) return;
+            deleteButton.disabled = true;
             closeModal();
-            const confirmed = await showConfirmModal({
-                title: '删除笔记',
-                message: `确定要删除“${existing.title || '这条笔记'}”吗？删除后内容将无法恢复。`,
-                confirmText: '删除',
-                cancelText: '返回编辑',
-                tone: 'danger',
-            });
-            if (!confirmed) {
-                openNoteFormModal(existing);
-                return;
-            }
-            try {
-                await api.delete(`/items/${existing.id}`);
-                showToast('笔记已删除', 'success');
-                window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'note' } }));
-                await loadAndRender();
-            } catch (err) {
-                showToast(`删除失败：${err.message}`, 'error');
-            }
+            await confirmAndDeleteNote(note, '返回编辑', () => openNoteFormModal(note));
         };
     }
 
-    content.querySelector('#note-modal-save').onclick = async () => {
-        const form = content.querySelector('#note-form');
-        const data = getFormData(form);
-        if (!data.title) {
+    let saving = false;
+    const saveNote = async (event) => {
+        event?.preventDefault?.();
+        if (saving) return;
+        const data = getFormData(form) || {};
+        const title = textValue(data.title).trim();
+        if (!title) {
             showToast('请填写标题', 'warning');
             return;
         }
-        data.tags = tagsFromInput(data.tags || '');
-        const relatedItems = idListFromInput(data.related_items || '');
-        data.related_items = relatedItems;
-        data.references = referencesForPayload(relatedItems.join(','));
+        const relatedItems = idListFromInput(data.related_items);
+        const payload = {
+            title,
+            category: textValue(data.category).trim(),
+            tags: tagsFromInput(data.tags),
+            related_items: relatedItems,
+            references: relatedItems.map((id) => ({ kind: 'item', id })),
+            content: textValue(data.content),
+        };
+        saving = true;
+        saveButton.disabled = true;
         try {
-            if (isEdit) {
-                await api.put(`/items/${existing.id}`, data);
+            if (note) {
+                await api.put(`/items/${encodeURIComponent(note.id)}`, payload);
                 showToast('笔记已更新', 'success');
             } else {
-                await api.post('/items', { type: 'note', ...data });
+                await api.post('/items', { type: 'note', ...payload });
                 showToast('笔记已创建', 'success');
             }
             closeModal();
-            window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'note' } }));
-            await loadAndRender();
-        } catch (err) {
-            showToast(`保存失败：${err.message}`, 'error');
+            dispatchNoteChange();
+        } catch (error) {
+            showToast(`保存失败：${errorMessage(error)}`, 'error');
+        } finally {
+            saving = false;
+            saveButton.disabled = false;
         }
     };
+    form.onsubmit = saveNote;
+    saveButton.onclick = saveNote;
+    return content;
 }
 
 function attachListeners() {
-    if (!_container) return;
+    const root = _container;
+    if (!root) return;
 
-    initCustomSelects(_container, {
+    initCustomSelects(root, {
         'notes-filter-category': async (value) => {
-            _filters.category = value;
+            const category = textValue(value).trim();
+            if (category === _filters.category) return;
+            _filters.category = category;
             _page = 1;
             await loadAndRender();
         },
     });
 
-    _container.querySelectorAll('.notes-range-btn').forEach((button) => {
+    root.querySelectorAll('.notes-range-btn').forEach((button) => {
         button.onclick = async () => {
-            const nextRange = button.dataset.range || 'month';
+            const requestedRange = textValue(button.dataset.range).trim();
+            const nextRange = RANGE_KEYS.has(requestedRange) ? requestedRange : 'month';
+            if (nextRange === _filters.range) return;
             _filters.range = nextRange;
             if (nextRange === 'custom' && (!_filters.customStart || !_filters.customEnd)) {
-                const fallback = derivePresetRange('month', { today: todayKey() });
+                const fallback = derivePresetRange('month', { today: todayRangeKey() });
                 _filters.customStart = fallback.start;
                 _filters.customEnd = fallback.end;
             }
@@ -1140,24 +1389,50 @@ function attachListeners() {
         };
     });
 
-    const rangeApply = _container.querySelector('#notes-range-apply');
+    const applyCustomRange = async () => {
+        if (_container !== root) return;
+        const start = textValue(root.querySelector('#notes-range-start')?.value).trim();
+        const end = textValue(root.querySelector('#notes-range-end')?.value).trim();
+        const candidate = derivePresetRange('custom', {
+            today: todayRangeKey(),
+            customStart: start,
+            customEnd: end,
+            customFallback: '',
+        });
+        if (candidate.start !== start || candidate.end !== end) {
+            showToast('请输入有效日期，格式为 YYYY-MM-DD', 'warning');
+            return;
+        }
+        if (start > end) {
+            showToast('开始日期不能晚于结束日期', 'warning');
+            return;
+        }
+        if (start === _filters.customStart && end === _filters.customEnd) return;
+        _filters.customStart = start;
+        _filters.customEnd = end;
+        _page = 1;
+        await loadAndRender();
+    };
+
+    const rangeApply = root.querySelector('#notes-range-apply');
     if (rangeApply) {
-        rangeApply.onclick = async () => {
-            const startInput = _container.querySelector('#notes-range-start');
-            const endInput = _container.querySelector('#notes-range-end');
-            _filters.customStart = startInput?.value || '';
-            _filters.customEnd = endInput?.value || '';
-            _page = 1;
-            await loadAndRender();
-        };
+        rangeApply.onclick = applyCustomRange;
+        ['#notes-range-start', '#notes-range-end'].forEach((selector) => {
+            root.querySelector(selector)?.addEventListener('keydown', async (event) => {
+                if (event.key !== 'Enter' || event.isComposing) return;
+                event.preventDefault();
+                await applyCustomRange();
+            });
+        });
     }
 
-    const addTop = _container.querySelector('#notes-add-top');
+    const addTop = root.querySelector('#notes-add-top');
     if (addTop) addTop.onclick = () => openNoteFormModal(null);
 
-    const reset = _container.querySelector('#notes-filter-reset');
+    const reset = root.querySelector('#notes-filter-reset');
     if (reset) {
         reset.onclick = async () => {
+            if (!_filters.category && !_filters.tag && !_filters.keyword) return;
             _filters.category = '';
             _filters.tag = '';
             _filters.keyword = '';
@@ -1166,99 +1441,80 @@ function attachListeners() {
         };
     }
 
-    const keywordInput = _container.querySelector('#notes-filter-keyword');
-    if (keywordInput) {
-        keywordInput.addEventListener('change', async () => {
-            _filters.keyword = keywordInput.value.trim();
+    // 关键词与标签输入共享提交规则，避免 Enter 后 blur 再触发一次重复请求。
+    const bindTextFilter = (selector, key) => {
+        const input = root.querySelector(selector);
+        if (!input) return;
+        const commit = async (value) => {
+            const nextValue = textValue(value).trim();
+            if (_filters[key] === nextValue) return;
+            _filters[key] = nextValue;
             _page = 1;
             await loadAndRender();
-        });
-        keywordInput.addEventListener('keydown', async (event) => {
-            if (event.key === 'Enter') {
+        };
+        input.addEventListener('change', () => commit(input.value));
+        input.addEventListener('keydown', async (event) => {
+            if (event.key === 'Enter' && !event.isComposing) {
                 event.preventDefault();
-                _filters.keyword = keywordInput.value.trim();
-                _page = 1;
-                await loadAndRender();
+                await commit(input.value);
             }
             if (event.key === 'Escape') {
                 event.preventDefault();
-                keywordInput.value = '';
-                _filters.keyword = '';
-                _page = 1;
-                await loadAndRender();
+                input.value = '';
+                await commit('');
             }
         });
-    }
+    };
+    bindTextFilter('#notes-filter-keyword', 'keyword');
+    bindTextFilter('#notes-filter-tag', 'tag');
 
-    const tagInput = _container.querySelector('#notes-filter-tag');
-    if (tagInput) {
-        tagInput.addEventListener('change', async () => {
-            _filters.tag = tagInput.value.trim();
-            _page = 1;
-            await loadAndRender();
-        });
-        tagInput.addEventListener('keydown', async (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                _filters.tag = tagInput.value.trim();
-                _page = 1;
-                await loadAndRender();
-            }
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                tagInput.value = '';
-                _filters.tag = '';
-                _page = 1;
-                await loadAndRender();
-            }
-        });
-    }
-
-    _container.querySelectorAll('.notes-tag-chip').forEach((chip) => {
+    root.querySelectorAll('.notes-tag-chip').forEach((chip) => {
         chip.onclick = async () => {
-            _filters.tag = chip.dataset.tag || '';
+            const tag = textValue(chip.dataset.tag).trim();
+            if (tag === _filters.tag) return;
+            _filters.tag = tag;
             _page = 1;
             await loadAndRender();
         };
     });
 
-    _container.querySelectorAll('.note-card').forEach((card) => {
+    root.querySelectorAll('[data-open-note]').forEach((card) => {
         card.onclick = () => {
-            const note = _items.find((item) => String(item.id) === String(card.dataset.id));
+            const note = _items.find((item) => item.id === textValue(card.dataset.openNote));
             if (note) openNoteViewModal(note);
         };
     });
 }
 
-export function render(container) {
+export async function render(container) {
+    if (!container || typeof container.querySelector !== 'function') {
+        throw new TypeError('笔记页需要有效的容器元素');
+    }
+    _loadVersion += 1;
+    _unsubscribeDataChanges?.();
+    _unsubscribeDataChanges = null;
     _container = container;
     _items = [];
     _overview = null;
     _total = 0;
     _page = 1;
     _loading = false;
-    _filters = { range: 'year', customStart: '', customEnd: '', category: '', tag: '', keyword: '' };
+    _filters = { ...DEFAULT_FILTERS };
     _activeRange = deriveRangeDates();
-    renderPage();
-    loadAndRender();
-    _dataChangedHandler = async (event) => {
-        const changedType = event?.detail?.type;
-        if (changedType && changedType !== 'note') return;
-        await loadAndRender();
-    };
-    window.addEventListener('pendo-data-changed', _dataChangedHandler);
+    _unsubscribeDataChanges = subscribeDataChanges('note', loadAndRender);
+    await loadAndRender();
 }
 
 export function destroy() {
-    if (_dataChangedHandler) {
-        window.removeEventListener('pendo-data-changed', _dataChangedHandler);
-        _dataChangedHandler = null;
-    }
+    _loadVersion += 1;
+    _unsubscribeDataChanges?.();
+    _unsubscribeDataChanges = null;
     _container = null;
     _items = [];
     _overview = null;
     _total = 0;
+    _page = 1;
+    _loading = false;
+    _filters = { ...DEFAULT_FILTERS };
     _activeRange = { start: '', end: '' };
 }
-
-export function onRouteEnter(_params) {}

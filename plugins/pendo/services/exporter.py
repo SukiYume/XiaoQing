@@ -9,14 +9,58 @@ Pendo Markdown 导出服务。
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar, Protocol
 
 from ..models.item import get_item_type_value
 from ..utils.error_handlers import error_result, success_result
 from ..utils.time_utils import parse_search_date_range
+
+logger = logging.getLogger(__name__)
+
+
+class _ExportItemsRepository(Protocol):
+    """导出器依赖的最小条目仓储接口。"""
+
+    def get_items(
+        self,
+        owner_id: str,
+        filters: dict[str, Any] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        use_cache: bool = True,
+    ) -> list[Any]: ...
+
+    def get_all_items(
+        self,
+        owner_id: str,
+        filters: dict[str, Any] | None = None,
+        *,
+        page_size: int = 200,
+    ) -> list[Any]: ...
+
+    def get_event_collection(
+        self, collection_id: str, owner_id: str | None = None
+    ) -> dict[str, Any] | None: ...
+
+
+class _ExportDatabase(_ExportItemsRepository, Protocol):
+    """导出器依赖的最小数据库接口。"""
+
+    def log_transfer(
+        self,
+        owner_id: str,
+        action: str,
+        bundle_id: str | None = None,
+        filename: str | None = None,
+        types: list[str] | None = None,
+        record_count: int = 0,
+        result_summary: dict[str, Any] | None = None,
+    ) -> int: ...
 
 
 def _sanitize_user_id(user_id: str) -> str:
@@ -37,15 +81,10 @@ def _sanitize_export_filename(raw_name: str) -> str:
     return name
 
 
-def _get_export_dir(user_id: str) -> Path:
-    safe_user_id = _sanitize_user_id(user_id)
-    return Path(__file__).parent.parent / "data" / "exports" / safe_user_id
-
-
 class ExporterService:
     """Pendo 导出服务。"""
 
-    _EXPORT_TYPE_MAP = {
+    _EXPORT_TYPE_MAP: ClassVar[dict[str, str]] = {
         "event": "event",
         "todo": "task",
         "task": "task",
@@ -56,22 +95,22 @@ class ExporterService:
         "全部": "all",
         "*": "all",
     }
-    _TYPE_ORDER = ["event", "task", "note", "ledger", "diary"]
-    _TYPE_LABELS = {
+    _TYPE_ORDER: ClassVar[tuple[str, ...]] = ("event", "task", "note", "ledger", "diary")
+    _TYPE_LABELS: ClassVar[dict[str, str]] = {
         "event": "日程",
         "task": "待办",
         "note": "笔记",
         "ledger": "记账",
         "diary": "日记",
     }
-    _TYPE_EXPORT_NAMES = {
+    _TYPE_EXPORT_NAMES: ClassVar[dict[str, str]] = {
         "event": "event",
         "task": "todo",
         "note": "note",
         "ledger": "ledger",
         "diary": "diary",
     }
-    _TYPE_SUMMARY_HINTS = {
+    _TYPE_SUMMARY_HINTS: ClassVar[dict[str, str]] = {
         "event": "按开始时间归档，保留地点、提醒、日程集合与节点上下文。",
         "task": "按计划日期、截止时间或创建时间排序，保留优先级、提醒与完成状态。",
         "note": "按创建时间归档，保留分类、标签与关联条目信息。",
@@ -79,8 +118,9 @@ class ExporterService:
         "diary": "按日记日期归档，保留天气、地点、心情等记录。",
     }
 
-    def __init__(self, db):
+    def __init__(self, db: _ExportDatabase, export_root: Path) -> None:
         self.db = db
+        self._export_root = Path(export_root)
         self._event_collection_cache: dict[tuple[str | None, str], dict[str, Any] | None] = {}
 
     def export_markdown(self, user_id: str, args: str, context: dict[str, Any]) -> dict[str, Any]:
@@ -102,7 +142,7 @@ class ExporterService:
                 f"时间范围: {params['range_label']}\n类型: {params['type_label']}"
             )
 
-        export_dir = _get_export_dir(user_id)
+        export_dir = self._export_root / _sanitize_user_id(user_id)
         export_dir.mkdir(parents=True, exist_ok=True)
         file_path = export_dir / params["filename"]
 
@@ -182,7 +222,20 @@ class ExporterService:
         normalized = (token or "").strip().lower()
         if not normalized:
             return False
-        if normalized in {"all", "全部", "*", "today", "tomorrow", "week", "month", "year", "今天", "本周", "本月", "今年"}:
+        if normalized in {
+            "all",
+            "全部",
+            "*",
+            "today",
+            "tomorrow",
+            "week",
+            "month",
+            "year",
+            "今天",
+            "本周",
+            "本月",
+            "今年",
+        }:
             return True
         if ".." in normalized:
             return True
@@ -227,11 +280,7 @@ class ExporterService:
                 "label": "全部类型",
             }
 
-        parts = [
-            part.strip().lower()
-            for part in re.split(r"[,，+/|]", normalized)
-            if part.strip()
-        ]
+        parts = [part.strip().lower() for part in re.split(r"[,，+/|]", normalized) if part.strip()]
         if not parts:
             return error_result(f"无法解析类型筛选: {token}")
 
@@ -267,11 +316,21 @@ class ExporterService:
     ) -> list[Any]:
         items: list[Any] = []
         for item_type in selected_types:
-            type_items = self.db.items.get_items(
-                user_id,
-                filters={"type": item_type, "limit": 10000},
-                limit=10000,
-            )
+            # 正式数据库按页读完，避免旧版 10000 条上限造成静默截断；轻量测试
+            # 仓储仍可只实现 get_items。
+            if hasattr(self.db, "get_all_items"):
+                type_items = self.db.get_all_items(
+                    user_id,
+                    filters={"type": item_type},
+                    page_size=500,
+                )
+            else:
+                type_items = self.db.get_items(
+                    user_id,
+                    filters={"type": item_type},
+                    limit=10000,
+                    use_cache=False,
+                )
             for item in type_items:
                 if self._item_matches_range(item, item_type, start_date, end_date):
                     items.append(item)
@@ -341,7 +400,9 @@ class ExporterService:
             return None
 
         if dt.tzinfo is not None:
-            return dt.astimezone().replace(tzinfo=None)
+            # 导出范围是用户看到的日历时间，保留 ISO 文本自身的墙钟值；不能让
+            # 运行机器的本地时区改变条目所属日期。
+            return dt.replace(tzinfo=None)
         return dt
 
     def _build_counts(self, items: list[Any]) -> dict[str, int]:
@@ -405,7 +466,9 @@ class ExporterService:
 
         for item_type in self._TYPE_ORDER:
             type_items = [
-                item for item in items if get_item_type_value(getattr(item, "type", None)) == item_type
+                item
+                for item in items
+                if get_item_type_value(getattr(item, "type", None)) == item_type
             ]
             if not type_items:
                 continue
@@ -436,7 +499,7 @@ class ExporterService:
         return "\n".join(blocks)
 
     def _render_item_block(self, item_type: str, item: Any, index: int) -> str:
-        title = self._display_title(item_type, item)
+        title = re.sub(r"[\r\n]+", " ", self._display_title(item_type, item)).strip()
         meta_rows = self._build_common_meta_rows(item_type, item)
         extra_rows = self._build_type_specific_rows(item_type, item)
         all_rows = meta_rows + extra_rows
@@ -468,8 +531,14 @@ class ExporterService:
         rows = [
             ("分类", self._escape_table(self._value_or_dash(category))),
             ("标签", self._escape_table(self._format_tags(getattr(item, "tags", [])))),
-            ("创建时间", self._escape_table(self._format_time_value(getattr(item, "created_at", None)))),
-            ("更新时间", self._escape_table(self._format_time_value(getattr(item, "updated_at", None)))),
+            (
+                "创建时间",
+                self._escape_table(self._format_time_value(getattr(item, "created_at", None))),
+            ),
+            (
+                "更新时间",
+                self._escape_table(self._format_time_value(getattr(item, "updated_at", None))),
+            ),
         ]
         if item_type == "ledger":
             rows[0] = (
@@ -494,7 +563,8 @@ class ExporterService:
                     "地点",
                     self._escape_table(
                         self._value_or_dash(
-                            getattr(item, "location", "") or ((collection or {}).get("location") or "")
+                            getattr(item, "location", "")
+                            or ((collection or {}).get("location") or "")
                         )
                     ),
                 ),
@@ -526,11 +596,15 @@ class ExporterService:
                 ),
                 (
                     "完成时间",
-                    self._escape_table(self._format_time_value(getattr(item, "completed_at", None))),
+                    self._escape_table(
+                        self._format_time_value(getattr(item, "completed_at", None))
+                    ),
                 ),
                 (
                     "取消时间",
-                    self._escape_table(self._format_time_value(getattr(item, "cancelled_at", None))),
+                    self._escape_table(
+                        self._format_time_value(getattr(item, "cancelled_at", None))
+                    ),
                 ),
                 (
                     "提醒",
@@ -555,8 +629,16 @@ class ExporterService:
                 ("交易类型", self._escape_table(self._format_transaction_type(transaction_type))),
                 ("金额", self._escape_table(amount_text)),
                 ("币种", self._escape_table(self._value_or_dash(getattr(item, "currency", "")))),
-                ("账户", self._escape_table(self._value_or_dash(getattr(item, "account_name", "")))),
-                ("转入账户", self._escape_table(self._value_or_dash(getattr(item, "counter_account_name", "")))),
+                (
+                    "账户",
+                    self._escape_table(self._value_or_dash(getattr(item, "account_name", ""))),
+                ),
+                (
+                    "转入账户",
+                    self._escape_table(
+                        self._value_or_dash(getattr(item, "counter_account_name", ""))
+                    ),
+                ),
                 ("商户", self._escape_table(self._value_or_dash(getattr(item, "merchant", "")))),
                 ("备注", self._escape_table(self._value_or_dash(getattr(item, "remark", "")))),
             ]
@@ -574,7 +656,10 @@ class ExporterService:
                 ("天气", self._escape_table(self._value_or_dash(getattr(item, "weather", "")))),
                 ("地点", self._escape_table(self._value_or_dash(getattr(item, "location", "")))),
                 ("心情", self._escape_table(self._value_or_dash(getattr(item, "mood", "")))),
-                ("心情分数", self._escape_table(self._value_or_dash(getattr(item, "mood_score", "")))),
+                (
+                    "心情分数",
+                    self._escape_table(self._value_or_dash(getattr(item, "mood_score", ""))),
+                ),
                 ("收藏", "是" if getattr(item, "is_favorite", False) else "否"),
                 ("模板", self._escape_table(self._value_or_dash(getattr(item, "template_id", "")))),
             ]
@@ -599,54 +684,60 @@ class ExporterService:
         sections: list[str] = []
         content = (getattr(item, "content", "") or "").strip()
         if content:
-            sections.extend(["**正文**", "", content])
+            self._append_body_section(sections, "**正文**", [content])
 
         if item_type == "note":
             references = self._format_note_references(getattr(item, "references", []))
-            if references:
-                if sections:
-                    sections.append("")
-                sections.extend(["**关联条目**", "", *references])
+            self._append_body_section(sections, "**关联条目**", references)
 
         if item_type == "event":
-            if getattr(item, "event_collection_id", None):
-                collection = self._get_event_collection(item)
-                if collection:
-                    sections.extend([
-                        "",
-                        "**所属日程集合**",
-                        "",
-                        f"- 集合标题: {self._value_or_dash(collection.get('title'))}",
-                        f"- 集合类型: {self._value_or_dash(collection.get('kind'))}",
-                    ])
-                    collection_notes = (collection.get("notes") or "").strip()
-                    if collection_notes:
-                        sections.append(f"- 集合备注: {collection_notes}")
-
-            notes = (getattr(item, "notes", "") or "").strip()
-            if notes:
-                sections.extend(["", "**补充备注**", "", notes])
+            self._append_event_body_sections(sections, item)
 
         if item_type == "diary":
             answers = self._format_template_answers(getattr(item, "template_answers", []))
-            if answers:
-                if sections:
-                    sections.append("")
-                sections.extend(["**模板回答**", "", *answers])
+            self._append_body_section(sections, "**模板回答**", answers)
 
         return sections
+
+    @staticmethod
+    def _append_body_section(sections: list[str], heading: str, lines: list[str]) -> None:
+        """追加一个非空 Markdown 段落，并统一处理段间空行。"""
+        if not lines:
+            return
+        if sections:
+            sections.append("")
+        sections.extend([heading, "", *lines])
+
+    def _append_event_body_sections(self, sections: list[str], item: Any) -> None:
+        """追加日程集合上下文和节点备注。"""
+        collection = (
+            self._get_event_collection(item) if getattr(item, "event_collection_id", None) else None
+        )
+        if collection:
+            collection_lines = [
+                f"- 集合标题: {self._value_or_dash(collection.get('title'))}",
+                f"- 集合类型: {self._value_or_dash(collection.get('kind'))}",
+            ]
+            collection_notes = str(collection.get("notes") or "").strip()
+            if collection_notes:
+                collection_lines.append(f"- 集合备注: {collection_notes}")
+            self._append_body_section(sections, "**所属日程集合**", collection_lines)
+
+        notes = str(getattr(item, "notes", "") or "").strip()
+        self._append_body_section(sections, "**补充备注**", [notes] if notes else [])
 
     def _get_event_collection(self, item: Any) -> dict[str, Any] | None:
         collection_id = getattr(item, "event_collection_id", None)
         owner_id = getattr(item, "owner_id", None)
-        if not collection_id or not hasattr(self.db.items, "get_event_collection"):
+        if not collection_id or not hasattr(self.db, "get_event_collection"):
             return None
         cache_key = (str(owner_id) if owner_id else None, str(collection_id))
         if cache_key in self._event_collection_cache:
             return self._event_collection_cache[cache_key]
         try:
-            collection = self.db.items.get_event_collection(collection_id, owner_id)
-        except Exception:
+            collection = self.db.get_event_collection(str(collection_id), cache_key[0])
+        except Exception as exc:
+            logger.warning("读取导出日程集合失败 error_type=%s", type(exc).__name__)
             collection = None
         self._event_collection_cache[cache_key] = collection
         return collection
@@ -794,6 +885,6 @@ class ExporterService:
                     "path": str(file_path.resolve()),
                 },
             )
-        except Exception:
+        except Exception as exc:
             # 审计日志失败不应影响导出主流程
-            return
+            logger.warning("记录导出审计日志失败 error_type=%s", type(exc).__name__)
