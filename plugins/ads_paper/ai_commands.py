@@ -1,24 +1,74 @@
+"""AI 摘要、每日推荐与个人 BibTeX 文献库命令。"""
+
 import asyncio
 import logging
-import re
+from datetime import UTC, date, datetime
 from typing import Any
 
-from core.plugin_base import segments
+from core.plugin_base import PluginContextProtocol, Segments, segments
 from core.public_errors import public_error_message, public_error_response
 
-from .ads_client import ADSClient
+from .ads_client import ADSClient, _escape_ads_term, paper_title
+from .bibtex import citation_entries
 from .constants import DEFAULT_DAILY_PAPERS
 from .paper_commands import resolve_paper_id_to_bibcode
+from .storage import PaperStorage
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_today() -> date:
+    return datetime.now(UTC).date()
+
+
+def _paper_entry_date(paper: dict[str, Any]) -> date | None:
+    raw = paper.get("entdate")
+    if isinstance(raw, list):
+        raw = raw[0] if raw else ""
+    value = str(raw or "").strip()
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _daily_topic_query(topics: list[str], day: date) -> str:
+    quoted = []
+    for topic in topics:
+        escaped = _escape_ads_term(topic)
+        if escaped:
+            quoted.append(f'"{escaped}"')
+    topic_query = " OR ".join(quoted)
+    return f"({topic_query}) AND entdate:[{day.isoformat()} TO NOW]"
+
+
+def _summary_messages(title: str, abstract: str) -> list[dict[str, str]]:
+    """构造论文摘要任务；模型、凭据和 fallback 由 core route 负责。"""
+
+    prompt = f"""请用中文总结以下论文的要点，包括：
+1. 研究背景和动机
+2. 主要方法和创新点
+3. 关键结果和结论
+4. 研究意义
+
+论文标题: {title}
+
+摘要:
+{abstract}
+
+请用简洁清晰的语言总结，不超过300字。"""
+    return [{"role": "user", "content": prompt}]
+
 
 async def cmd_summarize(
     client: ADSClient,
     args: str,
-    context  # Type: PluginContext, but avoid circular import
-) -> list[dict[str, Any]]:
+    context: PluginContextProtocol,
+) -> Segments:
     if not args.strip():
-        return segments("❌ 请提供论文标识符\n用法: /paper summarize <arXiv ID / arXiv链接 / Bibcode>")
+        return segments(
+            "❌ 请提供论文标识符\n用法: /paper summarize <arXiv ID / arXiv链接 / Bibcode>"
+        )
 
     paper_id = args.strip()
     bibcode = await resolve_paper_id_to_bibcode(client, paper_id)
@@ -30,40 +80,29 @@ async def cmd_summarize(
     if not paper:
         return segments(f"❌ 未找到论文: {bibcode}")
 
-    title = paper.get("title", [""])[0] if paper.get("title") else ""
-    abstract = paper.get("abstract", "")
+    title = paper_title(paper, default="")
+    raw_abstract = paper.get("abstract", "")
+    abstract = raw_abstract.strip() if isinstance(raw_abstract, str) else ""
 
     if not abstract:
         return segments(f"⚠️ 论文 '{title}' 没有摘要")
 
-    llm_config = context.secrets.get("plugins", {}).get("ads_paper", {})
-    api_base = llm_config.get("api_base")
-    api_key = llm_config.get("api_key")
-    model = llm_config.get("model")
-
-    if not api_base or not api_key or not model:
+    ai = getattr(getattr(context, "capabilities", None), "ai", None)
+    if ai is None:
         lines = [
             f"📄 论文: {title}\n",
             f"📝 摘要:\n{abstract}\n",
-            "💡 提示: 配置 LLM 后可生成 AI 摘要"
+            "💡 提示: 配置 AI summary route 后可生成 AI 摘要",
         ]
         return segments("\n".join(lines))
 
     try:
-        from .llm_client import generate_summary
-        summary = await generate_summary(
-            context.http_session,
-            api_base,
-            api_key,
-            model,
-            title,
-            abstract
-        )
+        result = await ai.complete("summary", _summary_messages(title, abstract))
+        summary = result.content
+        if not summary:
+            raise RuntimeError("AI summary response is empty")
 
-        lines = [
-            f"📄 论文: {title}\n",
-            f"🤖 AI 摘要:\n{summary}"
-        ]
+        lines = [f"📄 论文: {title}\n", f"🤖 AI 摘要:\n{summary}"]
         return segments("\n".join(lines))
     except Exception as exc:
         error_message = public_error_message(
@@ -79,20 +118,38 @@ async def cmd_summarize(
         ]
         return segments("\n".join(lines))
 
+
 async def cmd_daily(
     client: ADSClient,
-    context,  # Type: PluginContext, but avoid circular import
+    storage: PaperStorage,
     user_id: int,
-) -> list[dict[str, Any]]:
-    from .storage import PaperStorage
-    storage = PaperStorage(context.data_dir)
+) -> Segments:
 
     topics = await asyncio.to_thread(storage.get_topics, user_id)
     if not topics:
         return segments("🏷️ 请先添加研究兴趣关键词\n用法: /paper topics add <关键词>")
 
-    query = " OR ".join(topics)
-    papers = await client.search_papers(query, max_results=DEFAULT_DAILY_PAPERS)
+    today = _utc_today()
+    query = _daily_topic_query(topics, today)
+    papers = await client.search_papers(
+        query,
+        max_results=DEFAULT_DAILY_PAPERS,
+        fields=[
+            "bibcode",
+            "title",
+            "author",
+            "year",
+            "entdate",
+            "citation_count",
+            "arxiv_class",
+            "identifier",
+        ],
+        sort="entdate desc,bibcode asc",
+    )
+    papers = [paper for paper in papers if _paper_entry_date(paper) == today]
+    # 日期已被上一步严格过滤为同一天，本地稳定排序只需 bibcode。
+    papers.sort(key=lambda paper: str(paper.get("bibcode", "") or ""))
+    papers = papers[:DEFAULT_DAILY_PAPERS]
 
     if not papers:
         return segments(f"🔍 未找到与关键词 '{', '.join(topics)}' 相关的新论文")
@@ -103,14 +160,18 @@ async def cmd_daily(
 
     return segments("\n".join(lines))
 
+
 async def cmd_ref_add(
     client: ADSClient,
     args: str,
-    context,  # Type: PluginContext, but avoid circular import
+    storage: PaperStorage,
+    context: PluginContextProtocol,
     user_id: int,
-) -> list[dict[str, Any]]:
+) -> Segments:
     if not args.strip():
-        return segments("❌ 请提供论文标识符\n用法: /paper ref_add <arXiv ID / arXiv链接 / Bibcode>")
+        return segments(
+            "❌ 请提供论文标识符\n用法: /paper ref_add <arXiv ID / arXiv链接 / Bibcode>"
+        )
 
     paper_id = args.strip()
     bibcode = await resolve_paper_id_to_bibcode(client, paper_id)
@@ -122,20 +183,11 @@ async def cmd_ref_add(
     if not bibtex:
         return segments(f"❌ 无法获取 BibTeX: {bibcode}")
 
-    from .storage import PaperStorage
-    storage = PaperStorage(context.data_dir)
-
     try:
         if not await asyncio.to_thread(storage.add_reference, user_id, bibcode, bibtex):
             return segments(f"⚠️ 该引用已在文献库中 (Bibcode: {bibcode})")
 
-        lines = [
-            "✅ 已添加到文献库\n",
-            "📎 BibTeX:\n",
-            "```",
-            bibtex,
-            "```"
-        ]
+        lines = ["✅ 已添加到文献库\n", "📎 BibTeX:\n", "```", bibtex, "```"]
         return segments("\n".join(lines))
     except Exception as exc:
         return public_error_response(
@@ -145,40 +197,29 @@ async def cmd_ref_add(
             component="ads_paper.ref_add",
         )
 
+
 async def cmd_refs(
-    context,  # Type: PluginContext, but avoid circular import
+    storage: PaperStorage,
+    context: PluginContextProtocol,
     user_id: int,
-) -> list[dict[str, Any]]:
+) -> Segments:
     try:
-        from .storage import PaperStorage
-        storage = PaperStorage(context.data_dir)
         content = await asyncio.to_thread(storage.get_references, user_id)
         if not content:
             return segments("📚 文献库为空\n\n提示: 使用 '/paper ref_add <ID>' 添加引用")
-        entries = [e.strip() for e in content.split("@") if e.strip()]
+        entries = citation_entries(content)
 
         if not entries:
             return segments("📚 文献库为空")
 
         lines = [f"📚 文献库 ({len(entries)} 条引用):\n"]
         for i, entry in enumerate(entries, 1):
-            entry_lines = entry.split("\n")
-            title_line = next(
-                (line for line in entry_lines if "title" in line.lower()),
-                "",
-            )
-            if title_line:
-                # Improved title extraction with error handling
-                # Improved title extraction using regex to handle various BibTeX formats
-                # Matches: title = "{Title}", title = "Title", title = {Title}
-                title_match = re.search(r'title\s*=\s*["{]*(.*?)[}"],?$', title_line, re.IGNORECASE)
-                if title_match:
-                    title = title_match.group(1)
-                    lines.append(f"  {i}. {title[:60]}...")
-                else:
-                    lines.append(f"  {i}. {title_line.strip()[:60]}...")
+            title = entry.title
+            if title:
+                suffix = "..." if len(title) > 60 else ""
+                lines.append(f"  {i}. {title[:60]}{suffix}")
             else:
-                lines.append(f"  {i}. @entry...")
+                lines.append(f"  {i}. @{entry.entry_type}{{{entry.citation_key}}}")
 
         return segments("\n".join(lines))
     except Exception as exc:

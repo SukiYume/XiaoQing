@@ -1,4 +1,7 @@
-from plugins.xiaoqing_chat.message_parts import build_message_parts_from_template
+from plugins.xiaoqing_chat.message_parts import (
+    build_message_parts_from_template,
+    merge_reply_media_parts,
+)
 from plugins.xiaoqing_chat.reply_payload import (
     build_reply_payload_from_parts,
 )
@@ -66,6 +69,43 @@ def test_build_reply_payload_from_parts_keeps_append_behavior_without_placeholde
     assert payload.outbound_batches[0][1]["data"]["file"].endswith("/tmp/emoji.png")
     assert payload.display_text == "懂了[表情包：无语]\n[QQ表情：狗头]"
     assert [part["kind"] for part in payload.parts] == ["text", "emoji", "text", "qq_face"]
+
+
+def test_merge_reply_media_keeps_distinct_anonymous_images() -> None:
+    parts = merge_reply_media_parts(
+        [
+            {"kind": "text", "text": "第一张"},
+            {"kind": "image", "marker": "[图片：一]", "file_path": "/tmp/one.png"},
+            {"kind": "text", "text": "第二张"},
+        ],
+        [{"kind": "image", "marker": "[图片：二]", "file_path": "/tmp/two.png"}],
+    )
+
+    images = [part for part in parts if part["kind"] == "image"]
+    assert [item["marker"] for item in images] == ["[图片：一]", "[图片：二]"]
+
+
+def test_merge_reply_media_updates_matching_stable_identity() -> None:
+    parts = merge_reply_media_parts(
+        [{"kind": "emoji", "media_hash": "same", "marker": "[表情包：旧]"}],
+        [
+            {
+                "kind": "emoji",
+                "media_hash": "same",
+                "marker": "[表情包：新]",
+                "file_path": "/tmp/new.png",
+            }
+        ],
+    )
+
+    assert parts == (
+        {
+            "kind": "emoji",
+            "media_hash": "same",
+            "marker": "[表情包：新]",
+            "file_path": "/tmp/new.png",
+        },
+    )
 
 
 def test_build_reply_payload_from_parts_preserves_interleaved_media_order() -> None:

@@ -67,7 +67,7 @@
       - [参数选项](#参数选项-1)
       - [使用示例](#使用示例-9)
     - [wolframalpha - 万能计算器](#wolframalpha---万能计算器)
-      - [特殊后缀](#特殊后缀)
+      - [显式模式](#显式模式)
       - [使用示例](#使用示例-10)
     - [codex - Codex 后台任务队列](#codex---codex-后台任务队列)
     - [shell - 终端命令](#shell---终端命令)
@@ -136,20 +136,23 @@
 
 | 命令 | 触发词 | 说明 | 管理员 |
 |------|--------|------|--------|
-| `help` | `/help`, `/h`, `/帮助` | 查看帮助信息 | ❌ |
+| `help` | `/help`, `/h`, `/帮助`, `/catalog` | 查询、分页或导出 Core 的递归命令目录 | ❌ |
 | `plugins` | `/plugins`, `/插件` | 查看已加载插件列表 | ❌ |
 | `reload` | `/reload`, `/重载` | 热重载配置和插件 | ✅ |
 | `metrics` | `/metrics`, `/指标` | 查看运行指标统计 | ✅ |
-| `闭嘴` | `/闭嘴`, `/shutup`, `/mute` | 群内静音一段时间 | ❌ |
-| `说话` | `/说话`, `/speak`, `/unmute` | 解除群内静音 | ❌ |
+| `闭嘴` | `/闭嘴`, `/shutup`, `/mute` | 群内静音一段时间 | ✅ |
+| `说话` | `/说话`, `/speak`, `/unmute` | 解除群内静音 | ✅ |
 | `set_secret` | `/set_secret`, `/设置密钥` | 修改密钥配置 | ✅ |
 | `get_secret` | `/get_secret`, `/查看密钥` | 查看密钥配置 | ✅ |
 
 #### 使用示例
 
 ```
-/help                    # 显示所有命令帮助
-/help 天文               # 搜索包含"天文"的命令
+/help page 1             # 分页遍历所有命令节点
+/help pendo              # 查看 Pendo 的完整递归子树
+/help pendo.pendo.todo.add # 按稳定命令码精确查询
+/help search 天文        # 搜索别名、说明和用法
+/help json qingpet       # 导出结构化 JSON
 /闭嘴 30                 # 静音 30 分钟
 /闭嘴 1h                 # 静音 1 小时
 /reload                  # 热重载所有插件
@@ -162,6 +165,7 @@
 个人时间与信息管理插件，支持日程、待办、笔记、日记、账本、提醒、搜索、统计和 **Web 控制台**（FastAPI + 原生 JS SPA）。
 
 > `/pendo` 会显示带 emoji 的模块导航帮助；输入 `/pendo <模块>`（如 `/pendo event`、`/pendo ledger`）可直达对应分组帮助。
+> 全部 Pendo 聊天命令只允许私聊，群聊请求由 Core 在进入插件前拒绝。
 
 Pendo 的长期文档入口是 `plugins/pendo/README.md` 和 `plugins/pendo/ARCHITECTURE.md`：前者面向使用和部署，后者面向维护和二次开发。本章提供命令速查和功能索引。
 
@@ -171,7 +175,7 @@ Pendo 的长期文档入口是 `plugins/pendo/README.md` 和 `plugins/pendo/ARCH
 |------|------|
 | **AI 智能解析** | 日程添加自动识别时间、地点、提醒设置 |
 | **多轮对话** | 支持会话式操作 |
-| **隐私保护** | 支持群聊隐私模式，敏感内容转私聊 |
+| **隐私保护** | manifest 声明全部聊天命令仅允许私聊 |
 | **提醒** | 支持单次、重复、多节点、提前确认和延后提醒 |
 | **定时任务** | 每日简报、日记提醒、待办顺延、财务周报/月报和 demo 数据清理 |
 | **导出和迁移** | 聊天端 Markdown 档案导出；Web 端 `.pendo.zip` Bundle 导入导出 |
@@ -282,20 +286,22 @@ Pendo 的长期文档入口是 `plugins/pendo/README.md` 和 `plugins/pendo/ARCH
 | `/pendo settings timezone <时区>` | 设置时区 |
 | `/pendo settings quiet_hours <开始>-<结束>` | 静默时段 |
 | `/pendo settings daily_report <时间>` | 每日简报时间 |
+| `/pendo settings daily_briefing on/off` | 开关每日简报 |
 | `/pendo settings diary_remind <时间>` | 日记提醒时间 |
-| `/pendo settings privacy on/off` | 开关隐私模式 |
+| `/pendo settings ai_consent on/off` | 是否允许把日记正文发送给已配置的外部 AI |
 
 **Web 控制台**
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo web token` | 生成登录令牌（JWT，用于浏览器登录） |
+| `/pendo web token` | 生成私聊一次性登录链接（5 分钟内仅可使用一次） |
 | `/pendo web widget-token` | 生成 Scriptable 小组件令牌（只读） |
+| `/pendo web widget-revoke` | 吊销自己的全部 Scriptable 小组件令牌 |
 | `/pendo web start` | 启动 Web 服务 |
 | `/pendo web stop` | 停止 Web 服务 |
 | `/pendo web status` | 查看运行状态和访问地址 |
 
-> pendo 插件初始化时会尝试自动启动 Web 服务；如果启动失败，仍可用 `/pendo web start` 手动重试。默认监听 `127.0.0.1:12001`，可通过环境变量 `PENDO_WEB_HOST` / `PENDO_WEB_PORT` 调整。
+> pendo 插件初始化时会在 `plugins.pendo.web_enabled` 为 `true` 时尝试自动启动 Web 服务；如果启动失败，仍可用 `/pendo web start` 手动重试。默认监听 `127.0.0.1:12001`。绑定非 loopback 地址时，服务要求在 TLS 反向代理后配置 `"web_session_cookie_secure": true`，不会开放明文 HTTP 登录入口。
 
 Web 控制台提供以下页面：
 
@@ -316,23 +322,31 @@ Web 控制台提供以下页面：
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo undo [分钟]` | 撤销删除（默认 5 分钟内） |
+| `/pendo undo [分钟]` | 撤销最近 5 分钟内的删除或编辑；参数可将范围缩短至 1～5 分钟 |
 
 #### 配置说明
 
-在 `secrets.json` 中配置：
+Pendo 的模型连接复用项目级统一注册表，只在 `config.json` 声明 `parse` route：
 
 ```json
 {
   "plugins": {
     "pendo": {
-      "api_base": "https://your-llm-api.com/v1",
-      "api_key": "your-llm-api-key",
-      "model": "gpt-4o-mini"
+      "ai": {
+        "routes": {
+          "parse": {
+            "models": ["deepseek-flash", "glm-5.2"],
+            "temperature": 0.3,
+            "max_tokens": 1000
+          }
+        }
+      }
     }
   }
 }
 ```
+
+provider 与模型 profile 位于 `config.ai`，API Key 位于 `secrets.ai.providers`。route 不可用时自动回退到本地规则解析。
 
 #### 使用示例
 
@@ -413,15 +427,16 @@ Web 控制台提供以下页面：
 
 ```
 /pendo settings view                         # 查看设置
-/pendo settings privacy on                  # 开启隐私模式
 /pendo settings diary_remind 21:30          # 设置日记提醒时间
+/pendo settings daily_briefing off           # 关闭每日简报
+/pendo settings ai_consent off               # 禁止把日记正文发送给外部 AI
 ```
 
 **9. 撤销操作**
 
 ```
 /pendo undo                                  # 撤销最近5分钟内的删除
-/pendo undo 10                               # 撤销最近10分钟内的删除
+/pendo undo 3                                # 撤销最近3分钟内的删除或编辑
 ```
 
 **10. 记账管理**
@@ -450,18 +465,19 @@ Web 控制台提供以下页面：
 ```
 /pendo web token                             # 获取一次性浏览器登录链接（私聊）
 /pendo web widget-token                      # 获取 Scriptable 小组件令牌
+/pendo web widget-revoke                     # 吊销自己的全部小组件令牌
 /pendo web start                             # 启动 Web 服务（默认端口 12001）
 /pendo web status                            # 查看访问地址
 /pendo web stop                              # 停止服务
 ```
 
-启动后默认通过 `http://127.0.0.1:12001` 访问。反向代理部署时，也可以通过自己的外网地址访问。浏览器登录用 `/pendo web token` 的私聊一次性链接（5 分钟、仅一次）；登录后使用短期 HttpOnly session cookie。iPhone Scriptable 小组件仍使用 `/pendo web widget-token` 的只读 bearer。
+启动后默认通过 `http://127.0.0.1:12001` 访问。若在 TLS 反向代理后绑定非 loopback 地址，必须在 `config/config.json` 的 `plugins.pendo` 中配置 `"web_session_cookie_secure": true`；服务会拒绝不安全的外网绑定。浏览器登录使用 `/pendo web token` 私聊发送的一次性登录链接（5 分钟、仅一次），登录后使用短期 HttpOnly session cookie。iPhone Scriptable 小组件仍使用 `/pendo web widget-token` 的只读 bearer。
 
-Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚本仓库版本只保留 `BASE_URL` 和 `TOKEN` 占位值，导入 Scriptable 后需要替换成你自己的 Pendo Web 地址和 widget token。它可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏，并支持 `small` / `medium` / `large` 三种尺寸。
+Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚本仓库版本只保留 `BASE_URL`，Widget Token 在首次 App 内运行时通过安全输入框写入 iOS Keychain。Token 默认 30 天有效，可用 `/pendo web widget-revoke` 吊销。它可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏，并支持 `small` / `medium` / `large` 三种尺寸。
 
-如果在 Windows 上默认端口启动失败，但 `netstat -ano` 看不到进程占用，通常是系统拒绝绑定该端口。优先改 `PENDO_WEB_PORT`，而不是继续排查“哪个进程占了它”。
+如果在 Windows 上默认端口启动失败，但 `netstat -ano` 看不到进程占用，通常是系统拒绝绑定该端口。优先改 `plugins.pendo.web_port`，而不是继续排查“哪个进程占了它”。
 
-公开 demo 会话默认关闭；只有在显式设置 `PENDO_WEB_DEMO_ENABLED=1` 时才会开放临时演示空间。
+公开 demo 会话默认关闭；只有把 `plugins.pendo.web_demo_enabled` 显式配置为 `true` 时才会开放临时演示空间。
 
 #### 定时任务
 
@@ -469,18 +485,19 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - **每分钟** - 每日简报（用户可自定义触发时间，因此逐分钟检查）
 - **每分钟** - 日记提醒（用户可自定义触发时间，因此逐分钟检查）
 - **每天 00:05** - 待办计划迁移（将昨日仍 open 的计划顺延到今天）
+- **每天 00:15** - 清理过期操作日志与撤销快照
 - **每周日 21:00** - 每周财务总结
 - **每月最后一天 21:00** - 月底财务总结
 - **每 6 小时** - 清理过期 Web demo 数据
 
 #### 注意事项
 
-- 日程添加需要配置 LLM API 以使用 AI 解析功能
-- 群聊中长消息会自动转为私聊以保护隐私
+- LLM API 是可选能力；未配置或请求失败时，日程解析和日记情绪分析会回退到本地规则
+- 所有聊天命令与多轮会话均只在私聊中运行
 - 支持会话式交互，使用"退出"或"q"结束会话
 - Pendo 的本地运行时数据包括 SQLite 数据库和 Web Token 签名密钥
-- Web 控制台需要额外依赖：`PyJWT`、`fastapi`、`uvicorn`、`passlib[bcrypt]`（已包含在根目录 `requirements.txt`）
-- 默认仅绑定 loopback。部署到非 loopback/TLS 反向代理时必须设置 `PENDO_WEB_SESSION_COOKIE_SECURE=true`，否则服务拒绝启动；请同时由反向代理提供 HTTPS。
+- Web 控制台依赖已包含在仓库根目录 `requirements.txt` 中；请使用 `python -m pip install -r requirements.txt`
+- 默认仅绑定 loopback。部署到非 loopback/TLS 反向代理时必须配置 `plugins.pendo.web_session_cookie_secure=true`，否则服务拒绝启动；请同时由反向代理提供 HTTPS。
 
 ---
 
@@ -533,36 +550,34 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 | `/xc 记忆 <关键词>` | 检索长期记忆 | ❌ |
 | `/xc 表达` | 查看学到的表达方式 | ❌ |
 | `/xc 黑话` | 查看学到的黑话 | ❌ |
-| `/xc 模型 [名称]` | 查看当前 provider；切换 provider 仅管理员可用 | ✅ |
+| `/xc 模型 [别名]` | 查看 route profile；管理员可严格固定模型，`默认` 恢复 fallback | ✅ |
 
 #### 配置项
 
-聊天模型和视觉模型在 `config/secrets.json` 中配置；插件行为开关在 `plugins/xiaoqing_chat/config/xiaoqing_config.json` 中配置。
+聊天和视觉模型复用 `config.ai` 统一注册表，API Key 位于 `secrets.ai.providers`；插件行为开关在 `plugins/xiaoqing_chat/config/xiaoqing_config.json` 中配置。
 
 ```json
 {
   "plugins": {
     "xiaoqing_chat": {
-      "default": "deepseek",
-      "providers": {
-        "deepseek": {
-          "api_base": "https://api.deepseek.com",
-          "api_key": "your-chat-api-key",
-          "model": "deepseek-chat",
-          "endpoint_path": "/v1/chat/completions"
-        }
-      },
-      "vision": {
-        "default": "glm-4.6v-flash",
-        "providers": {
-          "glm-4.6v-flash": {
-            "api_base": "https://open.bigmodel.cn/api/paas/v4",
-            "api_key": "your-vision-api-key",
-            "model": "glm-4.6v-flash",
-            "endpoint_path": "/chat/completions",
-            "thinking": {
-              "type": "disabled"
-            }
+      "ai": {
+        "default_model_alias": "deepseek",
+        "model_aliases": {
+          "deepseek": "deepseek-flash",
+          "glm": "glm-5.2"
+        },
+        "routes": {
+          "chat": {
+            "models": ["deepseek-flash", "glm-5.2"]
+          },
+          "checker": {
+            "models": ["deepseek-flash-thinking", "deepseek-pro", "glm-5.2"]
+          },
+          "reasoning": {
+            "models": ["deepseek-flash-thinking", "deepseek-pro", "glm-5.2"]
+          },
+          "vision": {
+            "models": ["glm-4.6v-flash", "glm-4.6v"]
           }
         }
       }
@@ -571,16 +586,21 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 }
 ```
 
+列表第 0 项是主模型，其余项只在允许的故障类别上顺序 fallback。GLM provider 使用标准按量 API；Coding Plan 专属端点只用于官方支持的编码工具。完整 provider、profile 和密钥示例见 `docs/06-configuration.md`。
+
 常用媒体行为开关如下。
 
 ```json
 {
-  "reply_probability_base": 0.72,
-  "min_reply_interval_seconds": 3,
+  "reply_probability_base": 0.45,
+  "active_topic_reply_probability": 0.6,
+  "active_topic_question_reply_probability": 0.9,
+  "min_reply_interval_seconds": 8,
   "active_topic_min_reply_interval": 3.0,
-  "max_replies_per_minute": 6,
-  "continuous_reply_limit": 5,
-  "continuous_cooldown_seconds": 12,
+  "active_topic_question_min_reply_interval": 2.0,
+  "max_replies_per_minute": 4,
+  "continuous_reply_limit": 3,
+  "continuous_cooldown_seconds": 25,
   "planner": {
     "enable_planner": true,
     "think_mode": "dynamic"
@@ -596,15 +616,14 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
   },
   "media": {
     "enable_inbound_media_context": true,
-    "max_media_per_message": 1,
-    "vision_provider": ""
+    "max_media_per_message": 1
   }
 }
 ```
 
 触发和频控说明如下。
 
-- 当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时，群聊消息会先经过插件观察；`random_reply_rate` 不参与 dispatcher 分发。
+- 当 `smalltalk_provider` 设置为 `xiaoqing_chat` 时，群聊消息会先经过插件观察，再由插件内部判断是否回复。
 - `/xc`、私聊、`@小青`、直接叫名字、只喊名字后的追问、reply 引用小青，以及有近期上下文锚点的“她/ta”共指召唤，会跳过普通插话概率并强制回复。
 - 没有明确 directed attention 的普通群聊消息才会使用 `reply_probability_base`、heartflow、连续未回复补偿和硬频控。
 - 配置边界：`reply_probability_private`、`heartflow.threshold`、`heartflow.enable_random_gate`、`heartflow.weight_mentioned`、`heartflow.weight_private`、`heartflow.weight_rate_limit`、`heartflow.weight_cooldown`、`heartflow.weight_interval` 不参与当前回复主路径。私聊、点名和共指由 attention gate 处理；速率限制由硬频控处理。
@@ -623,15 +642,15 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 - 对话中的关键事件
 
 **3. 图片/表情包记忆**
-- 收到的图片统一落到 `plugins/xiaoqing_chat/data/media/inbox/`
-- 可发送图片固定放在 `plugins/xiaoqing_chat/data/media/reply_images/`
-- 识别为表情包的图片会复制进 `plugins/xiaoqing_chat/data/media/library/`
-- 图片描述缓存保存在 `plugins/xiaoqing_chat/data/media/render_cache.json`
+- 收到的图片统一落到 `data/xiaoqing_chat/media/inbox/`
+- 可发送图片固定放在 `data/xiaoqing_chat/media/reply_images/`
+- 识别为表情包的图片会复制进 `data/xiaoqing_chat/media/library/`
+- 图片描述缓存保存在 `data/xiaoqing_chat/media/render_cache.json`
 
 #### 使用说明
 
 - 作为 `smalltalk_provider` 使用时，会接管所有闲聊消息
-- 插件内部有独立频率控制，不依赖全局 `random_reply_rate`
+- 插件内部有独立频率控制
 - `/xc`、私聊、`@`、直接叫名字、只喊名字后的追问、reply 引用小青，以及有近期上下文锚点的“她/ta”共指召唤会强制回复
 - 普通群聊消息才走 `reply_probability_base`、heartflow 和硬频控
 - 启用媒体能力后，纯图片、QQ 表情、NapCat `mface` 都能进入正常对话链
@@ -655,14 +674,15 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 ### smalltalk - 闲聊插件
 
-基础闲聊插件，支持问答学习功能。
+基础闲聊插件，支持只喊名字回复、分域问答、`chat.reply` 回落和可选的
+`voice.synthesize_text` 语音合成。它不会对普通群消息随机插话，也不存在笑话命令。
 
 #### 命令列表
 
 | 命令 | 触发词 | 说明 | 管理员 |
 |------|--------|------|--------|
-| `qa` | `/记忆`, `/记住`, `/学习` | 教机器人新的问答 | ❌ |
-| `qa_list` | `/对话` | 查看已学内容 | ❌ |
+| `qa` | `/记忆`, `/记住`, `/学习` | 教机器人新的问答 | ✅ |
+| `qa_list` | `/对话` | 查看已学内容 | ✅ |
 | `qa_remove` | `/删除对话` | 删除指定问答 | ✅ |
 
 #### 使用示例
@@ -670,7 +690,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 ```
 /记忆 你好 你好呀~       # 学习"你好"的回复
 /对话                    # 查看所有已学问答
-/对话 你好               # 搜索包含"你好"的问答
+/对话 你好               # 精确查询"你好"的回答
 /删除对话 你好           # 删除"你好"的问答
 ```
 
@@ -681,13 +701,17 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 ```json
 {
   "plugins": {
-    "smalltalk_provider": "smalltalk", // 或 "xiaoqing_chat"
+    "smalltalk_provider": "smalltalk",
     "smalltalk": {
-      "voice_probability": 0           // 语音回复概率
+      "voice_probability": 0
     }
   }
 }
 ```
+
+三个 QA 命令均为管理员命令；问题是第一个非空白字段，群聊按群号共享，私聊按用户号隔离。
+`voice_probability` 必须是 `0` 到 `1` 的有限数字，非法显式值会禁用语音。更完整的配额、运行数据和
+provider 降级边界见插件目录中的 `README.md`。
 
 ---
 
@@ -710,17 +734,18 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 ### voice - 语音功能
 
-基于 Azure Cognitive Services 的语音插件。当前公开命令面提供 TTS；STT 作为内部工具函数保留，供其他插件集成时复用。
+基于 Azure Speech 的语音插件。公开命令只提供管理员 TTS；内部同时提供 `voice.synthesize_text` 服务和受限的 `speech_to_text()` 工具函数。
 
 #### 功能特性
 
-- **文字转语音 (TTS)**: 支持 SSML，可自定义语音、风格、角色
-- **内部 STT 能力**: 供框架内其他插件复用，不单独暴露命令
-- **音频缓存**: 基于文本与音色配置的缓存机制
+- **文字转语音 (TTS)**：文本最多 500 个字符，SSML 属性和正文均经过转义
+- **内部 STT 能力**：只接受 16 kHz、单声道、16 位 PCM WAV，不单独暴露命令
+- **有界音频缓存**：缓存键包含文本和全部音色配置，最多 2048 项、256 MiB，保留 7 天
+- **受限传输**：单个音频最多 10 MiB，TTS/STT 共用最多 2 个并发 Azure 请求
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
-| `tts` | `/语音`, `/念`, `/tts` | 文字转语音 |
+| `tts` | `/语音`, `/念`, `/tts` | 管理员文字转语音 |
 
 #### 使用示例
 
@@ -728,6 +753,8 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 /语音 你好，我是小青
 /tts Hello World
 ```
+
+Azure 密钥、区域、音色和可选代理只配置在 `config/secrets.json` 的 `plugins.voice`；完整字段与运行边界见 `plugins/voice/README.md`。
 
 ---
 
@@ -759,7 +786,7 @@ Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚�
 
 - 周一至周五 **10:00 / 10:30 / 11:00 / 11:30** 检查 arXiv 是否已经更新到当天；更新后执行筛选并推送论文列表。
 - 周一至周五 **12:00** 做最后一次检查；如果当天仍未更新，发送停更通知，不再继续追加定时任务。
-- 每天自动推送只执行一次，运行状态由 `plugins/arxiv_filter/data/update_status.json` 去重。
+- 每天自动推送只执行一次，运行状态由 `data/arxiv_filter/update_status.json` 去重。
 - 用户仍可通过 `/arxiv` 手动执行一次筛选；这会重新发送论文列表，并触发 Codex 摘要侧路。
 
 #### 技术说明
@@ -819,6 +846,8 @@ Codex 侧会对同一天摘要做去重：
 ### ads_paper - 论文与文献管理
 
 基于 NASA ADS API 的天文论文管理助手，支持论文搜索、引用管理、笔记记录、AI 摘要等功能。
+
+搜索、作者、引用、引用网络、相关论文与摘要命令可在私聊或群聊使用；笔记、写作灵感、研究主题、截稿日期、每日个性化推荐和个人文献库命令只允许私聊。
 
 #### 核心特性
 
@@ -896,16 +925,15 @@ https://arxiv.org/abs/astro-ph/0701089
 {
   "plugins": {
     "ads_paper": {
-      "ads_token": "your-ads-api-token",
-      "api_base": "https://your-llm-api.com/v1",  // 可选：AI 摘要
-      "api_key": "your-llm-key",                  // 可选：AI 摘要
-      "model": "gpt-4"                             // 可选：AI 摘要
+      "ads_token": "your-ads-api-token"
     }
   }
 }
 ```
 
-获取 ADS API Token: https://ui.adsabs.harvard.edu/user/settings/token
+AI 摘要使用 `config.plugins.ads_paper.ai.routes.summary`，模型链复用 `config.ai.models`，API Key 复用 `secrets.ai.providers`。未配置或调用失败时返回 ADS 原始摘要。
+
+获取 ADS API Token 请访问 https://ui.adsabs.harvard.edu/user/settings/token
 
 #### 使用示例
 
@@ -970,7 +998,7 @@ https://arxiv.org/abs/astro-ph/0701089
 - 需要申请 ADS API Token 才能使用
 - AI 摘要功能需要额外配置 LLM API
 - 所有接受 `<ID>` 参数的命令都支持多种格式
-- 笔记、写作灵感、截稿日期数据保存在 `plugins/ads_paper/data/` 目录
+- 笔记、写作灵感、截稿日期数据保存在 `data/ads_paper/` 目录
 
 ---
 
@@ -1047,13 +1075,19 @@ https://arxiv.org/abs/astro-ph/0701089
 #### 依赖库
 
 - `astropy` - 核心天文计算库
-- `astroquery` - 天文数据库查询（Simbad）
+
+SIMBAD 查询直接使用受限的 TAP HTTP 请求，不再依赖 `astroquery`。
 
 ---
 
 ### color - 颜色查询
 
 中国传统色彩查询与颜色转换工具，支持光谱型颜色查询。
+
+当前发行资产内置 526 种中国传统色；普通成员可使用全部查询功能。`-w` 添加和
+`-d` 删除会修改当前会话共享数据，因此仅限 Bot 全局管理员，每个会话作用域最多
+保存 200 种自定义颜色。生成的色卡使用 256 项、32 MiB、30 天空闲 TTL 的磁盘
+LRU 缓存。
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
@@ -1115,18 +1149,20 @@ https://arxiv.org/abs/astro-ph/0701089
 
 ### wolframalpha - 万能计算器
 
-Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
+Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。命令仅限 Bot 管理员，App ID 只从 `config/secrets.json` 的 `plugins.wolframalpha.appid` 读取。
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
-| `alpha` | `/alpha`, `/wolfram`, `/wa`, `/计算` | 计算或查询 |
+| `alpha` | `/alpha`, `/wolfram`, `/wa`, `/计算` | 管理员计算或查询 |
 
-#### 特殊后缀
+#### 显式模式
 
-| 后缀 | 说明 |
+| 参数 | 说明 |
 |------|------|
-| `step` | 显示步骤解答 |
-| `cp` | 仅返回完整结果 |
+| `--mode=step` | 显示步骤解答 |
+| `--mode=complete` | 仅返回完整结果 |
+
+`--mode=cp` 是 complete 的兼容别名。模式必须显式指定；普通问题自然以 `step` 或 `cp` 结尾时，这些词仍属于问题正文。查询最多 500 字符，三种模式共享 30 秒超时、1 MiB 响应预算和 2 个并发请求，最终 API 文本最多 2400 字符。
 
 #### 使用示例
 
@@ -1136,8 +1172,8 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 /alpha integrate x^2          # 积分
 /alpha solve x^2+2x+1=0      # 方程求解
 /alpha derivative of sin(x)   # 求导
-/alpha integrate x^2 step     # 显示步骤解答
-/alpha 1+1 cp                # 仅返回完整结果
+/alpha --mode=step integrate x^2  # 显示步骤解答
+/alpha --mode=complete 1+1        # 仅返回完整结果
 /计算 population of China     # 查询数据
 ```
 
@@ -1145,7 +1181,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 
 ### codex - Codex 后台任务队列
 
-通过 QQ 命令调用生产环境 Codex CLI。插件自己维护 Codex 会话标签、任务队列和对话记录，不占用 XiaoQing 的框架 Session。全部 `/codex` 命令保持 `admin_only: true`，只有 `admin_user_ids` 中的 Bot 管理员可以使用。
+通过 QQ 命令调用生产环境 Codex CLI。插件自己维护 Codex 会话标签、任务队列和对话记录，不占用 XiaoQing 的框架 Session。全部 `/codex` 命令保持 `admin_only: true` 且仅允许私聊，只有 `admin_user_ids` 中的 Bot 管理员能在私聊中使用。
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
@@ -1158,8 +1194,8 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 - **队列隔离**：同一标签内串行执行，避免并发 resume 同一个 Codex thread；不同标签可并行执行。
 - **主动回发结果**：任务完成、失败、超时或取消后，插件主动发送 `[codex:<name> #<job_id>]` 文字和图片消息。
 - **图片透传**：每个任务自动获得 artifacts 目录；Codex 生成的本地图片会从 artifacts 或 `$CODEX_HOME/generated_images/` 复制到会话图片目录，并随文字一起发送。
-- **会话持久化**：`plugins/codex/data/sessions.json` 保存 label、cwd 和 thread id；`plugins/codex/data/session/<name>/conversation.jsonl` 保存每个会话的任务、回复和图片记录。
-- **受保护会话与归档**：`astro-ph` 等受保护会话不能被普通删除；删除会话时旧历史会移动到 `plugins/codex/data/deleted_sessions/`。
+- **会话持久化**：`data/codex/sessions.json` 保存 label、cwd 和 thread id；`data/codex/session/<name>/conversation.jsonl` 保存每个会话的任务、回复和图片记录。
+- **受保护会话与归档**：`astro-ph` 等受保护会话不能被普通删除；删除会话时旧历史会移动到 `data/codex/deleted_sessions/`。
 - **arXiv 摘要会话**：为 arXiv Filter 提供固定 `astro-ph` 会话、首次静默初始化、历史摘要重发和失败重试。
 - **路径归一化**：QQ 中建议统一输入 `/` 斜杠路径，插件按 bot 所在系统解析。
 
@@ -1184,16 +1220,17 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 {
   "plugins": {
     "codex": {
-      "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
-      "allowed_cwd_roots": ["C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"],
       "protected_sessions": ["astro-ph"],
       "arxiv_summary": {
         "label": "astro-ph",
-        "cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
         "methodology": "arxiv-summary-methodology.md"
       },
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
+      "session_ttl_days": 90,
+      "artifact_retention_days": 30,
+      "emergency_disk_bytes": 10737418240,
+      "emergency_queue_limit": 1000,
       "spawn_timeout_seconds": 30,
       "job_timeout_seconds": 3600,
       "max_stdout_bytes": 16777216,
@@ -1219,10 +1256,15 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 
 如果 Codex CLI 不在 PATH 中，可在 `config.json` 或 `secrets.json` 的 `plugins.codex.codex_bin` 指定完整路径。`allowed_cwd_roots` 是安全边界，用户创建会话时指定的 `cwd:` 必须位于这些目录下。`arxiv_summary.cwd` 也应位于允许目录内，并提前放置 `arxiv-summary-methodology.md`。
 
+安全边界必须按本机代码执行权限理解：manifest 只允许 Bot 管理员私聊触发，但 `codex_bin` 是可配置的可执行文件，等价于授予 Bot 进程运行该文件的权限；`sandbox: danger-full-access` 会取消 Codex CLI 的文件系统限制，`approval_policy: never` 不提供人工确认。只有受信任的管理员配置才能修改这些字段，不能把 Codex 命令开放到群聊或不受信任的配置写入路径。任务输出只向聊天发送受限文本、图片和文件名，完整本机路径留在日志/归档内部。
+
 资源预算字段及默认值如下。配置值超出范围时会被钳制到最近边界。
 
 | 字段 | 默认值 | 合法范围 | 超限行为 |
 |---|---:|---:|---|
+| `per_session_queue_limit` | 10 项 | 1-1,000 | 单会话达到排队上限后硬拒绝新任务。 |
+| `emergency_queue_limit` | 1,000 项 | 10-10,000，且不低于会话上限 | 触发进程级紧急队列保护。 |
+| `emergency_disk_bytes` | 10 GiB | 不低于 64 MiB | 数据目录达到阈值后拒绝新任务。 |
 | `max_stdout_bytes` | 16 MiB | 64 KiB-128 MiB | stdout 累计超限时终止整棵 Codex 进程树。 |
 | `max_stderr_bytes` | 4 MiB | 64 KiB-64 MiB | stderr 累计超限时终止整棵 Codex 进程树。 |
 | `max_json_line_bytes` | 1 MiB | 16 KiB-8 MiB | 单条 JSON 事件超限时立即终止任务。 |
@@ -1237,7 +1279,7 @@ Wolfram|Alpha 计算引擎，可以计算数学、物理、化学等问题。
 | `max_image_frames` | 120 帧 | 1-500 | 多帧图片超限时被拒绝。 |
 | `max_qq_images` | 10 张 | 1-20 | 只发送前 N 张已接受图片，其余已归档图片不发送。 |
 
-输出流/最终输出超限属于进程级硬限制；最终输出文件超限只归档有界头尾副本，QQ 文本字符超限采用“完整归档、截断投递”；图片扫描、数量、字节、签名/解码、像素与帧数超限采用“拒绝不合格产物”，拒绝原因进入任务记录。`max_qq_images` 只限制 QQ 发送数量。资源预算保护 Bot 存活性与投递链路，不改变 Codex 面向可信管理员的 sandbox、审批策略和工作目录灵活性。
+输出流/最终输出超限属于进程级硬限制；最终输出文件超限只归档有界头尾副本，QQ 文本字符超限采用“完整归档、截断投递”；图片扫描、数量、字节、签名/解码、像素与帧数超限采用“拒绝不合格产物”，拒绝原因进入任务记录。`max_qq_images` 只限制 QQ 发送数量。`sessions.json` 采用版本化字段白名单，坏状态隔离到 `quarantine/`；`session_ttl_days` 归档空闲非受保护会话，`artifact_retention_days` 清理已结束 job、输出及旧归档，活跃任务不会被回收。资源预算保护 Bot 存活性与投递链路，不改变 Codex 面向可信管理员的 sandbox、审批策略和工作目录灵活性。
 
 #### arXiv 摘要会话
 
@@ -1263,7 +1305,7 @@ https://arxiv.org/abs/2605.18050
 
 ```
 /codex create main
-/codex create repo cwd:C:/Users/testuser/Desktop/project
+/codex create repo cwd:C:/workspace/project
 /codex main 总结一下当前项目结构
 /codex repo 跑一下测试并说明失败点
 /codex list
@@ -1273,15 +1315,15 @@ https://arxiv.org/abs/2605.18050
 /codex delete astro-ph --force --protected
 ```
 
-Windows 下可以写 `C:/Users/testuser/Desktop/project`。Linux/macOS 下照常写 `/home/user/project`。插件只负责路径解析和允许目录校验，不会绕过 Codex CLI 自身的 sandbox、审批策略和系统权限。
+Windows 下可以写 `C:/workspace/project`。Linux/macOS 下照常写 `/srv/xiaoqing/workspaces/project`。插件只负责路径解析和允许目录校验，不会绕过 Codex CLI 自身的 sandbox、审批策略和系统权限。
 
-Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，用户不需要额外要求“把图片保存到哪里”。如果 Codex 在最终回复里用 Markdown 图片语法或 `图片: <path>` 标出图片，或直接把图片保存到本任务 artifacts 目录，插件会把图片复制到 `plugins/codex/data/session/<name>/images/` 并发送到 QQ。内置 imagegen 若只落到 `$CODEX_HOME/generated_images/`，插件也会按任务开始和结束时间扫描生成的图片作为兜底。
+Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，用户不需要额外要求“把图片保存到哪里”。如果 Codex 在最终回复里用 Markdown 图片语法或 `图片: <path>` 标出图片，或直接把图片保存到本任务 artifacts 目录，插件会把图片复制到 `data/codex/session/<name>/images/` 并发送到 QQ。内置 imagegen 若只落到 `$CODEX_HOME/generated_images/`，插件也会按任务开始和结束时间扫描生成的图片作为兜底。
 
 ---
 
 ### shell - 终端命令
 
-在服务器上执行终端命令。
+供 Bot 管理员在私聊中执行服务器终端命令。
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
@@ -1293,7 +1335,7 @@ Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，
 - **管理员命令启用列表**：控制默认开放哪些命令入口，用于防误触；它不是安全沙箱，Python、PowerShell、Docker 等通用工具仍可执行任意管理员操作
 - **执行超时**：默认 30 秒超时
 - **输出限制**：输出最大 4000 字符
-- **权限边界**：唯一安全边界是可靠的 `admin_only` 与入站认证；参数检查和命令链接符限制只降低误操作概率
+- **权限边界**：`admin_only`、manifest 私聊场景与入站认证共同构成边界；参数检查和命令链接符限制只降低误操作概率
 - **超时清理**：超时后会终止整棵子进程树，而不只是直接子进程
 - **路径归一化**：QQ 中可统一输入 `/` 斜杠路径，插件按 bot 所在系统转换
 
@@ -1325,7 +1367,7 @@ Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，
 
 Shell 插件会在拆分命令参数后，对看起来像路径的参数做系统相关归一化：
 
-- Windows 上可以输入 `C:/Users/testuser/Desktop/a.txt`，执行前会规范化成 Windows 本机路径。
+- Windows 上可以输入 `C:/workspace/a.txt`，执行前会规范化成 Windows 本机路径。
 - Linux/macOS 上继续输入 `/home/user/a.txt`、`~/a.txt`、`./file` 或 `../file`。
 - `key=value` 中的 value 如果像路径，也会被归一化，例如 `--output=C:/tmp/a.txt`。
 - URL（如 `https://example.com/a/b`）不会被当作路径改写。
@@ -1341,9 +1383,9 @@ Shell 插件会在拆分命令参数后，对看起来像路径的参数做系�
 /sh ping -c 3 google.com
 /sh list                    # 查看白名单
 /shell help                 # 显示帮助
-/shell cp C:/Users/testuser/Desktop/a.txt C:/Users/testuser/Desktop/b.txt
-/shell cmd /c copy C:/Users/testuser/Desktop/a.txt C:/Users/testuser/Desktop/b.txt
-/shell robocopy C:/Users/testuser/Desktop/src C:/Users/testuser/Desktop/dst a.txt
+/shell cp C:/workspace/a.txt C:/workspace/b.txt
+/shell cmd /c copy C:/workspace/a.txt C:/workspace/b.txt
+/shell robocopy C:/workspace/src C:/workspace/dst a.txt
 ```
 
 > ⚠️ **警告**: 此命令具有高危险性，请谨慎使用，仅管理员可用。
@@ -1352,31 +1394,32 @@ Shell 插件会在拆分命令参数后，对看起来像路径的参数做系�
 
 ### url_parser - 链接解析
 
-自动解析消息中的链接，生成预览信息。
+为完整的单 URL 消息生成网页标题、描述和可选预览图。
 
-**无需命令触发**，当消息中包含 URL 时自动解析。
+**无需命令触发**。Dispatcher 仅在清理后的消息整体是一个 HTTP(S) URL 时调用本插件；带附加文字或
+多个 URL 的消息不会触发。
 
-支持的平台：
-- Bilibili 视频/动态
-- 微博
-- 知乎
-- GitHub
-- 通用网页
+- 标题最多 200 个字符；描述按 `description`、`og:description`、`twitter:description` 的顺序读取，
+  最多 100 个字符。
+- `og:image`、`twitter:image` 支持相对地址，并以页面最终 URL 为基准补全。
+- 输入 URL 最多 2048 个字符，最终文字预览不会超过 QQ 单条文本预算。
+- HTML 上限为 2 MiB；预览图上限为 5 MiB、2000 万像素和 120 帧，只接收 JPEG、PNG、WebP。
+- 页面和图片使用不含应用凭据的公共安全客户端，每次请求与重定向都校验 URL 和 DNS；同时最多处理 4 个预览。
+- 图片缓存位于插件数据目录的 `url_previews/`，最多 128 项、128 MiB，7 天未使用后清理。
 
-如果网页提供 `og:image` 或 `twitter:image`，插件会在文字摘要后附带实际图片消息段。
-
-对于使用相对路径图片地址的网页，插件也会基于页面 URL 自动补全成绝对地址后再发送。
+页面抓取失败时不发送预览；可选图片失败时仍保留已解析出的文字摘要。需要脚本执行、登录态或专有接口的
+网站可能无法生成预览。
 
 ---
 
 ### qingssh - SSH 远程控制
 
-SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
+仅供 Bot 管理员私聊使用的 SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 
 **核心特性**:
 - **环境保持**: 支持 `cd` 切换目录和 `export` 环境变量
 - **流式输出**: 实时推送长命令的执行结果
-- **用户隔离**: 支持多用户、多群组同时与不同服务器交互
+- **用户隔离**: 不同私聊管理员的连接和远程环境互不复用
 - **配置管理**: 支持导入 `~/.ssh/config`，支持密钥和密码认证
 - **用户名支持**: ✅ 支持 `user@server` 格式指定连接用户名
 - **Host Key 校验**: 默认严格校验 `~/.ssh/known_hosts`
@@ -1384,11 +1427,10 @@ SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 
 #### 连接管理逻辑（核心机制）
 
-本插件采用严格的 **用户 + 群组 + 服务器** 三维隔离机制，确保连接的安全性和独立性：
+本插件按 **私聊用户 + 服务器** 隔离连接，确保连接的安全性和独立性：
 
 1.  **连接隔离**：
-    - 连接标识符 (Key) = `用户ID : 群ID : 服务器名`
-    - 群 A 中建立的服务器连接不能在群 B 中直接使用，需要重新连接。
+    - 连接标识符由用户、私聊场景和服务器共同确定。
     - 同样，其他用户也无法复用你的连接。
 
 2.  **交互逻辑**：
@@ -1396,22 +1438,20 @@ SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
     - 支持长连接和状态保持（如 `cd` 目录切换在回话期间持续有效）。
 
 3.  **断开逻辑**：
-    - `/ssh断开` 命令仅断开 **当前用户** 在 **当前群** 的指定连接。
-    - **即使**你在多个群都连接了同一个服务器，在一个群断开**不会影响**其他群的连接。
+    - `/ssh断开` 命令仅断开当前私聊用户的指定连接。
     - **安全设计**：你永远无法断开其他用户的连接。
 
 #### 交互与隔离示例
 
-假设已添加服务器 `myserver`，不同用户在不同场景下的操作如下：
+假设已添加服务器 `myserver`，不同私聊管理员的操作如下：
 
 | 时间 | 操作者 | 环境 |指令 | 状态/结果 |
 |------|--------|------|------|-----------|
-| T1 | 用户A | 群1 | `/ssh myserver` | ✅ **建立连接 C1** (Key: `A:群1:myserver`) |
-| T2 | 用户A | 群1 | `cd /var/www` | 📂 C1 切换目录到 `/var/www` |
-| T3 | 用户B | 群1 | `/ssh myserver` | ✅ **建立连接 C2** (Key: `B:群1:myserver`) <br> *用户B拥有独立环境* |
-| T4 | 用户B | 群1 | `pwd` | 📄 C2 输出 `/root` (不受 A 的 `cd` 影响) |
-| T5 | 用户A | 群2 | `/ssh myserver` | ✅ **建立连接 C3** (Key: `A:群2:myserver`) <br> *即便是同一用户，换了群也是新环境* |
-| T6 | 用户A | 群1 | `/ssh断开` | 🔌 **断开 C1** <br> *C2 (用户B) 和 C3 (A在群2) 保持连接，不受影响* |
+| T1 | 用户A | 私聊 | `/ssh myserver` | ✅ 建立连接 C1 |
+| T2 | 用户A | 私聊 | `cd /var/www` | 📂 C1 切换目录到 `/var/www` |
+| T3 | 用户B | 私聊 | `/ssh myserver` | ✅ 建立独立连接 C2 |
+| T4 | 用户B | 私聊 | `pwd` | 📄 C2 输出 `/root`，不受 C1 影响 |
+| T5 | 用户A | 私聊 | `/ssh断开` | 🔌 只断开 C1，C2 保持连接 |
 
 #### 命令列表
 
@@ -1470,7 +1510,7 @@ SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 ```
 /ssh状态                    # 查看当前有多少活跃连接
 /ssh断开                    # 断开当前的连接
-/ssh断开 myserver           # 断开当前用户在当前群里的 myserver 连接
+/ssh断开 myserver           # 断开当前私聊用户的 myserver 连接
 ```
 
 **6. 导入配置**
@@ -1503,7 +1543,7 @@ SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 
 #### 配置说明
 
-服务器配置保存在 `plugins/qingssh/data/servers.json`：
+服务器配置保存在 `data/qingssh/servers.json`：
 
 ```json
 {
@@ -1575,15 +1615,14 @@ SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 
 ### signin - 自动签到
 
-自动签到多个网站。
+使用部署者配置的共享凭据执行影视飓风远端签到；该命令保持 Bot 管理员专用。
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
 | `signin` | `/signin`, `/签到` | 执行签到 |
 
-#### 支持平台
+#### 签到平台
 
-- **Sony** (`/signin sony`, `/signin s`) - Sony 官网签到
 - **影视飓风** (`/signin yingshi`, `/signin y`) - 影视飓风签到
 
 #### 配置说明
@@ -1594,10 +1633,6 @@ SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 {
   "plugins": {
     "signin": {
-      "sony": {
-        "login_id": "账号",
-        "password": "密码"
-      },
       "yingshijufeng": {
         "app_id": "应用ID",
         "kdt_id": "店铺ID",
@@ -1617,8 +1652,6 @@ SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 
 ```
 /signin                  # 显示帮助
-/signin sony             # Sony 官网签到
-/signin s                # Sony 签到（简写）
 /signin yingshi          # 影视飓风签到
 /signin y                # 影视飓风签到（简写）
 ```
@@ -1627,12 +1660,12 @@ SSH 远程控制插件，支持交互式会话、命令执行和配置管理。
 
 ### twitter - Twitter 图片
 
-Twitter 图片抓取与随机发送。
+从指定 X/Twitter 账号抓取图片到有限的本地缓存，并随机发送一张本轮尚未发送的图片。
 
 | 命令 | 触发词 | 说明 | 管理员 |
 |------|--------|------|--------|
-| `twimg` | `/twimg`, `/twitter`, `/推特` | 随机发送一张图片 | ❌ |
-| `tw_fetch` | `/tw_fetch`, `/抓取推特` | 手动抓取新图 | ✅ |
+| `twimg` | `/twimg`, `/twitter`, `/推特` | 只从本地缓存随机发送一张图片 | ❌ |
+| `tw_fetch` | `/tw_fetch`, `/抓取推特` | 立即抓取新图 | ✅ |
 
 #### 配置说明
 
@@ -1643,10 +1676,12 @@ Twitter 图片抓取与随机发送。
   "plugins": {
     "twitter": {
       "user_id": "Twitter用户ID",
-      "proxy": "http://127.0.0.1:1080",
-      "max_pages": 50,
-      "headers": {},
-      "cookies": {}
+      "headers": {
+        "authorization": "Bearer <TWITTER_BEARER_TOKEN>"
+      },
+      "cookies": {},
+      "proxy": "http://proxy.example.com:8080",
+      "max_pages": 50
     }
   }
 }
@@ -1654,22 +1689,23 @@ Twitter 图片抓取与随机发送。
 
 | 配置项 | 说明 |
 |--------|------|
-| `user_id` | 要抓取的 Twitter 用户 ID |
-| `proxy` | 代理地址（可选） |
-| `max_pages` | 最大检查页数（默认 50） |
-| `headers` | 自定义请求头 |
-| `cookies` | Cookie 配置 |
+| `user_id` | 目标用户 ID，接受非空字符串或正整数 |
+| `headers` | API 自定义请求头，仅接受有限的字符串键值；代码不提供默认认证头 |
+| `cookies` | API Cookie，仅接受有限的字符串键值 |
+| `proxy` | 可选的 HTTP(S) 代理；空值和非法地址视为未配置 |
+| `max_pages` | 最大检查页数，只接受整数并限制在 `1..50`，默认 50 |
 
 #### 功能特性
 
-- **智能抓取**：自动下载新图片，避免重复
-- **本地存储**：图片存储在本地，无需重复下载
-- **随机发送**：随机选择一张未发送过的图片
-- **循环播放**：所有图片发送完后自动重置
+- **安全抓取**：API 响应限制为 5 MiB；媒体只允许三个 Twitter HTTPS 域名，不携带 API 凭据
+- **图片校验**：单图限制为 10 MiB、4000 万像素和 120 帧，只接收 JPEG、PNG、WebP
+- **有限并发**：单轮最多新增 100 张、同时下载 4 张，重复抓取任务串行执行
+- **有限缓存**：图片按内容哈希去重，最多 5000 项、512 MiB，保留 90 天
+- **循环发送**：`posted.txt` 读取上限为 1 MiB，陈旧记录会剔除；全部图片发送后重置轮次
 
 #### 定时任务
 
-- 每天 **3:00** 自动抓取新图片
+- 每天 **03:00** 静默抓取新图片，不主动向群聊发送消息
 
 #### 使用示例
 
@@ -1682,13 +1718,14 @@ Twitter 图片抓取与随机发送。
 ```
 
 说明：
-- `proxy` 不再默认指向本地 `127.0.0.1:1080`；只有显式配置时才启用代理。
-      
+- `/twimg` 只读取本地缓存；缓存为空时需等待定时任务或由管理员执行 `/tw_fetch`。
+- `proxy` 不再默认指向本地 `127.0.0.1:1080`；只有显式配置合法地址时才启用。
+
 ---
 
 ### jupyter - 代码执行
 
-Python 代码执行环境，支持绘图。
+仅供 Bot 管理员私聊使用的 Python 代码执行环境，支持绘图。
       
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
@@ -1698,11 +1735,11 @@ Python 代码执行环境，支持绘图。
 #### 功能特性
       
 - **代码执行**: 支持异步、并发执行 Python 代码
-- **绘图支持**: matplotlib 绘图自动转换为图片发送
+- **绘图支持**: matplotlib 绘图经过字节、PNG 签名和像素校验后以内联图片段发送，不遗留逐次执行目录
 - **持久内核**: 变量状态在会话间保留
 - **自动管理**: 空闲自动关闭，按需自动启动
-- **隔离粒度**: 内核按“用户 + 群”隔离，同一用户跨群不会共享变量
-- **超时处理**: 代码超时会主动中断当前执行，避免继续污染内核状态
+- **隔离粒度**: 内核按私聊用户隔离，不同管理员不会共享变量
+- **超时处理**: 代码超时会主动中断当前执行，用户参数和内部调用统一受 600 秒硬上限约束
 - **启动回滚**: 只有 ready 握手完成后才发布内核；任一启动阶段失败都会完整回滚，无法确认退出的实例会隔离且不再复用
       
 #### 使用示例
@@ -1913,7 +1950,7 @@ A岛匿名版 (ADNMB) 客户端，支持浏览时间线和串内容。
 
 ### minecraft - MC 服务器通信
 
-Minecraft 服务器通信插件，支持多服务器、双向聊天和状态查询。
+仅供 Bot 管理员私聊使用的 Minecraft 服务器通信插件，支持多服务器、日志转发和状态查询。
 
 | 命令 | 触发词 | 说明 | 优先级 |
 |------|--------|------|--------|
@@ -1925,15 +1962,14 @@ Minecraft 服务器通信插件，支持多服务器、双向聊天和状态查�
 
 - **RCON 协议**: 标准 Minecraft RCON 通信
 - **双向聊天**: QQ ↔ MC 实时消息同步
-- **多服务器**: 支持连接多个服务器（不同群/私聊可连接不同服务器）
+- **多服务器**: 不同私聊管理员可连接不同服务器
 - **日志监控**: 自动读取服务器 `latest.log`；以有界 tail、批量摘要、每服务器跨轮 token bucket、单 action 字符/字节上限和全局每 tick action 上限防止日志洪泛，摘要会写明折叠/跳过数量
 
 #### 使用示例
 
 ```
 /mc help                # 显示帮助
-/mcconnect 127.0.0.1:25575 password          # 连接服务器
-/mcconnect 127.0.0.1:25575 password /path/to/latest.log # 连接服务器并指定日志路径
+/mc connect default     # 使用 plugins/minecraft/config.json 与 secrets.json 中的 default profile
 /mc status             # 查看连接状态
 /mc list               # 查看在线玩家
 /mc time set day       # 发送命令到服务器
@@ -1942,7 +1978,10 @@ Minecraft 服务器通信插件，支持多服务器、双向聊天和状态查�
 ```
 
 > [!NOTE]
-> 如果传入日志文件路径，插件会先校验它是否指向 `latest.log`，校验通过后才会建立 RCON 连接。
+> `plugins/minecraft/config.json` 只保存 `host`、`port` 和可选 `log_file`；同名 RCON
+> 密码必须放在 `config/secrets.json -> plugins.minecraft.<配置名>`，不能作为聊天参数传递。
+> Source RCON 不加密，建议服务端仅监听 `127.0.0.1`，跨主机时使用 SSH 隧道，并禁止把
+> RCON 端口暴露给不可信网络。若整块响应在等待续包时超时，回复会明确提示可能不完整。
 
 #### 定时任务
 

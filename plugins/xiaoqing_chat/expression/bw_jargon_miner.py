@@ -9,8 +9,9 @@ from typing import Any
 from ..llm.llm_client import LLMError, chat_completions_raw_with_fallback_paths
 from ..logging_utils import _redacted_value, sanitize_log_fields
 from ..memory.memory import StoredMessage
+from ..utils.json_parsing import parse_first_json_array, parse_first_json_object
 from .bw_jargon_store import JargonRecord, JargonStore
-from .expr_utils import extract_json_array, extract_json_obj, render_dialogue
+from .expr_utils import render_dialogue
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
 
@@ -18,7 +19,7 @@ _EXTRACT_PROMPT = """你是黑话/缩写挖掘器。你会从对话里抽取可�
 
 要求：
 - 只抽取词条本身，不要抽取整句
-- 如果只是普通常见词，不算黑话
+- 根据词在当前上下文中的特殊含义判断；普通词或证据不足时不算黑话
 - term 用原文；最多输出 10 条
 
 对话如下：
@@ -29,16 +30,17 @@ _EXTRACT_PROMPT = """你是黑话/缩写挖掘器。你会从对话里抽取可�
 - is_jargon: boolean
 - meaning: string (如果你能确定，给一个简短解释；否则留空)
 
-示例：
-[
-  {{"term":"PFC","is_jargon":true,"meaning":"前额叶皮层架构的简称"}}
-]"""
+只输出以下结构的 JSON 数组：
+[{{"term":"...","is_jargon":true,"meaning":""}}]"""
 
-_INFER_PROMPT = """你是黑话/缩写解释器。你会根据上下文给出一个尽量简短准确的解释。
+_INFER_PROMPT = """你是黑话/缩写解释器。只根据给出的多个上下文片段判断词义。
 
 词条：{term}
 上下文片段：
 {contexts}
+
+不同上下文含义不一致或证据不足时，meaning 留空；不要用熟悉的相近词义补全。
+is_global 只表示上下文明确证明它跨会话通用，不能根据常识猜测。
 
 请严格输出 JSON：
 {{
@@ -100,15 +102,10 @@ async def mine_jargon(
     timeout_seconds: float,
     max_retry: int,
     retry_interval_seconds: float,
-    proxy: str,
-    endpoint_path: str,
     infer_threshold: int = 3,
-    extra_payload: dict[str, Any] | None = None,
 ) -> int:
-    api_base = secrets.get("api_base", "")
-    api_key = secrets.get("api_key", "")
     model = secrets.get("model", "")
-    if not api_base or not api_key or not model:
+    if "_ai" in secrets and secrets.get("_ai") is None:
         return 0
 
     dialogue = render_dialogue(messages)
@@ -120,10 +117,7 @@ async def mine_jargon(
     prompt = _EXTRACT_PROMPT.format(dialogue=dialogue)
     try:
         resp, _path = await chat_completions_raw_with_fallback_paths(
-            session=http_session,
-            api_base=api_base,
-            api_key=api_key,
-            model=model,
+            secrets=secrets,
             messages=[{"role": "user", "content": prompt}],
             temperature=min(0.4, float(temperature)),
             top_p=float(top_p),
@@ -131,9 +125,6 @@ async def mine_jargon(
             timeout_seconds=float(timeout_seconds),
             max_retry=int(max_retry),
             retry_interval_seconds=float(retry_interval_seconds),
-            proxy=proxy,
-            endpoint_path=endpoint_path,
-            extra_payload=extra_payload,
         )
     except LLMError as exc:
         _log_jargon_step(
@@ -147,7 +138,7 @@ async def mine_jargon(
         )
         return 0
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-    arr = extract_json_array(str(content))
+    arr = parse_first_json_array(str(content))
     _log_jargon_step(
         "jargon.extract.done",
         chat_id=chat_id,
@@ -205,10 +196,7 @@ async def mine_jargon(
         ip = _INFER_PROMPT.format(term=term, contexts=contexts)
         try:
             r2, _p2 = await chat_completions_raw_with_fallback_paths(
-                session=http_session,
-                api_base=api_base,
-                api_key=api_key,
-                model=model,
+                secrets=secrets,
                 messages=[{"role": "user", "content": ip}],
                 temperature=min(0.2, float(temperature)),
                 top_p=float(top_p),
@@ -216,9 +204,6 @@ async def mine_jargon(
                 timeout_seconds=float(timeout_seconds),
                 max_retry=int(max_retry),
                 retry_interval_seconds=float(retry_interval_seconds),
-                proxy=proxy,
-                endpoint_path=endpoint_path,
-                extra_payload=extra_payload,
             )
         except LLMError as exc:
             _log_jargon_step(
@@ -233,7 +218,7 @@ async def mine_jargon(
             )
             continue
         c2 = (((r2.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
-        obj = extract_json_obj(str(c2))
+        obj = parse_first_json_object(str(c2)) or {}
         meaning = str(obj.get("meaning", "") or "").strip()
         _log_jargon_step(
             "jargon.infer.done",
@@ -243,7 +228,7 @@ async def mine_jargon(
         if meaning:
             rec.meaning = meaning[:200].strip()
             rec.is_complete = True
-        # Model output may explain a term but may never widen its visibility.
+        # 模型输出可以解释术语，但绝不能扩大其可见范围。
         rec.is_global = False
         rec.last_inference_count = rec.count
         rec.updated_at = time.time()

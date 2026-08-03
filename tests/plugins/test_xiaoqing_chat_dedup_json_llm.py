@@ -1,22 +1,12 @@
 import pytest
 
-from plugins.xiaoqing_chat.memory.knowledge_extract import _parse_fact_json, _parse_word_json
+from plugins.xiaoqing_chat.memory.knowledge_extract import _parse_fact_json
 from plugins.xiaoqing_chat.memory.memory_retrieval import _parse_question_json
 
 
 def test_parse_question_json_rejects_embedded_json_object() -> None:
     text = 'prefix {"question": "  今晚吃什么  "} suffix'
     assert _parse_question_json(text) == ""
-
-
-def test_parse_word_json_rejects_embedded_json_object() -> None:
-    text = (
-        "说明：\n"
-        '{"items":[{"word":"YYDS","definition":"永远的神"},{"word":"","definition":"skip"}]}'
-        "\n结束"
-    )
-    items = _parse_word_json(text)
-    assert items == []
 
 
 def test_parse_fact_json_rejects_embedded_json_object() -> None:
@@ -59,7 +49,7 @@ def test_llm_content_extractor_preserves_untrusted_think_prefix() -> None:
             {
                 "message": {
                     "reasoning_content": "这里不应该参与解析",
-                    "content": "<think>内部思考</think>\n{\"answer\":\"最终\"}",
+                    "content": '<think>内部思考</think>\n{"answer":"最终"}',
                 }
             }
         ]
@@ -80,8 +70,9 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
                     {
                         "message": {
                             "content": (
-                                '{"suitable": false, "reason": "重复", '
-                                '"need_replan": true}'
+                                '{"suitable": false, "reason": "重复", "need_replan": true, '
+                                '"persona_scan_complete": true, "persona_claims": [], '
+                                '"context_scan_complete": true, "context_claims": []}'
                             )
                         }
                     }
@@ -119,8 +110,6 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
         timeout_seconds=1.0,
         max_retry=0,
         retry_interval_seconds=0.0,
-        proxy="",
-        endpoint_path="/v1/chat/completions",
     )
 
     assert called["count"] == 1
@@ -131,40 +120,69 @@ async def test_reply_checker_uses_shared_content_extractor(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_llm_client_fallback_wrapper_shared_logic_for_content_mode() -> None:
-    from plugins.xiaoqing_chat.llm.llm_client import LLMError, _call_with_fallback_paths
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
 
-    calls: list[str] = []
-
-    async def invoke(path: str):
-        calls.append(path)
-        if path == "/v1/chat/completions":
-            raise LLMError("http_404:not found")
-        return "ok"
-
-    value, used_path = await _call_with_fallback_paths(
-        endpoint_path="/v1/chat/completions",
-        invoke=invoke,
+    from core.ai import AICompletionResult
+    from plugins.xiaoqing_chat.llm.llm_client import (
+        chat_completions_raw_with_fallback_paths,
     )
 
-    assert value == "ok"
-    assert used_path == "/chat/completions"
-    assert calls == ["/v1/chat/completions", "/chat/completions"]
+    service = SimpleNamespace(
+        complete=AsyncMock(
+            return_value=AICompletionResult(
+                response={"choices": [{"message": {"content": "ok"}}]},
+                profile="fallback-profile",
+                provider="provider",
+                model="actual-model",
+                finish_reason="stop",
+                attempts=2,
+            )
+        )
+    )
+    response, used_profile = await chat_completions_raw_with_fallback_paths(
+        secrets={"_ai": service, "_route": "chat"},
+        model="legacy-display-only",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.2,
+        top_p=0.9,
+        max_tokens=32,
+        timeout_seconds=1.0,
+        max_retry=0,
+        retry_interval_seconds=0.0,
+    )
+
+    assert response["choices"][0]["message"]["content"] == "ok"
+    assert used_profile == "fallback-profile"
+    assert "model" not in service.complete.await_args.kwargs
 
 
 @pytest.mark.asyncio
 async def test_llm_client_fallback_wrapper_stops_on_non_404() -> None:
-    from plugins.xiaoqing_chat.llm.llm_client import LLMError, _call_with_fallback_paths
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
 
-    calls: list[str] = []
+    from core.ai import AIRequestError
+    from plugins.xiaoqing_chat.llm.llm_client import (
+        chat_completions_raw_with_fallback_paths,
+    )
 
-    async def invoke(path: str):
-        calls.append(path)
-        raise LLMError("http_500:boom")
+    service = SimpleNamespace(
+        complete=AsyncMock(side_effect=AIRequestError("authentication", status=401))
+    )
+    with pytest.raises(AIRequestError, match="ai_authentication"):
+        await chat_completions_raw_with_fallback_paths(
+            secrets={"_ai": service, "_route": "chat"},
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.2,
+            top_p=0.9,
+            max_tokens=32,
+            timeout_seconds=1.0,
+            max_retry=0,
+            retry_interval_seconds=0.0,
+        )
 
-    with pytest.raises(LLMError, match="http_500"):
-        await _call_with_fallback_paths(endpoint_path="/v1/chat/completions", invoke=invoke)
-
-    assert calls == ["/v1/chat/completions"]
+    service.complete.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -196,7 +214,6 @@ async def test_person_fact_extract_skips_empty_llm_response(
         http_session=None,
         secrets={"api_base": "https://example.com", "api_key": "k", "model": "m"},
         memory_db=memory_db,
-        bot_name="小青",
         chat_id="g1",
         history=history,
         temperature=0.8,
@@ -205,8 +222,48 @@ async def test_person_fact_extract_skips_empty_llm_response(
         timeout_seconds=1.0,
         max_retry=0,
         retry_interval_seconds=0.0,
-        proxy="",
-        endpoint_path="/v1/chat/completions",
     )
 
     memory_db.upsert_text.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_person_fact_extract_throttle_survives_capped_history(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from plugins.xiaoqing_chat.memory.knowledge_extract import maybe_extract_person_facts
+    from plugins.xiaoqing_chat.memory.memory import StoredMessage
+
+    complete = AsyncMock(return_value='{"facts":[]}')
+    monkeypatch.setattr(
+        "plugins.xiaoqing_chat.memory.knowledge_extract.chat_completions",
+        complete,
+    )
+
+    def history(start: int, stop: int) -> list[StoredMessage]:
+        return [
+            StoredMessage(role="user", name="User", content=f"消息 {index}", ts=float(index))
+            for index in range(start, stop)
+        ]
+
+    common = {
+        "data_dir": tmp_path,
+        "http_session": None,
+        "secrets": {"api_base": "https://example.com", "api_key": "k", "model": "m"},
+        "memory_db": MagicMock(),
+        "chat_id": "g-capped",
+        "temperature": 0.8,
+        "top_p": 0.9,
+        "max_tokens": 512,
+        "timeout_seconds": 1.0,
+        "max_retry": 0,
+        "retry_interval_seconds": 0.0,
+    }
+
+    await maybe_extract_person_facts(history=history(1, 201), **common)
+    await maybe_extract_person_facts(history=history(2, 202), **common)
+    await maybe_extract_person_facts(history=history(21, 221), **common)
+
+    assert complete.await_count == 2

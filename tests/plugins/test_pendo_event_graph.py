@@ -18,9 +18,7 @@ def test_event_graph_schema_and_event_item_roundtrip(tmp_path: Path):
     db = Database(str(tmp_path / "pendo_event_graph_schema.db"))
     try:
         conn = db.get_connection()
-        item_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(items)").fetchall()
-        }
+        item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
         assert {
             "event_role",
             "event_collection_id",
@@ -33,8 +31,7 @@ def test_event_graph_schema_and_event_item_roundtrip(tmp_path: Path):
         assert {"rrule", "parent_id", "remind_policy_id", "milestones"}.isdisjoint(item_columns)
 
         collection_columns = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(event_collections)").fetchall()
+            row["name"] for row in conn.execute("PRAGMA table_info(event_collections)").fetchall()
         }
         assert {
             "id",
@@ -260,8 +257,8 @@ def test_batch_soft_delete_removes_child_reminder_logs(tmp_path: Path):
         )
         db.insert_item(first, "node-log1")
         db.insert_item(second, "node-log2")
-        db.log_reminder("node-log1", "2030-01-01T08:00:00", sent=True)
-        db.log_reminder("node-log2", "2030-01-02T08:00:00", sent=True)
+        db.log_reminder("node-log1", db.get_item("node-log1", "u1").remind_times[0], sent=True)
+        db.log_reminder("node-log2", db.get_item("node-log2", "u1").remind_times[0], sent=True)
 
         assert db.get_reminder_logs("node-log1")
         assert db.get_reminder_logs("node-log2")
@@ -325,8 +322,8 @@ def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Pat
         assert collection["kind"] == "multi_node"
         assert collection["title"] == "学术会议"
         assert collection["notes"] == "全局备注"
-        assert collection["start_time"] == "2030-04-01T09:00:00"
-        assert collection["end_time"] == "2030-04-03T09:00:00"
+        assert collection["start_time"] == "2030-04-01T01:00:00+00:00"
+        assert collection["end_time"] == "2030-04-03T01:00:00+00:00"
 
         children = db.get_collection_events(collection_id, "u1")
         assert [child.id for child in children] == [
@@ -337,13 +334,13 @@ def test_create_multi_node_event_writes_collection_and_leaf_events(tmp_path: Pat
         assert children[0].event_role == "multi_node_child"
         assert children[0].event_collection_id == collection_id
         assert children[0].remind_times == [
-            "2030-04-01T08:00:00",
-            "2030-04-01T09:00:00",
+            "2030-04-01T00:00:00+00:00",
+            "2030-04-01T01:00:00+00:00",
         ]
         assert children[1].notes == "带证件"
         assert children[1].remind_times == [
-            "2030-04-03T08:00:00",
-            "2030-04-03T09:00:00",
+            "2030-04-03T00:00:00+00:00",
+            "2030-04-03T01:00:00+00:00",
         ]
     finally:
         db.cleanup()
@@ -423,16 +420,16 @@ def test_create_recurring_event_writes_collection_and_occurrence_leaves(tmp_path
             "recurring_occurrence",
         ]
         assert [child.start_time for child in children] == [
-            "2030-01-01T09:00:00",
-            "2030-01-02T09:00:00",
+            "2030-01-01T01:00:00+00:00",
+            "2030-01-02T01:00:00+00:00",
         ]
         assert [child.end_time for child in children] == [
-            "2030-01-01T10:00:00",
-            "2030-01-02T10:00:00",
+            "2030-01-01T02:00:00+00:00",
+            "2030-01-02T02:00:00+00:00",
         ]
         assert children[1].remind_times == [
-            "2030-01-02T08:00:00",
-            "2030-01-02T09:00:00",
+            "2030-01-02T00:00:00+00:00",
+            "2030-01-02T01:00:00+00:00",
         ]
     finally:
         db.cleanup()
@@ -486,13 +483,11 @@ def test_cli_view_edit_delete_and_reminders_support_event_graph(tmp_path: Path):
         assert first_id in reminders["message"]
         assert second_id in reminders["message"]
 
-        set_result = asyncio.run(
-            handler.set_reminders("u1", f"{collection_id} 提前1小时提醒", {})
-        )
+        set_result = asyncio.run(handler.set_reminders("u1", f"{collection_id} 提前1小时提醒", {}))
         assert set_result["status"] == "success"
         assert db.get_item(first_id, "u1").remind_times == [
-            "2030-05-01T09:00:00",
-            "2030-05-01T10:00:00",
+            "2030-05-01T01:00:00+00:00",
+            "2030-05-01T02:00:00+00:00",
         ]
 
         async def fake_parse_updates(changes, current_event):
@@ -545,19 +540,20 @@ def test_cli_delete_single_reminder_removes_it_from_event_and_logs(tmp_path: Pat
             "evt-del",
             user_action="preconfirmed",
             owner_id="u1",
-            remind_time="2030-06-01T09:00:00",
+            remind_time="2030-06-01T01:00:00+00:00",
             allow_future=True,
         )
 
-        result = asyncio.run(
-            handler.handle_reminders("u1", "delete evt-del 2030-06-01 09:00", {})
-        )
+        result = asyncio.run(handler.handle_reminders("u1", "delete evt-del 2030-06-01 09:00", {}))
 
         assert result["status"] == "success"
         event = db.get_item("evt-del", owner_id="u1")
-        assert event.remind_times == ["2030-06-01T10:00:00"]
+        assert event.remind_times == ["2030-06-01T02:00:00+00:00"]
         assert event.reminder_rules == [{"offset_seconds": 0}]
-        assert db.get_reminder_logs("evt-del") == []
+        logs = db.get_reminder_logs("evt-del")
+        assert [log["remind_time"] for log in logs] == ["2030-06-01T02:00:00+00:00"]
+        assert logs[0]["sent_at"] is None
+        assert logs[0]["confirmed_at"] is None
     finally:
         db.cleanup()
 

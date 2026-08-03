@@ -1,20 +1,24 @@
-"""Event graph loading helpers.
+"""加载事件叶节点及其可选集合上下文。
 
-The graph model treats only item rows as schedulable leaves. Collections are
-non-schedulable headers used to group multi-node and recurring leaves.
+事件图只把 ``items`` 行视为可调度叶节点；集合只是多节点或重复事件的分组头，
+自身不参与调度。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..models.item import EventItem
 
+if TYPE_CHECKING:
+    from .db import Database
 
-@dataclass
+
+@dataclass(slots=True)
 class EventFamily:
+    """一个事件叶节点或集合及其完整子节点。"""
+
     kind: str
     collection: dict[str, Any] | None = None
     leaf: EventItem | None = None
@@ -22,9 +26,9 @@ class EventFamily:
 
 
 class EventGraphService:
-    """Load event leaves and their optional collection context."""
+    """按 ID 统一解析单事件、集合子节点和集合头。"""
 
-    def __init__(self, db: Any):
+    def __init__(self, db: Database) -> None:
         self.db = db
 
     def load_by_id(self, owner_id: str, event_or_collection_id: str) -> EventFamily:
@@ -53,30 +57,3 @@ class EventGraphService:
             )
 
         return EventFamily(kind="missing")
-
-    def list_leaf_events_for_range(
-        self, owner_id: str, start_time: str, end_time: str
-    ) -> list[EventItem]:
-        """Return leaf events whose concrete time overlaps a range."""
-        range_start = datetime.fromisoformat(start_time)
-        range_end = datetime.fromisoformat(end_time)
-        events = self.db.get_events_for_range(owner_id, start_time, end_time)
-
-        leaves: list[EventItem] = []
-        for event in events:
-            if not isinstance(event, EventItem) or not event.start_time:
-                continue
-            if event.event_role not in {"single", "multi_node_child", "recurring_occurrence"}:
-                continue
-            event_start = datetime.fromisoformat(event.start_time)
-            event_end = datetime.fromisoformat(event.end_time) if event.end_time else event_start
-            if event_start <= range_end and event_end >= range_start:
-                leaves.append(event)
-        leaves.sort(key=lambda item: (item.start_time or "", item.id))
-        return leaves
-
-    @staticmethod
-    def format_title_context(leaf: EventItem, collection: dict[str, Any] | None) -> str:
-        if collection:
-            return f"{collection.get('title') or '无标题'} · {leaf.title or '无标题'}"
-        return leaf.title or "无标题"

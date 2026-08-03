@@ -1,7 +1,7 @@
 {
     "name": "color",
-    "version": "0.2.0",
-    "description": "中国传统色彩查询与颜色转换工具 - 支持8000+中国色、恒星光谱颜色、自定义颜色库",
+    "version": "0.4.0",
+    "description": "中国传统色、恒星光谱色与管理员会话颜色库查询工具（内置 526 色）",
     "author": "XiaoQing Bot",
     "entry": "main.py",
     "commands": [
@@ -13,7 +13,95 @@
                 "色彩"
             ],
             "help": "颜色查询与转换 | -n 名称 / -r RGB / -x HEX / -s 光谱型 / -h 帮助",
-            "admin_only": false
+            "admin_only": false,
+            "usage": "/color <-n|-r|-x|-c|-a|-s|-t|-w|-d> [参数] [-p]",
+            "examples": ["/color -n 天青", "/color -x 66CCFF -p", "/color -t G"],
+            "invalid_examples": ["/color -p", "/color -n 天青 -x 66CCFF", "/color --unknown"],
+            "subcommands": [
+                {
+                    "name": "-n",
+                    "aliases": ["--name"],
+                    "help": "按中国传统色名称查询；可用 -p/--picture 生成色卡",
+                    "usage": "/color -n <名称> [-p|--picture]",
+                    "examples": ["/color -n 天青", "/color --name 天青 --picture"],
+                    "invalid_examples": ["/color -n", "/color -n 天青 extra"]
+                },
+                {
+                    "name": "-r",
+                    "aliases": ["--rgb"],
+                    "help": "按 RGB 三元组查询最接近的传统色",
+                    "usage": "/color -r <R,G,B|R G B> [-p|--picture]",
+                    "examples": ["/color -r 102,204,255", "/color --rgb 102 204 255 -p"],
+                    "invalid_examples": ["/color -r", "/color -r 999,0,0"]
+                },
+                {
+                    "name": "-x",
+                    "aliases": ["--hex"],
+                    "help": "按十六进制颜色查询最接近的传统色",
+                    "usage": "/color -x <HEX> [-p|--picture]",
+                    "examples": ["/color -x 66CCFF", "/color --hex #66CCFF -p"],
+                    "invalid_examples": ["/color -x", "/color -x ZZZZZZ"]
+                },
+                {
+                    "name": "-c",
+                    "aliases": ["--cmyk"],
+                    "help": "按 CMYK 四元组查询最接近的传统色",
+                    "usage": "/color -c <C,M,Y,K|C M Y K> [-p|--picture]",
+                    "examples": ["/color -c 50,20,0,0"],
+                    "invalid_examples": ["/color -c", "/color -c 10,20,30"]
+                },
+                {
+                    "name": "-a",
+                    "aliases": ["--accord"],
+                    "help": "按名称关键词搜索传统色",
+                    "usage": "/color -a <关键词>",
+                    "examples": ["/color -a 青"],
+                    "invalid_examples": ["/color -a", "/color -a 青 -p"]
+                },
+                {
+                    "name": "-s",
+                    "aliases": ["--stellar"],
+                    "help": "查询恒星光谱型对应的近似颜色",
+                    "usage": "/color -s <光谱型>",
+                    "examples": ["/color -s G2V"],
+                    "invalid_examples": ["/color -s", "/color -s G2V -p"]
+                },
+                {
+                    "name": "-t",
+                    "aliases": ["--spectype"],
+                    "help": "列出光谱型，可按前缀筛选",
+                    "usage": "/color -t [前缀]",
+                    "examples": ["/color -t", "/color --spectype G"],
+                    "invalid_examples": ["/color -t G extra", "/color -t -p"]
+                },
+                {
+                    "name": "-w",
+                    "aliases": ["--write"],
+                    "help": "向当前作用域写入自定义颜色",
+                    "usage": "/color -w <名称> <R> <G> <B> | /color -w <名称> <#HEX>",
+                    "permission": "bot_admin",
+                    "examples": ["/color -w 测试蓝 #3366FF"],
+                    "invalid_examples": ["/color -w 测试蓝", "/color -w 测试蓝 999 0 0"]
+                },
+                {
+                    "name": "-d",
+                    "aliases": ["--delete"],
+                    "help": "删除当前作用域的自定义颜色",
+                    "usage": "/color -d <名称>",
+                    "permission": "bot_admin",
+                    "examples": ["/color -d 测试蓝"],
+                    "invalid_examples": ["/color -d", "/color -d 测试蓝 extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["h", "list", "l", "帮助", "-h", "--help", "-l", "--list"],
+                    "help": "显示全部颜色查询、恒星色和管理员操作",
+                    "usage": "/color help",
+                    "match": "exact",
+                    "examples": ["/color help", "/color -h"],
+                    "invalid_examples": ["/color help extra", "/color -h -n 天青"]
+                }
+            ]
         }
     ],
     "schedule": [],
@@ -27,11 +115,6 @@
             "name": "numpy",
             "required": false,
             "description": "用于生成颜色图片"
-        },
-        {
-            "name": "pandas",
-            "required": false,
-            "description": "用于恒星光谱颜色查询"
         }
     ]
 }

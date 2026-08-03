@@ -19,20 +19,30 @@ Pendo 提供 Scriptable 只读摘要接口，可以把日程、待办、财务�
 /pendo web widget-token
 ```
 
-默认有效期来自 `plugins/pendo/config.py` 中的 `WEB_WIDGET_TOKEN_EXPIRE_HOURS`。
+默认有效期为 30 天，来自 `plugins/pendo/config.py` 中的
+`WEB_WIDGET_TOKEN_EXPIRE_HOURS`。令牌每次签发都有独立 `jti`，服务端会在 Pendo 数据库中
+持久化登记。如果手机丢失或令牌可能泄漏，执行：
+
+```text
+/pendo web widget-revoke
+```
+
+该命令会吊销当前用户所有尚未过期的 Widget Token，不影响其他用户或 Web Cookie 会话。
 
 ## Scriptable 脚本
 
 脚本文件位于 `plugins/pendo/web/scriptable/pendo_widget.js`。
 
-使用前修改两个常量。
+使用前只修改 Web 地址：
 
 ```javascript
 const BASE_URL = "https://example.com/pendo";
-const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
 ```
 
-仓库中的脚本默认只保留占位值，不包含任何真实地址或 token。
+仓库脚本不包含 Token 常量。首次在 Scriptable App 内直接运行脚本时，
+它会弹出安全输入框；粘贴私聊收到的 Token 后，值会写入 iOS Keychain，
+不会写回脚本或 iCloud 同步的源码。接口返回 401 时，脚本会删除失效的
+Keychain 条目，下次在 App 内运行时可录入新令牌。
 `BASE_URL` 应改成你自己的 Pendo Web 地址，例如：
 
 - `http://127.0.0.1:12001`
@@ -52,7 +62,7 @@ const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
 1. 安装 `Scriptable`
 2. 新建脚本并粘贴 `plugins/pendo/web/scriptable/pendo_widget.js`
 3. 把 `BASE_URL` 改成你的 Pendo Web 地址
-4. 把 `TOKEN` 改成 `/pendo web widget-token` 生成的值
+4. 在 Scriptable App 内直接运行一次脚本，将 `/pendo web widget-token` 私聊生成的值存入 Keychain
 5. 长按主屏幕，添加 `Scriptable` 小组件
 6. 选择这个脚本
 7. 可选填写参数：
@@ -61,7 +71,7 @@ const TOKEN = "PASTE_WIDGET_TOKEN_HERE";
    - `notes`
    - `auto`
 
-Windows 部署下默认端口启动失败时，可以先改服务端环境变量 `PENDO_WEB_PORT`，再把 `BASE_URL` 同步成新的端口。
+Windows 部署下默认端口启动失败时，可以先修改服务端 `config/config.json` 中的 `plugins.pendo.web_port`，再把 `BASE_URL` 同步成新的端口。
 
 ## 交互说明
 

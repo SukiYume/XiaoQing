@@ -6,40 +6,29 @@ apod 插件单元测试
 - HTML 解析和标题提取
 - 图片处理
 - 视频处理（iframe 和 video 标签）
-- 网络请求和代理
+- 受限网络请求
 - 定时任务
 """
 
-import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import aiohttp
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-
-spec = importlib.util.spec_from_file_location("apod_main", ROOT / "plugins" / "apod" / "main.py")
-apod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(apod)
-
+from core.safe_http import SafeHttpError
+from plugins.apod import main as apod
+from tests.helpers.settings_snapshot import with_settings_reader
 
 # ============================================================
 # Fixtures
 # ============================================================
 
-@pytest.fixture
-def temp_data_dir():
-    """创建临时数据目录"""
-    import tempfile
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
-
 
 @pytest.fixture
 def mock_context(temp_data_dir):
     """模拟插件上下文"""
+
     class MockContext:
         def __init__(self, data_dir):
             self.data_dir = data_dir
@@ -50,17 +39,13 @@ def mock_context(temp_data_dir):
             self.current_group_id = 100000001
             self.send_action = AsyncMock()
 
-    return MockContext(temp_data_dir)
+    return with_settings_reader(MockContext(temp_data_dir))
 
 
 @pytest.fixture
 def mock_event():
     """模拟事件"""
-    return {
-        "user_id": 12345,
-        "group_id": 100000001,
-        "message_type": "group"
-    }
+    return {"user_id": 12345, "group_id": 100000001, "message_type": "group"}
 
 
 # ============================================================
@@ -188,6 +173,7 @@ SAMPLE_APOD_HTML_NO_TITLE = """
 # Test Config
 # ============================================================
 
+
 class TestConfig:
     """测试配置功能"""
 
@@ -198,40 +184,43 @@ class TestConfig:
 
     def test_get_config_with_values(self, temp_data_dir):
         """测试获取有值的配置"""
+
         class MockContext:
             def __init__(self, data_dir):
                 self.data_dir = data_dir
-                self.config = {"plugins": {"apod": {"url": "http://test.com", "proxy": "http://proxy"}}}
+                self.config = {
+                    "plugins": {
+                        "apod": {
+                            "url": "https://apod.nasa.gov/apod/astropix.html",
+                            "allowed_hosts": ["apod.nasa.gov"],
+                        }
+                    }
+                }
                 self.http_session = None
                 self.logger = MagicMock()
 
-        context = MockContext(temp_data_dir)
+        context = with_settings_reader(MockContext(temp_data_dir))
         config = apod._get_config(context)
-        assert config["url"] == "http://test.com"
-        assert config["proxy"] == "http://proxy"
+        assert config == {
+            "url": "https://apod.nasa.gov/apod/astropix.html",
+            "allowed_hosts": ["apod.nasa.gov"],
+        }
 
-    def test_get_proxy(self, mock_context):
-        """测试获取代理"""
-        proxy = apod._get_proxy(mock_context)
-        assert proxy is None
+    def test_allowed_hosts_ignores_non_string_and_empty_entries(self, mock_context):
+        mock_context.config["plugins"]["apod"]["allowed_hosts"] = [
+            "Images.Example.",
+            123,
+            None,
+            "",
+        ]
 
-    def test_get_proxy_with_value(self, temp_data_dir):
-        """测试获取代理（有值）"""
-        class MockContext:
-            def __init__(self, data_dir):
-                self.data_dir = data_dir
-                self.config = {"plugins": {"apod": {"proxy": "http://proxy.example.com"}}}
-                self.http_session = None
-                self.logger = MagicMock()
-
-        context = MockContext(temp_data_dir)
-        proxy = apod._get_proxy(context)
-        assert proxy == "http://proxy.example.com"
+        assert apod._allowed_hosts(mock_context) == {"apod.nasa.gov", "images.example"}
 
 
 # ============================================================
 # Test Title Extraction
 # ============================================================
+
 
 class TestTitleExtraction:
     """测试标题提取功能"""
@@ -240,7 +229,7 @@ class TestTitleExtraction:
         """测试从 center 标签中的 b 标签提取标题"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(SAMPLE_APOD_HTML_WITH_IMAGE, 'html.parser')
+        soup = BeautifulSoup(SAMPLE_APOD_HTML_WITH_IMAGE, "html.parser")
         title = apod._extract_title(soup, MagicMock())
         assert "Galaxy Center" in title or "Astronomy" in title
 
@@ -248,7 +237,7 @@ class TestTitleExtraction:
         """测试没有 center 标签时使用 title 标签"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(SAMPLE_APOD_HTML_NO_TITLE, 'html.parser')
+        soup = BeautifulSoup(SAMPLE_APOD_HTML_NO_TITLE, "html.parser")
         title = apod._extract_title(soup, MagicMock())
         assert title == "Page Title" or title == apod.DEFAULT_FALLBACK_TITLE
 
@@ -256,76 +245,97 @@ class TestTitleExtraction:
         """测试标题提取失败时使用默认值"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup("<html><body></body></html>", 'html.parser')
+        soup = BeautifulSoup("<html><body></body></html>", "html.parser")
         title = apod._extract_title(soup, MagicMock())
         assert title == apod.DEFAULT_FALLBACK_TITLE
 
 
+def test_image_selection_prefers_apod_image_path(mock_context) -> None:
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(
+        '<img src="/static/logo.png"><img src="image/apod260201.jpg">',
+        "html.parser",
+    )
+    assert apod._find_image_url(
+        soup,
+        apod.DEFAULT_APOD_URL,
+        mock_context,
+        {"apod.nasa.gov"},
+    ) == "https://apod.nasa.gov/apod/image/apod260201.jpg"
+
+
+def test_image_selection_rejects_ambiguous_allowed_images(mock_context) -> None:
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(
+        '<img src="/static/logo.png"><img src="/static/banner.png">',
+        "html.parser",
+    )
+    assert (
+        apod._find_image_url(
+            soup,
+            apod.DEFAULT_APOD_URL,
+            mock_context,
+            {"apod.nasa.gov"},
+        )
+        is None
+    )
+
+
 # ============================================================
-# Test Filename Sanitization
+# Test content-addressed cache names
 # ============================================================
 
-class TestFilenameSanitization:
-    """测试文件名清理功能"""
 
-    def test_sanitize_filename_simple(self):
-        """测试简单文件名"""
-        result = apod._sanitize_filename("http://example.com/image.jpg")
-        assert result == "image.jpg"
+class TestCacheFilename:
+    def test_cache_filename_is_stable_hash_with_verified_mime_extension(self):
+        first = apod._cache_filename("https://apod.nasa.gov/image?id=1", ".png")
+        second = apod._cache_filename("https://apod.nasa.gov/image?id=1", ".png")
+        different = apod._cache_filename("https://apod.nasa.gov/image?id=2", ".png")
 
-    def test_sanitize_filename_with_special_chars(self):
-        """测试包含特殊字符的文件名"""
-        result = apod._sanitize_filename("http://example.com/image<>:\"/\\|?*.jpg")
-        assert "<" not in result
-        assert ">" not in result
-        assert ":" not in result
-        assert ".jpg" in result
+        assert first == second
+        assert first != different
+        assert len(Path(first).stem) == 64
+        assert first.endswith(".png")
 
-    def test_sanitize_filename_no_extension(self):
-        """测试没有扩展名的文件名"""
-        result = apod._sanitize_filename("http://example.com/image")
+    def test_cache_filename_does_not_trust_url_extension(self):
+        result = apod._cache_filename("https://apod.nasa.gov/payload.exe", ".jpg")
+
         assert result.endswith(".jpg")
-
-    def test_sanitize_filename_url_encoded(self):
-        """测试 URL 编码的文件名"""
-        result = apod._sanitize_filename("http://example.com/image%20test.jpg")
-        assert "image" in result
-        assert ".jpg" in result
+        assert "payload" not in result
 
 
 # ============================================================
 # Test Explanation Extraction
 # ============================================================
 
+
 class TestExplanationExtraction:
     """测试解释文本提取功能"""
 
-    @pytest.mark.asyncio
-    async def test_get_explanation_valid(self):
+    def test_get_explanation_valid(self):
         """测试提取有效的解释文本"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(SAMPLE_APOD_HTML_WITH_IMAGE, 'html.parser')
-        explanation = await apod.get_explanation(soup, MagicMock())
+        soup = BeautifulSoup(SAMPLE_APOD_HTML_WITH_IMAGE, "html.parser")
+        explanation = apod.get_explanation(soup, MagicMock())
         assert "test explanation" in explanation.lower()
 
-    @pytest.mark.asyncio
-    async def test_get_explanation_no_soup(self):
+    def test_get_explanation_no_soup(self):
         """测试空 soup"""
-        explanation = await apod.get_explanation(None, MagicMock())
+        explanation = apod.get_explanation(None, MagicMock())
         assert explanation == apod.NO_EXPLANATION_TEXT
 
-    @pytest.mark.asyncio
-    async def test_get_explanation_no_paragraphs(self):
+    def test_get_explanation_no_paragraphs(self):
         """测试没有段落"""
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup("<html><body>No content</body></html>", 'html.parser')
-        explanation = await apod.get_explanation(soup, MagicMock())
+        soup = BeautifulSoup("<html><body>No content</body></html>", "html.parser")
+        explanation = apod.get_explanation(soup, MagicMock())
         assert "No explanation found" in explanation or "unavailable" in explanation.lower()
 
-    @pytest.mark.asyncio
-    async def test_get_explanation_removes_tomorrow(self):
+    def test_get_explanation_removes_tomorrow(self):
         """测试移除 Tomorrow's picture 部分"""
         html = """
         <p>
@@ -335,8 +345,8 @@ class TestExplanationExtraction:
         """
         from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(html, 'html.parser')
-        explanation = await apod.get_explanation(soup, MagicMock())
+        soup = BeautifulSoup(html, "html.parser")
+        explanation = apod.get_explanation(soup, MagicMock())
         assert "Tomorrow" not in explanation
         assert "Today's picture description" in explanation
 
@@ -345,6 +355,7 @@ class TestExplanationExtraction:
 # Test Image URL Extraction
 # ============================================================
 
+
 class TestImageExtraction:
     """测试图片提取功能"""
 
@@ -352,19 +363,23 @@ class TestImageExtraction:
     async def test_handle_with_image(self, mock_context, mock_event):
         """测试处理图片 APOD"""
         call_count = [0]
+
         class MockResponse:
             status = 200
+
             async def text(self):
                 return SAMPLE_APOD_HTML_WITH_IMAGE
+
             async def read(self):
                 call_count[0] += 1
                 if call_count[0] == 1:
-                    return SAMPLE_APOD_HTML_WITH_IMAGE.encode('utf-8')
+                    return SAMPLE_APOD_HTML_WITH_IMAGE.encode("utf-8")
                 return b"fake image data"
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -375,9 +390,10 @@ class TestImageExtraction:
         mock_context.http_session = MockSession()
 
         result = await apod.handle("apod", "", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "Galaxy" in result_text or "explanation" in result_text.lower()
+        assert [segment["type"] for segment in result] == ["image", "text"]
+        assert result[0]["data"]["file"].startswith("file:")
+        assert result[1]["data"]["text"].startswith("The Galaxy Center\n\n")
+        assert "test explanation of the astronomy picture" in result[1]["data"]["text"]
 
     @pytest.mark.asyncio
     async def test_handle_image_download_failure(self, mock_context, mock_event):
@@ -387,19 +403,23 @@ class TestImageExtraction:
 
         class MockResponse:
             status = 200
+
             async def text(self):
                 return SAMPLE_APOD_HTML_WITH_IMAGE
+
             async def read(self):
                 call_count[0] += 1
                 if call_count[0] == 1:
-                    return SAMPLE_APOD_HTML_WITH_IMAGE.encode('utf-8')
+                    return SAMPLE_APOD_HTML_WITH_IMAGE.encode("utf-8")
                 return None  # 图片下载失败
 
         class MockGetContextManager:
             def __init__(self, fail=False):
                 self.fail = fail
+
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -410,12 +430,61 @@ class TestImageExtraction:
         mock_context.http_session = MockSession()
 
         result = await apod.handle("apod", "", mock_event, mock_context)
-        assert result is not None
+        assert len(result) == 1
+        assert result[0]["type"] == "text"
+        assert "图片暂时下载失败" in result[0]["data"]["text"]
+        assert "The Galaxy Center" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [
+            SafeHttpError("response is too large"),
+            TimeoutError("image download timed out"),
+            OSError("invalid image stream"),
+            ValueError("image pixel budget exceeded"),
+        ],
+    )
+    async def test_handle_image_download_error_degrades_to_text(
+        self,
+        mock_context,
+        mock_event,
+        monkeypatch,
+        error,
+    ):
+        """图片增强失败时仍返回已抓取的标题、说明与原图链接。"""
+        monkeypatch.setattr(
+            apod,
+            "fetch_public_html",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    url=apod.DEFAULT_APOD_URL,
+                    body=SAMPLE_APOD_HTML_WITH_IMAGE,
+                    headers={"Content-Type": "text/html"},
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            apod,
+            "_safe_download_image",
+            AsyncMock(side_effect=error),
+        )
+
+        result = await apod.handle("apod", "", mock_event, mock_context)
+
+        assert len(result) == 1
+        assert result[0]["type"] == "text"
+        message = result[0]["data"]["text"]
+        assert "图片暂时下载失败" in message
+        assert "https://apod.nasa.gov/apod/image/apod260201.jpg" in message
+        assert "The Galaxy Center" in message
+        assert "XQ-PLUGIN-UNEXPECTED" not in message
 
 
 # ============================================================
 # Test Video Handling
 # ============================================================
+
 
 class TestVideoHandling:
     """测试视频处理功能"""
@@ -423,16 +492,20 @@ class TestVideoHandling:
     @pytest.mark.asyncio
     async def test_handle_with_iframe(self, mock_context, mock_event):
         """测试处理 iframe 视频"""
+
         class MockResponse:
             status = 200
+
             async def text(self):
                 return SAMPLE_APOD_HTML_WITH_IFRAME
+
             async def read(self):
-                return SAMPLE_APOD_HTML_WITH_IFRAME.encode('utf-8')
+                return SAMPLE_APOD_HTML_WITH_IFRAME.encode("utf-8")
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -450,16 +523,20 @@ class TestVideoHandling:
     @pytest.mark.asyncio
     async def test_handle_with_video_tag(self, mock_context, mock_event):
         """测试处理 video 标签"""
+
         class MockResponse:
             status = 200
+
             async def text(self):
                 return SAMPLE_APOD_HTML_WITH_VIDEO
+
             async def read(self):
-                return SAMPLE_APOD_HTML_WITH_VIDEO.encode('utf-8')
+                return SAMPLE_APOD_HTML_WITH_VIDEO.encode("utf-8")
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -475,192 +552,35 @@ class TestVideoHandling:
         assert "video" in result_text.lower() or "mp4" in result_text
         assert "https://apod.nasa.gov/apod/video/apod_video.mp4" in result_text
 
-
-# ============================================================
-# Test Network Requests
-# ============================================================
-
-class TestNetworkRequests:
-    """测试网络请求功能"""
-
     @pytest.mark.asyncio
-    async def test_fetch_with_retry_success(self, mock_context):
-        """测试重试机制成功"""
-        class MockResponse:
-            status = 200
-            async def text(self):
-                return "Success"
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        session = MockSession()
-        mock_context.http_session = session
-        result = await apod._fetch_with_retry(
-            session=session,
-            url="https://apod.nasa.gov/apod/test.html",
-            proxy=None,
-            timeout=aiohttp.ClientTimeout(total=60),
-            is_binary=False,
-            context=mock_context
-        )
-        assert result is not None
-
-    @pytest.mark.asyncio
-    async def test_fetch_with_retry_direct_fails_proxy_succeeds(self, mock_context):
-        """测试直连失败代理成功"""
-
-    @pytest.mark.asyncio
-    async def test_fetch_with_retry_both_fail(self, mock_context):
-        """测试直连和代理都失败"""
-
-    @pytest.mark.asyncio
-    async def test_fetch_binary(self, mock_context):
-        """测试获取二进制数据"""
-        class MockResponse:
-            status = 200
-            async def read(self):
-                return b"binary data"
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        session = MockSession()
-        mock_context.http_session = session
-        result = await apod._fetch_with_retry(
-            session=session,
-            url="https://apod.nasa.gov/apod/image.jpg",
-            proxy=None,
-            timeout=aiohttp.ClientTimeout(total=60),
-            is_binary=True,
-            context=mock_context
-        )
-        assert result == b"binary data"
-
-
-# ============================================================
-# Test Download Image
-# ============================================================
-
-class TestDownloadImage:
-    """测试图片下载功能"""
-
-    @pytest.mark.asyncio
-    async def test_download_image_success(self, mock_context, temp_data_dir):
-        """测试成功下载图片"""
-
-        class MockResponse:
-            status = 200
-            async def read(self):
-                return b"fake image content"
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        file_path = temp_data_dir / "test_image.jpg"
-
-        session = MockSession()
-        mock_context.http_session = session
-        result = await apod.download_image(
-            session=session,
-            url="https://apod.nasa.gov/apod/image.jpg",
-            file_path=file_path,
-            proxy=None,
-            timeout=aiohttp.ClientTimeout(total=60),
-            context=mock_context
+    async def test_relative_iframe_uses_final_redirect_url(
+        self,
+        mock_context,
+        mock_event,
+        monkeypatch,
+    ):
+        html = '<html><body><iframe src="../media/video"></iframe></body></html>'
+        monkeypatch.setattr(
+            apod,
+            "fetch_public_html",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    url="https://apod.nasa.gov/redirected/day/page.html",
+                    body=html,
+                    headers={"Content-Type": "text/html"},
+                )
+            ),
         )
 
-        assert result is True
-        assert file_path.exists()
-        assert file_path.read_bytes() == b"fake image content"
+        result = await apod.handle("apod", "", mock_event, mock_context)
 
-    @pytest.mark.asyncio
-    async def test_download_image_creates_directory(self, mock_context, temp_data_dir):
-        """测试下载时创建目录"""
-
-        class MockResponse:
-            status = 200
-            async def read(self):
-                return b"content"
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        # 使用不存在的子目录
-        file_path = temp_data_dir / "subdir" / "nested" / "image.jpg"
-
-        session = MockSession()
-        mock_context.http_session = session
-        result = await apod.download_image(
-            session=session,
-            url="https://apod.nasa.gov/apod/image.jpg",
-            file_path=file_path,
-            proxy=None,
-            timeout=aiohttp.ClientTimeout(total=60),
-            context=mock_context
-        )
-
-        assert result is True
-        assert file_path.exists()
-
-    @pytest.mark.asyncio
-    async def test_download_image_failure(self, mock_context, temp_data_dir):
-        """测试下载失败"""
-        class MockGetContextManager:
-            async def __aenter__(self):
-                raise aiohttp.ClientError("Download failed")
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        file_path = temp_data_dir / "test_image.jpg"
-
-        result = await apod.download_image(
-            session=MockSession(),
-            url="https://apod.nasa.gov/apod/image.jpg",
-            file_path=file_path,
-            proxy=None,
-            timeout=aiohttp.ClientTimeout(total=60),
-            context=mock_context
-        )
-
-        assert result is False
+        assert result[0]["data"]["text"].startswith("https://apod.nasa.gov/redirected/media/video")
 
 
 # ============================================================
 # Test Handle Commands
 # ============================================================
+
 
 class TestHandleCommands:
     """测试命令处理"""
@@ -684,16 +604,28 @@ class TestHandleCommands:
     @pytest.mark.asyncio
     async def test_handle_network_error(self, mock_context, mock_event):
         """测试网络错误"""
+        mock_context.http_session = None
+
+        result = await apod.handle("apod", "", mock_event, mock_context)
+
+        assert result == [
+            {
+                "type": "text",
+                "data": {"text": "❌ 获取失败: 网络错误"},
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_handle_http_error(self, mock_context, mock_event):
         """测试 HTTP 错误"""
+
         class MockResponse:
             status = 404
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -723,14 +655,17 @@ class TestHandleCommands:
 
         class MockResponse:
             status = 200
+
             async def text(self):
                 return html
+
             async def read(self):
-                return html.encode('utf-8')
+                return html.encode("utf-8")
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -750,43 +685,32 @@ class TestHandleCommands:
 # Test Scheduled
 # ============================================================
 
+
 class TestScheduled:
     """测试定时任务"""
 
     @pytest.mark.asyncio
-    async def test_scheduled_task(self, mock_context):
+    async def test_scheduled_task(self, mock_context, monkeypatch):
         """测试定时任务入口"""
-        class MockResponse:
-            status = 200
-            async def text(self):
-                return SAMPLE_APOD_HTML_WITH_IMAGE
-            async def read(self):
-                if not hasattr(self, 'count'):
-                    self.count = 0
-                self.count += 1
-                if self.count == 1:
-                    return SAMPLE_APOD_HTML_WITH_IMAGE.encode('utf-8')
-                return b"fake image"
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
+        expected = [{"type": "text", "data": {"text": "scheduled APOD"}}]
+        handle = AsyncMock(return_value=expected)
+        monkeypatch.setattr(apod, "handle", handle)
 
         result = await apod.scheduled(mock_context)
-        assert result is not None
+
+        assert result == expected
+        handle.assert_awaited_once_with(
+            command="apod",
+            args="",
+            event={},
+            context=mock_context,
+        )
 
 
 # ============================================================
 # Test Help
 # ============================================================
+
 
 class TestHelp:
     """测试帮助信息"""
@@ -794,59 +718,57 @@ class TestHelp:
     def test_show_help(self):
         """测试显示帮助信息"""
         help_text = apod._show_help()
-        assert help_text is not None
-        assert "APOD" in help_text or "天文图" in help_text
+        assert "每日一天文图 (APOD)" in help_text
         assert "/apod" in help_text
-
-
-# ============================================================
-# Test Init
-# ============================================================
-
-class TestInit:
-    """测试插件初始化"""
-
-    def test_init(self):
-        """测试插件初始化"""
-        apod.init()
-        assert True
+        assert "HTTPS、主机、响应字节、MIME 与图片像素受限校验" in help_text
 
 
 # ============================================================
 # Test Image Path Construction
 # ============================================================
 
+
 class TestImagePathConstruction:
     """测试图片路径构造"""
 
+    @pytest.mark.parametrize(
+        "image_url",
+        [
+            pytest.param("image/test.jpg", id="relative"),
+            pytest.param("https://example.com/image/test.jpg", id="absolute"),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_relative_image_url(self, mock_context, mock_event):
-        """测试相对图片 URL"""
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <body>
-            <center><b>Test</b></center>
-            <img src="image/test.jpg">
-        </body>
-        </html>
-        """
+    async def test_image_url(self, mock_context, mock_event, image_url):
+        """相对与绝对图片 URL 均能进入统一下载流程。"""
+        html = f"""
+            <!DOCTYPE html>
+            <html>
+            <body>
+                <center><b>Test</b></center>
+                <img src="{image_url}">
+            </body>
+            </html>
+            """
 
         class MockResponse:
             status = 200
+
             async def text(self):
                 return html
+
             async def read(self):
-                if not hasattr(self, 'count'):
+                if not hasattr(self, "count"):
                     self.count = 0
                 self.count += 1
                 if self.count == 1:
-                    return html.encode('utf-8')
+                    return html.encode("utf-8")
                 return b"data"
 
         class MockGetContextManager:
             async def __aenter__(self):
                 return MockResponse()
+
             async def __aexit__(self, *args):
                 pass
 
@@ -858,47 +780,3 @@ class TestImagePathConstruction:
 
         result = await apod.handle("apod", "", mock_event, mock_context)
         assert result is not None
-
-    @pytest.mark.asyncio
-    async def test_absolute_image_url(self, mock_context, mock_event):
-        """测试绝对图片 URL"""
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <body>
-            <center><b>Test</b></center>
-            <img src="https://example.com/image/test.jpg">
-        </body>
-        </html>
-        """
-
-        class MockResponse:
-            status = 200
-            async def text(self):
-                return html
-            async def read(self):
-                if not hasattr(self, 'count'):
-                    self.count = 0
-                self.count += 1
-                if self.count == 1:
-                    return html.encode('utf-8')
-                return b"data"
-
-        class MockGetContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockGetContextManager()
-
-        mock_context.http_session = MockSession()
-
-        result = await apod.handle("apod", "", mock_event, mock_context)
-        assert result is not None
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

@@ -1,31 +1,54 @@
 {
-    "name": "chime",
-    "version": "0.2.0",
-    "description": "CHIME FRB 重复暴监测 - 自动追踪快速射电暴的最新观测数据",
-    "author": "XiaoQing Bot",
-    "entry": "main.py",
-    "commands": [
+  "name": "chime",
+  "version": "0.3.0",
+  "description": "查询 CHIME/FRB 重复暴目录，并可靠通知新增重复暴和新脉冲",
+  "author": "XiaoQing Bot",
+  "entry": "main.py",
+  "commands": [
+    {
+      "name": "chime",
+      "triggers": [
+        "chime",
+        "frb"
+      ],
+      "help": "查询 CHIME/FRB 重复暴目录，或检查上次成功通知后的更新",
+      "admin_only": false,
+      "usage": "/chime [list|FRB名称]",
+      "examples": ["/chime", "/chime FRB20180916B"],
+      "invalid_examples": ["/chime unknown source"],
+      "subcommands": [
         {
-            "name": "chime",
-            "triggers": [
-                "chime",
-                "frb"
-            ],
-            "help": "查询 CHIME FRB 重复暴的最新观测数据，自动检测新发现的重复暴和新脉冲",
-            "admin_only": false
-        }
-    ],
-    "schedule": [
+          "name": "list",
+          "aliases": ["列表"],
+          "help": "列出最近更新的 5 个重复暴",
+          "usage": "/chime list",
+          "match": "exact",
+          "examples": ["/chime list"],
+          "invalid_examples": ["/chime list extra"]
+        },
         {
-            "id": "chime_check",
-            "handler": "scheduled_check",
-            "cron": {
-                "hour": "9,21",
-                "minute": 0
-            },
-            "group_ids": [],
-            "description": "每天 9:00 和 21:00 检查 CHIME FRB 数据更新"
+          "name": "help",
+          "aliases": ["帮助"],
+          "help": "显示 CHIME/FRB 命令说明",
+          "usage": "/chime help",
+          "match": "exact",
+          "examples": ["/chime help"],
+          "invalid_examples": ["/chime help extra"]
         }
-    ],
-    "dependencies": []
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "id": "chime_check",
+      "handler": "scheduled_check",
+      "cron": {
+        "hour": "9,21",
+        "minute": 0
+      },
+      "group_ids": [],
+      "description": "每天 09:00 和 21:00 检查 CHIME/FRB 重复暴目录"
+    }
+  ],
+  "dependencies": []
 }

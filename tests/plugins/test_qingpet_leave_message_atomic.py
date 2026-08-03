@@ -82,8 +82,7 @@ def test_social_service_uses_atomic_result_and_enforces_limit(tmp_path):
     _seed(db)
     conn = db._get_connection()
     conn.execute(
-        "UPDATE users SET today_message_count = 9 "
-        "WHERE user_id = 'sender' AND group_id = ?",
+        "UPDATE users SET today_message_count = 9 WHERE user_id = 'sender' AND group_id = ?",
         (GROUP,),
     )
     conn.commit()
@@ -110,7 +109,7 @@ def test_each_leave_message_write_failure_rolls_back_all_state(tmp_path, fragmen
     db = Database(str(tmp_path / "write-failure.db"))
     _seed(db)
     before = _state(db)
-    db._conn = _FailingConnection(db._get_connection(), fragment)
+    db._local.conn = _FailingConnection(db._get_connection(), fragment)
 
     result = db.leave_message_atomic("sender", "target", GROUP, "不会留下", 10)
 
@@ -123,7 +122,7 @@ def test_leave_message_commit_failure_rolls_back_all_state(tmp_path):
     db = Database(str(tmp_path / "commit-failure.db"))
     _seed(db)
     before = _state(db)
-    db._conn = _CommitFailingConnection(db._get_connection())
+    db._local.conn = _CommitFailingConnection(db._get_connection())
 
     result = db.leave_message_atomic("sender", "target", GROUP, "不会提交", 10)
 
@@ -138,8 +137,7 @@ def test_two_connections_cannot_both_claim_last_message_slot(tmp_path):
     _seed(first_db)
     conn = first_db._get_connection()
     conn.execute(
-        "UPDATE users SET today_message_count = 9 "
-        "WHERE user_id = 'sender' AND group_id = ?",
+        "UPDATE users SET today_message_count = 9 WHERE user_id = 'sender' AND group_id = ?",
         (GROUP,),
     )
     conn.commit()

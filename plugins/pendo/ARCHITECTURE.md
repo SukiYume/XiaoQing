@@ -22,23 +22,22 @@ Pendo 是 XiaoQing 的个人时间与信息管理中枢，当前功能边界如�
 
 ## 正式文档边界
 
-Pendo 插件目录中可能存在测试提示和运行报告等执行产物。当前维护时只把以下两个文件当作长期文档入口。
+Pendo 插件目录中可能存在本地运行报告等执行产物。当前维护时只把以下两个文件当作长期文档入口。
 
 - `README.md`: 用户手册，覆盖命令、Web 控制台、迁移、配置和排障。
 - `ARCHITECTURE.md`: 工程手册，覆盖运行时分层、数据库、服务、Web API、调度和测试边界。
 
-测试任务文档和 test report 属于执行记录，不参与架构说明。
+本地 test report 属于执行记录，不参与架构说明。
 
 ## 目录结构
 
 ```text
 plugins/pendo/
-├── main.py                      # 插件入口、生命周期、命令注册、scheduled_* 入口
+├── main.py                      # 插件钩子编排、命令注册、scheduled_* 入口
 ├── config.py                    # 配置常量、提醒策略、日记模板
 ├── plugin.json                  # 插件清单和定时任务
 ├── README.md                    # 用户使用说明
 ├── ARCHITECTURE.md              # 架构文档
-├── requirements.txt
 │
 ├── core/
 │   ├── router.py                # CommandRouter、别名解析、帮助入口
@@ -47,9 +46,7 @@ plugins/pendo/
 │   └── exceptions.py            # 业务异常
 │
 ├── models/
-│   ├── item.py                  # Item / EventItem / TaskItem / NoteItem / DiaryItem / LedgerItem
-│   ├── types.py                 # 通用命令结果类型
-│   └── constants.py             # ItemFields 字段常量
+│   └── item.py                  # Item / EventItem / TaskItem / NoteItem / DiaryItem / LedgerItem
 │
 ├── handlers/
 │   ├── event.py                 # 日程命令；单次/多节点/重复日程的 leaf 操作
@@ -63,12 +60,12 @@ plugins/pendo/
 │
 ├── services/
 │   ├── db.py                    # SQLite、schema、缓存、CRUD、审计
+│   ├── runtime.py               # 数据库、配置订阅、Web 生命周期所有权
 │   ├── event_graph.py           # event_collections 与 leaf events 的组装/拆解
 │   ├── reminder.py              # 提醒计算、发送、日志去重
-│   ├── ai_parser.py             # 日程自然语言解析入口
+│   ├── ai_parser.py             # 通过 core AI parse route 做自然语言解析
 │   ├── rule_parser.py           # 规则解析回退
-│   ├── exporter.py              # CLI Markdown 档案导出
-│   └── llm_client.py            # LLM 客户端封装
+│   └── exporter.py              # CLI Markdown 档案导出
 │
 ├── commands/
 │   ├── operations.py            # confirm / snooze / undo
@@ -86,18 +83,15 @@ plugins/pendo/
 │   └── validators.py            # event/note/diary/task/ledger 统一归一化
 │
 ├── scripts/
-│   ├── migrate_pendo_redesign.py # 一次性迁移：event/note/diary/task/ledger 新结构
-│   ├── migrate_event_graph.py    # 事件图迁移辅助
-│   └── *.py.old                  # 已停用的历史脚本
-│
-├── data/
-│   ├── pendo.db                 # SQLite 数据库
-│   └── web_token_secret.txt     # Web Token 签名密钥
+│   ├── migration_utils.py        # SQLite 迁移共享校验、备份和时间归一化
+│   ├── migrate_event_graph.py    # 旧 event 到集合/叶子事件图的迁移
+│   └── migrate_pendo_redesign.py # event/note/diary/task/ledger 总迁移入口
 │
 └── web/
     ├── server.py                # FastAPI app 生命周期
     ├── auth.py                  # Web Token 生成和校验
     ├── deps.py                  # owner_id / Database 依赖
+    ├── utils.py                 # Web 请求时间、查询和响应辅助
     ├── api/                     # FastAPI routers
     ├── analytics/               # Dashboard/Stats 聚合逻辑
     ├── services/                # Bundle 导入导出、demo 数据
@@ -105,13 +99,8 @@ plugins/pendo/
     └── static/                  # SPA 前端
 ```
 
-重构方案文档不再放在插件目录下，统一放到 `docs/plans/`，例如：
-
-- `docs/plans/2026-04-24-pendo-event-redesign.md.old`
-- `docs/plans/2026-04-25-pendo-note-redesign.md`
-- `docs/plans/2026-04-29-pendo-diary-redesign.md`
-- `docs/plans/2026-04-29-pendo-task-redesign.md`
-- `docs/plans/2026-04-29-pendo-ledger-redesign.md`
+运行时数据不属于源码树：Core 默认将 Pendo 的 SQLite、导出文件和签名密钥
+分配到项目根下的 `data/pendo/`；可通过全局 `data_root` 改变所有插件的数据根目录。
 
 ## 运行时分层
 
@@ -120,10 +109,15 @@ XiaoQing Plugin Runtime
         |
         v
 plugins/pendo/main.py
-  - init / cleanup
+  - init / cleanup hooks（委托资源所有权）
   - handle(command, args, event, context)
   - scheduled_* handlers
   - service cache bootstrap
+        |
+        +--> services/runtime.py PendoRuntimeService
+             - one database generation
+             - config unsubscribe ownership
+             - Web start / stop / endpoint reconfigure
         |
         v
 core/router.py CommandRouter
@@ -146,6 +140,8 @@ DB, reminders, parser, exporter, normalization
 services/db.py SQLite schema
 ```
 
+`PendoRuntimeService` 是 Pendo 的内部生命周期边界。初始化只有在数据库成功认领后才发布配置订阅；卸载会先摘除订阅与 singleton，再对每个数据库对象只关闭一次。Web 自动启动、停止和端点重配置也经由同一对象。Pendo 仍随 XiaoQing 在同一进程部署，因此 Bot 重启仍会重启 Web；这里建立的是所有权和可测试性边界，不是进程级故障隔离或微服务承诺。
+
 ## 命令路由
 
 `main.py::_build_command_router()` 注册当前 CLI 子命令：
@@ -164,7 +160,7 @@ services/db.py SQLite schema
 - `undo`
 - `web`
 
-CLI 不再提供 Markdown 导入命令；聊天端只保留 `/pendo export <文件名> [范围] [类型]`。数据迁移、恢复、预览和冲突处理走 Web 端 Bundle 流程。
+CLI 不再执行 Markdown 或本地路径导入；`/pendo import` 只返回 Web 迁移页的安全操作指引。聊天端的数据文件操作只保留 `/pendo export <文件名> [范围] [类型]`，数据迁移、恢复、预览和冲突处理都走 Web 端 Bundle 流程。
 
 ## 数据模型
 
@@ -176,7 +172,9 @@ CLI 不再提供 Markdown 导入命令；聊天端只保留 `/pendo export <文�
 - `tags`, `category`
 - `created_at`, `updated_at`
 - `owner_id`, `context`
+- `visibility`, `attachments`, `ai_meta`
 - `deleted`, `deleted_at`
+- `version`: 乐观并发版本号。
 
 ### Event
 
@@ -189,6 +187,7 @@ CLI 不再提供 Markdown 导入命令；聊天端只保留 `/pendo export <文�
 关键字段：
 
 - `start_time`, `end_time`, `location`
+- `timezone`, `participants`
 - `reminder_rules`, `remind_times`
 - `event_role`: `single` / `multi_node_child` / `recurring_occurrence`
 - `event_collection_id`, `event_collection_kind`
@@ -204,6 +203,7 @@ CLI 不再提供 Markdown 导入命令；聊天端只保留 `/pendo export <文�
 - `plan_date`: 计划处理日期，决定今天/未来/收件箱视图。
 - `deadline_at`: 真正硬截止时间。
 - `remind_times`: 明确提醒时间。
+- `reminder_rules`: 相对时间等结构化提醒规则。
 - `priority`: 1-5。
 - `status`: `open`, `done`, `cancelled`。
 - `completed_at`, `cancelled_at`, `repeat_rule`。
@@ -216,6 +216,7 @@ CLI 不再提供 Markdown 导入命令；聊天端只保留 `/pendo export <文�
 
 - `tags`, `category`
 - `references`: 结构化引用，记录引用类型、目标 ID 或外部描述。
+- `last_viewed`: 最近查看时间。
 - `related_items`: 由引用派生或显式维护的关联条目 ID。
 
 Web、CLI、搜索、Bundle 导入导出都应保留 `references` 与 `related_items` 的一致性。
@@ -253,10 +254,12 @@ CLI、Web 和导入路径都通过 `normalize_diary_fields()` 统一校验心情
 `services/db.py` 管理 SQLite schema、连接、缓存和审计。主要表：
 
 - `items`: 统一条目表。
+- `schema_migrations`: 已应用 schema 迁移版本。
 - `event_collections`: 多节点/重复日程的集合头。
 - `items_fts`: FTS5 全文搜索索引。
 - `reminder_logs`: 提醒发送/确认日志。
-- `operation_logs`: create/update/delete/export/import 审计。
+- `scheduled_delivery_outbox`: 每日简报、日记提醒和财务总结的投递租约。
+- `operation_logs`: create/update/delete/undo 审计；撤销保留来源行，以 `undone_at` 和 `undo_log_id` 关联追加的反向事件，只有保留期清理和 demo 空间销毁会物理删除。
 - `user_settings`: 用户时区、静默时段、日报时间等。
 - `transfer_logs`: Web Bundle 导入导出日志。
 - `imported_bundles`: Bundle 幂等导入记录。
@@ -269,6 +272,7 @@ CLI、Web 和导入路径都通过 `normalize_diary_fields()` 统一校验心情
 - diary `diary_date`, `entry_time`
 - ledger `ledger_date`, `transaction_type`
 - event collection `owner_id/kind/time`
+- operation log `user_id + created_at` 与 `created_at`
 
 ## 统一校验路径
 
@@ -314,7 +318,7 @@ CLI、Web 和导入路径都通过 `normalize_diary_fields()` 统一校验心情
 
 `web/static/js` 是无构建 SPA：
 
-- `app.js`, `router.js`, `store.js`, `api.js`
+- `app.js`, `router.js`, `api.js`
 - `components/`: header、sidebar、modal、toast、pagination、自定义 select、通用 form。
 - `pages/`: dashboard、events、tasks、notes、diary、ledger、search、stats、settings、transfer。
 - `utils/`: date range 和 UI/format helpers。
@@ -367,42 +371,42 @@ plugins/pendo/scripts/migrate_pendo_redesign.py
 - `scheduled_daily_briefing`: 每分钟检查是否到用户本地日报时间。
 - `scheduled_diary_reminder`: 每分钟检查是否到用户本地日记提醒时间。
 - `scheduled_migrate_todos`: 每天 00:05 将昨日仍 open 的计划顺延到今天。
+- `scheduled_prune_operation_logs`: 每天 00:15 清理过期日志，并仅擦除已越过固定 5 分钟窗口的撤销快照；刚写入的快照不会因日界清理而失效。
 - `scheduled_weekly_finance_summary`: 每周日 21:00 财务总结。
 - `scheduled_month_end_finance_summary`: 每月最后一天 21:00 财务总结。
 - `scheduled_cleanup_demo_data`: 每 6 小时清理过期 Web demo 数据。
 
 ## 常见修改入口
 
-| 任务 | 先读文件 |
-|---|---|
-| 改 CLI 命令 | `main.py`, `core/router.py`, `handlers/<module>.py` |
-| 改 Web CRUD 字段 | `web/api/items.py`, `utils/validators.py`, `models/item.py`, `services/db.py` |
-| 改日程集合/节点 | `handlers/event.py`, `handlers/event_support.py`, `services/event_graph.py`, `services/db.py`, `web/api/events.py` |
-| 改提醒 | `services/reminder.py`, `commands/operations.py`, `commands/scheduled.py` |
-| 改搜索 | `handlers/search.py`, `web/api/search.py`, `services/db.py` |
-| 改 Dashboard/统计 | `web/analytics/*.py`, `web/api/dashboard.py`, `web/api/stats.py` |
-| 改 Bundle 导入导出 | `web/api/transfer.py`, `web/services/transfer_bundle.py`, `web/services/bundle_import.py` |
-| 改 CLI Markdown 导出 | `services/exporter.py` |
-| 改前端页面 | `web/static/js/pages/<page>.js`, `web/static/css/app.css` |
-| 改迁移 | `scripts/migrate_pendo_redesign.py`, `tests/plugins/test_pendo_event_migration.py` |
+| 任务                 | 先读文件                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 改 CLI 命令          | `main.py`, `core/router.py`, `handlers/<module>.py`                                                                |
+| 改 Web CRUD 字段     | `web/api/items.py`, `utils/validators.py`, `models/item.py`, `services/db.py`                                      |
+| 改日程集合/节点      | `handlers/event.py`, `handlers/event_support.py`, `services/event_graph.py`, `services/db.py`, `web/api/events.py` |
+| 改提醒               | `services/reminder.py`, `commands/operations.py`, `commands/scheduled.py`                                          |
+| 改搜索               | `handlers/search.py`, `web/api/search.py`, `services/db.py`                                                        |
+| 改 Dashboard/统计    | `web/analytics/*.py`, `web/api/dashboard.py`, `web/api/stats.py`                                                   |
+| 改 Bundle 导入导出   | `web/api/transfer.py`, `web/services/transfer_bundle.py`, `web/services/bundle_import.py`                          |
+| 改 CLI Markdown 导出 | `services/exporter.py`                                                                                             |
+| 改前端页面           | `web/static/js/pages/<page>.js`, `web/static/css/app.css`                                                          |
+| 改迁移               | `scripts/migrate_pendo_redesign.py`, `tests/plugins/test_pendo_event_migration.py`                                 |
 
 ## 文档归属
 
 - 插件内用户文档：`README.md`
 - 插件内架构文档：`ARCHITECTURE.md`
 - 全局插件手册：`docs/09-plugins.md`
-- 重构/实现计划：`docs/plans/`
-- 历史 superpowers 过程记录：`docs/superpowers/`
 
-不要在用户手册里描述个人迁移临时文件或已停用脚本；需要记录迁移细节时写入 `docs/plans/`。
+个人迁移临时文件或已停用脚本不进入用户手册；长期有效的变更写入
+`CHANGELOG.md` 或对应的架构文档。
 
 ## 验证建议
 
 文档或架构调整后至少运行以下命令。
 
 ```powershell
-python -m pytest tests/plugins/test_pendo.py::TestPendoDocumentation -q
-git diff --check -- plugins/pendo/ARCHITECTURE.md docs/plans
+python -m pytest tests/plugins/test_pendo_contracts.py::TestPendoDocumentation -q
+git diff --check -- plugins/pendo/ARCHITECTURE.md
 ```
 
 涉及运行时字段、API 或前端时，再补充对应 `tests/plugins/test_pendo_*` 用例。

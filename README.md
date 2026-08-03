@@ -24,6 +24,8 @@ XiaoQingBot 是一个面向真实 QQ 使用场景的机器人项目。它既是�
 
 项目定位为可长期运行的 QQ 助手。它可以在群里聊天，可以私聊处理个人事务，可以定时推送提醒，可以通过 Web 管理结构化数据，也可以加载独立工具类插件处理特定需求。日常使用时，它更像一套常驻的小工具箱，而不是只响应单条命令的脚手架。
 
+> **插件信任边界：** 插件是与 Bot 同进程、同操作系统权限运行的受信任 Python 代码，不是安全沙箱。`PluginContext` 只暴露当前插件的配置与 secret 命名空间，但这不能阻止恶意代码直接读文件、访问网络或影响主进程。不要安装未经审查的第三方插件，也不要把 XiaoQing 宣传为可安全运行陌生插件的平台。
+
 ## 核心能力
 
 | 能力 | 说明 |
@@ -31,9 +33,10 @@ XiaoQingBot 是一个面向真实 QQ 使用场景的机器人项目。它既是�
 | OneBot v11 接入 | 支持被动 HTTP inbound server 和主动 WebSocket client 两种接入方式 |
 | 异步运行时 | 核心收发、调度、HTTP、插件处理都围绕 `asyncio` 设计 |
 | 插件系统 | 每个插件独立目录、独立 `plugin.json`、独立数据目录和生命周期 |
+| 插件执行治理（非安全隔离） | 异步入口和同步阻塞调用均有按插件 bulkhead、有界队列、跨插件公平调度及卸载隔离；这些机制保护可用性，不构成安全沙箱 |
 | 命令路由 | 支持多个命令前缀、触发词、管理员命令、bot name 前缀剥离和参数解析 |
-| Handler 链 | `BotNameHandler`、`CommandHandler`、`SessionHandler`、`SmalltalkHandler` 分层处理 |
-| 多轮会话 | 内置 session manager，适合游戏、表单、REPL、SSH、记账引导等交互 |
+| 分发流程 | `Dispatcher` 固定的 A–G 线性流程：处理门控、URL、只喊名字、会话、命令、未知命令、闲聊回落 |
+| 多轮会话 | 内置按键串行、快照隔离且失败可回滚的 session 事务，适合游戏、表单、REPL、SSH、记账引导等交互 |
 | 后台任务队列 | 插件可自建独立队列并通过 `context.send_action()` 主动回发文字或图片结果，适合 Codex 这类长任务 |
 | Smalltalk Provider | 可把普通闲聊交给 `smalltalk` 或 `xiaoqing_chat` 插件处理 |
 | 调度任务 | 插件可在 `plugin.json` 中声明 cron schedule，由框架统一调度 |
@@ -52,9 +55,17 @@ XiaoQing/
 │   └── secrets.json.example         # 敏感配置示例
 ├── core/
 │   ├── app.py                       # XiaoQingApp，管理核心组件生命周期
-│   ├── dispatcher.py                # 消息分发和 Handler 链
+│   ├── app_delivery.py              # OneBot 投递与事件收集
+│   ├── app_identity.py              # 管理员状态与 principal authority
+│   ├── app_ingress.py               # 入站端点事务式重协商
+│   ├── app_plugin_watch.py          # 插件 watcher 监督
+│   ├── app_scheduling.py            # 插件排程发布
+│   ├── dispatcher.py                # 消息分发和 A–G 线性流程
 │   ├── router.py                    # 命令路由
 │   ├── plugin_manager.py            # 插件加载、热重载、生命周期
+│   ├── plugin_generation.py         # 插件代际发布、回滚和清理
+│   ├── plugin_watcher.py            # 插件扫描、快照和变更收敛
+│   ├── plugin_runtime.py            # 执行 gate 与声明式服务
 │   ├── session.py                   # 多轮会话
 │   ├── scheduler.py                 # 插件定时任务
 │   ├── onebot.py                    # OneBot HTTP / WebSocket 发送与连接
@@ -83,38 +94,44 @@ XiaoQing/
 2. `XiaoQingApp` 将事件交给 `Dispatcher`。
 3. `Dispatcher` 解析消息类型、文本、用户、群号和原始消息段。
 4. 全局 URL 监听、静音状态、命令前缀、bot name 和随机闲聊配置参与决策。
-5. Handler 链按顺序尝试处理。
-   - `BotNameHandler`: 用户只喊机器人名字时的回应。
-   - `CommandHandler`: 命令路由命中插件。
-   - `SessionHandler`: 活跃多轮会话继续处理。
-   - `SmalltalkHandler`: 普通闲聊交给 smalltalk provider。
+5. `Dispatcher` 按固定的 A–G 线性流程处理（并非独立的 Handler 类）。
+   - 处理门控：私聊、配置放行、命令前缀、bot name、@me 或活跃会话决定是否继续。
+   - URL 解析：`clean_text` 为单个 URL 时（门控与静音之后）交给 `url_parser`。
+   - 只喊名字：用户只喊机器人名字时的回应。
+   - 会话：活跃多轮会话优先继续处理。
+   - 命令：命令路由命中插件并执行。
+   - 未知命令：以命令前缀开头但未命中时给出提示。
+   - 闲聊回落：其余交给 smalltalk provider（静音仅阻塞此步）。
 6. 插件返回文本、图片、语音、QQ face 等 OneBot 消息段。
 7. `onebot.py` 通过 HTTP API 或 WebSocket 发送回复。
 
-当 `plugins.smalltalk_provider = "xiaoqing_chat"` 时，群聊消息都会进入 `xiaoqing_chat` 自己的观察和回复判断。全局 `random_reply_rate` 不再决定是否进入插件；插件内部使用 attention gate、频率控制、PFC planner、主 LLM 和 reply checker 决定是否回复。
+当 `plugins.smalltalk_provider = "xiaoqing_chat"` 时，群聊消息都会进入 `xiaoqing_chat` 自己的观察和回复判断；插件内部使用 attention gate、频率控制、PFC planner、主 LLM 和 reply checker 决定是否回复。
 
 ## 快速开始
 
 ### 环境要求
 
-- Python `3.10+`，推荐 `3.11`。
+- Python `3.10+`。插件首次加载不依赖特定小版本；热重载会在启动时验证 CPython
+  module-lock 的真实行为，能力不足时自动进入 restart-only 模式，插件改动通过重启生效。
 - 一个 OneBot v11 实现，推荐 [NapCatQQ](https://github.com/NapNeko/NapCatQQ)。
-- 如果使用 `pendo` Web 控制台，根目录 `requirements.txt` 已包含 FastAPI、uvicorn、PyJWT、passlib 等依赖。
-- 如果使用 `xiaoqing_chat`，需要在 `config/secrets.json` 配置 OpenAI-compatible 聊天模型 provider；图片理解还需要视觉 provider。
+- 根目录 `requirements.txt` 包含 Core 与默认启用能力，包括 `pendo` Web 控制台所需的 FastAPI、uvicorn、PyJWT；Jupyter 内核和 arXiv 本地模型属于可选依赖。
+- 如果使用 `xiaoqing_chat`，需要在 `config.json` 配置统一 AI provider、模型 profile 和插件 route，并在 `config/secrets.json` 的 `ai.providers` 中放对应 API Key；图片理解还需要带 `image` 模态的视觉 profile。
 
 ### 安装依赖
 
 ```bash
 git clone https://github.com/SukiYume/XiaoQing.git
 cd XiaoQing
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Windows PowerShell 下同样可以直接执行。
 
 ```powershell
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
+
+仓库只维护根目录这一份直接依赖清单；pip 会按当前 Python 和平台解析可用版本。
 
 ### 创建配置
 
@@ -137,7 +154,6 @@ Copy-Item config/secrets.json.example config/secrets.json
   "bot_name": "小青",
   "command_prefixes": ["/"],
   "require_bot_name_in_group": true,
-  "random_reply_rate": 0.05,
   "enable_ws_client": false,
   "enable_inbound_server": true,
   "onebot_http_base": "http://127.0.0.1:11001",
@@ -145,13 +161,37 @@ Copy-Item config/secrets.json.example config/secrets.json
   "inbound_trusted_tls_proxy": false,
   "timezone": "Asia/Shanghai",
   "log_level": "INFO",
+  "ai": {
+    "providers": {
+      "deepseek": {
+        "api_base": "https://api.deepseek.com",
+        "endpoint_path": "/chat/completions"
+      }
+    },
+    "models": {
+      "deepseek-flash": {
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "modalities": ["text"]
+      }
+    }
+  },
   "plugins": {
-    "smalltalk_provider": "xiaoqing_chat"
+    "smalltalk_provider": "xiaoqing_chat",
+    "xiaoqing_chat": {
+      "ai": {
+        "routes": {
+          "chat": {
+            "models": ["deepseek-flash"]
+          }
+        }
+      }
+    }
   }
 }
 ```
 
-Inbound listener 默认只能绑定 loopback。不要为“启用 HTTPS”把它改成 `https://`/`wss://` 或直接暴露 `0.0.0.0`：XiaoQing 本身不终止 TLS。公网接入应由 Nginx/Caddy 提供 HTTPS/WSS 并转发到 loopback；只有跨容器受控网络确实需要非 loopback 明文 bind 时，才能显式设置 `inbound_trusted_tls_proxy: true`，同时用防火墙阻止绕过代理直连。详见 [配置与部署文档](docs/06-configuration.md#inbound_trusted_tls_proxy)。
+Inbound listener 默认只能绑定 loopback，并且只要配置了 HTTP 或 WS listener，启动时就必须提供非空 `inbound_token`。不要为“启用 HTTPS”把地址改成 `https://`/`wss://` 或直接暴露 `0.0.0.0`：XiaoQing 本身不终止 TLS。公网接入应由 Nginx/Caddy 提供 HTTPS/WSS 并转发到 loopback；只有跨容器受控网络确实需要非 loopback 明文 bind 时，才能显式设置 `inbound_trusted_tls_proxy: true`，同时用防火墙阻止绕过代理直连。详见 [配置与部署文档](docs/06-configuration.md#inbound_trusted_tls_proxy)。
 
 最小 `config/secrets.json` 示例内容如下。
 
@@ -159,17 +199,10 @@ Inbound listener 默认只能绑定 loopback。不要为“启用 HTTPS”把它
 {
   "inbound_token": "your-secret-token",
   "admin_user_ids": [123456789],
-  "plugins": {
-    "xiaoqing_chat": {
-      "default": "deepseek",
-      "providers": {
-        "deepseek": {
-          "api_base": "https://api.deepseek.com",
-          "api_key": "sk-xxx",
-          "model": "deepseek-chat",
-          "endpoint_path": "/v1/chat/completions",
-          "proxy": ""
-        }
+  "ai": {
+    "providers": {
+      "deepseek": {
+        "api_key": "your-deepseek-api-key"
       }
     }
   }
@@ -201,6 +234,10 @@ http:
 }
 ```
 
+主动 WebSocket 在正常关闭、异常关闭和短连接后都会使用 5–60 秒的有界指数退避并加入连续抖动；连接连续稳定 30 秒后才重置退避。修改地址或 token 会立即唤醒正在等待或阻塞于旧连接的任务；旧连接即使拒绝取消或关闭失败，也会被隔离并由停机流程有界回收。配置非空 `onebot_token` 时，客户端只会使用当前 `websockets` 版本明确支持的 `additional_headers` 或 `extra_headers` 参数发送 Bearer 头；无法确认支持时会拒绝启动，不会降级为匿名连接。只有来源状态为 VALID 的 `secrets.json` 中缺省或明确为空字符串的 token 才表示合法匿名模式；secrets 缺失、损坏、不可读、跨代不一致或 token 类型错误时，HTTP 与 WebSocket 都暂停网络访问。相同规则也保护 `inbound_token` 和管理员列表：来源异常或类型错误会让 Inbound 鉴权拒绝所有请求并清空运行态管理员，恢复有效的新 revision 后才重新启用。
+
+被动 Inbound 的 HTTP `/event` 与 WebSocket `/ws` 共用一个有界调度器；即使分别监听不同端口，同一私聊用户或同一“群 + 用户”的 handler 仍按统一接纳顺序串行，不同会话可以并行。排队项在执行前复验当前 token，队列满时快速拒绝。配置热切换会先绑定不接纳的候选 listener，排空旧代后再提交新代，避免两代同时处理同一会话。
+
 ### 启动
 
 ```bash
@@ -211,6 +248,9 @@ python main.py
 
 ```text
 /help
+/help pendo
+/help pendo.pendo.todo.add
+/help json qingpet
 /plugins
 /metrics
 小青 你好
@@ -222,17 +262,18 @@ python main.py
 
 | 命令 | 说明 |
 |---|---|
-| `/help [关键词]` | 查看命令帮助或搜索命令 |
+| `/help [插件名\|稳定命令码\|关键词] [page N]` | 查询或分页遍历完整递归命令目录 |
+| `/help json [查询] [page N]` | 导出包含别名、权限、场景和样例的命令目录 JSON |
 | `/plugins` | 查看已加载插件 |
 | `/reload` | 管理员热重载配置和插件 |
 | `/闭嘴 [分钟/1h]` | 当前群静音机器人 |
 | `/说话` | 解除当前群静音 |
 | `/metrics` | 查看运行指标 |
 | `/xc <内容>` | 进入 xiaoqing_chat 对话 |
-| `/pendo ...` | 进入 Pendo 个人管理功能 |
-| `/codex ...` | 管理 Codex 后台会话、任务队列和结果回发 |
+| `/pendo ...` | 私聊进入 Pendo 个人管理功能 |
+| `/codex ...` | 管理员私聊管理 Codex 后台会话、任务队列和结果回发 |
 | `/arxiv` | 执行今日 arXiv 论文筛选，并触发 Codex 摘要侧路 |
-| `/shell <命令>` | 管理员执行白名单内终端命令 |
+| `/shell <命令>` | 管理员私聊执行启用列表内终端命令 |
 
 ## 核心插件
 
@@ -323,6 +364,7 @@ http://127.0.0.1:12001
 /pendo web status
 /pendo web token
 /pendo web widget-token
+/pendo web widget-revoke
 /pendo web stop
 ```
 
@@ -334,7 +376,7 @@ $env:PENDO_WEB_PORT="12003"
 python main.py
 ```
 
-浏览器登录不需要账号密码；执行 `/pendo web token` 后在私聊中打开一次性登录链接（5 分钟内仅可兑换一次）。浏览器会使用短期 HttpOnly 会话，而不会保存 bearer token。Scriptable 小组件使用 `/pendo web widget-token` 生成的只读 token。
+浏览器登录不需要账号密码；执行 `/pendo web token` 后在私聊中打开一次性登录链接（5 分钟内仅可兑换一次）。浏览器会使用短期 HttpOnly 会话，而不会保存 bearer token。Scriptable 小组件使用 `/pendo web widget-token` 生成默认 30 天的只读 token，首次运行时存入 iOS Keychain；需要失效时执行 `/pendo web widget-revoke`。
 
 ## Codex 与 arXiv 摘要
 
@@ -342,7 +384,7 @@ python main.py
 
 `arxiv_filter` 的每日流程会先发送筛选出的论文列表，再把所有 positive 论文链接后台投递到 Codex `astro-ph` 会话。`astro-ph` 首次没有 thread 时会先静默初始化，后续摘要 prompt 会要求 Codex 读取工作目录下的 `arxiv-summary-methodology.md`。同一天已有成功执行结果时，手动 `/arxiv` 会直接重发历史摘要；失败或没有记录时会重新总结。
 
-`astro-ph` 默认是受保护会话，删除时需要 `/codex delete astro-ph --force --protected`。删除不会直接抹掉旧目录，历史会归档到 `plugins/codex/data/deleted_sessions/`。
+`astro-ph` 默认是受保护会话，删除时需要 `/codex delete astro-ph --force --protected`。删除不会直接抹掉旧目录，历史会归档到 `data/codex/deleted_sessions/`。
 
 ## 插件开发概览
 
@@ -354,7 +396,9 @@ plugins/my_plugin/
 └── main.py
 ```
 
-`plugin.json` 描述插件名、版本、命令、触发词、入口和定时任务。
+`plugin.json` 描述插件名、版本、命令、触发词、入口、额外观察文件和定时任务。插件名只能是小写 ASCII Python 标识符。入口只能是插件真实目录内的规范 POSIX `.py` 相对路径（如 `main.py` 或 `handlers/main.py`）；绝对路径、`..`、反斜杠、symlink、junction 和其他 reparse point 会被拒绝。
+
+每个加载代都会冻结全部 Python 源码、插件根目录的 JSON，以及 `watch_files` 显式列出的嵌套配置；插件运行数据位于源码树外，遍历只跳过 `__pycache__/`。插件代码是与 Bot 进程同权限运行的受信任 Python 扩展，不是安全沙箱；框架的 execution gate 只约束命令、服务、回调和生命周期发布。
 
 ```json
 {
@@ -362,17 +406,27 @@ plugins/my_plugin/
   "version": "0.1.0",
   "description": "示例插件",
   "entry": "main.py",
+  "watch_files": ["config/settings.json"],
   "commands": [
     {
       "name": "hello",
       "triggers": ["hello"],
-      "help": "打招呼 | /hello <name>",
-      "admin_only": false
+      "help": "打招呼",
+      "usage": "/hello <name>",
+      "examples": ["/hello 小青"],
+      "invalid_examples": ["/hello"]
     }
   ],
   "schedule": []
 }
 ```
+
+复合插件在同一命令对象内递归声明 `subcommands`；子节点使用 `aliases`，并继续提供
+`help`、`usage`、`examples` 与 `invalid_examples`。Core 会为每个节点生成
+`plugin.root.child` 形式的稳定命令码，并把同一份不可变目录交给 `/help`、JSON 导出、
+权限/场景校验、插件运行时和全插件 `/event` 测试。不要再用插件帮助字符串维护另一份
+命令清单。详细 schema 与消费 `context.command_invocation` 的方式见
+[插件开发指南](docs/03-plugin-development.md#commands-字段)。
 
 `main.py` 至少实现 `handle()`。
 
@@ -394,6 +448,30 @@ async def handle(command: str, args: str, event: dict, context):
 - `handle_smalltalk(text, event, context)`: 作为闲聊 provider。
 - schedule handler: 在 `plugin.json` 中声明定时任务。
 
+同步阻塞库必须通过 `core.plugin_base.run_sync()` 调用。该 helper 会沿用当前插件的执行 gate，在四个共享 worker 之上施加按插件并发/排队上限并公平调度；一个慢插件不能占满全部线程拖住其它插件。队列满时请求会快速失败，取消或卸载也不会让仍在运行的 Python 线程跨代重叠。不要在普通插件入口中直接调用 `asyncio.to_thread()`；确实需要自管线程的低层组件必须拥有独立、有界的 executor，并在 `init`/`shutdown` 中完整管理其生命周期。
+
+### 从零创建一个插件（五步）
+
+以一个「待办清单」插件 `todo` 为例，完整流程只有五步。
+
+1. **建目录**：`plugins/todo/`，放入 `plugin.json`、`main.py` 和空的 `__init__.py`。目录名必须等于 `plugin.json` 的 `name`（小写 ASCII 标识符）。
+2. **写 `plugin.json`**：在 `commands` 里声明 `todo` 命令、`add`/`list` 子命令、`usage`、`examples` 和 `invalid_examples`。这份 Manifest 是命令目录的唯一真相来源，`/help` 与全插件测试都读它。
+3. **写 `main.py`**：实现 `async def handle(command, args, event, context)`。用 `context.command_invocation.node.name` 取 Core 已解析好的子命令，用 `context.data_dir` 做私有持久化，用 `core.plugin_base.segments(...)` 构造回复。
+   ```python
+   from core.plugin_base import segments
+
+   async def handle(command, args, event, context):
+       inv = context.command_invocation
+       sub = inv.node.name if inv else ""
+       if sub == "add":
+           return segments(f"✅ 已添加：{inv.arguments}")
+       return segments("📝 待办清单…")
+   ```
+4. **加载**：开发期 `python main.py` 重启即可；运行中让管理员发 `/reload` 热扫描插件，或开启 `enable_plugin_watcher` 保存即自动重载。加载后 `/plugins` 会列出 `todo`。
+5. **测试**：私聊或群里发 `/todo add 写周报`、`/todo list` 验证；提交前跑 `python -m compileall -q plugins/todo` 与 `python -m pytest tests -q`。
+
+完整分步教程（含子命令、会话、定时任务、AI route、数据持久化和权限）见 [docs/03-plugin-development.md](docs/03-plugin-development.md)。
+
 详细指南见 [docs/03-plugin-development.md](docs/03-plugin-development.md) 和 [docs/05-api-reference.md](docs/05-api-reference.md)。
 
 ## 配置与热重载
@@ -403,11 +481,24 @@ async def handle(command: str, args: str, event: dict, context):
 - `config/config.json`: 基础运行配置，例如 bot name、命令前缀、OneBot 地址、日志级别、插件选择和并发限制。
 - `config/secrets.json`: 敏感配置，例如 inbound token、管理员 QQ、LLM API Key、第三方服务 token。
 
+LLM/VLM 使用统一注册表：公开连接信息和模型 profile 位于 `config.ai`，插件只在 `plugins.<name>.ai.routes` 中声明有序模型链，密钥统一位于 `secrets.ai.providers`。同一个 provider 可被多个插件和多个文本/视觉 profile 复用，不需要复制 API Key。完整字段见 [配置指南](docs/06-configuration.md#统一-aivlm-注册表)。
+
 常用运行时配置支持热重载。修改配置后可以执行以下命令。
 
 ```text
 /reload config
 ```
+
+普通配置读取采用 last-known-good；敏感配置采用 fail-closed。watcher 发现 `secrets.json` 被删除、损坏或出现未经确认的新内容时会立即撤销运行态凭据。直接编辑 secrets 后，请等待文件完整保存、确认没有其他写入进程，再执行 `/reload config` 显式确认；不要一边写文件一边 reload。详细状态与并发边界见 [配置指南](docs/06-configuration.md#配置热重载)。
+
+`plugin_execution` 可分别限制插件入口排队、单插件同步并发/排队和全局同步排队；`overrides.<plugin_name>` 只覆盖该插件。所有队列都有硬上限，过载不会继续堆积内存。完整字段、范围和停机语义见 [插件执行配置](docs/06-configuration.md#plugin_execution)。
+
+插件文件 watcher 默认关闭。启用时会先验证当前解释器是否真正支持导入屏障；能力不足
+则保持首次加载可用并进入 restart-only 模式，不会因 Python 小版本直接拒绝启动。探针
+通过后，单路径删除、原子替换和权限竞态只影响当前轮次；稳定快照核验失败不会发布
+混合代，应用会对意外退出的 watcher 进行唯一、有界退避重启。运行数据目录与
+`__pycache__` 在遍历阶段即被忽略；插件导入始终直接编译已核验的源码快照，不会回退
+执行陈旧 `.pyc`。
 
 需要重新扫描插件或命令时执行以下命令。
 
@@ -415,7 +506,7 @@ async def handle(command: str, args: str, event: dict, context):
 /reload
 ```
 
-插件运行时数据通常位于各自的 `plugins/<name>/data/` 目录，不应提交。Pendo 的 SQLite 数据库、xiaoqing_chat 的媒体库/记忆/表达学习状态，以及 codex 的会话索引、`session/<name>/conversation.jsonl`、图片副本、任务 artifacts 和删除归档 `deleted_sessions/` 都属于本地运行时数据。
+插件运行时数据默认位于项目级 `data/<name>/`，与 `plugins/<name>/` 源码树分离且不应提交；可用全局 `data_root` 改变根目录。Pendo 的 SQLite 数据库、xiaoqing_chat 的媒体库/记忆/表达学习状态，以及 codex 的会话索引、`session/<name>/conversation.jsonl`、图片副本、任务 artifacts 和删除归档 `deleted_sessions/` 都属于本地运行时数据。首次启动新版本时，Core 会把尚未迁移的旧 `plugins/<name>/data/` 原子复制到新位置，再将旧目录移到 `data_root/.legacy-plugin-data/<name>/` 供人工回退；运行时只读写新位置。
 
 ## 测试
 
@@ -426,12 +517,45 @@ python -m compileall -q core plugins tests
 python -m pytest tests -q
 ```
 
+在 Git Bash、macOS 或 Linux 中执行完整并行回归：
+
+```bash
+pytest -n 2
+```
+
+该命令只运行自动化测试，不会代替下面的真实服务 UAT。
+
+上线前需要复现“真实启动 + 全插件命令 + 压力 + CI 门禁”时，使用统一 UAT
+入口。它直接使用当前 `PATH` 中的 `python` 执行 `main.py`，不识别 Conda/venv
+名称，也不会按 Python 小版本卡口；测试数据写入被忽略的独立报告目录，并在结束时逐字节恢复本地
+`config/config.json`。
+
+```bash
+bash scripts/run_full_uat.sh --plan-only
+bash scripts/run_full_uat.sh
+```
+
+默认覆盖 HTTP 与 WebSocket 命令矩阵、带清理的本地 CRUD/高权限场景、Core
+背压恢复、全量 pytest/coverage、Ruff、mypy、compileall 和 staged/unstaged
+`git diff --check`。会访问外部服务的场景与会产生模型费用的聊天质量测试分别用
+`--include-external --scenario-fixtures <本地文件>` 和
+`--include-chat-quality` 显式开启。环境和依赖由使用者在运行前准备，Git Bash、
+macOS 和 Linux 使用同一条命令。结果统一写入
+`test_reports/runs/project/full-uat-*/reports/FULL_UAT_REPORT.md`；若进程被强制杀死
+而留下恢复锁，确认 12000 端口已释放后执行
+`bash scripts/run_full_uat.sh --recover`。
+
+修复后可以定点复测；例如只复测 Pendo 的 WebSocket 命令并跑轻量静态门禁：
+
+```bash
+bash scripts/run_full_uat.sh --phases ws-matrix,ruff,mypy,diff --matrix-plugins pendo
+```
+
 `xiaoqing_chat` 的常用验证命令如下。
 
 ```powershell
-python -m pytest tests/plugins/test_xiaoqing_chat.py -q
-python -m pytest tests/plugins/test_xiaoqing_chat_media.py -q
-python -m pytest tests/plugins/test_reply_checker.py -q
+$files = Get-ChildItem -LiteralPath 'tests/plugins' -Filter 'test_xiaoqing_chat*.py' | Sort-Object Name | ForEach-Object { $_.FullName }
+python -m pytest @files tests/plugins/test_reply_checker.py -q
 python -m pytest tests -k "xiaoqing or reply_checker" -q
 ```
 
@@ -441,7 +565,8 @@ python -m pytest tests -k "xiaoqing or reply_checker" -q
 python -m compileall -q plugins/pendo
 node --check plugins/pendo/web/scriptable/pendo_widget.js
 $files = Get-ChildItem -LiteralPath 'tests/plugins' -Filter 'test_pendo*.py' | Sort-Object Name | ForEach-Object { $_.FullName }
-python -m pytest @files tests/test_server.py
+$serverFiles = Get-ChildItem -LiteralPath 'tests' -Filter 'test_server*.py' | Sort-Object Name | ForEach-Object { $_.FullName }
+python -m pytest @files @serverFiles
 ```
 
 Windows PowerShell 不会像 bash 一样展开某些 pytest 通配符。需要先用 `Get-ChildItem` 枚举文件，再传给 pytest。
@@ -449,7 +574,8 @@ Windows PowerShell 不会像 bash 一样展开某些 pytest 通配符。需要�
 工具插件的常用验证命令如下。
 
 ```powershell
-python -m pytest tests/plugins/test_codex.py tests/plugins/test_shell_plugin.py -q
+$files = Get-ChildItem -LiteralPath 'tests/plugins' -Filter 'test_codex*.py' | Sort-Object Name | ForEach-Object { $_.FullName }
+python -m pytest @files tests/plugins/test_shell_plugin.py -q
 ```
 
 ## 文档入口
@@ -496,9 +622,10 @@ python -m pytest tests/plugins/test_codex.py tests/plugins/test_shell_plugin.py 
 
 **LLM 插件不可用**
 
-1. 检查 `config/secrets.json` 中 provider 的 `api_base`、`api_key`、`model` 和 `endpoint_path`。
-2. 检查代理和网络。
-3. 对 `xiaoqing_chat`，用 `/xc 模型` 查看当前 provider。
+1. 检查 `config.ai.providers`、`config.ai.models` 和 `plugins.<插件>.ai.routes` 的引用是否一致。
+2. 检查 `secrets.ai.providers.<provider>.api_key` 是否存在；不要再把模型连接字段放到插件 secrets。
+3. 检查代理和网络。限流或服务端故障会按 route 顺序 fallback，认证和请求参数错误不会被掩盖。
+4. 对 `xiaoqing_chat`，用 `/xc 模型` 查看当前 profile；`/xc 模型 默认` 恢复自动 fallback 链。
 
 ## 许可证
 

@@ -1,20 +1,44 @@
 {
     "name": "jupyter",
-    "version": "3.0.0",
-    "description": "Jupyter 代码执行器 - 在 Jupyter 内核中远程执行 Python 代码，支持交互式 REPL 模式",
+    "version": "3.1.0",
+    "description": "按用户与会话场景隔离的有界 Jupyter 代码执行器",
     "entry": "main.py",
+    "capabilities": ["admin_sessions", "execution_timeout_exempt"],
     "commands": [
         {
             "name": "jupyter",
             "triggers": [
                 "jupyter",
                 "py",
-                "python",
-                "exec"
+                "python"
             ],
-            "help": "执行 Python 代码或启动 REPL | /py <代码> | /py repl | /py help",
+            "help": "执行 Python 代码或启动 REPL | /py <代码> | /py repl",
             "admin_only": true,
-            "priority": 10
+            "contexts": ["private"],
+            "priority": 10,
+            "usage": "/py [-t 0.1-600] <Python代码> | /py repl",
+            "examples": ["/py print(1 + 1)", "/py -t 30 print('ok')"],
+            "invalid_examples": ["/py"],
+            "subcommands": [
+                {
+                    "name": "repl",
+                    "aliases": ["interactive", "交互"],
+                    "help": "启动 10 分钟代码缓冲会话",
+                    "usage": "/py repl",
+                    "match": "exact",
+                    "examples": ["/py repl"],
+                    "invalid_examples": ["/py repl extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示代码执行与 REPL 说明",
+                    "usage": "/py help",
+                    "match": "exact",
+                    "examples": ["/py help"],
+                    "invalid_examples": ["/py help extra"]
+                }
+            ]
         },
         {
             "name": "jupyter_kernel",
@@ -22,9 +46,73 @@
                 "kernel",
                 "内核"
             ],
-            "help": "管理 Jupyter 内核 | /kernel status | /kernel restart",
-            "admin_only": true
+            "help": "管理隔离内核 | /kernel [status|start|restart|shutdown]",
+            "admin_only": true,
+            "contexts": ["private"],
+            "usage": "/kernel [status|start|restart|shutdown]",
+            "examples": ["/kernel"],
+            "invalid_examples": ["/kernel unknown"],
+            "subcommands": [
+                {
+                    "name": "status",
+                    "aliases": ["状态"],
+                    "help": "查看隔离内核状态",
+                    "usage": "/kernel status",
+                    "match": "exact",
+                    "examples": ["/kernel status"],
+                    "invalid_examples": ["/kernel status extra"]
+                },
+                {
+                    "name": "start",
+                    "aliases": ["启动"],
+                    "help": "启动隔离内核",
+                    "usage": "/kernel start",
+                    "match": "exact",
+                    "examples": ["/kernel start"],
+                    "invalid_examples": ["/kernel start extra"]
+                },
+                {
+                    "name": "restart",
+                    "aliases": ["重启"],
+                    "help": "重启内核并清除变量",
+                    "usage": "/kernel restart",
+                    "match": "exact",
+                    "examples": ["/kernel restart"],
+                    "invalid_examples": ["/kernel restart extra"]
+                },
+                {
+                    "name": "shutdown",
+                    "aliases": ["stop", "关闭", "停止"],
+                    "help": "关闭隔离内核",
+                    "usage": "/kernel shutdown",
+                    "match": "exact",
+                    "examples": ["/kernel shutdown"],
+                    "invalid_examples": ["/kernel shutdown extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "-h", "?"],
+                    "help": "显示内核管理说明",
+                    "usage": "/kernel help",
+                    "match": "exact",
+                    "examples": ["/kernel help"],
+                    "invalid_examples": ["/kernel help extra"]
+                }
+            ]
         }
     ],
-    "schedule": []
+    "dependencies": [
+        {
+            "name": "jupyter_client",
+            "required": false,
+            "description": "可选 Jupyter 内核进程管理；缺失时帮助命令仍可用"
+        },
+        {
+            "name": "ipykernel",
+            "required": false,
+            "description": "可选 Python 内核运行时"
+        }
+    ],
+    "schedule": [],
+    "concurrency": "parallel"
 }

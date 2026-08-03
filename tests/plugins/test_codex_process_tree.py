@@ -163,6 +163,118 @@ async def test_windows_attempts_taskkill_even_if_parent_has_exited(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_windows_treats_missing_reaped_target_as_already_terminated(monkeypatch):
+    """父进程已回收时，taskkill 的“找不到 PID”不应被误报为清理失败。"""
+    monkeypatch.setattr(runner.sys, "platform", "win32")
+    target = _FakeProcess(returncode=0)
+    helper = _FakeTaskkill(target, code=128)
+    monkeypatch.setattr(
+        runner.asyncio,
+        "create_subprocess_exec",
+        AsyncMock(return_value=helper),
+    )
+
+    result = await runner.terminate_process_tree(
+        target,  # type: ignore[arg-type]
+        helper_timeout_seconds=0.1,
+        kill_timeout_seconds=0.1,
+    )
+
+    assert result.tree_confirmed is True
+    assert result.parent_reaped is True
+    assert result.forced is False
+    assert result.helper_error is None
+    assert target.kill_calls == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process-tree integration test")
+def test_real_windows_parent_child_and_grandchild_are_reaped():
+    policy = asyncio.WindowsProactorEventLoopPolicy()
+    loop = policy.new_event_loop()
+    try:
+        loop.run_until_complete(_exercise_real_windows_process_tree())
+    finally:
+        loop.close()
+
+
+async def _exercise_real_windows_process_tree() -> None:
+    import ctypes
+    import subprocess
+
+    def process_alive(pid: int) -> bool:
+        process_handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not process_handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(
+                process_handle,
+                ctypes.byref(exit_code),
+            ):
+                return False
+            return exit_code.value == 259
+        finally:
+            ctypes.windll.kernel32.CloseHandle(process_handle)
+
+    grandchild_code = "import time; time.sleep(60)"
+    child_code = (
+        "import subprocess,sys,time; "
+        f"grandchild=subprocess.Popen([sys.executable, '-c', {grandchild_code!r}]); "
+        "print(grandchild.pid, flush=True); "
+        "time.sleep(60)"
+    )
+    parent_code = (
+        "import subprocess,sys,time; "
+        f"child=subprocess.Popen([sys.executable, '-c', {child_code!r}], "
+        "stdout=subprocess.PIPE, text=True); "
+        "grandchild_pid=child.stdout.readline().strip(); "
+        "print(f'{child.pid} {grandchild_pid}', flush=True); "
+        "time.sleep(60)"
+    )
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        parent_code,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=creationflags,
+    )
+    assert process.stdout is not None
+    child_pid, grandchild_pid = map(
+        int,
+        (await asyncio.wait_for(process.stdout.readline(), timeout=5)).split(),
+    )
+
+    try:
+        result = await runner.terminate_process_tree(
+            process,
+            helper_timeout_seconds=5,
+            kill_timeout_seconds=5,
+        )
+
+        assert result.parent_reaped is True
+        assert result.tree_confirmed is True
+        for _ in range(100):
+            if not process_alive(child_pid) and not process_alive(grandchild_pid):
+                break
+            await asyncio.sleep(0.05)
+        assert process_alive(child_pid) is False
+        assert process_alive(grandchild_pid) is False
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        for pid in (child_pid, grandchild_pid):
+            if process_alive(pid):
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    check=False,
+                    capture_output=True,
+                )
+
+
+@pytest.mark.asyncio
 async def test_pipe_drain_has_hard_deadline_and_closes_transports():
     never = asyncio.Event()
 

@@ -127,7 +127,7 @@ def _remove_trailing_commas(text: str) -> str:
 
 
 def _quote_unquoted_keys(text: str) -> str:
-    return re.sub(r'([{\[,]\s*)([A-Za-z_][\w\-]*)(\s*:)', r'\1"\2"\3', text)
+    return re.sub(r"([{\[,]\s*)([A-Za-z_][\w\-]*)(\s*:)", r'\1"\2"\3', text)
 
 
 def repair_json_text(text: str) -> str:
@@ -199,5 +199,5 @@ def extract_named_list_field(obj: dict[str, Any] | None, field: str) -> list[Any
 
 
 def strict_json_bool(value: Any) -> bool | None:
-    """Accept only JSON booleans, never truthy strings or numbers."""
+    """只接受 JSON 布尔值，不接受具有真值语义的字符串或数字。"""
     return value if type(value) is bool else None

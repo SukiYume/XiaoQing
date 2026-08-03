@@ -1,7 +1,7 @@
 {
   "name": "choice",
-  "version": "0.2.0",
-  "description": "随机选择助手 - 帮你做决定，支持单选、多选、加权选择",
+  "version": "0.3.0",
+  "description": "随机选择助手，支持重复项加权和按文本去重的不放回抽样",
   "author": "XiaoQing Bot",
   "entry": "main.py",
   "commands": [
@@ -13,8 +13,22 @@
         "选择",
         "抽奖"
       ],
-      "help": "随机选择困难症救星 | 用法: /选择 问题 选项1 选项2 选项3",
-      "admin_only": false
+      "help": "用法：/选择 问题 选项1 选项2 ... [-n 数量] [-u]",
+      "admin_only": false,
+      "usage": "/选择 <问题> <选项1> <选项2> [...] [-n 1-10] [-u]",
+      "examples": ["/选择 晚饭 米饭 面条", "/选择 晚饭 米饭 面条 火锅 -n 2 -u"],
+      "invalid_examples": ["/选择 晚饭 只有一个选项", "/选择 晚饭 A B -n 0"],
+      "subcommands": [
+        {
+          "name": "help",
+          "aliases": ["帮助"],
+          "help": "显示随机选择的参数与抽样规则",
+          "usage": "/选择 help",
+          "match": "exact",
+          "examples": ["/选择 help"],
+          "invalid_examples": ["/选择 help extra"]
+        }
+      ]
     }
   ],
   "schedule": [],

@@ -1,6 +1,6 @@
 # Codex 插件
 
-通过 QQ 命令调用本机 Codex CLI 的后台任务插件。`plugin.json` 将全部 `/codex` 命令标记为 `admin_only: true`，因此只有 `config/secrets.json` 中 `admin_user_ids` 列出的 Bot 管理员可以使用；资源预算不会削弱可信管理员选择 Codex sandbox、审批策略和工作目录的灵活性。
+通过 QQ 命令调用本机 Codex CLI 的后台任务插件。`plugin.json` 将全部 `/codex` 命令标记为 `admin_only: true` 且仅允许私聊，因此只有 `config/secrets.json` 中 `admin_user_ids` 列出的 Bot 管理员能在私聊中使用；资源预算不会削弱可信管理员选择 Codex sandbox、审批策略和工作目录的灵活性。
 
 Codex 插件不使用 XiaoQing 的框架 Session。它维护自己的 Codex 会话标签、工作目录、任务队列和对话记录：同一标签内任务串行执行，不同标签可并行执行；任务完成后主动向 QQ 回发文字和图片结果。
 
@@ -17,11 +17,19 @@ Codex 插件不使用 XiaoQing 的框架 Session。它维护自己的 Codex 会�
 /codex delete <name> [--force] [--protected]
 ```
 
+<!-- manifest-command-aliases:start -->
+| 推荐入口 | manifest 等价别名 |
+|---|---|
+| `/codex` | 无；所有子命令共享这一个管理员入口。 |
+<!-- manifest-command-aliases:end -->
+
+`create/new/创建`、`list/ls/列表`、`status/状态`、`cancel/stop/取消/停止`、`clear/清空` 和 `delete/del/remove/rm/删除` 是 `/codex` 内部的等价子命令，不是独立 manifest 命令。未知选项、多余参数、带值的 `--force/--protected`、非 ASCII 或非正数任务编号都会被拒绝。
+
 ## 使用示例
 
 ```text
 /codex create main
-/codex create repo cwd:C:/Users/testuser/Desktop/project
+/codex create repo cwd:C:/workspace/project
 /codex main 总结一下当前项目结构
 /codex repo 跑一下测试并说明失败点
 /codex status repo
@@ -33,7 +41,7 @@ Codex 插件不使用 XiaoQing 的框架 Session。它维护自己的 Codex 会�
 
 ## arXiv 摘要会话
 
-arXiv Filter 插件会把每天筛选出的所有 positive 论文链接交给固定 Codex 会话 `astro-ph`。该会话默认工作目录为 `C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex`，并假设工作目录下存在 `arxiv-summary-methodology.md`。如果运行时发现 `astro-ph` 还没有 Codex thread，插件会先发送一条静默初始化消息建立摘要规则；初始化结果只写入会话历史，不推送到 QQ。随后当天摘要任务按普通 Codex 队列任务投递。每次发送总结任务时，prompt 都会明确要求 Codex 先读取当前工作目录下的 `arxiv-summary-methodology.md`，并附上形如：
+arXiv Filter 插件会把每天筛选出的所有 positive 论文链接交给固定 Codex 会话 `astro-ph`。日期必须是实际存在的 `YYYY-MM-DD`，单次最多接受 512 个 `arxiv.org/abs` 或 `arxiv.org/pdf` 链接；版本号、PDF 后缀和查询参数会被规范化为无版本 HTTPS abs 链接，其他站点或任意文本不会进入 prompt。该会话默认使用 Codex 插件数据目录下的 `workspaces/`，并假设工作目录下存在 `arxiv-summary-methodology.md`。如果运行时发现 `astro-ph` 还没有 Codex thread，插件会先发送一条静默初始化消息建立摘要规则；初始化结果只写入会话历史，不推送到 QQ。随后当天摘要任务按普通 Codex 队列任务投递。每次发送总结任务时，prompt 都会明确要求 Codex 先读取当前工作目录下的 `arxiv-summary-methodology.md`，并附上形如：
 
 ```markdown
 ## 2026-05-19
@@ -66,16 +74,18 @@ https://arxiv.org/abs/2605.18050
 {
   "plugins": {
     "codex": {
-      "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
-      "allowed_cwd_roots": ["C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"],
       "protected_sessions": ["astro-ph"],
       "arxiv_summary": {
         "label": "astro-ph",
-        "cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
         "methodology": "arxiv-summary-methodology.md"
       },
       "max_parallel_jobs": 2,
       "per_session_queue_limit": 10,
+      "max_prompt_chars": 200000,
+      "session_ttl_days": 90,
+      "artifact_retention_days": 30,
+      "emergency_disk_bytes": 10737418240,
+      "emergency_queue_limit": 1000,
       "spawn_timeout_seconds": 30,
       "job_timeout_seconds": 3600,
       "max_stdout_bytes": 16777216,
@@ -99,14 +109,25 @@ https://arxiv.org/abs/2605.18050
 }
 ```
 
-如果 Codex CLI 不在 PATH 中，可在 `plugins.codex.codex_bin` 指定可执行文件路径。`allowed_cwd_roots` 是工作目录安全边界，管理员指定的 `cwd:` 必须位于这些根目录下。`spawn_timeout_seconds` 限制创建 CLI 进程的等待时间；进程登记与 prompt 提交之间受取消 handoff 保护。
+如果 Codex CLI 不在 PATH 中，可在 `plugins.codex.codex_bin` 指定可执行文件路径。`allowed_cwd_roots` 是工作目录安全边界，管理员指定的 `cwd:` 必须位于这些根目录下；默认目录也会先通过该边界校验，之后才允许创建。`sandbox` 只接受 `read-only`、`workspace-write`、`danger-full-access`，`approval_policy` 只接受 `untrusted`、`on-failure`、`on-request`、`never`。`spawn_timeout_seconds` 限制创建 CLI 进程的等待时间；进程登记与 prompt 提交之间受取消 handoff 保护。
+
+安全边界说明：该插件只允许 Bot 管理员在私聊中触发，但它仍会以 Bot 进程身份启动本机 CLI。`danger-full-access` 代表 CLI 不受 Codex sandbox 的文件系统限制；`approval_policy: never` 不会增加人工确认；`skip_git_repo_check` 也只是仓库检查开关。`codex_bin` 可指定任意可执行文件，因此其权限等价于把该可执行文件交给 Bot 进程运行。只有受信任的管理员配置才能修改这些字段；不要把 Codex 入口开放到群聊或不受信任的配置写入路径。结果回发只暴露文件名，完整归档路径仅留在本机记录。
 
 ### 强制资源预算
 
-下列字段保护 Bot 进程、磁盘和 QQ 投递链路。括号内是 `config.py` 接受的范围；超出范围的配置值会被钳制到最近边界。这些预算是管理员任务的存活性护栏，不是 Codex 能力 allowlist。
+下列字段保护 Bot 进程、磁盘和 QQ 投递链路。括号内是 `config.py` 接受的范围；JSON 整数超出范围时会被钳制到最近边界，布尔、浮点、数字字符串等错误类型不会再被隐式转换，而会回退到默认值。这些预算是管理员任务的存活性护栏，不是 Codex 能力 allowlist。
 
 | 字段 | 默认值 | 合法范围 | 达到上限后的行为 |
 |---|---:|---:|---|
+| `max_parallel_jobs` | `2` | 1-64 | 全局并行许可达到上限后等待；热缩容不会抢占已运行任务，未启动任务按新上限重排。 |
+| `per_session_queue_limit` | `10` | 1-1,000 | 单个会话的非内部排队任务达到上限后拒绝继续入队，不再只发软警告。 |
+| `emergency_queue_limit` | `1000` | 10-10,000，且不低于会话上限 | 进程级紧急队列保护触发后拒绝继续入队。 |
+| `max_prompt_chars` | `200000` | 1,000-1,000,000 | 用户入口和内部 sidecar 共用该入队边界，超长任务不会写入队列或历史。 |
+| `spawn_timeout_seconds` | `30` 秒 | 1-120 | CLI 创建超时后任务失败并清理已拥有的临时资源。 |
+| `job_timeout_seconds` | `3600` 秒 | 30-604,800 | 达到执行时限后终止整棵进程树并返回超时结果。 |
+| `session_ttl_days` | `90` 天 | 0-3,650 | 归档过期、空闲、非受保护且无排队/运行任务的会话；`0` 关闭。 |
+| `artifact_retention_days` | `30` 天 | 0-3,650 | 回收已结束任务目录、临时输出、隔离状态和删除归档；`0` 关闭。 |
+| `emergency_disk_bytes` | 10 GiB | 64 MiB-1 TiB | 数据目录达到阈值后拒绝新任务。 |
 | `max_stdout_bytes` | 16 MiB（`16777216`） | 64 KiB-128 MiB | Codex JSON stdout 累计超过上限时，任务标记为输出超限并终止整棵进程树。 |
 | `max_stderr_bytes` | 4 MiB（`4194304`） | 64 KiB-64 MiB | stderr 累计超过上限时，任务标记为输出超限并终止整棵进程树。 |
 | `max_json_line_bytes` | 1 MiB（`1048576`） | 16 KiB-8 MiB | 单条 stdout JSON 事件超过上限时立即终止任务，避免无界行缓冲。 |
@@ -123,20 +144,23 @@ https://arxiv.org/abs/2605.18050
 
 输出流和最终输出的四项字节预算是硬限制，触发后会终止任务；最终输出文件超限时仅保留有界头尾归档，QQ 文本字符超限时则采用“完整归档、截断投递”；图片扫描、数量、字节、签名/解码、像素与帧数预算采用“拒绝不合格产物”，并把拒绝原因写入任务记录。`max_qq_images` 只限制发送数量，不把已通过校验的会话归档删除。
 
+`sessions.json` 使用版本化字段白名单；截断、未知 schema、坏字段或已越出 `allowed_cwd_roots` 的记录会保留到 `quarantine/` 后以安全状态继续启动。`session_ttl_days` 自动归档超过保留期的空闲非受保护会话；`artifact_retention_days` 回收已结束的 job 目录、输出、隔离快照和删除归档。运行中或仍排队的 job、受保护会话不会被维护任务删除。设为 `0` 可分别关闭对应 TTL 回收。
+
 ## 路径格式
 
 QQ 消息里建议统一使用 `/` 斜杠输入路径：
 
-- Windows 可输入 `C:/Users/testuser/Desktop/project`。
+- Windows 可输入 `C:/workspace/project`。
 - Linux/macOS 仍输入 `/home/user/project`。
 - 相对路径不接受，工作目录必须是绝对路径。
 - 非 Windows 系统会拒绝 Windows 盘符路径。
 
 ## 运行时数据
 
-运行时数据保存在 `plugins/codex/data/`，不应提交到 Git：
+运行时数据保存在 `context.data_dir`（默认 `data/codex/`），不应提交到 Git：
 
-- `sessions.json`：Codex 会话标签、工作目录、owner 和 thread id。
+- `sessions.json`：版本化的 Codex 会话标签、工作目录、owner 和 thread id 状态。
+- `quarantine/sessions-*.json`：无法直接信任的状态快照；供排障，不参与运行时加载，并按制品保留期清理。
 - `session/<name>/conversation.jsonl`：每个标签的用户任务、Codex 回复、取消、删除事件和图片记录。
 - `session/<name>/images/`：该 Codex 会话已经透传到 QQ 的图片副本。
 - `session/<name>/jobs/job-0001/artifacts/`：单次任务的图片输出目录；插件会自动把这个目录写入 Codex prompt。
@@ -147,7 +171,7 @@ QQ 消息里建议统一使用 `/` 斜杠输入路径：
 
 插件会在每次 Codex 任务的默认 prompt 后自动追加图片输出约定。Codex 如果生成图片，应保存到当前任务的 `artifacts/` 目录，并在最终回复中用 Markdown 图片语法或 `图片: <path>` 标出。用户不需要在 QQ 命令里手写这段要求。
 
-结果回发时，插件会解析最终文本、扫描 `artifacts/` 目录，并兜底扫描 `$CODEX_HOME/generated_images/` 中该任务运行期间生成的图片，把本地图片复制到 `session/<name>/images/`，再通过 QQ image 消息段和文字一起发送。长文本结果会先按 XiaoQing 的消息长度限制拆分，再发送图片，避免混合消息超长。
+结果回发时，插件只解析最终文本中的显式本地图片路径，并扫描本任务专属的 `artifacts/` 目录；不会猜测或遍历全局 `$CODEX_HOME/generated_images/`。如果 imagegen 先把文件保存到全局目录，Codex 必须按自动附加的约定把它复制到本任务目录或在最终回复中显式引用。候选图片通过目录归属、非链接/非硬链接、文件身份稳定、字节、格式、真实解码、像素和帧数检查后，才复制到 `session/<name>/images/` 并通过 QQ image 消息段发送。长文本结果会先按 XiaoQing 的消息长度限制拆分，再发送图片，避免混合消息超长。
 
 ## 注意事项
 

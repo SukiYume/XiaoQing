@@ -1,18 +1,37 @@
 {
     "name": "dict",
-    "version": "0.1.0",
-    "description": "天文学词典工具",
+    "version": "0.3.0",
+    "description": "内置官方 r241020 数据与完整校验清单的离线天文学中英词典",
     "entry": "main.py",
     "commands": [
         {
             "name": "dict",
-            "triggers": [
-                "dict",
-                "词典",
-                "字典"
+            "triggers": ["dict", "词典", "字典"],
+            "help": "天文学中英词典 | /dict [-e] [-n 1-100] <词汇>",
+            "admin_only": false,
+            "usage": "/dict [-e|--exact] [-n|--num 1-100] [--] <词汇>",
+            "examples": [
+                "/dict galaxy",
+                "/dict 星系",
+                "/dict -e \"fast radio burst\"",
+                "/dict -n 20 star"
             ],
-            "help": "天文学词典 | /dict galaxy",
-            "admin_only": false
+            "invalid_examples": [
+                "/dict",
+                "/dict -n 0 star",
+                "/dict --unknown star"
+            ],
+            "subcommands": [
+                {
+                    "name": "help",
+                    "aliases": ["h", "list", "l", "帮助"],
+                    "help": "显示词典查询、精确匹配和结果数量选项",
+                    "usage": "/dict help",
+                    "match": "exact",
+                    "examples": ["/dict help"],
+                    "invalid_examples": ["/dict help extra"]
+                }
+            ]
         }
     ],
     "schedule": []

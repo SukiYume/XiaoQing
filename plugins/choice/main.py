@@ -1,270 +1,184 @@
-"""
-随机选择插件
-提供从多个选项中随机选择的功能
-"""
-import logging
+"""提供有界参数解析、加权抽样和不重复抽样的随机选择插件。"""
+
+from __future__ import annotations
+
 import random
 from typing import Any
 
-from core.args import parse, tokenize
-from core.plugin_base import segments
+from core.args import tokenize
+from core.plugin_base import Segments, segments
 from core.public_errors import public_error_response
 
-logger = logging.getLogger(__name__)
+MIN_OPTIONS = 2
+MAX_OPTIONS = 50
+MAX_CHOICES = 10
+DEFAULT_CHOICES = 1
+MAX_ARGUMENT_CHARS = 4_096
+MAX_QUESTION_CHARS = 100
+MAX_OPTION_CHARS = 200
 
-# ============================================================
-# 常量配置
-# ============================================================
+CHOICE_EMOJIS = ("🎲", "🎯", "✨", "🌟", "💫", "🎰", "🔮", "🎪")
+_HELP_WORDS = frozenset({"help", "帮助"})
+_RNG = random.SystemRandom()
 
-MIN_OPTIONS = 2  # 至少需要的选项数
-MAX_OPTIONS = 50  # 最多支持的选项数
-MAX_CHOICES = 10  # 单次最多选择的数量
-DEFAULT_CHOICES = 1  # 默认选择数量
-
-CHOICE_EMOJIS = ["🎲", "🎯", "✨", "🌟", "💫", "🎰", "🔮", "🎪"]
-
-# ============================================================
-# 插件初始化
-# ============================================================
-
-def init(context=None) -> None:
-    """插件初始化"""
-    pass
-
-# ============================================================
-# 参数解析
-# ============================================================
-
-def parse_choice_args(args: str) -> tuple[str | None, list[str], int, bool]:
-    """解析选择命令的参数
-
-    Args:
-        args: 命令参数字符串
-
-    Returns:
-        (问题, 选项列表, 选择数量, 是否去重)
-    """
-    if not args or not args.strip():
-        return None, [], DEFAULT_CHOICES, False
-
-    # 分割参数
-    tokens = tokenize(args)
-
-    if len(tokens) < 2:
-        return None, [], DEFAULT_CHOICES, False
-
-    # 检查是否有 -n 参数指定选择数量
-    choice_count = DEFAULT_CHOICES
-    unique = False
-
-    # 从后往前检查特殊参数
-    filtered_tokens = []
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        if token == "-n" and i + 1 < len(tokens):
-            # 尝试解析数量
-            try:
-                choice_count = int(tokens[i + 1])
-                i += 2  # 跳过 -n 和数字
-                continue
-            except ValueError:
-                pass
-        elif token == "-u" or token == "--unique":
-            # 去重选项
-            unique = True
-            i += 1
-            continue
-
-        filtered_tokens.append(token)
-        i += 1
-
-    if len(filtered_tokens) < 2:
-        return None, [], DEFAULT_CHOICES, False
-
-    # 第一个是问题，其余是选项
-    question = filtered_tokens[0]
-    options = filtered_tokens[1:]
-
-    return question, options, choice_count, unique
-
-def validate_options(options: list[str], choice_count: int, context) -> tuple[bool, str | None]:
-    """验证选项的有效性
-
-    Args:
-        options: 选项列表
-        choice_count: 要选择的数量
-        context: 插件上下文
-
-    Returns:
-        (是否有效, 错误信息)
-    """
-    if len(options) < MIN_OPTIONS:
-        return False, f"至少需要 {MIN_OPTIONS} 个选项"
-
-    if len(options) > MAX_OPTIONS:
-        return False, f"选项过多，最多支持 {MAX_OPTIONS} 个选项"
-
-    if choice_count < 1:
-        return False, "选择数量必须至少为 1"
-
-    if choice_count > MAX_CHOICES:
-        return False, f"选择数量过多，最多支持一次选择 {MAX_CHOICES} 个"
-
-    return True, None
-
-# ============================================================
-# 选择逻辑
-# ============================================================
-
-def make_choice(
-    options: list[str],
-    count: int = 1,
-    unique: bool = False
-) -> list[str]:
-    """从选项中随机选择
-
-    Args:
-        options: 选项列表
-        count: 选择数量
-        unique: 是否去重（不重复选择同一项）
-
-    Returns:
-        选中的选项列表
-    """
-    if unique:
-        if count > len(options):
-            raise ValueError("unique mode requires count <= number of options")
-        if count == len(options):
-            result = options.copy()
-            random.shuffle(result)
-            return result
-        return random.sample(options, count)
-
-    if count <= 0:
-        return []
-
-    # Non-unique mode should honor the requested count even when it exceeds the option count.
-    return random.choices(options, k=count)
-
-def format_choice_result(
-    question: str,
-    options: list[str],
-    choices: list[str],
-    total_options: int
-) -> str:
-    """格式化选择结果
-
-    Args:
-        question: 问题
-        options: 原始选项列表
-        choices: 选中的选项
-        total_options: 总选项数
-
-    Returns:
-        格式化的结果文本
-    """
-    emoji = random.choice(CHOICE_EMOJIS)
-
-    if len(choices) == 1:
-        # 单个选择
-        result = f"{emoji} {question}：**{choices[0]}**"
-    else:
-        # 多个选择
-        result_lines = [f"{emoji} {question}："]
-        for i, choice in enumerate(choices, 1):
-            result_lines.append(f"  {i}. **{choice}**")
-        result = "\n".join(result_lines)
-
-    # 添加统计信息
-    if len(choices) > 1:
-        result += f"\n\n已从 {total_options} 个选项中选择 {len(choices)} 个"
-
-    return result
-
-# ============================================================
-# 命令处理
-# ============================================================
-
-async def handle(
-    command: str,
-    args: str,
-    event: dict[str, Any],
-    context
-) -> list[dict[str, Any]]:
-    """命令处理入口"""
-    try:
-        parsed = parse(args)
-
-        # 解析子命令或检查help
-        if parsed and parsed.first:
-            subcommand = parsed.first.lower()
-
-            if subcommand == "help" or subcommand == "帮助":
-                return segments(_show_help())
-
-        # 解析参数
-        question, options, choice_count, unique = parse_choice_args(args)
-
-        if question is None or not options:
-            return segments(_show_help())
-
-        # 验证选项
-        is_valid, error_msg = validate_options(options, choice_count, context)
-        if not is_valid:
-            return segments(f"❌ {error_msg}")
-
-        if unique and choice_count > len(options):
-            return segments(
-                f"❌ 去重模式下，选择数量不能超过选项数量（{choice_count} > {len(options)}）"
-            )
-
-        # 记录日志
-        unique_options = list(set(options))
-        logger.info(
-            "随机选择: question_length=%d, 选项数=%d (去重后%d), 选择数=%d, 去重=%s",
-            len(question), len(options), len(unique_options), choice_count, unique,
-        )
-
-        # 执行选择
-        choices = make_choice(options, choice_count, unique)
-
-        # 格式化结果
-        result = format_choice_result(question, options, choices, len(options))
-
-        logger.debug("选择完成: result_count=%d", len(choices))
-
-        return segments(result)
-
-    except Exception as exc:
-        return public_error_response(context, exc, logger=logger, component="choice.handle")
-
-def _show_help() -> str:
-    """显示帮助信息"""
-    return """
+HELP_TEXT = """
 🎲 **随机选择助手**
 
-从多个选项中随机选择一个或多个
+**用法:**
+• /选择 <问题> <选项1> <选项2> ...
+• /选择 <问题> <选项1> <选项2> -n 3
+• /选择 <问题> <选项1> <选项2> -u
 
-**基础用法:**
-• /choice 问题 选项1 选项2 选项3
-• /选择 吃啥 火锅 烤肉 披萨
+问题或选项含空格时请使用引号，例如：
+• /选择 "今天吃什么" "ice cream" 火锅
 
-**高级用法:**
-• /choice 问题 选项1 选项2 -n 2    # 选择2个
-• /choice 问题 选项1 选项2 -u      # 去重选择
-• /choice 问题 选项1 选项1 选项2   # 加权选择
+**抽样规则:**
+• 默认有放回抽样；重复选项会增加该文本被抽中的权重
+• -u / --unique 按文本去重后不放回抽样
+• -n 只能指定一次，数量为 1–10 的 ASCII 整数
+• 使用 -- 后，-n、-u 等文本会被当作普通选项
 
-**示例:**
-• /选择 今天吃什么 火锅 烤肉 日料 川菜
-• /choice 抽奖 小明 小红 小张 -n 3
-• /choice help - 显示帮助信息
-
-**功能特点:**
-- 支持多个选项随机选择
-- 支持加权选择
-- 支持去重或保留重复
-- 友好的结果展示
-
-输入 /choice 问题 选项1 选项2 开始选择
+问题最长 100 字，单个选项最长 200 字，支持 2–50 个选项。
 """.strip()
+
+
+class ChoiceArgumentError(ValueError):
+    """可安全返回给用户的选择参数错误。"""
+
+
+def _is_bounded_text(value: object, max_chars: int) -> bool:
+    return (
+        isinstance(value, str) and bool(value) and len(value) <= max_chars and value.isprintable()
+    )
+
+
+def _parse_choice_tokens(tokens: list[str]) -> tuple[list[str], int, bool]:
+    """扫描位置参数及 `-n`、`-u`、`--` 状态，不再执行第二次分词。"""
+    positional: list[str] = []
+    choice_count = DEFAULT_CHOICES
+    count_seen = False
+    unique = False
+    parse_flags = True
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if parse_flags and token == "--":
+            parse_flags = False
+            index += 1
+            continue
+        if parse_flags and token in {"-u", "--unique"}:
+            unique = True
+            index += 1
+            continue
+        if parse_flags and token == "-n":
+            if count_seen:
+                raise ChoiceArgumentError("-n 只能指定一次")
+            if index + 1 >= len(tokens):
+                raise ChoiceArgumentError("-n 后必须提供选择数量")
+            raw_count = tokens[index + 1]
+            if not raw_count.isascii() or not raw_count.isdecimal() or len(raw_count) > 2:
+                raise ChoiceArgumentError("选择数量必须是 1–10 的 ASCII 整数")
+            choice_count = int(raw_count)
+            count_seen = True
+            index += 2
+            continue
+        if parse_flags and token.startswith("-"):
+            raise ChoiceArgumentError("存在不支持的命令选项；如需选择该文本，请先使用 --")
+        positional.append(token.strip())
+        index += 1
+    return positional, choice_count, unique
+
+
+def parse_choice_args(args: object) -> tuple[str | None, list[str], int, bool]:
+    """一次性解析命令参数；空参数或帮助命令返回空请求。"""
+    if not isinstance(args, str):
+        raise ChoiceArgumentError("参数必须是文本")
+    if len(args) > MAX_ARGUMENT_CHARS:
+        raise ChoiceArgumentError(f"参数过长，最多支持 {MAX_ARGUMENT_CHARS} 个字符")
+    try:
+        tokens = tokenize(args, strict=True)
+    except ValueError as exc:
+        raise ChoiceArgumentError("参数中的引号未正确闭合") from exc
+    if not tokens or (len(tokens) == 1 and tokens[0].casefold() in _HELP_WORDS):
+        return None, [], DEFAULT_CHOICES, False
+
+    positional, choice_count, unique = _parse_choice_tokens(tokens)
+    if not positional:
+        return None, [], DEFAULT_CHOICES, False
+    question = positional[0]
+    if not _is_bounded_text(question, MAX_QUESTION_CHARS):
+        raise ChoiceArgumentError(f"问题必须为 1–{MAX_QUESTION_CHARS} 个可显示字符")
+    return question, positional[1:], choice_count, unique
+
+
+def make_choice(
+    options: list[str], count: int = DEFAULT_CHOICES, unique: bool = False
+) -> list[str]:
+    """按请求执行有放回或按文本去重后的不放回抽样。"""
+    if not isinstance(options, list):
+        raise ChoiceArgumentError("选项必须是列表")
+    if len(options) < MIN_OPTIONS:
+        raise ChoiceArgumentError(f"至少需要 {MIN_OPTIONS} 个选项")
+    if len(options) > MAX_OPTIONS:
+        raise ChoiceArgumentError(f"选项过多，最多支持 {MAX_OPTIONS} 个选项")
+    if any(not _is_bounded_text(option, MAX_OPTION_CHARS) for option in options):
+        raise ChoiceArgumentError(f"每个选项必须为 1–{MAX_OPTION_CHARS} 个可显示字符")
+    if type(count) is not int or not 1 <= count <= MAX_CHOICES:
+        raise ChoiceArgumentError(f"选择数量必须是 1–{MAX_CHOICES} 的整数")
+    if type(unique) is not bool:
+        raise ChoiceArgumentError("unique 必须是布尔值")
+
+    if not unique:
+        # 重复文本保留为多个候选位置，因此可以自然表达权重。
+        return list(_RNG.choices(options, k=count))
+
+    distinct_options = list(dict.fromkeys(options))
+    if count > len(distinct_options):
+        raise ChoiceArgumentError(
+            f"去重模式下，选择数量不能超过不同选项数量（{count} > {len(distinct_options)}）"
+        )
+    return list(_RNG.sample(distinct_options, k=count))
+
+
+def format_choice_result(question: str, choices: list[str], total_options: int) -> str:
+    """把已验证的抽样结果格式化为一段消息。"""
+    emoji = _RNG.choice(CHOICE_EMOJIS)
+    if len(choices) == 1:
+        return f"{emoji} {question}：**{choices[0]}**"
+
+    lines = [f"{emoji} {question}："]
+    lines.extend(f"  {index}. **{choice}**" for index, choice in enumerate(choices, 1))
+    lines.append(f"\n已从 {total_options} 个选项中选择 {len(choices)} 个")
+    return "\n".join(lines)
+
+
+async def handle(command: str, args: str, event: dict[str, Any], context: Any) -> Segments:
+    """插件命令入口；只在最终消息中回显经过边界校验的问题和选项。"""
+    try:
+        question, options, choice_count, unique = parse_choice_args(args)
+        if question is None:
+            return segments(HELP_TEXT)
+
+        choices = make_choice(options, choice_count, unique)
+        distinct_count = len(dict.fromkeys(options))
+        context.logger.info(
+            "随机选择：问题长度=%d，候选位置=%d，不同选项=%d，选择数=%d，去重=%s",
+            len(question),
+            len(options),
+            distinct_count,
+            choice_count,
+            unique,
+        )
+        total_options = distinct_count if unique else len(options)
+        result = format_choice_result(question, choices, total_options)
+        context.logger.debug("随机选择完成：结果数=%d", len(choices))
+        return segments(result)
+    except ChoiceArgumentError as exc:
+        return segments(f"❌ {exc}")
+    except Exception as exc:
+        return public_error_response(
+            context,
+            exc,
+            logger=context.logger,
+            component="choice.handle",
+        )

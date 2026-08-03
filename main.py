@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import signal
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 
@@ -24,6 +24,24 @@ def _prepare_runtime() -> None:
         pass
 
 
+def _install_stop_signal_handlers(
+    loop: asyncio.AbstractEventLoop,
+    request_stop: Callable[[], None],
+) -> None:
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, request_stop)
+        return
+
+    def schedule_stop(*_: object) -> None:
+        loop.call_soon_threadsafe(request_stop)
+
+    signal.signal(signal.SIGINT, schedule_stop)
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is not None:
+        signal.signal(sigbreak, schedule_stop)
+
+
 async def main() -> None:
     _prepare_runtime()
     from core.app import XiaoQingApp
@@ -38,11 +56,7 @@ async def main() -> None:
         stop_event.set()
 
     loop = asyncio.get_running_loop()
-    if sys.platform != "win32":
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, request_stop)
-    else:
-        signal.signal(signal.SIGINT, lambda *_: loop.call_soon_threadsafe(request_stop))
+    _install_stop_signal_handlers(loop, request_stop)
 
     try:
         await app.start()

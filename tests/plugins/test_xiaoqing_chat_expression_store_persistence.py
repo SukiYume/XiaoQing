@@ -71,6 +71,70 @@ def test_jargon_store_load_save_roundtrip(tmp_path):
     assert rec.is_complete is True
 
 
+def test_jargon_store_merges_concurrent_incremental_updates(tmp_path):
+    seed = JargonStore()
+    seed.bind(tmp_path)
+    seed.save(
+        [
+            JargonRecord(
+                content="梗",
+                scope_chat_id="chat-1",
+                raw_content=["base"],
+                chat_id_counts=[["chat-1", 1]],
+                count=1,
+                updated_at=1.0,
+            )
+        ]
+    )
+    first = JargonStore()
+    second = JargonStore()
+    first.bind(tmp_path)
+    second.bind(tmp_path)
+    first_items = first.load()
+    second_items = second.load()
+    key = JargonStore.key_for("梗", "chat-1")
+
+    first_items[key].count += 1
+    first_items[key].raw_content.append("first")
+    first_items[key].chat_id_counts = [["chat-1", 2]]
+    first_items[key].updated_at = 2.0
+    second_items[key].count += 1
+    second_items[key].raw_content.append("second")
+    second_items[key].chat_id_counts = [["chat-1", 2]]
+    second_items[key].updated_at = 3.0
+
+    first.save(list(first_items.values()))
+    second.save(list(second_items.values()))
+
+    reloaded = JargonStore()
+    reloaded.bind(tmp_path)
+    merged = reloaded.load()[key]
+    assert merged.count == 3
+    assert merged.raw_content == ["base", "first", "second"]
+    assert merged.chat_id_counts == [["chat-1", 3]]
+    assert merged.updated_at == 3.0
+
+
+def test_jargon_store_same_directory_rebind_keeps_merge_baseline(tmp_path):
+    store = JargonStore()
+    store.bind(tmp_path)
+    store.save([JargonRecord(content="梗", scope_chat_id="chat-1", count=1)])
+    items = store.load()
+    store.bind(tmp_path)
+    items[JargonStore.key_for("梗", "chat-1")].count += 1
+
+    concurrent = JargonStore()
+    concurrent.bind(tmp_path)
+    concurrent_items = concurrent.load()
+    concurrent_items[JargonStore.key_for("梗", "chat-1")].count += 1
+    concurrent.save(list(concurrent_items.values()))
+    store.save(list(items.values()))
+
+    reloaded = JargonStore()
+    reloaded.bind(tmp_path)
+    assert reloaded.load()[JargonStore.key_for("梗", "chat-1")].count == 3
+
+
 def test_reflect_tracker_store_persistence(tmp_path):
     store = ReflectTrackerStore()
     store.bind(tmp_path)
@@ -111,3 +175,54 @@ def test_message_recorder_malformed_file_fallback_then_persist(tmp_path):
     recorder.set_last_time("chat-2", 42.0)
     saved = json.loads((learner_dir / "message_recorder.json").read_text(encoding="utf-8"))
     assert saved == {"last_extraction_time": {"chat-2": 42.0}}
+
+
+def test_message_recorder_rebind_does_not_leak_previous_root_cache(tmp_path):
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    recorder = MessageRecorder()
+    recorder.bind(first_root)
+    recorder.set_last_time("chat-1", 12.5)
+
+    recorder.bind(second_root)
+    assert recorder.get_last_time("chat-1") == 0.0
+
+    recorder.bind(first_root)
+    assert recorder.get_last_time("chat-1") == 12.5
+
+
+def test_message_recorder_repairs_invalid_timestamp_values(tmp_path):
+    learner_dir = tmp_path / "bw_learner"
+    learner_dir.mkdir(parents=True)
+    (learner_dir / "message_recorder.json").write_text(
+        json.dumps(
+            {
+                "last_extraction_time": {
+                    "nan": "NaN",
+                    "infinite": "Infinity",
+                    "negative": -1,
+                    "valid": 9.5,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    recorder = MessageRecorder()
+    recorder.bind(tmp_path)
+
+    assert recorder.get_last_time("nan") == 0.0
+    assert recorder.get_last_time("infinite") == 0.0
+    assert recorder.get_last_time("negative") == 0.0
+    assert recorder.get_last_time("valid") == 9.5
+
+
+def test_message_recorder_uses_one_normalized_chat_key(tmp_path):
+    recorder = MessageRecorder()
+    recorder.bind(tmp_path)
+
+    assert recorder.try_begin(" chat-1 ") is True
+    assert recorder.try_begin("chat-1") is False
+    recorder.end(" chat-1 ")
+    assert recorder.try_begin("chat-1") is True
+    recorder.end("chat-1")

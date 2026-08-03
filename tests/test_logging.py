@@ -5,20 +5,43 @@
 import logging
 from pathlib import Path
 
-import pytest
-
 from core.logging_config import (
     ColoredFormatter,
     LogManager,
     RequestContextFormatter,
+    _enable_windows_ansi,
     get_log_manager,
     get_logger,
     setup_logging,
 )
 
+
+class _FakeKernel32:
+    def __init__(self, *, mode: int = 0x20, get_mode_ok: bool = True) -> None:
+        self.mode = mode
+        self.get_mode_ok = get_mode_ok
+        self.set_calls: list[tuple[int, int]] = []
+
+    def GetStdHandle(self, identifier: int) -> int:
+        assert identifier == -11
+        return 123
+
+    def GetConsoleMode(self, handle: int, mode_pointer) -> int:
+        assert handle == 123
+        if not self.get_mode_ok:
+            return 0
+        mode_pointer._obj.value = self.mode
+        return 1
+
+    def SetConsoleMode(self, handle: int, mode: int) -> int:
+        self.set_calls.append((handle, mode))
+        return 1
+
+
 # ============================================================
 # ColoredFormatter 测试
 # ============================================================
+
 
 class TestColoredFormatter:
     """ColoredFormatter 测试类"""
@@ -43,7 +66,7 @@ class TestColoredFormatter:
         result = formatter.format(record)
         # 应包含 ANSI 颜色代码
         assert "\033[32m" in result  # 绿色
-        assert "\033[0m" in result   # 重置
+        assert "\033[0m" in result  # 重置
         assert "Test message" in result
         assert record.levelname == "INFO"
 
@@ -89,16 +112,38 @@ class TestColoredFormatter:
         assert "\033[" not in result
         assert "INFO: Test message" in result
 
+    def test_windows_ansi_preserves_existing_console_mode_bits(self):
+        kernel32 = _FakeKernel32(mode=0x23)
+
+        assert _enable_windows_ansi(kernel32) is True
+        assert kernel32.set_calls == [(123, 0x27)]
+
+    def test_windows_ansi_fails_closed_when_mode_cannot_be_read(self):
+        kernel32 = _FakeKernel32(get_mode_ok=False)
+
+        assert _enable_windows_ansi(kernel32) is False
+        assert kernel32.set_calls == []
+
     def test_format_includes_request_id_or_safe_background_placeholder(self):
         formatter = RequestContextFormatter("[request_id=%(request_id)s] %(message)s")
         request_record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="correlated", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="correlated",
+            args=(),
+            exc_info=None,
         )
         request_record.request_id = "req-123"  # type: ignore[attr-defined]
         background_record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="background", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="background",
+            args=(),
+            exc_info=None,
         )
 
         assert formatter.format(request_record) == "[request_id=req-123] correlated"
@@ -109,6 +154,7 @@ class TestColoredFormatter:
 # ============================================================
 # LogManager 测试
 # ============================================================
+
 
 class TestLogManager:
     """LogManager 测试类"""
@@ -221,6 +267,7 @@ class TestLogManager:
 # setup_logging 测试
 # ============================================================
 
+
 class TestSetupLogging:
     """setup_logging 函数测试"""
 
@@ -291,6 +338,7 @@ class TestSetupLogging:
 # get_logger 测试
 # ============================================================
 
+
 class TestGetLogger:
     """get_logger 函数测试"""
 
@@ -309,11 +357,3 @@ class TestGetLogger:
 
         assert child.parent is parent
         assert child.parent.name == "parent"
-
-
-# ============================================================
-# 运行测试
-# ============================================================
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

@@ -4,28 +4,21 @@
 提供灵活的命令参数解析功能。
 """
 
+import re
 import shlex
 from dataclasses import dataclass, field
 
-
-def _looks_like_negative_number(token: str) -> bool:
-    if not token.startswith("-") or token == "-":
-        return False
-    try:
-        float(token)
-        return True
-    except ValueError:
-        return False
+_SHORT_OPTION_PATTERN = re.compile(r"-[A-Za-z]\Z")
+_LONG_OPTION_PATTERN = re.compile(r"--[A-Za-z][A-Za-z0-9_-]*(?:=.*)?\Z")
+_INTEGER_PATTERN = re.compile(r"[+-]?[0-9]+\Z")
+FLAG_VALUE = "true"
 
 
 def _is_option_token(token: str) -> bool:
-    if not token:
-        return False
-    if token.startswith("--") and len(token) > 2:
-        return not _looks_like_negative_number(token)
-    if token.startswith("-") and len(token) > 1:
-        return not _looks_like_negative_number(token)
-    return False
+    """只接受无歧义的 ASCII 短选项或长选项形态。"""
+
+    return bool(_SHORT_OPTION_PATTERN.fullmatch(token) or _LONG_OPTION_PATTERN.fullmatch(token))
+
 
 @dataclass
 class ParsedArgs:
@@ -69,19 +62,52 @@ class ParsedArgs:
     def __bool__(self) -> bool:
         return bool(self.raw.strip())
 
-def tokenize(text: str) -> list[str]:
+
+def tokenize(text: str, *, strict: bool = False) -> list[str]:
     """
     分词：将输入文本分割为 token 列表。
 
-    支持引号包裹的字符串作为单个 token。
+    支持引号包裹的字符串作为单个 token。默认将未闭合引号按空白分割；
+    需要严格命令语法的调用方可传入 ``strict=True`` 保留错误。
     """
     if not text:
         return []
     try:
         return shlex.split(text, posix=True)
     except ValueError:
-        # 引号不匹配时退回简单分割
+        if strict:
+            raise
+        # A bare quote is common in free text (for example an inch mark) and
+        # should not turn command parsing into an exception path.
         return text.split()
+
+
+def parse_int(
+    text: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int | None:
+    """Parse one strict ASCII integer token, returning ``None`` when invalid.
+
+    The lexical check keeps command protocols deterministic: Unicode digits,
+    whitespace and Python-only underscore separators are not accepted.  The
+    conversion still treats ``ValueError`` as ordinary invalid input, including
+    Python's protection against excessively long integer strings.
+    """
+
+    if _INTEGER_PATTERN.fullmatch(text) is None:
+        return None
+    try:
+        value = int(text, 10)
+    except ValueError:
+        return None
+    if minimum is not None and value < minimum:
+        return None
+    if maximum is not None and value > maximum:
+        return None
+    return value
+
 
 def parse(raw: str) -> ParsedArgs:
     """
@@ -90,53 +116,60 @@ def parse(raw: str) -> ParsedArgs:
     支持:
     - 位置参数: arg1 arg2
     - 短选项: -f value 或 -f
-      注意：-abc 会解析为 key="abc" 的单个短选项，不拆分为 -a -b -c
+      仅单个 ASCII 字母可作为短选项；-abc、-1+2、-3σ 均是位置参数
     - 长选项: --option=value 或 --option value 或 --flag
+    - `--` 终止选项解析；其后的 token 全部是位置参数
 
     返回: ParsedArgs 对象
     """
-    tokens_list = tokenize(raw)
+    args, options = _parse_tokens(tokenize(raw))
+    return ParsedArgs(raw=raw, tokens=args, options=options)
+
+
+def _parse_tokens(tokens_list: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Parse caller-owned token boundaries without joining and tokenizing again."""
     args: list[str] = []
     options: dict[str, str] = {}
     idx = 0
+    options_enabled = True
 
     while idx < len(tokens_list):
         token = tokens_list[idx]
 
-        if token.startswith("--") and len(token) > 2 and not _looks_like_negative_number(token):
+        if options_enabled and token == "--":
+            options_enabled = False
+        elif options_enabled and _LONG_OPTION_PATTERN.fullmatch(token):
             # 长选项
             key, eq, value = token[2:].partition("=")
             if eq:
                 options[key] = value
-            elif idx + 1 < len(tokens_list) and not _is_option_token(tokens_list[idx + 1]):
+            elif (
+                idx + 1 < len(tokens_list)
+                and tokens_list[idx + 1] != "--"
+                and not _is_option_token(tokens_list[idx + 1])
+            ):
                 options[key] = tokens_list[idx + 1]
                 idx += 1
             else:
-                options[key] = "true"
-        elif token.startswith("-") and len(token) > 1 and not _looks_like_negative_number(token):
-            # 短选项 (排除负数如 -1)
+                options[key] = FLAG_VALUE
+        elif options_enabled and _SHORT_OPTION_PATTERN.fullmatch(token):
+            # 单字母短选项
             key = token[1:]
-            if idx + 1 < len(tokens_list) and not _is_option_token(tokens_list[idx + 1]):
+            if (
+                idx + 1 < len(tokens_list)
+                and tokens_list[idx + 1] != "--"
+                and not _is_option_token(tokens_list[idx + 1])
+            ):
                 options[key] = tokens_list[idx + 1]
                 idx += 1
             else:
-                options[key] = "true"
+                options[key] = FLAG_VALUE
         else:
             args.append(token)
 
         idx += 1
 
-    return ParsedArgs(raw=raw, tokens=args, options=options)
+    return args, options
 
-def parse_kv(tokens: list[str]) -> tuple[list[str], dict[str, str]]:
-    """
-    解析键值对（向后兼容）。
 
-    推荐使用 parse() 函数替代。
-    """
-    # 复用 parse() 的逻辑
-    raw = " ".join(tokens)
-    result = parse(raw)
-    return result.tokens, result.options
-
-__all__ = ["ParsedArgs", "tokenize", "parse", "parse_kv"]
+__all__ = ["FLAG_VALUE", "ParsedArgs", "parse", "parse_int", "tokenize"]

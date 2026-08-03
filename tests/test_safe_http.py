@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import socket
 from urllib.parse import urlsplit
@@ -9,6 +10,18 @@ from urllib.parse import urlsplit
 import pytest
 
 from core import safe_http
+
+
+def test_redact_url_for_log_removes_credentials_query_and_fragment() -> None:
+    redacted = safe_http.redact_url_for_log(
+        "https://user:password@example.com:8443/path?token=secret#private"
+    )
+
+    assert redacted == "https://example.com:8443/path?<redacted>#<redacted>"
+    assert "user" not in redacted
+    assert "password" not in redacted
+    assert "secret" not in redacted
+    assert "private" not in redacted
 
 
 class _FakeLoop:
@@ -328,9 +341,8 @@ async def test_binary_fetch_enforces_mime_encoding_and_actual_byte_limit(monkeyp
 @pytest.mark.asyncio
 async def test_binary_fetch_exact_mime_rejects_spoof_before_body_read(monkeypatch):
     class NeverReadContent:
-        async def iter_chunked(self, _size):
+        def iter_chunked(self, _size):
             raise AssertionError("invalid exact MIME body must not be read")
-            yield b""  # pragma: no cover
 
     response = _Response(200, headers={"Content-Type": "image/jpeg-malformed"})
     response.content = NeverReadContent()
@@ -387,6 +399,60 @@ async def test_redirects_are_manual_and_timeout_is_bounded(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fetcher_name", ["fetch_public_html", "fetch_public_bytes"])
+async def test_total_timeout_covers_dns_validation(monkeypatch, fetcher_name):
+    cancelled = False
+
+    async def blocked_dns(_url):
+        nonlocal cancelled
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+
+    monkeypatch.setattr(safe_http, "validate_public_fetch_target", blocked_dns)
+    fetcher = getattr(safe_http, fetcher_name)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await fetcher("https://example.com/resource", timeout_seconds=0.01)
+
+    assert cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_redirects_share_one_total_deadline(monkeypatch):
+    responses = [
+        _Response(302, headers={"Location": "/next"}),
+        _Response(200, chunks=[b"<html/>"]),
+    ]
+    requested_urls: list[str] = []
+    validation_count = 0
+
+    async def slow_validate(url):
+        nonlocal validation_count
+        validation_count += 1
+        await asyncio.sleep(0.12)
+        return urlsplit(url), ("8.8.8.8",)
+
+    monkeypatch.setattr(safe_http, "validate_public_fetch_target", slow_validate)
+    monkeypatch.setattr(
+        safe_http.aiohttp,
+        "ClientSession",
+        lambda **kwargs: _Session(responses, requested_urls, **kwargs),
+    )
+
+    with pytest.raises(asyncio.TimeoutError):
+        await safe_http.fetch_public_html(
+            "https://example.com/start",
+            timeout_seconds=0.2,
+        )
+
+    assert validation_count == 2
+    assert requested_urls == ["https://example.com/start"]
+
+
+@pytest.mark.asyncio
 async def test_rejects_compressed_response_bomb():
     payload = b"x" * (safe_http.MAX_RESPONSE_BYTES + 1)
     compressed = gzip.compress(payload)
@@ -417,9 +483,8 @@ async def test_rejects_excessive_decompression_ratio_before_response_limit():
 @pytest.mark.asyncio
 async def test_public_html_rejects_spoofed_html_mime(monkeypatch):
     class NeverReadContent:
-        async def iter_chunked(self, _size):
+        def iter_chunked(self, _size):
             raise AssertionError("spoofed MIME body must not be read")
-            yield b""  # pragma: no cover
 
     async def validate(url):
         return safe_http.validate_public_url(url), ("93.184.216.34",)

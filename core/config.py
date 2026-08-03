@@ -6,18 +6,24 @@
 
 import asyncio
 import copy
+import hashlib
+import inspect
 import json
 import logging
+import math
 import os
 import platform
 import re
 import stat
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Any, TypeVar
+from types import MappingProxyType
+from typing import Any, BinaryIO, TypeVar, cast
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -26,19 +32,89 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    StrictStr,
     ValidationError,
     field_validator,
     model_validator,
 )
 
+from .atomic_store import MISSING_ETAG, keyed_path_lock
+from .constants import VALID_PLUGIN_NAME_PATTERN
 from .exceptions import ConfigLoadError
 from .inbound_policy import validate_inbound_listener
-from .plugin_base import atomic_write_text, load_json
 
 ConfigCallback = Callable[["ConfigSnapshot"], None] | Callable[["ConfigSnapshot"], Any]
+SecurityConfigCallback = Callable[["ConfigSnapshot"], None]
 T = TypeVar("T")
+_SourceStatKey = tuple[int, int, int, int]
+
+_MAX_CONFIG_SOURCE_BYTES = 8 * 1024 * 1024
+_MAX_CONFIG_TREE_DEPTH = 64
+_MAX_CONFIG_TREE_NODES = 100_000
+_MAX_WATCH_STABILITY_RETRIES = 3
+_REQUIRED_STABLE_SOURCE_READS = 3
+_MAX_STABLE_SOURCE_READS = 6
+_CONFIG_CALLBACK_TIMEOUT_SECONDS = 5.0
 
 logger = logging.getLogger(__name__)
+
+
+class _PluginExecutionPolicySchema(BaseModel):
+    """Strict, partial policy shared by global and per-plugin execution limits."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    timeout_seconds: float | None = Field(default=None, ge=0, le=86400)
+    parallel_limit: int | None = Field(default=None, ge=1, le=1024)
+    admission_queue_limit: int | None = Field(default=None, ge=0, le=10000)
+    sync_parallel_limit: int | None = Field(default=None, ge=1, le=3)
+    sync_queue_limit: int | None = Field(default=None, ge=0, le=10000)
+    failure_threshold: int | None = Field(default=None, ge=1, le=10000)
+    cooldown_seconds: float | None = Field(default=None, ge=0.1, le=86400)
+    drain_timeout_seconds: float | None = Field(default=None, ge=0.1, le=3600)
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _validate_timeout_seconds(cls, value: float | None) -> float:
+        if value is None:
+            raise ValueError("must not be null; omit the field to inherit its value")
+        if value == 0 or value >= 0.1:
+            return value
+        raise ValueError("must be 0 (disabled) or between 0.1 and 86400 seconds")
+
+    @model_validator(mode="after")
+    def _reject_explicit_nulls(self) -> "_PluginExecutionPolicySchema":
+        for field_name in self.model_fields_set:
+            if getattr(self, field_name) is None:
+                raise ValueError(
+                    f"{field_name} must not be null; omit the field to inherit its value"
+                )
+        return self
+
+
+class _PluginExecutionConfigSchema(_PluginExecutionPolicySchema):
+    """Top-level execution policy, including process-wide sync admission."""
+
+    global_sync_queue_limit: int | None = Field(default=None, ge=1, le=100000)
+    overrides: dict[str, _PluginExecutionPolicySchema] | None = None
+
+    @field_validator("overrides")
+    @classmethod
+    def _validate_override_names(
+        cls,
+        value: dict[str, _PluginExecutionPolicySchema] | None,
+    ) -> dict[str, _PluginExecutionPolicySchema]:
+        if value is None:
+            raise ValueError("must not be null; omit the field when no overrides are needed")
+        invalid_names = [
+            name for name in value if re.fullmatch(VALID_PLUGIN_NAME_PATTERN, name) is None
+        ]
+        if invalid_names:
+            raise ValueError(
+                "override keys must be non-empty plugin names containing only "
+                "ASCII letters, digits, and underscores"
+            )
+        return value
 
 
 class _RuntimeConfigSchema(BaseModel):
@@ -49,8 +125,10 @@ class _RuntimeConfigSchema(BaseModel):
     max_concurrency: int | None = Field(default=None, ge=1, le=1024)
     session_timeout: float | None = Field(default=None, gt=0, le=604800)
     plugin_poll_interval: float | None = Field(default=None, gt=0, le=86400)
+    data_root: StrictStr | None = None
     ws_queue_size: int | None = Field(default=None, ge=1, le=10000)
     inbound_ws_max_workers: int | None = Field(default=None, ge=1, le=128)
+    inbound_ws_broadcast_timeout_seconds: float | None = Field(default=None, gt=0, le=300)
     timezone: str | None = None
     enable_ws_client: bool | None = None
     enable_inbound_server: bool | None = None
@@ -59,6 +137,24 @@ class _RuntimeConfigSchema(BaseModel):
     onebot_http_base: str | None = None
     inbound_ws_uri: str | None = None
     inbound_http_base: str | None = None
+    plugin_execution: _PluginExecutionConfigSchema | None = None
+
+    @field_validator("data_root")
+    @classmethod
+    def _validate_data_root(cls, value: str | None) -> str:
+        if value is None or not value.strip() or "\x00" in value:
+            raise ValueError("must be a non-empty filesystem path")
+        return value.strip()
+
+    @field_validator("plugin_execution")
+    @classmethod
+    def _validate_plugin_execution(
+        cls,
+        value: _PluginExecutionConfigSchema | None,
+    ) -> _PluginExecutionConfigSchema:
+        if value is None:
+            raise ValueError("must be an object, not null")
+        return value
 
     @field_validator("timezone")
     @classmethod
@@ -116,51 +212,70 @@ def _validate_runtime_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ConfigLoadError(f"Invalid runtime configuration: {exc}") from exc
 
 
-class _FrozenConfigDict(dict[str, Any]):
-    """dict-compatible read-only config snapshot."""
+def _validate_config_tree(value: Any) -> None:
+    """Bound and validate a JSON-like tree before recursive freezing."""
 
-    def _readonly(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("Config snapshots are read-only")
-
-    __setitem__ = _readonly
-    __delitem__ = _readonly
-    clear = _readonly
-    pop = _readonly
-    popitem = _readonly
-    setdefault = _readonly
-    update = _readonly
-
-
-class _FrozenConfigList(list[Any]):
-    """list-compatible read-only config snapshot."""
-
-    def _readonly(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("Config snapshots are read-only")
-
-    __setitem__ = _readonly
-    __delitem__ = _readonly
-    append = _readonly
-    clear = _readonly
-    extend = _readonly
-    insert = _readonly
-    pop = _readonly
-    remove = _readonly
-    reverse = _readonly
-    sort = _readonly
+    nodes = 0
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        current, depth = stack.pop()
+        nodes += 1
+        if nodes > _MAX_CONFIG_TREE_NODES:
+            raise ValueError(f"Config snapshot exceeds {_MAX_CONFIG_TREE_NODES} values")
+        if depth > _MAX_CONFIG_TREE_DEPTH:
+            raise ValueError(f"Config snapshot exceeds maximum depth {_MAX_CONFIG_TREE_DEPTH}")
+        if isinstance(current, Mapping):
+            for key, child in current.items():
+                if not isinstance(key, str):
+                    raise TypeError("Config snapshot mapping keys must be strings")
+                stack.append((child, depth + 1))
+            continue
+        if isinstance(current, (list, tuple)):
+            stack.extend((child, depth + 1) for child in current)
+            continue
+        if current is None or isinstance(current, (str, bool, int)):
+            continue
+        if isinstance(current, float):
+            if not math.isfinite(current):
+                raise ValueError("Config snapshot numbers must be finite")
+            continue
+        raise TypeError(f"Unsupported mutable config snapshot value: {type(current).__name__}")
 
 
 def _freeze_config_value(value: Any) -> Any:
-    if isinstance(value, dict):
-        return _FrozenConfigDict(
-            {key: _freeze_config_value(child) for key, child in value.items()}
-        )
-    if isinstance(value, list):
-        return _FrozenConfigList([_freeze_config_value(child) for child in value])
-    return value
+    """Copy JSON-like data into containers with no mutable builtin backdoor."""
+
+    if isinstance(value, Mapping):
+        frozen: dict[str, Any] = {}
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise TypeError("Config snapshot mapping keys must be strings")
+            frozen[key] = _freeze_config_value(child)
+        return MappingProxyType(frozen)
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_config_value(child) for child in value)
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Config snapshot numbers must be finite")
+        return value
+    raise TypeError(f"Unsupported mutable config snapshot value: {type(value).__name__}")
 
 
-def _freeze_config_mapping(value: dict[str, Any]) -> dict[str, Any]:
-    return _freeze_config_value(value)
+def _freeze_config_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    _validate_config_tree(value)
+    return cast(Mapping[str, Any], _freeze_config_value(value))
+
+
+def materialize_snapshot_value(value: Any) -> Any:
+    """Return a detached mutable JSON-compatible copy of a frozen value."""
+
+    if isinstance(value, Mapping):
+        return {key: materialize_snapshot_value(child) for key, child in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [materialize_snapshot_value(child) for child in value]
+    return copy.deepcopy(value)
 
 
 def _check_secrets_file_permissions(path: Path) -> None:
@@ -181,10 +296,7 @@ def _check_secrets_file_permissions(path: Path) -> None:
     if platform.system() == "Windows":
         # Windows 使用 ACL，标准 Unix 权限检查不适用
         # 记录提醒，建议用户手动检查
-        logger.info(
-            "Running on Windows: please ensure %s has appropriate permissions",
-            path
-        )
+        logger.info("Running on Windows: please ensure %s has appropriate permissions", path)
         return
 
     try:
@@ -197,21 +309,124 @@ def _check_secrets_file_permissions(path: Path) -> None:
 
         if group_readable or others_readable:
             logger.warning(
-                "Security: %s is readable by group or others. "
-                "Consider: chmod 600 %s",
-                path, path
+                "Security: %s is readable by group or others. Consider: chmod 600 %s", path, path
             )
         else:
             logger.debug("Secrets file permissions OK: %s", path)
     except OSError as exc:
         logger.warning("Could not check file permissions for %s: %s", path, exc)
 
-@dataclass
-class ConfigSnapshot:
-    """配置快照"""
-    config: dict[str, Any]
-    secrets: dict[str, Any]
-    revision: int = 0
+
+class ConfigSourceStatus(str, Enum):
+    """Observed state of one on-disk configuration source."""
+
+    VALID = "valid"
+    MISSING = "missing"
+    INVALID = "invalid"
+    UNAVAILABLE = "unavailable"
+    INCONSISTENT = "inconsistent"
+
+
+class ConfigSnapshot(tuple[Any, ...]):
+    """Deeply immutable configuration and source-health snapshot.
+
+    A tuple-backed carrier prevents even ``object.__setattr__`` from replacing
+    fields while callbacks share the snapshot.
+    """
+
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        config: Mapping[str, Any],
+        secrets: Mapping[str, Any],
+        revision: int = 0,
+        config_status: ConfigSourceStatus = ConfigSourceStatus.VALID,
+        secrets_status: ConfigSourceStatus = ConfigSourceStatus.VALID,
+    ) -> "ConfigSnapshot":
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise TypeError("Config snapshot revision must be an integer")
+        if revision < 0:
+            raise ValueError("Config snapshot revision cannot be negative")
+        return tuple.__new__(
+            cls,
+            (
+                _freeze_config_mapping(config),
+                _freeze_config_mapping(secrets),
+                revision,
+                ConfigSourceStatus(config_status),
+                ConfigSourceStatus(secrets_status),
+            ),
+        )
+
+    @property
+    def config(self) -> Mapping[str, Any]:
+        return cast(Mapping[str, Any], self[0])
+
+    @property
+    def secrets(self) -> Mapping[str, Any]:
+        return cast(Mapping[str, Any], self[1])
+
+    @property
+    def revision(self) -> int:
+        return cast(int, self[2])
+
+    @property
+    def config_status(self) -> ConfigSourceStatus:
+        return cast(ConfigSourceStatus, self[3])
+
+    @property
+    def secrets_status(self) -> ConfigSourceStatus:
+        return cast(ConfigSourceStatus, self[4])
+
+    def mutable_config(self) -> dict[str, Any]:
+        return cast(dict[str, Any], materialize_snapshot_value(self.config))
+
+    def mutable_secrets(self) -> dict[str, Any]:
+        return cast(dict[str, Any], materialize_snapshot_value(self.secrets))
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceRead:
+    status: ConfigSourceStatus
+    etag: str
+    value: dict[str, Any] | None = None
+    error: ConfigLoadError | None = None
+    identity: str = ""
+    stat_key: _SourceStatKey | None = None
+
+    @property
+    def signature(self) -> tuple[ConfigSourceStatus, str, str]:
+        return self.status, self.etag, self.identity
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number is not permitted: {value}")
+
+
+def _payload_etag(payload: bytes | None) -> str:
+    return hashlib.sha256(payload).hexdigest() if payload is not None else MISSING_ETAG
+
+
+def _source_identity(source_stat: os.stat_result) -> str:
+    """Track atomic replacement generations even when bytes are identical."""
+
+    return ":".join(
+        str(value)
+        for value in (
+            source_stat.st_dev,
+            source_stat.st_ino,
+        )
+    )
+
+
+def _source_stat_key(source_stat: os.stat_result) -> _SourceStatKey:
+    return (
+        source_stat.st_dev,
+        source_stat.st_ino,
+        source_stat.st_size,
+        source_stat.st_mtime_ns,
+    )
 
 
 @dataclass
@@ -219,59 +434,99 @@ class _ConfigNotification:
     revision: int
     snapshot: ConfigSnapshot
     callbacks: tuple[ConfigCallback, ...]
-    completed: threading.Event
+
+
+def _write_secret_payload(handle: BinaryIO, payload: bytes) -> None:
+    """Overwrite one already verified inode and durably flush it."""
+
+    handle.seek(0)
+    remaining = memoryview(payload)
+    while remaining:
+        written = handle.write(remaining)
+        if not written:
+            raise OSError("short write while persisting secrets")
+        remaining = remaining[written:]
+    handle.truncate(len(payload))
+    handle.flush()
+    os.fsync(handle.fileno())
+
 
 class ConfigManager:
     """配置管理器"""
 
     def __init__(self, config_path: Path, secrets_path: Path) -> None:
-        self.config_path = config_path
-        self.secrets_path = secrets_path
+        self.config_path = Path(config_path)
+        self.secrets_path = Path(secrets_path)
         self._config: dict[str, Any] = {}
         self._secrets: dict[str, Any] = {}
-        self._config_view: dict[str, Any] = _freeze_config_mapping({})
-        self._secrets_view: dict[str, Any] = _freeze_config_mapping({})
+        self._config_view: Mapping[str, Any] = _freeze_config_mapping({})
+        self._secrets_view: Mapping[str, Any] = _freeze_config_mapping({})
+        self._config_source = _SourceRead(ConfigSourceStatus.MISSING, MISSING_ETAG)
+        self._secrets_source = _SourceRead(ConfigSourceStatus.MISSING, MISSING_ETAG)
+        self._paired_config_signature = self._config_source.signature
+        self._paired_secrets_signature = self._secrets_source.signature
+        self._source_generation = 0
         self._callbacks: list[ConfigCallback] = []
+        self._security_callbacks: list[SecurityConfigCallback] = []
         self._revision = 0
-        self._notification_queue: deque[_ConfigNotification] = deque()
+        # Claim the first revision before scheduling its consumer so a second
+        # synchronous reload cannot overwrite it before the event loop runs.
+        # Among later not-yet-started revisions, subscribers only need the
+        # latest immutable snapshot.
+        self._notification_current: _ConfigNotification | None = None
+        self._notification_queue: deque[_ConfigNotification] = deque(maxlen=1)
         self._notification_draining = False
-        self._notification_thread_id: int | None = None
         self._callback_loop: asyncio.AbstractEventLoop | None = None
+        self._callback_timeout_seconds = _CONFIG_CALLBACK_TIMEOUT_SECONDS
         self._last_notified_revision = 0
-        self._last_config_mtime: float = 0
-        self._last_secrets_mtime: float = 0
+        self._parsed_source_cache: dict[Path, _SourceRead] = {}
+        self._parsed_source_cache_lock = threading.Lock()
         self._lock = threading.RLock()
         self._initial_load()
 
     def _initial_load(self) -> None:
-        """初始加载配置（不触发回调）"""
+        """Load each source independently without exposing stale credentials."""
+
         with self._lock:
-            try:
-                self._replace_snapshot(
-                    self._load(self.config_path),
-                    self._load(self.secrets_path),
-                )
-            except ConfigLoadError as exc:
-                logger.error("%s", exc)
-                self._replace_snapshot({}, {})
+            config_read, secrets_read = self._read_stable_sources()
+            published_secrets, paired = self._prepare_confirmed_secrets_locked(
+                config_read,
+                secrets_read,
+                confirm_config=True,
+            )
+            self._apply_source_reads_locked(
+                config_read,
+                published_secrets,
+                force=True,
+                bump_revision=False,
+                notify=False,
+            )
+            if paired:
+                self._mark_sources_paired_locked(config_read, secrets_read)
+            else:
+                self._paired_config_signature = config_read.signature
+        self._log_source_problem("config", config_read)
+        self._log_source_problem("secrets", published_secrets)
         logger.info("Config loaded")
         _check_secrets_file_permissions(self.secrets_path)
 
     @property
-    def config(self) -> dict[str, Any]:
+    def config(self) -> Mapping[str, Any]:
         with self._lock:
             return self._config_view
 
     @property
-    def secrets(self) -> dict[str, Any]:
+    def secrets(self) -> Mapping[str, Any]:
         with self._lock:
             return self._secrets_view
 
     def _snapshot_locked(self) -> ConfigSnapshot:
         return ConfigSnapshot(
-            config=copy.deepcopy(self._config),
-            secrets=copy.deepcopy(self._secrets),
+            config=self._config_view,
+            secrets=self._secrets_view,
             revision=self._revision,
+            config_status=self._config_source.status,
+            secrets_status=self._secrets_source.status,
         )
 
     def _enqueue_notification_locked(self, snapshot: ConfigSnapshot) -> _ConfigNotification:
@@ -279,41 +534,253 @@ class ConfigManager:
             revision=snapshot.revision,
             snapshot=snapshot,
             callbacks=tuple(self._callbacks),
-            completed=threading.Event(),
         )
-        self._notification_queue.append(notification)
+        if self._notification_current is None and not self._notification_draining:
+            self._notification_current = notification
+        else:
+            self._notification_queue.append(notification)
         return notification
 
     def reload(self, *, notify: bool = False) -> ConfigSnapshot:
-        """Serialize disk read, validation and snapshot publication."""
+        """Strictly reload both sources and atomically publish their health state."""
 
         with self._lock:
-            config = self._load(self.config_path)
-            secrets = self._load(self.secrets_path)
-            self._replace_snapshot(config, secrets)
-            self._revision += 1
-            self._update_mtime_locked()
-            snapshot = self._snapshot_locked()
-            notification = self._enqueue_notification_locked(snapshot) if notify else None
+            config_read, secrets_read = self._read_stable_sources()
+            published_secrets, paired = self._prepare_confirmed_secrets_locked(
+                config_read,
+                secrets_read,
+                confirm_config=True,
+            )
+            snapshot, notification, _changed = self._apply_source_reads_locked(
+                config_read,
+                published_secrets,
+                force=True,
+                bump_revision=True,
+                notify=notify,
+            )
+            if paired:
+                self._mark_sources_paired_locked(config_read, secrets_read)
+            else:
+                self._paired_config_signature = config_read.signature
         if notification is not None:
             self._dispatch_notification(notification)
+        self._log_source_problem("config", config_read)
+        self._log_source_problem("secrets", published_secrets)
         logger.info("Config reloaded")
         _check_secrets_file_permissions(self.secrets_path)
+        if config_read.status in {
+            ConfigSourceStatus.INVALID,
+            ConfigSourceStatus.UNAVAILABLE,
+        }:
+            assert config_read.error is not None
+            raise config_read.error
         return snapshot
 
-    def _replace_snapshot(self, config: dict[str, Any], secrets: dict[str, Any]) -> None:
-        self._config = config
-        self._secrets = secrets
-        self._config_view = _freeze_config_mapping(config)
-        self._secrets_view = _freeze_config_mapping(secrets)
+    def _mark_sources_paired_locked(
+        self,
+        config_read: _SourceRead,
+        secrets_read: _SourceRead,
+    ) -> None:
+        self._paired_config_signature = config_read.signature
+        self._paired_secrets_signature = secrets_read.signature
+
+    def _guard_unconfirmed_secrets_locked(
+        self,
+        config_read: _SourceRead,
+        secrets_read: _SourceRead,
+    ) -> _SourceRead:
+        """Keep externally introduced credentials revoked until explicit confirmation."""
+
+        if secrets_read.status is not ConfigSourceStatus.VALID:
+            return secrets_read
+        secret_is_confirmed = secrets_read.signature == self._paired_secrets_signature
+        config_is_compatible = (
+            config_read.status is not ConfigSourceStatus.VALID
+            or config_read.signature == self._paired_config_signature
+        )
+        if secret_is_confirmed and config_is_compatible:
+            return secrets_read
+        error = ConfigLoadError(
+            "external secrets change is pending explicit reload confirmation; "
+            "runtime credentials remain revoked"
+        )
+        return _SourceRead(
+            ConfigSourceStatus.INCONSISTENT,
+            f"pending:{config_read.status.value}:{config_read.etag}:{secrets_read.etag}",
+            error=error,
+            identity=secrets_read.identity,
+        )
+
+    def _prepare_confirmed_secrets_locked(
+        self,
+        config_read: _SourceRead,
+        secrets_read: _SourceRead,
+        *,
+        confirm_config: bool,
+    ) -> tuple[_SourceRead, bool]:
+        """Prevent a new secret generation from pairing with an unrelated LKG config."""
+
+        if secrets_read.status is not ConfigSourceStatus.VALID:
+            return secrets_read, True
+        config_can_authorize_new_secrets = config_read.status is ConfigSourceStatus.VALID and (
+            confirm_config or config_read.signature == self._paired_config_signature
+        )
+        if config_can_authorize_new_secrets:
+            return secrets_read, True
+        guarded = self._guard_unconfirmed_secrets_locked(config_read, secrets_read)
+        return guarded, guarded is secrets_read
+
+    def _replace_snapshot(
+        self,
+        config: Mapping[str, Any],
+        secrets: Mapping[str, Any],
+    ) -> None:
+        """Install detached internal copies; callers cannot retain a mutable alias."""
+
+        config_view = _freeze_config_mapping(config)
+        secrets_view = _freeze_config_mapping(secrets)
+        config_copy = cast(dict[str, Any], materialize_snapshot_value(config_view))
+        secrets_copy = cast(dict[str, Any], materialize_snapshot_value(secrets_view))
+        # Commit only after every copy and validation step succeeds.
+        self._config = config_copy
+        self._secrets = secrets_copy
+        self._config_view = config_view
+        self._secrets_view = secrets_view
+
+    def _apply_source_reads_locked(
+        self,
+        config_read: _SourceRead,
+        secrets_read: _SourceRead,
+        *,
+        force: bool,
+        bump_revision: bool,
+        notify: bool,
+    ) -> tuple[ConfigSnapshot, _ConfigNotification | None, bool]:
+        """Publish config LKG and fail-closed secrets as one coherent revision."""
+
+        source_changed = (
+            config_read.signature != self._config_source.signature
+            or secrets_read.signature != self._secrets_source.signature
+        )
+        next_config = (
+            config_read.value
+            if config_read.status is ConfigSourceStatus.VALID and config_read.value is not None
+            else self._config
+        )
+        next_secrets = (
+            secrets_read.value
+            if secrets_read.status is ConfigSourceStatus.VALID and secrets_read.value is not None
+            else {}
+        )
+        data_changed = next_config != self._config or next_secrets != self._secrets
+        changed = force or source_changed or data_changed
+
+        if not changed:
+            self._config_source = config_read
+            self._secrets_source = secrets_read
+            return self._snapshot_locked(), None, False
+
+        self._replace_snapshot(next_config, next_secrets)
+        self._config_source = config_read
+        self._secrets_source = secrets_read
+        if bump_revision:
+            self._revision += 1
+        self._source_generation += 1
+        snapshot = self._snapshot_locked()
+        # Trusted authorization holders publish synchronously and independently
+        # of the ordinary callback queue.  This method is always called with the
+        # manager's re-entrant lock held, so hooks must remain bounded and must
+        # never perform blocking I/O.
+        self._dispatch_security_update(snapshot)
+        notification = self._enqueue_notification_locked(snapshot) if notify else None
+        return snapshot, notification, True
 
     def save_secrets(self) -> None:
-        """保存 secrets 配置到文件"""
+        """Persist the current internal candidate only if the source is unchanged."""
+
+        notification: _ConfigNotification | None = None
+        failure: BaseException | None = None
         try:
             with self._lock:
-                payload = json.dumps(self._secrets, indent="\t", ensure_ascii=False)
-                atomic_write_text(self.secrets_path, payload)
-                self._update_secrets_mtime_locked()
+                candidate = copy.deepcopy(self._secrets)
+                with keyed_path_lock(self.secrets_path):
+                    current = self._read_source_unlocked(self.secrets_path)
+                    if current.status is not ConfigSourceStatus.VALID:
+                        _snapshot, notification, _changed = self._apply_source_reads_locked(
+                            self._config_source,
+                            current,
+                            force=False,
+                            bump_revision=True,
+                            notify=True,
+                        )
+                        self._mark_sources_paired_locked(self._config_source, current)
+                        failure = self._secret_source_error(current)
+                    elif (
+                        self._secrets_source.status is not ConfigSourceStatus.VALID
+                        or current.etag != self._secrets_source.etag
+                    ):
+                        guarded = self._guard_unconfirmed_secrets_locked(
+                            self._config_source,
+                            current,
+                        )
+                        _snapshot, notification, _changed = self._apply_source_reads_locked(
+                            self._config_source,
+                            guarded,
+                            force=False,
+                            bump_revision=True,
+                            notify=True,
+                        )
+                        failure = ConfigLoadError(
+                            "secrets changed on disk; reload the latest source before saving"
+                        )
+                    else:
+                        try:
+                            committed = (
+                                current
+                                if candidate == current.value
+                                else self._write_secrets_unlocked(
+                                    candidate,
+                                    expected_etag=current.etag,
+                                )
+                            )
+                        except BaseException as exc:
+                            observed = self._read_source_unlocked(self.secrets_path)
+                            guarded = self._guard_unconfirmed_secrets_locked(
+                                self._config_source,
+                                observed,
+                            )
+                            _snapshot, notification, _changed = self._apply_source_reads_locked(
+                                self._config_source,
+                                guarded,
+                                force=False,
+                                bump_revision=True,
+                                notify=True,
+                            )
+                            if observed.status is not ConfigSourceStatus.VALID:
+                                self._mark_sources_paired_locked(self._config_source, observed)
+                            failure = exc
+                        else:
+                            published, paired = self._prepare_confirmed_secrets_locked(
+                                self._config_source,
+                                committed,
+                                confirm_config=False,
+                            )
+                            _snapshot, notification, _changed = self._apply_source_reads_locked(
+                                self._config_source,
+                                published,
+                                force=False,
+                                bump_revision=True,
+                                notify=True,
+                            )
+                            if paired:
+                                self._mark_sources_paired_locked(
+                                    self._config_source,
+                                    committed,
+                                )
+            if notification is not None:
+                self._dispatch_notification(notification)
+            if failure is not None:
+                raise failure
             logger.info("Secrets saved to %s", self.secrets_path)
         except Exception as exc:
             logger.error("Failed to save secrets: %s", exc)
@@ -323,24 +790,93 @@ class ConfigManager:
         self,
         mutate: Callable[[dict[str, Any]], tuple[bool, T]],
     ) -> T:
-        """Persist a candidate before publishing it to live readers."""
+        """Mutate the strict on-disk value and publish only after durable commit."""
 
+        notification: _ConfigNotification | None = None
+        failure: BaseException | None = None
+        result = cast(T, None)
         with self._lock:
-            candidate = copy.deepcopy(self._secrets)
-            changed, result = mutate(candidate)
-            if not changed:
-                return result
-            payload = json.dumps(candidate, indent="\t", ensure_ascii=False)
-            candidate_view = _freeze_config_mapping(candidate)
-            atomic_write_text(self.secrets_path, payload)
-            self._secrets = candidate
-            self._secrets_view = candidate_view
-            self._revision += 1
-            self._update_secrets_mtime_locked()
-            snapshot = self._snapshot_locked()
-            notification = self._enqueue_notification_locked(snapshot)
+            with keyed_path_lock(self.secrets_path):
+                current = self._read_source_unlocked(self.secrets_path)
+                if current.status is not ConfigSourceStatus.VALID or current.value is None:
+                    snapshot, notification, _changed = self._apply_source_reads_locked(
+                        self._config_source,
+                        current,
+                        force=False,
+                        bump_revision=True,
+                        notify=True,
+                    )
+                    self._mark_sources_paired_locked(self._config_source, current)
+                    failure = self._secret_source_error(current)
+                elif (
+                    self._secrets_source.status is not ConfigSourceStatus.VALID
+                    or current.etag != self._secrets_source.etag
+                ):
+                    guarded = self._guard_unconfirmed_secrets_locked(
+                        self._config_source,
+                        current,
+                    )
+                    snapshot, notification, _changed = self._apply_source_reads_locked(
+                        self._config_source,
+                        guarded,
+                        force=False,
+                        bump_revision=True,
+                        notify=True,
+                    )
+                    failure = ConfigLoadError(
+                        "secrets changed on disk; reload the latest source and retry the mutation"
+                    )
+                else:
+                    candidate = copy.deepcopy(current.value)
+                    try:
+                        changed, result = mutate(candidate)
+                        committed = (
+                            self._write_secrets_unlocked(
+                                candidate,
+                                expected_etag=current.etag,
+                            )
+                            if changed
+                            else current
+                        )
+                    except BaseException as exc:
+                        # A write can fail after partially changing the primary.
+                        # Reconcile it before propagating so live auth never keeps
+                        # credentials contradicted by the observed disk state.
+                        observed = self._read_source_unlocked(self.secrets_path)
+                        guarded = self._guard_unconfirmed_secrets_locked(
+                            self._config_source,
+                            observed,
+                        )
+                        snapshot, notification, _published = self._apply_source_reads_locked(
+                            self._config_source,
+                            guarded,
+                            force=False,
+                            bump_revision=True,
+                            notify=True,
+                        )
+                        if observed.status is not ConfigSourceStatus.VALID:
+                            self._mark_sources_paired_locked(self._config_source, observed)
+                        failure = exc
+                    else:
+                        published, paired = self._prepare_confirmed_secrets_locked(
+                            self._config_source,
+                            committed,
+                            confirm_config=False,
+                        )
+                        snapshot, notification, _published = self._apply_source_reads_locked(
+                            self._config_source,
+                            published,
+                            force=False,
+                            bump_revision=True,
+                            notify=True,
+                        )
+                        if paired:
+                            self._mark_sources_paired_locked(self._config_source, committed)
+        if notification is not None:
+            self._dispatch_notification(notification)
+        if failure is not None:
+            raise failure
         logger.info("Secrets transaction committed at revision %d", snapshot.revision)
-        self._dispatch_notification(notification)
         return result
 
     def update_secret(self, path: str, value: Any) -> None:
@@ -361,9 +897,9 @@ class ConfigManager:
             current = candidate
             for i, key in enumerate(keys[:-1]):
                 if key not in current:
-                    raise KeyError(f"路径不存在: {'.'.join(keys[:i+1])}")
+                    raise KeyError(f"路径不存在: {'.'.join(keys[: i + 1])}")
                 if not isinstance(current[key], dict):
-                    raise ValueError(f"路径 {'.'.join(keys[:i+1])} 不是字典类型")
+                    raise ValueError(f"路径 {'.'.join(keys[: i + 1])} 不是字典类型")
                 current = current[key]
 
             final_key = keys[-1]
@@ -474,6 +1010,58 @@ class ConfigManager:
 
         return unsubscribe
 
+    def on_security_update(
+        self,
+        callback: SecurityConfigCallback,
+    ) -> Callable[[], None]:
+        """Register a trusted synchronous authorization publication hook.
+
+        Core authorization holders use this channel so a slow ordinary reload
+        subscriber cannot delay credential revocation.  Hooks must only perform
+        bounded in-memory work and must not return an awaitable.
+        """
+
+        if not callable(callback):
+            raise TypeError("security config callback must be callable")
+        active = True
+
+        def guarded(snapshot: ConfigSnapshot) -> None:
+            with self._lock:
+                enabled = active
+            if enabled:
+                callback(snapshot)
+
+        with self._lock:
+            self._security_callbacks.append(guarded)
+
+        def unsubscribe() -> None:
+            nonlocal active
+            with self._lock:
+                if not active:
+                    return
+                active = False
+                try:
+                    self._security_callbacks.remove(guarded)
+                except ValueError:
+                    pass
+
+        return unsubscribe
+
+    def _dispatch_security_update(self, snapshot: ConfigSnapshot) -> None:
+        """Apply trusted authorization updates outside the ordinary queue."""
+
+        with self._lock:
+            callbacks = tuple(self._security_callbacks)
+        for callback in callbacks:
+            try:
+                result = callback(snapshot)
+                if result is not None:
+                    if asyncio.iscoroutine(result):
+                        result.close()
+                    raise TypeError("security config callback must be synchronous")
+            except BaseException as exc:
+                logger.exception("Security config callback failed: %s", exc)
+
     def snapshot(self) -> ConfigSnapshot:
         with self._lock:
             return self._snapshot_locked()
@@ -489,19 +1077,155 @@ class ConfigManager:
             return self._last_notified_revision
 
     async def watch(self, interval: float = 2.0) -> None:
-        """监控配置文件变化"""
+        """Poll strict content outcomes; worker threads never publish state."""
+
+        if (
+            isinstance(interval, bool)
+            or not isinstance(interval, (int, float))
+            or not math.isfinite(float(interval))
+            or interval <= 0
+        ):
+            raise ValueError("config watch interval must be positive and finite")
+        interval = float(interval)
         with self._lock:
             self._callback_loop = asyncio.get_running_loop()
-        self._update_mtime()
         while True:
             await asyncio.sleep(interval)
-            if await asyncio.to_thread(self._changed):
-                try:
-                    await asyncio.to_thread(self.reload, notify=True)
-                except ConfigLoadError as exc:
-                    logger.error("Config reload skipped, keeping last valid snapshot: %s", exc)
-                    await asyncio.to_thread(self._update_mtime)
+            try:
+                await self._watch_reconcile_once()
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                logger.exception("Config watcher iteration failed", exc_info=exc)
+                self._fail_closed_watch_error(exc)
+
+    async def _watch_reconcile_once(self) -> None:
+        notification: _ConfigNotification | None = None
+        changed = False
+        published_config: _SourceRead | None = None
+        published_secrets: _SourceRead | None = None
+        read_hint: tuple[_SourceRead, _SourceRead] | None = None
+        for _attempt in range(_MAX_WATCH_STABILITY_RETRIES):
+            with self._lock:
+                generation = self._source_generation
+                if read_hint is None:
+                    read_hint = (self._config_source, self._secrets_source)
+            candidate = await asyncio.to_thread(
+                self._read_sources,
+                read_hint,
+                allow_stat_reuse=True,
+            )
+            # Cancellation delivered while the worker was reading must win before
+            # this coroutine is allowed to publish its result.
+            await asyncio.sleep(0)
+            with self._lock:
+                if generation != self._source_generation:
+                    return
+            verified = await asyncio.to_thread(
+                self._read_sources,
+                candidate,
+                allow_stat_reuse=True,
+            )
+            await asyncio.sleep(0)
+            with self._lock:
+                if generation != self._source_generation:
+                    return
+            if tuple(item.signature for item in candidate) != tuple(
+                item.signature for item in verified
+            ):
+                read_hint = verified
+                continue
+            # A full final read remains the publication linearization point.  It
+            # catches same-size edits whose mtime was deliberately restored,
+            # while the two earlier observations avoid redundant parsing.
+            final = await asyncio.to_thread(self._read_sources)
+            await asyncio.sleep(0)
+            with self._lock:
+                if generation != self._source_generation:
+                    return
+                if tuple(item.signature for item in verified) != tuple(
+                    item.signature for item in final
+                ):
+                    read_hint = final
                     continue
+                config_read, secrets_read, paired = self._prepare_watched_sources_locked(*final)
+                _snapshot, notification, changed = self._apply_source_reads_locked(
+                    config_read,
+                    secrets_read,
+                    force=False,
+                    bump_revision=True,
+                    notify=True,
+                )
+                if paired:
+                    self._mark_sources_paired_locked(*final)
+                published_config = config_read
+                published_secrets = secrets_read
+                break
+        else:
+            self._fail_closed_watch_error(
+                RuntimeError("configuration sources did not stabilize before publication")
+            )
+            return
+
+        if not changed or published_config is None or published_secrets is None:
+            return
+        self._log_source_problem("config", published_config)
+        self._log_source_problem("secrets", published_secrets)
+        if notification is not None:
+            self._dispatch_notification(notification)
+        if published_secrets.status is ConfigSourceStatus.VALID:
+            _check_secrets_file_permissions(self.secrets_path)
+
+    def _prepare_watched_sources_locked(
+        self,
+        config_read: _SourceRead,
+        secrets_read: _SourceRead,
+    ) -> tuple[_SourceRead, _SourceRead, bool]:
+        """Apply config LKG while never authorizing an unconfirmed secret edit.
+
+        Plain files carry no shared generation or transactional envelope.  A
+        watcher therefore cannot prove that two externally staged writes belong
+        together.  New valid secret bytes remain fail-closed until ``reload()``
+        explicitly confirms them; previously confirmed bytes may recover after
+        a transient watcher failure.
+        """
+
+        if secrets_read.status is not ConfigSourceStatus.VALID:
+            # Revoked/malformed source states cannot grant authority, so they
+            # are safe to confirm as the new baseline.  Recreating even
+            # byte-identical old credentials will then require explicit reload.
+            return config_read, secrets_read, True
+        guarded_secrets = self._guard_unconfirmed_secrets_locked(config_read, secrets_read)
+        paired = (
+            guarded_secrets is secrets_read
+            and secrets_read.status is ConfigSourceStatus.VALID
+            and secrets_read.signature == self._paired_secrets_signature
+            and (
+                config_read.status is not ConfigSourceStatus.VALID
+                or config_read.signature == self._paired_config_signature
+            )
+        )
+        return config_read, guarded_secrets, paired
+
+    def _fail_closed_watch_error(self, exc: BaseException) -> None:
+        error = ConfigLoadError(f"configuration watcher failed: {type(exc).__name__}: {exc}")
+        unavailable = _SourceRead(
+            ConfigSourceStatus.UNAVAILABLE,
+            f"watch-error:{type(exc).__name__}",
+            error=error,
+        )
+        with self._lock:
+            _snapshot, notification, changed = self._apply_source_reads_locked(
+                self._config_source,
+                unavailable,
+                force=False,
+                bump_revision=True,
+                notify=True,
+            )
+        if changed:
+            self._log_source_problem("secrets", unavailable)
+            if notification is not None:
+                self._dispatch_notification(notification)
 
     def _dispatch_notification(self, notification: _ConfigNotification) -> None:
         """Start one ordered callback consumer without holding the data lock."""
@@ -513,7 +1237,6 @@ class ConfigManager:
 
         start_sync = False
         schedule_loop: asyncio.AbstractEventLoop | None = None
-        wait_for_completion = False
         with self._lock:
             callback_loop = self._callback_loop
             if callback_loop is not None and callback_loop.is_closed():
@@ -530,10 +1253,7 @@ class ConfigManager:
                 elif running_loop is not None:
                     schedule_loop = running_loop
                 else:
-                    self._notification_thread_id = threading.get_ident()
                     start_sync = True
-            elif running_loop is None and self._notification_thread_id != threading.get_ident():
-                wait_for_completion = True
 
         if schedule_loop is not None:
             if running_loop is schedule_loop:
@@ -544,12 +1264,8 @@ class ConfigManager:
                     self._drain_notifications_async(),
                     schedule_loop,
                 )
-                wait_for_completion = True
         elif start_sync:
             self._drain_notifications_sync()
-
-        if wait_for_completion:
-            notification.completed.wait()
 
     @staticmethod
     def _consume_notification_task_error(task: asyncio.Task[None]) -> None:
@@ -557,15 +1273,18 @@ class ConfigManager:
             task.result()
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except BaseException:
             logger.exception("Config notification consumer failed")
 
     def _next_notification(self) -> _ConfigNotification | None:
         with self._lock:
+            if self._notification_current is not None:
+                notification = self._notification_current
+                self._notification_current = None
+                return notification
             if self._notification_queue:
                 return self._notification_queue.popleft()
             self._notification_draining = False
-            self._notification_thread_id = None
             return None
 
     def _complete_notification(self, notification: _ConfigNotification) -> None:
@@ -574,17 +1293,26 @@ class ConfigManager:
                 self._last_notified_revision,
                 notification.revision,
             )
-        notification.completed.set()
 
     def _run_notification_sync(self, notification: _ConfigNotification) -> None:
         for callback in notification.callbacks:
             try:
                 result = callback(notification.snapshot)
-                if asyncio.iscoroutine(result):
-                    asyncio.run(result)
+                if inspect.isawaitable(result):
+                    asyncio.run(
+                        asyncio.wait_for(
+                            result,
+                            timeout=self._callback_timeout_seconds,
+                        )
+                    )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Config callback timed out at revision %d",
+                    notification.revision,
+                )
             except asyncio.CancelledError:
                 logger.warning("Config callback cancelled at revision %d", notification.revision)
-            except Exception as exc:
+            except BaseException as exc:
                 logger.exception("Config callback failed: %s", exc)
 
     def _drain_notifications_sync(self) -> None:
@@ -599,7 +1327,6 @@ class ConfigManager:
 
     async def _drain_notifications_async(self) -> None:
         with self._lock:
-            self._notification_thread_id = threading.get_ident()
             self._callback_loop = asyncio.get_running_loop()
         while True:
             notification = self._next_notification()
@@ -609,51 +1336,341 @@ class ConfigManager:
                 for callback in notification.callbacks:
                     try:
                         result = callback(notification.snapshot)
-                        if asyncio.iscoroutine(result):
-                            await result
+                        if inspect.isawaitable(result):
+                            await asyncio.wait_for(
+                                result,
+                                timeout=self._callback_timeout_seconds,
+                            )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Config callback timed out at revision %d",
+                            notification.revision,
+                        )
                     except asyncio.CancelledError:
                         logger.warning(
                             "Config callback cancelled at revision %d",
                             notification.revision,
                         )
-                    except Exception as exc:
+                    except BaseException as exc:
                         logger.exception("Config callback failed: %s", exc)
             finally:
                 self._complete_notification(notification)
 
-    def _load(self, path: Path) -> dict[str, Any]:
-        """加载 JSON 文件"""
+    def _cached_parsed_source(
+        self,
+        path: Path,
+        *,
+        etag: str,
+        identity: str,
+        stat_key: _SourceStatKey,
+    ) -> _SourceRead | None:
+        with self._parsed_source_cache_lock:
+            cached = self._parsed_source_cache.get(path)
+        if cached is None or cached.etag != etag:
+            return None
+        return _SourceRead(
+            cached.status,
+            etag,
+            value=cached.value,
+            error=cached.error,
+            identity=identity,
+            stat_key=stat_key,
+        )
+
+    def _remember_parsed_source(self, path: Path, source: _SourceRead) -> None:
+        if source.status not in {ConfigSourceStatus.VALID, ConfigSourceStatus.INVALID}:
+            return
+        with self._parsed_source_cache_lock:
+            self._parsed_source_cache[path] = source
+
+    @staticmethod
+    def _reuse_unchanged_source(path: Path, previous: _SourceRead) -> _SourceRead | None:
+        if previous.status is ConfigSourceStatus.MISSING:
+            try:
+                path.stat()
+            except FileNotFoundError:
+                return previous
+            except OSError:
+                return None
+            return None
+        if previous.status not in {ConfigSourceStatus.VALID, ConfigSourceStatus.INVALID}:
+            return None
         try:
-            payload = load_json(path, raise_on_error=True)
-        except json.JSONDecodeError as exc:
-            raise ConfigLoadError(path, exc) from exc
-        if not isinstance(payload, dict):
-            raise ConfigLoadError(f"Configuration at {path} must be a JSON object")
-        if path == self.config_path and payload:
-            return _validate_runtime_config(payload)
-        return payload
+            current_stat = path.stat()
+        except OSError:
+            return None
+        if previous.stat_key == _source_stat_key(current_stat):
+            return previous
+        return None
 
-    def _update_mtime(self) -> None:
-        """更新文件修改时间"""
-        with self._lock:
-            self._update_mtime_locked()
+    def _read_source_unlocked(self, path: Path) -> _SourceRead:
+        """Read one exact primary file without backup recovery."""
 
-    def _update_mtime_locked(self) -> None:
-        if self.config_path.exists():
-            self._last_config_mtime = self.config_path.stat().st_mtime
-        self._update_secrets_mtime_locked()
+        try:
+            with path.open("rb") as handle:
+                initial_stat = os.fstat(handle.fileno())
+                observed_size = initial_stat.st_size
+                raw = handle.read(_MAX_CONFIG_SOURCE_BYTES + 1)
+                final_stat = os.fstat(handle.fileno())
+                path_stat = path.stat()
+        except FileNotFoundError:
+            return _SourceRead(ConfigSourceStatus.MISSING, MISSING_ETAG)
+        except OSError as exc:
+            error = ConfigLoadError(path, exc)
+            token = f"unavailable:{type(exc).__name__}:{getattr(exc, 'errno', None)}"
+            return _SourceRead(ConfigSourceStatus.UNAVAILABLE, token, error=error)
 
-    def _update_secrets_mtime_locked(self) -> None:
-        if self.secrets_path.exists():
-            self._last_secrets_mtime = self.secrets_path.stat().st_mtime
+        changed_during_read = (
+            not os.path.samestat(final_stat, path_stat)
+            or initial_stat.st_size != final_stat.st_size
+            or initial_stat.st_mtime_ns != final_stat.st_mtime_ns
+            or (final_stat.st_size <= _MAX_CONFIG_SOURCE_BYTES and len(raw) != final_stat.st_size)
+        )
+        if changed_during_read:
+            token = f"volatile:{final_stat.st_size}:{final_stat.st_mtime_ns}:{_payload_etag(raw)}"
+            error = ConfigLoadError(f"Configuration at {path} changed while it was being read")
+            return _SourceRead(ConfigSourceStatus.UNAVAILABLE, token, error=error)
 
-    def _changed(self) -> bool:
-        """检查文件是否变化"""
-        with self._lock:
-            if self.config_path.exists() and self.config_path.stat().st_mtime != self._last_config_mtime:
-                return True
-            if self.secrets_path.exists() and self.secrets_path.stat().st_mtime != self._last_secrets_mtime:
-                return True
-            return False
+        identity = _source_identity(final_stat)
+        stat_key = _source_stat_key(final_stat)
+        if len(raw) > _MAX_CONFIG_SOURCE_BYTES:
+            token = f"oversize:{observed_size}:{_payload_etag(raw)}"
+            error = ConfigLoadError(
+                f"Configuration at {path} exceeds {_MAX_CONFIG_SOURCE_BYTES} bytes"
+            )
+            return _SourceRead(
+                ConfigSourceStatus.INVALID,
+                token,
+                error=error,
+                identity=identity,
+                stat_key=stat_key,
+            )
 
-__all__ = ["ConfigManager", "ConfigSnapshot", "ConfigLoadError"]
+        etag = _payload_etag(raw)
+        cached = self._cached_parsed_source(
+            path,
+            etag=etag,
+            identity=identity,
+            stat_key=stat_key,
+        )
+        if cached is not None:
+            return cached
+        try:
+            decoded = raw.decode("utf-8")
+            value = json.loads(decoded, parse_constant=_reject_json_constant)
+            if not isinstance(value, dict):
+                raise ValueError("top-level JSON value must be an object")
+            if path == self.config_path:
+                value = _validate_runtime_config(value)
+            # JSON's exponent syntax can decode to infinity without invoking
+            # parse_constant.  Round-trip through the strict tree validator so
+            # every nested value is finite and supported before it is VALID.
+            value = cast(
+                dict[str, Any],
+                materialize_snapshot_value(_freeze_config_mapping(value)),
+            )
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            ValueError,
+            TypeError,
+            RecursionError,
+            ConfigLoadError,
+        ) as exc:
+            error = exc if isinstance(exc, ConfigLoadError) else ConfigLoadError(path, exc)
+            result = _SourceRead(
+                ConfigSourceStatus.INVALID,
+                etag,
+                error=error,
+                identity=identity,
+                stat_key=stat_key,
+            )
+            self._remember_parsed_source(path, result)
+            return result
+        result = _SourceRead(
+            ConfigSourceStatus.VALID,
+            etag,
+            value=value,
+            identity=identity,
+            stat_key=stat_key,
+        )
+        self._remember_parsed_source(path, result)
+        return result
+
+    def _read_sources(
+        self,
+        previous: tuple[_SourceRead, _SourceRead] | None = None,
+        *,
+        allow_stat_reuse: bool = False,
+    ) -> tuple[_SourceRead, _SourceRead]:
+        # Holding both local path locks prevents another managed writer from
+        # interleaving generations between the two reads.  Canonical ordering
+        # also avoids deadlock if two managers are accidentally wired in reverse.
+        unique_paths = {
+            self.config_path.expanduser().resolve(strict=False),
+            self.secrets_path.expanduser().resolve(strict=False),
+        }
+        ordered_paths = sorted(unique_paths, key=lambda item: os.path.normcase(str(item)))
+        with ExitStack() as locks:
+            for path in ordered_paths:
+                locks.enter_context(keyed_path_lock(path))
+            reads: list[_SourceRead] = []
+            for index, path in enumerate((self.config_path, self.secrets_path)):
+                reused = (
+                    self._reuse_unchanged_source(path, previous[index])
+                    if allow_stat_reuse and previous is not None
+                    else None
+                )
+                reads.append(reused or self._read_source_unlocked(path))
+            return reads[0], reads[1]
+
+    def _read_stable_sources(self) -> tuple[_SourceRead, _SourceRead]:
+        """Require three identical pair reads before explicit confirmation.
+
+        The final matching read is the publication linearization point.  This
+        detects ordinary torn/staged saves but cannot synchronize with a
+        non-cooperating process that starts another write after that point.
+        """
+
+        previous_reads = (self._config_source, self._secrets_source)
+        previous_signatures: tuple[tuple[ConfigSourceStatus, str, str], ...] | None = None
+        stable_count = 0
+        last_signatures: tuple[tuple[ConfigSourceStatus, str, str], ...] = ()
+        for _attempt in range(_MAX_STABLE_SOURCE_READS):
+            require_content_read = stable_count >= _REQUIRED_STABLE_SOURCE_READS - 1
+            current = self._read_sources(
+                previous_reads,
+                allow_stat_reuse=not require_content_read,
+            )
+            signatures = tuple(item.signature for item in current)
+            if signatures == previous_signatures:
+                stable_count += 1
+            else:
+                previous_signatures = signatures
+                stable_count = 1
+            last_signatures = signatures
+            previous_reads = current
+            if stable_count >= _REQUIRED_STABLE_SOURCE_READS:
+                return current
+
+        token = _payload_etag(repr(last_signatures).encode("utf-8"))
+        error = ConfigLoadError(
+            "config and secrets did not remain stable long enough for explicit confirmation"
+        )
+        return (
+            _SourceRead(ConfigSourceStatus.UNAVAILABLE, f"unstable-config:{token}", error=error),
+            _SourceRead(ConfigSourceStatus.UNAVAILABLE, f"unstable-secrets:{token}", error=error),
+        )
+
+    def _write_secrets_unlocked(
+        self,
+        candidate: Mapping[str, Any],
+        *,
+        expected_etag: str,
+    ) -> _SourceRead:
+        """Write a verified inode without recreating a deleted/replaced primary.
+
+        Managed writers are serialized by the keyed lock.  Pre/post identity and
+        content checks make an external replace, delete, or observed same-inode
+        overwrite fail closed.  No portable advisory lock can stop a deliberately
+        non-cooperating process from writing after the final check; the watcher
+        treats any later external secret content as unconfirmed and revokes it.
+        A crash may leave this file invalid, which the strict reader also handles
+        fail closed.
+        """
+
+        _validate_config_tree(candidate)
+        payload = json.dumps(
+            candidate,
+            indent="\t",
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        payload_bytes = payload.encode("utf-8")
+        if len(payload_bytes) > _MAX_CONFIG_SOURCE_BYTES:
+            raise ValueError(f"secrets exceed {_MAX_CONFIG_SOURCE_BYTES} bytes")
+        canonical = json.loads(payload, parse_constant=_reject_json_constant)
+        if not isinstance(canonical, dict):
+            raise TypeError("secrets must be a JSON object")
+        _validate_config_tree(canonical)
+
+        try:
+            handle = self.secrets_path.open("r+b", buffering=0)
+        except OSError as exc:
+            raise ConfigLoadError(self.secrets_path, exc) from exc
+        with handle:
+            current_payload = handle.read(_MAX_CONFIG_SOURCE_BYTES + 1)
+            if len(current_payload) > _MAX_CONFIG_SOURCE_BYTES:
+                raise ConfigLoadError("secrets changed on disk before commit")
+            if _payload_etag(current_payload) != expected_etag:
+                raise ConfigLoadError("secrets changed on disk before commit")
+            handle_stat = os.fstat(handle.fileno())
+            try:
+                path_stat = self.secrets_path.stat()
+            except OSError as exc:
+                raise ConfigLoadError("secrets changed on disk before commit") from exc
+            if not os.path.samestat(handle_stat, path_stat):
+                raise ConfigLoadError("secrets changed on disk before commit")
+
+            _write_secret_payload(handle, payload_bytes)
+
+            try:
+                committed_stat = self.secrets_path.stat()
+            except OSError as exc:
+                raise ConfigLoadError("secrets changed on disk during commit") from exc
+            if not os.path.samestat(handle_stat, committed_stat):
+                raise ConfigLoadError("secrets changed on disk during commit")
+            handle.seek(0)
+            observed_payload = handle.read(_MAX_CONFIG_SOURCE_BYTES + 1)
+            if observed_payload != payload_bytes:
+                raise ConfigLoadError("secrets changed on disk during commit")
+            final_handle_stat = os.fstat(handle.fileno())
+            if not os.path.samestat(handle_stat, final_handle_stat):
+                raise ConfigLoadError("secrets changed on disk during commit")
+            try:
+                final_path_stat = self.secrets_path.stat()
+            except OSError as exc:
+                raise ConfigLoadError("secrets changed on disk during commit") from exc
+            if not os.path.samestat(final_handle_stat, final_path_stat):
+                raise ConfigLoadError("secrets changed on disk during commit")
+        try:
+            closed_path_stat = self.secrets_path.stat()
+        except OSError as exc:
+            raise ConfigLoadError("secrets changed on disk during commit") from exc
+        if not os.path.samestat(final_handle_stat, closed_path_stat):
+            raise ConfigLoadError("secrets changed on disk during commit")
+        result = _SourceRead(
+            ConfigSourceStatus.VALID,
+            _payload_etag(payload_bytes),
+            value=canonical,
+            identity=_source_identity(closed_path_stat),
+            stat_key=_source_stat_key(closed_path_stat),
+        )
+        self._remember_parsed_source(self.secrets_path, result)
+        return result
+
+    @staticmethod
+    def _secret_source_error(source: _SourceRead) -> ConfigLoadError:
+        if source.error is not None:
+            return source.error
+        return ConfigLoadError(
+            f"Refusing to mutate secrets while primary source is {source.status.value}"
+        )
+
+    @staticmethod
+    def _log_source_problem(name: str, source: _SourceRead) -> None:
+        if source.status is ConfigSourceStatus.VALID:
+            return
+        if source.status is ConfigSourceStatus.MISSING:
+            logger.warning("%s source is missing", name)
+            return
+        logger.error("%s source is %s: %s", name, source.status.value, source.error)
+
+
+__all__ = [
+    "ConfigLoadError",
+    "ConfigManager",
+    "ConfigSnapshot",
+    "ConfigSourceStatus",
+    "materialize_snapshot_value",
+]

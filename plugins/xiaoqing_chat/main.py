@@ -2,14 +2,21 @@
 小青智能对话插件
 提供 AI 对话、上下文记忆、表达学习等高级功能
 """
+
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
-from core.args import parse
 from core.plugin_base import segments
 from core.public_errors import public_error_message, public_error_response
+from core.router import (
+    CommandCatalogNode,
+    format_command_catalog,
+    get_context_command_root,
+    resolve_context_command_invocation,
+)
 
 from .handlers import (
     call_bot_name_only_internal,
@@ -32,39 +39,46 @@ from .runtime_state import get_state as _state
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# 子命令路由表
-# ============================================================
-
-_SUBCOMMANDS: dict[str, str] = {
-    "help": "帮助",   "帮助": "帮助",   "?": "帮助",
-    "reset": "重置",  "重置": "重置",   "清空": "重置",
-    "stats": "统计",  "统计": "统计",   "状态": "统计",
-    "brain": "深度",  "深度": "深度",
-    "config": "配置", "配置": "配置",
-    "memory": "记忆", "记忆": "记忆",
-    "expression": "表达", "表达": "表达",
-    "jargon": "黑话", "黑话": "黑话",
-    "review": "审查", "审查": "审查",
-    "model": "模型",  "模型": "模型",   "provider": "模型",  "供应商": "模型",
-}
-
 _HANDLERS: dict[str, Any] = {
-    "重置": lambda rest, ev, ctx: handle_internal("重置", rest, ev, ctx),
-    "统计": lambda rest, ev, ctx: handle_internal("统计", rest, ev, ctx),
-    "深度": lambda rest, ev, ctx: handle_internal("深度对话", rest, ev, ctx),
-    "配置": handle_config,
-    "记忆": handle_memory,
-    "表达": handle_expression,
-    "黑话": handle_jargon,
-    "模型": handle_provider,
-    "审查": handle_review,
+    "reset": lambda rest, ev, ctx: handle_internal("重置", rest, ev, ctx),
+    "stats": lambda rest, ev, ctx: handle_internal("统计", rest, ev, ctx),
+    "brain": lambda rest, ev, ctx: handle_internal("深度对话", rest, ev, ctx),
+    "config": handle_config,
+    "memory": handle_memory,
+    "expression": handle_expression,
+    "jargon": handle_jargon,
+    "model": handle_provider,
+    "review": handle_review,
 }
 
 
-def init(context=None) -> None:
+def _catalog_root(context: Any) -> CommandCatalogNode | None:
+    """优先复用 Dispatcher 注入的快照，直接调用时再查同一 Core 目录。"""
+
+    return get_context_command_root(context, "xiaoqing_chat.xc")
+
+
+def _resolve_invocation(args: str, context: Any):
+    return resolve_context_command_invocation(context, "xiaoqing_chat.xc", args)
+
+
+def _help_text(context: Any) -> str:
+    root = _catalog_root(context)
+    if root is None:
+        return "💬 小青智能对话\n\n完整命令目录暂不可用，请使用 /help xiaoqing_chat"
+    return format_command_catalog(root, title="💬 小青智能对话 · 完整命令目录")
+
+
+async def init(context=None) -> None:
     """插件初始化"""
-    if context:
+    state = _state()
+    state.start_accepting_background_tasks()
+    if context is not None:
+        from .media.event_media_common import _run_media_blocking
+        from .store_binding import _bind_all_stores
+
+        _bind_all_stores(state, context.data_dir)
+        await _run_media_blocking(state.media_store.load)
         log = getattr(context, "logger", logger)
         log.info("XiaoQing Chat plugin initialized")
 
@@ -75,27 +89,56 @@ async def handle(
     event: dict[str, Any],
     context,
 ) -> list[dict[str, Any]]:
-    """命令处理入口 — 统一 /xc <子命令> 风格"""
+    """命令处理入口；``command`` 由插件协议传入，实际子命令从 ``args`` 解析。"""
     try:
-        parsed = parse(args)
-        subcommand = parsed.first.lower() if parsed.first else ""
+        raw_args = str(args or "").strip()
+        raw_parts = raw_args.split(maxsplit=1)
+        catalog_root = _catalog_root(context)
+        first_node = (
+            catalog_root.resolve_child(raw_parts[0]) if raw_parts and catalog_root else None
+        )
+        first_is_help = bool(first_node is not None and first_node.name == "help") or bool(
+            raw_parts and raw_parts[0].casefold() in {"help", "帮助", "?"}
+        )
+        if first_is_help and len(raw_parts) > 1:
+            usage = first_node.usage if first_node is not None else "/xc help"
+            return segments(f"❌ help 子命令不接受额外参数\n用法: {usage}")
 
-        # 无参数 → 帮助
-        if not subcommand:
-            return segments(_show_help())
+        invocation = _resolve_invocation(args, context)
+        root = invocation.root if invocation is not None else None
+        if not raw_args:
+            return segments(_help_text(context))
 
-        # 子命令路由
-        action = _SUBCOMMANDS.get(subcommand)
+        action = (
+            invocation.chain[1].name if invocation is not None and len(invocation.chain) > 1 else ""
+        )
+        rest = invocation.remainder_after(1) if invocation is not None and action else ""
+        if not action and root is None:
+            parts = raw_parts
+            candidate = parts[0].casefold() if parts else ""
+            action = candidate if candidate in {*_HANDLERS, "help"} else ""
+            rest = parts[1] if len(parts) > 1 else ""
 
-        if action == "帮助":
-            return segments(_show_help())
+        if action == "help":
+            return segments(_help_text(context))
 
-        handler = _HANDLERS.get(action) if action else None
+        if not action and root is not None:
+            parts = raw_parts
+            candidate = root.resolve_child(parts[0]) if parts else None
+            if (
+                candidate is not None
+                and candidate.name != "help"
+                and candidate.match_mode == "exact"
+                and len(parts) > 1
+            ):
+                return segments(f"❌ 用法: {candidate.usage}")
+
+        handler = _HANDLERS.get(action)
         if handler:
-            return await handler(parsed.rest(1), event, context)
+            return await handler(rest, event, context)
 
         # 未匹配子命令 → 当作聊天内容（使用 args 而非 raw_message，避免带上 /xc 前缀）
-        text = args.strip()
+        text = raw_args
         if not text:
             return []
         # 显式 /xc 命令 → 标记强制回复，跳过概率判断
@@ -110,38 +153,6 @@ async def handle(
             logger=log,
             component="xiaoqing_chat.handle",
         )
-
-
-def _show_help() -> str:
-    """显示帮助信息"""
-    return """
-💬 **小青智能对话**
-
-**基础对话:**
-• /xc <内容> - 和小青聊天
-• @小青 <内容> - 在群聊中呼叫小青
-• 启用媒体能力后，小青也能理解图片/表情包消息
-
-**会话管理:**
-• /xc 清空 - 私聊中清空自己的上下文记忆
-• /xc 清空 确认 - 群管理员/群主清空当前群的共享状态（需二次确认）
-• /xc 统计 - 查看当前会话的统计信息
-
-**高级功能:**
-• /xc 深度 - 查看深度对话模式状态
-• /xc 配置 - 查看插件配置概要
-• /xc 记忆 <关键词> - 检索长期记忆
-• /xc 表达 - 查看学到的表达方式
-• /xc 黑话 - 查看学到的黑话
-• /xc 模型 - 查看/切换 LLM 供应商
-• /xc 审查 <ok|no|answer|close> <会话ID> [内容] - 管理员处理反思会话
-
-**使用提示:**
-• 群聊中需要 @小青 或使用命令触发
-• 私聊会自动启用聊天模式
-
-输入 /xc help 查看此帮助
-""".strip()
 
 
 async def call_bot_name_only(context) -> list[dict[str, Any]]:
@@ -170,51 +181,25 @@ async def observe_outgoing_action(
     )
 
 
-async def shutdown(context) -> None:
-    """
-    插件卸载时清理
+async def _flush_shutdown_state(context: Any, state: Any, log: logging.Logger) -> None:
+    """把所有可能仍在防抖窗口内的数据完整落盘。"""
+    flushers = (
+        ("memory_store", state.memory_store.persist_all),
+        ("pfc_state", state.pfc_state_store.flush),
+        ("action_history", state.action_history.flush),
+        ("media_store", state.media_store.flush),
+    )
+    for component, flush in flushers:
+        try:
+            await asyncio.to_thread(flush)
+        except Exception as exc:
+            public_error_message(
+                context,
+                exc,
+                logger=log,
+                component=f"xiaoqing_chat.shutdown.{component}",
+            )
 
-    等待后台任务完成（带超时），然后执行兆底数据保存。
-    """
-    log = getattr(context, "logger", logger)
-    log.info("XiaoQing Chat plugin shutting down")
-    import asyncio
-    state = _state()
-
-    # 1. Wait for background tasks with timeout
-    bg_tasks = set(state._bg_tasks)
-    if bg_tasks:
-        log.info("XiaoQing Chat: waiting for %d background tasks...", len(bg_tasks))
-        done, pending = await asyncio.wait(bg_tasks, timeout=5.0)
-        if pending:
-            log.warning("XiaoQing Chat: cancelling %d unfinished tasks", len(pending))
-            for t in pending:
-                t.cancel()
-            # Give cancelled tasks a moment to clean up
-            await asyncio.wait(pending, timeout=2.0)
-
-    # 2. Final flush: persist memory and action history
-    try:
-        state.action_history.flush_all()
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger=log,
-            component="xiaoqing_chat.shutdown.action_history",
-        )
-
-    try:
-        state.media_store.flush_all()
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger=log,
-            component="xiaoqing_chat.shutdown.media_store",
-        )
-
-    # 3. Save vector DB if dirty
     try:
         if state.memory_db.is_dirty():
             await asyncio.to_thread(state.memory_db.save)
@@ -226,6 +211,30 @@ async def shutdown(context) -> None:
             component="xiaoqing_chat.shutdown.memory_db",
         )
 
+
+async def shutdown(context) -> None:
+    """停止新后台工作，完整落盘，再取消超时任务并做最终落盘。"""
+
+    log = getattr(context, "logger", logger)
+    log.info("XiaoQing Chat plugin shutting down")
+    state = _state()
+    state.stop_accepting_background_tasks()
+
+    # 已登记任务先获得一次自然收尾机会；关闭标志会拒绝它们继续派生后台工作。
+    bg_tasks = state.background_tasks()
+    pending: set[asyncio.Task[Any]] = set()
+    if bg_tasks:
+        log.info("XiaoQing Chat: waiting for %d background tasks...", len(bg_tasks))
+        _done, pending = await asyncio.wait(bg_tasks, timeout=5.0)
+
+    # 必须在取消任务前保存：防抖写入本身也可能位于 pending 集合中。
+    await _flush_shutdown_state(context, state, log)
+    if pending:
+        log.warning("XiaoQing Chat: cancelling %d unfinished tasks", len(pending))
+        for task in pending:
+            task.cancel()
+        await asyncio.wait(pending, timeout=2.0)
+        # 任务的 finally 块可能在取消过程中产生最后一批状态变更。
+        await _flush_shutdown_state(context, state, log)
+
     log.info("XiaoQing Chat plugin shutdown complete")
-    # 当前没有需要清理的资源
-    pass

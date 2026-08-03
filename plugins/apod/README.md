@@ -7,6 +7,14 @@
 - `/apod`：获取当天 APOD
 - `/apod help`：帮助
 
+<!-- manifest-command-aliases:start -->
+| 功能 | 推荐入口 | manifest 等价别名 |
+| --- | --- | --- |
+| 获取当天 APOD | `/apod` | `/每日一天文图` |
+<!-- manifest-command-aliases:end -->
+
+表中的等价别名由 dispatcher 直接识别；参数和权限语义与推荐入口完全相同。
+
 每天 13:30 的 schedule 使用部署侧 `default_group_ids`；干净安装没有目标群时不会发送。
 
 ## 可选公开配置

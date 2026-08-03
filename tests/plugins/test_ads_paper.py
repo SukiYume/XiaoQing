@@ -8,13 +8,18 @@ ads_paper 插件单元测试
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, cast
+from types import SimpleNamespace
+from typing import Any, ClassVar, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
-from plugins.ads_paper import note_commands
-from plugins.ads_paper.ads_client import ADSClient
-from plugins.ads_paper.llm_client import generate_summary
+from plugins.ads_paper import ai_commands, constants, note_commands, paper_commands, storage
+from plugins.ads_paper import main as ads_main
+from plugins.ads_paper.ads_client import ADSClient, paper_title
+from plugins.ads_paper.storage import PaperStorage
+from tests.helpers.assertions import text_segments_text
+from tests.helpers.settings_snapshot import with_settings_reader
 
 # 添加项目根目录到路径
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -24,63 +29,121 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 # Tests
 # ============================================================
 
-class TestAdsPaperPlugin:
-    """测试 ads_paper 插件基本功能"""
 
-    def test_constants_file_exists(self):
-        """测试常量文件存在"""
-        constants_path = ROOT / "plugins" / "ads_paper" / "constants.py"
-        assert constants_path.exists()
+class TestAdsPaperRuntimeContract:
+    """Verify the installed package imports and exposes its real entrypoints."""
 
-        with open(constants_path, encoding="utf-8") as f:
-            content = f.read()
-            # 检查是否定义了必要的常量
-            assert "ADS_API_BASE" in content or "ADS" in content.upper()
+    def test_package_modules_and_entrypoints_import(self):
+        assert ads_main.init() is None
+        assert callable(ads_main.handle)
+        assert callable(paper_commands.cmd_search)
+        assert callable(note_commands.cmd_note)
+        assert callable(ai_commands.cmd_summarize)
+        assert constants.ARXIV_NEW_FORMAT_PATTERN.search("arXiv:2607.01234")
+        assert storage.PaperStorage is not None
 
-    def test_storage_module_exists(self):
-        """测试存储模块存在"""
-        storage_path = ROOT / "plugins" / "ads_paper" / "storage.py"
-        assert storage_path.exists()
 
-        with open(storage_path, encoding="utf-8") as f:
-            content = f.read()
-            assert "class" in content or "def" in content
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "paper_id",
+    [
+        "2401.12345",
+        "2401.12345v2",
+        "astro-ph/0701089",
+        "https://arxiv.org/abs/2401.12345v2",
+        "https://arxiv.org/abs/astro-ph/0701089v3",
+    ],
+)
+async def test_resolve_missing_arxiv_identifier_never_falls_through_to_bibcode(
+    paper_id: str,
+) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.searched: list[str] = []
 
-    def test_ads_client_module_exists(self):
-        """测试 ADS 客户端模块存在"""
-        client_path = ROOT / "plugins" / "ads_paper" / "ads_client.py"
-        assert client_path.exists()
+        async def search_by_arxiv_id(self, value: str):
+            self.searched.append(value)
+            return None
 
-        with open(client_path, encoding="utf-8") as f:
-            content = f.read()
-            assert "class" in content
+    client = Client()
 
-    def test_paper_commands_module_exists(self):
-        """测试论文命令模块存在"""
-        commands_path = ROOT / "plugins" / "ads_paper" / "paper_commands.py"
-        assert commands_path.exists()
+    result = await paper_commands.resolve_paper_id_to_bibcode(cast(Any, client), paper_id)
 
-        with open(commands_path, encoding="utf-8") as f:
-            content = f.read()
-            assert "async def" in content or "def" in content
+    assert result is None
+    assert client.searched == [paper_id]
 
-    def test_note_commands_module_exists(self):
-        """测试笔记命令模块存在"""
-        note_path = ROOT / "plugins" / "ads_paper" / "note_commands.py"
-        assert note_path.exists()
 
-        with open(note_path, encoding="utf-8") as f:
-            content = f.read()
-            assert "async def" in content or "def" in content
+@pytest.mark.asyncio
+async def test_resolve_arxiv_identifier_returns_found_bibcode() -> None:
+    class Client:
+        async def search_by_arxiv_id(self, value: str):
+            assert value == "2401.12345"
+            return {"bibcode": "2024arXiv240112345A"}
 
-    def test_ai_commands_module_exists(self):
-        """测试 AI 命令模块存在"""
-        ai_path = ROOT / "plugins" / "ads_paper" / "ai_commands.py"
-        assert ai_path.exists()
+    assert (
+        await paper_commands.resolve_paper_id_to_bibcode(cast(Any, Client()), "2401.12345")
+        == "2024arXiv240112345A"
+    )
 
-        with open(ai_path, encoding="utf-8") as f:
-            content = f.read()
-            assert "async def" in content or "def" in content
+
+@pytest.mark.asyncio
+async def test_resolve_real_ads_bibcode_bypasses_arxiv_search() -> None:
+    class Client:
+        async def search_by_arxiv_id(self, _value: str):
+            raise AssertionError("ADS bibcodes must not be searched as arXiv identifiers")
+
+    bibcode = "2026arXiv260122115P"
+    assert await paper_commands.resolve_paper_id_to_bibcode(cast(Any, Client()), bibcode) == bibcode
+
+
+@pytest.mark.asyncio
+async def test_ads_query_builders_escape_author_and_reject_invalid_bibcodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ADSClient("token", object())
+    captured: list[str] = []
+
+    async def capture(query: str, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        del args, kwargs
+        captured.append(query)
+        return []
+
+    monkeypatch.setattr(client, "_search_docs", capture)
+
+    await client.search_by_author(r' A\B"C ')
+    assert captured == [r'author:"A\\B\"C"']
+
+    bibcode = "2026ApJ...001..001A"
+    await client.get_paper_by_bibcode(bibcode)
+    await client.get_citations(bibcode)
+    await client.get_references(bibcode)
+    assert captured[1:] == [
+        f"bibcode:{bibcode}",
+        f"citations(bibcode:{bibcode})",
+        f"references(bibcode:{bibcode})",
+    ]
+
+    for method in (
+        client.get_paper_by_bibcode,
+        client.get_citations,
+        client.get_references,
+    ):
+        with pytest.raises(ValueError, match="invalid ADS bibcode"):
+            await method('2026ApJ...001..001A" OR *:*')
+
+
+@pytest.mark.asyncio
+async def test_resolve_invalid_non_arxiv_identifier_returns_none() -> None:
+    class Client:
+        async def search_by_arxiv_id(self, _value: str) -> None:
+            raise AssertionError("invalid identifiers must not reach arXiv search")
+
+    assert (
+        await paper_commands.resolve_paper_id_to_bibcode(
+            cast(Any, Client()), '2026ApJ...001..001A" OR *:*'
+        )
+        is None
+    )
 
 
 class TestAdsPaperConfig:
@@ -106,62 +169,139 @@ class TestAdsPaperConfig:
         for cmd in config.get("commands", []):
             if "name" in cmd:
                 # 命令应该有描述或使用说明
-                assert "help" in cmd or "usage" in cmd or "description" in cmd or cmd.get("help", "")
+                assert (
+                    "help" in cmd or "usage" in cmd or "description" in cmd or cmd.get("help", "")
+                )
 
 
-class TestAdsPaperModules:
-    """测试 ads_paper 各模块结构"""
+@pytest.mark.asyncio
+async def test_help_and_local_topics_do_not_require_ads_token(tmp_path):
+    context = cast(
+        Any,
+        with_settings_reader(
+            SimpleNamespace(
+                secrets={"plugins": {"ads_paper": {}}},
+                state={},
+                data_dir=tmp_path,
+                http_session=object(),
+                request_id=None,
+            )
+        ),
+    )
+    help_result = await ads_main.handle("paper", "help", {}, context)
+    topics_result = await ads_main.handle("paper", "topics", {"user_id": 1}, context)
 
-    def test_main_exports_plugin(self):
-        """测试 main.py 导出 Plugin 类"""
-        main_path = ROOT / "plugins" / "ads_paper" / "main.py"
-        with open(main_path, encoding="utf-8") as f:
-            content = f.read()
-
-        assert "class Plugin" in content or "plugin" in content.lower()
-
-    def test_modules_import_correctly(self):
-        """测试各模块可以正确导入"""
-        modules_to_check = [
-            "constants",
-            "storage",
-            "ads_client",
-            "paper_commands",
-            "note_commands",
-            "ai_commands"
-        ]
-
-        for module_name in modules_to_check:
-            module_path = ROOT / "plugins" / "ads_paper" / f"{module_name}.py"
-            assert module_path.exists(), f"Module {module_name} does not exist"
-
-            # 尝试读取文件内容
-            with open(module_path, encoding="utf-8") as f:
-                content = f.read()
-                # 确保文件有实际内容
-                assert len(content.strip()) > 0, f"Module {module_name} is empty"
+    assert "论文与文献管理助手" in help_result[0]["data"]["text"]
+    assert "暂无研究兴趣关键词" in topics_result[0]["data"]["text"]
 
 
-class TestAdsPaperArxivPatterns:
-    """测试 arXiv ID 解析模式"""
+@pytest.mark.asyncio
+async def test_free_text_commands_preserve_quotes_backslashes_and_spacing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = cast(
+        Any,
+        with_settings_reader(
+            SimpleNamespace(
+                secrets={"plugins": {"ads_paper": {"ads_token": "test-token"}}},
+                state={},
+                data_dir=tmp_path,
+                http_session=object(),
+                request_id="ads-free-text",
+            )
+        ),
+    )
+    event = {"user_id": 10001, "message_type": "private"}
+    search = AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}])
+    monkeypatch.setattr(paper_commands, "cmd_search", search)
+    query = r'"fast radio burst" -3σ  C:\papers'
 
-    def test_arxiv_id_patterns_in_constants(self):
-        """测试常量文件中有 arXiv ID 模式"""
-        constants_path = ROOT / "plugins" / "ads_paper" / "constants.py"
-        with open(constants_path, encoding="utf-8") as f:
-            content = f.read()
+    result = await ads_main.handle("paper", f"search {query}", event, context)
 
-        # 检查是否包含 arXiv 相关的正则表达式
-        assert "arxiv" in content.lower() or "ARXIV" in content
+    assert "ok" in text_segments_text(result)
+    search.assert_awaited_once()
+    assert search.await_args.args[1] == query
 
-    def test_ads_client_has_arxiv_methods(self):
-        """测试 ADS 客户端有 arXiv 处理方法"""
-        client_path = ROOT / "plugins" / "ads_paper" / "ads_client.py"
-        with open(client_path, encoding="utf-8") as f:
-            content = f.read()
+    content = r'-3σ  偏差\路径 "保留引号"'
+    note_result = await ads_main.handle(
+        "paper",
+        f"note 2401.12345 {content}",
+        event,
+        context,
+    )
 
-        # 检查是否有 arXiv 相关的方法
-        assert "arxiv" in content.lower() or "normalize" in content.lower()
+    assert "已添加笔记" in text_segments_text(note_result)
+    notes = context.state["paper_storage"].get_paper_notes("2401.12345", 10001)
+    assert notes[0]["content"] == content
+
+
+@pytest.mark.asyncio
+async def test_local_resource_commands_share_one_user_lifecycle_and_reject_bad_mutations(
+    tmp_path: Path,
+) -> None:
+    """所有本地资源都从真实 ``handle`` 入口完成增查错删闭环。"""
+
+    context = cast(
+        Any,
+        with_settings_reader(
+            SimpleNamespace(
+                secrets={"plugins": {"ads_paper": {}}},
+                state={},
+                data_dir=tmp_path,
+                http_session=object(),
+                request_id="ads-lifecycle",
+            )
+        ),
+    )
+    event = {"user_id": 10001, "message_type": "private"}
+
+    async def call(args: str) -> str:
+        return text_segments_text(
+            await ads_main.handle("paper", args, event, context),
+            separator="\n",
+        )
+
+    # 论文笔记：错误序号必须拒绝，且不能误删同一论文的真实笔记。
+    assert "已添加笔记" in await call("note 2401.12345 第一条笔记")
+    assert "第一条笔记" in await call("note 2401.12345")
+    assert "删除失败" in await call("note del 2401.12345 99")
+    assert "第一条笔记" in await call("note 2401.12345")
+    assert "已删除" in await call("note del 2401.12345 1")
+    assert "暂无笔记" in await call("note 2401.12345")
+
+    # 写作灵感：同一章节贯穿添加、查询、错误删除和正确删除。
+    assert "已添加" in await call("writing 引言 解释研究动机")
+    assert "解释研究动机" in await call("writing 引言")
+    assert "序号必须是数字" in await call("writing del 引言 bad")
+    assert "解释研究动机" in await call("writing 引言")
+    assert "已删除" in await call("writing del 引言 1")
+    assert "暂无灵感" in await call("writing 引言")
+
+    # 关键词：重复添加和删除不存在项都不应改变集合。
+    assert "已添加关键词" in await call("topics add Fast Radio Burst")
+    assert "已存在" in await call("topics add Fast Radio Burst")
+    assert "fast radio burst" in (await call("topics")).casefold()
+    assert "不存在" in await call("topics remove missing-topic")
+    assert "fast radio burst" in (await call("topics")).casefold()
+    assert "已删除关键词" in await call("topics remove Fast Radio Burst")
+    assert "暂无研究兴趣关键词" in await call("topics")
+
+    # 截稿日期：非法日期必须在写入前返回，随后仍只存在原记录。
+    assert "已添加截稿日期" in await call("deadline add FRB2027 2027-07-22")
+    assert "FRB2027 - 2027-07-22" in await call("deadline")
+    assert "日期格式错误" in await call("deadline add Broken tomorrow")
+    deadline_text = await call("deadline")
+    assert deadline_text.count("FRB2027 - 2027-07-22") == 1
+    assert "Broken" not in deadline_text
+    assert "已删除截稿日期" in await call("deadline del 1")
+    assert "暂无截稿日期" in await call("deadline")
+
+    storage_instance = context.state["paper_storage"]
+    assert storage_instance.get_paper_notes("2401.12345", 10001) == []
+    assert storage_instance.list_writing_sections(10001) == []
+    assert storage_instance.get_topics(10001) == []
+    assert storage_instance.get_deadlines(10001) == []
 
 
 class TestAdsPaperAsyncStorage:
@@ -211,14 +351,13 @@ class TestAdsPaperAsyncStorage:
             return func(*args, **kwargs)
 
         class Client:
-            async def search_papers(self, query, max_results):
-                assert query == "LLM OR agents"
+            async def search_papers(self, query, max_results, *, fields, sort):
+                assert '"LLM" OR "agents"' in query
+                assert "entdate:" in query
                 assert max_results > 0
+                assert "entdate" in fields
+                assert sort == "entdate desc,bibcode asc"
                 return []
-
-        class MockContext:
-            def __init__(self, data_dir):
-                self.data_dir = data_dir
 
         monkeypatch.setattr(ai_commands.asyncio, "to_thread", fake_to_thread)
 
@@ -229,7 +368,7 @@ class TestAdsPaperAsyncStorage:
             encoding="utf-8",
         )
 
-        result = asyncio.run(ai_commands.cmd_daily(cast(Any, Client()), MockContext(data_dir), 1))
+        result = asyncio.run(ai_commands.cmd_daily(cast(Any, Client()), PaperStorage(data_dir), 1))
 
         assert "get_topics" in calls
         assert "未找到" in str(result)
@@ -254,7 +393,9 @@ class TestPaperStorageBehavior:
         assert len(deadlines) == 1
         assert deadlines[0]["name"] == "submit"
 
-    def test_storage_filters_notes_and_deadlines_by_user_and_delete_uses_visible_order(self, tmp_path):
+    def test_storage_filters_notes_and_deadlines_by_user_and_delete_uses_visible_order(
+        self, tmp_path
+    ):
         from plugins.ads_paper.storage import PaperStorage
 
         storage = PaperStorage(tmp_path)
@@ -308,6 +449,29 @@ class TestPaperStorageBehavior:
         assert "bib-2" not in storage.get_references(1)
 
 
+def test_ads_paper_requires_exact_positive_user_id():
+    for value in (None, 0, -1, True, "1"):
+        with pytest.raises(ValueError, match="positive integer user_id"):
+            ads_main._require_user_id({"user_id": value})
+    assert ads_main._require_user_id({"user_id": 1}) == 1
+
+
+@pytest.mark.asyncio
+async def test_ads_search_filters_non_mapping_docs_and_formats_scalar_fields(monkeypatch):
+    client = ADSClient("token", object())
+    monkeypatch.setattr(
+        client,
+        "_request_json",
+        AsyncMock(return_value={"response": {"docs": [None, "bad", {"title": "Full"}]}}),
+    )
+
+    assert await client.search_papers("frb") == [{"title": "Full"}]
+    assert paper_title({"title": "Full title"}) == "Full title"
+    assert ADSClient.format_paper_info({"title": "Full title", "author": "Solo"}).startswith(
+        "📄 Full title\n   👤 Solo"
+    )
+
+
 @pytest.mark.asyncio
 async def test_ads_client_search_passes_timeout():
     captured = {}
@@ -319,7 +483,7 @@ async def test_ads_client_search_passes_timeout():
     class MockResponse:
         status = 200
         url = "https://api.adsabs.harvard.edu/v1/search/query"
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
         content_length = None
         content = MockContent()
 
@@ -345,17 +509,17 @@ async def test_ads_client_search_passes_timeout():
 
 
 @pytest.mark.asyncio
-async def test_ads_llm_generate_summary_passes_timeout():
-    captured = {}
+async def test_ads_bibtex_accepts_valid_json_without_content_type():
+    """ADS BibTeX 端点偶尔省略 MIME，但正文仍是受限解析的合法 JSON。"""
 
     class MockContent:
         async def iter_chunked(self, _size):
-            yield b'{"choices":[{"message":{"content":"summary"}}]}'
+            yield b'{"msg":"Retrieved 1 abstract","export":"@article{demo}"}'
 
     class MockResponse:
         status = 200
-        url = "https://example.com/v1/chat/completions"
-        headers = {"Content-Type": "application/json"}
+        url = "https://api.adsabs.harvard.edu/v1/export/bibtex"
+        headers: ClassVar[dict[str, str]] = {}
         content_length = None
         content = MockContent()
 
@@ -369,18 +533,47 @@ async def test_ads_llm_generate_summary_passes_timeout():
             return None
 
     class MockSession:
-        def request(self, *args, **kwargs):
-            captured.update(kwargs)
+        def request(self, *_args, **_kwargs):
             return MockResponse()
 
-    result = await generate_summary(
-        session=MockSession(),
-        api_base="https://example.com/v1",
-        api_key="key",
-        model="model",
-        title="title",
-        abstract="abstract",
+    client = ADSClient("token", MockSession())
+
+    assert await client.get_bibtex("demo") == "@article{demo}"
+
+
+@pytest.mark.asyncio
+async def test_ads_summary_uses_core_ai_route_without_plugin_credentials():
+    captured: dict[str, Any] = {}
+
+    class Client:
+        async def get_paper_by_bibcode(self, bibcode):
+            assert bibcode == "2026ApJ...001..001A"
+            return {"title": ["A title"], "abstract": "An abstract"}
+
+    class AI:
+        async def complete(self, route, messages):
+            captured["route"] = route
+            captured["messages"] = messages
+            return SimpleNamespace(content="统一摘要")
+
+    context = cast(
+        Any,
+        with_settings_reader(
+            SimpleNamespace(
+                capabilities=SimpleNamespace(ai=AI()),
+                secrets={"plugins": {"ads_paper": {"ads_token": "token"}}},
+                logger=SimpleNamespace(),
+                request_id=None,
+            )
+        ),
     )
 
-    assert result == "summary"
-    assert captured["timeout"].total == 60
+    result = await ai_commands.cmd_summarize(
+        cast(Any, Client()),
+        "2026ApJ...001..001A",
+        context,
+    )
+
+    assert captured["route"] == "summary"
+    assert "A title" in captured["messages"][0]["content"]
+    assert "统一摘要" in result[0]["data"]["text"]

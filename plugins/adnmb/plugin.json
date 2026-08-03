@@ -11,8 +11,99 @@
                 "a岛",
                 "岛"
             ],
-            "help": "A岛匿名版 | /adnmb -h 查看帮助",
-            "admin_only": false
+            "help": "A岛匿名版浏览客户端；登录、发帖与回复功能已禁用",
+            "admin_only": false,
+            "usage": "/adnmb <-t|-f|-m|-c|-r|-d|-a|-e> [参数] [-p 页码]",
+            "examples": ["/adnmb", "/adnmb -t", "/adnmb -m 综合版1 -p 2"],
+            "invalid_examples": ["/adnmb -p 2", "/adnmb -t -f", "/adnmb --unknown"],
+            "subcommands": [
+                {
+                    "name": "-t",
+                    "aliases": ["--timeline"],
+                    "help": "查看时间线，可用 -p/--page 指定页码",
+                    "usage": "/adnmb -t [-p <页码>]",
+                    "examples": ["/adnmb -t", "/adnmb --timeline --page 2"],
+                    "invalid_examples": ["/adnmb -t 2", "/adnmb -t -p 0"]
+                },
+                {
+                    "name": "-f",
+                    "aliases": ["--forumlist"],
+                    "help": "查看全部板块",
+                    "usage": "/adnmb -f",
+                    "match": "exact",
+                    "examples": ["/adnmb -f"],
+                    "invalid_examples": ["/adnmb -f extra", "/adnmb -f -p 2"]
+                },
+                {
+                    "name": "-m",
+                    "aliases": ["--showforum"],
+                    "help": "查看指定板块内容，可指定页码",
+                    "usage": "/adnmb -m <板块名> [-p <页码>]",
+                    "examples": ["/adnmb -m 综合版1", "/adnmb --showforum 综合版1 -p 2"],
+                    "invalid_examples": ["/adnmb -m", "/adnmb -m 综合版1 -p zero"]
+                },
+                {
+                    "name": "-c",
+                    "aliases": ["--chuan"],
+                    "help": "查看指定串及回复，可指定页码",
+                    "usage": "/adnmb -c <串号> [-p <页码>]",
+                    "examples": ["/adnmb -c 12345678"],
+                    "invalid_examples": ["/adnmb -c", "/adnmb -c abc"]
+                },
+                {
+                    "name": "-r",
+                    "aliases": ["--ref"],
+                    "help": "查看单条回复",
+                    "usage": "/adnmb -r <回复号>",
+                    "examples": ["/adnmb -r 12345678"],
+                    "invalid_examples": ["/adnmb -r", "/adnmb -r 123 -p 2"]
+                },
+                {
+                    "name": "-d",
+                    "aliases": ["--feed"],
+                    "help": "查看订阅内容，可指定页码",
+                    "usage": "/adnmb -d [-p <页码>]",
+                    "examples": ["/adnmb -d", "/adnmb --feed -p 2"],
+                    "invalid_examples": ["/adnmb -d extra", "/adnmb -d -p 0"]
+                },
+                {
+                    "name": "-a",
+                    "aliases": ["--addfeed"],
+                    "help": "订阅指定串",
+                    "usage": "/adnmb -a <串号>",
+                    "examples": ["/adnmb -a 12345678"],
+                    "invalid_examples": ["/adnmb -a", "/adnmb -a 123 -p 2"]
+                },
+                {
+                    "name": "-e",
+                    "aliases": ["--delfeed"],
+                    "help": "取消订阅指定串",
+                    "usage": "/adnmb -e <串号>",
+                    "examples": ["/adnmb -e 12345678"],
+                    "invalid_examples": ["/adnmb -e", "/adnmb -e 123 -p 2"]
+                },
+                {
+                    "name": "-h",
+                    "aliases": ["--help", "-l", "--list", "help", "帮助"],
+                    "help": "显示全部可用浏览和订阅命令",
+                    "usage": "/adnmb -h",
+                    "match": "exact",
+                    "examples": ["/adnmb -h"],
+                    "invalid_examples": ["/adnmb -h extra", "/adnmb -h -t"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "aiohttp",
+            "required": true,
+            "description": "ADnMB API 客户端在入口导入链中直接使用 aiohttp"
+        },
+        {
+            "name": "PIL",
+            "required": true,
+            "description": "用于验证和转换串内图片"
         }
     ],
     "schedule": []

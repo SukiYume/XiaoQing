@@ -11,25 +11,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .runtime_state import _ChatRuntime
 
-from .config.config import BrainChatConfig
-
 
 def is_brain_chat_active(
     runtime: _ChatRuntime,
     is_private: bool,
-    forced: bool = False,
 ) -> bool:
-    """
-    检查是否处于深度对话模式
-
-    Args:
-        runtime: 运行时配置
-        is_private: 是否为私聊
-        forced: 是否被强制触发（@或bot名称）
-
-    Returns:
-        True 如果处于深度对话模式
-    """
+    """仅在配置允许的私聊中启用深度对话。"""
     # 深度对话模式仅在私聊中启用，且需要配置开启
     if not is_private:
         return False
@@ -41,23 +28,28 @@ def is_brain_chat_active(
 
 
 def get_brain_chat_identity(runtime: _ChatRuntime, is_brain_chat: bool) -> str:
-    """获取对话模式下的人格描述"""
-    brain_chat_cfg = getattr(runtime.cfg, "brain_chat", None)
-    personality_cfg = getattr(runtime.cfg, "personality", None)
-    brain_identity = getattr(brain_chat_cfg, "brain_identity", "")
+    """返回稳定人物底座，并在深度模式下叠加思考方式。
+
+    深度模式只改变如何聊，不能替换角色身份；否则进入私聊后会丢掉年龄、
+    兴趣和人物边界，形成两个互不一致的“小青”。
+    """
+
+    base_identity = str(runtime.cfg.personality.identity or "").strip()
+    brain_identity = runtime.cfg.brain_chat.brain_identity
     if is_brain_chat and brain_identity:
-        return brain_identity
-    return getattr(personality_cfg, "identity", "")
+        supplement = str(brain_identity or "").strip()
+        if base_identity:
+            return f"{base_identity}\n深度对话方式补充：{supplement}"
+        return supplement
+    return base_identity
 
 
 def get_brain_chat_reply_style(runtime: _ChatRuntime, is_brain_chat: bool) -> str:
     """获取对话模式下的回复风格"""
-    brain_chat_cfg = getattr(runtime.cfg, "brain_chat", None)
-    personality_cfg = getattr(runtime.cfg, "personality", None)
-    brain_reply_style = getattr(brain_chat_cfg, "brain_reply_style", "")
+    brain_reply_style = runtime.cfg.brain_chat.brain_reply_style
     if is_brain_chat and brain_reply_style:
         return brain_reply_style
-    return getattr(personality_cfg, "reply_style", "")
+    return runtime.cfg.personality.reply_style
 
 
 def get_brain_chat_think_level(
@@ -66,40 +58,24 @@ def get_brain_chat_think_level(
     *,
     history_len: int = 0,
 ) -> int:
-    """获取对话模式下的思考级别
-    使用显式 None 检查而非 falsy fallback，避免合法值 0 被误判为未设置。
-    """
-    brain_chat_cfg = getattr(runtime.cfg, "brain_chat", None)
-    brain_think_level = getattr(brain_chat_cfg, "brain_think_level", None)
-    if is_brain_chat and brain_think_level is not None:
-        return brain_think_level
-    planner_cfg = getattr(runtime.cfg, "planner", None)
-    resolve_think_level = getattr(planner_cfg, "resolve_think_level", None)
-    if callable(resolve_think_level):
-        return int(resolve_think_level(history_len))
-    return 0
+    """按当前对话模式返回思考级别。"""
+    if is_brain_chat:
+        return runtime.cfg.brain_chat.brain_think_level
+    return runtime.cfg.planner.resolve_think_level(history_len)
 
 
 def get_brain_chat_max_context(runtime: _ChatRuntime, is_brain_chat: bool) -> int:
-    """获取对话模式下的最大上下文大小
-    使用显式 None 检查而非 falsy fallback。
-    """
-    brain_chat_cfg = getattr(runtime.cfg, "brain_chat", None)
-    brain_max_context_size = getattr(brain_chat_cfg, "brain_max_context_size", None)
-    if is_brain_chat and brain_max_context_size is not None:
-        return brain_max_context_size
-    return int(getattr(runtime.cfg, "max_context_size", 30))
+    """按当前对话模式返回最大上下文大小。"""
+    if is_brain_chat:
+        return runtime.cfg.brain_chat.brain_max_context_size
+    return runtime.cfg.max_context_size
 
 
 def get_brain_chat_temperature(runtime: _ChatRuntime, is_brain_chat: bool) -> float:
-    """获取对话模式下的温度参数
-    使用显式 None 检查而非 falsy fallback，避免 temperature=0.0 被误判为未设置。
-    """
-    brain_chat_cfg = getattr(runtime.cfg, "brain_chat", None)
-    brain_temperature = getattr(brain_chat_cfg, "brain_temperature", None)
-    if is_brain_chat and brain_temperature is not None:
-        return float(brain_temperature)
-    return float(getattr(runtime.cfg, "temperature", 0.8))
+    """按当前对话模式返回生成温度。"""
+    if is_brain_chat:
+        return runtime.cfg.brain_chat.brain_temperature
+    return runtime.cfg.temperature
 
 
 def maybe_add_mode_indicator(reply: str, runtime: _ChatRuntime) -> str:
@@ -113,29 +89,9 @@ def maybe_add_mode_indicator(reply: str, runtime: _ChatRuntime) -> str:
     Returns:
         可能带有模式标识的回复
     """
-    brain_chat_cfg = getattr(runtime.cfg, "brain_chat", None)
-    if getattr(brain_chat_cfg, "show_mode_indicator", False) and reply:
-        indicator = getattr(brain_chat_cfg, "brain_mode_indicator", "") or ""
+    brain_chat_cfg = runtime.cfg.brain_chat
+    if brain_chat_cfg.show_mode_indicator and reply:
+        indicator = brain_chat_cfg.brain_mode_indicator
         if indicator:
             return f"{indicator}\n{reply}"
     return reply
-
-
-def get_brain_chat_config_summary(runtime: _ChatRuntime) -> dict[str, object]:
-    """
-    获取深度对话配置摘要（用于调试）
-
-    Returns:
-        配置摘要字典
-    """
-    cfg = getattr(runtime.cfg, "brain_chat", None)
-    return {
-        "enabled": getattr(cfg, "enable_private_brain_chat", False),
-        "planner_always_on": getattr(cfg, "private_planner_always_on", True),
-        "think_level": getattr(cfg, "brain_think_level", BrainChatConfig().brain_think_level),
-        "max_context": getattr(
-            cfg, "brain_max_context_size", BrainChatConfig().brain_max_context_size
-        ),
-        "temperature": getattr(cfg, "brain_temperature", BrainChatConfig().brain_temperature),
-        "show_indicator": getattr(cfg, "show_mode_indicator", False),
-    }

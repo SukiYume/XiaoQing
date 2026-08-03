@@ -8,7 +8,6 @@
   "arxiv": {
     "url": "https://arxiv.org/list/astro-ph/new",
     "proxy": null,
-    "api_days": 2,
     "use_ssl_verify": true,
     "timeout": 30
   }

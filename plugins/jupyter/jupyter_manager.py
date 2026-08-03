@@ -2,84 +2,84 @@
 Jupyter 内核管理器
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
+import binascii
 import inspect
 import logging
+import math
 import re
-import struct
+import shutil
 import threading
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from queue import Empty as QueueEmpty
+from typing import Any, ClassVar
 
-from core.plugin_base import ensure_dir
+from core.image_validation import (
+    ImageValidationError,
+    ImageValidationLimits,
+    validate_image_bytes,
+)
 
+from .jupyter_audit import log_sensitive_audit, safe_audit_id
 from .jupyter_config import (
     AUTO_SHUTDOWN_TIMEOUT,
     CHECK_INTERVAL,
     DEFAULT_TIMEOUT,
+    MAX_EXECUTION_TIMEOUT,
     MAX_IMAGE_BYTES,
     MAX_IMAGE_PIXELS,
     MAX_IMAGES,
+    MAX_KERNEL_INSTANCES,
     MAX_OUTPUT_BYTES,
+    MAX_TOTAL_IMAGE_BYTES,
 )
 from .jupyter_models import ExecutionResult
 
 logger = logging.getLogger(__name__)
-AUDIT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
-AUDIT_LABEL_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,95}\Z")
-ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
 
+_LEGACY_FIGURE_DIR_PATTERN = re.compile(r"[0-9a-f]{32}\Z")
+_LEGACY_FIGURE_FILE_PATTERN = re.compile(r"output_[0-9]{10}_[0-9]+\.png\Z")
+_MAX_LEGACY_FIGURE_ENTRIES = 4_096
+_ANSI_ESCAPE_PATTERN = re.compile(r"(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~])")
+_PNG_FORMAT_EXTENSIONS = {"PNG": ".png"}
 
-def _safe_audit_id(value: object) -> str:
-    candidate = value if isinstance(value, str) else ""
-    return candidate if AUDIT_ID_RE.fullmatch(candidate) else "-"
-
-
-def _safe_audit_label(value: str) -> str:
-    return value if AUDIT_LABEL_RE.fullmatch(value) else "unknown"
-
-
-def _audit_error_type(exc: BaseException | None, fallback: str = "-") -> str:
-    candidate = type(exc).__name__ if exc is not None else fallback
-    return candidate if ERROR_TYPE_RE.fullmatch(candidate) else "Exception"
-
-
-def _log_manager_audit(
-    operation: str,
-    *,
-    status: str,
-    audit_id: str | None = None,
-    exc: BaseException | None = None,
-    error_type: str = "-",
-    level: int = logging.INFO,
-) -> None:
-    safe_error_type = _audit_error_type(exc, error_type)
-    selected_level = logging.ERROR if exc is not None else level
-    logger.log(
-        selected_level,
-        "sensitive_audit operation=%s job_id=%s status=%s error_type=%s "
-        "payload_kind=none payload_length=0 payload_bytes=0 payload_fingerprint=-",
-        _safe_audit_label(operation),
-        _safe_audit_id(audit_id),
-        _safe_audit_label(status),
-        safe_error_type,
-    )
-
-
-# 全局变量保存导入状态
+# 可选依赖允许安装后重试，因此失败状态不是永久缓存。
 JUPYTER_AVAILABLE = False
-IMPORT_ERROR = None
-KernelManager = None
-AsyncKernelManager = None
+IMPORT_ERROR: str | None = None
+KernelManager: Any | None = None
+_IMPORT_LOCK = threading.Lock()
+
+
+def validate_png_bytes(image_data: object) -> bool:
+    """Fully decode one bounded, non-animated PNG through the shared image boundary."""
+
+    try:
+        validate_image_bytes(
+            image_data,
+            limits=ImageValidationLimits(
+                max_bytes=MAX_IMAGE_BYTES,
+                max_pixels=MAX_IMAGE_PIXELS,
+                max_frames=1,
+            ),
+            format_extensions=_PNG_FORMAT_EXTENSIONS,
+            expected_format="PNG",
+            allow_animation=False,
+        )
+    except ImageValidationError:
+        return False
+    return True
 
 
 @dataclass
 class KernelCleanupReport:
-    """Best-effort kernel cleanup result retained for diagnostics and tests."""
+    """保留分阶段的尽力清理结果，供隔离决策、诊断和测试使用。"""
 
     context: str
     channels_stopped: bool | None = None
@@ -90,6 +90,12 @@ class KernelCleanupReport:
     alive_after: bool | None = None
     orphan_confirmed_absent: bool = True
     errors: list[str] = field(default_factory=list)
+
+    def record_error(self, stage: str, exc: BaseException | None = None) -> None:
+        """只保留阶段与异常类型，避免诊断报告携带路径或凭据正文。"""
+
+        error_type = type(exc).__name__ if exc is not None else "Unavailable"
+        self.errors.append(f"{stage}:{error_type}")
 
     def summary(self) -> str:
         error_text = ", ".join(self.errors) if self.errors else "none"
@@ -103,42 +109,69 @@ class KernelCleanupReport:
         )
 
 
-def lazy_import_jupyter():
-    """惰性导入 jupyter_client"""
-    global JUPYTER_AVAILABLE, IMPORT_ERROR, KernelManager, AsyncKernelManager
-    if JUPYTER_AVAILABLE:
-        return
+@dataclass(slots=True)
+class _OutputBudget:
+    """在 stdout、stderr、表达式结果和 traceback 之间共享字节预算。"""
 
-    try:
-        from jupyter_client import KernelManager as KM
+    used_bytes: int = 0
 
-        # 尝试直接导入（适用于新版）
+    def append(self, current: str, value: object) -> tuple[str, bool]:
+        text = value if isinstance(value, str) else str(value or "")
+        text = _ANSI_ESCAPE_PATTERN.sub("", text)
+        text = "".join(
+            character
+            for character in text
+            if character in "\n\r\t"
+            or (ord(character) >= 32 and not 0x7F <= ord(character) <= 0x9F)
+        )
+        encoded = text.encode("utf-8", errors="replace")
+        remaining = MAX_OUTPUT_BYTES - self.used_bytes
+        if remaining <= 0:
+            return current, bool(encoded)
+        kept = encoded[:remaining].decode("utf-8", errors="ignore")
+        self.used_bytes += len(kept.encode("utf-8"))
+        return current + kept, len(encoded) > remaining
+
+
+@dataclass(slots=True)
+class _ExecutionState:
+    """记录可能仍在线程中运行的 I/O，保证取消时可以等待其收敛。"""
+
+    kernel_was_running: bool
+    pending_task: asyncio.Task[Any] | None = None
+    pending_kind: str | None = None
+    recovery_task: asyncio.Task[str] | None = None
+    msg_id: str | None = None
+
+
+def lazy_import_jupyter() -> None:
+    """线程安全地惰性导入唯一实际使用的同步 KernelManager。"""
+
+    global IMPORT_ERROR, JUPYTER_AVAILABLE, KernelManager
+    with _IMPORT_LOCK:
+        if JUPYTER_AVAILABLE and KernelManager is not None:
+            return
         try:
-            from jupyter_client import AsyncKernelManager as AKM
-        except ImportError:
-            # 尝试从 asynchronous 子模块导入（适用于旧版）
-            from jupyter_client.asynchronous import AsyncKernelManager as AKM
-
-        global KernelManager, AsyncKernelManager
-        KernelManager = KM
-        AsyncKernelManager = AKM
+            from jupyter_client import KernelManager as imported_manager
+        except ImportError as exc:
+            JUPYTER_AVAILABLE = False
+            IMPORT_ERROR = str(exc)
+            KernelManager = None
+            return
+        KernelManager = imported_manager
+        IMPORT_ERROR = None
         JUPYTER_AVAILABLE = True
-    except ImportError as e:
-        JUPYTER_AVAILABLE = False
-        IMPORT_ERROR = str(e)
-        KernelManager = None
-        AsyncKernelManager = None
 
 
 class JupyterKernelManager:
-    _instances: dict[str, "JupyterKernelManager"] = {}
-    _quarantined_instances: set["JupyterKernelManager"] = set()
+    _instances: ClassVar[dict[str, JupyterKernelManager]] = {}
+    _quarantined_instances: ClassVar[set[JupyterKernelManager]] = set()
     _instances_lock = threading.Lock()
 
     def __init__(self, data_dir: Path):
-        self.data_dir = data_dir
-        self.figures_dir = data_dir / "figures"
-        ensure_dir(self.figures_dir)
+        self.data_dir = Path(data_dir)
+        self.figures_dir = self.data_dir / "figures"
+        self._cleanup_legacy_figures()
 
         self._km: Any | None = None
         self._kc: Any | None = None
@@ -153,26 +186,78 @@ class JupyterKernelManager:
 
         # 自动关闭相关
         self._last_activity = 0.0
-        self._shutdown_task: asyncio.Task | None = None
+        self._shutdown_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _cleanup_legacy_figures(self) -> None:
+        """有界删除两代旧输出布局，同时保留链接和无关用户文件。"""
+
+        try:
+            # ``Path.iterdir()`` 延迟到首次迭代才访问目录，异常边界必须包住循环。
+            for index, child in enumerate(self.figures_dir.iterdir()):
+                if index >= _MAX_LEGACY_FIGURE_ENTRIES:
+                    log_sensitive_audit(
+                        logger,
+                        "jupyter.figures.migration",
+                        status="bounded",
+                        error_type="EntryLimit",
+                        level=logging.WARNING,
+                    )
+                    break
+                self._remove_legacy_figure(child)
+        except (FileNotFoundError, NotADirectoryError, OSError):
+            return
+        with suppress(OSError):
+            self.figures_dir.rmdir()
+
+    @staticmethod
+    def _remove_legacy_figure(child: Path) -> None:
+        """只删除名称和类型都符合旧插件布局的真实文件。"""
+
+        try:
+            if child.is_symlink():
+                return
+            if child.is_dir() and _LEGACY_FIGURE_DIR_PATTERN.fullmatch(child.name):
+                shutil.rmtree(child)
+                return
+            if child.is_file() and _LEGACY_FIGURE_FILE_PATTERN.fullmatch(child.name):
+                child.unlink()
+        except OSError:
+            log_sensitive_audit(
+                logger,
+                "jupyter.figures.migration",
+                status="error",
+                error_type="LegacyCleanupError",
+                level=logging.WARNING,
+            )
 
     @staticmethod
     def _instance_key(data_dir: Path, owner_key: str) -> str:
+        if (
+            type(owner_key) is not str
+            or not owner_key
+            or len(owner_key) > 128
+            or any(ord(character) < 33 or ord(character) > 126 for character in owner_key)
+        ):
+            raise ValueError("Jupyter owner key is invalid")
         resolved_dir = str(Path(data_dir).resolve())
-        return f"{owner_key or 'global'}::{resolved_dir}"
+        return f"{owner_key}::{resolved_dir}"
 
     @classmethod
-    def get_instance(cls, data_dir: Path, owner_key: str = "global") -> "JupyterKernelManager":
-        key = cls._instance_key(data_dir, str(owner_key or "global"))
+    def get_instance(cls, data_dir: Path, owner_key: str) -> JupyterKernelManager:
+        key = cls._instance_key(data_dir, owner_key)
         with cls._instances_lock:
             instance = cls._instances.get(key)
             if instance is None or instance._broken:
+                registered = set(cls._instances.values()) | cls._quarantined_instances
+                if key not in cls._instances and len(registered) >= MAX_KERNEL_INSTANCES:
+                    raise RuntimeError("Jupyter kernel instance limit reached")
                 instance = cls(data_dir)
                 cls._instances[key] = instance
             return instance
 
     @classmethod
-    def _isolate_instance(cls, instance: "JupyterKernelManager") -> None:
+    def _isolate_instance(cls, instance: JupyterKernelManager) -> None:
         with cls._instances_lock:
             stale_keys = [key for key, value in cls._instances.items() if value is instance]
             for key in stale_keys:
@@ -180,20 +265,12 @@ class JupyterKernelManager:
             cls._quarantined_instances.add(instance)
 
     @classmethod
-    def shutdown_all(cls) -> None:
+    def _forget_instance(cls, instance: JupyterKernelManager) -> None:
         with cls._instances_lock:
-            instances = list(dict.fromkeys([*cls._instances.values(), *cls._quarantined_instances]))
-            cls._instances.clear()
-            cls._quarantined_instances.clear()
-        for instance in instances:
-            try:
-                instance.shutdown_kernel()
-            except Exception as exc:
-                _log_manager_audit(
-                    "jupyter.kernel.shutdown_all",
-                    status="error",
-                    exc=exc,
-                )
+            stale_keys = [key for key, value in cls._instances.items() if value is instance]
+            for key in stale_keys:
+                cls._instances.pop(key, None)
+            cls._quarantined_instances.discard(instance)
 
     @classmethod
     async def shutdown_all_async(cls) -> None:
@@ -206,10 +283,27 @@ class JupyterKernelManager:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.gather(
-            *(asyncio.to_thread(instance.shutdown_kernel, False) for instance in instances),
+        results = await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    instance.shutdown_kernel,
+                    False,
+                    evict_instance=False,
+                )
+                for instance in instances
+            ),
             return_exceptions=True,
         )
+        failures = [result for result in results if isinstance(result, BaseException)]
+        if failures:
+            for failure in failures:
+                log_sensitive_audit(
+                    logger,
+                    "jupyter.kernel.shutdown_all",
+                    status="error",
+                    exc=failure,
+                )
+            raise RuntimeError(f"{len(failures)} Jupyter kernel cleanup operation(s) failed")
 
     @property
     def is_running(self) -> bool:
@@ -232,18 +326,22 @@ class JupyterKernelManager:
     def _resolve_awaitable(value: Any, *, timeout: float = 5.0) -> Any:
         if not inspect.isawaitable(value):
             return value
+        deadline = max(0.1, timeout)
         result: list[Any] = []
         errors: list[BaseException] = []
 
+        async def await_value() -> Any:
+            return await asyncio.wait_for(value, timeout=deadline)
+
         def run() -> None:
             try:
-                result.append(asyncio.run(value))
+                result.append(asyncio.run(await_value()))
             except BaseException as exc:  # noqa: BLE001 - propagate from helper thread.
                 errors.append(exc)
 
         worker = threading.Thread(target=run, name="jupyter-cleanup-awaitable", daemon=True)
         worker.start()
-        worker.join(timeout=max(0.1, timeout))
+        worker.join(timeout=deadline + 0.5)
         if worker.is_alive():
             raise TimeoutError("async cleanup step did not finish before its deadline")
         if errors:
@@ -285,7 +383,7 @@ class JupyterKernelManager:
             return bool(cls._resolve_awaitable(is_alive()))
         except BaseException as exc:  # noqa: BLE001 - cleanup must continue.
             if report is not None:
-                report.errors.append(f"{stage}.is_alive: {exc}")
+                report.record_error(f"{stage}.is_alive", exc)
             return None
 
     @classmethod
@@ -316,7 +414,9 @@ class JupyterKernelManager:
         private_kill = getattr(km, "_kill_kernel", None)
         if callable(private_kill):
             candidates.append(("_kill_kernel", private_kill, {}))
-        process = getattr(provisioner, "process", None) or getattr(km, "process", None)
+        process = getattr(provisioner, "process", None)
+        if process is None:
+            process = getattr(km, "process", None)
         process_kill = getattr(process, "kill", None)
         if callable(process_kill):
             candidates.append(("process.kill", process_kill, {}))
@@ -327,13 +427,65 @@ class JupyterKernelManager:
                 cls._invoke_cleanup(callback, **kwargs)
                 report.fallback_succeeded = True
             except BaseException as exc:  # noqa: BLE001 - try the next fallback.
-                report.errors.append(f"{name}: {exc}")
+                report.record_error(name, exc)
                 continue
             alive = cls._wait_for_kernel_exit(km, report, stage=name)
             if alive is False:
                 report.alive_after = False
                 return True
         return False
+
+    @classmethod
+    def _stop_client_channels(
+        cls,
+        kc: Any,
+        report: KernelCleanupReport,
+    ) -> None:
+        if kc is None:
+            return
+        stop_channels = getattr(kc, "stop_channels", None)
+        if not callable(stop_channels):
+            return
+        try:
+            cls._invoke_cleanup(stop_channels)
+            report.channels_stopped = True
+        except BaseException as exc:  # noqa: BLE001 - kernel cleanup must continue.
+            report.channels_stopped = False
+            report.record_error("stop_channels", exc)
+
+    @classmethod
+    def _request_kernel_shutdown(cls, km: Any, report: KernelCleanupReport) -> None:
+        shutdown = getattr(km, "shutdown_kernel", None)
+        if not callable(shutdown):
+            report.shutdown_succeeded = False
+            report.record_error("shutdown_kernel")
+            return
+        try:
+            cls._invoke_cleanup(shutdown, now=True)
+            report.shutdown_succeeded = True
+        except BaseException as exc:  # noqa: BLE001 - fallback kill must continue.
+            report.shutdown_succeeded = False
+            report.record_error("shutdown_kernel", exc)
+
+    @classmethod
+    def _request_resource_cleanup(
+        cls,
+        km: Any,
+        report: KernelCleanupReport,
+        *,
+        after_kill: bool = False,
+    ) -> Any | None:
+        cleanup_resources = getattr(km, "cleanup_resources", None)
+        if not callable(cleanup_resources):
+            return None
+        stage = "cleanup_resources_after_kill" if after_kill else "cleanup_resources"
+        try:
+            cls._invoke_cleanup(cleanup_resources, restart=False)
+            report.resources_cleaned = True
+        except BaseException as exc:  # noqa: BLE001 - termination proof is separate.
+            report.resources_cleaned = False
+            report.record_error(stage, exc)
+        return cleanup_resources
 
     @classmethod
     def _cleanup_kernel_resources(
@@ -344,41 +496,14 @@ class JupyterKernelManager:
         context: str,
     ) -> KernelCleanupReport:
         report = KernelCleanupReport(context=context)
-        if kc is not None:
-            stop_channels = getattr(kc, "stop_channels", None)
-            if callable(stop_channels):
-                try:
-                    cls._invoke_cleanup(stop_channels)
-                    report.channels_stopped = True
-                except BaseException as exc:  # noqa: BLE001 - continue to kernel kill.
-                    report.channels_stopped = False
-                    report.errors.append(f"stop_channels: {exc}")
-
+        cls._stop_client_channels(kc, report)
         if km is None:
             report.alive_after = False
             report.orphan_confirmed_absent = True
             return report
 
-        shutdown = getattr(km, "shutdown_kernel", None)
-        if callable(shutdown):
-            try:
-                cls._invoke_cleanup(shutdown, now=True)
-                report.shutdown_succeeded = True
-            except BaseException as exc:  # noqa: BLE001 - cleanup must continue.
-                report.shutdown_succeeded = False
-                report.errors.append(f"shutdown_kernel: {exc}")
-        else:
-            report.shutdown_succeeded = False
-            report.errors.append("shutdown_kernel: unavailable")
-
-        cleanup_resources = getattr(km, "cleanup_resources", None)
-        if callable(cleanup_resources):
-            try:
-                cls._invoke_cleanup(cleanup_resources, restart=False)
-                report.resources_cleaned = True
-            except BaseException as exc:  # noqa: BLE001 - fallback kill still runs.
-                report.resources_cleaned = False
-                report.errors.append(f"cleanup_resources: {exc}")
+        cls._request_kernel_shutdown(km, report)
+        cleanup_resources = cls._request_resource_cleanup(km, report)
 
         alive = cls._kernel_alive(km, report=report, stage="post_shutdown")
         report.alive_after = alive
@@ -390,11 +515,7 @@ class JupyterKernelManager:
         killed = cls._force_kill_kernel(km, report)
         if killed:
             if callable(cleanup_resources) and report.resources_cleaned is False:
-                try:
-                    cls._invoke_cleanup(cleanup_resources, restart=False)
-                    report.resources_cleaned = True
-                except BaseException as exc:  # noqa: BLE001 - termination is confirmed.
-                    report.errors.append(f"cleanup_resources_after_kill: {exc}")
+                cls._request_resource_cleanup(km, report, after_kill=True)
             report.orphan_confirmed_absent = True
             return report
 
@@ -409,27 +530,37 @@ class JupyterKernelManager:
         self._orphan_kc = kc
         self._last_cleanup_report = report
         self._isolate_instance(self)
-        _log_manager_audit(
+        log_sensitive_audit(
+            logger,
             "jupyter.kernel.cleanup",
             status="quarantined",
             error_type="KernelCleanupIncomplete",
             level=logging.ERROR,
         )
 
-    async def _check_idleness_loop(self):
-        """后台任务：检查空闲时间并自动关闭"""
+    async def _shutdown_if_expired(self) -> bool:
+        """在没有执行占用时重新确认空闲状态，并按需关闭内核。"""
+
+        async with self._execute_lock:
+            if not self.is_running:
+                return True
+            idle_time = time.monotonic() - self._last_activity
+            if idle_time <= AUTO_SHUTDOWN_TIMEOUT:
+                return False
+            log_sensitive_audit(
+                logger,
+                "jupyter.kernel.idle_shutdown",
+                status="started",
+            )
+            await asyncio.to_thread(self.shutdown_kernel, False)
+            return True
+
+    async def _check_idleness_loop(self) -> None:
+        """后台任务：检查空闲时间并自动关闭。"""
+
         while self.is_running:
             await asyncio.sleep(CHECK_INTERVAL)
-            if not self.is_running:
-                break
-
-            idle_time = time.time() - self._last_activity
-            if idle_time > AUTO_SHUTDOWN_TIMEOUT:
-                _log_manager_audit(
-                    "jupyter.kernel.idle_shutdown",
-                    status="started",
-                )
-                await asyncio.to_thread(self.shutdown_kernel, False)
+            if await self._shutdown_if_expired():
                 break
 
     def ensure_idle_monitor(self) -> None:
@@ -439,17 +570,17 @@ class JupyterKernelManager:
 
     def get_status(self) -> dict[str, Any]:
         """获取内核状态"""
-        if not self.is_running:
-            return {"running": False, "message": "内核未启动"}
-
-        uptime = time.time() - self._started_at if self._started_at else 0
-        return {
-            "running": True,
-            "kernel_name": self._km.kernel_name,
-            "uptime": uptime,
-            "execution_count": self._execution_count,
-            "message": f"内核运行中 (已执行 {self._execution_count} 次, 运行 {uptime:.0f}s)",
-        }
+        with self._lifecycle_lock:
+            if not self.is_running or self._km is None:
+                return {"running": False, "message": "内核未启动"}
+            uptime = time.monotonic() - self._started_at if self._started_at else 0.0
+            return {
+                "running": True,
+                "kernel_name": str(getattr(self._km, "kernel_name", "unknown")),
+                "uptime": uptime,
+                "execution_count": self._execution_count,
+                "message": f"内核运行中 (已执行 {self._execution_count} 次, 运行 {uptime:.0f}s)",
+            }
 
     def start_kernel(self, kernel_name: str = "python3") -> bool:
         """启动内核"""
@@ -458,7 +589,8 @@ class JupyterKernelManager:
                 raise RuntimeError("Jupyter manager 已隔离，必须重新获取实例")
 
             lazy_import_jupyter()
-            if not JUPYTER_AVAILABLE:
+            factory = KernelManager
+            if not JUPYTER_AVAILABLE or not callable(factory):
                 raise ImportError(f"Jupyter 依赖未加载: {IMPORT_ERROR}")
             if self.is_running:
                 return True
@@ -482,11 +614,12 @@ class JupyterKernelManager:
             km: Any | None = None
             kc: Any | None = None
             try:
-                km = KernelManager(kernel_name=kernel_name)
+                km = factory(kernel_name=kernel_name)
                 km.start_kernel()
                 kc = km.client()
                 kc.start_channels()
                 kc.wait_for_ready(timeout=30)
+                self._initialize_matplotlib(kc)
             except Exception as exc:
                 report = self._cleanup_kernel_resources(
                     km,
@@ -502,19 +635,20 @@ class JupyterKernelManager:
                     self._mark_broken(km, kc, report)
                 raise RuntimeError(f"启动内核失败: {exc}; cleanup: {report.summary()}") from exc
 
-            # Publish the manager/client pair only after the ready handshake.
+            # ready 与内联后端初始化全部成功后，才发布可复用实例。
             self._km = km
             self._kc = kc
             self._orphan_km = None
             self._orphan_kc = None
-            self._started_at = time.time()
+            self._started_at = time.monotonic()
             self._execution_count = 0
-            self._last_activity = time.time()
-            self._init_matplotlib()
+            self._last_activity = time.monotonic()
             return True
 
-    def _init_matplotlib(self) -> None:
-        """初始化 matplotlib 内联后端"""
+    @staticmethod
+    def _initialize_matplotlib(kc: Any) -> None:
+        """在发布内核前等待可选 matplotlib 初始化消息完整收敛。"""
+
         init_code = """
 import warnings
 warnings.filterwarnings('ignore')
@@ -530,31 +664,28 @@ try:
         ipython = get_ipython()
         if ipython:
             ipython.run_line_magic('matplotlib', 'inline')
-    except:
+    except Exception:
         pass
 except ImportError:
     pass
 """
-        try:
-            msg_id = self._kc.execute(init_code)
-            deadline = time.time() + 1.0
-            while time.time() < deadline:
-                try:
-                    msg = self._kc.get_iopub_msg(timeout=0.2)
-                except TimeoutError:
-                    continue
-                except Exception:
-                    break
-                if msg.get("msg_type") != "status":
-                    continue
-                content = msg.get("content", {})
-                parent_id = msg.get("parent_header", {}).get("msg_id")
-                if content.get("execution_state") == "idle" and parent_id == msg_id:
-                    break
-        except Exception:
-            pass
+        msg_id = str(kc.execute(init_code))
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            try:
+                message = kc.get_iopub_msg(timeout=0.2)
+            except (TimeoutError, QueueEmpty):
+                continue
+            if JupyterKernelManager._is_matching_idle(message, msg_id):
+                return
+        raise TimeoutError("Jupyter kernel initialization did not become idle")
 
-    def shutdown_kernel(self, cancel_idle_task: bool = True) -> None:
+    def shutdown_kernel(
+        self,
+        cancel_idle_task: bool = True,
+        *,
+        evict_instance: bool = True,
+    ) -> None:
         """关闭内核"""
         with self._lifecycle_lock:
             if cancel_idle_task and self._shutdown_task and not self._shutdown_task.done():
@@ -564,6 +695,7 @@ except ImportError:
                 else:
                     task.cancel()
             self._shutdown_task = None
+            self._loop = None
 
             km = self._km if self._km is not None else self._orphan_km
             kc = self._kc if self._kc is not None else self._orphan_kc
@@ -576,8 +708,11 @@ except ImportError:
             if report.orphan_confirmed_absent:
                 self._orphan_km = None
                 self._orphan_kc = None
-                with self._instances_lock:
-                    self._quarantined_instances.discard(self)
+                if evict_instance:
+                    self._forget_instance(self)
+                else:
+                    with self._instances_lock:
+                        self._quarantined_instances.discard(self)
                 return
             self._mark_broken(km, kc, report)
             raise RuntimeError(f"无法确认 Jupyter kernel 已退出: {report.summary()}")
@@ -587,24 +722,43 @@ except ImportError:
         with self._lifecycle_lock:
             kernel_name = str(getattr(self._km, "kernel_name", "python3") or "python3")
             if self._km is not None or self._orphan_km is not None:
-                self.shutdown_kernel(cancel_idle_task=False)
+                self.shutdown_kernel(cancel_idle_task=False, evict_instance=False)
             self.start_kernel(kernel_name)
 
     def interrupt_kernel(self) -> None:
         """中断当前执行中的代码，避免超时后继续占用内核状态。"""
         with self._lifecycle_lock:
-            if self._km and self.is_running:
+            if self._km is not None and self.is_running:
                 self._km.interrupt_kernel()
 
     @staticmethod
     def _is_matching_idle(message: Any, msg_id: str | None) -> bool:
+        if not msg_id or not isinstance(message, dict) or message.get("msg_type") != "status":
+            return False
+        content = message.get("content")
+        parent = message.get("parent_header")
         return bool(
-            msg_id
-            and isinstance(message, dict)
-            and message.get("msg_type") == "status"
-            and message.get("content", {}).get("execution_state") == "idle"
-            and message.get("parent_header", {}).get("msg_id") == msg_id
+            isinstance(content, dict)
+            and isinstance(parent, dict)
+            and content.get("execution_state") == "idle"
+            and parent.get("msg_id") == msg_id
         )
+
+    def _require_client(self) -> Any:
+        client = self._kc
+        if client is None:
+            raise RuntimeError("Jupyter kernel client is unavailable")
+        return client
+
+    @staticmethod
+    def _normalize_timeout(value: object) -> float:
+        try:
+            timeout = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError, OverflowError):
+            return float(DEFAULT_TIMEOUT)
+        if not math.isfinite(timeout) or timeout <= 0:
+            return float(DEFAULT_TIMEOUT)
+        return min(timeout, float(MAX_EXECUTION_TIMEOUT))
 
     @staticmethod
     async def _wait_task_despite_cancellation(task: asyncio.Task[Any]) -> Any:
@@ -615,89 +769,349 @@ except ImportError:
                 continue
         return task.result()
 
+    @staticmethod
+    async def _run_tracked_thread(
+        state: _ExecutionState,
+        kind: str,
+        callback: Any,
+        *args: Any,
+    ) -> Any:
+        """在线程调用完成前保留任务引用，供取消清理路径接管。"""
+
+        task = asyncio.create_task(
+            asyncio.to_thread(callback, *args),
+            name=f"jupyter-io-{kind}",
+        )
+        state.pending_task = task
+        state.pending_kind = kind
+        try:
+            value = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            state.pending_task = None
+            state.pending_kind = None
+            raise
+        state.pending_task = None
+        state.pending_kind = None
+        return value
+
+    async def _await_cancel_pending(
+        self,
+        task: asyncio.Task[Any] | None,
+        audit_id: str,
+    ) -> tuple[Any, bool]:
+        if task is None:
+            return None, False
+        try:
+            return await self._wait_task_despite_cancellation(task), False
+        except Exception as exc:
+            log_sensitive_audit(
+                logger,
+                "jupyter.cancel.pending_operation",
+                status="error",
+                job_id=audit_id,
+                exc=exc,
+            )
+            return None, True
+
+    async def _shutdown_new_kernel_after_cancel(
+        self,
+        kernel_was_running: bool,
+        audit_id: str,
+        operation: str,
+    ) -> None:
+        if kernel_was_running or not self.is_running:
+            return
+        try:
+            await asyncio.to_thread(self.shutdown_kernel)
+        except Exception as exc:
+            log_sensitive_audit(
+                logger,
+                operation,
+                status="quarantined",
+                job_id=audit_id,
+                exc=exc,
+            )
+
     async def _cancel_execution_cleanup(
         self,
         *,
-        pending_task: asyncio.Task[Any] | None,
-        pending_kind: str | None,
-        msg_id: str | None,
-        recovery_task: asyncio.Task[Any] | None,
-        kernel_was_running: bool,
+        state: _ExecutionState,
         audit_id: str,
     ) -> None:
-        if recovery_task is not None:
+        if state.recovery_task is not None:
             try:
-                await self._wait_task_despite_cancellation(recovery_task)
+                await self._wait_task_despite_cancellation(state.recovery_task)
             except Exception as exc:
-                _log_manager_audit(
+                log_sensitive_audit(
+                    logger,
                     "jupyter.cancel.recovery",
                     status="error",
-                    audit_id=audit_id,
+                    job_id=audit_id,
                     exc=exc,
                 )
             return
 
-        pending_value: Any = None
-        pending_failed = False
-        if pending_task is not None:
-            try:
-                pending_value = await self._wait_task_despite_cancellation(pending_task)
-            except Exception as exc:
-                pending_failed = True
-                _log_manager_audit(
-                    "jupyter.cancel.pending_operation",
-                    status="error",
-                    audit_id=audit_id,
-                    exc=exc,
-                )
-
-        if pending_kind == "start":
-            if not kernel_was_running and self.is_running:
-                try:
-                    await asyncio.to_thread(self.shutdown_kernel)
-                except Exception as exc:
-                    _log_manager_audit(
-                        "jupyter.cancel.new_kernel_shutdown",
-                        status="quarantined",
-                        audit_id=audit_id,
-                        exc=exc,
-                    )
-            return
-        if pending_kind == "submit" and not pending_failed:
-            msg_id = str(pending_value)
-        if (
-            pending_kind == "read"
-            and not pending_failed
-            and self._is_matching_idle(
-                pending_value,
-                msg_id,
+        pending_value, pending_failed = await self._await_cancel_pending(
+            state.pending_task,
+            audit_id,
+        )
+        if state.pending_kind == "start":
+            await self._shutdown_new_kernel_after_cancel(
+                state.kernel_was_running,
+                audit_id,
+                "jupyter.cancel.new_kernel_shutdown",
             )
+            return
+        if state.pending_kind == "submit" and not pending_failed:
+            state.msg_id = str(pending_value)
+        if (
+            state.pending_kind == "read"
+            and not pending_failed
+            and self._is_matching_idle(pending_value, state.msg_id)
         ):
             return
-        if not msg_id:
-            if not kernel_was_running and self.is_running:
-                try:
-                    await asyncio.to_thread(self.shutdown_kernel)
-                except Exception as exc:
-                    _log_manager_audit(
-                        "jupyter.cancel.new_kernel_cleanup",
-                        status="quarantined",
-                        audit_id=audit_id,
-                        exc=exc,
-                    )
+        if not state.msg_id:
+            await self._shutdown_new_kernel_after_cancel(
+                state.kernel_was_running,
+                audit_id,
+                "jupyter.cancel.new_kernel_cleanup",
+            )
             return
 
         try:
-            if pending_kind != "interrupt":
-                await asyncio.to_thread(self.interrupt_kernel)
-            await self._recover_after_interrupt(msg_id, audit_id=audit_id)
+            await self._interrupt_and_recover(state.msg_id, audit_id)
         except Exception as exc:
-            _log_manager_audit(
+            log_sensitive_audit(
+                logger,
                 "jupyter.cancel.cleanup",
                 status="error",
-                audit_id=audit_id,
+                job_id=audit_id,
                 exc=exc,
             )
+
+    @staticmethod
+    def _set_output_limit(result: ExecutionResult, message: str) -> None:
+        result.error = message
+        result.success = False
+
+    def _append_image(
+        self,
+        result: ExecutionResult,
+        encoded_image: object,
+        total_image_bytes: int,
+    ) -> tuple[int, bool]:
+        if len(result.images) >= MAX_IMAGES:
+            return total_image_bytes, False
+        image = self._decode_image(encoded_image)
+        if image is None:
+            return total_image_bytes, False
+        if total_image_bytes + len(image) > MAX_TOTAL_IMAGE_BYTES:
+            self._set_output_limit(
+                result,
+                f"图片输出超过 {MAX_TOTAL_IMAGE_BYTES} 字节安全上限，已中断内核",
+            )
+            return total_image_bytes, True
+        result.images.append(image)
+        return total_image_bytes + len(image), False
+
+    def _process_data_message(
+        self,
+        data: object,
+        result: ExecutionResult,
+        budget: _OutputBudget,
+        total_image_bytes: int,
+        *,
+        include_text: bool,
+    ) -> tuple[int, bool]:
+        if not isinstance(data, dict):
+            return total_image_bytes, False
+        total_image_bytes, exceeded = self._append_image(
+            result,
+            data.get("image/png"),
+            total_image_bytes,
+        )
+        if exceeded or not include_text or "text/plain" not in data:
+            return total_image_bytes, exceeded
+        separator = "\n" if result.result else ""
+        result.result, exceeded = budget.append(
+            result.result + separator,
+            data.get("text/plain"),
+        )
+        return total_image_bytes, exceeded
+
+    @staticmethod
+    def _matching_message_content(
+        message: object,
+        msg_id: str,
+    ) -> tuple[object, dict[str, Any]] | None:
+        if not isinstance(message, dict):
+            return None
+        parent = message.get("parent_header")
+        content = message.get("content")
+        if not isinstance(parent, dict) or parent.get("msg_id") != msg_id:
+            return None
+        if not isinstance(content, dict):
+            return None
+        return message.get("msg_type"), content
+
+    @staticmethod
+    def _process_stream_message(
+        content: dict[str, Any],
+        result: ExecutionResult,
+        budget: _OutputBudget,
+    ) -> bool:
+        name = content.get("name")
+        if name == "stdout":
+            result.stdout, exceeded = budget.append(result.stdout, content.get("text"))
+            return exceeded
+        if name == "stderr":
+            result.stderr, exceeded = budget.append(result.stderr, content.get("text"))
+            return exceeded
+        return False
+
+    @staticmethod
+    def _process_error_message(
+        content: dict[str, Any],
+        result: ExecutionResult,
+        budget: _OutputBudget,
+    ) -> bool:
+        traceback = content.get("traceback")
+        lines = traceback if isinstance(traceback, list) else []
+        result.error, exceeded = budget.append("", "\n".join(map(str, lines)))
+        result.success = False
+        return exceeded
+
+    def _process_iopub_message(
+        self,
+        message: object,
+        msg_id: str,
+        result: ExecutionResult,
+        budget: _OutputBudget,
+        total_image_bytes: int,
+    ) -> tuple[str, int]:
+        """处理一条属于当前执行的 IOPub 消息，并返回下一步动作。"""
+
+        payload = self._matching_message_content(message, msg_id)
+        if payload is None:
+            return "continue", total_image_bytes
+        msg_type, content = payload
+        exceeded = False
+        if msg_type == "stream":
+            exceeded = self._process_stream_message(content, result, budget)
+        elif msg_type in {"execute_result", "display_data"}:
+            total_image_bytes, exceeded = self._process_data_message(
+                content.get("data"),
+                result,
+                budget,
+                total_image_bytes,
+                include_text=msg_type == "execute_result",
+            )
+        elif msg_type == "error":
+            exceeded = self._process_error_message(content, result, budget)
+        elif msg_type == "status" and content.get("execution_state") == "idle":
+            return "idle", total_image_bytes
+
+        if exceeded:
+            self._set_output_limit(
+                result,
+                f"输出超过 {MAX_OUTPUT_BYTES} 字节安全上限，已中断内核",
+            )
+            return "limit", total_image_bytes
+        return "continue", total_image_bytes
+
+    async def _interrupt_and_recover(self, msg_id: str, audit_id: str) -> str:
+        try:
+            await asyncio.to_thread(self.interrupt_kernel)
+        except Exception as exc:
+            log_sensitive_audit(
+                logger,
+                "jupyter.interrupt",
+                status="error",
+                job_id=audit_id,
+                exc=exc,
+            )
+        return await self._recover_after_interrupt(msg_id, audit_id=audit_id)
+
+    async def _run_recovery(self, state: _ExecutionState, audit_id: str) -> None:
+        if state.msg_id is None:
+            raise RuntimeError("Jupyter execution message id is unavailable")
+        task = asyncio.create_task(
+            self._interrupt_and_recover(state.msg_id, audit_id),
+            name="jupyter-interrupt-recovery",
+        )
+        state.recovery_task = task
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            state.recovery_task = None
+            raise
+        state.recovery_task = None
+
+    async def _contain_execution_failure(
+        self,
+        state: _ExecutionState,
+        audit_id: str,
+    ) -> None:
+        """提交状态不确定时恢复已知执行；没有消息 ID 时直接关闭内核。"""
+
+        try:
+            if state.msg_id is not None:
+                await self._run_recovery(state, audit_id)
+            elif self.is_running:
+                await asyncio.to_thread(self.shutdown_kernel)
+        except Exception as exc:
+            log_sensitive_audit(
+                logger,
+                "jupyter.execute.containment",
+                status="quarantined",
+                job_id=audit_id,
+                exc=exc,
+            )
+
+    async def _collect_execution_messages(
+        self,
+        state: _ExecutionState,
+        client: Any,
+        result: ExecutionResult,
+        budget: _OutputBudget,
+        timeout: float,
+        started_at: float,
+        audit_id: str,
+    ) -> None:
+        total_image_bytes = 0
+        deadline = started_at + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                result.error = f"执行超时 ({timeout}s)"
+                result.success = False
+                await self._run_recovery(state, audit_id)
+                return
+            try:
+                message = await self._run_tracked_thread(
+                    state,
+                    "read",
+                    client.get_iopub_msg,
+                    min(remaining, 0.25),
+                )
+            except (TimeoutError, QueueEmpty):
+                continue
+            action, total_image_bytes = self._process_iopub_message(
+                message,
+                str(state.msg_id),
+                result,
+                budget,
+                total_image_bytes,
+            )
+            if action == "continue":
+                continue
+            if action == "limit":
+                await self._run_recovery(state, audit_id)
+            return
 
     async def execute(
         self,
@@ -708,171 +1122,45 @@ except ImportError:
     ) -> ExecutionResult:
         """执行代码，并在外部取消返回前收敛底层 kernel 工作。"""
         async with self._execute_lock:
-            audit_id = _safe_audit_id(audit_id)
+            timeout = self._normalize_timeout(timeout)
+            audit_id = safe_audit_id(audit_id)
             if audit_id == "-":
                 audit_id = uuid.uuid4().hex
-            kernel_was_running = self.is_running
-            pending_task: asyncio.Task[Any] | None = None
-            pending_kind: str | None = None
-            recovery_task: asyncio.Task[Any] | None = None
-            msg_id: str | None = None
+            state = _ExecutionState(kernel_was_running=self.is_running)
             result = ExecutionResult()
-            start_time = time.time()
-            deadline = start_time + timeout
-            image_count = 0
-            text_bytes = 0
-            execution_dir = self.figures_dir / uuid.uuid4().hex
-
-            def append_text(current: str, value: Any) -> tuple[str, bool]:
-                nonlocal text_bytes
-                encoded = str(value or "").encode("utf-8", errors="replace")
-                remaining = MAX_OUTPUT_BYTES - text_bytes
-                if remaining <= 0:
-                    return current, True
-                kept = encoded[:remaining].decode("utf-8", errors="ignore")
-                text_bytes += len(kept.encode("utf-8"))
-                return current + kept, len(encoded) > remaining
-
-            async def interrupt_and_recover() -> None:
-                nonlocal pending_task, pending_kind, recovery_task
-                pending_kind = "interrupt"
-                pending_task = asyncio.create_task(
-                    asyncio.to_thread(self.interrupt_kernel),
-                    name="jupyter-io-interrupt",
-                )
-                await asyncio.shield(pending_task)
-                pending_task = None
-                pending_kind = None
-                recovery_task = asyncio.create_task(
-                    self._recover_after_interrupt(str(msg_id), audit_id=audit_id),
-                    name="jupyter-cancel-recovery",
-                )
-                await asyncio.shield(recovery_task)
-                recovery_task = None
+            budget = _OutputBudget()
+            started_at = time.monotonic()
 
             try:
                 if not self.is_running:
-                    pending_kind = "start"
-                    pending_task = asyncio.create_task(
-                        asyncio.to_thread(self.start_kernel),
-                        name="jupyter-io-start",
-                    )
-                    await asyncio.shield(pending_task)
-                    pending_task = None
-                    pending_kind = None
-
-                self._last_activity = time.time()
+                    await self._run_tracked_thread(state, "start", self.start_kernel)
+                self._last_activity = time.monotonic()
                 self.ensure_idle_monitor()
-                start_time = time.time()
-                deadline = start_time + timeout
-
-                pending_kind = "submit"
-                pending_task = asyncio.create_task(
-                    asyncio.to_thread(self._kc.execute, code),
-                    name="jupyter-io-submit",
+                started_at = time.monotonic()
+                client = self._require_client()
+                submitted_id = await self._run_tracked_thread(
+                    state,
+                    "submit",
+                    client.execute,
+                    code,
                 )
-                msg_id = str(await asyncio.shield(pending_task))
-                pending_task = None
-                pending_kind = None
-
-                while True:
-                    remaining = deadline - time.time()
-                    if remaining <= 0:
-                        result.error = f"执行超时 ({timeout}s)"
-                        result.success = False
-                        await interrupt_and_recover()
-                        break
-
-                    pending_kind = "read"
-                    pending_task = asyncio.create_task(
-                        asyncio.to_thread(
-                            self._kc.get_iopub_msg,
-                            min(remaining, 0.25),
-                        ),
-                        name="jupyter-io-read",
-                    )
-                    try:
-                        msg = await asyncio.shield(pending_task)
-                    except TimeoutError:
-                        pending_task = None
-                        pending_kind = None
-                        continue
-                    pending_task = None
-                    pending_kind = None
-
-                    parent_id = msg.get("parent_header", {}).get("msg_id")
-                    if parent_id != msg_id:
-                        continue
-
-                    msg_type = msg["msg_type"]
-                    content = msg.get("content", {})
-
-                    if msg_type == "stream":
-                        if content.get("name") == "stdout":
-                            result.stdout, exceeded = append_text(
-                                result.stdout,
-                                content.get("text", ""),
-                            )
-                        elif content.get("name") == "stderr":
-                            result.stderr, exceeded = append_text(
-                                result.stderr,
-                                content.get("text", ""),
-                            )
-                        else:
-                            exceeded = False
-                        if exceeded:
-                            result.error = f"输出超过 {MAX_OUTPUT_BYTES} 字节安全上限，已中断内核"
-                            result.success = False
-                            await interrupt_and_recover()
-                            break
-
-                    elif msg_type == "execute_result":
-                        data = content.get("data", {})
-                        if "image/png" in data and image_count < MAX_IMAGES:
-                            img_path = self._save_image(
-                                data["image/png"], image_count, execution_dir
-                            )
-                            if img_path:
-                                result.images.append(img_path)
-                                image_count += 1
-                        if "text/plain" in data:
-                            result.result, exceeded = append_text("", data["text/plain"])
-                            if exceeded:
-                                result.error = (
-                                    f"输出超过 {MAX_OUTPUT_BYTES} 字节安全上限，已中断内核"
-                                )
-                                result.success = False
-                                await interrupt_and_recover()
-                                break
-
-                    elif msg_type == "display_data":
-                        data = content.get("data", {})
-                        if "image/png" in data and image_count < MAX_IMAGES:
-                            img_path = self._save_image(
-                                data["image/png"], image_count, execution_dir
-                            )
-                            if img_path:
-                                result.images.append(img_path)
-                                image_count += 1
-
-                    elif msg_type == "error":
-                        traceback = content.get("traceback", [])
-                        cleaned = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in traceback]
-                        result.error, _exceeded = append_text("", "\n".join(cleaned))
-                        result.success = False
-
-                    elif msg_type == "status" and content.get("execution_state") == "idle":
-                        break
-
+                if not isinstance(submitted_id, str) or not submitted_id:
+                    raise RuntimeError("Jupyter kernel returned an invalid message id")
+                state.msg_id = submitted_id
+                await self._collect_execution_messages(
+                    state,
+                    client,
+                    result,
+                    budget,
+                    timeout,
+                    started_at,
+                    audit_id,
+                )
                 self._execution_count += 1
             except asyncio.CancelledError:
                 cleanup_task = asyncio.create_task(
                     self._cancel_execution_cleanup(
-                        pending_task=pending_task,
-                        pending_kind=pending_kind,
-                        msg_id=msg_id,
-                        recovery_task=recovery_task,
-                        kernel_was_running=kernel_was_running,
+                        state=state,
                         audit_id=audit_id,
                     ),
                     name="jupyter-cancel-recovery",
@@ -885,26 +1173,30 @@ except ImportError:
                 try:
                     cleanup_task.result()
                 except Exception as exc:
-                    _log_manager_audit(
+                    log_sensitive_audit(
+                        logger,
                         "jupyter.cancel.cleanup_task",
                         status="error",
-                        audit_id=audit_id,
+                        job_id=audit_id,
                         exc=exc,
                     )
-                self._last_activity = time.time()
+                self._last_activity = time.monotonic()
                 raise
             except Exception as exc:
-                _log_manager_audit(
+                await self._contain_execution_failure(state, audit_id)
+                log_sensitive_audit(
+                    logger,
                     "jupyter.execute",
                     status="error",
-                    audit_id=audit_id,
+                    job_id=audit_id,
+                    payload=code,
                     exc=exc,
                 )
-                result.error = f"执行异常: {exc}"
+                result.error = "执行失败，请稍后重试"
                 result.success = False
 
-            self._last_activity = time.time()
-            result.execution_time = time.time() - start_time
+            self._last_activity = time.monotonic()
+            result.execution_time = time.monotonic() - started_at
             return result
 
     async def _recover_after_interrupt(
@@ -913,61 +1205,50 @@ except ImportError:
         *,
         audit_id: str | None = None,
     ) -> str:
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
             try:
-                msg = await asyncio.to_thread(self._kc.get_iopub_msg, 0.2)
-            except TimeoutError:
+                msg = await asyncio.to_thread(self._require_client().get_iopub_msg, 0.2)
+            except (TimeoutError, QueueEmpty):
                 continue
             except Exception:
                 break
-            if (
-                msg.get("msg_type") == "status"
-                and msg.get("content", {}).get("execution_state") == "idle"
-                and msg.get("parent_header", {}).get("msg_id") == msg_id
-            ):
+            if self._is_matching_idle(msg, msg_id):
                 return "idle"
         try:
             await asyncio.to_thread(self.restart_kernel)
             return "restarted"
         except Exception as exc:
-            _log_manager_audit(
+            log_sensitive_audit(
+                logger,
                 "jupyter.interrupt.restart",
                 status="error",
-                audit_id=audit_id,
+                job_id=audit_id,
                 exc=exc,
             )
             try:
                 await asyncio.to_thread(self.shutdown_kernel)
                 return "shutdown"
-            except Exception as exc:
-                _log_manager_audit(
+            except Exception as shutdown_exc:
+                log_sensitive_audit(
+                    logger,
                     "jupyter.interrupt.shutdown",
                     status="quarantined",
-                    audit_id=audit_id,
-                    exc=exc,
+                    job_id=audit_id,
+                    exc=shutdown_exc,
                 )
                 return "quarantined"
 
-    def _save_image(self, base64_data: str, index: int, execution_dir: Path) -> Path | None:
-        """保存 base64 图片到文件"""
+    @staticmethod
+    def _decode_image(base64_data: object) -> bytes | None:
+        """在内存中严格解码一个有界 PNG。"""
+
         try:
+            if type(base64_data) is not str:
+                return None
             if len(base64_data) > ((MAX_IMAGE_BYTES + 2) // 3) * 4:
                 return None
             image_data = base64.b64decode(base64_data, validate=True)
-            if len(image_data) > MAX_IMAGE_BYTES:
-                return None
-            if len(image_data) < 24 or image_data[:8] != b"\x89PNG\r\n\x1a\n":
-                return None
-            width, height = struct.unpack(">II", image_data[16:24])
-            if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
-                return None
-            ensure_dir(execution_dir)
-            filename = f"output_{index}.png"
-            filepath = execution_dir / filename
-            temp_path = execution_dir / f".{filename}.tmp"
-            temp_path.write_bytes(image_data)
-            temp_path.replace(filepath)
-            return filepath
-        except Exception:
+            return image_data if validate_png_bytes(image_data) else None
+        except (ValueError, binascii.Error):
             return None

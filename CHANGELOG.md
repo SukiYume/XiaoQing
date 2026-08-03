@@ -6,10 +6,60 @@
 
 ## 未发布
 
+### 全插件命令 WS 联调、Pendo 示例修复与文档同步
+
+- 新增统一 `bash scripts/run_full_uat.sh` 上线验收入口：隔离插件数据、真实启动/优雅停机、HTTP/WS 命令矩阵、动态业务场景、Core 压测及 CI 门禁统一产出可续查报告；外部依赖和付费聊天质量显式选择，插件/命令/用例类型可定点复测。
+- UAT 与 Windows 监控器只调用当前 `PATH` 中的 `python`；项目不识别、激活或固定任何 Conda/venv 名称，也不维护 Python 小版本卡口。
+- 修复 UAT Bash 语法回归依赖系统默认编码的问题：测试中的文本子进程现在显式使用 UTF-8 和 `errors="replace"`，Git Bash 直接运行 `pytest -n 2` 不再被跨平台编码门禁拦截。
+- 通过 inbound WebSocket（`/ws`）对 core 与全部 28 个命令插件做了广泛联调：370 个命令节点、404 条 `invalid_examples`（参数/权限校验）与全部 `examples`（含外部 API、LLM、TTS、有状态与管理会话命令）全部实测，命令路由、参数校验、权限门控、会话延续与后台推送均正确，全流程 0 崩溃；外部依赖不可达（如 CHIME）与凭据过期（如 signin）均优雅降级。
+- 修复 Pendo 自带示例与解析器不一致：`/pendo todo add` 示例中的 `plan:tomorrow`、`/pendo todo edit` 示例中的 `deadline:tomorrow 18:00` 会被解析器拒绝（快捷 token 只接受 `plan:YYYY-MM-DD` 与 `deadline:YYYY-MM-DDTHH:MM`）。改为 `plan:2026-08-01` 与 `deadline:2026-08-01T18:00`，并实测通过。
+- 同步文档与当前 Dispatcher 行为：将 `docs/02/04/05/06/07/08` 与 README 中过时的 “URL 短路在最前、静音不影响 URL” 描述统一改为固定的 A–G 流程（处理门控 → URL → 只喊名字 → 会话 → 命令 → 未知命令 → 闲聊回落），URL 解析位于门控与静音之后、静音时跳过，命令解析先于观察且命令/URL/会话/命令前缀输入不进入观察。
+- 更正 README 中不存在的 “Handler 链（`BotNameHandler`/`CommandHandler`/…）” 表述为真实的线性分发流程；补全 `docs/04` 核心模块表（新增 `ai`、`plugin_execution`、`delivery`、`safe_http`、`bounded_http`、`atomic_store`、`bounded_file_cache`、`durable_fanout`、`async_keyed_lock`、`auth`、`inbound_policy`、`lifecycle`、`public_errors`、`sensitive_audit`、`version` 等）；移除 `docs/00` 目录树中已删除的 `scripts/clean_pycache.sh` 引用并补入 `ai.py`/`plugin_execution.py`/`safe_http.py`。
+- 新增 “从零到运行：五步创建一个插件” 完整分步教程（`docs/03`，含子命令、`command_invocation` 消费、`data_dir` 持久化、加载与测试），并在 README 增加对应的精简五步教程与指引。
+- 验证：Git Bash `pytest -n 2` 收集 5915 项并以退出码 0 完成（5914 passed、1 skipped）；UAT runner 与编码门禁聚焦回归 8 passed，Ruff 与 `git diff --check` 通过；对修正后的 `plan:`/`deadline:` 快捷 token 和真实 WS 命令路径均已实测。
+
+> 说明：以下五条补记 2026-07-11~07-12 两个未标注提交（`"runtime v2"`、`"new bad file"`）及其后续工作树整理引入的改动。原提交信息未说明意图，条目中的“为什么”由代码与 diff 反推，与“全量代码审查整改闭环”不重复的部分单列如下。
+
+### 统一 AI/VLM 模型注册表与路由
+
+- 新增 `core/ai.py`，把原先分散在各插件里的 OpenAI 兼容请求合并为一条受控路径：公开连接信息放 `config.ai.providers`，可复用模型 profile 与模态放 `config.ai.models`，插件只在 `config.plugins.<plugin>.ai.routes` 声明有序模型链与调用预算，API Key 统一放 `secrets.ai.providers`。
+- `XiaoQingApp` 为每个插件构造绑定插件名的窄 `AIService`：调用方只提供 route 名、messages 和任务级参数，拿不到 provider 密钥，也无法改写命名空间；每次 `complete()`/`list_models()` 读取新的配置快照，热重载后新请求即时生效。
+- route 首个 profile 为主模型，先做有界重试，再只对网络/超时/限流/服务端/模型不可用等可恢复错误按序 fallback；认证与无效请求直接返回，整条链受 `total_timeout_seconds` 约束，管理员可用 `pinned_model` 只调用指定 profile。响应用 `AICompletionResult`（`content`/`response`/`profile`/`provider`/`model`/`finish_reason`/`attempts`，不含凭据）。
+- 同步 `docs/04/06` 的统一 AI/VLM 注册表说明。
+
+### 运行时版本解析（原 "runtime v2"）
+
+- 新增 `core/version.py`，从 `pyproject.toml` 或已安装 wheel 元数据解析运行时 `VERSION`（当前 `4.1.0`），不再在多处硬编码版本；`/health`、inbound server 等统一读取该值。
+
+### 崩溃安全的定时通知扇出、投递回执与有界文件缓存
+
+- 新增 `core/durable_fanout.py`：为定时通知按目标记录崩溃安全进度，进程中断重启后不会对同一目标重复或漏发。
+- 新增 `core/delivery.py`：提供进程内投递回执，支持“先确认送达再提交插件状态”（commit-after-ack），HTTP 响应/WS Action 写入失败会回滚已附加的回执。
+- 新增 `core/bounded_file_cache.py`：带 TTL、LRU、条目与字节上限的崩溃安全磁盘缓存，供插件复用而不必各自造轮子。
+
+### 打包、CI 与仓库行尾统一
+
+- 引入 `.gitattributes` 行尾策略：仓库文本统一以 LF 存储与检出（`* text=auto`，`.py/.toml/.json/.yml/.md` 等 `eol=lf`），仅 Windows `cmd/vbs` 保留 CRLF；本次提交会带来一次全仓行尾归一化（大体量 diff 主要来自于此，非逻辑改动）。
+- 精简 `Dockerfile` 与 `.dockerignore`，新增 `MANIFEST.in` 规范打包内容，新增 `.github/dependabot.yml`；精简 `tests.yml` 工作流。
+- 放弃按 Python 版本维护 lock 文件的做法：删除 `dependency-locks` 工作流与整个 `requirements/` 锁文件目录，仓库只维护根目录一份直接依赖清单 `requirements.txt`（由 pip 按当前 Python/平台解析）。
+
+### 补充清理（代码审查闭环之外）
+
+- 删除随上述提交引入或已失去用途的文件：`code_review.md` 与配套 `scripts/check_code_review.py`/`tests/test_code_review.py`、`docs/python-release.md`/`docs/container-security.md`、`coverage.json`、`deploy/runtime-paths.txt`，以及 `release/` 与 `scripts/verify_python_release.py`/`verify_docker_release.py`/`build_docker_context.py` 等发布脚本。
+- 清理插件内的过程文档与随统一 AI 迁移作废的客户端：各插件 `IMPROVEMENTS.md`/`MODULE_STRUCTURE.md`、`docs/plans/` 与 `docs/superpowers/specs/` 历史设计稿，以及 `plugins/pendo/services/llm_client.py`（AI 调用改走统一 `core/ai.py`）。`plugins/xiaoqing_chat/planning/planner.py` 的移除属于上文“全量代码审查整改闭环”中 PFC 阶段协调器重构的一部分。
+
+### 全量代码审查整改闭环
+
+- 完成 285 项历史代码审查整改：统一高权限边界、网络与输出预算、事务/幂等、隐私隔离、取消清理、发布制品和测试可信度门禁。
+- 删除 Sony 签到死实现、ADNMB 死模块、QingPet 非原子旧 API、手工 pytest runner 与已跟踪的 `coverage.json`；生成型 coverage 文件统一由 `.gitignore` 排除。
+- 将 Xiaoqing Chat 回复生成、PFC 和 Codex runner 拆成有类型的阶段协调器，并用 AST 回归门禁限制重新膨胀。
+- QingPet 群统计改为常数次聚合查询，明确 `users.coins` 为余额权威来源，并加入基于持久检查点与新增 `asset_ledger` 净变动的差异检测。
+- 同步插件开发/API/高级用法、Voice/Signin 示例、Pendo 依赖说明和真实 GitHub 项目链接。
+
 ### 远端同步脚本交付
 
-- 将 `sync_to_remote.sh`、固定根目录哨兵、运维说明和安全契约测试纳入版本化项目资产，干净 checkout 可直接预演同步。
-- 为 shell 脚本固定 LF，并在 Git 索引中保留 `sync_to_remote.sh` 的可执行位；脚本默认仍只执行 dry-run。
+- 将 `scripts/sync_to_remote.sh`、固定根目录哨兵、运维说明和安全契约测试纳入版本化项目资产，干净 checkout 可直接预演同步。
+- 为 shell 脚本固定 LF，并在 Git 索引中保留 `scripts/sync_to_remote.sh` 的可执行位；脚本默认仍只执行 dry-run。
 
 ### Pendo Web 细节优化与 Token 有效期延长
 
@@ -102,7 +152,7 @@
 ### 验证
 
 - 已执行 `git diff --check`。
-- 已执行 `conda activate normal; python -m pytest tests/plugins/test_codex.py tests/plugins/test_shell_plugin.py tests/plugins/test_pendo.py -q`，结果为 `180 passed`。
+- 已在维护者本地 Python 环境执行 `python -m pytest tests/plugins/test_codex.py tests/plugins/test_shell_plugin.py tests/plugins/test_pendo.py -q`，结果为 `180 passed`。
 
 ## 2026-05-08
 
@@ -147,7 +197,7 @@
 
 - 为 `plugins/pendo` 保留插件级 `README.md` 和 `ARCHITECTURE.md` 两个入口。README 面向日常使用和部署，ARCHITECTURE 面向维护者理解数据模型、命令、Web API、调度和导入导出。
 - 删除与 README 高度重复的 `plugins/pendo/Pendo个人时间与信息管理中枢.md`，避免同一个插件出现多份权威说明。
-- 调整 `plugins/pendo/pendo测试.md`，让它成为稳定的插件测试 prompt。内容聚焦完整测试目标、状态恢复、case 矩阵、报告写法和验证要求，避免写成历史更新记录。
+- 将 Pendo 的正式验证入口统一为仓库内自动化测试；本地黑盒测试说明和执行记录不再纳入版本控制。
 - 清理 Pendo test reports，只保留 final report、关键截图、迁移样例、完整测试脚本和有复盘价值的报告。中间过程文件和一次性结果文件已移出版本控制。
 
 ### xiaoqing_chat 文档与测试资料整理
@@ -443,7 +493,7 @@
 ### Pendo Web UI V3.0 合并
 
 - 合并 Pendo Web UI console，形成包含 dashboard、events、tasks、ledger、notes、diary、search、stats 和 settings 的 Web 页面套件。
-- 增加 PyJWT、FastAPI、uvicorn、passlib 等 Web UI 依赖。
+- 增加 PyJWT、FastAPI、uvicorn 等 Web UI 依赖。
 - 修复子路径 nginx 部署下的 API 前缀和相对路径问题，让 `/pendo` 子路径部署可用。
 - 加固 Pendo event reminders 和 edits，减少 Web UI 与聊天命令同时操作事件时的状态问题。
 

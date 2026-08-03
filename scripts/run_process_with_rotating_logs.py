@@ -4,6 +4,10 @@ The monitor uses this helper instead of asking ``Start-Process`` to redirect to
 live files.  On Windows an inherited redirection handle prevents a monitor
 from renaming the active file.  Here the thread that owns each file explicitly
 closes it before rotation and immediately reopens it afterwards.
+
+每条输出流只由一个泵线程读取并写入自己的日志，因此轮转不需要跨线程文件锁。日志
+写入一旦失败，泵线程仍要继续排空管道并通知主线程终止整棵子进程树，避免子进程因
+管道写满而卡死；返回前必须回收进程、管道和两个泵线程，不能遗留后台写入者。
 """
 
 from __future__ import annotations
@@ -158,6 +162,8 @@ def _pump_stream(
 
         try:
             while chunk := stream.read(_READ_SIZE):
+                # 日志已经失败时仍丢弃式排空管道，直到主线程完成进程树终止；
+                # 直接退出会让尚未收到终止信号的子进程阻塞在 stdout/stderr。
                 if logging_failed or log is None:
                     continue
                 try:
@@ -261,12 +267,7 @@ def _join_pump_threads(
             errors.append(cleanup_error)
     except Exception as exc:
         errors.append(exc)
-    for stream in (process.stdout, process.stderr):
-        if stream is not None:
-            try:
-                stream.close()
-            except Exception as exc:
-                errors.append(exc)
+    _close_process_pipes(process, errors)
     for thread in alive:
         thread.join(1.0)
     still_alive = [thread.name for thread in alive if thread.is_alive()]
@@ -369,6 +370,8 @@ def run_process(
 
         while True:
             if failed.wait(timeout=0.1):
+                # 从这里开始，管道异常属于主动停机的连带结果，不再覆盖最初的日志错误。
+                stopping.set()
                 return_code, cleanup_error = _terminate_process_tree(process)
                 if cleanup_error is not None:
                     errors.append(cleanup_error)

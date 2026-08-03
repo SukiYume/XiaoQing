@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 
 class GenerationLimitExceeded(RuntimeError):
-    """Raised when a generation request exceeds a configured hard boundary."""
+    """生成请求超过配置硬限制。"""
 
 
 @dataclass
@@ -19,6 +19,16 @@ class GenerationLimiter:
     _chat_inflight: dict[str, int] = field(default_factory=dict)
     _user_inflight: dict[str, int] = field(default_factory=dict)
     _user_calls: dict[str, deque[float]] = field(default_factory=dict)
+    max_tracked_users: int = 10_000
+    sweep_interval_seconds: float = 300.0
+    _last_sweep_at: float = 0.0
+
+    def _sweep_user_calls(self, cutoff: float) -> None:
+        for tracked_user, tracked_calls in tuple(self._user_calls.items()):
+            while tracked_calls and tracked_calls[0] < cutoff:
+                tracked_calls.popleft()
+            if not tracked_calls:
+                self._user_calls.pop(tracked_user, None)
 
     @asynccontextmanager
     async def admit(
@@ -34,6 +44,15 @@ class GenerationLimiter:
         now = time.time()
         cutoff = now - 86400.0
         async with self._lock:
+            if now - self._last_sweep_at >= max(0.0, self.sweep_interval_seconds) or len(
+                self._user_calls
+            ) >= max(1, self.max_tracked_users):
+                self._sweep_user_calls(cutoff)
+                self._last_sweep_at = now
+            if user_id not in self._user_calls and len(self._user_calls) >= max(
+                1, self.max_tracked_users
+            ):
+                raise GenerationLimitExceeded("daily_user_capacity")
             calls = self._user_calls.setdefault(user_id, deque())
             while calls and calls[0] < cutoff:
                 calls.popleft()

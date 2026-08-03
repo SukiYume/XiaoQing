@@ -1,117 +1,97 @@
-"""
-Minecraft 连接管理
+"""Minecraft 连接对象与并发安全的连接注册表。"""
 
-管理多个 MC 服务器连接。
-"""
+from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
-from typing import Any
+import logging
+from dataclasses import dataclass
+
+from core.interfaces import DeliveryTarget
+
+from .audit import audit_error_type
+from .log_monitor import LogMonitor
+from .rcon import RconClient
+
+logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(slots=True)
 class McConnection:
-    """单个 MC 服务器连接"""
+    """一个 QQ 投递目标当前使用的 Minecraft 连接。"""
 
     host: str
     port: int
-    password: str = field(repr=False)
-    log_file: str
-    target_type: str  # "group" 或 "private"
-    target_id: int  # group_id 或 user_id
-    rcon_client: Any = None
-    log_monitor: Any = None
+    target: DeliveryTarget
+    rcon_client: RconClient | None = None
+    log_monitor: LogMonitor | None = None
 
     async def cleanup(self) -> None:
-        if self.rcon_client and hasattr(self.rcon_client, "disconnect"):
-            await self.rcon_client.disconnect()
+        """幂等关闭 RCON；先摘除引用，避免并发清理重复使用旧客户端。"""
 
-    def connection_key(self) -> str:
-        """生成连接的唯一标识"""
-        return f"{self.target_type}_{self.target_id}"
+        client, self.rcon_client = self.rcon_client, None
+        if client is not None:
+            await client.disconnect()
 
 
 class ConnectionManager:
-    """管理所有 MC 服务器连接"""
+    """以 core 已验证的投递目标为键，原子发布和移除连接。"""
 
-    def __init__(self):
-        # key: "group_{group_id}" 或 "private_{user_id}"
-        self._connections: dict[str, McConnection] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._manager_lock = asyncio.Lock()
+    def __init__(self) -> None:
+        self._connections: dict[DeliveryTarget, McConnection] = {}
+        self._lock = asyncio.Lock()
 
-    def _lock_for(self, key: str) -> asyncio.Lock:
-        lock = self._locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[key] = lock
-        return lock
+    def get_connection(self, target: DeliveryTarget) -> McConnection | None:
+        """返回当前快照；所有写操作均在同一事件循环内原子发布。"""
 
-    def get_key(self, group_id: int | None, user_id: int | None) -> str:
-        """根据 group_id 或 user_id 生成 key"""
-        if group_id:
-            return f"group_{group_id}"
-        else:
-            return f"private_{user_id}"
-
-    def get_connection(
-        self, group_id: int | None, user_id: int | None
-    ) -> McConnection | None:
-        """获取当前 id 的连接"""
-        key = self.get_key(group_id, user_id)
-        return self._connections.get(key)
-
-    def has_connection(self, group_id: int | None, user_id: int | None) -> bool:
-        """检查是否有连接"""
-        key = self.get_key(group_id, user_id)
-        return key in self._connections
-
-    def add_connection(self, conn: McConnection) -> None:
-        """添加连接"""
-        key = conn.connection_key()
-        self._connections[key] = conn
+        return self._connections.get(target)
 
     async def replace_connection(self, conn: McConnection) -> McConnection | None:
-        """Atomically publish a connection and close the previously published client."""
-        key = conn.connection_key()
-        async with self._lock_for(key):
-            old = self._connections.get(key)
-            self._connections[key] = conn
-            if old is not None and old is not conn:
-                await old.cleanup()
-            return old
+        """先发布新连接，再尽力关闭同一目标的旧连接。"""
 
-    async def disconnect_connection(
-        self,
-        group_id: int | None,
-        user_id: int | None,
-    ) -> McConnection | None:
-        key = self.get_key(group_id, user_id)
-        async with self._lock_for(key):
-            conn = self._connections.pop(key, None)
-            if conn is not None:
-                await conn.cleanup()
-            return conn
+        async with self._lock:
+            old = self._connections.get(conn.target)
+            self._connections[conn.target] = conn
 
-    def remove_connection(
-        self, group_id: int | None, user_id: int | None
-    ) -> McConnection | None:
-        """移除并返回连接"""
-        key = self.get_key(group_id, user_id)
-        return self._connections.pop(key, None)
+        if old is not None and old is not conn:
+            await self._cleanup_safely(old, operation="replace")
+        return old
+
+    async def disconnect_connection(self, target: DeliveryTarget) -> McConnection | None:
+        """原子移除指定目标的连接，并在锁外关闭网络资源。"""
+
+        async with self._lock:
+            conn = self._connections.pop(target, None)
+        if conn is not None:
+            await self._cleanup_safely(conn, operation="disconnect")
+        return conn
 
     def all_connections(self) -> list[McConnection]:
-        """获取所有活跃连接"""
+        """返回活跃连接的稳定快照，避免调度期间遍历可变字典。"""
+
         return list(self._connections.values())
 
-    def connection_count(self) -> int:
-        """获取连接数量"""
-        return len(self._connections)
-
     async def cleanup_all(self) -> None:
-        async with self._manager_lock:
-            items = list(self._connections.items())
+        """一次摘除全部连接，并保证单个关闭失败不影响其余连接。"""
+
+        async with self._lock:
+            connections = list(self._connections.values())
             self._connections.clear()
-        for key, conn in items:
-            async with self._lock_for(key):
-                await conn.cleanup()
+        await asyncio.gather(
+            *(self._cleanup_safely(conn, operation="shutdown") for conn in connections)
+        )
+
+    @staticmethod
+    async def _cleanup_safely(conn: McConnection, *, operation: str) -> None:
+        try:
+            await conn.cleanup()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Minecraft connection cleanup status=failed operation=%s error_type=%s",
+                operation,
+                audit_error_type(exc),
+            )
+
+
+__all__ = ["ConnectionManager", "McConnection"]

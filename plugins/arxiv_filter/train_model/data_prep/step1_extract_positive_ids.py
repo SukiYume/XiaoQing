@@ -15,10 +15,21 @@ Step 1: 从 apod 笔记中提取正样本 arXiv ID 和日期范围
 """
 
 import csv
+import io
 import json
 import os
 import re
+import sys
+from datetime import date
 from pathlib import Path
+
+try:
+    from core.atomic_store import atomic_write_text
+except ModuleNotFoundError:  # 允许在仓库根目录之外直接执行脚本。
+    repository_root = Path(__file__).resolve().parents[4]
+    if str(repository_root) not in sys.path:
+        sys.path.insert(0, str(repository_root))
+    from core.atomic_store import atomic_write_text
 
 # ============================================================
 # 配置
@@ -46,13 +57,13 @@ def resolve_apod_root() -> Path:
 
 def extract_from_file(filepath: Path, apod_root: Path) -> tuple[list[dict[str, str]], list[str]]:
     """从单个 md 文件中提取 arXiv ID 和日期"""
-    ids = []
-    dates = []
+    ids: list[dict[str, str]] = []
+    dates: list[str] = []
 
     try:
         text = filepath.read_text(encoding="utf-8")
-    except Exception as e:
-        print(f"  [WARN] 无法读取 {filepath}: {e}")
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"  [WARN] 无法读取 {filepath}: {exc}")
         return ids, dates
 
     for match in ARXIV_PATTERN.finditer(text):
@@ -64,12 +75,18 @@ def extract_from_file(filepath: Path, apod_root: Path) -> tuple[list[dict[str, s
         )
 
     for match in DATE_HEADER_PATTERN.finditer(text):
-        dates.append(match.group(1))
+        raw_date = match.group(1)
+        try:
+            date.fromisoformat(raw_date)
+        except ValueError:
+            print(f"  [WARN] 忽略非法日期标题: {filepath}: {raw_date}")
+            continue
+        dates.append(raw_date)
 
     return ids, dates
 
 
-def main():
+def main() -> None:
     apod_root = resolve_apod_root()
     md_files = sorted(apod_root.rglob("AstroPH-*.md"))
     print(f"找到 {len(md_files)} 个笔记文件")
@@ -95,13 +112,10 @@ def main():
     print(f"\n总计: {len(all_ids)} 条记录, 去重后 {len(unique_ids)} 个唯一 arXiv ID")
 
     # 确定日期范围
-    if all_dates:
-        date_start = min(all_dates)
-        date_end = max(all_dates)
-    else:
-        date_start = "2020-12-05"
-        date_end = "2026-03-05"
-        print("[WARN] 未从笔记中提取到日期, 使用默认范围")
+    if not all_dates:
+        raise RuntimeError("未从笔记中提取到有效日期，拒绝使用过期的硬编码范围")
+    date_start = min(all_dates)
+    date_end = max(all_dates)
 
     print(f"日期范围: {date_start} ~ {date_end}")
 
@@ -109,16 +123,19 @@ def main():
     CACHE_DIR.mkdir(exist_ok=True)
 
     # 保存正样本 ID CSV
-    with open(OUTPUT_IDS_CSV, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["arXiv ID", "source_file"])
-        writer.writeheader()
-        writer.writerows(unique_ids)
+    csv_buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(csv_buffer, fieldnames=["arXiv ID", "source_file"])
+    writer.writeheader()
+    writer.writerows(unique_ids)
+    atomic_write_text(OUTPUT_IDS_CSV, csv_buffer.getvalue())
     print(f"已保存正样本 ID 到 {OUTPUT_IDS_CSV}")
 
     # 保存日期范围
     date_range = {"start": date_start, "end": date_end}
-    with open(OUTPUT_DATE_RANGE, "w", encoding="utf-8") as f:
-        json.dump(date_range, f, ensure_ascii=False, indent=2)
+    atomic_write_text(
+        OUTPUT_DATE_RANGE,
+        json.dumps(date_range, ensure_ascii=False, indent=2),
+    )
     print(f"已保存日期范围到 {OUTPUT_DATE_RANGE}")
 
 

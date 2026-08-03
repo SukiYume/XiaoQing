@@ -1,28 +1,73 @@
 {
-	"name": "github",
-	"version": "0.1.0",
-	"description": "GitHub Trending",
-	"entry": "main.py",
-	"commands": [
-		{
-			"name": "github",
-			"triggers": [
-				"github",
-				"gh",
-				"trending"
-			],
-			"help": "GitHub 热门项目 | /gh [daily/weekly/monthly]",
-			"admin_only": false
-		}
-	],
-	"schedule": [
-		{
-			"id": "daily",
-			"handler": "scheduled",
-			"cron": {
-				"hour": 8,
-				"minute": 30
-			}
-		}
-	]
+    "name": "github",
+    "version": "0.2.0",
+    "description": "抓取 GitHub 官方每日、每周和每月 Trending 仓库",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "github",
+            "triggers": [
+                "github",
+                "gh",
+                "trending"
+            ],
+            "help": "GitHub Trending | /gh [daily|weekly|monthly]",
+            "admin_only": false,
+            "usage": "/github [daily|weekly|monthly]",
+            "examples": ["/github"],
+            "invalid_examples": ["/github yearly"],
+            "subcommands": [
+                {
+                    "name": "daily",
+                    "help": "查看每日 Trending",
+                    "usage": "/github daily",
+                    "match": "exact",
+                    "examples": ["/github daily"],
+                    "invalid_examples": ["/github daily extra"]
+                },
+                {
+                    "name": "weekly",
+                    "help": "查看每周 Trending",
+                    "usage": "/github weekly",
+                    "match": "exact",
+                    "examples": ["/github weekly"],
+                    "invalid_examples": ["/github weekly extra"]
+                },
+                {
+                    "name": "monthly",
+                    "help": "查看每月 Trending",
+                    "usage": "/github monthly",
+                    "match": "exact",
+                    "examples": ["/github monthly"],
+                    "invalid_examples": ["/github monthly extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["h", "帮助"],
+                    "help": "显示 GitHub Trending 说明",
+                    "usage": "/github help",
+                    "match": "exact",
+                    "examples": ["/github help"],
+                    "invalid_examples": ["/github help extra"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "bs4",
+            "required": true,
+            "description": "用于解析 GitHub Trending 页面"
+        }
+    ],
+    "schedule": [
+        {
+            "id": "daily",
+            "handler": "scheduled",
+            "cron": {
+                "hour": 8,
+                "minute": 30
+            }
+        }
+    ]
 }

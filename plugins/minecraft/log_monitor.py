@@ -1,133 +1,153 @@
-"""
-Minecraft 服务器日志监控
+"""有界读取 Minecraft 日志，并提取需要转发的玩家事件。"""
 
-监控服务器日志文件，提取玩家聊天消息和事件。
-"""
+from __future__ import annotations
 
-import asyncio
 import logging
+import os
 import re
 from collections import deque
-from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, overload
+from typing import BinaryIO
 
+from core.atomic_store import AtomicJsonStore
 from core.sensitive_audit import summarize_sensitive
 
 from .audit import audit_error_type
 
 logger = logging.getLogger(__name__)
 
-
-class LogEventType(Enum):
-    """日志事件类型"""
-
-    CHAT = "chat"  # 玩家聊天
-    JOIN = "join"  # 玩家加入
-    LEAVE = "leave"  # 玩家离开
-    DEATH = "death"  # 玩家死亡
-    ADVANCEMENT = "advancement"  # 获得成就
-    UNKNOWN = "unknown"
+_PLAYER_PATTERN = r"[A-Za-z0-9_]{1,16}"
 
 
-@dataclass
+class LogEventType(str, Enum):
+    """插件会转发的日志事件类型。"""
+
+    CHAT = "chat"
+    JOIN = "join"
+    LEAVE = "leave"
+    DEATH = "death"
+    ADVANCEMENT = "advancement"
+
+
+@dataclass(frozen=True, slots=True)
 class LogEvent:
-    """日志事件"""
+    """已解析且与原始日志行解耦的最小事件。"""
 
     event_type: LogEventType
-    player: str | None
-    message: str | None
-    raw_line: str
-    timestamp: str | None = None
+    player: str
+    message: str | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class LogBatch:
-    """One bounded log poll and explicit information about discarded input."""
+    """一次有界轮询的事件、丢弃统计和待提交游标。"""
 
     events: list[LogEvent]
     matched_total: int = 0
     dropped_events: int = 0
     skipped_bytes: int = 0
     skipped_lines: int | None = 0
+    cursor_before: int | None = None
+    cursor_after: int | None = None
+    file_identity: str | None = None
 
-    def __len__(self) -> int:
-        return len(self.events)
 
-    def __iter__(self) -> Iterator[LogEvent]:
-        return iter(self.events)
-
-    @overload
-    def __getitem__(self, index: int) -> LogEvent: ...
-
-    @overload
-    def __getitem__(self, index: slice) -> list[LogEvent]: ...
-
-    def __getitem__(self, index: int | slice) -> Any:
-        return self.events[index]
+@dataclass(frozen=True, slots=True)
+class _ReadWindow:
+    content: bytes
+    cursor_before: int
+    cursor_after: int
+    file_identity: str
+    skipped_bytes: int = 0
+    skipped_lines: int | None = 0
 
 
 class LogMonitor:
-    """
-    日志文件监控器
+    """跟踪一个日志文件；只有投递确认后才持久化读取位置。"""
 
-    追踪日志文件的变化，解析新增的日志行。
-    """
-
-    # 日志行模式
-    # 格式: [HH:MM:SS] [Thread/INFO]: <Player> Message
-    # Paper 服务器可能使用异步线程: [Async Chat Thread - #N/INFO]
-    CHAT_PATTERN = re.compile(r"\[[\d:]+\] \[[^\]]+/INFO\]: <(\w+)> (.+)")
-
-    # 玩家加入: Player joined the game
-    JOIN_PATTERN = re.compile(r"\[[\d:]+\] \[[^\]]+/INFO\]: (\w+) joined the game")
-
-    # 玩家离开: Player left the game
-    LEAVE_PATTERN = re.compile(r"\[[\d:]+\] \[[^\]]+/INFO\]: (\w+) left the game")
-
-    # 玩家死亡 (各种死亡消息)
-    DEATH_PATTERNS = [
-        re.compile(
-            r"\[[\d:]+\] \[[^\]]+/INFO\]: (\w+) (was slain|was shot|drowned|burned|fell|hit the ground|was blown up|was killed|died|withered away|was squashed|was pricked|walked into a cactus|suffocated|starved|was impaled|was fireballed|was pummeled|was stung|froze|was skewered|was obliterated)"
-        ),
-    ]
-
-    # 获得成就
+    LOG_PREFIX_PATTERN = re.compile(
+        r"^\[\d{1,2}:\d{2}:\d{2}\] \[[^\]\r\n]+/INFO\]: (?P<body>[^\r\n]*)\Z"
+    )
+    CHAT_PATTERN = re.compile(rf"^<(?P<player>{_PLAYER_PATTERN})> (?P<message>.+)\Z")
+    PRESENCE_PATTERN = re.compile(
+        rf"^(?P<player>{_PLAYER_PATTERN}) (?P<action>joined|left) the game\Z"
+    )
     ADVANCEMENT_PATTERN = re.compile(
-        r"\[[\d:]+\] \[[^\]]+/INFO\]: (\w+) has (made the advancement|completed the challenge|reached the goal) \[(.+)\]"
+        rf"^(?P<player>{_PLAYER_PATTERN}) has "
+        r"(?:made the advancement|completed the challenge|reached the goal) "
+        r"\[(?P<message>.+)\]\Z"
+    )
+    DEATH_PATTERN = re.compile(
+        rf"^(?P<player>{_PLAYER_PATTERN}) (?P<message>"
+        r"(?:was slain|was shot|drowned|burned|fell|hit the ground|was blown up|"
+        r"was killed|died|withered away|was squashed|was pricked|walked into a cactus|"
+        r"suffocated|starved|was impaled|was fireballed|was pummeled|was stung|froze|"
+        r"was skewered|was obliterated)(?: .*)?)\Z"
     )
 
-    # 时间戳提取
-    TIMESTAMP_PATTERN = re.compile(r"\[([\d:]+)\]")
     MAX_READ_BYTES = 1024 * 1024
     MAX_EVENTS_PER_CHECK = 1000
     MAX_SKIPPED_LINE_SCAN_BYTES = 4 * 1024 * 1024
 
-    def __init__(self, log_path: str):
+    def __init__(self, log_path: str, *, state_path: str | Path | None = None) -> None:
         self.log_path = Path(log_path)
+        self.state_path = Path(state_path) if state_path is not None else None
         self._last_position = 0
-        self._last_size = 0
+        self._file_identity: str | None = None
         self._initialized = False
 
-    def initialize(self) -> bool:
-        """初始化监控器，定位到文件末尾"""
-        path_audit = summarize_sensitive(str(self.log_path))
-        if not self.log_path.exists():
-            logger.warning(
-                "sensitive_audit operation=minecraft.log_monitor status=missing "
-                "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
-                path_audit.kind,
-                path_audit.length,
-                path_audit.byte_length,
-                path_audit.fingerprint,
-            )
-            return False
+    @staticmethod
+    def _identity(stat: os.stat_result) -> str:
+        return f"{int(stat.st_dev)}:{int(stat.st_ino)}"
 
+    def _load_saved_position(self, *, file_identity: str, current_size: int) -> int | None:
+        if self.state_path is None or not self.state_path.is_file():
+            return None
         try:
-            self._last_size = self.log_path.stat().st_size
-            self._last_position = self._last_size  # 从文件末尾开始
+            state = AtomicJsonStore(self.state_path).read({}, raise_on_error=True)
+            if not isinstance(state, dict) or state.get("version") != 1:
+                raise ValueError("Minecraft cursor state version is invalid")
+            position = state.get("position")
+            if isinstance(position, bool) or not isinstance(position, int) or position < 0:
+                raise ValueError("Minecraft cursor position is invalid")
+            if state.get("file_identity") != file_identity or position > current_size:
+                return 0
+            return position
+        except Exception as exc:
+            # 状态损坏时从当前文件末尾恢复，避免重放整份历史日志造成洪泛。
+            logger.error(
+                "Minecraft cursor state rejected error_type=%s",
+                audit_error_type(exc),
+            )
+            return current_size
+
+    def _persist_position(self, position: int, file_identity: str) -> None:
+        if self.state_path is None:
+            return
+        AtomicJsonStore(self.state_path).write(
+            {
+                "version": 1,
+                "position": position,
+                "file_identity": file_identity,
+            }
+        )
+
+    def initialize(self) -> bool:
+        """读取文件身份；无历史游标时从末尾开始，不回放旧日志。"""
+
+        path_audit = summarize_sensitive(str(self.log_path))
+        try:
+            with self.log_path.open("rb") as file:
+                stat = os.fstat(file.fileno())
+            file_identity = self._identity(stat)
+            saved_position = self._load_saved_position(
+                file_identity=file_identity,
+                current_size=stat.st_size,
+            )
+            self._last_position = stat.st_size if saved_position is None else saved_position
+            self._file_identity = file_identity
             self._initialized = True
             logger.info(
                 "sensitive_audit operation=minecraft.log_monitor status=initialized "
@@ -140,6 +160,15 @@ class LogMonitor:
                 self._last_position,
             )
             return True
+        except FileNotFoundError:
+            logger.warning(
+                "sensitive_audit operation=minecraft.log_monitor status=missing "
+                "payload_kind=%s payload_length=%d payload_bytes=%d payload_fingerprint=%s",
+                path_audit.kind,
+                path_audit.length,
+                path_audit.byte_length,
+                path_audit.fingerprint,
+            )
         except Exception as exc:
             logger.error(
                 "sensitive_audit operation=minecraft.log_monitor status=failed "
@@ -151,96 +180,128 @@ class LogMonitor:
                 path_audit.fingerprint,
                 audit_error_type(exc),
             )
-            return False
+        self._initialized = False
+        return False
 
-    def _count_skipped_lines(self, start: int, end: int) -> int | None:
+    def _count_skipped_lines(self, file: BinaryIO, start: int, end: int) -> int | None:
         byte_count = max(0, end - start)
         if byte_count <= 0:
             return 0
         if byte_count > self.MAX_SKIPPED_LINE_SCAN_BYTES:
             return None
         count = 0
-        with self.log_path.open("rb") as file:
-            file.seek(start)
-            remaining = byte_count
-            while remaining > 0:
-                chunk = file.read(min(64 * 1024, remaining))
-                if not chunk:
-                    break
-                count += chunk.count(b"\n")
-                remaining -= len(chunk)
+        file.seek(start)
+        remaining = byte_count
+        while remaining > 0:
+            chunk = file.read(min(64 * 1024, remaining))
+            if not chunk:
+                break
+            count += chunk.count(b"\n")
+            remaining -= len(chunk)
         return count
 
-    def check_updates(self) -> LogBatch:
-        """
-        检查日志文件更新
+    def _bounded_read_start(
+        self,
+        file: BinaryIO,
+        *,
+        read_position: int,
+        current_size: int,
+    ) -> tuple[int, int, int | None]:
+        if current_size - read_position <= self.MAX_READ_BYTES:
+            return read_position, 0, 0
+        read_start = current_size - self.MAX_READ_BYTES
+        skipped_lines = self._count_skipped_lines(file, read_position, read_start)
+        logger.warning(
+            "Minecraft 日志积压超过 %d 字节，仅处理最新 tail",
+            self.MAX_READ_BYTES,
+        )
+        return read_start, read_start - read_position, skipped_lines
 
-        Returns:
-            新日志事件列表
-        """
-        if not self._initialized:
-            if not self.initialize():
-                return LogBatch(events=[])
+    @staticmethod
+    def _drop_partial_prefix(
+        file: BinaryIO,
+        *,
+        read_start: int,
+        content: bytes,
+    ) -> tuple[bytes, int]:
+        if read_start <= 0 or not content:
+            return content, 0
+        file.seek(read_start - 1)
+        if file.read(1) == b"\n":
+            return content, 0
+        newline = content.find(b"\n")
+        discarded = len(content) if newline < 0 else newline + 1
+        return (b"" if newline < 0 else content[newline + 1 :]), discarded
 
-        if not self.log_path.exists():
-            logger.warning("日志文件不存在")
-            return LogBatch(events=[])
+    @staticmethod
+    def _keep_complete_lines(content: bytes, *, content_start: int) -> tuple[bytes, int]:
+        if not content:
+            return b"", content_start
+        last_newline = content.rfind(b"\n")
+        if last_newline < 0:
+            return b"", content_start
+        cursor_after = content_start + last_newline + 1
+        return content[: last_newline + 1], cursor_after
 
-        retained_events: deque[LogEvent] = deque(maxlen=self.MAX_EVENTS_PER_CHECK)
-        matched_total = 0
-        skipped_bytes = 0
-        skipped_lines: int | None = 0
-
-        try:
-            current_size = self.log_path.stat().st_size
-
-            # 文件可能被轮换（新的 latest.log）
-            if current_size < self._last_position:
+    def _read_window(self) -> _ReadWindow:
+        # fstat 与读取使用同一文件句柄，避免日志轮换时把两个不同文件拼在一起。
+        with self.log_path.open("rb") as file:
+            stat = os.fstat(file.fileno())
+            current_size = stat.st_size
+            current_identity = self._identity(stat)
+            cursor_before = self._last_position
+            rotated = current_identity != self._file_identity or current_size < cursor_before
+            read_position = 0 if rotated else cursor_before
+            if rotated:
                 logger.info("检测到日志文件轮换，重新开始监控")
-                self._last_position = 0
-
-            if current_size == self._last_position:
-                return LogBatch(events=[])  # 没有新内容
-
-            # 只读取最新的有界 tail，避免一次更新把整个日志装入内存。
-            read_start = self._last_position
-            if current_size - read_start > self.MAX_READ_BYTES:
-                read_start = current_size - self.MAX_READ_BYTES
-                skipped_bytes = read_start - self._last_position
-                skipped_lines = self._count_skipped_lines(self._last_position, read_start)
-                logger.warning(
-                    "Minecraft 日志积压超过 %d 字节，仅处理最新 tail",
-                    self.MAX_READ_BYTES,
+            if current_size == read_position:
+                return _ReadWindow(
+                    b"",
+                    cursor_before,
+                    current_size,
+                    current_identity,
                 )
-            with open(self.log_path, "rb") as f:
-                f.seek(read_start)
-                new_content = f.read(self.MAX_READ_BYTES)
-            self._last_position = current_size
 
-            if read_start > 0 and new_content:
-                with self.log_path.open("rb") as file:
-                    file.seek(read_start - 1)
-                    starts_at_line_boundary = file.read(1) == b"\n"
-                if not starts_at_line_boundary:
-                    newline = new_content.find(b"\n")
-                    discarded = len(new_content) if newline < 0 else newline + 1
-                    skipped_bytes += discarded
-                    if skipped_lines is not None:
-                        skipped_lines += 1
-                    new_content = b"" if newline < 0 else new_content[newline + 1 :]
+            read_start, skipped_bytes, skipped_lines = self._bounded_read_start(
+                file,
+                read_position=read_position,
+                current_size=current_size,
+            )
+            file.seek(read_start)
+            content = file.read(current_size - read_start)
+            content, prefix_bytes = self._drop_partial_prefix(
+                file,
+                read_start=read_start,
+                content=content,
+            )
+            if prefix_bytes:
+                skipped_bytes += prefix_bytes
+                if skipped_lines is not None:
+                    skipped_lines += 1
+            content_start = read_start + prefix_bytes
+            content, cursor_after = self._keep_complete_lines(
+                content,
+                content_start=content_start,
+            )
+            return _ReadWindow(
+                content,
+                cursor_before,
+                cursor_after,
+                current_identity,
+                skipped_bytes,
+                skipped_lines,
+            )
 
-            # 解析每一行
-            decoded = new_content.decode("utf-8", errors="replace")
-            for line in decoded.splitlines():
-                if line.strip():
-                    event = self._parse_line(line)
-                    if event and event.event_type != LogEventType.UNKNOWN:
-                        matched_total += 1
-                        retained_events.append(event)
+    def check_updates(self) -> LogBatch:
+        """读取一个有界窗口；异常时返回不可提交的空批次。"""
 
-            self._last_size = current_size
-
+        if not self._initialized and not self.initialize():
+            return LogBatch(events=[])
+        try:
+            window = self._read_window()
+            events, matched_total = self._parse_events(window.content)
         except Exception as exc:
+            self._initialized = False
             path_audit = summarize_sensitive(str(self.log_path))
             logger.error(
                 "sensitive_audit operation=minecraft.log_poll status=failed "
@@ -252,87 +313,75 @@ class LogMonitor:
                 path_audit.fingerprint,
                 audit_error_type(exc),
             )
+            return LogBatch(events=[])
 
-        events = list(retained_events)
         return LogBatch(
             events=events,
             matched_total=matched_total,
             dropped_events=max(0, matched_total - len(events)),
-            skipped_bytes=skipped_bytes,
-            skipped_lines=skipped_lines,
+            skipped_bytes=window.skipped_bytes,
+            skipped_lines=window.skipped_lines,
+            cursor_before=window.cursor_before,
+            cursor_after=window.cursor_after,
+            file_identity=window.file_identity,
         )
 
-    async def check_updates_async(self) -> LogBatch:
-        """在线程池中检查更新，避免阻塞事件循环"""
-        return await asyncio.to_thread(self.check_updates)
+    def commit(self, batch: LogBatch) -> bool:
+        """仅提交仍与当前内存游标衔接的批次，拒绝乱序或重复确认。"""
+
+        if (
+            batch.cursor_before is None
+            or batch.cursor_after is None
+            or batch.file_identity is None
+            or batch.cursor_before != self._last_position
+            or batch.cursor_after < 0
+        ):
+            return False
+        self._persist_position(batch.cursor_after, batch.file_identity)
+        self._last_position = batch.cursor_after
+        self._file_identity = batch.file_identity
+        self._initialized = True
+        return True
+
+    def _parse_events(self, content: bytes) -> tuple[list[LogEvent], int]:
+        retained: deque[LogEvent] = deque(maxlen=self.MAX_EVENTS_PER_CHECK)
+        matched_total = 0
+        for line in content.decode("utf-8", errors="replace").splitlines():
+            event = self._parse_line(line)
+            if event is not None:
+                matched_total += 1
+                retained.append(event)
+        return list(retained), matched_total
 
     def _parse_line(self, line: str) -> LogEvent | None:
-        """解析单行日志"""
-        # 提取时间戳
-        timestamp = None
-        ts_match = self.TIMESTAMP_PATTERN.search(line)
-        if ts_match:
-            timestamp = ts_match.group(1)
+        prefix = self.LOG_PREFIX_PATTERN.fullmatch(line)
+        if prefix is None:
+            return None
+        body = prefix.group("body")
 
-        # 尝试匹配聊天消息
-        match = self.CHAT_PATTERN.search(line)
-        if match:
+        match = self.CHAT_PATTERN.fullmatch(body)
+        if match is not None:
+            return LogEvent(LogEventType.CHAT, match.group("player"), match.group("message"))
+
+        match = self.PRESENCE_PATTERN.fullmatch(body)
+        if match is not None:
+            event_type = (
+                LogEventType.JOIN if match.group("action") == "joined" else LogEventType.LEAVE
+            )
+            return LogEvent(event_type, match.group("player"))
+
+        match = self.ADVANCEMENT_PATTERN.fullmatch(body)
+        if match is not None:
             return LogEvent(
-                event_type=LogEventType.CHAT,
-                player=match.group(1),
-                message=match.group(2),
-                raw_line=line,
-                timestamp=timestamp,
+                LogEventType.ADVANCEMENT,
+                match.group("player"),
+                match.group("message"),
             )
 
-        # 尝试匹配玩家加入
-        match = self.JOIN_PATTERN.search(line)
-        if match:
-            return LogEvent(
-                event_type=LogEventType.JOIN,
-                player=match.group(1),
-                message=None,
-                raw_line=line,
-                timestamp=timestamp,
-            )
-
-        # 尝试匹配玩家离开
-        match = self.LEAVE_PATTERN.search(line)
-        if match:
-            return LogEvent(
-                event_type=LogEventType.LEAVE,
-                player=match.group(1),
-                message=None,
-                raw_line=line,
-                timestamp=timestamp,
-            )
-
-        # 尝试匹配死亡消息
-        for pattern in self.DEATH_PATTERNS:
-            match = pattern.search(line)
-            if match:
-                return LogEvent(
-                    event_type=LogEventType.DEATH,
-                    player=match.group(1),
-                    message=match.group(2),
-                    raw_line=line,
-                    timestamp=timestamp,
-                )
-
-        # 尝试匹配成就
-        match = self.ADVANCEMENT_PATTERN.search(line)
-        if match:
-            return LogEvent(
-                event_type=LogEventType.ADVANCEMENT,
-                player=match.group(1),
-                message=match.group(3),
-                raw_line=line,
-                timestamp=timestamp,
-            )
-
+        match = self.DEATH_PATTERN.fullmatch(body)
+        if match is not None:
+            return LogEvent(LogEventType.DEATH, match.group("player"), match.group("message"))
         return None
 
-    def reset(self) -> None:
-        """重置监控位置到文件末尾"""
-        self._initialized = False
-        self.initialize()
+
+__all__ = ["LogBatch", "LogEvent", "LogEventType", "LogMonitor"]

@@ -289,6 +289,59 @@ def test_shutdown_failure_uses_provisioner_kill_fallback(
     assert "provisioner.kill" in manager.last_cleanup_report.fallback_methods
 
 
+def test_successful_shutdown_evicts_registered_instance(tmp_path: Path) -> None:
+    owner = "user-1"
+    manager = JupyterKernelManager.get_instance(tmp_path, owner)
+    kernel = FakeKernel()
+    kernel.alive = True
+    manager._km = kernel  # noqa: SLF001
+    manager._kc = kernel.client_instance  # noqa: SLF001
+
+    manager.shutdown_kernel()
+
+    replacement = JupyterKernelManager.get_instance(tmp_path, owner)
+    assert replacement is not manager
+    assert manager.is_running is False
+
+
+def test_restart_keeps_registered_manager_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = "user-1"
+    manager = JupyterKernelManager.get_instance(tmp_path, owner)
+    old_kernel = FakeKernel()
+    old_kernel.alive = True
+    manager._km = old_kernel  # noqa: SLF001
+    manager._kc = old_kernel.client_instance  # noqa: SLF001
+    new_kernel = FakeKernel()
+    monkeypatch.setattr(manager_module, "KernelManager", lambda **_kwargs: new_kernel)
+
+    manager.restart_kernel()
+
+    assert JupyterKernelManager.get_instance(tmp_path, owner) is manager
+    assert old_kernel.alive is False
+    assert new_kernel.alive is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_async_propagates_cleanup_failures(tmp_path: Path) -> None:
+    first = JupyterKernelManager.get_instance(tmp_path / "a", "user-1")
+    second = JupyterKernelManager.get_instance(tmp_path / "b", "user-2")
+    first.shutdown_kernel = lambda *args, **kwargs: None  # type: ignore[method-assign]
+
+    def fail_shutdown(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("cleanup failed")
+
+    second.shutdown_kernel = fail_shutdown  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="1 Jupyter kernel cleanup"):
+        await JupyterKernelManager.shutdown_all_async()
+
+    assert JupyterKernelManager._instances == {}  # noqa: SLF001
+    assert JupyterKernelManager._quarantined_instances == set()  # noqa: SLF001
+
+
 def test_unconfirmed_orphan_marks_instance_broken_and_evicts_registry(
     tmp_path: Path,
 ) -> None:

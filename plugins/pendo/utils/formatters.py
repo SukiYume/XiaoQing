@@ -1,13 +1,33 @@
-"""
-消息格式化工具
-统一处理各Handler中重复的消息格式化逻辑
-"""
+"""Pendo 的消息格式化和命令元数据提取工具。"""
 
 import re
-from datetime import datetime
+from datetime import datetime, tzinfo
 from typing import Any
 
-from ..models.item import get_item_type_value
+UNSAFE_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def single_line_text(value: Any) -> str:
+    """移除控制字符并把用户可见字段压缩成安全单行。"""
+
+    text = UNSAFE_CONTROL_RE.sub("", str(value or ""))
+    return " ".join(text.split())
+
+
+def ledger_amount_yuan(item: Any) -> float:
+    """读取账目金额（元），优先使用当前规范的整数分字段。"""
+
+    cents = getattr(item, "amount_cents", None)
+    if cents not in (None, ""):
+        try:
+            return int(cents) / 100
+        except (TypeError, ValueError):
+            pass
+    try:
+        return float(getattr(item, "amount", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
 
 # 优先级图标映射
 PRIORITY_ICONS = {
@@ -55,8 +75,9 @@ TYPE_NAMES = {
 }
 
 TAG_NAME_PATTERN = r"[\w\u4e00-\u9fa5-]+"
-TAG_TOKEN_RE = re.compile(rf"#({TAG_NAME_PATTERN})")
-BOUNDARY_TAG_TOKEN_RE = re.compile(rf"(?<!\S)#({TAG_NAME_PATTERN})(?=\s|$)")
+TAG_TOKEN_RE = re.compile(rf"(?<!\S)#({TAG_NAME_PATTERN})(?=\s|$)")
+CATEGORY_TOKEN_RE = re.compile(r"(?<!\S)cat:(\S+)")
+PRIORITY_TOKEN_RE = re.compile(r"(?<!\S)p:([1-5])(?=\s|$)")
 
 
 def extract_tags(text: str | None) -> list[str]:
@@ -65,6 +86,13 @@ def extract_tags(text: str | None) -> list[str]:
 
 def is_tag_token(text: str | None) -> bool:
     return re.fullmatch(rf"#{TAG_NAME_PATTERN}", text or "") is not None
+
+
+def _remove_token(text: str, match: re.Match[str]) -> str:
+    """删除一个参数令牌，只规范令牌两侧产生的空白接缝。"""
+    before = text[: match.start()].rstrip()
+    after = text[match.end() :].lstrip()
+    return " ".join(part for part in (before, after) if part)
 
 
 class ItemFormatter:
@@ -122,7 +150,12 @@ class ItemFormatter:
         return TYPE_ICONS.get(item_type, "📄")
 
     @staticmethod
-    def format_datetime(dt_str: str, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    def format_datetime(
+        dt_str: str,
+        fmt: str = "%Y-%m-%d %H:%M",
+        *,
+        tz: tzinfo,
+    ) -> str:
         """格式化日期时间字符串
 
         Args:
@@ -133,24 +166,15 @@ class ItemFormatter:
             格式化后的时间字符串，解析失败则返回原始字符串
         """
         try:
-            return datetime.fromisoformat(dt_str).strftime(fmt)
+            parsed = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(tz)
+            return parsed.strftime(fmt)
         except (ValueError, TypeError):
             return dt_str
 
     @staticmethod
-    def format_date(dt_str: str) -> str:
-        """格式化日期字符串
-
-        Args:
-            dt_str: ISO格式时间字符串
-
-        Returns:
-            格式化后的日期字符串 (YYYY-MM-DD)
-        """
-        return ItemFormatter.format_datetime(dt_str, "%Y-%m-%d")
-
-    @staticmethod
-    def format_time(dt_str: str) -> str:
+    def format_time(dt_str: str, *, tz: tzinfo) -> str:
         """格式化时间字符串
 
         Args:
@@ -159,7 +183,7 @@ class ItemFormatter:
         Returns:
             格式化后的时间字符串 (HH:MM)
         """
-        return ItemFormatter.format_datetime(dt_str, "%H:%M")
+        return ItemFormatter.format_datetime(dt_str, "%H:%M", tz=tz)
 
     @staticmethod
     def format_tags(tags: list[str]) -> str:
@@ -176,43 +200,12 @@ class ItemFormatter:
         return " ".join(f"#{tag}" for tag in tags)
 
     @staticmethod
-    def format_remind_times(remind_times: list[str]) -> str:
-        """格式化提醒时间列表
-
-        Args:
-            remind_times: 提醒时间列表（ISO格式）
-
-        Returns:
-            格式化后的提醒时间字符串
-        """
-        if not remind_times:
-            return "未设置提醒"
-
-        formatted = []
-        for t in remind_times:
-            time_str = ItemFormatter.format_datetime(t, "%m-%d %H:%M")
-            formatted.append(time_str)
-        return ", ".join(formatted)
-
-    @staticmethod
-    def format_item_reference(item) -> str:
-        """格式化条目引用（用于搜索结果等）
-
-        Args:
-            item: 条目数据（Item dataclass实例）
-
-        Returns:
-            格式化后的引用字符串
-        """
-        item_type = get_item_type_value(item.type)
-        icon = ItemFormatter.format_type_icon(item_type)
-        title = item.title or ItemFormatter.truncate_content(item.content or "", 30)
-        item_id = item.id or ""
-
-        return f"{icon} {title} `{item_id}`"
-
-    @staticmethod
-    def format_time_range(start_time: str | None, end_time: str | None = None) -> str:
+    def format_time_range(
+        start_time: str | None,
+        end_time: str | None = None,
+        *,
+        tz: tzinfo,
+    ) -> str:
         """格式化时间范围
 
         Args:
@@ -225,58 +218,13 @@ class ItemFormatter:
         if not start_time:
             return ""
 
-        start_str = ItemFormatter.format_time(start_time)
+        start_str = ItemFormatter.format_time(start_time, tz=tz)
 
         if end_time:
-            end_str = ItemFormatter.format_time(end_time)
+            end_str = ItemFormatter.format_time(end_time, tz=tz)
             return f"{start_str} - {end_str}"
 
         return start_str
-
-    @staticmethod
-    def format_confirm_message(item, action: str = "confirm") -> str:
-        """格式化确认消息
-
-        Args:
-            item: 条目数据（Item dataclass实例）
-            action: 操作类型
-
-        Returns:
-            确认消息字符串
-        """
-        lines = [f"⚠️ 请确认要{action}以下内容:", ""]
-
-        if item.title:
-            lines.append(f"📋 标题: {item.title}")
-
-        item_type = get_item_type_value(item.type)
-        if item_type == "event":
-            if getattr(item, "start_time", None):
-                lines.append(f"⏰ 时间: {ItemFormatter.format_datetime(item.start_time)}")
-            if getattr(item, "location", None):
-                lines.append(f"📍 地点: {item.location}")
-
-        lines.append("")
-        lines.append("回复 'yes' 确认，'no' 取消")
-
-        return "\n".join(lines)
-
-    @staticmethod
-    def format_list_header(title: str, count: int, filter_info: str = "") -> str:
-        """格式化列表头部
-
-        Args:
-            title: 列表标题
-            count: 条目数量
-            filter_info: 筛选条件说明
-
-        Returns:
-            格式化后的列表头部字符串
-        """
-        header = f"📋 **{title}** (共{count}项)"
-        if filter_info:
-            header += f"\n{filter_info}"
-        return header
 
     @staticmethod
     def truncate_content(content: str, max_length: int = 50, suffix: str = "...") -> str:
@@ -303,7 +251,7 @@ class MessageBuilder:
     用于构建复杂的多行消息。
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.lines: list[str] = []
 
     def add_line(self, line: str = "") -> "MessageBuilder":
@@ -311,34 +259,10 @@ class MessageBuilder:
         self.lines.append(line)
         return self
 
-    def add_header(self, text: str, level: int = 1) -> "MessageBuilder":
-        """添加标题"""
-        prefix = "#" * level
-        self.lines.append(f"{prefix} {text}")
-        return self
-
-    def add_section(self, title: str) -> "MessageBuilder":
-        """添加小节标题"""
-        self.lines.append(f"\n**{title}**")
-        return self
-
     def add_item(self, icon: str, text: str, indent: int = 0) -> "MessageBuilder":
         """添加列表项"""
         prefix = "  " * indent
         self.lines.append(f"{prefix}{icon} {text}")
-        return self
-
-    def add_info(self, key: str, value: str, icon: str = "") -> "MessageBuilder":
-        """添加键值对信息"""
-        if icon:
-            self.lines.append(f"{icon} {key}: {value}")
-        else:
-            self.lines.append(f"{key}: {value}")
-        return self
-
-    def add_separator(self) -> "MessageBuilder":
-        """添加分隔符"""
-        self.lines.append("---")
         return self
 
     def add_blank(self) -> "MessageBuilder":
@@ -349,53 +273,6 @@ class MessageBuilder:
     def build(self) -> str:
         """构建最终消息"""
         return "\n".join(self.lines)
-
-    def __str__(self) -> str:
-        return self.build()
-
-
-def format_success_message(message: str, item_id: str | None = None) -> str:
-    """格式化成功消息
-
-    Args:
-        message: 主要消息内容
-        item_id: 条目ID（可选）
-
-    Returns:
-        格式化后的成功消息
-    """
-    lines = [f"✅ {message}"]
-    if item_id:
-        lines.append(f"\n`{item_id}`")
-    return "\n".join(lines)
-
-
-def format_error_message(message: str, hint: str | None = None) -> str:
-    """格式化错误消息
-
-    Args:
-        message: 错误消息
-        hint: 提示信息（可选）
-
-    Returns:
-        格式化后的错误消息
-    """
-    lines = [f"❌ {message}"]
-    if hint:
-        lines.append(f"\n💡 {hint}")
-    return "\n".join(lines)
-
-
-def format_warning_message(message: str) -> str:
-    """格式化警告消息
-
-    Args:
-        message: 警告消息
-
-    Returns:
-        格式化后的警告消息
-    """
-    return f"⚠️ {message}"
 
 
 def extract_metadata(text: str, *, with_priority: bool = False) -> dict[str, Any]:
@@ -410,16 +287,16 @@ def extract_metadata(text: str, *, with_priority: bool = False) -> dict[str, Any
     """
     result: dict[str, Any] = {"category": None, "tags": [], "priority": None}
 
-    cat_match = re.search(r"cat:(\S+)", text)
+    cat_match = CATEGORY_TOKEN_RE.search(text)
     if cat_match:
         result["category"] = cat_match.group(1)
-        text = text.replace(cat_match.group(0), "").strip()
+        text = _remove_token(text, cat_match)
 
     if with_priority:
-        p_match = re.search(r"p:([1-5])", text)
+        p_match = PRIORITY_TOKEN_RE.search(text)
         if p_match:
             result["priority"] = int(p_match.group(1))
-            text = text.replace(p_match.group(0), "").strip()
+            text = _remove_token(text, p_match)
 
     tags = extract_tags(text)
     if tags:
@@ -430,18 +307,9 @@ def extract_metadata(text: str, *, with_priority: bool = False) -> dict[str, Any
     return result
 
 
-def extract_kv_param(text: str, key: str) -> tuple[str | None, str]:
-    """从文本中提取 key=value 或 key:value 参数，返回 (value, 剩余文本)。
-
-    用于 search handler 中提取 type=event、range=last7d 等参数。
-    """
-    match = re.search(rf"{re.escape(key)}[=:]([^\s]+)", text)
-    if match:
-        return match.group(1), text.replace(match.group(0), "").strip()
-    return None, text
-
-
-def paginate(items: list[Any], page: int = 1, page_size: int = 10, show_all: bool = False):
+def paginate(
+    items: list[Any], page: int = 1, page_size: int = 10, show_all: bool = False
+) -> tuple[list[Any], str, bool]:
     """通用分页，返回 (display_items, page_info_str, has_more)。"""
     total = len(items)
     if show_all:
@@ -455,5 +323,3 @@ def paginate(items: list[Any], page: int = 1, page_size: int = 10, show_all: boo
         info = ""
     has_more = total > end
     return display, info, has_more
-
-

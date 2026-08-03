@@ -1,11 +1,12 @@
-"""
-搜索处理器
-处理全文搜索和高级筛选
-"""
+"""处理 Pendo 全文检索、高级筛选与紧凑结果展示。"""
 
-import logging
+from __future__ import annotations
+
+import re
+import shlex
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, cast
+from datetime import datetime, tzinfo
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from core.plugin_base import run_sync
 
@@ -21,58 +22,74 @@ from ..models.item import (
 )
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import (
-    BOUNDARY_TAG_TOKEN_RE,
     PRIORITY_ICONS,
     STATUS_ICONS,
+    TAG_TOKEN_RE,
     TYPE_NAMES,
+    UNSAFE_CONTROL_RE,
     ItemFormatter,
-    extract_kv_param,
+    ledger_amount_yuan,
+    single_line_text,
 )
-from ..utils.time_utils import parse_remind_times, parse_search_date_range
-
-logger = logging.getLogger(__name__)
+from ..utils.time_utils import (
+    TimezoneHelper,
+    get_user_local_wall_time,
+    parse_remind_times,
+    parse_search_date_range,
+)
+from ..utils.validators import sanitize_search_keyword, validate_tag
 
 if TYPE_CHECKING:
     from ..services.db import Database
 
 SearchItem = EventItem | TaskItem | DiaryItem | NoteItem | LedgerItem
-_ALLOWED_SEARCH_TYPES = {"event", "task", "note", "diary", "ledger"}
-_ALLOWED_TASK_STATUS = {"open", "done", "cancelled"}
-_ALLOWED_TRANSACTION_TYPES = {"income", "expense", "transfer"}
+SearchFilters = dict[str, Any]
 
-# 操作提示：根据类型提供对应的操作命令
-_TYPE_ACTION_HINTS: dict[str, str] = {
+_ALLOWED_SEARCH_TYPES: Final = frozenset({"event", "task", "note", "diary", "ledger"})
+_ALLOWED_TASK_STATUS: Final = frozenset({"open", "done", "cancelled"})
+_ALLOWED_TRANSACTION_TYPES: Final = frozenset({"income", "expense", "transfer"})
+_SEARCH_TYPE_ORDER: Final = ("event", "task", "ledger", "diary", "note")
+_SEARCH_RESULT_LIMIT: Final = 15
+_SEARCH_INPUT_MAX_CHARS: Final = 2_000
+_SEARCH_QUERY_MAX_CHARS: Final = 100
+_SEARCH_TITLE_MAX_CHARS: Final = 60
+_FILTER_TOKEN_RE: Final = re.compile(
+    r"^(type|status|category|transaction_type|account|merchant|tag|tags|range)[=:](.*)$",
+    re.IGNORECASE,
+)
+_FILTER_KEY_ALIASES: Final = {
+    "account": "account_name",
+    "tag": "tags",
+}
+_LEDGER_FILTER_KEYS: Final = frozenset({"transaction_type", "account_name", "merchant"})
+_DATE_FIELD_BY_TYPE: Final = {
+    "event": "start_time",
+    "task": "plan_date",
+    "diary": "diary_date",
+    "ledger": "ledger_date",
+    "note": "created_at",
+}
+_DATE_ONLY_SEARCH_FIELDS: Final = frozenset({"plan_date", "diary_date", "ledger_date"})
+_TYPE_ACTION_HINTS: Final[dict[str, str]] = {
     "event": "/pendo event view <id>",
     "task": "/pendo todo view <id>",
     "note": "/pendo note view <id>",
     "diary": "/pendo diary view <日期或ID>",
     "ledger": "/pendo ledger view <id>",
 }
+_TRANSACTION_LABELS: Final = {"income": "收入", "expense": "支出", "transfer": "转账"}
+_TRANSACTION_SIGNS: Final = {"income": "+", "expense": "-", "transfer": "↔"}
 
 
 class SearchHandler:
-    """搜索处理器
+    """解析搜索条件，通过数据库分页检索，并按条目类型展示结果。"""
 
-    负责处理全文搜索和高级筛选功能，包括：
-    - 全文检索（使用SQLite FTS5）
-    - 按类型、时间范围、标签等筛选
-    - 结果按类型分组显示
-    - 搜索结果格式化
-
-    Attributes:
-        db: 数据库服务实例
-    """
-
-    def __init__(self, db: "Database"):
+    def __init__(self, db: Database):
         self.db = db
 
     @handle_command_errors
     async def search(self, user_id: str, args: str, context: PendoContext) -> CommandMessage:
-        """
-        搜索条目
-        支持: 关键词搜索 + 筛选条件
-        例如: /pendo search 会议 type=event range=last7d
-        """
+        """搜索条目，例如 ``/pendo search 会议 type=event range=last7d``。"""
         if not args or not args.strip():
             return {
                 "status": "error",
@@ -91,312 +108,410 @@ class SearchHandler:
                 ),
             }
 
-        # 解析查询和过滤条件
         try:
-            query, filters = self._parse_search_query(args)
+            query, filters = self._parse_search_query(
+                args,
+                await get_user_local_wall_time(user_id, self.db),
+            )
         except ValueError as exc:
-            return {"status": "error", "message": f"❌ {str(exc)}"}
+            return {"status": "error", "message": f"❌ {exc}"}
 
-        if not query:
-            return {"status": "error", "message": "❌ 请提供搜索关键词"}
-
-        # 执行搜索
-        results = cast(
-            list[SearchItem], await run_sync(self.db.items.search_items, user_id, query, filters)
+        raw_results, total = await run_sync(
+            self.db.search_items_page,
+            user_id,
+            query,
+            filters,
+            limit=_SEARCH_RESULT_LIMIT,
+            offset=0,
         )
+        results = cast(list[SearchItem], raw_results)
 
         if not results:
-            filter_hint = ""
-            if filters:
-                filter_hint = "\n💡 试试去掉筛选条件扩大搜索范围"
-            return {"status": "success", "message": f'🔍 没有找到包含 "{query}" 的结果{filter_hint}'}
+            filter_hint = "\n💡 试试去掉筛选条件扩大搜索范围" if filters else ""
+            return {
+                "status": "success",
+                "message": f'🔍 没有找到包含 "{query}" 的结果{filter_hint}',
+            }
 
-        # 格式化输出
-        message = self._format_search_results(results, query, filters)
-
+        collection_titles = await self._load_event_collection_titles(user_id, results)
+        display_timezone = await run_sync(
+            TimezoneHelper.get_user_timezone,
+            user_id,
+            self.db,
+        )
+        message = self._format_search_results(
+            results,
+            total,
+            query,
+            filters,
+            collection_titles,
+            display_timezone,
+        )
         return {"status": "success", "message": message}
 
-    def _parse_search_query(self, args: str) -> tuple[str, dict[str, Any]]:
-        """解析搜索查询和过滤条件，返回 (query, filters)"""
-        filters: dict[str, Any] = {}
+    @staticmethod
+    def _parse_filter_token(token: str) -> tuple[str, str] | None:
+        """识别一个筛选 token；普通关键词返回 ``None``。"""
+        if token.startswith("#"):
+            tag_match = TAG_TOKEN_RE.fullmatch(token)
+            if not tag_match:
+                raise ValueError(f"无效标签: {token}")
+            return "tags", tag_match.group(1)
 
-        type_val, args = extract_kv_param(args, "type")
-        if type_val:
-            if type_val not in _ALLOWED_SEARCH_TYPES:
-                raise ValueError(f"无效类型: {type_val}")
-            filters["type"] = type_val
+        filter_match = _FILTER_TOKEN_RE.fullmatch(token)
+        if not filter_match:
+            return None
+        raw_key, raw_value = filter_match.groups()
+        key = _FILTER_KEY_ALIASES.get(raw_key.casefold(), raw_key.casefold())
+        value = raw_value.strip()
+        if not value:
+            raise ValueError(f"{raw_key} 筛选值不能为空")
+        return key, value
 
-        status_val, args = extract_kv_param(args, "status")
-        if status_val:
-            if status_val not in _ALLOWED_TASK_STATUS:
-                raise ValueError(f"无效待办状态: {status_val}")
-            filters["status"] = status_val
+    @classmethod
+    def _tokenize_search_args(cls, args: str) -> tuple[list[str], dict[str, str]]:
+        """一次分词，分离关键词与筛选条件，并拒绝重复条件。"""
+        if len(args) > _SEARCH_INPUT_MAX_CHARS:
+            raise ValueError(f"搜索参数不能超过 {_SEARCH_INPUT_MAX_CHARS} 字")
+        if UNSAFE_CONTROL_RE.search(args):
+            raise ValueError("搜索参数包含不允许的控制字符")
+        try:
+            tokens = shlex.split(args, comments=False, posix=True)
+        except ValueError as exc:
+            raise ValueError("搜索参数中的引号未闭合") from exc
 
-        category_val, args = extract_kv_param(args, "category")
-        if category_val:
-            if filters.get("type") == "ledger":
-                filters["ledger_category"] = category_val
-            else:
-                filters["category"] = category_val
-
-        transaction_val, args = extract_kv_param(args, "transaction_type")
-        if transaction_val:
-            if transaction_val not in _ALLOWED_TRANSACTION_TYPES:
-                raise ValueError(f"无效交易类型: {transaction_val}")
-            filters["transaction_type"] = transaction_val
-
-        for key, filter_key in [
-            ("account", "account_name"),
-            ("merchant", "merchant"),
-        ]:
-            val, args = extract_kv_param(args, key)
-            if val:
-                filters[filter_key] = val
-
-        for key in ("tag", "tags"):
-            tag_val, args = extract_kv_param(args, key)
-            if tag_val:
-                filters["tags"] = tag_val
-
-        tag_match = BOUNDARY_TAG_TOKEN_RE.search(args)
-        if tag_match:
-            filters["tags"] = tag_match.group(1)
-            args = (args[: tag_match.start()] + args[tag_match.end() :]).strip()
-
-        range_val, args = extract_kv_param(args, "range")
-        if range_val:
-            start_date, end_date = parse_search_date_range(range_val, strict=True)
-            if start_date:
-                date_field = self._resolve_search_date_field(filters.get("type"))
-                filters["date_field"] = date_field
-                if self._is_date_only_search_field(date_field):
-                    start_date = start_date[:10]
-                    if end_date:
-                        end_date = end_date[:10]
-                filters["start_date"] = start_date
-            if end_date:
-                filters["end_date"] = end_date
-
-        return args.strip(), filters
+        query_tokens: list[str] = []
+        raw_filters: dict[str, str] = {}
+        for token in tokens:
+            parsed = cls._parse_filter_token(token)
+            if parsed is None:
+                query_tokens.append(token)
+                continue
+            key, value = parsed
+            if key in raw_filters:
+                raise ValueError(f"筛选条件不能重复: {key}")
+            raw_filters[key] = value
+        return query_tokens, raw_filters
 
     @staticmethod
-    def _resolve_search_date_field(item_type: str | None) -> str:
-        mapping = {
-            "event": "start_time",
-            "task": "plan_date",
-            "diary": "diary_date",
-            "ledger": "ledger_date",
-            "note": "created_at",
+    def _infer_filter_type(raw_filters: dict[str, str]) -> str | None:
+        """验证枚举筛选，并从专属字段推断待办或账目类型。"""
+        item_type = raw_filters.get("type")
+        if item_type:
+            item_type = item_type.casefold()
+            if item_type not in _ALLOWED_SEARCH_TYPES:
+                raise ValueError(f"无效类型: {item_type}")
+
+        status = raw_filters.get("status")
+        if status and status.casefold() not in _ALLOWED_TASK_STATUS:
+            raise ValueError(f"无效待办状态: {status}")
+        transaction_type = raw_filters.get("transaction_type")
+        if transaction_type and transaction_type.casefold() not in _ALLOWED_TRANSACTION_TYPES:
+            raise ValueError(f"无效交易类型: {transaction_type}")
+
+        has_ledger_filter = bool(_LEDGER_FILTER_KEYS.intersection(raw_filters))
+        if status and has_ledger_filter:
+            raise ValueError("待办状态不能与账目专属筛选同时使用")
+        inferred_type = "task" if status else ("ledger" if has_ledger_filter else None)
+        if item_type and inferred_type and item_type != inferred_type:
+            raise ValueError(f"{item_type} 类型不能使用 {inferred_type} 专属筛选")
+        return item_type or inferred_type
+
+    @staticmethod
+    def _bounded_filter_value(value: str, label: str, max_length: int) -> str:
+        """校验用于精确匹配的文本筛选，禁止静默截断。"""
+        normalized = value.strip()
+        if UNSAFE_CONTROL_RE.search(normalized):
+            raise ValueError(f"{label}包含不允许的控制字符")
+        if len(normalized) > max_length:
+            raise ValueError(f"{label}不能超过 {max_length} 字")
+        return normalized
+
+    @staticmethod
+    def _apply_date_filter(
+        filters: SearchFilters,
+        range_value: str,
+        user_now: datetime,
+    ) -> None:
+        start_date, end_date = parse_search_date_range(range_value, now=user_now, strict=True)
+        date_field = _DATE_FIELD_BY_TYPE.get(str(filters.get("type") or ""), "created_at")
+        filters["date_field"] = date_field
+        if date_field in _DATE_ONLY_SEARCH_FIELDS:
+            start_date = start_date[:10] if start_date else None
+            end_date = end_date[:10] if end_date else None
+        if start_date:
+            filters["start_date"] = start_date
+        if end_date:
+            filters["end_date"] = end_date
+
+    @classmethod
+    def _normalize_search_filters(
+        cls,
+        raw_filters: dict[str, str],
+        user_now: datetime,
+    ) -> SearchFilters:
+        filters: SearchFilters = {}
+        item_type = cls._infer_filter_type(raw_filters)
+        if item_type:
+            filters["type"] = item_type
+        if status := raw_filters.get("status"):
+            filters["status"] = status.casefold()
+        if category := raw_filters.get("category"):
+            category_key = "ledger_category" if item_type == "ledger" else "category"
+            category_limit = 60 if item_type == "ledger" else 50
+            filters[category_key] = cls._bounded_filter_value(category, "分类筛选", category_limit)
+        if transaction_type := raw_filters.get("transaction_type"):
+            filters["transaction_type"] = transaction_type.casefold()
+        for key, label, limit in (
+            ("account_name", "账户筛选", 80),
+            ("merchant", "商户筛选", 120),
+        ):
+            if value := raw_filters.get(key):
+                filters[key] = cls._bounded_filter_value(value, label, limit)
+        if tag := raw_filters.get("tags"):
+            bounded_tag = cls._bounded_filter_value(tag, "标签筛选", 20)
+            filters["tags"] = validate_tag(bounded_tag)
+        if range_value := raw_filters.get("range"):
+            cls._apply_date_filter(filters, range_value, user_now)
+        return filters
+
+    @classmethod
+    def _parse_search_query(
+        cls,
+        args: str,
+        user_now: datetime,
+    ) -> tuple[str, SearchFilters]:
+        """返回已规范化关键词和可直接交给数据库的筛选条件。"""
+        query_tokens, raw_filters = cls._tokenize_search_args(args)
+        raw_query = " ".join(query_tokens).strip()
+        if not raw_query:
+            raise ValueError("请提供搜索关键词")
+        if len(raw_query) > _SEARCH_QUERY_MAX_CHARS:
+            raise ValueError(f"搜索关键词不能超过 {_SEARCH_QUERY_MAX_CHARS} 字")
+        query = sanitize_search_keyword(raw_query)
+        if not query:
+            raise ValueError("搜索关键词清洗后为空")
+        return query, cls._normalize_search_filters(raw_filters, user_now)
+
+    async def _load_event_collection_titles(
+        self,
+        user_id: str,
+        results: list[SearchItem],
+    ) -> dict[str, str]:
+        """批量读取当前页日程集合标题，避免在格式化循环中阻塞事件循环。"""
+        collection_ids = list(
+            dict.fromkeys(
+                item.event_collection_id
+                for item in results
+                if isinstance(item, EventItem) and item.event_collection_id
+            )
+        )
+        if not collection_ids:
+            return {}
+        collections = cast(
+            dict[str, dict[str, Any]],
+            await run_sync(
+                self.db.get_event_collections_by_ids,
+                user_id,
+                collection_ids,
+            ),
+        )
+        return {
+            collection_id: str(collection.get("title") or "无标题")
+            for collection_id, collection in collections.items()
         }
-        return mapping.get(item_type or "", "created_at")
-
-    @staticmethod
-    def _is_date_only_search_field(date_field: str) -> bool:
-        return date_field in {"plan_date", "diary_date", "ledger_date"}
 
     def _format_search_results(
-        self, results: list[SearchItem], query: str, filters: dict[str, Any],
+        self,
+        results: list[SearchItem],
+        total: int,
+        query: str,
+        filters: SearchFilters,
+        collection_titles: dict[str, str],
+        display_timezone: tzinfo,
     ) -> str:
-        """格式化搜索结果，按类型分组显示"""
+        """按固定类型顺序展示当前页，并保留数据库返回的精确总数。"""
         if not results:
             return f'🔍 搜索 "{query}"\n\n未找到相关内容'
 
-        # 按类型分组
         grouped: dict[str, list[SearchItem]] = defaultdict(list)
         for item in results:
             item_type = get_item_type_value(item.type, default=str(item.type))
             grouped[item_type].append(item)
 
-        # 构建输出
         parts: list[str] = [
             "🔎 搜索结果",
             f"关键词: {query}",
-            f"命中: {len(results)} 条",
+            f"命中: {total} 条",
         ]
-
-        # 显示筛选条件（紧凑行）
         filter_parts = self._format_filter_summary(filters)
         if filter_parts:
             parts.append(f"筛选: {filter_parts}")
+        parts.extend(("━━━━━━━━━━━━━━━━━━", ""))
 
-        parts.append("━━━━━━━━━━━━━━━━━━")
-        parts.append("")
-
-        # 类型显示顺序
-        type_order = ["event", "task", "ledger", "diary", "note"]
-        # 如果只有一个类型，不显示分组标题
+        ordered_types: list[str] = [
+            item_type for item_type in _SEARCH_TYPE_ORDER if item_type in grouped
+        ]
+        ordered_types.extend(sorted(set(grouped).difference(_SEARCH_TYPE_ORDER)))
         single_type = len(grouped) == 1
-
-        total_shown = 0
-        max_display = 15  # 最多显示15条
-
-        for item_type in type_order:
-            items = grouped.get(item_type)
-            if not items:
-                continue
-
+        for item_type in ordered_types:
+            items = grouped[item_type]
             if not single_type:
                 type_name = TYPE_NAMES.get(item_type, item_type)
-                parts.append(f"【{type_name}】{len(items)} 条")
-
+                parts.append(f"【{type_name}】本页 {len(items)} 条")
             for item in items:
-                if total_shown >= max_display:
-                    break
-                parts.append(self._format_item_line(item, query))
-                total_shown += 1
-
-            if total_shown >= max_display:
-                break
+                collection_id = item.event_collection_id if isinstance(item, EventItem) else None
+                collection_title = collection_titles.get(collection_id or "")
+                parts.append(
+                    self._format_item_line(
+                        item,
+                        query,
+                        collection_title,
+                        display_timezone=display_timezone,
+                    )
+                )
             parts.append("")
 
-        remaining = len(results) - total_shown
+        remaining = max(0, total - len(results))
         if remaining > 0:
             parts.append(f"...还有 {remaining} 条结果，请添加筛选条件缩小范围")
 
-        # 操作提示：只列出结果中出现的类型
-        hint_types = [t for t in type_order if t in grouped]
-        hints = [_TYPE_ACTION_HINTS[t] for t in hint_types if t in _TYPE_ACTION_HINTS]
+        hints = [
+            _TYPE_ACTION_HINTS[item_type]
+            for item_type in _SEARCH_TYPE_ORDER
+            if item_type in grouped
+        ]
         if hints:
-            parts.append("")
-            parts.append(f"💡 操作: {' | '.join(hints)}")
+            parts.extend(("", f"💡 操作: {' | '.join(hints)}"))
 
         return "\n".join(parts)
 
-    def _format_item_line(self, item: SearchItem, query: str) -> str:
-        """格式化单条搜索结果为紧凑的多行块"""
+    @staticmethod
+    def _format_item_title(
+        item: SearchItem,
+        collection_title: str | None,
+    ) -> str:
+        title = single_line_text(item.title)
+        if isinstance(item, EventItem) and collection_title:
+            collection = single_line_text(collection_title) or "无标题"
+            title = f"{collection} · {title or '无标题'}"
+        if not title:
+            title = single_line_text(item.content) or "无标题"
+        return ItemFormatter.truncate_content(title, _SEARCH_TITLE_MAX_CHARS, "...")
+
+    @staticmethod
+    def _format_item_heading(item: SearchItem, title: str) -> str:
         item_type = get_item_type_value(item.type, default=str(item.type))
         icon = ItemFormatter.format_type_icon(item_type)
-        title = item.title
-        if isinstance(item, EventItem) and getattr(item, "event_collection_id", None):
-            try:
-                collection = self.db.items.get_event_collection(
-                    item.event_collection_id,
-                    item.owner_id,
-                )
-            except Exception:
-                collection = None
-            if collection:
-                title = f"{collection.get('title') or '无标题'} · {title or '无标题'}"
-        if not title:
-            title = ItemFormatter.truncate_content(item.content or "", 40, "...")
-        item_id = item.id or ""
-
-        lines: list[str] = []
-
-        # === 第一行: 图标 + 标题 + 类型特有摘要 ===
         main_line = f"• {icon} {title}"
-
-        # 记账: 在标题行追加金额
         if isinstance(item, LedgerItem):
-            tx_type = getattr(item, "transaction_type", "expense")
-            sign = "+" if tx_type == "income" else ("↔ " if tx_type == "transfer" else "-")
-            main_line += f"  {sign}¥{item.amount:.2f}"
-
-        # 待办: 在标题行追加状态
-        if isinstance(item, TaskItem):
-            status_icon = STATUS_ICONS.get(
-                item.status.value if hasattr(item.status, "value") else str(item.status), "⬜"
-            )
+            sign = _TRANSACTION_SIGNS.get(item.transaction_type, "-")
+            main_line += f"  {sign}¥{ledger_amount_yuan(item):.2f}"
+        elif isinstance(item, TaskItem):
+            status_icon = STATUS_ICONS.get(item.status.value, "⬜")
             main_line += f" {status_icon}"
-            if item.priority and item.priority <= 2:
+            if item.priority <= 2:
                 main_line += f" {PRIORITY_ICONS.get(item.priority, '')}"
+        return main_line
 
-        lines.append(main_line)
+    @staticmethod
+    def _ledger_detail_parts(item: LedgerItem) -> list[str]:
+        details: list[str] = []
+        if item.ledger_category:
+            details.append(f"📂{single_line_text(item.ledger_category)}")
+        if item.account_name:
+            account = single_line_text(item.account_name)
+            counter = single_line_text(item.counter_account_name)
+            details.append(f"🏦{account + '→' + counter if counter else account}")
+        if item.merchant:
+            details.append(f"🏷️{single_line_text(item.merchant)}")
+        return details
 
-        # === 第二行: 时间 + 元数据 ===
-        detail_parts: list[str] = []
+    @staticmethod
+    def _common_detail_parts(item: SearchItem) -> list[str]:
+        details: list[str] = []
+        if item.category and item.category != "未分类":
+            details.append(f"📂{single_line_text(item.category)}")
+        if item.tags:
+            tags = [single_line_text(tag) for tag in item.tags[:2]]
+            details.append(f"🏷️{ItemFormatter.format_tags(tags)}")
+        return details
 
-        # 时间信息
-        time_info = self._get_item_time_info(item)
-        if time_info:
-            detail_parts.append(time_info)
-
-        # 记账分类
-        if isinstance(item, LedgerItem) and item.ledger_category:
-            detail_parts.append(f"📂{item.ledger_category}")
-        if isinstance(item, LedgerItem) and getattr(item, "account_name", ""):
-            account = item.account_name
-            counter = getattr(item, "counter_account_name", "") or ""
-            detail_parts.append(f"🏦{account + '→' + counter if counter else account}")
-        if isinstance(item, LedgerItem) and getattr(item, "merchant", ""):
-            detail_parts.append(f"🏷️{item.merchant}")
-
-        # 通用分类和标签（非记账类型）
-        if not isinstance(item, LedgerItem):
-            if item.category and item.category != "未分类":
-                detail_parts.append(f"📂{item.category}")
-            if item.tags:
-                tags_str = ItemFormatter.format_tags(item.tags[:2])
-                detail_parts.append(f"🏷️{tags_str}")
-
-        # 提醒信息（日程）
+    def _format_item_details(
+        self,
+        item: SearchItem,
+        query: str,
+        display_timezone: tzinfo,
+    ) -> list[str]:
+        details: list[str] = []
+        if time_info := self._get_item_time_info(item, display_timezone):
+            details.append(time_info)
+        if isinstance(item, LedgerItem):
+            details.extend(self._ledger_detail_parts(item))
+        else:
+            details.extend(self._common_detail_parts(item))
         if isinstance(item, EventItem) and item.remind_times:
             remind_times = parse_remind_times(item.remind_times)
             if remind_times:
-                detail_parts.append(f"🔔{len(remind_times)}个提醒")
+                details.append(f"🔔{len(remind_times)}个提醒")
+        if preview := self._get_content_preview(item, query):
+            details.append(f"「{preview}」")
+        return details
 
-        # 内容预览（当标题和内容不同时，显示内容片段）
-        preview = self._get_content_preview(item, query)
-        if preview:
-            detail_parts.append(f"「{preview}」")
-
-        if detail_parts:
-            lines.append(f"  {' | '.join(detail_parts)}")
-
-        # ID 行
-        lines.append(f"  ID: `{item_id}`")
-
+    def _format_item_line(
+        self,
+        item: SearchItem,
+        query: str,
+        collection_title: str | None = None,
+        *,
+        display_timezone: tzinfo,
+    ) -> str:
+        """把一条结果格式化为标题、元数据和 ID 三个紧凑区段。"""
+        title = self._format_item_title(item, collection_title)
+        lines = [self._format_item_heading(item, title)]
+        if details := self._format_item_details(item, query, display_timezone):
+            lines.append(f"  {' | '.join(details)}")
+        lines.append(f"  ID: `{item.id or ''}`")
         return "\n".join(lines)
 
     def _get_content_preview(self, item: SearchItem, query: str) -> str:
-        """提取包含关键词的内容片段预览"""
-        content = item.content or ""
-        # 如果没有内容或内容与标题相同，跳过
-        if not content or content == item.title:
+        """提取单行内容片段，并尽量把命中位置保留在固定预算内。"""
+        source = item.remark if isinstance(item, LedgerItem) else item.content
+        content = single_line_text(source)
+        if not content or content == single_line_text(item.title):
             return ""
 
-        # 记账条目用 remark 作为预览来源
-        if isinstance(item, LedgerItem):
-            content = item.remark or ""
-            if not content:
-                return ""
-
         preview_len = PendoConfig.SEARCH_CONTENT_PREVIEW_LENGTH
-
-        # 尝试找到关键词所在位置，截取上下文
-        query_lower = query.lower()
-        content_lower = content.lower()
-        idx = content_lower.find(query_lower)
+        idx = content.casefold().find(query.casefold())
         if idx >= 0:
-            # 以关键词为中心截取
             start = max(0, idx - 10)
-            end = min(len(content), idx + len(query) + preview_len - 10)
+            end = min(len(content), start + preview_len)
             snippet = content[start:end]
             if start > 0:
-                snippet = "..." + snippet
+                snippet = f"...{snippet}"
             if end < len(content):
-                snippet = snippet + "..."
+                snippet = f"{snippet}..."
             return snippet
 
-        # 关键词不在 content 里（可能在 title/tags 匹配），截取开头
         return ItemFormatter.truncate_content(content, preview_len, "...")
 
-    def _get_item_time_info(self, item: SearchItem) -> str:
+    def _get_item_time_info(self, item: SearchItem, display_timezone: tzinfo) -> str:
         """获取条目的时间信息"""
         if isinstance(item, EventItem) and item.start_time:
-            dt_str = ItemFormatter.format_datetime(item.start_time)
+            dt_str = ItemFormatter.format_datetime(item.start_time, tz=display_timezone)
             return f"🗓️{dt_str}"
 
         if isinstance(item, TaskItem):
             if item.plan_date:
                 return f"📅{item.plan_date}"
             if item.deadline_at:
-                dt_str = ItemFormatter.format_datetime(item.deadline_at)
+                dt_str = ItemFormatter.format_datetime(item.deadline_at, tz=display_timezone)
                 return f"⏱{dt_str}"
 
         if isinstance(item, DiaryItem):
             if item.entry_time:
-                return f"📔{item.entry_time[:16].replace('T', ' ')}"
+                dt_str = ItemFormatter.format_datetime(item.entry_time, tz=display_timezone)
+                return f"📔{dt_str}"
             if item.diary_date:
                 return f"📔{item.diary_date}"
 
@@ -405,7 +520,7 @@ class SearchHandler:
 
         return ""
 
-    def _format_filter_summary(self, filters: dict[str, Any]) -> str:
+    def _format_filter_summary(self, filters: SearchFilters) -> str:
         """格式化筛选条件为紧凑的一行"""
         parts: list[str] = []
         if filters.get("type"):
@@ -420,7 +535,7 @@ class SearchHandler:
             parts.append(f"标签=#{filters['tags']}")
         if filters.get("transaction_type"):
             transaction_type = filters["transaction_type"]
-            label = {"income": "收入", "expense": "支出", "transfer": "转账"}.get(transaction_type, transaction_type)
+            label = _TRANSACTION_LABELS.get(transaction_type, transaction_type)
             parts.append(f"交易={label}")
         if filters.get("account_name"):
             parts.append(f"账户={filters['account_name']}")

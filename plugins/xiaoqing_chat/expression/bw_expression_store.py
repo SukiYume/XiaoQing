@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from core.atomic_store import keyed_path_lock
 
 from ..store_base import StoreBase
 
@@ -26,17 +29,22 @@ class ExpressionStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
         self._cache: list[ExpressionRecord] | None = None
+        self._baseline: list[ExpressionRecord] = []
+
+    def bind(self, data_dir: Path) -> None:
+        if self._data_dir == data_dir:
+            return
+        super().bind(data_dir)
+        self._cache = None
+        self._baseline = []
 
     def _path(self) -> Path | None:
         return self._resolve_path("bw_learner", "expressions.json")
 
-    def load(self) -> list[ExpressionRecord]:
-        if self._cache is not None:
-            return list(self._cache)
+    def _read_records(self) -> list[ExpressionRecord]:
         try:
             raw = self._load_json_from_path_parts("bw_learner", "expressions.json", default=[])
             if not isinstance(raw, list):
-                self._cache = []
                 return []
             out: list[ExpressionRecord] = []
             for item in raw:
@@ -74,17 +82,107 @@ class ExpressionStore(StoreBase):
                         modified_by=modified_by,
                     )
                 )
-            self._cache = out
-            return list(out)
+            return out
         except Exception:
-            self._cache = []
             return []
 
-    def save(self, items: Sequence[ExpressionRecord]) -> None:
-        payload = [asdict(x) for x in items]
-        if not self._save_json_to_path_parts("bw_learner", "expressions.json", data=payload):
-            return
-        self._cache = list(items)
+    def load(self) -> list[ExpressionRecord]:
+        path = self._path()
+        if path is None:
+            return []
+        # 使用 core 的规范路径锁，模块热重载前后的类实例也共享同一把锁。
+        with keyed_path_lock(path):
+            if self._cache is None:
+                self._cache = self._read_records()
+                self._baseline = deepcopy(self._cache)
+            return deepcopy(self._cache)
 
-    def upsert_all(self, items: Sequence[ExpressionRecord]) -> None:
-        self.save(items)
+    def clear(self, chat_id: str) -> None:
+        """删除一个会话的表达学习记录，并保留其它会话的记录。"""
+
+        target = str(chat_id or "").strip()
+        path = self._path()
+        if not target or path is None:
+            return
+        with keyed_path_lock(path):
+            latest = self._read_records()
+            remaining = [item for item in latest if item.chat_id != target]
+            if len(remaining) != len(latest):
+                payload = [asdict(item) for item in remaining]
+                if not self._save_json_to_path_parts(
+                    "bw_learner", "expressions.json", data=payload
+                ):
+                    return
+            self._cache = deepcopy(remaining)
+            self._baseline = deepcopy(remaining)
+
+    @staticmethod
+    def _merge_record(
+        latest: ExpressionRecord | None,
+        baseline: ExpressionRecord | None,
+        desired: ExpressionRecord,
+    ) -> ExpressionRecord:
+        if latest is None:
+            return deepcopy(desired)
+        merged = deepcopy(latest)
+        original_count = baseline.count if baseline is not None else 0
+        merged.count = max(0, latest.count + (desired.count - original_count))
+        original_content = baseline.content_list if baseline is not None else []
+        removed = set(original_content) - set(desired.content_list)
+        additions = [item for item in desired.content_list if item not in original_content]
+        merged.content_list = [item for item in latest.content_list if item not in removed]
+        merged.content_list.extend(item for item in additions if item not in merged.content_list)
+        preserve_rejection = (
+            latest.rejected and not desired.rejected and desired.modified_by != "user"
+        )
+        for field_name in (
+            "chat_id",
+            "situation",
+            "style",
+            "last_active_time",
+            "checked",
+            "rejected",
+            "modified_by",
+        ):
+            if preserve_rejection and field_name in {"checked", "rejected", "modified_by"}:
+                continue
+            original = getattr(baseline, field_name) if baseline is not None else None
+            desired_value = getattr(desired, field_name)
+            if baseline is None or desired_value != original:
+                setattr(merged, field_name, desired_value)
+        return merged
+
+    def save(self, items: Sequence[ExpressionRecord]) -> None:
+        desired_items = deepcopy(list(items))
+        path = self._path()
+        if path is None:
+            return
+        with keyed_path_lock(path):
+            latest_items = self._read_records()
+            latest_by_id = {item.expression_id: item for item in latest_items}
+            baseline_by_id = {item.expression_id: item for item in self._baseline}
+            desired_by_id = {item.expression_id: item for item in desired_items}
+            merged_by_id = dict(latest_by_id)
+            for expression_id, desired in desired_by_id.items():
+                merged_by_id[expression_id] = self._merge_record(
+                    latest_by_id.get(expression_id),
+                    baseline_by_id.get(expression_id),
+                    desired,
+                )
+            for expression_id in set(baseline_by_id) - set(desired_by_id):
+                merged_by_id.pop(expression_id, None)
+
+            desired_order = [item.expression_id for item in desired_items]
+            concurrent_order = [
+                item.expression_id
+                for item in latest_items
+                if item.expression_id not in baseline_by_id
+                and item.expression_id not in desired_by_id
+            ]
+            order = [*concurrent_order, *desired_order]
+            merged_items = [merged_by_id[key] for key in order if key in merged_by_id]
+            payload = [asdict(item) for item in merged_items]
+            if not self._save_json_to_path_parts("bw_learner", "expressions.json", data=payload):
+                return
+            self._cache = deepcopy(merged_items)
+            self._baseline = deepcopy(merged_items)

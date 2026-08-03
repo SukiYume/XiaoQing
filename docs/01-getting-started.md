@@ -9,7 +9,8 @@
 
 ## 🖥️ 环境要求
 
-- **Python 3.10+**（推荐 3.11）
+- **Python 3.10+**。首次加载不限制解释器小版本；插件热重载会验证 CPython
+  module-lock 的真实行为，能力不足时自动进入 restart-only 模式，插件改动通过重启生效。
 - **OneBot 实现**：用于连接 QQ
   - 推荐 [NapCatQQ](https://github.com/NapNeko/NapCatQQ) (Modern OneBot 11 Implementation)
 
@@ -20,18 +21,19 @@
 ```bash
 git clone https://github.com/SukiYume/XiaoQing.git
 cd XiaoQing
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
+
+仓库只维护根目录 `requirements.txt`，由 pip 按当前 Python 和平台安装 Core 与默认启用能力的直接依赖。
 
 核心依赖包括以下组件。
 - `aiohttp` - 异步 HTTP
 - `websockets` - WebSocket 通信
 - `apscheduler` - 定时任务
 - `fastapi` + `uvicorn` - pendo Web 控制台服务器
-- `PyJWT` + `passlib[bcrypt]` - pendo Web 控制台身份验证
+- `PyJWT` - pendo Web 控制台短期登录码与会话令牌
 
-> [!NOTE]
-> 若 NumPy/PyTorch 在特定 Windows 部署上报告重复 OpenMP runtime，请先统一依赖来源和版本。只有在已验证的兼容环境中，才由部署脚本显式设置 `KMP_DUPLICATE_LIB_OK=TRUE`；XiaoQing 不会自行设置该变量。
+Jupyter 内核与 arXiv 本地模型推理是可选能力；需要时分别安装 `.[jupyter]` 或 `.[arxiv-ml]` extra。根目录依赖文件末尾也列出了对应的可选包。
 
 ---
 
@@ -68,6 +70,7 @@ Copy-Item config/secrets.json.example config/secrets.json
   "inbound_http_base": "http://127.0.0.1:12000",
   "inbound_ws_uri": "ws://127.0.0.1:12000/ws",
   "inbound_trusted_tls_proxy": false,
+  "inbound_ws_broadcast_timeout_seconds": 5.0,
   
   "max_concurrency": 5,
   "session_timeout": 300,
@@ -107,12 +110,14 @@ Copy-Item config/secrets.json.example config/secrets.json
 | 配置项 | 说明 |
 |--------|------|
 | `inbound_token` | 与 OneBot 通信的密钥，需要双方一致 |
-| `onebot_token` | OneBot HTTP API 的鉴权 token；启用 token 时需要同步填写，否则图片回收接口会失败 |
+| `onebot_token` | OneBot HTTP 与主动 WebSocket 共用的鉴权 token；在来源有效的 `secrets.json` 中缺省或明确设为 `""` 才表示允许匿名连接 |
 | `admin_user_ids` | 管理员 QQ 号列表，可执行管理命令 |
 | `plugins` | 各插件的私有配置（如 API Key） |
 
 > [!WARNING]
 > `secrets.json` 包含敏感信息（token、管理员 ID、API Key），**不要提交到 Git！** 项目 `.gitignore` 已默认排除此文件。
+
+`secrets.json` 缺失、损坏、不可读或跨代不一致时，整个运行态 secrets 视图都会撤权：OneBot HTTP/主动 WebSocket 停止新网络调用，Inbound token 清空（所有 Bearer 校验失败），管理员列表也清空。`onebot_token`/`inbound_token` 必须是精确的 JSON 字符串，框架不会把布尔、数字、null、数组或对象强制转换成 token。修复文件并完成稳定 reload 后才会恢复权限。
 
 ---
 
@@ -220,39 +225,42 @@ cd XiaoQing
 python main.py
 ```
 
-Windows 也可以双击仓库根目录的 `run-bot.vbs`，由隐藏窗口中的
+Windows 也可以双击 `scripts\run-bot.vbs`，由隐藏窗口中的
 `scripts/run-bot-monitor.ps1` 同时看护 XiaoQing 和本机 NapCat。监控器不会
 接管同名的其他进程，只会复用自身 PID 文件中且命令行同时匹配本仓库
 `main.py` 和日志泵的进程。XiaoQing 异常退出后按有界指数退避重启；稳定运行
 达到阈值后退避恢复初值。
 
-本机路径、Conda 环境、QQ 账号和额外启动参数都必须由部署者配置，不再内置
-账号。在当前 PowerShell 会话直接启动监控器时，可以这样设置进程环境变量：
+Python 环境及依赖由部署者在启动前准备；项目和监控器都只调用当前 `PATH` 中的
+`python`，不识别或固定 Conda/venv 名称。QQ 账号和额外启动参数也不内置。在当前
+PowerShell 会话直接启动监控器时，可以这样设置进程环境变量：
 
 ```powershell
 $env:XIAOQING_NAPCAT_ACCOUNT = "你的QQ号"
-& .\scripts\run-bot-monitor.ps1 `
-  -PythonPath "$env:USERPROFILE\miniconda3\python.exe" `
-  -CondaPath "$env:USERPROFILE\miniconda3\Scripts\conda.exe" `
-  -CondaEnvironment "base"
+& .\scripts\run-bot-monitor.ps1
 ```
 
-如果要继续从资源管理器双击 `run-bot.vbs`，应通过 Windows 用户环境变量界面
+如果要继续从资源管理器双击 `scripts\run-bot.vbs`，应通过 Windows 用户环境变量界面
 持久设置 `XIAOQING_NAPCAT_ACCOUNT`，并在重新登录后启动；仅在另一个已打开的
 PowerShell 窗口设置 `$env:` 不会改变资源管理器已经继承的环境。
 
-高级部署可以通过 `-BotPythonCommand`、`-BotArguments`、`-NapCatPath` 和
-`-NapCatArguments` 传入实际命令。`-MonitorIntervalSeconds`、重启退避、稳定
+高级部署可以通过 `-BotArguments`、`-NapCatPath` 和 `-NapCatArguments` 传入
+额外参数或实际 NapCat 路径。`-MonitorIntervalSeconds`、重启退避、稳定
 运行阈值、`-MaximumLogBytes`（64 KiB～10 GiB）和 `-LogBackupCount`（1～100）
 都有启动时范围校验，且最大退避不得小于初始退避。
+
+默认模式要求 `-NapCatPath` 指向真实可执行文件；启动时缺失或运行中消失都会让
+监控器明确失败，不会把“适配器不存在”误报为“已运行”。只有 NapCat 由另一个
+受监督服务、容器或远端主机明确提供时，才使用 `-DisableNapCat` 关闭本脚本的
+适配器管理；该开关只禁用 NapCat 启动/探测，不会替你验证外部 OneBot 服务可用。
 
 stdout 和 stderr 分别写入 `logs/*-monitor.log`。日志由标准库 Python 辅助进程
 持续读取；达到阈值时由持有者先关闭 Windows 文件句柄，再依次轮转并重开，
 因此运行中的长寿命进程也能轮转。每个日志最多保留配置数量的备份，每个活动
 日志和备份均受字节上限约束；写盘失败会终止其创建的进程树，让监控器按退避
 策略重启，而不是让机器人在无日志状态下继续运行。日志泵脚本已列入
-`deploy/runtime-paths.txt` 的运行时清单；若部署不完整而缺少它，监控器会在
-启动任何子进程前明确失败。
+`scripts/run_process_with_rotating_logs.py`；若脚本缺失，监控器会在启动任何
+子进程前明确失败。
 
 看到以下日志说明启动成功：
 
@@ -285,6 +293,26 @@ stdout 和 stderr 分别写入 `logs/*-monitor.log`。日志由标准库 Python 
 机器人: [插件列表...]
 ```
 
+### 自动化回归与上线验收
+
+安装项目依赖后，可在项目根目录的 Git Bash、macOS 或 Linux 终端执行完整并行回归：
+
+```bash
+pytest -n 2
+```
+
+上线前需要连同真实 `python main.py` 生命周期、HTTP/WS 全插件命令矩阵、Core
+压力测试和静态门禁一起验证时，使用统一 Bash 入口：
+
+```bash
+bash scripts/run_full_uat.sh --plan-only
+bash scripts/run_full_uat.sh
+```
+
+入口直接使用当前 `PATH` 中的 `python`；项目不检测、激活或固定 Conda/venv
+环境，也不限制 Python 小版本。外部服务和可能产生模型费用的聊天质量测试默认不运行，
+需要时再显式传入 `--include-external` 或 `--include-chat-quality`。
+
 ### 智能对话测试（xiaoqing_chat）
 
 ```
@@ -316,7 +344,7 @@ stdout 和 stderr 分别写入 `logs/*-monitor.log`。日志由标准库 Python 
 - 最近上下文明确在聊小青时，发送 `不@她能不能听见啊` 这类“她/ta”共指消息，应能被识别为在叫小青。
 - 纯普通群聊闲聊不保证每条都回复，它会经过普通插话概率、heartflow、planner 和硬频控。
 
-这些行为属于 `xiaoqing_chat` 插件内部的 attention gate 和 participation gate，不由全局 `random_reply_rate` 决定。
+这些行为统一由 `xiaoqing_chat` 插件内部的 attention gate 和 participation gate 决定。
 
 ### 个人助理测试（pendo）
 
@@ -363,7 +391,7 @@ Codex 插件不占用框架的多轮 session。先创建一个带标签的 Codex
 机器人: [当前运行与排队状态...]
 ```
 
-默认工作目录是 `C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex`。在 QQ 里建议统一使用 `/` 斜杠输入路径，例如 `/codex create demo cwd:C:/Users/testuser/Desktop/project`，插件会按 bot 所在系统解析。Codex 任务如果生成图片，插件会自动提供任务级 artifacts 目录，完成后把文字和图片一起回发到 QQ。
+默认工作目录是 Codex 插件数据目录下的 `workspaces/`。在 QQ 里建议统一使用 `/` 斜杠输入路径，例如 `/codex create demo cwd:C:/workspace/project`，插件会按 bot 所在系统解析。Codex 任务如果生成图片，插件会自动提供任务级 artifacts 目录，完成后把文字和图片一起回发到 QQ。
 
 `arxiv_filter` 会复用 Codex 插件的后台队列：筛选结果发出后，所有 positive 论文链接会投递到固定 `astro-ph` 会话。该会话默认受保护，工作目录需要存在 `arxiv-summary-methodology.md`，用于约束每日论文摘要格式。
 
@@ -372,10 +400,10 @@ Codex 插件不占用框架的多轮 session。先创建一个带标签的 Codex
 Shell 插件直接执行白名单命令，不经过系统 shell。Windows 下 `copy`、`del` 这类内建命令不能直接执行；复制文件优先使用 `cp`、`xcopy`、`robocopy`，或显式通过 `cmd /c copy`。
 
 ```
-你: /shell cp C:/Users/testuser/Desktop/a.txt C:/Users/testuser/Desktop/b.txt
+你: /shell cp C:/workspace/a.txt C:/workspace/b.txt
 机器人: [执行结果...]
 
-你: /shell cmd /c copy C:/Users/testuser/Desktop/a.txt C:/Users/testuser/Desktop/b.txt
+你: /shell cmd /c copy C:/workspace/a.txt C:/workspace/b.txt
 机器人: [执行结果...]
 ```
 
@@ -407,9 +435,9 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 机器人: 运行中 | 地址：http://127.0.0.1:12001
 ```
 
-打开浏览器访问后，先执行 `/pendo web token` 获取登录令牌，再将令牌粘贴到登录页即可。iPhone Scriptable 小组件使用 `/pendo web widget-token` 生成只读 token。
+打开浏览器访问后，先执行 `/pendo web token` 获取一次性登录链接。iPhone Scriptable 小组件使用 `/pendo web widget-token` 生成默认 30 天的只读 token，并在首次运行脚本时存入 iOS Keychain；需要失效时执行 `/pendo web widget-revoke`。
 
-Windows 上遇到端口绑定失败，且 `netstat -ano` 看不到默认端口被占用时，优先尝试在启动前设置 `$env:PENDO_WEB_PORT="12003"` 后重启主进程。
+Windows 上遇到端口绑定失败，且 `netstat -ano` 看不到默认端口被占用时，优先把 `config/config.json` 中的 `plugins.pendo.web_port` 改为其他合法端口（例如 `12003`）；保存后配置热重载会重启监听端点。
 
 如需使用 nginx 反向代理部署在子路径（如 `/pendo`），参见 [06-configuration.md](06-configuration.md) 中的 nginx 配置示例。
 
@@ -459,7 +487,7 @@ Windows 上遇到端口绑定失败，且 `netstat -ano` 看不到默认端口�
 XiaoQing 支持两种闲聊模式。
 
 1. **xiaoqing_chat**（推荐）：基于 LLM 的智能对话
-   - 需要在 `config/secrets.json` 中配置 LLM API
+   - 需要在 `config.json` 配置统一 provider、model profile 和 route，并在 `config/secrets.json` 填写对应 API Key
    - 支持长期记忆、表情学习、情绪系统
 
 2. **smalltalk**：基于规则的简单闲聊
@@ -481,21 +509,42 @@ XiaoQing 支持两种闲聊模式。
 
 1. **LLM API 配置**
    ```json
+   // config.json
    {
+     "ai": {
+       "providers": {
+         "deepseek": {
+           "api_base": "https://api.deepseek.com",
+           "endpoint_path": "/chat/completions"
+         }
+       },
+       "models": {
+         "deepseek-flash": {
+           "provider": "deepseek",
+           "model": "deepseek-v4-flash",
+           "modalities": ["text"]
+         }
+       }
+     },
      "plugins": {
-        "xiaoqing_chat": {
-          "default": "deepseek",
-          "providers": {
-            "deepseek": {
-              "api_base": "https://api.deepseek.com",
-              "api_key": "your-api-key",
-              "model": "deepseek-chat",
-              "endpoint_path": "/v1/chat/completions"
-            }
-          }
-        }
-      }
-    }
+       "xiaoqing_chat": {
+         "ai": {
+           "routes": {
+             "chat": {"models": ["deepseek-flash"]}
+           }
+         }
+       }
+     }
+   }
+
+   // secrets.json
+   {
+     "ai": {
+       "providers": {
+         "deepseek": {"api_key": "your-deepseek-api-key"}
+       }
+     }
+   }
    ```
 
 2. **查看日志确认错误**
@@ -508,7 +557,7 @@ XiaoQing 支持两种闲聊模式。
    ```
 
 3. **普通群消息的回复频率由插件内部控制**，不是所有消息都会回复；但 `/xc`、`@` 机器人、直接叫 `bot_name` 都属于强制回复路径
-4. **图片或表情包不回复时**，检查 `config/secrets.json -> plugins.xiaoqing_chat.vision` 是否已配置，以及日志中是否出现 `media.analyze.skip` / `media.analyze.fail`
+4. **图片或表情包不回复时**，检查 `plugins.xiaoqing_chat.ai.routes.vision` 是否引用了带 `image` 模态的 profile，以及日志中是否出现 `media.analyze.skip` / `media.analyze.fail`
 
 ### 详细日志查看
 

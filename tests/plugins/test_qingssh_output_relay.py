@@ -1,24 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from plugins.qingssh import session_handlers
 from plugins.qingssh import ssh_manager as ssh_manager_module
 from plugins.qingssh.config import SessionKeys
 from plugins.qingssh.output_relay import SSHOutputPolicy, SSHOutputRelay
-from plugins.qingssh.session_handlers import _run_background_command
+from tests.helpers.settings_snapshot import with_settings_reader
 
 
 class _Session:
     def __init__(self) -> None:
         self.data = {
             SessionKeys.STATE: "executing",
-            SessionKeys.CURRENT_TASK: "running",
         }
+        self.plugin_name = "qingssh"
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.data.get(key, default)
@@ -27,11 +30,55 @@ class _Session:
         self.data[key] = value
 
 
+def _start_background_job(
+    *,
+    session: _Session,
+    manager: Any,
+    send_action: Any,
+    command: str,
+    policy: SSHOutputPolicy,
+    server_name: str = "srv",
+    is_cd: bool = False,
+) -> asyncio.Task[None]:
+    key = (1, 2)
+    job_id = uuid.uuid4().hex
+    session.set(SessionKeys.SERVER_NAME, server_name)
+    session.set(SessionKeys.STATE, "executing")
+    session.set(SessionKeys.CURRENT_TASK, job_id)
+
+    async def update_session(callback: Any) -> Any:
+        return callback(session)
+
+    task = asyncio.create_task(
+        session_handlers._run_background_command(
+            update_session,
+            send_action,
+            manager,
+            server_name,
+            command,
+            "1",
+            "2",
+            1,
+            2,
+            policy,
+            job_key=key,
+            job_id=job_id,
+            is_cd=is_cd,
+        )
+    )
+    session_handlers._register_job(
+        session_handlers._CommandJob(
+            key=key,
+            server_name=server_name,
+            job_id=job_id,
+            task=task,
+        )
+    )
+    return task
+
+
 def _action_texts(actions: list[dict[str, Any]]) -> list[str]:
-    return [
-        str(action["params"]["message"][0]["data"]["text"])
-        for action in actions
-    ]
+    return [str(action["params"]["message"][0]["data"]["text"]) for action in actions]
 
 
 def _fast_policy(**overrides: Any) -> SSHOutputPolicy:
@@ -51,24 +98,47 @@ def _fast_policy(**overrides: Any) -> SSHOutputPolicy:
     return SSHOutputPolicy(**values)
 
 
+@pytest.mark.asyncio
+async def test_relay_strips_terminal_controls_only_from_user_projection(tmp_path: Path) -> None:
+    sent: list[str] = []
+
+    async def send_text(value: str) -> None:
+        sent.append(value)
+
+    relay = SSHOutputRelay(
+        output_dir=tmp_path,
+        policy=_fast_policy(),
+        send_text=send_text,
+    )
+    await relay.feed("\x1b[31mvisible\x1b[0m\x00text")
+    summary = await relay.finish("✅ done")
+
+    projected = "".join(sent)
+    assert "visible" in projected and "text" in projected
+    assert "\x1b" not in projected and "\x00" not in projected
+    assert summary.total_chars == len("\x1b[31mvisible\x1b[0m\x00text")
+
+
 def test_policy_reads_plugin_namespace_and_allows_explicit_unlimited_command() -> None:
-    context = SimpleNamespace(
-        config={
-            "plugins": {
-                "qingssh": {
-                    "command_timeout_seconds": 0,
-                    "qq_max_actions": 4,
-                    "qq_max_text_chars": 4096,
-                    "qq_max_message_chars": 1024,
-                    "qq_head_chars": 2048,
-                    "qq_tail_chars": 512,
-                    "qq_send_interval_seconds": 0,
-                    "qq_send_timeout_seconds": 2,
-                    "archive_max_bytes": 2 * 1024 * 1024,
-                    "archive_tail_bytes": 64 * 1024,
+    context = with_settings_reader(
+        SimpleNamespace(
+            config={
+                "plugins": {
+                    "qingssh": {
+                        "command_timeout_seconds": 0,
+                        "qq_max_actions": 4,
+                        "qq_max_text_chars": 4096,
+                        "qq_max_message_chars": 1024,
+                        "qq_head_chars": 2048,
+                        "qq_tail_chars": 512,
+                        "qq_send_interval_seconds": 0,
+                        "qq_send_timeout_seconds": 2,
+                        "archive_max_bytes": 2 * 1024 * 1024,
+                        "archive_tail_bytes": 64 * 1024,
+                    }
                 }
             }
-        }
+        )
     )
 
     policy = SSHOutputPolicy.from_context(context)
@@ -89,7 +159,7 @@ def test_policy_reads_plugin_namespace_and_allows_explicit_unlimited_command() -
     ],
 )
 def test_policy_rejects_unsafe_or_nonfunctional_bounds(name: str, value: Any) -> None:
-    context = SimpleNamespace(config={"plugins": {"qingssh": {name: value}}})
+    context = with_settings_reader(SimpleNamespace(config={"plugins": {"qingssh": {name: value}}}))
 
     with pytest.raises(ValueError, match=name):
         SSHOutputPolicy.from_context(context)
@@ -125,26 +195,55 @@ async def test_normal_output_is_complete_and_creates_no_archive(tmp_path: Path) 
     session = _Session()
     command = "printf '%s\\n' 'hello world' && uname -a"
 
-    await _run_background_command(
-        context,
-        session,
-        Manager(),
-        "srv",
-        command,
-        "1",
-        "2",
-        1,
-        2,
-        _fast_policy(),
+    await _start_background_job(
+        session=session,
+        manager=Manager(),
+        send_action=context.send_action,
+        command=command,
+        policy=_fast_policy(),
     )
 
     texts = _action_texts(actions)
     assert command_seen == [(command, 0.0)]
     assert "".join(texts).startswith("hello\nworld\n")
     assert "✅ 命令执行完毕" in texts[-1]
-    assert not list((tmp_path / "command_outputs").glob("*"))
+    assert not (tmp_path / "command_outputs").exists()
     assert session.get(SessionKeys.STATE) == "connected"
     assert session.get(SessionKeys.CURRENT_TASK) is None
+
+
+@pytest.mark.asyncio
+async def test_archive_filesystem_operations_run_off_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = SSHOutputRelay(
+        output_dir=tmp_path,
+        policy=_fast_policy(),
+        send_text=lambda _text: asyncio.sleep(0),
+    )
+    event_loop_thread = threading.get_ident()
+    operation_threads: list[tuple[str, int]] = []
+
+    for method_name in ("_open_archive", "_archive", "_commit_archive"):
+        original = getattr(relay, method_name)
+
+        def tracked(*args: Any, _name: str = method_name, _original: Any = original) -> Any:
+            operation_threads.append((_name, threading.get_ident()))
+            return _original(*args)
+
+        monkeypatch.setattr(relay, method_name, tracked)
+
+    await relay.feed("x" * 20_000)
+    summary = await relay.finish("✅ done")
+
+    assert summary.archive_path is not None
+    assert {name for name, _thread_id in operation_threads} == {
+        "_open_archive",
+        "_archive",
+        "_commit_archive",
+    }
+    assert all(thread_id != event_loop_thread for _name, thread_id in operation_threads)
 
 
 @pytest.mark.asyncio
@@ -168,17 +267,12 @@ async def test_multi_megabyte_output_has_bounded_qq_projection_and_full_archive(
     async def send_action(action: dict[str, Any]) -> None:
         actions.append(action)
 
-    await _run_background_command(
-        SimpleNamespace(send_action=send_action),
-        _Session(),
-        Manager(),
-        "srv",
-        "yes x | head -c 4194304",
-        "1",
-        "2",
-        1,
-        2,
-        _fast_policy(),
+    await _start_background_job(
+        session=_Session(),
+        manager=Manager(),
+        send_action=send_action,
+        command="yes x | head -c 4194304",
+        policy=_fast_policy(),
     )
 
     texts = _action_texts(actions)
@@ -191,7 +285,8 @@ async def test_multi_megabyte_output_has_bounded_qq_projection_and_full_archive(
     archives = list((tmp_path / "command_outputs").glob("ssh-output-*.txt"))
     assert len(archives) == 1
     assert archives[0].read_text(encoding="utf-8") == payload
-    assert str(archives[0].resolve()) in texts[-1]
+    assert archives[0].name in texts[-1]
+    assert str(archives[0].resolve()) not in texts[-1]
     assert not list((tmp_path / "command_outputs").glob("*.tmp"))
 
 
@@ -304,19 +399,12 @@ async def test_cancellation_reclaims_remote_and_removes_relay_artifacts(tmp_path
         raise AssertionError("partial output must not escape after cancellation")
 
     session = _Session()
-    task = asyncio.create_task(
-        _run_background_command(
-            SimpleNamespace(send_action=send_action),
-            session,
-            Manager(),
-            "srv",
-            "long-running-command --unchanged",
-            "1",
-            "2",
-            1,
-            2,
-            _fast_policy(),
-        )
+    task = _start_background_job(
+        session=session,
+        manager=Manager(),
+        send_action=send_action,
+        command="long-running-command --unchanged",
+        policy=_fast_policy(),
     )
     await asyncio.wait_for(entered.wait(), timeout=1)
 
@@ -325,7 +413,7 @@ async def test_cancellation_reclaims_remote_and_removes_relay_artifacts(tmp_path
         await asyncio.wait_for(task, timeout=1)
 
     assert remote_cancelled.is_set()
-    assert not list((tmp_path / "command_outputs").glob("*"))
+    assert not (tmp_path / "command_outputs").exists()
     assert session.get(SessionKeys.STATE) == "connected"
     assert session.get(SessionKeys.CURRENT_TASK) is None
     assert not {

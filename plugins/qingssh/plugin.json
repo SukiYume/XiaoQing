@@ -3,102 +3,178 @@
     "version": "2.0.0",
     "description": "SSH远程控制插件 - 通过多轮对话管理SSH连接和执行命令，支持 ~/.ssh/config，统一子命令系统",
     "entry": "main.py",
+    "capabilities": ["admin_sessions", "execution_timeout_exempt"],
     "commands": [
         {
             "name": "ssh",
-            "triggers": [
-                "ssh",
-                "SSH",
-                "远程",
-                "ssh连接",
-                "sshconnect"
-            ],
-            "help": "🖥️ SSH远程控制 - 支持子命令：help/list/add/remove/import/config/status/disconnect | /ssh help 查看详细帮助",
-            "admin_only": true
+            "triggers": ["ssh", "SSH", "远程", "ssh连接", "sshconnect"],
+            "help": "连接服务器并管理 SSH 配置、连接和状态；会话内 Shell 输入不是独立命令",
+            "admin_only": true,
+            "contexts": ["private"],
+            "usage": "/ssh [help|list|add|remove|import|config|status|disconnect|服务器名] [参数]",
+            "examples": ["/ssh", "/ssh server-name", "/ssh root@server-name"],
+            "invalid_examples": ["/ssh user@@server", "/ssh help extra"],
+            "subcommands": [
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示全部 SSH 管理命令和会话说明",
+                    "usage": "/ssh help",
+                    "match": "exact",
+                    "examples": ["/ssh help"],
+                    "invalid_examples": ["/ssh help extra"]
+                },
+                {
+                    "name": "list",
+                    "aliases": ["列表"],
+                    "help": "列出已保存服务器及当前用户的连接状态",
+                    "usage": "/ssh list",
+                    "match": "exact",
+                    "examples": ["/ssh list"],
+                    "invalid_examples": ["/ssh list extra"]
+                },
+                {
+                    "name": "add",
+                    "aliases": ["添加"],
+                    "help": "无参数时引导添加；有参数时快速添加服务器",
+                    "usage": "/ssh add [名称 主机 [端口] [用户名]]",
+                    "examples": ["/ssh add", "/ssh add work host.example 22 root"],
+                    "invalid_examples": ["/ssh add only-name", "/ssh add work host 22 root extra"]
+                },
+                {
+                    "name": "remove",
+                    "aliases": ["删除", "del"],
+                    "help": "删除已保存服务器配置及相关连接",
+                    "usage": "/ssh remove <服务器名>",
+                    "examples": ["/ssh remove work"],
+                    "invalid_examples": ["/ssh remove"]
+                },
+                {
+                    "name": "import",
+                    "aliases": ["导入"],
+                    "help": "列出可导入 Host，或从 ~/.ssh/config 导入一个/全部配置",
+                    "usage": "/ssh import [Host名|all|全部]",
+                    "examples": ["/ssh import", "/ssh import all"],
+                    "invalid_examples": ["/ssh import host extra"]
+                },
+                {
+                    "name": "config",
+                    "aliases": ["配置"],
+                    "help": "列出 ~/.ssh/config 中可直接使用的 Host",
+                    "usage": "/ssh config",
+                    "match": "exact",
+                    "examples": ["/ssh config"],
+                    "invalid_examples": ["/ssh config extra"]
+                },
+                {
+                    "name": "status",
+                    "aliases": ["状态"],
+                    "help": "显示全部活跃 SSH 连接",
+                    "usage": "/ssh status",
+                    "match": "exact",
+                    "examples": ["/ssh status"],
+                    "invalid_examples": ["/ssh status extra"]
+                },
+                {
+                    "name": "disconnect",
+                    "aliases": ["断开"],
+                    "help": "断开当前连接或指定服务器连接",
+                    "usage": "/ssh disconnect [服务器名]",
+                    "examples": ["/ssh disconnect", "/ssh disconnect work"],
+                    "invalid_examples": ["/ssh disconnect work extra"]
+                }
+            ]
         },
         {
             "name": "ssh断开",
-            "triggers": [
-                "ssh断开",
-                "sshdisconnect",
-                "ssh退出"
-            ],
-            "help": "🔌 断开SSH连接 | /ssh断开 或 /ssh断开 <服务器名>",
+            "triggers": ["ssh断开", "sshdisconnect", "ssh退出"],
+            "help": "旧版兼容入口；等价于 /ssh disconnect",
             "admin_only": true,
-            "priority": 1
+            "contexts": ["private"],
+            "priority": 1,
+            "usage": "/ssh断开 [服务器名]",
+            "examples": ["/ssh断开", "/ssh断开 work"],
+            "invalid_examples": ["/ssh断开 work extra"]
         },
         {
             "name": "ssh列表",
-            "triggers": [
-                "ssh列表",
-                "sshlist",
-                "ssh服务器"
-            ],
-            "help": "📋 查看已保存的SSH服务器列表及连接状态 | /ssh列表",
+            "triggers": ["ssh列表", "sshlist", "ssh服务器"],
+            "help": "旧版兼容入口；等价于 /ssh list",
             "admin_only": true,
-            "priority": 1
+            "contexts": ["private"],
+            "priority": 1,
+            "usage": "/ssh列表",
+            "examples": ["/ssh列表"],
+            "invalid_examples": ["/ssh列表 extra"]
         },
         {
             "name": "ssh添加",
-            "triggers": [
-                "ssh添加",
-                "sshadd"
-            ],
-            "help": "➕ 添加SSH服务器（引导式或快速模式） | /ssh添加 或 /ssh添加 <名称> <主机> [端口] [用户名]",
+            "triggers": ["ssh添加", "sshadd"],
+            "help": "旧版兼容入口；等价于 /ssh add",
             "admin_only": true,
-            "priority": 1
+            "contexts": ["private"],
+            "priority": 1,
+            "usage": "/ssh添加 [名称 主机 [端口] [用户名]]",
+            "examples": ["/ssh添加", "/ssh添加 work host.example 22 root"],
+            "invalid_examples": ["/ssh添加 only-name"]
         },
         {
             "name": "ssh删除",
-            "triggers": [
-                "ssh删除",
-                "sshremove",
-                "sshdel"
-            ],
-            "help": "➖ 删除已保存的SSH服务器配置 | /ssh删除 <服务器名>",
+            "triggers": ["ssh删除", "sshremove", "sshdel"],
+            "help": "旧版兼容入口；等价于 /ssh remove",
             "admin_only": true,
-            "priority": 1
+            "contexts": ["private"],
+            "priority": 1,
+            "usage": "/ssh删除 <服务器名>",
+            "examples": ["/ssh删除 work"],
+            "invalid_examples": ["/ssh删除"]
         },
         {
             "name": "ssh导入",
-            "triggers": [
-                "ssh导入",
-                "sshimport"
-            ],
-            "help": "📥 从 ~/.ssh/config 导入服务器 | /ssh导入 <Host名> 或 /ssh导入 all",
+            "triggers": ["ssh导入", "sshimport"],
+            "help": "旧版兼容入口；等价于 /ssh import",
             "admin_only": true,
-            "priority": 1
+            "contexts": ["private"],
+            "priority": 1,
+            "usage": "/ssh导入 [Host名|all|全部]",
+            "examples": ["/ssh导入 all"],
+            "invalid_examples": ["/ssh导入 host extra"]
         },
         {
             "name": "sshconfig",
-            "triggers": [
-                "sshconfig",
-                "ssh配置"
-            ],
-            "help": "🔧 查看 ~/.ssh/config 中的所有 Host 配置 | /sshconfig",
+            "triggers": ["sshconfig", "ssh配置"],
+            "help": "旧版兼容入口；等价于 /ssh config",
             "admin_only": true,
-            "priority": 1
+            "contexts": ["private"],
+            "priority": 1,
+            "usage": "/sshconfig",
+            "examples": ["/sshconfig"],
+            "invalid_examples": ["/sshconfig extra"]
         },
         {
             "name": "ssh状态",
-            "triggers": [
-                "ssh状态",
-                "sshstatus",
-                "ssh连接数",
-                "sshactive"
-            ],
-            "help": "📊 查看当前活跃的 SSH 连接数及详情 | /ssh状态",
+            "triggers": ["ssh状态", "sshstatus", "ssh连接数", "sshactive"],
+            "help": "旧版兼容入口；等价于 /ssh status",
             "admin_only": true,
-            "priority": 1
+            "contexts": ["private"],
+            "priority": 1,
+            "usage": "/ssh状态",
+            "examples": ["/ssh状态"],
+            "invalid_examples": ["/ssh状态 extra"]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "paramiko",
+            "required": false,
+            "description": "可选 SSH 连接后端；缺失时插件仍可加载并返回安装提示"
         }
     ],
     "schedule": [
         {
             "id": "cleanup",
             "handler": "cleanup_orphans",
-            "cron": {
-                "minute": "*/1"
-            }
+            "cron": {"minute": "*/1"}
         }
     ],
     "concurrency": "sequential"

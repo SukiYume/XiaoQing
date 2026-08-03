@@ -18,7 +18,9 @@ _FACE_TEXT_KEYS = (
     "title",
 )
 
-_GENERIC_FACE_LABELS = frozenset({"face", "emoji", "qqface", "qq emoji", "qq表情", "表情", "系统表情"})
+_GENERIC_FACE_LABELS = frozenset(
+    {"face", "emoji", "qqface", "qq emoji", "qq表情", "表情", "系统表情"}
+)
 
 
 def _strip_wrapping_brackets(text: str) -> str:
@@ -27,7 +29,11 @@ def _strip_wrapping_brackets(text: str) -> str:
     while cleaned:
         stripped = cleaned
         for left, right in pairs:
-            if cleaned.startswith(left) and cleaned.endswith(right) and len(cleaned) > len(left) + len(right):
+            if (
+                cleaned.startswith(left)
+                and cleaned.endswith(right)
+                and len(cleaned) > len(left) + len(right)
+            ):
                 stripped = cleaned[len(left) : -len(right)].strip()
                 break
         if stripped == cleaned:

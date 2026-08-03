@@ -1,1 +1,1 @@
-# Guess Number Plugin
+"""有界多轮猜数字游戏插件。"""

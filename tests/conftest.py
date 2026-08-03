@@ -24,6 +24,12 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from tests.helpers.ci_skip_policy import (
+    current_platform,
+    load_skip_allowances,
+    unexpected_skips,
+)
+
 # Add project root to path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -31,13 +37,41 @@ sys.path.insert(0, str(ROOT))
 # Suppress logging during tests unless explicitly enabled
 logging.getLogger().setLevel(logging.WARNING)
 
-PROJECT_TMP_ROOT = ROOT / ".pytest_cache"
-PROJECT_TMP_RUN_ROOT = PROJECT_TMP_ROOT / "tmp"
-
 
 def _safe_node_name(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
     return cleaned or "tmp"
+
+
+PROJECT_TMP_ROOT = ROOT / ".pytest_cache"
+PROJECT_TMP_BASE = PROJECT_TMP_ROOT / "tmp"
+_PROJECT_TMP_RUN_ID = (
+    os.environ.get("PYTEST_XDIST_TESTRUNUID") or f"serial-{os.getpid()}-{uuid.uuid4().hex}"
+)
+_PROJECT_TMP_WORKER_ID = os.environ.get("PYTEST_XDIST_WORKER") or "master"
+# xdist 在加载 conftest 前发布 run/worker 身份。tempfile.mkdtemp 也必须直接落到
+# 该 worker 根目录，否则它绕过 fixture 后仍会与其他 worker 共用并被提前清理。
+PROJECT_TMP_RUN_ROOT = (
+    PROJECT_TMP_BASE
+    / _safe_node_name(_PROJECT_TMP_RUN_ID)
+    / _safe_node_name(_PROJECT_TMP_WORKER_ID)
+)
+
+
+def _remove_project_tmp_run_root(path: Path) -> None:
+    """只清理当前 worker 的受控根目录，并尽力移除已经空掉的父目录。"""
+
+    base = PROJECT_TMP_BASE.resolve()
+    target = path.resolve()
+    if target == base or base not in target.parents:
+        raise RuntimeError(f"refusing to remove temp path outside worker root: {target}")
+    shutil.rmtree(target, ignore_errors=True)
+    for parent in (target.parent, base):
+        try:
+            parent.rmdir()
+        except OSError:
+            # 其他 worker 或历史运行仍占用父目录时必须保留。
+            pass
 
 
 def _project_mkdtemp(
@@ -85,9 +119,11 @@ class ProjectTmpPathFactory:
         candidate.mkdir(parents=True, exist_ok=True)
         return candidate
 
+
 # ============================================================
 # Test Configuration
 # ============================================================
+
 
 def pytest_configure(config):
     """Configure pytest with custom markers"""
@@ -110,9 +146,11 @@ def pytest_pyfunc_call(pyfuncitem):
     asyncio.run(pyfuncitem.obj(**funcargs))
     return True
 
+
 # ============================================================
 # Path Fixtures
 # ============================================================
+
 
 @pytest.fixture
 def project_root() -> Path:
@@ -140,14 +178,13 @@ def config_dir() -> Path:
 
 @pytest.fixture(scope="session")
 def project_tmp_root() -> Iterator[Path]:
-    """Session-scoped writable temp root inside the project workspace."""
-    if PROJECT_TMP_ROOT.exists():
-        shutil.rmtree(PROJECT_TMP_ROOT, ignore_errors=True)
+    """返回本次 pytest run 中仅属于当前 xdist worker 的项目内临时根。"""
+
     PROJECT_TMP_RUN_ROOT.mkdir(parents=True, exist_ok=True)
     try:
         yield PROJECT_TMP_RUN_ROOT
     finally:
-        shutil.rmtree(PROJECT_TMP_ROOT, ignore_errors=True)
+        _remove_project_tmp_run_root(PROJECT_TMP_RUN_ROOT)
 
 
 @pytest.fixture(scope="session")
@@ -167,9 +204,41 @@ def temp_dir(tmp_path: Path) -> Iterator[Path]:
     """Create a temporary directory for tests using the project-local tmp_path."""
     yield tmp_path
 
+
+@pytest.fixture(autouse=True)
+def isolate_process_global_import_hooks() -> Iterator[None]:
+    """Keep plugin import guards and dependency stubs from leaking between tests."""
+    from core import plugin_manager as plugin_manager_module
+
+    original_meta_path = list(sys.meta_path)
+    original_owners = dict(plugin_manager_module._PLUGIN_NAMESPACE_OWNERS)
+    plugins_package = sys.modules.get("plugins")
+    original_plugins_path = (
+        list(plugins_package.__path__)
+        if plugins_package is not None and hasattr(plugins_package, "__path__")
+        else None
+    )
+    dependency_modules = {name: sys.modules.get(name) for name in ("fastapi", "fastapi.responses")}
+    dependency_presence = {name: name in sys.modules for name in dependency_modules}
+    try:
+        yield
+    finally:
+        sys.meta_path[:] = original_meta_path
+        plugin_manager_module._PLUGIN_NAMESPACE_OWNERS.clear()
+        plugin_manager_module._PLUGIN_NAMESPACE_OWNERS.update(original_owners)
+        if original_plugins_path is not None and plugins_package is not None:
+            plugins_package.__path__[:] = original_plugins_path
+        for name, module in dependency_modules.items():
+            if dependency_presence[name]:
+                sys.modules[name] = module
+            else:
+                sys.modules.pop(name, None)
+
+
 # ============================================================
 # Config Fixtures
 # ============================================================
+
 
 @pytest.fixture
 def sample_config() -> dict[str, Any]:
@@ -178,7 +247,6 @@ def sample_config() -> dict[str, Any]:
         "bot_name": "小青",
         "command_prefixes": ["/"],
         "require_bot_name_in_group": True,
-        "random_reply_rate": 0.05,
         "enable_ws_client": False,
         "enable_inbound_server": True,
         "inbound_server_port": 8080,
@@ -219,9 +287,11 @@ def temp_secrets_file(temp_dir: Path, sample_secrets: dict[str, Any]) -> Path:
         json.dump(sample_secrets, f, indent=2, ensure_ascii=False)
     return secrets_path
 
+
 # ============================================================
 # Event Fixtures
 # ============================================================
+
 
 @pytest.fixture
 def sample_group_event() -> dict[str, Any]:
@@ -297,9 +367,11 @@ def sample_at_event() -> dict[str, Any]:
         },
     }
 
+
 # ============================================================
 # Mock Fixtures
 # ============================================================
+
 
 @pytest.fixture
 def mock_http_session():
@@ -319,6 +391,7 @@ def mock_send_action():
 @pytest.fixture
 def mock_context_factory():
     """Mock context factory"""
+
     def _factory(
         name: str,
         plugin_dir: Path,
@@ -329,6 +402,7 @@ def mock_context_factory():
         request_id: str | None = None,
     ):
         from core.context import PluginContext
+
         return PluginContext(
             config={"bot_name": "测试"},
             secrets={"plugins": {}},
@@ -339,13 +413,14 @@ def mock_context_factory():
             send_action=lambda x: None,
             reload_config=lambda: None,
             reload_plugins=lambda: None,
-            list_commands=lambda: ["help: 查看帮助"],
+            get_command_catalog=lambda: (),
             list_plugins=lambda: ["core", "echo"],
             current_user_id=user_id,
             current_group_id=group_id,
             request_id=request_id,
             state=state or {},
         )
+
     return _factory
 
 
@@ -370,6 +445,7 @@ def mock_aiohttp_session():
     """Mock aioresponses for HTTP testing"""
     try:
         from aioresponses import aioresponses
+
         with aioresponses() as m:
             yield m
     except ImportError:
@@ -402,33 +478,34 @@ def temp_db_file(temp_dir: Path) -> Path:
     db_path = temp_dir / "test.db"
     return db_path
 
+
 # ============================================================
 # Async Fixtures
 # ============================================================
 
-@pytest.fixture
+
+@pytest.fixture(scope="session")
 def event_loop_policy():
-    """Event loop policy for async tests"""
+    """Provide pytest-asyncio a policy without replacing the global policy."""
+    # pytest-asyncio 1.x snapshots the previous loop with get_event_loop().
+    # Mark the main thread as having no implicit loop so that snapshotting does
+    # not allocate an unowned Proactor loop before the selected policy is active.
+    asyncio.set_event_loop(None)
     if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    return asyncio.get_event_loop_policy()
+        return asyncio.WindowsSelectorEventLoopPolicy()
+    return asyncio.DefaultEventLoopPolicy()
 
-
-@pytest.fixture
-def event_loop():
-    """Create an instance of the default event loop for each test case"""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 # ============================================================
 # Router Fixture
 # ============================================================
 
+
 @pytest.fixture
 def empty_router():
     """Create an empty CommandRouter"""
     from core.router import CommandRouter
+
     return CommandRouter()
 
 
@@ -475,19 +552,24 @@ def sample_router(empty_router):
 
     return empty_router
 
+
 # ============================================================
 # Session Manager Fixture
 # ============================================================
+
 
 @pytest.fixture
 def session_manager():
     """Create a SessionManager for testing"""
     from core.session import SessionManager
+
     return SessionManager(default_timeout=300.0)
+
 
 # ============================================================
 # Plugin Manager Fixture
 # ============================================================
+
 
 @pytest.fixture
 def plugin_manager(plugins_dir: Path):
@@ -503,42 +585,43 @@ def plugin_manager(plugins_dir: Path):
     manager = PluginManager(plugins_dir, router, dummy_context_factory)
     return manager
 
+
 # ============================================================
 # Scheduler Fixture
 # ============================================================
+
 
 @pytest.fixture
 def scheduler_manager():
     """Create a SchedulerManager for testing"""
     from core.scheduler import SchedulerManager
+
     manager = SchedulerManager()
     yield manager
     # Cleanup
     if manager.scheduler:
         manager.scheduler.shutdown()
 
+
 # ============================================================
 # Utility Functions
 # ============================================================
 
+
 @pytest.fixture
 def async_wait():
     """Helper to wait for async operations"""
+
     async def _wait(seconds: float = 0.1):
         await asyncio.sleep(seconds)
+
     return _wait
-
-
-def make_async_mock(return_value=None):
-    """Create an async mock function"""
-    async def _mock(*args, **kwargs):
-        return return_value
-    return _mock
 
 
 # ============================================================
 # Skip markers
 # ============================================================
+
 
 def pytest_collection_modifyitems(config, items):
     """Modify test collection to add markers dynamically"""
@@ -546,6 +629,26 @@ def pytest_collection_modifyitems(config, items):
         # Mark async tests
         if asyncio.iscoroutinefunction(item.function):
             item.add_marker(pytest.mark.asyncio)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Turn every non-allowlisted CI skip into a failing test session."""
+
+    config = session.config
+    if os.environ.get("XIAOQING_CI") != "1" or hasattr(config, "workerinput"):
+        return
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        raise RuntimeError("terminal reporter is required for CI skip enforcement")
+    reports = reporter.stats.get("skipped", ())
+    allowances = load_skip_allowances(ROOT / "tests" / "ci_skip_allowlist.toml")
+    violations = unexpected_skips(reports, allowances, platform=current_platform())
+    if not violations:
+        return
+    reporter.write_sep("=", "UNEXPECTED CI SKIPS")
+    for violation in violations:
+        reporter.write_line(violation, red=True)
+    session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture(autouse=True)

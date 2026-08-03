@@ -1,24 +1,33 @@
-"""Compact widget-oriented API for Scriptable and similar clients."""
+"""为 Scriptable 等轻量客户端提供紧凑的小组件摘要。"""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Annotated, Any, Final, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...services.db import Database
+from ...utils.formatters import ledger_amount_yuan
+from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ..analytics.event_schedule import build_event_schedule, ensure_datetime
 from ..analytics.ledger_insights import build_ledger_insights
-from ..analytics.notes_overview import build_notes_overview
-from ..analytics.task_overview import build_task_overview
+from ..analytics.notes_overview import build_notes_widget_overview
+from ..analytics.task_overview import build_task_widget_overview
 from ..deps import get_current_user, get_db
+from ..utils import parse_iso_date
 
 router = APIRouter()
 
-_WEEKDAY_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-_SECTION_ORDER = ["tasks", "ledger", "notes"]
-_LINKS = {
+JsonObject = dict[str, Any]
+PanelSection = Literal["tasks", "ledger", "notes"]
+WidgetSection = Literal["tasks", "ledger", "notes", "all"]
+PanelBuilder = Callable[[Database, str, datetime], JsonObject]
+
+_WEEKDAY_LABELS: Final = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+_SECTION_ORDER: Final[tuple[PanelSection, ...]] = ("tasks", "ledger", "notes")
+_LINKS: Final = {
     "dashboard": "#/dashboard",
     "events": "#/events",
     "tasks": "#/tasks",
@@ -27,32 +36,44 @@ _LINKS = {
 }
 
 
-def _parse_now(value: str | None) -> datetime:
-    if not value:
-        return datetime.now().replace(microsecond=0)
-    parsed = datetime.fromisoformat(str(value))
-    if parsed.tzinfo is not None:
-        parsed = parsed.replace(tzinfo=None)
-    return parsed.replace(microsecond=0)
+def _parse_now(value: str | None, owner_id: str, db: Database) -> datetime:
+    """把输入时间统一为当前用户时区下的无时区墙钟时间。"""
+
+    text = str(value or "").strip()
+    if not text:
+        return now_in_timezone(owner_id, db).replace(tzinfo=None, microsecond=0)
+    try:
+        parsed = TimezoneHelper.parse(text, TimezoneHelper.get_user_timezone(owner_id, db))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="now must be a valid ISO datetime") from exc
+    return parsed.replace(tzinfo=None, microsecond=0)
 
 
-def _section_for(value: str, now: datetime) -> str:
+def _section_for(value: str | None, now: datetime) -> WidgetSection:
+    """解析显式板块，或按当前小时稳定轮换自动板块。"""
+
     normalized = str(value or "auto").strip().lower()
     if normalized == "all":
         return "all"
     if normalized in _SECTION_ORDER:
         return normalized
     if normalized != "auto":
-        raise HTTPException(status_code=400, detail="section must be one of tasks, ledger, notes, all, auto")
+        raise HTTPException(
+            status_code=422, detail="section must be one of tasks, ledger, notes, all, auto"
+        )
     return _SECTION_ORDER[now.hour % len(_SECTION_ORDER)]
 
 
 def _title_text(value: str | None, fallback: str = "无标题", limit: int = 22) -> str:
+    """生成单行标题，并给空标题提供稳定回退。"""
+
     text = str(value or "").strip() or fallback
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
 
 
 def _preview_text(value: str | None, limit: int = 26) -> str:
+    """折叠正文空白并截成适合小组件的预览。"""
+
     text = " ".join(str(value or "").strip().split())
     if len(text) <= limit:
         return text
@@ -60,6 +81,8 @@ def _preview_text(value: str | None, limit: int = 26) -> str:
 
 
 def _format_amount(value: float, *, signed: bool = False) -> str:
+    """按小组件的整数元样式格式化金额。"""
+
     amount = float(value or 0)
     prefix = ""
     if signed:
@@ -68,21 +91,9 @@ def _format_amount(value: float, *, signed: bool = False) -> str:
     return f"{prefix}¥{amount:.0f}"
 
 
-def _ledger_amount(item: Any) -> float:
-    """Return ledger amount in yuan, preferring the redesign canonical cents field."""
-    cents = getattr(item, "amount_cents", None)
-    if cents not in (None, ""):
-        try:
-            return int(cents) / 100
-        except (TypeError, ValueError):
-            pass
-    try:
-        return float(getattr(item, "amount", 0) or 0)
-    except (TypeError, ValueError):
-        return 0.0
+def _format_event_meta(entry: JsonObject) -> str:
+    """拼接日程时间段与地点。"""
 
-
-def _format_event_meta(entry: dict[str, Any]) -> str:
     parts: list[str] = []
     start_time = str(entry.get("start_time") or "")
     end_time = str(entry.get("end_time") or "")
@@ -96,7 +107,13 @@ def _format_event_meta(entry: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
-def _format_task_meta(task: dict[str, Any], today_key: str) -> str:
+def _format_task_meta(
+    task: JsonObject,
+    today_key: str,
+    user_timezone: Any,
+) -> str:
+    """拼接任务状态与计划/截止日期。"""
+
     status_map = {
         "open": "待办",
         "done": "已完成",
@@ -105,7 +122,13 @@ def _format_task_meta(task: dict[str, Any], today_key: str) -> str:
     status = status_map.get(str(task.get("status") or ""), "待办")
     plan_date = str(task.get("plan_date") or "")
     deadline_at = str(task.get("deadline_at") or "")
-    due_key = plan_date or deadline_at[:10]
+    due_day = parse_iso_date(plan_date)
+    if due_day is None and deadline_at:
+        try:
+            due_day = TimezoneHelper.parse(deadline_at, user_timezone).date()
+        except (TypeError, ValueError):
+            pass
+    due_key = due_day.isoformat() if due_day is not None else ""
     if due_key:
         if due_key == today_key:
             due_label = "今天"
@@ -115,47 +138,38 @@ def _format_task_meta(task: dict[str, Any], today_key: str) -> str:
     return status
 
 
-def _merge_unique_tasks(*task_groups: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
-    merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for group in task_groups:
-        for task in group:
-            task_id = str(task.get("id") or "")
-            dedupe_key = task_id or (
-                f"{task.get('title')}|{task.get('plan_date')}|"
-                f"{task.get('deadline_at')}|{task.get('created_at')}"
-            )
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            merged.append(task)
-            if len(merged) >= limit:
-                return merged
-    return merged
-
-
 def _flatten_event_entries(
     db: Database,
     owner_id: str,
     events: list[Any],
     range_start: datetime,
     range_end: datetime,
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+) -> list[JsonObject]:
+    """展开日程显示行，并一次批量补齐可能引用的集合头。"""
+
+    rows: list[JsonObject] = []
+    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
     start_day = range_start.date()
     end_day = range_end.date()
-    collection_cache: dict[str, dict[str, Any] | None] = {}
+    collection_ids = list(
+        dict.fromkeys(
+            str(collection_id)
+            for event in events
+            if (collection_id := getattr(event, "event_collection_id", None))
+        )
+    )
+    collections = (
+        db.get_event_collections_by_ids(owner_id, collection_ids) if collection_ids else {}
+    )
     for event in events:
-        collection = None
         collection_id = getattr(event, "event_collection_id", None)
-        if collection_id:
-            if collection_id not in collection_cache:
-                collection_cache[collection_id] = db.get_event_collection(collection_id, owner_id)
-            collection = collection_cache[collection_id]
-        schedule = build_event_schedule(event, start_day, end_day)
+        collection = collections.get(str(collection_id)) if collection_id else None
+        schedule = build_event_schedule(event, start_day, end_day, user_timezone)
         for day in schedule["display_days"]:
             for row in schedule["day_entries"].get(day, []):
-                row_start = ensure_datetime(row.get("start_time")) or datetime.fromisoformat(f"{day}T00:00:00")
+                row_start = ensure_datetime(
+                    row.get("start_time"), user_timezone
+                ) or datetime.fromisoformat(f"{day}T00:00:00")
                 entry_title = row.get("title") or getattr(event, "title", None) or "无标题"
                 if collection and collection.get("kind") == "multi_node":
                     entry_title = f"{collection.get('title') or '多节点日程'} · {entry_title}"
@@ -177,9 +191,13 @@ def _flatten_event_entries(
 
 
 def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
+    """构建今天起三十天内、最多五项的日程摘要。"""
+
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow_start = today_start + timedelta(days=1)
-    range_end = (today_start + timedelta(days=30)).replace(hour=23, minute=59, second=59, microsecond=0)
+    range_end = (today_start + timedelta(days=30)).replace(
+        hour=23, minute=59, second=59, microsecond=0
+    )
     raw_events = db.get_events_for_range(
         owner_id,
         today_start.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -215,17 +233,19 @@ def _build_agenda(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
     }
 
 
-def _build_task_panel(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
+def _build_task_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
+    """构建去重后的待办概览。"""
+
     today_key = now.strftime("%Y-%m-%d")
-    overview = build_task_overview(db=db, owner_id=owner_id, today=today_key)
-    items = _merge_unique_tasks(
-        overview["focus_tasks"],
-        overview["up_next_tasks"],
-        overview["backlog_tasks"],
-        overview["later_tasks"],
+    overview = build_task_widget_overview(
+        db=db,
+        owner_id=owner_id,
+        today=today_key,
         limit=5,
     )
+    items = overview["items"]
     summary = overview["summary"]
+    user_timezone = TimezoneHelper.get_user_timezone(owner_id, db)
     secondary_bits = [f"{summary['focus_count']} 项今日聚焦"]
     if summary["overdue_count"]:
         secondary_bits.append(f"{summary['overdue_count']} 项逾期")
@@ -241,7 +261,7 @@ def _build_task_panel(db: Database, owner_id: str, now: datetime) -> dict[str, A
         "items": [
             {
                 "title": _title_text(task.get("title"), limit=18),
-                "meta": _format_task_meta(task, today_key),
+                "meta": _format_task_meta(task, today_key, user_timezone),
             }
             for task in items
         ],
@@ -249,7 +269,9 @@ def _build_task_panel(db: Database, owner_id: str, now: datetime) -> dict[str, A
     }
 
 
-def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
+def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
+    """构建本月至今的财务摘要和最近账目。"""
+
     today_key = now.strftime("%Y-%m-%d")
     month_start = now.replace(day=1).strftime("%Y-%m-%d")
     insights = build_ledger_insights(
@@ -269,15 +291,9 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> dict[str,
             "sort_order": "DESC",
         },
         limit=5,
+        use_cache=True,
     )
-    recent_ledger = sorted(
-        recent_ledger,
-        key=lambda item: (
-            getattr(item, "ledger_date", "") or "",
-            getattr(item, "created_at", "") or "",
-        ),
-        reverse=True,
-    )
+    # 稳定排序只把支出放在前面；同组日期顺序沿用数据库的 DESC 结果。
     recent_ledger = sorted(
         recent_ledger,
         key=lambda item: getattr(item, "transaction_type", "expense") != "expense",
@@ -297,16 +313,21 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> dict[str,
             {
                 "title": _title_text(getattr(item, "title", None), fallback="未命名账目", limit=18),
                 "meta": " · ".join(
-                    part for part in [getattr(item, "ledger_category", None) or "未分类", getattr(item, "ledger_date", None) or ""] if part
+                    part
+                    for part in [
+                        getattr(item, "ledger_category", None) or "未分类",
+                        getattr(item, "ledger_date", None) or "",
+                    ]
+                    if part
                 ),
                 "transaction_type": getattr(item, "transaction_type", "expense") or "expense",
                 "amount_text": (
-                    f"↔ {_format_amount(_ledger_amount(item))}"
+                    f"↔ {_format_amount(ledger_amount_yuan(item))}"
                     if getattr(item, "transaction_type", "expense") == "transfer"
                     else (
-                        _format_amount(_ledger_amount(item), signed=True)
+                        _format_amount(ledger_amount_yuan(item), signed=True)
                         if getattr(item, "transaction_type", "expense") == "income"
-                        else f"-{_format_amount(_ledger_amount(item))}"
+                        else f"-{_format_amount(ledger_amount_yuan(item))}"
                     )
                 ),
             }
@@ -316,11 +337,18 @@ def _build_ledger_panel(db: Database, owner_id: str, now: datetime) -> dict[str,
     }
 
 
-def _build_note_panel(db: Database, owner_id: str, now: datetime) -> dict[str, Any]:
+def _build_note_panel(db: Database, owner_id: str, now: datetime) -> JsonObject:
+    """构建笔记总量、近七天新增量与最近预览。"""
+
     today_key = now.strftime("%Y-%m-%d")
-    overview = build_notes_overview(db=db, owner_id=owner_id, today=today_key)
+    overview = build_notes_widget_overview(
+        db=db,
+        owner_id=owner_id,
+        today=today_key,
+        limit=5,
+    )
     summary = overview["summary"]
-    notes = overview["recent_notes"][:5]
+    notes = overview["recent_notes"]
 
     return {
         "section": "notes",
@@ -342,15 +370,19 @@ def _build_note_panel(db: Database, owner_id: str, now: datetime) -> dict[str, A
     }
 
 
-def build_widget_summary(db: Database, owner_id: str, section: str = "auto", now: str | None = None) -> dict[str, Any]:
-    current = _parse_now(now)
+def build_widget_summary(
+    db: Database, owner_id: str, section: str = "auto", now: str | None = None
+) -> JsonObject:
+    """构建单板块或全板块小组件响应。"""
+
+    current = _parse_now(now, owner_id, db)
     resolved_section = _section_for(section, current)
-    panel_builders = {
+    panel_builders: dict[PanelSection, PanelBuilder] = {
         "tasks": _build_task_panel,
         "ledger": _build_ledger_panel,
         "notes": _build_note_panel,
     }
-    base: dict[str, Any] = {
+    base: JsonObject = {
         "generated_at": current.isoformat(),
         "section_requested": str(section or "auto").strip().lower() or "auto",
         "section": resolved_section,
@@ -359,21 +391,22 @@ def build_widget_summary(db: Database, owner_id: str, section: str = "auto", now
     }
     if resolved_section == "all":
         base["panels"] = {
-            key: builder(db=db, owner_id=owner_id, now=current)
-            for key, builder in panel_builders.items()
+            key: builder(db, owner_id, current) for key, builder in panel_builders.items()
         }
     else:
-        base["panel"] = panel_builders[resolved_section](db=db, owner_id=owner_id, now=current)
+        base["panel"] = panel_builders[resolved_section](db, owner_id, current)
     return base
 
 
-@router.get("/widget/summary")
+@router.get("/widget/summary")  # type: ignore[untyped-decorator]
 def get_widget_summary(
-    section: str = "auto",
-    now: str | None = None,
+    section: Annotated[str, Query(max_length=16)] = "auto",
+    now: Annotated[str | None, Query(max_length=64)] = None,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
+) -> JsonObject:
+    """返回经认证所有者的小组件摘要。"""
+
     return {
         "ok": True,
         "data": build_widget_summary(db=db, owner_id=owner_id, section=section, now=now),

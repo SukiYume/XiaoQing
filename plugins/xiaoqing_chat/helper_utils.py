@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from core.message import contains_bot_name, extract_text, has_at_mention, iter_message_segments
+from core.message import contains_bot_name, extract_text, has_at_mention
 
 from .config.config import XiaoQingChatConfig, load_xiaoqing_chat_config
 from .constants import FIND_BY_LOCAL_ID_LIMIT
@@ -12,67 +13,14 @@ from .llm.llm_config import LLMCallConfig
 from .runtime_state import _ChatRuntime
 from .runtime_state import get_state as _state
 
-_LLM_SECRET_BASE_KEYS = {
-    "api_base",
-    "api_key",
-    "model",
-    "endpoint_path",
-    "proxy",
-}
-_LLM_EXTRA_DIRECT_KEYS = {
-    "frequency_penalty",
-    "logit_bias",
-    "logprobs",
-    "metadata",
-    "modalities",
-    "parallel_tool_calls",
-    "presence_penalty",
-    "reasoning_effort",
-    "response_format",
-    "seed",
-    "service_tier",
-    "stop",
-    "store",
-    "thinking",
-    "top_logprobs",
-    "user",
-}
-_LLM_EXTRA_PAYLOAD_KEYS = ("extra_payload", "extra_body", "model_kwargs", "request_payload")
-
-
-def _iter_message_segments(event_or_message: Any) -> list[dict[str, Any]]:
-    """
-    Return normalized OneBot message segments from either an event or raw message payload.
-    """
-    return list(iter_message_segments(event_or_message))
-
 
 def _get_lock(chat_id: str):
-    """
-    Get the asyncio lock for a specific chat.
-
-    Args:
-        chat_id: The chat/group identifier
-
-    Returns:
-        An asyncio.Lock for synchronizing access to this chat's state.
-    """
+    """取得指定会话的异步锁。"""
     return _state().get_lock(chat_id)
 
 
 def _chat_id(event: dict[str, Any]) -> str:
-    """
-    Extract a standardized chat ID from a OneBot event.
-
-    For group chats, returns "g{group_id}". For private chats,
-    returns "u{user_id}".
-
-    Args:
-        event: The OneBot event dictionary
-
-    Returns:
-        A standardized chat identifier string.
-    """
+    """从 OneBot 事件提取统一会话 ID：群聊以 g 开头，私聊以 u 开头。"""
     group_id = event.get("group_id")
     user_id = event.get("user_id")
     if group_id not in (None, ""):
@@ -83,30 +31,12 @@ def _chat_id(event: dict[str, Any]) -> str:
 
 
 def _get_bot_name(context: Any) -> str:
-    """
-    Get the bot's configured name.
-
-    Args:
-        context: The plugin context
-
-    Returns:
-        The bot's name from config, or "小青" as default.
-    """
-    return (context.config or {}).get("bot_name", "") or "小青"
+    """读取机器人名称，未配置时使用“小青”。"""
+    return context.get_settings_snapshot().config.get("bot_name", "") or "小青"
 
 
 def _extract_sender_name(event: dict[str, Any]) -> str:
-    """
-    Extract the sender's display name from a OneBot event.
-
-    Tries card, nickname, and name fields in that order.
-
-    Args:
-        event: The OneBot event dictionary
-
-    Returns:
-        The sender's display name, or "用户{user_id}" as fallback.
-    """
+    """依次从群名片、昵称和名称字段提取发送者显示名。"""
     sender = event.get("sender") or {}
     for key in ("card", "nickname", "name"):
         v = sender.get(key)
@@ -117,43 +47,18 @@ def _extract_sender_name(event: dict[str, Any]) -> str:
 
 
 def _is_private(event: dict[str, Any]) -> bool:
-    """
-    Check if an event is from a private chat.
-
-    Args:
-        event: The OneBot event dictionary
-
-    Returns:
-        True if this is a private chat event, False otherwise.
-    """
+    """判断事件是否来自私聊。"""
     return event.get("group_id") is None
 
 
 def _is_at_me(event: dict[str, Any]) -> bool:
-    """
-    Check if the bot was @mentioned in this message.
-
-    Args:
-        event: The OneBot event dictionary
-
-    Returns:
-        True if the bot was mentioned, False otherwise.
-    """
+    """判断消息是否通过 @ 提及机器人。"""
     self_id = str(event.get("self_id", "") or "")
     return has_at_mention(event, self_id=self_id)
 
 
 def _has_bot_name(event: dict[str, Any], bot_name: str) -> bool:
-    """
-    Check if the bot's name appears in the message text.
-
-    Args:
-        event: The OneBot event dictionary
-        bot_name: The bot's name to check for
-
-    Returns:
-        True if the bot's name appears in the message (case-insensitive).
-    """
+    """判断消息正文是否包含机器人名称。"""
     if not bot_name:
         return False
     text = extract_text(event.get("message")).strip()
@@ -161,23 +66,11 @@ def _has_bot_name(event: dict[str, Any], bot_name: str) -> bool:
 
 
 def _load_runtime(context: Any) -> _ChatRuntime:
-    """
-    Load or retrieve the cached runtime configuration for the plugin.
-
-    Uses config/xiaoqing_config.json as the primary config path for mtime
-    monitoring, consistent with the actual load priority (issue: config
-    hot-reload path mismatch).
-
-    Args:
-        context: The plugin context
-
-    Returns:
-        The cached or newly loaded _ChatRuntime instance.
-    """
+    """加载或返回缓存的运行配置，并按实际加载优先级监听配置文件。"""
+    settings = context.get_settings_snapshot()
     plugin_dir: Path = context.plugin_dir
     config_key = str(plugin_dir)
-    # Fix: Monitor the same path that load_xiaoqing_chat_config actually reads
-    # (config/ subdirectory takes priority over plugin root)
+    # 监听器必须观察加载器实际读取的路径；config/ 子目录优先于插件根目录。
     config_path_sub = plugin_dir / "config" / "xiaoqing_config.json"
     config_path_root = plugin_dir / "xiaoqing_config.json"
     if config_path_sub.exists():
@@ -185,15 +78,19 @@ def _load_runtime(context: Any) -> _ChatRuntime:
     elif config_path_root.exists():
         config_path = config_path_root
     else:
-        config_path = config_path_sub  # fallback to expected path
+        config_path = config_path_sub  # 文件尚不存在时仍监听约定路径。
     mtime = config_path.stat().st_mtime_ns if config_path.exists() else -1
 
     state = _state()
     cached = state.get_runtime(config_key)
-    if cached is not None and state.get_runtime_mtime(config_key) == mtime:
+    if (
+        cached is not None
+        and state.get_runtime_mtime(config_key) == mtime
+        and state.get_runtime_revision(config_key) == settings.revision
+    ):
         return cached
 
-    cfg = load_xiaoqing_chat_config(context_config=context.config, plugin_dir=plugin_dir)
+    cfg = load_xiaoqing_chat_config(context_config=settings.config, plugin_dir=plugin_dir)
     compiled = []
     for pattern in cfg.ban_regex:
         try:
@@ -202,149 +99,125 @@ def _load_runtime(context: Any) -> _ChatRuntime:
             continue
 
     runtime = _ChatRuntime(cfg=cfg, compiled_ban_regex=compiled)
-    if cfg.knowledge.enable_knowledge and cfg.knowledge.files:
-        state.memory_db.bind(context.data_dir)
-        from .memory.knowledge_base import ensure_knowledge_index
+    from .memory.knowledge_base import ensure_knowledge_index
 
-        ensure_knowledge_index(
-            memory_db=state.memory_db,
-            data_dir=context.data_dir,
-            plugin_dir=plugin_dir,
-            files=cfg.knowledge.files,
-        )
-    state.set_runtime(config_key, runtime, mtime)
+    ensure_knowledge_index(
+        memory_db=state.memory_db,
+        data_dir=context.data_dir,
+        plugin_dir=plugin_dir,
+        files=cfg.knowledge.files if cfg.knowledge.enable_knowledge else (),
+    )
+    state.set_runtime(config_key, runtime, mtime, settings.revision)
     return runtime
 
 
-def _get_llm_secrets(context: Any, *, chat_id: str | None = None) -> dict[str, Any]:
-    """Resolve LLM provider config into a flat dict.
+def _get_ai_route_context(context: Any, *, chat_id: str | None = None) -> dict[str, Any]:
+    """返回不含凭据的 AI route 句柄和当前模型选择。
 
-    The ``xiaoqing_chat`` secrets block now uses a provider-based layout::
+    provider 地址、密钥、模型参数和默认 fallback 链都由 core 管理。这里仅把公开模型
+    profile 映射成 ``/xc 模型`` 沿用的短名称。没有运行时覆盖时不固定模型，因此 core
+    会按 route 列表自动降级；管理员显式切换后才通过 ``_pinned_model`` 严格固定。
+    """
 
-        {
-            "default": "deepseek",
-            "providers": {
-                "deepseek": {"api_base": "...", "api_key": "...", "model": "...", "endpoint_path": "...", "proxy": ""},
-                "glm":     {"api_base": "...", ...}
-            }
+    capabilities = getattr(context, "capabilities", None)
+    ai_service = getattr(capabilities, "ai", None)
+    if ai_service is None:
+        return {
+            "model": "",
+            "_ai": None,
+            "_route": "chat",
+            "_pinned_model": None,
+            "_provider_name": "",
+            "_providers": {},
+            "_default": "",
         }
 
-    Resolution order:
-    1. The current chat's in-memory override.
-    2. The Bot-admin-controlled global in-memory override.
-    3. The configured ``default`` provider.
-    4. Flatten the provider dict so downstream code can use the legacy keys.
+    model_infos = ai_service.list_models("chat")
+    by_profile = {item.name: item for item in model_infos}
 
-    Returns:
-        Flat dict with keys: api_base, api_key, model, endpoint_path, proxy,
-        plus ``_provider_name``, ``_providers`` for introspection.
-    """
-    raw: dict[str, Any] = (context.secrets or {}).get("plugins", {}).get("xiaoqing_chat", {}) or {}
-    configured_providers = raw.get("providers") or {}
-    providers: dict[str, dict[str, Any]] = {
-        str(name): dict(value)
-        for name, value in configured_providers.items()
-        if isinstance(name, str) and isinstance(value, dict)
-    } if isinstance(configured_providers, dict) else {}
-    default_name: str = raw.get("default", "") or ""
+    plugin_config = context.get_settings_snapshot().plugin_config("xiaoqing_chat")
+    ai_config = plugin_config.get("ai", {}) if isinstance(plugin_config, Mapping) else {}
+    aliases_config = ai_config.get("model_aliases", {}) if isinstance(ai_config, Mapping) else {}
+
+    aliases: dict[str, str] = {}
+    if isinstance(aliases_config, Mapping):
+        for raw_alias, raw_profile in aliases_config.items():
+            alias = str(raw_alias or "").strip()
+            profile = str(raw_profile or "").strip()
+            if alias and profile in by_profile and alias not in aliases:
+                aliases[alias] = profile
+
+    # 没有显式短名称的 profile 仍可直接选择，避免配置新增模型后管理命令看不到。
+    for info in model_infos:
+        if info.name not in aliases.values():
+            aliases[info.name] = info.name
+
+    providers = {
+        alias: {
+            "profile": profile,
+            "provider": by_profile[profile].provider,
+            "model": by_profile[profile].model,
+            "modalities": list(by_profile[profile].modalities),
+        }
+        for alias, profile in aliases.items()
+    }
+    configured_default = (
+        str(ai_config.get("default_model_alias", "") or "").strip()
+        if isinstance(ai_config, Mapping)
+        else ""
+    )
+    if configured_default not in providers:
+        primary_profile = model_infos[0].name if model_infos else ""
+        configured_default = next(
+            (alias for alias, profile in aliases.items() if profile == primary_profile),
+            "",
+        )
 
     state = _state()
-    active = state.resolve_provider_name(chat_id, list(providers), default_name)
+    active = state.resolve_provider_name(chat_id, list(providers), configured_default)
+    active_config = providers.get(active, {})
+    local_override = state.get_chat_provider(chat_id) if chat_id is not None else None
+    global_override = state.global_active_provider
+    is_explicit_override = active in {local_override, global_override}
 
-    provider: dict[str, Any] = {}
-    if active:
-        provider = providers.get(active, {})
-
-    # Build flat dict for downstream consumption
-    result: dict[str, Any] = {
-        "api_base": provider.get("api_base", ""),
-        "api_key": provider.get("api_key", ""),
-        "model": provider.get("model", ""),
-        "endpoint_path": provider.get("endpoint_path", "/v1/chat/completions"),
-        "proxy": provider.get("proxy", ""),
-        # Metadata for /xc 模型 display
+    return {
+        "model": active_config.get("model", ""),
+        "_ai": ai_service,
+        "_route": "chat",
+        "_pinned_model": active_config.get("profile") if is_explicit_override else None,
+        "_profile": active_config.get("profile", ""),
         "_provider_name": active,
         "_providers": providers,
-        "_default": default_name,
+        "_default": configured_default,
     }
-    for key, value in provider.items():
-        if key not in result:
-            result[key] = value
-    return result
-
-
-def _llm_declared_extra_payload(secrets: dict[str, Any]) -> dict[str, Any]:
-    """Build request fields explicitly declared as provider payload options."""
-    payload: dict[str, Any] = {}
-    for key in _LLM_EXTRA_DIRECT_KEYS:
-        if key in secrets and secrets.get(key) is not None:
-            payload[key] = secrets[key]
-    for key in _LLM_EXTRA_PAYLOAD_KEYS:
-        value = secrets.get(key)
-        if isinstance(value, dict):
-            payload.update(value)
-    return payload
-
-
-def _llm_extra_payload(secrets: dict[str, Any]) -> dict[str, Any]:
-    """Build provider-specific OpenAI-compatible request fields from secrets."""
-    payload = _llm_declared_extra_payload(secrets)
-    for key, value in secrets.items():
-        if key in _LLM_SECRET_BASE_KEYS or key in _LLM_EXTRA_DIRECT_KEYS or key in _LLM_EXTRA_PAYLOAD_KEYS:
-            continue
-        if str(key).startswith("_"):
-            continue
-        if value is not None:
-            payload[key] = value
-    return payload
 
 
 def _resolve_llm_config(
     cfg: XiaoQingChatConfig,
-    secrets: dict[str, Any],
     *,
     foreground: bool = False,
 ) -> LLMCallConfig:
-    """Resolve timeout/retry/proxy settings for LLM calls."""
-    base_timeout = getattr(cfg, "timeout_seconds", 30.0)
-    base_max_retry = getattr(cfg, "max_retry", 1)
-    base_retry_interval = getattr(cfg, "retry_interval_seconds", 0.5)
+    """解析插件行为配置中的超时、重试和生成参数。"""
     if foreground:
-        timeout = float(getattr(cfg, "foreground_timeout_seconds", base_timeout))
-        max_retry = int(getattr(cfg, "foreground_max_retry", base_max_retry))
-        retry_interval = float(
-            getattr(cfg, "foreground_retry_interval_seconds", base_retry_interval)
-        )
+        timeout = cfg.foreground_timeout_seconds
+        max_retry = cfg.foreground_max_retry
+        retry_interval = cfg.foreground_retry_interval_seconds
     else:
-        timeout = float(getattr(cfg, "background_timeout_seconds", base_timeout))
-        max_retry = int(getattr(cfg, "background_max_retry", base_max_retry))
-        retry_interval = float(
-            getattr(cfg, "background_retry_interval_seconds", base_retry_interval)
-        )
+        timeout = cfg.background_timeout_seconds
+        max_retry = cfg.background_max_retry
+        retry_interval = cfg.background_retry_interval_seconds
     return LLMCallConfig(
         timeout_seconds=timeout,
         max_retry=max_retry,
         retry_interval_seconds=retry_interval,
-        proxy=secrets.get("proxy", "") or "",
-        endpoint_path=secrets.get("endpoint_path", "") or cfg.endpoint_path,
         temperature=float(cfg.temperature),
         top_p=float(cfg.top_p),
         max_tokens=int(cfg.max_tokens),
-        extra_payload=_llm_extra_payload(secrets),
     )
 
 
 def _should_ignore_text(text: str, runtime: _ChatRuntime) -> bool:
-    """
-    Check if text should be ignored based on ban words/regex patterns.
-
-    Args:
-        text: The text to check
-        runtime: The chat runtime configuration
-
-    Returns:
-        True if the text matches any ban pattern, False otherwise.
-    """
+    """根据屏蔽词和正则规则判断是否忽略文本。"""
     s = text.strip()
     if not s:
         return True
@@ -355,15 +228,6 @@ def _should_ignore_text(text: str, runtime: _ChatRuntime) -> bool:
         if r.search(s):
             return True
     return False
-
-
-def _parse_local_id_num(local_id: str) -> int:
-    if not local_id:
-        return 0
-    m = re.match(r"^m(\d+)$", local_id)
-    if m:
-        return int(m.group(1))
-    return 0
 
 
 def _next_local_id(chat_id: str) -> str:
@@ -388,11 +252,7 @@ def _most_recent_user_local_id(chat_id: str) -> str:
 
 
 def _replace_local_ids_with_text(chat_id: str, text: str) -> str:
-    """Replace local message IDs (e.g. m123) with human-readable references.
-
-    Uses re.sub for precise, position-aware replacement instead of str.replace
-    which could accidentally replace multiple occurrences.
-    """
+    """用位置感知的正则替换，把本地消息 ID（如 m123）转换为可读引用。"""
     if not text:
         return ""
 

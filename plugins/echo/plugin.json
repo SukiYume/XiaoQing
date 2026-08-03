@@ -1,7 +1,7 @@
 {
     "name": "echo",
-    "version": "0.1.0",
-    "description": "示例插件：回显用户输入",
+    "version": "0.2.0",
+    "description": "有界文本回显与问候示例",
     "entry": "main.py",
     "commands": [
         {
@@ -10,8 +10,11 @@
                 "echo",
                 "回显"
             ],
-            "help": "复读机 | /echo <文本>",
-            "admin_only": false
+            "help": "回显最多 3000 字的文本 | /echo <文本>",
+            "admin_only": false,
+            "usage": "/echo <文本>",
+            "examples": ["/echo hello world"],
+            "invalid_examples": ["/echo"]
         },
         {
             "name": "hello",
@@ -19,8 +22,11 @@
                 "hello",
                 "你好"
             ],
-            "help": "打个招呼 👋",
-            "admin_only": false
+            "help": "使用当前 QQ 号打招呼 | /hello",
+            "admin_only": false,
+            "usage": "/hello",
+            "examples": ["/hello"],
+            "invalid_examples": ["/hello extra"]
         }
     ],
     "schedule": []

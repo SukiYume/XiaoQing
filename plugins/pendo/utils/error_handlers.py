@@ -1,18 +1,11 @@
-"""
-统一错误处理装饰器
-
-提供一致的错误处理机制，包括：
-- 业务异常的友好提示
-- 未预期异常的详细日志
-- 错误ID生成用于追踪
-"""
+"""把业务异常和内部异常转换成统一、安全的命令响应。"""
 
 import functools
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, TypeVar, cast, overload
 
 from core.public_errors import public_error_message
 
@@ -20,12 +13,13 @@ from ..core.exceptions import PendoException
 
 logger = logging.getLogger(__name__)
 _command_error_depth: ContextVar[int] = ContextVar("pendo_command_error_depth", default=0)
+_AsyncCallable = TypeVar("_AsyncCallable", bound=Callable[..., Awaitable[Any]])
 
 
 def _context_from_call(
     target: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> Any | None:
-    """Resolve a named context argument without guessing from positional slots."""
+    """按函数签名解析具名 ``context``，避免猜测位置参数。"""
     explicit = kwargs.get("context")
     if explicit is not None:
         return explicit
@@ -35,32 +29,36 @@ def _context_from_call(
         return None
 
 
-def build_result(status: str, message: str, **extra: Any) -> dict[str, Any]:
-    """Build a consistent command result payload."""
-    result: dict[str, Any] = {"status": status, "message": message}
-    result.update(extra)
-    return result
-
-
 def success_result(message: str, **extra: Any) -> dict[str, Any]:
-    return build_result("success", message, **extra)
+    """构造成功响应。"""
+    return {"status": "success", "message": message, **extra}
 
 
 def error_result(message: str, **extra: Any) -> dict[str, Any]:
-    return build_result("error", message, **extra)
+    """构造失败响应。"""
+    return {"status": "error", "message": message, **extra}
 
 
 def info_result(message: str, **extra: Any) -> dict[str, Any]:
-    return build_result("info", message, **extra)
+    """构造不改变数据的提示响应。"""
+    return {"status": "info", "message": message, **extra}
 
 
-def preview_result(message: str, **extra: Any) -> dict[str, Any]:
-    return build_result("preview", message, **extra)
+@overload
+def handle_command_errors(
+    func: _AsyncCallable, *, return_segments: bool = False
+) -> _AsyncCallable: ...
+
+
+@overload
+def handle_command_errors(
+    func: None = None, *, return_segments: bool = False
+) -> Callable[[_AsyncCallable], _AsyncCallable]: ...
 
 
 def handle_command_errors(
-    func: Callable[..., Any] | None = None, *, return_segments: bool = False
-) -> Callable[..., Any]:
+    func: _AsyncCallable | None = None, *, return_segments: bool = False
+) -> _AsyncCallable | Callable[[_AsyncCallable], _AsyncCallable]:
     """统一的命令错误处理装饰器
 
     自动处理命令执行中的异常，提供一致的错误响应格式。
@@ -85,9 +83,9 @@ def handle_command_errors(
         ...     return [{"type": "text", "data": {"text": "成功"}}]
     """
 
-    def decorator(target: Callable[..., Any]) -> Callable[..., Any]:
+    def decorator(target: _AsyncCallable) -> _AsyncCallable:
         @functools.wraps(target)
-        async def wrapper(*args, **kwargs) -> Any:
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             parent_depth = _command_error_depth.get()
             depth_token = _command_error_depth.set(parent_depth + 1)
             try:
@@ -123,91 +121,9 @@ def handle_command_errors(
             finally:
                 _command_error_depth.reset(depth_token)
 
-        return wrapper
+        return cast(_AsyncCallable, wrapper)
 
     if func is not None:
         return decorator(func)
-
-    return decorator
-
-
-def handle_command_errors_with_segments(func: Callable[..., Any]) -> Callable[..., Any]:
-    """兼容旧接口：返回消息段列表"""
-    return handle_command_errors(func, return_segments=True)
-
-
-def handle_scheduled_task_errors(task_name: str) -> Callable[..., Any]:
-    """定时任务错误处理装饰器
-
-    专门用于定时任务的错误处理，异常时返回空列表而不是错误消息。
-    适合不需要向用户通知错误的后台任务。
-
-    Args:
-        task_name: 任务名称，用于日志记录
-
-    Returns:
-        装饰器函数
-
-    Examples:
-        >>> @handle_scheduled_task_errors("check_reminders")
-        ... async def check_reminders(context):
-        ...     # 检查提醒...
-        ...     return []
-    """
-
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs) -> list[dict[str, Any]]:
-            try:
-                result = await func(*args, **kwargs)
-                return result if result else []
-            except Exception as exc:
-                context = _context_from_call(func, args, kwargs)
-                log = getattr(context, "logger", None) or logger
-                public_error_message(
-                    context,
-                    exc,
-                    logger=log,
-                    component=f"pendo.scheduled.{task_name}",
-                )
-                return []
-
-        return wrapper
-
-    return decorator
-
-
-def log_exceptions(logger_instance: logging.Logger | None = None) -> Callable[..., Any]:
-    """兼容旧接口：保留包装器，但把异常原样交给最外层边界。
-
-    Args:
-        logger_instance: 日志记录器实例，不提供则使用模块logger
-
-    Returns:
-        装饰器函数
-
-    Examples:
-        >>> @log_exceptions(my_logger)
-        ... def some_function():
-        ...     # 函数逻辑...
-        ...     pass
-    """
-
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        _ = logger_instance
-
-        @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs):
-            return await func(*args, **kwargs)
-
-        @functools.wraps(func)
-        def sync_wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        # 判断是否为协程函数
-        if inspect.iscoroutinefunction(func):
-            return async_wrapper
-        else:
-            return sync_wrapper
 
     return decorator

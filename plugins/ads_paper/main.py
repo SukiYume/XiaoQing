@@ -2,11 +2,12 @@
 论文与文献管理插件
 提供论文搜索、笔记管理、AI摘要等功能
 """
+
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from core.args import parse
-from core.plugin_base import segments
+from core.plugin_base import PluginContextProtocol, Segments, segments
 from core.public_errors import public_error_response
 
 from . import ai_commands, note_commands, paper_commands
@@ -15,22 +16,32 @@ from .storage import PaperStorage
 
 logger = logging.getLogger(__name__)
 
+
 def init(context=None) -> None:
     """插件初始化"""
     logger.info("ADS Paper 插件已初始化")
 
-def _get_ads_token(context) -> str:
+
+def _get_ads_token(context: PluginContextProtocol) -> str:
     """获取ADS Token"""
-    token = context.secrets.get("plugins", {}).get("ads_paper", {}).get("ads_token", "")
+    token = context.get_settings_snapshot().plugin_secrets("ads_paper").get("ads_token", "")
+    if isinstance(token, str) and token:
+        logger.debug("成功获取 ADS Token，长度: %s", len(token))
+        return token
     if token:
-        logger.debug(f"成功获取 ADS Token，长度: {len(token)}")
+        logger.warning("ADS Token 配置必须是字符串")
     else:
         logger.warning("未配置 ADS Token")
-    return token
+    return ""
 
-def _get_user_id(event: dict[str, Any]) -> int:
-    """获取用户ID"""
-    return event.get("user_id", 0)
+
+def _require_user_id(event: dict[str, Any]) -> int:
+    """返回有效 QQ 用户 ID，拒绝把缺失身份归入共享的零号存储。"""
+
+    user_id = event.get("user_id")
+    if type(user_id) is not int or user_id <= 0:
+        raise ValueError("ADS Paper requires a positive integer user_id")
+    return user_id
 
 
 def _get_storage(context) -> PaperStorage:
@@ -44,54 +55,90 @@ def _get_storage(context) -> PaperStorage:
         return storage
     return PaperStorage(context.data_dir)
 
-async def handle(command: str, args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
+
+async def handle(
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+) -> Segments:
     """命令处理入口"""
     try:
-        logger.info(f"收到 ADS Paper 命令: {command} {args}")
-        token = _get_ads_token(context)
-        if not token:
-            logger.error("ADS Token 未配置")
-            return segments("❌ 未配置 ADS Token\n请在 secrets.json 中配置:\n  \"plugins\": {\"ads_paper\": {\"ads_token\": \"your-token\"}}")
-
-        # Use shared HTTP session for connection pooling
-        client = ADSClient(token, context.http_session, context)
-        storage = _get_storage(context)
-        user_id = _get_user_id(event)
-        logger.debug(f"用户 ID: {user_id}")
-
-        parsed = parse(args)
-
-        if not parsed:
+        logger.info("收到 ADS Paper 命令: %s %s", command, args)
+        command_parts = args.strip().split(maxsplit=1)
+        if not command_parts:
             logger.debug("无参数，显示帮助信息")
             return _show_help()
 
-        subcommand = parsed.first.lower()
-        logger.info(f"执行子命令: {subcommand}")
+        subcommand = command_parts[0].casefold()
+        subcommand_args = command_parts[1] if len(command_parts) == 2 else ""
+        logger.info("执行子命令: %s", subcommand)
 
-        if subcommand == "help" or subcommand == "帮助":
+        if subcommand in {"help", "帮助"}:
+            if subcommand_args.strip():
+                return segments("❌ 用法: /paper help")
             return _show_help()
 
-        COMMAND_MAP = {
-            "search": lambda: paper_commands.cmd_search(client, parsed.rest(1)),
-            "author": lambda: paper_commands.cmd_author(client, parsed.rest(1)),
-            "cite": lambda: paper_commands.cmd_cite(client, parsed.rest(1)),
-            "cite-network": lambda: paper_commands.cmd_cite_network(client, parsed.rest(1)),
-            "related": lambda: paper_commands.cmd_related(client, parsed.rest(1)),
-            "note": lambda: note_commands.cmd_note(storage, parsed.rest(1), user_id),
-            "writing": lambda: note_commands.cmd_writing(storage, parsed.rest(1), user_id),
-            "topics": lambda: note_commands.cmd_topics(storage, parsed.rest(1), user_id),
-            "deadline": lambda: note_commands.cmd_deadline(storage, parsed.rest(1), user_id),
-            "summarize": lambda: ai_commands.cmd_summarize(client, parsed.rest(1), context),
-            "daily": lambda: ai_commands.cmd_daily(client, context, user_id),
-            "ref_add": lambda: ai_commands.cmd_ref_add(client, parsed.rest(1), context, user_id),
-            "refs": lambda: ai_commands.cmd_refs(context, user_id),
+        storage = _get_storage(context)
+        user_id = _require_user_id(event)
+        logger.debug("用户 ID: %s", user_id)
+        local_commands: dict[str, Callable[[], Awaitable[Segments]]] = {
+            "note": lambda: note_commands.cmd_note(storage, subcommand_args, user_id),
+            "writing": lambda: note_commands.cmd_writing(storage, subcommand_args, user_id),
+            "topics": lambda: note_commands.cmd_topics(storage, subcommand_args, user_id),
+            "deadline": lambda: note_commands.cmd_deadline(storage, subcommand_args, user_id),
+            "refs": lambda: (
+                ai_commands.cmd_refs(storage, context, user_id)
+                if not subcommand_args.strip()
+                else _invalid_no_arg_command("/paper refs")
+            ),
         }
+        local_handler = local_commands.get(subcommand)
+        if local_handler is not None:
+            return await local_handler()
 
-        handler = COMMAND_MAP.get(subcommand)
-        if handler:
-            return await handler()
+        remote_commands = {
+            "search",
+            "author",
+            "cite",
+            "cite-network",
+            "related",
+            "summarize",
+            "daily",
+            "ref_add",
+        }
+        if subcommand not in remote_commands:
+            return segments(f"未知命令: {subcommand}\n输入 /paper help 查看帮助")
 
-        return segments(f"未知命令: {subcommand}\n输入 /paper help 查看帮助")
+        if subcommand == "daily" and subcommand_args.strip():
+            return segments("❌ 用法: /paper daily")
+
+        token = _get_ads_token(context)
+        if not token:
+            logger.error("ADS Token 未配置")
+            return segments(
+                '❌ 未配置 ADS Token\n请在 secrets.json 中配置:\n  "plugins": {"ads_paper": {"ads_token": "your-token"}}'
+            )
+
+        # 只有远程子命令才创建 ADS 客户端，并复用核心提供的共享 HTTP 会话。
+        client = ADSClient(token, context.http_session, context)
+        remote_handlers: dict[str, Callable[[], Awaitable[Segments]]] = {
+            "search": lambda: paper_commands.cmd_search(client, subcommand_args),
+            "author": lambda: paper_commands.cmd_author(client, subcommand_args),
+            "cite": lambda: paper_commands.cmd_cite(client, subcommand_args),
+            "cite-network": lambda: paper_commands.cmd_cite_network(client, subcommand_args),
+            "related": lambda: paper_commands.cmd_related(client, subcommand_args),
+            "summarize": lambda: ai_commands.cmd_summarize(client, subcommand_args, context),
+            "daily": lambda: ai_commands.cmd_daily(client, storage, user_id),
+            "ref_add": lambda: ai_commands.cmd_ref_add(
+                client,
+                subcommand_args,
+                storage,
+                context,
+                user_id,
+            ),
+        }
+        return await remote_handlers[subcommand]()
 
     except Exception as exc:
         return public_error_response(
@@ -101,7 +148,14 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
             component="ads_paper.handle",
         )
 
-def _show_help() -> list[dict[str, Any]]:
+
+async def _invalid_no_arg_command(usage: str) -> Segments:
+    """让无参数命令在通用异步路由表中返回一致的语法错误。"""
+
+    return segments(f"❌ 用法: {usage}")
+
+
+def _show_help() -> Segments:
     """显示帮助信息"""
     help_text = (
         "📚 **论文与文献管理助手**\n\n"
@@ -135,7 +189,7 @@ def _show_help() -> list[dict[str, Any]]:
         "  /paper ref_add <ID>         - 添加引用到文献库 (支持 arXiv ID/链接/Bibcode)\n"
         "  /paper refs                 - 查看文献库\n\n"
         "💡 示例:\n"
-        "  /paper search \"fast radio burst\"\n"
+        '  /paper search "fast radio burst"\n'
         "  /paper cite 2401.12345\n"
         "  /paper topics add fast radio burst\n"
         "  /paper daily"

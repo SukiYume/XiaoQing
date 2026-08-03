@@ -1,5 +1,12 @@
-"""FastAPI web server for Pendo Web UI."""
+"""FastAPI web server for Pendo Web UI.
+
+模块级状态只代表当前进程实际拥有的一个 Uvicorn 线程；start/stop 必须在同一状态锁内
+串行化。启动超时不能直接清空引用并遗留孤儿线程，只有确认线程退出后才能重置状态；
+可达性探测仅用于展示外部服务状态，不能冒充本进程对服务生命周期的所有权。
+"""
+
 import logging
+import math
 import threading
 import time
 from pathlib import Path
@@ -9,6 +16,7 @@ from urllib.request import urlopen
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import PendoConfig
@@ -22,6 +30,7 @@ _app: FastAPI | None = None
 _server: uvicorn.Server | None = None
 _thread: threading.Thread | None = None
 _last_error: str | None = None
+_STATE_LOCK = threading.RLock()
 
 STATIC_DIR = Path(__file__).parent / "static"
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -50,11 +59,8 @@ def create_app(db: Database) -> FastAPI:
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         return response
 
-    # Set database instance for dependency injection
+    # 数据库依赖必须在挂载路由前绑定，路由处理期间只读取这一实例。
     set_db(db)
-
-    # Custom error handler to match spec response format
-    from fastapi.responses import JSONResponse
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request, exc):
@@ -121,22 +127,44 @@ def _reset_state() -> None:
     _thread = None
 
 
-def _run_server() -> None:
+def _run_server(server: uvicorn.Server, host: str, port: int) -> None:
     """Run uvicorn and preserve startup failures for command-level reporting."""
     global _last_error
 
-    if _server is None:
-        _last_error = "Web server is not initialized"
-        return
-
     try:
-        _server.run()
-    except Exception as exc:
-        _last_error = _format_start_error(PendoConfig.WEB_HOST, PendoConfig.WEB_PORT, exc)
+        server.run()
+    except BaseException as exc:
+        _last_error = _format_start_error(host, port, exc)
         logger.error(
             "Pendo Web UI crashed during startup error_type=%s",
             type(exc).__name__,
         )
+
+
+def _validated_timeout(value: float, *, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must be a positive finite number")
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise TypeError(f"{field_name} must be a positive finite number") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError(f"{field_name} must be a positive finite number")
+    return timeout
+
+
+def _request_thread_stop(
+    server: uvicorn.Server,
+    thread: threading.Thread,
+    *,
+    timeout: float,
+) -> bool:
+    server.should_exit = True
+    thread.join(timeout=timeout)
+    if thread.is_alive() and hasattr(server, "force_exit"):
+        server.force_exit = True
+        thread.join(timeout=min(1.0, timeout))
+    return not thread.is_alive()
 
 
 def start(db: Database) -> bool:
@@ -146,49 +174,57 @@ def start(db: Database) -> bool:
     """
     global _app, _server, _thread, _last_error
 
-    if _thread is not None and _thread.is_alive():
-        return False
+    with _STATE_LOCK:
+        if _thread is not None and _thread.is_alive():
+            return False
 
-    if (
-        PendoConfig.WEB_HOST.lower() not in _LOOPBACK_HOSTS
-        and not PendoConfig.WEB_SESSION_COOKIE_SECURE
-    ):
-        _last_error = (
-            "拒绝将 Pendo Web 绑定到非 loopback 地址而不使用 Secure session cookie；"
-            "请在 TLS 反向代理后设置 PENDO_WEB_SESSION_COOKIE_SECURE=true。"
+        runtime = PendoConfig.runtime()
+        host = runtime.web_host
+        port = runtime.web_port
+        if host.lower() not in _LOOPBACK_HOSTS and not runtime.web_session_cookie_secure:
+            _last_error = (
+                "拒绝将 Pendo Web 绑定到非 loopback 地址而不使用 Secure session cookie；"
+                "请在 TLS 反向代理后设置 "
+                "plugins.pendo.web_session_cookie_secure=true。"
+            )
+            logger.error(_last_error)
+            return False
+
+        _last_error = None
+        _app = create_app(db)
+        config = uvicorn.Config(_app, host=host, port=port, log_level="warning")
+        server = uvicorn.Server(config)
+        thread = threading.Thread(
+            target=_run_server,
+            args=(server, host, port),
+            daemon=True,
+            name="pendo-web",
         )
-        logger.error(_last_error)
+        _server = server
+        _thread = thread
+        try:
+            thread.start()
+        except Exception as exc:
+            _last_error = _format_start_error(host, port, exc)
+            _reset_state()
+            return False
+
+        # 短暂等待让端口绑定错误直接返回给命令；超时后必须先终止并回收线程，
+        # 不能清空全局引用后让它在后台继续完成启动。
+        for _ in range(20):
+            if getattr(server, "started", False):
+                logger.info("Pendo Web UI started on http://%s:%d", host, port)
+                return True
+            if not thread.is_alive():
+                break
+            time.sleep(0.05)
+
+        _last_error = _last_error or f"Web UI 未能在 {host}:{port} 上完成启动"
+        logger.warning("Pendo Web UI startup failed: %s", _last_error)
+        stopped = not thread.is_alive() or _request_thread_stop(server, thread, timeout=1.0)
+        if stopped:
+            _reset_state()
         return False
-
-    _last_error = None
-    _app = create_app(db)
-
-    config = uvicorn.Config(
-        _app,
-        host=PendoConfig.WEB_HOST,
-        port=PendoConfig.WEB_PORT,
-        log_level="warning",
-    )
-    _server = uvicorn.Server(config)
-    _thread = threading.Thread(target=_run_server, daemon=True, name="pendo-web")
-    _thread.start()
-
-    # Uvicorn starts in a background thread; wait briefly so bind failures become visible
-    # to `/pendo web start` instead of surfacing only in logs.
-    for _ in range(20):
-        if getattr(_server, "started", False):
-            logger.info("Pendo Web UI started on http://%s:%d", PendoConfig.WEB_HOST, PendoConfig.WEB_PORT)
-            return True
-        if not _thread.is_alive():
-            break
-        time.sleep(0.05)
-
-    _last_error = _last_error or (
-        f"Web UI 未能在 {PendoConfig.WEB_HOST}:{PendoConfig.WEB_PORT} 上完成启动"
-    )
-    logger.warning("Pendo Web UI startup failed: %s", _last_error)
-    _reset_state()
-    return False
 
 
 def stop(timeout: float = 5.0) -> bool:
@@ -198,35 +234,36 @@ def stop(timeout: float = 5.0) -> bool:
     """
     global _app, _server, _thread, _last_error
 
-    if _server is None or _thread is None or not _thread.is_alive():
-        return False
+    normalized_timeout = _validated_timeout(timeout, field_name="timeout")
+    with _STATE_LOCK:
+        if _server is None or _thread is None or not _thread.is_alive():
+            return False
 
-    _server.should_exit = True
-    _thread.join(timeout=timeout)
-    if _thread.is_alive() and hasattr(_server, "force_exit"):
-        _server.force_exit = True
-        _thread.join(timeout=1.0)
+        if not _request_thread_stop(_server, _thread, timeout=normalized_timeout):
+            logger.warning(
+                "Pendo Web UI did not stop within %.1fs",
+                normalized_timeout + min(1.0, normalized_timeout),
+            )
+            return False
 
-    if _thread.is_alive():
-        logger.warning("Pendo Web UI did not stop within %.1fs", timeout + 1.0)
-        return False
-
-    _reset_state()
-    _last_error = None
-    logger.info("Pendo Web UI stopped")
-    return True
+        _reset_state()
+        _last_error = None
+        logger.info("Pendo Web UI stopped")
+        return True
 
 
 def is_managed_running() -> bool:
     """Check whether this process owns a running web server thread."""
-    return _thread is not None and _thread.is_alive()
+    with _STATE_LOCK:
+        return _thread is not None and _thread.is_alive()
 
 
 def is_reachable(timeout: float = 0.3) -> bool:
     """Check whether a web service is reachable at the configured URL."""
+    normalized_timeout = _validated_timeout(timeout, field_name="timeout")
     try:
-        with urlopen(get_url(), timeout=timeout) as response:
-            return 200 <= response.status < 500
+        with urlopen(get_url(), timeout=normalized_timeout) as response:
+            return 200 <= int(response.status) < 500
     except (OSError, URLError, TimeoutError):
         return False
 
@@ -238,9 +275,13 @@ def is_running() -> bool:
 
 def get_last_error() -> str | None:
     """Return the most recent startup failure for user-facing diagnostics."""
-    return _last_error
+    with _STATE_LOCK:
+        return _last_error
 
 
 def get_url() -> str:
     """Get the web UI URL."""
-    return f"http://{PendoConfig.WEB_HOST}:{PendoConfig.WEB_PORT}"
+    runtime = PendoConfig.runtime()
+    host = runtime.web_host
+    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"http://{url_host}:{runtime.web_port}"

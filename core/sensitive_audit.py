@@ -11,11 +11,16 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
+import re
 import secrets
 from dataclasses import dataclass
 
 _FINGERPRINT_KEY = secrets.token_bytes(32)
 _FINGERPRINT_HEX_CHARS = 24
+_AUDIT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
+_AUDIT_LABEL_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,95}\Z")
+_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,95}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +31,27 @@ class SensitiveAuditSummary:
     length: int
     byte_length: int
     fingerprint: str
+
+
+def audit_error_type(exc: BaseException | None) -> str:
+    """Return a bounded, log-safe exception type name."""
+
+    if exc is None:
+        return "-"
+    candidate = type(exc).__name__
+    return candidate if _ERROR_TYPE_RE.fullmatch(candidate) else "Exception"
+
+
+def safe_audit_id(value: object) -> str:
+    """Return a bounded identifier safe to include in audit metadata."""
+
+    return value if type(value) is str and _AUDIT_ID_RE.fullmatch(value) else "-"
+
+
+def safe_audit_label(value: object) -> str:
+    """Return a bounded operation/status label safe for structured logs."""
+
+    return value if type(value) is str and _AUDIT_LABEL_RE.fullmatch(value) else "unknown"
 
 
 def summarize_sensitive(value: str | bytes | bytearray | memoryview) -> SensitiveAuditSummary:
@@ -60,4 +86,63 @@ def summarize_sensitive(value: str | bytes | bytearray | memoryview) -> Sensitiv
     )
 
 
-__all__ = ["SensitiveAuditSummary", "summarize_sensitive"]
+def log_sensitive_operation(
+    target_logger: logging.Logger,
+    operation: str,
+    *,
+    status: str,
+    request_id: object = None,
+    job_id: object = None,
+    payload: str | bytes | bytearray | memoryview | None = None,
+    exc: BaseException | None = None,
+    error_type: str = "-",
+    return_code: int | None = None,
+    level: int = logging.INFO,
+) -> None:
+    """Log safe metadata for an operation without retaining sensitive text.
+
+    Plugins may add their own stable numeric fields such as ``return_code``;
+    arbitrary user-controlled fields do not belong in this shared boundary.
+    """
+
+    if payload is None:
+        payload_kind = "none"
+        payload_length = 0
+        payload_bytes = 0
+        payload_fingerprint = "-"
+    else:
+        summary = summarize_sensitive(payload)
+        payload_kind = summary.kind
+        payload_length = summary.length
+        payload_bytes = summary.byte_length
+        payload_fingerprint = summary.fingerprint
+    target_logger.log(
+        logging.ERROR if exc is not None else level,
+        "sensitive_audit operation=%s request_id=%s job_id=%s status=%s "
+        "return_code=%s error_type=%s payload_kind=%s payload_length=%d "
+        "payload_bytes=%d payload_fingerprint=%s",
+        safe_audit_label(operation),
+        safe_audit_id(request_id),
+        safe_audit_id(job_id),
+        safe_audit_label(status),
+        return_code if type(return_code) is int else "-",
+        audit_error_type(exc) if exc is not None else _safe_error_type(error_type),
+        payload_kind,
+        payload_length,
+        payload_bytes,
+        payload_fingerprint,
+    )
+
+
+def _safe_error_type(value: object) -> str:
+    return value if type(value) is str and _ERROR_TYPE_RE.fullmatch(value) else "Exception"
+
+
+__all__ = [
+    "SensitiveAuditSummary",
+    "audit_error_type",
+    "log_sensitive_operation",
+    "safe_audit_id",
+    "safe_audit_label",
+    "summarize_sensitive",
+]

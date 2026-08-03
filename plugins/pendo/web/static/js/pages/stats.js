@@ -1,10 +1,29 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { formatAmount, formatDateInput, formatMoneyCompact, isValidDateInput, pad2, todayStr as sharedTodayStr } from '../utils/format.js';
+import {
+    arrayValue as safeArray,
+    errorMessage,
+    finiteNumber,
+    formatAmount,
+    formatMoneyCompact,
+    isRecord,
+    isValidDateInput,
+    noteCadenceSubtitle,
+    pad2,
+    records as safeRecords,
+    todayStr as sharedTodayStr,
+} from '../utils/format.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import { bindEnterAction, BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-stats-waterfall-styles';
+const RANGE_KEYS = new Set(RANGE_PRESET_OPTIONS.map((option) => option.key));
+const TASK_TONES = Object.freeze({
+    open: '#F59E0B',
+    done: '#166534',
+    cancelled: '#94a3b8',
+    created: '#FCD34D',
+});
 const DEFAULT_MOOD_EMOJIS = {
     happy: '😊',
     sad: '😢',
@@ -40,31 +59,63 @@ let _heatmapData = null;
 let _comparisonData = null;
 let _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
 let _moodLabels = { ...DEFAULT_MOOD_LABELS };
+let _loadVersion = 0;
+let _activeRequestSignature = '';
+let _dataSignature = '';
+let _chartSequence = 0;
 
-function nowDate() { return new Date(); }
+// 通用数据边界：统计接口异常时不把 NaN、Infinity 或空记录带入图表。
+function nonNegativeNumber(value, fallback = 0) {
+    return Math.max(0, finiteNumber(value, fallback));
+}
+
+function normalizeTextMap(value, defaults) {
+    if (!isRecord(value)) return { ...defaults };
+    const entries = Object.entries(value)
+        .filter(([, text]) => typeof text === 'string' && text.trim())
+        .map(([key, text]) => [key, text.trim()]);
+    return { ...defaults, ...Object.fromEntries(entries) };
+}
+
+function responseData(response) {
+    return isRecord(response?.data) ? response.data : {};
+}
+
 function todayStr() {
     return todayRangeKey() || sharedTodayStr();
 }
 
-function formatCount(value) { return `${Number(value || 0)}`; }
+function formatCount(value) {
+    return `${Math.round(nonNegativeNumber(value))}`;
+}
+
 function formatWordCompact(value) {
-    const words = Number(value || 0);
+    const words = Math.round(nonNegativeNumber(value));
     if (words >= 10000) return `${(words / 10000).toFixed(1)}万字`;
     if (words >= 1000) return `${(words / 1000).toFixed(1)}k字`;
     return `${words}字`;
 }
-function formatPercent(value) { return `${Math.round(Number(value || 0) * 100)}%`; }
-function sumBy(items, key) { return (items || []).reduce((sum, item) => sum + Number(item?.[key] || 0), 0); }
-function safeArray(value) { return Array.isArray(value) ? value : []; }
+
+function formatPercent(value) {
+    const ratio = Math.min(1, nonNegativeNumber(value));
+    return `${Math.round(ratio * 100)}%`;
+}
+
+function sumBy(items, key) {
+    return safeRecords(items).reduce((sum, item) => sum + finiteNumber(item[key]), 0);
+}
+
+// 时间范围与坐标采样集中在这里，避免各图表重复推导。
 function rangeLabel() {
     if (_range === 'custom') return '当前范围';
     if (_range === 'all') return '全部时间';
     return RANGE_PRESET_OPTIONS.find((item) => item.key === _range)?.label || '当前范围';
 }
-function diaryRangeTitle() { return _range === 'custom' ? '当前范围' : rangeLabel(); }
-function diaryRangeSentence() { return _range === 'custom' ? '这个范围内' : `${rangeLabel()}里`; }
+function diaryRangeSentence() {
+    return _range === 'custom' ? '这个范围内' : `${rangeLabel()}里`;
+}
 function compactAxisLabel(value) {
-    const text = String(value || '');
+    const text = String(value ?? '');
     if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text.slice(5).replace('-', '/');
     if (/^\d{4}-W\d{2}$/.test(text)) return text.replace(/^\d{4}-/, '');
     if (/^\d{4}-\d{2}$/.test(text)) return text.slice(2).replace('-', '/');
@@ -72,45 +123,68 @@ function compactAxisLabel(value) {
 }
 
 function sortByNumericDesc(items, key) {
-    return safeArray(items).slice().sort((a, b) => Number(b?.[key] || 0) - Number(a?.[key] || 0));
+    return safeRecords(items)
+        .slice()
+        .sort((a, b) => finiteNumber(b[key]) - finiteNumber(a[key]));
+}
+
+function sampleIndexes(length, maxPoints = 18) {
+    const size = Math.max(0, Math.floor(finiteNumber(length)));
+    const limit = Math.max(1, Math.floor(finiteNumber(maxPoints, 18)));
+    if (size <= limit) return Array.from({ length: size }, (_, index) => index);
+    if (limit === 1) return [0];
+
+    const step = (size - 1) / (limit - 1);
+    const picked = new Set();
+    for (let index = 0; index < limit; index += 1) {
+        picked.add(Math.round(index * step));
+    }
+    return Array.from(picked).sort((a, b) => a - b);
 }
 
 function buildAxisTickLabels(labels, maxTicks = 6) {
     const all = safeArray(labels).map(compactAxisLabel);
-    if (all.length <= maxTicks) return all;
-    const step = (all.length - 1) / (maxTicks - 1);
-    const picked = new Set();
-    for (let index = 0; index < maxTicks; index += 1) {
-        picked.add(Math.round(index * step));
-    }
-    return Array.from(picked).sort((a, b) => a - b).map((index) => all[index]);
+    return sampleIndexes(all.length, maxTicks).map((index) => all[index]);
 }
 
-function sampleIndexes(length, maxPoints = 18) {
-    if (length <= maxPoints) return Array.from({ length }, (_, index) => index);
-    const step = (length - 1) / (maxPoints - 1);
-    const picked = new Set();
-    for (let index = 0; index < maxPoints; index += 1) {
-        picked.add(Math.round(index * step));
-    }
-    picked.add(0);
-    picked.add(length - 1);
-    return Array.from(picked).sort((a, b) => a - b);
-}
-
-function buildRequestRangeValue() {
-    if (_range === 'all') return 'all';
-    const range = deriveRangeDates();
+function buildRequestRangeValue(rangeKey = _range, range = deriveRangeDates()) {
+    if (rangeKey === 'all') return 'all';
     return `${range.start}..${range.end}`;
 }
 
-function deriveRangeDates() {
-    return derivePresetRange(_range, {
-        today: todayStr(),
-        customStart: _customStart,
-        customEnd: _customEnd,
+function deriveRangeDates({
+    rangeKey = _range,
+    customStart = _customStart,
+    customEnd = _customEnd,
+    today = todayStr(),
+} = {}) {
+    return derivePresetRange(rangeKey, {
+        today,
+        customStart,
+        customEnd,
         customFallback: 'month',
     });
+}
+
+function currentRangeRequest() {
+    const rangeKey = RANGE_KEYS.has(_range) ? _range : 'month';
+    const today = todayStr();
+    const range = deriveRangeDates({
+        rangeKey,
+        customStart: _customStart,
+        customEnd: _customEnd,
+        today,
+    });
+    return {
+        rangeKey,
+        range,
+        today,
+        signature: `${rangeKey}|${range.start}|${range.end}`,
+    };
+}
+
+function isCurrentLoad(container, version) {
+    return _container === container && _loadVersion === version;
 }
 
 function overviewReferenceDay(range, today = todayStr()) {
@@ -122,7 +196,7 @@ function overviewReferenceDay(range, today = todayStr()) {
 
 function resolveHeatmapYear(range = deriveRangeDates()) {
     const endDate = new Date(`${range.end}T00:00:00`);
-    return Number.isNaN(endDate.getTime()) ? nowDate().getFullYear() : endDate.getFullYear();
+    return Number.isNaN(endDate.getTime()) ? new Date().getFullYear() : endDate.getFullYear();
 }
 
 function clampRangeToYear(range, year) {
@@ -135,50 +209,53 @@ function clampRangeToYear(range, year) {
 }
 
 function diffDays(start, end) {
-    if (!start || !end) return 0;
-    const startDate = new Date(`${start}T00:00:00`);
-    const endDate = new Date(`${end}T00:00:00`);
-    const diff = endDate.getTime() - startDate.getTime();
+    if (!isValidDateInput(start) || !isValidDateInput(end)) return 0;
+    const startTime = Date.parse(`${start}T00:00:00Z`);
+    const endTime = Date.parse(`${end}T00:00:00Z`);
+    const diff = endTime - startTime;
     return Math.max(0, Math.round(diff / 86400000));
 }
 
 function ledgerRhythmSeries(ledger, range = deriveRangeDates()) {
     const spanDays = diffDays(range.start, range.end);
     const useMonthly = _range === 'year' || _range === 'last_year' || spanDays > 62;
-    const source = useMonthly && safeArray(ledger.monthly).length
-        ? safeArray(ledger.monthly)
-        : safeArray(ledger.daily);
+    const source =
+        useMonthly && safeRecords(ledger?.monthly).length ? safeRecords(ledger.monthly) : safeRecords(ledger?.daily);
     const labelKey = useMonthly ? 'month' : 'date';
     return source.map((item) => ({
         label: compactAxisLabel(String(item[labelKey] || '')),
-        total: Number(item.expense || 0) + Number(item.income || 0),
+        total: nonNegativeNumber(item.expense) + nonNegativeNumber(item.income),
     }));
 }
 
 function ledgerTrendSeries(ledger, range = deriveRangeDates()) {
     const spanDays = diffDays(range.start, range.end);
     const useMonthly = _range === 'year' || _range === 'last_year' || spanDays > 62;
-    const source = useMonthly && safeArray(ledger.monthly).length
-        ? safeArray(ledger.monthly)
-        : safeArray(ledger.daily);
+    const source =
+        useMonthly && safeRecords(ledger?.monthly).length ? safeRecords(ledger.monthly) : safeRecords(ledger?.daily);
     const labelKey = useMonthly ? 'month' : 'date';
     return source.map((item) => ({
         label: String(item[labelKey] || ''),
-        expense: Number(item.expense || 0),
-        income: Number(item.income || 0),
+        expense: nonNegativeNumber(item.expense),
+        income: nonNegativeNumber(item.income),
     }));
 }
 
 function moodEmoji(mood) {
-    const normalized = String(mood || '').trim().toLowerCase();
-    return normalized ? (_moodEmojis[normalized] || '') : '';
+    const normalized = String(mood || '')
+        .trim()
+        .toLowerCase();
+    if (!normalized || !Object.hasOwn(_moodEmojis, normalized)) return '';
+    return typeof _moodEmojis[normalized] === 'string' ? _moodEmojis[normalized] : '';
 }
 
 function formatMoodLabel(mood) {
     const normalized = String(mood || '').trim();
     if (!normalized) return '未记录';
     const emoji = moodEmoji(normalized);
-    const label = _moodLabels[normalized.toLowerCase()] || normalized;
+    const moodKey = normalized.toLowerCase();
+    const configuredLabel = Object.hasOwn(_moodLabels, moodKey) ? _moodLabels[moodKey] : '';
+    const label = typeof configuredLabel === 'string' && configuredLabel ? configuredLabel : normalized;
     return emoji ? `${emoji} ${label}` : label;
 }
 
@@ -189,62 +266,35 @@ function diaryCadenceSubtitle(granularity) {
     return `${diaryRangeSentence()}每天写了多少字。`;
 }
 
-function noteCadenceSubtitle(granularity) {
-    if (granularity === 'year') return `按${rangeLabel()}查看每年新增笔记数量。`;
-    if (granularity === 'month') return `按${rangeLabel()}查看每月新增笔记数量。`;
-    if (granularity === 'week') return `按${rangeLabel()}查看每周新增笔记数量。`;
-    return `按${rangeLabel()}查看每天的笔记输入频率。`;
-}
-
-async function fetchNoteRangeBounds(fallbackEnd = todayStr()) {
-    return fetchItemRangeBounds(api, {
-        type: 'note',
-        sortField: 'created_at',
-        startField: 'created_at',
-        endField: 'created_at',
-        fallbackEnd,
-    });
-}
-
-async function fetchLedgerRangeBounds(fallbackEnd = todayStr()) {
-    return fetchItemRangeBounds(api, {
-        type: 'ledger',
-        sortField: 'ledger_date',
-        startField: 'ledger_date',
-        endField: 'ledger_date',
-        fallbackEnd,
-    });
-}
-
-async function fetchDiaryRangeBounds(fallbackEnd = todayStr()) {
-    return fetchItemRangeBounds(api, {
-        type: 'diary',
-        sortField: 'diary_date',
-        startField: 'diary_date',
-        endField: 'diary_date',
-        fallbackEnd,
-    });
-}
-
+// 轻量图表原语全部生成原生 HTML/SVG，不依赖外部图表运行时。
 function sparklinePath(values, width = 440, height = 168, padding = 18) {
-    if (!values.length) return { line: '', area: '', points: [] };
-    const max = Math.max(...values, 1);
-    const step = values.length > 1 ? (width - padding * 2) / (values.length - 1) : 0;
-    const points = values.map((value, index) => {
+    const normalized = safeArray(values).map(nonNegativeNumber);
+    if (!normalized.length) return { line: '', area: '', points: [] };
+    const max = Math.max(...normalized, 1);
+    const step = normalized.length > 1 ? (width - padding * 2) / (normalized.length - 1) : 0;
+    const points = normalized.map((value, index) => {
         const x = padding + step * index;
-        const y = height - padding - ((value / max) * (height - padding * 2));
+        const y = height - padding - (value / max) * (height - padding * 2);
         return [x, y];
     });
     const line = points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'}${x},${y}`).join(' ');
-    const area = `${line} L ${padding + step * (values.length - 1)},${height - padding} L ${padding},${height - padding} Z`;
+    const area = `${line} L ${padding + step * (normalized.length - 1)},${height - padding} L ${padding},${height - padding} Z`;
     return { line, area, points };
 }
 
 function compressSeries(labels, values, maxPoints = 26) {
     const safeLabels = safeArray(labels);
-    const safeValues = safeArray(values).map((value) => Number(value || 0));
-    if (safeValues.length <= maxPoints) return { labels: safeLabels, values: safeValues };
-    const innerSlots = Math.max(1, maxPoints - 2);
+    const safeValues = safeArray(values).map(nonNegativeNumber);
+    const limit = Math.max(1, Math.floor(finiteNumber(maxPoints, 26)));
+    if (safeValues.length <= limit) return { labels: safeLabels, values: safeValues };
+    if (limit === 1) return { labels: [safeLabels[0]], values: [safeValues[0]] };
+    if (limit === 2) {
+        return {
+            labels: [safeLabels[0], safeLabels.at(-1)],
+            values: [safeValues[0], safeValues.at(-1)],
+        };
+    }
+    const innerSlots = limit - 2;
     const bucketSize = (safeValues.length - 2) / innerSlots;
     const picked = [0];
     for (let bucket = 0; bucket < innerSlots; bucket += 1) {
@@ -270,16 +320,16 @@ function compressSeries(labels, values, maxPoints = 26) {
 }
 
 function renderSparkline(labels, values, color, formatter) {
-    if (!values.length) return '<div class="stats-empty-card">暂无数据</div>';
     const compressed = compressSeries(labels, values, 28);
-    const gradId = `stats-grad-${color.replace(/[^a-zA-Z0-9]/g, '')}-${values.length}`;
+    if (!compressed.values.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const gradId = `stats-grad-${color.replace(/[^a-zA-Z0-9]/g, '')}-${++_chartSequence}`;
     const { line, area, points } = sparklinePath(compressed.values);
     const max = Math.max(...compressed.values, 1);
     const footerLabels = buildAxisTickLabels(compressed.labels, 6);
     const visiblePointIndexes = sampleIndexes(compressed.values.length, 14);
     return `
         <div class="stats-chart-block">
-            <svg viewBox="0 0 440 168" class="stats-sparkline">
+            <svg viewBox="0 0 440 168" class="stats-sparkline" role="img" aria-label="趋势图">
                 <defs>
                     <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stop-color="${color}" stop-opacity="0.28"></stop>
@@ -288,17 +338,25 @@ function renderSparkline(labels, values, color, formatter) {
                 </defs>
                 <path d="${area}" fill="url(#${gradId})"></path>
                 <path d="${line}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>
-                ${points.map(([x, y], index) => visiblePointIndexes.includes(index) ? `
+                ${points
+                    .map(([x, y], index) =>
+                        visiblePointIndexes.includes(index)
+                            ? `
                     <g>
                         <circle cx="${x}" cy="${y}" r="4" fill="${color}"></circle>
-                        <title>${escapeHtml(compressed.labels[index] || '')} · ${formatter(compressed.values[index])}</title>
+                        <title>${escapeHtml(compressed.labels[index] || '')} · ${escapeHtml(formatter(compressed.values[index]))}</title>
                     </g>
-                ` : '').join('')}
-                ${[0.25, 0.5, 0.75].map((ratio) => {
-                    const y = 168 - 18 - (ratio * (168 - 36));
-                    return `<line x1="18" y1="${y}" x2="422" y2="${y}" stroke="rgba(148,163,184,0.18)" stroke-dasharray="4 7"></line>`;
-                }).join('')}
-                <text x="422" y="18" text-anchor="end" fill="#94a3b8" font-size="11">${formatter(max)}</text>
+                `
+                            : '',
+                    )
+                    .join('')}
+                ${[0.25, 0.5, 0.75]
+                    .map((ratio) => {
+                        const y = 168 - 18 - ratio * (168 - 36);
+                        return `<line x1="18" y1="${y}" x2="422" y2="${y}" stroke="rgba(148,163,184,0.18)" stroke-dasharray="4 7"></line>`;
+                    })
+                    .join('')}
+                <text x="422" y="18" text-anchor="end" fill="#94a3b8" font-size="11">${escapeHtml(formatter(max))}</text>
             </svg>
             <div class="stats-sparkline-footer">
                 ${footerLabels.map((label) => `<span title="${escapeHtml(label)}">${escapeHtml(label)}</span>`).join('')}
@@ -308,54 +366,59 @@ function renderSparkline(labels, values, color, formatter) {
 }
 
 function renderColumnChart(items, valueKey, labelKey, color, formatter) {
-    if (!items.length) return '<div class="stats-empty-card">暂无数据</div>';
-    const max = Math.max(...items.map((item) => Number(item[valueKey] || 0)), 1);
+    const rows = safeRecords(items);
+    if (!rows.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const max = Math.max(...rows.map((item) => nonNegativeNumber(item[valueKey])), 1);
     return `
         <div class="stats-column-chart">
-            ${items.map((item) => {
-                const value = Number(item[valueKey] || 0);
-                const height = Math.max(8, Math.round((value / max) * 100));
-                return `
-                    <div class="stats-column-item" title="${escapeHtml(item[labelKey])} · ${formatter(value)}">
+            ${rows
+                .map((item) => {
+                    const value = nonNegativeNumber(item[valueKey]);
+                    const height = Math.max(8, Math.round((value / max) * 100));
+                    return `
+                    <div class="stats-column-item" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(value))}">
                         <div class="stats-column-stage">
                             <span class="stats-column-bar" style="height:${height}%; background:${color};"></span>
                         </div>
-                        <span class="stats-column-value">${formatter(value)}</span>
+                        <span class="stats-column-value">${escapeHtml(formatter(value))}</span>
                         <span class="stats-column-label">${escapeHtml(compactAxisLabel(item[labelKey]))}</span>
                     </div>
                 `;
-            }).join('')}
+                })
+                .join('')}
         </div>
     `;
 }
 
 function renderBarRows(items, valueKey, labelKey, color, formatter) {
-    if (!items.length) return '<div class="stats-empty-card">暂无数据</div>';
-    const max = Math.max(...items.map((item) => Number(item[valueKey] || 0)), 1);
+    const rows = safeRecords(items);
+    if (!rows.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const max = Math.max(...rows.map((item) => nonNegativeNumber(item[valueKey])), 1);
     return `
         <div class="stats-bar-rows">
-            ${items.map((item) => {
-                const value = Number(item[valueKey] || 0);
-                return `
-                    <div class="stats-bar-row">
+            ${rows
+                .map((item) => {
+                    const value = nonNegativeNumber(item[valueKey]);
+                    return `
+                    <div>
                         <div class="stats-bar-top">
                             <span class="stats-bar-label">${escapeHtml(item[labelKey])}</span>
-                            <span class="stats-bar-value">${formatter(value)}</span>
+                            <span class="stats-bar-value">${escapeHtml(formatter(value))}</span>
                         </div>
                         <div class="stats-bar-track">
                             <span class="stats-bar-fill" style="width:${Math.max(8, Math.round((value / max) * 100))}%; background:${color};"></span>
                         </div>
                     </div>
                 `;
-            }).join('')}
+                })
+                .join('')}
         </div>
     `;
 }
 
 function renderTreemap(items, valueKey, labelKey, colors, formatter) {
-    if (!items.length) return '<div class="stats-empty-card">暂无数据</div>';
-    const sorted = [...items]
-        .map((item) => ({ ...item, __value: Number(item[valueKey] || 0) }))
+    const sorted = safeRecords(items)
+        .map((item) => ({ ...item, __value: nonNegativeNumber(item[valueKey]) }))
         .filter((item) => item.__value > 0)
         .sort((a, b) => b.__value - a.__value)
         .slice(0, 8);
@@ -363,77 +426,89 @@ function renderTreemap(items, valueKey, labelKey, colors, formatter) {
     const max = Math.max(...sorted.map((item) => item.__value), 1);
     return `
         <div class="stats-treemap">
-            ${sorted.map((item, index) => {
-                const ratio = item.__value / max;
-                const span = ratio > 0.72 ? 2 : 1;
-                const shade = (0.14 + ratio * 0.2).toFixed(2);
-                return `
+            ${sorted
+                .map((item, index) => {
+                    const ratio = item.__value / max;
+                    const span = ratio > 0.72 ? 2 : 1;
+                    const shade = (0.14 + ratio * 0.2).toFixed(2);
+                    return `
                     <div class="stats-treemap-tile" style="grid-column: span ${span}; background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.7)), rgba(255,255,255,0.88); border-color: rgba(255,255,255,0.55); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28);">
                         <span class="stats-treemap-glow" style="background:${colors[index % colors.length]}; opacity:${shade};"></span>
                         <div class="stats-treemap-label">${escapeHtml(item[labelKey])}</div>
-                        <div class="stats-treemap-value">${formatter(item.__value)}</div>
+                        <div class="stats-treemap-value">${escapeHtml(formatter(item.__value))}</div>
                     </div>
                 `;
-            }).join('')}
+                })
+                .join('')}
         </div>
     `;
 }
 
 function renderStackedColumns(items, labelKey, segments, formatter) {
-    if (!items.length) return '<div class="stats-empty-card">暂无数据</div>';
-    const normalized = items.map((item) => {
-        const total = segments.reduce((sum, segment) => sum + Number(item[segment.key] || 0), 0);
+    const rows = safeRecords(items);
+    const safeSegments = safeRecords(segments);
+    if (!rows.length || !safeSegments.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const normalized = rows.map((item) => {
+        const total = safeSegments.reduce((sum, segment) => sum + nonNegativeNumber(item[segment.key]), 0);
         return { ...item, __total: total };
     });
     const max = Math.max(...normalized.map((item) => item.__total), 1);
     return `
         <div class="stats-stacked-columns">
-            ${normalized.map((item) => {
-                const height = Math.max(12, Math.round((item.__total / max) * 100));
-                return `
-                    <div class="stats-stacked-item" title="${escapeHtml(item[labelKey])} · ${formatter(item.__total)}">
+            ${normalized
+                .map((item) => {
+                    const height = Math.max(12, Math.round((item.__total / max) * 100));
+                    return `
+                    <div class="stats-stacked-item" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(item.__total))}">
                         <div class="stats-stacked-stage">
                             <div class="stats-stacked-track" style="height:${height}%;">
-                                ${segments.map((segment) => {
-                                const value = Number(item[segment.key] || 0);
-                                const segmentHeight = item.__total ? (value / item.__total) * 100 : 0;
-                                return `<span class="stats-stacked-segment" style="height:${segmentHeight}%; background:${segment.color};"></span>`;
-                                }).join('')}
+                                ${safeSegments
+                                    .map((segment) => {
+                                        const value = nonNegativeNumber(item[segment.key]);
+                                        const segmentHeight = item.__total ? (value / item.__total) * 100 : 0;
+                                        return `<span class="stats-stacked-segment" style="height:${segmentHeight}%; background:${segment.color};"></span>`;
+                                    })
+                                    .join('')}
                             </div>
                         </div>
-                        <span class="stats-stacked-total">${formatter(item.__total)}</span>
+                        <span class="stats-stacked-total">${escapeHtml(formatter(item.__total))}</span>
                         <span class="stats-stacked-label">${escapeHtml(compactAxisLabel(item[labelKey]))}</span>
                     </div>
                 `;
-            }).join('')}
+                })
+                .join('')}
         </div>
     `;
 }
 
 function renderHistogram(items, valueKey, labelKey, color, formatter) {
-    if (!items.length) return '<div class="stats-empty-card">暂无数据</div>';
-    const max = Math.max(...items.map((item) => Number(item[valueKey] || 0)), 1);
+    const rows = safeRecords(items);
+    if (!rows.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const max = Math.max(...rows.map((item) => nonNegativeNumber(item[valueKey])), 1);
     return `
         <div class="stats-histogram">
-            ${items.map((item) => {
-                const value = Number(item[valueKey] || 0);
-                const height = Math.max(value ? 14 : 6, Math.round((value / max) * 100));
-                return `
-                    <div class="stats-histogram-bin" title="${escapeHtml(item[labelKey])} · ${formatter(value)}">
+            ${rows
+                .map((item) => {
+                    const value = nonNegativeNumber(item[valueKey]);
+                    const height = Math.max(value ? 14 : 6, Math.round((value / max) * 100));
+                    return `
+                    <div class="stats-histogram-bin" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(value))}">
                         <div class="stats-histogram-stage">
                             <span class="stats-histogram-bar" style="height:${height}%; background:${color};"></span>
                         </div>
-                        <span class="stats-histogram-value">${formatter(value)}</span>
+                        <span class="stats-histogram-value">${escapeHtml(formatter(value))}</span>
                         <span class="stats-histogram-label">${escapeHtml(compactAxisLabel(item[labelKey]))}</span>
                     </div>
                 `;
-            }).join('')}
+                })
+                .join('')}
         </div>
     `;
 }
 
+// 环图路径和二维热力图共享同一组安全数值边界。
 function polarToCartesian(cx, cy, r, angle) {
-    const rad = (angle - 90) * Math.PI / 180;
+    const rad = ((angle - 90) * Math.PI) / 180;
     return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
 }
 
@@ -465,29 +540,36 @@ function fullRingPath(cx, cy, outer, inner) {
 }
 
 function renderMatrixHeatmap(rows, xLabels, yLabels, color) {
-    if (!rows.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const records = safeRecords(rows);
+    if (!records.length) return '<div class="stats-empty-card">暂无数据</div>';
     const matrix = new Map();
-    rows.forEach((row) => {
-        matrix.set(`${row.weekday}|${row.slot}`, Number(row.count || 0));
+    records.forEach((row) => {
+        matrix.set(`${row.weekday}|${row.slot}`, nonNegativeNumber(row.count));
     });
-    const max = Math.max(...rows.map((row) => Number(row.count || 0)), 1);
+    const max = Math.max(...records.map((row) => nonNegativeNumber(row.count)), 1);
     return `
         <div class="stats-matrix">
             <div class="stats-matrix-corner"></div>
             ${xLabels.map((label) => `<div class="stats-matrix-xlabel">${escapeHtml(label)}</div>`).join('')}
-            ${yLabels.map((weekday) => `
+            ${yLabels
+                .map(
+                    (weekday) => `
                 <div class="stats-matrix-ylabel">${escapeHtml(weekday)}</div>
-                ${xLabels.map((slot) => {
-                    const value = Number(matrix.get(`${weekday}|${slot}`) || 0);
-                    const opacity = value ? (0.12 + (value / max) * 0.88) : 0.06;
-                    return `
+                ${xLabels
+                    .map((slot) => {
+                        const value = nonNegativeNumber(matrix.get(`${weekday}|${slot}`));
+                        const opacity = value ? 0.12 + (value / max) * 0.88 : 0.06;
+                        return `
                         <div class="stats-matrix-cell" title="${escapeHtml(weekday)} · ${escapeHtml(slot)} · ${value} 个"
                             style="background: rgba(${color}, ${opacity});">
                             <span>${value || ''}</span>
                         </div>
                     `;
-                }).join('')}
-            `).join('')}
+                    })
+                    .join('')}
+            `,
+                )
+                .join('')}
         </div>
     `;
 }
@@ -500,12 +582,13 @@ function donutCenterValueClass(value) {
 }
 
 function renderDonut(items, valueKey, labelKey, colors, centerValue, centerLabel, formatter) {
-    if (!items.length) return '<div class="stats-empty-card">暂无数据</div>';
-    const normalized = [...items]
-        .map((item) => ({ ...item, value: Number(item[valueKey] || 0) }))
+    const normalized = safeRecords(items)
+        .map((item) => ({ ...item, value: nonNegativeNumber(item[valueKey]) }))
         .filter((item) => item.value > 0);
     const total = normalized.reduce((sum, item) => sum + item.value, 0);
     if (!total) return '<div class="stats-empty-card">暂无数据</div>';
+    const providedColors = safeArray(colors).filter((color) => typeof color === 'string' && color);
+    const palette = providedColors.length ? providedColors : ['#94a3b8'];
     let cursor = 0;
     const outer = 67;
     const inner = 43;
@@ -513,84 +596,109 @@ function renderDonut(items, valueKey, labelKey, colors, centerValue, centerLabel
         <div class="stats-donut-wrap">
             <svg viewBox="0 0 180 180" class="stats-donut">
                 <circle cx="90" cy="90" r="${outer}" fill="rgba(248,250,252,0.96)"></circle>
-                ${normalized.map((item, index) => `
-                    ${(() => {
-                        const angle = total ? (item.value / total) * 360 : 0;
-                        const path = angle >= 359.999
-                            ? fullRingPath(90, 90, outer, inner)
-                            : arcPath(90, 90, outer, inner, cursor, cursor + angle);
-                        const color = colors[index % colors.length];
+                ${normalized
+                    .map((item, index) => {
+                        const angle = (item.value / total) * 360;
+                        const path =
+                            angle >= 359.999
+                                ? fullRingPath(90, 90, outer, inner)
+                                : arcPath(90, 90, outer, inner, cursor, cursor + angle);
+                        const color = palette[index % palette.length];
                         cursor += angle;
-                        return `<path d="${path}" fill="${color}" fill-rule="evenodd" stroke="#ffffff" stroke-width="1.5"></path>`;
-                    })()}
-                `).join('')}
+                        return `<path d="${path}" fill="${color}" fill-rule="evenodd" stroke="#ffffff" stroke-width="1.5"><title>${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(item.value))}</title></path>`;
+                    })
+                    .join('')}
                 <circle cx="90" cy="90" r="${inner - 1}" fill="#fff"></circle>
                 <text x="90" y="86" text-anchor="middle" class="${donutCenterValueClass(centerValue)}">${escapeHtml(centerValue)}</text>
                 <text x="90" y="106" text-anchor="middle" class="stats-donut-center-label">${escapeHtml(centerLabel)}</text>
             </svg>
             <div class="stats-donut-legend">
-                ${normalized.map((item, index) => `
+                ${normalized
+                    .map(
+                        (item, index) => `
                     <div class="stats-donut-legend-item">
-                        <span class="stats-donut-legend-dot" style="background:${colors[index % colors.length]};"></span>
+                        <span class="stats-donut-legend-dot" style="background:${palette[index % palette.length]};"></span>
                         <span class="stats-donut-legend-name">${escapeHtml(item[labelKey])}</span>
-                        <span class="stats-donut-legend-value">${formatter(item.value)}</span>
+                        <span class="stats-donut-legend-value">${escapeHtml(formatter(item.value))}</span>
                     </div>
-                `).join('')}
+                `,
+                    )
+                    .join('')}
             </div>
         </div>
     `;
 }
 
 function renderHeatStrip(items, valueKey, labelKey, color, formatter = (value) => `${value}`, options = {}) {
-    if (!items.length) return '<div class="stats-empty-card">暂无数据</div>';
-    const max = Math.max(...items.map((item) => Number(item[valueKey] || 0)), 1);
-    const columns = Number(options.columns || 0);
+    const rows = safeRecords(items);
+    if (!rows.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const max = Math.max(...rows.map((item) => nonNegativeNumber(item[valueKey])), 1);
+    const columns = Math.min(31, Math.max(0, Math.floor(finiteNumber(options?.columns))));
     const style = columns > 0 ? ` style="grid-template-columns:repeat(${columns}, minmax(0, 1fr));"` : '';
     return `
         <div class="stats-heat-strip"${style}>
-            ${items.map((item) => {
-                const value = Number(item[valueKey] || 0);
-                const opacity = value ? (0.16 + (value / max) * 0.84) : 0.08;
-                return `
+            ${rows
+                .map((item) => {
+                    const value = nonNegativeNumber(item[valueKey]);
+                    const opacity = value ? 0.16 + (value / max) * 0.84 : 0.08;
+                    return `
                     <div class="stats-heat-cell" title="${escapeHtml(item[labelKey])} · ${escapeHtml(formatter(value))}"
                         style="background:rgba(${color}, ${opacity});">
                         <span>${escapeHtml(item[labelKey])}</span>
                     </div>
                 `;
-            }).join('')}
+                })
+                .join('')}
         </div>
     `;
 }
 
 function renderTokenCloud(items, formatter) {
-    if (!items.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const tokens = safeRecords(items);
+    if (!tokens.length) return '<div class="stats-empty-card">暂无数据</div>';
     return `
         <div class="stats-token-cloud">
-            ${items.map((item, index) => `
+            ${tokens
+                .map(
+                    (item, index) => `
                 <span class="stats-token stats-token-${(index % 4) + 1}">
-                    ${escapeHtml(item.label)} · ${formatter(item.value)}
+                    ${escapeHtml(item.label)} · ${escapeHtml(formatter(nonNegativeNumber(item.value)))}
                 </span>
-            `).join('')}
+            `,
+                )
+                .join('')}
         </div>
     `;
 }
 
 function renderActivityHeatmap(days, highlightStart, highlightEnd) {
-    if (!days || !days.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const normalizedDays = safeRecords(days)
+        .filter((day) => isValidDateInput(String(day.date || '')))
+        .map((day) => ({
+            date: String(day.date),
+            count: Math.round(nonNegativeNumber(day.count)),
+            ledger: Math.round(nonNegativeNumber(day.ledger)),
+            task: Math.round(nonNegativeNumber(day.task)),
+            event: Math.round(nonNegativeNumber(day.event)),
+            note: Math.round(nonNegativeNumber(day.note)),
+            diary: Math.round(nonNegativeNumber(day.diary)),
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date));
+    if (!normalizedDays.length) return '<div class="stats-empty-card">暂无数据</div>';
     const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
-    const firstDay = new Date(`${days[0].date}T00:00:00`);
-    const maxCount = Math.max(...days.map((d) => d.count), 1);
+    const firstDay = new Date(`${normalizedDays[0].date}T00:00:00`);
+    const maxCount = Math.max(...normalizedDays.map((day) => day.count), 1);
     const weeks = [];
     let week = [];
     const startWeekday = (firstDay.getDay() + 6) % 7;
     for (let i = 0; i < startWeekday; i += 1) {
         week.push(null);
     }
-    days.forEach((d) => {
+    normalizedDays.forEach((d) => {
         const dt = new Date(`${d.date}T00:00:00`);
         const wd = (dt.getDay() + 6) % 7;
         week.push(d);
-        if (wd === 6 || d === days[days.length - 1]) {
+        if (wd === 6 || d === normalizedDays[normalizedDays.length - 1]) {
             while (week.length < 7) week.push(null);
             weeks.push(week);
             week = [];
@@ -620,42 +728,51 @@ function renderActivityHeatmap(days, highlightStart, highlightEnd) {
         if (!count) return 0;
         return 0.24 + (count / maxCount) * 0.76;
     };
-    const minWidth = 28 + (weeks.length * 12) + ((weeks.length - 1) * 2);
+    const minWidth = 28 + weeks.length * 12 + (weeks.length - 1) * 2;
     return `
         <div class="stats-heatmap" style="--stats-heatmap-weeks:${weeks.length}; --stats-heatmap-min-width:${minWidth}px;">
             <div class="stats-heatmap-months">
                 <div class="stats-heatmap-corner"></div>
-                ${weeks.map((_, wi) => {
-                    const ml = monthLabels.find((m) => m.index === wi);
-                    return `<div class="stats-heatmap-month-label">${ml ? escapeHtml(ml.label) : ''}</div>`;
-                }).join('')}
+                ${weeks
+                    .map((_, wi) => {
+                        const ml = monthLabels.find((m) => m.index === wi);
+                        return `<div class="stats-heatmap-month-label">${ml ? escapeHtml(ml.label) : ''}</div>`;
+                    })
+                    .join('')}
             </div>
             <div class="stats-heatmap-grid">
-                ${weekdayLabels.map((label, yi) => `
+                ${weekdayLabels
+                    .map(
+                        (label, yi) => `
                     <div class="stats-heatmap-ylabel">${escapeHtml(label)}</div>
-                    ${weeks.map((w) => {
-                        const cell = w[yi];
-                        if (!cell) return `<div class="stats-heatmap-cell empty"></div>`;
-                        const highlighted = isHighlighted(cell.date);
-                        const op = cellOpacity(cell.count);
-                        const background = cell.count
-                            ? `rgba(16,185,129,${op})`
-                            : 'rgba(226,232,240,0.52)';
-                        return `
+                    ${weeks
+                        .map((w) => {
+                            const cell = w[yi];
+                            if (!cell) return `<div class="stats-heatmap-cell empty"></div>`;
+                            const highlighted = isHighlighted(cell.date);
+                            const op = cellOpacity(cell.count);
+                            const background = cell.count ? `rgba(16,185,129,${op})` : 'rgba(226,232,240,0.52)';
+                            return `
                             <div class="stats-heatmap-cell${highlighted ? ' in-range' : ''}"
                                 style="background:${background};"
                                 title="${escapeHtml(cell.date)} · 活动 ${cell.count}（记账${cell.ledger} 任务${cell.task} 日程${cell.event} 笔记${cell.note} 日记${cell.diary}）">
                             </div>
                         `;
-                    }).join('')}
-                `).join('')}
+                        })
+                        .join('')}
+                `,
+                    )
+                    .join('')}
             </div>
             <div class="stats-heatmap-footer">
                 <span class="stats-heatmap-legend-label">少</span>
                 <div class="stats-heatmap-legend-cell" style="background:rgba(226,232,240,0.52)"></div>
-                ${[0.24, 0.4, 0.56, 0.72, 0.88, 1.0].map((op) =>
-                    `<div class="stats-heatmap-legend-cell" style="background:rgba(16,185,129,${op})"></div>`
-                ).join('')}
+                ${[0.24, 0.4, 0.56, 0.72, 0.88, 1.0]
+                    .map(
+                        (op) =>
+                            `<div class="stats-heatmap-legend-cell" style="background:rgba(16,185,129,${op})"></div>`,
+                    )
+                    .join('')}
                 <span class="stats-heatmap-legend-label">多</span>
             </div>
         </div>
@@ -663,8 +780,9 @@ function renderActivityHeatmap(days, highlightStart, highlightEnd) {
 }
 
 function renderComparisonMetric(label, value, maxExpense, color) {
-    const amount = Number(value || 0);
-    const width = amount > 0 ? Math.max(6, Math.round((amount / maxExpense) * 100)) : 0;
+    const amount = nonNegativeNumber(value);
+    const maximum = Math.max(1, nonNegativeNumber(maxExpense, 1));
+    const width = amount > 0 ? Math.min(100, Math.max(6, Math.round((amount / maximum) * 100))) : 0;
     return `
         <div class="stats-comparison-metric" title="${escapeHtml(label)} ${formatAmount(amount)}">
             <div class="stats-comparison-metric-head">
@@ -679,13 +797,14 @@ function renderComparisonMetric(label, value, maxExpense, color) {
 }
 
 function renderComparisonBars(months) {
-    if (!months || !months.length) return '<div class="stats-empty-card">暂无数据</div>';
-    const recent = months.slice(-6);
-    const maxExpense = Math.max(...recent.map((m) => Math.max(
-        Number(m.expense || 0),
-        Number(m.prev_expense || 0),
-        Number(m.yoy_expense || 0),
-    )), 1);
+    const recent = safeRecords(months).slice(-6);
+    if (!recent.length) return '<div class="stats-empty-card">暂无数据</div>';
+    const maxExpense = Math.max(
+        ...recent.map((m) =>
+            Math.max(nonNegativeNumber(m.expense), nonNegativeNumber(m.prev_expense), nonNegativeNumber(m.yoy_expense)),
+        ),
+        1,
+    );
     return `
         <div class="stats-comparison">
             <div class="stats-chip-row">
@@ -694,7 +813,9 @@ function renderComparisonBars(months) {
                 <span class="stats-chip" style="border-left:3px solid #94a3b8;">去年同月</span>
             </div>
             <div class="stats-comparison-table">
-                ${recent.map((m) => `
+                ${recent
+                    .map(
+                        (m) => `
                     <div class="stats-comparison-row">
                         <div class="stats-comparison-label">${escapeHtml(compactAxisLabel(m.month))}</div>
                         <div class="stats-comparison-series">
@@ -703,12 +824,15 @@ function renderComparisonBars(months) {
                             ${renderComparisonMetric('去年同月', m.yoy_expense, maxExpense, '#94a3b8')}
                         </div>
                     </div>
-                `).join('')}
+                `,
+                    )
+                    .join('')}
             </div>
         </div>
     `;
 }
 
+// 洞察文本只拼接页面计算结果；来自接口的标签必须先转义。
 function generateInsights(data) {
     const insights = [];
     const ledger = data?.ledger || {};
@@ -730,7 +854,7 @@ function generateInsights(data) {
             text: `${rangeLabel()}支出 <strong>${formatAmount(expenseTotal)}</strong>，收入 <strong>${formatAmount(incomeTotal)}</strong>，结余 <strong>${formatAmount(incomeTotal - expenseTotal)}</strong>`,
         });
         if (top) {
-            const pct = expenseTotal > 0 ? Math.round((Number(top.total || 0) / expenseTotal) * 100) : 0;
+            const pct = expenseTotal > 0 ? Math.round((nonNegativeNumber(top.total) / expenseTotal) * 100) : 0;
             insights.push({
                 icon: '🏷️',
                 color: '#fff7ed',
@@ -748,20 +872,22 @@ function generateInsights(data) {
         insights.push({
             icon: '✅',
             color: '#f0fdf4',
-            text: completionBase > 0
-                ? `任务完成率 <strong>${rate}%</strong>（${doneCount}/${completionBase}），未完成 <strong>${active}</strong> 项${cancelled ? `，已取消 <strong>${cancelled}</strong> 项` : ''}`
-                : `当前范围内暂无可完成任务${cancelled ? `，但有 <strong>${cancelled}</strong> 项已取消` : ''}。`,
+            text:
+                completionBase > 0
+                    ? `任务完成率 <strong>${rate}%</strong>（${doneCount}/${completionBase}），未完成 <strong>${active}</strong> 项${cancelled ? `，已取消 <strong>${cancelled}</strong> 项` : ''}`
+                    : `当前范围内暂无可完成任务${cancelled ? `，但有 <strong>${cancelled}</strong> 项已取消` : ''}。`,
         });
     }
 
-    const timeSlots = safeArray(events.time_slots);
+    const timeSlots = safeRecords(events.time_slots);
     if (timeSlots.length > 0) {
-        const peak = [...timeSlots].sort((a, b) => Number(b.count || 0) - Number(a.count || 0))[0];
-        if (peak && peak.count > 0) {
+        const peak = safeRecords(timeSlots).sort((a, b) => nonNegativeNumber(b.count) - nonNegativeNumber(a.count))[0];
+        const peakCount = nonNegativeNumber(peak?.count);
+        if (peak && peakCount > 0) {
             insights.push({
                 icon: '📅',
                 color: '#eef2ff',
-                text: `最活跃时段：<strong>${escapeHtml(peak.slot || '')}</strong>，共 ${peak.count} 个日程`,
+                text: `最活跃时段：<strong>${escapeHtml(peak.slot || '')}</strong>，共 ${formatCount(peakCount)} 个日程`,
             });
         }
     }
@@ -796,47 +922,52 @@ function renderInsightCard(data) {
         subtitle: `基于当前统计结果生成的摘要，默认按${rangeLabel()}解读。`,
         body: `
             <div class="stats-insights">
-                ${insights.map((item) => `
+                ${insights
+                    .map(
+                        (item) => `
                     <div class="stats-insight-item">
                         <div class="stats-insight-icon" style="background:${item.color};">${item.icon}</div>
                         <div class="stats-insight-text">${item.text}</div>
                     </div>
-                `).join('')}
+                `,
+                    )
+                    .join('')}
             </div>
         `,
     });
 }
 
 function normalizeTaskTotals(totals = {}) {
-    const open = Number(totals.open || 0) || 0;
-    const done = Number(totals.done || 0) || 0;
-    const cancelled = Number(totals.cancelled || 0) || 0;
-    const closed = Number(totals.closed || (done + cancelled)) || 0;
+    const source = isRecord(totals) ? totals : {};
+    const open = Math.round(nonNegativeNumber(source.open));
+    const done = Math.round(nonNegativeNumber(source.done));
+    const cancelled = Math.round(nonNegativeNumber(source.cancelled));
     const total = open + done + cancelled;
     const completionBase = open + done;
     return {
         open,
         done,
         cancelled,
-        closed,
         total,
-        completionRate: completionBase ? (done / completionBase) : 0,
+        completionRate: completionBase ? done / completionBase : 0,
     };
 }
 
+// 顶部大图、比较卡与通用卡片骨架。
 function renderFeaturedDeck() {
     const range = deriveRangeDates();
-    const heatmapRange = clampRangeToYear(range, Number(_heatmapData?.year || 0));
+    const heatmapYear = Math.round(nonNegativeNumber(_heatmapData?.year));
+    const heatmapRange = clampRangeToYear(range, heatmapYear);
     return `
         <section class="stats-featured">
             ${renderCard({
                 accent: '#10b981',
                 eyebrow: 'Overview',
                 title: '全年活动',
-                subtitle: `${_heatmapData?.year || ''}年全年活跃度概览，当前时间范围仅用于高亮，不改变底图统计。`,
+                subtitle: `${heatmapYear || ''}年全年活跃度概览，当前时间范围仅用于高亮，不改变底图统计。`,
                 classes: 'stats-card--full',
                 body: renderActivityHeatmap(
-                    safeArray(_heatmapData?.days),
+                    safeRecords(_heatmapData?.days),
                     heatmapRange.start || undefined,
                     heatmapRange.end || undefined,
                 ),
@@ -847,17 +978,22 @@ function renderFeaturedDeck() {
 
 function renderComparisonCard() {
     if (!_comparisonData) return '';
+    const months = safeRecords(_comparisonData.months);
+    if (!months.length) return '';
     return renderCard({
         accent: '#f97316',
         eyebrow: 'Finance',
         title: '同比 · 环比',
         subtitle: '固定展示近 6 个月支出对比，不随当前时间范围切换。',
-        body: renderComparisonBars(_comparisonData.months),
+        body: renderComparisonBars(months),
         footer: (() => {
-            const latest = (_comparisonData.months || []).slice(-1)[0];
+            const latest = months.at(-1);
             if (!latest) return '';
-            const momVal = latest.prev_expense ? ((latest.expense - latest.prev_expense) / latest.prev_expense * 100) : null;
-            const yoyVal = latest.yoy_expense ? ((latest.expense - latest.yoy_expense) / latest.yoy_expense * 100) : null;
+            const expense = nonNegativeNumber(latest.expense);
+            const previousExpense = nonNegativeNumber(latest.prev_expense);
+            const yearAgoExpense = nonNegativeNumber(latest.yoy_expense);
+            const momVal = previousExpense ? ((expense - previousExpense) / previousExpense) * 100 : null;
+            const yoyVal = yearAgoExpense ? ((expense - yearAgoExpense) / yearAgoExpense) * 100 : null;
             const momText = momVal !== null ? `${momVal >= 0 ? '+' : ''}${momVal.toFixed(1)}%` : '-';
             const yoyText = yoyVal !== null ? `${yoyVal >= 0 ? '+' : ''}${yoyVal.toFixed(1)}%` : '-';
             return renderMetricPairs([
@@ -869,20 +1005,33 @@ function renderComparisonCard() {
 }
 
 function renderMetricPairs(items) {
-    if (!items.length) return '';
+    const pairs = safeRecords(items);
+    if (!pairs.length) return '';
     return `
         <div class="stats-metric-pairs">
-            ${items.map((item) => `
+            ${pairs
+                .map(
+                    (item) => `
                 <div class="stats-metric-pair">
                     <span>${escapeHtml(item.label)}</span>
                     <strong>${escapeHtml(item.value)}</strong>
                 </div>
-            `).join('')}
+            `,
+                )
+                .join('')}
         </div>
     `;
 }
 
-function renderCard({ accent = '#4f46e5', eyebrow = '', title = '', subtitle = '', body = '', footer = '', classes = '' }) {
+function renderCard({
+    accent = '#4f46e5',
+    eyebrow = '',
+    title = '',
+    subtitle = '',
+    body = '',
+    footer = '',
+    classes = '',
+}) {
     return `
         <article class="stats-card ${classes}" style="--stats-accent:${accent};">
             <div class="stats-card-head">
@@ -899,8 +1048,12 @@ function renderCard({ accent = '#4f46e5', eyebrow = '', title = '', subtitle = '
 }
 
 function ensureStyles() {
-    injectStyles(CSS_ID, `
+    injectStyles(
+        CSS_ID,
+        `
         ${pageShellCss('stats-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
+
+        /* 页面头部与范围选择 */
         .stats-stack { display: flex; flex-direction: column; gap: 18px; }
         .stats-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start;
@@ -923,6 +1076,9 @@ function ensureStyles() {
         }
         .stats-range-btn { cursor: pointer; }
         .stats-range-btn.active { background: #4f46e5; border-color: #4f46e5; color: #fff; box-shadow: 0 10px 24px rgba(79,70,229,0.18); }
+        .stats-range-btn:focus-visible, .stats-date-field:focus-visible {
+            outline: 3px solid rgba(79,70,229,0.25); outline-offset: 2px; border-color: #6366f1;
+        }
         .stats-custom-range {
             display: inline-flex;
             align-items: center;
@@ -947,6 +1103,7 @@ function ensureStyles() {
             min-width: 64px;
             justify-content: center;
         }
+        /* 摘要、瀑布流与通用卡片 */
         .stats-summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
         .stats-summary-card {
             min-width: 0;
@@ -999,6 +1156,7 @@ function ensureStyles() {
         .stats-card-body { margin-top: 14px; }
         .stats-card-footer { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(226,232,240,0.82); }
         .stats-empty-card { padding: 28px 18px; border-radius: 18px; text-align: center; background: rgba(248,250,252,0.82); border: 1px dashed rgba(148,163,184,0.28); color: var(--color-text-secondary); }
+        /* 折线、柱状、条形与面积块 */
         .stats-chart-block { display: flex; flex-direction: column; gap: 10px; }
         .stats-sparkline { display: block; width: 100%; height: auto; }
         .stats-sparkline-footer { display: grid; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); gap: 8px; font-size: 10px; color: var(--color-text-secondary); }
@@ -1062,6 +1220,7 @@ function ensureStyles() {
         }
         .stats-histogram-value { font-size: 10px; font-weight: 800; color: #0f172a; }
         .stats-histogram-label { width: 100%; font-size: 10px; color: var(--color-text-secondary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* 环图、热力图与比较图 */
         .stats-donut-wrap { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 12px; align-items: center; }
         .stats-donut { width: 100%; height: auto; max-width: 180px; margin: 0 auto; }
         .stats-donut path { transition: opacity 0.2s ease, transform 0.2s ease; transform-origin: 90px 90px; }
@@ -1161,11 +1320,17 @@ function ensureStyles() {
         .stats-insight-item { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.7; color: #334155; }
         .stats-insight-icon { flex-shrink: 0; width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
         .stats-insight-text strong { color: #0f172a; font-weight: 800; }
-        ${mediaMax(BREAKPOINTS.XL, `
+        /* 响应式收敛 */
+        ${mediaMax(
+            BREAKPOINTS.XL,
+            `
             .stats-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .stats-wall { column-count: 2; }
-        `)}
-        ${mediaMax(BREAKPOINTS.MOBILE, `
+        `,
+        )}
+        ${mediaMax(
+            BREAKPOINTS.MOBILE,
+            `
             .stats-hero { grid-template-columns: 1fr; padding: 22px 20px; }
             .stats-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .stats-wall { column-count: 2; }
@@ -1178,8 +1343,11 @@ function ensureStyles() {
             .stats-donut-legend-item { font-size: 11px; }
             .stats-date-field { min-width: 132px; }
             .stats-range-group { margin-top: 0; }
-        `)}
-        ${mediaMax(BREAKPOINTS.PHONE, `
+        `,
+        )}
+        ${mediaMax(
+            BREAKPOINTS.PHONE,
+            `
             .stats-wall { column-count: 1; }
             .stats-summary-grid, .stats-metric-pairs, .stats-dual-grid, .stats-treemap { grid-template-columns: 1fr; }
             .stats-range-group, .stats-chip-row { align-items: stretch; }
@@ -1196,46 +1364,81 @@ function ensureStyles() {
             .stats-comparison-label { text-align: left; padding-top: 0; }
             .stats-comparison-series { grid-template-columns: 1fr; }
             .stats-insight-item { font-size: 12px; }
-        `)}
-    `);
+        `,
+        )}
+    `,
+    );
 }
 
-async function fetchAllData() {
-    const range = deriveRangeDates();
-    const rangeParam = buildRequestRangeValue();
+// 数据请求：固定本次范围快照，全部时间的三个边界查询并行执行。
+async function fetchAllData({ rangeKey, range, today }) {
+    const rangeParam = buildRequestRangeValue(rangeKey, range);
     const heatmapYear = resolveHeatmapYear(range);
-    const ledgerRange = _range === 'all' ? await fetchLedgerRangeBounds(range.end) : range;
-    const notesRange = _range === 'all' ? await fetchNoteRangeBounds(range.end) : range;
-    const diaryRange = _range === 'all' ? await fetchDiaryRangeBounds(range.end) : range;
+    const [ledgerRange, notesRange, diaryRange] =
+        rangeKey === 'all'
+            ? await Promise.all([
+                  fetchItemRangeBounds(api, {
+                      type: 'ledger',
+                      sortField: 'ledger_date',
+                      startField: 'ledger_date',
+                      endField: 'ledger_date',
+                      fallbackEnd: range.end,
+                  }),
+                  fetchItemRangeBounds(api, {
+                      type: 'note',
+                      sortField: 'created_at',
+                      startField: 'created_at',
+                      endField: 'created_at',
+                      fallbackEnd: range.end,
+                  }),
+                  fetchItemRangeBounds(api, {
+                      type: 'diary',
+                      sortField: 'diary_date',
+                      startField: 'diary_date',
+                      endField: 'diary_date',
+                      fallbackEnd: range.end,
+                  }),
+              ])
+            : [range, range, range];
     const [ledgerRes, tasksRes, eventsRes, notesRes, diaryRes, heatmapRes, comparisonRes, moodRes] = await Promise.all([
-        api.get('/stats/ledger', _range === 'all' ? { start_date: ledgerRange.start, end_date: ledgerRange.end } : { range: rangeParam }),
+        api.get(
+            '/stats/ledger',
+            rangeKey === 'all' ? { start_date: ledgerRange.start, end_date: ledgerRange.end } : { range: rangeParam },
+        ),
         api.get('/stats/tasks', { range: rangeParam }),
         api.get('/stats/events', { range: rangeParam }),
-        api.get('/stats/notes/overview', { start_date: notesRange.start, end_date: notesRange.end, today: overviewReferenceDay(notesRange) }),
-        api.get('/stats/diary/overview', { start_date: diaryRange.start, end_date: diaryRange.end, today: diaryRange.end, cadence_granularity: 'auto' }),
+        api.get('/stats/notes/overview', {
+            start_date: notesRange.start,
+            end_date: notesRange.end,
+            today: overviewReferenceDay(notesRange, today),
+        }),
+        api.get('/stats/diary/overview', {
+            start_date: diaryRange.start,
+            end_date: diaryRange.end,
+            today: diaryRange.end,
+            cadence_granularity: 'auto',
+        }),
         api.get('/stats/activity-heatmap', { year: heatmapYear }),
         api.get('/stats/ledger/comparison', { months: 6 }),
         api.get('/config/diary/moods').catch(() => null),
     ]);
-    const fetchedMoodEmojis = moodRes?.data?.mood_emojis;
-    const fetchedMoodLabels = moodRes?.data?.mood_labels;
-    _moodEmojis = fetchedMoodEmojis && typeof fetchedMoodEmojis === 'object'
-        ? { ...DEFAULT_MOOD_EMOJIS, ...fetchedMoodEmojis }
-        : { ...DEFAULT_MOOD_EMOJIS };
-    _moodLabels = fetchedMoodLabels && typeof fetchedMoodLabels === 'object'
-        ? { ...DEFAULT_MOOD_LABELS, ...fetchedMoodLabels }
-        : { ...DEFAULT_MOOD_LABELS };
-    _heatmapData = heatmapRes?.data || null;
-    _comparisonData = comparisonRes?.data || null;
+    const moodData = responseData(moodRes);
     return {
-        ledger: ledgerRes?.data || {},
-        tasks: tasksRes?.data || {},
-        events: eventsRes?.data || {},
-        notes: notesRes?.data || {},
-        diary: diaryRes?.data || {},
+        data: {
+            ledger: responseData(ledgerRes),
+            tasks: responseData(tasksRes),
+            events: responseData(eventsRes),
+            notes: responseData(notesRes),
+            diary: responseData(diaryRes),
+        },
+        heatmapData: responseData(heatmapRes),
+        comparisonData: responseData(comparisonRes),
+        moodEmojis: normalizeTextMap(moodData.mood_emojis, DEFAULT_MOOD_EMOJIS),
+        moodLabels: normalizeTextMap(moodData.mood_labels, DEFAULT_MOOD_LABELS),
     };
 }
 
+// 各业务模块卡片按财务、任务、日程、笔记、日记顺序排列。
 function financeCards() {
     const ledger = _data?.ledger || {};
     const range = deriveRangeDates();
@@ -1331,7 +1534,7 @@ function financeCards() {
             title: '单笔金额分布',
             subtitle: `按${rangeLabel()}统计支出集中在哪些金额区间。`,
             body: renderHistogram(
-                safeArray(ledger.expense_amount_histogram),
+                safeRecords(ledger.expense_amount_histogram),
                 'count',
                 'bucket',
                 '#f59e0b',
@@ -1343,13 +1546,7 @@ function financeCards() {
             eyebrow: 'Finance',
             title: `${rangeLabel()}节奏`,
             subtitle: `按${rangeLabel()}比较各时段收支量级。`,
-            body: renderColumnChart(
-                rhythmSeries,
-                'total',
-                'label',
-                '#f59e0b',
-                formatMoneyCompact,
-            ),
+            body: renderColumnChart(rhythmSeries, 'total', 'label', '#f59e0b', formatMoneyCompact),
         }),
     ].join('');
 }
@@ -1358,31 +1555,45 @@ function taskCards() {
     const tasks = _data?.tasks || {};
     const totals = normalizeTaskTotals(tasks.totals);
     const totalCount = totals.total;
-    const taskToneDone = '#166534';
-    const taskToneOpen = '#F59E0B';
-    const taskToneMuted = '#94a3b8';
     const statusItems = [
-        { label: '未完成', count: totals.open, color: taskToneOpen },
-        { label: '已完成', count: totals.done, color: taskToneDone },
-        { label: '已取消', count: totals.cancelled, color: taskToneMuted },
+        { label: '未完成', count: totals.open, color: TASK_TONES.open },
+        { label: '已完成', count: totals.done, color: TASK_TONES.done },
+        { label: '已取消', count: totals.cancelled, color: TASK_TONES.cancelled },
     ].filter((item) => item.count > 0);
-    const weekly = safeArray(tasks.weekly);
-    const planItems = safeArray(tasks.by_plan).slice(0, 8).map((item) => ({ label: item.plan || '未安排', count: item.count }));
-    const categoryItems = safeArray(tasks.by_category).slice(0, 8).map((item) => ({ label: item.category || '未分类', count: item.count }));
+    const weekly = safeRecords(tasks.weekly);
+    const planItems = safeRecords(tasks.by_plan)
+        .slice(0, 8)
+        .map((item) => ({ label: item.plan || '未安排', count: item.count }));
+    const categoryItems = safeRecords(tasks.by_category)
+        .slice(0, 8)
+        .map((item) => ({ label: item.category || '未分类', count: item.count }));
     return [
         renderCard({
             accent: '#10b981',
             eyebrow: 'Tasks',
             title: '任务状态',
             subtitle: `按${rangeLabel()}统一为未完成、已完成、已取消三种结果。`,
-            body: renderDonut(statusItems, 'count', 'label', statusItems.map((item) => item.color), formatCount(totalCount), '总任务', (value) => `${value} 项`),
+            body: renderDonut(
+                statusItems,
+                'count',
+                'label',
+                statusItems.map((item) => item.color),
+                formatCount(totalCount),
+                '总任务',
+                (value) => `${value} 项`,
+            ),
         }),
         renderCard({
             accent: '#22c55e',
             eyebrow: 'Tasks',
             title: '完成节奏',
             subtitle: `${rangeLabel()}里真正完成的任务节奏。`,
-            body: renderSparkline(weekly.map((item) => item.week || ''), weekly.map((item) => Number(item.done || 0)), '#10b981', (value) => `${value} 项`),
+            body: renderSparkline(
+                weekly.map((item) => item.week || ''),
+                weekly.map((item) => nonNegativeNumber(item.done)),
+                '#10b981',
+                (value) => `${value} 项`,
+            ),
             footer: renderMetricPairs([
                 { label: `${rangeLabel()}新增`, value: formatCount(tasks.new_this_week || 0) },
                 { label: '当前未完成', value: formatCount(totals.open) },
@@ -1396,15 +1607,15 @@ function taskCards() {
             body: renderStackedColumns(
                 weekly.map((item) => ({
                     label: String(item.week || '').replace(/^\d{4}-W/, 'W'),
-                    created: Number(item.created || 0),
-                    done: Number(item.done || 0),
-                    cancelled: Number(item.cancelled || 0),
+                    created: nonNegativeNumber(item.created),
+                    done: nonNegativeNumber(item.done),
+                    cancelled: nonNegativeNumber(item.cancelled),
                 })),
                 'label',
                 [
-                    { key: 'created', color: '#FCD34D' },
-                    { key: 'done', color: taskToneDone },
-                    { key: 'cancelled', color: taskToneMuted },
+                    { key: 'created', color: TASK_TONES.created },
+                    { key: 'done', color: TASK_TONES.done },
+                    { key: 'cancelled', color: TASK_TONES.cancelled },
                 ],
                 (value) => `${value}`,
             ),
@@ -1422,7 +1633,7 @@ function taskCards() {
             title: '优先级分布',
             subtitle: `按${rangeLabel()}观察高优事项是否堆积。`,
             body: renderBarRows(
-                safeArray(tasks.by_priority).map((item) => ({ ...item, label: `优先级 ${item.priority ?? '未设'}` })),
+                safeRecords(tasks.by_priority).map((item) => ({ ...item, label: `优先级 ${item.priority ?? '未设'}` })),
                 'count',
                 'label',
                 '#10b981',
@@ -1434,33 +1645,21 @@ function taskCards() {
             eyebrow: 'Tasks',
             title: '计划分布',
             subtitle: `按${rangeLabel()}查看未完成任务主要分布在哪些日期桶。`,
-            body: renderColumnChart(
-                planItems,
-                'count',
-                'label',
-                '#059669',
-                (value) => `${value}`,
-            ),
+            body: renderColumnChart(planItems, 'count', 'label', '#059669', (value) => `${value}`),
         }),
         renderCard({
             accent: '#0f766e',
             eyebrow: 'Tasks',
             title: '文字分类',
             subtitle: `按${rangeLabel()}查看未完成任务压在哪些非日期分类。`,
-            body: renderColumnChart(
-                categoryItems,
-                'count',
-                'label',
-                '#0f766e',
-                (value) => `${value}`,
-            ),
+            body: renderColumnChart(categoryItems, 'count', 'label', '#0f766e', (value) => `${value}`),
         }),
     ].join('');
 }
 
 function eventCards() {
     const events = _data?.events || {};
-    const weekly = safeArray(events.weekly);
+    const weekly = safeRecords(events.weekly);
     const totalEvents = sumBy(weekly, 'count');
     const slotLabels = ['06-09', '09-12', '12-14', '14-18', '18-21', '21-24'];
     const weekdayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -1470,10 +1669,15 @@ function eventCards() {
             eyebrow: 'Events',
             title: '日程密度',
             subtitle: `按${rangeLabel()}查看安排数量随时间的变化。`,
-            body: renderSparkline(weekly.map((item) => item.week || ''), weekly.map((item) => Number(item.count || 0)), '#6366f1', (value) => `${value} 个`),
+            body: renderSparkline(
+                weekly.map((item) => item.week || ''),
+                weekly.map((item) => nonNegativeNumber(item.count)),
+                '#6366f1',
+                (value) => `${value} 个`,
+            ),
             footer: renderMetricPairs([
                 { label: '日程总量', value: formatCount(totalEvents) },
-                { label: '分类数', value: formatCount(safeArray(events.by_category).length) },
+                { label: '分类数', value: formatCount(safeRecords(events.by_category).length) },
             ]),
         }),
         renderCard({
@@ -1481,14 +1685,20 @@ function eventCards() {
             eyebrow: 'Events',
             title: '常见时段',
             subtitle: `按${rangeLabel()}看一天里哪些时段最常被安排占据。`,
-            body: renderBarRows(safeArray(events.time_slots).map((item) => ({ ...item, label: item.slot })), 'count', 'label', '#8b5cf6', (value) => `${value} 个`),
+            body: renderBarRows(
+                safeRecords(events.time_slots).map((item) => ({ ...item, label: item.slot })),
+                'count',
+                'label',
+                '#8b5cf6',
+                (value) => `${value} 个`,
+            ),
         }),
         renderCard({
             accent: '#7c3aed',
             eyebrow: 'Events',
             title: '周内时段热力图',
             subtitle: `按${rangeLabel()}观察安排更容易扎堆在哪几天、哪几个时段。`,
-            body: renderMatrixHeatmap(safeArray(events.weekday_slots), slotLabels, weekdayLabels, '124, 58, 237'),
+            body: renderMatrixHeatmap(safeRecords(events.weekday_slots), slotLabels, weekdayLabels, '124, 58, 237'),
         }),
         renderCard({
             accent: '#4f46e5',
@@ -1496,7 +1706,9 @@ function eventCards() {
             title: '日程分类',
             subtitle: `按${rangeLabel()}统计日程主题分布。`,
             body: renderDonut(
-                safeArray(events.by_category).slice(0, 6).map((item) => ({ ...item, category: item.category || '未分类' })),
+                safeRecords(events.by_category)
+                    .slice(0, 6)
+                    .map((item) => ({ ...item, category: item.category || '未分类' })),
                 'count',
                 'category',
                 ['#6366f1', '#8b5cf6', '#3b82f6', '#a855f7', '#818cf8', '#60a5fa'],
@@ -1512,18 +1724,23 @@ function noteCards() {
     const notes = _data?.notes || {};
     const summary = notes.summary || {};
     const cadenceGranularity = notes.cadence_granularity || 'day';
-    const categories = safeArray(notes.categories);
-    const hotTags = safeArray(notes.hot_tags).slice(0, 10).map((item) => ({ label: `#${item.tag}`, value: item.count }));
-    const cadenceItems = safeArray(notes.cadence).map((item) => ({ label: item.label, count: item.count }));
-    const cadenceBody = cadenceGranularity === 'day'
-        ? renderHeatStrip(cadenceItems, 'count', 'label', '59, 130, 246', (value) => `${value}`, { columns: Math.min(Math.max(cadenceItems.length, 1), 7) })
-        : renderColumnChart(cadenceItems, 'count', 'label', '#3b82f6', (value) => `${value}`);
+    const categories = safeRecords(notes.categories);
+    const hotTags = safeRecords(notes.hot_tags)
+        .slice(0, 10)
+        .map((item) => ({ label: `#${item.tag}`, value: item.count }));
+    const cadenceItems = safeRecords(notes.cadence).map((item) => ({ label: item.label, count: item.count }));
+    const cadenceBody =
+        cadenceGranularity === 'day'
+            ? renderHeatStrip(cadenceItems, 'count', 'label', '59, 130, 246', (value) => `${value}`, {
+                  columns: Math.min(Math.max(cadenceItems.length, 1), 7),
+              })
+            : renderColumnChart(cadenceItems, 'count', 'label', '#3b82f6', (value) => `${value}`);
     return [
         renderCard({
             accent: '#3b82f6',
             eyebrow: 'Notes',
             title: '笔记节奏',
-            subtitle: noteCadenceSubtitle(cadenceGranularity),
+            subtitle: noteCadenceSubtitle(cadenceGranularity, rangeLabel()),
             body: cadenceBody,
             footer: renderMetricPairs([
                 { label: `${rangeLabel()}笔记`, value: formatCount(summary.total_count || 0) },
@@ -1535,7 +1752,13 @@ function noteCards() {
             eyebrow: 'Notes',
             title: '笔记分类',
             subtitle: `按${rangeLabel()}统计知识沉淀主题。`,
-            body: renderBarRows(categories.map((item) => ({ ...item, category: item.category || '未分类' })), 'count', 'category', '#3b82f6', (value) => `${value} 条`),
+            body: renderBarRows(
+                categories.map((item) => ({ ...item, category: item.category || '未分类' })),
+                'count',
+                'category',
+                '#3b82f6',
+                (value) => `${value} 条`,
+            ),
         }),
         renderCard({
             accent: '#0ea5e9',
@@ -1555,24 +1778,45 @@ function diaryCards() {
     const diary = _data?.diary || {};
     const summary = diary.summary || {};
     const cadenceGranularity = diary.cadence_granularity || 'day';
-    const cadenceItems = safeArray(diary.cadence).map((item) => ({
+    const cadenceItems = safeRecords(diary.cadence).map((item) => ({
         ...item,
         mood_label: formatMoodLabel(item.mood),
         template_label: item.template_id || '手写',
     }));
-    const moodItems = safeArray(diary.mood_breakdown)
+    const moodItems = safeRecords(diary.mood_breakdown)
         .slice(0, 6)
         .map((item) => ({ ...item, label: formatMoodLabel(item.mood) }));
-    const densityBody = cadenceGranularity === 'day'
-        ? renderHeatStrip(cadenceItems.map((item) => ({ label: item.label, words: item.words })), 'words', 'label', '236, 72, 153', formatWordCompact)
-        : renderColumnChart(cadenceItems.map((item) => ({ label: item.label, words: item.words })), 'words', 'label', '#ec4899', formatWordCompact);
+    const densityBody =
+        cadenceGranularity === 'day'
+            ? renderHeatStrip(
+                  cadenceItems.map((item) => ({ label: item.label, words: item.words })),
+                  'words',
+                  'label',
+                  '236, 72, 153',
+                  formatWordCompact,
+              )
+            : renderColumnChart(
+                  cadenceItems.map((item) => ({ label: item.label, words: item.words })),
+                  'words',
+                  'label',
+                  '#ec4899',
+                  formatWordCompact,
+              );
     return [
         renderCard({
             accent: '#ec4899',
             eyebrow: 'Diary',
             title: '心情分布',
             subtitle: `${diaryRangeSentence()}常见情绪落点。`,
-            body: renderDonut(moodItems, 'count', 'label', ['#ec4899', '#f472b6', '#fb7185', '#f9a8d4', '#db2777', '#be185d'], formatCount(summary.entry_count || 0), `${diaryRangeTitle()}篇数`, (value) => `${value} 条`),
+            body: renderDonut(
+                moodItems,
+                'count',
+                'label',
+                ['#ec4899', '#f472b6', '#fb7185', '#f9a8d4', '#db2777', '#be185d'],
+                formatCount(summary.entry_count || 0),
+                `${rangeLabel()}篇数`,
+                (value) => `${value} 条`,
+            ),
         }),
         renderCard({
             accent: '#f43f5e',
@@ -1590,15 +1834,27 @@ function diaryCards() {
             eyebrow: 'Diary',
             title: '模板与回看',
             subtitle: `${diaryRangeSentence()}常用模板和回看节奏。`,
-            body: renderBarRows(safeArray(diary.template_usage).slice(0, 5).map((item) => ({ ...item, label: item.template_id || '手写' })), 'count', 'label', '#ec4899', (value) => `${value} 次`),
+            body: renderBarRows(
+                safeRecords(diary.template_usage)
+                    .slice(0, 5)
+                    .map((item) => ({ ...item, label: item.template_id || '手写' })),
+                'count',
+                'label',
+                '#ec4899',
+                (value) => `${value} 次`,
+            ),
             footer: renderMetricPairs([
-                { label: '区间最长连续', value: formatCount(summary.period_longest_streak || summary.month_longest_streak || 0) },
+                {
+                    label: '区间最长连续',
+                    value: formatCount(summary.period_longest_streak || 0),
+                },
                 { label: '总字数', value: formatCount(summary.total_words || 0) },
             ]),
         }),
     ].join('');
 }
 
+// 页面级摘要、瀑布流与交互绑定。
 function renderSummary() {
     const ledger = _data?.ledger || {};
     const tasks = _data?.tasks || {};
@@ -1615,9 +1871,9 @@ function renderSummary() {
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}支出</div><div class="stats-summary-value">${formatAmount(expenseTotal)}</div><div class="stats-summary-meta">收入 ${formatAmount(incomeTotal)}</div></article>
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}结余</div><div class="stats-summary-value">${formatAmount(incomeTotal - expenseTotal)}</div><div class="stats-summary-meta">按当前范围计算</div></article>
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}任务</div><div class="stats-summary-value">${formatCount(totals.total)}</div><div class="stats-summary-meta">完成 ${formatCount(totals.done)} 项 · 取消 ${formatCount(totals.cancelled)} 项</div></article>
-            <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}日程</div><div class="stats-summary-value">${formatCount(totalEvents)}</div><div class="stats-summary-meta">分类 ${formatCount(safeArray(events.by_category).length)} 种</div></article>
+            <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}日程</div><div class="stats-summary-value">${formatCount(totalEvents)}</div><div class="stats-summary-meta">分类 ${formatCount(safeRecords(events.by_category).length)} 种</div></article>
             <article class="stats-summary-card"><div class="stats-summary-label">${rangeTitle}笔记</div><div class="stats-summary-value">${formatCount(notes.summary?.total_count || 0)}</div><div class="stats-summary-meta">范围尾端近 7 天新增 ${formatCount(notes.summary?.week_new_count || 0)}</div></article>
-            <article class="stats-summary-card"><div class="stats-summary-label">日记</div><div class="stats-summary-value">${formatCount(diary.summary?.entry_count || 0)}</div><div class="stats-summary-meta">区间最长 ${formatCount(diary.summary?.period_longest_streak || diary.summary?.month_longest_streak || 0)} 天</div></article>
+            <article class="stats-summary-card"><div class="stats-summary-label">日记</div><div class="stats-summary-value">${formatCount(diary.summary?.entry_count || 0)}</div><div class="stats-summary-meta">区间最长 ${formatCount(diary.summary?.period_longest_streak || 0)} 天</div></article>
         </section>
     `;
 }
@@ -1640,14 +1896,19 @@ function renderWall() {
 function renderPage() {
     if (!_container) return;
     ensureStyles();
-    if (_loading && !_data) {
-        _container.innerHTML = `<div class="stats-shell"><div class="stats-empty-card">正在加载统计视图...</div></div>`;
+    if (_loading && _activeRequestSignature !== _dataSignature) {
+        _container.innerHTML = `
+            <div class="stats-shell" aria-busy="true">
+                <div class="stats-empty-card" role="status" aria-live="polite">正在加载统计视图...</div>
+            </div>
+        `;
         return;
     }
+    _chartSequence = 0;
     const range = deriveRangeDates();
     const rangeSummary = _range === 'all' ? '全部时间' : `${range.start} → ${range.end}`;
     _container.innerHTML = `
-        <div class="stats-shell">
+        <div class="stats-shell" ${_loading ? 'aria-busy="true"' : ''}>
             <div class="stats-stack">
                 <section class="stats-hero">
                     <div>
@@ -1658,20 +1919,25 @@ function renderPage() {
                             <span class="stats-chip">${rangeSummary}</span>
                             <span class="stats-chip">按模块查看</span>
                             <span class="stats-chip">笔记与日记同步更新</span>
+                            ${_loading ? '<span class="stats-chip" role="status" aria-live="polite">正在更新...</span>' : ''}
                         </div>
                     </div>
                     <div class="stats-range-group">
                         <div class="stats-chip-row">
-                            ${RANGE_PRESET_OPTIONS.map((option) => `<button type="button" class="stats-range-btn${_range === option.key ? ' active' : ''}" data-range="${option.key}">${option.label}</button>`).join('')}
+                            ${RANGE_PRESET_OPTIONS.map((option) => `<button type="button" class="stats-range-btn${_range === option.key ? ' active' : ''}" data-range="${escapeHtml(option.key)}" aria-pressed="${_range === option.key}">${escapeHtml(option.label)}</button>`).join('')}
                         </div>
-                        ${_range === 'custom' ? `
+                        ${
+                            _range === 'custom'
+                                ? `
                             <div class="stats-custom-range">
-                                <input type="text" class="stats-date-field" id="stats-custom-start" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftStart || _customStart || range.start)}" aria-label="统计开始日期">
+                                <input type="text" class="stats-date-field" id="stats-custom-start" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftStart || _customStart || range.start)}" aria-label="统计开始日期">
                                 <span class="stats-range-sep">至</span>
-                                <input type="text" class="stats-date-field" id="stats-custom-end" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftEnd || _customEnd || range.end)}" aria-label="统计结束日期">
+                                <input type="text" class="stats-date-field" id="stats-custom-end" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="YYYY-MM-DD" value="${escapeHtml(_customDraftEnd || _customEnd || range.end)}" aria-label="统计结束日期">
                                 <button type="button" class="stats-range-btn stats-apply-btn" id="stats-custom-apply">应用</button>
                             </div>
-                        ` : ''}
+                        `
+                                : ''
+                        }
                     </div>
                 </section>
                 ${renderSummary()}
@@ -1684,9 +1950,12 @@ function renderPage() {
 
 function attachListeners() {
     if (!_container) return;
-    _container.querySelectorAll('.stats-range-btn[data-range]').forEach((button) => {
+    const container = _container;
+    container.querySelectorAll('.stats-range-btn[data-range]').forEach((button) => {
         button.onclick = async () => {
-            const nextRange = button.dataset.range || 'month';
+            if (_container !== container) return;
+            const nextRange = button.dataset.range || '';
+            if (!RANGE_KEYS.has(nextRange)) return;
             if (nextRange === _range) return;
             if (nextRange === 'custom' && (!_customStart || !_customEnd)) {
                 const fallback = deriveRangeDates();
@@ -1699,12 +1968,13 @@ function attachListeners() {
             await loadAndRender();
         };
     });
-    const customStart = _container.querySelector('#stats-custom-start');
-    const customEnd = _container.querySelector('#stats-custom-end');
-    const customApply = _container.querySelector('#stats-custom-apply');
+    const customStart = container.querySelector('#stats-custom-start');
+    const customEnd = container.querySelector('#stats-custom-end');
+    const customApply = container.querySelector('#stats-custom-apply');
     const applyCustomRange = async () => {
-        const nextStart = customStart?.value.trim() || '';
-        const nextEnd = customEnd?.value.trim() || '';
+        if (_container !== container) return;
+        const nextStart = String(customStart?.value || '').trim();
+        const nextEnd = String(customEnd?.value || '').trim();
         _customDraftStart = nextStart;
         _customDraftEnd = nextEnd;
         if (!isValidDateInput(nextStart) || !isValidDateInput(nextEnd)) {
@@ -1715,6 +1985,7 @@ function attachListeners() {
             showToast('开始日期不能晚于结束日期', 'error');
             return;
         }
+        if (nextStart === _customStart && nextEnd === _customEnd && !_loading) return;
         _customStart = nextStart;
         _customEnd = nextEnd;
         await loadAndRender();
@@ -1723,46 +1994,77 @@ function attachListeners() {
         customStart.oninput = () => {
             _customDraftStart = customStart.value;
         };
-        customStart.onkeydown = async (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                await applyCustomRange();
-            }
-        };
+        bindEnterAction(customStart, applyCustomRange);
     }
     if (customEnd) {
         customEnd.oninput = () => {
             _customDraftEnd = customEnd.value;
         };
-        customEnd.onkeydown = async (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                await applyCustomRange();
-            }
-        };
+        bindEnterAction(customEnd, applyCustomRange);
     }
     if (customApply) customApply.onclick = applyCustomRange;
 }
 
 async function loadAndRender() {
+    if (!_container) return;
+    const request = currentRangeRequest();
+    if (_loading && request.signature === _activeRequestSignature) return;
+
+    const container = _container;
+    const version = ++_loadVersion;
+    _activeRequestSignature = request.signature;
     _loading = true;
     renderPage();
     try {
-        _data = await fetchAllData();
-    } catch (err) {
-        _data = null;
-        showToast(`加载统计失败：${err.message}`, 'error');
+        const result = await fetchAllData(request);
+        if (!isCurrentLoad(container, version)) return;
+        _data = result.data;
+        _heatmapData = result.heatmapData;
+        _comparisonData = result.comparisonData;
+        _moodEmojis = result.moodEmojis;
+        _moodLabels = result.moodLabels;
+        _dataSignature = request.signature;
+    } catch (error) {
+        if (isCurrentLoad(container, version)) {
+            if (_dataSignature !== request.signature) {
+                _data = null;
+                _heatmapData = null;
+                _comparisonData = null;
+                _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
+                _moodLabels = { ...DEFAULT_MOOD_LABELS };
+                _dataSignature = '';
+            }
+            showToast(`加载统计失败：${errorMessage(error)}`, 'error');
+        }
     } finally {
-        _loading = false;
+        if (isCurrentLoad(container, version)) {
+            _loading = false;
+            _activeRequestSignature = '';
+            renderPage();
+        }
     }
-    renderPage();
 }
 
-export function render(container) {
+// 路由生命周期：首屏可等待数据，销毁会让所有在途请求失效。
+export async function render(container) {
+    if (
+        !container ||
+        typeof container.querySelector !== 'function' ||
+        typeof container.querySelectorAll !== 'function'
+    ) {
+        throw new TypeError('统计页需要有效的容器元素');
+    }
+
+    _loadVersion += 1;
     _container = container;
     _range = 'month';
     _loading = false;
+    _activeRequestSignature = '';
+    _dataSignature = '';
+    _chartSequence = 0;
     _data = null;
+    _heatmapData = null;
+    _comparisonData = null;
     const initialRange = deriveRangeDates();
     _customStart = initialRange.start;
     _customEnd = initialRange.end;
@@ -1770,17 +2072,24 @@ export function render(container) {
     _customDraftEnd = _customEnd;
     _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
     _moodLabels = { ...DEFAULT_MOOD_LABELS };
-    renderPage();
-    loadAndRender();
+    await loadAndRender();
 }
 
 export function destroy() {
+    _loadVersion += 1;
     _container = null;
+    _range = 'month';
+    _loading = false;
+    _activeRequestSignature = '';
+    _dataSignature = '';
+    _chartSequence = 0;
     _data = null;
+    _customStart = '';
+    _customEnd = '';
+    _customDraftStart = '';
+    _customDraftEnd = '';
     _heatmapData = null;
     _comparisonData = null;
     _moodEmojis = { ...DEFAULT_MOOD_EMOJIS };
     _moodLabels = { ...DEFAULT_MOOD_LABELS };
 }
-
-export function onRouteEnter(_params) {}

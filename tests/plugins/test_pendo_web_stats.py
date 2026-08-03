@@ -1,381 +1,531 @@
-"""Regression tests for Pendo web stats aggregations."""
+"""Pendo Web 统计接口的聚合、校验与前端契约回归。"""
 
-import importlib
-import shutil
-import sys
-import types
-import uuid
-from datetime import datetime, timedelta
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from plugins.pendo.services.db import Database
-from plugins.pendo.web.analytics.notes_overview import build_notes_overview
+from plugins.pendo.web.api import stats as stats_api
+from tests.helpers.assertions import assert_http_error as _assert_http_error
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _load_stats_module():
-    fastapi = types.ModuleType("fastapi")
+def test_stats_router_exposes_only_documented_get_endpoints() -> None:
+    """统计模块只注册九个只读公开入口。"""
 
-    class _Router:
-        def _decorator(self, *_args, **_kwargs):
-            def decorator(fn):
-                return fn
-            return decorator
-
-        def get(self, *_args, **_kwargs):
-            return self._decorator(*_args, **_kwargs)
-
-        def post(self, *_args, **_kwargs):
-            return self._decorator(*_args, **_kwargs)
-
-        def put(self, *_args, **_kwargs):
-            return self._decorator(*_args, **_kwargs)
-
-        def delete(self, *_args, **_kwargs):
-            return self._decorator(*_args, **_kwargs)
-
-    fastapi.APIRouter = _Router
-    fastapi.Depends = lambda dep=None: dep
-    fastapi.Query = lambda default=None, **_kwargs: default
-    fastapi.Header = lambda default=None, **_kwargs: default
-    fastapi.Request = type("Request", (), {})
-
-    class _HTTPException(Exception):
-        def __init__(self, status_code: int, detail: str):
-            super().__init__(detail)
-            self.status_code = status_code
-            self.detail = detail
-
-    fastapi.HTTPException = _HTTPException
-    responses = types.ModuleType("fastapi.responses")
-    responses.Response = type("Response", (), {})
-
-    _orig_fastapi = sys.modules.get("fastapi")
-    _orig_responses = sys.modules.get("fastapi.responses")
-
-    sys.modules["fastapi"] = fastapi
-    sys.modules["fastapi.responses"] = responses
-    sys.modules.pop("plugins.pendo.web.api.stats", None)
-    mod = importlib.import_module("plugins.pendo.web.api.stats")
-
-    if _orig_fastapi is not None:
-        sys.modules["fastapi"] = _orig_fastapi
-    else:
-        sys.modules.pop("fastapi", None)
-    if _orig_responses is not None:
-        sys.modules["fastapi.responses"] = _orig_responses
-    else:
-        sys.modules.pop("fastapi.responses", None)
-
-    return mod
+    registered = {
+        (route.path, frozenset(getattr(route, "methods", set())))
+        for route in stats_api.router.routes
+    }
+    assert registered == {
+        ("/stats/ledger", frozenset({"GET"})),
+        ("/stats/ledger/insights", frozenset({"GET"})),
+        ("/stats/tasks", frozenset({"GET"})),
+        ("/stats/tasks/overview", frozenset({"GET"})),
+        ("/stats/notes/overview", frozenset({"GET"})),
+        ("/stats/diary/overview", frozenset({"GET"})),
+        ("/stats/events", frozenset({"GET"})),
+        ("/stats/ledger/comparison", frozenset({"GET"})),
+        ("/stats/activity-heatmap", frozenset({"GET"})),
+    }
 
 
-def test_ledger_stats_returns_expense_amount_histogram():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_ledger_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_stats_http_preserves_range_alias_and_declared_query_bounds(db: Database) -> None:
+    """真实 HTTP 层继续接收 ``range``，并在进入路由前拦截数值越界。"""
+
+    owner_id = "u-stats-http"
+    app = FastAPI()
+    app.include_router(stats_api.router)
+    app.dependency_overrides[stats_api.get_current_user] = lambda: owner_id
+    app.dependency_overrides[stats_api.get_db] = lambda: db
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/stats/ledger",
+            params={"range": "2026-03-01..2026-03-31"},
+        )
+        invalid_range = client.get("/stats/events", params={"range": "not-a-range"})
+        invalid_months = client.get("/stats/ledger/comparison", params={"months": 2})
+        invalid_year = client.get("/stats/activity-heatmap", params={"year": 1969})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["monthly"] == []
+    assert invalid_range.status_code == 422
+    assert invalid_months.status_code == 422
+    assert invalid_year.status_code == 422
+
+
+def test_ledger_insights_normalizes_filters_and_validates_bounds(
+    db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """账本洞察清理文本，并拒绝不完整日期和反向金额区间。"""
+
+    captured: dict[str, Any] = {}
+
+    def fake_build_ledger_insights(**kwargs: Any) -> dict[str, str]:
+        captured.update(kwargs)
+        return {"marker": "ok"}
+
+    monkeypatch.setattr(stats_api, "build_ledger_insights", fake_build_ledger_insights)
+    result = stats_api.ledger_visual_insights(
+        transaction_type="expense",
+        category=" 餐饮 ",
+        account_name=" 现金 ",
+        start_date="2026-03-01",
+        end_date="2026-03-31",
+        amount_min=10,
+        amount_max=20,
+        compare_mode="previous_year_to_date",
+        owner_id="u-insights",
+        db=db,
+    )
+
+    assert result["data"] == {"marker": "ok"}
+    assert captured["category"] == "餐饮"
+    assert captured["account_name"] == "现金"
+    assert captured["start_date"] == "2026-03-01"
+    assert captured["compare_mode"] == "previous_year_to_date"
+    _assert_http_error(
+        422,
+        lambda: stats_api.ledger_visual_insights(
+            start_date="2026-03-01",
+            owner_id="u-insights",
+            db=db,
+        ),
+    )
+    _assert_http_error(
+        422,
+        lambda: stats_api.ledger_visual_insights(
+            start_date="2026-03-31",
+            end_date="2026-03-01",
+            owner_id="u-insights",
+            db=db,
+        ),
+    )
+    _assert_http_error(
+        422,
+        lambda: stats_api.ledger_visual_insights(
+            amount_min=20,
+            amount_max=10,
+            owner_id="u-insights",
+            db=db,
+        ),
+    )
+
+
+def test_task_overview_wraps_analytics_payload(db: Database) -> None:
+    """任务概览路由保持统一的 ok/data/message 响应外壳。"""
+
+    result = stats_api.task_overview(today="2026-03-01", owner_id="u-task-overview", db=db)
+    assert result["ok"] is True
+    assert isinstance(result["data"], dict)
+    assert result["message"] == ""
+
+
+def test_task_overview_translates_builder_validation_error(db: Database) -> None:
+    """任务分析器的非法 today 应转换为稳定的 HTTP 400。"""
+
+    error = _assert_http_error(
+        400,
+        lambda: stats_api.task_overview(
+            today="not-a-date",
+            owner_id="u-task-invalid",
+            db=db,
+        ),
+    )
+    assert "valid ISO date" in error.detail
+
+
+def test_ledger_stats_returns_expense_amount_histogram(db: Database) -> None:
+    """支出直方图只统计支出，并正确覆盖首尾金额桶。"""
+
     owner_id = "u-ledger-stats"
-    stats_module = _load_stats_module()
+    for title, amount, transaction_type, category, ledger_date in (
+        ("早餐", 12, "expense", "餐饮", "2026-03-10"),
+        ("打车", 48, "expense", "交通", "2026-03-11"),
+        ("房租", 1200, "expense", "居住", "2026-03-12"),
+        ("工资", 5000, "income", "工资", "2026-03-15"),
+    ):
+        db.insert_item(
+            {
+                "type": "ledger",
+                "owner_id": owner_id,
+                "title": title,
+                "amount": amount,
+                "transaction_type": transaction_type,
+                "ledger_category": category,
+                "ledger_date": ledger_date,
+            }
+        )
 
-    try:
-        db.insert_item({
+    result = stats_api.ledger_stats(
+        range_str="2026-03-01..2026-03-31",
+        owner_id=owner_id,
+        db=db,
+    )
+    histogram = {
+        item["bucket"]: item["count"] for item in result["data"]["expense_amount_histogram"]
+    }
+
+    assert histogram["0-20"] == 1
+    assert histogram["20-50"] == 1
+    assert histogram["1000+"] == 1
+    assert sum(histogram.values()) == 3
+
+
+def test_ledger_stats_respects_range_for_totals_categories_and_trend_data(
+    db: Database,
+) -> None:
+    """账本趋势、分类和直方图必须共用同一个日期范围。"""
+
+    owner_id = "u-ledger-range"
+    for item in (
+        {
             "type": "ledger",
             "owner_id": owner_id,
             "title": "早餐",
-            "amount": 12,
+            "amount": 18,
             "transaction_type": "expense",
-            "ledger_category": "餐饮",
-            "ledger_date": "2026-03-10",
-        })
-        db.insert_item({
+            "ledger_category": " 餐饮 ",
+            "ledger_date": "2026-03-02",
+        },
+        {
             "type": "ledger",
             "owner_id": owner_id,
-            "title": "打车",
-            "amount": 48,
+            "title": "兼职",
+            "amount": 300,
+            "transaction_type": "income",
+            "ledger_category": "副业",
+            "ledger_date": "2026-03-03",
+        },
+        {
+            "type": "ledger",
+            "owner_id": owner_id,
+            "title": "转账",
+            "amount": 50,
+            "transaction_type": "transfer",
+            "ledger_category": "",
+            "account_name": "现金",
+            "counter_account_name": "银行卡",
+            "ledger_date": "2026-03-04",
+        },
+        {
+            "type": "ledger",
+            "owner_id": owner_id,
+            "title": "遗留类型",
+            "amount": 5,
+            "transaction_type": "expense",
+            "ledger_category": "遗留",
+            "ledger_date": "2026-03-05",
+        },
+        {
+            "type": "ledger",
+            "owner_id": owner_id,
+            "title": "范围外支出",
+            "amount": 66,
             "transaction_type": "expense",
             "ledger_category": "交通",
-            "ledger_date": "2026-03-11",
-        })
-        db.insert_item({
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "房租",
-            "amount": 1200,
-            "transaction_type": "expense",
-            "ledger_category": "居住",
-            "ledger_date": "2026-03-12",
-        })
-        db.insert_item({
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "工资",
-            "amount": 5000,
-            "transaction_type": "income",
-            "ledger_category": "工资",
-            "ledger_date": "2026-03-15",
-        })
+            "ledger_date": "2026-04-03",
+        },
+    ):
+        db.insert_item(item)
 
-        result = stats_module.ledger_stats(range="2026-03-01..2026-03-31", owner_id=owner_id, db=db)
-        histogram = {item["bucket"]: item["count"] for item in result["data"]["expense_amount_histogram"]}
+    # 模拟升级前遗留的空白分类，确认统计层不会把空白当作独立类别。
+    db.get_connection().execute(
+        "UPDATE items SET ledger_category=' ' WHERE owner_id=? AND title='转账'",
+        (owner_id,),
+    )
+    db.get_connection().execute(
+        "UPDATE items SET transaction_type='legacy' WHERE owner_id=? AND title='遗留类型'",
+        (owner_id,),
+    )
+    db.get_connection().commit()
 
-        assert histogram["0-20"] == 1
-        assert histogram["20-50"] == 1
-        assert histogram["1000+"] == 1
-        assert sum(histogram.values()) == 3
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    data = stats_api.ledger_stats(
+        range_str="2026-03-01..2026-03-31",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
 
-
-def test_ledger_stats_respects_range_for_totals_categories_and_trend_data():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_ledger_range_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
-    owner_id = "u-ledger-range"
-    stats_module = _load_stats_module()
-
-    try:
-        for item in [
-            {
-                "type": "ledger",
-                "owner_id": owner_id,
-                "title": "早餐",
-                "amount": 18,
-                "transaction_type": "expense",
-                "ledger_category": "餐饮",
-                "ledger_date": "2026-03-02",
-            },
-            {
-                "type": "ledger",
-                "owner_id": owner_id,
-                "title": "兼职",
-                "amount": 300,
-                "transaction_type": "income",
-                "ledger_category": "副业",
-                "ledger_date": "2026-03-03",
-            },
-            {
-                "type": "ledger",
-                "owner_id": owner_id,
-                "title": "范围外支出",
-                "amount": 66,
-                "transaction_type": "expense",
-                "ledger_category": "交通",
-                "ledger_date": "2026-04-03",
-            },
-        ]:
-            db.insert_item(item)
-
-        result = stats_module.ledger_stats(range="2026-03-01..2026-03-31", owner_id=owner_id, db=db)
-        data = result["data"]
-
-        assert data["monthly"] == [{"month": "2026-03", "income": 300, "expense": 18}]
-        assert data["daily"] == [
-            {"date": "2026-03-02", "income": 0, "expense": 18},
-            {"date": "2026-03-03", "income": 300, "expense": 0},
-        ]
-        assert data["expense_by_category"] == [{"category": "餐饮", "total": 18}]
-        assert data["income_by_category"] == [{"category": "副业", "total": 300}]
-        histogram = {item["bucket"]: item["count"] for item in data["expense_amount_histogram"]}
-        assert histogram["0-20"] == 1
-        assert sum(histogram.values()) == 1
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert data["monthly"] == [{"month": "2026-03", "income": 300, "expense": 18}]
+    assert data["daily"] == [
+        {"date": "2026-03-02", "income": 0, "expense": 18},
+        {"date": "2026-03-03", "income": 300, "expense": 0},
+        {"date": "2026-03-04", "income": 0, "expense": 0},
+        {"date": "2026-03-05", "income": 0, "expense": 0},
+    ]
+    assert data["expense_by_category"] == [{"category": "餐饮", "total": 18}]
+    assert data["income_by_category"] == [{"category": "副业", "total": 300}]
+    assert data["transfer_by_category"] == [{"category": "未分类", "total": 50}]
+    histogram = {item["bucket"]: item["count"] for item in data["expense_amount_histogram"]}
+    assert histogram["0-20"] == 1
+    assert sum(histogram.values()) == 1
 
 
-def test_ledger_stats_all_range_stops_at_today_and_excludes_future_entries():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_ledger_all_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_ledger_stats_all_range_stops_at_today_and_excludes_future_entries(
+    db: Database,
+) -> None:
+    """“全部”范围以今天为上界，不能把未来流水算作已发生。"""
+
     owner_id = "u-ledger-all"
-    stats_module = _load_stats_module()
     now = datetime.now()
     included_date = (now - timedelta(days=2)).strftime("%Y-%m-%d")
     future_date = (now + timedelta(days=30)).strftime("%Y-%m-%d")
 
-    try:
-        db.insert_item({
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "已发生支出",
-            "amount": 28,
-            "transaction_type": "expense",
-            "ledger_category": "餐饮",
-            "ledger_date": included_date,
-        })
-        db.insert_item({
-            "type": "ledger",
-            "owner_id": owner_id,
-            "title": "未来支出",
-            "amount": 88,
-            "transaction_type": "expense",
-            "ledger_category": "未来",
-            "ledger_date": future_date,
-        })
+    for title, amount, category, ledger_date in (
+        ("已发生支出", 28, "餐饮", included_date),
+        ("未来支出", 88, "未来", future_date),
+    ):
+        db.insert_item(
+            {
+                "type": "ledger",
+                "owner_id": owner_id,
+                "title": title,
+                "amount": amount,
+                "transaction_type": "expense",
+                "ledger_category": category,
+                "ledger_date": ledger_date,
+            }
+        )
 
-        result = stats_module.ledger_stats(range="all", owner_id=owner_id, db=db)
-        data = result["data"]
+    data = stats_api.ledger_stats(range_str="all", owner_id=owner_id, db=db)["data"]
 
-        assert data["expense_by_category"] == [{"category": "餐饮", "total": 28}]
-        assert all(item["date"] != future_date for item in data["daily"])
-        assert sum(item["count"] for item in data["expense_amount_histogram"]) == 1
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert data["expense_by_category"] == [{"category": "餐饮", "total": 28}]
+    assert all(item["date"] != future_date for item in data["daily"])
+    assert sum(item["count"] for item in data["expense_amount_histogram"]) == 1
 
 
-def test_event_stats_filters_range_and_builds_weekday_slot_matrix():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_event_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_event_stats_filters_range_and_builds_weekday_slot_matrix(db: Database) -> None:
+    """日程周趋势、时段和星期矩阵必须排除范围外事件。"""
+
     owner_id = "u-event-stats"
-    stats_module = _load_stats_module()
+    for title, category, start_time, end_time in (
+        ("下午会议", " 工作 ", "2026-03-31T14:00:00", "2026-03-31T15:00:00"),
+        ("晨间回顾", "个人", "2026-03-31T09:30:00", "2026-03-31T10:00:00"),
+        ("范围外事件", "工作", "2026-04-01T09:00:00", "2026-04-01T10:00:00"),
+    ):
+        db.insert_item(
+            {
+                "type": "event",
+                "owner_id": owner_id,
+                "title": title,
+                "category": category,
+                "start_time": start_time,
+                "end_time": end_time,
+            }
+        )
 
-    try:
-        db.insert_item({
+    data = stats_api.event_stats(
+        range_str="2026-03-31..2026-03-31",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
+    by_category = {item["category"]: item["count"] for item in data["by_category"]}
+
+    assert sum(item["count"] for item in data["weekly"]) == 2
+    assert by_category == {"个人": 1, "工作": 1}
+    assert sum(item["count"] for item in data["weekday_slots"]) == 2
+    assert {item["slot"] for item in data["time_slots"]} == {"09-12", "14-18"}
+
+
+def test_timestamp_stats_group_aware_values_in_user_timezone(db: Database) -> None:
+    """带偏移时间按用户自然日和小时分桶，不能交给 SQLite 隐式转 UTC。"""
+
+    owner_id = "u-stats-aware-user-zone"
+    db.update_user_settings(owner_id, {"timezone": "Asia/Shanghai"})
+    for payload in (
+        {
+            "id": "aware-event",
             "type": "event",
-            "owner_id": owner_id,
-            "title": "下午会议",
-            "category": "工作",
-            "start_time": "2026-03-31T14:00:00",
-            "end_time": "2026-03-31T15:00:00",
-        })
-        db.insert_item({
-            "type": "event",
-            "owner_id": owner_id,
-            "title": "晨间回顾",
-            "category": "个人",
-            "start_time": "2026-03-31T09:30:00",
-            "end_time": "2026-03-31T10:00:00",
-        })
-        db.insert_item({
-            "type": "event",
-            "owner_id": owner_id,
-            "title": "范围外事件",
-            "category": "工作",
-            "start_time": "2026-04-01T09:00:00",
-            "end_time": "2026-04-01T10:00:00",
-        })
+            "title": "上海早会",
+            "start_time": "2026-03-30T23:30:00+00:00",
+        },
+        {
+            "id": "aware-task",
+            "type": "task",
+            "title": "上海当天任务",
+            "status": "open",
+            "created_at": "2026-03-30T23:30:00+00:00",
+        },
+        {
+            "id": "aware-note",
+            "type": "note",
+            "title": "上海当天笔记",
+            "created_at": "2026-03-30T23:30:00+00:00",
+        },
+    ):
+        db.insert_item({"owner_id": owner_id, **payload})
 
-        result = stats_module.event_stats(range="2026-03-31..2026-03-31", owner_id=owner_id, db=db)
-        weekly_total = sum(item["count"] for item in result["data"]["weekly"])
-        by_category = {item["category"]: item["count"] for item in result["data"]["by_category"]}
-        weekday_slots = result["data"]["weekday_slots"]
+    event_data = stats_api.event_stats(
+        range_str="2026-03-31..2026-03-31",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
+    task_data = stats_api.task_stats(
+        range_str="2026-03-31..2026-03-31",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
+    heatmap = stats_api.activity_heatmap(year=2026, owner_id=owner_id, db=db)["data"]
+    march_30 = next(row for row in heatmap["days"] if row["date"] == "2026-03-30")
+    march_31 = next(row for row in heatmap["days"] if row["date"] == "2026-03-31")
 
-        assert weekly_total == 2
-        assert by_category == {"个人": 1, "工作": 1}
-        assert sum(item["count"] for item in weekday_slots) == 2
-        assert any(item["slot"] == "09-12" and item["count"] == 1 for item in weekday_slots)
-        assert any(item["slot"] == "14-18" and item["count"] == 1 for item in weekday_slots)
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert event_data["time_slots"] == [{"slot": "06-09", "count": 1}]
+    assert task_data["totals"]["open"] == 1
+    assert march_30["count"] == 0
+    assert (march_31["event"], march_31["task"], march_31["note"]) == (1, 1, 1)
 
 
-def test_event_stats_counts_event_graph_leaves_and_collection_category_fallback():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_event_graph_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_event_stats_counts_graph_leaves_and_uses_trimmed_collection_category(
+    db: Database,
+) -> None:
+    """事件图只统计叶子；未分类叶子应回退到清理后的集合分类。"""
+
     owner_id = "u-event-stats-graph"
-    stats_module = _load_stats_module()
-
-    try:
-        db.create_event_collection({
+    db.create_event_collection(
+        {
             "id": "stat-conf",
             "owner_id": owner_id,
             "kind": "multi_node",
             "title": "统计会议",
-            "category": "学术",
+            "category": " 学术 ",
             "start_time": "2026-03-05T09:00:00",
             "end_time": "2026-03-06T10:00:00",
-        })
-        for item_id, title, start_time in [
-            ("stat-conf_m01", "摘要截止", "2026-03-05T09:00:00"),
-            ("stat-conf_m02", "会议开始", "2026-03-06T10:00:00"),
-        ]:
-            db.insert_item({
+        }
+    )
+    for item_id, title, start_time in (
+        ("stat-conf_m01", "摘要截止", "2026-03-05T09:00:00"),
+        ("stat-conf_m02", "会议开始", "2026-03-06T10:00:00"),
+    ):
+        db.insert_item(
+            {
                 "id": item_id,
                 "type": "event",
                 "owner_id": owner_id,
                 "title": title,
-                "category": "未分类",
+                "category": " 未分类 ",
                 "start_time": start_time,
                 "event_role": "multi_node_child",
                 "event_collection_id": "stat-conf",
                 "event_collection_kind": "multi_node",
-            })
+            }
+        )
 
-        result = stats_module.event_stats(range="2026-03-01..2026-03-31", owner_id=owner_id, db=db)
-        data = result["data"]
+    data = stats_api.event_stats(
+        range_str="2026-03-01..2026-03-31",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
 
-        assert sum(item["count"] for item in data["weekly"]) == 2
-        assert data["by_category"] == [{"category": "学术", "count": 2}]
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert sum(item["count"] for item in data["weekly"]) == 2
+    assert data["by_category"] == [{"category": "学术", "count": 2}]
 
 
-def test_task_stats_separates_created_and_completed_weeks():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_task_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_task_stats_separates_created_done_and_cancelled_weeks(db: Database) -> None:
+    """任务创建、完成和取消时间轴独立统计，详情分布只扫描一次。"""
+
     owner_id = "u-task-stats"
-    stats_module = _load_stats_module()
-
-    try:
-        db.insert_item({
+    for item in (
+        {
             "type": "task",
             "owner_id": owner_id,
-            "title": "任务一",
+            "title": "已完成任务",
             "status": "done",
             "category": "工作",
+            "priority": 5,
             "created_at": "2026-03-03T09:00:00",
             "completed_at": "2026-03-10T10:00:00",
-        })
-        db.insert_item({
+        },
+        {
             "type": "task",
             "owner_id": owner_id,
-            "title": "任务二",
+            "title": "计划任务",
             "status": "open",
             "category": "生活",
+            "priority": 3,
+            "plan_date": "2026-03-20",
             "created_at": "2026-03-17T09:00:00",
-        })
+        },
+        {
+            "type": "task",
+            "owner_id": owner_id,
+            "title": "仅截止日任务",
+            "status": "open",
+            "category": " 未分类 ",
+            "priority": 1,
+            "deadline_at": "2026-03-25T18:00:00",
+            "created_at": "2026-03-18T09:00:00",
+        },
+        {
+            "type": "task",
+            "owner_id": owner_id,
+            "title": "无日期计划任务",
+            "status": "open",
+            "category": "工作",
+            "priority": 2,
+            "created_at": "2026-03-19T09:00:00",
+        },
+        {
+            "type": "task",
+            "owner_id": owner_id,
+            "title": "已取消任务",
+            "status": "cancelled",
+            "category": "归档",
+            "priority": 1,
+            "created_at": "2026-02-01T09:00:00",
+            "cancelled_at": "2026-03-12T10:00:00",
+        },
+    ):
+        db.insert_item(item)
 
-        result = stats_module.task_stats(range="2026-03-01..2026-03-31", owner_id=owner_id, db=db)
-        weekly = {item["week"]: item for item in result["data"]["weekly"]}
-        totals = result["data"]["totals"]
+    data = stats_api.task_stats(
+        range_str="2026-03-01..2026-03-31",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
+    weekly = {item["week"]: item for item in data["weekly"]}
 
-        assert weekly["2026-W09"]["created"] == 1
-        assert weekly["2026-W09"]["done"] == 0
-        assert weekly["2026-W11"]["created"] == 1
-        assert weekly["2026-W11"]["done"] == 0
-        assert weekly["2026-W10"]["done"] == 1
-        assert weekly["2026-W10"]["created"] == 0
-        assert totals["done"] == 1
-        assert totals["open"] == 1
-        assert result["data"]["new_this_week"] == 2
-        assert result["data"]["by_category"] == [{"category": "生活", "count": 1}]
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert weekly["2026-W09"]["created"] == 1
+    assert weekly["2026-W10"]["done"] == 1
+    assert weekly["2026-W10"]["cancelled"] == 1
+    assert weekly["2026-W11"]["created"] == 3
+    assert data["totals"] == {"open": 3, "done": 1, "cancelled": 1, "closed": 2}
+    assert data["new_this_week"] == 4
+    assert data["by_plan"] == [
+        {"plan": "2026-03-20", "count": 1},
+        {"plan": "2026-03-25", "count": 1},
+    ]
+    assert data["by_category"] == [
+        {"category": "工作", "count": 1},
+        {"category": "生活", "count": 1},
+    ]
+    assert data["by_priority"] == [
+        {"priority": 1, "count": 2},
+        {"priority": 2, "count": 1},
+        {"priority": 3, "count": 1},
+        {"priority": 5, "count": 1},
+    ]
 
 
-def test_diary_overview_accepts_explicit_range_and_auto_cadence():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_diary_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_diary_overview_accepts_explicit_range_and_auto_cadence(db: Database) -> None:
+    """日记概览应透传显式范围，并自动选择周粒度。"""
+
     owner_id = "u-diary-stats"
-    stats_module = _load_stats_module()
-
-    try:
-        for item_id, diary_date, mood, content in [
-            ("d1", "2026-01-06", "calm", "第一条记录"),
-            ("d2", "2026-01-15", "happy", "第二条记录更长一些"),
-            ("d3", "2026-02-03", "happy", "第三条记录"),
-        ]:
-            db.insert_item({
+    for item_id, diary_date, mood, content in (
+        ("d1", "2026-01-06", "calm", "第一条记录"),
+        ("d2", "2026-01-15", "happy", "第二条记录更长一些"),
+        ("d3", "2026-02-03", "happy", "第三条记录"),
+    ):
+        db.insert_item(
+            {
                 "id": item_id,
                 "type": "diary",
                 "owner_id": owner_id,
@@ -385,42 +535,52 @@ def test_diary_overview_accepts_explicit_range_and_auto_cadence():
                 "mood": mood,
                 "created_at": f"{diary_date}T20:00:00",
                 "updated_at": f"{diary_date}T20:00:00",
-            })
-
-        result = stats_module.diary_overview(
-            start_date="2026-01-01",
-            end_date="2026-02-15",
-            cadence_granularity="auto",
-            today="2026-02-15",
-            owner_id=owner_id,
-            db=db,
+            }
         )
 
-        data = result["data"]
-        assert data["summary"]["entry_count"] == 3
-        assert data["summary"]["range_start"] == "2026-01-01"
-        assert data["summary"]["range_end"] == "2026-02-15"
-        assert data["cadence_granularity"] == "week"
-        assert sum(item["count"] for item in data["cadence"]) == 3
-        assert data["mood_breakdown"][0]["mood"] == "happy"
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    data = stats_api.diary_overview(
+        start_date="2026-01-01",
+        end_date="2026-02-15",
+        cadence_granularity="auto",
+        today="2026-02-15",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
+
+    assert data["summary"]["entry_count"] == 3
+    assert data["summary"]["range_start"] == "2026-01-01"
+    assert data["summary"]["range_end"] == "2026-02-15"
+    assert data["cadence_granularity"] == "week"
+    assert sum(item["count"] for item in data["cadence"]) == 3
+    assert data["mood_breakdown"][0]["mood"] == "happy"
 
 
-def test_notes_overview_accepts_explicit_range():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_notes_range_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_diary_overview_translates_builder_validation_error(db: Database) -> None:
+    """日记分析器的非法反向区间应转换为稳定的 HTTP 400。"""
+
+    error = _assert_http_error(
+        400,
+        lambda: stats_api.diary_overview(
+            start_date="2026-03-31",
+            end_date="2026-03-01",
+            owner_id="u-diary-invalid",
+            db=db,
+        ),
+    )
+    assert error.detail
+
+
+def test_notes_overview_accepts_explicit_range_and_trims_filters(db: Database) -> None:
+    """笔记概览按范围聚合，并清理分类和标签查询参数。"""
+
     owner_id = "u-note-stats"
-
-    try:
-        for item_id, title, category, created_at in [
-            ("n-in-1", "范围内一", "工作", "2026-03-03T09:00:00"),
-            ("n-in-2", "范围内二", "生活", "2026-03-15T09:00:00"),
-            ("n-out", "范围外", "归档", "2026-02-20T09:00:00"),
-        ]:
-            db.insert_item({
+    for item_id, title, category, created_at in (
+        ("n-in-1", "范围内一", "工作", "2026-03-03T09:00:00"),
+        ("n-in-2", "范围内二", "生活", "2026-03-15T09:00:00"),
+        ("n-out", "范围外", "归档", "2026-02-20T09:00:00"),
+    ):
+        db.insert_item(
+            {
                 "id": item_id,
                 "owner_id": owner_id,
                 "type": "note",
@@ -430,39 +590,50 @@ def test_notes_overview_accepts_explicit_range():
                 "tags": ["alpha", "beta"] if item_id != "n-out" else ["legacy"],
                 "created_at": created_at,
                 "updated_at": created_at,
-            })
-
-        result = build_notes_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2026-03-01",
-            end_date="2026-03-31",
-            today="2026-03-31",
+            }
         )
 
-        assert result["summary"]["total_count"] == 2
-        assert result["cadence_granularity"] == "week"
-        assert {item["category"] for item in result["categories"]} == {"工作", "生活"}
-        assert {item["tag"] for item in result["hot_tags"]} == {"alpha", "beta"}
-        assert sum(item["count"] for item in result["cadence"]) == 2
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    data = stats_api.notes_overview(
+        start_date="2026-03-01",
+        end_date="2026-03-31",
+        today="2026-03-31",
+        category="   ",
+        tags="   ",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
+
+    assert data["summary"]["total_count"] == 2
+    assert data["cadence_granularity"] == "week"
+    assert {item["category"] for item in data["categories"]} == {"工作", "生活"}
+    assert {item["tag"] for item in data["hot_tags"]} == {"alpha", "beta"}
+    assert sum(item["count"] for item in data["cadence"]) == 2
 
 
-def test_ledger_stats_accepts_explicit_date_bounds():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_ledger_bounds_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_notes_overview_translates_builder_validation_error(db: Database) -> None:
+    """笔记分析器的缺失范围边界应转换为稳定的 HTTP 400。"""
+
+    error = _assert_http_error(
+        400,
+        lambda: stats_api.notes_overview(
+            start_date="2026-03-01",
+            owner_id="u-note-invalid",
+            db=db,
+        ),
+    )
+    assert "provided together" in error.detail
+
+
+def test_ledger_stats_explicit_bounds_override_range_preset(db: Database) -> None:
+    """成对显式日期应优先于 range 预设。"""
+
     owner_id = "u-ledger-bounds"
-    stats_module = _load_stats_module()
-
-    try:
-        for title, amount, ledger_date in [
-            ("一月支出", 88, "2026-01-05"),
-            ("三月支出", 66, "2026-03-18"),
-        ]:
-            db.insert_item({
+    for title, amount, ledger_date in (
+        ("一月支出", 88, "2026-01-05"),
+        ("三月支出", 66, "2026-03-18"),
+    ):
+        db.insert_item(
+            {
                 "type": "ledger",
                 "owner_id": owner_id,
                 "title": title,
@@ -470,37 +641,32 @@ def test_ledger_stats_accepts_explicit_date_bounds():
                 "transaction_type": "expense",
                 "ledger_category": "测试",
                 "ledger_date": ledger_date,
-            })
-
-        result = stats_module.ledger_stats(
-            range="all",
-            start_date="2026-03-01",
-            end_date="2026-03-31",
-            owner_id=owner_id,
-            db=db,
+            }
         )
-        data = result["data"]
 
-        assert data["expense_by_category"] == [{"category": "测试", "total": 66}]
-        assert data["daily"] == [{"date": "2026-03-18", "income": 0, "expense": 66}]
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    data = stats_api.ledger_stats(
+        range_str="all",
+        start_date="2026-03-01",
+        end_date="2026-03-31",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
+
+    assert data["expense_by_category"] == [{"category": "测试", "total": 66}]
+    assert data["daily"] == [{"date": "2026-03-18", "income": 0, "expense": 66}]
 
 
-def test_notes_overview_uses_yearly_cadence_for_cross_year_ranges():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_notes_year_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_notes_overview_uses_yearly_cadence_for_cross_year_ranges(db: Database) -> None:
+    """跨年范围应自动切换为年度节奏。"""
+
     owner_id = "u-note-stats-year"
-
-    try:
-        for item_id, created_at in [
-            ("n-2024", "2024-03-03T09:00:00"),
-            ("n-2025", "2025-06-18T09:00:00"),
-            ("n-2026", "2026-02-01T09:00:00"),
-        ]:
-            db.insert_item({
+    for item_id, created_at in (
+        ("n-2024", "2024-03-03T09:00:00"),
+        ("n-2025", "2025-06-18T09:00:00"),
+        ("n-2026", "2026-02-01T09:00:00"),
+    ):
+        db.insert_item(
+            {
                 "id": item_id,
                 "owner_id": owner_id,
                 "type": "note",
@@ -509,262 +675,207 @@ def test_notes_overview_uses_yearly_cadence_for_cross_year_ranges():
                 "category": "工作",
                 "created_at": created_at,
                 "updated_at": created_at,
-            })
-
-        result = build_notes_overview(
-            db=db,
-            owner_id=owner_id,
-            start_date="2024-01-01",
-            end_date="2026-12-31",
-            today="2026-12-31",
+            }
         )
 
-        assert result["cadence_granularity"] == "year"
-        assert [item["label"] for item in result["cadence"]] == ["2024", "2025", "2026"]
-        assert [item["count"] for item in result["cadence"]] == [1, 1, 1]
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    data = stats_api.notes_overview(
+        start_date="2024-01-01",
+        end_date="2026-12-31",
+        today="2026-12-31",
+        owner_id=owner_id,
+        db=db,
+    )["data"]
+
+    assert data["cadence_granularity"] == "year"
+    assert [item["label"] for item in data["cadence"]] == ["2024", "2025", "2026"]
+    assert [item["count"] for item in data["cadence"]] == [1, 1, 1]
 
 
-def test_stats_page_source_passes_note_range_params():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    ("range_value", "expected"),
+    (
+        (None, ("2026-05-01", "2026-05-20")),
+        ("   ", ("2026-05-01", "2026-05-20")),
+        ("week", ("2026-05-18", "2026-05-20")),
+        ("quarter", ("2026-04-01", "2026-05-20")),
+        ("year", ("2026-01-01", "2026-05-20")),
+        ("last_year", ("2025-01-01", "2025-12-31")),
+        ("all", ("1970-01-01", "2026-05-20")),
+        ("2024-02", ("2024-02-01", "2024-02-29")),
+        ("2026-03-01..2026-03-31", ("2026-03-01", "2026-03-31")),
+    ),
+)
+def test_parse_range_supports_presets_months_and_explicit_bounds(
+    range_value: str | None,
+    expected: tuple[str, str],
+) -> None:
+    """所有公开范围语法都应解析为真实、规范化的闭区间。"""
 
-    assert "async function fetchNoteRangeBounds(fallbackEnd = todayStr())" in src
-    assert "const notesRange = _range === 'all' ? await fetchNoteRangeBounds(range.end) : range;" in src
-    assert "function overviewReferenceDay(range, today = todayStr())" in src
-    assert "api.get('/stats/notes/overview', { start_date: notesRange.start, end_date: notesRange.end, today: overviewReferenceDay(notesRange) })" in src
-
-
-def test_stats_page_source_passes_ledger_range_params_for_all():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
-
-    assert "async function fetchLedgerRangeBounds(fallbackEnd = todayStr())" in src
-    assert "const ledgerRange = _range === 'all' ? await fetchLedgerRangeBounds(range.end) : range;" in src
-    assert "api.get('/stats/ledger', _range === 'all' ? { start_date: ledgerRange.start, end_date: ledgerRange.end } : { range: rangeParam })" in src
-
-
-def test_parse_range_supports_last_year():
-    stats_module = _load_stats_module()
-    start, end = stats_module._parse_range("last_year")
-    current_year = __import__("datetime").datetime.now().year
-
-    assert start == f"{current_year - 1}-01-01"
-    assert end == f"{current_year - 1}-12-31"
+    assert stats_api._parse_range(range_value, today=date(2026, 5, 20)) == expected
 
 
-def test_parse_range_supports_all():
-    stats_module = _load_stats_module()
-    start, end = stats_module._parse_range("all")
+@pytest.mark.parametrize(
+    "range_value",
+    (
+        "unsupported",
+        "2026-13",
+        "2026-03-31..2026-03-01",
+        "bad..2026-03-01",
+        "2026-01-01..2026-02-01..2026-03-01",
+    ),
+)
+def test_parse_range_rejects_invalid_or_reversed_values(range_value: str) -> None:
+    """非法月份、日期、分隔符和反向区间必须失败关闭。"""
 
-    assert start == "1970-01-01"
-    assert end == __import__("datetime").datetime.now().strftime("%Y-%m-%d")
-
-
-def test_parse_range_supports_calendar_quarter_boundaries():
-    stats_module = _load_stats_module()
-
-    class _FrozenDateTime(datetime):
-        @classmethod
-        def now(cls):
-            return cls(2026, 5, 18, 9, 0, 0)
-
-    original_datetime = stats_module.datetime
-    stats_module.datetime = _FrozenDateTime
-    try:
-        start, end = stats_module._parse_range("quarter")
-    finally:
-        stats_module.datetime = original_datetime
-
-    assert start == "2026-04-01"
-    assert end == "2026-05-18"
+    with pytest.raises(ValueError):
+        stats_api._parse_range(range_value, today=date(2026, 5, 20))
 
 
-def test_stats_page_source_uses_task_palette_aligned_with_tasks_page():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+def test_stats_range_requires_paired_explicit_bounds() -> None:
+    """显式开始和结束日期不能只给一端。"""
 
-    assert "const taskToneDone = '#166534';" in src
-    assert "const taskToneOpen = '#F59E0B';" in src
-    assert "{ label: '未完成', count: totals.open, color: taskToneOpen }" in src
-    assert "{ label: '已完成', count: totals.done, color: taskToneDone }" in src
-    assert "浅橙 = 新增" in src
-
-
-def test_stats_page_source_uses_dynamic_note_cadence_layout():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
-
-    assert "function renderHeatStrip(items, valueKey, labelKey, color, formatter = (value) => `${value}`, options = {})" in src
-    assert 'const style = columns > 0 ? ` style="grid-template-columns:repeat(${columns}, minmax(0, 1fr));"` : \'\';' in src
-    assert "const cadenceBody = cadenceGranularity === 'day'" in src
-    assert "Math.min(Math.max(cadenceItems.length, 1), 7)" in src
+    error = _assert_http_error(
+        422,
+        lambda: stats_api._resolve_stats_range("all", start_date="2026-01-01"),
+    )
+    assert "同时提供" in error.detail
 
 
-def test_stats_page_source_scales_summary_values_for_mid_width_layouts():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+def test_amount_histogram_uses_half_open_boundaries() -> None:
+    """相邻金额桶边界不应重复计数。"""
 
-    assert ".stats-summary-card {" in src
-    assert "font-size: clamp(24px, 1.85vw, 30px);" in src
-    assert "overflow-wrap: anywhere;" in src
-    assert "word-break: break-word;" in src
+    histogram = stats_api._build_amount_histogram([0, 19.99, 20, 49.99, 50, 1000])
+    assert [item["count"] for item in histogram] == [2, 2, 1, 0, 0, 1]
 
 
-def test_stats_page_source_uses_neutral_zero_cells_for_activity_heatmap():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
+def test_ledger_comparison_fills_gaps_and_keeps_mom_and_yoy_baselines(
+    db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """月度比较填充空月，并从同一查询提供环比和同比基线。"""
 
-    assert "if (!count) return 0;" in src
-    assert "? `rgba(16,185,129,${op})`" in src
-    assert ": 'rgba(226,232,240,0.52)';" in src
-    assert '<div class="stats-heatmap-legend-cell" style="background:rgba(226,232,240,0.52)"></div>' in src
-
-
-def test_stats_page_source_uses_even_axis_tick_sampling_without_forced_last_label():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
-
-    assert "const step = (all.length - 1) / (maxTicks - 1);" in src
-    assert "picked.add(Math.round(index * step));" in src
-    assert "return Array.from(picked).sort((a, b) => a - b).map((index) => all[index]);" in src
-
-
-def test_stats_page_source_uses_unified_time_presets():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
-
-    assert "RANGE_PRESET_OPTIONS" in src
-    assert "if (_range === 'all') return 'all';" in src
-
-
-def test_stats_page_source_marks_note_cards_as_range_driven():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
-
-    assert "subtitle: noteCadenceSubtitle(cadenceGranularity)," in src
-    assert "if (granularity === 'year') return `按${rangeLabel()}查看每年新增笔记数量。`;" in src
-    assert "subtitle: `按${rangeLabel()}统计知识沉淀主题。`" in src
-    assert "subtitle: `按${rangeLabel()}统计高频标签。`" in src
-
-
-def test_notes_page_source_uses_range_driven_note_cadence():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "notes.js").read_text(encoding="utf-8")
-
-    assert "RANGE_PRESET_OPTIONS" in src
-    assert "range: 'year'" in src
-    assert "async function fetchNoteRangeBounds(fallbackEnd = todayKey())" in src
-    assert "async function resolveActiveRange()" in src
-    assert "function overviewReferenceDay(range)" in src
-    assert "start_date: range?.start || ''" in src
-    assert "today: overviewReferenceDay(range)," in src
-    assert "date_field: 'created_at'" in src
-    assert "function noteCadenceSubtitle(granularity)" in src
-    assert "按${rangeLabel()}查看每月新增笔记数量。" in src
-
-
-def test_date_range_utility_uses_full_natural_period_bounds():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "utils" / "date_ranges.js").read_text(encoding="utf-8")
-
-    assert "function endOfWeek(base)" in src
-    assert "function endOfMonth(base)" in src
-    assert "function endOfQuarter(base)" in src
-    assert "function endOfYear(base)" in src
-    assert "const firstMonth = Math.floor(base.getMonth() / 3) * 3;" in src
-    assert "start: isoDate(new Date(base.getFullYear(), firstMonth, 1))," in src
-    assert "return { start: isoDate(monday), end: isoDate(endOfWeek(base)) };" in src
-    assert "end: isoDate(endOfMonth(base))," in src
-    assert "end: isoDate(endOfQuarter(base))," in src
-    assert "end: isoDate(endOfYear(base))," in src
-
-
-def test_notes_page_source_scales_summary_values_for_mid_width_layouts():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "notes.js").read_text(encoding="utf-8")
-
-    assert "min-width: 0;" in src
-    assert "font-size: clamp(24px, 1.9vw, 30px);" in src
-    assert "overflow-wrap: anywhere;" in src
-    assert "word-break: break-word;" in src
-    assert ".notes-spotlight-side {" in src
-    assert "display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));" in src
-    assert ".note-row-side {" in src
-    assert ".note-row-footer {" in src
-    assert ".note-row-preview { font-size: 12px; line-height: 1.55; -webkit-line-clamp: 1; }" in src
-    assert ".note-row-order, .note-card-category, .note-tag { height: 22px; padding: 0 7px; font-size: 10px; }" in src
-
-
-def test_stats_page_source_compacts_mobile_donuts():
-    src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "stats.js").read_text(encoding="utf-8")
-
-    assert ".stats-donut { width: 100%; height: auto; max-width: 180px; margin: 0 auto; }" in src
-    assert ".stats-donut { max-width: min(200px, 52vw); }" in src
-    assert ".stats-donut-center-value { font-size: 16px; }" in src
-    assert "fill: #7f1d1d;" in src
-
-
-def test_ledger_comparison_fills_missing_months_and_keeps_prev_month_baseline():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_stats_compare_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-ledger-compare"
-    stats_module = _load_stats_module()
+    monkeypatch.setattr(stats_api, "_today", lambda *_args: date(2026, 3, 29))
+    for title, amount, transaction_type, ledger_date in (
+        ("同比十月支出", 40, "expense", "2024-10-12"),
+        ("同比十月收入", 100, "income", "2024-10-15"),
+        ("九月支出", 90, "expense", "2025-09-20"),
+        ("十月支出", 120, "expense", "2025-10-12"),
+        ("十月收入", 500, "income", "2025-10-25"),
+        ("十二月支出", 360, "expense", "2025-12-08"),
+        ("二月支出", 240, "expense", "2026-02-18"),
+        ("三月支出", 180, "expense", "2026-03-05"),
+        ("三月转账", 10, "transfer", "2026-03-06"),
+        ("未来支出", 999, "expense", "2026-04-05"),
+    ):
+        db.insert_item(
+            {
+                "type": "ledger",
+                "owner_id": owner_id,
+                "title": title,
+                "amount": amount,
+                "transaction_type": transaction_type,
+                "ledger_category": "餐饮",
+                "account_name": "现金",
+                "counter_account_name": "银行卡" if transaction_type == "transfer" else None,
+                "ledger_date": ledger_date,
+            }
+        )
 
-    class _FrozenDateTime(datetime):
-        @classmethod
-        def now(cls):
-            return cls(2026, 3, 29, 10, 0, 0)
+    months = stats_api.ledger_comparison(months=6, owner_id=owner_id, db=db)["data"]["months"]
 
-    original_datetime = stats_module.datetime
-    stats_module.datetime = _FrozenDateTime
+    assert [item["month"] for item in months] == [
+        "2025-10",
+        "2025-11",
+        "2025-12",
+        "2026-01",
+        "2026-02",
+        "2026-03",
+    ]
+    assert months[0]["expense"] == 120
+    assert months[0]["income"] == 500
+    assert months[0]["prev_expense"] == 90
+    assert months[0]["yoy_expense"] == 40
+    assert months[0]["yoy_income"] == 100
+    assert months[1]["expense"] == 0
+    assert months[3]["expense"] == 0
+    assert months[5]["prev_expense"] == 240
 
-    try:
-        db.insert_item({
+
+def test_ledger_comparison_rejects_direct_out_of_range_months(db: Database) -> None:
+    """内部直接调用也必须遵守 3 到 12 个月的公开边界。"""
+
+    _assert_http_error(
+        422,
+        lambda: stats_api.ledger_comparison(months=2, owner_id="u", db=db),
+    )
+
+
+def test_activity_heatmap_counts_all_item_types_and_leap_day(db: Database) -> None:
+    """全年热力图一次查询聚合五类条目，并保留闰日空位。"""
+
+    owner_id = "u-heatmap"
+    for item in (
+        {
             "type": "ledger",
             "owner_id": owner_id,
-            "title": "十月支出",
-            "amount": 120,
+            "title": "支出",
+            "amount": 1,
             "transaction_type": "expense",
-            "ledger_category": "餐饮",
-            "ledger_date": "2025-10-12",
-        })
-        db.insert_item({
-            "type": "ledger",
+            "ledger_date": "2024-02-29",
+        },
+        {
+            "type": "task",
             "owner_id": owner_id,
-            "title": "十二月支出",
-            "amount": 360,
-            "transaction_type": "expense",
-            "ledger_category": "交通",
-            "ledger_date": "2025-12-08",
-        })
-        db.insert_item({
-            "type": "ledger",
+            "title": "任务",
+            "created_at": "2024-02-29T08:00:00",
+        },
+        {
+            "type": "event",
             "owner_id": owner_id,
-            "title": "二月支出",
-            "amount": 240,
-            "transaction_type": "expense",
-            "ledger_category": "服务",
-            "ledger_date": "2026-02-18",
-        })
-        db.insert_item({
-            "type": "ledger",
+            "title": "日程",
+            "start_time": "2024-02-29T09:00:00",
+        },
+        {
+            "type": "note",
             "owner_id": owner_id,
-            "title": "三月支出",
-            "amount": 180,
-            "transaction_type": "expense",
-            "ledger_category": "娱乐",
-            "ledger_date": "2026-03-05",
-        })
+            "title": "笔记",
+            "created_at": "2024-02-29T10:00:00",
+        },
+        {
+            "type": "diary",
+            "owner_id": owner_id,
+            "title": "日记",
+            "diary_date": "2024-02-29",
+        },
+        {
+            "type": "task",
+            "owner_id": "other-owner",
+            "title": "他人任务",
+            "created_at": "2024-02-29T08:00:00",
+        },
+    ):
+        db.insert_item(item)
 
-        result = stats_module.ledger_comparison(months=6, owner_id=owner_id, db=db)
-        months = result["data"]["months"]
+    data = stats_api.activity_heatmap(year=2024, owner_id=owner_id, db=db)["data"]
+    leap_day = next(item for item in data["days"] if item["date"] == "2024-02-29")
 
-        assert [item["month"] for item in months] == [
-            "2025-10",
-            "2025-11",
-            "2025-12",
-            "2026-01",
-            "2026-02",
-            "2026-03",
-        ]
-        assert months[1]["expense"] == 0
-        assert months[3]["expense"] == 0
-        assert months[2]["prev_expense"] == 0
-        assert months[4]["prev_expense"] == 0
-        assert months[5]["prev_expense"] == 240
-    finally:
-        stats_module.datetime = original_datetime
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert len(data["days"]) == 366
+    assert leap_day == {
+        "date": "2024-02-29",
+        "count": 5,
+        "ledger": 1,
+        "task": 1,
+        "event": 1,
+        "note": 1,
+        "diary": 1,
+    }
+
+
+def test_activity_heatmap_rejects_invalid_direct_year(db: Database) -> None:
+    """HTTP 之外的调用也不能构造 SQLite 无意义年份。"""
+
+    _assert_http_error(
+        422,
+        lambda: stats_api.activity_heatmap(year=1969, owner_id="u", db=db),
+    )

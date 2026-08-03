@@ -1,5 +1,6 @@
+"""宠物互访、礼物、留言、排行榜、小游戏和展示会服务。"""
+
 import hashlib
-import logging
 import random
 import secrets
 
@@ -7,19 +8,29 @@ from ..models import Pet
 from ..utils.constants import (
     COOLDOWN_TIMES,
     DAILY_LIMITS,
+    DEFAULT_ITEMS,
     MINIGAME_CONFIG,
-    PET_SHOW_CONFIG,
     PetPersonality,
 )
-from ..utils.validators import validate_sensitive_content
-from .database import Database, MinigameOutcome
-from .user_service import UserService
+from ..utils.formatters import format_pet_card
+from ..utils.validators import validate_item_amount, validate_sensitive_content
+from .database import Database, MinigameAtomicResult, MinigameOutcome
 
-logger = logging.getLogger(__name__)
+_RPS_CHOICES = {
+    "石头": "rock",
+    "剪刀": "scissors",
+    "布": "paper",
+    "rock": "rock",
+    "scissors": "scissors",
+    "paper": "paper",
+}
+_RPS_NAMES = {"rock": "石头", "scissors": "剪刀", "paper": "布"}
 
 
 class SocialService:
-    def __init__(self, db: Database):
+    """校验社交请求，并把涉及资产的操作交给数据库原子结算。"""
+
+    def __init__(self, db: Database) -> None:
         self.db = db
 
     @staticmethod
@@ -32,22 +43,20 @@ class SocialService:
         message_id: str | None = None,
     ) -> str:
         request_token = str(message_id or secrets.token_hex(16))
-        material = (
-            f"{request_token}\0{game_type}\0{group_id}\0{user_id}\0"
-            f"{opponent_user_id or ''}"
-        )
+        material = f"{request_token}\0{game_type}\0{group_id}\0{user_id}\0{opponent_user_id or ''}"
         return f"pet-minigame:v1:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
 
     @staticmethod
-    def _reward_suffix(result, *, offered_coins: bool) -> str:
-        suffix = ""
+    def _reward_suffix(result: MinigameAtomicResult, *, offered_coins: bool) -> str:
+        """按实际结算值生成小游戏奖励摘要。"""
+        parts: list[str] = []
         if offered_coins:
-            suffix += f" 获得{result.coin_grant}金币"
+            parts.append(f"获得{result.coin_grant}金币")
         if result.experience_grant > 0:
-            suffix += f" + {result.experience_grant}经验"
+            parts.append(f"+ {result.experience_grant}经验")
         if result.energy_cost > 0:
-            suffix += f" 消耗{result.energy_cost}精力"
-        return suffix
+            parts.append(f"消耗{result.energy_cost}精力")
+        return f" {' '.join(parts)}" if parts else ""
 
     # ──────────────────── 互访 ────────────────────
 
@@ -79,8 +88,7 @@ class SocialService:
             reward_text = f"双方各获得{result.visitor_grant}金币"
         else:
             reward_text = (
-                f"访客获得{result.visitor_grant}金币，"
-                f"宠物主人获得{result.target_grant}金币"
+                f"访客获得{result.visitor_grant}金币，宠物主人获得{result.target_grant}金币"
             )
         return (
             True,
@@ -89,10 +97,23 @@ class SocialService:
 
     # ──────────────────── 送礼 ────────────────────
 
-    def gift_item(self, from_user_id: str, to_user_id: str, group_id: int,
-                  item_id: str, amount: int = 1) -> tuple[bool, str]:
+    def gift_item(
+        self,
+        from_user_id: str,
+        to_user_id: str,
+        group_id: int,
+        item_id: str,
+        amount: int = 1,
+    ) -> tuple[bool, str]:
         if from_user_id == to_user_id:
             return False, "不能给自己送礼物"
+        if type(amount) is not int:
+            return False, "数量必须是整数"
+        valid, message = validate_item_amount(amount)
+        if not valid:
+            return False, message
+        if item_id not in DEFAULT_ITEMS:
+            return False, "道具不存在或不可赠送"
 
         friendship_gain = 2
         success, reason = self.db.gift_item_atomic(
@@ -110,27 +131,25 @@ class SocialService:
             return True, f"礼物发送成功！双方各获得{friendship_gain}友情点"
         return False, reason or "送礼失败"
 
-    # ──────────────────── 查看他人宠物卡片（Issue #42）────────────────────
+    # ──────────────────── 查看他人宠物卡片 ────────────────────
 
-    def view_pet_card(self, viewer_user_id: str, target_user_id: str,
-                      group_id: int) -> tuple[bool, str]:
-        """查看他人的宠物卡片"""
+    def view_pet_card(self, target_user_id: str, group_id: int) -> tuple[bool, str]:
+        """读取指定用户的宠物和账户信息，并生成公开卡片。"""
         target_pet = self.db.get_pet(target_user_id, group_id)
-        if not target_pet:
+        if target_pet is None:
             return False, "该用户没有宠物"
 
         target_user = self.db.get_user(target_user_id, group_id)
-        if not target_user:
+        if target_user is None:
             return False, "用户不存在"
 
-        from ..utils.formatters import format_pet_card
         card = format_pet_card(target_pet, target_user)
         return True, f"📋 {target_user_id} 的宠物卡片\n\n{card}"
 
-    # ──────────────────── 点赞/摸摸（Issue #43）────────────────────
+    # ──────────────────── 点赞/摸摸 ───────────────────────────────
 
     def like_pet(self, user_id: str, target_user_id: str, group_id: int) -> tuple[bool, str]:
-        """CR Review Issue #4/#9: 添加每日每用户点赞次数限制"""
+        """点赞目标宠物，并执行每用户、每目标的每日次数限制。"""
         if user_id == target_user_id:
             return False, "不能给自己点赞"
 
@@ -144,11 +163,12 @@ class SocialService:
             return True, f"你摸了摸{target_pet.name}，它看起来很开心！👋"
         return False, f"今日对该宠物的点赞次数已达上限({like_limit}次)或操作失败"
 
-    # ──────────────────── 留言板（Issue #44）────────────────────
+    # ──────────────────── 留言板 ──────────────────────────────────
 
-    def leave_message(self, from_user_id: str, to_user_id: str,
-                      group_id: int, message: str) -> tuple[bool, str]:
-        """CR Review Issue #3/#8: 添加每日留言次数限制"""
+    def leave_message(
+        self, from_user_id: str, to_user_id: str, group_id: int, message: str
+    ) -> tuple[bool, str]:
+        """给另一用户留言，并执行发送者的每日留言次数限制。"""
         if from_user_id == to_user_id:
             return False, "不能给自己留言"
 
@@ -178,18 +198,19 @@ class SocialService:
         if not messages:
             return True, "📝 暂无留言"
 
-        text = "📝 **留言板**\n\n"
+        lines = ["📝 **留言板**", ""]
         for msg in messages:
-            created = msg.get('created_at', '未知时间')
+            created = msg.get("created_at", "未知时间")
             if isinstance(created, str) and len(created) > 16:
                 created = created[:16]
-            text += f"• [{created}] 来自 {msg['from_user_id']}: {msg['message']}\n"
-        return True, text
+            lines.append(f"• [{created}] 来自 {msg['from_user_id']}: {msg['message']}")
+        return True, "\n".join(lines)
 
-    # ──────────────────── 排行榜（修复 care_score 显示问题 Issue #15）────────────
+    # ──────────────────── 排行榜（展示持久化 care_score）───────────
 
-    def get_ranking(self, group_id: int, ranking_type: str = "care_score",
-                    limit: int = 10) -> list[tuple[str, str, float]]:
+    def get_ranking(
+        self, group_id: int, ranking_type: str = "care_score", limit: int = 10
+    ) -> list[tuple[str, str, float]]:
         if ranking_type in {"care_score", "intimacy", "experience"}:
             rows = self.db.get_pet_ranking(group_id, ranking_type, limit)
             return [
@@ -201,13 +222,13 @@ class SocialService:
                 for row in rows
             ]
         if ranking_type == "coins":
-            # CR Review: 使用优化的 JOIN 查询替代 N+1 循环
+            # 排行榜由数据库一次 JOIN 聚合，避免随榜单长度增加查询次数。
             rows = self.db.get_coins_ranking(group_id, limit)
-            return [(r['user_id'], r['pet_name'], r['coins']) for r in rows]
+            return [(row["user_id"], row["pet_name"], row["coins"]) for row in rows]
 
         return []
 
-    # ──────────────────── 小游戏（Issue #46）────────────────────
+    # ──────────────────── 小游戏 ──────────────────────────────────
 
     def play_rock_paper_scissors(
         self,
@@ -217,15 +238,11 @@ class SocialService:
         *,
         message_id: str | None = None,
     ) -> tuple[bool, str]:
-        """猜拳小游戏"""
-        choices = {"石头": "rock", "剪刀": "scissors", "布": "paper",
-                   "rock": "rock", "scissors": "scissors", "paper": "paper"}
-
-        normalized = choices.get(player_choice)
+        """与宠物进行猜拳，并原子结算冷却和奖励。"""
+        normalized = _RPS_CHOICES.get(player_choice)
         if not normalized:
             return False, "请选择：石头、剪刀 或 布"
 
-        cn = {"rock": "石头", "scissors": "剪刀", "paper": "布"}
         config = MINIGAME_CONFIG["rock_paper_scissors"]
 
         def outcome_factory(_pet: Pet, _opponent: Pet | None) -> MinigameOutcome:
@@ -272,15 +289,19 @@ class SocialService:
             return False, settlement.reason or "猜拳结算失败"
         payload = settlement.payload or {}
 
-        msg = "✊✌️✋ **猜拳**\n\n"
-        msg += f"你出了：{cn[str(payload['player_choice'])]}\n"
-        msg += f"{settlement.pet_name}出了：{cn[str(payload['npc_choice'])]}\n\n"
-        msg += f"**{payload['result']}！**"
-        msg += self._reward_suffix(
+        lines = [
+            "✊✌️✋ **猜拳**",
+            "",
+            f"你出了：{_RPS_NAMES[str(payload['player_choice'])]}",
+            f"{settlement.pet_name}出了：{_RPS_NAMES[str(payload['npc_choice'])]}",
+            "",
+            f"**{payload['result']}！**",
+        ]
+        message = "\n".join(lines) + self._reward_suffix(
             settlement,
             offered_coins=bool(payload.get("offered_coins")),
         )
-        return True, msg
+        return True, message
 
     def play_dice(
         self,
@@ -289,7 +310,7 @@ class SocialService:
         *,
         message_id: str | None = None,
     ) -> tuple[bool, str]:
-        """骰子小游戏"""
+        """与宠物掷骰子，并原子结算冷却和奖励。"""
         config = MINIGAME_CONFIG["dice"]
 
         def outcome_factory(_pet: Pet, _opponent: Pet | None) -> MinigameOutcome:
@@ -322,9 +343,7 @@ class SocialService:
             user_id,
             group_id,
             "dice",
-            reference_id=self._minigame_reference(
-                "dice", user_id, group_id, message_id=message_id
-            ),
+            reference_id=self._minigame_reference("dice", user_id, group_id, message_id=message_id),
             daily_coin_limit=DAILY_LIMITS["coins"],
             cooldown_seconds=int(config.get("cooldown", 0) or 0),
             outcome_factory=outcome_factory,
@@ -333,15 +352,19 @@ class SocialService:
             return False, settlement.reason or "骰子结算失败"
         payload = settlement.payload or {}
 
-        msg = "🎲 **骰子**\n\n"
-        msg += f"你掷出了：{payload['player_dice']}\n"
-        msg += f"{settlement.pet_name}掷出了：{payload['pet_dice']}\n\n"
-        msg += f"**{payload['result']}！**"
-        msg += self._reward_suffix(
+        lines = [
+            "🎲 **骰子**",
+            "",
+            f"你掷出了：{payload['player_dice']}",
+            f"{settlement.pet_name}掷出了：{payload['pet_dice']}",
+            "",
+            f"**{payload['result']}！**",
+        ]
+        message = "\n".join(lines) + self._reward_suffix(
             settlement,
             offered_coins=bool(payload.get("offered_coins")),
         )
-        return True, msg
+        return True, message
 
     def race_pet(
         self,
@@ -351,7 +374,7 @@ class SocialService:
         *,
         message_id: str | None = None,
     ) -> tuple[bool, str]:
-        """宠物赛跑"""
+        """让两只宠物赛跑，并原子结算精力、冷却和奖励。"""
         if user_id == target_user_id:
             return False, "不能跟自己的宠物赛跑"
 
@@ -417,61 +440,38 @@ class SocialService:
         else:
             outcome_text = f"😔 {settlement.opponent_pet_name}赢了！"
 
-        msg = "🏃 **宠物赛跑**\n\n"
-        msg += f"{settlement.pet_name} 🆚 {settlement.opponent_pet_name}\n\n"
-        msg += outcome_text
-        msg += self._reward_suffix(
+        message = (
+            f"🏃 **宠物赛跑**\n\n"
+            f"{settlement.pet_name} 🆚 {settlement.opponent_pet_name}\n\n"
+            f"{outcome_text}"
+        ) + self._reward_suffix(
             settlement,
             offered_coins=bool(payload.get("offered_coins")),
         )
-        return True, msg
+        return True, message
 
-    # ──────────────────── 展示会结算（新增）────────────────────
+    # ──────────────────── 展示会结算 ────────────────────
 
-    def settle_pet_show(self, group_id: int) -> str:
-        """结算展示会，发放奖励"""
-        show = self.db.get_active_pet_show(group_id)
-        if not show:
+    def settle_pet_show(self, group_id: int, *, force: bool = True) -> str:
+        """原子结算一个已截止或被管理员明确结束的展示会。"""
+        settlement = self.db.settle_pet_show_atomic(group_id, force=force)
+        if settlement is None:
             return ""
 
-        votes = self.db.get_pet_show_votes(show['id'])
-        if not votes:
-            self.db.end_pet_show(show['id'])
+        if not settlement.winners:
             return "🏆 展示会已结束（无投票数据）"
 
-        sorted_votes = sorted(votes.items(), key=lambda x: x[1], reverse=True)
-        rewards = [
-            PET_SHOW_CONFIG["reward_first"],
-            PET_SHOW_CONFIG["reward_second"],
-            PET_SHOW_CONFIG["reward_third"]
-        ]
         medals = ["🥇", "🥈", "🥉"]
+        lines = [f"🏆 **{settlement.title} 结果**", ""]
 
-        text = f"🏆 **{show.get('title', '展示会')} 结果**\n\n"
+        for index, winner in enumerate(settlement.winners):
+            medal = medals[index] if index < len(medals) else f"#{index + 1}"
+            line = f"{medal} {winner.pet_name} ({winner.user_id}) - {winner.vote_count}票"
+            if winner.coins_granted > 0:
+                line += f" +{winner.coins_granted}金币"
+            if index == 0:
+                line += " 🏅展示会冠军"
+            lines.append(line)
 
-        for i, (uid, vote_count) in enumerate(sorted_votes[:3]):
-            pet = self.db.get_pet(uid, group_id)
-            name = pet.name if pet else uid
-            medal = medals[i] if i < len(medals) else f"#{i+1}"
-            reward = rewards[i] if i < len(rewards) else 0
-
-            text += f"{medal} {name} ({uid}) - {vote_count}票"
-            if reward > 0:
-                text += f" +{reward}金币"
-                user = self.db.get_user(uid, group_id)
-                if user:
-                    self.db.credit_coins_atomic(
-                        uid,
-                        group_id,
-                        reward,
-                        reason="pet_show",
-                        reference_id=f"show:{show['id']}:{i}:{uid}",
-                    )
-            if i == 0:
-                UserService(self.db).grant_temporary_title(uid, group_id, "展示会冠军")
-                text += " 🏅展示会冠军"
-            text += "\n"
-
-        self.db.end_pet_show(show['id'])
-        text += "\n🎉 展示会已结束，感谢参与！"
-        return text
+        lines.extend(("", "🎉 展示会已结束，感谢参与！"))
+        return "\n".join(lines)

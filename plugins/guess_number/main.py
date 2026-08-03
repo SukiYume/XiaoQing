@@ -1,391 +1,473 @@
-"""
-猜数字游戏插件
+"""提供有界输入、会话隔离和动态范围提示的猜数字游戏。"""
 
-演示如何使用 SessionManager 实现多轮对话。
+from __future__ import annotations
 
-游戏规则：
-1. 用户发送 /猜数字 开始游戏
-2. 系统随机生成一个 1-100 的数字
-3. 用户猜测数字，系统提示大了/小了
-4. 猜对或次数用尽时游戏结束
-
-多轮对话实现要点：
-1. 使用 context.create_session() 创建会话
-2. 实现 handle_session() 函数处理会话消息
-3. 使用 session.get()/set() 存取会话数据
-4. 使用 context.end_session() 结束会话
-"""
-
-# 标准库
 import logging
-import random
+import re
+import secrets
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
 
-# 本地导入
-from core.args import parse
-from core.plugin_base import segments
+from core.args import tokenize
+from core.plugin_base import Segments, has_control_characters, segments
 from core.public_errors import public_error_response
 
 logger = logging.getLogger(__name__)
 
+PLUGIN_NAME = "guess_number"
+SESSION_TIMEOUT_SECONDS = 180.0
+MAX_COMMAND_CHARS = 64
+MAX_SESSION_INPUT_CHARS = 64
 
-# ============================================================
-# 游戏配置
-# ============================================================
-
-MIN_NUMBER = 1
-MAX_NUMBER = 100
-MAX_ATTEMPTS = 7
-SESSION_TIMEOUT = 180.0  # 3 分钟
-
-
-# ============================================================
-# 插件初始化
-# ============================================================
-
-def init(context=None) -> None:
-    """插件初始化"""
-    logger.info("GuessNumber plugin initialized")
+DifficultyKey = Literal["easy", "normal", "hard", "hell"]
+SessionAction = Literal["status", "restart", "help"]
+CommandAction = Literal["start", "status", "restart", "help"]
 
 
-# ============================================================
-# 主命令入口
-# ============================================================
+@dataclass(frozen=True, slots=True)
+class Difficulty:
+    """一份难度配置，同时作为命令别名和会话状态的唯一真相源。"""
 
-async def handle(command: str, args: str, event: dict, context) -> list:
-    """
-    命令处理入口
+    key: DifficultyKey
+    label: str
+    minimum: int
+    maximum: int
+    max_attempts: int
+    aliases: frozenset[str]
 
-    处理初始命令和子命令。
-    后续的猜测消息由 handle_session() 处理。
-    """
+
+EASY = Difficulty("easy", "简单 ⭐", 1, 50, 10, frozenset({"easy", "e", "简单"}))
+NORMAL = Difficulty("normal", "普通 ⭐⭐", 1, 100, 7, frozenset({"normal", "n", "普通"}))
+HARD = Difficulty("hard", "困难 ⭐⭐⭐", 1, 200, 8, frozenset({"hard", "h", "困难"}))
+HELL = Difficulty(
+    "hell",
+    "地狱 ⭐⭐⭐⭐⭐",
+    1,
+    1000,
+    10,
+    frozenset({"hell", "nightmare", "地狱"}),
+)
+DIFFICULTIES = (EASY, NORMAL, HARD, HELL)
+_DIFFICULTY_BY_ALIAS = {
+    alias: difficulty for difficulty in DIFFICULTIES for alias in difficulty.aliases
+}
+
+_HELP_ALIASES = frozenset({"help", "帮助", "?"})
+_STATUS_ALIASES = frozenset({"status", "状态", "info", "信息"})
+_RESTART_ALIASES = frozenset({"restart", "重新开始", "重开"})
+_SESSION_STATUS_ALIASES = _STATUS_ALIASES | {"?"}
+_COMMAND_TRIGGERS = frozenset({"猜数字", "guess", "猜"})
+_COMMAND_ACTION_BY_ALIAS: dict[str, SessionAction] = {
+    **dict.fromkeys(_HELP_ALIASES, "help"),
+    **dict.fromkeys(_STATUS_ALIASES, "status"),
+    **dict.fromkeys(_RESTART_ALIASES, "restart"),
+}
+_GUESS_PATTERN = re.compile(r"[0-9]{1,4}\Z")
+
+HELP_TEXT = """
+🎮 **猜数字游戏**
+
+**开始游戏：**
+• /猜数字 - 普通难度（1-100，7 次）
+• /猜数字 简单/easy - 1-50，10 次
+• /猜数字 困难/hard - 1-200，8 次
+• /猜数字 地狱/hell - 1-1000，10 次
+
+**管理游戏：**
+• /猜数字 status - 查看当前状态
+• /猜数字 restart - 结束本插件旧游戏并按普通难度重开
+• /猜数字 help - 显示帮助
+
+游戏开始后直接发送数字；发送「退出」或「取消」可放弃。会话 3 分钟无操作自动结束。
+""".strip()
+
+OTHER_SESSION_TEXT = "⚠️ 当前已有其他插件会话；请先发送「退出」结束该会话，再开始猜数字。"
+INVALID_STATE_TEXT = "⚠️ 猜数字会话状态无效，已安全结束；请重新开始游戏。"
+
+
+class _GameSession(Protocol):
+    plugin_name: str
+
+    def get(self, key: str, default: Any = None) -> Any: ...
+
+    def set(self, key: str, value: Any) -> None: ...
+
+
+class _GuessNumberContext(Protocol):
+    async def create_session(
+        self,
+        initial_data: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> _GameSession: ...
+
+    async def get_session(self) -> _GameSession | None: ...
+
+    async def end_session(self) -> bool: ...
+
+
+class GuessNumberCommandError(ValueError):
+    """表示可直接反馈给用户的命令格式错误。"""
+
+
+class InvalidGameState(ValueError):
+    """表示当前插件会话不满足游戏状态不变量。"""
+
+
+@dataclass(frozen=True, slots=True)
+class CommandRequest:
+    action: CommandAction
+    difficulty: Difficulty = NORMAL
+
+
+@dataclass(frozen=True, slots=True)
+class GameState:
+    target: int
+    minimum: int
+    maximum: int
+    attempts: int
+    max_attempts: int
+    history: tuple[int, ...]
+    difficulty: Difficulty
+
+    @property
+    def remaining(self) -> int:
+        return self.max_attempts - self.attempts
+
+    @property
+    def hint(self) -> str:
+        return f"{self.minimum}-{self.maximum}"
+
+
+def _parse_request(args: object) -> CommandRequest:
+    """完整消费单参数命令，拒绝静默忽略和未知难度回退。"""
+
+    if type(args) is not str:
+        raise TypeError("guess_number arguments must be a string")
+    if len(args) > MAX_COMMAND_CHARS:
+        raise GuessNumberCommandError(f"命令参数不能超过 {MAX_COMMAND_CHARS} 个字符")
+    if has_control_characters(args, include_c1=True):
+        raise GuessNumberCommandError("命令参数不能包含控制字符")
     try:
-        parsed = parse(args)
+        tokens = tokenize(args)
+    except ValueError as exc:
+        raise GuessNumberCommandError("命令中的引号没有闭合") from exc
+    if not tokens:
+        return CommandRequest("start")
+    if len(tokens) != 1:
+        raise GuessNumberCommandError("用法：/猜数字 [简单|普通|困难|地狱|status|restart|help]")
 
-        # 如果有参数，检查是否为子命令
-        if parsed and parsed.first:
-            subcommand = parsed.first.lower()
+    token = tokens[0].casefold()
+    action = _COMMAND_ACTION_BY_ALIAS.get(token)
+    if action is not None:
+        return CommandRequest(action)
+    difficulty = _DIFFICULTY_BY_ALIAS.get(token)
+    if difficulty is None:
+        raise GuessNumberCommandError("未知难度；请使用简单、普通、困难或地狱")
+    return CommandRequest("start", difficulty)
 
-            # 帮助命令
-            if subcommand in {"help", "帮助", "?"}:
-                return segments(_show_help())
 
-            # 状态查询
-            if subcommand in {"status", "状态", "info", "信息"}:
-                return await _handle_status(context)
+def _owns_session(session: _GameSession) -> bool:
+    return type(session.plugin_name) is str and session.plugin_name == PLUGIN_NAME
 
-            # 重新开始（结束当前游戏并开始新游戏）
-            if subcommand in {"restart", "重新开始", "重开"}:
+
+def _read_state_int(session: _GameSession, key: str) -> int:
+    value = session.get(key)
+    if type(value) is not int:
+        raise InvalidGameState(f"{key} must be an integer")
+    return value
+
+
+def _load_game_state(session: _GameSession) -> GameState:
+    """从会话恢复并交叉验证状态，不信任冗余或任意对象值。"""
+
+    raw_difficulty = session.get("difficulty", NORMAL.key)
+    if type(raw_difficulty) is not str:
+        raise InvalidGameState("difficulty must be a string")
+    difficulty = _DIFFICULTY_BY_ALIAS.get(raw_difficulty.casefold())
+    if difficulty is None:
+        raise InvalidGameState("difficulty is unknown")
+
+    target = _read_state_int(session, "target")
+    minimum = _read_state_int(session, "min")
+    maximum = _read_state_int(session, "max")
+    attempts = _read_state_int(session, "attempts")
+    max_attempts = _read_state_int(session, "max_attempts")
+    raw_history = session.get("history")
+    if (
+        type(raw_history) is not list
+        or len(raw_history) > difficulty.max_attempts
+        or any(type(item) is not int for item in raw_history)
+    ):
+        raise InvalidGameState("history must be an integer list")
+    history = tuple(raw_history)
+
+    if max_attempts != difficulty.max_attempts or not 0 <= attempts < max_attempts:
+        raise InvalidGameState("attempt counters are inconsistent")
+    if len(history) != attempts or any(
+        not difficulty.minimum <= guess <= difficulty.maximum for guess in history
+    ):
+        raise InvalidGameState("history is inconsistent")
+    if not difficulty.minimum <= minimum <= target <= maximum <= difficulty.maximum:
+        raise InvalidGameState("range is inconsistent")
+    if target in history or any(minimum <= guess <= maximum for guess in history):
+        raise InvalidGameState("active history contradicts the current range")
+    return GameState(
+        target=target,
+        minimum=minimum,
+        maximum=maximum,
+        attempts=attempts,
+        max_attempts=max_attempts,
+        history=history,
+        difficulty=difficulty,
+    )
+
+
+def _format_history(history: tuple[int, ...]) -> str:
+    return " → ".join(str(guess) for guess in history) if history else "（尚未开始）"
+
+
+def _format_status(state: GameState) -> str:
+    return (
+        "📊 游戏状态\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"难度: {state.difficulty.label}\n"
+        f"当前范围: {state.hint}\n"
+        f"剩余次数: {state.remaining}/{state.max_attempts}\n"
+        f"已猜次数: {state.attempts}\n"
+        f"猜测历史: {_format_history(state.history)}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "继续直接发送数字猜测"
+    )
+
+
+async def _start_game(
+    difficulty: Difficulty,
+    context: _GuessNumberContext,
+    *,
+    restart: bool = False,
+) -> Segments:
+    """检测到现有会话时只替换本插件游戏，并创建最小规范状态。"""
+
+    existing = await context.get_session()
+    if existing is not None:
+        if not _owns_session(existing):
+            return segments(OTHER_SESSION_TEXT)
+        if restart:
+            await context.end_session()
+        else:
+            try:
+                state = _load_game_state(existing)
+            except InvalidGameState:
                 await context.end_session()
-                # 不带参数重新开始
-                return await _start_game("", context)
+                logger.warning("Discarded invalid guess_number session before starting a game")
+            else:
+                return segments(
+                    "🎮 你已经有一个进行中的游戏！\n"
+                    f"当前范围: {state.hint}\n"
+                    f"剩余次数: {state.remaining}\n\n"
+                    "直接发送数字继续猜测\n"
+                    "发送「退出」/「取消」放弃游戏\n"
+                    "发送 /猜数字 restart 重新开始"
+                )
 
-            # 如果不是子命令，作为难度参数处理
-            return await _start_game(subcommand, context)
+    target = secrets.randbelow(difficulty.maximum - difficulty.minimum + 1) + difficulty.minimum
+    await context.create_session(
+        initial_data={
+            "target": target,
+            "min": difficulty.minimum,
+            "max": difficulty.maximum,
+            "attempts": 0,
+            "max_attempts": difficulty.max_attempts,
+            "history": [],
+            "difficulty": difficulty.key,
+        },
+        timeout=SESSION_TIMEOUT_SECONDS,
+    )
+    logger.info(
+        "Game started: difficulty=%s, range=%d-%d, max_attempts=%d",
+        difficulty.key,
+        difficulty.minimum,
+        difficulty.maximum,
+        difficulty.max_attempts,
+    )
+    return segments(
+        "🎮 猜数字游戏开始！\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"难度: {difficulty.label}\n"
+        f"范围: {difficulty.minimum} 到 {difficulty.maximum}\n"
+        f"机会: {difficulty.max_attempts} 次\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "🎯 请直接发送一个数字开始猜测\n"
+        "💡 输入「退出」/「取消」可以放弃游戏"
+    )
 
-        # 无参数，直接开始游戏
-        return await _start_game("", context)
 
+async def _handle_status(context: _GuessNumberContext) -> Segments:
+    """读取本插件状态；发现损坏状态时安全结束对应会话。"""
+
+    session = await context.get_session()
+    if session is None:
+        return segments("📊 当前没有进行中的游戏\n发送 /猜数字 开始新游戏")
+    if not _owns_session(session):
+        return segments(OTHER_SESSION_TEXT)
+    try:
+        state = _load_game_state(session)
+    except InvalidGameState:
+        await context.end_session()
+        logger.warning("Discarded invalid guess_number session during status query")
+        return segments(INVALID_STATE_TEXT)
+    return segments(_format_status(state))
+
+
+async def handle(
+    command: str,
+    args: str,
+    event: dict[str, Any],
+    context: _GuessNumberContext,
+) -> Segments:
+    """处理开始、状态、重开和帮助命令；普通猜测由会话入口处理。"""
+
+    del command, event
+    try:
+        request = _parse_request(args)
+        if request.action == "help":
+            return segments(HELP_TEXT)
+        if request.action == "status":
+            return await _handle_status(context)
+        return await _start_game(
+            request.difficulty,
+            context,
+            restart=request.action == "restart",
+        )
+    except GuessNumberCommandError as exc:
+        return segments(str(exc))
     except Exception as exc:
         return public_error_response(context, exc, logger=logger, component="guess_number.handle")
 
 
-async def _start_game(difficulty: str, context) -> list[dict]:
-    """开始新游戏"""
-    # 检查是否已有进行中的游戏
-    existing_session = await context.get_session()
-    if existing_session:
-        return segments(
-            "🎮 你已经有一个进行中的游戏！\n"
-            f"当前范围: {existing_session.get('hint', '1-100')}\n"
-            f"剩余次数: {existing_session.get('remaining', MAX_ATTEMPTS)}\n"
-            "\n发送数字继续猜测\n"
-            "发送「退出」/「取消」放弃游戏\n"
-            "发送 /猜数字 restart 重新开始"
-        )
+def _parse_session_input(
+    text: object,
+) -> int | SessionAction | None:
+    """把会话文本归一为控制动作或有界 ASCII 猜测。
 
-    # 解析难度参数
-    min_num, max_num, max_attempts = _parse_difficulty(difficulty)
+    活跃会话会先于普通命令路由收到消息，因此这里还要识别完整的
+    ``/猜数字 status``、``/猜数字 restart`` 和 ``/猜数字 help``。
+    """
 
-    # 生成目标数字
-    target = random.randint(min_num, max_num)
+    if type(text) is not str:
+        raise TypeError("guess_number session input must be a string")
+    if len(text) > MAX_SESSION_INPUT_CHARS or has_control_characters(text, include_c1=True):
+        return None
+    normalized = text.strip().casefold()
+    if normalized in _SESSION_STATUS_ALIASES:
+        return "status"
+    if normalized in _RESTART_ALIASES:
+        return "restart"
+    if normalized in _HELP_ALIASES:
+        return "help"
 
-    # 创建会话
-    await context.create_session(
-        initial_data={
-            "target": target,
-            "min": min_num,
-            "max": max_num,
-            "attempts": 0,
-            "max_attempts": max_attempts,
-            "remaining": max_attempts,
-            "hint": f"{min_num}-{max_num}",
-            "history": [],
-            "difficulty": difficulty or "normal",
-        },
-        timeout=SESSION_TIMEOUT,
-    )
+    parts = normalized.split()
+    if len(parts) == 2 and parts[0].removeprefix("/") in _COMMAND_TRIGGERS:
+        return _COMMAND_ACTION_BY_ALIAS.get(parts[1])
+    if _GUESS_PATTERN.fullmatch(normalized) is None:
+        return None
+    return int(normalized)
 
-    logger.info(
-        "Game started: range=%d-%d, max_attempts=%d, user=%s",
-        min_num, max_num, max_attempts, context.current_user_id
-    )
-
-    difficulty_text = _get_difficulty_name(difficulty)
-
-    return segments(
-        f"🎮 猜数字游戏开始！\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"难度: {difficulty_text}\n"
-        f"范围: {min_num} 到 {max_num}\n"
-        f"机会: {max_attempts} 次\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 请发送一个数字开始猜测\n"
-        f"💡 输入「退出」/「取消」可以放弃游戏"
-    )
-
-
-async def _handle_status(context) -> list[dict]:
-    """查询当前游戏状态"""
-    session = await context.get_session()
-    if not session:
-        return segments(
-            "📊 当前没有进行中的游戏\n"
-            "发送 /猜数字 开始新游戏"
-        )
-
-    history = session.get("history", [])
-    history_str = " → ".join(str(g) for g in history) if history else "（尚未开始）"
-
-    return segments(
-        f"📊 游戏状态\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"当前范围: {session.get('hint', 'N/A')}\n"
-        f"剩余次数: {session.get('remaining', 0)}/{session.get('max_attempts', 0)}\n"
-        f"已猜次数: {session.get('attempts', 0)}\n"
-        f"猜测历史: {history_str}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"继续发送数字猜测"
-    )
-
-
-# ============================================================
-# 会话处理（多轮对话核心）
-# ============================================================
 
 async def handle_session(
     text: str,
-    event: dict,
-    context,
-    session,
-) -> list[dict]:
-    """
-    处理会话消息
+    event: dict[str, Any],
+    context: _GuessNumberContext,
+    session: _GameSession,
+) -> Segments:
+    """在框架的单会话事务内处理一次状态查询或数字猜测。"""
 
-    当用户有活跃会话时，Dispatcher 会调用这个函数处理后续消息。
-    框架已自动处理退出命令（退出/取消/exit/quit/q），插件无需再处理。
-
-    参数:
-        text: 用户发送的原始文本
-        event: OneBot 事件
-        context: 插件上下文
-        session: 当前会话对象
-    """
-    # 获取会话数据
-    target = session.get("target")
-    min_num = session.get("min", MIN_NUMBER)
-    max_num = session.get("max", MAX_NUMBER)
-    attempts = session.get("attempts", 0)
-    max_attempts = session.get("max_attempts", MAX_ATTEMPTS)
-    history = session.get("history", [])
-
-    # 解析用户输入
-    guess_text = text.strip()
-
-    # 检查特殊命令
-    if guess_text.lower() in {"status", "状态", "info", "信息", "?"}:
-        history_str = " → ".join(str(g) for g in history) if history else "（尚未开始）"
-        return segments(
-            f"📊 游戏状态\n"
-            f"当前范围: {session.get('hint')}\n"
-            f"剩余次数: {session.get('remaining', 0)}/{max_attempts}\n"
-            f"猜测历史: {history_str}"
-        )
-
-    # 尝试解析为数字
+    del event
+    if not _owns_session(session):
+        raise ValueError("guess_number received a foreign session")
     try:
-        guess = int(guess_text)
-    except ValueError:
-        return segments(
-            f"❓ 请输入一个数字（{min_num}-{max_num}）\n"
-            f"💡 输入「退出」/「取消」可以放弃游戏"
-        )
+        state = _load_game_state(session)
+    except InvalidGameState:
+        await context.end_session()
+        logger.warning("Discarded invalid guess_number session during continuation")
+        return segments(INVALID_STATE_TEXT)
 
-    # 验证范围
-    if guess < min_num or guess > max_num:
+    parsed = _parse_session_input(text)
+    if parsed == "status":
+        return segments(_format_status(state))
+    if parsed == "restart":
+        return await _start_game(NORMAL, context, restart=True)
+    if parsed == "help":
+        return segments(HELP_TEXT)
+    if parsed is None:
         return segments(
-            f"⚠️ 请输入 {min_num} 到 {max_num} 之间的数字！"
+            f"❓ 请输入一个 ASCII 数字（{state.minimum}-{state.maximum}）\n"
+            "💡 输入「退出」/「取消」可以放弃游戏"
         )
+    guess = parsed
+    if not state.minimum <= guess <= state.maximum:
+        return segments(f"⚠️ 请输入 {state.minimum} 到 {state.maximum} 之间的数字！")
 
-    # 更新尝试次数
-    attempts += 1
-    remaining = max_attempts - attempts
-    history.append(guess)
+    attempts = state.attempts + 1
+    remaining = state.max_attempts - attempts
+    history = (*state.history, guess)
+    if guess == state.target:
+        await context.end_session()
+        logger.info("Game won: difficulty=%s, attempts=%d", state.difficulty.key, attempts)
+        return segments(
+            "🎉 恭喜你猜对了！\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"答案是: {state.target}\n"
+            f"尝试次数: {attempts} 次\n"
+            f"猜测历史: {_format_history(history)}\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"{_get_rating(attempts, state.max_attempts)}"
+        )
+    if remaining == 0:
+        await context.end_session()
+        logger.info("Game lost: difficulty=%s", state.difficulty.key)
+        return segments(
+            "😢 游戏结束，次数用尽！\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"正确答案是: {state.target}\n"
+            f"你的猜测: {_format_history(history)}\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "再接再厉！发送 /猜数字 开始新游戏"
+        )
 
     session.set("attempts", attempts)
-    session.set("history", history)
-    session.set("remaining", remaining)
-
-    # 判断结果
-    if guess == target:
-        # 猜对了！
-        await context.end_session()
-
-        # 生成历史记录展示
-        history_str = " → ".join(str(g) for g in history)
-
-        logger.info(
-            "Game won: user=%s, attempts=%d",
-            context.current_user_id, attempts
-        )
-
-        return segments(
-            f"🎉 恭喜你猜对了！\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"答案是: {target}\n"
-            f"尝试次数: {attempts} 次\n"
-            f"猜测历史: {history_str}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"{_get_rating(attempts, max_attempts)}"
-        )
-
-    # 检查是否用尽次数
-    if remaining <= 0:
-        await context.end_session()
-        history_str = " → ".join(str(g) for g in history)
-
-        logger.info(
-            "Game lost: user=%s, attempts=%d",
-            context.current_user_id, attempts
-        )
-
-        return segments(
-            f"😢 游戏结束，次数用尽！\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"正确答案是: {target}\n"
-            f"你的猜测: {history_str}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"再接再厉！发送 /猜数字 开始新游戏"
-        )
-
-    # 给出提示
-    if guess < target:
-        hint_emoji = "📈"
-        hint_text = "太小了！"
-        # 更新范围下限
-        new_min = max(min_num, guess + 1)
-        session.set("min", new_min)
-        session.set("hint", f"{new_min}-{max_num}")
+    session.set("history", list(history))
+    if guess < state.target:
+        minimum = guess + 1
+        maximum = state.maximum
+        hint = "📈 太小了！"
+        session.set("min", minimum)
     else:
-        hint_emoji = "📉"
-        hint_text = "太大了！"
-        # 更新范围上限
-        new_max = min(max_num, guess - 1)
-        session.set("max", new_max)
-        session.set("hint", f"{min_num}-{new_max}")
-
-    return segments(
-        f"{hint_emoji} {hint_text}\n"
-        f"剩余次数: {remaining}\n"
-        f"当前范围: {session.get('hint')}"
-    )
-
-
-# ============================================================
-# 辅助函数
-# ============================================================
-
-def _show_help() -> str:
-    """显示帮助信息"""
-    return """
-🎮 **猜数字游戏**
-
-**游戏规则:**
-• 系统随机生成一个数字
-• 你输入猜测的数字，系统提示大了/小了
-• 在有限次数内猜对即可获胜
-
-**基本命令:**
-• /猜数字 - 开始游戏（默认难度）
-• /猜数字 help - 显示帮助
-• /猜数字 status - 查看当前游戏状态
-• /猜数字 restart - 重新开始游戏
-
-**难度选择:**
-• /猜数字 简单 - 1-50，10次机会
-• /猜数字 普通 - 1-100，7次机会（默认）
-• /猜数字 困难 - 1-200，8次机会
-• /猜数字 地狱 - 1-1000，10次机会
-
-**游戏中命令:**
-• 输入数字 - 进行猜测
-• 输入「退出」/「取消」- 放弃游戏
-• 输入「状态」/「info」- 查看状态
-
-**提示:**
-• 游戏会动态缩小猜测范围
-• 剩余次数显示在每次提示中
-• 3分钟无操作自动结束会话
-""".strip()
-
-
-def _get_difficulty_name(difficulty: str) -> str:
-    """获取难度名称"""
-    difficulty_map = {
-        "简单": "简单 ⭐",
-        "easy": "简单 ⭐",
-        "e": "简单 ⭐",
-        "困难": "困难 ⭐⭐⭐",
-        "hard": "困难 ⭐⭐⭐",
-        "h": "困难 ⭐⭐⭐",
-        "地狱": "地狱 ⭐⭐⭐⭐⭐",
-        "hell": "地狱 ⭐⭐⭐⭐⭐",
-        "nightmare": "地狱 ⭐⭐⭐⭐⭐",
-    }
-    return difficulty_map.get(difficulty.lower(), "普通 ⭐⭐")
-
-
-def _parse_difficulty(difficulty: str) -> tuple:
-    """
-    解析难度参数
-
-    Returns:
-        (min_num, max_num, max_attempts) 元组
-    """
-    if difficulty in {"简单", "easy", "e"}:
-        return 1, 50, 10
-    elif difficulty in {"困难", "hard", "h"}:
-        return 1, 200, 8
-    elif difficulty in {"地狱", "hell", "nightmare"}:
-        return 1, 1000, 10
-    else:
-        # 默认难度
-        return MIN_NUMBER, MAX_NUMBER, MAX_ATTEMPTS
+        minimum = state.minimum
+        maximum = guess - 1
+        hint = "📉 太大了！"
+        session.set("max", maximum)
+    return segments(f"{hint}\n剩余次数: {remaining}\n当前范围: {minimum}-{maximum}")
 
 
 def _get_rating(attempts: int, max_attempts: int) -> str:
-    """根据尝试次数给出评价"""
-    ratio = attempts / max_attempts
+    """按已用机会比例给出稳定评价。"""
 
+    if (
+        type(attempts) is not int
+        or type(max_attempts) is not int
+        or not 1 <= attempts <= max_attempts
+    ):
+        raise ValueError("rating attempt counters are invalid")
     if attempts == 1:
         return "🏆 难以置信！一发入魂！"
-    elif ratio <= 0.3:
+    ratio = attempts / max_attempts
+    if ratio <= 0.3:
         return "⭐⭐⭐⭐⭐ 太厉害了！"
-    elif ratio <= 0.5:
+    if ratio <= 0.5:
         return "⭐⭐⭐⭐ 表现优秀！"
-    elif ratio <= 0.7:
+    if ratio <= 0.7:
         return "⭐⭐⭐ 不错哦~"
-    elif ratio <= 0.9:
+    if ratio <= 0.9:
         return "⭐⭐ 还可以更好！"
-    else:
-        return "⭐ 险胜！"
-
+    return "⭐ 险胜！"

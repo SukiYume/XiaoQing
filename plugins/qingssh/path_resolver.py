@@ -1,106 +1,96 @@
-"""
-路径解析器
-
-集中管理 SSH 会话中的路径解析和命令构建逻辑。
+"""集中处理 SSH 会话中的工作目录、环境变量和远程路径。
 
 核心原则：
-- CWD 始终存储为服务器上的绝对路径（通过 pwd 获取）
-- cd 命令附加 pwd 以获取真实绝对路径
-- 所有命令（包括 cd）都使用 CWD 前缀确保正确的工作目录
+- CWD 始终保存远端绝对路径；
+- 独立的 `cd` 执行后追加带唯一标记的工作目录探针，用真实结果更新 CWD；
+- 每条命令都显式应用当前 CWD 和环境变量。
 """
 
+import re
 import shlex
+from collections.abc import Mapping
+
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*", re.ASCII)
+_CWD_MARKER = "__XQ_CWD__"
+_SHELL_CONTROL_TOKENS = frozenset({"&&", "||", ";", "&", "|", ">", ">>", "<", "<<"})
 
 
 def is_cd_command(text: str) -> bool:
-    """判断是否为 cd 命令"""
-    stripped = text.strip()
-    return stripped == "cd" or stripped.startswith("cd ")
+    """判断输入是否为独立的 `cd` 命令。"""
+
+    if "\n" in text or "\r" in text:
+        return False
+    try:
+        tokens = shlex.split(text, comments=False, posix=True)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] != "cd":
+        return False
+    return not any(
+        token in _SHELL_CONTROL_TOKENS
+        or any(operator in token for operator in _SHELL_CONTROL_TOKENS)
+        for token in tokens[1:]
+    )
 
 
 def build_command(
     text: str,
     cwd: str | None = None,
-    env_vars: dict | None = None,
+    env_vars: Mapping[str, str] | None = None,
 ) -> str:
-    """
-    构建带工作目录和环境变量前缀的完整 shell 命令。
+    """构造应用当前目录和环境变量的完整远端 shell 命令。"""
 
-    所有命令（包括 cd）都会添加 cwd 前缀。
-    cd 命令会额外附加 pwd 以获取执行后的绝对路径。
+    parts: list[str] = []
 
-    Args:
-        text: 用户输入的原始命令
-        cwd: 当前工作目录（绝对路径或 None）
-        env_vars: 环境变量字典
-
-    Returns:
-        构建好的完整命令字符串
-    """
-    parts = []
-
-    # 1. cd 到当前工作目录
     if cwd:
         parts.append(f"cd {shlex.quote(cwd)}")
 
-    # 2. 设置环境变量
     if env_vars:
-        env_exports = " ".join(
-            f"{k}={shlex.quote(v)}" for k, v in env_vars.items()
-        )
+        invalid_names = [name for name in env_vars if _ENV_NAME_RE.fullmatch(name) is None]
+        if invalid_names:
+            raise ValueError("environment variable name is invalid")
+        env_exports = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_vars.items())
         parts.append(f"export {env_exports}")
 
-    # 3. 用户命令
     parts.append(text.strip())
 
-    # 4. 如果是 cd 命令，附加 pwd 获取绝对路径
     if is_cd_command(text):
-        parts.append("pwd")
+        parts.append(f"printf '%s%s\\n' '{_CWD_MARKER}' \"$(pwd -P)\"")
 
     return " && ".join(parts)
 
 
-def extract_cwd_from_output(accumulated_output: str) -> str | None:
-    """
-    从 cd 命令的输出中提取 pwd 结果（绝对路径）。
-
-    pwd 输出是最后一行以 / 开头的路径。
-
-    Args:
-        accumulated_output: 命令的完整输出
-
-    Returns:
-        绝对路径字符串，若无法提取则返回 None
-    """
+def extract_cwd_from_output(accumulated_output: str | None) -> str | None:
+    """从唯一标记探针输出中提取远端绝对工作目录。"""
     if not accumulated_output:
         return None
 
-    # 从后往前找第一行以 / 开头的非空行
-    lines = accumulated_output.strip().splitlines()
+    lines = accumulated_output.splitlines()
     for line in reversed(lines):
-        stripped = line.strip()
-        if stripped.startswith("/"):
-            return stripped
+        if not line.startswith(_CWD_MARKER):
+            continue
+        path = line[len(_CWD_MARKER) :].rstrip("\r")
+        if path.startswith("/"):
+            return path
 
     return None
 
 
+def strip_cwd_markers(text: str) -> str:
+    """从用户可见输出中移除内部 CWD 探针行。"""
+
+    if not text or _CWD_MARKER not in text:
+        return text
+    return "".join(
+        line for line in text.splitlines(keepends=True) if not line.startswith(_CWD_MARKER)
+    )
+
+
 def resolve_remote_path(filename: str, cwd: str | None = None) -> str:
-    """
-    将文件名解析为远程服务器上的完整路径。
-
-    Args:
-        filename: 文件名
-        cwd: 当前工作目录（绝对路径）
-
-    Returns:
-        完整的远程文件路径
-    """
-    # 已经是绝对路径
+    """相对文件名使用当前远端目录解析，绝对路径原样返回。"""
     if filename.startswith("/"):
         return filename
 
-    # 有 CWD 时拼接
     if cwd:
         return f"{cwd.rstrip('/')}/{filename}"
 

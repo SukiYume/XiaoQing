@@ -1,50 +1,63 @@
-"""Events-specific API routes for the web UI."""
+"""提供日程概览、集合图增删改查和单个日程详情端点。"""
 
 import uuid
-from typing import Any
+from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from ...config import PendoConfig
+from ...core.exceptions import ItemNotFoundException
 from ...services.db import Database
 from ...utils.settings_utils import resolve_default_category
-from ...utils.time_utils import now_in_timezone
+from ...utils.time_utils import TimezoneHelper, now_in_timezone
 from ...utils.validators import (
     build_remind_times_from_rules,
     normalize_event_fields,
     normalize_reminder_rules,
+    sanitize_text,
+    validate_title,
 )
 from ..analytics.events_overview import (
     build_event_collection_detail,
     build_event_detail,
     build_events_overview,
+    list_event_categories,
 )
 from ..deps import get_current_user, get_db
 
 router = APIRouter()
 
 
-class EventCollectionChildCreate(BaseModel):
+# 当前 Pydantic 运行依赖没有向 Mypy 暴露基类类型，请求字段仍由 FastAPI 校验。
+class EventCollectionChildCreate(BaseModel):  # type: ignore[misc]
+    """创建多节点集合时提交的一个叶子日程。"""
+
     title: str
     start_time: str
     end_time: str | None = None
     notes: str | None = ""
 
 
-class EventCollectionCreate(BaseModel):
+class EventCollectionCreate(BaseModel):  # type: ignore[misc]
+    """创建多节点日程集合的请求体。"""
+
     kind: str = "multi_node"
     title: str
     content: str | None = ""
     category: str | None = None
     location: str | None = ""
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     notes: str | None = ""
     timezone: str | None = None
     reminder_rules: list[dict[str, Any]] | None = None
     children: list[EventCollectionChildCreate]
 
 
-class EventCollectionUpdate(BaseModel):
+class EventCollectionUpdate(BaseModel):  # type: ignore[misc]
+    """部分更新日程集合的请求体；显式空值用于清空可选字段。"""
+
     title: str | None = None
     content: str | None = None
     category: str | None = None
@@ -65,10 +78,11 @@ def get_events_overview(
     reminder: str = "all",
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    return {
-        "ok": True,
-        "data": build_events_overview(
+) -> dict[str, object]:
+    """按日期范围和筛选条件返回当前所有者的日程概览。"""
+
+    try:
+        overview = build_events_overview(
             db=db,
             owner_id=owner_id,
             start_date=start_date,
@@ -77,7 +91,12 @@ def get_events_overview(
             category=category,
             kind=kind,
             reminder=reminder,
-        ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "data": overview,
         "message": "",
     }
 
@@ -86,20 +105,46 @@ def get_events_overview(
 def get_event_categories(
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    overview = build_events_overview(
-        db=db,
-        owner_id=owner_id,
-        start_date="1970-01-01",
-        end_date="2099-12-31",
+) -> dict[str, object]:
+    """只读取日程分类，避免为分类下拉框构造跨 130 年的完整概览。"""
+
+    return {
+        "ok": True,
+        "data": {"categories": list_event_categories(db, owner_id)},
+        "message": "",
+    }
+
+
+def _normalize_collection_updates(
+    body: EventCollectionUpdate,
+    db: Database,
+    owner_id: str,
+    *,
+    anchor_start_time: object,
+    default_timezone: str,
+) -> dict[str, Any]:
+    """复用日程规范化器清洗集合字段，不重复维护另一套校验规则。"""
+
+    updates = cast(dict[str, Any], body.model_dump(exclude_unset=True))
+    if not updates:
+        raise ValueError("No collection fields to update")
+
+    if "category" in updates:
+        category = str(updates["category"] or "").strip()
+        if not category or category == PendoConfig.DEFAULT_CATEGORY:
+            updates["category"] = resolve_default_category(db, owner_id)
+    if "timezone" in updates and not str(updates["timezone"] or "").strip():
+        updates["timezone"] = default_timezone
+
+    # 集合更新不修改起始时间，但共享规范化器需要时间锚点来校验提醒规则。
+    normalized = normalize_event_fields(
+        {
+            "start_time": str(anchor_start_time or "2000-01-01T00:00:00"),
+            **updates,
+        },
+        partial=True,
     )
-    return {"ok": True, "data": {"categories": overview["categories"]}, "message": ""}
-
-
-def _new_collection_id(db: Database, owner_id: str) -> str:
-    # Full UUID entropy makes cross-request and same-day occurrence collisions
-    # negligible; database primary keys remain the final integrity guard.
-    return uuid.uuid4().hex
+    return {field: normalized[field] for field in updates}
 
 
 @router.post("/events/collections", status_code=201)
@@ -107,19 +152,37 @@ def create_event_collection(
     body: EventCollectionCreate,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    if body.kind != "multi_node":
-        raise HTTPException(status_code=422, detail="Only multi_node collections can be created here")
-    if len(body.children) < 2:
-        raise HTTPException(status_code=422, detail="Multi-node collections require at least 2 children")
+) -> dict[str, object]:
+    """校验并原子创建集合头、全部叶子日程和创建审计记录。"""
 
-    category = body.category
-    if not str(category or "").strip() or str(category or "").strip() == "未分类":
-        category = resolve_default_category(db, owner_id)
+    if body.kind != "multi_node":
+        raise HTTPException(
+            status_code=422, detail="Only multi_node collections can be created here"
+        )
+    if len(body.children) < 2:
+        raise HTTPException(
+            status_code=422, detail="Multi-node collections require at least 2 children"
+        )
+
+    category_text = str(body.category or "").strip()
+    category = (
+        resolve_default_category(db, owner_id)
+        if not category_text or category_text == PendoConfig.DEFAULT_CATEGORY
+        else category_text
+    )
     try:
-        rules = normalize_reminder_rules(body.reminder_rules if body.reminder_rules is not None else [{"offset_seconds": 0}])
-        collection_id = _new_collection_id(db, owner_id)
-        now = now_in_timezone(owner_id, db).replace(tzinfo=None).isoformat()
+        rules = normalize_reminder_rules(
+            body.reminder_rules if body.reminder_rules is not None else [{"offset_seconds": 0}]
+        )
+        collection_id = uuid.uuid4().hex
+        local_now = now_in_timezone(owner_id, db)
+        default_timezone = str(
+            getattr(local_now.tzinfo, "key", None) or PendoConfig.DEFAULT_TIMEZONE
+        )
+        timezone_name = str(body.timezone or "").strip() or default_timezone
+        now = local_now.replace(tzinfo=None).isoformat()
+        collection_title = validate_title(body.title)
+        collection_notes = sanitize_text(str(body.notes or ""), 50000)
 
         child_rows: list[tuple[str, dict[str, Any]]] = []
         for index, child in enumerate(body.children, 1):
@@ -136,7 +199,7 @@ def create_event_collection(
                     "location": body.location or "",
                     "tags": body.tags,
                     "notes": child.notes or "",
-                    "timezone": body.timezone or "Asia/Shanghai",
+                    "timezone": timezone_name,
                     "reminder_rules": rules,
                     "event_role": "multi_node_child",
                     "event_collection_id": collection_id,
@@ -150,22 +213,31 @@ def create_event_collection(
             )
             child_rows.append((f"{collection_id}_{node_key}", normalized))
 
-        start_time = min(row["start_time"] for _, row in child_rows)
-        end_time = max((row.get("end_time") or row["start_time"]) for _, row in child_rows)
+        # 有偏移和无偏移时间统一映射到集合时区后比较，避免 ISO 字符串字典序误判。
+        shared_fields = child_rows[0][1]
+        event_timezone = ZoneInfo(str(shared_fields["timezone"]))
+        start_time = min(
+            (str(row["start_time"]) for _, row in child_rows),
+            key=lambda value: TimezoneHelper.parse(value, event_timezone),
+        )
+        end_time = max(
+            (str(row.get("end_time") or row["start_time"]) for _, row in child_rows),
+            key=lambda value: TimezoneHelper.parse(value, event_timezone),
+        )
 
         db.create_event_collection_with_children(
             {
                 "id": collection_id,
                 "owner_id": owner_id,
                 "kind": "multi_node",
-                "title": body.title,
-                "content": body.content or "",
-                "category": category,
-                "location": body.location or "",
-                "tags": body.tags,
-                "notes": body.notes or "",
-                "timezone": body.timezone or "Asia/Shanghai",
-                "reminder_rules": rules,
+                "title": collection_title,
+                "content": shared_fields["content"],
+                "category": shared_fields["category"],
+                "location": shared_fields["location"],
+                "tags": list(shared_fields["tags"]),
+                "notes": collection_notes,
+                "timezone": shared_fields["timezone"],
+                "reminder_rules": list(shared_fields["reminder_rules"]),
                 "start_time": start_time,
                 "end_time": end_time,
                 "created_at": now,
@@ -190,7 +262,9 @@ def get_collection_detail(
     collection_id: str,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
+) -> dict[str, object]:
+    """返回集合头及其全部叶子日程。"""
+
     detail = build_event_collection_detail(db=db, owner_id=owner_id, collection_id=collection_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Event collection not found")
@@ -203,26 +277,66 @@ def update_collection(
     body: EventCollectionUpdate,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    updates = body.model_dump(exclude_unset=True)
+) -> dict[str, object]:
+    """原子更新集合字段、全部叶子提醒和对应审计记录。"""
+
+    collection = db.get_event_collection(collection_id, owner_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Event collection not found")
+
+    local_now = now_in_timezone(owner_id, db)
+    default_timezone = str(getattr(local_now.tzinfo, "key", None) or PendoConfig.DEFAULT_TIMEZONE)
     try:
-        if "reminder_rules" in updates and updates["reminder_rules"] is not None:
-            updates["reminder_rules"] = normalize_reminder_rules(updates["reminder_rules"])
-            for child in db.get_collection_events(collection_id, owner_id):
-                db.update_item(
-                    child.id,
-                    {
-                        "reminder_rules": updates["reminder_rules"],
-                        "remind_times": build_remind_times_from_rules(child.start_time, updates["reminder_rules"]),
-                    },
-                    owner_id=owner_id,
+        updates = _normalize_collection_updates(
+            body,
+            db,
+            owner_id,
+            anchor_start_time=collection.get("start_time"),
+            default_timezone=default_timezone,
+        )
+        audit_updates = dict(updates)
+        operation_log = {
+            "user_id": owner_id,
+            "action": "update_event_collection",
+            "item_type": "event",
+            "item_id": collection_id,
+            "details": {"updates": audit_updates},
+        }
+
+        if "reminder_rules" in updates:
+            rules = cast(list[dict[str, int]], updates.pop("reminder_rules"))
+            child_updates = {
+                child.id: (
+                    build_remind_times_from_rules(child.start_time, rules),
+                    rules,
                 )
+                for child in db.get_collection_events(collection_id, owner_id)
+            }
+            db.update_event_collection_reminders(
+                collection_id,
+                owner_id,
+                child_updates,
+                rules,
+                collection_updates=updates,
+                operation_log=operation_log,
+            )
+        elif not db.update_event_collection(
+            collection_id,
+            updates,
+            owner_id,
+            operation_log=operation_log,
+        ):
+            raise HTTPException(status_code=404, detail="Event collection not found")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    success = db.update_event_collection(collection_id, updates, owner_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Event collection not found")
-    db.log_operation(owner_id, "update_event_collection", item_type="event", item_id=collection_id)
+    except ItemNotFoundException as exc:
+        status_code = 404 if exc.item_id == collection_id else 409
+        detail = (
+            "Event collection not found"
+            if status_code == 404
+            else "Event collection changed; reload and retry"
+        )
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     return {"ok": True, "data": {"id": collection_id}, "message": "更新成功"}
 
 
@@ -231,11 +345,24 @@ def delete_collection(
     collection_id: str,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
-    success = db.delete_event_collection(collection_id, owner_id, cascade=True)
+) -> dict[str, object]:
+    """在一个事务内软删除集合、叶子日程和提醒，并写入删除审计。"""
+
+    child_ids = [child.id for child in db.get_collection_events(collection_id, owner_id)]
+    success = db.delete_event_collection(
+        collection_id,
+        owner_id,
+        cascade=True,
+        operation_log={
+            "user_id": owner_id,
+            "action": "delete_event_collection",
+            "item_type": "event",
+            "item_id": collection_id,
+            "details": {"child_ids": child_ids},
+        },
+    )
     if not success:
         raise HTTPException(status_code=404, detail="Event collection not found")
-    db.log_operation(owner_id, "delete_event_collection", item_type="event", item_id=collection_id)
     return {"ok": True, "data": {"id": collection_id}, "message": "已删除"}
 
 
@@ -244,7 +371,9 @@ def get_event_detail(
     event_id: str,
     owner_id: str = Depends(get_current_user),
     db: Database = Depends(get_db),
-):
+) -> dict[str, object]:
+    """返回一个叶子日程及其提醒和同集合关联信息。"""
+
     detail = build_event_detail(db=db, owner_id=owner_id, event_id=event_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Event not found")

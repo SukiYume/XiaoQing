@@ -1,8 +1,9 @@
 {
   "name": "wolframalpha",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Wolfram|Alpha 计算引擎",
   "entry": "main.py",
+  "concurrency": "parallel",
   "commands": [
     {
       "name": "alpha",
@@ -13,8 +14,28 @@
         "计算"
       ],
       "help": "🧮 万能计算器 | /wa <问题>",
-      "admin_only": true
+      "admin_only": true,
+      "usage": "/alpha [--mode=simple|step|complete|cp] <问题>",
+      "examples": ["/alpha 1+1", "/alpha --mode=step integrate x^2"],
+      "invalid_examples": ["/alpha", "/alpha --mode=unknown 1+1"],
+      "subcommands": [
+        {
+          "name": "help",
+          "aliases": ["帮助", "-h", "--help"],
+          "help": "显示查询模式和示例",
+          "usage": "/alpha help",
+          "match": "exact",
+          "examples": ["/alpha help"],
+          "invalid_examples": ["/alpha help extra"]
+        }
+      ]
     }
   ],
-  "schedule": []
+  "dependencies": [
+    {
+      "name": "aiohttp",
+      "required": true,
+      "description": "WolframAlpha HTTP 查询在入口模块中直接使用 aiohttp"
+    }
+  ]
 }

@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.atomic_store import atomic_write_text, keyed_path_lock
 
-@dataclass(frozen=True)
-class ThinkingBackRecord:
-    ts: float
-    question: str
-    answer: str
+from ..store_base import delete_json_artifacts
+
 
 def _path(data_dir: Path, chat_id: str) -> Path:
     return data_dir / "thinking_back" / f"{chat_id}.jsonl"
+
+
+def clear_records(*, data_dir: Path, chat_id: str) -> None:
+    """删除当前会话的回看缓存及可能遗留的备份。"""
+    delete_json_artifacts(_path(data_dir, chat_id))
+
 
 def _load_recent(path: Path, *, max_lines: int) -> list[dict[str, Any]]:
     if not path.exists():
@@ -38,6 +41,7 @@ def _load_recent(path: Path, *, max_lines: int) -> list[dict[str, Any]]:
             out.append(obj)
     return out
 
+
 def get_cached_answer(
     *,
     data_dir: Path,
@@ -51,7 +55,9 @@ def get_cached_answer(
         return ""
     path = _path(data_dir, chat_id)
     now = time.time()
-    for obj in reversed(_load_recent(path, max_lines=max_scan_lines)):
+    with keyed_path_lock(path):
+        recent = _load_recent(path, max_lines=max_scan_lines)
+    for obj in reversed(recent):
         ts_val = obj.get("ts", 0.0)
         try:
             ts = float(ts_val)
@@ -65,6 +71,7 @@ def get_cached_answer(
         if ans:
             return ans
     return ""
+
 
 def append_record(
     *,
@@ -82,22 +89,23 @@ def append_record(
     path = _path(data_dir, chat_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {"ts": time.time(), "question": q, "answer": a}
-    try:
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    except OSError:
-        return
-
-    try:
-        if path.stat().st_size <= max_bytes:
+    with keyed_path_lock(path):
+        try:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except OSError:
             return
-    except OSError:
-        return
 
-    items = _load_recent(path, max_lines=max(1, int(max_entries)) if max_entries > 0 else 200)
-    try:
-        with path.open("w", encoding="utf-8") as f:
-            for obj in items[-max_entries:]:
-                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    except OSError:
-        return
+        try:
+            if path.stat().st_size <= max_bytes:
+                return
+        except OSError:
+            return
+
+        entry_limit = max(1, int(max_entries)) if max_entries > 0 else 200
+        items = _load_recent(path, max_lines=entry_limit)
+        payload = "".join(json.dumps(obj, ensure_ascii=False) + "\n" for obj in items)
+        try:
+            atomic_write_text(path, payload)
+        except OSError:
+            return

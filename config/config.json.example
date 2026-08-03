@@ -4,7 +4,6 @@
                 "/"
         ],
         "require_bot_name_in_group": true,
-        "random_reply_rate": 0.05,
         "default_group_ids": [
                 123456789
         ],
@@ -14,12 +13,17 @@
         "onebot_http_base": "http://127.0.0.1:11001",
         "ws_queue_size": 200,
         "max_concurrency": 5,
+        "data_root": "data",
         "plugin_execution": {
                 "timeout_seconds": 60,
                 "parallel_limit": 4,
+                "admission_queue_limit": 64,
+                "sync_parallel_limit": 1,
+                "sync_queue_limit": 16,
                 "failure_threshold": 3,
                 "cooldown_seconds": 60,
                 "drain_timeout_seconds": 5,
+                "global_sync_queue_limit": 256,
                 "overrides": {
                         "codex": {"timeout_seconds": 0},
                         "qingssh": {"timeout_seconds": 0},
@@ -32,6 +36,7 @@
         "inbound_http_base": "http://127.0.0.1:12000",
         "inbound_trusted_tls_proxy": false,
         "inbound_ws_max_workers": 8,
+        "inbound_ws_broadcast_timeout_seconds": 5.0,
         "timezone": "Asia/Shanghai",
         "log_level": "INFO",
         "log_to_file": true,
@@ -40,10 +45,164 @@
         "log_max_size_mb": 10,
         "log_backup_count": 5,
         "log_rotation": "time",
+        "ai": {
+                "providers": {
+                        "deepseek": {
+                                "api_base": "https://api.deepseek.com",
+                                "endpoint_path": "/chat/completions",
+                                "proxy": ""
+                        },
+                        "zhipu": {
+                                "api_base": "https://open.bigmodel.cn/api/paas/v4",
+                                "endpoint_path": "/chat/completions",
+                                "proxy": ""
+                        }
+                },
+                "models": {
+                        "deepseek-flash": {
+                                "provider": "deepseek",
+                                "model": "deepseek-v4-flash",
+                                "modalities": ["text"],
+                                "request_defaults": {
+                                        "thinking": {"type": "disabled"}
+                                }
+                        },
+                        "deepseek-flash-thinking": {
+                                "provider": "deepseek",
+                                "model": "deepseek-v4-flash",
+                                "modalities": ["text"],
+                                "request_defaults": {
+                                        "thinking": {"type": "enabled"},
+                                        "reasoning_effort": "high"
+                                }
+                        },
+                        "deepseek-pro": {
+                                "provider": "deepseek",
+                                "model": "deepseek-v4-pro",
+                                "modalities": ["text"],
+                                "request_defaults": {
+                                        "thinking": {"type": "enabled"},
+                                        "reasoning_effort": "high"
+                                }
+                        },
+                        "glm-5.2": {
+                                "provider": "zhipu",
+                                "model": "glm-5.2",
+                                "modalities": ["text"]
+                        },
+                        "glm-4.6v-flash": {
+                                "provider": "zhipu",
+                                "model": "glm-4.6v-flash",
+                                "modalities": ["text", "image"],
+                                "request_defaults": {
+                                        "thinking": {"type": "disabled"}
+                                }
+                        },
+                        "glm-4.6v": {
+                                "provider": "zhipu",
+                                "model": "glm-4.6v",
+                                "modalities": ["text", "image"],
+                                "request_defaults": {
+                                        "thinking": {"type": "disabled"}
+                                }
+                        },
+                        "glm-4v-flash": {
+                                "provider": "zhipu",
+                                "model": "glm-4v-flash",
+                                "modalities": ["text", "image"],
+                                "request_defaults": {
+                                        "thinking": {"type": "disabled"}
+                                }
+                        },
+                        "glm-4.1v-thinking-flash": {
+                                "provider": "zhipu",
+                                "model": "glm-4.1v-thinking-flash",
+                                "modalities": ["text", "image"]
+                        }
+                }
+        },
         "plugins": {
                 "smalltalk_provider": "xiaoqing_chat",
+                "chat": {
+                        "daily_user_limit": 20,
+                        "daily_global_limit": 100
+                },
                 "pendo": {
-                        "web_demo_enabled": false
+                        "web_enabled": true,
+                        "web_host": "127.0.0.1",
+                        "web_port": 12001,
+                        "web_session_cookie_secure": false,
+                        "web_demo_enabled": false,
+                        "ai": {
+                                "routes": {
+                                        "parse": {
+                                                "models": ["deepseek-flash", "glm-5.2"],
+                                                "temperature": 0.3,
+                                                "max_tokens": 1000,
+                                                "timeout_seconds": 30,
+                                                "total_timeout_seconds": 60,
+                                                "max_retry": 1,
+                                                "retry_interval_seconds": 1
+                                        }
+                                }
+                        }
+                },
+                "ads_paper": {
+                        "ai": {
+                                "routes": {
+                                        "summary": {
+                                                "models": ["deepseek-pro", "glm-5.2"],
+                                                "temperature": 0.7,
+                                                "max_tokens": 1200,
+                                                "timeout_seconds": 60,
+                                                "total_timeout_seconds": 90,
+                                                "max_retry": 0
+                                        }
+                                }
+                        }
+                },
+                "xiaoqing_chat": {
+                        "ai": {
+                                "default_model_alias": "deepseek",
+                                "model_aliases": {
+                                        "deepseek": "deepseek-flash",
+                                        "glm": "glm-5.2"
+                                },
+                                "routes": {
+                                        "chat": {
+                                                "models": ["deepseek-flash", "glm-5.2"],
+                                                "timeout_seconds": 15,
+                                                "total_timeout_seconds": 60,
+                                                "max_retry": 2,
+                                                "retry_interval_seconds": 0.5
+                                        },
+                                        "checker": {
+                                                "models": ["deepseek-flash-thinking", "deepseek-pro", "glm-5.2"],
+                                                "timeout_seconds": 8,
+                                                "total_timeout_seconds": 20,
+                                                "max_retry": 0
+                                        },
+                                        "reasoning": {
+                                                "models": ["deepseek-flash-thinking", "deepseek-pro", "glm-5.2"],
+                                                "timeout_seconds": 15,
+                                                "total_timeout_seconds": 45,
+                                                "max_retry": 1,
+                                                "retry_interval_seconds": 0.5
+                                        },
+                                        "vision": {
+                                                "models": [
+                                                        "glm-4v-flash",
+                                                        "glm-4.6v-flash",
+                                                        "glm-4.6v",
+                                                        "glm-4.1v-thinking-flash"
+                                                ],
+                                                "timeout_seconds": 20,
+                                                "total_timeout_seconds": 70,
+                                                "max_retry": 1,
+                                                "retry_interval_seconds": 0.5
+                                        }
+                                }
+                        }
                 },
                 "qingssh": {
                         "command_timeout_seconds": 30,
@@ -59,10 +218,6 @@
                         "archive_retention_files": 20
                 },
                 "codex": {
-                        "default_cwd": "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex",
-                        "allowed_cwd_roots": [
-                                "C:/Users/testuser/Desktop/XiaoQing/XiaoQing_Codex"
-                        ],
                         "max_parallel_jobs": 2,
                         "per_session_queue_limit": 10,
                         "spawn_timeout_seconds": 30,

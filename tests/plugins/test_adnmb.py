@@ -1,200 +1,89 @@
 """测试 ADnMB 论坛插件"""
 
+import asyncio
 import json
 import uuid
 from pathlib import Path
-from typing import cast
+from typing import ClassVar, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from core.interfaces import PluginContextProtocol
+from plugins.adnmb import adapi as adnmb_adapi
 from plugins.adnmb import main as adnmb_main
 from plugins.adnmb.adapi import AdnmbClient
+from tests.helpers.settings_snapshot import with_settings_reader
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-class MockClientSession:
-    """模拟 aiohttp ClientSession"""
+@pytest.mark.asyncio
+async def test_format_posts_limits_concurrent_image_downloads(tmp_path: Path) -> None:
+    posts = [
+        adnmb_adapi.Post(
+            id=str(index),
+            time="",
+            user_id="",
+            content=f"post-{index}",
+            img=f"{index}.jpg",
+        )
+        for index in range(5)
+    ]
+    active = 0
+    maximum = 0
 
-    def __init__(self):
-        self.get_calls = []
+    class _Client:
+        async def download_image(self, _image_path: str) -> Path:
+            nonlocal active, maximum
+            active += 1
+            maximum = max(maximum, active)
+            await asyncio.sleep(0)
+            active -= 1
+            return tmp_path / _image_path
 
-    def get(self, url, params=None):
-        """记录 GET 调用"""
-        self.get_calls.append((url, params))
-        return MockResponse()
+    result = await adnmb_main.format_posts(posts, _Client())
 
-
-class MockResponse:
-    """模拟 HTTP 响应"""
-
-    def __init__(self, json_data=None, status=200):
-        self._json_data = json_data or {}
-        self.status = status
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        pass
-
-    async def json(self):
-        return self._json_data
-
-    async def read(self):
-        return b"fake_image_data"
+    assert maximum <= 3
+    assert sum(segment["type"] == "image" for segment in result) == 5
 
 
-class TestAdnmbPlugin:
-    """测试 ADnMB 插件"""
+class TestAdnmbRuntimeContract:
+    """Exercise the imported plugin and API objects, not source strings."""
 
-    def test_init(self):
-        """测试插件初始化"""
-        main_file = ROOT / "plugins" / "adnmb" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-        assert "def init" in content
+    def test_public_entrypoints_and_help(self):
+        assert adnmb_main.init() is None
+        assert callable(adnmb_main.handle)
+        help_text = adnmb_main._get_help()
+        assert "A岛" in help_text
+        assert "/adnmb" in help_text
 
-    def test_help_text(self):
-        """测试帮助文本格式"""
-        main_file = ROOT / "plugins" / "adnmb" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-        assert "A岛" in content
-        assert "_get_help" in content
+    def test_api_contract_is_importable(self):
+        assert {"forum_list", "timeline", "thread", "feed"} <= set(adnmb_adapi.ENDPOINTS)
+        assert adnmb_adapi.API_HOST.startswith("https://")
+        assert callable(adnmb_adapi.Post.from_json)
+        assert callable(adnmb_adapi.Thread.from_json)
+        assert callable(AdnmbClient.get_timeline)
 
+    @pytest.mark.asyncio
+    async def test_feed_mutation_result_uses_shared_external_text_boundary(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = AdnmbClient(session=object(), cache_dir=tmp_path, uuid="uuid")
+        monkeypatch.setattr(
+            client,
+            "_get",
+            AsyncMock(return_value="\x1b[31m完成\x1b[0m\x00" + "长" * 1_000),
+        )
 
-class TestAdnmbApi:
-    """测试 ADnMB API 模块"""
+        result = await client.add_feed("123")
 
-    def test_api_constants(self):
-        """测试 API 常量"""
-        adapi_file = ROOT / "plugins" / "adnmb" / "adapi.py"
-        content = adapi_file.read_text(encoding='utf-8')
-
-        # 检查关键常量和类
-        assert "API_HOST" in content
-        assert "class Post" in content
-        assert "class Thread" in content
-        assert "class AdnmbClient" in content
-
-    def test_api_endpoints(self):
-        """测试 API 端点定义"""
-        adapi_file = ROOT / "plugins" / "adnmb" / "adapi.py"
-        content = adapi_file.read_text(encoding='utf-8')
-
-        # 检查端点定义
-        assert "forum_list" in content
-        assert "timeline" in content
-        assert "thread" in content
-        assert "feed" in content
-
-    def test_post_data_structure(self):
-        """测试 Post 数据结构"""
-        adapi_file = ROOT / "plugins" / "adnmb" / "adapi.py"
-        content = adapi_file.read_text(encoding='utf-8')
-
-        # 检查 Post 类方法
-        assert "from_json" in content
-        assert "format_text" in content
-
-    def test_html_cleaning(self):
-        """测试 HTML 清理逻辑"""
-        adapi_file = ROOT / "plugins" / "adnmb" / "adapi.py"
-        content = adapi_file.read_text(encoding='utf-8')
-
-        # 检查 HTML 标签清理
-        assert "re.sub" in content
-        assert '<[^>]+' in content or "html" in content.lower()
-
-    def test_thread_data_structure(self):
-        """测试 Thread 数据结构"""
-        adapi_file = ROOT / "plugins" / "adnmb" / "adapi.py"
-        content = adapi_file.read_text(encoding='utf-8')
-
-        # 检查 Thread 结构
-        assert "main_post" in content
-        assert "replies" in content
-        assert "Replies" in content
-
-    def test_admin_filtering(self):
-        """测试 Admin 回复过滤"""
-        adapi_file = ROOT / "plugins" / "adnmb" / "adapi.py"
-        content = adapi_file.read_text(encoding='utf-8')
-
-        # 检查 Admin 过滤
-        assert 'Admin"' in content or "'Admin'" in content
-
-    def test_client_methods(self):
-        """测试客户端方法"""
-        adapi_file = ROOT / "plugins" / "adnmb" / "adapi.py"
-        content = adapi_file.read_text(encoding='utf-8')
-
-        # 检查客户端方法
-        assert "get_forum_list" in content
-        assert "get_timeline" in content
-        assert "get_thread" in content
-        assert "get_ref" in content
-        assert "get_feed" in content
-        assert "add_feed" in content
-        assert "del_feed" in content
-        assert "download_image" in content
-
-    def test_image_download(self):
-        """测试图片下载功能"""
-        adapi_file = ROOT / "plugins" / "adnmb" / "adapi.py"
-        content = adapi_file.read_text(encoding='utf-8')
-
-        # 检查图片下载相关
-        assert "IMAGE_CDN" in content
-        assert "cache_dir" in content
-
-
-class TestAdnmbCommands:
-    """测试 ADnMB 命令处理"""
-
-    def test_command_handlers(self):
-        """测试命令处理器"""
-        main_file = ROOT / "plugins" / "adnmb" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        # 检查各种命令处理
-        assert "timeline" in content
-        assert "forumlist" in content
-        assert "showforum" in content
-        assert "chuan" in content
-        assert "ref" in content
-        assert "feed" in content
-        assert "addfeed" in content
-        assert "delfeed" in content
-
-    def test_disabled_commands(self):
-        """测试已禁用的命令"""
-        main_file = ROOT / "plugins" / "adnmb" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        # 检查已禁用的功能提示
-        assert "已禁用" in content
-        assert "verify" in content
-        assert "login" in content
-        assert "reply" in content
-
-    def test_page_parameter(self):
-        """测试页码参数处理"""
-        main_file = ROOT / "plugins" / "adnmb" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        # 检查页码处理
-        assert "'p'" in content or '"p"' in content
-        assert "page" in content
-
-    def test_format_functions(self):
-        """测试格式化函数"""
-        main_file = ROOT / "plugins" / "adnmb" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        # 检查格式化函数
-        assert "format_posts" in content
-        assert "format_threads" in content
+        assert "\x1b" not in result and "\x00" not in result
+        assert result.endswith("…")
+        assert len(result) <= adnmb_adapi.MAX_EXTERNAL_RESULT_CHARS
+        assert len(result.encode("utf-8")) <= adnmb_adapi.MAX_EXTERNAL_RESULT_CHARS * 4
 
 
 class TestAdnmbPluginJson:
@@ -208,7 +97,7 @@ class TestAdnmbPluginJson:
     def test_plugin_json_content(self):
         """测试 plugin.json 内容"""
         plugin_json = ROOT / "plugins" / "adnmb" / "plugin.json"
-        content = json.loads(plugin_json.read_text(encoding='utf-8'))
+        content = json.loads(plugin_json.read_text(encoding="utf-8"))
 
         assert content["name"] == "adnmb"
         assert "commands" in content
@@ -217,39 +106,12 @@ class TestAdnmbPluginJson:
     def test_command_triggers(self):
         """测试命令触发器"""
         plugin_json = ROOT / "plugins" / "adnmb" / "plugin.json"
-        content = json.loads(plugin_json.read_text(encoding='utf-8'))
+        content = json.loads(plugin_json.read_text(encoding="utf-8"))
 
         adnmb_cmd = next((cmd for cmd in content["commands"] if cmd["name"] == "adnmb"), None)
         assert adnmb_cmd is not None
         assert "adnmb" in adnmb_cmd["triggers"]
         assert "a岛" in adnmb_cmd["triggers"] or "岛" in adnmb_cmd["triggers"]
-
-
-class TestAdnmbIntegration:
-    """集成测试"""
-
-    def test_module_files_exist(self):
-        """测试模块文件存在"""
-        assert (ROOT / "plugins" / "adnmb" / "main.py").exists()
-        assert (ROOT / "plugins" / "adnmb" / "adapi.py").exists()
-
-    def test_main_functions(self):
-        """测试主模块导出"""
-        main_file = ROOT / "plugins" / "adnmb" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-        # 检查关键函数存在
-        assert "def init" in content
-        assert "async def handle" in content
-        assert "def _get_help" in content
-
-    def test_api_exports(self):
-        """测试 API 模块导出"""
-        adapi_file = ROOT / "plugins" / "adnmb" / "adapi.py"
-        content = adapi_file.read_text(encoding='utf-8')
-        # 检查关键类存在
-        assert "class Post" in content
-        assert "class Thread" in content
-        assert "class AdnmbClient" in content
 
 
 class _AdnmbTestContext:
@@ -272,7 +134,7 @@ def test_adnmb_rebuilds_client_when_uuid_changes(monkeypatch, tmp_path):
 
     monkeypatch.setattr(adnmb_main, "AdnmbClient", FakeClient)
 
-    context = _AdnmbTestContext(tmp_path)
+    context = with_settings_reader(_AdnmbTestContext(tmp_path))
     typed_context = cast(PluginContextProtocol, cast(object, context))
     cache_dir = context.plugin_dir / "cache"
 
@@ -305,7 +167,7 @@ def test_adnmb_get_client_reuses_fallback_uuid_client(tmp_path):
             self.state = {}
             self.secrets = {"plugins": {"adnmb": {}}}
 
-    context = _Context(tmp_path)
+    context = with_settings_reader(_Context(tmp_path))
     typed_context = cast(PluginContextProtocol, cast(object, context))
     cache_dir = context.plugin_dir / "cache"
 
@@ -324,7 +186,7 @@ def test_adnmb_get_client_isolates_subscription_uuid_per_user(tmp_path):
             self.secrets = {"plugins": {"adnmb": {"uuid": "shared-uuid"}}}
             self.current_user_id = None
 
-    context = _Context(tmp_path)
+    context = with_settings_reader(_Context(tmp_path))
     typed_context = cast(PluginContextProtocol, cast(object, context))
     cache_dir = context.plugin_dir / "cache"
 
@@ -333,6 +195,73 @@ def test_adnmb_get_client_isolates_subscription_uuid_per_user(tmp_path):
 
     assert first is not second
     assert first.uuid != second.uuid
+
+
+def test_adnmb_models_normalize_fields_and_ignore_malformed_replies():
+    post = adnmb_adapi.Post.from_json({"id": 1, "now": 2, "user_hash": 3, "content": None})
+    thread = adnmb_adapi.Thread.from_json(
+        {
+            "id": "10",
+            "content": "main",
+            "Replies": [
+                None,
+                "bad",
+                {"id": "9999999", "content": "special"},
+                {"id": 11, "content": "reply"},
+            ],
+        }
+    )
+
+    assert (post.id, post.time, post.user_id, post.content) == ("1", "2", "3", "")
+    assert [reply.id for reply in thread.replies] == ["11"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ("-m", "请指定板块名称"),
+        ("--showforum", "请指定板块名称"),
+        ("-c", "请指定串号"),
+        ("--chuan", "请指定串号"),
+        ("-r", "请指定回复号"),
+        ("-a", "请指定要订阅的串号"),
+        ("-e", "请指定要取消订阅的串号"),
+        ("-p", "请指定页码"),
+    ],
+)
+async def test_adnmb_value_options_reject_missing_values_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    args: str,
+    expected: str,
+):
+    context = _AdnmbTestContext(tmp_path)
+    context.data_dir = tmp_path
+    get_client = Mock()
+    ensure_cache = Mock()
+    monkeypatch.setattr(adnmb_main, "_get_client", get_client)
+    monkeypatch.setattr(adnmb_main, "ensure_dir", ensure_cache)
+
+    result = await adnmb_main.handle("adnmb", args, {"user_id": 1001}, context)
+
+    assert expected in result[0]["data"]["text"]
+    get_client.assert_not_called()
+    ensure_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_adnmb_list_endpoints_ignore_malformed_payload_items(tmp_path):
+    client = AdnmbClient(session=object(), cache_dir=tmp_path, uuid="uuid")
+    client._get = AsyncMock(
+        side_effect=[[None, "bad", {"id": 1}], {"not": "a list"}, [None, {"id": 2}]]
+    )
+
+    assert [thread.main_post.id for thread in await client.get_timeline()] == ["1"]
+    client._forum_cache = {"综合版": "1"}
+    client._forum_cache_expires_at = float("inf")
+    assert await client.get_forum("综合版") == []
+    assert [post.id for post in await client.get_feed()] == ["2"]
 
 
 @pytest.mark.asyncio
@@ -346,7 +275,7 @@ async def test_adnmb_client_get_passes_timeout(tmp_path):
     class _Response:
         status = 200
         url = "https://www.nmbxd1.com/Api/getForumList"
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
         content_length = None
         content = _Content()
 

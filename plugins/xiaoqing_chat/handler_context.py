@@ -1,4 +1,4 @@
-"""Handler context — bundles common per-request state."""
+"""集中保存一次请求中重复使用的处理器上下文。"""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class HandlerContext:
-    """Immutable bundle of per-request context extracted once at entry point."""
+    """入口处一次性解析出的不可变请求上下文。"""
 
     chat_id: str
     runtime: _ChatRuntime
@@ -26,7 +26,7 @@ class HandlerContext:
     secrets: dict[str, Any]
     data_dir: Path
     bot_name: str
-    context: Any  # plugin context (untyped)
+    context: Any  # 插件框架上下文没有稳定的静态类型。
 
     @classmethod
     def from_event(
@@ -38,8 +38,8 @@ class HandlerContext:
     ) -> HandlerContext:
         from .helper_utils import (
             _chat_id,
+            _get_ai_route_context,
             _get_bot_name,
-            _get_llm_secrets,
             _load_runtime,
         )
         from .runtime_state import get_state as _state
@@ -53,36 +53,29 @@ class HandlerContext:
             chat_id=chat_id,
             runtime=runtime,
             state=state,
-            secrets=_get_llm_secrets(context, chat_id=chat_id),
+            secrets=_get_ai_route_context(context, chat_id=chat_id),
             data_dir=context.data_dir,
             bot_name=_get_bot_name(context),
             context=context,
         )
 
 
-def handle_errors(label: str):
-    """Decorator that wraps async handler functions with standard error handling.
+def handle_errors(fn):
+    """为异步处理器统一记录异常，并返回脱敏的用户提示。"""
 
-    Catches all exceptions, logs them, and returns a user-friendly error message.
-    Expects ``context`` as the last positional argument of the wrapped function.
-    """
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        context = kwargs.get("context")
+        if context is None and args:
+            context = args[-1]
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as exc:
+            return public_error_response(
+                context,
+                exc,
+                logger=getattr(context, "logger", logger),
+                component=f"xiaoqing_chat.handler.{fn.__name__}",
+            )
 
-    def decorator(fn):
-        @functools.wraps(fn)
-        async def wrapper(*args, **kwargs):
-            context = kwargs.get("context")
-            if context is None and args:
-                context = args[-1]
-            try:
-                return await fn(*args, **kwargs)
-            except Exception as exc:
-                return public_error_response(
-                    context,
-                    exc,
-                    logger=getattr(context, "logger", logger),
-                    component=f"xiaoqing_chat.handler.{fn.__name__}",
-                )
-
-        return wrapper
-
-    return decorator
+    return wrapper

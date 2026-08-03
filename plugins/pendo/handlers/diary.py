@@ -1,24 +1,23 @@
-"""
-日记(Diary)处理器
-处理日记相关的所有操作，不需要AI解析
-"""
+"""日记命令、模板会话、结构化元数据和情绪降级处理。"""
 
 import logging
+import re
+from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
 
 from core.plugin_base import run_sync
 from core.public_errors import public_error_message
 
 from ..config import DIARY_TEMPLATES, MOOD_ANALYSIS_CONFIG, PendoConfig
-from ..core.types import CommandMessage, PendoContext
-from ..models.constants import ItemFields
+from ..core.types import CommandMessage, PendoContext, SessionData
 from ..models.item import DiaryItem, ItemType
+from ..services.ai_parser import analyze_diary_mood_rule
 from ..utils.db_ops import DbOpsMixin
 from ..utils.error_handlers import handle_command_errors
 from ..utils.formatters import TAG_TOKEN_RE, ItemFormatter
-from ..utils.session_utils import safe_create_reply_scoped_session, safe_end_session
-from ..utils.time_utils import now_in_timezone, parse_date_optional, parse_diary_range
+from ..utils.session_utils import safe_create_session, safe_end_session
+from ..utils.time_utils import get_user_local_wall_time, parse_date_optional, parse_diary_range
 from ..utils.validators import normalize_diary_fields, normalize_diary_mood
 
 logger = logging.getLogger(__name__)
@@ -26,65 +25,100 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from ..services.db import Database
 
-TemplateDef = dict[str, str | list[str]]
+
+class DiaryTemplate(TypedDict):
+    """运行时使用的日记模板结构。"""
+
+    name: str
+    prompts: list[str]
+
+
+class DiaryMoodAnalyzer(Protocol):
+    """日记处理器所需的最小 AI 情绪分析接口。"""
+
+    async def analyze_diary_mood(
+        self, text: str, user_id: str
+    ) -> tuple[str | None, int | None]: ...
+
+
+_DIARY_USAGE_MESSAGE: Final = (
+    "❌ 请提供日记内容\n\n用法: /pendo diary add [日期] <内容> [weather:xxx] [location:xxx]"
+)
+_DIARY_METADATA_RE: Final = re.compile(
+    r"(?P<key>weather|location|mood|score|tags|tag|favorite|fav):"
+    r"(?P<value>\"[^\"]*\"|'[^']*'|\S+)",
+    re.IGNORECASE,
+)
+_DIARY_LIST_FILTER_RE: Final = re.compile(
+    r"(?<!\S)(?P<key>mood|cat):(?P<value>\"[^\"]*\"|'[^']*'|\S+)",
+    re.IGNORECASE,
+)
+_TRUE_METADATA_VALUES: Final = frozenset({"1", "true", "yes", "y", "on", "是", "收藏"})
+_FALSE_METADATA_VALUES: Final = frozenset({"0", "false", "no", "n", "off", "否", "不收藏"})
+_MOOD_EMOJIS: Final[dict[str, str]] = cast(
+    dict[str, str], MOOD_ANALYSIS_CONFIG.get("mood_emojis", {})
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DiaryListFilters:
+    """日记列表命令中分离出的范围和元数据筛选。"""
+
+    time_range: str
+    mood: str | None
+    category: str | None
+    tag: str | None
 
 
 class DiaryHandler(DbOpsMixin):
-    """日记处理器
+    """处理日记写入、查询、模板会话和可选 AI 情绪分析。"""
 
-    负责处理日记（Diary）相关的所有操作：
-    - 写日记（直接写或使用模板）
-    - 查看和列表日记
-    - 模板管理
-
-    不需要AI解析
-    """
-
-    def __init__(self, db: "Database", ai_parser: object | None = None):
+    def __init__(
+        self,
+        db: "Database",
+        ai_parser: DiaryMoodAnalyzer | None = None,
+    ) -> None:
         self.db = db
         self.ai_parser = ai_parser
-        # ai_parser 用于日记情绪分析（_analyze_mood），为 None 时降级到规则分析
-        # 日记模板（从配置读取）
-        self.templates: dict[str, TemplateDef] = cast(dict[str, TemplateDef], DIARY_TEMPLATES)
+        self.templates = cast(dict[str, DiaryTemplate], DIARY_TEMPLATES)
 
     async def _fetch_diaries(self, user_id: str, start_date: str, end_date: str) -> list[DiaryItem]:
-        """获取日记列表"""
-        return cast(
-            list[DiaryItem],
-            await run_sync(
-                self.db.items.query_items_by_date_range,
-                user_id,
-                ItemType.DIARY.value,
-                ItemFields.DIARY_DATE,
-                start_date,
-                end_date,
-            ),
+        """读取并按日期、记录时间和 ID 稳定倒序排列日记。"""
+        items = await run_sync(
+            self.db.query_items_by_date_range,
+            user_id,
+            ItemType.DIARY.value,
+            "diary_date",
+            start_date,
+            end_date,
         )
-
-    def _user_now(self, user_id: str) -> datetime:
-        return now_in_timezone(user_id, self.db).replace(tzinfo=None)
+        diaries = [item for item in items if isinstance(item, DiaryItem)]
+        diaries.sort(
+            key=lambda diary: (
+                diary.diary_date or "",
+                diary.entry_time or diary.created_at or diary.updated_at or "",
+                diary.updated_at or "",
+                str(diary.id),
+            ),
+            reverse=True,
+        )
+        return diaries
 
     @staticmethod
     def _entry_time_for_diary_date(user_now: datetime, diary_date: str) -> str:
         return f"{diary_date}T{user_now.strftime('%H:%M:%S')}"
 
-    async def _resolve_diary_query(
+    async def _resolve_diary_id(
         self, user_id: str, query: str
-    ) -> tuple[DiaryItem | None, str | None, CommandMessage | None]:
-        """Resolve a diary by date or item ID."""
+    ) -> tuple[DiaryItem | None, CommandMessage | None]:
+        """按 ID 读取日记，并返回准确的跨类型提示。"""
         query = (query or "").strip()
-        diary_date = parse_date_optional(query)
-        if diary_date:
-            return await self._get_diary_by_date(user_id, diary_date), diary_date, None
-
         item = await self._db_get_item(query, owner_id=user_id)
         if not item:
-            return None, None, {"status": "error", "message": f"❌ 找不到日记 {query}"}
+            return None, {"status": "error", "message": f"❌ 找不到日记 {query}"}
         if not isinstance(item, DiaryItem):
-            return None, None, self._build_wrong_type_message(query, "日记", item)
-
-        diary = cast(DiaryItem, item)
-        return diary, diary.diary_date or query, None
+            return None, self._build_wrong_type_message(query, "日记", item)
+        return item, None
 
     @handle_command_errors
     async def handle(
@@ -107,17 +141,16 @@ class DiaryHandler(DbOpsMixin):
         command = parts[0].lower()
         rest = parts[1] if len(parts) > 1 else ""
 
-        handlers = {
-            "add": lambda: self.add_diary(user_id, rest, context, group_id),
-            "list": lambda: self.list_diaries(user_id, rest, context),
-            "view": lambda: self.view_diary(user_id, rest, context),
-            "template": lambda: self._handle_template_command(user_id, rest, context, group_id),
-            "delete": lambda: self.delete_diary(user_id, rest, context),
-        }
-
-        handler = handlers.get(command)
-        if handler:
-            return await handler()
+        if command == "add":
+            return await self.add_diary(user_id, rest, context, group_id)
+        if command == "list":
+            return await self.list_diaries(user_id, rest, context)
+        if command == "view":
+            return await self.view_diary(user_id, rest, context)
+        if command == "template":
+            return await self._handle_template_command(user_id, rest, context, group_id)
+        if command == "delete":
+            return await self.delete_diary(user_id, rest, context)
 
         # 检查是否是模板ID
         if args.strip() in self.templates:
@@ -137,18 +170,15 @@ class DiaryHandler(DbOpsMixin):
         - /pendo diary add weather:晴 location:北京 <内容> -> 带天气和地点
         """
         if not args:
-            return {
-                "status": "error",
-                "message": "❌ 请提供日记内容\n\n用法: /pendo diary add [日期] <内容> [weather:xxx] [location:xxx]",
-            }
+            return {"status": "error", "message": _DIARY_USAGE_MESSAGE}
 
         # 尝试解析第一个参数是否是日期
         parts = args.split(maxsplit=1)
         first_arg = parts[0]
         rest = parts[1] if len(parts) > 1 else ""
 
-        user_now = self._user_now(user_id)
-        diary_date = parse_date_optional(first_arg)
+        user_now = await get_user_local_wall_time(user_id, self.db)
+        diary_date = parse_date_optional(first_arg, now=user_now)
 
         if diary_date:
             # 第一个参数是日期
@@ -158,17 +188,17 @@ class DiaryHandler(DbOpsMixin):
             diary_date = user_now.strftime("%Y-%m-%d")
             content_text = args
 
-        _USAGE_MSG = (
-            "❌ 请提供日记内容\n\n用法: /pendo diary add [日期] <内容> [weather:xxx] [location:xxx]"
-        )
         if not content_text:
-            return {"status": "error", "message": _USAGE_MSG}
+            return {"status": "error", "message": _DIARY_USAGE_MESSAGE}
 
-        # 解析内容、天气、地点
-        parsed = self._parse_diary_text(content_text)
+        # 元数据属于显式命令参数，非法布尔值等必须明确拒绝，不能静默改成 False。
+        try:
+            parsed = self._parse_diary_text(content_text)
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
 
         if not parsed["content"]:
-            return {"status": "error", "message": _USAGE_MSG}
+            return {"status": "error", "message": _DIARY_USAGE_MESSAGE}
 
         parsed["entry_time"] = self._entry_time_for_diary_date(user_now, diary_date)
         return await self.create_diary(user_id, diary_date, parsed, context, group_id=group_id)
@@ -183,8 +213,8 @@ class DiaryHandler(DbOpsMixin):
         group_id: int | None = None,
     ) -> CommandMessage:
         """创建日记"""
-        user_now = self._user_now(user_id)
-        content = str(parsed.get("content", ""))
+        user_now = await get_user_local_wall_time(user_id, self.db)
+        content = str(parsed.get("content") or "")
 
         manual_mood = parsed.get("mood")
         manual_score = parsed.get("mood_score")
@@ -194,7 +224,9 @@ class DiaryHandler(DbOpsMixin):
         else:
             mood, mood_score = await self._analyze_mood(content, user_id)
 
-        entry_time = parsed.get("entry_time") or self._entry_time_for_diary_date(user_now, diary_date)
+        entry_time = parsed.get("entry_time") or self._entry_time_for_diary_date(
+            user_now, diary_date
+        )
         item_data = {
             "owner_id": user_id,
             "title": str(parsed.get("title") or "").strip(),
@@ -208,7 +240,7 @@ class DiaryHandler(DbOpsMixin):
             "template_id": parsed.get("template_id") or template_id,
             "template_answers": parsed.get("template_answers") or [],
             "is_favorite": parsed.get("is_favorite", False),
-            "tags": cast(list[str], parsed.get("tags") or []),
+            "tags": parsed.get("tags") or [],
             "category": "日记",
             "context": {"group_id": group_id} if group_id else {},
             "created_at": user_now.isoformat(timespec="seconds"),
@@ -219,7 +251,9 @@ class DiaryHandler(DbOpsMixin):
         except ValueError as exc:
             return {"status": "error", "message": f"❌ {exc}"}
 
-        entry_time = item_data.get("entry_time") or self._entry_time_for_diary_date(user_now, diary_date)
+        entry_time = item_data.get("entry_time") or self._entry_time_for_diary_date(
+            user_now, diary_date
+        )
         entry_dt = datetime.fromisoformat(str(entry_time))
         entry_label = entry_dt.strftime("%H:%M")
 
@@ -238,8 +272,7 @@ class DiaryHandler(DbOpsMixin):
         # 格式化返回消息
         message = f"✅ 已记录 {diary_date} {entry_label} 的日记\n\n"
         if diary_item.mood:
-            mood_emojis = cast(dict[str, str], MOOD_ANALYSIS_CONFIG.get("mood_emojis", {}))
-            emoji = mood_emojis.get(diary_item.mood, "📝")
+            emoji = _MOOD_EMOJIS.get(diary_item.mood, "📝")
             message += f"{emoji} 情绪: {diary_item.mood}"
             if diary_item.mood_score:
                 message += f" ({diary_item.mood_score}/10)"
@@ -258,14 +291,15 @@ class DiaryHandler(DbOpsMixin):
     ) -> CommandMessage:
         """查看日记"""
         query = (date_str or "").strip()
+        user_now = await get_user_local_wall_time(user_id, self.db)
         if not query:
-            query = self._user_now(user_id).strftime("%Y-%m-%d")
+            query = user_now.strftime("%Y-%m-%d")
         elif error := self._single_token_error(
             query, "❌ 日记详情只接受一个日期或ID\n例如: /pendo diary view 2026-05-10"
         ):
             return error
 
-        query_date = parse_date_optional(query)
+        query_date = parse_date_optional(query, now=user_now)
         if query_date:
             entries = await self._get_diaries_by_date(user_id, query_date)
             if not entries:
@@ -280,16 +314,14 @@ class DiaryHandler(DbOpsMixin):
                     message += "\n---\n\n"
             return {"status": "success", "message": message}
 
-        diary, diary_date, error = await self._resolve_diary_query(user_id, query)
+        diary, error = await self._resolve_diary_id(user_id, query)
         if error:
             return error
 
         if not diary:
-            return {
-                "status": "success",
-                "message": f"📔 您还没有写 {diary_date} 的日记\n\n💡 用 /pendo diary add {diary_date} <内容> 开始写",
-            }
+            return {"status": "error", "message": f"❌ 找不到日记 {query}"}
 
+        diary_date = diary.diary_date or query
         message = f"📔 **{diary_date} 的日记条目**\n\n"
         message += self._format_diary_entry_detail(diary)
 
@@ -308,90 +340,92 @@ class DiaryHandler(DbOpsMixin):
         - /pendo diary list start..end
         - /pendo diary list mood:happy -> 按情绪筛选
         """
-        import re as _re
-        range_str = (range_str or "").strip()
-
-        # 解析 mood:/cat:/#tag 过滤参数
-        mood_filter = None
-        category_filter = None
-        tag_filter = None
-        mood_match = _re.search(r"mood:(\S+)", range_str)
-        if mood_match:
-            try:
-                mood_filter = normalize_diary_mood(mood_match.group(1))
-            except ValueError:
-                mood_filter = mood_match.group(1).lower()
-            range_str = range_str.replace(mood_match.group(0), "").strip()
-
-        cat_match = _re.search(r"cat:(\S+)", range_str)
-        if cat_match:
-            category_filter = cat_match.group(1)
-            range_str = range_str.replace(cat_match.group(0), "").strip()
-
-        tag_match = TAG_TOKEN_RE.search(range_str)
-        if tag_match:
-            tag_filter = tag_match.group(1)
-            range_str = range_str.replace(tag_match.group(0), "").strip()
-
-        # 解析时间范围（默认本月）
-        if not range_str:
-            range_str = self._user_now(user_id).strftime("%Y-%m")
         try:
-            start_date, end_date = parse_diary_range(range_str, strict=True)
+            filters = self._parse_list_filters(range_str)
         except ValueError as exc:
-            return {"status": "error", "message": f"❌ {str(exc)}"}
+            return {"status": "error", "message": f"❌ {exc}"}
 
-        # 查询日记
+        user_now = await get_user_local_wall_time(user_id, self.db)
+        time_range = filters.time_range or user_now.strftime("%Y-%m")
+        try:
+            start_date, end_date = parse_diary_range(time_range, now=user_now, strict=True)
+        except ValueError as exc:
+            return {"status": "error", "message": f"❌ {exc}"}
+
         diaries = await self._fetch_diaries(user_id, start_date, end_date)
+        diaries = [diary for diary in diaries if self._matches_list_filters(diary, filters)]
 
-        # 应用情绪过滤
-        if mood_filter:
-            diaries = [d for d in diaries if (d.mood or "").lower() == mood_filter]
-        if category_filter:
-            diaries = [d for d in diaries if (d.category or "") == category_filter]
-        if tag_filter:
-            diaries = [d for d in diaries if tag_filter in (d.tags or [])]
-
-        filter_labels = []
-        if mood_filter:
-            filter_labels.append(f"情绪:{mood_filter}")
-        if category_filter:
-            filter_labels.append(f"分类:{category_filter}")
-        if tag_filter:
-            filter_labels.append(f"#{tag_filter}")
+        filter_labels: list[str] = []
+        if filters.mood:
+            filter_labels.append(f"情绪:{filters.mood}")
+        if filters.category:
+            filter_labels.append(f"分类:{filters.category}")
+        if filters.tag:
+            filter_labels.append(f"#{filters.tag}")
         filter_suffix = f" [{', '.join(filter_labels)}]" if filter_labels else ""
 
         if not diaries:
             return {
                 "status": "success",
-                "message": f"📔 {range_str or 'today'}{filter_suffix} 没有日记\n\n💡 用 /pendo diary add [日期] <内容> 开始写日记",
+                "message": f"📔 {time_range}{filter_suffix} 没有日记\n\n💡 用 /pendo diary add [日期] <内容> 开始写日记",
             }
 
-        # 格式化输出
-        message = f"📔 **日记列表**{filter_suffix} (共{len(diaries)}篇)\n\n"
+        return self._format_diary_list(diaries, filter_suffix)
 
+    @staticmethod
+    def _parse_list_filters(raw_query: str) -> DiaryListFilters:
+        """从列表命令提取 mood、category 和单个标签筛选。"""
+        query = (raw_query or "").strip()
+        metadata: dict[str, str] = {}
+        for match in _DIARY_LIST_FILTER_RE.finditer(query):
+            value = match.group("value").strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                value = value[1:-1].strip()
+            if value:
+                metadata[match.group("key").lower()] = value
+        query = _DIARY_LIST_FILTER_RE.sub(" ", query)
+
+        tag = None
+        if tag_match := TAG_TOKEN_RE.search(query):
+            tag = tag_match.group(1)
+            query = f"{query[: tag_match.start()]} {query[tag_match.end() :]}"
+
+        mood = normalize_diary_mood(metadata["mood"]) if metadata.get("mood") else None
+        return DiaryListFilters(
+            time_range=re.sub(r"\s+", " ", query).strip(),
+            mood=mood,
+            category=metadata.get("cat"),
+            tag=tag,
+        )
+
+    @staticmethod
+    def _matches_list_filters(diary: DiaryItem, filters: DiaryListFilters) -> bool:
+        """判断一条日记是否满足全部元数据筛选。"""
+        if filters.mood and (diary.mood or "").lower() != filters.mood:
+            return False
+        if filters.category and (diary.category or "") != filters.category:
+            return False
+        return not filters.tag or filters.tag in (diary.tags or [])
+
+    def _format_diary_list(self, diaries: list[DiaryItem], filter_suffix: str) -> CommandMessage:
+        """格式化已经排序和筛选的日记列表。"""
+        lines = [f"📔 **日记列表**{filter_suffix} (共{len(diaries)}篇)", ""]
         for diary in diaries:
-            date = diary.diary_date or ""
-            entry_time = self._format_entry_time(diary)
-
-            # 情绪图标
-            mood_emoji = "📝"
-            if diary.mood:
-                mood_emojis = cast(dict[str, str], MOOD_ANALYSIS_CONFIG.get("mood_emojis", {}))
-                mood_emoji = mood_emojis.get(diary.mood, "📝")
-
-            # 预览
             content_preview = ItemFormatter.truncate_content(
-                diary.content or "", PendoConfig.SEARCH_CONTENT_PREVIEW_LENGTH
+                diary.content or "",
+                PendoConfig.SEARCH_CONTENT_PREVIEW_LENGTH,
             )
-
-            message += f"{mood_emoji} **{date} {entry_time}**\n"
-            message += f"  _{content_preview}_\n"
-            message += f"  `{diary.id}`\n\n"
-
-        message += "💡 用 /pendo diary view <日期或ID> 查看完整日记"
-
-        return {"status": "success", "message": message}
+            lines.extend(
+                (
+                    f"{_MOOD_EMOJIS.get(diary.mood or '', '📝')} "
+                    f"**{diary.diary_date or ''} {self._format_entry_time(diary)}**",
+                    f"  _{content_preview}_",
+                    f"  `{diary.id}`",
+                    "",
+                )
+            )
+        lines.append("💡 用 /pendo diary view <日期或ID> 查看完整日记")
+        return {"status": "success", "message": "\n".join(lines)}
 
     async def delete_diary(
         self, user_id: str, date_str: str, context: PendoContext
@@ -401,7 +435,8 @@ class DiaryHandler(DbOpsMixin):
         if not query:
             return {"status": "error", "message": "❌ 请指定要删除的日记日期或ID"}
 
-        query_date = parse_date_optional(query)
+        user_now = await get_user_local_wall_time(user_id, self.db)
+        query_date = parse_date_optional(query, now=user_now)
         if query_date:
             entries = await self._get_diaries_by_date(user_id, query_date)
             if not entries:
@@ -414,26 +449,29 @@ class DiaryHandler(DbOpsMixin):
                     )
                     lines.append(f"• `{entry.id}` {self._format_entry_time(entry)} {preview}")
                 return {"status": "error", "message": "\n".join(lines)}
-            diary = entries[0]
-            await self._db_soft_delete_with_log(diary.id, user_id, item_type=ItemType.DIARY.value)
+            dated_diary = entries[0]
+            await self._db_soft_delete_with_log(
+                dated_diary.id, user_id, item_type=ItemType.DIARY.value
+            )
             return {
                 "status": "success",
-                "message": f"🗑️ 已删除 {query_date} 的日记条目\n\n💡 5分钟内可用 /pendo undo 撤销",
+                "message": f"🗑️ 已删除 {query_date} 的日记条目\n\n{PendoConfig.UNDO_HINT}",
             }
 
-        diary, diary_date, error = await self._resolve_diary_query(user_id, query)
+        diary, error = await self._resolve_diary_id(user_id, query)
         if error:
             return error
 
         if not diary:
-            return {"status": "error", "message": f"❌ 没有找到 {diary_date} 的日记"}
+            return {"status": "error", "message": f"❌ 没有找到日记 {query}"}
 
         # 软删除
         await self._db_soft_delete_with_log(diary.id, user_id, item_type=ItemType.DIARY.value)
 
+        diary_date = diary.diary_date or query
         return {
             "status": "success",
-            "message": f"🗑️ 已删除 {diary_date} 的日记条目\n\n💡 5分钟内可用 /pendo undo 撤销",
+            "message": f"🗑️ 已删除 {diary_date} 的日记条目\n\n{PendoConfig.UNDO_HINT}",
         }
 
     async def start_template_session(
@@ -444,43 +482,39 @@ class DiaryHandler(DbOpsMixin):
         if not template:
             return {"status": "error", "message": "❌ 模板不存在"}
 
-        diary_date = self._user_now(user_id).strftime("%Y-%m-%d")
-        prompts = cast(list[str], template.get("prompts", []))
+        diary_date = (await get_user_local_wall_time(user_id, self.db)).strftime("%Y-%m-%d")
+        prompts = template.get("prompts", [])
 
         if not prompts:
             return {"status": "error", "message": "❌ 该模板没有预设问题"}
 
         # 创建会话
-        if await safe_create_reply_scoped_session(
+        if await safe_create_session(
             context,
-                initial_data={
-                    "type": "diary_template",
-                    "owner_id": user_id,
-                    "template_id": template_id,
-                    "diary_date": diary_date,
-                    "group_id": group_id,
-                    "prompts": prompts,
-                    "step": 0,
-                    "answers": [],
-                    "total_steps": len(prompts),
-                },
-                timeout=300.0,  # 5分钟超时
-            ):
+            initial_data={
+                "type": PendoConfig.SESSION_TYPE_DIARY_TEMPLATE,
+                "template_id": template_id,
+                "diary_date": diary_date,
+                "group_id": group_id,
+                "prompts": prompts,
+                "step": 0,
+                "answers": [],
+            },
+            timeout=PendoConfig.SESSION_TIMEOUT_SECONDS,
+        ):
             first_question = prompts[0]
             return {
                 "status": "success",
                 "message": f"📋 **开始写{template['name']}** ({diary_date})\n\n1/{len(prompts)}: {first_question}\n\n(发送 '退出' 可随时结束)",
             }
-        else:
-            # Fallback：直接显示模板
-            return await self.use_template(user_id, template_id, diary_date)
+        return self._format_template_fallback(template_id, diary_date)
 
-    async def use_template(self, user_id: str, template_id: str, diary_date: str) -> CommandMessage:
-        """Fallback when multi-turn session creation is unavailable."""
+    def _format_template_fallback(self, template_id: str, diary_date: str) -> CommandMessage:
+        """会话创建不可用时，直接显示可手动填写的模板。"""
         template = self.templates.get(template_id)
         if not template:
             return {"status": "error", "message": "❌ 模板不存在"}
-        prompts = cast(list[str], template.get("prompts", []))
+        prompts = template.get("prompts", [])
         lines = [f"📋 **{template.get('name', template_id)}** ({diary_date})", ""]
         lines.extend(f"{idx}. {prompt}" for idx, prompt in enumerate(prompts, 1))
         lines.append("")
@@ -488,51 +522,60 @@ class DiaryHandler(DbOpsMixin):
         return {"status": "success", "message": "\n".join(lines)}
 
     async def handle_session_message(
-        self, text: str, context: PendoContext, session: dict[str, Any]
+        self, user_id: str, text: str, context: PendoContext, session: SessionData
     ) -> CommandMessage:
-        """处理会话消息"""
-        # 记录当前问题的答案
-        answers = session.get("answers", [])
+        """校验模板会话状态，记录当前答案并推进到下一题。"""
+        raw_prompts = session.get("prompts", [])
+        raw_answers = session.get("answers", [])
+        raw_step = session.get("step", 0)
+        prompts = (
+            [prompt for prompt in raw_prompts if isinstance(prompt, str) and prompt.strip()]
+            if isinstance(raw_prompts, list)
+            else []
+        )
+        answers = (
+            [answer for answer in raw_answers if isinstance(answer, str)]
+            if isinstance(raw_answers, list)
+            else []
+        )
+        step = raw_step if isinstance(raw_step, int) and not isinstance(raw_step, bool) else -1
+        if not prompts or not 0 <= step < len(prompts) or len(answers) != step:
+            await safe_end_session(context)
+            return {"status": "error", "message": "❌ 模板会话状态损坏，请重新开始"}
+
         answers.append(text)
         session.set("answers", answers)
-
-        # 移动到下一步
-        step = session.get("step", 0) + 1
+        step += 1
         session.set("step", step)
 
-        prompts = session.get("prompts", [])
-        total_steps = session.get("total_steps", 0)
-
-        # 检查是否完成
-        if step >= total_steps:
-            # 完成所有问题，生成日记
+        if step == len(prompts):
             await safe_end_session(context)
 
-            owner_id = session.get("owner_id")
             diary_date = session.get("diary_date")
             template_id = session.get("template_id")
             group_id = session.get("group_id")
             if (
-                not isinstance(owner_id, str)
-                or not isinstance(diary_date, str)
+                not isinstance(diary_date, str)
                 or not isinstance(template_id, str)
+                or template_id not in self.templates
             ):
                 return {"status": "error", "message": "❌ 会话数据缺失，无法提交模板日记"}
-            group_id_val = group_id if isinstance(group_id, int) else None
+            group_id_val = (
+                group_id if isinstance(group_id, int) and not isinstance(group_id, bool) else None
+            )
 
             return await self._submit_template_result(
-                owner_id,
+                user_id,
                 diary_date,
                 template_id,
-                cast(list[str], prompts),
-                cast(list[str], answers),
+                prompts,
+                answers,
                 group_id_val,
                 context,
             )
 
-        # 下一个问题
         next_question = prompts[step]
-        return {"status": "question", "message": f"{step + 1}/{total_steps}: {next_question}"}
+        return {"status": "question", "message": f"{step + 1}/{len(prompts)}: {next_question}"}
 
     async def _submit_template_result(
         self,
@@ -547,7 +590,7 @@ class DiaryHandler(DbOpsMixin):
         """提交模板结果"""
         template_answers = [
             {"prompt": q, "answer": a}
-            for q, a in zip(prompts, answers, strict=False)
+            for q, a in zip(prompts, answers, strict=True)
             if str(q or "").strip() or str(a or "").strip()
         ]
         content = "\n\n".join(f"**{row['prompt']}**\n{row['answer']}" for row in template_answers)
@@ -578,16 +621,13 @@ class DiaryHandler(DbOpsMixin):
         arg = args.strip()
         usable = self._get_usable_templates()
 
-        # 按编号匹配
-        try:
+        # 纯数字按展示编号匹配，其他输入再按名称或模板 ID 匹配。
+        if arg.isdecimal():
             idx = int(arg)
             if 1 <= idx <= len(usable):
                 template_id = usable[idx - 1][0]
                 return await self.start_template_session(user_id, template_id, context, group_id)
-            else:
-                return {"status": "error", "message": f"❌ 无效编号，可选 1-{len(usable)}"}
-        except ValueError:
-            pass
+            return {"status": "error", "message": f"❌ 无效编号，可选 1-{len(usable)}"}
 
         # 按名称匹配
         for tid, tpl in usable:
@@ -598,10 +638,13 @@ class DiaryHandler(DbOpsMixin):
         if arg in self.templates and self.templates[arg].get("prompts"):
             return await self.start_template_session(user_id, arg, context, group_id)
 
-        return {"status": "error", "message": f"❌ 未找到模板: {arg}\n\n{self._show_template_list()['message']}"}
+        return {
+            "status": "error",
+            "message": f"❌ 未找到模板: {arg}\n\n{self._show_template_list()['message']}",
+        }
 
-    def _get_usable_templates(self) -> list[tuple[str, dict]]:
-        """获取有 prompts 的可用模板列表"""
+    def _get_usable_templates(self) -> list[tuple[str, DiaryTemplate]]:
+        """获取至少包含一个问题的可用模板列表。"""
         return [(tid, tpl) for tid, tpl in self.templates.items() if tpl.get("prompts")]
 
     def _show_template_list(self) -> CommandMessage:
@@ -651,14 +694,17 @@ class DiaryHandler(DbOpsMixin):
             return ""
 
     def _format_diary_entry_detail(self, diary: DiaryItem, *, index: int | None = None) -> str:
-        title_prefix = f"**{index}. {diary.title or '日记条目'}**" if index else f"**{diary.title or '日记条目'}**"
+        title_prefix = (
+            f"**{index}. {diary.title or '日记条目'}**"
+            if index
+            else f"**{diary.title or '日记条目'}**"
+        )
         lines = [title_prefix]
         entry_time = self._format_entry_time(diary)
         if entry_time:
             lines.append(f"🕘 时间: {entry_time}")
         if diary.mood:
-            mood_emojis = cast(dict[str, str], MOOD_ANALYSIS_CONFIG.get("mood_emojis", {}))
-            emoji = mood_emojis.get(diary.mood, "😐")
+            emoji = _MOOD_EMOJIS.get(diary.mood, "😐")
             mood_line = f"{emoji} 情绪: {diary.mood}"
             if diary.mood_score:
                 mood_line += f" ({diary.mood_score}/10)"
@@ -677,58 +723,8 @@ class DiaryHandler(DbOpsMixin):
         return "\n".join(lines)
 
     async def _get_diaries_by_date(self, user_id: str, diary_date: str) -> list[DiaryItem]:
-        """根据日期获取当天所有日记条目。"""
-
-        def _fetch():
-            conn = self.db.conn_manager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT * FROM items
-                WHERE owner_id = ?
-                AND type = '{ItemType.DIARY.value}'
-                AND diary_date = ?
-                AND deleted = 0
-                ORDER BY COALESCE(entry_time, created_at, updated_at) DESC, updated_at DESC
-                """,
-                (user_id, diary_date),
-            )
-            entries: list[DiaryItem] = []
-            for row in cursor.fetchall():
-                item = self.db.items._row_to_item(row)
-                if isinstance(item, DiaryItem):
-                    entries.append(item)
-            return entries
-
-        return await run_sync(_fetch)
-
-    async def _get_diary_by_date(self, user_id: str, diary_date: str) -> DiaryItem | None:
-        """根据日期获取最近一条日记，返回DiaryItem dataclass"""
-
-        def _fetch():
-            conn = self.db.conn_manager.get_connection()
-            cursor = conn.cursor()
-
-            cursor.execute(
-                f"""
-                SELECT * FROM items
-                WHERE owner_id = ?
-                AND type = '{ItemType.DIARY.value}'
-                AND diary_date = ?
-                AND deleted = 0
-                ORDER BY COALESCE(entry_time, created_at, updated_at) DESC, updated_at DESC
-                LIMIT 1
-            """,
-                (user_id, diary_date),
-            )
-
-            row = cursor.fetchone()
-            if row:
-                item = self.db.items._row_to_item(row)
-                return item if isinstance(item, DiaryItem) else None
-            return None
-
-        return await run_sync(_fetch)
+        """通过统一仓储查询当天全部日记，避免 Handler 直接依赖 SQL 私有实现。"""
+        return await self._fetch_diaries(user_id, diary_date, diary_date)
 
     def _parse_diary_text(self, text: str) -> dict[str, Any]:
         """解析日记文本（提取天气、地点等元信息）
@@ -738,8 +734,6 @@ class DiaryHandler(DbOpsMixin):
         - 内容 weather:"多云转晴" location:"上海 徐汇"
         - 内容 mood:happy score:8 tags:工作,复盘 favorite:true
         """
-        import re
-
         result: dict[str, Any] = {
             "content": "",
             "weather": None,
@@ -750,20 +744,15 @@ class DiaryHandler(DbOpsMixin):
             "is_favorite": False,
         }
 
-        pattern = re.compile(
-            r"(?P<key>weather|location|mood|score|tags|tag|favorite|fav):"
-            r"(?P<value>\"[^\"]*\"|'[^']*'|\S+)"
-        )
-
-        def _clean(raw: str) -> str:
-            raw = raw.strip()
-            if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
-                return raw[1:-1].strip()
-            return raw
-
-        for match in list(pattern.finditer(text)):
-            key = match.group("key")
-            value = _clean(match.group("value"))
+        content_parts: list[str] = []
+        previous_end = 0
+        for match in _DIARY_METADATA_RE.finditer(text):
+            content_parts.extend((text[previous_end : match.start()], " "))
+            previous_end = match.end()
+            key = match.group("key").lower()
+            value = match.group("value").strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                value = value[1:-1].strip()
             if key == "weather":
                 result["weather"] = value
             elif key == "location":
@@ -773,19 +762,26 @@ class DiaryHandler(DbOpsMixin):
             elif key == "score":
                 result["mood_score"] = value
             elif key in {"tags", "tag"}:
-                result["tags"] = [item.strip() for item in re.split(r"[,，]", value) if item.strip()]
+                new_tags = [item.strip() for item in re.split(r"[,，]", value) if item.strip()]
+                old_tags = result["tags"] if isinstance(result["tags"], list) else []
+                result["tags"] = list(dict.fromkeys([*old_tags, *new_tags]))
             elif key in {"favorite", "fav"}:
-                result["is_favorite"] = value.lower() in {"1", "true", "yes", "y", "on", "是", "收藏"}
-            text = text.replace(match.group(0), " ").strip()
+                normalized_value = value.casefold()
+                if normalized_value in _TRUE_METADATA_VALUES:
+                    result["is_favorite"] = True
+                elif normalized_value in _FALSE_METADATA_VALUES:
+                    result["is_favorite"] = False
+                else:
+                    raise ValueError("favorite 只接受 true/false、yes/no、on/off、1/0 或 是/否")
 
-        # 剩余内容
-        result["content"] = re.sub(r"[ \t]{2,}", " ", text).strip()
+        content_parts.append(text[previous_end:])
+        result["content"] = re.sub(r"[ \t]{2,}", " ", "".join(content_parts)).strip()
 
         return result
 
     async def _analyze_mood(self, content: str, user_id: str) -> tuple[str | None, int | None]:
         """优先使用 AI 判别日记情绪，失败时降级到规则分析。"""
-        if self.ai_parser and hasattr(self.ai_parser, "analyze_diary_mood"):
+        if self.ai_parser is not None:
             try:
                 return await self.ai_parser.analyze_diary_mood(content, user_id)
             except Exception as exc:
@@ -797,66 +793,4 @@ class DiaryHandler(DbOpsMixin):
                     component="pendo.diary.mood_fallback",
                 )
 
-        return self._analyze_mood_rule(content)
-
-    def _analyze_mood_rule(self, content: str) -> tuple[str | None, int | None]:
-        """使用配置词典进行规则情绪分析。"""
-        positive_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("positive_words", []))
-        negative_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("negative_words", []))
-        calm_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("calm_words", []))
-        excited_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("excited_words", []))
-        angry_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("angry_words", []))
-        tired_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("tired_words", []))
-        anxious_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("anxious_words", []))
-        grateful_words = cast(list[str], MOOD_ANALYSIS_CONFIG.get("grateful_words", []))
-
-        pos_count = sum(1 for word in positive_words if word in content)
-        neg_count = sum(1 for word in negative_words if word in content)
-        calm_count = sum(1 for word in calm_words if word in content)
-        excited_count = sum(1 for word in excited_words if word in content)
-        angry_count = sum(1 for word in angry_words if word in content)
-        tired_count = sum(1 for word in tired_words if word in content)
-        anxious_count = sum(1 for word in anxious_words if word in content)
-        grateful_count = sum(1 for word in grateful_words if word in content)
-
-        # 根据关键词出现次数和数量确定情绪类型
-        base_scores = cast(dict[str, int], MOOD_ANALYSIS_CONFIG.get("base_scores", {}))
-        raw_increment = MOOD_ANALYSIS_CONFIG.get("score_increment", 1)
-        score_increment = raw_increment if isinstance(raw_increment, int) else 1
-
-        # 按优先级判断情绪
-        # S-3修复：删去 or (excited_count + pos_count) >= 2，
-        # 该条件在 excited_count==0、pos_count>=2 时将 happy 误判为 excited
-        if grateful_count > 0:
-            mood = "grateful"
-            score = min(10, base_scores.get("grateful", 7) + grateful_count)
-            return mood, score
-        if excited_count > 0:
-            mood = "excited"
-            score = min(10, base_scores.get("excited", 8) + excited_count + pos_count)
-            return mood, score
-        elif angry_count > neg_count or angry_count >= 2:
-            mood = "angry"
-            score = max(1, base_scores.get("angry", 3) - angry_count)
-            return mood, score
-        elif anxious_count > 0:
-            mood = "anxious"
-            score = max(1, base_scores.get("anxious", 3) - anxious_count)
-            return mood, score
-        elif tired_count > 0:
-            mood = "tired"
-            score = max(1, base_scores.get("tired", 4) - tired_count)
-            return mood, score
-        elif pos_count > neg_count and pos_count > calm_count:
-            mood = "happy"
-            score = min(10, base_scores.get("happy", 6) + pos_count * score_increment)
-            return mood, score
-        elif neg_count > pos_count:
-            mood = "sad"
-            score = max(1, base_scores.get("sad", 5) - neg_count * score_increment)
-            return mood, score
-        elif calm_count > 0:
-            mood = "calm"
-            return mood, base_scores.get("calm", 5)
-
-        return "neutral", base_scores.get("neutral", 5)
+        return cast(tuple[str | None, int | None], analyze_diary_mood_rule(content))

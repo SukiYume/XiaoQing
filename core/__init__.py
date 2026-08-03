@@ -18,9 +18,10 @@ XiaoQing 核心模块
 - metrics: 性能监控
 
 """
+
 # 参数解析
-from .args import ParsedArgs, parse, parse_kv, tokenize
-from .config import ConfigManager, ConfigSnapshot
+from .args import ParsedArgs, parse, tokenize
+from .config import ConfigManager, ConfigSnapshot, materialize_snapshot_value
 from .dispatcher import Dispatcher
 
 # 异常
@@ -63,7 +64,17 @@ from .plugin_base import (
     write_json,
 )
 from .plugin_manager import LoadedPlugin, PluginManager
-from .router import CommandRouter, CommandSpec
+from .router import (
+    CommandCatalogNode,
+    CommandInvocation,
+    CommandRouter,
+    CommandSpec,
+    build_command_catalog_node,
+    format_command_catalog,
+    get_context_command_root,
+    resolve_catalog_invocation,
+    resolve_context_command_invocation,
+)
 
 # 会话管理
 from .session import Session, SessionManager
@@ -72,7 +83,6 @@ __all__ = [
     # 参数解析
     "tokenize",
     "parse",
-    "parse_kv",
     "ParsedArgs",
     # 消息段
     "segments",
@@ -115,8 +125,16 @@ __all__ = [
     # 核心组件
     "ConfigManager",
     "ConfigSnapshot",
+    "materialize_snapshot_value",
     "CommandRouter",
     "CommandSpec",
+    "CommandCatalogNode",
+    "CommandInvocation",
+    "build_command_catalog_node",
+    "format_command_catalog",
+    "get_context_command_root",
+    "resolve_catalog_invocation",
+    "resolve_context_command_invocation",
     "Dispatcher",
     "PluginManager",
     "LoadedPlugin",

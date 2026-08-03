@@ -3,14 +3,191 @@
   "version": "0.2.0",
   "description": "小青拟人聊天（纯对话 + 可选图片上下文/表情包回复）",
   "entry": "main.py",
+  "concurrency": "parallel",
+  "capabilities": ["onebot_media"],
+  "services": [
+    {
+      "name": "core.observe_outgoing_action",
+      "callback": "observe_outgoing_action",
+      "callers": ["core"]
+    }
+  ],
+  "watch_files": [
+    "config/xiaoqing_config.json",
+    "media/qq_face_builtin_catalog.json"
+  ],
   "commands": [
     {
       "name": "xc",
       "triggers": ["xc"],
-      "help": "小青聊天 | /xc <内容>  子命令: help 清空 统计 深度 配置 记忆 表达 模型；启用媒体能力后可理解图片并追加表情包回复",
+      "help": "小青聊天、会话状态、长期记忆、表达学习、模型和审查管理",
       "admin_only": false,
-      "priority": 5
+      "priority": 5,
+      "usage": "/xc <聊天内容> | /xc <子命令> [参数]",
+      "examples": ["/xc 最近有什么值得聊的？", "/xc stats"],
+      "invalid_examples": ["/xc stats extra"],
+      "subcommands": [
+        {
+          "name": "help",
+          "aliases": ["帮助", "?"],
+          "help": "显示小青聊天的完整结构化命令目录",
+          "usage": "/xc help",
+          "match": "exact",
+          "examples": ["/xc help"],
+          "invalid_examples": ["/xc help extra"]
+        },
+        {
+          "name": "reset",
+          "aliases": ["重置", "清空"],
+          "help": "私聊重置自己的会话；群聊需管理员并二次确认",
+          "usage": "/xc reset [确认|confirm]",
+          "examples": ["/xc reset", "/xc reset confirm"],
+          "invalid_examples": ["/xc reset maybe"]
+        },
+        {
+          "name": "stats",
+          "aliases": ["统计", "状态"],
+          "help": "查看当前会话的上下文、学习和运行统计",
+          "usage": "/xc stats",
+          "match": "exact",
+          "examples": ["/xc stats"],
+          "invalid_examples": ["/xc stats extra"]
+        },
+        {
+          "name": "brain",
+          "aliases": ["深度"],
+          "help": "查看深度对话模式状态和参数",
+          "usage": "/xc brain",
+          "match": "exact",
+          "examples": ["/xc brain"],
+          "invalid_examples": ["/xc brain on"]
+        },
+        {
+          "name": "config",
+          "aliases": ["配置"],
+          "help": "查看聊天、记忆、表达学习和模型配置概要",
+          "usage": "/xc config",
+          "match": "exact",
+          "examples": ["/xc config"],
+          "invalid_examples": ["/xc config set"]
+        },
+        {
+          "name": "memory",
+          "aliases": ["记忆"],
+          "help": "按关键词检索当前会话可见的长期记忆",
+          "usage": "/xc memory <关键词>",
+          "examples": ["/xc memory 喜欢的食物"],
+          "invalid_examples": ["/xc memory"]
+        },
+        {
+          "name": "expression",
+          "aliases": ["表达"],
+          "help": "查看当前会话学到的表达方式",
+          "usage": "/xc expression",
+          "match": "exact",
+          "examples": ["/xc expression"],
+          "invalid_examples": ["/xc expression extra"]
+        },
+        {
+          "name": "jargon",
+          "aliases": ["黑话"],
+          "help": "查看当前会话学到的黑话",
+          "usage": "/xc jargon",
+          "match": "exact",
+          "examples": ["/xc jargon"],
+          "invalid_examples": ["/xc jargon extra"]
+        },
+        {
+          "name": "review",
+          "aliases": ["审查"],
+          "help": "管理员处理当前会话的反思审查流程",
+          "usage": "/xc review <ok|no|answer|close> <会话ID> [内容]",
+          "permission": "group_admin",
+          "examples": ["/xc review ok review-123"],
+          "invalid_examples": ["/xc review maybe review-123"],
+          "subcommands": [
+            {
+              "name": "ok",
+              "help": "确认当前目标或进入下一审查步骤",
+              "usage": "/xc review ok <会话ID>",
+              "examples": ["/xc review ok review-123"],
+              "invalid_examples": ["/xc review ok"]
+            },
+            {
+              "name": "no",
+              "help": "关闭当前审查会话",
+              "usage": "/xc review no <会话ID>",
+              "examples": ["/xc review no review-123"],
+              "invalid_examples": ["/xc review no"]
+            },
+            {
+              "name": "answer",
+              "help": "提交新的规则、目标或策略内容",
+              "usage": "/xc review answer <会话ID> <内容>",
+              "examples": ["/xc review answer review-123 避免连续追问"],
+              "invalid_examples": ["/xc review answer review-123"]
+            },
+            {
+              "name": "close",
+              "help": "关闭当前审查会话",
+              "usage": "/xc review close <会话ID>",
+              "examples": ["/xc review close review-123"],
+              "invalid_examples": ["/xc review close"]
+            }
+          ]
+        },
+        {
+          "name": "model",
+          "aliases": ["模型", "provider", "供应商"],
+          "help": "查看回退链，或由管理员固定当前会话/全局模型",
+          "usage": "/xc model [名称|default|global <名称|default>]",
+          "examples": ["/xc model", "/xc model default"],
+          "invalid_examples": ["/xc model global"],
+          "subcommands": [
+            {
+              "name": "default",
+              "aliases": ["默认", "reset"],
+              "help": "清除当前会话的模型固定设置",
+              "usage": "/xc model default",
+              "permission": "group_admin",
+              "match": "exact",
+              "examples": ["/xc model default"],
+              "invalid_examples": ["/xc model default extra"]
+            },
+            {
+              "name": "global",
+              "aliases": ["全局"],
+              "help": "由 Bot 全局管理员设置或清除全局模型固定项",
+              "usage": "/xc model global <名称|default>",
+              "permission": "bot_admin",
+              "examples": ["/xc model global default"],
+              "invalid_examples": ["/xc model global"]
+            }
+          ]
+        }
+      ]
     }
   ],
-  "schedule": []
+  "dependencies": [
+    {
+      "name": "aiohttp",
+      "required": true,
+      "description": "聊天模型与媒体客户端在入口导入链中直接使用 aiohttp"
+    },
+    {
+      "name": "numpy",
+      "required": true,
+      "description": "向量记忆在入口导入链中直接使用 NumPy"
+    },
+    {
+      "name": "pydantic",
+      "required": true,
+      "description": "聊天配置模型在入口导入链中直接使用 Pydantic"
+    },
+    {
+      "name": "PIL",
+      "required": false,
+      "description": "可选图片和动图分析；缺失时纯文本聊天仍可运行"
+    }
+  ]
 }

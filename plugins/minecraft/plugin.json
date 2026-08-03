@@ -1,9 +1,10 @@
 {
     "name": "minecraft",
-    "version": "3.0.0",
+    "version": "4.0.0",
     "enabled": true,
     "description": "Minecraft 服务器通信插件 - 支持多服务器连接、RCON命令执行和状态查询",
     "entry": "main.py",
+    "capabilities": ["admin_sessions"],
     "commands": [
         {
             "name": "mc",
@@ -12,7 +13,48 @@
                 "minecraft"
             ],
             "help": "Minecraft RCON 工具 | /mc help 查看详细帮助",
-            "admin_only": true
+            "admin_only": true,
+            "contexts": ["private"],
+            "usage": "/mc <help|connect|disconnect|status|服务器命令>",
+            "examples": ["/mc status", "/mc list"],
+            "invalid_examples": ["/mc connect"],
+            "subcommands": [
+                {
+                    "name": "connect",
+                    "aliases": ["连接"],
+                    "help": "连接清单中的服务器配置",
+                    "usage": "/mc connect <配置名>",
+                    "examples": ["/mc connect default"],
+                    "invalid_examples": ["/mc connect"]
+                },
+                {
+                    "name": "disconnect",
+                    "aliases": ["断开"],
+                    "help": "断开当前会话目标的服务器连接",
+                    "usage": "/mc disconnect",
+                    "match": "exact",
+                    "examples": ["/mc disconnect"],
+                    "invalid_examples": ["/mc disconnect extra"]
+                },
+                {
+                    "name": "status",
+                    "aliases": ["状态"],
+                    "help": "查看连接和日志监控状态",
+                    "usage": "/mc status",
+                    "match": "exact",
+                    "examples": ["/mc status"],
+                    "invalid_examples": ["/mc status extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示 Minecraft RCON 说明",
+                    "usage": "/mc help",
+                    "match": "exact",
+                    "examples": ["/mc help"],
+                    "invalid_examples": ["/mc help extra"]
+                }
+            ]
         },
         {
             "name": "mcconnect",
@@ -20,9 +62,13 @@
                 "mcconnect",
                 "mc连接"
             ],
-            "help": "连接 MC 服务器 | /mc connect <配置名> [log_file_path]",
+            "help": "连接 MC 服务器 | /mcconnect <配置名>",
             "admin_only": true,
-            "priority": 1
+            "contexts": ["private"],
+            "priority": 1,
+            "usage": "/mcconnect <配置名>",
+            "examples": ["/mcconnect default"],
+            "invalid_examples": ["/mcconnect"]
         },
         {
             "name": "mcdisconnect",
@@ -32,7 +78,11 @@
             ],
             "help": "断开当前 MC 服务器连接 | /mc disconnect",
             "admin_only": true,
-            "priority": 1
+            "contexts": ["private"],
+            "priority": 1,
+            "usage": "/mcdisconnect",
+            "examples": ["/mcdisconnect"],
+            "invalid_examples": ["/mcdisconnect extra"]
         }
     ],
     "schedule": [

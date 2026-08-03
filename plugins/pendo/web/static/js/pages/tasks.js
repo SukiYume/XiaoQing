@@ -1,14 +1,32 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
+import { showModal, closeModal, showConfirmModal, safeHtml } from '../components/modal.js';
 import { buildFormHTML, getFormData, initFormInteractions } from '../components/form.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
-import { pad2, parseDate } from '../utils/format.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import {
+    errorMessage,
+    isRecord,
+    pad2,
+    parseDate,
+    trimmedTextValue as textValue,
+} from '../utils/format.js';
+import { fetchUserTimeZone, zonedDateTimeToInput, zonedInputToUtcIso } from '../utils/timezone.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss, subscribeDataChanges } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-tasks-redesign-styles';
 const TODAY = () => new Date();
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TASK_STATUSES = new Set(['open', 'done', 'cancelled']);
+const VIEW_MODES = new Set(['list', 'board']);
+const PLAN_FILTER_VALUES = new Set(['', 'today', 'week', 'month', 'future', 'undated', 'custom']);
+const DEFAULT_FILTERS = Object.freeze({
+    search: '',
+    plan: '',
+    category: '',
+    status: '',
+    customStart: '',
+    customEnd: '',
+});
 
 const STATUS_META = {
     open: { label: '未完成', tone: '#F59E0B', bg: 'rgba(245,158,11,0.12)' },
@@ -43,35 +61,54 @@ const TASK_FIELDS = [
     { name: 'category', label: '分类', type: 'text', placeholder: '例如：工作、学习' },
     { name: 'content', label: '备注', type: 'textarea' },
 ];
+const PLAN_FILTER_OPTIONS = [
+    { value: '', label: '全部计划日期' },
+    { value: 'today', label: '今天' },
+    { value: 'week', label: '本周' },
+    { value: 'month', label: '本月' },
+    { value: 'future', label: '更晚' },
+    { value: 'undated', label: '未安排日期' },
+    { value: 'custom', label: '自定义时间段' },
+];
+const STATUS_FILTER_OPTIONS = [
+    { value: '', label: '全部状态' },
+    { value: 'open', label: '未完成' },
+    { value: 'done', label: '已完成' },
+    { value: 'cancelled', label: '已取消' },
+];
 
 let _container = null;
-let _dataChangedHandler = null;
+let _unsubscribeDataChanges = null;
 let _viewMode = 'list';
 let _loading = false;
+let _loadError = '';
 let _overview = null;
 let _dragTaskId = null;
-let _filters = {
-    search: '',
-    plan: '',
-    category: '',
-    status: '',
-    customStart: '',
-    customEnd: '',
-};
+let _filters = { ...DEFAULT_FILTERS };
+let _loadVersion = 0;
+const _pendingTaskIds = new Set();
 
+// 数据与错误边界：接口损坏记录不能进入筛选、排序或动作路径。
+function idValue(value) {
+    return value === null || value === undefined ? '' : String(value).trim();
+}
+
+// 所有日期桶都按本地自然日计算，避免纯日期被浏览器解释成 UTC 后跨天。
 function startOfDay(value) {
-    const day = new Date(value);
+    const day = parseDate(value);
+    if (!day) return null;
     day.setHours(0, 0, 0, 0);
     return day;
 }
 
 function dateKey(value) {
-    const day = value instanceof Date ? value : new Date(value);
+    const day = parseDate(value);
+    if (!day) return '';
     return `${day.getFullYear()}-${pad2(day.getMonth() + 1)}-${pad2(day.getDate())}`;
 }
 
 function firstDayOfWeek(value = TODAY()) {
-    const day = startOfDay(value);
+    const day = startOfDay(value) || startOfDay(TODAY());
     day.setDate(day.getDate() - ((day.getDay() + 6) % 7));
     return day;
 }
@@ -83,33 +120,29 @@ function lastDayOfWeek(value = TODAY()) {
 }
 
 function firstDayOfMonth(value = TODAY()) {
-    const day = startOfDay(value);
+    const day = startOfDay(value) || startOfDay(TODAY());
     return new Date(day.getFullYear(), day.getMonth(), 1);
 }
 
 function lastDayOfMonth(value = TODAY()) {
-    const day = startOfDay(value);
+    const day = startOfDay(value) || startOfDay(TODAY());
     return new Date(day.getFullYear(), day.getMonth() + 1, 0);
 }
 
 function parseIsoDate(value) {
-    if (!value || !ISO_DATE_RE.test(String(value))) return null;
-    return new Date(`${value}T00:00:00`);
+    const text = textValue(value);
+    if (!ISO_DATE_RE.test(text)) return null;
+    const date = parseDate(text);
+    return date && dateKey(date) === text ? date : null;
 }
 
 function isIsoDate(value) {
-    return ISO_DATE_RE.test(String(value || '').trim());
+    return Boolean(parseIsoDate(value));
 }
 
 function taskTextCategory(task) {
     const category = String(task?.category || '').trim();
     return category && category !== '未分类' ? category : '';
-}
-
-function taskEditableCategoryValue(task) {
-    const category = String(task?.category || '').trim();
-    if (category && category !== '未分类') return category;
-    return '';
 }
 
 function taskPlanDateKey(task) {
@@ -119,13 +152,8 @@ function taskPlanDateKey(task) {
     return deadline ? dateKey(deadline) : '';
 }
 
-function taskPlanDate(task) {
-    const key = taskPlanDateKey(task);
-    return key ? parseIsoDate(key) : null;
-}
-
 function taskPrimaryStatus(task) {
-    return ['done', 'cancelled'].includes(task?.status) ? task.status : 'open';
+    return TASK_STATUSES.has(task?.status) ? task.status : 'open';
 }
 
 function taskStatusBucket(task) {
@@ -161,24 +189,28 @@ function defaultCustomPlanRange() {
 
 function planDateMatches(task, filterValue, todayKey = dateKey(TODAY()), customStart = '', customEnd = '') {
     if (!filterValue) return true;
+    if (!PLAN_FILTER_VALUES.has(filterValue)) return false;
+
     const planKey = taskPlanDateKey(task);
     if (filterValue === 'undated') return !planKey;
     if (!planKey) return false;
 
-    const weekStart = dateKey(firstDayOfWeek(TODAY()));
-    const weekEnd = dateKey(lastDayOfWeek(TODAY()));
-    const monthStart = dateKey(firstDayOfMonth(TODAY()));
-    const monthEnd = dateKey(lastDayOfMonth(TODAY()));
-    if (filterValue === 'today') return planKey === todayKey;
+    const anchor = parseIsoDate(todayKey) || startOfDay(TODAY());
+    const anchorKey = dateKey(anchor);
+    const weekStart = dateKey(firstDayOfWeek(anchor));
+    const weekEnd = dateKey(lastDayOfWeek(anchor));
+    const monthStart = dateKey(firstDayOfMonth(anchor));
+    const monthEnd = dateKey(lastDayOfMonth(anchor));
+    if (filterValue === 'today') return planKey === anchorKey;
     if (filterValue === 'week') return planKey >= weekStart && planKey <= weekEnd;
     if (filterValue === 'month') return planKey >= monthStart && planKey <= monthEnd;
     if (filterValue === 'future') return planKey > monthEnd;
     if (filterValue === 'custom') {
         const range = normalizePlanRange(customStart, customEnd);
-        if (!range.start || !range.end) return true;
+        if (!range.start || !range.end) return false;
         return planKey >= range.start && planKey <= range.end;
     }
-    return true;
+    return false;
 }
 
 function formatShortDate(value) {
@@ -187,49 +219,102 @@ function formatShortDate(value) {
     return `${date.getMonth() + 1}/${date.getDate()} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
-function toDatetimeLocal(value) {
-    if (!value) return '';
-    return String(value).slice(0, 16);
-}
-
 function defaultTaskPlanDateValue(now = TODAY()) {
-    const target = new Date(now);
+    const target = parseDate(now) || TODAY();
     if (target.getHours() >= 20) {
         target.setDate(target.getDate() + 1);
     }
     return dateKey(target);
 }
 
-function normalizeTaskPayload(formData) {
-    const payload = { ...formData };
-    const priority = Number(payload.priority);
+function normalizeTaskPayload(formData, userTimeZone) {
+    const source = isRecord(formData) ? formData : {};
+    const priority = Number(source.priority);
+    const status = textValue(source.status);
+    const planDate = textValue(source.plan_date);
+    const deadline = textValue(source.deadline_at);
+    const normalizedDeadline = deadline ? zonedInputToUtcIso(deadline, userTimeZone) : '';
+    if (deadline && !normalizedDeadline) throw new RangeError('请输入有效的截止时间');
 
-    payload.title = String(payload.title || '').trim();
-    payload.content = payload.content ?? '';
-    payload.category = String(payload.category || '').trim() || '未分类';
-    payload.status = ['done', 'cancelled'].includes(payload.status) ? payload.status : 'open';
-    payload.priority = Number.isInteger(priority) && priority >= 1 && priority <= 5 ? priority : 3;
-    payload.plan_date = payload.plan_date || null;
-    payload.deadline_at = payload.deadline_at || null;
+    return {
+        title: textValue(source.title),
+        content: textValue(source.content),
+        category: textValue(source.category) || '未分类',
+        status: TASK_STATUSES.has(status) ? status : 'open',
+        priority: Number.isInteger(priority) && priority >= 1 && priority <= 5 ? priority : 3,
+        plan_date: isIsoDate(planDate) ? planDate : null,
+        deadline_at: normalizedDeadline || null,
+    };
+}
 
-    return payload;
+// 概览接口只需要 all_tasks；在这里统一字段类型并去重，后续渲染无需反复防御。
+function normalizeTask(value) {
+    if (!isRecord(value)) return null;
+
+    const id = idValue(value.id);
+    if (!id) return null;
+
+    const priority = Number(value.priority);
+    const status = textValue(value.status);
+    const planDate = textValue(value.plan_date);
+    const deadline = textValue(value.deadline_at);
+    const version = Number(value.version);
+    return {
+        id,
+        title: textValue(value.title),
+        content: textValue(value.content),
+        category: textValue(value.category) || '未分类',
+        status: TASK_STATUSES.has(status) ? status : 'open',
+        priority: Number.isInteger(priority) && priority >= 1 && priority <= 5 ? priority : 3,
+        plan_date: isIsoDate(planDate) ? planDate : '',
+        deadline_at: deadline && parseDate(deadline) ? deadline : '',
+        completed_at: textValue(value.completed_at),
+        cancelled_at: textValue(value.cancelled_at),
+        created_at: textValue(value.created_at),
+        updated_at: textValue(value.updated_at),
+        version: Number.isInteger(version) && version >= 0 ? version : 0,
+    };
+}
+
+function normalizeOverview(value) {
+    const source = isRecord(value) && Array.isArray(value.all_tasks) ? value.all_tasks : [];
+    const tasks = [];
+    const seenIds = new Set();
+    source.forEach((item) => {
+        const task = normalizeTask(item);
+        if (!task || seenIds.has(task.id)) return;
+        seenIds.add(task.id);
+        tasks.push(task);
+    });
+    return { all_tasks: tasks };
+}
+
+function itemPath(taskId) {
+    return `/items/${encodeURIComponent(idValue(taskId))}`;
+}
+
+function emitTaskChanged() {
+    window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'task' } }));
 }
 
 function isOverdue(task, today = startOfDay(TODAY())) {
     if (taskStatusBucket(task) !== 'open') return false;
-    const planDate = taskPlanDate(task);
-    return planDate ? startOfDay(planDate) < today : false;
+    const planDate = parseIsoDate(taskPlanDateKey(task));
+    const anchor = startOfDay(today) || startOfDay(TODAY());
+    return planDate ? startOfDay(planDate) < anchor : false;
 }
 
 function taskSortKey(task) {
-    const priority = Number(task.priority || 99);
+    const rawPriority = Number(task?.priority);
+    const priority = Number.isInteger(rawPriority) && rawPriority >= 1 && rawPriority <= 5 ? rawPriority : 99;
     const plan = taskPlanDateKey(task) || '9999-12-31';
-    const deadline = task.deadline_at || '9999-12-31T99:99:99';
-    return [priority, plan, deadline, task.created_at || ''];
+    const deadline = textValue(task?.deadline_at) || '9999-12-31T99:99:99';
+    return [priority, plan, deadline, textValue(task?.created_at)];
 }
 
 function sortTasks(tasks) {
-    return [...tasks].sort((a, b) => {
+    const source = Array.isArray(tasks) ? tasks.filter(isRecord) : [];
+    return [...source].sort((a, b) => {
         const ak = taskSortKey(a);
         const bk = taskSortKey(b);
         for (let i = 0; i < ak.length; i += 1) {
@@ -241,16 +326,17 @@ function sortTasks(tasks) {
 }
 
 function sortDone(tasks) {
-    return [...tasks].sort((a, b) => {
-        const at = a.completed_at || a.updated_at || '';
-        const bt = b.completed_at || b.updated_at || '';
+    const source = Array.isArray(tasks) ? tasks.filter(isRecord) : [];
+    return [...source].sort((a, b) => {
+        const at = textValue(a.completed_at) || textValue(a.cancelled_at) || textValue(a.updated_at);
+        const bt = textValue(b.completed_at) || textValue(b.cancelled_at) || textValue(b.updated_at);
         return bt.localeCompare(at);
     });
 }
 
 function filteredTasks() {
-    const tasks = _overview?.all_tasks || [];
-    const keyword = (_filters.search || '').trim().toLowerCase();
+    const tasks = Array.isArray(_overview?.all_tasks) ? _overview.all_tasks : [];
+    const keyword = textValue(_filters.search).toLowerCase();
     const todayKey = dateKey(TODAY());
     const usePlanFilter = Boolean(_filters.plan);
     return tasks.filter((task) => {
@@ -268,19 +354,25 @@ function filteredTasks() {
             taskTextCategory(task),
             taskPlanDateKey(task),
             task.deadline_at || '',
-        ].join('\n').toLowerCase();
+        ]
+            .join('\n')
+            .toLowerCase();
         return haystack.includes(keyword);
     });
 }
 
+// 筛选后在客户端重新分桶，保证列表、看板和概览数字使用同一份任务集合。
 function deriveDisplayModel(tasks) {
+    const source = Array.isArray(tasks) ? tasks.filter(isRecord) : [];
     const today = startOfDay(TODAY());
     const todayKey = dateKey(today);
-    const next7EndKey = dateKey(new Date(today.getTime() + 7 * 86400000));
-    const active = tasks.filter((task) => taskStatusBucket(task) === 'open');
-    const done = tasks.filter((task) => taskPrimaryStatus(task) === 'done');
-    const cancelled = tasks.filter((task) => taskPrimaryStatus(task) === 'cancelled');
-    const closed = tasks.filter((task) => taskStatusBucket(task) === 'closed');
+    const next7End = new Date(today);
+    next7End.setDate(next7End.getDate() + 7);
+    const next7EndKey = dateKey(next7End);
+    const active = source.filter((task) => taskStatusBucket(task) === 'open');
+    const done = source.filter((task) => taskPrimaryStatus(task) === 'done');
+    const cancelled = source.filter((task) => taskPrimaryStatus(task) === 'cancelled');
+    const closed = [...done, ...cancelled];
     const overdueTasks = [];
     const focusTasks = [];
     const upNextTasks = [];
@@ -310,32 +402,15 @@ function deriveDisplayModel(tasks) {
         return 0;
     });
 
-    const doneTodayCount = done.filter((task) => {
-        const completed = parseDate(task.completed_at || task.updated_at);
-        return completed ? startOfDay(completed).getTime() === today.getTime() : false;
-    }).length;
-
     const completionDays = Array.from({ length: 7 }, (_, index) => {
-        const day = new Date(today.getTime() - (6 - index) * 86400000);
+        const day = new Date(today);
+        day.setDate(day.getDate() - (6 - index));
         const key = dateKey(day);
         const count = done.filter((task) => dateKey(task.completed_at || task.updated_at) === key).length;
         return { date: key, label: `${day.getMonth() + 1}/${day.getDate()}`, count };
     });
 
-    const categoryMap = new Map();
-    active.forEach((task) => {
-        const category = taskTextCategory(task);
-        if (!category) return;
-        categoryMap.set(category, (categoryMap.get(category) || 0) + 1);
-    });
-    const categoryLoad = [...categoryMap.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 6)
-        .map(([category, count]) => ({
-            category,
-            count,
-            share: active.length ? count / active.length : 0,
-        }));
+    const textCategoryCount = new Set(active.map(taskTextCategory).filter(Boolean)).size;
 
     const planMap = new Map();
     active.forEach((task) => {
@@ -354,7 +429,7 @@ function deriveDisplayModel(tasks) {
             label: formatPlanDate(plan),
             count,
             share: active.length ? count / active.length : 0,
-            state: plan < todayKey ? 'overdue' : (plan === todayKey ? 'today' : 'upcoming'),
+            state: plan < todayKey ? 'overdue' : plan === todayKey ? 'today' : 'upcoming',
         }));
 
     return {
@@ -362,34 +437,33 @@ function deriveDisplayModel(tasks) {
             active_count: active.length,
             focus_count: focusSorted.length,
             overdue_count: overdueTasks.length,
-            done_today_count: doneTodayCount,
             done_count: done.length,
             cancelled_count: cancelled.length,
             closed_count: closed.length,
-            completion_rate: (active.length + done.length) ? done.length / (active.length + done.length) : 0,
+            completion_rate: active.length + done.length ? done.length / (active.length + done.length) : 0,
         },
         focus_tasks: focusSorted,
         up_next_tasks: sortTasks(upNextTasks),
         later_tasks: sortTasks(laterTasks),
         backlog_tasks: sortTasks(backlogTasks),
-        done_recent: sortDone(done).slice(0, 8),
-        cancelled_recent: sortDone(cancelled),
-        overdue_tasks: sortTasks(overdueTasks),
+        closed_recent: sortDone(closed).slice(0, 8),
         plan_load: planLoad,
-        category_load: categoryLoad,
+        text_category_count: textCategoryCount,
         completion_bars: completionDays,
+        match_count: source.length,
         board_columns: {
             open: sortTasks(active),
-            done: sortDone(done),
-            cancelled: sortDone(cancelled),
             closed: sortDone(closed),
         },
     };
 }
 
 function ensureStyles() {
-    injectStyles(CSS_ID, `
+    injectStyles(
+        CSS_ID,
+        `
         ${pageShellCss('tasks-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
+        /* 页面头部与视图切换。 */
         .tasks-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
             padding: 24px 26px; border-radius: 26px; margin-bottom: 18px;
@@ -417,6 +491,7 @@ function ensureStyles() {
             border-radius: 999px; padding: 9px 14px; font-size: 13px; font-weight: 700; transition: all 0.16s ease;
         }
         .tasks-toggle-btn.active { background: var(--color-tasks); color: #fff; box-shadow: 0 10px 24px rgba(16,185,129,0.24); }
+        /* 概览指标与计划分布。 */
         .tasks-layout {
             display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
             gap: 16px; margin-bottom: 18px;
@@ -459,6 +534,7 @@ function ensureStyles() {
         .tasks-category-count { color: var(--color-text-secondary); font-weight: 700; }
         .tasks-category-track { height: 10px; border-radius: 999px; background: rgba(226,232,240,0.7); overflow: hidden; }
         .tasks-category-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, rgba(16,185,129,0.88), rgba(52,211,153,0.55)); }
+        /* 搜索及互斥筛选条件。 */
         .tasks-filter-bar {
             display: grid; grid-template-columns: minmax(0, 1.3fr) repeat(3, minmax(140px, 0.6fr));
             gap: 12px; margin-bottom: 18px; padding: 16px 18px; border-radius: 22px;
@@ -477,6 +553,7 @@ function ensureStyles() {
         .tasks-filter-bar .pselect-trigger { height: 40px; padding: 0 14px; border-radius: 14px; background: rgba(255,255,255,0.92); }
         .tasks-filter-bar .pselect-panel { border-radius: 16px; }
         .tasks-filter-bar .pselect-label { min-width: 0; }
+        /* 执行列表。 */
         .tasks-workspace {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
             border: 1px solid rgba(226,232,240,0.92); border-radius: 22px; box-shadow: 0 18px 34px rgba(15,23,42,0.04);
@@ -503,7 +580,7 @@ function ensureStyles() {
         .task-row {
             display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: start;
             margin: 0 -8px; padding: 14px 8px; border-bottom: 1px solid rgba(226,232,240,0.66);
-            background: transparent; cursor: pointer;
+            background: transparent;
             transition: background 0.16s ease;
         }
         .task-row:last-child { border-bottom: none; }
@@ -514,7 +591,8 @@ function ensureStyles() {
         .task-row-main { min-width: 0; }
         .task-row-title-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
         .task-row-title {
-            margin: 0; font-size: 15px; font-weight: 760; color: var(--color-text);
+            margin: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer;
+            font: inherit; font-size: 15px; font-weight: 760; color: var(--color-text);
             min-width: 0; overflow-wrap: anywhere; word-break: break-word;
         }
         .task-row-note { margin-top: 6px; font-size: 13px; line-height: 1.6; color: var(--color-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -550,8 +628,8 @@ function ensureStyles() {
             padding: 28px 18px; border-radius: 18px; text-align: center; background: rgba(248,250,252,0.82);
             border: 1px dashed rgba(148,163,184,0.26); color: var(--color-text-secondary);
         }
-        .tasks-board { display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); gap: 14px; overflow-x: auto; padding-bottom: 4px; }
-        .tasks-board--two-col { grid-template-columns: repeat(2, minmax(260px, 1fr)); }
+        /* 双栏看板。 */
+        .tasks-board { display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 14px; overflow-x: auto; padding-bottom: 4px; }
         .tasks-board-col {
             min-width: 240px; border-radius: 18px; border: 1px solid rgba(226,232,240,0.92);
             background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92));
@@ -564,11 +642,14 @@ function ensureStyles() {
         .tasks-board-list.drag-over { background: rgba(16,185,129,0.05); border-radius: 0 0 22px 22px; }
         .tasks-board-card {
             border: 1px solid rgba(226,232,240,0.86); border-radius: 14px; background: #fff; padding: 12px;
-            cursor: pointer; transition: box-shadow 0.16s ease, transform 0.16s ease; position: relative;
+            cursor: grab; transition: box-shadow 0.16s ease, transform 0.16s ease; position: relative;
         }
         .tasks-board-card:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(15,23,42,0.08); }
         .tasks-board-card.dragging { opacity: 0.44; }
-        .tasks-board-card h4 { margin: 0; font-size: 14px; font-weight: 760; color: var(--color-text); }
+        .tasks-board-card-title {
+            display: block; width: 100%; margin: 0; padding: 0; border: 0; background: transparent;
+            text-align: left; cursor: pointer; font: inherit; font-size: 14px; font-weight: 760; color: var(--color-text);
+        }
         .tasks-board-card p { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--color-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .tasks-board-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
         .tasks-board-add { padding: 0 12px 12px; }
@@ -576,6 +657,7 @@ function ensureStyles() {
             width: 100%; border: 1px dashed rgba(148,163,184,0.5); background: transparent; color: var(--color-text-secondary);
             border-radius: 14px; padding: 10px 12px; cursor: pointer; font-weight: 700;
         }
+        /* 模态框里的优先级选择器。 */
         .priority-selector { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .priority-btn {
             width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
@@ -590,13 +672,28 @@ function ensureStyles() {
         .priority-btn.priority-3.active { border-color: rgba(234,179,8,0.38); background: rgba(254,252,232,0.98); box-shadow: inset 0 0 0 1px rgba(234,179,8,0.14); }
         .priority-btn.priority-4.active { border-color: rgba(34,197,94,0.36); background: rgba(240,253,244,0.98); box-shadow: inset 0 0 0 1px rgba(34,197,94,0.12); }
         .priority-btn.priority-5.active { border-color: rgba(148,163,184,0.42); background: rgba(248,250,252,0.98); box-shadow: inset 0 0 0 1px rgba(148,163,184,0.12); }
-        ${mediaMax(BREAKPOINTS.XL, `
+        .tasks-toggle-btn:focus-visible,
+        .tasks-filter-field input:focus-visible,
+        .task-row-title:focus-visible,
+        .task-action-btn:focus-visible,
+        .tasks-board-card-title:focus-visible,
+        .tasks-board-add button:focus-visible,
+        .priority-btn:focus-visible {
+            outline: 3px solid rgba(16,185,129,0.28);
+            outline-offset: 2px;
+        }
+        ${mediaMax(
+            BREAKPOINTS.XL,
+            `
             .tasks-layout { grid-template-columns: 1fr; }
             .tasks-filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .tasks-filter-field--range { grid-column: span 2; }
             .tasks-board { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
-        `)}
-        ${mediaMax(BREAKPOINTS.MOBILE, `
+        `,
+        )}
+        ${mediaMax(
+            BREAKPOINTS.MOBILE,
+            `
             .tasks-hero { grid-template-columns: 1fr; }
             .tasks-hero-actions { justify-content: flex-start; }
             .tasks-layout { gap: 14px; }
@@ -607,39 +704,22 @@ function ensureStyles() {
             .task-row { grid-template-columns: auto minmax(0, 1fr); }
             .task-row-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
             .tasks-board { grid-template-columns: 1fr; }
-        `)}
-    `);
+        `,
+        )}
+    `,
+    );
 }
 
 async function fetchOverview() {
     const res = await api.get('/stats/tasks/overview', { today: dateKey(TODAY()) });
-    return res.data || null;
+    return normalizeOverview(res?.data);
 }
 
+// 以下模板只接收规范化后的任务；所有用户文本仍在插值点显式转义。
 function renderCategoryOptions(tasks) {
-    const categories = [...new Set(tasks.map((task) => taskTextCategory(task)).filter(Boolean))].sort();
+    const source = Array.isArray(tasks) ? tasks : [];
+    const categories = [...new Set(source.map((task) => taskTextCategory(task)).filter(Boolean))].sort();
     return [{ value: '', label: '全部分类' }, ...categories.map((category) => ({ value: category, label: category }))];
-}
-
-function renderPlanOptions() {
-    return [
-        { value: '', label: '全部计划日期' },
-        { value: 'today', label: '今天' },
-        { value: 'week', label: '本周' },
-        { value: 'month', label: '本月' },
-        { value: 'future', label: '更晚' },
-        { value: 'undated', label: '未安排日期' },
-        { value: 'custom', label: '自定义时间段' },
-    ];
-}
-
-function renderStatusOptions() {
-    return [
-        { value: '', label: '全部状态' },
-        { value: 'open', label: '未完成' },
-        { value: 'done', label: '已完成' },
-        { value: 'cancelled', label: '已取消' },
-    ];
 }
 
 function renderHero(model) {
@@ -656,11 +736,11 @@ function renderHero(model) {
                 </div>
             </div>
             <div class="tasks-hero-actions">
-                <div class="tasks-view-toggle">
-                    <button class="tasks-toggle-btn ${_viewMode === 'list' ? 'active' : ''}" id="task-view-list" data-view="list">执行列表</button>
-                    <button class="tasks-toggle-btn ${_viewMode === 'board' ? 'active' : ''}" id="task-view-board" data-view="board">双栏总览</button>
+                <div class="tasks-view-toggle" role="group" aria-label="待办视图">
+                    <button type="button" class="tasks-toggle-btn ${_viewMode === 'list' ? 'active' : ''}" id="task-view-list" data-view="list" aria-pressed="${_viewMode === 'list'}">执行列表</button>
+                    <button type="button" class="tasks-toggle-btn ${_viewMode === 'board' ? 'active' : ''}" id="task-view-board" data-view="board" aria-pressed="${_viewMode === 'board'}">双栏总览</button>
                 </div>
-                <button class="btn btn-primary" id="tasks-add-top">＋ 新建任务</button>
+                <button type="button" class="btn btn-primary" id="tasks-add-top">＋ 新建任务</button>
             </div>
         </section>`;
 }
@@ -703,12 +783,16 @@ function renderInsights(model) {
                         </div>
                     </div>
                     <div class="tasks-meter">
-                        ${model.completion_bars.map((item) => `
+                        ${model.completion_bars
+                            .map(
+                                (item) => `
                             <div class="tasks-meter-bar">
                                 <div class="tasks-meter-value">${item.count}</div>
                                 <div class="tasks-meter-stick" style="height:${14 + (item.count / maxBar) * 66}px;"></div>
                                 <div class="tasks-meter-label">${item.label}</div>
-                            </div>`).join('')}
+                            </div>`,
+                            )
+                            .join('')}
                     </div>
                 </div>
             </div>
@@ -720,13 +804,17 @@ function renderInsights(model) {
                     </div>
                 </div>
                 <div class="tasks-panel-body">
-                    ${model.plan_load.length ? `
+                    ${
+                        model.plan_load.length
+                            ? `
                         <div class="tasks-category-list">
-                            ${model.plan_load.map((item) => `
+                            ${model.plan_load
+                                .map(
+                                    (item) => `
                                 <div class="tasks-category-row">
                                     <div>
                                         <div class="tasks-category-top">
-                                            <span class="tasks-category-name">${item.state === 'today' ? `今天 · ${item.label}` : (item.state === 'overdue' ? `已滞后 · ${item.label}` : `计划 · ${item.label}`)}</span>
+                                            <span class="tasks-category-name">${item.state === 'today' ? `今天 · ${item.label}` : item.state === 'overdue' ? `已滞后 · ${item.label}` : `计划 · ${item.label}`}</span>
                                             <span class="tasks-category-count">${item.count} 项</span>
                                         </div>
                                         <div class="tasks-category-track">
@@ -734,9 +822,13 @@ function renderInsights(model) {
                                         </div>
                                     </div>
                                     <div class="task-pill">${Math.round(item.share * 100)}%</div>
-                                </div>`).join('')}
-                        </div>` : `<div class="tasks-empty">当前没有带计划日期的未完成任务；如果录入了文字分类，可以直接用上方筛选器查看。</div>`}
-                    ${model.category_load.length ? `<div class="task-pill" style="margin-top:14px;">${model.category_load.length} 个文字分类可筛选</div>` : ''}
+                                </div>`,
+                                )
+                                .join('')}
+                        </div>`
+                            : `<div class="tasks-empty">当前没有带计划日期的未完成任务；如果录入了文字分类，可以直接用上方筛选器查看。</div>`
+                    }
+                    ${model.text_category_count ? `<div class="task-pill" style="margin-top:14px;">${model.text_category_count} 个文字分类可筛选</div>` : ''}
                 </div>
             </div>
         </section>`;
@@ -754,7 +846,7 @@ function renderFilters(tasks) {
                 <label id="tasks-filter-plan-label">计划日期</label>
                 ${renderCustomSelect({
                     id: 'tasks-filter-plan',
-                    options: renderPlanOptions(),
+                    options: PLAN_FILTER_OPTIONS,
                     selected: _filters.plan,
                     className: 'pselect-block pselect-theme-tasks',
                     placeholder: '全部计划日期',
@@ -776,22 +868,26 @@ function renderFilters(tasks) {
                 <label id="tasks-filter-status-label">状态</label>
                 ${renderCustomSelect({
                     id: 'tasks-filter-status',
-                    options: renderStatusOptions(),
+                    options: STATUS_FILTER_OPTIONS,
                     selected: _filters.status,
                     className: 'pselect-block pselect-theme-tasks',
                     placeholder: '全部状态',
                     labelledBy: 'tasks-filter-status-label',
                 })}
             </div>
-            ${showCustomRange ? `
+            ${
+                showCustomRange
+                    ? `
                 <div class="tasks-filter-field tasks-filter-field--range">
                     <label>自定义范围</label>
                     <div class="tasks-filter-range">
-                        <input id="tasks-filter-plan-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${_filters.customStart || ''}" aria-label="计划开始日期">
+                        <input id="tasks-filter-plan-start" type="text" inputmode="numeric" pattern="\\d{4}-\\d{2}-\\d{2}" maxlength="10" autocomplete="off" spellcheck="false" placeholder="YYYY-MM-DD" value="${escapeHtml(_filters.customStart)}" aria-label="计划开始日期">
                         <span>至</span>
-                        <input id="tasks-filter-plan-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${_filters.customEnd || ''}" aria-label="计划结束日期">
+                        <input id="tasks-filter-plan-end" type="text" inputmode="numeric" pattern="\\d{4}-\\d{2}-\\d{2}" maxlength="10" autocomplete="off" spellcheck="false" placeholder="YYYY-MM-DD" value="${escapeHtml(_filters.customEnd)}" aria-label="计划结束日期">
                     </div>
-                </div>` : ''}
+                </div>`
+                    : ''
+            }
         </section>`;
 }
 
@@ -801,14 +897,19 @@ function taskRowHTML(task) {
     const status = STATUS_META[normalizedStatus] || STATUS_META.open;
     const textCategory = taskTextCategory(task);
     const planKey = taskPlanDateKey(task);
-    const scheduleText = taskStatusBucket(task) === 'closed'
-        ? (task.completed_at || task.updated_at
-            ? `${normalizedStatus === 'cancelled' ? '结束于' : '完成于'} · ${formatShortDate(task.completed_at || task.updated_at)}`
-            : (normalizedStatus === 'cancelled' ? '已取消' : '已完成'))
-        : (task.deadline_at
-            ? `${isOverdue(task) ? '已滞后' : '截止'} · ${formatShortDate(task.deadline_at)}`
-            : describePlanDate(planKey));
+    const scheduleText =
+        taskStatusBucket(task) === 'closed'
+            ? task.completed_at || task.cancelled_at || task.updated_at
+                ? `${normalizedStatus === 'cancelled' ? '结束于' : '完成于'} · ${formatShortDate(task.completed_at || task.cancelled_at || task.updated_at)}`
+                : normalizedStatus === 'cancelled'
+                  ? '已取消'
+                  : '已完成'
+            : task.deadline_at
+              ? `${isOverdue(task) ? '已滞后' : '截止'} · ${formatShortDate(task.deadline_at)}`
+              : describePlanDate(planKey);
     const taskId = escapeHtml(task.id || '');
+    const pending = _pendingTaskIds.has(task.id);
+    const pendingAttrs = pending ? ' disabled aria-busy="true"' : '';
     const content = task.content ? `<div class="task-row-note">${escapeHtml(task.content)}</div>` : '';
     const metaParts = [
         `${priority.icon} ${priority.label}`,
@@ -817,11 +918,11 @@ function taskRowHTML(task) {
         scheduleText,
     ].filter(Boolean);
     return `
-        <div class="task-row" data-task-id="${taskId}">
+        <article class="task-row">
             <div class="task-row-priority" style="background:${priority.color};"></div>
             <div class="task-row-main">
                 <div class="task-row-title-line">
-                    <h4 class="task-row-title">${escapeHtml(task.title || '(无标题)')}</h4>
+                    <button type="button" class="task-row-title" data-action="edit" data-id="${taskId}"${pendingAttrs}>${escapeHtml(task.title || '(无标题)')}</button>
                     <span class="task-status-badge" style="--task-pill-color:${status.tone};--task-pill-bg:${status.bg};">${status.label}</span>
                 </div>
                 ${content}
@@ -830,11 +931,11 @@ function taskRowHTML(task) {
                 </div>
             </div>
             <div class="task-row-actions">
-                ${taskStatusBucket(task) !== 'closed' ? `<button class="task-action-btn primary" data-action="done" data-id="${taskId}">完成</button>` : `<button class="task-action-btn" data-action="resume" data-id="${taskId}">恢复</button>`}
-                ${taskStatusBucket(task) !== 'closed' ? `<button class="task-action-btn" data-action="cancel" data-id="${taskId}">取消</button>` : ''}
-                <button class="task-action-btn" data-action="edit" data-id="${taskId}">编辑</button>
+                ${taskStatusBucket(task) !== 'closed' ? `<button type="button" class="task-action-btn primary" data-action="done" data-id="${taskId}"${pendingAttrs}>完成</button>` : `<button type="button" class="task-action-btn" data-action="resume" data-id="${taskId}"${pendingAttrs}>恢复</button>`}
+                ${taskStatusBucket(task) !== 'closed' ? `<button type="button" class="task-action-btn" data-action="cancel" data-id="${taskId}"${pendingAttrs}>取消</button>` : ''}
+                <button type="button" class="task-action-btn" data-action="edit" data-id="${taskId}"${pendingAttrs}>编辑</button>
             </div>
-        </div>`;
+        </article>`;
 }
 
 function renderSection(title, subtitle, tasks) {
@@ -842,27 +943,28 @@ function renderSection(title, subtitle, tasks) {
         <section class="tasks-section">
             <div class="tasks-section-head">
                 <div>
-                    <div class="tasks-section-title">${title}</div>
-                    <div class="tasks-section-meta">${subtitle}</div>
+                    <div class="tasks-section-title">${escapeHtml(title)}</div>
+                    <div class="tasks-section-meta">${escapeHtml(subtitle)}</div>
                 </div>
                 <div class="tasks-section-count">${tasks.length} 项</div>
             </div>
-            ${tasks.length
-                ? `<div class="tasks-task-list">${tasks.map(taskRowHTML).join('')}</div>`
-                : `<div class="tasks-empty">当前没有内容。</div>`}
+            ${
+                tasks.length
+                    ? `<div class="tasks-task-list">${tasks.map(taskRowHTML).join('')}</div>`
+                    : `<div class="tasks-empty">当前没有内容。</div>`
+            }
         </section>`;
 }
 
 function renderListView(model) {
     const showActive = !_filters.status || _filters.status === 'open';
     const showClosed = !_filters.status || _filters.status === 'done' || _filters.status === 'cancelled';
-    const closedTasks = sortDone([...model.done_recent, ...model.cancelled_recent]).slice(0, 8);
     return `
         <div class="tasks-sections">
             ${showActive ? renderSection('今天与滞后', '优先清理今天计划和已经拖后的任务。', model.focus_tasks) : ''}
             ${showActive ? renderSection('未来 7 天', '接下来一周内需要继续跟进的事项。', model.up_next_tasks) : ''}
             ${showActive ? renderSection('更晚与未安排', '更晚的计划日期，以及尚未放进日期桶的任务。', [...model.later_tasks, ...model.backlog_tasks]) : ''}
-            ${showClosed ? renderSection('最近完成', '已完成和已取消的任务。', closedTasks) : ''}
+            ${showClosed ? renderSection('最近结束', '已完成和已取消的任务。', model.closed_recent) : ''}
         </div>`;
 }
 
@@ -871,9 +973,12 @@ function boardCardHTML(task) {
     const status = STATUS_META[taskPrimaryStatus(task)] || STATUS_META.open;
     const textCategory = taskTextCategory(task);
     const planKey = taskPlanDateKey(task);
+    const taskId = escapeHtml(task.id || '');
+    const pending = _pendingTaskIds.has(task.id);
+    const pendingAttrs = pending ? ' disabled aria-busy="true"' : '';
     return `
-        <div class="tasks-board-card" data-task-id="${escapeHtml(task.id || '')}" draggable="true">
-            <h4>${escapeHtml(task.title || '(无标题)')}</h4>
+        <div class="tasks-board-card" data-task-id="${taskId}" draggable="${!pending}">
+            <button type="button" class="tasks-board-card-title" data-action="edit" data-id="${taskId}"${pendingAttrs}>${escapeHtml(task.title || '(无标题)')}</button>
             ${task.content ? `<p>${escapeHtml(task.content)}</p>` : ''}
             <div class="tasks-board-meta">
                 <span class="task-pill">${priority.icon} ${priority.label}</span>
@@ -890,8 +995,10 @@ function renderBoardView(model) {
         { key: 'closed', label: '已结束', color: '#16A34A' },
     ];
     return `
-        <div class="tasks-board tasks-board--two-col">
-            ${columns.map((column) => `
+        <div class="tasks-board">
+            ${columns
+                .map(
+                    (column) => `
                 <section class="tasks-board-col">
                     <div class="tasks-board-head">
                         <div class="tasks-board-title">
@@ -901,19 +1008,22 @@ function renderBoardView(model) {
                         <span class="tasks-board-count">${model.board_columns[column.key].length}</span>
                     </div>
                     <div class="tasks-board-list" data-col="${column.key}">
-                        ${model.board_columns[column.key].length
-                            ? model.board_columns[column.key].map(boardCardHTML).join('')
-                            : `<div class="tasks-empty">暂无任务</div>`}
+                        ${
+                            model.board_columns[column.key].length
+                                ? model.board_columns[column.key].map(boardCardHTML).join('')
+                                : `<div class="tasks-empty">暂无任务</div>`
+                        }
                     </div>
-                    ${column.key === 'open' ? `<div class="tasks-board-add"><button id="tasks-add-board">＋ 添加任务</button></div>` : ''}
-                </section>`).join('')}
+                    ${column.key === 'open' ? `<div class="tasks-board-add"><button type="button" id="tasks-add-board">＋ 添加任务</button></div>` : ''}
+                </section>`,
+                )
+                .join('')}
         </div>`;
 }
 
 function renderWorkspace(model) {
-    const subtitle = _viewMode === 'list'
-        ? '按计划日期和完成情况安排接下来要处理的事。'
-        : '把未完成和已结束分成两栏快速浏览。';
+    const subtitle =
+        _viewMode === 'list' ? '按计划日期和完成情况安排接下来要处理的事。' : '把未完成和已结束分成两栏快速浏览。';
     return `
         <section class="tasks-workspace">
             <div class="tasks-workspace-head">
@@ -921,7 +1031,7 @@ function renderWorkspace(model) {
                     <h3 class="tasks-workspace-title">${_viewMode === 'list' ? '执行列表' : '双栏总览'}</h3>
                     <p class="tasks-workspace-subtitle">${subtitle}</p>
                 </div>
-                <div class="task-pill">${filteredTasks().length} 项匹配</div>
+                <div class="task-pill">${model.match_count} 项匹配</div>
             </div>
             <div class="tasks-content">
                 ${_viewMode === 'list' ? renderListView(model) : renderBoardView(model)}
@@ -934,7 +1044,19 @@ function renderPage() {
     ensureStyles();
 
     if (_loading && !_overview) {
-        _container.innerHTML = `<div class="tasks-shell"><div class="tasks-empty">正在加载待办...</div></div>`;
+        _container.innerHTML = `<div class="tasks-shell" aria-busy="true"><div class="tasks-empty" role="status" aria-live="polite">正在加载待办...</div></div>`;
+        return;
+    }
+
+    if (_loadError && !_overview) {
+        _container.innerHTML = `
+            <div class="tasks-shell">
+                <div class="tasks-empty" role="alert">
+                    <p>待办加载失败：${escapeHtml(_loadError)}</p>
+                    <button type="button" class="btn btn-secondary" id="tasks-retry">重新加载</button>
+                </div>
+            </div>`;
+        _container.querySelector('#tasks-retry')?.addEventListener('click', () => void loadAndRender());
         return;
     }
 
@@ -942,7 +1064,7 @@ function renderPage() {
     const model = deriveDisplayModel(tasks);
 
     _container.innerHTML = `
-        <div class="tasks-shell">
+        <div class="tasks-shell" aria-busy="${_loading}">
             ${renderHero(model)}
             ${renderInsights(model)}
             ${renderFilters(_overview?.all_tasks || [])}
@@ -954,102 +1076,155 @@ function renderPage() {
 }
 
 async function updateTaskStatus(taskId, status) {
-    const task = (_overview?.all_tasks || []).find((item) => String(item.id) === String(taskId));
-    if (!task) return;
-    await api.put(`/items/${taskId}`, { status });
-    showToast('任务状态已更新', 'success');
-    window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'task' } }));
-    await loadAndRender();
+    const id = idValue(taskId);
+    if (!id || !TASK_STATUSES.has(status) || _pendingTaskIds.has(id)) return false;
+
+    const task = (_overview?.all_tasks || []).find((item) => item.id === id);
+    if (!task || taskPrimaryStatus(task) === status) return false;
+
+    _pendingTaskIds.add(id);
+    renderPage();
+    try {
+        await api.put(itemPath(id), { status, version: task.version });
+        showToast('任务状态已更新', 'success');
+        emitTaskChanged();
+        return true;
+    } catch (error) {
+        showToast(`状态更新失败：${errorMessage(error)}`, 'error');
+        return false;
+    } finally {
+        _pendingTaskIds.delete(id);
+        renderPage();
+    }
 }
 
-export function openTaskModal(existing = null) {
+// 新建与编辑共用字段定义，但保存和删除各自锁定，防止双击产生重复写入。
+export async function openTaskModal(existing = null) {
+    let userTimeZone;
+    try {
+        userTimeZone = await fetchUserTimeZone();
+    } catch (error) {
+        showToast(`无法读取用户时区：${errorMessage(error)}`, 'error');
+        return;
+    }
     ensureStyles();
-    const isEdit = Boolean(existing);
+    const task = normalizeTask(existing);
+    const isEdit = Boolean(task);
+    const deadlineValue = task?.deadline_at ? zonedDateTimeToInput(task.deadline_at, userTimeZone) : '';
+    if (task?.deadline_at && !deadlineValue) {
+        showToast('截止时间格式无效，已阻止编辑以免覆盖原值', 'error');
+        return;
+    }
     const fields = TASK_FIELDS.map((field) => {
         let value = field.value ?? '';
-        if (existing) {
-            if (field.name === 'deadline_at') value = toDatetimeLocal(existing.deadline_at);
-            else if (field.name === 'status') value = taskPrimaryStatus(existing);
-            else if (field.name === 'category') value = taskEditableCategoryValue(existing);
-            else value = existing[field.name] ?? field.value ?? '';
+        if (task) {
+            if (field.name === 'deadline_at') value = deadlineValue;
+            else if (field.name === 'status') value = taskPrimaryStatus(task);
+            else if (field.name === 'category') value = taskTextCategory(task);
+            else value = task[field.name] ?? field.value ?? '';
         } else if (field.name === 'plan_date') {
             value = defaultTaskPlanDateValue();
         }
         return { ...field, value };
     });
 
-    const content = showModal(isEdit ? '编辑任务' : '新建任务', `<form id="task-form">${buildFormHTML(fields)}</form>`, {
-        footer: `
-            ${isEdit ? `<button class="btn btn-danger btn-sm" id="task-delete" style="margin-right:auto;">删除</button>` : ''}
-            <button class="btn btn-secondary" id="task-cancel">取消</button>
-            <button class="btn btn-primary" id="task-save">保存</button>
-        `,
-    });
+    const content = showModal(
+        isEdit ? '编辑任务' : '新建任务',
+        safeHtml(`<form id="task-form">${buildFormHTML(fields)}</form>`),
+        {
+            footer: safeHtml(`
+            ${isEdit ? `<button type="button" class="btn btn-danger btn-sm" id="task-delete" style="margin-right:auto;">删除</button>` : ''}
+            <button type="button" class="btn btn-secondary" id="task-cancel">取消</button>
+            <button type="button" class="btn btn-primary" id="task-save">保存</button>
+        `),
+        },
+    );
 
     initFormInteractions(content);
-    content.querySelector('#task-cancel').onclick = closeModal;
+    content.querySelector('#task-cancel')?.addEventListener('click', closeModal);
+    let submitting = false;
 
-    if (isEdit) {
-        content.querySelector('#task-delete').onclick = async () => {
+    if (task) {
+        content.querySelector('#task-delete')?.addEventListener('click', async () => {
+            if (submitting) return;
+            submitting = true;
             closeModal();
             const confirmed = await showConfirmModal({
                 title: '删除任务',
-                message: `确定要删除“${existing.title || '这个任务'}”吗？删除后会从执行列表和看板里一起移除。`,
+                message: `确定要删除“${task.title || '这个任务'}”吗？删除后会从执行列表和看板里一起移除。`,
                 confirmText: '删除',
                 cancelText: '返回编辑',
                 tone: 'danger',
             });
             if (!confirmed) {
-                openTaskModal(existing);
+                openTaskModal(task);
                 return;
             }
             try {
-                await api.delete(`/items/${existing.id}`);
+                await api.delete(itemPath(task.id));
                 showToast('任务已删除', 'success');
-                window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'task' } }));
-                await loadAndRender();
-            } catch (err) {
-                showToast(`删除失败：${err.message}`, 'error');
+                emitTaskChanged();
+            } catch (error) {
+                showToast(`删除失败：${errorMessage(error)}`, 'error');
+            } finally {
+                submitting = false;
             }
-        };
+        });
     }
 
-    content.querySelector('#task-save').onclick = async () => {
+    const saveButton = content.querySelector('#task-save');
+    saveButton?.addEventListener('click', async () => {
+        if (submitting) return;
         const form = content.querySelector('#task-form');
-        const payload = normalizeTaskPayload(getFormData(form));
+        let payload;
+        try {
+            payload = normalizeTaskPayload(getFormData(form), userTimeZone);
+        } catch (error) {
+            showToast(errorMessage(error), 'warning');
+            return;
+        }
         if (!payload.title) {
             showToast('请填写标题', 'warning');
             return;
         }
+        submitting = true;
+        saveButton.disabled = true;
+        saveButton.setAttribute('aria-busy', 'true');
         try {
-            if (isEdit) {
-                await api.put(`/items/${existing.id}`, payload);
+            if (task) {
+                await api.put(itemPath(task.id), { ...payload, version: task.version });
                 showToast('任务已更新', 'success');
             } else {
                 await api.post('/items', { type: 'task', ...payload });
                 showToast('任务已创建', 'success');
             }
             closeModal();
-            window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'task' } }));
-            await loadAndRender();
-        } catch (err) {
-            showToast(`保存失败：${err.message}`, 'error');
+            emitTaskChanged();
+        } catch (error) {
+            showToast(`保存失败：${errorMessage(error)}`, 'error');
+        } finally {
+            submitting = false;
+            if (saveButton.isConnected) {
+                saveButton.disabled = false;
+                saveButton.removeAttribute('aria-busy');
+            }
         }
-    };
+    });
 }
 
 function attachListeners() {
     if (!_container) return;
 
     const handlePlanChange = (value) => {
-        _filters.plan = value;
-        if (value) {
+        const plan = PLAN_FILTER_VALUES.has(value) ? value : '';
+        _filters.plan = plan;
+        if (plan) {
             _filters.category = '';
         } else {
             _filters.customStart = '';
             _filters.customEnd = '';
         }
-        if (value === 'custom' && (!_filters.customStart || !_filters.customEnd)) {
+        if (plan === 'custom' && (!_filters.customStart || !_filters.customEnd)) {
             const range = defaultCustomPlanRange();
             _filters.customStart = range.start;
             _filters.customEnd = range.end;
@@ -1060,20 +1235,27 @@ function attachListeners() {
     initCustomSelects(_container, {
         'tasks-filter-plan': handlePlanChange,
         'tasks-filter-category': (value) => {
-            _filters.category = value;
-            if (value) {
+            const categories = new Set(renderCategoryOptions(_overview?.all_tasks).map((option) => option.value));
+            const category = categories.has(value) ? value : '';
+            _filters.category = category;
+            if (category) {
                 _filters.plan = '';
                 _filters.customStart = '';
                 _filters.customEnd = '';
             }
             renderPage();
         },
-        'tasks-filter-status': (value) => { _filters.status = value; renderPage(); },
+        'tasks-filter-status': (value) => {
+            _filters.status = value === '' || TASK_STATUSES.has(value) ? value : '';
+            renderPage();
+        },
     });
 
     _container.querySelectorAll('[data-view]').forEach((button) => {
         button.onclick = () => {
-            _viewMode = button.dataset.view;
+            const view = button.dataset.view;
+            if (!VIEW_MODES.has(view) || view === _viewMode) return;
+            _viewMode = view;
             renderPage();
         };
     });
@@ -1086,34 +1268,39 @@ function attachListeners() {
     const search = _container.querySelector('#tasks-filter-search');
     if (search) {
         search.onchange = () => {
-            _filters.search = search.value || '';
+            _filters.search = textValue(search.value);
             renderPage();
         };
     }
 
+    const updateCustomDate = (key, input) => {
+        const value = textValue(input.value);
+        if (!isIsoDate(value)) {
+            input.setCustomValidity('请输入有效日期，格式为 YYYY-MM-DD');
+            input.reportValidity();
+            return;
+        }
+        input.setCustomValidity('');
+        _filters[key] = value;
+        renderPage();
+    };
     const customStart = _container.querySelector('#tasks-filter-plan-start');
     if (customStart) {
-        customStart.onchange = () => {
-            _filters.customStart = customStart.value || '';
-            renderPage();
-        };
+        customStart.onchange = () => updateCustomDate('customStart', customStart);
     }
 
     const customEnd = _container.querySelector('#tasks-filter-plan-end');
     if (customEnd) {
-        customEnd.onchange = () => {
-            _filters.customEnd = customEnd.value || '';
-            renderPage();
-        };
+        customEnd.onchange = () => updateCustomDate('customEnd', customEnd);
     }
 
     _container.onclick = async (event) => {
-        const actionButton = event.target.closest('[data-action]');
+        const actionButton = event.target?.closest?.('[data-action]');
         if (actionButton) {
             event.stopPropagation();
-            const taskId = actionButton.dataset.id;
+            const taskId = idValue(actionButton.dataset.id);
             const action = actionButton.dataset.action;
-            const task = (_overview?.all_tasks || []).find((item) => String(item.id) === String(taskId));
+            const task = (_overview?.all_tasks || []).find((item) => item.id === taskId);
             if (!task) return;
             if (action === 'edit') {
                 openTaskModal(task);
@@ -1133,20 +1320,21 @@ function attachListeners() {
             }
             return;
         }
-
-        const taskCard = event.target.closest('[data-task-id]');
-        if (taskCard) {
-            const task = (_overview?.all_tasks || []).find((item) => String(item.id) === String(taskCard.dataset.taskId));
-            if (task) openTaskModal(task);
-        }
     };
 
     if (_viewMode === 'board') {
         _container.querySelectorAll('.tasks-board-card').forEach((card) => {
             card.addEventListener('dragstart', (event) => {
+                if (card.getAttribute('draggable') !== 'true') {
+                    event.preventDefault();
+                    return;
+                }
                 _dragTaskId = card.dataset.taskId;
                 card.classList.add('dragging');
-                event.dataTransfer.effectAllowed = 'move';
+                if (event.dataTransfer) {
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', _dragTaskId || '');
+                }
             });
             card.addEventListener('dragend', () => {
                 card.classList.remove('dragging');
@@ -1165,51 +1353,66 @@ function attachListeners() {
             zone.addEventListener('drop', async (event) => {
                 event.preventDefault();
                 zone.classList.remove('drag-over');
-                const status = zone.dataset.col;
-                if (!_dragTaskId || !status) return;
-                await updateTaskStatus(_dragTaskId, status === 'closed' ? 'done' : 'open');
+                const taskId = _dragTaskId || idValue(event.dataTransfer?.getData('text/plain'));
+                const column = zone.dataset.col;
+                const task = (_overview?.all_tasks || []).find((item) => item.id === taskId);
+                if (!task || !['open', 'closed'].includes(column)) return;
+                const currentStatus = taskPrimaryStatus(task);
+                const nextStatus = column === 'open' ? 'open' : currentStatus === 'open' ? 'done' : currentStatus;
+                await updateTaskStatus(taskId, nextStatus);
             });
         });
     }
 }
 
+// 递增版本号实现 latest-wins；路由销毁也会递增版本，使迟到响应自动失效。
 async function loadAndRender() {
+    const loadVersion = ++_loadVersion;
     _loading = true;
+    if (!_overview) _loadError = '';
     renderPage();
     try {
-        _overview = await fetchOverview();
-    } catch (err) {
-        _overview = null;
-        showToast(`加载任务失败：${err.message}`, 'error');
+        const overview = await fetchOverview();
+        if (!_container || loadVersion !== _loadVersion) return;
+        _overview = overview;
+        _loadError = '';
+    } catch (error) {
+        if (!_container || loadVersion !== _loadVersion) return;
+        _loadError = errorMessage(error);
+        showToast(`加载任务失败：${_loadError}`, 'error');
     } finally {
-        _loading = false;
+        if (_container && loadVersion === _loadVersion) {
+            _loading = false;
+            renderPage();
+        }
     }
-    renderPage();
 }
 
 export function render(container) {
+    _unsubscribeDataChanges?.();
+    _unsubscribeDataChanges = null;
+    _loadVersion += 1;
     _container = container;
     _overview = null;
     _loading = false;
+    _loadError = '';
     _viewMode = 'list';
-    _filters = { search: '', plan: '', category: '', status: '', customStart: '', customEnd: '' };
-    renderPage();
-    loadAndRender();
-    _dataChangedHandler = async (event) => {
-        const changedType = event?.detail?.type;
-        if (changedType && changedType !== 'task') return;
-        await loadAndRender();
-    };
-    window.addEventListener('pendo-data-changed', _dataChangedHandler);
+    _dragTaskId = null;
+    _filters = { ...DEFAULT_FILTERS };
+    _pendingTaskIds.clear();
+    _unsubscribeDataChanges = subscribeDataChanges('task', loadAndRender);
+    void loadAndRender();
 }
 
 export function destroy() {
-    if (_dataChangedHandler) {
-        window.removeEventListener('pendo-data-changed', _dataChangedHandler);
-        _dataChangedHandler = null;
-    }
+    _unsubscribeDataChanges?.();
+    _unsubscribeDataChanges = null;
+    _loadVersion += 1;
     _container = null;
     _overview = null;
+    _loading = false;
+    _loadError = '';
+    _dragTaskId = null;
+    _filters = { ...DEFAULT_FILTERS };
+    _pendingTaskIds.clear();
 }
-
-export function onRouteEnter(_params) {}
