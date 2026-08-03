@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from core.plugin_base import write_json
+from core.plugin_base import load_json, write_json
+
+from ..store_base import delete_json_artifacts
 
 
 @dataclass(frozen=True)
@@ -22,10 +23,9 @@ class ActionRecord:
 
 
 class ActionHistoryStore:
-    """Stores action records per chat with debounced persistence.
+    """按会话保存动作记录，并采用防抖持久化。
 
-    Uses a dirty-flag + debounced write strategy instead of writing on every
-    append, to avoid I/O bottlenecks in high-frequency conversation scenarios.
+    使用脏标记和防抖写入，而不是每次追加都落盘，避免高频对话中的 I/O 瓶颈。
     """
 
     def __init__(self) -> None:
@@ -54,19 +54,18 @@ class ActionHistoryStore:
             self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
 
     def clear(self, chat_id: str) -> None:
-        with self._lock:
-            self._cache.pop(chat_id, None)
-            self._dirty.discard(chat_id)
-            self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
-            path = self._path(chat_id)
-        if path and path.exists():
-            try:
-                path.unlink()
-            except OSError:
-                pass
+        # 与正在执行的防抖刷盘串行，避免重置删除后旧快照又被后台线程写回。
+        with self._write_lock:
+            with self._lock:
+                self._cache.pop(chat_id, None)
+                self._dirty.discard(chat_id)
+                self._state_version[chat_id] = self._state_version.get(chat_id, 0) + 1
+                path = self._path(chat_id)
+            if path:
+                delete_json_artifacts(path)
 
     def flush(self, chat_id: str | None = None) -> None:
-        """Persist dirty chat(s) to disk. Call from debounced scheduler."""
+        """把脏会话持久化到磁盘，由防抖调度器调用。"""
         if chat_id is not None:
             self._persist(chat_id)
         else:
@@ -74,19 +73,6 @@ class ActionHistoryStore:
                 dirty = list(self._dirty)
             for cid in dirty:
                 self._persist(cid)
-
-    def flush_all(self) -> None:
-        """Flush all dirty chats — used during shutdown."""
-        self.flush()
-
-    def get_recent(self, chat_id: str, *, max_items: int = 20) -> list[ActionRecord]:
-        with self._lock:
-            if chat_id not in self._cache:
-                loaded = self._load(chat_id)
-                self._cache[chat_id] = loaded or []
-            if max_items <= 0:
-                return []
-            return list(self._cache[chat_id][-max_items:])
 
     async def get_recent_async(self, chat_id: str, *, max_items: int = 20) -> list[ActionRecord]:
         if chat_id not in self._cache:
@@ -128,7 +114,7 @@ class ActionHistoryStore:
         if not path or not path.exists():
             return None
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = load_json(path, default=None)
             if not isinstance(raw, list):
                 return None
             out: list[ActionRecord] = []

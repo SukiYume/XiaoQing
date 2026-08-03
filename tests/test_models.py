@@ -101,6 +101,25 @@ class TestOneBotEvent:
         assert event.message[0]["type"] == "text"
         assert event.message[0]["data"]["text"] == "not json"
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            [{"type": "text", "data": "truthy"}],
+            [{"type": "text", "data": None}],
+            [{"type": "", "data": {}}],
+            [{"data": {"text": "missing type"}}],
+            ["not a segment"],
+            123,
+        ],
+    )
+    def test_rejects_malformed_structured_message(self, message):
+        with pytest.raises(ValidationError):
+            OneBotEvent(message=message)
+
+    def test_rejects_malformed_json_segment_array(self):
+        with pytest.raises(ValidationError):
+            OneBotEvent(message='[{"type":"text","data":"truthy"}]')
+
     def test_model_validate_dict(self):
         """测试从字典验证"""
         data = {
@@ -248,6 +267,8 @@ class TestPluginManifest:
         assert manifest.schema_version == 1
         assert manifest.dependencies == []
         assert manifest.services == []
+        assert manifest.uses_services == []
+        assert manifest.capabilities == []
 
     def test_create_full_manifest(self):
         """测试创建完整清单"""
@@ -282,6 +303,36 @@ class TestPluginManifest:
         with pytest.raises(ValidationError):
             PluginManifest(name="test", pretend_concurrency_limit=1)
 
+    def test_manifest_entry_uses_the_shared_strict_path_contract(self):
+        assert PluginManifest(name="test", entry="nested/entry.py").entry == "nested/entry.py"
+        for invalid in (
+            "../main.py",
+            "/main.py",
+            "C:/main.py",
+            "nested\\main.py",
+            "nested//main.py",
+            "sub.main.py",
+            "__init__.py",
+        ):
+            with pytest.raises(ValidationError):
+                PluginManifest(name="test", entry=invalid)
+
+    def test_manifest_watch_files_are_bounded_canonical_and_unique(self):
+        manifest = PluginManifest(
+            name="test",
+            watch_files=["config/settings.json", "assets/catalog.json"],
+        )
+        assert manifest.watch_files == ["config/settings.json", "assets/catalog.json"]
+
+        for invalid in (
+            ["data/state.json"],
+            ["config/settings.txt"],
+            ["config/settings.json", "config/settings.json"],
+            [f"config/{index}.json" for index in range(65)],
+        ):
+            with pytest.raises(ValidationError):
+                PluginManifest(name="test", watch_files=invalid)
+
     def test_model_validate_from_dict(self):
         """测试从字典验证"""
         data = {
@@ -300,6 +351,61 @@ class TestPluginManifest:
         assert manifest.version == "2.0.0"
         assert len(manifest.commands) == 1
         assert manifest.commands[0].name == "hello"
+
+    def test_command_catalog_rejects_duplicate_root_codes(self):
+        command = {"name": "same", "triggers": ["one"], "help": "same"}
+        with pytest.raises(ValidationError, match="duplicate stable names"):
+            PluginManifest.model_validate(
+                {
+                    "name": "test",
+                    "commands": [command, {**command, "triggers": ["two"]}],
+                }
+            )
+
+    def test_command_catalog_rejects_excessive_depth(self):
+        child = {"name": "level9", "help": "level 9", "usage": "/deep"}
+        for depth in range(8, 1, -1):
+            child = {
+                "name": f"level{depth}",
+                "help": f"level {depth}",
+                "usage": "/deep",
+                "subcommands": [child],
+            }
+        with pytest.raises(ValidationError, match="8 levels"):
+            PluginManifest.model_validate(
+                {
+                    "name": "test",
+                    "commands": [
+                        {
+                            "name": "deep",
+                            "triggers": ["deep"],
+                            "help": "deep",
+                            "subcommands": [child],
+                        }
+                    ],
+                }
+            )
+
+    def test_command_catalog_rejects_more_than_512_nodes(self):
+        commands = []
+        for root_index in range(5):
+            commands.append(
+                {
+                    "name": f"root{root_index}",
+                    "triggers": [f"root{root_index}"],
+                    "help": "root",
+                    "subcommands": [
+                        {
+                            "name": f"child{child_index}",
+                            "help": "child",
+                            "usage": "/root child",
+                        }
+                        for child_index in range(128)
+                    ],
+                }
+            )
+        with pytest.raises(ValidationError, match="512 nodes"):
+            PluginManifest.model_validate({"name": "test", "commands": commands})
 
     def test_service_contracts_are_closed_and_provider_scoped(self):
         service = PluginServiceManifest(
@@ -355,10 +461,47 @@ class TestPluginManifest:
             with pytest.raises(ValidationError):
                 PluginManifest(name="codex", services=[changed])
 
+    def test_capabilities_are_manifest_declared_but_core_owner_scoped(self):
+        assert PluginManifest(
+            name="bot_core",
+            capabilities=["secret_admin"],
+        ).capabilities == ["secret_admin"]
+        assert PluginManifest(
+            name="codex",
+            capabilities=["admin_sessions", "execution_timeout_exempt"],
+        ).capabilities == ["admin_sessions", "execution_timeout_exempt"]
 
-# ============================================================
-# 运行测试
-# ============================================================
+        for payload in (
+            {"name": "other", "capabilities": ["secret_admin"]},
+            {"name": "qingssh", "capabilities": ["secret_admin"]},
+            {
+                "name": "bot_core",
+                "capabilities": ["secret_admin", "secret_admin"],
+            },
+        ):
+            with pytest.raises(ValidationError):
+                PluginManifest.model_validate(payload)
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    def test_service_consumers_and_core_observer_are_closed_contracts(self):
+        smalltalk = PluginManifest(
+            name="smalltalk",
+            uses_services=["chat.reply", "voice.synthesize_text"],
+        )
+        assert smalltalk.uses_services == ["chat.reply", "voice.synthesize_text"]
+        observer = {
+            "name": "core.observe_outgoing_action",
+            "callback": "observe_outgoing_action",
+            "callers": ["core"],
+        }
+        assert PluginManifest(name="xiaoqing_chat", services=[observer]).services
+
+        for payload in (
+            {"name": "shell", "uses_services": ["chat.reply"]},
+            {
+                "name": "smalltalk",
+                "uses_services": ["chat.reply", "chat.reply"],
+            },
+            {"name": "other", "services": [observer]},
+        ):
+            with pytest.raises(ValidationError):
+                PluginManifest.model_validate(payload)

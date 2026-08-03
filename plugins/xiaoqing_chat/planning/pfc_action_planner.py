@@ -1,6 +1,12 @@
+"""把对话上下文转换为有界、可执行的 PFC 行动计划。
+
+规划器只接收裁剪后的目标、记忆和行动摘要，并把模型输出收窄到固定动作集合。模型
+不可用、超时、JSON 异常或未知动作时，群聊必须退回 wait，私聊才退回 direct_reply。
+新鲜轮次里已经通过频控的全群邀请可直接进入回复；其余消息仍由规划器判断对象和轮次。
+"""
+
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -12,53 +18,23 @@ from ..config.config import PersonalityConfig
 from ..llm.llm_client import chat_completions_raw_with_fallback_paths
 from ..llm.prompt_builder import build_dialogue_prompt
 from ..memory.memory import StoredMessage
+from ..participation import classify_group_participation_cue as _group_participation_cue
 from .pfc_utils import get_items_from_json
 
 _logger = logging.getLogger("plugin.xiaoqing_chat")
 
-PROMPT_INITIAL_REPLY = """{persona_text}。现在你在参与一场QQ{channel}，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以回复，可以倾听，可以调取知识，甚至可以屏蔽对方：
-
-【当前对话目标】
-{goals_str}
-{knowledge_info_str}
-
-【最近行动历史概要】
-{action_history_summary}
-【上一次行动的详细情况和结果】
-{last_action_context}
-【时间和超时提示】
-{time_since_last_bot_message_info}{timeout_context}
-【最近的对话记录】(包括你已成功发送的消息 和 新收到的消息。注意：仔细看每条消息的发送者，不同用户是不同的人)
-{chat_history_text}
-
-------
-【决策指导——请逐条思考】
-1. 先分析哪些对话是跟你说的，哪些是其他人之间的互动
-2. 逐一评估每个可选动作是否符合当下情境
-3. 群聊里遇到轻松闲聊、感叹、接梗、分享见闻时，即使没人点名你，只要能自然接一句，也可以回复；不要因为“不是在跟我说”就机械等待
-4. 如果有人在追问你，倾向继续回复；如果有人对你感到厌烦，减少回复
-5. 如果相同的action已经被执行过，不要重复执行
-6. 若小青之前已经问过某个问题但没有得到回答，跟随最新话题接话
-7. 对话里出现 [图片：...]、[表情包：...] 或 [QQ表情：...] 时，把它们当成对方刚发来的真实内容，不要当成系统噪音
-
-可选行动类型以及解释：
-fetch_knowledge: 需要调取专业知识或重要记忆时选择（仅限真正需要的情况，陌生人名/词汇通常不需要）
-listening: 倾听对方发言，当你认为对方话才说到一半，发言明显未结束时选择
-direct_reply: 直接回复对方
-wait: 暂时等待，给对方留出空间（需指定等待秒数）
-rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择
-end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择
-block_and_ignore: 仅跳过当前这一条消息；不得让整个群或私聊进入持续屏蔽状态
-
-请先输出你的思考过程，再输出行动决策。JSON格式：
-{{
-    "thinking": "你对当前局势的分析：谁在跟谁说话、气氛如何、你该不该插话",
-    "action": "选择的行动类型 (必须是上面列表中的一个)",
-    "reason": "选择该行动的详细原因",
-    "wait_seconds": 0
-}}
-说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，必须是 JSON 整数，表示等待秒数（0~30），其余 action 填 0。
-注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
+_ALLOWED_PLANNER_ACTIONS = frozenset(
+    {
+        "block_and_ignore",
+        "direct_reply",
+        "end_conversation",
+        "fetch_knowledge",
+        "listening",
+        "rethink_goal",
+        "send_new_message",
+        "wait",
+    }
+)
 
 PROMPT_INITIAL_REPLY_COMPACT = """{persona_text}。你在QQ{channel}闲聊。
 
@@ -66,16 +42,24 @@ PROMPT_INITIAL_REPLY_COMPACT = """{persona_text}。你在QQ{channel}闲聊。
 {goals_str}
 
 【决策指导——请逐条思考】
-1. 先分析哪些对话是跟你说的，哪些是其他人之间的互动
-2. 逐一评估每个可选动作是否符合当下情境
-3. 如果有人在追问你或话题正好和你相关，倾向 direct_reply
-4. 群聊里遇到轻松闲聊、感叹、接梗、分享见闻，即使没人点你，只要能自然接一句，也优先 direct_reply，不要因为“不是在跟我说”就机械 wait
-5. 群友连续发来新内容时，尤其是短句、碎片句、接梗句、感叹句，通常说明话题还在流动；这时宁可简短接话，也不要机械等待
-6. 如果有人对你感到厌烦、忽视你、或明确表示不想聊，减少回复
-7. 如果小青已经问过某个问题但没人回答，顺着最新话题接话，不要继续追问
-8. 不认识的词/人名直接跳过或随口接话，不要追问含义
-9. 如果对话里出现 [图片：...]、[表情包：...] 或 [QQ表情：...]，要把它们当成真实消息内容来判断要不要接话
-{timeout_context}
+1. 先判断最新消息的说话人、目标对象和它与前文的关系，不把别人之间的互动误当成在叫你
+2. 判断回复能否增加具体内容、情绪承接或必要澄清；只能复述、套话或重复追问时，选择 wait 或 listening
+3. 面向全群的交流信号会提高回复价值，但不自动等于必须回复；同时考虑话题是否收尾、他人是否正在接话以及你刚才是否已经连续发言
+4. 对方明确追问你、纠正你或延续你刚才的话时，通常适合继续；明确拒聊、厌烦或转向别人时，应留出空间
+5. 消息长度不能单独决定行动：短消息也可能有明确交流作用，长消息也可能与你无关
+6. 对不确定的信息先判断是否需要 fetch_knowledge；无需检索时可以承认不确定，但不能编造解释
+7. 已经提出而无人回应的问题不要原样追问，按最新话题重新判断是否有必要发言
+8. 媒体摘要是消息内容的一部分，应根据它表达的意思和当前上下文判断行动，而不是因为出现媒体就回复
+
+{knowledge_info_str}
+【最近行动概要】
+{action_history_summary}
+
+【上次行动】
+{last_action_context}
+
+【时间提示】
+{time_since_last_bot_message_info}{timeout_context}
 
 最近对话（注意：仔细看每条消息的发送者，不同用户是不同的人）：
 {chat_history_text}
@@ -92,65 +76,29 @@ fetch_knowledge / listening / direct_reply / wait / rethink_goal / end_conversat
 }}
 说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，必须是 JSON 整数，表示等待秒数（0~30），其余 action 填 0。"""
 
-PROMPT_FOLLOW_UP = """{persona_text}。现在你在参与一场QQ{channel}，刚刚你已经回复了对方，请根据以下【所有信息】审慎且灵活的决策下一步行动，可以继续发送新消息，可以等待，可以倾听，可以调取知识，甚至可以屏蔽对方：
-
-【当前对话目标】
-{goals_str}
-{knowledge_info_str}
-
-【最近行动历史概要】
-{action_history_summary}
-【上一次行动的详细情况和结果】
-{last_action_context}
-【时间和超时提示】
-{time_since_last_bot_message_info}{timeout_context}
-【最近的对话记录】(包括你已成功发送的消息 和 新收到的消息。注意：仔细看每条消息的发送者，不同用户是不同的人)
-{chat_history_text}
-
-------
-【决策指导——请逐条思考】
-1. 先分析哪些对话是跟你说的，哪些是其他人之间的互动
-2. 你刚刚已经发过消息，除非对方没有新内容，否则不要因为刚说过话就机械 wait；群里出现新内容时可以简短接一句
-3. 群聊里哪怕没人点你，只要能自然顺着新话题接一句，也可以继续发送新消息，不必总等别人来叫你
-4. 如果对方在追问你，继续回复；如果对方显得厌烦，选择 wait 或 end_conversation
-5. 如果相同的action已经被执行（如连续 send_new_message），考虑换一种行动
-6. 若小青之前已经追问过某个问题但没有得到回答，不要继续追问，顺着最新话题或选 wait
-7. 如果对话里出现 [图片：...]、[表情包：...] 或 [QQ表情：...]，要把它们当成对方刚发来的真实内容
-
-可选行动类型以及解释：
-fetch_knowledge: 需要调取专业知识或重要记忆时选择（仅限真正需要的情况，陌生人名/词汇通常不需要）
-wait: 暂时不说话，留给对方交互空间，等待对方回复（需指定等待秒数）
-listening: 倾听对方发言（如果对方立刻回复且明显话没说完，可以选择这个）
-send_new_message: 发送一条新消息继续对话，允许适当的追问、补充、深入话题，或开启相关新话题。避免在因重复被拒后立即使用，也不要过多轰炸
-rethink_goal: 思考一个对话目标，当你觉得目前对话需要目标，或当前目标不再适用，或话题卡住时选择
-end_conversation: 结束对话，对方长时间没回复或者当你觉得对话告一段落时可以选择
-block_and_ignore: 仅跳过当前这一条消息；不得让整个群或私聊进入持续屏蔽状态
-
-请先输出你的思考过程，再输出行动决策。JSON格式：
-{{
-    "thinking": "你对当前局势的分析：谁在跟谁说话、对方态度如何、你刚发过言该怎么做",
-    "action": "选择的行动类型 (必须是上面列表中的一个)",
-    "reason": "选择该行动的详细原因",
-    "wait_seconds": 0
-}}
-说明：wait_seconds 仅在 action 为 wait 或 listening 时生效，必须是 JSON 整数，表示等待秒数（0~30），其余 action 填 0。
-注意：请严格按照JSON格式输出，不要包含任何其他内容。"""
-
 PROMPT_FOLLOW_UP_COMPACT = """{persona_text}。你在QQ{channel}闲聊，刚刚你已经回复过对方。
 
 目标：
 {goals_str}
 
 【决策指导——请逐条思考】
-1. 先分析哪些对话是跟你说的，哪些是其他人之间的互动
-2. 你刚刚已经发过消息了，除非对方没有新内容，否则不要仅因为刚发过言就机械 wait；有新内容时可以简短插一句
-3. 群聊里没人点你也可以自然接话，重点是像普通群友顺着聊，不是抢话筒
-4. 如果对方在追问你，继续回复；如果对方显得厌烦，选择 wait 或 end_conversation
-5. 如果已经追问过某个问题但没人回答，不要继续追问，顺着最新话题或选 wait
-6. 不认识的词/人名/英文词不要追问，跳过或随口接话即可
-7. 如果相同的行动刚刚已经被执行（如连续 send_new_message），考虑换一种行动
-8. 如果对话里出现 [图片：...]、[表情包：...] 或 [QQ表情：...]，要把它们当成真实消息内容来判断行动
-{timeout_context}
+1. 先判断最新消息是否在回应、追问或纠正你；如果不是，再判断它是否面向全群以及你能否补充新内容
+2. 你刚刚已经发过消息，默认给其他人留出轮次；只有对话确实需要你继续承接时才再次发言
+3. 不以有没有 @、消息长短或是否包含问号作为单一依据，要综合对象、相关性、时机和新增内容
+4. 对方继续交流时可以回应；出现拒聊、厌烦、自然收尾或话题已被别人接住时，选择 wait、listening 或 end_conversation
+5. 不重复未获回应的问题，也不换一种说法重复刚才的结论、笑点或行动
+6. 不确定的信息可以检索、承认不确定或不接，不要根据零散关键词猜测
+7. 媒体摘要与文字具有同等地位，根据其交际含义和上下文判断是否继续
+
+{knowledge_info_str}
+【最近行动概要】
+{action_history_summary}
+
+【上次行动】
+{last_action_context}
+
+【时间提示】
+{time_since_last_bot_message_info}{timeout_context}
 
 最近对话（注意：仔细看每条消息的发送者，不同用户是不同的人）：
 {chat_history_text}
@@ -173,7 +121,7 @@ PROMPT_END_DECISION = """{persona_text}。刚刚你决定结束一场 QQ {channe
 {chat_history_text}
 
 你觉得你们的对话已经完整结束了吗？有时候，在对话自然结束后再说点什么可能会有点奇怪，但有时也可能需要一条简短的消息来圆满结束。
-如果觉得确实有必要再发一条简短、自然、符合你人设的告别消息（比如 "好，下次再聊~" 或 "嗯，先这样吧"），就输出 "yes"。
+只有额外一句话能自然补足尚未表达的收尾时才输出 "yes"；不要为了礼貌固定追加告别模板。
 如果觉得当前状态下直接结束对话更好，没有必要再发消息，就输出 "no"。
 
 请以 JSON 格式输出你的选择：
@@ -184,6 +132,7 @@ PROMPT_END_DECISION = """{persona_text}。刚刚你决定结束一场 QQ {channe
 
 注意：请严格按照 JSON 格式输出，不要包含任何其他内容。"""
 
+
 @dataclass(frozen=True)
 class PFCPlan:
     action: str
@@ -191,11 +140,17 @@ class PFCPlan:
     thinking: str = ""
     wait_seconds: int = 0
 
+
 def _build_persona_text(bot_name: str, personality: PersonalityConfig) -> str:
     identity = (personality.identity or "").strip()
     if identity:
-        return identity.replace("你是", f"你的名字是{bot_name}，你是", 1) if identity.startswith("你是") else f"你的名字是{bot_name}，{identity}"
+        return (
+            identity.replace("你是", f"你的名字是{bot_name}，你是", 1)
+            if identity.startswith("你是")
+            else f"你的名字是{bot_name}，{identity}"
+        )
     return f"你的名字是{bot_name}"
+
 
 def _goals_to_text(goal_list: Sequence[dict[str, Any]]) -> str:
     lines: list[str] = []
@@ -212,6 +167,7 @@ def _goals_to_text(goal_list: Sequence[dict[str, Any]]) -> str:
             lines.append(f"- {g}")
     return "\n".join(lines).strip()
 
+
 def _knowledge_to_text(knowledge_list: Sequence[dict[str, Any]]) -> str:
     lines: list[str] = []
     for item in knowledge_list[-6:]:
@@ -224,6 +180,7 @@ def _knowledge_to_text(knowledge_list: Sequence[dict[str, Any]]) -> str:
         return ""
     return "【已知的知识/记忆信息】\n" + "\n".join(lines)
 
+
 def _time_since_last_bot(history: Sequence[StoredMessage]) -> str:
     now = time.time()
     for msg in reversed(history[-200:]):
@@ -235,9 +192,30 @@ def _time_since_last_bot(history: Sequence[StoredMessage]) -> str:
         return ""
     return ""
 
+
+def _planner_total_timeout_seconds(secrets: dict[str, Any], timeout_seconds: float) -> float:
+    """给 route 中每个候选模型保留一次完整请求预算。"""
+
+    if secrets.get("_pinned_model"):
+        profile_count = 1
+    else:
+        providers = secrets.get("_providers")
+        profiles = (
+            {
+                str(item.get("profile") or "").strip()
+                for item in providers.values()
+                if isinstance(item, dict)
+            }
+            if isinstance(providers, dict)
+            else set()
+        )
+        profiles.discard("")
+        profile_count = max(1, len(profiles))
+    return min(1800.0, max(0.1, float(timeout_seconds)) * profile_count + 0.3)
+
+
 async def plan_next_action(
     *,
-    http_session,
     secrets: dict[str, Any],
     bot_name: str,
     is_private: bool,
@@ -255,34 +233,51 @@ async def plan_next_action(
     timeout_seconds: float,
     max_retry: int,
     retry_interval_seconds: float,
-    proxy: str,
-    endpoint_path: str,
-    extra_payload: dict[str, Any] | None = None,
+    current_text: str = "",
 ) -> PFCPlan:
-    api_base = secrets.get("api_base", "")
-    api_key = secrets.get("api_key", "")
     model = secrets.get("model", "")
-    if not api_base or not api_key or not model:
-        return PFCPlan(action="direct_reply", reason="secrets_missing")
+    fallback_action = "direct_reply" if is_private else "wait"
+    if "_ai" in secrets and secrets.get("_ai") is None:
+        return PFCPlan(action=fallback_action, reason="ai_route_unavailable")
 
     persona_text = _build_persona_text(bot_name, personality)
     goals_str = _goals_to_text(goal_list) or "- 自然聊天"
     knowledge_info_str = _knowledge_to_text(knowledge_list)
-    chat_history_text = build_dialogue_prompt(history, bot_name=bot_name, truncate=True, max_chars=1200)
+    chat_history_text = build_dialogue_prompt(
+        history, bot_name=bot_name, truncate=True, max_chars=1200
+    )
     time_info = _time_since_last_bot(history)
     channel = "私聊" if is_private else "群聊"
+    participation_cue = ""
+    if not is_private and not last_successful_reply_action:
+        # 分类器已经排除点给其他人的消息；上游频控也已经完成概率、间隔和限流。
+        # 新鲜轮次里的明确全群邀请直接回复，避免规划器仅凭“没点名”再次否决。
+        participation_cue = _group_participation_cue(current_text)
+        if participation_cue:
+            return PFCPlan(
+                action="direct_reply",
+                reason=f"fresh_group_participation:{participation_cue}",
+            )
 
-    tpl = PROMPT_FOLLOW_UP_COMPACT if last_successful_reply_action in ("direct_reply", "send_new_message") else PROMPT_INITIAL_REPLY_COMPACT
+    tpl = (
+        PROMPT_FOLLOW_UP_COMPACT
+        if last_successful_reply_action in ("direct_reply", "send_new_message")
+        else PROMPT_INITIAL_REPLY_COMPACT
+    )
+
     def _truncate(s: str, n: int) -> str:
         t = (s or "").strip()
         if len(t) <= n:
             return t
         return t[: max(0, n - 1)].rstrip() + "…"
+
     prompt = tpl.format(
         persona_text=persona_text,
         channel=channel,
         goals_str=goals_str,
-        knowledge_info_str=(_truncate(knowledge_info_str, 480) + "\n") if knowledge_info_str else "",
+        knowledge_info_str=(_truncate(knowledge_info_str, 480) + "\n")
+        if knowledge_info_str
+        else "",
         action_history_summary=_truncate(action_history_summary, 360) or "（暂无）",
         last_action_context=_truncate(last_action_context, 360) or "（暂无）",
         time_since_last_bot_message_info=time_info,
@@ -292,24 +287,16 @@ async def plan_next_action(
 
     try:
         t0 = time.monotonic()
-        resp, _path = await asyncio.wait_for(
-            chat_completions_raw_with_fallback_paths(
-                session=http_session,
-                api_base=api_base,
-                api_key=api_key,
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=min(0.7, float(temperature)),
-                top_p=float(top_p),
-                max_tokens=min(400, max(200, int(max_tokens))),
-                timeout_seconds=float(timeout_seconds),
-                max_retry=int(max_retry),
-                retry_interval_seconds=float(retry_interval_seconds),
-                proxy=proxy,
-                endpoint_path=endpoint_path,
-                extra_payload=extra_payload,
-            ),
-            timeout=max(0.1, float(timeout_seconds) + 0.3),
+        resp, _path = await chat_completions_raw_with_fallback_paths(
+            secrets=secrets,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=min(0.7, float(temperature)),
+            top_p=float(top_p),
+            max_tokens=min(400, max(200, int(max_tokens))),
+            timeout_seconds=float(timeout_seconds),
+            total_timeout_seconds=_planner_total_timeout_seconds(secrets, timeout_seconds),
+            max_retry=int(max_retry),
+            retry_interval_seconds=float(retry_interval_seconds),
         )
         try:
             _logger.info(
@@ -327,15 +314,23 @@ async def plan_next_action(
             )
         except Exception:
             pass
-    except asyncio.TimeoutError:
+    except TimeoutError:
         try:
             _logger.info(
                 "xiaoqing_chat step=%s",
-                json.dumps({"step": "pfc.planner.timeout", "timeout_s": float(timeout_seconds), "model": model, "prompt_chars": len(prompt)}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "step": "pfc.planner.timeout",
+                        "timeout_s": float(timeout_seconds),
+                        "model": model,
+                        "prompt_chars": len(prompt),
+                    },
+                    ensure_ascii=False,
+                ),
             )
         except Exception:
             pass
-        return PFCPlan(action="wait", reason="planner_timeout")
+        return PFCPlan(action=fallback_action, reason="planner_timeout")
     except Exception as exc:
         try:
             _logger.info(
@@ -352,29 +347,36 @@ async def plan_next_action(
             )
         except Exception:
             pass
-        return PFCPlan(action="direct_reply", reason="planner_failed")
+        return PFCPlan(action=fallback_action, reason="planner_failed")
     content = (((resp.get("choices") or [{}])[0] or {}).get("message") or {}).get("content") or ""
     ok, obj = get_items_from_json(
         str(content),
         "action",
         "reason",
-        default_values={"action": "direct_reply", "reason": "", "thinking": "", "wait_seconds": 0},
+        default_values={
+            "action": fallback_action,
+            "reason": "",
+            "thinking": "",
+            "wait_seconds": 0,
+        },
         required_types={"action": str, "reason": str},
         allow_array=False,
     )
     if not ok or not isinstance(obj, dict):
-        return PFCPlan(action="direct_reply", reason="")
-    act = str(obj.get("action", "") or "").strip()
+        return PFCPlan(action=fallback_action, reason="planner_invalid_response")
+    act = str(obj.get("action", "") or "").strip().casefold()
     reason = str(obj.get("reason", "") or "").strip()
     thinking = str(obj.get("thinking", "") or "").strip()
     raw_wait_seconds = obj.get("wait_seconds", 0)
     wait_seconds = raw_wait_seconds if type(raw_wait_seconds) is int else 0
     wait_seconds = max(0, min(30, wait_seconds))
+    if act not in _ALLOWED_PLANNER_ACTIONS:
+        return PFCPlan(action=fallback_action, reason="planner_invalid_action")
     return PFCPlan(action=act, reason=reason, thinking=thinking, wait_seconds=wait_seconds)
+
 
 async def decide_say_bye(
     *,
-    http_session,
     secrets: dict[str, Any],
     bot_name: str,
     is_private: bool,
@@ -386,27 +388,22 @@ async def decide_say_bye(
     timeout_seconds: float,
     max_retry: int,
     retry_interval_seconds: float,
-    proxy: str,
-    endpoint_path: str,
-    extra_payload: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
-    api_base = secrets.get("api_base", "")
-    api_key = secrets.get("api_key", "")
-    model = secrets.get("model", "")
-    if not api_base or not api_key or not model:
+    if "_ai" in secrets and secrets.get("_ai") is None:
         return False, ""
 
     persona_text = _build_persona_text(bot_name, personality)
     channel = "私聊" if is_private else "群聊"
-    chat_history_text = build_dialogue_prompt(history, bot_name=bot_name, truncate=True, max_chars=2200)
-    prompt = PROMPT_END_DECISION.format(persona_text=persona_text, channel=channel, chat_history_text=chat_history_text)
+    chat_history_text = build_dialogue_prompt(
+        history, bot_name=bot_name, truncate=True, max_chars=2200
+    )
+    prompt = PROMPT_END_DECISION.format(
+        persona_text=persona_text, channel=channel, chat_history_text=chat_history_text
+    )
 
     try:
-        resp, _path = await chat_completions_raw_with_fallback_paths(
-            session=http_session,
-            api_base=api_base,
-            api_key=api_key,
-            model=model,
+        resp, _ = await chat_completions_raw_with_fallback_paths(
+            secrets=secrets,
             messages=[{"role": "user", "content": prompt}],
             temperature=min(0.4, float(temperature)),
             top_p=float(top_p),
@@ -414,9 +411,6 @@ async def decide_say_bye(
             timeout_seconds=float(timeout_seconds),
             max_retry=int(max_retry),
             retry_interval_seconds=float(retry_interval_seconds),
-            proxy=proxy,
-            endpoint_path=endpoint_path,
-            extra_payload=extra_payload,
         )
     except Exception:
         return False, ""

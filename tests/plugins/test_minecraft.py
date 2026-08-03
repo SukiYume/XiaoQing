@@ -1,677 +1,945 @@
-"""测试 Minecraft 服务器通信插件"""
+"""Minecraft 插件的命令、配置、连接和日志游标契约。"""
+
+from __future__ import annotations
 
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, ClassVar, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
-from core.interfaces import PluginContextProtocol
+from core.interfaces import DeliveryTarget, PluginContextProtocol
 from plugins.minecraft import main as mc_main
-from plugins.minecraft.log_monitor import LogEvent, LogEventType
+from plugins.minecraft.connection import ConnectionManager, McConnection
+from plugins.minecraft.log_monitor import LogBatch, LogEventType, LogMonitor
 from plugins.minecraft.rcon import (
-    PacketType,
-    RconClient,
     RconCommandResult,
     RconConnectResult,
-    RconPacket,
-    RconProtocolError,
-    RconResponseLimitError,
+    RconErrorKind,
 )
+from tests.helpers.settings_snapshot import settings_snapshot
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-
-
-class TestMinecraftPlugin:
-    """测试 Minecraft 插件"""
-
-    def test_init(self):
-        """测试插件初始化"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-        assert "def init" in content
-
-    def test_help_text(self):
-        """测试帮助文本"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-        assert "def _show_help" in content
-        assert "Minecraft" in content or "RCON" in content
-
-
-class TestMinecraftCommands:
-    """测试 Minecraft 命令处理"""
-
-    def test_handle_function(self):
-        """测试 handle 函数"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        assert "async def handle" in content
-        assert "command" in content
-        assert "args" in content
-
-    def test_help_command(self):
-        """测试帮助命令"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        assert "help" in content
-        assert "帮助" in content
-
-    def test_connect_command(self):
-        """测试连接命令"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        assert "connect" in content
-        assert "连接" in content
-
-    def test_disconnect_command(self):
-        """测试断开命令"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        assert "disconnect" in content
-        assert "断开" in content
-
-    def test_status_command(self):
-        """测试状态命令"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        assert "status" in content
-        assert "状态" in content
-
-
-class TestMinecraftConnection:
-    """测试 Minecraft 连接管理"""
-
-    def test_connection_module(self):
-        """测试连接模块"""
-        connection_file = ROOT / "plugins" / "minecraft" / "connection.py"
-        assert connection_file.exists()
-
-    def test_mc_connection_class(self):
-        """测试 McConnection 类"""
-        connection_file = ROOT / "plugins" / "minecraft" / "connection.py"
-        content = connection_file.read_text(encoding='utf-8')
-
-        assert "class McConnection" in content
-        assert "@dataclass" in content
-
-    def test_connection_manager_class(self):
-        """测试 ConnectionManager 类"""
-        connection_file = ROOT / "plugins" / "minecraft" / "connection.py"
-        content = connection_file.read_text(encoding='utf-8')
-
-        assert "class ConnectionManager" in content
-        assert "def get_connection" in content
-        assert "def add_connection" in content
-        assert "def remove_connection" in content
-        assert "def has_connection" in content
-
-    def test_connection_key_generation(self):
-        """测试连接键生成"""
-        connection_file = ROOT / "plugins" / "minecraft" / "connection.py"
-        content = connection_file.read_text(encoding='utf-8')
-
-        assert "connection_key" in content
-        assert "target_type" in content
-        assert "target_id" in content
-
-
-class TestMinecraftRcon:
-    """测试 Minecraft RCON 模块"""
-
-    def test_rcon_module(self):
-        """测试 RCON 模块存在"""
-        rcon_file = ROOT / "plugins" / "minecraft" / "rcon.py"
-        assert rcon_file.exists()
-
-    def test_rcon_client_class(self):
-        """测试 RconClient 类"""
-        rcon_file = ROOT / "plugins" / "minecraft" / "rcon.py"
-        content = rcon_file.read_text(encoding='utf-8')
-
-        assert "class RconClient" in content
-        assert "def connect" in content
-        assert "def disconnect" in content
-        assert "def command" in content
-
-    def test_rcon_packet(self):
-        """测试 RCON 数据包"""
-        rcon_file = ROOT / "plugins" / "minecraft" / "rcon.py"
-        content = rcon_file.read_text(encoding='utf-8')
-
-        assert "class RconPacket" in content
-        assert "PacketType" in content
-        assert "def encode" in content
-        assert "def decode" in content
-
-    def test_packet_types(self):
-        """测试数据包类型"""
-        rcon_file = ROOT / "plugins" / "minecraft" / "rcon.py"
-        content = rcon_file.read_text(encoding='utf-8')
-
-        assert "RESPONSE" in content
-        assert "COMMAND" in content
-        assert "LOGIN" in content
-
-    def test_rcon_protocol(self):
-        """测试 RCON 协议实现"""
-        rcon_file = ROOT / "plugins" / "minecraft" / "rcon.py"
-        content = rcon_file.read_text(encoding='utf-8')
-
-        # 检查协议相关
-        assert "struct" in content
-        assert "asyncio" in content
-        assert "open_connection" in content or "Stream" in content
-
-
-class TestMinecraftLogMonitor:
-    """测试 Minecraft 日志监控"""
-
-    def test_log_monitor_module(self):
-        """测试日志监控模块存在"""
-        log_monitor_file = ROOT / "plugins" / "minecraft" / "log_monitor.py"
-        assert log_monitor_file.exists()
-
-    def test_log_monitor_class(self):
-        """测试 LogMonitor 类"""
-        log_monitor_file = ROOT / "plugins" / "minecraft" / "log_monitor.py"
-        content = log_monitor_file.read_text(encoding='utf-8')
-
-        assert "class LogMonitor" in content
-        assert "def initialize" in content
-        assert "def check_updates" in content
-
-    def test_log_event_types(self):
-        """测试日志事件类型"""
-        log_monitor_file = ROOT / "plugins" / "minecraft" / "log_monitor.py"
-        content = log_monitor_file.read_text(encoding='utf-8')
-
-        assert "class LogEventType" in content
-        assert "CHAT" in content
-        assert "JOIN" in content
-        assert "LEAVE" in content
-        assert "DEATH" in content
-        assert "ADVANCEMENT" in content
-
-    def test_log_patterns(self):
-        """测试日志匹配模式"""
-        log_monitor_file = ROOT / "plugins" / "minecraft" / "log_monitor.py"
-        content = log_monitor_file.read_text(encoding='utf-8')
-
-        assert "CHAT_PATTERN" in content
-        assert "JOIN_PATTERN" in content
-        assert "LEAVE_PATTERN" in content
-        assert "DEATH_PATTERNS" in content
-        assert "ADVANCEMENT_PATTERN" in content
-
-    def test_log_event_class(self):
-        """测试 LogEvent 类"""
-        log_monitor_file = ROOT / "plugins" / "minecraft" / "log_monitor.py"
-        content = log_monitor_file.read_text(encoding='utf-8')
-
-        assert "class LogEvent" in content
-        assert "event_type" in content
-        assert "player" in content
-        assert "message" in content
-
-
-class TestMinecraftScheduled:
-    """测试 Minecraft 定时任务"""
-
-    def test_scheduled_function(self):
-        """测试定时任务函数"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        assert "async def scheduled" in content
-        assert "check_updates" in content
-
-    def test_event_formatting(self):
-        """测试事件格式化"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-
-        assert "_format_event_message" in content
-        assert "LogEventType" in content
-
-
-class TestMinecraftPluginJson:
-    """测试 Minecraft plugin.json 配置"""
-
-    def test_plugin_json_exists(self):
-        """测试 plugin.json 存在"""
-        plugin_json = ROOT / "plugins" / "minecraft" / "plugin.json"
-        assert plugin_json.exists()
-
-    def test_plugin_json_content(self):
-        """测试 plugin.json 内容"""
-        plugin_json = ROOT / "plugins" / "minecraft" / "plugin.json"
-        content = json.loads(plugin_json.read_text(encoding='utf-8'))
-
-        assert content["name"] == "minecraft"
-        assert "commands" in content
-        assert "schedule" in content
-
-    def test_command_triggers(self):
-        """测试命令触发器"""
-        plugin_json = ROOT / "plugins" / "minecraft" / "plugin.json"
-        content = json.loads(plugin_json.read_text(encoding='utf-8'))
-
-        mc_cmd = next((cmd for cmd in content["commands"] if cmd["name"] == "mc"), None)
-        assert mc_cmd is not None
-        assert "mc" in mc_cmd["triggers"]
-        assert "minecraft" in mc_cmd["triggers"]
-
-    def test_legacy_commands(self):
-        """测试旧命令存在"""
-        plugin_json = ROOT / "plugins" / "minecraft" / "plugin.json"
-        content = json.loads(plugin_json.read_text(encoding='utf-8'))
-
-        commands = [cmd["name"] for cmd in content["commands"]]
-        assert "mcconnect" in commands
-        assert "mcdisconnect" in commands
-
-    def test_all_rcon_commands_are_admin_only(self):
-        plugin_json = ROOT / "plugins" / "minecraft" / "plugin.json"
-        content = json.loads(plugin_json.read_text(encoding="utf-8"))
-
-        assert all(command["admin_only"] is True for command in content["commands"])
-        connect = next(command for command in content["commands"] if command["name"] == "mcconnect")
-        assert "<配置名>" in connect["help"]
-        assert "password" not in connect["help"]
-
-    def test_schedule_config(self):
-        """测试定时任务配置"""
-        plugin_json = ROOT / "plugins" / "minecraft" / "plugin.json"
-        content = json.loads(plugin_json.read_text(encoding='utf-8'))
-
-        assert "schedule" in content
-        assert len(content["schedule"]) > 0
-
-        # 检查日志检查任务
-        log_task = next((s for s in content["schedule"] if s["id"] == "check_log"), None)
-        assert log_task is not None
-        assert log_task["handler"] == "scheduled"
-
-
-class TestMinecraftIntegration:
-    """集成测试"""
-
-    def test_module_files_exist(self):
-        """测试模块文件存在"""
-        assert (ROOT / "plugins" / "minecraft" / "main.py").exists()
-        assert (ROOT / "plugins" / "minecraft" / "rcon.py").exists()
-        assert (ROOT / "plugins" / "minecraft" / "connection.py").exists()
-        assert (ROOT / "plugins" / "minecraft" / "log_monitor.py").exists()
-
-    def test_main_functions(self):
-        """测试主模块函数"""
-        main_file = ROOT / "plugins" / "minecraft" / "main.py"
-        content = main_file.read_text(encoding='utf-8')
-        # 检查关键函数存在
-        assert "def init" in content
-        assert "async def handle" in content
-        assert "def _show_help" in content
-        assert "async def scheduled" in content
-
-    def test_rcon_exports(self):
-        """测试 RCON 模块导出"""
-        rcon_file = ROOT / "plugins" / "minecraft" / "rcon.py"
-        content = rcon_file.read_text(encoding='utf-8')
-        # 检查关键类存在
-        assert "class RconClient" in content
-        assert "class RconPacket" in content
-        assert "class PacketType" in content or "PacketType" in content
-
-    def test_connection_exports(self):
-        """测试连接模块导出"""
-        connection_file = ROOT / "plugins" / "minecraft" / "connection.py"
-        content = connection_file.read_text(encoding='utf-8')
-        # 检查关键类存在
-        assert "class McConnection" in content
-        assert "class ConnectionManager" in content
-
-    def test_log_monitor_exports(self):
-        """测试日志监控模块导出"""
-        log_monitor_file = ROOT / "plugins" / "minecraft" / "log_monitor.py"
-        content = log_monitor_file.read_text(encoding='utf-8')
-        # 检查关键类存在
-        assert "class LogMonitor" in content
-        assert "class LogEventType" in content
-        assert "class LogEvent" in content
-
-
-class _MinecraftTestContext:
-    def __init__(self, secrets=None, plugin_dir=None):
-        self.secrets = secrets or {}
-        self.plugin_dir = plugin_dir or Path(".")
+PRIVATE_TARGET = DeliveryTarget("private", 10001)
+GROUP_TARGET = DeliveryTarget("group", 20001)
+
+
+class _Context:
+    def __init__(
+        self,
+        plugin_dir: Path,
+        *,
+        password: Any = "secret-pass",
+        profile: str = "default",
+    ) -> None:
+        self.plugin_dir = plugin_dir
+        self.data_dir = plugin_dir / "runtime-data"
+        self.request_id = "mc-test-request"
+        self.send_action = AsyncMock(return_value=True)
+        self.secrets = {"plugins": {"minecraft": {profile: password}}}
+
+    def get_settings_snapshot(self):
+        return settings_snapshot(secrets=self.secrets)
 
 
 class _FakeRconClient:
-    def __init__(self, host, port, password):
+    instances: ClassVar[list[_FakeRconClient]] = []
+    next_connect_result = RconConnectResult(success=True)
+
+    def __init__(self, host: str, port: int, password: str) -> None:
         self.host = host
         self.port = port
         self.password = password
         self.connected = False
-
-    async def connect(self):
-        self.connected = True
-        return RconConnectResult(success=True)
-
-    async def disconnect(self):
-        self.connected = False
-
-
-class _FakeDisconnectRcon:
-    def __init__(self):
         self.disconnected = False
+        self.commands: list[str] = []
+        self.command_result = RconCommandResult(success=True, response="ok")
+        type(self).instances.append(self)
 
-    async def disconnect(self):
+    async def connect(self) -> RconConnectResult:
+        result = type(self).next_connect_result
+        self.connected = result.success
+        return result
+
+    async def command(self, command: str) -> RconCommandResult:
+        self.commands.append(command)
+        return self.command_result
+
+    async def disconnect(self) -> None:
+        self.connected = False
         self.disconnected = True
 
 
-class _FakeCommandRcon:
-    def __init__(self, response="ok"):
-        self.commands = []
-        self.response = response
-
-    async def command(self, cmd):
-        self.commands.append(cmd)
-        return RconCommandResult(success=True, response=self.response)
+class _FailingCleanupClient:
+    async def disconnect(self) -> None:
+        raise RuntimeError("close failed")
 
 
-@pytest.mark.asyncio
-async def test_mc_connect_default_reads_secrets_config(monkeypatch, tmp_path):
-    monkeypatch.setattr(mc_main, "_manager", mc_main.ConnectionManager())
-    monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
-
-    # Write a config.json in the temp plugin dir
-    config_data = {
-        "default": {
-            "host": "127.0.0.1",
-            "port": 25575,
-            "password": "secret-pass",
-            "log_file": "",
-        }
-    }
-    (tmp_path / "config.json").write_text(json.dumps(config_data), encoding="utf-8")
-
-    context = cast(
-        PluginContextProtocol,
-        cast(object, _MinecraftTestContext(plugin_dir=tmp_path)),
-    )
-
-    msg = await mc_main._handle_connect("default", group_id=None, user_id=10001, context=context)
-    text = msg[0]["data"]["text"]
-
-    assert "已连接到 127.0.0.1:25575" in text
-
-
-@pytest.mark.asyncio
-async def test_mc_connect_default_missing_config_returns_usage(monkeypatch, tmp_path):
-    monkeypatch.setattr(mc_main, "_manager", mc_main.ConnectionManager())
-    monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
-
-    # No config.json in tmp_path, so it should return usage
-    context = cast(
-        PluginContextProtocol,
-        cast(object, _MinecraftTestContext(plugin_dir=tmp_path)),
-    )
-    msg = await mc_main._handle_connect("default", group_id=None, user_id=10002, context=context)
-    text = msg[0]["data"]["text"]
-
-    assert "config.json" in text
-
-
-@pytest.mark.asyncio
-async def test_mc_connect_rejects_invalid_log_file_before_rcon_connect(monkeypatch, tmp_path):
-    monkeypatch.setattr(mc_main, "_manager", mc_main.ConnectionManager())
-    fake_client = _FakeRconClient("127.0.0.1", 25575, "secret-pass")
-    monkeypatch.setattr(mc_main, "RconClient", lambda *args: fake_client)
-
-    config_data = {
-        "default": {
-            "host": "127.0.0.1",
-            "port": 25575,
-            "password": "secret-pass",
-            "log_file": "",
-        }
-    }
-    (tmp_path / "config.json").write_text(json.dumps(config_data), encoding="utf-8")
-
-    context = cast(
-        PluginContextProtocol,
-        cast(object, _MinecraftTestContext(plugin_dir=tmp_path)),
-    )
-
-    msg = await mc_main._handle_connect("default bad.log", group_id=None, user_id=10002, context=context)
-    text = msg[0]["data"]["text"]
-
-    assert "不存在" in text
-    assert fake_client.connected is False
-
-
-@pytest.mark.asyncio
-async def test_shutdown_cleans_all_mc_connections(monkeypatch):
-    manager = mc_main.ConnectionManager()
-    fake_rcon = _FakeDisconnectRcon()
-    conn = mc_main.McConnection(
-        host="127.0.0.1",
-        port=25575,
-        password="p",
-        log_file="",
-        target_type="private",
-        target_id=10003,
-        rcon_client=fake_rcon,
-        log_monitor=None,
-    )
-    manager.add_connection(conn)
+@pytest.fixture(autouse=True)
+def reset_minecraft_runtime(monkeypatch: pytest.MonkeyPatch) -> ConnectionManager:
+    manager = ConnectionManager()
     monkeypatch.setattr(mc_main, "_manager", manager)
+    monkeypatch.setattr(mc_main, "_schedule_lock", asyncio.Lock())
+    mc_main._event_buckets.clear()  # noqa: SLF001 - 隔离进程内限流状态。
+    mc_main._delivery_cursor = 0  # noqa: SLF001
+    _FakeRconClient.instances.clear()
+    _FakeRconClient.next_connect_result = RconConnectResult(success=True)
+    yield manager
+    mc_main._event_buckets.clear()  # noqa: SLF001
 
-    await mc_main.shutdown(None)
 
-    assert fake_rcon.disconnected is True
-    assert manager.connection_count() == 0
+def _context(
+    tmp_path: Path,
+    *,
+    password: Any = "secret-pass",
+    profile: str = "default",
+) -> PluginContextProtocol:
+    return cast(
+        PluginContextProtocol,
+        cast(object, _Context(tmp_path, password=password, profile=profile)),
+    )
 
 
-@pytest.mark.asyncio
-async def test_scheduled_uses_async_log_monitor(monkeypatch):
-    manager = mc_main.ConnectionManager()
-    monitor = MagicMock()
-    monitor.check_updates_async = AsyncMock(
-        return_value=[
-            LogEvent(
-                event_type=LogEventType.CHAT,
-                player="Steve",
-                message="hello",
-                raw_line="[12:00:00] [Server thread/INFO]: <Steve> hello",
-                timestamp="12:00:00",
-            )
+def _write_config(tmp_path: Path, server: dict[str, Any], *, profile: str = "default") -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps({profile: server}),
+        encoding="utf-8",
+    )
+
+
+def _server_config(**overrides: Any) -> dict[str, Any]:
+    server: dict[str, Any] = {
+        "host": "127.0.0.1",
+        "port": 25575,
+        "log_file": "",
+    }
+    server.update(overrides)
+    return server
+
+
+def _connection(
+    target: DeliveryTarget,
+    *,
+    client: Any = None,
+    monitor: Any = None,
+    host: str = "127.0.0.1",
+    port: int = 25575,
+) -> McConnection:
+    return McConnection(
+        host=host,
+        port=port,
+        target=target,
+        rcon_client=cast(Any, client),
+        log_monitor=cast(Any, monitor),
+    )
+
+
+class TestMinecraftMetadata:
+    def test_entrypoints_and_help_match_rcon_scope(self) -> None:
+        assert mc_main.init() is None
+        assert callable(mc_main.handle)
+        assert callable(mc_main.scheduled)
+        help_text = mc_main._show_help()
+        assert "Minecraft RCON" in help_text
+        assert "/mc connect <配置名>" in help_text
+        assert "start" not in help_text
+
+    def test_manifest_commands_are_admin_only_and_scheduled(self) -> None:
+        content = json.loads(
+            (ROOT / "plugins" / "minecraft" / "plugin.json").read_text(encoding="utf-8")
+        )
+        assert content["name"] == "minecraft"
+        assert all(command["admin_only"] is True for command in content["commands"])
+        assert {command["name"] for command in content["commands"]} == {
+            "mc",
+            "mcconnect",
+            "mcdisconnect",
+        }
+        schedule = next(item for item in content["schedule"] if item["id"] == "check_log")
+        assert schedule["handler"] == "scheduled"
+
+    def test_removed_test_only_connection_wrappers_stay_absent(self) -> None:
+        for name in ("add_connection", "remove_connection", "has_connection", "connection_count"):
+            assert not hasattr(ConnectionManager, name)
+
+
+class TestMinecraftConfiguration:
+    @pytest.mark.asyncio
+    async def test_connect_reads_local_profile_without_exposing_password(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        reset_minecraft_runtime: ConnectionManager,
+    ) -> None:
+        _write_config(tmp_path, _server_config())
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+
+        result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+
+        text = result[0]["data"]["text"]
+        conn = reset_minecraft_runtime.get_connection(PRIVATE_TARGET)
+        assert "已连接到 127.0.0.1:25575" in text
+        assert "secret-pass" not in text
+        assert conn is not None
+        assert not hasattr(conn, "password")
+        assert not hasattr(conn, "log_file")
+        assert _FakeRconClient.instances[0].password == "secret-pass"
+
+    @pytest.mark.asyncio
+    async def test_missing_config_returns_fixed_error(self, tmp_path: Path) -> None:
+        result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        assert "未找到 config.json" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_connect_without_profile_returns_usage(self, tmp_path: Path) -> None:
+        result = await mc_main._handle_connect("", PRIVATE_TARGET, _context(tmp_path))
+        assert "用法: /mc connect <配置名>" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_chat_cannot_override_log_path(self, tmp_path: Path) -> None:
+        _write_config(tmp_path, _server_config())
+        result = await mc_main._handle_connect(
+            "default C:/sensitive.log",
+            PRIVATE_TARGET,
+            _context(tmp_path),
+        )
+        assert "配置名必须" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server, expected",
+        [
+            (_server_config(host=" bad"), "host 无效"),
+            (_server_config(port=True), "port 必须"),
+            (_server_config(port=0), "port 必须"),
+            (_server_config(port=65536), "port 必须"),
+            (_server_config(log_file=7), "log_file 无效"),
+            (_server_config(log_file=" bad.log"), "log_file 无效"),
+            (_server_config(log_file="bad\0.log"), "log_file 无效"),
+        ],
+    )
+    async def test_invalid_profile_fields_are_rejected(
+        self,
+        tmp_path: Path,
+        server: dict[str, Any],
+        expected: str,
+    ) -> None:
+        _write_config(tmp_path, server)
+        result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        assert expected in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "password",
+        ["", "bad\0secret", pytest.param("x" * 4097, id="too-long"), 7],
+    )
+    async def test_invalid_secret_values_are_rejected(
+        self,
+        tmp_path: Path,
+        password: Any,
+    ) -> None:
+        _write_config(tmp_path, _server_config())
+        result = await mc_main._handle_connect(
+            "default",
+            PRIVATE_TARGET,
+            _context(tmp_path, password=password),
+        )
+        assert "password 为空" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_public_profile_cannot_contain_password(self, tmp_path: Path) -> None:
+        _write_config(tmp_path, _server_config(password="legacy-password"))
+        result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        assert "必须写入 config/secrets.json" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_missing_secret_is_rejected(self, tmp_path: Path) -> None:
+        _write_config(tmp_path, _server_config())
+        result = await mc_main._handle_connect(
+            "default",
+            PRIVATE_TARGET,
+            _context(tmp_path, password=None),
+        )
+        assert "未找到 config/secrets.json" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_non_object_and_invalid_json_are_rejected(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "config.json"
+        config_path.write_text("[]", encoding="utf-8")
+        non_object = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        config_path.write_text("{invalid", encoding="utf-8")
+        malformed = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        assert "顶层必须是对象" in non_object[0]["data"]["text"]
+        assert "不是有效 JSON" in malformed[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_missing_profile_and_oversized_config_are_rejected(self, tmp_path: Path) -> None:
+        (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+        missing = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        (tmp_path / "config.json").write_bytes(b" " * (mc_main.MC_MAX_CONFIG_BYTES + 1))
+        oversized = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        assert "未找到指定服务器配置" in missing[0]["data"]["text"]
+        assert "64 KiB" in oversized[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_optional_log_path_does_not_block_rcon(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        reset_minecraft_runtime: ConnectionManager,
+    ) -> None:
+        _write_config(tmp_path, _server_config(log_file="missing.log"))
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+
+        result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+
+        conn = reset_minecraft_runtime.get_connection(PRIVATE_TARGET)
+        assert "仅连接 RCON" in result[0]["data"]["text"]
+        assert conn is not None and conn.log_monitor is None
+        assert _FakeRconClient.instances[0].connected is True
+
+    @pytest.mark.asyncio
+    async def test_relative_log_path_is_resolved_from_plugin_directory(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        reset_minecraft_runtime: ConnectionManager,
+    ) -> None:
+        log_path = tmp_path / "latest.log"
+        log_path.write_text("old history\n", encoding="utf-8")
+        _write_config(tmp_path, _server_config(log_file="latest.log"))
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+
+        result = await mc_main._handle_connect("default", GROUP_TARGET, _context(tmp_path))
+
+        conn = reset_minecraft_runtime.get_connection(GROUP_TARGET)
+        assert "已启用" in result[0]["data"]["text"]
+        assert conn is not None and conn.log_monitor is not None
+        assert conn.log_monitor.log_path == log_path.resolve()
+        assert conn.log_monitor._last_position == log_path.stat().st_size  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_typed_connect_failure_is_returned_without_publishing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        reset_minecraft_runtime: ConnectionManager,
+    ) -> None:
+        _write_config(tmp_path, _server_config())
+        _FakeRconClient.next_connect_result = RconConnectResult(
+            False,
+            error_kind=RconErrorKind.AUTH,
+            error_message="RCON 认证失败，请检查密码",
+        )
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+
+        result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+
+        assert "认证失败" in result[0]["data"]["text"]
+        assert reset_minecraft_runtime.get_connection(PRIVATE_TARGET) is None
+
+    @pytest.mark.asyncio
+    async def test_connect_constructor_error_is_fixed_and_not_published(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        reset_minecraft_runtime: ConnectionManager,
+    ) -> None:
+        _write_config(tmp_path, _server_config())
+
+        def explode(*_args: Any) -> Any:
+            raise RuntimeError("SECRET-CONSTRUCTOR-DETAIL")
+
+        monkeypatch.setattr(mc_main, "RconClient", explode)
+        result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        text = result[0]["data"]["text"]
+        assert text == "❌ RCON 连接初始化失败"
+        assert "SECRET" not in text
+        assert reset_minecraft_runtime.get_connection(PRIVATE_TARGET) is None
+
+    @pytest.mark.asyncio
+    async def test_log_monitor_setup_error_falls_back_to_rcon_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        (tmp_path / "latest.log").write_bytes(b"")
+        _write_config(tmp_path, _server_config(log_file="latest.log"))
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+
+        def explode(*_args: Any, **_kwargs: Any) -> Any:
+            raise OSError("cursor init failed")
+
+        monkeypatch.setattr(mc_main, "LogMonitor", explode)
+        result = await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+        assert "仅连接 RCON" in result[0]["data"]["text"]
+
+
+class TestMinecraftCommands:
+    def test_target_resolution_prefers_group_and_rejects_invalid_ids(self) -> None:
+        assert mc_main._target_from_event({"group_id": 3, "user_id": 4}) == DeliveryTarget(
+            "group", 3
+        )
+        assert mc_main._target_from_event({"user_id": 4}) == DeliveryTarget("private", 4)
+        assert mc_main._target_from_event({"group_id": 0, "user_id": 4}) is None
+        assert mc_main._target_from_event({"user_id": True}) is None
+        assert mc_main._target_from_event({}) is None
+
+    @pytest.mark.asyncio
+    async def test_help_does_not_require_event_identity(self, tmp_path: Path) -> None:
+        result = await mc_main.handle("mc", "help", {}, _context(tmp_path))
+        assert "Minecraft RCON" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_legacy_connect_and_disconnect_route_to_same_target(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        reset_minecraft_runtime: ConnectionManager,
+    ) -> None:
+        _write_config(tmp_path, _server_config())
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+        context = _context(tmp_path)
+
+        connected = await mc_main.handle("mcconnect", "default", {"user_id": 9}, context)
+        status = await mc_main.handle("mc", "status", {"user_id": 9}, context)
+        disconnected = await mc_main.handle("mcdisconnect", "", {"user_id": 9}, context)
+
+        assert "已连接" in connected[0]["data"]["text"]
+        assert "连接状态" in status[0]["data"]["text"]
+        assert "已断开" in disconnected[0]["data"]["text"]
+        assert reset_minecraft_runtime.all_connections() == []
+
+    @pytest.mark.asyncio
+    async def test_primary_mc_entry_routes_connect_command_and_disconnect(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        _write_config(tmp_path, _server_config())
+        monkeypatch.setattr(mc_main, "RconClient", _FakeRconClient)
+        context = _context(tmp_path)
+
+        connected = await mc_main.handle("mc", "connect default", {"user_id": 10}, context)
+        client = _FakeRconClient.instances[0]
+        client.command_result = RconCommandResult(True, response="players: 1")
+        command = await mc_main.handle("mc", "list", {"user_id": 10}, context)
+        disconnected = await mc_main.handle("mc", "disconnect", {"user_id": 10}, context)
+
+        assert "已连接" in connected[0]["data"]["text"]
+        assert "players: 1" in command[0]["data"]["text"]
+        assert "已断开" in disconnected[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_connect_cancellation_propagates(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        _write_config(tmp_path, _server_config())
+
+        class CancelConnect(_FakeRconClient):
+            async def connect(self) -> RconConnectResult:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(mc_main, "RconClient", CancelConnect)
+        with pytest.raises(asyncio.CancelledError):
+            await mc_main._handle_connect("default", PRIVATE_TARGET, _context(tmp_path))
+
+    @pytest.mark.asyncio
+    async def test_unknown_command_and_invalid_target_are_fixed_errors(
+        self, tmp_path: Path
+    ) -> None:
+        context = _context(tmp_path)
+        unknown = await mc_main.handle("other", "", {"user_id": 9}, context)
+        invalid = await mc_main.handle("mc", "status", {"user_id": 0}, context)
+        assert unknown[0]["data"]["text"] == "未知命令"
+        assert "无法识别" in invalid[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_legacy_command_rejects_invalid_target(self, tmp_path: Path) -> None:
+        result = await mc_main.handle("mcconnect", "default", {"user_id": 0}, _context(tmp_path))
+        assert "无法识别" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_command_success_empty_failure_and_target_isolation(
+        self,
+        reset_minecraft_runtime: ConnectionManager,
+        tmp_path: Path,
+    ) -> None:
+        private_client = _FakeRconClient("private", 25575, "p")
+        group_client = _FakeRconClient("group", 25576, "p")
+        private_client.command_result = RconCommandResult(True, response="players: 3")
+        group_client.command_result = RconCommandResult(True, response="")
+        await reset_minecraft_runtime.replace_connection(
+            _connection(PRIVATE_TARGET, client=private_client)
+        )
+        await reset_minecraft_runtime.replace_connection(
+            _connection(GROUP_TARGET, client=group_client)
+        )
+        context = _context(tmp_path)
+
+        private = await mc_main._handle_mc_command("list", PRIVATE_TARGET, context)
+        empty = await mc_main._handle_mc_command("save-all", GROUP_TARGET, context)
+        private_client.command_result = RconCommandResult(
+            False,
+            error_kind=RconErrorKind.TIMEOUT,
+            error_message="RCON 操作超时，未收到完整响应",
+        )
+        failed = await mc_main._handle_mc_command("list", PRIVATE_TARGET, context)
+
+        assert "players: 3" in private[0]["data"]["text"]
+        assert "空响应" in empty[0]["data"]["text"]
+        assert "操作超时" in failed[0]["data"]["text"]
+        assert private_client.commands == ["list", "list"]
+        assert group_client.commands == ["save-all"]
+
+    @pytest.mark.asyncio
+    async def test_command_requires_connection_client_and_nonempty_input(
+        self,
+        reset_minecraft_runtime: ConnectionManager,
+        tmp_path: Path,
+    ) -> None:
+        context = _context(tmp_path)
+        missing = await mc_main._handle_mc_command("list", PRIVATE_TARGET, context)
+        await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET))
+        closed = await mc_main._handle_mc_command("list", PRIVATE_TARGET, context)
+        client = _FakeRconClient("private", 25575, "p")
+        await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET, client=client))
+        empty = await mc_main._handle_mc_command("   ", PRIVATE_TARGET, context)
+        assert "未连接" in missing[0]["data"]["text"]
+        assert "已关闭" in closed[0]["data"]["text"]
+        assert "请提供" in empty[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_missing_disconnect_and_status_are_explicit(self, tmp_path: Path) -> None:
+        context = _context(tmp_path)
+        disconnected = await mc_main._handle_disconnect(PRIVATE_TARGET, context)
+        status = mc_main._handle_status_command(PRIVATE_TARGET, context)
+        assert "当前无连接" in disconnected[0]["data"]["text"]
+        assert "未连接到任何服务器" in status[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_command_exception_is_fixed_and_cancellation_propagates(
+        self,
+        reset_minecraft_runtime: ConnectionManager,
+        tmp_path: Path,
+    ) -> None:
+        class ExplodingClient:
+            async def command(self, _command: str) -> RconCommandResult:
+                raise RuntimeError("SECRET-COMMAND-DETAIL")
+
+        await reset_minecraft_runtime.replace_connection(
+            _connection(PRIVATE_TARGET, client=cast(Any, ExplodingClient()))
+        )
+        failed = await mc_main._handle_mc_command("list", PRIVATE_TARGET, _context(tmp_path))
+        assert failed[0]["data"]["text"] == "❌ RCON 命令执行失败，请重新连接后重试"
+
+        class CancelledClient:
+            async def command(self, _command: str) -> RconCommandResult:
+                raise asyncio.CancelledError
+
+        await reset_minecraft_runtime.replace_connection(
+            _connection(PRIVATE_TARGET, client=cast(Any, CancelledClient()))
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await mc_main._handle_mc_command("list", PRIVATE_TARGET, _context(tmp_path))
+
+    @pytest.mark.asyncio
+    async def test_response_strips_controls_and_obeys_dual_budget(
+        self,
+        reset_minecraft_runtime: ConnectionManager,
+        tmp_path: Path,
+    ) -> None:
+        client = _FakeRconClient("private", 25575, "p")
+        client.command_result = RconCommandResult(
+            True,
+            response="\x1b[31mSECRET\x1b[0m\x00" + "🧱" * 5000,
+        )
+        await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET, client=client))
+
+        result = await mc_main._handle_mc_command("list", PRIVATE_TARGET, _context(tmp_path))
+        text = result[0]["data"]["text"]
+
+        assert "\x1b" not in text and "\x00" not in text
+        assert "响应已截断" in text
+        assert len(text) <= mc_main.MC_MAX_RESPONSE_CHARS + 2
+        assert len(text.encode("utf-8")) <= mc_main.MC_MAX_RESPONSE_BYTES + len("📤 ".encode())
+
+    @pytest.mark.asyncio
+    async def test_truncated_rcon_response_is_labeled(
+        self,
+        reset_minecraft_runtime: ConnectionManager,
+        tmp_path: Path,
+    ) -> None:
+        client = _FakeRconClient("private", 25575, "p")
+        client.command_result = RconCommandResult(
+            True,
+            response="partial response",
+            truncated=True,
+        )
+        await reset_minecraft_runtime.replace_connection(_connection(PRIVATE_TARGET, client=client))
+
+        result = await mc_main._handle_mc_command("list", PRIVATE_TARGET, _context(tmp_path))
+
+        assert "响应可能不完整" in result[0]["data"]["text"]
+
+    @pytest.mark.asyncio
+    async def test_unexpected_errors_never_echo_exception_text(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        async def explode(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("TOP-SECRET-INTERNAL")
+
+        monkeypatch.setattr(mc_main, "_dispatch_command", explode)
+        result = await mc_main.handle("mc", "status", {"user_id": 1}, _context(tmp_path))
+        text = result[0]["data"]["text"]
+        assert "处理 Minecraft 请求失败" in text
+        assert "TOP-SECRET-INTERNAL" not in text
+
+    @pytest.mark.asyncio
+    async def test_handle_cancellation_propagates(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        async def cancel(*_args: Any, **_kwargs: Any) -> Any:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(mc_main, "_dispatch_command", cancel)
+        with pytest.raises(asyncio.CancelledError):
+            await mc_main.handle("mc", "status", {"user_id": 1}, _context(tmp_path))
+
+
+class TestConnectionManager:
+    @pytest.mark.asyncio
+    async def test_replace_is_atomic_and_closes_old_client(self) -> None:
+        manager = ConnectionManager()
+        old_client = _FakeRconClient("old", 25575, "p")
+        new_client = _FakeRconClient("new", 25575, "p")
+        old = _connection(PRIVATE_TARGET, client=old_client, host="old")
+        new = _connection(PRIVATE_TARGET, client=new_client, host="new")
+        await manager.replace_connection(old)
+
+        replaced = await manager.replace_connection(new)
+
+        assert replaced is old
+        assert old_client.disconnected is True
+        assert old.rcon_client is None
+        assert manager.get_connection(PRIVATE_TARGET) is new
+
+    @pytest.mark.asyncio
+    async def test_disconnect_missing_and_snapshot_are_safe(self) -> None:
+        manager = ConnectionManager()
+        conn = _connection(PRIVATE_TARGET)
+        await manager.replace_connection(conn)
+        snapshot = manager.all_connections()
+        snapshot.clear()
+        assert manager.get_connection(PRIVATE_TARGET) is conn
+        assert await manager.disconnect_connection(GROUP_TARGET) is None
+        assert await manager.disconnect_connection(PRIVATE_TARGET) is conn
+
+    @pytest.mark.asyncio
+    async def test_cleanup_all_continues_after_one_client_fails(self) -> None:
+        manager = ConnectionManager()
+        healthy = _FakeRconClient("healthy", 25575, "p")
+        await manager.replace_connection(
+            _connection(PRIVATE_TARGET, client=cast(Any, _FailingCleanupClient()))
+        )
+        await manager.replace_connection(_connection(GROUP_TARGET, client=healthy))
+
+        await manager.cleanup_all()
+
+        assert healthy.disconnected is True
+        assert manager.all_connections() == []
+
+    @pytest.mark.asyncio
+    async def test_cleanup_cancellation_propagates_after_registry_is_cleared(self) -> None:
+        class CancelCleanupClient:
+            async def disconnect(self) -> None:
+                raise asyncio.CancelledError
+
+        manager = ConnectionManager()
+        await manager.replace_connection(
+            _connection(PRIVATE_TARGET, client=cast(Any, CancelCleanupClient()))
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await manager.cleanup_all()
+        assert manager.all_connections() == []
+
+    @pytest.mark.asyncio
+    async def test_shutdown_clears_connections_and_rate_state(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        manager = ConnectionManager()
+        client = _FakeRconClient("host", 25575, "p")
+        await manager.replace_connection(_connection(PRIVATE_TARGET, client=client))
+        monkeypatch.setattr(mc_main, "_manager", manager)
+        mc_main._event_buckets[("host", 25575, "private", 10001)] = mc_main._EventTokenBucket()
+        mc_main._delivery_cursor = 4
+
+        await mc_main.shutdown(None)
+
+        assert client.disconnected is True
+        assert manager.all_connections() == []
+        assert mc_main._event_buckets == {}
+        assert mc_main._delivery_cursor == 0
+
+
+class TestLogMonitor:
+    def test_parse_supported_events_and_keep_full_death_message(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        log_path.write_bytes(b"")
+        monitor = LogMonitor(str(log_path))
+        assert monitor.initialize() is True
+        lines = [
+            "[12:00:00] [Server thread/INFO]: <Steve> hello\n",
+            "[12:00:01] [Server thread/INFO]: Alex joined the game\n",
+            "[12:00:02] [Server thread/INFO]: Alex left the game\n",
+            "[12:00:03] [Server thread/INFO]: Steve was slain by Zombie\n",
+            "[12:00:04] [Server thread/INFO]: Steve has made the advancement [Stone Age]\n",
+            "[12:00:05] [Server thread/INFO]: server tick complete\n",
+            "[12:00:05] [Server thread/WARN]: ignored\n",
         ]
-    )
-    conn = mc_main.McConnection(
-        host="127.0.0.1",
-        port=25575,
-        password="p",
-        log_file="latest.log",
-        target_type="private",
-        target_id=10004,
-        rcon_client=None,
-        log_monitor=monitor,
-    )
-    manager.add_connection(conn)
-    monkeypatch.setattr(mc_main, "_manager", manager)
+        with log_path.open("a", encoding="utf-8") as file:
+            file.writelines(lines)
 
-    context = MagicMock()
-    context.send_action = AsyncMock()
+        batch = monitor.check_updates()
 
-    await mc_main.scheduled(context)
+        assert [event.event_type for event in batch.events] == [
+            LogEventType.CHAT,
+            LogEventType.JOIN,
+            LogEventType.LEAVE,
+            LogEventType.DEATH,
+            LogEventType.ADVANCEMENT,
+        ]
+        assert batch.events[3].message == "was slain by Zombie"
+        assert not hasattr(batch.events[0], "raw_line")
+        assert not hasattr(batch.events[0], "timestamp")
 
-    monitor.check_updates_async.assert_awaited_once()
-    context.send_action.assert_awaited_once()
-    action = context.send_action.await_args.args[0]
-    assert action["action"] == "send_private_msg"
-    assert "Steve" in action["params"]["message"][0]["data"]["text"]
+    def test_unterminated_line_is_delivered_only_after_newline(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        log_path.write_bytes(b"")
+        monitor = LogMonitor(str(log_path))
+        assert monitor.initialize()
+        with log_path.open("ab") as file:
+            file.write(b"[12:00:00] [Server thread/INFO]: <Steve> partial")
 
+        incomplete = monitor.check_updates()
+        assert incomplete.events == []
+        assert monitor.commit(incomplete) is True
+        with log_path.open("ab") as file:
+            file.write(b" message\n")
+        complete = monitor.check_updates()
+        assert [event.message for event in complete.events] == ["partial message"]
 
-@pytest.mark.asyncio
-async def test_mc_message_uses_rcon_command_api(monkeypatch):
-    manager = mc_main.ConnectionManager()
-    fake_rcon = _FakeCommandRcon("players: 3")
-    conn = mc_main.McConnection(
-        host="127.0.0.1",
-        port=25575,
-        password="p",
-        log_file="",
-        target_type="private",
-        target_id=10005,
-        rcon_client=fake_rcon,
-        log_monitor=None,
-    )
-    manager.add_connection(conn)
-    monkeypatch.setattr(mc_main, "_manager", manager)
+    def test_bounded_tail_reports_exact_skip_and_retains_latest_events(
+        self, tmp_path: Path
+    ) -> None:
+        log_path = tmp_path / "latest.log"
+        payload = (b"ignored line\n" * 80) + b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
+        log_path.write_bytes(payload)
+        monitor = LogMonitor(str(log_path))
+        monitor._initialized = True  # noqa: SLF001
+        monitor._last_position = 0  # noqa: SLF001
+        monitor.MAX_READ_BYTES = 128
+        read_start = len(payload) - monitor.MAX_READ_BYTES
+        partial = read_start > 0 and payload[read_start - 1 : read_start] != b"\n"
+        partial_end = payload.find(b"\n", read_start) + 1 if partial else read_start
 
-    result = await mc_main._handle_mc_message(
-        "list",
-        {"user_id": 10005, "message_type": "private"},
-        MagicMock(),
-    )
+        batch = monitor.check_updates()
 
-    assert fake_rcon.commands == ["list"]
-    assert "players: 3" in result[0]["data"]["text"]
+        assert batch.skipped_bytes == partial_end
+        assert batch.skipped_lines == payload[:read_start].count(b"\n") + int(partial)
+        assert [event.message for event in batch.events] == ["bounded"]
+        assert monitor._last_position == 0  # noqa: SLF001
+        assert monitor.commit(batch) is True
+        assert monitor._last_position == log_path.stat().st_size  # noqa: SLF001
 
+    def test_event_retention_is_bounded_and_counts_all_matches(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        lines = "".join(
+            f"[12:00:00] [Server thread/INFO]: <Player{index % 100}> message-{index}\n"
+            for index in range(1500)
+        )
+        log_path.write_text(lines, encoding="utf-8")
+        monitor = LogMonitor(str(log_path))
+        monitor._initialized = True  # noqa: SLF001
+        monitor.MAX_READ_BYTES = log_path.stat().st_size + 1
 
-class _FakeRconReader:
-    def __init__(self, payload: bytes):
-        self._payload = payload
+        batch = monitor.check_updates()
 
-    async def readexactly(self, n: int) -> bytes:
-        if n > len(self._payload):
-            raise asyncio.IncompleteReadError(partial=self._payload, expected=n)
-        chunk = self._payload[:n]
-        self._payload = self._payload[n:]
-        return chunk
+        assert batch.matched_total == 1500
+        assert batch.dropped_events == 500
+        assert len(batch.events) == 1000
+        assert batch.events[0].message == "message-500"
+        assert batch.events[-1].message == "message-1499"
 
+    def test_truncation_with_same_identity_restarts_from_zero(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        log_path.write_bytes(b"")
+        monitor = LogMonitor(str(log_path))
+        assert monitor.initialize()
+        log_path.write_text(
+            "[12:00:00] [Server thread/INFO]: <Steve> a very long first message\n",
+            encoding="utf-8",
+        )
+        first = monitor.check_updates()
+        assert monitor.commit(first)
+        log_path.write_text(
+            "[1:00:00] [Server thread/INFO]: A joined the game\n",
+            encoding="utf-8",
+        )
 
-class _FakeRconWriter:
-    def __init__(self):
-        self.written = b""
+        rotated = monitor.check_updates()
 
-    def write(self, data: bytes):
-        self.written += data
+        assert [event.player for event in rotated.events] == ["A"]
+        assert rotated.cursor_after == log_path.stat().st_size
 
-    async def drain(self):
-        return None
+    def test_persisted_cursor_survives_restart(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        state_path = tmp_path / "state" / "cursor.json"
+        log_path.write_bytes(b"")
+        first_monitor = LogMonitor(str(log_path), state_path=state_path)
+        assert first_monitor.initialize()
+        with log_path.open("a", encoding="utf-8") as file:
+            file.write("[12:00:00] [Server thread/INFO]: A joined the game\n")
+        first_batch = first_monitor.check_updates()
+        assert first_monitor.commit(first_batch)
 
-    def is_closing(self) -> bool:
-        return False
+        second_monitor = LogMonitor(str(log_path), state_path=state_path)
+        assert second_monitor.initialize()
+        with log_path.open("a", encoding="utf-8") as file:
+            file.write("[12:00:01] [Server thread/INFO]: B joined the game\n")
+        second_batch = second_monitor.check_updates()
 
+        assert [event.player for event in second_batch.events] == ["B"]
 
-def test_rcon_send_packet_reads_full_large_response():
-    large_payload = "x" * 5000
-    response_packet = RconPacket(request_id=1, packet_type=PacketType.RESPONSE, payload=large_payload)
-    encoded = response_packet.encode()
+    def test_corrupt_cursor_starts_at_current_end(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        state_path = tmp_path / "cursor.json"
+        log_path.write_text(
+            "[12:00:00] [Server thread/INFO]: Old joined the game\n",
+            encoding="utf-8",
+        )
+        state_path.write_text('{"version": 2, "position": 0}', encoding="utf-8")
+        monitor = LogMonitor(str(log_path), state_path=state_path)
+        assert monitor.initialize()
+        with log_path.open("a", encoding="utf-8") as file:
+            file.write("[12:00:01] [Server thread/INFO]: New joined the game\n")
 
-    client = RconClient("127.0.0.1", 25575, "pw")
-    client._reader = cast(Any, _FakeRconReader(encoded))
-    client._writer = cast(Any, _FakeRconWriter())
+        batch = monitor.check_updates()
 
-    response = asyncio.run(client._send_packet(PacketType.COMMAND, "list"))
+        assert [event.player for event in batch.events] == ["New"]
 
-    assert response.payload == large_payload
+    def test_cursor_identity_mismatch_or_position_past_eof_replays_from_zero(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        log_path = tmp_path / "latest.log"
+        state_path = tmp_path / "cursor.json"
+        log_path.write_text(
+            "[12:00:00] [Server thread/INFO]: Old joined the game\n",
+            encoding="utf-8",
+        )
+        identity = LogMonitor._identity(log_path.stat())  # noqa: SLF001
+        state_path.write_text(
+            json.dumps({"version": 1, "position": 9999, "file_identity": identity}),
+            encoding="utf-8",
+        )
+        past_eof = LogMonitor(str(log_path), state_path=state_path)
+        assert past_eof.initialize()
+        assert past_eof._last_position == 0  # noqa: SLF001
 
+        state_path.write_text(
+            json.dumps({"version": 1, "position": 1, "file_identity": "other"}),
+            encoding="utf-8",
+        )
+        mismatch = LogMonitor(str(log_path), state_path=state_path)
+        assert mismatch.initialize()
+        assert mismatch._last_position == 0  # noqa: SLF001
 
-def test_rcon_send_packet_joins_split_command_response():
-    first_payload = "a" * 4096
-    second_payload = "b" * 512
-    encoded = (
-        RconPacket(request_id=1, packet_type=PacketType.RESPONSE, payload=first_payload).encode()
-        + RconPacket(request_id=1, packet_type=PacketType.RESPONSE, payload=second_payload).encode()
-    )
+    def test_invalid_cursor_position_and_directory_path_fail_closed(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        state_path = tmp_path / "cursor.json"
+        log_path.write_text("history\n", encoding="utf-8")
+        state_path.write_text(
+            json.dumps({"version": 1, "position": True, "file_identity": "x"}),
+            encoding="utf-8",
+        )
+        monitor = LogMonitor(str(log_path), state_path=state_path)
+        assert monitor.initialize()
+        assert monitor._last_position == log_path.stat().st_size  # noqa: SLF001
+        assert LogMonitor(str(tmp_path)).initialize() is False
 
-    client = RconClient("127.0.0.1", 25575, "pw")
-    client._reader = cast(Any, _FakeRconReader(encoded))
-    client._writer = cast(Any, _FakeRconWriter())
+    def test_empty_file_and_skip_scan_extremes(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        log_path.write_bytes(b"")
+        monitor = LogMonitor(str(log_path))
+        assert monitor.initialize()
+        empty = monitor.check_updates()
+        assert empty.events == []
+        assert empty.cursor_before == empty.cursor_after == 0
+        assert monitor.commit(empty)
+        with log_path.open("rb") as file:
+            assert monitor._count_skipped_lines(file, 0, 0) == 0  # noqa: SLF001
+            monitor.MAX_SKIPPED_LINE_SCAN_BYTES = 1
+            assert monitor._count_skipped_lines(file, 0, 2) is None  # noqa: SLF001
+        assert LogMonitor._keep_complete_lines(b"", content_start=7) == (b"", 7)  # noqa: SLF001
 
-    response = asyncio.run(client._send_packet(PacketType.COMMAND, "list"))
+    def test_large_unscanned_prefix_keeps_unknown_line_count(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        event = b"[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
+        payload = b"x" * 200 + b"\n" + event
+        log_path.write_bytes(payload)
+        monitor = LogMonitor(str(log_path))
+        monitor._initialized = True  # noqa: SLF001
+        monitor.MAX_READ_BYTES = len(event) + 50
+        monitor.MAX_SKIPPED_LINE_SCAN_BYTES = 1
 
-    assert response.payload == first_payload + second_payload
+        batch = monitor.check_updates()
 
+        assert batch.skipped_lines is None
+        assert [item.message for item in batch.events] == ["bounded"]
 
-def test_rcon_rejects_oversized_packet_before_reading_body():
-    encoded_length = (RconClient.MAX_PACKET_BYTES + 1).to_bytes(4, "little", signed=True)
-    client = RconClient("127.0.0.1", 25575, "pw")
-    client._reader = cast(Any, _FakeRconReader(encoded_length))
+    def test_stale_and_uncommittable_batches_are_rejected(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "latest.log"
+        log_path.write_bytes(b"")
+        monitor = LogMonitor(str(log_path))
+        assert monitor.initialize()
+        assert monitor.commit(LogBatch(events=[])) is False
+        stale = LogBatch(
+            events=[],
+            cursor_before=99,
+            cursor_after=100,
+            file_identity="1:2",
+        )
+        assert monitor.commit(stale) is False
 
-    with pytest.raises(RconProtocolError, match="packet length"):
-        asyncio.run(client._read_packet(1.0))
+    def test_missing_file_and_poll_error_return_uncommittable_batch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        missing = LogMonitor(str(tmp_path / "missing.log"))
+        assert missing.initialize() is False
+        assert missing.check_updates().cursor_before is None
 
+        log_path = tmp_path / "latest.log"
+        log_path.write_bytes(b"")
+        monitor = LogMonitor(str(log_path))
+        assert monitor.initialize()
 
-def test_rcon_rejects_cumulative_response_limit():
-    first_payload = "a" * 4096
-    second_payload = "b" * 512
-    encoded = (
-        RconPacket(request_id=1, packet_type=PacketType.RESPONSE, payload=first_payload).encode()
-        + RconPacket(request_id=1, packet_type=PacketType.RESPONSE, payload=second_payload).encode()
-    )
-    client = RconClient("127.0.0.1", 25575, "pw")
-    client.MAX_RESPONSE_BYTES = 4200
-    client._reader = cast(Any, _FakeRconReader(encoded))
-    client._writer = cast(Any, _FakeRconWriter())
+        def fail() -> Any:
+            raise OSError("disk failure")
 
-    with pytest.raises(RconResponseLimitError, match="cumulative response"):
-        asyncio.run(client._send_packet(PacketType.COMMAND, "list"))
-
-
-def test_log_monitor_reads_only_bounded_tail(tmp_path):
-    log_path = tmp_path / "server.log"
-    prefix = b"x" * 4096
-    line = b"\n[12:00:00] [Server thread/INFO]: <Steve> bounded\n"
-    log_path.write_bytes(prefix + line)
-    monitor = mc_main.LogMonitor(str(log_path))
-    monitor.MAX_READ_BYTES = 256
-    monitor._initialized = True
-    monitor._last_position = 0
-
-    events = monitor.check_updates()
-
-    assert len(events) == 1
-    assert events[0].message == "bounded"
-    assert monitor._last_position == log_path.stat().st_size
-
-
-@pytest.mark.asyncio
-async def test_connection_manager_atomically_replaces_and_closes_old_client():
-    manager = mc_main.ConnectionManager()
-    old_rcon = _FakeDisconnectRcon()
-    old = mc_main.McConnection(
-        host="old",
-        port=25575,
-        password="p",
-        log_file="",
-        target_type="private",
-        target_id=7,
-        rcon_client=old_rcon,
-    )
-    new = mc_main.McConnection(
-        host="new",
-        port=25575,
-        password="p",
-        log_file="",
-        target_type="private",
-        target_id=7,
-    )
-    manager.add_connection(old)
-
-    replaced = await manager.replace_connection(new)
-
-    assert replaced is old
-    assert old_rcon.disconnected is True
-    assert manager.get_connection(None, 7) is new
+        monkeypatch.setattr(monitor, "_read_window", fail)
+        batch = monitor.check_updates()
+        assert batch.events == []
+        assert batch.cursor_before is None
+        assert monitor._initialized is False  # noqa: SLF001

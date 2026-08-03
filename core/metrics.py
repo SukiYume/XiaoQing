@@ -4,6 +4,7 @@
 提供插件执行时间统计、消息处理监控等功能。
 """
 
+import asyncio
 import functools
 import logging
 import threading
@@ -15,18 +16,27 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class ExecutionStats:
     """执行统计数据"""
+
     total_calls: int = 0
     total_time: float = 0.0
     min_time: float = float("inf")
     max_time: float = 0.0
     slow_calls: int = 0  # 超过阈值的调用次数
     errors: int = 0
+    cancelled: int = 0
     last_call_time: float = 0.0
 
-    def record(self, duration: float, slow_threshold: float = 5.0, is_error: bool = False) -> None:
+    def record(
+        self,
+        duration: float,
+        slow_threshold: float = 5.0,
+        is_error: bool = False,
+        is_cancelled: bool = False,
+    ) -> None:
         """记录一次执行"""
         self.total_calls += 1
         self.total_time += duration
@@ -37,7 +47,9 @@ class ExecutionStats:
         if duration > slow_threshold:
             self.slow_calls += 1
 
-        if is_error:
+        if is_cancelled:
+            self.cancelled += 1
+        elif is_error:
             self.errors += 1
 
     @property
@@ -52,7 +64,7 @@ class ExecutionStats:
         """成功率"""
         if self.total_calls == 0:
             return 1.0
-        return (self.total_calls - self.errors) / self.total_calls
+        return (self.total_calls - self.errors - self.cancelled) / self.total_calls
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -64,14 +76,20 @@ class ExecutionStats:
             "max_time": round(self.max_time, 3),
             "slow_calls": self.slow_calls,
             "errors": self.errors,
+            "cancelled": self.cancelled,
             "success_rate": round(self.success_rate, 4),
         }
+
 
 class MetricsCollector:
     """
     性能指标收集器
 
     用于收集和统计插件执行、命令处理等性能数据。
+
+    公开采集/查询方法保留 async 签名，是因为 ``PluginContext.metrics`` 已是
+    稳定的插件接口，仓库内外调用方都会 await。实现刻意不在持锁区 await：
+    当前统计仅做短小的内存操作，线程锁同时支持健康检查的同步快照读取。
     """
 
     def __init__(self, slow_threshold: float = 5.0):
@@ -100,6 +118,7 @@ class MetricsCollector:
         command_name: str,
         duration: float,
         is_error: bool = False,
+        is_cancelled: bool = False,
     ) -> None:
         """
         记录插件执行
@@ -109,21 +128,26 @@ class MetricsCollector:
             command_name: 命令名称
             duration: 执行时间（秒）
             is_error: 是否执行出错
+            is_cancelled: 是否被取消；取消与普通错误分别计数
         """
         with self._lock:
             self._plugin_stats[plugin_name].record(
-                duration, self._slow_threshold, is_error
+                duration, self._slow_threshold, is_error, is_cancelled
             )
             self._command_stats[f"{plugin_name}.{command_name}"].record(
-                duration, self._slow_threshold, is_error
+                duration, self._slow_threshold, is_error, is_cancelled
             )
-            self._global_stats.record(duration, self._slow_threshold, is_error)
+            self._global_stats.record(
+                duration,
+                self._slow_threshold,
+                is_error,
+                is_cancelled,
+            )
 
         # 慢调用日志
         if duration > self._slow_threshold:
             logger.warning(
-                "Slow plugin execution: %s.%s took %.2fs",
-                plugin_name, command_name, duration
+                "Slow plugin execution: %s.%s took %.2fs", plugin_name, command_name, duration
             )
 
     async def get_plugin_stats(self, plugin_name: str | None = None) -> dict[str, Any]:
@@ -137,18 +161,12 @@ class MetricsCollector:
             if plugin_name:
                 stats = self._plugin_stats.get(plugin_name)
                 return stats.to_dict() if stats else {}
-            return {
-                name: stats.to_dict()
-                for name, stats in self._plugin_stats.items()
-            }
+            return {name: stats.to_dict() for name, stats in self._plugin_stats.items()}
 
     async def get_command_stats(self) -> dict[str, Any]:
         """获取命令统计数据"""
         with self._lock:
-            return {
-                name: stats.to_dict()
-                for name, stats in self._command_stats.items()
-            }
+            return {name: stats.to_dict() for name, stats in self._command_stats.items()}
 
     def summary_snapshot(self) -> dict[str, Any]:
         """获取当前汇总统计快照。"""
@@ -168,9 +186,7 @@ class MetricsCollector:
     def _get_top_slow_plugins(self, n: int = 5) -> list[dict[str, Any]]:
         """获取最慢的插件"""
         sorted_plugins = sorted(
-            self._plugin_stats.items(),
-            key=lambda x: x[1].avg_time,
-            reverse=True
+            self._plugin_stats.items(), key=lambda x: x[1].avg_time, reverse=True
         )[:n]
         return [
             {"plugin": name, "avg_time": round(stats.avg_time, 3)}
@@ -187,6 +203,7 @@ class MetricsCollector:
             self._start_time = time.time()
             logger.info("Metrics reset")
 
+
 def timed_async(collector: MetricsCollector, plugin_name: str, command_name: str):
     """
     异步函数计时装饰器
@@ -196,23 +213,35 @@ def timed_async(collector: MetricsCollector, plugin_name: str, command_name: str
         async def my_handler(...):
             ...
     """
+
     def decorator(func: Callable):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
             start = time.perf_counter()
             is_error = False
+            is_cancelled = False
             try:
                 return await func(*args, **kwargs)
-            except Exception:
+            except asyncio.CancelledError:
+                is_cancelled = True
+                raise
+            except BaseException:
                 is_error = True
                 raise
             finally:
                 duration = time.perf_counter() - start
                 await collector.record_plugin_execution(
-                    plugin_name, command_name, duration, is_error
+                    plugin_name,
+                    command_name,
+                    duration,
+                    is_error=is_error,
+                    is_cancelled=is_cancelled,
                 )
+
         return wrapper
+
     return decorator
+
 
 class ExecutionTimer:
     """
@@ -237,6 +266,7 @@ class ExecutionTimer:
         self.start_time: float = 0
         self.duration: float = 0
         self._is_error = False
+        self._is_cancelled = False
 
     async def __aenter__(self) -> "ExecutionTimer":
         self.start_time = time.perf_counter()
@@ -244,16 +274,23 @@ class ExecutionTimer:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         self.duration = time.perf_counter() - self.start_time
-        self._is_error = exc_type is not None
+        self._is_cancelled = exc_type is not None and issubclass(
+            exc_type,
+            asyncio.CancelledError,
+        )
+        self._is_error = exc_type is not None and not self._is_cancelled
         await self.collector.record_plugin_execution(
             self.plugin_name,
             self.command_name,
             self.duration,
-            self._is_error,
+            is_error=self._is_error,
+            is_cancelled=self._is_cancelled,
         )
+
 
 # 全局默认收集器
 _default_collector: MetricsCollector | None = None
+
 
 def get_metrics_collector() -> MetricsCollector:
     """获取全局默认指标收集器"""
@@ -262,10 +299,12 @@ def get_metrics_collector() -> MetricsCollector:
         _default_collector = MetricsCollector()
     return _default_collector
 
+
 def set_metrics_collector(collector: MetricsCollector) -> None:
     """设置全局默认指标收集器"""
     global _default_collector
     _default_collector = collector
+
 
 __all__ = [
     "ExecutionStats",

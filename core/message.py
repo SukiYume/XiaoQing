@@ -5,10 +5,44 @@
 """
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 _MEDIA_SEGMENT_TYPES = frozenset({"image", "mface", "face"})
+
+
+class ValidatedInboundEvent(dict[str, Any]):
+    """Detached, mutable payload that crossed the OneBot validation boundary.
+
+    The server passes this same mapping through the inbound queue, so consumers may
+    append private, internal fields in place.  It is detached from the transport
+    request and each accepted payload has its own mapping; it is not an immutable
+    snapshot.
+    """
+
+
+def validate_message_segments(message: list[Any]) -> list[dict[str, Any]]:
+    """Validate and detach a OneBot segment list at the trust boundary."""
+
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(message):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"message segment {index} must be an object")
+        raw_type = item.get("type")
+        if type(raw_type) is not str or not raw_type.strip():
+            raise ValueError(f"message segment {index} has no valid type")
+        if "data" in item:
+            raw_data = item["data"]
+            if not isinstance(raw_data, Mapping):
+                raise ValueError(f"message segment {index} data must be an object")
+        else:
+            raw_data = {}
+        segment = dict(item)
+        segment["type"] = raw_type.strip()
+        segment["data"] = dict(raw_data)
+        normalized.append(segment)
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -38,7 +72,9 @@ def normalize_inbound_message(event: dict[str, Any]) -> dict[str, Any]:
 
 def iter_message_segments(event_or_message: Any) -> tuple[dict[str, Any], ...]:
     """Return normalized message segments from either an event or raw payload."""
-    message = event_or_message.get("message") if isinstance(event_or_message, dict) else event_or_message
+    message = (
+        event_or_message.get("message") if isinstance(event_or_message, dict) else event_or_message
+    )
     if not isinstance(message, list):
         return ()
     return tuple(item for item in message if isinstance(item, dict))
@@ -70,7 +106,8 @@ def scan_message(
 
     for item in iter_message_segments(message):
         segment_type = item.get("type")
-        data = item.get("data", {}) or {}
+        raw_data = item.get("data", {})
+        data = raw_data if isinstance(raw_data, Mapping) else {}
 
         if segment_type == "text":
             text_parts.append(str(data.get("text", "")))
@@ -100,11 +137,6 @@ def extract_text(message: Any) -> str:
     return scan_message(message).text
 
 
-def has_media_segment(message: Any) -> bool:
-    """判断消息中是否包含当前支持的媒体段。"""
-    return scan_message(message).has_media
-
-
 def contains_bot_name(text: str, bot_name: str) -> bool:
     if not text or not bot_name:
         return False
@@ -117,27 +149,13 @@ def has_at_mention(
     self_id: str = "",
     raw_message: str = "",
 ) -> bool:
-    message = event_or_message.get("message") if isinstance(event_or_message, dict) else event_or_message
+    message = (
+        event_or_message.get("message") if isinstance(event_or_message, dict) else event_or_message
+    )
     if isinstance(event_or_message, dict) and not raw_message:
         raw_message = str(event_or_message.get("raw_message", "") or "")
     return scan_message(message, self_id=self_id, raw_message=raw_message).is_at_me
 
-def normalize_message(event: dict[str, Any]) -> tuple[str, int | None, int | None]:
-    """
-    标准化消息事件
-
-    返回: (文本内容, user_id, group_id)
-    """
-    text = scan_message(event.get("message")).text.strip()
-    return text, event.get("user_id"), event.get("group_id")
-
-def is_bot_mentioned(
-    text: str,
-    event: dict[str, Any],
-    bot_name: str = "",
-    self_id: str = "",
-) -> bool:
-    return contains_bot_name(text, bot_name) or has_at_mention(event, self_id=self_id)
 
 def compile_bot_name_pattern(bot_name: str) -> re.Pattern[str] | None:
     if not bot_name:
@@ -146,6 +164,7 @@ def compile_bot_name_pattern(bot_name: str) -> re.Pattern[str] | None:
         rf"^{re.escape(bot_name)}[\s,，.。!！?？]*",
         re.IGNORECASE,
     )
+
 
 def strip_message_prefix(
     text: str,
@@ -161,7 +180,7 @@ def strip_message_prefix(
     if self_id:
         at_cq = f"[CQ:at,qq={self_id}]"
         if stripped.startswith(at_cq):
-            stripped = stripped[len(at_cq):].lstrip(" ,，.。!！?？\t\n")
+            stripped = stripped[len(at_cq) :].lstrip(" ,，.。!！?？\t\n")
         if at_cq in stripped:
             stripped = re.sub(rf"\s*{re.escape(at_cq)}\s*", " ", stripped).strip()
 
@@ -171,9 +190,10 @@ def strip_message_prefix(
 
     for prefix in prefixes:
         if stripped.startswith(prefix):
-            return stripped[len(prefix):].strip()
+            return stripped[len(prefix) :].strip()
 
     return stripped.strip()
+
 
 _URL_ONLY_PATTERN = re.compile(r"^https?://\S+$")
 
@@ -188,11 +208,12 @@ def is_clean_text_url_only(clean_text: str) -> bool:
 @dataclass(frozen=True)
 class TextCommandContext:
     """Result of parsing a single text message for routing signals."""
+
     clean_text: str
     is_at_me: bool
     has_bot_name: bool
-    has_command_prefix: bool   # text.startswith(any configured command prefix)
-    has_prefix: bool           # has_command_prefix OR has_bot_name OR is_at_me
+    has_command_prefix: bool  # text.startswith(any configured command prefix)
+    has_prefix: bool  # has_command_prefix OR has_bot_name OR is_at_me
     is_only_bot_name: bool
     is_url_only: bool
 
@@ -236,18 +257,17 @@ def parse_text_command_context(
         is_url_only=is_url_only,
     )
 
+
 __all__ = [
     "MessageScan",
     "TextCommandContext",
+    "ValidatedInboundEvent",
     "contains_bot_name",
     "extract_text",
-    "has_media_segment",
     "has_at_mention",
     "iter_message_segments",
     "is_clean_text_url_only",
     "normalize_inbound_message",
-    "normalize_message",
-    "is_bot_mentioned",
     "compile_bot_name_pattern",
     "scan_message",
     "strip_message_prefix",

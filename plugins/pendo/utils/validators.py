@@ -3,20 +3,42 @@
 
 提供统一的输入验证功能，确保数据安全性和一致性
 """
+
+import json
 import re
-from datetime import datetime, timedelta
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any
-from zoneinfo import ZoneInfo
+from typing import Any, Final, TypeAlias
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..config import PendoConfig
 
-DEFAULT_EVENT_REMINDER_RULES = [{"offset_seconds": 0}]
-DEFAULT_EVENT_TIMEZONE = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
+DEFAULT_EVENT_REMINDER_RULES: Final[tuple[dict[str, int], ...]] = ({"offset_seconds": 0},)
+DEFAULT_EVENT_TIMEZONE: Final = ZoneInfo(PendoConfig.DEFAULT_TIMEZONE)
+EVENT_ROLES: Final = frozenset({"single", "multi_node_child", "recurring_occurrence"})
+EVENT_COLLECTION_KINDS: Final = frozenset({"multi_node", "recurring"})
+TASK_STATUSES: Final = frozenset({"open", "done", "cancelled"})
+LEGACY_TASK_FIELDS: Final = frozenset(
+    {"due_time", "estimate", "subtasks", "dependencies", "progress"}
+)
 
-LEDGER_TRANSACTION_TYPES = {"expense", "income", "transfer"}
+LEDGER_TRANSACTION_TYPES: Final = frozenset({"expense", "income", "transfer"})
+LEDGER_TRANSACTION_TYPE_ALIASES: Final = {
+    "out": "expense",
+    "expense": "expense",
+    "支出": "expense",
+    "in": "income",
+    "income": "income",
+    "收入": "income",
+    "transfer": "transfer",
+    "xfer": "transfer",
+    "转账": "transfer",
+}
 LEDGER_DEFAULT_ACCOUNT = "现金"
 LEDGER_DEFAULT_CURRENCY = "CNY"
+MAX_NOTE_REFERENCES = 100
+MAX_NOTE_REFERENCE_BYTES = 64 * 1024
 
 COMMON_ITEM_FIELDS = {
     "id",
@@ -151,12 +173,13 @@ def sanitize_text(text: str, max_length: int = 10000) -> str:
         text = text[:max_length]
 
     # 移除控制字符（保留换行和制表符）
-    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 
     # 规范化Unicode字符
     text = text.strip()
 
     return text
+
 
 def validate_category(category: str, max_length: int = 50) -> str:
     """验证分类名
@@ -178,14 +201,11 @@ def validate_category(category: str, max_length: int = 50) -> str:
     category = sanitize_text(category, max_length)
 
     # 验证字符集（只允许中文、英文、数字、下划线、短横线、空格）
-    if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_\-\s]+$', category):
+    if not re.match(r"^[\u4e00-\u9fa5a-zA-Z0-9_\-\s]+$", category):
         raise ValueError("分类名只能包含中文、英文、数字、下划线、短横线和空格")
 
     return category.strip()
 
-
-def is_date_category(category: Any) -> bool:
-    return bool(re.match(r"^\d{4}-\d{2}-\d{2}$", str(category or "").strip()))
 
 def validate_tag(tag: str, max_length: int = 20) -> str:
     """验证标签名
@@ -207,7 +227,7 @@ def validate_tag(tag: str, max_length: int = 20) -> str:
     tag = sanitize_text(tag, max_length)
 
     # 验证字符集（不允许空格）
-    if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_\-]+$', tag):
+    if not re.match(r"^[\u4e00-\u9fa5a-zA-Z0-9_\-]+$", tag):
         raise ValueError("标签名只能包含中文、英文、数字、下划线和短横线")
 
     return tag
@@ -218,22 +238,6 @@ def default_task_plan_date(now: datetime | None = None) -> str:
     current = now or datetime.now()
     target = current + timedelta(days=1) if current.hour >= 20 else current
     return target.strftime("%Y-%m-%d")
-
-
-def _coerce_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if value in (None, ""):
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    try:
-        return datetime.fromisoformat(text)
-    except ValueError:
-        return None
 
 
 def validate_title(title: str, max_length: int = 200) -> str:
@@ -256,6 +260,7 @@ def validate_title(title: str, max_length: int = 200) -> str:
     title = sanitize_text(title, max_length)
 
     return title.strip()
+
 
 def sanitize_search_keyword(keyword: str) -> str:
     """清洗搜索关键词
@@ -325,24 +330,6 @@ def normalize_bool_flag(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "是", "收藏"}
 
 
-def validate_diary_content(content: str, max_length: int = 50000) -> str:
-    """验证日记内容
-
-    Args:
-        content: 日记内容
-        max_length: 最大长度
-
-    Returns:
-        验证后的内容
-    """
-    if not content:
-        return ""
-
-    # 清洗并限制长度
-    content = sanitize_text(content, max_length)
-
-    return content
-
 def validate_location(location: str, max_length: int = 200) -> str:
     """验证地点
 
@@ -361,6 +348,7 @@ def validate_location(location: str, max_length: int = 200) -> str:
 
     return location.strip()
 
+
 def validate_priority(priority: Any) -> int:
     """验证优先级
 
@@ -374,26 +362,71 @@ def validate_priority(priority: Any) -> int:
         ValueError: 优先级无效
     """
     try:
-        priority = int(priority)
+        normalized_priority = int(priority)
     except (ValueError, TypeError) as exc:
         raise ValueError("优先级必须是数字") from exc
 
-    if not 1 <= priority <= 5:
+    if not 1 <= normalized_priority <= 5:
         raise ValueError("优先级必须在1-5之间")
 
-    return priority
+    return normalized_priority
+
+
+def _normalize_tag_list(value: Any, *, field_name: str) -> list[str]:
+    """验证标签列表并按不区分大小写的键稳定去重。"""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+
+    tags: list[str] = []
+    seen: set[str] = set()
+    for raw_tag in value:
+        if raw_tag in (None, ""):
+            continue
+        tag = validate_tag(str(raw_tag))
+        key = tag.casefold()
+        if key not in seen:
+            seen.add(key)
+            tags.append(tag)
+    return tags
+
+
+def _normalize_common_fields(
+    normalized: dict[str, Any],
+    *,
+    partial: bool,
+    title_required: bool,
+    content_required: bool = False,
+) -> None:
+    """原地规范所有条目共享的标题、正文、分类与标签。"""
+    if "title" in normalized or not partial:
+        title = str(normalized.get("title") or "")
+        normalized["title"] = validate_title(title) if title_required else sanitize_text(title, 200)
+
+    if "content" in normalized or not partial:
+        content = sanitize_text(str(normalized.get("content") or ""), 50000)
+        if content_required and not content:
+            raise ValueError("Diary content cannot be empty")
+        normalized["content"] = content
+
+    if "category" in normalized or not partial:
+        category = str(normalized.get("category") or PendoConfig.DEFAULT_CATEGORY)
+        normalized["category"] = validate_category(category)
+
+    if "tags" in normalized or not partial:
+        normalized["tags"] = _normalize_tag_list(
+            normalized.get("tags"),
+            field_name="tags",
+        )
+
 
 def validate_item_data(data: dict[str, Any]) -> dict[str, Any]:
-    """验证条目数据
+    """执行不补业务默认值的存储层校验。
 
-    Args:
-        data: 条目数据字典
-
-    Returns:
-        验证后的数据字典
-
-    Raises:
-        ValueError: 数据无效
+    Handler 和 Web API 在构造条目时使用各类型的严格规范化器；数据库入口只负责
+    拒绝未知字段并清洗通用字段，不能再次推导提醒或终态时间，否则会改变已经明确
+    给出的业务语义。账目金额需要生成整数分字段，因此仍在此完成完整规范化。
     """
     item_type = str(data.get("type") or "").strip()
     if item_type in SUPPORTED_ITEM_TYPES:
@@ -403,42 +436,24 @@ def validate_item_data(data: dict[str, Any]) -> dict[str, Any]:
         if item_type == "ledger":
             return normalize_ledger_fields(dict(data), partial=False)
 
-    validated = {}
-
-    # 验证标题
-    if 'title' in data:
-        validated['title'] = validate_title(data['title'])
-
-    # 验证内容
-    if 'content' in data:
-        validated['content'] = sanitize_text(data['content'], 50000)
-
-    # 验证分类
-    if 'category' in data and data['category']:
-        validated['category'] = validate_category(data['category'])
-
-    # 验证标签
-    if 'tags' in data and isinstance(data['tags'], list):
-        validated['tags'] = [validate_tag(tag) for tag in data['tags'] if tag]
-
-    # 验证优先级
-    if 'priority' in data and data['priority'] is not None:
-        validated['priority'] = validate_priority(data['priority'])
-
-    # 验证地点
-    if 'location' in data and data['location']:
-        validated['location'] = validate_location(data['location'])
-
-    # 复制其他字段
-    for key, value in data.items():
-        if key not in validated and value is not None:
-            validated[key] = value
-
+    validated = {key: value for key, value in data.items() if value is not None}
+    if "title" in data:
+        validated["title"] = validate_title(data["title"])
+    if "content" in data:
+        validated["content"] = sanitize_text(data["content"], 50000)
+    if data.get("category"):
+        validated["category"] = validate_category(data["category"])
+    if isinstance(data.get("tags"), list):
+        validated["tags"] = [validate_tag(tag) for tag in data["tags"] if tag]
+    if data.get("priority") is not None:
+        validated["priority"] = validate_priority(data["priority"])
+    if data.get("location"):
+        validated["location"] = validate_location(data["location"])
     return validated
 
 
-def ledger_amount_to_cents(amount: Any) -> int:
-    """Convert a user-facing money amount to integer cents."""
+def _ledger_decimal_to_cents(amount: Any) -> int:
+    """Convert a decimal money value to integer cents with one rounding rule."""
     if amount is None or amount == "":
         raise ValueError("Ledger amount is required")
     if isinstance(amount, str):
@@ -447,9 +462,28 @@ def ledger_amount_to_cents(amount: Any) -> int:
         value = Decimal(str(amount))
     except (InvalidOperation, ValueError, TypeError) as exc:
         raise ValueError("Ledger amount must be a valid number") from exc
-    cents = int((value * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if not value.is_finite():
+        raise ValueError("Ledger amount must be a finite number")
+    try:
+        cents = int((value * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, OverflowError, ValueError) as exc:
+        raise ValueError("Ledger amount must be a valid number") from exc
+    return cents
+
+
+def ledger_amount_to_cents(amount: Any) -> int:
+    """Convert a positive user-facing money amount to integer cents."""
+    cents = _ledger_decimal_to_cents(amount)
     if cents <= 0:
         raise ValueError("Ledger amount must be greater than 0")
+    return cents
+
+
+def ledger_amount_filter_to_cents(amount: Any) -> int:
+    """Convert a non-negative money filter to integer cents."""
+    cents = _ledger_decimal_to_cents(amount)
+    if cents < 0:
+        raise ValueError("Ledger amount filter must not be negative")
     return cents
 
 
@@ -468,70 +502,62 @@ def _clean_ledger_text(value: Any, default: str = "", max_length: int = 80) -> s
     return sanitize_text(str(value or "").strip(), max_length) or default
 
 
-def _normalize_ledger_type(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    aliases = {
-        "out": "expense",
-        "expense": "expense",
-        "支出": "expense",
-        "in": "income",
-        "income": "income",
-        "收入": "income",
-        "transfer": "transfer",
-        "xfer": "transfer",
-        "转账": "transfer",
-    }
-    return aliases.get(text, text)
+def parse_ledger_transaction_type(value: Any) -> str | None:
+    """把中英文交易类型别名解析成持久化枚举值。"""
+    return LEDGER_TRANSACTION_TYPE_ALIASES.get(str(value or "").strip().lower())
 
 
-def normalize_ledger_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
-    """规范化并验证 ledger 字段。
-
-    `amount_cents` is the canonical money field. `amount` is a decimal
-    display mirror generated from cents.
-    """
-    normalized = dict(data)
-
-    has_amount_cents = "amount_cents" in normalized
+def _normalize_ledger_amount(normalized: dict[str, Any], *, partial: bool) -> None:
+    """把输入金额统一为整数分，并维护只用于展示的元镜像。"""
+    has_cents = "amount_cents" in normalized
     has_amount = "amount" in normalized
-    if not partial or has_amount_cents or has_amount:
-        if has_amount_cents and normalized.get("amount_cents") not in (None, ""):
-            try:
-                cents = int(normalized["amount_cents"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError("Ledger amount_cents must be an integer") from exc
-            if cents <= 0:
-                raise ValueError("Ledger amount_cents must be greater than 0")
-        elif has_amount:
-            cents = ledger_amount_to_cents(normalized.get("amount"))
-        else:
-            raise ValueError("Ledger amount must be greater than 0")
-        normalized["amount_cents"] = cents
-        normalized["amount"] = ledger_cents_to_amount(cents)
+    if partial and not has_cents and not has_amount:
+        return
+    if has_cents and normalized.get("amount_cents") not in (None, ""):
+        try:
+            cents = int(normalized["amount_cents"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Ledger amount_cents must be an integer") from exc
+        if cents <= 0:
+            raise ValueError("Ledger amount_cents must be greater than 0")
+    elif has_amount:
+        cents = ledger_amount_to_cents(normalized.get("amount"))
+    else:
+        raise ValueError("Ledger amount must be greater than 0")
+    normalized["amount_cents"] = cents
+    normalized["amount"] = ledger_cents_to_amount(cents)
 
-    tx_type = normalized.get("transaction_type")
-    if tx_type is None and not partial:
-        tx_type = "expense"
-    if tx_type is not None:
-        tx_type = _normalize_ledger_type(tx_type)
-        if tx_type not in LEDGER_TRANSACTION_TYPES:
+
+def _normalize_ledger_kind(normalized: dict[str, Any], *, partial: bool) -> str | None:
+    """规范收支类型与账目分类，并返回本次可见的交易类型。"""
+    transaction_type = normalized.get("transaction_type")
+    if transaction_type is None and not partial:
+        transaction_type = "expense"
+    if transaction_type is not None:
+        raw_type = str(transaction_type or "").strip().lower()
+        transaction_type = parse_ledger_transaction_type(raw_type) or raw_type
+        if transaction_type not in LEDGER_TRANSACTION_TYPES:
             raise ValueError("Invalid ledger transaction type")
-        normalized["transaction_type"] = tx_type
+        normalized["transaction_type"] = transaction_type
 
-    effective_type = normalized.get("transaction_type")
     category = normalized.get("ledger_category")
     if category is None and not partial:
-        category = "转账" if effective_type == "transfer" else "其他"
+        category = "转账" if transaction_type == "transfer" else "其他"
     if category is not None:
-        default_category = "转账" if effective_type == "transfer" else "其他"
-        normalized["ledger_category"] = _clean_ledger_text(category, default_category, 60)
+        fallback = "转账" if transaction_type == "transfer" else "其他"
+        normalized["ledger_category"] = _clean_ledger_text(category, fallback, 60)
+    return transaction_type
 
+
+def _normalize_ledger_date_and_currency(normalized: dict[str, Any], *, partial: bool) -> None:
     ledger_date = normalized.get("ledger_date")
     if not ledger_date and not partial:
         ledger_date = datetime.now().strftime("%Y-%m-%d")
     if ledger_date:
         try:
-            normalized["ledger_date"] = datetime.strptime(str(ledger_date), "%Y-%m-%d").strftime("%Y-%m-%d")
+            normalized["ledger_date"] = datetime.strptime(str(ledger_date), "%Y-%m-%d").strftime(
+                "%Y-%m-%d"
+            )
         except ValueError as exc:
             raise ValueError("Invalid ledger_date, expected YYYY-MM-DD") from exc
 
@@ -544,6 +570,13 @@ def normalize_ledger_fields(data: dict[str, Any], partial: bool = False) -> dict
             raise ValueError("Invalid ledger currency")
         normalized["currency"] = code
 
+
+def _normalize_ledger_accounts(
+    normalized: dict[str, Any],
+    *,
+    partial: bool,
+    transaction_type: str | None,
+) -> None:
     account = normalized.get("account_name")
     if account is None and not partial:
         account = LEDGER_DEFAULT_ACCOUNT
@@ -556,19 +589,22 @@ def normalize_ledger_fields(data: dict[str, Any], partial: bool = False) -> dict
     elif not partial:
         normalized["counter_account_name"] = ""
 
-    if effective_type == "transfer":
-        account_name = _clean_ledger_text(normalized.get("account_name"), LEDGER_DEFAULT_ACCOUNT, 80)
-        counter_name = _clean_ledger_text(normalized.get("counter_account_name"), "", 80)
-        if not counter_name:
-            raise ValueError("Ledger transfer requires counter_account_name")
-        if account_name == counter_name:
-            raise ValueError("Ledger transfer accounts must be different")
-        normalized["account_name"] = account_name
-        normalized["counter_account_name"] = counter_name
-        normalized["ledger_category"] = _clean_ledger_text(
-            normalized.get("ledger_category"), "转账", 60
-        )
+    if transaction_type != "transfer":
+        return
+    account_name = _clean_ledger_text(normalized.get("account_name"), LEDGER_DEFAULT_ACCOUNT, 80)
+    counter_name = _clean_ledger_text(normalized.get("counter_account_name"), "", 80)
+    if not counter_name:
+        raise ValueError("Ledger transfer requires counter_account_name")
+    if account_name == counter_name:
+        raise ValueError("Ledger transfer accounts must be different")
+    normalized["account_name"] = account_name
+    normalized["counter_account_name"] = counter_name
+    normalized["ledger_category"] = _clean_ledger_text(
+        normalized.get("ledger_category"), "转账", 60
+    )
 
+
+def _normalize_ledger_details(normalized: dict[str, Any], *, partial: bool) -> None:
     if "merchant" in normalized:
         normalized["merchant"] = _clean_ledger_text(normalized.get("merchant"), "", 120)
     elif not partial:
@@ -579,6 +615,20 @@ def normalize_ledger_fields(data: dict[str, Any], partial: bool = False) -> dict
     elif not partial:
         normalized["remark"] = ""
 
+
+def normalize_ledger_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
+    """规范账目字段；整数分是唯一计算字段，元值只是展示镜像。"""
+    normalized = dict(data)
+    _normalize_common_fields(normalized, partial=partial, title_required=False)
+    _normalize_ledger_amount(normalized, partial=partial)
+    transaction_type = _normalize_ledger_kind(normalized, partial=partial)
+    _normalize_ledger_date_and_currency(normalized, partial=partial)
+    _normalize_ledger_accounts(
+        normalized,
+        partial=partial,
+        transaction_type=transaction_type,
+    )
+    _normalize_ledger_details(normalized, partial=partial)
     return normalized
 
 
@@ -628,6 +678,8 @@ def normalize_reminder_rules(value: Any) -> list[dict[str, int]]:
         if not isinstance(row, dict):
             raise ValueError("reminder_rules must contain objects")
         raw_offset = row.get("offset_seconds")
+        if raw_offset is None:
+            raise ValueError("reminder_rules.offset_seconds must be an integer")
         try:
             offset = int(raw_offset)
         except (TypeError, ValueError) as exc:
@@ -683,6 +735,61 @@ def build_remind_times_from_rules(start_time: Any, reminder_rules: Any) -> list[
     return sorted(dict.fromkeys(remind_times))
 
 
+def _normalize_reminder_fields(
+    normalized: dict[str, Any],
+    *,
+    anchor_field: str,
+    partial: bool,
+    include_anchor_rule: bool,
+    default_rules: tuple[dict[str, int], ...] = (),
+) -> None:
+    """同步绝对提醒时间与相对规则，并保留显式清空语义。"""
+    rules_provided = "reminder_rules" in normalized
+    times_provided = "remind_times" in normalized
+
+    if rules_provided or not partial:
+        normalized["reminder_rules"] = normalize_reminder_rules(normalized.get("reminder_rules"))
+    if times_provided or not partial:
+        raw_times = normalized.get("remind_times") or []
+        if not isinstance(raw_times, list):
+            raise ValueError("remind_times must be a list")
+        normalized["remind_times"] = sorted(
+            {
+                _normalize_iso_datetime(value, "remind_times")
+                for value in raw_times
+                if value not in (None, "")
+            }
+        )
+
+    rules = normalized.get("reminder_rules") or []
+    times = normalized.get("remind_times") or []
+    explicitly_cleared = (rules_provided and not rules and not times) or (
+        times_provided and not times and not rules
+    )
+    anchor = normalized.get(anchor_field)
+
+    if rules and anchor:
+        normalized["remind_times"] = build_remind_times_from_rules(anchor, rules)
+    elif times and anchor:
+        derived = derive_reminder_rules(anchor, times)
+        normalized["reminder_rules"] = (
+            with_start_time_reminder_rule(derived) if include_anchor_rule else derived
+        )
+        normalized["remind_times"] = build_remind_times_from_rules(
+            anchor,
+            normalized["reminder_rules"],
+        )
+    elif explicitly_cleared:
+        normalized["reminder_rules"] = []
+        normalized["remind_times"] = []
+    elif not partial and default_rules and anchor:
+        normalized["reminder_rules"] = [dict(rule) for rule in default_rules]
+        normalized["remind_times"] = build_remind_times_from_rules(
+            anchor,
+            normalized["reminder_rules"],
+        )
+
+
 def _normalize_iso_date(value: Any, field_name: str) -> str:
     """将输入规范化为 YYYY-MM-DD。"""
     text = sanitize_text(str(value), 20)
@@ -700,22 +807,8 @@ def _normalize_optional_iso_date(value: Any, field_name: str) -> str | None:
     return _normalize_iso_date(value, field_name)
 
 
-def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
-    """规范化并验证 event 字段。"""
-    normalized = dict(data)
-    reminder_rules_provided = "reminder_rules" in normalized
-    remind_times_provided = "remind_times" in normalized
-
-    title = normalized.get("title")
-    if not partial or title is not None:
-        normalized["title"] = validate_title(title or "")
-
-    category = normalized.get("category")
-    if category is None and not partial:
-        category = "未分类"
-    if category is not None:
-        normalized["category"] = validate_category(category or "未分类")
-
+def _normalize_event_context_fields(normalized: dict[str, Any], *, partial: bool) -> None:
+    """规范事件的地点、备注和时区。"""
     if "location" in normalized:
         normalized["location"] = validate_location(normalized.get("location") or "")
     elif not partial:
@@ -728,26 +821,37 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
 
     timezone = normalized.get("timezone")
     if timezone is None and not partial:
-        timezone = "Asia/Shanghai"
+        timezone = PendoConfig.DEFAULT_TIMEZONE
     if timezone is not None:
-        normalized["timezone"] = sanitize_text(str(timezone), 80) or "Asia/Shanghai"
+        timezone_name = sanitize_text(str(timezone), 80) or PendoConfig.DEFAULT_TIMEZONE
+        try:
+            ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("Invalid event timezone") from exc
+        normalized["timezone"] = timezone_name
 
+
+def _normalize_event_role_fields(normalized: dict[str, Any], *, partial: bool) -> None:
+    """校验事件在集合图中的角色和集合类型。"""
     event_role = normalized.get("event_role")
     if event_role is None and not partial:
         event_role = "single"
     if event_role is not None:
         event_role = sanitize_text(str(event_role), 40) or "single"
-        if event_role not in {"single", "multi_node_child", "recurring_occurrence"}:
+        if event_role not in EVENT_ROLES:
             raise ValueError("Invalid event_role")
         normalized["event_role"] = event_role
 
     collection_kind = normalized.get("event_collection_kind")
     if collection_kind is not None:
         collection_kind = sanitize_text(str(collection_kind), 40)
-        if collection_kind and collection_kind not in {"multi_node", "recurring"}:
+        if collection_kind and collection_kind not in EVENT_COLLECTION_KINDS:
             raise ValueError("Invalid event_collection_kind")
         normalized["event_collection_kind"] = collection_kind or None
 
+
+def _normalize_event_identity_fields(normalized: dict[str, Any]) -> None:
+    """规范事件集合标识、节点标识和序号。"""
     for text_field in ("event_collection_id", "event_node_key", "source_item_id"):
         if text_field in normalized and normalized[text_field] is not None:
             normalized[text_field] = sanitize_text(str(normalized[text_field]), 120)
@@ -758,24 +862,9 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
         except (TypeError, ValueError) as exc:
             raise ValueError("event_index must be an integer") from exc
 
-    reminders = normalized.get("remind_times")
-    if reminders is None and not partial:
-        reminders = []
-    if reminders is not None:
-        if not isinstance(reminders, list):
-            raise ValueError("remind_times must be a list")
-        normalized["remind_times"] = sorted({
-            _normalize_iso_datetime(value, "remind_times")
-            for value in reminders
-            if value not in (None, "")
-        })
 
-    rules = normalized.get("reminder_rules")
-    if rules is None and not partial:
-        rules = []
-    if rules is not None:
-        normalized["reminder_rules"] = normalize_reminder_rules(rules)
-
+def _normalize_event_time_fields(normalized: dict[str, Any]) -> None:
+    """规范事件起止时间，并按真实时间顺序比较带偏移时间。"""
     start_time = normalized.get("start_time")
     if not start_time:
         raise ValueError("Event start_time is required")
@@ -786,80 +875,65 @@ def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[
         normalized["end_time"] = None
     else:
         normalized["end_time"] = _normalize_iso_datetime(end_time, "end_time")
-        if normalized["end_time"] < normalized["start_time"]:
+        start_dt = datetime.fromisoformat(normalized["start_time"])
+        end_dt = datetime.fromisoformat(normalized["end_time"])
+        if (start_dt.tzinfo is None) != (end_dt.tzinfo is None):
+            raise ValueError("Event start_time and end_time must use matching timezone forms")
+        if end_dt <= start_dt:
             raise ValueError("Event end_time must be after start_time")
 
-    has_rules = bool(normalized.get("reminder_rules"))
-    has_reminders = bool(normalized.get("remind_times"))
-    explicitly_cleared = (
-        (reminder_rules_provided and not has_rules and (not remind_times_provided or not has_reminders))
-        or (remind_times_provided and not has_reminders and (not reminder_rules_provided or not has_rules))
-    )
 
-    if has_rules:
-        normalized["remind_times"] = build_remind_times_from_rules(
-            normalized["start_time"],
-            normalized["reminder_rules"],
-        )
-    elif has_reminders:
-        normalized["reminder_rules"] = with_start_time_reminder_rule(
-            derive_reminder_rules(
-                normalized["start_time"],
-                normalized["remind_times"],
-            )
-        )
-        normalized["remind_times"] = build_remind_times_from_rules(
-            normalized["start_time"],
-            normalized["reminder_rules"],
-        )
-    elif explicitly_cleared:
-        normalized["reminder_rules"] = []
-        normalized["remind_times"] = []
-    elif not partial:
-        normalized["reminder_rules"] = [dict(rule) for rule in DEFAULT_EVENT_REMINDER_RULES]
-        normalized["remind_times"] = build_remind_times_from_rules(
-            normalized["start_time"],
-            normalized["reminder_rules"],
-        )
+def normalize_event_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
+    """规范化并验证 event 字段。"""
+    normalized = dict(data)
+    _normalize_common_fields(normalized, partial=partial, title_required=True)
+    _normalize_event_context_fields(normalized, partial=partial)
+    _normalize_event_role_fields(normalized, partial=partial)
+    _normalize_event_identity_fields(normalized)
+    _normalize_event_time_fields(normalized)
+    _normalize_reminder_fields(
+        normalized,
+        anchor_field="start_time",
+        partial=partial,
+        include_anchor_rule=True,
+        default_rules=DEFAULT_EVENT_REMINDER_RULES,
+    )
 
     return normalized
 
 
-def normalize_task_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
-    """规范化并验证 task 字段。"""
-    normalized = dict(data)
-    legacy_fields = {"due_time", "estimate", "subtasks", "dependencies", "progress"} & normalized.keys()
+def _reject_legacy_task_fields(normalized: dict[str, Any]) -> None:
+    """拒绝已经退出持久化模型的旧待办字段。"""
+    legacy_fields = LEGACY_TASK_FIELDS & normalized.keys()
     if legacy_fields:
         field_list = ", ".join(sorted(legacy_fields))
         raise ValueError(f"Unsupported legacy task field: {field_list}")
-    reminder_rules_provided = "reminder_rules" in normalized
-    remind_times_provided = "remind_times" in normalized
 
-    title = normalized.get("title")
-    if not partial or title is not None:
-        normalized["title"] = validate_title(title or "")
 
+def _normalize_task_schedule_fields(normalized: dict[str, Any], *, partial: bool) -> None:
+    """规范待办计划日期、截止时间和重复规则。"""
     plan_date = normalized.get("plan_date")
     if not partial or "plan_date" in normalized:
         normalized["plan_date"] = _normalize_optional_iso_date(plan_date, "plan_date")
 
-    category = normalized.get("category")
-    if category is None and not partial:
-        category = "未分类"
-    if category is not None:
-        normalized["category"] = validate_category(category or "未分类")
-
-    if "content" in normalized:
-        normalized["content"] = sanitize_text(normalized.get("content") or "", 50000)
-    elif not partial:
-        normalized["content"] = ""
-
     deadline_at = normalized.get("deadline_at")
     if not partial or "deadline_at" in normalized:
         normalized["deadline_at"] = (
-            None if deadline_at in (None, "") else _normalize_iso_datetime(deadline_at, "deadline_at")
+            None
+            if deadline_at in (None, "")
+            else _normalize_iso_datetime(deadline_at, "deadline_at")
         )
 
+    repeat_rule = normalized.get("repeat_rule")
+    if repeat_rule in (None, ""):
+        if not partial or "repeat_rule" in normalized:
+            normalized["repeat_rule"] = None
+    else:
+        normalized["repeat_rule"] = sanitize_text(str(repeat_rule), 200)
+
+
+def _normalize_task_priority_and_status(normalized: dict[str, Any], *, partial: bool) -> None:
+    """规范待办优先级和生命周期状态。"""
     priority = normalized.get("priority")
     if priority is None and not partial:
         priority = 3
@@ -871,169 +945,140 @@ def normalize_task_fields(data: dict[str, Any], partial: bool = False) -> dict[s
         status = "open"
     if status is not None:
         status = sanitize_text(str(status), 30)
-        if status not in {"open", "done", "cancelled"}:
+        if status not in TASK_STATUSES:
             raise ValueError("Invalid task status")
         normalized["status"] = status
 
-    reminders = normalized.get("remind_times")
-    if reminders is None and not partial:
-        reminders = []
-    if reminders is not None:
-        if not isinstance(reminders, list):
-            raise ValueError("remind_times must be a list")
-        normalized["remind_times"] = sorted({
-            _normalize_iso_datetime(value, "remind_times")
-            for value in reminders
-            if value not in (None, "")
-        })
 
-    rules = normalized.get("reminder_rules")
-    if rules is None and not partial:
-        rules = []
-    if rules is not None:
-        normalized["reminder_rules"] = normalize_reminder_rules(rules)
-
-    repeat_rule = normalized.get("repeat_rule")
-    if repeat_rule in (None, ""):
-        if not partial or "repeat_rule" in normalized:
-            normalized["repeat_rule"] = None
-    elif repeat_rule is not None:
-        normalized["repeat_rule"] = sanitize_text(str(repeat_rule), 200)
-
-    has_rules = bool(normalized.get("reminder_rules"))
-    has_reminders = bool(normalized.get("remind_times"))
-    deadline = normalized.get("deadline_at")
-    explicitly_cleared = (
-        (reminder_rules_provided and not has_rules and (not remind_times_provided or not has_reminders))
-        or (remind_times_provided and not has_reminders and (not reminder_rules_provided or not has_rules))
-    )
-    if has_rules and deadline:
-        normalized["remind_times"] = build_remind_times_from_rules(deadline, normalized["reminder_rules"])
-    elif has_reminders and deadline:
-        normalized["reminder_rules"] = derive_reminder_rules(deadline, normalized["remind_times"])
-    elif explicitly_cleared:
-        normalized["reminder_rules"] = []
-        normalized["remind_times"] = []
-
+def _sync_task_terminal_timestamps(normalized: dict[str, Any]) -> None:
+    """让完成/取消时间与待办终态保持一致。"""
     completed_at = normalized.get("completed_at")
     cancelled_at = normalized.get("cancelled_at")
     status_value = normalized.get("status")
     if status_value == "done":
         if completed_at in (None, ""):
-            normalized["completed_at"] = datetime.now().isoformat(timespec="seconds")
+            normalized["completed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         else:
             normalized["completed_at"] = _normalize_iso_datetime(completed_at, "completed_at")
         normalized["cancelled_at"] = None
     elif status_value == "cancelled":
         normalized["completed_at"] = None
         if cancelled_at in (None, ""):
-            normalized["cancelled_at"] = datetime.now().isoformat(timespec="seconds")
+            normalized["cancelled_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         else:
             normalized["cancelled_at"] = _normalize_iso_datetime(cancelled_at, "cancelled_at")
     elif status_value is not None:
         normalized["completed_at"] = None
         normalized["cancelled_at"] = None
 
+
+def normalize_task_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
+    """规范化并验证 task 字段。"""
+    normalized = dict(data)
+    _reject_legacy_task_fields(normalized)
+    _normalize_common_fields(normalized, partial=partial, title_required=True)
+    _normalize_task_schedule_fields(normalized, partial=partial)
+    _normalize_task_priority_and_status(normalized, partial=partial)
+    _normalize_reminder_fields(
+        normalized,
+        anchor_field="deadline_at",
+        partial=partial,
+        include_anchor_rule=False,
+    )
+    _sync_task_terminal_timestamps(normalized)
     return normalized
+
+
+def _check_note_reference_budget(normalized: dict[str, Any]) -> None:
+    """在展开引用前限制原始 JSON 体积，防止小条目携带巨型关系图。"""
+    payload = {key: normalized[key] for key in ("references", "related_items") if key in normalized}
+    if not payload:
+        return
+    try:
+        size = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Note references must be JSON serializable") from exc
+    if size > MAX_NOTE_REFERENCE_BYTES:
+        raise ValueError(f"Note references exceed {MAX_NOTE_REFERENCE_BYTES} UTF-8 bytes")
+
+
+def _normalize_note_references(value: Any) -> list[dict[str, str]]:
+    """规范引用对象，并按引用 ID 稳定去重。"""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("Note references must be a list")
+    if len(value) > MAX_NOTE_REFERENCES:
+        raise ValueError(f"Note references cannot exceed {MAX_NOTE_REFERENCES} entries")
+
+    references: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_reference in value:
+        if not isinstance(raw_reference, dict):
+            continue
+        reference_id = sanitize_text(str(raw_reference.get("id") or ""), 120)
+        if not reference_id or reference_id in seen:
+            continue
+        seen.add(reference_id)
+        reference = {
+            "kind": sanitize_text(str(raw_reference.get("kind") or "item"), 40) or "item",
+            "id": reference_id,
+        }
+        for key, limit in (("type", 40), ("title", 200)):
+            text = sanitize_text(str(raw_reference.get(key) or ""), limit)
+            if text:
+                reference[key] = text
+        references.append(reference)
+    return references
+
+
+def _normalize_related_item_ids(value: Any) -> list[str]:
+    """规范关联条目 ID，并保持首次出现顺序。"""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("Note related_items must be a list")
+    if len(value) > MAX_NOTE_REFERENCES:
+        raise ValueError(f"Note related_items cannot exceed {MAX_NOTE_REFERENCES} entries")
+
+    related: list[str] = []
+    seen: set[str] = set()
+    for raw_id in value:
+        related_id = sanitize_text(str(raw_id or ""), 120)
+        if related_id and related_id not in seen:
+            seen.add(related_id)
+            related.append(related_id)
+    return related
+
+
+def _merge_note_related_ids(
+    related_items: list[str], references: list[dict[str, str]]
+) -> list[str]:
+    """把引用 ID 补入关联列表，并执行统一总量上限。"""
+    merged = list(dict.fromkeys([*related_items, *(row["id"] for row in references)]))
+    if len(merged) > MAX_NOTE_REFERENCES:
+        raise ValueError(
+            f"Note references and related_items cannot exceed {MAX_NOTE_REFERENCES} unique entries"
+        )
+    return merged
 
 
 def normalize_note_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
     """规范化并验证 note 字段。"""
     normalized = dict(data)
+    _check_note_reference_budget(normalized)
+    _normalize_common_fields(normalized, partial=partial, title_required=True)
 
-    title = normalized.get("title")
-    if not partial or title is not None:
-        normalized["title"] = validate_title(title or "")
-
-    category = normalized.get("category")
-    if category is None and not partial:
-        category = "未分类"
-    if category is not None:
-        normalized["category"] = validate_category(category or "未分类")
-
-    if "content" in normalized:
-        normalized["content"] = sanitize_text(normalized.get("content") or "", 50000)
-    elif not partial:
-        normalized["content"] = ""
-
-    tags = normalized.get("tags")
-    if tags is None and not partial:
-        tags = []
-    if tags is not None:
-        if not isinstance(tags, list):
-            raise ValueError("Note tags must be a list")
-        clean_tags: list[str] = []
-        seen: set[str] = set()
-        for tag in tags:
-            if not tag:
-                continue
-            validated = validate_tag(tag)
-            key = validated.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            clean_tags.append(validated)
-        normalized["tags"] = clean_tags
-
-    references = normalized.get("references")
-    if references is None and not partial:
-        references = []
-    if references is not None:
-        if not isinstance(references, list):
-            raise ValueError("Note references must be a list")
-        clean_refs: list[dict[str, str]] = []
-        seen_refs: set[str] = set()
-        for ref in references:
-            if not isinstance(ref, dict):
-                continue
-            ref_id = sanitize_text(str(ref.get("id") or ""), 120)
-            if not ref_id or ref_id in seen_refs:
-                continue
-            seen_refs.add(ref_id)
-            clean_ref = {
-                "kind": sanitize_text(str(ref.get("kind") or "item"), 40) or "item",
-                "id": ref_id,
-            }
-            ref_type = sanitize_text(str(ref.get("type") or ""), 40)
-            ref_title = sanitize_text(str(ref.get("title") or ""), 200)
-            if ref_type:
-                clean_ref["type"] = ref_type
-            if ref_title:
-                clean_ref["title"] = ref_title
-            clean_refs.append(clean_ref)
-        normalized["references"] = clean_refs
-
-    related_items = normalized.get("related_items")
-    if related_items is None and not partial:
-        related_items = []
-    if related_items is not None:
-        if not isinstance(related_items, list):
-            raise ValueError("Note related_items must be a list")
-        clean_related: list[str] = []
-        seen_related: set[str] = set()
-        for value in related_items:
-            related_id = sanitize_text(str(value or ""), 120)
-            if not related_id or related_id in seen_related:
-                continue
-            seen_related.add(related_id)
-            clean_related.append(related_id)
-        normalized["related_items"] = clean_related
-
+    if "references" in normalized or not partial:
+        normalized["references"] = _normalize_note_references(normalized.get("references"))
+    if "related_items" in normalized or not partial:
+        normalized["related_items"] = _normalize_related_item_ids(normalized.get("related_items"))
     if "references" in normalized:
-        ref_ids = [
-            str(ref.get("id") or "")
-            for ref in normalized.get("references", [])
-            if isinstance(ref, dict) and ref.get("id")
-        ]
-        existing_related = normalized.get("related_items") if isinstance(normalized.get("related_items"), list) else []
-        merged_related: list[str] = []
-        seen_merged: set[str] = set()
-        for related_id in [*existing_related, *ref_ids]:
-            clean_id = sanitize_text(str(related_id or ""), 120)
-            if clean_id and clean_id not in seen_merged:
-                seen_merged.add(clean_id)
-                merged_related.append(clean_id)
-        normalized["related_items"] = merged_related
+        related_items = normalized.get("related_items")
+        normalized["related_items"] = _merge_note_related_ids(
+            related_items if isinstance(related_items, list) else [],
+            normalized["references"],
+        )
 
     if "last_viewed" in normalized:
         last_viewed = normalized.get("last_viewed")
@@ -1046,31 +1091,20 @@ def normalize_note_fields(data: dict[str, Any], partial: bool = False) -> dict[s
     return normalized
 
 
-def normalize_diary_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
-    """规范化并验证 diary 字段。"""
-    normalized = dict(data)
-
+def _normalize_diary_context_fields(normalized: dict[str, Any], *, partial: bool) -> None:
+    """规范日记日期和地点。"""
     diary_date = normalized.get("diary_date")
     if not partial or "diary_date" in normalized:
         normalized["diary_date"] = _normalize_iso_date(diary_date, "diary_date")
-
-    title = normalized.get("title")
-    if title is not None:
-        normalized["title"] = sanitize_text(str(title), 200)
-    elif not partial:
-        normalized["title"] = ""
-
-    content = normalized.get("content")
-    if not partial or "content" in normalized:
-        normalized["content"] = validate_diary_content(content or "")
-        if not normalized["content"]:
-            raise ValueError("Diary content cannot be empty")
 
     if "location" in normalized:
         normalized["location"] = validate_location(normalized.get("location") or "")
     elif not partial:
         normalized["location"] = ""
 
+
+def _normalize_diary_mood_fields(normalized: dict[str, Any], *, partial: bool) -> None:
+    """规范日记心情、天气和心情分数。"""
     mood = normalized.get("mood")
     if not partial or "mood" in normalized:
         normalized["mood"] = normalize_diary_mood(mood)
@@ -1093,6 +1127,9 @@ def normalize_diary_fields(data: dict[str, Any], partial: bool = False) -> dict[
             raise ValueError("Diary mood_score must be between 1 and 10")
         normalized["mood_score"] = score
 
+
+def _normalize_diary_template_fields(normalized: dict[str, Any], *, partial: bool) -> None:
+    """规范日记模板、记录时间和收藏状态。"""
     template_id = normalized.get("template_id")
     if template_id in (None, ""):
         normalized["template_id"] = None
@@ -1107,25 +1144,44 @@ def normalize_diary_fields(data: dict[str, Any], partial: bool = False) -> dict[
             normalized["entry_time"] = _normalize_iso_datetime(entry_time, "entry_time")
 
     if not partial or "template_answers" in normalized:
-        normalized["template_answers"] = normalize_template_answers(normalized.get("template_answers"))
+        normalized["template_answers"] = normalize_template_answers(
+            normalized.get("template_answers")
+        )
 
     if "is_favorite" in normalized:
         normalized["is_favorite"] = normalize_bool_flag(normalized.get("is_favorite"))
     elif not partial:
         normalized["is_favorite"] = False
 
+
+def normalize_diary_fields(data: dict[str, Any], partial: bool = False) -> dict[str, Any]:
+    """规范化并验证 diary 字段。"""
+    normalized = dict(data)
+    _normalize_common_fields(
+        normalized,
+        partial=partial,
+        title_required=False,
+        content_required=True,
+    )
+    _normalize_diary_context_fields(normalized, partial=partial)
+    _normalize_diary_mood_fields(normalized, partial=partial)
+    _normalize_diary_template_fields(normalized, partial=partial)
     return normalized
 
 
-def get_item_normalizer(item_type: str):
+ItemNormalizer: TypeAlias = Callable[[dict[str, Any], bool], dict[str, Any]]
+ITEM_NORMALIZERS: Final[dict[str, ItemNormalizer]] = {
+    "event": normalize_event_fields,
+    "task": normalize_task_fields,
+    "note": normalize_note_fields,
+    "diary": normalize_diary_fields,
+    "ledger": normalize_ledger_fields,
+}
+
+
+def get_item_normalizer(item_type: str) -> ItemNormalizer | None:
     """Return the strict field normalizer for a supported item type."""
-    return {
-        "event": normalize_event_fields,
-        "task": normalize_task_fields,
-        "note": normalize_note_fields,
-        "diary": normalize_diary_fields,
-        "ledger": normalize_ledger_fields,
-    }.get(str(item_type or "").strip())
+    return ITEM_NORMALIZERS.get(str(item_type or "").strip())
 
 
 def get_allowed_item_fields(item_type: str) -> set[str]:
@@ -1148,4 +1204,4 @@ def normalize_item_fields(data: dict[str, Any], partial: bool = False) -> dict[s
 
     payload = {key: value for key, value in data.items() if key in allowed}
     payload["type"] = item_type
-    return normalizer(payload, partial=partial)
+    return normalizer(payload, partial)

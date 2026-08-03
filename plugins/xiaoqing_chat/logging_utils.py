@@ -1,8 +1,4 @@
-"""
-Logging utilities for xiaoqing_chat plugin.
-
-Centralized logging functions to avoid code duplication and ensure consistent logging behavior.
-"""
+"""小青聊天插件的集中式日志工具，统一日志结构与脱敏行为。"""
 
 from __future__ import annotations
 
@@ -12,13 +8,12 @@ from typing import TYPE_CHECKING, Any
 
 from core.sensitive_audit import summarize_sensitive
 
+from .config.config import XiaoQingChatConfig
+
 if TYPE_CHECKING:
     from core.plugin_base import Context
 
-    from .config.config import XiaoQingChatConfig
     from .runtime_state import _ChatRuntime
-
-from .constants import DEFAULT_SHORT_TEXT_LIMIT
 
 _SENSITIVE_LOG_KEY_PARTS = (
     "text",
@@ -154,57 +149,30 @@ def sanitize_log_fields(fields: dict[str, Any]) -> dict[str, Any]:
         elif any(part in lowered for part in _SENSITIVE_LOG_KEY_PARTS):
             safe[key] = _redacted_value(value)
         elif isinstance(value, str):
-            # Unknown free-form strings fail closed. New observability fields
-            # must be explicitly classified above before their content can be
-            # written to an ordinary log.
+            # 未知自由文本默认拒绝记录；新增可观测字段必须先在上方明确分类，
+            # 才能把内容写入普通日志。
             safe[key] = _redacted_value(value)
         else:
             safe[key] = f"[type={type(value).__name__}]"
     return safe
 
 
-def _short_text(s: Any, *, limit: int = DEFAULT_SHORT_TEXT_LIMIT) -> str:
-    """
-    Truncate text to a specified limit for logging purposes.
-
-    Args:
-        s: The text to truncate
-        limit: Maximum length before truncation
-
-    Returns:
-        Truncated text with ellipsis if truncated, or original text if short enough
-    """
-    t = str(s or "").strip().replace("\n", "\\n")
-    if len(t) <= limit:
-        return t
-    return t[: max(0, limit - 1)].rstrip() + "…"
-
-
 def _log_step(
     context: Context,
-    runtime: _ChatRuntime | XiaoQingChatConfig,
+    runtime: _ChatRuntime | XiaoQingChatConfig | None,
     *,
     chat_id: str,
     step: str,
     fields: dict[str, Any] | None = None,
 ) -> None:
-    """
-    Log a step in the conversation flow with structured JSON output.
-
-    Args:
-        context: Plugin context with logger
-        runtime: Chat runtime configuration (_ChatRuntime or XiaoQingChatConfig)
-        chat_id: Chat/group identifier
-        step: Step name identifier
-        fields: Optional additional fields to include in log
-    """
-    # Handle both _ChatRuntime and XiaoQingChatConfig types
-    if hasattr(runtime, "cfg"):
-        log_enabled = getattr(getattr(runtime.cfg, "debug", None), "log_steps", True)
-    elif hasattr(runtime, "debug"):
-        log_enabled = getattr(runtime.debug, "log_steps", True)
-    else:
+    """使用结构化 JSON 记录对话流程中的一个步骤。"""
+    # 后台学习任务没有完整运行时对象，会显式传入 None 并沿用默认日志策略。
+    if runtime is None:
         log_enabled = True
+    elif isinstance(runtime, XiaoQingChatConfig):
+        log_enabled = runtime.debug.log_steps
+    else:
+        log_enabled = runtime.cfg.debug.log_steps
 
     if not log_enabled:
         return

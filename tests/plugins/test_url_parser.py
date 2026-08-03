@@ -1,627 +1,505 @@
-"""测试url_parser插件 - URL解析插件"""
+"""URL 预览插件的元数据、网络边界、图片缓存与调度契约测试。"""
 
-import importlib.util
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import urlsplit
 
 import pytest
 
-from core.safe_http import SafeHttpError, SafeHttpResponse
+from core.bounded_file_cache import FileCacheLimits
+from core.safe_http import SafeHttpError, SafeHttpResponse, UnsafeUrlError
+from plugins.url_parser import main as url_parser
+from tests.helpers.payloads import image_bytes as _image_bytes
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-
-spec = importlib.util.spec_from_file_location("url_parser_main", ROOT / "plugins" / "url_parser" / "main.py")
-url_parser = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(url_parser)
+ROOT = Path(__file__).resolve().parents[2]
 
 
-class TestURLParserPlugin:
-    """测试url_parser插件"""
+def _html_response(
+    html: str | bytes,
+    *,
+    url: str = "https://example.com/page",
+    charset: str | None = "utf-8",
+) -> SafeHttpResponse:
+    body = html.encode("utf-8") if isinstance(html, str) else html
+    return SafeHttpResponse(
+        url=url,
+        status=200,
+        body=body,
+        charset=charset,
+        headers={"Content-Type": "text/html"},
+    )
 
-    @pytest.fixture
-    def mock_context(self, monkeypatch, tmp_path):
-        """模拟插件上下文"""
-        context = MagicMock()
-        context.logger = MagicMock()
-        context.http_session = MagicMock()
 
-        # 创建成功的HTTP响应mock
-        html_content = b'''
-        <html>
-        <head>
-            <title>Test Page Title</title>
-            <meta name="description" content="This is a test description">
-            <meta property="og:image" content="https://example.com/image.jpg">
-        </head>
-        <body>
-            <p>Content</p>
-        </body>
-        </html>
-        '''
+def _image_response(
+    payload: bytes,
+    *,
+    content_type: str = "image/png",
+) -> SafeHttpResponse:
+    return SafeHttpResponse(
+        url="https://example.com/assets/final",
+        status=200,
+        body=payload,
+        charset=None,
+        headers={"Content-Type": content_type},
+    )
 
-        class MockSuccessResponse:
-            status = 200
-            charset = "utf-8"
 
-            @property
-            def content(self):
-                return self
+@pytest.fixture
+def context(tmp_path: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        data_dir=tmp_path,
+        http_session=None,
+        request_id="req-url-preview",
+        secrets={"plugins": {"url_parser": {}}},
+        logger=MagicMock(),
+    )
 
-            async def read(self, limit=None):
-                if limit and len(html_content) > limit:
-                    return html_content[:limit]
-                return html_content
 
-        class MockSuccessContextManager:
-            async def __aenter__(self):
-                return MockSuccessResponse()
-            async def __aexit__(self, *args):
-                pass
+@pytest.fixture
+def network(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    page = AsyncMock(return_value=None)
+    image = AsyncMock(return_value=None)
 
-        class MockHttpSession:
-            def get(self, *args, **kwargs):
-                return MockSuccessContextManager()
+    async def validate(url: str):
+        return urlsplit(url), ("93.184.216.34",)
 
-        context.http_session = MockHttpSession()
-        context.data_dir = tmp_path
+    validator = AsyncMock(side_effect=validate)
+    monkeypatch.setattr(url_parser, "fetch_public_html", page)
+    monkeypatch.setattr(url_parser, "fetch_public_bytes", image)
+    monkeypatch.setattr(url_parser, "validate_public_fetch_target", validator)
+    return SimpleNamespace(page=page, image=image, validator=validator)
 
-        # Unit-test adapter: production always uses core.safe_http's pinned
-        # client.  Keep parser tests focused on preview extraction by adapting
-        # the historical response doubles at that module boundary.
-        async def fake_fetch(url, **_kwargs):
-            async with context.http_session.get(url) as response:
-                if response.status != 200:
-                    return None
-                content = await response.content.read(url_parser.MAX_CONTENT_SIZE + 1)
-                if len(content) > url_parser.MAX_CONTENT_SIZE:
-                    raise SafeHttpError("response is too large")
-                return SafeHttpResponse(
-                    url=url,
-                    status=response.status,
-                    body=content,
-                    charset=getattr(response, "charset", None),
-                    headers={},
-                )
 
-        async def fake_validate(url):
-            return None, ("93.184.216.34",)
+def test_init_records_plugin_load(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("INFO", logger=url_parser.__name__):
+        assert url_parser.init() is None
+    assert "已加载" in caplog.text
 
-        async def fake_fetch_bytes(url, **_kwargs):
-            return SafeHttpResponse(
-                url=url,
-                status=200,
-                body=b"fake-image",
-                charset=None,
-                headers={"Content-Type": "image/jpeg"},
-            )
 
-        monkeypatch.setattr(url_parser, "fetch_public_html", fake_fetch)
-        monkeypatch.setattr(url_parser, "validate_public_fetch_target", fake_validate)
-        monkeypatch.setattr(url_parser, "fetch_public_bytes", fake_fetch_bytes)
+def test_text_compaction_normalizes_whitespace_and_enforces_budget() -> None:
+    assert url_parser._compact_text("  alpha\n beta  ", 20) == "alpha beta"
+    assert url_parser._compact_text(None, 20) == ""
+    compact = url_parser._compact_text("x" * 30, 10)
+    assert compact == "xxxxxxx..."
+    assert len(compact) == 10
 
-        return context
 
-    @pytest.fixture
-    def mock_event(self):
-        """模拟事件"""
-        return {
-            "user_id": "12345",
-            "message": "test",
-            "message_type": "private"
+def test_html_parser_uses_metadata_priority_and_real_text_bounds() -> None:
+    html = f"""
+    <html><head>
+      <title>  Nested page title  </title>
+      <meta name="description" content="{"d" * 150}">
+      <meta property="og:description" content="lower priority">
+      <meta name="twitter:description" content="lowest priority">
+      <meta property="og:image" content=" /assets/cover.png ">
+      <meta name="twitter:image" content="/fallback.png">
+    </head></html>
+    """
+
+    title, description, image_reference = url_parser._parse_preview_html(html)
+
+    assert title == "Nested page title"
+    assert len(description) == url_parser.MAX_DESC_LENGTH
+    assert description.endswith("...")
+    assert image_reference == "/assets/cover.png"
+
+
+@pytest.mark.parametrize(
+    ("markup", "expected_description", "expected_image"),
+    [
+        (
+            '<meta property="og:description" content="Open Graph">'
+            '<meta name="twitter:image" content="twitter.png">',
+            "Open Graph",
+            "twitter.png",
+        ),
+        (
+            '<meta name="twitter:description" content="Twitter Card">'
+            '<meta property="og:image" content="og.png">',
+            "Twitter Card",
+            "og.png",
+        ),
+        ("<meta name=description><meta property=og:image>", "", ""),
+    ],
+)
+def test_html_parser_supports_fallback_metadata(
+    markup: str,
+    expected_description: str,
+    expected_image: str,
+) -> None:
+    _, description, image_reference = url_parser._parse_preview_html(
+        f"<html><head>{markup}</head></html>"
+    )
+    assert (description, image_reference) == (expected_description, expected_image)
+
+
+def test_html_parser_drops_overlong_image_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(url_parser, "MAX_IMAGE_URL_LENGTH", 8)
+    _, _, image_reference = url_parser._parse_preview_html(
+        '<meta property="og:image" content="/much-too-long.png">'
+    )
+    assert image_reference == ""
+
+
+def test_html_decoder_uses_declared_charset_and_utf8_fallback() -> None:
+    assert url_parser._decode_html("中文".encode("gbk"), "gbk") == "中文"
+    assert url_parser._decode_html(b"<title>ok</title>", "unknown-charset") == ("<title>ok</title>")
+    assert "�" in url_parser._decode_html(b"\xff", None)
+
+
+@pytest.mark.parametrize(
+    ("image_format", "extension"),
+    [("JPEG", ".jpg"), ("PNG", ".png"), ("WEBP", ".webp")],
+)
+def test_image_validation_uses_actual_format(image_format: str, extension: str) -> None:
+    assert url_parser._detect_image_extension(_image_bytes(image_format)) == extension
+
+
+def test_image_validation_rejects_invalid_unsupported_and_oversized_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="valid image"):
+        url_parser._detect_image_extension(b"not an image")
+    with pytest.raises(ValueError, match="unsupported"):
+        url_parser._detect_image_extension(_image_bytes("GIF"))
+
+    monkeypatch.setattr(url_parser, "MAX_IMAGE_PIXELS", 3)
+    with pytest.raises(ValueError, match="dimensions"):
+        url_parser._detect_image_extension(_image_bytes())
+
+
+def test_cached_preview_rejects_mismatched_and_oversized_files(
+    context: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache = url_parser._preview_cache(context)
+    cache.directory.mkdir()
+    mismatched = cache.directory / "mismatch.jpg"
+    mismatched.write_bytes(_image_bytes("PNG"))
+    assert url_parser._validated_cached_preview(cache, (mismatched.name,)) is None
+    assert not mismatched.exists()
+
+    oversized = cache.directory / "oversized.png"
+    oversized.write_bytes(_image_bytes("PNG"))
+    monkeypatch.setattr(url_parser, "MAX_IMAGE_BYTES", 1)
+    assert url_parser._validated_cached_preview(cache, (oversized.name,)) is None
+    assert not oversized.exists()
+
+
+def test_cached_preview_cleanup_failure_is_best_effort(
+    context: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cache = url_parser._preview_cache(context)
+    cache.directory.mkdir()
+    corrupted = cache.directory / "corrupted.jpg"
+    corrupted.write_bytes(b"not an image")
+
+    monkeypatch.setattr(Path, "unlink", MagicMock(side_effect=OSError("locked")))
+    with caplog.at_level("DEBUG", logger=url_parser.__name__):
+        assert url_parser._validated_cached_preview(cache, (corrupted.name,)) is None
+    assert "暂时无法删除" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_text_preview_does_not_depend_on_shared_http_session(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+) -> None:
+    network.page.return_value = _html_response(
+        "<html><head><title> Example   Page </title>"
+        '<meta name="description" content="A useful summary"></head></html>'
+    )
+
+    result = await url_parser.handle_url("https://example.com/page", {}, context)
+
+    assert result == [
+        {
+            "type": "text",
+            "data": {"text": "🔗 Example Page\nA useful summary\n\n链接: https://example.com/page"},
         }
+    ]
+    network.page.assert_awaited_once_with(
+        "https://example.com/page",
+        headers={"User-Agent": url_parser._USER_AGENT},
+        timeout_seconds=url_parser.REQUEST_TIMEOUT,
+    )
 
-    def test_init(self):
-        """测试插件初始化"""
-        url_parser.init()
-        assert True
 
-    def test_constants(self):
-        """测试常量定义"""
-        assert hasattr(url_parser, 'MAX_CONTENT_SIZE')
-        assert hasattr(url_parser, 'MAX_DESC_LENGTH')
-        assert hasattr(url_parser, 'REQUEST_TIMEOUT')
+@pytest.mark.asyncio
+async def test_description_only_preview_uses_nonempty_heading(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+) -> None:
+    network.page.return_value = _html_response(
+        '<meta name="description" content="Description only">'
+    )
+    result = await url_parser.handle_url("https://example.com", {}, context)
+    assert result[0]["data"]["text"].startswith("🔗 网页预览\nDescription only")
 
-        assert url_parser.MAX_CONTENT_SIZE == 2 * 1024 * 1024  # 2MB
-        assert url_parser.MAX_DESC_LENGTH == 100
-        assert url_parser.REQUEST_TIMEOUT == 10
 
-    @pytest.mark.asyncio
-    async def test_handle_placeholder(self, mock_context, mock_event):
-        """测试handle占位符函数"""
-        result = await url_parser.handle("test", "args", mock_event, mock_context)
-        assert result == []
+@pytest.mark.asyncio
+async def test_relative_preview_image_is_validated_cached_and_reused(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+) -> None:
+    page_url = "https://example.com/posts/1"
+    image_url = "https://example.com/assets/cover.jpg"
+    network.page.return_value = _html_response(
+        '<title>With image</title><meta property="og:image" content="/assets/cover.jpg">',
+        url=page_url,
+    )
+    payload = _image_bytes("PNG")
+    network.image.return_value = _image_response(payload, content_type="image/jpeg")
+    digest = hashlib.sha256(image_url.encode()).hexdigest()
+    cache_dir = context.data_dir / "url_previews"
+    cache_dir.mkdir()
+    stale_path = cache_dir / f"{digest}.jpg"
+    stale_path.write_bytes(b"legacy invalid image")
 
-    @pytest.mark.asyncio
-    async def test_handle_url_no_session(self, mock_context, mock_event):
-        """测试没有HTTP会话的情况"""
-        mock_context.http_session = None
+    first = await url_parser.handle_url("https://example.com/input", {}, context)
+    second = await url_parser.handle_url("https://example.com/input", {}, context)
 
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result == []
+    expected_name = f"{digest}.png"
+    expected_path = context.data_dir / "url_previews" / expected_name
+    assert expected_path.read_bytes() == payload
+    assert not stale_path.exists()
+    assert first[1]["type"] == "image"
+    assert first[1]["data"]["file"].startswith("file:")
+    assert second[1] == first[1]
+    assert network.validator.await_count == 2
+    assert [call.args[0] for call in network.validator.await_args_list] == [image_url, image_url]
+    network.image.assert_awaited_once()
+    options = network.image.await_args.kwargs
+    assert options["max_bytes"] == url_parser.MAX_IMAGE_BYTES
+    assert options["allowed_content_type_prefixes"] == ("image/",)
+    assert options["allowed_schemes"] == ("http", "https")
 
-    @pytest.mark.asyncio
-    async def test_handle_url_success(self, mock_context, mock_event):
-        """测试成功的URL解析"""
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "Test Page Title" in result_text
 
-    @pytest.mark.asyncio
-    async def test_handle_url_no_http_session(self, mock_event):
-        """测试无HTTP会话"""
-        context = MagicMock()
-        context.http_session = None
-        context.logger = MagicMock()
+@pytest.mark.asyncio
+async def test_image_only_metadata_returns_an_image_segment(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+) -> None:
+    network.page.return_value = _html_response(
+        '<meta name="twitter:image" content="https://example.com/image.webp">'
+    )
+    network.image.return_value = _image_response(
+        _image_bytes("WEBP"),
+        content_type="image/webp",
+    )
 
-        result = await url_parser.handle_url("https://example.com", mock_event, context)
-        assert result == []
+    result = await url_parser.handle_url("https://example.com", {}, context)
+    assert len(result) == 1
+    assert result[0]["type"] == "image"
 
-    @pytest.mark.asyncio
-    async def test_handle_url_error_status(self, mock_context, mock_event):
-        """测试错误HTTP状态码"""
-        class MockErrorResponse:
-            status = 404
 
-        class MockErrorContextManager:
-            async def __aenter__(self):
-                return MockErrorResponse()
-            async def __aexit__(self, *args):
-                pass
+@pytest.mark.asyncio
+async def test_empty_and_oversized_pages_return_no_preview(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    network.page.return_value = None
+    assert await url_parser.handle_url("https://example.com", {}, context) == []
 
-        class MockErrorSession:
-            def get(self, *args, **kwargs):
-                return MockErrorContextManager()
+    network.page.return_value = _html_response("<html><body>no metadata</body></html>")
+    assert await url_parser.handle_url("https://example.com", {}, context) == []
 
-        mock_context.http_session = MockErrorSession()
+    monkeypatch.setattr(url_parser, "MAX_HTML_BYTES", 3)
+    network.page.return_value = _html_response(b"1234")
+    assert await url_parser.handle_url("https://example.com", {}, context) == []
 
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result == []
 
-    @pytest.mark.asyncio
-    async def test_handle_url_content_too_large(self, mock_context, mock_event):
-        """测试内容过大"""
-        large_content = b"a" * (3 * 1024 * 1024)  # 3MB
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [SafeHttpError("bounded"), UnsafeUrlError("private")])
+async def test_safe_page_failures_return_no_preview(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+    error: Exception,
+) -> None:
+    network.page.side_effect = error
+    assert await url_parser.handle_url("https://example.com", {}, context) == []
 
-        class MockLargeResponse:
-            status = 200
-            charset = "utf-8"
 
-            @property
-            def content(self):
-                return self
+@pytest.mark.asyncio
+async def test_unexpected_page_failure_uses_public_error_boundary(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    network.page.side_effect = RuntimeError("unexpected page failure")
+    with caplog.at_level("ERROR"):
+        result = await url_parser.handle_url("https://example.com", {}, context)
+    assert result == []
+    assert "url_parser.handle_url" in "\n".join(record.getMessage() for record in caplog.records)
 
-            async def read(self, limit=None):
-                if limit:
-                    return large_content[:limit + 1]
-                return large_content
 
-        class MockLargeContextManager:
-            async def __aenter__(self):
-                return MockLargeResponse()
-            async def __aexit__(self, *args):
-                pass
+@pytest.mark.asyncio
+async def test_unsafe_or_failed_optional_image_keeps_text_preview(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+) -> None:
+    network.page.return_value = _html_response(
+        '<title>Safe text</title><meta property="og:image" content="http://127.0.0.1/a.png">'
+    )
+    network.validator.side_effect = UnsafeUrlError("private image")
+    result = await url_parser.handle_url("https://example.com", {}, context)
+    assert len(result) == 1 and result[0]["type"] == "text"
+    network.image.assert_not_awaited()
 
-        class MockLargeSession:
-            def get(self, *args, **kwargs):
-                return MockLargeContextManager()
+    network.validator.side_effect = None
+    network.validator.return_value = (urlsplit("https://example.com/a.png"), ("93.184.216.34",))
+    network.image.side_effect = SafeHttpError("bad image")
+    result = await url_parser.handle_url("https://example.com", {}, context)
+    assert len(result) == 1 and result[0]["type"] == "text"
 
-        mock_context.http_session = MockLargeSession()
 
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result == []
+@pytest.mark.asyncio
+async def test_invalid_or_unexpected_optional_image_keeps_text_preview(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    network.page.return_value = _html_response(
+        '<title>Text survives</title><meta property="og:image" content="/bad.png">'
+    )
+    network.image.return_value = _image_response(b"not an image")
+    result = await url_parser.handle_url("https://example.com", {}, context)
+    assert len(result) == 1 and result[0]["type"] == "text"
 
-    @pytest.mark.asyncio
-    async def test_handle_url_no_title_or_desc(self, mock_context, mock_event):
-        """测试没有标题和描述的页面"""
-        class MockNoContentResponse:
-            status = 200
-            charset = "utf-8"
+    network.image.side_effect = RuntimeError("unexpected image failure")
+    with caplog.at_level("ERROR"):
+        result = await url_parser.handle_url("https://example.com", {}, context)
+    assert len(result) == 1 and result[0]["type"] == "text"
+    assert "url_parser.preview_image" in "\n".join(record.getMessage() for record in caplog.records)
 
-            @property
-            def content(self):
-                return self
 
-            async def read(self, limit=None):
-                return b'<html><body><p>Just content</p></body></html>'
+@pytest.mark.asyncio
+async def test_empty_oversized_or_uncacheable_image_keeps_text(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    network.page.return_value = _html_response(
+        '<title>Text only</title><meta property="og:image" content="/image.png">'
+    )
+    network.image.return_value = _image_response(b"")
+    result = await url_parser.handle_url("https://example.com", {}, context)
+    assert len(result) == 1
 
-        class MockNoContentContextManager:
-            async def __aenter__(self):
-                return MockNoContentResponse()
-            async def __aexit__(self, *args):
-                pass
+    payload = _image_bytes()
+    network.image.return_value = _image_response(payload)
+    monkeypatch.setattr(url_parser, "MAX_IMAGE_BYTES", len(payload) - 1)
+    result = await url_parser.handle_url("https://example.com", {}, context)
+    assert len(result) == 1
 
-        class MockNoContentSession:
-            def get(self, *args, **kwargs):
-                return MockNoContentContextManager()
+    monkeypatch.setattr(url_parser, "MAX_IMAGE_BYTES", 5 * 1024 * 1024)
+    monkeypatch.setattr(
+        url_parser,
+        "PREVIEW_CACHE_LIMITS",
+        FileCacheLimits(max_entries=1, max_bytes=1, ttl_seconds=60),
+    )
+    result = await url_parser.handle_url("https://example.com", {}, context)
+    assert len(result) == 1
+    assert list((context.data_dir / "url_previews").glob("*.png")) == []
 
-        mock_context.http_session = MockNoContentSession()
 
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_handle_url_with_description_truncated(self, mock_context, mock_event):
-        """测试长描述被截断"""
-        long_desc = "a" * 200
-        html_content = f'''
-        <html>
-        <head>
-            <title>Test</title>
-            <meta name="description" content="{long_desc}">
-        </head>
-        </html>
-        '''.encode()
-
-        class MockTruncatedResponse:
-            status = 200
-            charset = "utf-8"
-
-            @property
-            def content(self):
-                return self
-
-            async def read(self, limit=None):
-                return html_content
-
-        class MockTruncatedContextManager:
-            async def __aenter__(self):
-                return MockTruncatedResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockTruncatedSession:
-            def get(self, *args, **kwargs):
-                return MockTruncatedContextManager()
-
-        mock_context.http_session = MockTruncatedSession()
-
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "..." in result_text  # 描述被截断
-
-    @pytest.mark.asyncio
-    async def test_handle_url_with_og_tags(self, mock_context, mock_event):
-        """测试Open Graph标签"""
-        html_content = b'''
-        <html>
-        <head>
-            <title>OG Title</title>
-            <meta property="og:description" content="OG Description">
-            <meta property="og:image" content="https://example.com/og-image.jpg">
-        </head>
-        </html>
-        '''
-
-        class MockOGResponse:
-            status = 200
-            charset = "utf-8"
-
-            @property
-            def content(self):
-                return self
-
-            async def read(self, limit=None):
-                return html_content
-
-        class MockOGContextManager:
-            async def __aenter__(self):
-                return MockOGResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockOGSession:
-            def get(self, *args, **kwargs):
-                return MockOGContextManager()
-
-        mock_context.http_session = MockOGSession()
-
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result is not None
-        assert len(result) == 2
-        assert result[0]["type"] == "text"
-        assert "OG Title" in result[0]["data"]["text"]
-        assert "OG Description" in result[0]["data"]["text"]
-        assert result[1]["type"] == "image"
-        assert result[1]["data"]["file"].startswith("file:")
-
-    @pytest.mark.asyncio
-    async def test_handle_url_resolves_relative_image_url(self, mock_context, mock_event):
-        html_content = b'''
-        <html>
-        <head>
-            <title>Relative</title>
-            <meta property="og:image" content="/static/cover.jpg">
-        </head>
-        </html>
-        '''
-
-        class MockResponse:
-            status = 200
-            charset = "utf-8"
-
-            @property
-            def content(self):
-                return self
-
-            async def read(self, limit=None):
-                return html_content
-
-        class MockContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-
-            async def __aexit__(self, *args):
-                return None
-
-        class MockSession:
-            def get(self, *args, **kwargs):
-                return MockContextManager()
-
-        mock_context.http_session = MockSession()
-
-        result = await url_parser.handle_url("https://example.com/post/1", mock_event, mock_context)
-
-        assert any(
-            seg.get("type") == "image" and seg["data"]["file"].startswith("file:")
-            for seg in result
+@pytest.mark.asyncio
+async def test_overlong_resolved_image_url_is_not_validated(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(url_parser, "MAX_IMAGE_URL_LENGTH", 20)
+    assert (
+        await url_parser._cache_preview_image(
+            "https://example.com",
+            "/a-very-long-image-name.png",
+            context,
         )
+        is None
+    )
+    network.validator.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_handle_url_drops_private_og_image(self, mock_context, mock_event, monkeypatch):
-        html_content = b"""
-        <html><head><title>Safe page</title>
-        <meta property=\"og:image\" content=\"http://127.0.0.1/internal.png\">
-        </head></html>
-        """
 
-        async def fake_fetch(url, **_kwargs):
-            return SafeHttpResponse(url, 200, html_content, "utf-8", {})
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    ["", None, pytest.param("x" * (url_parser.MAX_INPUT_URL_LENGTH + 1), id="overlong")],
+)
+async def test_invalid_input_url_is_rejected_before_network(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+    url: object,
+) -> None:
+    assert await url_parser.handle_url(url, {}, context) == []
+    network.page.assert_not_awaited()
 
-        async def reject_private_image(url):
-            if "127.0.0.1" in url:
-                raise url_parser.UnsafeUrlError("non-public image")
-            return None, ("93.184.216.34",)
 
-        monkeypatch.setattr(url_parser, "fetch_public_html", fake_fetch)
-        monkeypatch.setattr(url_parser, "validate_public_fetch_target", reject_private_image)
+@pytest.mark.asyncio
+async def test_largest_accepted_url_stays_within_message_budget(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+) -> None:
+    prefix = "https://example.com/"
+    url = prefix + "x" * (url_parser.MAX_INPUT_URL_LENGTH - len(prefix))
+    title = "t" * 300
+    description = "d" * 200
+    network.page.return_value = _html_response(
+        f'<title>{title}</title><meta name="description" content="{description}">'
+    )
 
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result == [{"type": "text", "data": {"text": "🔗 Safe page\n\n链接: https://example.com"}}]
+    result = await url_parser.handle_url(url, {}, context)
 
-    @pytest.mark.asyncio
-    async def test_handle_url_with_twitter_tags(self, mock_context, mock_event):
-        """测试Twitter卡片标签"""
-        html_content = b'''
-        <html>
-        <head>
-            <title>Twitter Title</title>
-            <meta name="twitter:description" content="Twitter Description">
-            <meta name="twitter:image" content="https://example.com/twitter-image.jpg">
-        </head>
-        </html>
-        '''
+    assert len(result[0]["data"]["text"]) <= 3000
 
-        class MockTwitterResponse:
-            status = 200
-            charset = "utf-8"
 
-            @property
-            def content(self):
-                return self
+@pytest.mark.asyncio
+async def test_preview_concurrency_is_bounded(
+    context: SimpleNamespace,
+    network: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = 0
+    peak = 0
 
-            async def read(self, limit=None):
-                return html_content
+    async def slow_page(url: str, **_kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return _html_response(f"<title>{url}</title>", url=url)
 
-        class MockTwitterContextManager:
-            async def __aenter__(self):
-                return MockTwitterResponse()
-            async def __aexit__(self, *args):
-                pass
+    network.page.side_effect = slow_page
+    monkeypatch.setattr(url_parser, "_PREVIEW_SEMAPHORE", asyncio.Semaphore(2))
+    results = await asyncio.gather(
+        *(url_parser.handle_url(f"https://example.com/{index}", {}, context) for index in range(6))
+    )
+    assert all(result and result[0]["type"] == "text" for result in results)
+    assert peak == 2
 
-        class MockTwitterSession:
-            def get(self, *args, **kwargs):
-                return MockTwitterContextManager()
 
-        mock_context.http_session = MockTwitterSession()
+@pytest.mark.asyncio
+async def test_command_placeholder_and_manifest_match_dispatcher_contract(
+    context: SimpleNamespace,
+) -> None:
+    manifest = json.loads(
+        (ROOT / "plugins" / "url_parser" / "plugin.json").read_text(encoding="utf-8")
+    )
+    readme = (ROOT / "plugins" / "url_parser" / "README.md").read_text(encoding="utf-8")
 
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "Twitter Title" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_url_client_error(self, mock_context, mock_event):
-        """测试客户端错误"""
-        import aiohttp
-
-        class MockClientErrorContextManager:
-            async def __aenter__(self):
-                raise aiohttp.ClientError("Connection error")
-            async def __aexit__(self, *args):
-                pass
-
-        class MockClientErrorSession:
-            def get(self, *args, **kwargs):
-                return MockClientErrorContextManager()
-
-        mock_context.http_session = MockClientErrorSession()
-
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_handle_url_timeout(self, mock_context, mock_event):
-        """测试超时"""
-        import asyncio
-
-        class MockTimeoutContextManager:
-            async def __aenter__(self):
-                raise asyncio.TimeoutError()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockTimeoutSession:
-            def get(self, *args, **kwargs):
-                return MockTimeoutContextManager()
-
-        mock_context.http_session = MockTimeoutSession()
-
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_handle_url_exception(self, mock_context, mock_event):
-        """测试异常处理"""
-        class MockExceptionContextManager:
-            async def __aenter__(self):
-                raise Exception("Unexpected error")
-            async def __aexit__(self, *args):
-                pass
-
-        class MockExceptionSession:
-            def get(self, *args, **kwargs):
-                return MockExceptionContextManager()
-
-        mock_context.http_session = MockExceptionSession()
-
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_handle_url_charset_fallback(self, mock_context, mock_event):
-        """测试字符集回退"""
-        html_content = "测试内容".encode("gbk")
-
-        class MockCharsetResponse:
-            status = 200
-            charset = None
-
-            @property
-            def content(self):
-                return self
-
-            async def read(self, limit=None):
-                return html_content
-
-        class MockCharsetContextManager:
-            async def __aenter__(self):
-                return MockCharsetResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockCharsetSession:
-            def get(self, *args, **kwargs):
-                return MockCharsetContextManager()
-
-        mock_context.http_session = MockCharsetSession()
-
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        # 即使字符集回退，也不应该崩溃
-        assert isinstance(result, list)
-
-    @pytest.mark.asyncio
-    async def test_handle_url_invalid_charset(self, mock_context, mock_event):
-        """测试无效字符集"""
-        html_content = b"<html><head><title>Test</title></head></html>"
-
-        class MockInvalidCharsetResponse:
-            status = 200
-            charset = "invalid-charset"
-
-            @property
-            def content(self):
-                return self
-
-            async def read(self, limit=None):
-                return html_content
-
-        class MockInvalidCharsetContextManager:
-            async def __aenter__(self):
-                return MockInvalidCharsetResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockInvalidCharsetSession:
-            def get(self, *args, **kwargs):
-                return MockInvalidCharsetContextManager()
-
-        mock_context.http_session = MockInvalidCharsetSession()
-
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        # 应该回退到utf-8解码
-        assert isinstance(result, list)
-
-    @pytest.mark.asyncio
-    async def test_handle_url_with_title_only(self, mock_context, mock_event):
-        """测试只有标题的页面"""
-        html_content = b'<html><head><title>Only Title</title></head><body></body></html>'
-
-        class MockTitleOnlyResponse:
-            status = 200
-            charset = "utf-8"
-
-            @property
-            def content(self):
-                return self
-
-            async def read(self, limit=None):
-                return html_content
-
-        class MockTitleOnlyContextManager:
-            async def __aenter__(self):
-                return MockTitleOnlyResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockTitleOnlySession:
-            def get(self, *args, **kwargs):
-                return MockTitleOnlyContextManager()
-
-        mock_context.http_session = MockTitleOnlySession()
-
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "Only Title" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_url_empty_title(self, mock_context, mock_event):
-        """测试空标题"""
-        html_content = b'<html><head><title></title><meta name="description" content="Desc"></meta></head></html>'
-
-        class MockEmptyTitleResponse:
-            status = 200
-            charset = "utf-8"
-
-            @property
-            def content(self):
-                return self
-
-            async def read(self, limit=None):
-                return html_content
-
-        class MockEmptyTitleContextManager:
-            async def __aenter__(self):
-                return MockEmptyTitleResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockEmptyTitleSession:
-            def get(self, *args, **kwargs):
-                return MockEmptyTitleContextManager()
-
-        mock_context.http_session = MockEmptyTitleSession()
-
-        result = await url_parser.handle_url("https://example.com", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "Desc" in result_text
-
-    def test_no_commands(self):
-        """测试该插件没有定义命令"""
-        # url_parser是通过dispatcher调用的，不定义命令
-        assert hasattr(url_parser, 'handle')
-        assert callable(url_parser.handle)
+    assert await url_parser.handle("unused", "unused", {}, context) == []
+    assert manifest["commands"] == []
+    assert manifest["schedule"] == []
+    assert manifest["concurrency"] == "parallel"
+    for marker in ("完整的单 URL", "2 MiB", "5 MiB", "128", "7 天", "4"):
+        assert marker in readme

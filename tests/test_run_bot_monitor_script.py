@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import locale
 import os
 import shutil
 import subprocess
@@ -15,6 +16,40 @@ from scripts import run_process_with_rotating_logs as log_pump
 ROOT = Path(__file__).resolve().parents[1]
 MONITOR = ROOT / "scripts" / "run-bot-monitor.ps1"
 LOG_PUMP = ROOT / "scripts" / "run_process_with_rotating_logs.py"
+
+
+def _powershell_executable() -> str | None:
+    return shutil.which("powershell.exe") or shutil.which("pwsh")
+
+
+def _powershell_output_encoding(executable: str) -> str:
+    """返回 PowerShell 宿主实际使用的管道文本编码。"""
+
+    if os.name == "nt" and Path(executable).name.casefold() == "powershell.exe":
+        # Windows PowerShell 5.1 仍按系统代码页写入重定向管道；显式使用
+        # locale.getencoding()，避免 Python UTF-8 模式覆盖本机代码页。
+        return locale.getencoding()
+    return "utf-8"
+
+
+def _run_powershell(
+    executable: str,
+    *arguments: str,
+    env: dict[str, str] | None = None,
+    timeout: float = 10,
+) -> subprocess.CompletedProcess[str]:
+    """运行 PowerShell，并稳定解码不同宿主产生的诊断输出。"""
+
+    return subprocess.run(
+        [executable, "-NoLogo", "-NoProfile", *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding=_powershell_output_encoding(executable),
+        errors="replace",
+        env=env,
+        timeout=timeout,
+    )
 
 
 def _assert_process_not_running(process_id: int) -> None:
@@ -43,9 +78,9 @@ def _assert_process_not_running(process_id: int) -> None:
 
 
 def test_vbs_launcher_delegates_to_the_monitor() -> None:
-    source = (ROOT / "run-bot.vbs").read_text(encoding="utf-8")
+    source = (ROOT / "scripts" / "run-bot.vbs").read_text(encoding="utf-8")
 
-    assert "scripts\\run-bot-monitor.ps1" in source
+    assert 'fso.BuildPath(scriptDir, "run-bot-monitor.ps1")' in source
     assert "-WindowStyle Hidden" in source
     assert "tasklist" not in source.lower()
     assert "wmic" not in source.lower()
@@ -76,17 +111,18 @@ def test_monitor_uses_scoped_identity_configured_launch_and_log_pump() -> None:
     assert "utf8NoBOM" not in source
 
 
-def test_monitor_has_no_baked_account_and_configures_all_launch_layers() -> None:
+def test_monitor_has_no_baked_account_or_python_environment() -> None:
     source = MONITOR.read_text(encoding="utf-8")
 
     assert "1000000001" not in source
     assert "XIAOQING_NAPCAT_ACCOUNT" in source
+    assert "CondaPath" not in source
+    assert "CondaEnvironment" not in source
+    assert "PythonPath" not in source
+    assert '"python"' in source
     for parameter in (
-        "$PythonPath",
-        "$CondaPath",
-        "$CondaEnvironment",
-        "$BotPythonCommand",
         "$BotArguments",
+        "$DisableNapCat",
         "$NapCatAccount",
         "$NapCatArguments",
     ):
@@ -416,9 +452,6 @@ $definition = $ast.FindAll({
 }, $true) | Select-Object -First 1
 Invoke-Expression $definition.Extent.Text
 $script:PidFile = Join-Path $env:TEMP 'xiaoqing-monitor-nonexistent.pid'
-$script:CondaPath = 'C:\fake\conda.exe'
-$script:CondaEnvironment = 'base'
-$script:BotPythonCommand = 'python'
 $script:MainScript = 'C:\repo\main.py'
 $script:LogPumpScript = 'C:\repo\scripts\run_process_with_rotating_logs.py'
 $script:BotRoot = 'C:\repo'
@@ -452,14 +485,7 @@ try {
 }
 """
 
-    result = subprocess.run(
-        [executable, "-NoLogo", "-NoProfile", "-Command", probe],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=environment,
-        timeout=10,
-    )
+    result = _run_powershell(executable, "-Command", probe, env=environment)
 
     assert result.returncode == 0, result.stderr
 
@@ -519,21 +545,10 @@ if (-not $process.WaitForExit(5000)) {
 exit $process.ExitCode
 """
 
-    result = subprocess.run(
-        [executable, "-NoLogo", "-NoProfile", "-Command", probe],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=environment,
-        timeout=10,
-    )
+    result = _run_powershell(executable, "-Command", probe, env=environment)
 
     assert result.returncode == 0, result.stderr
     assert json.loads(output.read_text(encoding="utf-8")) == expected
-
-
-def _powershell_executable() -> str | None:
-    return shutil.which("powershell.exe") or shutil.which("pwsh")
 
 
 def test_monitor_parses_in_windows_powershell_and_pwsh() -> None:
@@ -553,13 +568,11 @@ def test_monitor_parses_in_windows_powershell_and_pwsh() -> None:
     )
 
     for executable in executables:
-        result = subprocess.run(
-            [executable, "-NoLogo", "-NoProfile", "-Command", parser_command],
-            check=False,
-            capture_output=True,
-            text=True,
+        result = _run_powershell(
+            executable,
+            "-Command",
+            parser_command,
             env=environment,
-            timeout=10,
         )
         assert result.returncode == 0, result.stderr
 
@@ -613,14 +626,7 @@ if ((Get-MutexName '\\server\share') -ne (Get-MutexName $uncRoot)) {
 exit 0
 """
 
-    result = subprocess.run(
-        [executable, "-NoLogo", "-NoProfile", "-Command", probe],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=environment,
-        timeout=10,
-    )
+    result = _run_powershell(executable, "-Command", probe, env=environment)
 
     assert result.returncode == 0, result.stderr
 
@@ -636,7 +642,6 @@ exit 0
         ["-LogBackupCount", "0"],
         ["-InitialRestartDelaySeconds", "11", "-MaximumRestartDelaySeconds", "10"],
         ["-NapCatAccount", "not-an-account"],
-        ["-CondaEnvironment", "bad environment"],
     ],
 )
 def test_monitor_rejects_invalid_ranges_before_launch(arguments: list[str]) -> None:
@@ -644,12 +649,94 @@ def test_monitor_rejects_invalid_ranges_before_launch(arguments: list[str]) -> N
     if executable is None:
         pytest.skip("PowerShell is not installed")
 
-    result = subprocess.run(
-        [executable, "-NoLogo", "-NoProfile", "-File", str(MONITOR), *arguments],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+    result = _run_powershell(executable, "-File", str(MONITOR), *arguments)
 
     assert result.returncode != 0
+
+
+def test_monitor_fails_closed_when_napcat_executable_is_missing(tmp_path: Path) -> None:
+    executable = _powershell_executable()
+    if executable is None:
+        pytest.skip("PowerShell is not installed")
+
+    bot_root = tmp_path / "bot"
+    scripts = bot_root / "scripts"
+    scripts.mkdir(parents=True)
+    (bot_root / "main.py").write_text("", encoding="utf-8")
+    (scripts / "run_process_with_rotating_logs.py").write_text("", encoding="utf-8")
+    missing_napcat = tmp_path / "missing-napcat.exe"
+
+    environment = {
+        **os.environ,
+        "XIAOQING_MONITOR_PATH": str(MONITOR),
+        "XIAOQING_TEST_BOT_ROOT": str(bot_root),
+        "XIAOQING_TEST_NAPCAT_PATH": str(missing_napcat),
+    }
+    # 顶层 throw 的原生错误流会随 PowerShell 宿主而变化。由同一个
+    # PowerShell 进程捕获脚本异常并显式输出消息，验证真实预检分支，
+    # 同时避免把宿主的错误流转发细节误当成监控脚本契约。
+    probe = r"""
+try {
+    & $env:XIAOQING_MONITOR_PATH `
+        -BotRoot $env:XIAOQING_TEST_BOT_ROOT `
+        -NapCatPath $env:XIAOQING_TEST_NAPCAT_PATH
+    exit 91
+} catch {
+    [Console]::Out.WriteLine([string]$_.Exception.Message)
+    exit 17
+}
+"""
+    result = _run_powershell(
+        executable,
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        probe,
+        env=environment,
+    )
+
+    assert result.returncode == 17, (
+        f"unexpected PowerShell result: stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    assert "NapCat executable not found" in output
+    assert "-DisableNapCat" in output
+
+
+def test_monitor_explicit_disable_is_the_only_missing_napcat_bypass(tmp_path: Path) -> None:
+    executable = _powershell_executable()
+    if executable is None:
+        pytest.skip("PowerShell is not installed")
+
+    environment = {
+        **os.environ,
+        "XIAOQING_MONITOR_AST_PATH": str(MONITOR),
+        "XIAOQING_MISSING_NAPCAT": str(tmp_path / "missing.exe"),
+    }
+    probe = r"""
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $env:XIAOQING_MONITOR_AST_PATH, [ref]$tokens, [ref]$errors)
+$definition = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Test-NapCatRunning'
+}, $true)
+Invoke-Expression $definition.Extent.Text
+$NapCatPath = $env:XIAOQING_MISSING_NAPCAT
+$DisableNapCat = $true
+if (-not (Test-NapCatRunning)) { exit 41 }
+$DisableNapCat = $false
+try {
+    Test-NapCatRunning | Out-Null
+    exit 42
+} catch {
+    if ($_.Exception.Message -notlike '*disappeared while monitoring*') { exit 43 }
+}
+exit 0
+"""
+
+    result = _run_powershell(executable, "-Command", probe, env=environment)
+
+    assert result.returncode == 0, result.stderr

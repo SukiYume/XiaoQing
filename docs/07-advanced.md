@@ -4,6 +4,19 @@
 
 ---
 
+## 私有 API 依赖登记
+
+下表集中记录运行时为兼容第三方库或跨平台清理而使用的私有 API。每一处都必须保留能力检测、异常兜底和升级回归测试；依赖升级时逐行复核，不把私有属性当作稳定契约。
+
+| 位置 | 私有 API | 使用目的 | 保护措施 |
+|---|---|---|---|
+| `core/plugin_manager_support.py` | `importlib._bootstrap._get_module_lock` | 在插件热加载期间复用 CPython 模块锁 | `getattr`/异常兜底；仅作为锁获取失败时的兼容路径 |
+| `core/scheduler_compat.py` | APScheduler 的内部 job store、executor、timer 和 pending-future 属性 | 在调度器重载与关闭时保留现有任务语义 | 版本探针先验证属性和调用约定；缺失属性回退到安全停机路径 |
+| `plugins/jupyter/jupyter_manager.py` | `_invoke_cleanup` 的回调签名反射、Jupyter 私有清理/终止方法 | 兼容不同 Jupyter 版本的异步清理和内核终止 | 只接受受限签名；每个私有候选均有异常隔离和清理报告 |
+| `plugins/codex/runner.py` | `process._transport.get_pipe_transport` | `communicate()` 失败后的跨平台管道关闭兜底 | `getattr`、类型检查和异常保护；仅在正常清理路径失败后使用 |
+
+---
+
 ## 💬 多轮对话
 
 多轮对话允许机器人与用户进行持续的交互，记住对话状态。
@@ -115,8 +128,6 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
     # 更新尝试
     remaining -= 1
     history.append(guess)
-    session.set("remaining", remaining)
-    session.set("history", history)
     
     # 判断结果
     if guess == target:
@@ -139,10 +150,20 @@ async def handle_session(text: str, event: Dict, context, session) -> List:
     # 给出提示
     if guess < target:
         hint = "太小了！"
-        session.set("min", max(min_num, guess + 1))
+        next_min = max(min_num, guess + 1)
+        next_max = max_num
     else:
         hint = "太大了！"
-        session.set("max", min(max_num, guess - 1))
+        next_min = min_num
+        next_max = min(max_num, guess - 1)
+
+    def persist_attempt(working):
+        working.set("remaining", remaining)
+        working.set("history", history)
+        working.set("min", next_min)
+        working.set("max", next_max)
+
+    await context.update_session(persist_attempt)
     
     return segments(f"{hint} 剩余 {remaining} 次机会")
 ```
@@ -171,10 +192,9 @@ session = await context.create_session(
 # 获取会话
 session = await context.get_session()
 
-# 读写数据
+# 读取快照；持久修改必须走原子 callback
 value = session.get("key", default)
-session.set("key", value)
-session.clear()
+await context.update_session(lambda working: working.set("key", value))
 
 # 检查状态
 if session.is_expired():
@@ -196,7 +216,7 @@ await context.end_session()
 - `/codex <label> <任务>` 将任务加入标签队列，handler 立即返回“已收到”。
 - 同一标签内任务串行运行，避免同一 Codex thread 被并发 resume；不同标签之间按 `max_parallel_jobs` 并行。
 - 任务完成、失败、超时或取消后，插件用 `context.send_action()` 主动回发 `[codex:<label> #<job_id>]` 消息；如果任务生成图片，会随文字一起发送 QQ image 段。
-- 会话索引保存在 `plugins/codex/data/sessions.json`，对话记录、图片副本和任务 artifacts 保存在 `plugins/codex/data/session/<label>/`，删除归档保存在 `plugins/codex/data/deleted_sessions/`，重启后可以继续知道 label、cwd 和 Codex thread id。
+- 会话索引保存在 `data/codex/sessions.json`，对话记录、图片副本和任务 artifacts 保存在 `data/codex/session/<label>/`，删除归档保存在 `data/codex/deleted_sessions/`，重启后可以继续知道 label、cwd 和 Codex thread id。
 - 业务插件可以把自己的长任务作为侧路投递给 Codex，例如 `arxiv_filter` 在发送论文列表后，把所有 positive arXiv 链接交给固定 `astro-ph` 会话；摘要成功、失败或历史重发都不影响论文列表消息。
 
 这种模式不会占用框架活跃会话，因此用户可以继续使用其他命令或闲聊。
@@ -299,20 +319,10 @@ async def send_weekly(context) -> List[Dict]:
 
 ### 动态定时任务
 
-动态任务需要在 `init()` 钩子中通过 `app` 实例操作调度器（`context` 不直接暴露 scheduler）：
-
-```python
-_app = None
-
-async def init(context):
-    # 保存 app 引用（通过 context.reload_plugins 的闭包可获取）
-    # 推荐在 init 时注册静态任务，动态任务场景较少
-    pass
-
-# 更推荐的方式：在 plugin.json schedule 字段声明所有定时任务
-```
-
-如确需动态注册，可将 `app` 引用通过 `init(context)` 外部传入（框架扩展场景）。
+公开的 `PluginContext` 不暴露 `app` 或 scheduler，也不能从回调闭包提取它。普通插件应把
+所有定时任务声明在 `plugin.json` 的 `schedule` 字段中。确需动态调度时，应先在核心中定义
+参数受限、可撤销并按插件授权的类型化 capability，再由 `XiaoQingApp` 显式注入；不要保存
+应用实例或直接访问调度器。
 
 ---
 
@@ -454,17 +464,17 @@ Dispatcher 使用固定线性流程处理消息。插件通过约定函数接入
     ↓
 解析 MessageContext
     ↓
-URL-only 短路
-    ↓
 处理门控（私聊 / require_bot_name_in_group=false / has_prefix / 活跃会话）
     ↓
+URL-only → url_parser（门控与静音之后，静音时跳过）
+    ↓
 只喊机器人名字或只 @ 机器人
+    ↓
+活跃会话并调用 handle_session()
     ↓
 命令匹配并调用 handle()
     ↓
 未知命令提示（仅严格命令前缀）
-    ↓
-活跃会话并调用 handle_session()
     ↓
 smalltalk 回落并调用 handle_smalltalk()
 ```
@@ -567,7 +577,7 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 进入和纯文本相同的频率控制、记忆、回复检查链路
 ```
 
-识别成表情包的图片会进入 `plugins/xiaoqing_chat/data/media/library/`，后续可作为本地表情包回复素材。
+识别成表情包的图片会进入 `data/xiaoqing_chat/media/library/`，后续可作为本地表情包回复素材。
 
 回复阶段由主 LLM 直接决定是否带出站媒体。模型可以在自然文本里附一个 `[想发表情:hint]`、`[想发QQ表情:hint]` 或 `[想发图片:hint]` marker。插件会剥离这个控制 marker，再按 hint 到本地表情包库、图片目录或 QQ face 目录里解析成实际发送段。旧图库里缺失的元数据会在后台补修，不会卡住当前回复。
 
@@ -583,13 +593,13 @@ xiaoqing_chat 提供基于 LLM 的智能对话能力。
 
 ### 智能回复控制
 
-xiaoqing_chat 内部实现智能回复频率控制，优于简单的 `random_reply_rate`。
+xiaoqing_chat 内部通过多层门控实现智能回复频率控制。
 
 **控制策略**：
 
 1. **attention gate**：先判断这条消息是不是冲小青来的。`/xc`、私聊、被 `@`、直接叫名字、只喊名字后的追问、reply 引用小青、以及近期上下文锚定小青的“她/ta”共指召唤，都会跳过普通概率门。
 2. **硬频控**：普通群聊参与前先检查最小回复间隔、每分钟上限、连续回复冷却。
-3. **活跃话题**：近期目标仍活跃时可使用更短的 `active_topic_min_reply_interval`，并提高普通参与概率。
+3. **活跃话题**：只用上一轮目标判断是否活跃，再按 `active_topic_reply_probability` 和 `active_topic_min_reply_interval` 控制参与；当前消息不会先抬高自己的回复概率。
 4. **soft gate**：普通群聊插话概率 `reply_probability_base` 叠加 heartflow 和连续未回复补偿。
 
 配置边界：`reply_probability_private`、`heartflow.threshold`、`heartflow.enable_random_gate`、`heartflow.weight_mentioned`、`heartflow.weight_private`、`heartflow.weight_rate_limit`、`heartflow.weight_cooldown`、`heartflow.weight_interval` 不属于当前回复主路径。私聊、点名和共指由 attention gate 处理；速率限制由硬频控处理。
@@ -706,33 +716,20 @@ remaining = context.get_mute_remaining(group_id)  # 分钟
 
 ## 插件间调用
 
-### 获取其他插件
+### 声明式服务与 capability
 
-```python
-async def handle(command: str, args: str, event: Dict, context) -> List:
-    # 获取插件管理器
-    pm = context.app.plugin_manager
-    
-    # 获取另一个插件
-    other_plugin = pm.get("other_plugin")
-    
-    if other_plugin:
-        # 调用其函数
-        if hasattr(other_plugin.module, "some_function"):
-            result = await other_plugin.module.some_function(args)
-```
+`PluginContext` 没有 `app` 或 `plugin_manager` 属性，插件也不能按字符串获取任意模块函数。
+框架只允许核心预先登记的固定服务契约：提供方在 `plugin.json` 声明服务，核心校验允许的
+owner、caller 和 required capability，再向指定调用方注入类型化的
+`context.capabilities.<service>`。例如 smalltalk 只能调用 `voice_synthesis.synthesize_text()` 与
+`chat_reply.reply()`；arxiv_filter 只能在获授权身份下调用
+`codex_arxiv_summary.enqueue_or_replay()`。新增跨插件调用必须同时扩展 manifest 模型、核心
+绑定、能力协议和授权测试，不能通过反射或应用后门实现。
 
 ### 共享数据
 
-通过文件或数据库共享数据：
-
-```python
-# 插件 A 写入
-write_json(context.data_dir.parent / "shared" / "data.json", data)
-
-# 插件 B 读取
-data = load_json(Path("plugins/shared/data.json"))
-```
+`context.data_dir` 属于当前插件；不要通过 `parent` 越界读写另一个插件目录。需要共享数据时，
+由核心定义拥有者明确、输入有界的服务 capability，或使用独立配置且具备访问控制的外部存储。
 
 ---
 
@@ -840,9 +837,11 @@ async def handle(command: str, args: str, event: Dict, context) -> List:
 ```python
 from core.plugin_base import run_sync
 
-# 阻塞操作放到线程池
+# 阻塞操作经当前插件的有界 bulkhead 提交
 result = await run_sync(blocking_function, arg1, arg2)
 ```
+
+`run_sync()` 受 `plugin_execution.sync_parallel_limit`、`sync_queue_limit` 和全局队列上限约束，并按插件公平调度；过载会快速失败。不要直接使用 `asyncio.to_thread()` 或默认 executor 绕过配额和卸载隔离。只有底层组件自带专用、有界 executor，且在 `init()`/`shutdown()` 中停止接纳并有界 drain 时，才可以自行管理 worker。调用方取消只能阻止尚未启动的任务，已经运行的 Python 线程仍由框架跟踪至真实结束。
 
 ---
 
@@ -938,22 +937,13 @@ sudo systemctl start xiaoqing
 
 ### 2. 使用 Docker
 
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["python", "main.py"]
-```
-
 ```bash
 docker build -t xiaoqing .
 docker run -d --name xiaoqing -v ./config:/app/config xiaoqing
 ```
+
+Dockerfile 使用 CPython 3.13，并直接安装根目录 `requirements.txt`。构建前请确认
+工作区中没有不应进入镜像的本地文件，并检查 `.dockerignore`。
 
 ### 3. 使用 PM2（Node.js 进程管理器）
 

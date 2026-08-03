@@ -28,13 +28,6 @@ def test_topic_summary_cache_parser_keeps_latest_valid_topic_summary(tmp_path: P
     assert entries[-1].summary == "先看预算和口味"
 
 
-def test_planner_planned_action_stays_compatible_with_shared_type() -> None:
-    from plugins.xiaoqing_chat.planning.planned_action import PlannedAction as SharedPlannedAction
-    from plugins.xiaoqing_chat.planning.planner import PlannedAction
-
-    assert PlannedAction is SharedPlannedAction
-
-
 def test_summarizer_load_cache_accepts_legacy_entries_without_topic_id(tmp_path: Path) -> None:
     from plugins.xiaoqing_chat.llm.summarizer import _load_cache
 
@@ -57,7 +50,10 @@ def test_summarizer_load_cache_accepts_legacy_entries_without_topic_id(tmp_path:
     assert topics[-1].topic == "火锅选择"
 
 
-def test_action_history_append_on_cold_cache_keeps_persisted_records(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_action_history_append_on_cold_cache_keeps_persisted_records(
+    tmp_path: Path,
+) -> None:
     from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore, ActionRecord
 
     chat_id = "cold-cache-history"
@@ -90,7 +86,7 @@ def test_action_history_append_on_cold_cache_keeps_persisted_records(tmp_path: P
 
     reloaded = ActionHistoryStore()
     reloaded.bind(tmp_path)
-    records = reloaded.get_recent(chat_id, max_items=10)
+    records = await reloaded.get_recent_async(chat_id, max_items=10)
 
     assert len(records) == 2
     assert records[0].reasoning == "persisted"
@@ -98,7 +94,9 @@ def test_action_history_append_on_cold_cache_keeps_persisted_records(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_action_history_get_recent_async_does_not_overwrite_concurrent_append(tmp_path: Path) -> None:
+async def test_action_history_get_recent_async_does_not_overwrite_concurrent_append(
+    tmp_path: Path,
+) -> None:
     from plugins.xiaoqing_chat.planning import action_history as action_history_module
     from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore, ActionRecord
 
@@ -149,13 +147,15 @@ async def test_action_history_get_recent_async_does_not_overwrite_concurrent_app
 
     reloaded = ActionHistoryStore()
     reloaded.bind(tmp_path)
-    persisted = reloaded.get_recent(chat_id, max_items=10)
+    persisted = await reloaded.get_recent_async(chat_id, max_items=10)
     assert len(persisted) == 1
     assert persisted[0].reasoning == "new-record"
 
 
 @pytest.mark.asyncio
-async def test_action_history_get_recent_async_does_not_restore_after_concurrent_clear(tmp_path: Path) -> None:
+async def test_action_history_get_recent_async_does_not_restore_after_concurrent_clear(
+    tmp_path: Path,
+) -> None:
     from plugins.xiaoqing_chat.planning import action_history as action_history_module
     from plugins.xiaoqing_chat.planning.action_history import ActionHistoryStore
 
@@ -194,4 +194,4 @@ async def test_action_history_get_recent_async_does_not_restore_after_concurrent
     store.flush(chat_id)
     reloaded = ActionHistoryStore()
     reloaded.bind(tmp_path)
-    assert reloaded.get_recent(chat_id, max_items=10) == []
+    assert await reloaded.get_recent_async(chat_id, max_items=10) == []

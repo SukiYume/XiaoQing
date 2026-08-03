@@ -1,22 +1,586 @@
 {
     "name": "pendo",
     "version": "1.0.0",
-    "description": "个人时间与信息管理中枢 - 日程、待办、想法、日记、笔记一体化管理工具",
+    "description": "个人时间与信息管理中枢：统一管理日程、待办、笔记、日记、账本、搜索与提醒",
     "author": "XiaoQing",
+    "capabilities": ["config_subscription"],
     "commands": [
         {
             "name": "pendo",
-            "triggers": [
-                "pendo",
-                "日程",
-                "待办",
-                "日记"
-            ],
-            "help": "个人时间与信息管理中枢\nWeb: /pendo web token | /pendo web widget-token\n\n使用 /pendo help 查看详细帮助",
-            "usage": "/pendo <subcommand> [args...]"
+            "triggers": ["pendo"],
+            "help": "个人时间与信息管理中枢；完整命令码由 Core 目录统一发布；Web 登录使用 /pendo web token，组件令牌使用 /pendo web widget-token",
+            "contexts": ["private"],
+            "usage": "/pendo <subcommand> [args...]",
+            "examples": ["/pendo"],
+            "invalid_examples": ["/pendo unknown-command"],
+            "subcommands": [
+                {
+                    "name": "confirm",
+                    "aliases": ["确认"],
+                    "help": "确认刚收到的提醒",
+                    "usage": "/pendo confirm <id>",
+                    "examples": ["/pendo confirm evt_123"],
+                    "invalid_examples": ["/pendo confirm"]
+                },
+                {
+                    "name": "snooze",
+                    "aliases": ["延后"],
+                    "help": "把条目当前提醒延后到相对时长或当天时刻",
+                    "usage": "/pendo snooze <id> <10m|1h|1d|HH:MM>",
+                    "examples": ["/pendo snooze evt_123 30m"],
+                    "invalid_examples": ["/pendo snooze evt_123"]
+                },
+                {
+                    "name": "undo",
+                    "aliases": ["撤销"],
+                    "help": "撤销最近一次删除或编辑",
+                    "usage": "/pendo undo [分钟]",
+                    "examples": ["/pendo undo 3"],
+                    "invalid_examples": ["/pendo undo tomorrow"]
+                },
+                {
+                    "name": "event",
+                    "aliases": ["e", "calendar", "日程", "事件"],
+                    "help": "管理单次、重复和多节点日程",
+                    "usage": "/pendo event <add|list|view|edit|delete|reminders> [args...]",
+                    "examples": ["/pendo event"],
+                    "invalid_examples": ["/pendo event unknown-command"],
+                    "subcommands": [
+                        {
+                            "name": "add",
+                            "help": "用自然语言添加日程",
+                            "usage": "/pendo event add <内容>",
+                            "examples": ["/pendo event add 明天上午九点开组会，提前30分钟提醒"],
+                            "invalid_examples": ["/pendo event add"]
+                        },
+                        {
+                            "name": "list",
+                            "help": "按日期范围、分类或标签列出日程",
+                            "usage": "/pendo event list [范围] [cat:分类] [#标签]",
+                            "examples": ["/pendo event list week cat:工作"],
+                            "invalid_examples": ["/pendo event list 2026-99-99"]
+                        },
+                        {
+                            "name": "view",
+                            "help": "查看单个日程、节点或集合详情",
+                            "usage": "/pendo event view <id>",
+                            "examples": ["/pendo event view evt_123"],
+                            "invalid_examples": ["/pendo event view"]
+                        },
+                        {
+                            "name": "edit",
+                            "help": "编辑日程内容或字段",
+                            "usage": "/pendo event edit <id> <内容>",
+                            "examples": ["/pendo event edit evt_123 改到明天下午三点"],
+                            "invalid_examples": ["/pendo event edit evt_123"]
+                        },
+                        {
+                            "name": "delete",
+                            "help": "删除单个日程、节点或整个集合",
+                            "usage": "/pendo event delete <id>",
+                            "examples": ["/pendo event delete evt_123"],
+                            "invalid_examples": ["/pendo event delete"]
+                        },
+                        {
+                            "name": "reminders",
+                            "aliases": ["reminder"],
+                            "help": "查看、设置、确认或删除日程提醒",
+                            "usage": "/pendo event reminders [set|confirm|delete|list] [args...]",
+                            "examples": ["/pendo event reminders today"],
+                            "invalid_examples": ["/pendo event reminders snooze evt_123 1h"],
+                            "subcommands": [
+                                {
+                                    "name": "set",
+                                    "help": "为日程设置一个或多个提醒",
+                                    "usage": "/pendo event reminders set <id> <描述>",
+                                    "examples": ["/pendo event reminders set evt_123 提前一天和一小时提醒"],
+                                    "invalid_examples": ["/pendo event reminders set evt_123"]
+                                },
+                                {
+                                    "name": "confirm",
+                                    "help": "确认指定日程提醒",
+                                    "usage": "/pendo event reminders confirm <id> [today|future|all|提醒时间]",
+                                    "examples": ["/pendo event reminders confirm evt_123 today"],
+                                    "invalid_examples": ["/pendo event reminders confirm"]
+                                },
+                                {
+                                    "name": "delete",
+                                    "aliases": ["remove", "rm"],
+                                    "help": "删除指定日程提醒",
+                                    "usage": "/pendo event reminders delete <id> <all|today|future|提醒时间>",
+                                    "examples": ["/pendo event reminders delete evt_123 future"],
+                                    "invalid_examples": ["/pendo event reminders delete evt_123"]
+                                },
+                                {
+                                    "name": "list",
+                                    "help": "按范围列出日程提醒",
+                                    "usage": "/pendo event reminders list [范围]",
+                                    "examples": ["/pendo event reminders list week"],
+                                    "invalid_examples": ["/pendo event reminders list 2026-99-99"]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "todo",
+                    "aliases": ["task", "t", "待办", "任务"],
+                    "help": "管理待办事项",
+                    "usage": "/pendo todo <add|list|view|done|cancel|undone|edit|delete> [args...]",
+                    "examples": ["/pendo todo"],
+                    "invalid_examples": ["/pendo todo unknown-command two-words"],
+                    "subcommands": [
+                        {
+                            "name": "add",
+                            "help": "交互式或快捷添加待办",
+                            "usage": "/pendo todo add [内容] [plan:日期] [deadline:时间] [cat:分类] [p:1-5]",
+                            "examples": ["/pendo todo add 写周报 cat:工作 p:2 plan:2026-08-01"],
+                            "invalid_examples": ["/pendo todo add 写周报 p:9"]
+                        },
+                        {
+                            "name": "list",
+                            "help": "按状态、范围或分类列出待办",
+                            "usage": "/pendo todo list [today|open|done|cancelled|overdue|upcoming|inbox|分类] [all|page:n]",
+                            "examples": ["/pendo todo list open page:1"],
+                            "invalid_examples": ["/pendo todo list page:zero"]
+                        },
+                        {
+                            "name": "view",
+                            "help": "查看待办详情",
+                            "usage": "/pendo todo view <id>",
+                            "examples": ["/pendo todo view todo_123"],
+                            "invalid_examples": ["/pendo todo view"]
+                        },
+                        {
+                            "name": "done",
+                            "help": "把待办标为完成",
+                            "usage": "/pendo todo done <id>",
+                            "examples": ["/pendo todo done todo_123"],
+                            "invalid_examples": ["/pendo todo done"]
+                        },
+                        {
+                            "name": "cancel",
+                            "help": "取消待办",
+                            "usage": "/pendo todo cancel <id>",
+                            "examples": ["/pendo todo cancel todo_123"],
+                            "invalid_examples": ["/pendo todo cancel"]
+                        },
+                        {
+                            "name": "undone",
+                            "help": "把已完成或取消的待办恢复为未完成",
+                            "usage": "/pendo todo undone <id>",
+                            "examples": ["/pendo todo undone todo_123"],
+                            "invalid_examples": ["/pendo todo undone"]
+                        },
+                        {
+                            "name": "edit",
+                            "help": "编辑待办内容与字段",
+                            "usage": "/pendo todo edit <id> <内容>",
+                            "examples": ["/pendo todo edit todo_123 deadline:2026-08-01T18:00"],
+                            "invalid_examples": ["/pendo todo edit todo_123"]
+                        },
+                        {
+                            "name": "delete",
+                            "help": "按 ID 或分类删除待办",
+                            "usage": "/pendo todo delete <id|cat:分类>",
+                            "examples": ["/pendo todo delete todo_123"],
+                            "invalid_examples": ["/pendo todo delete"]
+                        }
+                    ]
+                },
+                {
+                    "name": "diary",
+                    "aliases": ["d", "journal", "日记"],
+                    "help": "写日记、查看日记并使用引导模板",
+                    "usage": "/pendo diary <add|list|view|template|delete> [args...]",
+                    "examples": ["/pendo diary"],
+                    "invalid_examples": ["/pendo diary unknown-template"],
+                    "subcommands": [
+                        {
+                            "name": "add",
+                            "help": "写今天或指定日期的日记",
+                            "usage": "/pendo diary add [日期] <内容> [mood:情绪] [score:1-10]",
+                            "examples": ["/pendo diary add 今天跑步五公里 mood:happy score:8"],
+                            "invalid_examples": ["/pendo diary add"]
+                        },
+                        {
+                            "name": "list",
+                            "help": "按日期、情绪、分类或标签列出日记",
+                            "usage": "/pendo diary list [范围] [mood:情绪] [cat:分类] [#标签]",
+                            "examples": ["/pendo diary list month mood:happy"],
+                            "invalid_examples": ["/pendo diary list 2026-99"]
+                        },
+                        {
+                            "name": "view",
+                            "help": "按日期或 ID 查看日记详情",
+                            "usage": "/pendo diary view <日期|id>",
+                            "examples": ["/pendo diary view today"],
+                            "invalid_examples": ["/pendo diary view"]
+                        },
+                        {
+                            "name": "template",
+                            "help": "列出模板或按编号、名称、ID 启动模板",
+                            "usage": "/pendo diary template [编号|名称|id]",
+                            "examples": ["/pendo diary template 1"],
+                            "invalid_examples": ["/pendo diary template 999"]
+                        },
+                        {
+                            "name": "delete",
+                            "help": "按日期或 ID 删除日记",
+                            "usage": "/pendo diary delete <日期|id>",
+                            "examples": ["/pendo diary delete diary_123"],
+                            "invalid_examples": ["/pendo diary delete"]
+                        }
+                    ]
+                },
+                {
+                    "name": "note",
+                    "aliases": ["n", "idea", "笔记", "想法", "灵感"],
+                    "help": "创建、整理和关联笔记",
+                    "usage": "/pendo note <add|list|view|edit|append|tag|untag|link|delete> [args...]",
+                    "examples": ["/pendo note"],
+                    "invalid_examples": ["/pendo note unknown-command"],
+                    "subcommands": [
+                        {
+                            "name": "add",
+                            "help": "添加笔记，可指定标题、分类、标签和关联项",
+                            "usage": "/pendo note add <内容> [title:标题] [cat:分类] [#标签] [ref:id]",
+                            "examples": ["/pendo note add title:读书摘录 content 费曼技巧 cat:学习 #方法"],
+                            "invalid_examples": ["/pendo note add"]
+                        },
+                        {
+                            "name": "list",
+                            "help": "按分类或标签列出笔记",
+                            "usage": "/pendo note list [cat:分类] [#标签] [all|page:n]",
+                            "examples": ["/pendo note list cat:学习 #方法"],
+                            "invalid_examples": ["/pendo note list page:zero"]
+                        },
+                        {
+                            "name": "view",
+                            "help": "查看笔记详情",
+                            "usage": "/pendo note view <id>",
+                            "examples": ["/pendo note view note_123"],
+                            "invalid_examples": ["/pendo note view"]
+                        },
+                        {
+                            "name": "edit",
+                            "help": "编辑笔记内容与字段",
+                            "usage": "/pendo note edit <id> <新内容>",
+                            "examples": ["/pendo note edit note_123 title:新标题"],
+                            "invalid_examples": ["/pendo note edit note_123"]
+                        },
+                        {
+                            "name": "append",
+                            "help": "向笔记末尾追加内容",
+                            "usage": "/pendo note append <id> <追加内容>",
+                            "examples": ["/pendo note append note_123 补充一条观察"],
+                            "invalid_examples": ["/pendo note append note_123"]
+                        },
+                        {
+                            "name": "tag",
+                            "help": "给笔记添加标签",
+                            "usage": "/pendo note tag <id> <#标签>",
+                            "examples": ["/pendo note tag note_123 #重要"],
+                            "invalid_examples": ["/pendo note tag note_123"]
+                        },
+                        {
+                            "name": "untag",
+                            "help": "从笔记移除标签",
+                            "usage": "/pendo note untag <id> <#标签>",
+                            "examples": ["/pendo note untag note_123 #重要"],
+                            "invalid_examples": ["/pendo note untag note_123"]
+                        },
+                        {
+                            "name": "link",
+                            "help": "把笔记关联到另一条目",
+                            "usage": "/pendo note link <id> <关联条目id>",
+                            "examples": ["/pendo note link note_123 todo_123"],
+                            "invalid_examples": ["/pendo note link note_123"]
+                        },
+                        {
+                            "name": "delete",
+                            "help": "按 ID 或分类删除笔记",
+                            "usage": "/pendo note delete <id|cat:分类>",
+                            "examples": ["/pendo note delete note_123"],
+                            "invalid_examples": ["/pendo note delete"]
+                        }
+                    ]
+                },
+                {
+                    "name": "search",
+                    "aliases": ["s", "搜索", "查找"],
+                    "help": "跨日程、待办、笔记、日记和账本搜索",
+                    "usage": "/pendo search <关键词> [type:] [range:] [status:] [transaction_type:] [category:]",
+                    "examples": ["/pendo search 会议 type:event range:month"],
+                    "invalid_examples": ["/pendo search"]
+                },
+                {
+                    "name": "ledger",
+                    "aliases": ["bill", "finance", "记账", "账单"],
+                    "help": "管理收入、支出与转账账目",
+                    "usage": "/pendo ledger <add|quick|list|view|edit|delete|summary> [args...]",
+                    "examples": ["/pendo ledger"],
+                    "invalid_examples": ["/pendo ledger unknown-command"],
+                    "subcommands": [
+                        {
+                            "name": "add",
+                            "help": "通过交互会话添加账目",
+                            "usage": "/pendo ledger add",
+                            "examples": ["/pendo ledger add"],
+                            "invalid_examples": ["/pendo ledger add unexpected"]
+                        },
+                        {
+                            "name": "quick",
+                            "help": "快捷添加收入、支出或转账",
+                            "usage": "/pendo ledger quick <金额> <描述> [type:] [cat:] [account:]",
+                            "examples": ["/pendo ledger quick 35.5 午饭 cat:餐饮 account:微信"],
+                            "invalid_examples": ["/pendo ledger quick -10 午饭"]
+                        },
+                        {
+                            "name": "list",
+                            "help": "按范围、类型、分类或账户列出账目",
+                            "usage": "/pendo ledger list [范围] [type:] [cat:] [account:] [all|page:n]",
+                            "examples": ["/pendo ledger list month type:expense"],
+                            "invalid_examples": ["/pendo ledger list page:zero"]
+                        },
+                        {
+                            "name": "view",
+                            "help": "查看账目详情",
+                            "usage": "/pendo ledger view <id>",
+                            "examples": ["/pendo ledger view ledger_123"],
+                            "invalid_examples": ["/pendo ledger view"]
+                        },
+                        {
+                            "name": "edit",
+                            "help": "编辑账目字段",
+                            "usage": "/pendo ledger edit <id> <字段和值>",
+                            "examples": ["/pendo ledger edit ledger_123 amount:42.5"],
+                            "invalid_examples": ["/pendo ledger edit ledger_123"]
+                        },
+                        {
+                            "name": "delete",
+                            "help": "删除账目",
+                            "usage": "/pendo ledger delete <id>",
+                            "examples": ["/pendo ledger delete ledger_123"],
+                            "invalid_examples": ["/pendo ledger delete"]
+                        },
+                        {
+                            "name": "summary",
+                            "help": "生成指定范围的收支总结",
+                            "usage": "/pendo ledger summary [范围]",
+                            "examples": ["/pendo ledger summary month"],
+                            "invalid_examples": ["/pendo ledger summary 2026-99"]
+                        }
+                    ]
+                },
+                {
+                    "name": "export",
+                    "aliases": ["导出"],
+                    "help": "导出 Markdown 档案并私聊发送文件",
+                    "usage": "/pendo export <文件名> [范围] [类型]",
+                    "examples": ["/pendo export archive month all"],
+                    "invalid_examples": ["/pendo export"]
+                },
+                {
+                    "name": "import",
+                    "aliases": ["导入"],
+                    "help": "查看 Web 导入入口和支持格式；聊天端不接收文件路径",
+                    "usage": "/pendo import",
+                    "examples": ["/pendo import"],
+                    "invalid_examples": ["/pendo import local-file.zip"]
+                },
+                {
+                    "name": "settings",
+                    "aliases": ["setting", "config", "设置"],
+                    "help": "查看和修改用户设置",
+                    "usage": "/pendo settings [view|reminder|timezone|quiet_hours|daily_report|daily_briefing|diary_remind|ai_consent] [value]",
+                    "examples": ["/pendo settings"],
+                    "invalid_examples": ["/pendo settings unknown-key value"],
+                    "subcommands": [
+                        {
+                            "name": "view",
+                            "aliases": ["show"],
+                            "help": "查看当前用户设置",
+                            "usage": "/pendo settings view",
+                            "examples": ["/pendo settings view"],
+                            "invalid_examples": ["/pendo settings view extra"]
+                        },
+                        {
+                            "name": "reminder",
+                            "help": "开关事件和待办提醒",
+                            "usage": "/pendo settings reminder <on|off>",
+                            "examples": ["/pendo settings reminder on"],
+                            "invalid_examples": ["/pendo settings reminder maybe"]
+                        },
+                        {
+                            "name": "timezone",
+                            "help": "设置 IANA 时区",
+                            "usage": "/pendo settings timezone <IANA时区>",
+                            "examples": ["/pendo settings timezone Asia/Shanghai"],
+                            "invalid_examples": ["/pendo settings timezone Mars/Base"]
+                        },
+                        {
+                            "name": "quiet_hours",
+                            "help": "设置静默时段",
+                            "usage": "/pendo settings quiet_hours <HH:MM-HH:MM>",
+                            "examples": ["/pendo settings quiet_hours 23:00-07:00"],
+                            "invalid_examples": ["/pendo settings quiet_hours 25:00-07:00"]
+                        },
+                        {
+                            "name": "daily_report",
+                            "help": "设置每日简报时间",
+                            "usage": "/pendo settings daily_report <HH:MM>",
+                            "examples": ["/pendo settings daily_report 08:00"],
+                            "invalid_examples": ["/pendo settings daily_report 28:00"]
+                        },
+                        {
+                            "name": "daily_briefing",
+                            "help": "开关每日简报",
+                            "usage": "/pendo settings daily_briefing <on|off>",
+                            "examples": ["/pendo settings daily_briefing on"],
+                            "invalid_examples": ["/pendo settings daily_briefing maybe"]
+                        },
+                        {
+                            "name": "diary_remind",
+                            "help": "设置每日写日记提醒时间",
+                            "usage": "/pendo settings diary_remind <HH:MM>",
+                            "examples": ["/pendo settings diary_remind 22:30"],
+                            "invalid_examples": ["/pendo settings diary_remind tonight"]
+                        },
+                        {
+                            "name": "ai_consent",
+                            "aliases": ["ai_privacy"],
+                            "help": "控制日记正文是否可发送给配置的第三方 AI 服务",
+                            "usage": "/pendo settings ai_consent <on|off>",
+                            "examples": ["/pendo settings ai_consent off"],
+                            "invalid_examples": ["/pendo settings ai_consent maybe"]
+                        }
+                    ]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["h", "帮助", "?"],
+                    "help": "显示总览或指定模块的详细帮助",
+                    "usage": "/pendo help [command]",
+                    "examples": ["/pendo help event"],
+                    "invalid_examples": ["/pendo help unknown-command"]
+                },
+                {
+                    "name": "web",
+                    "aliases": ["webui", "网页"],
+                    "help": "管理 Pendo Web UI 并生成登录令牌",
+                    "usage": "/pendo web <token|widget-token|widget-revoke|start|stop|status>",
+                    "examples": ["/pendo web"],
+                    "invalid_examples": ["/pendo web unknown-command"],
+                    "subcommands": [
+                        {
+                            "name": "token",
+                            "help": "生成一次性 Web 登录链接",
+                            "usage": "/pendo web token",
+                            "examples": ["/pendo web token"],
+                            "invalid_examples": ["/pendo web token extra"]
+                        },
+                        {
+                            "name": "widget-token",
+                            "aliases": ["widget_token"],
+                            "help": "生成桌面组件访问令牌",
+                            "usage": "/pendo web widget-token",
+                            "examples": ["/pendo web widget-token"],
+                            "invalid_examples": ["/pendo web widget-token extra"]
+                        },
+                        {
+                            "name": "widget-revoke",
+                            "aliases": ["widget_revoke"],
+                            "help": "吊销自己尚未过期的全部桌面组件令牌",
+                            "usage": "/pendo web widget-revoke",
+                            "examples": ["/pendo web widget-revoke"],
+                            "invalid_examples": ["/pendo web widget-revoke extra"]
+                        },
+                        {
+                            "name": "start",
+                            "help": "启动 Web UI 服务",
+                            "usage": "/pendo web start",
+                            "examples": ["/pendo web start"],
+                            "invalid_examples": ["/pendo web start extra"]
+                        },
+                        {
+                            "name": "stop",
+                            "help": "停止 Web UI 服务",
+                            "usage": "/pendo web stop",
+                            "examples": ["/pendo web stop"],
+                            "invalid_examples": ["/pendo web stop extra"]
+                        },
+                        {
+                            "name": "status",
+                            "help": "查看 Web UI 服务状态",
+                            "usage": "/pendo web status",
+                            "examples": ["/pendo web status"],
+                            "invalid_examples": ["/pendo web status extra"]
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "日程",
+            "triggers": ["日程"],
+            "help": "日程快捷入口，规范命令目录见 /pendo event",
+            "contexts": ["private"],
+            "usage": "/日程 <subcommand> [args...]",
+            "examples": ["/日程 list today"],
+            "invalid_examples": ["/日程 unknown-command"]
+        },
+        {
+            "name": "待办",
+            "triggers": ["待办"],
+            "help": "待办快捷入口，规范命令目录见 /pendo todo",
+            "contexts": ["private"],
+            "usage": "/待办 <subcommand> [args...]",
+            "examples": ["/待办 list open"],
+            "invalid_examples": ["/待办 unknown-command two-words"]
+        },
+        {
+            "name": "日记",
+            "triggers": ["日记"],
+            "help": "日记快捷入口，规范命令目录见 /pendo diary",
+            "contexts": ["private"],
+            "usage": "/日记 <subcommand> [args...]",
+            "examples": ["/日记 list month"],
+            "invalid_examples": ["/日记 unknown-command"]
         }
     ],
-    "dependencies": [],
+    "dependencies": [
+        {
+            "name": "dateutil",
+            "required": true,
+            "description": "Pendo 日期和自然语言时间解析运行时"
+        },
+        {
+            "name": "fastapi",
+            "required": true,
+            "description": "默认启用的 Pendo Web API 框架"
+        },
+        {
+            "name": "uvicorn",
+            "required": true,
+            "description": "默认启用的 Pendo Web 服务运行时"
+        },
+        {
+            "name": "jwt",
+            "required": true,
+            "description": "Pendo Web 登录令牌签发与校验"
+        },
+        {
+            "name": "pydantic",
+            "required": true,
+            "description": "Pendo Web API 请求模型和严格校验"
+        },
+        {
+            "name": "starlette",
+            "required": true,
+            "description": "Pendo Web 响应、中间件与静态文件运行时"
+        }
+    ],
     "entry": "main.py",
     "schedule": [
         {
@@ -25,7 +589,7 @@
             "cron": {
                 "minute": "*"
             },
-            "description": "每分钟检查提醒（事件/待办提醒按分钟级触发）"
+            "description": "每分钟检查日程和待办提醒"
         },
         {
             "id": "pendo_daily_briefing",
@@ -33,7 +597,7 @@
             "cron": {
                 "minute": "*"
             },
-            "description": "每日简报 - 用户可自定义本地时间，因此按分钟检查"
+            "description": "按分钟检查用户本地每日简报时间"
         },
         {
             "id": "pendo_diary_reminder",
@@ -41,7 +605,7 @@
             "cron": {
                 "minute": "*"
             },
-            "description": "日记提醒 - 用户可自定义本地时间，因此按分钟检查"
+            "description": "按分钟检查用户本地日记提醒时间"
         },
         {
             "id": "pendo_migrate_todos",
@@ -50,7 +614,7 @@
                 "hour": 0,
                 "minute": 5
             },
-            "description": "待办迁移 - 每天00:05执行"
+            "description": "每天 00:05 顺延昨日仍未完成的计划待办"
         },
         {
             "id": "pendo_prune_operation_logs",
@@ -59,7 +623,7 @@
                 "hour": 0,
                 "minute": 15
             },
-            "description": "操作日志保留与撤销快照清理 - 每天00:15执行"
+            "description": "每天 00:15 清理过期日志和已越过撤销窗口的快照"
         },
         {
             "id": "pendo_weekly_finance_summary",
@@ -69,7 +633,7 @@
                 "hour": 21,
                 "minute": 0
             },
-            "description": "每周财务总结 - 每周日 21:00 执行"
+            "description": "每周日 21:00 生成财务总结"
         },
         {
             "id": "pendo_month_end_finance_summary",
@@ -79,7 +643,7 @@
                 "hour": 21,
                 "minute": 0
             },
-            "description": "月底财务总结 - 每月最后一天 21:00 执行"
+            "description": "每月最后一天 21:00 生成财务总结"
         },
         {
             "id": "pendo_cleanup_demo_data",
@@ -88,7 +652,7 @@
                 "hour": "*/6",
                 "minute": 15
             },
-            "description": "定期清理过期的 Pendo Web demo 数据 - 每 6 小时执行一次"
+            "description": "每 6 小时清理过期的 Pendo Web Demo 数据"
         }
     ]
 }

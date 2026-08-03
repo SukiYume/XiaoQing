@@ -1,27 +1,104 @@
 import { api, logout } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 import { navigate } from '../router.js';
+import { errorMessage, isRecord, nonEmptyTextValue as textValue } from '../utils/format.js';
+import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
 
 const CSS_ID = 'pendo-settings-redesign-styles';
+const DEFAULT_SETTINGS = Object.freeze({
+    timezone: 'Asia/Shanghai',
+    quiet_hours_start: '23:00',
+    quiet_hours_end: '07:00',
+    daily_report_time: '08:00',
+    diary_remind_time: '21:30',
+    default_category: '未分类',
+    settings_json: Object.freeze({
+        reminder_enabled: true,
+        daily_briefing_enabled: true,
+    }),
+});
 
 let _container = null;
 let _settings = null;
 let _saving = false;
+let _loggingOut = false;
+let _lifecycleVersion = 0;
+
+// 数据边界：只接收可解释的后端值，并为旧数据补齐稳定默认值。
+function booleanValue(value, fallback) {
+    if (typeof value === 'boolean') return value;
+    if (value === 1 || value === '1') return true;
+    if (value === 0 || value === '0') return false;
+    if (typeof value !== 'string') return fallback;
+
+    const normalized = value.trim().toLowerCase();
+    if (['true', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', 'no', 'off'].includes(normalized)) return false;
+    return fallback;
+}
 
 function normalizeToggleSettings(settingsJson) {
-    const raw = settingsJson && typeof settingsJson === 'object' ? settingsJson : {};
+    const raw = isRecord(settingsJson) ? settingsJson : {};
+    const active = { ...raw };
+    delete active.privacy_mode;
     return {
-        ...raw,
-        reminder_enabled: raw.reminder_enabled !== undefined ? Boolean(raw.reminder_enabled) : true,
-        daily_briefing_enabled: raw.daily_briefing_enabled !== undefined ? Boolean(raw.daily_briefing_enabled) : true,
-        privacy_mode: raw.privacy_mode !== undefined ? Boolean(raw.privacy_mode) : true,
+        ...active,
+        reminder_enabled: booleanValue(raw.reminder_enabled, DEFAULT_SETTINGS.settings_json.reminder_enabled),
+        daily_briefing_enabled: booleanValue(
+            raw.daily_briefing_enabled,
+            DEFAULT_SETTINGS.settings_json.daily_briefing_enabled,
+        ),
     };
 }
 
+function normalizeSettings(value) {
+    const raw = isRecord(value) ? value : {};
+    return {
+        ...raw,
+        timezone: textValue(raw.timezone, DEFAULT_SETTINGS.timezone),
+        quiet_hours_start: textValue(raw.quiet_hours_start, DEFAULT_SETTINGS.quiet_hours_start),
+        quiet_hours_end: textValue(raw.quiet_hours_end, DEFAULT_SETTINGS.quiet_hours_end),
+        daily_report_time: textValue(raw.daily_report_time, DEFAULT_SETTINGS.daily_report_time),
+        diary_remind_time: textValue(raw.diary_remind_time, DEFAULT_SETTINGS.diary_remind_time),
+        default_category: textValue(raw.default_category, DEFAULT_SETTINGS.default_category),
+        settings_json: normalizeToggleSettings(raw.settings_json),
+    };
+}
+
+function mergeSavedSettings(responseData, payload) {
+    const current = normalizeSettings(_settings);
+    const optimistic = normalizeSettings({
+        ...current,
+        ...payload,
+        settings_json: {
+            ...current.settings_json,
+            ...payload.settings_json,
+        },
+    });
+    if (!isRecord(responseData)) return optimistic;
+
+    return normalizeSettings({
+        ...optimistic,
+        ...responseData,
+        settings_json: {
+            ...optimistic.settings_json,
+            ...(isRecord(responseData.settings_json) ? responseData.settings_json : {}),
+        },
+    });
+}
+
+function isCurrentLifecycle(container, version) {
+    return _container === container && _lifecycleVersion === version;
+}
+
+// 页面样式按视觉区域排列，开关保留原生焦点能力。
 function ensureStyles() {
-    injectStyles(CSS_ID, `
+    injectStyles(
+        CSS_ID,
+        `
         ${pageShellCss('settings-shell', { compactPadding: '20px 16px 30px', compactBreakpoint: BREAKPOINTS.MOBILE })}
+
+        /* 页面骨架与头部 */
         .settings-stack { display: flex; flex-direction: column; gap: 18px; }
         .settings-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -40,6 +117,8 @@ function ensureStyles() {
             display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px;
             background: rgba(14,165,233,0.08); color: #0369a1; font-size: 12px; font-weight: 700;
         }
+
+        /* 摘要与内容布局 */
         .settings-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
         .settings-summary-card, .settings-panel {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
@@ -53,11 +132,12 @@ function ensureStyles() {
         }
         .settings-summary-meta { margin-top: 8px; font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; word-break: break-word; }
         .settings-layout { display: grid; grid-template-columns: minmax(0, 1.06fr) minmax(280px, 0.94fr); gap: 16px; }
-        .settings-main-stack { display: flex; flex-direction: column; gap: 16px; }
-        .settings-side-stack { display: flex; flex-direction: column; gap: 16px; }
+        .settings-main-stack, .settings-side-stack { display: flex; flex-direction: column; gap: 16px; }
         .settings-panel { padding: 18px 20px 20px; }
         .settings-panel h3 { margin: 0; font-size: 18px; font-weight: 780; color: var(--color-text); letter-spacing: -0.02em; }
         .settings-panel p { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); line-height: 1.7; }
+
+        /* 表单与功能开关 */
         .settings-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
         .settings-field { display: flex; flex-direction: column; gap: 6px; }
         .settings-field label { font-size: 12px; font-weight: 800; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -74,8 +154,11 @@ function ensureStyles() {
         }
         .settings-toggle-title { font-size: 14px; font-weight: 760; color: var(--color-text); }
         .settings-toggle-desc { margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--color-text-secondary); }
-        .settings-switch { position: relative; width: 46px; height: 28px; }
-        .settings-switch input { opacity: 0; width: 0; height: 0; }
+        .settings-switch { position: relative; width: 46px; height: 28px; cursor: pointer; }
+        .settings-switch input {
+            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+        }
         .settings-slider {
             position: absolute; inset: 0; border-radius: 999px; background: rgba(203,213,225,0.9); cursor: pointer; transition: .2s ease;
         }
@@ -83,8 +166,11 @@ function ensureStyles() {
             content: ''; position: absolute; width: 22px; height: 22px; left: 3px; top: 3px; border-radius: 999px;
             background: #fff; box-shadow: 0 1px 3px rgba(15,23,42,0.18); transition: .2s ease;
         }
+        .settings-switch input:focus-visible + .settings-slider { outline: 3px solid rgba(14,165,233,0.34); outline-offset: 3px; }
         .settings-switch input:checked + .settings-slider { background: #0ea5e9; }
         .settings-switch input:checked + .settings-slider::before { transform: translateX(18px); }
+
+        /* 迁移、登录与保存区域 */
         .settings-callout-card {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center;
             margin-top: 16px; padding: 16px; border-radius: 20px;
@@ -93,88 +179,89 @@ function ensureStyles() {
         .settings-callout-copy { min-width: 0; }
         .settings-callout-title { font-size: 15px; font-weight: 780; color: #0f172a; }
         .settings-callout-desc { margin-top: 6px; font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); }
-        .settings-info-block {
-            font-size: 13px; line-height: 1.7; color: var(--color-text-secondary);
-        }
+        .settings-info-block { font-size: 13px; line-height: 1.7; color: var(--color-text-secondary); }
         .settings-info-block code {
             font-family: monospace; background: rgba(14,165,233,0.10); color: #0369a1; border-radius: 6px; padding: 2px 6px;
         }
         .settings-actions { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 18px; }
         .settings-save-panel {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            align-items: center;
-            gap: 16px;
-            padding: 16px 18px;
+            display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+            gap: 16px; padding: 16px 18px;
         }
         .settings-save-panel h3 { font-size: 16px; }
         .settings-save-panel p { margin-top: 4px; }
-        .settings-save-actions {
-            justify-content: flex-end;
-            margin-top: 0;
-            min-width: min(360px, 100%);
-        }
+        .settings-save-actions { justify-content: flex-end; margin-top: 0; min-width: min(360px, 100%); }
         .settings-save-actions .settings-status { text-align: right; }
-        .settings-save-actions .btn {
-            flex: 0 0 auto;
-            min-width: 112px;
-        }
+        .settings-save-actions .btn { flex: 0 0 auto; min-width: 112px; }
         .settings-status { font-size: 12px; color: var(--color-text-secondary); }
         .settings-danger { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
         .settings-danger .btn { align-self: flex-start; }
-        .settings-transfer-card {
-            grid-template-columns: minmax(0, 1fr) auto;
-        }
+        .settings-transfer-card { grid-template-columns: minmax(0, 1fr) auto; }
         .settings-transfer-btn {
-            background: #fff;
-            border-color: rgba(191,219,254,0.92);
-            box-shadow: 0 8px 18px rgba(148,163,184,0.12);
+            background: #fff; border-color: rgba(191,219,254,0.92); box-shadow: 0 8px 18px rgba(148,163,184,0.12);
             transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease;
         }
         .settings-transfer-btn:hover {
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,255,0.96));
-            border-color: rgba(96,165,250,0.78);
-            box-shadow: 0 12px 24px rgba(59,130,246,0.12);
-            transform: translateY(-1px);
+            border-color: rgba(96,165,250,0.78); box-shadow: 0 12px 24px rgba(59,130,246,0.12); transform: translateY(-1px);
         }
-        ${mediaMax(BREAKPOINTS.XL, `
+
+        /* 响应式收敛 */
+        ${mediaMax(
+            BREAKPOINTS.XL,
+            `
             .settings-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .settings-layout { grid-template-columns: 1fr; }
-        `)}
-        ${mediaMax(BREAKPOINTS.MOBILE, `
+        `,
+        )}
+        ${mediaMax(
+            BREAKPOINTS.MOBILE,
+            `
             .settings-hero { grid-template-columns: 1fr; padding: 22px 20px; }
-            .settings-summary-grid { grid-template-columns: 1fr; }
-            .settings-form-grid { grid-template-columns: 1fr; }
+            .settings-summary-grid, .settings-form-grid { grid-template-columns: 1fr; }
             .settings-actions { flex-direction: column; align-items: stretch; }
             .settings-save-panel { grid-template-columns: 1fr; }
             .settings-save-actions { min-width: 0; }
             .settings-save-actions .settings-status { text-align: left; }
             .settings-callout-card { grid-template-columns: 1fr; }
-        `)}
-    `);
+        `,
+        )}
+    `,
+    );
 }
 
-function currentSettings() {
-    return _settings || {
-        timezone: 'Asia/Shanghai',
-        quiet_hours_start: '23:00',
-        quiet_hours_end: '07:00',
-        daily_report_time: '08:00',
-        diary_remind_time: '21:30',
-        default_category: '未分类',
-        settings_json: normalizeToggleSettings({}),
-    };
+// 渲染函数只消费已归一化状态，所有插值都经过转义。
+function toggleRow(id, title, description, checked) {
+    const safeId = escapeHtml(id);
+    const safeTitle = escapeHtml(title);
+    return `
+        <div class="settings-toggle-row">
+            <div>
+                <div class="settings-toggle-title">${safeTitle}</div>
+                <div class="settings-toggle-desc">${escapeHtml(description)}</div>
+            </div>
+            <label class="settings-switch">
+                <input type="checkbox" id="${safeId}" aria-label="${safeTitle}" ${checked ? 'checked' : ''}>
+                <span class="settings-slider" aria-hidden="true"></span>
+            </label>
+        </div>
+    `;
 }
 
 function renderPage() {
     if (!_container) return;
     ensureStyles();
-    if (!_settings && _saving === false) {
-        _container.innerHTML = '<div class="settings-shell"><div class="settings-panel"><h3>正在加载设置...</h3></div></div>';
+    if (!_settings) {
+        _container.innerHTML = `
+            <div class="settings-shell" aria-busy="true">
+                <div class="settings-panel" role="status" aria-live="polite"><h3>正在加载设置...</h3></div>
+            </div>
+        `;
         return;
     }
-    const settings = currentSettings();
-    const toggles = normalizeToggleSettings(settings.settings_json);
+
+    const settings = normalizeSettings(_settings);
+    const toggles = settings.settings_json;
     _container.innerHTML = `
         <div class="settings-shell">
             <div class="settings-stack">
@@ -185,7 +272,6 @@ function renderPage() {
                         <div class="settings-chip-row settings-hero-tags">
                             <span class="settings-chip">${escapeHtml(settings.timezone)}</span>
                             <span class="settings-chip">${escapeHtml(settings.quiet_hours_start)} - ${escapeHtml(settings.quiet_hours_end)}</span>
-                            <span class="settings-chip">${toggles.privacy_mode ? '隐私模式开启' : '隐私模式关闭'}</span>
                         </div>
                     </div>
                     <div class="settings-chip-row">
@@ -205,7 +291,7 @@ function renderPage() {
                     <div class="settings-main-stack">
                         <div class="settings-panel">
                             <h3>时间与默认项</h3>
-                            <p>先把时区和关键时间窗口定准，后续提醒、日报和 diary 逻辑才会按你的日常节奏工作。</p>
+                            <p>先把时区和关键时间窗口定准，后续提醒、日报和日记逻辑才会按你的日常节奏工作。</p>
                             <div class="settings-form-grid">
                                 <div class="settings-field full">
                                     <label for="setting-timezone">时区</label>
@@ -242,7 +328,7 @@ function renderPage() {
                                     <div class="settings-callout-title">打开数据迁移页</div>
                                     <div class="settings-callout-desc">导出正式 bundle 备份，或从 bundle 预检后按类别导入历史数据。</div>
                                 </div>
-                                <button class="btn btn-secondary settings-transfer-btn" id="btn-open-transfer">打开页面</button>
+                                <button type="button" class="btn btn-secondary settings-transfer-btn" id="btn-open-transfer">打开页面</button>
                             </div>
                         </section>
                     </div>
@@ -254,7 +340,6 @@ function renderPage() {
                             <div class="settings-toggle-list">
                                 ${toggleRow('toggle-reminder-enabled', '提醒通知', '控制事件提醒与待办提醒是否整体启用。', toggles.reminder_enabled)}
                                 ${toggleRow('toggle-daily-report-enabled', '每日简报', '决定是否按配置时间生成每日简报。', toggles.daily_briefing_enabled)}
-                                ${toggleRow('toggle-privacy-mode', '隐私模式', '减少不必要的暴露信息，更适合个人环境。', toggles.privacy_mode)}
                             </div>
                         </section>
 
@@ -268,7 +353,7 @@ function renderPage() {
                                 </div>
                             </div>
                             <div class="settings-danger">
-                                <button class="btn btn-secondary" id="btn-logout">退出登录</button>
+                                <button type="button" class="btn btn-secondary" id="btn-logout" ${_loggingOut ? 'disabled aria-busy="true"' : ''}>${_loggingOut ? '正在退出...' : '退出登录'}</button>
                             </div>
                         </section>
                     </div>
@@ -280,8 +365,8 @@ function renderPage() {
                         <p>修改后统一写入当前设置。</p>
                     </div>
                     <div class="settings-actions settings-save-actions">
-                        <div class="settings-status">${_saving ? '正在保存设置...' : '保存后会立即返回最新配置。'}</div>
-                        <button class="btn btn-primary" id="btn-save-settings" ${_saving ? 'disabled' : ''}>${_saving ? '保存中...' : '保存设置'}</button>
+                        <div class="settings-status" role="status" aria-live="polite">${_saving ? '正在保存设置...' : '保存后会立即返回最新配置。'}</div>
+                        <button type="button" class="btn btn-primary" id="btn-save-settings" ${_saving ? 'disabled aria-busy="true"' : ''}>${_saving ? '保存中...' : '保存设置'}</button>
                     </div>
                 </section>
             </div>
@@ -290,97 +375,125 @@ function renderPage() {
     attachListeners();
 }
 
-function toggleRow(id, title, desc, checked) {
-    return `
-        <div class="settings-toggle-row">
-            <div>
-                <div class="settings-toggle-title">${title}</div>
-                <div class="settings-toggle-desc">${desc}</div>
-            </div>
-            <label class="settings-switch">
-                <input type="checkbox" id="${id}" aria-label="${escapeHtml(title)}" ${checked ? 'checked' : ''}>
-                <span class="settings-slider"></span>
-            </label>
-        </div>
-    `;
-}
+// 表单读取先于重渲染；缺失控件回退到当前值，避免意外清空设置。
+function collectFormData(container = _container) {
+    if (!container || typeof container.querySelector !== 'function') {
+        throw new TypeError('设置页面尚未挂载');
+    }
 
-function collectFormData() {
-    const get = (id) => _container.querySelector(`#${id}`)?.value.trim() || '';
-    const checked = (id) => Boolean(_container.querySelector(`#${id}`)?.checked);
+    const current = normalizeSettings(_settings);
+    const custom = normalizeToggleSettings(current.settings_json);
+    const readText = (id, fallback) => textValue(container.querySelector(`#${id}`)?.value, fallback);
+    const readChecked = (id, fallback) => {
+        const checked = container.querySelector(`#${id}`)?.checked;
+        return typeof checked === 'boolean' ? checked : fallback;
+    };
+
     return {
-        timezone: get('setting-timezone') || null,
-        quiet_hours_start: get('setting-quiet-start') || null,
-        quiet_hours_end: get('setting-quiet-end') || null,
-        daily_report_time: get('setting-daily-report-time') || null,
-        diary_remind_time: get('setting-diary-remind-time') || null,
-        default_category: get('setting-default-category') || null,
+        timezone: readText('setting-timezone', current.timezone),
+        quiet_hours_start: readText('setting-quiet-start', current.quiet_hours_start),
+        quiet_hours_end: readText('setting-quiet-end', current.quiet_hours_end),
+        daily_report_time: readText('setting-daily-report-time', current.daily_report_time),
+        diary_remind_time: readText('setting-diary-remind-time', current.diary_remind_time),
+        default_category: readText('setting-default-category', DEFAULT_SETTINGS.default_category),
         settings_json: {
-            reminder_enabled: checked('toggle-reminder-enabled'),
-            daily_briefing_enabled: checked('toggle-daily-report-enabled'),
-            privacy_mode: checked('toggle-privacy-mode'),
+            ...custom,
+            reminder_enabled: readChecked('toggle-reminder-enabled', custom.reminder_enabled),
+            daily_briefing_enabled: readChecked('toggle-daily-report-enabled', custom.daily_briefing_enabled),
         },
     };
 }
 
+// 用户动作均带重复提交和生命周期保护，迟到响应不能覆盖新页面。
 async function handleSave() {
-    const payload = collectFormData();
+    if (_saving || !_container || !_settings) return;
+
+    const container = _container;
+    const version = _lifecycleVersion;
+    const payload = collectFormData(container);
     _saving = true;
     renderPage();
     try {
-        const res = await api.put('/settings', payload);
-        _settings = res?.data || payload;
+        const response = await api.put('/settings', payload);
+        if (!isCurrentLifecycle(container, version)) return;
+        _settings = mergeSavedSettings(response?.data, payload);
         showToast('设置已更新', 'success');
-    } catch (err) {
-        showToast(`保存失败：${err.message}`, 'error');
+    } catch (error) {
+        if (isCurrentLifecycle(container, version)) {
+            showToast(`保存失败：${errorMessage(error, '未知错误')}`, 'error');
+        }
     } finally {
-        _saving = false;
-        renderPage();
+        if (isCurrentLifecycle(container, version)) {
+            _saving = false;
+            renderPage();
+        }
     }
 }
 
 async function handleLogout() {
-    await logout();
-    window.location.reload();
-}
+    if (_loggingOut || !_container) return;
 
-function handleOpenTransfer() {
-    navigate('transfer');
+    const container = _container;
+    const version = _lifecycleVersion;
+    _loggingOut = true;
+    renderPage();
+    try {
+        await logout();
+        if (isCurrentLifecycle(container, version)) window.location.reload();
+    } catch (error) {
+        if (isCurrentLifecycle(container, version)) {
+            showToast(`退出失败：${errorMessage(error, '未知错误')}`, 'error');
+        }
+    } finally {
+        if (isCurrentLifecycle(container, version)) {
+            _loggingOut = false;
+            renderPage();
+        }
+    }
 }
 
 function attachListeners() {
     if (!_container) return;
-    const saveBtn = _container.querySelector('#btn-save-settings');
-    if (saveBtn) saveBtn.onclick = handleSave;
-    const logoutBtn = _container.querySelector('#btn-logout');
-    if (logoutBtn) logoutBtn.onclick = handleLogout;
-    const transferBtn = _container.querySelector('#btn-open-transfer');
-    if (transferBtn) transferBtn.onclick = handleOpenTransfer;
+    const saveButton = _container.querySelector('#btn-save-settings');
+    if (saveButton) saveButton.onclick = handleSave;
+    const logoutButton = _container.querySelector('#btn-logout');
+    if (logoutButton) logoutButton.onclick = handleLogout;
+    const transferButton = _container.querySelector('#btn-open-transfer');
+    if (transferButton) transferButton.onclick = () => navigate('transfer');
 }
 
-async function loadAndRender() {
-    if (!_container) return;
+async function loadAndRender(container, version) {
     try {
-        const res = await api.get('/settings');
-        _settings = res?.data || currentSettings();
-    } catch (err) {
-        _settings = currentSettings();
-        showToast(`加载设置失败：${err.message}`, 'error');
+        const response = await api.get('/settings');
+        if (!isCurrentLifecycle(container, version)) return;
+        _settings = normalizeSettings(response?.data);
+    } catch (error) {
+        if (!isCurrentLifecycle(container, version)) return;
+        _settings = normalizeSettings(null);
+        showToast(`加载设置失败：${errorMessage(error, '未知错误')}`, 'error');
     }
-    renderPage();
+    if (isCurrentLifecycle(container, version)) renderPage();
 }
 
-export function render(container) {
+// 路由生命周期：render 可等待首屏数据，destroy 使所有在途请求立即失效。
+export async function render(container) {
+    if (!container || typeof container.querySelector !== 'function') {
+        throw new TypeError('设置页需要有效的容器元素');
+    }
+
+    const version = ++_lifecycleVersion;
     _container = container;
     _settings = null;
     _saving = false;
+    _loggingOut = false;
     renderPage();
-    loadAndRender();
+    await loadAndRender(container, version);
 }
 
 export function destroy() {
+    _lifecycleVersion += 1;
     _container = null;
     _settings = null;
+    _saving = false;
+    _loggingOut = false;
 }
-
-export function onRouteEnter(_params) {}

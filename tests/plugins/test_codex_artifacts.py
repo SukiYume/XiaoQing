@@ -62,7 +62,7 @@ def _collect(
     )
 
 
-def test_collects_real_image_and_preserves_sequence_compatibility(tmp_path: Path) -> None:
+def test_collects_real_image_with_explicit_result_contract(tmp_path: Path) -> None:
     _, session_dir, artifact_dir, _ = _paths(tmp_path)
     source = artifact_dir / "chart.png"
     _save_png(source)
@@ -70,15 +70,12 @@ def test_collects_real_image_and_preserves_sequence_compatibility(tmp_path: Path
     result = _collect(tmp_path)
 
     assert isinstance(result, ArtifactCollectionResult)
-    assert len(result) == 1
-    assert list(result) == result.artifacts
-    assert result[0] == result.artifacts[0]
-    assert result[:] == result.artifacts
+    assert len(result.artifacts) == 1
     assert result.dropped_count == 0
     assert result.reasons == {}
     assert result.scan_truncated is False
-    assert result[0].path == "images/job-0001-01.png"
-    destination = Path(result[0].absolute_path)
+    assert result.artifacts[0].path == "images/job-0001-01.png"
+    destination = Path(result.artifacts[0].absolute_path)
     assert destination.is_relative_to(session_dir)
     with Image.open(destination) as copied:
         assert copied.format == "PNG"
@@ -99,7 +96,7 @@ def test_rejects_fake_truncated_and_suffix_mismatched_images(tmp_path: Path, kin
 
     result = _collect(tmp_path)
 
-    assert len(result) == 0
+    assert len(result.artifacts) == 0
     assert result.dropped_count == 1
     expected_reason = "format_mismatch" if kind == "wrong_suffix" else "invalid_image"
     assert result.reasons[expected_reason] == 1
@@ -114,7 +111,7 @@ def test_enforces_pixel_and_frame_limits(tmp_path: Path) -> None:
 
     pixel_result = _collect(pixel_base, limits=ArtifactLimits(max_pixels=399))
 
-    assert len(pixel_result) == 0
+    assert len(pixel_result.artifacts) == 0
     assert pixel_result.reasons["pixel_limit"] == 1
 
     frame_base = tmp_path / "frames"
@@ -123,7 +120,7 @@ def test_enforces_pixel_and_frame_limits(tmp_path: Path) -> None:
 
     frame_result = _collect(frame_base, limits=ArtifactLimits(max_frames=2))
 
-    assert len(frame_result) == 0
+    assert len(frame_result.artifacts) == 0
     assert frame_result.reasons["frame_limit"] == 1
 
 
@@ -138,7 +135,7 @@ def test_enforces_single_and_total_byte_limits(tmp_path: Path) -> None:
         limits=ArtifactLimits(max_single_bytes=single_source.stat().st_size - 1),
     )
 
-    assert len(single_result) == 0
+    assert len(single_result.artifacts) == 0
     assert single_result.reasons["single_bytes_limit"] == 1
 
     total_base = tmp_path / "total"
@@ -153,7 +150,7 @@ def test_enforces_single_and_total_byte_limits(tmp_path: Path) -> None:
         limits=ArtifactLimits(max_total_bytes=first.stat().st_size),
     )
 
-    assert len(total_result) == 1
+    assert len(total_result.artifacts) == 1
     assert total_result.dropped_count == 1
     assert total_result.reasons["total_bytes_limit"] == 1
 
@@ -165,7 +162,7 @@ def test_enforces_artifact_count_limit(tmp_path: Path) -> None:
 
     result = _collect(tmp_path, limits=ArtifactLimits(max_artifacts=2))
 
-    assert len(result) == 2
+    assert len(result.artifacts) == 2
     assert result.dropped_count == 2
     assert result.reasons["artifact_count_limit"] == 2
 
@@ -178,7 +175,7 @@ def test_scan_entry_and_depth_limits_are_bounded_and_reported(tmp_path: Path) ->
 
     entry_result = _collect(entry_base, limits=ArtifactLimits(scan_max_entries=1))
 
-    assert len(entry_result) <= 1
+    assert len(entry_result.artifacts) <= 1
     assert entry_result.scan_truncated is True
     assert entry_result.reasons["scan_max_entries"] == 1
 
@@ -188,7 +185,7 @@ def test_scan_entry_and_depth_limits_are_bounded_and_reported(tmp_path: Path) ->
 
     depth_result = _collect(depth_base, limits=ArtifactLimits(scan_max_depth=0))
 
-    assert len(depth_result) == 0
+    assert len(depth_result.artifacts) == 0
     assert depth_result.scan_truncated is True
     assert depth_result.reasons["scan_max_depth"] == 1
 
@@ -205,7 +202,7 @@ def test_rejects_symlinks_and_hardlinks(tmp_path: Path) -> None:
 
     symlink_result = _collect(symlink_base)
 
-    assert len(symlink_result) == 0
+    assert len(symlink_result.artifacts) == 0
     assert symlink_result.dropped_count == 1
     assert symlink_result.reasons["symlink"] == 1
 
@@ -220,7 +217,7 @@ def test_rejects_symlinks_and_hardlinks(tmp_path: Path) -> None:
 
     hardlink_result = _collect(hardlink_base)
 
-    assert len(hardlink_result) == 0
+    assert len(hardlink_result.artifacts) == 0
     assert hardlink_result.dropped_count == 1
     assert hardlink_result.reasons["hardlink"] == 1
 
@@ -239,7 +236,7 @@ def test_copy_failure_and_source_identity_failure_clean_random_temp_files(
     monkeypatch.setattr(artifact_module.os, "replace", fail_replace)
     replace_result = _collect(replace_base)
 
-    assert len(replace_result) == 0
+    assert len(replace_result.artifacts) == 0
     assert replace_result.reasons["copy_error"] == 1
     assert not list(replace_images.glob(".*.tmp"))
 
@@ -254,6 +251,34 @@ def test_copy_failure_and_source_identity_failure_clean_random_temp_files(
     monkeypatch.setattr(artifact_module, "_verify_source_unchanged", fail_identity)
     identity_result = _collect(identity_base)
 
-    assert len(identity_result) == 0
+    assert len(identity_result.artifacts) == 0
     assert identity_result.reasons["source_changed"] == 1
     assert not list(identity_images.glob(".*.tmp"))
+
+
+def test_archive_directory_must_stay_inside_session(tmp_path: Path) -> None:
+    cwd, session_dir, artifact_dir, _ = _paths(tmp_path)
+    _save_png(artifact_dir / "image.png")
+
+    with pytest.raises(ValueError, match="inside the session"):
+        collect_image_artifacts(
+            "",
+            cwd=cwd,
+            artifact_dir=artifact_dir,
+            session_dir=session_dir,
+            images_dir=tmp_path / "outside-images",
+            job_id=1,
+        )
+
+
+def test_non_string_explicit_reference_is_rejected_without_stringifying(
+    tmp_path: Path,
+) -> None:
+    result = _collect(
+        tmp_path,
+        referenced_paths=[123],  # type: ignore[list-item] - runtime boundary regression.
+    )
+
+    assert result.artifacts == []
+    assert result.dropped_count == 1
+    assert result.reasons == {"invalid_reference": 1}

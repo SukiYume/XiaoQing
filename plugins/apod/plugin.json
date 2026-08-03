@@ -11,7 +11,33 @@
                 "每日一天文图"
             ],
             "help": "NASA 每日天文图",
-            "admin_only": false
+            "admin_only": false,
+            "usage": "/apod",
+            "examples": ["/apod"],
+            "invalid_examples": ["/apod unknown"],
+            "subcommands": [
+                {
+                    "name": "help",
+                    "aliases": ["帮助"],
+                    "help": "显示 APOD 命令说明",
+                    "usage": "/apod help",
+                    "match": "exact",
+                    "examples": ["/apod help"],
+                    "invalid_examples": ["/apod help extra"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "bs4",
+            "required": true,
+            "description": "用于解析 APOD 页面元数据"
+        },
+        {
+            "name": "PIL",
+            "required": true,
+            "description": "用于验证和转换 APOD 图片"
         }
     ],
     "schedule": [

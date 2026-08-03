@@ -1,29 +1,27 @@
 """
-arXiv 数据获取模块
+arXiv 当日列表获取模块。
 
-提供从 arXiv 获取论文信息的功能，支持网页爬取和 API 两种方式。
+运行时只读取 astro-ph/new 网页；训练数据使用独立的数据准备脚本，避免两套抓取入口并存。
 """
 
 import logging
+import math
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping
+from datetime import datetime
+from typing import Any
 
-import feedparser
 import pandas as pd
 import requests
-import urllib3
 from bs4 import BeautifulSoup
 
 from core.bounded_http import (
     HTML_MIME_POLICY,
-    XML_MIME_POLICY,
     BodyLimits,
     BoundedHttpError,
     RedirectPolicy,
-    XmlLimits,
     requests_request_bounded,
-    validate_bounded_xml,
 )
 
 from .utils import load_plugin_config
@@ -31,25 +29,25 @@ from .utils import load_plugin_config
 logger = logging.getLogger(__name__)
 
 # 空结果的列定义（避免魔法字面量重复）
-_EMPTY_COLUMNS = ['arXiv ID', 'Title', 'Abstract']
+_EMPTY_COLUMNS = ["arXiv ID", "Title", "Abstract"]
+_ENGLISH_MONTHS = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
 _HTML_BODY_LIMITS = BodyLimits(
     max_wire_bytes=4 * 1024 * 1024,
     max_decoded_bytes=8 * 1024 * 1024,
-    max_decompression_ratio=100,
-)
-_ATOM_BODY_LIMITS = BodyLimits(
-    max_wire_bytes=8 * 1024 * 1024,
-    max_decoded_bytes=16 * 1024 * 1024,
-    max_decompression_ratio=100,
-)
-_ATOM_XML_LIMITS = XmlLimits(
-    max_bytes=_ATOM_BODY_LIMITS.max_decoded_bytes,
-    max_depth=64,
-    max_nodes=50_000,
-    max_attributes=100_000,
-    max_attribute_chars=2 * 1024 * 1024,
-    max_name_chars=512,
-    max_text_chars=12 * 1024 * 1024,
+    max_decompression_ratio=20,
 )
 _ARXIV_REDIRECT_POLICY = RedirectPolicy(
     max_hops=3,
@@ -59,7 +57,9 @@ _ARXIV_REDIRECT_POLICY = RedirectPolicy(
 )
 
 
-def _get_request_params(config: dict | None = None) -> tuple:
+def _get_request_params(
+    config: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, str] | None, bool, float]:
     """
     获取请求参数（代理、SSL验证、超时）
 
@@ -69,24 +69,44 @@ def _get_request_params(config: dict | None = None) -> tuple:
     if config is None:
         config = load_plugin_config()
     arxiv_config = config.get("arxiv", {})
+    if not isinstance(arxiv_config, Mapping):
+        raise ValueError("arxiv config must be a JSON object")
 
     # 代理配置：优先使用环境变量，其次使用配置文件
     proxy = os.getenv("ARXIV_PROXY") or arxiv_config.get("proxy")
+    if proxy is not None and (not isinstance(proxy, str) or not proxy.strip()):
+        raise ValueError("arxiv.proxy must be null or a non-empty string")
+    proxy = proxy.strip() if isinstance(proxy, str) else None
     proxies = {"http": proxy, "https": proxy} if proxy else None
 
     # SSL 验证：如果使用代理且配置允许，可以禁用
     use_ssl_verify = arxiv_config.get("use_ssl_verify", True)
+    if type(use_ssl_verify) is not bool:
+        raise ValueError("arxiv.use_ssl_verify must be a boolean")
     verify = True
     if proxies and not use_ssl_verify:
         verify = False
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        logger.warning(
+            "arXiv TLS certificate verification is disabled for the configured proxy; "
+            "use only with a trusted inspection proxy"
+        )
 
     timeout = arxiv_config.get("timeout", 30)
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(float(timeout))
+        or float(timeout) <= 0
+    ):
+        raise ValueError("arxiv.timeout must be a finite positive number")
 
-    return proxies, verify, timeout
+    return proxies, verify, float(timeout)
 
 
-def _fetch_arxiv_page(url: str | None = None, config: dict | None = None) -> BeautifulSoup | None:
+def _fetch_arxiv_page(
+    url: str | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> BeautifulSoup | None:
     """
     获取 arXiv 页面并解析为 BeautifulSoup 对象。
 
@@ -99,8 +119,14 @@ def _fetch_arxiv_page(url: str | None = None, config: dict | None = None) -> Bea
     """
     if config is None:
         config = load_plugin_config()
+    arxiv_config = config.get("arxiv", {})
+    if not isinstance(arxiv_config, Mapping):
+        raise ValueError("arxiv config must be a JSON object")
     if url is None:
-        url = config.get("arxiv", {}).get("url", "https://arxiv.org/list/astro-ph/new")
+        url = arxiv_config.get("url", "https://arxiv.org/list/astro-ph/new")
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("arxiv.url must be a non-empty string")
+    url = url.strip()
 
     proxies, verify, timeout = _get_request_params(config)
 
@@ -111,7 +137,7 @@ def _fetch_arxiv_page(url: str | None = None, config: dict | None = None) -> Bea
             limits=_HTML_BODY_LIMITS,
             mime_policy=HTML_MIME_POLICY,
             redirect_policy=_ARXIV_REDIRECT_POLICY,
-            headers={'User-Agent': 'Mozilla/5.0'},
+            headers={"User-Agent": "Mozilla/5.0"},
             request_kwargs={
                 "timeout": timeout,
                 "proxies": proxies,
@@ -125,7 +151,7 @@ def _fetch_arxiv_page(url: str | None = None, config: dict | None = None) -> Bea
         )
         return None
 
-    return BeautifulSoup(response.body, 'html.parser')
+    return BeautifulSoup(response.body, "html.parser")
 
 
 def get_today_arxiv(url: str | None = None) -> pd.DataFrame:
@@ -144,126 +170,52 @@ def get_today_arxiv(url: str | None = None) -> pd.DataFrame:
     if soup is None:
         return pd.DataFrame(columns=_EMPTY_COLUMNS)
 
-    dl_element = soup.find('dl')
+    dl_element = soup.find("dl")
     if not dl_element:
-        logger.error('No <dl> element found on the page.')
+        logger.error("No <dl> element found on the page.")
         return pd.DataFrame(columns=_EMPTY_COLUMNS)
 
     records = []
-    for dt in dl_element.find_all('dt'):
-        link = dt.find('a', href=re.compile(r'/abs/\d{4}\.\d{4,5}'))
+    for dt in dl_element.find_all("dt"):
+        link = dt.find("a", href=re.compile(r"/abs/\d{4}\.\d{4,5}"))
         if not link:
             continue
 
-        match = re.search(r'(\d{4}\.\d{4,5})', link['href'])
+        match = re.search(r"(\d{4}\.\d{4,5})", link["href"])
         if not match:
             continue
         arxiv_id = match.group(1)
 
-        dd = dt.find_next_sibling('dd')
+        dd = dt.find_next_sibling("dd")
         if not dd:
             continue
 
-        title_div = dd.find('div', class_='list-title')
+        title_div = dd.find("div", class_="list-title")
         if not title_div:
             continue
 
         title = title_div.get_text(strip=True)
-        title = re.sub(r'^Title:\s*', '', title)
-        title = re.sub(r'\s+', ' ', title).strip()
+        title = re.sub(r"^Title:\s*", "", title)
+        title = re.sub(r"\s+", " ", title).strip()
 
         # 提取摘要（在 <p class="mathjax"> 中）
-        abstract_p = dd.find('p', class_='mathjax')
-        abstract = ''
+        abstract_p = dd.find("p", class_="mathjax")
+        abstract = ""
         if abstract_p:
             abstract = abstract_p.get_text(strip=True)
-            abstract = re.sub(r'\s+', ' ', abstract).strip()
+            abstract = re.sub(r"\s+", " ", abstract).strip()
 
-        records.append({'arXiv ID': arxiv_id, 'Title': title, 'Abstract': abstract})
+        records.append({"arXiv ID": arxiv_id, "Title": title, "Abstract": abstract})
 
     if not records:
-        logger.warning('No articles found.')
+        logger.warning("No articles found.")
         return pd.DataFrame(columns=_EMPTY_COLUMNS)
 
     data = pd.DataFrame.from_records(records, columns=_EMPTY_COLUMNS)
-    logger.info(f'Found {len(data)} articles for today.')
+    logger.info("Found %d articles for today.", len(data))
 
     return data
 
-# 注意：此函数目前未被推理流程调用。若需启用，可在 config.json 中添加 "source": "api" 开关并在 arxiv_inference.py 中适配。
-def get_today_arxiv_api(days: int | None = None) -> pd.DataFrame:
-    """
-    从 arXiv API 获取最近几日的论文列表（含标题和摘要）
-
-    Args:
-        days: 查询最近多少天的论文，默认使用配置文件中的值（默认2天）
-
-    Returns:
-        包含 'arXiv ID', 'Title', 'Abstract' 列的 DataFrame
-    """
-    config = load_plugin_config()
-    if days is None:
-        days = config.get("arxiv", {}).get("api_days", 2)
-
-    proxies, verify, timeout = _get_request_params(config)
-
-    BASE_URL = 'https://export.arxiv.org/api/query'
-    HEADERS = {'User-Agent': 'arxiv-scraper/1.0 (SukiYume@users.noreply.github.com)'}
-
-    today = datetime.now(timezone.utc).date()
-    start_date = (today - timedelta(days=days)).strftime("%Y%m%d%H%M")
-    end_date = today.strftime("%Y%m%d%H%M")
-
-    search_query = f'astrophysics AND submittedDate:[{start_date} TO {end_date}]'
-    params = {
-        'search_query': search_query,
-        'max_results': 1000,
-        'sortBy': 'submittedDate',
-        'sortOrder': 'ascending'
-    }
-
-    try:
-        response = requests_request_bounded(
-            "GET",
-            BASE_URL,
-            limits=_ATOM_BODY_LIMITS,
-            mime_policy=XML_MIME_POLICY,
-            redirect_policy=_ARXIV_REDIRECT_POLICY,
-            headers=HEADERS,
-            request_kwargs={
-                "params": params,
-                "proxies": proxies,
-                "verify": verify,
-                "timeout": timeout,
-            },
-        )
-        xml_body = validate_bounded_xml(response, limits=_ATOM_XML_LIMITS)
-        feed = feedparser.parse(xml_body)
-        total_results = int(feed.feed.opensearch_totalresults)
-    except (requests.RequestException, BoundedHttpError, AttributeError, TypeError, ValueError) as err:
-        logger.error(
-            "Error fetching from API error_type=%s",
-            type(err).__name__,
-        )
-        return pd.DataFrame(columns=_EMPTY_COLUMNS)
-
-    logger.info(f"该时间段总共有 {total_results} 篇文章")
-
-    records = []
-    for entry in feed.entries:
-        arxiv_id = entry.id.split('/')[-1]
-        title = re.sub(r'\s+', ' ', entry.title.strip())
-        abstract = re.sub(r'\s+', ' ', entry.summary.strip())
-        records.append({
-            'arXiv ID': arxiv_id,
-            'Title': title,
-            'Abstract': abstract,
-        })
-
-    data = pd.DataFrame.from_records(records, columns=_EMPTY_COLUMNS)
-    logger.info(f'Found {len(data)} articles from API.')
-
-    return data
 
 def check_arxiv_update_date(url: str | None = None) -> str | None:
     """
@@ -283,20 +235,23 @@ def check_arxiv_update_date(url: str | None = None) -> str | None:
 
     # 查找包含日期信息的 h3 标签
     # 例如: "Showing new listings for Wednesday, 4 February 2026"
-    h3_elements = soup.find_all('h3')
+    h3_elements = soup.find_all("h3")
     for h3 in h3_elements:
         text = h3.get_text(strip=True)
-        if 'Showing new listings for' in text:
+        if "Showing new listings for" in text:
             # 提取日期部分，例如 "Wednesday, 4 February 2026"
-            match = re.search(r'Showing new listings for\s+\w+,\s+(\d+)\s+(\w+)\s+(\d{4})', text)
+            match = re.search(r"Showing new listings for\s+\w+,\s+(\d+)\s+(\w+)\s+(\d{4})", text)
             if match:
                 day, month_name, year = match.group(1), match.group(2), match.group(3)
                 try:
-                    date_obj = datetime.strptime(f"{day} {month_name} {year}", "%d %B %Y")
+                    month = _ENGLISH_MONTHS.get(month_name.casefold())
+                    if month is None:
+                        raise ValueError("unsupported arXiv month name")
+                    date_obj = datetime(int(year), month, int(day))
                     date_str = date_obj.strftime("%Y-%m-%d")
-                    logger.info(f'Found arXiv update date: {date_str}')
+                    logger.info("Found arXiv update date: %s", date_str)
                     return date_str
                 except ValueError:
                     pass  # 月份名无法解析，继续查找其他 h3
-    logger.warning('Could not find arXiv update date in page')
+    logger.warning("Could not find arXiv update date in page")
     return None

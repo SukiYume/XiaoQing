@@ -6,13 +6,55 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
+from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Generic, TypeVar
 
-from core.plugin_base import write_json
+from core.atomic_store import AtomicJsonStore, keyed_path_lock
+from core.plugin_base import load_json, write_json
 
 T = TypeVar("T")
+
+
+class LockedDirtyStateMixin:
+    """为带同步锁和 ``_dirty`` 标志的存储提供唯一的线程安全读取实现。"""
+
+    _lock: AbstractContextManager[Any]
+    _dirty: bool
+
+    def is_dirty(self) -> bool:
+        with self._lock:
+            return bool(self._dirty)
+
+
+def delete_json_artifacts(path: Path) -> None:
+    """删除一个原子 JSON 存储的主文件和备份文件。
+
+    重置会话属于数据清除操作；只删主文件会让旧内容继续留在 ``.bak`` 中，
+    甚至可能在后续恢复流程中重新出现。两个文件都尝试删除后再报告首个错误，避免
+    因主文件删除失败而跳过备份清理。
+    """
+    store = AtomicJsonStore(path)
+    first_error: OSError | None = None
+    with keyed_path_lock(path):
+        for candidate in (store.path, store.backup_path):
+            try:
+                candidate.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                if first_error is None:
+                    first_error = exc
+    if first_error is not None:
+        raise first_error
+
+
+def load_json_file(path: Path, default: Any = None) -> Any:
+    """通过 core 原子存储协议读取 JSON，并在主文件损坏时恢复备份。"""
+
+    return load_json(path, default=default)
 
 
 class StoreBase:
@@ -25,6 +67,9 @@ class StoreBase:
     def __init__(self) -> None:
         self._data_dir: Path | None = None
 
+    # 子类沿用原有存储接口，底层实现同时供实验工具复用。
+    _load_json = staticmethod(load_json_file)
+
     def bind(self, data_dir: Path) -> None:
         """
         绑定数据目录。
@@ -33,31 +78,6 @@ class StoreBase:
             data_dir: 数据目录路径
         """
         self._data_dir = data_dir
-
-    def _is_bound(self) -> bool:
-        """
-        检查是否已绑定数据目录。
-
-        Returns:
-            是否已绑定
-        """
-        return self._data_dir is not None
-
-    def _ensure_dir(self, *parts: str) -> Path | None:
-        """
-        确保目录存在，返回目录路径。
-
-        Args:
-            *parts: 目录的各个部分
-
-        Returns:
-            目录的完整路径，如果未绑定则返回 None
-        """
-        if not self._data_dir:
-            return None
-        path = self._data_dir.joinpath(*parts)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
 
     def _resolve_path(self, *parts: str) -> Path | None:
         """
@@ -72,24 +92,6 @@ class StoreBase:
         if not self._data_dir:
             return None
         return self._data_dir.joinpath(*parts)
-
-    def _load_json(self, path: Path, default: Any = None) -> Any:
-        """
-        安全地加载 JSON 文件。
-
-        Args:
-            path: 文件路径
-            default: 默认值
-
-        Returns:
-            JSON 内容，如果加载失败则返回默认值
-        """
-        if not path.exists():
-            return default
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return default
 
     def _load_json_from_path_parts(self, *parts: str, default: Any = None) -> Any:
         path = self._resolve_path(*parts)
@@ -122,3 +124,21 @@ class StoreBase:
         if not path:
             return False
         return self._save_json(path, data, ensure_parent=True)
+
+
+class AsyncKeyedStore(StoreBase, Generic[T], ABC):
+    """统一把按会话键读写的同步存储桥接到异步调用方。"""
+
+    @abstractmethod
+    def get(self, chat_id: str) -> T:
+        """同步读取一个会话状态。"""
+
+    @abstractmethod
+    def clear(self, chat_id: str) -> None:
+        """同步清除一个会话状态。"""
+
+    async def get_async(self, chat_id: str) -> T:
+        return await asyncio.to_thread(self.get, chat_id)
+
+    async def clear_async(self, chat_id: str) -> None:
+        await asyncio.to_thread(self.clear, chat_id)

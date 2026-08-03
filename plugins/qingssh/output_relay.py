@@ -1,21 +1,26 @@
-"""Bounded QQ projection and local archive handling for SSH command output."""
+"""把 SSH 完整输出排空到受控归档，并向 QQ 投影有界的首尾摘要。"""
 
 from __future__ import annotations
 
 import asyncio
 import math
 import os
+import threading
 import time
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
+
+from core.plugin_base import bounded_external_text
 
 _FINAL_RESERVE_CHARS = 512
 _ARCHIVE_MARKER = b"\n\n--- output exceeded archive budget; middle omitted ---\n\n"
+_ARCHIVE_WRITE_BATCH_BYTES = 256 * 1024
 
 
 def _integer_option(options: Mapping[str, Any], name: str, default: int) -> int:
@@ -46,7 +51,7 @@ def _float_option(options: Mapping[str, Any], name: str, default: float) -> floa
 
 @dataclass(frozen=True)
 class SSHOutputPolicy:
-    """Per-command transport policy; it never restricts the remote command itself."""
+    """单条命令的消息与归档预算，不限制远端命令本身。"""
 
     command_timeout_seconds: float = 30.0
     qq_max_actions: int = 6
@@ -62,14 +67,7 @@ class SSHOutputPolicy:
 
     @classmethod
     def from_context(cls, context: Any) -> SSHOutputPolicy:
-        config = getattr(context, "config", None)
-        options: Mapping[str, Any] = {}
-        if isinstance(config, Mapping):
-            plugins = config.get("plugins", {})
-            if isinstance(plugins, Mapping):
-                candidate = plugins.get("qingssh", {})
-                if isinstance(candidate, Mapping):
-                    options = candidate
+        options = context.get_settings_snapshot().plugin_config("qingssh")
         policy = cls(
             command_timeout_seconds=_float_option(
                 options,
@@ -142,13 +140,17 @@ class SSHOutputPolicy:
         if not 1024 * 1024 <= self.archive_max_bytes <= 1024 * 1024 * 1024:
             raise ValueError("archive_max_bytes must be between 1 MiB and 1 GiB")
         if not 64 * 1024 <= self.archive_tail_bytes <= self.archive_max_bytes // 2:
-            raise ValueError("archive_tail_bytes must be between 64 KiB and half the archive budget")
+            raise ValueError(
+                "archive_tail_bytes must be between 64 KiB and half the archive budget"
+            )
         if not 1 <= self.archive_retention_files <= 1000:
             raise ValueError("archive_retention_files must be between 1 and 1000")
 
 
 @dataclass(frozen=True)
 class SSHOutputSummary:
+    """命令输出结束后可安全记录的传输统计。"""
+
     total_chars: int
     total_bytes: int
     qq_truncated: bool
@@ -160,7 +162,7 @@ class SSHOutputSummary:
 
 
 class SSHOutputRelay:
-    """Drain SSH output quickly while sending a bounded, rate-limited QQ view."""
+    """快速排空 SSH 输出，同时按速率和总量限制发送 QQ 摘要。"""
 
     def __init__(
         self,
@@ -183,6 +185,7 @@ class SSHOutputRelay:
         self._tail_parts: deque[str] = deque()
         self._tail_chars = 0
         self._total_chars = 0
+        self._total_visible_chars = 0
         self._total_bytes = 0
         self._actions_attempted = 0
         self._text_chars_attempted = 0
@@ -196,15 +199,22 @@ class SSHOutputRelay:
         self._archive_file: BinaryIO | None = None
         self._archive_temp: Path | None = None
         self._archive_error: str | None = None
+        self._archive_started = False
+        self._created_output_dir = False
+        self._archive_pending: list[bytes] = []
+        self._archive_write_buffer = bytearray()
+        self._archive_io_lock = asyncio.Lock()
+        self._archive_thread_lock = threading.Lock()
         self._archive_head_bytes = policy.archive_max_bytes - policy.archive_tail_bytes
         self._archive_head_written = 0
         self._archive_tail_parts: deque[bytes] = deque()
         self._archive_tail_size = 0
-        self._open_archive()
 
-    def _open_archive(self) -> None:
+    def _open_archive(self, initial_payload: bytes = b"") -> None:
         try:
+            output_dir_existed = self._output_dir.exists()
             self._output_dir.mkdir(parents=True, exist_ok=True)
+            self._created_output_dir = not output_dir_existed
             path = self._output_dir / f".ssh-output-{uuid.uuid4().hex}.tmp"
             self._archive_file = path.open("xb")
             self._archive_temp = path
@@ -214,6 +224,41 @@ class SSHOutputRelay:
             self._archive_file = None
             self._archive_temp = None
             self._archive_error = type(exc).__name__
+
+        self._archive(initial_payload)
+
+    def _run_archive_operation(self, operation: Callable[..., Any], *args: Any) -> Any:
+        """串行化线程内归档操作，连取消后的后台线程也不能互相踩踏。"""
+
+        with self._archive_thread_lock:
+            return operation(*args)
+
+    async def _run_archive_io(self, operation: Callable[..., Any], *args: Any) -> Any:
+        return await asyncio.to_thread(self._run_archive_operation, operation, *args)
+
+    async def _record_archive_payload(self, payload: bytes) -> None:
+        """在事件循环中有界缓存，并批量把阻塞文件写入交给工作线程。"""
+
+        async with self._archive_io_lock:
+            if not self._archive_started:
+                self._archive_pending.append(payload)
+                if self._total_chars <= self.policy.qq_head_chars:
+                    return
+                self._archive_started = True
+                initial_payload = b"".join(self._archive_pending)
+                self._archive_pending.clear()
+                await self._run_archive_io(self._open_archive, initial_payload)
+                return
+
+            if not self._archive_write_buffer and len(payload) >= _ARCHIVE_WRITE_BATCH_BYTES:
+                batch = payload
+            else:
+                self._archive_write_buffer.extend(payload)
+                if len(self._archive_write_buffer) < _ARCHIVE_WRITE_BATCH_BYTES:
+                    return
+                batch = bytes(self._archive_write_buffer)
+                self._archive_write_buffer.clear()
+            await self._run_archive_io(self._archive, batch)
 
     @staticmethod
     def _safe_utf8_prefix(payload: bytes, limit: int) -> bytes:
@@ -248,7 +293,7 @@ class SSHOutputRelay:
                 prefix = self._safe_utf8_prefix(payload, remaining_head)
                 handle.write(prefix)
                 self._archive_head_written += len(prefix)
-                payload = payload[len(prefix):]
+                payload = payload[len(prefix) :]
             self._append_archive_tail(payload)
         except OSError as exc:
             self._archive_error = type(exc).__name__
@@ -278,7 +323,7 @@ class SSHOutputRelay:
             if not force and len(content) < self.policy.qq_max_message_chars:
                 break
             chunk = content[: self.policy.qq_max_message_chars]
-            content = content[len(chunk):]
+            content = content[len(chunk) :]
             self._queue.put_nowait(chunk)
             self._queued_head_actions += 1
         self._head_parts = [content] if content else []
@@ -286,45 +331,55 @@ class SSHOutputRelay:
     async def feed(self, text: Any) -> None:
         if self._closed:
             return
-        value = str(text or "")
+        value = "" if text is None else str(text)
         if not value:
             return
         encoded = value.encode("utf-8", errors="replace")
         self._total_chars += len(value)
         self._total_bytes += len(encoded)
-        self._archive(encoded)
-        self._append_tail(value)
+        await self._record_archive_payload(encoded)
+        visible = bounded_external_text(
+            value,
+            max_chars=max(1, len(value)),
+            max_bytes=max(1, len(encoded)),
+            suffix="",
+            strip=False,
+        )
+        self._total_visible_chars += len(visible)
+        self._append_tail(visible)
 
         remaining = self.policy.qq_head_chars - self._head_chars
         if remaining > 0:
-            kept = value[:remaining]
+            kept = visible[:remaining]
             self._head_parts.append(kept)
             self._head_chars += len(kept)
             self._enqueue_head(force=False)
 
     def _tail_without_head_overlap(self) -> str:
         tail = "".join(self._tail_parts)
-        overlap = max(0, self.policy.qq_head_chars + len(tail) - self._total_chars)
+        overlap = max(0, self.policy.qq_head_chars + len(tail) - self._total_visible_chars)
         return tail[overlap:]
 
     def _discard_archive(self) -> None:
         handle, self._archive_file = self._archive_file, None
         if handle is not None:
-            try:
+            # 清理路径不能用次生异常覆盖原始命令结果。
+            with suppress(OSError):
                 handle.close()
-            except OSError:
-                pass
         path, self._archive_temp = self._archive_temp, None
         if path is not None:
-            try:
+            with suppress(OSError):
                 path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        if self._created_output_dir:
+            with suppress(OSError):
+                self._output_dir.rmdir()
+            self._created_output_dir = False
 
     def _commit_archive(self) -> tuple[Path | None, bool]:
         handle = self._archive_file
         temp = self._archive_temp
         if handle is None or temp is None:
+            self._discard_archive()
             return None, False
         archive_truncated = self._total_bytes > self.policy.archive_max_bytes
         try:
@@ -338,28 +393,52 @@ class SSHOutputRelay:
             os.fsync(handle.fileno())
             handle.close()
             self._archive_file = None
-            archives = sorted(
-                (
-                    path
-                    for path in self._output_dir.glob("ssh-output-*.txt")
-                    if path.is_file() and not path.is_symlink()
-                ),
-                key=lambda path: (path.stat().st_mtime_ns, path.name),
-            )
+            archive_entries: list[tuple[int, str, Path]] = []
+            for path in self._output_dir.glob("ssh-output-*.txt"):
+                try:
+                    if path.is_file() and not path.is_symlink():
+                        archive_entries.append((path.stat().st_mtime_ns, path.name, path))
+                except OSError:
+                    continue
+            archives = [entry[2] for entry in sorted(archive_entries)]
             excess = len(archives) - self.policy.archive_retention_files + 1
             for stale in archives[: max(0, excess)]:
-                stale.unlink(missing_ok=True)
+                with suppress(OSError):
+                    stale.unlink(missing_ok=True)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             destination = self._output_dir / f"ssh-output-{stamp}-{uuid.uuid4().hex}.txt"
             os.replace(temp, destination)
             self._archive_temp = None
-            if os.name != "nt":
-                destination.chmod(0o600)
-            return destination.resolve(), archive_truncated
+            self._committed_archive = destination.resolve()
+            return self._committed_archive, archive_truncated
         except OSError as exc:
             self._archive_error = type(exc).__name__
             self._discard_archive()
             return None, False
+
+    async def _finish_archive(self, *, keep: bool) -> tuple[Path | None, bool]:
+        async with self._archive_io_lock:
+            if not keep:
+                self._archive_pending.clear()
+                self._archive_write_buffer.clear()
+                await self._run_archive_io(self._discard_archive)
+                return None, False
+
+            if self._archive_write_buffer:
+                batch = bytes(self._archive_write_buffer)
+                self._archive_write_buffer.clear()
+                await self._run_archive_io(self._archive, batch)
+            return cast(
+                tuple[Path | None, bool],
+                await self._run_archive_io(self._commit_archive),
+            )
+
+    def _abort_archive(self) -> None:
+        committed, self._committed_archive = self._committed_archive, None
+        if committed is not None:
+            with suppress(OSError):
+                committed.unlink(missing_ok=True)
+        self._discard_archive()
 
     async def _sender_loop(self) -> None:
         while True:
@@ -400,12 +479,12 @@ class SSHOutputRelay:
         archive_truncated: bool,
     ) -> str:
         lines = [status.strip()]
-        qq_truncated = self._total_chars > self.policy.qq_head_chars
+        qq_truncated = self._total_visible_chars > self.policy.qq_head_chars
         if qq_truncated:
             lines.append(f"⚠️ QQ 输出已截断（原始 {self._total_chars} 字符），以上为开头摘要。")
             if archive_path is not None:
                 label = "受控首尾归档" if archive_truncated else "完整输出"
-                lines.append(f"{label}：{archive_path}")
+                lines.append(f"{label}文件：{archive_path.name}（完整路径仅写入日志）")
             else:
                 reason = self._archive_error or "unavailable"
                 lines.append(f"完整输出归档失败（{reason}）")
@@ -424,14 +503,11 @@ class SSHOutputRelay:
             raise RuntimeError("SSH output relay is already closed")
         self._closed = True
         self._enqueue_head(force=True)
-        qq_truncated = self._total_chars > self.policy.qq_head_chars
+        qq_truncated = self._total_visible_chars > self.policy.qq_head_chars
         archive_path: Path | None = None
         archive_truncated = False
-        if qq_truncated:
-            archive_path, archive_truncated = self._commit_archive()
-            self._committed_archive = archive_path
-        else:
-            self._discard_archive()
+        archive_path, archive_truncated = await self._finish_archive(keep=qq_truncated)
+        self._committed_archive = archive_path
         final_message = self._final_message(
             status,
             archive_path=archive_path,
@@ -457,13 +533,10 @@ class SSHOutputRelay:
         if self._finished:
             return
         self._closed = True
-        self._discard_archive()
-        if self._committed_archive is not None:
-            try:
-                self._committed_archive.unlink(missing_ok=True)
-            except OSError:
-                pass
-            self._committed_archive = None
+        async with self._archive_io_lock:
+            self._archive_pending.clear()
+            self._archive_write_buffer.clear()
+            await self._run_archive_io(self._abort_archive)
         if not self._sender_task.done():
             self._sender_task.cancel()
         await asyncio.gather(self._sender_task, return_exceptions=True)

@@ -6,11 +6,514 @@
     "commands": [
         {
             "name": "astro",
-            "triggers": [
-                "astro"
-            ],
-            "help": "天文工具箱 | /astro <子命令> [参数]",
-            "admin_only": false
+            "triggers": ["astro"],
+            "help": "天文工具箱：时间、坐标、单位、红移、公式、天体和常数",
+            "admin_only": false,
+            "usage": "/astro <time|coord|convert|redshift|formula|obj|const> [参数]",
+            "examples": ["/astro time now", "/astro convert 3 Jy mJy"],
+            "invalid_examples": ["/astro unknown", "/astro convert 3 Jy"],
+            "subcommands": [
+                {
+                    "name": "time",
+                    "help": "转换 ISO、JD、MJD、Unix 时间，空参数表示当前时间",
+                    "usage": "/astro time [now|jd <值>|mjd <值>|unix <值>|时间值]",
+                    "examples": ["/astro time", "/astro time 2026-01-30T12:00:00"],
+                    "invalid_examples": ["/astro time not-a-time"],
+                    "subcommands": [
+                        {
+                            "name": "now",
+                            "help": "显示当前 UTC、JD、MJD、Unix 和恒星时",
+                            "usage": "/astro time now",
+                            "match": "exact",
+                            "examples": ["/astro time now"],
+                            "invalid_examples": ["/astro time now extra"]
+                        },
+                        {
+                            "name": "jd",
+                            "help": "把儒略日转换为日期时间",
+                            "usage": "/astro time jd <儒略日>",
+                            "examples": ["/astro time jd 2460419.5"],
+                            "invalid_examples": ["/astro time jd nope"]
+                        },
+                        {
+                            "name": "mjd",
+                            "help": "把修正儒略日转换为日期时间",
+                            "usage": "/astro time mjd <修正儒略日>",
+                            "examples": ["/astro time mjd 60419.5"],
+                            "invalid_examples": ["/astro time mjd nope"]
+                        },
+                        {
+                            "name": "unix",
+                            "help": "把 Unix 时间戳转换为天文时间",
+                            "usage": "/astro time unix <时间戳>",
+                            "examples": ["/astro time unix 1706616000"],
+                            "invalid_examples": ["/astro time unix nope"]
+                        },
+                        {
+                            "name": "help",
+                            "aliases": ["帮助"],
+                            "help": "显示天文工具总帮助",
+                            "usage": "/astro time help",
+                            "match": "exact",
+                            "examples": ["/astro time help"],
+                            "invalid_examples": ["/astro time help extra"]
+                        }
+                    ]
+                },
+                {
+                    "name": "coord",
+                    "help": "转换 ICRS、银道和黄道坐标",
+                    "usage": "/astro coord <RA> <Dec> | /astro coord <galactic|ecliptic> <经度> <纬度>",
+                    "examples": ["/astro coord 12:34:56 +12:34:56"],
+                    "invalid_examples": ["/astro coord 12:34:56"],
+                    "subcommands": [
+                        {
+                            "name": "galactic",
+                            "help": "把银道坐标转换为 ICRS",
+                            "usage": "/astro coord galactic <银经> <银纬>",
+                            "examples": ["/astro coord galactic 120 30"],
+                            "invalid_examples": ["/astro coord galactic 120"]
+                        },
+                        {
+                            "name": "ecliptic",
+                            "help": "把黄道坐标转换为 ICRS",
+                            "usage": "/astro coord ecliptic <黄经> <黄纬>",
+                            "examples": ["/astro coord ecliptic 90 23.5"],
+                            "invalid_examples": ["/astro coord ecliptic 90"]
+                        },
+                        {
+                            "name": "help",
+                            "aliases": ["帮助"],
+                            "help": "显示天文工具总帮助",
+                            "usage": "/astro coord help",
+                            "match": "exact",
+                            "examples": ["/astro coord help"],
+                            "invalid_examples": ["/astro coord help extra"]
+                        }
+                    ]
+                },
+                {
+                    "name": "convert",
+                    "help": "转换 Astropy 支持的物理单位",
+                    "usage": "/astro convert <数值> <源单位> <目标单位>",
+                    "examples": ["/astro convert 3 Jy mJy"],
+                    "invalid_examples": ["/astro convert 3 Jy"],
+                    "subcommands": [
+                        {
+                            "name": "help",
+                            "aliases": ["帮助"],
+                            "help": "显示天文工具总帮助",
+                            "usage": "/astro convert help",
+                            "match": "exact",
+                            "examples": ["/astro convert help"],
+                            "invalid_examples": ["/astro convert help extra"]
+                        }
+                    ]
+                },
+                {
+                    "name": "redshift",
+                    "help": "按 Planck 2018 宇宙学参数计算红移距离和年龄",
+                    "usage": "/astro redshift <0-1100>",
+                    "examples": ["/astro redshift 0.5"],
+                    "invalid_examples": ["/astro redshift -1"],
+                    "subcommands": [
+                        {
+                            "name": "help",
+                            "aliases": ["帮助"],
+                            "help": "显示天文工具总帮助",
+                            "usage": "/astro redshift help",
+                            "match": "exact",
+                            "examples": ["/astro redshift help"],
+                            "invalid_examples": ["/astro redshift help extra"]
+                        }
+                    ]
+                },
+                {
+                    "name": "formula",
+                    "help": "列出、查询或计算内置天文公式",
+                    "usage": "/astro formula [list|公式名|calc <类型> <质量>]",
+                    "examples": ["/astro formula", "/astro formula dm"],
+                    "invalid_examples": ["/astro formula unknown"],
+                    "subcommands": [
+                        {
+                            "name": "list",
+                            "help": "列出全部内置公式",
+                            "usage": "/astro formula list",
+                            "match": "exact",
+                            "examples": ["/astro formula list"],
+                            "invalid_examples": ["/astro formula list extra"]
+                        },
+                        {
+                            "name": "calc",
+                            "help": "执行质量相关的天文公式计算",
+                            "usage": "/astro formula calc <schwarzschild|luminosity|lifetime> <太阳质量>",
+                            "examples": ["/astro formula calc schwarzschild 10"],
+                            "invalid_examples": ["/astro formula calc unknown 10"],
+                            "subcommands": [
+                                {
+                                    "name": "schwarzschild",
+                                    "help": "计算史瓦西半径",
+                                    "usage": "/astro formula calc schwarzschild <太阳质量>",
+                                    "examples": ["/astro formula calc schwarzschild 10"],
+                                    "invalid_examples": ["/astro formula calc schwarzschild -1"]
+                                },
+                                {
+                                    "name": "luminosity",
+                                    "help": "估算主序星光度",
+                                    "usage": "/astro formula calc luminosity <太阳质量>",
+                                    "examples": ["/astro formula calc luminosity 2"],
+                                    "invalid_examples": ["/astro formula calc luminosity zero"]
+                                },
+                                {
+                                    "name": "lifetime",
+                                    "help": "估算主序星寿命",
+                                    "usage": "/astro formula calc lifetime <太阳质量>",
+                                    "examples": ["/astro formula calc lifetime 2"],
+                                    "invalid_examples": ["/astro formula calc lifetime 0"]
+                                }
+                            ]
+                        },
+                        {
+                            "name": "dm",
+                            "help": "查看色散量公式",
+                            "usage": "/astro formula dm",
+                            "match": "exact",
+                            "examples": ["/astro formula dm"],
+                            "invalid_examples": ["/astro formula dm extra"]
+                        },
+                        {
+                            "name": "redshift",
+                            "help": "查看红移定义公式",
+                            "usage": "/astro formula redshift",
+                            "match": "exact",
+                            "examples": ["/astro formula redshift"],
+                            "invalid_examples": ["/astro formula redshift extra"]
+                        },
+                        {
+                            "name": "luminosity",
+                            "help": "查看光度距离公式",
+                            "usage": "/astro formula luminosity",
+                            "match": "exact",
+                            "examples": ["/astro formula luminosity"],
+                            "invalid_examples": ["/astro formula luminosity extra"]
+                        },
+                        {
+                            "name": "flux",
+                            "help": "查看流量密度公式",
+                            "usage": "/astro formula flux",
+                            "match": "exact",
+                            "examples": ["/astro formula flux"],
+                            "invalid_examples": ["/astro formula flux extra"]
+                        },
+                        {
+                            "name": "blackbody",
+                            "help": "查看黑体辐射公式",
+                            "usage": "/astro formula blackbody",
+                            "match": "exact",
+                            "examples": ["/astro formula blackbody"],
+                            "invalid_examples": ["/astro formula blackbody extra"]
+                        },
+                        {
+                            "name": "parallax",
+                            "help": "查看视差距离公式",
+                            "usage": "/astro formula parallax",
+                            "match": "exact",
+                            "examples": ["/astro formula parallax"],
+                            "invalid_examples": ["/astro formula parallax extra"]
+                        },
+                        {
+                            "name": "schwarzschild",
+                            "help": "查看史瓦西半径公式",
+                            "usage": "/astro formula schwarzschild",
+                            "match": "exact",
+                            "examples": ["/astro formula schwarzschild"],
+                            "invalid_examples": ["/astro formula schwarzschild extra"]
+                        },
+                        {
+                            "name": "stellar_luminosity",
+                            "help": "查看主序星质光关系",
+                            "usage": "/astro formula stellar_luminosity",
+                            "match": "exact",
+                            "examples": ["/astro formula stellar_luminosity"],
+                            "invalid_examples": ["/astro formula stellar_luminosity extra"]
+                        },
+                        {
+                            "name": "stellar_lifetime",
+                            "help": "查看主序星寿命公式",
+                            "usage": "/astro formula stellar_lifetime",
+                            "match": "exact",
+                            "examples": ["/astro formula stellar_lifetime"],
+                            "invalid_examples": ["/astro formula stellar_lifetime extra"]
+                        },
+                        {
+                            "name": "help",
+                            "aliases": ["帮助"],
+                            "help": "显示天文工具总帮助",
+                            "usage": "/astro formula help",
+                            "match": "exact",
+                            "examples": ["/astro formula help"],
+                            "invalid_examples": ["/astro formula help extra"]
+                        }
+                    ]
+                },
+                {
+                    "name": "obj",
+                    "help": "查询太阳系内置对象或从 SIMBAD 查询其他天体",
+                    "usage": "/astro obj <天体名称>",
+                    "examples": ["/astro obj sun", "/astro obj Crab Pulsar"],
+                    "invalid_examples": ["/astro obj"],
+                    "subcommands": [
+                        {
+                            "name": "sun",
+                            "help": "显示太阳资料",
+                            "usage": "/astro obj sun",
+                            "match": "exact",
+                            "examples": ["/astro obj sun"],
+                            "invalid_examples": ["/astro obj sun extra"]
+                        },
+                        {
+                            "name": "moon",
+                            "help": "显示月球资料",
+                            "usage": "/astro obj moon",
+                            "match": "exact",
+                            "examples": ["/astro obj moon"],
+                            "invalid_examples": ["/astro obj moon extra"]
+                        },
+                        {
+                            "name": "earth",
+                            "help": "显示地球资料",
+                            "usage": "/astro obj earth",
+                            "match": "exact",
+                            "examples": ["/astro obj earth"],
+                            "invalid_examples": ["/astro obj earth extra"]
+                        },
+                        {
+                            "name": "mercury",
+                            "help": "显示水星资料",
+                            "usage": "/astro obj mercury",
+                            "match": "exact",
+                            "examples": ["/astro obj mercury"],
+                            "invalid_examples": ["/astro obj mercury extra"]
+                        },
+                        {
+                            "name": "venus",
+                            "help": "显示金星资料",
+                            "usage": "/astro obj venus",
+                            "match": "exact",
+                            "examples": ["/astro obj venus"],
+                            "invalid_examples": ["/astro obj venus extra"]
+                        },
+                        {
+                            "name": "mars",
+                            "help": "显示火星资料",
+                            "usage": "/astro obj mars",
+                            "match": "exact",
+                            "examples": ["/astro obj mars"],
+                            "invalid_examples": ["/astro obj mars extra"]
+                        },
+                        {
+                            "name": "jupiter",
+                            "help": "显示木星资料",
+                            "usage": "/astro obj jupiter",
+                            "match": "exact",
+                            "examples": ["/astro obj jupiter"],
+                            "invalid_examples": ["/astro obj jupiter extra"]
+                        },
+                        {
+                            "name": "saturn",
+                            "help": "显示土星资料",
+                            "usage": "/astro obj saturn",
+                            "match": "exact",
+                            "examples": ["/astro obj saturn"],
+                            "invalid_examples": ["/astro obj saturn extra"]
+                        },
+                        {
+                            "name": "uranus",
+                            "help": "显示天王星资料",
+                            "usage": "/astro obj uranus",
+                            "match": "exact",
+                            "examples": ["/astro obj uranus"],
+                            "invalid_examples": ["/astro obj uranus extra"]
+                        },
+                        {
+                            "name": "neptune",
+                            "help": "显示海王星资料",
+                            "usage": "/astro obj neptune",
+                            "match": "exact",
+                            "examples": ["/astro obj neptune"],
+                            "invalid_examples": ["/astro obj neptune extra"]
+                        },
+                        {
+                            "name": "help",
+                            "aliases": ["帮助"],
+                            "help": "显示天文工具总帮助",
+                            "usage": "/astro obj help",
+                            "match": "exact",
+                            "examples": ["/astro obj help"],
+                            "invalid_examples": ["/astro obj help extra"]
+                        }
+                    ]
+                },
+                {
+                    "name": "const",
+                    "help": "列出或查询内置物理与天文常数",
+                    "usage": "/astro const [常数名]",
+                    "examples": ["/astro const", "/astro const c"],
+                    "invalid_examples": ["/astro const unknown"],
+                    "subcommands": [
+                        {
+                            "name": "c",
+                            "aliases": ["speed", "light"],
+                            "help": "查询光速",
+                            "usage": "/astro const c",
+                            "match": "exact",
+                            "examples": ["/astro const c"],
+                            "invalid_examples": ["/astro const c extra"]
+                        },
+                        {
+                            "name": "g",
+                            "aliases": ["gravity"],
+                            "help": "查询引力常数",
+                            "usage": "/astro const g",
+                            "match": "exact",
+                            "examples": ["/astro const g"],
+                            "invalid_examples": ["/astro const g extra"]
+                        },
+                        {
+                            "name": "h",
+                            "aliases": ["planck"],
+                            "help": "查询普朗克常数",
+                            "usage": "/astro const h",
+                            "match": "exact",
+                            "examples": ["/astro const h"],
+                            "invalid_examples": ["/astro const h extra"]
+                        },
+                        {
+                            "name": "k",
+                            "aliases": ["boltzmann"],
+                            "help": "查询玻尔兹曼常数",
+                            "usage": "/astro const k",
+                            "match": "exact",
+                            "examples": ["/astro const k"],
+                            "invalid_examples": ["/astro const k extra"]
+                        },
+                        {
+                            "name": "sigma",
+                            "aliases": ["stefan"],
+                            "help": "查询斯特藩-玻尔兹曼常数",
+                            "usage": "/astro const sigma",
+                            "match": "exact",
+                            "examples": ["/astro const sigma"],
+                            "invalid_examples": ["/astro const sigma extra"]
+                        },
+                        {
+                            "name": "me",
+                            "aliases": ["electron"],
+                            "help": "查询电子质量",
+                            "usage": "/astro const me",
+                            "match": "exact",
+                            "examples": ["/astro const me"],
+                            "invalid_examples": ["/astro const me extra"]
+                        },
+                        {
+                            "name": "mp",
+                            "aliases": ["proton"],
+                            "help": "查询质子质量",
+                            "usage": "/astro const mp",
+                            "match": "exact",
+                            "examples": ["/astro const mp"],
+                            "invalid_examples": ["/astro const mp extra"]
+                        },
+                        {
+                            "name": "m_sun",
+                            "aliases": ["sun_mass"],
+                            "help": "查询太阳质量",
+                            "usage": "/astro const m_sun",
+                            "match": "exact",
+                            "examples": ["/astro const m_sun"],
+                            "invalid_examples": ["/astro const m_sun extra"]
+                        },
+                        {
+                            "name": "r_sun",
+                            "aliases": ["sun_radius"],
+                            "help": "查询太阳半径",
+                            "usage": "/astro const r_sun",
+                            "match": "exact",
+                            "examples": ["/astro const r_sun"],
+                            "invalid_examples": ["/astro const r_sun extra"]
+                        },
+                        {
+                            "name": "l_sun",
+                            "aliases": ["sun_luminosity"],
+                            "help": "查询太阳光度",
+                            "usage": "/astro const l_sun",
+                            "match": "exact",
+                            "examples": ["/astro const l_sun"],
+                            "invalid_examples": ["/astro const l_sun extra"]
+                        },
+                        {
+                            "name": "au",
+                            "help": "查询天文单位",
+                            "usage": "/astro const au",
+                            "match": "exact",
+                            "examples": ["/astro const au"],
+                            "invalid_examples": ["/astro const au extra"]
+                        },
+                        {
+                            "name": "pc",
+                            "aliases": ["parsec"],
+                            "help": "查询秒差距",
+                            "usage": "/astro const pc",
+                            "match": "exact",
+                            "examples": ["/astro const pc"],
+                            "invalid_examples": ["/astro const pc extra"]
+                        },
+                        {
+                            "name": "ly",
+                            "aliases": ["light_year"],
+                            "help": "查询光年",
+                            "usage": "/astro const ly",
+                            "match": "exact",
+                            "examples": ["/astro const ly"],
+                            "invalid_examples": ["/astro const ly extra"]
+                        },
+                        {
+                            "name": "h0",
+                            "aliases": ["hubble"],
+                            "help": "查询近似哈勃常数",
+                            "usage": "/astro const h0",
+                            "match": "exact",
+                            "examples": ["/astro const h0"],
+                            "invalid_examples": ["/astro const h0 extra"]
+                        },
+                        {
+                            "name": "help",
+                            "aliases": ["帮助"],
+                            "help": "显示天文工具总帮助",
+                            "usage": "/astro const help",
+                            "match": "exact",
+                            "examples": ["/astro const help"],
+                            "invalid_examples": ["/astro const help extra"]
+                        }
+                    ]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助"],
+                    "help": "显示全部天文工具命令",
+                    "usage": "/astro help",
+                    "match": "exact",
+                    "examples": ["/astro help"],
+                    "invalid_examples": ["/astro help extra"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "astropy",
+            "required": false,
+            "description": "天文单位、坐标、时间和宇宙学子命令的可选运行时"
         }
     ],
     "schedule": []

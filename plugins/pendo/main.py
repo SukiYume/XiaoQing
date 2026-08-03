@@ -15,15 +15,25 @@ Pendo Plugin - 个人时间与信息管理中枢
 """
 
 import asyncio
+import json
 import logging
-import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from core.interfaces import PluginContextProtocol
-from core.plugin_base import build_action, run_sync, segments
+from core.models import PluginManifest
+from core.plugin_base import run_sync, segments
 from core.public_errors import public_error_message
+from core.router import (
+    CommandCatalogNode,
+    build_command_catalog_node,
+    get_context_command_root,
+    resolve_catalog_invocation,
+    resolve_context_command_invocation,
+)
 
 from .commands.operations import handle_confirm, handle_snooze, handle_undo
 from .commands.scheduled import (
@@ -39,16 +49,21 @@ from .commands.scheduled import (
 )
 from .commands.session import handle_session_message
 from .commands.settings import handle_settings
-from .config import PendoConfig
+from .config import PendoConfig, PendoRuntimeSettings
+from .core.exceptions import (
+    InvalidDateRangeException,
+    InvalidFieldValueException,
+    InvalidTimeFormatException,
+    MissingRequiredFieldException,
+    NaturalLanguageParseException,
+    PastTimeException,
+)
 from .core.router import CommandRouter
 from .core.runtime import (
     get_cached_services,
-    set_cached_services,
+    get_plugin_runtime_state,
 )
-from .core.runtime import (
-    get_plugin_runtime_state as _runtime_plugin_state,
-)
-from .core.types import PendoContext, PendoServices
+from .core.types import PendoContext, PendoServices, SessionData
 from .handlers.diary import DiaryHandler
 from .handlers.event import EventHandler
 from .handlers.ledger import LedgerHandler
@@ -60,23 +75,24 @@ from .services.ai_parser import AIParser
 from .services.db import Database
 from .services.exporter import ExporterService
 from .services.reminder import ReminderService
-from .utils.db_ops import (
-    get_user_custom_settings as _get_user_custom_settings_from_db,
-)
-from .utils.db_ops import (
-    set_database_singleton,
-)
-from .utils.error_handlers import handle_command_errors_with_segments, success_result
+from .services.runtime import PendoRuntimeService
+from .utils.error_handlers import handle_command_errors, success_result
 from .utils.session_utils import safe_end_session
 from .utils.settings_utils import PLUGIN_SETTINGS_HELP_LINES
 
 logger = logging.getLogger(__name__)
-_startup_db: Database | None = None
+_runtime_service = PendoRuntimeService()
+_SESSION_INPUT_EXCEPTIONS = (
+    InvalidDateRangeException,
+    InvalidFieldValueException,
+    InvalidTimeFormatException,
+    MissingRequiredFieldException,
+    NaturalLanguageParseException,
+    PastTimeException,
+)
 TRIGGER_SUBCOMMAND_MAP = {
     "日程": "event",
-    "事件": "event",
     "待办": "todo",
-    "任务": "todo",
     "日记": "diary",
 }
 
@@ -85,9 +101,21 @@ TRIGGER_SUBCOMMAND_MAP = {
 # ============================================================
 
 
-def _apply_runtime_config(config: dict[str, Any] | None = None) -> None:
-    PendoConfig.configure(config)
+def _get_runtime_service(context: PluginContextProtocol | None) -> PendoRuntimeService:
+    runtime_state = get_plugin_runtime_state(context, create=False)
+    service = runtime_state.get("lifecycle_service")
+    if isinstance(service, PendoRuntimeService):
+        return service
+    return _runtime_service
+
+
+def _apply_runtime_config(context: PluginContextProtocol) -> bool:
+    settings = context.get_settings_snapshot()
     PendoConfig.validate()
+    return PendoConfig.configure(
+        settings.plugin_config("pendo"),
+        settings_revision=settings.revision,
+    )
 
 
 def _register_config_reload_hook(context: PluginContextProtocol | None) -> None:
@@ -96,81 +124,98 @@ def _register_config_reload_hook(context: PluginContextProtocol | None) -> None:
     if subscription is None:
         return
 
-    runtime_state = _get_plugin_runtime_state(context)
-    if callable(runtime_state.get("config_reload_unsubscribe")):
+    runtime_service = _get_runtime_service(context)
+    if runtime_service.has_config_subscription:
         return
 
-    def _on_reload(config: dict[str, Any]) -> None:
-        _apply_runtime_config(config)
+    async def _on_reload(_config: Mapping[str, Any]) -> None:
+        before = PendoConfig.runtime()
+        if not _apply_runtime_config(context):
+            return
+        after = PendoConfig.runtime()
+        database = runtime_service.database
+        if database is None:
+            raise RuntimeError("Pendo runtime database is unavailable during config reload")
+        await asyncio.to_thread(
+            _reconfigure_web_server,
+            database,
+            before,
+            after,
+        )
 
-    runtime_state["config_reload_unsubscribe"] = subscription.subscribe(_on_reload)
+    unsubscribe = subscription.subscribe(_on_reload)
+    if not runtime_service.bind_config_subscription(unsubscribe):
+        unsubscribe()
 
 
-def init(context=None) -> None:
+def init(context: PluginContextProtocol) -> None:
     """插件初始化"""
-    global _startup_db
 
-    config = getattr(context, "config", None) if context is not None else None
-    _apply_runtime_config(config)
-    _register_config_reload_hook(context)
+    _apply_runtime_config(context)
+    runtime_state = get_plugin_runtime_state(context)
+    runtime_state["lifecycle_service"] = _runtime_service
+    database_opened = False
+    try:
+        db = _runtime_service.open_database(context, Database)
+        database_opened = True
+        _register_config_reload_hook(context)
+        log = _get_logger(context)
+        log.info("Pendo plugin initialized, database at %s", _runtime_service.database_path)
 
-    db_path = os.path.join(os.path.dirname(__file__), "data", PendoConfig.DB_FILENAME)
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-    # 初始化数据库（创建表结构）
-    db = Database(db_path)
-    _startup_db = db
-    set_database_singleton(db)
-    log = _get_logger(context)
-    log.info("Pendo plugin initialized, database at %s", db_path)
-
-    if PendoConfig.WEB_ENABLED:
-        _start_web_server(db)
+        if PendoConfig.runtime().web_enabled:
+            _start_web_server(db)
+    except BaseException:
+        try:
+            _runtime_service.unsubscribe_config()
+        except Exception as exc:
+            public_error_message(
+                context,
+                exc,
+                logger=getattr(context, "logger", None) or logger,
+                component="pendo.init.config_subscription_rollback",
+            )
+        if database_opened:
+            for failure in _runtime_service.close_databases():
+                public_error_message(
+                    context,
+                    failure.error,
+                    logger=getattr(context, "logger", None) or logger,
+                    component=f"pendo.init.{failure.component}_rollback",
+                )
+        if runtime_state.get("lifecycle_service") is _runtime_service:
+            runtime_state.pop("lifecycle_service", None)
+        raise
 
 
 def _start_web_server(db: Database) -> bool:
     """Start the Pendo Web UI, replacing an existing in-process server if needed."""
-    try:
-        from .web import server as web_server
-
-        if web_server.is_running():
-            stopped = web_server.stop()
-            if not stopped and web_server.is_running():
-                logger.warning("Pendo Web UI is still running; skip restart")
-                return False
-
-        started = web_server.start(db)
-        if not started:
-            logger.warning("Failed to auto-start web UI")
-        return bool(started)
-    except Exception as exc:
-        public_error_message(None, exc, logger=logger, component="pendo.web.start")
-        return False
+    return _runtime_service.start_web(db)
 
 
 def _stop_web_server() -> bool:
-    try:
-        from .web import server as web_server
+    return _runtime_service.stop_web()
 
-        return bool(web_server.stop())
-    except Exception as exc:
-        public_error_message(None, exc, logger=logger, component="pendo.web.stop")
-        return False
+
+def _reconfigure_web_server(
+    db: Database,
+    before: PendoRuntimeSettings,
+    after: PendoRuntimeSettings,
+) -> None:
+    """Apply an already-published Web endpoint generation without dual state."""
+
+    _runtime_service.reconfigure_web(db, before, after)
 
 
 async def _stop_web_server_async() -> None:
-    await asyncio.to_thread(_stop_web_server)
+    await _runtime_service.stop_web_async()
 
 
 def _cleanup_resources(context=None, *, stop_web: bool) -> None:
     """Release Pendo resources shared by cleanup and shutdown hooks."""
-    global _startup_db
+    runtime_service = _get_runtime_service(context)
 
     try:
-        runtime_state = _get_plugin_runtime_state(context, create=False)
-        unsubscribe = runtime_state.pop("config_reload_unsubscribe", None)
-        if callable(unsubscribe):
-            unsubscribe()
+        runtime_service.unsubscribe_config()
     except Exception as exc:
         public_error_message(
             context,
@@ -182,44 +227,16 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
     if stop_web:
         _stop_web_server()
 
-    runtime_db = None
-    try:
-        runtime_db = _get_database(context)
-        runtime_db.cleanup()
-    except Exception as exc:
+    for failure in runtime_service.close_databases():
         public_error_message(
             context,
-            exc,
+            failure.error,
             logger=getattr(context, "logger", None) or logger,
-            component="pendo.cleanup.runtime_db",
+            component=f"pendo.cleanup.{failure.component}",
         )
 
     try:
-        from .utils.db_ops import cleanup_db_singleton
-
-        cleanup_db_singleton()
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger=getattr(context, "logger", None) or logger,
-            component="pendo.cleanup.singleton_db",
-        )
-
-    if _startup_db is not None and _startup_db is not runtime_db:
-        try:
-            _startup_db.cleanup()
-        except Exception as exc:
-            public_error_message(
-                context,
-                exc,
-                logger=getattr(context, "logger", None) or logger,
-                component="pendo.cleanup.startup_db",
-            )
-    _startup_db = None
-
-    try:
-        cleanup_reminder_singleton()  # L-5修复：清除 reminder service 单例
+        cleanup_reminder_singleton()  # 插件卸载后不得保留绑定旧数据库的服务单例。
     except Exception as exc:
         public_error_message(
             context,
@@ -229,7 +246,7 @@ def _cleanup_resources(context=None, *, stop_web: bool) -> None:
         )
 
     try:
-        runtime_state = _get_plugin_runtime_state(context, create=False)
+        runtime_state = get_plugin_runtime_state(context, create=False)
         runtime_state.clear()
     except Exception as exc:
         public_error_message(
@@ -259,7 +276,7 @@ async def shutdown(context=None) -> None:
 # ============================================================
 
 
-@handle_command_errors_with_segments
+@handle_command_errors(return_segments=True)
 async def handle(
     command: str,
     args: str,
@@ -290,8 +307,6 @@ async def handle(
     if await _has_active_session(context, plugin_name="pendo"):
         if _is_explicit_pendo_command(raw_message):
             await safe_end_session(context)
-        else:
-            return await _handle_active_session(user_id, raw_message, context, group_id)
 
     # 2. 解析并路由命令
     return await _handle_command_routing(user_id, route_args, context, group_id, log)
@@ -322,7 +337,7 @@ def _normalize_trigger_args(command: str, args: str) -> str:
 
 
 async def _has_active_session(context, plugin_name: str | None = None) -> bool:
-    """检查是否存在活跃会话
+    """检查是否存在活跃会话，优先使用不续命的只读快照。
 
     Args:
         context: 上下文对象
@@ -331,19 +346,57 @@ async def _has_active_session(context, plugin_name: str | None = None) -> bool:
     Returns:
         是否存在（匹配的）活跃会话
     """
-    if hasattr(context, "get_session"):
-        session = await context.get_session()
-        if session is None:
-            return False
-        # 如果指定了 plugin_name，则只检查该插件的会话
-        if plugin_name is not None:
-            return session.plugin_name == plugin_name
-        return True
-    return False
+    session = None
+    session_manager = getattr(context, "session_manager", None)
+    current_user_id = getattr(context, "current_user_id", None)
+    peek = getattr(session_manager, "peek", None)
+    if callable(peek) and current_user_id is not None:
+        session = await peek(current_user_id, getattr(context, "current_group_id", None))
+    else:
+        get_session = getattr(context, "get_session", None)
+        if callable(get_session):
+            session = await get_session()
+
+    if session is None:
+        return False
+    if plugin_name is not None:
+        return session.plugin_name == plugin_name
+    return True
+
+
+async def handle_session(
+    text: str,
+    event: dict[str, Any],
+    context: PluginContextProtocol,
+    session: SessionData,
+) -> list[dict[str, Any]]:
+    """Handle one continuation using the transaction-local Session supplied by core.
+
+    This entrypoint deliberately has no catch-all command decorator.  Expected
+    Pendo business and input errors are converted to user-facing messages;
+    unexpected failures escape to Dispatcher so SessionManager can roll back
+    every mutation made to its isolated working copy.
+    """
+
+    user_id = str(event.get("user_id", ""))
+    group_id = event.get("group_id")
+    try:
+        return await _handle_active_session(user_id, text, context, session, group_id)
+    except _SESSION_INPUT_EXCEPTIONS as exc:
+        _get_logger(context).warning(
+            "Pendo session business error error_code=%s error_type=%s",
+            exc.error_code,
+            type(exc).__name__,
+        )
+        return segments(exc.get_user_message())
 
 
 async def _handle_active_session(
-    user_id: str, raw_message: str, context, group_id: int | None = None
+    user_id: str,
+    raw_message: str,
+    context: PluginContextProtocol,
+    session: SessionData,
+    group_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """处理活跃会话的消息
 
@@ -353,11 +406,15 @@ async def _handle_active_session(
         user_id: 用户ID
         raw_message: 原始消息
         context: 上下文对象
+        session: Dispatcher 事务传入的隔离会话副本
         group_id: 群组ID（可选）
 
     Returns:
         消息列表
     """
+    if session.plugin_name != "pendo":
+        raise RuntimeError("Pendo received a session owned by another plugin")
+
     # 检查是否是退出命令
     raw_message = str(raw_message or "")
     if raw_message.strip() in PendoConfig.SESSION_EXIT_COMMANDS:
@@ -367,13 +424,11 @@ async def _handle_active_session(
     # 确保 services 已初始化（session 分支不经过 _build_command_router）
     _get_services(context)
 
-    session = await context.get_session()
-
     # 将消息传递给会话处理器（使用commands模块）
     result = await handle_session_message(user_id, raw_message, session, context)
 
     if result and result.get("status") != "error":
-        return await _format_result(user_id, result, group_id, context)
+        return _format_result(result)
     else:
         # 会话处理失败，清除会话
         await safe_end_session(context)
@@ -401,19 +456,17 @@ async def _handle_command_routing(
 
     router = _build_command_router(context, group_id)
 
-    subcommand, rest_args = _split_subcommand_preserve_rest(args)
+    catalog_root = getattr(router, "root", None) or _catalog_root(context)
+    invocation = resolve_context_command_invocation(context, catalog_root.code, args)
+    if invocation is None:
+        invocation = resolve_catalog_invocation(catalog_root, args)
+    if len(invocation.chain) > 1:
+        subcommand = invocation.chain[1].name
+        rest_args = invocation.remainder_after(1)
+    else:
+        subcommand, rest_args = _split_subcommand_preserve_rest(args)
     if not subcommand:
         return segments(router.get_help_message())
-
-    # 判断是否是公开命令（可以在群聊显示）
-    # 公开命令：settings、无参数的子命令（显示帮助）
-    public_subcommands = {"settings", "help"}
-    is_public = subcommand in public_subcommands or not rest_args.strip()
-    if context is not None:
-        reply_private = bool(
-            group_id and not is_public and await _get_user_privacy_mode(user_id, context)
-        )
-        context._pendo_reply_private = reply_private
 
     # 使用 CommandRouter 路由子命令
 
@@ -430,7 +483,7 @@ async def _handle_command_routing(
         cmd_name = f"subcommand.{router.alias_map.get(subcommand.lower(), subcommand)}"
         await _record_metric(context, cmd_name, time.perf_counter() - start_time, is_error=is_error)
 
-    return await _format_result(user_id, result, group_id, context, is_public=is_public)
+    return _format_result(result)
 
 
 def _split_subcommand_preserve_rest(args: str) -> tuple[str, str]:
@@ -602,89 +655,39 @@ async def _run_scheduled_task(
         return []
 
 
-async def _format_result(
-    user_id: str, result: Any, group_id: int | None = None, context=None, is_public: bool = False
-) -> list[dict[str, Any]]:
-    """格式化返回结果
+def _format_result(result: Any) -> list[dict[str, Any]]:
+    """把命令层返回值统一转换为消息段。"""
 
-    Args:
-        user_id: 用户ID
-        result: 命令执行结果
-        group_id: 群组ID
-        context: 上下文对象
-        is_public: 是否是公开内容（帮助信息、settings等），公开内容不受隐私模式影响
-    """
     if isinstance(result, dict):
         message = result.get("message", "")
     else:
         message = str(result)
-
-    if not group_id:
-        return segments(message)
-
-    # 公开内容直接在群聊显示（帮助信息、settings等）
-    if is_public:
-        return segments(message)
-
-    # 检查隐私模式
-    privacy_mode = await _get_user_privacy_mode(user_id, context)
-
-    # 隐私模式开启时，隐私内容发私聊
-    if privacy_mode:
-        group_message = "✅ 已发送私聊 (保护隐私)"
-        failure_message = "⚠️ 私聊发送失败，出于隐私保护未在群内显示内容"
-        if context is not None and hasattr(context, "send_action"):
-            try:
-                action = build_action(segments(message), int(user_id), None)
-                if action:
-                    delivered = await context.send_action(action)
-                    if delivered is not True:
-                        logger.warning("Private Pendo reply was not confirmed")
-                        return segments(failure_message)
-                else:
-                    return segments(failure_message)
-            except Exception as exc:
-                public_error_message(
-                    context,
-                    exc,
-                    logger=getattr(context, "logger", logger),
-                    component="pendo.private_reply_delivery",
-                )
-                return segments(failure_message)
-        else:
-            return segments(failure_message)
-        return segments(group_message)
-    else:
-        return segments(message)
-
-
-async def _get_user_privacy_mode(user_id: str, context) -> bool:
-    """获取用户的隐私模式设置"""
-    if context is None:
-        return PendoConfig.MESSAGE_PRIVACY_MODE_DEFAULT
-    try:
-        custom_settings = await _get_user_custom_settings(user_id, context)
-        return custom_settings.get("privacy_mode", PendoConfig.MESSAGE_PRIVACY_MODE_DEFAULT)
-    except Exception as exc:
-        public_error_message(
-            context,
-            exc,
-            logger=getattr(context, "logger", logger),
-            component="pendo.privacy_mode",
-        )
-        # Privacy lookup failures must not make sensitive content public.
-        return True
-
-
-async def _get_user_custom_settings(user_id: str, context) -> dict[str, Any]:
-    """获取用户自定义设置"""
-    db = _get_database(context)
-    return await _get_user_custom_settings_from_db(user_id, db)
+    return segments(message)
 
 
 # ============================================================
 # 命令处理
 # ============================================================
+
+
+@lru_cache(maxsize=1)
+def _local_catalog_root() -> CommandCatalogNode:
+    """直接单测没有 Core 上下文时，仍读取生产 manifest 的同一命令目录。"""
+
+    manifest_path = Path(__file__).with_name("plugin.json")
+    manifest = PluginManifest.model_validate(json.loads(manifest_path.read_text(encoding="utf-8")))
+    command = next(item for item in manifest.commands if item.name == "pendo")
+    return build_command_catalog_node(
+        manifest.name,
+        command.model_dump(),
+        root=True,
+    )
+
+
+def _catalog_root(context: Any) -> CommandCatalogNode:
+    """生产使用 Core 原子快照；无上下文的直接测试才回退到本地 manifest。"""
+
+    return get_context_command_root(context, "pendo.pendo") or _local_catalog_root()
 
 
 def _build_command_router(context, group_id: int | None = None) -> CommandRouter:
@@ -729,21 +732,24 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         except (TypeError, ValueError):
             target_user = user_id
 
-        try:
-            await ctx.send_action(
-                {
-                    "action": "upload_private_file",
-                    "params": {
-                        "user_id": target_user,
-                        "file": file_path,
-                        "name": file_name,
-                    },
-                }
-            )
-        except Exception:
-            raise
+        outcome = await ctx.send_action(
+            {
+                "action": "upload_private_file",
+                "params": {
+                    "user_id": target_user,
+                    "file": file_path,
+                    "name": file_name,
+                },
+            }
+        )
 
-        result["message"] = f"{result.get('message', '导出完成')}\n已通过 QQ 私聊文件发送给你"
+        if outcome is True:
+            delivery_message = "已通过 QQ 私聊文件发送给你"
+        elif outcome is None:
+            delivery_message = "已尝试通过 QQ 私聊发送文件，但未收到最终回执"
+        else:
+            delivery_message = "QQ 私聊文件发送失败；导出文件仍保留在服务器"
+        result["message"] = f"{result.get('message', '导出完成')}\n{delivery_message}"
         return result
 
     async def _search_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
@@ -752,8 +758,15 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         return await search_handler.search(user_id, args, ctx)
 
     async def _import_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
-        if args and args.strip().lower() in {"help", "h", "?"}:
+        requested = args.strip()
+        if requested.lower() in {"help", "h", "?"}:
             return success_result(_show_help("import"))
+        if requested:
+            return {
+                "status": "error",
+                "message": "❌ /pendo import 不接收文件路径或其他参数\n用法: /pendo import",
+            }
+        runtime = PendoConfig.runtime()
         return success_result(
             "\n".join(
                 [
@@ -762,7 +775,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
                     "命令聊天入口不能安全上传 `.pendo.zip` 文件；请使用 Web 数据迁移页完成预检和导入。",
                     "",
                     "1. 发送 `/pendo web token` 获取登录令牌",
-                    f"2. 打开 Web UI: http://{PendoConfig.WEB_HOST}:{PendoConfig.WEB_PORT}/#/transfer",
+                    f"2. 打开 Web UI: http://{runtime.web_host}:{runtime.web_port}/#/transfer",
                     "3. 在“导入”页上传 `.pendo.zip`，先预检，再执行导入",
                     "",
                     "聊天命令不接收本地文件路径，避免误读服务器文件或路径穿越风险。",
@@ -777,7 +790,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         return success_result(message)
 
     async def _confirm_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
-        # M-7修复：handle_confirm 现在返回 dict，直接透传，无需字符串前缀推断状态
+        # confirm 返回结构化状态，直接透传，不能从展示文本前缀推断成功与否。
         return await handle_confirm(user_id, args, reminder_service, db)
 
     async def _snooze_cmd(user_id: str, args: str, ctx: Any) -> dict[str, Any]:
@@ -812,7 +825,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
         "web": _help_or_exec(web_handler.handle, "web"),
     }
 
-    router = CommandRouter(handlers, help_provider=_show_help)
+    router = CommandRouter(_catalog_root(context), handlers, help_provider=_show_help)
     return router
 
 
@@ -1040,9 +1053,9 @@ HELP_MAP = {
     ],
     "common": [
         "↩️ **其他操作**",
-        "• /pendo undo [分钟] - 撤销最近一次删除或编辑 (默认5分钟内)",
+        f"• /pendo undo [分钟] - 撤销最近一次删除或编辑 (最多{PendoConfig.UNDO_WINDOW_MINUTES}分钟)",
         "  - 例: /pendo undo",
-        "  - 例: /pendo undo 30",
+        "  - 例: /pendo undo 3",
     ],
 }
 
@@ -1074,27 +1087,19 @@ def _render_help_section(key: str) -> list[str]:
 
 
 def _show_help_overview() -> str:
-    return "\n".join(
+    lines = [str(HELP_MAP["header"]), "", "🧭 **可用命令**"]
+    lines.extend(
+        f"• /pendo {command.name} - {command.help_text}"
+        for command in _local_catalog_root().children
+    )
+    lines.extend(
         [
-            str(HELP_MAP["header"]),
             "",
-            "🧭 **可用命令**",
-            "• /pendo event   - 日程：添加、列表、详情、编辑、提醒",
-            "• /pendo todo    - 待办：添加、列表、完成、取消、编辑",
-            "• /pendo note    - 笔记：记录、列表、详情、追加、标签、关联",
-            "• /pendo diary   - 日记：写日记、模板、按日期查看",
-            "• /pendo ledger  - 记账：快速记账、列表、详情、汇总",
-            "• /pendo search  - 全局搜索",
-            "• /pendo export  - Markdown 导出",
-            "• /pendo import  - Web 导入入口说明",
-            "• /pendo settings - 设置管理",
-            "• /pendo web     - Web UI 和 Scriptable token",
-            "• /pendo confirm / snooze / undo - 提醒确认、延后和撤销",
-            "",
-            "💡 查看详细用法：`/pendo <命令>` 或 `/pendo help <命令>`",
+            "💡 查看详细用法：`/pendo help <命令>`；完整命令码：`/help pendo`",
             "例: `/pendo event`、`/pendo todo`、`/pendo export`",
         ]
     )
+    return "\n".join(lines)
 
 
 def _show_help(subcommand: str = "") -> str:
@@ -1161,13 +1166,7 @@ def _get_database(context: PluginContextProtocol | None) -> Database:
     return get_database(context)
 
 
-def _get_plugin_runtime_state(
-    context: PendoContext | None, *, create: bool = True
-) -> dict[str, Any]:
-    return _runtime_plugin_state(context, create=create)
-
-
-def _get_services(context: PendoContext | None) -> PendoServices:
+def _get_services(context: PendoContext) -> PendoServices:
     """获取共享服务实例（绑定到 PluginContext.state）。"""
     cached_services = get_cached_services(context)
     if cached_services is not None:
@@ -1177,7 +1176,7 @@ def _get_services(context: PendoContext | None) -> PendoServices:
     ai_parser = AIParser(context)
     ai_parser.db = db
     reminder_service = ReminderService(db)
-    exporter = ExporterService(db)
+    exporter = ExporterService(db, Path(context.data_dir) / "exports")
 
     # Event/Diary 需要 AI 能力
     event_handler = EventHandler(db, ai_parser, reminder_service)
@@ -1202,6 +1201,6 @@ def _get_services(context: PendoContext | None) -> PendoServices:
         "web_handler": web_handler,
     }
 
-    set_cached_services(context, services)
+    get_plugin_runtime_state(context)["services"] = services
 
     return services

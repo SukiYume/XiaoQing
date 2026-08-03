@@ -1,20 +1,36 @@
 import { api } from '../api.js';
 import { showToast } from '../components/toast.js';
-import { showModal, closeModal, showConfirmModal } from '../components/modal.js';
+import { showModal, closeModal, showConfirmModal, safeHtml } from '../components/modal.js';
 import { renderCustomSelect, initCustomSelects } from '../components/custom_select.js';
 import { derivePresetRange, fetchItemRangeBounds, RANGE_PRESET_OPTIONS, todayRangeKey } from '../utils/date_ranges.js';
-import { isoDate as dateKey, isValidDateInput, pad2 as pad } from '../utils/format.js';
-import { BREAKPOINTS, escapeHtml, injectStyles, mediaMax, pageShellCss } from '../utils/ui.js';
+import { formatDateTime as formatSharedDateTime, isoDate, isValidDateInput, pad2, parseDate } from '../utils/format.js';
+import { fetchUserTimeZone, zonedDateTimeToInput, zonedInputToUtcIso } from '../utils/timezone.js';
+import {
+    bindEnterAction,
+    bindFormSubmit,
+    BREAKPOINTS,
+    escapeHtml,
+    injectStyles,
+    mediaMax,
+    pageShellCss,
+    subscribeDataChanges,
+} from '../utils/ui.js';
 
 const CSS_ID = 'pendo-events-redesign-styles';
-const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const CALENDAR_VISIBLE_ITEM_LIMIT = 3;
+const WEEKDAYS = Object.freeze(['周一', '周二', '周三', '周四', '周五', '周六', '周日']);
+const EVENT_KINDS = new Set(['single', 'multi_node', 'recurring']);
+const REMINDER_STATUSES = new Set(['pending', 'sent', 'confirmed']);
+const EVENT_FILTER_KINDS = new Set(['', 'all', ...EVENT_KINDS]);
+const REMINDER_FILTERS = new Set(['', 'all', 'with', 'none', ...REMINDER_STATUSES]);
 
 let _container = null;
-let _dataChangedHandler = null;
+let _unsubscribeDataChanges = null;
+let _loadVersion = 0;
 let _state = {
     viewMode: 'calendar',
     monthCursor: firstDayOfMonth(new Date()),
-    selectedDate: dateKey(new Date()),
+    selectedDate: isoDate(new Date()),
     listRange: 'month',
     customStart: '',
     customEnd: '',
@@ -47,68 +63,108 @@ function weekdayIndexMonday(date) {
 }
 
 function formatMonthLabel(value) {
-    return `${value.getFullYear()}年${pad(value.getMonth() + 1)}月`;
+    return `${value.getFullYear()}年${pad2(value.getMonth() + 1)}月`;
 }
 
 function formatDateLabel(day) {
-    if (!day) return '';
-    const date = new Date(day);
-    return `${date.getMonth() + 1}月${date.getDate()}日`;
+    const date = parseDate(day);
+    return date ? `${date.getMonth() + 1}月${date.getDate()}日` : '未知日期';
 }
 
 function formatWeekday(day) {
-    if (!day) return '';
-    const date = new Date(day);
-    return WEEKDAYS[weekdayIndexMonday(date)];
+    const date = parseDate(day);
+    return date ? WEEKDAYS[weekdayIndexMonday(date)] : '未知星期';
 }
 
-function formatTime(iso) {
-    if (!iso) return '全天';
-    return iso.slice(11, 16);
-}
-
-function formatDateTime(iso) {
-    if (!iso) return '';
-    return `${iso.slice(0, 10)} ${formatTime(iso)}`;
-}
-
-function calendarVisibleItemLimit() {
-    if (typeof window !== 'undefined') {
-        if (window.matchMedia(`(max-width: ${BREAKPOINTS.PHONE})`).matches) return 3;
-        if (window.matchMedia(`(max-width: ${BREAKPOINTS.MOBILE})`).matches) return 3;
+function finiteCount(value) {
+    try {
+        const number = Number(value);
+        return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+    } catch {
+        return 0;
     }
-    return 3;
 }
 
-function toInputDateTime(iso) {
-    return iso ? iso.slice(0, 16) : '';
+function normalizedKind(value) {
+    return EVENT_KINDS.has(value) ? value : 'single';
 }
 
-function inputToIso(value) {
-    if (!value) return '';
-    return value.length === 16 ? `${value}:00` : value;
+function normalizedReminderStatus(value) {
+    return REMINDER_STATUSES.has(value) ? value : 'pending';
 }
 
-function reminderRulesFromTimes(startTime, remindTimes = []) {
-    if (!startTime || !remindTimes.length) return [{ offset_seconds: 0 }];
-    const start = new Date(startTime).getTime();
+function hasInvalidDatePrefix(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return /^\d{4}-\d{2}-\d{2}/.test(text) && !isValidDateInput(text.slice(0, 10));
+}
+
+function formatEventDateTime(value) {
+    return hasInvalidDatePrefix(value) ? '未知时间' : formatSharedDateTime(value);
+}
+
+/** 把接口日期转成用户设置时区的 YYYY-MM-DDTHH:mm，非法值不进入表单。 */
+function toInputDateTime(value, userTimeZone) {
+    if (hasInvalidDatePrefix(value)) return '';
+    return zonedDateTimeToInput(value, userTimeZone);
+}
+
+/** 严格把用户设置时区的墙钟转换为唯一 UTC 时刻。 */
+function inputToIso(value, userTimeZone) {
+    return zonedInputToUtcIso(value, userTimeZone);
+}
+
+function reminderRulesFromTimes(startTime, remindTimes) {
+    const start = parseDate(startTime)?.getTime();
+    if (!Number.isFinite(start)) return [];
     const offsets = new Set();
-    for (const value of remindTimes) {
-        const remind = new Date(value).getTime();
-        if (Number.isFinite(start) && Number.isFinite(remind)) {
-            const offset = Math.round((start - remind) / 1000);
-            if (offset >= 0) offsets.add(offset);
-        }
+    for (const value of Array.isArray(remindTimes) ? remindTimes : []) {
+        const remind = parseDate(value)?.getTime();
+        if (!Number.isFinite(remind)) continue;
+        const offset = Math.round((start - remind) / 1000);
+        if (offset >= 0) offsets.add(offset);
     }
-    offsets.add(0);
     return [...offsets].sort((a, b) => b - a).map((offset) => ({ offset_seconds: offset }));
+}
+
+/** 接口边界只保留渲染所需结构，异常字段统一收敛为空值或非负整数。 */
+function normalizeOverview(value) {
+    const raw = value && typeof value === 'object' ? value : {};
+    const summary = raw.summary && typeof raw.summary === 'object' ? raw.summary : {};
+    const categories = Array.isArray(raw.categories)
+        ? [...new Set(raw.categories.map((item) => String(item ?? '').trim()).filter(Boolean))]
+        : [];
+    const calendarDays =
+        raw.calendar_days && typeof raw.calendar_days === 'object' && !Array.isArray(raw.calendar_days)
+            ? raw.calendar_days
+            : {};
+    const events = Array.isArray(raw.events) ? raw.events.filter((item) => item && typeof item === 'object') : [];
+    const timelineDays = Array.isArray(raw.timeline_days)
+        ? raw.timeline_days
+              .filter((row) => row && isValidDateInput(row.date))
+              .map((row) => ({
+                  ...row,
+                  date: row.date,
+                  items: Array.isArray(row.items) ? row.items.filter((item) => item && typeof item === 'object') : [],
+              }))
+        : [];
+    return {
+        summary: {
+            event_count: finiteCount(summary.event_count),
+            multi_node_count: finiteCount(summary.multi_node_count),
+            reminder_count: finiteCount(summary.reminder_count),
+        },
+        categories,
+        calendar_days: calendarDays,
+        timeline_days: timelineDays,
+        events,
+    };
 }
 
 function currentRange() {
     if (_state.viewMode === 'calendar') {
         return {
-            start: dateKey(firstDayOfMonth(_state.monthCursor)),
-            end: dateKey(lastDayOfMonth(_state.monthCursor)),
+            start: isoDate(firstDayOfMonth(_state.monthCursor)),
+            end: isoDate(lastDayOfMonth(_state.monthCursor)),
         };
     }
     if (_state.listRange === 'all' && _state.allRangeStart && _state.allRangeEnd) {
@@ -122,35 +178,8 @@ function currentRange() {
     });
 }
 
-async function fetchAllRangeBounds() {
-    return fetchItemRangeBounds(api, {
-        type: 'event',
-        sortField: 'start_time',
-        startField: 'start_time',
-        endField: 'end_time',
-        fallbackEnd: dateKey(new Date()),
-        minimumEnd: dateKey(new Date()),
-    });
-}
-
-function eventMap() {
-    const map = new Map();
-    for (const event of _state.overview?.events || []) {
-        map.set(String(event.id), event);
-    }
-    return map;
-}
-
-function dayTimeline(date) {
-    const timelineDays = _state.overview?.timeline_days || [];
-    return timelineDays.find((row) => row.date === date)?.items || [];
-}
-
-function categoryOptions() {
-    return _state.overview?.categories || [];
-}
-
 function restoreScrollPosition(scrollY) {
+    // 首次滚动后布局可能仍在收敛，下一帧再校准一次可避免筛选时页面跳动。
     window.requestAnimationFrame(() => {
         window.scrollTo({ top: scrollY });
         window.requestAnimationFrame(() => window.scrollTo({ top: scrollY }));
@@ -158,7 +187,9 @@ function restoreScrollPosition(scrollY) {
 }
 
 function ensureStyles() {
-    injectStyles(CSS_ID, `
+    injectStyles(
+        CSS_ID,
+        `
         ${pageShellCss('events-page', { padding: '26px 24px 34px', compactPadding: '20px 16px 28px', compactBreakpoint: BREAKPOINTS.MOBILE })}
         .events-hero {
             display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
@@ -207,9 +238,9 @@ function ensureStyles() {
             --pselect-accent-text: #B45309;
             --pselect-accent-soft: rgba(245, 158, 11, 0.08);
             --pselect-accent-shadow: rgba(245, 158, 11, 0.12);
-            --pselect-border-strong: rgba(245, 158, 11, 0.35);
         }
         .events-inline-date { appearance: none; }
+        .events-inline-separator { font-size: 12px; color: var(--color-text-secondary); }
         .events-list-range { display: inline-flex; gap: 6px; flex-wrap: wrap; }
         .events-timeline-tools { display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
         .events-timeline-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
@@ -248,16 +279,21 @@ function ensureStyles() {
             text-align: center; font-size: 12px; font-weight: 700; color: var(--color-text-secondary); padding: 6px 0;
         }
         .events-calendar-cell {
-            min-height: 128px; padding: 10px; border-radius: 18px; position: relative; cursor: pointer;
+            min-height: 128px; padding: 10px; border-radius: 18px; position: relative;
             border: 1px solid rgba(226,232,240,0.92); background: rgba(255,255,255,0.86); transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
         }
-        .events-calendar-cell:hover { transform: translateY(-1px); border-color: rgba(245,158,11,0.26); box-shadow: 0 12px 24px rgba(245,158,11,0.08); }
-        .events-calendar-cell.outside { opacity: 0.28; cursor: default; background: rgba(248,250,252,0.7); }
+        .events-calendar-cell:not(.outside):hover { transform: translateY(-1px); border-color: rgba(245,158,11,0.26); box-shadow: 0 12px 24px rgba(245,158,11,0.08); }
+        .events-calendar-cell.outside { opacity: 0.28; background: rgba(248,250,252,0.7); }
         .events-calendar-cell.selected { border-color: rgba(245,158,11,0.38); box-shadow: inset 0 0 0 1px rgba(245,158,11,0.18); background: linear-gradient(180deg, rgba(255,251,235,0.96), rgba(255,255,255,0.92)); }
         .events-calendar-cell.today .events-calendar-date {
             background: var(--color-events); color: #fff; box-shadow: 0 8px 18px rgba(245,158,11,0.24);
         }
-        .events-calendar-head { display: flex; align-items: center; justify-content: flex-start; gap: 8px; margin-bottom: 8px; min-height: 28px; padding-right: 34px; }
+        .events-calendar-head {
+            display: flex; width: 100%; align-items: center; justify-content: flex-start; gap: 8px;
+            margin-bottom: 8px; min-height: 28px; padding: 0 34px 0 0; border: 0;
+            background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer;
+        }
+        .events-calendar-head:disabled { cursor: default; }
         .events-calendar-date {
             width: 28px; min-width: 28px; max-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; aspect-ratio: 1 / 1;
             border-radius: 999px; font-size: 13px; font-weight: 700; color: var(--color-text);
@@ -291,10 +327,6 @@ function ensureStyles() {
         }
         .events-day-title { margin: 0; font-size: 18px; font-weight: 760; color: var(--color-text); }
         .events-day-subtitle { margin: 6px 0 0; font-size: 13px; color: var(--color-text-secondary); }
-        .events-day-empty {
-            padding: 26px 18px; border-radius: 18px; text-align: center; background: rgba(248,250,252,0.8);
-            border: 1px dashed rgba(148,163,184,0.26); color: var(--color-text-secondary);
-        }
         .events-timeline { display: flex; flex-direction: column; gap: 8px; }
         .events-timeline-continuous { gap: 2px; }
         .events-timeline-day-marker {
@@ -308,7 +340,7 @@ function ensureStyles() {
         .events-timeline-day-meta { font-size: 12px; color: var(--color-text-secondary); }
         .events-timeline-item {
             position: relative; display: grid; grid-template-columns: 68px 14px minmax(0, 1fr) auto; gap: 10px;
-            align-items: start; padding: 4px 0; cursor: pointer;
+            align-items: start; padding: 4px 0;
         }
         .events-timeline-time { font-size: 12px; font-weight: 800; color: var(--color-events); padding-top: 10px; text-align: right; }
         .events-timeline-track { position: relative; min-height: 100%; display: flex; justify-content: center; }
@@ -324,12 +356,12 @@ function ensureStyles() {
         .events-timeline-dot.multi-node { background: #6366F1; box-shadow: 0 0 0 4px rgba(99,102,241,0.12); }
         .events-timeline-dot.recurring { background: #10B981; box-shadow: 0 0 0 4px rgba(16,185,129,0.12); }
         .events-timeline-card {
-            padding: 10px 12px; border-radius: 16px; border: 1px solid rgba(226,232,240,0.92);
+            width: 100%; padding: 10px 12px; border-radius: 16px; border: 1px solid rgba(226,232,240,0.92);
             background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.94));
+            text-align: left; font: inherit; cursor: pointer;
         }
-        .events-timeline-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-        .events-timeline-title { font-size: 15px; font-weight: 700; color: var(--color-text); line-height: 1.35; }
-        .events-timeline-subtitle { margin-top: 4px; font-size: 12px; color: var(--color-text-secondary); }
+        .events-timeline-title { display: block; font-size: 15px; font-weight: 700; color: var(--color-text); line-height: 1.35; }
+        .events-timeline-subtitle { display: block; margin-top: 4px; font-size: 12px; color: var(--color-text-secondary); }
         .events-timeline-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
         .events-pill {
             display: inline-flex; align-items: center; gap: 4px; padding: 5px 8px; border-radius: 999px;
@@ -351,6 +383,9 @@ function ensureStyles() {
         }
         .events-detail-title { margin: 0; font-size: 28px; font-weight: 820; color: var(--color-text); letter-spacing: -0.03em; }
         .events-detail-time { margin-top: 10px; font-size: 14px; color: var(--color-text-secondary); }
+        .events-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .events-detail-collection { margin-bottom: 8px; font-size: 13px; font-weight: 800; color: var(--color-events); }
+        .events-detail-notes { margin-top: 12px; font-size: 13px; line-height: 1.8; color: var(--color-text-secondary); white-space: pre-wrap; }
         .events-detail-block { padding: 16px 18px; border-radius: 18px; background: rgba(248,250,252,0.72); border: 1px solid rgba(226,232,240,0.92); }
         .events-detail-block h4 { margin: 0 0 12px; font-size: 14px; font-weight: 800; color: var(--color-text); }
         .events-detail-list { display: flex; flex-direction: column; gap: 10px; }
@@ -360,6 +395,9 @@ function ensureStyles() {
         }
         .events-detail-row:last-child { border-bottom: none; padding-bottom: 0; }
         .events-detail-row:first-child { padding-top: 0; }
+        .events-detail-row-title { font-weight: 700; color: var(--color-text); }
+        .events-detail-row-meta { margin-top: 4px; font-size: 12px; color: var(--color-text-secondary); }
+        .events-detail-empty { font-size: 13px; color: var(--color-text-secondary); }
         .events-status {
             padding: 5px 8px; border-radius: 999px; font-size: 11px; font-weight: 800;
             background: rgba(148,163,184,0.08); color: var(--color-text-secondary);
@@ -405,11 +443,28 @@ function ensureStyles() {
             font-size: 12px; line-height: 1.7; color: var(--color-text-secondary); padding: 10px 12px;
             border-radius: 14px; background: rgba(248,250,252,0.78); border: 1px solid rgba(226,232,240,0.92);
         }
-        ${mediaMax(BREAKPOINTS.XL, `
+        .events-editor-field[hidden] { display: none; }
+        .events-toggle-btn:focus-visible,
+        .events-range-btn:focus-visible,
+        .events-month-btn:focus-visible,
+        .events-calendar-head:focus-visible,
+        .events-calendar-chip:focus-visible,
+        .events-timeline-card:focus-visible,
+        .events-editor-mode button:focus-visible,
+        .events-editor-row button:focus-visible,
+        .events-editor-add:focus-visible {
+            outline: 3px solid rgba(245,158,11,0.32); outline-offset: 2px;
+        }
+        ${mediaMax(
+            BREAKPOINTS.XL,
+            `
             .events-grid { grid-template-columns: 1fr; }
             .events-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        `)}
-        ${mediaMax(BREAKPOINTS.MOBILE, `
+        `,
+        )}
+        ${mediaMax(
+            BREAKPOINTS.MOBILE,
+            `
             .events-hero { grid-template-columns: 1fr; }
             .events-hero-actions { justify-content: flex-start; row-gap: 8px; }
             .events-hero-actions .events-summary-chip { width: auto; flex: 0 0 auto; }
@@ -445,8 +500,11 @@ function ensureStyles() {
             .events-timeline-item { grid-template-columns: 52px 14px minmax(0, 1fr); gap: 8px; }
             .events-timeline-time { padding-top: 8px; font-size: 11px; }
             .events-timeline-card { padding: 9px 10px; }
-        `)}
-        ${mediaMax(BREAKPOINTS.PHONE, `
+        `,
+        )}
+        ${mediaMax(
+            BREAKPOINTS.PHONE,
+            `
             .events-summary-chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .events-summary-chips .events-summary-chip { width: 100%; justify-content: center; padding: 0 8px; font-size: 10px; }
             .events-weekday { font-size: 10px; letter-spacing: 0; }
@@ -458,8 +516,10 @@ function ensureStyles() {
             .events-calendar-items { gap: 3px; }
             .events-calendar-chip::before { height: 5px; }
             .events-calendar-overflow { font-size: 8px; }
-        `)}
-    `);
+        `,
+        )}
+    `,
+    );
 }
 
 function renderHero() {
@@ -472,19 +532,22 @@ function renderHero() {
                 <p>${_state.viewMode === 'calendar' ? `查看 ${range.start} 到 ${range.end} 的月度安排。` : '按时间顺序浏览当前范围内的日程。'}</p>
             </div>
             <div class="events-hero-actions">
-                <div class="events-view-toggle">
-                    <button class="events-toggle-btn ${_state.viewMode === 'calendar' ? 'active' : ''}" data-view-mode="calendar">月历</button>
-                    <button class="events-toggle-btn ${_state.viewMode === 'timeline' ? 'active' : ''}" data-view-mode="timeline">时间线</button>
+                <div class="events-view-toggle" role="group" aria-label="日程视图">
+                    <button type="button" class="events-toggle-btn ${_state.viewMode === 'calendar' ? 'active' : ''}" data-view-mode="calendar" aria-pressed="${_state.viewMode === 'calendar'}">月历</button>
+                    <button type="button" class="events-toggle-btn ${_state.viewMode === 'timeline' ? 'active' : ''}" data-view-mode="timeline" aria-pressed="${_state.viewMode === 'timeline'}">时间线</button>
                 </div>
                 ${summary.event_count ? `<span class="events-summary-chip">${summary.event_count} 条日程</span>` : ''}
-                <button class="btn btn-primary" id="events-add-top">＋ 新建日程</button>
+                <button type="button" class="btn btn-primary" id="events-add-top">＋ 新建日程</button>
             </div>
         </section>`;
 }
 
 function renderFilters() {
     const filters = _state.filters;
-    const categoryOptionsList = [{ value: '', label: '全部分类' }, ...categoryOptions().map((category) => ({ value: category, label: category }))];
+    const categoryOptionsList = [
+        { value: '', label: '全部分类' },
+        ...(_state.overview?.categories || []).map((category) => ({ value: category, label: category })),
+    ];
     const kindOptions = [
         { value: 'all', label: '全部事件' },
         { value: 'single', label: '单次事件' },
@@ -541,10 +604,8 @@ function renderFilters() {
         </section>`;
 }
 
-function renderCalendarCell(day, month, calendarDay) {
-    const currentMonth = month.getMonth();
-    const today = dateKey(new Date());
-    const dayString = dateKey(day);
+function renderCalendarCell(day, currentMonth, calendarDay, today) {
+    const dayString = isoDate(day);
     const outside = day.getMonth() !== currentMonth;
     const selected = _state.selectedDate === dayString;
     const classes = ['events-calendar-cell'];
@@ -552,17 +613,25 @@ function renderCalendarCell(day, month, calendarDay) {
     if (selected) classes.push('selected');
     if (today === dayString) classes.push('today');
 
-    const items = calendarDay?.items || [];
-    const count = calendarDay?.count || 0;
-    const visibleLimit = calendarVisibleItemLimit();
-    const visibleItems = items.slice(0, visibleLimit);
+    const items = Array.isArray(calendarDay?.items)
+        ? calendarDay.items.filter((item) => item && typeof item === 'object')
+        : [];
+    const count = Math.max(finiteCount(calendarDay?.count), items.length);
+    const visibleItems = items.slice(0, CALENDAR_VISIBLE_ITEM_LIMIT);
+    const selectionLabel = `${dayString}，${count} 条日程`;
     return `
-        <div class="${classes.join(' ')}" data-day="${dayString}">
-            <div class="events-calendar-head">
+        <div class="${classes.join(' ')}">
+            <button type="button" class="events-calendar-head" data-select-day="${dayString}" aria-label="${selectionLabel}" aria-pressed="${selected}" ${outside ? 'disabled' : ''}>
                 <span class="events-calendar-date">${day.getDate()}</span>
-            </div>
+            </button>
             <div class="events-calendar-items">
-                ${visibleItems.map((item) => `<button class="events-calendar-chip ${item.kind}" data-event-id="${escapeHtml(String(item.event_id || ''))}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}"><span class="events-calendar-chip-text">${escapeHtml(item.label)}</span></button>`).join('')}
+                ${visibleItems
+                    .map((item) => {
+                        const eventId = String(item.event_id ?? '');
+                        const label = String(item.label ?? '(无标题)');
+                        return `<button type="button" class="events-calendar-chip ${normalizedKind(item.kind)}" data-event-id="${escapeHtml(eventId)}" title="${escapeHtml(label)}" aria-label="查看日程：${escapeHtml(label)}" ${eventId ? '' : 'disabled'}><span class="events-calendar-chip-text">${escapeHtml(label)}</span></button>`;
+                    })
+                    .join('')}
                 ${count > visibleItems.length ? `<div class="events-calendar-overflow">+${count - visibleItems.length}<span class="events-calendar-overflow-suffix"> 更多</span></div>` : ''}
             </div>
         </div>`;
@@ -576,12 +645,14 @@ function renderCalendarPanel() {
     const offset = weekdayIndexMonday(start);
     const totalCells = Math.ceil((offset + daysInThisMonth) / 7) * 7;
     const cells = [];
+    const currentMonth = _state.monthCursor.getMonth();
+    const today = isoDate(new Date());
 
     for (let index = 0; index < totalCells; index += 1) {
         const dayNumber = index - offset + 1;
         const cellDate = new Date(_state.monthCursor.getFullYear(), _state.monthCursor.getMonth(), dayNumber);
-        const key = dateKey(cellDate);
-        cells.push(renderCalendarCell(cellDate, _state.monthCursor, calendarDays[key]));
+        const key = isoDate(cellDate);
+        cells.push(renderCalendarCell(cellDate, currentMonth, calendarDays[key], today));
     }
 
     return `
@@ -592,8 +663,8 @@ function renderCalendarPanel() {
                     <p class="events-panel-subtitle">按月查看每天的日程分布。</p>
                 </div>
                 <div class="events-month-nav">
-                    <button class="events-month-btn" id="events-prev-month">‹</button>
-                    <button class="events-month-btn" id="events-next-month">›</button>
+                    <button type="button" class="events-month-btn" id="events-prev-month" aria-label="上个月">‹</button>
+                    <button type="button" class="events-month-btn" id="events-next-month" aria-label="下个月">›</button>
                 </div>
             </div>
             <div class="events-panel-body">
@@ -620,16 +691,16 @@ function kindPill(kind) {
 
 function detailActionNoun(event) {
     if (
-        event?.kind === 'multi_node'
-        || event?.event_role === 'multi_node_child'
-        || event?.event_collection_kind === 'multi_node'
+        event?.kind === 'multi_node' ||
+        event?.event_role === 'multi_node_child' ||
+        event?.event_collection_kind === 'multi_node'
     ) {
         return '节点';
     }
     if (
-        event?.kind === 'recurring'
-        || event?.event_role === 'recurring_occurrence'
-        || event?.event_collection_kind === 'recurring'
+        event?.kind === 'recurring' ||
+        event?.event_role === 'recurring_occurrence' ||
+        event?.event_collection_kind === 'recurring'
     ) {
         return '实例';
     }
@@ -637,35 +708,43 @@ function detailActionNoun(event) {
 }
 
 function renderTimelineEntries(items) {
-    if (!items.length) {
-        return '';
-    }
+    if (!Array.isArray(items) || !items.length) return '';
 
-    const events = eventMap();
-    return items.map((item) => {
-        const event = events.get(String(item.event_id));
-        const dotKind = item.kind === 'multi_node' ? 'multi-node' : (item.kind === 'recurring' ? 'recurring' : '');
-        const collectionTitle = item.collection?.title || event?.collection?.title || '';
-        const title = collectionTitle ? `${collectionTitle} · ${item.title || event?.title || '(无标题)'}` : (item.title || '(无标题)');
-        return `
-                <article class="events-timeline-item" data-event-id="${escapeHtml(String(item.event_id || ''))}">
+    const events = new Map(
+        (_state.overview?.events || [])
+            .filter((event) => event && typeof event === 'object')
+            .map((event) => [String(event.id ?? ''), event]),
+    );
+    return items
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => {
+            const eventId = String(item.event_id ?? '');
+            const event = events.get(eventId);
+            const itemKind = normalizedKind(item.kind);
+            const dotKind = itemKind === 'multi_node' ? 'multi-node' : itemKind === 'recurring' ? 'recurring' : '';
+            const collectionTitle = item.collection?.title || event?.collection?.title || '';
+            const title = collectionTitle
+                ? `${collectionTitle} · ${item.title || event?.title || '(无标题)'}`
+                : item.title || '(无标题)';
+            const reminderTotal = finiteCount(item.reminder_total);
+            return `
+                <article class="events-timeline-item">
                     <div class="events-timeline-time">${escapeHtml(item.time_label || '全天')}</div>
                     <div class="events-timeline-track"><span class="events-timeline-dot ${dotKind}"></span></div>
-                    <div class="events-timeline-card">
-                        <div class="events-timeline-top">
-                            <div class="events-timeline-title">${escapeHtml(title)}</div>
-                        </div>
-                        <div class="events-timeline-subtitle">${escapeHtml(item.subtitle || event?.time_summary || '')}</div>
-                        <div class="events-timeline-meta">
-                            ${kindPill(event?.kind || 'single')}
+                    <button type="button" class="events-timeline-card" data-event-id="${escapeHtml(eventId)}" aria-label="查看日程：${escapeHtml(title)}" ${eventId ? '' : 'disabled'}>
+                        <span class="events-timeline-title">${escapeHtml(title)}</span>
+                        <span class="events-timeline-subtitle">${escapeHtml(item.subtitle || event?.time_summary || '')}</span>
+                        <span class="events-timeline-meta">
+                            ${kindPill(event?.kind || itemKind)}
                             ${event?.category ? `<span class="events-pill">${escapeHtml(event.category)}</span>` : ''}
                             ${item.location ? `<span class="events-pill">📍 ${escapeHtml(item.location)}</span>` : ''}
-                            ${item.reminder_total ? `<span class="events-pill">🔔 ${item.reminder_total} 个提醒</span>` : ''}
-                        </div>
-                    </div>
-                    <button class="btn btn-secondary btn-sm" data-open-detail="${escapeHtml(String(item.event_id || ''))}">详情</button>
+                            ${reminderTotal ? `<span class="events-pill">🔔 ${reminderTotal} 个提醒</span>` : ''}
+                        </span>
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm" data-open-detail="${escapeHtml(eventId)}" ${eventId ? '' : 'disabled'}>详情</button>
                 </article>`;
-    }).join('');
+        })
+        .join('');
 }
 
 function renderTimelineItems(items) {
@@ -682,7 +761,7 @@ function renderTimelineItems(items) {
 
 function renderSelectedDayPanel() {
     const selectedDate = _state.selectedDate;
-    const items = dayTimeline(selectedDate);
+    const items = (_state.overview?.timeline_days || []).find((row) => row.date === selectedDate)?.items || [];
     return `
         <section class="events-day-shell">
             <div class="events-day-head">
@@ -690,7 +769,7 @@ function renderSelectedDayPanel() {
                     <h3 class="events-day-title">${formatDateLabel(selectedDate)} · ${formatWeekday(selectedDate)}</h3>
                     <div class="events-day-subtitle">选中日期后查看当天日程、提醒和详情。</div>
                 </div>
-                <button class="btn btn-primary btn-sm" id="events-add-day" data-date="${selectedDate}">＋ 添加当天日程</button>
+                <button type="button" class="btn btn-primary btn-sm" id="events-add-day" data-date="${selectedDate}">＋ 添加当天日程</button>
             </div>
             ${renderTimelineItems(items)}
         </section>`;
@@ -707,37 +786,49 @@ function renderTimelinePage() {
                 </div>
                 <div class="events-timeline-tools">
                     <div class="events-timeline-toolbar">
-                        <div class="events-list-range">
-                            ${RANGE_PRESET_OPTIONS.map((option) => `<button class="events-range-btn ${_state.listRange === option.key ? 'active' : ''}" data-list-range="${option.key}">${option.label}</button>`).join('')}
+                        <div class="events-list-range" role="group" aria-label="时间范围">
+                            ${RANGE_PRESET_OPTIONS.map((option) => `<button type="button" class="events-range-btn ${_state.listRange === option.key ? 'active' : ''}" data-list-range="${option.key}" aria-pressed="${_state.listRange === option.key}">${option.label}</button>`).join('')}
                         </div>
                     </div>
-                    ${_state.listRange === 'custom' ? `
+                    ${
+                        _state.listRange === 'custom'
+                            ? `
                         <div class="events-inline-dates">
                             <input class="events-inline-date" id="events-custom-start" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_state.customStart)}" aria-label="自定义开始日期">
-                            <span style="font-size:12px;color:var(--color-text-secondary);">至</span>
+                            <span class="events-inline-separator">至</span>
                             <input class="events-inline-date" id="events-custom-end" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" value="${escapeHtml(_state.customEnd)}" aria-label="自定义结束日期">
                             <button type="button" class="events-range-btn" id="events-custom-apply">应用</button>
-                        </div>` : ''}
+                        </div>`
+                            : ''
+                    }
                 </div>
             </div>
             <div class="events-panel-body">
-                ${timelineDays.length ? `
+                ${
+                    timelineDays.length
+                        ? `
                     <div class="events-timeline events-timeline-continuous">
-                        ${timelineDays.map((row) => `
+                        ${timelineDays
+                            .map(
+                                (row) => `
                             <div class="events-timeline-day-marker">
                                 <div class="events-timeline-day-label">${formatDateLabel(row.date)}</div>
                                 <div></div>
                                 <div class="events-timeline-day-meta">${formatWeekday(row.date)} · ${row.items.length} 条</div>
                             </div>
                             ${renderTimelineEntries(row.items)}
-                        `).join('')}
+                        `,
+                            )
+                            .join('')}
                     </div>
-                ` : `
+                `
+                        : `
                     <div class="events-empty events-timeline-empty">
                         <strong>当前筛选下没有日程</strong>
                         <p>可以放宽筛选条件，或者直接新建一条新的日程。</p>
                     </div>
-                `}
+                `
+                }
             </div>
         </section>`;
 }
@@ -769,7 +860,7 @@ function renderPage() {
         <div class="events-page">
             ${renderHero()}
             ${renderFilters()}
-            ${_state.loading || !_state.overview ? renderLoading() : (_state.viewMode === 'calendar' ? renderCalendarPage() : renderTimelinePage())}
+            ${_state.loading || !_state.overview ? renderLoading() : _state.viewMode === 'calendar' ? renderCalendarPage() : renderTimelinePage()}
         </div>
     `;
     attachPageListeners();
@@ -777,16 +868,31 @@ function renderPage() {
 
 async function loadOverview(options = {}) {
     if (!_container) return;
+    const container = _container;
+    const requestVersion = ++_loadVersion;
     const preserveScroll = Boolean(options.preserveScroll);
-    const scrollY = preserveScroll ? window.scrollY : 0;
+    const scrollY = preserveScroll && Number.isFinite(window.scrollY) ? window.scrollY : 0;
     const shouldShowLoading = !_state.overview && !preserveScroll;
 
     _state.loading = shouldShowLoading;
     if (shouldShowLoading) renderPage();
 
     try {
-        if (_state.viewMode !== 'calendar' && _state.listRange === 'all' && (!_state.allRangeStart || !_state.allRangeEnd)) {
-            const bounds = await fetchAllRangeBounds();
+        if (
+            _state.viewMode !== 'calendar' &&
+            _state.listRange === 'all' &&
+            (!_state.allRangeStart || !_state.allRangeEnd)
+        ) {
+            const today = isoDate(new Date());
+            const bounds = await fetchItemRangeBounds(api, {
+                type: 'event',
+                sortField: 'start_time',
+                startField: 'start_time',
+                endField: 'end_time',
+                fallbackEnd: today,
+                minimumEnd: today,
+            });
+            if (_container !== container || requestVersion !== _loadVersion) return;
             _state.allRangeStart = bounds.start;
             _state.allRangeEnd = bounds.end;
         }
@@ -799,9 +905,10 @@ async function loadOverview(options = {}) {
             kind: _state.filters.kind,
             reminder: _state.filters.reminder,
         });
-        _state.overview = res.data || {};
+        if (_container !== container || requestVersion !== _loadVersion) return;
+        _state.overview = normalizeOverview(res?.data);
 
-        const availableDays = (_state.overview.timeline_days || []).map((row) => row.date);
+        const availableDays = _state.overview.timeline_days.map((row) => row.date);
         if (_state.viewMode === 'calendar') {
             if (!_state.selectedDate || !_state.overview.calendar_days?.[_state.selectedDate]) {
                 _state.selectedDate = availableDays[0] || range.start;
@@ -811,15 +918,17 @@ async function loadOverview(options = {}) {
             _state.customEnd = range.end;
         }
     } catch (err) {
+        if (_container !== container || requestVersion !== _loadVersion) return;
         _state.overview = {
-            summary: {},
+            summary: { event_count: 0, multi_node_count: 0, reminder_count: 0 },
             categories: [],
             calendar_days: {},
             timeline_days: [],
             events: [],
         };
-        showToast('加载日程失败：' + err.message, 'error');
+        showToast(`加载日程失败：${err?.message || '未知错误'}`, 'error');
     } finally {
+        if (_container !== container || requestVersion !== _loadVersion) return;
         _state.loading = false;
         renderPage();
         if (preserveScroll) restoreScrollPosition(scrollY);
@@ -844,15 +953,25 @@ function nodeRowHTML(name = '', time = '', notes = '') {
         </div>`;
 }
 
-function editorModalHTML(existing = null, prefillDate = '') {
-    const isMultiNode = false;
-    const startValue = existing?.start_time ? toInputDateTime(existing.start_time) : (prefillDate ? `${prefillDate}T09:00` : '');
-    const endValue = existing?.end_time ? toInputDateTime(existing.end_time) : '';
-    const reminders = (existing?.reminders || []).map((row) => toInputDateTime(row.time || '')).filter(Boolean);
-    const nodes = [];
+function editorModalHTML(existing = null, prefillDate = '', userTimeZone) {
+    const defaultDate = isValidDateInput(prefillDate) ? prefillDate : '';
+    const startValue = existing?.start_time
+        ? toInputDateTime(existing.start_time, userTimeZone)
+        : defaultDate
+          ? `${defaultDate}T09:00`
+          : '';
+    const endValue = existing?.end_time ? toInputDateTime(existing.end_time, userTimeZone) : '';
+    const reminders = (Array.isArray(existing?.reminders) ? existing.reminders : [])
+        .map((row) => toInputDateTime(row?.time, userTimeZone))
+        .filter(Boolean);
+    const initialReminderValues = reminders.length ? reminders : existing ? [] : [startValue];
+    const initialNodes = [
+        { time: defaultDate ? `${defaultDate}T09:00:00` : '' },
+        { time: defaultDate ? `${defaultDate}T18:00:00` : '' },
+    ];
 
     return `
-        <form id="events-editor-form" data-mode="${isMultiNode ? 'multi_node' : 'single'}">
+        <form id="events-editor-form" data-mode="single">
             <div class="events-editor-grid">
                 <div class="events-editor-field full">
                     <label for="events-editor-title">标题</label>
@@ -866,34 +985,44 @@ function editorModalHTML(existing = null, prefillDate = '') {
                     <label for="events-editor-location">地点</label>
                     <input id="events-editor-location" name="location" type="text" value="${escapeHtml(existing?.location || '')}" placeholder="可选">
                 </div>
-                <div class="events-editor-field full">
+                ${
+                    existing
+                        ? ''
+                        : `<div class="events-editor-field full">
                     <label>事件模式</label>
                     <div class="events-editor-mode" id="events-editor-mode">
-                        <button type="button" class="${isMultiNode ? '' : 'active'}" data-editor-mode="single">单次事件</button>
-                        <button type="button" class="${isMultiNode ? 'active' : ''}" data-editor-mode="multi_node">多节点事件</button>
+                        <button type="button" class="active" data-editor-mode="single" aria-pressed="true">单次事件</button>
+                        <button type="button" data-editor-mode="multi_node" aria-pressed="false">多节点事件</button>
                     </div>
-                </div>
-                <div class="events-editor-field ${isMultiNode ? 'full' : ''}" data-single-section ${isMultiNode ? 'style="display:none;"' : ''}>
+                </div>`
+                }
+                <div class="events-editor-field" data-single-section>
                     <label for="events-editor-start-time">开始时间</label>
                     <input id="events-editor-start-time" name="start_time" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" value="${escapeHtml(startValue)}">
                 </div>
-                <div class="events-editor-field ${isMultiNode ? 'full' : ''}" data-single-section ${isMultiNode ? 'style="display:none;"' : ''}>
+                <div class="events-editor-field" data-single-section>
                     <label for="events-editor-end-time">结束时间</label>
                     <input id="events-editor-end-time" name="end_time" type="text" inputmode="numeric" placeholder="YYYY-MM-DD HH:mm" value="${escapeHtml(endValue)}">
                 </div>
-                <div class="events-editor-field full" data-node-section ${isMultiNode ? '' : 'style="display:none;"'}>
+                ${
+                    existing
+                        ? ''
+                        : `<div class="events-editor-field full" data-node-section hidden>
                     <label>时间节点</label>
                     <div class="events-editor-note">多节点事件会按节点时间生成当天时间线；保存时会自动用首尾节点推导整体起止时间。</div>
                     <div class="events-editor-rows" id="events-editor-nodes">
-                        ${(nodes.length ? nodes : [{ name: '', time: prefillDate ? `${prefillDate}T09:00:00` : '', notes: '' }, { name: '', time: prefillDate ? `${prefillDate}T18:00:00` : '', notes: '' }])
-                            .map((row) => nodeRowHTML(row.name || '', toInputDateTime(row.time || ''), row.notes || '')).join('')}
+                        ${initialNodes.map((row) => nodeRowHTML('', toInputDateTime(row.time, userTimeZone), '')).join('')}
                     </div>
                     <button type="button" class="events-editor-add" id="events-add-node">＋ 添加节点</button>
-                </div>
+                </div>`
+                }
                 <div class="events-editor-field full">
                     <label>提醒</label>
                     <div class="events-editor-rows" id="events-editor-reminders">
-                        ${(reminders.length ? reminders : [startValue]).filter(Boolean).map((value) => reminderRowHTML(value)).join('')}
+                        ${initialReminderValues
+                            .filter(Boolean)
+                            .map((value) => reminderRowHTML(value))
+                            .join('')}
                     </div>
                     <button type="button" class="events-editor-add" id="events-add-reminder">＋ 添加提醒时间</button>
                 </div>
@@ -901,94 +1030,133 @@ function editorModalHTML(existing = null, prefillDate = '') {
                     <label for="events-editor-notes">备注</label>
                     <textarea id="events-editor-notes" name="notes" placeholder="可选，用来记录背景、材料链接或执行说明">${escapeHtml(existing?.notes || '')}</textarea>
                 </div>
-                ${existing?.series_id ? `
+                ${
+                    existing?.series_id
+                        ? `
                     <div class="events-editor-field full">
                         <div class="events-editor-note">当前是重复日程实例。Web 端编辑和删除只作用于当前这一条，不会批量改整个系列。</div>
-                    </div>` : ''}
+                    </div>`
+                        : ''
+                }
             </div>
         </form>`;
 }
 
 function setEditorMode(content, mode) {
     const form = content.querySelector('#events-editor-form');
-    if (!form) return;
+    if (!form || !['single', 'multi_node'].includes(mode)) return;
     form.dataset.mode = mode;
     content.querySelectorAll('[data-editor-mode]').forEach((button) => {
-        button.classList.toggle('active', button.dataset.editorMode === mode);
+        const active = button.dataset.editorMode === mode;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
     });
     content.querySelectorAll('[data-single-section]').forEach((section) => {
-        section.style.display = mode === 'single' ? '' : 'none';
+        section.hidden = mode !== 'single';
     });
     content.querySelectorAll('[data-node-section]').forEach((section) => {
-        section.style.display = mode === 'multi_node' ? '' : 'none';
+        section.hidden = mode !== 'multi_node';
     });
 }
 
-function collectEditorPayload(content) {
+function collectEditorPayload(content, userTimeZone) {
     const form = content.querySelector('#events-editor-form');
-    const mode = form?.dataset.mode || 'single';
-    const title = form.querySelector('[name="title"]').value.trim();
-    const category = form.querySelector('[name="category"]').value.trim() || '未分类';
-    const location = form.querySelector('[name="location"]').value.trim();
-    const notes = form.querySelector('[name="notes"]').value.trim();
-    const remindTimes = [...form.querySelectorAll('.events-editor-reminder-input')]
-        .map((input) => inputToIso(input.value))
-        .filter(Boolean)
-        .sort()
-        .filter((value, index, list) => list.indexOf(value) === index);
+    if (!form) throw new Error('日程编辑器未正确加载');
+    const mode = form.dataset.mode === 'multi_node' ? 'multi_node' : 'single';
+    const title = form.querySelector('[name="title"]')?.value.trim() || '';
+    const category = form.querySelector('[name="category"]')?.value.trim() || '未分类';
+    const location = form.querySelector('[name="location"]')?.value.trim() || '';
+    const notes = form.querySelector('[name="notes"]')?.value.trim() || '';
+    const reminderInputs = [...form.querySelectorAll('.events-editor-reminder-input')]
+        .map((input) => input.value.trim())
+        .filter(Boolean);
+    const remindTimes = reminderInputs.map((value) => inputToIso(value, userTimeZone));
 
     if (!title) throw new Error('请填写标题');
+    if (remindTimes.some((value) => !value)) throw new Error('提醒时间格式无效');
+    const uniqueRemindTimes = [...new Set(remindTimes)].sort();
 
-    const payload = { title, category, location, notes };
+    const payload = { title, category, location, notes, timezone: userTimeZone };
 
     if (mode === 'multi_node') {
-        const nodes = [...form.querySelectorAll('[data-node-row]')]
-            .map((row) => {
-                const name = row.querySelector('.events-editor-node-name').value.trim();
-                const time = inputToIso(row.querySelector('.events-editor-node-time').value);
-                const notes = row.querySelector('.events-editor-node-notes').value.trim();
-                return name && time ? { name, time, ...(notes ? { notes } : {}) } : null;
-            })
-            .filter(Boolean)
-            .sort((a, b) => a.time.localeCompare(b.time));
+        const nodes = [];
+        for (const row of form.querySelectorAll('[data-node-row]')) {
+            const name = row.querySelector('.events-editor-node-name')?.value.trim() || '';
+            const rawTime = row.querySelector('.events-editor-node-time')?.value.trim() || '';
+            const nodeNotes = row.querySelector('.events-editor-node-notes')?.value.trim() || '';
+            if (!name && !rawTime && !nodeNotes) continue;
+            const time = inputToIso(rawTime, userTimeZone);
+            if (!name) throw new Error('请填写节点名称');
+            if (!time) throw new Error(`节点“${name}”的时间格式无效`);
+            nodes.push({ name, time, ...(nodeNotes ? { notes: nodeNotes } : {}) });
+        }
+        nodes.sort((a, b) => a.time.localeCompare(b.time));
 
         if (nodes.length < 2) throw new Error('多节点事件至少需要 2 个有效节点');
+        if (uniqueRemindTimes.some((value) => value > nodes[0].time)) {
+            throw new Error('提醒时间不能晚于第一个节点');
+        }
         payload.kind = 'multi_node';
-        payload.reminder_rules = reminderRulesFromTimes(nodes[0].time, remindTimes);
+        payload.reminder_rules = reminderRulesFromTimes(nodes[0].time, uniqueRemindTimes);
         payload.children = nodes.map((row) => ({
             title: row.name,
             start_time: row.time,
             ...(row.notes ? { notes: row.notes } : {}),
         }));
     } else {
-        const startTime = inputToIso(form.querySelector('[name="start_time"]').value);
-        const endTime = inputToIso(form.querySelector('[name="end_time"]').value);
-        if (!startTime) throw new Error('请填写开始时间');
+        const startTime = inputToIso(form.querySelector('[name="start_time"]')?.value, userTimeZone);
+        const rawEndTime = form.querySelector('[name="end_time"]')?.value.trim() || '';
+        const endTime = inputToIso(rawEndTime, userTimeZone);
+        if (!startTime) throw new Error('请填写有效的开始时间');
+        if (rawEndTime && !endTime) throw new Error('结束时间格式无效');
+        if (endTime && endTime < startTime) throw new Error('结束时间不能早于开始时间');
+        if (uniqueRemindTimes.some((value) => value > startTime)) {
+            throw new Error('提醒时间不能晚于开始时间');
+        }
         payload.start_time = startTime;
         payload.end_time = endTime || null;
-        payload.reminder_rules = reminderRulesFromTimes(startTime, remindTimes);
+        payload.reminder_rules = reminderRulesFromTimes(startTime, uniqueRemindTimes);
     }
 
     return payload;
 }
 
-function openEventEditor(existing = null, prefillDate = '') {
+async function openEventEditor(existing = null, prefillDate = '') {
+    let userTimeZone;
+    try {
+        userTimeZone = await fetchUserTimeZone();
+    } catch (error) {
+        showToast(`无法读取用户时区：${error?.message || '未知错误'}`, 'error');
+        return;
+    }
+    const existingTimes = [
+        existing?.start_time,
+        existing?.end_time,
+        ...(Array.isArray(existing?.reminders) ? existing.reminders.map((row) => row?.time) : []),
+    ].filter(Boolean);
+    if (existingTimes.some((value) => !toInputDateTime(value, userTimeZone))) {
+        showToast('日程包含无法解析的时间，已阻止编辑以免覆盖原值', 'error');
+        return;
+    }
     ensureStyles();
     const title = existing ? '编辑日程' : '新建日程';
-    const content = showModal(title, editorModalHTML(existing, prefillDate), {
-        footer: `
-            <button class="btn btn-secondary" id="events-editor-cancel">取消</button>
-            <button class="btn btn-primary" id="events-editor-save">保存</button>
-        `,
+    const content = showModal(title, safeHtml(editorModalHTML(existing, prefillDate, userTimeZone)), {
+        footer: safeHtml(`
+            <button type="button" class="btn btn-secondary" id="events-editor-cancel">取消</button>
+            <button type="button" class="btn btn-primary" id="events-editor-save">保存</button>
+        `),
     });
 
     content.querySelector('#events-editor-cancel').onclick = closeModal;
     content.querySelector('#events-add-reminder').onclick = () => {
         content.querySelector('#events-editor-reminders').insertAdjacentHTML('beforeend', reminderRowHTML(''));
     };
-    content.querySelector('#events-add-node').onclick = () => {
-        content.querySelector('#events-editor-nodes').insertAdjacentHTML('beforeend', nodeRowHTML('', '', ''));
-    };
+    const addNodeButton = content.querySelector('#events-add-node');
+    if (addNodeButton) {
+        addNodeButton.onclick = () => {
+            content.querySelector('#events-editor-nodes').insertAdjacentHTML('beforeend', nodeRowHTML('', '', ''));
+        };
+    }
 
     content.addEventListener('click', (event) => {
         const modeButton = event.target.closest('[data-editor-mode]');
@@ -1003,11 +1171,20 @@ function openEventEditor(existing = null, prefillDate = '') {
         }
     });
 
-    content.querySelector('#events-editor-save').onclick = async () => {
+    const saveButton = content.querySelector('#events-editor-save');
+    const editorForm = content.querySelector('#events-editor-form');
+    bindFormSubmit(editorForm, saveButton);
+    let saving = false;
+    saveButton.onclick = async () => {
+        if (saving) return;
+        saving = true;
+        saveButton.disabled = true;
         try {
-            const payload = collectEditorPayload(content);
+            const payload = collectEditorPayload(content, userTimeZone);
             if (existing) {
-                await api.put(`/items/${existing.id}`, payload);
+                const eventId = String(existing.id ?? '');
+                if (!eventId) throw new Error('无法更新缺少编号的日程');
+                await api.put(`/items/${encodeURIComponent(eventId)}`, payload);
                 showToast('日程已更新', 'success');
             } else if (payload.children?.length) {
                 await api.post('/events/collections', payload);
@@ -1017,15 +1194,19 @@ function openEventEditor(existing = null, prefillDate = '') {
                 showToast('日程已创建', 'success');
             }
             closeModal();
-            window.dispatchEvent(new CustomEvent('pendo-data-changed'));
-            await loadOverview();
+            window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'event' } }));
         } catch (err) {
-            showToast(err.message || '保存失败', 'error');
+            showToast(err?.message || '保存失败', 'error');
+        } finally {
+            saving = false;
+            saveButton.disabled = false;
         }
     };
 }
 
 async function deleteEvent(eventId, title = '这条日程') {
+    const normalizedId = String(eventId ?? '');
+    if (!normalizedId) throw new Error('无法删除缺少编号的日程');
     const confirmed = await showConfirmModal({
         title: '删除日程',
         message: `确定要删除“${title}”吗？删除后当前页面和时间线会立即移除它。`,
@@ -1034,13 +1215,14 @@ async function deleteEvent(eventId, title = '这条日程') {
         tone: 'danger',
     });
     if (!confirmed) return;
-    await api.delete(`/items/${eventId}`);
+    await api.delete(`/items/${encodeURIComponent(normalizedId)}`);
     showToast('日程已删除', 'success');
-    window.dispatchEvent(new CustomEvent('pendo-data-changed'));
-    await loadOverview();
+    window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'event' } }));
 }
 
 async function deleteCollection(collectionId, title = '这个日程集合') {
+    const normalizedId = String(collectionId ?? '');
+    if (!normalizedId) throw new Error('无法删除缺少编号的日程集合');
     const confirmed = await showConfirmModal({
         title: '删除整个多节点日程',
         message: `确定要删除“${title}”以及它的全部节点吗？`,
@@ -1049,10 +1231,9 @@ async function deleteCollection(collectionId, title = '这个日程集合') {
         tone: 'danger',
     });
     if (!confirmed) return;
-    await api.delete(`/events/collections/${collectionId}`);
+    await api.delete(`/events/collections/${encodeURIComponent(normalizedId)}`);
     showToast('多节点日程已删除', 'success');
-    window.dispatchEvent(new CustomEvent('pendo-data-changed'));
-    await loadOverview();
+    window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'event' } }));
 }
 
 function collectionEditorHTML(collection = {}) {
@@ -1078,79 +1259,110 @@ function collectionEditorHTML(collection = {}) {
 }
 
 function openCollectionEditor(collection) {
-    const content = showModal('编辑多节点日程', collectionEditorHTML(collection), {
-        footer: `
-            <button class="btn btn-secondary" id="events-collection-editor-cancel">取消</button>
-            <button class="btn btn-primary" id="events-collection-editor-save">保存</button>
-        `,
+    const collectionId = String(collection?.id ?? '');
+    if (!collectionId) {
+        showToast('无法编辑缺少编号的日程集合', 'error');
+        return;
+    }
+    const content = showModal('编辑多节点日程', safeHtml(collectionEditorHTML(collection)), {
+        footer: safeHtml(`
+            <button type="button" class="btn btn-secondary" id="events-collection-editor-cancel">取消</button>
+            <button type="button" class="btn btn-primary" id="events-collection-editor-save">保存</button>
+        `),
     });
     content.querySelector('#events-collection-editor-cancel').onclick = closeModal;
-    content.querySelector('#events-collection-editor-save').onclick = async () => {
-        const form = content.querySelector('#events-collection-editor-form');
+    const saveButton = content.querySelector('#events-collection-editor-save');
+    const editorForm = content.querySelector('#events-collection-editor-form');
+    bindFormSubmit(editorForm, saveButton);
+    let saving = false;
+    saveButton.onclick = async () => {
+        if (saving) return;
+        if (!editorForm) {
+            showToast('日程集合编辑器未正确加载', 'error');
+            return;
+        }
         const payload = {
-            title: form.querySelector('[name="title"]').value.trim(),
-            category: form.querySelector('[name="category"]').value.trim() || '未分类',
-            location: form.querySelector('[name="location"]').value.trim(),
-            notes: form.querySelector('[name="notes"]').value.trim(),
+            title: editorForm.querySelector('[name="title"]')?.value.trim() || '',
+            category: editorForm.querySelector('[name="category"]')?.value.trim() || '未分类',
+            location: editorForm.querySelector('[name="location"]')?.value.trim() || '',
+            notes: editorForm.querySelector('[name="notes"]')?.value.trim() || '',
         };
         if (!payload.title) {
             showToast('请填写集合标题', 'error');
             return;
         }
+        saving = true;
+        saveButton.disabled = true;
         try {
-            await api.put(`/events/collections/${collection.id}`, payload);
+            await api.put(`/events/collections/${encodeURIComponent(collectionId)}`, payload);
             showToast('多节点日程已更新', 'success');
             closeModal();
-            window.dispatchEvent(new CustomEvent('pendo-data-changed'));
-            await loadOverview();
+            window.dispatchEvent(new CustomEvent('pendo-data-changed', { detail: { type: 'event' } }));
         } catch (err) {
-            showToast('保存失败：' + err.message, 'error');
+            showToast(`保存失败：${err?.message || '未知错误'}`, 'error');
+        } finally {
+            saving = false;
+            saveButton.disabled = false;
         }
     };
 }
 
 function renderCollectionDetailBody(detail) {
-    const collection = detail.collection || {};
-    const children = detail.children || [];
+    const collection = detail?.collection && typeof detail.collection === 'object' ? detail.collection : {};
+    const children = Array.isArray(detail?.children)
+        ? detail.children.filter((child) => child && typeof child === 'object')
+        : [];
     return `
         <div class="events-detail-shell">
             <section class="events-detail-summary">
-                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+                <div class="events-detail-meta">
                     <span class="events-pill kind-multi-node">多节点</span>
                     ${collection.category ? `<span class="events-pill">${escapeHtml(collection.category)}</span>` : ''}
                     ${collection.location ? `<span class="events-pill">📍 ${escapeHtml(collection.location)}</span>` : ''}
                 </div>
                 <h3 class="events-detail-title">${escapeHtml(collection.title || '(无标题)')}</h3>
-                ${collection.notes ? `<div style="margin-top:12px;font-size:13px;line-height:1.8;color:var(--color-text-secondary);">${escapeHtml(collection.notes)}</div>` : ''}
+                ${collection.notes ? `<div class="events-detail-notes">${escapeHtml(collection.notes)}</div>` : ''}
             </section>
             <section class="events-detail-block">
                 <h4>节点</h4>
                 <div class="events-detail-list">
-                    ${children.map((child) => `
+                    ${children
+                        .map((child) => {
+                            const childId = String(child.id ?? '');
+                            return `
                         <div class="events-detail-row">
                             <div>
-                                <div style="font-weight:700;color:var(--color-text);">${escapeHtml(child.title || '(无标题)')}</div>
-                                <div style="margin-top:4px;font-size:12px;color:var(--color-text-secondary);">${escapeHtml(formatDateTime(child.start_time))} · ${escapeHtml(child.id)}</div>
+                                <div class="events-detail-row-title">${escapeHtml(child.title || '(无标题)')}</div>
+                                <div class="events-detail-row-meta">${escapeHtml(formatEventDateTime(child.start_time))}${childId ? ` · ${escapeHtml(childId)}` : ''}</div>
                             </div>
-                            <button class="btn btn-secondary btn-sm" data-open-detail="${escapeHtml(String(child.id || ''))}">详情</button>
+                            <button type="button" class="btn btn-secondary btn-sm" data-open-detail="${escapeHtml(childId)}" ${childId ? '' : 'disabled'}>详情</button>
                         </div>
-                    `).join('')}
+                    `;
+                        })
+                        .join('')}
                 </div>
             </section>
         </div>`;
 }
 
 async function openCollectionDetail(collectionId) {
+    const normalizedId = String(collectionId ?? '');
+    if (!normalizedId) {
+        showToast('无法加载缺少编号的日程集合', 'error');
+        return;
+    }
     try {
-        const res = await api.get(`/events/collections/${collectionId}/detail`);
-        const detail = res.data;
+        const res = await api.get(`/events/collections/${encodeURIComponent(normalizedId)}/detail`);
+        const detail = res?.data && typeof res.data === 'object' ? res.data : {};
         const collection = detail.collection;
-        const content = showModal('多节点日程', renderCollectionDetailBody(detail), {
-            footer: `
-                <button class="btn btn-secondary" id="events-collection-close">关闭</button>
-                <button class="btn btn-primary" id="events-collection-edit">编辑整体</button>
-                <button class="btn btn-danger" id="events-collection-delete">删除整体</button>
-            `,
+        if (!collection || typeof collection !== 'object') throw new Error('集合数据不完整');
+        const canMutate = Boolean(String(collection.id ?? ''));
+        const content = showModal('多节点日程', safeHtml(renderCollectionDetailBody(detail)), {
+            footer: safeHtml(`
+                <button type="button" class="btn btn-secondary" id="events-collection-close">关闭</button>
+                <button type="button" class="btn btn-primary" id="events-collection-edit" ${canMutate ? '' : 'disabled'}>编辑整体</button>
+                <button type="button" class="btn btn-danger" id="events-collection-delete" ${canMutate ? '' : 'disabled'}>删除整体</button>
+            `),
         });
         content.querySelector('#events-collection-close').onclick = closeModal;
         content.querySelector('#events-collection-edit').onclick = () => {
@@ -1162,7 +1374,7 @@ async function openCollectionDetail(collectionId) {
             try {
                 await deleteCollection(collection.id, collection.title || '这个日程集合');
             } catch (err) {
-                showToast('删除失败：' + err.message, 'error');
+                showToast(`删除失败：${err?.message || '未知错误'}`, 'error');
             }
         };
         content.addEventListener('click', async (event) => {
@@ -1173,77 +1385,116 @@ async function openCollectionDetail(collectionId) {
             }
         });
     } catch (err) {
-        showToast('加载集合失败：' + err.message, 'error');
+        showToast(`加载集合失败：${err?.message || '未知错误'}`, 'error');
     }
 }
 
 function renderDetailBody(detail) {
-    const event = detail.event;
-    const collection = event.collection || null;
+    const event = detail?.event && typeof detail.event === 'object' ? detail.event : {};
+    const collection = event.collection && typeof event.collection === 'object' ? event.collection : null;
+    const reminders = Array.isArray(event.reminders)
+        ? event.reminders.filter((row) => row && typeof row === 'object')
+        : [];
+    const relatedInstances = Array.isArray(detail?.related_instances)
+        ? detail.related_instances.filter((item) => item && typeof item === 'object')
+        : [];
+    const collectionId = String(collection?.id ?? '');
     return `
         <div class="events-detail-shell">
             <section class="events-detail-summary">
-                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+                <div class="events-detail-meta">
                     ${kindPill(event.kind)}
                     ${event.category ? `<span class="events-pill">${escapeHtml(event.category)}</span>` : ''}
                     ${event.location ? `<span class="events-pill">📍 ${escapeHtml(event.location)}</span>` : ''}
                 </div>
-                ${collection ? `<div style="margin-bottom:8px;font-size:13px;font-weight:800;color:var(--color-events);">${escapeHtml(collection.title || '多节点日程')}</div>` : ''}
+                ${collection ? `<div class="events-detail-collection">${escapeHtml(collection.title || '多节点日程')}</div>` : ''}
                 <h3 class="events-detail-title">${escapeHtml(event.title || '(无标题)')}</h3>
-                <div class="events-detail-time">${escapeHtml(formatDateTime(event.start_time))}${event.end_time ? ` - ${escapeHtml(formatDateTime(event.end_time))}` : ''}</div>
-                ${event.notes ? `<div style="margin-top:12px;font-size:13px;line-height:1.8;color:var(--color-text-secondary);">${escapeHtml(event.notes)}</div>` : ''}
+                <div class="events-detail-time">${escapeHtml(formatEventDateTime(event.start_time))}${event.end_time ? ` - ${escapeHtml(formatEventDateTime(event.end_time))}` : ''}</div>
+                ${event.notes ? `<div class="events-detail-notes">${escapeHtml(event.notes)}</div>` : ''}
             </section>
             <section class="events-detail-block">
                 <h4>提醒</h4>
-                ${event.reminders?.length ? `
+                ${
+                    reminders.length
+                        ? `
                     <div class="events-detail-list">
-                        ${event.reminders.map((row) => `
+                        ${reminders
+                            .map((row) => {
+                                const status = normalizedReminderStatus(row.status);
+                                const repeatCount = finiteCount(row.repeat_count);
+                                const statusLabel =
+                                    status === 'confirmed' ? '已确认' : status === 'sent' ? '已发送' : '待发送';
+                                return `
                             <div class="events-detail-row">
                                 <div>
-                                    <div style="font-weight:700;color:var(--color-text);">${escapeHtml(formatDateTime(row.time))}</div>
-                                    <div style="margin-top:4px;font-size:12px;color:var(--color-text-secondary);">${row.repeat_count ? `已重复 ${row.repeat_count} 次` : '等待发送或确认'}</div>
+                                    <div class="events-detail-row-title">${escapeHtml(formatEventDateTime(row.time))}</div>
+                                    <div class="events-detail-row-meta">${repeatCount ? `已重复 ${repeatCount} 次` : '等待发送或确认'}</div>
                                 </div>
-                                <span class="events-status ${row.status}">${row.status === 'confirmed' ? '已确认' : row.status === 'sent' ? '已发送' : '待发送'}</span>
+                                <span class="events-status ${status}">${statusLabel}</span>
                             </div>
-                        `).join('')}
-                    </div>` : `<div style="font-size:13px;color:var(--color-text-secondary);">当前没有提醒。</div>`}
+                        `;
+                            })
+                            .join('')}
+                    </div>`
+                        : '<div class="events-detail-empty">当前没有提醒。</div>'
+                }
             </section>
-            ${detail.related_instances?.length ? `
+            ${
+                relatedInstances.length
+                    ? `
                 <section class="events-detail-block">
                     <h4>同系列后续实例</h4>
                     <div class="events-detail-list">
-                        ${detail.related_instances.map((item) => `
+                        ${relatedInstances
+                            .map(
+                                (item) => `
                             <div class="events-detail-row">
                                 <div>
-                                    <div style="font-weight:700;color:var(--color-text);">${escapeHtml(item.title || '(无标题)')}</div>
-                                    <div style="margin-top:4px;font-size:12px;color:var(--color-text-secondary);">${escapeHtml(formatDateTime(item.start_time))}</div>
+                                    <div class="events-detail-row-title">${escapeHtml(item.title || '(无标题)')}</div>
+                                    <div class="events-detail-row-meta">${escapeHtml(formatEventDateTime(item.start_time))}</div>
                                 </div>
                             </div>
-                        `).join('')}
+                        `,
+                            )
+                            .join('')}
                     </div>
-                </section>` : ''}
-            ${collection ? `
+                </section>`
+                    : ''
+            }
+            ${
+                collection
+                    ? `
                 <section class="events-detail-block">
                     <h4>整体</h4>
-                    <button class="btn btn-secondary btn-sm" data-open-collection="${escapeHtml(String(collection.id || ''))}">管理“${escapeHtml(collection.title || '多节点日程')}”</button>
-                </section>` : ''}
+                    <button type="button" class="btn btn-secondary btn-sm" data-open-collection="${escapeHtml(collectionId)}" ${collectionId ? '' : 'disabled'}>管理“${escapeHtml(collection.title || '多节点日程')}”</button>
+                </section>`
+                    : ''
+            }
         </div>`;
 }
 
 export async function openEventDetail(eventId) {
     ensureStyles();
+    const normalizedId = String(eventId ?? '');
+    if (!normalizedId) {
+        showToast('无法加载缺少编号的日程', 'error');
+        return;
+    }
     try {
-        const res = await api.get(`/events/${eventId}/detail`);
-        const detail = res.data;
+        const res = await api.get(`/events/${encodeURIComponent(normalizedId)}/detail`);
+        const detail = res?.data && typeof res.data === 'object' ? res.data : {};
         const event = detail.event;
+        if (!event || typeof event !== 'object') throw new Error('日程数据不完整');
         const actionNoun = detailActionNoun(event);
-        const content = showModal('日程详情', renderDetailBody(detail), {
-            footer: `
-                <button class="btn btn-secondary" id="events-detail-close">关闭</button>
-                ${event.collection ? '<button class="btn btn-secondary" id="events-detail-group">管理整体</button>' : ''}
-                <button class="btn btn-primary" id="events-detail-edit">编辑${actionNoun}</button>
-                <button class="btn btn-danger" id="events-detail-delete">删除${actionNoun}</button>
-            `,
+        const canMutate = Boolean(String(event.id ?? ''));
+        const hasCollection = Boolean(String(event.collection?.id ?? ''));
+        const content = showModal('日程详情', safeHtml(renderDetailBody(detail)), {
+            footer: safeHtml(`
+                <button type="button" class="btn btn-secondary" id="events-detail-close">关闭</button>
+                ${hasCollection ? '<button type="button" class="btn btn-secondary" id="events-detail-group">管理整体</button>' : ''}
+                <button type="button" class="btn btn-primary" id="events-detail-edit" ${canMutate ? '' : 'disabled'}>编辑${actionNoun}</button>
+                <button type="button" class="btn btn-danger" id="events-detail-delete" ${canMutate ? '' : 'disabled'}>删除${actionNoun}</button>
+            `),
         });
         content.querySelector('#events-detail-close').onclick = closeModal;
         const groupButton = content.querySelector('#events-detail-group');
@@ -1262,7 +1513,7 @@ export async function openEventDetail(eventId) {
             try {
                 await deleteEvent(event.id, event.title || '这条日程');
             } catch (err) {
-                showToast('删除失败：' + err.message, 'error');
+                showToast(`删除失败：${err?.message || '未知错误'}`, 'error');
             }
         };
         content.addEventListener('click', async (event) => {
@@ -1273,7 +1524,7 @@ export async function openEventDetail(eventId) {
             }
         });
     } catch (err) {
-        showToast('加载详情失败：' + err.message, 'error');
+        showToast(`加载详情失败：${err?.message || '未知错误'}`, 'error');
     }
 }
 
@@ -1283,15 +1534,16 @@ function attachPageListeners() {
 
     initCustomSelects(root, {
         'events-filter-category': async (value) => {
-            _state.filters.category = value;
+            const categories = new Set(_state.overview?.categories || []);
+            _state.filters.category = value === '' || categories.has(value) ? value : '';
             await loadOverview({ preserveScroll: true });
         },
         'events-filter-kind': async (value) => {
-            _state.filters.kind = value;
+            _state.filters.kind = EVENT_FILTER_KINDS.has(value) ? value : 'all';
             await loadOverview({ preserveScroll: true });
         },
         'events-filter-reminder': async (value) => {
-            _state.filters.reminder = value;
+            _state.filters.reminder = REMINDER_FILTERS.has(value) ? value : 'all';
             await loadOverview({ preserveScroll: true });
         },
     });
@@ -1320,7 +1572,7 @@ function attachPageListeners() {
     if (prevMonth) {
         prevMonth.onclick = async () => {
             _state.monthCursor = addMonths(_state.monthCursor, -1);
-            _state.selectedDate = dateKey(_state.monthCursor);
+            _state.selectedDate = isoDate(_state.monthCursor);
             await loadOverview({ preserveScroll: true });
         };
     }
@@ -1328,7 +1580,7 @@ function attachPageListeners() {
     if (nextMonth) {
         nextMonth.onclick = async () => {
             _state.monthCursor = addMonths(_state.monthCursor, 1);
-            _state.selectedDate = dateKey(_state.monthCursor);
+            _state.selectedDate = isoDate(_state.monthCursor);
             await loadOverview({ preserveScroll: true });
         };
     }
@@ -1337,9 +1589,9 @@ function attachPageListeners() {
     if (addDay) addDay.onclick = () => openEventEditor(null, addDay.dataset.date);
 
     root.onclick = async (event) => {
-        const cell = event.target.closest('.events-calendar-cell[data-day]');
-        if (cell && !event.target.closest('[data-event-id]')) {
-            _state.selectedDate = cell.dataset.day;
+        const dayButton = event.target.closest('[data-select-day]');
+        if (dayButton?.dataset.selectDay) {
+            _state.selectedDate = dayButton.dataset.selectDay;
             renderPage();
             return;
         }
@@ -1384,33 +1636,23 @@ function attachPageListeners() {
         _state.customEnd = nextEnd;
         await loadOverview({ preserveScroll: true });
     };
-    if (customStart) {
-        customStart.onkeydown = async (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                await applyCustomRange();
-            }
-        };
-    }
-    if (customEnd) {
-        customEnd.onkeydown = async (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                await applyCustomRange();
-            }
-        };
-    }
+    bindEnterAction(customStart, applyCustomRange);
+    bindEnterAction(customEnd, applyCustomRange);
     if (customApply) customApply.onclick = applyCustomRange;
 }
 
 export function render(container) {
+    if (!container || typeof container.querySelector !== 'function') {
+        throw new TypeError('日程页需要有效的 DOM 挂载容器');
+    }
+    _unsubscribeDataChanges?.();
+    _unsubscribeDataChanges = null;
     _container = container;
     const today = new Date();
     _state = {
-        ..._state,
         viewMode: 'calendar',
         monthCursor: firstDayOfMonth(today),
-        selectedDate: dateKey(today),
+        selectedDate: isoDate(today),
         listRange: 'month',
         customStart: '',
         customEnd: '',
@@ -1426,22 +1668,14 @@ export function render(container) {
         },
     };
     renderPage();
-    loadOverview();
+    void loadOverview();
 
-    _dataChangedHandler = async (event) => {
-        const changedType = event?.detail?.type;
-        if (changedType && changedType !== 'event') return;
-        await loadOverview();
-    };
-    window.addEventListener('pendo-data-changed', _dataChangedHandler);
+    _unsubscribeDataChanges = subscribeDataChanges('event', () => loadOverview({ preserveScroll: true }));
 }
 
 export function destroy() {
-    if (_dataChangedHandler) {
-        window.removeEventListener('pendo-data-changed', _dataChangedHandler);
-        _dataChangedHandler = null;
-    }
+    _loadVersion += 1;
+    _unsubscribeDataChanges?.();
+    _unsubscribeDataChanges = null;
     _container = null;
 }
-
-export function onRouteEnter(_params) {}

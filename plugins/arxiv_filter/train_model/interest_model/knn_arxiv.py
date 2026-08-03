@@ -20,13 +20,14 @@ arXiv k-NN 兴趣模型训练脚本
 
 from __future__ import annotations  # noqa: I001 - torch must load before NumPy on Windows
 
-import importlib
 import json
+import hashlib
+import math
 import re
+import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 
@@ -37,10 +38,16 @@ from sklearn.metrics import (
     average_precision_score,
     classification_report,
     f1_score,
-    precision_recall_curve,
     roc_auc_score,
 )
-from sklearn.model_selection import train_test_split
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from plugins.arxiv_filter.train_model.interest_model import training_utils as _training
+else:
+    from . import training_utils as _training
+
+_log = _training.timestamp_log
 
 # =============================================================================
 # 路径常量
@@ -52,18 +59,19 @@ from sklearn.model_selection import train_test_split
 # parents[2] = plugins/arxiv_filter/   ← 推理系统期望模型在这一层
 _SCRIPT_DIR = Path(__file__).resolve().parent  # …/interest_model/
 _TRAIN_DIR = _SCRIPT_DIR.parent  # …/train_model/
+_PLUGIN_DIR = _TRAIN_DIR.parent  # …/arxiv_filter/
 
 # =============================================================================
 # 配置
 # =============================================================================
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class KNNConfig:
     input_path: Path = _TRAIN_DIR / "arxiv_papers_with_abstract.csv"
 
-    # ★ 修复：输出目录对齐到 plugins/arxiv_filter/best_model_knn/
-    output_dir: Path = _SCRIPT_DIR / "best_model_knn"
+    # 训练产物固定写入运行时加载器所使用的 best_model_knn 目录。
+    output_dir: Path = _PLUGIN_DIR / "best_model_knn"
 
     # ★ 新增：embedding 缓存目录（与 CSV 同目录，按 encoder 短名区分）
     #   不同 encoder 不会互相覆盖；CSV 行数变化时自动失效
@@ -96,6 +104,33 @@ class KNNConfig:
     split_mode: str = "random"
     random_seed: int = 42
     max_len: int = 512
+
+    def __post_init__(self) -> None:
+        """在耗时编码开始前校验全部训练超参数。"""
+
+        if not isinstance(self.encoder_name, str) or not self.encoder_name.strip():
+            raise ValueError("encoder_name must be a non-empty string")
+        for name in ("k", "neg_k", "neg_sample_size", "batch_size", "max_len"):
+            value = getattr(self, name)
+            minimum = 0 if name == "neg_k" else 1
+            if type(value) is not int or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+        for name, lower_bound in (("neg_weight", 0.0), ("beta", 0.0)):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) < lower_bound
+                or (name == "beta" and float(value) == 0)
+            ):
+                raise ValueError(f"{name} has an invalid value")
+        if not 0 < self.val_size < 1:
+            raise ValueError("val_size must be between 0 and 1")
+        if not math.isfinite(self.min_threshold):
+            raise ValueError("min_threshold must be finite")
+        if self.split_mode not in {"random", "time"}:
+            raise ValueError("split_mode must be 'random' or 'time'")
 
 
 CONFIG = KNNConfig()
@@ -141,84 +176,19 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
 # =============================================================================
 
 
-def _log(msg: str = "") -> None:
-    print(f"{datetime.now().strftime('%H:%M:%S')}  {msg}", flush=True)
-
-
-def _load_st():
-    return importlib.import_module("sentence_transformers").SentenceTransformer
-
-
-def set_seed(seed: int) -> None:
-    import random
-
-    random.seed(seed)
-    np.random.seed(seed)
-
-
-def normalize_col_name(name: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(name).strip().lower())
-
-
 def resolve_columns(df: pd.DataFrame) -> dict[str, str | None]:
-    norm = {normalize_col_name(c): c for c in df.columns}
-
-    def pick(candidates: list[str], required: bool = False) -> str | None:
-        for c in candidates:
-            if c in norm:
-                return norm[c]
-        if required:
-            raise ValueError(f"找不到列名。现有列：{list(df.columns)}，候选：{candidates}")
-        return None
-
-    return {
-        "id": pick(["arxivid", "id", "paperid"]),
-        "title": pick(["title", "papertitle"], required=True),
-        "abstract": pick(["abstract", "summary", "description"], required=True),
-        "label": pick(["label", "interest", "target", "y"]),
-        "date": pick(["date", "created", "submitted", "published", "updated"]),
-    }
-
-
-def clean_text(x: object) -> str:
-    if pd.isna(x):
-        return ""
-    return re.sub(r"\s+", " ", str(x)).strip()
-
-
-def build_texts(df: pd.DataFrame, title_col: str, abstract_col: str) -> list[str]:
-    titles = df[title_col].fillna("").astype(str).tolist()
-    abstracts = df[abstract_col].fillna("").astype(str).tolist()
-    return [
-        f"Title: {clean_text(t)}\nAbstract: {clean_text(a)}"
-        for t, a in zip(titles, abstracts, strict=True)
-    ]
-
-
-def best_fbeta_threshold(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    beta: float = 1.0,
-) -> tuple[float, float]:
-    if len(np.unique(y_true)) < 2:
-        return 0.5, 0.0
-    precision, recall, thresholds = precision_recall_curve(y_true, y_score)
-    if len(thresholds) == 0:
-        return 0.5, 0.0
-    b2 = beta * beta
-    with np.errstate(invalid="ignore", divide="ignore"):
-        fbeta = np.where(
-            (b2 * precision[:-1] + recall[:-1]) > 0,
-            (1 + b2) * precision[:-1] * recall[:-1] / (b2 * precision[:-1] + recall[:-1]),
-            0.0,
-        )
-    best_idx = int(np.nanargmax(fbeta))
-    return float(thresholds[best_idx]), float(fbeta[best_idx])
-
-
-def precision_at_k(y_true: np.ndarray, y_score: np.ndarray, k: int) -> float:
-    k = min(k, len(y_true))
-    return float(np.mean(y_true[np.argsort(-y_score)[:k]])) if k > 0 else 0.0
+    return _training.resolve_columns(
+        df,
+        {
+            "id": ["arxivid", "id", "paperid"],
+            "title": ["title", "papertitle"],
+            "abstract": ["abstract", "summary", "description"],
+            "label": ["label", "interest", "target", "y"],
+            "date": ["date", "created", "submitted", "published", "updated"],
+        },
+        required_fields={"title", "abstract"},
+        error_prefix="找不到列名",
+    )
 
 
 def split_dataframe(
@@ -230,34 +200,16 @@ def split_dataframe(
     label_col: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """切分数据集，返回的 DataFrame 保留 _orig_idx 列以便对齐预计算 embedding。"""
-    df = df.copy()
-    if split_mode == "time":
-        if not date_col or date_col not in df.columns:
-            raise ValueError("split_mode=time 需要日期列")
-        df["_dt"] = pd.to_datetime(df[date_col], errors="coerce")
-        df = df.sort_values("_dt").reset_index(drop=True)
-        n_val = max(1, int(round(len(df) * val_size)))
-        train_df = df.iloc[: len(df) - n_val].drop(columns=["_dt"]).reset_index(drop=True)
-        val_df = df.iloc[len(df) - n_val :].drop(columns=["_dt"]).reset_index(drop=True)
-        return train_df, val_df
-
-    # 随机切分
-    try:
-        if label_col:
-            return tuple(  # type: ignore[return-value]
-                d.reset_index(drop=True)
-                for d in train_test_split(
-                    df,
-                    test_size=val_size,
-                    stratify=df[label_col],
-                    random_state=seed,
-                )
-            )
-    except ValueError:
-        _log("警告：分层随机切分失败，退回普通随机切分")
-    return tuple(  # type: ignore[return-value]
-        d.reset_index(drop=True)
-        for d in train_test_split(df, test_size=val_size, random_state=seed)
+    return _training.split_dataframe(
+        df,
+        val_size,
+        split_mode,
+        seed=seed,
+        date_col=date_col,
+        label_col=label_col or None,
+        log=_log,
+        missing_date_error="split_mode=time 需要日期列",
+        stratify_fallback_message="警告：分层随机切分失败，退回普通随机切分",
     )
 
 
@@ -266,28 +218,51 @@ def split_dataframe(
 # =============================================================================
 
 
-def _encoder_short_name(encoder_name: str) -> str:
-    """把 encoder 路径压缩成安全的文件名片段，e.g. 'all-mpnet-base-v2'。"""
-    return re.sub(r"[^a-z0-9\-]", "-", encoder_name.split("/")[-1].lower())
-
-
 def _cache_paths(cache_dir: Path, encoder_name: str) -> tuple[Path, Path]:
-    short = _encoder_short_name(encoder_name)
+    short = re.sub(r"[^a-z0-9\-]", "-", encoder_name.split("/")[-1].lower())
     return (
         cache_dir / f"all_embeddings_{short}.npy",
         cache_dir / f"all_embeddings_{short}_meta.json",
     )
 
 
-def _cache_is_valid(meta_path: Path, npy_path: Path, encoder_name: str, n_rows: int) -> bool:
+def _data_fingerprint(df: pd.DataFrame, title_col: str, abstract_col: str) -> str:
+    """按行哈希标题和摘要，避免“行数相同但内容已变”时误用旧缓存。"""
+
+    digest = hashlib.sha256()
+    digest.update(pd.__version__.encode())
+    digest.update(title_col.encode())
+    digest.update(abstract_col.encode())
+    row_hashes = pd.util.hash_pandas_object(
+        df.loc[:, [title_col, abstract_col]],
+        index=True,
+        categorize=True,
+    )
+    digest.update(row_hashes.to_numpy(dtype=np.uint64, copy=False).tobytes())
+    return digest.hexdigest()
+
+
+def _cache_is_valid(
+    meta_path: Path,
+    npy_path: Path,
+    encoder_name: str,
+    n_rows: int,
+    data_fingerprint: str,
+) -> bool:
     """检查缓存是否存在且与当前数据/编码器匹配。"""
     if not meta_path.exists() or not npy_path.exists():
         return False
     try:
         with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
-        return meta.get("encoder_name") == encoder_name and int(meta.get("n_rows", -1)) == n_rows
-    except Exception:
+        return (
+            isinstance(meta, dict)
+            and meta.get("encoder_name") == encoder_name
+            and type(meta.get("n_rows")) is int
+            and meta["n_rows"] == n_rows
+            and meta.get("data_fingerprint") == data_fingerprint
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
 
 
@@ -303,28 +278,40 @@ def load_or_encode(
     返回 df 中每一行对应的 normalized embedding，shape = (len(df), D)。
 
     首次调用会编码全部文本并写入缓存；后续调用直接从缓存加载。
-    缓存失效条件：encoder 名称改变 OR CSV 行数改变。
+    缓存失效条件：编码器、数据行数，或标题/摘要内容发生变化。
     """
     npy_path, meta_path = _cache_paths(cache_dir, encoder_name)
+    data_fingerprint = _data_fingerprint(df, title_col, abstract_col)
 
-    if _cache_is_valid(meta_path, npy_path, encoder_name, len(df)):
+    if _cache_is_valid(
+        meta_path,
+        npy_path,
+        encoder_name,
+        len(df),
+        data_fingerprint,
+    ):
         _log(f"[cache] 从磁盘加载 embedding（{npy_path.name}）…")
-        emb = np.load(npy_path)
-        if emb.shape[0] == len(df):
+        try:
+            emb = _training.validate_embedding_matrix(
+                np.load(npy_path, allow_pickle=False),
+                expected_rows=len(df),
+                name="cached embeddings",
+            )
             _log(f"[cache] 命中，shape={emb.shape}")
             return emb
-        _log("[cache] 行数不符，重新编码")
+        except (OSError, ValueError):
+            _log("[cache] 缓存损坏，重新编码")
 
     _log(f"[encode] 编码 {len(df)} 篇论文（encoder={encoder_name}）…")
     _log("[encode] 预计耗时（CPU ~5-15 min；GPU ~1 min）")
 
-    SentenceTransformer = _load_st()
+    SentenceTransformer = _training.load_sentence_transformer_class()
     model = SentenceTransformer(encoder_name)
     fp16 = torch.cuda.is_available()
     if fp16:
         _log("[encode] CUDA 可用，启用 fp16")
 
-    texts = build_texts(df, title_col, abstract_col)
+    texts = _training.build_title_abstract_texts(df, title_col, abstract_col)
     kw: dict[str, Any] = {
         "batch_size": batch_size,
         "show_progress_bar": True,
@@ -336,14 +323,23 @@ def load_or_encode(
             emb = model.encode(texts, **kw)
     else:
         emb = model.encode(texts, **kw)
-    emb = emb.astype(np.float32)
+    emb = _training.validate_embedding_matrix(
+        emb,
+        expected_rows=len(df),
+        name="encoded embeddings",
+    )
 
     # 写入缓存
     cache_dir.mkdir(parents=True, exist_ok=True)
     np.save(npy_path, emb)
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(
-            {"encoder_name": encoder_name, "n_rows": len(df), "embed_dim": emb.shape[1]},
+            {
+                "encoder_name": encoder_name,
+                "n_rows": len(df),
+                "embed_dim": emb.shape[1],
+                "data_fingerprint": data_fingerprint,
+            },
             f,
             indent=2,
         )
@@ -412,7 +408,7 @@ def evaluate_per_topic(
         )
 
     # 未被任何话题覆盖的正样本
-    covered_mask = np.zeros(len(df), dtype=bool)
+    covered_mask: np.ndarray = np.zeros(len(df), dtype=bool)
     for kw_list in topic_keywords.values():
         pattern = "|".join(kw_list)
         covered_mask |= titles.str.contains(pattern, case=False, regex=True, na=False).to_numpy()
@@ -483,6 +479,30 @@ class KNNInterestModel:
         threshold_beta: float = 1.0,
         random_state: int = 42,
     ):
+        if not isinstance(encoder_name, str) or not encoder_name.strip():
+            raise ValueError("encoder_name must be a non-empty string")
+        for name, value, minimum in (
+            ("k", k, 1),
+            ("neg_k", neg_k, 0),
+            ("neg_sample_size", neg_sample_size, 1),
+            ("batch_size", batch_size, 1),
+        ):
+            if type(value) is not int or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+        if (
+            isinstance(neg_weight, bool)
+            or not isinstance(neg_weight, (int, float))
+            or not math.isfinite(float(neg_weight))
+            or neg_weight < 0
+        ):
+            raise ValueError("neg_weight must be a finite non-negative number")
+        if (
+            isinstance(threshold_beta, bool)
+            or not isinstance(threshold_beta, (int, float))
+            or not math.isfinite(float(threshold_beta))
+            or threshold_beta <= 0
+        ):
+            raise ValueError("threshold_beta must be a finite positive number")
         self.encoder_name = encoder_name
         self.k = k
         self.neg_k = neg_k
@@ -493,9 +513,11 @@ class KNNInterestModel:
         self.random_state = random_state
 
         _log(f"Loading encoder: {encoder_name}")
-        SentenceTransformer = _load_st()
+        SentenceTransformer = _training.load_sentence_transformer_class()
         self.encoder = SentenceTransformer(encoder_name)
         self.embed_dim = int(self.encoder.get_sentence_embedding_dimension())
+        if self.embed_dim <= 0:
+            raise ValueError("encoder returned an invalid embedding dimension")
         self._fp16 = torch.cuda.is_available()
         if self._fp16:
             _log("Enabled fp16 encoding (CUDA detected)")
@@ -524,7 +546,12 @@ class KNNInterestModel:
                 emb = self.encoder.encode(texts, **kw)
         else:
             emb = self.encoder.encode(texts, **kw)
-        return emb.astype(np.float32)
+        return _training.validate_embedding_matrix(
+            emb,
+            expected_rows=len(texts),
+            expected_dim=self.embed_dim,
+            name="encoded embeddings",
+        )
 
     # ------------------------------------------------------------------
     # 得分计算
@@ -540,7 +567,14 @@ class KNNInterestModel:
           top_k_pos_sims：新论文与最相似 k 篇兴趣论文的均值 → 正向拉力
           top_k_neg_sims：新论文与最相似若干不感兴趣论文的均值 → 负向惩罚
         """
-        assert self.pos_embeddings is not None, "模型未训练"
+        if self.pos_embeddings is None:
+            raise RuntimeError("模型未训练")
+        query_emb = _training.validate_embedding_matrix(
+            query_emb,
+            expected_rows=len(query_emb),
+            expected_dim=self.embed_dim,
+            name="query embeddings",
+        )
 
         # (n_query, n_pos)
         pos_sims = query_emb @ self.pos_embeddings.T
@@ -551,9 +585,12 @@ class KNNInterestModel:
             neg_sims = query_emb @ self.neg_embeddings.T  # (n_query, n_neg)
             nk = min(self.neg_k, neg_sims.shape[1])
             top_k_neg = np.sort(neg_sims, axis=1)[:, -nk:].mean(axis=1)
-            return (top_k_pos - self.neg_weight * top_k_neg).astype(np.float32)
+            return cast(
+                np.ndarray,
+                (top_k_pos - self.neg_weight * top_k_neg).astype(np.float32),
+            )
 
-        return top_k_pos.astype(np.float32)
+        return cast(np.ndarray, top_k_pos.astype(np.float32))
 
     # ------------------------------------------------------------------
     # 训练
@@ -573,19 +610,26 @@ class KNNInterestModel:
             raise ValueError("训练数据必须包含 label 列（0/1）")
 
         df = train_df.copy()
-        df[label_col] = df[label_col].astype(int)
-        labels = df[label_col].to_numpy()
+        labels = _training.coerce_binary_labels(df[label_col])
+        df[label_col] = labels
 
-        if len(np.unique(labels)) < 2:
+        if set(np.unique(labels)) != {0, 1}:
             raise ValueError("训练集必须同时包含 label=0 和 label=1")
+        if title_col is None or abstract_col is None:
+            raise RuntimeError("列解析器未返回必需的标题或摘要列")
 
         # ── 编码 ────────────────────────────────────────────────────────
         if precomputed_embeddings is not None:
             _log("使用预计算 embedding")
-            all_emb = precomputed_embeddings
+            all_emb = _training.validate_embedding_matrix(
+                precomputed_embeddings,
+                expected_rows=len(df),
+                expected_dim=self.embed_dim,
+                name="precomputed embeddings",
+            )
         else:
             _log("Encoding training texts…")
-            all_emb = self.encode(build_texts(df, title_col, abstract_col))
+            all_emb = self.encode(_training.build_title_abstract_texts(df, title_col, abstract_col))
 
         pos_mask = labels == 1
         neg_mask = ~pos_mask
@@ -624,10 +668,10 @@ class KNNInterestModel:
         if label_col is None:
             raise ValueError("验证集必须包含 label 列")
 
-        y_true = val_df[label_col].astype(int).to_numpy()
+        y_true = _training.coerce_binary_labels(val_df[label_col])
         y_score = self.predict_proba(val_df, precomputed_embeddings=precomputed_embeddings)
 
-        threshold, fbeta = best_fbeta_threshold(y_true, y_score, self.threshold_beta)
+        threshold, fbeta = _training.best_fbeta_threshold(y_true, y_score, self.threshold_beta)
 
         if threshold < min_threshold:
             _log(f"  阈值 {threshold:.4f} 低于下限 {min_threshold:.4f}，已抬升")
@@ -646,24 +690,27 @@ class KNNInterestModel:
         precomputed_embeddings: np.ndarray | None = None,
     ) -> np.ndarray:
         """返回每篇论文的得分（作为 pseudo-probability 使用）。"""
-        assert self.pos_embeddings is not None, "模型未训练"
+        if self.pos_embeddings is None:
+            raise RuntimeError("模型未训练")
         cols = resolve_columns(df)
         title_col = cols["title"]
         abstract_col = cols["abstract"]
 
         if len(df) == 0:
-            return np.array([], dtype=np.float32)
+            return cast(np.ndarray, np.array([], dtype=np.float32))
 
-        emb = (
-            precomputed_embeddings
-            if precomputed_embeddings is not None
-            else self.encode(build_texts(df, title_col, abstract_col))
-        )
+        if title_col is None or abstract_col is None:
+            raise RuntimeError("列解析器未返回必需的标题或摘要列")
+        if precomputed_embeddings is None:
+            emb = self.encode(_training.build_title_abstract_texts(df, title_col, abstract_col))
+        else:
+            emb = _training.validate_embedding_matrix(
+                precomputed_embeddings,
+                expected_rows=len(df),
+                expected_dim=self.embed_dim,
+                name="precomputed embeddings",
+            )
         return self._score_from_embeddings(emb)
-
-    def predict(self, df: pd.DataFrame, **kw) -> np.ndarray:
-        scores = self.predict_proba(df, **kw)
-        return (scores >= self.threshold).astype(int)
 
     # ------------------------------------------------------------------
     # 评估
@@ -675,13 +722,14 @@ class KNNInterestModel:
         name: str = "Eval",
         precomputed_embeddings: np.ndarray | None = None,
     ) -> dict[str, float]:
-        assert self.pos_embeddings is not None
+        if self.pos_embeddings is None:
+            raise RuntimeError("模型未训练")
         cols = resolve_columns(df)
         label_col = cols["label"]
         if label_col is None:
             raise ValueError("评估数据必须包含 label 列")
 
-        y_true = df[label_col].astype(int).to_numpy()
+        y_true = _training.coerce_binary_labels(df[label_col])
         y_score = self.predict_proba(df, precomputed_embeddings=precomputed_embeddings)
         y_pred = (y_score >= self.threshold).astype(int)
 
@@ -690,9 +738,9 @@ class KNNInterestModel:
             "roc_auc": float(roc_auc_score(y_true, y_score)) if has_both else float("nan"),
             "pr_auc": float(average_precision_score(y_true, y_score)) if has_both else float("nan"),
             "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-            "precision_at_5": precision_at_k(y_true, y_score, 5),
-            "precision_at_10": precision_at_k(y_true, y_score, 10),
-            "precision_at_20": precision_at_k(y_true, y_score, 20),
+            "precision_at_5": _training.precision_at_k(y_true, y_score, 5),
+            "precision_at_10": _training.precision_at_k(y_true, y_score, 10),
+            "precision_at_20": _training.precision_at_k(y_true, y_score, 20),
             "threshold": self.threshold,
         }
 
@@ -718,7 +766,8 @@ class KNNInterestModel:
     # ------------------------------------------------------------------
 
     def save(self, model_dir: Path) -> None:
-        assert self.pos_embeddings is not None, "模型未训练，无法保存"
+        if self.pos_embeddings is None:
+            raise RuntimeError("模型未训练，无法保存")
         model_dir.mkdir(parents=True, exist_ok=True)
 
         # 兴趣库 embedding
@@ -773,16 +822,19 @@ class KNNInterestModel:
 
 
 def main(config: KNNConfig = CONFIG) -> None:
-    set_seed(config.random_seed)
+    _training.seed_python_numpy(config.random_seed)
 
     # ── 读取数据 ─────────────────────────────────────────────────────────────
     _log(f"读取数据: {config.input_path}")
-    df = pd.read_csv(config.input_path)
+    # arXiv ID 含前导零，禁止 pandas 将其推断为浮点数。
+    df = _training.read_training_csv(config.input_path)
     columns = resolve_columns(df)
     label_col, title_col, abstract_col = (columns["label"], columns["title"], columns["abstract"])
     if label_col is None:
         raise ValueError("训练模式需要 label 列")
-    df[label_col] = df[label_col].astype(int)
+    df[label_col] = _training.coerce_binary_labels(df[label_col])
+    if title_col is None or abstract_col is None:
+        raise RuntimeError("列解析器未返回必需的标题或摘要列")
 
     # ── 保留原始行索引（用于切分后对齐预计算 embedding）────────────────────
     df = df.reset_index(drop=True)

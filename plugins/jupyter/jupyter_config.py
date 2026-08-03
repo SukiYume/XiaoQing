@@ -1,21 +1,29 @@
-"""
-Jupyter 插件配置
-"""
+"""Jupyter 插件的执行、输出、图片和会话硬预算。"""
 
-# 默认执行超时（秒）
-DEFAULT_TIMEOUT = 30
+DEFAULT_TIMEOUT = 30.0
+MIN_EXECUTION_TIMEOUT = 0.1
+MAX_EXECUTION_TIMEOUT = 600.0
 
-# 自动关闭空闲内核的超时时间（秒，5分钟）
-AUTO_SHUTDOWN_TIMEOUT = 300
+# 内核空闲约 5 分钟关闭；REPL 编辑会话独立保留 10 分钟。
+AUTO_SHUTDOWN_TIMEOUT = 300.0
+CHECK_INTERVAL = 60.0
+REPL_SESSION_TIMEOUT = 600.0
 
-# 最大输出长度
-MAX_OUTPUT_LENGTH = 2000
+MAX_CODE_CHARS = 16_000
+MAX_CODE_BYTES = 32 * 1024
+MAX_REPL_LINES = 64
+MAX_REPL_LINE_CHARS = 3_000
+MAX_REPL_EXECUTIONS = 1_000_000
+MAX_REPL_PREVIEW_CHARS = 2_400
+
+MAX_OUTPUT_LENGTH = 2_000
 MAX_OUTPUT_BYTES = 64 * 1024
 
-# 最大图片数量
 MAX_IMAGES = 5
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_TOTAL_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 
-# 空闲检查间隔（秒）
-CHECK_INTERVAL = 60
+# Each isolated kernel is a separate process. Keep the process set bounded
+# while normal idle shutdown catches inactive conversations.
+MAX_KERNEL_INSTANCES = 64

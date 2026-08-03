@@ -1,8 +1,9 @@
 {
     "name": "smalltalk",
     "version": "2.0.0",
-    "description": "闲聊插件 - 处理非命令消息、自定义问答对、语音回复",
+    "description": "基础闲聊、分域问答和可选语音合成",
     "entry": "main.py",
+    "uses_services": ["chat.reply", "voice.synthesize_text"],
     "commands": [
         {
             "name": "qa",
@@ -12,7 +13,21 @@
                 "学习"
             ],
             "help": "💬 教我说话 | /记忆 help 查看详细帮助",
-            "admin_only": true
+            "admin_only": true,
+            "usage": "/记忆 <问题> <回答>",
+            "examples": ["/记忆 你是谁 我是小青"],
+            "invalid_examples": ["/记忆 只有问题"],
+            "subcommands": [
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示问答添加说明",
+                    "usage": "/记忆 help",
+                    "match": "exact",
+                    "examples": ["/记忆 help"],
+                    "invalid_examples": ["/记忆 help extra"]
+                }
+            ]
         },
         {
             "name": "qa_list",
@@ -20,7 +35,21 @@
                 "对话"
             ],
             "help": "📜 查看已学内容 | /对话 help 查看详细帮助",
-            "admin_only": true
+            "admin_only": true,
+            "usage": "/对话 [问题]",
+            "examples": ["/对话", "/对话 你是谁"],
+            "invalid_examples": ["/对话 a b"],
+            "subcommands": [
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示问答查询说明",
+                    "usage": "/对话 help",
+                    "match": "exact",
+                    "examples": ["/对话 help"],
+                    "invalid_examples": ["/对话 help extra"]
+                }
+            ]
         },
         {
             "name": "qa_remove",
@@ -28,7 +57,22 @@
                 "删除对话"
             ],
             "help": "🗑️ 删除问答 | /删除对话 help 查看详细帮助",
-            "admin_only": true
+            "admin_only": true,
+            "usage": "/删除对话 <问题> [回答]",
+            "examples": ["/删除对话 你是谁"],
+            "invalid_examples": ["/删除对话"],
+            "subcommands": [
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示问答删除说明",
+                    "usage": "/删除对话 help",
+                    "match": "exact",
+                    "examples": ["/删除对话 help"],
+                    "invalid_examples": ["/删除对话 help extra"]
+                }
+            ]
         }
-    ]
+    ],
+    "concurrency": "parallel"
 }

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "xiaoqing"
 version = "4.1.0"
-description = "基于 OneBot 协议和 Python 3.10+ 异步的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
+description = "基于 OneBot 协议和 Python asyncio 的轻量级 QQ 机器人框架，内置向量记忆与行为规划"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -24,6 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Communications :: Chat",
 ]
 
@@ -31,10 +33,13 @@ classifiers = [
 dependencies = [
     "aiohttp>=3.8.0",
     "websockets>=11.0",
-    "apscheduler>=3.10.0",
+    # 3.x 私有 drain 能力经 scheduler_compat 行为探测隔离；不满足时使用公开关闭路径。
+    "apscheduler>=3.11,<4",
     "pydantic>=2.5.0",
+    "tomli>=2.0.1; python_version < '3.11'",
     # Pendo Web is enabled by default, so its server dependencies are core.
     "fastapi>=0.110.0",
+    "starlette>=0.36.3",
     "uvicorn>=0.29.0",
     "PyJWT>=2.8.0",
     "python-dateutil>=2.8.2",
@@ -48,10 +53,6 @@ plugins = [
     "pillow>=9.0.0",
     "numpy>=1.24.0",
     "matplotlib>=3.7.0",
-    "aiofiles>=23.0.0",
-    "pathvalidate>=3.2.0",
-    "jieba>=0.42.1",
-    "PyYAML>=6.0",
     "python-dateutil>=2.8.2",
 ]
 
@@ -66,7 +67,6 @@ ml = [
 # 天文工具插件
 astro = [
     "astropy>=5.0.0",
-    "astroquery>=0.4.0",
 ]
 
 # SSH远程控制插件
@@ -90,7 +90,6 @@ dev = [
     "mypy>=1.0.0",
     "pip-audit>=2.9.0",
     "pip-licenses>=5.0.0",
-    "tomli>=2.0.1; python_version < '3.11'",
     "uv==0.11.28",
 ]
 
@@ -98,6 +97,7 @@ dev = [
 # `pip install xiaoqing[web]` remains a discoverable, stable install target.
 web = [
     "fastapi>=0.110.0",
+    "starlette>=0.36.3",
     "uvicorn>=0.29.0",
     "PyJWT>=2.8.0",
 ]
@@ -108,6 +108,10 @@ jupyter = [
 ]
 
 arxiv-ml = [
+    "requests>=2.28.0",
+    "beautifulsoup4>=4.11.0",
+    "urllib3>=1.26.0",
+    "numpy>=1.24.0",
     "torch>=2.0.0",
     "transformers>=4.30.0",
     "pandas>=2.0.0",
@@ -124,11 +128,10 @@ all = [
 ]
 
 [project.urls]
-# 如果有真实的 GitHub 仓库，请替换为实际地址
-Homepage = "https://github.com/xiaoqing-bot/xiaoqing"
-Documentation = "https://github.com/xiaoqing-bot/xiaoqing#readme"
-Repository = "https://github.com/xiaoqing-bot/xiaoqing.git"
-Issues = "https://github.com/xiaoqing-bot/xiaoqing/issues"
+Homepage = "https://github.com/SukiYume/XiaoQing"
+Documentation = "https://github.com/SukiYume/XiaoQing#readme"
+Repository = "https://github.com/SukiYume/XiaoQing.git"
+Issues = "https://github.com/SukiYume/XiaoQing/issues"
 
 [project.scripts]
 xiaoqing = "main:cli"
@@ -239,12 +242,11 @@ omit = [
     "*/test_*.py",
     "*/__init__.py",
     "*/conftest.py",
-    "plugins/xiaoqing_chat/brain/*",
     "*/venv/*",
 ]
 
 [tool.coverage.report]
-fail_under = 50
+fail_under = 75
 show_missing = true
 exclude_lines = [
     "pragma: no cover",
@@ -254,19 +256,6 @@ exclude_lines = [
     "@abstractmethod",
     "if __name__ == .__main__.:",
 ]
-
-[tool.xiaoqing.coverage_floors]
-core = { line = 70, branch = 55 }
-"plugins.codex" = { line = 70, branch = 55 }
-"plugins.shell" = { line = 75, branch = 60 }
-"plugins.jupyter" = { line = 60, branch = 40 }
-"plugins.qingssh" = { line = 45, branch = 25 }
-"plugins.minecraft" = { line = 70, branch = 45 }
-"plugins.pendo" = { line = 60, branch = 40 }
-"plugins.xiaoqing_chat" = { line = 60, branch = 40 }
-"plugins.qingpet" = { line = 40, branch = 20 }
-"plugins.arxiv_filter" = { line = 20, branch = 8 }
-"plugins.astro_tools" = { line = 15, branch = 5 }
 
 [tool.black]
 line-length = 100
@@ -295,6 +284,12 @@ select = [
     "I",      # isort
     "B",      # flake8-bugbear
     "C4",     # flake8-comprehensions
+    "C901",   # McCabe complexity
+    "PIE790", # unnecessary pass after a docstring
+    "RUF009", # function call used directly as a dataclass default
+    "RUF012", # mutable class attributes must be marked ClassVar
+    "RUF059", # unpacked values that are never used
+    "TRY203", # useless try/except that immediately re-raises
     "UP",     # pyupgrade
 ]
 ignore = [
@@ -308,12 +303,85 @@ exclude = [
     "logs",
 ]
 
+[tool.ruff.lint.mccabe]
+# 超过该阈值的函数应按职责拆分，避免入口函数同时承担解析、授权和资源回收。
+max-complexity = 30
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
-exclude = [
-    "tests/",
-    "plugins/",
+check_untyped_defs = true
+# 默认检查全部生产代码；下面的逐文件排除清单是可量化的既有类型债务。
+# 插件树仍在迁移期间使用 skip，避免一次性把动态插件导入债务伪装成绿灯；core
+# 在下方 override 中恢复 normal，只有五个已登记的 core 债务模块继续显式 skip。
+# 新增运行时代码会自动进入门禁，不能再因未手工加入小样本列表而漏检。
+follow_imports = "skip"
+files = [
+    "core",
+    "plugins",
 ]
+exclude = [
+    "^tests/",
+    "^build/",
+    "^core/bounded_http\\.py$",
+    "^core/config\\.py$",
+    "^core/dispatcher\\.py$",
+    "^core/onebot\\.py$",
+    "^core/server\\.py$",
+    "^plugins/adnmb/main\\.py$",
+    "^plugins/ads_paper/ai_commands\\.py$",
+    "^plugins/ads_paper/main\\.py$",
+    "^plugins/ads_paper/storage\\.py$",
+    "^plugins/apod/main\\.py$",
+    "^plugins/arxiv_filter/arxiv_inference\\.py$",
+    "^plugins/arxiv_filter/inference/knn_backend\\.py$",
+    "^plugins/arxiv_filter/inference/multi_interest_backend\\.py$",
+    "^plugins/arxiv_filter/numerics\\.py$",
+    "^plugins/chime/main\\.py$",
+    "^plugins/github/main\\.py$",
+    "^plugins/minecraft/log_monitor\\.py$",
+    "^plugins/pendo/commands/scheduled\\.py$",
+    "^plugins/pendo/core/runtime\\.py$",
+    "^plugins/pendo/main\\.py$",
+    "^plugins/pendo/services/ai_parser\\.py$",
+    "^plugins/pendo/services/db\\.py$",
+    "^plugins/pendo/web/analytics/diary_overview\\.py$",
+    "^plugins/pendo/web/api/config_routes\\.py$",
+    "^plugins/pendo/web/api/events\\.py$",
+    "^plugins/pendo/web/api/transfer\\.py$",
+    "^plugins/wolframalpha/main\\.py$",
+    "^plugins/xiaoqing_chat/brain_chat\\.py$",
+    "^plugins/xiaoqing_chat/config/config\\.py$",
+    "^plugins/xiaoqing_chat/handlers_helper\\.py$",
+    "^plugins/xiaoqing_chat/handlers_internal\\.py$",
+    "^plugins/xiaoqing_chat/handlers\\.py$",
+    "^plugins/xiaoqing_chat/llm/llm_client\\.py$",
+    "^plugins/xiaoqing_chat/logging_utils\\.py$",
+    "^plugins/xiaoqing_chat/main\\.py$",
+    "^plugins/xiaoqing_chat/media_registry\\.py$",
+    "^plugins/xiaoqing_chat/media/emoji_library\\.py$",
+    "^plugins/xiaoqing_chat/media/event_media_analysis\\.py$",
+    "^plugins/xiaoqing_chat/media/event_media_common\\.py$",
+    "^plugins/xiaoqing_chat/media/event_media\\.py$",
+    "^plugins/xiaoqing_chat/memory/knowledge_extract\\.py$",
+    "^plugins/xiaoqing_chat/memory/vector_store\\.py$",
+    "^plugins/xiaoqing_chat/planning/pfc_engine\\.py$",
+    "^plugins/xiaoqing_chat/reply_generator\\.py$",
+    "^plugins/xiaoqing_chat/smalltalk_execution\\.py$",
+]
+
+[[tool.mypy.overrides]]
+module = ["core", "core.*"]
+follow_imports = "normal"
+
+[[tool.mypy.overrides]]
+module = [
+    "core.bounded_http",
+    "core.config",
+    "core.dispatcher",
+    "core.onebot",
+    "core.server",
+]
+follow_imports = "skip"

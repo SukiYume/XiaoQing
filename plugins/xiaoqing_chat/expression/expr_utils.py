@@ -1,28 +1,17 @@
-"""Shared utilities for the expression module."""
+"""表达学习模块的共享工具。"""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
 from ..memory.memory import StoredMessage
 from ..message_parts import render_stored_message
-from ..utils.json_parsing import parse_first_json_array, parse_first_json_object
-
-
-def extract_json_obj(text: str) -> dict[str, Any]:
-    """Extract the first JSON object from LLM response text."""
-    return parse_first_json_object(text) or {}
-
-
-def extract_json_array(text: str) -> list[dict[str, Any]]:
-    """Extract the first JSON array from LLM response text."""
-    return parse_first_json_array(text)
 
 
 def render_dialogue(
     messages: Sequence[StoredMessage], *, max_lines: int = 30, max_text_len: int = 200
 ) -> str:
-    """Render a sequence of messages into a human-readable dialogue string."""
+    """把消息序列渲染为便于阅读的对话文本。"""
     lines: list[str] = []
     for msg in messages[-max_lines:]:
         t = render_stored_message(msg)

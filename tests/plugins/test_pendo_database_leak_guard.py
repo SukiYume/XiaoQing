@@ -143,6 +143,8 @@ def test_non_pendo_plugin_path_does_not_import_database_module() -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
 

@@ -1,8 +1,9 @@
 {
     "name": "shell",
     "version": "2.0.0",
-    "description": "终端命令执行插件 - 仅管理员可用，支持白名单和安全限制",
+    "description": "管理员本地命令执行插件 - 支持命令启用列表、超时和输出限制",
     "entry": "main.py",
+    "capabilities": ["admin_sessions", "execution_timeout_exempt"],
     "commands": [
         {
             "name": "shell",
@@ -11,9 +12,33 @@
                 "sh",
                 "exec"
             ],
-            "help": "💻 执行终端命令 | /shell help 查看详细帮助",
+            "help": "💻 执行本地命令 | /shell help 查看权限边界和使用说明",
             "admin_only": true,
-            "priority": 20
+            "contexts": ["private"],
+            "priority": 20,
+            "usage": "/shell <启用的本地命令>",
+            "examples": ["/shell python --version"],
+            "invalid_examples": ["/shell command-not-enabled"],
+            "subcommands": [
+                {
+                    "name": "list",
+                    "aliases": ["列表", "-l", "--list"],
+                    "help": "查看管理员启用的本地命令入口",
+                    "usage": "/shell list",
+                    "match": "exact",
+                    "examples": ["/shell list"],
+                    "invalid_examples": ["/shell list extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?", "-h", "--help"],
+                    "help": "显示执行边界、超时和路径说明",
+                    "usage": "/shell help",
+                    "match": "exact",
+                    "examples": ["/shell help"],
+                    "invalid_examples": ["/shell help extra"]
+                }
+            ]
         }
     ],
     "schedule": []

@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from core.plugin_base import emoji, face, image, segments
 
-from .media_registry import rebuild_message_content
+from .media_registry import MEDIA_PLACEHOLDER_RE, rebuild_message_content
 from .message_parts import (
     message_parts_to_legacy,
     normalize_message_parts,
     template_with_fallback_placeholders,
 )
 from .reply_splitter import _split_chat_reply
-
-_MEDIA_PLACEHOLDER_RE = re.compile(r"\[\[xc_media_(\d+)\]\]")
 
 
 @dataclass(frozen=True)
@@ -23,6 +20,7 @@ class ReplyPayload:
     outbound_batches: list[list[dict[str, Any]]]
     media_items: list[dict[str, Any]]
     parts: tuple[dict[str, Any], ...] = ()
+
 
 def _media_segment(spec: dict[str, Any]) -> dict[str, Any] | None:
     kind = str(spec.get("kind", "") or "").strip()
@@ -45,7 +43,9 @@ def _media_segment(spec: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _build_batch_segments(batch_text: str, media_sequence: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[int]]:
+def _build_batch_segments(
+    batch_text: str, media_sequence: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[int]]:
     batch = str(batch_text or "")
     if not batch:
         return [], []
@@ -53,7 +53,7 @@ def _build_batch_segments(batch_text: str, media_sequence: list[dict[str, Any]])
     built: list[dict[str, Any]] = []
     consumed_indexes: list[int] = []
     cursor = 0
-    for match in _MEDIA_PLACEHOLDER_RE.finditer(batch):
+    for match in MEDIA_PLACEHOLDER_RE.finditer(batch):
         text_prefix = batch[cursor : match.start()].strip("\r\n")
         if text_prefix.strip():
             built.extend(segments(text_prefix))
@@ -69,12 +69,9 @@ def _build_batch_segments(batch_text: str, media_sequence: list[dict[str, Any]])
         built.extend(segments(suffix))
     return built, consumed_indexes
 
+
 def _media_sequence_from_parts(parts: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
-    return [
-        dict(part)
-        for part in parts
-        if str(part.get("kind", "") or "").strip() != "text"
-    ]
+    return [dict(part) for part in parts if str(part.get("kind", "") or "").strip() != "text"]
 
 
 def _build_reply_payload_core(

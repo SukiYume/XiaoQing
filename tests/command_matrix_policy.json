@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "default": {
+    "risk": "privileged",
+    "dependency": "local",
+    "sensitive": true,
+    "reason": "未分类命令默认禁止自动执行"
+  },
+  "plugins": {
+    "adnmb": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "ads_paper": {"risk": "isolated_state", "dependency": "external", "sensitive": false},
+    "apod": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "arxiv_filter": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "astro_tools": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "bot_core": {"risk": "privileged", "dependency": "local", "sensitive": false},
+    "chat": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "chime": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "choice": {"risk": "read_only", "dependency": "local", "sensitive": false},
+    "codex": {"risk": "privileged", "dependency": "local", "sensitive": true},
+    "color": {"risk": "read_only", "dependency": "local", "sensitive": false},
+    "dict": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "earthquake": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "echo": {"risk": "read_only", "dependency": "local", "sensitive": false},
+    "github": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "guess_number": {"risk": "isolated_state", "dependency": "local", "sensitive": false},
+    "jupyter": {"risk": "privileged", "dependency": "local", "sensitive": true},
+    "minecraft": {"risk": "privileged", "dependency": "external", "sensitive": true},
+    "pendo": {"risk": "isolated_state", "dependency": "local", "sensitive": false},
+    "qingpet": {"risk": "isolated_state", "dependency": "local", "sensitive": false},
+    "qingssh": {"risk": "privileged", "dependency": "external", "sensitive": true},
+    "shell": {"risk": "privileged", "dependency": "local", "sensitive": true},
+    "signin": {"risk": "privileged", "dependency": "external", "sensitive": true},
+    "smalltalk": {"risk": "isolated_state", "dependency": "local", "sensitive": false},
+    "twitter": {"risk": "isolated_state", "dependency": "external", "sensitive": false},
+    "url_parser": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "voice": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "wolframalpha": {"risk": "read_only", "dependency": "external", "sensitive": false},
+    "xiaoqing_chat": {"risk": "isolated_state", "dependency": "external", "sensitive": false}
+  },
+  "commands": {
+    "adnmb.adnmb.-a": {
+      "risk": "isolated_state",
+      "dependency": "external",
+      "sensitive": false,
+      "reason": "会为合成用户的匿名 UUID 写入外部订阅状态，必须与取消订阅串联"
+    },
+    "adnmb.adnmb.-e": {
+      "risk": "isolated_state",
+      "dependency": "external",
+      "sensitive": false,
+      "reason": "会修改合成用户的外部订阅状态，只能作为订阅闭环的清理步骤"
+    },
+    "astro_tools.astro.obj": {
+      "risk": "read_only",
+      "dependency": "external",
+      "sensitive": false,
+      "reason": "固定天体和帮助子命令必须在远端名称解析前拒绝多余参数",
+      "invalid_expect_any": ["请提供", "用法", "多余", "不接受参数"]
+    },
+    "bot_core.help": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "只读取统一命令目录"
+    },
+    "bot_core.plugins": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "只读取已加载插件列表"
+    },
+    "bot_core.metrics": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "只读取运行指标"
+    },
+    "bot_core.闭嘴": {
+      "risk": "isolated_state",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "只允许在合成群号中改变静音状态并在结束时恢复"
+    },
+    "bot_core.说话": {
+      "risk": "isolated_state",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "只允许在合成群号中恢复静音状态"
+    },
+    "chat.chat.help": {
+      "risk": "read_only",
+      "dependency": "external",
+      "sensitive": false,
+      "reason": "help 后的多余参数必须本地拒绝，不能作为聊天内容调用模型",
+      "invalid_expect_any": ["用法", "请输入", "参数错误", "多余参数"]
+    },
+    "color.color.-w": {
+      "risk": "privileged",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "会持久化管理员作用域的自定义颜色，必须使用唯一名称并在结尾删除"
+    },
+    "color.color.-d": {
+      "risk": "privileged",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "会删除管理员作用域的自定义颜色，只能作为同一名称生命周期的一部分"
+    },
+    "dict.dict.help": {
+      "risk": "read_only",
+      "dependency": "external",
+      "sensitive": false,
+      "reason": "help 后的多余参数必须作为格式错误处理，不能退化为词典查询",
+      "invalid_expect_any": ["用法", "参数错误", "多余参数"]
+    },
+    "jupyter.jupyter_kernel.status": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "只读取内核状态"
+    },
+    "pendo.pendo.web": {
+      "risk": "privileged",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "可能启动或停止本地 Web 服务"
+    },
+    "qingpet.qingpet.admin": {
+      "risk": "privileged",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "群管理命令可能修改成员或全群状态"
+    },
+    "qingssh.ssh.help": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "只返回帮助"
+    },
+    "qingssh.ssh.list": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": true,
+      "reason": "只列出服务器，但输出仍按敏感信息处理"
+    },
+    "qingssh.ssh.config": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": true,
+      "reason": "只读取遮罩后的配置"
+    },
+    "qingssh.ssh.status": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": true,
+      "reason": "只读取连接状态"
+    },
+    "qingssh.ssh列表": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": true,
+      "reason": "只列出服务器，但输出仍按敏感信息处理"
+    },
+    "qingssh.sshconfig": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": true,
+      "reason": "只读取遮罩后的配置"
+    },
+    "qingssh.ssh状态": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": true,
+      "reason": "只读取连接状态"
+    },
+    "shell.shell.list": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "只列出允许执行的程序"
+    },
+    "shell.shell.help": {
+      "risk": "read_only",
+      "dependency": "local",
+      "sensitive": false,
+      "reason": "只返回帮助"
+    },
+    "voice.tts.help": {
+      "risk": "read_only",
+      "dependency": "external",
+      "sensitive": false,
+      "reason": "help 后的多余参数必须本地拒绝，不能生成语音媒体",
+      "invalid_expect_any": ["用法", "参数错误", "多余参数"]
+    }
+  }
+}

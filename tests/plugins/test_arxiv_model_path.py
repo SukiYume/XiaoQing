@@ -58,11 +58,45 @@ def test_config_can_use_legacy_fallback_only_without_an_override(
     monkeypatch.setattr(
         shared,
         "load_plugin_config",
-        lambda: {"model": {"path": "missing-configured"}},
+        lambda: {"model": {}},
     )
     monkeypatch.delenv("ARXIV_MODEL_PATH", raising=False)
 
     assert shared.resolve_model_path() == str(fallback)
+
+
+def test_missing_explicit_configured_model_path_is_not_silently_replaced(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plugin_dir = tmp_path / "plugin"
+    (plugin_dir / "best_model").mkdir(parents=True)
+    monkeypatch.setattr(shared, "_PLUGIN_DIR", str(plugin_dir))
+    monkeypatch.setattr(
+        shared,
+        "load_plugin_config",
+        lambda: {"model": {"path": "missing-configured"}},
+    )
+    monkeypatch.delenv("ARXIV_MODEL_PATH", raising=False)
+
+    assert shared.resolve_model_path() == str(plugin_dir / "missing-configured")
+
+
+def test_obsolete_abstract_model_directory_is_not_auto_discovered(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plugin_dir = tmp_path / "plugin"
+    (plugin_dir / "best_model_abs").mkdir(parents=True)
+    monkeypatch.setattr(shared, "_PLUGIN_DIR", str(plugin_dir))
+    monkeypatch.setattr(
+        shared,
+        "load_plugin_config",
+        lambda: {"model": {"path": "configured"}},
+    )
+    monkeypatch.delenv("ARXIV_MODEL_PATH", raising=False)
+
+    assert shared.resolve_model_path() == str(plugin_dir / "configured")
 
 
 def test_packaged_config_and_repository_cli_expose_the_external_model_contract() -> None:
@@ -80,6 +114,8 @@ def test_packaged_config_and_repository_cli_expose_the_external_model_contract()
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
     assert completed.returncode == 0

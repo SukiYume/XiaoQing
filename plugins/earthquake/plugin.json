@@ -1,7 +1,7 @@
 {
     "name": "earthquake",
-    "version": "0.1.0",
-    "description": "地震快讯（微博中国地震台网）",
+    "version": "0.2.0",
+    "description": "查询中国地震台网速报微博，并可靠投递 4.0 级及以上新快讯",
     "entry": "main.py",
     "commands": [
         {
@@ -10,8 +10,47 @@
                 "earthquake",
                 "地震"
             ],
-            "help": "最新地震速报 (中国地震台网)",
-            "admin_only": false
+            "help": "查询最近地震快讯；定时任务推送 4.0 级及以上新快讯",
+            "admin_only": false,
+            "usage": "/earthquake [latest]",
+            "examples": ["/earthquake"],
+            "invalid_examples": ["/earthquake yesterday"],
+            "subcommands": [
+                {
+                    "name": "latest",
+                    "help": "获取最近一条地震快讯",
+                    "usage": "/earthquake latest",
+                    "match": "exact",
+                    "examples": ["/earthquake latest"],
+                    "invalid_examples": ["/earthquake latest extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["h", "帮助"],
+                    "help": "显示地震快讯命令说明",
+                    "usage": "/earthquake help",
+                    "match": "exact",
+                    "examples": ["/earthquake help"],
+                    "invalid_examples": ["/earthquake help extra"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "requests",
+            "required": true,
+            "description": "地震 feed 抓取在入口模块中直接使用 requests"
+        },
+        {
+            "name": "bs4",
+            "required": true,
+            "description": "用于解析地震详情页面"
+        },
+        {
+            "name": "PIL",
+            "required": true,
+            "description": "用于验证和转换地震图片"
         }
     ],
     "schedule": [

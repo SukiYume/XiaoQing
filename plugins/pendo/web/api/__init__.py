@@ -1,4 +1,4 @@
-"""API route aggregation for Pendo Web UI."""
+"""聚合 Pendo Web UI 使用的全部 HTTP API 子路由。"""
 
 from fastapi import APIRouter
 
@@ -15,7 +15,8 @@ from .widget import router as widget_router
 
 
 def create_api_router() -> APIRouter:
-    """Create the main API router with all sub-routers."""
+    """按公开 API 的逻辑顺序组装一份新的主路由。"""
+
     router = APIRouter()
     router.include_router(auth_router, tags=["auth"])
     router.include_router(items_router, tags=["items"])

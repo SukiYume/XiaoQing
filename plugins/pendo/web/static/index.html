@@ -1,75 +1,104 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Pendo Web</title>
-    <meta name="description" content="Pendo Web 个人管理台，用于查看总览、日程、待办、账本、笔记、日记与统计。">
-    <meta name="theme-color" content="#6366F1">
-    <link rel="icon" href="favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="css/app.css">
-</head>
-<body>
-    <!-- Login screen -->
-    <div id="login-screen" class="login-screen" style="display: none;">
-        <div class="login-shell">
-            <section class="login-stage">
-                <span class="login-stage-badge">Pendo Web</span>
-                <h1>登录你的个人管理台</h1>
-                <p>用聊天里生成的一次性登录链接进入总览、日程、待办、账本和写作空间。</p>
-                <div class="login-stage-points">
-                    <div class="login-stage-point">
-                        <strong>1</strong>
-                        <span>在聊天中执行 <code>/pendo web token</code></span>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+        <title>Pendo Web · 个人管理台</title>
+        <meta name="description" content="Pendo Web 个人管理台，用于查看总览、日程、待办、账本、笔记、日记与统计。" />
+        <meta name="theme-color" content="#6366F1" />
+        <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+        <link rel="stylesheet" href="css/app.css" />
+    </head>
+    <body>
+        <!-- 登录界面 -->
+        <div id="login-screen" class="login-screen" style="display: none">
+            <div class="login-shell">
+                <section class="login-stage" aria-labelledby="login-stage-title">
+                    <span class="login-stage-badge">Pendo Web</span>
+                    <h1 id="login-stage-title">登录你的个人管理台</h1>
+                    <p>用聊天里生成的一次性登录链接进入总览、日程、待办、账本和写作空间。</p>
+                    <div class="login-stage-points" role="list">
+                        <div class="login-stage-point" role="listitem">
+                            <strong>1</strong>
+                            <span>在聊天中执行 <code>/pendo web token</code></span>
+                        </div>
+                        <div class="login-stage-point" role="listitem">
+                            <strong>2</strong>
+                            <span>打开私聊中的登录链接，或把链接/登录码粘贴到右侧输入框</span>
+                        </div>
+                        <div class="login-stage-point" role="listitem">
+                            <strong>3</strong>
+                            <span>验证通过后直接进入当前数据空间</span>
+                        </div>
                     </div>
-                    <div class="login-stage-point">
-                        <strong>2</strong>
-                        <span>打开私聊中的登录链接，或把链接/登录码粘贴到右侧输入框</span>
+                </section>
+                <section class="login-card" aria-labelledby="login-card-title">
+                    <div class="login-card-head">
+                        <span class="login-card-kicker">一次性登录</span>
+                        <h2 id="login-card-title">粘贴登录链接或登录码</h2>
+                        <p>
+                            登录码仅可使用一次且短时有效。浏览器只保存 HttpOnly 会话 cookie，退出或过期后需要重新登录。
+                        </p>
                     </div>
-                    <div class="login-stage-point">
-                        <strong>3</strong>
-                        <span>验证通过后直接进入当前数据空间</span>
+                    <label class="login-field-label" for="token-input">登录链接 / 登录码</label>
+                    <textarea
+                        id="token-input"
+                        class="login-token-input"
+                        rows="4"
+                        placeholder="在这里粘贴私聊中的一次性登录链接或登录码"
+                        autocomplete="one-time-code"
+                        spellcheck="false"
+                        aria-describedby="login-helper login-error"
+                    ></textarea>
+                    <p id="login-error" class="error-text" role="alert" aria-live="assertive" style="display: none"></p>
+                    <div class="login-card-actions">
+                        <button id="login-btn" class="btn btn-primary" type="button">进入 Pendo</button>
                     </div>
-                </div>
-            </section>
-            <section class="login-card">
-                <div class="login-card-head">
-                    <span class="login-card-kicker">一次性登录</span>
-                    <h2>粘贴登录链接或登录码</h2>
-                    <p>登录码仅可使用一次且短时有效。浏览器只保存 HttpOnly 会话 cookie，退出或过期后需要重新登录。</p>
-                </div>
-                <label class="login-field-label" for="token-input">登录链接 / 登录码</label>
-                <textarea id="token-input" class="login-token-input" placeholder="在这里粘贴私聊中的一次性登录链接或登录码" autocomplete="off" spellcheck="false"></textarea>
-                <p id="login-error" class="error-text" style="display: none;"></p>
-                <div class="login-card-actions">
-                    <button id="login-btn" class="btn btn-primary">进入 Pendo</button>
-                </div>
-                <div class="login-card-subactions">
-                    <button id="login-demo-btn" class="btn btn-secondary" type="button">Demo</button>
-                    <button id="login-clear-btn" class="btn btn-ghost login-clear-btn" type="button">清空输入</button>
-                </div>
-                <p id="login-helper" class="login-helper">Demo 会创建一份可编辑的临时数据空间；浏览器会话可在设置页随时退出。</p>
-            </section>
+                    <div class="login-card-subactions">
+                        <button
+                            id="login-demo-btn"
+                            class="btn btn-secondary"
+                            type="button"
+                            aria-label="进入 Demo 临时空间"
+                        >
+                            Demo
+                        </button>
+                        <button id="login-clear-btn" class="btn btn-ghost login-clear-btn" type="button">
+                            清空输入
+                        </button>
+                    </div>
+                    <p id="login-helper" class="login-helper">
+                        Demo 会创建一份可编辑的临时数据空间；浏览器会话可在设置页随时退出。
+                    </p>
+                </section>
+            </div>
         </div>
-    </div>
 
-    <!-- Main app -->
-    <div id="app" style="display: none;">
-        <div id="sidebar-container"></div>
-        <div class="main-wrapper">
-            <div id="header-container"></div>
-            <main id="content" class="content"></main>
+        <!-- 主应用 -->
+        <div id="app" style="display: none">
+            <div id="sidebar-container"></div>
+            <div class="main-wrapper">
+                <div id="header-container"></div>
+                <main id="content" class="content" tabindex="-1"></main>
+            </div>
         </div>
-    </div>
 
-    <!-- Toast container -->
-    <div id="toast-container" class="toast-container"></div>
+        <!-- 全局提示 -->
+        <div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
 
-    <!-- Modal overlay -->
-    <div id="modal-overlay" class="modal-overlay" style="display: none;">
-        <div id="modal-content" class="modal-content"></div>
-    </div>
+        <!-- 模态框 -->
+        <div
+            id="modal-overlay"
+            class="modal-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-label="对话框"
+            tabindex="-1"
+            style="display: none"
+        >
+            <div id="modal-content" class="modal-content"></div>
+        </div>
 
-    <script type="module" src="js/app.js?v=20260430"></script>
-</body>
+        <script type="module" src="js/app.js?v=20260430"></script>
+    </body>
 </html>

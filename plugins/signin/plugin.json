@@ -1,27 +1,51 @@
 {
-	"name": "signin",
-	"version": "2.0.0",
-	"description": "自动签到插件 - 支持 Sony 官方商城、影视飓风等平台",
-	"entry": "main.py",
-	"commands": [
-		{
-			"name": "signin",
-			"triggers": [
-				"signin",
-				"签到"
-			],
-			"help": "📝 自动签到 | /signin help 查看详细帮助",
-			"admin_only": true
-		}
-	],
-	"schedule": [
-		{
-			"id": "yingshi",
-			"handler": "scheduled_yingshi",
-			"cron": {
-				"hour": 0,
-				"minute": 30
-			}
-		}
-	]
+    "name": "signin",
+    "version": "2.0.0",
+    "description": "管理员专用的影视飓风远端签到插件",
+    "entry": "main.py",
+    "commands": [
+        {
+            "name": "signin",
+            "triggers": [
+                "signin",
+                "签到"
+            ],
+            "help": "📝 影视飓风远端签到 | /signin help 查看说明",
+            "admin_only": true,
+            "usage": "/signin yingshi",
+            "examples": ["/signin yingshi"],
+            "invalid_examples": ["/signin unknown"],
+            "subcommands": [
+                {
+                    "name": "yingshi",
+                    "aliases": ["yingshijufeng", "y"],
+                    "help": "立即执行影视飓风签到",
+                    "usage": "/signin yingshi",
+                    "match": "exact",
+                    "examples": ["/signin yingshi"],
+                    "invalid_examples": ["/signin yingshi extra"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示签到说明和凭据路径",
+                    "usage": "/signin help",
+                    "match": "exact",
+                    "examples": ["/signin help"],
+                    "invalid_examples": ["/signin help extra"]
+                }
+            ]
+        }
+    ],
+    "schedule": [
+        {
+            "id": "yingshi",
+            "handler": "scheduled_yingshi",
+            "cron": {
+                "hour": 0,
+                "minute": 30
+            }
+        }
+    ],
+    "concurrency": "sequential"
 }

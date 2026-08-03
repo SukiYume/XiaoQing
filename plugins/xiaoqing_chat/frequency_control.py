@@ -5,22 +5,15 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .constants import is_question
+from .participation import (
+    classify_group_participation_cue,
+    is_group_turn_directed_to_other,
+    is_low_information_group_turn,
+)
+
 if TYPE_CHECKING:
     from .runtime_state import _ChatRuntime
-
-
-def _cfg_float(cfg: object, name: str, default: float) -> float:
-    value = getattr(cfg, name, default)
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return default
-    return default
 
 
 @dataclass(frozen=True)
@@ -37,6 +30,7 @@ class ReplyGateDecision:
     no_reply_streak: int = 0
     heartflow_score: float | None = None
     active_topic: bool = False
+    participation_cue: str = ""
 
     def as_log_fields(self) -> dict[str, object]:
         fields: dict[str, object] = {
@@ -48,6 +42,7 @@ class ReplyGateDecision:
             "cooldown_left_seconds": round(self.cooldown_left_seconds, 3),
             "no_reply_streak": self.no_reply_streak,
             "active_topic": self.active_topic,
+            "participation_cue": self.participation_cue,
         }
         if self.probability is not None:
             fields["probability"] = round(self.probability, 4)
@@ -71,7 +66,7 @@ def _freq_record(chat_id: str, runtime: _ChatRuntime, state, *, forced: bool) ->
 
     c = state.get_continuous_reply_count(chat_id) + 1
     state.set_continuous_reply_count(chat_id, c)
-    if runtime.cfg.continuous_reply_limit > 0 and c > runtime.cfg.continuous_reply_limit:
+    if runtime.cfg.continuous_reply_limit > 0 and c >= runtime.cfg.continuous_reply_limit:
         state.set_continuous_cooldown_until(
             chat_id, now + max(0.0, runtime.cfg.continuous_cooldown_seconds)
         )
@@ -127,21 +122,30 @@ async def _should_reply_decision(
     goal = getattr(goal_state, "goal", "") if goal_state else ""
     goal_ts = float(getattr(goal_state, "ts", 0.0) or 0.0) if goal_state else 0.0
 
-    # --- Hard constraints: rate limit & cooldown always apply ---
+    # --- 硬约束：无论其他信号如何，限流和冷却都必须生效。---
     seconds_since = max(0.0, now - last) if last else 9999.0
 
     is_active_topic = False
     if not is_private and goal and (now - goal_ts < 300) and (seconds_since < 300):
         is_active_topic = True
+    active_followup_question = is_active_topic and is_question(text)
+    participation_cue = "" if is_private else classify_group_participation_cue(text)
 
     actual_min_interval = runtime.cfg.min_reply_interval_seconds
     if is_active_topic:
         # 群聊中连续话题，允许更快回复
         active_topic_min_interval = max(
             0.0,
-            _cfg_float(runtime.cfg, "active_topic_min_reply_interval", 3.0),
+            runtime.cfg.active_topic_min_reply_interval,
         )
         actual_min_interval = min(actual_min_interval, active_topic_min_interval)
+        if active_followup_question:
+            # 别人紧接着追问上一条回复时，不应仍套用普通群聊的长间隔。
+            question_min_interval = max(
+                0.0,
+                runtime.cfg.active_topic_question_min_reply_interval,
+            )
+            actual_min_interval = min(actual_min_interval, question_min_interval)
 
     def make_decision(
         should_reply: bool,
@@ -165,6 +169,7 @@ async def _should_reply_decision(
             no_reply_streak=no_reply_streak,
             heartflow_score=heartflow_score,
             active_topic=is_active_topic,
+            participation_cue=participation_cue,
         )
         _remember_reply_gate_decision(state, chat_id, decision)
         return decision
@@ -175,6 +180,10 @@ async def _should_reply_decision(
         return make_decision(False, "max_replies_per_minute")
     if cooldown_left > 0:
         return make_decision(False, "continuous_cooldown")
+    if not is_private and is_low_information_group_turn(text):
+        return make_decision(False, "low_information")
+    if not is_private and is_group_turn_directed_to_other(text):
+        return make_decision(False, "directed_to_other")
 
     # --- 深度对话模式下跳过概率控制 ---
     if enable_private_brain_chat and is_private:
@@ -183,9 +192,21 @@ async def _should_reply_decision(
     # --- 单层概率控制：这里只处理普通参与，明确私聊/点名已在前面放行 ---
     p = runtime.cfg.reply_probability_base
 
+    if participation_cue:
+        # 明确面向全群的问题、邀请和开场梗值得更稳定地进入 PFC；这里仍只提高
+        # 概率，前面的间隔、每分钟上限和连续回复冷却继续作为硬约束。
+        cue_probability = runtime.cfg.participation_cue_reply_probability
+        p = max(p, min(1.0, cue_probability))
+
     if (not is_private) and is_active_topic:
-        # 活跃话题期间提高概率，使机器人更容易接住连续对话。
-        p = min(0.95, p + (1.0 - p) * 0.6)
+        # 使用明确上限而不是按剩余概率大幅增益，避免 0.72 被抬到 0.888 一类过强参与率。
+        active_probability = runtime.cfg.active_topic_reply_probability
+        p = max(p, min(1.0, active_probability))
+        if active_followup_question:
+            # 活跃话题里的明确追问更像连续对话，而不是随机插话；仍保留小概率静默，
+            # 后续 PFC 也会再次判断消息是否真的在跟小青说话。
+            question_probability = runtime.cfg.active_topic_question_reply_probability
+            p = max(p, min(1.0, question_probability))
 
     # Heartflow 信号作为概率调整（软加分），不再作为硬门槛
     hf_score: float | None = None
@@ -205,7 +226,7 @@ async def _should_reply_decision(
         hf_bonus = max(0.0, hf_score - runtime.cfg.heartflow.base_score)
         p = p + (1.0 - p) * hf_bonus
 
-    # --- Dynamic threshold: consecutive no-reply lowers the bar (MaiBot-style) ---
+    # --- 动态阈值：连续不回复会逐步降低门槛（参考 MaiBot）。---
     no_reply_streak = (await state.heartflow.get_async(chat_id)).no_reply_streak
     if no_reply_streak >= 5:
         p = min(p * 1.4, 0.95)

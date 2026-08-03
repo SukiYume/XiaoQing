@@ -6,17 +6,50 @@ XiaoQing 主应用
 
 import asyncio
 import functools
+import inspect
 import logging
+import math
+import threading
 import time
-import weakref
-from collections.abc import Awaitable, Callable
-from contextvars import ContextVar
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 
+from .ai import (
+    AICompletionResult,
+    AIModelInfo,
+    complete_configured_route,
+    list_configured_models,
+)
+from .app_delivery import AppDeliveryMixin
+from .app_identity import AppIdentityService
+from .app_ingress import AppIngressMixin
+from .app_plugin_watch import AppPluginWatchMixin
+from .app_scheduling import AppSchedulingMixin
+from .app_support import (
+    _PLUGIN_WATCH_RESTART_BASE_DELAY_SECONDS,
+    _PLUGIN_WATCH_RESTART_MAX_DELAY_SECONDS,
+    _PLUGIN_WATCH_STABLE_RESET_SECONDS,
+    _STARTUP_OWNERSHIP_MAX_ATTEMPTS,
+    _STARTUP_OWNERSHIP_RETRY_BASE_DELAY_SECONDS,
+    _STARTUP_OWNERSHIP_RETRY_MAX_DELAY_SECONDS,
+    _STARTUP_OWNERSHIP_TIMEOUT_SECONDS,
+    ApplicationLifecycleFatalError,
+    InboundReconcileError,
+    _AppLifecycleState,
+    _coerce_runtime_number,
+    _ConfigApplyOwner,
+    _inbound_credentials,
+    _onebot_credentials,
+    _require_onebot_holder_credentials,
+    _run_background_operation,
+    _trusted_secrets,
+    current_action_sink,
+)
 from .capabilities import (
+    AIService,
     ChatReplyService,
     CodexArxivSummaryService,
     ConfigSubscriptionService,
@@ -24,29 +57,40 @@ from .capabilities import (
     SecretAdminService,
     VoiceSynthesisService,
 )
-from .config import ConfigManager, ConfigSnapshot, _freeze_config_mapping
+from .config import ConfigManager, ConfigSnapshot, ConfigSourceStatus
 from .constants import (
     DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_HTTP_TIMEOUT_SECONDS,
-    DEFAULT_INBOUND_WS_QUEUE_SIZE,
     DEFAULT_MAX_CONCURRENCY,
     DEFAULT_SESSION_TIMEOUT_SEC,
-    INBOUND_EVENT_DEDUP_TTL_SECONDS,
-    MAX_INBOUND_EVENT_DEDUP_KEYS,
-    MAX_MESSAGE_PREVIEW_LENGTH,
-    MESSAGE_SPLIT_DELAY,
 )
-from .context import PluginContext
-from .dispatcher import Dispatcher
-from .interfaces import DeliveryTarget, PluginCapabilities, PluginPrincipal
+from .context import PluginContext, _scoped_plugin_config, _scoped_plugin_secrets
+from .dispatcher import AdjustableSemaphore, Dispatcher
+from .interfaces import (
+    PluginCapabilities,
+    PluginPrincipal,
+    PluginSettingsSnapshot,
+)
+from .lifecycle import (
+    DeferredCancellation as _DeferredCancellation,
+)
+from .lifecycle import LazyAsyncLock as _LazyAsyncLock
+from .lifecycle import (
+    OwnedTaskFatalError as _OwnedTaskFatalError,
+)
+from .lifecycle import (
+    await_owned_task as _await_owned_task,
+)
+from .lifecycle import (
+    run_owned_operation as _run_owned_operation,
+)
 from .logging_config import LogManager, setup_logging
 from .metrics import MetricsCollector
-from .onebot import OneBotHttpSender, OneBotWsClient, _extract_message_preview
-from .plugin_base import build_action, segments, split_message_segments
+from .onebot import (
+    OneBotHttpSender,
+    OneBotWsClient,
+)
 from .plugin_execution import (
-    PluginExecutionClosed,
-    PluginExecutionTimeout,
-    PluginExecutionUnavailable,
     call_plugin_callback,
     invoke_loaded_plugin,
 )
@@ -58,59 +102,21 @@ from .session import SessionManager
 
 logger = logging.getLogger(__name__)
 
-Action = dict[str, Any]
-ActionSink = Callable[[Action], Awaitable[None]]
-current_action_sink: ContextVar[ActionSink | None] = ContextVar("current_action_sink", default=None)
+__all__ = [
+    "ApplicationLifecycleFatalError",
+    "InboundReconcileError",
+    "XiaoQingApp",
+    "_onebot_credentials",
+    "current_action_sink",
+]
 
 
-def _build_shared_http_timeout() -> aiohttp.ClientTimeout:
-    return aiohttp.ClientTimeout(
-        total=DEFAULT_HTTP_TIMEOUT_SECONDS,
-        connect=DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
-    )
-
-
-class _PrincipalAuthority:
-    """Track principals minted by one Application instance by object identity."""
-
-    def __init__(self) -> None:
-        self._issued: weakref.WeakKeyDictionary[PluginPrincipal, str] = weakref.WeakKeyDictionary()
-
-    def issue(
-        self,
-        *,
-        kind: str,
-        user_id: int | None = None,
-        group_id: int | None = None,
-        is_bot_admin: bool = False,
-        is_private: bool = False,
-        group_role: str = "unknown",
-        delivery_targets: tuple[DeliveryTarget, ...] | None = None,
-    ) -> PluginPrincipal:
-        if delivery_targets is None:
-            if kind == "user" and group_id is not None:
-                delivery_targets = (DeliveryTarget("group", int(group_id)),)
-            elif kind == "user" and user_id is not None:
-                delivery_targets = (DeliveryTarget("private", int(user_id)),)
-            else:
-                delivery_targets = ()
-        principal = PluginPrincipal(
-            kind=kind,  # type: ignore[arg-type]
-            user_id=user_id,
-            group_id=group_id,
-            is_bot_admin=is_bot_admin,
-            is_private=is_private,
-            group_role=group_role,  # type: ignore[arg-type]
-            delivery_targets=delivery_targets,
-        )
-        self._issued[principal] = kind
-        return principal
-
-    def owns(self, principal: PluginPrincipal) -> bool:
-        return self._issued.get(principal) == principal.kind
-
-
-class XiaoQingApp:
+class XiaoQingApp(
+    AppPluginWatchMixin,
+    AppDeliveryMixin,
+    AppIngressMixin,
+    AppSchedulingMixin,
+):
     """XiaoQing 主应用类"""
 
     def __init__(
@@ -130,6 +136,8 @@ class XiaoQingApp:
             root / "config" / "config.json",
             root / "config" / "secrets.json",
         )
+        self._plugin_settings_cache: dict[tuple[str, int], PluginSettingsSnapshot] = {}
+        self._plugin_settings_cache_revision: int | None = None
 
         # 初始化日志系统（使用新的日志模块）
         self.log_manager: LogManager = setup_logging(
@@ -144,20 +152,34 @@ class XiaoQingApp:
         self.http_sender: OneBotHttpSender | None = None
         self.ws_client: OneBotWsClient | None = None
         self.inbound_manager: InboundManager | None = None
-        self._admin_set: set[int] = set()
-        self._principal_authority = _PrincipalAuthority()
+        self.identity_service = AppIdentityService()
+        # Kept as an internal alias for existing diagnostics; ownership and
+        # replacement semantics live in AppIdentityService.
+        self._admin_set = self.identity_service.admin_ids
 
         # 核心组件
         self.router: CommandRouter = router or CommandRouter()
         self.plugins_dir: Path = root / "plugins"
-        poll_interval = float(self.config_manager.config.get("plugin_poll_interval", 3600))
+        poll_interval = _coerce_runtime_number(
+            self.config_manager.config.get("plugin_poll_interval", 3600),
+            key="plugin_poll_interval",
+            default=3600.0,
+            integer=False,
+            minimum=0.01,
+            maximum=86400.0,
+        )
         context_factory = self._build_plugin_context
         manager_factory = PluginManager
+        configured_data_root = self.config_manager.config.get("data_root")
+        plugin_data_root = (
+            root / "data" if configured_data_root is None else Path(str(configured_data_root))
+        )
         self.plugin_manager: PluginManager = plugin_manager or manager_factory(
             self.plugins_dir,
             self.router,
             context_factory,
             poll_interval=poll_interval,
+            data_root=plugin_data_root,
         )
         self._configure_plugin_execution(self.config_manager.config)
         self.scheduler: SchedulerManager = scheduler or SchedulerManager(
@@ -166,24 +188,29 @@ class XiaoQingApp:
         self.metrics: MetricsCollector = MetricsCollector()
 
         # 会话管理器（用于多轮对话）
-        session_timeout = float(
-            self.config_manager.config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC)
+        session_timeout = _coerce_runtime_number(
+            self.config_manager.config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC),
+            key="session_timeout",
+            default=DEFAULT_SESSION_TIMEOUT_SEC,
+            integer=False,
+            minimum=0.001,
+            maximum=604800.0,
         )
         self.session_manager: SessionManager = session_manager or SessionManager(
             default_timeout=session_timeout
         )
 
         # 消息分发器
-        concurrency = int(
-            self.config_manager.config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY)
+        concurrency = _coerce_runtime_number(
+            self.config_manager.config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
+            key="max_concurrency",
+            default=DEFAULT_MAX_CONCURRENCY,
+            integer=True,
+            minimum=1,
+            maximum=1024,
         )
         self._dispatcher_concurrency = concurrency
-        # Create Semaphore - if no event loop, defer creation
-        try:
-            semaphore = asyncio.Semaphore(concurrency)
-        except RuntimeError:
-            # No event loop running - will be created later or mocked in tests
-            semaphore = None  # type: ignore
+        semaphore = AdjustableSemaphore(concurrency)
 
         self.dispatcher: Dispatcher = dispatcher or Dispatcher(
             self.router,
@@ -196,85 +223,89 @@ class XiaoQingApp:
             self.metrics,
         )
 
-        self._load_admins()
-
         self._session_cleanup_task: asyncio.Task[None] | None = None
-        self._reload_lock: asyncio.Lock | None = None
+        self._reload_lock = _LazyAsyncLock()
         self._reload_task: asyncio.Task[None] | None = None
         self._ws_client_task: asyncio.Task[None] | None = None
+        self._ws_client_stop_task: asyncio.Task[Any] | None = None
         self._config_watch_task: asyncio.Task[None] | None = None
         self._plugin_watch_task: asyncio.Task[None] | None = None
+        self._plugin_watch_tasks: set[asyncio.Task[None]] = set()
+        self._plugin_watch_restart_task: asyncio.Task[None] | None = None
+        self._plugin_watch_desired = False
+        self._plugin_watch_restart_pending = False
+        self._plugin_watch_restart_failures = 0
+        self._plugin_watch_restart_base_delay_seconds = _PLUGIN_WATCH_RESTART_BASE_DELAY_SECONDS
+        self._plugin_watch_restart_max_delay_seconds = _PLUGIN_WATCH_RESTART_MAX_DELAY_SECONDS
+        self._plugin_watch_stable_reset_seconds = _PLUGIN_WATCH_STABLE_RESET_SECONDS
         self._config_apply_task: asyncio.Task[None] | None = None
+        self._config_apply_tasks: set[asyncio.Task[None]] = set()
+        self._config_apply_generation = 0
+        self._config_apply_revision = -1
+        self._config_apply_owner: _ConfigApplyOwner | None = None
+        self._security_generation = 0
+        self._security_revision = -1
+        self._security_snapshot: ConfigSnapshot | None = None
+        self._security_conflict_revision: int | None = None
+        initial_snapshot = self.config_manager.snapshot()
+        (
+            self._runtime_onebot_token,
+            self._runtime_onebot_credentials_trusted,
+        ) = _onebot_credentials(initial_snapshot)
+        self._runtime_inbound_token = _inbound_credentials(initial_snapshot)
+        self._load_admins(_trusted_secrets(initial_snapshot))
+        self._runtime_inbound_key: tuple[Any, ...] | None = None
+        self._onebot_auth_generation = 0
+        self._ws_client_auth_generation = 0
+        self._ws_client_auth_quarantine: OneBotWsClient | None = None
         self._shutdown_task: asyncio.Task[None] | None = None
+        self._lifecycle_lock = _LazyAsyncLock()
+        self._inbound_reconcile_lock = _LazyAsyncLock()
+        self._inbound_cleanup_pending: list[InboundManager] = []
+        self._inbound_cleanup_quarantine: dict[int, BaseException] = {}
+        self._runtime_auth_lock = threading.RLock()
+        self._inbound_candidates_active: set[InboundManager] = set()
+        self._inbound_candidates_lock = threading.RLock()
+        self._lifecycle_state = _AppLifecycleState.NEW
         self._stopping = False
+        self._defer_plugin_schedule_updates = False
+        self._background_task_stop_timeout_seconds = 5.0
         self._last_shutdown_errors: tuple[str, ...] = ()
         self._last_connect_notification_ts: float = 0.0
-        self._recent_event_ids: dict[str, float] = {}
-        self._event_dedupe_lock: asyncio.Lock | None = None
+        self._recent_event_ids: dict[tuple[tuple[str, str], ...], float] = {}
+        self._event_dedupe_expirations: list[tuple[float, int, tuple[tuple[str, str], ...]]] = []
+        self._event_dedupe_sequence = 0
+        self._event_dedupe_lock = _LazyAsyncLock()
 
         # 注册回调
         self.plugin_manager.on_change(self._reschedule)
+        security_updates = getattr(self.config_manager, "on_security_update", None)
+        if callable(security_updates):
+            security_updates(self._apply_security_snapshot)
         self.config_manager.on_reload(self._apply_config)
 
-    def _ensure_reload_lock(self) -> asyncio.Lock:
-        """Ensure reload lock is initialized (requires event loop)"""
-        if self._reload_lock is None:
-            self._reload_lock = asyncio.Lock()
-        return self._reload_lock
+    def _unregister_inbound_candidate(self, manager: InboundManager) -> None:
+        with self._inbound_candidates_lock:
+            self._inbound_candidates_active.discard(manager)
 
-    def _configure_plugin_execution(self, config: dict[str, Any]) -> None:
-        configure = getattr(self.plugin_manager, "configure_execution", None)
-        if callable(configure):
-            configure(config.get("plugin_execution", {}))
-
-    def _plugin_watch_enabled(self, config: dict[str, Any] | None = None) -> bool:
-        source = config if config is not None else self.config
-        return bool(source.get("enable_plugin_watcher", False))
-
-    def _plugin_watch_poll_interval(self, config: dict[str, Any] | None = None) -> float:
-        source = config if config is not None else self.config
-        try:
-            return float(source.get("plugin_poll_interval", 3600))
-        except (TypeError, ValueError):
-            return 3600.0
-
-    def _watch_runtime_active(self) -> bool:
-        return self._config_watch_task is not None
-
-    def _configure_plugin_watch(self, config: dict[str, Any] | None = None) -> None:
-        if self._stopping:
-            logger.debug("Ignoring plugin watcher configuration while stopping")
-            return
-        self.plugin_manager.update_poll_interval(self._plugin_watch_poll_interval(config))
-        if not self._watch_runtime_active():
-            return
-
-        if self._plugin_watch_enabled(config):
-            if self._plugin_watch_task is None or self._plugin_watch_task.done():
-                self._plugin_watch_task = asyncio.create_task(self.plugin_manager.watch())
-            return
-
-        task = self._plugin_watch_task
-        if task is not None and not task.done():
-            task.cancel()
-        self._plugin_watch_task = None
+    def _active_inbound_candidates(self) -> tuple[InboundManager, ...]:
+        with self._inbound_candidates_lock:
+            return tuple(self._inbound_candidates_active)
 
     # ============================================================
     # 属性代理（供 Dispatcher 使用）
     # ============================================================
 
     @property
-    def config(self) -> dict[str, Any]:
-        return self.config_manager.config
+    def config(self) -> Mapping[str, Any]:
+        return cast(Mapping[str, Any], self.config_manager.config)
 
     @property
-    def secrets(self) -> dict[str, Any]:
-        return self.config_manager.secrets
+    def secrets(self) -> Mapping[str, Any]:
+        return cast(Mapping[str, Any], self.config_manager.secrets)
 
     def is_admin(self, user_id: int | None) -> bool:
-        if not user_id:
-            return False
-        return int(user_id) in self._admin_set
+        return self.identity_service.is_admin(user_id)
 
     def issue_user_principal(
         self,
@@ -286,230 +317,805 @@ class XiaoQingApp:
     ) -> PluginPrincipal:
         """Mint a user principal from one authenticated OneBot event."""
 
-        role = "unknown"
-        sender = event.get("sender")
-        if group_id is not None and isinstance(sender, dict):
-            sender_user_id = sender.get("user_id")
-            try:
-                sender_matches = (
-                    sender_user_id is not None
-                    and user_id is not None
-                    and int(sender_user_id) == int(user_id)
-                )
-            except (TypeError, ValueError):
-                sender_matches = False
-            candidate_role = str(sender.get("role", "") or "").strip().lower()
-            if sender_matches and candidate_role in {"owner", "admin", "member"}:
-                role = candidate_role
-        return self._principal_authority.issue(
-            kind="user",
+        return self.identity_service.issue_user_principal(
+            event,
             user_id=user_id,
             group_id=group_id,
-            is_bot_admin=self.is_admin(user_id),
             is_private=is_private,
-            group_role=role,
         )
 
-    def _load_admins(self, secrets: dict[str, Any] | None = None) -> None:
+    def _load_admins(self, secrets: Mapping[str, Any] | None = None) -> None:
         source = secrets if secrets is not None else self.secrets
-        raw_ids = source.get("admin_user_ids", [])
-        try:
-            self._admin_set = {int(x) for x in raw_ids}
-        except (TypeError, ValueError):
-            logger.warning("Invalid admin_user_ids in secrets")
-            self._admin_set = set()
+        self.identity_service.load_admins(source)
 
     # ============================================================
     # 生命周期
     # ============================================================
 
-    async def start(self) -> None:
-        """启动应用"""
-        if self._stopping:
-            raise RuntimeError("Cannot start an application that is stopping or stopped")
+    def _latest_startup_snapshot(self) -> ConfigSnapshot:
+        """Return the newest security-published snapshot as one atomic pair."""
 
-        # M1: 延迟初始化 Semaphore（确保运行在事件循环中）
-        if self.dispatcher.semaphore is None:
-            concurrency = int(self.config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY))
-            self.dispatcher.semaphore = asyncio.Semaphore(concurrency)
+        manager_snapshot = self.config_manager.snapshot()
+        with self._runtime_auth_lock:
+            security_snapshot = self._security_snapshot
+            if security_snapshot is None or manager_snapshot.revision > security_snapshot.revision:
+                self._apply_security_snapshot_locked(manager_snapshot)
+                return manager_snapshot
+            return security_snapshot
 
-        # 初始化 HTTP 会话
-        self.http_session = aiohttp.ClientSession(timeout=_build_shared_http_timeout())
+    def _claim_or_reuse_startup_owner(
+        self,
+        snapshot: ConfigSnapshot,
+    ) -> _ConfigApplyOwner | None:
+        owner = self._claim_config_apply_owner(snapshot)
+        if owner is not None:
+            return owner
+        with self._runtime_auth_lock:
+            owner = self._config_apply_owner
+            if (
+                owner is not None
+                and not self._stopping
+                and owner.revision == snapshot.revision
+                and owner.security_generation == self._security_generation
+                and owner.generation == self._config_apply_generation
+            ):
+                return owner
+        return None
 
-        # 初始化 HTTP 发送器（可选）
-        http_base = str(self.config.get("onebot_http_base", "") or "").strip()
-        if http_base:
-            self.http_sender = OneBotHttpSender(
-                http_base,
-                self.secrets.get("onebot_token", ""),
-                self.http_session,
+    async def _wait_for_startup_ownership_retry(
+        self,
+        *,
+        attempt: int,
+        started_at: float,
+        reason: str,
+    ) -> None:
+        """Apply bounded backoff or fail startup when ownership never stabilizes."""
+
+        elapsed = max(0.0, time.monotonic() - started_at)
+        if (
+            attempt >= _STARTUP_OWNERSHIP_MAX_ATTEMPTS
+            or elapsed >= _STARTUP_OWNERSHIP_TIMEOUT_SECONDS
+        ):
+            logger.error(
+                "Application startup ownership did not stabilize after %d attempt(s) "
+                "and %.3fs; last_reason=%s",
+                attempt,
+                elapsed,
+                reason,
             )
-        else:
-            self.http_sender = None
-            logger.info("HTTP sender disabled (onebot_http_base is empty)")
+            raise RuntimeError("startup authentication ownership did not stabilize")
 
-        # 加载插件
-        self.plugin_manager.load_all()
-        await self.plugin_manager.wait_inits()
+        exponent = min(max(0, attempt - 1), 16)
+        delay = min(
+            _STARTUP_OWNERSHIP_RETRY_MAX_DELAY_SECONDS,
+            _STARTUP_OWNERSHIP_RETRY_BASE_DELAY_SECONDS * (2**exponent),
+        )
+        await asyncio.sleep(max(0.0, delay))
+
+    async def start(self) -> None:
+        """Start one runtime generation, rolling it back completely on failure."""
+        async with self._lifecycle_lock.get():
+            if self._stopping:
+                raise RuntimeError(
+                    f"Cannot start application in lifecycle state {self._lifecycle_state.value}"
+                )
+            if self._lifecycle_state is _AppLifecycleState.RUNNING:
+                return
+            if self._lifecycle_state in {
+                _AppLifecycleState.STOPPING,
+                _AppLifecycleState.STOPPED,
+                _AppLifecycleState.FAILED,
+            }:
+                raise RuntimeError(
+                    f"Cannot start application in lifecycle state {self._lifecycle_state.value}"
+                )
+            if self._lifecycle_state is not _AppLifecycleState.NEW:
+                raise RuntimeError("Application start is already in progress")
+
+            self._lifecycle_state = _AppLifecycleState.STARTING
+            self._last_shutdown_errors = ()
+            try:
+                await self._start_runtime()
+            except BaseException as start_error:
+                self._stopping = True
+                rollback_errors: list[str] = []
+                deferred_cancellation = _DeferredCancellation()
+                cleanup_task = asyncio.create_task(
+                    _run_owned_operation(lambda: self._cleanup_runtime(rollback_errors))
+                )
+                try:
+                    await _await_owned_task(cleanup_task, deferred_cancellation)
+                except BaseException as cleanup_exc:
+                    rollback_errors.append(
+                        f"rollback task: {type(cleanup_exc).__name__}: {cleanup_exc}"
+                    )
+                    logger.exception("Application startup rollback failed", exc_info=cleanup_exc)
+                self._last_shutdown_errors = tuple(rollback_errors)
+                if rollback_errors:
+                    self._lifecycle_state = _AppLifecycleState.FAILED
+                    logger.error(
+                        "Application startup rollback left %d cleanup error(s): %s",
+                        len(rollback_errors),
+                        "; ".join(rollback_errors),
+                    )
+                else:
+                    self._lifecycle_state = _AppLifecycleState.NEW
+                    self._stopping = self._shutdown_task is not None
+                    # A clean rollback owns no runtime side effects.  Release
+                    # its startup-only revision claim so a same-revision
+                    # pre-start apply/retry can run, while keeping generation
+                    # counters and the fail-closed security revision monotonic.
+                    with self._runtime_auth_lock:
+                        self._config_apply_owner = None
+                        self._config_apply_revision = -1
+                if isinstance(start_error, asyncio.CancelledError):
+                    raise
+                deferred_cancellation.raise_if_requested(cause=start_error)
+                if isinstance(start_error, Exception):
+                    raise
+                raise ApplicationLifecycleFatalError(start_error) from None
+
+            self._lifecycle_state = _AppLifecycleState.RUNNING
+
+    async def _start_runtime(self) -> None:
+        startup_snapshot = self._latest_startup_snapshot()
+        startup_config = startup_snapshot.config
+
+        # 注入的测试 dispatcher 可以没有 limiter；生产 limiter 始终原地调容。
+        concurrency = _coerce_runtime_number(
+            startup_config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
+            key="max_concurrency",
+            default=DEFAULT_MAX_CONCURRENCY,
+            integer=True,
+            minimum=1,
+            maximum=1024,
+        )
+        session_timeout = _coerce_runtime_number(
+            startup_config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC),
+            key="session_timeout",
+            default=DEFAULT_SESSION_TIMEOUT_SEC,
+            integer=False,
+            minimum=0.001,
+            maximum=604800.0,
+        )
+        if self.dispatcher.semaphore is None:
+            self.dispatcher.semaphore = AdjustableSemaphore(concurrency)
+        elif isinstance(self.dispatcher.semaphore, AdjustableSemaphore):
+            self.dispatcher.semaphore.resize(concurrency)
+        self.session_manager.set_default_timeout(session_timeout)
+
+        self.http_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(
+                total=DEFAULT_HTTP_TIMEOUT_SECONDS,
+                connect=DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
+            )
+        )
+
+        self._defer_plugin_schedule_updates = True
+        try:
+            self.plugin_manager.load_all()
+            await self.plugin_manager.wait_inits()
+        finally:
+            self._defer_plugin_schedule_updates = False
+        self.scheduler.ensure_started()
         self._reschedule("startup")
 
-        self._session_cleanup_task = asyncio.create_task(self._cleanup_sessions_loop())
-        self._config_watch_task = asyncio.create_task(self.config_manager.watch())
-        self._configure_plugin_watch(self.config)
-
-        # 可选：启动 WebSocket 客户端（连接到 OneBot 服务端）
-        if self.config.get("enable_ws_client", True):
-            ws_uri = self.config.get("onebot_ws_uri", "")
-            if ws_uri:
-                ws_queue_size_raw = self.config.get("ws_queue_size", DEFAULT_INBOUND_WS_QUEUE_SIZE)
-                try:
-                    ws_queue_size = int(ws_queue_size_raw)
-                except (TypeError, ValueError):
-                    ws_queue_size = DEFAULT_INBOUND_WS_QUEUE_SIZE
-                self.ws_client = OneBotWsClient(
-                    ws_uri,
-                    self.secrets.get("onebot_token", ""),
-                    queue_size=ws_queue_size,
-                )
-                self.ws_client.set_on_connect(self._on_ws_connected)
-                self._ws_client_task = asyncio.create_task(
-                    self.ws_client.connect_and_listen(self._handle_upstream_event)
-                )
-                logger.info("WebSocket client enabled, connecting to %s", ws_uri)
-            else:
-                logger.warning("WebSocket client enabled but onebot_ws_uri is empty")
-        else:
-            logger.info("WebSocket client disabled")
-
-        # 可选：启动 HTTP/WS 服务端（接收外部请求）
-        self.inbound_manager = InboundManager.from_config(
-            config=self.config,
-            token=self.secrets.get("inbound_token", ""),
-            handler=self._handle_inbound_event,
+        self._session_cleanup_task = asyncio.create_task(
+            _run_background_operation(self._cleanup_sessions_loop)
         )
-        if self.inbound_manager:
-            self._bind_inbound_status_providers(self.inbound_manager)
-            await self.inbound_manager.start()
+
+        # Build every authentication holder from one immutable snapshot.  A
+        # security publication can run from another thread (or re-enter a
+        # patched factory in tests), so retry until one owner survives every
+        # await and publication boundary.
+        ownership_started_at = time.monotonic()
+        ownership_attempt = 0
+        while not self._stopping:
+            ownership_attempt += 1
+            startup_snapshot = self._latest_startup_snapshot()
+            owner = self._claim_or_reuse_startup_owner(startup_snapshot)
+            if owner is None:
+                await self._wait_for_startup_ownership_retry(
+                    attempt=ownership_attempt,
+                    started_at=ownership_started_at,
+                    reason="claim_rejected",
+                )
+                continue
+            config = startup_snapshot.config
+            secrets = _trusted_secrets(startup_snapshot)
+            onebot_token, onebot_credentials_trusted = _onebot_credentials(startup_snapshot)
+            http_base = str(config.get("onebot_http_base", "") or "").strip()
+
+            ownership_lost_reason = ""
+            with self._runtime_auth_lock:
+                if not self._owns_config_apply_locked(owner):
+                    ownership_lost_reason = "before_http_publish"
+                elif http_base:
+                    sender = OneBotHttpSender(
+                        http_base,
+                        onebot_token,
+                        self.http_session,
+                        credentials_trusted=onebot_credentials_trusted,
+                    )
+                    if not self._owns_config_apply_locked(owner):
+                        sender.update(http_base, "", credentials_trusted=False)
+                        ownership_lost_reason = "during_http_publish"
+                    else:
+                        self.http_sender = sender
+                else:
+                    self.http_sender = None
+                    ownership_lost_reason = ""
+
+            if ownership_lost_reason:
+                await self._wait_for_startup_ownership_retry(
+                    attempt=ownership_attempt,
+                    started_at=ownership_started_at,
+                    reason=ownership_lost_reason,
+                )
+                continue
+
+            await self._reconcile_ws_client(
+                enable_ws=bool(config.get("enable_ws_client", True)),
+                ws_uri=str(config.get("onebot_ws_uri", "") or "").strip(),
+                token=onebot_token,
+                credentials_trusted=onebot_credentials_trusted,
+                queue_size=self._parse_ws_queue_size(config),
+                owner=owner,
+            )
+            if not self._owns_config_apply(owner):
+                await self._wait_for_startup_ownership_retry(
+                    attempt=ownership_attempt,
+                    started_at=ownership_started_at,
+                    reason="after_ws_reconcile",
+                )
+                continue
+            await self._reconcile_inbound_manager(config, secrets, owner=owner)
+            if self._owns_config_apply(owner):
+                break
+            await self._wait_for_startup_ownership_retry(
+                attempt=ownership_attempt,
+                started_at=ownership_started_at,
+                reason="after_inbound_reconcile",
+            )
+
+        if self._stopping:
+            return
+
+        # Start the watcher only after all startup auth holders are safely
+        # published; it can no longer overtake provisional startup objects.
+        self._config_watch_task = asyncio.create_task(
+            _run_background_operation(self.config_manager.watch)
+        )
+        poll_interval = _coerce_runtime_number(
+            startup_snapshot.config.get("plugin_poll_interval", 3600),
+            key="plugin_poll_interval",
+            default=3600.0,
+            integer=False,
+            minimum=0.01,
+            maximum=86400.0,
+        )
+        self._configure_plugin_watch(
+            startup_snapshot.config,
+            poll_interval=float(poll_interval),
+        )
 
     async def stop(self) -> None:
         """优雅停止应用，并让并发调用共享同一次关停。"""
-        if self._shutdown_task is None:
+        task = self._shutdown_task
+        if task is None or (
+            task.done() and self._lifecycle_state is not _AppLifecycleState.STOPPED
+        ):
             # 先冻结所有会重建运行时组件的入口，再异步执行逐阶段清理。
             self._stopping = True
-            self._shutdown_task = asyncio.create_task(self._stop_async())
+            task = asyncio.create_task(_run_owned_operation(self._stop_async))
+            self._shutdown_task = task
 
-        if self._shutdown_task is asyncio.current_task():
+        if task is asyncio.current_task():
             return
-        await asyncio.shield(self._shutdown_task)
+        try:
+            await asyncio.shield(task)
+        finally:
+            if (
+                task.done()
+                and self._shutdown_task is task
+                and self._lifecycle_state is not _AppLifecycleState.STOPPED
+            ):
+                self._shutdown_task = None
 
     async def _stop_async(self) -> None:
-        """按固定顺序关闭资源；一个阶段失败不影响其余阶段。"""
-        logger.info("Shutting down XiaoQing...")
-        errors: list[str] = []
+        """Enter the terminal stopped state after converging every owned resource."""
+        async with self._lifecycle_lock.get():
+            if self._lifecycle_state is _AppLifecycleState.STOPPED:
+                return
+            self._lifecycle_state = _AppLifecycleState.STOPPING
+            logger.info("Shutting down XiaoQing...")
+            errors: list[str] = []
+            await self._cleanup_runtime(errors)
 
-        # 1. 先关闭所有入站入口，避免关停过程中接收新的请求。
-        await self._run_shutdown_step("inbound server", self._stop_inbound_manager, errors)
-        await self._run_shutdown_step("WebSocket client", self._stop_ws_client, errors)
+            self._last_shutdown_errors = tuple(errors)
+            if errors:
+                self._lifecycle_state = _AppLifecycleState.FAILED
+                logger.warning(
+                    "XiaoQing shutdown remains incomplete with %d cleanup error(s): %s",
+                    len(errors),
+                    "; ".join(errors),
+                )
+            else:
+                self._lifecycle_state = _AppLifecycleState.STOPPED
+                logger.info("XiaoQing shutdown complete")
+
+    async def _cleanup_runtime(self, errors: list[str]) -> None:
+        """Release resources in dependency order and retain blocked downstream owners."""
+        # 1. Freeze and converge every control-plane task before touching the
+        # runtime objects it may still reconcile, reload or reschedule.
         await self._run_shutdown_step(
-            "WebSocket listener task",
-            lambda: self._cancel_task("_ws_client_task"),
+            "background config apply tasks",
+            self._cancel_config_apply_tasks,
             errors,
         )
-
-        # 2. 冻结配置、重载和后台维护任务，防止它们重建已关闭的组件。
+        await self._run_shutdown_step(
+            "background plugin watch tasks",
+            self._cancel_plugin_watch_tasks,
+            errors,
+        )
         for attr_name in (
             "_config_watch_task",
-            "_plugin_watch_task",
-            "_config_apply_task",
             "_reload_task",
             "_session_cleanup_task",
         ):
             await self._run_shutdown_step(
                 f"background task {attr_name}",
-                lambda attr_name=attr_name: self._cancel_task(attr_name),
+                functools.partial(self._cancel_task, attr_name),
                 errors,
             )
 
-        # 3. 先停止调度，之后再卸载可能被任务引用的插件。
-        await self._run_shutdown_step("scheduler", self._stop_scheduler, errors)
-        await self._unload_plugins_for_shutdown(errors)
+        live_control_tasks = self._live_control_plane_tasks()
+        if live_control_tasks:
+            message = (
+                "runtime cleanup deferred while control-plane tasks are still running: "
+                + ", ".join(live_control_tasks)
+            )
+            errors.append(message)
+            logger.warning(message)
+            return
+
+        # 2. Stop every ingress path and its in-flight work before removing
+        # scheduler/plugin dependencies used by event callbacks.
+        inbound_stopped = await self._run_shutdown_step(
+            "inbound server",
+            self._stop_inbound_manager,
+            errors,
+        )
+        ws_client_stopped = await self._run_shutdown_step(
+            "WebSocket client",
+            self._stop_ws_client,
+            errors,
+        )
+        ws_listener_stopped = await self._run_shutdown_step(
+            "WebSocket listener task",
+            lambda: self._cancel_task("_ws_client_task"),
+            errors,
+        )
+        if not all((inbound_stopped, ws_client_stopped, ws_listener_stopped)):
+            message = "scheduler, plugin and HTTP cleanup deferred until ingress shutdown converges"
+            errors.append(message)
+            logger.warning(message)
+            return
+
+        # 3. 先停止调度，之后再卸载可能被任务引用的插件。若旧任务仍在
+        # 收敛，必须保留插件和共享连接供它完成清理，下一次 stop 再继续。
+        scheduler_stopped = await self._run_shutdown_step(
+            "scheduler",
+            self._stop_scheduler,
+            errors,
+        )
+        if not scheduler_stopped:
+            message = "plugin and HTTP cleanup deferred until scheduler shutdown converges"
+            errors.append(message)
+            logger.warning(message)
+            return
+
+        plugins_unloaded = await self._unload_plugins_for_shutdown(errors)
+        if not plugins_unloaded:
+            message = "HTTP cleanup deferred until plugin shutdown converges"
+            errors.append(message)
+            logger.warning(message)
+            return
 
         # 4. 最后释放共享连接。引用先清空，防止并发回调继续复用半关闭对象。
         await self._run_shutdown_step("HTTP session", self._close_http_session, errors)
 
-        self._last_shutdown_errors = tuple(errors)
-        if errors:
-            logger.warning(
-                "XiaoQing shutdown completed with %d cleanup error(s): %s",
-                len(errors),
-                "; ".join(errors),
-            )
-        else:
-            logger.info("XiaoQing shutdown complete")
+    def _live_control_plane_tasks(self) -> tuple[str, ...]:
+        """Return control tasks that still own mutable runtime dependencies."""
+        live: list[str] = []
+        config_tasks = set(self._config_apply_tasks)
+        if self._config_apply_task is not None:
+            config_tasks.add(self._config_apply_task)
+        if any(not task.done() for task in config_tasks):
+            live.append("config apply")
+
+        plugin_watch_tasks = set(self._plugin_watch_tasks)
+        if self._plugin_watch_task is not None:
+            plugin_watch_tasks.add(self._plugin_watch_task)
+        if any(not task.done() for task in plugin_watch_tasks):
+            live.append("plugin watcher")
+        restart_task = self._plugin_watch_restart_task
+        if restart_task is not None and not restart_task.done():
+            live.append("plugin watcher restart")
+
+        for attr_name, label in (
+            ("_config_watch_task", "config watcher"),
+            ("_reload_task", "plugin reload"),
+            ("_session_cleanup_task", "session maintenance"),
+        ):
+            task = getattr(self, attr_name, None)
+            if task is not None and not task.done():
+                live.append(label)
+        return tuple(live)
 
     async def _run_shutdown_step(
         self,
         name: str,
         operation: Callable[[], Awaitable[None]],
         errors: list[str],
-    ) -> None:
+    ) -> bool:
         """运行一个关停阶段，并把错误记入汇总而不是中断关停。"""
         try:
             await operation()
         except BaseException as exc:
             errors.append(f"{name}: {type(exc).__name__}: {exc}")
             logger.exception("Shutdown step %s failed", name)
+            return False
+        return True
 
     async def _stop_inbound_manager(self) -> None:
-        manager = self.inbound_manager
-        self.inbound_manager = None
-        if manager:
-            await manager.stop()
-            logger.info("Inbound server stopped")
+        lock = self._inbound_reconcile_lock.get()
+        try:
+            await asyncio.wait_for(
+                lock.acquire(),
+                timeout=self._background_task_stop_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError("timed out waiting for inbound reconciliation to finish") from exc
+        try:
+            current = self.inbound_manager
+            managers: list[InboundManager] = []
+            for manager in (current, *self._inbound_cleanup_pending):
+                if manager is not None and all(manager is not item for item in managers):
+                    managers.append(manager)
+            failed: list[tuple[InboundManager, BaseException]] = []
+            for manager in managers:
+                quarantined_error = self._inbound_cleanup_quarantine.pop(
+                    id(manager),
+                    None,
+                )
+                if quarantined_error is not None:
+                    # The candidate already failed one cleanup attempt in the
+                    # operation that triggered this rollback.  Preserve that
+                    # failure and ownership; a later explicit stop retries it.
+                    failed.append((manager, quarantined_error))
+                    continue
+                try:
+                    await manager.stop()
+                except BaseException as exc:
+                    failed.append((manager, exc))
+                else:
+                    self._inbound_cleanup_quarantine.pop(id(manager), None)
+            failed_managers = [manager for manager, _ in failed]
+            self._inbound_cleanup_pending = [
+                manager for manager in failed_managers if current is None or manager is not current
+            ]
+            if current is not None and any(current is manager for manager in failed_managers):
+                self.inbound_manager = current
+            else:
+                self.inbound_manager = None
+            if failed:
+                summary = "; ".join(f"{type(exc).__name__}: {exc}" for _, exc in failed)
+                raise RuntimeError(f"inbound cleanup failed: {summary}") from failed[0][1]
+            if managers:
+                logger.info("Inbound server stopped")
+        finally:
+            lock.release()
 
-    async def _stop_ws_client(self) -> None:
+    async def _stop_ws_client(self, *, owner: _ConfigApplyOwner | None = None) -> None:
+        if not self._owns_config_apply(owner):
+            return
         client = self.ws_client
-        self.ws_client = None
-        if client:
-            await client.stop()
-            logger.info("WebSocket client stopped")
+        if client is None:
+            if self._owns_config_apply(owner):
+                self._ws_client_stop_task = None
+            return
+
+        stop_task = self._ws_client_stop_task
+        if stop_task is not None and stop_task.done():
+            try:
+                stop_task.result()
+            except asyncio.CancelledError:
+                pass
+            except _OwnedTaskFatalError as exc:
+                self._ws_client_stop_task = None
+                self.ws_client = client
+                raise ApplicationLifecycleFatalError(exc.original) from None
+            except BaseException as exc:
+                logger.warning("Earlier WebSocket client stop attempt failed: %s", exc)
+            else:
+                if not self._owns_config_apply(owner):
+                    return
+                self._ws_client_stop_task = None
+                if self.ws_client is client:
+                    self.ws_client = None
+                if self._ws_client_auth_quarantine is client:
+                    self._ws_client_auth_quarantine = None
+                logger.info("WebSocket client stopped")
+                return
+            self._ws_client_stop_task = None
+            stop_task = None
+
+        if stop_task is None:
+            if not self._owns_config_apply(owner):
+                return
+            stop_task = asyncio.create_task(_run_owned_operation(client.stop))
+            self._ws_client_stop_task = stop_task
+        stop_timeout = self._background_task_stop_timeout_seconds
+        client_timeout = getattr(client, "_shutdown_timeout_seconds", None)
+        if isinstance(client_timeout, (int, float)) and not isinstance(client_timeout, bool):
+            # The client owns one absolute internal deadline.  Give its
+            # bounded cleanup a small scheduling margin rather than cancelling
+            # it at the exact instant it is about to report convergence.
+            stop_timeout = max(stop_timeout, max(0.0, float(client_timeout)) + 0.25)
+        _done, pending = await asyncio.wait(
+            {stop_task},
+            timeout=stop_timeout,
+        )
+        with self._runtime_auth_lock:
+            if not self._owns_config_apply_locked(owner):
+                return
+            if pending:
+                stop_task.cancel()
+                self.ws_client = client
+                raise RuntimeError(f"WebSocket client stop exceeded {stop_timeout:.3f}s")
+            try:
+                stop_task.result()
+            except _OwnedTaskFatalError as exc:
+                self._ws_client_stop_task = None
+                self.ws_client = client
+                raise ApplicationLifecycleFatalError(exc.original) from None
+            except BaseException:
+                self._ws_client_stop_task = None
+                self.ws_client = client
+                raise
+            else:
+                self._ws_client_stop_task = None
+                if self.ws_client is client:
+                    self.ws_client = None
+                if self._ws_client_auth_quarantine is client:
+                    self._ws_client_auth_quarantine = None
+                logger.info("WebSocket client stopped")
 
     async def _stop_scheduler(self) -> None:
-        if self.scheduler.scheduler:
-            self.scheduler.scheduler.shutdown(wait=True)
+        await self.scheduler.shutdown_async(wait=True)
         logger.info("Scheduler stopped")
 
-    async def _unload_plugins_for_shutdown(self, errors: list[str]) -> None:
+    async def _unload_plugins_for_shutdown(self, errors: list[str]) -> bool:
+        budget = self._plugin_shutdown_budget_seconds()
+        deadline = time.monotonic() + budget
         try:
-            plugin_names = list(self.plugin_manager.list_plugins())
+            plugin_names = self.plugin_manager.list_runtime_plugins()
         except BaseException as exc:
             errors.append(f"plugin list: {type(exc).__name__}: {exc}")
             logger.exception("Could not enumerate plugins during shutdown")
-            return
+            return False
 
-        for name in plugin_names:
+        for index, name in enumerate(plugin_names):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                message = (
+                    f"plugin shutdown budget exhausted after {budget:.3f}s; "
+                    f"remaining plugins: {', '.join(plugin_names[index:])}"
+                )
+                errors.append(message)
+                logger.warning(message)
+                break
             await self._run_shutdown_step(
                 f"plugin {name}",
-                lambda name=name: self.plugin_manager.unload_plugin(name),
+                functools.partial(
+                    self._unload_plugin_with_budget,
+                    name,
+                    remaining,
+                ),
                 errors,
             )
-        remaining = list(self.plugin_manager.list_plugins())
-        if remaining:
+        try:
+            remaining_plugins = self.plugin_manager.list_runtime_plugins()
+        except BaseException as exc:
+            errors.append(f"plugin post-drain list: {type(exc).__name__}: {exc}")
+            logger.exception("Could not enumerate plugins after shutdown")
+            return False
+        if remaining_plugins:
             message = "plugin drain incomplete; quarantined callbacks still running: " + ", ".join(
-                remaining
+                remaining_plugins
             )
             errors.append(message)
             logger.warning(message)
+            return False
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            message = f"plugin sync broker close exceeded shared {budget:.3f}s budget"
+            errors.append(message)
+            logger.warning(message)
+            return False
+        broker_closed = await self._run_shutdown_step(
+            "plugin sync broker",
+            lambda: self._close_plugin_execution_broker(remaining),
+            errors,
+        )
+        if not broker_closed:
+            return False
+        logger.info("All plugins unloaded and sync broker drained (%d total)", len(plugin_names))
+        return True
+
+    def _plugin_shutdown_budget_seconds(self) -> float:
+        raw_timeout = getattr(
+            self.plugin_manager,
+            "execution_drain_timeout_seconds",
+            self._background_task_stop_timeout_seconds,
+        )
+        try:
+            timeout = float(raw_timeout)
+        except (TypeError, ValueError):
+            timeout = self._background_task_stop_timeout_seconds
+        if not math.isfinite(timeout) or timeout <= 0:
+            timeout = self._background_task_stop_timeout_seconds
+        return timeout
+
+    async def _unload_plugin_with_budget(self, name: str, remaining: float) -> None:
+        unload = self.plugin_manager.unload_plugin
+        try:
+            parameters = inspect.signature(unload).parameters.values()
+        except (TypeError, ValueError):
+            supports_budget = False
         else:
-            logger.info("All plugins unloaded (%d total)", len(plugin_names))
+            supports_budget = any(
+                parameter.name == "drain_timeout_seconds" for parameter in parameters
+            )
+        operation = (
+            unload(name, drain_timeout_seconds=remaining) if supports_budget else unload(name)
+        )
+        await asyncio.wait_for(operation, timeout=remaining)
+
+    async def _close_plugin_execution_broker(self, remaining: float) -> None:
+        close_manager = getattr(self.plugin_manager, "close", None)
+        close_broker = getattr(self.plugin_manager, "close_execution_broker", None)
+        close_operation = close_manager if callable(close_manager) else close_broker
+        if not callable(close_operation):
+            return
+        result = await asyncio.wait_for(
+            close_operation(timeout_seconds=remaining),
+            timeout=remaining,
+        )
+        if not result.drained:
+            pending = getattr(
+                result,
+                "pending_callbacks",
+                getattr(result, "pending_sync_callbacks", "unknown"),
+            )
+            raise RuntimeError(f"sync broker drain incomplete; pending={pending}")
 
     async def _close_http_session(self) -> None:
         session = self.http_session
-        self.http_session = None
-        self.http_sender = None
         if session:
-            await session.close()
+            try:
+                await session.close()
+            except BaseException:
+                self.http_session = session
+                raise
+            self.http_session = None
+            self.http_sender = None
             logger.info("HTTP session closed")
+        else:
+            self.http_sender = None
+
+    async def _cancel_config_apply_tasks(self) -> None:
+        tasks = set(self._config_apply_tasks)
+        current = self._config_apply_task
+        if current is not None:
+            tasks.add(current)
+        if not tasks:
+            self._config_apply_task = None
+            return
+
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=self._background_task_stop_timeout_seconds,
+        )
+        failures: list[BaseException] = []
+        for task in done:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:
+                failures.append(exc)
+
+        self._config_apply_tasks = {task for task in self._config_apply_tasks if not task.done()}
+        self._config_apply_tasks.update(pending)
+        if pending:
+            if self._config_apply_task not in pending:
+                self._config_apply_task = next(iter(pending))
+            details = ""
+            if failures:
+                details = "; completed failures: " + "; ".join(
+                    f"{type(exc).__name__}: {exc}" for exc in failures
+                )
+            raise RuntimeError(
+                f"{len(pending)} runtime configuration task(s) ignored cancellation within "
+                f"{self._background_task_stop_timeout_seconds:.3f}s{details}"
+            )
+
+        self._config_apply_tasks.clear()
+        if self._config_apply_task in tasks:
+            self._config_apply_task = None
+        if failures:
+            summary = "; ".join(f"{type(exc).__name__}: {exc}" for exc in failures)
+            raise RuntimeError(f"runtime configuration task(s) failed: {summary}") from failures[0]
+
+    async def _cancel_plugin_watch_tasks(self) -> None:
+        self._plugin_watch_desired = False
+        self._plugin_watch_restart_pending = False
+        self._plugin_watch_restart_failures = 0
+        tasks = set(self._plugin_watch_tasks)
+        current = self._plugin_watch_task
+        if current is not None:
+            tasks.add(current)
+        restart_task = self._plugin_watch_restart_task
+        if restart_task is not None:
+            tasks.add(restart_task)
+        if not tasks:
+            self._plugin_watch_task = None
+            self._plugin_watch_restart_task = None
+            return
+
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=self._background_task_stop_timeout_seconds,
+        )
+        failures: list[BaseException] = []
+        for task in done:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:
+                failures.append(exc)
+
+        pending_watchers = pending - ({restart_task} if restart_task is not None else set())
+        self._plugin_watch_tasks = {task for task in self._plugin_watch_tasks if not task.done()}
+        self._plugin_watch_tasks.update(pending_watchers)
+        if pending:
+            if pending_watchers and self._plugin_watch_task not in pending_watchers:
+                self._plugin_watch_task = next(iter(pending_watchers))
+            if restart_task in pending:
+                self._plugin_watch_restart_task = restart_task
+            raise RuntimeError(
+                f"{len(pending)} plugin watcher task(s) ignored cancellation within "
+                f"{self._background_task_stop_timeout_seconds:.3f}s"
+            )
+
+        self._plugin_watch_tasks.clear()
+        if self._plugin_watch_task in tasks:
+            self._plugin_watch_task = None
+        if self._plugin_watch_restart_task in tasks:
+            self._plugin_watch_restart_task = None
+        if failures:
+            summary = "; ".join(f"{type(exc).__name__}: {exc}" for exc in failures)
+            raise RuntimeError(f"plugin watcher task(s) failed: {summary}") from failures[0]
 
     async def _cancel_task(self, attr_name: str) -> None:
         task = getattr(self, attr_name, None)
@@ -517,348 +1123,36 @@ class XiaoQingApp:
             return
         if task is asyncio.current_task():
             logger.warning("Skipped cancelling current task %s during shutdown", attr_name)
-            setattr(self, attr_name, None)
-            return
+            raise RuntimeError(f"cannot synchronously stop current task {attr_name}")
+        task.cancel()
+        _done, pending = await asyncio.wait(
+            {task},
+            timeout=self._background_task_stop_timeout_seconds,
+        )
+        if pending:
+            raise RuntimeError(
+                f"task {attr_name} did not finish after cancellation within "
+                f"{self._background_task_stop_timeout_seconds:.3f}s"
+            )
         try:
-            task.cancel()
-            await task
+            task.result()
         except asyncio.CancelledError:
             pass
         finally:
-            setattr(self, attr_name, None)
+            if getattr(self, attr_name, None) is task:
+                setattr(self, attr_name, None)
 
     async def _cleanup_sessions_loop(self) -> None:
         while True:
-            await asyncio.sleep(60)
             try:
                 await self.session_manager.cleanup_expired()
             except Exception as exc:
                 logger.warning("Session cleanup failed: %s", exc)
+            await asyncio.sleep(60)
 
     # ============================================================
     # 事件处理
     # ============================================================
-
-    async def _on_ws_connected(self) -> None:
-        """WebSocket 连接成功回调"""
-        ws_client = self.ws_client
-        if not ws_client:
-            return
-        # 获取 default 群列表
-        default_groups = self.config.get("default_group_ids", [])
-        if not default_groups:
-            logger.info("No default groups configured, skipping connect notification")
-            return
-
-        # 发送上线通知（可通过 config 配置）
-        connect_msg = self.config.get("connect_notification", "🟢 小青已上线~")
-        if not connect_msg:
-            return
-        now = time.monotonic()
-        min_interval = self._connect_notification_min_interval()
-        if (
-            min_interval > 0
-            and self._last_connect_notification_ts > 0
-            and now - self._last_connect_notification_ts < min_interval
-        ):
-            logger.info("Connect notification suppressed by min interval")
-            return
-        self._last_connect_notification_ts = now
-        message = [{"type": "text", "data": {"text": connect_msg}}]
-        for group_id in default_groups:
-            action = {
-                "action": "send_group_msg",
-                "params": {
-                    "group_id": int(group_id),
-                    "message": message,
-                },
-            }
-            await self._send_action(action)
-
-    def _connect_notification_min_interval(self) -> float:
-        try:
-            return max(
-                0.0,
-                float(self.config.get("connect_notification_min_interval_seconds", 300)),
-            )
-        except (TypeError, ValueError):
-            return 300.0
-
-    async def _process_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        """处理事件并返回 action（通用逻辑）"""
-        if self._stopping:
-            logger.debug("Dropping event while XiaoQing is stopping")
-            return None
-        segs = await self.dispatcher.handle_event(event)
-        segs = segments(segs)
-        return build_action(segs, event.get("user_id"), event.get("group_id"))
-
-    def _http_enabled(self) -> bool:
-        return bool(self.http_sender and str(getattr(self.http_sender, "http_base", "")).strip())
-
-    async def _request_onebot_action(
-        self,
-        action_name: str,
-        params: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        """Request a correlated OneBot response without using action sinks/broadcast."""
-
-        if self._stopping:
-            return None
-        action = {"action": action_name, "params": dict(params)}
-        ws_client = self.ws_client
-        if ws_client is not None and ws_client.connected():
-            response = await ws_client.request_action(action)
-            if response is not None:
-                return response
-        http_sender = self.http_sender
-        if http_sender is not None and str(getattr(http_sender, "http_base", "")).strip():
-            return await http_sender.request_action(action)
-        return None
-
-    async def _send_action(self, action: dict[str, Any], wait_ws_seconds: float = 0.0) -> bool:
-        # 自动拆分长文本消息
-        actions = self._maybe_split_action(action)
-        sent_all = True
-        for i, act in enumerate(actions):
-            if i > 0:
-                await asyncio.sleep(MESSAGE_SPLIT_DELAY)
-            sent = await self._send_single_action(
-                act,
-                wait_ws_seconds=wait_ws_seconds,
-            )
-            if sent:
-                await self._notify_outgoing_action_observers(act)
-            sent_all = sent and sent_all
-        return sent_all
-
-    @staticmethod
-    def _tag_action_source(action: dict[str, Any], plugin_name: str) -> dict[str, Any]:
-        if not isinstance(action, dict):
-            return action
-        tagged = dict(action)
-        tagged.setdefault("_source_plugin", str(plugin_name or "").strip())
-        return tagged
-
-    async def _notify_outgoing_action_observers(self, action: dict[str, Any]) -> None:
-        source_plugin = str(action.get("_source_plugin", "") or "").strip()
-        if not source_plugin:
-            return
-        if str(action.get("action", "") or "").strip() not in (
-            "send_group_msg",
-            "send_private_msg",
-        ):
-            return
-
-        loaded = self.plugin_manager.get("xiaoqing_chat")
-        observer = getattr(getattr(loaded, "module", None), "observe_outgoing_action", None)
-        if observer is None:
-            return
-
-        params = action.get("params") if isinstance(action.get("params"), dict) else {}
-        group_id = params.get("group_id")
-        user_id = params.get("user_id")
-        try:
-            context = self.plugin_manager.build_context(
-                "xiaoqing_chat",
-                user_id=user_id if group_id in (None, "") else None,
-                group_id=group_id,
-                principal=self._principal_authority.issue(
-                    kind="lifecycle",
-                    group_id=group_id,
-                ),
-            )
-
-            async def run_observer() -> None:
-                await call_plugin_callback(observer, action, context, source_plugin=source_plugin)
-
-            await invoke_loaded_plugin(loaded, run_observer)
-        except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable):
-            logger.debug("Outgoing action observer skipped during plugin unload")
-        except Exception as exc:
-            logger.debug("Outgoing action observer failed: %s", exc, exc_info=True)
-
-    def _maybe_split_action(self, action: dict[str, Any]) -> list[dict[str, Any]]:
-        """将包含过长文本的 action 拆分为多个 action"""
-        act_name = action.get("action", "")
-        if act_name not in ("send_group_msg", "send_private_msg"):
-            return [action]
-
-        params = action.get("params")
-        if not isinstance(params, dict):
-            return [action]
-
-        message = params.get("message")
-        if not isinstance(message, list):
-            return [action]
-
-        chunks = split_message_segments(message)
-        if len(chunks) <= 1:
-            return [action]
-
-        # 保留 action 上的额外字段（如 _bypass_sink）
-        results = []
-        for chunk in chunks:
-            new_action = {
-                "action": act_name,
-                "params": {**params, "message": chunk},
-            }
-            # 复制非标准字段
-            for key in action:
-                if key not in ("action", "params"):
-                    new_action[key] = action[key]
-            results.append(new_action)
-
-        logger.debug(
-            "Split long message into %d chunks (action=%s)",
-            len(results),
-            act_name,
-        )
-        return results
-
-    async def _send_single_action(
-        self, action: dict[str, Any], wait_ws_seconds: float = 0.0
-    ) -> bool:
-        try:
-            act = str(action.get("action", "") or "")
-            if act in ("send_group_msg", "send_private_msg"):
-                params = action.get("params") or {}
-                if isinstance(params, dict):
-                    msg = params.get("message")
-                    preview = ""
-                    if isinstance(msg, list):
-                        preview = _extract_message_preview(msg[:12]).replace("\n", "\\n").strip()
-                    if len(preview) > MAX_MESSAGE_PREVIEW_LENGTH:
-                        preview = preview[: MAX_MESSAGE_PREVIEW_LENGTH - 1] + "…"
-                    logger.info(
-                        "Sending: action=%s group=%s user=%s message_length=%s",
-                        act,
-                        params.get("group_id") or "-",
-                        params.get("user_id") or "-",
-                        len(preview),
-                    )
-        except (KeyError, TypeError, ValueError) as exc:
-            # 日志记录失败不影响消息发送，仅记录调试信息
-            logger.debug("Failed to generate message preview: %s", exc)
-        bypass_sink = bool(action.get("_bypass_sink", False))
-        delivery_action = {key: value for key, value in action.items() if key != "_bypass_sink"}
-
-        def copy_delivery_result() -> None:
-            if "_result_message_id" in delivery_action:
-                action["_result_message_id"] = delivery_action["_result_message_id"]
-
-        sink = current_action_sink.get()
-        if not bypass_sink and sink is not None and getattr(sink, "is_active", True):
-            await sink(delivery_action)
-            return True
-
-        if self.ws_client and self.ws_client.connected():
-            sent = await self.ws_client.send_action(delivery_action)
-            if sent:
-                copy_delivery_result()
-                return True
-
-        # 尝试通过 Inbound WebSocket 广播（如果存在活跃连接）
-        if self.inbound_manager and self.inbound_manager.has_active_ws_clients():
-            await self.inbound_manager.broadcast(delivery_action)
-            return True
-
-        if wait_ws_seconds > 0 and self.ws_client:
-            deadline = asyncio.get_running_loop().time() + float(wait_ws_seconds)
-            while asyncio.get_running_loop().time() < deadline:
-                if self.ws_client.connected():
-                    sent = await self.ws_client.send_action(delivery_action)
-                    if sent:
-                        copy_delivery_result()
-                        return True
-                await asyncio.sleep(0.1)
-
-        if self._http_enabled():
-            sent = await self.http_sender.send_action(delivery_action)  # pyright: ignore[reportOptionalMemberAccess]
-            copy_delivery_result()
-            if not sent:
-                logger.warning("Action was rejected or not acknowledged by OneBot HTTP")
-            return bool(sent)
-
-        logger.debug("Action dropped: no available sender (ws/http)")
-        return False
-
-    async def _collect_actions_for_event(
-        self,
-        event: dict[str, Any],
-        *,
-        default_source: str,
-    ) -> list[dict[str, Any]]:
-        if not await self._claim_inbound_event(event):
-            return []
-        sink = current_action_sink.get()
-        event = dict(event)
-        event.setdefault("_source", default_source)
-
-        if sink is not None:
-            action = await self._process_event(event)
-            return [action] if action else []
-
-        collected: list[dict[str, Any]] = []
-
-        async def _collect(action: dict[str, Any]) -> None:
-            collected.append(action)
-
-        # 标记 sink 为活动状态
-        _collect.is_active = True
-
-        token = current_action_sink.set(_collect)
-        try:
-            action = await self._process_event(event)
-            if action:
-                collected.append(action)
-        finally:
-            # 标记 sink 为失效，使后续（后台任务）调用能直通发送逻辑
-            _collect.is_active = False
-            current_action_sink.reset(token)
-
-        return collected
-
-    async def _claim_inbound_event(self, event: dict[str, Any]) -> bool:
-        """Claim a OneBot message id once across inbound HTTP and WS channels."""
-        message_id = event.get("message_id")
-        if message_id is None or isinstance(message_id, bool):
-            return True
-        key = ":".join(
-            str(event.get(field, ""))
-            for field in ("self_id", "post_type", "message_type", "message_id")
-        )
-        if self._event_dedupe_lock is None:
-            self._event_dedupe_lock = asyncio.Lock()
-        now = time.monotonic()
-        async with self._event_dedupe_lock:
-            expired = [
-                event_key
-                for event_key, seen_at in self._recent_event_ids.items()
-                if now - seen_at >= INBOUND_EVENT_DEDUP_TTL_SECONDS
-            ]
-            for event_key in expired:
-                self._recent_event_ids.pop(event_key, None)
-            if key in self._recent_event_ids:
-                logger.info("Dropped duplicate inbound OneBot event %s", key)
-                return False
-            if len(self._recent_event_ids) >= MAX_INBOUND_EVENT_DEDUP_KEYS:
-                oldest = min(self._recent_event_ids, key=self._recent_event_ids.get)
-                self._recent_event_ids.pop(oldest, None)
-            self._recent_event_ids[key] = now
-            return True
-
-    async def _handle_upstream_event(self, event: dict[str, Any]) -> None:
-        """处理来自 OneBot 上游的事件"""
-        actions = await self._collect_actions_for_event(event, default_source="upstream_ws")
-        if not actions:
-            return
-        for action in actions:
-            await self._send_action(action)
-
-    async def _handle_inbound_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
-        """处理来自 Inbound Server 的事件"""
-        return await self._collect_actions_for_event(event, default_source="inbound_http")
 
     # ============================================================
     # 插件上下文构建
@@ -874,6 +1168,8 @@ class XiaoQingApp:
         group_id: int | None = None,
         request_id: str | None = None,
         principal: PluginPrincipal | None = None,
+        declared_capabilities: frozenset[str] = frozenset(),
+        uses_services: frozenset[str] = frozenset(),
     ) -> Any:
         """构建插件上下文"""
         if principal is None:
@@ -885,11 +1181,11 @@ class XiaoQingApp:
                     is_private=group_id is None,
                 )
             else:
-                principal = self._principal_authority.issue(
+                principal = self.identity_service.issue(
                     kind="lifecycle",
                     group_id=group_id,
                 )
-        elif not self._principal_authority.owns(principal):
+        elif not self.identity_service.owns(principal):
             raise PermissionError("plugin context principal was not issued by this application")
         if principal.kind == "user":
             try:
@@ -909,18 +1205,23 @@ class XiaoQingApp:
             ):
                 raise PermissionError("plugin context identifiers do not match its principal")
 
-        async def send_action(action: dict[str, Any]) -> bool:
+        async def send_action(action: dict[str, Any]) -> bool | None:
             return await self._send_action(
                 self._tag_action_source(action, plugin_name),
                 wait_ws_seconds=2.0,
             )
 
-        plugin_config = self._plugin_config_view(plugin_name)
-        plugin_secrets = self._plugin_secrets_view(plugin_name)
-        capabilities = self._build_plugin_capabilities(plugin_name, principal, request_id)
+        plugin_settings = self._plugin_settings_snapshot(plugin_name)
+        capabilities = self._build_plugin_capabilities(
+            plugin_name,
+            principal,
+            request_id,
+            declared_capabilities=declared_capabilities,
+            uses_services=uses_services,
+        )
         return PluginContext(
-            config=plugin_config,
-            secrets=plugin_secrets,
+            config=plugin_settings.config,
+            secrets=plugin_settings.secrets,
             plugin_name=plugin_name,
             plugin_dir=plugin_dir,
             data_dir=data_dir,
@@ -928,7 +1229,7 @@ class XiaoQingApp:
             send_action=send_action,
             reload_config=self.reload_config,
             reload_plugins=self._reload_plugins,
-            list_commands=self.router.list_commands,
+            get_command_catalog=self.router.get_command_catalog,
             list_plugins=self.plugin_manager.list_plugins,
             metrics=self.metrics,
             session_manager=self.session_manager,
@@ -936,6 +1237,7 @@ class XiaoQingApp:
             current_group_id=group_id,
             mute_control=self.dispatcher,
             config_manager=None,
+            settings_reader=lambda: self._plugin_settings_snapshot(plugin_name),
             secret_reader=lambda path: self.config_manager.get_plugin_secret(plugin_name, path),
             secret_writer=lambda path, value: self.config_manager.set_plugin_secret(
                 plugin_name, path, value
@@ -959,7 +1261,7 @@ class XiaoQingApp:
     ) -> Any:
         """Invoke one current manifest binding selected by a core capability."""
 
-        if not self._principal_authority.owns(principal):
+        if not self.identity_service.owns(principal):
             raise PermissionError("plugin service principal was not issued by this application")
         loaded, service = self.plugin_manager.resolve_service(
             caller_plugin=caller_plugin,
@@ -982,7 +1284,7 @@ class XiaoQingApp:
         return await invoke_loaded_plugin(loaded, operation)
 
     def _codex_arxiv_authorized(self, principal: PluginPrincipal) -> bool:
-        if not self._principal_authority.owns(principal):
+        if not self.identity_service.owns(principal):
             return False
         if principal.is_system:
             return True
@@ -996,6 +1298,7 @@ class XiaoQingApp:
     async def _enqueue_codex_arxiv_summary(
         self,
         *,
+        caller_plugin: str,
         principal: PluginPrincipal,
         request_id: str | None,
         date: str,
@@ -1005,13 +1308,16 @@ class XiaoQingApp:
             raise PermissionError("Codex arXiv capability is no longer authorized")
         user_id = principal.user_id if principal.kind == "user" else None
         group_id = principal.group_id if principal.kind == "user" else None
-        return await self._invoke_declared_service(
-            caller_plugin="arxiv_filter",
-            service_name="codex.enqueue_arxiv_summary",
-            principal=principal,
-            request_id=request_id,
-            args=(date, list(links), user_id, group_id),
-            granted_capabilities=frozenset({"codex_arxiv_summary"}),
+        return cast(
+            str,
+            await self._invoke_declared_service(
+                caller_plugin=caller_plugin,
+                service_name="codex.enqueue_arxiv_summary",
+                principal=principal,
+                request_id=request_id,
+                args=(date, list(links), user_id, group_id),
+                granted_capabilities=frozenset({"codex_arxiv_summary"}),
+            ),
         )
 
     def _build_plugin_capabilities(
@@ -1019,15 +1325,18 @@ class XiaoQingApp:
         plugin_name: str,
         principal: PluginPrincipal,
         request_id: str | None = None,
+        *,
+        declared_capabilities: frozenset[str] = frozenset(),
+        uses_services: frozenset[str] = frozenset(),
     ) -> PluginCapabilities:
-        is_system = principal.is_system and self._principal_authority.owns(principal)
+        is_system = principal.is_system and self.identity_service.owns(principal)
         is_bot_admin = (
             principal.kind == "user"
-            and self._principal_authority.owns(principal)
+            and self.identity_service.owns(principal)
             and self.is_admin(principal.user_id)
         )
         secret_admin = None
-        if plugin_name == "bot_core" and is_bot_admin and principal.is_private:
+        if "secret_admin" in declared_capabilities and is_bot_admin and principal.is_private:
             secret_admin = SecretAdminService(
                 _authorized=lambda: (
                     principal.user_id is not None
@@ -1039,26 +1348,29 @@ class XiaoQingApp:
             )
 
         onebot_media = None
-        if plugin_name == "xiaoqing_chat":
+        if "onebot_media" in declared_capabilities:
             onebot_media = OneBotMediaService(self._request_onebot_action)
 
         config_subscription = None
-        if plugin_name == "pendo":
+        if "config_subscription" in declared_capabilities:
 
-            def subscribe(callback: Callable[[dict[str, Any]], Any]) -> Callable[[], None]:
-                def relay(_snapshot: ConfigSnapshot) -> Any:
-                    return callback(self._plugin_config_view(plugin_name))
+            def subscribe(
+                callback: Callable[[Mapping[str, Any]], Any],
+            ) -> Callable[[], None]:
+                def relay(snapshot: ConfigSnapshot) -> Any:
+                    return callback(self._plugin_config_view(plugin_name, snapshot.config))
 
-                return self.config_manager.on_reload(relay)
+                return cast(Callable[[], None], self.config_manager.on_reload(relay))
 
             config_subscription = ConfigSubscriptionService(subscribe)
 
         codex_arxiv_summary = None
-        if plugin_name == "arxiv_filter" and (is_system or is_bot_admin):
+        if "codex.enqueue_arxiv_summary" in uses_services and (is_system or is_bot_admin):
             codex_arxiv_summary = CodexArxivSummaryService(
                 _authorized=lambda: self._codex_arxiv_authorized(principal),
                 _enqueue=functools.partial(
                     self._enqueue_codex_arxiv_summary,
+                    caller_plugin=plugin_name,
                     principal=principal,
                     request_id=request_id,
                 ),
@@ -1066,31 +1378,101 @@ class XiaoQingApp:
 
         voice_synthesis = None
         chat_reply = None
-        if plugin_name == "smalltalk":
+        if "voice.synthesize_text" in uses_services:
 
             async def synthesize_text(text: str) -> list[dict[str, Any]] | None:
-                return await self._invoke_declared_service(
-                    caller_plugin="smalltalk",
-                    service_name="voice.synthesize_text",
-                    principal=principal,
-                    request_id=request_id,
-                    args=(text,),
+                return cast(
+                    list[dict[str, Any]] | None,
+                    await self._invoke_declared_service(
+                        caller_plugin=plugin_name,
+                        service_name="voice.synthesize_text",
+                        principal=principal,
+                        request_id=request_id,
+                        args=(text,),
+                    ),
                 )
+
+            voice_synthesis = VoiceSynthesisService(synthesize_text)
+
+        if "chat.reply" in uses_services:
 
             async def reply_via_chat(
                 text: str,
                 event: dict[str, Any],
             ) -> list[dict[str, Any]]:
-                return await self._invoke_declared_service(
-                    caller_plugin="smalltalk",
-                    service_name="chat.reply",
-                    principal=principal,
-                    request_id=request_id,
-                    args=(text, dict(event)),
+                return cast(
+                    list[dict[str, Any]],
+                    await self._invoke_declared_service(
+                        caller_plugin=plugin_name,
+                        service_name="chat.reply",
+                        principal=principal,
+                        request_id=request_id,
+                        args=(text, dict(event)),
+                    ),
                 )
 
-            voice_synthesis = VoiceSynthesisService(synthesize_text)
             chat_reply = ChatReplyService(reply_via_chat)
+
+        async def complete_ai_route(
+            *,
+            route_name: str,
+            messages: list[dict[str, Any]],
+            required_modalities: tuple[str, ...] = ("text",),
+            pinned_model: str | None = None,
+            temperature: float | None = None,
+            top_p: float | None = None,
+            max_tokens: int | None = None,
+            timeout_seconds: float | None = None,
+            total_timeout_seconds: float | None = None,
+            max_retry: int | None = None,
+            retry_interval_seconds: float | None = None,
+            tools: list[dict[str, Any]] | None = None,
+            tool_choice: Any = None,
+            extra_payload: Mapping[str, Any] | None = None,
+        ) -> AICompletionResult:
+            """用当前原子配置快照执行插件自己的 AI route。"""
+
+            session = self.http_session
+            if session is None or session.closed:
+                raise RuntimeError("shared HTTP session is unavailable")
+            snapshot = self.config_manager.snapshot()
+            return await complete_configured_route(
+                session=session,
+                config=snapshot.config,
+                secrets=snapshot.secrets,
+                plugin_name=plugin_name,
+                route_name=route_name,
+                messages=messages,
+                required_modalities=required_modalities,
+                pinned_model=pinned_model,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
+                total_timeout_seconds=total_timeout_seconds,
+                max_retry=max_retry,
+                retry_interval_seconds=retry_interval_seconds,
+                tools=tools,
+                tool_choice=tool_choice,
+                extra_payload=extra_payload,
+            )
+
+        def list_ai_models(
+            *,
+            route_name: str,
+            required_modalities: tuple[str, ...] = ("text",),
+        ) -> tuple[AIModelInfo, ...]:
+            snapshot = self.config_manager.snapshot()
+            return cast(
+                tuple[AIModelInfo, ...],
+                list_configured_models(
+                    config=snapshot.config,
+                    secrets=snapshot.secrets,
+                    plugin_name=plugin_name,
+                    route_name=route_name,
+                    required_modalities=required_modalities,
+                ),
+            )
 
         return PluginCapabilities(
             is_bot_admin=is_bot_admin,
@@ -1101,28 +1483,50 @@ class XiaoQingApp:
             codex_arxiv_summary=codex_arxiv_summary,
             voice_synthesis=voice_synthesis,
             chat_reply=chat_reply,
+            ai=AIService(complete_ai_route, list_ai_models),
         )
 
-    def _plugin_config_view(self, plugin_name: str) -> dict[str, Any]:
+    def _plugin_config_view(
+        self,
+        plugin_name: str,
+        config: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
         """Return the immutable public config and this plugin's config namespace."""
-        public_keys = (
-            "bot_name",
-            "command_prefixes",
-            "default_group_ids",
-            "timezone",
-            "require_bot_name_in_group",
-            "random_reply_rate",
-        )
-        config = self.config
-        plugin_options = config.get("plugins", {}).get(plugin_name, {})
-        view = {key: config[key] for key in public_keys if key in config}
-        view["plugins"] = {plugin_name: plugin_options}
-        return _freeze_config_mapping(view)
+        source = self.config if config is None else config
+        return cast(Mapping[str, Any], _scoped_plugin_config(plugin_name, source))
 
-    def _plugin_secrets_view(self, plugin_name: str) -> dict[str, Any]:
+    def _plugin_secrets_view(
+        self,
+        plugin_name: str,
+        secrets: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
         """Return only this plugin's immutable secret namespace."""
-        plugin_secrets = self.secrets.get("plugins", {}).get(plugin_name, {})
-        return _freeze_config_mapping({"plugins": {plugin_name: plugin_secrets}})
+        source = self.secrets if secrets is None else secrets
+        return cast(Mapping[str, Any], _scoped_plugin_secrets(plugin_name, source))
+
+    def _plugin_settings_snapshot(
+        self,
+        plugin_name: str,
+        snapshot: ConfigSnapshot | None = None,
+    ) -> PluginSettingsSnapshot:
+        """Atomically scope one ConfigManager generation to a single plugin."""
+        source = self.config_manager.snapshot() if snapshot is None else snapshot
+        if self._plugin_settings_cache_revision != source.revision:
+            self._plugin_settings_cache.clear()
+            self._plugin_settings_cache_revision = source.revision
+        cache_key = (plugin_name, source.revision)
+        cached = self._plugin_settings_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        settings = PluginSettingsSnapshot(
+            config=self._plugin_config_view(plugin_name, source.config),
+            secrets=self._plugin_secrets_view(plugin_name, source.secrets),
+            revision=source.revision,
+            config_status=source.config_status.value,
+            secrets_status=source.secrets_status.value,
+        )
+        self._plugin_settings_cache[cache_key] = settings
+        return settings
 
     def _reload_plugins(self) -> asyncio.Task[None] | None:
         """
@@ -1134,30 +1538,34 @@ class XiaoQingApp:
         if self._stopping:
             logger.debug("Ignoring plugin reload while stopping")
             return None
+        if not bool(getattr(self.plugin_manager, "hot_reload_supported", True)):
+            reason = getattr(self.plugin_manager, "hot_reload_unavailable_reason", None)
+            logger.error(
+                "Plugin reload is unavailable; restart the process to apply plugin changes: %s",
+                reason or "module import barrier capability probe failed",
+            )
+            return None
         if self._reload_task and not self._reload_task.done():
             logger.info("Plugin reload already in progress")
             return self._reload_task
-        self._reload_task = asyncio.create_task(self._reload_plugins_async_with_logging())
+        self._reload_task = asyncio.create_task(
+            _run_background_operation(self._reload_plugins_async_with_logging)
+        )
         return self._reload_task
 
     async def _reload_plugins_async_with_logging(self) -> None:
         """执行插件重载并记录结果"""
         try:
-            async with self._ensure_reload_lock():
+            async with self._reload_lock.get():
                 if self._stopping:
                     return
                 logger.info("Starting plugin reload...")
-                for name in list(self.plugin_manager.list_plugins()):
-                    if self._stopping:
-                        return
-                    # 清理该插件的所有活跃 session，避免 reload 后残留旧状态
-                    await self.session_manager.clear_plugin_sessions(name)
-                    await self.plugin_manager.unload_plugin(name)
-
-                if self._stopping:
+                completed = await self.plugin_manager.reload_all_plugins(
+                    before_reload=self.session_manager.clear_plugin_sessions,
+                )
+                if not completed:
+                    logger.error("Plugin reload stopped because a generation is quarantined")
                     return
-                self.plugin_manager.load_all()
-                await self.plugin_manager.wait_inits()
                 logger.info("Plugin reload completed successfully")
         except Exception as exc:
             logger.exception("Plugin reload failed: %s", exc)
@@ -1166,64 +1574,433 @@ class XiaoQingApp:
     # 配置热更新
     # ============================================================
 
+    def _apply_security_snapshot(self, snapshot: ConfigSnapshot) -> None:
+        with self._runtime_auth_lock:
+            self._apply_security_snapshot_locked(snapshot)
+
+    def _apply_security_snapshot_locked(self, snapshot: ConfigSnapshot) -> None:
+        """Synchronously revoke or rotate every already-published auth holder.
+
+        This callback is intentionally free of awaits and task scheduling so it
+        can run on ConfigManager's security publication path before ordinary
+        reload callbacks.  A newer security revision also invalidates any
+        cancellation-resistant runtime reconciliation that is still running.
+        """
+
+        if snapshot.revision < self._security_revision:
+            logger.debug(
+                "Ignoring stale security snapshot revision %d (latest=%d)",
+                snapshot.revision,
+                self._security_revision,
+            )
+            return
+
+        new_security_generation = True
+        if snapshot.revision == self._security_revision:
+            accepted = self._security_snapshot
+            if accepted is not None and snapshot == accepted:
+                # ConfigManager.snapshot() may materialize another immutable
+                # object for the same revision.  Equality is the publication
+                # identity here; treating object identity as a new generation
+                # can cancel the only task that is able to converge revocation.
+                snapshot = accepted
+                new_security_generation = False
+            elif self._security_conflict_revision == snapshot.revision:
+                logger.error(
+                    "Ignoring another conflicting security snapshot at revision %d; "
+                    "the revision remains fail-closed",
+                    snapshot.revision,
+                )
+                if accepted is None:
+                    return
+                snapshot = accepted
+                new_security_generation = False
+            else:
+                logger.critical(
+                    "Conflicting security snapshots share revision %d; revoking runtime "
+                    "credentials until a newer revision is published",
+                    snapshot.revision,
+                )
+                baseline = accepted or snapshot
+                snapshot = ConfigSnapshot(
+                    config=baseline.config,
+                    secrets={},
+                    revision=snapshot.revision,
+                    config_status=baseline.config_status,
+                    secrets_status=ConfigSourceStatus.INCONSISTENT,
+                )
+                self._security_conflict_revision = snapshot.revision
+        else:
+            self._security_conflict_revision = None
+
+        if new_security_generation:
+            self._security_generation += 1
+            self._security_snapshot = snapshot
+        self._security_revision = snapshot.revision
+
+        trusted_secrets = _trusted_secrets(snapshot)
+        onebot_token, onebot_credentials_trusted = _onebot_credentials(snapshot)
+        inbound_token = _inbound_credentials(snapshot)
+        if (onebot_token, onebot_credentials_trusted) != (
+            self._runtime_onebot_token,
+            self._runtime_onebot_credentials_trusted,
+        ):
+            self._onebot_auth_generation += 1
+        self._runtime_onebot_token = onebot_token
+        self._runtime_onebot_credentials_trusted = onebot_credentials_trusted
+        self._runtime_inbound_token = inbound_token
+        self._load_admins(trusted_secrets)
+
+        desired_http_base = str(snapshot.config.get("onebot_http_base", "") or "").strip()
+        desired_http_base = desired_http_base.rstrip("/")
+        sender = self.http_sender
+        if sender is not None:
+            try:
+                holder_endpoint = sender.http_base
+                holder_matches = bool(desired_http_base and holder_endpoint == desired_http_base)
+                holder_trusted = holder_matches and onebot_credentials_trusted
+                holder_token = onebot_token if holder_trusted else ""
+                sender.update(
+                    holder_endpoint,
+                    holder_token,
+                    credentials_trusted=holder_trusted,
+                )
+                _require_onebot_holder_credentials(
+                    sender,
+                    endpoint_attribute="http_base",
+                    expected_endpoint=holder_endpoint,
+                    expected_token=holder_token,
+                    expected_trust=holder_trusted,
+                )
+            except BaseException as exc:
+                logger.exception("Could not synchronously rotate HTTP auth", exc_info=exc)
+                # HTTP senders own no background resource.  Detaching the
+                # uncertain holder is the only safe publication after a
+                # legacy or broken update implementation rejects revocation.
+                if self.http_sender is sender:
+                    self.http_sender = None
+
+        desired_ws_uri = str(snapshot.config.get("onebot_ws_uri", "") or "").strip()
+        desired_ws_enabled = bool(snapshot.config.get("enable_ws_client", True))
+        ws_client = self.ws_client
+        if ws_client is not None:
+            try:
+                holder_endpoint = ws_client.ws_uri
+                holder_matches = bool(
+                    desired_ws_enabled and desired_ws_uri and holder_endpoint == desired_ws_uri
+                )
+                holder_trusted = holder_matches and onebot_credentials_trusted
+                holder_token = onebot_token if holder_trusted else ""
+                ws_client.update(
+                    holder_endpoint,
+                    holder_token,
+                    credentials_trusted=holder_trusted,
+                )
+                _require_onebot_holder_credentials(
+                    ws_client,
+                    endpoint_attribute="ws_uri",
+                    expected_endpoint=holder_endpoint,
+                    expected_token=holder_token,
+                    expected_trust=holder_trusted,
+                )
+            except BaseException as exc:
+                logger.exception("Could not synchronously rotate WebSocket auth", exc_info=exc)
+                # Retain ownership so asynchronous reconciliation can stop the
+                # socket, but remove it from every send/receive trust boundary
+                # immediately.  Cancelling the listener is best-effort and is
+                # thread-safe when the security callback runs off-loop.
+                self._ws_client_auth_quarantine = ws_client
+                ws_task = self._ws_client_task
+                if ws_task is not None and not ws_task.done():
+                    try:
+                        ws_task.get_loop().call_soon_threadsafe(ws_task.cancel)
+                    except BaseException as schedule_error:
+                        try:
+                            ws_task.cancel()
+                        except BaseException as cancel_error:
+                            logger.error(
+                                "Could not cancel quarantined WebSocket listener after %s/%s",
+                                type(schedule_error).__name__,
+                                type(cancel_error).__name__,
+                            )
+            else:
+                if self._ws_client_auth_quarantine is ws_client:
+                    self._ws_client_auth_quarantine = None
+
+        desired_inbound_key: tuple[Any, ...] | None = None
+        try:
+            desired_inbound_key = InboundManager.config_key_from_config(
+                config=snapshot.config,
+                token=inbound_token,
+            )
+        except BaseException as exc:
+            logger.warning(
+                "Invalid inbound configuration during synchronous auth rotation: %s",
+                exc,
+            )
+        self._runtime_inbound_key = desired_inbound_key
+        inbound_holders: list[InboundManager] = []
+        for manager in (
+            self.inbound_manager,
+            *self._active_inbound_candidates(),
+            *tuple(self._inbound_cleanup_pending),
+        ):
+            if manager is not None and all(manager is not item for item in inbound_holders):
+                inbound_holders.append(manager)
+        for manager in inbound_holders:
+            try:
+                safe_token = (
+                    inbound_token
+                    if desired_inbound_key is not None
+                    and self._inbound_manager_key(manager) == desired_inbound_key
+                    else ""
+                )
+                manager.update_token(safe_token)
+            except BaseException as exc:
+                logger.exception("Could not synchronously rotate inbound auth", exc_info=exc)
+
+    def _claim_config_apply_owner(
+        self,
+        snapshot: ConfigSnapshot,
+    ) -> _ConfigApplyOwner | None:
+        with self._runtime_auth_lock:
+            if snapshot.revision <= self._config_apply_revision:
+                logger.debug(
+                    "Ignoring duplicate or stale runtime-config snapshot revision %d (latest=%d)",
+                    snapshot.revision,
+                    self._config_apply_revision,
+                )
+                return None
+            if snapshot.revision < self._security_revision:
+                logger.debug(
+                    "Ignoring runtime-config snapshot revision %d behind security revision %d",
+                    snapshot.revision,
+                    self._security_revision,
+                )
+                return None
+
+            self._config_apply_generation += 1
+            self._config_apply_revision = snapshot.revision
+            owner = _ConfigApplyOwner(
+                generation=self._config_apply_generation,
+                revision=snapshot.revision,
+                security_generation=self._security_generation,
+            )
+            self._config_apply_owner = owner
+            return owner
+
+    def _owns_config_apply(self, owner: _ConfigApplyOwner | None) -> bool:
+        with self._runtime_auth_lock:
+            return self._owns_config_apply_locked(owner)
+
+    def _owns_config_apply_locked(self, owner: _ConfigApplyOwner | None) -> bool:
+        return owner is None or (
+            not self._stopping
+            and owner == self._config_apply_owner
+            and owner.security_generation == self._security_generation
+            and owner.revision == self._config_apply_revision
+        )
+
+    def _latest_safe_inbound_token(self, manager: InboundManager) -> str:
+        with self._runtime_auth_lock:
+            if self._inbound_manager_key(manager) == self._runtime_inbound_key:
+                return self._runtime_inbound_token
+            return ""
+
     def _apply_config(self, snapshot: ConfigSnapshot) -> None:
         """应用配置变更"""
+        try:
+            self._apply_config_impl(snapshot)
+        except Exception:
+            raise
+        except BaseException as exc:
+            raise ApplicationLifecycleFatalError(exc) from None
+
+    def _apply_config_impl(self, snapshot: ConfigSnapshot) -> None:
+        self._apply_security_snapshot(snapshot)
+        with self._runtime_auth_lock:
+            if (
+                snapshot.revision != self._security_revision
+                or self._security_snapshot is None
+                or snapshot != self._security_snapshot
+            ):
+                logger.error(
+                    "Ignoring runtime configuration snapshot revision %d because its "
+                    "security publication was not accepted",
+                    snapshot.revision,
+                )
+                return
+        owner = self._claim_config_apply_owner(snapshot)
+        if owner is None:
+            return
+        if not self._owns_config_apply(owner):
+            return
         if self._stopping:
             logger.debug("Ignoring configuration update while stopping")
             return
         config = snapshot.config
-        secrets = snapshot.secrets
 
-        self._load_admins(secrets)
+        # Validate every scalar before changing any runtime-owned component.
+        session_timeout = _coerce_runtime_number(
+            config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC),
+            key="session_timeout",
+            default=DEFAULT_SESSION_TIMEOUT_SEC,
+            integer=False,
+            minimum=0.001,
+            maximum=604800.0,
+        )
+        concurrency = _coerce_runtime_number(
+            config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY),
+            key="max_concurrency",
+            default=DEFAULT_MAX_CONCURRENCY,
+            integer=True,
+            minimum=1,
+            maximum=1024,
+        )
+        poll_interval = _coerce_runtime_number(
+            config.get("plugin_poll_interval", 3600),
+            key="plugin_poll_interval",
+            default=3600.0,
+            integer=False,
+            minimum=0.01,
+            maximum=86400.0,
+        )
+
         self.dispatcher.refresh_prefix_cache()
         self._configure_plugin_execution(config)
-        self._configure_plugin_watch(config)
-        session_timeout = float(config.get("session_timeout", DEFAULT_SESSION_TIMEOUT_SEC))
+        self._configure_plugin_watch(config, poll_interval=float(poll_interval))
         self.session_manager.set_default_timeout(session_timeout)
 
-        concurrency = int(config.get("max_concurrency", DEFAULT_MAX_CONCURRENCY))
         if concurrency != self._dispatcher_concurrency:
-            self.dispatcher.semaphore = asyncio.Semaphore(concurrency)
+            limiter = self.dispatcher.semaphore
+            if isinstance(limiter, AdjustableSemaphore):
+                limiter.resize(concurrency)
+            else:
+                # 兼容外部注入的旧 Dispatcher；生产路径从构造起使用可调 limiter。
+                self.dispatcher.semaphore = AdjustableSemaphore(concurrency)
             self._dispatcher_concurrency = concurrency
 
         timezone = str(config.get("timezone", "Asia/Shanghai") or "Asia/Shanghai")
-        if timezone != self.scheduler.timezone:
-            self.scheduler.reset(timezone)
-            self._reschedule("startup")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            scheduler = self.scheduler.scheduler
+            if scheduler is None or not bool(getattr(scheduler, "running", False)):
+                # A pre-start synchronous reload can safely update the lazy
+                # factory input; the next start will create the right zone.
+                self.scheduler.timezone = timezone
+                return
+            if timezone != self.scheduler.timezone:
+                raise RuntimeError(
+                    "cannot change a running scheduler timezone without an event loop"
+                ) from None
+            return
 
-        if self.http_session is not None:
-            current_task = self._config_apply_task
-            if current_task and not current_task.done():
+        # Timezone reconciliation is required even before the HTTP session
+        # exists (for example after a clean startup rollback).  The runtime
+        # method itself gates only the network components that need a session.
+        for current_task in tuple(self._config_apply_tasks):
+            if not current_task.done():
                 current_task.cancel()
-            self._config_apply_task = asyncio.create_task(self._apply_runtime_config(snapshot))
+        task = asyncio.create_task(self._apply_runtime_config(snapshot, owner=owner))
+        self._config_apply_tasks.add(task)
+        self._config_apply_task = task
+
+        def config_apply_done(done: asyncio.Task[None]) -> None:
+            self._config_apply_tasks.discard(done)
+            if self._config_apply_task is done:
+                self._config_apply_task = None
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:
+                logger.exception("Runtime configuration apply failed", exc_info=exc)
+
+        task.add_done_callback(config_apply_done)
 
     def reload_config(self) -> None:
         """重新加载配置并应用变更"""
         if self._stopping:
             logger.debug("Ignoring configuration reload while stopping")
             return
-        self.config_manager.reload()
-        snapshot = ConfigSnapshot(self.config_manager.config, self.config_manager.secrets)
-        self._apply_config(snapshot)
+        try:
+            self.config_manager.reload(notify=True)
+        except Exception:
+            # Invalid config keeps the last-known-good public config but may
+            # revoke secrets.  Apply that fail-closed snapshot before callers
+            # observe the original reload error.
+            snapshot = self.config_manager.snapshot()
+            try:
+                self._apply_config(snapshot)
+            except BaseException as apply_error:
+                logger.exception(
+                    "Unable to apply fail-closed configuration snapshot",
+                    exc_info=apply_error,
+                )
+            raise
 
-    async def _apply_runtime_config(self, snapshot: ConfigSnapshot) -> None:
+    async def _apply_runtime_config(
+        self,
+        snapshot: ConfigSnapshot,
+        *,
+        owner: _ConfigApplyOwner | None = None,
+    ) -> None:
+        try:
+            await self._apply_runtime_config_impl(snapshot, owner=owner)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise
+        except BaseException as exc:
+            raise ApplicationLifecycleFatalError(exc) from None
+
+    async def _apply_runtime_config_impl(
+        self,
+        snapshot: ConfigSnapshot,
+        *,
+        owner: _ConfigApplyOwner | None = None,
+    ) -> None:
         config = snapshot.config
-        secrets = snapshot.secrets
-        if self._stopping or not self.http_session:
+        secrets = _trusted_secrets(snapshot)
+        if not self._owns_config_apply(owner):
+            return
+
+        timezone = str(config.get("timezone", "Asia/Shanghai") or "Asia/Shanghai")
+        if timezone != self.scheduler.timezone:
+            if not self._owns_config_apply(owner):
+                return
+            await self.scheduler.reset_async(timezone)
+            if not self._owns_config_apply(owner):
+                return
+            self._reschedule("startup")
+
+        if not self._owns_config_apply(owner):
+            return
+        if not self.http_session:
             return
 
         http_base = str(config.get("onebot_http_base", "") or "").strip()
-        if http_base:
-            if not self.http_sender:
-                self.http_sender = OneBotHttpSender(
-                    http_base,
-                    secrets.get("onebot_token", ""),
-                    self.http_session,
-                )
+        onebot_token, onebot_credentials_trusted = _onebot_credentials(snapshot)
+        with self._runtime_auth_lock:
+            if not self._owns_config_apply_locked(owner):
+                return
+            if http_base:
+                if not self.http_sender:
+                    self.http_sender = OneBotHttpSender(
+                        http_base,
+                        onebot_token,
+                        self.http_session,
+                        credentials_trusted=onebot_credentials_trusted,
+                    )
+                else:
+                    self.http_sender.update(
+                        http_base,
+                        onebot_token,
+                        credentials_trusted=onebot_credentials_trusted,
+                    )
             else:
-                self.http_sender.update(http_base, secrets.get("onebot_token", ""))
-        else:
-            self.http_sender = None
+                self.http_sender = None
 
         enable_ws = bool(config.get("enable_ws_client", True))
         ws_uri = str(config.get("onebot_ws_uri", "") or "").strip()
@@ -1231,233 +2008,18 @@ class XiaoQingApp:
         await self._reconcile_ws_client(
             enable_ws=enable_ws,
             ws_uri=ws_uri,
-            token=secrets.get("onebot_token", ""),
+            token=onebot_token,
+            credentials_trusted=onebot_credentials_trusted,
             queue_size=ws_queue_size,
+            owner=owner,
         )
 
-        if self._stopping:
+        if not self._owns_config_apply(owner):
             return
-        await self._reconcile_inbound_manager(config, secrets)
-
-    def _parse_ws_queue_size(self, config: dict[str, Any]) -> int:
-        ws_queue_size_raw = config.get("ws_queue_size", DEFAULT_INBOUND_WS_QUEUE_SIZE)
-        try:
-            return int(ws_queue_size_raw)
-        except (TypeError, ValueError):
-            return DEFAULT_INBOUND_WS_QUEUE_SIZE
-
-    async def _reconcile_ws_client(
-        self,
-        *,
-        enable_ws: bool,
-        ws_uri: str,
-        token: str,
-        queue_size: int,
-    ) -> None:
-        if self._stopping:
+        await self._reconcile_inbound_manager(config, secrets, owner=owner)
+        if not self._owns_config_apply(owner):
             return
-        if not enable_ws or not ws_uri:
-            if self.ws_client:
-                await self.ws_client.stop()
-                await self._cancel_task("_ws_client_task")
-                self.ws_client = None
-            return
-
-        needs_restart = (
-            self.ws_client is None
-            or self.ws_client.ws_uri != ws_uri
-            or self.ws_client.auth_token != token
-            or getattr(self.ws_client, "_queue_size", queue_size) != queue_size
-            or self._ws_client_task is None
-            or self._ws_client_task.done()
-        )
-        if not needs_restart:
-            return
-
-        if self.ws_client:
-            await self.ws_client.stop()
-            await self._cancel_task("_ws_client_task")
-
-        if self._stopping:
-            return
-        self.ws_client = OneBotWsClient(
-            ws_uri,
-            token,
-            queue_size=queue_size,
-        )
-        self.ws_client.set_on_connect(self._on_ws_connected)
-        self._ws_client_task = asyncio.create_task(
-            self.ws_client.connect_and_listen(self._handle_upstream_event)
-        )
-
-    async def _reconcile_inbound_manager(
-        self,
-        config: dict[str, Any],
-        secrets: dict[str, Any],
-    ) -> None:
-        if self._stopping:
-            return
-        desired = InboundManager.from_config(
-            config=config,
-            token=secrets.get("inbound_token", ""),
-            handler=self._handle_inbound_event,
-        )
-        desired_key = self._inbound_manager_key(desired)
-        current_key = self._inbound_manager_key(self.inbound_manager)
-
-        if desired is None:
-            if self.inbound_manager:
-                await self.inbound_manager.stop()
-                self.inbound_manager = None
-            return
-
-        if self.inbound_manager is None or current_key != desired_key:
-            if self.inbound_manager:
-                await self.inbound_manager.stop()
-            if self._stopping:
-                return
-            self.inbound_manager = desired
-            self._bind_inbound_status_providers(self.inbound_manager)
-            await self.inbound_manager.start()
-            return
-
-        self.inbound_manager.update_token(secrets.get("inbound_token", ""))
-        self._bind_inbound_status_providers(self.inbound_manager)
-
-    @staticmethod
-    def _inbound_manager_key(manager: InboundManager | None) -> tuple[Any, ...] | None:
-        if manager is None:
-            return None
-        return manager.config_key
-
-    def _bind_inbound_status_providers(self, manager: InboundManager) -> None:
-        def _plugins_count() -> int:
-            return len(self.plugin_manager.list_plugins())
-
-        def _sessions_count() -> int:
-            return self.session_manager.active_count
-
-        def _pending_jobs() -> int:
-            scheduler = self.scheduler.scheduler
-            if not scheduler:
-                return 0
-            return len(scheduler.get_jobs())
-
-        def _metrics() -> dict[str, Any]:
-            return self.metrics.summary_snapshot()
-
-        manager.set_status_providers(
-            plugins_count=_plugins_count,
-            sessions_count=_sessions_count,
-            pending_jobs=_pending_jobs,
-            metrics=_metrics,
-        )
 
     # ============================================================
     # 定时任务
     # ============================================================
-
-    def _reschedule(self, plugin_name: str) -> None:
-        """重新调度定时任务"""
-        if self._stopping:
-            logger.debug("Skipping schedule update for %s while stopping", plugin_name)
-            return
-        if plugin_name == "startup":
-            # 启动时全量加载
-            self.scheduler.clear_prefix("plugin.")
-            target_plugins = self.plugin_manager.schedule_definitions()
-        else:
-            # 单个插件更新
-            self.scheduler.clear_prefix(f"plugin.{plugin_name}.")
-            loaded = self.plugin_manager.get(plugin_name)
-            target_plugins = [loaded] if loaded else []
-
-        for loaded in target_plugins:
-            if not loaded:
-                continue
-            for entry in loaded.definition.schedule:
-                if not entry.get("enabled", True):
-                    logger.info(
-                        "Manifest-disabled schedule skipped: plugin=%s id=%s",
-                        loaded.definition.name,
-                        entry.get("id", entry.get("handler", "<unknown>")),
-                    )
-                    continue
-                handler_name = entry.get("handler", "")
-                if not handler_name or not hasattr(loaded.module, handler_name):
-                    continue
-
-                cron = entry.get("cron", {})
-                job_id = f"plugin.{loaded.definition.name}.{entry.get('id', handler_name)}"
-                handler = getattr(loaded.module, handler_name)
-                # 获取定时任务配置的 group_ids（可选）
-                raw_group_ids = entry.get("group_ids")
-                group_ids = (
-                    tuple(int(x) for x in raw_group_ids) if raw_group_ids is not None else None
-                )
-
-                self.scheduler.add_job(
-                    job_id,
-                    functools.partial(
-                        self._run_job,
-                        handler,
-                        loaded.definition.name,
-                        group_ids,
-                        loaded_plugin=loaded,
-                    ),
-                    cron,
-                    description=entry.get("description"),
-                )
-
-    async def _run_job(
-        self,
-        handler,
-        plugin_name: str,
-        group_ids: tuple[int, ...] | list[int] | None = None,
-        *,
-        loaded_plugin: Any | None = None,
-    ) -> None:
-        """执行定时任务"""
-        if self._stopping:
-            logger.debug("Scheduled job skipped while stopping: %s", plugin_name)
-            return
-        raw_target_groups = (
-            group_ids if group_ids is not None else list(self.config.get("default_group_ids", []))
-        )
-        delivery_targets = tuple(DeliveryTarget("group", int(value)) for value in raw_target_groups)
-        principal = self._principal_authority.issue(
-            kind="scheduled_system",
-            is_private=False,
-            delivery_targets=delivery_targets,
-        )
-        context = self.plugin_manager.build_context(
-            plugin_name,
-            principal=principal,
-        )
-        try:
-            loaded = (
-                loaded_plugin if loaded_plugin is not None else self.plugin_manager.get(plugin_name)
-            )
-
-            async def run_job_handler() -> Any:
-                return await call_plugin_callback(handler, context)
-
-            result = await invoke_loaded_plugin(loaded, run_job_handler)
-
-            segs = segments(result)
-            if not segs:
-                return
-
-            for target in principal.delivery_targets:
-                action = build_action(segs, target.user_id, target.group_id)
-                if action:
-                    action = self._tag_action_source(action, plugin_name)
-                    # 使用统一的 _send_action 方法（优先 WS，备选 HTTP）
-                    await self._send_action(action)
-
-        except asyncio.CancelledError:
-            logger.info("Scheduled job cancelled during shutdown: %s", plugin_name)
-        except (PluginExecutionClosed, PluginExecutionTimeout, PluginExecutionUnavailable):
-            logger.debug("Scheduled job skipped during plugin unload: %s", plugin_name)
-        except Exception as exc:
-            logger.exception("Scheduled job failed: %s", exc)

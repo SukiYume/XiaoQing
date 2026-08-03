@@ -1,3 +1,0 @@
-# Canonical dependencies live in the repository-root pyproject.toml.
-# From the repository root, install this feature with:
-#   pip install ".[arxiv-ml]"

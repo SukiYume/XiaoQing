@@ -1,90 +1,113 @@
 {
-	"name": "bot_core",
-	"version": "0.2.0",
-	"description": "XiaoQing Bot 核心管理插件：提供帮助、热重载、插件管理、群消息控制、配置管理和性能监控等核心功能",
-	"author": "XiaoQing Bot Team",
-	"entry": "main.py",
-	"commands": [
-		{
-			"name": "help",
-			"triggers": [
-				"help",
-				"h",
-				"帮助"
-			],
-			"help": "查看帮助 | /help [关键词]",
-			"admin_only": false
-		},
-		{
-			"name": "reload",
-			"triggers": [
-				"reload",
-				"重载"
-			],
-			"help": "热重载配置和插件",
-			"admin_only": true
-		},
-		{
-			"name": "plugins",
-			"triggers": [
-				"plugins",
-				"插件"
-			],
-			"help": "查看已加载插件列表",
-			"admin_only": false
-		},
-		{
-			"name": "闭嘴",
-			"triggers": [
-				"闭嘴",
-				"shutup",
-				"mute",
-				"安静"
-			],
-			"help": "群内静音 | /闭嘴 [分钟/1h]",
-			"admin_only": true
-		},
-		{
-			"name": "说话",
-			"triggers": [
-				"说话",
-				"speak",
-				"unmute"
-			],
-			"help": "解除群内静音",
-			"admin_only": true
-		},
-		{
-			"name": "set_secret",
-			"triggers": [
-				"set_secret",
-				"setsecret",
-				"设置密钥"
-			],
-			"help": "修改密钥 | /set_secret <路径> <值>",
-			"admin_only": true
-		},
-		{
-			"name": "get_secret",
-			"triggers": [
-				"get_secret",
-				"getsecret",
-				"查看密钥"
-			],
-			"help": "查看密钥 | /get_secret <路径>",
-			"admin_only": true
-		},
-		{
-			"name": "metrics",
-			"triggers": [
-				"metrics",
-				"stats",
-				"性能",
-				"指标"
-			],
-			"help": "查看运行指标 | /metrics",
-			"admin_only": true
-		}
-	],
-	"schedule": []
+  "name": "bot_core",
+  "version": "0.2.0",
+  "description": "XiaoQing Bot 核心管理插件：提供帮助、热重载、插件管理、群消息控制、配置管理和性能监控等核心功能",
+  "author": "XiaoQing Bot Team",
+  "entry": "main.py",
+  "capabilities": ["secret_admin"],
+  "commands": [
+    {
+      "name": "help",
+      "triggers": ["help", "h", "帮助", "commands", "命令目录", "catalog"],
+      "help": "查询、分页或导出 Core 的完整结构化命令目录",
+      "admin_only": false,
+      "usage": "/help [插件名|命令码|关键词] [page N]",
+      "examples": ["/help", "/help qingpet", "/help qingpet.qingpet.feed"],
+      "invalid_examples": ["/help page 0"],
+      "subcommands": [
+        {
+          "name": "page",
+          "aliases": ["list", "all", "页", "全部"],
+          "help": "按页遍历所有命令节点",
+          "usage": "/help page <页码>",
+          "examples": ["/help page 1"],
+          "invalid_examples": ["/help page abc"]
+        },
+        {
+          "name": "search",
+          "aliases": ["find", "show", "搜索", "查找"],
+          "help": "按插件名、稳定命令码、路径、别名、说明或用法查询",
+          "usage": "/help search <插件名|命令码|关键词> [page N]",
+          "examples": ["/help search qingpet", "/help search pendo.pendo.todo.add"],
+          "invalid_examples": ["/help search"]
+        },
+        {
+          "name": "json",
+          "aliases": ["export", "导出"],
+          "help": "以 JSON 导出当前页的完整命令字段",
+          "usage": "/help json [插件名|命令码|关键词] [page N]",
+          "examples": ["/help json qingpet"],
+          "invalid_examples": ["/help json page 0"]
+        }
+      ]
+    },
+    {
+      "name": "reload",
+      "triggers": ["reload", "重载"],
+      "help": "热重载配置和插件",
+      "admin_only": true,
+      "usage": "/reload",
+      "examples": ["/reload"],
+      "invalid_examples": ["/reload extra"]
+    },
+    {
+      "name": "plugins",
+      "triggers": ["plugins", "插件"],
+      "help": "查看已加载插件列表",
+      "admin_only": false,
+      "usage": "/plugins",
+      "examples": ["/plugins"],
+      "invalid_examples": ["/plugins extra"]
+    },
+    {
+      "name": "闭嘴",
+      "triggers": ["闭嘴", "shutup", "mute", "安静"],
+      "help": "在当前群临时暂停 Bot 主动回复",
+      "admin_only": true,
+      "contexts": ["group"],
+      "usage": "/闭嘴 [分钟|Nh|N小时]",
+      "examples": ["/闭嘴", "/闭嘴 30m", "/闭嘴 1.5h"],
+      "invalid_examples": ["/闭嘴 -1", "/闭嘴 forever"]
+    },
+    {
+      "name": "说话",
+      "triggers": ["说话", "speak", "unmute"],
+      "help": "解除群内静音",
+      "admin_only": true,
+      "contexts": ["group"],
+      "usage": "/说话",
+      "examples": ["/说话"],
+      "invalid_examples": ["/说话 extra"]
+    },
+    {
+      "name": "set_secret",
+      "triggers": ["set_secret", "setsecret", "设置密钥"],
+      "help": "在管理员私聊中修改密钥",
+      "admin_only": true,
+      "contexts": ["private"],
+      "usage": "/set_secret <路径> <值>",
+      "examples": ["/set_secret plugins.signin.token new-value"],
+      "invalid_examples": ["/set_secret", "/set_secret bad path value"]
+    },
+    {
+      "name": "get_secret",
+      "triggers": ["get_secret", "getsecret", "查看密钥"],
+      "help": "在管理员私聊中查看遮罩后的密钥或目录",
+      "admin_only": true,
+      "contexts": ["private"],
+      "usage": "/get_secret <路径>",
+      "examples": ["/get_secret plugins.signin"],
+      "invalid_examples": ["/get_secret", "/get_secret bad path"]
+    },
+    {
+      "name": "metrics",
+      "triggers": ["metrics", "stats", "性能", "指标"],
+      "help": "查看运行指标",
+      "admin_only": true,
+      "usage": "/metrics",
+      "examples": ["/metrics"],
+      "invalid_examples": ["/metrics extra"]
+    }
+  ],
+  "schedule": []
 }

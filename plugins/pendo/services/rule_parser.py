@@ -1,201 +1,218 @@
-"""
-规则解析服务（精简版）
-基于正则表达式和关键词匹配的自然语言解析
-作为AI解析的备用方案
-"""
+"""基于关键词和正则的本地自然语言解析器，作为 AI 解析的降级路径。"""
 
 import re
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Final
 
 from ..models.item import ItemType
 from ..utils.formatters import extract_tags
 from ..utils.time_utils import TimezoneHelper
 
+TIME_KEYWORDS: Final[tuple[tuple[str, int], ...]] = (
+    # 长词必须在短词前，避免“下下周”先命中“下周”。
+    ("下下周", 14),
+    ("今天", 0),
+    ("明天", 1),
+    ("后天", 2),
+    ("今晚", 0),
+    ("明晚", 1),
+    ("这周", 0),
+    ("下周", 7),
+)
+PRIORITY_KEYWORDS: Final[tuple[tuple[str, int], ...]] = (
+    ("高优先级", 2),
+    ("低优先级", 4),
+    ("紧急", 1),
+    ("重要", 2),
+    ("普通", 3),
+    ("低", 4),
+)
+REPEAT_KEYWORDS: Final[tuple[tuple[str, str], ...]] = (
+    ("每天", "DAILY"),
+    ("每周", "WEEKLY"),
+    ("每个月", "MONTHLY"),
+    ("每月", "MONTHLY"),
+)
+NOTE_KEYWORDS: Final = ("想法", "灵感", "点子", "记录", "笔记", "idea")
+EVENT_KEYWORDS: Final = ("会议", "开会", "约", "见面", "活动", "聚会", "上课")
+TASK_KEYWORDS: Final = ("待办", "任务", "完成", "提交", "截止", "deadline", "todo")
+DEADLINE_HINTS: Final = ("到", "截止", "之前", "前")
+TIME_EXPRESSION_PATTERNS: Final = (
+    r"\d{1,2}[点:：]",
+    r"今天|明天|后天",
+    r"\d{4}-\d{1,2}-\d{1,2}",
+    r"下周|这周",
+)
+LOCATION_PATTERNS: Final = (
+    r"在([^，,。.！!？?]+?)(开会|见面|会议)",
+    r"地点[：:]\s*([^，,。.！!？?]+)",
+)
+REMINDER_UNIT_SECONDS: Final = {"分钟": 60, "小时": 3600, "天": 86400}
+WEEKDAY_CODES: Final[tuple[tuple[str, str], ...]] = (
+    ("周一", "MO"),
+    ("周二", "TU"),
+    ("周三", "WE"),
+    ("周四", "TH"),
+    ("周五", "FR"),
+    ("周六", "SA"),
+    ("周日", "SU"),
+)
+CATEGORY_KEYWORDS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("健康", ("体检", "锻炼", "跑步", "健身", "运动", "医院")),
+    ("工作", ("工作", "会议", "项目", "报告", "开会", "邮件", "周报")),
+    ("学习", ("学习", "课程", "作业", "论文", "考试", "阅读")),
+    ("生活", ("购物", "家务", "做饭", "买菜")),
+    ("财务", ("理财", "投资", "报销", "账单", "还款")),
+)
+
 
 class RuleParser:
-    """规则解析器"""
-
-    def __init__(self):
-        # 时间关键词
-        self.time_keywords = {
-            "今天": 0,
-            "明天": 1,
-            "后天": 2,
-            "今晚": 0,
-            "明晚": 1,
-            "这周": 0,
-            "下周": 7,
-            "下下周": 14,
-        }
-
-        # 优先级关键词
-        self.priority_keywords = {
-            "紧急": 1,
-            "重要": 2,
-            "普通": 3,
-            "低": 4,
-            "高优先级": 2,
-            "低优先级": 4,
-        }
-
-        # 重复规则关键词
-        self.repeat_keywords = {
-            "每天": "DAILY",
-            "每周": "WEEKLY",
-            "每月": "MONTHLY",
-            "每个月": "MONTHLY",
-        }
+    """把常见中文时间、类型和元数据表达解析为条目字段。"""
 
     def parse(self, text: str, user_id: str, *, now: datetime | None = None) -> dict[str, Any]:
         """解析自然语言，返回结构化数据"""
+        item_type = self._detect_type(text)
         result: dict[str, Any] = {
-            "type": self._detect_type(text),
+            "type": item_type,
             "title": text[:50],
             "content": text,
-            "tags": self._extract_tags(text),
+            "tags": extract_tags(text),
             "category": self._extract_category(text) or "未分类",
             "owner_id": user_id,
             "needs_confirmation": [],
         }
 
-        # 提取时间信息
         current_time = now or TimezoneHelper.now()
         if current_time.tzinfo is None:
             raise ValueError("rule-parser now must be timezone-aware")
         time_info = self._extract_time(text, current_time)
-        if time_info:
-            if result["type"] == ItemType.EVENT:
-                result["start_time"] = time_info.get("start_time")
-                result["end_time"] = time_info.get("end_time")
-            elif result["type"] == ItemType.TASK:
-                deadline_at = time_info.get("deadline_at")
-                start_time = time_info.get("start_time")
-                if deadline_at:
-                    result["deadline_at"] = deadline_at
-                    result["plan_date"] = deadline_at[:10]
-                elif start_time:
-                    result["plan_date"] = start_time[:10]
+        self._apply_time_fields(result, item_type, time_info)
+        self._apply_type_metadata(result, item_type, text)
 
-        # 提取地点
-        location = self._extract_location(text)
-        if location and result["type"] == ItemType.EVENT:
-            result["location"] = location
-
-        # 提取优先级
-        priority = self._extract_priority(text)
-        if priority and result["type"] == ItemType.TASK:
-            result["priority"] = priority
-
-        # 提取提醒设置
         remind_times = self._extract_reminders(text, time_info, current_time)
-        if remind_times:
+        if remind_times and item_type in {ItemType.EVENT, ItemType.TASK}:
             result["remind_times"] = remind_times
 
-        # 提取重复规则
-        if result["type"] == ItemType.EVENT:
-            rrule = self._extract_rrule(text)
-            if rrule:
-                result["rrule"] = rrule
-
-        # 检查缺失字段
-        if result["type"] == ItemType.EVENT and not result.get("start_time"):
-            result["needs_confirmation"].append("start_time")
-        if result["type"] == ItemType.TASK and not result.get("plan_date"):
-            result["needs_confirmation"].append("plan_date")
-
+        self._append_missing_fields(result, item_type)
         return result
+
+    @staticmethod
+    def _apply_time_fields(
+        result: dict[str, Any],
+        item_type: ItemType,
+        time_info: dict[str, str] | None,
+    ) -> None:
+        """把通用时间解析结果映射到事件或待办字段。"""
+        if not time_info:
+            return
+        if item_type == ItemType.EVENT:
+            for field in ("start_time", "end_time"):
+                if value := time_info.get(field):
+                    result[field] = value
+            return
+        if item_type == ItemType.TASK:
+            deadline_at = time_info.get("deadline_at")
+            start_time = time_info.get("start_time")
+            if deadline_at:
+                result["deadline_at"] = deadline_at
+                result["plan_date"] = deadline_at[:10]
+            elif start_time:
+                result["plan_date"] = start_time[:10]
+
+    def _apply_type_metadata(self, result: dict[str, Any], item_type: ItemType, text: str) -> None:
+        """提取只属于事件或待办的元数据。"""
+        if item_type == ItemType.EVENT:
+            if location := self._extract_location(text):
+                result["location"] = location
+            if rrule := self._extract_rrule(text):
+                result["rrule"] = rrule
+        elif item_type == ItemType.TASK:
+            if priority := self._extract_priority(text):
+                result["priority"] = priority
+
+    @staticmethod
+    def _append_missing_fields(result: dict[str, Any], item_type: ItemType) -> None:
+        """记录后续交互仍需用户补充的关键字段。"""
+        missing = result["needs_confirmation"]
+        if item_type == ItemType.EVENT and not result.get("start_time"):
+            missing.append("start_time")
+        if item_type == ItemType.TASK and not result.get("plan_date"):
+            missing.append("plan_date")
 
     def _detect_type(self, text: str) -> ItemType:
         """检测条目类型"""
-        event_kw = ["会议", "开会", "约", "见面", "活动", "聚会", "上课"]
-        task_kw = ["待办", "任务", "完成", "提交", "截止", "deadline", "todo"]
-        note_kw = ["想法", "灵感", "点子", "记录", "笔记", "idea"]
-
         text_lower = text.lower()
-
-        for kw in note_kw:
-            if kw in text_lower:
-                return ItemType.NOTE
-
-        for kw in self.repeat_keywords:
-            if kw in text:
-                return ItemType.EVENT
-
-        for kw in event_kw:
-            if kw in text:
-                return ItemType.EVENT
-
-        for kw in task_kw:
-            if kw in text:
-                return ItemType.TASK
-
-        # 有时间表达式倾向于判断为日程或任务
-        if self._has_time_expression(text):
-            if any(k in text for k in ["到", "截止", "之前", "前"]):
-                return ItemType.TASK
+        if any(keyword in text_lower for keyword in NOTE_KEYWORDS):
+            return ItemType.NOTE
+        if any(keyword in text for keyword, _frequency in REPEAT_KEYWORDS):
             return ItemType.EVENT
-
+        if any(keyword in text for keyword in EVENT_KEYWORDS):
+            return ItemType.EVENT
+        if any(keyword in text_lower for keyword in TASK_KEYWORDS):
+            return ItemType.TASK
+        if self._has_time_expression(text):
+            return ItemType.TASK if any(hint in text for hint in DEADLINE_HINTS) else ItemType.EVENT
         return ItemType.NOTE
 
     def _extract_time(self, text: str, now: datetime) -> dict[str, str] | None:
         """提取时间信息"""
-        result = {}
+        result = self._extract_relative_time(text, now)
+        if absolute_start := self._extract_absolute_start(text, now):
+            result["start_time"] = absolute_start
 
-        # 相对时间
-        for keyword, days_offset in self.time_keywords.items():
-            if keyword in text:
-                target_date = now + timedelta(days=days_offset)
+        if ("截止" in text or "deadline" in text.lower()) and "start_time" in result:
+            result["deadline_at"] = result.pop("start_time")
+            result.pop("end_time", None)
+        return result or None
 
-                # 提取具体时间点
-                time_match = re.search(r"(\d{1,2})[点:：](\d{1,2})?", text)
-                if time_match:
-                    hour = int(time_match.group(1))
-                    minute = int(time_match.group(2)) if time_match.group(2) else 0
-                    target_time = target_date.replace(hour=hour, minute=minute, second=0)
-                    result["start_time"] = target_time.isoformat()
+    def _extract_relative_time(self, text: str, now: datetime) -> dict[str, str]:
+        """解析今天、明天、下周等相对日期。"""
+        for keyword, days_offset in TIME_KEYWORDS:
+            if keyword not in text:
+                continue
+            target_date = now + timedelta(days=days_offset)
+            start_match = re.search(r"(\d{1,2})[点:：](\d{1,2})?", text)
+            start_time = self._clock_on_date(target_date, start_match) or target_date.replace(
+                hour=9, minute=0, second=0, microsecond=0
+            )
+            result = {"start_time": start_time.isoformat()}
+            end_match = re.search(r"到\s*(\d{1,2})[点:：](\d{1,2})?", text)
+            if end_time := self._clock_on_date(target_date, end_match):
+                result["end_time"] = end_time.isoformat()
+            return result
+        return {}
 
-                    # 检查结束时间
-                    end_match = re.search(r"到\s*(\d{1,2})[点:：](\d{1,2})?", text)
-                    if end_match:
-                        end_hour = int(end_match.group(1))
-                        end_minute = int(end_match.group(2)) if end_match.group(2) else 0
-                        result["end_time"] = target_date.replace(
-                            hour=end_hour, minute=end_minute, second=0
-                        ).isoformat()
-                else:
-                    result["start_time"] = target_date.replace(
-                        hour=9, minute=0, second=0
-                    ).isoformat()
-                break
-
-        # 绝对日期 YYYY-MM-DD
+    def _extract_absolute_start(self, text: str, now: datetime) -> str | None:
+        """解析 YYYY-MM-DD 及其可选时分。"""
         date_match = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", text)
-        if date_match:
-            year, month, day = map(int, date_match.groups())
+        if date_match is None:
+            return None
+        year, month, day = map(int, date_match.groups())
+        try:
             target_date = datetime(year, month, day, tzinfo=now.tzinfo)
-            result["start_time"] = target_date.isoformat()
+        except ValueError:
+            return None
+        time_match = re.search(r"(\d{1,2})[点:：](\d{1,2})?", text)
+        return (self._clock_on_date(target_date, time_match) or target_date).isoformat()
 
-        # 截止时间
-        if "截止" in text or "deadline" in text.lower():
-            if "start_time" in result:
-                result["deadline_at"] = result.pop("start_time")
-                result.pop("end_time", None)
-
-        return result if result else None
+    @staticmethod
+    def _clock_on_date(base: datetime, match: re.Match[str] | None) -> datetime | None:
+        """把合法的时分匹配应用到指定日期，非法时钟返回 ``None``。"""
+        if match is None:
+            return None
+        hour = int(match.group(1))
+        minute = int(match.group(2) or 0)
+        if not 0 <= hour < 24 or not 0 <= minute < 60:
+            return None
+        return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
     def _has_time_expression(self, text: str) -> bool:
         """检查是否包含时间表达"""
-        patterns = [r"\d{1,2}[点:：]", r"今天|明天|后天", r"\d{4}-\d{1,2}-\d{1,2}", r"下周|这周"]
-        return any(re.search(p, text) for p in patterns)
+        return any(re.search(pattern, text) for pattern in TIME_EXPRESSION_PATTERNS)
 
     def _extract_location(self, text: str) -> str | None:
         """提取地点"""
-        patterns = [
-            r"在([^，,。.！!？?]+?)(开会|见面|会议)",
-            r"地点[：:]\s*([^，,。.！!？?]+)",
-        ]
-        for pattern in patterns:
+        for pattern in LOCATION_PATTERNS:
             match = re.search(pattern, text)
             if match:
                 return match.group(1).strip()
@@ -203,7 +220,7 @@ class RuleParser:
 
     def _extract_rrule(self, text: str) -> str | None:
         """提取重复规则"""
-        for keyword, freq in self.repeat_keywords.items():
+        for keyword, freq in REPEAT_KEYWORDS:
             if keyword in text:
                 rrule_parts = [f"FREQ={freq}"]
 
@@ -220,16 +237,7 @@ class RuleParser:
 
                 # 提取星期几
                 if freq == "WEEKLY":
-                    week_map = {
-                        "周一": "MO",
-                        "周二": "TU",
-                        "周三": "WE",
-                        "周四": "TH",
-                        "周五": "FR",
-                        "周六": "SA",
-                        "周日": "SU",
-                    }
-                    for cn_day, en_day in week_map.items():
+                    for cn_day, en_day in WEEKDAY_CODES:
                         if cn_day in text:
                             rrule_parts.append(f"BYDAY={en_day}")
                             break
@@ -239,8 +247,9 @@ class RuleParser:
 
     def _extract_priority(self, text: str) -> int | None:
         """提取优先级"""
-        for keyword, priority in self.priority_keywords.items():
-            if keyword in text.lower():
+        text_lower = text.lower()
+        for keyword, priority in PRIORITY_KEYWORDS:
+            if keyword in text_lower:
                 return priority
         return None
 
@@ -251,7 +260,7 @@ class RuleParser:
         if not time_info or "start_time" not in time_info:
             return []
 
-        reminders = []
+        reminders: set[str] = set()
         start_time = datetime.fromisoformat(time_info["start_time"])
 
         patterns = [
@@ -264,35 +273,16 @@ class RuleParser:
                 num = int(match.group(1))
                 unit = match.group(2)
 
-                if unit == "分钟":
-                    remind_time = start_time - timedelta(minutes=num)
-                elif unit == "小时":
-                    remind_time = start_time - timedelta(hours=num)
-                elif unit == "天":
-                    remind_time = start_time - timedelta(days=num)
-                else:
-                    continue
+                remind_time = start_time - timedelta(seconds=num * REMINDER_UNIT_SECONDS[unit])
 
                 if remind_time > now:
-                    reminders.append(remind_time.isoformat())
+                    reminders.add(remind_time.isoformat())
 
-        return reminders
-
-    def _extract_tags(self, text: str) -> list[str]:
-        """提取标签 (#tag格式)"""
-        return extract_tags(text)
+        return sorted(reminders)
 
     def _extract_category(self, text: str) -> str | None:
         """提取分类"""
-        categories = {
-            "健康": ["体检", "锻炼", "跑步", "健身", "运动", "医院"],
-            "工作": ["工作", "会议", "项目", "报告", "开会", "邮件", "周报"],
-            "学习": ["学习", "课程", "作业", "论文", "考试", "阅读"],
-            "生活": ["购物", "家务", "做饭", "买菜"],
-            "财务": ["理财", "投资", "报销", "账单", "还款"],
-        }
-
-        for category, keywords in categories.items():
+        for category, keywords in CATEGORY_KEYWORDS:
             if any(kw in text for kw in keywords):
                 return category
         return None

@@ -12,17 +12,30 @@ import pytest
 from core.clock import (
     SystemClock,
     SystemRandom,
+    now_in_configured_timezone,
 )
 
 T = TypeVar("T")
+
+
+def test_now_in_configured_timezone_uses_settings_snapshot() -> None:
+    class Context:
+        def get_settings_snapshot(self):
+            return type("Settings", (), {"config": {"timezone": "UTC"}})()
+
+    value = now_in_configured_timezone(Context())
+    assert value.tzinfo is not None
+    assert value.utcoffset().total_seconds() == 0
 
 # ============================================================
 # IClock Protocol Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_iclock_protocol_has_now_method():
     """Test IClock protocol requires now() method"""
+
     class MockClock:
         def now(self):
             return 1234567890.0
@@ -48,9 +61,11 @@ def test_iclock_protocol_with_mock():
 # IRandom Protocol Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_irandom_protocol_has_required_methods():
     """Test IRandom protocol requires random() and choice() methods"""
+
     class MockRandom:
         def random(self):
             return 0.5
@@ -81,6 +96,7 @@ def test_irandom_protocol_with_mock():
 # ============================================================
 # SystemClock Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_system_clock_now():
@@ -125,6 +141,7 @@ def test_system_clock_has_now_method():
 # ============================================================
 # SystemRandom Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_system_random_random():
@@ -199,9 +216,11 @@ def test_system_random_has_required_methods():
 # Protocol Compatibility Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_custom_clock_implementation():
     """Test custom clock implementation matches protocol"""
+
     class CustomClock:
         def __init__(self, fixed_time):
             self._fixed_time = fixed_time
@@ -219,6 +238,7 @@ def test_custom_clock_implementation():
 @pytest.mark.unit
 def test_custom_random_implementation():
     """Test custom random implementation matches protocol"""
+
     class DeterministicRandom:
         def __init__(self, sequence):
             self._sequence = sequence
@@ -246,9 +266,11 @@ def test_custom_random_implementation():
 # Mock Clock for Testing Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_mock_clock_for_testing():
     """Test using mock clock for deterministic tests"""
+
     class MockClock:
         def __init__(self):
             self._current_time = 1000.0
@@ -269,6 +291,7 @@ def test_mock_clock_for_testing():
 @pytest.mark.unit
 def test_mock_random_for_testing():
     """Test using mock random for deterministic tests"""
+
     class MockRandom:
         def __init__(self, return_values=None):
             self._values = return_values or [0.5]
@@ -294,9 +317,11 @@ def test_mock_random_for_testing():
 # Integration Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_clock_and_random_together():
     """Test using both clock and random interfaces together"""
+
     class MockSystem:
         def __init__(self):
             self.clock = SystemClock()

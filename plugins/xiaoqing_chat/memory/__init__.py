@@ -1,3 +1,1 @@
-from .memory import StoredMessage
-
-__all__ = ["StoredMessage"]
+"""小青聊天插件的记忆与知识存储子包。"""

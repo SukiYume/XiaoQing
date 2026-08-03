@@ -20,11 +20,11 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
-STEPS = [
+STEPS = (
     ("step1_extract_positive_ids.py", "提取正样本 ID 和日期范围"),
     ("step2_fetch_all_astro_ph.py", "获取所有 astro-ph 论文"),
     ("step3_build_dataset.py", "构建最终训练数据集"),
-]
+)
 
 
 def run_step(script: str, description: str) -> bool:
@@ -33,25 +33,24 @@ def run_step(script: str, description: str) -> bool:
     print(f"  运行: {script}")
     print(f"{'=' * 60}\n")
 
-    start = time.time()
+    start = time.perf_counter()
     script_path = SCRIPT_DIR / script
     result = subprocess.run([sys.executable, str(script_path)], cwd=str(SCRIPT_DIR))
-    elapsed = time.time() - start
+    elapsed = time.perf_counter() - start
 
     if result.returncode == 0:
         print(f"\n  {description} 完成 ({elapsed:.1f}s)")
         return True
-    else:
-        print(f"\n  {description} 失败 (退出码: {result.returncode})")
-        return False
+    print(f"\n  {description} 失败 (退出码: {result.returncode})")
+    return False
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="构建/更新 arxiv 训练数据集")
     parser.add_argument("--step", type=int, choices=[1, 2, 3], help="只运行指定步骤 (1/2/3)")
     args = parser.parse_args()
 
-    if args.step:
+    if args.step is not None:
         idx = args.step - 1
         script, desc = STEPS[idx]
         success = run_step(script, f"Step {args.step}: {desc}")
@@ -61,14 +60,14 @@ def main():
     print(f"构建训练数据集 - 运行 Step 1-{len(STEPS)}")
     print("=" * 60)
 
-    total_start = time.time()
+    total_start = time.perf_counter()
     for i, (script, desc) in enumerate(STEPS):
         success = run_step(script, f"Step {i + 1}: {desc}")
         if not success:
             print(f"\n  Step {i + 1} 失败，停止执行后续步骤")
             sys.exit(1)
 
-    total_elapsed = time.time() - total_start
+    total_elapsed = time.perf_counter() - total_start
     print(f"\n{'=' * 60}")
     print(f"  全部步骤完成! 总耗时: {total_elapsed:.1f}s ({total_elapsed / 60:.1f}min)")
     print(f"{'=' * 60}")

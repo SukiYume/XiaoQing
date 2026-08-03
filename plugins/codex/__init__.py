@@ -1,1 +1,1 @@
-"""Codex CLI integration plugin."""
+"""Codex CLI 后台会话、队列、进程与图片制品插件。"""

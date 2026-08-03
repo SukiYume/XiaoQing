@@ -1,9 +1,10 @@
 {
     "name": "codex",
-    "version": "1.0.0",
-    "description": "Codex CLI 后台任务队列插件",
+    "version": "1.1.0",
+    "description": "有界、可取消的 Codex CLI 后台会话队列",
     "entry": "main.py",
     "concurrency": "parallel",
+    "capabilities": ["admin_sessions", "execution_timeout_exempt"],
     "services": [
         {
             "name": "codex.enqueue_arxiv_summary",
@@ -21,7 +22,78 @@
                 "codex"
             ],
             "help": "Codex 会话队列 | /codex help",
-            "admin_only": true
+            "admin_only": true,
+            "contexts": ["private"],
+            "usage": "/codex <会话名> <任务> | /codex <子命令>",
+            "examples": ["/codex research 检查当前测试失败"],
+            "invalid_examples": ["/codex only-session-name"],
+            "subcommands": [
+                {
+                    "name": "create",
+                    "aliases": ["new", "创建"],
+                    "help": "创建一个有界后台会话",
+                    "usage": "/codex create <name> [cwd:<path>]",
+                    "examples": ["/codex create review cwd:C:/workspace/project"],
+                    "invalid_examples": ["/codex create"]
+                },
+                {
+                    "name": "list",
+                    "aliases": ["ls", "列表"],
+                    "help": "列出会话",
+                    "usage": "/codex list",
+                    "match": "exact",
+                    "examples": ["/codex list"],
+                    "invalid_examples": ["/codex list extra"]
+                },
+                {
+                    "name": "status",
+                    "aliases": ["状态"],
+                    "help": "查看全部或指定会话状态",
+                    "usage": "/codex status [name]",
+                    "examples": ["/codex status", "/codex status review"],
+                    "invalid_examples": ["/codex status a b"]
+                },
+                {
+                    "name": "cancel",
+                    "aliases": ["stop", "取消", "停止"],
+                    "help": "取消运行中任务或移除排队任务",
+                    "usage": "/codex cancel <name> [job_id]",
+                    "examples": ["/codex cancel review"],
+                    "invalid_examples": ["/codex cancel"]
+                },
+                {
+                    "name": "clear",
+                    "aliases": ["清空"],
+                    "help": "清空指定会话的排队任务",
+                    "usage": "/codex clear <name>",
+                    "examples": ["/codex clear review"],
+                    "invalid_examples": ["/codex clear"]
+                },
+                {
+                    "name": "delete",
+                    "aliases": ["del", "remove", "rm", "删除"],
+                    "help": "删除会话并归档历史",
+                    "usage": "/codex delete <name> [--force] [--protected]",
+                    "examples": ["/codex delete review"],
+                    "invalid_examples": ["/codex delete"]
+                },
+                {
+                    "name": "help",
+                    "aliases": ["帮助", "?"],
+                    "help": "显示 Codex 会话队列说明",
+                    "usage": "/codex help",
+                    "match": "exact",
+                    "examples": ["/codex help"],
+                    "invalid_examples": ["/codex help extra"]
+                }
+            ]
+        }
+    ],
+    "dependencies": [
+        {
+            "name": "PIL",
+            "required": false,
+            "description": "可选 Codex 图片 artifact 校验；缺失时文本任务仍可运行"
         }
     ],
     "schedule": []

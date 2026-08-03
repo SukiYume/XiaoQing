@@ -19,6 +19,7 @@ from core.metrics import (
 # ExecutionStats Tests
 # ============================================================
 
+
 @pytest.mark.unit
 def test_execution_stats_initialization():
     """Test ExecutionStats initial values"""
@@ -85,6 +86,18 @@ def test_execution_stats_errors():
 
 
 @pytest.mark.unit
+def test_execution_stats_record_cancellation_separately_from_errors():
+    stats = ExecutionStats()
+
+    stats.record(0.2, is_cancelled=True)
+
+    assert stats.total_calls == 1
+    assert stats.errors == 0
+    assert stats.cancelled == 1
+    assert stats.success_rate == 0.0
+
+
+@pytest.mark.unit
 def test_execution_stats_avg_time():
     """Test average time calculation"""
     stats = ExecutionStats()
@@ -111,7 +124,7 @@ def test_execution_stats_success_rate():
     stats.record(0.5, is_error=False)
     stats.record(0.5, is_error=True)
 
-    assert stats.success_rate == 2/3
+    assert stats.success_rate == 2 / 3
 
 
 @pytest.mark.unit
@@ -150,6 +163,7 @@ def test_execution_stats_to_dict():
     assert data["max_time"] == 3.0
     assert data["slow_calls"] == 1
     assert data["errors"] == 1
+    assert data["cancelled"] == 0
     assert data["success_rate"] == 0.75
 
 
@@ -169,6 +183,7 @@ def test_execution_stats_to_dict_empty():
 # ============================================================
 # MetricsCollector Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_metrics_collector_initialization():
@@ -347,6 +362,7 @@ async def test_metrics_collector_slow_call_logging(caplog):
 # timed_async Decorator Tests
 # ============================================================
 
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_timed_async_decorator():
@@ -386,9 +402,39 @@ async def test_timed_async_decorator_with_error():
     assert stats["errors"] == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_timed_async_decorator_records_and_propagates_cancellation():
+    collector = MetricsCollector()
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+
+    @timed_async(collector, "test_plugin", "test_cmd")
+    async def cancelled_function():
+        started.set()
+        await blocked.wait()
+
+    task = asyncio.create_task(cancelled_function())
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert task.cancelled()
+    stats = await collector.get_plugin_stats("test_plugin")
+    assert stats["total_calls"] == 1
+    assert stats["errors"] == 0
+    assert stats["cancelled"] == 1
+    assert stats["success_rate"] == 0.0
+    command_stats = await collector.get_command_stats()
+    assert command_stats["test_plugin.test_cmd"]["cancelled"] == 1
+
+
 # ============================================================
 # ExecutionTimer Tests
 # ============================================================
+
 
 @pytest.mark.asyncio
 @pytest.mark.unit
@@ -425,6 +471,32 @@ async def test_execution_timer_with_error():
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_execution_timer_records_and_propagates_cancellation():
+    collector = MetricsCollector()
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def use_timer() -> None:
+        async with ExecutionTimer(collector, "test_plugin", "test_cmd"):
+            started.set()
+            await blocked.wait()
+
+    task = asyncio.create_task(use_timer())
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert task.cancelled()
+    stats = await collector.get_plugin_stats("test_plugin")
+    assert stats["errors"] == 0
+    assert stats["cancelled"] == 1
+    assert stats["success_rate"] == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_execution_timer_duration():
     """Test ExecutionTimer sets duration"""
     collector = MetricsCollector()
@@ -438,6 +510,7 @@ async def test_execution_timer_duration():
 # ============================================================
 # Global Collector Tests
 # ============================================================
+
 
 @pytest.mark.unit
 def test_get_metrics_collector_singleton():
@@ -463,6 +536,7 @@ def test_set_metrics_collector():
 # ============================================================
 # Thread Safety Tests
 # ============================================================
+
 
 @pytest.mark.asyncio
 @pytest.mark.unit
@@ -507,6 +581,7 @@ async def test_metrics_collector_lock_contention():
 # ============================================================
 # Edge Cases Tests
 # ============================================================
+
 
 @pytest.mark.asyncio
 @pytest.mark.unit

@@ -41,6 +41,8 @@ env/
 .coverage
 .coverage.*
 coverage.xml
+coverage*.json
+coverage-reports/
 htmlcov/
 .tox/
 .nox/
@@ -92,9 +94,11 @@ config/secrets.json
 plugins/minecraft/config.json
 
 # Plugin runtime data, caches and generated reports
+/data/
 plugins/*/data/
 plugins/*/cache/
-plugins/*/test_reports/
+/test_reports/runs/
+/tests/command_scenario_fixtures.local.json
 plugins/pendo/test_tools/
 plugins/xiaoqing_chat/figures/
 
@@ -113,13 +117,6 @@ plugins/*deprecated/
 .codex/
 .playwright-mcp/
 .worktrees/
-
-# Local planning notes and superpowers scratch space
-docs/plans/
-docs/superpowers/*
-!docs/superpowers/specs/
-docs/superpowers/specs/*
-!docs/superpowers/specs/2026-04-27-xiaoqing-chat-simplification-design.md
 
 # Temporary files
 *.tmp

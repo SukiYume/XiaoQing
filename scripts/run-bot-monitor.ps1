@@ -12,14 +12,9 @@ closing its Windows file handle.
 [CmdletBinding()]
 param(
     [string]$BotRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$PythonPath = (Join-Path $env:USERPROFILE "miniconda3\python.exe"),
-    [string]$CondaPath = (Join-Path $env:USERPROFILE "miniconda3\Scripts\conda.exe"),
-    [ValidatePattern('^[A-Za-z0-9._-]+$')]
-    [string]$CondaEnvironment = "base",
-    [ValidateNotNullOrEmpty()]
-    [string]$BotPythonCommand = "python",
     [string[]]$BotArguments = @(),
     [string]$NapCatPath = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "NapCat.Shell\NapCatWinBootMain.exe"),
+    [switch]$DisableNapCat,
     [AllowEmptyString()]
     [string]$NapCatAccount = $env:XIAOQING_NAPCAT_ACCOUNT,
     [string[]]$NapCatArguments = @(),
@@ -64,7 +59,7 @@ function Get-NormalizedDirectoryPath {
 if ($MaximumRestartDelaySeconds -lt $InitialRestartDelaySeconds) {
     throw "MaximumRestartDelaySeconds must be greater than or equal to InitialRestartDelaySeconds"
 }
-if ($NapCatAccount -and $NapCatAccount -notmatch '^\d{5,20}$') {
+if (-not $DisableNapCat -and $NapCatAccount -and $NapCatAccount -notmatch '^\d{5,20}$') {
     throw "NapCatAccount must contain 5 to 20 decimal digits"
 }
 foreach ($argument in @($BotArguments) + @($NapCatArguments)) {
@@ -74,8 +69,6 @@ foreach ($argument in @($BotArguments) + @($NapCatArguments)) {
 }
 
 $BotRoot = Get-NormalizedDirectoryPath $BotRoot
-$PythonPath = [IO.Path]::GetFullPath($PythonPath)
-$CondaPath = [IO.Path]::GetFullPath($CondaPath)
 $NapCatPath = [IO.Path]::GetFullPath($NapCatPath)
 $MainScript = Join-Path $BotRoot "main.py"
 $LogPumpScript = Join-Path $BotRoot "scripts\run_process_with_rotating_logs.py"
@@ -92,11 +85,11 @@ if (-not (Test-Path -LiteralPath $MainScript -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $LogPumpScript -PathType Leaf)) {
     throw "Rotating log helper not found: $LogPumpScript"
 }
-if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
-    throw "Python executable not found: $PythonPath"
+if ($null -eq (Get-Command python -CommandType Application -ErrorAction SilentlyContinue)) {
+    throw "Python command not found in PATH"
 }
-if (-not (Test-Path -LiteralPath $CondaPath -PathType Leaf)) {
-    throw "Conda executable not found: $CondaPath"
+if (-not $DisableNapCat -and -not (Test-Path -LiteralPath $NapCatPath -PathType Leaf)) {
+    throw "NapCat executable not found: $NapCatPath (use -DisableNapCat only when an external adapter is intentional)"
 }
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 
@@ -201,7 +194,7 @@ function Start-LogPumpedProcess {
     ) + $CommandArguments
 
     return Start-Process `
-        -FilePath $PythonPath `
+        -FilePath "python" `
         -ArgumentList (Join-NativeArguments $pumpArguments) `
         -WorkingDirectory $WorkingDirectory `
         -WindowStyle Hidden `
@@ -318,10 +311,7 @@ function Stop-OwnedProcessTree {
 function Start-TrackedBot {
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
     $botCommand = @(
-        $CondaPath,
-        "run", "-n", $CondaEnvironment,
-        "--no-capture-output",
-        $BotPythonCommand,
+        "python",
         $MainScript
     ) + $BotArguments
     $process = Start-LogPumpedProcess `
@@ -350,8 +340,11 @@ function Start-TrackedBot {
 }
 
 function Test-NapCatRunning {
-    if (-not (Test-Path -LiteralPath $NapCatPath -PathType Leaf)) {
+    if ($DisableNapCat) {
         return $true
+    }
+    if (-not (Test-Path -LiteralPath $NapCatPath -PathType Leaf)) {
+        throw "NapCat executable disappeared while monitoring: $NapCatPath"
     }
     $expected = [IO.Path]::GetFullPath($NapCatPath)
     $expectedName = [IO.Path]::GetFileName($expected).Replace("'", "''")

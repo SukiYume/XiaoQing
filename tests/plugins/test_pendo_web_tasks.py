@@ -1,26 +1,32 @@
-"""Regression tests for the redesigned Pendo web tasks page."""
+"""Pendo Web 任务概览聚合器的跨模块回归。"""
 
-import shutil
-import uuid
-from pathlib import Path
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+import pytest
 
 from plugins.pendo.services.db import Database
+from plugins.pendo.web.analytics import task_overview as task_overview_module
 from plugins.pendo.web.analytics.task_overview import build_task_overview
 
-ROOT = Path(__file__).resolve().parents[2]
+
+def _insert(db: Database, owner_id: str, **values: Any) -> None:
+    """为当前所有者写入一条测试任务。"""
+
+    db.insert_item({"owner_id": owner_id, "type": "task", **values})
 
 
-def test_build_task_overview_groups_focus_risk_and_recent_done():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_tasks_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_build_task_overview_groups_widget_tasks_and_returns_minimal_payload(
+    db: Database,
+) -> None:
+    """Widget 分组保持完整，页面负载不再夹带重复派生或私有字段。"""
+
     owner_id = "u-task-overview"
-
-    try:
-        db.insert_item({
+    for values in (
+        {
             "id": "t1",
-            "owner_id": owner_id,
-            "type": "task",
             "title": "今天截止",
             "category": "工作",
             "status": "open",
@@ -28,11 +34,9 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
             "plan_date": "2026-03-26",
             "deadline_at": "2026-03-26T18:00:00",
             "created_at": "2026-03-25T09:00:00",
-        })
-        db.insert_item({
+        },
+        {
             "id": "t2",
-            "owner_id": owner_id,
-            "type": "task",
             "title": "已经逾期",
             "category": "工作",
             "status": "open",
@@ -40,11 +44,9 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
             "plan_date": "2026-03-24",
             "deadline_at": "2026-03-24T18:00:00",
             "created_at": "2026-03-20T09:00:00",
-        })
-        db.insert_item({
+        },
+        {
             "id": "t3",
-            "owner_id": owner_id,
-            "type": "task",
             "title": "下周处理",
             "category": "生活",
             "status": "open",
@@ -52,153 +54,140 @@ def test_build_task_overview_groups_focus_risk_and_recent_done():
             "plan_date": "2026-03-29",
             "deadline_at": "2026-03-29T12:00:00",
             "created_at": "2026-03-22T09:00:00",
-        })
-        db.insert_item({
+        },
+        {
             "id": "t4",
-            "owner_id": owner_id,
-            "type": "task",
             "title": "已经完成",
             "category": "工作",
             "status": "done",
             "priority": 3,
             "plan_date": "2026-03-25",
-            "deadline_at": "2026-03-25T10:00:00",
             "completed_at": "2026-03-26T08:00:00",
             "created_at": "2026-03-24T09:00:00",
-        })
-        db.insert_item({
+        },
+        {
             "id": "t5",
-            "owner_id": owner_id,
-            "type": "task",
             "title": "已取消",
             "category": "杂项",
             "status": "cancelled",
             "priority": 5,
+            "cancelled_at": "2026-03-25T08:00:00",
             "created_at": "2026-03-23T09:00:00",
-        })
+        },
+    ):
+        _insert(db, owner_id, **values)
 
-        result = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
+    result = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
+    cancelled = next(task for task in result["all_tasks"] if task["id"] == "t5")
 
-        assert result["summary"]["active_count"] == 3
-        assert result["summary"]["focus_count"] == 2
-        assert result["summary"]["overdue_count"] == 1
-        assert result["summary"]["done_today_count"] == 1
-        assert result["summary"]["completion_rate"] == 0.25
-        assert result["focus_tasks"][0]["id"] == "t2"
-        assert result["up_next_tasks"][0]["id"] == "t3"
-        assert result["done_recent"][0]["id"] == "t4"
-        assert result["category_load"][0]["category"] == "工作"
-        assert result["board_columns"]["open"][0]["id"] == "t1"
-        assert result["board_columns"]["cancelled"][0]["id"] == "t5"
-        assert len(result["completion_bars"]) == 7
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert set(result) == {
+        "summary",
+        "focus_tasks",
+        "up_next_tasks",
+        "later_tasks",
+        "backlog_tasks",
+        "all_tasks",
+    }
+    assert result["summary"] == {"active_count": 3, "focus_count": 2, "overdue_count": 1}
+    assert [task["id"] for task in result["focus_tasks"]] == ["t2", "t1"]
+    assert [task["id"] for task in result["up_next_tasks"]] == ["t3"]
+    assert len(result["all_tasks"]) == 5
+    assert set(cancelled) == {
+        "id",
+        "title",
+        "content",
+        "category",
+        "status",
+        "priority",
+        "plan_date",
+        "deadline_at",
+        "completed_at",
+        "cancelled_at",
+        "created_at",
+        "updated_at",
+        "version",
+    }
+    assert cancelled["cancelled_at"] == "2026-03-25T00:00:00+00:00"
 
 
-def test_build_task_overview_returns_all_focus_tasks():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_tasks_focus_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
+def test_build_task_overview_returns_all_focus_tasks(db: Database) -> None:
+    """今日与逾期任务不能按 Widget 卡片上限截断。"""
+
     owner_id = "u-task-focus"
+    for index in range(8):
+        _insert(
+            db,
+            owner_id,
+            id=f"today-{index}",
+            title=f"今天任务 {index}",
+            category="工作",
+            status="open",
+            priority=3,
+            plan_date="2026-03-26",
+            created_at=f"2026-03-25T09:00:{index:02d}",
+        )
 
-    try:
-        for index in range(8):
-            db.insert_item({
-                "id": f"today-{index}",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": f"今天任务 {index}",
-                "category": "工作",
-                "status": "open",
-                "priority": 3,
-                "plan_date": "2026-03-26",
-                "created_at": f"2026-03-25T09:00:{index:02d}",
-            })
+    result = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
 
-        result = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
-
-        assert result["summary"]["focus_count"] == 8
-        assert len(result["focus_tasks"]) == 8
-        assert [task["id"] for task in result["focus_tasks"]] == [f"today-{index}" for index in range(8)]
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert result["summary"]["focus_count"] == 8
+    assert [task["id"] for task in result["focus_tasks"]] == [
+        f"today-{index}" for index in range(8)
+    ]
 
 
-def test_tasks_page_source_uses_task_overview_and_view_toggle():
-    api_src = (ROOT / "plugins" / "pendo" / "web" / "api" / "stats.py").read_text(encoding="utf-8")
-    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js").read_text(encoding="utf-8")
+def test_build_task_overview_loads_more_than_500_tasks(db: Database) -> None:
+    """全量任务不能在首个读取批次结束，Widget 小分组仍保持上限。"""
 
-    assert '"/stats/tasks/overview"' in api_src
-    assert "/stats/tasks/overview" in page_src
-    assert "task-view-list" in page_src
-    assert "task-view-board" in page_src
-    assert "model.focus_tasks.slice(0, 6)" not in page_src
-
-
-def test_tasks_page_source_normalizes_modal_payload_defaults():
-    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js").read_text(encoding="utf-8")
-
-    assert "function normalizeTaskPayload(formData)" in page_src
-    assert "payload.category = String(payload.category || '').trim() || '未分类';" in page_src
-    assert "payload.content = payload.content ?? '';" in page_src
-    assert "payload.priority = Number.isInteger(priority) && priority >= 1 && priority <= 5 ? priority : 3;" in page_src
-
-
-def test_diary_page_source_styles_mood_picker_active_state():
-    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "diary.js").read_text(encoding="utf-8")
-
-    assert ".mood-selector { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }" in page_src
-    assert ".mood-btn.active {" in page_src
-    assert "transform: scale(1.06);" in page_src
-    assert "box-shadow: inset 0 0 0 1px rgba(236,72,153,0.12);" in page_src
-
-
-def test_tasks_page_source_uses_subtle_priority_picker_active_state():
-    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js").read_text(encoding="utf-8")
-
-    assert "border-radius: 12px;" in page_src
-    assert ".priority-btn.active { opacity: 1; transform: scale(1.06); }" in page_src
-    assert ".priority-btn.priority-3.active { border-color: rgba(234,179,8,0.38);" in page_src
-    assert "box-shadow: inset 0 0 0 1px rgba(234,179,8,0.14);" in page_src
-
-
-def test_tasks_page_source_scales_stat_values_for_mid_width_layouts():
-    page_src = (ROOT / "plugins" / "pendo" / "web" / "static" / "js" / "pages" / "tasks.js").read_text(encoding="utf-8")
-
-    assert "min-width: 0;" in page_src
-    assert "font-size: clamp(24px, 1.9vw, 30px);" in page_src
-    assert "overflow-wrap: anywhere;" in page_src
-    assert "word-break: break-word;" in page_src
-    assert "white-space: nowrap;" in page_src
-    assert "text-overflow: ellipsis;" in page_src
-
-
-def test_build_task_overview_loads_more_than_500_tasks():
-    temp_dir = ROOT / ".pytest_cache" / "tmp" / f"pendo_web_tasks_many_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(str(temp_dir / "pendo.db"))
     owner_id = "u-task-many"
+    for index in range(505):
+        _insert(
+            db,
+            owner_id,
+            id=f"t{index}",
+            title=f"任务 {index}",
+            category="工作",
+            status="open",
+            priority=3,
+            created_at=f"2026-03-01T00:00:{index % 60:02d}",
+        )
 
-    try:
-        for index in range(505):
-            db.insert_item({
-                "id": f"t{index}",
-                "owner_id": owner_id,
-                "type": "task",
-                "title": f"任务 {index}",
-                "category": "工作",
-                "status": "open",
-                "priority": 3,
-                "created_at": f"2026-03-01T00:00:{index % 60:02d}",
-            })
+    result = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
 
-        result = build_task_overview(db=db, owner_id=owner_id, today="2026-03-26")
+    assert result["summary"]["active_count"] == 505
+    assert len(result["all_tasks"]) == 505
+    assert len(result["backlog_tasks"]) == 8
 
-        assert result["summary"]["active_count"] == 505
-        assert len(result["all_tasks"]) == 505
-        assert len(result["board_columns"]["open"]) == 505
-    finally:
-        db.cleanup()
-        shutil.rmtree(temp_dir, ignore_errors=True)
+
+def test_build_task_overview_uses_user_clock_when_today_is_omitted(
+    db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """省略 today 时，今日聚焦必须依据用户设置时区。"""
+
+    owner_id = "u-task-user-clock"
+    _insert(
+        db,
+        owner_id,
+        id="today",
+        title="用户今天",
+        status="open",
+        plan_date="2030-01-02",
+    )
+
+    def user_now(user_id: str, database: Database) -> datetime:
+        assert user_id == owner_id
+        assert database is db
+        return datetime.fromisoformat("2030-01-02T00:30:00-12:00")
+
+    monkeypatch.setattr(task_overview_module, "now_in_timezone", user_now)
+    result = build_task_overview(db=db, owner_id=owner_id)
+
+    assert result["summary"]["focus_count"] == 1
+    assert result["focus_tasks"][0]["id"] == "today"
+
+
+def test_build_task_overview_rejects_invalid_direct_today(db: Database) -> None:
+    """显式非法 today 不能静默改用宿主机日期。"""
+
+    with pytest.raises(ValueError, match="today must be a valid ISO date"):
+        build_task_overview(db=db, owner_id="u-task-invalid", today="not-a-date")

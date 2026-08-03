@@ -1,14 +1,33 @@
-"""
-参数解析模块单元测试
-"""
+"""参数解析模块单元测试。"""
 
 import pytest
 
-from core.args import parse, tokenize
+from core.args import parse, parse_int, tokenize
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("0", 0), ("+12", 12), ("-7", -7), ("0042", 42)],
+)
+def test_parse_int_accepts_strict_ascii_integer_tokens(raw: str, expected: int) -> None:
+    assert parse_int(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["", " 1", "1 ", "1_0", "²", "٣", "１２", "1.0"])
+def test_parse_int_rejects_non_protocol_integer_tokens(raw: str) -> None:
+    assert parse_int(raw) is None
+
+
+def test_parse_int_applies_inclusive_range() -> None:
+    assert parse_int("5", minimum=5, maximum=5) == 5
+    assert parse_int("4", minimum=5) is None
+    assert parse_int("6", maximum=5) is None
+
 
 # ============================================================
 # tokenize 测试
 # ============================================================
+
 
 class TestTokenize:
     """tokenize() 函数测试"""
@@ -58,12 +77,10 @@ class TestTokenize:
         result = tokenize('  "hello world"  ')
         assert result == ["hello world"]
 
-    def test_escaped_quotes_not_supported(self):
-        """测试转义引号（当前不支持）"""
-        # 当前的 tokenize 不处理转义
+    def test_escaped_quotes(self):
+        """引号中的转义引号由统一 shlex 词法层处理。"""
         result = tokenize(r'"hello \"world"')
-        # 引号内的内容原样保留
-        assert len(result) >= 1
+        assert result == ['hello "world']
 
     def test_multiple_quoted_segments(self):
         """测试多个引号段"""
@@ -71,15 +88,22 @@ class TestTokenize:
         assert result == ["a b", "c d"]
 
     def test_unclosed_quote(self):
-        """测试未闭合的引号"""
-        # 未闭合的引号会被当作普通字符处理
-        result = tokenize('"hello world')
-        # 引号被视为普通字符，结果取决于实现
-        assert len(result) >= 1
+        """未闭合引号按空白回退，保留用户输入而不抛异常。"""
+        assert tokenize('"hello world') == ['"hello', "world"]
+
+    def test_unclosed_quote_can_be_strict(self):
+        with pytest.raises(ValueError, match="No closing quotation"):
+            tokenize('"hello world', strict=True)
+
+    def test_parse_unclosed_quote_keeps_free_text_command_arguments(self):
+        result = parse('search "fast radio burst')
+
+        assert result.tokens == ["search", '"fast', "radio", "burst"]
+        assert result.options == {}
 
     def test_special_characters(self):
         """测试特殊字符"""
-        result = tokenize('hello@world #tag $100')
+        result = tokenize("hello@world #tag $100")
         assert result == ["hello@world", "#tag", "$100"]
 
     def test_unicode_characters(self):
@@ -87,9 +111,11 @@ class TestTokenize:
         result = tokenize("你好 世界 测试")
         assert result == ["你好", "世界", "测试"]
 
+
 # ============================================================
 # parse 测试
 # ============================================================
+
 
 class TestParse:
     """parse() 函数测试"""
@@ -194,13 +220,11 @@ class TestParse:
         assert result.opt("b") == "true"
         assert result.opt("c") == "true"
 
-    def test_combined_short_option_is_single_key(self):
-        """测试 -abc 被视为单个短选项 key"""
+    def test_combined_short_option_is_positional_text(self):
+        """短选项只允许一个 ASCII 字母。"""
         result = parse("-abc")
-        assert result.opt("abc") == "true"
-        assert not result.has("a")
-        assert not result.has("b")
-        assert not result.has("c")
+        assert result.tokens == ["-abc"]
+        assert result.options == {}
 
     def test_negative_numbers_are_tokens(self):
         """测试独立负数参数不会被当成选项"""
@@ -214,9 +238,32 @@ class TestParse:
         assert result.opt("offset") == "-1"
         assert result.opt("scale") == "-1.5"
 
+    def test_option_terminator_keeps_all_following_tokens_positional(self):
+        result = parse("-v -- -x --mode=step -1+2")
+
+        assert result.options == {"v": "true"}
+        assert result.tokens == ["-x", "--mode=step", "-1+2"]
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["-1+2", "-12:34:56", "-3σ", "-输出", "--3d", "--输出"],
+    )
+    def test_ambiguous_dash_prefixed_text_is_not_an_option(self, raw: str):
+        result = parse(raw)
+
+        assert result.tokens == [raw]
+        assert result.options == {}
+
+    def test_ascii_long_option_may_use_hyphen_underscore_and_equals(self):
+        result = parse("--output-format=json --cache_key value")
+
+        assert result.options == {"output-format": "json", "cache_key": "value"}
+
+
 # ============================================================
 # ParsedArgs 数据类测试
 # ============================================================
+
 
 class TestParsedArgs:
     """ParsedArgs 数据类测试"""
@@ -249,9 +296,11 @@ class TestParsedArgs:
         assert original_tokens == ["one", "two", "three"]
         assert args.tokens == ["one", "two", "three", "four"]
 
+
 # ============================================================
 # 边界情况测试
 # ============================================================
+
 
 class TestEdgeCases:
     """边界情况测试"""
@@ -279,16 +328,8 @@ class TestEdgeCases:
         result = parse(long_input)
         assert len(result.tokens) == 1000
 
-    def test_unicode_in_options(self):
-        """测试选项中的 Unicode"""
+    def test_unicode_after_dash_is_positional(self):
+        """非 ASCII 选项名不会把后一个位置参数吞成值。"""
         result = parse("-输出 值")
-        # 中文开头跟在横线后面被视为选项
-        assert "输出" in result.options
-        assert result.options["输出"] == "值"
-
-# ============================================================
-# 运行测试
-# ============================================================
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        assert result.tokens == ["-输出", "值"]
+        assert result.options == {}

@@ -1,79 +1,28 @@
-"""
-颜色查询模块
-提供颜色的各种查询功能
-"""
-MAX_SEARCH_RESULTS = 20
+"""在已校验的颜色记录中执行确定性精确或子串查询。"""
 
-def find_by_name(colors: list[dict], name: str) -> dict | None:
-    """按名称查找颜色
+from __future__ import annotations
 
-    Args:
-        colors: 颜色列表
-        name: 颜色名称
+from collections.abc import Sequence
 
-    Returns:
-        找到的颜色数据，未找到返回 None
-    """
-    for color in colors:
-        if color.get('name') == name:
-            return color
-    return None
+from .data_manager import ColorRecord
 
-def find_by_rgb(colors: list[dict], rgb: list[int]) -> dict | None:
-    """按 RGB 查找颜色
 
-    Args:
-        colors: 颜色列表
-        rgb: RGB 值列表 [R, G, B]
+def find_by_name(colors: Sequence[ColorRecord], name: str) -> ColorRecord | None:
+    return next((color for color in colors if color["name"] == name), None)
 
-    Returns:
-        找到的颜色数据，未找到返回 None
-    """
-    for color in colors:
-        if color.get('RGB') == rgb:
-            return color
-    return None
 
-def find_by_hex(colors: list[dict], hex_value: str) -> dict | None:
-    """按 HEX 查找颜色
+def find_by_rgb(colors: Sequence[ColorRecord], rgb: list[int]) -> ColorRecord | None:
+    return next((color for color in colors if color["RGB"] == rgb), None)
 
-    Args:
-        colors: 颜色列表
-        hex_value: HEX 颜色值
 
-    Returns:
-        找到的颜色数据，未找到返回 None
-    """
-    if not hex_value.startswith('#'):
-        hex_value = '#' + hex_value
-    for color in colors:
-        if color.get('hex', '').lower() == hex_value.lower():
-            return color
-    return None
+def find_by_hex(colors: Sequence[ColorRecord], hex_value: str) -> ColorRecord | None:
+    normalized = hex_value.casefold()
+    return next((color for color in colors if color["hex"].casefold() == normalized), None)
 
-def find_by_cmyk(colors: list[dict], cmyk: list[int]) -> dict | None:
-    """按 CMYK 查找颜色
 
-    Args:
-        colors: 颜色列表
-        cmyk: CMYK 值列表 [C, M, Y, K]
+def find_by_cmyk(colors: Sequence[ColorRecord], cmyk: list[int]) -> ColorRecord | None:
+    return next((color for color in colors if color["CMYK"] == cmyk), None)
 
-    Returns:
-        找到的颜色数据，未找到返回 None
-    """
-    for color in colors:
-        if color.get('CMYK') == cmyk:
-            return color
-    return None
 
-def find_by_keyword(colors: list[dict], keyword: str) -> list[dict]:
-    """按关键词搜索颜色
-
-    Args:
-        colors: 颜色列表
-        keyword: 搜索关键词
-
-    Returns:
-        匹配的颜色列表
-    """
-    return [c for c in colors if keyword in c.get('name', '')]
+def find_by_keyword(colors: Sequence[ColorRecord], keyword: str) -> list[ColorRecord]:
+    return [color for color in colors if keyword in color["name"]]

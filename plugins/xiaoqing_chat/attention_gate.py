@@ -48,11 +48,7 @@ async def decide_attention(
     pending_bot_name_forced: bool,
     enable_private_brain_chat: bool,
 ) -> AttentionDecision:
-    """Classify whether the current turn is directed at XiaoQing.
-
-    This gate owns "attention" semantics only. Ordinary group participation
-    probability stays in frequency_control.
-    """
+    """判断本轮是否在呼叫小青；普通群聊插话概率仍由频率控制模块负责。"""
     if command_forced:
         return AttentionDecision(
             mentioned=True,

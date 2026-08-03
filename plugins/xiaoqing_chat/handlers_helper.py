@@ -20,15 +20,7 @@ async def _spawn_post_reply_bg_tasks(
     history_snapshot: list[Any],
     event: dict[str, Any],
 ) -> None:
-    """
-    Spawn background tasks after a reply is sent.
-
-    Includes:
-    - Topic summarization
-    - Expression learning
-    - Review session push
-    - Fact extraction
-    """
+    """回复发送后启动主题摘要、表达学习、复盘推送和事实提取任务。"""
     context = hctx.context
     runtime = hctx.runtime
     state = hctx.state
@@ -36,7 +28,7 @@ async def _spawn_post_reply_bg_tasks(
     bot_name = hctx.bot_name
     secrets = hctx.secrets
 
-    bg = _resolve_llm_config(runtime.cfg, secrets, foreground=False)
+    bg = _resolve_llm_config(runtime.cfg, foreground=False)
 
     # 锁外调度后台任务（不阻塞其他请求）
     if runtime.cfg.summarizer.enable_topic_summarizer and not _is_private(event):
@@ -124,7 +116,6 @@ async def _spawn_post_reply_bg_tasks(
             http_session=context.http_session,
             secrets=secrets,
             memory_db=state.memory_db,
-            bot_name=bot_name,
             chat_id=chat_id,
             history=history_snapshot,
             **bg.to_model_kwargs(),

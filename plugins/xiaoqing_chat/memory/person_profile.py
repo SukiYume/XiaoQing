@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.plugin_base import write_json
+from core.plugin_base import load_json, write_json
 
 from .memory_db import MemoryDB
 
@@ -19,16 +18,18 @@ class PersonProfile:
     facts: list[str]
     updated_at: float
 
+
 def _profile_path(data_dir: Path, chat_id: str, subject_id: int) -> Path:
     safe_chat_id = (chat_id or "").strip() or "default"
     return data_dir / "person_profiles" / safe_chat_id / f"{subject_id}.json"
+
 
 def load_profile(data_dir: Path, *, chat_id: str, subject_id: int) -> PersonProfile | None:
     path = _profile_path(data_dir, chat_id, subject_id)
     if not path.exists():
         return None
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = load_json(path, default=None)
         if not isinstance(raw, dict):
             return None
         name = str(raw.get("subject_name", "")).strip()
@@ -37,9 +38,16 @@ def load_profile(data_dir: Path, *, chat_id: str, subject_id: int) -> PersonProf
         if not isinstance(facts, list):
             facts = []
         fact_list = [str(x).strip() for x in facts if isinstance(x, str) and str(x).strip()]
-        return PersonProfile(chat_id=chat_id, subject_id=subject_id, subject_name=name or str(subject_id), facts=fact_list, updated_at=updated_at)
+        return PersonProfile(
+            chat_id=chat_id,
+            subject_id=subject_id,
+            subject_name=name or str(subject_id),
+            facts=fact_list,
+            updated_at=updated_at,
+        )
     except Exception:
         return None
+
 
 def save_profile(data_dir: Path, profile: PersonProfile) -> None:
     path = _profile_path(data_dir, str(profile.chat_id), profile.subject_id)
@@ -52,6 +60,7 @@ def save_profile(data_dir: Path, profile: PersonProfile) -> None:
         "updated_at": profile.updated_at,
     }
     write_json(path, payload)
+
 
 def update_profile_and_index(
     *,
@@ -70,7 +79,11 @@ def update_profile_and_index(
         return
     now = time.time()
     existing = load_profile(data_dir, chat_id=chat_id, subject_id=subject_id) or PersonProfile(
-        chat_id=chat_id, subject_id=subject_id, subject_name=subject_name or str(subject_id), facts=[], updated_at=0.0
+        chat_id=chat_id,
+        subject_id=subject_id,
+        subject_name=subject_name or str(subject_id),
+        facts=[],
+        updated_at=0.0,
     )
     if subject_name and (not existing.subject_name or existing.subject_name == str(subject_id)):
         existing.subject_name = subject_name
@@ -96,8 +109,14 @@ def update_profile_and_index(
     memory_db.upsert_text(
         doc_id=f"profile:{chat_id}:{subject_id}",
         text=profile_text,
-        meta={"type": "person_profile", "chat_id": chat_id, "subject_id": subject_id, "subject_name": existing.subject_name},
+        meta={
+            "type": "person_profile",
+            "chat_id": chat_id,
+            "subject_id": subject_id,
+            "subject_name": existing.subject_name,
+        },
     )
+
 
 def build_profile_block(memory_db: MemoryDB, *, chat_id: str, subject_id: int | None) -> str:
     if not subject_id:

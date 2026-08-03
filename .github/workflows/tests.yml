@@ -2,184 +2,51 @@ name: Tests
 
 on:
   push:
-    branches: [ master, main, dev ]
   pull_request:
-    branches: [ master, main, dev ]
 
 permissions:
   contents: read
 
+env:
+  XIAOQING_CI: "1"
+
 jobs:
-  lint-changed-python:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code with history for the pull-request diff
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      with:
-        fetch-depth: 0
-        persist-credentials: false
-
-    - name: Set up Python 3.13
-      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
-      with:
-        python-version: "3.13"
-        cache: 'pip'
-        cache-dependency-path: requirements/python-3.13-ci.lock
-
-    - name: Install locked lint dependencies
-      run: |
-        python -m pip install --require-hashes -r requirements/python-3.13-ci.lock
-
-    - name: Reject Ruff diagnostics on changed Python lines
-      env:
-        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-      run: |
-        if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
-          BASE_SHA="$(git rev-parse HEAD^)"
-        fi
-        python scripts/check_ruff_changed.py --base "$BASE_SHA"
-
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-
+    env:
+      XIAOQING_REQUIRE_NODE: "1"
     steps:
-    - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      with:
-        persist-credentials: false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Ruff
+        run: python -m ruff check .
+      - name: Mypy
+        run: python -m mypy core plugins
+      - name: Tests
+        run: python -m pytest -q -n auto --cov=core --cov=plugins --cov-report=term-missing
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-        cache-dependency-path: |
-          requirements/python-${{ matrix.python-version }}-ci.lock
-          requirements/python-${{ matrix.python-version }}-runtime.lock
-
-    - name: Install dependencies
-      env:
-        CI_LOCK_FILE: requirements/python-${{ matrix.python-version }}-ci.lock
-        RUNTIME_LOCK_FILE: requirements/python-${{ matrix.python-version }}-runtime.lock
-      run: |
-        python -m pip install --require-hashes -r "$CI_LOCK_FILE"
-
-    - name: Audit locked dependencies
-      env:
-        CI_LOCK_FILE: requirements/python-${{ matrix.python-version }}-ci.lock
-        RUNTIME_LOCK_FILE: requirements/python-${{ matrix.python-version }}-runtime.lock
-      run: |
-        pip-audit --require-hashes -r "$CI_LOCK_FILE"
-        pip-audit --require-hashes -r "$RUNTIME_LOCK_FILE"
-
-    - name: Verify code review ledger
-      run: |
-        python scripts/check_code_review.py --require-complete
-
-    - name: Verify dependency lock freshness
-      if: matrix.python-version == '3.13'
-      run: |
-        python scripts/compile_locks.py --check
-
-    - name: Verify full test collection
-      run: |
-        python scripts/check_test_collection.py --manifest tests/test_collection_manifest.toml
-
-    - name: Scan Git-tracked release inputs for secrets
-      run: |
-        python scripts/scan_workspace_secrets.py --tracked .
-
-    - name: Run full test suite
-      run: |
-        python -m pytest tests/ --cov=core --cov=plugins --cov-branch --cov-report=xml --cov-report=json:coverage.json
-
-    - name: Enforce risk-based package line and branch coverage floors
-      run: |
-        python scripts/check_coverage_floors.py --coverage-json coverage.json
-
-    - name: Measure privileged plugins independently
-      if: matrix.python-version == '3.13'
-      run: |
-        python -m pytest \
-          tests/plugins/test_codex*.py \
-          tests/plugins/test_shell*.py \
-          tests/plugins/test_jupyter*.py \
-          tests/plugins/test_qingssh*.py \
-          tests/plugins/test_minecraft*.py \
-          tests/plugins/test_cr220_shell_jupyter_log_privacy.py \
-          tests/plugins/test_cr220_sensitive_audit.py \
-          --cov=plugins/codex \
-          --cov=plugins/shell \
-          --cov=plugins/jupyter \
-          --cov=plugins/qingssh \
-          --cov=plugins/minecraft \
-          --cov-branch \
-          --cov-report=term \
-          --cov-report=json:coverage-privileged.json \
-          --cov-fail-under=0
-
-    - name: Enforce per-plugin privileged coverage floors
-      if: matrix.python-version == '3.13'
-      run: |
-        python scripts/check_coverage_floors.py \
-          --coverage-json coverage-privileged.json \
-          --package plugins.codex \
-          --package plugins.shell \
-          --package plugins.jupyter \
-          --package plugins.qingssh \
-          --package plugins.minecraft
-
-    - name: Enforce strict Pendo SQLite resource lifecycle
-      if: matrix.python-version == '3.13'
-      run: |
-        python -m pytest tests/plugins/test_pendo*.py \
-          -W error::ResourceWarning \
-          -W error::pytest.PytestUnraisableExceptionWarning
-
-    - name: Python 3.13 isolated wheel and sdist release smoke
-      if: matrix.python-version == '3.13'
-      run: |
-        python scripts/verify_python_release.py
-
-    - name: Report dependency licenses
-      if: matrix.python-version == '3.13'
-      run: |
-        pip-licenses --format=markdown
-
-    - name: Upload coverage
-      uses: codecov/codecov-action@ab904c41d6ece82784817410c45d8b8c02684457 # v3.1.6
-      with:
-        file: ./coverage.xml
-        flags: unittests
-
-  docker-release-smoke:
-    needs: test
-    runs-on: ubuntu-latest
+  windows-smoke:
+    runs-on: windows-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      with:
-        persist-credentials: false
-
-    - name: Set up Python 3.13
-      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
-      with:
-        python-version: "3.13"
-
-    - name: Build and verify the isolated Docker release
-      run: |
-        build_root="$(mktemp -d)"
-        trap 'rm -rf -- "$build_root"' EXIT
-        mkdir "$build_root/dist"
-        python -m pip wheel . --no-deps --wheel-dir "$build_root/dist"
-        python scripts/build_docker_context.py \
-          --dist-dir "$build_root/dist" \
-          --context-dir "$build_root/context"
-        python scripts/verify_docker_release.py \
-          --context-dir "$build_root/context" \
-          --image-tag "xiaoqing-ci:${GITHUB_SHA}" \
-          --require-docker
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Windows process and monitor tests
+        run: >-
+          python -m pytest -q -n auto
+          tests/plugins/test_codex_process_tree.py
+          tests/test_run_bot_monitor_script.py

@@ -1,28 +1,18 @@
-"""
-A岛匿名版 API 封装模块
-
-优化改进:
-1. 使用 aiohttp 实现真正的异步 HTTP 请求
-2. 统一的 API 配置管理
-3. 数据类型使用 dataclass 更清晰
-4. 集中的错误处理
-5. 更好的图片下载与缓存机制
-"""
+"""A 岛匿名版的有界异步 API 客户端与图片缓存。"""
 
 import asyncio
 import hashlib
-import io
 import logging
 import re
 import time
 import uuid as uuidlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
-from PIL import Image
 
+from core.bounded_file_cache import BoundedFileCache, FileCacheLimits
 from core.bounded_http import (
     JSON_MIME_POLICY,
     BodyLimits,
@@ -30,7 +20,13 @@ from core.bounded_http import (
     aiohttp_request_bounded,
     parse_bounded_json,
 )
-from core.plugin_base import atomic_write_bytes
+from core.image_validation import (
+    ImageValidationError,
+    ImageValidationLimits,
+    validate_image_bytes,
+    validate_image_path,
+)
+from core.plugin_base import bounded_external_text
 from core.safe_http import SafeHttpError, fetch_public_bytes
 
 logger = logging.getLogger(__name__)
@@ -45,7 +41,23 @@ APP_ID = "A-Island-IOS-App"
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
+MAX_IMAGE_FRAMES = 120
 IMAGE_TIMEOUT_SECONDS = 15
+MAX_EXTERNAL_RESULT_CHARS = 512
+FORUM_CACHE_TTL_SECONDS = 60 * 60
+MAX_FORUM_CACHE_ENTRIES = 1_000
+IMAGE_CACHE_LIMITS = FileCacheLimits(
+    max_entries=256,
+    max_bytes=256 * 1024 * 1024,
+    ttl_seconds=7 * 24 * 60 * 60,
+)
+_IMAGE_MIME_FORMATS = {
+    "image/gif": "GIF",
+    "image/jpeg": "JPEG",
+    "image/png": "PNG",
+    "image/webp": "WEBP",
+}
+_IMAGE_FORMAT_EXTENSIONS = {"GIF": ".gif", "JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 _ADNMB_BODY_LIMITS = BodyLimits(
     max_wire_bytes=4 * 1024 * 1024,
     max_decoded_bytes=8 * 1024 * 1024,
@@ -73,9 +85,11 @@ ENDPOINTS = {
 # 数据结构
 # ============================================================
 
-@dataclass
+
+@dataclass(frozen=True, slots=True)
 class Post:
     """帖子/回复数据结构"""
+
     id: str
     time: str
     user_id: str
@@ -85,10 +99,10 @@ class Post:
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "Post":
         """从 API JSON 响应构建 Post 对象"""
-        content = data.get("content", "")
+        content = str(data.get("content", "") or "")
         # 清理 HTML 标签
-        content = re.sub(r'<[^>]+>', '', content)
-        content = content.replace('&gt;', '>').replace('&bull;', '')
+        content = re.sub(r"<[^>]+>", "", content)
+        content = content.replace("&gt;", ">").replace("&bull;", "")
 
         img = ""
         if data.get("img") and data.get("ext"):
@@ -96,19 +110,21 @@ class Post:
 
         return cls(
             id=str(data.get("id", "")),
-            time=data.get("now", data.get("time", "")),
-            user_id=data.get("user_hash", data.get("userid", "")),
+            time=str(data.get("now", data.get("time", "")) or ""),
+            user_id=str(data.get("user_hash", data.get("userid", "")) or ""),
             content=content,
-            img=img
+            img=img,
         )
 
     def format_text(self) -> str:
         """格式化为可读文本"""
         return f"{self.id} - {self.user_id}\n{self.time}\n{self.content}"
 
-@dataclass
+
+@dataclass(frozen=True, slots=True)
 class Thread:
     """串数据结构（包含主帖和回复）"""
+
     main_post: Post
     replies: list[Post]
 
@@ -116,41 +132,62 @@ class Thread:
     def from_json(cls, data: dict[str, Any]) -> "Thread":
         """从 API JSON 响应构建 Thread 对象"""
         main_post = Post.from_json(data)
-        replies = []
-
-        for reply_data in data.get("Replies", []):
+        replies: list[Post] = []
+        raw_replies = data.get("Replies", [])
+        if not isinstance(raw_replies, list):
+            raw_replies = []
+        for reply_data in raw_replies:
+            if not isinstance(reply_data, dict):
+                continue
             # 跳过 Admin 回复和特殊 ID (9999999)
-            if reply_data.get("user_hash") == "Admin" or reply_data.get("id") == 9999999:
+            if reply_data.get("user_hash") == "Admin" or str(reply_data.get("id")) == "9999999":
                 continue
             replies.append(Post.from_json(reply_data))
 
         return cls(main_post=main_post, replies=replies)
 
+
 # ============================================================
 # API 客户端
 # ============================================================
 
+
 class AdnmbClient:
     """A岛 API 异步客户端"""
 
-    def __init__(self, session: aiohttp.ClientSession, cache_dir: Path, uuid: str = ""):
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        cache_dir: Path,
+        uuid: str = "",
+    ) -> None:
         self.session = session
         self.cache_dir = cache_dir
         self.uuid = uuid or str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, str(cache_dir.resolve())))
         self._forum_cache: dict[str, str] | None = None
+        self._forum_cache_expires_at = 0.0
+        self._image_cache = BoundedFileCache(cache_dir, IMAGE_CACHE_LIMITS)
+        self._closed = False
 
-    def _build_params(self, **kwargs) -> dict[str, Any]:
-        """构建 API 请求参数"""
-        params = {
-            "appid": APP_ID,
-            "__t": int(time.time() * 1000)
-        }
-        params.update(kwargs)
-        return params
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
-    async def _get(self, endpoint: str, **params) -> Any:
+    def close(self) -> None:
+        """Clear wrapper-owned caches; the application owns ``session``."""
+        self._forum_cache = None
+        self._forum_cache_expires_at = 0.0
+        self._closed = True
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("ADnmb client is closed")
+
+    async def _get(self, endpoint: str, **params: Any) -> Any:
         """发送 GET 请求"""
+        self._ensure_open()
         url = f"{API_HOST}{ENDPOINTS.get(endpoint, endpoint)}"
+        request_params = {"appid": APP_ID, "__t": int(time.time() * 1000), **params}
         response = await aiohttp_request_bounded(
             self.session,
             "GET",
@@ -158,7 +195,7 @@ class AdnmbClient:
             limits=_ADNMB_BODY_LIMITS,
             mime_policy=JSON_MIME_POLICY,
             request_kwargs={
-                "params": self._build_params(**params),
+                "params": request_params,
                 "timeout": REQUEST_TIMEOUT,
             },
         )
@@ -166,22 +203,48 @@ class AdnmbClient:
 
     async def get_forum_list(self) -> dict[str, str]:
         """获取板块列表"""
-        if self._forum_cache:
-            return self._forum_cache
+        now = time.monotonic()
+        if self._forum_cache is not None and now < self._forum_cache_expires_at:
+            return dict(self._forum_cache)
 
         data = await self._get("forum_list")
-        forum_list = {}
+        if not isinstance(data, list):
+            return {}
+
+        forum_list: dict[str, str] = {}
         for group in data:
-            for forum in group.get("forums", []):
-                forum_list[forum["name"]] = forum["id"]
+            if not isinstance(group, dict):
+                continue
+            forums = group.get("forums", [])
+            if not isinstance(forums, list):
+                continue
+            for forum in forums:
+                if not isinstance(forum, dict):
+                    continue
+                name = forum.get("name")
+                forum_id = forum.get("id")
+                if not isinstance(name, str) or not name or forum_id is None:
+                    continue
+                forum_list[name] = str(forum_id)
+                if len(forum_list) >= MAX_FORUM_CACHE_ENTRIES:
+                    break
+            if len(forum_list) >= MAX_FORUM_CACHE_ENTRIES:
+                break
 
         self._forum_cache = forum_list
-        return forum_list
+        self._forum_cache_expires_at = now + FORUM_CACHE_TTL_SECONDS
+        return dict(forum_list)
 
     async def get_timeline(self, page: int = 1) -> list[Thread]:
         """获取时间线"""
         data = await self._get("timeline", id="-1", page=page)
-        return [Thread.from_json(item) for item in data if item.get("user_hash") != "Admin"]
+        if not isinstance(data, list):
+            return []
+        return [
+            Thread.from_json(item)
+            for item in data
+            if isinstance(item, dict) and item.get("user_hash") != "Admin"
+        ]
 
     async def get_forum(self, forum_name: str, page: int = 1) -> list[Thread]:
         """获取板块内容"""
@@ -195,7 +258,13 @@ class AdnmbClient:
         if data == "该板块不存在":
             return []
 
-        return [Thread.from_json(item) for item in data if item.get("user_hash") != "Admin"]
+        if not isinstance(data, list):
+            return []
+        return [
+            Thread.from_json(item)
+            for item in data
+            if isinstance(item, dict) and item.get("user_hash") != "Admin"
+        ]
 
     async def get_thread(self, thread_id: str, page: int = 1) -> Thread | None:
         """获取串内容"""
@@ -216,20 +285,31 @@ class AdnmbClient:
         data = await self._get("feed", page=page, uuid=self.uuid)
         if not isinstance(data, list):
             return []
-        return [Post.from_json(item) for item in data]
+        return [Post.from_json(item) for item in data if isinstance(item, dict)]
 
     async def add_feed(self, thread_id: str) -> str:
         """添加订阅"""
         result = await self._get("add_feed", tid=thread_id, uuid=self.uuid)
-        return str(result) if result else "添加订阅失败"
+        return bounded_external_text(
+            result,
+            max_chars=MAX_EXTERNAL_RESULT_CHARS,
+            max_bytes=MAX_EXTERNAL_RESULT_CHARS * 4,
+            default="添加订阅失败",
+        )
 
     async def del_feed(self, thread_id: str) -> str:
         """删除订阅"""
         result = await self._get("del_feed", tid=thread_id, uuid=self.uuid)
-        return str(result) if result else "删除订阅失败"
+        return bounded_external_text(
+            result,
+            max_chars=MAX_EXTERNAL_RESULT_CHARS,
+            max_bytes=MAX_EXTERNAL_RESULT_CHARS * 4,
+            default="删除订阅失败",
+        )
 
     async def download_image(self, img_path: str, use_thumb: bool = False) -> Path | None:
         """下载图片到本地缓存"""
+        self._ensure_open()
         if not img_path:
             return None
 
@@ -238,15 +318,29 @@ class AdnmbClient:
         url = f"{IMAGE_CDN}/{cdn_type}/{img_path}"
 
         # 本地文件路径
-        suffix = Path(img_path).suffix.lower()
-        if suffix not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
-            suffix = ".img"
-        filename = f"{hashlib.sha256(url.encode('utf-8')).hexdigest()}{suffix}"
-        local_path = self.cache_dir / filename
-
-        # 如果已缓存，直接返回
-        if local_path.exists():
-            return local_path
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        cached_path = await asyncio.to_thread(
+            self._image_cache.get_any,
+            tuple(f"{digest}{extension}" for extension in _IMAGE_FORMAT_EXTENSIONS.values()),
+        )
+        if cached_path is not None:
+            try:
+                await asyncio.to_thread(
+                    validate_image_path,
+                    cached_path,
+                    limits=ImageValidationLimits(
+                        max_bytes=MAX_IMAGE_BYTES,
+                        max_pixels=MAX_IMAGE_PIXELS,
+                        max_frames=MAX_IMAGE_FRAMES,
+                    ),
+                    format_extensions=_IMAGE_FORMAT_EXTENSIONS,
+                )
+                return cached_path
+            except (ImageValidationError, OSError):
+                try:
+                    await asyncio.to_thread(cached_path.unlink, missing_ok=True)
+                except OSError:
+                    logger.debug("Invalid ADNMB image cache could not be removed")
 
         try:
             fetched = await fetch_public_bytes(
@@ -261,16 +355,31 @@ class AdnmbClient:
                 logger.warning("Image download failed: %s", url)
                 return None
 
-            def validate_image() -> None:
-                with Image.open(io.BytesIO(fetched.body)) as image:
-                    width, height = image.size
-                    if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
-                        raise ValueError("image pixel budget exceeded")
-                    image.verify()
-
-            await asyncio.to_thread(validate_image)
-            await asyncio.to_thread(atomic_write_bytes, local_path, fetched.body)
-            return local_path
+            content_type = (
+                str(fetched.headers.get("Content-Type", "")).split(";", 1)[0].strip().casefold()
+            )
+            expected_format = _IMAGE_MIME_FORMATS.get(content_type)
+            if expected_format is None:
+                raise ImageValidationError(
+                    "unsupported_format",
+                    "ADNMB image Content-Type is not supported",
+                )
+            validated = await asyncio.to_thread(
+                validate_image_bytes,
+                fetched.body,
+                limits=ImageValidationLimits(
+                    max_bytes=MAX_IMAGE_BYTES,
+                    max_pixels=MAX_IMAGE_PIXELS,
+                    max_frames=MAX_IMAGE_FRAMES,
+                ),
+                format_extensions=_IMAGE_FORMAT_EXTENSIONS,
+                expected_format=expected_format,
+            )
+            filename = f"{digest}{validated.extension}"
+            return cast(
+                Path | None,
+                await asyncio.to_thread(self._image_cache.put, filename, fetched.body),
+            )
         except (SafeHttpError, ValueError) as exc:
             logger.warning(
                 "Image download rejected error_type=%s",

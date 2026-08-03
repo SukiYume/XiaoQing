@@ -1,3 +1,5 @@
+"""把筛选出的论文链接异步交给 Codex 摘要能力。"""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+
+from core.plugin_base import load_json
+
+from ..store_base import delete_json_artifacts
 
 
 @dataclass(frozen=True)
@@ -20,14 +23,16 @@ def topic_summary_cache_path(data_dir: Path, chat_id: str) -> Path:
     return data_dir / "hippo_memorizer" / f"{chat_id}.json"
 
 
+def clear_topic_summary_entries(data_dir: Path, chat_id: str) -> None:
+    """删除当前会话的话题摘要及原子备份。"""
+    delete_json_artifacts(topic_summary_cache_path(data_dir, chat_id))
+
+
 def load_topic_summary_entries(data_dir: Path, chat_id: str) -> list[TopicSummaryCacheEntry]:
     path = topic_summary_cache_path(data_dir, chat_id)
     if not path.exists():
         return []
-    try:
-        raw_obj = cast(object, json.loads(path.read_text(encoding="utf-8")))
-    except Exception:
-        return []
+    raw_obj = cast(object, load_json(path, default=[]))
     if not isinstance(raw_obj, list):
         return []
 

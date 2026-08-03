@@ -3,6 +3,10 @@
 Public handlers must not expose exception text to QQ users.  This module keeps
 the public contract deliberately small while retaining enough, bounded and
 redacted diagnostic information for an operator to correlate the failure.
+
+面向 QQ 的返回值只包含固定错误码和经校验的 request_id；异常文本、链路和栈帧只进入
+有界诊断日志。密钥扫描一旦因深度、数量或异常对象而不完整，就整体省略异常消息，
+不能用“尽量脱敏”的结果冒险；日志系统自身失败也不得改变安全的用户响应。
 """
 
 from __future__ import annotations
@@ -335,6 +339,8 @@ def _exception_chain(
         seen.add(current_id)
 
         message, message_oversized = _bounded_exception_message(current)
+        # 密钥树未完整扫描时，整条异常链都不记录消息；不能只省略当前节点，
+        # 因为同一凭据可能出现在 cause/context 的任意一层。
         if not include_messages:
             safe_message = "<omitted: secret scan limit>"
         elif message_oversized:
@@ -401,6 +407,8 @@ def _log_public_error(logger: object, payload: dict[str, Any], request_id: str) 
         return
     serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
     try:
+        # 只传入已经序列化、经过边界处理的 payload；绝不把原始 exc 交给
+        # logger.exception 或 exc_info，以免格式化器重新泄漏路径和异常文本。
         error_method(
             "public_error %s",
             serialized,

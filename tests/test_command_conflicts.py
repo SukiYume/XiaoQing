@@ -1,7 +1,6 @@
 """Regression tests for cross-plugin command trigger ownership."""
 
 import json
-from itertools import permutations
 from pathlib import Path
 from typing import Any
 
@@ -20,31 +19,35 @@ async def _handler(
 
 
 def _command_spec(plugin_name: str, command_name: str) -> CommandSpec:
-    manifest = json.loads((ROOT / "plugins" / plugin_name / "plugin.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (ROOT / "plugins" / plugin_name / "plugin.json").read_text(encoding="utf-8")
+    )
     command = next(item for item in manifest["commands"] if item["name"] == command_name)
     return CommandSpec(
         plugin=plugin_name,
         name=command["name"],
         triggers=command["triggers"],
         help_text=command["help"],
-        admin_only=command["admin_only"],
+        admin_only=bool(command.get("admin_only", False)),
         handler=_handler,
         priority=command.get("priority", 0),
     )
 
 
-def test_exec_trigger_has_stable_shell_owner_regardless_of_plugin_load_order() -> None:
-    specs = [_command_spec("jupyter", "jupyter"), _command_spec("shell", "shell")]
+def test_exec_trigger_is_owned_only_by_shell() -> None:
+    jupyter = _command_spec("jupyter", "jupyter")
+    shell = _command_spec("shell", "shell")
 
-    for ordered_specs in permutations(specs):
-        router = CommandRouter()
-        for spec in ordered_specs:
-            router.register(spec)
+    assert "exec" not in jupyter.triggers
+    assert "exec" in shell.triggers
 
-        resolved = router.resolve("exec echo stable")
-        assert resolved is not None
-        assert resolved[0].plugin == "shell"
-        assert resolved[0].admin_only is True
+    router = CommandRouter()
+    router.register(jupyter)
+    router.register(shell)
+    resolved = router.resolve("exec echo stable")
+    assert resolved is not None
+    assert resolved[0].plugin == "shell"
+    assert resolved[0].admin_only is True
 
 
 def test_explicit_aliases_keep_both_admin_execution_backends_available() -> None:
@@ -54,6 +57,18 @@ def test_explicit_aliases_keep_both_admin_execution_backends_available() -> None
 
     assert router.resolve("py print(1)")[0].plugin == "jupyter"  # type: ignore[index]
     assert router.resolve("shell echo ok")[0].plugin == "shell"  # type: ignore[index]
+
+
+def test_qingpet_canonical_command_name_is_routable() -> None:
+    spec = _command_spec("qingpet", "qingpet")
+    assert {"qingpet", "宠物", "pet"}.issubset(set(spec.triggers))
+
+    router = CommandRouter()
+    router.register(spec)
+    resolved = router.resolve("qingpet help")
+
+    assert resolved is not None
+    assert resolved[0].plugin == "qingpet"
 
 
 def test_all_cross_plugin_duplicate_triggers_have_explicit_distinct_priorities() -> None:

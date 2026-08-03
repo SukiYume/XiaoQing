@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from core.sensitive_audit import SensitiveAuditSummary, summarize_sensitive
+from core.sensitive_audit import SensitiveAuditSummary, audit_error_type, summarize_sensitive
 
 
 def test_sensitive_summary_is_correlatable_without_containing_the_payload() -> None:
@@ -61,3 +61,19 @@ def test_summary_dataclass_itself_contains_only_safe_metadata() -> None:
 
     assert summary.kind == "text"
     assert "secret" not in repr(summary).lower()
+
+
+def test_audit_error_type_is_bounded_and_safe_for_logs() -> None:
+    invalid_name_error = type("Bad\nName", (Exception,), {})()
+
+    assert audit_error_type(None) == "-"
+    assert audit_error_type(ValueError("bad")) == "ValueError"
+    assert audit_error_type(invalid_name_error) == "Exception"
+
+
+def test_plugin_audit_modules_reexport_the_shared_error_normalizer() -> None:
+    from plugins.minecraft.audit import audit_error_type as minecraft_error_type
+    from plugins.qingssh.audit import audit_error_type as qingssh_error_type
+
+    assert minecraft_error_type is audit_error_type
+    assert qingssh_error_type is audit_error_type

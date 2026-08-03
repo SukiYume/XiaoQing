@@ -1,288 +1,149 @@
-"""
-命令路由器
-负责解析命令并路由到相应的handler
-"""
+"""Pendo 顶层子命令、别名与帮助路由。"""
 
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Final
 
-from ..models.types import CommandResult, ErrorResult, SuccessResult
+from core.router import CommandCatalogNode
+
+from .types import CommandMessage
 
 logger = logging.getLogger(__name__)
 
-CommandHandler = Callable[[str, str, Any], Awaitable[CommandResult]]
+CommandHandler = Callable[[str, str, Any], Awaitable[CommandMessage]]
 
-# 顶层命令重定向提示：当用户误将顶层命令放到子模块下时使用
-# 例如 /pendo event confirm xxx → 提示应使用 /pendo confirm xxx
-TOP_LEVEL_REDIRECTS: dict[str, str] = {
+# 用户误把顶层操作写进业务子模块时，返回唯一正确入口。
+TOP_LEVEL_REDIRECTS: Final[dict[str, str]] = {
     "confirm": "/pendo confirm <id>",
     "snooze": "/pendo snooze <id> <时间>",
     "undo": "/pendo undo",
 }
 
-# 命令元数据表：(别名列表, 描述, 用法)
-# 不在此表中的命令仍可通过 handlers 字典注册，只是没有别名和描述
-COMMAND_META: dict[str, tuple[list[str], str, str]] = {
-    "confirm": (["确认"], "确认刚收到的提醒", "/pendo confirm <id>"),
-    "snooze": (["延后"], "延后提醒", "/pendo snooze <id> <时间>"),
-    "undo": (["撤销"], "撤销删除或编辑", "/pendo undo [分钟]"),
-    "event": (
-        ["e", "calendar", "日程", "事件"],
-        "管理日程",
-        "/pendo event <add|list|view|edit|delete|reminders> [args]",
-    ),
-    "todo": (
-        ["task", "t", "待办", "任务"],
-        "管理待办事项",
-        "/pendo todo <add|list|view|done|cancel|undone|edit|delete> [args]",
-    ),
-    "diary": (["d", "journal", "日记"], "写日记和查看日记", "/pendo diary <add|list|view|template|delete> [args]"),
-    "note": (
-        ["n", "idea", "笔记", "想法", "灵感"],
-        "记笔记",
-        "/pendo note <add|list|view|edit|append|tag|untag|link|delete> [args]",
-    ),
-    "search": (
-        ["s", "搜索", "查找"],
-        "搜索内容",
-        "/pendo search <关键词> [type=] [range=] [status=] [transaction_type=] [category=]",
-    ),
-    "ledger": (
-        ["bill", "finance", "记账", "账单"],
-        "记账管理",
-        "/pendo ledger <add|quick|list|view|edit|delete|summary> [args]",
-    ),
-    "export": (
-        ["导出"],
-        "导出 Markdown 档案并私聊发送文件",
-        "/pendo export <文件名> [range] [type]",
-    ),
-    "import": (
-        ["导入"],
-        "查看 Web 导入入口和支持格式",
-        "/pendo import",
-    ),
-    "settings": (["setting", "config", "设置"], "管理设置", "/pendo settings [key] [value]"),
-    "help": (["h", "帮助", "?"], "显示帮助信息", "/pendo help [command]"),
-    "web": (["webui", "网页"], "Web UI 管理", "/pendo web <token|widget-token|start|stop|status>"),
-}
 
-
-@dataclass
+@dataclass(frozen=True, slots=True)
 class CommandInfo:
-    """命令信息"""
+    """一个已经验证并可直接调用的顶层命令。"""
 
     name: str
     handler: CommandHandler
-    aliases: list[str]
+    aliases: tuple[str, ...]
     description: str
     usage: str
 
 
 class CommandRouter:
-    """命令路由器
-
-    负责:
-    1. 解析用户输入的命令
-    2. 路由到对应的handler
-    3. 处理命令别名
-    4. 提供命令帮助信息
-    """
+    """把规范命令或别名路由到对应的异步处理函数。"""
 
     def __init__(
         self,
-        handlers: Mapping[str, object],
+        root: CommandCatalogNode,
+        handlers: Mapping[str, CommandHandler],
         help_provider: Callable[[str], str] | None = None,
-    ):
-        """初始化路由器
-
-        Args:
-            handlers: handler实例字典，如:
-                {
-                    'event': EventHandler(...),
-                    'task': TaskHandler(...),
-                    ...
-                }
-        """
-        self.handlers = handlers
+    ) -> None:
+        if root.code != "pendo.pendo":
+            raise ValueError(f"unexpected Pendo command root: {root.code}")
+        self.root = root
         self.help_provider = help_provider
-        self.commands = self._build_command_registry()
+        self.commands = self._build_command_registry(root, handlers)
         self.alias_map = self._build_alias_map()
         logger.info("CommandRouter initialized with %s commands", len(self.commands))
 
-    def _build_command_registry(self) -> dict[str, CommandInfo]:
-        """构建命令注册表
+    def _build_command_registry(
+        self,
+        root: CommandCatalogNode,
+        handlers: Mapping[str, CommandHandler],
+    ) -> dict[str, CommandInfo]:
+        """只从 Core 目录读取命令元数据，处理器映射只负责业务实现。"""
+        catalog_by_name = {child.name: child for child in root.children}
+        missing = sorted((set(handlers) | {"help"}) - set(catalog_by_name))
+        if missing:
+            raise ValueError(f"Pendo handlers and command catalog disagree: missing={missing}")
 
-        双层注册：
-        1. 已知命令的元数据（别名、描述、用法）从 COMMAND_META 查找
-        2. handlers 字典中传入的所有命令都会被注册，即使没有预定义元数据
-           （此时使用命令名本身作为描述，无别名）
-
-        新增命令时只需在 main.py 的 handlers 字典中添加即可，
-        如需别名/描述，再在 COMMAND_META 中补充。
-        """
-        commands = {}
-
-        # 注册所有传入的 handler
-        for key, handler_obj in self.handlers.items():
-            # 解析 handler
-            handler = self._resolve_handler_from_obj(handler_obj)
-            if handler is None:
-                handler = self._make_unimplemented_handler(key)
-
-            # 查找元数据（别名、描述、用法）
-            meta = COMMAND_META.get(key)
-            if meta:
-                aliases, description, usage = meta
-            else:
-                aliases, description, usage = [], key, f"/pendo {key}"
-
-            commands[key] = CommandInfo(
-                name=key, handler=handler, aliases=aliases, description=description, usage=usage
-            )
-
-        # 确保 help 命令始终存在
-        if "help" not in commands:
-            meta = COMMAND_META["help"]
-            commands["help"] = CommandInfo(
-                name="help",
-                handler=self._handle_help,
-                aliases=meta[0],
-                description=meta[1],
-                usage=meta[2],
+        commands: dict[str, CommandInfo] = {}
+        selected_names = (*handlers, "help")
+        for name in selected_names:
+            node = catalog_by_name[name]
+            handler = self._handle_help if name == "help" else handlers[name]
+            commands[name] = CommandInfo(
+                name,
+                handler,
+                node.aliases,
+                node.help_text,
+                node.usage,
             )
 
         return commands
 
-    def _resolve_handler_from_obj(self, handler_obj: object) -> CommandHandler | None:
-        """解析命令处理函数，支持传入可调用或对象方法"""
-        if handler_obj is None:
-            return None
-        if callable(handler_obj):
-            return cast(CommandHandler, handler_obj)
-        # 对象实例：尝试 handle 方法
-        if hasattr(handler_obj, "handle") and callable(handler_obj.handle):
-            return cast(CommandHandler, handler_obj.handle)
-        return None
-
     def _build_alias_map(self) -> dict[str, str]:
-        """构建别名映射表"""
-        alias_map = {}
-        for cmd_name, cmd_info in self.commands.items():
-            # 命令名本身
-            alias_map[cmd_name] = cmd_name
-            # 所有别名
-            for alias in cmd_info.aliases:
-                alias_map[alias] = cmd_name
-        return alias_map
+        """把规范名和所有别名压平成一次查询表。"""
+        aliases: dict[str, str] = {}
+        for command_name, command in self.commands.items():
+            aliases[command_name] = command_name
+            aliases.update(dict.fromkeys(command.aliases, command_name))
+        return aliases
 
-    def _make_unimplemented_handler(self, command_name: str) -> CommandHandler:
-        async def _handler(user_id: str, args: str, context: Any) -> CommandResult:
-            result: ErrorResult = {
-                "status": "error",
-                "message": f"❌ {command_name} 功能暂不可用，请稍后再试",
-                "error_code": None,
-            }
-            return result
-
-        return _handler
-
-    async def route(self, subcommand: str, user_id: str, args: str, context: Any) -> CommandResult:
-        """路由命令到对应的handler
-
-        Args:
-            subcommand: 子命令（如 'event', 'todo'等）
-            user_id: 用户ID
-            args: 命令参数
-            context: 上下文对象
-
-        Returns:
-            命令执行结果
-        """
-        # 解析别名
-        cmd_name = self.alias_map.get(subcommand.lower())
-
-        if not cmd_name:
-            # 未知命令，返回帮助提示
+    async def route(
+        self,
+        subcommand: str,
+        user_id: str,
+        args: str,
+        context: Any,
+    ) -> CommandMessage:
+        """执行命令；未知命令只返回固定帮助提示。"""
+        command_name = self.alias_map.get(subcommand.lower())
+        if command_name is None:
             logger.info("Unknown command: %s", subcommand)
-            result: ErrorResult = {
+            return {
                 "status": "error",
                 "message": f"❓ 未知命令: {subcommand}\n\n请使用 /pendo help 查看所有可用命令",
                 "error_code": None,
             }
-            return result
+        logger.info("Routing command: %s for user %s", command_name, user_id)
+        return await self.commands[command_name].handler(user_id, args, context)
 
-        # 获取命令信息
-        cmd_info = self.commands[cmd_name]
-
-        logger.info("Routing command: %s for user %s", cmd_name, user_id)
-        return await cmd_info.handler(user_id, args, context)
-
-    async def _handle_help(self, user_id: str, args: str, context: Any) -> CommandResult:
-        """处理help命令
-
-        Args:
-            user_id: 用户ID
-            args: 参数（可选的具体命令名）
-            context: 上下文
-
-        Returns:
-            帮助信息
-        """
-        args = args.strip()
-
-        message = self.get_help_message(args)
-
-        result: SuccessResult = {
+    async def _handle_help(
+        self,
+        _user_id: str,
+        args: str,
+        _context: Any,
+    ) -> CommandMessage:
+        """把 help 也作为普通命令返回统一消息结构。"""
+        return {
             "status": "success",
-            "message": message,
+            "message": self.get_help_message(args.strip()),
             "item_id": None,
             "data": None,
         }
-        return result
 
     def get_help_message(self, args: str = "") -> str:
-        """获取帮助信息文本"""
-        args = (args or "").strip()
-
-        # 如果指定了命令，显示该命令的详细帮助
-        if args:
+        """优先复用完整帮助源，否则由命令元数据生成简版帮助。"""
+        target = (args or "").strip()
+        if target:
             if self.help_provider:
-                provided = self.help_provider(args)
+                provided = self.help_provider(target)
                 if not provided.startswith("❌ 未知命令"):
                     return provided
-            cmd_name = self.alias_map.get(args.lower())
-            if cmd_name:
-                if self.help_provider:
-                    return self.help_provider(cmd_name)
-                cmd_info = self.commands[cmd_name]
-                return (
-                    f"📖 {cmd_info.name} - {cmd_info.description}\n\n"
-                    f"用法:\n{cmd_info.usage}\n\n"
-                    f"别名: {', '.join(cmd_info.aliases)}"
-                )
-            return f"❌ 未知命令: {args}\n\n使用 /pendo help 查看所有命令"
 
-        # 使用外部提供的帮助文本（避免重复定义）
+            command_name = self.alias_map.get(target.lower())
+            if command_name is None:
+                return f"❌ 未知命令: {target}\n\n使用 /pendo help 查看所有命令"
+            if self.help_provider:
+                return self.help_provider(command_name)
+
+            command = self.commands[command_name]
+            aliases = ", ".join(command.aliases) or "无"
+            return (
+                f"📖 {command.name} - {command.description}\n\n"
+                f"用法:\n{command.usage}\n\n别名: {aliases}"
+            )
+
         if self.help_provider:
             return self.help_provider("")
 
-        # 默认帮助
         lines = ["📖 Pendo 帮助", "", "可用命令:", ""]
-
-        for cmd_name, cmd_info in self.commands.items():
-            lines.append(f"• {cmd_name} - {cmd_info.description}")
-
+        lines.extend(
+            f"• {command.name} - {command.description}" for command in self.commands.values()
+        )
         lines.extend(["", "使用 /pendo help <命令名> 查看详细用法"])
-
         return "\n".join(lines)
-
-    def get_command_list(self) -> list[str]:
-        """获取所有命令列表"""
-        return list(self.commands.keys())
-
-    def get_command_info(self, cmd_name: str) -> CommandInfo | None:
-        """获取命令信息"""
-        return self.commands.get(cmd_name)

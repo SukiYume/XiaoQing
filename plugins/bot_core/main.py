@@ -2,13 +2,18 @@
 核心命令插件
 提供 Bot 的基础管理功能
 """
+
 import json
 import logging
+import math
 import re
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, NoReturn
 
-from core.plugin_base import segments
+from core.args import parse_int
+from core.plugin_base import run_sync, segments
 from core.public_errors import public_error_response
+from core.router import CommandCatalogNode
 
 logger = logging.getLogger(__name__)
 
@@ -20,36 +25,27 @@ DEFAULT_MUTE_MINUTES = 10  # 默认静音时长（分钟）
 MAX_MUTE_MINUTES = 1440  # 最长静音时长（分钟，24小时）
 SECRET_MASK_CHAR = "*"  # 密钥遮罩字符
 METRICS_SEPARATOR = "─" * 20  # 指标显示分隔线
+MAX_DISPLAYED_SECRET_KEYS = 20
+HELP_PAGE_SIZE = 12
+MAX_HELP_QUERY_LENGTH = 128
+_NO_ARGUMENT_USAGE = {
+    "reload": "/reload",
+    "plugins": "/plugins",
+    "说话": "/说话",
+    "metrics": "/metrics",
+}
 
-# ============================================================
-# 插件初始化
-# ============================================================
+_SECRET_PATH_PATTERN = re.compile(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\Z")
+_DURATION_PATTERN = re.compile(
+    r"(?P<value>(?:\d+(?:\.\d*)?|\.\d+))(?P<unit>h|小时|m|min|分钟)?\Z",
+    flags=re.IGNORECASE,
+)
 
-def init(context=None) -> None:
-    """插件初始化"""
-    pass
-
-
-def _parse_help_header(line: str) -> tuple[str, str | None] | None:
-    """解析形如 `[plugin] - 描述` 的插件标题行。"""
-    stripped = line.strip()
-    if not stripped.startswith("[") or "]" not in stripped:
-        return None
-
-    end = stripped.index("]")
-    plugin_name = stripped[1:end].strip()
-    if not plugin_name:
-        return None
-
-    suffix = stripped[end + 1 :].strip()
-    if suffix.startswith("-"):
-        suffix = suffix[1:].strip()
-
-    return plugin_name, suffix or None
 
 # ============================================================
 # 主处理函数
 # ============================================================
+
 
 def mask_secret(value: Any) -> str:
     """遮罩敏感信息的显示
@@ -62,9 +58,10 @@ def mask_secret(value: Any) -> str:
     """
     try:
         if isinstance(value, str):
-            if len(value) <= 4:
+            if len(value) < 12:
                 return SECRET_MASK_CHAR * 4
-            return value[:2] + SECRET_MASK_CHAR * (len(value) - 4) + value[-2:]
+            # 固定遮罩长度，避免长密钥制造巨型日志或泄露原始长度。
+            return value[:2] + SECRET_MASK_CHAR * 4 + value[-2:]
         if isinstance(value, (int, float)):
             return SECRET_MASK_CHAR * 4
         if isinstance(value, list):
@@ -72,9 +69,53 @@ def mask_secret(value: Any) -> str:
         if isinstance(value, dict):
             return f"{{<{len(value)} keys>}}"
         return "[hidden]"
-    except Exception as e:
-        logger.error("遮罩密钥失败 error_type=%s", type(e).__name__)
+    except Exception as exc:
+        logger.error("遮罩密钥失败 error_type=%s", type(exc).__name__)
         return "[error]"
+
+
+def _secret_admin_capability(context):
+    """仅为可信 Bot 管理员私聊返回全局密钥管理能力。"""
+
+    principal = getattr(context, "principal", None)
+    capabilities = getattr(context, "capabilities", None)
+    capability = getattr(capabilities, "secret_admin", None)
+    if (
+        principal is None
+        or not getattr(capabilities, "is_bot_admin", False)
+        or not getattr(principal, "is_private", False)
+        or capability is None
+    ):
+        return None
+    return capability
+
+
+def _reject_json_constant(constant: str) -> NoReturn:
+    """拒绝 JSON 标准之外的 NaN/Infinity。"""
+
+    raise ValueError(f"non-standard JSON constant: {constant}")
+
+
+def _metric_number(
+    values: Mapping[str, Any],
+    key: str,
+    *,
+    maximum: float | None = None,
+) -> float | None:
+    """从指标映射读取有限非负数；损坏字段显示为未知而非零。"""
+
+    value = values.get(key, 0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number < 0 or (maximum is not None and number > maximum):
+        return None
+    return number
+
+
+def _format_metric(value: float | None, spec: str, suffix: str = "") -> str:
+    return "n/a" if value is None else f"{format(value, spec)}{suffix}"
+
 
 async def handle(command: str, args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     """命令处理入口
@@ -89,8 +130,14 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
         消息段列表
     """
     try:
-        logged_args = "<redacted>" if command in {"set_secret", "get_secret"} else (args[:50] if args else "")
+        logged_args = (
+            "<redacted>" if command in {"set_secret", "get_secret"} else (args[:50] if args else "")
+        )
         logger.info("核心命令: %s, 参数: %s", command, logged_args)
+
+        usage = _NO_ARGUMENT_USAGE.get(command)
+        if usage is not None and args.strip():
+            return segments(f"❌ 该命令不接受参数\n用法: {usage}")
 
         if command == "help":
             return _handle_help(args, context)
@@ -108,13 +155,9 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
             return _handle_unmute(event, context)
 
         if command == "set_secret":
-            if event.get("group_id") is not None:
-                return segments("❌ /set_secret 只能由管理员在私聊中使用")
-            return _handle_set_secret(args, context)
+            return await _handle_set_secret(args, context)
 
         if command == "get_secret":
-            if event.get("group_id") is not None:
-                return segments("❌ /get_secret 只能由管理员在私聊中使用")
             return _handle_get_secret(args, context)
 
         if command == "metrics":
@@ -131,48 +174,51 @@ async def handle(command: str, args: str, event: dict[str, Any], context) -> lis
             component="bot_core.handle",
         )
 
+
 # ============================================================
 # 子命令处理函数
 # ============================================================
 
+
 def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
-    """显示帮助信息
+    """从 Core 的结构化快照查询、分页或导出完整命令目录。"""
 
-    Args:
-        keyword: 搜索关键词
-        context: 插件上下文
-
-    Returns:
-        消息段列表
-    """
     try:
-        lines = context.list_commands()
-        if not lines:
+        catalog = context.get_command_catalog()
+        if not catalog:
             logger.warning("查询帮助信息为空")
             return segments("❌ 暂无命令")
 
-        keyword = keyword.strip().lower()
+        output_format, query, page = _parse_help_request(keyword)
+        selected = _select_catalog_nodes(catalog, query)
+        if not selected:
+            logger.info("未找到关键词 %r 相关的命令", query)
+            return segments(
+                f"❌ 未找到与 '{query}' 相关的命令\n"
+                "💡 使用 /help 查看目录，或使用 /help <插件名|命令码> 精确查询"
+            )
 
-        # 如果指定了关键词，过滤相关命令
-        if keyword:
-            filtered_lines = _filter_help_lines(lines, keyword)
+        page_nodes, total_pages = _catalog_page(selected, page)
+        if output_format == "json":
+            return segments(_format_catalog_json(page_nodes, query, page, total_pages))
+        return segments(
+            _format_catalog_text(
+                page_nodes,
+                query=query,
+                page=page,
+                total_pages=total_pages,
+                total_nodes=len(selected),
+                plugin_count=len({node.plugin for node in catalog}),
+            )
+        )
 
-            if not filtered_lines:
-                logger.info("未找到关键词 '%s' 相关的命令", keyword)
-                return segments(f"❌ 未找到与 '{keyword}' 相关的命令\n💡 使用 /help 查看所有命令")
-
-            header = f"🔍 '{keyword}' 相关命令\n{'─' * 20}\n"
-            body = _format_help_lines(filtered_lines)
-            logger.info("显示关键词 '%s' 的帮助: %d 行", keyword, len(filtered_lines))
-            return segments(header + body)
-
-        # 显示所有命令
-        header = f"📖 命令帮助\n{'─' * 20}\n"
-        body = _format_help_lines(lines)
-        footer = f"\n{'─' * 20}\n💡 /help <关键词> 搜索命令"
-
-        logger.debug("显示全部帮助: %d 行", len(lines))
-        return segments(header + body + footer)
+    except ValueError as exc:
+        return segments(
+            f"❌ {exc}\n"
+            "用法：/help [插件名|命令码|关键词] [page N]\n"
+            "      /help page <N>\n"
+            "      /help json [查询] [page N]"
+        )
 
     except Exception as exc:
         return public_error_response(
@@ -182,98 +228,194 @@ def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
             component="bot_core.help",
         )
 
-def _filter_help_lines(lines: list[str], keyword: str) -> list[str]:
-    """
-    过滤帮助行，以插件为单元进行过滤
 
-    如果关键词匹配到插件名、任何命令或任何说明，
-    则显示该插件的所有命令
+def _parse_help_request(raw: str) -> tuple[str, str, int]:
+    """解析帮助查询；保留 `/help <关键词>` 的兼容入口。"""
 
-    lines 格式:
-        [插件名]        - 插件标题
-          /命令         - 命令触发词
-            ↳ 说明      - 命令说明
-    """
-    # 第一步：按插件分组
-    plugins: dict[str, list[str]] = {}
-    current_plugin_name = None
+    tokens = raw.strip().split()
+    output_format = "text"
+    if tokens and tokens[0].casefold() in {"json", "export", "导出"}:
+        output_format = "json"
+        tokens.pop(0)
 
-    for line in lines:
-        parsed_header = _parse_help_header(line)
+    page = 1
+    if tokens and tokens[0].casefold() in {"page", "list", "all", "页", "全部"}:
+        action = tokens.pop(0).casefold()
+        # list/all are intentional aliases for the paged catalog view, so a
+        # following number is a page rather than a search term.
+        implicit_page = parse_int(tokens[0], minimum=1) if len(tokens) == 1 else None
+        if action == "page" or implicit_page is not None:
+            if tokens:
+                page = implicit_page or _parse_page_number(tokens[0])
+                tokens.pop(0)
+        if tokens:
+            raise ValueError("分页命令只接受一个页码")
+        return output_format, "", page
 
-        # 插件标题行
-        if parsed_header:
-            current_plugin_name, _ = parsed_header
-            plugins[current_plugin_name] = [line]
-            continue
+    if tokens and tokens[0].casefold() in {"search", "find", "show", "搜索", "查找"}:
+        tokens.pop(0)
+        if not tokens:
+            raise ValueError("请提供插件名、命令码或关键词")
 
-        # 其他行归入当前插件
-        if current_plugin_name and line.strip():
-            plugins[current_plugin_name].append(line)
+    if len(tokens) >= 2 and tokens[-2].casefold() in {"page", "页"}:
+        page = _parse_page_number(tokens[-1])
+        del tokens[-2:]
+    query = " ".join(tokens)
+    if len(query) > MAX_HELP_QUERY_LENGTH:
+        raise ValueError(f"查询词不能超过 {MAX_HELP_QUERY_LENGTH} 个字符")
+    return output_format, query, page
 
-    # 第二步：检查每个插件是否匹配
-    filtered = []
-    for plugin_name, plugin_lines in plugins.items():
-        plugin_matches = False
 
-        # 检查插件名是否匹配
-        if keyword in plugin_name.lower():
-            plugin_matches = True
+def _parse_page_number(raw: str) -> int:
+    page = parse_int(raw, minimum=1)
+    if page is None:
+        raise ValueError("页码必须是正整数")
+    return page
 
-        # 检查插件内任何行是否匹配
-        if not plugin_matches:
-            for line in plugin_lines[1:]:  # 跳过插件标题行
-                if keyword in line.lower():
-                    plugin_matches = True
-                    break
 
-        # 如果匹配，添加该插件的所有行
-        if plugin_matches:
-            filtered.extend(plugin_lines)
+def _flatten_catalog(catalog: tuple[CommandCatalogNode, ...]) -> tuple[CommandCatalogNode, ...]:
+    return tuple(node for root in catalog for node in root.walk())
 
-    return filtered
 
-def _format_help_lines(lines: list[str]) -> str:
-    """
-    格式化帮助行，生成美观的纯文本输出
-    """
-    result = []
+def _select_catalog_nodes(
+    catalog: tuple[CommandCatalogNode, ...],
+    query: str,
+) -> tuple[CommandCatalogNode, ...]:
+    """精确查询优先；命中父节点时返回其完整子树。"""
 
-    for line in lines:
-        parsed_header = _parse_help_header(line)
+    nodes = _flatten_catalog(catalog)
+    normalized = query.casefold().strip().lstrip("/")
+    if not normalized:
+        return nodes
 
-        # 插件标题行 [插件名] - 描述
-        if parsed_header:
-            plugin_name, description = parsed_header
-            if description:
-                result.append(f"\n📦 {plugin_name} - {description}")
-            else:
-                result.append(f"\n📦 {plugin_name}")
-            continue
+    if any(root.plugin.casefold() == normalized for root in catalog):
+        return tuple(node for node in nodes if node.plugin.casefold() == normalized)
 
-        stripped = line.strip()
+    exact: list[CommandCatalogNode] = []
+    for node in nodes:
+        exact_terms = {
+            node.code.casefold(),
+            " ".join(node.path).casefold(),
+            "/".join(node.path).casefold(),
+            node.name.casefold(),
+            *(alias.casefold() for alias in node.aliases),
+        }
+        if normalized in exact_terms:
+            exact.extend(node.walk())
+    if exact:
+        return _deduplicate_catalog_nodes(exact)
 
-        # 命令行
-        if stripped.startswith("/") or (stripped and "↳" not in stripped):
-            # 移除前导空格，添加命令图标
-            result.append(f"  ⌘ {stripped}")
-            continue
+    matches = []
+    for node in nodes:
+        searchable = "\n".join(
+            (
+                node.code,
+                node.plugin,
+                " ".join(node.path),
+                node.name,
+                " ".join(node.aliases),
+                node.help_text,
+                node.usage,
+            )
+        ).casefold()
+        if normalized in searchable:
+            matches.append(node)
+    return tuple(matches)
 
-        # 说明行
-        if "↳" in stripped:
-            # 提取说明文本
-            desc = stripped.replace("↳", "").strip()
-            result.append(f"      {desc}")
-            continue
 
-        # 其他行原样保留
-        if stripped:
-            result.append(line)
+def _deduplicate_catalog_nodes(nodes: list[CommandCatalogNode]) -> tuple[CommandCatalogNode, ...]:
+    unique: dict[str, CommandCatalogNode] = {}
+    for node in nodes:
+        unique.setdefault(node.code, node)
+    return tuple(unique.values())
 
-    return "\n".join(result)
+
+def _catalog_page(
+    nodes: tuple[CommandCatalogNode, ...],
+    page: int,
+) -> tuple[tuple[CommandCatalogNode, ...], int]:
+    total_pages = max(1, math.ceil(len(nodes) / HELP_PAGE_SIZE))
+    if page > total_pages:
+        raise ValueError(f"页码超出范围，共 {total_pages} 页")
+    start = (page - 1) * HELP_PAGE_SIZE
+    return nodes[start : start + HELP_PAGE_SIZE], total_pages
+
+
+def _format_catalog_text(
+    nodes: tuple[CommandCatalogNode, ...],
+    *,
+    query: str,
+    page: int,
+    total_pages: int,
+    total_nodes: int,
+    plugin_count: int,
+) -> str:
+    title = f"🔍 {query} 的命令目录" if query else "📖 完整命令目录"
+    lines = [
+        f"{title}  {page}/{total_pages}",
+        f"共 {total_nodes} 个命令节点，{plugin_count} 个已加载插件",
+        METRICS_SEPARATOR,
+    ]
+    current_plugin = None
+    detailed = bool(query)
+    for node in nodes:
+        if node.plugin != current_plugin:
+            current_plugin = node.plugin
+            lines.extend(("", f"📦 {current_plugin}"))
+        lines.extend(_format_catalog_node(node, detailed=detailed))
+    lines.extend(
+        (
+            "",
+            METRICS_SEPARATOR,
+            "💡 /help page <页码> · /help <插件名|命令码> · /help json [查询] [page N]",
+        )
+    )
+    return "\n".join(lines)
+
+
+def _format_catalog_node(node: CommandCatalogNode, *, detailed: bool) -> list[str]:
+    permission = {
+        "public": "公开",
+        "bot_admin": "Bot 管理员",
+        "group_admin": "群管理员",
+    }.get(node.permission, node.permission)
+    contexts = "/".join("群聊" if value == "group" else "私聊" for value in node.contexts)
+    lines = [
+        f"  ⌘ {node.usage}",
+        f"    code: {node.code} · {permission} · {contexts}",
+        f"    {node.help_text}",
+    ]
+    if node.aliases:
+        lines.append(f"    别名: {', '.join(node.aliases)}")
+    if detailed and node.examples:
+        lines.append(f"    正确示例: {' | '.join(node.examples)}")
+    if detailed and node.invalid_examples:
+        lines.append(f"    错误示例: {' | '.join(node.invalid_examples)}")
+    return lines
+
+
+def _format_catalog_json(
+    nodes: tuple[CommandCatalogNode, ...],
+    query: str,
+    page: int,
+    total_pages: int,
+) -> str:
+    records = []
+    for node in nodes:
+        record = node.to_dict()
+        record["subcommands"] = [child.code for child in node.children]
+        records.append(record)
+    payload = {
+        "query": query or None,
+        "page": page,
+        "total_pages": total_pages,
+        "commands": records,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
 
 async def _handle_reload(context) -> list[dict[str, Any]]:
-    """重载配置和插件
+    """重载配置，并在后台启动全量插件重载。
 
     Args:
         context: 插件上下文
@@ -283,12 +425,18 @@ async def _handle_reload(context) -> list[dict[str, Any]]:
     """
     try:
         logger.info("开始重载配置和插件")
-        context.reload_config()
+        await run_sync(context.reload_config)
+
+        # reload_plugins() 的契约是创建并返回后台任务。这里不能等待该任务：
+        # 当前命令仍占用 bot_core 的执行门，而全量重载需要先排空同一执行门；
+        # 若在此 await，就会形成“处理器等重载、重载等处理器”的自锁。
         reload_task = context.reload_plugins()
-        if reload_task is not None:
-            await reload_task
-        logger.info("配置和插件重载成功")
-        return segments("✅ 配置与插件已重载")
+        if reload_task is None:
+            logger.warning("配置已重载，但插件后台重载未启动")
+            return segments("⚠️ 配置已重载，但插件重载未启动")
+
+        logger.info("配置已重载，插件后台重载已启动")
+        return segments("✅ 配置已重载，插件正在后台重载")
     except Exception as exc:
         return public_error_response(
             context,
@@ -296,6 +444,7 @@ async def _handle_reload(context) -> list[dict[str, Any]]:
             logger=logger,
             component="bot_core.reload",
         )
+
 
 def _handle_plugins(context) -> list[dict[str, Any]]:
     """列出已加载的插件
@@ -324,6 +473,7 @@ def _handle_plugins(context) -> list[dict[str, Any]]:
             component="bot_core.plugins",
         )
 
+
 def _handle_mute(args: str, event: dict[str, Any], context) -> list[dict[str, Any]]:
     """处理闭嘴命令
 
@@ -348,25 +498,30 @@ def _handle_mute(args: str, event: dict[str, Any], context) -> list[dict[str, An
             logger.info("私聊不支持静音命令")
             return segments("❌ 私聊不支持此命令")
 
-        # 解析时长
-        duration = _parse_duration(args.strip())
-        if duration <= 0:
+        # 只有空参数使用默认值；畸形、非有限或非正数不能静默变成 10 分钟。
+        duration_text = args.strip()
+        duration: float
+        if not duration_text:
             duration = DEFAULT_MUTE_MINUTES
+        else:
+            parsed_duration = _parse_duration(duration_text)
+            if parsed_duration is None or parsed_duration <= 0:
+                return segments("❌ 时长格式错误，请输入有限正数，例如 30m 或 1.5h")
+            duration = parsed_duration
 
         # 限制最大时长
         if duration > MAX_MUTE_MINUTES:
             logger.warning("静音时长超过限制: %s > %s", duration, MAX_MUTE_MINUTES)
-            return segments(f"❌ 静音时长过长，最多支持 {MAX_MUTE_MINUTES//60} 小时")
+            return segments(f"❌ 静音时长过长，最多支持 {MAX_MUTE_MINUTES // 60} 小时")
 
         # 执行静音
         context.mute_group(group_id, duration)
 
         # 生成友好的时间显示
         if duration >= 60:
-            hours = duration / 60
-            time_str = f"{hours:.1f} 小时" if hours != int(hours) else f"{int(hours)} 小时"
+            time_str = f"{duration / 60:g} 小时"
         else:
-            time_str = f"{int(duration)} 分钟"
+            time_str = f"{duration:g} 分钟"
 
         logger.info("群 %s 设置静音: %s 分钟", group_id, duration)
         return segments(f"🤐 好的，我会安静 {time_str}")
@@ -378,6 +533,7 @@ def _handle_mute(args: str, event: dict[str, Any], context) -> list[dict[str, An
             logger=logger,
             component="bot_core.mute",
         )
+
 
 def _handle_unmute(event: dict[str, Any], context) -> list[dict[str, Any]]:
     """处理说话命令
@@ -415,7 +571,8 @@ def _handle_unmute(event: dict[str, Any], context) -> list[dict[str, Any]]:
             component="bot_core.unmute",
         )
 
-def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
+
+async def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
     """设置 secrets 中的某个值
 
     用法:
@@ -443,40 +600,37 @@ def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
 
     try:
         # 验证路径格式
-        if not re.match(r'^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)*$', path):
+        if _SECRET_PATH_PATTERN.fullmatch(path) is None:
             return segments("❌ 路径格式错误，请使用 . 分隔，如: plugins.signin.sid")
 
         # 尝试解析为 JSON（支持设置数字、布尔值等）
         try:
-            parsed_value = json.loads(value)
-        except json.JSONDecodeError:
+            parsed_value = json.loads(value, parse_constant=_reject_json_constant)
+        except (json.JSONDecodeError, ValueError):
             # 如果不是有效 JSON，就作为字符串处理
             parsed_value = value
 
-        principal = getattr(context, "principal", None)
-        capabilities = getattr(context, "capabilities", None)
-        capability = getattr(capabilities, "secret_admin", None)
-        if (
-            principal is None
-            or not getattr(capabilities, "is_bot_admin", False)
-            or not getattr(principal, "is_private", False)
-            or capability is None
-        ):
-            logger.warning("Global secret update denied: capability unavailable")
+        capability = _secret_admin_capability(context)
+        if capability is None:
+            logger.warning("全局密钥更新被拒绝：管理能力不可用")
             return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
 
-        capability.set(path, parsed_value)
+        await run_sync(capability.set, path, parsed_value)
 
-        logger.info("已更新配置: %s = %s", path, mask_secret(parsed_value))
-        return segments(f"✅ 已更新 {path}\n新值: {mask_secret(parsed_value)}")
-    except KeyError as exc:
+        masked_value = mask_secret(parsed_value)
+        logger.info("已更新配置: %s = %s", path, masked_value)
+        return segments(f"✅ 已更新 {path}\n新值: {masked_value}")
+    except KeyError:
         # 路径不存在
         logger.warning("配置路径不存在: %s", path)
-        return segments(f"❌ {exc}\n\n💡 提示: 使用 /get_secret 查看现有配置路径")
-    except ValueError as exc:
+        return segments("❌ 配置路径不存在\n\n💡 提示: 使用 /get_secret 查看现有配置路径")
+    except ValueError:
         # 路径类型错误
         logger.warning("配置路径类型错误: %s", path)
-        return segments(f"❌ {exc}")
+        return segments("❌ 配置路径或值格式错误")
+    except PermissionError:
+        logger.warning("全局密钥更新在提交前失去授权")
+        return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
     except Exception as exc:
         return public_error_response(
             context,
@@ -484,6 +638,7 @@ def _handle_set_secret(args: str, context) -> list[dict[str, Any]]:
             logger=logger,
             component="bot_core.set_secret",
         )
+
 
 def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
     """查看 secrets 中的某个值
@@ -510,25 +665,21 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
         )
 
     try:
-        principal = getattr(context, "principal", None)
-        capabilities = getattr(context, "capabilities", None)
-        capability = getattr(capabilities, "secret_admin", None)
-        if (
-            principal is None
-            or not getattr(capabilities, "is_bot_admin", False)
-            or not getattr(principal, "is_private", False)
-            or capability is None
-        ):
-            logger.warning("Global secret read denied: capability unavailable")
+        if _SECRET_PATH_PATTERN.fullmatch(path) is None:
+            return segments("❌ 路径格式错误，请使用 . 分隔，如: plugins.signin.sid")
+
+        capability = _secret_admin_capability(context)
+        if capability is None:
+            logger.warning("全局密钥读取被拒绝：管理能力不可用")
             return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
 
         current = capability.get(path)
 
         if isinstance(current, dict):
-            keys_list = list(current.keys())
-            if len(keys_list) > 20:
-                display_keys = keys_list[:20]
-                suffix = f"... 还有 {len(keys_list) - 20} 个"
+            keys_list = [str(key) for key in current]
+            if len(keys_list) > MAX_DISPLAYED_SECRET_KEYS:
+                display_keys = keys_list[:MAX_DISPLAYED_SECRET_KEYS]
+                suffix = f", ... 还有 {len(keys_list) - MAX_DISPLAYED_SECRET_KEYS} 个"
             else:
                 display_keys = keys_list
                 suffix = ""
@@ -544,6 +695,9 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
     except KeyError:
         logger.info("配置路径不存在: %s", path)
         return segments(f"❌ 路径 {path} 不存在")
+    except PermissionError:
+        logger.warning("全局密钥读取在返回前失去授权")
+        return segments("❌ 只有 Bot 全局管理员可在私聊中管理密钥")
     except Exception as exc:
         return public_error_response(
             context,
@@ -551,6 +705,7 @@ def _handle_get_secret(args: str, context) -> list[dict[str, Any]]:
             logger=logger,
             component="bot_core.get_secret",
         )
+
 
 async def _handle_metrics(context) -> list[dict[str, Any]]:
     """查看运行指标
@@ -563,35 +718,56 @@ async def _handle_metrics(context) -> list[dict[str, Any]]:
     """
     try:
         metrics = getattr(context, "metrics", None)
-        if not metrics:
+        if metrics is None:
             logger.warning("Metrics 未启用")
             return segments("❌ Metrics 未启用")
 
         summary = await metrics.get_summary()
-        if not summary:
+        if not isinstance(summary, Mapping) or not summary:
             logger.warning("无法获取 Metrics 数据")
             return segments("❌ 无法获取 Metrics 数据")
 
-        global_stats = summary.get("global", {})
+        raw_global_stats = summary.get("global", {})
+        global_stats = raw_global_stats if isinstance(raw_global_stats, Mapping) else {}
+        uptime_seconds = _metric_number(summary, "uptime_seconds")
+        total_calls = _metric_number(global_stats, "total_calls")
+        success_rate = _metric_number(global_stats, "success_rate", maximum=1.0)
+        avg_time = _metric_number(global_stats, "avg_time")
+        slow_calls = _metric_number(global_stats, "slow_calls")
+        errors = _metric_number(global_stats, "errors")
         lines = [
             "📈 运行指标",
             METRICS_SEPARATOR,
-            f"⏱️ 运行时间: {summary.get('uptime_seconds', 0):.0f}s",
-            f"📦 总调用: {global_stats.get('total_calls', 0)}",
-            f"✅ 成功率: {global_stats.get('success_rate', 1)*100:.1f}%",
-            f"⏳ 平均耗时: {global_stats.get('avg_time', 0):.3f}s",
-            f"🐢 慢调用: {global_stats.get('slow_calls', 0)}",
-            f"❌ 错误: {global_stats.get('errors', 0)}",
+            f"⏱️ 运行时间: {_format_metric(uptime_seconds, '.0f', 's')}",
+            f"📦 总调用: {_format_metric(total_calls, '.0f')}",
+            (
+                "✅ 成功率: n/a"
+                if success_rate is None
+                else f"✅ 成功率: {success_rate * 100:.1f}%"
+            ),
+            f"⏳ 平均耗时: {_format_metric(avg_time, '.3f', 's')}",
+            f"🐢 慢调用: {_format_metric(slow_calls, '.0f')}",
+            f"❌ 错误: {_format_metric(errors, '.0f')}",
         ]
 
         top_slow = summary.get("top_slow_plugins", [])
-        if top_slow:
-            lines.append(METRICS_SEPARATOR)
-            lines.append("⚠️ 最慢插件:")
+        if isinstance(top_slow, list) and top_slow:
+            slow_lines = []
             for item in top_slow[:5]:  # 限制显示5个
-                plugin_name = item.get('plugin', '-')
-                avg_time = item.get('avg_time', 0)
-                lines.append(f"  • {plugin_name}: {avg_time:.3f}s")
+                if not isinstance(item, Mapping):
+                    continue
+                raw_name = item.get("plugin")
+                plugin_name = (
+                    " ".join(raw_name.split())[:64]
+                    if isinstance(raw_name, str) and raw_name.strip()
+                    else "-"
+                )
+                plugin_avg_time = _metric_number(item, "avg_time")
+                slow_lines.append(
+                    f"  • {plugin_name}: {_format_metric(plugin_avg_time, '.3f', 's')}"
+                )
+            if slow_lines:
+                lines.extend((METRICS_SEPARATOR, "⚠️ 最慢插件:", *slow_lines))
 
         logger.info("查询运行指标")
         return segments("\n".join(lines))
@@ -604,7 +780,8 @@ async def _handle_metrics(context) -> list[dict[str, Any]]:
             component="bot_core.metrics",
         )
 
-def _parse_duration(text: str) -> float:
+
+def _parse_duration(text: str) -> float | None:
     """解析时长字符串
 
     支持格式:
@@ -617,28 +794,14 @@ def _parse_duration(text: str) -> float:
         text: 时长字符串
 
     Returns:
-        时长(分钟)，解析失败返回 0
+        时长（分钟）；空值、畸形值或非有限值返回 None
     """
-    if not text:
-        return 0
+    match = _DURATION_PATTERN.fullmatch(text.strip())
+    if match is None:
+        return None
 
-    text = text.lower().strip()
-
-    try:
-        # 小时格式
-        if text.endswith("h") or text.endswith("小时"):
-            num = re.sub(r'[h小时]+$', '', text)
-            hours = float(num)
-            return hours * 60
-
-        # 分钟格式
-        if text.endswith("m") or text.endswith("分钟") or text.endswith("min"):
-            num = re.sub(r'(min|分钟|m)$', '', text)
-            return float(num)
-
-        # 纯数字默认为分钟
-        minutes = float(text)
-        return minutes
-    except ValueError as e:
-        logger.warning("解析时长失败: %s, 错误: %s", text, e)
-        return 0
+    value = float(match.group("value"))
+    if not math.isfinite(value):
+        return None
+    unit = (match.group("unit") or "").casefold()
+    return value * 60 if unit in {"h", "小时"} else value

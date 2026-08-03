@@ -1,3 +1,10 @@
+"""为持久化聊天历史维护紧凑、稳定的媒体引用。
+
+消息正文保存位置占位符，注册表则为每个稳定媒体标识保留当前最佳元数据。更新遵循
+质量单调且尽力而为：注册表失败不能阻止提示词构造或消息投递。索引只含元数据，
+绝不包含原始媒体字节或服务商凭据。
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -5,13 +12,21 @@ import re
 import threading
 import time
 from collections.abc import Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from .store_base import StoreBase
+from core.atomic_store import keyed_path_lock
+
+from .media.event_media_common import (
+    _is_generic_media_label,
+    _normalize_media_label,
+    split_emoji_visible_text,
+)
+from .store_base import LockedDirtyStateMixin, StoreBase
 
 _MEDIA_MARKER_RE = re.compile(r"\[(?:图片|表情包|QQ表情)：[^\]\n]{0,400}\]")
-_MEDIA_PLACEHOLDER_RE = re.compile(r"\[\[xc_media_(\d+)\]\]")
+MEDIA_PLACEHOLDER_RE = re.compile(r"\[\[xc_media_(\d+)\]\]")
 _MEDIA_PLACEHOLDER_TEMPLATE = "[[xc_media_{index}]]"
 
 
@@ -32,7 +47,7 @@ def _clean_text_list(values: Any) -> list[str]:
     return cleaned
 
 
-def _media_placeholder(index: int) -> str:
+def media_placeholder(index: int) -> str:
     return _MEDIA_PLACEHOLDER_TEMPLATE.format(index=max(1, int(index)))
 
 
@@ -47,6 +62,8 @@ def _extract_marker_label(marker: Any) -> str:
 
 
 def _stable_media_key(item: dict[str, Any]) -> str:
+    """生成稳定标识，不在键中暴露原始路径。"""
+
     media_key = _clean_text(item.get("media_key"))
     if media_key:
         return media_key
@@ -71,7 +88,16 @@ def _stable_media_key(item: dict[str, Any]) -> str:
 
 def _normalize_media_ref(item: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
-    for field in ("kind", "media_hash", "face_id", "marker", "description", "file_path", "mode", "label"):
+    for field in (
+        "kind",
+        "media_hash",
+        "face_id",
+        "marker",
+        "description",
+        "file_path",
+        "mode",
+        "label",
+    ):
         value = _clean_text(item.get(field))
         if value:
             normalized[field] = value
@@ -91,6 +117,8 @@ def _normalize_media_ref(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_media_refs(items: Sequence[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """规范化媒体元数据，但不授权其中引用的任何路径。"""
+
     normalized: list[dict[str, Any]] = []
     for item in items or []:
         if not isinstance(item, dict):
@@ -102,11 +130,10 @@ def normalize_media_refs(items: Sequence[dict[str, Any]] | None) -> list[dict[st
 
 
 def _quality_score(item: dict[str, Any]) -> float:
-    try:
-        from .media.event_media import _is_generic_media_label
-    except Exception:
-        def _is_generic_media_label(_: str) -> bool:
-            return False
+    """估算描述丰富度，供注册表单调升级使用。
+
+    该分数只是内部合并启发式，不代表信任或安全等级。
+    """
 
     kind = _clean_text(item.get("kind"))
     description = _clean_text(item.get("description"))
@@ -119,7 +146,9 @@ def _quality_score(item: dict[str, Any]) -> float:
         score += 1.0
         if not _is_generic_media_label(description):
             score += 2.5
-        if description not in {"一张图片", "一张表情包"} and not description.startswith("系统表情#"):
+        if description not in {"一张图片", "一张表情包"} and not description.startswith(
+            "系统表情#"
+        ):
             score += 0.8
     if marker:
         score += 0.5
@@ -137,20 +166,7 @@ def _quality_score(item: dict[str, Any]) -> float:
 
 
 def _render_media_marker(item: dict[str, Any]) -> str:
-    try:
-        from .media.event_media import _is_generic_media_label, _normalize_media_label
-    except Exception:
-        def _is_generic_media_label(_: str) -> bool:
-            return False
-
-        def _normalize_media_label(value: str) -> str:
-            return _clean_text(value)
-
-    try:
-        from .media.event_media_common import split_emoji_visible_text
-    except Exception:
-        def split_emoji_visible_text(value: str) -> tuple[str, str]:
-            return _clean_text(value), ""
+    """把单个规范化引用渲染为确定性的提示词可见文本。"""
 
     kind = _clean_text(item.get("kind"))
     marker = _clean_text(item.get("marker"))
@@ -160,7 +176,9 @@ def _render_media_marker(item: dict[str, Any]) -> str:
     aliases = _clean_text_list(item.get("aliases", []))
 
     if kind == "qq_face":
-        resolved_label = label or description or (aliases[0] if aliases else "") or _extract_marker_label(marker)
+        resolved_label = (
+            label or description or (aliases[0] if aliases else "") or _extract_marker_label(marker)
+        )
         if not resolved_label:
             face_id = _clean_text(item.get("face_id"))
             resolved_label = f"系统表情#{face_id}" if face_id else ""
@@ -170,14 +188,9 @@ def _render_media_marker(item: dict[str, Any]) -> str:
         clean_desc, visible_text = split_emoji_visible_text(description)
         label_text = "，".join(emotion_tags[:2]).strip()
         if not label_text:
-            label_text = (
-                _extract_marker_label(marker)
-                or clean_desc
-                or description
-                or "一张表情包"
-            )
+            label_text = _extract_marker_label(marker) or clean_desc or description or "一张表情包"
         if visible_text:
-            return f'[表情包：{label_text}；写着“{visible_text}”]'
+            return f"[表情包：{label_text}；写着“{visible_text}”]"
         if (
             clean_desc
             and not _is_generic_media_label(clean_desc)
@@ -194,6 +207,8 @@ def _render_media_marker(item: dict[str, Any]) -> str:
 
 
 def compact_media_items(items: Sequence[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """保留稳定标识，省略可由注册表恢复的冗长元数据。"""
+
     compacted: list[dict[str, Any]] = []
     for normalized in normalize_media_refs(items):
         compact: dict[str, Any] = {}
@@ -222,6 +237,8 @@ def resolve_registered_media_items(
     *,
     store: Any | None = None,
 ) -> list[dict[str, Any]]:
+    """通过存储解析引用，任何失败都原样降级。"""
+
     normalized_items = normalize_media_refs(items)
     if not normalized_items:
         return []
@@ -245,6 +262,8 @@ def upsert_registered_media_items(
     store: Any | None = None,
     compact: bool = True,
 ) -> list[dict[str, Any]]:
+    """尽力更新注册表，并按需执行持久化压缩。"""
+
     normalized_items = normalize_media_refs(items)
     if not normalized_items:
         return []
@@ -261,6 +280,12 @@ def upsert_registered_media_items(
 
 
 def compact_message_content(content: str, media_items: Sequence[dict[str, Any]] | None) -> str:
+    """用有序占位符替换媒体标记，供持久化存储。
+
+    占位符保留媒体位置以及从 1 开始的条目关联；额外条目追加到末尾，确保压缩不会
+    静默丢失结构化引用。
+    """
+
     text = _clean_text(content)
     items = [item for item in media_items or [] if isinstance(item, dict)]
     if not items:
@@ -268,7 +293,7 @@ def compact_message_content(content: str, media_items: Sequence[dict[str, Any]] 
 
     matches = list(_MEDIA_MARKER_RE.finditer(text))
     if not matches:
-        placeholders = [_media_placeholder(index) for index in range(1, len(items) + 1)]
+        placeholders = [media_placeholder(index) for index in range(1, len(items) + 1)]
         if not placeholders:
             return text
         return "\n".join([part for part in [text, *placeholders] if part]).strip()
@@ -279,7 +304,7 @@ def compact_message_content(content: str, media_items: Sequence[dict[str, Any]] 
     for index, match in enumerate(matches, start=1):
         parts.append(text[cursor : match.start()])
         if index <= len(items):
-            parts.append(_media_placeholder(index))
+            parts.append(media_placeholder(index))
             replaced_count = index
         else:
             parts.append(match.group(0))
@@ -288,15 +313,22 @@ def compact_message_content(content: str, media_items: Sequence[dict[str, Any]] 
     compacted = "".join(parts).strip()
 
     trailing_placeholders = [
-        _media_placeholder(index)
-        for index in range(replaced_count + 1, len(items) + 1)
+        media_placeholder(index) for index in range(replaced_count + 1, len(items) + 1)
     ]
     if trailing_placeholders:
-        compacted = "\n".join([part for part in [compacted, *trailing_placeholders] if part]).strip()
+        compacted = "\n".join(
+            [part for part in [compacted, *trailing_placeholders] if part]
+        ).strip()
     return compacted
 
 
 def _merge_media_record(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """合并观测记录，不用较差描述覆盖较丰富描述。
+
+    别名会累积、质量不会下降、观测时间会刷新。只有注册表尚无文件路径时才补入路径；
+    调用方访问文件系统前仍须自行验证。
+    """
+
     now = float(time.time())
     merged = dict(existing) if isinstance(existing, dict) else {}
 
@@ -353,6 +385,12 @@ def rebuild_message_content(
     *,
     resolved_items: Sequence[dict[str, Any]] | None = None,
 ) -> str:
+    """按位置恢复提示词标记，并追加未匹配的媒体。
+
+    占位符索引优先于旧标记顺序；没有对应占位符的引用会追加到末尾，避免旧正文与
+    结构化元数据数量不一致时意外丢失内容。
+    """
+
     text = _clean_text(content)
     items = list(resolved_items if resolved_items is not None else media_items or [])
     markers = [_render_media_marker(item) for item in items if isinstance(item, dict)]
@@ -360,7 +398,7 @@ def rebuild_message_content(
     if not markers:
         return text
 
-    placeholder_matches = list(_MEDIA_PLACEHOLDER_RE.finditer(text))
+    placeholder_matches = list(MEDIA_PLACEHOLDER_RE.finditer(text))
     if placeholder_matches:
         parts: list[str] = []
         cursor = 0
@@ -411,6 +449,8 @@ def resolve_message_content(
     *,
     store: Any | None = None,
 ) -> str:
+    """使用指定存储或当前尽力存储解析压缩正文。"""
+
     items = normalize_media_refs(media_items)
     if not items:
         return _clean_text(content)
@@ -427,83 +467,117 @@ def resolve_message_content(
     return rebuild_message_content(content, items, resolved_items=resolved_items)
 
 
-def message_has_media_kind(message: Any, *kinds: str) -> bool:
-    normalized_kinds = {_clean_text(kind) for kind in kinds if _clean_text(kind)}
-    if not normalized_kinds:
-        return False
+class MediaRegistryStore(LockedDirtyStateMixin, StoreBase):
+    """线程安全、显式刷盘的持久化媒体元数据缓存。
 
-    try:
-        from .message_parts import build_message_parts, normalize_message_parts
+    修改操作只把内存索引标记为脏，不在组装每条消息时执行 I/O；生命周期代码必须
+    在持久化边界调用 :meth:`flush`。
+    """
 
-        message_parts = normalize_message_parts(getattr(message, "parts", ()) or ())
-        if not message_parts:
-            message_parts = build_message_parts(
-                str(getattr(message, "content", "") or ""),
-                getattr(message, "media_items", ()) or (),
-            )
-    except Exception:
-        message_parts = ()
-
-    return any(
-        _clean_text(item.get("kind")) in normalized_kinds
-        for item in message_parts
-        if isinstance(item, dict)
-    )
-
-
-class MediaRegistryStore(StoreBase):
     def __init__(self) -> None:
         super().__init__()
-        self._entries_cache: dict[str, dict[str, Any]] | None = None
+        self._entries_cache: dict[str, dict[str, Any]] = {}
+        self._pending_observations: list[dict[str, Any]] = []
         self._dirty = False
         self._lock = threading.Lock()
+        self._flush_lock = threading.Lock()
+        self._revision = 0
 
     def bind(self, data_dir: Path) -> None:
+        """绑定数据根目录，并丢弃前一根目录对应的缓存状态。"""
+
         with self._lock:
-            if self._data_dir != data_dir:
-                self._entries_cache = None
-                self._dirty = False
-        super().bind(data_dir)
+            if self._data_dir == data_dir:
+                return
+            super().bind(data_dir)
+            self._entries_cache = {}
+            self._pending_observations = []
+            self._dirty = False
+            self._revision += 1
 
     def _index_path(self) -> Path | None:
         return self._resolve_path("media", "index.json")
 
-    def _load_entries_locked(self) -> dict[str, dict[str, Any]]:
-        if self._entries_cache is not None:
-            return self._entries_cache
-        path = self._index_path()
-        payload = self._load_json(path, default={"entries": {}}) if path else {"entries": {}}
+    @staticmethod
+    def _entries_from_payload(payload: Any) -> dict[str, dict[str, Any]]:
         entries = payload.get("entries") if isinstance(payload, dict) else {}
-        self._entries_cache = entries if isinstance(entries, dict) else {}
-        return self._entries_cache
+        if not isinstance(entries, dict):
+            return {}
+        return {
+            str(key): deepcopy(value) for key, value in entries.items() if isinstance(value, dict)
+        }
 
-    def _save_entries_locked(self) -> bool:
-        path = self._index_path()
-        if not path:
-            return False
-        return self._save_json(path, {"entries": self._entries_cache or {}})
+    def load(self) -> None:
+        """同步加载持久化索引；生命周期入口必须在线程池中调用。"""
 
-    def is_dirty(self) -> bool:
         with self._lock:
-            return bool(self._dirty)
+            path = self._index_path()
+            revision = self._revision
+            if path is None or self._dirty:
+                return
+        with keyed_path_lock(path):
+            payload = self._load_json(path, default={"entries": {}})
+        loaded = self._entries_from_payload(payload)
+        with self._lock:
+            if self._index_path() != path or self._revision != revision or self._dirty:
+                return
+            self._entries_cache = loaded
+            self._revision += 1
 
     def flush(self) -> None:
-        with self._lock:
-            if not self._dirty:
-                return
-            if self._save_entries_locked():
-                self._dirty = False
+        """在实例锁外把待提交观测合并进最新磁盘快照。"""
 
-    def flush_all(self) -> None:
-        self.flush()
+        with self._flush_lock:
+            with self._lock:
+                if not self._dirty or not self._pending_observations:
+                    return
+                path = self._index_path()
+                revision = self._revision
+                pending = deepcopy(self._pending_observations)
+            if path is None:
+                return
+
+            with keyed_path_lock(path):
+                payload = self._load_json(path, default={"entries": {}})
+                persisted = self._entries_from_payload(payload)
+                for item in pending:
+                    media_key = _clean_text(item.get("media_key"))
+                    if not media_key:
+                        continue
+                    persisted[media_key] = _merge_media_record(
+                        persisted.get(media_key, {}),
+                        item,
+                    )
+                if not self._save_json(path, {"entries": persisted}):
+                    return
+
+            with self._lock:
+                if self._index_path() != path:
+                    return
+                remaining = self._pending_observations[len(pending) :]
+                if self._revision == revision:
+                    remaining = []
+                refreshed = deepcopy(persisted)
+                for item in remaining:
+                    media_key = _clean_text(item.get("media_key"))
+                    if media_key:
+                        refreshed[media_key] = _merge_media_record(
+                            refreshed.get(media_key, {}),
+                            item,
+                        )
+                self._entries_cache = refreshed
+                self._pending_observations = remaining
+                self._dirty = bool(remaining)
 
     def upsert_media_items(self, items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        """在同一把锁下合并观测记录，并返回信息最丰富的视图。"""
+
         normalized_items = [_normalize_media_ref(item) for item in items if isinstance(item, dict)]
         if not normalized_items:
             return []
 
         with self._lock:
-            entries = self._load_entries_locked()
+            entries = self._entries_cache
             changed = False
             resolved_items: list[dict[str, Any]] = []
 
@@ -516,19 +590,23 @@ class MediaRegistryStore(StoreBase):
                 merged = _merge_media_record(existing if isinstance(existing, dict) else {}, item)
                 if merged != existing:
                     entries[media_key] = merged
+                    self._pending_observations.append(item)
                     changed = True
                 resolved_items.append(self._resolve_item_locked(item, entries=entries))
 
             if changed:
                 self._dirty = True
+                self._revision += 1
             return resolved_items
 
     def resolve_media_items(self, items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        """解析已知标识，不修改观测记录或脏状态。"""
+
         normalized_items = [_normalize_media_ref(item) for item in items if isinstance(item, dict)]
         if not normalized_items:
             return []
         with self._lock:
-            entries = self._load_entries_locked()
+            entries = self._entries_cache
             return [self._resolve_item_locked(item, entries=entries) for item in normalized_items]
 
     def _resolve_item_locked(
@@ -537,6 +615,8 @@ class MediaRegistryStore(StoreBase):
         *,
         entries: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
+        """在保留请求标识的同时叠加注册表元数据。"""
+
         media_key = _clean_text(item.get("media_key"))
         if not media_key:
             return dict(item)
@@ -545,7 +625,15 @@ class MediaRegistryStore(StoreBase):
             return dict(item)
 
         resolved = dict(item)
-        for field in ("kind", "media_hash", "face_id", "marker", "description", "file_path", "label"):
+        for field in (
+            "kind",
+            "media_hash",
+            "face_id",
+            "marker",
+            "description",
+            "file_path",
+            "label",
+        ):
             value = _clean_text(existing.get(field))
             if value:
                 resolved[field] = value

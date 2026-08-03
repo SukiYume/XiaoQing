@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import tempfile
 import threading
-from collections.abc import Callable, Iterator
+import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +15,7 @@ from typing import Any, TypeVar
 
 T = TypeVar("T")
 MISSING_ETAG = "missing"
+_ATOMIC_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08)
 
 
 @dataclass
@@ -67,7 +68,16 @@ def atomic_write_bytes(path: Path, payload: bytes) -> None:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_name, path)
+        # Windows 的杀毒软件或索引器可能短暂占用刚关闭的目标文件。只对
+        # PermissionError 做有限退避；其他写盘错误仍立即暴露给调用方。
+        for delay in _ATOMIC_REPLACE_RETRY_DELAYS:
+            try:
+                os.replace(temp_name, path)
+                break
+            except PermissionError:
+                time.sleep(delay)
+        else:
+            os.replace(temp_name, path)
         if os.name != "nt":
             directory_fd = os.open(path.parent, os.O_RDONLY)
             try:
@@ -86,12 +96,8 @@ def atomic_write_text(path: Path, payload: str) -> None:
     atomic_write_bytes(path, payload.encode("utf-8"))
 
 
-def _etag(payload: bytes | None) -> str:
-    return hashlib.sha256(payload).hexdigest() if payload is not None else MISSING_ETAG
-
-
 class AtomicJsonStore:
-    """Atomic JSON store with backup recovery, mutate and content CAS."""
+    """带有效备份恢复的原子 JSON 读写器。"""
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -100,6 +106,15 @@ class AtomicJsonStore:
     @staticmethod
     def _decode(payload: bytes) -> Any:
         return json.loads(payload.decode("utf-8"))
+
+    @staticmethod
+    def _encode(value: Any) -> bytes:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            allow_nan=False,
+        ).encode("utf-8")
 
     def _read_payload_unlocked(self) -> bytes | None:
         try:
@@ -114,12 +129,14 @@ class AtomicJsonStore:
         try:
             return self._decode(payload)
         except (UnicodeDecodeError, json.JSONDecodeError) as primary_error:
+            if raise_on_error:
+                # Security-sensitive callers use strict reads so a stale backup
+                # cannot silently roll back a newer authorization decision.
+                raise primary_error from None
             try:
                 backup_payload = self.backup_path.read_bytes()
                 recovered = self._decode(backup_payload)
             except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
-                if raise_on_error:
-                    raise primary_error from None
                 return default
             atomic_write_bytes(self.path, backup_payload)
             return recovered
@@ -128,18 +145,8 @@ class AtomicJsonStore:
         with keyed_path_lock(self.path):
             return self._read_unlocked(default, raise_on_error=raise_on_error)
 
-    def read_versioned(self, default: T) -> tuple[T | Any, str]:
-        with keyed_path_lock(self.path):
-            value = self._read_unlocked(default, raise_on_error=False)
-            return value, _etag(self._read_payload_unlocked())
-
-    def _write_unlocked(self, value: Any) -> str:
-        payload = json.dumps(
-            value,
-            ensure_ascii=False,
-            indent=2,
-            allow_nan=False,
-        ).encode("utf-8")
+    def _write_unlocked(self, value: Any) -> None:
+        payload = self._encode(value)
         current = self._read_payload_unlocked()
         if current is not None:
             try:
@@ -149,22 +156,15 @@ class AtomicJsonStore:
             else:
                 atomic_write_bytes(self.backup_path, current)
         atomic_write_bytes(self.path, payload)
-        return _etag(payload)
 
-    def write(self, value: Any) -> str:
+    def write(self, value: Any) -> None:
         with keyed_path_lock(self.path):
-            return self._write_unlocked(value)
+            self._write_unlocked(value)
 
-    def compare_and_swap(self, expected_etag: str, value: Any) -> tuple[bool, str]:
-        with keyed_path_lock(self.path):
-            current_etag = _etag(self._read_payload_unlocked())
-            if current_etag != expected_etag:
-                return False, current_etag
-            return True, self._write_unlocked(value)
+    def write_with_backup(self, value: Any) -> None:
+        """Atomically publish a value and make the backup an explicit copy of it."""
 
-    def mutate(self, default: T, callback: Callable[[T | Any], Any]) -> Any:
+        payload = self._encode(value)
         with keyed_path_lock(self.path):
-            value = self._read_unlocked(default, raise_on_error=False)
-            result = callback(value)
-            self._write_unlocked(value if result is None else result)
-            return value if result is None else result
+            atomic_write_bytes(self.path, payload)
+            atomic_write_bytes(self.backup_path, payload)

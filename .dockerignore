@@ -1,14 +1,23 @@
-# Deny every path by default. scripts/build_docker_context.py creates a fresh
-# context containing only these exact release inputs; no source-tree wildcard is
-# permitted here.
-**
-
-!.dockerignore
-!Dockerfile
-!artifacts/
-!artifacts/xiaoqing.whl
-!requirements/
-!requirements/python-3.13-runtime.lock
-!config/
-!config/config.json.example
-!config/secrets.json.example
+.git
+.github
+.pytest_cache
+.ruff_cache
+.mypy_cache
+__pycache__
+*.py[cod]
+*.log
+.coverage
+htmlcov
+build
+dist
+logs
+test_reports/runs
+config/config.json
+config/secrets.json
+plugins/*/data
+data
+plugins/*/cache
+plugins/*/backups
+plugins/*/exports
+plugins/arxiv_filter/best_model*
+plugins/arxiv_filter/train_model/**/cache

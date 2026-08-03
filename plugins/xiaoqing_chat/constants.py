@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-# ── Shared question detection ──
-# Used across frequency_control, heartflow, goal_state, reply_checker.
+# ── 公共疑问句识别 ──
+# 由 frequency_control、heartflow、goal_state 和 reply_checker 共用。
 
 _QUESTION_ENDINGS = ("吗", "嘛", "啊", "呢", "吧", "诶")
 _QUESTION_KEYWORDS = frozenset(
@@ -36,9 +36,25 @@ _COLLOQUIAL_MEI_ACTION_MARKERS = frozenset(
         "可以",
     }
 )
-_COLLOQUIAL_MEI_ONE_CHAR_PREDICATES = frozenset({"好", "到", "行", "醒", "睡", "吃", "喝", "来", "去", "有"})
+_COLLOQUIAL_MEI_ONE_CHAR_PREDICATES = frozenset(
+    {"好", "到", "行", "醒", "睡", "吃", "喝", "来", "去", "有"}
+)
 _COLLOQUIAL_MEI_STANDALONE_NEGATIONS = frozenset(
-    {"没", "真没", "还没", "也没", "都没", "并没", "我没", "你没", "他没", "她没", "它没", "这没", "那没"}
+    {
+        "没",
+        "真没",
+        "还没",
+        "也没",
+        "都没",
+        "并没",
+        "我没",
+        "你没",
+        "他没",
+        "她没",
+        "它没",
+        "这没",
+        "那没",
+    }
 )
 
 
@@ -60,9 +76,7 @@ def _is_colloquial_mei_question(t: str) -> bool:
 
 
 def is_question(text: str) -> bool:
-    """Check if text is a question (contains question marks, ends with question particles, or
-    contains question keywords).
-    """
+    """根据问号、句末语气词和疑问关键词判断文本是否为问题。"""
     t = (text or "").strip()
     if not t:
         return False
@@ -75,32 +89,20 @@ def is_question(text: str) -> bool:
     return any(kw in t for kw in _QUESTION_KEYWORDS)
 
 
-# Maximum character length considered as "short text" for display/truncation purposes.
-DEFAULT_SHORT_TEXT_LIMIT = 120
-
-# Maximum character length for text logged in step-level debug output.
-LOG_TEXT_LIMIT = 140
-
-# How many recent local_ids to track per chat for auto-increment allocation.
-LOCAL_ID_HISTORY_LIMIT = 50
-
-# How many messages to scan backwards when resolving a local_id (e.g. "m123") to its content.
+# 把 local_id（如 m123）还原为正文时，最多向前扫描的消息数。
 FIND_BY_LOCAL_ID_LIMIT = 200
 
-# Timeout (seconds) for the foreground memory retrieval task before giving up.
+# 前台记忆检索任务放弃前的超时秒数。
 MEMORY_RETRIEVAL_TIMEOUT = 4.5
 
-# Maximum number of unknown/jargon words to look up per reply generation.
+# 每次生成回复时最多查询的未知词或行话数量。
 UNKNOWN_WORDS_MAX = 6
 
-# Default maximum number of expression habits injected into the prompt.
+# 注入提示词的表达习惯默认上限。
 EXPRESSION_MAX_INJ_DEFAULT = 10
 
-# Maximum number of reply regeneration attempts when reply-checker rejects the output.
-REGENERATION_MAX_ATTEMPTS = 3
-
-# Minimum interval (seconds) between expression learning runs for the same chat.
+# 同一会话两次表达学习之间的最短秒数。
 EXPRESSION_LEARN_MIN_INTERVAL = 90.0
 
-# Minimum number of new messages before triggering an expression learning cycle.
+# 触发一次表达学习所需的最少新消息数。
 EXPRESSION_LEARN_MIN_MESSAGES = 10

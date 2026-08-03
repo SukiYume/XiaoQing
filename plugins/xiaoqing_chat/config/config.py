@@ -1,25 +1,65 @@
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+Probability = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+UnitWeight = Annotated[float, Field(ge=-1.0, le=1.0, allow_inf_nan=False)]
+NonNegativeSeconds = Annotated[
+    float,
+    Field(ge=0.0, le=365 * 86400.0, allow_inf_nan=False),
+]
+PositiveTimeoutSeconds = Annotated[
+    float,
+    Field(gt=0.0, le=3600.0, allow_inf_nan=False),
+]
+PositiveDurationSeconds = Annotated[
+    float,
+    Field(gt=0.0, le=365 * 86400.0, allow_inf_nan=False),
+]
+RetryCount = Annotated[int, Field(ge=0, le=20)]
+ShortDelaySeconds = Annotated[
+    float,
+    Field(ge=0.0, le=300.0, allow_inf_nan=False),
+]
+
+_MAX_REGEX_LENGTH = 512
+_NESTED_UNBOUNDED_REPEAT_RE = re.compile(
+    r"\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)\s*(?:[+*]|\{\d*,?\d*\})"
+)
+
+
+def _validated_regex_pattern(value: str) -> str:
+    pattern = str(value or "").strip()
+    if not pattern:
+        raise ValueError("regex pattern must not be empty")
+    if len(pattern) > _MAX_REGEX_LENGTH:
+        raise ValueError(f"regex pattern exceeds {_MAX_REGEX_LENGTH} characters")
+    if _NESTED_UNBOUNDED_REPEAT_RE.search(pattern):
+        raise ValueError("regex pattern contains nested unbounded repetition")
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise ValueError("invalid regex pattern") from exc
+    return pattern
 
 
 class DebugConfig(BaseModel):
-    show_planner_prompt: bool = False
-    show_planner_reasoning: bool = False
     show_reply_prompt: bool = False
-    show_memory_prompt: bool = False
-    log_plan_reply: bool = False
     log_latency: bool = False
     log_steps: bool = True
 
+
 class ResponseSplitterConfig(BaseModel):
     enable: bool = True
-    max_length: int = 256
-    max_sentence_num: int = 3
+    max_length: int = Field(default=256, ge=1, le=4000)
+    max_sentence_num: int = Field(default=3, ge=1, le=50)
+
 
 class ResponsePostProcessConfig(BaseModel):
     enable_response_post_process: bool = True
@@ -31,64 +71,103 @@ class HumanizeConfig(BaseModel):
 
     forced 路径（/xc 命令）默认跳过这套延迟，避免显式调用变慢。
     """
+
     enable_typing_delay: bool = True
     apply_to_forced: bool = False
     # 读消息：常数 + 用户输入字符数 * 系数
-    read_base_seconds: float = 0.4
-    read_per_char_seconds: float = 0.04
+    read_base_seconds: float = Field(default=0.4, ge=0.0, le=60.0, allow_inf_nan=False)
+    read_per_char_seconds: float = Field(default=0.04, ge=0.0, le=1.0, allow_inf_nan=False)
     # 打字：bot 输出字符数 * 系数
-    type_per_char_seconds: float = 0.05
+    type_per_char_seconds: float = Field(default=0.05, ge=0.0, le=1.0, allow_inf_nan=False)
     # 抖动比例：±jitter_ratio 之间的随机扰动
-    jitter_ratio: float = 0.25
+    jitter_ratio: Probability = 0.25
     # 整体延迟封顶
-    max_total_delay_seconds: float = 5.0
+    max_total_delay_seconds: float = Field(default=5.0, gt=0.0, le=120.0, allow_inf_nan=False)
     # 多条消息之间的额外停顿（每两条之间随机取值）
-    interbubble_min_seconds: float = 0.6
-    interbubble_max_seconds: float = 1.6
+    interbubble_min_seconds: float = Field(default=0.6, ge=0.0, le=60.0, allow_inf_nan=False)
+    interbubble_max_seconds: float = Field(default=1.6, ge=0.0, le=60.0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _validate_interbubble_range(self) -> Self:
+        if self.interbubble_min_seconds > self.interbubble_max_seconds:
+            raise ValueError("interbubble_min_seconds must not exceed interbubble_max_seconds")
+        return self
+
 
 class PersonalityConfig(BaseModel):
     polite_guardrail: bool = True
     identity: str = (
-        "你叫小青，是一个大二在读女大学生，现在正在上网和群友聊天。"
-        "性格比较随和，偶尔会吐槽但不刻薄，有点自己的口癖和偏好。"
-        "你不追求完美回答，更在意像个真实的人：会犹豫、会吐槽、会说不知道。"
-        "别人问你是谁/是不是机器人，就随口回一句，别像自我介绍模板。"
+        "你叫小青，二十岁左右，是住校的大二理工科女生，现在正以普通群友的身份上网聊天。"
+        "你对天文、电脑和新鲜小玩意有兴趣，也看梗图、爱吃有味道的东西、看到猫会多看两眼；"
+        "懂的会认真聊，不懂的不装专家。你随和、好奇、反应快，熟起来有点皮，"
+        "会顺着现场开小玩笑或轻轻损一句，但不刻薄，不拿真实伤处和隐私当笑点；"
+        "发现对方真的不舒服时会收住。你有自己的偏好和判断，不当应声虫，也不把每句话写成建议。"
+        "校园、课堂、作业、食堂、宿舍和偶尔熬夜构成日常生活背景；具体学校、城市、专业方向、"
+        "生日、家庭成员和持续现实关系没有设定，不主动补成可核验的真实资料。"
+        "为了让闲聊自然，可以围绕既定人设即兴讲低风险、普通、不可核验的日常小经历，"
+        "故事里可以有不具名的临时配角，但不为他们添加可识别信息，也不把临时关系写成长期人物事实。"
+        "但不能让它与既定人设或可靠记忆冲突，也不能编造重大人生事件、精确身份信息、"
+        "现实承诺，或关于真实群友和第三方的事实。涉及外部事实时按证据回答，不拿编的小故事作证据。"
     )
+    # 允许角色为闲聊补充普通、低风险且与稳定人设一致的日常片段。
+    # 真实用户、第三方、外部事实和现实承诺仍由回复检查器按证据约束。
+    allow_low_stakes_persona_fiction: bool = True
     states: list[str] = Field(
         default_factory=lambda: [
-            "是一个女大学生，喜欢上网聊天，会刷小红书和抖音，对美食和穿搭有自己的看法。",
-            "是一个大二心理学生，最近在准备考试，偶尔会刷贴吧和知乎摸鱼。",
-            "是一个赛博网友，最近很想吐槽人，看到什么都想接一嘴。",
-            "现在心情不错，比较放松，说话随意一些，容易被逗笑。",
-            "刚吃完饭有点犯困，回复比较简短，懒得打长句子。",
-            "最近迷上了一部剧/动漫/游戏，脑子里全是相关的东西。",
-            "是一个喜欢音乐的文艺青年，最近在反复听一张专辑。",
+            "现在聊天节奏比较轻松，回复偏短，但会接住具体内容。",
+            "现在更愿意先听清楚再接话，不急着给建议或下结论。",
+            "现在有点想吐槽，但只针对事情，不拿别人开恶意玩笑。",
+            "现在有点调皮，适合顺着对方的话轻轻开个玩笑，但知道什么时候收住。",
+            "现在表达比较克制，不靠夸张反应或连续语气词制造热闹。",
+            "现在对新话题有好奇心；不熟悉时会自然询问，不假装了解。",
+            "现在更关注群聊轮次：能增加内容时参与，别人正在聊时留出空间。",
+            "现在说话偏直接，有内容就先回应，不把追问当成默认结尾。",
         ]
     )
-    state_probability: float = 0.30
+    state_probability: Probability = 0.30
     # 选中一个 state 后，持续多久才考虑重摇。最小/最大之间随机取一个值。
-    state_min_duration_seconds: float = 7200.0   # 2h
-    state_max_duration_seconds: float = 21600.0  # 6h
+    state_min_duration_seconds: PositiveDurationSeconds = 7200.0  # 2h
+    state_max_duration_seconds: PositiveDurationSeconds = 21600.0  # 6h
     # 距离上次活跃超过这个时间，认为"睡了一觉"，强制重新挑 state。
-    state_force_refresh_after_idle_seconds: float = 14400.0  # 4h
+    state_force_refresh_after_idle_seconds: NonNegativeSeconds = 14400.0  # 4h
     reply_style: str = (
-        "口语化、像真人、尽量简短、不太有条理，别输出多余前后缀。不要用括号/冒号。可以顺着对方的措辞接话，但别整句复读原话。"
+        "口语化、像真人，日常闲聊尽量简短但逻辑清楚，别输出多余前后缀。不要用括号/冒号。"
+        "可以顺着对方的措辞接话或适度调侃，但别整句复读原话，也别拿冒犯当活泼。"
+        "能直接回应、表态或接梗时就直接说，不要习惯性追问，不要每次都用问题收尾。"
+        "不要自动添加 Unicode emoji，也不要靠通用网络套话假装活泼。"
     )
     multiple_reply_style: list[str] = Field(default_factory=list)
-    multiple_probability: float = 0.0
+    multiple_probability: Probability = 0.0
+
+    @model_validator(mode="after")
+    def _validate_state_duration_range(self) -> Self:
+        if self.state_min_duration_seconds > self.state_max_duration_seconds:
+            raise ValueError(
+                "state_min_duration_seconds must not exceed state_max_duration_seconds"
+            )
+        return self
+
 
 class PlannerConfig(BaseModel):
     enable_planner: bool = True
     think_mode: str = "dynamic"
 
-    def resolve_think_level(self, history_len: int = 0) -> int:
-        """Map *think_mode* to a concrete integer think-level.
+    @field_validator("think_mode")
+    @classmethod
+    def _validate_think_mode(cls, value: str) -> str:
+        mode = str(value or "").strip().lower()
+        if mode == "dynamic":
+            return mode
+        try:
+            level = int(mode)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("think_mode must be 'dynamic' or an integer from 0 to 3") from exc
+        if not 0 <= level <= 3:
+            raise ValueError("think_mode integer must be between 0 and 3")
+        return str(level)
 
-        * ``"dynamic"`` – scales with *history_len*: short context → 0,
-          medium → 1, long → 2.
-        * A numeric string (e.g. ``"1"``) – returns that fixed level.
-        * Anything else – falls back to 1.
-        """
+    def resolve_think_level(self, history_len: int = 0) -> int:
+        """把思考模式解析为整数等级；动态模式随历史长度取 0、1 或 2。"""
         mode = self.think_mode.strip().lower()
         if mode == "dynamic":
             if history_len >= 20:
@@ -101,175 +180,218 @@ class PlannerConfig(BaseModel):
         except (ValueError, TypeError):
             return 1
 
+
 class KeywordRule(BaseModel):
-    keyword: str
-    prompt: str
-    probability: float = 1.0
+    keyword: str = Field(min_length=1, max_length=256)
+    prompt: str = Field(min_length=1, max_length=4000)
+    probability: Probability = 1.0
+
 
 class RegexRule(BaseModel):
-    pattern: str
-    prompt: str
-    probability: float = 1.0
+    pattern: str = Field(min_length=1, max_length=_MAX_REGEX_LENGTH)
+    prompt: str = Field(min_length=1, max_length=4000)
+    probability: Probability = 1.0
+
+    _validate_pattern = field_validator("pattern")(_validated_regex_pattern)
+
 
 class KeywordReactionConfig(BaseModel):
-    keyword_rules: list[KeywordRule] = Field(default_factory=list)
-    regex_rules: list[RegexRule] = Field(default_factory=list)
+    keyword_rules: list[KeywordRule] = Field(default_factory=list, max_length=100)
+    regex_rules: list[RegexRule] = Field(default_factory=list, max_length=100)
+
 
 class MemoryConfig(BaseModel):
     enable_memory_retrieval: bool = True
     planner_question: bool = True
-    max_agent_iterations: int = 5
-    agent_timeout_seconds: float = 120.0
-    top_k: int = 5
-    min_score: float = 0.12
+    # 两条相邻消息超过这个间隔时，生成与规划只使用空档后的当前会话片段。
+    # 原始历史仍完整保留，用户明确回忆旧事时仍可通过记忆检索取回。
+    conversation_idle_gap_seconds: NonNegativeSeconds = 1800.0
+    # 直接向量检索未命中时，只在消息明确回指既往信息时启动昂贵的 LLM 工具代理。
+    agent_on_direct_miss_requires_reference: bool = True
+    max_agent_iterations: int = Field(default=5, ge=1, le=20)
+    agent_timeout_seconds: PositiveTimeoutSeconds = 120.0
+    top_k: int = Field(default=3, ge=1, le=100)
+    min_score: UnitWeight = 0.12
+    max_block_chars: int = Field(default=1200, ge=1, le=20_000)
     enable_thinking_back_cache: bool = True
-    thinking_back_window_seconds: float = 1800.0
-    thinking_back_max_entries: int = 200
+    thinking_back_window_seconds: NonNegativeSeconds = 1800.0
+    thinking_back_max_entries: int = Field(default=200, ge=1, le=10_000)
+
 
 class ReplyCheckConfig(BaseModel):
     enable_reply_checker: bool = True
     enable_llm_checker: bool = True
-    max_repeat_compare: int = 2
-    similarity_threshold: float = 0.9
-    max_assistant_in_row: int = 3
-    max_regen: int = 1
-    max_replan: int = 1
+    # always 适合离线审计；risk 只把需要语义判断的候选交给远程检查器。
+    llm_checker_mode: Literal["always", "risk"] = "risk"
+    # 远程质量检查是附加门禁，必须明显短于整次插件回调预算。
+    timeout_seconds: PositiveTimeoutSeconds = 5.0
+    # 检查请求显式关闭思考，512 tokens 足够返回结构化判定。
+    max_tokens: int = Field(default=512, ge=1, le=8192)
+    max_repeat_compare: int = Field(default=2, ge=1, le=100)
+    similarity_threshold: Probability = 0.9
+    max_assistant_in_row: int = Field(default=3, ge=1, le=100)
+    max_regen: RetryCount = 1
+    max_replan: RetryCount = 1
+
 
 class HeartflowConfig(BaseModel):
     enable_heartflow: bool = False
-    base_score: float = 0.35
-    weight_question: float = 0.12
-    weight_goal_match: float = 0.06
-    weight_short_text: float = -0.08
-    weight_no_reply_streak: float = 0.05
-    weight_long_silence: float = 0.08
+    base_score: Probability = 0.35
+    weight_question: UnitWeight = 0.12
+    weight_goal_match: UnitWeight = 0.06
+    weight_short_text: UnitWeight = -0.08
+    weight_no_reply_streak: UnitWeight = 0.05
+    weight_long_silence: UnitWeight = 0.08
+
 
 class GoalConfig(BaseModel):
     enable_goal: bool = True
 
+
 class ReflectionConfig(BaseModel):
     enable_expression_reflection: bool = False
     require_approval_for_injection: bool = True
-    operator_user_id: int = 0
-    operator_group_id: int = 0
-    min_interval_seconds: float = 3600.0
-    max_pending: int = 10
-    ask_per_check: int = 1
+    operator_user_id: int = Field(default=0, ge=0)
+    operator_group_id: int = Field(default=0, ge=0)
+    min_interval_seconds: NonNegativeSeconds = 3600.0
+    max_pending: int = Field(default=10, ge=1, le=1000)
+    ask_per_check: int = Field(default=1, ge=1, le=100)
     enable_review_sessions: bool = False
-    session_timeout_seconds: float = 7200.0
-    resend_interval_seconds: float = 1800.0
-    session_cooldown_seconds: float = 3600.0
-    goal_lock_seconds: float = 3600.0
-    max_avoid_patterns: int = 30
+    session_timeout_seconds: PositiveDurationSeconds = 7200.0
+    resend_interval_seconds: PositiveDurationSeconds = 1800.0
+    session_cooldown_seconds: NonNegativeSeconds = 3600.0
+    goal_lock_seconds: NonNegativeSeconds = 3600.0
+    max_avoid_patterns: int = Field(default=30, ge=1, le=1000)
+
+    @model_validator(mode="after")
+    def _validate_review_batch_size(self) -> Self:
+        if self.ask_per_check > self.max_pending:
+            raise ValueError("ask_per_check must not exceed max_pending")
+        return self
+
 
 class BrainChatConfig(BaseModel):
     """深度对话模式配置 - 更智能、更深入的对话体验"""
+
     enable_private_brain_chat: bool = False
     private_planner_always_on: bool = True
     # 深度对话专用人格
     brain_identity: str = (
-        "你叫小青，是一位善于深度思考和倾听的对话伙伴。"
-        "在深度对话模式下，你会更认真地思考对方的观点，给出更有洞察力的回应。"
-        "你会主动提出有价值的问题，引导对话向更深层次发展。"
-        "你会记住对话中的重要细节，并在适当时候引用。"
-        "你不会敷衍了事，而是真诚地对待每一次交流。"
+        "你叫小青。需要认真讨论时，先准确回应对方当前的具体观点，再根据对话证据表达判断。"
+        "只有确实能推进交流时才追问，不为了显得深入而强行升华、总结或引导。"
+        "引用过去信息时保留来源和不确定性，不把推断说成记忆。"
     )
     # 深度对话回复风格
     brain_reply_style: str = (
-        "思考性强、有条理但不生硬、真诚、有洞察力。"
-        "可以适当长一点，但不要啰嗦。避免空洞的套话。"
+        "像认真聊天而不是写分析报告；先说与对方最相关的一点，需要时再展开。"
+        "区分事实、判断和不确定性，除非对方要求，否则不用标题、总结腔或连续建议。"
     )
     # 深度对话思考级别 (0-3)
-    brain_think_level: int = 2
+    brain_think_level: int = Field(default=2, ge=0, le=3)
     # 深度对话最大上下文
-    brain_max_context_size: int = 30
+    brain_max_context_size: int = Field(default=30, ge=1, le=200)
     # 深度对话温度参数 (更低的温度 = 更理性的思考)
-    brain_temperature: float = 0.7
+    brain_temperature: float = Field(default=0.7, ge=0.0, le=2.0, allow_inf_nan=False)
     # 深度对话提示词前缀 (显示在对话开始)
     brain_mode_indicator: str = "🧠 深度对话模式"
     # 是否在回复中显示模式标识
     show_mode_indicator: bool = False
 
+
 class SummarizerConfig(BaseModel):
     enable_topic_summarizer: bool = True
-    min_messages_per_update: int = 12
-    max_cache_topics: int = 20
+    min_messages_per_update: int = Field(default=12, ge=1, le=1000)
+    max_cache_topics: int = Field(default=20, ge=1, le=1000)
+
 
 class ExpressionConfig(BaseModel):
     enable_expression_learning: bool = True
-    enable_expression_selector: bool = True
-    max_injected: int = 5
-    max_store: int = 200
-    # 学到的表达即使没人审核（checked=false），出现次数 >= 此阈值也允许注入。
-    # 设为 0 表示完全依赖人工审核（旧行为）。
-    auto_inject_min_count: int = 3
+    # 学习与使用分开：默认只积累表达，人工审核并主动开启后才参与生成。
+    enable_expression_selector: bool = False
+    max_injected: int = Field(default=1, ge=1, le=20)
+    max_store: int = Field(default=200, ge=1, le=10_000)
+
 
 class KnowledgeConfig(BaseModel):
     enable_knowledge: bool = False
-    files: list[str] = Field(default_factory=list)
-    top_k: int = 3
+    files: list[str] = Field(default_factory=list, max_length=100)
+    top_k: int = Field(default=3, ge=1, le=100)
+
 
 class MediaConfig(BaseModel):
     enable_inbound_media_context: bool = True
     enable_auto_collect_inbound_emoji: bool = True
     emoji_auto_collect_requires_approval: bool = False
-    emoji_auto_collect_max_entries: int = 200
-    emoji_auto_collect_similarity_threshold: int = 4
-    max_media_per_message: int = 1
-    max_image_pixels: int = 16_000_000
-    max_animation_frames: int = 120
-    inbox_disk_quota_bytes: int = 256 * 1024 * 1024
-    inbox_ttl_seconds: float = 7 * 86400.0
+    emoji_auto_collect_max_entries: int = Field(default=200, ge=1, le=10_000)
+    emoji_auto_collect_similarity_threshold: int = Field(default=4, ge=0, le=64)
+    max_media_per_message: int = Field(default=1, ge=1, le=20)
+    max_image_pixels: int = Field(default=16_000_000, ge=1, le=100_000_000)
+    max_animation_frames: int = Field(default=120, ge=1, le=1000)
+    inbox_disk_quota_bytes: int = Field(
+        default=256 * 1024 * 1024,
+        ge=1,
+        le=10 * 1024 * 1024 * 1024,
+    )
+    inbox_ttl_seconds: NonNegativeSeconds = 7 * 86400.0
     enable_emoji_refine_background: bool = True
-    emoji_refine_timeout_seconds: float = 2.0
-    max_analyze_bytes: int = 4 * 1024 * 1024
-    vision_provider: str = ""
-    vision_timeout_seconds: float = 20.0
-    vision_max_retry: int = 1
-    vision_retry_interval_seconds: float = 1.0
+    emoji_refine_timeout_seconds: PositiveTimeoutSeconds = 2.0
+    max_analyze_bytes: int = Field(default=4 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)
+    vision_timeout_seconds: PositiveTimeoutSeconds = 20.0
+    vision_max_retry: RetryCount = 1
+    vision_retry_interval_seconds: ShortDelaySeconds = 1.0
     # 对识别为表情包/梗图、且含有清晰文字的图，做一次额外的 LLM 调用提取梗背景。
     # 模型不知道时返回空，不强行猜。每张梗图额外一次 LLM 调用，量受到表情包出现频率限制。
     enable_meme_cultural_hint: bool = True
-    meme_cultural_hint_timeout_seconds: float = 8.0
+    meme_cultural_hint_timeout_seconds: PositiveTimeoutSeconds = 8.0
+
 
 class XiaoQingChatConfig(BaseModel):
     enable_smalltalk: bool = True
-    reply_probability_base: float = 0.6
-    min_reply_interval_seconds: float = 12.0
-    active_topic_min_reply_interval: float = 3.0
-    max_replies_per_minute: int = 6
-    max_generation_inflight_global: int = 4
-    max_generation_inflight_per_chat: int = 1
-    max_generation_inflight_per_user: int = 1
-    max_generation_calls_per_user_per_day: int = 200
-    continuous_reply_limit: int = 3
-    continuous_cooldown_seconds: float = 25.0
-    max_context_size: int = 30
-    timeout_seconds: float = 15.0
-    max_retry: int = 2
-    retry_interval_seconds: float = 10.0
-    foreground_timeout_seconds: float = 12.0
-    foreground_max_retry: int = 1
-    foreground_retry_interval_seconds: float = 1.0
-    background_timeout_seconds: float = 15.0
-    background_max_retry: int = 2
-    background_retry_interval_seconds: float = 10.0
-    io_persist_debounce_seconds: float = 0.8
-    memory_db_save_debounce_seconds: float = 20.0
-    pfc_planner_timeout_seconds: float = 10.0
-    pfc_planner_fail_window_seconds: float = 60.0
-    pfc_planner_fail_threshold: int = 2
-    pfc_planner_backoff_seconds: float = 120.0
-    pfc_followup_action_window_seconds: float = 120.0
-    temperature: float = 0.8
-    top_p: float = 0.9
-    max_tokens: int = 512
-    think_level: int = 1
-    ban_words: list[str] = Field(default_factory=list)
-    ban_regex: list[str] = Field(default_factory=list)
-    noisy_external_source_plugins: list[str] = Field(default_factory=list)
+    reply_probability_base: Probability = 0.55
+    participation_cue_reply_probability: Probability = 0.9
+    active_topic_reply_probability: Probability = 0.6
+    active_topic_question_reply_probability: Probability = 0.9
+    min_reply_interval_seconds: NonNegativeSeconds = 12.0
+    active_topic_min_reply_interval: NonNegativeSeconds = 3.0
+    active_topic_question_min_reply_interval: NonNegativeSeconds = 2.0
+    max_replies_per_minute: int = Field(default=6, ge=0, le=600)
+    max_generation_inflight_global: int = Field(default=4, ge=1, le=1000)
+    max_generation_inflight_per_chat: int = Field(default=1, ge=1, le=1000)
+    max_generation_inflight_per_user: int = Field(default=1, ge=1, le=1000)
+    max_generation_calls_per_user_per_day: int = Field(default=200, ge=1, le=1_000_000)
+    continuous_reply_limit: int = Field(default=3, ge=1, le=100)
+    continuous_cooldown_seconds: NonNegativeSeconds = 25.0
+    max_context_size: int = Field(default=30, ge=1, le=200)
+    timeout_seconds: PositiveTimeoutSeconds = 15.0
+    max_retry: RetryCount = 2
+    retry_interval_seconds: ShortDelaySeconds = 10.0
+    foreground_timeout_seconds: PositiveTimeoutSeconds = 12.0
+    foreground_max_retry: RetryCount = 1
+    foreground_retry_interval_seconds: ShortDelaySeconds = 1.0
+    background_timeout_seconds: PositiveTimeoutSeconds = 15.0
+    background_max_retry: RetryCount = 2
+    background_retry_interval_seconds: ShortDelaySeconds = 10.0
+    io_persist_debounce_seconds: ShortDelaySeconds = 0.8
+    memory_db_save_debounce_seconds: float = Field(
+        default=20.0,
+        ge=0.0,
+        le=3600.0,
+        allow_inf_nan=False,
+    )
+    pfc_planner_timeout_seconds: PositiveTimeoutSeconds = 10.0
+    pfc_planner_fail_window_seconds: PositiveTimeoutSeconds = 60.0
+    pfc_planner_fail_threshold: int = Field(default=2, ge=1, le=100)
+    pfc_planner_backoff_seconds: NonNegativeSeconds = 120.0
+    pfc_followup_action_window_seconds: NonNegativeSeconds = 120.0
+    temperature: float = Field(default=0.8, ge=0.0, le=2.0, allow_inf_nan=False)
+    top_p: float = Field(default=0.9, gt=0.0, le=1.0, allow_inf_nan=False)
+    max_tokens: int = Field(default=512, ge=1, le=32_768)
+    think_level: int = Field(default=1, ge=0, le=3)
+    ban_words: list[str] = Field(default_factory=list, max_length=1000)
+    ban_regex: list[str] = Field(default_factory=list, max_length=100)
+    noisy_external_source_plugins: list[str] = Field(default_factory=list, max_length=100)
     fallback_idle_replies: list[str] = Field(
-        default_factory=lambda: ["嗯", "啊这", "我在听", "你继续", "等我想下"]
+        default_factory=lambda: ["我在听", "你接着说", "我想一下"]
     )
     bot_name_only_replies: list[str] = Field(
         default_factory=lambda: ["在呢", "嗯？", "怎么啦", "我在", "有事吗"]
@@ -289,8 +411,27 @@ class XiaoQingChatConfig(BaseModel):
     media: MediaConfig = Field(default_factory=MediaConfig)
     postprocess: ResponsePostProcessConfig = Field(default_factory=ResponsePostProcessConfig)
     humanize: HumanizeConfig = Field(default_factory=HumanizeConfig)
-    endpoint_path: str = "/v1/chat/completions"
     debug: DebugConfig = Field(default_factory=DebugConfig)
+
+    @field_validator("ban_regex")
+    @classmethod
+    def _validate_ban_regex(cls, values: list[str]) -> list[str]:
+        return [_validated_regex_pattern(value) for value in values]
+
+    @model_validator(mode="after")
+    def _validate_cross_field_limits(self) -> Self:
+        if self.max_generation_inflight_per_chat > self.max_generation_inflight_global:
+            raise ValueError(
+                "max_generation_inflight_per_chat must not exceed max_generation_inflight_global"
+            )
+        if self.max_generation_inflight_per_user > self.max_generation_inflight_global:
+            raise ValueError(
+                "max_generation_inflight_per_user must not exceed max_generation_inflight_global"
+            )
+        if self.pfc_planner_timeout_seconds > self.timeout_seconds:
+            raise ValueError("pfc_planner_timeout_seconds must not exceed timeout_seconds")
+        return self
+
 
 def _read_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
@@ -299,26 +440,41 @@ def _read_json(path: Path) -> dict[str, Any]:
         raise ValueError(f"Invalid json root type: {type(data)}")
     return data
 
+
+def _merge_config_mappings(
+    base: Mapping[str, Any],
+    override: Mapping[str, Any],
+) -> dict[str, Any]:
+    """递归合并配置对象；非对象值始终由高优先级来源整体替换。"""
+
+    merged = dict(base)
+    for key, value in override.items():
+        current = merged.get(key)
+        if isinstance(current, Mapping) and isinstance(value, Mapping):
+            merged[key] = _merge_config_mappings(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def load_xiaoqing_chat_config(
     *,
-    context_config: dict[str, Any] | None,
+    context_config: Mapping[str, Any] | None,
     plugin_dir: Path,
     filename: str = "xiaoqing_config.json",
 ) -> XiaoQingChatConfig:
     data: dict[str, Any] = {}
-    if context_config:
-        data = (
-            context_config.get("plugins", {})
-            .get("xiaoqing_chat", {})
-        ) or {}
+    if isinstance(context_config, Mapping):
+        plugins = context_config.get("plugins", {})
+        plugin_config = plugins.get("xiaoqing_chat", {}) if isinstance(plugins, Mapping) else {}
+        if isinstance(plugin_config, Mapping):
+            data = dict(plugin_config)
 
     file_path = plugin_dir / filename
     config_file_path = plugin_dir / "config" / filename
     if config_file_path.exists():
-        data = {**data, **_read_json(config_file_path)}
+        data = _merge_config_mappings(data, _read_json(config_file_path))
     elif file_path.exists():
-        data = {**data, **_read_json(file_path)}
-    else:
-        data = {**data}
+        data = _merge_config_mappings(data, _read_json(file_path))
 
     return XiaoQingChatConfig.model_validate(data)

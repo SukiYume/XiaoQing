@@ -11,13 +11,32 @@
 import copy
 import logging
 import sys
+from collections.abc import Mapping
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
+
+_STD_OUTPUT_HANDLE = -11
+_ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+
+
+def _enable_windows_ansi(kernel32: Any) -> bool:
+    """Enable ANSI output without discarding the console's existing mode bits."""
+
+    import ctypes
+
+    handle = kernel32.GetStdHandle(_STD_OUTPUT_HANDLE)
+    current_mode = ctypes.c_uint()
+    if not kernel32.GetConsoleMode(handle, ctypes.byref(current_mode)):
+        return False
+    updated_mode = current_mode.value | _ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    return bool(kernel32.SetConsoleMode(handle, updated_mode))
+
 
 # ============================================================
 # 颜色格式化（控制台）
 # ============================================================
+
 
 class RequestContextFormatter(logging.Formatter):
     """Formatter that makes request correlation visible without breaking background logs."""
@@ -35,30 +54,39 @@ class ColoredFormatter(RequestContextFormatter):
     """带颜色的日志格式化器（仅用于控制台）"""
 
     # ANSI 颜色代码
-    COLORS = {
-        'DEBUG': '\033[36m',     # 青色
-        'INFO': '\033[32m',      # 绿色
-        'WARNING': '\033[33m',   # 黄色
-        'ERROR': '\033[31m',     # 红色
-        'CRITICAL': '\033[35m',  # 紫色
+    COLORS: ClassVar[dict[str, str]] = {
+        "DEBUG": "\033[36m",  # 青色
+        "INFO": "\033[32m",  # 绿色
+        "WARNING": "\033[33m",  # 黄色
+        "ERROR": "\033[31m",  # 红色
+        "CRITICAL": "\033[35m",  # 紫色
     }
-    RESET = '\033[0m'
+    RESET = "\033[0m"
 
-    def __init__(self, fmt: str = None, datefmt: str = None, use_color: bool = True):
+    def __init__(
+        self,
+        fmt: str | None = None,
+        datefmt: str | None = None,
+        use_color: bool = True,
+    ) -> None:
         super().__init__(fmt, datefmt)
         self.use_color = use_color
 
     def format(self, record: logging.LogRecord) -> str:
         if self.use_color and record.levelname in self.COLORS:
             colored_record = copy.copy(record)
-            colored_record.levelname = f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
+            colored_record.levelname = (
+                f"{self.COLORS[record.levelname]}{record.levelname}{self.RESET}"
+            )
             return super().format(colored_record)
 
         return super().format(record)
 
+
 # ============================================================
 # 日志管理器
 # ============================================================
+
 
 class LogManager:
     """
@@ -166,8 +194,8 @@ class LogManager:
             # Windows 尝试启用 ANSI 支持
             try:
                 import ctypes
-                kernel32 = ctypes.windll.kernel32
-                kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+
+                use_color = _enable_windows_ansi(ctypes.windll.kernel32)
             except Exception:
                 use_color = False
 
@@ -184,9 +212,10 @@ class LogManager:
         """创建文件 handler（按大小或时间轮转）"""
         log_file = self.log_dir / "xiaoqing.log"
 
+        handler: logging.Handler
         if self.rotation_type == "time":
             # 按时间轮转（每天一个文件）
-            handler = TimedRotatingFileHandler(
+            timed_handler = TimedRotatingFileHandler(
                 filename=str(log_file),
                 when="midnight",
                 interval=1,
@@ -194,7 +223,8 @@ class LogManager:
                 encoding="utf-8",
             )
             # 设置文件名后缀格式
-            handler.suffix = "%Y-%m-%d"
+            timed_handler.suffix = "%Y-%m-%d"
+            handler = timed_handler
         else:
             # 按大小轮转
             handler = RotatingFileHandler(
@@ -245,9 +275,6 @@ class LogManager:
         if self._file_handler:
             self._file_handler.setLevel(self.level)
 
-    def get_logger(self, name: str) -> logging.Logger:
-        """获取指定名称的 logger"""
-        return get_logger(name)
 
 # ============================================================
 # 便捷函数
@@ -255,7 +282,8 @@ class LogManager:
 
 _log_manager: LogManager | None = None
 
-def setup_logging(config: dict[str, Any], log_dir: Path | None = None) -> LogManager:
+
+def setup_logging(config: Mapping[str, Any], log_dir: Path | None = None) -> LogManager:
     """
     设置日志系统
 
@@ -310,13 +338,16 @@ def setup_logging(config: dict[str, Any], log_dir: Path | None = None) -> LogMan
 
     return _log_manager
 
+
 def get_log_manager() -> LogManager | None:
     """获取全局 LogManager 实例"""
     return _log_manager
 
+
 def get_logger(name: str) -> logging.Logger:
     """获取指定名称的 logger"""
     return logging.getLogger(name)
+
 
 __all__ = [
     "LogManager",

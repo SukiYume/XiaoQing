@@ -1,18 +1,88 @@
 from __future__ import annotations
 
+import asyncio
+import functools
 import io
 import json
+import math
 import mimetypes
 import re
+import stat
 import threading
+import time
+import weakref
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlparse
 
 import aiohttp
 
+from core.atomic_store import keyed_path_lock
+from core.image_validation import ImageValidationLimits, validate_image_bytes
 from core.plugin_base import load_json, write_json
+
+if TYPE_CHECKING:
+    from ..config.config import MediaConfig
+    from ..runtime_state import _ChatRuntime
+
+_MEDIA_BLOCKING_MAX_CONCURRENCY = 2
+_media_blocking_limiters: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Semaphore
+] = weakref.WeakKeyDictionary()
+_media_blocking_limiters_lock = threading.Lock()
+
+
+class MediaPayloadTooLarge(ValueError):
+    """本地媒体文件在完整分配内存前已超过字节预算。"""
+
+    def __init__(self, size: int, limit: int) -> None:
+        super().__init__(f"media too large: {size} bytes (limit: {limit})")
+        self.size = size
+        self.limit = limit
+
+
+def _media_blocking_limiter(loop: asyncio.AbstractEventLoop) -> asyncio.Semaphore:
+    with _media_blocking_limiters_lock:
+        limiter = _media_blocking_limiters.get(loop)
+        if limiter is None:
+            limiter = asyncio.Semaphore(_MEDIA_BLOCKING_MAX_CONCURRENCY)
+            _media_blocking_limiters[loop] = limiter
+        return limiter
+
+
+async def _run_media_blocking(
+    callback: Callable[..., Any],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """在事件循环外执行媒体磁盘或编解码工作，并施加插件级背压。"""
+
+    loop = asyncio.get_running_loop()
+    async with _media_blocking_limiter(loop):
+        operation = functools.partial(callback, *args, **kwargs)
+        return await asyncio.to_thread(operation)
+
+
+def _read_file_bounded(path: Path, *, max_bytes: int) -> bytes:
+    """先读取文件状态，再最多读取到配置上限之外一个字节。"""
+
+    file_stat = path.stat()
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise FileNotFoundError(f"media source is not a regular file: {path}")
+    limit = int(max_bytes)
+    if limit > 0 and file_stat.st_size > limit:
+        raise MediaPayloadTooLarge(file_stat.st_size, limit)
+    read_size = limit + 1 if limit > 0 else -1
+    with path.open("rb") as handle:
+        payload = handle.read(read_size)
+    if limit > 0 and len(payload) > limit:
+        raise MediaPayloadTooLarge(len(payload), limit)
+    return payload
+
 
 _SUPPORTED_MEDIA_TYPES = frozenset({"image", "mface", "face"})
 _SUPPORTED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
@@ -31,6 +101,9 @@ _GENERIC_MEDIA_LABELS = frozenset(
         "一张图片",
         "一张表情包",
         "一张聊天表情包",
+        "图片内容读取失败",
+        "图片内容暂时无法识别",
+        "无法读取图片内容",
     }
 )
 _STRUCTURED_MEDIA_TAG_STOPWORDS = frozenset(
@@ -76,12 +149,11 @@ _SOURCE_QUERY_HINTS = (
     "cache=",
     "uuid=",
 )
-_MEDIA_ANALYSIS_PROMPT_VERSION = 5
-_RENDER_CACHE_LOCKS: dict[str, threading.RLock] = {}
-_RENDER_CACHE_LOCKS_GUARD = threading.Lock()
+_MEDIA_ANALYSIS_PROMPT_VERSION = 6
+_RENDER_CACHE_MAX_ENTRIES = 1_000
+_RENDER_CACHE_MAX_BYTES = 4 * 1024 * 1024
 _MEDIA_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10, sock_read=15)
 _ONEBOT_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
-_DOWNLOAD_CHUNK_SIZE = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -132,22 +204,16 @@ class MediaAnalysisDraft:
     cultural_hint: str = ""
 
 
-def _media_cfg(runtime) -> Any:
-    return getattr(getattr(runtime, "cfg", None), "media", None)
+def _media_cfg(runtime: _ChatRuntime) -> MediaConfig:
+    return runtime.cfg.media
 
 
-def _media_cfg_value(runtime, field: str, default: Any) -> Any:
-    cfg = _media_cfg(runtime)
-    if cfg is None:
-        return default
-    return getattr(cfg, field, default)
-
-
-def _media_log(context, runtime, *, step: str, fields: dict[str, Any] | None = None, level: str = "info") -> None:
+def _media_log(
+    context, runtime, *, step: str, fields: dict[str, Any] | None = None, level: str = "info"
+) -> None:
     from ..logging_utils import sanitize_log_fields
 
-    debug_cfg = getattr(getattr(runtime, "cfg", runtime), "debug", None)
-    if debug_cfg is not None and not bool(getattr(debug_cfg, "log_steps", True)):
+    if not runtime.cfg.debug.log_steps:
         return
     logger = getattr(context, "logger", None)
     if logger is None:
@@ -163,24 +229,34 @@ def _media_log(context, runtime, *, step: str, fields: dict[str, Any] | None = N
         return
 
 
-def _media_root(data_dir: Path) -> Path:
-    return data_dir / "media"
-
-
-def _media_files_root(context) -> Path:
-    return Path(context.data_dir) / "media"
-
-
 def _figures_inbox_dir(context) -> Path:
-    return _media_files_root(context) / "inbox"
+    return Path(context.data_dir) / "media" / "inbox"
 
 
 def _render_cache_path(data_dir: Path) -> Path:
-    return _media_root(data_dir) / "render_cache.json"
+    return data_dir / "media" / "render_cache.json"
 
 
-def _load_render_cache(data_dir: Path) -> dict[str, Any]:
-    payload = load_json(_render_cache_path(data_dir), default={"items": {}})
+def _load_render_cache(
+    data_dir: Path,
+    *,
+    max_bytes: int = _RENDER_CACHE_MAX_BYTES,
+) -> dict[str, Any]:
+    cache_path = _render_cache_path(data_dir)
+    byte_limit = max(0, int(max_bytes))
+    if byte_limit == 0:
+        return {"items": {}}
+    for candidate in (cache_path, cache_path.with_name(f"{cache_path.name}.bak")):
+        try:
+            if candidate.stat().st_size > byte_limit:
+                return {"items": {}}
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return {"items": {}}
+    payload = load_json(cache_path, default={"items": {}})
+    if not isinstance(payload, dict):
+        return {"items": {}}
     items = payload.get("items")
     if not isinstance(items, dict):
         payload["items"] = {}
@@ -191,14 +267,54 @@ def _save_render_cache(data_dir: Path, cache: dict[str, Any]) -> None:
     write_json(_render_cache_path(data_dir), cache)
 
 
-def _render_cache_lock(data_dir: Path) -> threading.RLock:
-    key = str(_render_cache_path(data_dir).resolve())
-    with _RENDER_CACHE_LOCKS_GUARD:
-        lock = _RENDER_CACHE_LOCKS.get(key)
-        if lock is None:
-            lock = threading.RLock()
-            _RENDER_CACHE_LOCKS[key] = lock
-        return lock
+def _render_cache_lock(data_dir: Path) -> AbstractContextManager[None]:
+    return keyed_path_lock(_render_cache_path(data_dir))
+
+
+def _render_cache_entry_timestamp(item: tuple[str, Any]) -> tuple[float, str]:
+    key, payload = item
+    try:
+        timestamp = float(payload.get("updated_at", 0.0)) if isinstance(payload, dict) else 0.0
+    except (TypeError, ValueError):
+        timestamp = 0.0
+    if not math.isfinite(timestamp):
+        timestamp = 0.0
+    return timestamp, key
+
+
+def _serialized_render_cache_size(cache: dict[str, Any]) -> int:
+    return len(
+        json.dumps(
+            cache,
+            ensure_ascii=False,
+            indent=2,
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+
+
+def _prune_render_cache(
+    cache: dict[str, Any],
+    *,
+    max_entries: int,
+    max_bytes: int,
+) -> dict[str, Any]:
+    items = cache.get("items")
+    normalized_items = dict(items) if isinstance(items, dict) else {}
+    bounded_cache: dict[str, Any] = {"items": normalized_items}
+    entry_limit = max(0, int(max_entries))
+    byte_limit = max(0, int(max_bytes))
+    oldest_first = sorted(normalized_items.items(), key=_render_cache_entry_timestamp)
+
+    while len(normalized_items) > entry_limit and oldest_first:
+        key, _payload = oldest_first.pop(0)
+        normalized_items.pop(key, None)
+    while normalized_items and (
+        byte_limit == 0 or _serialized_render_cache_size(bounded_cache) > byte_limit
+    ):
+        key, _payload = oldest_first.pop(0)
+        normalized_items.pop(key, None)
+    return bounded_cache
 
 
 def write_render_cache_entry(
@@ -209,6 +325,8 @@ def write_render_cache_entry(
     source: str,
     quality: str,
     prompt_version: int | None = None,
+    max_entries: int = _RENDER_CACHE_MAX_ENTRIES,
+    max_bytes: int = _RENDER_CACHE_MAX_BYTES,
 ) -> None:
     normalized_source = str(source or "").strip() or "fallback"
     if prompt_version is None:
@@ -222,12 +340,18 @@ def write_render_cache_entry(
         "analysis_quality": str(quality or "").strip(),
         "analysis_prompt_version": int(prompt_version or 0),
         "cultural_hint": str(getattr(rendered, "cultural_hint", "") or "").strip(),
+        "updated_at": time.time(),
     }
     with _render_cache_lock(data_dir):
-        cache = _load_render_cache(data_dir)
+        cache = _load_render_cache(data_dir, max_bytes=max_bytes)
         items = cache.setdefault("items", {})
         items[resolved.media_hash] = cache_payload
-        _save_render_cache(data_dir, cache)
+        bounded_cache = _prune_render_cache(
+            cache,
+            max_entries=max_entries,
+            max_bytes=max_bytes,
+        )
+        _save_render_cache(data_dir, bounded_cache)
 
 
 def _parse_file_uri(value: str) -> Path | None:
@@ -277,7 +401,9 @@ def _looks_like_unusable_source_label(value: str) -> bool:
         return True
     if compact in _GENERIC_SOURCE_LABELS:
         return True
-    if re.fullmatch(r"(?:img|image|photo|picture|screenshot|file|attachment|download)\d{0,8}", compact):
+    if re.fullmatch(
+        r"(?:img|image|photo|picture|screenshot|file|attachment|download)\d{0,8}", compact
+    ):
         return True
     if re.fullmatch(r"[0-9a-f]{24,64}", compact):
         return True
@@ -310,37 +436,56 @@ def _guess_mime_type(path: Path) -> str:
     return mime_type or "image/png"
 
 
-def _suffix_from_format(format_name: str) -> str:
-    normalized = str(format_name or "").strip().upper()
-    if not normalized:
-        return ".png"
-    mapping = {
-        "JPEG": ".jpg",
-        "JPG": ".jpg",
-        "PNG": ".png",
-        "GIF": ".gif",
-        "WEBP": ".webp",
-        "BMP": ".bmp",
-    }
-    return mapping.get(normalized, f".{normalized.lower()}")
+def _image_validation_limits(
+    *, max_bytes: int, max_pixels: int, max_frames: int
+) -> ImageValidationLimits:
+    """Build the shared image boundary from the plugin's media budgets."""
+
+    return ImageValidationLimits(
+        max_bytes=int(max_bytes),
+        max_pixels=int(max_pixels),
+        max_frames=int(max_frames),
+    )
 
 
-def _inspect_image_payload(payload: bytes, *, fallback_suffix: str = ".png") -> tuple[str, str, int, int, bool]:
+@dataclass(frozen=True, slots=True)
+class ImagePayloadInfo:
+    mime_type: str
+    suffix: str
+    width: int
+    height: int
+    is_animated: bool
+    frame_count: int
+
+
+def _inspect_image_payload_details(
+    payload: bytes,
+    *,
+    fallback_suffix: str = ".png",
+    max_bytes: int | None = None,
+    max_pixels: int = 16_000_000,
+    max_frames: int = 120,
+) -> ImagePayloadInfo:
     try:
-        from PIL import Image
-
-        with Image.open(io.BytesIO(payload)) as image:
-            format_name = str(getattr(image, "format", "") or "").upper()
-            mime_type = ""
-            if format_name:
-                mime_type = str(Image.MIME.get(format_name, "") or "").strip()
-            width, height = image.size
-            is_animated = bool(getattr(image, "is_animated", False) or getattr(image, "n_frames", 1) > 1)
-            suffix = _suffix_from_format(format_name) if format_name else fallback_suffix
-            return mime_type or _guess_mime_type(Path(f"image{suffix}")), suffix or fallback_suffix, width, height, is_animated
-    except Exception:
-        mime_type = _guess_mime_type(Path(f"image{fallback_suffix or '.png'}"))
-        return mime_type, fallback_suffix or ".png", 0, 0, False
+        validated = validate_image_bytes(
+            payload,
+            limits=_image_validation_limits(
+                max_bytes=len(payload) if max_bytes is None else max_bytes,
+                max_pixels=max_pixels,
+                max_frames=max_frames,
+            ),
+        )
+        suffix = str(validated.extension or fallback_suffix).strip().lower()
+        return ImagePayloadInfo(
+            mime_type=_guess_mime_type(Path(f"image{suffix}")),
+            suffix=suffix,
+            width=validated.width,
+            height=validated.height,
+            is_animated=validated.frames > 1,
+            frame_count=validated.frames,
+        )
+    except Exception as exc:
+        raise ValueError("invalid or undecodable image payload") from exc
 
 
 def _animation_sample_indexes(frame_count: int) -> list[int]:
@@ -357,6 +502,8 @@ def _animation_sample_indexes(frame_count: int) -> list[int]:
 
 
 def _render_animation_contact_sheet(payload: bytes) -> tuple[bytes, int]:
+    """Convert already-validated animation bytes into a bounded contact sheet."""
+
     from PIL import Image
 
     gap = 8
@@ -417,15 +564,11 @@ def _normalize_emotion_tags(value: Any) -> tuple[str, ...]:
     return tuple(tags[:4])
 
 
-def _clean_media_hint(value: Any) -> str:
-    return str(value or "").strip()
-
-
 def _segment_summary_hint(segment: dict[str, Any]) -> str:
     data = segment.get("data", {}) or {}
     generic = ""
     for key in ("summary", "text", "name", "key", "emoji_id"):
-        value = _clean_media_hint(data.get(key))
+        value = str(data.get(key, "") or "").strip()
         if not value:
             continue
         if value in _GENERIC_MEDIA_HINTS:
@@ -455,7 +598,13 @@ def _fallback_kind(source_name: str, *, width: int, height: int, segment_type: s
         return "emoji"
     if _EMOJI_HINT_RE.search(source_name or ""):
         return "emoji"
-    if not source_name and width and height and max(width, height) <= 512 and abs(width - height) <= 96:
+    if (
+        not source_name
+        and width
+        and height
+        and max(width, height) <= 512
+        and abs(width - height) <= 96
+    ):
         return "emoji"
     return "image"
 
@@ -484,9 +633,7 @@ def _build_context_marker(rendered: RenderedMedia) -> str:
 
     clean_desc, visible_text = split_emoji_visible_text(description)
     if visible_text:
-        return _append_cultural_hint(
-            f'[表情包：{label}；写着“{visible_text}”]', cultural_hint
-        )
+        return _append_cultural_hint(f"[表情包：{label}；写着“{visible_text}”]", cultural_hint)
 
     normalized_label = _normalize_media_label(label)
     normalized_description = _normalize_media_label(clean_desc)
@@ -527,14 +674,13 @@ def _is_generic_media_label(value: str) -> bool:
     return normalized in _GENERIC_MEDIA_LABELS
 
 
-_EMOJI_VISIBLE_TEXT_RE = re.compile(r'^(?:(.+?)，)?文字内容是“(.+?)”$')
+_EMOJI_VISIBLE_TEXT_RE = re.compile(r"^(?:(.+?)，)?文字内容是“(.+?)”$")
 
 
 def split_emoji_visible_text(description: str) -> tuple[str, str]:
-    """Pull `desc，文字内容是“X”` apart into (clean_desc, visible_text).
+    """把 ``描述，文字内容是“X”`` 拆成（清洁描述，可见文字）。
 
-    Returns the original description and an empty visible_text when the
-    suffix is absent.
+    不含该后缀时返回原描述和空的可见文字。
     """
     text = str(description or "").strip()
     if not text:
@@ -610,13 +756,25 @@ def _is_low_quality_rendered_media(
         return True
     if _is_generic_media_label(rendered.description):
         return True
-    if rendered.kind == "emoji" and not rendered.emotion_tags and _is_generic_media_label(rendered.marker):
+    if (
+        rendered.kind == "emoji"
+        and not rendered.emotion_tags
+        and _is_generic_media_label(rendered.marker)
+    ):
         return True
     summary_label = _normalize_media_label(summary_hint)
-    if summary_label and summary_label == _normalize_media_label(rendered.description) and _is_generic_media_label(summary_hint):
+    if (
+        summary_label
+        and summary_label == _normalize_media_label(rendered.description)
+        and _is_generic_media_label(summary_hint)
+    ):
         return True
     source_label = _normalize_media_label(resolved.source_name)
-    if source_label and source_label == _normalize_media_label(rendered.description) and _is_generic_media_label(resolved.source_name):
+    if (
+        source_label
+        and source_label == _normalize_media_label(rendered.description)
+        and _is_generic_media_label(resolved.source_name)
+    ):
         return True
     return False
 
@@ -642,7 +800,10 @@ def _build_fallback_render(
         description = label or "一张聊天表情包"
     else:
         emotion_tags = ()
-        description = label or "一张图片"
+        # A filename or transport summary is not visual evidence.  When the
+        # vision route fails, tell the reply model that the pixels were not
+        # understood instead of inviting it to guess from the source label.
+        description = "图片内容暂时无法识别"
     marker = _build_marker(kind, description, emotion_tags)
     return RenderedMedia(
         media_hash=resolved.media_hash,
@@ -658,7 +819,9 @@ def _rendered_media_from_cache(cached: dict[str, Any], *, resolved: ResolvedMedi
     kind = str(cached.get("kind", "") or "").strip() or "image"
     description = str(cached.get("description", "") or "").strip()
     emotion_tags = _normalize_emotion_tags(cached.get("emotion_tags"))
-    marker = str(cached.get("marker", "") or "").strip() or _build_marker(kind, description, emotion_tags)
+    marker = str(cached.get("marker", "") or "").strip() or _build_marker(
+        kind, description, emotion_tags
+    )
     face_id = str(cached.get("face_id", "") or "").strip()
     cultural_hint = str(cached.get("cultural_hint", "") or "").strip()
     return RenderedMedia(

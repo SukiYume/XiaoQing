@@ -1,30 +1,27 @@
-"""Compact diary overview analytics for the redesigned diary page."""
+"""为 Pendo Web 日记页生成紧凑、可直接渲染的统计数据。"""
+
 from __future__ import annotations
 
 from calendar import monthrange
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
-from ...models.item import ItemType
+from ...models.item import DiaryItem, ItemType
 from ...services.db import Database
+from ...utils.time_utils import now_in_timezone
+
+_ALLOWED_CADENCE_GRANULARITIES = frozenset({"day", "week", "month", "year", "auto"})
 
 
 def _parse_day(value: str | None) -> date | None:
+    """解析持久化日期；损坏的历史值由调用方决定忽略或报错。"""
+
     if not value:
         return None
     try:
-        return datetime.strptime(value[:10], "%Y-%m-%d").date()
+        return date.fromisoformat(value[:10])
     except ValueError:
         return None
-
-
-def _date_span(start: date, end: date) -> list[date]:
-    days: list[date] = []
-    cursor = start
-    while cursor <= end:
-        days.append(cursor)
-        cursor += timedelta(days=1)
-    return days
 
 
 def _resolve_period(
@@ -33,7 +30,9 @@ def _resolve_period(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> tuple[date, date]:
-    if start_date or end_date:
+    """把自然月或显式日期范围归一为闭区间。"""
+
+    if start_date is not None or end_date is not None:
         start = _parse_day(start_date)
         end = _parse_day(end_date)
         if start is None or end is None:
@@ -41,106 +40,82 @@ def _resolve_period(
         if start > end:
             raise ValueError("start_date must not be after end_date")
         return start, end
+
     if year is None or month is None:
         raise ValueError("year and month are required when start_date/end_date are not provided")
-    start = date(year, month, 1)
-    end = date(year, month, monthrange(year, month)[1])
-    return start, end
+    try:
+        start = date(year, month, 1)
+    except ValueError as exc:
+        raise ValueError("year and month must form a valid calendar month") from exc
+    return start, date(year, month, monthrange(year, month)[1])
 
 
-def _load_all_diaries(db: Database, owner_id: str) -> list[Any]:
-    items: list[Any] = []
-    offset = 0
-    batch_size = 300
+def _load_diary_days(db: Database, owner_id: str) -> set[date]:
+    """只读取历史日记日期，避免为连续记录统计反序列化完整条目。"""
 
-    while True:
-        batch = db.get_items(
-            owner_id,
-            filters={
-                "type": ItemType.DIARY.value,
-                "sort_field": "entry_time",
-                "sort_order": "DESC",
-            },
-            limit=batch_size,
-            offset=offset,
-        )
-        if not batch:
-            break
-        items.extend(batch)
-        if len(batch) < batch_size:
-            break
-        offset += batch_size
-
-    return items
-
-
-def _entry_sort_key(item: Any) -> str:
-    return str(
-        getattr(item, "entry_time", None)
-        or getattr(item, "created_at", None)
-        or getattr(item, "updated_at", None)
-        or getattr(item, "diary_date", None)
-        or ""
+    rows = db.get_connection().execute(
+        """
+        SELECT DISTINCT diary_date
+        FROM items
+        WHERE owner_id = ? AND type = ? AND deleted = 0 AND diary_date IS NOT NULL
+        """,
+        (owner_id, ItemType.DIARY.value),
     )
+    days: set[date] = set()
+    for row in rows:
+        value = row[0]
+        parsed = _parse_day(value if isinstance(value, str) else None)
+        if parsed is not None:
+            days.add(parsed)
+    return days
 
 
-def _entry_label(item: Any) -> str:
+def _entry_sort_key(item: DiaryItem) -> str:
+    """优先按日记发生时间排序，旧数据再回退到通用时间字段。"""
+
+    return item.entry_time or item.created_at or item.updated_at or item.diary_date or ""
+
+
+def _entry_label(item: DiaryItem) -> str:
+    """提取列表使用的 HH:MM 标签；没有具体时间的条目标记为全天。"""
+
     raw = _entry_sort_key(item)
-    if "T" in raw and len(raw) >= 16:
-        return raw[11:16]
-    return "全天"
+    return raw[11:16] if "T" in raw and len(raw) >= 16 else "全天"
 
 
-def _compute_streaks(days: list[date], today: date) -> tuple[int, int]:
-    if not days:
-        return 0, 0
+def _current_streak(days: set[date], today: date) -> int:
+    """计算截至今天的连续天数；今天未写时允许从昨天延续。"""
 
-    ordered = sorted(set(days))
-
-    longest = 1
-    current_run = 1
-    for index in range(1, len(ordered)):
-        if ordered[index] - ordered[index - 1] == timedelta(days=1):
-            current_run += 1
-            longest = max(longest, current_run)
-        else:
-            current_run = 1
-
-    days_set = set(ordered)
-    current = 0
-    cursor = today
-    while cursor in days_set:
-        current += 1
+    cursor = today if today in days else today - timedelta(days=1)
+    streak = 0
+    while cursor in days:
+        streak += 1
         cursor -= timedelta(days=1)
-
-    if current == 0:
-        yesterday = today - timedelta(days=1)
-        cursor = yesterday
-        while cursor in days_set:
-            current += 1
-            cursor -= timedelta(days=1)
-
-    return current, longest
+    return streak
 
 
-def _compute_longest_streak(days: list[date]) -> int:
-    if not days:
-        return 0
-    ordered = sorted(set(days))
-    longest = 1
-    current_run = 1
-    for index in range(1, len(ordered)):
-        if ordered[index] - ordered[index - 1] == timedelta(days=1):
-            current_run += 1
-            longest = max(longest, current_run)
-        else:
-            current_run = 1
+def _longest_streak(days: set[date]) -> int:
+    """计算一组日期中的最长连续区间。"""
+
+    longest = 0
+    current = 0
+    previous: date | None = None
+    for current_day in sorted(days):
+        current = current + 1 if previous and current_day - previous == timedelta(days=1) else 1
+        longest = max(longest, current)
+        previous = current_day
     return longest
 
 
-def _resolve_cadence_granularity(start: date, end: date, cadence_granularity: str) -> str:
-    if cadence_granularity != "auto":
-        return cadence_granularity
+def _resolve_cadence_granularity(start: date, end: date, granularity: str) -> str:
+    """校验粒度，并为自动模式选择不会过密的时间桶。"""
+
+    if granularity not in _ALLOWED_CADENCE_GRANULARITIES:
+        allowed = ", ".join(sorted(_ALLOWED_CADENCE_GRANULARITIES))
+        raise ValueError(f"cadence_granularity must be one of: {allowed}")
+    if granularity != "auto":
+        return granularity
+
     span_days = (end - start).days + 1
     if start.year != end.year:
         return "year"
@@ -151,12 +126,6 @@ def _resolve_cadence_granularity(start: date, end: date, cadence_granularity: st
     return "day"
 
 
-def _format_day_label(current: date, start: date, end: date) -> str:
-    if start.year == end.year and start.month == end.month:
-        return str(current.day)
-    return f"{current.month}/{current.day}"
-
-
 def _build_cadence(
     start: date,
     end: date,
@@ -164,12 +133,15 @@ def _build_cadence(
     day_words: dict[str, int],
     cadence_granularity: str,
 ) -> tuple[str, list[dict[str, Any]]]:
+    """按指定粒度补齐范围内的空桶并汇总篇数和字数。"""
+
     resolved = _resolve_cadence_granularity(start, end, cadence_granularity)
     buckets: dict[str, dict[str, Any]] = {}
     ordered_keys: list[str] = []
 
-    for current in _date_span(start, end):
-        date_key = current.strftime("%Y-%m-%d")
+    for offset in range((end - start).days + 1):
+        current = start + timedelta(days=offset)
+        date_key = current.isoformat()
         if resolved == "year":
             bucket_key = current.strftime("%Y")
             label = bucket_key
@@ -182,7 +154,12 @@ def _build_cadence(
             label = bucket_key
         else:
             bucket_key = date_key
-            label = _format_day_label(current, start, end)
+            label = (
+                str(current.day)
+                if start.year == end.year and start.month == end.month
+                else f"{current.month}/{current.day}"
+            )
+
         if bucket_key not in buckets:
             buckets[bucket_key] = {
                 "bucket": bucket_key,
@@ -208,57 +185,62 @@ def build_diary_overview(
     today: str | None = None,
     cadence_granularity: str = "day",
 ) -> dict[str, Any]:
-    """Build compact diary analytics for a specific month or explicit date range."""
-    start, end = _resolve_period(year=year, month=month, start_date=start_date, end_date=end_date)
-    today_day = _parse_day(today) or date.today()
+    """生成指定自然月或显式日期范围的日记概览。"""
 
-    window_items = db.query_items_by_date_range(
+    start, end = _resolve_period(year=year, month=month, start_date=start_date, end_date=end_date)
+    if today is None:
+        today_day = now_in_timezone(owner_id, db).date()
+    else:
+        today_day = _parse_day(today)
+        if today_day is None:
+            raise ValueError("today must be a valid YYYY-MM-DD string")
+
+    queried_items = db.query_items_by_date_range(
         owner_id,
         ItemType.DIARY.value,
         "diary_date",
-        start.strftime("%Y-%m-%d"),
-        end.strftime("%Y-%m-%d"),
+        start.isoformat(),
+        end.isoformat(),
     )
-    window_items = sorted(window_items, key=_entry_sort_key, reverse=True)
-    all_items = _load_all_diaries(db, owner_id)
+    window_items = sorted(
+        (item for item in queried_items if isinstance(item, DiaryItem)),
+        key=_entry_sort_key,
+        reverse=True,
+    )
 
     day_counts: dict[str, int] = {}
     day_words: dict[str, int] = {}
     mood_counts: dict[str, int] = {}
     template_counts: dict[str, int] = {}
+    period_days: set[date] = set()
+    total_words = 0
 
     for item in window_items:
-        key = getattr(item, "diary_date", "") or ""
-        if not key:
+        diary_day = _parse_day(item.diary_date)
+        if diary_day is None:
             continue
-        day_counts[key] = day_counts.get(key, 0) + 1
-        words = len(str(getattr(item, "content", "") or "").strip())
-        day_words[key] = day_words.get(key, 0) + words
+        date_key = diary_day.isoformat()
+        period_days.add(diary_day)
+        day_counts[date_key] = day_counts.get(date_key, 0) + 1
 
-        mood = str(getattr(item, "mood", "") or "").strip()
+        word_count = len(item.content.strip())
+        total_words += word_count
+        day_words[date_key] = day_words.get(date_key, 0) + word_count
+
+        mood = (item.mood or "").strip()
         if mood:
             mood_counts[mood] = mood_counts.get(mood, 0) + 1
 
-        template_id = str(getattr(item, "template_id", "") or "").strip()
+        template_id = (item.template_id or "").strip()
         if template_id:
             template_counts[template_id] = template_counts.get(template_id, 0) + 1
 
-    all_days = [
-        parsed
-        for item in all_items
-        if (parsed := _parse_day(getattr(item, "diary_date", None))) is not None
-    ]
-    period_days = [
-        parsed
-        for key in day_counts.keys()
-        if (parsed := _parse_day(key)) is not None
-    ]
-    current_streak, longest_streak = _compute_streaks(all_days, today_day)
-    period_longest_streak = _compute_longest_streak(period_days)
-
-    total_words = sum(len(str(getattr(item, "content", "") or "").strip()) for item in window_items)
-    active_days = len(day_counts)
+    all_days = _load_diary_days(db, owner_id)
+    current_streak = _current_streak(all_days, today_day)
+    longest_streak = _longest_streak(all_days)
+    period_longest_streak = _longest_streak(period_days)
     total_days = (end - start).days + 1
+    active_days = len(period_days)
 
     resolved_cadence_granularity, cadence = _build_cadence(
         start=start,
@@ -276,32 +258,36 @@ def build_diary_overview(
         }
         for mood, count in sorted(mood_counts.items(), key=lambda item: (-item[1], item[0]))
     ]
-
     template_usage = [
         {"template_id": template_id, "count": count}
-        for template_id, count in sorted(template_counts.items(), key=lambda item: (-item[1], item[0]))
+        for template_id, count in sorted(
+            template_counts.items(), key=lambda item: (-item[1], item[0])
+        )
     ]
-
     recent_entries = [
         {
             "id": item.id,
             "title": item.title,
             "diary_date": item.diary_date,
-            "entry_time": getattr(item, "entry_time", None),
+            "entry_time": item.entry_time,
             "entry_label": _entry_label(item),
             "mood": item.mood,
-            "mood_score": getattr(item, "mood_score", None),
+            "mood_score": item.mood_score,
             "weather": item.weather,
-            "is_favorite": getattr(item, "is_favorite", False),
-            "content_preview": str(item.content or "").strip()[:80],
-            "word_count": len(str(item.content or "").strip()),
+            "is_favorite": item.is_favorite,
+            "content_preview": item.content.strip()[:80],
+            "word_count": len(item.content.strip()),
         }
         for item in window_items[:6]
     ]
 
     busiest_day = None
     if day_words:
-        busiest_date = max(day_words.keys(), key=lambda item: (day_words[item], day_counts.get(item, 0), item))
+        # 字数和篇数相同时选择较新的日期，保证结果稳定且更贴近近期回顾。
+        busiest_date = max(
+            day_words,
+            key=lambda day: (day_words[day], day_counts.get(day, 0), day),
+        )
         busiest_day = {
             "date": busiest_date,
             "count": day_counts.get(busiest_date, 0),
@@ -311,16 +297,15 @@ def build_diary_overview(
     return {
         "summary": {
             "entry_count": len(window_items),
-            "range_start": start.strftime("%Y-%m-%d"),
-            "range_end": end.strftime("%Y-%m-%d"),
+            "range_start": start.isoformat(),
+            "range_end": end.isoformat(),
             "range_days": total_days,
             "active_days": active_days,
             "average_length": round(total_words / len(window_items), 1) if window_items else 0,
-            "fill_rate": active_days / total_days if total_days else 0,
+            "fill_rate": active_days / total_days,
             "current_streak": current_streak,
             "longest_streak": longest_streak,
             "period_longest_streak": period_longest_streak,
-            "month_longest_streak": period_longest_streak,
             "total_words": total_words,
             "busiest_day": busiest_day,
         },

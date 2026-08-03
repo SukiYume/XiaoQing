@@ -1,559 +1,405 @@
-"""测试wolframalpha插件 - Wolfram|Alpha计算引擎"""
+"""验证 Wolfram|Alpha 插件的命令、配置、解析和网络边界。"""
 
-import importlib.util
+from __future__ import annotations
+
+import asyncio
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import pytest
 
-from core.bounded_http import BoundedHttpResponse
+from core.bounded_http import BoundedHttpResponse, HttpStatusError, ResponseFormatError
+from plugins.wolframalpha import main as wolframalpha
+from tests.aiohttp_fakes import bounded_json_response
+from tests.helpers.settings_snapshot import with_settings_reader
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-
-spec = importlib.util.spec_from_file_location("wolframalpha_main", ROOT / "plugins" / "wolframalpha" / "main.py")
-wolframalpha = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(wolframalpha)
+ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.fixture(autouse=True)
-def bounded_transport_adapter(monkeypatch):
-    """Adapt old endpoint mocks while retaining real JSON/XML parsing tests."""
+def _context(appid: object = "TEST-APPID") -> SimpleNamespace:
+    """构造插件实际需要的最小上下文。"""
 
-    async def request(session, method, url, **kwargs):
-        request_kwargs = dict(kwargs.get("request_kwargs") or {})
-        response_cm = getattr(session, method.lower())(
-            url,
-            headers=kwargs.get("headers"),
-            **request_kwargs,
+    return with_settings_reader(
+        SimpleNamespace(
+            secrets={"plugins": {"wolframalpha": {"appid": appid}}},
+            http_session=object(),
+            logger=MagicMock(),
         )
-        async with response_cm as response:
-            if response.status != 200:
-                raise wolframalpha.HttpStatusError(response.status)
-            if hasattr(response, "json"):
-                body = json.dumps(await response.json()).encode("utf-8")
-                media_type = "application/json"
-            else:
-                body = (await response.text()).encode("utf-8")
-                media_type = (
-                    "application/xml"
-                    if kwargs.get("mime_policy") is wolframalpha.XML_MIME_POLICY
-                    else "text/plain"
-                )
-            return BoundedHttpResponse(
-                url=url,
-                status=200,
-                body=body,
-                media_type=media_type,
-                charset="utf-8",
-                headers={},
-                wire_bytes=len(body),
-                decoded_bytes=len(body),
-            )
-
-    monkeypatch.setattr(wolframalpha, "aiohttp_request_bounded", request)
+    )
 
 
-class TestWolframAlphaPlugin:
-    """测试wolframalpha插件"""
+def _response(
+    body: bytes,
+    media_type: str,
+    *,
+    charset: str | None = "utf-8",
+) -> BoundedHttpResponse:
+    return BoundedHttpResponse(
+        url="https://api.wolframalpha.com/test",
+        status=200,
+        body=body,
+        media_type=media_type,
+        charset=charset,
+        headers={"Content-Type": media_type},
+        wire_bytes=len(body),
+        decoded_bytes=len(body),
+    )
 
-    @pytest.fixture
-    def mock_context(self):
-        """模拟插件上下文"""
-        context = MagicMock()
-        context.secrets = {
-            "plugins": {
-                "wolframalpha": {
-                    "appid": "test_appid_123"
-                }
-            }
+
+class _BodyStream:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    async def iter_chunked(self, size: int):
+        for offset in range(0, len(self.body), max(1, size)):
+            yield self.body[offset : offset + size]
+
+
+class _RawResponse:
+    """把有限响应数据暴露为 aiohttp 响应协议。"""
+
+    def __init__(self, response: BoundedHttpResponse) -> None:
+        self.status = response.status
+        self.url = response.url
+        content_type = response.media_type or "application/octet-stream"
+        if response.charset is not None:
+            content_type = f"{content_type}; charset={response.charset}"
+        self.headers = {"Content-Type": content_type}
+        self.content_length = len(response.body)
+        self.content = _BodyStream(response.body)
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _Session:
+    """记录请求并依次返回协议正确的原始响应。"""
+
+    def __init__(self, *responses: BoundedHttpResponse) -> None:
+        self.responses = list(responses)
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def request(self, method: str, url: str, **kwargs):
+        self.calls.append((method, url, kwargs))
+        return _RawResponse(self.responses.pop(0))
+
+
+def test_init_and_manifest_contract() -> None:
+    assert wolframalpha.init() is None
+    assert "--mode=step" in wolframalpha._HELP_TEXT
+
+    manifest = json.loads(
+        (ROOT / "plugins" / "wolframalpha" / "plugin.json").read_text(encoding="utf-8")
+    )
+    assert manifest["version"] == "0.2.0"
+    assert manifest["concurrency"] == "parallel"
+    assert "schedule" not in manifest
+    command = manifest["commands"][0]
+    assert command["name"] == "alpha"
+    assert command["triggers"] == ["alpha", "wolfram", "wa", "计算"]
+    assert command["admin_only"] is True
+    assert command["usage"].startswith("/alpha")
+    assert command["subcommands"][0]["name"] == "help"
+
+
+def test_get_appid_reads_only_valid_secret_hierarchy() -> None:
+    context = _context(" APP_123-xyz ")
+    assert wolframalpha._get_appid(context) == "APP_123-xyz"
+
+    for secrets in (None, [], {"plugins": []}, {"plugins": {"wolframalpha": []}}):
+        context.secrets = secrets
+        assert wolframalpha._get_appid(context) == ""
+
+
+@pytest.mark.parametrize(
+    "appid",
+    [None, 123, "", "with space", "bad\nvalue", "!invalid", "x" * 129],
+    ids=["none", "non-string", "empty", "space", "control", "punctuation", "too-long"],
+)
+def test_get_appid_rejects_invalid_values(appid: object) -> None:
+    assert wolframalpha._get_appid(_context(appid)) == ""
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, "empty"),
+        ("   ", "empty"),
+        (" short ", "short"),
+        ("x" * (wolframalpha.MAX_RESULT_TEXT_LENGTH + 1), "x" * 2399 + "…"),
+    ],
+)
+def test_result_text_is_normalized_and_bounded(value: object, expected: str) -> None:
+    assert wolframalpha._bound_result_text(value, empty_message="empty") == expected
+
+
+def test_text_response_accepts_utf8_and_ascii_aliases() -> None:
+    assert wolframalpha._decode_text_response(_response("答案".encode(), "text/plain")) == "答案"
+    assert (
+        wolframalpha._decode_text_response(_response(b"42", "text/plain", charset="US_ASCII"))
+        == "42"
+    )
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _response(b"42", "text/plain", charset="utf-16"),
+        _response(b"\xff", "text/plain", charset="utf-8"),
+    ],
+    ids=["unsupported-charset", "invalid-utf8"],
+)
+def test_text_response_rejects_ambiguous_or_invalid_encoding(response) -> None:
+    with pytest.raises(ResponseFormatError):
+        wolframalpha._decode_text_response(response)
+
+
+@pytest.mark.asyncio
+async def test_handle_help_unknown_and_validation_errors() -> None:
+    context = _context()
+    assert "未知命令" in str(await wolframalpha.handle("other", "1+1", {}, context))
+    assert "万能计算器" in str(await wolframalpha.handle("alpha", "", {}, context))
+    assert "万能计算器" in str(await wolframalpha.handle("alpha", "--help", {}, context))
+    assert "不接受额外参数" in str(await wolframalpha.handle("alpha", "--help extra", {}, context))
+    assert "不支持的选项" in str(await wolframalpha.handle("alpha", "--z=1 --a=2 1+1", {}, context))
+    assert "mode 仅支持" in str(
+        await wolframalpha.handle("alpha", "--mode=invalid 1+1", {}, context)
+    )
+    assert "请输入问题" in str(await wolframalpha.handle("alpha", "--mode=step", {}, context))
+    assert "查询过长" in str(
+        await wolframalpha.handle(
+            "alpha",
+            "x" * (wolframalpha.MAX_QUERY_LENGTH + 1),
+            {},
+            context,
+        )
+    )
+    assert "控制字符" in str(await wolframalpha.handle("alpha", "bad\0query", {}, context))
+    assert "未配置有效 appid" in str(await wolframalpha.handle("alpha", "1+1", {}, _context("")))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("args", "question", "mode"),
+    [
+        ("1+1", "1+1", "simple"),
+        ("-1+2", "-1+2", "simple"),
+        ("-3σ 偏差明显", "-3σ 偏差明显", "simple"),
+        ("-- --mode=step", "--mode=step", "simple"),
+        ("--mode=simple 1+1", "1+1", "simple"),
+        ("--mode=step integrate x^2", "integrate x^2", "step"),
+        ("--mode complete population of China", "population of China", "complete"),
+        ("--mode=cp 6*7", "6*7", "complete"),
+        ("help extra", "help extra", "simple"),
+        ("帮助 extra", "帮助 extra", "simple"),
+    ],
+)
+async def test_handle_passes_explicit_mode_and_question(
+    monkeypatch,
+    args: str,
+    question: str,
+    mode: str,
+) -> None:
+    query = AsyncMock(return_value=[{"type": "text", "data": {"text": "ok"}}])
+    monkeypatch.setattr(wolframalpha, "_get_answer", query)
+    context = _context()
+
+    assert "ok" in str(await wolframalpha.handle("alpha", args, {}, context))
+    query.assert_awaited_once_with(question, "TEST-APPID", context, mode=mode)
+
+
+@pytest.mark.asyncio
+async def test_handle_returns_public_error_for_parser_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        wolframalpha,
+        "parse",
+        MagicMock(side_effect=RuntimeError("private parser detail")),
+    )
+    result = await wolframalpha.handle("alpha", "1+1", {}, _context())
+    assert "XQ-PLUGIN-UNEXPECTED" in result[0]["data"]["text"]
+    assert "private parser detail" not in result[0]["data"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_simple_answer_uses_fixed_get_query_timeout_and_limits() -> None:
+    context = _context()
+    session = _Session(_response(b"42", "text/plain"))
+    context.http_session = session
+
+    result = await wolframalpha._get_answer("6*7", "APPID", context)
+
+    assert "6*7" in str(result) and "42" in str(result)
+    method, url, kwargs = session.calls[0]
+    assert method == "GET"
+    assert url == wolframalpha.WA_RESULT_URL
+    assert "APPID" not in url
+    assert kwargs["params"] == {"appid": "APPID", "i": "6*7"}
+    assert kwargs["timeout"] is wolframalpha._WA_TIMEOUT
+    assert kwargs["allow_redirects"] is False
+    assert kwargs["auto_decompress"] is False
+    assert kwargs["headers"]["Accept-Encoding"] == "gzip, deflate"
+    assert wolframalpha._RESPONSE_LIMITS.max_wire_bytes == wolframalpha.MAX_RESPONSE_BYTES
+    assert wolframalpha._RESPONSE_LIMITS.max_decoded_bytes == wolframalpha.MAX_RESPONSE_BYTES
+
+
+@pytest.mark.asyncio
+async def test_simple_answer_handles_empty_and_long_results() -> None:
+    context = _context()
+    context.http_session = _Session(_response(b"   ", "text/plain"))
+    assert "未找到结果" in str(await wolframalpha._get_answer("x", "APPID", context))
+
+    context.http_session = _Session(
+        _response(b"x" * (wolframalpha.MAX_RESULT_TEXT_LENGTH + 1), "text/plain"),
+    )
+    result = await wolframalpha._get_answer("x", "APPID", context)
+    text = result[0]["data"]["text"]
+    assert text.endswith("…")
+    assert len(text) < 3_000
+
+
+@pytest.mark.asyncio
+async def test_answer_delegates_step_and_complete_modes(monkeypatch) -> None:
+    context = _context()
+    step = AsyncMock(return_value="step result")
+    complete = AsyncMock(return_value="complete result")
+    monkeypatch.setattr(wolframalpha, "_query_step", step)
+    monkeypatch.setattr(wolframalpha, "_query_complete", complete)
+
+    assert "步骤解答" in str(await wolframalpha._get_answer("x", "APPID", context, mode="step"))
+    assert "计算结果" in str(await wolframalpha._get_answer("x", "APPID", context, mode="complete"))
+    step.assert_awaited_once_with("x", "APPID", context.http_session)
+    complete.assert_awaited_once_with("x", "APPID", context.http_session)
+
+
+@pytest.mark.asyncio
+async def test_answer_rejects_missing_http_session() -> None:
+    context = _context()
+    context.http_session = None
+    assert "HTTP 会话未初始化" in str(await wolframalpha._get_answer("1+1", "APPID", context))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception", "marker"),
+    [
+        (HttpStatusError(429), "HTTP 429"),
+        (asyncio.TimeoutError(), "查询超时"),
+        (aiohttp.ClientError("network"), "网络错误"),
+        (ResponseFormatError("bad response"), "格式异常"),
+        (RuntimeError("unexpected"), "XQ-PLUGIN-UNEXPECTED"),
+    ],
+    ids=["http", "timeout", "network", "format", "unexpected"],
+)
+async def test_answer_maps_failures_to_stable_public_messages(
+    monkeypatch,
+    exception: Exception,
+    marker: str,
+) -> None:
+    async def fail(*_args, **_kwargs):
+        raise exception
+
+    monkeypatch.setattr(wolframalpha, "_request_wolfram", fail)
+    result = await wolframalpha._get_answer("1+1", "APPID", _context())
+    assert marker in result[0]["data"]["text"]
+    if detail := str(exception):
+        assert detail not in result[0]["data"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_step_query_extracts_only_first_twenty_nonempty_items() -> None:
+    items = ["<plaintext>   </plaintext>"] + [
+        f"<plaintext>item-{index}</plaintext>" for index in range(21)
+    ]
+    session = _Session(
+        _response(
+            f"<queryresult><pod>{''.join(items)}</pod></queryresult>".encode(),
+            "application/xml",
+        ),
+    )
+
+    result = await wolframalpha._query_step("integrate x", "APPID", session)
+
+    assert "item-0" in result and "item-19" in result
+    assert "item-20" not in result
+    assert session.calls[0][1] == wolframalpha.WA_QUERY_URL
+    assert session.calls[0][2]["params"]["podstate"].startswith("Result__")
+
+
+@pytest.mark.asyncio
+async def test_step_query_returns_stable_empty_message() -> None:
+    session = _Session(
+        _response(b"<queryresult><pod /></queryresult>", "application/xml"),
+    )
+    assert await wolframalpha._query_step("x", "APPID", session) == "未找到步骤解答"
+
+
+@pytest.mark.asyncio
+async def test_complete_query_collects_valid_subpods_and_skips_bad_items() -> None:
+    payload = {
+        "queryresult": {
+            "pods": [
+                None,
+                {"subpods": None},
+                {"subpods": [None, {"plaintext": 1}, {"plaintext": " 42 "}]},
+                {"subpods": [{"plaintext": "second"}]},
+            ]
         }
-        context.logger = MagicMock()
-        context.http_session = MagicMock()
-
-        # 创建成功的HTTP响应mock
-        class MockSuccessResponse:
-            status = 200
-            async def text(self):
-                return "42"
-
-        class MockSuccessContextManager:
-            async def __aenter__(self):
-                return MockSuccessResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockPostSuccessResponse:
-            status = 200
-            async def text(self):
-                return '<?xml version="1.0"?><queryresult><pod><plaintext>Step 1</plaintext></pod></queryresult>'
-
-        class MockPostSuccessContextManager:
-            async def __aenter__(self):
-                return MockPostSuccessResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockHttpSession:
-            def get(self, *args, **kwargs):
-                return MockSuccessContextManager()
-            def post(self, *args, **kwargs):
-                return MockPostSuccessContextManager()
-
-        context.http_session = MockHttpSession()
-
-        return context
-
-    @pytest.fixture
-    def mock_event(self):
-        """模拟事件"""
-        return {
-            "user_id": "12345",
-            "message": "test",
-            "message_type": "private"
-        }
-
-    def test_init(self):
-        """测试插件初始化"""
-        wolframalpha.init()
-        assert True
-
-    def test_get_appid_valid(self, mock_context):
-        """测试获取有效的App ID"""
-        appid = wolframalpha._get_appid(mock_context)
-        assert appid == "test_appid_123"
-
-    def test_get_appid_missing(self):
-        """测试缺失App ID"""
-        context = MagicMock()
-        context.secrets = {}
-        appid = wolframalpha._get_appid(context)
-        assert appid == ""
-
-    def test_get_appid_empty_plugin(self):
-        """测试空的插件配置"""
-        context = MagicMock()
-        context.secrets = {"plugins": {}}
-        appid = wolframalpha._get_appid(context)
-        assert appid == ""
-
-    def test_show_help(self):
-        """测试帮助信息"""
-        help_text = wolframalpha._show_help()
-        assert help_text is not None
-        assert "Wolfram" in help_text or "计算" in help_text
-        assert "/alpha" in help_text
-
-    @pytest.mark.asyncio
-    async def test_handle_help_command(self, mock_context, mock_event):
-        """测试帮助命令"""
-        result = await wolframalpha.handle("alpha", "help", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "Wolfram" in result_text or "计算" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_help_chinese(self, mock_context, mock_event):
-        """测试中文帮助命令"""
-        result = await wolframalpha.handle("alpha", "帮助", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "Wolfram" in result_text or "计算" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_empty_question(self, mock_context, mock_event):
-        """测试空问题"""
-        result = await wolframalpha.handle("alpha", "", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "请输入" in result_text or "问题" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_no_appid(self, mock_event):
-        """测试缺少App ID"""
-        context = MagicMock()
-        context.secrets = {}
-        context.logger = MagicMock()
-        context.http_session = MagicMock()
-
-        result = await wolframalpha.handle("alpha", "1+1", mock_event, context)
-        assert result is not None
-        result_text = str(result)
-        assert "未配置" in result_text or "appid" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_simple_calculation(self, mock_context, mock_event):
-        """测试简单计算"""
-        result = await wolframalpha.handle("alpha", "1+1", mock_event, mock_context)
-        assert result is not None
-        assert len(result) > 0
-        result_text = str(result)
-        assert "1+1" in result_text
-
-    @pytest.mark.asyncio
-    async def test_get_answer_success(self, mock_context):
-        """测试成功获取答案"""
-        result = await wolframalpha._get_answer("2+2", "test_appid", mock_context)
-        assert result is not None
-        assert len(result) > 0
-
-    @pytest.mark.asyncio
-    async def test_get_answer_uses_https_endpoint(self, mock_context):
-        captured = {}
-
-        class MockResponse:
-            status = 200
-
-            async def text(self):
-                return "42"
-
-        class MockContextManager:
-            async def __aenter__(self):
-                return MockResponse()
-
-            async def __aexit__(self, *args):
-                pass
-
-        class MockSession:
-            def post(self, url, *args, **kwargs):
-                captured["url"] = url
-                captured.update(kwargs)
-                return MockContextManager()
-
-        mock_context.http_session = MockSession()
-
-        await wolframalpha._get_answer("2+2", "appid", mock_context)
-
-        assert captured["url"].startswith("https://")
-        assert "appid" not in captured["url"]
-        assert captured["data"]["appid"] == "appid"
-
-    def test_manifest_defaults_quota_api_to_admin_only(self):
-        import json
-
-        manifest = json.loads((ROOT / "plugins" / "wolframalpha" / "plugin.json").read_text(encoding="utf-8"))
-        assert manifest["commands"][0]["admin_only"] is True
-
-    @pytest.mark.asyncio
-    async def test_get_answer_no_session(self):
-        """测试无HTTP会话"""
-        context = MagicMock()
-        context.http_session = None
-        context.logger = MagicMock()
-
-        result = await wolframalpha._get_answer("test", "appid", context)
-        assert result is not None
-        result_text = str(result)
-        assert "HTTP" in result_text or "会话" in result_text
-
-    @pytest.mark.asyncio
-    async def test_get_answer_timeout(self, mock_context):
-        """测试查询超时"""
-        import asyncio
-
-        class MockTimeoutContextManager:
-            async def __aenter__(self):
-                raise asyncio.TimeoutError()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockTimeoutSession:
-            def post(self, *args, **kwargs):
-                return MockTimeoutContextManager()
-
-        mock_context.http_session = MockTimeoutSession()
-
-        result = await wolframalpha._get_answer("test", "appid", mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "超时" in result_text or "重试" in result_text
-
-    @pytest.mark.asyncio
-    async def test_get_answer_api_error(self, mock_context):
-        """测试API错误"""
-        class MockErrorResponse:
-            status = 400
-            async def text(self):
-                return "Bad Request"
-
-        class MockErrorContextManager:
-            async def __aenter__(self):
-                return MockErrorResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockErrorSession:
-            def get(self, *args, **kwargs):
-                return MockErrorContextManager()
-
-        mock_context.http_session = MockErrorSession()
-
-        result = await wolframalpha._get_answer("test", "appid", mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "失败" in result_text or "错误" in result_text
-
-    @pytest.mark.asyncio
-    async def test_query_step_success(self, mock_context):
-        """测试步骤解答"""
-        captured = {}
-
-        class MockStepResponse:
-            status = 200
-            async def text(self):
-                return '<?xml version="1.0"?><queryresult><pod><plaintext>Step 1: Do this</plaintext><plaintext>Step 2: Do that</plaintext></pod></queryresult>'
-
-        class MockStepContextManager:
-            async def __aenter__(self):
-                return MockStepResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockStepSession:
-            def post(self, url, *args, **kwargs):
-                captured["url"] = url
-                return MockStepContextManager()
-
-        result = await wolframalpha._query_step("integrate x^2", "appid", MockStepSession())
-        assert result is not None
-        assert "Step" in result
-        assert captured["url"].startswith("https://")
-
-    @pytest.mark.asyncio
-    async def test_query_step_no_result(self, mock_context):
-        """测试步骤解答无结果"""
-        class MockEmptyResponse:
-            status = 200
-            async def text(self):
-                return '<?xml version="1.0"?><queryresult></queryresult>'
-
-        class MockEmptyContextManager:
-            async def __aenter__(self):
-                return MockEmptyResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockEmptySession:
-            def post(self, *args, **kwargs):
-                return MockEmptyContextManager()
-
-        result = await wolframalpha._query_step("test", "appid", MockEmptySession())
-        assert result == "未找到步骤解答"
-
-    @pytest.mark.asyncio
-    async def test_query_step_error(self, mock_context):
-        """测试步骤解答API错误"""
-        class MockStepErrorResponse:
-            status = 500
-            async def text(self):
-                return "Internal Server Error"
-
-        class MockStepErrorContextManager:
-            async def __aenter__(self):
-                return MockStepErrorResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockStepErrorSession:
-            def post(self, *args, **kwargs):
-                return MockStepErrorContextManager()
-
-        with pytest.raises(wolframalpha.HttpStatusError):
-            await wolframalpha._query_step("test", "appid", MockStepErrorSession())
-
-    @pytest.mark.asyncio
-    async def test_query_complete_success(self, mock_context):
-        """测试完整结果查询"""
-        captured = {}
-
-        class MockCompleteResponse:
-            status = 200
-            async def json(self):
-                return {
-                    "queryresult": {
-                        "pods": [
-                            {
-                                "subpods": [
-                                    {"plaintext": "42"}
-                                ]
-                            }
-                        ]
-                    }
-                }
-
-        class MockCompleteContextManager:
-            async def __aenter__(self):
-                return MockCompleteResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockCompleteSession:
-            def post(self, url, *args, **kwargs):
-                captured["url"] = url
-                return MockCompleteContextManager()
-
-        result = await wolframalpha._query_complete("1+1", "appid", MockCompleteSession())
-        assert result == "42"
-        assert captured["url"].startswith("https://")
-
-    @pytest.mark.asyncio
-    async def test_query_complete_no_result(self, mock_context):
-        """测试完整结果查询无结果"""
-        class MockNoResultResponse:
-            status = 200
-            async def json(self):
-                return {
-                    "queryresult": {
-                        "pods": [
-                            {
-                                "subpods": [
-                                    {"plaintext": ""}
-                                ]
-                            }
-                        ]
-                    }
-                }
-
-        class MockNoResultContextManager:
-            async def __aenter__(self):
-                return MockNoResultResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockNoResultSession:
-            def post(self, *args, **kwargs):
-                return MockNoResultContextManager()
-
-        result = await wolframalpha._query_complete("test", "appid", MockNoResultSession())
-        assert result == "未找到结果"
-
-    @pytest.mark.asyncio
-    async def test_query_complete_parse_error(self, mock_context):
-        """测试完整结果解析错误"""
-        class MockParseErrorResponse:
-            status = 200
-            async def json(self):
-                return {"queryresult": {}}
-
-        class MockParseErrorContextManager:
-            async def __aenter__(self):
-                return MockParseErrorResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockParseErrorSession:
-            def post(self, *args, **kwargs):
-                return MockParseErrorContextManager()
-
-        result = await wolframalpha._query_complete("test", "appid", MockParseErrorSession())
-        assert result == "结果解析失败"
-
-    @pytest.mark.asyncio
-    async def test_handle_step_suffix(self, mock_context, mock_event):
-        """测试step后缀"""
-        class MockStepSuffixResponse:
-            status = 200
-            async def text(self):
-                return '<?xml version="1.0"?><queryresult><pod><plaintext>Step details</plaintext></pod></queryresult>'
-
-        class MockStepSuffixContextManager:
-            async def __aenter__(self):
-                return MockStepSuffixResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockStepSuffixSession:
-            def post(self, *args, **kwargs):
-                return MockStepSuffixContextManager()
-
-        mock_context.http_session = MockStepSuffixSession()
-
-        result = await wolframalpha.handle("alpha", "integrate x^2 step", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "步骤" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_cp_suffix(self, mock_context, mock_event):
-        """测试cp后缀"""
-        class MockCpSuffixResponse:
-            status = 200
-            async def json(self):
-                return {
-                    "queryresult": {
-                        "pods": [
-                            {
-                                "subpods": [
-                                    {"plaintext": "Complete result"}
-                                ]
-                            }
-                        ]
-                    }
-                }
-
-        class MockCpSuffixContextManager:
-            async def __aenter__(self):
-                return MockCpSuffixResponse()
-            async def __aexit__(self, *args):
-                pass
-
-        class MockCpSuffixSession:
-            def post(self, *args, **kwargs):
-                return MockCpSuffixContextManager()
-
-        mock_context.http_session = MockCpSuffixSession()
-
-        result = await wolframalpha.handle("alpha", "test cp", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "计算结果" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_network_error(self, mock_context, mock_event):
-        """测试网络错误"""
-        import aiohttp
-
-        class MockNetworkErrorContextManager:
-            async def __aenter__(self):
-                raise aiohttp.ClientError("Network error")
-            async def __aexit__(self, *args):
-                pass
-
-        class MockNetworkErrorSession:
-            def get(self, *args, **kwargs):
-                return MockNetworkErrorContextManager()
-
-        mock_context.http_session = MockNetworkErrorSession()
-
-        result = await wolframalpha.handle("alpha", "test", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "网络" in result_text or "错误" in result_text
-
-    @pytest.mark.asyncio
-    async def test_handle_exception(self, mock_context, mock_event):
-        """测试异常处理"""
-        class MockExceptionContextManager:
-            async def __aenter__(self):
-                raise Exception("Unexpected error")
-            async def __aexit__(self, *args):
-                pass
-
-        class MockExceptionSession:
-            def get(self, *args, **kwargs):
-                return MockExceptionContextManager()
-
-        mock_context.http_session = MockExceptionSession()
-
-        result = await wolframalpha.handle("alpha", "test", mock_event, mock_context)
-        assert result is not None
-        result_text = str(result)
-        assert "失败" in result_text or "错误" in result_text
-
-    def test_command_triggers(self):
-        """测试支持的命令触发词"""
-        # plugin.json中定义的触发词: alpha, wolfram, wa, 计算
-        # 这里只是确认插件导出了handle函数
-        assert hasattr(wolframalpha, 'handle')
-        assert callable(wolframalpha.handle)
+    }
+    session = _Session(bounded_json_response(payload, url="https://api.wolframalpha.com/test"))
+
+    result = await wolframalpha._query_complete("6*7", "APPID", session)
+
+    assert result == "42\n\nsecond"
+    request_params = session.calls[0][2]["params"]
+    assert request_params["includepodid"] == "Result"
+    assert request_params["output"] == "json"
+
+
+@pytest.mark.asyncio
+async def test_complete_query_stops_after_twenty_results() -> None:
+    subpods = [{"plaintext": f"item-{index}"} for index in range(21)]
+    session = _Session(
+        bounded_json_response(
+            {"queryresult": {"pods": [{"subpods": subpods}]}},
+            url="https://api.wolframalpha.com/test",
+        ),
+    )
+
+    result = await wolframalpha._query_complete("x", "APPID", session)
+
+    assert "item-19" in result
+    assert "item-20" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"queryresult": {}}, "结果解析失败"),
+        ({"queryresult": {"pods": []}}, "未找到结果"),
+        ({"queryresult": {"pods": [None, {"subpods": None}]}}, "未找到结果"),
+    ],
+)
+async def test_complete_query_handles_missing_or_empty_structure(
+    payload: object,
+    expected: str,
+) -> None:
+    session = _Session(bounded_json_response(payload, url="https://api.wolframalpha.com/test"))
+    assert await wolframalpha._query_complete("x", "APPID", session) == expected
+
+
+@pytest.mark.asyncio
+async def test_complete_query_rejects_non_object_root() -> None:
+    session = _Session(bounded_json_response([], url="https://api.wolframalpha.com/test"))
+    with pytest.raises(ResponseFormatError):
+        await wolframalpha._query_complete("x", "APPID", session)

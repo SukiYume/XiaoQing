@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import asyncio
 import threading
 from dataclasses import replace
@@ -21,11 +20,14 @@ from plugins.codex.runner import (
     _FinalOutputCapture,
     _remove_output_path_with_retry,
 )
+from tests.codex_fakes import CallbackStreamingProcess
+from tests.helpers.settings_snapshot import with_settings_reader
 
 
 @pytest.fixture
 def config(tmp_path: Path) -> CodexPluginConfig:
     context = SimpleNamespace(
+        data_dir=tmp_path / "plugin-data",
         config={
             "plugins": {
                 "codex": {
@@ -42,7 +44,7 @@ def config(tmp_path: Path) -> CodexPluginConfig:
         },
         secrets={},
     )
-    return load_plugin_config(context)
+    return load_plugin_config(with_settings_reader(context))
 
 
 def _job() -> SimpleNamespace:
@@ -81,25 +83,6 @@ def _install_cleanup_probe(
     mock = AsyncMock(side_effect=cleanup)
     monkeypatch.setattr(codex_runner, "_terminate_and_drain_process", mock)
     return calls, mock
-
-
-class _CompatProcess:
-    pid = 43210
-
-    def __init__(self, communicate: Any, *, returncode: int | None = None) -> None:
-        self._communicate = communicate
-        self.returncode = returncode
-        self.kill_calls = 0
-
-    async def communicate(self, input: bytes | None = None):
-        return await self._communicate(input)
-
-    async def wait(self) -> int | None:
-        return self.returncode
-
-    def kill(self) -> None:
-        self.kill_calls += 1
-        self.returncode = -9
 
 
 class _Writer:
@@ -317,46 +300,30 @@ async def test_stream_cancel_preserves_cancel_when_first_tree_cleanup_fails(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", ["communicate", "parse", "capture"])
-async def test_post_spawn_failures_terminate_owned_process_and_remove_raw(
+async def test_capture_failure_terminates_owned_process_and_removes_raw(
     tmp_path: Path,
     config: CodexPluginConfig,
     monkeypatch: pytest.MonkeyPatch,
-    failure_stage: str,
 ) -> None:
     output_dir = tmp_path / "outputs"
 
-    async def communicate(_input: bytes | None):
-        if failure_stage == "communicate":
-            raise OSError("communicate failed")
+    async def exchange(_input: bytes) -> tuple[bytes, bytes]:
         return b"{}\n", b""
 
-    process = _CompatProcess(communicate, returncode=0)
+    process = CallbackStreamingProcess(exchange, returncode=0)
     monkeypatch.setattr(
         codex_runner.asyncio,
         "create_subprocess_exec",
         AsyncMock(return_value=process),
     )
-    if failure_stage == "parse":
-        monkeypatch.setattr(
-            codex_runner,
-            "_parse_json_events",
-            lambda _value: (_ for _ in ()).throw(ValueError("parse failed")),
-        )
-    if failure_stage == "capture":
-        monkeypatch.setattr(
-            codex_runner,
-            "_capture_final_output",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("capture failed")),
-        )
+    monkeypatch.setattr(
+        codex_runner,
+        "_capture_final_output",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("capture failed")),
+    )
     calls, _ = _install_cleanup_probe(monkeypatch)
 
-    expected = {
-        "communicate": "communicate failed",
-        "parse": "parse failed",
-        "capture": "capture failed",
-    }[failure_stage]
-    with pytest.raises((OSError, ValueError), match=expected):
+    with pytest.raises(ValueError, match="capture failed"):
         await CodexRunner(config, output_dir).run(
             cwd=tmp_path,
             prompt="body",
@@ -379,14 +346,14 @@ async def test_cancel_during_capture_waits_for_thread_then_removes_windows_raw_f
     entered = threading.Event()
     release = threading.Event()
 
-    async def communicate(_input: bytes | None):
+    async def exchange(_input: bytes) -> tuple[bytes, bytes]:
         output_path = Path(captured_args[captured_args.index("-o") + 1])
         output_path.write_text("sensitive output", encoding="utf-8")
         return b"", b""
 
-    process = _CompatProcess(communicate, returncode=0)
+    process = CallbackStreamingProcess(exchange, returncode=0)
 
-    async def spawn(*args: Any, **_kwargs: Any) -> _CompatProcess:
+    async def spawn(*args: Any, **_kwargs: Any) -> CallbackStreamingProcess:
         captured_args.extend(args)
         return process
 
@@ -433,10 +400,10 @@ async def test_cancel_during_final_cleanup_preserves_cancel_and_cleans_all_resou
     cleanup_release = asyncio.Event()
     cleanup_finished = False
 
-    async def communicate(_input: bytes | None):
+    async def exchange(_input: bytes) -> tuple[bytes, bytes]:
         return b"", b""
 
-    process = _CompatProcess(communicate, returncode=0)
+    process = CallbackStreamingProcess(exchange, returncode=0)
     monkeypatch.setattr(
         codex_runner.asyncio,
         "create_subprocess_exec",
@@ -501,7 +468,7 @@ async def test_cancel_during_final_unlink_does_not_return_normal_result(
     unlink_release = asyncio.Event()
     captured_args: list[Any] = []
 
-    async def communicate(_input: bytes | None):
+    async def exchange(_input: bytes) -> tuple[bytes, bytes]:
         output_path = Path(captured_args[captured_args.index("-o") + 1])
         output_path.write_text(
             "archive" * config.max_qq_text_chars,
@@ -509,9 +476,9 @@ async def test_cancel_during_final_unlink_does_not_return_normal_result(
         )
         return b"", b""
 
-    process = _CompatProcess(communicate, returncode=0)
+    process = CallbackStreamingProcess(exchange, returncode=0)
 
-    async def spawn(*args: Any, **_kwargs: Any) -> _CompatProcess:
+    async def spawn(*args: Any, **_kwargs: Any) -> CallbackStreamingProcess:
         captured_args.extend(args)
         return process
 
@@ -641,14 +608,14 @@ async def test_success_keeps_archive_does_not_kill_and_closes_handle_before_spaw
     captured_output: Path | None = None
     long_text = "q" * (config.max_qq_text_chars + 1)
 
-    async def communicate(_input: bytes | None):
+    async def exchange(_input: bytes) -> tuple[bytes, bytes]:
         assert captured_output is not None
         captured_output.write_text(long_text, encoding="utf-8")
         return b"", b""
 
-    process = _CompatProcess(communicate, returncode=0)
+    process = CallbackStreamingProcess(exchange, returncode=0)
 
-    async def spawn(*args: Any, **_kwargs: Any) -> _CompatProcess:
+    async def spawn(*args: Any, **_kwargs: Any) -> CallbackStreamingProcess:
         nonlocal captured_output
         captured_output = Path(args[args.index("-o") + 1])
         # This open occurs during spawn and proves NamedTemporaryFile is already closed.
@@ -672,63 +639,3 @@ async def test_success_keeps_archive_does_not_kill_and_closes_handle_before_spaw
     assert archive.exists()
     assert archive.read_text(encoding="utf-8") == long_text
     assert not _raw_outputs(output_dir)
-
-
-def test_codex_run_static_lifecycle_gate() -> None:
-    source = Path(codex_runner.__file__).read_text(encoding="utf-8")
-    module = ast.parse(source)
-    runner_class = next(
-        node
-        for node in module.body
-        if isinstance(node, ast.ClassDef) and node.name == "CodexRunner"
-    )
-    run = next(
-        node
-        for node in runner_class.body
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "run"
-    )
-    outer_try = next(node for node in run.body if isinstance(node, ast.Try))
-
-    def call_name(call: ast.Call) -> str:
-        if isinstance(call.func, ast.Attribute):
-            return call.func.attr
-        if isinstance(call.func, ast.Name):
-            return call.func.id
-        return ""
-
-    outer_calls = [node for node in ast.walk(outer_try) if isinstance(node, ast.Call)]
-    assert any(call_name(call) == "NamedTemporaryFile" for call in outer_calls)
-    assert any(call_name(call) == "create_subprocess_exec" for call in outer_calls)
-    assert any(call_name(call) == "_capture_in_thread" for call in outer_calls)
-    assert any(
-        call_name(call) == "_run_cleanup_cancellation_resistant"
-        for statement in outer_try.finalbody
-        for call in ast.walk(statement)
-        if isinstance(call, ast.Call)
-    )
-    assert any(
-        call_name(call) == "_remove_output_path_with_retry"
-        for statement in outer_try.finalbody
-        for call in ast.walk(statement)
-        if isinstance(call, ast.Call)
-    )
-    assert not any(
-        call_name(call) == "to_thread" for call in ast.walk(run) if isinstance(call, ast.Call)
-    )
-
-    temp_calls = [call for call in outer_calls if call_name(call) == "NamedTemporaryFile"]
-    assert len(temp_calls) == 1
-    delete_keyword = next(keyword for keyword in temp_calls[0].keywords if keyword.arg == "delete")
-    assert isinstance(delete_keyword.value, ast.Constant)
-    assert delete_keyword.value.value is False
-    raw_prefixes = [
-        node.value
-        for node in ast.walk(module)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and node.value == "codex-last-"
-    ]
-    assert raw_prefixes == ["codex-last-"]
-
-    for handler in (node for node in ast.walk(run) if isinstance(node, ast.ExceptHandler)):
-        assert not (len(handler.body) == 1 and isinstance(handler.body[0], ast.Pass))

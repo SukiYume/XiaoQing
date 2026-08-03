@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
+import hashlib
+import io
 import json
-import os
 import re
-import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -12,7 +11,8 @@ from typing import Any
 
 import numpy as np
 
-from core.plugin_base import write_json
+from core.atomic_store import atomic_write_bytes
+from core.plugin_base import load_json, write_json
 
 _RE_WS = re.compile(r"\s+")
 
@@ -24,13 +24,44 @@ class VectorDoc:
     meta: dict[str, Any]
 
 
+def _docs_content_digest(docs: Sequence[VectorDoc]) -> str:
+    payload = json.dumps(
+        [asdict(doc) for doc in docs],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_cached_matrix(
+    matrix: Any,
+    *,
+    expected_rows: int,
+    expected_dim: int,
+) -> np.ndarray | None:
+    if not isinstance(matrix, np.ndarray):
+        return None
+    if matrix.ndim != 2 or matrix.shape != (expected_rows, expected_dim):
+        return None
+    if not np.issubdtype(matrix.dtype, np.number):
+        return None
+    if np.issubdtype(matrix.dtype, np.complexfloating):
+        return None
+    with np.errstate(over="ignore", invalid="ignore"):
+        normalized = matrix.astype(np.float32, copy=False)
+    if not np.isfinite(normalized).all():
+        return None
+    return normalized
+
+
 class VectorStore:
     def __init__(self, *, dim: int = 2048) -> None:
         self._dim = dim
         self._docs: list[VectorDoc] = []
         self._matrix: np.ndarray | None = None
         self._id_to_idx: dict[str, int] = {}
-        self._lock = asyncio.Lock()
 
     @property
     def dim(self) -> int:
@@ -129,7 +160,7 @@ class VectorStore:
 
         if docs_path.exists():
             try:
-                raw = json.loads(docs_path.read_text(encoding="utf-8"))
+                raw = load_json(docs_path, default=[])
                 if isinstance(raw, list):
                     for item in raw:
                         if not isinstance(item, dict):
@@ -143,24 +174,32 @@ class VectorStore:
                             self._id_to_idx[doc_id] = len(self._docs)
                             self._docs.append(VectorDoc(doc_id=doc_id, text=text, meta=meta))
             except Exception:
-                # If docs fail to load, we have nothing.
+                # 文档加载失败时没有可用数据。
                 self._docs = []
                 self._id_to_idx = {}
 
-        # Only attempt to load vector cache if we have docs
+        # 仅在已有文档时尝试加载向量缓存。
         if self._docs and npz_path.exists():
             try:
-                npz = np.load(npz_path, allow_pickle=False)
-                dim = int(npz.get("dim", self._dim))
-                matrix = npz.get("matrix")
-                if isinstance(matrix, np.ndarray):
-                    # Validate consistency: matrix rows must match doc count
-                    if matrix.shape[0] == len(self._docs) and dim == self._dim:
-                        self._dim = dim
-                        self._matrix = matrix.astype(np.float32, copy=False)
-                    else:
-                        # Inconsistent cache, force rebuild
-                        self._matrix = None
+                with np.load(npz_path, allow_pickle=False) as npz:
+                    if not {"dim", "matrix", "docs_digest"} <= set(npz.files):
+                        return
+                    dim_value = np.asarray(npz["dim"])
+                    if dim_value.ndim != 0:
+                        return
+                    dim = int(dim_value)
+                    if dim != self._dim:
+                        return
+                    digest_value = np.asarray(npz["docs_digest"])
+                    if digest_value.ndim != 0 or str(digest_value.item()) != _docs_content_digest(
+                        self._docs
+                    ):
+                        return
+                    self._matrix = _validate_cached_matrix(
+                        npz["matrix"],
+                        expected_rows=len(self._docs),
+                        expected_dim=self._dim,
+                    )
             except Exception:
                 self._matrix = None
 
@@ -181,16 +220,14 @@ def write_vector_store_files(
     npz_path = dir_path / f"{name}.vecs.npz"
     docs_payload = [asdict(d) for d in docs]
     write_json(docs_path, docs_payload)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".npz", dir=dir_path)
-    os.close(fd)
-    tmp_path = Path(tmp_name)
-    try:
-        np.savez_compressed(tmp_path, dim=np.int32(dim), matrix=matrix)
-        with tmp_path.open("rb") as handle:
-            os.fsync(handle.fileno())
-        os.replace(tmp_path, npz_path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    buffer = io.BytesIO()
+    np.savez_compressed(
+        buffer,
+        dim=np.int32(dim),
+        matrix=matrix,
+        docs_digest=np.asarray(_docs_content_digest(docs)),
+    )
+    atomic_write_bytes(npz_path, buffer.getvalue())
 
 
 def _tokenize(text: str) -> list[str]:

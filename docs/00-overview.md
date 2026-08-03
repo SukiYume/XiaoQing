@@ -149,7 +149,7 @@ return segments("你好")  # 自动转换为消息段
 
 每次处理消息时，插件会收到一个 `context` 对象，包含：
 
-- 配置信息（`context.config`, `context.secrets`）
+- 插件作用域的只读配置与秘密（优先使用 `context.get_config()`、`context.get_secret()`）
 - 日志工具（`context.logger`）
 - HTTP 客户端（`context.http_session`）
 - 会话管理（`context.create_session()`）
@@ -216,14 +216,14 @@ return segments("你好")  # 自动转换为消息段
    - 判断是否需要处理（私聊、命令前缀、bot_name、@机器人、关闭群聊名称限制或活跃会话）
    │
    ▼
-3. 命令路由
-   - Router 匹配触发词
-   - 找到对应插件和命令
+3. 检查会话
+   - 活跃会话优先消费后续输入，包括与全局命令同名或纯空白的输入
+   - 会话处理器明确返回 `None` 时才继续命令路由
    │
    ▼
-4. 检查会话
-   - 命令未命中时，检查用户是否有进行中的多轮对话
-   - 有 → 路由到会话插件
+4. 命令路由
+   - Router 匹配触发词
+   - 找到对应插件和命令
    │
    ▼
 5. 权限检查
@@ -246,8 +246,19 @@ return segments("你好")  # 自动转换为消息段
 ```
 XiaoQing/
 ├── main.py                 # 程序入口
-├── requirements.txt        # Python 依赖
+├── requirements.txt        # 项目与内置插件的直接依赖
 ├── pyproject.toml          # 打包、pytest、coverage 与静态检查配置
+├── scripts/                # 启动、维护、同步和 arXiv 推理工具
+│   ├── run-bot.vbs         # Windows 后台启动入口
+│   ├── run-bot-monitor.ps1 # 机器人监控器
+│   ├── run_process_with_rotating_logs.py # 日志轮转执行器
+│   ├── run_full_uat.sh      # Git Bash/macOS/Linux 全量 UAT 入口
+│   ├── run_full_uat.py      # UAT 隔离、生命周期与报告执行器
+│   ├── run_command_matrix.py # HTTP/WS 命令与业务场景矩阵
+│   ├── run_core_pressure.py # Core 入站背压与恢复压测
+│   ├── run_xiaoqing_chat_quality.py # 真实聊天质量门禁
+│   ├── sync_to_remote.sh    # 远端 rsync 预览/同步入口
+│   └── arxiv_inference_cli.py # arXiv 推理入口
 │
 ├── config/                 # 配置文件
 │   ├── config.json         # 基础配置（可提交到 Git）
@@ -265,10 +276,13 @@ XiaoQing/
 │   ├── onebot.py           # OneBot 通信
 │   ├── server.py           # Inbound 服务器
 │   ├── config.py           # 配置管理
+│   ├── ai.py               # 统一 AI/VLM 模型路由与 fallback
+│   ├── plugin_execution.py # 每插件执行 gate、同步 bulkhead 与公平调度
 │   ├── message.py          # 消息处理工具
 │   ├── args.py             # 命令参数解析（ParsedArgs）
 │   ├── metrics.py          # 运行指标统计（MetricsCollector）
 │   ├── interfaces.py       # Protocol 接口定义
+│   ├── safe_http.py        # 出站 URL SSRF 防护（fail-closed）
 │   ├── exceptions.py       # 自定义异常
 │   ├── models.py           # 通用数据模型
 │   ├── clock.py            # 时区/时间工具
@@ -312,11 +326,13 @@ XiaoQing/
 │   └── xiaoqing_error.log      # 错误日志
 │
 ├── tests/                  # 测试文件
-│   ├── test_app.py
-│   ├── test_dispatcher.py
+│   ├── test_app_*.py       # 应用生命周期、投递、能力与任务测试
+│   ├── test_dispatcher_*.py # 消息解析、命令与上下文测试
 │   ├── plugins/
 │   ├── integration/
 │   └── helpers/
+│
+├── test_reports/           # 唯一保留的本地完整验证基线与说明
 │
 └── docs/                   # 文档（你正在看的）
 ```
