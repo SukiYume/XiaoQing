@@ -6,6 +6,14 @@
 
 ## 未发布
 
+## 2026-08-05 (v4.2.0)
+
+### v4.2.0 发布
+
+- 发布 `v4.2.0`，收录全量代码审查整改、运行时服务边界、安全默认、统一 AI/VLM 路由、全插件命令 UAT、Pendo 与 XiaoQing Chat 改进，以及发布与运维工具整理后的当前主线。
+- 使用生产环境旧版 `plugins/*/data/` 与日志快照完成发布验收：Pendo、QingPet 的 WAL 数据库在迁移前通过 `quick_check` 与完整 `integrity_check`，29 个插件在隔离数据根中完成旧布局迁移并连续三次正常启动、优雅停机和释放端口。
+- 完整 UAT 的 WebSocket/HTTP 命令矩阵、动态 CRUD/清理场景、Core 压测、compileall、Ruff、mypy、pytest 与双 diff 门禁全部通过；全量测试为 5914 passed、1 skipped，覆盖率 80.79%，配置逐字节恢复且 secrets 哈希不变。外部依赖与真实付费模型质量测试仍保持显式 opt-in，不计入本次默认发布门禁。
+
 ### 全插件命令 WS 联调、Pendo 示例修复与文档同步
 
 - 新增统一 `bash scripts/run_full_uat.sh` 上线验收入口：隔离插件数据、真实启动/优雅停机、HTTP/WS 命令矩阵、动态业务场景、Core 压测及 CI 门禁统一产出可续查报告；外部依赖和付费聊天质量显式选择，插件/命令/用例类型可定点复测。
@@ -29,7 +37,7 @@
 
 ### 运行时版本解析（原 "runtime v2"）
 
-- 新增 `core/version.py`，从 `pyproject.toml` 或已安装 wheel 元数据解析运行时 `VERSION`（当前 `4.1.0`），不再在多处硬编码版本；`/health`、inbound server 等统一读取该值。
+- 新增 `core/version.py`，从 `pyproject.toml` 或已安装 wheel 元数据解析运行时 `VERSION`（当前 `4.2.0`），不再在多处硬编码版本；`/health`、inbound server 等统一读取该值。
 
 ### 崩溃安全的定时通知扇出、投递回执与有界文件缓存
 
