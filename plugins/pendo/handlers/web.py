@@ -18,8 +18,12 @@ if TYPE_CHECKING:
 class _LoginCodeIssuer(Protocol):
     """一次性网页登录码生成器接口。"""
 
-    def __call__(self, owner_id: str, expires_seconds: int = 300) -> str:
-        """为用户签发短期、单次使用的登录码。"""
+    def __call__(
+        self,
+        owner_id: str,
+        expires_seconds: int = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
+    ) -> str:
+        """为用户签发限时、单次使用的登录码。"""
         ...
 
 
@@ -29,7 +33,7 @@ class _WidgetTokenGenerator(Protocol):
     def __call__(
         self,
         owner_id: str,
-        expires_hours: int = 24 * 30,
+        expires_hours: int = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS,
         *,
         db: Database,
     ) -> str:
@@ -138,7 +142,7 @@ class WebHandler:
 
         command = " ".join(args.casefold().split())
         if command == "token":
-            return await self._generate_token(user_id, context, server, login_code_issuer)
+            return await self._generate_token(user_id, context, login_code_issuer)
         if command in {"widget-token", "widget_token", "widget token"}:
             return await self._generate_widget_token(user_id, context, widget_token_generator)
         if command in {"widget-revoke", "widget_revoke", "widget revoke"}:
@@ -159,43 +163,23 @@ class WebHandler:
         self,
         user_id: str,
         context: PendoContext | None,
-        server: _WebServer,
         issuer: _LoginCodeIssuer,
     ) -> CommandMessage:
-        """生成一次性登录码，并只在私聊中发送完整登录链接。"""
+        """生成一次性登录码，并只在私聊中发送原始 Code。"""
         code = issuer(
             user_id,
             expires_seconds=PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
         )
-        base_url = server.get_url()
-        login_url = f"{base_url}/?code={code}"
-        running = await run_sync(server.is_running)
-        status_text = "运行中" if running else "未启动"
-        token_sent = await self._send_private_text(
-            context,
-            user_id,
-            "\n".join(
-                [
-                    "🔑 Pendo Web 一次性登录链接",
-                    login_url,
-                    "",
-                    f"⏳ 有效期: {PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS // 60} 分钟，仅可使用一次",
-                    "💡 打开链接会自动建立浏览器会话；链接失效后请重新生成。",
-                ]
-            ),
-        )
+        expiry_days = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS // (24 * 60 * 60)
+        token_sent = await self._send_private_text(context, user_id, code)
 
         return self._build_token_result(
             token_sent=token_sent,
             header="🌐 Pendo Web",
-            success_line="✅ 已生成一次性登录链接",
-            expiry_text=f"{PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS // 60} 分钟，仅可使用一次",
-            private_hint="🔒 一次性登录链接已单独私聊发送",
-            private_copy_hint="💡 请在私聊中打开链接；链接不会在群聊或命令回复中显示。",
-            extra_lines=[
-                f"🌍 本地地址: {base_url}",
-                f"⚙️ 服务状态: {status_text}",
-            ],
+            success_line="✅ 已生成一次性登录 Code",
+            expiry_text=f"{expiry_days} 天，仅可使用一次",
+            private_hint="🔒 登录 Code 已单独私聊发送",
+            private_copy_hint="💡 复制私聊中的 Code，在 Pendo Web 登录页粘贴使用。",
         )
 
     async def _generate_widget_token(
@@ -265,7 +249,7 @@ class WebHandler:
                     "⚡ 服务已在运行\n\n"
                     f"🌍 地址: {url}\n"
                     f"🔌 端口: {runtime.web_port}\n"
-                    "🔑 发送 /pendo web token 获取一次性登录链接"
+                    "🔑 发送 /pendo web token 获取一次性登录 Code"
                 ),
             }
         started = await run_sync(server.start, self.db)
@@ -277,7 +261,7 @@ class WebHandler:
                     "✅ 服务已启动\n\n"
                     f"🌍 地址: {url}\n"
                     f"🔌 端口: {runtime.web_port}\n"
-                    "🔑 下一步: 发送 /pendo web token 获取一次性登录链接"
+                    "🔑 下一步: 发送 /pendo web token 获取一次性登录 Code"
                 ),
             }
         error_reader = getattr(server, "get_last_error", None)
@@ -334,7 +318,7 @@ class WebHandler:
                 f"📡 服务状态: {status}\n\n"
                 f"🌍 地址: {server.get_url()}\n"
                 f"🔌 端口: {PendoConfig.runtime().web_port}\n"
-                "🔑 登录链接: /pendo web token\n"
+                "🔑 登录 Code: /pendo web token\n"
                 "🧩 Widget Token: /pendo web widget-token"
             ),
         }
@@ -348,7 +332,7 @@ class WebHandler:
                 "🌐 Pendo Web\n"
                 "管理网页入口、登录令牌和服务状态。\n\n"
                 "可用命令:\n"
-                "• /pendo web token  - 生成一次性登录链接\n"
+                "• /pendo web token  - 生成一次性登录 Code\n"
                 "• /pendo web widget-token - 生成 Scriptable 小组件令牌\n"
                 "• /pendo web widget-revoke - 吊销自己的全部小组件令牌\n"
                 "• /pendo web start  - 启动 Web 服务\n"

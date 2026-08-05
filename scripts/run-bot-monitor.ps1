@@ -1,22 +1,22 @@
 <#
 .SYNOPSIS
-    Single-instance, fail-safe Windows monitor for XiaoQing and NapCat.
+    Monitors XiaoQing and a local NapCat process on Windows.
 
-The script never terminates a process it did not create. It recognises the
-bot only through this repository's PID file plus the absolute helper/main.py
-paths, uses a named mutex to prevent competing monitors, and backs off after
-crashes. A Python helper owns stdout/stderr and rotates each active log after
-closing its Windows file handle.
+The monitor uses a repository-scoped mutex and PID file, restarts failed
+children with bounded backoff, and delegates stdout/stderr rotation to the
+Python log-pump helper. NapCat's QQ account and optional Bot process settings
+come from config/config.json; deployment-specific values are never embedded
+in this script.
 #>
 
 [CmdletBinding()]
 param(
-    [string]$BotRoot = (Split-Path -Parent $PSScriptRoot),
-    [string[]]$BotArguments = @(),
-    [string]$NapCatPath = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "NapCat.Shell\NapCatWinBootMain.exe"),
-    [switch]$DisableNapCat,
     [AllowEmptyString()]
-    [string]$NapCatAccount = $env:XIAOQING_NAPCAT_ACCOUNT,
+    [string]$BotRoot = "",
+    [AllowEmptyString()]
+    [string]$NapCatPath = "",
+    [switch]$DisableNapCat,
+    [string[]]$BotArguments = @(),
     [string[]]$NapCatArguments = @(),
     [ValidateRange(1, 3600)]
     [int]$MonitorIntervalSeconds = 10,
@@ -56,11 +56,72 @@ function Get-NormalizedDirectoryPath {
     return $trimmedFullPath
 }
 
+function Read-LauncherConfig {
+    param([string]$Path)
+
+    try {
+        $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    } catch {
+        throw "Unable to read XiaoQing config: $Path ($($_.Exception.Message))"
+    }
+    if ($config -isnot [Management.Automation.PSCustomObject]) {
+        throw "XiaoQing config root must be a JSON object: $Path"
+    }
+
+    $account = ""
+    $accountProperty = $config.PSObject.Properties["napcat_account"]
+    if ($null -ne $accountProperty -and $null -ne $accountProperty.Value) {
+        if ($accountProperty.Value -isnot [string]) {
+            throw "config.json napcat_account must be a string"
+        }
+        $account = $accountProperty.Value.Trim()
+    }
+    if ($account -and $account -notmatch '^\d{5,20}$') {
+        throw "config.json napcat_account must contain 5 to 20 decimal digits"
+    }
+
+    $mklThreadingLayer = ""
+    $mklProperty = $config.PSObject.Properties["mkl_threading_layer"]
+    if ($null -ne $mklProperty -and $null -ne $mklProperty.Value) {
+        if ($mklProperty.Value -isnot [string]) {
+            throw "config.json mkl_threading_layer must be a string"
+        }
+        $mklThreadingLayer = $mklProperty.Value.Trim()
+    }
+    if ($mklThreadingLayer -and $mklThreadingLayer -notmatch '^[A-Za-z0-9._-]{1,64}$') {
+        throw "config.json mkl_threading_layer must be a simple token up to 64 characters"
+    }
+
+    return [pscustomobject]@{
+        NapCatAccount = $account
+        MklThreadingLayer = $mklThreadingLayer
+    }
+}
+
+# Resolve all deployment settings in one place. Defaults are evaluated after
+# parameter binding because Windows PowerShell 5.1 may leave $PSScriptRoot empty
+# inside param() default expressions.
+$ScriptDirectory = $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($ScriptDirectory)) {
+    $ScriptPath = $MyInvocation.MyCommand.Path
+    if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+        throw "Unable to resolve XiaoQing monitor script directory"
+    }
+    $ScriptDirectory = Split-Path -Parent $ScriptPath
+}
+if ([string]::IsNullOrWhiteSpace($BotRoot)) {
+    $BotRoot = Split-Path -Parent $ScriptDirectory
+}
+$BotRoot = Get-NormalizedDirectoryPath $BotRoot
+if ([string]::IsNullOrWhiteSpace($NapCatPath)) {
+    $NapCatPath = Join-Path `
+        (Split-Path -Parent $BotRoot) `
+        "NapCat.Shell\NapCatWinBootMain.exe"
+}
+$NapCatPath = [IO.Path]::GetFullPath($NapCatPath)
+
 if ($MaximumRestartDelaySeconds -lt $InitialRestartDelaySeconds) {
     throw "MaximumRestartDelaySeconds must be greater than or equal to InitialRestartDelaySeconds"
-}
-if (-not $DisableNapCat -and $NapCatAccount -and $NapCatAccount -notmatch '^\d{5,20}$') {
-    throw "NapCatAccount must contain 5 to 20 decimal digits"
 }
 foreach ($argument in @($BotArguments) + @($NapCatArguments)) {
     if ($null -eq $argument) {
@@ -68,10 +129,9 @@ foreach ($argument in @($BotArguments) + @($NapCatArguments)) {
     }
 }
 
-$BotRoot = Get-NormalizedDirectoryPath $BotRoot
-$NapCatPath = [IO.Path]::GetFullPath($NapCatPath)
 $MainScript = Join-Path $BotRoot "main.py"
 $LogPumpScript = Join-Path $BotRoot "scripts\run_process_with_rotating_logs.py"
+$ConfigFile = Join-Path $BotRoot "config\config.json"
 $LogDirectory = Join-Path $BotRoot "logs"
 $PidFile = Join-Path $LogDirectory "xiaoqing-bot.pid.json"
 $BotLog = Join-Path $LogDirectory "bot-monitor.log"
@@ -85,12 +145,18 @@ if (-not (Test-Path -LiteralPath $MainScript -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $LogPumpScript -PathType Leaf)) {
     throw "Rotating log helper not found: $LogPumpScript"
 }
+if (-not (Test-Path -LiteralPath $ConfigFile -PathType Leaf)) {
+    throw "XiaoQing config not found: $ConfigFile"
+}
 if ($null -eq (Get-Command python -CommandType Application -ErrorAction SilentlyContinue)) {
     throw "Python command not found in PATH"
 }
 if (-not $DisableNapCat -and -not (Test-Path -LiteralPath $NapCatPath -PathType Leaf)) {
     throw "NapCat executable not found: $NapCatPath (use -DisableNapCat only when an external adapter is intentional)"
 }
+$LauncherConfig = Read-LauncherConfig -Path $ConfigFile
+$NapCatAccount = $LauncherConfig.NapCatAccount
+$MklThreadingLayer = $LauncherConfig.MklThreadingLayer
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 
 function Get-MutexName {
@@ -201,19 +267,6 @@ function Start-LogPumpedProcess {
         -PassThru
 }
 
-function Get-ProcessByIdSafely {
-    param([int]$ProcessId)
-
-    if ($ProcessId -le 0) {
-        return $null
-    }
-    try {
-        return Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId"
-    } catch {
-        return $null
-    }
-}
-
 function Test-CommandLineContains {
     param(
         [AllowNull()][string]$CommandLine,
@@ -230,7 +283,11 @@ function Get-TrackedBotProcess {
     }
     try {
         $saved = Get-Content -LiteralPath $PidFile -Raw | ConvertFrom-Json
-        $process = Get-ProcessByIdSafely -ProcessId ([int]$saved.process_id)
+        $processId = [int]$saved.process_id
+        if ($processId -le 0) {
+            throw "Invalid tracked process ID"
+        }
+        $process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId"
         if ($null -ne $process -and
             (Test-CommandLineContains $process.CommandLine $LogPumpScript) -and
             (Test-CommandLineContains $process.CommandLine $MainScript)) {
@@ -243,40 +300,29 @@ function Get-TrackedBotProcess {
     return $null
 }
 
-function Stop-OwnedProcessTree {
-    param([Diagnostics.Process]$Process)
-
-    try {
-        if ($Process.HasExited) {
-            return
-        }
-    } catch {
-        # The PID is still owned by this start attempt. A failed status query
-        # must not silently turn a live helper and its descendants into orphans.
-    }
+function Invoke-TaskKill {
+    param([int]$ProcessId)
 
     $taskKillPath = Join-Path ([Environment]::SystemDirectory) "taskkill.exe"
-    $treeCleanupError = $null
+    if (-not (Test-Path -LiteralPath $taskKillPath -PathType Leaf)) {
+        throw "Windows taskkill executable not found: $taskKillPath"
+    }
+
     $killer = $null
     try {
-        if (-not (Test-Path -LiteralPath $taskKillPath -PathType Leaf)) {
-            throw "Windows taskkill executable not found: $taskKillPath"
-        }
         $killer = Start-Process `
             -FilePath $taskKillPath `
-            -ArgumentList @("/PID", $Process.Id.ToString(), "/T", "/F") `
+            -ArgumentList @("/PID", $ProcessId.ToString(), "/T", "/F") `
             -WindowStyle Hidden `
             -PassThru
         if (-not $killer.WaitForExit(5000)) {
             $killer.Kill()
             [void]$killer.WaitForExit(1000)
-            throw "taskkill timed out for owned process tree $($Process.Id)"
+            throw "taskkill timed out for owned process tree $ProcessId"
         }
         if ($killer.ExitCode -ne 0) {
-            throw "taskkill failed for owned process tree $($Process.Id) with exit code $($killer.ExitCode)"
+            throw "taskkill failed for owned process tree $ProcessId with exit code $($killer.ExitCode)"
         }
-    } catch {
-        $treeCleanupError = $_
     } finally {
         if ($null -ne $killer) {
             try {
@@ -288,6 +334,25 @@ function Stop-OwnedProcessTree {
             }
             $killer.Dispose()
         }
+    }
+}
+
+function Stop-OwnedProcessTree {
+    param([Diagnostics.Process]$Process)
+
+    try {
+        if ($Process.HasExited) {
+            return
+        }
+    } catch {
+        # It still belongs to this start attempt; continue with cleanup.
+    }
+
+    $treeCleanupError = $null
+    try {
+        Invoke-TaskKill -ProcessId $Process.Id
+    } catch {
+        $treeCleanupError = $_
     }
 
     try {
@@ -314,16 +379,40 @@ function Start-TrackedBot {
         "python",
         $MainScript
     ) + $BotArguments
-    $process = Start-LogPumpedProcess `
-        -CommandArguments $botCommand `
-        -WorkingDirectory $BotRoot `
-        -StandardOutputLog $BotLog `
-        -StandardErrorLog $BotErrorLog
+
+    # Start-Process in Windows PowerShell 5.1 has no per-process environment
+    # parameter. Temporarily update the monitor environment so only this new
+    # log-pump tree inherits the configured MKL threading layer, then restore
+    # the operator's original value before the monitor loop continues.
+    $previousMklThreadingLayer = [Environment]::GetEnvironmentVariable(
+        "MKL_THREADING_LAYER",
+        [EnvironmentVariableTarget]::Process
+    )
+    try {
+        if ($MklThreadingLayer) {
+            [Environment]::SetEnvironmentVariable(
+                "MKL_THREADING_LAYER",
+                $MklThreadingLayer,
+                [EnvironmentVariableTarget]::Process
+            )
+        }
+        $process = Start-LogPumpedProcess `
+            -CommandArguments $botCommand `
+            -WorkingDirectory $BotRoot `
+            -StandardOutputLog $BotLog `
+            -StandardErrorLog $BotErrorLog
+    } finally {
+        if ($MklThreadingLayer) {
+            [Environment]::SetEnvironmentVariable(
+                "MKL_THREADING_LAYER",
+                $previousMklThreadingLayer,
+                [EnvironmentVariableTarget]::Process
+            )
+        }
+    }
     try {
         $record = [pscustomobject]@{
             process_id = $process.Id
-            main_script = $MainScript
-            log_pump = $LogPumpScript
             started_at = (Get-Date).ToUniversalTime().ToString("o")
         } | ConvertTo-Json -Compress
         Write-Utf8NoBomAtomically -Path $PidFile -Content "$record`n"
@@ -336,7 +425,6 @@ function Start-TrackedBot {
         }
         throw $pidCommitError
     }
-    return $process
 }
 
 function Test-NapCatRunning {
@@ -346,11 +434,10 @@ function Test-NapCatRunning {
     if (-not (Test-Path -LiteralPath $NapCatPath -PathType Leaf)) {
         throw "NapCat executable disappeared while monitoring: $NapCatPath"
     }
-    $expected = [IO.Path]::GetFullPath($NapCatPath)
-    $expectedName = [IO.Path]::GetFileName($expected).Replace("'", "''")
+    $expectedName = [IO.Path]::GetFileName($NapCatPath).Replace("'", "''")
     return @(
         Get-CimInstance -ClassName Win32_Process -Filter "Name = '$expectedName'" -ErrorAction SilentlyContinue |
-            Where-Object { Test-CommandLineContains $_.CommandLine $expected }
+            Where-Object { Test-CommandLineContains $_.CommandLine $NapCatPath }
     ).Count -gt 0
 }
 
@@ -391,10 +478,13 @@ try {
                 Start-Sleep -Seconds $restartDelaySeconds
                 $restartDelaySeconds = [Math]::Min($restartDelaySeconds * 2, $MaximumRestartDelaySeconds)
             }
-            $trackedProcess = Start-TrackedBot
+            Start-TrackedBot
             $startedAt = Get-Date
             $wasRunning = $true
-        } elseif ($null -ne $startedAt -and ((Get-Date) - $startedAt).TotalSeconds -ge $StableRunSeconds) {
+        } elseif (
+            $null -ne $startedAt -and
+            ((Get-Date) - $startedAt).TotalSeconds -ge $StableRunSeconds
+        ) {
             $restartDelaySeconds = $InitialRestartDelaySeconds
         }
 

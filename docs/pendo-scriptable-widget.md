@@ -19,7 +19,7 @@ Pendo 提供 Scriptable 只读摘要接口，可以把日程、待办、财务�
 /pendo web widget-token
 ```
 
-默认有效期为 30 天，来自 `plugins/pendo/config.py` 中的
+默认有效期为 365 天，来自 `plugins/pendo/config.py` 中的
 `WEB_WIDGET_TOKEN_EXPIRE_HOURS`。令牌每次签发都有独立 `jti`，服务端会在 Pendo 数据库中
 持久化登记。如果手机丢失或令牌可能泄漏，执行：
 

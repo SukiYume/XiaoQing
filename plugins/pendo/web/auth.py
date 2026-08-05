@@ -15,6 +15,8 @@ import jwt
 
 from core.plugin_base import atomic_write_text
 
+from ..config import PendoConfig
+
 if TYPE_CHECKING:
     from ..services.db import Database
 
@@ -115,8 +117,11 @@ def _prune_expired(now: float) -> None:
             _SESSIONS.pop(session_id, None)
 
 
-def issue_login_code(owner_id: str, expires_seconds: int = 300) -> str:
-    """签发绑定用户、短期有效且只能消费一次的登录交换码。"""
+def issue_login_code(
+    owner_id: str,
+    expires_seconds: int = PendoConfig.WEB_LOGIN_CODE_EXPIRE_SECONDS,
+) -> str:
+    """签发绑定用户、限时有效且只能消费一次的登录交换码。"""
     normalized_owner = _normalize_owner_id(owner_id)
     lifetime = _positive_lifetime_seconds(expires_seconds)
     code = secrets.token_urlsafe(32)
@@ -302,7 +307,7 @@ def generate_token(
 
 def generate_widget_token(
     owner_id: str,
-    expires_hours: int = 24 * 30,
+    expires_hours: int = PendoConfig.WEB_WIDGET_TOKEN_EXPIRE_HOURS,
     *,
     db: Database,
 ) -> str:

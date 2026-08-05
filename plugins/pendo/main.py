@@ -774,7 +774,7 @@ def _build_command_router(context, group_id: int | None = None) -> CommandRouter
                     "",
                     "命令聊天入口不能安全上传 `.pendo.zip` 文件；请使用 Web 数据迁移页完成预检和导入。",
                     "",
-                    "1. 发送 `/pendo web token` 获取登录令牌",
+                    "1. 发送 `/pendo web token` 获取一次性登录 Code",
                     f"2. 打开 Web UI: http://{runtime.web_host}:{runtime.web_port}/#/transfer",
                     "3. 在“导入”页上传 `.pendo.zip`，先预检，再执行导入",
                     "",
@@ -1044,7 +1044,7 @@ HELP_MAP = {
     ],
     "web": [
         "🌐 **Web UI 管理 (Web)**",
-        "• /pendo web token  - 生成登录令牌（Token 单独发送）",
+        "• /pendo web token  - 生成一次性登录 Code（Code 单独发送）",
         "• /pendo web widget-token - 生成 Scriptable 小组件令牌",
         "• /pendo web start  - 启动 Web 服务",
         "• /pendo web stop   - 停止 Web 服务",

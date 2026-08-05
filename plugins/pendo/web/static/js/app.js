@@ -51,7 +51,7 @@ async function bootstrap() {
             await showApp();
             return;
         }
-        showLogin(result.message || '登录链接已失效，请重新生成。');
+        showLogin(result.message || '登录码已失效，请重新生成。');
         return;
     }
     const result = await getSession();
@@ -95,7 +95,7 @@ function showLogin(initialError = '') {
         if (pending) return;
         const code = extractLoginCode(input.value);
         if (!code) {
-            error.textContent = '请先粘贴一次性登录链接或登录码';
+            error.textContent = '请先粘贴一次性登录码';
             error.style.display = 'block';
             input.focus();
             return;
@@ -116,9 +116,9 @@ function showLogin(initialError = '') {
                 await showApp();
                 return;
             }
-            error.textContent = result.message || '登录链接无效或已过期';
+            error.textContent = result.message || '登录码无效或已过期';
             error.style.display = 'block';
-            helper.textContent = '请回到聊天中重新生成一次性登录链接后再试。';
+            helper.textContent = '请回到聊天中重新生成一次性登录码后再试。';
         } catch (cause) {
             console.error('Pendo Web 登录初始化失败:', cause);
             error.textContent = '登录时发生错误，请稍后重试';
@@ -145,7 +145,7 @@ function showLogin(initialError = '') {
 
             error.textContent = result.message || '暂时无法进入演示空间';
             error.style.display = 'block';
-            helper.textContent = '你也可以回到聊天里生成自己的一次性登录链接。';
+            helper.textContent = '你也可以回到聊天里生成自己的一次性登录码。';
         } catch (cause) {
             console.error('Pendo Web 演示空间初始化失败:', cause);
             error.textContent = '暂时无法进入演示空间';

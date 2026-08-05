@@ -159,6 +159,16 @@ XiaoQing 使用两个 JSON 配置文件：
 - **默认**：`true`
 - **说明**：是否启用 Inbound 服务器（被动接收 OneBot 推送）。
 
+#### napcat_account
+- **类型**：`string`
+- **默认**：`""`
+- **说明**：Windows 生产监控器启动本机 NapCat 时追加的 QQ 账号参数。该值由 `scripts/run-bot-monitor.ps1` 从 `config/config.json` 读取，不写入启动脚本；留空或省略时不追加账号参数。
+
+#### mkl_threading_layer
+- **类型**：`string`
+- **默认**：`""`
+- **说明**：Windows 生产监控器为 Bot 子进程设置的可选 `MKL_THREADING_LAYER`。留空或省略时完整继承部署环境；例如使用混合 NumPy/MKL/PyTorch 安装且经验证需要 TBB 时可设为 `"TBB"`。监控器只在创建 Bot 日志泵进程树期间临时注入该值，随后恢复自身原环境，不会固定 Python/Conda 路径，也不会传给后续启动的 NapCat。修改后需要重启监控器。
+
 #### onebot_ws_uri
 - **类型**：`string`
 - **默认**：`"ws://127.0.0.1:11000/ws"`
@@ -901,10 +911,10 @@ pendo 有两部分配置：**AI 解析 route**（日程智能解析需要）和*
 pendo Web UI 使用 JWT Token 认证，无需手动配置密码。Token 由以下方式管理：
 
 ```
-# 获取登录 Token（私聊发送，有效期 24 小时）
+# 获取一次性登录码（私聊发送，7 天内仅可兑换一次）
 /pendo web token
 
-# 获取 Scriptable 小组件只读 Token（默认 30 天）
+# 获取 Scriptable 小组件只读 Token（默认 365 天）
 /pendo web widget-token
 
 # 吊销当前用户全部尚未过期的 Widget Token
@@ -1320,7 +1330,7 @@ tail -f logs/xiaoqing.log
 
 如需改端口，把 `config/config.json` 中的 `plugins.pendo.web_port` 改为合法整数；保存后配置热重载会重启监听端点。
 
-访问 `http://127.0.0.1:12001`（或你自定义的新端口），使用 `/pendo web token` 私聊获得的一次性登录链接登录。链接 5 分钟内仅可兑换一次；浏览器随后使用短期 HttpOnly session cookie，不会把 bearer 写入 localStorage。
+访问 `http://127.0.0.1:12001`（或你自定义的新端口），使用 `/pendo web token` 私聊获得一次性登录码并粘贴登录。登录码 7 天内有效且仅可兑换一次；浏览器随后使用短期 HttpOnly session cookie，不会把 bearer 写入 localStorage。
 
 默认 loopback HTTP 为本机开发保留非 Secure cookie。若把 `plugins.pendo.web_host` 改为非 loopback 地址，必须放在 HTTPS 反向代理之后，并同时配置 `"web_session_cookie_secure": true`；否则服务拒绝启动。
 
