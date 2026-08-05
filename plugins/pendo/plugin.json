@@ -8,7 +8,7 @@
         {
             "name": "pendo",
             "triggers": ["pendo"],
-            "help": "个人时间与信息管理中枢；完整命令码由 Core 目录统一发布；Web 登录使用 /pendo web token，组件令牌使用 /pendo web widget-token",
+            "help": "个人时间与信息管理中枢；完整命令码由 Core 目录统一发布；Web 登录码使用 /pendo web token，组件令牌使用 /pendo web widget-token",
             "contexts": ["private"],
             "usage": "/pendo <subcommand> [args...]",
             "examples": ["/pendo"],
@@ -468,14 +468,14 @@
                 {
                     "name": "web",
                     "aliases": ["webui", "网页"],
-                    "help": "管理 Pendo Web UI 并生成登录令牌",
+                    "help": "管理 Pendo Web UI 并生成登录码",
                     "usage": "/pendo web <token|widget-token|widget-revoke|start|stop|status>",
                     "examples": ["/pendo web"],
                     "invalid_examples": ["/pendo web unknown-command"],
                     "subcommands": [
                         {
                             "name": "token",
-                            "help": "生成一次性 Web 登录链接",
+                            "help": "生成一次性 Web 登录码",
                             "usage": "/pendo web token",
                             "examples": ["/pendo web token"],
                             "invalid_examples": ["/pendo web token extra"]

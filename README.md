@@ -376,7 +376,7 @@ $env:PENDO_WEB_PORT="12003"
 python main.py
 ```
 
-浏览器登录不需要账号密码；执行 `/pendo web token` 后在私聊中打开一次性登录链接（5 分钟内仅可兑换一次）。浏览器会使用短期 HttpOnly 会话，而不会保存 bearer token。Scriptable 小组件使用 `/pendo web widget-token` 生成默认 30 天的只读 token，首次运行时存入 iOS Keychain；需要失效时执行 `/pendo web widget-revoke`。
+浏览器登录不需要账号密码；执行 `/pendo web token` 后，私聊会只返回一次性登录码，在登录页粘贴即可。登录码 7 天内有效且仅可兑换一次；浏览器会使用短期 HttpOnly 会话，而不会保存 bearer token。Scriptable 小组件使用 `/pendo web widget-token` 生成默认 365 天的只读 token，首次运行时存入 iOS Keychain；需要失效时执行 `/pendo web widget-revoke`。
 
 ## Codex 与 arXiv 摘要
 

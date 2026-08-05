@@ -9,6 +9,8 @@
         ],
         "enable_ws_client": false,
         "enable_inbound_server": true,
+        "napcat_account": "",
+        "mkl_threading_layer": "",
         "onebot_ws_uri": "ws://127.0.0.1:11000/ws",
         "onebot_http_base": "http://127.0.0.1:11001",
         "ws_queue_size": 200,

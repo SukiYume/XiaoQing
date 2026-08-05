@@ -16,7 +16,7 @@
                 <section class="login-stage" aria-labelledby="login-stage-title">
                     <span class="login-stage-badge">Pendo Web</span>
                     <h1 id="login-stage-title">登录你的个人管理台</h1>
-                    <p>用聊天里生成的一次性登录链接进入总览、日程、待办、账本和写作空间。</p>
+                    <p>用聊天里生成的一次性登录码进入总览、日程、待办、账本和写作空间。</p>
                     <div class="login-stage-points" role="list">
                         <div class="login-stage-point" role="listitem">
                             <strong>1</strong>
@@ -24,7 +24,7 @@
                         </div>
                         <div class="login-stage-point" role="listitem">
                             <strong>2</strong>
-                            <span>打开私聊中的登录链接，或把链接/登录码粘贴到右侧输入框</span>
+                            <span>复制私聊中的登录码，并粘贴到右侧输入框</span>
                         </div>
                         <div class="login-stage-point" role="listitem">
                             <strong>3</strong>
@@ -35,17 +35,17 @@
                 <section class="login-card" aria-labelledby="login-card-title">
                     <div class="login-card-head">
                         <span class="login-card-kicker">一次性登录</span>
-                        <h2 id="login-card-title">粘贴登录链接或登录码</h2>
+                        <h2 id="login-card-title">粘贴登录码</h2>
                         <p>
-                            登录码仅可使用一次且短时有效。浏览器只保存 HttpOnly 会话 cookie，退出或过期后需要重新登录。
+                            登录码仅可使用一次且 7 天内有效。浏览器只保存 HttpOnly 会话 cookie，退出或过期后需要重新登录。
                         </p>
                     </div>
-                    <label class="login-field-label" for="token-input">登录链接 / 登录码</label>
+                    <label class="login-field-label" for="token-input">登录码</label>
                     <textarea
                         id="token-input"
                         class="login-token-input"
                         rows="4"
-                        placeholder="在这里粘贴私聊中的一次性登录链接或登录码"
+                        placeholder="在这里粘贴私聊中的一次性登录码"
                         autocomplete="one-time-code"
                         spellcheck="false"
                         aria-describedby="login-helper login-error"

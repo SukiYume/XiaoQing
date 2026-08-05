@@ -294,7 +294,7 @@ Pendo 的长期文档入口是 `plugins/pendo/README.md` 和 `plugins/pendo/ARCH
 
 | 命令 | 说明 |
 |------|------|
-| `/pendo web token` | 生成私聊一次性登录链接（5 分钟内仅可使用一次） |
+| `/pendo web token` | 生成私聊一次性登录码（7 天内仅可使用一次） |
 | `/pendo web widget-token` | 生成 Scriptable 小组件令牌（只读） |
 | `/pendo web widget-revoke` | 吊销自己的全部 Scriptable 小组件令牌 |
 | `/pendo web start` | 启动 Web 服务 |
@@ -463,7 +463,7 @@ provider 与模型 profile 位于 `config.ai`，API Key 位于 `secrets.ai.provi
 **11. Web 控制台**
 
 ```
-/pendo web token                             # 获取一次性浏览器登录链接（私聊）
+/pendo web token                             # 获取一次性浏览器登录码（私聊）
 /pendo web widget-token                      # 获取 Scriptable 小组件令牌
 /pendo web widget-revoke                     # 吊销自己的全部小组件令牌
 /pendo web start                             # 启动 Web 服务（默认端口 12001）
@@ -471,9 +471,9 @@ provider 与模型 profile 位于 `config.ai`，API Key 位于 `secrets.ai.provi
 /pendo web stop                              # 停止服务
 ```
 
-启动后默认通过 `http://127.0.0.1:12001` 访问。若在 TLS 反向代理后绑定非 loopback 地址，必须在 `config/config.json` 的 `plugins.pendo` 中配置 `"web_session_cookie_secure": true`；服务会拒绝不安全的外网绑定。浏览器登录使用 `/pendo web token` 私聊发送的一次性登录链接（5 分钟、仅一次），登录后使用短期 HttpOnly session cookie。iPhone Scriptable 小组件仍使用 `/pendo web widget-token` 的只读 bearer。
+启动后默认通过 `http://127.0.0.1:12001` 访问。若在 TLS 反向代理后绑定非 loopback 地址，必须在 `config/config.json` 的 `plugins.pendo` 中配置 `"web_session_cookie_secure": true`；服务会拒绝不安全的外网绑定。浏览器登录使用 `/pendo web token` 私聊发送的原始一次性登录码（7 天、仅一次），在登录页粘贴后使用短期 HttpOnly session cookie。iPhone Scriptable 小组件仍使用 `/pendo web widget-token` 的只读 bearer。
 
-Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚本仓库版本只保留 `BASE_URL`，Widget Token 在首次 App 内运行时通过安全输入框写入 iOS Keychain。Token 默认 30 天有效，可用 `/pendo web widget-revoke` 吊销。它可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏，并支持 `small` / `medium` / `large` 三种尺寸。
+Scriptable 小组件使用 `plugins/pendo/web/scriptable/pendo_widget.js`，脚本仓库版本只保留 `BASE_URL`，Widget Token 在首次 App 内运行时通过安全输入框写入 iOS Keychain。Token 默认 365 天有效，可用 `/pendo web widget-revoke` 吊销。它可把未来 30 天内最多 5 条日程与右侧最多 5 条待办 / 财务 / 笔记摘要显示到主屏，并支持 `small` / `medium` / `large` 三种尺寸。
 
 如果在 Windows 上默认端口启动失败，但 `netstat -ano` 看不到进程占用，通常是系统拒绝绑定该端口。优先改 `plugins.pendo.web_port`，而不是继续排查“哪个进程占了它”。
 

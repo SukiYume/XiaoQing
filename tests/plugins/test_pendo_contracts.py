@@ -301,7 +301,7 @@ class TestPendoDocumentation:
                 '"web_session_cookie_secure": true',
                 "/pendo settings ai_consent on/off",
                 "section=tasks|ledger|notes|all|auto",
-                "一次性登录链接",
+                "一次性登录码",
             ):
                 assert current_contract in content
             for removed_contract in (

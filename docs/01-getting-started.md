@@ -232,17 +232,23 @@ Windows 也可以双击 `scripts\run-bot.vbs`，由隐藏窗口中的
 达到阈值后退避恢复初值。
 
 Python 环境及依赖由部署者在启动前准备；项目和监控器都只调用当前 `PATH` 中的
-`python`，不识别或固定 Conda/venv 名称。QQ 账号和额外启动参数也不内置。在当前
-PowerShell 会话直接启动监控器时，可以这样设置进程环境变量：
+`python`，不识别或固定 Conda/venv 名称。QQ 账号不内置在启动脚本中，而由同一份
+`config/config.json` 提供。部署环境还可以在同一处选择 Bot 子进程使用的 MKL
+线程层，而不必把 Conda 或 Python 路径写进脚本：
 
-```powershell
-$env:XIAOQING_NAPCAT_ACCOUNT = "你的QQ号"
-& .\scripts\run-bot-monitor.ps1
+```json
+{
+  "napcat_account": "你的QQ号",
+  "mkl_threading_layer": ""
+}
 ```
 
-如果要继续从资源管理器双击 `scripts\run-bot.vbs`，应通过 Windows 用户环境变量界面
-持久设置 `XIAOQING_NAPCAT_ACCOUNT`，并在重新登录后启动；仅在另一个已打开的
-PowerShell 窗口设置 `$env:` 不会改变资源管理器已经继承的环境。
+两个值都应使用字符串。`napcat_account` 留空或省略时，监控器不会向 NapCat
+追加账号参数。`mkl_threading_layer` 留空或省略时，Bot 完全继承部署者准备的
+环境；仅当本机的 NumPy/MKL/PyTorch 组合明确需要时才配置，例如
+`"mkl_threading_layer": "TBB"`。该设置只注入新建的 Bot 日志泵进程树，监控器
+随后恢复原环境，不会固定 Python/Conda 路径，也不会改动 NapCat 环境。双击
+`scripts/run-bot.vbs` 与直接运行监控器都会读取这份配置；修改后需要重启监控器。
 
 高级部署可以通过 `-BotArguments`、`-NapCatPath` 和 `-NapCatArguments` 传入
 额外参数或实际 NapCat 路径。`-MonitorIntervalSeconds`、重启退避、稳定
@@ -435,7 +441,7 @@ pendo 插件内置了一个基于 FastAPI 的 Web 控制台，可以在浏览器
 机器人: 运行中 | 地址：http://127.0.0.1:12001
 ```
 
-打开浏览器访问后，先执行 `/pendo web token` 获取一次性登录链接。iPhone Scriptable 小组件使用 `/pendo web widget-token` 生成默认 30 天的只读 token，并在首次运行脚本时存入 iOS Keychain；需要失效时执行 `/pendo web widget-revoke`。
+打开浏览器访问后，先执行 `/pendo web token` 获取一次性登录码并粘贴登录。登录码 7 天内有效且仅可使用一次。iPhone Scriptable 小组件使用 `/pendo web widget-token` 生成默认 365 天的只读 token，并在首次运行脚本时存入 iOS Keychain；需要失效时执行 `/pendo web widget-revoke`。
 
 Windows 上遇到端口绑定失败，且 `netstat -ano` 看不到默认端口被占用时，优先把 `config/config.json` 中的 `plugins.pendo.web_port` 改为其他合法端口（例如 `12003`）；保存后配置热重载会重启监听端点。
 

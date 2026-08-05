@@ -473,4 +473,4 @@ def test_app_source_extracts_one_time_login_code_from_pasted_message() -> None:
     assert "url.searchParams.get('code')" in src
     assert "const code = extractLoginCode(input.value);" in src
     assert "if (code !== input.value.trim()) {" in src
-    assert "一次性登录链接" in html
+    assert "一次性登录码" in html

@@ -87,9 +87,9 @@ class PendoConfig:
     SESSION_TYPE_LEDGER_ADD = "ledger_add"
 
     # Web UI
-    WEB_LOGIN_CODE_EXPIRE_SECONDS = 5 * 60
+    WEB_LOGIN_CODE_EXPIRE_SECONDS = 7 * 24 * 60 * 60
     WEB_SESSION_EXPIRE_SECONDS = 8 * 60 * 60
-    WEB_WIDGET_TOKEN_EXPIRE_HOURS = 24 * 30
+    WEB_WIDGET_TOKEN_EXPIRE_HOURS = 24 * 365
     WEB_DEMO_EXPIRE_HOURS = 6
     WEB_DEMO_MAX_ACTIVE_SESSIONS = 20
     WEB_DEMO_REQUESTS_PER_HOUR = 3
@@ -113,6 +113,8 @@ class PendoConfig:
             raise ValueError("UNDO_WINDOW_MINUTES must be positive")
         if cls.REMINDER_STALE_AFTER_SECONDS <= cls.REMINDER_REPEAT_INTERVAL_SECONDS:
             raise ValueError("REMINDER_STALE_AFTER_SECONDS must exceed the repeat interval")
+        if cls.WEB_LOGIN_CODE_EXPIRE_SECONDS <= 0:
+            raise ValueError("WEB_LOGIN_CODE_EXPIRE_SECONDS must be positive")
         if cls.WEB_WIDGET_TOKEN_EXPIRE_HOURS <= 0:
             raise ValueError("WEB_WIDGET_TOKEN_EXPIRE_HOURS must be positive")
 

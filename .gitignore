@@ -97,6 +97,7 @@ plugins/minecraft/config.json
 /data/
 plugins/*/data/
 plugins/*/cache/
+/test_reports/
 /test_reports/runs/
 /tests/command_scenario_fixtures.local.json
 plugins/pendo/test_tools/
