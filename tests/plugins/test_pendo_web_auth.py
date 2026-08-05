@@ -99,7 +99,8 @@ def test_generated_widget_token_contains_read_only_claims(
     assert payload["kind"] == "widget"
     assert payload["scope"] == "widget:read"
     assert isinstance(payload["jti"], str) and payload["jti"]
-    assert payload["exp"] - issued_at <= 31 * 24 * 60 * 60
+    lifetime = payload["exp"] - issued_at
+    assert 364 * 24 * 60 * 60 <= lifetime <= 366 * 24 * 60 * 60
 
 
 def test_widget_token_revocation_is_persistent(tmp_path: Path) -> None:

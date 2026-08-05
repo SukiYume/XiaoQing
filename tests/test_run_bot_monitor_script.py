@@ -111,11 +111,14 @@ def test_monitor_uses_scoped_identity_configured_launch_and_log_pump() -> None:
     assert "utf8NoBOM" not in source
 
 
-def test_monitor_has_no_baked_account_or_python_environment() -> None:
+def test_monitor_reads_launcher_config_without_baking_deployment_values() -> None:
     source = MONITOR.read_text(encoding="utf-8")
 
-    assert "1000000001" not in source
-    assert "XIAOQING_NAPCAT_ACCOUNT" in source
+    assert '"config\\config.json"' in source
+    assert 'Properties["napcat_account"]' in source
+    assert 'Properties["mkl_threading_layer"]' in source
+    assert '"MKL_THREADING_LAYER"' in source
+    assert "XIAOQING_NAPCAT_ACCOUNT" not in source
     assert "CondaPath" not in source
     assert "CondaEnvironment" not in source
     assert "PythonPath" not in source
@@ -123,10 +126,184 @@ def test_monitor_has_no_baked_account_or_python_environment() -> None:
     for parameter in (
         "$BotArguments",
         "$DisableNapCat",
-        "$NapCatAccount",
         "$NapCatArguments",
     ):
         assert parameter in source
+
+
+def test_monitor_resolves_script_relative_defaults_after_parameter_binding() -> None:
+    source = MONITOR.read_text(encoding="utf-8")
+    parameter_block, runtime_body = source.split("Set-StrictMode", maxsplit=1)
+
+    assert "$PSScriptRoot" not in parameter_block
+    assert "$ScriptDirectory = $PSScriptRoot" in runtime_body
+    assert "$BotRoot = Split-Path -Parent $ScriptDirectory" in runtime_body
+    assert "Unable to resolve XiaoQing monitor script directory" in runtime_body
+
+
+def test_monitor_passes_configured_account_as_first_napcat_argument(tmp_path: Path) -> None:
+    executable = _powershell_executable()
+    if executable is None:
+        pytest.skip("PowerShell is not installed")
+
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "napcat_account": "123456789",
+                "mkl_threading_layer": "TBB",
+            }
+        ),
+        encoding="utf-8",
+    )
+    invalid_type_file = tmp_path / "invalid-type.json"
+    invalid_type_file.write_text(json.dumps({"napcat_account": 123456789}), encoding="utf-8")
+    invalid_value_file = tmp_path / "invalid-value.json"
+    invalid_value_file.write_text(json.dumps({"napcat_account": "not-an-account"}), encoding="utf-8")
+    invalid_mkl_type_file = tmp_path / "invalid-mkl-type.json"
+    invalid_mkl_type_file.write_text(
+        json.dumps({"mkl_threading_layer": 123}),
+        encoding="utf-8",
+    )
+    invalid_mkl_value_file = tmp_path / "invalid-mkl-value.json"
+    invalid_mkl_value_file.write_text(
+        json.dumps({"mkl_threading_layer": "TBB;unsafe"}),
+        encoding="utf-8",
+    )
+    environment = {
+        **os.environ,
+        "XIAOQING_MONITOR_AST_PATH": str(MONITOR),
+        "XIAOQING_TEST_CONFIG": str(config_file),
+        "XIAOQING_TEST_INVALID_TYPE_CONFIG": str(invalid_type_file),
+        "XIAOQING_TEST_INVALID_VALUE_CONFIG": str(invalid_value_file),
+        "XIAOQING_TEST_INVALID_MKL_TYPE_CONFIG": str(invalid_mkl_type_file),
+        "XIAOQING_TEST_INVALID_MKL_VALUE_CONFIG": str(invalid_mkl_value_file),
+        "XIAOQING_TEST_NAPCAT": str(tmp_path / "NapCatWinBootMain.exe"),
+    }
+    probe = r"""
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $env:XIAOQING_MONITOR_AST_PATH, [ref]$tokens, [ref]$errors)
+$definitions = $ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in @('Read-LauncherConfig', 'Start-NapCat')
+}, $true)
+foreach ($definition in $definitions) {
+    Invoke-Expression $definition.Extent.Text
+}
+foreach ($invalidConfig in @(
+    $env:XIAOQING_TEST_INVALID_TYPE_CONFIG,
+    $env:XIAOQING_TEST_INVALID_VALUE_CONFIG,
+    $env:XIAOQING_TEST_INVALID_MKL_TYPE_CONFIG,
+    $env:XIAOQING_TEST_INVALID_MKL_VALUE_CONFIG
+)) {
+    try {
+        Read-LauncherConfig -Path $invalidConfig | Out-Null
+        exit 41
+    } catch {
+        if ($_.Exception.Message -notlike '*config.json*') { exit 42 }
+    }
+}
+$script:CapturedArguments = $null
+function Start-LogPumpedProcess {
+    param($CommandArguments, $WorkingDirectory, $StandardOutputLog, $StandardErrorLog)
+    $script:CapturedArguments = @($CommandArguments)
+}
+$launcherConfig = Read-LauncherConfig -Path $env:XIAOQING_TEST_CONFIG
+if ($launcherConfig.MklThreadingLayer -ne 'TBB') { exit 43 }
+$script:NapCatAccount = $launcherConfig.NapCatAccount
+$script:NapCatPath = $env:XIAOQING_TEST_NAPCAT
+$script:NapCatArguments = @('--mode', 'production')
+$script:NapCatLog = 'stdout.log'
+$script:NapCatErrorLog = 'stderr.log'
+Start-NapCat
+$script:CapturedArguments | ConvertTo-Json -Compress
+"""
+
+    result = _run_powershell(executable, "-Command", probe, env=environment)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [
+        str(tmp_path / "NapCatWinBootMain.exe"),
+        "123456789",
+        "--mode",
+        "production",
+    ]
+
+
+def test_monitor_scopes_configured_mkl_layer_to_bot_process_tree() -> None:
+    executable = _powershell_executable()
+    if executable is None:
+        pytest.skip("PowerShell is not installed")
+
+    environment = {**os.environ, "XIAOQING_MONITOR_AST_PATH": str(MONITOR)}
+    probe = r"""
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $env:XIAOQING_MONITOR_AST_PATH, [ref]$tokens, [ref]$errors)
+$definition = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Start-TrackedBot'
+}, $true)
+Invoke-Expression $definition.Extent.Text
+$script:PidFile = Join-Path ([IO.Path]::GetTempPath()) 'xiaoqing-mkl-test.pid'
+$script:MainScript = 'C:\repo\main.py'
+$script:BotRoot = 'C:\repo'
+$script:BotLog = 'C:\repo\stdout.log'
+$script:BotErrorLog = 'C:\repo\stderr.log'
+$script:BotArguments = @()
+$script:MklThreadingLayer = 'TBB'
+$script:CapturedMklThreadingLayer = $null
+function Start-LogPumpedProcess {
+    param($CommandArguments, $WorkingDirectory, $StandardOutputLog, $StandardErrorLog)
+    $script:CapturedMklThreadingLayer = $env:MKL_THREADING_LAYER
+    return [pscustomobject]@{ Id = 424242 }
+}
+function Write-Utf8NoBomAtomically { }
+$original = [Environment]::GetEnvironmentVariable(
+    'MKL_THREADING_LAYER', [EnvironmentVariableTarget]::Process)
+try {
+    $env:MKL_THREADING_LAYER = 'ambient-value'
+    Start-TrackedBot
+    if ($script:CapturedMklThreadingLayer -ne 'TBB') { exit 51 }
+    if ($env:MKL_THREADING_LAYER -ne 'ambient-value') { exit 52 }
+} finally {
+    [Environment]::SetEnvironmentVariable(
+        'MKL_THREADING_LAYER', $original, [EnvironmentVariableTarget]::Process)
+}
+exit 0
+"""
+
+    result = _run_powershell(executable, "-Command", probe, env=environment)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_monitor_default_bot_root_resolves_in_windows_powershell(
+    tmp_path: Path,
+) -> None:
+    executable = _powershell_executable()
+    if executable is None:
+        pytest.skip("PowerShell is not installed")
+
+    result = _run_powershell(
+        executable,
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(MONITOR),
+        "-NapCatPath",
+        str(tmp_path / "missing-napcat.exe"),
+    )
+
+    assert result.returncode != 0
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    assert "NapCat executable not found" in output
+    assert "Unable to resolve XiaoQing monitor script directory" not in output
 
 
 def test_log_pump_rotates_both_streams_while_child_remains_running(tmp_path: Path) -> None:
@@ -641,7 +818,6 @@ exit 0
         ["-MaximumLogBytes", str(64 * 1024 - 1)],
         ["-LogBackupCount", "0"],
         ["-InitialRestartDelaySeconds", "11", "-MaximumRestartDelaySeconds", "10"],
-        ["-NapCatAccount", "not-an-account"],
     ],
 )
 def test_monitor_rejects_invalid_ranges_before_launch(arguments: list[str]) -> None:
@@ -662,8 +838,14 @@ def test_monitor_fails_closed_when_napcat_executable_is_missing(tmp_path: Path) 
     bot_root = tmp_path / "bot"
     scripts = bot_root / "scripts"
     scripts.mkdir(parents=True)
+    config_dir = bot_root / "config"
+    config_dir.mkdir()
     (bot_root / "main.py").write_text("", encoding="utf-8")
     (scripts / "run_process_with_rotating_logs.py").write_text("", encoding="utf-8")
+    (config_dir / "config.json").write_text(
+        json.dumps({"napcat_account": ""}),
+        encoding="utf-8",
+    )
     missing_napcat = tmp_path / "missing-napcat.exe"
 
     environment = {

@@ -733,7 +733,7 @@ class TestOperationAndExportRegression:
 class TestPendoWebHandler:
     """测试 pendo web 命令格式化与发送行为"""
 
-    def test_web_token_sends_token_as_separate_private_message(self, monkeypatch):
+    def test_web_token_sends_raw_code_as_separate_private_message(self, monkeypatch):
         import importlib
         import sys
         import types
@@ -753,7 +753,13 @@ class TestPendoWebHandler:
 
         web_module = importlib.import_module("plugins.pendo.handlers.web")
 
-        monkeypatch.setattr(web_module, "issue_login_code", lambda *_args, **_kwargs: "mock-code")
+        issuance = {}
+
+        def issue_code(owner_id, *, expires_seconds):
+            issuance.update(owner_id=owner_id, expires_seconds=expires_seconds)
+            return "mock-code"
+
+        monkeypatch.setattr(web_module, "issue_login_code", issue_code)
         monkeypatch.setattr(web_module.web_server, "get_url", lambda: "http://127.0.0.1:8765")
         monkeypatch.setattr(web_module.web_server, "is_running", lambda: True)
 
@@ -769,15 +775,17 @@ class TestPendoWebHandler:
         result = asyncio.run(handler.handle("1001", "token", context=context))
 
         assert result["status"] == "success"
-        assert "一次性登录链接已单独私聊发送" in result["message"]
+        assert "登录 Code 已单独私聊发送" in result["message"]
+        assert "7 天，仅可使用一次" in result["message"]
         assert "mock-code" not in result["message"]
+        assert issuance == {"owner_id": "1001", "expires_seconds": 7 * 24 * 60 * 60}
         assert len(actions) == 1
         assert actions[0]["action"] == "send_private_msg"
         assert actions[0]["params"]["user_id"] == 1001
         token_text = actions[0]["params"]["message"][0]["data"]["text"]
-        assert "Pendo Web 一次性登录链接" in token_text
-        assert "?code=mock-code" in token_text
-        assert "仅可使用一次" in token_text
+        assert token_text == "mock-code"
+        assert "http://" not in token_text
+        assert "https://" not in token_text
 
     def test_web_token_fails_closed_when_private_delivery_is_unavailable(self, monkeypatch):
         import importlib
@@ -809,7 +817,7 @@ class TestPendoWebHandler:
         assert result["status"] == "error"
         assert "无法通过私聊安全发送凭据" in result["message"]
         assert "mock-code" not in result["message"]
-        assert "登录链接:" not in result["message"]
+        assert "登录 Code:" not in result["message"]
 
     def test_web_token_reports_unknown_private_delivery_without_exposing_credential(self):
         from plugins.pendo.handlers.web import WebHandler
@@ -913,9 +921,13 @@ class TestPendoWebHandler:
         )
 
         web_module = importlib.import_module("plugins.pendo.handlers.web")
-        monkeypatch.setattr(
-            web_module, "generate_widget_token", lambda *_args, **_kwargs: "widget-token"
-        )
+        issuance = {}
+
+        def issue_widget(owner_id, *, expires_hours, db):
+            issuance.update(owner_id=owner_id, expires_hours=expires_hours, db=db)
+            return "widget-token"
+
+        monkeypatch.setattr(web_module, "generate_widget_token", issue_widget)
 
         actions = []
 
@@ -930,7 +942,9 @@ class TestPendoWebHandler:
 
         assert result["status"] == "success"
         assert "Widget Token 已单独私聊发送" in result["message"]
+        assert "365 天" in result["message"]
         assert "widget-token" not in result["message"]
+        assert issuance == {"owner_id": "1001", "expires_hours": 24 * 365, "db": None}
         assert len(actions) == 1
         token_text = actions[0]["params"]["message"][0]["data"]["text"]
         assert "Pendo Web Widget Token" in token_text

@@ -179,7 +179,7 @@ Pendo 是 XiaoQing 的个人管理插件，用同一套数据模型管理日程�
 }
 ```
 
-Web 登录不需要账号密码。执行 `/pendo web token` 后，一次性登录链接会单独通过私聊发送；链接 5 分钟内仅可使用一次，打开后会自动建立浏览器会话。`PENDO_WEB_TOKEN_SECRET` 可用于保持多实例或重启后的签名密钥稳定。
+Web 登录不需要账号密码。执行 `/pendo web token` 后，私聊会只发送可直接复制的一次性登录码；登录码 7 天内有效且仅可使用一次，在 Pendo Web 登录页粘贴后会建立浏览器会话。`PENDO_WEB_TOKEN_SECRET` 可用于保持多实例或重启后的签名密钥稳定。
 
 默认地址只监听本机。若把 `web_host` 改为非 loopback 地址，服务会要求同时配置 `"web_session_cookie_secure": true`，并且必须部署在 TLS 反向代理之后；不要把明文 HTTP 登录入口直接暴露到网络。`web_demo_enabled` 只应用于受控的本地演示环境。布尔值必须使用 JSON 布尔值，`web_port` 必须是 `1..65535` 的整数；非法配置会被拒绝，不会覆盖上一代有效设置。
 
@@ -218,7 +218,7 @@ plugins/pendo/web/scriptable/pendo_widget.js
 脚本中只保留 `BASE_URL`，不保留 Token 常量。使用前将 `BASE_URL` 改成自己的
 Pendo Web 地址，然后在 Scriptable App 内直接运行一次脚本，将
 `/pendo web widget-token` 私聊生成的只读 Token 存入 iOS Keychain。Token 默认
-30 天过期；可用 `/pendo web widget-revoke` 吊销自己所有未过期的组件令牌。
+365 天过期；可用 `/pendo web widget-revoke` 吊销自己所有未过期的组件令牌。
 详细说明见 `docs/pendo-scriptable-widget.md`。
 
 ## 导入、导出和迁移

@@ -6,6 +6,21 @@
 
 ## 未发布
 
+### Windows 生产启动链
+
+- 修复 `scripts/run-bot-monitor.ps1` 在 Windows PowerShell 5.1 中通过 `-File`/`run-bot.vbs` 启动时，参数默认表达式过早读取空 `$PSScriptRoot`、导致监控器在拉起 Bot 前退出的问题；脚本相对默认路径现在统一在参数绑定完成后解析，并保留无法确定脚本目录时的失败关闭。
+- 新增源码契约与真实 Windows PowerShell 回归测试，覆盖省略 `-BotRoot` 的默认启动路径以及配置驱动的 Bot 环境变量作用域；监控器测试文件 31 项全部通过。
+- 重整 `scripts/run-bot-monitor.ps1` 的部署配置、路径解析、进程识别、启动和监控顺序，删除未使用的 PID 元数据与重复进程查询封装；Conda、虚拟环境和 Python 路径仍完全由部署者自行准备，脚本只调用 `PATH` 中的 `python`。
+- NapCat QQ 账号改由 `config/config.json` 的 `napcat_account` 提供，启动器读取后作为 NapCat 的第一个位置参数传入；脚本、VBS 和仓库示例均不内置生产 QQ 号。
+- 新增可选的 `mkl_threading_layer` 部署配置；Windows 监控器只在创建 Bot 日志泵进程树时临时设置 `MKL_THREADING_LAYER` 并立即恢复原环境，用于解决双击启动未经过 Conda 激活钩子时的 MKL/OpenMP 运行库冲突，同时不恢复固定 Conda/Python 路径，也不使用不安全的 `KMP_DUPLICATE_LIB_OK` 绕过。
+
+### Pendo Web 登录凭据
+
+- `/pendo web token` 的私聊凭据消息改为只包含原始登录 Code，不再拼接本机 URL；Code 仍只能兑换一次，有效期由 5 分钟延长为 7 天。
+- `/pendo web widget-token` 的默认有效期由 30 天延长为 365 天，保留按用户持久化登记和 `/pendo web widget-revoke` 主动吊销能力。
+- 同步更新 Pendo 登录页、命令帮助、配置说明和 Scriptable 文档，并新增登录 Code 原始投递、期限参数和 NapCat 配置启动参数回归测试。
+- 验证：Git Bash `pytest -q -n 2` 全量通过（5913 passed、5 skipped），Ruff 全仓检查、307 个生产源文件的 mypy 检查、compileall、JSON 解析与 `git diff --check` 均通过。
+
 ## 2026-08-05 (v4.2.0)
 
 ### v4.2.0 发布

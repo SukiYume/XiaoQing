@@ -178,7 +178,7 @@ export function exchangeLoginCode(code) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ code }),
         },
-        '登录链接无效或已失效',
+        '登录码无效或已失效',
         '无法连接到 Web 服务',
     );
 }
