@@ -1,6 +1,7 @@
 """bot_core 插件单元测试。"""
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -212,13 +213,19 @@ class TestHelpCommand:
 
     @pytest.mark.asyncio
     async def test_help_all_commands(self, mock_context):
-        """测试显示所有命令帮助"""
+        """默认帮助只显示插件级功能导航。"""
         result = await bot_core.handle("help", "", {}, mock_context)
         assert result is not None
         assert len(result) > 0
-        result_text = str(result)
-        # 应该包含命令帮助的标题
-        assert "命令帮助" in result_text or "📖" in result_text
+        result_text = result[0]["data"]["text"]
+        assert "XiaoQing 功能导航" in result_text
+        assert "bot_core（Core）" in result_text
+        assert "/help" in result_text
+        assert "/reload" in result_text
+        assert "chat" in result_text
+        assert "/help <插件名>" in result_text
+        assert "code:" not in result_text
+        assert "bot_core.help.search" not in result_text
 
     @pytest.mark.asyncio
     async def test_help_with_keyword(self, mock_context):
@@ -236,9 +243,24 @@ class TestHelpCommand:
         result = await bot_core.handle("help", "bot_core", {}, mock_context)
         assert result is not None
         assert len(result) > 0
-        result_text = str(result)
-        # 应该包含bot_core相关命令
-        assert "bot_core" in result_text.lower() or "bot" in result_text.lower()
+        result_text = result[0]["data"]["text"]
+        assert "bot_core 插件命令目录" in result_text
+        assert "bot_core.help" in result_text
+        assert "bot_core.help.search" in result_text
+
+    @pytest.mark.asyncio
+    async def test_help_json_without_query_keeps_complete_flat_catalog(self, mock_context):
+        """自动化依赖的 JSON 全量目录不随人类首页分层而改变。"""
+
+        result = await bot_core.handle("help", "json page 1", {}, mock_context)
+        payload = json.loads(result[0]["data"]["text"])
+
+        assert [command["code"] for command in payload["commands"]] == [
+            "bot_core.help",
+            "bot_core.help.search",
+            "bot_core.reload",
+            "chat.chat",
+        ]
 
     @pytest.mark.asyncio
     async def test_help_with_no_results(self, mock_context):
@@ -883,6 +905,58 @@ class TestCommandAliases:
 
 
 class TestStructuredCommandCatalog:
+    def test_plugin_overview_paginates_plugins_instead_of_command_nodes(self):
+        roots = tuple(
+            _catalog_node(
+                f"plugin_{index}.command",
+                f"plugin_{index}",
+                (f"command_{index}",),
+                f"插件 {index} 功能",
+                f"/command_{index}",
+            )
+            for index in range(bot_core.HELP_PLUGIN_PAGE_SIZE + 1)
+        )
+
+        first_page, total_pages = bot_core._plugin_overview_page(roots, 1)
+        second_page, second_total = bot_core._plugin_overview_page(roots, 2)
+
+        assert total_pages == second_total == 2
+        assert len(first_page) == bot_core.HELP_PLUGIN_PAGE_SIZE
+        assert len(second_page) == 1
+
+    def test_plugin_overview_prefers_the_root_with_the_complete_command_tree(self):
+        canonical = _catalog_node(
+            "demo.demo",
+            "demo",
+            ("demo",),
+            "主入口",
+            "/demo <子命令>",
+            children=(
+                _catalog_node(
+                    "demo.demo.list",
+                    "demo",
+                    ("demo", "list"),
+                    "列表",
+                    "/demo list",
+                ),
+            ),
+        )
+        compatibility = _catalog_node(
+            "demo.legacy",
+            "demo",
+            ("legacy",),
+            "旧版兼容入口",
+            "/legacy",
+        )
+
+        output = bot_core._format_plugin_overview_entry(
+            "demo",
+            (compatibility, canonical),
+        )
+
+        assert "• demo · /demo · /legacy · 3 个命令" in output
+        assert "  主入口" in output
+
     def test_select_by_plugin_returns_every_descendant(self):
         result = bot_core._select_catalog_nodes(_sample_catalog(), "bot_core")
 

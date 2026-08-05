@@ -385,10 +385,12 @@ Core 为每个节点生成全局稳定命令码：`<插件名>.<顶层 name>.<�
 运行时可用以下入口查看同一份目录：
 
 ```text
-/help                         # 分页遍历所有节点
+/help                         # 查看 Core 与已加载插件的功能导航
+/help page 1                  # 按页浏览插件级导航
 /help myplugin                # 查看插件完整子树
 /help myplugin.cmd.show       # 按稳定命令码精确查询
 /help json myplugin           # 导出包含权限、场景、样例和子节点的 JSON
+/help json page 1             # 自动化按页读取所有命令节点
 ```
 
 ### schedule 字段
