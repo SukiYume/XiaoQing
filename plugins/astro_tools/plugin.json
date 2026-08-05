@@ -514,6 +514,11 @@
             "name": "astropy",
             "required": false,
             "description": "天文单位、坐标、时间和宇宙学子命令的可选运行时"
+        },
+        {
+            "name": "scipy",
+            "required": false,
+            "description": "Astropy 宇宙学距离和时间积分的可选运行时"
         }
     ],
     "schedule": []

@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import ntpath
 import os
 import re
 import shlex
@@ -186,7 +187,7 @@ def _normalize_path_token(token: str) -> str:
     if sys.platform == "win32":
         if token.startswith("~/"):
             token = os.path.expanduser(token)
-        return os.path.normpath(token)
+        return ntpath.normpath(token)
 
     if token.startswith("~/"):
         return os.path.expanduser(token)

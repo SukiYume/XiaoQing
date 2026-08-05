@@ -451,7 +451,7 @@ $definition = $ast.FindAll({
         $node.Name -eq 'Start-TrackedBot'
 }, $true) | Select-Object -First 1
 Invoke-Expression $definition.Extent.Text
-$script:PidFile = Join-Path $env:TEMP 'xiaoqing-monitor-nonexistent.pid'
+$script:PidFile = Join-Path ([IO.Path]::GetTempPath()) 'xiaoqing-monitor-nonexistent.pid'
 $script:MainScript = 'C:\repo\main.py'
 $script:LogPumpScript = 'C:\repo\scripts\run_process_with_rotating_logs.py'
 $script:BotRoot = 'C:\repo'

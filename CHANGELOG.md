@@ -13,6 +13,7 @@
 - 发布 `v4.2.0`，收录全量代码审查整改、运行时服务边界、安全默认、统一 AI/VLM 路由、全插件命令 UAT、Pendo 与 XiaoQing Chat 改进，以及发布与运维工具整理后的当前主线。
 - 使用生产环境旧版 `plugins/*/data/` 与日志快照完成发布验收：Pendo、QingPet 的 WAL 数据库在迁移前通过 `quick_check` 与完整 `integrity_check`，29 个插件在隔离数据根中完成旧布局迁移并连续三次正常启动、优雅停机和释放端口。
 - 完整 UAT 的 WebSocket/HTTP 命令矩阵、动态 CRUD/清理场景、Core 压测、compileall、Ruff、mypy、pytest 与双 diff 门禁全部通过；全量测试为 5914 passed、1 skipped，覆盖率 80.79%，配置逐字节恢复且 secrets 哈希不变。外部依赖与真实付费模型质量测试仍保持显式 opt-in，不计入本次默认发布门禁。
+- 补齐干净环境暴露的可选功能依赖契约：源码 checkout 的完整依赖加入 arXiv 数据层所需的 pandas，`astro` extra 与 Astro Tools 清单加入宇宙学积分所需的 SciPy；同时固定 Shell 的 Windows 路径规范化语义，并让 Windows 监控器测试探针使用跨平台临时目录 API。
 
 ### 全插件命令 WS 联调、Pendo 示例修复与文档同步
 
