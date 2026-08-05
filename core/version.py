@@ -13,7 +13,7 @@ def _source_tree_version() -> str | None:
     try:
         import tomllib
     except ModuleNotFoundError:  # pragma: no cover - exercised on CPython 3.10
-        import tomli as tomllib
+        import tomli as tomllib  # type: ignore[no-redef]
 
     with pyproject.open("rb") as stream:
         project = tomllib.load(stream).get("project")
