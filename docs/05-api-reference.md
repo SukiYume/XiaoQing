@@ -296,7 +296,9 @@ for root in roots:
 每个 `CommandCatalogNode` 都包含 `code`、`plugin`、`path`、`name`、`aliases`、
 `help_text`、`usage`、`match_mode`、`permission`、`contexts`、`examples`、
 `invalid_examples` 和 `children`。`to_dict()` 返回可直接 JSON 序列化、且不包含处理器的
-公开视图。不要从 `/help` 格式化文本反向解析命令。
+公开视图。`/help` 默认只渲染插件级功能导航，`/help <插件名>`
+渲染该插件的递归命令目录；自动化应读取 `/help json page N`，不要从
+任何 `/help` 格式化文本反向解析命令。
 
 #### command_invocation
 
