@@ -115,7 +115,7 @@ def test_general_plugin_and_astro_extras_have_no_orphaned_legacy_packages() -> N
         if line.strip() and not line.lstrip().startswith("#")
     ]
     requirement_names = _names(requirement_lines)
-    assert {"pandas", "scipy"} <= requirement_names
+    assert {"pandas", "scipy", "scikit-learn"} <= requirement_names
     assert "astroquery" not in requirement_names
 
 
