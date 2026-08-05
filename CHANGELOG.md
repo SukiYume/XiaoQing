@@ -10,6 +10,7 @@
 
 - 修复 `scripts/run-bot-monitor.ps1` 在 Windows PowerShell 5.1 中通过 `-File`/`run-bot.vbs` 启动时，参数默认表达式过早读取空 `$PSScriptRoot`、导致监控器在拉起 Bot 前退出的问题；脚本相对默认路径现在统一在参数绑定完成后解析，并保留无法确定脚本目录时的失败关闭。
 - 新增源码契约与真实 Windows PowerShell 回归测试，覆盖省略 `-BotRoot` 的默认启动路径以及配置驱动的 Bot 环境变量作用域；监控器测试文件 31 项全部通过。
+- 修复默认路径回归测试在干净 checkout 中错误依赖本机 `config/config.json` 的问题；Windows smoke 固定使用两个 pytest worker，并为 PowerShell 进程启动保留充足的 CI 时间，避免共享 runner 抖动造成成批超时误报。
 - 重整 `scripts/run-bot-monitor.ps1` 的部署配置、路径解析、进程识别、启动和监控顺序，删除未使用的 PID 元数据与重复进程查询封装；Conda、虚拟环境和 Python 路径仍完全由部署者自行准备，脚本只调用 `PATH` 中的 `python`。
 - NapCat QQ 账号改由 `config/config.json` 的 `napcat_account` 提供，启动器读取后作为 NapCat 的第一个位置参数传入；脚本、VBS 和仓库示例均不内置生产 QQ 号。
 - 新增可选的 `mkl_threading_layer` 部署配置；Windows 监控器只在创建 Bot 日志泵进程树时临时设置 `MKL_THREADING_LAYER` 并立即恢复原环境，用于解决双击启动未经过 Conda 激活钩子时的 MKL/OpenMP 运行库冲突，同时不恢复固定 Conda/Python 路径，也不使用不安全的 `KMP_DUPLICATE_LIB_OK` 绕过。

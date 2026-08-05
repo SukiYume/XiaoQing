@@ -16,6 +16,7 @@ from scripts import run_process_with_rotating_logs as log_pump
 ROOT = Path(__file__).resolve().parents[1]
 MONITOR = ROOT / "scripts" / "run-bot-monitor.ps1"
 LOG_PUMP = ROOT / "scripts" / "run_process_with_rotating_logs.py"
+POWERSHELL_TIMEOUT_SECONDS = 30
 
 
 def _powershell_executable() -> str | None:
@@ -36,7 +37,7 @@ def _run_powershell(
     executable: str,
     *arguments: str,
     env: dict[str, str] | None = None,
-    timeout: float = 10,
+    timeout: float = POWERSHELL_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
     """运行 PowerShell，并稳定解码不同宿主产生的诊断输出。"""
 
@@ -69,7 +70,7 @@ def _assert_process_not_running(process_id: int) -> None:
             check=False,
             capture_output=True,
             env=environment,
-            timeout=10,
+            timeout=POWERSHELL_TIMEOUT_SECONDS,
         )
         assert result.returncode == 0
     else:
@@ -290,12 +291,26 @@ def test_monitor_default_bot_root_resolves_in_windows_powershell(
     if executable is None:
         pytest.skip("PowerShell is not installed")
 
+    clean_checkout = tmp_path / "clean checkout"
+    scripts_directory = clean_checkout / "scripts"
+    config_directory = clean_checkout / "config"
+    scripts_directory.mkdir(parents=True)
+    config_directory.mkdir()
+    copied_monitor = scripts_directory / MONITOR.name
+    shutil.copy2(MONITOR, copied_monitor)
+    shutil.copy2(LOG_PUMP, scripts_directory / LOG_PUMP.name)
+    (clean_checkout / "main.py").write_text("", encoding="utf-8")
+    (config_directory / "config.json").write_text(
+        '{"napcat_account":"","mkl_threading_layer":""}\n',
+        encoding="utf-8",
+    )
+
     result = _run_powershell(
         executable,
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        str(MONITOR),
+        str(copied_monitor),
         "-NapCatPath",
         str(tmp_path / "missing-napcat.exe"),
     )
