@@ -1,12 +1,12 @@
 # bot_core
 
-`bot_core` 是 XiaoQing 的基础管理插件，集中提供命令帮助、运行时重载、插件列表、群静音、密钥管理和指标查看能力。当前版本为 `0.2.0`。
+`bot_core` 是 XiaoQing 的基础管理插件，集中提供命令帮助、运行时重载、插件列表、群静音、密钥管理和指标查看能力。当前版本为 `0.3.0`。
 
 ## 命令
 
 | 主命令 | 别名 | 权限 | 作用 |
 | --- | --- | --- | --- |
-| `/help [关键词]` | `/h`、`/帮助` | 所有人 | 查看全部命令，或按插件名、命令和说明搜索 |
+| `/help [插件名\|命令码\|关键词]` | `/h`、`/帮助` | 所有人 | 默认查看插件级导航，传入查询后查看详细命令 |
 | `/reload` | `/重载` | 管理员 | 依次重载配置和插件 |
 | `/plugins` | `/插件` | 所有人 | 查看已加载的插件名称和总数 |
 | `/闭嘴 [时长]` | `/shutup`、`/mute`、`/安静` | 管理员 | 在群聊中临时停止回复 |
@@ -19,7 +19,15 @@
 
 ## 帮助与插件列表
 
-`/help` 从插件管理器读取帮助文本，并按插件分组显示。带关键词时，只要插件名、命令或说明中任意一行匹配，就会保留该插件的完整分组；匹配不区分大小写。
+`/help` 从 Core 发布的结构化命令目录生成两级帮助：
+
+- `/help` 只列出 Core 和已加载插件的主入口、命令数和功能摘要；
+- `/help pendo` 列出 Pendo 的完整递归命令目录；
+- `/help pendo.pendo.todo` 按稳定命令码只查看一个分支；
+- `/help search 提醒` 按插件名、命令码、路径、别名、说明或用法搜索；
+- `/help json page 1` 仍按页导出所有命令节点，保持 UAT 等自动化调用的稳定契约。
+
+功能导航和插件内命令都支持 `page N`。精确命令码优先于模糊搜索，匹配不区分大小写。
 
 `/plugins` 只列出当前已加载的插件名称，不推测或展示清单之外的版本信息。
 
@@ -116,10 +124,10 @@ bot_core/
 
 在仓库根目录运行：
 
-```powershell
+```bash
 python -m ruff check plugins/bot_core tests/plugins/test_bot_core.py
-python -m pytest -q tests/plugins/test_bot_core.py `
-  tests/plugins/test_internal_log_redaction.py `
+python -m pytest -q tests/plugins/test_bot_core.py \
+  tests/plugins/test_internal_log_redaction.py \
   tests/plugins/test_public_error_redaction.py
 ```
 

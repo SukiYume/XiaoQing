@@ -1,6 +1,6 @@
 {
   "name": "bot_core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "XiaoQing Bot 核心管理插件：提供帮助、热重载、插件管理、群消息控制、配置管理和性能监控等核心功能",
   "author": "XiaoQing Bot Team",
   "entry": "main.py",
@@ -9,16 +9,16 @@
     {
       "name": "help",
       "triggers": ["help", "h", "帮助", "commands", "命令目录", "catalog"],
-      "help": "查询、分页或导出 Core 的完整结构化命令目录",
+      "help": "分层查看插件功能导航、插件内命令或结构化目录",
       "admin_only": false,
       "usage": "/help [插件名|命令码|关键词] [page N]",
-      "examples": ["/help", "/help qingpet", "/help qingpet.qingpet.feed"],
+      "examples": ["/help", "/help pendo", "/help qingpet.qingpet.feed"],
       "invalid_examples": ["/help page 0"],
       "subcommands": [
         {
           "name": "page",
           "aliases": ["list", "all", "页", "全部"],
-          "help": "按页遍历所有命令节点",
+          "help": "按页浏览插件级功能导航",
           "usage": "/help page <页码>",
           "examples": ["/help page 1"],
           "invalid_examples": ["/help page abc"]
@@ -34,7 +34,7 @@
         {
           "name": "json",
           "aliases": ["export", "导出"],
-          "help": "以 JSON 导出当前页的完整命令字段",
+          "help": "以 JSON 导出当前页的完整命令字段（无查询时覆盖全部命令）",
           "usage": "/help json [插件名|命令码|关键词] [page N]",
           "examples": ["/help json qingpet"],
           "invalid_examples": ["/help json page 0"]

@@ -27,7 +27,19 @@ SECRET_MASK_CHAR = "*"  # 密钥遮罩字符
 METRICS_SEPARATOR = "─" * 20  # 指标显示分隔线
 MAX_DISPLAYED_SECRET_KEYS = 20
 HELP_PAGE_SIZE = 12
+HELP_PLUGIN_PAGE_SIZE = 30
 MAX_HELP_QUERY_LENGTH = 128
+MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH = 48
+_CORE_OVERVIEW_ENTRYPOINT_ORDER = (
+    "/help",
+    "/plugins",
+    "/reload",
+    "/metrics",
+    "/闭嘴",
+    "/说话",
+    "/set_secret",
+    "/get_secret",
+)
 _NO_ARGUMENT_USAGE = {
     "reload": "/reload",
     "plugins": "/plugins",
@@ -190,6 +202,18 @@ def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
             return segments("❌ 暂无命令")
 
         output_format, query, page = _parse_help_request(keyword)
+        if output_format == "text" and not query:
+            plugin_groups, total_pages = _plugin_overview_page(catalog, page)
+            return segments(
+                _format_plugin_overview(
+                    plugin_groups,
+                    page=page,
+                    total_pages=total_pages,
+                    total_plugins=len(_group_catalog_by_plugin(catalog)),
+                    total_nodes=len(_flatten_catalog(catalog)),
+                )
+            )
+
         selected = _select_catalog_nodes(catalog, query)
         if not selected:
             logger.info("未找到关键词 %r 相关的命令", query)
@@ -208,15 +232,15 @@ def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
                 page=page,
                 total_pages=total_pages,
                 total_nodes=len(selected),
-                plugin_count=len({node.plugin for node in catalog}),
+                plugin_count=len({node.plugin for node in selected}),
             )
         )
 
     except ValueError as exc:
         return segments(
             f"❌ {exc}\n"
-            "用法：/help [插件名|命令码|关键词] [page N]\n"
-            "      /help page <N>\n"
+            "用法：/help [page N]\n"
+            "      /help <插件名|命令码|关键词> [page N]\n"
             "      /help json [查询] [page N]"
         )
 
@@ -275,6 +299,121 @@ def _parse_page_number(raw: str) -> int:
 
 def _flatten_catalog(catalog: tuple[CommandCatalogNode, ...]) -> tuple[CommandCatalogNode, ...]:
     return tuple(node for root in catalog for node in root.walk())
+
+
+def _group_catalog_by_plugin(
+    catalog: tuple[CommandCatalogNode, ...],
+) -> tuple[tuple[str, tuple[CommandCatalogNode, ...]], ...]:
+    """按插件聚合顶层命令；Core 始终放在功能导航最前面。"""
+
+    grouped: dict[str, list[CommandCatalogNode]] = {}
+    for root in catalog:
+        grouped.setdefault(root.plugin, []).append(root)
+    plugin_names = sorted(
+        grouped,
+        key=lambda plugin: (plugin.casefold() != "bot_core", plugin.casefold()),
+    )
+    return tuple((plugin, tuple(grouped[plugin])) for plugin in plugin_names)
+
+
+def _plugin_overview_page(
+    catalog: tuple[CommandCatalogNode, ...],
+    page: int,
+) -> tuple[tuple[tuple[str, tuple[CommandCatalogNode, ...]], ...], int]:
+    groups = _group_catalog_by_plugin(catalog)
+    total_pages = max(1, math.ceil(len(groups) / HELP_PLUGIN_PAGE_SIZE))
+    if page > total_pages:
+        raise ValueError(f"页码超出范围，共 {total_pages} 页")
+    start = (page - 1) * HELP_PLUGIN_PAGE_SIZE
+    return groups[start : start + HELP_PLUGIN_PAGE_SIZE], total_pages
+
+
+def _primary_catalog_root(
+    roots: tuple[CommandCatalogNode, ...],
+) -> CommandCatalogNode:
+    """优先选择子命令最完整的规范入口，而不是兼容快捷入口。"""
+
+    return max(
+        enumerate(roots),
+        key=lambda item: (len(item[1].walk()), -item[0]),
+    )[1]
+
+
+def _overview_usage(root: CommandCatalogNode) -> str:
+    usage = root.usage.strip()
+    if usage:
+        return usage.split(maxsplit=1)[0]
+    return f"/{root.name}"
+
+
+def _overview_summary(root: CommandCatalogNode) -> str:
+    summary = re.sub(r"\s+", " ", root.help_text).split("|", 1)[0].strip().rstrip("。；;")
+    if not summary:
+        return "查看该插件的命令目录"
+    if len(summary) > MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH:
+        return summary[: MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH - 1] + "…"
+    return summary
+
+
+def _format_plugin_overview_entry(
+    plugin: str,
+    roots: tuple[CommandCatalogNode, ...],
+) -> str:
+    primary = _primary_catalog_root(roots)
+    ordered_roots = (primary, *(root for root in roots if root is not primary))
+    usages = tuple(dict.fromkeys(_overview_usage(root) for root in ordered_roots))
+    if plugin == "bot_core":
+        preferred_order = {
+            usage: index for index, usage in enumerate(_CORE_OVERVIEW_ENTRYPOINT_ORDER)
+        }
+        usages = tuple(
+            sorted(
+                usages,
+                key=lambda usage: (preferred_order.get(usage, len(preferred_order)), usage),
+            )
+        )
+        entrypoints = " · ".join(usages)
+    elif len(usages) <= 3:
+        entrypoints = " · ".join(usages)
+    else:
+        entrypoints = f"{usages[0]} 等 {len(usages)} 个顶层入口"
+    node_count = sum(len(root.walk()) for root in roots)
+    label = "bot_core（Core）" if plugin == "bot_core" else plugin
+    return f"• {label} · {entrypoints} · {node_count} 个命令\n  {_overview_summary(primary)}"
+
+
+def _format_plugin_overview(
+    groups: tuple[tuple[str, tuple[CommandCatalogNode, ...]], ...],
+    *,
+    page: int,
+    total_pages: int,
+    total_plugins: int,
+    total_nodes: int,
+) -> str:
+    lines = [
+        f"🧭 XiaoQing 功能导航  {page}/{total_pages}",
+        f"共 {total_plugins} 个插件、{total_nodes} 个命令；本页只列插件和顶层入口",
+        METRICS_SEPARATOR,
+    ]
+    for plugin, roots in groups:
+        lines.extend(("", _format_plugin_overview_entry(plugin, roots)))
+
+    navigation: list[str] = []
+    if page > 1:
+        navigation.append(f"上一页 /help page {page - 1}")
+    if page < total_pages:
+        navigation.append(f"下一页 /help page {page + 1}")
+    lines.extend(("", METRICS_SEPARATOR))
+    if navigation:
+        lines.append("📄 " + " · ".join(navigation))
+    lines.extend(
+        (
+            "💡 /help <插件名> 查看详细命令，例如 /help pendo",
+            "🔎 /help search <关键词> · /help <稳定命令码>",
+            "⚙️ 自动化全量目录：/help json page 1",
+        )
+    )
+    return "\n".join(lines)
 
 
 def _select_catalog_nodes(
@@ -350,7 +489,16 @@ def _format_catalog_text(
     total_nodes: int,
     plugin_count: int,
 ) -> str:
-    title = f"🔍 {query} 的命令目录" if query else "📖 完整命令目录"
+    selected_plugins = {node.plugin for node in nodes}
+    normalized_query = query.casefold().strip().lstrip("/")
+    if (
+        query
+        and len(selected_plugins) == 1
+        and next(iter(selected_plugins)).casefold() == normalized_query
+    ):
+        title = f"📦 {next(iter(selected_plugins))} 插件命令目录"
+    else:
+        title = f"🔍 {query} 的命令目录" if query else "📖 完整命令目录"
     lines = [
         f"{title}  {page}/{total_pages}",
         f"共 {total_nodes} 个命令节点，{plugin_count} 个已加载插件",
@@ -363,13 +511,15 @@ def _format_catalog_text(
             current_plugin = node.plugin
             lines.extend(("", f"📦 {current_plugin}"))
         lines.extend(_format_catalog_node(node, detailed=detailed))
-    lines.extend(
-        (
-            "",
-            METRICS_SEPARATOR,
-            "💡 /help page <页码> · /help <插件名|命令码> · /help json [查询] [page N]",
-        )
-    )
+    navigation: list[str] = []
+    if page > 1:
+        navigation.append(f"上一页 /help {query} page {page - 1}")
+    if page < total_pages:
+        navigation.append(f"下一页 /help {query} page {page + 1}")
+    lines.extend(("", METRICS_SEPARATOR))
+    if navigation:
+        lines.append("📄 " + " · ".join(navigation))
+    lines.append("💡 /help 返回功能导航 · /help <插件名|命令码> · /help json [查询] [page N]")
     return "\n".join(lines)
 
 
@@ -740,11 +890,7 @@ async def _handle_metrics(context) -> list[dict[str, Any]]:
             METRICS_SEPARATOR,
             f"⏱️ 运行时间: {_format_metric(uptime_seconds, '.0f', 's')}",
             f"📦 总调用: {_format_metric(total_calls, '.0f')}",
-            (
-                "✅ 成功率: n/a"
-                if success_rate is None
-                else f"✅ 成功率: {success_rate * 100:.1f}%"
-            ),
+            ("✅ 成功率: n/a" if success_rate is None else f"✅ 成功率: {success_rate * 100:.1f}%"),
             f"⏳ 平均耗时: {_format_metric(avg_time, '.3f', 's')}",
             f"🐢 慢调用: {_format_metric(slow_calls, '.0f')}",
             f"❌ 错误: {_format_metric(errors, '.0f')}",

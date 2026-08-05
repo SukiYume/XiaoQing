@@ -136,7 +136,7 @@
 
 | 命令 | 触发词 | 说明 | 管理员 |
 |------|--------|------|--------|
-| `help` | `/help`, `/h`, `/帮助`, `/catalog` | 查询、分页或导出 Core 的递归命令目录 | ❌ |
+| `help` | `/help`, `/h`, `/帮助`, `/catalog` | 分层查看插件级功能导航、插件内命令或 JSON 目录 | ❌ |
 | `plugins` | `/plugins`, `/插件` | 查看已加载插件列表 | ❌ |
 | `reload` | `/reload`, `/重载` | 热重载配置和插件 | ✅ |
 | `metrics` | `/metrics`, `/指标` | 查看运行指标统计 | ✅ |
@@ -148,11 +148,13 @@
 #### 使用示例
 
 ```
-/help page 1             # 分页遍历所有命令节点
+/help                    # 查看 Core 与全部插件的紧凑功能导航
+/help page 1             # 按页浏览插件级导航
 /help pendo              # 查看 Pendo 的完整递归子树
 /help pendo.pendo.todo.add # 按稳定命令码精确查询
 /help search 天文        # 搜索别名、说明和用法
-/help json qingpet       # 导出结构化 JSON
+/help json page 1        # 为自动化按页导出全量结构化 JSON
+/help json qingpet       # 只导出 QingPet 的结构化 JSON
 /闭嘴 30                 # 静音 30 分钟
 /闭嘴 1h                 # 静音 1 小时
 /reload                  # 热重载所有插件
