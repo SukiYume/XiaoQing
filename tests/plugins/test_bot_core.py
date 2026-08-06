@@ -24,6 +24,10 @@ def _catalog_node(
     *,
     aliases: tuple[str, ...] = (),
     children: tuple[CommandCatalogNode, ...] = (),
+    permission: str = "public",
+    contexts: tuple[str, ...] = ("private", "group"),
+    examples: tuple[str, ...] = (),
+    invalid_examples: tuple[str, ...] = (),
 ) -> CommandCatalogNode:
     return CommandCatalogNode(
         code=code,
@@ -33,6 +37,10 @@ def _catalog_node(
         aliases=aliases,
         help_text=help_text,
         usage=usage,
+        permission=permission,
+        contexts=contexts,
+        examples=examples,
+        invalid_examples=invalid_examples,
         children=children,
     )
 
@@ -45,6 +53,8 @@ def _sample_catalog() -> tuple[CommandCatalogNode, ...]:
         "搜索命令",
         "/help search <关键词>",
         aliases=("find", "搜索"),
+        examples=("/help search 提醒",),
+        invalid_examples=("/help search",),
     )
     return (
         _catalog_node(
@@ -223,7 +233,7 @@ class TestHelpCommand:
         assert "/help" in result_text
         assert "/reload" in result_text
         assert "chat" in result_text
-        assert "/help <插件名>" in result_text
+        assert "查看插件：/help pendo" in result_text
         assert "code:" not in result_text
         assert "bot_core.help.search" not in result_text
 
@@ -244,9 +254,23 @@ class TestHelpCommand:
         assert result is not None
         assert len(result) > 0
         result_text = result[0]["data"]["text"]
-        assert "bot_core 插件命令目录" in result_text
-        assert "bot_core.help" in result_text
-        assert "bot_core.help.search" in result_text
+        assert "📦 bot_core" in result_text
+        assert "/help search" in result_text
+        assert "/reload" in result_text
+        assert "bot_core.help" not in result_text
+        assert "正确示例" not in result_text
+
+    @pytest.mark.asyncio
+    async def test_help_exact_leaf_shows_metadata_only_on_detail_page(self, mock_context):
+        result = await bot_core.handle("help", "help search", {}, mock_context)
+
+        result_text = result[0]["data"]["text"]
+        assert result_text.startswith("📘 命令详情")
+        assert "/help search <关键词>" in result_text
+        assert "✓ /help search 提醒" in result_text
+        assert "✗ /help search" in result_text
+        assert "命令码：bot_core.help.search" in result_text
+        assert "返回上级：/help help" in result_text
 
     @pytest.mark.asyncio
     async def test_help_json_without_query_keeps_complete_flat_catalog(self, mock_context):
@@ -954,8 +978,66 @@ class TestStructuredCommandCatalog:
             (compatibility, canonical),
         )
 
-        assert "• demo · /demo · /legacy · 3 个命令" in output
+        assert "• demo · 3个命令" in output
+        assert "  /demo（另有1个入口）" in output
         assert "  主入口" in output
+
+    def test_plugin_and_branch_menus_only_show_direct_children(self):
+        grandchild = _catalog_node(
+            "demo.demo.section.run",
+            "demo",
+            ("demo", "section", "run"),
+            "执行操作",
+            "/demo section run <参数>",
+            examples=("/demo section run value",),
+            invalid_examples=("/demo section run",),
+        )
+        section = _catalog_node(
+            "demo.demo.section",
+            "demo",
+            ("demo", "section"),
+            "分组操作",
+            "/demo section <操作>",
+            children=(grandchild,),
+        )
+        root = _catalog_node(
+            "demo.demo",
+            "demo",
+            ("demo",),
+            "演示插件",
+            "/demo <功能>",
+            children=(section,),
+        )
+
+        plugin_menu = bot_core._format_plugin_menu((root,), page=1)
+        branch_menu = bot_core._format_branch_menu(section, page=1)
+
+        assert "/demo section" in plugin_menu
+        assert "/demo section run" not in plugin_menu
+        assert "命令码：" not in plugin_menu
+        assert "正确示例" not in plugin_menu
+        assert "/demo section run" in branch_menu
+        assert "/demo section run <参数>" not in branch_menu
+        assert "继续查看：/help demo section run" in branch_menu
+
+    def test_text_catalog_uses_smaller_mobile_pages_without_changing_json_pages(self):
+        nodes = tuple(
+            _catalog_node(
+                f"demo.demo.item_{index}",
+                "demo",
+                ("demo", f"item_{index}"),
+                f"项目 {index}",
+                f"/demo item_{index}",
+            )
+            for index in range(bot_core.HELP_PAGE_SIZE + bot_core.HELP_TEXT_PAGE_SIZE + 1)
+        )
+
+        text_page, text_pages = bot_core._text_catalog_page(nodes, 1)
+        json_page, json_pages = bot_core._catalog_page(nodes, 1)
+
+        assert len(text_page) == bot_core.HELP_TEXT_PAGE_SIZE
+        assert len(json_page) == bot_core.HELP_PAGE_SIZE
+        assert text_pages > json_pages
 
     def test_select_by_plugin_returns_every_descendant(self):
         result = bot_core._select_catalog_nodes(_sample_catalog(), "bot_core")

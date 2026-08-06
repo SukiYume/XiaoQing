@@ -249,7 +249,8 @@ python main.py
 ```text
 /help
 /help pendo
-/help pendo.pendo.todo.add
+/help pendo todo
+/help pendo todo add
 /help json qingpet
 /plugins
 /metrics
@@ -263,7 +264,7 @@ python main.py
 | 命令 | 说明 |
 |---|---|
 | `/help [page N]` | 显示 Core 与已加载插件的功能导航和顶层入口 |
-| `/help <插件名\|稳定命令码\|关键词> [page N]` | 查看某个插件、命令分支或搜索结果的详细目录 |
+| `/help <插件名\|命令路径\|稳定命令码\|关键词> [page N]` | 逐层查看插件、分支或单命令详情，也可搜索 |
 | `/help json [查询] [page N]` | 导出包含别名、权限、场景和样例的命令目录 JSON |
 | `/plugins` | 查看已加载插件 |
 | `/reload` | 管理员热重载配置和插件 |

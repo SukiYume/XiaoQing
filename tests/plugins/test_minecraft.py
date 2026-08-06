@@ -144,6 +144,10 @@ class TestMinecraftMetadata:
         help_text = mc_main._show_help()
         assert "Minecraft RCON" in help_text
         assert "/mc connect <配置名>" in help_text
+        assert "/mc say <消息>" in help_text
+        assert "/mc say 大家好" in help_text
+        assert "/mc tell <玩家名> <消息>" in help_text
+        assert "玩家聊天、加入和离开等事件会转发到当前 QQ 私聊" in help_text
         assert "start" not in help_text
 
     def test_manifest_commands_are_admin_only_and_scheduled(self) -> None:

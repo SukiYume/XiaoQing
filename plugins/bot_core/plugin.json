@@ -1,6 +1,6 @@
 {
   "name": "bot_core",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "XiaoQing Bot 核心管理插件：提供帮助、热重载、插件管理、群消息控制、配置管理和性能监控等核心功能",
   "author": "XiaoQing Bot Team",
   "entry": "main.py",
@@ -9,10 +9,10 @@
     {
       "name": "help",
       "triggers": ["help", "h", "帮助", "commands", "命令目录", "catalog"],
-      "help": "分层查看插件功能导航、插件内命令或结构化目录",
+      "help": "用适合手机阅读的分层目录查看插件、命令路径或结构化目录",
       "admin_only": false,
-      "usage": "/help [插件名|命令码|关键词] [page N]",
-      "examples": ["/help", "/help pendo", "/help qingpet.qingpet.feed"],
+      "usage": "/help [插件名|命令路径|命令码|关键词] [page N]",
+      "examples": ["/help", "/help pendo", "/help pendo todo add"],
       "invalid_examples": ["/help page 0"],
       "subcommands": [
         {
@@ -26,8 +26,8 @@
         {
           "name": "search",
           "aliases": ["find", "show", "搜索", "查找"],
-          "help": "按插件名、稳定命令码、路径、别名、说明或用法查询",
-          "usage": "/help search <插件名|命令码|关键词> [page N]",
+          "help": "按插件名、命令路径、稳定命令码、别名、说明或用法查询",
+          "usage": "/help search <插件名|命令路径|命令码|关键词> [page N]",
           "examples": ["/help search qingpet", "/help search pendo.pendo.todo.add"],
           "invalid_examples": ["/help search"]
         },
