@@ -313,6 +313,32 @@ class TestShellHandle:
         assert "C:/workspace/example.py" in rendered
 
     @pytest.mark.asyncio
+    async def test_handle_help_uses_windows_native_examples(
+        self, monkeypatch, mock_context, mock_event
+    ):
+        monkeypatch.setattr(shell_main.sys, "platform", "win32")
+
+        result = await shell_main.handle("shell", "help", mock_event, mock_context)
+
+        rendered = text_segments_text(result)
+        assert "/shell cmd /c dir" in rendered
+        assert "/shell cmd /c cd" in rendered
+        assert "/shell ls -la" not in rendered
+
+    @pytest.mark.asyncio
+    async def test_handle_help_uses_posix_examples(
+        self, monkeypatch, mock_context, mock_event
+    ):
+        monkeypatch.setattr(shell_main.sys, "platform", "linux")
+
+        result = await shell_main.handle("shell", "help", mock_event, mock_context)
+
+        rendered = text_segments_text(result)
+        assert "/shell ls -la" in rendered
+        assert "/shell pwd" in rendered
+        assert "/shell cmd /c dir" not in rendered
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("alias", ["-h", "--help"])
     async def test_handle_option_help_aliases(self, alias, mock_context, mock_event):
         result = await shell_main.handle("shell", alias, mock_event, mock_context)
@@ -326,6 +352,21 @@ class TestShellHandle:
         assert isinstance(result, list)
         assert "echo" in str(result)
         assert "ls" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_handle_list_distinguishes_enabled_from_available(
+        self, monkeypatch, mock_context, mock_event
+    ):
+        monkeypatch.setattr(shell_main, "_command_available", lambda name: name == "echo")
+
+        result = await shell_main.handle("shell", "list", mock_event, mock_context)
+
+        rendered = text_segments_text(result)
+        assert "当前 Bot PATH 可执行（1）" in rendered
+        assert "当前 Bot PATH 未找到（2）" in rendered
+        assert "echo" in rendered
+        assert "ls" in rendered and "pwd" in rendered
+        assert "启用列表不负责安装程序" in rendered
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("alias", ["-l", "--list"])
@@ -342,6 +383,29 @@ class TestShellHandle:
         result = await shell_main.handle("shell", "invalid_cmd", mock_event, mock_context)
         assert isinstance(result, list)
         assert "拒绝" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_handle_missing_executable_returns_actionable_error(
+        self, monkeypatch, mock_context, mock_event
+    ):
+        execute = AsyncMock(side_effect=FileNotFoundError(2, "not found"))
+        audit = MagicMock()
+        monkeypatch.setattr(shell_main, "_execute_command", execute)
+        monkeypatch.setattr(shell_main, "_log_command_audit", audit)
+        monkeypatch.setattr(shell_main.sys, "platform", "win32")
+
+        result = await shell_main.handle("shell", "ls", mock_event, mock_context)
+
+        rendered = text_segments_text(result)
+        assert "找不到可执行命令 'ls'" in rendered
+        assert "启用列表只控制允许执行的入口" in rendered
+        assert "/shell cmd /c dir" in rendered
+        assert "XQ-PLUGIN-UNEXPECTED" not in rendered
+        execute.assert_awaited_once_with(["ls"], 30)
+        assert [call.kwargs["status"] for call in audit.call_args_list] == [
+            "started",
+            "unavailable",
+        ]
 
     @pytest.mark.asyncio
     async def test_handle_list_whitelist_hides_unsupported_builtins(self, mock_context, mock_event):

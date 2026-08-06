@@ -6,6 +6,12 @@
 
 ## 未发布
 
+### Shell 命令可用性与 Windows 错误提示
+
+- 修复 Windows 生产环境执行 `/shell ls`、`/shell pwd` 时，因程序不在 Bot 进程 PATH 中而返回 `XQ-PLUGIN-UNEXPECTED` 的问题；真实的 `FileNotFoundError` 现在会转换为明确的“程序未安装或未加入 Bot PATH”提示。
+- `/shell list` 不再把跨平台默认启用列表暗示为本机均可执行，而是分别列出当前 Bot PATH 可解析和未找到的入口；启用列表仍只用于防误触，不负责安装工具。
+- `/shell help` 按运行平台展示示例：Windows 使用 `cmd /c dir`、`cmd /c cd`，Linux/macOS 使用 `ls`、`pwd`。项目不绑定 Git Bash、Conda、虚拟环境或固定 Python 路径，环境继续由部署者自行准备。Shell 插件版本升至 `2.0.1`。
+
 ### 分层命令帮助
 
 - `/help` 从展开全部命令节点改为紧凑的插件级功能导航，优先展示 `bot_core` Core 入口，并为每个已加载插件列出主入口、命令数和功能摘要。

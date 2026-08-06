@@ -1330,7 +1330,7 @@ Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
 | `shell` | `/shell`, `/sh` | 执行命令 |
-| `shell list` | `/shell list`, `/shell 列表` | 查看白名单 |
+| `shell list` | `/shell list`, `/shell 列表` | 查看启用入口及当前 PATH 可用性 |
 
 #### 功能特性
 
@@ -1340,6 +1340,7 @@ Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，
 - **权限边界**：`admin_only`、manifest 私聊场景与入站认证共同构成边界；参数检查和命令链接符限制只降低误操作概率
 - **超时清理**：超时后会终止整棵子进程树，而不只是直接子进程
 - **路径归一化**：QQ 中可统一输入 `/` 斜杠路径，插件按 bot 所在系统转换
+- **运行环境透明**：启用列表不等于程序已安装；`/shell list` 会把当前 Bot PATH 可执行和未找到的入口分开显示
 
 #### 安全设置
 
@@ -1376,16 +1377,28 @@ Shell 插件会在拆分命令参数后，对看起来像路径的参数做系�
 - Windows 选项（如 `cmd /c`、`xcopy /Y`）不会被误判为绝对路径。
 
 插件直接启动外部命令，不经过系统 shell。Windows 的 `copy`、`del`、`type` 等内建命令不能直接执行；需要用 `cmd /c copy ...`，或改用外部命令 `cp`、`xcopy`、`robocopy`。
+外部命令还必须由 Bot 进程的 PATH 解析；项目不会自动绑定 Git Bash、Conda、虚拟环境或固定 Python 路径。找不到程序时会返回明确提示，不再转成通用插件异常。
 
 #### 使用示例
 
-```
+Linux/macOS：
+
+```text
 /sh ls -la
 /sh python --version
-/sh ping -c 3 google.com
+/sh ping -c 3 127.0.0.1
 /sh list                    # 查看白名单
 /shell help                 # 显示帮助
-/shell cp C:/workspace/a.txt C:/workspace/b.txt
+/shell cp /srv/a.txt /srv/b.txt
+```
+
+Windows：
+
+```text
+/shell python --version
+/shell git status --short
+/shell cmd /c dir
+/shell cmd /c cd
 /shell cmd /c copy C:/workspace/a.txt C:/workspace/b.txt
 /shell robocopy C:/workspace/src C:/workspace/dst a.txt
 ```
