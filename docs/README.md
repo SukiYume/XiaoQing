@@ -58,7 +58,7 @@
 
 ### 配置 Codex、arXiv 摘要和 Shell 工具
 
-1. [06-configuration.md](06-configuration.md): 配置 `plugins.codex` 的默认工作目录、允许目录、并发数、sandbox、`astro-ph` 摘要会话和方法论文件名；配置 shell 白名单。
+1. [06-configuration.md](06-configuration.md): 配置 `plugins.codex` 的默认工作目录、允许目录、并发数、sandbox、`astro-ph` 摘要会话和方法论文件名；配置 Shell 默认终端和命令启用列表。
 2. [09-plugins.md](09-plugins.md): 查看 `/codex create`、`/codex <name> <任务>`、`/codex cancel`、`/arxiv`、`/shell` 等命令示例。
 3. [08-message-flow.md](08-message-flow.md): 理解普通 bot session 与 Codex 独立后台队列的区别。
 

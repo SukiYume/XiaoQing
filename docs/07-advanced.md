@@ -217,7 +217,7 @@ await context.end_session()
 - 同一标签内任务串行运行，避免同一 Codex thread 被并发 resume；不同标签之间按 `max_parallel_jobs` 并行。
 - 任务完成、失败、超时或取消后，插件用 `context.send_action()` 主动回发 `[codex:<label> #<job_id>]` 消息；如果任务生成图片，会随文字一起发送 QQ image 段。
 - 会话索引保存在 `data/codex/sessions.json`，对话记录、图片副本和任务 artifacts 保存在 `data/codex/session/<label>/`，删除归档保存在 `data/codex/deleted_sessions/`，重启后可以继续知道 label、cwd 和 Codex thread id。
-- 业务插件可以把自己的长任务作为侧路投递给 Codex，例如 `arxiv_filter` 在发送论文列表后，把所有 positive arXiv 链接交给固定 `astro-ph` 会话；摘要成功、失败或历史重发都不影响论文列表消息。
+- 业务插件可以把自己的长任务作为侧路投递给 Codex，例如 `arxiv_filter` 在发送论文列表后，把所有 positive arXiv 链接交给固定 `astro-ph` 会话；其历史复用同时校验源列表日期和规范化论文集合，摘要成功、失败或历史重发都不影响论文列表消息。
 
 这种模式不会占用框架活跃会话，因此用户可以继续使用其他命令或闲聊。
 

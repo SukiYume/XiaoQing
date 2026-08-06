@@ -222,11 +222,19 @@ class TestHandle:
     async def test_handle_default_calls_run_filter(self, mock_context, mock_event):
         """测试默认命令调用 _run_filter"""
         with patch.object(
+            arxiv_filter,
+            "_latest_arxiv_source_date",
+            new=AsyncMock(return_value="2026-08-06"),
+        ), patch.object(
             arxiv_filter, "_run_filter", new=AsyncMock(return_value=arxiv_filter.segments("test"))
         ) as mock_run:
             result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
             assert result is not None
-            mock_run.assert_called_once()
+            mock_run.assert_awaited_once_with(
+                mock_context,
+                allow_codex_sidecar=False,
+                source_date="2026-08-06",
+            )
 
     @pytest.mark.asyncio
     async def test_handle_enables_codex_sidecar_only_for_current_bot_admin(
@@ -238,6 +246,10 @@ class TestHandle:
         mock_context.capabilities = PluginCapabilities(is_bot_admin=True)
         with patch.object(
             arxiv_filter,
+            "_latest_arxiv_source_date",
+            new=AsyncMock(return_value="2026-08-06"),
+        ), patch.object(
+            arxiv_filter,
             "_run_filter",
             new=AsyncMock(return_value=arxiv_filter.segments("test")),
         ) as mock_run:
@@ -245,10 +257,15 @@ class TestHandle:
 
         assert mock_run.await_args.kwargs == {
             "allow_codex_sidecar": True,
+            "source_date": "2026-08-06",
         }
 
         mock_event["user_id"] = 99999
         with patch.object(
+            arxiv_filter,
+            "_latest_arxiv_source_date",
+            new=AsyncMock(return_value="2026-08-06"),
+        ), patch.object(
             arxiv_filter,
             "_run_filter",
             new=AsyncMock(return_value=arxiv_filter.segments("test")),
@@ -268,6 +285,10 @@ class TestHandle:
     async def test_handle_exception(self, mock_context, mock_event):
         """测试处理异常"""
         with patch.object(
+            arxiv_filter,
+            "_latest_arxiv_source_date",
+            new=AsyncMock(return_value="2026-08-06"),
+        ), patch.object(
             arxiv_filter, "_run_filter", new=AsyncMock(side_effect=Exception("Test error"))
         ):
             result = await arxiv_filter.handle("arxiv", "", mock_event, mock_context)
@@ -569,12 +590,20 @@ class TestScheduledTasks:
         """测试定时任务入口"""
         with patch.object(
             arxiv_filter,
+            "_latest_arxiv_source_date",
+            new=AsyncMock(return_value="2026-08-06"),
+        ), patch.object(
+            arxiv_filter,
             "_run_filter",
             new=AsyncMock(return_value=arxiv_filter.segments("scheduled")),
         ) as mock_run:
             result = await arxiv_filter.scheduled(mock_context)
             assert result is not None
-            mock_run.assert_called_once()
+            mock_run.assert_awaited_once_with(
+                mock_context,
+                allow_codex_sidecar=True,
+                source_date="2026-08-06",
+            )
 
     @pytest.mark.asyncio
     async def test_scheduled_check(self, mock_context):
@@ -696,12 +725,13 @@ Probability: 0.7500
                 result = await arxiv_filter._run_filter(
                     mock_context,
                     allow_codex_sidecar=True,
+                    source_date="2026-05-19",
                 )
 
         assert "First Paper Title" in str(result)
         schedule_mock.assert_called_once_with(
             mock_context,
-            date=arxiv_filter._business_now(mock_context).date().isoformat(),
+            date="2026-05-19",
             filter_text=mock_result,
         )
 
@@ -721,9 +751,41 @@ Probability: 0.9000
                 "schedule_codex_summary_from_filter_result",
                 side_effect=RuntimeError("queue unavailable"),
             ):
-                result = await arxiv_filter._run_filter(mock_context)
+                result = await arxiv_filter._run_filter(
+                    mock_context,
+                    allow_codex_sidecar=True,
+                    source_date="2026-05-19",
+                )
 
         assert "First Paper Title" in str(result)
+
+    @pytest.mark.asyncio
+    async def test_run_filter_does_not_guess_codex_date_when_source_date_is_unknown(
+        self,
+        mock_context,
+    ):
+        mock_result = """
+----- Positive #1 -----
+Title      : First Paper Title
+Link       : https://arxiv.org/abs/2605.16917
+Probability: 0.9000
+"""
+        with patch.object(
+            arxiv_filter,
+            "_load_inference",
+            return_value=lambda **kwargs: mock_result,
+        ), patch.object(
+            arxiv_filter,
+            "schedule_codex_summary_from_filter_result",
+        ) as schedule_mock:
+            result = await arxiv_filter._run_filter(
+                mock_context,
+                allow_codex_sidecar=True,
+                source_date=None,
+            )
+
+        assert "日期未能确认" in str(result)
+        schedule_mock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_codex_summary_missing_codex_does_not_raise(self, mock_context):
@@ -822,7 +884,7 @@ Probability: 0.9000
             assert await arxiv_filter.scheduled(mock_context) == []
 
     @pytest.mark.asyncio
-    async def test_filter_inference_is_singleflight_and_cached_per_business_day(self, mock_context):
+    async def test_filter_inference_is_singleflight_and_cached_per_source_date(self, mock_context):
         calls = 0
         gate = threading.Event()
 
@@ -834,12 +896,16 @@ Probability: 0.9000
 
         arxiv_filter._FILTER_CACHE.clear()
         with patch.object(arxiv_filter, "_load_inference", return_value=inference):
-            first = asyncio.create_task(arxiv_filter._run_filter(mock_context))
-            second = asyncio.create_task(arxiv_filter._run_filter(mock_context))
+            first = asyncio.create_task(
+                arxiv_filter._run_filter(mock_context, source_date="2026-08-06")
+            )
+            second = asyncio.create_task(
+                arxiv_filter._run_filter(mock_context, source_date="2026-08-06")
+            )
             await asyncio.sleep(0.05)
             gate.set()
             await asyncio.gather(first, second)
-            await arxiv_filter._run_filter(mock_context)
+            await arxiv_filter._run_filter(mock_context, source_date="2026-08-06")
 
         assert calls == 1
 
