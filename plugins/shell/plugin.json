@@ -1,7 +1,7 @@
 {
     "name": "shell",
-    "version": "2.0.1",
-    "description": "管理员本地命令执行插件 - 支持命令启用列表、PATH 可用性、超时和输出限制",
+    "version": "2.1.0",
+    "description": "管理员本地命令执行插件 - 支持 direct/Git Bash 终端、命令启用列表、超时和输出限制",
     "entry": "main.py",
     "capabilities": ["admin_sessions", "execution_timeout_exempt"],
     "commands": [

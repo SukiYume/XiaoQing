@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 def mock_context():
     """模拟上下文"""
     context = MagicMock()
+    context.config = {}
     context.secrets = {
         "plugins": {
             "shell": {
@@ -91,6 +92,42 @@ class TestShellConfig:
         assert config["whitelist"] == ("echo", "pwd")
         assert shell_main._get_whitelist(mock_context) == {"echo", "pwd"}
         assert shell_main._get_timeout(mock_context) == 17
+
+    def test_public_git_bash_terminal_config(self, mock_context):
+        mock_context.config = {
+            "plugins": {
+                "shell": {
+                    "terminal": {
+                        "backend": "git-bash",
+                        "executable": "C:/Program Files/Git/bin/bash.exe",
+                    }
+                }
+            }
+        }
+
+        settings = shell_main._get_terminal_settings(mock_context)
+
+        assert settings.backend == "git-bash"
+        assert settings.executable == "C:/Program Files/Git/bin/bash.exe"
+        assert settings.error is None
+
+    @pytest.mark.parametrize(
+        "terminal,error_fragment",
+        [
+            ("git-bash", "必须是对象"),
+            ({"backend": "unknown"}, "direct 或 git-bash"),
+            ({"backend": "git-bash"}, "需要非空"),
+        ],
+    )
+    def test_invalid_public_terminal_config_fails_closed(
+        self, mock_context, terminal, error_fragment
+    ):
+        mock_context.config = {"plugins": {"shell": {"terminal": terminal}}}
+
+        settings = shell_main._get_terminal_settings(mock_context)
+
+        assert settings.error is not None
+        assert error_fragment in settings.error
 
     def test_default_whitelist_not_empty(self):
         """测试默认白名单不为空"""
@@ -339,6 +376,30 @@ class TestShellHandle:
         assert "/shell cmd /c dir" not in rendered
 
     @pytest.mark.asyncio
+    async def test_handle_help_uses_git_bash_examples_on_windows(
+        self, monkeypatch, mock_context, mock_event
+    ):
+        monkeypatch.setattr(shell_main.sys, "platform", "win32")
+        mock_context.config = {
+            "plugins": {
+                "shell": {
+                    "terminal": {
+                        "backend": "git-bash",
+                        "executable": "C:/Program Files/Git/bin/bash.exe",
+                    }
+                }
+            }
+        }
+
+        result = await shell_main.handle("shell", "help", mock_event, mock_context)
+
+        rendered = text_segments_text(result)
+        assert "默认终端: Git Bash" in rendered
+        assert "/shell ls -la" in rendered
+        assert "/shell pwd" in rendered
+        assert "/shell cmd /c dir" not in rendered
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("alias", ["-h", "--help"])
     async def test_handle_option_help_aliases(self, alias, mock_context, mock_event):
         result = await shell_main.handle("shell", alias, mock_event, mock_context)
@@ -367,6 +428,45 @@ class TestShellHandle:
         assert "echo" in rendered
         assert "ls" in rendered and "pwd" in rendered
         assert "启用列表不负责安装程序" in rendered
+
+    @pytest.mark.asyncio
+    async def test_handle_list_queries_git_bash_once(
+        self, monkeypatch, mock_context, mock_event
+    ):
+        mock_context.config = {
+            "plugins": {
+                "shell": {
+                    "terminal": {
+                        "backend": "git-bash",
+                        "executable": "C:/Program Files/Git/bin/bash.exe",
+                    }
+                }
+            }
+        }
+        monkeypatch.setattr(
+            shell_main,
+            "_resolve_terminal_executable",
+            lambda _settings: r"C:\Program Files\Git\bin\bash.exe",
+        )
+        execute = AsyncMock(return_value=(0, "ls\npwd\n", ""))
+        monkeypatch.setattr(shell_main, "_execute_command", execute)
+
+        result = await shell_main.handle("shell", "list", mock_event, mock_context)
+
+        rendered = text_segments_text(result)
+        assert "当前 Git Bash 可执行（2）" in rendered
+        assert "当前 Git Bash 未找到（1）" in rendered
+        assert "ls, pwd" in rendered
+        assert "echo" in rendered
+        execute.assert_awaited_once()
+        queried = execute.await_args.args[0]
+        assert queried[:4] == [
+            r"C:\Program Files\Git\bin\bash.exe",
+            "--noprofile",
+            "--norc",
+            "-c",
+        ]
+        assert queried[-3:] == ["echo", "ls", "pwd"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("alias", ["-l", "--list"])
@@ -406,6 +506,62 @@ class TestShellHandle:
             "started",
             "unavailable",
         ]
+
+    @pytest.mark.asyncio
+    async def test_handle_executes_original_command_through_configured_git_bash(
+        self, monkeypatch, mock_context, mock_event
+    ):
+        mock_context.config = {
+            "plugins": {
+                "shell": {
+                    "terminal": {
+                        "backend": "git-bash",
+                        "executable": "C:/Program Files/Git/bin/bash.exe",
+                    }
+                }
+            }
+        }
+        bash = r"C:\Program Files\Git\bin\bash.exe"
+        monkeypatch.setattr(shell_main, "_resolve_terminal_executable", lambda _settings: bash)
+        execute = AsyncMock(return_value=(0, "ok", ""))
+        monkeypatch.setattr(shell_main, "_execute_command", execute)
+        command = 'echo "C:/Program Files/example.txt"'
+
+        result = await shell_main.handle("shell", command, mock_event, mock_context)
+
+        assert "返回码: 0" in text_segments_text(result)
+        execute.assert_awaited_once_with(
+            [bash, "--noprofile", "--norc", "-c", command],
+            30,
+        )
+
+    @pytest.mark.asyncio
+    async def test_handle_missing_configured_git_bash_fails_before_audit(
+        self, monkeypatch, mock_context, mock_event
+    ):
+        mock_context.config = {
+            "plugins": {
+                "shell": {
+                    "terminal": {
+                        "backend": "git-bash",
+                        "executable": "C:/missing/bash.exe",
+                    }
+                }
+            }
+        }
+        monkeypatch.setattr(shell_main, "_resolve_terminal_executable", lambda _settings: None)
+        execute = AsyncMock()
+        audit = MagicMock()
+        monkeypatch.setattr(shell_main, "_execute_command", execute)
+        monkeypatch.setattr(shell_main, "_log_command_audit", audit)
+
+        result = await shell_main.handle("shell", "ls", mock_event, mock_context)
+
+        rendered = text_segments_text(result)
+        assert "Shell 终端配置不可用" in rendered
+        assert "plugins.shell.terminal" in rendered
+        execute.assert_not_awaited()
+        audit.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_handle_list_whitelist_hides_unsupported_builtins(self, mock_context, mock_event):

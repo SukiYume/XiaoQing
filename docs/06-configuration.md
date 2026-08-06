@@ -627,7 +627,7 @@ Codex 是可信管理员级高权限插件：全部 `/codex` 命令保持 `admin
 
 路径输入建议统一使用 `/` 斜杠。Windows 上可以写 `C:/workspace/project`，插件会按运行系统解析；Linux/macOS 上仍写 `/srv/xiaoqing/workspaces/project`。如果 bot 运行在非 Windows 系统，Windows 盘符路径会被拒绝。
 
-arXiv Filter 会把筛选出的 positive 论文链接投递给 `arxiv_summary.label` 指定的 Codex 会话。首次没有 Codex thread 时，会先投递一条静默初始化任务；之后每次摘要 prompt 都会明确要求读取 `arxiv_summary.methodology`，但不会把该文件正文拼进 prompt。该文件需要提前放在 `arxiv_summary.cwd` 中。
+arXiv Filter 会把筛选出的 positive 论文链接投递给 `arxiv_summary.label` 指定的 Codex 会话。首次没有 Codex thread 时，会先投递一条静默初始化任务；之后每次摘要 prompt 都会明确要求读取 `arxiv_summary.methodology`，但不会把该文件正文拼进 prompt。该文件需要提前放在 `arxiv_summary.cwd` 中。历史摘要与在途任务按“arXiv 源列表日期 + 规范化论文链接集合”匹配，而不是只按本地日期匹配。
 
 Codex 插件会把运行时状态写入 `data/codex/`：`sessions.json` 保存会话标签和 thread id，`session/<label>/conversation.jsonl` 保存每个标签的用户任务、Codex 回复、取消、删除事件和图片记录，`session/<label>/images/` 保存已透传到 QQ 的图片副本，`session/<label>/jobs/` 保存单次任务的 artifacts 目录，`deleted_sessions/` 保存删除会话时归档的旧历史。该目录不应提交到 Git。
 
@@ -998,8 +998,24 @@ Windows 上遇到 `WinError 10013` 时，常见原因是系统拒绝绑定端口
 
 #### shell 配置
 
-Shell 插件的配置放在 `secrets.json -> plugins.shell`。它默认只允许白名单命令，并且直接用 `create_subprocess_exec()` 启动进程，不经过系统 shell。
-白名单只表示管理员允许尝试的入口，不表示本机已经安装对应程序；`/shell list` 会按 Bot 进程的当前 PATH 区分可执行和未找到的入口。
+Shell 的公开终端配置放在 `config.json -> plugins.shell`。未配置时使用 `direct`，直接用 `create_subprocess_exec()` 启动程序；Windows 部署也可显式选择 Git Bash：
+
+```json
+{
+  "plugins": {
+    "shell": {
+      "terminal": {
+        "backend": "git-bash",
+        "executable": "C:/Program Files/Git/bin/bash.exe"
+      }
+    }
+  }
+}
+```
+
+Git Bash 以 `--noprofile --norc -c` 运行，不加载用户启动脚本。可执行文件路径由部署者提供，项目不会扫描 Git、Conda 或虚拟环境目录；配置缺失或失效会明确报错，不会回退到另一个 Bash。
+
+命令启用列表和超时放在 `secrets.json -> plugins.shell`：
 
 ```json
 {
@@ -1021,10 +1037,12 @@ Shell 插件的配置放在 `secrets.json -> plugins.shell`。它默认只允许
 | `timeout` | `int` | `30` | 命令执行超时秒数 |
 | `disable_whitelist` | `boolean` | `false` | 关闭白名单，危险模式；危险正则仍会生效 |
 
+启用列表只表示管理员允许尝试的首入口，不表示终端中已经安装对应程序；`/shell list` 会按当前配置的终端区分可执行和未找到的入口。
+
 路径参数会按 bot 所在系统归一化。QQ 里可以统一输入 `/` 斜杠路径，例如 Windows 的 `C:/workspace/a.txt` 或 Linux/macOS 的 `/srv/xiaoqing/workspaces/a.txt`。URL 不会被当作路径改写，`/c`、`/Y` 这类 Windows 选项也不会被误判为路径。
 
 Windows 的 `copy`、`del`、`type` 等命令是 shell 内建命令，不能直接 `/shell copy ...`。需要复制文件时，优先用外部命令 `cp`、`xcopy`、`robocopy`，或者显式执行 `cmd /c copy <src> <dst>`。
-其中 `cp` 只有在部署环境确实安装并加入 Bot PATH 时才可用。项目不会查找或固定 Conda、Git Bash、虚拟环境、Python 等工具路径；这些均由部署者在启动前准备。
+其中 `cp` 只有在当前终端确实提供时才可用。`direct` 使用 Bot PATH；Git Bash 使用其自身命令环境。
 
 #### ads_paper 配置
 

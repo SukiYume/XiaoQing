@@ -782,23 +782,24 @@ Azure 密钥、区域、音色和可选代理只配置在 `config/secrets.json` 
 
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
-| `arxiv` | `/arxiv`, `/论文` | 获取今日推荐论文 |
+| `arxiv` | `/arxiv`, `/论文` | 获取 arXiv 当前最新列表的推荐论文 |
 
 #### 定时任务
 
 - 周一至周五 **10:00 / 10:30 / 11:00 / 11:30** 检查 arXiv 是否已经更新到当天；更新后执行筛选并推送论文列表。
 - 周一至周五 **12:00** 做最后一次检查；如果当天仍未更新，发送停更通知，不再继续追加定时任务。
 - 每天自动推送只执行一次，运行状态由 `data/arxiv_filter/update_status.json` 去重。
-- 用户仍可通过 `/arxiv` 手动执行一次筛选；这会重新发送论文列表，并触发 Codex 摘要侧路。
+- 用户仍可通过 `/arxiv` 手动请求筛选；回复会标明 arXiv 源列表的实际发布日期。源站当天更新前返回上一发布日列表属于正常行为。
 
 #### 技术说明
 
-使用预训练的 BERT 模型对当日 arXiv 论文进行相关性评分和筛选。筛选结果发送后，`plugins/arxiv_filter/codex_summary.py` 会从结果文本中提取所有 arXiv 链接并异步投递给 Codex；如果 Codex 摘要模块不可用或执行失败，不会影响论文列表消息。
+使用预训练模型对 arXiv 当前源列表进行相关性评分和筛选。推理缓存按源列表日期区分，因此同一业务日内从昨日列表切换到今日列表时会重新推理。筛选结果发送后，`plugins/arxiv_filter/codex_summary.py` 会从结果文本中提取所有 arXiv 链接并异步投递给 Codex；如果无法确认源列表日期、Codex 摘要模块不可用或执行失败，不会影响论文列表消息。
 
-Codex 侧会对同一天摘要做去重：
+Codex 侧按“源列表日期 + 规范化后的论文链接集合”去重：
 
-- 已有成功执行结果时，手动 `/arxiv` 会直接重发历史摘要。
-- 已有同一天任务正在队列或运行中时，只发送状态提示。
+- 两项身份都相同且已有成功执行结果时，手动 `/arxiv` 会直接重发历史摘要。
+- 两项身份都相同且任务正在队列或运行中时，只发送状态提示。
+- 日期相同但论文集合变化时，按新列表重新投递，不复用旧摘要。
 - 失败过或没有成功记录时，重新总结并发送结果。
 - Codex 执行失败时，会单独发送包含日期的总结失败消息。
 
@@ -1330,7 +1331,7 @@ Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，
 | 命令 | 触发词 | 说明 |
 |------|--------|------|
 | `shell` | `/shell`, `/sh` | 执行命令 |
-| `shell list` | `/shell list`, `/shell 列表` | 查看启用入口及当前 PATH 可用性 |
+| `shell list` | `/shell list`, `/shell 列表` | 查看启用入口及当前终端可用性 |
 
 #### 功能特性
 
@@ -1340,11 +1341,27 @@ Codex 插件会自动把图片输出约定追加到每次任务的 prompt 后，
 - **权限边界**：`admin_only`、manifest 私聊场景与入站认证共同构成边界；参数检查和命令链接符限制只降低误操作概率
 - **超时清理**：超时后会终止整棵子进程树，而不只是直接子进程
 - **路径归一化**：QQ 中可统一输入 `/` 斜杠路径，插件按 bot 所在系统转换
-- **运行环境透明**：启用列表不等于程序已安装；`/shell list` 会把当前 Bot PATH 可执行和未找到的入口分开显示
+- **可配置终端**：公开配置可选择 `direct` 或带明确可执行文件路径的 `git-bash`
+- **运行环境透明**：启用列表不等于程序已安装；`/shell list` 会按当前终端把可执行和未找到的入口分开显示
 
 #### 安全设置
 
-通过 `secrets.json` 配置：
+公开终端配置通过 `config.json` 设置；以下示例在 Windows 使用 Git Bash：
+
+```json
+{
+  "plugins": {
+    "shell": {
+      "terminal": {
+        "backend": "git-bash",
+        "executable": "C:/Program Files/Git/bin/bash.exe"
+      }
+    }
+  }
+}
+```
+
+Git Bash 不加载 profile/rc；路径失效时会明确失败，不会回退到 WSL Bash 或 direct。命令启用列表和超时继续通过 `secrets.json` 配置：
 
 ```json
 {
@@ -1376,8 +1393,7 @@ Shell 插件会在拆分命令参数后，对看起来像路径的参数做系�
 - URL（如 `https://example.com/a/b`）不会被当作路径改写。
 - Windows 选项（如 `cmd /c`、`xcopy /Y`）不会被误判为绝对路径。
 
-插件直接启动外部命令，不经过系统 shell。Windows 的 `copy`、`del`、`type` 等内建命令不能直接执行；需要用 `cmd /c copy ...`，或改用外部命令 `cp`、`xcopy`、`robocopy`。
-外部命令还必须由 Bot 进程的 PATH 解析；项目不会自动绑定 Git Bash、Conda、虚拟环境或固定 Python 路径。找不到程序时会返回明确提示，不再转成通用插件异常。
+`direct` 后端直接启动外部命令，不经过系统 shell。Windows 的 `copy`、`del`、`type` 等内建命令不能直接执行；需要用 `cmd /c copy ...`，或改用外部命令。Git Bash 后端会显式解释原始单命令文本，但命令链接、多行和受限危险模式仍在进入 Bash 前被拒绝。
 
 #### 使用示例
 
@@ -1392,7 +1408,7 @@ Linux/macOS：
 /shell cp /srv/a.txt /srv/b.txt
 ```
 
-Windows：
+Windows direct：
 
 ```text
 /shell python --version
@@ -1402,6 +1418,8 @@ Windows：
 /shell cmd /c copy C:/workspace/a.txt C:/workspace/b.txt
 /shell robocopy C:/workspace/src C:/workspace/dst a.txt
 ```
+
+Windows Git Bash 使用上面的 Linux/macOS 命令形式，例如 `/shell ls -la` 和 `/shell pwd`。
 
 > ⚠️ **警告**: 此命令具有高危险性，请谨慎使用，仅管理员可用。
 

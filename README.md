@@ -383,7 +383,7 @@ python main.py
 
 `codex` 插件维护独立的 Codex 会话标签、任务队列和运行时历史，不占用框架多轮 Session。同一标签内任务串行执行，不同标签按 `max_parallel_jobs` 并行；任务完成后通过 `context.send_action()` 主动回发文字和图片。
 
-`arxiv_filter` 的每日流程会先发送筛选出的论文列表，再把所有 positive 论文链接后台投递到 Codex `astro-ph` 会话。`astro-ph` 首次没有 thread 时会先静默初始化，后续摘要 prompt 会要求 Codex 读取工作目录下的 `arxiv-summary-methodology.md`。同一天已有成功执行结果时，手动 `/arxiv` 会直接重发历史摘要；失败或没有记录时会重新总结。
+`arxiv_filter` 的每日流程会先发送筛选出的论文列表，再把所有 positive 论文链接后台投递到 Codex `astro-ph` 会话。`astro-ph` 首次没有 thread 时会先静默初始化，后续摘要 prompt 会要求 Codex 读取工作目录下的 `arxiv-summary-methodology.md`。手动 `/arxiv` 会显示 arXiv 源站当前列表的实际发布日期；摘要只有在“源列表日期 + 规范化论文链接集合”都相同时才重发历史结果，同日列表变化会重新总结。
 
 `astro-ph` 默认是受保护会话，删除时需要 `/codex delete astro-ph --force --protected`。删除不会直接抹掉旧目录，历史会归档到 `data/codex/deleted_sessions/`。
 

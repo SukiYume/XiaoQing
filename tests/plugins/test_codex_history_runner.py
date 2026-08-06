@@ -60,6 +60,36 @@ async def test_arxiv_summary_duplicate_inflight_reports_status(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_same_date_different_link_set_does_not_reuse_inflight_job(tmp_path: Path):
+    context = FakeContext(tmp_path)
+    runner = FakeRunner(block_summary=True)
+    manager = _install_fake_manager(context, runner)
+
+    await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-08-06",
+        links=["https://arxiv.org/abs/2608.00001"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+    await _wait_until(lambda: runner.started == ["astro-ph", "astro-ph"])
+
+    result = await _arxiv_addon(manager).enqueue_or_replay(
+        date="2026-08-06",
+        links=["https://arxiv.org/abs/2608.00002"],
+        user_id=1,
+        group_id=2,
+        context=context,
+    )
+
+    assert "已投递" in result
+    assert len(manager.queues["astro-ph"]) == 1
+    assert "2608.00002" in manager.queues["astro-ph"][0].prompt
+    runner.release.set()
+    await manager.wait_idle()
+
+
+@pytest.mark.asyncio
 async def test_arxiv_summary_failed_history_is_retried(tmp_path: Path):
     context = FakeContext(tmp_path)
     runner = FakeRunner(result_text="network failed", exit_code=1)

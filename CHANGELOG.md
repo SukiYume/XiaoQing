@@ -6,11 +6,19 @@
 
 ## 未发布
 
-### Shell 命令可用性与 Windows 错误提示
+### arXiv 源列表与 Codex 摘要身份修复
 
+- 修复更新前手动 `/arxiv` 把上一发布日列表标成本地当天、随后定时更新又可能复用旧推理缓存的问题；回复现在显示 arXiv 源站列表的实际发布日期，推理缓存也按该日期隔离。无法确认源日期时仍返回论文列表，但不会猜测日期并投递 Codex。
+- Codex arXiv 摘要的历史重发和在途任务复用由“只比较日期”改为同时比较源列表日期与规范化论文链接集合；同日列表内容变化会创建新任务，链接顺序、版本号、PDF 后缀和查询参数差异则仍视为同一集合。
+- 新增更新前后缓存切换、同日不同列表的历史/运行中任务、相同规范化集合重发等回归测试；`arxiv_filter` 升至 `0.2.0`，`codex` 升至 `1.1.1`。
+
+### Shell Git Bash 终端与 Windows 错误提示
+
+- 新增 `config.plugins.shell.terminal` 公开配置：默认保持跨平台 `direct`，Windows 部署可用明确的 `executable` 选择 `git-bash`；Git Bash 以 `--noprofile --norc -c` 运行，配置失效会失败关闭，不扫描或猜测安装目录。
+- 命令文本仍在进入 Git Bash 前执行危险模式和首入口启用校验；`/shell list` 改为按当前终端一次性查询可用入口，`/shell help` 也按配置终端展示示例。Shell 插件版本升至 `2.1.0`。
 - 修复 Windows 生产环境执行 `/shell ls`、`/shell pwd` 时，因程序不在 Bot 进程 PATH 中而返回 `XQ-PLUGIN-UNEXPECTED` 的问题；真实的 `FileNotFoundError` 现在会转换为明确的“程序未安装或未加入 Bot PATH”提示。
 - `/shell list` 不再把跨平台默认启用列表暗示为本机均可执行，而是分别列出当前 Bot PATH 可解析和未找到的入口；启用列表仍只用于防误触，不负责安装工具。
-- `/shell help` 按运行平台展示示例：Windows 使用 `cmd /c dir`、`cmd /c cd`，Linux/macOS 使用 `ls`、`pwd`。项目不绑定 Git Bash、Conda、虚拟环境或固定 Python 路径，环境继续由部署者自行准备。Shell 插件版本升至 `2.0.1`。
+- `/shell help` 按运行平台和终端展示示例：Windows direct 使用 `cmd /c dir`、`cmd /c cd`，Git Bash 与 Linux/macOS 使用 `ls`、`pwd`。环境和终端路径继续由部署者准备。
 
 ### 分层命令帮助
 

@@ -241,6 +241,11 @@
                         "approval_policy": "never",
                         "skip_git_repo_check": true
                 },
+                "shell": {
+                        "terminal": {
+                                "backend": "direct"
+                        }
+                },
                 "smalltalk": {
                         "voice_probability": 0
                 }

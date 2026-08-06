@@ -1,7 +1,7 @@
 {
 	"name": "arxiv_filter",
-	"version": "0.1.0",
-	"description": "arXiv 论文筛选（支持 Transformer 与兴趣模型）",
+	"version": "0.2.0",
+	"description": "按 arXiv 源列表日期筛选论文（支持 Transformer 与兴趣模型）",
 	"entry": "main.py",
 	"uses_services": ["codex.enqueue_arxiv_summary"],
 	"commands": [

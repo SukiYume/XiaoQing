@@ -1,6 +1,6 @@
 {
     "name": "codex",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "有界、可取消的 Codex CLI 后台会话队列",
     "entry": "main.py",
     "concurrency": "parallel",

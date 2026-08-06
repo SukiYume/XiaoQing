@@ -206,10 +206,44 @@ async def test_daily_filter_cache_changes_with_plugin_configuration(
     monkeypatch.setattr(arxiv_filter, "load_plugin_config", lambda: next(configs))
     monkeypatch.setattr(arxiv_filter, "_load_inference", lambda **_kwargs: inference)
 
-    await arxiv_filter._run_filter(context)
-    await arxiv_filter._run_filter(context)
+    await arxiv_filter._run_filter(context, source_date="2026-08-05")
+    await arxiv_filter._run_filter(context, source_date="2026-08-05")
 
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_filter_cache_changes_when_arxiv_source_listing_date_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """更新前的昨日列表不能污染同一业务日稍后发布的新列表。"""
+
+    context = _context(tmp_path)
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "training_config.json").write_text("{}", encoding="utf-8")
+    calls = 0
+
+    def inference(**_kwargs) -> str:
+        nonlocal calls
+        calls += 1
+        return "No positive predictions found."
+
+    arxiv_filter._FILTER_CACHE.clear()
+    monkeypatch.setattr(
+        arxiv_filter,
+        "load_plugin_config",
+        lambda: {"model": {"path": str(model_dir)}},
+    )
+    monkeypatch.setattr(arxiv_filter, "_load_inference", lambda **_kwargs: inference)
+
+    await arxiv_filter._run_filter(context, source_date="2026-08-05")
+    await arxiv_filter._run_filter(context, source_date="2026-08-05")
+    await arxiv_filter._run_filter(context, source_date="2026-08-06")
+
+    assert calls == 2
+    assert {key[0] for key in arxiv_filter._FILTER_CACHE} == {"2026-08-06"}
 
 
 @pytest.mark.asyncio
@@ -249,8 +283,8 @@ async def test_daily_cache_reuses_one_model_tree_fingerprint(
     monkeypatch.setattr(arxiv_filter, "_load_inference", lambda **_kwargs: inference)
     monkeypatch.setattr(shared, "model_artifact_fingerprint", counted_fingerprint)
 
-    await arxiv_filter._run_filter(context)
-    await arxiv_filter._run_filter(context)
+    await arxiv_filter._run_filter(context, source_date="2026-08-05")
+    await arxiv_filter._run_filter(context, source_date="2026-08-05")
 
     assert fingerprint_calls == 1
     assert len(inference_kwargs) == 1
@@ -291,12 +325,12 @@ async def test_model_fingerprint_refresh_detects_live_artifact_replacement(
         lambda: current_monotonic["value"],
     )
 
-    await arxiv_filter._run_filter(context)
+    await arxiv_filter._run_filter(context, source_date="2026-08-05")
     current_monotonic["value"] = 10.0
-    await arxiv_filter._run_filter(context)
+    await arxiv_filter._run_filter(context, source_date="2026-08-05")
     artifact.write_text('{"version": 2}', encoding="utf-8")
     current_monotonic["value"] = 61.0
-    await arxiv_filter._run_filter(context)
+    await arxiv_filter._run_filter(context, source_date="2026-08-05")
 
     assert inference_calls == 2
 
