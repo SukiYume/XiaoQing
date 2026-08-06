@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from collections.abc import Mapping
 from typing import Any, NoReturn
 
@@ -26,20 +27,14 @@ MAX_MUTE_MINUTES = 1440  # 最长静音时长（分钟，24小时）
 SECRET_MASK_CHAR = "*"  # 密钥遮罩字符
 METRICS_SEPARATOR = "─" * 20  # 指标显示分隔线
 MAX_DISPLAYED_SECRET_KEYS = 20
+# JSON 导出沿用原分页大小；面向手机的文本目录单独使用更小页面。
 HELP_PAGE_SIZE = 12
-HELP_PLUGIN_PAGE_SIZE = 30
+HELP_TEXT_PAGE_SIZE = 8
+HELP_PLUGIN_PAGE_SIZE = 6
 MAX_HELP_QUERY_LENGTH = 128
-MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH = 48
-_CORE_OVERVIEW_ENTRYPOINT_ORDER = (
-    "/help",
-    "/plugins",
-    "/reload",
-    "/metrics",
-    "/闭嘴",
-    "/说话",
-    "/set_secret",
-    "/get_secret",
-)
+MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH = 32
+MAX_HELP_MENU_SUMMARY_LENGTH = 32
+HELP_MOBILE_LINE_WIDTH = 34
 _NO_ARGUMENT_USAGE = {
     "reload": "/reload",
     "plugins": "/plugins",
@@ -214,25 +209,37 @@ def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
                 )
             )
 
+        if output_format == "json":
+            selected = _select_catalog_nodes(catalog, query)
+            if not selected:
+                return _help_not_found(query)
+            page_nodes, total_pages = _catalog_page(selected, page)
+            return segments(_format_catalog_json(page_nodes, query, page, total_pages))
+
+        plugin_roots = _find_plugin_roots(catalog, query)
+        if plugin_roots:
+            return segments(_format_plugin_menu(plugin_roots, page=page))
+
+        exact_nodes = _find_exact_catalog_nodes(catalog, query)
+        if len(exact_nodes) == 1:
+            node = exact_nodes[0]
+            if node.children:
+                return segments(_format_branch_menu(node, page=page))
+            if page != 1:
+                raise ValueError("页码超出范围，共 1 页")
+            return segments(_format_command_detail(node))
+
         selected = _select_catalog_nodes(catalog, query)
         if not selected:
-            logger.info("未找到关键词 %r 相关的命令", query)
-            return segments(
-                f"❌ 未找到与 '{query}' 相关的命令\n"
-                "💡 使用 /help 查看目录，或使用 /help <插件名|命令码> 精确查询"
-            )
-
-        page_nodes, total_pages = _catalog_page(selected, page)
-        if output_format == "json":
-            return segments(_format_catalog_json(page_nodes, query, page, total_pages))
+            return _help_not_found(query)
+        page_nodes, total_pages = _text_catalog_page(selected, page)
         return segments(
-            _format_catalog_text(
+            _format_search_results(
                 page_nodes,
                 query=query,
                 page=page,
                 total_pages=total_pages,
                 total_nodes=len(selected),
-                plugin_count=len({node.plugin for node in selected}),
             )
         )
 
@@ -240,7 +247,7 @@ def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
         return segments(
             f"❌ {exc}\n"
             "用法：/help [page N]\n"
-            "      /help <插件名|命令码|关键词> [page N]\n"
+            "      /help <插件名|命令路径|命令码|关键词> [page N]\n"
             "      /help json [查询] [page N]"
         )
 
@@ -251,6 +258,13 @@ def _handle_help(keyword: str, context) -> list[dict[str, Any]]:
             logger=logger,
             component="bot_core.help",
         )
+
+
+def _help_not_found(query: str) -> list[dict[str, Any]]:
+    logger.info("未找到关键词 %r 相关的命令", query)
+    return segments(
+        f"❌ 未找到与“{query}”相关的命令\n查看插件：/help <插件名>\n搜索功能：/help search <关键词>"
+    )
 
 
 def _parse_help_request(raw: str) -> tuple[str, str, int]:
@@ -346,13 +360,31 @@ def _overview_usage(root: CommandCatalogNode) -> str:
     return f"/{root.name}"
 
 
+def _display_width(value: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1 for char in value)
+
+
+def _truncate_display_text(value: str, max_width: int) -> str:
+    if _display_width(value) <= max_width:
+        return value
+    retained: list[str] = []
+    width = 0
+    budget = max(1, max_width - 1)
+    for char in value:
+        char_width = 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+        if width + char_width > budget:
+            break
+        retained.append(char)
+        width += char_width
+    return "".join(retained).rstrip() + "…"
+
+
 def _overview_summary(root: CommandCatalogNode) -> str:
-    summary = re.sub(r"\s+", " ", root.help_text).split("|", 1)[0].strip().rstrip("。；;")
+    normalized = re.sub(r"\s+", " ", root.help_text)
+    summary = re.split(r"[|；;]", normalized, maxsplit=1)[0].strip().rstrip("。；;")
     if not summary:
         return "查看该插件的命令目录"
-    if len(summary) > MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH:
-        return summary[: MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH - 1] + "…"
-    return summary
+    return _truncate_display_text(summary, MAX_PLUGIN_OVERVIEW_SUMMARY_LENGTH)
 
 
 def _format_plugin_overview_entry(
@@ -360,26 +392,22 @@ def _format_plugin_overview_entry(
     roots: tuple[CommandCatalogNode, ...],
 ) -> str:
     primary = _primary_catalog_root(roots)
-    ordered_roots = (primary, *(root for root in roots if root is not primary))
-    usages = tuple(dict.fromkeys(_overview_usage(root) for root in ordered_roots))
+    entrypoint = _overview_usage(primary)
     if plugin == "bot_core":
-        preferred_order = {
-            usage: index for index, usage in enumerate(_CORE_OVERVIEW_ENTRYPOINT_ORDER)
-        }
-        usages = tuple(
-            sorted(
-                usages,
-                key=lambda usage: (preferred_order.get(usage, len(preferred_order)), usage),
-            )
-        )
-        entrypoints = " · ".join(usages)
-    elif len(usages) <= 3:
-        entrypoints = " · ".join(usages)
-    else:
-        entrypoints = f"{usages[0]} 等 {len(usages)} 个顶层入口"
+        preferred = ("/help", "/plugins", "/reload")
+        available = {_overview_usage(root) for root in roots}
+        entrypoint = " · ".join(usage for usage in preferred if usage in available)
+    elif len(roots) > 1:
+        entrypoint += f"（另有{len(roots) - 1}个入口）"
     node_count = sum(len(root.walk()) for root in roots)
     label = "bot_core（Core）" if plugin == "bot_core" else plugin
-    return f"• {label} · {entrypoints} · {node_count} 个命令\n  {_overview_summary(primary)}"
+    return "\n".join(
+        (
+            f"• {label} · {node_count}个命令",
+            f"  {entrypoint}",
+            f"  {_overview_summary(primary)}",
+        )
+    )
 
 
 def _format_plugin_overview(
@@ -392,28 +420,66 @@ def _format_plugin_overview(
 ) -> str:
     lines = [
         f"🧭 XiaoQing 功能导航  {page}/{total_pages}",
-        f"共 {total_plugins} 个插件、{total_nodes} 个命令；本页只列插件和顶层入口",
-        METRICS_SEPARATOR,
+        f"{total_plugins} 个插件 · {total_nodes} 个命令",
+        "",
     ]
     for plugin, roots in groups:
-        lines.extend(("", _format_plugin_overview_entry(plugin, roots)))
+        lines.extend((_format_plugin_overview_entry(plugin, roots), ""))
 
-    navigation: list[str] = []
     if page > 1:
-        navigation.append(f"上一页 /help page {page - 1}")
+        lines.append(f"⬅️ 上一页：/help page {page - 1}")
     if page < total_pages:
-        navigation.append(f"下一页 /help page {page + 1}")
-    lines.extend(("", METRICS_SEPARATOR))
-    if navigation:
-        lines.append("📄 " + " · ".join(navigation))
+        lines.append(f"➡️ 下一页：/help page {page + 1}")
     lines.extend(
         (
-            "💡 /help <插件名> 查看详细命令，例如 /help pendo",
-            "🔎 /help search <关键词> · /help <稳定命令码>",
-            "⚙️ 自动化全量目录：/help json page 1",
+            "查看插件：/help pendo",
+            "搜索功能：/help search <关键词>",
+            "JSON 导出：/help json page 1",
         )
     )
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip()
+
+
+def _normalized_help_query(query: str) -> str:
+    return query.casefold().strip().lstrip("/")
+
+
+def _find_plugin_roots(
+    catalog: tuple[CommandCatalogNode, ...],
+    query: str,
+) -> tuple[CommandCatalogNode, ...]:
+    """只在完整插件名命中时返回其顶层入口。"""
+
+    normalized = _normalized_help_query(query)
+    return tuple(root for root in catalog if root.plugin.casefold() == normalized)
+
+
+def _catalog_exact_terms(node: CommandCatalogNode) -> frozenset[str]:
+    path = tuple(part.casefold() for part in node.path)
+    terms = {
+        node.code.casefold(),
+        " ".join(path),
+        "/".join(path),
+        node.name.casefold(),
+        *(alias.casefold() for alias in node.aliases),
+    }
+    for alias in node.aliases:
+        alias_path = (*path[:-1], alias.casefold())
+        terms.add(" ".join(alias_path))
+        terms.add("/".join(alias_path))
+    return frozenset(terms)
+
+
+def _find_exact_catalog_nodes(
+    catalog: tuple[CommandCatalogNode, ...],
+    query: str,
+) -> tuple[CommandCatalogNode, ...]:
+    normalized = _normalized_help_query(query)
+    if not normalized:
+        return ()
+    return tuple(
+        node for node in _flatten_catalog(catalog) if normalized in _catalog_exact_terms(node)
+    )
 
 
 def _select_catalog_nodes(
@@ -423,26 +489,18 @@ def _select_catalog_nodes(
     """精确查询优先；命中父节点时返回其完整子树。"""
 
     nodes = _flatten_catalog(catalog)
-    normalized = query.casefold().strip().lstrip("/")
+    normalized = _normalized_help_query(query)
     if not normalized:
         return nodes
 
-    if any(root.plugin.casefold() == normalized for root in catalog):
+    if _find_plugin_roots(catalog, query):
         return tuple(node for node in nodes if node.plugin.casefold() == normalized)
 
-    exact: list[CommandCatalogNode] = []
-    for node in nodes:
-        exact_terms = {
-            node.code.casefold(),
-            " ".join(node.path).casefold(),
-            "/".join(node.path).casefold(),
-            node.name.casefold(),
-            *(alias.casefold() for alias in node.aliases),
-        }
-        if normalized in exact_terms:
-            exact.extend(node.walk())
-    if exact:
-        return _deduplicate_catalog_nodes(exact)
+    exact_nodes = _find_exact_catalog_nodes(catalog, query)
+    if exact_nodes:
+        return _deduplicate_catalog_nodes(
+            [descendant for node in exact_nodes for descendant in node.walk()]
+        )
 
     matches = []
     for node in nodes:
@@ -473,11 +531,234 @@ def _catalog_page(
     nodes: tuple[CommandCatalogNode, ...],
     page: int,
 ) -> tuple[tuple[CommandCatalogNode, ...], int]:
+    """保持自动化 JSON 导出的既有分页。"""
+
     total_pages = max(1, math.ceil(len(nodes) / HELP_PAGE_SIZE))
     if page > total_pages:
         raise ValueError(f"页码超出范围，共 {total_pages} 页")
     start = (page - 1) * HELP_PAGE_SIZE
     return nodes[start : start + HELP_PAGE_SIZE], total_pages
+
+
+def _text_catalog_page(
+    nodes: tuple[CommandCatalogNode, ...],
+    page: int,
+) -> tuple[tuple[CommandCatalogNode, ...], int]:
+    total_pages = max(1, math.ceil(len(nodes) / HELP_TEXT_PAGE_SIZE))
+    if page > total_pages:
+        raise ValueError(f"页码超出范围，共 {total_pages} 页")
+    start = (page - 1) * HELP_TEXT_PAGE_SIZE
+    return nodes[start : start + HELP_TEXT_PAGE_SIZE], total_pages
+
+
+def _compact_help_summary(value: str) -> str:
+    summary = re.sub(r"\s+", " ", value).strip().rstrip("。；;")
+    if not summary:
+        return "查看命令详情"
+    return _truncate_display_text(summary, MAX_HELP_MENU_SUMMARY_LENGTH)
+
+
+def _wrap_help_tokens(
+    value: str,
+    *,
+    first_prefix: str = "",
+    subsequent_prefix: str = "  ",
+) -> list[str]:
+    """按手机可读宽度在参数边界换行，不拆开命令 token。"""
+
+    tokens = value.split()
+    if not tokens:
+        return [first_prefix.rstrip()]
+    lines: list[str] = []
+    current = first_prefix
+    for token in tokens:
+        separator = "" if current == first_prefix else " "
+        candidate = f"{current}{separator}{token}"
+        if current != first_prefix and _display_width(candidate) > HELP_MOBILE_LINE_WIDTH:
+            lines.append(current.rstrip())
+            current = f"{subsequent_prefix}{token}"
+        else:
+            current = candidate
+    lines.append(current.rstrip())
+    return lines
+
+
+def _menu_navigation_example(nodes: tuple[CommandCatalogNode, ...]) -> CommandCatalogNode | None:
+    return next((node for node in nodes if node.children), nodes[0] if nodes else None)
+
+
+def _help_query_for_node(node: CommandCatalogNode) -> str:
+    return " ".join(node.path)
+
+
+def _format_menu_entries(nodes: tuple[CommandCatalogNode, ...]) -> list[str]:
+    lines: list[str] = []
+    for index, node in enumerate(nodes):
+        marker = "▸" if node.children else "•"
+        lines.extend(
+            _wrap_help_tokens(
+                f"/{' '.join(node.path)}",
+                first_prefix=f"{marker} ",
+            )
+        )
+        lines.append(f"  {_compact_help_summary(node.help_text)}")
+        if index + 1 < len(nodes):
+            lines.append("")
+    return lines
+
+
+def _append_text_page_navigation(
+    lines: list[str],
+    *,
+    query: str,
+    page: int,
+    total_pages: int,
+) -> None:
+    if page > 1:
+        lines.append(f"⬅️ 上一页：/help {query} page {page - 1}")
+    if page < total_pages:
+        lines.append(f"➡️ 下一页：/help {query} page {page + 1}")
+
+
+def _plugin_menu_nodes(
+    roots: tuple[CommandCatalogNode, ...],
+) -> tuple[CommandCatalogNode, ...]:
+    primary = _primary_catalog_root(roots)
+    compatibility_roots = tuple(root for root in roots if root is not primary)
+    if primary.children:
+        return (*primary.children, *compatibility_roots)
+    return roots
+
+
+def _format_plugin_menu(
+    roots: tuple[CommandCatalogNode, ...],
+    *,
+    page: int,
+) -> str:
+    primary = _primary_catalog_root(roots)
+    menu_nodes = _plugin_menu_nodes(roots)
+    if len(roots) == 1 and not primary.children:
+        if page != 1:
+            raise ValueError("页码超出范围，共 1 页")
+        return _format_command_detail(primary)
+
+    page_nodes, total_pages = _text_catalog_page(menu_nodes, page)
+    total_nodes = sum(len(root.walk()) for root in roots)
+    lines = [
+        f"📦 {primary.plugin}  {page}/{total_pages}",
+        f"{total_nodes} 个命令 · 本层 {len(menu_nodes)} 个入口",
+        _overview_usage(primary),
+        _overview_summary(primary),
+        "",
+        *_format_menu_entries(page_nodes),
+        "",
+    ]
+    _append_text_page_navigation(
+        lines,
+        query=primary.plugin,
+        page=page,
+        total_pages=total_pages,
+    )
+    example = _menu_navigation_example(page_nodes)
+    if example is not None:
+        lines.append(f"继续查看：/help {_help_query_for_node(example)}")
+    lines.append("返回总览：/help")
+    return "\n".join(lines).rstrip()
+
+
+def _format_branch_menu(node: CommandCatalogNode, *, page: int) -> str:
+    page_nodes, total_pages = _text_catalog_page(node.children, page)
+    query = _help_query_for_node(node)
+    lines = [
+        f"📂 /{query}  {page}/{total_pages}",
+        f"{len(node.walk())} 个命令 · 本层 {len(node.children)} 个操作",
+        _compact_help_summary(node.help_text),
+        "",
+        *_format_menu_entries(page_nodes),
+        "",
+    ]
+    _append_text_page_navigation(
+        lines,
+        query=query,
+        page=page,
+        total_pages=total_pages,
+    )
+    example = _menu_navigation_example(page_nodes)
+    if example is not None:
+        lines.append(f"继续查看：/help {_help_query_for_node(example)}")
+    parent_query = " ".join(node.path[:-1]) or node.plugin
+    lines.append(f"返回上级：/help {parent_query}")
+    return "\n".join(lines).rstrip()
+
+
+def _permission_label(permission: str) -> str:
+    return {
+        "public": "公开",
+        "bot_admin": "Bot 管理员",
+        "group_admin": "群管理员",
+    }.get(permission, permission)
+
+
+def _context_label(contexts: tuple[str, ...]) -> str:
+    labels = {"private": "私聊", "group": "群聊"}
+    return "、".join(labels.get(value, value) for value in contexts)
+
+
+def _format_command_detail(node: CommandCatalogNode) -> str:
+    lines = [
+        "📘 命令详情",
+        "",
+        "用法",
+        *_wrap_help_tokens(node.usage),
+        node.help_text,
+    ]
+    if node.aliases:
+        lines.extend(("", f"别名：{'、'.join(node.aliases)}"))
+    if node.examples:
+        lines.extend(("", "正确示例"))
+        for example in node.examples:
+            lines.extend(_wrap_help_tokens(example, first_prefix="✓ "))
+    if node.invalid_examples:
+        lines.extend(("", "错误示例"))
+        for example in node.invalid_examples:
+            lines.extend(_wrap_help_tokens(example, first_prefix="✗ "))
+    lines.extend(
+        (
+            "",
+            f"适用：{_permission_label(node.permission)} · {_context_label(node.contexts)}",
+            f"命令码：{node.code}",
+        )
+    )
+    if len(node.path) > 1:
+        lines.append(f"返回上级：/help {' '.join(node.path[:-1])}")
+    return "\n".join(lines)
+
+
+def _format_search_results(
+    nodes: tuple[CommandCatalogNode, ...],
+    *,
+    query: str,
+    page: int,
+    total_pages: int,
+    total_nodes: int,
+) -> str:
+    lines = [
+        f"🔎 “{query}”  {page}/{total_pages}",
+        f"{total_nodes} 条结果",
+        "",
+        *_format_menu_entries(nodes),
+        "",
+    ]
+    _append_text_page_navigation(
+        lines,
+        query=query,
+        page=page,
+        total_pages=total_pages,
+    )
+    if nodes:
+        lines.append(f"查看详情：/help {_help_query_for_node(nodes[0])}")
+    lines.append("返回总览：/help")
+    return "\n".join(lines).rstrip()
 
 
 def _format_catalog_text(
@@ -489,59 +770,22 @@ def _format_catalog_text(
     total_nodes: int,
     plugin_count: int,
 ) -> str:
-    selected_plugins = {node.plugin for node in nodes}
-    normalized_query = query.casefold().strip().lstrip("/")
-    if (
-        query
-        and len(selected_plugins) == 1
-        and next(iter(selected_plugins)).casefold() == normalized_query
-    ):
-        title = f"📦 {next(iter(selected_plugins))} 插件命令目录"
-    else:
-        title = f"🔍 {query} 的命令目录" if query else "📖 完整命令目录"
-    lines = [
-        f"{title}  {page}/{total_pages}",
-        f"共 {total_nodes} 个命令节点，{plugin_count} 个已加载插件",
-        METRICS_SEPARATOR,
-    ]
-    current_plugin = None
-    detailed = bool(query)
-    for node in nodes:
-        if node.plugin != current_plugin:
-            current_plugin = node.plugin
-            lines.extend(("", f"📦 {current_plugin}"))
-        lines.extend(_format_catalog_node(node, detailed=detailed))
-    navigation: list[str] = []
-    if page > 1:
-        navigation.append(f"上一页 /help {query} page {page - 1}")
-    if page < total_pages:
-        navigation.append(f"下一页 /help {query} page {page + 1}")
-    lines.extend(("", METRICS_SEPARATOR))
-    if navigation:
-        lines.append("📄 " + " · ".join(navigation))
-    lines.append("💡 /help 返回功能导航 · /help <插件名|命令码> · /help json [查询] [page N]")
-    return "\n".join(lines)
+    """兼容旧的内部调用点；人类文本统一使用紧凑搜索结果格式。"""
+
+    del plugin_count
+    return _format_search_results(
+        nodes,
+        query=query,
+        page=page,
+        total_pages=total_pages,
+        total_nodes=total_nodes,
+    )
 
 
 def _format_catalog_node(node: CommandCatalogNode, *, detailed: bool) -> list[str]:
-    permission = {
-        "public": "公开",
-        "bot_admin": "Bot 管理员",
-        "group_admin": "群管理员",
-    }.get(node.permission, node.permission)
-    contexts = "/".join("群聊" if value == "group" else "私聊" for value in node.contexts)
-    lines = [
-        f"  ⌘ {node.usage}",
-        f"    code: {node.code} · {permission} · {contexts}",
-        f"    {node.help_text}",
-    ]
-    if node.aliases:
-        lines.append(f"    别名: {', '.join(node.aliases)}")
-    if detailed and node.examples:
-        lines.append(f"    正确示例: {' | '.join(node.examples)}")
-    if detailed and node.invalid_examples:
-        lines.append(f"    错误示例: {' | '.join(node.invalid_examples)}")
-    return lines
+    """兼容旧的内部调用点，并避免重新引入密集元数据列表。"""
+
+    return _format_command_detail(node).splitlines() if detailed else _format_menu_entries((node,))
 
 
 def _format_catalog_json(

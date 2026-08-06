@@ -150,8 +150,10 @@
 ```
 /help                    # 查看 Core 与全部插件的紧凑功能导航
 /help page 1             # 按页浏览插件级导航
-/help pendo              # 查看 Pendo 的完整递归子树
-/help pendo.pendo.todo.add # 按稳定命令码精确查询
+/help pendo              # 查看 Pendo 的一级功能入口
+/help pendo todo         # 查看 Todo 的直接操作
+/help pendo todo add     # 查看 Todo 添加命令的完整详情
+/help pendo.pendo.todo.add # 稳定命令码仍可打开同一详情
 /help search 天文        # 搜索别名、说明和用法
 /help json page 1        # 为自动化按页导出全量结构化 JSON
 /help json qingpet       # 只导出 QingPet 的结构化 JSON
@@ -2006,9 +2008,14 @@ A岛匿名版 (ADNMB) 客户端，支持浏览时间线和串内容。
 /mc status             # 查看连接状态
 /mc list               # 查看在线玩家
 /mc time set day       # 发送命令到服务器
-/mc 大家好             # 向服务器发送消息
+/mc say 大家好         # 向所有在线玩家广播消息
+/mc tell Steve 你好    # 向指定玩家发送私信
 /mcdisconnect          # 断开连接
 ```
+
+`say`、`tell` 和 `tellraw` 是 Minecraft 自身的服务器命令，插件会把 `/mc` 后的完整内容通过
+RCON 发送。不能省略 `say` 直接写 `/mc 大家好`，否则 Minecraft 会将“大家好”视为未知命令。
+日志监控启用后，玩家聊天、加入、离开、死亡和进度事件会转发到发起连接的管理员 QQ 私聊。
 
 > [!NOTE]
 > `plugins/minecraft/config.json` 只保存 `host`、`port` 和可选 `log_file`；同名 RCON

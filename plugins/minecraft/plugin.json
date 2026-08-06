@@ -1,6 +1,6 @@
 {
     "name": "minecraft",
-    "version": "4.0.0",
+    "version": "4.0.1",
     "enabled": true,
     "description": "Minecraft 服务器通信插件 - 支持多服务器连接、RCON命令执行和状态查询",
     "entry": "main.py",
@@ -16,7 +16,12 @@
             "admin_only": true,
             "contexts": ["private"],
             "usage": "/mc <help|connect|disconnect|status|服务器命令>",
-            "examples": ["/mc status", "/mc list"],
+            "examples": [
+                "/mc status",
+                "/mc list",
+                "/mc say 大家好",
+                "/mc tell Steve 你好"
+            ],
             "invalid_examples": ["/mc connect"],
             "subcommands": [
                 {

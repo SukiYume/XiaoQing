@@ -24,6 +24,7 @@
 | 文档 | 内容 |
 |---|---|
 | [../CHANGELOG.md](../CHANGELOG.md) | 项目更新记录，按日期整理每次维护内容 |
+| [remote-sync.md](remote-sync.md) | 使用 Git Bash 和 rsync 安全更新生产代码、arXiv 模型及保留运行数据 |
 | [pendo-scriptable-widget.md](pendo-scriptable-widget.md) | Pendo iPhone Scriptable 小组件配置和只读 API |
 
 ## 核心插件文档
