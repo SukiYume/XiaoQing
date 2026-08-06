@@ -15,14 +15,25 @@
 ```
 
 清单注册的三个等价入口为 `/shell`、`/sh` 和 `/exec`，均受同一 `admin_only` 与 `contexts: ["private"]` 约束。
+`/shell list` 会分别显示“管理员已启用且当前 Bot PATH 可执行”和“已启用但 PATH 未找到”的入口。启用只代表允许尝试，
+不负责安装程序，也不会替部署者修改 PATH。
 
-常用示例：
+Windows 常用示例：
 
 ```text
 /shell python --version
 /shell git status --short
-/shell cp C:/workspace/a.txt C:/workspace/b.txt
+/shell cmd /c dir
+/shell cmd /c cd
 /shell cmd /c copy C:/workspace/a.txt C:/workspace/b.txt
+```
+
+Linux/macOS 常用示例：
+
+```text
+/shell ls -la
+/shell pwd
+/shell cp /srv/a.txt /srv/b.txt
 ```
 
 `cd`、`copy`、`dir`、`type` 等依赖命令解释器的内建语义，不能作为首个程序直接执行。确实需要时可显式
@@ -55,6 +66,7 @@
 ## 执行与资源边界
 
 - 明显的命令链接、管道、替换、多行输入及若干高风险误触形式始终被拒绝。
+- 首个程序必须能由 Bot 进程的当前 PATH 解析；找不到时会返回可操作提示，而不是内部异常错误码。
 - 子进程标准输入固定连接到空设备；插件不支持交互式提示、编辑器或密码输入。
 - 每条命令在独立进程组中启动；超时、输出溢出或任务取消会回收整棵子进程树。
 - stdout 与 stderr 的原始捕获共享 64 KiB 硬上限，QQ 回复中的输出正文共享 4000 字符首尾预算。
@@ -76,4 +88,5 @@ QQ 消息中建议统一使用 `/` 斜杠；插件会按 Bot 所在系统规范�
 
 - 仅在受控管理员入口启用该插件，并定期检查管理员名单和入站认证。
 - 生产环境优先使用最小化的 `replace` 列表，不要长期设置 `disable_whitelist = true`。
+- 由部署者在启动 Bot 前配置程序和 PATH；插件不绑定 Conda、Git Bash、虚拟环境或固定 Python 路径。
 - 不要把启用列表当作权限隔离；需要真正隔离时，应在操作系统层使用低权限账户、容器或专用执行服务。

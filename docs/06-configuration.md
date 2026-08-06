@@ -999,6 +999,7 @@ Windows 上遇到 `WinError 10013` 时，常见原因是系统拒绝绑定端口
 #### shell 配置
 
 Shell 插件的配置放在 `secrets.json -> plugins.shell`。它默认只允许白名单命令，并且直接用 `create_subprocess_exec()` 启动进程，不经过系统 shell。
+白名单只表示管理员允许尝试的入口，不表示本机已经安装对应程序；`/shell list` 会按 Bot 进程的当前 PATH 区分可执行和未找到的入口。
 
 ```json
 {
@@ -1023,6 +1024,7 @@ Shell 插件的配置放在 `secrets.json -> plugins.shell`。它默认只允许
 路径参数会按 bot 所在系统归一化。QQ 里可以统一输入 `/` 斜杠路径，例如 Windows 的 `C:/workspace/a.txt` 或 Linux/macOS 的 `/srv/xiaoqing/workspaces/a.txt`。URL 不会被当作路径改写，`/c`、`/Y` 这类 Windows 选项也不会被误判为路径。
 
 Windows 的 `copy`、`del`、`type` 等命令是 shell 内建命令，不能直接 `/shell copy ...`。需要复制文件时，优先用外部命令 `cp`、`xcopy`、`robocopy`，或者显式执行 `cmd /c copy <src> <dst>`。
+其中 `cp` 只有在部署环境确实安装并加入 Bot PATH 时才可用。项目不会查找或固定 Conda、Git Bash、虚拟环境、Python 等工具路径；这些均由部署者在启动前准备。
 
 #### ads_paper 配置
 

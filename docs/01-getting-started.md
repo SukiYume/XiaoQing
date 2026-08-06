@@ -403,11 +403,14 @@ Codex 插件不占用框架的多轮 session。先创建一个带标签的 Codex
 
 ### Shell 路径测试
 
-Shell 插件直接执行白名单命令，不经过系统 shell。Windows 下 `copy`、`del` 这类内建命令不能直接执行；复制文件优先使用 `cp`、`xcopy`、`robocopy`，或显式通过 `cmd /c copy`。
+Shell 插件直接执行管理员启用的命令，不经过系统 shell。启用列表不负责安装程序；`/shell list` 会显示哪些入口能由 Bot 当前 PATH 解析。Windows 下 `copy`、`del` 这类内建命令不能直接执行，可显式通过 `cmd /c copy`。
 
-```
-你: /shell cp C:/workspace/a.txt C:/workspace/b.txt
-机器人: [执行结果...]
+```text
+你: /shell list
+机器人: [分别列出当前 PATH 可执行和未找到的启用入口...]
+
+你: /shell cmd /c dir
+机器人: [目录列表...]
 
 你: /shell cmd /c copy C:/workspace/a.txt C:/workspace/b.txt
 机器人: [执行结果...]
