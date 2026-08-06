@@ -19,6 +19,19 @@ LOG_PUMP = ROOT / "scripts" / "run_process_with_rotating_logs.py"
 POWERSHELL_TIMEOUT_SECONDS = 30
 
 
+def _pid_marker_child_source() -> str:
+    """Child probe that publishes its PID atomically before sleeping."""
+
+    return (
+        "import os, pathlib, sys, time; "
+        "marker = pathlib.Path(sys.argv[1]); "
+        "pending = marker.with_name(marker.name + '.tmp'); "
+        "pending.write_text(str(os.getpid()), encoding='utf-8'); "
+        "os.replace(pending, marker); "
+        "time.sleep(60)"
+    )
+
+
 def _powershell_executable() -> str | None:
     return shutil.which("powershell.exe") or shutil.which("pwsh")
 
@@ -474,11 +487,7 @@ def test_thread_start_failure_reaps_owned_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pid_marker = tmp_path / "child-started.txt"
-    child = (
-        "import os, pathlib, sys, time; "
-        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='utf-8'); "
-        "time.sleep(60)"
-    )
+    child = _pid_marker_child_source()
     original_start = log_pump.threading.Thread.start
     starts = 0
 
@@ -514,11 +523,7 @@ def test_second_thread_construction_failure_reaps_owned_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     started_marker = tmp_path / "constructor-child-started.txt"
-    child = (
-        "import os, pathlib, sys, time; "
-        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='utf-8'); "
-        "time.sleep(60)"
-    )
+    child = _pid_marker_child_source()
     original_thread = log_pump.threading.Thread
     constructions = 0
 
