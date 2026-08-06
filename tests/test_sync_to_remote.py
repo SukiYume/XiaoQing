@@ -83,12 +83,52 @@ def test_sync_validates_both_roots_and_protects_runtime_data() -> None:
     for protected in (
         "/config/config.json",
         "/config/secrets.json",
+        "/plugins/minecraft/config.json",
         "/logs/***",
         "/test_reports/runs/***",
+        "/data/***",
         "/plugins/*/data/***",
         "/plugins/*/cache/***",
+        "/plugins/*/backups/***",
+        "/plugins/*/exports/***",
     ):
         assert f"--filter='P {protected}'" in source
+
+
+def test_sync_target_is_edited_in_script_instead_of_passed_as_environment() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'readonly REMOTE_HOST="secondary-production-host"' in source
+    assert 'readonly REMOTE_DIR="/c/Users/testuser/Desktop/XiaoQing/XiaoQing_V3"' in source
+    assert "XIAOQING_SYNC_HOST" not in source
+    assert "XIAOQING_SYNC_DIR" not in source
+
+
+def test_sync_treats_the_arxiv_runtime_model_as_a_required_release_asset() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'readonly ARXIV_MODEL_DIR="plugins/arxiv_filter/best_model"' in source
+    for artifact in (
+        "config.json",
+        "model.safetensors",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "training_config.json",
+    ):
+        assert f'"$ARXIV_MODEL_DIR/{artifact}"' in source
+    assert '--include="/$ARXIV_MODEL_DIR/***"' in source
+    assert "--exclude='/plugins/arxiv_filter/best_model*'" not in source
+    assert "required release file is missing or empty" in source
+    assert "remote release file is missing or empty" in source
+    assert "--checksum" in source
+
+
+def test_sync_reuses_gitignore_without_dropping_its_include_exceptions() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert '--exclude-from="$REPO_DIR/.gitignore"' in source
+    assert "--include='/.env.example'" in source
+    assert "--include='/.env.*.example'" in source
 
 
 def test_sync_has_no_release_staging_dependencies() -> None:

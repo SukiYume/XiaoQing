@@ -387,8 +387,10 @@ Core 为每个节点生成全局稳定命令码：`<插件名>.<顶层 name>.<�
 ```text
 /help                         # 查看 Core 与已加载插件的功能导航
 /help page 1                  # 按页浏览插件级导航
-/help myplugin                # 查看插件完整子树
-/help myplugin.cmd.show       # 按稳定命令码精确查询
+/help myplugin                # 只查看插件的一级功能入口
+/help cmd                     # 查看 cmd 下的直接子命令
+/help cmd show                # 查看 show 的完整用法和样例
+/help myplugin.cmd.show       # 稳定命令码仍可打开同一详情
 /help json myplugin           # 导出包含权限、场景、样例和子节点的 JSON
 /help json page 1             # 自动化按页读取所有命令节点
 ```

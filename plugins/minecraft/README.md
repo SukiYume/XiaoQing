@@ -12,6 +12,8 @@
 /mc connect <配置名>        # 读取本地 config.json 并连接
 /mc status                  # 查看当前私聊的连接状态
 /mc <服务器命令>            # 执行 RCON 命令，例如 /mc list
+/mc say <消息>              # 向所有在线玩家广播消息
+/mc tell <玩家名> <消息>    # 向指定玩家发送私信
 /mc disconnect              # 关闭当前私聊的连接
 ```
 
@@ -25,6 +27,11 @@
 
 `/mcconnect default` 等价于 `/mc connect default`；`/mcdisconnect` 等价于
 `/mc disconnect`。所有入口均由 manifest 标记为管理员专用且仅允许私聊。
+
+`say`、`tell` 和 `tellraw` 是 Minecraft 自身的服务器命令，插件会把 `/mc` 后面的完整内容
+通过 RCON 发送。例如 `/mc say 大家好` 会向所有在线玩家广播；不能省略 `say` 直接写
+`/mc 大家好`，否则 Minecraft 会把“大家好”当成未知服务器命令。日志监控启用后，玩家在
+游戏内的普通聊天、加入、离开、死亡和进度事件会转发到发起连接的 QQ 私聊。
 
 ## 配置
 

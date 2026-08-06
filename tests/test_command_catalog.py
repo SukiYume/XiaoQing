@@ -358,6 +358,50 @@ def test_help_plugin_and_stable_code_queries_cover_the_same_catalog() -> None:
             assert [item.code for item in exact] == [item.code for item in node.walk()]
 
 
+def test_mobile_help_progressively_discloses_real_pendo_catalog() -> None:
+    """人类帮助只显示当前层；叶节点详情和 JSON 仍保留完整契约。"""
+
+    from plugins.bot_core.main import (
+        HELP_MOBILE_LINE_WIDTH,
+        _display_width,
+        _find_exact_catalog_nodes,
+        _find_plugin_roots,
+        _format_branch_menu,
+        _format_command_detail,
+        _format_menu_entries,
+        _format_plugin_menu,
+    )
+
+    fixture = _load_catalog()
+    pendo_roots = _find_plugin_roots(fixture.roots, "pendo")
+    plugin_page = _format_plugin_menu(pendo_roots, page=1)
+    todo = _find_exact_catalog_nodes(fixture.roots, "pendo todo")[0]
+    todo_page = _format_branch_menu(todo, page=1)
+    todo_add = _find_exact_catalog_nodes(fixture.roots, "pendo todo add")[0]
+    detail = _format_command_detail(todo_add)
+
+    assert "📦 pendo  1/3" in plugin_page
+    assert "/pendo event" in plugin_page
+    assert "/pendo event add" not in plugin_page
+    assert "命令码：" not in plugin_page
+    assert "正确示例" not in plugin_page
+
+    assert "📂 /pendo todo  1/1" in todo_page
+    assert "/pendo todo add" in todo_page
+    assert "/pendo todo add [内容]" not in todo_page
+    assert "继续查看：/help pendo todo add" in todo_page
+
+    assert detail.startswith("📘 命令详情")
+    assert "/pendo todo add [内容]" in detail
+    assert "正确示例" in detail
+    assert "错误示例" in detail
+    assert "命令码：pendo.pendo.todo.add" in detail
+
+    for node in (item for root in fixture.roots for item in root.walk()):
+        lines = _format_menu_entries((node,))
+        assert max(map(_display_width, lines)) <= HELP_MOBILE_LINE_WIDTH, node.code
+
+
 def test_live_matrix_is_generated_from_every_catalog_node_and_alias() -> None:
     """运行态 Runner 必须自动扩展正反例、场景、别名和权限拒绝用例。"""
 
